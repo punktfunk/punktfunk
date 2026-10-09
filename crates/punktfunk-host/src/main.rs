@@ -130,6 +130,8 @@ mod host;
 // The box itself: identity, adverts, wake, power, sleep; the flat names keep `crate::power::*`.
 mod hostsys;
 use hostsys::{discovery, identity, osinfo, power, sleep_inhibit, wol};
+// HTTPS serving for nvhttp and the management API, and the device-key digest.
+mod https;
 // Shim: inject backends live in `pf-inject`; keep `crate::inject::*` for this crate's callers.
 mod inject {
     pub(crate) use pf_inject::*;
@@ -168,6 +170,8 @@ mod pad_feed;
 mod plugin_host;
 use plugin_host::{plugins, store};
 mod send_pacing;
+// `serve`'s flags, then what it writes before the planes start.
+mod serve_cli;
 mod session_plan;
 mod slug;
 mod spike;
@@ -191,6 +195,11 @@ mod test_support {
         DIRS.with_borrow_mut(|dirs| dirs.push(dir));
         path
     }
+
+    /// A command line as `real_main` hands it to a parser.
+    pub(crate) fn args(a: &[&str]) -> Vec<String> {
+        a.iter().map(|s| s.to_string()).collect()
+    }
 }
 mod update;
 mod version;
@@ -207,9 +216,6 @@ mod zerocopy {
 }
 
 use anyhow::{bail, Context, Result};
-use encode::Codec;
-use spike::{Options, Source};
-use std::path::PathBuf;
 
 /// Console filter when `RUST_LOG` is unset. `zbus::proxy` warns once per portal
 /// Request/Session proxy whose server answers no `org.freedesktop.DBus.Properties`
@@ -486,9 +492,8 @@ fn real_main() -> Result<()> {
 
     match args.first().map(String::as_str) {
         Some("serve") => {
-            let (mgmt_opts, native, gamestream) = parse_serve(&args[1..])?;
-            // A launcher rewrite can drop a granted folder's ACE; re-apply them each boot.
-            plugins::converge_grants();
+            let serve = serve_cli::parse_serve_args(&args[1..])?;
+            let (mgmt_opts, native, gamestream) = serve_cli::prepare_serve(serve)?;
             // Restart-class settings changed after this point wait for a restart.
             pf_host_config::mark_started();
             // Must run before any new session touches the topology.
@@ -571,7 +576,7 @@ fn real_main() -> Result<()> {
         Some("pad-usbip-test") => devtest::pad_usbip_test(&args),
         #[cfg(target_os = "linux")]
         Some("switchpro-test") => devtest::switchpro_test(&args),
-        Some("spike") => spike::run(parse_spike(&args[1..])?),
+        Some("spike") => spike::run(spike::parse_spike(&args[1..])?),
         Some("punktfunk1-host") => native::run(parse_punktfunk1(&args[1..])?),
         Some("-h") | Some("--help") | Some("help") | None => {
             print_usage();
@@ -605,222 +610,8 @@ fn settings_cli(args: &[String]) -> Result<()> {
     Ok(())
 }
 
-/// Native plane + management API always run. `--gamestream` is trusted-LAN only.
-/// Pairing is required unless `--open`. Returns `(mgmt, native, gamestream)`.
-fn parse_serve(args: &[String]) -> Result<(mgmt::Options, native::NativeServe, bool)> {
-    let mut opts = mgmt::Options::default();
-    let mut native_port: u16 = 9777;
-
-    let mut open = false;
-    let mut gamestream = false;
-    // The browser plane, off unless asked for — same stance as GameStream above.
-    let mut webtransport = false;
-    let mut webtransport_port: u16 = webtransport::DEFAULT_PORT;
-    let mut webtransport_port_explicit = false;
-    // Interface only; the port is its own flag so `--webtransport-bind` reads like an address.
-    let mut webtransport_host = "::".to_string();
-    let mut webtransport_bind_explicit = false;
-    let mut no_mdns = false;
-    // If unset, bind wide below so paired clients can browse. Admin stays loopback in `require_auth`.
-    let mut mgmt_bind_explicit = false;
-    // Explicit `--native-port` outranks `PUNKTFUNK_NATIVE_PORT` after the loop.
-    let mut native_port_explicit = false;
-    let mut i = 0;
-    while i < args.len() {
-        let arg = args[i].as_str();
-        let mut next = || {
-            i += 1;
-            args.get(i)
-                .cloned()
-                .ok_or_else(|| anyhow::anyhow!("missing value for {arg}"))
-        };
-        match arg {
-            "--mgmt-bind" => {
-                opts.bind = next()?
-                    .parse()
-                    .map_err(|_| anyhow::anyhow!("bad --mgmt-bind (want IP:PORT)"))?;
-                mgmt_bind_explicit = true;
-            }
-            // No-op: the native plane always runs.
-            "--native" => {}
-            "--native-port" => {
-                native_port = next()?
-                    .parse()
-                    .map_err(|_| anyhow::anyhow!("bad --native-port (want a port number)"))?;
-                native_port_explicit = true;
-            }
-            // Video rides the native port. Accepted so an older service unit still starts.
-            "--data-port" => {
-                next()?;
-                tracing::warn!("--data-port is ignored: video uses the native port");
-            }
-            "--gamestream" | "--moonlight" => gamestream = true,
-            "--webtransport" => webtransport = true,
-            "--webtransport-port" => {
-                webtransport_port = next()?
-                    .parse()
-                    .map_err(|_| anyhow::anyhow!("bad --webtransport-port (want a port number)"))?;
-                webtransport_port_explicit = true;
-            }
-            "--webtransport-bind" => {
-                webtransport_host = next()?;
-                webtransport_bind_explicit = true;
-            }
-            "--open" => open = true,
-            // Read by `real_main` before startup; accepted here so it parses.
-            "--door" => {}
-            // Bridged Docker / CI netns: multicast never arrives.
-            "--no-mdns" => no_mdns = true,
-            "-h" | "--help" => {
-                print_usage();
-                std::process::exit(0);
-            }
-            other => bail!("unknown argument '{other}' (try --help)"),
-        }
-        i += 1;
-    }
-    // Env (persisted), else the `mgmt-token` file, else generate. HTTPS+token even on loopback.
-    if opts.token.is_none() {
-        opts.token = Some(crate::mgmt_token::load_or_generate()?);
-    }
-    // Installs before this build granted every local account read on the config tree.
-    #[cfg(windows)]
-    crate::plugins::converge_config_dir_acls();
-    // The tray's bearer. A seat host has no tray and serves no summary. Not fatal: the tray
-    // then shows the host as running without detail.
-    #[cfg(target_os = "windows")]
-    let seat_host = seat::is_seat_host();
-    #[cfg(not(target_os = "windows"))]
-    let seat_host = false;
-    if !seat_host {
-        match crate::mgmt_token::mint_tray_token() {
-            Ok(t) => opts.tray_token = Some(t),
-            Err(e) => tracing::warn!(error = %format!("{e:#}"), "tray token not written"),
-        }
-        crate::tray_autostart::converge();
-    }
-    // Mint only if the runner is installed — otherwise a second admin-adjacent credential sits
-    // on disk for a subsystem that is not running. Scope: `plugin_may_access`, not pairing/hooks.
-    let runner = crate::plugins::runtime_status();
-    // The plugin runner is the owner's: the door has none to hand a token to.
-    if runner.installed && !pf_paths::seat::is_door() {
-        opts.plugin_token = Some(crate::mgmt_token::load_or_generate_plugin()?);
-        // One token per installed plugin, so the API can tell them apart: a plugin may write its
-        // own registration and its own provider, and no other's.
-        opts.plugin_tokens = crate::mgmt_token::load_or_generate_per_plugin()?;
-        // An upgrade or a hand-edited grants file may have changed what the runner must see.
-        #[cfg(windows)]
-        {
-            crate::plugins::publish_sandbox_override();
-            crate::plugins::recheck_runner_roots();
-        }
-        crate::plugins::converge_runner_roots();
-        // A launcher installed after the host started brings a declared folder with no ACE; the
-        // converge places it within a minute, while the plugin keeps running.
-        #[cfg(windows)]
-        let _ = std::thread::Builder::new()
-            .name("plugin-roots".into())
-            .spawn(|| loop {
-                std::thread::sleep(std::time::Duration::from_secs(60));
-                crate::plugins::converge_runner_roots();
-            });
-        crate::plugins::converge_runner_acls(&runner);
-        crate::plugins::converge_seat_denies();
-    }
-    // Default all-interfaces so paired clients browse over mTLS. Admin stays loopback in
-    // `require_auth`. Packaged units ship a fixed ExecStart — `host.env` is the upgrade-safe pin;
-    // CLI wins as the more explicit of the two.
-    if !mgmt_bind_explicit {
-        opts.bind = match pf_host_config::config().mgmt_bind.as_deref() {
-            Some(s) => s
-                .parse()
-                .map_err(|_| anyhow::anyhow!("bad PUNKTFUNK_MGMT_BIND '{s}' (want IP:PORT)"))?,
-            None => std::net::SocketAddr::from(([0, 0, 0, 0], mgmt::DEFAULT_PORT)),
-        };
-    }
-    // A bad value is fatal — serving 9777 while host.env says otherwise reads as
-    // "I moved the port and the client still cannot reach me".
-    if !native_port_explicit {
-        if let Some(s) = pf_host_config::config().native_port.as_deref() {
-            native_port = s
-                .parse()
-                .map_err(|_| anyhow::anyhow!("bad PUNKTFUNK_NATIVE_PORT '{s}' (want a port)"))?;
-        }
-    }
-    // Same function as the token persist so the console unit sees both. A race falls back to
-    // 47990; `Restart=always` retries.
-    mgmt::publish_endpoint(opts.bind);
-    let native = native::NativeServe {
-        port: native_port,
-        require_pairing: !open,
-        // Real bound port, not the default, so mDNS clients follow a moved mgmt port.
-        mgmt_port: opts.bind.port(),
-        mdns: !no_mdns && discovery::mdns_enabled(),
-        // Resolved just below, once the env fallbacks have been applied.
-        webtransport_bind: None,
-    };
-    if !webtransport_port_explicit {
-        if let Some(s) = pf_host_config::config().webtransport_port.as_deref() {
-            webtransport_port = s.parse().map_err(|_| {
-                anyhow::anyhow!("bad PUNKTFUNK_WEBTRANSPORT_PORT '{s}' (want a port)")
-            })?;
-        }
-    }
-    if !webtransport_bind_explicit {
-        if let Some(s) = pf_host_config::config().webtransport_bind.as_deref() {
-            webtransport_host = s.to_string();
-        }
-    }
-    // Bracketed IPv6 or a bare IPv4, joined to the port flag. A bad address is a startup error:
-    // listening on every interface when the operator asked for one is the wrong way to fail.
-    let webtransport_bind: std::net::SocketAddr = format!(
-        "{}:{webtransport_port}",
-        if webtransport_host.contains(':') && !webtransport_host.starts_with('[') {
-            format!("[{webtransport_host}]")
-        } else {
-            webtransport_host.clone()
-        }
-    )
-    .parse()
-    .map_err(|_| anyhow::anyhow!("bad --webtransport-bind '{webtransport_host}' (want an IP)"))?;
-    // A flag outranks env and the console's value; pinning it lets the console show why.
-    if gamestream {
-        pf_host_config::pin("gamestream", "--gamestream", serde_json::Value::Bool(true));
-    }
-    if webtransport {
-        pf_host_config::pin(
-            "webtransport",
-            "--webtransport",
-            serde_json::Value::Bool(true),
-        );
-    }
-    // The door places connects and streams nothing, and stock Moonlight has no redirect to follow.
-    let gamestream = pf_host_config::config().gamestream && !pf_paths::seat::is_door();
-    let native = native::NativeServe {
-        webtransport_bind: pf_host_config::config()
-            .webtransport
-            .then_some(webtransport_bind),
-        ..native
-    };
-    // Refused here rather than at bind: the plane is spawned as a secondary tier whose errors
-    // only log, and this combination must not be something an operator can miss.
-    if native.webtransport_bind.is_some()
-        && !webtransport::is_confined(
-            native.require_pairing,
-            &pf_host_config::config().webtransport_origins,
-        )
-    {
-        anyhow::bail!(
-            "--open leaves the browser plane unauthenticated, and with no origin list any page \
-             the user visits can stream and inject input (WebTransport gets no same-origin rule). \
-             Set PUNKTFUNK_WEBTRANSPORT_ORIGINS, or drop --open"
-        );
-    }
-    Ok((opts, native, gamestream))
-}
-
-/// `punktfunk1-host` flags. A bad value is an error, as in [`parse_serve`]: a typo'd port
-/// must not quietly serve 9777.
+/// `punktfunk1-host` flags. A bad value is an error, as in
+/// [`serve_cli::parse_serve_args`]: a typo'd port must not quietly serve 9777.
 fn parse_punktfunk1(args: &[String]) -> Result<native::Punktfunk1Options> {
     fn value<T: std::str::FromStr>(flag: &str, v: String) -> Result<T> {
         v.trim()
@@ -920,123 +711,6 @@ fn parse_punktfunk1(args: &[String]) -> Result<native::Punktfunk1Options> {
         other => bail!("unknown --source '{other}' (synthetic|synthetic-abr|virtual)"),
     };
     Ok(opts)
-}
-
-fn parse_spike(args: &[String]) -> Result<Options> {
-    let mut source = Source::Portal;
-    let mut width = 1920u32;
-    let mut height = 1080u32;
-    let mut fps = 60u32;
-    let mut seconds = 5u32;
-    let mut codec = Codec::H265;
-    let mut hdr = false;
-    let mut bitrate_mbps = 20u64;
-    let mut out: Option<PathBuf> = None;
-    let mut loopback = true;
-    let mut wire_chunk: Option<usize> = None;
-
-    let mut i = 0;
-    while i < args.len() {
-        let arg = args[i].as_str();
-        let mut next = || {
-            i += 1;
-            args.get(i)
-                .cloned()
-                .ok_or_else(|| anyhow::anyhow!("missing value for {arg}"))
-        };
-        match arg {
-            "--source" => {
-                source = match next()?.as_str() {
-                    "synthetic" => Source::Synthetic,
-                    "synthetic-nv12" => Source::SyntheticNv12,
-                    "portal" => Source::Portal,
-                    // `kwin-virtual` is what this was called when only KWin had one.
-                    "virtual" | "kwin-virtual" => Source::Virtual,
-                    other => {
-                        bail!(
-                            "unknown --source '{other}' \
-                             (synthetic|synthetic-nv12|portal|virtual)"
-                        )
-                    }
-                }
-            }
-            "--width" => {
-                width = next()?
-                    .parse()
-                    .map_err(|_| anyhow::anyhow!("bad --width"))?
-            }
-            "--height" => {
-                height = next()?
-                    .parse()
-                    .map_err(|_| anyhow::anyhow!("bad --height"))?
-            }
-            "--fps" => fps = next()?.parse().map_err(|_| anyhow::anyhow!("bad --fps"))?,
-            "--seconds" => {
-                seconds = next()?
-                    .parse()
-                    .map_err(|_| anyhow::anyhow!("bad --seconds"))?
-            }
-            "--codec" => {
-                codec = match next()?.as_str() {
-                    "h264" => Codec::H264,
-                    "h265" | "hevc" => Codec::H265,
-                    "av1" => Codec::Av1,
-                    // Needs `pyrowave` and `PUNKTFUNK_ENCODER=pyrowave` (raw-dmabuf passthrough).
-                    "pyrowave" => Codec::PyroWave,
-                    other => bail!("unknown --codec '{other}' (h264|h265|av1|pyrowave)"),
-                }
-            }
-            "--hdr" => hdr = true,
-            "--bitrate" => {
-                bitrate_mbps = next()?
-                    .parse()
-                    .map_err(|_| anyhow::anyhow!("bad --bitrate (Mbps)"))?
-            }
-            "--out" => out = Some(PathBuf::from(next()?)),
-            "--no-loopback" => loopback = false,
-            "--wire-chunk" => {
-                let v: usize = next()?
-                    .parse()
-                    .map_err(|_| anyhow::anyhow!("bad --wire-chunk (bytes)"))?;
-                wire_chunk = (v > 0).then_some(v);
-            }
-            "-h" | "--help" => {
-                print_usage();
-                std::process::exit(0);
-            }
-            other => bail!("unknown argument '{other}' (try --help)"),
-        }
-        i += 1;
-    }
-
-    if fps == 0 || width == 0 || height == 0 || seconds == 0 {
-        bail!("--fps/--width/--height/--seconds must be > 0");
-    }
-
-    let out = out.unwrap_or_else(|| {
-        let ext = match codec {
-            Codec::H264 => "h264",
-            Codec::H265 => "h265",
-            Codec::Av1 => "obu",
-            // Concatenated packets; not an FFmpeg-playable stream.
-            Codec::PyroWave => "pyrowave",
-        };
-        std::env::temp_dir().join(format!("punktfunk-spike.{ext}"))
-    });
-
-    Ok(Options {
-        source,
-        width,
-        height,
-        fps,
-        seconds,
-        codec,
-        hdr,
-        bitrate_bps: bitrate_mbps.saturating_mul(1_000_000),
-        out,
-        loopback,
-        wire_chunk,
-    })
 }
 
 fn print_usage() {
@@ -1172,10 +846,7 @@ NOTES:
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn args(a: &[&str]) -> Vec<String> {
-        a.iter().map(|s| s.to_string()).collect()
-    }
+    use crate::test_support::args;
 
     /// A bad value is refused rather than replaced by the default.
     #[test]

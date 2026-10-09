@@ -14,6 +14,7 @@
 //! thing this file must never grow back into.
 
 use super::{Serving, WebTransportPlane};
+use crate::https::{sha256, spki_p256_point};
 use crate::native::link::{CtlReader, CtlRecv, CtlSend, SessionLink, V2Session};
 use crate::native::{DataPlane, Served};
 use anyhow::{Context, Result};
@@ -227,25 +228,6 @@ fn verify(auth: &AuthResponse, nonce: &[u8; 32], serving: &Serving) -> Result<[u
     Ok(sha256(&auth.device_key))
 }
 
-/// The 65-byte uncompressed point inside a P-256 SPKI.
-///
-/// Every P-256 SPKI starts with the same 26-byte header — the SEQUENCE, the two OIDs and the BIT
-/// STRING tag are all fixed by the key type — so matching it whole both locates the point and
-/// rejects any other key type, which is what we want: the verifier is P-256 only.
-pub(crate) fn spki_p256_point(spki: &[u8]) -> Option<&[u8]> {
-    const P256_SPKI_HEADER: [u8; 26] = [
-        0x30, 0x59, 0x30, 0x13, 0x06, 0x07, 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x02, 0x01, 0x06, 0x08,
-        0x2a, 0x86, 0x48, 0xce, 0x3d, 0x03, 0x01, 0x07, 0x03, 0x42, 0x00,
-    ];
-    let (head, point) = spki.split_at_checked(P256_SPKI_HEADER.len())?;
-    (head == P256_SPKI_HEADER && point.len() == 65 && point[0] == 0x04).then_some(point)
-}
-
-pub(crate) fn sha256(bytes: &[u8]) -> [u8; 32] {
-    use sha2::Digest as _;
-    sha2::Sha256::digest(bytes).into()
-}
-
 /// Pair a browser, then end the connection.
 ///
 /// The identities are what makes this the native ceremony rather than a second one: the client's
@@ -324,10 +306,7 @@ mod tests {
     use punktfunk_core::quic::v2::hello::ClientHello;
     use punktfunk_core::quic::v2::msg::V2Message;
     use punktfunk_core::quic::Hello;
-    use rcgen::{
-        KeyPair, PublicKeyData as _, SigningKey as _, PKCS_ECDSA_P256_SHA256,
-        PKCS_ECDSA_P384_SHA384,
-    };
+    use rcgen::{KeyPair, PublicKeyData as _, SigningKey as _, PKCS_ECDSA_P256_SHA256};
 
     fn store(tag: &str) -> Arc<crate::native_pairing::NativePairing> {
         let path =
@@ -359,28 +338,6 @@ mod tests {
             device_key,
             signature,
         }
-    }
-
-    /// A P-256 SPKI is a fixed shape, so locating the point is exact rather than a guess — and
-    /// anything that is not one has to be refused, not misread.
-    #[test]
-    fn only_a_p256_spki_yields_a_key() {
-        let p256 = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).unwrap();
-        let spki = p256.subject_public_key_info();
-        let point = spki_p256_point(&spki).expect("a P-256 SPKI has a point");
-        assert_eq!(point.len(), 65);
-        assert_eq!(point[0], 0x04, "uncompressed");
-
-        let p384 = KeyPair::generate_for(&PKCS_ECDSA_P384_SHA384).unwrap();
-        assert!(spki_p256_point(&p384.subject_public_key_info()).is_none());
-        assert!(spki_p256_point(&[]).is_none());
-        assert!(
-            spki_p256_point(&spki[..spki.len() - 1]).is_none(),
-            "truncated"
-        );
-        let mut trailing = spki.clone();
-        trailing.push(0);
-        assert!(spki_p256_point(&trailing).is_none(), "over-long");
     }
 
     /// A signature proves the key only over *this* nonce on *this* connection, and yields that

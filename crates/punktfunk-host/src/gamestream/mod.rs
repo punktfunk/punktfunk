@@ -5,7 +5,7 @@
 //! Evidence: `design/gamestream-host-plan.md`.
 
 // Moonlight modules and `rusty_enet`/`rsa` exist only with `feature = "gamestream"`.
-// Ports, pairing persistence and `tls` stay in every build.
+// Ports and pairing persistence stay in every build; `tls` is the crate's `https`.
 #[cfg(feature = "gamestream")]
 pub mod apps;
 // Non-Linux builds get a stub `start` inside this module.
@@ -36,7 +36,9 @@ mod rtsp;
 mod serverinfo;
 #[cfg(feature = "gamestream")]
 pub(crate) mod stream;
-pub(crate) mod tls;
+// nvhttp and the management tests name it by this path.
+#[cfg(any(feature = "gamestream", test))]
+pub(crate) use crate::https as tls;
 #[cfg(feature = "gamestream")]
 mod video;
 

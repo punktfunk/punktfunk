@@ -72,7 +72,7 @@ pub(crate) fn run_netsh(args: &[String]) -> bool {
 }
 
 /// A setting `serve` reads: `flag` in host.env's `PUNKTFUNK_HOST_CMD`, else the last `key=` line,
-/// the same order `parse_serve` applies.
+/// the same order `parse_serve_args` applies.
 pub(super) fn serve_setting<'a>(host_env: &'a str, flag: &str, key: &str) -> Option<&'a str> {
     let last = |name: &str| {
         host_env

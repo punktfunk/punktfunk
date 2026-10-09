@@ -216,7 +216,7 @@ pub(crate) struct TokenGrant {
 )]
 pub(crate) async fn post_device_challenge(
     State(st): State<Arc<MgmtState>>,
-    peer: Option<axum::Extension<crate::gamestream::tls::PeerAddr>>,
+    peer: Option<axum::Extension<crate::https::PeerAddr>>,
 ) -> Response {
     Json(Challenge {
         nonce: st.device_auth.challenge(peer.map(|p| p.0 .0.ip())),
@@ -263,7 +263,7 @@ pub(crate) async fn post_device_token(
     let Ok(nonce) = <[u8; 32] as hex::FromHex>::from_hex(&req.nonce) else {
         return refuse();
     };
-    let Some(point) = crate::webtransport::spki_p256_point(&spki) else {
+    let Some(point) = crate::https::spki_p256_point(&spki) else {
         return refuse();
     };
 
@@ -283,7 +283,7 @@ pub(crate) async fn post_device_token(
         return refuse();
     }
 
-    let fingerprint = hex::encode(crate::webtransport::sha256(&spki));
+    let fingerprint = hex::encode(crate::https::sha256(&spki));
     // Paired *and* unexpired, read now rather than trusted from the ceremony: the same
     // `effective` check the certificate lane makes.
     let paired = st.native.as_ref().is_some_and(|n| {

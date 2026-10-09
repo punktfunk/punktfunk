@@ -378,11 +378,9 @@ mod tests {
 
         let ours = crate::identity::ephemeral().unwrap();
         let squatter = crate::identity::ephemeral().unwrap();
-        let server = crate::gamestream::tls::server_config_optional_client(
-            &squatter.cert_pem,
-            &squatter.key_pem,
-        )
-        .unwrap();
+        let server =
+            crate::https::server_config_optional_client(&squatter.cert_pem, &squatter.key_pem)
+                .unwrap();
 
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let port = listener.local_addr().unwrap().port();

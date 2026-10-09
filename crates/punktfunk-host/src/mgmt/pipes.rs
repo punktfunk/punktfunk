@@ -8,7 +8,7 @@
 //! The set follows `plugin-run/plugin-tokens.json`. A store job rewrites it and calls
 //! [`changed`]; a CLI `plugins add` only rewrites it, so the set is re-read on a tick as well.
 
-use crate::gamestream::tls::{serve_conn, PeerAddr, PeerCertFingerprint, PipePlugin};
+use crate::https::{serve_conn, PeerAddr, PeerCertFingerprint, PipePlugin};
 use crate::windows::app_container::{package_sid, pipe_client_package_sid};
 use crate::windows::plugin_pipe::create_plugin_pipe;
 use axum::Router;

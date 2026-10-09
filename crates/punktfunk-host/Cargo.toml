@@ -83,12 +83,12 @@ mac_address = "1"
 # turns it on by unification anyway, and `wake_macs` should not enumerate a different set of NICs
 # depending on which other crates share the build.
 if-addrs = { version = "0.15", features = ["link-local"] }
-# `SO_EXCLUSIVEADDRUSE` on the TCP listeners (gamestream/tls.rs): std's bind leaves a
+# `SO_EXCLUSIVEADDRUSE` on the TCP listeners (https.rs): std's bind leaves a
 # wildcard-held port open to a same-account specific bind on Windows.
 socket2 = "0.6"
 tokio = { version = "1", features = ["full"] }
 # GameStream-only (behind the `gamestream` feature): the Moonlight RSA-2048 identity generator +
-# pairing signer (cert.rs, pairing.rs) and the legacy-client-cert leniency verifier (tls.rs).
+# pairing signer (cert.rs, pairing.rs) and the legacy-client-cert leniency verifier (https.rs).
 # The native planes use the P-256 identity (src/hostsys/identity.rs) and never touch this crate — so a
 # native-only build also sheds the accepted Marvin advisory (RUSTSEC-2023-0071, .cargo/audit.toml).
 #
@@ -98,7 +98,7 @@ tokio = { version = "1", features = ["full"] }
 # `sha2` re-exports the `sha2` that `rsa`'s OWN trait generation speaks. `rsa` 0.9 is built on
 # `digest 0.10`, and the rest of this crate is on the `digest 0.11` wave (sha2 0.11 / hmac 0.13) —
 # so the digest types that appear as `rsa` TYPE PARAMETERS (`SigningKey<Sha256>` in cert.rs,
-# `VerifyingKey<_>` in pairing.rs and tls.rs) must come from `rsa::sha2`, not from the `sha2`
+# `VerifyingKey<_>` in pairing.rs and https.rs) must come from `rsa::sha2`, not from the `sha2`
 # below. Everything else (plain hashing, HMAC) uses the 0.11 one. Collapsing the two needs `rsa`
 # 0.10, which is still release-candidate only — not something the Moonlight pairing ceremony
 # should ride.
@@ -142,7 +142,7 @@ rcgen = { workspace = true }
 # punktfunk-host -i thiserror@1` must keep reporting no match.
 x509-parser = "0.18"
 # (axum-server left with the plain-HTTP nvhttp listener: both nvhttp listeners now run the
-# governed tokio-rustls/hyper accept loop in gamestream/tls.rs — connection ceilings + header
+# governed tokio-rustls/hyper accept loop in https.rs — connection ceilings + header
 # deadlines, security-review 2026-08-31 M-6 — which axum-server could not express.)
 # The workspace entry's `prefer-post-quantum` offers X25519MLKEM768 first on the mgmt/native TLS
 # 1.3 listeners; classical curves stay in the list, so a client without ML-KEM still connects.
@@ -208,7 +208,7 @@ utoipa-scalar = { version = "0.3", features = ["axum"] }
 # normal dependency above and those are visible to tests — the dev-dependency re-declaration was
 # redundant.)
 http-body-util = "0.1"
-# An HTTP/2 client for the management API's multiplexing test (`gamestream/tls.rs`).
+# An HTTP/2 client for the management API's multiplexing test (`https.rs`).
 h2 = "0.4"
 # Disposable directory fixtures for the Steam local-librarycache scan tests (library.rs).
 tempfile = "3"

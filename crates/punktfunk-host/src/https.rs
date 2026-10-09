@@ -7,6 +7,9 @@
 //! — pairing is the identity proof. Authorization is per-request:
 //! [`serve_https`] attaches [`PeerCertFingerprint`]; nvhttp/mgmt handlers
 //! reject unpinned callers (Apollo's post-handshake `get_verified_cert`).
+//!
+//! [`spki_p256_point`] and [`sha256`] are the device-key helpers the browser plane and the
+//! management API share.
 
 use anyhow::{Context, Result};
 use axum::Router;
@@ -707,4 +710,53 @@ fn build_server_config(
         .with_single_cert(certs, key)
         .context("rustls server cert")?;
     Ok(Arc::new(config))
+}
+
+/// The 65-byte uncompressed point inside a P-256 SPKI.
+///
+/// Every P-256 SPKI starts with the same 26-byte header — the SEQUENCE, the two OIDs and the BIT
+/// STRING tag are all fixed by the key type — so matching it whole both locates the point and
+/// rejects any other key type, which is what we want: the verifier is P-256 only.
+pub(crate) fn spki_p256_point(spki: &[u8]) -> Option<&[u8]> {
+    const P256_SPKI_HEADER: [u8; 26] = [
+        0x30, 0x59, 0x30, 0x13, 0x06, 0x07, 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x02, 0x01, 0x06, 0x08,
+        0x2a, 0x86, 0x48, 0xce, 0x3d, 0x03, 0x01, 0x07, 0x03, 0x42, 0x00,
+    ];
+    let (head, point) = spki.split_at_checked(P256_SPKI_HEADER.len())?;
+    (head == P256_SPKI_HEADER && point.len() == 65 && point[0] == 0x04).then_some(point)
+}
+
+/// SHA-256 of `bytes`: a certificate DER, a device-key SPKI or a PEM body. The browser plane and
+/// the management API's device lane key a device by this one digest.
+pub(crate) fn sha256(bytes: &[u8]) -> [u8; 32] {
+    use sha2::Digest as _;
+    sha2::Sha256::digest(bytes).into()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rcgen::{KeyPair, PublicKeyData as _, PKCS_ECDSA_P256_SHA256, PKCS_ECDSA_P384_SHA384};
+
+    /// A P-256 SPKI is a fixed shape, so locating the point is exact rather than a guess — and
+    /// anything that is not one has to be refused, not misread.
+    #[test]
+    fn only_a_p256_spki_yields_a_key() {
+        let p256 = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).unwrap();
+        let spki = p256.subject_public_key_info();
+        let point = spki_p256_point(&spki).expect("a P-256 SPKI has a point");
+        assert_eq!(point.len(), 65);
+        assert_eq!(point[0], 0x04, "uncompressed");
+
+        let p384 = KeyPair::generate_for(&PKCS_ECDSA_P384_SHA384).unwrap();
+        assert!(spki_p256_point(&p384.subject_public_key_info()).is_none());
+        assert!(spki_p256_point(&[]).is_none());
+        assert!(
+            spki_p256_point(&spki[..spki.len() - 1]).is_none(),
+            "truncated"
+        );
+        let mut trailing = spki.clone();
+        trailing.push(0);
+        assert!(spki_p256_point(&trailing).is_none(), "over-long");
+    }
 }
