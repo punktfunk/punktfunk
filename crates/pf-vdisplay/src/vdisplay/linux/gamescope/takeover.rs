@@ -290,7 +290,11 @@ pub fn restore_takeover_on_startup() {
     let record = read_takeover_record();
     // A fresh host owns no session unit. One left running holds Steam with nothing to stop it, and
     // reads as the box's own session to the hand-back check below.
-    if !record.as_ref().is_some_and(|s| s.managed_session) && unit_known_active(SESSION_UNIT) {
+    // Unknown and `deactivating` read as not running.
+    if !record.as_ref().is_some_and(|s| s.managed_session)
+        && unit_state(SESSION_UNIT)
+            .is_some_and(|s| matches!(s.as_str(), "active" | "activating" | "reloading"))
+    {
         tracing::warn!(
             "gamescope: stopping a managed session a previous host instance left running"
         );
@@ -396,18 +400,12 @@ fn unset_forced_session_screen_env() {
 /// stays barred until reboot.
 #[cfg(test)]
 fn mask_unit(unit: &str) {
-    let _ = crate::proc::status_within(
-        Command::new("systemctl").args(["--user", "mask", "--runtime", unit]),
-        UNIT_VERB_BUDGET,
-    );
+    systemctl_user(&["mask", "--runtime", unit]);
 }
 
 /// Every restore path must unmask before restarting, or Game Mode stays broken until reboot.
 fn unmask_unit(unit: &str) {
-    let _ = crate::proc::status_within(
-        Command::new("systemctl").args(["--user", "unmask", "--runtime", unit]),
-        UNIT_VERB_BUDGET,
-    );
+    systemctl_user(&["unmask", "--runtime", unit]);
 }
 
 /// Idempotent. Keeps the stopped units: mask lifetime is shorter than the takeover, and restore

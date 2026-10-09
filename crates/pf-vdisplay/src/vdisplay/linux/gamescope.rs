@@ -252,62 +252,43 @@ impl VirtualDisplay for GamescopeDisplay {
     }
 
     fn create(&mut self, mode: Mode) -> Result<VirtualOutput> {
-        // This session's route — never the process env, or a second connect retargets this one.
-        let (session_env, node_env) = match self.route.clone() {
-            Some(crate::GamescopeRoute::Managed { client }) => (Some(client), None),
-            Some(crate::GamescopeRoute::Attach { node }) => (None, Some(node)),
-            Some(crate::GamescopeRoute::Spawn) => (None, None),
-            None => (None, None), // no resolver on this path: bare spawn, the ladder default
-        };
         // Sampled once so managed hold, exclusive session-free, and spawn darken cannot disagree.
         let exclusive =
             crate::effective_topology(self.client_fp) == crate::policy::Topology::Exclusive;
-        if let Some(client) = session_env {
-            // A joiner shares the running session. Relaunching it at another mode or HDR would
-            // end the owner's stream.
-            if self.join_live && !managed_session_matches(mode, self.hdr) {
-                bail!(
-                    "join the running gamescope session: it runs at another mode or HDR, and \
-                     relaunching it would end the owner's stream"
-                );
+        // This session's route — never the process env, or a second connect retargets this one.
+        match self.route.clone() {
+            Some(crate::GamescopeRoute::Managed { client }) => {
+                // A joiner shares the running session. Relaunching it at another mode or HDR
+                // would end the owner's stream.
+                if self.join_live && !managed_session_matches(mode, self.hdr) {
+                    bail!(
+                        "join the running gamescope session: it runs at another mode or HDR, \
+                         and relaunching it would end the owner's stream"
+                    );
+                }
+                let out = create_managed_session(&client, mode, self.hdr)?;
+                // Idling autologin leaves the CRTC configured. The hold cannot ride
+                // `pending_restore`: this route is `SessionManaged`, so the registry never picks
+                // it up. Release is [`do_restore_tv_session`].
+                managed_darken_acquire(exclusive);
+                Ok(out)
             }
-            let out = create_managed_session(&client, mode, self.hdr)?;
-            // Idling autologin leaves the CRTC configured. The hold cannot ride `pending_restore`:
-            // this route is `SessionManaged`, so the registry never picks it up. Release is
-            // [`do_restore_tv_session`].
-            managed_darken_acquire(exclusive);
-            return Ok(out);
+            Some(crate::GamescopeRoute::Attach { node }) => create_attach(&node, mode, self.hdr),
+            // No resolver on this path: bare spawn, the ladder default.
+            Some(crate::GamescopeRoute::Spawn) | None => self.create_spawn(mode, exclusive),
         }
-        if let Some(id) = node_env {
-            let node_id: u32 = if id.trim().eq_ignore_ascii_case("auto") {
-                // Headless box: game-mode resolution is ours. Skip and the client gets the box default.
-                ensure_box_gamescope_mode(mode, self.hdr)?
-            } else {
-                id.parse()
-                    .context("PUNKTFUNK_GAMESCOPE_NODE must be a node id or 'auto'")?
-            };
-            point_injector_at_eis(Scope::Box);
-            // Attach mirrors a gamescope that may be lighting the panel. Darkening it would
-            // darken the picture being streamed. Exclusive cannot be served on this route.
-            tracing::info!(node_id, "gamescope: attaching to existing PipeWire node");
-            return Ok(VirtualOutput {
-                node_id,
-                remote_fd: None,
-                preferred_mode: Some((mode.width, mode.height, mode.refresh_hz)),
-                keepalive: Box::new(()),
-                ownership: DisplayOwnership::External,
-                reused_gen: None,
-                pool_gen: None,
-                expect_exact_dims: false,
-                output_name: None, // EIS seat, not a wlr virtual pointer to aim by name
-                input_output: None,
-                seat: None,
-                pid: None,
-            });
-        }
-        check_gamescope_version(); // diagnostic only — warns on known-deadlock-prone versions
-                                   // Resolve once before the gate and hand the same answer to [`spawn`]. Gating on `self.cmd`
-                                   // alone while spawn fell back to `PUNKTFUNK_GAMESCOPE_APP` would pass `--steam` with no instance free.
+    }
+}
+
+impl GamescopeDisplay {
+    /// Bare headless gamescope at `mode`, running [`VirtualDisplay::set_launch_command`]. The
+    /// output owns the process. `exclusive` is the topology `create` sampled.
+    fn create_spawn(&mut self, mode: Mode, exclusive: bool) -> Result<VirtualOutput> {
+        // Diagnostic only: warns on known-deadlock-prone versions.
+        check_gamescope_version();
+        // Resolve once before the gate and hand the same answer to [`spawn`]. Gating on `self.cmd`
+        // alone while spawn fell back to `PUNKTFUNK_GAMESCOPE_APP` would pass `--steam` with no
+        // instance free.
         let app = resolved_spawn_app(self.cmd.as_deref());
         let steam = app.as_deref().is_some_and(is_steam_launch);
         // This session's own Steam home, provisioned on first use. `None` keeps every path below
@@ -410,6 +391,36 @@ impl VirtualDisplay for GamescopeDisplay {
         );
         Ok(out)
     }
+}
+
+/// Capture + inject an already-running gamescope; no lifecycle ownership. `auto` is the box's own
+/// session, set to `mode` first.
+fn create_attach(node: &str, mode: Mode, hdr: bool) -> Result<VirtualOutput> {
+    let node_id: u32 = if node.trim().eq_ignore_ascii_case("auto") {
+        // Headless box: game-mode resolution is ours. Skip and the client gets the box default.
+        ensure_box_gamescope_mode(mode, hdr)?
+    } else {
+        node.parse()
+            .context("PUNKTFUNK_GAMESCOPE_NODE must be a node id or 'auto'")?
+    };
+    point_injector_at_eis(Scope::Box);
+    // Attach mirrors a gamescope that may be lighting the panel. Darkening it would
+    // darken the picture being streamed. Exclusive cannot be served on this route.
+    tracing::info!(node_id, "gamescope: attaching to existing PipeWire node");
+    Ok(VirtualOutput {
+        node_id,
+        remote_fd: None,
+        preferred_mode: Some((mode.width, mode.height, mode.refresh_hz)),
+        keepalive: Box::new(()),
+        ownership: DisplayOwnership::External,
+        reused_gen: None,
+        pool_gen: None,
+        expect_exact_dims: false,
+        output_name: None, // EIS seat, not a wlr virtual pointer to aim by name
+        input_output: None,
+        seat: None,
+        pid: None,
+    })
 }
 
 /// Host-managed session at the client's mode, state in [`Takeover::managed`]. Reuse if mode and
@@ -1118,37 +1129,19 @@ fn launch_session(client: &str, unit_name: &str, mode: Mode, hdr: bool) -> Resul
         }
         // A relaunch follows our own failed run; its line must not count toward the box's reset.
         forget_host_short_sessions();
+        let env = bind
+            .map(SessionBind::run_args)
+            .unwrap_or_default()
+            .into_iter()
+            .chain(wsi.setenv_args(hdr))
+            .chain(xkb_setenv_args())
+            .chain(discovery::reaper_path_env().map(|path| format!("--setenv=PATH={path}")))
+            .collect();
+        let flags = our_flags(hdr, game);
         let mut cmd = Command::new("systemd-run");
-        cmd.args(["--user", "--collect", &format!("--unit={unit_name}")]);
-        for arg in bind.map(SessionBind::run_args).unwrap_or_default() {
-            cmd.arg(arg);
-        }
-        for arg in wsi.setenv_args(hdr) {
-            cmd.arg(arg);
-        }
-        for arg in xkb_setenv_args() {
-            cmd.arg(arg);
-        }
-        if let Some(path) = discovery::reaper_path_env() {
-            cmd.arg(format!("--setenv=PATH={path}"));
-        }
-        // Stale desktop DISPLAY/WAYLAND_DISPLAY in the manager env would abort gamescope.
-        cmd.arg("--property=UnsetEnvironment=DISPLAY WAYLAND_DISPLAY")
-            .arg("--setenv=BACKEND=headless")
-            .arg(format!("--setenv=SCREEN_WIDTH={}", mode.width))
-            .arg(format!("--setenv=SCREEN_HEIGHT={}", mode.height))
-            .arg(format!("--setenv=PF_HZ={game}"))
-            // Unquoted: wrapper word-splits. Empty for stock-gamescope SDR.
-            .arg(format!(
-                "--setenv=PF_HDR_ARGS={}",
-                our_flags(hdr, game).join(" ")
-            ))
-            .arg(format!("--setenv=GAMESCOPE_BIN={}", wrapper.display()))
-            .arg("--setenv=DRM_MODE=cvt")
-            .arg(format!("--setenv=CUSTOM_REFRESH_RATES={offered}"))
-            .arg("--")
-            .arg(SESSION_PLUS_BIN)
-            .arg(client);
+        cmd.args(session_unit_args(
+            unit_name, client, mode, game, &offered, &wrapper, &flags, env,
+        ));
         // Without `--wait`, seconds here means a wedged manager — unbounded would pin the connect.
         let status = crate::proc::status_within(&mut cmd, UNIT_VERB_BUDGET).context(
             "launch gamescope-session-plus via `systemd-run --user` (is the user systemd \
@@ -1189,7 +1182,14 @@ fn launch_session(client: &str, unit_name: &str, mode: Mode, hdr: bool) -> Resul
             );
         }
         // Wrapper SIGKILLs a gamescope that missed its 5 s handshake; no Restart=. Don't wait on a corpse.
-        if !unit_starting_or_active(unit_name) {
+        // Unknown and `deactivating` count as alive, so a hiccup cannot start a relaunch storm.
+        let alive = unit_state(unit_name).is_none_or(|s| {
+            matches!(
+                s.as_str(),
+                "active" | "activating" | "reloading" | "deactivating"
+            )
+        });
+        if !alive {
             tracing::warn!(
                 unit = unit_name,
                 "gamescope session: transient unit died (missed the wrapper's 5 s gamescope \
@@ -1207,32 +1207,53 @@ fn launch_session(client: &str, unit_name: &str, mode: Mode, hdr: bool) -> Resul
     }
 }
 
-/// Unknown reports `true` so a hiccup cannot trigger a relaunch storm. Timeout is that same answer.
-fn unit_starting_or_active(unit: &str) -> bool {
-    let Ok(out) = crate::proc::output_within(
-        Command::new("systemctl").args(["--user", "is-active", unit]),
-        UNIT_STATE_BUDGET,
-    ) else {
-        return true;
-    };
-    matches!(
-        String::from_utf8_lossy(&out.stdout).trim(),
-        "active" | "activating" | "reloading" | "deactivating"
-    )
+/// `systemd-run` argv for the managed session's transient unit. `env` is the part read from the box
+/// (bind, WSI, XKB, `PATH`), in that order; `flags` is [`our_flags`].
+#[allow(clippy::too_many_arguments)] // one unit spec, one call site
+fn session_unit_args(
+    unit: &str,
+    client: &str,
+    mode: Mode,
+    game: u32,
+    offered: &str,
+    wrapper: &std::path::Path,
+    flags: &[String],
+    env: Vec<String>,
+) -> Vec<String> {
+    let mut args = vec![
+        "--user".to_string(),
+        "--collect".to_string(),
+        format!("--unit={unit}"),
+    ];
+    args.extend(env);
+    args.extend([
+        // Stale desktop DISPLAY/WAYLAND_DISPLAY in the manager env would abort gamescope.
+        "--property=UnsetEnvironment=DISPLAY WAYLAND_DISPLAY".to_string(),
+        "--setenv=BACKEND=headless".to_string(),
+        format!("--setenv=SCREEN_WIDTH={}", mode.width),
+        format!("--setenv=SCREEN_HEIGHT={}", mode.height),
+        format!("--setenv=PF_HZ={game}"),
+        // Unquoted: wrapper word-splits. Empty for stock-gamescope SDR.
+        format!("--setenv=PF_HDR_ARGS={}", flags.join(" ")),
+        format!("--setenv=GAMESCOPE_BIN={}", wrapper.display()),
+        "--setenv=DRM_MODE=cvt".to_string(),
+        format!("--setenv=CUSTOM_REFRESH_RATES={offered}"),
+        "--".to_string(),
+        SESSION_PLUS_BIN.to_string(),
+        client.to_string(),
+    ]);
+    args
 }
 
-/// [`unit_starting_or_active`]'s opposite bias: unknown and timeout report `false`.
-fn unit_known_active(unit: &str) -> bool {
-    crate::proc::output_within(
+/// `systemctl --user is-active`'s word for `unit`; `None` when the manager did not answer in
+/// budget. Each caller picks how an unknown state and `deactivating` read.
+fn unit_state(unit: &str) -> Option<String> {
+    let out = crate::proc::output_within(
         Command::new("systemctl").args(["--user", "is-active", unit]),
         UNIT_STATE_BUDGET,
     )
-    .is_ok_and(|out| {
-        matches!(
-            String::from_utf8_lossy(&out.stdout).trim(),
-            "active" | "activating" | "reloading"
-        )
-    })
+    .ok()?;
+    Some(String::from_utf8_lossy(&out.stdout).trim().to_string())
 }
 
 fn stop_session(unit_name: &str) {
@@ -1251,4 +1272,52 @@ pub fn ei_socket_file() -> std::path::PathBuf {
     // libei injector). Compute it under the session env lock so a concurrent session handshake's
     // `apply_session_env` XDG_RUNTIME_DIR retarget can't race this producer-side read.
     crate::with_env_lock(pf_paths::gamescope_ei_socket_file)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_managed_session_unit_argv_keeps_its_shape() {
+        let args = session_unit_args(
+            "punktfunk-gamescope",
+            "steam",
+            Mode {
+                width: 2560,
+                height: 1440,
+                refresh_hz: 120,
+            },
+            60,
+            "60,120",
+            std::path::Path::new("/run/user/1000/gamescope-bin"),
+            &["--hdr-enabled".to_string(), "--adaptive-sync".to_string()],
+            vec![
+                "--property=BindReadOnlyPaths=/w:/usr/bin/gamescope".to_string(),
+                "--setenv=XKB_DEFAULT_LAYOUT=de".to_string(),
+            ],
+        );
+        assert_eq!(
+            args,
+            [
+                "--user",
+                "--collect",
+                "--unit=punktfunk-gamescope",
+                "--property=BindReadOnlyPaths=/w:/usr/bin/gamescope",
+                "--setenv=XKB_DEFAULT_LAYOUT=de",
+                "--property=UnsetEnvironment=DISPLAY WAYLAND_DISPLAY",
+                "--setenv=BACKEND=headless",
+                "--setenv=SCREEN_WIDTH=2560",
+                "--setenv=SCREEN_HEIGHT=1440",
+                "--setenv=PF_HZ=60",
+                "--setenv=PF_HDR_ARGS=--hdr-enabled --adaptive-sync",
+                "--setenv=GAMESCOPE_BIN=/run/user/1000/gamescope-bin",
+                "--setenv=DRM_MODE=cvt",
+                "--setenv=CUSTOM_REFRESH_RATES=60,120",
+                "--",
+                SESSION_PLUS_BIN,
+                "steam",
+            ]
+        );
+    }
 }
