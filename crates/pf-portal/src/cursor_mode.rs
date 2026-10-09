@@ -4,9 +4,9 @@
 //! `INVALID_ARGUMENT` from xdg-desktop-portal, not the backend. [`pick`]
 //! always returns a subset of the advertised bits.
 //!
-//! One ladder for every portal cast: `pf_capture::portal_rt::negotiate_cursor_mode`
-//! reads the advertised bits and `PUNKTFUNK_PORTAL_CURSOR_MODE`, then calls
-//! [`pick`]. Pure and platform-neutral so the tests run without a compositor.
+//! One ladder for every portal cast: `negotiate_cursor_mode` (Linux) reads the
+//! advertised bits and `PUNKTFUNK_PORTAL_CURSOR_MODE`, then calls [`pick`].
+//! Pure and platform-neutral so the tests run without a compositor.
 
 /// Portal wire bits. `pf_vdisplay::PortalCursorMode` re-exports this; the host
 /// reads it to know whether `SPA_META_Cursor` can arrive.

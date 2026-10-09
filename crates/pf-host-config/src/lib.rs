@@ -259,7 +259,7 @@ pub struct HostConfig {
     /// `design/per-monitor-portal-capture.md`.
     pub capture_monitor: Option<String>,
     /// `PUNKTFUNK_PORTAL_CURSOR_MODE` — `auto` (default) · `hidden` · `embedded` ·
-    /// `metadata`. Preference, not a command: `pf_frame::cursor_mode::pick` never
+    /// `metadata`. Preference, not a command: `pf_portal::cursor_mode::pick` never
     /// requests a mode the backend does not advertise. `embedded` is the safe pin.
     pub portal_cursor_mode: Option<String>,
     /// `PUNKTFUNK_COMPOSITOR` — explicit compositor override (operator/CI/test).
@@ -399,7 +399,7 @@ impl HostConfig {
             capture_monitor: val("PUNKTFUNK_CAPTURE_MONITOR")
                 .map(|s| s.trim().to_string())
                 .filter(|s| !s.is_empty()),
-            // Emptied-to-None. Spellings are parsed by `pf_frame::cursor_mode::parse_pin`.
+            // Emptied-to-None. Spellings are parsed by `pf_portal::cursor_mode::parse_pin`.
             portal_cursor_mode: val("PUNKTFUNK_PORTAL_CURSOR_MODE")
                 .map(|s| s.trim().to_string())
                 .filter(|s| !s.is_empty()),

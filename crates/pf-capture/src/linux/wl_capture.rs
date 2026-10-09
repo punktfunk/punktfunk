@@ -17,6 +17,7 @@ use super::gbm_pool::{render_node_for, GbmPool};
 use super::{CaptureSignals, FrameSlot};
 use anyhow::{anyhow, bail, Context, Result};
 use pf_frame::{CapturedFrame, DmabufFrame, FramePayload, HdrMeta, PixelFormat};
+use pf_zerocopy::drm;
 use std::os::fd::{AsRawFd, OwnedFd};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::SyncSender;
@@ -630,18 +631,12 @@ fn needs_cuda_import(policy: &crate::ZeroCopyPolicy) -> bool {
     policy.backend_is_gpu && !policy.backend_is_vaapi && !policy.pyrowave_session
 }
 
+/// The pixel format of a buffer this capture allocates: packed RGB only, never the
+/// two-plane NV12/P010 a PipeWire producer may offer. The 10-bit pair is the HDR capture,
+/// PQ by the output's description.
 fn fourcc_to_pixel(fourcc: u32) -> Option<PixelFormat> {
-    // `XR24`/`AR24` are little-endian BGRx/BGRA, which is what the encoders ingest; the
-    // 10-bit pair is the HDR capture, PQ by the output's description.
-    match &fourcc.to_le_bytes() {
-        b"XR24" => Some(PixelFormat::Bgrx),
-        b"AR24" => Some(PixelFormat::Bgra),
-        b"XB24" => Some(PixelFormat::Rgbx),
-        b"AB24" => Some(PixelFormat::Rgba),
-        b"XB30" => Some(PixelFormat::X2Bgr10),
-        b"XR30" => Some(PixelFormat::X2Rgb10),
-        _ => None,
-    }
+    PixelFormat::from_drm_fourcc(fourcc)
+        .filter(|f| !matches!(f, PixelFormat::Nv12 | PixelFormat::P010))
 }
 
 /// Fourccs to allocate, by preference. SDR is the packed-RGB pair every encoder ingests.
@@ -649,9 +644,9 @@ fn fourcc_to_pixel(fourcc: u32) -> Option<PixelFormat> {
 /// Hyprland hands out `XBGR2101010` for a 10-bit head anyway.
 fn wanted_fourccs(hdr: bool) -> [u32; 2] {
     if hdr {
-        [u32::from_le_bytes(*b"XB30"), u32::from_le_bytes(*b"XR30")]
+        [drm::XB30, drm::XR30]
     } else {
-        [u32::from_le_bytes(*b"XR24"), u32::from_le_bytes(*b"AR24")]
+        [drm::XR24, drm::AR24]
     }
 }
 
@@ -1245,11 +1240,7 @@ mod tests {
     use super::{choose_format, fourcc_to_pixel, wanted_fourccs, OutputColor};
     use super::{Primaries, TransferFunction};
     use pf_frame::PixelFormat;
-
-    const XR24: u32 = u32::from_le_bytes(*b"XR24");
-    const AR24: u32 = u32::from_le_bytes(*b"AR24");
-    const XB30: u32 = u32::from_le_bytes(*b"XB30");
-    const XR30: u32 = u32::from_le_bytes(*b"XR30");
+    use pf_zerocopy::drm::{AR24, NV12, P010, XB30, XR24, XR30};
 
     fn pq() -> OutputColor {
         OutputColor {
@@ -1369,6 +1360,7 @@ mod tests {
     fn only_the_packed_rgb_fourccs_the_encoders_ingest_map_to_a_pixel_format() {
         assert_eq!(fourcc_to_pixel(XR24), Some(PixelFormat::Bgrx));
         assert_eq!(fourcc_to_pixel(AR24), Some(PixelFormat::Bgra));
-        assert_eq!(fourcc_to_pixel(u32::from_le_bytes(*b"NV12")), None);
+        assert_eq!(fourcc_to_pixel(NV12), None);
+        assert_eq!(fourcc_to_pixel(P010), None);
     }
 }

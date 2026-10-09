@@ -133,7 +133,7 @@ pub(crate) unsafe fn select_physical_device(instance: &ash::Instance) -> Result<
 /// deduplicated, one memory plane. Unknown fourcc, or no loader/instance/device,
 /// is an empty list, not an error.
 pub(crate) fn sampled_capture_modifiers(fourcc: u32) -> Vec<u64> {
-    let Some(fmt) = fourcc_to_vk(fourcc) else {
+    let Some(fmt) = pf_zerocopy::drm::vk_format(fourcc) else {
         return Vec::new();
     };
     // SAFETY: fresh instance, plain physical-device property queries, destroyed before
@@ -244,19 +244,7 @@ pub(crate) fn imported_release_barrier(
         .subresource_range(color_range(0))
 }
 
-/// First memory type in `bits` carrying every flag in `want`. A miss is an error, never
-/// index 0: that type may sit outside `bits` or lack a flag the caller relies on.
-pub(crate) fn find_mem(
-    mp: &vk::PhysicalDeviceMemoryProperties,
-    bits: u32,
-    want: vk::MemoryPropertyFlags,
-) -> Result<u32> {
-    (0..mp.memory_type_count)
-        .find(|&i| {
-            bits & (1 << i) != 0 && mp.memory_types[i as usize].property_flags.contains(want)
-        })
-        .ok_or_else(|| anyhow::anyhow!("no Vulkan memory type with {want:?} in bits {bits:#x}"))
-}
+pub(crate) use pf_zerocopy::vkdev::memory_type as find_mem;
 
 /// [`find_mem`] for `prefer`, else any type in `bits`. For video session and video image
 /// memory, which a driver may legally place off the device-local heap.
@@ -267,30 +255,6 @@ pub(crate) fn find_mem_preferring(
     prefer: vk::MemoryPropertyFlags,
 ) -> Result<u32> {
     find_mem(mp, bits, prefer).or_else(|_| find_mem(mp, bits, vk::MemoryPropertyFlags::empty()))
-}
-
-/// DRM fourcc → VkFormat whose *color* components match; Vulkan does the byte swizzle.
-pub(crate) fn fourcc_to_vk(fourcc: u32) -> Option<vk::Format> {
-    // fourcc_code(a,b,c,d) = a | b<<8 | c<<16 | d<<24
-    const XR24: u32 = 0x3432_5258; // XRGB8888
-    const AR24: u32 = 0x3432_5241; // ARGB8888
-    const XB24: u32 = 0x3432_4258; // XBGR8888
-    const AB24: u32 = 0x3432_4241; // ABGR8888
-    const NV12: u32 = 0x3231_564e; // DRM_FORMAT_NV12
-    const P010: u32 = 0x3031_3050; // DRM_FORMAT_P010
-                                   // DRM word layout == Vulkan PACK32 (not a byte swizzle). A2R10G10B10 is
-                                   // optional; a reject means drop XR30 from the capture offer, not convert here.
-    const XR30: u32 = 0x3033_5258; // DRM_FORMAT_XRGB2101010
-    const XB30: u32 = 0x3033_4258; // DRM_FORMAT_XBGR2101010
-    match fourcc {
-        XR24 | AR24 => Some(vk::Format::B8G8R8A8_UNORM),
-        XB24 | AB24 => Some(vk::Format::R8G8B8A8_UNORM),
-        XR30 => Some(vk::Format::A2R10G10B10_UNORM_PACK32),
-        XB30 => Some(vk::Format::A2B10G10R10_UNORM_PACK32),
-        NV12 => Some(vk::Format::G8_B8R8_2PLANE_420_UNORM),
-        P010 => Some(vk::Format::G10X6_B10X6R10X6_2PLANE_420_UNORM_3PACK16),
-        _ => None,
-    }
 }
 
 pub(crate) fn pixel_to_vk(fmt: PixelFormat) -> Option<vk::Format> {
@@ -521,7 +485,7 @@ pub(crate) unsafe fn import_rgb_dmabuf_as(
 ) -> Result<(vk::Image, vk::DeviceMemory, vk::ImageView)> {
     use anyhow::Context;
     use std::os::fd::AsFd;
-    let fmt = fourcc_to_vk(d.fourcc)
+    let fmt = pf_zerocopy::drm::vk_format(d.fourcc)
         .with_context(|| format!("unsupported dmabuf fourcc {:#x}", d.fourcc))?;
     let two_plane = matches!(
         fmt,
