@@ -438,7 +438,7 @@ pub(crate) struct Shell {
     actions: VecDeque<OverlayAction>,
     settings: trust::Settings,
     store: Arc<dyn SettingsStore>,
-    /// This device. The overlay corrects `av1_ok` in place.
+    /// This device. The overlay corrects `av1_ok` and `native_mode` in place.
     pub(crate) device: crate::screens::Device,
     hosts: Vec<HostRow>,
     hosts_gen: u64,
@@ -586,6 +586,7 @@ impl Shell {
             device: crate::screens::Device {
                 platform: opts.platform,
                 screen: opts.screen,
+                native_mode: None,
                 deck: opts.deck,
                 tv: opts.tv,
                 fallback_ui: opts.fallback_ui,

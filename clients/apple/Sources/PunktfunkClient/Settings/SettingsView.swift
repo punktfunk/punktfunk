@@ -44,6 +44,7 @@ struct SettingsView: View {
     @AppStorage(DefaultsKey.systemButtons) var systemButtons = "auto"
     @AppStorage(DefaultsKey.guideGesture) var guideGesture = "auto"
     @AppStorage(DefaultsKey.bitrateKbps) var bitrateKbps = 0
+    @AppStorage(DefaultsKey.pyrowaveBpp) var pyrowaveBpp = 1.6
     @AppStorage(DefaultsKey.presentPriority) var presentPriority =
         SettingsOptions.presentPriorityDefault
     @AppStorage(DefaultsKey.smoothBuffer) var smoothBuffer = 0

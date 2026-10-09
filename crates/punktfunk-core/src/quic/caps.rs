@@ -399,6 +399,7 @@ mod tests {
         ("EXT_TAG_LINK_FACTS", EXT_TAG_LINK_FACTS),
         ("EXT_TAG_PROBE_ONLY", EXT_TAG_PROBE_ONLY),
         ("EXT_TAG_PRESET", EXT_TAG_PRESET),
+        ("EXT_TAG_PYROWAVE_QUALITY", EXT_TAG_PYROWAVE_QUALITY),
     ];
 
     /// Within a byte, each constant is one bit and no bit is spent twice; tags are distinct

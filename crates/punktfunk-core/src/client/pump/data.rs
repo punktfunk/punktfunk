@@ -51,8 +51,10 @@ pub(super) struct DataPump {
     /// Audio-plane wire reservation, spent whether video flows or not.
     pub(super) audio_reserved_kbps: u32,
     /// Mode+codec ceiling ([`crate::abr::stream_ceiling_kbps`]) for the
-    /// negotiated geometry; recomputed by the driver on a mode switch.
+    /// negotiated geometry, PyroWave's pin; recomputed by the driver on a mode switch.
     pub(super) stream_cap_kbps: u32,
+    /// PyroWave: [`crate::pyrowave::BPP_FLOOR`] at the negotiated geometry.
+    pub(super) pyrowave_floor_kbps: Option<u32>,
     /// Negotiated refresh, not the request still sitting in `shared.mode`.
     pub(super) refresh_hz: u32,
     /// A short frame may ask for its missing shards: whole AUs only, so not under
@@ -235,21 +237,18 @@ impl DataPump {
 
     /// The session's ABR driver, with the three environment overrides read
     /// once. Automatic is a session with no embedder rate and a host that
-    /// echoed one.
+    /// echoed one: PyroWave's adapts between its floor and the host's pin.
+    /// An explicit-rate PyroWave session runs at the pin, which the bring-up
+    /// ramp may lower once; no controller runs for it.
     fn driver(&self, session_start: Instant) -> crate::abr::Driver {
-        // PyroWave pins the rate (hard per-frame CBR), so Automatic never
-        // arms: no AIMD. The bring-up ramp still runs for an Automatic
-        // session — to size the pin, not to feed a controller.
-        let rate_pinned = self.negotiated_codec == crate::quic::CODEC_PYROWAVE;
-        // The pin the Welcome resolved, for a PyroWave Automatic session on a
-        // host that serves the ramp. A measured wall lowers it once; nothing
-        // raises it.
-        let pin_kbps = (rate_pinned && self.bitrate_kbps == 0)
+        let automatic = self.bitrate_kbps == 0;
+        let pyrowave = self.negotiated_codec == crate::quic::CODEC_PYROWAVE;
+        let pin_kbps = (pyrowave && !automatic)
             .then_some(self.resolved_bitrate_kbps)
             .filter(|&pin| pin > 0);
         let mut driver = crate::abr::Driver::new(
             DriverConfig {
-                start_kbps: if self.bitrate_kbps == 0 && !rate_pinned {
+                start_kbps: if automatic {
                     self.resolved_bitrate_kbps
                 } else {
                     0
@@ -268,6 +267,7 @@ impl DataPump {
                 ramp: self.serves_ramp,
                 probe_only: self.shared.probe_only(),
                 pin_kbps,
+                floor_kbps: self.pyrowave_floor_kbps.filter(|_| automatic),
             },
             session_start,
         );
@@ -630,6 +630,9 @@ impl DataPump {
                 .map_or(0, |c| c as u8),
             Ordering::Relaxed,
         );
+        self.shared
+            .quality_floor_kbps
+            .store(lp.abr.quality_floor().unwrap_or(0), Ordering::Relaxed);
         if let Some(perf) = lp.perf.as_mut() {
             if let Some(p) = self.session.take_pump_perf() {
                 let per_pkt_ns = |ns: u64| ns.checked_div(p.packets).unwrap_or(0);
@@ -970,6 +973,7 @@ mod tests {
             serves_ramp: false,
             audio_reserved_kbps: 256,
             stream_cap_kbps: 100_000,
+            pyrowave_floor_kbps: None,
             refresh_hz: 60,
             nack: false,
             on_anchors: false,

@@ -171,11 +171,13 @@ async fn dial(
             .map(crate::transport::ifinfo::link_facts)
             .unwrap_or_default();
         let link_facts = link.encode();
+        let pyrowave = p.pyrowave_bpp_x100.to_le_bytes();
         use crate::quic::v2::features::FeatureSet;
         use crate::quic::v2::hello::{ClientHello, Ready, ServerHello};
         use crate::quic::v2::{io as v2io, msg::V2Message, registry};
         v2io::write_stream_type(&mut send, registry::STREAM_CONTROL).await?;
-        let entries = crate::quic::start_ext(&label, &abr, &preset, &link_facts, p.probe_only);
+        let entries =
+            crate::quic::start_ext(&label, &abr, &preset, &link_facts, p.probe_only, &pyrowave);
         let wants_chacha = p.video_caps & crate::quic::VIDEO_CAP_CHACHA20 != 0;
         // Resumable reader: `select!` and the clock-sync timeout can both interrupt a
         // read; a lost partial frame would misalign the stream for the session.

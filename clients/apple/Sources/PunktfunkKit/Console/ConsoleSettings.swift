@@ -111,6 +111,7 @@ public enum ConsoleSettings {
         .int("refresh_hz", DefaultsKey.streamHz, 0),
         .bool("match_window", DefaultsKey.matchWindow, false),
         .int("bitrate_kbps", DefaultsKey.bitrateKbps, 0),
+        .double("pyrowave_bpp", DefaultsKey.pyrowaveBpp, 1.6),
         .double("render_scale", DefaultsKey.renderScale, 1.0),
         .string("video_fit", DefaultsKey.videoFit, "fit"),
         .string("codec", DefaultsKey.codec, "auto"),

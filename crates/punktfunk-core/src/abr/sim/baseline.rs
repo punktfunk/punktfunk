@@ -49,6 +49,7 @@ mod tests {
     /// rows by a few frames). `Smooth` is for a LAN receiver that drops the head of a
     /// line-rate burst; the health check never offers it for a queue build-up.
     const SMOOTH_COSTS: &[&str] = &[
+        "pyrowave_auto_floor",
         "shared_fixed_plus_auto",
         "wan_brownout",
         "wan_shallow_wall",

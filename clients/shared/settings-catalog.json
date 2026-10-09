@@ -33,6 +33,7 @@
     { "key": "smooth_buffer", "label": "Smoothness buffer", "category": "display", "advanced": true },
     { "key": "render_scale", "label": "Render scale", "category": "display", "advanced": true },
     { "key": "codec", "label": "Video codec", "category": "display", "advanced": true },
+    { "key": "pyrowave_bpp", "label": "PyroWave quality", "category": "display", "advanced": true },
     { "key": "enable_444", "label": "Full chroma (4:4:4)", "category": "display", "advanced": true },
     { "key": "ten_bit_sdr", "label": "10-bit SDR", "category": "display", "advanced": true },
     { "key": "vsync", "label": "V-Sync", "category": "display", "advanced": true },

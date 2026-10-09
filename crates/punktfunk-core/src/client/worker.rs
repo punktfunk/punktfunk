@@ -88,6 +88,8 @@ pub(crate) struct ClientShared {
     pub(crate) live_bitrate_kbps: AtomicU32,
     /// [`crate::hud::RateCut`] code the pump publishes each window; `0` = no standing cut.
     pub(crate) rate_cut: AtomicU8,
+    /// Automatic PyroWave's floor (kbps) while the session is held there; `0` = not held.
+    pub(crate) quality_floor_kbps: AtomicU32,
     /// RFIs the control task sent, aged at each overlay read.
     pub(crate) recent_rfis: Mutex<RecentRfis>,
     /// What each frame the pump skipped past still lacked, for the RFI line.
@@ -155,6 +157,7 @@ impl ClientShared {
             anchor: Mutex::default(),
             live_bitrate_kbps: AtomicU32::new(0),
             rate_cut: AtomicU8::new(0),
+            quality_floor_kbps: AtomicU32::new(0),
             recent_rfis: Mutex::default(),
             short_frames: Mutex::default(),
             rfi: Mutex::default(),

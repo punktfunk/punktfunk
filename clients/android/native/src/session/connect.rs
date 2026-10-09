@@ -327,6 +327,9 @@ struct ConnectRequest {
     /// 0 = host default.
     #[serde(default)]
     bitrate_kbps: u32,
+    /// PyroWave quality in hundredths of a bit per pixel; 0 = the host's own.
+    #[serde(default)]
+    pyrowave_bpp_x100: u16,
     /// `CompositorPref` / `GamepadPref` wire bytes (unknown ⇒ Auto).
     #[serde(default)]
     compositor_pref: u8,
@@ -430,6 +433,7 @@ fn connect(req: ConnectRequest) -> jlong {
         key_pem: key,
         pin_hex,
         bitrate_kbps,
+        pyrowave_bpp_x100,
         compositor_pref,
         gamepad_pref,
         hdr_enabled,
@@ -518,6 +522,7 @@ fn connect(req: ConnectRequest) -> jlong {
         compositor: CompositorPref::from_u8(compositor_pref),
         gamepad: GamepadPref::from_u8(gamepad_pref),
         bitrate_kbps, // 0 = host default
+        pyrowave_bpp_x100,
         video_caps: video_caps(hdr_enabled, ten_bit_sdr, multi_slice_ok),
         audio_channels,
         // The audio format this session ASKS for (resolved above). A non-default pair is what

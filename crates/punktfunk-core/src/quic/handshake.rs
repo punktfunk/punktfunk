@@ -147,6 +147,20 @@ pub const EXT_TAG_PROBE_ONLY: u16 = 6;
 /// `delivery_flags` and the JNI dial carry it.
 pub const EXT_DELIVERY_PROBE_ONLY: u8 = 0x02;
 
+/// Entry `7` in `ClientHello`: `bpp_x100 u16`, the player's PyroWave quality in hundredths of
+/// a bit per pixel. Absent or `0` leaves the host's own; the host holds it inside
+/// [`crate::pyrowave::BPP_FLOOR`]..=[`crate::pyrowave::BPP_MAX`].
+pub const EXT_TAG_PYROWAVE_QUALITY: u16 = 7;
+
+/// The quality among `entries` ([`EXT_TAG_PYROWAVE_QUALITY`]); `0` when absent or short.
+pub fn ext_pyrowave_bpp_x100(entries: &[(u16, &[u8])]) -> u16 {
+    entries
+        .iter()
+        .find(|(tag, _)| *tag == EXT_TAG_PYROWAVE_QUALITY)
+        .and_then(|(_, v)| Some(u16::from_le_bytes(v.get(..2)?.try_into().ok()?)))
+        .unwrap_or(0)
+}
+
 pub use crate::transport::LinkFacts;
 
 impl LinkFacts {
@@ -230,8 +244,8 @@ impl SessionPreset {
 }
 
 /// The entries a client adds to its `ClientHello`: label, ABR features, the preset, its link
-/// facts and the probes-only mark. An empty label or preset is left out rather than sent
-/// empty.
+/// facts, the probes-only mark and the PyroWave quality (`u16` LE). An empty label or preset
+/// and a zero quality are left out rather than sent empty.
 #[cfg(any(feature = "quic", test))]
 pub(crate) fn start_ext<'a>(
     label: &'a str,
@@ -239,8 +253,9 @@ pub(crate) fn start_ext<'a>(
     preset: &'a [u8],
     link: &'a [u8],
     probe_only: bool,
+    pyrowave: &'a [u8; 2],
 ) -> Vec<(u16, &'a [u8])> {
-    let mut out: Vec<(u16, &[u8])> = Vec::with_capacity(5);
+    let mut out: Vec<(u16, &[u8])> = Vec::with_capacity(6);
     if !label.is_empty() {
         out.push((EXT_TAG_CLIENT, label.as_bytes()));
     }
@@ -251,6 +266,9 @@ pub(crate) fn start_ext<'a>(
     out.push((EXT_TAG_LINK_FACTS, link));
     if probe_only {
         out.push((EXT_TAG_PROBE_ONLY, &[1]));
+    }
+    if *pyrowave != [0, 0] {
+        out.push((EXT_TAG_PYROWAVE_QUALITY, pyrowave));
     }
     out
 }
@@ -434,7 +452,7 @@ mod tests {
     }
 
     /// The label comes first, the ABR byte and the link facts always ride, the probes-only
-    /// mark only on a diagnostic dial, and nothing empty is sent.
+    /// mark only on a diagnostic dial, the quality only when asked, and nothing empty is sent.
     #[test]
     fn start_entries_skip_what_is_empty() {
         let abr = [EXT_ABR_ACK_REASON];
@@ -443,8 +461,9 @@ mod tests {
             mbps: 1_000,
         }
         .encode();
-        let ext = start_ext("android 0.38.0", &abr, &[], &facts, false);
+        let ext = start_ext("android 0.38.0", &abr, &[], &facts, false, &[0, 0]);
         assert_eq!(ext.len(), 3);
+        assert_eq!(ext_pyrowave_bpp_x100(&ext), 0);
         assert_eq!(ext[0].0, EXT_TAG_CLIENT);
         assert_eq!(ext_abr_features(&ext), EXT_ABR_ACK_REASON);
         assert_eq!(
@@ -455,9 +474,17 @@ mod tests {
             })
         );
         assert!(!ext_probe_only(&ext));
-        let probe = start_ext("", &abr, &[], &facts, true);
+        let probe = start_ext("", &abr, &[], &facts, true, &[0, 0]);
         assert_eq!(probe.len(), 3);
         assert!(ext_probe_only(&probe));
+        let bpp = 160u16.to_le_bytes();
+        let quality = start_ext("", &abr, &[], &facts, false, &bpp);
+        assert_eq!(ext_pyrowave_bpp_x100(&quality), 160);
+        // A short value is no ask, never a failed handshake.
+        assert_eq!(
+            ext_pyrowave_bpp_x100(&[(EXT_TAG_PYROWAVE_QUALITY, &[7][..])]),
+            0
+        );
     }
 
     #[test]
@@ -465,10 +492,10 @@ mod tests {
         let preset = SessionPreset::new("3f9a0c11e2b4", "Docked").unwrap();
         let bytes = preset.encode();
         let abr = [EXT_ABR_ACK_REASON];
-        let got = start_ext("deck", &abr, &bytes, &[], false);
+        let got = start_ext("deck", &abr, &bytes, &[], false, &[0, 0]);
         assert_eq!(SessionPreset::from_ext(&got), Some(preset));
         assert_eq!(
-            SessionPreset::from_ext(&start_ext("", &abr, &[], &[], false)),
+            SessionPreset::from_ext(&start_ext("", &abr, &[], &[], false, &[0, 0])),
             None
         );
         // A hostile value is bounded, never a failed handshake.

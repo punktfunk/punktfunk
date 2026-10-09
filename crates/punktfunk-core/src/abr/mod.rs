@@ -50,6 +50,19 @@ pub use verdict::{shows_loss_shape, Reason};
 
 use std::time::Instant;
 
+/// Judged windows that engage or clear Automatic PyroWave's floor verdict:
+/// 4 × 750 ms = 3 s, long enough that one cut's landing is not a weak network.
+const FLOOR_WINDOWS: u32 = 4;
+
+/// Automatic PyroWave's quality floor, and how long the session has sat on
+/// the other side of `held`.
+#[derive(Clone, Copy, Debug)]
+struct FloorWatch {
+    kbps: u32,
+    run: u32,
+    held: bool,
+}
+
 /// What the session negotiated, plus the three environment overrides. Read
 /// once, by the embedder, so nothing below the constructor touches the env.
 #[derive(Clone, Copy, Debug)]
@@ -85,11 +98,15 @@ pub struct DriverConfig {
     /// A diagnostic session ([`EXT_DELIVERY_PROBE_ONLY`](crate::quic::EXT_DELIVERY_PROBE_ONLY)):
     /// no stream spends the rate, so the ramp climbs to the link's wall, not the stream cap.
     pub probe_only: bool,
-    /// PyroWave Automatic: the pin the Welcome resolved, kbps. `Some` runs
-    /// the bring-up ramp as a fit check on that pin — a measured wall lowers
-    /// it once, every other outcome leaves it. The controller stays off
-    /// either way, and the pin is never raised from a measurement.
+    /// PyroWave at an explicit rate: the pin the Welcome resolved, kbps.
+    /// `Some` runs the bring-up ramp as a fit check on that pin — a measured
+    /// wall lowers it once, every other outcome leaves it. The controller
+    /// stays off either way, and the pin is never raised from a measurement.
     pub pin_kbps: Option<u32>,
+    /// Automatic PyroWave: [`crate::pyrowave::BPP_FLOOR`] at the Welcome mode,
+    /// kbps. No cut goes under it, and [`stream_cap_kbps`](Self::stream_cap_kbps)
+    /// is the host's pin. `None` keeps the controller's own floor.
+    pub floor_kbps: Option<u32>,
 }
 
 /// What the embedder has to do for the controller. Everything else it does
@@ -205,9 +222,11 @@ pub struct Driver {
     codec: u8,
     bit_depth: u8,
     chroma_format: u8,
-    /// The pin a PyroWave Automatic session negotiated, when it has one. The
-    /// ramp's verdict is judged against it in [`on_ramped`](Self::on_ramped).
+    /// The pin an explicit-rate PyroWave session negotiated, when it has one.
+    /// The ramp's verdict is judged against it in [`on_ramped`](Self::on_ramped).
     pin_kbps: Option<u32>,
+    /// Automatic PyroWave's quality floor, and whether the session is held there.
+    floor: Option<FloorWatch>,
     /// Raised between ticks (a probe ended, a burst was abandoned) and sent
     /// on the next one, microseconds later.
     pending: Vec<Action>,
@@ -238,6 +257,14 @@ impl Driver {
         // durations they were calibrated at.
         abr.set_frame_budget(cfg.refresh_hz);
         let pin_kbps = cfg.pin_kbps.filter(|&pin| pin > 0);
+        let floor = cfg.floor_kbps.map(|kbps| {
+            abr.set_floor(kbps);
+            FloorWatch {
+                kbps,
+                run: 0,
+                held: false,
+            }
+        });
         if let Some(pin) = pin_kbps {
             // A pinned session's running rate is the pin itself. The
             // controller is off, so the number windows are judged against
@@ -247,10 +274,10 @@ impl Driver {
         Driver {
             abr,
             window: window::WindowAccumulator::new(cfg.audio_reserved_kbps, cfg.marks_repeats, now),
-            // A pinned or explicit rate has nothing to measure for — except
-            // a PyroWave pin, which the ramp checks once before the first
-            // frame. The pinned probe never arms the beside-video burst.
-            probe: match pin_kbps {
+            // An explicit rate has nothing to measure for — except a PyroWave
+            // pin, which the ramp checks once before the first frame. A
+            // PyroWave ramp climbs past the pin and never bursts beside video.
+            probe: match pin_kbps.or(floor.map(|_| cfg.stream_cap_kbps)) {
                 Some(pin) => probe::CapacityProbe::for_pinned(
                     cfg.probe && cfg.ramp,
                     cfg.probe_target_kbps,
@@ -271,6 +298,7 @@ impl Driver {
             bit_depth: cfg.bit_depth,
             chroma_format: cfg.chroma_format,
             pin_kbps,
+            floor,
             pending: Vec::new(),
             acks: Vec::new(),
             video_aus: 0,
@@ -390,18 +418,40 @@ impl Driver {
 
     /// The accepted mode changed. Encoder and decoder knees and the rolling
     /// baselines are properties of the mode; the probe-measured link ceiling
-    /// is not, and survives.
+    /// is not, and survives. Automatic PyroWave re-derives its floor, and its
+    /// cap keeps the pin's bits per pixel: both scale with the pixel rate.
     pub fn on_mode_switch(&mut self, width: u32, height: u32, refresh_hz: u32) {
         self.abr.on_mode_switch();
         self.abr.set_frame_budget(refresh_hz);
-        self.stream_cap_kbps = stream_ceiling_kbps(
-            width,
-            height,
-            refresh_hz,
-            self.codec,
-            self.bit_depth,
-            self.chroma_format,
-        );
+        self.stream_cap_kbps = match self.floor.as_mut() {
+            Some(f) => {
+                let mode = crate::config::Mode {
+                    width,
+                    height,
+                    refresh_hz,
+                };
+                let floor = crate::pyrowave::kbps_for(
+                    &mode,
+                    self.chroma_format == crate::quic::CHROMA_IDC_444,
+                    self.bit_depth,
+                    crate::pyrowave::BPP_FLOOR,
+                );
+                let cap =
+                    u64::from(self.stream_cap_kbps) * u64::from(floor) / u64::from(f.kbps.max(1));
+                let cap = u32::try_from(cap).unwrap_or(u32::MAX);
+                f.kbps = floor.min(cap);
+                self.abr.set_floor(f.kbps);
+                cap
+            }
+            None => stream_ceiling_kbps(
+                width,
+                height,
+                refresh_hz,
+                self.codec,
+                self.bit_depth,
+                self.chroma_format,
+            ),
+        };
         // Rebinds an already-learned ceiling downward for the new geometry.
         self.abr.set_stream_cap(self.stream_cap_kbps);
     }
@@ -514,11 +564,14 @@ impl Driver {
     /// gave it: the stream shape is the only bound left, so authority goes
     /// there. Nothing measured at all licenses nothing.
     ///
-    /// A pinned session reads the verdict instead: the pin drops to
+    /// An explicit-rate PyroWave session reads the verdict instead: the pin drops to
     /// `min(pin, 0.7 × delivered)` on a wall, and only on a wall — a floor
     /// under the link, an unreadable step, and a ramp cut short are not
     /// walls, so none of them moves the pin. The one ask goes out before
     /// the first frame; a ramp that never ran produces no ask at all.
+    ///
+    /// Automatic PyroWave opens at what a wall licensed, else at the pin: its
+    /// frames are all one size, and an older host reads that ask as the fit.
     fn on_ramped(&mut self, ramped: probe::Ramped, now: Instant) -> Option<u32> {
         if let Some(pin) = self.pin_kbps {
             let probe::Ramped::Wall { delivered_kbps } = ramped else {
@@ -563,6 +616,13 @@ impl Driver {
                 return None;
             }
         };
+        if self.floor.is_some() {
+            let start = match ramped {
+                probe::Ramped::Wall { delivered_kbps } => probe::wall_ceiling_kbps(delivered_kbps),
+                probe::Ramped::NoWall { .. } => self.stream_cap_kbps,
+            };
+            return self.abr.start_from_measurement(start, now);
+        }
         // A ramp the first frame cut short proved only a floor; known ports say more.
         let basis = if self.probe.ramp_cut_short() && self.link.wired() {
             self.link.kbps()
@@ -651,6 +711,7 @@ impl Driver {
                 actions.push(Action::SetBitrate(kbps));
             }
             self.after_window(w, &mut actions);
+            self.watch_floor();
         }
         self.tell_link(&mut actions);
         Tick {
@@ -667,6 +728,36 @@ impl Driver {
 }
 
 impl Driver {
+    /// Automatic PyroWave's floor, kbps, while the session is held there: the
+    /// player is told the network is weak.
+    pub fn quality_floor(&self) -> Option<u32> {
+        self.floor.filter(|f| f.held).map(|f| f.kbps)
+    }
+
+    /// Held at the floor is at it and, to engage, put there by a cut or by a
+    /// measurement that licenses no more. [`FLOOR_WINDOWS`] judged windows the
+    /// other way move the verdict; each engagement logs once.
+    fn watch_floor(&mut self) {
+        let Some(f) = self.floor.as_mut() else {
+            return;
+        };
+        let held = self.abr.current_kbps <= f.kbps
+            && (f.held || self.abr.last_cut().is_some() || self.abr.ceiling_kbps <= f.kbps);
+        if held == f.held {
+            f.run = 0;
+            return;
+        }
+        f.run += 1;
+        if f.run < FLOOR_WINDOWS {
+            return;
+        }
+        f.run = 0;
+        f.held = held;
+        if held {
+            tracing::warn!(kbps = f.kbps, "pyrowave at its quality floor");
+        }
+    }
+
     /// What a judged window says about the link and the receiver: tail loss two windows
     /// running with no frame lost is a mark that takes `L` down a notch, without a cut;
     /// tail loss that kills a frame is the controller's cut and mark, and restarts the
@@ -819,6 +910,7 @@ mod tests {
                 ramp: true,
                 probe_only: false,
                 pin_kbps: None,
+                floor_kbps: None,
             },
             base,
         );
@@ -959,6 +1051,7 @@ mod tests {
                 ramp: false,
                 probe_only: false,
                 pin_kbps: None,
+                floor_kbps: None,
             },
             at,
         )
@@ -987,6 +1080,124 @@ mod tests {
             out.extend(d.tick(at + std::time::Duration::from_millis(ms)).actions);
         }
         out
+    }
+
+    /// A PyroWave session at 2 Gbit/s with no ramp: Automatic with `floor_kbps`, else
+    /// pinned there.
+    fn pyrowave_driver(at: Instant, floor_kbps: Option<u32>) -> Driver {
+        Driver::new(
+            DriverConfig {
+                start_kbps: if floor_kbps.is_some() { 2_000_000 } else { 0 },
+                ceiling_cap_kbps: None,
+                stream_cap_kbps: 2_000_000,
+                refresh_hz: 60,
+                codec: crate::quic::CODEC_PYROWAVE,
+                bit_depth: 8,
+                chroma_format: crate::quic::CHROMA_IDC_420,
+                audio_reserved_kbps: 0,
+                marks_repeats: true,
+                probe: false,
+                probe_target_kbps: None,
+                ramp: false,
+                probe_only: false,
+                pin_kbps: floor_kbps.is_none().then_some(2_000_000),
+                floor_kbps,
+            },
+            at,
+        )
+    }
+
+    /// `windows` report windows from `from_ms` at 2 Gbit/s, losing `dead` frames each, with
+    /// a host that grants every ask at once. The rate, the floor verdict and the ask after
+    /// each window.
+    fn run_granted(
+        d: &mut Driver,
+        at: Instant,
+        st: &mut Stats,
+        (from_ms, windows, dead): (u64, u64, u64),
+    ) -> Vec<(u32, Option<u32>, Option<u32>)> {
+        let mut out = Vec::new();
+        for ms in from_ms..from_ms + windows * 750 {
+            st.packets_received += 170;
+            st.bytes_received += 250_000;
+            if ms % 750 == 0 {
+                st.frames_dropped += dead;
+            }
+            d.on_stats(st);
+            if ms % 16 == 0 {
+                st.frames_completed += 1;
+                d.on_au(false);
+            }
+            let tick = d.tick(at + std::time::Duration::from_millis(ms));
+            let mut asked = None;
+            for a in tick.actions {
+                if let Action::SetBitrate(kbps) = a {
+                    d.on_ack(kbps, Some(crate::quic::AckReason::Granted));
+                    asked = Some(kbps);
+                }
+            }
+            if tick.window.is_some() {
+                out.push((d.target_kbps(), d.quality_floor(), asked));
+            }
+        }
+        out
+    }
+
+    /// Automatic PyroWave's cuts stop at `BPP_FLOOR`'s rate. The fourth judged window
+    /// held there tells the player, and four windows off it clear the verdict.
+    #[test]
+    fn automatic_pyrowave_stops_at_its_floor_and_says_so() {
+        let mode = crate::config::Mode {
+            width: 3840,
+            height: 2160,
+            refresh_hz: 60,
+        };
+        let floor = crate::pyrowave::kbps_for(&mode, false, 8, crate::pyrowave::BPP_FLOOR);
+        let at = Instant::now();
+        let mut d = pyrowave_driver(at, Some(floor));
+        let mut st = Stats::default();
+        let lossy = run_granted(&mut d, at, &mut st, (1, 40, 8));
+        assert!(
+            lossy.iter().all(|&(kbps, _, _)| kbps >= floor),
+            "no cut goes under the floor: {lossy:?}"
+        );
+        let reached = lossy
+            .iter()
+            .position(|&(kbps, _, _)| kbps == floor)
+            .expect("the cuts reach the floor");
+        assert_eq!(
+            lossy[reached + 2].1,
+            None,
+            "three windows are not a verdict"
+        );
+        assert_eq!(lossy[reached + 3].1, Some(floor), "the fourth is");
+        assert!(lossy[reached + 3..].iter().all(|w| w.1 == Some(floor)));
+
+        // The host moves the rate up: off the floor for three windows still holds it.
+        d.on_ack(floor * 2, Some(crate::quic::AckReason::Granted));
+        let off = run_granted(&mut d, at, &mut st, (40 * 750 + 1, 4, 0));
+        assert!(off.iter().all(|w| w.0 > floor));
+        assert_eq!(off[2].1, Some(floor));
+        assert_eq!(off[3].1, None, "the fourth clears it");
+    }
+
+    /// A `Pinned` ack leaves a PyroWave session without a controller: an explicit-rate
+    /// one never had one, and an Automatic one behind a host that pins every PyroWave
+    /// session retires on it. Neither asks for anything after, however lossy.
+    #[test]
+    fn a_pinned_pyrowave_session_asks_for_nothing() {
+        let at = Instant::now();
+        for floor in [None, Some(600_000)] {
+            let mut d = pyrowave_driver(at, floor);
+            d.on_ack(1_400_000, Some(crate::quic::AckReason::Pinned));
+            let mut st = Stats::default();
+            let run = run_granted(&mut d, at, &mut st, (1, 12, 8));
+            assert!(
+                run.iter()
+                    .all(|&(kbps, _, asked)| kbps == 1_400_000 && asked.is_none()),
+                "{floor:?}: {run:?}"
+            );
+        }
     }
 
     /// `L` goes out on the first tick, before anything is measured: both ports' speed when
@@ -1135,6 +1346,7 @@ mod tests {
                 ramp: false,
                 probe_only: false,
                 pin_kbps: None,
+                floor_kbps: None,
             },
             base,
         );

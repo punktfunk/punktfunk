@@ -40,6 +40,8 @@ pub struct SettingsOverlay {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub bitrate_kbps: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub pyrowave_bpp: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub render_scale: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub video_fit: Option<String>,
@@ -119,6 +121,9 @@ impl SettingsOverlay {
         }
         if let Some(v) = self.bitrate_kbps {
             s.bitrate_kbps = v;
+        }
+        if let Some(v) = self.pyrowave_bpp {
+            s.pyrowave_bpp = v;
         }
         if let Some(v) = self.render_scale {
             s.render_scale = v;
@@ -224,6 +229,9 @@ impl SettingsOverlay {
         if after.bitrate_kbps != before.bitrate_kbps {
             self.bitrate_kbps = Some(after.bitrate_kbps);
         }
+        if after.pyrowave_bpp != before.pyrowave_bpp {
+            self.pyrowave_bpp = Some(after.pyrowave_bpp);
+        }
         if after.render_scale != before.render_scale {
             self.render_scale = Some(after.render_scale);
         }
@@ -321,6 +329,7 @@ impl SettingsOverlay {
             "refresh_hz" => self.refresh_hz = None,
             "match_window" => self.match_window = None,
             "bitrate_kbps" => self.bitrate_kbps = None,
+            "pyrowave_bpp" => self.pyrowave_bpp = None,
             "render_scale" => self.render_scale = None,
             "video_fit" => self.video_fit = None,
             "codec" => self.codec = None,
@@ -368,6 +377,7 @@ impl SettingsOverlay {
             "refresh_hz" => self.refresh_hz = Some(s.refresh_hz),
             "match_window" => self.match_window = Some(s.match_window),
             "bitrate_kbps" => self.bitrate_kbps = Some(s.bitrate_kbps),
+            "pyrowave_bpp" => self.pyrowave_bpp = Some(s.pyrowave_bpp),
             "render_scale" => self.render_scale = Some(s.render_scale),
             "video_fit" => self.video_fit = Some(s.video_fit.clone()),
             "codec" => self.codec = Some(s.codec.clone()),
@@ -614,6 +624,7 @@ mod tests {
             "refresh_hz",
             "match_window",
             "bitrate_kbps",
+            "pyrowave_bpp",
             "render_scale",
             "video_fit",
             "codec",
@@ -690,6 +701,7 @@ mod tests {
         let out = empty.apply(&base);
         assert_eq!((out.width, out.height), (1920, 1080));
         assert_eq!(out.bitrate_kbps, 20000);
+        assert_eq!(out.pyrowave_bpp, punktfunk_core::pyrowave::BPP_DEFAULT);
         assert_eq!(out.codec, "hevc");
         assert!(
             out.gamepad_forwarding,
@@ -702,6 +714,7 @@ mod tests {
             height: Some(2160),
             refresh_hz: Some(120),
             bitrate_kbps: Some(80000),
+            pyrowave_bpp: Some(1.0),
             render_scale: Some(1.5),
             codec: Some("av1".into()),
             hdr_enabled: Some(false),
@@ -730,6 +743,7 @@ mod tests {
         let out = overlay.apply(&base);
         assert_eq!((out.width, out.height, out.refresh_hz), (3840, 2160, 120));
         assert_eq!(out.bitrate_kbps, 80000);
+        assert_eq!(out.pyrowave_bpp, 1.0);
         assert_eq!(out.render_scale, 1.5);
         assert_eq!(out.codec, "av1");
         assert!(!out.hdr_enabled);

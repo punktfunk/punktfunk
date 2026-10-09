@@ -235,8 +235,8 @@ pub(super) struct SendStats {
     pub(super) link_kbps: Arc<AtomicU32>,
     /// Both ends' ports: the floor under a silent client and the hard ceiling.
     pub(super) ports: crate::send_pacing::Ports,
-    /// A pinned stream (PyroWave): its rate says nothing about the link, so the link the
-    /// client proved is a hard ceiling too ([`crate::send_pacing::pinned_wall`]).
+    /// An explicit-rate PyroWave stream: its pinned rate says nothing about the link, so the
+    /// link the client proved is a hard ceiling too ([`crate::send_pacing::pinned_wall`]).
     pub(super) link_paced: bool,
     /// The shape the client asked for (`Shape as u8`). `PUNKTFUNK_DELIVERY` overrides it.
     pub(super) shape: Arc<std::sync::atomic::AtomicU8>,

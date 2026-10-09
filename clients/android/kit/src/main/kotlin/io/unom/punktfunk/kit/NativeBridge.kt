@@ -211,6 +211,29 @@ object NativeBridge {
     external fun nativeNetworkCheck(handle: Long): DoubleArray?
 
     /**
+     * This device's link toward its default route as core reads it: `[kind, mbps]`, a
+     * `PUNKTFUNK_IFACE_KIND_*` (0 unknown, 1 Ethernet, 2 Wi-Fi, 3 other) and Mbit/s, `0` where
+     * the OS did not say. A route lookup: nothing is sent. Cheap; UI-safe.
+     */
+    external fun nativeLocalLink(): IntArray?
+
+    /**
+     * The PyroWave quality row, priced by core: `"<rate>\n<warning>"`, the rate [bppX100] needs
+     * at this mode (`1.6 Gbit/s`), then the warning when a link of [linkKind] and [linkMbps] is
+     * short of it, empty when it fits. Pure; UI-safe.
+     */
+    external fun nativePyrowaveQuality(
+        width: Int,
+        height: Int,
+        refreshHz: Int,
+        chroma444: Boolean,
+        bitDepth: Int,
+        bppX100: Int,
+        linkKind: Int,
+        linkMbps: Int,
+    ): String
+
+    /**
      * Apply the user's "Low-latency mode (experimental)" toggle to the process-wide transport
      * defaults — today just DSCP/QoS marking on the media sockets. Must be called BEFORE
      * [nativeConnect] (the tag is applied at socket creation); `HostConnect.connectToHost` does.

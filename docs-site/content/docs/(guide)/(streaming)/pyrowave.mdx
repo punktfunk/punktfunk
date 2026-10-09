@@ -43,9 +43,12 @@ PyroWave has no quality setting of its own: its encoder fills each frame's byte 
 Punktfunk sets that budget in **bits per pixel**, so one number means the same picture at every
 resolution and frame rate.
 
-Set it in the web console under **Host → Video → PyroWave quality**, or with
-`PUNKTFUNK_PYROWAVE_BPP` in `host.env`: 0.25 to 4, from the next session. One value covers every
-client, each at its own bitrate. The client's bitrate setting doesn't apply.
+Set it on the client under **PyroWave quality**, 0.5 to 2, shown as the rate it needs at your
+stream's mode ([Client settings](/docs/client-settings)). For a client without that row, set the
+host's value in the web console under **Host → Video → PyroWave quality**, or
+with `PUNKTFUNK_PYROWAVE_BPP` in `host.env`: 0.25 to 4, from the next session. Either way a fixed
+bitrate on the client doesn't apply; with **Automatic**, the quality is the most a session uses
+([Fitting the link](#fitting-the-link)).
 
 The default is **1.6**, the codec author's clean point: at 200 Mbps for 1080p60 he
 [could not spot compression artifacts](https://themaister.net/blog/2025/06/16/i-designed-my-own-ridiculously-fast-game-streaming-video-codec-pyrowave/)
@@ -82,10 +85,14 @@ Together, 4:4:4 HDR at the default is ~3.0 bits per pixel.
 ## Fitting the link
 
 Before the first frame the client tests the link. If it can't carry the rate with room to spare,
-the session drops to 70 % of what the link delivered, so 4K120 on Gigabit still streams at fewer
-bits per pixel. The rate never rises afterwards and adaptive bitrate stays off; under sustained
-loss, switch to HEVC. The Android app runs this test only with its bitrate on **Automatic**, the
-default.
+the session starts at 70 % of what the link delivered, so 4K120 on Gigabit still streams at fewer
+bits per pixel.
+
+With the client's bitrate on **Automatic**, the default, PyroWave then adapts like the other
+codecs: bits per pixel follow the link between 0.5 and **PyroWave quality**, dropping under loss
+and climbing back when the link recovers. Held at 0.5 for three seconds, the
+[stats overlay](/docs/stats) says the network is weak and that HEVC would look better on this
+link. With a fixed client bitrate the session stays at the rate the test left.
 
 To hold every session under a fixed rate, set **PyroWave bitrate cap** (under **Show advanced**,
 `PUNKTFUNK_PYROWAVE_MAX_MBPS`, 0 for no cap).
