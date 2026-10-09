@@ -791,9 +791,10 @@ impl AscBackend {
     }
 
     /// One frame on glass at `present_ns`: with a `real` vsync (a present fence) phase the clock
-    /// and correct the pacer by what actually happened; either way score the interval and record
-    /// the display metrics. A latch stands in for the vsync where no fence exists — it never
-    /// phases the clock, so such a device keeps the one-pending as-soon-as-possible budget.
+    /// and correct the pacer by what actually happened; either way score the interval, record the
+    /// display metrics and publish the glass-to-glass figure. A latch stands in for the vsync
+    /// where no fence exists — it never phases the clock, so such a device keeps the one-pending
+    /// as-soon-as-possible budget.
     fn on_present(
         &mut self,
         a: PresentSample,
@@ -817,23 +818,18 @@ impl AscBackend {
         }
         // Apply → on glass: what the HUD and the log line call `latch`, which is SurfaceFlinger's
         // whole share and not its latch instant.
-        let on_glass_ns = (present_ns - a.release_mono).clamp(0, 10_000_000_000);
+        let on_glass_ns = (present_ns - a.release_mono).clamp(0, crate::stats::SANE_NS as i64);
         let displayed_real = a.release_real + on_glass_ns as i128;
-        let e2e_ns = displayed_real + clock_offset as i128 - a.pts_us as i128 * 1000;
         let latch_use = (on_glass_ns / 1000) as u64;
         self.latch_us.push(latch_use);
         self.displays += 1;
-        if e2e_ns > 0 && e2e_ns < 10_000_000_000 {
-            self.e2e_us.push((e2e_ns / 1000) as u64);
-            // Publish glass-to-glass RAW for the audio plane to align against.
-            video_e2e.store(e2e_ns as u64, Ordering::Relaxed);
+        let pts_ns = a.pts_us.saturating_mul(1000);
+        // Published RAW for the audio plane to align against.
+        if let Some(us) = crate::stats::publish_e2e(video_e2e, displayed_real, clock_offset, pts_ns)
+        {
+            self.e2e_us.push(us);
         }
-        stats.note_displayed(
-            a.pts_us * 1000,
-            a.decoded_real,
-            a.release_real,
-            displayed_real,
-        );
+        stats.note_displayed(pts_ns, a.decoded_real, a.release_real, displayed_real);
     }
 
     /// A real vsync for a frame the scheduler aimed at `assigned`: phase the clock, score the slot

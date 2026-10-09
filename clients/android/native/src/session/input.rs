@@ -4,14 +4,14 @@
 //! from the Kotlin UI thread. NOT android-gated — send_input exists on the host build too, so these
 //! compile everywhere (parity with nativeConnect/nativeClose). The wire codes are the GameStream
 //! conventions: buttons 1=left/2=middle/3=right/4=X1/5=X2; scroll axis 0=vertical/1=horizontal,
-//! signed 120-unit delta, +=up/right; keys are Windows VK (mapped from KEYCODE_* on the Kotlin side).
+//! +=up/right; keys are Windows VK (mapped from KEYCODE_* on the Kotlin side).
 
 use jni::errors::LogErrorAndDefault;
 use jni::objects::{JByteArray, JByteBuffer, JFloatArray, JObject, JString};
 use jni::sys::{jboolean, jint, jlong};
 use jni::EnvUnowned;
 use punktfunk_core::input::scroll::ScrollEvent;
-use punktfunk_core::input::{InputEvent, InputKind, SCROLL_FLAG_PRECISE};
+use punktfunk_core::input::{InputEvent, InputKind};
 use punktfunk_core::quic::{
     PenSample, PenTool, RichInput, HID_REPORT_MAX, HOST_CAP2_TOUCH, HOST_CAP_PEN,
     HOST_CAP_TEXT_INPUT, PEN_ANGLE_UNKNOWN, PEN_BATCH_MAX, PEN_DISTANCE_UNKNOWN, PEN_TILT_UNKNOWN,
@@ -87,25 +87,6 @@ pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeSendPointer
             InputKind::MouseButtonUp
         };
         send_event(handle, kind, button as u32, 0, 0, 0);
-    })
-}
-
-/// `NativeBridge.nativeSendScroll(handle, axis, delta, precise)` — one scroll step. `axis`:
-/// 0=vertical, 1=horizontal. `delta`: signed, WHEEL_DELTA(120)-scaled, +=up/right. `precise`:
-/// the delta was MEASURED off a trackpad, so the host travels that distance instead of pricing
-/// each detent as a wheel click ([`SCROLL_FLAG_PRECISE`]).
-#[unsafe(no_mangle)]
-pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeSendScroll(
-    _env: EnvUnowned,
-    _this: JObject,
-    handle: jlong,
-    axis: jint,
-    delta: jint,
-    precise: jboolean,
-) {
-    jni_guard((), || {
-        let flags = if precise { SCROLL_FLAG_PRECISE } else { 0 };
-        send_event(handle, InputKind::MouseScroll, axis as u32, delta, 0, flags);
     })
 }
 

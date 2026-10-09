@@ -227,23 +227,14 @@ mod imp {
 
             // Presented. Stamped here rather than at a latch callback: this path has no
             // render-timestamp signal (that is the ASurfaceControl backend's), so the HUD
-            // shows the capture→decoded headline and drops the `display` stage — the same
-            // fallback it already takes when the platform delivers no render callbacks.
-            let presented_ns = if want_stamps { now_realtime_ns() } else { 0 };
-            let e2e_ns =
-                presented_ns + clock_offset.load(Ordering::Relaxed) as i128 - frame.pts_ns as i128;
-            // Same (0, 10 s) clamp as every other e2e sample: one garbage value here would
-            // step the audio ring, not just a percentile.
-            if want_stamps && e2e_ns > 0 && e2e_ns < 10_000_000_000 {
-                video_e2e.store(e2e_ns as u64, Ordering::Relaxed);
-            }
+            // shows the capture→decoded headline and drops the `display` stage. Stamped
+            // whatever the HUD state: the audio plane steers by `video_e2e`.
+            let presented_ns = now_realtime_ns();
+            let offset = clock_offset.load(Ordering::Relaxed);
+            crate::stats::publish_e2e(&video_e2e, presented_ns, offset, frame.pts_ns);
             if stats.enabled() {
-                let clamp = |v: i128| (v > 0 && v < 10_000_000_000).then_some((v / 1000) as u64);
-                stats.note_decoded(
-                    frame.pts_ns,
-                    presented_ns,
-                    clamp(presented_ns - received_ns),
-                );
+                let decode_us = crate::stats::sane_us(presented_ns - received_ns);
+                stats.note_decoded(frame.pts_ns, presented_ns, decode_us);
             }
         }
 

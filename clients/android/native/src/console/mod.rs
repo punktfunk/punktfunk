@@ -3,10 +3,9 @@
 //! Kotlin retains trust, discovery, library, wake, and pairing services and exchanges their serde
 //! models through JNI. Console actions return through a blocking event poll and command drain.
 //!
-//! `nativeConsoleCreate` returns an opaque integer key into an `Arc<ConsoleHost>` table. Lookups
-//! retain the host across destroy-vs-poll races; destroy removes the key, and the final reference
-//! stops and joins the render thread. Surface, model, menu, pointer, key, and text calls all use the
-//! same retained lookup rather than exposing a Rust pointer to Kotlin.
+//! `nativeConsoleCreate` returns an opaque integer key into an `Arc<ConsoleHost>` table. The console
+//! lives for the process, so nothing removes its key. Surface, model, menu, pointer, key, and text
+//! calls all use the same keyed lookup rather than exposing a Rust pointer to Kotlin.
 
 mod egl;
 mod gpu;
@@ -118,19 +117,6 @@ pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativePadMark<'lo
     };
     env.with_env(|env| env.new_string(path))
         .resolve::<LogErrorAndDefault>()
-}
-
-/// Remove one console key; the final retained call then stops and joins the render thread.
-/// Zero, stale, duplicate, and concurrent destroys are no-ops.
-#[unsafe(no_mangle)]
-pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeConsoleDestroy(
-    _env: EnvUnowned,
-    _this: JObject,
-    handle: jlong,
-) {
-    jni_guard((), || {
-        drop(CONSOLES.remove(handle));
-    })
 }
 
 /// `NativeBridge.nativeConsoleSurfaceCreated(handle, surface)` — the `SurfaceView`'s surface is
