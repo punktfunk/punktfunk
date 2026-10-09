@@ -250,6 +250,12 @@ jobs:
           python3 scripts/ci/check-workflow-paths.py --self-test
           python3 scripts/ci/check-workflow-paths.py
 
+      # A client crate that links a host crate drags the host stack into every client build.
+      - name: Crate group gate
+        run: |
+          python3 scripts/ci/check-crate-groups.py --self-test
+          python3 scripts/ci/check-crate-groups.py
+
       # The plugin runner's unit replaces the home with a tmpfs, so a config file it reads and the
       # unit does not bind is ENOENT at runtime — which is how plugin-tokens.json shipped unbound
       # and no Linux plugin could start. Reads the names out of the SDK, not a second list.

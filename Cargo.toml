@@ -2,7 +2,7 @@
 resolver = "2"
 members = [
     # crates/<group>: core and codec serve both sides; client and host never depend on each
-    # other; install sits on core and host.
+    # other; install sits on core and host. scripts/ci/check-crate-groups.py holds the rule.
     "crates/core/punktfunk-core",
     "crates/core/pf-dmabuf",
     "crates/core/pf-update-check",
