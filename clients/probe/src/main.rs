@@ -103,7 +103,7 @@ struct Args {
     /// `--launch ID` — ask the host to launch a library title in this session (a store-qualified
     /// id from the host's `GET /api/v1/library`, e.g. `steam:570`). Host resolves it; `None` = none.
     launch: Option<String>,
-    /// `--preset ID:NAME` — the settings preset this session names on `Start`, as a client does.
+    /// `--preset ID:NAME` — the settings preset this session names, as a client does.
     preset: Option<punktfunk_core::quic::SessionPreset>,
     /// `--speed-test KBPS:MS` — after the stream starts, ask the host for a `MS`-millisecond
     /// bandwidth probe burst at `KBPS`, then report measured throughput + loss.
@@ -590,14 +590,7 @@ async fn session(mut args: Args) -> Result<()> {
     )
     .await?;
     let mut recv: CtlRx = v2io::FrameReader::new(recv);
-    // The `Start` entries ride the `ClientHello`.
-    let preset = args.preset.as_ref().map(|p| p.encode()).unwrap_or_default();
     let extra = Extra {
-        start_ext: if preset.is_empty() {
-            Vec::new()
-        } else {
-            vec![(punktfunk_core::quic::EXT_TAG_PRESET, preset)]
-        },
         resume: None,
         suites: if std::env::var_os("PUNKTFUNK_CLIENT_CHACHA20").is_some() {
             vec![
@@ -757,7 +750,6 @@ async fn connect(
 
 /// What the `ClientHello` carries beyond the `Hello`.
 struct Extra {
-    start_ext: Vec<(u16, Vec<u8>)>,
     resume: Option<[u8; 16]>,
     suites: Vec<punktfunk_core::crypto::MediaSuite>,
 }
@@ -879,7 +871,11 @@ async fn handshake(
             audio_rate_hz: args.audio_format.map(|(r, _)| r).unwrap_or(0),
             audio_bits: args.audio_format.map(|(_, b)| b).unwrap_or(0),
         },
-        start_ext: extra.start_ext,
+        client_label: None,
+        abr_features: 0,
+        preset: args.preset.clone(),
+        link: Default::default(),
+        probe_only: false,
         resume: extra.resume,
         suites: extra.suites,
         // A host answers a `Redirect` only to a client that says it follows one.

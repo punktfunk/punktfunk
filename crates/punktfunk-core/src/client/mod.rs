@@ -66,10 +66,7 @@ pub use self::rumble::{ActuatorQuirks, RumbleCommand};
 
 use self::control::{CtrlRequest, Negotiated};
 use self::frame_channel::{DecodeLatAcc, FrameChannel, FramePop};
-use self::planes::{
-    RumbleUpdate, AUDIO_QUEUE, CLIP_EVENT_QUEUE, CURSOR_STATE_QUEUE, HDR_META_QUEUE, HIDOUT_QUEUE,
-    HOST_TIMING_QUEUE, PAD_AUDIO_QUEUE, RUMBLE_QUEUE,
-};
+use self::planes::{PlaneRx, RawRumble};
 use self::probe::ProbeState;
 use self::pump::run_pump;
 pub use self::recovery::FrameOrder;
@@ -79,11 +76,11 @@ use self::worker::{ClientShared, WorkerArgs};
 
 /// What this client calls itself in the host's `handshake complete` line: build plus the shell
 /// and path that dialled. Process-wide because it describes the embedder, not one session; set it
-/// before the dial. Empty (the default) sends no `Start` extension at all.
+/// before the dial. Empty (the default) sends no label.
 static CLIENT_LABEL: Mutex<String> = Mutex::new(String::new());
 
-/// Set the label [`EXT_TAG_CLIENT`](crate::quic::EXT_TAG_CLIENT) carries. Bounded and stripped
-/// on the way in, so the wire never has to trust the caller.
+/// Set the label [`ClientHello::client_label`](crate::quic::v2::hello::ClientHello::client_label)
+/// carries. Bounded and stripped on the way in, so the wire never has to trust the caller.
 pub fn set_client_label(label: &str) {
     *CLIENT_LABEL.lock().unwrap_or_else(|e| e.into_inner()) = crate::quic::client_label(label);
 }
@@ -152,10 +149,6 @@ pub struct MicUplinkStats {
 /// Sparse requests (mode, keyframe, ~1.3 loss reports/s). 32 is hours of headroom;
 /// full means the control task is wedged — callers treat that as a closed session.
 const CTRL_QUEUE: usize = 32;
-
-/// Console edits and expiry warnings — a handful per session. Live grants/deadline
-/// slots hold the truth, so a full queue drops news the embedder would re-derive.
-const ACCESS_QUEUE: usize = 8;
 
 /// Client-wall unix seconds from a relative remaining; `0` stays `0` (permanent).
 /// Anchor on the client clock: the wire is relative, so host/client skew must not
@@ -234,30 +227,10 @@ impl From<&quinn::ConnectionError> for PunktfunkEndReason {
 pub struct NativeClient {
     /// Cells the worker writes and this handle reads, or the other way round.
     shared: Arc<ClientShared>,
-    // Per-plane mutex so `NativeClient` is `Sync`. One-thread-per-plane (C ABI); the
-    // lock is uncontended there. Two threads racing one plane serialize instead of UB.
-    audio: Mutex<Receiver<AudioPacket>>,
-    rumble: Mutex<Receiver<RumbleUpdate>>,
-    /// Policy engine in parallel with the raw `rumble` queue. Consume ONE of the two APIs
-    /// ([`NativeClient::next_rumble_command`]).
-    rumble_sched: Arc<rumble::RumbleShared>,
-    hidout: Mutex<Receiver<HidOutput>>,
-    /// DualSense haptics/speaker Opus. Empty unless [`quic::CLIENT_CAP_PAD_AUDIO`] met
-    /// [`quic::HOST_CAP_PAD_AUDIO`].
-    pad_audio: Mutex<Receiver<PadAudioFrame>>,
-    hdr_meta: Mutex<Receiver<HdrMeta>>,
+    /// The host-filled planes, one receiver each.
+    planes: PlaneRx,
     /// Newest entry [`NativeClient::latest_hdr_meta`] drained.
     hdr_meta_last: Mutex<Option<HdrMeta>>,
-    /// Per-AU capture→send timings. Client always advertises [`quic::VIDEO_CAP_HOST_TIMING`];
-    /// an older host never sends any.
-    host_timing: Mutex<Receiver<crate::quic::HostTiming>>,
-    /// Control-stream shapes. Empty unless [`quic::CLIENT_CAP_CURSOR`] met [`quic::HOST_CAP_CURSOR`].
-    cursor_shape: self::planes::ShapeReceiver,
-    /// Per-frame cursor state (`0xD0`). Same negotiation gate as shapes.
-    cursor_state: Mutex<Receiver<crate::quic::CursorState>>,
-    /// Wake-up plane for [`NativeClient::next_access_update`]. Truth is `access_grants` /
-    /// `access_deadline_unix`; a dropped event loses news, never accuracy.
-    access: Mutex<Receiver<crate::quic::AccessUpdate>>,
     input_tx: tokio::sync::mpsc::UnboundedSender<InputEvent>,
     /// Bounded ([`MIC_QUEUE`]): pump sheds oldest-first; a full queue drops the fresh frame.
     /// Standing backlog is worse than a dropout.
@@ -271,7 +244,6 @@ pub struct NativeClient {
     sc2: Mutex<[sc2::Filter; sc2::PADS]>,
     /// Bounded ([`CTRL_QUEUE`]). Sparse; full means the control task is wedged — treat as closed.
     ctrl_tx: tokio::sync::mpsc::Sender<CtrlRequest>,
-    clip: Mutex<Receiver<ClipEventCore>>,
     /// Unbounded like `input_tx`; sparse, at most one paste's bytes each.
     clip_cmd_tx: tokio::sync::mpsc::UnboundedSender<ClipCommand>,
     /// Outbound fetch ids. Stay below [`crate::clipboard::INBOUND_REQ_FLAG`] or they collide
@@ -279,6 +251,8 @@ pub struct NativeClient {
     next_xfer_id: AtomicU32,
     /// Wrapping [`crate::quic::PenBatch::seq`]; the host's reorder gate compares it.
     pen_seq: AtomicU16,
+    /// The host's offer. The pub fields below are copies of it, read by embedders.
+    welcome: crate::quic::Welcome,
     pub host_caps: u8,
     pub host_caps2: u8,
     /// `0` when the host did not advertise a management port.
@@ -597,8 +571,8 @@ pub struct ConnectParams {
     pub pin: Option<[u8; 32]>,
     /// PEM cert + PKCS#8 key ([`endpoint::generate_identity`]); `None` = anonymous.
     pub identity: Option<(String, String)>,
-    /// Settings preset this dial names ([`crate::quic::EXT_TAG_PRESET`]); the host shows it and
-    /// hands it to hooks, the stream is unchanged. `None` names none.
+    /// Settings preset this dial names; the host shows it and hands it to hooks, the stream is
+    /// unchanged. `None` names none.
     pub preset: Option<crate::quic::SessionPreset>,
     /// A diagnostic session ([`crate::quic::EXT_DELIVERY_PROBE_ONLY`]): the host serves probes
     /// from the punched data plane and never builds a pipeline.
@@ -656,30 +630,14 @@ impl NativeClient {
     /// [`audio_bits`](Self::audio_bits) and build the decoder from [`codec`](Self::codec), never
     /// from `params`.
     pub fn connect(mut params: ConnectParams) -> Result<NativeClient> {
-        let (audio_tx, audio_rx) = std::sync::mpsc::sync_channel::<AudioPacket>(AUDIO_QUEUE);
-        let (rumble_tx, rumble_rx) = std::sync::mpsc::sync_channel::<RumbleUpdate>(RUMBLE_QUEUE);
-        let rumble_sched = Arc::new(rumble::RumbleShared::new());
-        let rumble_feed = rumble::RumbleFeed(rumble_sched.clone());
-        let (hidout_tx, hidout_rx) = std::sync::mpsc::sync_channel::<HidOutput>(HIDOUT_QUEUE);
-        let (pad_audio_tx, pad_audio_rx) =
-            std::sync::mpsc::sync_channel::<PadAudioFrame>(PAD_AUDIO_QUEUE);
-        let (hdr_meta_tx, hdr_meta_rx) = std::sync::mpsc::sync_channel::<HdrMeta>(HDR_META_QUEUE);
-        let (host_timing_tx, host_timing_rx) =
-            std::sync::mpsc::sync_channel::<crate::quic::HostTiming>(HOST_TIMING_QUEUE);
+        let (planes_tx, planes) = planes::channels();
         let (input_tx, input_rx) = tokio::sync::mpsc::unbounded_channel::<InputEvent>();
         let (mic_tx, mic_rx) = tokio::sync::mpsc::channel::<(u32, u64, Vec<u8>)>(MIC_QUEUE);
         let (rich_input_tx, rich_input_rx) = tokio::sync::mpsc::unbounded_channel::<Vec<u8>>();
         let (pad_touch_tx, pad_touch_rx) =
             tokio::sync::mpsc::unbounded_channel::<pad_touch::Contact>();
         let (ctrl_tx, ctrl_rx) = tokio::sync::mpsc::channel::<CtrlRequest>(CTRL_QUEUE);
-        let (clip_event_tx, clip_event_rx) =
-            std::sync::mpsc::sync_channel::<ClipEventCore>(CLIP_EVENT_QUEUE);
         let (clip_cmd_tx, clip_cmd_rx) = tokio::sync::mpsc::unbounded_channel::<ClipCommand>();
-        let (cursor_shape_tx, cursor_shape_rx) = self::planes::shape_queue();
-        let (cursor_state_tx, cursor_state_rx) =
-            std::sync::mpsc::sync_channel::<crate::quic::CursorState>(CURSOR_STATE_QUEUE);
-        let (access_tx, access_rx) =
-            std::sync::mpsc::sync_channel::<crate::quic::AccessUpdate>(ACCESS_QUEUE);
         let (ready_tx, ready_rx) = std::sync::mpsc::channel::<Result<Negotiated>>();
         let shared = Arc::new(ClientShared::new(params.mode));
         shared
@@ -714,25 +672,15 @@ impl NativeClient {
                 rt.block_on(run_pump(WorkerArgs {
                     params,
                     shared: shared_w,
-                    audio_tx,
-                    rumble_tx,
-                    rumble_feed,
-                    hidout_tx,
-                    pad_audio_tx,
-                    hdr_meta_tx,
-                    host_timing_tx,
-                    cursor_shape_tx,
-                    cursor_state_tx,
+                    planes: planes_tx,
                     input_rx,
                     mic_rx,
                     rich_input_rx,
                     pad_touch_rx,
                     ctrl_rx,
                     ctrl_tx: ctrl_tx_pump,
-                    clip_event_tx,
                     clip_cmd_rx,
                     ready_tx,
-                    access_tx,
                 }));
             })
             .map_err(PunktfunkError::Io)?;
@@ -763,35 +711,27 @@ impl NativeClient {
                 }
             }
         };
-        *shared.mode.lock().unwrap() = negotiated.mode;
+        let welcome = negotiated.welcome;
+        *shared.mode.lock().unwrap() = welcome.mode;
         let hud = Arc::new(crate::hud::Stats::new(shared.clock_offset.clone()));
         Ok(NativeClient {
             shared,
-            audio: Mutex::new(audio_rx),
-            rumble: Mutex::new(rumble_rx),
-            rumble_sched,
-            hidout: Mutex::new(hidout_rx),
-            pad_audio: Mutex::new(pad_audio_rx),
-            hdr_meta: Mutex::new(hdr_meta_rx),
+            planes,
             hdr_meta_last: Mutex::new(None),
-            host_timing: Mutex::new(host_timing_rx),
-            cursor_shape: cursor_shape_rx,
-            cursor_state: Mutex::new(cursor_state_rx),
-            access: Mutex::new(access_rx),
             input_tx,
             mic_tx,
             rich_input_tx,
             pad_touch_tx,
             sc2: Mutex::default(),
             ctrl_tx,
-            clip: Mutex::new(clip_event_rx),
             clip_cmd_tx,
             next_xfer_id: AtomicU32::new(1),
             pen_seq: AtomicU16::new(0),
-            host_caps: negotiated.host_caps,
-            host_caps2: negotiated.host_caps2,
-            mgmt_port: negotiated.mgmt_port,
-            profile: negotiated.profile.clone(),
+            welcome,
+            host_caps: welcome.host_caps,
+            host_caps2: welcome.host_caps2,
+            mgmt_port: welcome.mgmt_port,
+            profile: negotiated.profile,
             worker: Some(worker),
             video_e2e_ns: Arc::new(AtomicU64::new(0)),
             audio_av_offset_ms: Arc::new(AtomicI64::new(0)),
@@ -800,25 +740,25 @@ impl NativeClient {
             // Match the pump: Automatic, not rate-pinned PyroWave, AND host echoed a rate.
             // Dropping the last term over-advertises against an old host that reports no rate.
             wants_decode: bitrate_kbps == 0
-                && negotiated.codec != crate::quic::CODEC_PYROWAVE
-                && negotiated.bitrate_kbps > 0,
+                && welcome.codec != crate::quic::CODEC_PYROWAVE
+                && welcome.bitrate_kbps > 0,
             host_fingerprint: negotiated.host_fingerprint,
-            resolved_compositor: negotiated.compositor,
-            resolved_gamepad: negotiated.gamepad,
+            resolved_compositor: welcome.compositor,
+            resolved_gamepad: welcome.gamepad,
             requested_gamepad,
-            resolved_bitrate_kbps: negotiated.bitrate_kbps,
-            shard_payload: negotiated.shard_payload,
+            resolved_bitrate_kbps: welcome.bitrate_kbps,
+            shard_payload: welcome.shard_payload,
             clock_offset_ns: negotiated.clock_offset_ns,
-            bit_depth: negotiated.bit_depth,
-            color: negotiated.color,
-            chroma_format: negotiated.chroma_format,
-            audio_channels: negotiated.audio_channels,
-            audio_codec: negotiated.audio_codec,
-            audio_sample_rate_hz: negotiated.audio_rate_hz,
-            audio_bits: negotiated.audio_bits,
-            audio_frame_us: negotiated.audio_frame_us,
-            audio_layout: negotiated.audio_layout,
-            codec: negotiated.codec,
+            bit_depth: welcome.bit_depth,
+            color: welcome.color,
+            chroma_format: welcome.chroma_format,
+            audio_channels: welcome.audio_channels,
+            audio_codec: welcome.audio_codec,
+            audio_sample_rate_hz: welcome.audio_rate_hz,
+            audio_bits: welcome.audio_bits,
+            audio_frame_us: welcome.audio_frame_us,
+            audio_layout: welcome.audio_layout,
+            codec: welcome.codec,
         })
     }
 
@@ -1371,7 +1311,7 @@ impl NativeClient {
 
     /// Next audio packet. Drain on a dedicated thread — packets arrive every 5 ms.
     pub fn next_audio(&self, timeout: Duration) -> Result<AudioPacket> {
-        pull(&self.audio, timeout)
+        pull(&self.planes.audio, timeout)
     }
 
     /// Mute this client's own speakers. Nothing leaves for the host: it keeps encoding, and a
@@ -1420,8 +1360,8 @@ impl NativeClient {
 
     /// `(pad, low, high, ttl_ms)`. `Some(ms)` = v2 lease; `None` = v1, use the renderer's
     /// staleness heuristic. Reorder gate is applied in demux; stale envelopes never surface.
-    pub fn next_rumble_ttl(&self, timeout: Duration) -> Result<RumbleUpdate> {
-        pull(&self.rumble, timeout)
+    pub fn next_rumble_ttl(&self, timeout: Duration) -> Result<RawRumble> {
+        pull(&self.planes.rumble, timeout)
     }
 
     /// Policy-engine command: level on every wire update, explicit zero at expiry/staleness/
@@ -1433,7 +1373,7 @@ impl NativeClient {
     /// has them; do not fold them into a handle ([`RumbleCommand`]). Use this OR
     /// `next_rumble`/`next_rumble_ttl` for the connection, never both.
     pub fn next_rumble_command(&self, timeout: Duration) -> Result<RumbleCommand> {
-        match self.rumble_sched.next_command(timeout) {
+        match self.planes.rumble_sched.next_command(timeout) {
             Ok(Some(c)) => Ok(c),
             Ok(None) => Err(PunktfunkError::NoFrame),
             Err(rumble::Closed) => Err(PunktfunkError::Closed),
@@ -1443,12 +1383,12 @@ impl NativeClient {
     /// Actuator quirks for wire pad `pad` (at attach). Default = well-behaved; only decaying
     /// actuators need a keepalive.
     pub fn set_rumble_quirks(&self, pad: u16, quirks: ActuatorQuirks) {
-        self.rumble_sched.set_quirks(pad, quirks);
+        self.planes.rumble_sched.set_quirks(pad, quirks);
     }
 
     /// DualSense HID-output (lightbar / LEDs / adaptive trigger). DualSense host backend only.
     pub fn next_hidout(&self, timeout: Duration) -> Result<HidOutput> {
-        pull(&self.hidout, timeout)
+        pull(&self.planes.hidout, timeout)
     }
 
     /// Pad-audio Opus (haptics 5 ms / speaker 10 ms). Shared queue; fan out by `pad`/`kind`.
@@ -1456,7 +1396,7 @@ impl NativeClient {
     /// Empty unless [`quic::CLIENT_CAP_PAD_AUDIO`] met [`quic::HOST_CAP_PAD_AUDIO`] and
     /// [`set_pad_audio_caps`](Self::set_pad_audio_caps) declared the pad.
     pub fn next_pad_audio(&self, timeout: Duration) -> Option<PadAudioFrame> {
-        self.pad_audio.lock().unwrap().recv_timeout(timeout).ok()
+        pull(&self.planes.pad_audio, timeout).ok()
     }
 
     /// Pad-audio render caps: bit0 haptics, bit1 speaker. Call at attach, before arrival —
@@ -1471,14 +1411,14 @@ impl NativeClient {
     /// ST.2086 mastering + CLL. Host sends at start and on mastering/keyframe changes. HDR
     /// (`color.is_hdr()`, PQ) only; drain on its own thread and apply the latest.
     pub fn next_hdr_meta(&self, timeout: Duration) -> Result<HdrMeta> {
-        pull(&self.hdr_meta, timeout)
+        pull(&self.planes.hdr_meta, timeout)
     }
 
     /// The newest [`HdrMeta`] so far: drains the queue, blocking up to `wait` only while none
     /// has ever arrived. Kept across calls, so a decoder rebuilt mid-session starts from the
     /// current grade. Use this OR [`next_hdr_meta`](Self::next_hdr_meta), never both.
     pub fn latest_hdr_meta(&self, wait: Duration) -> Option<HdrMeta> {
-        let rx = self.hdr_meta.lock().unwrap();
+        let rx = self.planes.hdr_meta.lock().unwrap();
         latest_of(&rx, &mut self.hdr_meta_last.lock().unwrap(), wait)
     }
 
@@ -1486,20 +1426,23 @@ impl NativeClient {
     /// [`NativeClient::next_cursor_state`] references it. Empty unless
     /// [`crate::quic::CLIENT_CAP_CURSOR`] was advertised against a capable host.
     pub fn next_cursor_shape(&self, timeout: Duration) -> Result<crate::quic::CursorShape> {
-        self.cursor_shape.recv_timeout(timeout).map_err(plane_err)
+        self.planes
+            .cursor_shape
+            .recv_timeout(timeout)
+            .map_err(plane_err)
     }
 
     /// Per-frame cursor state (`0xD0`): position, visibility, relative-mode hint. Latest-wins
     /// — drain and apply only the newest. Same gate as [`NativeClient::next_cursor_shape`].
     pub fn next_cursor_state(&self, timeout: Duration) -> Result<crate::quic::CursorState> {
-        pull(&self.cursor_state, timeout)
+        pull(&self.planes.cursor_state, timeout)
     }
 
     /// Per-AU capture→sent (`pts_ns`). HUD split: `network = (received + clock_offset − pts)
     /// − host_us`. Older host never sends any — keep combined `host+network`. Drain
     /// non-blockingly alongside frame samples.
     pub fn next_host_timing(&self, timeout: Duration) -> Result<crate::quic::HostTiming> {
-        let t = pull(&self.host_timing, timeout)?;
+        let t = pull(&self.planes.host_timing, timeout)?;
         self.hud.note_host_timing(&t);
         Ok(t)
     }
@@ -1544,6 +1487,12 @@ impl NativeClient {
         if let Some(f) = self.sc2.lock().unwrap().get_mut(usize::from(pad)) {
             f.gate = gate;
         }
+    }
+
+    /// The host's session offer as it arrived. Connect-time values: [`mode`](Self::mode),
+    /// [`access_grants`](Self::access_grants) and the live bitrate move on during the session.
+    pub fn welcome(&self) -> &crate::quic::Welcome {
+        &self.welcome
     }
 
     /// Welcome [`crate::quic::HOST_CAP_GAMEPAD_STATE`] / [`crate::quic::HOST_CAP_CLIPBOARD`].
@@ -1600,7 +1549,7 @@ impl NativeClient {
     /// only: truth is already in [`access_grants`](Self::access_grants) /
     /// [`access_deadline_unix`](Self::access_deadline_unix).
     pub fn next_access_update(&self, timeout: Duration) -> Result<crate::quic::AccessUpdate> {
-        pull(&self.access, timeout)
+        pull(&self.planes.access, timeout)
     }
 
     /// Opt-in clipboard. Nothing is announced until `enabled = true`. `flags` carries
@@ -1657,7 +1606,7 @@ impl NativeClient {
     /// Clipboard events (offer, state, fetch-request, data, cancel, error). Drain on its own
     /// thread onto the OS pasteboard.
     pub fn next_clip(&self, timeout: Duration) -> Result<ClipEventCore> {
-        pull(&self.clip, timeout)
+        pull(&self.planes.clip, timeout)
     }
 
     /// Opus mic uplink (0xCB). `seq`/`pts_ns` are caller diagnostics. Best-effort; no retransmit.

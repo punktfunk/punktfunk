@@ -14673,7 +14673,7 @@
       },
       "PresetRef": {
         "type": "object",
-        "description": "The settings preset a client dialled with ([`punktfunk_core::quic::EXT_TAG_PRESET`]). The\nid is the client's own and stable across a rename, so it is what a hook or plugin keys on\ntogether with the device fingerprint; the name is for people.",
+        "description": "The settings preset a client dialled with ([`punktfunk_core::quic::SessionPreset`]). The\nid is the client's own and stable across a rename, so it is what a hook or plugin keys on\ntogether with the device fingerprint; the name is for people.",
         "required": [
           "id",
           "name"

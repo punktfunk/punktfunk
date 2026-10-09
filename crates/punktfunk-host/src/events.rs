@@ -70,7 +70,7 @@ pub enum DisconnectReason {
     Error,
 }
 
-/// The settings preset a client dialled with ([`punktfunk_core::quic::EXT_TAG_PRESET`]). The
+/// The settings preset a client dialled with ([`punktfunk_core::quic::SessionPreset`]). The
 /// id is the client's own and stable across a rename, so it is what a hook or plugin keys on
 /// together with the device fingerprint; the name is for people.
 #[derive(Serialize, Deserialize, ToSchema, Clone, Debug, PartialEq, Eq)]

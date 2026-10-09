@@ -402,7 +402,11 @@ mod tests {
         };
         ClientHello {
             hello,
-            start_ext: Vec::new(),
+            client_label: None,
+            abr_features: 0,
+            preset: None,
+            link: Default::default(),
+            probe_only: false,
             resume: None,
             suites: Vec::new(),
             features: Default::default(),

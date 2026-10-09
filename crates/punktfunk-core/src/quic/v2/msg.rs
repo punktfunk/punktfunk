@@ -18,8 +18,7 @@ pub trait V2Message: Sized {
     fn fields(&self) -> Fields;
     fn from_body(body: &[u8]) -> Result<Self>;
 
-    /// The whole frame: `type ‖ len ‖ fields`. Not `encode`: the structs keep
-    /// `punktfunk/1`'s inherent `encode` until that wire is removed.
+    /// The whole frame: `type ‖ len ‖ fields`.
     fn encode_v2(&self) -> Vec<u8> {
         self.fields().frame(Self::TYPE)
     }

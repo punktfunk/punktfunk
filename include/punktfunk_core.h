@@ -1056,46 +1056,17 @@
 // `2` because [`AUDIO_CODEC_FLAC_RESERVED`] holds `1`.
 #define PUNKTFUNK_AUDIO_CODEC_PCM 2
 
-// Entry `2` in `ClientHello`: what the client calls itself, UTF-8, no NUL — its build and
-// the shell that dialled (`"android 0.38.0 console/library"`). A label for the host's log, never
-// a fact it acts on: two sessions from one device are told apart here instead of by capture.
-// Bounded by [`EXT_CLIENT_MAX`]; a longer value is truncated on a char boundary by
-// [`client_label`].
-#define PUNKTFUNK_EXT_TAG_CLIENT 2
-
-// Longest [`EXT_TAG_CLIENT`] value in UTF-8 bytes. A log field, so short.
+// Longest [`ClientHello::client_label`] in UTF-8 bytes. A log field, so short.
 #define PUNKTFUNK_EXT_CLIENT_MAX 96
 
-// Entry `3` in `ClientHello`: one byte of ABR protocol features the client understands,
-// as a bitfield ([`EXT_ABR_ACK_REASON`] is bit 0). A later feature takes another bit here
-// rather than a tag of its own, so the host reads one byte and answers what it recognises.
-// An absent tag, an empty value or a zero byte is a client that understands none of them —
-// which is every client shipped so far.
-#define PUNKTFUNK_EXT_TAG_ABR 3
-
-// [`EXT_TAG_ABR`] bit 0: the client reads the reason byte on
+// [`ClientHello::abr_features`] bit 0: the client reads the reason byte on
 // [`BitrateChanged`](super::control::BitrateChanged). The host sends that tenth byte only
 // toward this bit, because every client without it rejects an ack of any other length.
 // Core sets it for every embedder that links the controller reading it, not the embedder.
 #define PUNKTFUNK_EXT_ABR_ACK_REASON 1
 
-// Entry `4` in `ClientHello`: the settings preset this session was dialled with, as
-// [`SessionPreset::encode`] writes it. The id is the client's own and stable across a rename;
-// the name is for people. The host shows it and hands it to hooks and plugins; it changes
-// nothing about the stream. Absent when the client streams with its plain settings.
-#define EXT_TAG_PRESET 4
-
-// Entry `5` in `ClientHello`: `kind ‖ mbps u32`, what this client's OS says about its end
-// of the path ([`LinkFacts`]). Every dial sends it; a short value reads the missing fields
-// as zero.
-#define PUNKTFUNK_EXT_TAG_LINK_FACTS 5
-
-// Entry `6` in `ClientHello`, on a diagnostic session only: serve probes from the punched
-// data plane and never build a pipeline.
-#define PUNKTFUNK_EXT_TAG_PROBE_ONLY 6
-
-// The connect-options bit that dials a diagnostic session ([`EXT_TAG_PROBE_ONLY`]): the FFI
-// `delivery_flags` and the JNI dial carry it.
+// The connect-options bit that dials a diagnostic session ([`ClientHello::probe_only`]): the
+// FFI `delivery_flags` and the JNI dial carry it.
 #define PUNKTFUNK_EXT_DELIVERY_PROBE_ONLY 2
 
 // Longest [`SessionPreset::id`], printable ASCII.
@@ -1636,7 +1607,7 @@ typedef struct {
     const char *preset_name;
     // Always `0`.
     uint8_t reserved3;
-    // `2` dials a network check's probes-only session (`EXT_TAG_PROBE_ONLY`). `0` streams,
+    // `2` dials a network check's probes-only session (`EXT_DELIVERY_PROBE_ONLY`). `0` streams,
     // which is what a shorter prefix defaults to.
     uint8_t delivery_flags;
     // Always `0`. Fills what would otherwise be padding, as `reserved0` does.

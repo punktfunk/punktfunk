@@ -7,13 +7,11 @@
 //! [`crate::reject::RejectReason`]; transport and local closes keep the original error.
 
 use super::*;
-use crate::clipboard::{ClipCommand, ClipEventCore};
+use crate::clipboard::ClipCommand;
 use crate::config::Mode;
 use crate::error::Result;
 use crate::input::InputEvent;
-use crate::quic::{HdrMeta, HidOutput, PadAudioFrame};
 use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU16, AtomicU32, AtomicU64, AtomicU8};
-use std::sync::mpsc::SyncSender;
 use std::sync::{Arc, Mutex};
 
 /// Cells [`NativeClient`] and the worker's tasks share, one `Arc` per dial.
@@ -232,18 +230,7 @@ pub(crate) struct WorkerArgs {
     /// ([`advertised_client_caps`]); `cancel` stays with the connect call.
     pub(crate) params: ConnectParams,
     pub(crate) shared: Arc<ClientShared>,
-    pub(crate) audio_tx: SyncSender<AudioPacket>,
-    pub(crate) rumble_tx: SyncSender<RumbleUpdate>,
-    /// Feed half of the rumble policy engine. Its `Drop` (demux task end) marks the
-    /// engine closed, so the command API always sees teardown.
-    pub(crate) rumble_feed: super::rumble::RumbleFeed,
-    pub(crate) hidout_tx: SyncSender<HidOutput>,
-    /// Inbound `0xD1` pad-audio frames (voice-coil haptics + speaker).
-    pub(crate) pad_audio_tx: SyncSender<PadAudioFrame>,
-    pub(crate) hdr_meta_tx: SyncSender<HdrMeta>,
-    pub(crate) host_timing_tx: SyncSender<crate::quic::HostTiming>,
-    pub(crate) cursor_shape_tx: super::planes::ShapeSender,
-    pub(crate) cursor_state_tx: SyncSender<crate::quic::CursorState>,
+    pub(crate) planes: super::planes::PlaneTx,
     pub(crate) input_rx: tokio::sync::mpsc::UnboundedReceiver<InputEvent>,
     pub(crate) mic_rx: tokio::sync::mpsc::Receiver<(u32, u64, Vec<u8>)>,
     /// Pre-encoded `0xCC` datagrams — rich input and pen batches share this queue.
@@ -252,14 +239,8 @@ pub(crate) struct WorkerArgs {
     pub(crate) pad_touch_rx: tokio::sync::mpsc::UnboundedReceiver<super::pad_touch::Contact>,
     pub(crate) ctrl_rx: tokio::sync::mpsc::Receiver<CtrlRequest>,
     pub(crate) ctrl_tx: tokio::sync::mpsc::Sender<CtrlRequest>,
-    /// Clipboard event plane: control task pushes ClipState/ClipOffer, clipboard
-    /// task pushes fetch data.
-    pub(crate) clip_event_tx: SyncSender<ClipEventCore>,
     pub(crate) clip_cmd_rx: tokio::sync::mpsc::UnboundedReceiver<ClipCommand>,
     pub(crate) ready_tx: std::sync::mpsc::Sender<Result<Negotiated>>,
-    /// Pushed by the control task only AFTER it has folded the update into
-    /// `shared.access_grants` / `shared.access_deadline_unix`.
-    pub(crate) access_tx: SyncSender<crate::quic::AccessUpdate>,
 }
 
 /// The host's stated rejection and the sentence it sent with it, if the connection

@@ -357,7 +357,7 @@ struct ConnectRequest {
     /// Soft codec preference wire byte (0 = Auto).
     #[serde(default)]
     preferred_codec: u8,
-    /// `2` dials a network check's probes-only session (`EXT_TAG_PROBE_ONLY`).
+    /// `2` dials a network check's probes-only session (`EXT_DELIVERY_PROBE_ONLY`).
     #[serde(default)]
     delivery_flags: u8,
     /// Handshake budget: short for a normal connect, long (≥ the host's approval-park window) for

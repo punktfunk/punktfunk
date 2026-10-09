@@ -92,9 +92,8 @@ pub struct SetBitrate {
 }
 
 /// Why an ack is short of what was asked. The tenth byte of
-/// [`BitrateChanged`], toward a client whose `Start` carried
-/// [`EXT_TAG_ABR`](super::EXT_TAG_ABR) with
-/// [`EXT_ABR_ACK_REASON`](super::EXT_ABR_ACK_REASON) set.
+/// [`BitrateChanged`], toward a client whose `ClientHello` set
+/// [`EXT_ABR_ACK_REASON`](super::EXT_ABR_ACK_REASON) in its `abr_features`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AckReason {
     /// Nothing on the host held the rate down. A request past the host's
@@ -142,11 +141,10 @@ impl AckReason {
 /// In-place retarget has no IDR; a rebuild switches on the next frame (IDR).
 /// No answer ⇒ an old host that does not renegotiate bitrate.
 ///
-/// Nine bytes, or ten with [`AckReason`]. The host lengthens it only for a
-/// client whose `Start` carried [`EXT_TAG_ABR`](super::EXT_TAG_ABR) with
-/// [`EXT_ABR_ACK_REASON`](super::EXT_ABR_ACK_REASON) set, because every other
-/// client rejects an ack of any other length. `reason: None` is what an older
-/// host sends and what this host sends to a client that did not ask.
+/// Nine bytes, or ten with [`AckReason`]. The host lengthens it only for a client whose
+/// `ClientHello` set [`EXT_ABR_ACK_REASON`](super::EXT_ABR_ACK_REASON) in its `abr_features`,
+/// because every other client rejects an ack of any other length. `reason: None` is what an
+/// older host sends and what this host sends to a client that did not ask.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct BitrateChanged {
     pub bitrate_kbps: u32,

@@ -17,7 +17,6 @@ pub(super) struct HandshakeOut {
     pub(super) ctrl_send: CtlSend,
     pub(super) ctrl_recv: CtlRecv,
     pub(super) negotiated: Negotiated,
-    pub(super) host_caps: u8,
     /// The host and port that run the session: a seat's after a redirect. A lost session is
     /// kept under them, so the next dial's resume reaches the host that holds it.
     pub(super) landed_at: (String, u16),
@@ -31,7 +30,7 @@ enum Dialed {
 
 /// The handshake's end: a session, or the host's `Redirect`.
 enum Step {
-    Session(Box<(Session, CtlSend, CtlRecv, Negotiated, u8)>),
+    Session(Box<(Session, CtlSend, CtlRecv, Negotiated)>),
     Redirected(Redirect),
 }
 
@@ -159,23 +158,15 @@ async fn dial(
             .open_bi()
             .await
             .map_err(|e| PunktfunkError::Io(std::io::Error::other(e.to_string())))?;
-        let label = super::super::client_label();
-        // Core decides the ABR byte for every embedder: the controller that reads the ack's
-        // reason is this crate's, so no client app can leave it clear and make one host
-        // answer two ways.
-        let abr = [crate::quic::EXT_ABR_ACK_REASON];
-        let preset = p.preset.as_ref().map(|s| s.encode()).unwrap_or_default();
         // Every dial says what its OS knows about this end of the path.
         let link = conn
             .local_ip()
             .map(crate::transport::ifinfo::link_facts)
             .unwrap_or_default();
-        let link_facts = link.encode();
         use crate::quic::v2::features::FeatureSet;
         use crate::quic::v2::hello::{ClientHello, Ready, ServerHello};
         use crate::quic::v2::{io as v2io, msg::V2Message, registry};
         v2io::write_stream_type(&mut send, registry::STREAM_CONTROL).await?;
-        let entries = crate::quic::start_ext(&label, &abr, &preset, &link_facts, p.probe_only);
         let wants_chacha = p.video_caps & crate::quic::VIDEO_CAP_CHACHA20 != 0;
         // Resumable reader: `select!` and the clock-sync timeout can both interrupt a
         // read; a lost partial frame would misalign the stream for the session.
@@ -218,8 +209,14 @@ async fn dial(
                 // How this client fills its view; a host framing for another device reframes to it.
                 video_fit: p.video_fit.wire(),
             },
-            // The `Start` entries: every host reads them.
-            start_ext: entries.iter().map(|(t, v)| (*t, v.to_vec())).collect(),
+            client_label: Some(super::super::client_label()),
+            // Core decides the ABR byte for every embedder: the controller that reads the ack's
+            // reason is this crate's, so no client app can leave it clear and make one host
+            // answer two ways.
+            abr_features: crate::quic::EXT_ABR_ACK_REASON,
+            preset: p.preset.clone(),
+            link,
+            probe_only: p.probe_only,
             resume: crate::client::resume::peek(host, port),
             suites: if wants_chacha {
                 vec![MediaSuite::ChaCha20Poly1305, MediaSuite::Aes128Gcm]
@@ -317,34 +314,12 @@ async fn dial(
             send,
             recv,
             Negotiated {
-                mode: welcome.mode,
-                compositor: welcome.compositor,
-                gamepad: welcome.gamepad,
+                welcome,
                 host_fingerprint: fingerprint,
-                bitrate_kbps: welcome.bitrate_kbps,
                 clock_offset_ns,
                 clock_rtt_ns,
-                bit_depth: welcome.bit_depth,
-                color: welcome.color,
-                chroma_format: welcome.chroma_format,
-                audio_channels: welcome.audio_channels,
-                // Welcome is the only authority — never claim a rate we did not get
-                // (`design/hi-res-audio.md`). An omitted tail is Opus / 48 kHz / 16.
-                audio_codec: welcome.audio_codec,
-                audio_rate_hz: welcome.audio_rate_hz,
-                audio_bits: welcome.audio_bits,
-                audio_frame_us: welcome.audio_frame_us,
-                audio_layout: welcome.audio_layout,
-                codec: welcome.codec,
-                shard_payload: welcome.shard_payload,
-                host_caps: welcome.host_caps,
-                host_caps2: welcome.host_caps2,
-                mgmt_port: welcome.mgmt_port,
-                grants: welcome.grants,
-                expires_in_secs: welcome.expires_in_secs,
                 profile: server.profile.clone(),
             },
-            welcome.host_caps,
         ))))
     };
     // Cancel and the connect deadline (both `shutdown`) reach a parked handshake too: the host
@@ -365,7 +340,7 @@ async fn dial(
     };
     match outcome {
         Ok(Step::Session(landed)) => {
-            let (session, send, recv, negotiated, host_caps) = *landed;
+            let (session, send, recv, negotiated) = *landed;
             Ok(Dialed::Session(Box::new(HandshakeOut {
                 conn: ClientConn::new(conn),
                 ep,
@@ -373,7 +348,6 @@ async fn dial(
                 ctrl_send: send,
                 ctrl_recv: recv,
                 negotiated,
-                host_caps,
                 landed_at: (host.to_string(), port),
             })))
         }
