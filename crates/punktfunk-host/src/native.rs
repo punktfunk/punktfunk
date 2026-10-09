@@ -27,9 +27,6 @@ use punktfunk_core::Session;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicU8, Ordering};
 use std::sync::Arc;
 
-/// Shared with GameStream.
-pub(crate) use pf_frame::thread_qos::boost_thread_priority;
-
 // The session's control connection, whichever transport carries it (quinn or WebTransport).
 pub(crate) mod link;
 /// A seat's Steam, up before its client asks (`design/steam-seats-warm-launch-implementation-plan.md`).

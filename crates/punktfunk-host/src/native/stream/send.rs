@@ -287,7 +287,7 @@ pub(super) fn send_loop(
     timing_conn: Option<crate::native::link::SessionLink>,
     probe_seq: bool,
 ) {
-    boost_thread_priority(false);
+    pf_frame::thread_qos::boost_thread_priority(false);
     let wire = WireLine::new(stats.wire_sock.take());
     let mut session = session;
     session.tap_plaintext(true);

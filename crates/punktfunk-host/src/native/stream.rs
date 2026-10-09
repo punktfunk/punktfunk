@@ -575,7 +575,7 @@ pub(super) struct SessionContext {
 
 /// The virtual-display session: bring up, then tick until the client leaves.
 pub(super) fn virtual_stream(ctx: SessionContext, prepared: Option<PreparedDisplay>) -> Result<()> {
-    boost_thread_priority(true);
+    pf_frame::thread_qos::boost_thread_priority(true);
     StreamState::new(ctx, prepared)?.run()
 }
 

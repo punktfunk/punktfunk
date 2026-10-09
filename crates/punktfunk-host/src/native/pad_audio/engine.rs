@@ -198,7 +198,7 @@ pub(super) fn pad_audio_thread<C: crate::audio::AudioCapturer>(
     stop: Arc<AtomicBool>,
 ) {
     // Same boost as session send: live pad audio is a ≤10 ms cadence.
-    crate::native::boost_thread_priority(false);
+    pf_frame::thread_qos::boost_thread_priority(false);
     let mut lanes = match build_lanes(kinds) {
         Ok(l) => l,
         Err(e) => {

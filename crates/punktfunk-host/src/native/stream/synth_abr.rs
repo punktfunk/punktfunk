@@ -238,7 +238,7 @@ pub(crate) struct SynthAbrContext {
 /// Stream until the client leaves, `seconds` (`0` = until the client leaves) elapse, or the
 /// send thread goes.
 pub(crate) fn synthetic_abr_stream(ctx: SynthAbrContext) -> Result<()> {
-    boost_thread_priority(true);
+    pf_frame::thread_qos::boost_thread_priority(true);
     let SynthAbrContext {
         common:
             StreamCommon {

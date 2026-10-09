@@ -113,7 +113,7 @@ pub fn start(
     if std::thread::Builder::new()
         .name("punktfunk-video".into())
         .spawn(move || {
-            crate::native::boost_thread_priority(true);
+            pf_frame::thread_qos::boost_thread_priority(true);
             // Hold even for video-only viewers — plane parity with native `LiveSessionGuard`.
             let _sleep = crate::sleep_inhibit::hold();
             tracing::info!(?cfg, "video stream starting");
@@ -1024,7 +1024,7 @@ fn spawn_packetizer(
     std::thread::Builder::new()
         .name("punktfunk-pkt".into())
         .spawn(move || {
-            crate::native::boost_thread_priority(false);
+            pf_frame::thread_qos::boost_thread_priority(false);
             let mut shells: Vec<PacketBatch> = Vec::new();
             let mut cur_pct = fec_pct_live.load(std::sync::atomic::Ordering::Relaxed);
             while let Ok(frame) = rx.recv() {
@@ -1078,7 +1078,7 @@ fn spawn_sender(
     std::thread::Builder::new()
         .name("punktfunk-send".into())
         .spawn(move || {
-            crate::native::boost_thread_priority(false);
+            pf_frame::thread_qos::boost_thread_priority(false);
             let mut sent: u64 = 0;
             let mut dropped: u64 = 0;
             use crate::send_pacing as sp;
