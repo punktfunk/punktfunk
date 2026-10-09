@@ -10,8 +10,7 @@
 //! and `SwDeviceClose`s it on drop. The driver package must already be installed.
 
 use super::dualsense_proto::{
-    parse_ds_output, serialize_state, DsEncoder, DsFeedback, DsState, DS_INPUT_REPORT_LEN,
-    DS_TOUCH_H, DS_TOUCH_W,
+    parse_ds_output, DsEncoder, DsFeedback, DsState, DS_TOUCH_H, DS_TOUCH_W,
 };
 use super::gamepad_raii::{create_swdevice, PadChannel, ProofTransport, SwDeviceProfile};
 use super::pad_shm::ShmPad;
@@ -72,12 +71,10 @@ impl WinDsIdentity {
 
 impl DsWinPad {
     pub(super) fn open(index: u8, id: &WinDsIdentity) -> Result<DsWinPad> {
-        let mut neutral = [0u8; DS_INPUT_REPORT_LEN];
-        serialize_state(&mut neutral, &DsState::neutral(), 0, 0);
         let shm = ShmPad::open(
             index,
             id.devtype,
-            &neutral,
+            &pf_driver_proto::dualsense::NEUTRAL_REPORT,
             &SwDeviceProfile {
                 instance: &format!("{}_{index}", id.instance_prefix),
                 container_tag: 0x5046_4453, // "PFDS"
