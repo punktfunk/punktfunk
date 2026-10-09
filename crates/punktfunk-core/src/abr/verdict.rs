@@ -121,10 +121,16 @@ pub(super) fn link_signature(w: &WindowSample) -> bool {
     w.sock_drops > 0
 }
 
-/// Loss at the frames' tails, well past the rest, while every frame still decodes: the
-/// queue is close to full, and a mark can go in before the picture breaks.
+/// Loss at the frames' tails, well past the rest: a queue on the path overflowing. A bad
+/// window that shows it is the link's whatever `loss_ppm` says.
+pub(super) fn tail_signature(w: &WindowSample) -> bool {
+    tails(w.head, w.mid, w.tail)
+}
+
+/// The tail signature while every frame still decodes: the queue is close to full, and a
+/// mark can go in before the picture breaks.
 pub(super) fn tail_mark(w: &WindowSample) -> bool {
-    tails(w.head, w.mid, w.tail) && w.dropped == 0
+    tail_signature(w) && w.dropped == 0
 }
 
 fn tails(head: u32, mid: u32, tail: u32) -> bool {

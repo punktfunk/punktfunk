@@ -669,7 +669,8 @@ impl Driver {
 impl Driver {
     /// What a judged window says about the link and the receiver: tail loss two windows
     /// running with no frame lost is a mark that takes `L` down a notch, without a cut;
-    /// head loss switches the wake shape; the controller's wall moves `L`.
+    /// tail loss that kills a frame is the controller's cut and mark, and restarts the
+    /// calm count; head loss switches the wake shape; the controller's wall moves `L`.
     fn after_window(&mut self, w: &WindowSample, actions: &mut Vec<Action>) {
         if verdict::tail_mark(w) {
             self.tail_run = self.tail_run.saturating_add(1);
@@ -684,7 +685,11 @@ impl Driver {
             }
         } else {
             self.tail_run = 0;
-            self.link.calm_window();
+            if verdict::tail_signature(w) {
+                self.link.tail_loss();
+            } else {
+                self.link.calm_window();
+            }
         }
         let calm = w.head <= w.mid.saturating_add(w.tail);
         if let Some(s) = self.shape.note(verdict::head_signature(w), calm, w.now) {
@@ -1056,6 +1061,42 @@ mod tests {
             20_000,
             "the rate is the controller's own business"
         );
+    }
+
+    /// Tail loss that kills a frame is the controller's cut, not a calm window: the
+    /// forty calm windows that give a notch back start over, and so does the run toward
+    /// the next mark.
+    #[test]
+    fn tail_loss_with_a_dead_frame_is_not_calm() {
+        let at = Instant::now();
+        let mut d = quiet_driver(at);
+        let mut acts = Vec::new();
+        let tails = WindowSample {
+            tail: 6,
+            ..WindowSample::at(at)
+        };
+        let dead = WindowSample {
+            dropped: 1,
+            ..tails
+        };
+        let calm = WindowSample::at(at);
+        d.after_window(&tails, &mut acts);
+        d.after_window(&tails, &mut acts);
+        let notched = d.link().0;
+        assert!(notched < LINK_FLOOR_KBPS);
+        for _ in 0..link::NOTCH_CALM_WINDOWS - 1 {
+            d.after_window(&calm, &mut acts);
+        }
+        d.after_window(&tails, &mut acts);
+        d.after_window(&dead, &mut acts);
+        d.after_window(&tails, &mut acts);
+        assert_eq!(d.link().0, notched, "the run starts over");
+        d.after_window(&calm, &mut acts);
+        assert_eq!(d.link().0, notched, "the calm count starts over");
+        for _ in 1..link::NOTCH_CALM_WINDOWS {
+            d.after_window(&calm, &mut acts);
+        }
+        assert_eq!(d.link().0, LINK_FLOOR_KBPS, "forty calm windows after it");
     }
 
     /// When step `i`'s report reached the client, in the test above.
