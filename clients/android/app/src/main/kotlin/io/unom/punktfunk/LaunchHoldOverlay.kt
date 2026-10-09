@@ -431,8 +431,7 @@ fun LaunchHoldOverlay(hold: LaunchHold, onRetry: () -> Unit, onShow: () -> Unit)
                             } else {
                                 withContext(Dispatchers.IO) {
                                     LibraryClient.endGame(
-                                        hold.address, hold.mgmtPort, id.certPem, id.privateKeyPem,
-                                        hold.fpHex, hold.game.id,
+                                        id, hold.address, hold.mgmtPort, hold.fpHex, hold.game.id,
                                     )
                                 }
                             }

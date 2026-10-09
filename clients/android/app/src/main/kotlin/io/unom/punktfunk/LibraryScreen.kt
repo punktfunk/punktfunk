@@ -332,7 +332,7 @@ fun LibraryScreen(
                     launch(identity, game, choice.id)
                     return@launch
                 }
-                if (token == "profile-unknown") knownHostStore.savePick(host, null)
+                if (token == "profile-unknown") HostRecords.savePick(knownHostStore, host, null)
                 Toast.makeText(
                     context,
                     ConnectErrors.connectMessage(token, requestAccess = false),
@@ -380,8 +380,7 @@ fun LibraryScreen(
         scope.launch {
             val outcome = withContext(Dispatchers.IO) {
                 LibraryClient.endGame(
-                    host.address, host.effectiveMgmtPort, ready.identity.certPem,
-                    ready.identity.privateKeyPem, host.fpHex, game.id,
+                    ready.identity, host.address, host.effectiveMgmtPort, host.fpHex, game.id,
                 )
             }
             if (outcome.gameGone) {
@@ -410,8 +409,7 @@ fun LibraryScreen(
         scope.launch {
             val outcome = withContext(Dispatchers.IO) {
                 LibraryClient.changeInstall(
-                    host.address, host.effectiveMgmtPort, ready.identity.certPem,
-                    ready.identity.privateKeyPem, host.fpHex, game.id, action,
+                    ready.identity, host.address, host.effectiveMgmtPort, host.fpHex, game.id, action,
                 )
             }
             if (outcome == InstallOutcome.Done && action == InstallAction.Remove) {
