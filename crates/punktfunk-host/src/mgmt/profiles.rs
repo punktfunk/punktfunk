@@ -1291,7 +1291,7 @@ pub(crate) async fn proxy_profile_seat(
         .and_then(|v| v.to_str().ok())
         .map(str::to_string);
     let method = method.as_str().to_string();
-    let answer = tokio::task::spawn_blocking(move || {
+    let forwarded = blocking("seat", move || {
         crate::seats::forward(
             &row,
             &method,
@@ -1299,10 +1299,11 @@ pub(crate) async fn proxy_profile_seat(
             content_type.as_deref(),
             body.to_vec(),
         )
-    })
-    .await
-    .ok()
-    .flatten();
+    });
+    let answer = match forwarded.await {
+        Ok(answer) => answer,
+        Err(resp) => return resp,
+    };
     let Some((status, content_type, bytes)) = answer else {
         return api_error(
             StatusCode::BAD_GATEWAY,

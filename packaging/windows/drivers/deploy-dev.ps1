@@ -42,14 +42,11 @@ $inx   = Join-Path $root 'pf-vdisplay\pf_vdisplay.inx'
 $clear = Join-Path $root '..\clear-force-integrity.ps1'
 if (-not (Test-Path $dll)) { throw "driver not built: $dll  (cargo build --release in packaging/windows/drivers first)" }
 
-$kits = 'C:\Program Files (x86)\Windows Kits\10\bin'
-function Find-Tool([string]$name, [string]$arch) {
-    (Get-ChildItem "$kits\*\$arch\$name" -EA SilentlyContinue | Sort-Object FullName | Select-Object -Last 1).FullName
-}
-$signtool = Find-Tool 'signtool.exe' 'x64'
-$stampinf = Find-Tool 'stampinf.exe' 'x64'
-$inf2cat  = Find-Tool 'Inf2Cat.exe'  'x86'
-foreach ($t in @($signtool, $stampinf, $inf2cat)) { if (-not $t) { throw 'a WDK tool (signtool/stampinf/Inf2Cat) was not found' } }
+# Find-SdkTool only: this script decodes no key, so it arms no shred.
+. (Join-Path $root '..\signing.ps1')
+$signtool = Find-SdkTool 'signtool.exe'
+$stampinf = Find-SdkTool 'stampinf.exe'
+$inf2cat  = Find-SdkTool 'Inf2Cat.exe' 'x86'
 
 if (Test-Path $Stage) { Remove-Item $Stage -Recurse -Force }
 New-Item -ItemType Directory -Force -Path $Stage | Out-Null

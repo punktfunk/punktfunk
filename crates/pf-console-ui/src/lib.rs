@@ -29,6 +29,9 @@
     target_vendor = "apple",
     target_family = "wasm"
 ))]
+// Android has no native TLS, so std wraps a `const { }` thread-local initializer in a plain
+// fn and clippy asks for the `const` the source already has.
+#![cfg_attr(target_os = "android", allow(clippy::missing_const_for_thread_local))]
 
 pub mod anim;
 pub mod art_stats;

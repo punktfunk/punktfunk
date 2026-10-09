@@ -601,9 +601,11 @@ pub(crate) fn hosts_page(props: &HostsProps, cx: &mut RenderCx) -> Element {
 
     body.push(header(&props.svc, &props.set_show_add));
 
+    // Connect errors, editor refusals and host-action outcomes share this line. Each message
+    // is a whole sentence, so the bar carries no title of its own.
     if !status.is_empty() {
         body.push(
-            InfoBar::new("Couldn't connect")
+            InfoBar::new("")
                 .message(status.to_string())
                 .error()
                 .is_closable(false)

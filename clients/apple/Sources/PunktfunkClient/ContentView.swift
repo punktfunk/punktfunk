@@ -19,11 +19,12 @@ struct ContentView: View {
     // The dev auto-connect hook (DEBUG-only — see `autoConnectIfAsked`) writes these three, so
     // they stay observed here; every OTHER stream setting reaches a session through
     // `EffectiveSettings`, resolved once per connect.
-    @AppStorage(DefaultsKey.streamWidth) private var width = 0
-    @AppStorage(DefaultsKey.streamHeight) private var height = 0
-    @AppStorage(DefaultsKey.streamHz) private var hz = 0
-    @AppStorage(DefaultsKey.fullscreenWhileStreaming) private var fullscreenWhileStreaming = true
-    @AppStorage(DefaultsKey.fullscreenAlways) private var fullscreenAlways = false
+    @AppStorage(DefaultsKey.streamWidth) private var width = SettingDefault.streamWidth
+    @AppStorage(DefaultsKey.streamHeight) private var height = SettingDefault.streamHeight
+    @AppStorage(DefaultsKey.streamHz) private var hz = SettingDefault.streamHz
+    @AppStorage(DefaultsKey.fullscreenWhileStreaming) private var fullscreenWhileStreaming =
+        SettingDefault.fullscreenWhileStreaming
+    @AppStorage(DefaultsKey.fullscreenAlways) private var fullscreenAlways = SettingDefault.fullscreenAlways
     // The raw string is what @AppStorage observes (so cycles from any surface re-render this
     // view); the absent-key default runs the legacy-hudEnabled migration once per init.
     @AppStorage(DefaultsKey.statsVerbosity) private var statsVerbosityRaw
@@ -136,7 +137,7 @@ struct ContentView: View {
     // On tvOS the same screens are focus-engine-driven, so the Siri Remote keeps working;
     // with no (extended) controller attached tvOS falls back to HomeView as before.
     @ObservedObject private var gamepadManager = GamepadManager.shared
-    @AppStorage(DefaultsKey.gamepadUIEnabled) private var gamepadUIEnabled = true
+    @AppStorage(DefaultsKey.gamepadUIEnabled) private var gamepadUIEnabled = SettingDefault.gamepadUIEnabled
     /// When the switch above takes over — "connected" (default) or "always". See
     /// `GamepadUIEnvironment`.
     @AppStorage(DefaultsKey.gamepadUIMode) private var gamepadUIMode =
@@ -144,11 +145,11 @@ struct ContentView: View {
     /// Auto-wake on connect (Settings → General). On (default): a dial to an offline saved host
     /// fires Wake-on-LAN up front and falls into the "Waking…" wait if the dial fails. Off: connects
     /// go straight through with no wake. The explicit "Wake Host" action is unaffected either way.
-    @AppStorage(DefaultsKey.autoWake) private var autoWakeEnabled = true
+    @AppStorage(DefaultsKey.autoWake) private var autoWakeEnabled = SettingDefault.autoWake
     /// Where a bare launch opens (Settings → Library). Library (the default) opens the default
     /// host's shelf; Stream also dials its desktop. Resolved once per process by
     /// `applyStartScreen`, never on foregrounding — see `startApplied`.
-    @AppStorage(DefaultsKey.startIn) private var startInRaw = StartIn.hosts.stored
+    @AppStorage(DefaultsKey.startIn) private var startInRaw = SettingDefault.startIn
     /// Which host that is, when several are paired. Empty until somebody picks one; with exactly
     /// one paired host the default is derived and this stays empty.
     @AppStorage(DefaultsKey.defaultHost) private var defaultHostID = ""
@@ -159,8 +160,9 @@ struct ContentView: View {
     /// Background keep-alive (Settings → General, iOS-only). Default OFF (today's freeze-on-background
     /// is the default). When on, backgrounding a live session keeps audio + the connection alive and
     /// drops video, auto-disconnecting after `backgroundTimeoutMinutes`.
-    @AppStorage(DefaultsKey.backgroundKeepAlive) private var backgroundKeepAlive = false
-    @AppStorage(DefaultsKey.backgroundTimeoutMinutes) private var backgroundTimeoutMinutes = 10
+    @AppStorage(DefaultsKey.backgroundKeepAlive) private var backgroundKeepAlive = SettingDefault.backgroundKeepAlive
+    @AppStorage(DefaultsKey.backgroundTimeoutMinutes) private var backgroundTimeoutMinutes =
+        SettingDefault.backgroundTimeoutMinutes
     /// scenePhase drives the keep-alive: use THIS, not the willResignActive observers — resign-active
     /// also fires for Control Center / app-switcher peeks, where the disconnect timer must not start.
     @Environment(\.scenePhase) private var scenePhase

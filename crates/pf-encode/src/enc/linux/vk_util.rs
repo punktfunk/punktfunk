@@ -340,6 +340,7 @@ pub(crate) fn import_failure_feeds_latch(e: &anyhow::Error) -> bool {
 
 /// Context on an import error that [`reject_dmabuf`] took. The encode worker forwards only
 /// these as `capture_rebuild`, so the host's latch sees what an in-process encoder feeds it.
+#[cfg_attr(not(feature = "pyrowave"), allow(dead_code))]
 #[derive(Debug)]
 pub(crate) struct ImportRejected;
 
