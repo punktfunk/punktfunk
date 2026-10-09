@@ -577,9 +577,9 @@ impl Shell {
                 );
                 canvas.restore();
             }
-            None => {
-                crate::screens::library::draw_poster_placeholder(canvas, fonts, None, card, k, 1.0)
-            }
+            None => crate::screens::library::art::draw_poster_placeholder(
+                canvas, fonts, None, card, k, 1.0,
+            ),
         }
         canvas.draw_rrect(
             RRect::new_rect_xy(card, corner, corner),

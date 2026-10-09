@@ -993,7 +993,9 @@ fn title_card(
                 &crate::theme::fill(fg(1.0)),
             );
         }
-        None => super::library::draw_poster_placeholder(canvas, fonts, Some(game), art, k, 1.0),
+        None => {
+            super::library::art::draw_poster_placeholder(canvas, fonts, Some(game), art, k, 1.0)
+        }
     }
     canvas.restore();
     let x = f64::from(art.right) + 28.0 * k;
