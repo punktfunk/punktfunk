@@ -275,20 +275,79 @@ const REASSERT_BREAKER_ROUNDS: u32 = 4;
 /// The rolling window the second count uses.
 const REASSERT_WINDOW: Duration = Duration::from_secs(60);
 
-/// Drop re-assert stamps older than `window` and return how many remain — the rolling count
-/// behind the breaker.
-fn rounds_in_window(
-    recent: &mut std::collections::VecDeque<Instant>,
-    now: Instant,
-    window: Duration,
-) -> u32 {
-    while recent
-        .front()
-        .is_some_and(|&t| now.saturating_duration_since(t) >= window)
-    {
-        recent.pop_front();
+/// What one exclusive-watch cycle owes the group, per [`ReassertBreaker::on_cycle`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Cycle {
+    /// No non-managed display is active. `was_fighting` counts the re-asserts it ends.
+    Stable { was_fighting: u32 },
+    /// The breaker tripped earlier: mutate nothing for the group's life.
+    Conceded,
+    /// The breaker trips now: concede the isolate, the stream continues on the shared desktop.
+    Concede { rounds: u32 },
+    /// Re-assert the isolate; `round` is the larger of the two counts.
+    Reassert { round: u32 },
+}
+
+/// Re-assert breaker for one exclusive group (immunity plan WP10 item 6). Pure: the watch
+/// feeds it each cycle's survivor count and acts on the [`Cycle`] it returns.
+#[derive(Default)]
+struct ReassertBreaker {
+    /// Consecutive re-assert cycles; a stable cycle resets it.
+    fighting: u32,
+    /// Every re-assert's stamp, for the rolling count (the alternating fight).
+    recent: std::collections::VecDeque<Instant>,
+    /// Tripped: no further write, nor stream rebuild, for the group's life. A doubling
+    /// back-off still cost the client a capture+encoder rebuild per re-assert.
+    conceded: bool,
+}
+
+impl ReassertBreaker {
+    /// One cycle that saw `survivors` non-managed displays active at `now`.
+    fn on_cycle(&mut self, survivors: u32, now: Instant) -> Cycle {
+        if survivors == 0 {
+            let was_fighting = std::mem::take(&mut self.fighting);
+            return Cycle::Stable { was_fighting };
+        }
+        if self.conceded {
+            return Cycle::Conceded;
+        }
+        self.fighting += 1;
+        self.recent.push_back(now);
+        while self
+            .recent
+            .front()
+            .is_some_and(|&t| now.saturating_duration_since(t) >= REASSERT_WINDOW)
+        {
+            self.recent.pop_front();
+        }
+        let rounds = self.fighting.max(self.recent.len() as u32);
+        if rounds >= REASSERT_BREAKER_ROUNDS {
+            self.conceded = true;
+            return Cycle::Concede { rounds };
+        }
+        Cycle::Reassert { round: rounds }
     }
-    recent.len() as u32
+}
+
+/// The exclusive watch's wait: until the display actor publishes a new topology snapshot
+/// (immunity plan WP9), else `interval`, in 250 ms slices so stop+join stays bounded.
+/// `false` once `stop` is set.
+fn wait_watch_cycle(stop: &AtomicBool, interval: Duration) -> bool {
+    let seen = pf_win_display::display_events::snapshot().generation;
+    let mut slept = Duration::ZERO;
+    while slept < interval {
+        if stop.load(Ordering::Relaxed) {
+            return false;
+        }
+        let slice = Duration::from_millis(250).min(interval - slept);
+        match pf_win_display::display_events::wait_for_change(seen, slice) {
+            Some(s) if s.generation > seen => break,
+            Some(_) => {}
+            None => thread::sleep(slice), // actor not running: plain cadence
+        }
+        slept += slice;
+    }
+    true
 }
 
 /// [`ShrinkAction`] a non-last-member teardown owes the group.
@@ -385,6 +444,79 @@ impl MgrInner {
         keep.push(new);
         keep
     }
+
+    /// The exclusive watch's snapshot gates: the keep-set and how many non-managed displays
+    /// are active. `None` mutates nothing this cycle: no exclusive isolate is live, or the
+    /// display snapshot is unknown, which is not the same as stable.
+    fn exclusive_survivors(&self) -> Option<(Vec<CcdTargetKey>, u32)> {
+        if self.group.ccd_saved.is_none() || !self.group.ccd_exclusive {
+            return None;
+        }
+        let keep = self.target_keys();
+        if keep.is_empty() {
+            return None;
+        }
+        // Not FRESH: the actor's last query failed, or it never published.
+        let snap = pf_win_display::display_events::snapshot_or_query();
+        if !snap.is_fresh() && snap.generation > 0 {
+            tracing::debug!(
+                failures = snap.failures,
+                "exclusive re-assert watchdog: display snapshot is last-known-good — \
+                 topology state unknown this cycle, mutating nothing"
+            );
+            return None;
+        }
+        // Under a live exclusive isolate our own targets are active, so a snapshot
+        // without them is an untrustworthy read, not an empty desk.
+        if !keep.iter().any(|k| snap.target(*k).is_some()) {
+            tracing::debug!(
+                "exclusive re-assert watchdog: the snapshot carries none of our \
+                 targets — unknown this cycle, mutating nothing"
+            );
+            return None;
+        }
+        let survivors = snap.count_other_active(&keep);
+        Some((keep, survivors))
+    }
+
+    /// One re-assert, as a topology transaction (immunity plan WP10): descriptor-following
+    /// holds for `hold`, swap-chain bounce included, and the transaction finishes with what
+    /// the verification read observed. Only an observed change bumps
+    /// [`topology_reassert_gen`] and parks the re-lit display's devnode for the session.
+    fn reassert_isolate(&mut self, keep: &[CcdTargetKey], hold: Duration) {
+        use pf_win_display::topology_churn::{self, Outcome};
+        let txn = topology_churn::begin("exclusive-reassert", hold);
+        let outcome = isolate_txn_outcome(isolate_displays_ccd_checked_seam(keep).map(|(_, o)| o));
+        let finished = topology_churn::finish(txn, outcome);
+        if outcome != Outcome::Changed {
+            return;
+        }
+        // The forced re-commit hands the IDD path a fresh swap-chain: the session
+        // re-attaches capture instead of streaming a frozen frame.
+        TOPOLOGY_REASSERT_GEN.fetch_add(1, Ordering::Relaxed);
+        // A display that re-lit itself while held off would evict again on its next HPD
+        // pulse. Leased like the acquire's park, re-enabled at teardown.
+        if !crate::policy::prefs().standby_sink_neutralise() {
+            return;
+        }
+        let parked = pf_win_display::monitor_devnode::disable_connected_inactive(
+            keep,
+            &[],
+            finished.generation,
+        );
+        if !parked.is_empty() {
+            tracing::info!(
+                parked = parked.len(),
+                "exclusive re-assert: PnP-disabled the re-lit display for the \
+                 session (re-enabled at teardown)"
+            );
+        }
+        for id in parked {
+            if !self.group.pnp_disabled.contains(&id) {
+                self.group.pnp_disabled.push(id);
+            }
+        }
+    }
 }
 
 /// Device-level watchdog pinger, running while any slot lives (any IOCTL
@@ -393,6 +525,16 @@ impl MgrInner {
 struct Pinger {
     stop: Arc<AtomicBool>,
     thread: JoinHandle<()>,
+}
+
+impl Pinger {
+    /// Signal and join. The pinger's join is bounded by its interval (watchdog/3 s), the
+    /// exclusive watch's by its 250 ms slices: it only `try_lock`s the state lock, so stopping
+    /// it under that lock cannot deadlock.
+    fn stop(self) {
+        self.stop.store(true, Ordering::Relaxed);
+        let _ = self.thread.join();
+    }
 }
 
 /// Control-device cache. A gone-class IOCTL retires the handle; the next
@@ -990,26 +1132,17 @@ impl VirtualDisplayManager {
         *guard = Some(Pinger { stop, thread });
     }
 
-    /// Stop and join the device-level pinger (the last slot was just torn down).
-    /// Join is bounded by the ping interval (watchdog/3 seconds).
-    fn stop_pinger(&self) {
-        if let Some(p) = self.pinger.lock().unwrap().take() {
-            p.stop.store(true, Ordering::Relaxed);
-            let _ = p.thread.join();
-        }
-    }
-
     /// Start the exclusive-topology re-assert watchdog (idempotent).
     ///
     /// A verified [`isolate_displays_ccd`] is not durable: the isolated topology
     /// is deliberately not saved to the CCD database (teardown must restore the
     /// user's layout), so a later re-resolution can bring the stored layout back.
     ///
-    /// Re-query every [`knobs::exclusive_reassert_ms`]. On a non-managed display,
-    /// evict via full isolate — the forced re-commit restarts presentation, and
-    /// the session heals the swap-chain bounce off [`topology_reassert_gen`].
-    /// Cycles `try_lock` the state lock: teardown stops+joins this thread while
-    /// holding that lock, so a blocking `lock()` here would deadlock. Sleep is
+    /// Each cycle, at most every [`knobs::exclusive_reassert_ms`]: wait, `try_lock` the
+    /// state, read the survivors, ask the [`ReassertBreaker`], act. A re-assert evicts via full
+    /// isolate; the forced re-commit restarts presentation, and the session heals the
+    /// swap-chain bounce off [`topology_reassert_gen`]. Teardown stops+joins this thread while
+    /// holding the state lock, so a blocking `lock()` here would deadlock, and the wait is
     /// sliced so stop+join is bounded by ~250 ms, not a full cycle.
     fn ensure_exclusive_watch(&'static self) {
         let interval = Duration::from_millis(knobs::exclusive_reassert_ms());
@@ -1025,171 +1158,51 @@ impl VirtualDisplayManager {
         let thread = thread::Builder::new()
             .name("vdisplay-exclusive-watch".into())
             .spawn(move || {
-                // Consecutive eviction cycles. Resets when a cycle is clean,
-                // so a rare re-add WARNs each time; a fighter escalates once.
-                let mut fighting = 0u32;
-                // Every re-assert's stamp for the rolling count (the alternating fight).
-                let mut recent = std::collections::VecDeque::<Instant>::new();
-                // The breaker tripped: this group's isolate is CONCEDED. The desktop stays as
-                // the other actor keeps restoring it, the stream continues on it, and no further
-                // write (nor stream rebuild) is issued for the group's life. Measured live on
-                // `.173` with a real client: a doubling back-off still cost the client a
-                // capture+encoder rebuild per re-assert, every 2, 4, 8 s.
-                let mut conceded = false;
-                'watch: loop {
-                    // Subscribe to the display actor's topology generation (immunity plan WP9):
-                    // wake early when a snapshot lands, else at the interval — sliced so stop+join
-                    // stays bounded by ~250 ms. No CCD query on this thread any more.
-                    let seen = pf_win_display::display_events::snapshot().generation;
-                    let mut slept = Duration::ZERO;
-                    while slept < interval {
-                        if stop_t.load(Ordering::Relaxed) {
-                            break 'watch;
-                        }
-                        let slice = Duration::from_millis(250).min(interval - slept);
-                        match pf_win_display::display_events::wait_for_change(seen, slice) {
-                            Some(s) if s.generation > seen => break,
-                            Some(_) => {}
-                            None => thread::sleep(slice), // actor not running: plain cadence
-                        }
-                        slept += slice;
-                    }
-                    let Ok(mut inner) = vdm().state.try_lock() else {
+                let mut breaker = ReassertBreaker::default();
+                while wait_watch_cycle(&stop_t, interval) {
+                    let Ok(mut inner) = self.state.try_lock() else {
                         continue;
                     };
-                    if inner.group.ccd_saved.is_none() || !inner.group.ccd_exclusive {
-                        continue; // no exclusive isolate live right now
-                    }
-                    let keep = inner.target_keys();
-                    if keep.is_empty() {
+                    let Some((keep, survivors)) = inner.exclusive_survivors() else {
                         continue;
-                    }
-                    // A snapshot that is not FRESH (the actor's last query failed, or it never
-                    // published) is UNKNOWN, not "stable": back off to the next cycle and mutate
-                    // nothing (the old `unwrap_or(0)` silently called an unknown topology
-                    // successfully exclusive).
-                    let snap = pf_win_display::display_events::snapshot_or_query();
-                    if !snap.is_fresh() && snap.generation > 0 {
-                        tracing::debug!(
-                            failures = snap.failures,
-                            "exclusive re-assert watchdog: display snapshot is last-known-good — \
-                             topology state unknown this cycle, mutating nothing"
-                        );
-                        continue;
-                    }
-                    // Under a live exclusive isolate our own targets are active, so a snapshot
-                    // without them is an untrustworthy read, not an empty desk.
-                    if !keep.iter().any(|k| snap.target(*k).is_some()) {
-                        tracing::debug!(
-                            "exclusive re-assert watchdog: the snapshot carries none of our \
-                             targets — unknown this cycle, mutating nothing"
-                        );
-                        continue;
-                    }
-                    let survivors = snap.count_other_active(&keep);
-                    if survivors == 0 {
-                        if fighting > 0 {
+                    };
+                    match breaker.on_cycle(survivors, Instant::now()) {
+                        Cycle::Stable { was_fighting: 0 } => {}
+                        Cycle::Stable { was_fighting } => {
                             tracing::info!(
-                                reasserts = fighting,
+                                reasserts = was_fighting,
                                 "exclusive topology stable again — no non-managed display active"
                             );
                             // Close the churn window now — descriptor-following
                             // resumes instead of waiting out the hold expiry.
                             pf_win_display::topology_churn::release();
                         }
-                        fighting = 0;
-                        continue;
-                    }
-                    if conceded {
-                        tracing::debug!(
+                        Cycle::Conceded => tracing::debug!(
                             survivors,
                             "exclusive topology conceded — a non-managed display is active and \
                              stays so; not re-asserting"
-                        );
-                        continue;
-                    }
-                    fighting += 1;
-                    recent.push_back(Instant::now());
-                    let rounds = fighting.max(rounds_in_window(
-                        &mut recent,
-                        Instant::now(),
-                        REASSERT_WINDOW,
-                    ));
-                    if rounds >= REASSERT_BREAKER_ROUNDS {
-                        tracing::error!(
-                            survivors,
-                            rounds,
-                            "exclusive topology keeps being re-activated (4 re-asserts in a row \
-                             or within a minute) — something on this host is fighting the \
-                             isolate; CONCEDING for this session: the display stays active, the \
-                             stream continues on the shared desktop, no further re-assert"
-                        );
-                        pf_win_display::topology_churn::release();
-                        conceded = true;
-                        continue;
-                    }
-                    // The re-assert is a topology TRANSACTION (immunity plan WP10): it holds
-                    // descriptor-following (samples until "stable again" are the transient
-                    // eviction state) for interval + 3 s, swap-chain bounce included, and is
-                    // finished with what the verification read OBSERVED — the recovery
-                    // generation moves only on a real change.
-                    let txn = pf_win_display::topology_churn::begin(
-                        "exclusive-reassert",
-                        interval + Duration::from_secs(3),
-                    );
-                    tracing::warn!(
-                        survivors,
-                        round = rounds,
-                        "exclusive topology lost — a non-managed display re-activated after the \
-                         verified isolate (hybrid-GPU driver / display-poller software restoring \
-                         the saved layout?); re-asserting the isolate"
-                    );
-                    let outcome = isolate_displays_ccd_checked_seam(&keep).map(|(_, o)| o);
-                    let changed = matches!(
-                        outcome,
-                        Some(IsolateOutcome::Verified { deactivated, .. }) if deactivated > 0
-                    );
-                    let finished = pf_win_display::topology_churn::finish(
-                        txn,
-                        match outcome {
-                            Some(IsolateOutcome::Verified { .. }) if changed => {
-                                pf_win_display::topology_churn::Outcome::Changed
-                            }
-                            Some(
-                                IsolateOutcome::Verified { .. } | IsolateOutcome::NothingActive,
-                            ) => pf_win_display::topology_churn::Outcome::Unchanged,
-                            Some(IsolateOutcome::Unverified { .. }) | None => {
-                                pf_win_display::topology_churn::Outcome::Unknown
-                            }
-                        },
-                    );
-                    // Forced re-commit hands the IDD path a fresh swap-chain: bump so the session
-                    // re-attaches capture instead of streaming a frozen frame — but only when the
-                    // verification read saw the topology change (an attempted-but-unverified
-                    // write is not a recovery incident for the stream to react to).
-                    if changed {
-                        TOPOLOGY_REASSERT_GEN.fetch_add(1, Ordering::Relaxed);
-                    }
-                    // A display that re-lit itself while held off is a sink for the rest of
-                    // the session, operator panel or not: park its devnode so the next HPD
-                    // pulse cannot evict again. Leased like the acquire's, enabled at teardown.
-                    if changed && crate::policy::prefs().standby_sink_neutralise() {
-                        let parked = pf_win_display::monitor_devnode::disable_connected_inactive(
-                            &keep,
-                            &[],
-                            finished.generation,
-                        );
-                        if !parked.is_empty() {
-                            tracing::info!(
-                                parked = parked.len(),
-                                "exclusive re-assert: PnP-disabled the re-lit display for the \
-                                 session (re-enabled at teardown)"
+                        ),
+                        Cycle::Concede { rounds } => {
+                            tracing::error!(
+                                survivors,
+                                rounds,
+                                "exclusive topology keeps being re-activated (4 re-asserts in a \
+                                 row or within a minute) — something on this host is fighting \
+                                 the isolate; CONCEDING for this session: the display stays \
+                                 active, the stream continues on the shared desktop, no further \
+                                 re-assert"
                             );
+                            pf_win_display::topology_churn::release();
                         }
-                        for id in parked {
-                            if !inner.group.pnp_disabled.contains(&id) {
-                                inner.group.pnp_disabled.push(id);
-                            }
+                        Cycle::Reassert { round } => {
+                            tracing::warn!(
+                                survivors,
+                                round,
+                                "exclusive topology lost — a non-managed display re-activated \
+                                 after the verified isolate (hybrid-GPU driver / display-poller \
+                                 software restoring the saved layout?); re-asserting the isolate"
+                            );
+                            inner.reassert_isolate(&keep, interval + Duration::from_secs(3));
                         }
                     }
                 }
@@ -1209,16 +1222,6 @@ impl VirtualDisplayManager {
             }
         };
         *guard = Some(Pinger { stop, thread });
-    }
-
-    /// Stop and join the exclusive-topology watchdog. Safe under the state
-    /// lock: the watchdog only `try_lock`s it, and sliced sleep bounds the
-    /// join by ~250 ms.
-    fn stop_exclusive_watch(&self) {
-        if let Some(w) = self.exclusive_watch.lock().unwrap().take() {
-            w.stop.store(true, Ordering::Relaxed);
-            let _ = w.thread.join();
-        }
     }
 
     /// Arrange live slots' desktop origins (`auto-row` default, console `manual`
@@ -1879,10 +1882,14 @@ impl VirtualDisplayManager {
     /// running, the monitors disabled and the EDID pinned, and nothing left to undo it.
     fn restore_group(&self, inner: &mut MgrInner) {
         // Last slot: stop the pinger first, then restore first-in/last-out.
-        self.stop_pinger();
+        if let Some(p) = self.pinger.lock().unwrap().take() {
+            p.stop();
+        }
         // Watchdog must be gone before restore — it would read the restored
         // topology as "lost exclusivity" and re-fight it.
-        self.stop_exclusive_watch();
+        if let Some(w) = self.exclusive_watch.lock().unwrap().take() {
+            w.stop();
+        }
         // Re-enable PnP first and let them re-arrive, so CCD restore
         // finds monitors that exist. Outside the ccd_saved gate: the
         // connected-inactive sweep also runs in Extend/Primary.
@@ -2465,32 +2472,49 @@ pub(crate) fn force_release(slot: Option<u64>) -> usize {
 #[cfg(test)]
 mod tests {
     use super::{
-        needs_resize, rounds_in_window, shrink_action, Mode, ShrinkAction, REASSERT_BREAKER_ROUNDS,
-        REASSERT_WINDOW,
+        needs_resize, shrink_action, Cycle, Mode, ReassertBreaker, ShrinkAction,
+        REASSERT_BREAKER_ROUNDS, REASSERT_WINDOW,
     };
     use std::time::{Duration, Instant};
 
     /// The alternating fight (lost / stable / lost …) reaches the breaker through the rolling
-    /// window even though the consecutive count never leaves 1, and old rounds age out.
+    /// window even though the consecutive count never leaves 1, and a conceded group stays so.
     #[test]
     fn an_alternating_fight_reaches_the_breaker_through_the_window() {
         let t0 = Instant::now();
-        let mut recent = std::collections::VecDeque::new();
-        let mut rounds = 0;
-        for i in 0..REASSERT_BREAKER_ROUNDS {
-            let consecutive = 1u32; // a clean cycle in between reset it
-            let now = t0 + Duration::from_secs(4 * u64::from(i));
-            recent.push_back(now);
-            rounds = consecutive.max(rounds_in_window(&mut recent, now, REASSERT_WINDOW));
+        let mut b = ReassertBreaker::default();
+        for round in 1..REASSERT_BREAKER_ROUNDS {
+            let lost = t0 + Duration::from_secs(4 * u64::from(round));
+            assert_eq!(b.on_cycle(1, lost), Cycle::Reassert { round });
+            let stable = lost + Duration::from_secs(2);
+            assert_eq!(b.on_cycle(0, stable), Cycle::Stable { was_fighting: 1 });
         }
+        let trip = t0 + Duration::from_secs(4 * u64::from(REASSERT_BREAKER_ROUNDS));
         assert_eq!(
-            rounds, REASSERT_BREAKER_ROUNDS,
+            b.on_cycle(1, trip),
+            Cycle::Concede {
+                rounds: REASSERT_BREAKER_ROUNDS
+            },
             "four rounds in 16 s trip the breaker"
         );
-        // A minute later the window has drained and a lone re-add is a lone re-add again.
+        assert_eq!(
+            b.on_cycle(1, trip + Duration::from_secs(2)),
+            Cycle::Conceded
+        );
+    }
+
+    /// A minute later the window has drained and a lone re-add is round 1 again.
+    #[test]
+    fn old_rounds_age_out_of_the_window() {
+        let t0 = Instant::now();
+        let mut b = ReassertBreaker::default();
+        for i in 0..REASSERT_BREAKER_ROUNDS - 1 {
+            let lost = t0 + Duration::from_secs(4 * u64::from(i));
+            b.on_cycle(1, lost);
+            b.on_cycle(0, lost + Duration::from_secs(2));
+        }
         let later = t0 + REASSERT_WINDOW + Duration::from_secs(20);
-        recent.push_back(later);
-        assert_eq!(rounds_in_window(&mut recent, later, REASSERT_WINDOW), 1);
+        assert_eq!(b.on_cycle(1, later), Cycle::Reassert { round: 1 });
     }
 
     const fn m(width: u32, height: u32, refresh_hz: u32) -> Mode {
