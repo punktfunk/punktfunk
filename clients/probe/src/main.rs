@@ -29,6 +29,7 @@ use punktfunk_core::quic::{
     endpoint, window_loss_ppm, BitrateChanged, CursorRenderMode, Hello, ProbeRequest, ProbeResult,
     Reconfigure, Reconfigured, SetBitrate, Welcome,
 };
+use punktfunk_core::session::test_frame;
 use punktfunk_core::{CompositorPref, Mode, PunktfunkError, Session};
 use std::io::Write;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64};
@@ -176,8 +177,7 @@ impl Wire {
     async fn read_datagram(&self) -> Result<Vec<u8>, quinn::ConnectionError> {
         loop {
             let b = self.conn.read_datagram().await?;
-            use punktfunk_core::quic::v2::dgram::{decode, Dgram};
-            if let Some(Dgram::Audio(p) | Dgram::InputState(p) | Dgram::HostEvent(p)) = decode(&b) {
+            if let Some(p) = punktfunk_core::quic::v2::dgram::client_payload(&b) {
                 return Ok(p.to_vec());
             }
         }
@@ -1859,8 +1859,12 @@ fn data_plane(
                     }
                 }
                 if expected > 0 {
-                    // Verification mode: deterministic content.
-                    let idx = u32::from_le_bytes(frame.data[0..4].try_into().unwrap());
+                    // Verification mode: deterministic content. A frame under four bytes
+                    // carries no index and checks as zeros.
+                    let idx = frame
+                        .data
+                        .first_chunk()
+                        .map_or(0, |b| u32::from_le_bytes(*b));
                     if frame.data == test_frame(idx, frame.data.len()) {
                         ok += 1;
                     } else {
@@ -1987,18 +1991,6 @@ fn report_side_planes(counters: &Counters) {
             "host→client datagrams (Opus 48 kHz stereo, 5 ms frames; rumble; DualSense HID)"
         );
     }
-}
-
-/// The host's deterministic test frame (mirror of `punktfunk-host::m3::test_frame`).
-fn test_frame(idx: u32, len: usize) -> Vec<u8> {
-    let mut d = vec![0u8; len];
-    if len >= 4 {
-        d[0..4].copy_from_slice(&idx.to_le_bytes());
-    }
-    for (i, b) in d.iter_mut().enumerate().skip(4) {
-        *b = (idx as u8).wrapping_add(i as u8);
-    }
-    d
 }
 
 #[cfg(test)]

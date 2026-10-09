@@ -146,6 +146,19 @@ impl PlainTap {
     }
 }
 
+/// The synthetic source's access unit: `idx` as `u32` LE, then byte `i` is `idx + i`
+/// (wrapping). Under four bytes it is all zeros. The probe byte-checks it.
+pub fn test_frame(idx: u32, len: usize) -> Vec<u8> {
+    let mut d = vec![0u8; len];
+    if len >= 4 {
+        d[0..4].copy_from_slice(&idx.to_le_bytes());
+    }
+    for (i, b) in d.iter_mut().enumerate().skip(4) {
+        *b = (idx as u8).wrapping_add(i as u8);
+    }
+    d
+}
+
 /// Stamp [`Frame::received_ns`] as the frame leaves [`Session::poll_frame`]. Completed
 /// frames return as the last shard lands, so this is reassembly completion. CLOCK_REALTIME
 /// to match `pts_ns` and the skew handshake — not monotonic; the math is cross-machine.
@@ -1783,6 +1796,15 @@ mod wire_equivalence_tests {
             client.stats().packets_dropped >= 1,
             "the replayed packet is dropped"
         );
+    }
+
+    /// The index leads, the pattern counts on from it, and a frame too short for the
+    /// index is zeros rather than a panic.
+    #[test]
+    fn test_frame_pattern() {
+        assert_eq!(test_frame(0x0102_0304, 6), [4, 3, 2, 1, 8, 9]);
+        assert_eq!(test_frame(7, 3), [0, 0, 0]);
+        assert!(test_frame(7, 0).is_empty());
     }
 
     /// A packet number far past the newest is dropped before any key is derived for it.
