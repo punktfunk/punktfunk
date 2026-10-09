@@ -14,7 +14,8 @@ use super::VIDEO_PORT;
 use crate::capture::{self, Capturer, FastSyntheticCapturer};
 use crate::encode::{self, Codec};
 use crate::encode_recovery::{
-    EncoderWatchdog, RebuildBudget, MAX_CAPTURE_REBUILDS, MAX_ENCODER_RESETS,
+    on_submit_error, reset_stalled_encoder, run_parked_stage, EncoderWatchdog, RebuildBudget,
+    MAX_CAPTURE_REBUILDS, MAX_ENCODER_RESETS,
 };
 use anyhow::{Context, Result};
 use std::net::UdpSocket;
@@ -1322,7 +1323,7 @@ fn stream_body(
 
     // A delivered frame clears this; a permanently dead source ends the stream after the cap.
     let mut rebuilds: u32 = 0;
-    // Submit/poll failure or a stall rebuilds in place (native `reset_stalled_encoder`).
+    // Submit/poll failure, a stall or a ladder rung rebuilds in place.
     let mut watchdog = EncoderWatchdog::new();
 
     // Without RFI each request is a full IDR. One IDR resolves pending loss; NVENC
@@ -1350,7 +1351,14 @@ fn stream_body(
         let tick = Instant::now();
         let measure = perf || stats.is_armed();
         let mut fresh = false;
-        match capturer.try_latest() {
+        // The encoder's clocks go to the capturer's ladder before the grab, its rung after.
+        capturer.observe_encoder(enc.telemetry());
+        let cap_result = capturer.try_latest();
+        run_parked_stage(&mut **capturer, &mut *enc, &mut watchdog, || {
+            enc_inflight = 0;
+            keyframes.emitted(Instant::now());
+        });
+        match cap_result {
             Ok(Some(f)) => {
                 frame = f;
                 fresh = true;
@@ -1522,22 +1530,13 @@ fn stream_body(
             None => enc.submit_indexed(&frame, au_seq.wrapping_add(enc_inflight)),
         };
         if let Err(e) = submitted {
-            let Some(backoff) = watchdog.recover(frame_interval, || enc.reset()) else {
-                tracing::error!(
-                    error = %format!("{e:#}"),
-                    resets = watchdog.resets(),
-                    "encoder did not recover after repeated in-place rebuilds — ending the \
-                     stream (see the error above for the cause)"
-                );
-                return Err(e).context("encoder submit");
-            };
             // Owed AUs died with the discarded state. IDR bypasses coalesce: the client must resync.
-            enc_inflight = 0;
-            enc.request_keyframe();
-            keyframes.emitted(Instant::now());
-            tracing::warn!(error = %format!("{e:#}"), reset = watchdog.resets(),
-                max = MAX_ENCODER_RESETS,
-                "encoder submit failed — encoder rebuilt in place, forcing an IDR");
+            let backoff = on_submit_error(&mut watchdog, e, frame_interval, || {
+                reset_stalled_encoder(&mut *enc, || {
+                    enc_inflight = 0;
+                    keyframes.emitted(Instant::now());
+                })
+            })?;
             next_frame = Instant::now() + backoff;
             std::thread::sleep(backoff);
             continue;
@@ -1613,13 +1612,15 @@ fn stream_body(
                 Some(e) => format!("poll failed: {e:#}"),
                 None => stalled.unwrap_or_default(),
             };
-            let Some(backoff) = watchdog.recover(frame_interval, || enc.reset()) else {
+            let Some(backoff) = watchdog.recover(frame_interval, || {
+                reset_stalled_encoder(&mut *enc, || {
+                    enc_inflight = 0;
+                    keyframes.emitted(Instant::now());
+                })
+            }) else {
                 return Err(poll_err.unwrap_or_else(|| anyhow::anyhow!("{why}")))
                     .context("encoder stalled — in-place rebuild unavailable or exhausted");
             };
-            enc_inflight = 0;
-            enc.request_keyframe();
-            keyframes.emitted(Instant::now());
             tracing::warn!(reset = watchdog.resets(), max = MAX_ENCODER_RESETS, %why,
                 "encode stall detected — encoder rebuilt in place, forcing an IDR");
             next_frame = Instant::now() + backoff;

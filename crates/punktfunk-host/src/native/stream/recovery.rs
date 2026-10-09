@@ -3,7 +3,7 @@
 //! with its recovery-cadence diagnosis.
 
 use super::pipeline::open_session_encoder;
-use super::state::{announce_pipeline_gap, Inflight, StreamState};
+use super::state::{announce_pipeline_gap, StreamState};
 use super::*;
 
 impl StreamState {
@@ -558,66 +558,6 @@ pub(super) fn settle_fec(
 /// written a newer proposal since.
 fn hold_fec(fec_requested: &AtomicU8, applied: u8, requested: u8) {
     let _ = fec_requested.compare_exchange(requested, applied, Ordering::AcqRel, Ordering::Acquire);
-}
-
-/// Rebuild the encoder in place and drop owed in-flight AUs. `false` = no in-place reset.
-pub(super) fn reset_stalled_encoder(
-    enc: &mut Box<dyn crate::encode::Encoder>,
-    inflight: &mut Inflight,
-) -> bool {
-    if !enc.reset() {
-        return false;
-    }
-    inflight.clear();
-    enc.request_keyframe();
-    true
-}
-
-/// The ladder rungs whose actuator this loop owns because the encoder or the display manager
-/// does. `EncoderReset` is [`reset_stalled_encoder`] plus a bounded wait for the first access
-/// unit — the rung's whole cost, one IDR included. `DriverCycle` reaps the WUDFHost and reloads
-/// the adapter (seconds, the display black for the cycle); its `Applied` ends the capturer so
-/// the pipeline rebuild reopens SET_ENCODE and the ring against the fresh host.
-pub(super) fn run_loop_stage(
-    stage: pf_frame::recovery::Stage,
-    enc: &mut Box<dyn crate::encode::Encoder>,
-    inflight: &mut Inflight,
-) -> pf_frame::recovery::StageOutcome {
-    use pf_frame::recovery::{Stage, StageOutcome, ENCODER_RESET_FIRST_AU};
-    match stage {
-        Stage::EncoderReset => {
-            let t0 = std::time::Instant::now();
-            if !reset_stalled_encoder(enc, inflight) {
-                return StageOutcome::Failed;
-            }
-            let first_au = enc.ready_aus(t0 + ENCODER_RESET_FIRST_AU).map(|n| n > 0);
-            tracing::warn!(
-                cost_ms = t0.elapsed().as_millis() as u64,
-                first_au,
-                "recovery: encoder reset applied — one IDR plus the first-AU wait"
-            );
-            StageOutcome::Applied
-        }
-        #[cfg(target_os = "windows")]
-        Stage::DriverCycle => {
-            let t0 = std::time::Instant::now();
-            match crate::vdisplay::driver::force_driver_cycle() {
-                Ok(()) => {
-                    tracing::warn!(
-                        cost_ms = t0.elapsed().as_millis() as u64,
-                        "recovery: driver cycle — adapter reloaded, display black for the cycle; \
-                         the session rebuilds against the fresh WUDFHost"
-                    );
-                    StageOutcome::Applied
-                }
-                Err(e) => {
-                    tracing::error!(error = %format!("{e:#}"), "recovery: driver cycle failed");
-                    StageOutcome::Failed
-                }
-            }
-        }
-        _ => StageOutcome::Unsupported,
-    }
 }
 
 /// A recovery frame's flight: encode, wire, decode. A request inside it echoes the loss the

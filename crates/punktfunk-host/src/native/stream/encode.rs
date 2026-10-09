@@ -1,10 +1,11 @@
 //! The per-tick data path: capture, submit, poll into the send thread, the encode-stall watch,
 //! the IDD pipeline-depth adaptation, and the pacing sleep. The drain after the loop is here too.
 
-use super::recovery::{reset_stalled_encoder, run_loop_stage};
 use super::state::{Flow, StreamState, Tick};
 use super::*;
-use crate::encode_recovery::MAX_ENCODER_RESETS;
+use crate::encode_recovery::{
+    on_submit_error, reset_stalled_encoder, run_parked_stage, MAX_ENCODER_RESETS,
+};
 use crate::stats_recorder::DriverSample;
 
 // ~20 net behind-frames (≈0.3 s) escalates; warmup skips the first ~1 s of bring-up.
@@ -178,13 +179,12 @@ impl StreamState {
         if self.perf {
             self.st_cap.push(cap_us);
         }
-        // A recovery rung the capturer's ladder chose but this loop must run (the encoder is
-        // ours). Its outcome goes straight back; a reset forfeited every in-flight AU.
-        if let Some(stage) = self.capturer.take_pending_stage() {
-            let outcome = run_loop_stage(stage, &mut self.enc, &mut self.inflight);
-            self.capturer.stage_done(stage, outcome);
-            self.watchdog.restart();
-        }
+        run_parked_stage(
+            &mut *self.capturer,
+            &mut *self.enc,
+            &mut self.watchdog,
+            || self.inflight.clear(),
+        );
         let mut repeat = false;
         match cap_result {
             Ok(Some(f)) => self.on_frame(f, t_cap),
@@ -360,28 +360,9 @@ impl StreamState {
             }
         };
         if let Err(e) = submitted {
-            if e.downcast_ref::<crate::encode::TerminalEncoderError>()
-                .is_some()
-            {
-                tracing::error!(
-                    error = %format!("{e:#}"),
-                    "encoder failed with a deterministic configuration error — ending the video \
-                     session without rebuild attempts (see the error for the remedy)");
-                return Err(e).context("encoder submit");
-            }
-            let Some(backoff) = self.watchdog.recover(self.interval, || {
-                reset_stalled_encoder(&mut self.enc, &mut self.inflight)
-            }) else {
-                tracing::error!(
-                    error = %format!("{e:#}"),
-                    resets = self.watchdog.resets(),
-                    "encoder did not recover after repeated in-place rebuilds — ending the video \
-                     session (see the error above for the cause)");
-                return Err(e).context("encoder submit");
-            };
-            tracing::warn!(error = %format!("{e:#}"), reset = self.watchdog.resets(),
-                max = MAX_ENCODER_RESETS,
-                "encoder submit failed — encoder rebuilt in place, forcing an IDR");
+            let backoff = on_submit_error(&mut self.watchdog, e, self.interval, || {
+                reset_stalled_encoder(&mut *self.enc, || self.inflight.clear())
+            })?;
             self.next = std::time::Instant::now() + backoff;
             std::thread::sleep(backoff);
             return Ok(Flow::Continue);
@@ -657,7 +638,7 @@ impl StreamState {
             (None, None) => return Ok(()),
         };
         let recovered = self.watchdog.recover(self.interval, || {
-            reset_stalled_encoder(&mut self.enc, &mut self.inflight)
+            reset_stalled_encoder(&mut *self.enc, || self.inflight.clear())
         });
         if recovered.is_none() {
             return Err(poll_err.unwrap_or_else(|| anyhow!("{why}")))
