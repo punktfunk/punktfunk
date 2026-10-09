@@ -80,7 +80,8 @@ classify() {
             esac
             case "$path" in
                 sdk/*|plugin-kit/*|api/openapi.json|scripts/ci/retry.sh|\
-                clients/shared/library-id-vectors.json)
+                clients/shared/library-id-vectors.json|\
+                crates/punktfunk-host/testdata/path-refusal-vectors.json)
                     sdk_plugin_kit=true
                     ;;
             esac
@@ -160,6 +161,9 @@ self_test() {
     # The console types the plugin surfaces from the kit's wire.ts.
     check plugin-surface 'plugin-kit/src/wire.ts' \
         'rust=false rust_arm64=false web=true docs_site=false sdk_plugin_kit=true decky_typecheck=false'
+    # The runner's sandbox replays the host's path refusals.
+    check path-refusal-vectors 'crates/punktfunk-host/testdata/path-refusal-vectors.json' \
+        'rust=true rust_arm64=false web=false docs_site=false sdk_plugin_kit=true decky_typecheck=false'
     check openapi 'api/openapi.json' \
         'rust=true rust_arm64=false web=true docs_site=false sdk_plugin_kit=true decky_typecheck=false'
     check platforms 'data/platforms.json' \

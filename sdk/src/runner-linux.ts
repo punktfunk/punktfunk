@@ -132,7 +132,7 @@ export const runSandboxed = (
 			...grants.map((g) => g.path),
 		]
 			.map((p) => expandHome(p, home))
-			.filter((p) => path.isAbsolute(p) && refusedRoot(p, home));
+			.filter((p) => path.isAbsolute(p) && refusedRoot(p, home, config));
 		if (refused.length > 0)
 			log(`[runner] ${id}: not sharing ${refused.join(", ")} — no plugin gets those`, "warn");
 		const runtime = process.env.XDG_RUNTIME_DIR ?? "/tmp";
@@ -182,6 +182,7 @@ export const runSandboxed = (
 					bun: process.execPath,
 					runner: runnerEntry(),
 					home,
+					configDir: config,
 					homeLink: homeLink(),
 					...(ui ? { ui } : {}),
 				},
