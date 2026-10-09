@@ -1,4 +1,5 @@
 use super::*;
+use pf_client_core::audio_format::AUDIO_FORMAT_OPUS;
 use pf_client_core::trust::Settings;
 
 /// The row shows the global; a host's bound preset outranks it at launch, and the
@@ -1922,8 +1923,8 @@ fn the_background_rows_follow_the_device() {
     );
 }
 
-/// Every row kept in `extra` reads its default unwritten, and one step writes the key it
-/// reads back, so the row never shows one value and steps from another.
+/// Every single-entry row shows what one step changes, so it never shows one value and steps
+/// from another. One kept in `extra` reads its default unwritten and writes the key it reads.
 #[test]
 fn every_extra_row_steps_the_value_it_shows() {
     let ids = TABS
@@ -1931,17 +1932,21 @@ fn every_extra_row_steps_the_value_it_shows() {
         .flat_map(|(_, rows)| rows.iter().copied())
         .filter(|id| id.extra().is_some());
     for id in ids {
-        let mut settings = Settings::default();
+        // The switches that dim a row are on, so every row steps.
+        let mut settings = Settings {
+            mic_enabled: true,
+            gamepad_forwarding: true,
+            ..Settings::default()
+        };
         let library = crate::library::LibraryShared::default();
         let mut ctx = Ctx::test(&mut settings, &library);
         let shown = |ctx: &Ctx| row_spec(id, ctx, &[], &Default::default()).value;
         let before = shown(&ctx);
         assert!(adjust(id, 1, true, &mut ctx), "{id:?} steps");
         assert_ne!(shown(&ctx), before, "{id:?} shows what it stepped to");
-        let (Some(Extra::Bool(key, _)) | Some(Extra::Choice(key, _, _))) = id.extra() else {
-            unreachable!()
-        };
-        assert!(ctx.settings.extra.contains_key(key), "{id:?} writes {key}");
+        if let Some(Extra::Bool(key, _) | Extra::Choice(key, _, _)) = id.extra() {
+            assert!(ctx.settings.extra.contains_key(key), "{id:?} writes {key}");
+        }
     }
 }
 

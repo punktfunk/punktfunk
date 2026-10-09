@@ -1625,7 +1625,7 @@ impl LibraryScreen {
             None => grid_cell(this.cursor.max(0) as usize),
         };
         tree.set_focus((!this.quiet).then(|| games::zone_id(this.zone, field)));
-        let cheap = super::settings::reduce_ui_res(
+        let cheap = super::settings::rows::reduce_ui_res(
             ctx.settings,
             ctx.device.platform,
             ctx.device.fallback_ui,

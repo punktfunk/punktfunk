@@ -389,7 +389,7 @@ impl ProfilesScreen {
             );
         }
         tree.set_focus(Some(card_id(self.cursor)));
-        let cheap = super::settings::reduce_ui_res(
+        let cheap = super::settings::rows::reduce_ui_res(
             ctx.settings,
             ctx.device.platform,
             ctx.device.fallback_ui,

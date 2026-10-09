@@ -2140,7 +2140,7 @@ impl Shell {
     /// measures well above what a webOS TV will keep.
     fn apply_speed_bitrate(&mut self, kbps: u32) -> String {
         self.settings = self.store.load();
-        let ceiling = crate::screens::settings::bitrate_ceiling_kbps(self.device.platform);
+        let ceiling = crate::screens::settings::rows::bitrate_ceiling_kbps(self.device.platform);
         self.settings.bitrate_kbps = kbps.min(ceiling);
         self.store.save(&self.settings);
         format!(
@@ -2429,7 +2429,7 @@ impl Shell {
     fn draw_aurora(&self, canvas: &Canvas, w: f64, h: f64, t: f64, calm: f64) {
         // One clock read: the takeover's `draw_aurora` inherits it.
         let t = self.field_clock(t);
-        let reduced = crate::screens::settings::reduce_ui_res(
+        let reduced = crate::screens::settings::rows::reduce_ui_res(
             &self.settings,
             self.device.platform,
             self.device.fallback_ui,

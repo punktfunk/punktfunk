@@ -1048,7 +1048,7 @@ fn every_settings_tab_rasters() {
     // One lap of the strip. Walk to the end first so both row paths run, then one
     // frame per tab — every tab's rows fit on 800-tall. CPU SkSL is ~1s/frame in
     // debug; this is a panic catch, not an eyeball pass.
-    for _ in 0..crate::screens::settings::TAB_COUNT {
+    for _ in 0..crate::screens::settings::rows::TAB_COUNT {
         for _ in 0..12 {
             s.handle_menu(MenuEvent::Move(MenuDir::Down));
         }

@@ -7,7 +7,7 @@
 //! A change is recorded as an override ([`SettingsOverlay::absorb`]); X clears one, so the
 //! row follows the global value again.
 
-use super::settings::{adjust, advanced, overrides_row, preset_field, preset_rows, row_spec};
+use super::settings::rows::{adjust, advanced, overrides_row, preset_field, preset_rows, row_spec};
 use crate::glyphs::{Hint, HintKey};
 use crate::model::ConsoleCmd;
 use crate::pointer::Pointer;
@@ -461,7 +461,7 @@ impl PresetEdit {
 
     /// The preset's rows. An advanced one shows under Show advanced, or while this preset
     /// overrides it, so no override is ever out of sight.
-    fn rows(&self, ctx: &mut Ctx) -> Vec<(&'static str, super::settings::RowId)> {
+    fn rows(&self, ctx: &mut Ctx) -> Vec<(&'static str, super::settings::rows::RowId)> {
         let overlay = &self.overlay;
         self.in_preset(ctx, |ctx| {
             let all = ctx.settings.show_advanced;
@@ -520,7 +520,7 @@ impl PresetEdit {
     /// that steps on, or Native could never be left.
     fn step(
         &mut self,
-        id: super::settings::RowId,
+        id: super::settings::rows::RowId,
         delta: i32,
         wrap: bool,
         ctx: &mut Ctx,
@@ -534,7 +534,7 @@ impl PresetEdit {
             }
             let mut held = overlay.clone();
             held.absorb(&before, ctx.settings);
-            let unheld = id == super::settings::RowId::Resolution && held == *overlay;
+            let unheld = id == super::settings::rows::RowId::Resolution && held == *overlay;
             if unheld && !adjust(id, delta, wrap, ctx) {
                 return None;
             }
@@ -598,7 +598,7 @@ impl PresetEdit {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::screens::settings::RowId;
+    use crate::screens::settings::rows::RowId;
     use crate::screens::Nav;
     use pf_client_core::menu_nav::MenuDir;
     use pf_client_core::trust::Settings;

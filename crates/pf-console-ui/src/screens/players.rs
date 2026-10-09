@@ -258,7 +258,7 @@ impl PlayersScreen {
             ));
         let root = El::column().child(row);
         let frame = self.tree.layout(root, rect);
-        let cheap = super::settings::reduce_ui_res(
+        let cheap = super::settings::rows::reduce_ui_res(
             ctx.settings,
             ctx.device.platform,
             ctx.device.fallback_ui,

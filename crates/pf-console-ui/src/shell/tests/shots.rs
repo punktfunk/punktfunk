@@ -117,7 +117,7 @@ fn dump_console_screens() {
         .encode(None, skia_safe::EncodedImageFormat::PNG, 100)
         .unwrap();
     std::fs::write(format!("{dir}/03c-settings-blur-mid.png"), png.as_bytes()).unwrap();
-    for _ in 5..crate::screens::settings::TAB_COUNT {
+    for _ in 5..crate::screens::settings::rows::TAB_COUNT {
         next_section(&mut s);
     }
     // Home at full contrast under a few palettes: the backdrop's loudest form.

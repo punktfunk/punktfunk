@@ -85,7 +85,7 @@ impl Shell {
         // `settings`, so the transition arms cannot read the field.
         let reduce = self.reduce_motion();
         crate::theme::set_reduce_motion(reduce);
-        crate::theme::set_reduced_ui(crate::screens::settings::reduce_ui_res(
+        crate::theme::set_reduced_ui(crate::screens::settings::rows::reduce_ui_res(
             &self.settings,
             self.device.platform,
             self.device.fallback_ui,
@@ -529,7 +529,7 @@ impl LayerEnv<'_> {
         if band == Band::Strip {
             self.root_targets = Some(targets);
         }
-        self.cheap = crate::screens::settings::reduce_ui_res(
+        self.cheap = crate::screens::settings::rows::reduce_ui_res(
             ctx.settings,
             ctx.device.platform,
             ctx.device.fallback_ui,

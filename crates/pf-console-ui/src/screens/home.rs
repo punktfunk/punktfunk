@@ -623,7 +623,7 @@ impl HomeScreen {
         ctx: &mut Ctx,
     ) {
         self.reconcile(ctx.hosts);
-        let reduced = super::settings::reduce_ui_res(
+        let reduced = super::settings::rows::reduce_ui_res(
             ctx.settings,
             ctx.device.platform,
             ctx.device.fallback_ui,
