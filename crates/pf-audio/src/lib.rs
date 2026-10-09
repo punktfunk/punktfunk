@@ -171,6 +171,10 @@ pub fn per_session_sink_possible() -> bool {
     plat::per_session_sink_possible()
 }
 
+/// Host-lifetime capturer slot: [`park_audio_capture`] fills it, [`take_parked_capture`]
+/// drains it.
+pub type AudioCapSlot = std::sync::Arc<std::sync::Mutex<Option<Box<dyn AudioCapturer>>>>;
+
 /// Park a capturer at session end so the next session reuses its PipeWire thread.
 /// A capturer that owns a sink is dropped instead: WirePlumber elects a live sink
 /// from its default history whenever the restored output is missing. Windows drops
@@ -404,8 +408,10 @@ pub mod wiring_plan;
 #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 pub mod capture_policy;
 
+mod capture_lease;
 mod mic_jitter;
 mod mic_pump;
+pub use capture_lease::{CaptureLease, CaptureRoute, Ready};
 pub use mic_pump::{mic_source_id, MicFrame, MicPump};
 
 /// A session's hold on the shared virtual mic as the box's default source. The mic loses the

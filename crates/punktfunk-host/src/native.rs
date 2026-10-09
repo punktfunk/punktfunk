@@ -1122,8 +1122,7 @@ fn apply_fec_target(session: &mut Session, fec_target: &AtomicU8) {
     }
 }
 
-/// Host-lifetime PipeWire capturer, reused across sessions (one connect/negotiate, not per session).
-type AudioCapSlot = Arc<std::sync::Mutex<Option<Box<dyn crate::audio::AudioCapturer>>>>;
+use crate::audio::AudioCapSlot;
 
 /// Park an unpaired knock for console Approve. QUIC keep-alive (4 s, under 8 s idle) holds
 /// the path; approval streams with no reconnect. Under the pending TTL (10 min).
