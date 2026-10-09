@@ -86,7 +86,7 @@ classify() {
                     ;;
             esac
             case "$path" in
-                clients/decky/*)
+                clients/decky/*|clients/shared/host-row-vectors.json)
                     decky_typecheck=true
                     ;;
             esac
@@ -147,6 +147,9 @@ self_test() {
         'rust=true rust_arm64=false web=false docs_site=false sdk_plugin_kit=false decky_typecheck=false'
     check client-shared 'clients/shared/deeplink-vectors.json' \
         'rust=true rust_arm64=true web=false docs_site=false sdk_plugin_kit=false decky_typecheck=false'
+    # Decky replays the host rows through its own merge.
+    check host-row-vectors 'clients/shared/host-row-vectors.json' \
+        'rust=true rust_arm64=true web=false docs_site=false sdk_plugin_kit=false decky_typecheck=true'
     check library-id-vectors 'clients/shared/library-id-vectors.json' \
         'rust=true rust_arm64=true web=true docs_site=false sdk_plugin_kit=true decky_typecheck=false'
     # The host's unprivileged launch kinds and the console's copy: each side's test reads the other.
