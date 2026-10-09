@@ -16,8 +16,12 @@
 		"checkJs": false,
 		"noEmit": true,
 		"types": ["vite/client"],
+		// The plugin surface contract is read from the kit's source, as types only. Its `effect`
+		// import resolves here, since plugin-kit's own node_modules is not installed beside web.
 		"paths": {
-			"@/*": ["./src/*"]
+			"@/*": ["./src/*"],
+			"@punktfunk/plugin-kit/wire": ["../plugin-kit/src/wire.ts"],
+			"effect": ["./node_modules/effect/dist/index"]
 		}
 	},
 	"include": [

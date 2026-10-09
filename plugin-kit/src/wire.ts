@@ -284,3 +284,46 @@ export const MetadataEntry = Schema.Struct({
 	meta: Schema.optionalKey(GameMeta),
 });
 export type MetadataEntry = typeof MetadataEntry.Type;
+
+// ---- the surfaces the console reads off a plugin --------------------------------------------
+// The console imports these as types only, so effect stays out of its bundle: a constant's twin
+// in the console is typed `typeof` the constant here, and tsc fails when the two differ.
+
+/** One game a search offers for "wrong game?". `key` becomes the operator's pin. */
+export interface Candidate {
+	readonly key: string;
+	readonly label: string;
+	readonly thumb?: string | null;
+}
+
+/** One image a source offers for a slot of a match. */
+export interface Image {
+	readonly url: string;
+	readonly thumb?: string;
+	readonly label?: string;
+	readonly width?: number;
+	readonly height?: number;
+}
+
+/** `GET /__metadata/status`: the console's status line for this source. */
+export interface MetadataStatus {
+	readonly ready: boolean;
+	/** Why the source is not filling anything, in words. */
+	readonly reason?: string;
+	/** Entries worth a lookup, and how many of them this source has something for. */
+	readonly wanted: number;
+	readonly found: number;
+	readonly lastRun?: number;
+	readonly searchable: boolean;
+}
+
+/** The `/__metadata/<route>` surface a source serves, and each route's methods. */
+export const METADATA_ROUTES = {
+	status: ["GET"],
+	match: ["GET", "PUT"],
+	search: ["POST"],
+	images: ["GET"],
+} as const;
+
+/** One path segment a plugin's page route may be (`game.abc`): no `/`, nothing to escape. */
+export const PAGE_SEGMENT = "^[A-Za-z0-9._~-]{1,200}$";

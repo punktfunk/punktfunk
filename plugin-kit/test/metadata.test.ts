@@ -17,6 +17,7 @@ import {
 	toRow,
 	wanted,
 } from "../src/metadata/index.js";
+import { METADATA_ROUTES } from "../src/wire.js";
 
 const hades: LibraryEntry = {
 	id: "steam:1145360",
@@ -227,6 +228,23 @@ describe("defineMetadataPlugin", () => {
 					headers: { authorization: `Bearer ${ui.secret}` },
 				});
 			const q = `entry=${encodeURIComponent("steam:1145360")}`;
+
+			// The console's BFF forwards exactly METADATA_ROUTES, so the handler serves exactly those.
+			// The bodies are invalid on purpose: a served route refuses them without changing state.
+			for (const [route, methods] of Object.entries(METADATA_ROUTES)) {
+				for (const method of ["GET", "PUT", "POST"] as const) {
+					const res = await at(`${route}?${q}`, {
+						method,
+						...(method === "GET" ? {} : { body: "{}" }),
+					});
+					const { error } = (await res.json()) as { error?: string };
+					expect([route, method, error === "no such route"]).toEqual([
+						route,
+						method,
+						!(methods as ReadonlyArray<string>).includes(method),
+					]);
+				}
+			}
 
 			const status = (await (await at("status")).json()) as Record<
 				string,
