@@ -430,8 +430,7 @@ fn bitmap_extent(hbm: HBITMAP) -> Option<(u32, u32)> {
 ///   entirely invert.
 /// - monochrome (`hbmColor` null): `hbmMask` is double height — AND over XOR.
 ///   (0,0) black, (0,1) white, (1,0) transparent, (1,1) invert. Invert is
-///   unrepresentable in straight alpha, so it becomes opaque black with a white
-///   outline grown into adjacent transparency (keeps the I-beam legible).
+///   unrepresentable in straight alpha, so it draws as the driver's translucent gray.
 fn convert(ii: &ICONINFO) -> Option<(Vec<u8>, u32, u32)> {
     // SAFETY: GetDC(None) yields the screen DC, released below on every path; it is only used
     // as the GetDIBits reference DC.

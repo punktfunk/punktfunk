@@ -5,6 +5,8 @@
 // Off Windows only the tests read this module.
 #![cfg_attr(not(target_os = "windows"), allow(dead_code))]
 
+use pf_driver_proto::cursor::INVERT_RGBA;
+
 /// `rgba` is `Arc` so slot publish and every downstream attach is a refcount bump.
 pub(crate) struct Shape {
     pub(crate) rgba: std::sync::Arc<Vec<u8>>,
@@ -54,17 +56,6 @@ pub(crate) fn compose_overlay(
     })
 }
 
-const NEIGHBORS: [(i32, i32); 8] = [
-    (-1, -1),
-    (0, -1),
-    (1, -1),
-    (-1, 0),
-    (1, 0),
-    (-1, 1),
-    (0, 1),
-    (1, 1),
-];
-
 /// Alpha channel entirely zero: old-style cursor whose transparency (and invert)
 /// live in the AND mask ([`masked_color_to_rgba`]).
 pub(crate) fn alpha_is_empty(rgba: &[u8]) -> bool {
@@ -92,7 +83,6 @@ pub(crate) fn masked_color_to_rgba(
     h: usize,
 ) -> Vec<u8> {
     let mut rgba = vec![0u8; w * h * 4];
-    let mut invert = vec![false; w * h];
     for i in 0..w * h {
         let and = mask_bgra.get(i * 4).is_some_and(|&b| b != 0);
         let c = color_rgba.get(i * 4..i * 4 + 3).unwrap_or(&[0, 0, 0]);
@@ -102,17 +92,13 @@ pub(crate) fn masked_color_to_rgba(
             (false, false) => px.copy_from_slice(&[0, 0, 0, 0xFF]),
             (false, true) => px.copy_from_slice(&[c[0], c[1], c[2], 0xFF]),
             (true, false) => {}
-            (true, true) => {
-                px.copy_from_slice(&[0, 0, 0, 0xFF]);
-                invert[i] = true;
-            }
+            (true, true) => px.copy_from_slice(&INVERT_RGBA),
         }
     }
-    grow_invert_outline(&mut rgba, &invert, w, h);
     rgba
 }
 
-/// Monochrome-cursor truth table, plus the white outline that makes invert legible.
+/// Monochrome-cursor truth table.
 ///
 /// A monochrome `HCURSOR` has no colour bitmap: `hbmMask` is double height — AND
 /// over XOR — and the pair encodes four states:
@@ -122,12 +108,10 @@ pub(crate) fn masked_color_to_rgba(
 /// | 0   | 0   | black       | opaque black                             |
 /// | 0   | 1   | white       | opaque white                             |
 /// | 1   | 0   | transparent | fully transparent                        |
-/// | 1   | 1   | INVERT dst  | opaque black + a grown white outline     |
+/// | 1   | 1   | INVERT dst  | [`INVERT_RGBA`], translucent mid-gray    |
 ///
-/// Invert is unrepresentable in straight alpha (per-pixel XOR of the destination),
-/// so it becomes opaque black and every transparent 8-neighbour of an invert
-/// pixel is turned opaque white. That outline keeps a text I-beam — almost
-/// entirely invert — legible over dark content.
+/// Invert is unrepresentable in straight alpha (per-pixel XOR of the destination), so it
+/// draws as the driver's composite draws it.
 pub(crate) fn mono_planes_to_rgba(
     and_plane: &[u8],
     xor_plane: &[u8],
@@ -135,7 +119,6 @@ pub(crate) fn mono_planes_to_rgba(
     h: usize,
 ) -> Vec<u8> {
     let mut rgba = vec![0u8; w * h * 4];
-    let mut invert = vec![false; w * h];
     for i in 0..w * h {
         let (a, x) = (and_plane[i * 4] != 0, xor_plane[i * 4] != 0);
         let px = &mut rgba[i * 4..i * 4 + 4];
@@ -143,36 +126,10 @@ pub(crate) fn mono_planes_to_rgba(
             (false, false) => px.copy_from_slice(&[0, 0, 0, 0xFF]),
             (false, true) => px.copy_from_slice(&[0xFF, 0xFF, 0xFF, 0xFF]),
             (true, false) => {}
-            (true, true) => {
-                px.copy_from_slice(&[0, 0, 0, 0xFF]);
-                invert[i] = true;
-            }
+            (true, true) => px.copy_from_slice(&INVERT_RGBA),
         }
     }
-    grow_invert_outline(&mut rgba, &invert, w, h);
     rgba
-}
-
-/// Transparent 8-neighbours of an invert pixel become opaque white. Invert
-/// itself stays opaque black. Shared by the monochrome and masked-color paths.
-fn grow_invert_outline(rgba: &mut [u8], invert: &[bool], w: usize, h: usize) {
-    for y in 0..h as i32 {
-        for x in 0..w as i32 {
-            if !invert[(y * w as i32 + x) as usize] {
-                continue;
-            }
-            for (dx, dy) in NEIGHBORS {
-                let (nx, ny) = (x + dx, y + dy);
-                if nx < 0 || ny < 0 || nx >= w as i32 || ny >= h as i32 {
-                    continue;
-                }
-                let o = (ny * w as i32 + nx) as usize * 4;
-                if rgba[o + 3] == 0 {
-                    rgba[o..o + 4].copy_from_slice(&[0xFF, 0xFF, 0xFF, 0xFF]);
-                }
-            }
-        }
-    }
 }
 
 #[cfg(test)]
@@ -231,6 +188,7 @@ mod tests {
     const OPAQUE_WHITE: [u8; 4] = [0xFF, 0xFF, 0xFF, 0xFF];
     const TRANSPARENT: [u8; 4] = [0, 0, 0, 0];
 
+    /// Invert draws as the driver's gray and leaves its transparent neighbour alone.
     #[test]
     fn the_monochrome_truth_table_is_exact() {
         //          (0,0) black  (0,1) white  (1,0) transparent  (1,1) invert
@@ -239,65 +197,8 @@ mod tests {
         let out = mono_planes_to_rgba(&and, &xor, 4, 1);
         assert_eq!(px(&out, 0), OPAQUE_BLACK, "AND=0 XOR=0 ⇒ black");
         assert_eq!(px(&out, 1), OPAQUE_WHITE, "AND=0 XOR=1 ⇒ white");
-        // Pixel 2 is transparent by the table, but it is an 8-neighbour of the invert pixel at 3,
-        // so the outline claims it — that IS the documented behaviour.
-        assert_eq!(
-            px(&out, 2),
-            OPAQUE_WHITE,
-            "outline grows into adjacent transparency"
-        );
-        assert_eq!(px(&out, 3), OPAQUE_BLACK, "AND=1 XOR=1 ⇒ black + outline");
-    }
-
-    #[test]
-    fn transparent_pixels_stay_transparent_without_an_invert_neighbour() {
-        let and = plane(&[1, 1, 1, 1]);
-        let xor = plane(&[0, 0, 0, 0]);
-        let out = mono_planes_to_rgba(&and, &xor, 4, 1);
-        for i in 0..4 {
-            assert_eq!(px(&out, i), TRANSPARENT, "pixel {i}");
-        }
-    }
-
-    #[test]
-    fn the_invert_outline_covers_eight_neighbours_and_overwrites_nothing() {
-        // 3×3, invert at the centre, everything else transparent.
-        let and = plane(&[1, 1, 1, 1, 1, 1, 1, 1, 1]);
-        let mut xor = plane(&[0; 9]);
-        for b in &mut xor[4 * 4..4 * 4 + 3] {
-            *b = 0xFF; // centre pixel's XOR bit
-        }
-        let out = mono_planes_to_rgba(&and, &xor, 3, 3);
-        assert_eq!(px(&out, 4), OPAQUE_BLACK, "the invert pixel itself");
-        for i in [0, 1, 2, 3, 5, 6, 7, 8] {
-            assert_eq!(px(&out, i), OPAQUE_WHITE, "neighbour {i} outlined");
-        }
-
-        // Now surround it with BLACK shape pixels (AND=0, XOR=0): the outline must leave them alone.
-        let and = plane(&[0, 0, 0, 0, 1, 0, 0, 0, 0]);
-        let out = mono_planes_to_rgba(&and, &xor, 3, 3);
-        for i in [0, 1, 2, 3, 5, 6, 7, 8] {
-            assert_eq!(
-                px(&out, i),
-                OPAQUE_BLACK,
-                "neighbour {i} must not be repainted"
-            );
-        }
-    }
-
-    #[test]
-    fn the_outline_clips_at_the_edges() {
-        // 2×2 with the invert at (0, 0): only (1,0), (0,1) and (1,1) can be outlined.
-        let and = plane(&[1, 1, 1, 1]);
-        let mut xor = plane(&[0; 4]);
-        for b in &mut xor[0..3] {
-            *b = 0xFF;
-        }
-        let out = mono_planes_to_rgba(&and, &xor, 2, 2);
-        assert_eq!(px(&out, 0), OPAQUE_BLACK);
-        for i in [1, 2, 3] {
-            assert_eq!(px(&out, i), OPAQUE_WHITE, "in-bounds neighbour {i}");
-        }
+        assert_eq!(px(&out, 2), TRANSPARENT, "AND=1 XOR=0 ⇒ transparent");
+        assert_eq!(px(&out, 3), INVERT_RGBA, "AND=1 XOR=1 ⇒ invert");
     }
 
     #[test]
@@ -328,7 +229,7 @@ mod tests {
 
     /// Colour standing in for XOR. Pixel 3 is the I-beam case: AND=1 and a
     /// non-zero colour pixel is invert, not transparent — `apply_and_mask_alpha`
-    /// would have dropped it.
+    /// would have dropped it. Invert is the driver's gray, as in the monochrome table.
     #[test]
     fn a_masked_color_invert_pixel_is_not_transparent() {
         //          (0,0) black  (0,1) red    (1,0) transparent  (1,1) invert
@@ -341,16 +242,10 @@ mod tests {
             [0xCC, 0, 0, 0xFF],
             "AND=0 colour ⇒ opaque colour"
         );
-        // Pixel 2 is transparent by the table, but it is an 8-neighbour of the invert pixel at 3,
-        // so the outline claims it — same as the monochrome table.
-        assert_eq!(
-            px(&out, 2),
-            OPAQUE_WHITE,
-            "outline grows into adjacent transparency"
-        );
+        assert_eq!(px(&out, 2), TRANSPARENT, "AND=1 colour=0 ⇒ transparent");
         assert_eq!(
             px(&out, 3),
-            OPAQUE_BLACK,
+            INVERT_RGBA,
             "AND=1 colour≠0 ⇒ invert, not drop"
         );
     }
