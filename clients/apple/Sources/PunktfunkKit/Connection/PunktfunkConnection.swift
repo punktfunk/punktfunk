@@ -1013,6 +1013,7 @@ public final class PunktfunkConnection: @unchecked Sendable {
         opts.compositor = compositor.rawValue
         opts.gamepad = gamepad.rawValue
         opts.bitrate_kbps = bitrateKbps
+        opts.pyrowave_bpp_x100 = settings.pyrowaveBppX100
         opts.video_caps = videoCaps
         opts.audio_channels = audioChannels
         opts.delivery_flags = deliveryFlags

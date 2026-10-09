@@ -21,6 +21,8 @@ public struct EffectiveSettings: Equatable, Sendable {
     public var refreshHz = SettingDefault.streamHz
     public var matchWindow = SettingDefault.matchWindow
     public var bitrateKbps = SettingDefault.bitrateKbps
+    /// PyroWave quality, bits per pixel (`DefaultsKey.pyrowaveBpp`).
+    public var pyrowaveBpp = SettingDefault.pyrowaveBpp
     public var renderScale = SettingDefault.renderScale
     /// A `VideoFit` raw value; unknown reads as fit.
     public var videoFit = SettingDefault.videoFit
@@ -101,6 +103,7 @@ public struct EffectiveSettings: Equatable, Sendable {
         refreshHz = int(DefaultsKey.streamHz, refreshHz)
         matchWindow = bool(DefaultsKey.matchWindow, matchWindow)
         bitrateKbps = int(DefaultsKey.bitrateKbps, bitrateKbps)
+        pyrowaveBpp = dbl(DefaultsKey.pyrowaveBpp, pyrowaveBpp)
         renderScale = dbl(DefaultsKey.renderScale, renderScale)
         videoFit = str(DefaultsKey.videoFit, videoFit)
         codec = str(DefaultsKey.codec, codec)
@@ -188,6 +191,7 @@ public struct EffectiveSettings: Equatable, Sendable {
         if let v = overlay.refreshHz { s.refreshHz = v }
         if let v = overlay.matchWindow { s.matchWindow = v }
         if let v = overlay.bitrateKbps { s.bitrateKbps = v }
+        if let v = overlay.pyrowaveBpp { s.pyrowaveBpp = v }
         if let v = overlay.renderScale { s.renderScale = v }
         if let v = overlay.videoFit { s.videoFit = v }
         if let v = overlay.codec { s.codec = v }
@@ -380,5 +384,10 @@ extension EffectiveSettings {
             maxDimension: RenderScale.maxDimension(codec: codec))
         let hz = refreshHz == 0 ? max(native.hz, 30) : refreshHz
         return (mode.width, mode.height, UInt32(clamping: hz))
+    }
+
+    /// `pyrowaveBpp` in the hundredths the dial carries, held inside 0.5…2.
+    public var pyrowaveBppX100: UInt16 {
+        UInt16((min(max(pyrowaveBpp, 0.5), 2.0) * 100).rounded())
     }
 }

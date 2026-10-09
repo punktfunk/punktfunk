@@ -99,6 +99,7 @@ public struct SettingsOverlay: Codable, Equatable, Sendable {
     public var refreshHz: Int?
     public var matchWindow: Bool?
     public var bitrateKbps: Int?
+    public var pyrowaveBpp: Double?
     public var renderScale: Double?
     /// A `VideoFit` raw value.
     public var videoFit: String?
@@ -161,6 +162,7 @@ public struct SettingsOverlay: Codable, Equatable, Sendable {
         case refreshHz = "refresh_hz"
         case matchWindow = "match_window"
         case bitrateKbps = "bitrate_kbps"
+        case pyrowaveBpp = "pyrowave_bpp"
         case renderScale = "render_scale"
         case videoFit = "video_fit"
         case codec
@@ -202,6 +204,7 @@ public struct SettingsOverlay: Codable, Equatable, Sendable {
         refreshHz = int(.refreshHz)
         matchWindow = bool(.matchWindow)
         bitrateKbps = int(.bitrateKbps)
+        pyrowaveBpp = dbl(.pyrowaveBpp)
         renderScale = dbl(.renderScale)
         videoFit = str(.videoFit)
         codec = str(.codec)
@@ -245,6 +248,7 @@ public struct SettingsOverlay: Codable, Equatable, Sendable {
         try c.encodeIfPresent(refreshHz, forKey: AnyKey(Key.refreshHz.rawValue))
         try c.encodeIfPresent(matchWindow, forKey: AnyKey(Key.matchWindow.rawValue))
         try c.encodeIfPresent(bitrateKbps, forKey: AnyKey(Key.bitrateKbps.rawValue))
+        try c.encodeIfPresent(pyrowaveBpp, forKey: AnyKey(Key.pyrowaveBpp.rawValue))
         try c.encodeIfPresent(renderScale, forKey: AnyKey(Key.renderScale.rawValue))
         try c.encodeIfPresent(videoFit, forKey: AnyKey(Key.videoFit.rawValue))
         try c.encodeIfPresent(codec, forKey: AnyKey(Key.codec.rawValue))
@@ -305,6 +309,7 @@ public enum OverlayField {
         case "refresh_hz": overlay.refreshHz = nil
         case "match_window": overlay.matchWindow = nil
         case "bitrate_kbps": overlay.bitrateKbps = nil
+        case "pyrowave_bpp": overlay.pyrowaveBpp = nil
         case "render_scale": overlay.renderScale = nil
         case "video_fit": overlay.videoFit = nil
         case "codec": overlay.codec = nil
@@ -348,6 +353,7 @@ public enum OverlayField {
         case "refresh_hz": return o.refreshHz != nil
         case "match_window": return o.matchWindow != nil
         case "bitrate_kbps": return o.bitrateKbps != nil
+        case "pyrowave_bpp": return o.pyrowaveBpp != nil
         case "render_scale": return o.renderScale != nil
         case "video_fit": return o.videoFit != nil
         case "codec": return o.codec != nil

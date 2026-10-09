@@ -108,7 +108,7 @@ pub enum AckReason {
     /// The host divided a shared path between sessions. Reserved: no host
     /// sends it yet.
     Governor,
-    /// PyroWave: the rate is per-frame CBR and not negotiable.
+    /// PyroWave at an explicit rate: the pin is not negotiable.
     Pinned,
 }
 

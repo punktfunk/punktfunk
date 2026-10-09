@@ -25,6 +25,9 @@ pub enum RowId {
     /// `trust::Settings::video_fit`: bars, crop or stretch when the stream's shape differs.
     VideoFit,
     Bitrate,
+    /// `trust::Settings::pyrowave_bpp`, shown as the rate it needs. In Bitrate's place while
+    /// the codec is PyroWave.
+    PyroWaveQuality,
     Compositor,
     Codec,
     Decoder,
@@ -142,6 +145,7 @@ pub fn advanced(id: RowId) -> bool {
     matches!(
         id,
         RowId::SmoothBuffer
+            | RowId::PyroWaveQuality
             | RowId::RenderScale
             | RowId::Codec
             | RowId::Chroma444
@@ -464,6 +468,7 @@ pub(super) const TABS: [(&str, &[RowId]); 7] = [
             RowId::Resolution,
             RowId::Refresh,
             RowId::Bitrate,
+            RowId::PyroWaveQuality,
             RowId::VideoFit,
             RowId::SecondScreen,
             RowId::Hdr,
@@ -564,6 +569,41 @@ pub(super) fn family(
     family_of(fams, s.width, s.height).unwrap_or(0)
 }
 
+/// What a Native stream asks for here. Unknown, a handheld's panel or 1920×1080 at 60 Hz,
+/// as the desktop presenter assumes for a display that reports no mode.
+fn native_mode(device: &crate::screens::Device) -> punktfunk_core::Mode {
+    device.native_mode.unwrap_or_else(|| {
+        let (width, height) = device.screen.map_or((1920, 1080), |s| s.full);
+        punktfunk_core::Mode {
+            width,
+            height,
+            refresh_hz: 60,
+        }
+    })
+}
+
+/// This device's link toward its default route, looked up at most once a second: the rows
+/// are rebuilt every frame.
+fn local_link() -> punktfunk_core::transport::LinkFacts {
+    #[cfg(not(target_family = "wasm"))]
+    {
+        use std::time::{Duration, Instant};
+        type Seen = Option<(Instant, punktfunk_core::transport::LinkFacts)>;
+        static LAST: std::sync::Mutex<Seen> = std::sync::Mutex::new(None);
+        let mut last = LAST.lock().unwrap_or_else(|e| e.into_inner());
+        match *last {
+            Some((at, facts)) if at.elapsed() < Duration::from_secs(1) => facts,
+            _ => {
+                let facts = punktfunk_core::transport::ifinfo::local_link_facts(None);
+                *last = Some((Instant::now(), facts));
+                facts
+            }
+        }
+    }
+    #[cfg(target_family = "wasm")]
+    punktfunk_core::transport::LinkFacts::default()
+}
+
 /// A window the stream can follow (Match window): the desktops, the browser, and every Apple
 /// device but the TV.
 fn has_window(device: &crate::screens::Device) -> bool {
@@ -614,6 +654,10 @@ pub(super) const BITRATES: [u32; 30] = [
 ];
 /// Typed-field ceiling in Mbps — the ladder's top. Host range is 500 kbps–8 Gbps.
 const CUSTOM_MAX_MBPS: u32 = 2_000;
+/// PyroWave quality's rungs, hundredths of a bit per pixel: `BPP_FLOOR` to `BPP_MAX` by 0.1.
+const PYROWAVE_BPP_X100: [u16; 16] = [
+    50, 60, 70, 80, 90, 100, 110, 120, 130, 140, 150, 160, 170, 180, 190, 200,
+];
 
 /// The highest fixed bitrate this client may be set to, in kbps.
 ///
@@ -756,6 +800,8 @@ pub fn row_on(id: RowId, platform: crate::platform::Platform) -> bool {
         RowId::SecondScreen => &[Android],
         // The clients whose presenters place the picture through `video_fit`.
         RowId::VideoFit => &[Desktop, Android, Apple],
+        // The clients whose dial sends `pyrowave_bpp`.
+        RowId::PyroWaveQuality => &[Desktop, Android, Apple],
         // Offered wherever there is a second UI to fall back to: Android's touch home,
         // webOS's cursor shell. `row_applies` still needs `fallback_ui` from the host.
         RowId::GamepadUi | RowId::GamepadUiMode => &[Android, WebOS, Apple],
@@ -824,12 +870,21 @@ pub fn row_on(id: RowId, platform: crate::platform::Platform) -> bool {
     on.contains(&platform)
 }
 
+/// The codec setting is PyroWave on a device that decodes it and dials its quality: the
+/// session's rate is the quality's, not Bitrate's.
+fn pyrowave_rate(ctx: &Ctx) -> bool {
+    ctx.settings.codec == "pyrowave"
+        && ctx.device.pyrowave_ok
+        && row_on(RowId::PyroWaveQuality, ctx.device.platform)
+}
+
 /// Offered this frame, as opposed to offered-but-inert.
 ///
 /// Echo cancel and pad rows dim under a parent switch so the relationship stays
 /// visible. Smoothness buffer is a knob on one of two intents — under Lowest
 /// latency the quantity does not exist, so the row is dropped. It sits directly
-/// below the intent row so the cursor is never on a row that vanishes.
+/// below the intent row so the cursor is never on a row that vanishes. Bitrate and
+/// PyroWave quality trade places with the codec.
 pub fn row_applies(id: RowId, ctx: &Ctx) -> bool {
     let apple = ctx.device.platform == crate::platform::Platform::Apple;
     match id {
@@ -842,6 +897,9 @@ pub fn row_applies(id: RowId, ctx: &Ctx) -> bool {
             !ctx.device.tv
         }
         RowId::SmoothBuffer => ctx.settings.present_priority == "smooth",
+        // PyroWave sets its own rate, so its quality stands where Bitrate stood.
+        RowId::Bitrate => !pyrowave_rate(ctx),
+        RowId::PyroWaveQuality => pyrowave_rate(ctx),
         // Needs `fallback_ui`; otherwise off strands the user with no UI.
         RowId::GamepadUi => ctx.device.fallback_ui,
         // Hidden unless fallback_ui and the switch above is on. Sits below that
@@ -907,7 +965,13 @@ pub fn changed(ids: &[RowId], ctx: &Ctx) -> Vec<RowId> {
     };
     ids.iter()
         .copied()
-        .filter(|id| row_spec_base(*id, &under, &[]).value != row_spec_base(*id, ctx, &[]).value)
+        .filter(|id| match id {
+            // Its value is a rate the mode rows move too: compare the setting itself.
+            RowId::PyroWaveQuality => {
+                under.settings.pyrowave_bpp_x100() != ctx.settings.pyrowave_bpp_x100()
+            }
+            _ => row_spec_base(*id, &under, &[]).value != row_spec_base(*id, ctx, &[]).value,
+        })
         .collect()
 }
 
@@ -980,7 +1044,11 @@ pub(super) fn row_icon(id: RowId) -> &'static str {
         }
         RowId::Resolution | RowId::ReduceUiResolution => "monitor",
         RowId::Refresh | RowId::Vsync | RowId::AllowVrr => "refresh-cw",
-        RowId::Bitrate | RowId::PadRumble | RowId::PadHaptics | RowId::PhoneRumble => "activity",
+        RowId::Bitrate
+        | RowId::PyroWaveQuality
+        | RowId::PadRumble
+        | RowId::PadHaptics
+        | RowId::PhoneRumble => "activity",
         RowId::VideoFit => "square",
         RowId::Compositor => "panel-right",
         RowId::Codec => "film",
@@ -1059,6 +1127,7 @@ pub(crate) fn preset_field(id: RowId) -> Option<&'static str> {
         RowId::RenderScale => "render_scale",
         RowId::VideoFit => "video_fit",
         RowId::Bitrate => "bitrate_kbps",
+        RowId::PyroWaveQuality => "pyrowave_bpp",
         RowId::Compositor => "compositor",
         RowId::Codec => "codec",
         RowId::Hdr => "hdr_enabled",
@@ -1167,6 +1236,17 @@ fn row_spec_base(id: RowId, ctx: &Ctx, presets: &[(String, String)]) -> RowSpec 
                 label: "Version".into(),
                 value: Some(ctx.device.version.clone()),
                 ..RowSpec::default()
+            };
+        }
+        // The rate the quality needs at the mode a connect would ask; the link's warning under it.
+        RowId::PyroWaveQuality => {
+            let (rate, warning) = ctx
+                .settings
+                .pyrowave_quality_lines(native_mode(ctx.device), local_link());
+            let spec = RowSpec::choice("PyroWave quality", rate);
+            return match warning {
+                Some(w) => spec.with_note(w),
+                None => spec,
             };
         }
         _ => {}
@@ -1420,6 +1500,7 @@ fn row_spec_base(id: RowId, ctx: &Ctx, presets: &[(String, String)]) -> RowSpec 
         | RowId::QuickActions
         | RowId::LibrarySections
         | RowId::Palette
+        | RowId::PyroWaveQuality
         | RowId::Version => {
             unreachable!("returned above")
         }
@@ -1441,8 +1522,6 @@ fn row_spec_base(id: RowId, ctx: &Ctx, presets: &[(String, String)]) -> RowSpec 
 fn row_enabled(id: RowId, s: &pf_client_core::trust::Settings) -> bool {
     match id {
         RowId::EchoCancel => s.mic_enabled,
-        // PyroWave ignores stored bitrate (session sends 0). Dim; keep the value.
-        RowId::Bitrate => s.codec != "pyrowave",
         // Session still drops lossless unless `audio_channels == 2` (before the wire).
         // A live row under surround would change nothing. Delete this arm when that
         // filter learns the frame ladder — not before.
@@ -1480,9 +1559,9 @@ pub fn detail(id: RowId, ctx: &Ctx) -> &'static str {
             "When the stream's shape differs from this window. Fit shows the whole picture \
              with black bars, Crop to fill cuts the edges off, Stretch to fill distorts it."
         }
-        RowId::Bitrate if ctx.settings.codec == "pyrowave" => {
-            "PyroWave sets its own rate from the stream mode (all-intra) — a fixed bitrate \
-             doesn't apply. Pick another codec to use this setting."
+        RowId::PyroWaveQuality => {
+            "Higher is sharper and needs a faster wired link. On a weak network the stream \
+             sends less on its own."
         }
         RowId::Bitrate => {
             "Automatic uses the host's default (20 Mbps). Y types an exact rate, up to 2 Gbps."
@@ -1909,6 +1988,16 @@ pub fn adjust(id: RowId, delta: i32, wrap: bool, ctx: &mut Ctx) -> bool {
                 }),
             };
             stepped.map(|i| s.bitrate_kbps = rungs[i])
+        }
+        // A value another client set between rungs steps to the neighbour in that direction.
+        RowId::PyroWaveQuality => {
+            let x100 = s.pyrowave_bpp_x100();
+            let stepped = match PYROWAVE_BPP_X100.iter().position(|&r| r == x100) {
+                Some(i) => step_option(Some(i), PYROWAVE_BPP_X100.len(), delta, wrap),
+                None if delta < 0 => PYROWAVE_BPP_X100.iter().rposition(|&r| r < x100),
+                None => PYROWAVE_BPP_X100.iter().position(|&r| r > x100),
+            };
+            stepped.map(|i| s.pyrowave_bpp = f64::from(PYROWAVE_BPP_X100[i]) / 100.0)
         }
         RowId::Compositor => step_str(&COMPOSITORS, &mut s.compositor, delta, wrap),
         RowId::Codec => step_str(codecs(platform), &mut s.codec, delta, wrap),

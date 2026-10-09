@@ -88,7 +88,8 @@ pub struct WindowSample {
     pub head: u32,
     pub mid: u32,
     pub tail: u32,
-    /// Packets this device's own receive buffer dropped.
+    /// Packets this device dropped before the session read them: its kernel socket's and its
+    /// demux queue's.
     pub sock_drops: u32,
 }
 

@@ -10,7 +10,8 @@
 
 use super::*;
 use crate::native::bitrate::{
-    audio_reserved_kbps, fec_static_override, resolve_bitrate_kbps_for, EncDerive,
+    audio_reserved_kbps, fec_static_override, resolve_bitrate_kbps_for, session_pyrowave_bpp,
+    EncDerive,
 };
 use punktfunk_core::abr::budget::FEC_ADAPTIVE_START;
 
@@ -326,6 +327,8 @@ pub(super) struct Negotiated {
     pub(super) client_link: punktfunk_core::quic::LinkFacts,
     /// A diagnostic session.
     pub(super) probe_only: bool,
+    /// PyroWave's bits per pixel for this session: the client's quality, else the host's.
+    pub(super) pyrowave_bpp: f64,
     /// This host's end of the path, for every `StreamConfig`.
     pub(super) host_link: punktfunk_core::quic::HostLink,
     pub(super) compositor: Option<crate::vdisplay::Compositor>,
@@ -549,12 +552,21 @@ pub(super) async fn negotiate(
     let (bit_depth, session_hdr, chroma) =
         negotiate_video_format(&hello, codec, compositor, gamescope_route.as_ref()).await?;
 
-    // After depth + chroma: PyroWave Automatic is a ~bpp pin that scales with both.
-    let bitrate_kbps =
-        resolve_bitrate_kbps_for(codec, hello.bitrate_kbps, &hello.mode, chroma, bit_depth);
+    // After depth + chroma: PyroWave Automatic is a ~bpp pin that scales with both, at the
+    // client's quality when it sent one.
+    let pyrowave_bpp = session_pyrowave_bpp(first.pyrowave_bpp_x100);
+    let bitrate_kbps = resolve_bitrate_kbps_for(
+        codec,
+        hello.bitrate_kbps,
+        &hello.mode,
+        chroma,
+        bit_depth,
+        pyrowave_bpp,
+    );
     tracing::info!(
         requested_kbps = hello.bitrate_kbps,
         resolved_kbps = bitrate_kbps,
+        pyrowave_bpp,
         "encoder bitrate"
     );
 
@@ -793,9 +805,9 @@ pub(super) async fn negotiate(
             // Same bit SessionContext reads; a different max_slices would change the wire mid-flow.
             let multi_slice = hello.video_caps & punktfunk_core::quic::VIDEO_CAP_MULTI_SLICE != 0;
             let (mode, shard_payload) = (hello.mode, welcome.shard_payload);
-            // Sampled here so the closure need not capture `hello`. PyroWave is always Automatic.
-            // The build may re-resolve if the source delivers a different size.
-            let bitrate_auto = hello.bitrate_kbps == 0 || codec == crate::encode::Codec::PyroWave;
+            // Sampled here so the closure need not capture `hello`. The build may re-resolve
+            // if the source delivers a different size.
+            let bitrate_auto = hello.bitrate_kbps == 0;
             // `bitrate_kbps` is the wire budget; the prep encoder opens at the derived video
             // rate, snapshotted at Welcome's initial FEC percent. The FEC watcher re-derives.
             let enc_of = EncDerive {
@@ -830,6 +842,7 @@ pub(super) async fn negotiate(
                         enc_of,
                         chroma,
                         codec,
+                        pyrowave_bpp,
                         shard_payload,
                         reframe_to,
                         &quit,
@@ -870,6 +883,7 @@ pub(super) async fn negotiate(
         abr_features: first.abr_features,
         client_link: first.link,
         probe_only: first.probe_only,
+        pyrowave_bpp,
         host_link,
         compositor,
         gamescope_route,

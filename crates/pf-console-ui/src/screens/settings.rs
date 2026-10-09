@@ -570,10 +570,10 @@ impl ScreenView for SettingsScreen {
         }
         let ids = self.row_ids(ctx);
         self.clamp_cursor(ids.len());
-        // Y opens the typed bitrate or size. Not the bitrate under PyroWave: the row is inert.
+        // Y opens the typed bitrate or size.
         if ev == MenuEvent::Secondary {
             let typing = match ids.get(self.list.cursor) {
-                Some(RowId::Bitrate) if ctx.settings.codec != "pyrowave" => Typing::Bitrate,
+                Some(RowId::Bitrate) => Typing::Bitrate,
                 Some(RowId::Resolution) => Typing::Width,
                 _ => return None,
             };
@@ -640,10 +640,6 @@ impl ScreenView for SettingsScreen {
                 Hint::new(HintKey::Confirm, "Open"),
                 Hint::new(HintKey::Back, "Done"),
             ],
-            // Inert under PyroWave (`row_spec`): no Adjust hint.
-            Some(RowId::Bitrate) if ctx.settings.codec == "pyrowave" => {
-                vec![Hint::new(HintKey::Back, "Done")]
-            }
             Some(RowId::Bitrate) => vec![
                 Hint::new(HintKey::Adjust, "Adjust"),
                 Hint::new(HintKey::Secondary, "Type a rate"),

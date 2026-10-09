@@ -31,6 +31,20 @@ pub fn link_facts(ip: IpAddr) -> LinkFacts {
     }
 }
 
+/// Facts of the interface this device reaches `toward` through, or its default route's when
+/// `None`. A UDP `connect` is a route lookup: nothing is sent.
+pub fn local_link_facts(toward: Option<IpAddr>) -> LinkFacts {
+    let to = toward.unwrap_or(IpAddr::V4(std::net::Ipv4Addr::new(8, 8, 8, 8)));
+    let any: IpAddr = if to.is_ipv4() {
+        std::net::Ipv4Addr::UNSPECIFIED.into()
+    } else {
+        std::net::Ipv6Addr::UNSPECIFIED.into()
+    };
+    std::net::UdpSocket::bind((any, 0))
+        .and_then(|s| s.connect((to, 9)).and_then(|()| s.local_addr()))
+        .map_or(LinkFacts::default(), |a| link_facts(a.ip()))
+}
+
 /// Wi-Fi has a `wireless/` directory, a NIC a `device/` link; anything else is
 /// [`IFACE_KIND_OTHER`]. `speed` reads `-1` or nothing where the driver does not say.
 /// Android is the same kernel; an app that may not read `/sys` gets "other" and `0`.

@@ -786,6 +786,12 @@ pub struct PunktfunkConnectOpts {
     /// The profile to play as: a host profile id (at most 64 bytes), or null to let the host
     /// choose. [`punktfunk_connection_profile`] reads which it resolved.
     pub profile_id: *const std::os::raw::c_char,
+    /// The player's PyroWave quality in hundredths of a bit per pixel, 50 to 200
+    /// ([`punktfunk_pyrowave_kbps`]). `0`, which a shorter prefix defaults to, leaves the
+    /// host's own.
+    pub pyrowave_bpp_x100: u16,
+    /// Always `0`. Fills what would otherwise be tail padding.
+    pub reserved4: [u8; 6],
 }
 
 // No tail padding (append contract). On grow: freeze `CONNECT_OPTS_MIN_SIZE`, update these sizes.
@@ -795,17 +801,19 @@ const _: () = {
     use core::mem::{offset_of, size_of};
     #[cfg(target_pointer_width = "64")]
     assert!(
-        size_of::<PunktfunkConnectOpts>() == 136
+        size_of::<PunktfunkConnectOpts>() == 144
             && offset_of!(PunktfunkConnectOpts, video_fit) == 100
             && offset_of!(PunktfunkConnectOpts, delivery_flags) == 121
             && offset_of!(PunktfunkConnectOpts, profile_id) == 128
+            && offset_of!(PunktfunkConnectOpts, pyrowave_bpp_x100) == 136
     );
     #[cfg(target_pointer_width = "32")]
     assert!(
-        size_of::<PunktfunkConnectOpts>() == 96
+        size_of::<PunktfunkConnectOpts>() == 104
             && offset_of!(PunktfunkConnectOpts, video_fit) == 72
             && offset_of!(PunktfunkConnectOpts, delivery_flags) == 85
             && offset_of!(PunktfunkConnectOpts, profile_id) == 92
+            && offset_of!(PunktfunkConnectOpts, pyrowave_bpp_x100) == 96
     );
 };
 
@@ -845,6 +853,8 @@ impl Default for PunktfunkConnectOpts {
             delivery_flags: 0,
             reserved2: [0; 6],
             profile_id: ptr::null(),
+            pyrowave_bpp_x100: 0,
+            reserved4: [0; 6],
         }
     }
 }
@@ -1073,6 +1083,7 @@ unsafe fn connect_params(
         compositor,
         gamepad,
         bitrate_kbps: o.bitrate_kbps,
+        pyrowave_bpp_x100: o.pyrowave_bpp_x100,
         video_caps: o.video_caps,
         audio_channels: punktfunk_core::audio::normalize_channels(o.audio_channels),
         // Unvalidated on purpose: a bad rate is the host's to decline, not a failed connect.
@@ -1099,6 +1110,88 @@ unsafe fn connect_params(
             std::time::Duration::from_millis(u64::from(o.timeout_ms)),
         )
     })
+}
+
+/// The rate, kbps, a PyroWave quality of `bpp_x100` hundredths of a bit per pixel needs at a
+/// mode: what the quality row shows. `0` prices the client default, 1.6. Pass the mode a
+/// connect would ask for and the chroma and depth the player's switches ask.
+#[cfg(feature = "quic")]
+#[unsafe(no_mangle)]
+pub extern "C" fn punktfunk_pyrowave_kbps(
+    width: u32,
+    height: u32,
+    refresh_hz: u32,
+    chroma_444: bool,
+    bit_depth: u8,
+    bpp_x100: u16,
+) -> u32 {
+    use punktfunk_core::pyrowave::{bpp_of_x100, kbps_for, BPP_DEFAULT};
+    let mode = punktfunk_core::config::Mode {
+        width,
+        height,
+        refresh_hz,
+    };
+    let bpp = bpp_of_x100(bpp_x100).unwrap_or(BPP_DEFAULT);
+    kbps_for(&mode, chroma_444, bit_depth, bpp)
+}
+
+/// What the OS says about this device's interface toward `host_ip`, or toward its default
+/// route when `host_ip` is null or no IP literal: `PUNKTFUNK_IFACE_KIND_*` and link speed in
+/// Mbit/s, `0` where it did not say. `false` when it named no interface; both outs are written
+/// either way. A route lookup: nothing is sent.
+///
+/// # Safety
+/// `host_ip` is null or a NUL-terminated C string; `out_kind` and `out_mbps` are null or
+/// writable for one value.
+#[cfg(feature = "quic")]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn punktfunk_local_link_facts(
+    host_ip: *const std::os::raw::c_char,
+    out_kind: *mut u8,
+    out_mbps: *mut u32,
+) -> bool {
+    std::panic::catch_unwind(|| {
+        // SAFETY: null or NUL-terminated, per this function's contract.
+        let toward = unsafe { opt_cstr(host_ip) }
+            .ok()
+            .flatten()
+            .and_then(|s| s.trim().parse().ok());
+        let facts = punktfunk_core::transport::ifinfo::local_link_facts(toward);
+        // SAFETY: the caller passes each out null or writable for one value.
+        unsafe {
+            put(out_kind, facts.kind);
+            put(out_mbps, facts.mbps);
+        }
+        facts.kind != punktfunk_core::transport::IFACE_KIND_UNKNOWN
+    })
+    .unwrap_or(false)
+}
+
+/// The line the PyroWave quality row shows when `required_kbps` is more than this device's
+/// link carries ([`punktfunk_local_link_facts`]'s `kind` and `mbps`), NUL-terminated into
+/// `out`; empty when it fits. One wording for every client. 160 bytes is ample.
+///
+/// # Safety
+/// `out` is writable for `cap` bytes.
+#[cfg(feature = "quic")]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn punktfunk_pyrowave_link_warning(
+    required_kbps: u32,
+    kind: u8,
+    mbps: u32,
+    out: *mut std::os::raw::c_char,
+    cap: usize,
+) -> PunktfunkStatus {
+    if out.is_null() || cap == 0 {
+        return PunktfunkStatus::NullPointer;
+    }
+    let facts = punktfunk_core::transport::LinkFacts { kind, mbps };
+    let line = punktfunk_core::pyrowave::link_warning(required_kbps, facts).unwrap_or_default();
+    // SAFETY: `out` is writable for `cap` bytes, per this function's contract.
+    if !unsafe { crate::write_cstr(out, cap, &line) } {
+        return PunktfunkStatus::InvalidArg;
+    }
+    PunktfunkStatus::Ok
 }
 
 /// Generate a persistent client identity: self-signed certificate + private key,
@@ -1287,6 +1380,37 @@ mod tests {
         o.profile_id = std::ptr::null();
         // SAFETY: as above.
         assert_eq!(unsafe { connect_params(&o) }.unwrap().profile, None);
+    }
+
+    /// The quality reaches the dial as asked; the row's rate and warning come from core.
+    #[test]
+    fn connect_opts_carry_the_pyrowave_quality() {
+        let o = PunktfunkConnectOpts {
+            host: c"127.0.0.1".as_ptr(),
+            pyrowave_bpp_x100: 120,
+            ..Default::default()
+        };
+        // SAFETY: every pointer field is null or a live C-string literal.
+        let p = unsafe { connect_params(&o) }.unwrap();
+        assert_eq!(p.pyrowave_bpp_x100, 120);
+        assert_eq!(
+            punktfunk_pyrowave_kbps(1920, 1080, 60, false, 8, 0),
+            199_065
+        );
+        let mut line = [0 as std::os::raw::c_char; 160];
+        let wifi = punktfunk_core::transport::IFACE_KIND_WIFI;
+        // SAFETY: `line` is writable for its length.
+        let st = unsafe {
+            punktfunk_pyrowave_link_warning(100_000, wifi, 0, line.as_mut_ptr(), line.len())
+        };
+        assert_eq!(st, PunktfunkStatus::Ok);
+        // SAFETY: the call above wrote a NUL-terminated string into `line`.
+        let said = unsafe { std::ffi::CStr::from_ptr(line.as_ptr()) };
+        assert!(said.to_str().unwrap().ends_with("on Wi-Fi."));
+        let (mut kind, mut mbps) = (u8::MAX, u32::MAX);
+        // SAFETY: both outs are locals; a null `host_ip` asks for the default route.
+        unsafe { punktfunk_local_link_facts(std::ptr::null(), &mut kind, &mut mbps) };
+        assert_ne!(kind, u8::MAX, "the kind is written either way");
     }
 
     /// Size-prefix guard: null/undersized is a status, not a read.

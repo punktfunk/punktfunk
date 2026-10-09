@@ -90,11 +90,15 @@ pub fn display(b: &mut Build) {
         }),
     );
     let codec = b.choice(&spec::CODEC, CODEC_LABELS);
+    let (quality_field, show_quality) = pyrowave_quality_row(b);
     {
         let w = codec.widget().clone();
+        // PyroWave sets its own rate: its quality stands in for Bitrate.
         codec.connect_changed(move |i| {
             set_row_subtitle(&w, codec_caption(i));
-            lock_bitrate(&bitrate, *at(CODECS, i) == "pyrowave");
+            let pyrowave = *at(CODECS, i) == "pyrowave";
+            bitrate.set_visible(!pyrowave);
+            show_quality(pyrowave);
         });
     }
     b.put(
@@ -104,6 +108,7 @@ pub fn display(b: &mut Build) {
             s.codec = at(CODECS, i).to_string()
         }),
     );
+    b.put(&mut p, None, quality_field);
     type Switch = (
         &'static spec::Spec,
         fn(&Settings) -> bool,
@@ -347,18 +352,98 @@ fn bitrate_row() -> (Field, adw::SpinRow) {
     (field, row)
 }
 
-/// Under PyroWave the host sets the rate from the stream mode: the Bitrate row greys out and
-/// says so. The stored rate stays for the other codecs.
-fn lock_bitrate(row: &adw::SpinRow, pyrowave: bool) {
-    row.set_sensitive(!pyrowave);
-    set_row_subtitle(
-        row.upcast_ref(),
-        if pyrowave {
-            "PyroWave sets its own rate from the stream mode"
-        } else {
-            BITRATE_CAPTION
+/// PyroWave quality: a slider from 0.5 to 2 bits per pixel by tenths that never shows them.
+/// Its caption is the rate the quality needs at the mode a connect would ask, re-read as any
+/// row moves; a warning row follows while this device's link is short of it. The returned
+/// closure shows both under PyroWave.
+fn pyrowave_quality_row(b: &Build) -> (Field, Rc<dyn Fn(bool)>) {
+    use punktfunk_core::pyrowave::{BPP_DEFAULT, BPP_FLOOR, BPP_MAX};
+    let scale = gtk::Scale::with_range(gtk::Orientation::Horizontal, BPP_FLOOR, BPP_MAX, 0.1);
+    scale.set_draw_value(false);
+    scale.set_round_digits(1);
+    scale.set_width_request(220);
+    scale.set_valign(gtk::Align::Center);
+    let row = adw::ActionRow::builder()
+        .title(spec::PYROWAVE_QUALITY.title)
+        .visible(false)
+        .build();
+    row.add_suffix(&scale);
+    let warning = adw::ActionRow::builder()
+        .use_markup(false)
+        .css_classes(["warning"])
+        .visible(false)
+        .build();
+    warning.add_prefix(&gtk::Image::from_icon_name("dialog-warning-symbolic"));
+    let shown = Rc::new(Cell::new(false));
+    // Weak: the store outlives the dialog and keeps its listeners.
+    let refresh: Rc<dyn Fn()> = {
+        let (store, preset_id, native) = (Rc::downgrade(b.store), b.preset_id.clone(), b.native);
+        let link = punktfunk_core::transport::ifinfo::local_link_facts(None);
+        let (row, warning, scale, shown) = (
+            row.downgrade(),
+            warning.downgrade(),
+            scale.downgrade(),
+            shown.clone(),
+        );
+        Rc::new(move || {
+            let (Some(store), Some(row), Some(warning), Some(scale)) = (
+                store.upgrade(),
+                row.upgrade(),
+                warning.upgrade(),
+                scale.upgrade(),
+            ) else {
+                return;
+            };
+            let globals = store.settings().clone();
+            let preset = preset_id
+                .as_ref()
+                .and_then(|id| store.presets().find_by_id(id).cloned());
+            let mut s = match preset {
+                Some(p) => p.overrides.apply(&globals),
+                None => globals,
+            };
+            s.pyrowave_bpp = scale.value();
+            let (caption, warn) = s.pyrowave_quality_lines(native, link);
+            set_row_subtitle(row.upcast_ref(), &caption);
+            warning.set_title(warn.as_deref().unwrap_or(""));
+            warning.set_visible(shown.get() && warn.is_some());
+        })
+    };
+    {
+        let (on_slide, on_store) = (refresh.clone(), refresh.clone());
+        scale.connect_value_changed(move |_| on_slide());
+        b.store.subscribe(move |_| on_store());
+    }
+    let show: Rc<dyn Fn(bool)> = {
+        let (row, refresh) = (row.clone(), refresh.clone());
+        Rc::new(move |on| {
+            shown.set(on);
+            row.set_visible(on);
+            refresh();
+        })
+    };
+    let s = scale.clone();
+    let field = Field::new(
+        &spec::PYROWAVE_QUALITY,
+        &row,
+        vec![row.clone().upcast(), warning.upcast()],
+        {
+            let s = s.clone();
+            move |set| s.set_value(set.pyrowave_bpp)
+        },
+        {
+            let s = s.clone();
+            move |set| set.pyrowave_bpp = (s.value() * 10.0).round() / 10.0
+        },
+        {
+            let s = s.clone();
+            move || (s.value() - BPP_DEFAULT).abs() > 0.01
+        },
+        move |f| {
+            s.connect_value_changed(move |_| f());
         },
     );
+    (field, show)
 }
 
 /// The row's caption names the selected choice.

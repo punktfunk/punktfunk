@@ -262,8 +262,6 @@ pub(super) fn display_section(cx: &Cx) -> Vec<Element> {
         let (set_rev, set_status) = (set_rev.clone(), set_status.clone());
         NumberBox::new(f64::from(s.bitrate_kbps) / 1000.0)
             .range(0.0, 3000.0)
-            // PyroWave sets its own rate; the stored one stays for the other codecs.
-            .enabled(s.codec != "pyrowave")
             .on_value_changed(move |v: f64| {
                 commit(
                     &ctx,
@@ -276,6 +274,47 @@ pub(super) fn display_section(cx: &Cx) -> Vec<Element> {
                     },
                 );
             })
+    };
+    // PyroWave sets its own rate: its quality stands where Bitrate stood, as the rate it needs
+    // at the mode a connect would ask, never as bits per pixel. The stored bitrate stays for the
+    // other codecs.
+    let pyrowave = s.codec == "pyrowave";
+    let (quality_caption, quality_warning) = {
+        let probes = ctx.probes.lock().unwrap();
+        let native = probes.native.unwrap_or(punktfunk_core::Mode {
+            width: 1920,
+            height: 1080,
+            refresh_hz: 60,
+        });
+        s.pyrowave_quality_lines(native, probes.link)
+    };
+    let quality_control = {
+        use punktfunk_core::pyrowave::{BPP_FLOOR, BPP_MAX};
+        let (ctx, scope) = (ctx.clone(), scope.to_string());
+        let (set_rev, set_status) = (set_rev.clone(), set_status.clone());
+        let slider = Slider::new(s.pyrowave_bpp)
+            .range(BPP_FLOOR, BPP_MAX)
+            .step(0.1)
+            .on_value_changed(move |v: f64| {
+                commit(
+                    &ctx,
+                    &scope,
+                    "pyrowave_bpp",
+                    (rev, &set_rev),
+                    &set_status,
+                    |s| {
+                        s.pyrowave_bpp = (v * 10.0).round() / 10.0;
+                    },
+                );
+            });
+        // Always mounted, empty while the link carries the rate.
+        let warning = text_block(quality_warning.as_deref().unwrap_or(""))
+            .font_size(12.0)
+            .foreground(ThemeRef::SystemCaution)
+            .wrap()
+            .max_width(420.0)
+            .horizontal_alignment(HorizontalAlignment::Left);
+        vstack((Element::from(slider), Element::from(warning))).spacing(4.0)
     };
     let hdr_toggle = setting_toggle(cx, scope, "hdr_enabled", s.hdr_enabled, |s, on| {
         s.hdr_enabled = on
@@ -347,48 +386,48 @@ pub(super) fn display_section(cx: &Cx) -> Vec<Element> {
         ],
         None,
     );
+    let mut picture = Vec::new();
+    if !pyrowave {
+        picture.push(described_overridable(
+            cx,
+            "bitrate_kbps",
+            "Bitrate (Mb/s, 0 = automatic)",
+            bitrate_box,
+            "0 lets the host decide (its default, clamped to what it supports). A host \
+             card\u{2019}s context menu has a network speed test.",
+        ));
+    }
+    picture.extend([
+        described_overridable(
+            cx,
+            "video_fit",
+            "Picture fit",
+            fit_combo,
+            "When the stream's shape differs from the window. Fit shows the whole \
+             picture with black bars, Crop to fill cuts the edges off, Stretch to \
+             fill distorts it.",
+        ),
+        described_overridable(
+            cx,
+            "hdr_enabled",
+            "10-bit HDR",
+            hdr_toggle,
+            "HDR10, when the host has HDR content and this display supports it. \
+             With H.264 the stream stays SDR.",
+        ),
+        described_overridable(
+            cx,
+            "present_priority",
+            "Prioritize",
+            present_combo,
+            "Lowest latency shows each frame the moment the display can take \
+             it \u{2014} a network hiccup becomes an occasional repeated or \
+             skipped frame. Smoothness buffers a little to even those out.",
+        ),
+    ]);
     out.extend(group(
         Some("Picture"),
-        vec![
-            described_overridable(
-                cx,
-                "bitrate_kbps",
-                "Bitrate (Mb/s, 0 = automatic)",
-                bitrate_box,
-                if s.codec == "pyrowave" {
-                    "PyroWave sets its own rate from the stream mode."
-                } else {
-                    "0 lets the host decide (its default, clamped to what it supports). A \
-                     host card\u{2019}s context menu has a network speed test."
-                },
-            ),
-            described_overridable(
-                cx,
-                "video_fit",
-                "Picture fit",
-                fit_combo,
-                "When the stream's shape differs from the window. Fit shows the whole \
-                 picture with black bars, Crop to fill cuts the edges off, Stretch to \
-                 fill distorts it.",
-            ),
-            described_overridable(
-                cx,
-                "hdr_enabled",
-                "10-bit HDR",
-                hdr_toggle,
-                "HDR10, when the host has HDR content and this display supports it. \
-                 With H.264 the stream stays SDR.",
-            ),
-            described_overridable(
-                cx,
-                "present_priority",
-                "Prioritize",
-                present_combo,
-                "Lowest latency shows each frame the moment the display can take \
-                 it \u{2014} a network hiccup becomes an occasional repeated or \
-                 skipped frame. Smoothness buffers a little to even those out.",
-            ),
-        ],
+        picture,
         // The one form-level note, exactly as on Apple.
         Some("Display changes apply from the next session."),
     ));
@@ -424,6 +463,17 @@ pub(super) fn display_section(cx: &Cx) -> Vec<Element> {
              bitrate (hundreds of Mb/s) for near-zero decode time, so it wants \
              gigabit Ethernet.",
         ),
+    ]);
+    if pyrowave {
+        advanced.push(described_overridable(
+            cx,
+            "pyrowave_bpp",
+            "PyroWave quality",
+            quality_control,
+            &quality_caption,
+        ));
+    }
+    advanced.extend([
         // First sentence shared with the GTK client (its chroma_row); the constraint
         // sentence names the real gate (host: PyroWave || NVENC).
         described_overridable(
@@ -493,6 +543,7 @@ pub(super) fn display_section(cx: &Cx) -> Vec<Element> {
         smoothing && s.smooth_buffer != d.smooth_buffer,
         s.render_scale != d.render_scale,
         s.codec != d.codec,
+        pyrowave && s.pyrowave_bpp_x100() != d.pyrowave_bpp_x100(),
         s.enable_444 != d.enable_444,
         s.ten_bit_sdr != d.ten_bit_sdr,
         s.vsync != d.vsync,
@@ -512,7 +563,8 @@ pub(super) fn display_section(cx: &Cx) -> Vec<Element> {
         "compositor",
     ]
     .into_iter()
-    .any(|f| cx.overrides(f));
+    .any(|f| cx.overrides(f))
+        || (pyrowave && cx.overrides("pyrowave_bpp"));
     out.extend(advanced_group(
         cx,
         advanced,

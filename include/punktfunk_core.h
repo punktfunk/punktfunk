@@ -369,7 +369,7 @@
 //
 // The wire is versioned by ALPN, not by this. Pin the integer in `punktfunk-ffi`
 // (`abi_version_is_pinned`). Per-bump notes live in `CHANGELOG.md`.
-#define PUNKTFUNK_ABI_VERSION 48
+#define PUNKTFUNK_ABI_VERSION 49
 
 // This client silenced its own speakers (`client::NativeClient::set_audio_muted`). The host
 // keeps sending, so a session joined to the same sink still hears the game.
@@ -1063,6 +1063,11 @@
 // FFI `delivery_flags` and the JNI dial carry it.
 #define PUNKTFUNK_EXT_DELIVERY_PROBE_ONLY 2
 
+// Entry `7` in `ClientHello`: `bpp_x100 u16`, the player's PyroWave quality in hundredths of
+// a bit per pixel. Absent or `0` leaves the host's own; the host holds it inside
+// [`crate::pyrowave::BPP_FLOOR`]..=[`crate::pyrowave::BPP_MAX`].
+#define PUNKTFUNK_EXT_TAG_PYROWAVE_QUALITY 7
+
 // Longest [`SessionPreset::id`], printable ASCII.
 #define PRESET_ID_MAX 32
 
@@ -1609,6 +1614,12 @@ typedef struct {
     // The profile to play as: a host profile id (at most 64 bytes), or null to let the host
     // choose. [`punktfunk_connection_profile`] reads which it resolved.
     const char *profile_id;
+    // The player's PyroWave quality in hundredths of a bit per pixel, 50 to 200
+    // ([`punktfunk_pyrowave_kbps`]). `0`, which a shorter prefix defaults to, leaves the
+    // host's own.
+    uint16_t pyrowave_bpp_x100;
+    // Always `0`. Fills what would otherwise be tail padding.
+    uint8_t reserved4[6];
 } PunktfunkConnectOpts;
 #endif
 
@@ -2483,6 +2494,44 @@ void punktfunk_set_session_preset(const char *id, const char *name);
 PunktfunkConnection *punktfunk_connect_opts(const PunktfunkConnectOpts *opts,
                                             uint8_t *observed_sha256_out,
                                             int32_t *status_out);
+#endif
+
+#if defined(PUNKTFUNK_FEATURE_QUIC)
+// The rate, kbps, a PyroWave quality of `bpp_x100` hundredths of a bit per pixel needs at a
+// mode: what the quality row shows. `0` prices the client default, 1.6. Pass the mode a
+// connect would ask for and the chroma and depth the player's switches ask.
+uint32_t punktfunk_pyrowave_kbps(uint32_t width,
+                                 uint32_t height,
+                                 uint32_t refresh_hz,
+                                 bool chroma_444,
+                                 uint8_t bit_depth,
+                                 uint16_t bpp_x100);
+#endif
+
+#if defined(PUNKTFUNK_FEATURE_QUIC)
+// What the OS says about this device's interface toward `host_ip`, or toward its default
+// route when `host_ip` is null or no IP literal: `PUNKTFUNK_IFACE_KIND_*` and link speed in
+// Mbit/s, `0` where it did not say. `false` when it named no interface; both outs are written
+// either way. A route lookup: nothing is sent.
+//
+// # Safety
+// `host_ip` is null or a NUL-terminated C string; `out_kind` and `out_mbps` are null or
+// writable for one value.
+bool punktfunk_local_link_facts(const char *host_ip, uint8_t *out_kind, uint32_t *out_mbps);
+#endif
+
+#if defined(PUNKTFUNK_FEATURE_QUIC)
+// The line the PyroWave quality row shows when `required_kbps` is more than this device's
+// link carries ([`punktfunk_local_link_facts`]'s `kind` and `mbps`), NUL-terminated into
+// `out`; empty when it fits. One wording for every client. 160 bytes is ample.
+//
+// # Safety
+// `out` is writable for `cap` bytes.
+PunktfunkStatus punktfunk_pyrowave_link_warning(uint32_t required_kbps,
+                                                uint8_t kind,
+                                                uint32_t mbps,
+                                                char *out,
+                                                uintptr_t cap);
 #endif
 
 #if defined(PUNKTFUNK_FEATURE_QUIC)

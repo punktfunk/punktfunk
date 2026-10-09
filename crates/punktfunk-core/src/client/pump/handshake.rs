@@ -217,6 +217,7 @@ async fn dial(
             preset: p.preset.clone(),
             link,
             probe_only: p.probe_only,
+            pyrowave_bpp_x100: p.pyrowave_bpp_x100,
             resume: crate::client::resume::peek(host, port),
             suites: if wants_chacha {
                 vec![MediaSuite::ChaCha20Poly1305, MediaSuite::Aes128Gcm]
@@ -285,6 +286,7 @@ async fn dial(
         if let Ok(sock) = media.try_clone_socket() {
             *args.shared.data_sock.lock().unwrap() = Some(sock);
         }
+        *args.shared.demux.lock().unwrap() = Some(media.stats().clone());
         *args.shared.local_ip.lock().unwrap() = conn.local_ip();
         *args.shared.client_link.lock().unwrap() = link;
         tracing::info!(kind = link.kind, mbps = link.mbps, "this end's link facts");

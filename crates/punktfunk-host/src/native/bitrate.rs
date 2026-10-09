@@ -141,16 +141,27 @@ pub(super) fn resolve_bitrate_kbps(requested: u32) -> u32 {
     }
 }
 
-/// PyroWave pins the host's bits per pixel (row `pyrowave_bpp`) for the negotiated mode, not
-/// the 20 Mbps H.26x default. ABR stays off; mid-stream retargets are refused. A client rate
-/// is ignored: bits per pixel is the quality knob, and it holds across modes. Every pin goes
-/// through `PUNKTFUNK_PYROWAVE_MAX_MBPS`. H.26x/AV1 explicit rates stand.
+/// The session's PyroWave bits per pixel: the client's quality
+/// ([`EXT_TAG_PYROWAVE_QUALITY`](punktfunk_core::quic::EXT_TAG_PYROWAVE_QUALITY)) held inside
+/// `[BPP_FLOOR, BPP_MAX]`, else the host's row `pyrowave_bpp`. Fixed for the session, so a
+/// mode switch re-pins at the same quality.
+pub(super) fn session_pyrowave_bpp(client_x100: u16) -> f64 {
+    punktfunk_core::pyrowave::bpp_of_x100(client_x100)
+        .unwrap_or_else(|| pf_host_config::config().pyrowave_bpp)
+}
+
+/// PyroWave pins the session's bits per pixel (`pyrowave_bpp`, [`session_pyrowave_bpp`]) for
+/// the negotiated mode, not the 20 Mbps H.26x default: an explicit session runs at the pin, an
+/// Automatic one adapts under it. A client rate is ignored: bits per pixel is the quality
+/// knob, and it holds across modes. Every pin goes through `PUNKTFUNK_PYROWAVE_MAX_MBPS`.
+/// H.26x/AV1 explicit rates stand.
 pub(super) fn resolve_bitrate_kbps_for(
     codec: crate::encode::Codec,
     requested: u32,
     mode: &punktfunk_core::config::Mode,
     chroma: crate::encode::ChromaFormat,
     bit_depth: u8,
+    pyrowave_bpp: f64,
 ) -> u32 {
     resolve_bitrate_kbps_under(
         codec,
@@ -158,29 +169,32 @@ pub(super) fn resolve_bitrate_kbps_for(
         mode,
         chroma,
         bit_depth,
+        pyrowave_bpp,
         pyrowave_auto_pin_ceiling_kbps,
     )
 }
 
 /// [`resolve_bitrate_kbps_for`] with the PyroWave ceiling (kbps) read through `ceiling`, so a
 /// test hands one in without writing the process environment.
+#[allow(clippy::too_many_arguments)]
 fn resolve_bitrate_kbps_under(
     codec: crate::encode::Codec,
     requested: u32,
     mode: &punktfunk_core::config::Mode,
     chroma: crate::encode::ChromaFormat,
     bit_depth: u8,
+    bpp: f64,
     ceiling: fn() -> Option<u32>,
 ) -> u32 {
     if codec == crate::encode::Codec::PyroWave {
         if requested != 0 {
             tracing::warn!(
                 requested_kbps = requested,
-                "a client bitrate does not apply to PyroWave — using the host's bits per pixel"
+                "a client bitrate does not apply to PyroWave — using the session's bits per pixel"
             );
         }
-        let bpp = pf_host_config::config().pyrowave_bpp;
-        let pin = pyrowave_pin_kbps(mode, chroma, bit_depth, bpp);
+        let pin = punktfunk_core::pyrowave::kbps_for(mode, chroma.is_444(), bit_depth, bpp)
+            .clamp(MIN_BITRATE_KBPS, MAX_BITRATE_KBPS);
         // Open-loop pin can outrun the link. `PUNKTFUNK_PYROWAVE_MAX_MBPS` caps it;
         // unset ⇒ no cap.
         if let Some(ceiling) = ceiling() {
@@ -275,34 +289,62 @@ pub(super) fn audio_reserved_kbps(welcome: &punktfunk_core::quic::Welcome) -> u3
     }
 }
 
-/// `bpp` bits per pixel for a 4:2:0 SDR frame. 4:4:4 carries twice the samples but costs
-/// ×1.625, since chroma compresses better than luma; 10-bit planes add 15 %.
-fn pyrowave_pin_kbps(
-    mode: &punktfunk_core::config::Mode,
-    chroma: crate::encode::ChromaFormat,
-    bit_depth: u8,
-    bpp: f64,
-) -> u32 {
-    let mut bpp = bpp;
-    if chroma.is_444() {
-        bpp *= 1.625;
-    }
-    if bit_depth >= 10 {
-        bpp *= 1.15;
-    }
-    let px_per_s =
-        f64::from(mode.width) * f64::from(mode.height) * f64::from(mode.refresh_hz.max(1));
-    // `as` saturates, so a huge mode lands on the clamp.
-    ((px_per_s * bpp / 1000.0) as u32).clamp(MIN_BITRATE_KBPS, MAX_BITRATE_KBPS)
-}
-
 /// `PUNKTFUNK_PYROWAVE_MAX_MBPS` (Mb/s) → kbps. `None` when unset/zero/invalid (no cap).
 /// Every PyroWave session, including an explicit client rate, goes through the pin.
-fn pyrowave_auto_pin_ceiling_kbps() -> Option<u32> {
+pub(super) fn pyrowave_auto_pin_ceiling_kbps() -> Option<u32> {
     pf_host_config::knob("PUNKTFUNK_PYROWAVE_MAX_MBPS")
         .and_then(|s| s.trim().parse::<u32>().ok())
         .filter(|&m| m > 0)
         .map(|m| m.saturating_mul(1000))
+}
+
+/// A PyroWave session's `(floor, pin)` at `mode`, kbps: [`BPP_FLOOR`] and the session's `bpp`
+/// ([`session_pyrowave_bpp`]), the floor never over the pin. An Automatic session adapts
+/// between them.
+///
+/// [`BPP_FLOOR`]: punktfunk_core::pyrowave::BPP_FLOOR
+pub(super) fn pyrowave_bounds_kbps(
+    mode: &punktfunk_core::config::Mode,
+    chroma: crate::encode::ChromaFormat,
+    bit_depth: u8,
+    bpp: f64,
+    ceiling: fn() -> Option<u32>,
+) -> (u32, u32) {
+    let pin = resolve_bitrate_kbps_under(
+        crate::encode::Codec::PyroWave,
+        0,
+        mode,
+        chroma,
+        bit_depth,
+        bpp,
+        ceiling,
+    );
+    let floor = punktfunk_core::pyrowave::kbps_for(
+        mode,
+        chroma.is_444(),
+        bit_depth,
+        punktfunk_core::pyrowave::BPP_FLOOR,
+    )
+    .clamp(MIN_BITRATE_KBPS, MAX_BITRATE_KBPS);
+    (floor.min(pin), pin)
+}
+
+/// What a PyroWave session encodes at `mode`: the pin at the session's bits per pixel
+/// ([`SessionPlan::pyrowave_bpp`](crate::session_plan::SessionPlan::pyrowave_bpp)), or an
+/// Automatic session's `running` rate held inside that mode's bounds.
+pub(super) fn pyrowave_mode_kbps(
+    running: Option<u32>,
+    mode: &punktfunk_core::config::Mode,
+    plan: &crate::session_plan::SessionPlan,
+) -> u32 {
+    let (floor, pin) = pyrowave_bounds_kbps(
+        mode,
+        plan.chroma,
+        plan.bit_depth,
+        plan.pyrowave_bpp,
+        pyrowave_auto_pin_ceiling_kbps,
+    );
+    running.map_or(pin, |kbps| kbps.clamp(floor, pin))
 }
 
 /// `PUNKTFUNK_FEC_PCT` pins recovery and disables adaptive FEC. `None` ⇒ adaptive. `0`
@@ -472,88 +514,125 @@ mod tests {
             height: 1080,
             refresh_hz: 60,
         };
-        use crate::encode::ChromaFormat;
-        // Automatic PyroWave → ~1.6 bpp, not the 20 Mbps H.26x default.
-        let kbps = resolve_bitrate_kbps_for(
-            crate::encode::Codec::PyroWave,
-            0,
-            &mode,
-            ChromaFormat::Yuv420,
-            8,
-        );
+        use crate::encode::{ChromaFormat, Codec};
+        // A client that sends no quality gets the host's row: ~1.6 bpp, not 20 Mbps.
+        let host = session_pyrowave_bpp(0);
+        let at = |codec, requested, chroma, depth| {
+            resolve_bitrate_kbps_for(codec, requested, &mode, chroma, depth, host)
+        };
+        let kbps = at(Codec::PyroWave, 0, ChromaFormat::Yuv420, 8);
         assert_eq!(kbps, 1920 * 1080 * 60 * 16 / 10 / 1000);
         // 4:4:4 ≈ 2.6 bpp; 10-bit adds 15 %. `design/pyrowave-444-hdr.md`.
         assert_eq!(
-            resolve_bitrate_kbps_for(
-                crate::encode::Codec::PyroWave,
-                0,
-                &mode,
-                ChromaFormat::Yuv444,
-                8
-            ),
+            at(Codec::PyroWave, 0, ChromaFormat::Yuv444, 8),
             1920 * 1080 * 60 * 26 / 10 / 1000
         );
         assert_eq!(
-            resolve_bitrate_kbps_for(
-                crate::encode::Codec::PyroWave,
-                0,
-                &mode,
-                ChromaFormat::Yuv444,
-                10
-            ),
+            at(Codec::PyroWave, 0, ChromaFormat::Yuv444, 10),
             (1920u64 * 1080 * 60 * 26 / 10 * 115 / 100 / 1000) as u32
         );
-        // A client rate is ignored; the host's bits per pixel sets the pin.
+        // A client rate is ignored; the session's bits per pixel sets the pin.
         assert_eq!(
-            resolve_bitrate_kbps_for(
-                crate::encode::Codec::PyroWave,
-                130_000,
-                &mode,
-                ChromaFormat::Yuv420,
-                8
-            ),
+            at(Codec::PyroWave, 130_000, ChromaFormat::Yuv420, 8),
             1920 * 1080 * 60 * 16 / 10 / 1000
         );
         // H.26x codecs keep the 20 Mbps default.
         assert_eq!(
-            resolve_bitrate_kbps_for(
-                crate::encode::Codec::H265,
-                0,
-                &mode,
-                ChromaFormat::Yuv420,
-                8
-            ),
+            at(Codec::H265, 0, ChromaFormat::Yuv420, 8),
             DEFAULT_BITRATE_KBPS
         );
     }
 
+    /// A client's quality sizes the pin, held inside `[0.5, 2.0]` bits per pixel and under the
+    /// operator's ceiling. A client that sends none gets the host's row.
     #[test]
-    fn pyrowave_pin_follows_the_host_bpp() {
-        use crate::encode::ChromaFormat;
-        use punktfunk_core::config::Mode;
-        let mode = Mode {
+    fn a_client_quality_sizes_the_pyrowave_pin() {
+        use crate::encode::{ChromaFormat, Codec};
+        let fhd = punktfunk_core::config::Mode {
+            width: 1920,
+            height: 1080,
+            refresh_hz: 60,
+        };
+        assert_eq!(
+            session_pyrowave_bpp(0),
+            pf_host_config::config().pyrowave_bpp
+        );
+        assert_eq!(session_pyrowave_bpp(120), 1.2);
+        assert_eq!(session_pyrowave_bpp(10), 0.5);
+        assert_eq!(session_pyrowave_bpp(900), 2.0);
+        fn none() -> Option<u32> {
+            None
+        }
+        fn link() -> Option<u32> {
+            Some(200_000)
+        }
+        let pin = |x100, ceiling| {
+            resolve_bitrate_kbps_under(
+                Codec::PyroWave,
+                0,
+                &fhd,
+                ChromaFormat::Yuv420,
+                8,
+                session_pyrowave_bpp(x100),
+                ceiling,
+            )
+        };
+        let px = 1920 * 1080 * 60;
+        assert_eq!(pin(120, none), px * 12 / 10 / 1000);
+        assert_eq!(
+            pin(900, none),
+            px * 2 / 1000,
+            "asked past 2.0, pinned at it"
+        );
+        assert_eq!(
+            pin(900, link),
+            200_000,
+            "the operator's ceiling still binds"
+        );
+    }
+
+    /// A mode switch re-pins at the session's quality, not the host's row.
+    #[test]
+    fn a_mode_switch_keeps_the_session_quality() {
+        use crate::encode::{ChromaFormat, Codec};
+        let mut plan = crate::session_plan::SessionPlan::resolve(
+            8,
+            false,
+            ChromaFormat::Yuv420,
+            Codec::PyroWave,
+            false,
+            false,
+            true,
+        );
+        plan.pyrowave_bpp = session_pyrowave_bpp(100);
+        let uhd = punktfunk_core::config::Mode {
             width: 3840,
             height: 2160,
-            refresh_hz: 120,
+            refresh_hz: 60,
         };
-        let px = 3840 * 2160 * 120;
-        // 0.5 bpp is Steam's 500 Mbps ceiling at 4K120.
         assert_eq!(
-            pyrowave_pin_kbps(&mode, ChromaFormat::Yuv420, 8, 0.5),
-            px / 2 / 1000
+            pyrowave_mode_kbps(None, &uhd, &plan),
+            3840 * 2160 * 60 / 1000
         );
-        // 4:4:4 and 10-bit scale from the operator's value, not from 1.6.
-        assert_eq!(
-            pyrowave_pin_kbps(&mode, ChromaFormat::Yuv444, 10, 1.0),
-            (f64::from(px) * 1.625 * 1.15 / 1000.0) as u32
-        );
-        let tiny = Mode {
+    }
+
+    /// The bits-per-pixel rule is core's (`punktfunk_core::pyrowave`); the host bounds it.
+    #[test]
+    fn a_tiny_pyrowave_pin_lands_on_the_rate_floor() {
+        let tiny = punktfunk_core::config::Mode {
             width: 64,
             height: 64,
             refresh_hz: 1,
         };
         assert_eq!(
-            pyrowave_pin_kbps(&tiny, ChromaFormat::Yuv420, 8, 0.25),
+            resolve_bitrate_kbps_for(
+                crate::encode::Codec::PyroWave,
+                0,
+                &tiny,
+                crate::encode::ChromaFormat::Yuv420,
+                8,
+                session_pyrowave_bpp(0),
+            ),
             MIN_BITRATE_KBPS
         );
     }
@@ -568,8 +647,17 @@ mod tests {
             height: 1440,
             refresh_hz: 240,
         };
+        let host = session_pyrowave_bpp(0);
         let pin = |requested, mode: &Mode, chroma, depth, ceiling: fn() -> Option<u32>| {
-            resolve_bitrate_kbps_under(Codec::PyroWave, requested, mode, chroma, depth, ceiling)
+            resolve_bitrate_kbps_under(
+                Codec::PyroWave,
+                requested,
+                mode,
+                chroma,
+                depth,
+                host,
+                ceiling,
+            )
         };
         fn none() -> Option<u32> {
             None
@@ -599,6 +687,77 @@ mod tests {
             pin(6_000_000, &mode, ChromaFormat::Yuv444, 10, link),
             4_500_000
         );
+    }
+
+    /// Automatic PyroWave adapts between 0.5 bpp and the session's pin for the mode it
+    /// encodes. The operator's ceiling binds the pin and, under it, the floor too.
+    #[test]
+    fn pyrowave_bounds_follow_the_mode_under_the_operator_ceiling() {
+        use crate::encode::{ChromaFormat, Codec};
+        use punktfunk_core::config::Mode;
+        let host = session_pyrowave_bpp(0);
+        let bounds = |mode: &Mode, ceiling| {
+            pyrowave_bounds_kbps(mode, ChromaFormat::Yuv420, 8, host, ceiling)
+        };
+        fn none() -> Option<u32> {
+            None
+        }
+        fn tight() -> Option<u32> {
+            Some(300_000)
+        }
+        let uhd = Mode {
+            width: 3840,
+            height: 2160,
+            refresh_hz: 120,
+        };
+        let fhd = Mode {
+            width: 1920,
+            height: 1080,
+            refresh_hz: 60,
+        };
+        let px = 3840 * 2160 * 120;
+        assert_eq!(bounds(&uhd, none), (px / 2 / 1000, px / 1000 * 16 / 10));
+        assert_eq!(
+            bounds(&fhd, none),
+            (px / 8 / 2 / 1000, px / 8 * 16 / 10 / 1000),
+            "an eighth of the pixels, an eighth of both"
+        );
+        assert_eq!(
+            bounds(&uhd, tight),
+            (300_000, 300_000),
+            "a ceiling under the floor takes both"
+        );
+        // A rebuild holds an Automatic rate inside the new mode's bounds.
+        let (floor, pin) = bounds(&fhd, none);
+        let mut plan = crate::session_plan::SessionPlan::resolve(
+            8,
+            false,
+            ChromaFormat::Yuv420,
+            Codec::PyroWave,
+            false,
+            false,
+            true,
+        );
+        plan.pyrowave_bpp = host;
+        let at = |running| pyrowave_mode_kbps(running, &fhd, &plan);
+        assert_eq!(at(None), pin, "an explicit session takes the pin");
+        assert_eq!(at(Some(1_000)), floor);
+        assert_eq!(at(Some(u32::MAX)), pin);
+        assert_eq!(at(Some(floor + 1)), floor + 1);
+    }
+
+    /// PyroWave's wire budget is its encoder rate, so a granted ask reaches the encoder's
+    /// in-place retarget as asked, and the read-back is the ask.
+    #[test]
+    fn a_pyrowave_retarget_reaches_the_encoder_as_asked() {
+        let ed = EncDerive {
+            audio_kbps: 512,
+            shard_payload: 1408,
+            fec_percent: 20,
+            identity: true,
+        };
+        assert_eq!(ed.enc_kbps(1_200_000), 1_200_000);
+        assert_eq!(ed.applied_budget_kbps(1_200_000, 1_200_000), 1_200_000);
     }
 
     /// An RFI ask prices the report window it lands in. A report a window late closes a

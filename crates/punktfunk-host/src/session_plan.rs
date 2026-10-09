@@ -100,6 +100,10 @@ pub struct SessionPlan {
     /// to every encoder this plan opens so AUs stay shard-aligned across rebuilds.
     /// `None` for H.26x.
     pub wire_chunk: Option<usize>,
+    /// PyroWave's bits per pixel for this session: every pin a rebuild or mode switch
+    /// resolves uses it. The host's row `pyrowave_bpp` until the native handshake sets the
+    /// client's.
+    pub pyrowave_bpp: f64,
     /// Encoder composites cursor bitmaps. Set only via [`cursor_blend_for`]: Linux
     /// when the encoder is the compositing stage; Windows always `false` (IDD
     /// composites the pointer). Encoders whose fast path cannot blend stay off
@@ -128,7 +132,8 @@ pub struct SessionPlan {
 }
 
 impl SessionPlan {
-    /// `hdr` is the handshake verdict, not derived from depth: 10-bit SDR exists.
+    /// `hdr` is the handshake verdict, not derived from depth: 10-bit SDR exists. PyroWave's
+    /// bits per pixel start at the host's; a caller that knows the client's sets them.
     #[allow(clippy::too_many_arguments)]
     pub fn resolve(
         bit_depth: u8,
@@ -149,6 +154,7 @@ impl SessionPlan {
             chroma,
             codec,
             wire_chunk: None,
+            pyrowave_bpp: pf_host_config::config().pyrowave_bpp,
             cursor_blend,
             cursor_forward,
             // Callers that know the compositor overwrite these; default off for everyone else.

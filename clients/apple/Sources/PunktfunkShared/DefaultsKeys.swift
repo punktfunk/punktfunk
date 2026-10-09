@@ -99,6 +99,9 @@ public enum DefaultsKey {
     /// and forces the session SDR). A soft preference — the host emits it when it can, else
     /// falls back. Drives the decoder via `Welcome.codec`.
     public static let codec = "punktfunk.codec"
+    /// PyroWave quality, bits per pixel from 0.5 to 2 (default 1.6): the most a PyroWave session
+    /// sends. The row shows it as the rate it needs, never as bits per pixel.
+    public static let pyrowaveBpp = "punktfunk.pyrowaveBpp"
     public static let micEnabled = "punktfunk.micEnabled"
     /// Echo cancellation for the mic uplink (on by default): playback + capture share ONE
     /// audio engine so the system voice processor can subtract what this device is playing
@@ -350,6 +353,8 @@ public enum SettingDefault {
     public static let streamHz = 0
     public static let matchWindow = false
     public static let bitrateKbps = 0
+    /// PyroWave quality, bits per pixel; the host's own default.
+    public static let pyrowaveBpp = 1.6
     public static let renderScale = 1.0
     public static let videoFit = VideoFit.fit.rawValue
     public static let codec = "auto"

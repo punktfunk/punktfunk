@@ -469,6 +469,12 @@ impl BitrateController {
         }
     }
 
+    /// The rate no cut goes under, in place of [`FLOOR_KBPS`]: PyroWave's quality floor
+    /// for the session's mode. A mode switch sets it again.
+    pub(crate) fn set_floor(&mut self, kbps: u32) {
+        self.floor_kbps = kbps;
+    }
+
     /// Size encode thresholds in frame budgets, not the 120 Hz [`ENCODE_RISE_US`]
     /// durations. Ignored for a nonsense rate — the defaults stand. Past 1 MHz the
     /// budget rounds to 0 µs, which the decode check divides by.
@@ -614,9 +620,9 @@ impl BitrateController {
         );
     }
 
-    /// The host will not negotiate this session's rate (PyroWave: per-frame
-    /// CBR). Nothing to control, so retire quietly — an unanswered host is
-    /// already retired the same way.
+    /// The host will not negotiate this session's rate: an explicit-rate
+    /// PyroWave pin, or any PyroWave pin on an older host. Nothing to control,
+    /// so retire quietly — an unanswered host is already retired the same way.
     fn on_pinned(&mut self, kbps: u32) {
         self.acks.last_requested_kbps = None;
         self.acks.unacked = 0;
@@ -1037,7 +1043,9 @@ impl BitrateController {
     ///
     /// The proven mark is scored after the verdict and gated on the whole of
     /// it: a damaged window overstates delivery (stall drain, flush queue,
-    /// FEC surge), and those bytes arriving is not climb authority.
+    /// FEC surge), and those bytes arriving is not climb authority. A bad
+    /// window also says whether the link did it, and whether its delivery is
+    /// the rate to land on; loss at the frames' tails says both.
     fn note_verdict(&mut self, w: &WindowSample, v: &Verdict) {
         // Bucket clock ticks on idle windows too: decay is about time.
         self.proven.tick();
@@ -1068,11 +1076,12 @@ impl BitrateController {
         }
         if v.bad {
             // What the rate is the lever for, read before the streaks move:
-            // loss share, a delay rise, a flush, drops the clean run does not
-            // vouch for, and a decoder past its budget. Keyframe asks and one
-            // lost frame behind a clean window are not.
+            // loss share, a delay rise, a flush, unvouched drops, a socket or a
+            // queue's tail dropping shards, a decoder past its budget. Keyframe
+            // asks and one lost frame behind a clean window are not.
             let repeated_drops = w.dropped > 1 || (w.dropped == 1 && self.clean_windows == 0);
-            let signature = super::verdict::link_signature(w);
+            let tail = super::verdict::tail_signature(w);
+            let signature = super::verdict::link_signature(w) || tail;
             let link = w.loss_ppm >= HEAVY_LOSS_PPM
                 || v.owd_bad
                 || w.flushed
@@ -1084,16 +1093,16 @@ impl BitrateController {
             if v.reason != Reason::Encode {
                 self.rate_verdict = link || v.decode_bad;
             }
-            // The link showed itself in one of two ways: a queue filling on
-            // this session's own delay floor, or a window that carried less
-            // than it was asked for. A link with room shows neither, so
-            // neither branch can fire where there is no wall (L2).
+            // The link shows itself as a queue filling on this session's own
+            // delay floor, a window that carried less than it was asked for, or
+            // the frames' tails gone. A link with room shows none of them, so
+            // none can fire where there is no wall (L2).
             let short = self.short_of_offered(w, v.owd_bad);
-            self.link_evidence = link && (v.owd_bad || short);
-            // Only a shortfall, or a socket that could not keep up, makes what
-            // was delivered the number to land on. At the wall itself the
-            // session is already getting what it asks for, and the blind step
-            // is what drains the queue.
+            self.link_evidence = link && (v.owd_bad || short || tail);
+            // A shortfall, a socket that could not keep up, or a queue dropping
+            // the frames' tails makes what was delivered the number to land on.
+            // At a wall that shows none, the session gets what it asks for, and
+            // the blind step is what drains the queue.
             self.link_verdict = link && (short || signature);
             self.bad_windows += 1;
             self.streak_cut = Some(v.reason);
@@ -1679,6 +1688,31 @@ mod tests {
         assert_eq!(cut(0), Some(10_000));
         // The link handed over what it was asked for: today's arithmetic.
         assert_eq!(cut(20_000), Some(14_000));
+    }
+
+    /// A frame dying with the loss at the frames' tails is the link's whatever
+    /// `loss_ppm` says: after a climb the cut lands on what was delivered, and its mark
+    /// meets the one already standing. Tails short of three times the rest are not.
+    #[test]
+    fn tail_loss_that_kills_a_frame_marks_the_wall() {
+        let start = Instant::now();
+        let cut = |head: u32, mid: u32| {
+            let mut c = BitrateController::new(16_000, None);
+            c.note_link_mark(18_000);
+            c.on_ack(20_000, None);
+            calm_window(&mut c, ticks(start, 0));
+            let next = c.on_window(&WindowSample {
+                head,
+                mid,
+                tail: 6,
+                dropped: 1,
+                actual_kbps: 18_000,
+                ..WindowSample::at(ticks(start, 1))
+            });
+            (next, c.link_wall_kbps())
+        };
+        assert_eq!(cut(0, 1), (Some(15_300), Some(18_000)), "0.85 x 18 000");
+        assert_eq!(cut(3, 3), (Some(14_000), None), "the blind step");
     }
 
     /// What a clean window delivers at this rate is the norm a short one is

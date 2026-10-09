@@ -876,6 +876,7 @@ async fn handshake(
         preset: args.preset.clone(),
         link: Default::default(),
         probe_only: false,
+        pyrowave_bpp_x100: 0,
         resume: extra.resume,
         suites: extra.suites,
         // A host answers a `Redirect` only to a client that says it follows one.

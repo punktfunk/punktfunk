@@ -45,6 +45,7 @@ struct SettingsView: View {
     @AppStorage(DefaultsKey.systemButtons) var systemButtons = SettingDefault.systemButtons
     @AppStorage(DefaultsKey.guideGesture) var guideGesture = SettingDefault.guideGesture
     @AppStorage(DefaultsKey.bitrateKbps) var bitrateKbps = SettingDefault.bitrateKbps
+    @AppStorage(DefaultsKey.pyrowaveBpp) var pyrowaveBpp = SettingDefault.pyrowaveBpp
     @AppStorage(DefaultsKey.presentPriority) var presentPriority = SettingDefault.presentPriority
     @AppStorage(DefaultsKey.smoothBuffer) var smoothBuffer = SettingDefault.smoothBuffer
     #if os(macOS)

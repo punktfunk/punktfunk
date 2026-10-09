@@ -37,7 +37,7 @@ pub(crate) const FLOOR_KBPS: u32 = 800_000;
 /// The smallest group, and the wake shape's first one: one GSO super-packet.
 pub(crate) const GROUP_MIN: usize = 16 * 1024;
 
-/// Packets in one send call: a GSO train.
+/// Packets in one group while nothing bounds `R`, and in a burst: one GSO train.
 pub(crate) const GROUP_PACKETS: usize = 64;
 
 /// The wake shape's gap after the first group.
@@ -252,8 +252,9 @@ pub(crate) fn pinned_wall(pinned: bool, reported_kbps: u32, bitrate_kbps: u32) -
         .then_some(reported_kbps)
 }
 
-/// `G`: half a millisecond at `rate_bps`, at least [`GROUP_MIN`]. A group is also never
-/// more than [`GROUP_PACKETS`] packets.
+/// Half a millisecond at `rate_bps`, at least [`GROUP_MIN`]: `G` while nothing bounds `R`,
+/// at most [`GROUP_PACKETS`] packets. A link known to carry `R` takes a millisecond with no
+/// packet limit ([`Pacer::begin`]).
 pub(crate) fn group_bytes(rate_bps: u64) -> usize {
     usize::try_from(rate_bps / 16_000)
         .unwrap_or(usize::MAX)
@@ -354,6 +355,8 @@ pub(crate) struct Pacer {
     cap_bps: u64,
     rate_bps: u64,
     group: usize,
+    /// [`GROUP_PACKETS`], or no limit where the cap bounds `R`.
+    max_packets: usize,
     /// The wake shape's first group of this frame is still to leave.
     wake_first: bool,
     started: Option<Instant>,
@@ -374,6 +377,7 @@ impl Pacer {
             cap_bps: u64::MAX,
             rate_bps: 1,
             group: GROUP_MIN,
+            max_packets: GROUP_PACKETS,
             wake_first: false,
             started: None,
             paced: false,
@@ -415,15 +419,18 @@ impl Pacer {
 
     /// A frame of `frame_bytes` on the wire begins; `0` when not yet known (a streamed AU).
     /// A frame whose wire time at `R` would pass its spread leaves at the rate that fits it,
-    /// up to the cap: past the link it would only be lost or queued.
+    /// up to the cap: past the link it would only be lost or queued. A wait must clear the
+    /// sleep floor to sleep, and a known bottleneck drains a 1 ms group as it arrives: where
+    /// the cap bounds `R` a group is 1 ms of `R` with no packet limit.
     pub(crate) fn begin(&mut self, frame_bytes: usize) {
         let spread_ns = self.max_spread.min(MAX_PACE_SPREAD).as_nanos().max(1) as u64;
         let floor_bps = (frame_bytes as u64).saturating_mul(8_000_000_000) / spread_ns;
         self.rate_bps = self.base_bps.max(floor_bps).min(self.cap_bps).max(1);
-        self.group = match self.shape {
-            Shape::Smooth => GROUP_MIN,
-            Shape::Burst => usize::MAX,
-            _ => group_bytes(self.rate_bps),
+        (self.group, self.max_packets) = match self.shape {
+            Shape::Smooth => (GROUP_MIN, GROUP_PACKETS),
+            Shape::Burst => (usize::MAX, GROUP_PACKETS),
+            _ if self.cap_bps == u64::MAX => (group_bytes(self.rate_bps), GROUP_PACKETS),
+            _ => (group_bytes(self.rate_bps.saturating_mul(2)), usize::MAX),
         };
         self.clock.set_rate(self.rate_bps);
         self.wake_first = self.shape == Shape::Wake;
@@ -432,7 +439,8 @@ impl Pacer {
         self.sock_ns = 0;
     }
 
-    /// Send `pkts` in groups on the clock. A `send` error ends the frame.
+    /// Send `pkts` on the clock in groups within `G` and the frame's packet limit. A `send`
+    /// error ends the frame.
     pub(crate) fn send<T: AsRef<[u8]>, E>(
         &mut self,
         pkts: &[T],
@@ -446,7 +454,7 @@ impl Pacer {
             } else {
                 self.group
             };
-            let n = group_len(rest, max);
+            let n = group_len(rest, max, self.max_packets);
             let (group, tail) = rest.split_at(n);
             rest = tail;
             if self.shape != Shape::Burst {
@@ -479,12 +487,12 @@ impl Pacer {
     }
 }
 
-/// Packets of the next group: at least one, at most [`GROUP_PACKETS`], no more than
+/// Packets of the next group: at least one, at most `max_packets`, no more than
 /// `max_bytes` past the first.
-fn group_len<T: AsRef<[u8]>>(pkts: &[T], max_bytes: usize) -> usize {
+fn group_len<T: AsRef<[u8]>>(pkts: &[T], max_bytes: usize, max_packets: usize) -> usize {
     let mut cum = 0usize;
     let mut n = 0usize;
-    for p in pkts.iter().take(GROUP_PACKETS) {
+    for p in pkts.iter().take(max_packets) {
         let len = p.as_ref().len();
         if n > 0 && cum.saturating_add(len) > max_bytes {
             break;
@@ -716,7 +724,7 @@ mod tests {
         );
     }
 
-    /// (a) 1 GbE both ends, 80 Mbit/s: `R` is 0.9 L and a group half a millisecond of it.
+    /// (a) 1 GbE both ends, 80 Mbit/s: `R` is 0.9 L and [`group_bytes`] half a millisecond.
     /// (b) a 2.5 GbE host and a 1 GbE client's report: 900 Mbit/s, and the 10 GbE →
     /// 2.5 GbE desk 2.25 Gbit/s. (c) a measured 12 Mbit/s tunnel under an 8 Mbit/s stream:
     /// 3 × B stops at `L` and the group is the floor; the client's floor caps nothing.
@@ -774,18 +782,19 @@ mod tests {
         assert_eq!(rate_bps(1_427_000, &unknown, None), 2_450_000_000);
     }
 
-    /// (a) A 167 KB frame at 900 Mbit/s leaves in groups of at most `G`, each on the
-    /// clock: about 1.5 ms end to end instead of one line-rate blast.
+    /// (a) A 167 KB frame at 900 Mbit/s on known 1 GbE ports leaves in 1 ms groups, each on
+    /// the clock: about 1.5 ms end to end instead of one line-rate blast.
     #[test]
     fn a_frame_leaves_in_groups_on_the_clock() {
         let t0 = Instant::now();
         let mut p = Pacer::new(gbe(), None);
         p.update(80_000, 0, None, Shape::Auto, Duration::from_millis(33));
         p.begin(0);
+        assert_eq!(p.group, 112_500);
         let pkts = packets(116, 1_440);
         let groups = run(&mut p, &pkts);
         let (stat, _) = p.finish();
-        assert!(groups.iter().all(|&(b, _)| b <= 56_250), "{groups:?}");
+        assert!(groups.iter().all(|&(b, _)| b <= 112_500), "{groups:?}");
         assert_eq!(groups.iter().map(|g| g.0).sum::<usize>(), 116 * 1_440);
         // The last group waits for the wire time of all before it, from the clock's start.
         let before_last: usize = groups[..groups.len() - 1].iter().map(|g| g.0).sum();
@@ -800,11 +809,11 @@ mod tests {
 
         // On a simulated clock: the last group is out by 1.6 ms, and each group waits for
         // the wire time of the one before it.
-        let (rate, g) = (900_000_000, group_bytes(900_000_000));
+        let (rate, g) = (900_000_000, 112_500);
         let mut c = GroupClock::new(rate, t0);
         let (mut now, mut rest, mut sent) = (t0, &pkts[..], Vec::new());
         while !rest.is_empty() {
-            let n = group_len(rest, g);
+            let n = group_len(rest, g, usize::MAX);
             let bytes: usize = rest[..n].iter().map(Vec::len).sum();
             now += c.advance(bytes, now);
             sent.push((now, bytes));
@@ -814,6 +823,32 @@ mod tests {
         let (last_at, last_bytes) = *sent.last().unwrap();
         assert!(last_at + wire(last_bytes) - t0 <= Duration::from_micros(1_600));
         assert!(sent.windows(2).all(|w| w[1].0 - w[0].0 >= wire(w[0].1)));
+    }
+
+    /// A 1.4 Gbit/s pinned stream into a 2.5 GbE client paces at 2.2 Gbit/s under a known
+    /// cap: a group is 1 ms of it, 191 packets. With no evidence `R` is 3 × B and nothing
+    /// bounds it, so a group stays one train.
+    #[test]
+    fn a_known_link_lets_a_group_outgrow_one_train() {
+        let (spread, pkts) = (Duration::from_millis(33), packets(300, 1_440));
+        let train = GROUP_PACKETS * 1_440;
+        let mut p = Pacer::new(Ports::of((ETH, 10_000), (ETH, 2_500)), None);
+        let wall = pinned_wall(true, 2_450_000, 1_400_000);
+        let r = p.update(1_400_000, 2_450_000, wall, Shape::Auto, spread);
+        assert_eq!(r, 2_205_000_000);
+        p.begin(0);
+        let groups = run(&mut p, &pkts);
+        assert_eq!(groups[0].0, 191 * 1_440);
+        assert!(groups.iter().all(|&(b, _)| b <= 275_625), "{groups:?}");
+
+        let mut p = Pacer::new(Ports::default(), None);
+        assert_eq!(
+            p.update(1_400_000, 0, None, Shape::Auto, spread),
+            4_200_000_000
+        );
+        p.begin(0);
+        let groups = run(&mut p, &pkts);
+        assert!(groups.iter().all(|&(b, _)| b <= train), "{groups:?}");
     }
 
     /// (d) The wake shape: a 16 KiB first group, then at least 300 µs, then the rest.

@@ -105,16 +105,50 @@ pub(crate) fn refresh_snapshot(ctx: &Arc<AppCtx>) {
         gpus: crate::gpu::adapter_names(),
         speakers,
         mics,
+        native: primary_mode(),
+        link: punktfunk_core::transport::ifinfo::local_link_facts(None),
     };
 }
 
-/// This device's pickable hardware: DXGI adapters and WASAPI endpoints. Probed once per
-/// visit by [`refresh_snapshot`], never on the render each settings commit triggers.
+/// The primary display's current mode in real pixels: what a Native stream asks for here.
+/// `None` when Windows names none.
+fn primary_mode() -> Option<punktfunk_core::Mode> {
+    use windows::Win32::wingdi::DEVMODEW;
+    use windows::Win32::winuser::{EnumDisplaySettingsW, ENUM_CURRENT_SETTINGS};
+    // SAFETY: DEVMODEW is integers, arrays and unions of integers; all-zero is a valid value.
+    let mut dm: DEVMODEW = unsafe { std::mem::zeroed() };
+    dm.dmSize = std::mem::size_of::<DEVMODEW>() as u16;
+    // SAFETY: `dm` is a local with `dmSize` set, the one field the call reads before filling it;
+    // a null device name is the current display device.
+    let ok = unsafe {
+        EnumDisplaySettingsW(
+            windows::core::PCWSTR::null(),
+            ENUM_CURRENT_SETTINGS,
+            &mut dm,
+        )
+    };
+    (ok.as_bool() && dm.dmPelsWidth > 0).then_some(punktfunk_core::Mode {
+        width: dm.dmPelsWidth,
+        height: dm.dmPelsHeight,
+        // 0 and 1 are "the hardware's default".
+        refresh_hz: if dm.dmDisplayFrequency > 1 {
+            dm.dmDisplayFrequency
+        } else {
+            60
+        },
+    })
+}
+
+/// This device's pickable hardware: DXGI adapters and WASAPI endpoints, and the display and
+/// link PyroWave quality prices against. Probed once per visit by [`refresh_snapshot`], never
+/// on the render each settings commit triggers.
 #[derive(Default)]
 pub(crate) struct DeviceProbes {
     gpus: Vec<String>,
     speakers: Vec<pf_client_core::audio::AudioDevice>,
     mics: Vec<pf_client_core::audio::AudioDevice>,
+    native: Option<punktfunk_core::Mode>,
+    link: punktfunk_core::transport::LinkFacts,
 }
 
 /// The layer the settings screen is editing, resolved for display: `None` = the defaults.

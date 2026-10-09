@@ -20,6 +20,9 @@ data class Settings(
     val height: Int = 0,
     val hz: Int = 0,
     val bitrateKbps: Int = 0,
+    /** PyroWave quality, bits per pixel from 0.5 to 2: the most a PyroWave session sends. Shown
+     *  as the rate it needs ([PyroWaveQuality]), never as bits per pixel. */
+    val pyrowaveBpp: Double = 1.6,
     /**
      * Render-resolution multiplier: the client asks the host to render/encode at `chosen mode ×
      * renderScale` and the compositor downscales the larger decoded frame to the SurfaceView

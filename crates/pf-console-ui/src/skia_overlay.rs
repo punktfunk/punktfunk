@@ -416,6 +416,10 @@ impl Overlay for SkiaOverlay {
     }
 
     fn frame(&mut self, ctx: &FrameCtx) -> Result<Option<OverlayFrame>> {
+        // The window may have moved to another display since the last frame.
+        if let Some(shell) = &mut self.shell {
+            shell.device.native_mode = Some(ctx.native);
+        }
         // Full-screen and opaque; the aurora animates every frame. Idle, the slot on glass
         // is handed back until `IDLE_FRAME` passes, and the presenter skips its present.
         if self.console_visible() {

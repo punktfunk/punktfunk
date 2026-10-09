@@ -29,8 +29,12 @@ pub struct Build<'a> {
     /// Pickers as in-window subpages (gamescope).
     pub inline: bool,
     pub preset_scope: bool,
+    /// The preset in scope, by id, for a row that re-reads its effective values as they move.
+    pub preset_id: Option<String>,
     /// The preset's overrides, in preset scope.
     pub overlay: Option<&'a SettingsOverlay>,
+    /// What a Native stream asks for: the monitor the window is on.
+    pub native: punktfunk_core::Mode,
     pub store: &'a Rc<Store>,
     /// The values the rows open on: the defaults, or the preset over them.
     pub seed: &'a Settings,

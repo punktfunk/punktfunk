@@ -17,7 +17,7 @@ use super::*;
 pub(crate) const RAMP_STEP_MAX_MS: u32 = 50;
 
 /// Quiet window after the last served result during which a fit server's
-/// `ramp_open` stays true, so an Automatic PyroWave client's one lower pin
+/// `ramp_open` stays true, so an explicit-rate PyroWave client's one lower pin
 /// can still cross the control stream.
 const PIN_FIT_IDLE_GRACE: std::time::Duration = std::time::Duration::from_millis(100);
 /// Hard bound on the grace: counted from when `serve` first observes the
@@ -41,8 +41,8 @@ impl RampServer {
     /// task reads to let ramp steps past its one-per-10 s spacing; it is
     /// cleared on hand-over, because from then on the send loop owns the
     /// session and video is about to leave. `fit_pin` keeps `open` true a
-    /// bounded grace past pipeline-ready: an Automatic PyroWave client's one
-    /// lower pin must still read the ramp as open.
+    /// bounded grace past pipeline-ready: an explicit-rate PyroWave client's
+    /// one lower pin must still read the ramp as open.
     pub(super) fn start(
         session: Session,
         probe_rx: ProbeReceiver,

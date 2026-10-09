@@ -1105,6 +1105,7 @@ pub(crate) async fn run_admitted(
         abr_features,
         client_link,
         probe_only,
+        pyrowave_bpp,
         host_link,
         compositor,
         gamescope_route,
@@ -1305,12 +1306,10 @@ pub(crate) async fn run_admitted(
         live_reconfig_ok,
         adaptive_fec,
         session_bitrate_kbps,
-        // Automatic, and negotiable: PyroWave resolves a pin the client cannot
-        // move either, so the governor must not move it for it.
-        bitrate_automatic: hello.bitrate_kbps == 0 && codec != crate::encode::Codec::PyroWave,
-        // Automatic PyroWave: the client's bring-up ramp may lower the pin
-        // once, while the ramp window is still open.
+        // Automatic, so negotiable: the governor may move it. PyroWave's floor still binds.
+        bitrate_automatic: hello.bitrate_kbps == 0,
         pyrowave_automatic: hello.bitrate_kbps == 0 && codec == crate::encode::Codec::PyroWave,
+        pyrowave_bpp,
         wire_bytes: u64::from(welcome.shard_payload)
             + punktfunk_core::abr::budget::SHARD_WIRE_OVERHEAD,
         audio_kbps: audio_reserved_kbps(&welcome),
@@ -1567,8 +1566,8 @@ pub(crate) async fn run_admitted(
                 compositor: compositor
                     .expect("the Virtual source resolves a compositor during the handshake"),
                 gamescope_route,
-                // PyroWave is Automatic unconditionally (an explicit rate is overridden).
-                bitrate_auto: hello.bitrate_kbps == 0 || codec == crate::encode::Codec::PyroWave,
+                bitrate_auto: hello.bitrate_kbps == 0,
+                pyrowave_bpp,
                 cursor_forward,
                 // Sentinel-headed streamed blocks: ship early FEC while the AU tail still encodes.
                 streamed_au: hello.video_caps & punktfunk_core::quic::VIDEO_CAP_STREAMED_AU != 0,
@@ -1600,7 +1599,8 @@ pub(crate) async fn run_admitted(
                 inj_session_tx,
             }
         };
-        let fit_pin = hello.bitrate_kbps == 0 && codec == crate::encode::Codec::PyroWave;
+        // Explicit-rate PyroWave: the client's ramp closes with one lower pin.
+        let fit_pin = hello.bitrate_kbps != 0 && codec == crate::encode::Codec::PyroWave;
         // Client address: what the registry groups sessions of one NAT or tunnel by.
         let (plane, peer) = (conn.plane(), conn.remote_address().ip());
         // Native thread: no async on the hot path.

@@ -5,7 +5,7 @@
 use super::*;
 #[cfg(target_os = "linux")]
 use crate::capture::OutputLease;
-use crate::native::bitrate::{resolve_bitrate_kbps_for, EncDerive};
+use crate::native::bitrate::{pyrowave_mode_kbps, resolve_bitrate_kbps_for, EncDerive};
 
 /// One built pipeline. `bitrate_kbps` is the rate the encoder actually opened at.
 pub(in crate::native) struct Pipeline {
@@ -46,8 +46,9 @@ pub(in crate::native) type PrepHandle = (
     std::thread::JoinHandle<Result<()>>,
 );
 
-/// A virtual-display session's plan on `compositor`. Bring-up and the Welcome-time prep both
-/// resolve here, so a prepared pipeline is built from the plan its session runs.
+/// A virtual-display session's plan on `compositor`, `pyrowave_bpp` the session's. Bring-up
+/// and the Welcome-time prep both resolve here, so a prepared pipeline is built from the plan
+/// its session runs.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn resolve_plan(
     bit_depth: u8,
@@ -58,6 +59,7 @@ pub(super) fn resolve_plan(
     multi_slice: bool,
     compositor: crate::vdisplay::Compositor,
     route: Option<&crate::vdisplay::GamescopeRoute>,
+    pyrowave_bpp: f64,
     shard_payload: usize,
     reframe_to: Option<(punktfunk_core::video_fit::VideoFit, (u32, u32))>,
     join_live: bool,
@@ -84,6 +86,7 @@ pub(super) fn resolve_plan(
         route,
     );
     plan.sdr10_native = crate::session_plan::sdr10_native_for(&plan, compositor, route);
+    plan.pyrowave_bpp = pyrowave_bpp;
     if codec == crate::encode::Codec::PyroWave {
         plan.wire_chunk = Some(shard_payload);
     }
@@ -113,6 +116,7 @@ pub(in crate::native) fn prepare_display(
     enc_of: EncDerive,
     chroma: crate::encode::ChromaFormat,
     codec: crate::encode::Codec,
+    pyrowave_bpp: f64,
     shard_payload: u16,
     reframe_to: Option<(punktfunk_core::video_fit::VideoFit, (u32, u32))>,
     quit: &Arc<AtomicBool>,
@@ -129,6 +133,7 @@ pub(in crate::native) fn prepare_display(
         multi_slice,
         compositor,
         None,
+        pyrowave_bpp,
         shard_payload as usize,
         reframe_to,
         join_live,
@@ -603,16 +608,28 @@ fn attach_pipeline(
         t.mark("first_frame");
     }
     let negotiated = (mode.width, mode.height);
-    // Automatic bitrate follows the pixels actually encoded: a mirrored head's fit, or
-    // whatever a virtual display delivered.
+    // Automatic bitrate and every PyroWave pin follow the pixels actually encoded: a
+    // mirrored head's fit, or whatever a virtual display delivered.
     let kbps_for = |w: u32, h: u32| {
-        if bitrate_auto && (w, h) != negotiated {
-            let encoded = punktfunk_core::Mode {
-                width: w,
-                height: h,
-                ..mode
-            };
-            resolve_bitrate_kbps_for(plan.codec, 0, &encoded, plan.chroma, bit_depth)
+        let encoded = punktfunk_core::Mode {
+            width: w,
+            height: h,
+            ..mode
+        };
+        if (w, h) == negotiated {
+            bitrate_kbps
+        } else if plan.codec == crate::encode::Codec::PyroWave {
+            let running = bitrate_auto.then_some(bitrate_kbps);
+            pyrowave_mode_kbps(running, &encoded, &plan)
+        } else if bitrate_auto {
+            resolve_bitrate_kbps_for(
+                plan.codec,
+                0,
+                &encoded,
+                plan.chroma,
+                bit_depth,
+                plan.pyrowave_bpp,
+            )
         } else {
             bitrate_kbps
         }

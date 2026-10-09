@@ -52,6 +52,9 @@ pub struct Device {
     pub platform: crate::platform::Platform,
     /// This device's own screen ([`crate::shell::ConsoleOptions::screen`]).
     pub screen: Option<crate::shell::DeviceScreen>,
+    /// The mode a Native stream asks for here: the display the window is on, which the
+    /// desktop overlay corrects each frame. `None` where nothing has said.
+    pub native_mode: Option<punktfunk_core::Mode>,
     /// The device's own keyboard types into an open field: Steam's on a Steam Deck, tvOS's
     /// on an Apple TV ([`crate::shell::ConsoleOptions::system_keyboard`]).
     pub system_keyboard: bool,
@@ -96,6 +99,7 @@ impl Device {
         Device {
             platform: crate::platform::Platform::Desktop,
             screen: None,
+            native_mode: None,
             system_keyboard: false,
             tv: false,
             fallback_ui: false,

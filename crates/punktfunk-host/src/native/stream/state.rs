@@ -17,7 +17,7 @@ use super::cursor::composite_plan;
 use super::cursor::settle_portal_cursor;
 use super::pipeline::{build_pipeline_with_retry, resolve_plan, Pipeline};
 use super::*;
-use crate::native::bitrate::{resolve_bitrate_kbps_for, EncDerive, EncoderCeiling};
+use crate::native::bitrate::{pyrowave_mode_kbps, EncDerive, EncoderCeiling};
 use crate::session_status::pack_mode;
 
 /// (capture_ns, submit_ns) per frame handed to the encoder and not yet polled.
@@ -378,14 +378,15 @@ impl StreamState {
             ctx.multi_slice,
             ctx.compositor,
             ctx.gamescope_route.as_ref(),
+            ctx.pyrowave_bpp,
             ctx.common.session.shard_payload(),
             ctx.reframe_to,
             ctx.join_live,
         );
         tracing::info!(?plan, "resolved session plan");
-        // Automatic PyroWave: the client's ramp closes with one lower pin, so
-        // the window lingers past pipeline-ready for it to cross.
-        let fit_pin = ctx.bitrate_auto && ctx.common.codec == crate::encode::Codec::PyroWave;
+        // Explicit-rate PyroWave: the client's ramp closes with one lower pin,
+        // so the window lingers past pipeline-ready for it to cross.
+        let fit_pin = !ctx.bitrate_auto && ctx.common.codec == crate::encode::Codec::PyroWave;
         let SessionContext {
             common:
                 StreamCommon {
@@ -460,6 +461,7 @@ impl StreamState {
             client_hdr,
             join_live,
             reframe_to: _,
+            pyrowave_bpp: _,
             frame_map,
             #[cfg(target_os = "linux")]
             gamescope_xwayland,
@@ -546,9 +548,9 @@ impl StreamState {
                      instead of building twice"
                 );
                 mode = m;
-                if bitrate_auto && plan.codec == crate::encode::Codec::PyroWave {
-                    bitrate_kbps =
-                        resolve_bitrate_kbps_for(plan.codec, 0, &mode, plan.chroma, plan.bit_depth);
+                if plan.codec == crate::encode::Codec::PyroWave {
+                    let running = bitrate_auto.then_some(bitrate_kbps);
+                    bitrate_kbps = pyrowave_mode_kbps(running, &mode, &plan);
                 }
             }
         }
@@ -692,7 +694,7 @@ impl StreamState {
             bitrate_kbps: live_bitrate.clone(),
             link_kbps,
             ports,
-            link_paced: budget_identity,
+            link_paced: budget_identity && !bitrate_auto,
             shape,
             bringup: bringup.clone(),
             wire_sock,

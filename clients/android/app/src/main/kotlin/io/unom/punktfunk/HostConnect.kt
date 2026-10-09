@@ -218,9 +218,9 @@ private suspend fun dial(
         // still resolves HEVC. An explicit user choice always wins unchanged.
         val preferredCodec = settings.preferredCodec().takeIf { it != 0 }
             ?: if (codecBits and 4 != 0 && !partialFrame) 4 else 0
-        // PyroWave takes its rate from the host's bits per pixel. Asking Automatic (0) is what
-        // lets the host fit that rate to the link before the first frame; a stored fixed rate
-        // is kept for the other codecs.
+        // PyroWave takes its rate from the player's quality. Asking Automatic (0) is what lets
+        // the host fit that rate to the link before the first frame; a stored fixed rate is
+        // kept for the other codecs.
         val pyrowave = preferredCodec == 8 && codecBits and 8 != 0
         // The connect-time capability readout (`adb logcat -s pf.caps`): the P2 slice pipeline
         // is client-inert unless BOTH probes pass — this line says which decoder failed one.
@@ -234,7 +234,7 @@ private suspend fun dial(
             host = host, port = port, width = w, height = h, refreshHz = hz,
             certPem = identity.certPem, keyPem = identity.privateKeyPem, pinHex = pinHex,
             bitrateKbps = if (pyrowave) 0 else settings.bitrateKbps, compositorPref = settings.compositor,
-            gamepadPref = gamepadPref,
+            pyrowaveBppX100 = settings.pyrowaveBppX100(), gamepadPref = gamepadPref,
             hdrEnabled = hdrEnabled, tenBitSdr = tenBitSdr, multiSliceOk = multiSlice,
             framePartsOk = frameParts,
             audioChannels = settings.audioChannels,

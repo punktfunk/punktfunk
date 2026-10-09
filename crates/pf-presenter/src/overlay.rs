@@ -73,6 +73,8 @@ pub struct FrameCtx<'a> {
     pub pads: &'a [pf_client_core::gamepad::PadInfo],
     /// Quick-action ring facts (`design/touch-client-overlay.md`). `None` outside a stream.
     pub ring: Option<&'a RingFacts>,
+    /// The window's display as a stream request: what a Native connect asks for.
+    pub native: punktfunk_core::Mode,
 }
 
 /// Overlay image ready to composite: RGBA, premultiplied, already in

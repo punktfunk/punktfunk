@@ -48,6 +48,9 @@ pub mod hud;
 pub mod input;
 pub mod packet;
 pub mod phase;
+// The bits-per-pixel rule host and client share; Rust-only, so the C header stays out of it.
+/// cbindgen:ignore
+pub mod pyrowave;
 pub mod quic;
 pub mod reanchor;
 pub mod reject;
@@ -101,7 +104,7 @@ fn env_value_on(value: &str) -> bool {
 ///
 /// The wire is versioned by ALPN, not by this. Pin the integer in `punktfunk-ffi`
 /// (`abi_version_is_pinned`). Per-bump notes live in `CHANGELOG.md`.
-pub const ABI_VERSION: u32 = 48;
+pub const ABI_VERSION: u32 = 49;
 
 #[cfg(test)]
 mod env_tests {

@@ -149,15 +149,30 @@ pub(super) async fn run_pump(args: WorkerArgs) {
     let bit_depth = welcome.bit_depth;
     let chroma_format = welcome.chroma_format;
     // ABR holds the probe-measured link ceiling to this. Computed here (Welcome
-    // geometry); the data pump stays codec-agnostic.
-    let stream_cap_kbps = crate::abr::stream_ceiling_kbps(
-        welcome.mode.width,
-        welcome.mode.height,
-        welcome.mode.refresh_hz,
-        welcome.codec,
-        welcome.bit_depth,
-        welcome.chroma_format,
-    );
+    // geometry); the data pump stays codec-agnostic. PyroWave's is the host's pin,
+    // and its floor the same rule at `BPP_FLOOR`.
+    let pyrowave = welcome.codec == crate::quic::CODEC_PYROWAVE;
+    let stream_cap_kbps = if pyrowave {
+        resolved_bitrate_kbps
+    } else {
+        crate::abr::stream_ceiling_kbps(
+            welcome.mode.width,
+            welcome.mode.height,
+            welcome.mode.refresh_hz,
+            welcome.codec,
+            welcome.bit_depth,
+            welcome.chroma_format,
+        )
+    };
+    let pyrowave_floor_kbps = pyrowave.then(|| {
+        crate::pyrowave::kbps_for(
+            &welcome.mode,
+            welcome.chroma_format == crate::quic::CHROMA_IDC_444,
+            welcome.bit_depth,
+            crate::pyrowave::BPP_FLOOR,
+        )
+        .min(stream_cap_kbps)
+    });
     // ABR encode-threshold unit ([`BitrateController::encode_thresholds`]). Negotiated
     // refresh, not the request still sitting in `shared.mode` (60-for-120 must score at 60).
     let refresh_hz = welcome.mode.refresh_hz;
@@ -349,6 +364,7 @@ pub(super) async fn run_pump(args: WorkerArgs) {
         serves_ramp,
         audio_reserved_kbps,
         stream_cap_kbps,
+        pyrowave_floor_kbps,
         refresh_hz,
         nack: !params.frame_parts,
         on_anchors: false,

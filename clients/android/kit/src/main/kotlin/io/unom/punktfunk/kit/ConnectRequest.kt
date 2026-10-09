@@ -89,6 +89,8 @@ data class ConnectRequest(
     val deliveryFlags: Int = 0,
     /** The host profile to play as (its id); `null` sends none. Rides the Hello as `profile`. */
     val profile: String? = null,
+    /** PyroWave quality in hundredths of a bit per pixel, 50 to 200; `0` leaves the host's own. */
+    val pyrowaveBppX100: Int = 0,
 ) {
     fun toJson(): String = JSONObject()
         .put("host", host)
@@ -100,6 +102,7 @@ data class ConnectRequest(
         .put("key_pem", keyPem)
         .put("pin_hex", pinHex)
         .put("bitrate_kbps", bitrateKbps)
+        .put("pyrowave_bpp_x100", pyrowaveBppX100)
         .put("compositor_pref", compositorPref)
         .put("gamepad_pref", gamepadPref)
         .put("hdr_enabled", hdrEnabled)

@@ -79,6 +79,10 @@ enum SettingsFields {
         .init(name: "bitrate_kbps", key: DefaultsKey.bitrateKbps,
               overlay: \.bitrateKbps, effective: \.bitrateKbps)
     }
+    static var pyrowaveBpp: SettingsField<Double> {
+        .init(name: "pyrowave_bpp", key: DefaultsKey.pyrowaveBpp,
+              overlay: \.pyrowaveBpp, effective: \.pyrowaveBpp)
+    }
     static var codec: SettingsField<String> {
         .init(name: "codec", key: DefaultsKey.codec, overlay: \.codec, effective: \.codec)
     }
@@ -204,6 +208,7 @@ extension SettingsView {
         base.refreshHz = hz
         base.matchWindow = matchWindow
         base.bitrateKbps = bitrateKbps
+        base.pyrowaveBpp = pyrowaveBpp
         base.renderScale = renderScale
         base.videoFit = videoFit
         base.codec = codec

@@ -631,9 +631,9 @@ pub(crate) struct CapacityProbe {
     /// Nothing is going to measure this link: no probe was armed, the host
     /// declined it, it timed out, or the ramp ended with nothing. Taken once.
     no_evidence: bool,
-    /// A pinned session's ramp: it sizes the pin, and nothing follows — no
-    /// burst beside video, and no controller a measured ceiling would serve.
-    /// A cut-short ramp must not arm the burst it was never going to fire.
+    /// A PyroWave ramp, at an explicit rate or Automatic: it climbs past the
+    /// pin, and no burst follows it beside video. A cut-short ramp must not
+    /// arm one.
     pinned: bool,
 }
 
@@ -670,14 +670,13 @@ impl CapacityProbe {
         }
     }
 
-    /// A pinned session's ramp. It climbs to [`PINNED_RAMP_HEADROOM`] times
-    /// the pin: a wall under the pin sizes the pin, and the rate it proves is
-    /// what the host paces the stream at. `armed` is `PUNKTFUNK_ABR_PROBE`
-    /// plus the host's `HOST_CAP2_RAMP`; an old host runs no measurement and
-    /// keeps the pin it resolved.
+    /// A PyroWave session's ramp. It climbs to [`PINNED_RAMP_HEADROOM`] times
+    /// the pin: a wall under an explicit pin sizes it, and the rate the ramp
+    /// proves is the link the host paces at. `armed` is `PUNKTFUNK_ABR_PROBE`
+    /// plus the host's `HOST_CAP2_RAMP`; an old host runs no measurement.
     ///
-    /// No burst follows: a cut-short ramp leaves the pin as it is rather
-    /// than costing a started picture a measurement nobody would use.
+    /// No burst follows: a stream already near the link loses frames to one,
+    /// and a cut-short ramp leaves an explicit pin as it is.
     pub(crate) fn for_pinned(
         armed: bool,
         target_kbps: Option<u32>,
@@ -841,9 +840,9 @@ impl CapacityProbe {
     /// rig, 38 % over a 237 Mbps link and 19 cuts in ten minutes. So the
     /// legacy burst is armed to finish the job the moment video flows. It
     /// costs the picture what it has always cost, in the only case that needs
-    /// it, and it is a measurement rather than a guess. A pinned session
-    /// skips that: it has no ceiling for the burst to set, and the pin it
-    /// could not check stands. So does a session whose ports both ends know:
+    /// it, and it is a measurement rather than a guess. A PyroWave session
+    /// skips that: its stream already runs near the link, so a burst beside
+    /// it only loses frames. So does a session whose ports both ends know:
     /// they bound the link already, and a burst past them only loses frames.
     pub(crate) fn take_ramped(&mut self, now: Instant, wired: bool) -> Option<Ramped> {
         let r = self.ramp.as_mut()?;

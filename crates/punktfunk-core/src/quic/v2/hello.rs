@@ -51,6 +51,8 @@ pub struct ClientHello {
     pub link: LinkFacts,
     /// A diagnostic session: serve probes from the punched data plane, never build a pipeline.
     pub probe_only: bool,
+    /// The player's PyroWave quality in hundredths of a bit per pixel; `0` leaves the host's.
+    pub pyrowave_bpp_x100: u16,
     /// The session this client held, to take back after a drop.
     pub resume: Option<[u8; 16]>,
     /// Media AEADs the client takes, most wanted first. Empty on a carrier that encrypts.
@@ -123,6 +125,9 @@ impl V2Message for ClientHello {
             })
             .when(link.is_some(), |f| f.bytes(22, &link.unwrap_or_default()))
             .when(self.probe_only, |f| f.u8(24, 1))
+            .when(self.pyrowave_bpp_x100 != 0, |f| {
+                f.bytes(25, &self.pyrowave_bpp_x100.to_le_bytes())
+            })
             .when(profile.is_some(), |f| f.str(23, profile.unwrap_or("")))
     }
 
@@ -149,6 +154,7 @@ impl V2Message for ClientHello {
         let (mut resume, mut suites) = (None, Vec::new());
         let (mut client_label, mut abr_features, mut preset) = (None, 0, None);
         let (mut link, mut probe_only) = (LinkFacts::default(), false);
+        let mut pyrowave_bpp_x100 = 0u16;
         let mut features = FeatureSet::default();
         let mut profile = None;
         let mut seen = Vec::new();
@@ -195,6 +201,14 @@ impl V2Message for ClientHello {
                 22 => link = LinkFacts::decode(v),
                 23 => profile = label(v, PROFILE_ID_MAX),
                 24 => probe_only = true,
+                // A short value is no ask, never a failed handshake.
+                25 => {
+                    pyrowave_bpp_x100 = v
+                        .get(..2)
+                        .and_then(|b| b.try_into().ok())
+                        .map(u16::from_le_bytes)
+                        .unwrap_or(0)
+                }
                 _ => {}
             }
         }
@@ -213,6 +227,7 @@ impl V2Message for ClientHello {
             preset,
             link,
             probe_only,
+            pyrowave_bpp_x100,
             resume,
             suites,
             features,
@@ -579,7 +594,7 @@ mod tests {
         /// changes nothing.
         #[test]
         fn hellos_settle_after_one_trip(h in hello_strategy(), w in welcome_strategy()) {
-            let ch = ClientHello { hello: h, client_label: None, abr_features: 0, preset: None, link: LinkFacts::default(), probe_only: false, resume: None, suites: vec![], features: FeatureSet::default(), profile: None };
+            let ch = ClientHello { hello: h, client_label: None, abr_features: 0, preset: None, link: LinkFacts::default(), probe_only: false, pyrowave_bpp_x100: 0, resume: None, suites: vec![], features: FeatureSet::default(), profile: None };
             let once = ClientHello::from_body(&ch.fields().into_body()).unwrap();
             let twice = ClientHello::from_body(&once.fields().into_body()).unwrap();
             prop_assert_eq!(twice, once);
@@ -639,9 +654,11 @@ mod tests {
         };
         let mut ch = ClientHello::from_body(&Fields::new().into_body()).unwrap();
         ch.client_label = Some(String::new());
-        assert!(tags(&ch).iter().all(|t| !(19..=24).contains(t)));
+        assert!(tags(&ch).iter().all(|t| !(19..=25).contains(t)));
         ch.probe_only = true;
         assert!(tags(&ch).contains(&24));
+        ch.pyrowave_bpp_x100 = 120;
+        assert!(tags(&ch).contains(&25));
 
         let read = |tag, v: &[u8]| {
             ClientHello::from_body(&Fields::new().bytes(tag, v).into_body()).unwrap()
@@ -654,6 +671,9 @@ mod tests {
         assert_eq!(read(19, b"\n").client_label, None);
         assert_eq!(read(21, &[9, b'x']).preset, None);
         assert!(read(24, &[]).probe_only);
+        assert_eq!(read(25, &[120, 0]).pyrowave_bpp_x100, 120);
+        // A short value is no ask, never a failed handshake.
+        assert_eq!(read(25, &[7]).pyrowave_bpp_x100, 0);
     }
 
     #[test]
@@ -690,6 +710,7 @@ mod tests {
                 mbps: 2_500,
             },
             probe_only: true,
+            pyrowave_bpp_x100: 120,
             resume: Some([3; 16]),
             suites: vec![MediaSuite::ChaCha20Poly1305, MediaSuite::Aes128Gcm],
             features: FeatureSet::default().with(reg::FEATURE_STREAM_CONFIG),
@@ -699,10 +720,10 @@ mod tests {
         let frame: String = ch.encode_v2().iter().map(|b| format!("{b:02x}")).collect();
         assert_eq!(
             frame,
-            "01407f01100303030303030303030303030303030302020100030c80070000380400003c000000040100\
+            "01408301100303030303030303030303030303030302020100030c80070000380400003c000000040100\
              05010006040000000007044465636b090540400000010a01020b01020c01000e0280050f0480bb0000\
              100110110100120100130c616e64726f696420302e3433140101150902703105436f756368160501c4\
-             090000180101"
+             09000018010119027800"
         );
         let back = ClientHello::from_body(&ch.fields().into_body()).unwrap();
         assert_eq!(back, ch);

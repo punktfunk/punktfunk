@@ -1052,6 +1052,16 @@ pub fn link_line(
     out
 }
 
+/// What a player reads while Automatic holds PyroWave at its quality floor of `floor_kbps`.
+pub fn quality_floor_line(floor_kbps: u32) -> String {
+    format!(
+        "Weak network: PyroWave is at its lowest quality ({} bits per pixel, {} Mbit/s). \
+         HEVC would look better on this link.",
+        crate::pyrowave::BPP_FLOOR,
+        floor_kbps / 1_000
+    )
+}
+
 /// One decimal, none when it is zero: `2.5`, `1`, `10`.
 fn trim(v: f64) -> String {
     let s = format!("{v:.1}");
@@ -2035,6 +2045,15 @@ mod tests {
         assert!(all(&s, StatsVerbosity::Detailed, true).ends_with("\n⚠ panel 60 Hz, not 120"));
         assert!(all(&s, StatsVerbosity::Detailed, true).contains("\npresent: fifo · vrr yes"));
         assert!(!all(&s, StatsVerbosity::Normal, true).contains("present:"));
+    }
+
+    #[test]
+    fn the_quality_floor_names_its_bits_and_the_next_move() {
+        assert_eq!(
+            quality_floor_line(497_664),
+            "Weak network: PyroWave is at its lowest quality (0.5 bits per pixel, 497 Mbit/s). \
+             HEVC would look better on this link."
+        );
     }
 
     /// Every field a Normal line shows sits on some Detailed line, in both vocabularies.

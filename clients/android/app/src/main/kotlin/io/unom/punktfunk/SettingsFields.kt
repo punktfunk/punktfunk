@@ -28,6 +28,10 @@ internal object SettingsFields {
         // document's `Settings::extra` rather than needing a row in the shared shell.
         field("bitrateKbps", "bitrate_kbps", IntKind, { it.bitrateKbps }, { s, v -> s.copy(bitrateKbps = v) },
             overlay({ it.bitrateKbps }, { o, v -> o.copy(bitrateKbps = v) })),
+        // Prefs keep a float; reading back in hundredths, the dial's unit, returns what was saved.
+        field("pyrowaveBpp", "pyrowave_bpp", DoubleKind, { it.pyrowaveBpp },
+            { s, v -> s.copy(pyrowaveBpp = Math.round(v * 100) / 100.0) },
+            overlay({ it.pyrowaveBpp }, { o, v -> o.copy(pyrowaveBpp = v) })),
         field("renderScale", "render_scale", DoubleKind, { it.renderScale }, { s, v -> s.copy(renderScale = v) },
             overlay({ it.renderScale }, { o, v -> o.copy(renderScale = v) })),
         field("videoFit", "video_fit", StrKind, { it.videoFit }, { s, v -> s.copy(videoFit = v) },
