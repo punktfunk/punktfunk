@@ -41,6 +41,22 @@ pub(crate) fn api_error(status: StatusCode, message: &str) -> Response {
         .into_response()
 }
 
+/// Runs `f` off the async worker. A worker that never finishes is logged and answers 500
+/// "The {what} stopped responding."; the panic text stays in the log.
+pub(super) async fn blocking<T, F>(what: &'static str, f: F) -> Result<T, Response>
+where
+    F: FnOnce() -> T + Send + 'static,
+    T: Send + 'static,
+{
+    tokio::task::spawn_blocking(f).await.map_err(|e| {
+        tracing::error!(worker = what, error = %e, "management worker did not finish");
+        api_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &format!("The {what} stopped responding."),
+        )
+    })
+}
+
 /// `axum::Json` that rewraps rejections (400/422/415) in [`ApiError`].
 pub(crate) struct ApiJson<T>(pub(crate) T);
 
