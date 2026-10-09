@@ -1246,7 +1246,6 @@ pub(crate) async fn run_admitted(
     // can refuse onto it before the stream thread exists.
     let (launch_outcome_tx, launch_outcome_rx) =
         tokio::sync::mpsc::unbounded_channel::<punktfunk_core::quic::LaunchOutcome>();
-    let launch_outcome_dp = launch_outcome_tx.clone();
     // What `DELETE /session/{id}` and its siblings act on. `ceiling` is the pairing's own
     // mask: a live re-point clamps to it, so the console never grants past the pairing.
     let controls = crate::session_status::SessionControls {
@@ -1456,16 +1455,11 @@ pub(crate) async fn run_admitted(
         send_test_feedback(&conn);
     }
 
-    // Native thread: no async on the hot path.
-    let cfg = welcome.session_config(Role::Host);
-    let source = opts.source;
-    let (seconds, frames) = (opts.seconds, opts.frames);
-    let mode = hello.mode;
     // `$XDG_RUNTIME_DIR/punktfunk/stream` while this session streams. RAII retracts on every exit.
     let _stream_marker = crate::stream_marker::announce(crate::stream_marker::StreamInfo {
-        width: mode.width,
-        height: mode.height,
-        refresh_hz: mode.refresh_hz,
+        width: hello.mode.width,
+        height: hello.mode.height,
+        refresh_hz: hello.mode.refresh_hz,
         hdr: welcome.color.is_hdr(),
         client: client_name.clone().unwrap_or_default(),
         fingerprint: session_fp_hex.clone(),
@@ -1494,7 +1488,7 @@ pub(crate) async fn run_admitted(
     // The prep guard and the waiting row are held to the session's end.
     let (
         launch_target,
-        launch_for_dp,
+        launch_command,
         crate::session_launch::Prepared {
             claim: launch_claim,
             stamp: launch_stamp,
@@ -1511,183 +1505,109 @@ pub(crate) async fn run_admitted(
         &stop,
     )
     .await?;
-    // Welcome/acks/HUD speak wire budget. Encoder opens get the derived video rate (`EncDerive`).
-    // PyroWave: budget == encoder rate (bpp pin).
-    let bitrate_kbps = welcome.bitrate_kbps;
-    let audio_reserved_kbps = audio_reserved_kbps(&welcome);
-    // Automatic: host default. PyroWave is Automatic unconditionally (explicit rate overridden).
-    let bitrate_auto = hello.bitrate_kbps == 0 || codec == crate::encode::Codec::PyroWave;
-    let bit_depth = welcome.bit_depth;
-    // HDR from Welcome colour, not from depth: a 10-bit SDR session is 10 + SDR.
-    let hdr = welcome.color.is_hdr();
-    // Typed chroma from the Welcome byte. `Yuv444` only when the handshake gate passed.
-    let chroma = if welcome.chroma_format == punktfunk_core::quic::CHROMA_IDC_444 {
-        crate::encode::ChromaFormat::Yuv444
-    } else {
-        crate::encode::ChromaFormat::Yuv420
-    };
-    let stop_stream = stop.clone();
-    let quit_stream = quit.clone();
-    let end_reason_stream = end_reason.clone();
-    let counters_stream = counters.clone();
-    // Client HDR volume for EDID + 0xCE. `None` = older client / no HDR → built-in defaults.
-    let client_hdr = hello.display_hdr.map(crate::encode::hdr_meta_from_wire);
-    let conn_stream = conn.clone();
-    // 0xCF host-timing only if the client advertised the cap; older clients get no extra datagrams.
-    let timing_conn =
-        (hello.video_caps & punktfunk_core::quic::VIDEO_CAP_HOST_TIMING != 0).then(|| conn.clone());
-    // Client reassembles probe filler in its own index window. Bit clear → decline mid-session probes.
-    let probe_seq = hello.video_caps & punktfunk_core::quic::VIDEO_CAP_PROBE_SEQ != 0;
-    // Sentinel-headed streamed blocks: ship early FEC while the AU tail still encodes.
-    let streamed_au = hello.video_caps & punktfunk_core::quic::VIDEO_CAP_STREAMED_AU != 0;
-    // Absent ⇒ single-slice. Some TV-SoC decoders wedge on multi-slice AUs.
-    let multi_slice = hello.video_caps & punktfunk_core::quic::VIDEO_CAP_MULTI_SLICE != 0;
-    let stats_dp = stats;
-    let shared_dp = shared;
     // The title's `audio.sessions`, over every session on this display. Lifted with the session.
     let _audio_policy = hello
         .launch
         .as_deref()
         .and_then(crate::library::audio_sessions_for)
         .map(|policy| crate::session_status::apply_audio_policy(policy, &client_label));
-    // Punch + virtual-stream stages on the same trace; resizes write into the shared slot.
-    let bringup_dp = bringup.clone();
-    let resize_ms_dp = resize_ms.clone();
-    // Stream thread re-points input across compositor switches and hands identity to backends.
-    #[cfg(target_os = "linux")]
-    let isolation_dp = planes.isolation.clone();
-    #[cfg(target_os = "linux")]
-    let input_route_dp = planes.input_route.clone();
-    #[cfg(target_os = "linux")]
-    let inj_shared_tx_dp = inj_tx.clone();
-    #[cfg(target_os = "linux")]
-    let inj_session_tx_dp = planes.inj_session_tx.clone();
-    // Client address: what the registry groups sessions of one NAT or tunnel by.
-    let peer_ip = conn.remote_address().ip();
-    let plane = conn.plane();
     let result: Result<()> = async {
-        let stream_thread = tokio::task::spawn_blocking(move || -> Result<()> {
-            let (transport, wire_sock, media) = bind_data_plane(data_plane, &bringup_dp)?;
-            let session = Session::new(cfg, media, transport)
-                .map_err(|e| anyhow!("host session: {e:?}"))?;
-            let mut common = StreamCommon {
-                session,
-                mode,
-                seconds,
-                stop: stop_stream,
-                quit: quit_stream,
-                end_reason: end_reason_stream,
-                counters: counters_stream,
-                ends: stream_ends,
-                shared: shared_dp,
-                bitrate_kbps,
-                audio_reserved_kbps,
-                shard_payload: welcome.shard_payload,
-                timing_conn,
-                probe_seq,
-                stats: stats_dp,
-                client_label,
-                bringup: bringup_dp,
-                wire_sock,
-                codec,
-                controls,
-                client_name,
-                hdr,
-                bit_depth,
-                chroma,
-            };
-            // A display prep that started at Welcome (Windows) goes unreceived here and
-            // aborts into keep-alive: the tag arrives on Start, after the prep began.
-            if probe_only {
-                return stream::probe_only_stream(&mut common, probe_seq);
+        let (transport, wire_sock, media) = bind_data_plane(data_plane, &bringup)?;
+        let session = Session::new(welcome.session_config(Role::Host), media, transport)
+            .map_err(|e| anyhow!("host session: {e:?}"))?;
+        let common = StreamCommon {
+            session,
+            mode: hello.mode,
+            seconds: opts.seconds,
+            stop: stop.clone(),
+            quit,
+            end_reason,
+            counters,
+            ends: stream_ends,
+            shared,
+            bitrate_kbps: welcome.bitrate_kbps,
+            audio_reserved_kbps: audio_reserved_kbps(&welcome),
+            shard_payload: welcome.shard_payload,
+            // 0xCF host-timing only if the client advertised the cap.
+            timing_conn: (hello.video_caps & punktfunk_core::quic::VIDEO_CAP_HOST_TIMING != 0)
+                .then(|| conn.clone()),
+            // Client reassembles probe filler in its own index window. Clear → decline probes.
+            probe_seq: hello.video_caps & punktfunk_core::quic::VIDEO_CAP_PROBE_SEQ != 0,
+            stats,
+            client_label,
+            bringup,
+            wire_sock,
+            codec,
+            controls,
+            client_name,
+            // From Welcome colour, not from depth: a 10-bit SDR session is 10 + SDR.
+            hdr: welcome.color.is_hdr(),
+            bit_depth: welcome.bit_depth,
+            // `Yuv444` only when the handshake gate passed.
+            chroma: if welcome.chroma_format == punktfunk_core::quic::CHROMA_IDC_444 {
+                crate::encode::ChromaFormat::Yuv444
+            } else {
+                crate::encode::ChromaFormat::Yuv420
+            },
+        };
+        // The virtual source's display half. The stream thread owns it for every source, so the
+        // launch claim and the input sender drop with the thread, before teardown joins input.
+        let display = {
+            let conn = conn.clone();
+            let launch_outcome = launch_outcome_tx.clone();
+            // Re-points input across compositor switches and hands identity to backends.
+            #[cfg(target_os = "linux")]
+            let (isolation, input_route, inj_session_tx) = (
+                planes.isolation.clone(),
+                planes.input_route.clone(),
+                planes.inj_session_tx.clone(),
+            );
+            move |common| SessionContext {
+                common,
+                compositor: compositor
+                    .expect("the Virtual source resolves a compositor during the handshake"),
+                gamescope_route,
+                // PyroWave is Automatic unconditionally (an explicit rate is overridden).
+                bitrate_auto: hello.bitrate_kbps == 0 || codec == crate::encode::Codec::PyroWave,
+                cursor_forward,
+                // Sentinel-headed streamed blocks: ship early FEC while the AU tail still encodes.
+                streamed_au: hello.video_caps & punktfunk_core::quic::VIDEO_CAP_STREAMED_AU != 0,
+                multi_slice: hello.video_caps & punktfunk_core::quic::VIDEO_CAP_MULTI_SLICE != 0,
+                conn,
+                launch: launch_command,
+                launch_target,
+                launch_claim,
+                launch_stamp,
+                launch_owner,
+                launch_outcome,
+                // `None` = older client or no HDR: the EDID and 0xCE take built-in defaults.
+                client_hdr: hello.display_hdr.map(crate::encode::hdr_meta_from_wire),
+                join_live,
+                reframe_to,
+                frame_map,
+                #[cfg(target_os = "linux")]
+                gamescope_xwayland,
+                resize_ms,
+                #[cfg(target_os = "linux")]
+                input_tx: input_tx_stream,
+                #[cfg(target_os = "linux")]
+                isolation,
+                #[cfg(target_os = "linux")]
+                input_route,
+                #[cfg(target_os = "linux")]
+                inj_shared_tx: inj_tx,
+                #[cfg(target_os = "linux")]
+                inj_session_tx,
             }
-            match source {
-                Punktfunk1Source::Software => software_stream(
-                    &mut common.session,
-                    codec,
-                    mode,
-                    bitrate_kbps,
-                    &common.stop,
-                    &common.ends.probe_rx,
-                    &common.ends.probe_result_tx,
-                    &common.shared.fec_target,
-                    probe_seq,
-                ),
-                Punktfunk1Source::Synthetic => synthetic_stream(
-                    &mut common.session,
-                    frames,
-                    &common.stop,
-                    &common.ends,
-                    &common.shared.fec_target,
-                    common.timing_conn.as_ref(),
-                    probe_seq,
-                ),
-                Punktfunk1Source::SyntheticAbr(shape) => synthetic_abr_stream(SynthAbrContext {
-                    common,
-                    content: shape.content,
-                    recovery: shape.recovery,
-                    answer: shape.answer,
-                    idr_pct: shape.idr_pct,
-                    bringup_delay: shape.bringup,
-                    fit_pin: hello.bitrate_kbps == 0 && codec == crate::encode::Codec::PyroWave,
-                    plane,
-                    peer: peer_ip,
-                }),
-                Punktfunk1Source::Virtual => {
-                    let compositor = compositor
-                        .expect("the Virtual source resolves a compositor during the handshake");
-                    let ctx = SessionContext {
-                        common,
-                        compositor,
-                        gamescope_route,
-                        bitrate_auto,
-                        cursor_forward,
-                        streamed_au,
-                        multi_slice,
-                        conn: conn_stream,
-                        launch: launch_for_dp,
-                        launch_target,
-                        launch_claim,
-                        launch_stamp,
-                        launch_owner,
-                        launch_outcome: launch_outcome_dp,
-                        client_hdr,
-                        join_live,
-                        reframe_to,
-                        frame_map,
-                        #[cfg(target_os = "linux")]
-                        gamescope_xwayland,
-                        resize_ms: resize_ms_dp,
-                        #[cfg(target_os = "linux")]
-                        input_tx: input_tx_stream,
-                        #[cfg(target_os = "linux")]
-                        isolation: isolation_dp,
-                        #[cfg(target_os = "linux")]
-                        input_route: input_route_dp,
-                        #[cfg(target_os = "linux")]
-                        inj_shared_tx: inj_shared_tx_dp,
-                        #[cfg(target_os = "linux")]
-                        inj_session_tx: inj_session_tx_dp,
-                    };
-                    match prep {
-                        // Display prep started at Welcome: hand it the post-punch context.
-                        Some((ctx_tx, prep_thread)) => match ctx_tx.send(ctx) {
-                            Ok(()) => match prep_thread.join() {
-                                Ok(r) => r,
-                                Err(_) => Err(anyhow!("prepared stream thread panicked")),
-                            },
-                            // Prep died before hand-off (guard/lease unwound): build inline.
-                            Err(std::sync::mpsc::SendError(ctx)) => {
-                                tracing::warn!(
-                                    "display-prep thread gone before hand-off — building inline"
-                                );
-                                virtual_stream(ctx, None)
-                            }
-                        },
-                        None => virtual_stream(ctx, None),
-                    }
-                }
-            }
+        };
+        let fit_pin = hello.bitrate_kbps == 0 && codec == crate::encode::Codec::PyroWave;
+        // Client address: what the registry groups sessions of one NAT or tunnel by.
+        let (plane, peer) = (conn.plane(), conn.remote_address().ip());
+        // Native thread: no async on the hot path.
+        let stream_thread = tokio::task::spawn_blocking(move || {
+            run_source(
+                common, source, frames, probe_only, fit_pin, plane, peer, display, prep,
+            )
         });
         // `stop` is advisory: a stuck syscall inside an iteration never sees it, and teardown
         // waits on this join. Bound the wait: after `STREAM_STOP_GRACE`, abandon the thread
@@ -1936,6 +1856,82 @@ async fn prepare_launch(
             Ok((None, None, prepared))
         }
         None => Ok((target, command, prepared)),
+    }
+}
+
+/// The stream thread's body. A probe-only session answers probes and builds nothing; otherwise
+/// `source` streams on `common`. The virtual source wraps `common` with `display`, and a display
+/// prep that started at Welcome (`prep`) takes that context over and streams it.
+#[allow(clippy::too_many_arguments)]
+fn run_source(
+    mut common: StreamCommon,
+    source: Punktfunk1Source,
+    frames: u32,
+    probe_only: bool,
+    fit_pin: bool,
+    plane: crate::events::Plane,
+    peer: std::net::IpAddr,
+    display: impl FnOnce(StreamCommon) -> SessionContext,
+    prep: Option<stream::PrepHandle>,
+) -> Result<()> {
+    // A display prep that started at Welcome (Windows) goes unreceived here and
+    // aborts into keep-alive: the tag arrives on Start, after the prep began.
+    if probe_only {
+        let probe_seq = common.probe_seq;
+        return stream::probe_only_stream(&mut common, probe_seq);
+    }
+    match source {
+        Punktfunk1Source::Software => software_stream(
+            &mut common.session,
+            common.codec,
+            common.mode,
+            common.bitrate_kbps,
+            &common.stop,
+            &common.ends.probe_rx,
+            &common.ends.probe_result_tx,
+            &common.shared.fec_target,
+            common.probe_seq,
+        ),
+        Punktfunk1Source::Synthetic => synthetic_stream(
+            &mut common.session,
+            frames,
+            &common.stop,
+            &common.ends,
+            &common.shared.fec_target,
+            common.timing_conn.as_ref(),
+            common.probe_seq,
+        ),
+        Punktfunk1Source::SyntheticAbr(shape) => synthetic_abr_stream(SynthAbrContext {
+            common,
+            content: shape.content,
+            recovery: shape.recovery,
+            answer: shape.answer,
+            idr_pct: shape.idr_pct,
+            bringup_delay: shape.bringup,
+            fit_pin,
+            plane,
+            peer,
+        }),
+        Punktfunk1Source::Virtual => {
+            let ctx = display(common);
+            match prep {
+                // Display prep started at Welcome: hand it the post-punch context.
+                Some((ctx_tx, prep_thread)) => match ctx_tx.send(ctx) {
+                    Ok(()) => match prep_thread.join() {
+                        Ok(r) => r,
+                        Err(_) => Err(anyhow!("prepared stream thread panicked")),
+                    },
+                    // Prep died before hand-off (guard/lease unwound): build inline.
+                    Err(std::sync::mpsc::SendError(ctx)) => {
+                        tracing::warn!(
+                            "display-prep thread gone before hand-off — building inline"
+                        );
+                        virtual_stream(ctx, None)
+                    }
+                },
+                None => virtual_stream(ctx, None),
+            }
+        }
     }
 }
 
