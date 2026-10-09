@@ -942,4 +942,51 @@ mod tests {
         // Unknown wire byte degrades to Auto.
         assert_eq!(GamepadPref::from_u8(200), GamepadPref::Auto);
     }
+
+    /// The cross-language contract; the Swift `GamepadType` replays the same file.
+    #[test]
+    fn gamepad_kind_vectors() {
+        let raw = include_str!("../../../clients/shared/gamepad-kind-vectors.json");
+        let file: serde_json::Value = serde_json::from_str(raw).expect("vector file parses");
+        let kinds = file["kinds"].as_array().expect("kinds");
+        for (i, row) in kinds.iter().enumerate() {
+            let value = row["value"].as_u64().unwrap();
+            assert_eq!(value, i as u64, "rows run 0, 1, 2… with no gap");
+            let p = GamepadPref::from_u8(value as u8);
+            assert_eq!(u64::from(p.to_u8()), value, "{row}");
+            assert_eq!(p.as_str(), row["name"].as_str().unwrap(), "{row}");
+            assert_eq!(GamepadPref::from_name(p.as_str()), Some(p), "{row}");
+            assert_eq!(
+                p.has_motion(),
+                row["has_motion"].as_bool().unwrap(),
+                "{row}"
+            );
+            for alias in row["aliases"].as_array().unwrap() {
+                let alias = alias.as_str().unwrap();
+                assert_eq!(GamepadPref::from_name(alias), Some(p), "{alias}");
+                let loud = format!(" {} ", alias.to_ascii_uppercase());
+                assert_eq!(GamepadPref::from_name(&loud), Some(p), "{loud}");
+            }
+        }
+        // Every byte past the last row is unassigned, so a new kind needs a row.
+        for v in kinds.len()..=255 {
+            assert_eq!(GamepadPref::from_u8(v as u8), GamepadPref::Auto, "byte {v}");
+        }
+        for name in file["rejected_names"].as_array().expect("rejected_names") {
+            assert_eq!(
+                GamepadPref::from_name(name.as_str().unwrap()),
+                None,
+                "{name}"
+            );
+        }
+        let kind = |v: &serde_json::Value| GamepadPref::from_name(v.as_str().unwrap()).unwrap();
+        for row in file["motion_reaches"].as_array().expect("motion_reaches") {
+            let got = pad_motion_reaches(
+                kind(&row["declared"]),
+                kind(&row["asked"]),
+                kind(&row["resolved"]),
+            );
+            assert_eq!(got, row["want"].as_bool().unwrap(), "{}", row["why"]);
+        }
+    }
 }

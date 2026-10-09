@@ -1,7 +1,7 @@
 // The streaming overlay HUD: the core formats every stats line (`SessionModel.hudLines`, one
 // vocabulary for every client) and this view paints them by role on one glass card, beside the
 // Apple-only chrome (the tvOS access line, the capture hints, the buttons). `.off` never
-// reaches this view (ContentView gates the overlay on the tier).
+// reaches this view (StreamScene gates the overlay on the tier).
 
 import PunktfunkKit
 import SwiftUI
@@ -20,7 +20,7 @@ struct StreamHUDView: View {
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     var body: some View {
-        // .off is gated upstream (ContentView only mounts the HUD when the tier is on) —
+        // .off is gated upstream (StreamScene only mounts the HUD when the tier is on) —
         // render nothing if it ever slips through.
         if verbosity != .off {
             // ONE shared glass card wraps the tier-dependent content, so a verbosity change MORPHS
