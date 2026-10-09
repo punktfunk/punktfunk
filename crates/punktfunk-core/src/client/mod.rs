@@ -279,6 +279,8 @@ pub struct NativeClient {
     next_xfer_id: AtomicU32,
     /// Wrapping [`crate::quic::PenBatch::seq`]; the host's reorder gate compares it.
     pen_seq: AtomicU16,
+    /// The host's offer. The pub fields below are copies of it, read by embedders.
+    welcome: crate::quic::Welcome,
     pub host_caps: u8,
     pub host_caps2: u8,
     /// `0` when the host did not advertise a management port.
@@ -763,7 +765,8 @@ impl NativeClient {
                 }
             }
         };
-        *shared.mode.lock().unwrap() = negotiated.mode;
+        let welcome = negotiated.welcome;
+        *shared.mode.lock().unwrap() = welcome.mode;
         let hud = Arc::new(crate::hud::Stats::new(shared.clock_offset.clone()));
         Ok(NativeClient {
             shared,
@@ -788,10 +791,11 @@ impl NativeClient {
             clip_cmd_tx,
             next_xfer_id: AtomicU32::new(1),
             pen_seq: AtomicU16::new(0),
-            host_caps: negotiated.host_caps,
-            host_caps2: negotiated.host_caps2,
-            mgmt_port: negotiated.mgmt_port,
-            profile: negotiated.profile.clone(),
+            welcome,
+            host_caps: welcome.host_caps,
+            host_caps2: welcome.host_caps2,
+            mgmt_port: welcome.mgmt_port,
+            profile: negotiated.profile,
             worker: Some(worker),
             video_e2e_ns: Arc::new(AtomicU64::new(0)),
             audio_av_offset_ms: Arc::new(AtomicI64::new(0)),
@@ -800,25 +804,25 @@ impl NativeClient {
             // Match the pump: Automatic, not rate-pinned PyroWave, AND host echoed a rate.
             // Dropping the last term over-advertises against an old host that reports no rate.
             wants_decode: bitrate_kbps == 0
-                && negotiated.codec != crate::quic::CODEC_PYROWAVE
-                && negotiated.bitrate_kbps > 0,
+                && welcome.codec != crate::quic::CODEC_PYROWAVE
+                && welcome.bitrate_kbps > 0,
             host_fingerprint: negotiated.host_fingerprint,
-            resolved_compositor: negotiated.compositor,
-            resolved_gamepad: negotiated.gamepad,
+            resolved_compositor: welcome.compositor,
+            resolved_gamepad: welcome.gamepad,
             requested_gamepad,
-            resolved_bitrate_kbps: negotiated.bitrate_kbps,
-            shard_payload: negotiated.shard_payload,
+            resolved_bitrate_kbps: welcome.bitrate_kbps,
+            shard_payload: welcome.shard_payload,
             clock_offset_ns: negotiated.clock_offset_ns,
-            bit_depth: negotiated.bit_depth,
-            color: negotiated.color,
-            chroma_format: negotiated.chroma_format,
-            audio_channels: negotiated.audio_channels,
-            audio_codec: negotiated.audio_codec,
-            audio_sample_rate_hz: negotiated.audio_rate_hz,
-            audio_bits: negotiated.audio_bits,
-            audio_frame_us: negotiated.audio_frame_us,
-            audio_layout: negotiated.audio_layout,
-            codec: negotiated.codec,
+            bit_depth: welcome.bit_depth,
+            color: welcome.color,
+            chroma_format: welcome.chroma_format,
+            audio_channels: welcome.audio_channels,
+            audio_codec: welcome.audio_codec,
+            audio_sample_rate_hz: welcome.audio_rate_hz,
+            audio_bits: welcome.audio_bits,
+            audio_frame_us: welcome.audio_frame_us,
+            audio_layout: welcome.audio_layout,
+            codec: welcome.codec,
         })
     }
 
@@ -1544,6 +1548,12 @@ impl NativeClient {
         if let Some(f) = self.sc2.lock().unwrap().get_mut(usize::from(pad)) {
             f.gate = gate;
         }
+    }
+
+    /// The host's session offer as it arrived. Connect-time values: [`mode`](Self::mode),
+    /// [`access_grants`](Self::access_grants) and the live bitrate move on during the session.
+    pub fn welcome(&self) -> &crate::quic::Welcome {
+        &self.welcome
     }
 
     /// Welcome [`crate::quic::HOST_CAP_GAMEPAD_STATE`] / [`crate::quic::HOST_CAP_CLIPBOARD`].

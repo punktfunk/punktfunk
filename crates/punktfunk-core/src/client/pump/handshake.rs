@@ -17,7 +17,6 @@ pub(super) struct HandshakeOut {
     pub(super) ctrl_send: CtlSend,
     pub(super) ctrl_recv: CtlRecv,
     pub(super) negotiated: Negotiated,
-    pub(super) host_caps: u8,
     /// The host and port that run the session: a seat's after a redirect. A lost session is
     /// kept under them, so the next dial's resume reaches the host that holds it.
     pub(super) landed_at: (String, u16),
@@ -31,7 +30,7 @@ enum Dialed {
 
 /// The handshake's end: a session, or the host's `Redirect`.
 enum Step {
-    Session(Box<(Session, CtlSend, CtlRecv, Negotiated, u8)>),
+    Session(Box<(Session, CtlSend, CtlRecv, Negotiated)>),
     Redirected(Redirect),
 }
 
@@ -317,34 +316,12 @@ async fn dial(
             send,
             recv,
             Negotiated {
-                mode: welcome.mode,
-                compositor: welcome.compositor,
-                gamepad: welcome.gamepad,
+                welcome,
                 host_fingerprint: fingerprint,
-                bitrate_kbps: welcome.bitrate_kbps,
                 clock_offset_ns,
                 clock_rtt_ns,
-                bit_depth: welcome.bit_depth,
-                color: welcome.color,
-                chroma_format: welcome.chroma_format,
-                audio_channels: welcome.audio_channels,
-                // Welcome is the only authority — never claim a rate we did not get
-                // (`design/hi-res-audio.md`). An omitted tail is Opus / 48 kHz / 16.
-                audio_codec: welcome.audio_codec,
-                audio_rate_hz: welcome.audio_rate_hz,
-                audio_bits: welcome.audio_bits,
-                audio_frame_us: welcome.audio_frame_us,
-                audio_layout: welcome.audio_layout,
-                codec: welcome.codec,
-                shard_payload: welcome.shard_payload,
-                host_caps: welcome.host_caps,
-                host_caps2: welcome.host_caps2,
-                mgmt_port: welcome.mgmt_port,
-                grants: welcome.grants,
-                expires_in_secs: welcome.expires_in_secs,
                 profile: server.profile.clone(),
             },
-            welcome.host_caps,
         ))))
     };
     // Cancel and the connect deadline (both `shutdown`) reach a parked handshake too: the host
@@ -365,7 +342,7 @@ async fn dial(
     };
     match outcome {
         Ok(Step::Session(landed)) => {
-            let (session, send, recv, negotiated, host_caps) = *landed;
+            let (session, send, recv, negotiated) = *landed;
             Ok(Dialed::Session(Box::new(HandshakeOut {
                 conn: ClientConn::new(conn),
                 ep,
@@ -373,7 +350,6 @@ async fn dial(
                 ctrl_send: send,
                 ctrl_recv: recv,
                 negotiated,
-                host_caps,
                 landed_at: (host.to_string(), port),
             })))
         }
