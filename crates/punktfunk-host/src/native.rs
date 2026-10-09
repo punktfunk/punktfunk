@@ -1241,7 +1241,6 @@ pub(crate) async fn run_admitted(
     let preferred_pad_slot = session_fp_hex.as_deref().and_then(|fp| np.pad_slot_of(fp));
     let pad_id =
         crate::inject::pad_pool::PadIdentity::new(session_fp_hex.as_deref(), preferred_pad_slot);
-    let pad_slots = Arc::new(std::sync::atomic::AtomicU16::new(0));
     // Launch verdict lane. Unbounded and opened here so the library resolve below
     // can refuse onto it before the stream thread exists.
     let (launch_outcome_tx, launch_outcome_rx) =
@@ -1258,7 +1257,7 @@ pub(crate) async fn run_admitted(
         )),
         access_tx: Some(access_tx.clone()),
         audio_tx: Some(audio_tx),
-        pad_slots: pad_slots.clone(),
+        pad_slots: Arc::new(std::sync::atomic::AtomicU16::new(0)),
         fingerprint: session_fp_hex.clone(),
         preset: session_preset.clone(),
         profile: Some(profile_ref.clone()),
@@ -1370,56 +1369,24 @@ pub(crate) async fn run_admitted(
         &inj_tx,
         mic_tx,
     );
-    let input_route = planes.input_route.clone();
 
     // Stream loop parks the seat pointer through the same path client input takes.
     #[cfg(target_os = "linux")]
     let input_tx_stream = input_tx.clone();
-    let input_handle = {
-        let conn = conn.clone();
-        let stop = stop.clone();
-        let gamepad = welcome.gamepad;
-        // Read HOST_CAP_PAD_AUDIO back off Welcome so the input thread cannot disagree.
-        let pad_audio_on = welcome.host_caps & punktfunk_core::quic::HOST_CAP_PAD_AUDIO != 0;
-        let grants = session_grants.clone();
-        let frame_map = frame_map.clone();
-        let pad_feed = controls.pads.clone();
-        let counters = counters.clone();
-        let seat_dev = planes.seat_dev.clone();
-        std::thread::Builder::new()
-            .name("punktfunk1-input".into())
-            .spawn({
-                let input_route = input_route.clone();
-                move || {
-                    input_thread(
-                        input_rx,
-                        conn,
-                        input_route,
-                        gamepad,
-                        pad_audio_on,
-                        pad_id,
-                        pad_slots,
-                        Some(pad_tx),
-                        pad_writes,
-                        grants,
-                        frame_map,
-                        pad_feed,
-                        seat_dev,
-                        stop,
-                        counters,
-                    )
-                }
-            })
-            .context("spawn input thread")?
-    };
-    input::spawn_datagram_reader(
-        conn.clone(),
-        session_grants.clone(),
-        counters.clone(),
-        planes.mic_tx.clone(),
-        input_tx,
+    let input_handle = spawn_input_plane(
+        &conn,
+        &stop,
+        &welcome,
+        &controls,
+        &counters,
+        &planes,
+        &frame_map,
+        (input_tx, input_rx),
+        pad_id,
+        pad_tx,
+        pad_writes,
         feedback_tx,
-    );
+    )?;
 
     // Handshake complete: CONNECTED. A client rejected earlier never emits either.
     emit_connected(
@@ -1644,7 +1611,7 @@ pub(crate) async fn run_admitted(
     #[cfg(target_os = "linux")]
     let isolation_dp = planes.isolation.clone();
     #[cfg(target_os = "linux")]
-    let input_route_dp = input_route.clone();
+    let input_route_dp = planes.input_route.clone();
     #[cfg(target_os = "linux")]
     let inj_shared_tx_dp = inj_tx.clone();
     #[cfg(target_os = "linux")]
@@ -1845,6 +1812,74 @@ async fn place_profile(
             anyhow::bail!("seat refused: {reason}");
         }
     }
+}
+
+/// The input thread, and the datagram reader that feeds it client input, mic frames and the
+/// client's feedback. Grants, pad slots and the pad feed come from the session's `controls`;
+/// the pointer route, seat devices and mic from its `planes`. Teardown joins the thread.
+#[allow(clippy::too_many_arguments)]
+fn spawn_input_plane(
+    conn: &link::SessionLink,
+    stop: &Arc<AtomicBool>,
+    welcome: &Welcome,
+    controls: &crate::session_status::SessionControls,
+    counters: &Arc<crate::session_status::SessionCounters>,
+    planes: &SessionPlanes,
+    frame_map: &input::FrameMap,
+    (input_tx, input_rx): (
+        std::sync::mpsc::SyncSender<ClientInput>,
+        std::sync::mpsc::Receiver<ClientInput>,
+    ),
+    pad_id: crate::inject::pad_pool::PadIdentity,
+    pad_tx: tokio::sync::mpsc::UnboundedSender<input::PadToClient>,
+    pad_writes: bool,
+    feedback_tx: tokio::sync::mpsc::UnboundedSender<punktfunk_core::quic::v2::dgram::Feedback>,
+) -> Result<std::thread::JoinHandle<()>> {
+    let input_handle = {
+        let conn = conn.clone();
+        let stop = stop.clone();
+        let gamepad = welcome.gamepad;
+        // Read HOST_CAP_PAD_AUDIO back off Welcome so the input thread cannot disagree.
+        let pad_audio_on = welcome.host_caps & punktfunk_core::quic::HOST_CAP_PAD_AUDIO != 0;
+        let grants = controls.grants.clone();
+        let pad_slots = controls.pad_slots.clone();
+        let frame_map = frame_map.clone();
+        let pad_feed = controls.pads.clone();
+        let counters = counters.clone();
+        let seat_dev = planes.seat_dev.clone();
+        let input_route = planes.input_route.clone();
+        std::thread::Builder::new()
+            .name("punktfunk1-input".into())
+            .spawn(move || {
+                input_thread(
+                    input_rx,
+                    conn,
+                    input_route,
+                    gamepad,
+                    pad_audio_on,
+                    pad_id,
+                    pad_slots,
+                    Some(pad_tx),
+                    pad_writes,
+                    grants,
+                    frame_map,
+                    pad_feed,
+                    seat_dev,
+                    stop,
+                    counters,
+                )
+            })
+            .context("spawn input thread")?
+    };
+    input::spawn_datagram_reader(
+        conn.clone(),
+        controls.grants.clone(),
+        counters.clone(),
+        planes.mic_tx.clone(),
+        input_tx,
+        feedback_tx,
+    );
+    Ok(input_handle)
 }
 
 /// What admission resolved for this device: its effective grant mask, deadline and the record's
