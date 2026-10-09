@@ -22,6 +22,7 @@ use cros_codecs::codec::h265::parser::Sps;
 use pf_bitstream::h265::AuPlan;
 use pf_bitstream::h265::PicId;
 use pf_bitstream::h265::RefPic;
+use pf_bitstream::h265::RefRpsIdxError;
 
 use crate::uapi_stateless as uapi;
 use crate::uapi_stateless::V4l2CtrlHevcDecodeParams;
@@ -82,6 +83,11 @@ pub enum FillError {
         slice: usize,
         count: u32,
     },
+    /// `num_delta_pocs_of_ref_rps_idx` is not derivable from this plan.
+    RefRpsIdx(RefRpsIdxError),
+    /// The inline `st_ref_pic_set()` bit count exceeds the control's `u16`;
+    /// a header that large is corrupt.
+    StRpsBitsOverflow(u32),
 }
 
 impl std::fmt::Display for FillError {
@@ -109,6 +115,10 @@ impl std::fmt::Display for FillError {
                     f,
                     "slice {slice}: {count} entry points exceed the parser's 32"
                 )
+            }
+            FillError::RefRpsIdx(err) => write!(f, "{err}"),
+            FillError::StRpsBitsOverflow(bits) => {
+                write!(f, "inline st_ref_pic_set of {bits} bits exceeds u16")
             }
         }
     }
@@ -170,9 +180,11 @@ pub fn fill(
 
     let first = &plan.slices[0].header;
     let lt_bits = long_term_bits(first, sps);
-    let st_bits = pic
-        .short_term_ref_pic_set_size_bits
-        .min(u32::from(u16::MAX)) as u16;
+    let st_bits = u16::try_from(pic.short_term_ref_pic_set_size_bits)
+        .map_err(|_| FillError::StRpsBitsOverflow(pic.short_term_ref_pic_set_size_bits))?;
+    let num_delta_pocs = plan
+        .num_delta_pocs_of_ref_rps_idx()
+        .map_err(FillError::RefRpsIdx)?;
 
     let mut slices = Vec::with_capacity(plan.slices.len());
     let mut entry_points = Vec::new();
@@ -331,7 +343,7 @@ pub fn fill(
         poc_st_curr_before,
         poc_st_curr_after,
         poc_lt_curr,
-        num_delta_pocs_of_ref_rps_idx: ref_rps_delta_pocs(first, sps),
+        num_delta_pocs_of_ref_rps_idx: num_delta_pocs,
         reserved: [0; 3],
         dpb,
         flags: flags(&[
@@ -512,17 +524,9 @@ pub fn fill(
         ]),
     };
 
-    // PPS lists win unless only the SPS carried them.
-    let scaling = if sps.scaling_list_enabled_flag {
-        let lists = if sps.scaling_list_data_present_flag && !pps.scaling_list_data_present_flag {
-            &sps.scaling_list
-        } else {
-            &pps.scaling_list
-        };
-        scaling_matrix(lists)
-    } else {
-        V4l2CtrlHevcScalingMatrix::FLAT
-    };
+    let scaling = plan
+        .active_scaling_lists()
+        .map_or(V4l2CtrlHevcScalingMatrix::FLAT, scaling_matrix);
 
     Ok(Request {
         sps: sps_ctrl,
@@ -595,18 +599,6 @@ fn long_term_bits(hdr: &SliceHeader, sps: &Sps) -> u16 {
         }
     }
     bits.min(u32::from(u16::MAX)) as u16
-}
-
-/// `NumDeltaPocs[RefRpsIdx]` for a slice-coded, inter-predicted RPS; else 0.
-fn ref_rps_delta_pocs(hdr: &SliceHeader, sps: &Sps) -> u8 {
-    let rps = &hdr.short_term_ref_pic_set;
-    if hdr.short_term_ref_pic_set_sps_flag || !rps.inter_ref_pic_set_prediction_flag {
-        return 0;
-    }
-    usize::from(sps.num_short_term_ref_pic_sets)
-        .checked_sub(usize::from(rps.delta_idx_minus1) + 1)
-        .and_then(|i| sps.short_term_ref_pic_set.get(i))
-        .map_or(0, |r| r.num_delta_pocs.min(255) as u8)
 }
 
 /// The SPS's short-term sets, each written out explicitly. The parser keeps
@@ -802,5 +794,35 @@ mod tests {
             fill(&inter.1, inter.0, |_| None, false),
             Err(FillError::UnresolvedReference(_))
         ));
+    }
+
+    /// What the other rungs refuse is refused here too: an inline RPS that
+    /// predicts from a missing candidate, and an RPS bit count past `u16`.
+    #[test]
+    fn a_header_the_other_rungs_refuse_is_refused() {
+        let aus = split_h265_aus(H265_25FPS);
+        let plan = H265Planner::new().plan_au(aus[0]).expect("plans");
+
+        let mut bad_rps = plan.clone();
+        let inline = bad_rps.sps.num_short_term_ref_pic_sets;
+        let hdr = &mut bad_rps.slices[0].header;
+        hdr.short_term_ref_pic_set_sps_flag = false;
+        hdr.curr_rps_idx = inline;
+        hdr.short_term_ref_pic_set.inter_ref_pic_set_prediction_flag = true;
+        hdr.short_term_ref_pic_set.delta_idx_minus1 = inline; // RefRpsIdx = -1
+        assert_eq!(
+            fill(&bad_rps, aus[0], Some, false).unwrap_err(),
+            FillError::RefRpsIdx(RefRpsIdxError::Invalid {
+                curr_rps_idx: inline,
+                delta_idx_minus1: inline,
+            })
+        );
+
+        let mut bad_bits = plan;
+        bad_bits.picture.short_term_ref_pic_set_size_bits = 1 << 16;
+        assert_eq!(
+            fill(&bad_bits, aus[0], Some, false).unwrap_err(),
+            FillError::StRpsBitsOverflow(1 << 16)
+        );
     }
 }

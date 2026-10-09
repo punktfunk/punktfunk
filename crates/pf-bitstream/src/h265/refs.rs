@@ -1,5 +1,7 @@
 //! Reference facts every H.265 backend derives the same way from an [`AuPlan`].
 
+use cros_codecs::codec::h265::parser::ScalingLists;
+
 use super::AuPlan;
 use super::PicId;
 use super::RefPic;
@@ -162,5 +164,30 @@ impl AuPlan {
         // header on hardware, so a constructed plan that exceeds it is an error.
         u8::try_from(source.num_delta_pocs)
             .map_err(|_| RefRpsIdxError::NumDeltaPocsOverflow(source.num_delta_pocs))
+    }
+
+    /// The scaling lists this picture dequantizes with, or `None` when the SPS
+    /// disables them; a backend then submits no matrix at all.
+    ///
+    /// 7.4.5 takes the PPS's coded lists, else the SPS's coded lists, else the
+    /// Table 7-5/7-6 defaults. The parser default-fills an uncoded PPS and
+    /// leaves an uncoded SPS at zero, so the PPS copy carries the first and the
+    /// last case, and the SPS's wins only when it alone coded data. Taking the
+    /// SPS's whenever lists are enabled dequantizes every residual to nothing.
+    ///
+    /// VAAPI, DXVA and V4L2 take their one matrix from here. Vulkan passes the
+    /// SPS and PPS lists separately.
+    pub fn active_scaling_lists(&self) -> Option<&ScalingLists> {
+        let (sps, pps) = (&self.sps, &self.pps);
+        if !sps.scaling_list_enabled_flag {
+            return None;
+        }
+        Some(
+            if sps.scaling_list_data_present_flag && !pps.scaling_list_data_present_flag {
+                &sps.scaling_list
+            } else {
+                &pps.scaling_list
+            },
+        )
     }
 }
