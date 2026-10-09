@@ -44,14 +44,12 @@ import {
   clientUpdateIsManualOnly,
   clientUpdateIsOneTap,
   hasUpdate,
-  HostView,
-  needsPair,
   refreshHosts,
   startStream,
-  trustState,
   useHosts,
   useUpdate,
 } from "./hooks";
+import { type HostView, needsPair, trustState } from "./hosts";
 import {
   gamePageStreamEnabled,
   installGamePageStream,

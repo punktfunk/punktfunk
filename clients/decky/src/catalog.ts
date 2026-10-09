@@ -7,7 +7,7 @@
 // wakes it. A host the Deck can no longer see, or that no longer trusts it, loses its entry.
 import { toaster } from "@decky/api";
 import { library } from "./backend";
-import type { HostView } from "./hooks";
+import type { HostView } from "./hosts";
 
 export interface LibrarySnapshot {
   /** When it was fetched (ms since epoch). */
