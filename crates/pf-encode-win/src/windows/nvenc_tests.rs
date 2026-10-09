@@ -476,73 +476,17 @@ fn nvenc_ltr_soak() {
     });
 }
 
-/// Many waves in a row, each answering a frame lost two ahead of its start
-/// (`PUNKTFUNK_NVENC_IR_ALWAYS=1` turns the RFI into a wave), then `PF_WAVE_GAP` plain
-/// P frames. The view loses every such frame, so `wave-soak.ps1` can map each close and
-/// the drift after it. `PF_WAVE_SOAK=<waves>`; shape, scroll and noise as the smoke.
+/// The wave soak ([`crate::smoke_pattern::WaveSoak`], its `PF_WAVE_*` knobs) on the D3D11
+/// session: a fresh texture per frame, 10-bit as R10G10B10A2. `wave-soak.ps1` maps each
+/// close and the drift after it from the dumped view.
 ///
 /// `cargo test -p pf-encode-win --features nvenc nvenc_wave_soak -- --ignored --nocapture`
 #[test]
 #[ignore = "requires an NVIDIA GPU + driver — run manually on the RTX box (.173)"]
 fn nvenc_wave_soak() {
-    let shape = std::env::var("PF_WAVE_SMOKE").unwrap_or_else(|_| "256x256:8:120:1".into());
-    let waves: usize = std::env::var("PF_WAVE_SOAK")
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(12);
-    let gap: usize = std::env::var("PF_WAVE_GAP")
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(12);
-    // `PF_WAVE_SPOIL=1`: three frames into every wave a frame inside its sweep is lost,
-    // so it closes unmarked and the wave queued behind it is the one that must be exact.
-    // `PF_WAVE_IDR=1`: two frames into every wave an IDR is forced, which flushes it.
-    let spoil = std::env::var("PF_WAVE_SPOIL").is_ok_and(|v| v == "1");
-    let idr = std::env::var("PF_WAVE_IDR").is_ok_and(|v| v == "1");
-    // `PF_WAVE_CODEC=av1` runs with `PF_WAVE_ANCHOR=1`: NVENC AV1 never waves. The dump is
-    // `.obu` with its `.idx`, for `field_av1`.
-    let av1 = std::env::var("PF_WAVE_CODEC").is_ok_and(|v| v == "av1");
-    let (codec, ext) = if av1 {
-        (Codec::Av1, "obu")
-    } else {
-        (Codec::H265, "h265")
-    };
-    // `PF_WAVE_ANCHOR=1`: answer each loss with an RFI anchor instead of a wave (leave
-    // `PUNKTFUNK_NVENC_IR_ALWAYS` unset); the anchor P must decode exact at once.
-    let anchor = std::env::var("PF_WAVE_ANCHOR").is_ok_and(|v| v == "1");
-    // `PF_WAVE_LAG=<n>` (anchors only): the ask trails its loss by n frames, 2 by
-    // default. The n - 1 frames between decode concealed, as over a real round trip.
-    let lag: usize = std::env::var("PF_WAVE_LAG")
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(2);
-    assert!(
-        lag >= 1 && (lag == 2 || anchor),
-        "PF_WAVE_LAG=1.. with PF_WAVE_ANCHOR=1"
-    );
-    assert_ne!(
-        anchor,
-        std::env::var("PUNKTFUNK_NVENC_IR_ALWAYS").is_ok_and(|v| v == "1"),
-        "PUNKTFUNK_NVENC_IR_ALWAYS=1 makes every ask a wave; PF_WAVE_ANCHOR=1 wants anchors"
-    );
-    assert!(!(anchor && (spoil || idr)), "PF_WAVE_ANCHOR runs alone");
-    assert!(
-        !av1 || anchor,
-        "NVENC AV1 never waves: soak it with PF_WAVE_ANCHOR=1"
-    );
-    let mut parts = shape.split(':');
-    let (w, h) = parts
-        .next()
-        .and_then(|s| s.split_once('x'))
-        .map(|(w, h)| (w.parse::<u32>().unwrap(), h.parse::<u32>().unwrap()))
-        .expect("PF_WAVE_SMOKE=WxH[:bits[:fps[:mbps]]]");
-    let ten_bit = parts.next().is_some_and(|b| b == "10");
-    let fps: u32 = parts.next().map_or(60, |f| f.parse().unwrap());
-    let mbps: u64 = parts
-        .next()
-        .map_or(if w >= 1920 { 86 } else { 10 }, |m| m.parse().unwrap());
-    #[allow(non_snake_case)]
-    let (W, H) = (w, h);
+    use crate::smoke_pattern::scroll_pattern_rgb10;
+    let soak = crate::smoke_pattern::WaveSoak::from_env();
+    let (w, h, fps, ten_bit) = (soak.w, soak.h, soak.fps, soak.ten_bit);
     let (format, dxgi) = if ten_bit {
         (PixelFormat::Rgb10a2Sdr, DXGI_FORMAT_R10G10B10A2_UNORM)
     } else {
@@ -558,22 +502,19 @@ fn nvenc_wave_soak() {
             .expect("NVIDIA adapter");
         let (device, _ctx) = pf_frame::dxgi::make_device(&adapter).expect("make_device");
         let texture = |i: usize| {
-            let mut bytes = scroll_pattern(W as usize, H as usize, i);
-            if ten_bit {
-                for px in bytes.chunks_exact_mut(4) {
-                    let (b, g, r) = (px[0] as u32, px[1] as u32, px[2] as u32);
-                    let v = (r << 2) | ((g << 2) << 10) | ((b << 2) << 20) | (3 << 30);
-                    px.copy_from_slice(&v.to_le_bytes());
-                }
-            }
+            let bytes = if ten_bit {
+                scroll_pattern_rgb10(w as usize, h as usize, i)
+            } else {
+                scroll_pattern(w as usize, h as usize, i)
+            };
             let init = D3D11_SUBRESOURCE_DATA {
                 pSysMem: bytes.as_ptr() as *const _,
-                SysMemPitch: W * 4,
+                SysMemPitch: w * 4,
                 SysMemSlicePitch: 0,
             };
             let desc = D3D11_TEXTURE2D_DESC {
-                Width: W,
-                Height: H,
+                Width: w,
+                Height: h,
                 MipLevels: 1,
                 ArraySize: 1,
                 Format: dxgi,
@@ -593,148 +534,36 @@ fn nvenc_wave_soak() {
             tex.expect("null frame texture")
         };
         let mut enc = NvencD3d11Encoder::open(
-            codec,
+            soak.codec,
             format,
-            W,
-            H,
+            w,
+            h,
             fps,
-            mbps * 1_000_000,
+            soak.mbps * 1_000_000,
             if ten_bit { 10 } else { 8 },
             ChromaFormat::Yuv420,
             1,
             None,
         )
         .expect("NVENC open");
-        enc.prepare_d3d11(&device, format, W, H).expect("prepare");
-        assert!(
-            enc.caps().supports_rfi,
-            "the RTX box invalidates references"
-        );
-        let cycle = enc.s.wave_cycle() as usize;
-        assert!(cycle >= 2 || anchor, "the wave is on");
-        // Wave k starts at lag + 1 + k * period; its lost frame is `lag` before that. A
-        // spoiled wave is followed by the queued one, so its period holds two cycles.
-        assert!(
-            cycle > 3 || !spoil,
-            "the spoiling loss lands inside the sweep"
-        );
-        let period = if spoil {
-            2 * cycle + gap
-        } else {
-            cycle.max(lag) + gap
-        };
-        let base = lag + 1;
-        let last = base + waves * period;
-        let mut lost = Vec::new();
-        let mut starts = Vec::new();
-        let mut closes = Vec::new();
-        let mut idrs = Vec::new();
-        let mut anchors = Vec::new();
-        let mut aus = Vec::new();
-        for i in 0..=last {
-            let offset = (i >= base && (i - base) / period < waves).then(|| (i - base) % period);
-            match offset {
-                Some(0) => {
-                    let l = (i - lag) as i64;
-                    assert!(enc.invalidate_ref_frames(l, l), "the ask is answered");
-                    lost.push(i - lag);
-                    if anchor {
-                        assert!(enc.s.pending_anchor && enc.s.wave.is_none(), "an anchor");
-                        anchors.push(i);
-                    } else {
-                        assert_eq!(enc.s.wave.map(|w| w.index), Some(0), "a fresh wave");
-                        starts.push(i);
-                        if !spoil && !idr {
-                            closes.push(i + cycle - 1);
-                        }
-                    }
-                }
-                Some(2) if idr => {
-                    enc.request_keyframe();
-                    idrs.push(i);
-                }
-                Some(3) if spoil => {
-                    let l = (i - 1) as i64;
-                    assert!(enc.invalidate_ref_frames(l, l), "a loss inside the sweep");
-                    assert!(
-                        enc.s.wave_spoiled && enc.s.wave_queued,
-                        "spoiled, one queued"
-                    );
-                    lost.push(i - 1);
-                    starts.push(i - 3 + cycle);
-                    closes.push(i - 3 + 2 * cycle - 1);
-                }
-                _ => {}
-            }
-            let tex = texture(i);
-            let frame = CapturedFrame {
+        enc.prepare_d3d11(&device, format, w, h).expect("prepare");
+        soak.run(
+            "nvenc",
+            &mut enc,
+            |e| &e.s,
+            |i| CapturedFrame {
                 provenance: Default::default(),
-                width: W,
-                height: H,
+                width: w,
+                height: h,
                 pts_ns: i as u64 * 1_000_000_000 / u64::from(fps),
                 format,
                 payload: FramePayload::D3d11(D3d11Frame {
-                    texture: tex,
+                    texture: texture(i),
                     device: device.clone(),
                     pyro: None,
                 }),
                 cursor: None,
-            };
-            enc.submit_indexed(&frame, i as u32).expect("submit");
-            let au = enc.poll().expect("poll").expect("an AU per submit (sync)");
-            if idrs.last() == Some(&i) {
-                assert!(enc.s.wave.is_none(), "the IDR flushed the wave");
-            }
-            aus.push(au);
-        }
-        enc.flush().ok();
-        for (i, au) in aus.iter().enumerate() {
-            assert_eq!(
-                au.keyframe,
-                i == 0 || idrs.contains(&i),
-                "AU {i}: IDRs only where forced"
-            );
-            assert_eq!(
-                au.recovery_point,
-                starts.contains(&i) || closes.contains(&i),
-                "AU {i}: marks on every start and unspoiled close"
-            );
-            assert_eq!(
-                au.recovery_close,
-                closes.contains(&i),
-                "AU {i}: the close bit on every unspoiled close"
-            );
-            assert_eq!(
-                au.recovery_anchor,
-                anchors.contains(&i),
-                "AU {i}: anchors where asked"
-            );
-        }
-        let full: Vec<&[u8]> = aus.iter().map(|a| a.data.as_slice()).collect();
-        let view: Vec<&[u8]> = aus
-            .iter()
-            .enumerate()
-            .filter(|(i, _)| !lost.contains(i))
-            .map(|(_, a)| a.data.as_slice())
-            .collect();
-        let dir = std::env::var("PUNKTFUNK_SMOKE_DIR").unwrap_or_else(|_| ".".into());
-        let capture = crate::smoke_pattern::write_capture;
-        capture(&format!("{dir}/nvenc-wave.{ext}"), &full).expect("write");
-        capture(&format!("{dir}/nvenc-wave-dropS.{ext}"), &view).expect("write");
-        let csv = |v: &[usize]| {
-            v.iter()
-                .map(|n| n.to_string())
-                .collect::<Vec<_>>()
-                .join(",")
-        };
-        println!(
-            "nvenc_wave_soak: {W}x{H} {}-bit {fps} fps {mbps} Mbps cycle={cycle} gap={gap} \
-             waves={waves} aus={} lost={} closes={} spoil={spoil} idrs={}",
-            if ten_bit { 10 } else { 8 },
-            aus.len(),
-            csv(&lost),
-            csv(&closes),
-            csv(&idrs)
+            },
         );
     }
 }
@@ -836,9 +665,8 @@ fn encode_pattern(chroma: ChromaFormat, path: &str) {
     }
 }
 
-/// Encode a few frames, `reconfigure_bitrate` mid-stream (up and down), and assert
-/// every post-reconfigure AU is a P-frame (`resetEncoder=0` / `forceIDR=0` must not
-/// restart the stream). Windows counterpart of Linux `nvenc_cuda_reconfigure_no_idr`.
+/// An in-place rate retarget up and down emits no IDR
+/// ([`crate::smoke_pattern::reconfigure_no_idr`]).
 #[test]
 #[ignore = "requires an NVIDIA GPU + driver — run manually on the RTX box (.173)"]
 fn nvenc_reconfigure_no_idr() {
@@ -902,59 +730,23 @@ fn nvenc_reconfigure_no_idr() {
             None,
         )
         .expect("NVENC open");
-
-        let submit_and_poll = |enc: &mut NvencD3d11Encoder, range: std::ops::Range<u64>| {
-            let mut keyframes = 0usize;
-            let mut aus = 0usize;
-            for i in range {
-                let frame = CapturedFrame {
-                    provenance: Default::default(),
-                    width: W,
-                    height: H,
-                    pts_ns: i * 16_666_667,
-                    format: PixelFormat::Bgra,
-                    payload: FramePayload::D3d11(D3d11Frame {
-                        texture: tex.clone(),
-                        device: device.clone(),
-                        pyro: None,
-                    }),
-                    cursor: None,
-                };
-                enc.submit_indexed(&frame, i as u32).expect("submit");
-                while let Some(au) = enc.poll().expect("poll") {
-                    aus += 1;
-                    keyframes += au.keyframe as usize;
-                }
-            }
-            enc.flush().ok();
-            while let Ok(Some(au)) = enc.poll() {
-                aus += 1;
-                keyframes += au.keyframe as usize;
-            }
-            (aus, keyframes)
-        };
-
-        let (aus, kfs) = submit_and_poll(&mut enc, 0..4);
-        assert!(aus > 0, "no AUs before the reconfigure");
-        assert_eq!(kfs, 1, "exactly the opening IDR before the reconfigure");
-
-        assert!(
-            enc.reconfigure_bitrate(60_000_000),
-            "in-place reconfigure to 60 Mbps must succeed on RTX NVENC"
+        crate::smoke_pattern::reconfigure_no_idr(
+            &mut enc,
+            |i| CapturedFrame {
+                provenance: Default::default(),
+                width: W,
+                height: H,
+                pts_ns: i as u64 * 16_666_667,
+                format: PixelFormat::Bgra,
+                payload: FramePayload::D3d11(D3d11Frame {
+                    texture: tex.clone(),
+                    device: device.clone(),
+                    pyro: None,
+                }),
+                cursor: None,
+            },
+            &[60_000_000, 10_000_000],
         );
-        let (aus, kfs) = submit_and_poll(&mut enc, 4..8);
-        assert!(aus > 0, "no AUs after the up-reconfigure");
-        assert_eq!(kfs, 0, "an in-place rate retarget must not emit an IDR");
-
-        assert!(
-            enc.reconfigure_bitrate(10_000_000),
-            "in-place reconfigure down to 10 Mbps must succeed"
-        );
-        let (aus, kfs) = submit_and_poll(&mut enc, 8..12);
-        assert!(aus > 0, "no AUs after the down-reconfigure");
-        assert_eq!(kfs, 0, "an in-place rate retarget must not emit an IDR");
-
-        println!("nvenc (Windows) reconfigure smoke: 20→60→10 Mbps in place, zero IDRs");
     }
 }
 

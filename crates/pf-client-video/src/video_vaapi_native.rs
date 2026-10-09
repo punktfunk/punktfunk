@@ -2232,8 +2232,7 @@ mod tests {
     pub(super) const H265_25FPS: &[u8] = pf_bitstream::testing::H265_25FPS;
 
     /// 50 AUs, Main 10: different profile, RT format, and P010. Catches NV12 for 10-bit.
-    pub(super) const MAIN10_H265: &[u8] =
-        include_bytes!("../../pf-vkdecode/tests/data/test-main10.h265");
+    const MAIN10_H265: &[u8] = pf_bitstream::testing::parity::MAIN10.bytes;
 
     const H26X_AU_COUNT: usize = 250;
     const MAIN10_AU_COUNT: usize = 50;
@@ -2737,74 +2736,16 @@ mod parity {
 
     use sha2::Digest;
 
+    use pf_bitstream::testing::parity;
+    use pf_bitstream::testing::parity::Fixture;
     use pf_bitstream::testing::split_h264_aus;
     use pf_bitstream::testing::split_h265_aus;
-    use pf_bitstream::testing::split_ivf;
     // Test-only `ImageApi` re-dlopens libva and names these; the lib itself does not.
     use pf_libva::VaDisplay;
     use pf_libva::VaStatus;
     use pf_libva::VA_STATUS_SUCCESS;
 
-    use super::tests::AV1_25FPS;
-    use super::tests::H264_25FPS;
-    use super::tests::H265_25FPS;
-    use super::tests::MAIN10_H265;
     use super::*;
-
-    const GOLDENS_H264: &str = include_str!("../../pf-vkdecode/tests/data/test-25fps.nv12.sha256");
-    const GOLDENS_H265: &str =
-        include_str!("../../pf-vkdecode/tests/data/test-25fps-h265.nv12.sha256");
-    const GOLDENS_MAIN10: &str =
-        include_str!("../../pf-vkdecode/tests/data/test-main10.p010.sha256");
-    const GOLDENS_AV1: &str =
-        include_str!("../../pf-vkdecode/tests/data/test-25fps-av1.nv12.sha256");
-
-    /// Host low-delay H.264: `max_num_reorder_frames = 0`. Pixels-check of the
-    /// one-snapshot exemption (module docs).
-    const LOWDELAY_H264: &[u8] =
-        include_bytes!("../../pf-vkdecode/tests/data/lowdelay-640x480.h264");
-    const GOLDENS_LOWDELAY_H264: &str =
-        include_str!("../../pf-vkdecode/tests/data/lowdelay-640x480.nv12.sha256");
-
-    /// Host low-delay HEVC twin of [`LOWDELAY_H264`].
-    const LOWDELAY_H265: &[u8] =
-        include_bytes!("../../pf-vkdecode/tests/data/lowdelay-640x480.h265");
-    const GOLDENS_LOWDELAY_H265: &str =
-        include_str!("../../pf-vkdecode/tests/data/lowdelay-640x480-h265.nv12.sha256");
-
-    /// Host 4K AV1, two tiles in one Tile Group OBU. Decode coverage only — not the
-    /// wire path; packetisation once shipped only the first tile while this would pass.
-    const LOWDELAY_AV1: &[u8] =
-        include_bytes!("../../pf-vkdecode/tests/data/lowdelay-3840x2160.ivf.av1");
-    const GOLDENS_LOWDELAY_AV1: &str =
-        include_str!("../../pf-vkdecode/tests/data/lowdelay-3840x2160-av1.nv12.sha256");
-
-    /// Frame 0 is intra with no refs: a mismatch is readback geometry or tiles, not refs.
-    const AV1_FRAME0_NV12: &[u8] =
-        include_bytes!("../../pf-vkdecode/tests/data/test-25fps-av1.frame0.nv12");
-
-    const H26X_AU_COUNT: usize = 250;
-    const MAIN10_AU_COUNT: usize = 50;
-    const AV1_UNIT_COUNT: usize = 250;
-    const AV1_DECODED_COUNT: usize = 274;
-    const AV1_SHOWN_COUNT: usize = 250;
-    const DISPLAY_AV1: (u32, u32) = (320, 240);
-
-    /// Not derived from each other: a harness that computed hidden=0 from one stream
-    /// would stop checking the other.
-    const LOWDELAY_H264_AU_COUNT: usize = 120;
-    const LOWDELAY_H265_AU_COUNT: usize = 120;
-    const LOWDELAY_AV1_UNIT_COUNT: usize = 60;
-    const LOWDELAY_AV1_DECODED_COUNT: usize = 60;
-    const LOWDELAY_AV1_SHOWN_COUNT: usize = 60;
-    const DISPLAY_LOWDELAY_AV1: (u32, u32) = (3840, 2160);
-
-    fn golden_hashes(file: &'static str) -> Vec<&'static str> {
-        file.lines()
-            .map(str::trim)
-            .filter(|line| !line.is_empty() && !line.starts_with('#'))
-            .collect()
-    }
 
     fn sha256_hex(data: &[u8]) -> String {
         use std::fmt::Write as _;
@@ -3277,7 +3218,12 @@ mod parity {
                         "{what}: the two readback routes disagree on the picture's size"
                     );
                     if a != b {
-                        let diff = localise(a, b, display, fourcc);
+                        let layout = if fourcc == pf_vaapi::VA_FOURCC_P010 {
+                            parity::Layout::P010
+                        } else {
+                            parity::Layout::Nv12
+                        };
+                        let diff = parity::localise(a, b, display, layout);
                         panic!(
                             "{what}: vaDeriveImage and vaGetImage read DIFFERENT pixels \
                              out of one surface — {diff}. Derive is handing back memory \
@@ -3310,201 +3256,6 @@ mod parity {
                 self.route, self.derived, self.fetched
             )
         }
-    }
-
-    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-    struct Divergence {
-        luma_samples: usize,
-        chroma_samples: usize,
-        luma_box: Option<(u32, u32, u32, u32)>,
-        max_delta: u32,
-        /// P010 ten bits are in the high end; non-zero low six bits is a format error.
-        low_bits_set: usize,
-    }
-
-    impl std::fmt::Display for Divergence {
-        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            if self.luma_samples == 0 && self.chroma_samples == 0 {
-                return write!(f, "identical");
-            }
-            write!(
-                f,
-                "{} luma sample(s), {} chroma sample(s), max |delta| {}",
-                self.luma_samples, self.chroma_samples, self.max_delta
-            )?;
-            if let Some((x0, y0, x1, y1)) = self.luma_box {
-                write!(
-                    f,
-                    ", luma bounding box ({x0},{y0})..({x1},{y1}) = {}x{}",
-                    x1 - x0 + 1,
-                    y1 - y0 + 1
-                )?;
-            }
-            if self.chroma_samples == 0 {
-                write!(f, ", chroma CLEAN")?;
-            }
-            if self.low_bits_set > 0 {
-                write!(
-                    f,
-                    ", and {} sample(s) have their low six bits set — P010's ten bits \
-                     belong in the HIGH end of each word, so suspect the FORMAT before \
-                     the decode",
-                    self.low_bits_set
-                )?;
-            }
-            Ok(())
-        }
-    }
-
-    fn localise(got: &[u8], want: &[u8], display: (u32, u32), fourcc: u32) -> Divergence {
-        let stride = if fourcc == pf_vaapi::VA_FOURCC_P010 {
-            2usize
-        } else {
-            1
-        };
-        let (width, height) = (display.0 as usize, display.1 as usize);
-        let luma_bytes = width * height * stride;
-        let sample = |buf: &[u8], at: usize| -> u32 {
-            if stride == 2 {
-                u32::from(u16::from_le_bytes([buf[at], buf[at + 1]]))
-            } else {
-                u32::from(buf[at])
-            }
-        };
-        let mut d = Divergence {
-            luma_samples: 0,
-            chroma_samples: 0,
-            luma_box: None,
-            max_delta: 0,
-            low_bits_set: 0,
-        };
-        let end = got.len().min(want.len());
-        let mut at = 0usize;
-        while at + stride <= end {
-            let (a, b) = (sample(got, at), sample(want, at));
-            if stride == 2 && a & 0x3f != 0 {
-                d.low_bits_set += 1;
-            }
-            if a != b {
-                d.max_delta = d.max_delta.max(a.abs_diff(b));
-                if at < luma_bytes {
-                    d.luma_samples += 1;
-                    let index = at / stride;
-                    let (x, y) = ((index % width) as u32, (index / width) as u32);
-                    d.luma_box = Some(match d.luma_box {
-                        None => (x, y, x, y),
-                        Some((x0, y0, x1, y1)) => (x0.min(x), y0.min(y), x1.max(x), y1.max(y)),
-                    });
-                } else {
-                    d.chroma_samples += 1;
-                }
-            }
-            at += stride;
-        }
-        d
-    }
-
-    /// Planner walk alongside the rung. Hardware legs hash delivery order; CPU
-    /// guards check goldens against this. RASL skip contributes an empty `per_unit`.
-    struct Order {
-        decode: Vec<u64>,
-        display: Vec<u64>,
-        per_unit: Vec<Vec<u64>>,
-    }
-
-    impl Order {
-        fn empty() -> Order {
-            Order {
-                decode: Vec::new(),
-                display: Vec::new(),
-                per_unit: Vec::new(),
-            }
-        }
-    }
-
-    fn order_h264(aus: &[&[u8]]) -> Order {
-        let mut planner = pf_vaapi::H264Planner::new();
-        let mut order = Order::empty();
-        for (index, au) in aus.iter().enumerate() {
-            let plan = planner
-                .plan_au(au)
-                .unwrap_or_else(|e| panic!("AU {index}: the clean vector must plan, got {e:?}"));
-            assert_eq!(
-                (plan.picture.display_crop.x, plan.picture.display_crop.y),
-                (0, 0),
-                "AU {index}: this rung REFUSES a non-zero conformance-window origin \
-                 (`shape_of`), so a vector that had one could not be decoded here at all"
-            );
-            let id = plan
-                .dpb
-                .stored
-                .unwrap_or_else(|| panic!("AU {index}: every picture of this vector is stored"));
-            order.decode.push(id);
-            order.per_unit.push(vec![id]);
-            order.display.extend(plan.dpb.outputs.iter().copied());
-        }
-        order.display.extend(planner.flush().outputs);
-        order
-    }
-
-    fn order_h265(aus: &[&[u8]]) -> Order {
-        let mut planner = pf_vaapi::H265Planner::new();
-        let mut order = Order::empty();
-        for (index, au) in aus.iter().enumerate() {
-            let plan = match planner.plan_au(au) {
-                Ok(plan) => plan,
-                Err(pf_vaapi::PlanErrorH265::RaslSkipped { .. }) => {
-                    order.per_unit.push(Vec::new());
-                    continue;
-                }
-                Err(e) => panic!("AU {index}: the clean vector must plan, got {e:?}"),
-            };
-            assert_eq!(
-                (plan.picture.display_crop.x, plan.picture.display_crop.y),
-                (0, 0),
-                "AU {index}: this rung refuses a non-zero conformance-window origin"
-            );
-            let id = plan
-                .dpb
-                .stored
-                .unwrap_or_else(|| panic!("AU {index}: every picture of this vector is stored"));
-            order.decode.push(id);
-            order.per_unit.push(vec![id]);
-            order.display.extend(plan.dpb.outputs.iter().copied());
-        }
-        order.display.extend(planner.flush().outputs);
-        order
-    }
-
-    /// One decoded picture per FRAME; a unit may carry several. No planner flush.
-    fn order_av1(units: &[&[u8]], render: (u32, u32)) -> Order {
-        let mut planner = pf_vaapi::Av1Planner::new();
-        let mut order = Order::empty();
-        for (index, unit) in units.iter().enumerate() {
-            let plans = planner
-                .plan_au(unit)
-                .unwrap_or_else(|e| panic!("unit {index}: the clean vector must plan, got {e}"));
-            let mut this_unit = Vec::new();
-            for plan in &plans {
-                assert!(
-                    plan.warnings.is_empty(),
-                    "unit {index}: a clean vector must plan without warnings, got {:?}",
-                    plan.warnings
-                );
-                assert_eq!(
-                    (plan.picture.render_width, plan.picture.render_height),
-                    render,
-                    "unit {index}: the goldens are the {render:?} render region"
-                );
-                if let Some(id) = plan.dpb.stored {
-                    order.decode.push(id);
-                    this_unit.push(id);
-                }
-                order.display.extend(plan.dpb.outputs.iter().copied());
-            }
-            order.per_unit.push(this_unit);
-        }
-        order
     }
 
     /// Surface, display region, and fourcc from the delivered frame, not re-derived.
@@ -3678,40 +3429,21 @@ mod parity {
         );
     }
 
-    fn parity_run(
-        codec: pf_vaapi::Codec,
-        stream: StreamFormat,
-        aus: &[&[u8]],
-        order: &Order,
-        goldens: &[&str],
-        expected_aus: usize,
-        label: &str,
-    ) {
-        assert_eq!(
-            aus.len(),
-            expected_aus,
-            "{label}: the vector must split into {expected_aus} access units — a \
-             different count means this file's splitter disagrees with pf-bitstream's, \
-             and nothing below it is meaningful"
-        );
-        assert_eq!(
-            order.display.len(),
-            goldens.len(),
-            "{label}: the planner outputs {} pictures, the goldens carry {}",
-            order.display.len(),
-            goldens.len()
-        );
+    /// Decode `f` through the rung and compare what it delivers, `flush` included, with
+    /// libavcodec's goldens in display order.
+    fn parity_run(codec: pf_vaapi::Codec, stream: StreamFormat, f: &Fixture) {
+        let (aus, goldens, label) = (f.split(), f.goldens(), f.label);
 
         let mut decoder = NativeVaapiDecoder::new(codec, stream)
             .unwrap_or_else(|e| panic!("{label}: this box must host this profile — {e:#}"));
         let mut readback = Readback::new(&decoder.display);
         let dump_tag = std::env::var("PF_VAAPI_DUMP").ok();
 
-        let delivered = drive(&mut decoder, &mut readback, aus, label);
+        let delivered = drive(&mut decoder, &mut readback, &aus, label);
         dump(&dump_tag, label, "display0", &delivered.first_bytes);
-        check_delivery(&delivered, goldens, label);
+        check_delivery(&delivered, &goldens, label);
 
-        let (mismatches, first) = compare(&delivered.hashes, goldens, label);
+        let (mismatches, first) = compare(&delivered.hashes, &goldens, label);
         let readback_note = readback.summary();
         readback.destroy_staging(&decoder.display);
         verdict(
@@ -3726,55 +3458,34 @@ mod parity {
         );
     }
 
-    /// Temporal units, not pictures. Frame 0 pixels localise without a second GPU.
-    #[allow(clippy::too_many_arguments)]
-    fn av1_parity_run(
-        units: &[&[u8]],
-        order: &Order,
-        goldens: &[&str],
-        unit_count: usize,
-        decoded_count: usize,
-        shown_count: usize,
-        frame0_golden: Option<&[u8]>,
-        label: &str,
-    ) {
-        assert_eq!(
-            units.len(),
-            unit_count,
-            "{label}: the IVF reader disagrees with the stream's temporal-unit count"
-        );
-        assert_eq!(order.decode.len(), decoded_count);
-        assert_eq!(order.per_unit.len(), units.len());
-        assert_eq!(order.display.len(), goldens.len());
-        assert_eq!(order.display.len(), shown_count);
+    /// Temporal units, not pictures. With `frame0_golden`, frame 0 pixels localise without
+    /// a second GPU.
+    fn av1_parity_run(f: &Fixture, frame0_golden: Option<&[u8]>) {
+        let (units, goldens, label) = (f.split(), f.goldens(), f.label);
 
         let mut decoder = NativeVaapiDecoder::new(pf_vaapi::Codec::Av1, StreamFormat::SDR_420_8)
             .unwrap_or_else(|e| panic!("{label}: this box must host AV1 Profile 0 — {e:#}"));
         let mut readback = Readback::new(&decoder.display);
         let dump_tag = std::env::var("PF_VAAPI_DUMP").ok();
 
-        let delivered = drive(&mut decoder, &mut readback, units, label);
+        let delivered = drive(&mut decoder, &mut readback, &units, label);
         dump(&dump_tag, label, "display0", &delivered.first_bytes);
-        check_delivery(&delivered, goldens, label);
+        check_delivery(&delivered, &goldens, label);
 
-        let hidden = decoded_count - shown_count;
+        let hidden = f.decoded - f.shown;
         assert_eq!(
             delivered.hashes.len(),
-            shown_count,
-            "{label}: {decoded_count} pictures decode and {shown_count} display, so \
-             {hidden} must have been decoded and WITHHELD. On a stream with no hidden \
-             frames both sides are equal and this is a tautology — deliberately, so one \
-             harness serves both shapes"
+            f.shown,
+            "{label}: {} pictures decode and {} display, so {hidden} must have been \
+             decoded and WITHHELD. On a stream with no hidden frames both sides are equal \
+             and this is a tautology — deliberately, so one harness serves both shapes",
+            f.decoded,
+            f.shown
         );
 
         if let Some(golden) = frame0_golden {
             if delivered.first_bytes.as_slice() != golden {
-                let diff = localise(
-                    &delivered.first_bytes,
-                    golden,
-                    DISPLAY_AV1,
-                    pf_vaapi::VA_FOURCC_NV12,
-                );
+                let diff = parity::localise(&delivered.first_bytes, golden, f.display, f.layout);
                 panic!(
                     "{label}: display frame 0 does not match libavcodec's own pixels — \
                      {diff}. It is a KEY frame with no references, so this is readback \
@@ -3785,7 +3496,7 @@ mod parity {
             eprintln!("{label}: display frame 0 is byte-identical to libavcodec's pixels");
         }
 
-        let (mismatches, first) = compare(&delivered.hashes, goldens, label);
+        let (mismatches, first) = compare(&delivered.hashes, &goldens, label);
         let readback_note = readback.summary();
         readback.destroy_staging(&decoder.display);
         verdict(
@@ -3805,32 +3516,20 @@ mod parity {
     #[test]
     #[ignore = "needs a machine with a libva runtime and an H.264 VLD entry point"]
     fn h264_every_frame_hashes_bit_identical_to_libavcodec() {
-        let aus = split_h264_aus(H264_25FPS);
-        let order = order_h264(&aus);
         parity_run(
             pf_vaapi::Codec::H264,
             StreamFormat::SDR_420_8,
-            &aus,
-            &order,
-            &golden_hashes(GOLDENS_H264),
-            H26X_AU_COUNT,
-            "H.264",
+            &parity::H264,
         );
     }
 
     #[test]
     #[ignore = "needs a machine with a libva runtime and an H.264 VLD entry point"]
     fn low_delay_host_h264_every_frame_hashes_bit_identical_to_libavcodec() {
-        let aus = split_h264_aus(LOWDELAY_H264);
-        let order = order_h264(&aus);
         parity_run(
             pf_vaapi::Codec::H264,
             StreamFormat::SDR_420_8,
-            &aus,
-            &order,
-            &golden_hashes(GOLDENS_LOWDELAY_H264),
-            LOWDELAY_H264_AU_COUNT,
-            "H.264 (low-delay host stream)",
+            &parity::H264_LOWDELAY,
         );
     }
 
@@ -3882,32 +3581,20 @@ mod parity {
     #[test]
     #[ignore = "needs a machine with a libva runtime and an HEVC Main VLD entry point"]
     fn h265_every_frame_hashes_bit_identical_to_libavcodec() {
-        let aus = split_h265_aus(H265_25FPS);
-        let order = order_h265(&aus);
         parity_run(
             pf_vaapi::Codec::H265,
             StreamFormat::SDR_420_8,
-            &aus,
-            &order,
-            &golden_hashes(GOLDENS_H265),
-            H26X_AU_COUNT,
-            "H.265",
+            &parity::H265,
         );
     }
 
     #[test]
     #[ignore = "needs a machine with a libva runtime and an HEVC Main VLD entry point"]
     fn low_delay_host_h265_every_frame_hashes_bit_identical_to_libavcodec() {
-        let aus = split_h265_aus(LOWDELAY_H265);
-        let order = order_h265(&aus);
         parity_run(
             pf_vaapi::Codec::H265,
             StreamFormat::SDR_420_8,
-            &aus,
-            &order,
-            &golden_hashes(GOLDENS_LOWDELAY_H265),
-            LOWDELAY_H265_AU_COUNT,
-            "H.265 (low-delay host stream)",
+            &parity::H265_LOWDELAY,
         );
     }
 
@@ -3915,62 +3602,31 @@ mod parity {
     #[test]
     #[ignore = "needs a machine with a libva runtime and an HEVC Main 10 VLD entry point"]
     fn main10_every_frame_hashes_bit_identical_to_libavcodec() {
-        let aus = split_h265_aus(MAIN10_H265);
-        let order = order_h265(&aus);
-        parity_run(
-            pf_vaapi::Codec::H265,
-            StreamFormat {
-                bit_depth: 10,
-                ..StreamFormat::SDR_420_8
-            },
-            &aus,
-            &order,
-            &golden_hashes(GOLDENS_MAIN10),
-            MAIN10_AU_COUNT,
-            "HEVC Main 10",
-        );
+        let ten_bit = StreamFormat {
+            bit_depth: 10,
+            ..StreamFormat::SDR_420_8
+        };
+        parity_run(pf_vaapi::Codec::H265, ten_bit, &parity::MAIN10);
     }
 
     #[test]
     #[ignore = "needs a machine with a libva runtime and an AV1 VLD entry point"]
     fn av1_every_delivered_frame_hashes_bit_identical_to_libavcodec() {
-        let units = split_ivf(AV1_25FPS);
-        let order = order_av1(&units, DISPLAY_AV1);
-        av1_parity_run(
-            &units,
-            &order,
-            &golden_hashes(GOLDENS_AV1),
-            AV1_UNIT_COUNT,
-            AV1_DECODED_COUNT,
-            AV1_SHOWN_COUNT,
-            Some(AV1_FRAME0_NV12),
-            "AV1",
-        );
+        av1_parity_run(&parity::AV1, Some(parity::AV1_FRAME0));
     }
 
     /// Two tiles; the vendored vector is single-tile so `plan_to_va_av1` would stay degenerate.
     #[test]
     #[ignore = "needs a machine with a libva runtime and an AV1 VLD entry point"]
     fn low_delay_host_av1_every_frame_hashes_bit_identical_to_libavcodec() {
-        let units = split_ivf(LOWDELAY_AV1);
-        let order = order_av1(&units, DISPLAY_LOWDELAY_AV1);
-        av1_parity_run(
-            &units,
-            &order,
-            &golden_hashes(GOLDENS_LOWDELAY_AV1),
-            LOWDELAY_AV1_UNIT_COUNT,
-            LOWDELAY_AV1_DECODED_COUNT,
-            LOWDELAY_AV1_SHOWN_COUNT,
-            None,
-            "AV1 (low-delay host stream, 4K two-tile)",
-        );
+        av1_parity_run(&parity::AV1_LOWDELAY, None);
     }
 
     /// Fails rather than skips if neither route works.
     #[test]
     #[ignore = "needs a machine with a libva runtime and an H.264 VLD entry point"]
     fn probe_this_machines_readback_routes() {
-        let aus = split_h264_aus(H264_25FPS);
+        let aus = parity::H264.split();
         let mut decoder = NativeVaapiDecoder::new(pf_vaapi::Codec::H264, StreamFormat::SDR_420_8)
             .expect("this box is supposed to have a VAAPI H.264 decode entry point");
         let mut frame = None;
@@ -4029,8 +3685,7 @@ mod parity {
     #[test]
     #[ignore = "needs a machine with a libva runtime and an H.264 VLD entry point"]
     fn the_readback_reads_real_pixels_and_the_comparison_can_fail() {
-        let aus = split_h264_aus(H264_25FPS);
-        let goldens = golden_hashes(GOLDENS_H264);
+        let (aus, goldens) = (parity::H264.split(), parity::H264.goldens());
         let mut decoder = NativeVaapiDecoder::new(pf_vaapi::Codec::H264, StreamFormat::SDR_420_8)
             .expect("this box is supposed to have a VAAPI H.264 decode entry point");
         let mut readback = Readback::new(&decoder.display);
@@ -4077,11 +3732,11 @@ mod parity {
         // Centre luma of 320x240, so the box names a pixel, not a plane edge.
         let at = 120 * 320 + 160;
         corrupted[at] ^= 0x01;
-        let diff = localise(
+        let diff = parity::localise(
             &corrupted,
             &frames[victim],
             (320, 240),
-            pf_vaapi::VA_FOURCC_NV12,
+            parity::Layout::Nv12,
         );
         assert_eq!(
             diff.luma_samples, 1,
@@ -4140,133 +3795,6 @@ mod parity {
     }
 
     #[test]
-    fn every_golden_set_matches_its_planners_display_order() {
-        for (label, order, goldens) in [
-            (
-                "H.264",
-                order_h264(&split_h264_aus(H264_25FPS)),
-                golden_hashes(GOLDENS_H264),
-            ),
-            (
-                "H.264 low-delay",
-                order_h264(&split_h264_aus(LOWDELAY_H264)),
-                golden_hashes(GOLDENS_LOWDELAY_H264),
-            ),
-            (
-                "H.265",
-                order_h265(&split_h265_aus(H265_25FPS)),
-                golden_hashes(GOLDENS_H265),
-            ),
-            (
-                "H.265 low-delay",
-                order_h265(&split_h265_aus(LOWDELAY_H265)),
-                golden_hashes(GOLDENS_LOWDELAY_H265),
-            ),
-            (
-                "HEVC Main 10",
-                order_h265(&split_h265_aus(MAIN10_H265)),
-                golden_hashes(GOLDENS_MAIN10),
-            ),
-            (
-                "AV1",
-                order_av1(&split_ivf(AV1_25FPS), DISPLAY_AV1),
-                golden_hashes(GOLDENS_AV1),
-            ),
-            (
-                "AV1 low-delay 4K",
-                order_av1(&split_ivf(LOWDELAY_AV1), DISPLAY_LOWDELAY_AV1),
-                golden_hashes(GOLDENS_LOWDELAY_AV1),
-            ),
-        ] {
-            assert_eq!(
-                order.display.len(),
-                goldens.len(),
-                "{label}: the planner outputs {} pictures and the golden file carries {}",
-                order.display.len(),
-                goldens.len()
-            );
-            assert!(
-                order.decode.len() >= order.display.len(),
-                "{label}: a picture cannot be displayed without being decoded"
-            );
-            for id in &order.display {
-                assert!(
-                    order.decode.contains(id),
-                    "{label}: display order names PicId {id}, which nothing decodes — the \
-                     hardware legs would fail on this with a message about the rung"
-                );
-            }
-            assert_eq!(
-                goldens.len(),
-                goldens
-                    .iter()
-                    .collect::<std::collections::HashSet<_>>()
-                    .len(),
-                "{label}: two display frames carry the SAME golden hash. That is not \
-                 impossible in principle, but on these vectors it would mean the golden \
-                 file was generated from a stream that repeated a frame — and a parity \
-                 leg cannot tell a correctly repeated frame from a rung that delivered \
-                 one picture twice"
-            );
-        }
-    }
-
-    #[test]
-    fn the_two_av1_streams_are_the_opposite_shapes_the_legs_claim() {
-        let vendored = order_av1(&split_ivf(AV1_25FPS), DISPLAY_AV1);
-        assert_eq!(vendored.per_unit.len(), AV1_UNIT_COUNT);
-        assert_eq!(vendored.decode.len(), AV1_DECODED_COUNT);
-        assert_eq!(vendored.display.len(), AV1_SHOWN_COUNT);
-        assert_eq!(
-            vendored.per_unit.iter().filter(|u| u.len() > 1).count(),
-            AV1_DECODED_COUNT - AV1_SHOWN_COUNT,
-            "24 units must carry a hidden frame as well as the shown one — without them \
-             the AV1 leg proves nothing the H.264 leg does not already prove"
-        );
-
-        let ours = order_av1(&split_ivf(LOWDELAY_AV1), DISPLAY_LOWDELAY_AV1);
-        assert_eq!(ours.per_unit.len(), LOWDELAY_AV1_UNIT_COUNT);
-        assert_eq!(ours.decode.len(), LOWDELAY_AV1_DECODED_COUNT);
-        assert_eq!(ours.display.len(), LOWDELAY_AV1_SHOWN_COUNT);
-        assert!(
-            ours.per_unit.iter().all(|u| u.len() == 1),
-            "our host emits one frame per temporal unit and no hidden frames — the \
-             OPPOSITE shape to the vendored vector, which is why both legs exist"
-        );
-    }
-
-    #[test]
-    fn the_vendored_vectors_reorder_and_our_own_streams_do_not() {
-        for (label, order) in [
-            ("H.264", order_h264(&split_h264_aus(H264_25FPS))),
-            ("H.265", order_h265(&split_h265_aus(H265_25FPS))),
-        ] {
-            assert_ne!(
-                order.decode, order.display,
-                "{label}: this vector no longer reorders — the tail `flush` drains would \
-                 then be empty and these legs would stop covering the reordering path"
-            );
-        }
-        for (label, order) in [
-            (
-                "H.264 low-delay",
-                order_h264(&split_h264_aus(LOWDELAY_H264)),
-            ),
-            (
-                "H.265 low-delay",
-                order_h265(&split_h265_aus(LOWDELAY_H265)),
-            ),
-        ] {
-            assert_eq!(
-                order.decode, order.display,
-                "{label}: our host emits zero-reorder output, so decode order IS display \
-                 order — if that stops being true these fixtures no longer represent \
-                 what punktfunk streams"
-            );
-        }
-    }
-
-    #[test]
     fn the_comparison_catches_a_corrupted_frame() {
         let goldens = ["aa", "bb", "cc"];
         let clean: Vec<String> = goldens.iter().map(|g| (*g).to_string()).collect();
@@ -4291,64 +3819,5 @@ mod parity {
             (2, Some(0)),
             "the first divergence must be the FIRST one, not the last seen"
         );
-    }
-
-    #[test]
-    fn a_divergence_names_the_plane_the_box_and_the_magnitude() {
-        let (w, h) = (320u32, 240u32);
-        let clean = vec![0x40u8; (w * h + w * h / 2) as usize];
-
-        let mut one_block = clean.clone();
-        for y in 24..48u32 {
-            for x in 16..32u32 {
-                one_block[(y * w + x) as usize] = 0x48;
-            }
-        }
-        let d = localise(&one_block, &clean, (w, h), pf_vaapi::VA_FOURCC_NV12);
-        assert_eq!(d.luma_samples, 16 * 24);
-        assert_eq!(d.chroma_samples, 0);
-        assert_eq!(d.luma_box, Some((16, 24, 31, 47)));
-        assert_eq!(d.max_delta, 8);
-        assert!(format!("{d}").contains("chroma CLEAN"));
-        assert!(format!("{d}").contains("16x24"));
-
-        let structural = vec![0xffu8; clean.len()];
-        let d = localise(&structural, &clean, (w, h), pf_vaapi::VA_FOURCC_NV12);
-        assert_eq!(d.luma_samples, (w * h) as usize);
-        assert_eq!(d.chroma_samples, (w * h / 2) as usize);
-        assert_eq!(d.max_delta, 0xff - 0x40);
-        assert!(!format!("{d}").contains("chroma CLEAN"));
-
-        assert_eq!(
-            localise(&clean, &clean, (w, h), pf_vaapi::VA_FOURCC_NV12).luma_samples,
-            0
-        );
-        assert_eq!(
-            format!(
-                "{}",
-                localise(&clean, &clean, (w, h), pf_vaapi::VA_FOURCC_NV12)
-            ),
-            "identical"
-        );
-    }
-
-    /// P010 ten bits are high-aligned; LSB-aligned `yuv420p10le` has the right length.
-    #[test]
-    fn lsb_aligned_ten_bit_samples_are_called_out_as_a_format_problem() {
-        let (w, h) = (16u32, 16u32);
-        let samples = (w * h + w * h / 2) as usize;
-        let msb: Vec<u8> = (0..samples).flat_map(|_| 0x0200u16.to_le_bytes()).collect();
-        let lsb: Vec<u8> = (0..samples).flat_map(|_| 0x0008u16.to_le_bytes()).collect();
-
-        let d = localise(&lsb, &msb, (w, h), pf_vaapi::VA_FOURCC_P010);
-        assert_eq!(d.low_bits_set, samples, "every sample carries low bits");
-        assert!(
-            format!("{d}").contains("low six bits"),
-            "the report must point at the FORMAT: {d}"
-        );
-
-        let d = localise(&msb, &msb, (w, h), pf_vaapi::VA_FOURCC_P010);
-        assert_eq!(d.low_bits_set, 0);
-        assert_eq!(format!("{d}"), "identical");
     }
 }
