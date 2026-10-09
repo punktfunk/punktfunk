@@ -11,6 +11,7 @@
 //! - [`snapshot`]: the platform-neutral snapshot types and cache rules (tested everywhere).
 //! - [`console_display`]: the console display's power state and the wake a new monitor needs.
 //! - [`compose_probe`]: the recovery canary — a 1-pixel window repaint, never input.
+//! - [`open_wudfhost`]: the WUDFHost a driver channel duplicates handles into, image-path proved.
 
 #[cfg(target_os = "windows")]
 pub mod adl_emul;
@@ -48,6 +49,10 @@ pub fn multi_sz(items: &[&str]) -> Vec<u16> {
 pub mod topology_churn;
 #[cfg(target_os = "windows")]
 pub mod win_display;
+#[cfg(target_os = "windows")]
+mod wudfhost;
+#[cfg(target_os = "windows")]
+pub use wudfhost::{open_wudfhost, verify_is_wudfhost};
 
 /// Whether the machine-level seats marker reserves connector slots.
 /// Key existence is the signal; HKLM keeps an unprivileged seat process from
