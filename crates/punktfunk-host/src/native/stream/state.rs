@@ -680,9 +680,7 @@ impl StreamState {
         )));
         let force_idr = Arc::new(AtomicBool::new(false));
         let send_spread_us = Arc::new(AtomicU32::new(0));
-        let send_spread_send = Arc::clone(&send_spread_us);
         let wire_rekeys = Arc::new(AtomicU32::new(0));
-        let wire_rekeys_send = Arc::clone(&wire_rekeys);
         let driver_dropped = Arc::new(AtomicU64::new(0));
         let send_stats = SendStats {
             rec: stats.clone(),
@@ -700,34 +698,22 @@ impl StreamState {
             driver_dropped: driver_dropped.clone(),
             counters: counters.clone(),
         };
-        // Pipeline, launch and lease are up: take the data plane back. A step
-        // in flight finishes first, which is ≤ 50 ms.
-        let (session, probe_rx) = ramp.finish();
-        let send_thread = std::thread::Builder::new()
-            .name("punktfunk-send".into())
-            .spawn({
-                let stop = stop.clone();
-                let fec_target_send = fec_target.clone();
-                move || {
-                    send_loop(
-                        session,
-                        frame_rx,
-                        probe_rx,
-                        probe_result_tx,
-                        stop,
-                        perf,
-                        send_spread_send,
-                        wire_rekeys_send,
-                        slice_wire,
-                        fec_target_send,
-                        shard_rx,
-                        send_stats,
-                        timing_conn,
-                        probe_seq,
-                    )
-                }
-            })
-            .context("spawn send thread")?;
+        // Pipeline, launch and lease are up.
+        let send_thread = spawn_send_thread(
+            ramp,
+            frame_rx,
+            probe_result_tx,
+            &stop,
+            perf,
+            &send_spread_us,
+            &wire_rekeys,
+            slice_wire,
+            &fec_target,
+            shard_rx,
+            send_stats,
+            timing_conn,
+            probe_seq,
+        )?;
 
         let capture_health: Arc<std::sync::Mutex<Option<pf_capture::CaptureHealth>>> =
             Arc::new(std::sync::Mutex::new(None));
@@ -994,6 +980,52 @@ pub(super) fn adopt_built_bitrate(
     live.store(built, Ordering::Relaxed);
     // The host re-resolved what it encodes; nothing refused the client a rate.
     let _ = retarget.send((built, AckReason::Granted));
+}
+
+/// The send thread: take the data plane back from the bring-up ramp, then send what the encode
+/// loop queues on `frame_rx`. A ramp step in flight finishes first, which is ≤ 50 ms.
+#[allow(clippy::too_many_arguments)]
+fn spawn_send_thread(
+    ramp: ramp::RampServer,
+    frame_rx: std::sync::mpsc::Receiver<SendMsg>,
+    probe_result_tx: tokio::sync::mpsc::UnboundedSender<ProbeResult>,
+    stop: &Arc<AtomicBool>,
+    perf: bool,
+    send_spread_us: &Arc<AtomicU32>,
+    wire_rekeys: &Arc<AtomicU32>,
+    slice_wire: bool,
+    fec_target: &Arc<std::sync::atomic::AtomicU8>,
+    shard_rx: std::sync::mpsc::Receiver<usize>,
+    send_stats: SendStats,
+    timing_conn: Option<crate::native::link::SessionLink>,
+    probe_seq: bool,
+) -> Result<std::thread::JoinHandle<()>> {
+    let (session, probe_rx) = ramp.finish();
+    let stop = stop.clone();
+    let send_spread_us = send_spread_us.clone();
+    let wire_rekeys = wire_rekeys.clone();
+    let fec_target = fec_target.clone();
+    std::thread::Builder::new()
+        .name("punktfunk-send".into())
+        .spawn(move || {
+            send_loop(
+                session,
+                frame_rx,
+                probe_rx,
+                probe_result_tx,
+                stop,
+                perf,
+                send_spread_us,
+                wire_rekeys,
+                slice_wire,
+                fec_target,
+                shard_rx,
+                send_stats,
+                timing_conn,
+                probe_seq,
+            )
+        })
+        .context("spawn send thread")
 }
 
 /// Launch the session's title on the display it just opened, tell the client the verdict, and
