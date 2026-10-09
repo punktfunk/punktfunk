@@ -441,6 +441,11 @@ extension Notification.Name {
     /// handles the same combo directly; both end at `SessionModel.toggleMicMute`.
     public static let punktfunkToggleMicMute = Notification.Name("io.unom.punktfunk.toggle-mic-mute")
 
+    /// Posted by InputCapture's chord path (⌃⌥⇧C) while input is CAPTURED (`object` is the
+    /// session's connection). ContentView flips that session's clipboard sharing; released, the
+    /// Stream menu item handles the same combo.
+    public static let punktfunkToggleClipboard = Notification.Name("io.unom.punktfunk.toggle-clipboard")
+
     /// Posted by the Live Activity's / Shortcuts' End-stream intent (`EndStreamIntent.perform`,
     /// which runs in the app's process): the app tears the active session down deliberately
     /// (quit-close the host). Same cross-process-signal pattern as `punktfunkReleaseCapture` —

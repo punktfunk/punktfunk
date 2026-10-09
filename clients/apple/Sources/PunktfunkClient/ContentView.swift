@@ -510,6 +510,11 @@ struct ContentView: View {
             guard note.object as AnyObject === model.connection else { return }
             model.toggleMicMute()
         }
+        // ⌃⌥⇧C, captured: the same rule.
+        .onReceive(NotificationCenter.default.publisher(for: .punktfunkToggleClipboard)) { note in
+            guard note.object as AnyObject === model.connection else { return }
+            model.toggleClipboardSync()
+        }
         #endif
         #if os(macOS)
         // Fullscreen from launch under Always, else only while a session is up (incl. the trust

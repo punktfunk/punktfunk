@@ -25,8 +25,9 @@ final class KeyboardChordTests: XCTestCase {
     }
 
     /// The handler compares letters as VKs: O toggles the ring, Q releases, A mutes, D
-    /// disconnects, S cycles the stats.
+    /// disconnects, S cycles the stats, C flips clipboard sharing.
     func testChordLettersAreTheVKsTheirKeysSend() {
+        XCTAssertEqual(InputCapture.hidToVK[0x06], 0x43) // C
         XCTAssertEqual(InputCapture.hidToVK[0x12], 0x4F) // O
         XCTAssertEqual(InputCapture.hidToVK[0x14], 0x51) // Q
         XCTAssertEqual(InputCapture.hidToVK[0x04], 0x41) // A
@@ -35,7 +36,7 @@ final class KeyboardChordTests: XCTestCase {
     }
 
     /// Each platform's chord table holds exactly the ⌃⌥⇧ letters `ShortcutsCatalog` lists for it,
-    /// read from source because the app target is not importable. ⌃⌥⇧C is the Stream menu's alone.
+    /// read from source because the app target is not importable.
     func testChordTablesMatchTheShortcutsReference() throws {
         let url = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent() // PunktfunkKitTests
@@ -51,10 +52,9 @@ final class KeyboardChordTests: XCTestCase {
         func letters(_ chords: [InputCapture.Chord]) -> Set<String> {
             Set(chords.map { String(UnicodeScalar(UInt8($0.vk))) })
         }
-        let menuOnly: Set<String> = ["C"]
         let mac = try listed(from: "#if os(macOS)", to: "#elseif os(iOS) || os(visionOS)")
         let pad = try listed(from: "#elseif os(iOS) || os(visionOS)", to: "#elseif os(tvOS)")
-        XCTAssertEqual(letters(InputCapture.macChords), mac.subtracting(menuOnly))
-        XCTAssertEqual(letters(InputCapture.padChords), pad.subtracting(menuOnly))
+        XCTAssertEqual(letters(InputCapture.macChords), mac)
+        XCTAssertEqual(letters(InputCapture.padChords), pad)
     }
 }
