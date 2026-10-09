@@ -25,11 +25,10 @@ tracing = "0.1"
 opus = "0.4"
 
 [target.'cfg(target_os = "linux")'.dependencies]
-# Must match the pipewire crate ashpd 0.13 links (libspa/pipewire-sys `links` key is unique per
-# build), i.e. 0.9.
-pipewire = "0.10"
-# `pwinit::ensure_init`: the one process-wide PipeWire init capture and audio share.
-pf-capture = { path = "../pf-capture" }
+# One version across the workspace: pipewire-sys and libspa-sys carry a `links` key. Its
+# `init()` is OnceLock-guarded in 0.10.1, so callers need no wrapper; recheck on a bump.
+# `v0_3_49`: `Buffer::requested`, the virtual mic's per-cycle quantum.
+pipewire = { version = "0.10", features = ["v0_3_49"] }
 # The USB/IP DualSense's audio channel, and its pairing reply for the `{mac}` sink template.
 pf-inject = { path = "../pf-inject" }
 # `state_dir`: the pre-claim audio defaults, kept for the host start after a crash.

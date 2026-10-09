@@ -22,9 +22,9 @@ use super::{audio_control, MicBackendStats, VirtualMic, SAMPLE_RATE};
 use anyhow::{anyhow, Context, Result};
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
-use std::sync::mpsc::{sync_channel, SyncSender};
+use std::sync::mpsc::SyncSender;
 use std::sync::{Arc, Condvar, Mutex};
-use std::thread::{self, JoinHandle};
+use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 use wasapi::{Direction, SampleType, StreamMode, WaveFormat};
 
@@ -93,42 +93,33 @@ impl WasapiVirtualMic {
         let stop = Arc::new(AtomicBool::new(false));
         let alive = Arc::new(AtomicBool::new(true));
         let ring = Arc::new(RingShared::default());
-        // Ready channel: a missing device must surface as Err (pump retries),
-        // not a silent dead thread.
-        let (ready_tx, ready_rx) = sync_channel::<Result<String>>(1);
         let (q, st, rg, al) = (queue.clone(), stop.clone(), ring.clone(), alive.clone());
-        let join = thread::Builder::new()
-            .name("punktfunk-wasapi-mic".into())
-            .spawn(move || {
-                if let Err(e) = render_thread(q, st, rg, ready_tx) {
+        let (name, join) = crate::ready::spawn_ready(
+            "punktfunk-wasapi-mic",
+            Duration::from_secs(5),
+            move |ready| {
+                if let Err(e) = render_thread(q, st, rg, ready) {
                     tracing::error!(error = %format!("{e:#}"), "wasapi virtual-mic thread failed");
                 }
                 // Drop and device error both: this instance is done; the pump reopens.
                 al.store(false, Ordering::Release);
-            })
-            .context("spawn wasapi mic thread")?;
-        match ready_rx.recv_timeout(Duration::from_secs(5)) {
-            Ok(Ok(name)) => {
-                tracing::info!(device = %name,
-                    "WASAPI virtual mic ready (client mic → this device's render endpoint)");
-                Ok(WasapiVirtualMic {
-                    queue,
-                    stop,
-                    alive,
-                    ring,
-                    join: Some(join),
-                })
-            }
-            // The thread sent this and is already unwinding to its own `alive` store.
-            Ok(Err(e)) => Err(e),
-            Err(_) => {
-                // Nothing owns the thread on this path — no `WasapiVirtualMic` was built, so
-                // `Drop` never runs. Unset, it holds its render client forever and the pump's
-                // next retry spawns another. Detached: it exits at its next `stop` check.
+            },
+            |join| {
+                // No `WasapiVirtualMic` owns the thread here, so no `Drop` stops it: unset, it
+                // holds its render client forever.
                 stop.store(true, Ordering::SeqCst);
-                Err(anyhow!("wasapi virtual-mic init timed out"))
-            }
-        }
+                crate::ready::reap_timed_out("wasapi virtual-mic", join)
+            },
+        )?;
+        tracing::info!(device = %name,
+            "WASAPI virtual mic ready (client mic → this device's render endpoint)");
+        Ok(WasapiVirtualMic {
+            queue,
+            stop,
+            alive,
+            ring,
+            join: Some(join),
+        })
     }
 }
 

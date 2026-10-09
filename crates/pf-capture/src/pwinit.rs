@@ -1,6 +1,5 @@
-//! PipeWire library init, shared by the video portal and audio capture threads.
-//! `pw_init` is not concurrent-safe on first use; RTSP PLAY starts both paths
-//! at once, so init goes through a `Once`.
+//! PipeWire library init for the video capture thread, and the libpipewire version logged once.
+//! `pipewire::init()` guards itself; the `Once` here is for the log.
 
 #[cfg(target_os = "linux")]
 pub fn ensure_init() {

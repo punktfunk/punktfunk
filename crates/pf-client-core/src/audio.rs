@@ -53,8 +53,7 @@ pub fn devices() -> Result<(Vec<AudioDevice>, Vec<AudioDevice>)> {
     use std::cell::RefCell;
     use std::rc::Rc;
 
-    static PW_INIT: std::sync::Once = std::sync::Once::new();
-    PW_INIT.call_once(pw::init);
+    pw::init();
 
     let mainloop = pw::main_loop::MainLoopRc::new(None).context("pw MainLoop")?;
     let context = pw::context::ContextRc::new(&mainloop, None).context("pw Context")?;
@@ -254,8 +253,7 @@ fn pw_thread(
     use spa::param::audio::{AudioFormat, AudioInfoRaw};
     use spa::pod::Pod;
 
-    static PW_INIT: std::sync::Once = std::sync::Once::new();
-    PW_INIT.call_once(pw::init);
+    pw::init();
 
     let channels = fmt.channels as usize;
 
@@ -609,8 +607,7 @@ fn mic_thread(
     use spa::param::audio::{AudioFormat, AudioInfoRaw};
     use spa::pod::Pod;
 
-    static PW_INIT: std::sync::Once = std::sync::Once::new();
-    PW_INIT.call_once(pw::init);
+    pw::init();
 
     // The callback drains every frame it fills, so no backlog builds to self-heal.
     let mic = punktfunk_core::audio::mic::MicEncoder::new(false)

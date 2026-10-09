@@ -53,21 +53,21 @@ impl WasapiLoopbackCapturer {
         anyhow::ensure!(rate_hz > 0, "audio capture rate must be positive");
         let (tx, rx) = sync_channel::<Vec<f32>>(64);
         let stop = Arc::new(AtomicBool::new(false));
-        // Handshake: a missing render endpoint is Err (native plane retries), not a silent dead thread.
-        let (ready_tx, ready_rx) = sync_channel::<Result<()>>(1);
         let stop_t = stop.clone();
         let active = Arc::new(AtomicBool::new(true));
         let active_t = active.clone();
         // Honest until the endpoint is read; also the final answer on the common 48 kHz path.
         let opened_rate = Arc::new(AtomicU32::new(rate_hz));
         let opened_rate_t = opened_rate.clone();
-        let join = thread::Builder::new()
-            .name("punktfunk-wasapi-audio".into())
-            .spawn(move || {
+        // 30 s: first open may auto-install the Steam Streaming pair (two driver installs, ~5 s each).
+        let ((), join) = crate::ready::spawn_ready(
+            "punktfunk-wasapi-audio",
+            Duration::from_secs(30),
+            move |ready| {
                 if let Err(e) = capture_thread(
                     tx,
                     stop_t,
-                    ready_tx,
+                    ready,
                     channels,
                     rate_hz,
                     active_t,
@@ -75,33 +75,27 @@ impl WasapiLoopbackCapturer {
                 ) {
                     tracing::error!(error = %format!("{e:#}"), "wasapi loopback thread failed");
                 }
-            })
-            .context("spawn wasapi audio thread")?;
-        // 30 s: first open may auto-install the Steam Streaming pair (two driver installs, ~5 s each).
-        match ready_rx.recv_timeout(Duration::from_secs(30)) {
-            Ok(Ok(())) => {
-                // Settled rate, not `rate_hz` — a log must not print one rate while the stream carries another.
-                tracing::info!(
-                    channels,
-                    rate_hz = opened_rate.load(Ordering::Relaxed),
-                    "WASAPI loopback capture: f32"
-                );
-                Ok(WasapiLoopbackCapturer {
-                    chunks: rx,
-                    channels,
-                    stop,
-                    join: Some(join),
-                    active,
-                    opened_rate,
-                })
-            }
-            Ok(Err(e)) => Err(e),
-            Err(_) => {
-                // Otherwise it captures for the process lifetime with the playback default still parked.
+            },
+            |join| {
+                // Unstopped, it captures for the process lifetime with the playback default parked.
                 stop.store(true, Ordering::SeqCst);
-                Err(anyhow!("wasapi loopback init timed out"))
-            }
-        }
+                crate::ready::reap_timed_out("wasapi loopback", join)
+            },
+        )?;
+        // Settled rate, not `rate_hz` — a log must not print one rate while the stream carries another.
+        tracing::info!(
+            channels,
+            rate_hz = opened_rate.load(Ordering::Relaxed),
+            "WASAPI loopback capture: f32"
+        );
+        Ok(WasapiLoopbackCapturer {
+            chunks: rx,
+            channels,
+            stop,
+            join: Some(join),
+            active,
+            opened_rate,
+        })
     }
 }
 
