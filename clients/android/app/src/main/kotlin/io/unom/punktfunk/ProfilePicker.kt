@@ -37,15 +37,14 @@ import io.unom.punktfunk.kit.ListedProfile
 import io.unom.punktfunk.kit.ProfilePick
 import io.unom.punktfunk.kit.SeatGate
 import io.unom.punktfunk.kit.initials
-import io.unom.punktfunk.kit.library.mgmtBase
-import io.unom.punktfunk.kit.library.mtlsHttpClient
+import io.unom.punktfunk.kit.library.MgmtReply
+import io.unom.punktfunk.kit.library.mgmtCall
 import io.unom.punktfunk.kit.pickerDecision
 import io.unom.punktfunk.kit.seatGate
 import io.unom.punktfunk.kit.security.ClientIdentity
 import io.unom.punktfunk.kit.security.KnownHost
 import io.unom.punktfunk.kit.security.KnownHostStore
 import io.unom.punktfunk.kit.wakingLine
-import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -66,36 +65,30 @@ private const val PROFILES_WAIT_MS = 3_000L
 /** The gap between two looks at a seat that is coming up. */
 private const val SEAT_POLL_MS = 2_000L
 
-/** Asks a paired host who can play on it, over the same mTLS client as [HostActions]. Blocking. */
+/** Asks a paired host who can play on it, over [mgmtCall] like [HostActions]. Blocking. */
 object HostProfiles {
     private const val TAG = "HostProfiles"
 
-    private fun client(identity: ClientIdentity, addr: String, fpHex: String) =
-        mtlsHttpClient(identity.certPem, identity.privateKeyPem, addr, fpHex)
-            .newBuilder().callTimeout(PROFILES_WAIT_MS, TimeUnit.MILLISECONDS).build()
-
-    fun fetch(identity: ClientIdentity, addr: String, mgmtPort: Int, fpHex: String): ProfilesAnswer =
-        runCatching {
-            val req = Request.Builder().url("${mgmtBase(addr, mgmtPort)}/api/v1/profiles/enumerate").get().build()
-            client(identity, addr, fpHex).newCall(req).execute().use { resp ->
-                when {
-                    resp.code == 404 -> ProfilesAnswer.NoProfiles
-                    !resp.isSuccessful -> ProfilesAnswer.Failed("the host answered ${resp.code}")
-                    else -> ListedProfile.parseList(resp.body.string())
-                        ?.let { ProfilesAnswer.Listed(it) } ?: ProfilesAnswer.Failed("bad answer")
-                }
-            }
-        }.getOrElse { ProfilesAnswer.Failed(it.message ?: "no answer") }
+    /** A host without the route has no profiles; a refusal or no answer is [ProfilesAnswer.Failed]. */
+    fun fetch(identity: ClientIdentity, addr: String, mgmtPort: Int, fpHex: String): ProfilesAnswer {
+        val reply = mgmtCall(identity, addr, mgmtPort, fpHex, PROFILES_WAIT_MS) { base ->
+            Request.Builder().url("$base/api/v1/profiles/enumerate").get().build()
+        }
+        return when {
+            reply is MgmtReply.Answer && reply.code == 404 -> ProfilesAnswer.NoProfiles
+            reply is MgmtReply.Answer && reply.ok -> ListedProfile.parseList(reply.body)
+                ?.let { ProfilesAnswer.Listed(it) } ?: ProfilesAnswer.Failed("the host's answer made no sense")
+            else -> ProfilesAnswer.Failed(reply.why)
+        }
+    }
 
     /** Starts a stopped seat. `enumerate` says whether it came up, so a failure is only logged. */
     fun wake(identity: ClientIdentity, addr: String, mgmtPort: Int, fpHex: String, id: String) {
-        runCatching {
-            val req = Request.Builder().url("${mgmtBase(addr, mgmtPort)}/api/v1/profiles/$id/wake")
+        val reply = mgmtCall(identity, addr, mgmtPort, fpHex, PROFILES_WAIT_MS) { base ->
+            Request.Builder().url("$base/api/v1/profiles/$id/wake")
                 .post(ByteArray(0).toRequestBody(null, 0, 0)).build()
-            client(identity, addr, fpHex).newCall(req).execute().use { resp ->
-                if (!resp.isSuccessful) Log.i(TAG, "profile seat did not wake: the host answered ${resp.code}")
-            }
-        }.onFailure { Log.i(TAG, "profile seat did not wake", it) }
+        }
+        if (reply is MgmtReply.Answer && !reply.ok) Log.i(TAG, "profile seat did not wake: status ${reply.code}")
     }
 }
 

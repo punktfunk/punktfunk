@@ -1130,7 +1130,7 @@ object SkiaConsole {
             return
         }
         ioPool.execute {
-            val outcome = LibraryClient.endGame(addr, mgmt, id.certPem, id.privateKeyPem, fp, appId)
+            val outcome = LibraryClient.endGame(id, addr, mgmt, fp, appId)
             main.post {
                 notice(outcome.notice(title))
                 fetchLibrary(c, refreshOnly = true)
@@ -1152,8 +1152,7 @@ object SkiaConsole {
             return
         }
         ioPool.execute {
-            val outcome =
-                LibraryClient.changeInstall(addr, mgmt, id.certPem, id.privateKeyPem, fp, appId, action)
+            val outcome = LibraryClient.changeInstall(id, addr, mgmt, fp, appId, action)
             main.post {
                 notice(outcome.notice(action, title))
                 val removed = outcome == InstallOutcome.Done && action == InstallAction.Remove

@@ -3,6 +3,7 @@ package io.unom.punktfunk.kit.library
 import android.util.Log
 import io.unom.punktfunk.kit.NativeBridge
 import io.unom.punktfunk.kit.SessionAccess
+import io.unom.punktfunk.kit.security.ClientIdentity
 import okhttp3.Cache
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.MediaType.Companion.toMediaType
@@ -33,7 +34,7 @@ import javax.net.ssl.X509TrustManager
 // host's unified game library from its management REST API (`GET /api/v1/library`) over **mTLS**: the
 // paired client presents its persistent cert/key (the same identity the host paired over QUIC), and
 // the host's self-signed cert is pinned by SHA-256(DER). Reads the library and what is running;
-// [LibraryClient.endGame] is the one write. Mirrors the GameEntry/Artwork schema in
+// writes go through [mgmtCall]. Mirrors the GameEntry/Artwork schema in
 // crates/punktfunk-host/src/library.rs.
 
 /** The management API's default port — matches `mgmt::DEFAULT_PORT` on the host and the Apple client. */
@@ -604,61 +605,48 @@ object LibraryClient {
      * `POST /api/v1/game/end` for one title, live session included (`streaming`). The host ends it
      * only if this device launched it. BLOCKING; call from IO.
      */
-    fun endGame(
-        address: String,
-        mgmtPort: Int = DEFAULT_MGMT_PORT,
-        certPem: String,
-        keyPem: String,
-        fpHex: String,
-        appId: String,
-    ): GameEnd {
+    fun endGame(id: ClientIdentity, address: String, mgmtPort: Int, fpHex: String, appId: String): GameEnd {
         if (fpHex.isBlank() || appId.isBlank()) return GameEnd.Failed("this host isn't paired")
-        return try {
-            val body = JSONObject().put("app_id", appId).put("streaming", true)
-            val req = Request.Builder()
-                .url("${mgmtBase(address, mgmtPort)}/api/v1/game/end")
-                .post(body.toString().toRequestBody("application/json".toMediaType()))
-                .build()
-            mtlsHttpClient(certPem, keyPem, address, fpHex).newCall(req).execute()
-                .use { GameEnd.fromStatus(it.code) }
-        } catch (e: Exception) {
-            Log.w(TAG, "end game failed", e)
-            GameEnd.Failed(e.message ?: "couldn't reach the host")
+        val body = JSONObject().put("app_id", appId).put("streaming", true)
+        return when (
+            val reply = mgmtCall(id, address, mgmtPort, fpHex) { base ->
+                Request.Builder().url("$base/api/v1/game/end")
+                    .post(body.toString().toRequestBody("application/json".toMediaType()))
+                    .build()
+            }
+        ) {
+            is MgmtReply.Answer -> GameEnd.fromStatus(reply.code)
+            MgmtReply.Unreachable -> GameEnd.Failed(reply.why)
         }
     }
 
     /**
-     * Start, resume, pause or remove a title's download (`/api/v1/library/install/{id}`).
-     * BLOCKING; call from IO.
+     * Start, resume, pause or remove a title's download (`/api/v1/library/install/{id}`). A
+     * refusal carries the host's own sentence. BLOCKING; call from IO.
      */
     fun changeInstall(
+        id: ClientIdentity,
         address: String,
-        mgmtPort: Int = DEFAULT_MGMT_PORT,
-        certPem: String,
-        keyPem: String,
+        mgmtPort: Int,
         fpHex: String,
         appId: String,
         action: InstallAction,
     ): InstallOutcome {
         if (fpHex.isBlank() || appId.isBlank()) return InstallOutcome.Failed("this host isn't paired")
-        return try {
-            val url = "${mgmtBase(address, mgmtPort)}/api/v1/library/install/" +
-                java.net.URLEncoder.encode(appId, "UTF-8").replace("+", "%20").replace("%3A", ":")
-            val empty = ByteArray(0).toRequestBody(null)
-            val req = when (action) {
-                InstallAction.Install, InstallAction.Resume -> Request.Builder().url(url).post(empty)
-                InstallAction.Pause -> Request.Builder().url("$url/pause").post(empty)
-                InstallAction.Remove -> Request.Builder().url(url).delete()
-            }.build()
-            mtlsHttpClient(certPem, keyPem, address, fpHex).newCall(req).execute().use { resp ->
-                val message = runCatching {
-                    str(JSONObject(resp.body.string()), "message")
-                }.getOrNull()
-                InstallOutcome.fromReply(resp.code, message)
+        val path = "/api/v1/library/install/" +
+            java.net.URLEncoder.encode(appId, "UTF-8").replace("+", "%20").replace("%3A", ":")
+        val empty = ByteArray(0).toRequestBody(null)
+        return when (
+            val reply = mgmtCall(id, address, mgmtPort, fpHex) { base ->
+                when (action) {
+                    InstallAction.Install, InstallAction.Resume -> Request.Builder().url(base + path).post(empty)
+                    InstallAction.Pause -> Request.Builder().url("$base$path/pause").post(empty)
+                    InstallAction.Remove -> Request.Builder().url(base + path).delete()
+                }.build()
             }
-        } catch (e: Exception) {
-            Log.w(TAG, "install change failed", e)
-            InstallOutcome.Failed(e.message ?: "couldn't reach the host")
+        ) {
+            is MgmtReply.Answer -> InstallOutcome.fromReply(reply.code, reply.apiError)
+            MgmtReply.Unreachable -> InstallOutcome.Failed(reply.why)
         }
     }
 
@@ -821,6 +809,54 @@ object LibraryClient {
     /** Host-relative art path (`/api/v1/library/art/...`) → absolute against the host; else unchanged. */
     private fun resolveArt(s: String?, base: String): String? =
         if (s != null && s.startsWith("/")) base + s else s
+}
+
+/** The sentence a person sees, after a dash, when a management call got no answer. */
+const val MGMT_UNREACHABLE = "the request didn't reach the host"
+
+/** What one management-API call came to. */
+sealed interface MgmtReply {
+    /** Why it is not a success, in the user register: the host's own sentence, else its status. */
+    val why: String
+
+    /** The host answered. [apiError] is the `ApiError` envelope's `error`, when it sent one. */
+    data class Answer(val code: Int, val body: String, val apiError: String?) : MgmtReply {
+        val ok: Boolean get() = code in 200..299
+        override val why: String get() = apiError ?: "the host refused it ($code)"
+
+        companion object {
+            fun of(code: Int, body: String) = Answer(
+                code, body,
+                runCatching { JSONObject(body).optString("error") }.getOrNull()?.takeIf { it.isNotBlank() },
+            )
+        }
+    }
+
+    /** No answer: the connection, the TLS pin or the request itself failed. The cause is logged. */
+    data object Unreachable : MgmtReply {
+        override val why: String get() = MGMT_UNREACHABLE
+    }
+}
+
+/**
+ * One request to a paired host's management API over [mtlsHttpClient]. [build] gets the
+ * [mgmtBase] URL. [callTimeoutMs] caps the whole call; zero leaves the client's own timeouts.
+ * The exception behind [MgmtReply.Unreachable] goes to the log, never to a person. BLOCKING.
+ */
+fun mgmtCall(
+    id: ClientIdentity,
+    addr: String,
+    mgmtPort: Int,
+    fpHex: String,
+    callTimeoutMs: Long = 0,
+    build: (base: String) -> Request,
+): MgmtReply = try {
+    var client = mtlsHttpClient(id.certPem, id.privateKeyPem, addr, fpHex)
+    if (callTimeoutMs > 0) client = client.newBuilder().callTimeout(callTimeoutMs, TimeUnit.MILLISECONDS).build()
+    client.newCall(build(mgmtBase(addr, mgmtPort))).execute().use { MgmtReply.Answer.of(it.code, it.body.string()) }
+} catch (e: Exception) {
+    Log.w("pf.mgmt", "mgmt call to $addr", e)
+    MgmtReply.Unreachable
 }
 
 /**

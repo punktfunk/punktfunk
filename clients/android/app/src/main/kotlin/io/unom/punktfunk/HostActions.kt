@@ -1,8 +1,8 @@
 package io.unom.punktfunk
 
-import io.unom.punktfunk.kit.library.mgmtBase
+import io.unom.punktfunk.kit.library.MgmtReply
+import io.unom.punktfunk.kit.library.mgmtCall
 import io.unom.punktfunk.kit.security.ClientIdentity
-import android.util.Log
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONObject
@@ -25,8 +25,6 @@ import org.json.JSONObject
  * Blocking — call it off the main thread.
  */
 object HostActions {
-    private const val TAG = "HostActions"
-
     /** One action as the host reports it to THIS device. */
     data class Action(
         /** Stable id, the invoke argument (`power.sleep`). */
@@ -54,36 +52,32 @@ object HostActions {
      * What this host lets this device do to it (`GET /api/v1/actions`). Only the PERMITTED rows
      * come back: what a device may not invoke is not its business to render.
      */
-    fun list(identity: ClientIdentity, addr: String, mgmtPort: Int, fpHex: String): List<Action> =
-        runCatching {
-            val client = io.unom.punktfunk.kit.library.mtlsHttpClient(
-                identity.certPem, identity.privateKeyPem, addr, fpHex,
+    fun list(identity: ClientIdentity, addr: String, mgmtPort: Int, fpHex: String): List<Action> {
+        val reply = mgmtCall(identity, addr, mgmtPort, fpHex) { base ->
+            Request.Builder().url("$base/api/v1/actions").get().build()
+        }
+        if (reply !is MgmtReply.Answer || !reply.ok) return emptyList()
+        val arr = runCatching { JSONObject(reply.body).optJSONArray("actions") }.getOrNull()
+            ?: return emptyList()
+        return (0 until arr.length()).mapNotNull { i ->
+            val o = arr.optJSONObject(i) ?: return@mapNotNull null
+            if (!o.optBoolean("permitted")) return@mapNotNull null
+            val id = o.optString("id")
+            Action(
+                id = id,
+                label = label(id, o.optString("title")),
+                danger = o.optBoolean("danger"),
+                available = o.optBoolean("available"),
+                unavailableReason = o.optString("unavailable_reason"),
             )
-            val req = Request.Builder().url("${mgmtBase(addr, mgmtPort)}/api/v1/actions").get().build()
-            client.newCall(req).execute().use { resp ->
-                if (!resp.isSuccessful) return@runCatching emptyList()
-                val arr = JSONObject(resp.body.string()).optJSONArray("actions")
-                    ?: return@runCatching emptyList()
-                (0 until arr.length()).mapNotNull { i ->
-                    val o = arr.optJSONObject(i) ?: return@mapNotNull null
-                    if (!o.optBoolean("permitted")) return@mapNotNull null
-                    val id = o.optString("id")
-                    Action(
-                        id = id,
-                        label = label(id, o.optString("title")),
-                        danger = o.optBoolean("danger"),
-                        available = o.optBoolean("available"),
-                        unavailableReason = o.optString("unavailable_reason"),
-                    )
-                }
-            }
-        }.getOrDefault(emptyList())
+        }
+    }
 
     /**
      * Invoke one action by id (`POST /api/v1/actions/{id}`, empty body) and return the
      * user-facing outcome.
      *
-     * A 202 is the last word: the host ends every session and acts about a second later, so
+     * A 2xx is the last word: the host ends every session and acts about a second later, so
      * there is nothing to poll and nothing to undo. A refusal carries the host's own reason
      * ("another device is streaming from this host right now"), which tells a person what to do
      * where a bare status code would not.
@@ -97,32 +91,18 @@ object HostActions {
         actionId: String,
         label: String,
     ): String {
-        val err = runCatching {
-            val client = io.unom.punktfunk.kit.library.mtlsHttpClient(
-                identity.certPem, identity.privateKeyPem, addr, fpHex,
-            )
-            val req = Request.Builder()
-                .url("${mgmtBase(addr, mgmtPort)}/api/v1/actions/$actionId")
+        val reply = mgmtCall(identity, addr, mgmtPort, fpHex) { base ->
+            Request.Builder()
+                .url("$base/api/v1/actions/$actionId")
                 // Empty body by design: the id is the whole request, and no request field ever
                 // reaches the host's privileged path.
                 .post(ByteArray(0).toRequestBody(null, 0, 0))
                 .build()
-            client.newCall(req).execute().use { resp ->
-                if (resp.isSuccessful) {
-                    ""
-                } else {
-                    // The `ApiError` envelope carries the host's sentence; fall back to the code
-                    // only when there isn't one.
-                    runCatching {
-                        JSONObject(resp.body.string()).optString("error")
-                    }.getOrNull()?.takeIf { it.isNotEmpty() } ?: "the host refused (${resp.code})"
-                }
-            }
-        }.getOrElse {
-            // The exception text is OkHttp/TLS internals — for the log, not the toast.
-            Log.w(TAG, "action $actionId on $addr", it)
-            "the request didn't reach the host"
         }
-        return if (err.isEmpty()) "$hostName: $label — on its way" else "$label failed — $err"
+        return if (reply is MgmtReply.Answer && reply.ok) {
+            "$hostName: $label — on its way"
+        } else {
+            "$label failed — ${reply.why}"
+        }
     }
 }

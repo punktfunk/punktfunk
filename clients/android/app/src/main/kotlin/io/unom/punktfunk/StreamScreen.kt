@@ -513,10 +513,7 @@ fun StreamScreen(session: ActiveSession, onSessionEnded: (SessionEndReason) -> U
                 scope.launch {
                     val outcome = withContext(Dispatchers.IO) {
                         (IdentityStore(context).load() as? IdentityLoad.Ok)?.identity?.let { id ->
-                            LibraryClient.endGame(
-                                kh.address, kh.effectiveMgmtPort, id.certPem, id.privateKeyPem,
-                                kh.fpHex, appId,
-                            )
+                            LibraryClient.endGame(id, kh.address, kh.effectiveMgmtPort, kh.fpHex, appId)
                         } ?: GameEnd.Failed("this device has no identity yet")
                     }
                     // Gone either way: leave as End stream does. A refusal keeps the stream.
