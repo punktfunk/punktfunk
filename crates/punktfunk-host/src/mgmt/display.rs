@@ -574,7 +574,7 @@ pub(crate) struct MonitorsResponse {
         (status = UNAUTHORIZED, description = "Missing or invalid bearer token", body = ApiError),
     )
 )]
-pub(crate) async fn get_display_monitors() -> Json<MonitorsResponse> {
+pub(crate) async fn get_display_monitors() -> Result<Json<MonitorsResponse>, Response> {
     let pin_supported = cfg!(any(target_os = "linux", target_os = "windows"));
     // Effective pin (env override, else stored policy): highlight what sessions will mirror.
     // With no mirror backend report `None` even if a pin is stored — highlighting a head
@@ -584,7 +584,7 @@ pub(crate) async fn get_display_monitors() -> Json<MonitorsResponse> {
         .flatten();
     // Shells out / D-Bus / Wayland, and on Windows walks CCD (can serialize on the display-config
     // lock). Off the async worker.
-    let (compositor, listed) = tokio::task::spawn_blocking(|| {
+    let (compositor, listed) = blocking("monitor list", || {
         // No compositor to detect. Label the CCD walk as `windows` instead of Linux XDG advice.
         #[cfg(windows)]
         {
@@ -599,8 +599,7 @@ pub(crate) async fn get_display_monitors() -> Json<MonitorsResponse> {
             Err(e) => (None, Err(e)),
         }
     })
-    .await
-    .unwrap_or_else(|e| (None, Err(anyhow::anyhow!("enumeration task failed: {e}"))));
+    .await?;
     let (monitors, error) = match listed {
         Ok(ms) => (
             ms.into_iter()
@@ -623,13 +622,13 @@ pub(crate) async fn get_display_monitors() -> Json<MonitorsResponse> {
         ),
         Err(e) => (Vec::new(), Some(format!("{e:#}"))),
     };
-    Json(MonitorsResponse {
+    Ok(Json(MonitorsResponse {
         compositor,
         monitors,
         pinned,
         pin_supported,
         error,
-    })
+    }))
 }
 
 /// Request body for `releaseDisplay`.
