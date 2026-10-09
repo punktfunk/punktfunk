@@ -587,7 +587,7 @@
 	"diag_attention_link": "Troubleshooting",
 	"diag_attention_more": "and {count} more",
 	"diag_takeover_privilege_title": "Display-manager takeover",
-	"diag_virtual_deck_vhci_title": "Virtual Steam Deck controller",
+	"diag_virtual_deck_vhci_title": "USB/IP controllers",
 	"diag_uinput_access_title": "Virtual controller support",
 	"diag_server_conflict_title": "Competing streaming server",
 	"diag_vdisplay_driver_title": "Virtual display driver",

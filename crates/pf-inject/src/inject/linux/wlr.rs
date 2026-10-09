@@ -8,6 +8,7 @@
 //! operator's physical display, never the session head.
 
 use super::{gs_button_to_evdev, vk_to_evdev, InputEvent, InputInjector};
+use crate::head_pick::{self, HeadFacts, StreamTarget};
 use crate::scroll::{AxisSource, ScrollBackend, ScrollMapper, ScrollOp};
 use anyhow::{bail, Context, Result};
 use punktfunk_core::input::InputKind;
@@ -51,22 +52,22 @@ struct Globals {
     outputs: Vec<Output>,
 }
 
-/// Index of `want` in advertisement order. No fallback: a miss is `None`
-/// (whole-layout mapping). First-advertised is the operator's physical head.
-///
-/// Split from [`Globals::output_named`] so the rule is testable without a live connection.
-fn index_named<'a>(
-    names: impl IntoIterator<Item = Option<&'a str>>,
-    want: Option<&str>,
-) -> Option<usize> {
-    let want = want?;
-    names.into_iter().position(|n| n == Some(want))
-}
-
 impl Globals {
-    fn output_named(&self, want: &str) -> Option<WlOutput> {
-        index_named(self.outputs.iter().map(|o| o.name.as_deref()), Some(want))
-            .map(|i| self.outputs[i].proxy.clone())
+    /// The output absolute motion binds to by [`head_pick::pick`]; `None` maps the whole
+    /// layout. A `wl_output` carries only a name, so the name and sole-head rungs decide.
+    fn resolve(&self, target: &StreamTarget) -> Option<&Output> {
+        let heads: Vec<HeadFacts> = (self.outputs.iter())
+            .map(|o| HeadFacts {
+                name: o.name.as_deref(),
+                ..HeadFacts::default()
+            })
+            .collect();
+        head_pick::pick(&heads, target, None).map(|i| &self.outputs[i])
+    }
+
+    /// True when `target` names a head this registry has not shown yet.
+    fn lacks(&self, target: &StreamTarget) -> bool {
+        target.name.is_some() && !self.outputs.iter().any(|o| o.name == target.name)
     }
 }
 
@@ -161,8 +162,9 @@ pub struct WlrootsInjector {
     queue: EventQueue<Globals>,
     globals: Globals,
     pointer: ZwlrVirtualPointerV1,
-    /// Output `pointer` is bound to; `None` maps absolute motion over the whole layout.
-    bound_output: Option<String>,
+    /// Registry global of the output `pointer` is bound to; `None` maps absolute motion over
+    /// the whole layout. A global, not a name: a supersede briefly leaves two heads sharing one.
+    bound_output: Option<u32>,
     /// Aim generation [`Self::retarget`] last read the socket for an unbound name.
     lookup_gen: u64,
     /// Buttons held on `pointer`. Released before destroy; the compositor will not.
@@ -177,16 +179,6 @@ pub struct WlrootsInjector {
     text: Option<TextKeyboard>,
     /// Scroll lowering, legacy and normalized; holds the sub-detent residue.
     scroll: ScrollMapper,
-}
-
-fn resolve_target(globals: &Globals) -> (Option<WlOutput>, Option<String>) {
-    let Some(want) = crate::stream_output() else {
-        return (None, None);
-    };
-    match globals.output_named(&want) {
-        Some(proxy) => (Some(proxy), Some(want)),
-        None => (None, None),
-    }
 }
 
 /// Distinct chars before the text keymap restarts. Keycodes start at 9; xkb max is 255.
@@ -231,9 +223,16 @@ impl WlrootsInjector {
             .roundtrip(&mut globals)
             .context("Wayland output-name roundtrip")?;
 
-        let (target, bound_output) = resolve_target(&globals);
-        let pointer =
-            pointer_mgr.create_virtual_pointer_with_output(Some(&seat), target.as_ref(), &qh, ());
+        let want = crate::stream_target();
+        let bound = globals.resolve(&want);
+        let pointer = pointer_mgr.create_virtual_pointer_with_output(
+            Some(&seat),
+            bound.map(|o| &o.proxy),
+            &qh,
+            (),
+        );
+        let (bound_output, bound_name) =
+            (bound.map(|o| o.global), bound.and_then(|o| o.name.clone()));
         let keyboard = keyboard_mgr.create_virtual_keyboard(&seat, &qh, ());
 
         // Wire keys are US-positional; this keymap is the host layout or ISO keys
@@ -276,8 +275,8 @@ impl WlrootsInjector {
 
         tracing::info!(
             outputs = globals.outputs.len(),
-            want = ?crate::stream_output(),
-            bound = ?bound_output,
+            want = ?want.name,
+            bound = ?bound_name,
             "wlroots virtual input ready (pointer + keyboard)"
         );
         Ok(Self {
@@ -307,23 +306,24 @@ impl WlrootsInjector {
     /// last read takes two roundtrips, one to bind it and one for its name; they
     /// run once per aim generation, not per motion.
     fn retarget(&mut self) {
-        let mut resolved = resolve_target(&self.globals);
-        if resolved.1.is_none()
-            && crate::stream_output().is_some()
-            && self.lookup_gen != crate::aim_gen()
-        {
+        let want = crate::stream_target();
+        if self.globals.lacks(&want) && self.lookup_gen != crate::aim_gen() {
             self.lookup_gen = crate::aim_gen();
             for _ in 0..2 {
                 if self.queue.roundtrip(&mut self.globals).is_err() {
                     break;
                 }
             }
-            resolved = resolve_target(&self.globals);
         }
-        let (target, want) = resolved;
-        if want == self.bound_output {
+        let target = self.globals.resolve(&want);
+        let to = target.map(|o| o.global);
+        if to == self.bound_output {
             return;
         }
+        let (target, name) = (
+            target.map(|o| o.proxy.clone()),
+            target.and_then(|o| o.name.clone()),
+        );
         let (Some(mgr), Some(seat)) = (self.globals.pointer_mgr.clone(), self.globals.seat.clone())
         else {
             return;
@@ -345,11 +345,10 @@ impl WlrootsInjector {
             (),
         );
         tracing::info!(
-            from = ?self.bound_output,
-            to = ?want,
+            output = ?name,
             "wlroots virtual pointer re-aimed (absolute input now maps into this output)"
         );
-        self.bound_output = want;
+        self.bound_output = to;
     }
 
     /// Read the socket, dispatch, flush. `dispatch_pending` does not read, so
@@ -716,28 +715,5 @@ mod tests {
         };
         assert_ne!(depressed(false), 0, "ungated: Super pinned after the up");
         assert_eq!(depressed(true), 0, "gated: the one up clears it");
-    }
-
-    /// Physical head first, session head later — advertisement order on a real box.
-    const HYPRLAND_BOX: [Option<&str>; 2] = [Some("HDMI-A-1"), Some("PF-87756-3")];
-
-    #[test]
-    fn binds_the_streamed_head_not_the_first_advertised_one() {
-        assert_eq!(index_named(HYPRLAND_BOX, Some("PF-87756-3")), Some(1));
-        assert_eq!(index_named(HYPRLAND_BOX, Some("HDMI-A-1")), Some(0));
-        let sway = [Some("HEADLESS-1"), Some("DP-2"), Some("HEADLESS-2")];
-        assert_eq!(index_named(sway, Some("HEADLESS-2")), Some(2));
-        assert_eq!(index_named(sway, Some("DP-2")), Some(1));
-    }
-
-    #[test]
-    fn an_unknown_target_binds_nothing_rather_than_falling_back() {
-        // Name not in the advertised set (injector can open before the head exists).
-        assert_eq!(index_named(HYPRLAND_BOX, Some("PF-87756-9")), None);
-        assert_eq!(index_named(HYPRLAND_BOX, None), None);
-        // v3 compositor: globals exist but never get a `name`.
-        assert_eq!(index_named([None, None], Some("PF-87756-3")), None);
-        let headless: [Option<&str>; 0] = [];
-        assert_eq!(index_named(headless, Some("PF-87756-3")), None);
     }
 }

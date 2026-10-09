@@ -14,6 +14,7 @@
 //! lands every control on the wrong action. Reserved slots 3, 6, 9, 10 are Microsoft's — leave
 //! them empty.
 
+use crate::dpad::dpad_octant;
 use punktfunk_core::input::{gamepad as gs, GamepadFrame};
 
 /// The Series report, id included. One S and Elite publish only its first
@@ -108,35 +109,6 @@ fn trigger(v: u8) -> u16 {
     ((v as u32 * TRIGGER_MAX + 127) / 255) as u16
 }
 
-/// `0` is NULL (logical min is 1), then 1..8 clockwise from North. Opposing presses cancel.
-fn hat(buttons: u32) -> u8 {
-    let up = buttons & gs::BTN_DPAD_UP != 0;
-    let down = buttons & gs::BTN_DPAD_DOWN != 0;
-    let left = buttons & gs::BTN_DPAD_LEFT != 0;
-    let right = buttons & gs::BTN_DPAD_RIGHT != 0;
-    let (up, down) = if up && down {
-        (false, false)
-    } else {
-        (up, down)
-    };
-    let (left, right) = if left && right {
-        (false, false)
-    } else {
-        (left, right)
-    };
-    match (up, right, down, left) {
-        (true, false, false, false) => 1, // N
-        (true, true, false, false) => 2,  // NE
-        (false, true, false, false) => 3, // E
-        (false, true, true, false) => 4,  // SE
-        (false, false, true, false) => 5, // S
-        (false, false, true, true) => 6,  // SW
-        (false, false, false, true) => 7, // W
-        (true, false, false, true) => 8,  // NW
-        _ => 0,                           // nothing held → NULL
-    }
-}
-
 fn button_bits(buttons: u32) -> (u8, u8) {
     let mut bits: u16 = 0;
     for (mask, bit) in [
@@ -168,7 +140,9 @@ pub fn serialize_xbox_state(s: &XboxState) -> [u8; XBOX_REPORT_LEN] {
     r[7..9].copy_from_slice(&axis_y(s.rs_y).to_le_bytes());
     r[9..11].copy_from_slice(&trigger(s.left_trigger).to_le_bytes());
     r[11..13].copy_from_slice(&trigger(s.right_trigger).to_le_bytes());
-    r[13] = hat(s.buttons); // low nibble; the high nibble is descriptor padding
+    // Hat `0` is NULL (logical min 1), then 1..8 clockwise from North. The high nibble is
+    // descriptor padding.
+    r[13] = dpad_octant(s.buttons).map_or(0, |d| d + 1);
     let (lo, hi) = button_bits(s.buttons);
     r[14] = lo;
     r[15] = hi;
@@ -366,17 +340,6 @@ mod tests {
             let r = serialize_xbox_state(&XboxState::from_gamepad(buttons, 0, 0, 0, 0, 0, 0));
             assert_eq!(r[13] & 0x0F, want, "buttons {buttons:#x}");
         }
-    }
-
-    /// A physical hat cannot report both; a game that sees "up" on up+down drifts.
-    #[test]
-    fn opposing_dpad_presses_cancel() {
-        let ud = gs::BTN_DPAD_UP | gs::BTN_DPAD_DOWN;
-        let r = serialize_xbox_state(&XboxState::from_gamepad(ud, 0, 0, 0, 0, 0, 0));
-        assert_eq!(r[13] & 0x0F, 0);
-        let lr = gs::BTN_DPAD_LEFT | gs::BTN_DPAD_RIGHT;
-        let r = serialize_xbox_state(&XboxState::from_gamepad(lr, 0, 0, 0, 0, 0, 0));
-        assert_eq!(r[13] & 0x0F, 0);
     }
 
     #[test]

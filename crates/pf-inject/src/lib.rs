@@ -37,6 +37,11 @@ pub mod held;
 #[path = "inject/scroll.rs"]
 pub mod scroll;
 
+/// The streamed head absolute input lands on, one rule for every Linux backend. Pure and
+/// ungated like [`scroll`].
+#[path = "inject/head_pick.rs"]
+mod head_pick;
+
 /// Host-session injector. Not `Send`: owns compositor resources and stays on the control
 /// thread that created it.
 pub trait InputInjector {
@@ -204,6 +209,17 @@ pub fn absolute_anchor() -> Option<AbsoluteAnchor> {
         .read()
         .unwrap_or_else(|e| e.into_inner())
         .clone()
+}
+
+/// The session's output name, the streamed mode and the host-wide anchor, read together so
+/// one sample sees one aim.
+#[cfg(target_os = "linux")]
+pub(crate) fn stream_target() -> head_pick::StreamTarget {
+    head_pick::StreamTarget {
+        name: stream_output(),
+        extent: stream_extent(),
+        anchor: absolute_anchor(),
+    }
 }
 
 /// Backend the live session resolved to. Host writes this from `pf_vdisplay::input_backend_id`
@@ -468,24 +484,20 @@ pub enum VhciVerdict {
     ModuleMissing,
     /// Node present; this process cannot write it. Why is the host's question.
     NotWritable { path: String },
-    /// Virtual-Deck-over-usbip does not apply here.
+    /// No pad attaches over USB/IP on this OS.
     Inapplicable { why: &'static str },
 }
 
-/// Probe the vhci attach node for the virtual Deck: its gate on, module present, writable
-/// by this process.
+/// Probe the vhci attach node for the USB/IP pads: module present, writable by this process.
 ///
+/// Probed whatever the Deck, SC2 and DualSense gates say: a client can always ask for a
+/// Switch 2 pad, which has no other USB transport.
 /// Writability is what attach will attempt. `60-punktfunk.rules` `chgrp punktfunk` +
 /// `chmod 0660`, so only a process that actually carries the group gets `W_OK`.
 #[cfg(target_os = "linux")]
 pub fn vhci_probe() -> VhciVerdict {
     use std::os::unix::ffi::OsStrExt;
 
-    if !steam_usbip::usbip_preferred() {
-        return VhciVerdict::Inapplicable {
-            why: "the virtual Steam Deck's usbip transport is disabled (PUNKTFUNK_STEAM_USBIP=0)",
-        };
-    }
     let Some(base) = usbip::vhci_base() else {
         return VhciVerdict::ModuleMissing;
     };
@@ -511,7 +523,7 @@ pub fn vhci_probe() -> VhciVerdict {
 #[cfg(not(target_os = "linux"))]
 pub fn vhci_probe() -> VhciVerdict {
     VhciVerdict::Inapplicable {
-        why: "the virtual Steam Deck's usbip transport is Linux-only",
+        why: "USB/IP pads are a Linux feature.",
     }
 }
 
@@ -669,6 +681,9 @@ fn libei_ei_source() -> libei::EiSource {
 #[cfg(target_os = "windows")]
 #[path = "inject/windows/channel_proof.rs"]
 pub mod channel_proof;
+/// Wire D-pad bits → the hat octant every HID pad codec reports.
+#[path = "inject/proto/dpad.rs"]
+mod dpad;
 #[cfg(target_os = "linux")]
 #[path = "inject/linux/dualsense.rs"]
 pub mod dualsense;

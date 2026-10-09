@@ -613,8 +613,8 @@ fn takeover_privilege() -> HostCheck {
         .with_remedy(Remedy {
             text: format!(
                 "Add the user to the “{group}” group, then restart the computer. The same group \
-                 gates the virtual Steam Deck pad's usbip nodes, which can present arbitrary \
-                 emulated USB devices — join it only on a machine you trust."
+                 gates the USB/IP pads' nodes, which can present arbitrary emulated USB devices \
+                 — join it only on a machine you trust."
             ),
             command: Some(format!("sudo usermod -aG {group} {user}")),
             // Helper reads the user database and is satisfied at once; this process keeps the
@@ -652,19 +652,23 @@ fn takeover_inapplicable_reason(why: TakeoverInapplicable) -> &'static str {
     }
 }
 
+/// What a player loses while USB/IP pads can't attach.
+const USBIP_PAD_IMPACT: &str = "USB/IP pads can't attach. Steam Input then never sees a virtual \
+     Steam Deck or Steam Controller, so nothing in Game Mode can be navigated with a pad, and \
+     Switch 2 pads fall back to the Switch Pro.";
+
 fn virtual_deck_vhci() -> HostCheck {
     let id = ids::VIRTUAL_DECK_VHCI;
     let group = PUNKTFUNK_GROUP;
     match crate::inject::vhci_probe() {
         VhciVerdict::Inapplicable { why } => HostCheck::inapplicable(id, why),
-        VhciVerdict::Ok => HostCheck::ok(id, "The virtual Steam Deck controller can attach."),
+        VhciVerdict::Ok => HostCheck::ok(id, "USB/IP pads can attach."),
         VhciVerdict::ModuleMissing => HostCheck::problem(
             id,
             CheckStatus::Fail,
             Severity::Warning,
             "The vhci_hcd kernel module is not loaded",
-            "The virtual Steam Deck controller cannot attach, so Steam Input never sees it — in \
-             Game Mode that means nothing can be navigated with a pad.",
+            USBIP_PAD_IMPACT,
         )
         .with_remedy(Remedy {
             text: "Load the vhci_hcd module (the packages install a modules-load rule that does \
@@ -689,8 +693,7 @@ fn not_writable_check(id: &str, group: &str, path: String) -> HostCheck {
             .with_param("group", group)
             .with_param("path", path.clone())
     };
-    let pad_impact = "The virtual Steam Deck controller cannot attach, so Steam Input never sees \
-                      it — in Game Mode that means nothing can be navigated with a pad.";
+    let pad_impact = USBIP_PAD_IMPACT;
 
     match (in_userdb, in_process) {
         (Some(true), Some(false)) => {
@@ -733,11 +736,7 @@ fn not_writable_check(id: &str, group: &str, path: String) -> HostCheck {
 
         // User database unreachable. Do not guess a cause; a wrong remedy costs more than a
         // vague one.
-        _ => base(
-            "The virtual Steam Deck controller's attach node is not writable",
-            pad_impact,
-        )
-        .with_remedy(Remedy {
+        _ => base("The USB/IP pads' attach node is not writable", pad_impact).with_remedy(Remedy {
             text: format!(
                 "Check that this machine's user is in the “{group}” group and that the udev rule \
                  granting it access to the vhci nodes is installed, then restart the computer."
