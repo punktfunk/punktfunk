@@ -207,42 +207,8 @@ final class SessionModel: ObservableObject {
     /// background's privacy mute never clears the user's choice. Local and instant: it gates
     /// capture on this device, nothing is sent to the host.
     @Published private(set) var micMuted = false
-    /// The kind a controller declared when it turned out this session cannot carry its motion —
-    /// set once per such pad, cleared after `motionHintSeconds`. Nil the rest of the time.
-    ///
-    /// It exists because the failure is otherwise entirely silent: the gyro simply does nothing,
-    /// with no way for the player to tell a dead sensor from a session that resolved a backend
-    /// without a motion plane. The fix is a settings change, so the hint has to name it.
-    @Published private(set) var motionUnreachableKind: PunktfunkConnection.GamepadType?
-    /// Drops `motionUnreachableKind` again — held so a second pad's hint replaces the first
-    /// cleanly, and so ending the session cancels a pending clear rather than letting it fire
-    /// into a torn-down model.
-    private var motionHintTimer: Task<Void, Never>?
-    /// How long the motion hint stays up — the start-of-stream shortcut banner's 6 s, since the
-    /// two share the bottom-centre stack and a player reads them the same way.
-    private static let motionHintSeconds: UInt64 = 6
-    /// True while the "Steam Controller passing through" badge shows — set on the SC2
-    /// capture's claim edge (stream start, or the pad powering on mid-session), auto-dropped
-    /// after `motionHintSeconds` like the motion hint it stacks with, and dropped EARLY on a
-    /// release edge so the badge can never outlive the passthrough it announces. The badge is
-    /// the capture's ONLY UI surface: the raw BLE device never enters GameController, so the
-    /// Controllers page cannot list it.
-    @Published private(set) var sc2CapturedHint = false
-    /// True while the exit hint shows: from stream start for `motionHintSeconds`, unless the
-    /// player turned it off (`DefaultsKey.exitHint`).
-    @Published private(set) var exitHintShown = false
-    /// Drops `exitHintShown` — cancelled on teardown, like `motionHintTimer`.
-    private var exitHintTimer: Task<Void, Never>?
-    /// Drops `sc2CapturedHint` — same contract as `motionHintTimer` (restart on a new claim,
-    /// cancel on teardown rather than firing into a torn-down model). Only `noteSc2Phase` and
-    /// the disconnect teardown touch it.
-    private var sc2HintTimer: Task<Void, Never>?
-    /// The touch model is passthrough, but this host drops contacts (no `HOST_CAP2_TOUCH`): the
-    /// stream view runs the trackpad model instead, and this says so once, for
-    /// `motionHintSeconds`, in the same bottom-centre slot. Otherwise the setting is silently
-    /// ignored and every finger vanishes.
-    @Published private(set) var touchFallbackNotice = false
-    private var touchHintTimer: Task<Void, Never>?
+    /// The stream's hints, notices and access chip. Reset whole in `disconnect`.
+    @Published private(set) var notices = SessionNotices()
     /// Resize overlay (design/midstream-resolution-resize.md — client resize UX): true from the
     /// instant a Match-window resize starts steering toward a new size until a frame at that size
     /// decodes (or a safety timeout). Drives the blur+spinner so the unavoidable host-rebuild delay
@@ -348,33 +314,6 @@ final class SessionModel: ObservableObject {
     /// The host's last `ClipState.reason` (`CLIP_REASON_*`) — why an enable was refused
     /// (backend unavailable / policy disabled / …); 0 = OK.
 
-    // MARK: - Per-client access (design/per-client-access.md §7)
-
-    /// The session's access preset, derived live from the grants mask (§3.2 — the label is
-    /// never stored). `.fullControl` against every old host and for every full-grant device,
-    /// so nothing below changes today's look there.
-    @Published private(set) var accessLevel: PunktfunkConnection.AccessLevel = .fullControl
-    /// Seconds until this session's access expires; `0` = permanent. Ticks down at the 1 Hz
-    /// stats cadence — the chip's countdown renders straight from it.
-    @Published private(set) var accessRemainingSecs: UInt32 = 0
-    /// Anything about this session's access differs from full-and-permanent — the visibility
-    /// gate for the chip (and the tvOS stats-overlay line). False = today's look, untouched.
-    @Published private(set) var accessLimited = false
-    /// The transient expiry-warning toast ("Access ends in 5 m") — non-nil for a few seconds
-    /// around the T−5 m / T−1 m marks the host also warns at via `AccessUpdate`.
-    @Published private(set) var accessWarning: String?
-    /// One-shot latches for the two warning marks (reset per session).
-    private var accessWarned5m = false
-    private var accessWarned1m = false
-    /// Auto-dismiss for `accessWarning` — held so a newer warning replaces a pending clear.
-    private var accessWarningTimer: Task<Void, Never>?
-    /// The host's line for a launch that did not give the player their game, up for
-    /// `launchNoticeSeconds`. `launchNoticeShown` keeps one verdict from re-raising it.
-    @Published private(set) var launchNotice: String?
-    private var launchNoticeShown: String?
-    private var launchNoticeTimer: Task<Void, Never>?
-    /// Long enough to read a sentence with its cause.
-    private static let launchNoticeSeconds: UInt64 = 10
     #if os(tvOS)
     /// Siri Remote → host pointer while streaming (touch surface moves, press = left click,
     /// Play/Pause = right click) + the remote's deliberate exit (hold Back ≥ 1 s). See
@@ -690,38 +629,32 @@ final class SessionModel: ObservableObject {
         applyMicMute()
     }
 
-    /// A forwarded controller has a gyro this session cannot carry (see
-    /// `GamepadCapture.onMotionUnreachable`). Show it briefly, then let it go.
-    ///
-    /// Last pad wins, and its timer restarts: two such pads are the same one fact to a player, and
-    /// a second hint appearing under a still-visible first would only read as a stutter.
-    /// Raise `touchFallbackNotice` when the passthrough touch model meets a host without touch
-    /// injection — the same fallback `StreamLayerUIView` applies to the fingers themselves.
+    /// Show `value` in the notice at `slot` for `seconds`. Last one wins and its clock restarts:
+    /// a second hint under a still-visible first would only read as a stutter.
+    private func flash<Value>(
+        _ slot: WritableKeyPath<SessionNotices, Flash<Value>>, _ value: Value,
+        for seconds: UInt64 = SessionNotices.hintSeconds
+    ) {
+        notices[keyPath: slot].show(value, for: seconds) { [weak self] in
+            self?.notices[keyPath: slot].clear()
+        }
+    }
+
+    /// Say so when the passthrough touch model meets a host without touch injection — the same
+    /// fallback `StreamLayerUIView` applies to the fingers themselves.
     private func noteTouchFallback(_ conn: PunktfunkConnection) {
         #if os(iOS) || os(visionOS)
         guard TouchInputMode.current(conn.settings) == .touch, !conn.hostSupportsTouch else { return }
-        touchFallbackNotice = true
-        touchHintTimer?.cancel()
-        touchHintTimer = Task { [weak self] in
-            try? await Task.sleep(for: .seconds(Self.motionHintSeconds))
-            guard !Task.isCancelled else { return }
-            self?.touchFallbackNotice = false
-        }
+        flash(\.touchFallback, true)
         #endif
     }
 
-    /// Show the exit hint for `motionHintSeconds` at stream start, unless it is turned off.
+    /// Show the exit hint at stream start, unless it is turned off.
     private func noteStreamStart() {
-        exitHintTimer?.cancel()
-        guard UserDefaults.standard.object(forKey: DefaultsKey.exitHint) as? Bool ?? true else {
-            exitHintShown = false
-            return
-        }
-        exitHintShown = true
-        exitHintTimer = Task { [weak self] in
-            try? await Task.sleep(for: .seconds(Self.motionHintSeconds))
-            guard !Task.isCancelled else { return }
-            self?.exitHintShown = false
+        if UserDefaults.standard.object(forKey: DefaultsKey.exitHint) as? Bool ?? true {
+            flash(\.exitHint, true)
+        } else {
+            notices.exitHint.clear()
         }
     }
 
@@ -741,32 +674,12 @@ final class SessionModel: ObservableObject {
         #endif
     }
 
-    private func noteMotionUnreachable(_ kind: PunktfunkConnection.GamepadType) {
-        motionUnreachableKind = kind
-        motionHintTimer?.cancel()
-        motionHintTimer = Task { [weak self] in
-            try? await Task.sleep(for: .seconds(Self.motionHintSeconds))
-            guard !Task.isCancelled else { return }
-            self?.motionUnreachableKind = nil
-        }
-    }
-
     /// The SC2 passthrough's claim/release edges (`Sc2Capture.onPhaseChange`, delivered on
-    /// main). A claim shows the badge briefly — motion-hint style; a release drops it at
-    /// once, because a badge still saying "passing through" over a released slot would be
-    /// exactly the silent lie the badge exists to prevent.
+    /// main). A claim shows the badge briefly; a release drops it at once.
     private func noteSc2Phase(_ phase: Sc2Capture.Phase) {
-        sc2HintTimer?.cancel()
         switch phase {
-        case .captured:
-            sc2CapturedHint = true
-            sc2HintTimer = Task { [weak self] in
-                try? await Task.sleep(for: .seconds(Self.motionHintSeconds))
-                guard !Task.isCancelled else { return }
-                self?.sc2CapturedHint = false
-            }
-        case .released:
-            sc2CapturedHint = false
+        case .captured: flash(\.sc2Captured, true)
+        case .released: notices.sc2Captured.clear()
         }
     }
 
@@ -783,17 +696,18 @@ final class SessionModel: ObservableObject {
 
     /// Refresh the published access state from the connection's LIVE grants + countdown —
     /// called by the 1 Hz stats tick, which is also what makes a mid-session `AccessUpdate`
-    /// (a console edit) reach the chip and the capture gates within a second. The equality
-    /// guards keep a full-and-permanent session (every old host) from publishing anything.
+    /// (a console edit) reach the chip and the capture gates within a second. Every write is
+    /// guarded: `notices` publishes on any assignment, and a full-and-permanent session (every
+    /// old host) must publish nothing.
     private func updateAccessState() {
         guard let conn = connection else { return }
         let grants = conn.accessGrants
         let level = PunktfunkConnection.AccessLevel(grants: grants)
         let remaining = conn.accessExpiresInSeconds
-        if accessLevel != level { accessLevel = level }
-        if accessRemainingSecs != remaining { accessRemainingSecs = remaining }
+        if notices.accessLevel != level { notices.accessLevel = level }
+        if notices.accessRemainingSecs != remaining { notices.accessRemainingSecs = remaining }
         let limited = level != .fullControl || remaining != 0
-        if accessLimited != limited { accessLimited = limited }
+        if notices.accessLimited != limited { notices.accessLimited = limited }
         // A mid-session edit that removed BOTH input classes releases an engaged capture:
         // holding a frozen cursor and swallowed keys over input the host now drops is
         // exactly the "keyboard does nothing and nobody says why" failure §7 exists to
@@ -809,43 +723,29 @@ final class SessionModel: ObservableObject {
         // that extends the deadline back above a mark re-arms it.
         guard remaining != 0 else { return }
         if remaining > 300 {
-            accessWarned5m = false
-            accessWarned1m = false
-        } else if remaining > 60 {
-            accessWarned1m = false
-            if !accessWarned5m {
-                accessWarned5m = true
-                showAccessWarning("Access ends in \(Self.accessCountdown(remaining))")
+            // The 1 m latch never stands without the 5 m one.
+            if notices.accessWarned5m {
+                notices.accessWarned5m = false
+                notices.accessWarned1m = false
             }
-        } else if !accessWarned1m {
-            accessWarned1m = true
-            accessWarned5m = true
-            showAccessWarning("Access ends in under a minute")
+        } else if remaining > 60 {
+            if notices.accessWarned1m { notices.accessWarned1m = false }
+            if !notices.accessWarned5m {
+                notices.accessWarned5m = true
+                flash(\.accessWarning, "Access ends in \(Self.accessCountdown(remaining))")
+            }
+        } else if !notices.accessWarned1m {
+            notices.accessWarned1m = true
+            notices.accessWarned5m = true
+            flash(\.accessWarning, "Access ends in under a minute")
         }
     }
 
-    /// Put one warning toast up for a few seconds (the motion hint's pattern: last one wins,
-    /// its timer restarts, teardown cancels a pending clear).
-    private func showAccessWarning(_ text: String) {
-        accessWarning = text
-        accessWarningTimer?.cancel()
-        accessWarningTimer = Task { [weak self] in
-            try? await Task.sleep(for: .seconds(Self.motionHintSeconds))
-            guard !Task.isCancelled else { return }
-            self?.accessWarning = nil
-        }
-    }
-
-    /// Same transient contract as `showAccessWarning`, on its own timer so neither hides the other.
+    /// The host's launch line, once per verdict, on its own clock so it never hides the access
+    /// warning.
     private func showLaunchNotice(_ text: String) {
-        launchNoticeShown = text
-        launchNotice = text
-        launchNoticeTimer?.cancel()
-        launchNoticeTimer = Task { [weak self] in
-            try? await Task.sleep(for: .seconds(Self.launchNoticeSeconds))
-            guard !Task.isCancelled else { return }
-            self?.launchNotice = nil
-        }
+        notices.launchShown = text
+        flash(\.launch, text, for: SessionNotices.launchSeconds)
     }
 
     /// "1 h 58 m" / "12 m" / "45 s" — the countdown wording the chip and the warnings share.
@@ -912,31 +812,6 @@ final class SessionModel: ObservableObject {
         // The mic mute is per-session and never persisted: the next stream starts live (if the
         // mic is enabled), rather than silently carrying a mute nobody remembers making.
         micMuted = false
-        // Cancel before clearing: a pending clear firing into a torn-down session would be
-        // harmless but pointless, and leaving the hint set would carry it into the next stream.
-        motionHintTimer?.cancel()
-        motionHintTimer = nil
-        motionUnreachableKind = nil
-        exitHintTimer?.cancel()
-        exitHintTimer = nil
-        exitHintShown = false
-        touchHintTimer?.cancel()
-        touchHintTimer = nil
-        touchFallbackNotice = false
-        // Access state is per-session: back to the invisible full-and-permanent default, and
-        // no warning latch may carry into the next stream (same discipline as the mic mute).
-        accessWarningTimer?.cancel()
-        accessWarningTimer = nil
-        accessWarning = nil
-        launchNoticeTimer?.cancel()
-        launchNoticeTimer = nil
-        launchNotice = nil
-        launchNoticeShown = nil
-        accessLevel = .fullControl
-        accessRemainingSecs = 0
-        accessLimited = false
-        accessWarned5m = false
-        accessWarned1m = false
         let audio = self.audio
         self.audio = nil
         // The virtual pad's slot goes the same way, while the connection is still up.
@@ -953,14 +828,11 @@ final class SessionModel: ObservableObject {
         gamepadFeedback?.setHidRawSink(nil)
         sc2Capture?.stop()
         sc2Capture = nil
-        // The stop path CANNOT rely on the capture's `.released` edge: `sc2Capture = nil`
-        // above deallocates it before its main-queue release hop runs, so the weakly-held
-        // callback is already gone. Clear the badge directly — same cancel-before-clear
-        // discipline as the motion hint above, and same reason: a "passing through" badge
-        // carried into the next stream would be a lie about a session that no longer exists.
-        sc2HintTimer?.cancel()
-        sc2HintTimer = nil
-        sc2CapturedHint = false
+        // Every hint, notice and access latch is per-session. After the captures: the SC2
+        // capture's `.released` edge never lands once it is deallocated, so the reset drops
+        // its badge, and no pending clear fires into the next stream.
+        notices.cancelTimers()
+        notices = SessionNotices()
         #if os(tvOS)
         remotePointer?.stop() // releases any held click while the connection is still up
         remotePointer = nil
@@ -1254,7 +1126,7 @@ final class SessionModel: ObservableObject {
         capture.onDisconnectRequest = { [weak self] in self?.disconnect() }
         // A pad with a gyro that this session cannot carry — say so once, briefly, and name the
         // setting that fixes it. Already main-actor (GamepadCapture fires it there).
-        capture.onMotionUnreachable = { [weak self] kind in self?.noteMotionUnreachable(kind) }
+        capture.onMotionUnreachable = { [weak self] kind in self?.flash(\.motionUnreachable, kind) }
         capture.onRingChord = { [weak self] pad in self?.onRingChord?(pad) }
         capture.onRingNav = { [weak self] nav in self?.onRingNav?(nav) }
         capture.start()
@@ -1363,7 +1235,7 @@ final class SessionModel: ObservableObject {
                 // readout also walks the countdown and picks up mid-session grant edits.
                 self.updateAccessState()
                 guard let conn = self.connection else { return }
-                if let notice = conn.launchNotice, notice != self.launchNoticeShown {
+                if let notice = conn.launchNotice, notice != self.notices.launchShown {
                     self.showLaunchNotice(notice)
                 }
                 let (frames, _) = self.meter.drain()
