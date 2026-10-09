@@ -726,7 +726,7 @@ struct Pass {
     aus_dropped: u64,
     /// The codec freed an input slot this pass (the hung-codec check, see [`InputStall`]).
     input_offered: bool,
-    /// The admission rule asked for a keyframe this pass.
+    /// The admission rule or a dropped AU asked for a keyframe this pass.
     ask_keyframe: bool,
     /// ASurfaceControl transaction completions, applied after the drain (on the decode thread,
     /// not the binder thread that posted them).
@@ -949,6 +949,14 @@ impl State {
         }
     }
 
+    /// `feed` dropped an admitted AU: freeze now, ask for a keyframe through the pass's throttled
+    /// ask, and re-judge the parked AUs behind it ([`State::local_loss`]).
+    fn drop_admitted(&mut self, pass: &mut Pass) {
+        self.gate.arm(Instant::now());
+        pass.ask_keyframe = true;
+        self.local_loss(pass);
+    }
+
     /// The pass proper, after the drain: completions, the vsync tick, the format change, feeding,
     /// the re-anchor cadence reset, then presenting.
     fn apply(&mut self, ctx: &Ctx, pass: &mut Pass) {
@@ -1048,18 +1056,17 @@ impl State {
                     );
                     // The close makes the codec emit concealed garbage at the dead pts — freeze it
                     // off the glass until the recovery keyframe re-anchors.
-                    self.gate.arm(Instant::now());
-                    let _ = ctx.client.request_keyframe();
                     self.pending_aus.push_front(frame);
-                    self.local_loss(pass);
+                    self.drop_admitted(pass);
                     continue;
                 }
                 // No AU open: an orphan non-first piece lost its head upstream — discard and
-                // re-sync at the next `first` (the recovery request rides the same loss).
+                // re-sync at the next `first`. No `local_loss`: the network gap or local drop
+                // that lost the head already told the admission rule.
                 if !first {
                     self.free_inputs.push_front(idx);
                     self.gate.arm(Instant::now());
-                    let _ = ctx.client.request_keyframe();
+                    pass.ask_keyframe = true;
                     continue;
                 }
             }
@@ -1085,18 +1092,18 @@ impl State {
                     dst.len(),
                     self.oversized_dropped
                 );
-                let _ = ctx.client.request_keyframe();
-                self.gate.arm(Instant::now());
                 if frame.part.is_some() {
                     // Pieces already queued can't be unqueued: poison the ledger so the next
                     // delivery mismatches and takes the close-empty path above.
+                    self.gate.arm(Instant::now());
+                    pass.ask_keyframe = true;
                     self.part_open = Some(PartFeed {
                         index: frame.frame_index,
                         expected: usize::MAX,
                         pts_us,
                     });
                 } else {
-                    self.local_loss(pass);
+                    self.drop_admitted(pass);
                 }
                 continue;
             }
@@ -1118,10 +1125,8 @@ impl State {
                         pts_us,
                     });
                 } else {
-                    // A whole AU lost here is a loss like any other: freeze and ask.
-                    self.gate.arm(Instant::now());
-                    let _ = ctx.client.request_keyframe();
-                    self.local_loss(pass);
+                    // A whole AU lost here is a loss like any other.
+                    self.drop_admitted(pass);
                 }
                 continue;
             }
@@ -1307,7 +1312,7 @@ impl State {
     }
 
     /// The hung-codec check ([`InputStall`]), the keyframe backstops ([`Backstops::poll`]), then the
-    /// admission rule's keyframe ask through the same throttle.
+    /// pass's keyframe ask (the admission rule's or `feed`'s) through the same throttle.
     /// Evaluated after `feed`, so an AU that arrived this pass has either been fed or is parked
     /// in `pending_aus`.
     fn housekeeping(&mut self, ctx: &Ctx, had_output: bool, pass: &Pass) {
