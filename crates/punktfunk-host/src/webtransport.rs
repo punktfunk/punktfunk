@@ -23,9 +23,9 @@ pub(crate) mod mgmt;
 mod session;
 
 pub(crate) use datagrams::WebTransportPlane;
-// The management API's device lane verifies the same key shape against the same digest, and
-// must not grow a second opinion about either.
-pub(crate) use session::{sha256, spki_p256_point};
+// The management tests still name the digest by this path.
+#[cfg(test)]
+pub(crate) use crate::https::sha256;
 
 use anyhow::{Context, Result};
 use std::net::SocketAddr;

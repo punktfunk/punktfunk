@@ -14,8 +14,8 @@
 //! unauthenticated (the spec is in-tree). Default bind is all interfaces;
 //! `--mgmt-bind 127.0.0.1:47990` restores loopback-only.
 
-use crate::gamestream::tls::serve_https_with_plain;
 use crate::host::AppState;
+use crate::https::serve_https_with_plain;
 use anyhow::{Context, Result};
 use axum::extract::Request;
 use axum::http::StatusCode;
@@ -229,11 +229,8 @@ pub async fn run(
     // Native identity (the cert clients already pin). Client cert optional:
     // a paired client presents a fingerprint; a browser presents none and
     // uses the bearer. See `require_auth`.
-    let tls = crate::gamestream::tls::server_config_optional_client(
-        &identity.cert_pem,
-        &identity.key_pem,
-    )
-    .context("management API TLS config")?;
+    let tls = crate::https::server_config_optional_client(&identity.cert_pem, &identity.key_pem)
+        .context("management API TLS config")?;
     tracing::info!(
         addr = %opts.bind,
         auth = "mTLS (paired cert) or bearer (required)",
@@ -243,7 +240,7 @@ pub async fn run(
     // browser stored when it paired. Parsed once here rather than per request.
     let identity_fingerprint = x509_parser::pem::parse_x509_pem(identity.cert_pem.as_bytes())
         .ok()
-        .map(|(_, pem)| crate::webtransport::sha256(&pem.contents));
+        .map(|(_, pem)| crate::https::sha256(&pem.contents));
     if identity_fingerprint.is_none() {
         tracing::warn!("the host identity did not parse — browsers cannot use the device lane");
     }

@@ -19,7 +19,7 @@
 //! same router and the same authority, each request after its stream type.
 
 use super::Serving;
-use crate::gamestream::tls::{LocalAddr, PeerAddr, PeerCertFingerprint};
+use crate::https::{LocalAddr, PeerAddr, PeerCertFingerprint};
 use crate::mgmt::shared::api_error;
 use anyhow::{Context, Result};
 use axum::body::{Body, HttpBody as _};

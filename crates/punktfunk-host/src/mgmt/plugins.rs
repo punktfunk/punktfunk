@@ -506,7 +506,7 @@ fn validate_ui(u: PluginUi, over_pipe: bool) -> Result<StoredUi, String> {
 )]
 pub(crate) async fn register_plugin(
     OwnedId(id, _): OwnedId<PluginId>,
-    pipe: Option<axum::Extension<crate::gamestream::tls::PipePlugin>>,
+    pipe: Option<axum::Extension<crate::https::PipePlugin>>,
     ApiJson(reg): ApiJson<PluginRegistration>,
 ) -> Response {
     let valid = match validate(reg, pipe.is_some()) {

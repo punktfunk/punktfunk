@@ -133,6 +133,8 @@ mod host;
 // The box itself: identity, adverts, wake, power, sleep; the flat names keep `crate::power::*`.
 mod hostsys;
 use hostsys::{discovery, identity, osinfo, power, sleep_inhibit, wol};
+// HTTPS serving for nvhttp and the management API, and the device-key digest.
+mod https;
 // Shim: inject backends live in `pf-inject`; keep `crate::inject::*` for this crate's callers.
 mod inject {
     pub(crate) use pf_inject::*;
