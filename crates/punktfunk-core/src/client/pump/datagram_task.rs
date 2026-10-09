@@ -156,15 +156,8 @@ mod tests {
     /// no `AudioRedRecovery`, and only the loop can be wrong about those.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_lossless_datagram_reaches_the_audio_sink() {
-        let server = crate::quic::endpoint::server("127.0.0.1:0".parse().unwrap()).unwrap();
-        let addr = server.local_addr().unwrap();
-        let client = crate::quic::endpoint::client_insecure().unwrap();
-        let accept = tokio::spawn(async move {
-            let incoming = server.accept().await.expect("incoming");
-            (server, incoming.await.expect("host side connects"))
-        });
-        let client_conn = client.connect(addr, "punktfunk").unwrap().await.unwrap();
-        let (_server_ep, host_conn) = accept.await.unwrap();
+        let (_server_ep, _client_ep, host_conn, client_conn) =
+            crate::quic::test_util::connect_pair().await;
 
         // Keep every receiver alive: a closed sink would fail `try_send` for the wrong reason.
         let (audio_tx, audio_rx) = std::sync::mpsc::sync_channel::<AudioPacket>(8);

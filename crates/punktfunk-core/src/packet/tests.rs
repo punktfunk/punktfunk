@@ -1611,9 +1611,9 @@ fn slice_streamed_in_flight_budget_matches_legacy() {
 // design/shard-payload-reneg.md
 // ---------------------------------------------------------------------------
 
-/// Shard sizes renegotiation uses: clamp floor 512, 1280-MTU 1216, 1500-MTU 1408,
-/// 9000-MTU jumbo 8908 (sealed 8972, inside [`MAX_DATAGRAM_BYTES`]).
-const PRODUCTION_SHARDS: [usize; 4] = [512, 1216, 1408, 8908];
+/// Shard sizes renegotiation uses: clamp floor 512, 1280-B UDP budget 1234, 1500-MTU 1408,
+/// 9000-MTU jumbo 8926 (sealed 8972, inside [`MAX_DATAGRAM_BYTES`]).
+const PRODUCTION_SHARDS: [usize; 4] = [512, 1234, 1408, 8926];
 
 fn geo_config(shard_payload: usize) -> Config {
     let mut c = prod_slice_config();
@@ -1852,8 +1852,9 @@ fn shard_size_firewall_bounds() {
         h.frame_bytes = shard as u32;
         h
     };
-    // 510 below floor (even), 9154 above ceiling (even), 1409 odd within bounds: all dropped.
-    for (i, shard) in [510usize, 9154, 1409].into_iter().enumerate() {
+    // 510 below floor (even), one even step above ceiling, 1409 odd within bounds: all dropped.
+    let over = crate::config::max_shard_payload() + 2;
+    for (i, shard) in [510usize, over, 1409].into_iter().enumerate() {
         let before = rig.stats.snapshot().packets_dropped;
         assert!(rig.push(&packet(single(shard, i as u32))).is_none());
         assert_eq!(

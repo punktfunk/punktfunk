@@ -27,6 +27,7 @@ use punktfunk_core::quic::{
     ColorInfo, GrantClass, Hello, PairRequest, PipelineGap, ProbeResult, ProbeShaped, Reconfigure,
     Reconfigured, SetBitrate, Welcome, GRANT_ALL, GRANT_CLIPBOARD, GRANT_LAUNCH,
 };
+use punktfunk_core::session::test_frame;
 use punktfunk_core::Session;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicU8, Ordering};
 use std::sync::Arc;
@@ -129,16 +130,6 @@ use crate::stats_recorder::StatsRecorder;
 
 /// Bounds online PIN guessing: SPAKE2 already gives one guess per ceremony; this caps the rate.
 pub(crate) const PAIRING_COOLDOWN: std::time::Duration = std::time::Duration::from_secs(2);
-
-/// `u32 LE index` then `data[i] = idx + i` (wrapping) — the client byte-checks this.
-pub fn test_frame(idx: u32, len: usize) -> Vec<u8> {
-    let mut d = vec![0u8; len];
-    d[0..4].copy_from_slice(&idx.to_le_bytes());
-    for (i, b) in d.iter_mut().enumerate().skip(4) {
-        *b = (idx as u8).wrapping_add(i as u8);
-    }
-    d
-}
 
 use punktfunk_core::quic::wall_clock_ns as now_ns;
 

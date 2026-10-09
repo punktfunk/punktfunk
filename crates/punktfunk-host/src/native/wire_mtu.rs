@@ -539,14 +539,14 @@ mod tests {
 
     #[test]
     fn env_override_beats_learned() {
-        // 1280 wire − 28 IP/UDP − 64 header/crypto = 1188.
-        assert_eq!(resolve(Some(1280), Some(1472), NO_JUMBO, V4), 1188);
+        // 1280 wire − 28 IP/UDP − 46 header/tag = 1206.
+        assert_eq!(resolve(Some(1280), Some(1472), NO_JUMBO, V4), 1206);
     }
 
     #[test]
     fn learned_budget_clamps() {
-        // 1280-byte UDP budget − 64 header/crypto = 1216.
-        assert_eq!(resolve(None, Some(1280), NO_JUMBO, V4), 1216);
+        // 1280-byte UDP budget − 46 header/tag = 1234.
+        assert_eq!(resolve(None, Some(1280), NO_JUMBO, V4), 1234);
     }
 
     #[test]
@@ -573,17 +573,17 @@ mod tests {
         );
     }
 
-    /// 9000 − 28 (IPv4) − 64 = 8908; 9000 − 48 − 64 = 8888.
+    /// 9000 − 28 (IPv4) − 46 = 8926; 9000 − 48 − 46 = 8906.
     #[test]
     fn proven_and_reproven_path_starts_jumbo() {
-        assert_eq!(jumbo_session_start(proven_jumbo(), V4), Some(8908));
+        assert_eq!(jumbo_session_start(proven_jumbo(), V4), Some(8926));
         let mut v6 = proven_jumbo();
         v6.live_udp_mtu = 8952;
         v6.proven_udp_budget = Some(8952);
-        assert_eq!(jumbo_session_start(v6, V6), Some(8888));
+        assert_eq!(jumbo_session_start(v6, V6), Some(8906));
         // `resolve` must pick jumbo ahead of the env branch, which would
         // clamp a >1500 `PUNKTFUNK_WIRE_MTU` to the family default.
-        assert_eq!(resolve(Some(9000), None, proven_jumbo(), V4), 8908);
+        assert_eq!(resolve(Some(9000), None, proven_jumbo(), V4), 8926);
     }
 
     #[test]
@@ -621,7 +621,7 @@ mod tests {
         // A clamp at or above the sealed target is not contrary evidence.
         let mut roomy = proven_jumbo();
         roomy.clamped_udp_budget = Some(8972);
-        assert_eq!(jumbo_session_start(roomy, V4), Some(8908));
+        assert_eq!(jumbo_session_start(roomy, V4), Some(8926));
     }
 
     #[test]
@@ -665,7 +665,9 @@ mod tests {
                 );
             }
         }
-        assert_eq!(jumbo_target(Some(1500), u16::MAX, V4), None);
+        // A wire whose fit is the family default gains nothing.
+        let default_wire = sealed_datagram_bytes(mtu1500_shard_payload_for(V4)) + 28;
+        assert_eq!(jumbo_target(Some(default_wire), u16::MAX, V4), None);
         assert_eq!(jumbo_target(None, u16::MAX, V4), None);
     }
 

@@ -70,8 +70,7 @@ impl ClientConn {
     ) -> std::result::Result<Vec<u8>, quinn::ConnectionError> {
         loop {
             let b = self.conn.read_datagram().await?;
-            use crate::quic::v2::dgram::{decode, Dgram};
-            if let Some(Dgram::Audio(p) | Dgram::InputState(p) | Dgram::HostEvent(p)) = decode(&b) {
+            if let Some(p) = crate::quic::v2::dgram::client_payload(&b) {
                 return Ok(p.to_vec());
             }
         }
