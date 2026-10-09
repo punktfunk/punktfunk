@@ -657,26 +657,50 @@ const USBIP_PAD_IMPACT: &str = "USB/IP pads can't attach. Steam Input then never
      Steam Deck or Steam Controller, so nothing in Game Mode can be navigated with a pad, and \
      Switch 2 pads fall back to the Switch Pro.";
 
+/// The same with the Steam and DualSense gates off: only a Switch 2 pad still asks for USB/IP.
+const SWITCH2_ONLY_IMPACT: &str = "Switch 2 pads fall back to the Switch Pro. USB/IP is off for \
+     Steam and DualSense pads, so nothing else changes.";
+
+/// Whether a gate still asks for a USB/IP pad: the Steam gate (on by default) or the DualSense
+/// row. A client can always ask for a Switch 2 pad, which degrades instead.
+#[cfg(target_os = "linux")]
+fn usbip_gate_open() -> bool {
+    pf_inject::steam_usbip::usbip_preferred() || pf_inject::dualsense_usbip::usbip_preferred()
+}
+
+#[cfg(not(target_os = "linux"))]
+fn usbip_gate_open() -> bool {
+    false
+}
+
 fn virtual_deck_vhci() -> HostCheck {
     let id = ids::VIRTUAL_DECK_VHCI;
     let group = PUNKTFUNK_GROUP;
     match crate::inject::vhci_probe() {
         VhciVerdict::Inapplicable { why } => HostCheck::inapplicable(id, why),
         VhciVerdict::Ok => HostCheck::ok(id, "USB/IP pads can attach."),
-        VhciVerdict::ModuleMissing => HostCheck::problem(
-            id,
-            CheckStatus::Fail,
-            Severity::Warning,
-            "The vhci_hcd kernel module is not loaded",
-            USBIP_PAD_IMPACT,
-        )
-        .with_remedy(Remedy {
-            text: "Load the vhci_hcd module (the packages install a modules-load rule that does \
-                   this at boot; on an unpackaged install, load it by hand)."
-                .to_string(),
-            command: Some("sudo modprobe vhci-hcd".to_string()),
-            relogin_required: false,
-        }),
+        VhciVerdict::ModuleMissing => {
+            // Both gates off leaves only the Switch 2 fallback: a note, not a warning.
+            let (severity, impact) = if usbip_gate_open() {
+                (Severity::Warning, USBIP_PAD_IMPACT)
+            } else {
+                (Severity::Info, SWITCH2_ONLY_IMPACT)
+            };
+            HostCheck::problem(
+                id,
+                CheckStatus::Fail,
+                severity,
+                "The vhci_hcd kernel module is not loaded",
+                impact,
+            )
+            .with_remedy(Remedy {
+                text: "Load the vhci_hcd module (the packages install a modules-load rule that \
+                       does this at boot; on an unpackaged install, load it by hand)."
+                    .to_string(),
+                command: Some("sudo modprobe vhci-hcd".to_string()),
+                relogin_required: false,
+            })
+        }
         // Node exists, not writable. The three causes need different remedies; only userdb vs
         // process groups can tell them apart.
         VhciVerdict::NotWritable { path } => not_writable_check(id, group, path),
