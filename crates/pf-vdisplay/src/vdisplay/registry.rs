@@ -2237,24 +2237,21 @@ mod linux {
             let es = r.entries.lock().unwrap();
             es.iter()
                 .filter_map(|e| {
-                    let (state, expires_in_ms, sessions) = match e.life {
-                        lifecycle::State::Active { refs } => ("active", None, refs),
-                        lifecycle::State::Lingering { until } => (
-                            "lingering",
-                            Some(until.saturating_duration_since(now).as_millis() as u64),
-                            0,
-                        ),
-                        lifecycle::State::Pinned => ("pinned", None, 0),
+                    let expires_in_ms = match e.life {
                         lifecycle::State::Idle => return None,
+                        lifecycle::State::Lingering { until } => {
+                            Some(until.saturating_duration_since(now).as_millis() as u64)
+                        }
+                        lifecycle::State::Active { .. } | lifecycle::State::Pinned => None,
                     };
                     Some(Row {
                         generation: e.generation,
                         backend: e.backend,
                         mode: e.mode,
                         identity_slot: e.identity_slot,
-                        state,
+                        state: e.life.label(),
                         expires_in_ms,
-                        sessions,
+                        sessions: e.life.refs(),
                     })
                 })
                 .collect()

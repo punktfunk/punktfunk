@@ -1,7 +1,8 @@
 //! Per-display lifecycle: earned refcount, linger, and pin.
 //!
 //! Pure: no I/O, no OS types. [`State`] reports [`Acquire`] / [`Release`];
-//! [`super::registry`] owns the backend resource and applies those.
+//! the owner of the backend resource applies those: [`super::registry`] on
+//! Linux, the Windows manager's slots on Windows.
 //!
 //! Contract: `Idle → Active{refs} → Lingering{until} | Pinned → Idle`.
 //! `Pinned` never expires here; only [`State::force_release`] drops it.
@@ -59,11 +60,21 @@ impl State {
         !matches!(self, State::Idle)
     }
 
-    #[allow(dead_code)] // tests pin the live-hold count; not production API
+    /// Live holds: the `/display/state` session count.
     pub fn refs(self) -> u32 {
         match self {
             State::Active { refs } => refs,
             _ => 0,
+        }
+    }
+
+    /// The `/display/state` wire name. Idle is never listed.
+    pub fn label(self) -> &'static str {
+        match self {
+            State::Idle => "idle",
+            State::Active { .. } => "active",
+            State::Lingering { .. } => "lingering",
+            State::Pinned => "pinned",
         }
     }
 
@@ -212,6 +223,16 @@ mod tests {
         assert_eq!(effective_linger(true, Linger::Forever), Linger::Forever);
         assert_eq!(effective_linger(false, ten), ten);
         assert_eq!(effective_linger(false, Linger::Forever), Linger::Forever);
+    }
+
+    /// `/display/state` clients match on these strings on both OSes.
+    #[test]
+    fn labels_are_the_display_state_wire_names() {
+        let now = Instant::now();
+        assert_eq!(State::Active { refs: 2 }.label(), "active");
+        assert_eq!(State::Lingering { until: now }.label(), "lingering");
+        assert_eq!(State::Pinned.label(), "pinned");
+        assert_eq!(State::Idle.label(), "idle");
     }
 
     #[test]
