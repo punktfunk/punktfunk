@@ -87,13 +87,16 @@ pub fn vdisplay_luminance_fields(m: &HdrMeta) -> (u32, u32, u32) {
     )
 }
 
-/// BT.2020 / D65 / 1000-nit HDR10 default until the source display is read.
+/// The HDR10 block every capturer claims when the source names no mastering volume:
+/// BT.2020 / D65, 1000 / 0.005 nits, MaxCLL 1000, MaxFALL 400. A CLL of 0/0 reads as
+/// "unknown" and leaves the display tone-mapping blind, so the light levels match the
+/// 1000-nit peak.
 pub fn generic_hdr10() -> HdrMeta {
     HdrMeta {
         display_primaries: [[8500, 39850], [6550, 2300], [35400, 14600]], // BT.2020 G, B, R
         white_point: [15635, 16450],                                      // D65
         max_display_mastering_luminance: 10_000_000,                      // 1000 nits
-        min_display_mastering_luminance: 1,                               // 0.0001 nits
+        min_display_mastering_luminance: 50,                              // 0.005 nits
         max_cll: 1000,
         max_fall: 400,
     }
@@ -395,7 +398,7 @@ mod tests {
         assert_eq!((be16(11), be16(13)), (8585, 3015));
         assert_eq!((be16(15), be16(17)), (20493, 21561));
         assert_eq!(be32(19), 1000 << 8, "1000 nits in 24.8");
-        assert_eq!(be32(23), 2, "0.0001 nits in 18.14");
+        assert_eq!(be32(23), 82, "0.005 nits in 18.14");
         assert_eq!(obus[27], 0x80);
         assert_eq!(&obus[28..], &[0x2a, 6, 1, 0x03, 0xe8, 0x01, 0x90, 0x80]);
     }
@@ -463,7 +466,7 @@ mod tests {
         assert_eq!(&p[4..6], &6550u16.to_be_bytes());
         assert_eq!(&p[12..14], &15635u16.to_be_bytes());
         assert_eq!(&p[16..20], &10_000_000u32.to_be_bytes());
-        assert_eq!(&p[20..24], &1u32.to_be_bytes());
+        assert_eq!(&p[20..24], &50u32.to_be_bytes());
     }
 
     #[test]

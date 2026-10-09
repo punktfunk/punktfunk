@@ -1239,7 +1239,7 @@ mod tests {
         assert_eq!(&pt[13..15], &6550u16.to_le_bytes()); // blue.x
         assert_eq!(&pt[17..19], &15635u16.to_le_bytes()); // whitePoint.x
         assert_eq!(&pt[21..23], &1000u16.to_le_bytes()); // maxDisplayLuminance (nits)
-        assert_eq!(&pt[23..25], &1u16.to_le_bytes()); // minDisplayLuminance (1/10000 nit)
+        assert_eq!(&pt[23..25], &50u16.to_le_bytes()); // minDisplayLuminance (1/10000 nit)
         assert_eq!(&pt[25..27], &1000u16.to_le_bytes()); // maxContentLightLevel (MaxCLL)
         assert_eq!(&pt[27..29], &400u16.to_le_bytes()); // maxFrameAverageLightLevel (MaxFALL)
         assert_eq!(&pt[29..31], &1000u16.to_le_bytes()); // maxFullFrameLuminance mirrors the peak

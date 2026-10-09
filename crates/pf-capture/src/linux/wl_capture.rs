@@ -216,41 +216,35 @@ pub(super) struct OutputColor {
     pub max_fall: Option<u32>,
 }
 
-/// BT.2020 primaries and D65 white, CIE xy × 1e6.
-const BT2020_XY: [(i32, i32); 4] = [
-    (708_000, 292_000),
-    (170_000, 797_000),
-    (131_000, 46_000),
-    (312_700, 329_000),
-];
-
 impl OutputColor {
     /// BT.2020 under the PQ curve — the one encoding the stream's HDR path carries.
     pub(super) fn is_hdr10(&self) -> bool {
         self.primaries == Primaries::Bt2020 as u32 && self.tf == TransferFunction::St2084Pq as u32
     }
 
-    /// ST.2086 + CLL block for this description. Mastering values when the compositor sent
-    /// them (Hyprland forwards the panel's EDID); otherwise the generic 1000-nit HDR10 block
-    /// the PipeWire path also claims. CIE xy × 1e6 → 1/50000 units is a divide by 20.
+    /// ST.2086 + CLL block for this description: [`pf_frame::hdr::generic_hdr10`] with each
+    /// field the compositor sent written over it (Hyprland forwards the panel's EDID).
+    /// CIE xy × 1e6 → 1/50000 units is a divide by 20.
     pub(super) fn hdr_meta(&self) -> HdrMeta {
-        let xy = |(x, y): (i32, i32)| {
-            [
-                (x / 20).clamp(0, 50_000) as u16,
-                (y / 20).clamp(0, 50_000) as u16,
-            ]
-        };
-        let [r, g, b, w] = self.target_primaries.unwrap_or(BT2020_XY);
-        let (min, max) = self.target_luminance.unwrap_or((50, 1000));
-        let nits = |v: Option<u32>| v.unwrap_or(0).min(u32::from(u16::MAX)) as u16;
-        HdrMeta {
-            display_primaries: [xy(g), xy(b), xy(r)],
-            white_point: xy(w),
-            max_display_mastering_luminance: max.saturating_mul(10_000),
-            min_display_mastering_luminance: min,
-            max_cll: nits(self.max_cll),
-            max_fall: nits(self.max_fall),
+        let mut m = pf_frame::hdr::generic_hdr10();
+        if let Some([r, g, b, w]) = self.target_primaries {
+            let xy = |(x, y): (i32, i32)| {
+                [
+                    (x / 20).clamp(0, 50_000) as u16,
+                    (y / 20).clamp(0, 50_000) as u16,
+                ]
+            };
+            m.display_primaries = [xy(g), xy(b), xy(r)];
+            m.white_point = xy(w);
         }
+        if let Some((min, max)) = self.target_luminance {
+            m.min_display_mastering_luminance = min;
+            m.max_display_mastering_luminance = max.saturating_mul(10_000);
+        }
+        let nits = |v: u32| v.min(u32::from(u16::MAX)) as u16;
+        m.max_cll = self.max_cll.map_or(m.max_cll, nits);
+        m.max_fall = self.max_fall.map_or(m.max_fall, nits);
+        m
     }
 }
 
@@ -1268,16 +1262,21 @@ mod tests {
 
     #[test]
     fn a_description_without_mastering_data_yields_the_generic_hdr10_block() {
-        let m = pq().hdr_meta();
-        // The same block `PortalCapturer::hdr_meta` claims: BT.2020, D65, 1000 / 0.005 nits.
-        assert_eq!(
-            m.display_primaries,
-            [[8500, 39850], [6550, 2300], [35400, 14600]]
-        );
-        assert_eq!(m.white_point, [15635, 16450]);
-        assert_eq!(m.max_display_mastering_luminance, 10_000_000);
-        assert_eq!(m.min_display_mastering_luminance, 50);
-        assert_eq!((m.max_cll, m.max_fall), (0, 0));
+        assert_eq!(pq().hdr_meta(), pf_frame::hdr::generic_hdr10());
+    }
+
+    /// Only the fields the compositor sent replace the fallback's.
+    #[test]
+    fn a_partial_description_keeps_the_fallback_for_the_rest() {
+        let c = OutputColor {
+            max_cll: Some(600),
+            ..pq()
+        };
+        let want = pf_frame::HdrMeta {
+            max_cll: 600,
+            ..pf_frame::hdr::generic_hdr10()
+        };
+        assert_eq!(c.hdr_meta(), want);
     }
 
     #[test]
