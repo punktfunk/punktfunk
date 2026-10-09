@@ -3,6 +3,7 @@
 // it server-side.
 import { readFileSync } from "node:fs";
 import { createError, type H3Event, proxyRequest } from "h3";
+import { dirPrefix } from "../../nitro-entry/tls-paths.mjs";
 
 /** The management API the proxy forwards to (loopback by default — never LAN-exposed). It serves
  * HTTPS with the host's self-signed identity cert, so the proxy relaxes verification for that ONE
@@ -54,19 +55,17 @@ let warnedUnpinned = false;
 
 /** The host's identity cert PEMs, the one the management API serves FIRST: the
  * `native-cert.pem` sibling of the `cert.pem` the launcher names when it exists (a host that
- * took the identity split serves it; see nitro-entry/tls-paths.mjs), then the legacy cert.
- * Bun's fetch honours only the first `ca` entry (1.3.14, probed against a live host), so the
- * order is the pin. Re-read every few seconds so a re-minted identity is picked up without a
- * restart. */
+ * took the identity split serves it), then the legacy cert. The sibling is found by the entry's
+ * own `dirPrefix` (nitro-entry/tls-paths.mjs), so a cert under any other name has none.
+ * Bun's fetch honours only the first `ca` entry, so the order is the pin. Re-read every few
+ * seconds so a re-minted identity is picked up without a restart. */
 function hostIdentityCerts(): string[] {
 	const now = Date.now();
 	if (now - certCache.at < CERT_CACHE_MS) return certCache.pems;
 	const pems: string[] = [];
 	const legacy = process.env.PUNKTFUNK_UI_TLS_CERT?.trim();
 	if (legacy) {
-		const dir = legacy.endsWith("cert.pem")
-			? legacy.slice(0, -"cert.pem".length)
-			: null;
+		const dir = dirPrefix(legacy, "cert.pem");
 		for (const p of [dir === null ? null : `${dir}native-cert.pem`, legacy]) {
 			if (!p) continue;
 			try {
