@@ -1,0 +1,79 @@
+{
+  "$comment": "The console bridge's JSON (pf-console-ui bridge.rs), pinned by pf-console-ui bridge::tests, the Kotlin ConsoleBridgeVectorTest and the Swift ConsoleJSONTests. Hand-written: this file is the contract, not what serde emits today. A new ConsoleCmd variant or pushed shape adds a sample here.",
+  "commands": [
+    {"FetchLibrary": {"addr": "10.0.0.2", "mgmt": 47990, "fp_hex": "ab12"}},
+    {"RefreshRunning": {"addr": "10.0.0.2", "mgmt": 47990, "fp_hex": "ab12"}},
+    {"Pair": {"addr": "10.0.0.2", "port": 9777, "pin": "1234", "device_name": "Pixel"}},
+    {"SendLogs": {"addr": "10.0.0.2", "mgmt": 47990, "fp_hex": "ab12", "host_name": "Desk"}},
+    {"SpeedTest": {"key": "ab12", "addr": "10.0.0.2", "port": 9777, "fp_hex": "ab12", "host_name": "Desk"}},
+    {"SaveHost": {"name": "Attic", "addr": "10.0.0.9", "port": 9777}},
+    {"UpdateHost": {"key": "ab12", "name": "Desk", "addr": "10.0.0.3", "port": 9777}},
+    {"ForgetHost": {"key": "ab12"}},
+    {"Wake": {"key": "ab12", "then_connect": true}},
+    "CancelWake",
+    "Probe",
+    {"SetPin": {"key": "ab12", "preset_id": "couch", "pin": true}},
+    {"FetchProfiles": {"addr": "10.0.0.2", "mgmt": 47990, "fp_hex": "ab12"}},
+    {"WakeProfile": {"addr": "10.0.0.2", "mgmt": 47990, "fp_hex": "ab12", "id": "p1"}},
+    {"SetProfile": {"key": "ab12", "profile": {"id": "p1", "display_name": "Ada"}}},
+    {"BindPreset": {"key": "ab12", "game": null, "preset_id": "couch"}},
+    {"SetClipboard": {"key": "ab12", "on": true}},
+    {"UnpairHost": {"key": "ab12"}},
+    {"SavePreset": {"id": "couch", "name": "Couch", "overrides": {"bitrate_kbps": 50000}}},
+    {"DeletePreset": {"id": "couch"}},
+    {"PadTest": {"on": true}},
+    "LoadLicenses",
+    {"PromptAnswer": {"id": "q1", "choice": 1}},
+    {"PadAction": {"action": "rumble", "pad_key": "1118:2834:Xbox"}},
+    {"HostAction": {"addr": "10.0.0.2", "mgmt": 47990, "fp_hex": "ab12", "host_name": "Desk", "action_id": "power.sleep", "label": "Sleep"}},
+    {"EndGame": {"addr": "10.0.0.2", "mgmt": 47990, "fp_hex": "ab12", "app_id": "steam:570", "title": "Dota 2"}},
+    {"Install": {"addr": "10.0.0.2", "mgmt": 47990, "fp_hex": "ab12", "app_id": "steam:570", "title": "Dota 2", "action": "Install"}}
+  ],
+  "$commands": "One sample per ConsoleCmd variant, exactly as the console sends it: a unit variant is a bare string, one with fields {\"Name\": {...}}, an absent Option null.",
+  "models": {
+    "PairPhase": ["Idle", "Busy", {"Failed": "Wrong PIN."}, {"Paired": {"key": "ab12"}}],
+    "WakeStatus": [
+      {"key": "ab12", "name": "Desk", "seconds": 12, "timed_out": false, "online": true, "then_connect": true}
+    ],
+    "SpeedPhase": [
+      "Connecting",
+      "Measuring",
+      {"Progress": {"kbps": 41000}},
+      {"Failed": "Couldn't reach 10.0.0.2."},
+      {"Done": {"throughput_kbps": 120000, "wall": true, "clean": {"rate_kbps": 100000, "loss_pct": 0.5, "jitter_us": 800}, "recommended_kbps": 84000, "findings": [{"id": 3, "severity": 1, "numbers": [120000, 0, 0]}]}}
+    ],
+    "ProfilesAnswer": [
+      {"Listed": [
+        {"id": "p1", "display_name": "Ada", "accent": "#3366ff", "owner": true, "legacy_seat": false, "seat": {"state": "starting", "detail": "Starting Steam", "occupant": null, "steam_sign_in": true}},
+        {"id": "p2", "display_name": "Ben", "accent": null, "owner": false, "legacy_seat": true, "seat": null}
+      ]},
+      "NoProfiles",
+      {"Failed": "Couldn't load the profiles."}
+    ],
+    "LibraryPhase": ["Loading", "Empty", "Ready", {"Error": {"title": "Not paired", "body": "Pair this device first.", "can_retry": false}}],
+    "DownloadsPush": [
+      {"downloads": [
+        {"app_id": "steam:570", "state": "downloading", "done_bytes": 1048576, "total_bytes": 4194304, "rate_bps": 524288, "eta_s": 6, "phase": "File 2 of 3"},
+        {"app_id": "steam:620", "state": "failed", "done_bytes": 0, "error": "The disk is full."}
+      ], "grants": 255}
+    ],
+    "PadsJson": [
+      {"label": "Steam Controller", "pref": 0, "pads": [
+        {"name": "Steam Controller", "key": "sc2:1", "pref": 0, "steam_virtual": false, "detail": "28DE:1302 · gamepad", "forwarded": true, "rumble": true, "battery": null}
+      ], "others": []},
+      {"label": "DualSense", "pref": 2, "pads": [
+        {"name": "DualSense", "key": "054C:0CE6:DualSense", "pref": 2, "steam_virtual": false, "detail": "054C:0CE6 · gamepad", "forwarded": true, "rumble": true, "battery": {"percent": 42, "charging": false}}
+      ], "others": [{"name": "Keyboard", "kind": "keyboard", "detail": "USB"}]}
+    ],
+    "Settings": [{"bitrate_kbps": 20000, "gamepad_ui_enabled": false, "android.low_latency": false}]
+  },
+  "$models": "What a host pushes, by the Rust type that reads it. Each sample parses, and every key in it comes back out of the type: a key the type drops is a row that silently stays at its default. A producer may omit a key the type defaults.",
+  "settings_extra_keys": ["gamepad_ui_enabled", "android.low_latency"],
+  "$settings_extra_keys": "Keys of the Settings sample that ride Settings::extra, which is serde-flattened: top-level keys, never nested under \"extra\".",
+  "codes": {
+    "phase": ["connecting", "streaming", "failed", "ended", "reconnecting", "profile_gone"],
+    "stale": ["fresh", "waking", "offline"],
+    "menu": ["up", "down", "left", "right", "confirm", "back", "secondary", "tertiary", "jump_back", "jump_forward", "ok_down", "ok_up"]
+  },
+  "$codes": "The integer codes a host passes, each list indexed by code (bridge::phase_code, stale_code, menu_code). A phase or menu code past its list is refused; a stale code past it reads as fresh."
+}

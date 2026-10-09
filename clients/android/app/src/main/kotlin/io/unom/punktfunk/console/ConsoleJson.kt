@@ -3,8 +3,10 @@ package io.unom.punktfunk.console
 import android.os.Vibrator
 import android.view.InputDevice
 import io.unom.punktfunk.HostActions
+import io.unom.punktfunk.ProfilesAnswer
 import io.unom.punktfunk.Settings
 import io.unom.punktfunk.SettingsFields
+import io.unom.punktfunk.SpeedTestPhase
 import io.unom.punktfunk.StatsVerbosity
 import io.unom.punktfunk.StreamPreset
 import io.unom.punktfunk.kit.Gamepad
@@ -26,6 +28,7 @@ import org.json.JSONObject
  * (`crates/pf-console-ui/src/model.rs` `HostRow`/`WakeStatus`/`PairPhase`, `library.rs`
  * `LibraryGame`/`LibraryPhase`, `pf-client-core/src/trust.rs` `Settings`/`KnownHosts`), so there
  * is no Android-side mirror type to drift; the Rust structs deserialize these directly.
+ * `clients/shared/console-bridge-vectors.json` holds a sample of each pushed model these write.
  */
 internal object ConsoleJson {
     // ---- host rows (`HostRow`) ------------------------------------------------------------
@@ -276,6 +279,51 @@ internal object ConsoleJson {
     fun pairFailed(msg: String): String = JSONObject().put("Failed", msg).toString()
     fun pairPaired(key: String): String =
         JSONObject().put("Paired", JSONObject().put("key", key)).toString()
+
+    // ---- speed test / profiles ----------------------------------------------------------------
+
+    /** `SpeedPhase`: unit variants are bare strings. */
+    fun speedPhase(p: SpeedTestPhase): String = when (p) {
+        SpeedTestPhase.Connecting -> "\"Connecting\""
+        SpeedTestPhase.Measuring -> "\"Measuring\""
+        is SpeedTestPhase.Failed -> JSONObject().put("Failed", p.message).toString()
+        is SpeedTestPhase.Done -> JSONObject().put(
+            "Done",
+            JSONObject()
+                .put("throughput_kbps", p.throughputKbps)
+                .put("wall", p.wall)
+                .put(
+                    "clean",
+                    p.clean?.let {
+                        JSONObject()
+                            .put("rate_kbps", it.rateKbps)
+                            .put("loss_pct", it.lossPct)
+                            .put("jitter_us", it.jitterUs)
+                    } ?: JSONObject.NULL,
+                )
+                .put("recommended_kbps", p.recommendedKbps)
+                .put(
+                    "findings",
+                    JSONArray(
+                        p.findings.map { f ->
+                            JSONObject().put("id", f.id).put("severity", f.severity)
+                                .put("numbers", JSONArray(f.numbers))
+                        },
+                    ),
+                ),
+        ).toString()
+    }
+
+    /** `SpeedPhase::Progress`: a mid-burst figure for the console's graph. */
+    fun speedProgress(kbps: Int): String =
+        JSONObject().put("Progress", JSONObject().put("kbps", kbps)).toString()
+
+    /** The answer to `ConsoleCmd::FetchProfiles`, as the console's `ProfilesAnswer`. */
+    fun profilesAnswer(answer: ProfilesAnswer): String = when (answer) {
+        is ProfilesAnswer.Listed -> JSONObject().put("Listed", JSONArray(answer.rows.map(::profileRow))).toString()
+        ProfilesAnswer.NoProfiles -> "\"NoProfiles\""
+        is ProfilesAnswer.Failed -> JSONObject().put("Failed", answer.why).toString()
+    }
 
     // ---- library ------------------------------------------------------------------------------
 

@@ -57,14 +57,7 @@ final class ConsoleJSONTests: XCTestCase {
     /// `clients/shared/host-row-vectors.json`: the rows the Kotlin and desktop producers send
     /// too, so a player moving between devices finds one carousel.
     func testHostRowsMatchTheSharedVectors() throws {
-        let url = URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent() // PunktfunkKitTests
-            .deletingLastPathComponent() // Tests
-            .deletingLastPathComponent() // apple
-            .deletingLastPathComponent() // clients
-            .appendingPathComponent("shared/host-row-vectors.json")
-        let doc = try XCTUnwrap(
-            try JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
+        let doc = try sharedVectors("host-row-vectors.json")
         for c in try XCTUnwrap(doc["cases"] as? [[String: Any]]) {
             let name = c["name"] as? String ?? "?"
             var ids: [String: UUID] = [:]
@@ -213,6 +206,91 @@ final class ConsoleJSONTests: XCTestCase {
         XCTAssertEqual(merged.hdrEnabled, false)
         XCTAssertNil(merged.codec, "the console cleared it")
         XCTAssertEqual(merged.modifierLayout, "pc", "only this app edits it")
+    }
+
+    /// `clients/shared/console-bridge-vectors.json`: the models this client writes match its
+    /// samples, and the menu and phase codes match its table. `Phase` stops at reconnecting:
+    /// this client never reports a profile the host refused.
+    func testBridgeShapesMatchTheSharedVectors() throws {
+        let doc = try sharedVectors("console-bridge-vectors.json")
+        let models = try XCTUnwrap(doc["models"] as? [String: [Any]])
+        // Every key written is in the sample with its value; one left out is one Rust defaults.
+        func within(_ got: Any, _ want: Any) -> Bool {
+            if let g = got as? [String: Any], let w = want as? [String: Any] {
+                return g.allSatisfy { k, v in w[k].map { within(v, $0) } ?? false }
+            }
+            if let g = got as? [Any], let w = want as? [Any] {
+                return g.count == w.count && zip(g, w).allSatisfy { within($0, $1) }
+            }
+            return (got as AnyObject).isEqual(want)
+        }
+        func check(_ model: String, _ i: Int, _ written: String, exact: Bool = true) throws {
+            let got = try JSONSerialization.jsonObject(
+                with: Data(written.utf8), options: .fragmentsAllowed)
+            let want = try XCTUnwrap(models[model]?[i], "\(model)[\(i)]")
+            let same = exact ? (got as AnyObject).isEqual(want) : within(got, want)
+            XCTAssertTrue(same, "\(model)[\(i)] wrote \(written)")
+        }
+
+        try check("PairPhase", 0, ConsoleJSON.pairIdle)
+        try check("PairPhase", 1, ConsoleJSON.pairBusy)
+        try check("PairPhase", 2, ConsoleJSON.pairFailed("Wrong PIN."))
+        try check("PairPhase", 3, ConsoleJSON.pairPaired(key: "ab12"))
+        try check(
+            "WakeStatus", 0,
+            ConsoleJSON.wake(
+                key: "ab12", name: "Desk", seconds: 12, timedOut: false, online: true,
+                thenConnect: true))
+        try check(
+            "LibraryPhase", 3,
+            ConsoleJSON.libraryError(
+                title: "Not paired", body: "Pair this device first.", canRetry: false))
+        let downloads = [
+            HostDownload(
+                appID: "steam:570", state: "downloading", doneBytes: 1_048_576,
+                totalBytes: 4_194_304, rateBps: 524_288, etaS: 6, phase: "File 2 of 3"),
+            HostDownload(appID: "steam:620", state: "failed", error: "The disk is full."),
+        ]
+        try check("DownloadsPush", 0, ConsoleJSON.downloads(downloads, grants: 255))
+        let sc2 = ConsoleJSON.Pad(
+            name: "Steam Controller", key: "sc2:1", pref: 0, detail: "28DE:1302 · gamepad",
+            forwarded: true, rumble: true, battery: nil, charging: false)
+        try check("PadsJson", 0, ConsoleJSON.pads([sc2], active: sc2), exact: false)
+        let ds = ConsoleJSON.Pad(
+            name: "DualSense", key: "054C:0CE6:DualSense", pref: 2, detail: "054C:0CE6 · gamepad",
+            forwarded: true, rumble: true, battery: 0.42, charging: false)
+        try check(
+            "PadsJson", 1,
+            ConsoleJSON.pads([ds], active: ds, others: [(name: "Keyboard", kind: "keyboard")]),
+            exact: false)
+
+        let codes = try XCTUnwrap(doc["codes"] as? [String: [String]])
+        func camel(_ name: String) -> String {
+            let words = name.split(separator: "_")
+            return words.prefix(1).joined() + words.dropFirst().map(\.capitalized).joined()
+        }
+        for (code, name) in try XCTUnwrap(codes["menu"]).enumerated() {
+            let menu = ConsoleBridge.Menu(rawValue: UInt8(code))
+            XCTAssertEqual(menu.map { "\($0)" }, camel(name), "menu \(code)")
+        }
+        XCTAssertNil(ConsoleBridge.Menu(rawValue: UInt8(codes["menu"]?.count ?? 0)))
+        for (code, name) in try XCTUnwrap(codes["phase"]).enumerated() {
+            let phase = ConsoleBridge.Phase(rawValue: UInt8(code))
+            XCTAssertEqual(
+                phase.map { "\($0)" }, name == "profile_gone" ? nil : camel(name), "phase \(code)")
+        }
+    }
+
+    /// One of the `clients/shared` vector files.
+    private func sharedVectors(_ file: String) throws -> [String: Any] {
+        let url = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent() // PunktfunkKitTests
+            .deletingLastPathComponent() // Tests
+            .deletingLastPathComponent() // apple
+            .deletingLastPathComponent() // clients
+            .appendingPathComponent("shared/\(file)")
+        return try XCTUnwrap(
+            try JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
     }
 }
 

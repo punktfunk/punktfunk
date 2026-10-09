@@ -17,7 +17,7 @@ pub struct ProfilePick {
 }
 
 /// A seat profile's state right now. A word the host adds later reads as [`SeatState::Other`].
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SeatState {
     #[default]
@@ -31,7 +31,7 @@ pub enum SeatState {
 }
 
 /// A profile's own seat. Absent for one that plays on the box's own session.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Seat {
     pub state: SeatState,
@@ -44,7 +44,7 @@ pub struct Seat {
 }
 
 /// One row of `enumerate`. Every field defaults, so a host that adds one never fails the list.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ListedProfile {
     pub id: String,
