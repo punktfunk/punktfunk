@@ -58,6 +58,11 @@ pub struct CursorShm {
     pub _reserved: u32,
 }
 
+/// Straight-alpha RGBA for a pixel that XORs (inverts) the screen. No blend can honor an
+/// inversion; translucent mid-gray stays visible over dark and light content. Every
+/// cursor rasteriser on either side of the driver boundary draws invert as this.
+pub const INVERT_RGBA: [u8; 4] = [0x80, 0x80, 0x80, 0xB4];
+
 /// One shape as straight-alpha RGBA, `w * h * 4` bytes.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ShapeRgba {
@@ -103,7 +108,7 @@ pub fn shape_extent(hdr: &CursorShm) -> (usize, usize, usize) {
 /// [`shape_extent`]) into straight RGBA. ALPHA is BGRA (swap R↔B). MASKED_COLOR: `alpha ==
 /// 0` is opaque color; `0xFF` XORs the screen with the color. XOR with black is the
 /// transparent field around a monochrome shape (the I-beam is mostly that); XOR with
-/// anything else is an inversion, which no blend can honor — mid-gray keeps it visible.
+/// anything else is an inversion, drawn as [`INVERT_RGBA`].
 #[must_use]
 pub fn shape_rgba(hdr: &CursorShm, raw: &[u8]) -> ShapeRgba {
     let (width, rows, pitch) = shape_extent(hdr);
@@ -124,7 +129,7 @@ pub fn shape_rgba(hdr: &CursorShm, raw: &[u8]) -> ShapeRgba {
                 } else if (r, g, b) == (0, 0, 0) {
                     rgba.extend_from_slice(&[0, 0, 0, 0]);
                 } else {
-                    rgba.extend_from_slice(&[0x80, 0x80, 0x80, 0xB4]);
+                    rgba.extend_from_slice(&INVERT_RGBA);
                 }
             } else {
                 rgba.extend_from_slice(&[r, g, b, a]);

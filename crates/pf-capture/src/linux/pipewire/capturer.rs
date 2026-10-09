@@ -531,23 +531,15 @@ impl Capturer for PortalCapturer {
         risk
     }
 
-    /// Standard HDR10 default block once 10-bit PQ negotiated. Neither Linux
-    /// producer exposes mastering through the screencast (Mutter has none;
-    /// gamescope's `VK_EXT_hdr_metadata` stops at the compositor). The native
-    /// loop prefers the client's volume when sent (`Hello::display_hdr`).
+    /// [`pf_frame::hdr::generic_hdr10`] once 10-bit PQ negotiated. Neither Linux producer
+    /// exposes mastering through the screencast (Mutter has none; gamescope's
+    /// `VK_EXT_hdr_metadata` stops at the compositor). The native loop prefers the client's
+    /// volume when sent (`Hello::display_hdr`).
     fn hdr_meta(&self) -> Option<pf_frame::HdrMeta> {
-        if !self.signals.hdr_negotiated.load(Ordering::Relaxed) {
-            return None;
-        }
-        Some(pf_frame::HdrMeta {
-            // ST.2086 order G, B, R; (x, y) chromaticity in 1/50000 units.
-            display_primaries: [[8500, 39850], [6550, 2300], [35400, 14600]],
-            white_point: [15635, 16450],                 // D65
-            max_display_mastering_luminance: 10_000_000, // 1000 cd/m² (0.0001 units)
-            min_display_mastering_luminance: 50,         // 0.005 cd/m²
-            max_cll: 0,
-            max_fall: 0,
-        })
+        self.signals
+            .hdr_negotiated
+            .load(Ordering::Relaxed)
+            .then(pf_frame::hdr::generic_hdr10)
     }
 }
 
