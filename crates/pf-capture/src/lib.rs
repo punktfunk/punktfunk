@@ -717,6 +717,9 @@ mod cursor_witness;
 // so its tests run on every target; `idd_push/stall.rs` writes the report.
 #[path = "windows/stall_model.rs"]
 mod stall_model;
+// The GDI cursor poller's planes-to-RGBA rasterisers, pure over `&[u8]` for the same reason.
+#[path = "windows/cursor_raster.rs"]
+mod cursor_raster;
 #[cfg(target_os = "windows")]
 pub use idd_push::driver_encode::{open_driver_encoder, DriverEncodeOpenError, DriverEncodeParams};
 // A monitor the host did not create, captured and encoded by a capture worker.
