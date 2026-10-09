@@ -1,10 +1,11 @@
 //! The per-tick data path: capture, submit, poll into the send thread, the encode-stall watch,
 //! the IDD pipeline-depth adaptation, and the pacing sleep. The drain after the loop is here too.
 
-use super::recovery::{reset_stalled_encoder, run_loop_stage};
 use super::state::{Flow, StreamState, Tick};
 use super::*;
-use crate::encode_recovery::MAX_ENCODER_RESETS;
+use crate::encode_recovery::{
+    on_submit_error, reset_stalled_encoder, run_parked_stage, MAX_ENCODER_RESETS,
+};
 use crate::stats_recorder::DriverSample;
 
 // ~20 net behind-frames (≈0.3 s) escalates; warmup skips the first ~1 s of bring-up.
@@ -61,24 +62,6 @@ fn cadence_budget(
     match src_period_ns {
         Some(p) => std::time::Duration::from_nanos(p).clamp(interval, interval * 4),
         None => interval,
-    }
-}
-
-/// How long past `next` the arrival wait runs before a repeat goes out: half an interval
-/// with no measured source cadence, else until 1.25× the source period after the last
-/// submit. A steady slower source gets no repeat between its own frames; a stalled one
-/// re-sends after that same wait.
-fn keepalive_wait(
-    interval: std::time::Duration,
-    src_period_ns: Option<u64>,
-) -> std::time::Duration {
-    let half = interval.mul_f32(0.5);
-    match src_period_ns {
-        Some(p) => std::time::Duration::from_nanos(p)
-            .mul_f32(1.25)
-            .saturating_sub(interval)
-            .max(half),
-        None => half,
     }
 }
 
@@ -196,13 +179,12 @@ impl StreamState {
         if self.perf {
             self.st_cap.push(cap_us);
         }
-        // A recovery rung the capturer's ladder chose but this loop must run (the encoder is
-        // ours). Its outcome goes straight back; a reset forfeited every in-flight AU.
-        if let Some(stage) = self.capturer.take_pending_stage() {
-            let outcome = run_loop_stage(stage, &mut self.enc, &mut self.inflight);
-            self.capturer.stage_done(stage, outcome);
-            self.watchdog.restart();
-        }
+        run_parked_stage(
+            &mut *self.capturer,
+            &mut *self.enc,
+            &mut self.watchdog,
+            || self.inflight.clear(),
+        );
         let mut repeat = false;
         match cap_result {
             Ok(Some(f)) => self.on_frame(f, t_cap),
@@ -378,28 +360,9 @@ impl StreamState {
             }
         };
         if let Err(e) = submitted {
-            if e.downcast_ref::<crate::encode::TerminalEncoderError>()
-                .is_some()
-            {
-                tracing::error!(
-                    error = %format!("{e:#}"),
-                    "encoder failed with a deterministic configuration error — ending the video \
-                     session without rebuild attempts (see the error for the remedy)");
-                return Err(e).context("encoder submit");
-            }
-            let Some(backoff) = self.watchdog.recover(self.interval, || {
-                reset_stalled_encoder(&mut self.enc, &mut self.inflight)
-            }) else {
-                tracing::error!(
-                    error = %format!("{e:#}"),
-                    resets = self.watchdog.resets(),
-                    "encoder did not recover after repeated in-place rebuilds — ending the video \
-                     session (see the error above for the cause)");
-                return Err(e).context("encoder submit");
-            };
-            tracing::warn!(error = %format!("{e:#}"), reset = self.watchdog.resets(),
-                max = MAX_ENCODER_RESETS,
-                "encoder submit failed — encoder rebuilt in place, forcing an IDR");
+            let backoff = on_submit_error(&mut self.watchdog, e, self.interval, || {
+                reset_stalled_encoder(&mut *self.enc, || self.inflight.clear())
+            })?;
             self.next = std::time::Instant::now() + backoff;
             std::thread::sleep(backoff);
             return Ok(Flow::Continue);
@@ -414,9 +377,6 @@ impl StreamState {
             self.st_submit.push(submit_us);
         }
         self.next = if frame_driven_enabled() && self.capturer.supports_arrival_wait() {
-            if !repeat {
-                self.pace.charge();
-            }
             std::time::Instant::now() + self.interval
         } else {
             self.next + self.interval
@@ -678,7 +638,7 @@ impl StreamState {
             (None, None) => return Ok(()),
         };
         let recovered = self.watchdog.recover(self.interval, || {
-            reset_stalled_encoder(&mut self.enc, &mut self.inflight)
+            reset_stalled_encoder(&mut *self.enc, || self.inflight.clear())
         });
         if recovered.is_none() {
             return Err(poll_err.unwrap_or_else(|| anyhow!("{why}")))
@@ -818,41 +778,18 @@ impl StreamState {
         }
     }
 
-    /// Wait for the next tick: the capturer's arrival wait under the credit pacer, the next
-    /// access unit of an encoder that publishes its own, or the fixed-interval sleep. A
-    /// repeat holds no slot: the real frame after it goes out on arrival.
+    /// Wait for the next tick ([`crate::send_pacing::wait_next_tick`]) on this session's
+    /// measured source cadence.
     pub(super) fn sleep_to_next(&mut self, t_cap: std::time::Instant, repeat: bool) {
-        if !frame_driven_enabled() {
-            return self.sleep_to_grid();
-        }
-        if self.capturer.supports_arrival_wait() {
-            // Anchor the 0.9× floor to `t_cap`, not `next`: a sync encoder folds encode into cadence.
-            if !repeat {
-                let earliest = std::cmp::max(
-                    t_cap + self.interval.mul_f32(0.9),
-                    self.pace.earliest(std::time::Instant::now(), self.interval),
-                );
-                if let Some(d) = earliest.checked_duration_since(std::time::Instant::now()) {
-                    std::thread::sleep(d);
-                }
-            }
-            self.capturer
-                .wait_arrival(self.next + keepalive_wait(self.interval, self.src_period_ns));
-        } else if self.enc.ready_aus(self.next).is_some() {
-            // An access unit landed or the period ran out. The grid restarts here: on its own
-            // phase it holds a finished AU for up to a period, a different one every session.
-            self.next = std::time::Instant::now();
-        } else {
-            self.sleep_to_grid();
-        }
-    }
-
-    /// The fixed-cadence tick, re-anchored when the loop is behind it.
-    fn sleep_to_grid(&mut self) {
-        match self.next.checked_duration_since(std::time::Instant::now()) {
-            Some(d) => std::thread::sleep(d),
-            None => self.next = std::time::Instant::now(),
-        }
+        crate::send_pacing::wait_next_tick(
+            &mut *self.capturer,
+            &mut *self.enc,
+            &mut self.pace,
+            &mut self.next,
+            (!repeat).then_some(t_cap),
+            self.interval,
+            self.src_period_ns,
+        );
     }
 
     /// After the loop: poll what the encoder still owes into the send thread.
@@ -1016,22 +953,5 @@ mod tests {
         assert!(!mark_recovery_boundary(&mut pos, false, period));
         assert!(!mark_recovery_boundary(&mut pos, false, period));
         assert!(mark_recovery_boundary(&mut pos, false, period));
-    }
-}
-
-#[cfg(test)]
-mod keepalive_tests {
-    use super::keepalive_wait;
-    use std::time::Duration;
-
-    /// A source at 2× the interval gets its next frame before any repeat; one at the
-    /// interval, or none measured, keeps the plain half-interval keep-alive.
-    #[test]
-    fn a_slower_steady_source_outlives_the_keepalive() {
-        let i = Duration::from_micros(8_333);
-        assert_eq!(keepalive_wait(i, None), i.mul_f32(0.5));
-        assert_eq!(keepalive_wait(i, Some(i.as_nanos() as u64)), i.mul_f32(0.5));
-        let two = keepalive_wait(i, Some(2 * i.as_nanos() as u64));
-        assert!(two > i.mul_f32(1.4) && two < i.mul_f32(1.6), "{two:?}");
     }
 }
