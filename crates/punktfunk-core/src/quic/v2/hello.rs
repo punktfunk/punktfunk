@@ -661,6 +661,15 @@ mod tests {
             features: FeatureSet::default().with(reg::FEATURE_STREAM_CONFIG),
             profile: None,
         };
+        // The bytes on the wire are pinned: a change here is a wire change.
+        let frame: String = ch.encode_v2().iter().map(|b| format!("{b:02x}")).collect();
+        assert_eq!(
+            frame,
+            "01407f01100303030303030303030303030303030302020100030c80070000380400003c000000040100\
+             05010006040000000007044465636b090540400000010a01020b01020c01000e0280050f0480bb0000\
+             100110110100120100130c616e64726f696420302e3433140101150902703105436f756368160501c4\
+             090000180101"
+        );
         let back = ClientHello::from_body(&ch.fields().into_body()).unwrap();
         assert_eq!(back, ch);
         let entries = back.ext_entries();
