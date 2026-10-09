@@ -1,15 +1,13 @@
-//! Find a title on this host's shelf by name. The console's keyboard types it (Steam's on a
-//! Deck); searching swaps this screen for the shelf filtered to the titles whose name
-//! contains it, so Back from the results lands on the whole shelf.
+//! Find a title on this host's shelf by name. The console's keyboard types it, or the
+//! device's own (Steam's on a Deck); searching swaps this screen for the shelf filtered to
+//! the titles whose name contains it, so Back from the results lands on the whole shelf.
 
 use crate::glyphs::{Hint, HintKey};
 use crate::model::HostRow;
 use crate::pointer::Pointer;
-use crate::screens::{Ctx, Outbox, Screen, ScreenView};
+use crate::screens::{Ctx, Outbox, Screen, ScreenView, TextEntry};
 use crate::theme::Fonts;
-use crate::widgets::{
-    blurb, entry_hints, field_key, type_text, Entry, Keyboard, ListMsg, MenuList, RowSpec,
-};
+use crate::widgets::{blurb, field_key, type_text, Entry, ListMsg, MenuList, RowSpec};
 use pf_client_core::menu_nav::{MenuEvent, MenuPulse};
 use skia_safe::{Canvas, Image, Rect};
 use std::collections::HashMap;
@@ -22,7 +20,7 @@ pub(crate) struct SearchScreen {
     /// Covers the shelf already decoded, handed on so the results show them at once.
     art: HashMap<String, Image>,
     list: MenuList,
-    keyboard: Keyboard,
+    keyboard: TextEntry,
     query: String,
     editing: bool,
 }
@@ -34,7 +32,7 @@ impl SearchScreen {
             host: host.clone(),
             art: art.clone(),
             list: MenuList::new(),
-            keyboard: Keyboard::new(),
+            keyboard: TextEntry::default(),
             query: String::new(),
             editing: true,
         }
@@ -107,10 +105,8 @@ impl ScreenView for SearchScreen {
 
     fn menu(&mut self, ev: MenuEvent, ctx: &mut Ctx, fx: &mut Outbox) -> Option<MenuPulse> {
         if self.editing {
-            let deck = ctx.device.deck;
-            let (entry, pulse) = self
-                .keyboard
-                .edit_menu(ev, deck, &mut self.query, Self::admits);
+            let (entry, pulse) =
+                (self.keyboard).menu(ev, ctx.device, &mut self.query, Self::admits);
             return match entry {
                 Entry::Stay => pulse,
                 Entry::Close => {
@@ -133,14 +129,15 @@ impl ScreenView for SearchScreen {
 
     /// A press outside the tray closes it; the row underneath is not activated.
     fn pointer(&mut self, p: Pointer, ctx: &mut Ctx, fx: &mut Outbox) -> bool {
-        if self.editing && !ctx.device.deck {
-            let Some(entry) = self.keyboard.edit_pointer(p, &mut self.query, Self::admits) else {
-                return false;
-            };
+        let tray = self
+            .editing
+            .then(|| (self.keyboard).pointer(p, ctx.device, &mut self.query, Self::admits));
+        if let Some(entry) = tray.flatten() {
             match entry {
-                Entry::Stay => {}
-                Entry::Close => self.editing = false,
-                Entry::Done => {
+                None => return false,
+                Some(Entry::Stay) => {}
+                Some(Entry::Close) => self.editing = false,
+                Some(Entry::Done) => {
                     self.search(fx);
                 }
             }
@@ -158,7 +155,7 @@ impl ScreenView for SearchScreen {
 
     fn hints(&self, ctx: &Ctx) -> Vec<Hint> {
         if self.editing {
-            return entry_hints(ctx.device.deck, "Search");
+            return TextEntry::hints(ctx.device, "Search");
         }
         vec![
             Hint::new(HintKey::Confirm, "Select"),
@@ -182,12 +179,8 @@ impl ScreenView for SearchScreen {
             rect,
             k,
         );
-        let seat = self.keyboard.seat(self.editing && !ctx.device.deck, dt);
-        let tray_h = if seat > 0.0 {
-            (Keyboard::tray_height() + 12.0) * k * seat
-        } else {
-            0.0
-        };
+        self.keyboard.seat(self.editing, ctx.device, dt);
+        let tray_h = self.keyboard.reserve(k);
         let list_rect = Rect::from_ltrb(
             rect.left,
             below.top,
@@ -202,10 +195,7 @@ impl ScreenView for SearchScreen {
         ];
         self.list
             .render(canvas, list_rect, &rows, fonts, k, dt, !self.editing);
-        if seat > 0.0 {
-            let (w, bottom) = (f64::from(rect.width()), f64::from(rect.bottom));
-            self.keyboard.render(canvas, fonts, w, bottom, seat, k);
-        }
+        self.keyboard.render(canvas, fonts, rect, k);
     }
 
     fn press(&mut self) {
@@ -232,11 +222,11 @@ mod tests {
         }
     }
 
-    fn with_ctx<R>(deck: bool, f: impl FnOnce(&mut Ctx) -> R) -> R {
+    fn with_ctx<R>(system_keyboard: bool, f: impl FnOnce(&mut Ctx) -> R) -> R {
         let mut settings = Settings::default();
         let library = crate::library::LibraryShared::default();
         let device = crate::screens::Device {
-            deck,
+            system_keyboard,
             ..crate::screens::Device::test()
         };
         let mut ctx = Ctx {

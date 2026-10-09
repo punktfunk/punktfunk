@@ -720,6 +720,34 @@ fn wake_gates_input_in_the_same_press() {
     assert!(s.handle_menu(MenuEvent::Move(MenuDir::Left)).is_some());
 }
 
+/// A on the wake card's Try Again acts on the card: the tab hidden under it does not dip.
+#[test]
+fn a_on_a_takeover_leaves_the_screen_under_it_still() {
+    let host = hosts().remove(0);
+    let (mut s, console, _library) = shell(vec![Screen::Home(HomeScreen::new())]);
+    s.strip_focus = true;
+    console.set_wake(Some(WakeStatus {
+        key: host.key.clone(),
+        name: host.name.clone(),
+        seconds: 30,
+        timed_out: true,
+        online: false,
+        then_connect: false,
+    }));
+    s.sync();
+    assert_eq!(s.takeover(), Some(Takeover::Wake));
+    assert!(matches!(
+        s.handle_menu(MenuEvent::Confirm),
+        Some(MenuPulse::Confirm)
+    ));
+    assert!(!s.strip.plate_busy(), "the tab under the card stays still");
+    console.set_wake(None);
+    s.sync();
+    assert_eq!(s.takeover(), None);
+    s.handle_menu(MenuEvent::Confirm);
+    assert!(s.strip.plate_busy(), "with the card gone, A dips the tab");
+}
+
 /// Tab / Shift+Tab walk the console's tabs, the keyboard's L1/R1.
 #[test]
 fn tab_and_shift_tab_change_tabs() {

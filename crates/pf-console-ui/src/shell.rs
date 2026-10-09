@@ -192,8 +192,9 @@ pub struct ConsoleOptions {
     /// The About row's version, verbatim. `None` shows this kit's version: right where the
     /// app ships from this workspace.
     pub version: Option<String>,
-    /// Steam Deck: Steam's keyboard types; this shell never draws one.
-    pub deck: bool,
+    /// The device's own keyboard types into an open field: Steam's on a Steam Deck, tvOS's
+    /// on an Apple TV. This shell never raises its keyboard tray.
+    pub system_keyboard: bool,
     /// A TV (Apple TV, Android TV): rows for a clipboard or a phone's sensors do nothing.
     pub tv: bool,
     /// Host has another UI when the console is off (phone/tablet touch shell).
@@ -232,11 +233,11 @@ pub struct DeviceScreen {
 }
 
 impl ConsoleOptions {
-    pub fn desktop(device_name: String, deck: bool) -> ConsoleOptions {
+    pub fn desktop(device_name: String, system_keyboard: bool) -> ConsoleOptions {
         ConsoleOptions {
             device_name,
             version: None,
-            deck,
+            system_keyboard,
             tv: false,
             fallback_ui: false,
             // The desktop probe reads the session's Vulkan device, which the console does
@@ -271,6 +272,18 @@ pub const DEFAULT_GPU_CACHE_BYTES: usize = 160 << 20;
 /// It is a ceiling, not an allocation, and the shell hands its covers back
 /// before a stream takes the GPU.
 pub const MIN_GPU_CACHE_BYTES: usize = 96 << 20;
+
+/// The full-screen card that owns input, in the order input checks them. Asking and
+/// connecting coexist (the card shows after a beat), and a woken host goes on to connect.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Takeover {
+    Launching,
+    Asking,
+    SeatWait,
+    Connecting,
+    Wake,
+    Speed,
+}
 
 pub(crate) struct Shell {
     /// `stack[0]` is [`Self::tab`]'s root.
@@ -431,7 +444,7 @@ impl Shell {
             device: crate::screens::Device {
                 platform: opts.platform,
                 screen: opts.screen,
-                deck: opts.deck,
+                system_keyboard: opts.system_keyboard,
                 tv: opts.tv,
                 fallback_ui: opts.fallback_ui,
                 pyrowave_ok: opts.pyrowave_ok,
@@ -554,14 +567,20 @@ impl Shell {
     /// whose Back belongs to the system when the console does not want it (tvOS's Menu)
     /// asks before it binds.
     pub(crate) fn at_root(&self) -> bool {
-        self.stack.len() == 1
-            && self.strip_focus
-            && self.connecting.is_none()
-            && self.launching.is_none()
-            && self.asking.is_none()
-            && self.seat_wait.is_none()
-            && self.wake.is_none()
-            && self.speed.is_none()
+        self.stack.len() == 1 && self.strip_focus && self.takeover().is_none()
+    }
+
+    /// The takeover that owns input: the first one up, in [`Takeover`]'s order.
+    pub(crate) fn takeover(&self) -> Option<Takeover> {
+        let up = [
+            (self.launching.is_some(), Takeover::Launching),
+            (self.asking.is_some(), Takeover::Asking),
+            (self.seat_wait.is_some(), Takeover::SeatWait),
+            (self.connecting.is_some(), Takeover::Connecting),
+            (self.wake.is_some(), Takeover::Wake),
+            (self.speed.is_some(), Takeover::Speed),
+        ];
+        up.into_iter().find_map(|(on, t)| on.then_some(t))
     }
 
     pub(crate) fn editing(&self) -> bool {
@@ -586,14 +605,7 @@ impl Shell {
     /// screen — the per-frame-work-that-changes-nothing shape this shell has
     /// already paid to remove once.
     pub(crate) fn focus_announcement(&mut self) -> Option<String> {
-        if self.in_stream
-            || self.holds_stream()
-            || self.connecting.is_some()
-            || self.asking.is_some()
-            || self.seat_wait.is_some()
-            || self.wake.is_some()
-            || self.speed.is_some()
-        {
+        if self.in_stream || self.takeover().is_some() {
             return None;
         }
         if self.strip_focus && self.stack.len() == 1 {
@@ -1137,9 +1149,10 @@ impl Shell {
         pulse.filter(|_| self.settings.pad_rumble)
     }
 
-    /// OK went down on what has focus: its plate and the element dip.
+    /// OK went down on what has focus: its plate and the element dip. Under a takeover
+    /// nothing dips: its card has the input, and the screen beneath is hidden.
     fn dip(&mut self) {
-        if self.connecting.is_some() || self.launching.is_some() || self.seat_wait.is_some() {
+        if self.takeover().is_some() {
             return;
         }
         if self.strip_focus && self.stack.len() == 1 {
@@ -1173,85 +1186,8 @@ impl Shell {
     fn menu_event(&mut self, ev: MenuEvent) -> Option<MenuPulse> {
         self.last_input = Instant::now();
         self.sync();
-        // The launch hold owns the buttons while it is up: before the dial lands B
-        // cancels it, as the connect card's B does; after, any press shows the stream.
-        if let Some(l) = &self.launching {
-            if l.connected {
-                if matches!(ev, MenuEvent::Confirm | MenuEvent::Back) {
-                    self.reveal_stream();
-                    return Some(MenuPulse::Confirm);
-                }
-            } else if ev == MenuEvent::Back {
-                self.launching = None;
-                self.actions.push_back(OverlayAction::CancelConnect);
-                return Some(MenuPulse::Confirm);
-            }
-            return None;
-        }
-        if self.asking.is_some() {
-            if ev != MenuEvent::Back {
-                return None;
-            }
-            // Nothing has dialed yet: no cancel to send.
-            self.asking = None;
-            self.connecting = None;
-            return Some(MenuPulse::Confirm);
-        }
-        if self.seat_wait.is_some() {
-            if ev != MenuEvent::Back {
-                return None;
-            }
-            // Nothing has dialed yet: no cancel to send.
-            self.seat_wait = None;
-            return Some(MenuPulse::Confirm);
-        }
-        if self.connecting.is_some() {
-            if ev == MenuEvent::Back {
-                // Drop the takeover here, not on the next `session_phase`.
-                // The dial is blocking on the host; a dropped cancel never
-                // sends a phase. Cancel is local; `CancelConnect` still goes
-                // out and hosts already handle a dial that lands after it.
-                self.connecting = None;
-                self.actions.push_back(OverlayAction::CancelConnect);
-                return Some(MenuPulse::Confirm);
-            }
-            return None;
-        }
-        if let Some(w) = &self.wake {
-            match ev {
-                MenuEvent::Back => {
-                    self.bus.send(ConsoleCmd::CancelWake);
-                    self.wake = None;
-                    self.wake_optimistic = false;
-                    return Some(MenuPulse::Confirm);
-                }
-                MenuEvent::Confirm if w.timed_out => {
-                    self.bus.send(ConsoleCmd::Wake {
-                        key: w.key.clone(),
-                        then_connect: w.then_connect,
-                    });
-                    return Some(MenuPulse::Confirm);
-                }
-                _ => return None,
-            }
-        }
-        if self.speed.is_some() {
-            match ev {
-                // Dismissing mid-burst abandons the measurement, not the burst: the host
-                // finishes it either way, and `advance_speed` drops the late report.
-                MenuEvent::Back => {
-                    self.close_speed();
-                    return Some(MenuPulse::Confirm);
-                }
-                MenuEvent::Confirm => {
-                    let kbps = self.speed_recommendation()?;
-                    let text = self.apply_speed_bitrate(kbps);
-                    self.close_speed();
-                    self.show_toast(text);
-                    return Some(MenuPulse::Confirm);
-                }
-                _ => return None,
-            }
+        if let Some(t) = self.takeover() {
+            return self.takeover_menu(t, ev);
         }
         // Back is always heard by the transition (`nav_back`). Other events
         // wait until the spring is past `NAV_INPUT_OPENS` so a double-tapped
@@ -1288,6 +1224,58 @@ impl Shell {
         pulse
     }
 
+    /// A menu event while takeover `t` owns the input. B drops every card; the launch
+    /// hold before its dial lands and the connect card also cancel the dial. After the
+    /// dial lands, A or B on the launch hold shows the stream.
+    fn takeover_menu(&mut self, t: Takeover, ev: MenuEvent) -> Option<MenuPulse> {
+        match (t, ev) {
+            (Takeover::Launching, MenuEvent::Confirm | MenuEvent::Back)
+                if self.launching.as_ref().is_some_and(|l| l.connected) =>
+            {
+                self.reveal_stream();
+            }
+            (Takeover::Launching, MenuEvent::Back) => {
+                self.launching = None;
+                self.actions.push_back(OverlayAction::CancelConnect);
+            }
+            // Dropped here, not on the next `session_phase`: a dial blocked on the host
+            // never sends one. Hosts handle a dial that lands after the cancel.
+            (Takeover::Connecting, MenuEvent::Back) => {
+                self.connecting = None;
+                self.actions.push_back(OverlayAction::CancelConnect);
+            }
+            // Nothing has dialed yet: no cancel to send.
+            (Takeover::Asking, MenuEvent::Back) => {
+                self.asking = None;
+                self.connecting = None;
+            }
+            (Takeover::SeatWait, MenuEvent::Back) => self.seat_wait = None,
+            (Takeover::Wake, MenuEvent::Back) => {
+                self.bus.send(ConsoleCmd::CancelWake);
+                self.wake = None;
+                self.wake_optimistic = false;
+            }
+            (Takeover::Wake, MenuEvent::Confirm) => {
+                let w = self.wake.as_ref().filter(|w| w.timed_out)?;
+                self.bus.send(ConsoleCmd::Wake {
+                    key: w.key.clone(),
+                    then_connect: w.then_connect,
+                });
+            }
+            // Dismissing mid-burst abandons the measurement, not the burst: the host
+            // finishes it either way, and `advance_speed` drops the late report.
+            (Takeover::Speed, MenuEvent::Back) => self.close_speed(),
+            (Takeover::Speed, MenuEvent::Confirm) => {
+                let kbps = self.speed_recommendation()?;
+                let text = self.apply_speed_bitrate(kbps);
+                self.close_speed();
+                self.show_toast(text);
+            }
+            _ => return None,
+        }
+        Some(MenuPulse::Confirm)
+    }
+
     /// Mouse and touch, device pixels. `true` = consumed.
     ///
     /// Same modal/motion precedence as [`Self::handle_menu`]. The hint bar
@@ -1300,48 +1288,43 @@ impl Shell {
             y: p.y - f64::from(self.last_insets.1),
             kind: p.kind,
         };
-        // Right button is B, including on modal cards, but not on a root: a
-        // right-click there is too easy to fire by accident.
-        if let Some(l) = &self.launching {
-            let connected = l.connected;
-            if connected && (p.press() || p.kind == PointerKind::Back) {
-                self.reveal_stream();
-            } else if !connected && p.kind == PointerKind::Back {
-                self.launching = None;
-                self.actions.push_back(OverlayAction::CancelConnect);
+        // A takeover swallows every pointer event: clicking through a connect card onto
+        // the library would start a second session. Right button is its B.
+        match self.takeover() {
+            Some(Takeover::Launching) => {
+                let connected = self.launching.as_ref().is_some_and(|l| l.connected);
+                if connected && (p.press() || p.kind == PointerKind::Back) {
+                    self.reveal_stream();
+                } else if !connected && p.kind == PointerKind::Back {
+                    self.launching = None;
+                    self.actions.push_back(OverlayAction::CancelConnect);
+                }
+                return true;
             }
-            return true;
+            Some(_) if p.kind == PointerKind::Back => {
+                self.handle_menu(MenuEvent::Back);
+                return true;
+            }
+            // Cancel is the one button on the seat wait; the rest of it is not clickable.
+            Some(Takeover::SeatWait) => {
+                let on_cancel = self
+                    .hint_rects
+                    .iter()
+                    .any(|(key, r)| *key == crate::glyphs::HintKey::Back && p.hits(*r));
+                if p.press() && on_cancel {
+                    self.handle_menu(MenuEvent::Back);
+                }
+                return true;
+            }
+            Some(_) => return true,
+            None => {}
         }
+        // Right button is B, but not on a root: a right-click there is too easy to fire
+        // by accident.
         if p.kind == PointerKind::Back {
-            if self.stack.len() > 1
-                || self.connecting.is_some()
-                || self.asking.is_some()
-                || self.seat_wait.is_some()
-                || self.wake.is_some()
-                || self.speed.is_some()
-            {
+            if self.stack.len() > 1 {
                 self.handle_menu(MenuEvent::Back);
             }
-            return true;
-        }
-        // Cancel is the one button on the seat wait; the rest of it is not clickable.
-        if self.seat_wait.is_some() {
-            let on_cancel = self
-                .hint_rects
-                .iter()
-                .any(|(key, r)| *key == crate::glyphs::HintKey::Back && p.hits(*r));
-            if p.press() && on_cancel {
-                self.handle_menu(MenuEvent::Back);
-            }
-            return true;
-        }
-        // Clicking through a connect takeover onto the library would start
-        // a second session. Same early return as the menu path.
-        if self.connecting.is_some()
-            || self.asking.is_some()
-            || self.wake.is_some()
-            || self.speed.is_some()
-        {
             return true;
         }
         if !matches!(self.motion, Motion::None) {

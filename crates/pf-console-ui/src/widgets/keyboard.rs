@@ -66,8 +66,8 @@ pub(crate) enum Entry {
     Stay,
     /// Put the field away: Back, Return or Escape, or a press outside the tray.
     Close,
-    /// The keyboard's Done key or Y; on a Steam Deck, OK. A field whose Done means
-    /// something (search, save) does it; the rest close.
+    /// The keyboard's Done key or Y; where the device's own keyboard types, OK. A field
+    /// whose Done means something (search, save) does it; the rest close.
     Done,
 }
 
@@ -99,25 +99,6 @@ pub(crate) fn field_key(key: crate::input::Key, text: &mut String) -> Option<Ent
         }
         K::Return | K::Escape => Some(Entry::Close),
         _ => None,
-    }
-}
-
-/// The legend while a field is open. On a Steam Deck Steam's keyboard types, so the pad
-/// only confirms (`done`) or closes.
-pub(crate) fn entry_hints(deck: bool, done: &'static str) -> Vec<crate::glyphs::Hint> {
-    use crate::glyphs::{Hint, HintKey};
-    if deck {
-        vec![
-            Hint::new(HintKey::Key("STEAM + X"), "Keyboard"),
-            Hint::new(HintKey::Confirm, done),
-            Hint::new(HintKey::Back, "Done"),
-        ]
-    } else {
-        vec![
-            Hint::new(HintKey::Confirm, "Type"),
-            Hint::new(HintKey::Tertiary, "Delete"),
-            Hint::new(HintKey::Back, "Done"),
-        ]
     }
 }
 
@@ -270,18 +251,18 @@ impl Keyboard {
     }
 
     /// A pad or remote event for the open field over `text`. Typing lands through `admits`.
-    /// On a Steam Deck (`deck`) Steam types, so the pad only confirms or closes.
+    /// Where the device's own keyboard types (`system`), the pad only confirms or closes.
     pub(crate) fn edit_menu(
         &mut self,
         ev: MenuEvent,
-        deck: bool,
+        system: bool,
         text: &mut String,
         admits: impl Fn(&str, char) -> bool,
     ) -> (Entry, Option<MenuPulse>) {
         if ev == MenuEvent::Back {
             return (Entry::Close, Some(MenuPulse::Confirm));
         }
-        if deck {
+        if system {
             return match ev {
                 MenuEvent::Confirm => (Entry::Done, Some(MenuPulse::Confirm)),
                 _ => (Entry::Stay, None),
@@ -531,16 +512,17 @@ mod tests {
     use super::*;
     use crate::pointer::PointerKind;
 
-    /// Back closes an open field and Y is Done; on a Steam Deck OK is Done and the D-pad
-    /// types nothing. OK types the focused key through the field's rule.
+    /// Back closes an open field and Y is Done; where the device's keyboard types, OK is
+    /// Done and the D-pad types nothing. OK types the focused key through the field's rule.
     #[test]
-    fn an_open_field_routes_back_done_and_the_deck() {
+    fn an_open_field_routes_back_done_and_the_system_keyboard() {
         use MenuPulse::{Boundary, Confirm, Move};
         let (mut kb, mut text) = (Keyboard::new(), String::new());
         let any = |_: &str, _: char| true;
         let none = |_: &str, _: char| false;
-        let mut ev =
-            |ev, deck, admits: fn(&str, char) -> bool| kb.edit_menu(ev, deck, &mut text, admits);
+        let mut ev = |ev, system, admits: fn(&str, char) -> bool| {
+            kb.edit_menu(ev, system, &mut text, admits)
+        };
         assert!(matches!(
             ev(MenuEvent::Back, false, any),
             (Entry::Close, Some(Confirm))

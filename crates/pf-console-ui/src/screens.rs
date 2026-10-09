@@ -31,6 +31,7 @@ use crate::library::LibraryShared;
 use crate::model::{ConsoleCmd, HostRow};
 use crate::pointer::Pointer;
 use crate::theme::Fonts;
+use crate::widgets::{Entry, Keyboard};
 use pf_client_core::menu_nav::{MenuEvent, MenuPulse};
 use pf_client_core::{menu_nav::PadInfo, trust};
 use skia_safe::{Canvas, Rect};
@@ -51,8 +52,9 @@ pub struct Device {
     pub platform: crate::platform::Platform,
     /// This device's own screen ([`crate::shell::ConsoleOptions::screen`]).
     pub screen: Option<crate::shell::DeviceScreen>,
-    /// Steam Deck: never draw our keyboard — Steam's types via SDL text input.
-    pub deck: bool,
+    /// The device's own keyboard types into an open field: Steam's on a Steam Deck, tvOS's
+    /// on an Apple TV ([`crate::shell::ConsoleOptions::system_keyboard`]).
+    pub system_keyboard: bool,
     /// A TV: no clipboard to copy to, no phone sensors ([`crate::shell::ConsoleOptions::tv`]).
     pub tv: bool,
     /// Host has a fallback UI ([`crate::shell::ConsoleOptions::fallback_ui`]); gates the
@@ -94,7 +96,7 @@ impl Device {
         Device {
             platform: crate::platform::Platform::Desktop,
             screen: None,
-            deck: false,
+            system_keyboard: false,
             tv: false,
             fallback_ui: false,
             pyrowave_ok: true,
@@ -155,6 +157,87 @@ impl EditField {
             text: text.into(),
             digits,
         })
+    }
+}
+
+/// The keyboard of a screen's text field. Where the device's own keyboard types
+/// ([`Device::system_keyboard`]) the tray never rises and the pad only confirms or closes;
+/// each method applies that rule, so a screen keeps only what its field's [`Entry`] means.
+#[derive(Default)]
+pub(crate) struct TextEntry {
+    keyboard: Keyboard,
+    /// How far the tray is up, 0..1, as the last frame left it.
+    seat: f64,
+}
+
+impl TextEntry {
+    /// A pad or remote event for the open field over `text`, typing through `admits`.
+    pub(crate) fn menu(
+        &mut self,
+        ev: MenuEvent,
+        device: &Device,
+        text: &mut String,
+        admits: impl Fn(&str, char) -> bool,
+    ) -> (Entry, Option<MenuPulse>) {
+        (self.keyboard).edit_menu(ev, device.system_keyboard, text, admits)
+    }
+
+    /// A pointer while a field is open over `text`. `None` when the device's keyboard types:
+    /// no tray, so the screen's rows take it. The raised tray is modal: a press outside it
+    /// closes the field, and a hover outside is `Some(None)`, which nothing takes.
+    pub(crate) fn pointer(
+        &mut self,
+        p: Pointer,
+        device: &Device,
+        text: &mut String,
+        admits: impl Fn(&str, char) -> bool,
+    ) -> Option<Option<Entry>> {
+        (!device.system_keyboard).then(|| self.keyboard.edit_pointer(p, text, admits))
+    }
+
+    /// Steps the tray toward up while a field is `open`, down otherwise. Once a frame.
+    pub(crate) fn seat(&mut self, open: bool, device: &Device, dt: f64) {
+        self.seat = self.keyboard.seat(open && !device.system_keyboard, dt);
+    }
+
+    /// How far the tray is up, as [`Self::seat`] last left it.
+    pub(crate) fn seated(&self) -> f64 {
+        self.seat
+    }
+
+    /// The height the tray takes from the bottom of the screen, its gap included.
+    pub(crate) fn reserve(&self, k: f64) -> f64 {
+        (Keyboard::tray_height() + 12.0) * k * self.seat
+    }
+
+    /// Draws the tray rising from the bottom of `rect`, while it is up at all.
+    pub(crate) fn render(&mut self, canvas: &Canvas, fonts: &Fonts, rect: Rect, k: f64) {
+        if self.seat > 0.0 {
+            let (w, bottom) = (f64::from(rect.width()), f64::from(rect.bottom));
+            (self.keyboard).render(canvas, fonts, w, bottom, self.seat, k);
+        }
+    }
+
+    /// The legend while a field is open. Where the device's keyboard types, the pad only
+    /// confirms (`done`) or closes; on a Steam Deck the legend also names Steam's chord.
+    pub(crate) fn hints(device: &Device, done: &'static str) -> Vec<Hint> {
+        use crate::glyphs::HintKey;
+        if !device.system_keyboard {
+            return vec![
+                Hint::new(HintKey::Confirm, "Type"),
+                Hint::new(HintKey::Tertiary, "Delete"),
+                Hint::new(HintKey::Back, "Done"),
+            ];
+        }
+        let mut hints = vec![
+            Hint::new(HintKey::Confirm, done),
+            Hint::new(HintKey::Back, "Done"),
+        ];
+        // The one desktop session whose own keyboard types is a Steam Deck's.
+        if device.platform == crate::platform::Platform::Desktop {
+            hints.insert(0, Hint::new(HintKey::Key("STEAM + X"), "Keyboard"));
+        }
+        hints
     }
 }
 
@@ -558,5 +641,32 @@ impl Screen {
             Screen::Home(_) | Screen::Library(_) | Screen::Players(_) => Bg::Aurora,
             _ => Bg::Form,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::glyphs::HintKey;
+    use crate::platform::Platform;
+
+    /// A field's legend names Steam's chord on a Steam Deck only: an Apple TV's own
+    /// keyboard is not Steam's, and the tray's legend types and deletes.
+    #[test]
+    fn only_a_steam_deck_names_the_steam_chord() {
+        let keys = |system_keyboard, platform| {
+            let device = Device {
+                system_keyboard,
+                platform,
+                ..Device::test()
+            };
+            let hints = TextEntry::hints(&device, "Done");
+            hints.into_iter().map(|h| h.key).collect::<Vec<_>>()
+        };
+        let steam = HintKey::Key("STEAM + X");
+        assert!(keys(true, Platform::Desktop).contains(&steam));
+        assert!(keys(true, Platform::Apple) == [HintKey::Confirm, HintKey::Back]);
+        assert!(!keys(false, Platform::Desktop).contains(&steam));
+        assert!(keys(false, Platform::Apple).contains(&HintKey::Tertiary));
     }
 }

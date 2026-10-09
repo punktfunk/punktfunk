@@ -12,11 +12,10 @@ use crate::anim::{approach, Spring, TRAY_C, TRAY_K};
 use crate::glyphs::{Hint, HintKey};
 use crate::pointer::Pointer;
 use crate::ring::draw_keycap_disc;
-use crate::screens::{Ctx, Outbox, ScreenView};
+use crate::screens::{Ctx, Outbox, ScreenView, TextEntry};
 use crate::theme::{accent, fg, fill, on_accent, stroke, Fonts, PanelStroke, W};
 use crate::widgets::{
-    entry_hints, field_key, permits, type_text, Charset, Entry, Keyboard, ListMsg, MenuList,
-    RowSpec, ROW_MAX_W,
+    field_key, permits, type_text, Charset, Entry, ListMsg, MenuList, RowSpec, ROW_MAX_W,
 };
 use pf_client_core::menu_nav::{MenuDir, MenuEvent, MenuPulse};
 use pf_client_core::overlay_actions::{
@@ -311,8 +310,8 @@ impl KeyTray {
 pub(crate) struct ShortcutEditorScreen {
     draft: Draft,
     list: MenuList,
-    /// Own tray; a Deck uses Steam's keyboard instead.
-    keyboard: Keyboard,
+    /// The name's keyboard.
+    keyboard: TextEntry,
     keys: KeyTray,
     editing_name: bool,
     picking_key: bool,
@@ -330,7 +329,7 @@ impl ShortcutEditorScreen {
         ShortcutEditorScreen {
             draft,
             list,
-            keyboard: Keyboard::new(),
+            keyboard: TextEntry::default(),
             keys: KeyTray::new(),
             editing_name: false,
             picking_key: false,
@@ -470,9 +469,8 @@ impl ScreenView for ShortcutEditorScreen {
 
     fn menu(&mut self, ev: MenuEvent, ctx: &mut Ctx, fx: &mut Outbox) -> Option<MenuPulse> {
         if self.editing_name {
-            let (entry, pulse) =
-                self.keyboard
-                    .edit_menu(ev, ctx.device.deck, &mut self.draft.label, Self::admits);
+            let label = &mut self.draft.label;
+            let (entry, pulse) = self.keyboard.menu(ev, ctx.device, label, Self::admits);
             if entry != Entry::Stay {
                 self.editing_name = false;
             }
@@ -495,15 +493,14 @@ impl ScreenView for ShortcutEditorScreen {
     }
 
     fn pointer(&mut self, p: Pointer, ctx: &mut Ctx, fx: &mut Outbox) -> bool {
-        if self.editing_name && !ctx.device.deck {
-            let label = &mut self.draft.label;
-            let Some(entry) = self.keyboard.edit_pointer(p, label, Self::admits) else {
-                return false;
-            };
-            if entry != Entry::Stay {
+        let tray = self
+            .editing_name
+            .then(|| (self.keyboard).pointer(p, ctx.device, &mut self.draft.label, Self::admits));
+        if let Some(entry) = tray.flatten() {
+            if entry.is_some_and(|e| e != Entry::Stay) {
                 self.editing_name = false;
             }
-            return true;
+            return entry.is_some();
         }
         if self.picking_key {
             if !self.keys.covers(p) {
@@ -533,7 +530,7 @@ impl ScreenView for ShortcutEditorScreen {
 
     fn hints(&self, ctx: &Ctx) -> Vec<Hint> {
         if self.editing_name {
-            return entry_hints(ctx.device.deck, "Done");
+            return TextEntry::hints(ctx.device, "Done");
         }
         if self.picking_key {
             return vec![
@@ -606,12 +603,9 @@ impl ScreenView for ShortcutEditorScreen {
         );
 
         // Shrink the list by whichever tray is seated so the edited row stays in view.
-        let seat_kb = self
-            .keyboard
-            .seat(self.editing_name && !ctx.device.deck, dt);
+        self.keyboard.seat(self.editing_name, ctx.device, dt);
         let seat_keys = self.keys.seat(self.picking_key, dt);
-        let tray_h = (Keyboard::tray_height() + 12.0) * k * seat_kb
-            + (KeyTray::tray_height() + 12.0) * k * seat_keys;
+        let tray_h = self.keyboard.reserve(k) + (KeyTray::tray_height() + 12.0) * k * seat_keys;
         let list_rect = Rect::from_ltrb(
             rect.left,
             top + 2.0 * r + 22.0 * kf,
@@ -628,16 +622,7 @@ impl ScreenView for ShortcutEditorScreen {
             dt,
             !self.editing_name && !self.picking_key,
         );
-        if seat_kb > 0.0 {
-            self.keyboard.render(
-                canvas,
-                fonts,
-                f64::from(rect.width()),
-                f64::from(rect.bottom),
-                seat_kb,
-                k,
-            );
-        }
+        self.keyboard.render(canvas, fonts, rect, k);
         if seat_keys > 0.0 {
             self.keys.render(
                 canvas,

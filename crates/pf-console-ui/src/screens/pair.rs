@@ -1,6 +1,6 @@
 //! PIN pairing on the controller console — counterpart of the desktop PairSheet.
 //!
-//! Type the PIN the host shows (on-screen tray, or Steam's keyboard on Deck).
+//! Type the PIN the host shows (on-screen tray, or the device's own keyboard).
 //! SPAKE2 runs on the binary's service thread; success pins the host and the
 //! shell pops Home. A discovered host with an advertised fingerprint also
 //! offers Request access (connect and wait for operator approval). A typed
@@ -9,11 +9,10 @@
 use crate::glyphs::{Hint, HintKey};
 use crate::model::{ConsoleCmd, HostRow, PairPhase};
 use crate::pointer::Pointer;
-use crate::screens::{ConnectIntent, Ctx, Outbox, ScreenView};
+use crate::screens::{ConnectIntent, Ctx, Outbox, ScreenView, TextEntry};
 use crate::theme::{fg, Fonts, ERROR, W};
 use crate::widgets::{
-    blurb, entry_hints, field_key, permits, type_text, Charset, Entry, Keyboard, ListMsg, MenuList,
-    RowSpec,
+    blurb, field_key, permits, type_text, Charset, Entry, ListMsg, MenuList, RowSpec,
 };
 use pf_client_core::menu_nav::{MenuEvent, MenuPulse};
 use skia_safe::{Canvas, Rect};
@@ -39,7 +38,7 @@ pub(crate) struct PairScreen {
     /// Empty = typed host with no advert, so no Request access row.
     fp_hex: String,
     list: MenuList,
-    keyboard: Keyboard,
+    keyboard: TextEntry,
     pin: String,
     device: String,
     editing: Option<Field>,
@@ -56,7 +55,7 @@ impl PairScreen {
             port: host.port,
             fp_hex: host.fp_hex.clone(),
             list: MenuList::new(),
-            keyboard: Keyboard::new(),
+            keyboard: TextEntry::default(),
             pin: String::new(),
             device: device_name.to_string(),
             editing: None,
@@ -108,7 +107,7 @@ impl PairScreen {
     }
 
     /// The open field, its text, and the keyboard that types into it.
-    fn open(&mut self) -> Option<(Field, &mut Keyboard, &mut String)> {
+    fn open(&mut self) -> Option<(Field, &mut TextEntry, &mut String)> {
         let f = self.editing?;
         let text = match f {
             Field::Pin => &mut self.pin,
@@ -263,9 +262,8 @@ impl ScreenView for PairScreen {
     }
 
     fn menu(&mut self, ev: MenuEvent, ctx: &mut Ctx, fx: &mut Outbox) -> Option<MenuPulse> {
-        let deck = ctx.device.deck;
         if let Some((f, keyboard, text)) = self.open() {
-            let (entry, pulse) = keyboard.edit_menu(ev, deck, text, |t, c| Self::admits(f, t, c));
+            let (entry, pulse) = keyboard.menu(ev, ctx.device, text, |t, c| Self::admits(f, t, c));
             if entry != Entry::Stay {
                 self.editing = None;
             }
@@ -285,14 +283,14 @@ impl ScreenView for PairScreen {
     /// Raised keyboard is modal: hits on it stay here; a press outside closes it rather
     /// than reaching the row underneath.
     fn pointer(&mut self, p: Pointer, ctx: &mut Ctx, fx: &mut Outbox) -> bool {
-        if let Some((f, keyboard, text)) = self.open().filter(|_| !ctx.device.deck) {
-            let Some(entry) = keyboard.edit_pointer(p, text, |t, c| Self::admits(f, t, c)) else {
-                return false;
-            };
-            if entry != Entry::Stay {
+        let tray = self.open().and_then(|(f, keyboard, text)| {
+            keyboard.pointer(p, ctx.device, text, |t, c| Self::admits(f, t, c))
+        });
+        if let Some(entry) = tray {
+            if entry.is_some_and(|e| e != Entry::Stay) {
                 self.editing = None;
             }
-            return true;
+            return entry.is_some();
         }
         let roles = self.roles();
         let (msg, pulse) = self.list.pointer(p, roles.len());
@@ -305,7 +303,7 @@ impl ScreenView for PairScreen {
 
     fn hints(&self, ctx: &Ctx) -> Vec<Hint> {
         if self.editing.is_some() {
-            return entry_hints(ctx.device.deck, "Done");
+            return TextEntry::hints(ctx.device, "Done");
         }
         vec![
             Hint::new(HintKey::Confirm, "Select"),
@@ -330,14 +328,8 @@ impl ScreenView for PairScreen {
         };
         let below = blurb(canvas, fonts, intro, rect, k);
 
-        let seat = self
-            .keyboard
-            .seat(self.editing.is_some() && !ctx.device.deck, dt);
-        let tray_h = if seat > 0.0 {
-            (Keyboard::tray_height() + 12.0) * k * seat
-        } else {
-            0.0
-        };
+        self.keyboard.seat(self.editing.is_some(), ctx.device, dt);
+        let tray_h = self.keyboard.reserve(k);
         // Status band (spinner / error); 34 matches the settings detail band.
         let status_h = 34.0 * k;
         let list_rect = Rect::from_ltrb(
@@ -383,16 +375,7 @@ impl ScreenView for PairScreen {
             );
         }
 
-        if seat > 0.0 {
-            self.keyboard.render(
-                canvas,
-                fonts,
-                f64::from(rect.width()),
-                f64::from(rect.bottom),
-                seat,
-                k,
-            );
-        }
+        self.keyboard.render(canvas, fonts, rect, k);
     }
 
     fn title(&self) -> String {
