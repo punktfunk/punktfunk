@@ -1183,15 +1183,8 @@ mod tests {
     /// never dropped. The next window must report: discard is one wide.
     #[tokio::test(flavor = "multi_thread", worker_threads = 3)]
     async fn a_host_pipeline_gap_discards_the_report_window_in_flight() {
-        let server = crate::quic::endpoint::server("127.0.0.1:0".parse().unwrap()).unwrap();
-        let addr = server.local_addr().unwrap();
-        let client = crate::quic::endpoint::client_insecure().unwrap();
-        let accept = tokio::spawn(async move {
-            let incoming = server.accept().await.expect("incoming");
-            (server, incoming.await.expect("host side connects"))
-        });
-        let client_conn = client.connect(addr, "punktfunk").unwrap().await.unwrap();
-        let (_server_ep, host_conn) = accept.await.unwrap();
+        let (_server_ep, _client_ep, host_conn, client_conn) =
+            crate::quic::test_util::connect_pair().await;
         // Host opens the control stream (normally the client does during
         // handshake): this host end only writes, so a client-opened
         // stream would stay invisible.
