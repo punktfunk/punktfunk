@@ -1,7 +1,7 @@
 //! Session configuration: role, FEC, shard/MTU knobs, and `Config`.
 
 use crate::error::{PunktfunkError, Result};
-use crate::packet::{CRYPTO_OVERHEAD, HEADER_LEN, MAX_DATAGRAM_BYTES};
+use crate::packet::{MAX_DATAGRAM_BYTES, WIRE_OVERHEAD};
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -387,24 +387,28 @@ impl FecConfig {
     }
 }
 
-/// Header + crypto still fit in [`MAX_DATAGRAM_BYTES`].
+/// Header and tag still fit in [`MAX_DATAGRAM_BYTES`].
 pub const fn max_shard_payload() -> usize {
-    MAX_DATAGRAM_BYTES - HEADER_LEN - CRYPTO_OVERHEAD
+    MAX_DATAGRAM_BYTES - WIRE_OVERHEAD
 }
 
-/// Largest even shard payload whose sealed IPv4/UDP datagram fits a 1500-byte MTU:
-/// `1500 − 20 − 8 − HEADER_LEN − CRYPTO_OVERHEAD` = 1408. One byte more and the kernel
-/// IP-fragments every video datagram; either fragment lost drops the datagram.
+/// Bytes of a 1500-MTU datagram the default shards leave empty. Growing into them
+/// changes every host's `Welcome::shard_payload`.
+const MTU1500_UNUSED: usize = 18;
+
+/// Default shard payload whose sealed IPv4/UDP datagram fits a 1500-byte MTU:
+/// `1500 − 20 − 8 − WIRE_OVERHEAD − MTU1500_UNUSED` = 1408. Past the 1426 fit the
+/// kernel IP-fragments every video datagram; either fragment lost drops the datagram.
 pub const fn mtu1500_shard_payload() -> usize {
-    let p = 1500 - 20 - 8 - HEADER_LEN - CRYPTO_OVERHEAD;
+    let p = 1500 - 20 - 8 - WIRE_OVERHEAD - MTU1500_UNUSED;
     p - p % 2 // FEC requires even shards
 }
 
-/// IPv6 sibling of [`mtu1500_shard_payload`]: `1500 − 40 − 8 − HEADER_LEN −
-/// CRYPTO_OVERHEAD` = 1388. IPv6 routers never fragment; an oversized datagram is
+/// IPv6 sibling of [`mtu1500_shard_payload`]: `1500 − 40 − 8 − WIRE_OVERHEAD −
+/// MTU1500_UNUSED` = 1388. IPv6 routers never fragment; an oversized datagram is
 /// ICMPv6 Packet-Too-Big or a silent blackhole, not a degrade.
 pub const fn mtu1500_shard_payload_v6() -> usize {
-    let p = 1500 - 40 - 8 - HEADER_LEN - CRYPTO_OVERHEAD;
+    let p = 1500 - 40 - 8 - WIRE_OVERHEAD - MTU1500_UNUSED;
     p - p % 2 // FEC requires even shards
 }
 
@@ -425,22 +429,22 @@ pub fn mtu1500_shard_payload_for(peer: core::net::IpAddr) -> usize {
 pub const MIN_SHARD_PAYLOAD: usize = 512;
 
 pub const fn sealed_datagram_bytes(shard_payload: usize) -> usize {
-    HEADER_LEN + shard_payload + CRYPTO_OVERHEAD
+    shard_payload + WIRE_OVERHEAD
 }
 
-/// Sealed size of the [`mtu1500_shard_payload`] default (= 1472, the 1500-MTU IPv4
-/// UDP ceiling). Also the QUIC MTU-discovery probe ceiling: settled-at means the
-/// path carries full-size video; settled-below means it cannot. quinn's stock 1452
-/// ceiling cannot make that discrimination.
+/// The 1500-MTU IPv4 UDP payload, 1472, which the sealed [`mtu1500_shard_payload`]
+/// fits. Also the QUIC MTU-discovery probe ceiling: settled-at means the path carries
+/// a 1500-byte wire; settled-below means it may not. quinn's stock 1452 ceiling
+/// cannot make that discrimination.
 pub const fn video_datagram_udp_ceiling() -> usize {
-    sealed_datagram_bytes(mtu1500_shard_payload())
+    1500 - 20 - 8
 }
 
 /// Largest even shard payload that fits `udp_budget` (what QUIC MTU discovery
 /// measures). Clamped to [`mtu1500_shard_payload_for`] so a generous budget never
 /// grows past the family 1500 default; floored at [`MIN_SHARD_PAYLOAD`].
 pub fn shard_payload_for_udp_budget(udp_budget: usize, peer: core::net::IpAddr) -> usize {
-    let p = udp_budget.saturating_sub(HEADER_LEN + CRYPTO_OVERHEAD);
+    let p = udp_budget.saturating_sub(WIRE_OVERHEAD);
     let p = p - p % 2; // FEC requires even shards
     p.clamp(MIN_SHARD_PAYLOAD, mtu1500_shard_payload_for(peer))
 }
@@ -484,7 +488,7 @@ pub fn jumbo_wire_mtu() -> Option<usize> {
 pub fn jumbo_shard_payload_for(wire_mtu: usize, peer: core::net::IpAddr) -> usize {
     let p = wire_mtu
         .saturating_sub(ip_udp_overhead(peer))
-        .saturating_sub(HEADER_LEN + CRYPTO_OVERHEAD);
+        .saturating_sub(WIRE_OVERHEAD);
     let p = p - p % 2; // FEC requires even shards
     p.clamp(MIN_SHARD_PAYLOAD, max_shard_payload())
 }
@@ -594,40 +598,41 @@ mod tests {
         assert!(c.validate().is_err());
     }
 
-    /// Pin 1500-MTU IPv4 math: sealed datagram ≤ 1472 (`1500 − 20 − 8`); +2 must not.
+    /// Pin 1500-MTU IPv4 math: the sealed default and [`MTU1500_UNUSED`] fill 1472
+    /// (`1500 − 20 − 8`) exactly.
     #[test]
     fn mtu1500_shard_payload_never_fragments() {
         let p = mtu1500_shard_payload();
         assert_eq!(p % 2, 0, "FEC requires even shards");
         assert!(p <= max_shard_payload());
-        let wire = HEADER_LEN + p + CRYPTO_OVERHEAD;
-        assert!(wire <= 1472, "sealed datagram {wire} B would IP-fragment");
-        assert!(HEADER_LEN + (p + 2) + CRYPTO_OVERHEAD > 1472, "not maximal");
+        assert_eq!(p, 1408);
+        assert_eq!(sealed_datagram_bytes(p) + MTU1500_UNUSED, 1472);
     }
 
-    /// Pin IPv6 math: sealed datagram ≤ 1452 (`1500 − 40 − 8`); +2 must not.
-    /// v6 routers do not fragment, so overshoot blackholes.
+    /// Pin IPv6 math: the sealed default and [`MTU1500_UNUSED`] fill 1452
+    /// (`1500 − 40 − 8`) exactly. v6 routers do not fragment, so overshoot blackholes.
     #[test]
     fn mtu1500_shard_payload_v6_never_blackholes() {
         let p = mtu1500_shard_payload_v6();
         assert_eq!(p % 2, 0, "FEC requires even shards");
         assert!(p <= max_shard_payload());
-        let wire = HEADER_LEN + p + CRYPTO_OVERHEAD;
-        assert!(
-            wire <= 1452,
-            "sealed datagram {wire} B exceeds a 1500-MTU IPv6 hop"
-        );
-        assert!(HEADER_LEN + (p + 2) + CRYPTO_OVERHEAD > 1452, "not maximal");
+        assert_eq!(p, 1388);
+        assert_eq!(sealed_datagram_bytes(p) + MTU1500_UNUSED, 1452);
     }
 
-    /// The ceiling equals the exact v4 sealed size; QUIC MTU discovery uses that equality.
+    /// QUIC MTU discovery probes to the IPv4 UDP payload, which the sealed default fits.
     #[test]
-    fn video_datagram_ceiling_is_the_sealed_default() {
-        assert_eq!(
-            video_datagram_udp_ceiling(),
-            HEADER_LEN + mtu1500_shard_payload() + CRYPTO_OVERHEAD
-        );
+    fn video_datagram_ceiling_fits_the_sealed_default() {
         assert_eq!(video_datagram_udp_ceiling(), 1472);
+        assert!(sealed_datagram_bytes(mtu1500_shard_payload()) <= video_datagram_udp_ceiling());
+    }
+
+    /// A sealed datagram is its shard, the v2 header and the AEAD tag.
+    #[test]
+    fn sealed_datagram_is_shard_plus_header_and_tag() {
+        assert_eq!(WIRE_OVERHEAD, 46);
+        assert_eq!(sealed_datagram_bytes(1000), 1046);
+        assert_eq!(max_shard_payload() + WIRE_OVERHEAD, MAX_DATAGRAM_BYTES);
     }
 
     /// Even, fits the budget, clamped to the family default and [`MIN_SHARD_PAYLOAD`].
@@ -678,9 +683,9 @@ mod tests {
             shard_payload_for_wire_mtu(1500, v6),
             mtu1500_shard_payload_v6()
         );
-        // 1280 wire − 28 − 64 = 1188 (v4); − 48 − 64 = 1168 (v6).
-        assert_eq!(shard_payload_for_wire_mtu(1280, v4), 1188);
-        assert_eq!(shard_payload_for_wire_mtu(1280, v6), 1168);
+        // 1280 wire − 28 − 46 = 1206 (v4); − 48 − 46 = 1186 (v6).
+        assert_eq!(shard_payload_for_wire_mtu(1280, v4), 1206);
+        assert_eq!(shard_payload_for_wire_mtu(1280, v6), 1186);
     }
 
     /// Jumbo grow-target: even, sealed fits the wire, clamped to [`max_shard_payload`].
@@ -689,11 +694,11 @@ mod tests {
         use core::net::IpAddr;
         let v4: IpAddr = "192.168.1.50".parse().unwrap();
         let v6: IpAddr = "fd00::50".parse().unwrap();
-        // 9000 − 28 − 64 = 8908 (v4); 9000 − 48 − 64 = 8888 (v6).
-        assert_eq!(jumbo_shard_payload_for(9000, v4), 8908);
-        assert_eq!(sealed_datagram_bytes(8908), 8972);
-        assert!(sealed_datagram_bytes(8908) <= MAX_DATAGRAM_BYTES);
-        assert_eq!(jumbo_shard_payload_for(9000, v6), 8888);
+        // 9000 − 28 − 46 = 8926 (v4); 9000 − 48 − 46 = 8906 (v6).
+        assert_eq!(jumbo_shard_payload_for(9000, v4), 8926);
+        assert_eq!(sealed_datagram_bytes(8926), 8972);
+        assert!(sealed_datagram_bytes(8926) <= MAX_DATAGRAM_BYTES);
+        assert_eq!(jumbo_shard_payload_for(9000, v6), 8906);
         // Oversize clamps to the receive ceiling; degenerate floors.
         assert_eq!(jumbo_shard_payload_for(64_000, v4), max_shard_payload());
         let p = jumbo_shard_payload_for(4000, v4);

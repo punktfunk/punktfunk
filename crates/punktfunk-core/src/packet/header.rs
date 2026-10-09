@@ -60,12 +60,9 @@ pub const USER_FLAG_REPEAT: u32 = 0x100;
 /// has no valid reference, or the counters have desynced.
 pub const RFI_MAX_RANGE: u32 = 256;
 
-/// Sealed-packet overhead: 8-byte sequence prefix plus the GCM tag.
-pub const CRYPTO_OVERHEAD: usize = 8 + crate::crypto::TAG_LEN;
-
 /// Acceptance ceiling, not a transmit size. 9216 fits a 9000-MTU jumbo
-/// (sealed ~8972 B). `Config::validate` keeps
-/// `HEADER_LEN + shard_payload + CRYPTO_OVERHEAD` under this. Receive rings
+/// (sealed 8972 B). `Config::validate` keeps
+/// `shard_payload + WIRE_OVERHEAD` under this. Receive rings
 /// are sized from it so a jumbo geometry needs no mid-session resize.
 pub const MAX_DATAGRAM_BYTES: usize = 9216;
 

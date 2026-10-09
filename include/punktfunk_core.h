@@ -599,8 +599,8 @@
 #define PUNKTFUNK_RFI_MAX_RANGE 256
 
 // Acceptance ceiling, not a transmit size. 9216 fits a 9000-MTU jumbo
-// (sealed ~8972 B). `Config::validate` keeps
-// `HEADER_LEN + shard_payload + CRYPTO_OVERHEAD` under this. Receive rings
+// (sealed 8972 B). `Config::validate` keeps
+// `shard_payload + WIRE_OVERHEAD` under this. Receive rings
 // are sized from it so a jumbo geometry needs no mid-session resize.
 #define PUNKTFUNK_MAX_DATAGRAM_BYTES 9216
 

@@ -3,7 +3,7 @@
 //! Transport: keep-alive is on (quinn defaults it off); idle is
 //! [`DEFAULT_IDLE_TIMEOUT`], host-tunable. Datagram send buffer is 4 KiB so
 //! audio/HID stay latest-wins under congestion. MTU discovery probes to the
-//! sealed video datagram size (1472), or the sealed jumbo size when opted in.
+//! 1500-MTU IPv4 UDP payload (1472), or the sealed jumbo size when opted in.
 //!
 //! TLS: the host offers optional client auth; the client pins the host leaf via
 //! [`crate::tls::PinVerify`]. This module only wires the verifier in.
@@ -39,9 +39,9 @@ fn stream_transport_idle(idle: std::time::Duration) -> Arc<quinn::TransportConfi
     // the plane is known, so a PCM-sized buffer would give Opus ~800 ms of lag.
     // Eviction is silent (`send_datagram` drop=true returns Ok); counters miss it.
     t.datagram_send_buffer_size(4 * 1024);
-    // Probe to the sealed IPv4 video datagram (1472), not quinn's 1452: settle at
-    // the ceiling proves the path carries full-size video; settle below proves it
-    // cannot. Stock 1452 made a healthy path and a constrained one look the same.
+    // Probe to the 1500-MTU IPv4 UDP payload (1472), not quinn's 1452: settle at
+    // the ceiling proves the path carries full-size video; settle below sizes it.
+    // Stock 1452 made a healthy path and a constrained one look the same.
     let mut mtud = quinn::MtuDiscoveryConfig::default();
     // Jumbo opt-in: probe to the sealed jumbo datagram so settle can prove a
     // jumbo path; grow stays client-ack-gated (`native/wire_mtu.rs`). Ceiling is

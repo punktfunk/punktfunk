@@ -561,12 +561,12 @@ pub(super) async fn negotiate(
     // A browser's video rides this connection's datagrams, which are smaller than a UDP payload
     // (QUIC and HTTP/3 framing come out of the same budget). Ask, falling back to the 1200 every
     // QUIC path guarantees; a shard that does not fit is dropped at send, and FEC cannot cover all.
+    // The budget is net of the kind varint, and the carrier seals, so a packet adds its header.
     if conn.is_web() {
         let budget = conn.max_datagram_size().unwrap_or(1200);
-        shard_payload = shard_payload.min(punktfunk_core::config::shard_payload_for_udp_budget(
-            budget,
-            conn.remote_address().ip(),
-        ));
+        let p = budget.saturating_sub(punktfunk_core::packet::V2_HEADER_LEN);
+        shard_payload =
+            shard_payload.min((p - p % 2).max(punktfunk_core::config::MIN_SHARD_PAYLOAD));
     }
 
     // ChaCha20 when the client asked (`VIDEO_CAP_CHACHA20`, soft-AES armv7) and the operator

@@ -17,6 +17,8 @@ use super::*;
 /// Bytes before the sealed part: the tag and the low half of the packet number.
 pub const V2_CLEAR_LEN: usize = 5;
 pub const V2_HEADER_LEN: usize = 30;
+/// Bytes a sealed packet adds to its shard: the header and the AEAD tag.
+pub const WIRE_OVERHEAD: usize = V2_HEADER_LEN + crate::crypto::TAG_LEN;
 /// Stream id of video frames.
 pub const V2_STREAM_VIDEO: u8 = 0;
 /// Stream id of speed-test filler, in its own frame-index space.

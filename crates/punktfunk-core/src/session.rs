@@ -350,10 +350,11 @@ impl Session {
         })
     }
 
-    /// Bytes one AU of `frame_len` puts on the wire at the current geometry.
+    /// Bytes one AU of `frame_len` puts on the wire at the current geometry. An unsealed
+    /// session's packets carry the header without the tag.
     pub fn frame_wire_len(&self, frame_len: usize) -> usize {
         let header = match self.crypto {
-            Some(_) => crate::packet::V2_HEADER_LEN + crate::crypto::TAG_LEN,
+            Some(_) => crate::packet::WIRE_OVERHEAD,
             None => crate::packet::V2_HEADER_LEN,
         };
         self.packetizer.geometry(frame_len).wire_packets()
@@ -1035,7 +1036,7 @@ impl Session {
             let (pkt_range, seq) = match &self.crypto {
                 Some(c) => {
                     use crate::packet::V2_CLEAR_LEN;
-                    if len < crate::packet::V2_HEADER_LEN + crate::crypto::TAG_LEN {
+                    if len < crate::packet::WIRE_OVERHEAD {
                         continue;
                     }
                     let wire = &mut self.recv_scratch[i][..len];

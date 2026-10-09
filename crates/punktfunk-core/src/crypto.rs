@@ -15,7 +15,7 @@ use zeroize::Zeroize;
 
 pub const TAG_LEN: usize = 16;
 
-// CRYPTO_OVERHEAD and every in-place split assume both AEADs append TAG_LEN.
+// WIRE_OVERHEAD and every in-place split assume both AEADs append TAG_LEN.
 const _: () = assert!(std::mem::size_of::<aes_gcm::Tag>() == TAG_LEN);
 const _: () = assert!(std::mem::size_of::<chacha20poly1305::Tag>() == TAG_LEN);
 
