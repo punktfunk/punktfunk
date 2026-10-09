@@ -4036,7 +4036,6 @@ dependencies = [
  "tracing",
  "ureq",
  "windows-sys 0.61.2",
- "zerocopy 0.8.61",
  "zeroize",
 ]
 

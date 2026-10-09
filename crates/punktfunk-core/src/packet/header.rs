@@ -1,14 +1,8 @@
-//! Wire packet header: the fixed [`PacketHeader`] and the flag/geometry consts
-//! every packet carries. Zero-copy (de)serializable; 40 bytes, unpadded.
+//! The logical [`PacketHeader`] and the `user_flags` bits every packet carries.
+//! [`encode_v2`](super::encode_v2) and [`decode_v2`](super::decode_v2) put it on the wire.
 
-use zerocopy::{FromBytes, Immutable, IntoBytes, KnownLayout};
-
-/// Video packet discriminator; input datagrams use a different magic ([`crate::input`]).
-pub const PUNKTFUNK_MAGIC: u8 = 0xC9;
-
-// Transport `flags` nibble. Values match GameStream `FLAG_*`.
+// Low `user_flags` bits the host stamps per AU. Values match GameStream `FLAG_*`.
 pub const FLAG_PIC: u8 = 0x1;
-pub const FLAG_EOF: u8 = 0x2;
 pub const FLAG_SOF: u8 = 0x4;
 /// Bandwidth-probe filler. Not decodable video — do not feed to the decoder.
 /// Punktfunk/1 only; GameStream never sets this bit.
@@ -66,12 +60,20 @@ pub const RFI_MAX_RANGE: u32 = 256;
 /// are sized from it so a jumbo geometry needs no mid-session resize.
 pub const MAX_DATAGRAM_BYTES: usize = 9216;
 
-#[repr(C)]
-#[derive(Clone, Copy, Debug, FromBytes, IntoBytes, KnownLayout, Immutable)]
+/// One packet's place in its frame, as the packetizer emits it and [`decode_v2`] reads it
+/// back. Not a wire layout: [`encode_v2`] writes the `punktfunk/2` header from it.
+///
+/// `block_count == 0` marks a sentinel: a non-last block of a frame whose size is not known
+/// yet. Its `frame_bytes` is the block's byte base under [`USER_FLAG_SLICE_STREAM`], else `0`.
+/// Every other packet carries the frame's real `frame_bytes` and `block_count`.
+/// [`decode_v2`] returns every packet in the slice form.
+///
+/// [`decode_v2`]: super::decode_v2
+/// [`encode_v2`]: super::encode_v2
+#[derive(Clone, Copy, Debug, Default)]
 pub struct PacketHeader {
     pub pts_ns: u64,
     pub frame_index: u32,
-    pub stream_seq: u32,
     pub frame_bytes: u32,
     pub user_flags: u32,
     pub block_index: u16,
@@ -80,12 +82,4 @@ pub struct PacketHeader {
     pub recovery_shards: u16,
     pub shard_index: u16,
     pub shard_bytes: u16,
-    pub magic: u8,
-    pub version: u8,
-    pub fec_scheme: u8,
-    pub flags: u8,
 }
-
-pub const HEADER_LEN: usize = std::mem::size_of::<PacketHeader>();
-
-const _: () = assert!(HEADER_LEN == 40, "PacketHeader must be 40 bytes / unpadded");

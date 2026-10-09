@@ -2,10 +2,8 @@
 
 use super::*;
 use crate::config::Config;
-use crate::config::FecScheme;
 use crate::error::{PunktfunkError, Result};
 use crate::fec::ErasureCoder;
-use zerocopy::IntoBytes;
 
 /// Splits an access unit into FEC-protected shard packets. Host-side only.
 ///
@@ -17,13 +15,11 @@ use zerocopy::IntoBytes;
 pub struct Packetizer {
     next_frame_index: u32,
     next_probe_index: u32,
-    next_seq: u32,
     shard_payload: usize,
     /// Negotiated frame-size cap. [`set_shard_payload`](Self::set_shard_payload) re-derives
     /// per-frame block ceilings from this and the live shard size.
     max_frame_bytes: usize,
     fec: crate::config::FecConfig,
-    version: u8,
     /// Zero-padded scratch for the last data shard (partial or empty-frame). Every other
     /// data shard is a `shard_payload` slice into the frame; only the last can be short.
     tail: Vec<u8>,
@@ -44,12 +40,10 @@ pub struct Packetizer {
 }
 
 /// In-progress streamed access unit. Encoder chunks enter via
-/// [`Packetizer::push_streamed`]; slice-granularity blocks leave under sentinel headers
-/// (`block_count = 0`, `frame_bytes` = shard-aligned base byte offset; base 0 matches the
-/// legacy sentinel) before the AU size is known. [`Packetizer::finish_streamed`] seals the
-/// tail with real totals and `FLAG_EOF`. Requires [`crate::quic::VIDEO_CAP_STREAMED_AU`];
-/// non-zero-base sentinels also need [`crate::quic::VIDEO_CAP_MULTI_SLICE`] — older
-/// receivers reject a non-zero sentinel `frame_bytes`.
+/// [`Packetizer::push_streamed`]; blocks leave under sentinel headers (`block_count = 0`,
+/// see [`PacketHeader`]) before the AU size is known. [`Packetizer::finish_streamed`] seals
+/// the tail with the real totals. Requires [`crate::quic::VIDEO_CAP_STREAMED_AU`]; slice
+/// cuts also need [`crate::quic::VIDEO_CAP_MULTI_SLICE`].
 pub struct StreamedAu {
     frame_index: u32,
     pts_ns: u64,
@@ -62,7 +56,6 @@ pub struct StreamedAu {
     /// Whole shards already emitted — next sentinel base in shard units. Bases stay
     /// shard-aligned so the layout tiles; the receiver derives the final base the same way.
     emitted_shards: u64,
-    opened: bool,
 }
 
 /// Slice-flush floor. Below this, per-block FEC is `ceil(k × pct/100) ≥ 1` regardless of
@@ -81,11 +74,9 @@ impl Packetizer {
         let mut p = Packetizer {
             next_frame_index: 0,
             next_probe_index: 0,
-            next_seq: 0,
             shard_payload: config.shard_payload,
             max_frame_bytes: config.max_frame_bytes,
             fec: config.fec,
-            version: 2,
             tail: Vec::new(),
             recovery: Vec::new(),
             // Mirrors `ReassemblerLimits::from_config` — keep the two in step.
@@ -136,26 +127,6 @@ impl Packetizer {
         self.fec.fec_percent
     }
 
-    /// Packetize one AU into owned packets (header ++ shard). Thin wrapper over
-    /// [`packetize_each`](Self::packetize_each); tests and the loss harness use this.
-    pub fn packetize(
-        &mut self,
-        frame: &[u8],
-        pts_ns: u64,
-        user_flags: u32,
-        coder: &dyn ErasureCoder,
-    ) -> Result<Vec<Vec<u8>>> {
-        let mut packets = Vec::new();
-        self.packetize_each(frame, pts_ns, user_flags, None, coder, |hdr, body| {
-            let mut pkt = Vec::with_capacity(HEADER_LEN + body.len());
-            pkt.extend_from_slice(hdr.as_bytes());
-            pkt.extend_from_slice(body);
-            packets.push(pkt);
-            Ok(())
-        })?;
-        Ok(packets)
-    }
-
     /// One AU's shard geometry: what the data pass, the parity pass and a parity thread
     /// agree on before any of them runs.
     pub fn geometry(&self, frame_len: usize) -> Geometry {
@@ -187,12 +158,11 @@ impl Packetizer {
     /// Packetize one AU, yielding `(header, shard)` to `emit` in wire order — also the
     /// order the session nonce advances. No per-packet allocation: the caller can seal
     /// into a pooled buffer ([`Session::seal_frame`](crate::session::Session::seal_frame)).
-    /// An `emit` error is fatal; `stream_seq` has already advanced.
+    /// An `emit` error is fatal.
     ///
     /// Wire order is data-first: every block's data shards, then every block's parity.
     /// Lossless completion is the last data shard, not the parity tail. The receiver is
-    /// order-agnostic (`data + recovery ≥ k`). `FLAG_SOF` is block 0 / shard 0;
-    /// `FLAG_EOF` is the last emitted packet (final parity, or final data if `m = 0`).
+    /// order-agnostic (`data + recovery ≥ k`).
     ///
     /// `frame_index`: `Some(i)` is the caller's index (encode-loop RFI 1:1 with the
     /// client); `None` draws from the internal counter. Do not mix styles in one space.
@@ -216,29 +186,12 @@ impl Packetizer {
         let fec = parity(&geo, frame, coder, &mut recovery);
         self.recovery = recovery;
         fec?;
-        self.emit_data(
-            &geo,
-            frame,
-            pts_ns,
-            user_flags,
-            frame_index,
-            coder.scheme(),
-            &mut emit,
-        )?;
-        self.emit_parity(
-            &geo,
-            pts_ns,
-            user_flags,
-            frame_index,
-            coder.scheme(),
-            &mut emit,
-        )
+        self.emit_data(&geo, frame, pts_ns, user_flags, frame_index, &mut emit)?;
+        self.emit_parity(&geo, pts_ns, user_flags, frame_index, &mut emit)
     }
 
     /// Pass 1 of [`packetize_each`](Self::packetize_each): every block's data shards, in
-    /// order. `FLAG_SOF` on the first; `FLAG_EOF` on the last only when the frame carries
-    /// no parity. `frame_index` is the caller's, already resolved.
-    #[allow(clippy::too_many_arguments)]
+    /// order. `frame_index` is the caller's, already resolved.
     pub fn emit_data(
         &mut self,
         geo: &Geometry,
@@ -246,7 +199,6 @@ impl Packetizer {
         pts_ns: u64,
         user_flags: u32,
         frame_index: u32,
-        scheme: FecScheme,
         emit: &mut dyn FnMut(&PacketHeader, &[u8]) -> Result<()>,
     ) -> Result<()> {
         let payload = geo.payload;
@@ -257,81 +209,41 @@ impl Packetizer {
         if rem > 0 {
             self.tail[..rem].copy_from_slice(&frame[full_shards * payload..]);
         }
-        let total_recovery = geo.total_recovery();
-        let mut seq = self.next_seq;
         for b in 0..geo.block_count {
             let first = b * geo.max_block;
-            let k = geo.data_count(b);
-            for shard_index in 0..k {
+            for shard_index in 0..geo.data_count(b) {
                 let s = first + shard_index;
                 let body: &[u8] = if s < full_shards {
                     &frame[s * payload..(s + 1) * payload]
                 } else {
                     &self.tail
                 };
-                let mut flags = FLAG_PIC;
-                if b == 0 && shard_index == 0 {
-                    flags |= FLAG_SOF;
-                }
-                if total_recovery == 0 && b + 1 == geo.block_count && shard_index + 1 == k {
-                    flags |= FLAG_EOF;
-                }
-                let hdr = geo.header(
-                    pts_ns,
-                    frame_index,
-                    user_flags,
-                    self.version,
-                    scheme,
-                    b,
-                    shard_index,
-                    seq,
-                    flags,
-                );
-                seq = seq.wrapping_add(1);
-                emit(&hdr, body)?;
+                emit(
+                    &geo.header(pts_ns, frame_index, user_flags, b, shard_index),
+                    body,
+                )?;
             }
         }
-        self.next_seq = seq;
         Ok(())
     }
 
-    /// Pass 2: every block's parity, the frame's tail on the wire; `FLAG_EOF` on the
-    /// last. The pool must hold this frame's parity ([`parity`]).
+    /// Pass 2: every block's parity, the frame's tail on the wire. The pool must hold this
+    /// frame's parity ([`parity`]).
     pub fn emit_parity(
         &mut self,
         geo: &Geometry,
         pts_ns: u64,
         user_flags: u32,
         frame_index: u32,
-        scheme: FecScheme,
         emit: &mut dyn FnMut(&PacketHeader, &[u8]) -> Result<()>,
     ) -> Result<()> {
-        let mut left = geo.total_recovery();
-        let mut seq = self.next_seq;
         for b in 0..geo.block_count {
             let k = geo.data_count(b);
             for r in 0..geo.recovery_count(k) {
-                left -= 1;
-                let mut flags = FLAG_PIC;
-                if left == 0 {
-                    flags |= FLAG_EOF;
-                }
-                let hdr = geo.header(
-                    pts_ns,
-                    frame_index,
-                    user_flags,
-                    self.version,
-                    scheme,
-                    b,
-                    k + r,
-                    seq,
-                    flags,
-                );
-                seq = seq.wrapping_add(1);
+                let hdr = geo.header(pts_ns, frame_index, user_flags, b, k + r);
                 emit(&hdr, &self.recovery[b][r])?;
             }
         }
-        self.next_seq = seq;
         Ok(())
     }
 
@@ -356,13 +268,11 @@ impl Packetizer {
             blocks_out: 0,
             total_bytes: 0,
             emitted_shards: 0,
-            opened: false,
         }
     }
 
-    /// Feed one encoder chunk. Completed slice-granularity blocks leave as sentinels
-    /// (`block_count = 0`, `frame_bytes` = base-shard-offset × shard size). `slice_end`
-    /// is an Annex-B cut: only then may a partial block flush, and only whole shards
+    /// Feed one encoder chunk. Completed blocks leave as sentinels ([`PacketHeader`]).
+    /// `slice_end` is an Annex-B cut: only then may a partial block flush, and only whole shards
     /// (remainder stays pending so bases stay aligned). Tails wait for
     /// [`MIN_STREAM_BLOCK_SHARDS`]. The last block — real totals — is never emitted here.
     pub fn push_streamed(
@@ -377,9 +287,8 @@ impl Packetizer {
         au.pending.extend_from_slice(chunk);
         let payload = self.shard_payload;
         let block_bytes = self.fec.max_data_per_block as usize * payload;
-        // [`USER_FLAG_SLICE_STREAM`] is the only slice-wire gate: without it `slice_end`
-        // is inert and sentinels stay full-K / `frame_bytes = 0` (shipped receivers drop
-        // any other sentinel). Callers pass `slice_end` always and gate with the flag.
+        // [`USER_FLAG_SLICE_STREAM`] gates slice cuts: without it `slice_end` is inert and
+        // every sentinel is full-K. Callers pass `slice_end` always and gate with the flag.
         let slice_wire = au.user_flags & USER_FLAG_SLICE_STREAM != 0;
         // One chunk can fill several blocks; keep cutting so the leftover never exceeds K.
         loop {
@@ -403,13 +312,12 @@ impl Packetizer {
             }
             // Never empty `pending`. A zero-padded final shard would derive base
             // `total_data − 1`, overlapping the block just flushed; the receiver then
-            // rejects the AU. Slice arm only: legacy `must_flush` is strict `>`, so
+            // rejects the AU. Slice arm only: the full-K `must_flush` is strict `>`, so
             // remainder is never empty. One shard rides out in the final block anyway.
             let mut k = whole.min(self.fec.max_data_per_block as usize);
             if k > 1 && k == whole && au.pending.len() == whole * payload {
                 k -= 1;
             }
-            let sof = !au.opened;
             let (bi, pts, uf) = (au.blocks_out, au.pts_ns, au.user_flags);
             let fi = au.frame_index;
             let base_bytes = if slice_wire {
@@ -418,7 +326,7 @@ impl Packetizer {
                     .and_then(|b| u32::try_from(b).ok())
                     .ok_or(PunktfunkError::Unsupported("streamed AU exceeds u32 bytes"))?
             } else {
-                0 // legacy sentinel: uniform full-K, no base on the wire
+                0 // full-K: `encode_v2` places it at `block × K`
             };
             let flush_len = k * payload;
             self.emit_streamed_block(
@@ -429,21 +337,18 @@ impl Packetizer {
                 &au.pending[..flush_len],
                 base_bytes,
                 0,
-                sof,
-                false,
                 coder,
                 &mut emit,
             )?;
             au.pending.drain(..flush_len);
             au.emitted_shards += k as u64;
             au.blocks_out += 1;
-            au.opened = true;
         }
     }
 
-    /// Seal the final block: real `frame_bytes`/`block_count` (receiver retro-validates
-    /// the frame) and `FLAG_EOF` on the last packet. An empty AU is one zero-padded
-    /// shard (`block_count = 1`, never a sentinel).
+    /// Seal the final block with the real `frame_bytes`/`block_count`, which the receiver
+    /// retro-validates the frame against. An empty AU is one zero-padded shard
+    /// (`block_count = 1`, never a sentinel).
     pub fn finish_streamed(
         &mut self,
         au: StreamedAu,
@@ -461,16 +366,13 @@ impl Packetizer {
             &au.pending,
             frame_bytes,
             block_count,
-            !au.opened,
-            true,
             coder,
             &mut emit,
         )
     }
 
-    /// One streamed block (data then parity). Sentinels pass `block_count = 0` and reuse
-    /// `frame_bytes` as the shard-aligned base byte offset (0 matches the legacy sentinel);
-    /// the final block passes the real totals. `sof`/`eof` mark the frame's first/last packet.
+    /// One streamed block (data then parity). Sentinels pass `block_count = 0` and the
+    /// `frame_bytes` [`PacketHeader`] describes; the final block passes the real totals.
     #[allow(clippy::too_many_arguments)]
     fn emit_streamed_block(
         &mut self,
@@ -481,8 +383,6 @@ impl Packetizer {
         bytes: &[u8],
         frame_bytes: u32,
         block_count: u16,
-        sof: bool,
-        eof: bool,
         coder: &dyn ErasureCoder,
         emit: &mut impl FnMut(&PacketHeader, &[u8]) -> Result<()>,
     ) -> Result<()> {
@@ -520,48 +420,24 @@ impl Packetizer {
         }
         coder.encode_into(&data_shards, m, &mut self.recovery[0])?;
 
-        let mut next_seq = self.next_seq;
-        let mut emit_one = |next_seq: &mut u32, shard_index: usize, body: &[u8], flags: u8| {
-            let seq = *next_seq;
-            *next_seq = next_seq.wrapping_add(1);
-            let hdr = PacketHeader {
-                pts_ns,
-                frame_index,
-                stream_seq: seq,
-                frame_bytes,
-                user_flags,
-                block_index,
-                block_count,
-                data_shards: k as u16,
-                recovery_shards: m as u16,
-                shard_index: shard_index as u16,
-                shard_bytes: payload as u16,
-                magic: PUNKTFUNK_MAGIC,
-                version: self.version,
-                fec_scheme: coder.scheme() as u8,
-                flags,
-            };
-            emit(&hdr, body)
+        let hdr = |shard_index: usize| PacketHeader {
+            pts_ns,
+            frame_index,
+            frame_bytes,
+            user_flags,
+            block_index,
+            block_count,
+            data_shards: k as u16,
+            recovery_shards: m as u16,
+            shard_index: shard_index as u16,
+            shard_bytes: payload as u16,
         };
         for (shard_index, body) in data_shards.iter().enumerate() {
-            let mut flags = FLAG_PIC;
-            if sof && shard_index == 0 {
-                flags |= FLAG_SOF;
-            }
-            if eof && m == 0 && shard_index + 1 == k {
-                flags |= FLAG_EOF;
-            }
-            emit_one(&mut next_seq, shard_index, body, flags)?;
+            emit(&hdr(shard_index), body)?;
         }
-        for r in 0..m {
-            let mut flags = FLAG_PIC;
-            if eof && r + 1 == m {
-                flags |= FLAG_EOF;
-            }
-            let body: &[u8] = &self.recovery[0][r];
-            emit_one(&mut next_seq, k + r, body, flags)?;
+        for (r, body) in self.recovery[0][..m].iter().enumerate() {
+            emit(&hdr(k + r), body)?;
         }
-        self.next_seq = next_seq;
         Ok(())
     }
 }
@@ -622,24 +498,18 @@ impl Geometry {
         Ok(())
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn header(
         &self,
         pts_ns: u64,
         frame_index: u32,
         user_flags: u32,
-        version: u8,
-        scheme: FecScheme,
         b: usize,
         shard_index: usize,
-        seq: u32,
-        flags: u8,
     ) -> PacketHeader {
         let k = self.data_count(b);
         PacketHeader {
             pts_ns,
             frame_index,
-            stream_seq: seq,
             frame_bytes: self.frame_bytes,
             user_flags,
             block_index: b as u16,
@@ -648,10 +518,6 @@ impl Geometry {
             recovery_shards: self.recovery_count(k) as u16,
             shard_index: shard_index as u16,
             shard_bytes: self.payload as u16,
-            magic: PUNKTFUNK_MAGIC,
-            version,
-            fec_scheme: scheme as u8,
-            flags,
         }
     }
 }

@@ -36,10 +36,9 @@ pub const VIDEO_CAP_HOST_TIMING: u8 = 0x08;
 /// [`ProbeResult`].
 pub const VIDEO_CAP_PROBE_SEQ: u8 = 0x10;
 /// [`Hello::video_caps`]: the reassembler accepts streamed access units. Non-final blocks
-/// use SENTINEL headers (`block_count == 0`, `frame_bytes == 0`, exactly
-/// `max_data_per_block` data shards); the FINAL block carries real `frame_bytes` /
-/// `block_count` and `FLAG_EOF`. A geometry mismatch drops the frame. Hosts stream only
-/// to clients that set this bit; others get a whole-AU seal.
+/// leave as sentinels before the AU size is known; the FINAL block carries the real
+/// totals. A geometry mismatch drops the frame. Hosts stream only to clients that set
+/// this bit; others get a whole-AU seal.
 pub const VIDEO_CAP_STREAMED_AU: u8 = 0x20;
 /// [`Hello::video_caps`]: client can open ChaCha20-Poly1305 session datagrams and wants
 /// them (software-AES targets). The host grants only when `PUNKTFUNK_CHACHA20` allows, and

@@ -45,8 +45,8 @@ const REORDER_WINDOW: u32 = 64;
 struct BlockState {
     data_shards: usize,
     recovery_shards: usize,
-    /// Data-shard origin in the frame buffer. Uniform: `block_index × max_data_shards`.
-    /// Slice-stream: sentinel `frame_bytes / shard_bytes`; final `total_data − K`.
+    /// Data-shard origin in the frame buffer: a sentinel's wire base, the final block's
+    /// `total_data − K`.
     base_shard: usize,
     /// Present data-shard slots; also the FEC reconstruct input map.
     have_data: Vec<bool>,
@@ -65,10 +65,10 @@ struct FrameBuf {
     /// `shard_payload` change cannot splice two geometries into one buffer.
     /// See `design/shard-payload-reneg.md`.
     shard_bytes: usize,
-    /// Exact AU size. `0` = opened by a streamed-AU sentinel; cannot complete until
-    /// the final block pins the totals.
+    /// Exact AU size. `0` = opened by a sentinel; cannot complete until the final block
+    /// pins the totals.
     frame_bytes: usize,
-    /// `0` = unpinned streamed frame. A legacy-opened frame always has ≥ 1.
+    /// `0` until the final block pins the totals.
     block_count: usize,
     pts_ns: u64,
     user_flags: u32,
@@ -308,34 +308,16 @@ impl Reassembler {
         coder: &dyn ErasureCoder,
         stats: &StatsCounters,
     ) -> Result<Option<Frame>> {
-        match decode_v2(pkt, self.clock_origin_ns, &mut self.pts_ref_us) {
-            Some((hdr, epoch, body)) => self.push_header(hdr, epoch, body, coder, stats),
-            None => {
-                StatsCounters::add(&stats.packets_dropped, 1);
-                Ok(None)
-            }
-        }
+        let pushed = decode_v2(pkt, self.clock_origin_ns, &mut self.pts_ref_us)
+            .ok_or(Dropped)
+            .and_then(|(hdr, epoch, body)| self.push_inner(hdr, epoch, body, coder, stats));
+        Ok(pushed.unwrap_or_else(|Dropped| {
+            StatsCounters::add(&stats.packets_dropped, 1);
+            None
+        }))
     }
 
-    /// [`Self::push`] past the header decode. Tests craft hostile headers here: most of the
-    /// logical header has no wire field of its own.
-    pub(crate) fn push_header(
-        &mut self,
-        hdr: PacketHeader,
-        epoch: u8,
-        body: &[u8],
-        coder: &dyn ErasureCoder,
-        stats: &StatsCounters,
-    ) -> Result<Option<Frame>> {
-        Ok(self
-            .push_inner(hdr, epoch, body, coder, stats)
-            .unwrap_or_else(|Dropped| {
-                StatsCounters::add(&stats.packets_dropped, 1);
-                None
-            }))
-    }
-
-    /// [`Self::push_header`] with every counted drop as `Err(Dropped)`.
+    /// [`Self::push`] past the header decode, with every counted drop as `Err(Dropped)`.
     fn push_inner(
         &mut self,
         hdr: PacketHeader,
@@ -416,7 +398,6 @@ impl Reassembler {
             !is_probe,
             recovery_pool,
             in_flight_bytes,
-            lim.max_data_shards,
             (*deliver_partial && !is_probe).then_some(pending_partial),
         );
 
@@ -463,14 +444,10 @@ impl Reassembler {
         // First packet pinned shard size; a later in-bounds but different size would
         // compute different offsets into one buffer. Also keeps a mid-session
         // `shard_payload` change from landing a straggler in the wrong geometry.
-        // Mixed slice/uniform would firewall under one rule and place under the other.
-        if frame.shard_bytes != g.shard_bytes
-            || frame.epoch != epoch
-            || (frame.user_flags ^ hdr.user_flags) & crate::packet::USER_FLAG_SLICE_STREAM != 0
-        {
+        if frame.shard_bytes != g.shard_bytes || frame.epoch != epoch {
             return Err(Dropped);
         }
-        match pin_totals(frame, &g, lim.max_data_shards) {
+        match pin_totals(frame, &g) {
             Pin::Keep => {}
             Pin::Drop => return Err(Dropped),
             Pin::KillFrame => {
@@ -482,8 +459,7 @@ impl Reassembler {
                 // Remember the index (late-shard memory, like an aged-out frame) so
                 // stragglers cannot resurrect it. Count the drop: recovery-keyframe
                 // is the right outcome for a frame destroyed by a bad header.
-                win.completed
-                    .insert(hdr.frame_index, Done::of(&f, lim.max_data_shards));
+                win.completed.insert(hdr.frame_index, Done::of(&f));
                 for block in f.blocks.values_mut() {
                     reclaim_parity(block, recovery_pool, in_flight_bytes);
                 }
@@ -635,12 +611,11 @@ impl Reassembler {
         // after the final block pinned; it cannot complete before (`0 != blocks_ok`).
         if frame.block_count != 0 && frame.blocks_ok == frame.block_count {
             let done = win.frames.remove(&hdr.frame_index).unwrap();
-            win.completed
-                .insert(hdr.frame_index, Done::of(&done, lim.max_data_shards));
+            win.completed.insert(hdr.frame_index, Done::of(&done));
             *in_flight_bytes -= frame_cost(&done); // before `into_frame` truncates
 
             // The index is already in `completed`, so an untiled frame counts its drop.
-            if done.user_flags & crate::packet::USER_FLAG_SLICE_STREAM != 0 && !tiles(&done) {
+            if !tiles(&done) {
                 if !is_probe {
                     StatsCounters::add(&stats.frames_dropped, 1);
                 }
@@ -772,8 +747,8 @@ struct Done {
 }
 
 impl Done {
-    /// `max_data_shards` is a uniform block's data width.
-    fn of(f: &FrameBuf, max_data_shards: usize) -> Done {
+    /// What `f` lacked when it terminated.
+    fn of(f: &FrameBuf) -> Done {
         let mut d = Done::default();
         let covered = f
             .blocks
@@ -791,17 +766,6 @@ impl Done {
                 d.missing[loss_position(idx, d.total_data)] += 1;
                 if b.reconstructed {
                     d.restored.push(idx);
-                }
-            }
-        }
-        // A uniform frame's blocks that never saw a shard are missing whole.
-        if f.user_flags & crate::packet::USER_FLAG_SLICE_STREAM == 0 && f.block_count > 1 {
-            let per = max_data_shards as u32;
-            for bi in 0..f.block_count as u32 {
-                if !f.blocks.contains_key(&(bi as u16)) {
-                    for idx in bi * per..((bi + 1) * per).min(d.total_data) {
-                        d.missing[loss_position(idx, d.total_data)] += 1;
-                    }
                 }
             }
         }
@@ -846,13 +810,9 @@ struct Geom {
     block_idx: usize,
     block_count: usize,
     frame_bytes: usize,
-    /// Streamed-AU sentinel (`block_count == 0`): a non-final block of an AU whose
-    /// total is still unknown.
+    /// Sentinel (`block_count == 0`): a non-final block of an AU whose total is still
+    /// unknown.
     sentinel: bool,
-    /// Variable-size, base-addressed blocks: the uniform rules do not apply.
-    slice_stream: bool,
-    /// Data shards `frame_bytes` spans.
-    total_data: usize,
     /// Buffer extent this packet proves, in shards.
     need_shards: usize,
     /// Where this block's data shards start in the AU.
@@ -862,9 +822,11 @@ struct Geom {
 /// Bound every attacker-controlled header field before anything allocates on it.
 /// `None` = drop the packet.
 ///
-/// `shard_bytes` is a range, not equality: geometry is per-frame, and `push` rejects a
-/// mid-frame change. Even size matches `Config::validate`. Reads only the header, the
-/// length of the bytes after it and the limits, so it is tested directly.
+/// Reads [`decode_v2`]'s slice form: a sentinel carries its block's base in `frame_bytes`,
+/// the final block the frame's totals. `shard_bytes` is a range, not equality: geometry is
+/// per-frame, and `push` rejects a mid-frame change. Even size matches `Config::validate`.
+/// Reads only the header, the length of the bytes after it and the limits, so it is tested
+/// directly.
 fn firewall(hdr: &PacketHeader, body_len: usize, lim: &ReassemblerLimits) -> Option<Geom> {
     let shard_bytes = hdr.shard_bytes as usize;
     let data_shards = hdr.data_shards as usize;
@@ -873,8 +835,7 @@ fn firewall(hdr: &PacketHeader, body_len: usize, lim: &ReassemblerLimits) -> Opt
     let shard_index = hdr.shard_index as usize;
     let block_count = hdr.block_count as usize;
     let frame_bytes = hdr.frame_bytes as usize;
-    if hdr.magic != PUNKTFUNK_MAGIC
-        || shard_bytes < lim.min_shard_bytes
+    if shard_bytes < lim.min_shard_bytes
         || shard_bytes > lim.max_shard_bytes
         || shard_bytes % 2 != 0
         || body_len < shard_bytes
@@ -887,91 +848,40 @@ fn firewall(hdr: &PacketHeader, body_len: usize, lim: &ReassemblerLimits) -> Opt
     {
         return None;
     }
-    // Bound by negotiated limits: full-K, not the last allowed block. Exact geometry
-    // waits for the pin. Legacy never emits `block_count == 0`.
     let sentinel = block_count == 0;
-    // Flagged on every packet because reorder can deliver the final block first.
-    let slice_stream = hdr.user_flags & crate::packet::USER_FLAG_SLICE_STREAM != 0;
     let block_idx = hdr.block_index as usize;
-    // Per-packet shard-size ceiling for block caps and buffer extent. Allocation
+    // Per-packet shard-size ceiling for the block cap and buffer extent. Allocation
     // uses only what this packet proves (`need_shards`); the in-flight budget
     // bounds the rest — one datagram must not commit `max_frame_bytes`.
     let total_data_max = lim.max_frame_bytes.div_ceil(shard_bytes).max(1);
-    // Per-frame FEC-block ceiling at this shard size. A session-level cap from
-    // the negotiated size would reject legitimate post-shrink frames.
-    let max_blocks = total_data_max.div_ceil(lim.max_data_shards).max(1);
-    // Slice pipeline: every non-final block is at least
-    // `min(MIN_STREAM_BLOCK_SHARDS, max_data_per_block)` data shards, so a
-    // max-size frame bounds the count (+ final + rounding). Matches the sender.
-    let slice_block_cap = total_data_max
+    // Every non-final block is at least `min(MIN_STREAM_BLOCK_SHARDS, max_data_per_block)`
+    // data shards, so a max-size frame bounds the count (+ final + rounding). Matches the
+    // sender.
+    let block_cap = total_data_max
         / super::packetize::MIN_STREAM_BLOCK_SHARDS.min(lim.max_data_shards.max(1))
         + 2;
     let total_data = frame_bytes.div_ceil(shard_bytes).max(1);
-    if sentinel && slice_stream {
-        // Slice sentinel: `frame_bytes` is the block's base byte offset.
-        // Shard-aligned; the block's range must fit the negotiated frame budget.
+    if sentinel {
+        // Shard-aligned base; the block's range must fit the negotiated frame budget.
         if frame_bytes % shard_bytes != 0
             || frame_bytes + data_shards * shard_bytes > lim.max_frame_bytes
-            || block_idx + 1 >= slice_block_cap
+            || block_idx + 1 >= block_cap
         {
             return None;
         }
-    } else if sentinel {
-        if frame_bytes != 0 || data_shards != lim.max_data_shards || block_idx + 1 >= max_blocks {
-            return None;
-        }
-    } else {
-        let block_cap = if slice_stream {
-            slice_block_cap
-        } else {
-            max_blocks
-        };
-        if block_count > block_cap || block_idx >= block_count {
-            return None;
-        }
-        if slice_stream {
-            // Only the final block is non-sentinel. It must be last, K must fit
-            // the block size, and its shards must sit in the frame
-            // (`base = total_data − data_shards`).
-            if block_idx + 1 != block_count
-                || data_shards > lim.max_data_shards
-                || data_shards > total_data
-            {
-                return None;
-            }
-        } else {
-            // Uniform sender: consecutive full-K blocks, last smaller, exact
-            // `frame_bytes` on every non-sentinel. Offset
-            // `(block × max_data_per_block + shard) × shard_bytes` is then
-            // computable on arrival. A mismatched header is dropped, not placed.
-            let expect_blocks = total_data.div_ceil(lim.max_data_shards).max(1);
-            let expect_data_shards = if block_idx + 1 == expect_blocks {
-                total_data - (expect_blocks - 1) * lim.max_data_shards
-            } else {
-                lim.max_data_shards
-            };
-            if block_count != expect_blocks || data_shards != expect_data_shards {
-                return None;
-            }
-        }
+    } else if block_count > block_cap || block_idx + 1 != block_count || data_shards > total_data {
+        // The final block must be last and its shards must sit in the frame
+        // (`base = total_data − data_shards`).
+        return None;
     }
-    // A sentinel has no total but pins its own block (slice: wire base; legacy:
-    // full-K position). Never `total_data_max` (8–64 MiB): every slice AU would
-    // open at the ceiling and exhaust the in-flight budget after ~3 frames.
-    let need_shards = if sentinel && slice_stream {
-        frame_bytes / shard_bytes + data_shards
-    } else if sentinel {
-        (block_idx + 1).saturating_mul(lim.max_data_shards)
+    // A sentinel has no total but pins its own block at its wire base. Never
+    // `total_data_max` (8–64 MiB): every AU would open at the ceiling and exhaust the
+    // in-flight budget after ~3 frames.
+    let (base_shard, need_shards) = if sentinel {
+        let base = frame_bytes / shard_bytes;
+        (base, base + data_shards)
     } else {
-        total_data
-    }
-    .min(total_data_max);
-    let base_shard = if !slice_stream {
-        block_idx * lim.max_data_shards
-    } else if sentinel {
-        frame_bytes / shard_bytes // sentinel wire base (shard-aligned above)
-    } else {
-        total_data - data_shards // final block sits at the end of the frame
+        (total_data - data_shards, total_data)
     };
     Some(Geom {
         shard_bytes,
@@ -982,9 +892,7 @@ fn firewall(hdr: &PacketHeader, body_len: usize, lim: &ReassemblerLimits) -> Opt
         block_count,
         frame_bytes,
         sentinel,
-        slice_stream,
-        total_data,
-        need_shards,
+        need_shards: need_shards.min(total_data_max),
         base_shard,
     })
 }
@@ -1014,29 +922,25 @@ enum Pin {
 /// Check `g` against `frame`'s pinned totals, pinning them on the first final block.
 ///
 /// A sentinel has no totals: unpinned it matches by construction; pinned (either
-/// order — reorder is normal) it must still be non-final. Final-block totals
-/// retro-validate every sentinel-created block. Totals that put a landed block out of
-/// range or not full-K kill the frame: landed offsets can't be trusted, so delivering
-/// would splice the decoder.
-fn pin_totals(frame: &mut FrameBuf, g: &Geom, max_data_shards: usize) -> Pin {
+/// order — reorder is normal) it must still be non-final and sit below the final block.
+/// Final-block totals retro-validate every sentinel-created block. Totals that put a
+/// landed block out of range kill the frame: landed offsets can't be trusted, so
+/// delivering would splice the decoder.
+fn pin_totals(frame: &mut FrameBuf, g: &Geom) -> Pin {
     if g.sentinel {
-        // Full-K was already enforced; offsets sit in range by `idx + 1 < count`.
         if frame.block_count != 0 {
-            if g.block_idx + 1 >= frame.block_count {
+            // The pinning packet created the final block. A later sentinel must sit
+            // strictly below its base or it overwrites landed shards.
+            let final_k = frame
+                .blocks
+                .get(&((frame.block_count - 1) as u16))
+                .map(|b| b.data_shards)
+                .unwrap_or(0);
+            let pinned_total = frame.frame_bytes.div_ceil(g.shard_bytes).max(1);
+            if g.block_idx + 1 >= frame.block_count
+                || g.base_shard + g.data_shards > pinned_total - final_k
+            {
                 return Pin::Drop;
-            }
-            if g.slice_stream {
-                // The pinning packet created the final block. A later sentinel
-                // must sit strictly below its base or it overwrites landed shards.
-                let final_k = frame
-                    .blocks
-                    .get(&((frame.block_count - 1) as u16))
-                    .map(|b| b.data_shards)
-                    .unwrap_or(0);
-                let pinned_total = frame.frame_bytes.div_ceil(g.shard_bytes).max(1);
-                if g.frame_bytes / g.shard_bytes + g.data_shards > pinned_total - final_k {
-                    return Pin::Drop;
-                }
             }
         }
         return Pin::Keep;
@@ -1048,26 +952,12 @@ fn pin_totals(frame: &mut FrameBuf, g: &Geom, max_data_shards: usize) -> Pin {
             Pin::Keep
         };
     }
-    let lied = if g.slice_stream {
-        // No uniform K to demand. Every sentinel must sit strictly below the
-        // final base (`total_data − data_shards`; subtraction is firewall-safe)
-        // and be a non-final index. Sentinel overlap is not policed here —
-        // placement stays in-bounds; the tiling check refuses to deliver gaps.
-        let final_base = g.total_data - g.data_shards;
-        frame.blocks.iter().any(|(&bi, b)| {
-            let bi = bi as usize;
-            bi + 1 >= g.block_count || b.base_shard + b.data_shards > final_base
-        })
-    } else {
-        let expect_blocks = g.total_data.div_ceil(max_data_shards).max(1);
-        let final_k = g.total_data - (expect_blocks - 1) * max_data_shards;
-        frame.blocks.iter().any(|(&bi, b)| {
-            let bi = bi as usize;
-            bi >= expect_blocks
-                || (bi + 1 < expect_blocks && b.data_shards != max_data_shards)
-                || (bi + 1 == expect_blocks && b.data_shards != final_k)
-        })
-    };
+    // Every landed sentinel must be a non-final index and sit strictly below the final
+    // base. Sentinel overlap is not policed here: placement stays in bounds and the
+    // tiling check refuses to deliver gaps.
+    let lied = frame.blocks.iter().any(|(&bi, b)| {
+        bi as usize + 1 >= g.block_count || b.base_shard + b.data_shards > g.base_shard
+    });
     if lied {
         return Pin::KillFrame;
     }
@@ -1182,7 +1072,6 @@ impl ReassemblyWindow {
         count_drops: bool,
         recovery_pool: &mut Vec<Vec<u8>>,
         in_flight_bytes: &mut usize,
-        max_data_shards: usize,
         // `Some(sink)` = deliver aged-out CHUNK_ALIGNED frames instead of only dropping them.
         mut partial_sink: Option<&mut Option<Frame>>,
     ) {
@@ -1209,7 +1098,7 @@ impl ReassemblyWindow {
                 // Remember the index so a straggler cannot resurrect the frame
                 // (which would re-allocate and double-count the drop). Restored
                 // shards join late-shard memory exactly like an emitted frame.
-                completed.insert(idx, Done::of(f, max_data_shards));
+                completed.insert(idx, Done::of(f));
                 *in_flight_bytes -= frame_cost(f);
                 // Chunk-aligned: the buffer is already the consumer shape (received
                 // at final offsets, zeros in holes). Newest-wins. Still counted dropped.
@@ -1322,7 +1211,6 @@ mod firewall_tests {
         }
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn header(
         shard_bytes: u16,
         data: u16,
@@ -1331,39 +1219,30 @@ mod firewall_tests {
         block_index: u16,
         block_count: u16,
         frame_bytes: u32,
-        slice: bool,
     ) -> PacketHeader {
         PacketHeader {
-            pts_ns: 0,
-            frame_index: 0,
-            stream_seq: 0,
             frame_bytes,
-            user_flags: if slice { USER_FLAG_SLICE_STREAM } else { 0 },
+            user_flags: USER_FLAG_SLICE_STREAM,
             block_index,
             block_count,
             data_shards: data,
             recovery_shards: rec,
             shard_index,
             shard_bytes,
-            magic: PUNKTFUNK_MAGIC,
-            version: 1,
-            fec_scheme: 0,
-            flags: FLAG_PIC,
+            ..PacketHeader::default()
         }
     }
 
-    /// One header of each wire shape passes, with the base and extent it proves.
+    /// A sentinel and a final block pass, each with the base and extent it proves.
     #[test]
     fn each_wire_shape_passes_with_its_own_extent() {
         let geom =
             |h: PacketHeader| firewall(&h, 16, &lim()).map(|g| (g.base_shard, g.need_shards));
-        // 20 data shards at K = 8: blocks of 8, 8, 4.
-        assert_eq!(geom(header(16, 4, 2, 0, 2, 3, 320, false)), Some((16, 20)));
-        assert_eq!(geom(header(16, 8, 2, 0, 1, 0, 0, false)), Some((8, 16)));
-        assert_eq!(geom(header(16, 5, 1, 0, 1, 0, 160, true)), Some((10, 15)));
-        assert_eq!(geom(header(16, 3, 1, 0, 2, 3, 320, true)), Some((17, 20)));
-        // A uniform block whose K disagrees with `frame_bytes` is refused.
-        assert_eq!(geom(header(16, 3, 2, 0, 2, 3, 320, false)), None);
+        // A sentinel at shard 10, and a final block of 3 closing a 20-shard frame.
+        assert_eq!(geom(header(16, 5, 1, 0, 1, 0, 160)), Some((10, 15)));
+        assert_eq!(geom(header(16, 3, 1, 0, 2, 3, 320)), Some((17, 20)));
+        // A final block with more data than its frame holds is refused.
+        assert_eq!(geom(header(16, 8, 1, 0, 2, 3, 112)), None);
     }
 
     proptest! {
@@ -1380,12 +1259,11 @@ mod firewall_tests {
             block_index in 0u16..8,
             block_count in 0u16..8,
             frame_bytes in prop_oneof![Just(0u32), (0u32..300).prop_map(|k| k * 16), 0u32..4200],
-            slice in any::<bool>(),
             short in 0usize..2,
         ) {
             let lim = lim();
             let h = header(shard_bytes, data, rec, shard_index, block_index, block_count,
-                frame_bytes, slice);
+                frame_bytes);
             let body_len = (shard_bytes as usize).saturating_sub(short);
             if let Some(g) = firewall(&h, body_len, &lim) {
                 prop_assert!(body_len >= g.shard_bytes);

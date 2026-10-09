@@ -50,7 +50,6 @@ crc32fast = "1"                # DualSense Bluetooth output-report CRC (`audio::
 chacha20poly1305 = "0.11"
 # Optional for chacha-aws-lc-rs.
 aws-lc-rs = { workspace = true, optional = true }
-zerocopy = { version = "0.8", features = ["derive"] }
 socket2 = { version = "0.6", features = [
     "all",
 ] } # SO_SNDBUF/SO_RCVBUF growth (default UDP buffers too small for 4K/5K bursts) + DSCP/SO_PRIORITY media QoS
