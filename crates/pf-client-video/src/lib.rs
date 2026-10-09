@@ -10,10 +10,6 @@
 // Decoder-input capture behind `PUNKTFUNK_DUMP_VIDEO`, written by the session pump.
 #[cfg(desktop)]
 pub mod au_dump;
-// pf-client-core compiles this file into its portable half too: the Skia settings screen
-// reads it on targets that never build this crate.
-#[cfg(desktop)]
-mod decoder_pref;
 // The ladder. Every item is re-exported at the root, so `pf_client_core::video::X` is `X` here.
 #[cfg(desktop)]
 mod video;

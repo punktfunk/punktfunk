@@ -41,9 +41,6 @@ use crate::video_software::SoftwareDecoder;
 /// Defined in [`crate::video_types`] so `d3d11va` can name them without this
 /// module. Call sites keep the `video::` paths.
 pub use crate::video_types::{umd_version_parts, DecodeHealth, StreamFormat};
-// Lives in portable `decoder_pref` (the Skia console reads the decoder row
-// through it). Re-exported so desktop callers keep `video::migrate_decoder_pref`.
-pub use crate::decoder_pref::migrate_decoder_pref;
 #[cfg(target_os = "linux")]
 use crate::video_vaapi_native::NativeVaapiDecoder;
 /// The Vulkan handoff types live in [`crate::video_vk`] so Android can reach them without
@@ -51,6 +48,9 @@ use crate::video_vaapi_native::NativeVaapiDecoder;
 /// them here.
 pub use crate::video_vk::{QueueLock, QueueLockGuard, VulkanDecodeDevice};
 use crate::video_vk_native::{NativeCodec, NativeVulkanDecoder};
+/// Lives in punktfunk-core, where every settings screen reads it; re-exported so
+/// desktop callers keep `video::migrate_decoder_pref`.
+pub use punktfunk_core::decoder_pref::migrate_decoder_pref;
 
 /// One decoded frame. `pts_ns` is the host capture timestamp for
 /// capture→displayed latency at present time.

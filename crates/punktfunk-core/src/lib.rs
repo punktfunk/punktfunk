@@ -34,6 +34,9 @@ pub mod config;
 #[path = "crash_windows.rs"]
 pub mod crash;
 pub mod crypto;
+// Stored decoder-pin migration, shared by the decode ladder and every settings screen.
+/// cbindgen:ignore
+pub mod decoder_pref;
 pub mod discovery;
 pub mod error;
 pub mod fec;
