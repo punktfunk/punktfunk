@@ -17,23 +17,10 @@
 #   PUNKTFUNK_SRC=~/src/punktfunk bash scripts/steamdeck/install.sh   # source elsewhere
 #
 set -euo pipefail
-
-log()  { printf '\033[1;36m==>\033[0m %s\n' "$*"; }
-ok()   { printf '\033[1;32m  ok\033[0m %s\n' "$*"; }
-warn() { printf '\033[1;33m  !!\033[0m %s\n' "$*" >&2; }
-die()  { printf '\033[1;31merror:\033[0m %s\n' "$*" >&2; exit 1; }
-have() { command -v "$1" >/dev/null 2>&1; }
-# Create a system group if it is missing (needs sudo). Idempotent, and mirrors what the
-# deb/rpm/arch scriptlets do — a udev rule that chgrp's to a group nobody created fails silently.
-ensure_group() {
-    getent group "$1" >/dev/null 2>&1 && return 0
-    sudo groupadd --system "$1" 2>/dev/null || return 1
-    ok "created the '$1' system group"
-}
+# shellcheck source-path=SCRIPTDIR source=lib.sh
+. "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
 # --- options ---------------------------------------------------------------
-SRC="${PUNKTFUNK_SRC:-$HOME/punktfunk}"
-BOX="${PUNKTFUNK_BOX:-pf2}"
 BOX_IMAGE="${PUNKTFUNK_BOX_IMAGE:-docker.io/library/debian:trixie}"
 MGMT_PORT="${PUNKTFUNK_MGMT_PORT:-47990}"
 WEB_PORT="${PUNKTFUNK_WEB_PORT:-47992}"
@@ -50,21 +37,13 @@ for arg in "$@"; do
         --no-web) WITH_WEB=0 ;;
         --gamestream) GAMESTREAM=true ;;
         --no-gamestream) GAMESTREAM=false ;;
-        --src=*) SRC="${arg#--src=}" ;;
+        --src=*) pf_set_src "${arg#--src=}" ;;
         --web-bind=*) WEB_BIND="${arg#--web-bind=}"; WEB_BIND_SET=1 ;;
         -h|--help) sed -n '2,20p' "$0"; exit 0 ;;
         *) die "unknown option: $arg (try --help)" ;;
     esac
 done
-TARGET_DIR="$SRC/target-steamos"
-BIN="$TARGET_DIR/release/punktfunk-host"
-# The PyroWave encode worker — a separate executable next to the host, and the ONLY binary this
-# installer setcaps. Never a hardlink or a mode of $BIN: a shared inode shares the file capability
-# and would void the KWin .desktop grant written below.
-WORKER="$TARGET_DIR/release/punktfunk-encode-worker"
 CONFIG="$HOME/.config/punktfunk"
-UNITS="$HOME/.config/systemd/user"
-XRD="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
 # Set when this run does something that only a fresh login picks up (input-group add, first-time
 # KWin .desktop grant). Drives the loud "reboot before streaming" note in the summary.
 NEED_RELOGIN=0
@@ -344,115 +323,7 @@ log "System tuning (UDP buffers + gamepad rules + vhci-hcd + input/punktfunk gro
 # sudo was acquired up front in preflight (SUDO_OK) so this never stalls behind the long build; a
 # skip here (no password / no TTY) was already reported loudly there.
 if [ "$SUDO_OK" = 1 ]; then
-    printf 'net.core.wmem_max=33554432\nnet.core.rmem_max=33554432\n' \
-        | sudo tee /etc/sysctl.d/99-punktfunk-net.conf >/dev/null
-    sudo sysctl -q -p /etc/sysctl.d/99-punktfunk-net.conf >/dev/null
-    ok "UDP socket buffers raised to 32 MB (persisted)"
-    # Nice-limit headroom for the host's data-plane threads (audio/send): without it (or rtkit,
-    # which SteamOS does not guarantee) the per-thread renice silently no-ops and a busy game can
-    # deschedule the 5 ms audio loop. SteamOS's /usr is read-only, so unlike the packaged installs
-    # this lands in /etc — same drop-in, same effect, from the next boot. NEVER a file capability
-    # on the host binary (see the setcap note above — KWin identification).
-    if [ -f "$SRC/packaging/linux/50-punktfunk-nice.conf" ]; then
-        sudo install -Dm644 "$SRC/packaging/linux/50-punktfunk-nice.conf" \
-            /etc/systemd/system/user@.service.d/50-punktfunk-nice.conf
-        sudo systemctl daemon-reload || true
-        ok "nice-limit drop-in installed (data-plane thread priority; applies after a reboot)"
-    fi
-    if [ -f "$SRC/scripts/60-punktfunk.rules" ]; then
-        sudo install -m644 "$SRC/scripts/60-punktfunk.rules" /etc/udev/rules.d/60-punktfunk.rules
-        sudo udevadm control --reload-rules && sudo udevadm trigger || true
-        ok "installed udev rule (virtual gamepads + native Steam Deck controller)"
-    fi
-    # vhci-hcd: the usbip transport that makes the virtual Steam Deck pad a *real* USB device so Steam
-    # Input adopts it (else it degrades to plain UHID, which Steam ignores — "no controller appears").
-    # Persist the autoload AND load it now so passthrough works without waiting for a reboot.
-    if [ -f "$SRC/scripts/punktfunk-modules.conf" ]; then
-        sudo install -m644 "$SRC/scripts/punktfunk-modules.conf" /etc/modules-load.d/punktfunk.conf
-        sudo modprobe vhci-hcd 2>/dev/null || warn "could not load vhci-hcd now (loads on next boot) — needed for the native Steam Deck pad"
-        ok "vhci-hcd autoload installed (native Steam Deck controller transport)"
-    fi
-    if id -nG "$USER" | grep -qw input; then
-        ok "already in the 'input' group"
-    else
-        sudo usermod -aG input "$USER"
-        NEED_RELOGIN=1
-        warn "added $USER to the 'input' group (applies after a reboot)"
-    fi
-    # The 'punktfunk' group owns the usbip vhci attach/detach nodes (see 60-punktfunk.rules).
-    # Deliberately NOT 'input': writing 'attach' hands the kernel a caller-supplied socket fd and
-    # materialises an arbitrary emulated USB device — a root-only primitive that must not ride on
-    # the group every gamepad guide tells you to join (security-review 2026-08-05 M-4).
-    #
-    # The deb/rpm/arch scriptlets groupadd this; NOTHING on the Deck path did. So the rule we just
-    # installed ran `chgrp punktfunk` against a group that did not exist, the chgrp failed, the
-    # attach/detach files stayed root-only, and the native Steam Deck pad never attached — with no
-    # error anywhere the user would look. Create it and join it here: unlike a general-purpose
-    # host, running THIS script IS the statement "make my Deck a host with native pad passthrough".
-    # `if ensure_group` (not `ensure_group || true`): a failed groupadd must not fall through to a
-    # usermod against a group that does not exist, which under `set -e` would kill the installer
-    # here — after the long build and before the services are installed.
-    if ensure_group punktfunk; then
-        if id -nG "$USER" | grep -qw punktfunk; then
-            ok "already in the 'punktfunk' group (usbip vhci access)"
-        else
-            sudo usermod -aG punktfunk "$USER"
-            NEED_RELOGIN=1
-            warn "added $USER to the 'punktfunk' group — the native Steam Deck pad needs it. That group"
-            warn "can emulate arbitrary USB devices; drop it with 'sudo gpasswd -d $USER punktfunk' if"
-            warn "you would rather stream without the native pad."
-        fi
-    else
-        warn "could not create the 'punktfunk' group — the native Steam Deck pad will not attach"
-        warn "(everything else works; the pad arrives as a generic Xbox 360 controller). By hand:"
-        warn "  sudo groupadd --system punktfunk; sudo usermod -aG punktfunk $USER"
-    fi
-    # NO CAP_SYS_NICE on the host binary — and a removal of the one 0.26.0-1 granted here.
-    #
-    # 0.26.0-1 setcap'd this binary for the GPU-priority lever, which on a Van Gogh APU is a real
-    # win. It also broke Desktop-mode streaming outright. Just above, this installer writes
-    # ~/.local/share/applications/io.unom.Punktfunk.Host.desktop with Exec=$BIN so KWin will grant
-    # the host its restricted protocols — and KWin makes that grant by resolving the client's
-    # /proc/<pid>/exe and matching it against that Exec=. The kernel refuses that readlink to any
-    # reader whose effective set is not a superset of the target's PERMITTED set
-    # (cap_ptrace_access_check), and KWin holds no capabilities. So the capability silently voided
-    # the .desktop written six lines earlier, and every Desktop-mode session died with
-    # "KWin does not expose zkde_screencast_unstable_v1 to this client". Gaming Mode (gamescope) is
-    # unaffected — it has no such gate. Full matrix in packaging/arch/punktfunk-host.install.
-    #
-    # Costs pacing only: pf-zerocopy walks REALTIME -> HIGH -> default when a class is refused.
-    # `setcap -r` exits non-zero on a file that has no capability, hence the redirect.
-    if [ -x "$BIN" ]; then
-        sudo setcap -r "$BIN" 2>/dev/null || true
-    fi
-    # CAP_SYS_NICE on the ENCODE WORKER — the same grant, on the binary that can hold it, and the
-    # Deck is the box that wants it most: one small Van Gogh GPU shared between the game and
-    # PyroWave's compute-shader encode. punktfunk-encode-worker is a separate executable spawned
-    # per session that speaks one socketpair to the host and never touches Wayland, D-Bus or the
-    # network — nothing resolves ITS /proc/<pid>/exe, so the .desktop grant written above stays
-    # valid. Every driver tested (RADV included) refuses EVERY elevated global-priority class
-    # without this capability, so without it the lever is decoration.
-    #
-    # Like $BIN it lives under $HOME, so it survives a SteamOS A/B update on its own — but a
-    # REBUILD is a new inode and file capabilities do not follow, so it must be re-applied after
-    # every rebuild. Re-running this installer does that, and so does update.sh.
-    #
-    # Best-effort: a failure just means the encode runs at default priority, as it does today.
-    if [ -x "$WORKER" ]; then
-        if sudo setcap 'cap_sys_nice=ep' "$WORKER" 2>/dev/null; then
-            ok "granted CAP_SYS_NICE to the encode worker (PyroWave can outrank a GPU-bound game)"
-        else
-            warn "could not grant CAP_SYS_NICE to $WORKER — PyroWave stays at default GPU priority"
-        fi
-    fi
-    # SteamOS A/B updates rebuild /etc and DROP everything not on Valve's keep list — verified
-    # live: an OS update stripped the udev rule + vhci autoload + UDP sysctl (gamepads silently
-    # degrade to Xbox 360, buffers back to 208 KB). The sanctioned fix is a preserve drop-in in
-    # /etc/atomic-update.conf.d/ (itself on the stock keep list, so it self-preserves).
-    if [ -f "$SRC/scripts/punktfunk-atomic-keep.conf" ]; then
-        sudo install -Dm644 "$SRC/scripts/punktfunk-atomic-keep.conf" /etc/atomic-update.conf.d/punktfunk.conf
-        ok "system tuning registered to survive SteamOS updates (atomic-update.conf.d)"
-    fi
+    apply_system_tuning
 else
     warn "no usable sudo — SKIPPED system tuning. Gamepad passthrough + clean streaming need root (udev"
     warn "rule, 'input' + 'punktfunk' groups, vhci-hcd, UDP buffers) — there is no user-space way to do these."
@@ -463,7 +334,7 @@ else
     warn "  sudo install -m644 $SRC/scripts/punktfunk-modules.conf /etc/modules-load.d/punktfunk.conf &&"
     warn "  sudo groupadd --system punktfunk;"
     warn "  sudo usermod -aG input,punktfunk $USER &&"
-    warn "  printf 'net.core.wmem_max=33554432\\nnet.core.rmem_max=33554432\\n' | sudo tee /etc/sysctl.d/99-punktfunk-net.conf &&"
+    warn "  sudo install -m644 $SRC/scripts/99-punktfunk-net.conf /etc/sysctl.d/ &&"
     warn "  sudo sysctl --system && sudo udevadm control --reload-rules && sudo udevadm trigger"
     warn "('punktfunk' owns the usbip vhci nodes the native Steam Deck pad attaches through — without"
     warn " it the pad silently never appears. Omit it if you do not want that pad.)"
@@ -486,23 +357,7 @@ if [ -n "$GAMESTREAM" ]; then
 fi
 SERVE_ARGS="serve --mgmt-bind 0.0.0.0:$MGMT_PORT"
 [ "$OPEN" = 1 ] && SERVE_ARGS="$SERVE_ARGS --open"
-cat > "$UNITS/punktfunk-host.service" <<EOF
-# Generated by scripts/steamdeck/install.sh — punktfunk Steam Deck host (native binary).
-[Unit]
-Description=punktfunk host
-After=pipewire.service
-
-[Service]
-EnvironmentFile=-%h/.config/punktfunk/host.env
-Environment=XDG_RUNTIME_DIR=$XRD
-Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=$XRD/bus
-ExecStart=$BIN $SERVE_ARGS
-Restart=on-failure
-RestartSec=2
-
-[Install]
-WantedBy=default.target
-EOF
+write_host_unit "$BIN $SERVE_ARGS"
 ok "punktfunk-host.service ($SERVE_ARGS)"
 
 if [ "$WITH_WEB" = 1 ]; then
