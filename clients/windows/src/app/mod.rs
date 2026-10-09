@@ -409,17 +409,18 @@ fn root(cx: &mut RenderCx, ctx: &Arc<AppCtx>) -> Element {
     // below can deliver anything: a link queued at startup is explicit intent and wins, and
     // `pending()` reads the queue WITHOUT draining it so the router still gets it.
     cx.use_effect((), {
-        let (ctx, set_screen, set_library, set_status) = (
-            ctx.clone(),
-            set_screen.clone(),
-            set_library.clone(),
-            set_status.clone(),
-        );
+        let svc = Svc {
+            ctx: ctx.clone(),
+            set_screen: set_screen.clone(),
+            set_status: set_status.clone(),
+            set_speed: set_speed.clone(),
+            set_library: set_library.clone(),
+        };
         move || {
             if crate::deeplink::pending() {
                 return;
             }
-            let settings = ctx.settings.lock().unwrap().clone();
+            let settings = svc.ctx.settings.lock().unwrap().clone();
             let known = pf_client_core::trust::KnownHosts::load();
             let (default, source) = start::default_host_with_source(&settings, &known);
             tracing::info!(
@@ -431,14 +432,11 @@ fn root(cx: &mut RenderCx, ctx: &Arc<AppCtx>) -> Element {
             let screen = start::start_screen(&settings, &known);
             let Some(i) = screen.host_index() else { return };
             let target = hosts::saved_target(&known.hosts[i]);
-            // The same three steps the "Browse library" menu item takes, in the same order.
-            *ctx.shared.target.lock().unwrap() = target.clone();
-            library::start_fetch(&ctx, &set_library);
-            set_screen.call(Screen::Library);
+            library::open_library(&svc, target.clone());
             // Stream is the library PLUS a connect, never a screen of its own: the session
             // window is the overlay, so ending it leaves the shelf on screen underneath.
             if matches!(screen, start::Start::Stream(_)) {
-                connect::initiate_waking(&ctx, target, &set_screen, &set_status);
+                connect::initiate_waking(&svc.ctx, target, &svc.set_screen, &svc.set_status);
             }
         }
     });

@@ -3,6 +3,7 @@
 //! forget) and a manual connect entry — the same card layout as the Linux and Apple clients.
 
 use super::connect::{initiate, initiate_waking, open_console};
+use super::library::open_library;
 use super::lucide;
 use super::speed::SpeedState;
 use super::style::*;
@@ -1027,11 +1028,7 @@ fn saved_menu(
                 pf_client_core::clipboard::set_text(&url);
             }
             MENU_CONNECT => initiate(&svc.ctx, target.clone(), &svc.set_screen, &svc.set_status),
-            MENU_LIBRARY => {
-                *svc.ctx.shared.target.lock().unwrap() = target.clone();
-                super::library::start_fetch(&svc.ctx, &svc.set_library);
-                svc.set_screen.call(Screen::Library);
-            }
+            MENU_LIBRARY => open_library(&svc, target.clone()),
             MENU_WAKE => crate::wol::wake(&target.mac, target.addr.parse().ok()),
             MENU_SEND_LOGS => send_logs(&svc, &target),
             MENU_SPEED => {
@@ -1186,14 +1183,7 @@ fn pinned_tile(
                 items
             })
             .on_item_clicked(move |item: String| match item.as_str() {
-                MENU_LIBRARY => {
-                    // The shared target IS what the library page launches through, so
-                    // parking THIS tile's target here is what makes its grid launch
-                    // with the pinned preset.
-                    *svc.ctx.shared.target.lock().unwrap() = target.clone();
-                    super::library::start_fetch(&svc.ctx, &svc.set_library);
-                    svc.set_screen.call(Screen::Library);
-                }
+                MENU_LIBRARY => open_library(&svc, target.clone()),
                 MENU_COPY_LINK => {
                     let url = pf_client_core::deeplink::DeepLink::for_host(
                         &link_host,

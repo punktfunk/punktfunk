@@ -19,7 +19,7 @@ use super::connect::{initiate_launch, initiate_waking};
 use super::embedded_png::file_uri;
 use super::lucide;
 use super::style::*;
-use super::{AppCtx, Screen, Svc};
+use super::{AppCtx, Screen, Svc, Target};
 use pf_client_core::collate::{self, Collatable, SortKey};
 use pf_client_core::library::{self, initials, store_label, DESKTOP_ID};
 use pf_client_core::trust::Settings;
@@ -129,6 +129,14 @@ impl PartialEq for LibraryProps {
     fn eq(&self, other: &Self) -> bool {
         self.svc == other.svc && self.state == other.state && self.end_game == other.end_game
     }
+}
+
+/// Show `target`'s library. The target becomes `Shared::target`, which the grid launches
+/// through, so a pinned card's preset rides along; then the fetch starts and the screen shows.
+pub(crate) fn open_library(svc: &Svc, target: Target) {
+    *svc.ctx.shared.target.lock().unwrap() = target;
+    start_fetch(&svc.ctx, &svc.set_library);
+    svc.set_screen.call(Screen::Library);
 }
 
 /// Fetch the library for `Shared::target` off the UI thread, publishing into root state:
