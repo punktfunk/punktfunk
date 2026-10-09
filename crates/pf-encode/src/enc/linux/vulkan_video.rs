@@ -496,7 +496,7 @@ pub(crate) fn vulkan_capture_modifiers(codec: Codec, fourcc: u32, ten_bit: bool)
     if !matches!(codec, Codec::H265 | Codec::Av1) {
         return Vec::new();
     }
-    let Some(fmt) = super::vk_util::fourcc_to_vk(fourcc) else {
+    let Some(fmt) = pf_zerocopy::drm::vk_format(fourcc) else {
         return Vec::new();
     };
     let av1 = codec == Codec::Av1;

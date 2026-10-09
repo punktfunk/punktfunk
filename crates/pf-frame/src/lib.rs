@@ -121,33 +121,89 @@ mod pixel_format_tests {
     }
 }
 
-/// DRM FourCC from a 4-byte name, little-endian (`b"XR24"`).
-#[cfg(target_os = "linux")]
-const fn drm_fourcc_code(c: &[u8; 4]) -> u32 {
-    (c[0] as u32) | ((c[1] as u32) << 8) | ((c[2] as u32) << 16) | ((c[3] as u32) << 24)
-}
-
 /// SPA/our [`PixelFormat`] → DRM FourCC for EGL import. SPA `BGRx` is DRM `XRGB8888`
-/// (memory B,G,R,X).
+/// (memory B,G,R,X). [`PixelFormat::from_drm_fourcc`] is the inverse.
 #[cfg(target_os = "linux")]
 pub fn drm_fourcc(format: PixelFormat) -> Option<u32> {
+    use pf_zerocopy::drm;
     use PixelFormat::*;
     Some(match format {
-        Bgrx => drm_fourcc_code(b"XR24"), // DRM_FORMAT_XRGB8888
-        Bgra => drm_fourcc_code(b"AR24"), // DRM_FORMAT_ARGB8888
-        Rgbx => drm_fourcc_code(b"XB24"), // DRM_FORMAT_XBGR8888
-        Rgba => drm_fourcc_code(b"AB24"), // DRM_FORMAT_ABGR8888
-        // One LINEAR dmabuf, Y then interleaved UV (`DRM_FORMAT_NV12`).
-        Nv12 => drm_fourcc_code(b"NV12"),
-        X2Rgb10 => drm_fourcc_code(b"XR30"), // DRM_FORMAT_XRGB2101010
-        X2Bgr10 => drm_fourcc_code(b"XB30"), // DRM_FORMAT_XBGR2101010
-        // NV12 at 16 bits per sample, the 10-bit code high (`DRM_FORMAT_P010`).
-        P010 => drm_fourcc_code(b"P010"),
+        Bgrx => drm::XR24,
+        Bgra => drm::AR24,
+        Rgbx => drm::XB24,
+        Rgba => drm::AB24,
+        // One LINEAR dmabuf, Y then interleaved UV.
+        Nv12 => drm::NV12,
+        X2Rgb10 => drm::XR30,
+        X2Bgr10 => drm::XB30,
+        P010 => drm::P010,
         // 24-bit packed RGB/BGR have no dmabuf import here; use the CPU path.
         // Rgb10a2/Rgb10a2Sdr/RgbaF16 are Windows formats; Yuv444 is convert output, never a
         // capture source.
         Rgb | Bgr | Rgb10a2 | Rgb10a2Sdr | RgbaF16 | Yuv444 => return None,
     })
+}
+
+#[cfg(target_os = "linux")]
+impl PixelFormat {
+    /// The inverse of [`drm_fourcc`]. A fourcc no capture produces (`AR30`, `AB30`) is `None`.
+    pub fn from_drm_fourcc(fourcc: u32) -> Option<PixelFormat> {
+        use pf_zerocopy::drm;
+        Some(match fourcc {
+            drm::XR24 => PixelFormat::Bgrx,
+            drm::AR24 => PixelFormat::Bgra,
+            drm::XB24 => PixelFormat::Rgbx,
+            drm::AB24 => PixelFormat::Rgba,
+            drm::NV12 => PixelFormat::Nv12,
+            drm::XR30 => PixelFormat::X2Rgb10,
+            drm::XB30 => PixelFormat::X2Bgr10,
+            drm::P010 => PixelFormat::P010,
+            _ => return None,
+        })
+    }
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod drm_fourcc_tests {
+    use super::{drm_fourcc, PixelFormat};
+
+    /// Both directions agree: every format with a fourcc maps back to itself, and every
+    /// fourcc with a format maps back to its code.
+    #[test]
+    fn drm_fourcc_round_trips() {
+        use PixelFormat::*;
+        let all = [
+            Bgrx, Rgbx, Bgra, Rgba, Rgb, Bgr, Rgb10a2, Rgb10a2Sdr, Nv12, P010, RgbaF16, Yuv444,
+            X2Rgb10, X2Bgr10,
+        ];
+        let mut mapped = 0;
+        for f in all {
+            if let Some(code) = drm_fourcc(f) {
+                assert_eq!(PixelFormat::from_drm_fourcc(code), Some(f), "{f:?}");
+                mapped += 1;
+            }
+        }
+        assert_eq!(mapped, 8);
+        use pf_zerocopy::drm;
+        let codes = [
+            drm::XR24,
+            drm::AR24,
+            drm::XB24,
+            drm::AB24,
+            drm::XR30,
+            drm::AR30,
+            drm::XB30,
+            drm::AB30,
+            drm::NV12,
+            drm::P010,
+        ];
+        for code in codes {
+            if let Some(f) = PixelFormat::from_drm_fourcc(code) {
+                assert_eq!(drm_fourcc(f), Some(code), "{code:#x}");
+            }
+        }
+        assert_eq!(PixelFormat::from_drm_fourcc(drm::AR30), None);
+    }
 }
 
 /// What a Windows capturer produces, resolved once per session and passed into

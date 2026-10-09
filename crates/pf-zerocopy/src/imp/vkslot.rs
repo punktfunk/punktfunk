@@ -1195,14 +1195,12 @@ impl VkSlotBlend {
                 .context("create reframe intermediate")?;
             stage.tmp = tmp;
             let reqs = d.get_buffer_memory_requirements(tmp);
-            let mem_type = (0..self.mem_props.memory_type_count)
-                .find(|&i| {
-                    reqs.memory_type_bits & (1 << i) != 0
-                        && self.mem_props.memory_types[i as usize]
-                            .property_flags
-                            .contains(vk::MemoryPropertyFlags::DEVICE_LOCAL)
-                })
-                .ok_or_else(|| anyhow!("no device-local memory for the reframe intermediate"))?;
+            let mem_type = vkdev::memory_type(
+                &self.mem_props,
+                reqs.memory_type_bits,
+                vk::MemoryPropertyFlags::DEVICE_LOCAL,
+            )
+            .context("reframe intermediate memory")?;
             stage.tmp_mem = d
                 .allocate_memory(
                     &vk::MemoryAllocateInfo::default()
