@@ -12,6 +12,7 @@
 
 use super::*;
 
+use crate::audio::{CaptureLease, CaptureRoute, Ready};
 use punktfunk_core::audio::pcm;
 
 /// Wire clock: `pts_ns` is an anchor plus a running total of interleaved samples.
@@ -267,152 +268,6 @@ impl Pacer {
     }
 }
 
-/// This session's capturer: opened, reopened after a death under [`INJECTOR_REOPEN_BACKOFF`],
-/// its sink name published for a later joiner, and parked at the end. Empty chunks from a
-/// quiet sink are not a death.
-struct CaptureLease {
-    cap: Option<Box<dyn crate::audio::AudioCapturer>>,
-    /// The sink this session opens by name. `None` is the shared path, the only one that parks.
-    target: Option<String>,
-    last_failed: Option<std::time::Instant>,
-    channels: u32,
-    rate_hz: u32,
-    /// A `join` session taps the owner's sink instead of minting a second one of that name.
-    tap: bool,
-    /// Isolated session sink (`design/gamescope-multiuser.md`). Linux-only.
-    sink: Option<String>,
-    /// The owner's live-display slot, for a joiner on the shared path.
-    tap_from: Option<Arc<std::sync::Mutex<Option<String>>>>,
-    /// This session's live-display record: the sink name goes here on every open.
-    published: Arc<std::sync::Mutex<Option<String>>>,
-}
-
-/// What [`CaptureLease::ready`] found.
-enum Ready {
-    Live,
-    /// A new capturer after a gap: drop whatever straddles it.
-    Reopened,
-    /// Still down; try again next pass.
-    Down,
-}
-
-impl CaptureLease {
-    /// How long a joiner waits for the owner's sink name before minting its own. The owner's
-    /// capturer opens within its first second; past this, the owner has no audio to share.
-    const JOIN_SINK_WAIT: std::time::Duration = std::time::Duration::from_secs(2);
-
-    /// The sink to open: the isolated one, else the owner's once published. A joiner spawned
-    /// inside the owner's first second waits for it — minting its own sink here would claim
-    /// the default from under the owner.
-    fn resolve(&self, stop: &AtomicBool) -> Option<String> {
-        if self.sink.is_some() {
-            return self.sink.clone();
-        }
-        let slot = self.tap_from.as_ref()?;
-        let deadline = std::time::Instant::now() + Self::JOIN_SINK_WAIT;
-        loop {
-            if let Some(name) = slot.lock().unwrap().clone() {
-                return Some(name);
-            }
-            if std::time::Instant::now() >= deadline || stop.load(Ordering::SeqCst) {
-                return None;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(50));
-        }
-    }
-
-    /// First open. Isolated sessions never adopt the parked shared capturer, and the audio
-    /// settings must match too: a keep-host session must not inherit a sink claim. A failed
-    /// open is retried by [`Self::ready`] like a mid-session death.
-    fn open(&mut self, parked: &AudioCapSlot, stop: &AtomicBool) {
-        self.target = self.resolve(stop);
-        let reuse = if self.target.is_none() {
-            crate::audio::take_parked_capture(parked, self.channels, self.rate_hz)
-        } else {
-            None
-        };
-        self.cap = reuse.or_else(|| match self.open_named() {
-            Ok(c) => Some(c),
-            Err(e) => {
-                tracing::warn!(error = %format!("{e:#}"), "punktfunk/1 audio failed to open — retrying in the background until it comes up");
-                None
-            }
-        });
-        self.last_failed = self.cap.is_none().then(std::time::Instant::now);
-        self.publish();
-    }
-
-    fn open_named(&self) -> Result<Box<dyn crate::audio::AudioCapturer>> {
-        crate::audio::open_audio_capture_named(
-            self.channels,
-            self.rate_hz,
-            self.target.as_deref(),
-            self.tap,
-        )
-    }
-
-    fn publish(&self) {
-        if let Some(c) = &self.cap {
-            *self.published.lock().unwrap() = c.sink_name().map(str::to_owned);
-        }
-    }
-
-    /// A live capturer, reopening a dead one once the backoff allows. Sleeps 200 ms when it
-    /// stays down.
-    fn ready(&mut self, stop: &AtomicBool) -> Ready {
-        if self.cap.is_some() {
-            return Ready::Live;
-        }
-        if self
-            .last_failed
-            .is_some_and(|t| t.elapsed() < INJECTOR_REOPEN_BACKOFF)
-        {
-            std::thread::sleep(std::time::Duration::from_millis(200));
-            return Ready::Down;
-        }
-        // The owner may have reopened on a new name meanwhile.
-        self.target = self.resolve(stop);
-        match self.open_named() {
-            Ok(c) => {
-                tracing::info!("punktfunk/1 audio capture reopened");
-                self.cap = Some(c);
-                self.last_failed = None;
-                self.publish();
-                Ready::Reopened
-            }
-            Err(e) => {
-                tracing::debug!(error = %format!("{e:#}"), "audio reopen failed — will retry");
-                self.last_failed = Some(std::time::Instant::now());
-                std::thread::sleep(std::time::Duration::from_millis(200));
-                Ready::Down
-            }
-        }
-    }
-
-    /// The live capturer. Only after [`Self::ready`] said so.
-    fn live(&mut self) -> &mut Box<dyn crate::audio::AudioCapturer> {
-        self.cap.as_mut().expect("capturer is live")
-    }
-
-    /// The capture thread died: reopen after the backoff.
-    fn lost(&mut self) {
-        self.cap = None;
-        self.last_failed = Some(std::time::Instant::now());
-    }
-
-    /// Park a live shared capturer (releases the routing claim). An isolated capturer is
-    /// dropped: its sink name is this session's, and a later shared session would capture a
-    /// sink nothing routes to.
-    fn park(self, parked: &AudioCapSlot) {
-        if let Some(mut c) = self.cap {
-            c.idle();
-            if self.target.is_none() {
-                crate::audio::park_audio_capture(parked, c);
-            }
-        }
-    }
-}
-
 /// Desktop capture → the session's resolved plane (Opus on `AUDIO_MAGIC`/`AUDIO_RED_MAGIC`,
 /// or PCM on `AUDIO_PCM_MAGIC`) at negotiated `channels` (2 / 6 = 5.1 / 8 = 7.1, wire order
 /// FL FR FC LFE RL RR SL SR). Capturer comes from and returns to [`AudioCapSlot`] through a
@@ -488,18 +343,15 @@ pub(super) fn audio_thread(
     // lock so a budget-ladder change cannot turn redundancy on here.
     let (tier, redundancy) = (budget.tier, budget.redundancy && !pcm_plane);
 
-    let mut lease = CaptureLease {
-        cap: None,
-        target: None,
-        last_failed: None,
-        channels: want as u32,
-        rate_hz,
-        tap,
+    let route = CaptureRoute {
         sink,
+        tap,
         tap_from,
         published,
     };
-    lease.open(&audio_cap, &stop);
+    let mut lease = CaptureLease::new(want as u32, rate_hz, route);
+    let stopped = || stop.load(Ordering::SeqCst);
+    lease.open(&audio_cap, stopped);
     // No Opus encoder at all on the PCM plane — there is nothing for it to do, and building one
     // would make a libopus failure able to kill a session that does not use libopus.
     let mut enc = if pcm_plane {
@@ -573,7 +425,7 @@ pub(super) fn audio_thread(
     // re-tested a few hundred times a second, and it is a statement about the capturer, not an
     // event.
     let rate_mismatch_warned = std::sync::Once::new();
-    if lease.cap.is_some() {
+    if lease.is_live() {
         tracing::info!(
             channels = want,
             plane = if pcm_plane { "0xD3 PCM" } else { "0xC9 Opus" },
@@ -595,7 +447,7 @@ pub(super) fn audio_thread(
         );
     }
     'session: while !stop.load(Ordering::SeqCst) {
-        match lease.ready(&stop) {
+        match lease.ready(stopped) {
             Ready::Live => {}
             Ready::Down => continue,
             Ready::Reopened => {
@@ -635,17 +487,9 @@ pub(super) fn audio_thread(
         }
         // Wake on a chunk or the next owed slot, whichever first. Waiting only on capture
         // made a hole cost more than the audio it swallowed — see [`InfillPolicy`].
-        let waited = match pacer.wake_budget(std::time::Instant::now(), acc.len()) {
-            None => lease.live().next_chunk(),
-            Some(budget) => lease.live().next_chunk_within(budget),
-        };
-        let chunk = match waited {
-            Ok(c) => c,
-            Err(e) => {
-                tracing::warn!(error = %format!("{e:#}"), "audio capture lost — reopening");
-                lease.lost();
-                continue;
-            }
+        let wake = pacer.wake_budget(std::time::Instant::now(), acc.len());
+        let Some(chunk) = lease.next_chunk(wake) else {
+            continue;
         };
         if !chunk.is_empty() {
             let quantum =
@@ -960,39 +804,6 @@ mod tests {
             p.on_chunk(t, frame, MS(5)),
             "the next chunk starts a new continuity"
         );
-    }
-
-    struct Idle;
-    impl crate::audio::AudioCapturer for Idle {
-        fn next_chunk(&mut self) -> Result<Vec<f32>> {
-            Ok(Vec::new())
-        }
-    }
-
-    /// Only a shared capturer parks. An isolated one carries this session's sink name, and a
-    /// later shared session adopting it would capture a sink nothing routes to.
-    #[test]
-    fn only_a_shared_capturer_is_parked() {
-        let lease = |target: Option<&str>| CaptureLease {
-            cap: Some(Box::new(Idle)),
-            target: target.map(str::to_owned),
-            last_failed: None,
-            channels: 2,
-            rate_hz: 48_000,
-            tap: false,
-            sink: None,
-            tap_from: None,
-            published: Default::default(),
-        };
-        let slot: AudioCapSlot = Default::default();
-        lease(Some("punktfunk-session-1")).park(&slot);
-        assert!(
-            slot.lock().unwrap().is_none(),
-            "an isolated capturer was parked"
-        );
-        lease(None).park(&slot);
-        // Windows drops every capturer at park (`park_audio_capture`).
-        assert_eq!(slot.lock().unwrap().is_some(), !cfg!(windows));
     }
 
     /// The number this clock exists for, pinned exactly.
