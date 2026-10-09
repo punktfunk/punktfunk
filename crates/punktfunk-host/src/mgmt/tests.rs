@@ -35,7 +35,7 @@ use crate::gamestream::tls::{PeerAddr, PeerCertFingerprint};
 use crate::gamestream::{LaunchSession, HTTPS_PORT, HTTP_PORT};
 use crate::host::Host;
 use axum::body::Body;
-use axum::http::StatusCode;
+use axum::http::{Method, StatusCode};
 use http_body_util::BodyExt;
 use sha2::{Digest, Sha256};
 use std::sync::atomic::Ordering;
@@ -180,6 +180,24 @@ async fn send(app: &Router, mut req: axum::http::Request<Body>) -> (StatusCode, 
 
 fn get_req(path: &str) -> axum::http::Request<Body> {
     axum::http::Request::get(path).body(Body::empty()).unwrap()
+}
+
+fn json_req(method: Method, path: &str, body: serde_json::Value) -> axum::http::Request<Body> {
+    axum::http::Request::builder()
+        .method(method)
+        .uri(path)
+        .header(axum::http::header::CONTENT_TYPE, "application/json")
+        .body(Body::from(body.to_string()))
+        .unwrap()
+}
+
+/// `req` carrying `token` as its bearer, so `send` leaves it as it is.
+fn with_bearer(mut req: axum::http::Request<Body>, token: &str) -> axum::http::Request<Body> {
+    req.headers_mut().insert(
+        axum::http::header::AUTHORIZATION,
+        axum::http::HeaderValue::from_str(&format!("Bearer {token}")).unwrap(),
+    );
+    req
 }
 
 /// Cert-only: inject `PeerCertFingerprint` and omit the bearer so `require_auth` takes the cert branch.
@@ -484,7 +502,8 @@ async fn cert_auth_is_a_read_only_allowlist() {
     assert_eq!(
         send_cert(
             &app,
-            post_json(
+            json_req(
+                Method::POST,
                 "/api/v1/native/pair/arm",
                 serde_json::json!({"ttl_secs": 60})
             ),
@@ -698,11 +717,13 @@ async fn a_per_session_route_404s_an_unknown_id() {
         axum::http::Request::post(format!("/api/v1/session/{ghost}/idr"))
             .body(Body::empty())
             .unwrap(),
-        put_json(
+        json_req(
+            Method::PUT,
             &format!("/api/v1/session/{ghost}/audio"),
             serde_json::json!({ "muted": true }),
         ),
-        put_json(
+        json_req(
+            Method::PUT,
             &format!("/api/v1/session/{ghost}/access"),
             serde_json::json!({ "level": "view" }),
         ),
@@ -811,7 +832,8 @@ async fn muting_one_session_leaves_the_other_hearing() {
 
     let (status, _) = send(
         &app,
-        put_json(
+        json_req(
+            Method::PUT,
             &format!("/api/v1/session/{}/audio", one.id),
             serde_json::json!({ "muted": true }),
         ),
@@ -840,7 +862,8 @@ async fn muting_one_session_leaves_the_other_hearing() {
     // Unmute puts it back without touching the sibling.
     let (status, _) = send(
         &app,
-        put_json(
+        json_req(
+            Method::PUT,
             &format!("/api/v1/session/{}/audio", one.id),
             serde_json::json!({ "muted": false }),
         ),
@@ -861,8 +884,9 @@ async fn placing_a_player_touches_only_that_session() {
     let app = test_app(test_state(), None);
     let (one, ..) = fake_session_with_flags("aabbccddeeff");
     let (two, ..) = fake_session_with_flags("112233445566");
-    let pick =
-        |id: u64, body: serde_json::Value| put_json(&format!("/api/v1/session/{id}/player"), body);
+    let pick = |id: u64, body: serde_json::Value| {
+        json_req(Method::PUT, &format!("/api/v1/session/{id}/player"), body)
+    };
 
     // Past the host's slot count: refused, so no console can store a slot no pad can take.
     let (status, _) = send(&app, pick(one.id, serde_json::json!({ "slot": 16 }))).await;
@@ -923,7 +947,8 @@ async fn a_live_access_change_applies_to_the_running_session() {
 
     let (status, body) = send(
         &app,
-        put_json(
+        json_req(
+            Method::PUT,
             &format!("/api/v1/session/{}/access", one.id),
             serde_json::json!({ "level": "view" }),
         ),
@@ -945,7 +970,8 @@ async fn a_live_access_change_applies_to_the_running_session() {
     // Handing the pad back: `full` is asked for, the controller-only pairing is what lands.
     let (status, body) = send(
         &app,
-        put_json(
+        json_req(
+            Method::PUT,
             &format!("/api/v1/session/{}/access", one.id),
             serde_json::json!({ "level": "full" }),
         ),
@@ -970,7 +996,11 @@ async fn a_live_access_change_applies_to_the_running_session() {
     ] {
         let (status, body) = send(
             &app,
-            put_json(&format!("/api/v1/session/{}/access", one.id), bad),
+            json_req(
+                Method::PUT,
+                &format!("/api/v1/session/{}/access", one.id),
+                bad,
+            ),
         )
         .await;
         assert_eq!(status, StatusCode::BAD_REQUEST);
@@ -1854,7 +1884,7 @@ async fn a_plugin_may_reconcile_only_its_own_provider() {
 async fn every_plugin_scoped_write_checks_the_owner_first() {
     let app = test_app(test_state(), None);
     let req = |method: &str, path: &str, token: &str| {
-        bearer_req(
+        with_bearer(
             axum::http::Request::builder()
                 .method(method)
                 .uri(format!("/api/v1{path}"))
@@ -1998,7 +2028,8 @@ async fn plugin_registry_roundtrip() {
 
     let (status, _) = send(
         &app,
-        put_json(
+        json_req(
+            Method::PUT,
             &format!("/api/v1/plugins/{id}"),
             serde_json::json!({
                 "title": "Test Plugin",
@@ -2057,7 +2088,8 @@ async fn plugin_registry_roundtrip() {
     // Port 80 is privileged; registration must 400.
     let (status, _) = send(
         &app,
-        put_json(
+        json_req(
+            Method::PUT,
             &format!("/api/v1/plugins/{id}"),
             serde_json::json!({ "title": "x", "ui": { "port": 80, "secret": secret } }),
         ),
@@ -2075,7 +2107,7 @@ async fn plugin_log_ingest_lands_in_the_ring() {
 
     let (status, _) = send(
         &app,
-        post_json(
+        json_req(Method::POST,
             "/api/v1/plugins/logs",
             serde_json::json!({"entries": [
                 {"ts_ms": 1_700_000_000_123u64, "level": "warn", "source": "virtualhere", "msg": marker},
@@ -2113,7 +2145,11 @@ async fn plugin_log_ingest_lands_in_the_ring() {
         .collect();
     let (status, _) = send(
         &app,
-        post_json("/api/v1/plugins/logs", serde_json::json!({"entries": big})),
+        json_req(
+            Method::POST,
+            "/api/v1/plugins/logs",
+            serde_json::json!({"entries": big}),
+        ),
     )
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
@@ -2766,13 +2802,6 @@ fn openapi_document_is_complete_and_checked_in() {
     );
 }
 
-fn post_json(path: &str, body: serde_json::Value) -> axum::http::Request<Body> {
-    axum::http::Request::post(path)
-        .header("content-type", "application/json")
-        .body(Body::from(body.to_string()))
-        .unwrap()
-}
-
 /// Verdicts carry the host user, group layout, and device-node state.
 #[tokio::test]
 async fn diagnostics_require_the_operator_token() {
@@ -3119,7 +3148,8 @@ async fn the_host_wide_policy_put_refuses_to_carry_overlays() {
     let app = test_app(test_state(), None);
     let (status, _) = send(
         &app,
-        put_json(
+        json_req(
+            Method::PUT,
             "/api/v1/display/settings",
             serde_json::json!({
                 "preset": "default",
@@ -3146,7 +3176,11 @@ async fn display_state_and_release_empty() {
 
     let (status, body) = send(
         &app,
-        post_json("/api/v1/display/release", serde_json::json!({})),
+        json_req(
+            Method::POST,
+            "/api/v1/display/release",
+            serde_json::json!({}),
+        ),
     )
     .await;
     assert_eq!(status, StatusCode::OK);
@@ -3194,7 +3228,8 @@ async fn native_pairing_arm_show_and_unpair() {
 
     let (s, b) = send(
         &app,
-        post_json(
+        json_req(
+            Method::POST,
             "/api/v1/native/pair/arm",
             serde_json::json!({"ttl_secs": 60}),
         ),
@@ -3306,7 +3341,8 @@ async fn pending_devices_approve_and_deny() {
 
     let (s, b) = send(
         &app,
-        post_json(
+        json_req(
+            Method::POST,
             &format!("/api/v1/native/pending/{approve_id}/approve"),
             serde_json::json!({"name": "Office MacBook"}),
         ),
@@ -3317,7 +3353,8 @@ async fn pending_devices_approve_and_deny() {
     assert_eq!(b["fingerprint"], "aa11");
     assert!(np.is_paired("AA11"), "approval pins the fingerprint");
 
-    let deny = post_json(
+    let deny = json_req(
+        Method::POST,
         &format!("/api/v1/native/pending/{deny_id}/deny"),
         serde_json::json!({}),
     );
@@ -3325,7 +3362,8 @@ async fn pending_devices_approve_and_deny() {
     assert!(!np.is_paired("bb22"));
     let (s, _) = send(
         &app,
-        post_json(
+        json_req(
+            Method::POST,
             &format!("/api/v1/native/pending/{deny_id}/deny"),
             serde_json::json!({}),
         ),
@@ -3338,17 +3376,14 @@ async fn pending_devices_approve_and_deny() {
     assert_eq!(b.as_array().unwrap().len(), 0);
     let (s, _) = send(
         &app,
-        post_json("/api/v1/native/pending/123/approve", serde_json::json!({})),
+        json_req(
+            Method::POST,
+            "/api/v1/native/pending/123/approve",
+            serde_json::json!({}),
+        ),
     )
     .await;
     assert_eq!(s, StatusCode::NOT_FOUND);
-}
-
-fn patch_json(path: &str, body: serde_json::Value) -> axum::http::Request<Body> {
-    axum::http::Request::patch(path)
-        .header(axum::http::header::CONTENT_TYPE, "application/json")
-        .body(Body::from(body.to_string()))
-        .unwrap()
 }
 
 /// Host wall clock, unix seconds — relative-in / absolute-stored conversion.
@@ -3382,7 +3417,8 @@ async fn patch_native_access_reflects_in_list_and_fires_watch() {
     let now = wall_now();
     let (s, b) = send(
         &app,
-        patch_json(
+        json_req(
+            Method::PATCH,
             "/api/v1/native/clients/AA11",
             serde_json::json!({"grants": GRANT_GAMEPAD, "expires_in_secs": 7200}),
         ),
@@ -3413,7 +3449,8 @@ async fn patch_native_access_reflects_in_list_and_fires_watch() {
 
     let (s, b) = send(
         &app,
-        patch_json(
+        json_req(
+            Method::PATCH,
             "/api/v1/native/clients/aa11",
             serde_json::json!({"expires_in_secs": 60}),
         ),
@@ -3427,7 +3464,8 @@ async fn patch_native_access_reflects_in_list_and_fires_watch() {
     // Omitted expiry keeps the stored deadline exactly, not re-derived.
     let (s, b) = send(
         &app,
-        patch_json(
+        json_req(
+            Method::PATCH,
             "/api/v1/native/clients/aa11",
             serde_json::json!({"grants": 0}),
         ),
@@ -3443,7 +3481,8 @@ async fn patch_native_access_reflects_in_list_and_fires_watch() {
 
     let (s, b) = send(
         &app,
-        patch_json(
+        json_req(
+            Method::PATCH,
             "/api/v1/native/clients/aa11",
             serde_json::json!({"clear_expiry": true}),
         ),
@@ -3455,7 +3494,8 @@ async fn patch_native_access_reflects_in_list_and_fires_watch() {
 
     let (_, b) = send(
         &app,
-        patch_json(
+        json_req(
+            Method::PATCH,
             "/api/v1/native/clients/aa11",
             serde_json::json!({"grants": GRANT_GAMEPAD | GRANT_POINTER}),
         ),
@@ -3484,7 +3524,8 @@ async fn patch_native_access_validates_and_404s() {
 
     let (s, b) = send(
         &app,
-        patch_json(
+        json_req(
+            Method::PATCH,
             "/api/v1/native/clients/bb22",
             serde_json::json!({"grants": GRANT_ALL | (1u32 << 30)}),
         ),
@@ -3496,7 +3537,8 @@ async fn patch_native_access_validates_and_404s() {
 
     let (s, b) = send(
         &app,
-        patch_json(
+        json_req(
+            Method::PATCH,
             "/api/v1/native/clients/bb22",
             serde_json::json!({"expires_in_secs": 60, "clear_expiry": true}),
         ),
@@ -3507,7 +3549,8 @@ async fn patch_native_access_validates_and_404s() {
 
     let (s, _) = send(
         &app,
-        patch_json(
+        json_req(
+            Method::PATCH,
             "/api/v1/native/clients/nope99",
             serde_json::json!({"grants": GRANT_GAMEPAD}),
         ),
@@ -3519,7 +3562,8 @@ async fn patch_native_access_validates_and_404s() {
     let plain = test_app(test_state(), None);
     let (s, _) = send(
         &plain,
-        patch_json(
+        json_req(
+            Method::PATCH,
             "/api/v1/native/clients/bb22",
             serde_json::json!({"grants": GRANT_GAMEPAD}),
         ),
@@ -3548,7 +3592,8 @@ async fn until_disconnect_alone_is_refused_rather_than_widening_access() {
 
     let (s, _) = send(
         &app,
-        post_json(
+        json_req(
+            Method::POST,
             &format!("/api/v1/native/pending/{id}/approve"),
             serde_json::json!({"until_disconnect": true}),
         ),
@@ -3561,7 +3606,8 @@ async fn until_disconnect_alone_is_refused_rather_than_widening_access() {
     // Arming refuses it on the same terms, and leaves no window open.
     let (s, _) = send(
         &app,
-        post_json(
+        json_req(
+            Method::POST,
             "/api/v1/native/pair/arm",
             serde_json::json!({"until_disconnect": true}),
         ),
@@ -3573,7 +3619,8 @@ async fn until_disconnect_alone_is_refused_rather_than_widening_access() {
     // With an access level beside it, it lands.
     let (s, b) = send(
         &app,
-        post_json(
+        json_req(
+            Method::POST,
             &format!("/api/v1/native/pending/{id}/approve"),
             serde_json::json!({"grants": 1, "until_disconnect": true}),
         ),
@@ -3612,7 +3659,8 @@ async fn a_wan_knock_is_listed_as_wan_and_refused_by_approve() {
 
     let (s, _) = send(
         &app,
-        post_json(
+        json_req(
+            Method::POST,
             &format!(
                 "/api/v1/native/pending/{}/approve",
                 wan_row["id"].as_u64().unwrap()
@@ -3632,7 +3680,8 @@ async fn a_wan_knock_is_listed_as_wan_and_refused_by_approve() {
     // The LAN one goes through, so the refusal is about the source and nothing else.
     let (s, _) = send(
         &app,
-        post_json(
+        json_req(
+            Method::POST,
             &format!(
                 "/api/v1/native/pending/{}/approve",
                 lan_row["id"].as_u64().unwrap()
@@ -3671,7 +3720,8 @@ async fn approve_with_access_pins_the_chosen_mask() {
 
     let (s, _) = send(
         &app,
-        post_json(
+        json_req(
+            Method::POST,
             &format!("/api/v1/native/pending/{id}/approve"),
             serde_json::json!({"grants": GRANT_ALL | (1u32 << 31)}),
         ),
@@ -3688,7 +3738,7 @@ async fn approve_with_access_pins_the_chosen_mask() {
     let now = wall_now();
     let (s, b) = send(
         &app,
-        post_json(
+        json_req(Method::POST,
             &format!("/api/v1/native/pending/{id}/approve"),
             serde_json::json!({"name": "Guest Phone", "grants": GRANT_GAMEPAD, "expires_in_secs": 14400}),
         ),
@@ -3728,7 +3778,8 @@ async fn arm_with_access_ceremony_inherits_the_choice() {
 
     let (s, _) = send(
         &app,
-        post_json(
+        json_req(
+            Method::POST,
             "/api/v1/native/pair/arm",
             serde_json::json!({"grants": GRANT_ALL | (1u32 << 29)}),
         ),
@@ -3740,7 +3791,8 @@ async fn arm_with_access_ceremony_inherits_the_choice() {
     let now = wall_now();
     let (s, b) = send(
         &app,
-        post_json(
+        json_req(
+            Method::POST,
             "/api/v1/native/pair/arm",
             serde_json::json!({"ttl_secs": 60, "grants": GRANT_GAMEPAD, "expires_in_secs": 3600}),
         ),
@@ -3780,7 +3832,8 @@ async fn approve_and_arm_without_access_fields_keep_todays_behavior() {
 
     let (s, _) = send(
         &app,
-        post_json(
+        json_req(
+            Method::POST,
             "/api/v1/native/pair/arm",
             serde_json::json!({"ttl_secs": 60}),
         ),
@@ -3794,7 +3847,8 @@ async fn approve_and_arm_without_access_fields_keep_todays_behavior() {
     let id = pend[0]["id"].as_u64().unwrap();
     let (s, b) = send(
         &app,
-        post_json(
+        json_req(
+            Method::POST,
             &format!("/api/v1/native/pending/{id}/approve"),
             serde_json::json!({"name": "Old Laptop"}),
         ),
@@ -3822,7 +3876,11 @@ async fn native_endpoints_report_disabled_without_native_host() {
     assert_eq!(b["enabled"], false);
     let (s, _) = send(
         &app,
-        post_json("/api/v1/native/pair/arm", serde_json::json!({})),
+        json_req(
+            Method::POST,
+            "/api/v1/native/pair/arm",
+            serde_json::json!({}),
+        ),
     )
     .await;
     assert_eq!(s, StatusCode::SERVICE_UNAVAILABLE);
@@ -3832,23 +3890,24 @@ async fn native_endpoints_report_disabled_without_native_host() {
     assert_eq!(b.as_array().unwrap().len(), 0);
     let (s, _) = send(
         &app,
-        post_json("/api/v1/native/pending/0/approve", serde_json::json!({})),
+        json_req(
+            Method::POST,
+            "/api/v1/native/pending/0/approve",
+            serde_json::json!({}),
+        ),
     )
     .await;
     assert_eq!(s, StatusCode::SERVICE_UNAVAILABLE);
     let (s, _) = send(
         &app,
-        post_json("/api/v1/native/pending/0/deny", serde_json::json!({})),
+        json_req(
+            Method::POST,
+            "/api/v1/native/pending/0/deny",
+            serde_json::json!({}),
+        ),
     )
     .await;
     assert_eq!(s, StatusCode::SERVICE_UNAVAILABLE);
-}
-
-fn put_json(path: &str, body: serde_json::Value) -> axum::http::Request<Body> {
-    axum::http::Request::put(path)
-        .header(axum::http::header::CONTENT_TYPE, "application/json")
-        .body(Body::from(body.to_string()))
-        .unwrap()
 }
 
 /// Inventory GET always answers (empty on a GPU-less box). Preference PUT validates
@@ -3870,7 +3929,8 @@ async fn gpu_endpoints_list_and_validate() {
 
     let (s, _) = send(
         &app,
-        put_json(
+        json_req(
+            Method::PUT,
             "/api/v1/gpus/preference",
             serde_json::json!({"mode": "fastest"}),
         ),
@@ -3880,7 +3940,8 @@ async fn gpu_endpoints_list_and_validate() {
 
     let (s, _) = send(
         &app,
-        put_json(
+        json_req(
+            Method::PUT,
             "/api/v1/gpus/preference",
             serde_json::json!({"mode": "manual"}),
         ),
@@ -3890,7 +3951,8 @@ async fn gpu_endpoints_list_and_validate() {
 
     let (s, _) = send(
         &app,
-        put_json(
+        json_req(
+            Method::PUT,
             "/api/v1/gpus/preference",
             serde_json::json!({"mode": "manual", "gpu_id": "ffff-ffff-9"}),
         ),
@@ -3949,16 +4011,6 @@ async fn logs_endpoint_pages_by_cursor() {
 /// counter, so the cap test must never 503 a concurrently running stream test.
 static EVENTS_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
-/// `get_req` plus the default bearer; these tests read streaming bodies instead of `send`.
-fn events_req(path: &str) -> axum::http::Request<Body> {
-    let mut req = get_req(path);
-    req.headers_mut().insert(
-        axum::http::header::AUTHORIZATION,
-        axum::http::HeaderValue::from_static("Bearer test-secret"),
-    );
-    req
-}
-
 async fn next_sse_chunk(body: &mut Body) -> Option<String> {
     match tokio::time::timeout(std::time::Duration::from_secs(5), body.frame()).await {
         Ok(Some(Ok(frame))) => frame
@@ -4003,7 +4055,10 @@ async fn events_stream_catch_up_filter_resume_tail_and_dropped() {
 
     let resp = app
         .clone()
-        .oneshot(events_req("/api/v1/events?kinds=library.changed"))
+        .oneshot(with_bearer(
+            get_req("/api/v1/events?kinds=library.changed"),
+            "test-secret",
+        ))
         .await
         .expect("infallible");
     assert_eq!(resp.status(), StatusCode::OK);
@@ -4057,9 +4112,12 @@ async fn events_stream_catch_up_filter_resume_tail_and_dropped() {
             None => {
                 let resp = app
                     .clone()
-                    .oneshot(events_req(&format!(
-                        "/api/v1/events?since={m1_seq}&kinds=library.changed"
-                    )))
+                    .oneshot(with_bearer(
+                        get_req(&format!(
+                            "/api/v1/events?since={m1_seq}&kinds=library.changed"
+                        )),
+                        "test-secret",
+                    ))
                     .await
                     .expect("infallible");
                 body = resp.into_body();
@@ -4079,9 +4137,12 @@ async fn events_stream_catch_up_filter_resume_tail_and_dropped() {
 
     let resp = app
         .clone()
-        .oneshot(events_req(&format!(
-            "/api/v1/events?since={m1_seq}&kinds=library.changed"
-        )))
+        .oneshot(with_bearer(
+            get_req(&format!(
+                "/api/v1/events?since={m1_seq}&kinds=library.changed"
+            )),
+            "test-secret",
+        ))
         .await
         .expect("infallible");
     let mut body = resp.into_body();
@@ -4096,7 +4157,10 @@ async fn events_stream_catch_up_filter_resume_tail_and_dropped() {
     drop(body);
 
     // Last-Event-ID beats `?since` (newer cursor on SSE auto-reconnect).
-    let mut req = events_req("/api/v1/events?since=0&kinds=library.changed");
+    let mut req = with_bearer(
+        get_req("/api/v1/events?since=0&kinds=library.changed"),
+        "test-secret",
+    );
     req.headers_mut().insert(
         "last-event-id",
         axum::http::HeaderValue::from_str(&m1_seq.to_string()).unwrap(),
@@ -4119,7 +4183,10 @@ async fn events_stream_catch_up_filter_resume_tail_and_dropped() {
     }
     let resp = app
         .clone()
-        .oneshot(events_req("/api/v1/events?since=1"))
+        .oneshot(with_bearer(
+            get_req("/api/v1/events?since=1"),
+            "test-secret",
+        ))
         .await
         .expect("infallible");
     let mut body = resp.into_body();
@@ -4139,7 +4206,7 @@ async fn events_stream_connection_cap() {
     let slots = super::events::test_support::saturate_slots();
     let resp = app
         .clone()
-        .oneshot(events_req("/api/v1/events"))
+        .oneshot(with_bearer(get_req("/api/v1/events"), "test-secret"))
         .await
         .expect("infallible");
     assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
@@ -4147,7 +4214,7 @@ async fn events_stream_connection_cap() {
 
     let resp = app
         .clone()
-        .oneshot(events_req("/api/v1/events"))
+        .oneshot(with_bearer(get_req("/api/v1/events"), "test-secret"))
         .await
         .expect("infallible");
     assert_eq!(resp.status(), StatusCode::OK, "cap frees with the slots");
@@ -4427,7 +4494,8 @@ async fn a_seat_plays_the_boxs_library_and_changes_none_of_it() {
     std::fs::write(seat.path().join("library-stats.json"), r#"{"games":{}}"#).unwrap();
     assert!(!Arc::ptr_eq(&games, &crate::library::sorted_games()));
 
-    let hide = put_json(
+    let hide = json_req(
+        Method::PUT,
         "/api/v1/library/hidden/steam:400",
         serde_json::json!({"hidden": true}),
     );
@@ -5319,7 +5387,11 @@ async fn custom_entry_hints_round_trip_and_survive_an_update() {
 
     let (s, json) = send(
         &app,
-        put_json(&path, serde_json::json!({ "title": "Eden II" })),
+        json_req(
+            Method::PUT,
+            &path,
+            serde_json::json!({ "title": "Eden II" }),
+        ),
     )
     .await;
     assert_eq!(s, StatusCode::OK, "{json}");
@@ -5335,7 +5407,7 @@ async fn custom_entry_hints_round_trip_and_survive_an_update() {
     );
 
     let body = serde_json::json!({ "title": "Eden II", "detect": {}, "prep": [] });
-    let (s, json) = send(&app, put_json(&path, body)).await;
+    let (s, json) = send(&app, json_req(Method::PUT, &path, body)).await;
     assert_eq!(s, StatusCode::OK, "{json}");
     let (_, json) = send(&app, get_req(&path)).await;
     assert!(
@@ -5378,15 +5450,6 @@ fn test_app_access(state: Arc<AppState>, access_dir: &std::path::Path) -> Router
     )
 }
 
-fn bearer_req(req: axum::http::Request<Body>, token: &str) -> axum::http::Request<Body> {
-    let mut req = req;
-    req.headers_mut().insert(
-        axum::http::header::AUTHORIZATION,
-        axum::http::HeaderValue::from_str(&format!("Bearer {token}")).unwrap(),
-    );
-    req
-}
-
 /// The next `plugins.changed` for `id`, failing on timeout. Subscribe BEFORE the call so the
 /// event cannot race past the receiver.
 async fn expect_plugins_changed(
@@ -5426,8 +5489,8 @@ async fn plugin_access_request_and_own_rows() {
     let body = serde_json::json!({ "paths": [{ "path": path }], "reason": "library folder" });
     let (s, json) = send(
         &app,
-        bearer_req(
-            post_json("/api/v1/plugin-access/requests", body),
+        with_bearer(
+            json_req(Method::POST, "/api/v1/plugin-access/requests", body),
             "demo-secret",
         ),
     )
@@ -5440,7 +5503,7 @@ async fn plugin_access_request_and_own_rows() {
 
     let (s, json) = send(
         &app,
-        bearer_req(get_req("/api/v1/plugin-access/requests"), "demo-secret"),
+        with_bearer(get_req("/api/v1/plugin-access/requests"), "demo-secret"),
     )
     .await;
     assert_eq!(s, StatusCode::OK, "{json}");
@@ -5449,16 +5512,18 @@ async fn plugin_access_request_and_own_rows() {
     assert_eq!(json["pending"][0]["reason"], "library folder");
 
     for req in [
-        post_json(
+        json_req(
+            Method::POST,
             "/api/v1/plugin-access/requests",
             serde_json::json!({ "paths": [{ "path": path }] }),
         ),
-        post_json(
+        json_req(
+            Method::POST,
             "/api/v1/plugin-access/requests",
             serde_json::json!({ "paths": [] }),
         ),
     ] {
-        let (s, _) = send(&app, bearer_req(req, "plugin-secret")).await;
+        let (s, _) = send(&app, with_bearer(req, "plugin-secret")).await;
         assert_eq!(
             s,
             StatusCode::FORBIDDEN,
@@ -5467,7 +5532,7 @@ async fn plugin_access_request_and_own_rows() {
     }
     let (s, _) = send(
         &app,
-        bearer_req(get_req("/api/v1/plugin-access/requests"), "plugin-secret"),
+        with_bearer(get_req("/api/v1/plugin-access/requests"), "plugin-secret"),
     )
     .await;
     assert_eq!(s, StatusCode::FORBIDDEN);
@@ -5488,8 +5553,9 @@ async fn plugin_access_rows_stay_with_their_plugin() {
 
     let (s, _) = send(
         &app,
-        bearer_req(
-            post_json(
+        with_bearer(
+            json_req(
+                Method::POST,
                 "/api/v1/plugin-access/requests",
                 serde_json::json!({ "paths": [{ "path": path }] }),
             ),
@@ -5502,7 +5568,7 @@ async fn plugin_access_rows_stay_with_their_plugin() {
     // `other` gets an empty snapshot, not demo's row.
     let (s, json) = send(
         &app,
-        bearer_req(get_req("/api/v1/plugin-access/requests"), "other-secret"),
+        with_bearer(get_req("/api/v1/plugin-access/requests"), "other-secret"),
     )
     .await;
     assert_eq!(s, StatusCode::OK, "{json}");
@@ -5511,8 +5577,9 @@ async fn plugin_access_rows_stay_with_their_plugin() {
 
     // And no plugin token may decide — demo's own row included.
     let decide = |token: &str| {
-        bearer_req(
-            post_json(
+        with_bearer(
+            json_req(
+                Method::POST,
                 "/api/v1/plugin-access/demo/decide",
                 serde_json::json!({ "path": path, "decision": "allow" }),
             ),
@@ -5526,7 +5593,7 @@ async fn plugin_access_rows_stay_with_their_plugin() {
     // The admin overview is likewise off-lane.
     let (s, _) = send(
         &app,
-        bearer_req(get_req("/api/v1/plugin-access"), "demo-secret"),
+        with_bearer(get_req("/api/v1/plugin-access"), "demo-secret"),
     )
     .await;
     assert_eq!(s, StatusCode::FORBIDDEN);
@@ -5554,8 +5621,9 @@ async fn plugin_access_decisions_land_and_stick() {
         .to_string();
 
     let post = |p: &str| {
-        bearer_req(
-            post_json(
+        with_bearer(
+            json_req(
+                Method::POST,
                 "/api/v1/plugin-access/requests",
                 serde_json::json!({ "paths": [{ "path": p }] }),
             ),
@@ -5568,7 +5636,8 @@ async fn plugin_access_decisions_land_and_stick() {
     let rx = crate::events::bus().subscribe_live();
     let (s, json) = send(
         &app,
-        post_json(
+        json_req(
+            Method::POST,
             "/api/v1/plugin-access/demo/decide",
             serde_json::json!({ "path": allow_path, "decision": "allow" }),
         ),
@@ -5586,7 +5655,8 @@ async fn plugin_access_decisions_land_and_stick() {
 
     let (s, json) = send(
         &app,
-        post_json(
+        json_req(
+            Method::POST,
             "/api/v1/plugin-access/demo/decide",
             serde_json::json!({ "path": deny_path, "decision": "deny" }),
         ),
@@ -5616,7 +5686,8 @@ async fn plugin_access_decisions_land_and_stick() {
     // Deciding a path that was never asked for is a 404.
     let (s, _) = send(
         &app,
-        post_json(
+        json_req(
+            Method::POST,
             "/api/v1/plugin-access/demo/decide",
             serde_json::json!({ "path": deny_path, "decision": "allow" }),
         ),
@@ -5638,7 +5709,8 @@ async fn plugin_access_form_grants_go_with_the_form() {
 
     let (s, json) = send(
         &app,
-        post_json(
+        json_req(
+            Method::POST,
             "/api/v1/plugin-access/demo/decide",
             serde_json::json!({
                 "path": ini, "decision": "allow", "write": true, "form": "game:steam:1",
@@ -5654,7 +5726,8 @@ async fn plugin_access_form_grants_go_with_the_form() {
     );
 
     let release = |form: &str, keep: &[&str]| {
-        post_json(
+        json_req(
+            Method::POST,
             "/api/v1/plugin-access/demo/release",
             serde_json::json!({ "form": form, "keep": keep }),
         )
@@ -5686,8 +5759,9 @@ async fn plugin_access_refusals_and_reason_sanitizing() {
 
     let (s, json) = send(
         &app,
-        bearer_req(
-            post_json(
+        with_bearer(
+            json_req(
+                Method::POST,
                 "/api/v1/plugin-access/requests",
                 serde_json::json!({
                     "paths": [
@@ -5715,7 +5789,7 @@ async fn plugin_access_refusals_and_reason_sanitizing() {
 
     let (s, json) = send(
         &app,
-        bearer_req(get_req("/api/v1/plugin-access/requests"), "demo-secret"),
+        with_bearer(get_req("/api/v1/plugin-access/requests"), "demo-secret"),
     )
     .await;
     assert_eq!(s, StatusCode::OK);
@@ -5727,8 +5801,9 @@ async fn plugin_access_refusals_and_reason_sanitizing() {
     let other = tempfile::tempdir().unwrap();
     let (s, _) = send(
         &app,
-        bearer_req(
-            post_json(
+        with_bearer(
+            json_req(
+                Method::POST,
                 "/api/v1/plugin-access/requests",
                 serde_json::json!({
                     "paths": [{ "path": other.path().canonicalize().unwrap().to_string_lossy() }],
@@ -5742,7 +5817,7 @@ async fn plugin_access_refusals_and_reason_sanitizing() {
     assert_eq!(s, StatusCode::OK);
     let (s, json) = send(
         &app,
-        bearer_req(get_req("/api/v1/plugin-access/requests"), "demo-secret"),
+        with_bearer(get_req("/api/v1/plugin-access/requests"), "demo-secret"),
     )
     .await;
     assert_eq!(s, StatusCode::OK);
