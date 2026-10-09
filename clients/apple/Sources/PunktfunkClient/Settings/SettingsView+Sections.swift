@@ -433,6 +433,7 @@ extension SettingsView {
                     options: SettingsOptions.codecs(current: scoped(SettingsFields.codec).wrappedValue),
                     selection: scoped(SettingsFields.codec))
             }
+            pyrowaveQualityRows
             pictureDepthRows
             presentationRows
             described("The backend the host drives its virtual output with — honored only if "
@@ -446,8 +447,8 @@ extension SettingsView {
     }
 
     private static let displayAdvancedFields = [
-        "smooth_buffer", "render_scale", "codec", "enable_444", "ten_bit_sdr", "vsync",
-        "allow_vrr", "compositor",
+        "smooth_buffer", "render_scale", "codec", "pyrowave_bpp", "enable_444", "ten_bit_sdr",
+        "vsync", "allow_vrr", "compositor",
     ]
 
     /// Advanced display rows away from their defaults, for the collapsed section's count.
@@ -455,7 +456,8 @@ extension SettingsView {
         let e = effective, d = EffectiveSettings()
         var changed = [
             e.presentPriority == "smooth" && e.smoothBuffer != d.smoothBuffer,
-            e.renderScale != d.renderScale, e.codec != d.codec, e.enable444 != d.enable444,
+            e.renderScale != d.renderScale, e.codec != d.codec,
+            pyroWaveRate && e.pyrowaveBppX100 != d.pyrowaveBppX100, e.enable444 != d.enable444,
             e.tenBitSdr != d.tenBitSdr, e.compositor != d.compositor,
         ]
         #if os(macOS)
@@ -506,27 +508,16 @@ extension SettingsView {
     }
 
     #if !os(tvOS)
-    /// The automatic-bitrate toggle + manual slider (and the >1 Gbps warning) rows.
+    /// The automatic-bitrate toggle + manual slider (and the >1 Gbps warning) rows. None under
+    /// PyroWave: its quality row stands in, and the stored rate waits for the next codec.
     @ViewBuilder private var bitrateRows: some View {
-        // PyroWave is always Automatic (ABR overhaul RFC §5.2): the session sends 0 and the
-        // host pins a per-mode rate, so a live rate control here would change nothing. Same
-        // support gate as the codec picker offering the option; the stored rate is untouched,
-        // so switching the codec back restores it.
-        if effective.codec == "pyrowave", MetalWaveletDecoder.supported {
-            described("PyroWave sets its own rate from the stream mode — a fixed bitrate "
-                + "doesn't apply.",
-                field: "bitrate_kbps") {
-                Toggle("Automatic bitrate", isOn: .constant(true))
-                    .disabled(true)
-            }
-        } else {
+        if !pyroWaveRate {
             described("Uses the host's default, 20 Mbps. Off to set it yourself.",
                 field: "bitrate_kbps") {
                 Toggle("Automatic bitrate", isOn: automaticBitrate)
             }
         }
-        if effective.codec != "pyrowave" || !MetalWaveletDecoder.supported,
-           effective.bitrateKbps != 0 {
+        if !pyroWaveRate, effective.bitrateKbps != 0 {
             HStack(spacing: 12) {
                 Slider(value: bitrateSlider, in: 0...1) {
                     Text("Bitrate")
@@ -545,14 +536,9 @@ extension SettingsView {
     }
     #else
     /// The TV's bitrate: a list of steps plus a typed rate, where the touch and desktop forms have
-    /// a switch and a slider. PyroWave sets its own rate, so it shows none.
+    /// a switch and a slider. None under PyroWave, whose quality row stands in.
     @ViewBuilder private var tvBitrateRow: some View {
-        if effective.codec == "pyrowave", MetalWaveletDecoder.supported {
-            described("PyroWave sets its own rate from the stream mode — a fixed bitrate "
-                + "doesn't apply.", field: "bitrate_kbps") {
-                LabeledContent("Bitrate", value: "Automatic")
-            }
-        } else {
+        if !pyroWaveRate {
             described(effective.bitrateKbps > 1_000_000
                 ? Self.gigabitWarning : "Automatic uses the host's default, 20 Mbps.",
                 field: "bitrate_kbps") {
@@ -580,6 +566,64 @@ extension SettingsView {
         }
     }
     #endif
+
+    /// The codec is PyroWave and this device decodes it: the session's rate is its quality's.
+    var pyroWaveRate: Bool {
+        effective.codec == "pyrowave" && MetalWaveletDecoder.supported
+    }
+
+    /// The mode a connect would ask for: an attached monitor's on iPhone and iPad, else this
+    /// display's.
+    private func connectMode(_ s: EffectiveSettings) -> (width: UInt32, height: UInt32, hz: UInt32) {
+        #if os(iOS)
+        if let mode = ExternalDisplay.streamMode(s) { return mode }
+        #endif
+        return s.streamMode(native: NativeDisplay.mode)
+    }
+
+    /// PyroWave quality in Bitrate's place: 0.5 to 2 by tenths, read as the rate it needs at the
+    /// mode a connect would ask, warned when this device's link is short of it. The TV lists
+    /// those rates.
+    @ViewBuilder private var pyrowaveQualityRows: some View {
+        if pyroWaveRate {
+            let s = effective
+            let mode = connectMode(s)
+            let lines = PyroWaveQuality.lines(s, mode: mode, link: PyroWaveQuality.localLink())
+            let field = scoped(SettingsFields.pyrowaveBpp)
+            let quality = Binding(
+                get: { PyroWaveQuality.snapped(field.wrappedValue) },
+                set: { field.wrappedValue = PyroWaveQuality.snapped($0) })
+            #if os(tvOS)
+            described(lines.warning.map { "\(lines.caption). \($0)" } ?? lines.caption,
+                field: "pyrowave_bpp") {
+                settingPicker(
+                    "PyroWave quality",
+                    options: PyroWaveQuality.rungs.map { bpp in
+                        var at = s
+                        at.pyrowaveBpp = bpp
+                        let kbps = PyroWaveQuality.kbps(at, mode: mode)
+                        return (label: PyroWaveQuality.rateLabel(kbps: kbps), tag: bpp)
+                    },
+                    selection: quality)
+            }
+            #else
+            described(lines.caption, field: "pyrowave_bpp") {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("PyroWave quality")
+                    Slider(value: quality, in: PyroWaveQuality.range, step: 0.1) {
+                        Text("PyroWave quality")
+                    }
+                    .labelsHidden()
+                }
+            }
+            if let warning = lines.warning {
+                Label(warning, systemImage: "exclamationmark.triangle.fill")
+                    .font(.geist(12, relativeTo: .caption))
+                    .foregroundStyle(.orange)
+            }
+            #endif
+        }
+    }
 
     // MARK: - Display: Presentation
 
