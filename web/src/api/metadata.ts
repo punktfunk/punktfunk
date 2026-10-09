@@ -1,6 +1,7 @@
 // An Art & Metadata source's own surface (`/__metadata/*` on the plugin), through the console's
 // `/api/plugin-metadata/<id>/<route>` BFF. Hand-written: the plugin serves it, not the host API.
 import { useQuery } from "@tanstack/react-query";
+import { pluginSurfaceOrThrow } from "./pluginSurface";
 
 export interface SourceStatus {
 	ready: boolean;
@@ -40,30 +41,12 @@ const url = (
 	return `/api/plugin-metadata/${id}/${route}${qs ? `?${qs}` : ""}`;
 };
 
-async function call<T>(
+const call = <T>(
 	id: string,
 	route: string,
 	params: Record<string, string>,
-	init?: { method: "PUT" | "POST"; body: unknown },
-): Promise<T> {
-	const res = await fetch(url(id, route, params), {
-		credentials: "same-origin",
-		...(init
-			? {
-					method: init.method,
-					headers: { "content-type": "application/json" },
-					body: JSON.stringify(init.body),
-				}
-			: {}),
-	});
-	const body = (await res.json().catch(() => null)) as
-		| (T & { error?: string; issue?: string })
-		| null;
-	if (!res.ok || body === null) {
-		throw new Error(body?.issue ?? body?.error ?? `${res.status}`);
-	}
-	return body;
-}
+	send?: { method: "PUT" | "POST"; body: unknown },
+): Promise<T> => pluginSurfaceOrThrow<T>(url(id, route, params), send);
 
 export const sourceKey = (id: string, ...rest: string[]) => [
 	"metadata-source",

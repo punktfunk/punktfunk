@@ -10,7 +10,7 @@ import {
 	Trash2,
 } from "lucide-react";
 import { motion } from "motion/react";
-import { type FC, type FormEvent, useEffect, useState } from "react";
+import { type FC, type FormEvent, useState } from "react";
 import { ApiError } from "@/api/fetcher";
 import type { SourceView } from "@/api/gen/model";
 import { useListPluginSources } from "@/api/gen/store/store";
@@ -21,24 +21,12 @@ import {
 	useSetSource,
 } from "@/api/store";
 import { useDialogs } from "@/components/dialogs";
-import {
-	PasswordConfirmField,
-	type PasswordFailure,
-	usePasswordFailure,
-} from "@/components/password-confirm";
+import { PasswordConfirmDialog } from "@/components/password-confirm";
 import { QueryState } from "@/components/query-state";
 import { ROW, ROW_GAP, Stagger } from "@/components/stagger";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import {
-	Dialog,
-	DialogContent,
-	DialogDescription,
-	DialogFooter,
-	DialogHeader,
-	DialogTitle,
-} from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { fmtDateTimeSecs } from "@/lib/format";
@@ -67,26 +55,15 @@ export const SourcesTab: FC = () => {
 	// The draft waiting on the trust dialog, and a key that re-mounts (and so clears) the form.
 	const [draft, setDraft] = useState<SourceDraft | null>(null);
 	const [formKey, setFormKey] = useState(0);
-	const refusal = usePasswordFailure();
 
 	const onRefresh = () =>
 		refresh.mutate(undefined, {
 			onError: () => toast.error(m.store_refresh_failed()),
 		});
 
-	const onConfirmAdd = async (password: string) => {
-		if (!draft) return;
-		refusal.reset();
-		try {
-			await save.mutateAsync({ ...draft, password });
-			setDraft(null);
-			setFormKey((k) => k + 1);
-		} catch (e) {
-			// A refused password keeps the dialog open so the operator can retry without refilling
-			// the form; anything else is a genuine failure to write the source.
-			if (refusal.classify(e)) return;
-			toast.error(m.store_add_source_failed());
-		}
+	const onConfirmAdd = async (draft: SourceDraft, password: string) => {
+		await save.mutateAsync({ ...draft, password });
+		setFormKey((k) => k + 1);
 	};
 
 	const onRemove = async (source: SourceView) => {
@@ -127,12 +104,7 @@ export const SourcesTab: FC = () => {
 
 			<TrustSourceDialog
 				draft={draft}
-				isSaving={save.isPending}
-				failure={refusal.failure}
-				onCancel={() => {
-					setDraft(null);
-					refusal.reset();
-				}}
+				onClose={() => setDraft(null)}
 				onConfirm={onConfirmAdd}
 			/>
 		</div>
@@ -339,67 +311,38 @@ export const AddSourceForm: FC<{
 	);
 };
 
-/** The one-time trust warning shown before a third-party catalog is written to the host. */
+/** The one-time trust warning shown before a third-party catalog is written to the host. A
+ * refused password keeps it open, so the operator retries without refilling the form. */
 export const TrustSourceDialog: FC<{
 	draft: SourceDraft | null;
-	isSaving: boolean;
-	onCancel: () => void;
-	onConfirm: (password: string) => void;
-	/** Why the BFF refused the password — say so and keep the dialog open. */
-	failure?: PasswordFailure;
-}> = ({ draft, isSaving, onCancel, onConfirm, failure = null }) => {
-	const [password, setPassword] = useState("");
-	// The dialog stays mounted between drafts; clear the password whenever it closes.
-	useEffect(() => {
-		if (!draft) setPassword("");
-	}, [draft]);
-	return (
-		<Dialog open={draft !== null} onOpenChange={(open) => !open && onCancel()}>
-			{draft && (
-				<DialogContent>
-					<DialogHeader>
-						<DialogTitle className="flex items-center gap-2">
-							<AlertTriangle className="size-5 shrink-0 text-amber-600 dark:text-amber-500" />
-							{m.store_source_trust_title()}
-						</DialogTitle>
-						<DialogDescription>
-							{m.store_source_trust_body({ name: draft.name })}
-						</DialogDescription>
-					</DialogHeader>
-
-					<p className="rounded-md bg-muted px-3 py-2 font-mono text-xs break-all text-muted-foreground">
-						{draft.url}
-					</p>
-
-					{!draft.public_key && (
-						<p className="rounded-md border border-amber-600/40 bg-amber-500/10 px-3 py-2 text-sm text-amber-600 dark:border-amber-500/40 dark:text-amber-500">
-							{m.store_source_trust_unsigned()}
-						</p>
-					)}
-
-					{/* Adding a source is a trust-root change: every future install rides on it, so the
-				    console password is re-entered here and verified at the BFF, exactly as for a
-				    host update. */}
-					<PasswordConfirmField
-						id="store-source-password"
-						value={password}
-						onChange={setPassword}
-						failure={failure}
-					/>
-
-					<DialogFooter>
-						<Button variant="outline" onClick={onCancel} disabled={isSaving}>
-							{m.common_cancel()}
-						</Button>
-						<Button
-							disabled={isSaving || password.length === 0}
-							onClick={() => onConfirm(password)}
-						>
-							{m.store_source_trust_confirm()}
-						</Button>
-					</DialogFooter>
-				</DialogContent>
+	onClose: () => void;
+	onConfirm: (draft: SourceDraft, password: string) => Promise<void>;
+}> = ({ draft, onClose, onConfirm }) =>
+	draft && (
+		// Adding a source is a trust-root change: every future install rides on it, so the console
+		// password is re-entered here and verified at the BFF, exactly as for a host update.
+		<PasswordConfirmDialog
+			open
+			id="store-source-password"
+			title={
+				<>
+					<AlertTriangle className="size-5 shrink-0 text-amber-600 dark:text-amber-500" />
+					{m.store_source_trust_title()}
+				</>
+			}
+			body={m.store_source_trust_body({ name: draft.name })}
+			submitLabel={m.store_source_trust_confirm()}
+			failedText={m.store_add_source_failed()}
+			onSubmit={(password) => onConfirm(draft, password)}
+			onClose={onClose}
+		>
+			<p className="rounded-md bg-muted px-3 py-2 font-mono text-xs break-all text-muted-foreground">
+				{draft.url}
+			</p>
+			{!draft.public_key && (
+				<p className="rounded-md border border-amber-600/40 bg-amber-500/10 px-3 py-2 text-sm text-amber-600 dark:border-amber-500/40 dark:text-amber-500">
+					{m.store_source_trust_unsigned()}
+				</p>
 			)}
-		</Dialog>
+		</PasswordConfirmDialog>
 	);
-};

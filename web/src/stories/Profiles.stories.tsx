@@ -16,6 +16,7 @@ import {
 } from "./lib/fixtures";
 
 const noop = () => {};
+const done = async () => {};
 
 const meta = {
 	title: "Pages/Profiles",
@@ -96,9 +97,7 @@ export const RemoveSeat: Story = {
 		<RemoveProfileDialog
 			profile={profilesEvery[2] ?? null}
 			onCancel={noop}
-			onRemove={noop}
-			isPending={false}
-			failure={null}
+			onRemove={done}
 		/>
 	),
 };
@@ -212,29 +211,13 @@ export const LinuxDoorSwitching: Story = {
 
 /** Turning the door on asks for the console password. */
 export const DoorTurnOn: Story = {
-	render: () => (
-		<DoorDialog
-			open
-			turningOn
-			isPending={false}
-			failure={null}
-			onConfirm={noop}
-			onCancel={noop}
-		/>
-	),
+	render: () => <DoorDialog open turningOn onConfirm={done} onCancel={noop} />,
 };
 
 /** Turning it off hands the box back to the owner's session. */
 export const DoorTurnOff: Story = {
 	render: () => (
-		<DoorDialog
-			open
-			turningOn={false}
-			isPending={false}
-			failure="wrong"
-			onConfirm={noop}
-			onCancel={noop}
-		/>
+		<DoorDialog open turningOn={false} onConfirm={done} onCancel={noop} />
 	),
 };
 
@@ -260,9 +243,7 @@ export const RemoveWindowsSeat: Story = {
 			profile={profilesWindows[2] ?? null}
 			windows
 			onCancel={noop}
-			onRemove={noop}
-			isPending={false}
-			failure={null}
+			onRemove={done}
 		/>
 	),
 };

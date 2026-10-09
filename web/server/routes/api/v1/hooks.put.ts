@@ -6,19 +6,16 @@
 // Wins over the `/api/**` catch-all by h3 route specificity. GET is not gated — reading the current
 // automation is ordinary console business.
 import { defineEventHandler, readBody } from "h3";
+import type { HooksConfig } from "../../../../src/api/gen/model";
 import { confirmPassword } from "../../../util/confirm";
-import { forwardJson } from "../../../util/forward";
-
-interface HooksBody {
-	hooks?: unknown[];
-	password?: string;
-}
+import { type AllFields, forwardJson } from "../../../util/forward";
 
 export default defineEventHandler(async (event) => {
-	const body = await readBody<HooksBody>(event);
+	const body = await readBody<HooksConfig & { password?: string }>(event);
 	await confirmPassword(event, body?.password);
-	// Rebuild from the one field the host takes, so the password cannot leak upstream.
-	return forwardJson(event, "/api/v1/hooks", "PUT", {
+	// Rebuild from the contract's fields, so the password cannot leak upstream.
+	const upstream = {
 		hooks: Array.isArray(body?.hooks) ? body.hooks : [],
-	});
+	} satisfies AllFields<HooksConfig>;
+	return forwardJson(event, "/api/v1/hooks", "PUT", upstream);
 });

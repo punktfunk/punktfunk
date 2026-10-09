@@ -8,22 +8,11 @@ import type { HookEntry } from "@/api/gen/model/hookEntry";
 import { useListNativeClients } from "@/api/gen/native/native";
 import { hookAction, hookFilterSummary, useSaveHooks } from "@/api/hooks";
 import { useDialogs } from "@/components/dialogs";
-import {
-	PasswordConfirmField,
-	usePasswordFailure,
-} from "@/components/password-confirm";
+import { PasswordConfirmDialog } from "@/components/password-confirm";
 import { QueryState } from "@/components/query-state";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import {
-	Dialog,
-	DialogContent,
-	DialogDescription,
-	DialogFooter,
-	DialogHeader,
-	DialogTitle,
-} from "@/components/ui/dialog";
 import { useLocale } from "@/lib/i18n";
 import { m } from "@/paraglide/messages";
 import { HookForm } from "./HookForm";
@@ -67,8 +56,6 @@ export const SectionAutomation: FC = () => {
 		hook: HookEntry;
 	} | null>(null);
 	const [confirming, setConfirming] = useState(false);
-	const [password, setPassword] = useState("");
-	const refusal = usePasswordFailure();
 
 	// Seed once. Unlike the display card there is no re-seed-when-clean dance: nothing else in the
 	// console writes hooks, so the server value cannot move underneath an edit.
@@ -102,17 +89,9 @@ export const SectionAutomation: FC = () => {
 		setHooks((prev) => (prev ?? []).filter((_, i) => i !== index));
 	};
 
-	const commit = async () => {
-		refusal.reset();
-		try {
-			await save.mutateAsync({ hooks: list, password });
-			setConfirming(false);
-			setPassword("");
-			toast.success(m.automation_saved());
-		} catch (e) {
-			if (refusal.classify(e)) return;
-			toast.error(m.automation_save_failed());
-		}
+	const commit = async (password: string) => {
+		await save.mutateAsync({ hooks: list, password });
+		toast.success(m.automation_saved());
 	};
 
 	return (
@@ -242,45 +221,16 @@ export const SectionAutomation: FC = () => {
 
 			{/* Saving installs commands the host will run on its own — same bar as an update or an
 			    unreviewed install, so the same password. */}
-			<Dialog
+			<PasswordConfirmDialog
 				open={confirming}
-				onOpenChange={(o) => {
-					if (!o) {
-						setConfirming(false);
-						refusal.reset();
-					}
-				}}
-			>
-				<DialogContent>
-					<DialogHeader>
-						<DialogTitle>{m.automation_confirm_title()}</DialogTitle>
-						<DialogDescription>{m.automation_confirm_body()}</DialogDescription>
-					</DialogHeader>
-					<PasswordConfirmField
-						id="automation-password"
-						value={password}
-						onChange={setPassword}
-						failure={refusal.failure}
-					/>
-					<DialogFooter>
-						<Button
-							variant="outline"
-							onClick={() => {
-								setConfirming(false);
-								refusal.reset();
-							}}
-						>
-							{m.common_cancel()}
-						</Button>
-						<Button
-							disabled={save.isPending || password.length === 0}
-							onClick={commit}
-						>
-							{m.display_save()}
-						</Button>
-					</DialogFooter>
-				</DialogContent>
-			</Dialog>
+				id="automation-password"
+				title={m.automation_confirm_title()}
+				body={m.automation_confirm_body()}
+				submitLabel={m.display_save()}
+				failedText={m.automation_save_failed()}
+				onSubmit={commit}
+				onClose={() => setConfirming(false)}
+			/>
 		</Section>
 	);
 };

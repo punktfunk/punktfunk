@@ -5,13 +5,23 @@
 // `/plugin-ui/**` proxy and the health probe. Naming one of OUR listeners there makes the proxy
 // dial itself, which on the plugin origin recurses until the process dies; and it is silent, since
 // a self-dial answers 200 like anything else.
-import { afterEach, describe, expect, test } from "bun:test";
+import {
+	afterAll,
+	afterEach,
+	beforeEach,
+	describe,
+	expect,
+	test,
+} from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
+	bustCredential,
+	callPlugin,
 	injectThemeReceiver,
 	isDialablePort,
 	PLUGIN_ID_RE,
+	type UiCredential,
 	validEntryId,
 } from "./pluginProxy";
 
@@ -117,5 +127,69 @@ describe("injectThemeReceiver", () => {
 
 	test("leaves a page without <head> alone", () => {
 		expect(injectThemeReceiver("<p>hi</p>")).toBe("<p>hi</p>");
+	});
+});
+
+describe("callPlugin", () => {
+	// The fake host hands out `creds` in order, then 404s; the fake plugin takes only `fresh`.
+	let creds: UiCredential[] = [];
+	const plugin = Bun.serve({
+		port: 0,
+		hostname: "127.0.0.1",
+		fetch: async (req) =>
+			req.headers.get("authorization") === "Bearer fresh"
+				? Response.json({
+						type: req.headers.get("content-type"),
+						body: await req.text(),
+					})
+				: new Response("unauthorized", { status: 401 }),
+	});
+	const host = Bun.serve({
+		port: 0,
+		hostname: "127.0.0.1",
+		fetch: () => {
+			const cred = creds.shift();
+			return cred ? Response.json(cred) : new Response("", { status: 404 });
+		},
+	});
+	const dead = Bun.serve({
+		port: 0,
+		hostname: "127.0.0.1",
+		fetch: () => new Response(),
+	});
+	const deadPort = dead.port as number;
+	dead.stop(true);
+	const live = (secret: string) => ({ port: plugin.port as number, secret });
+
+	beforeEach(() => {
+		process.env.PUNKTFUNK_MGMT_URL = `http://127.0.0.1:${host.port}`;
+		process.env.PUNKTFUNK_MGMT_TOKEN = "t0k";
+		bustCredential("p");
+	});
+	afterAll(() => {
+		plugin.stop(true);
+		host.stop(true);
+		delete process.env.PUNKTFUNK_MGMT_URL;
+		delete process.env.PUNKTFUNK_MGMT_TOKEN;
+	});
+
+	test("retries a rotated secret and passes the body through untouched", async () => {
+		creds = [live("stale"), live("fresh")];
+		const res = await callPlugin("p", "/x", {
+			method: "POST",
+			body: new TextEncoder().encode("{}"),
+		});
+		expect(await res?.json()).toEqual({ type: null, body: "{}" });
+	});
+
+	test("keeps the first 401 when the retry finds no plugin", async () => {
+		creds = [live("stale")];
+		expect((await callPlugin("p", "/x", { method: "GET" }))?.status).toBe(401);
+	});
+
+	test("a dead port busts the credential", async () => {
+		creds = [{ port: deadPort, secret: "fresh" }, live("fresh")];
+		expect(await callPlugin("p", "/x", { method: "GET" })).toBeNull();
+		expect((await callPlugin("p", "/x", { method: "GET" }))?.status).toBe(200);
 	});
 });

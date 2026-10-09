@@ -11,8 +11,8 @@ import { confirmIfCommandExecution } from "../../../../util/libraryConfirm";
 export default defineEventHandler(async (event) => {
 	const body = await readBody<Record<string, unknown>>(event);
 	await confirmIfCommandExecution(event, body, body?.password);
-	// Strip the confirmation before forwarding — the host has no such field and it must not leak
-	// upstream or into `library.json`.
+	// Strip only the password: CustomInput flattens GameMeta, so a field-list rebuild would wipe
+	// metadata the host adds. The gate above reads `prep` and `launch` off this same body.
 	const { password: _password, ...entry } = body ?? {};
 	return forwardJson(event, "/api/v1/library/custom", "POST", entry);
 });

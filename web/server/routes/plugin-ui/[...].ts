@@ -15,14 +15,10 @@ import {
 	sendWebResponse,
 	setResponseStatus,
 } from "h3";
-import { mgmtFetch } from "../../util/forward";
 import {
-	bustCredential,
-	fetchUiCredential,
-	hostRelayPath,
+	callPlugin,
 	injectThemeReceiver,
 	PLUGIN_ID_RE,
-	viaHost,
 } from "../../util/pluginProxy";
 
 export default defineEventHandler(async (event) => {
@@ -51,42 +47,12 @@ export default defineEventHandler(async (event) => {
 		? ((await readRawBody(event, false)) as Uint8Array | undefined)
 		: undefined;
 
-	// One proxied attempt; `null` means the plugin is unreachable (unregistered, or its port died).
-	const attempt = async (bustCache: boolean): Promise<Response | null> => {
-		// `null` also covers a port we refuse to dial — the plugin declared it when it registered, so
-		// it is not ours to trust (see isDialablePort in util/pluginProxy.ts).
-		const cred = await fetchUiCredential(id, { bustCache });
-		if (!cred) return null;
-		try {
-			// A plugin with no listener: the host relays, and adds the plugin's secret itself.
-			if (viaHost(cred)) {
-				return await mgmtFetch(hostRelayPath(id, `${rest}${search}`), {
-					method,
-					headers,
-					body: body as BodyInit | undefined,
-					redirect: "manual",
-				});
-			}
-			return await fetch(`http://127.0.0.1:${cred.port}${rest}${search}`, {
-				method,
-				headers: { ...headers, authorization: `Bearer ${cred.secret}` },
-				body: body as BodyInit | undefined,
-				redirect: "manual",
-			});
-		} catch {
-			// The port is dead (plugin crashed/restarted on a new port): drop the stale credential so
-			// the next request re-resolves it.
-			bustCredential(id);
-			return null;
-		}
-	};
-
-	let resp = await attempt(false);
-	// Stale secret after a plugin restart (S7): the plugin rejects our cached secret — re-fetch once.
-	if (resp?.status === 401) {
-		const retry = await attempt(true);
-		if (retry) resp = retry;
-	}
+	let resp = await callPlugin(id, `${rest}${search}`, {
+		method,
+		headers,
+		body,
+		redirect: "manual",
+	});
 	if (!resp) {
 		setResponseStatus(event, 502);
 		return { error: `plugin "${id}" is not running` };

@@ -4,8 +4,8 @@
 // browser; the BFF additionally denylists the credential endpoint from the generic passthrough).
 //
 // The credential is cached briefly so a burst of iframe asset requests doesn't hammer the host. On a
-// 401 from the plugin (its secret rotated on restart within the cache window) the proxy busts this
-// cache and re-fetches once — see the route.
+// 401 from the plugin (its secret rotated on restart within the cache window) `callPlugin` busts this
+// cache and re-fetches once.
 import { isError } from "h3";
 import { mgmtFetch } from "./forward";
 import { consoleOriginPort, pluginOriginPort } from "./pluginOrigin";
@@ -116,45 +116,52 @@ export async function fetchUiCredential(
 	return null;
 }
 
+/** One request to a plugin. `body` and `headers` go through as given; the dial adds only the bearer. */
+interface PluginRequest {
+	method: string;
+	headers?: Record<string, string>;
+	body?: Uint8Array;
+	redirect?: RequestRedirect;
+}
+
 /**
- * One request to a plugin's loopback surface (`/__config`, `/__game?entry=…`, `/__metadata/…`)
- * with its secret.
- * A 401 means the secret rotated inside the cache window, so it retries once with a fresh one.
- * `null` means unreachable. Callers read `body` before calling: a retry must not resend an
- * emptied stream.
+ * The only dial to a plugin's UI server: `pathAndQuery` on 127.0.0.1 with its secret, or through
+ * the host's relay for a plugin with no listener.
+ *
+ * A 401 means the secret rotated inside the cache window, so it retries once with a fresh
+ * credential, and keeps the first answer when the retry finds no plugin. A throw (the port died)
+ * busts the credential. `null` means unreachable. Callers read `body` before calling: a retry must
+ * not resend an emptied stream.
  */
 export async function callPlugin(
 	id: string,
-	path: string,
-	method: "GET" | "PUT" | "POST",
-	body?: Uint8Array,
+	pathAndQuery: string,
+	{ headers = {}, body, ...init }: PluginRequest,
 ): Promise<Response | null> {
 	const attempt = async (bustCache: boolean): Promise<Response | null> => {
+		// `null` also covers a port we refuse to dial (see isDialablePort).
 		const cred = await fetchUiCredential(id, { bustCache });
 		if (!cred) return null;
-		const headers: Record<string, string> =
-			method !== "GET" ? { "content-type": "application/json" } : {};
+		const sent = { ...init, body: body as BodyInit | undefined };
 		try {
 			if (viaHost(cred)) {
-				return await mgmtFetch(hostRelayPath(id, path), {
-					method,
+				return await mgmtFetch(hostRelayPath(id, pathAndQuery), {
+					...sent,
 					headers,
-					body: body as BodyInit | undefined,
 				});
 			}
-			return await fetch(`http://127.0.0.1:${cred.port}${path}`, {
-				method,
-				headers: { authorization: `Bearer ${cred.secret}`, ...headers },
-				body: body as BodyInit | undefined,
+			return await fetch(`http://127.0.0.1:${cred.port}${pathAndQuery}`, {
+				...sent,
+				headers: { ...headers, authorization: `Bearer ${cred.secret}` },
 			});
 		} catch {
+			bustCredential(id);
 			return null;
 		}
 	};
 	const res = await attempt(false);
 	if (res?.status !== 401) return res;
-	bustCredential(id);
-	return attempt(true);
+	return (await attempt(true)) ?? res;
 }
 
 /** A plugin's answer as JSON, or its text wrapped as an error. */

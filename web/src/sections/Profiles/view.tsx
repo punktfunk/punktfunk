@@ -19,10 +19,7 @@ import type { ProfileCreate } from "@/api/gen/model/profileCreate";
 import type { Seating } from "@/api/gen/model/seating";
 import type { SeatState } from "@/api/gen/model/seatState";
 import { DocsLink } from "@/components/docs-link";
-import {
-	PasswordConfirmField,
-	type PasswordFailure,
-} from "@/components/password-confirm";
+import { PasswordConfirmDialog } from "@/components/password-confirm";
 import { ProfileAvatar } from "@/components/profile-avatar";
 import { QueryState } from "@/components/query-state";
 import { ROW, Stagger } from "@/components/stagger";
@@ -33,7 +30,6 @@ import { Checkbox } from "@/components/ui/checkbox";
 import {
 	Dialog,
 	DialogContent,
-	DialogDescription,
 	DialogFooter,
 	DialogHeader,
 	DialogTitle,
@@ -248,54 +244,26 @@ export const DoorDialog: FC<{
 	open: boolean;
 	/** The state the switch is asked to take. */
 	turningOn: boolean;
-	isPending: boolean;
-	failure: PasswordFailure;
-	onConfirm: (password: string) => void;
+	onConfirm: (password: string) => Promise<void>;
 	onCancel: () => void;
-}> = ({ open, turningOn, isPending, failure, onConfirm, onCancel }) => {
-	const [password, setPassword] = useState("");
-	useEffect(() => {
-		if (open) setPassword("");
-	}, [open]);
-	return (
-		<Dialog open={open} onOpenChange={(o) => !o && onCancel()}>
-			<DialogContent className="max-w-md">
-				<DialogHeader>
-					<DialogTitle>{m.profiles_door()}</DialogTitle>
-					<DialogDescription>
-						{turningOn ? m.profiles_door_hint() : m.profiles_door_off_hint()}{" "}
-						<DocsLink path="profiles#on-linux" />
-					</DialogDescription>
-				</DialogHeader>
-				<form
-					onSubmit={(e) => {
-						e.preventDefault();
-						if (!isPending && password) onConfirm(password);
-					}}
-				>
-					<PasswordConfirmField
-						id="door-password"
-						value={password}
-						onChange={setPassword}
-						failure={failure}
-						autoFocus
-					/>
-				</form>
-				<DialogFooter>
-					<Button variant="outline" onClick={onCancel} disabled={isPending}>
-						{m.common_cancel()}
-					</Button>
-					<Button
-						disabled={isPending || password.length === 0}
-						onClick={() => onConfirm(password)}
-					>
-						{turningOn ? m.profiles_door_on() : m.profiles_door_off()}
-					</Button>
-				</DialogFooter>
-			</DialogContent>
-		</Dialog>
-	);
-};
+}> = ({ open, turningOn, onConfirm, onCancel }) => (
+	<PasswordConfirmDialog
+		open={open}
+		id="door-password"
+		className="max-w-md"
+		title={m.profiles_door()}
+		body={
+			<>
+				{turningOn ? m.profiles_door_hint() : m.profiles_door_off_hint()}{" "}
+				<DocsLink path="profiles#on-linux" />
+			</>
+		}
+		submitLabel={turningOn ? m.profiles_door_on() : m.profiles_door_off()}
+		failedText={m.profiles_door_failed()}
+		onSubmit={onConfirm}
+		onClose={onCancel}
+	/>
+);
 
 const ProfileRow: FC<{
 	profile: ProfileAdmin;
@@ -615,80 +583,51 @@ export const AddProfileDialog: FC<{
 export const RemoveProfileDialog: FC<{
 	profile: ProfileAdmin | null;
 	onCancel: () => void;
-	onRemove: (id: string, erase: boolean, password: string) => void;
-	isPending: boolean;
-	failure: PasswordFailure;
+	onRemove: (id: string, erase: boolean, password: string) => Promise<void>;
 	windows?: boolean;
-}> = ({ profile, onCancel, onRemove, isPending, failure, windows = false }) => {
+}> = ({ profile, onCancel, onRemove, windows = false }) => {
 	const [erase, setErase] = useState(false);
-	const [password, setPassword] = useState("");
 	useEffect(() => {
-		if (!profile) return;
-		setErase(false);
-		setPassword("");
+		if (profile) setErase(false);
 	}, [profile]);
+	if (!profile) return null;
 	// A Windows seat is always a desktop of its own; on Linux the kind says so.
 	const ownAccount =
-		profile?.seat != null && (windows || profile.seat.kind === "desktop");
-	const submit = () => {
-		if (profile && password)
-			onRemove(profile.id, erase || ownAccount, password);
-	};
+		profile.seat != null && (windows || profile.seat.kind === "desktop");
 	return (
-		<Dialog open={profile !== null} onOpenChange={(o) => !o && onCancel()}>
-			{profile && (
-				<DialogContent className="max-w-md">
-					<DialogHeader>
-						<DialogTitle>
-							{m.profiles_remove_title({ name: profile.display_name })}
-						</DialogTitle>
-						<DialogDescription>
-							{m.profiles_remove_body({ name: profile.display_name })}
-							{ownAccount &&
-								` ${(windows ? m.profiles_remove_windows : m.profiles_remove_linux)({ name: profile.display_name })}`}
-						</DialogDescription>
-					</DialogHeader>
-					{profile.seat && !ownAccount && (
-						<div className="flex items-start gap-2">
-							<Checkbox
-								id="profile-erase"
-								checked={erase}
-								onCheckedChange={(v) => setErase(v === true)}
-							/>
-							<Label htmlFor="profile-erase" className="leading-snug">
-								{m.profiles_remove_erase({ name: profile.display_name })}
-							</Label>
-						</div>
-					)}
-					<form
-						onSubmit={(e) => {
-							e.preventDefault();
-							if (!isPending) submit();
-						}}
-					>
-						<PasswordConfirmField
-							id="profile-remove-password"
-							value={password}
-							onChange={setPassword}
-							failure={failure}
-							autoFocus
-						/>
-					</form>
-					<DialogFooter>
-						<Button variant="outline" onClick={onCancel} disabled={isPending}>
-							{m.common_cancel()}
-						</Button>
-						<Button
-							variant="destructive"
-							disabled={isPending || password.length === 0}
-							onClick={submit}
-						>
-							{m.profiles_remove()}
-						</Button>
-					</DialogFooter>
-				</DialogContent>
+		<PasswordConfirmDialog
+			open
+			id="profile-remove-password"
+			className="max-w-md"
+			title={m.profiles_remove_title({ name: profile.display_name })}
+			body={
+				<>
+					{m.profiles_remove_body({ name: profile.display_name })}
+					{ownAccount &&
+						` ${(windows ? m.profiles_remove_windows : m.profiles_remove_linux)({ name: profile.display_name })}`}
+				</>
+			}
+			submitLabel={m.profiles_remove()}
+			failedText={m.profiles_remove_failed()}
+			destructive
+			onSubmit={(password) =>
+				onRemove(profile.id, erase || ownAccount, password)
+			}
+			onClose={onCancel}
+		>
+			{profile.seat && !ownAccount && (
+				<div className="flex items-start gap-2">
+					<Checkbox
+						id="profile-erase"
+						checked={erase}
+						onCheckedChange={(v) => setErase(v === true)}
+					/>
+					<Label htmlFor="profile-erase" className="leading-snug">
+						{m.profiles_remove_erase({ name: profile.display_name })}
+					</Label>
+				</div>
 			)}
-		</Dialog>
+		</PasswordConfirmDialog>
 	);
 };
 
