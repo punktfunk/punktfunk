@@ -1922,31 +1922,6 @@ fn the_background_rows_follow_the_device() {
     );
 }
 
-/// The two row-to-field maps agree: a row names an overlay field exactly when an overlay
-/// holding every field marks it overridden.
-#[test]
-fn the_preset_field_map_matches_the_override_map() {
-    let every: SettingsOverlay = serde_json::from_value(serde_json::json!({
-        "width": 1920, "height": 1080, "refresh_hz": 60, "match_window": false,
-        "bitrate_kbps": 20000, "render_scale": 1.0, "video_fit": "fit", "codec": "hevc",
-        "hdr_enabled": true, "enable_444": false, "ten_bit_sdr": false, "compositor": "auto",
-        "audio_channels": 2, "audio_format": "opus", "keep_host_audio": false,
-        "mic_enabled": true, "echo_cancel": true, "touch_mode": "trackpad",
-        "mouse_mode": "capture", "invert_scroll": false, "inhibit_shortcuts": true,
-        "gamepad": "auto", "gamepad_forwarding": true, "system_buttons": "auto",
-        "guide_gesture": "auto", "stats_verbosity": "normal", "fullscreen_on_stream": true,
-        "present_priority": "latency", "smooth_buffer": 0, "vsync": false, "allow_vrr": true
-    }))
-    .unwrap();
-    for id in TABS.iter().flat_map(|(_, rows)| rows.iter().copied()) {
-        assert_eq!(
-            preset_field(id).is_some(),
-            overrides_row(id, &every),
-            "{id:?}"
-        );
-    }
-}
-
 /// Every row kept in `extra` reads its default unwritten, and one step writes the key it
 /// reads back, so the row never shows one value and steps from another.
 #[test]

@@ -1747,9 +1747,8 @@ fn preset_override<'a>(
     })
 }
 
-/// Whether an overlay pins the value this row shows.
 /// The overlay field a preset stores for this row, by its serialised name
-/// ([`SettingsOverlay::clear`]); `None` for a row no preset carries. Mirrors [`overrides_row`].
+/// ([`SettingsOverlay::clear`]); `None` for a row no preset carries.
 pub(crate) fn preset_field(id: RowId) -> Option<&'static str> {
     Some(match id {
         RowId::Resolution | RowId::Aspect => "resolution",
@@ -1794,41 +1793,9 @@ pub(crate) fn preset_rows(ctx: &Ctx) -> Vec<(&'static str, RowId)> {
         .collect()
 }
 
+/// Whether an overlay pins the value this row shows.
 pub(crate) fn overrides_row(id: RowId, o: &SettingsOverlay) -> bool {
-    match id {
-        RowId::Resolution | RowId::Aspect => {
-            o.width.is_some() || o.height.is_some() || o.match_window.is_some()
-        }
-        RowId::Refresh => o.refresh_hz.is_some(),
-        RowId::RenderScale => o.render_scale.is_some(),
-        RowId::VideoFit => o.video_fit.is_some(),
-        RowId::Bitrate => o.bitrate_kbps.is_some(),
-        RowId::Compositor => o.compositor.is_some(),
-        RowId::Codec => o.codec.is_some(),
-        RowId::Hdr => o.hdr_enabled.is_some(),
-        RowId::Chroma444 => o.enable_444.is_some(),
-        RowId::TenBitSdr => o.ten_bit_sdr.is_some(),
-        RowId::PresentPriority => o.present_priority.is_some(),
-        RowId::SmoothBuffer => o.smooth_buffer.is_some(),
-        RowId::Vsync => o.vsync.is_some(),
-        RowId::AllowVrr => o.allow_vrr.is_some(),
-        RowId::Audio => o.audio_channels.is_some(),
-        RowId::AudioFormat => o.audio_format.is_some(),
-        RowId::KeepHostAudio => o.keep_host_audio.is_some(),
-        RowId::Mic => o.mic_enabled.is_some(),
-        RowId::EchoCancel => o.echo_cancel.is_some(),
-        RowId::PadForward => o.gamepad_forwarding.is_some(),
-        RowId::PadType => o.gamepad.is_some(),
-        RowId::SystemButtons => o.system_buttons.is_some(),
-        RowId::GuideGesture => o.guide_gesture.is_some(),
-        RowId::Touch => o.touch_mode.is_some(),
-        RowId::Mouse => o.mouse_mode.is_some(),
-        RowId::InvertScroll => o.invert_scroll.is_some(),
-        RowId::Shortcuts => o.inhibit_shortcuts.is_some(),
-        RowId::Stats => o.stats_verbosity.is_some(),
-        RowId::Fullscreen => o.fullscreen_on_stream.is_some(),
-        _ => false,
-    }
+    preset_field(id).is_some_and(|f| o.overrides(f))
 }
 
 fn row_spec_base(id: RowId, ctx: &Ctx, presets: &[(String, String)]) -> RowSpec {
