@@ -151,12 +151,12 @@ impl VirtualMic for PwMicSource {
 }
 
 /// Incoming decoded PCM and a capped ring the process callback drains into
-/// PipeWire buffers. `primed` is the jitter-buffer gate — see the callback.
+/// PipeWire buffers through [`MicGate`].
 struct MicUserData {
     rx: Receiver<(std::time::Instant, Vec<f32>)>,
     ring: VecDeque<f32>,
     channels: usize,
-    primed: bool,
+    gate: MicGate,
     flush: Arc<AtomicBool>,
     shared: Arc<MicRingShared>,
     /// Last process-callback run. A long gap means the ring predates the
@@ -168,6 +168,60 @@ struct MicUserData {
 /// ring content from before a consumer gap would otherwise burst as stale
 /// audio when recording (re)starts.
 const MIC_STALE: Duration = Duration::from_secs(1);
+
+/// The mic's jitter gate: silence until the ring holds the prime depth, then drain it; only a
+/// full drain re-arms the prime. Counts are samples, not frames.
+#[derive(Default)]
+struct MicGate {
+    primed: bool,
+}
+
+/// What one [`MicGate::fill`] did.
+#[derive(Debug, PartialEq)]
+struct Filled {
+    /// Oldest samples dropped to bound latency.
+    dropped: usize,
+    /// The ring ran dry and the gate re-armed its prime.
+    reprimed: bool,
+}
+
+impl MicGate {
+    /// Prime depth for a `want`-sample quantum: one quantum plus the pump's jitter target
+    /// (per channel). A target of `0` (no estimate yet) is three quanta within 15–200 ms.
+    fn target(want: usize, pump_target: usize, channels: usize) -> usize {
+        match pump_target * channels {
+            0 => (3 * want).clamp(720 * channels, 9600 * channels),
+            pump => want + pump,
+        }
+    }
+
+    /// One quantum into `out` as F32LE: drop the oldest beyond `target` plus one quantum of
+    /// slack, prime once the ring holds `target`, then drain. Silence while priming and on
+    /// an underrun.
+    fn fill(&mut self, ring: &mut VecDeque<f32>, out: &mut [u8], target: usize) -> Filled {
+        let want = out.len() / 4;
+        let excess = ring.len().saturating_sub(target.max(want) + want);
+        ring.drain(..excess);
+        if !self.primed && ring.len() >= target {
+            self.primed = true;
+        }
+        for slot in out.chunks_exact_mut(4) {
+            let s = match self.primed {
+                true => ring.pop_front().unwrap_or(0.0),
+                false => 0.0,
+            };
+            slot.copy_from_slice(&s.to_le_bytes());
+        }
+        let reprimed = self.primed && ring.is_empty();
+        if reprimed {
+            self.primed = false;
+        }
+        Filled {
+            dropped: excess,
+            reprimed,
+        }
+    }
+}
 
 fn mic_pw_thread(
     pcm_rx: Receiver<(std::time::Instant, Vec<f32>)>,
@@ -237,7 +291,7 @@ fn mic_pw_thread(
             rx: pcm_rx,
             ring: VecDeque::new(),
             channels: channels as usize,
-            primed: false,
+            gate: MicGate::default(),
             flush,
             shared,
             last_run: None,
@@ -287,7 +341,7 @@ fn mic_pw_thread(
                         .is_some_and(|t| now.duration_since(t) > MIC_STALE);
                     if ud.flush.swap(false, std::sync::atomic::Ordering::AcqRel) || idled {
                         ud.ring.clear();
-                        ud.primed = false;
+                        ud.gate = MicGate::default();
                     }
                     ud.last_run = Some(now);
                     while let Ok((t, frame)) = ud.rx.try_recv() {
@@ -318,45 +372,17 @@ fn mic_pw_thread(
                         );
                     }
 
-                    // Prime = one quantum + pump jitter target; re-prime only
-                    // after a full drain. Target `0` keeps the 3-quanta clamp,
-                    // which scaled with the recorder's quantum (2048 → 128 ms).
-                    let pump_target = ud.shared.target.load(Ordering::Relaxed) * ud.channels;
-                    let target = if pump_target == 0 {
-                        (3 * want).clamp(720 * ud.channels, 9600 * ud.channels)
-                    } else {
-                        want + pump_target
-                    };
-                    let mut dropped = 0usize;
-                    while ud.ring.len() > target.max(want) + want {
-                        ud.ring.pop_front(); // bound latency: drop the oldest beyond ~1 quantum slack
-                        dropped += 1;
-                    }
-                    if dropped > 0 {
+                    let pump_target = ud.shared.target.load(Ordering::Relaxed);
+                    let target = MicGate::target(want, pump_target, ud.channels);
+                    // A missing mapping has no capacity, so `want` is 0 there.
+                    let out = data.data().map(|s| &mut s[..want * 4]).unwrap_or_default();
+                    let filled = ud.gate.fill(&mut ud.ring, out, target);
+                    if filled.dropped > 0 {
                         ud.shared
                             .overflow
-                            .fetch_add((dropped / ud.channels) as u64, Ordering::Relaxed);
+                            .fetch_add((filled.dropped / ud.channels) as u64, Ordering::Relaxed);
                     }
-                    if !ud.primed && ud.ring.len() >= target {
-                        ud.primed = true;
-                    }
-
-                    let n_frames = if let Some(slice) = data.data() {
-                        for k in 0..want {
-                            let s = if ud.primed {
-                                ud.ring.pop_front().unwrap_or(0.0) // silence on a momentary underrun
-                            } else {
-                                0.0 // not yet primed — emit silence while the buffer fills
-                            };
-                            let off = k * 4;
-                            slice[off..off + 4].copy_from_slice(&s.to_le_bytes());
-                        }
-                        want_frames
-                    } else {
-                        0
-                    };
-                    if ud.primed && ud.ring.is_empty() {
-                        ud.primed = false; // fully drained — re-prime before producing again
+                    if filled.reprimed {
                         ud.shared.reprimes.fetch_add(1, Ordering::Relaxed);
                     }
                     ud.shared
@@ -368,7 +394,7 @@ fn mic_pw_thread(
                     let chunk = data.chunk_mut();
                     *chunk.offset_mut() = 0;
                     *chunk.stride_mut() = stride as _;
-                    *chunk.size_mut() = (stride * n_frames) as _;
+                    *chunk.size_mut() = (stride * want_frames) as _;
                 }));
                 if outcome.is_err() {
                     tracing::error!("panic in pipewire virtual-mic callback");
@@ -408,4 +434,89 @@ fn mic_pw_thread(
         let _ = ready.send(Err(anyhow!("{e:#}")));
     }
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Runs one quantum of `want` samples and returns what was written.
+    fn run(
+        gate: &mut MicGate,
+        ring: &mut VecDeque<f32>,
+        want: usize,
+        target: usize,
+    ) -> (Vec<f32>, Filled) {
+        let mut out = vec![0xAAu8; want * 4];
+        let filled = gate.fill(ring, &mut out, target);
+        let samples = out
+            .chunks_exact(4)
+            .map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+            .collect();
+        (samples, filled)
+    }
+
+    #[test]
+    fn silence_until_primed_then_drain() {
+        let mut gate = MicGate::default();
+        let mut ring: VecDeque<f32> = (1..=3).map(|v| v as f32).collect();
+        let (out, filled) = run(&mut gate, &mut ring, 2, 4);
+        assert_eq!(out, [0.0, 0.0], "below the prime depth: silence, ring kept");
+        assert_eq!(ring.len(), 3);
+        assert_eq!(
+            filled,
+            Filled {
+                dropped: 0,
+                reprimed: false
+            }
+        );
+        ring.push_back(4.0);
+        assert_eq!(run(&mut gate, &mut ring, 2, 4).0, [1.0, 2.0]);
+        // Primed: holds below the prime depth until the ring is empty.
+        assert_eq!(run(&mut gate, &mut ring, 2, 4).0, [3.0, 4.0]);
+    }
+
+    #[test]
+    fn an_underrun_pads_silence_and_rearms() {
+        let mut gate = MicGate::default();
+        let mut ring: VecDeque<f32> = [1.0, 2.0, 3.0].into();
+        let (out, filled) = run(&mut gate, &mut ring, 4, 3);
+        assert_eq!(out, [1.0, 2.0, 3.0, 0.0]);
+        assert_eq!(
+            filled,
+            Filled {
+                dropped: 0,
+                reprimed: true
+            }
+        );
+        ring.push_back(5.0);
+        assert_eq!(run(&mut gate, &mut ring, 2, 3).0, [0.0, 0.0], "re-priming");
+    }
+
+    #[test]
+    fn overflow_drops_the_oldest_beyond_one_quantum_of_slack() {
+        let mut gate = MicGate::default();
+        let mut ring: VecDeque<f32> = (0..10).map(|v| v as f32).collect();
+        let (out, filled) = run(&mut gate, &mut ring, 2, 4);
+        // Bound is target + want = 6: the four oldest go.
+        assert_eq!(filled.dropped, 4);
+        assert_eq!(out, [4.0, 5.0]);
+        assert_eq!(ring.len(), 4);
+        // An empty quantum (no mapped buffer) still bounds the ring.
+        let mut big: VecDeque<f32> = (0..10).map(|v| v as f32).collect();
+        assert_eq!(gate.fill(&mut big, &mut [], 4).dropped, 6);
+    }
+
+    #[test]
+    fn prime_target_follows_the_pump_or_three_clamped_quanta() {
+        // Stereo, 240-frame quanta: 480 samples each.
+        assert_eq!(MicGate::target(480, 0, 2), 1440, "three quanta");
+        assert_eq!(MicGate::target(64, 0, 2), 1440, "15 ms floor");
+        assert_eq!(MicGate::target(8192 * 2, 0, 2), 19200, "200 ms ceiling");
+        assert_eq!(
+            MicGate::target(480, 960, 2),
+            480 + 1920,
+            "quantum + pump target"
+        );
+    }
 }
