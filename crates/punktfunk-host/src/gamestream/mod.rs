@@ -36,8 +36,8 @@ mod rtsp;
 mod serverinfo;
 #[cfg(feature = "gamestream")]
 pub(crate) mod stream;
-// nvhttp and the management tests name it by this path.
-#[cfg(any(feature = "gamestream", test))]
+// The GameStream modules name it by this path.
+#[cfg(feature = "gamestream")]
 pub(crate) use crate::https as tls;
 #[cfg(feature = "gamestream")]
 mod video;

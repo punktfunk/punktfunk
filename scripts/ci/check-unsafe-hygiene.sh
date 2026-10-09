@@ -185,7 +185,7 @@ crates/punktfunk-core/src/quic/endpoint.rs:2
 crates/punktfunk-host/src/hostsys/identity.rs:3
 crates/punktfunk-host/src/library/art.rs:2
 crates/punktfunk-host/src/main.rs:2
-crates/punktfunk-host/src/mgmt/tests.rs:2
+crates/punktfunk-host/src/mgmt/tests/mod.rs:2
 crates/punktfunk-host/src/native.rs:2
 crates/punktfunk-host/src/windows/service/host_env.rs:1
 packaging/windows/drivers/pf-vdisplay/src/encode/thread.rs:1
