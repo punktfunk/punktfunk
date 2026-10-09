@@ -170,6 +170,8 @@ impl Shell {
         };
         let games_ok = self.games_host().is_some();
         let (tab, strip_focus) = (self.tab, self.strip_focus);
+        // A takeover owns B/A while up: the screen's legend would name buttons it ignores.
+        let show_hints = self.takeover().is_none();
         let mut env = LayerEnv {
             strip: &mut self.strip,
             tab,
@@ -191,11 +193,7 @@ impl Shell {
             device: &self.device,
             t,
             glyphs: self.glyphs,
-            // A modal owns B/A while up — do not also show the screen's legend.
-            show_hints: self.connecting.is_none()
-                && self.launching.is_none()
-                && self.seat_wait.is_none()
-                && self.wake.is_none(),
+            show_hints,
             cheap: false,
             root_targets: None,
         };
