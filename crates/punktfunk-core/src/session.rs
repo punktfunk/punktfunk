@@ -452,7 +452,6 @@ impl Session {
         } else {
             coder.as_ref()
         };
-        let scheme = coder_ref.scheme();
         let mut send = |p: &[&[u8]]| -> Result<usize> {
             let sent = transport.send_gso(p)?;
             if sent < p.len() {
@@ -524,15 +523,8 @@ impl Session {
         // The data streams out while the parity is computed beside it.
         let mut result = std::thread::scope(|s| {
             let fec = s.spawn(|| crate::packet::parity(&geo, data, coder_ref, &mut recovery));
-            let emitted = packetizer.emit_data(
-                &geo,
-                data,
-                pts_ns,
-                user_flags,
-                frame_index,
-                scheme,
-                &mut emit,
-            );
+            let emitted =
+                packetizer.emit_data(&geo, data, pts_ns, user_flags, frame_index, &mut emit);
             let parity = fec
                 .join()
                 .unwrap_or(Err(PunktfunkError::Unsupported("parity thread panicked")));
@@ -540,8 +532,7 @@ impl Session {
         });
         packetizer.put_recovery(recovery);
         if result.is_ok() {
-            result =
-                packetizer.emit_parity(&geo, pts_ns, user_flags, frame_index, scheme, &mut emit);
+            result = packetizer.emit_parity(&geo, pts_ns, user_flags, frame_index, &mut emit);
         }
         if result.is_ok() {
             // The tail seals here while the lane finishes the last chunk; wire order holds.
@@ -626,8 +617,8 @@ impl Session {
         })
     }
 
-    /// Close a streamed AU: seal the last block with the real totals and `FLAG_EOF`,
-    /// which retro-validates the frame at the receiver. Counts the frame as submitted.
+    /// Close a streamed AU: seal the last block with the real totals, which
+    /// retro-validates the frame at the receiver. Counts the frame as submitted.
     pub fn seal_streamed_finish(&mut self, au: StreamedAu) -> Result<Vec<Vec<u8>>> {
         self.seal_run(true, |p, coder, emit| p.finish_streamed(au, coder, emit))
     }
@@ -1152,9 +1143,8 @@ mod wire_equivalence_tests {
     use super::*;
     use crate::config::{FecConfig, FecScheme};
     use crate::crypto::MediaSuite;
-    use crate::packet::{HEADER_LEN, V2_CLEAR_LEN};
+    use crate::packet::V2_CLEAR_LEN;
     use crate::transport::loopback_pair;
-    use zerocopy::FromBytes;
 
     fn host_cfg(scheme: FecScheme, fec_percent: u8) -> Config {
         Config {
@@ -1185,29 +1175,23 @@ mod wire_equivalence_tests {
         Session::new(cfg, media(sealed), Box::new(h)).unwrap()
     }
 
-    /// Reference wire path: the `packetize` wrapper, then each packet staged and sealed on its
+    /// Reference wire path: every packet collected first, then each staged and sealed on its
     /// own. Shares session state with `seal_frame` and nothing else, so the equality pin is real.
-    fn seal_via_wrapper(sess: &mut Session, frame: &[u8], pts_ns: u64, flags: u32) -> Vec<Vec<u8>> {
-        let packets = sess
-            .packetizer
-            .packetize(frame, pts_ns, flags, sess.coder.as_ref())
+    fn seal_one_by_one(sess: &mut Session, frame: &[u8], pts_ns: u64, flags: u32) -> Vec<Vec<u8>> {
+        let mut packets = Vec::new();
+        sess.packetizer
+            .packetize_each(frame, pts_ns, flags, None, sess.coder.as_ref(), |h, b| {
+                packets.push((*h, b.to_vec()));
+                Ok(())
+            })
             .unwrap();
         let mut wires = Vec::new();
-        for pkt in &packets {
-            let hdr = PacketHeader::read_from_bytes(&pkt[..HEADER_LEN]).unwrap();
+        for (hdr, body) in &packets {
             let seq = sess.next_seq;
             sess.next_seq += 1;
             let sealed = sess.crypto.is_some();
             let mut wire = Vec::new();
-            stage_wire(
-                &mut wire,
-                &sess.stamp,
-                None,
-                seq,
-                sealed,
-                &hdr,
-                &pkt[HEADER_LEN..],
-            );
+            stage_wire(&mut wire, &sess.stamp, None, seq, sealed, hdr, body);
             if let Some(c) = &sess.crypto {
                 let (aad, rest) = wire.split_at_mut(V2_CLEAR_LEN);
                 c.seal_media(seq, aad, rest).unwrap();
@@ -1217,11 +1201,11 @@ mod wire_equivalence_tests {
         wires
     }
 
-    /// `seal_frame`'s pooled-wire path must be byte-identical to the wrapper path
+    /// `seal_frame`'s pooled-wire path must be byte-identical to `seal_one_by_one`
     /// (same plaintext, same nonce sequence) across schemes, FEC percents, crypto on/off,
     /// and the frame shapes below.
     #[test]
-    fn zero_copy_seal_matches_wrapper_path() {
+    fn zero_copy_seal_matches_one_by_one_path() {
         for scheme in [FecScheme::Gf8, FecScheme::Gf16] {
             for fec_percent in [0u8, 50] {
                 for encrypt in [true, false] {
@@ -1239,7 +1223,7 @@ mod wire_equivalence_tests {
                     ];
                     for (i, frame) in frames.iter().enumerate() {
                         let got = opt.seal_frame(frame, 1000 * i as u64, i as u32).unwrap();
-                        let want = seal_via_wrapper(&mut refr, frame, 1000 * i as u64, i as u32);
+                        let want = seal_one_by_one(&mut refr, frame, 1000 * i as u64, i as u32);
                         assert_eq!(
                             got, want,
                             "wire mismatch: scheme={scheme:?} fec={fec_percent}% encrypt={encrypt} frame#{i}"
@@ -1329,7 +1313,7 @@ mod wire_equivalence_tests {
         });
         let frame = pattern(20000); // > TWO_LANE_MIN_PACKETS wire packets → takes the split path
         let got = opt.seal_frame(&frame, 7, 0).unwrap();
-        let want = seal_via_wrapper(&mut refr, &frame, 7, 0);
+        let want = seal_one_by_one(&mut refr, &frame, 7, 0);
         assert_eq!(got, want, "fallback must seal the whole frame, not half");
         assert!(
             opt.seal_lane.is_none(),
@@ -1337,7 +1321,7 @@ mod wire_equivalence_tests {
         );
         opt.reclaim_wires(got);
         let got2 = opt.seal_frame(&frame, 8, 1).unwrap();
-        let want2 = seal_via_wrapper(&mut refr, &frame, 8, 1);
+        let want2 = seal_one_by_one(&mut refr, &frame, 8, 1);
         assert_eq!(got2, want2);
         assert!(
             opt.seal_lane.is_some(),

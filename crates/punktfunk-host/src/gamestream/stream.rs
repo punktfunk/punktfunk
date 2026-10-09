@@ -980,7 +980,7 @@ fn sendmmsg_all(sock: &UdpSocket, pkts: &[Vec<u8>]) -> std::io::Result<()> {
 #[cfg(target_os = "windows")]
 fn sendmmsg_all(sock: &UdpSocket, pkts: &[Vec<u8>]) -> std::io::Result<()> {
     let refs: Vec<&[u8]> = pkts.iter().map(|p| p.as_slice()).collect();
-    let n = punktfunk_core::transport::send_uso_all(sock, &refs)?;
+    let n = super::uso::send_uso_all(sock, &refs)?;
     for p in &pkts[n..] {
         sock.send(p)?;
     }

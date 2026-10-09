@@ -36,6 +36,8 @@ mod rtsp;
 mod serverinfo;
 #[cfg(feature = "gamestream")]
 pub(crate) mod stream;
+#[cfg(all(feature = "gamestream", any(target_os = "windows", test)))]
+mod uso;
 // The GameStream modules name it by this path.
 #[cfg(feature = "gamestream")]
 pub(crate) use crate::https as tls;

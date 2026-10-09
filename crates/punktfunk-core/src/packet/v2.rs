@@ -137,7 +137,6 @@ pub fn decode_v2<'a>(
     let hdr = PacketHeader {
         pts_ns,
         frame_index: u32_at(8),
-        stream_seq: u32_at(1),
         frame_bytes,
         user_flags,
         block_index: block,
@@ -146,10 +145,6 @@ pub fn decode_v2<'a>(
         recovery_shards: u16_at(26),
         shard_index: u16_at(22),
         shard_bytes,
-        magic: PUNKTFUNK_MAGIC,
-        version: 2,
-        fec_scheme: crate::config::FecScheme::Gf16 as u8,
-        flags: FLAG_PIC,
     };
     Some((hdr, h[5], body))
 }
@@ -168,7 +163,6 @@ mod tests {
     use crate::config::{Config, FecConfig, FecScheme, Role};
     use crate::fec::coder_for;
     use proptest::prelude::*;
-    use zerocopy::FromBytes;
 
     fn stamp(seq: u64) -> V2Stamp {
         V2Stamp {
@@ -235,11 +229,13 @@ mod tests {
 
     #[test]
     fn probe_rides_its_own_stream_and_bad_tags_are_refused() {
-        let mut h = PacketHeader::read_from_bytes(&[0u8; HEADER_LEN]).unwrap();
-        h.shard_bytes = 16;
-        h.data_shards = 1;
-        h.block_count = 1;
-        h.user_flags = u32::from(FLAG_PROBE);
+        let h = PacketHeader {
+            shard_bytes: 16,
+            data_shards: 1,
+            block_count: 1,
+            user_flags: u32::from(FLAG_PROBE),
+            ..PacketHeader::default()
+        };
         let mut pkt = encode_v2(&h, &stamp(0)).to_vec();
         pkt.extend_from_slice(&[0; 16]);
         assert_eq!(pkt[0], V2_STREAM_PROBE);
@@ -253,11 +249,13 @@ mod tests {
 
     #[test]
     fn padding_past_one_shard_is_refused() {
-        let mut h = PacketHeader::read_from_bytes(&[0u8; HEADER_LEN]).unwrap();
-        h.shard_bytes = 16;
-        h.data_shards = 2;
-        h.block_count = 1;
-        h.frame_bytes = 20;
+        let h = PacketHeader {
+            shard_bytes: 16,
+            data_shards: 2,
+            block_count: 1,
+            frame_bytes: 20,
+            ..PacketHeader::default()
+        };
         let mut pkt = encode_v2(&h, &stamp(0)).to_vec();
         pkt.extend_from_slice(&[0; 16]);
         let mut r = None;
@@ -275,11 +273,13 @@ mod tests {
     #[test]
     fn capture_time_unwraps_across_the_32_bit_edge() {
         let mut r = Some(i64::from(u32::MAX) - 10);
-        let mut h = PacketHeader::read_from_bytes(&[0u8; HEADER_LEN]).unwrap();
-        h.shard_bytes = 16;
-        h.data_shards = 1;
-        h.block_count = 1;
-        h.pts_ns = (i64::from(u32::MAX) + 5) as u64 * 1000;
+        let mut h = PacketHeader {
+            shard_bytes: 16,
+            data_shards: 1,
+            block_count: 1,
+            pts_ns: (i64::from(u32::MAX) + 5) as u64 * 1000,
+            ..PacketHeader::default()
+        };
         let origin0 = V2Stamp {
             clock_origin_ns: 0,
             ..stamp(0)

@@ -4035,7 +4035,6 @@ dependencies = [
  "tracing",
  "ureq",
  "windows-sys 0.61.2",
- "zerocopy 0.8.61",
  "zeroize",
 ]
 
@@ -4134,6 +4133,7 @@ dependencies = [
  "wasapi",
  "windows 0.62.2 (registry+https://github.com/rust-lang/crates.io-index)",
  "windows-service",
+ "windows-sys 0.61.2",
  "winreg 0.56.0",
  "winresource",
  "wtransport",

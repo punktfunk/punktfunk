@@ -539,12 +539,7 @@
 // Same pin as [`MOTION_GYRO_LSB_PER_DEG_S`].
 #define MOTION_ACCEL_LSB_PER_G 10000
 
-// Video packet discriminator; input datagrams use a different magic ([`crate::input`]).
-#define PUNKTFUNK_MAGIC 201
-
 #define PUNKTFUNK_FLAG_PIC 1
-
-#define PUNKTFUNK_FLAG_EOF 2
 
 #define PUNKTFUNK_FLAG_SOF 4
 
@@ -682,10 +677,9 @@
 #define PUNKTFUNK_VIDEO_CAP_PROBE_SEQ 16
 
 // [`Hello::video_caps`]: the reassembler accepts streamed access units. Non-final blocks
-// use SENTINEL headers (`block_count == 0`, `frame_bytes == 0`, exactly
-// `max_data_per_block` data shards); the FINAL block carries real `frame_bytes` /
-// `block_count` and `FLAG_EOF`. A geometry mismatch drops the frame. Hosts stream only
-// to clients that set this bit; others get a whole-AU seal.
+// leave as sentinels before the AU size is known; the FINAL block carries the real
+// totals. A geometry mismatch drops the frame. Hosts stream only to clients that set
+// this bit; others get a whole-AU seal.
 #define PUNKTFUNK_VIDEO_CAP_STREAMED_AU 32
 
 // [`Hello::video_caps`]: client can open ChaCha20-Poly1305 session datagrams and wants
