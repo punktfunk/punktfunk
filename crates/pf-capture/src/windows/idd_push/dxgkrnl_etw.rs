@@ -21,6 +21,8 @@ use std::collections::VecDeque;
 use std::sync::{Arc, Mutex, OnceLock, Weak};
 use std::time::{Duration, Instant};
 
+use crate::stall_model::EtwWindowCounts;
+
 use windows::core::{GUID, PCWSTR, PWSTR};
 use windows::Win32::Foundation::{CloseHandle, ERROR_SUCCESS};
 use windows::Win32::System::Diagnostics::Etw::{
@@ -480,25 +482,6 @@ fn count_window(
         }
     }
     out
-}
-
-/// Structured half of [`EtwWatch::window_report`]: compose-silence discriminator evidence.
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
-pub(super) struct EtwWindowCounts {
-    /// Swapchain presents inside the window; the game and dwm both count.
-    pub(super) presents: u32,
-    /// `BltQueueAddEntry` events inside the window (frames entering the kernel queue).
-    pub(super) queue_adds: u32,
-    /// Present stream demonstrated liveness inside [`LOOKBACK`] before the hole — a
-    /// working witness whose in-window zero is a reading, not a dead one whose zero is noise.
-    pub(super) present_history: bool,
-    /// Queue-stream liveness inside [`LOOKBACK`] before the hole (`BltQueueAddEntry` or
-    /// `BltQueueCompleteIndirectPresent` — either proves the witness works).
-    pub(super) queue_history: bool,
-    /// Every lookback present came from `dwm.exe` (and there was at least one): pre-hole
-    /// flow was desktop composition, not a game. Set by [`EtwWatch::window_report`] (name
-    /// resolution lives there); `stall::classify` requires it so a game's holes are never demoted.
-    pub(super) flow_dwm_only: bool,
 }
 
 /// Distinct pids that presented (DXGI 42/55) in `[from_q - lookback_q, from_q]`.
