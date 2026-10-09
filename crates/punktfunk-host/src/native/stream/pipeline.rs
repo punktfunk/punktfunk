@@ -45,8 +45,9 @@ pub(in crate::native) type PrepHandle = (
     std::thread::JoinHandle<Result<()>>,
 );
 
-/// Build display + pipeline at Welcome time. Same setters as [`StreamState::new`]'s inline arm.
-/// Windows-only by policy (`handshake.rs` never spawns it elsewhere), not by construction.
+/// Build display + pipeline at Welcome time. Same setters as [`StreamState::new`]'s inline arm,
+/// `pyrowave_bpp` the session's. Windows-only by policy (`handshake.rs` never spawns it
+/// elsewhere), not by construction.
 #[allow(clippy::too_many_arguments)]
 pub(in crate::native) fn prepare_display(
     compositor: crate::vdisplay::Compositor,
@@ -62,6 +63,7 @@ pub(in crate::native) fn prepare_display(
     enc_of: super::EncDerive,
     chroma: crate::encode::ChromaFormat,
     codec: crate::encode::Codec,
+    pyrowave_bpp: f64,
     shard_payload: u16,
     join_live: bool,
     quit: &Arc<AtomicBool>,
@@ -89,6 +91,7 @@ pub(in crate::native) fn prepare_display(
         None,
     );
     plan.sdr10_native = crate::session_plan::sdr10_native_for(&plan, compositor, None);
+    plan.pyrowave_bpp = pyrowave_bpp;
     if codec == crate::encode::Codec::PyroWave {
         plan.wire_chunk = Some(shard_payload as usize);
     }
@@ -565,9 +568,16 @@ fn attach_pipeline(
             bitrate_kbps
         } else if plan.codec == crate::encode::Codec::PyroWave {
             let running = bitrate_auto.then_some(bitrate_kbps);
-            pyrowave_mode_kbps(running, &encoded, plan.chroma, bit_depth)
+            pyrowave_mode_kbps(running, &encoded, &plan)
         } else if bitrate_auto {
-            resolve_bitrate_kbps_for(plan.codec, 0, &encoded, plan.chroma, bit_depth)
+            resolve_bitrate_kbps_for(
+                plan.codec,
+                0,
+                &encoded,
+                plan.chroma,
+                bit_depth,
+                plan.pyrowave_bpp,
+            )
         } else {
             bitrate_kbps
         }

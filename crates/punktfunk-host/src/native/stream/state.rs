@@ -397,6 +397,7 @@ impl StreamState {
             ctx.compositor,
             ctx.gamescope_route.as_ref(),
         );
+        plan.pyrowave_bpp = ctx.pyrowave_bpp;
         if ctx.common.codec == crate::encode::Codec::PyroWave {
             plan.wire_chunk = Some(ctx.common.session.shard_payload());
         }
@@ -482,6 +483,7 @@ impl StreamState {
             client_hdr,
             join_live,
             reframe_to: _,
+            pyrowave_bpp: _,
             frame_map,
             #[cfg(target_os = "linux")]
             gamescope_xwayland,
@@ -570,7 +572,7 @@ impl StreamState {
                 mode = m;
                 if plan.codec == crate::encode::Codec::PyroWave {
                     let running = bitrate_auto.then_some(bitrate_kbps);
-                    bitrate_kbps = pyrowave_mode_kbps(running, &mode, plan.chroma, plan.bit_depth);
+                    bitrate_kbps = pyrowave_mode_kbps(running, &mode, &plan);
                 }
             }
         }

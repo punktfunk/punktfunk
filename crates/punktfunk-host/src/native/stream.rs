@@ -532,6 +532,8 @@ pub(super) struct SessionContext {
     /// `Hello::bitrate_kbps == 0`. A mode switch re-resolves PyroWave's pin either way, and an
     /// Automatic rate is held inside the new bounds. Another codec's explicit rate stays.
     pub(super) bitrate_auto: bool,
+    /// PyroWave's bits per pixel for every pin this session resolves (`session_pyrowave_bpp`).
+    pub(super) pyrowave_bpp: f64,
     pub(super) conn: super::link::SessionLink,
     pub(super) cursor_forward: bool,
     pub(super) streamed_au: bool,

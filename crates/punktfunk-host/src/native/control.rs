@@ -250,6 +250,8 @@ pub(super) struct Task {
     /// 0`): it adapts between its floor and the pin. An explicit one runs at
     /// the pin, which its bring-up ramp may lower once while `ramp_open` holds.
     pub(super) pyrowave_automatic: bool,
+    /// PyroWave's bits per pixel for this session; a delivered mode re-pins at it.
+    pub(super) pyrowave_bpp: f64,
     /// One wire packet, bytes. Turns the client's delivery count into the rate
     /// the governor divides, and the shard the parity rule sizes against.
     pub(super) wire_bytes: u64,
@@ -344,6 +346,7 @@ pub(super) async fn run(task: Task) {
         session_bitrate_kbps,
         bitrate_automatic,
         pyrowave_automatic,
+        pyrowave_bpp,
         wire_bytes,
         audio_kbps,
         ack_reason,
@@ -417,8 +420,8 @@ pub(super) async fn run(task: Task) {
     // Same again. The launch site drops its sender when the session ends.
     let mut launch_outcome_closed = false;
     let mut active = initial_mode;
-    // PyroWave's bounds at a delivered mode. The Welcome resolved the pin for
-    // the first one; the floor comes from the same rule.
+    // PyroWave's bounds at a delivered mode, at the session's bits per pixel. The
+    // Welcome resolved the pin for the first one; the floor comes from the same rule.
     let pyrowave_bounds = |mode: &punktfunk_core::Mode| {
         let chroma = if initial_config.chroma_format == punktfunk_core::quic::CHROMA_IDC_444 {
             crate::encode::ChromaFormat::Yuv444
@@ -429,6 +432,7 @@ pub(super) async fn run(task: Task) {
             mode,
             chroma,
             initial_config.bit_depth,
+            pyrowave_bpp,
             pyrowave_auto_pin_ceiling_kbps,
         )
     };
