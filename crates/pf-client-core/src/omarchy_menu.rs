@@ -23,11 +23,10 @@ const BEGIN: &str =
 const END: &str = "// <<< punktfunk-client";
 
 fn menu_path() -> Option<PathBuf> {
-    let config = std::env::var_os("XDG_CONFIG_HOME")
-        .map(PathBuf::from)
-        .filter(|p| !p.as_os_str().is_empty())
-        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))?;
-    Some(config.join("omarchy/extensions/omarchy-menu.jsonc"))
+    Some(
+        crate::paths::xdg_home("XDG_CONFIG_HOME", ".config")?
+            .join("omarchy/extensions/omarchy-menu.jsonc"),
+    )
 }
 
 /// Consent bit `sync_if_enabled` keys off: our block is already in the file.

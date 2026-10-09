@@ -472,8 +472,9 @@ pub fn local_art_bytes(path: &str) -> Option<(Vec<u8>, String)> {
 /// Where the covers this host fetched live: `<key>.<ext>` beside `<key>.json` ([`ArtMeta`]),
 /// plus a zero-byte `<key>.refused` for a URL a fetch rejected, all keyed by [`art_key`].
 ///
-/// `PUNKTFUNK_LIBRARY_ART_CACHE` moves it; the default is the per-user cache dir. Never the
-/// config dir — [`resolved_art_path_is_confined`] refuses that root unconditionally.
+/// `PUNKTFUNK_LIBRARY_ART_CACHE` moves it; the default is the per-user cache dir, else the
+/// temp dir when no absolute one is named. Never the config dir —
+/// [`resolved_art_path_is_confined`] refuses that root unconditionally.
 fn art_store_dir() -> PathBuf {
     if let Some(dir) = std::env::var_os("PUNKTFUNK_LIBRARY_ART_CACHE").filter(|d| !d.is_empty()) {
         return PathBuf::from(dir);
@@ -481,10 +482,8 @@ fn art_store_dir() -> PathBuf {
     #[cfg(windows)]
     let base = std::env::var_os("LOCALAPPDATA").map(PathBuf::from);
     #[cfg(not(windows))]
-    let base = std::env::var_os("XDG_CACHE_HOME")
-        .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".cache")));
-    base.filter(|b| !b.as_os_str().is_empty())
+    let base = Some(pf_paths::xdg_home("XDG_CACHE_HOME", ".cache"));
+    base.filter(|b| b.is_absolute())
         .unwrap_or_else(std::env::temp_dir)
         .join("punktfunk")
         .join("art")

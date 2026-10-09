@@ -66,9 +66,6 @@ pub fn launched_as_uninstaller(exe: &std::path::Path) -> bool {
         .is_some_and(|n| n.eq_ignore_ascii_case(UNINSTALLER_EXE))
 }
 
-/// Where D11 moves the management API when a competitor owns [`MGMT_PORT`].
-pub const MGMT_PORT_MOVED: u16 = 47991;
-
 /// NLA network category. `Domain` cannot be changed through the API.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]

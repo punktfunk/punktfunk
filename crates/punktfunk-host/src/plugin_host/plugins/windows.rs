@@ -401,7 +401,7 @@ pub(super) fn icacls_path() -> String {
 /// directory first, so a planted `powershell.exe` beside the host would run
 /// with these privileges.
 fn powershell_path() -> String {
-    crate::install::sys32(r"WindowsPowerShell\v1.0\powershell.exe")
+    crate::install::sys32(pf_paths::POWERSHELL)
 }
 
 pub(super) fn powershell(command: &str) -> Result<()> {

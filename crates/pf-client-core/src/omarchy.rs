@@ -82,15 +82,9 @@ pub fn parse_colors_toml(raw: &str) -> Option<OsTheme> {
     })
 }
 
-/// `XDG_STATE_HOME` first (the spec, and non-default setups); else `~/.local/state`.
+/// `$XDG_STATE_HOME/omarchy`, else `~/.local/state/omarchy`.
 fn omarchy_state_dir() -> Option<std::path::PathBuf> {
-    let state = std::env::var_os("XDG_STATE_HOME")
-        .map(std::path::PathBuf::from)
-        .filter(|p| !p.as_os_str().is_empty())
-        .or_else(|| {
-            std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join(".local/state"))
-        })?;
-    Some(state.join("omarchy"))
+    Some(crate::paths::xdg_home("XDG_STATE_HOME", ".local/state")?.join("omarchy"))
 }
 
 /// True iff Omarchy's state directory exists — one `stat`, and the Follow-system row's gate.

@@ -313,31 +313,3 @@ pub fn random_hex(n: usize) -> Result<String, String> {
 pub fn random_hex(_n: usize) -> Result<String, String> {
     Err("password generation runs on Windows".into())
 }
-
-/// `%SystemRoot%\System32\<rel>`. `CreateProcess` searches the launching exe's directory
-/// and the cwd before `%PATH%`, and setup runs elevated from wherever it was downloaded, so
-/// a system tool is never spawned by bare name. `powershell` lives one level down.
-pub fn system32(rel: &str) -> String {
-    let root = std::env::var("SystemRoot")
-        .or_else(|_| std::env::var("WINDIR"))
-        .unwrap_or_else(|_| r"C:\Windows".to_string());
-    let rel = match rel {
-        "powershell" | "powershell.exe" => r"WindowsPowerShell\v1.0\powershell.exe",
-        _ => rel,
-    };
-    format!(r"{root}\System32\{rel}")
-}
-
-#[cfg(test)]
-mod system32_tests {
-    #[test]
-    fn bare_tools_resolve_under_system32() {
-        let p = super::system32("icacls.exe");
-        assert!(p.ends_with(r"\System32\icacls.exe"), "{p}");
-        let ps = super::system32("powershell");
-        assert!(
-            ps.ends_with(r"\System32\WindowsPowerShell\v1.0\powershell.exe"),
-            "{ps}"
-        );
-    }
-}

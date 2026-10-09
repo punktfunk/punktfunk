@@ -74,23 +74,13 @@ fn write_private_key(path: &std::path::Path, bytes: &[u8]) -> Result<()> {
     Ok(())
 }
 
-/// `icacls.exe` under `SystemRoot`, else `WINDIR`, else `C:\Windows` — never a bare name,
-/// which `CreateProcess` would look up beside the exe first. `pf_paths::system32`'s rule.
-#[cfg(any(windows, test))]
-fn icacls_exe() -> String {
-    let root = std::env::var("SystemRoot")
-        .or_else(|_| std::env::var("WINDIR"))
-        .unwrap_or_else(|_| r"C:\Windows".to_string());
-    format!(r"{root}\System32\icacls.exe")
-}
-
 /// One `icacls` call with no console window: the WinUI shell has no console, so a
 /// plain spawn would open one. Failure is `restrict client key`.
 #[cfg(windows)]
 fn run_icacls(path: &std::path::Path, args: &[&str]) -> Result<()> {
     use std::os::windows::process::CommandExt;
     const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-    let status = std::process::Command::new(icacls_exe())
+    let status = std::process::Command::new(crate::paths::system32("icacls.exe"))
         .arg(path)
         .args(args)
         .creation_flags(CREATE_NO_WINDOW)
@@ -150,12 +140,6 @@ pub fn pair_with_host(
 mod tests {
     use super::*;
 
-    #[test]
-    fn icacls_is_named_under_system32_never_by_bare_name() {
-        let p = icacls_exe();
-        assert!(p.ends_with(r"\System32\icacls.exe"), "{p}");
-    }
-
     /// The key file is owner-only on create. Unix is mode 0600. Windows is an
     /// owner ACE with inherited access removed.
     #[test]
@@ -177,7 +161,7 @@ mod tests {
         #[cfg(windows)]
         {
             let saved = dir.join("key-acl.txt");
-            let out = std::process::Command::new(icacls_exe())
+            let out = std::process::Command::new(crate::paths::system32("icacls.exe"))
                 .arg(&key)
                 .arg("/save")
                 .arg(&saved)

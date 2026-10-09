@@ -119,6 +119,8 @@ pub mod settings;
 // sends; Android measures through its own JNI session instead.
 #[cfg(desktop)]
 pub mod speed;
+// The XDG and System32 path rules, as the host's pf-paths applies them.
+mod paths;
 #[cfg(portable)]
 pub mod trust;
 // Profiles on a box and the picker rule every shell shares (`design/profiles-and-seats.md` §10).
