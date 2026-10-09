@@ -39,7 +39,7 @@ pub fn push(
         .css_classes(["title-1"])
         .build();
     let caption = gtk::Label::builder()
-        .label(format!("The host sends a short burst to {}", req.name))
+        .label(format!("The host sends a short burst to {}", req.host.name))
         .css_classes(["dim-label"])
         .wrap(true)
         .build();
@@ -106,9 +106,13 @@ pub fn push(
             let result = if crate::shots::shot_scene().is_some() {
                 canned(progress)
             } else {
-                let fp = req.fp_hex.as_deref();
+                let fp = req.host.fp_hex.as_deref();
                 pf_client_core::speed::run_network_check_with(
-                    &req.addr, req.port, fp, identity, progress,
+                    &req.host.addr,
+                    req.host.port,
+                    fp,
+                    identity,
+                    progress,
                 )
             };
             let _ = tx.send_blocking(Probe::Done(result.map(Box::new)));
@@ -406,7 +410,7 @@ impl Target {
     fn resolve(req: &ConnectRequest, store: &Store) -> Target {
         let bound = store
             .hosts()
-            .resolve(req.fp_hex.as_deref(), &req.addr, req.port)
+            .resolve(req.host.fp_hex.as_deref(), &req.host.addr, req.host.port)
             .and_then(|h| h.preset_id.clone());
         let reference = match req.preset.as_deref() {
             Some("") => return Target::Global,

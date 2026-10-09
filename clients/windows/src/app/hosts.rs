@@ -10,6 +10,7 @@ use super::style::*;
 use super::{saved, Screen, Svc, Target};
 use crate::trust::{HostEdit, KnownHosts, Settings};
 use pf_client_core::discovery::DiscoveredHost;
+use pf_client_core::orchestrate::HostTarget;
 use pf_client_core::profiles::ProfilePick;
 use std::collections::HashMap;
 use windows_reactor::*;
@@ -554,26 +555,6 @@ fn edit_editor(
     ))
 }
 
-/// A saved host's plain dial: its fingerprint is already pinned, so this is the silent connect
-/// a tile's click makes. `preset: None` honours the host's own binding.
-///
-/// Free rather than inline in the tile loop so the shell's start screen can build one before
-/// any tile exists.
-pub(crate) fn saved_target(k: &pf_client_core::trust::KnownHost) -> Target {
-    Target {
-        name: k.name.clone(),
-        addr: k.addr.clone(),
-        port: k.port,
-        fp_hex: Some(k.fp_hex.clone()),
-        pair_optional: false,
-        mac: k.mac.clone(),
-        mgmt_port: k.mgmt_port,
-        preset: None,
-        launch: None,
-        link_profile: None,
-    }
-}
-
 pub(crate) fn hosts_page(props: &HostsProps, cx: &mut RenderCx) -> Element {
     let status = props.status.as_str();
     let (manual, set_manual) = cx.use_state(String::new());
@@ -752,7 +733,10 @@ fn saved_tiles(
         (&props.svc.ctx, &props.svc.set_screen, &props.svc.set_status);
     let hosts = props.hosts.as_slice();
     let mut tiles: Vec<Element> = Vec::new();
-    let target = saved_target(k);
+    let target = Target {
+        host: HostTarget::from(k),
+        ..Target::default()
+    };
     // Online = the last probe sweep reached it, and nothing else. An advert is NOT
     // presence: it is a cache entry with a 75-minute TTL that a suspending host sends no
     // goodbye for, so counting it kept a sleeping machine's pip green — and every wake
@@ -785,6 +769,7 @@ fn saved_tiles(
         pf_client_core::host_actions::refresh(
             &k.addr,
             target
+                .host
                 .mgmt_port
                 .unwrap_or(pf_client_core::library::DEFAULT_MGMT_PORT),
             &k.fp_hex,
@@ -1018,7 +1003,9 @@ fn saved_menu(
                     svc.set_screen.call(Screen::SpeedTest);
                 }
                 MenuAction::SendLogs => send_logs(&svc, &target),
-                MenuAction::Wake => crate::wol::wake(&target.mac, target.addr.parse().ok()),
+                MenuAction::Wake => {
+                    crate::wol::wake(&target.host.mac, target.host.addr.parse().ok())
+                }
                 MenuAction::HostAction(a) => run_host_action(&svc, &target, a),
                 MenuAction::CopyLink => {
                     let url = pf_client_core::deeplink::DeepLink::for_host(&link_host, None, None)
@@ -1090,18 +1077,19 @@ fn run_host_action(svc: &Svc, target: &Target, a: &pf_client_core::host_actions:
     }
     let identity = svc.ctx.identity.clone();
     let target = target.clone();
-    set_status.call(format!("{label} — asking {}…", target.name));
+    set_status.call(format!("{label} — asking {}…", target.host.name));
     let _ = std::thread::Builder::new()
         .name("punktfunk-hostaction".into())
         .spawn(move || {
             set_status.call(pf_client_core::host_actions::run(
-                &target.name,
-                &target.addr,
+                &target.host.name,
+                &target.host.addr,
                 target
+                    .host
                     .mgmt_port
                     .unwrap_or(pf_client_core::library::DEFAULT_MGMT_PORT),
                 &identity,
-                target.fp_hex.as_deref().unwrap_or_default(),
+                target.host.fp_hex.as_deref().unwrap_or_default(),
                 &action_id,
                 &label,
             ));
@@ -1114,19 +1102,20 @@ fn send_logs(svc: &Svc, target: &Target) {
     let identity = svc.ctx.identity.clone();
     let target = target.clone();
     let set_status = svc.set_status.clone();
-    set_status.call(format!("Sending logs to {}…", target.name));
+    set_status.call(format!("Sending logs to {}…", target.host.name));
     let _ = std::thread::Builder::new()
         .name("punktfunk-sendlogs".into())
         .spawn(move || {
             set_status.call(pf_client_core::logring::send_bundle(
                 "punktfunk-client",
-                &target.name,
-                &target.addr,
+                &target.host.name,
+                &target.host.addr,
                 target
+                    .host
                     .mgmt_port
                     .unwrap_or(pf_client_core::library::DEFAULT_MGMT_PORT),
                 &identity,
-                target.fp_hex.as_deref().unwrap_or_default(),
+                target.host.fp_hex.as_deref().unwrap_or_default(),
             ));
         });
 }
@@ -1245,16 +1234,17 @@ fn discovered_tiles(props: &HostsProps, known: &KnownHosts, hover: &Hover, cols:
     let mut tiles: Vec<Element> = Vec::new();
     for h in discovered {
         let target = Target {
-            name: h.name.clone(),
-            addr: h.addr.clone(),
-            port: h.port,
-            fp_hex: (!h.fp_hex.is_empty()).then(|| h.fp_hex.clone()),
+            host: HostTarget {
+                name: h.name.clone(),
+                addr: h.addr.clone(),
+                port: h.port,
+                fp_hex: (!h.fp_hex.is_empty()).then(|| h.fp_hex.clone()),
+                mac: h.mac.clone(),
+                mgmt_port: h.mgmt_port,
+                ..HostTarget::default()
+            },
             pair_optional: h.pair == "optional",
-            mac: h.mac.clone(),
-            mgmt_port: h.mgmt_port,
-            preset: None,
-            launch: None,
-            link_profile: None,
+            ..Target::default()
         };
         let (ctx2, ss, st) = (ctx.clone(), set_screen.clone(), set_status.clone());
         let (badge, kind) = if h.pair == "required" {
@@ -1348,21 +1338,16 @@ fn add_host_slot(
             sa.call(false);
             initiate(
                 &ctx2,
+                // A typed address: no pin, and no mgmt port until an advert teaches one, so the
+                // library falls back to 47990.
                 Target {
-                    name: addr.clone(),
-                    addr,
-                    port,
-                    fp_hex: None,
-                    pair_optional: false,
-                    mac: Vec::new(),
-                    // Added by hand, so nothing has told us where its mgmt API is: fall back to
-                    // 47990 (exactly today's behaviour) until an advert teaches us otherwise.
-                    // A host that moved its mgmt port AND is never visible on mDNS still needs the
-                    // host to announce the port in-band — see the note in `Target::mgmt_port`.
-                    mgmt_port: None,
-                    preset: None,
-                    launch: None,
-                    link_profile: None,
+                    host: HostTarget {
+                        name: addr.clone(),
+                        addr,
+                        port,
+                        ..HostTarget::default()
+                    },
+                    ..Target::default()
                 },
                 &ss,
                 &st,

@@ -5,11 +5,12 @@
 
 use super::card::os_icon_name;
 use super::model::{Preset, Status};
-use super::{saved_request, Act, HostRef, HostsMsg};
+use super::{Act, HostRef, HostsMsg};
 use crate::store::{Changed, Store};
 use crate::trust::{HostEdit, KnownHost, KnownHosts};
 use adw::prelude::*;
 use pf_client_core::host_actions::ActionInfo;
+use pf_client_core::orchestrate::HostTarget;
 use pf_client_core::start::StartIn;
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -50,7 +51,10 @@ impl Ctx {
     }
 
     fn request(&self) -> super::ConnectRequest {
-        saved_request(&self.current.borrow())
+        super::ConnectRequest {
+            host: HostTarget::from(&*self.current.borrow()),
+            ..Default::default()
+        }
     }
 
     /// Apply `f` to this record in the store; a failed save says so.
@@ -135,7 +139,7 @@ impl DetailPage {
             let ctx = ctx.clone();
             connect.connect_clicked(move |_| {
                 let req = ctx.request();
-                ctx.act(if !ctx.online.get() && !req.mac.is_empty() {
+                ctx.act(if !ctx.online.get() && !req.host.mac.is_empty() {
                     Act::WakeConnect(req)
                 } else {
                     Act::Connect(req)

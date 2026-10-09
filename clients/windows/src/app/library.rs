@@ -155,7 +155,11 @@ pub(crate) fn start_fetch(ctx: &Arc<AppCtx>, set_library: &AsyncSetState<Library
     std::thread::Builder::new()
         .name("pf-library".into())
         .spawn(move || {
-            let pin = target.fp_hex.as_deref().and_then(crate::trust::parse_hex32);
+            let pin = target
+                .host
+                .fp_hex
+                .as_deref()
+                .and_then(crate::trust::parse_hex32);
             let publish = |state: &LibraryState| {
                 if shared.library_gen.load(Ordering::SeqCst) == generation {
                     set.call(state.clone());
@@ -163,8 +167,8 @@ pub(crate) fn start_fetch(ctx: &Arc<AppCtx>, set_library: &AsyncSetState<Library
             };
             let mut state = LibraryState::default();
             let games = match library::fetch_games(
-                &target.addr,
-                target.mgmt_port.unwrap_or(library::DEFAULT_MGMT_PORT),
+                &target.host.addr,
+                target.host.mgmt_port.unwrap_or(library::DEFAULT_MGMT_PORT),
                 &identity,
                 pin,
             ) {
@@ -181,8 +185,8 @@ pub(crate) fn start_fetch(ctx: &Arc<AppCtx>, set_library: &AsyncSetState<Library
 
             // Seed cached posters; queue the art pipeline for the rest.
             let base = library::base_url(
-                &target.addr,
-                target.mgmt_port.unwrap_or(library::DEFAULT_MGMT_PORT),
+                &target.host.addr,
+                target.host.mgmt_port.unwrap_or(library::DEFAULT_MGMT_PORT),
             );
             let cache = art_cache_dir();
             let mut jobs: VecDeque<(String, Vec<String>)> = VecDeque::new();
@@ -215,8 +219,8 @@ pub(crate) fn start_fetch(ctx: &Arc<AppCtx>, set_library: &AsyncSetState<Library
             publish(&state);
 
             // After the titles: a slow `/status` must not hold the shelf back.
-            let mgmt = target.mgmt_port.unwrap_or(library::DEFAULT_MGMT_PORT);
-            for g in library::fetch_running(&target.addr, mgmt, &identity, pin) {
+            let mgmt = target.host.mgmt_port.unwrap_or(library::DEFAULT_MGMT_PORT);
+            for g in library::fetch_running(&target.host.addr, mgmt, &identity, pin) {
                 if let Some(id) = g.app_id.clone().filter(|_| g.is_up()) {
                     *state.running.entry(id).or_default() |= g.endable;
                 }
@@ -290,9 +294,9 @@ const MENU_END_GAME: &str = "End game";
 fn game_link(target: &super::Target, game_id: &str) -> Option<String> {
     pf_client_core::deeplink::saved_host_link(
         &crate::trust::KnownHosts::load(),
-        target.fp_hex.as_deref(),
-        &target.addr,
-        target.port,
+        target.host.fp_hex.as_deref(),
+        &target.host.addr,
+        target.host.port,
         target.preset.as_deref().filter(|p| !p.is_empty()),
         Some(game_id),
     )
@@ -515,10 +519,10 @@ pub(crate) fn library_page(props: &LibraryProps, cx: &mut RenderCx) -> Element {
             ss.call(Screen::Hosts)
         }
     });
-    let title = if target.name.is_empty() {
+    let title = if target.host.name.is_empty() {
         "Game library".to_string()
     } else {
-        format!("Game library \u{00B7} {}", target.name)
+        format!("Game library \u{00B7} {}", target.host.name)
     };
     let mut body: Vec<Element> = vec![page_header(&title, back_btn)];
     if let Some(said) = &props.end_game.said {
@@ -684,10 +688,14 @@ pub(crate) fn library_page(props: &LibraryProps, cx: &mut RenderCx) -> Element {
                     .name("punktfunk-endgame".into())
                     .spawn(move || {
                         let target = ctx2.shared.target.lock().unwrap().clone();
-                        let pin = target.fp_hex.as_deref().and_then(crate::trust::parse_hex32);
-                        let mgmt = target.mgmt_port.unwrap_or(library::DEFAULT_MGMT_PORT);
+                        let pin = target
+                            .host
+                            .fp_hex
+                            .as_deref()
+                            .and_then(crate::trust::parse_hex32);
+                        let mgmt = target.host.mgmt_port.unwrap_or(library::DEFAULT_MGMT_PORT);
                         let outcome =
-                            library::end_game(&target.addr, mgmt, &ctx2.identity, pin, &id);
+                            library::end_game(&target.host.addr, mgmt, &ctx2.identity, pin, &id);
                         tracing::info!(app = %id, ?outcome, "end game");
                         se.call(EndGameUi {
                             ask: None,

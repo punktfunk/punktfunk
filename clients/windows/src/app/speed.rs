@@ -61,9 +61,9 @@ pub(crate) fn speed_page(props: &SpeedProps, cx: &mut RenderCx) -> Element {
                 .name("pf-speedtest".into())
                 .spawn(move || {
                     let outcome = pf_client_core::speed::run_network_check_with(
-                        &target.addr,
-                        target.port,
-                        target.fp_hex.as_deref(),
+                        &target.host.addr,
+                        target.host.port,
+                        target.host.fp_hex.as_deref(),
                         identity,
                         |_| {},
                     );
@@ -99,10 +99,10 @@ pub(crate) fn speed_page(props: &SpeedProps, cx: &mut RenderCx) -> Element {
             .on_click(move || ss.call(Screen::Hosts))
             .horizontal_alignment(HorizontalAlignment::Center)
     };
-    let headline = if target.name.is_empty() {
+    let headline = if target.host.name.is_empty() {
         "Network speed test".to_string()
     } else {
-        format!("Network speed test \u{00B7} {}", target.name)
+        format!("Network speed test \u{00B7} {}", target.host.name)
     };
 
     match &props.state {
@@ -142,7 +142,11 @@ pub(crate) fn speed_page(props: &SpeedProps, cx: &mut RenderCx) -> Element {
             // it: the one-off this test was started with, else the host's binding.
             let target = ctx.shared.target.lock().unwrap().clone();
             let bound = KnownHosts::load()
-                .resolve(target.fp_hex.as_deref(), &target.addr, target.port)
+                .resolve(
+                    target.host.fp_hex.as_deref(),
+                    &target.host.addr,
+                    target.host.port,
+                )
                 .and_then(|h| h.preset_id.clone());
             let preset = match target.preset.as_deref() {
                 Some("") => None,

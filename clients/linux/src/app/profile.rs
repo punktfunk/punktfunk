@@ -62,7 +62,7 @@ impl AppModel {
         let (identity, out) = (self.identity.clone(), sender.input_sender().clone());
         let pin = trust::parse_hex32(&fp_hex);
         std::thread::spawn(move || {
-            let listed = profiles::fetch_within(&req.addr, mgmt, &identity, pin, ASK_BUDGET);
+            let listed = profiles::fetch_within(&req.host.addr, mgmt, &identity, pin, ASK_BUDGET);
             let _ = out.send(done(req, fp_hex, listed));
         });
     }
@@ -259,7 +259,7 @@ impl AppModel {
         let mgmt = self.mgmt_port(&fp_hex);
         let (identity, pin) = (self.identity.clone(), trust::parse_hex32(&fp_hex));
         let (out, flag) = (sender.input_sender().clone(), stop.clone());
-        let (addr, watched) = (req.addr.clone(), row.clone());
+        let (addr, watched) = (req.host.addr.clone(), row.clone());
         std::thread::spawn(move || {
             profiles::watch_seat(&addr, mgmt, &identity, pin, &watched, &flag, |row| {
                 let stop = flag.clone();
@@ -342,7 +342,7 @@ impl AppModel {
 
     /// The host refused the saved profile: drop the pick so the next connect asks again.
     pub(super) fn forget_profile(&self, req: &ConnectRequest) {
-        if let Some(fp_hex) = &req.fp_hex {
+        if let Some(fp_hex) = req.host.pin() {
             self.save_profile(fp_hex, None);
         }
     }
@@ -379,7 +379,7 @@ impl AppModel {
             _ => None,
         };
         let dialog = adw::AlertDialog::new(
-            Some(&format!("Who\u{2019}s playing on {}?", req.name)),
+            Some(&format!("Who\u{2019}s playing on {}?", req.host.name)),
             body.as_deref(),
         );
         dialog.add_response("cancel", if rows.is_some() { "Cancel" } else { "Close" });

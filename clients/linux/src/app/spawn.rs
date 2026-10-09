@@ -49,13 +49,8 @@ pub use orchestrate::{session_binary, CancelHandle};
 fn plan_for(req: &ConnectRequest, fp_hex: &str, tofu: bool, opts: &SpawnOpts) -> ConnectPlan {
     let mut plan = ConnectPlan::for_target(
         HostTarget {
-            name: req.name.clone(),
-            addr: req.addr.clone(),
-            port: req.port,
             fp_hex: Some(fp_hex.to_string()),
-            mac: req.mac.clone(),
-            id: None,
-            mgmt_port: None, // this shell resolves the library port itself (`mgmt_port_for`)
+            ..req.host.clone()
         },
         req.launch.clone(),
         // A plain card click carries no one-off: the resolver honors the host's own binding
@@ -192,15 +187,8 @@ mod tests {
         known.save().unwrap();
 
         let req = ConnectRequest {
-            name: "Desk".into(),
-            addr: "192.168.1.50".into(),
-            port: 9777,
-            fp_hex: Some("a".repeat(64)),
-            pair_optional: false,
-            launch: None,
-            mac: vec![],
-            preset: None,
-            profile: None,
+            host: HostTarget::from(&known.hosts[0]),
+            ..ConnectRequest::default()
         };
         let opts = SpawnOpts::default();
 

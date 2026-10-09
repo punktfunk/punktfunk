@@ -20,26 +20,22 @@ use gtk::{gio, glib};
 pub use model::Phase;
 use model::{Band, CardModel, Live, Preset, Status};
 use pf_client_core::host_order;
+use pf_client_core::orchestrate::HostTarget;
 use relm4::prelude::*;
 use std::collections::HashMap;
 use std::rc::Rc;
 
-/// What the user asked to connect to. `fp_hex` comes from the mDNS TXT record when the
-/// host was discovered (drives the trust decision *before* connecting); manual entries
-/// have none. `pair_optional` is true ONLY when a discovered host advertised
-/// `pair=optional` — the sole case in which the reduced-security TOFU path may be
-/// offered; every other case mandates PIN pairing.
-#[derive(Clone, Debug, PartialEq)]
+/// What the user asked to connect to: the host, plus this connect's own asks. A saved card's
+/// `host` is [`HostTarget::from`] its record; a discovered one's carries the advertised pin,
+/// which drives the trust decision *before* connecting. `pair_optional` is true ONLY when a
+/// discovered host advertised `pair=optional` — the sole case in which the reduced-security
+/// TOFU path may be offered; every other case mandates PIN pairing.
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct ConnectRequest {
-    pub name: String,
-    pub addr: String,
-    pub port: u16,
-    pub fp_hex: Option<String>,
+    pub host: HostTarget,
     pub pair_optional: bool,
     /// A library title id to launch on connect.
     pub launch: Option<String>,
-    /// Wake-on-LAN MAC(s) for this host. Empty when none is known.
-    pub mac: Vec<String>,
     /// A ONE-OFF settings preset for this connect ("Connect with ▸ X"): `Some(id)` overrides
     /// the host's binding for this launch, `Some("")` forces the global defaults on a bound
     /// host, `None` honors the binding. It never rebinds anything — the host's default changes
@@ -49,33 +45,14 @@ pub struct ConnectRequest {
     pub profile: Option<String>,
 }
 
-/// A saved host's plain connect: its fingerprint is already pinned, so this is the silent
-/// pinned dial a card's click makes. `preset: None` honours the host's own binding.
-///
-/// Free rather than a method so the shell's start screen can build one before any card exists.
-pub fn saved_request(k: &trust::KnownHost) -> ConnectRequest {
-    ConnectRequest {
-        name: k.name.clone(),
-        addr: k.addr.clone(),
-        port: k.port,
-        // `None` for a record saved by address and never paired, so `card_key` keys it by
-        // address. Same shape the discovered cards use.
-        fp_hex: (!k.fp_hex.is_empty()).then(|| k.fp_hex.clone()),
-        pair_optional: false,
-        launch: None,
-        mac: k.mac.clone(),
-        preset: None,
-        profile: None,
-    }
-}
-
 impl ConnectRequest {
-    /// The key the page tracks an in-flight connect under (the card that swaps its
-    /// avatar for a spinner): the fingerprint when known, else the address.
+    /// The key the page tracks an in-flight connect under (the card that swaps its avatar for
+    /// a spinner): the pin, else the address, as [`KnownHost::card_key`] keys the card.
     pub fn card_key(&self) -> String {
-        self.fp_hex
-            .clone()
-            .unwrap_or_else(|| format!("{}:{}", self.addr, self.port))
+        self.host.pin().map_or_else(
+            || format!("{}:{}", self.host.addr, self.host.port),
+            str::to_string,
+        )
     }
 }
 
@@ -799,7 +776,11 @@ impl HostsPage {
     /// an earlier advert taught the saved record. Over a VPN or any multicast-dead network there
     /// is no advert, and a host that moved off 47990 would otherwise lose its library there.
     fn mgmt_port_for(&self, req: &ConnectRequest) -> Option<u16> {
-        self.learned_mgmt_port(req.fp_hex.as_deref().unwrap_or(""), &req.addr, req.port)
+        self.learned_mgmt_port(
+            req.host.fp_hex.as_deref().unwrap_or(""),
+            &req.host.addr,
+            req.host.port,
+        )
     }
 
     fn learned_mgmt_port(&self, fp: &str, addr: &str, port: u16) -> Option<u16> {

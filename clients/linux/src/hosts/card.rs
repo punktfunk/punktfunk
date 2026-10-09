@@ -91,8 +91,8 @@ fn saved_ref(m: &CardModel) -> Option<HostRef> {
     };
     Some(HostRef {
         id: id.clone(),
-        addr: m.request.addr.clone(),
-        port: m.request.port,
+        addr: m.request.host.addr.clone(),
+        port: m.request.host.port,
     })
 }
 
@@ -238,7 +238,7 @@ fn menu(
         add("details", Box::new(move || Act::Details(host.clone())));
     }
     {
-        let (mac, addr) = (m.request.mac.clone(), m.request.addr.clone());
+        let (mac, addr) = (m.request.host.mac.clone(), m.request.host.addr.clone());
         add(
             "wake",
             Box::new(move || Act::Wake {
@@ -298,7 +298,7 @@ fn menu(
     if *paired {
         menu.append(Some("Browse Library"), Some("card.library"));
     }
-    if !m.status.live() && !m.request.mac.is_empty() {
+    if !m.status.live() && !m.request.host.mac.is_empty() {
         menu.append(Some("Wake Host"), Some("card.wake"));
     }
     if profile.is_some() {

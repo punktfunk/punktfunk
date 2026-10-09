@@ -9,10 +9,9 @@ use super::style::*;
 use super::{AppCtx, Screen, Svc, Target};
 use crate::trust::{self, KnownHosts};
 use pf_client_core::orchestrate::{
-    trust_route, wake_parked_line, CancelHandle, ConnectOutcome, TrustRoute, WakeOutcome, WakeWait,
-    WAKE_PARKED_HINT,
+    self, trust_route, wake_parked_line, CancelHandle, ConnectOutcome, ExitRoute, HostTarget,
+    TrustRoute, WakeOutcome, WakeWait, FINGERPRINT_CHANGED, WAKE_PARKED_HINT,
 };
-use punktfunk_core::reject::RejectReason;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -30,18 +29,25 @@ pub(crate) fn initiate(
 
 /// Dial-first for a saved host that isn't advertising but has a known MAC: the magic packet goes
 /// out and the dial starts at once. mDNS absence is not unreachable: a host on a routed network
-/// (Tailscale, VPN, another subnet) never advertises. Only a failed dial falls into the visible
-/// [`wake_and_connect`] wait.
+/// (Tailscale, VPN, another subnet) never advertises. With auto-wake on, read once here, a
+/// failed dial falls into the visible [`wake_and_connect`] wait.
 pub(crate) fn initiate_waking(
     ctx: &Arc<AppCtx>,
     target: Target,
     set_screen: &AsyncSetState<Screen>,
     set_status: &AsyncSetState<String>,
 ) {
-    if ctx.settings.lock().unwrap().auto_wake {
-        crate::wol::wake(&target.mac, target.addr.parse().ok());
+    let wake = send_wake(ctx, &target);
+    initiate_opts(ctx, target, None, set_screen, set_status, wake)
+}
+
+/// The dial-first magic packet, when auto-wake is on. `true` arms the wake fallback.
+fn send_wake(ctx: &Arc<AppCtx>, target: &Target) -> bool {
+    let on = ctx.settings.lock().unwrap().auto_wake;
+    if on {
+        crate::wol::wake(&target.host.mac, target.host.addr.parse().ok());
     }
-    initiate_opts(ctx, target, None, set_screen, set_status, true)
+    on
 }
 
 /// Opens the surface [`trust_route`] picks: the stored pin dials, a changed fingerprint or an
@@ -59,13 +65,18 @@ fn initiate_opts(
     // "Streaming to X") — stash it up front, not just on the pairing route.
     *ctx.shared.target.lock().unwrap() = target.clone();
     let known = KnownHosts::load();
-    let fp = target.fp_hex.as_deref();
-    let pin = match trust_route(&known, fp, &target.addr, target.port, target.pair_optional) {
+    let fp = target.host.fp_hex.as_deref();
+    let pin = match trust_route(
+        &known,
+        fp,
+        &target.host.addr,
+        target.host.port,
+        target.pair_optional,
+    ) {
         TrustRoute::Pinned(fp_hex) => trust::parse_hex32(&fp_hex),
         TrustRoute::OfferTofu(_) => None,
         TrustRoute::FingerprintChanged => {
-            set_status
-                .call("Host fingerprint changed — re-pair with a PIN to continue".to_string());
+            set_status.call(FINGERPRINT_CHANGED.to_string());
             set_screen.call(Screen::Pair);
             return;
         }
@@ -94,9 +105,9 @@ fn ask_then_connect(
 ) {
     let fp = pin
         .map(|p| trust::hex(&p))
-        .or_else(|| target.fp_hex.clone());
+        .or_else(|| target.host.fp_hex.clone());
     let saved = KnownHosts::load()
-        .resolve(fp.as_deref(), &target.addr, target.port)
+        .resolve(fp.as_deref(), &target.host.addr, target.host.port)
         .filter(|h| h.paired)
         .map(|h| h.profile.clone());
     let Some(saved) = saved else {
@@ -183,10 +194,8 @@ pub(crate) fn initiate_launch_waking(
     set_screen: &AsyncSetState<Screen>,
     set_status: &AsyncSetState<String>,
 ) {
-    if ctx.settings.lock().unwrap().auto_wake {
-        crate::wol::wake(&target.mac, target.addr.parse().ok());
-    }
-    initiate_opts(ctx, target, Some(launch), set_screen, set_status, true)
+    let wake = send_wake(ctx, &target);
+    initiate_opts(ctx, target, Some(launch), set_screen, set_status, wake)
 }
 
 /// Tunables that differ between the normal connect and the no-PIN "request access" flow.
@@ -209,11 +218,9 @@ pub(crate) struct ConnectOpts {
     /// session may already own.
     cancel: Option<Arc<AtomicBool>>,
     /// Fall into the Wake-on-LAN wait ([`wake_and_connect`]) when THIS dial fails with a plain
-    /// connect failure (not a trust rejection). Set by the dial-first path for a saved host that
-    /// isn't advertising but has a known MAC — the dial is attempted unconditionally (mDNS
-    /// absence ≠ unreachable: routed/Tailscale hosts never advertise here), and only a real
-    /// failure escalates to the visible "Waking…" wait. The wait's own redial clears the flag,
-    /// so it can't loop.
+    /// connect failure (not a trust rejection). Set by the dial-first path, with auto-wake on,
+    /// for a saved host that isn't advertising but has a known MAC. The wait's own redial
+    /// clears the flag, so it can't loop.
     wake_on_fail: bool,
     /// A library title id (`steam:570`, …) the host launches during the connect handshake —
     /// the library page's tap-to-play, passed to the spawned session child as `--launch`.
@@ -269,12 +276,10 @@ fn connect_with(
     connect_spawn(ctx, target, pin, set_screen, set_status, opts)
 }
 
-/// Spawn-mode connect: run the stream in the punktfunk-session binary and translate its
-/// stdout contract into the app's connect-flow navigation. The child
-/// NEVER connects unpinned — a stored/ceremony pin, else the host's advertised
-/// fingerprint (TOFU: persisted once the child reports ready, which proves the host
-/// really holds that identity, mirroring the GTK shell); no fingerprint at all routes to
-/// the PIN ceremony.
+/// Spawn-mode connect: run the stream in the punktfunk-session binary and turn its events
+/// into screens. The child never connects unpinned: a stored or ceremony pin, else the
+/// advertised fingerprint (TOFU, saved once ready proves the host holds it); no fingerprint
+/// routes to the PIN ceremony. Its exit goes where [`orchestrate::exit_route`] says.
 fn connect_spawn(
     ctx: &Arc<AppCtx>,
     target: &Target,
@@ -286,6 +291,7 @@ fn connect_spawn(
     let tofu = pin.is_none();
     let fp_hex = pin.map(|p| trust::hex(&p)).or_else(|| {
         target
+            .host
             .fp_hex
             .clone()
             .filter(|f| trust::parse_hex32(f).is_some())
@@ -315,8 +321,11 @@ fn connect_spawn(
     let shared = ctx.shared.clone();
     let (ss, st) = (set_screen.clone(), set_status.clone());
     let target = target.clone();
-    // The closure owns `target`/`fp_hex`; the call itself borrows copies.
-    let (addr, port, fp_arg) = (target.addr.clone(), target.port, fp_hex.clone());
+    // The closure owns `target`/`fp_hex`; the call takes copies, the pin it dials included.
+    let host = HostTarget {
+        fp_hex: Some(fp_hex.clone()),
+        ..target.host.clone()
+    };
     let preset_arg = target.preset.clone();
     let profile_arg = opts.profile.clone();
     // The launch id: an explicit opts pick (the library's tap-to-play), else one riding
@@ -328,9 +337,7 @@ fn connect_spawn(
         launch_arg.clone(),
     );
     let spawned = crate::spawn::spawn_session(
-        &addr,
-        port,
-        &fp_arg,
+        host.clone(),
         opts.connect_timeout.as_secs(),
         launch_arg.as_deref(),
         preset_arg.as_deref(),
@@ -352,18 +359,12 @@ fn connect_spawn(
                 SpawnEvent::Ready => {
                     // Ready proves the host answered, so no later exit is the asleep case.
                     wake_on_fail = false;
-                    // Request-access records the host PAIRED; plain TOFU pins it *unpaired*
-                    // (ready proves the host holds the advertised fingerprint). A failed save
-                    // waits on the status line, which a clean exit leaves for the host list.
+                    // Request access saves the host PAIRED, plain TOFU pinned but unpaired. A
+                    // failed save waits on the status line, which a clean exit leaves for the
+                    // host list.
                     if (persist_paired || tofu)
-                        && let Err(e) = trust::persist_host(
-                            &target.name,
-                            &target.addr,
-                            target.port,
-                            &fp_hex,
-                            persist_paired,
-                            &target.mac,
-                        )
+                        && let Err(e) =
+                            orchestrate::persist_on_ready(&target.host, &fp_hex, persist_paired)
                     {
                         st.call(format!("Connected, but couldn't save — {e:#}"));
                     }
@@ -374,69 +375,46 @@ fn connect_spawn(
                     ss.call(Screen::Stream);
                 }
                 SpawnEvent::Stats(s) => *shared.stats.lock().unwrap() = Some(*s),
-                SpawnEvent::Exited(outcome) => match outcome {
-                    ConnectOutcome::TrustRejected(msg) => {
-                        // Pinned-fingerprint mismatch / pairing required → re-pair via
-                        // the PIN screen. The host ANSWERED, so never the wake fallback.
-                        st.call(msg);
-                        *shared.target.lock().unwrap() = target.clone();
-                        ss.call(Screen::Pair);
-                    }
-                    // The host answered and refused: never a wake. A profile it no longer has is
-                    // forgotten, after one more look at its list.
-                    ConnectOutcome::Refused { msg, reason } => {
-                        let unknown = reason == RejectReason::ProfileUnknown;
-                        let give_up = {
-                            let (fp_hex, target) = (fp_hex.clone(), target.clone());
-                            let (ss, st) = (ss.clone(), st.clone());
-                            move || {
-                                if unknown {
-                                    profiles::save_pick(
-                                        Some(&fp_hex),
-                                        &target.addr,
-                                        target.port,
-                                        None,
-                                    );
-                                }
-                                st.call(msg);
-                                ss.call(Screen::Hosts);
-                            }
-                        };
-                        match retry.clone().filter(|_| unknown) {
-                            Some(id) => {
-                                let target = Target {
-                                    launch: retry_launch.clone(),
-                                    ..target.clone()
-                                };
-                                redial_profile(&ctx2, target, pin, id, &ss, &st, give_up);
-                            }
-                            None => give_up(),
+                SpawnEvent::Exited(outcome) => {
+                    let forget_then = |msg: String| {
+                        let (host, ss, st) = (host.clone(), ss.clone(), st.clone());
+                        move || {
+                            profiles::save_pick(&host, None);
+                            st.call(msg);
+                            ss.call(Screen::Hosts);
                         }
+                    };
+                    let log = crate::spawn::log_hint();
+                    match orchestrate::exit_route(
+                        &outcome,
+                        tofu,
+                        retry.as_deref(),
+                        wake_on_fail,
+                        &log,
+                    ) {
+                        // The user closed the stream window, or Disconnect killed it.
+                        ExitRoute::Silent => ss.call(Screen::Hosts),
+                        ExitRoute::Banner(msg) => {
+                            st.call(msg);
+                            ss.call(Screen::Hosts);
+                        }
+                        ExitRoute::Repair(msg) => {
+                            st.call(msg);
+                            *shared.target.lock().unwrap() = target.clone();
+                            ss.call(Screen::Pair);
+                        }
+                        ExitRoute::RedialProfile { id, msg } => {
+                            let target = Target {
+                                launch: retry_launch.clone(),
+                                ..target.clone()
+                            };
+                            let give_up = forget_then(msg);
+                            redial_profile(&ctx2, target, pin, id, &ss, &st, give_up);
+                        }
+                        ExitRoute::ForgetProfileThen(msg) => forget_then(msg)(),
+                        ExitRoute::Wake => wake_and_connect(&ctx2, target.clone(), &ss, &st),
                     }
-                    // The dial-first attempt to a non-advertising host failed — it may
-                    // genuinely be asleep. Only with auto-wake on: the wait is worth showing
-                    // only while magic packets are going out to end it.
-                    o if o.warrants_wake()
-                        && wake_on_fail
-                        && ctx2.settings.lock().unwrap().auto_wake =>
-                    {
-                        wake_and_connect(&ctx2, target.clone(), &ss, &st);
-                    }
-                    ConnectOutcome::ConnectFailed(msg) | ConnectOutcome::Ended(Some(msg)) => {
-                        st.call(msg);
-                        ss.call(Screen::Hosts);
-                    }
-                    // A child that said nothing AND failed gets the exit code, so the return
-                    // to the host list is never unexplained.
-                    ConnectOutcome::RendererFailed { code } => {
-                        st.call(crate::spawn::renderer_failed_banner(code));
-                        ss.call(Screen::Hosts);
-                    }
-                    // The user closed the stream window, or Disconnect killed it.
-                    ConnectOutcome::Ended(None) | ConnectOutcome::Cancelled => {
-                        ss.call(Screen::Hosts);
-                    }
-                },
+                }
             }
         },
     );
@@ -486,7 +464,7 @@ pub(crate) fn open_console(
                     | ConnectOutcome::Refused { msg, .. }
                     | ConnectOutcome::Ended(Some(msg)) => st.call(msg),
                     ConnectOutcome::RendererFailed { code } => {
-                        st.call(crate::spawn::renderer_failed_banner(code))
+                        st.call(ConnectOutcome::died_banner(code, &crate::spawn::log_hint()))
                     }
                     ConnectOutcome::Ended(None) | ConnectOutcome::Cancelled => {}
                 }
@@ -508,7 +486,7 @@ pub(crate) fn request_access(props: &Svc, target: &Target) {
     let ctx = &props.ctx;
     // Pin the advertised certificate for a discovered host (defence against a host impostor while
     // we wait); a manually-typed host has no advertised fingerprint, so trust-on-first-use.
-    let pin = target.fp_hex.as_deref().and_then(trust::parse_hex32);
+    let pin = target.host.fp_hex.as_deref().and_then(trust::parse_hex32);
     // A fresh cancel flag per request, installed where the waiting screen's Cancel button can read
     // it back; this request's event loop captures the same `Arc` (via ConnectOpts) below.
     let cancel = Arc::new(AtomicBool::new(false));
@@ -566,10 +544,14 @@ fn wake_and_connect(
             if cancel.load(Ordering::SeqCst) {
                 return;
             }
-            let resolved = adverts.poll(target.fp_hex.as_deref(), &target.addr, target.port);
+            let resolved = adverts.poll(
+                target.host.fp_hex.as_deref(),
+                &target.host.addr,
+                target.host.port,
+            );
             let tick = wait.tick(resolved.is_some());
             if tick.send_packet {
-                crate::wol::wake(&target.mac, target.addr.parse().ok());
+                crate::wol::wake(&target.host.mac, target.host.addr.parse().ok());
             }
             match tick.outcome {
                 Some(WakeOutcome::Online) => {
@@ -578,10 +560,10 @@ fn wake_and_connect(
                     // moves only when the probe sweep hears its pin there — an advert's
                     // address can be another machine's.
                     if let Some((addr, port)) =
-                        resolved.filter(|(a, p)| *a != target.addr || *p != target.port)
+                        resolved.filter(|(a, p)| *a != target.host.addr || *p != target.host.port)
                     {
-                        target.addr = addr;
-                        target.port = port;
+                        target.host.addr = addr;
+                        target.host.port = port;
                     }
                     initiate(&ctx, target, &ss, &st);
                     return;
@@ -599,7 +581,7 @@ fn wake_and_connect(
 
 /// The plain "Connecting…" screen shown while the session worker handshakes. No hooks.
 pub(crate) fn connecting_page(ctx: &Arc<AppCtx>, status: &str) -> Element {
-    let target_name = ctx.shared.target.lock().unwrap().name.clone();
+    let target_name = ctx.shared.target.lock().unwrap().host.name.clone();
     let headline = if target_name.is_empty() {
         "Connecting\u{2026}".to_string()
     } else {
@@ -621,7 +603,7 @@ pub(crate) fn request_access_page(
     ctx: &Arc<AppCtx>,
     set_screen: &AsyncSetState<Screen>,
 ) -> Element {
-    let target_name = ctx.shared.target.lock().unwrap().name.clone();
+    let target_name = ctx.shared.target.lock().unwrap().host.name.clone();
     let headline = if target_name.is_empty() {
         "Waiting for approval\u{2026}".to_string()
     } else {
@@ -655,7 +637,7 @@ pub(crate) fn request_access_page(
 /// poll loop waits for the woken host to reappear on mDNS, plus a Cancel that returns to the host
 /// list and trips the shared cancel flag so the poll loop stops re-sending and tears down. No hooks.
 pub(crate) fn waking_page(ctx: &Arc<AppCtx>, set_screen: &AsyncSetState<Screen>) -> Element {
-    let target_name = ctx.shared.target.lock().unwrap().name.clone();
+    let target_name = ctx.shared.target.lock().unwrap().host.name.clone();
     let headline = if target_name.is_empty() {
         "Waking the host\u{2026}".to_string()
     } else {
@@ -714,7 +696,7 @@ pub(crate) fn wake_parked_page(
         .horizontal_alignment(HorizontalAlignment::Center);
     notice_page(
         None,
-        &wake_parked_line(&target.name),
+        &wake_parked_line(&target.host.name),
         WAKE_PARKED_HINT,
         vec![actions.into()],
     )
