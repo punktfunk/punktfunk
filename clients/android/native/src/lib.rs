@@ -16,14 +16,12 @@
 //! Wi-Fi `MulticastLock` + permission UX, Keystore identity).
 //!
 //! JNI symbols map to `io.unom.punktfunk.kit.NativeBridge` in the `:kit` Gradle module
-//! (`clients/android`). The surface: the native-link proof (`abiVersion`/`coreVersion`), mDNS host
-//! discovery ([`discovery`]), and the session lifecycle in [`session`] — connect/pair + the trust
-//! surface, the per-plane pumps (video → AMediaCodec, audio ↔ AAudio, mic uplink), input, and
-//! rumble/HID feedback ([`feedback`]), and mid-session mode renegotiation.
+//! (`clients/android`). The surface: mDNS host discovery ([`discovery`]) and the session lifecycle
+//! in [`session`] — connect/pair + the trust surface, the per-plane pumps (video → AMediaCodec,
+//! audio ↔ AAudio, mic uplink), input, and rumble/HID feedback ([`feedback`]), and mid-session
+//! mode renegotiation.
 
-use jni::errors::LogErrorAndDefault;
-use jni::objects::{JObject, JString};
-use jni::sys::jint;
+use jni::objects::JObject;
 use jni::EnvUnowned;
 
 #[cfg(target_os = "android")]
@@ -109,7 +107,7 @@ impl log::Log for RingTee {
 pub extern "system" fn JNI_OnLoad(
     _vm: *mut jni::sys::JavaVM,
     _reserved: *mut std::ffi::c_void,
-) -> jint {
+) -> jni::sys::jint {
     let logcat = android_logger::AndroidLogger::new(
         android_logger::Config::default()
             .with_max_level(log::LevelFilter::Info)
@@ -124,27 +122,6 @@ pub extern "system" fn JNI_OnLoad(
         punktfunk_core::ABI_VERSION
     );
     jni::sys::JNI_VERSION_1_6
-}
-
-/// `NativeBridge.abiVersion(): Int` — the core's C-ABI version. A non-error return is the
-/// scaffold's proof that `System.loadLibrary` found the `.so`, the JNI symbol resolved, and the
-/// linked `punktfunk-core` is the one we expect.
-#[unsafe(no_mangle)]
-pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_abiVersion(
-    _env: EnvUnowned,
-    _this: JObject,
-) -> jint {
-    punktfunk_core::ABI_VERSION as jint
-}
-
-/// `NativeBridge.coreVersion(): String` — the crate version, proving JNI string marshaling works.
-#[unsafe(no_mangle)]
-pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_coreVersion<'local>(
-    mut env: EnvUnowned<'local>,
-    _this: JObject<'local>,
-) -> JString<'local> {
-    env.with_env(|env| env.new_string(env!("CARGO_PKG_VERSION")))
-        .resolve::<LogErrorAndDefault>()
 }
 
 /// `NativeBridge.nativeConsoleAvailable(): Boolean` — whether this `.so` carries the Skia

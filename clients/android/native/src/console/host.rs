@@ -218,7 +218,8 @@ impl ConsoleHost {
         })
     }
 
-    /// Signal the render loop and join it once. The final table-held `Arc` calls this from `Drop`.
+    /// Signal the render loop and join it once, from `Drop`. The handle table never drops a
+    /// console, so this guards ownership rather than a live teardown path.
     fn stop(&mut self) {
         self.shared.send(Cmd::Quit);
         if let Some(t) = self.thread.take() {
