@@ -18,7 +18,7 @@ use super::dualsense_proto::{
     DS_FEATURE_CALIBRATION, DS_FEATURE_FIRMWARE, DS_INPUT_REPORT_LEN, DS_PRODUCT, DS_VENDOR,
     DUALSENSE_RDESC,
 };
-use super::steam_usbip::{attach_device, boxed, UsbipAttachment};
+use super::usbip::{attach_device, boxed, ep, hid_class_descriptor, UsbipAttachment};
 use anyhow::Result;
 use std::any::Any;
 use std::sync::mpsc::{sync_channel, Receiver, SyncSender};
@@ -87,31 +87,6 @@ fn clear_audio_rx(pad: u8) {
             *slot = None;
         }
     }
-}
-
-fn ep(address: u8, attributes: u8, max_packet_size: u16, interval: u8) -> UsbEndpoint {
-    UsbEndpoint {
-        address,
-        attributes,
-        max_packet_size,
-        interval,
-    }
-}
-
-/// HID class descriptor for interface 3. Hardware is `bcdHID 1.11`, country 0 — the Deck
-/// helper in [`super::steam_usbip`] bakes 1.10/33, so this is a local copy.
-fn hid_class_descriptor(report_len: usize) -> Vec<u8> {
-    let l = report_len as u16;
-    #[rustfmt::skip]
-    let d = vec![
-        0x09, 0x21,       // bLength, bDescriptorType (HID)
-        0x11, 0x01,       // bcdHID 1.11
-        0x00,             // bCountryCode
-        0x01,             // bNumDescriptors
-        0x22,             // bDescriptorType (Report)
-        (l & 0xff) as u8, (l >> 8) as u8, // wDescriptorLength
-    ];
-    d
 }
 
 /// Interface 0 Audio Control class descriptors, verbatim from hardware. `wTotalLength`
@@ -329,7 +304,7 @@ impl std::fmt::Debug for HidHandler {
 
 impl UsbInterfaceHandler for HidHandler {
     fn get_class_specific_descriptor(&self) -> Vec<u8> {
-        hid_class_descriptor(DUALSENSE_RDESC.len())
+        hid_class_descriptor(0x0111, 0, DUALSENSE_RDESC.len()) // as hardware
     }
 
     fn handle_urb(
@@ -512,7 +487,7 @@ pub struct DualSenseUsbip {
 impl DualSenseUsbip {
     /// Bind wire pad `index` and attach via `vhci_hcd`. Fails (caller degrades to uhid)
     /// when `vhci_hcd` is missing or sysfs `attach` is not writable — see
-    /// [`super::steam_usbip::attach_device`].
+    /// [`super::usbip::attach_device`].
     pub fn open(index: u8) -> Result<DualSenseUsbip> {
         let report = Arc::new(Mutex::new([0u8; DS_INPUT_REPORT_LEN]));
         let feedback = Arc::new(Mutex::new(DsFeedback::default()));
@@ -729,7 +704,8 @@ mod tests {
             + 9 + audio_streaming_descriptor(1, 4).len() + iso_ep_len // interface 1 alt 1
             + 9                                    // interface 2 alt 0
             + 9 + audio_streaming_descriptor(6, 2).len() + iso_ep_len // interface 2 alt 1
-            + 9 + hid_class_descriptor(DUALSENSE_RDESC.len()).len() + 7 + 7 // interface 3
+            // interface 3: its descriptor, the HID class descriptor, two endpoints
+            + 9 + hid_class_descriptor(0x0111, 0, DUALSENSE_RDESC.len()).len() + 7 + 7
     }
 
     /// Assembled config length equals hardware `wTotalLength` `0x00e3` (`lsusb -v` on
