@@ -22,9 +22,9 @@ pub(crate) struct CursorPlane {
     pub(crate) stage: vk::Buffer,
     stage_mem: vk::DeviceMemory,
     /// Serial of the uploaded bitmap. `u64::MAX` before the first: a real serial may be 0.
-    pub(crate) serial: u64,
+    serial: u64,
     /// The image has left UNDEFINED.
-    pub(crate) ready: bool,
+    ready: bool,
 }
 
 impl Default for CursorPlane {
@@ -185,6 +185,12 @@ impl CursorPlane {
                 Ok([0, 0, 0, 0])
             }
         }
+    }
+
+    /// Drop the upload a reset command buffer discarded, so the next frame uploads again.
+    pub(crate) fn forget(&mut self) {
+        self.serial = u64::MAX;
+        self.ready = false;
     }
 
     /// Destroy every handle. A null one, from a partly built slot, is a no-op.
