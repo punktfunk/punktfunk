@@ -36,51 +36,26 @@ impl PadLoopbackCapturer {
     pub fn open(endpoint_id: &str) -> Result<PadLoopbackCapturer> {
         let (tx, rx) = sync_channel::<Vec<f32>>(64);
         let stop = Arc::new(AtomicBool::new(false));
-        // Surface an open failure as Err (caller retries), never a silent dead thread.
-        let (ready_tx, ready_rx) = sync_channel::<Result<()>>(1);
         let (stop_t, id) = (stop.clone(), endpoint_id.to_string());
-        let join = thread::Builder::new()
-            .name("punktfunk-pad-cap".into())
-            .spawn(move || {
-                if let Err(e) = pad_capture_thread(&id, tx, stop_t, ready_tx) {
+        let ((), join) = crate::ready::spawn_ready(
+            "punktfunk-pad-cap",
+            Duration::from_secs(10),
+            move |ready| {
+                if let Err(e) = pad_capture_thread(&id, tx, stop_t, ready) {
                     tracing::error!(error = %format!("{e:#}"), "pad loopback thread failed");
                 }
-            })
-            .context("spawn pad loopback thread")?;
-        match ready_rx.recv_timeout(Duration::from_secs(10)) {
-            Ok(Ok(())) => Ok(PadLoopbackCapturer {
-                chunks: rx,
-                stop,
-                join: Some(join),
-            }),
-            Ok(Err(e)) => Err(e),
-            Err(_) => {
-                // Signal and reap. Dropping `join` leaked one WASAPI thread per
-                // ~2 s reopen. If it is stuck in a blocking call, fail rather
-                // than leak.
+            },
+            |join| {
                 stop.store(true, Ordering::SeqCst);
-                match reap_with_timeout(join, Duration::from_secs(2)) {
-                    true => Err(anyhow!("pad loopback init timed out")),
-                    false => Err(anyhow!(
-                        "pad loopback init timed out and its thread did not exit — the audio \
-                         stack is wedged; not retrying into a thread leak"
-                    )),
-                }
-            }
-        }
+                crate::ready::reap_timed_out("pad loopback", join)
+            },
+        )?;
+        Ok(PadLoopbackCapturer {
+            chunks: rx,
+            stop,
+            join: Some(join),
+        })
     }
-}
-
-fn reap_with_timeout(join: JoinHandle<()>, budget: Duration) -> bool {
-    let deadline = std::time::Instant::now() + budget;
-    while !join.is_finished() {
-        if std::time::Instant::now() >= deadline {
-            return false;
-        }
-        std::thread::sleep(Duration::from_millis(20));
-    }
-    let _ = join.join();
-    true
 }
 
 /// Channel pair for [`render_test_tone`]. Front = pad speaker (FL FR);

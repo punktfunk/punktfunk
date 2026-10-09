@@ -54,7 +54,6 @@ use punktfunk_core::audio::{spa_channel_order, spa_positions};
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::mpsc::{sync_channel, Receiver, RecvTimeoutError};
 use std::sync::Arc;
-use std::thread;
 use std::time::Duration;
 
 struct Terminate;
@@ -268,18 +267,18 @@ impl PwAudioCapturer {
         let (tx, rx) = sync_channel::<Vec<f32>>(64);
         let (quit_tx, quit_rx) = pipewire::channel::channel::<Terminate>();
         let (host_tx, host_rx) = pipewire::channel::channel::<Option<String>>();
-        // PipeWire not running must be an open error (callers' reopen backoff).
-        // Stream-sink: the sink node must exist before we claim the default.
-        let (ready_tx, ready_rx) = sync_channel::<Result<()>>(1);
         let sink_name = nodes.sink.clone().or_else(|| nodes.target.clone());
         // Opens at session start, so the consumer is live from the first chunk.
         let active = Arc::new(AtomicBool::new(true));
         let thread_active = Arc::clone(&active);
         let negotiated_rate = Arc::new(AtomicU32::new(rate_hz));
         let thread_rate = Arc::clone(&negotiated_rate);
-        thread::Builder::new()
-            .name("punktfunk-pw-audio".into())
-            .spawn(move || {
+        // Stream-sink: the sink node exists before the default is claimed below. The thread
+        // keeps no handle: it exits on Terminate.
+        crate::ready::spawn_ready(
+            "punktfunk-pw-audio",
+            Duration::from_secs(5),
+            move |ready| {
                 if let Err(e) = pw_thread(
                     tx,
                     quit_rx,
@@ -287,23 +286,19 @@ impl PwAudioCapturer {
                     channels,
                     rate_hz,
                     nodes,
-                    ready_tx,
+                    ready,
                     thread_active,
                     thread_rate,
                 ) {
                     tracing::error!(error = %format!("{e:#}"), "pipewire audio thread failed");
                 }
-            })
-            .context("spawn pipewire audio thread")?;
-        match ready_rx.recv_timeout(Duration::from_secs(5)) {
-            Ok(Ok(())) => {}
-            Ok(Err(e)) => return Err(e),
-            Err(_) => {
-                // The thread may still come up; it must not outlive this error with a live sink.
+            },
+            |_detached| {
+                // It may still come up; it must not outlive this error with a live sink.
                 let _ = quit_tx.send(Terminate);
-                return Err(anyhow!("pipewire audio init timed out"));
-            }
-        }
+                anyhow!("pipewire audio init timed out")
+            },
+        )?;
         // Routing claim starts with the session; release is `idle()` or Drop.
         let claimed = match &sink_name {
             Some(name) => {

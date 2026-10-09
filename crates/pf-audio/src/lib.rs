@@ -411,6 +411,9 @@ pub mod capture_policy;
 mod capture_lease;
 mod mic_jitter;
 mod mic_pump;
+// Only the Windows openers reap; macOS has no backend thread at all.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+mod ready;
 pub use capture_lease::{CaptureLease, CaptureRoute, Ready};
 pub use mic_pump::{mic_source_id, MicFrame, MicPump};
 

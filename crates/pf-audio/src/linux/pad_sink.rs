@@ -24,7 +24,6 @@ use anyhow::{anyhow, Context, Result};
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::mpsc::{sync_channel, Receiver, RecvTimeoutError};
-use std::thread;
 use std::time::Duration;
 
 struct Terminate;
@@ -326,26 +325,22 @@ impl PadSinkCapturer {
         let split_name = identity.split_name.clone();
         let (tx, rx) = sync_channel::<Vec<f32>>(64);
         let (quit_tx, quit_rx) = pipewire::channel::channel::<Terminate>();
-        // Bring-up handshake: a missing PipeWire must fail `open`, not leave a
-        // zombie thread. The caller owns backoff.
-        let (ready_tx, ready_rx) = sync_channel::<Result<()>>(1);
-        thread::Builder::new()
-            .name(format!("punktfunk-pw-pad{pad}"))
-            .spawn(move || {
-                if let Err(e) = pad_sink_thread(tx, quit_rx, identity, ready_tx) {
+        // A missing PipeWire fails `open`; the caller owns backoff. The thread keeps no
+        // handle: it exits on Terminate.
+        crate::ready::spawn_ready(
+            &format!("punktfunk-pw-pad{pad}"),
+            Duration::from_secs(5),
+            move |ready| {
+                if let Err(e) = pad_sink_thread(tx, quit_rx, identity, ready) {
                     tracing::warn!(pad, error = %format!("{e:#}"), "pipewire pad-sink thread failed");
                 }
-            })
-            .context("spawn pipewire pad-sink thread")?;
-        match ready_rx.recv_timeout(Duration::from_secs(5)) {
-            Ok(Ok(())) => {}
-            Ok(Err(e)) => return Err(e),
-            Err(_) => {
-                // The thread may still come up; it must not outlive this error with live sinks.
+            },
+            |_detached| {
+                // It may still come up; it must not outlive this error with live sinks.
                 let _ = quit_tx.send(Terminate);
-                return Err(anyhow!("pipewire pad-sink init timed out"));
-            }
-        }
+                anyhow!("pipewire pad-sink init timed out")
+            },
+        )?;
         let split_log = if split_name.is_empty() {
             "(suppressed)"
         } else {

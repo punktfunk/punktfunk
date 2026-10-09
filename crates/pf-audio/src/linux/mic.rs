@@ -10,7 +10,6 @@ use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::{sync_channel, Receiver};
 use std::sync::Arc;
-use std::thread;
 use std::time::Duration;
 
 /// Virtual microphone: a PipeWire `Audio/Source` the host pushes decoded
@@ -67,41 +66,38 @@ impl PwMicSource {
         let (quit_tx, quit_rx) = pipewire::channel::channel::<Terminate>();
         let alive = Arc::new(AtomicBool::new(true));
         let flush = Arc::new(AtomicBool::new(false));
-        // PipeWire not running must be an open error (pump backoff), not an
-        // instantly-dead instance the pump would churn on.
-        let (ready_tx, ready_rx) = sync_channel::<Result<()>>(1);
         let ring = Arc::new(MicRingShared::default());
         let (alive_t, flush_t, ring_t) = (alive.clone(), flush.clone(), ring.clone());
-        thread::Builder::new()
-            .name("punktfunk-pw-mic".into())
-            .spawn(move || {
-                if let Err(e) =
-                    mic_pw_thread(pcm_rx, quit_rx, channels, &node_name, flush_t, ring_t, ready_tx)
-                {
+        // PipeWire not running is an open error (pump backoff), not an instantly-dead
+        // instance the pump would churn on. The thread keeps no handle: it exits on Terminate.
+        crate::ready::spawn_ready(
+            "punktfunk-pw-mic",
+            Duration::from_secs(5),
+            move |ready| {
+                if let Err(e) = mic_pw_thread(
+                    pcm_rx, quit_rx, channels, &node_name, flush_t, ring_t, ready,
+                ) {
                     // Setup/open failure only (the running mainloop exits Ok).
                     // Already reported via the ready handshake.
                     tracing::debug!(error = %format!("{e:#}"), "pipewire virtual-mic setup failed — pump will back off and retry");
                 }
                 // Clean quit or daemon death: this instance is done; the pump reopens.
                 alive_t.store(false, Ordering::Release);
-            })
-            .context("spawn pipewire virtual-mic thread")?;
-        match ready_rx.recv_timeout(Duration::from_secs(5)) {
-            Ok(Ok(())) => Ok(PwMicSource {
-                pcm: pcm_tx,
-                channels,
-                quit: quit_tx,
-                alive,
-                flush,
-                ring,
-            }),
-            Ok(Err(e)) => Err(e),
-            Err(_) => {
-                // The thread may still come up; it must not outlive this error with a live source.
+            },
+            |_detached| {
+                // It may still come up; it must not outlive this error with a live source.
                 let _ = quit_tx.send(Terminate);
-                Err(anyhow!("pipewire virtual-mic init timed out"))
-            }
-        }
+                anyhow!("pipewire virtual-mic init timed out")
+            },
+        )?;
+        Ok(PwMicSource {
+            pcm: pcm_tx,
+            channels,
+            quit: quit_tx,
+            alive,
+            flush,
+            ring,
+        })
     }
 }
 
