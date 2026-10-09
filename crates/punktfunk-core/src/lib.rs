@@ -74,6 +74,35 @@ pub use error::{PunktfunkError, PunktfunkStatus, Result};
 pub use session::{Frame, Session};
 pub use stats::Stats;
 
+/// Explicit-off for a `PUNKTFUNK_*` switch: trimmed, case-insensitive `0`/`false`/`off`/`no`
+/// are off, any other present value is on, unset is `None`. A kill switch reads
+/// `!= Some(false)`, an opt-in `== Some(true)`. `pf-host-config` applies the same rule to
+/// the host's rows; this one is for every process that has only the environment.
+pub fn env_on(name: &str) -> Option<bool> {
+    std::env::var(name).ok().map(|v| env_value_on(&v))
+}
+
+fn env_value_on(value: &str) -> bool {
+    !matches!(
+        value.trim().to_ascii_lowercase().as_str(),
+        "0" | "false" | "off" | "no"
+    )
+}
+
+#[cfg(test)]
+mod env_tests {
+    /// The host reads `PUNKTFUNK_UPDATE_CHECK=no` as off; every other process must too.
+    #[test]
+    fn env_switches_read_the_hosts_off_grammar() {
+        for off in ["0", "false", "off", "no", "OFF", " No ", "0 "] {
+            assert!(!super::env_value_on(off), "{off:?}");
+        }
+        for on in ["1", "true", "yes", "", "garbage"] {
+            assert!(super::env_value_on(on), "{on:?}");
+        }
+    }
+}
+
 /// C-ABI generation. Mirrors `punktfunk_abi_version()`; embedders abort on mismatch.
 ///
 /// Bump on any breaking change to the C ABI (`punktfunk-ffi`). Additive bumps add

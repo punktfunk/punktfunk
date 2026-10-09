@@ -230,9 +230,7 @@ fn load_api() -> std::result::Result<EncodeApi, String> {
 /// Stream-ordered submit (default on; `PUNKTFUNK_NVENC_STREAM_ORDERED=0` = blocking copies).
 /// Sync retrieve only, and only while `pending` is empty — see [`Encoder::submit`].
 fn stream_ordered_requested() -> bool {
-    std::env::var("PUNKTFUNK_NVENC_STREAM_ORDERED")
-        .map(|v| v.trim() != "0")
-        .unwrap_or(true)
+    pf_host_config::env_on("PUNKTFUNK_NVENC_STREAM_ORDERED") != Some(false)
 }
 
 /// A dead convert worker waits this long before the lane spawns another. A crash loop would

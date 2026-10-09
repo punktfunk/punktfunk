@@ -202,12 +202,9 @@ impl SteamDeckUsbip {
     }
 }
 
-/// Default on. `PUNKTFUNK_STEAM_USBIP=0`/`false` skips usbip; `open` still degrades if `vhci_hcd` is missing.
+/// Default on. `PUNKTFUNK_STEAM_USBIP=0` skips usbip; `open` still degrades if `vhci_hcd` is missing.
 pub fn usbip_preferred() -> bool {
-    !matches!(
-        std::env::var("PUNKTFUNK_STEAM_USBIP").ok().as_deref(),
-        Some("0") | Some("false")
-    )
+    pf_host_config::env_on("PUNKTFUNK_STEAM_USBIP") != Some(false)
 }
 
 #[cfg(test)]

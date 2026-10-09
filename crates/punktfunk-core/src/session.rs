@@ -245,12 +245,8 @@ impl Session {
             recv_idx: 0,
             wire_pool: Vec::new(),
             // Read once at construct; set `PUNKTFUNK_PERF` before connecting.
-            perf: std::env::var("PUNKTFUNK_PERF")
-                .is_ok_and(|v| v != "0")
-                .then(PumpPerf::default),
-            seal_perf: std::env::var("PUNKTFUNK_PERF")
-                .is_ok_and(|v| v != "0")
-                .then(SealPerf::default),
+            perf: (crate::env_on("PUNKTFUNK_PERF") == Some(true)).then(PumpPerf::default),
+            seal_perf: (crate::env_on("PUNKTFUNK_PERF") == Some(true)).then(SealPerf::default),
             seal_lane: None,
             // Default two-lane; `PUNKTFUNK_SEAL_LANES=1` is single-lane. Byte-identical;
             // only who seals changes.

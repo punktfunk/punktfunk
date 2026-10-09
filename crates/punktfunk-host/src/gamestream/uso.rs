@@ -15,9 +15,7 @@ mod state {
             1 => true,
             2 => false,
             _ => {
-                let off = std::env::var_os("PUNKTFUNK_GSO")
-                    .map(|v| v == "0")
-                    .unwrap_or(false);
+                let off = pf_host_config::env_on("PUNKTFUNK_GSO") == Some(false);
                 STATE.store(if off { 2 } else { 1 }, Ordering::Relaxed);
                 tracing::info!(
                     enabled = !off,

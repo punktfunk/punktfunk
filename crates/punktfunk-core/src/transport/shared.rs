@@ -360,7 +360,7 @@ impl Transport for ClientMedia {
 fn gso_allowed() -> bool {
     static ALLOWED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *ALLOWED.get_or_init(|| {
-        let off = std::env::var_os("PUNKTFUNK_GSO").is_some_and(|v| v == "0");
+        let off = crate::env_on("PUNKTFUNK_GSO") == Some(false);
         if off {
             tracing::info!("PUNKTFUNK_GSO=0: media leaves one packet per send");
         }

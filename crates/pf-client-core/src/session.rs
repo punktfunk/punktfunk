@@ -1774,10 +1774,7 @@ fn spawn_audio(
     .ok()?;
     // A/V sync. This thread holds the packet's host capture `pts_ns`, the ring
     // depth, and the video e2e figure. `PUNKTFUNK_NO_AV_SYNC` is the escape hatch.
-    let av_sync_enabled = !matches!(
-        std::env::var("PUNKTFUNK_NO_AV_SYNC").as_deref(),
-        Ok("1") | Ok("true")
-    );
+    let av_sync_enabled = crate::env_on("PUNKTFUNK_NO_AV_SYNC") != Some(true);
     let sync_cell = player.sync_cell();
     // Device-callback counters. Logged from this thread, on wall clock — the
     // PipeWire callback runs on the graph's realtime loop and formats nothing.

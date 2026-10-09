@@ -756,7 +756,7 @@ impl HandoffWindow {
             begin_retries: 0,
             begin_wait: Duration::ZERO,
             blt_us: Vec::with_capacity(256),
-            debug: std::env::var_os("PUNKTFUNK_PRESENT_DEBUG").is_some(),
+            debug: punktfunk_core::env_on("PUNKTFUNK_PRESENT_DEBUG") == Some(true),
         }
     }
 

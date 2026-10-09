@@ -1298,7 +1298,7 @@ fn sync_mode() -> u8 {
     use std::sync::atomic::Ordering;
     match SYNC_MODE.load(Ordering::Relaxed) {
         SYNC_UNDECIDED => {
-            let off = std::env::var_os("PUNKTFUNK_VAAPI_EXPLICIT_SYNC").is_some_and(|v| v == "0");
+            let off = punktfunk_core::env_on("PUNKTFUNK_VAAPI_EXPLICIT_SYNC") == Some(false);
             let mode = if off { SYNC_CPU } else { SYNC_EXPLICIT };
             SYNC_MODE.store(mode, Ordering::Relaxed);
             mode
