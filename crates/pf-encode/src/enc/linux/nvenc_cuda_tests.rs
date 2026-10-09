@@ -283,75 +283,29 @@ fn nvenc_cuda_smoke_rfi_anchor() {
     println!("nvenc_cuda smoke: {aus} AUs, RFI succeeded, recovery-anchor tagged on the P-frame");
 }
 
-/// The Windows `nvenc_wave_soak` on the CUDA session, HEVC only (AV1 never waves): many
-/// waves, each answering a frame lost two ahead of its start (`PUNKTFUNK_NVENC_IR_ALWAYS=1`
-/// makes every RFI a wave), the same `PF_WAVE_*` knobs, frames uploaded from host memory. The
-/// full stream and the view that lost those frames land in `PUNKTFUNK_SMOKE_DIR` with `.idx`
-/// sidecars, for `gpu_parity`'s field hashers.
+/// The wave soak ([`crate::smoke_pattern::WaveSoak`], its `PF_WAVE_*` knobs) on the CUDA
+/// session, frames uploaded from host memory; 10-bit feeds XBGR2101010, the Windows soak's
+/// R10G10B10A2 bytes.
 ///
 /// `cargo test -p pf-encode --features nvenc --release nvenc_cuda_wave_soak -- --ignored --nocapture`
 #[test]
 #[ignore = "requires an NVIDIA GPU + driver — run manually on an NVIDIA Linux box"]
 fn nvenc_cuda_wave_soak() {
-    let shape = std::env::var("PF_WAVE_SMOKE").unwrap_or_else(|_| "256x256:8:120:1".into());
-    let count = |k: &str, d: usize| {
-        std::env::var(k)
-            .ok()
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(d)
-    };
-    let on = |k: &str| std::env::var(k).is_ok_and(|v| v == "1");
-    let (waves, gap) = (count("PF_WAVE_SOAK", 12), count("PF_WAVE_GAP", 12));
-    let (spoil, idr) = (on("PF_WAVE_SPOIL"), on("PF_WAVE_IDR"));
-    let (codec, ext) = (Codec::H265, "h265");
-    assert!(
-        on("PUNKTFUNK_NVENC_IR_ALWAYS"),
-        "PUNKTFUNK_NVENC_IR_ALWAYS=1 makes every ask a wave"
-    );
-    let mut parts = shape.split(':');
-    let (w, h) = parts
-        .next()
-        .and_then(|s| s.split_once('x'))
-        .map(|(w, h)| (w.parse::<u32>().unwrap(), h.parse::<u32>().unwrap()))
-        .expect("PF_WAVE_SMOKE=WxH[:bits[:fps[:mbps]]]");
-    let ten_bit = parts.next().is_some_and(|b| b == "10");
-    let fps: u32 = parts.next().map_or(60, |f| f.parse().unwrap());
-    let mbps: u64 = parts
-        .next()
-        .map_or(if w >= 1920 { 86 } else { 10 }, |m| m.parse().unwrap());
-    // 10-bit feeds XBGR2101010: the Windows soak's R10G10B10A2 bytes.
+    let soak = crate::smoke_pattern::WaveSoak::from_env();
+    let (w, h, fps, ten_bit) = (soak.w, soak.h, soak.fps, soak.ten_bit);
     let format = if ten_bit {
         PixelFormat::X2Bgr10
     } else {
         PixelFormat::Bgra
     };
-    let frame_at = |i: usize| {
-        let mut px = crate::smoke_pattern::scroll_pattern(w as usize, h as usize, i);
-        if ten_bit {
-            for p in px.chunks_exact_mut(4) {
-                let (b, g, r) = (u32::from(p[0]), u32::from(p[1]), u32::from(p[2]));
-                let v = (r << 2) | ((g << 2) << 10) | ((b << 2) << 20) | (3 << 30);
-                p.copy_from_slice(&v.to_le_bytes());
-            }
-        }
-        CapturedFrame {
-            provenance: Default::default(),
-            width: w,
-            height: h,
-            pts_ns: i as u64 * 1_000_000_000 / u64::from(fps),
-            format,
-            payload: FramePayload::Cpu(px),
-            cursor: None,
-        }
-    };
     pf_zerocopy::cuda::make_current().expect("shared CUDA context current");
     let mut enc = NvencCudaEncoder::open(
-        codec,
+        soak.codec,
         format,
         w,
         h,
         fps,
-        mbps * 1_000_000,
+        soak.mbps * 1_000_000,
         true,
         if ten_bit { 10 } else { 8 },
         format.is_ten_bit(),
@@ -360,100 +314,27 @@ fn nvenc_cuda_wave_soak() {
         1,
     )
     .expect("open NVENC CUDA session");
-    let cycle = enc.s.wave_cycle() as usize;
-    assert!(cycle >= 2, "the wave is on");
-    assert!(
-        cycle > 3 || !spoil,
-        "the spoiling loss lands inside the sweep"
-    );
-    // Wave k starts at 3 + k * period; its lost frame is two before that. A spoiled
-    // wave is followed by the queued one, so its period holds two cycles.
-    let period = if spoil { 2 * cycle + gap } else { cycle + gap };
-    let last = 3 + waves * period;
-    let (mut lost, mut starts, mut closes, mut idrs) = (vec![], vec![], vec![], vec![]);
-    let mut aus = Vec::new();
-    for i in 0..=last {
-        let offset = (i >= 3 && (i - 3) / period < waves).then(|| (i - 3) % period);
-        match offset {
-            Some(0) => {
-                let l = (i - 2) as i64;
-                assert!(enc.invalidate_ref_frames(l, l), "the always-wave answers");
-                assert_eq!(enc.s.wave.map(|w| w.index), Some(0), "a fresh wave");
-                lost.push(i - 2);
-                starts.push(i);
-                if !spoil && !idr {
-                    closes.push(i + cycle - 1);
-                }
+    soak.run(
+        "nvenc-cuda",
+        &mut enc,
+        |e| &e.s,
+        |i| {
+            let (w, h) = (w as usize, h as usize);
+            let px = if ten_bit {
+                crate::smoke_pattern::scroll_pattern_rgb10(w, h, i)
+            } else {
+                crate::smoke_pattern::scroll_pattern(w, h, i)
+            };
+            CapturedFrame {
+                provenance: Default::default(),
+                width: w as u32,
+                height: h as u32,
+                pts_ns: i as u64 * 1_000_000_000 / u64::from(fps),
+                format,
+                payload: FramePayload::Cpu(px),
+                cursor: None,
             }
-            Some(2) if idr => {
-                enc.request_keyframe();
-                idrs.push(i);
-            }
-            Some(3) if spoil => {
-                let l = (i - 1) as i64;
-                assert!(enc.invalidate_ref_frames(l, l), "a loss inside the sweep");
-                assert!(
-                    enc.s.wave_spoiled && enc.s.wave_queued,
-                    "spoiled, one queued"
-                );
-                lost.push(i - 1);
-                starts.push(i - 3 + cycle);
-                closes.push(i - 3 + 2 * cycle - 1);
-            }
-            _ => {}
-        }
-        enc.submit_indexed(&frame_at(i), i as u32).expect("submit");
-        while let Some(au) = enc.poll().expect("poll") {
-            aus.push(au);
-        }
-    }
-    enc.flush().ok();
-    while let Some(au) = enc.poll().expect("poll") {
-        aus.push(au);
-    }
-    assert_eq!(aus.len(), last + 1, "one AU per submitted frame");
-    for (i, au) in aus.iter().enumerate() {
-        assert_eq!(
-            au.keyframe,
-            i == 0 || idrs.contains(&i),
-            "AU {i}: IDRs only where forced"
-        );
-        assert_eq!(
-            au.recovery_point,
-            starts.contains(&i) || closes.contains(&i),
-            "AU {i}: marks on every start and unspoiled close"
-        );
-        assert_eq!(
-            au.recovery_close,
-            closes.contains(&i),
-            "AU {i}: the close bit on every unspoiled close"
-        );
-    }
-    let full: Vec<&[u8]> = aus.iter().map(|a| a.data.as_slice()).collect();
-    let view: Vec<&[u8]> = aus
-        .iter()
-        .enumerate()
-        .filter(|(i, _)| !lost.contains(i))
-        .map(|(_, a)| a.data.as_slice())
-        .collect();
-    let dir = std::env::var("PUNKTFUNK_SMOKE_DIR").unwrap_or_else(|_| ".".into());
-    let capture = crate::smoke_pattern::write_capture;
-    capture(&format!("{dir}/nvenc-cuda-wave.{ext}"), &full).expect("write");
-    capture(&format!("{dir}/nvenc-cuda-wave-dropS.{ext}"), &view).expect("write");
-    let csv = |v: &[usize]| {
-        v.iter()
-            .map(|n| n.to_string())
-            .collect::<Vec<_>>()
-            .join(",")
-    };
-    println!(
-        "nvenc_cuda_wave_soak: {w}x{h} {}-bit {fps} fps {mbps} Mbps cycle={cycle} gap={gap} \
-         waves={waves} aus={} lost={} closes={} spoil={spoil} idrs={}",
-        if ten_bit { 10 } else { 8 },
-        aus.len(),
-        csv(&lost),
-        csv(&closes),
-        csv(&idrs)
+        },
     );
 }
 
@@ -916,7 +797,8 @@ fn nvenc_cuda_yuv444() {
     println!("nvenc_cuda 4:4:4 smoke: {aus} AUs, caps.chroma_444=true");
 }
 
-/// Hardware: in-place rate retarget up and down must not emit an IDR.
+/// Hardware: an in-place rate retarget up and down emits no IDR
+/// ([`crate::smoke_pattern::reconfigure_no_idr`]).
 #[test]
 #[ignore = "requires an NVIDIA GPU + driver — run manually on the RTX box (.21)"]
 fn nvenc_cuda_reconfigure_no_idr() {
@@ -938,43 +820,11 @@ fn nvenc_cuda_reconfigure_no_idr() {
         4,
     )
     .expect("open NVENC CUDA session");
-
-    let submit_and_poll = |enc: &mut NvencCudaEncoder, range: std::ops::Range<u32>| {
-        let mut keyframes = 0usize;
-        let mut aus = 0usize;
-        for i in range {
-            let frame = nv12_frame(W, H, i);
-            enc.submit_indexed(&frame, i).expect("submit");
-            while let Some(au) = enc.poll().expect("poll") {
-                aus += 1;
-                keyframes += au.keyframe as usize;
-            }
-        }
-        (aus, keyframes)
-    };
-
-    let (aus, kfs) = submit_and_poll(&mut enc, 0..4);
-    assert!(aus > 0, "no AUs before the reconfigure");
-    assert_eq!(kfs, 1, "exactly the opening IDR before the reconfigure");
-
-    assert!(
-        enc.reconfigure_bitrate(60_000_000),
-        "in-place reconfigure to 60 Mbps must succeed on RTX NVENC"
+    crate::smoke_pattern::reconfigure_no_idr(
+        &mut enc,
+        |i| nv12_frame(W, H, i as u32),
+        &[60_000_000, 10_000_000],
     );
-    let (aus, kfs) = submit_and_poll(&mut enc, 4..8);
-    assert!(aus > 0, "no AUs after the up-reconfigure");
-    assert_eq!(kfs, 0, "an in-place rate retarget must not emit an IDR");
-
-    assert!(
-        enc.reconfigure_bitrate(10_000_000),
-        "in-place reconfigure down to 10 Mbps must succeed"
-    );
-    let (aus, kfs) = submit_and_poll(&mut enc, 8..12);
-    assert!(aus > 0, "no AUs after the down-reconfigure");
-    assert_eq!(kfs, 0, "an in-place rate retarget must not emit an IDR");
-
-    enc.flush().ok();
-    println!("nvenc_cuda reconfigure smoke: 20→60→10 Mbps in place, zero IDRs");
 }
 
 /// Hardware: can `splitEncodeMode` move in place (`resetEncoder=0`) without an IDR?
