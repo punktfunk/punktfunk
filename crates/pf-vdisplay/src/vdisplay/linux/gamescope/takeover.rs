@@ -400,18 +400,12 @@ fn unset_forced_session_screen_env() {
 /// stays barred until reboot.
 #[cfg(test)]
 fn mask_unit(unit: &str) {
-    let _ = crate::proc::status_within(
-        Command::new("systemctl").args(["--user", "mask", "--runtime", unit]),
-        UNIT_VERB_BUDGET,
-    );
+    systemctl_user(&["mask", "--runtime", unit]);
 }
 
 /// Every restore path must unmask before restarting, or Game Mode stays broken until reboot.
 fn unmask_unit(unit: &str) {
-    let _ = crate::proc::status_within(
-        Command::new("systemctl").args(["--user", "unmask", "--runtime", unit]),
-        UNIT_VERB_BUDGET,
-    );
+    systemctl_user(&["unmask", "--runtime", unit]);
 }
 
 /// Idempotent. Keeps the stopped units: mask lifetime is shorter than the takeover, and restore
