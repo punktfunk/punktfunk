@@ -16,11 +16,11 @@ mod bluetooth;
 #[cfg_attr(windows, path = "wasapi.rs")]
 mod usb;
 
-use punktfunk_core::audio::pad_mix::{plc_frames, HapticsLiveness, QuadMixer};
-use punktfunk_core::audio::AudioGapTracker;
+use punktfunk_core::audio::pad_mix::{
+    is_haptics_evidence, HapticsLiveness, PadDecode, QuadMixer, MAX_FRAME_SAMPLES,
+};
 use punktfunk_core::client::NativeClient;
 use punktfunk_core::input::MAX_PADS;
-use punktfunk_core::quic::{PAD_AUDIO_KIND_HAPTICS, PAD_AUDIO_KIND_SPEAKER};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
@@ -349,13 +349,6 @@ pub(crate) fn container_guid_from_blob(bytes: &[u8]) -> Option<String> {
     ))
 }
 
-/// `frame_samples` is the PLC synthesis unit (session audio-thread discipline).
-struct KindStream {
-    dec: opus::Decoder,
-    gaps: AudioGapTracker,
-    frame_samples: usize,
-}
-
 /// Pad-audio renderer: 0xD1 consumer. Opens the sink on the first frame so a session without
 /// a DualSense is an idle 10 ms poll. Exits on the session stop flag or the plane closing.
 pub(crate) fn spawn(
@@ -374,10 +367,10 @@ pub(crate) fn spawn(
 fn run(connector: &NativeClient, stop: &AtomicBool, haptics: bool, speaker: bool) {
     // Late decode is rumble after the hit. Same best-effort RT as the main decode leg.
     crate::audio_rt::boost_and_log("pf-pad-audio");
-    // v1: first streaming pad; per-(pad, kind) degenerates to per-kind once latched.
-    let mut streams: [Option<KindStream>; 2] = [None, None];
+    // v1 renders the first streaming pad, so one decode stage serves it.
+    let mut stage = PadDecode::new(haptics, speaker);
     let mut mixer = QuadMixer::<f32>::new(MAX_BUFFER_FRAMES);
-    let mut pcm = vec![0f32; 5760 * 2]; // max Opus frame (120 ms) × stereo
+    let mut pcm = vec![0f32; MAX_FRAME_SAMPLES * 2];
     let mut out: Option<Sink> = None;
     let mut active_pad: Option<u8> = None;
     let mut other_pad_logged = false;
@@ -391,11 +384,7 @@ fn run(connector: &NativeClient, stop: &AtomicBool, haptics: bool, speaker: bool
             }
             continue;
         };
-        // Host only emits declared kinds; re-check settings so a stale host cannot force a renderer.
-        if f.kind > 1
-            || (f.kind == PAD_AUDIO_KIND_HAPTICS && !haptics)
-            || (f.kind == PAD_AUDIO_KIND_SPEAKER && !speaker)
-        {
+        if !stage.wants(f.kind) {
             continue;
         }
         // v1: one DualSense. Latch the first streaming pad, drop the rest.
@@ -414,44 +403,11 @@ fn run(connector: &NativeClient, stop: &AtomicBool, haptics: bool, speaker: bool
             }
             _ => {}
         }
-        // Rendered haptics take the coils from wire rumble (`haptics_live`); concealment is
-        // not evidence, and nothing renders without an output.
-        if f.kind == PAD_AUDIO_KIND_HAPTICS && !f.opus.is_empty() && out.is_some() {
+        // Rendered haptics take the coils from wire rumble (`haptics_live`).
+        if is_haptics_evidence(&f, out.is_some()) {
             HAPTICS.note(f.pad);
         }
-        let k = f.kind as usize;
-        if streams[k].is_none() {
-            match opus::Decoder::new(48_000, opus::Channels::Stereo) {
-                Ok(dec) => {
-                    streams[k] = Some(KindStream {
-                        dec,
-                        gaps: AudioGapTracker::new(),
-                        frame_samples: 0,
-                    })
-                }
-                Err(e) => {
-                    tracing::warn!(error = %e, kind = f.kind, "pad-audio opus decoder failed");
-                    continue;
-                }
-            }
-        }
-        let st = streams[k].as_mut().expect("inserted above");
-        // Seq-gap PLC before decode. A frozen seq (host paused) produces no packets — silence.
-        for _ in 0..plc_frames(&mut st.gaps, f.seq, st.frame_samples) {
-            let n = st.frame_samples * 2;
-            if let Ok(samples) = st.dec.decode_float(&[], &mut pcm[..n], false) {
-                mixer.push(f.kind, &pcm[..samples * 2], Instant::now());
-            }
-        }
-        if !f.opus.is_empty() {
-            match st.dec.decode_float(&f.opus, &mut pcm, false) {
-                Ok(samples) => {
-                    st.frame_samples = samples;
-                    mixer.push(f.kind, &pcm[..samples * 2], Instant::now());
-                }
-                Err(e) => tracing::debug!(error = %e, kind = f.kind, "pad-audio opus decode"),
-            }
-        }
+        stage.decode_frame(&f, &mut pcm, &mut mixer);
         // Open lazily; drop + re-correlate with backoff when the sink vanishes.
         if out.as_ref().is_some_and(Sink::finished) {
             tracing::info!("pad-audio output ended (device gone?) — re-correlating");
