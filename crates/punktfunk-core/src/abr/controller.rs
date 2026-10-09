@@ -808,9 +808,9 @@ impl BitrateController {
         );
     }
 
-    /// The host will not negotiate this session's rate (PyroWave: per-frame
-    /// CBR). Nothing to control, so retire quietly — an unanswered host is
-    /// already retired the same way.
+    /// The host will not negotiate this session's rate: an explicit-rate
+    /// PyroWave pin, or any PyroWave pin on an older host. Nothing to control,
+    /// so retire quietly — an unanswered host is already retired the same way.
     fn on_pinned(&mut self, kbps: u32) {
         self.acks.last_requested_kbps = None;
         self.acks.unacked = 0;

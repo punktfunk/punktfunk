@@ -223,8 +223,8 @@ pub(crate) struct SynthAbrContext {
     /// pipeline build holds it. The client's bring-up ramp is served on the
     /// idle data plane for exactly this long.
     pub(crate) bringup_delay: std::time::Duration,
-    /// Automatic PyroWave: the client's ramp closes with one lower pin, so the
-    /// window lingers a bounded grace past the fake bring-up for it to cross.
+    /// Explicit-rate PyroWave: the client's ramp closes with one lower pin, so
+    /// the window lingers a bounded grace past the fake bring-up for it to cross.
     pub(crate) fit_pin: bool,
     /// What [`crate::session_status::register`] needs and this source can't derive: which
     /// plane carries it, and the client's address, which is how the shared-path governor

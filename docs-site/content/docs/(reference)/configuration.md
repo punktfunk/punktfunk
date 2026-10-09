@@ -107,7 +107,8 @@ The table shows the Linux values. On Windows, **Encoder** takes `auto` · `nvenc
 | **Direct capture** | wlroots and Hyprland: capture the output directly instead of through the portal, on GPU sessions. A failure falls back to the portal. |
 | **On-demand capture** | GNOME 49+: the virtual monitor paints once per streamed frame instead of on a timer. |
 | **KWin capture pacing** | KWin 6.7+: keep KWin's own recording throttle. |
-| **PyroWave bitrate cap** | A ceiling on every [PyroWave](/docs/pyrowave) session's bitrate, over what the link measurement found. |
+| **PyroWave quality** | The most bits per pixel a [PyroWave](/docs/pyrowave) session uses. With the client's bitrate on **Automatic** the session adapts between 0.5 and this value; a fixed client bitrate runs at it. |
+| **PyroWave bitrate cap** | A ceiling on every [PyroWave](/docs/pyrowave) session's bitrate, Automatic or not, over what the link measurement found. |
 | **Pause Instant Replay** | Windows, NVIDIA. Instant Replay shares the encoder with the stream. `auto` pauses it once a stream falls behind while another app encodes; `on` pauses it for every stream. Both turn it back on after the last stream. [Stutter while Instant Replay is on](/docs/troubleshooting-stream#stutter-while-nvidia-instant-replay-is-on-windows). |
 | **Where audio plays** | **Device only**: the host goes quiet while streaming. **Device and host**: the host's speakers play too. **Host's own output**: the host leaves its audio devices alone and captures what plays there — a client asks for this per session with **Keep host audio playing**. |
 | **Audio quality** | `high` is stereo 256 kbps Opus, `standard` 128 kbps, `low` for tight links. |

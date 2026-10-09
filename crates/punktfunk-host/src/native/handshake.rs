@@ -790,9 +790,9 @@ pub(super) async fn negotiate(
             // Same bit SessionContext reads; a different max_slices would change the wire mid-flow.
             let multi_slice = hello.video_caps & punktfunk_core::quic::VIDEO_CAP_MULTI_SLICE != 0;
             let (mode, shard_payload) = (hello.mode, welcome.shard_payload);
-            // Sampled here so the closure need not capture `hello`. PyroWave is always Automatic.
-            // The build may re-resolve if the source delivers a different size.
-            let bitrate_auto = hello.bitrate_kbps == 0 || codec == crate::encode::Codec::PyroWave;
+            // Sampled here so the closure need not capture `hello`. The build may re-resolve
+            // if the source delivers a different size.
+            let bitrate_auto = hello.bitrate_kbps == 0;
             // `bitrate_kbps` is the wire budget; the prep encoder opens at the derived video
             // rate, snapshotted at Welcome's initial FEC percent. The FEC watcher re-derives.
             let enc_of = super::EncDerive {

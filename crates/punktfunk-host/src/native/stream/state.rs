@@ -405,9 +405,9 @@ impl StreamState {
             plan = plan.sharing_live_display();
         }
         tracing::info!(?plan, "resolved session plan");
-        // Automatic PyroWave: the client's ramp closes with one lower pin, so
-        // the window lingers past pipeline-ready for it to cross.
-        let fit_pin = ctx.bitrate_auto && ctx.common.codec == crate::encode::Codec::PyroWave;
+        // Explicit-rate PyroWave: the client's ramp closes with one lower pin,
+        // so the window lingers past pipeline-ready for it to cross.
+        let fit_pin = !ctx.bitrate_auto && ctx.common.codec == crate::encode::Codec::PyroWave;
         let SessionContext {
             common:
                 StreamCommon {
@@ -568,9 +568,9 @@ impl StreamState {
                      instead of building twice"
                 );
                 mode = m;
-                if bitrate_auto && plan.codec == crate::encode::Codec::PyroWave {
-                    bitrate_kbps =
-                        resolve_bitrate_kbps_for(plan.codec, 0, &mode, plan.chroma, plan.bit_depth);
+                if plan.codec == crate::encode::Codec::PyroWave {
+                    let running = bitrate_auto.then_some(bitrate_kbps);
+                    bitrate_kbps = pyrowave_mode_kbps(running, &mode, plan.chroma, plan.bit_depth);
                 }
             }
         }
@@ -882,7 +882,7 @@ impl StreamState {
             bitrate_kbps: live_bitrate.clone(),
             link_kbps,
             ports,
-            link_paced: budget_identity,
+            link_paced: budget_identity && !bitrate_auto,
             shape,
             bringup: bringup.clone(),
             wire_sock,

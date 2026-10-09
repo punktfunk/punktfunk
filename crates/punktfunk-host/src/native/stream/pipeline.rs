@@ -553,15 +553,20 @@ fn attach_pipeline(
         t.mark("first_frame");
     }
     let negotiated = (mode.width, mode.height);
-    // Automatic bitrate follows the pixels actually encoded: a mirrored head's fit, or
-    // whatever a virtual display delivered.
+    // Automatic bitrate and every PyroWave pin follow the pixels actually encoded: a
+    // mirrored head's fit, or whatever a virtual display delivered.
     let kbps_for = |w: u32, h: u32| {
-        if bitrate_auto && (w, h) != negotiated {
-            let encoded = punktfunk_core::Mode {
-                width: w,
-                height: h,
-                ..mode
-            };
+        let encoded = punktfunk_core::Mode {
+            width: w,
+            height: h,
+            ..mode
+        };
+        if (w, h) == negotiated {
+            bitrate_kbps
+        } else if plan.codec == crate::encode::Codec::PyroWave {
+            let running = bitrate_auto.then_some(bitrate_kbps);
+            pyrowave_mode_kbps(running, &encoded, plan.chroma, bit_depth)
+        } else if bitrate_auto {
             resolve_bitrate_kbps_for(plan.codec, 0, &encoded, plan.chroma, bit_depth)
         } else {
             bitrate_kbps

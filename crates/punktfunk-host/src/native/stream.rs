@@ -529,7 +529,8 @@ pub(super) struct SessionContext {
     pub(super) compositor: crate::vdisplay::Compositor,
     /// Per-instance, not via `PUNKTFUNK_GAMESCOPE_NODE` — two sessions must not overwrite each other.
     pub(super) gamescope_route: Option<crate::vdisplay::GamescopeRoute>,
-    /// `Hello::bitrate_kbps == 0`. PyroWave re-resolves on a mid-stream mode switch; an explicit rate stays.
+    /// `Hello::bitrate_kbps == 0`. A mode switch re-resolves PyroWave's pin either way, and an
+    /// Automatic rate is held inside the new bounds. Another codec's explicit rate stays.
     pub(super) bitrate_auto: bool,
     pub(super) conn: super::link::SessionLink,
     pub(super) cursor_forward: bool,

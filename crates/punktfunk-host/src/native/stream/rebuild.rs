@@ -140,7 +140,8 @@ impl StreamState {
     }
 
     /// The client's latest accepted mode: in place on Windows IDD-push, else a full rebuild. A
-    /// failed rebuild stays on the current mode and tells the client so.
+    /// failed rebuild stays on the current mode and tells the client so. PyroWave re-resolves
+    /// its pin for the new mode, and an Automatic session keeps its rate inside the new bounds.
     pub(super) fn on_mode_switch(&mut self) {
         let mut want = None;
         while let Ok(m) = self.reconfig.try_recv() {
@@ -151,15 +152,9 @@ impl StreamState {
         };
         tracing::info!(?new_mode, "rebuilding pipeline for mode switch");
         let resize_trace = crate::bringup::Trace::start("resize", self.resize_ms.clone());
-        let mode_bitrate = if self.bitrate_auto && self.plan.codec == crate::encode::Codec::PyroWave
-        {
-            resolve_bitrate_kbps_for(
-                self.plan.codec,
-                0,
-                &new_mode,
-                self.plan.chroma,
-                self.plan.bit_depth,
-            )
+        let mode_bitrate = if self.plan.codec == crate::encode::Codec::PyroWave {
+            let running = self.bitrate_auto.then_some(self.bitrate_kbps);
+            pyrowave_mode_kbps(running, &new_mode, self.plan.chroma, self.plan.bit_depth)
         } else {
             self.bitrate_kbps
         };
@@ -495,21 +490,16 @@ impl StreamState {
     }
 
     /// The source changed format or size with no client Reconfigure: reopen the encoder at the
-    /// delivered size and make it the session's mode. `Ok(false)` = the reopen failed and the
-    /// tick is spent on the backoff.
+    /// delivered size and make it the session's mode, PyroWave's rate re-resolved for it as on
+    /// a mode switch. `Ok(false)` = the reopen failed and the tick is spent on the backoff.
     pub(super) fn follow_source_mode(&mut self) -> Result<bool> {
         if self.enc_src == (self.frame.format, self.frame.width, self.frame.height) {
             return Ok(true);
         }
         let actual = self.delivered_mode();
-        let src_kbps = if self.bitrate_auto && self.plan.codec == crate::encode::Codec::PyroWave {
-            resolve_bitrate_kbps_for(
-                self.plan.codec,
-                0,
-                &actual,
-                self.plan.chroma,
-                self.plan.bit_depth,
-            )
+        let src_kbps = if self.plan.codec == crate::encode::Codec::PyroWave {
+            let running = self.bitrate_auto.then_some(self.bitrate_kbps);
+            pyrowave_mode_kbps(running, &actual, self.plan.chroma, self.plan.bit_depth)
         } else {
             self.bitrate_kbps
         };
