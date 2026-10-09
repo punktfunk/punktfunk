@@ -16,6 +16,7 @@
 
 use super::policy::{intra_refresh_requested, ltr_test_force_at};
 use super::{ChromaFormat, Codec, EncodedFrame, Encoder, EncoderCaps};
+use crate::ltr::{LtrMirror, LtrStep, NUM_LTR_SLOTS};
 use crate::retrieve::{poll_budget_ms, AuQueue, RetrieveThread};
 use anyhow::{anyhow, bail, Context, Result};
 use libvpl_sys as vpl;
@@ -123,8 +124,6 @@ fn fourcc(format: PixelFormat) -> Option<u32> {
 fn ts_90k(pts_ns: u64) -> u64 {
     pts_ns.wrapping_mul(9) / 100_000
 }
-
-const NUM_LTR_SLOTS: usize = 2;
 
 /// Defeat LTR-RFI (`PUNKTFUNK_NO_QSV_LTR`); loss recovery then always IDRs.
 fn ltr_disabled() -> bool {
@@ -893,16 +892,10 @@ pub struct QsvEncoder {
     ir_active: bool,
     /// `mfxExtRefListCtrl` passed the per-codec Query gate — gates [`EncoderCaps::supports_rfi`].
     ltr_active: bool,
-    /// Wire index in each LTR slot (`None` = never marked). Mirrors the hardware DPB:
-    /// clearing an entry issues no VPL call, so the encoder keeps the frame long-term.
-    /// Distrust lives in `ltr_tainted` so RejectedRefList can still name the slot.
-    ltr_slots: [Option<i64>; NUM_LTR_SLOTS],
-    /// Mark is live in the DPB but sat inside the client's corrupt window — reject, don't force.
-    /// Cleared on re-mark or IDR flush.
-    ltr_tainted: [bool; NUM_LTR_SLOTS],
-    next_ltr_slot: usize,
+    /// Mirrors the hardware DPB. Distrust is a taint, never a cleared slot: clearing issues no
+    /// VPL call, so the encoder keeps the frame long-term and RejectedRefList must name it.
+    ltr: LtrMirror,
     ltr_mark_interval: i64,
-    pending_force: Option<usize>,
     /// The newest frame the client confirmed, while the host holds confirmed references.
     reference_floor: Option<crate::Acked>,
     ltr_test_force_at: Option<i64>,
@@ -978,11 +971,8 @@ impl QsvEncoder {
             hdr_applied: None,
             ir_active: false,
             ltr_active: false,
-            ltr_slots: [None; NUM_LTR_SLOTS],
-            ltr_tainted: [false; NUM_LTR_SLOTS],
-            next_ltr_slot: 0,
+            ltr: LtrMirror::default(),
             ltr_mark_interval: ltr_mark_interval(fps),
-            pending_force: None,
             reference_floor: None,
             ltr_test_force_at: ltr_test_force_at(),
             #[cfg(test)]
@@ -1184,10 +1174,7 @@ impl QsvEncoder {
         };
         self.ltr_active = ltr_active;
         self.ir_active = ir_active;
-        self.ltr_slots = [None; NUM_LTR_SLOTS];
-        self.ltr_tainted = [false; NUM_LTR_SLOTS];
-        self.next_ltr_slot = 0;
-        self.pending_force = None;
+        self.ltr = LtrMirror::default();
         self.hdr_applied = self.hdr_meta;
         tracing::info!(
             codec = ?self.codec,
@@ -1293,7 +1280,7 @@ impl QsvEncoder {
             forced,
             ltr,
             cur_idx,
-            &self.ltr_slots,
+            &self.ltr.slots,
             self.codec != Codec::Av1,
         );
         let mut bs = inner.take_bs();
@@ -1332,73 +1319,18 @@ impl QsvEncoder {
         Ok(())
     }
 
-    /// This frame's LTR mark and force. An IDR empties the mirror and drops a queued force. A
-    /// queued force resolves now: taint may have landed since it was queued, and an empty or
-    /// tainted slot ships a plain P with no recovery anchor (that tag lifts the client's
-    /// post-loss freeze). A force takes the frame's mark, which would overwrite it.
+    /// This frame's LTR mark and force ([`LtrMirror::step`]). Confirmed references are AVC and
+    /// HEVC only: AV1 rejects nothing, so a hint it ignored would tag a frame that still leans
+    /// on a loss. A force keeps the other marks, which RejectedRefList names for this frame.
     fn ltr_step(&mut self, forced: bool, cur_idx: i64) -> LtrStep {
-        let mut step = LtrStep::default();
         if !self.ltr_active {
-            return step;
+            return LtrStep::default();
         }
-        if forced {
-            self.ltr_slots = [None; NUM_LTR_SLOTS];
-            self.ltr_tainted = [false; NUM_LTR_SLOTS]; // IDR flushed the DPB
-            self.next_ltr_slot = 0;
-            self.pending_force = None;
-        }
-        if let Some(slot) = self.pending_force.take() {
-            step.force = self.ltr_slots[slot]
-                .filter(|_| !self.ltr_tainted[slot])
-                .map(|idx| (slot, idx));
-        }
-        // Confirmed references, AVC and HEVC only: AV1 rejects nothing, so a hint it ignored
-        // would tag a frame that still leans on a loss.
-        let acked = self.reference_floor.filter(|_| self.codec != Codec::Av1);
-        if let Some(acked) = acked.filter(|_| step.force.is_none() && !forced) {
-            let view: [Option<i64>; NUM_LTR_SLOTS] =
-                std::array::from_fn(|s| self.ltr_slots[s].filter(|_| !self.ltr_tainted[s]));
-            let (mark, force) =
-                super::rfi::ltr_acked_step(&view, &acked, cur_idx, self.next_ltr_slot);
-            // A force rejects every other mark, so the slot it frees takes this frame.
-            let mark = match force {
-                Some((f, _)) => Some((f + 1) % NUM_LTR_SLOTS),
-                None => mark,
-            };
-            if let Some(m) = mark {
-                self.ltr_slots[m] = Some(cur_idx);
-                self.ltr_tainted[m] = false;
-                self.next_ltr_slot = (m + 1) % NUM_LTR_SLOTS;
-            }
-            return LtrStep {
-                mark_slot: mark,
-                force,
-                acked: true,
-            };
-        }
-        if step.force.is_none() && (forced || cur_idx % self.ltr_mark_interval == 0) {
-            let trusted: [bool; NUM_LTR_SLOTS] =
-                std::array::from_fn(|s| self.ltr_slots[s].is_some() && !self.ltr_tainted[s]);
-            let slot = super::rfi::mark_slot(&trusted, self.next_ltr_slot);
-            self.ltr_slots[slot] = Some(cur_idx);
-            // Re-mark replaces LongTermIdx: the tainted frame leaves the DPB.
-            self.ltr_tainted[slot] = false;
-            self.next_ltr_slot = (slot + 1) % NUM_LTR_SLOTS;
-            step.mark_slot = Some(slot);
-        }
-        step
+        let floor = self.reference_floor.filter(|_| self.codec != Codec::Av1);
+        let interval = self.ltr_mark_interval;
+        self.ltr
+            .step(forced, cur_idx, interval, floor, false, false)
     }
-}
-
-/// One frame's LTR action, decided before the surface is built.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-struct LtrStep {
-    /// Mark this frame long-term into the slot.
-    mark_slot: Option<usize>,
-    /// Re-reference `(slot, wire index)`; the AU is a recovery anchor.
-    force: Option<(usize, i64)>,
-    /// The force follows the client's confirmations, not an RFI.
-    acked: bool,
 }
 
 /// The encode control for an IDR, an LTR mark or an LTR force; `None` for a plain P. A force
@@ -1733,31 +1665,14 @@ impl Encoder for QsvEncoder {
         self.hdr_meta = meta;
     }
 
-    /// Force-reference the newest LTR marked before `[first, last]`. `false` → IDR fallback.
+    /// Force-reference the newest LTR marked before `[first, last]` ([`LtrMirror::invalidate`]).
+    /// `false` → IDR fallback.
     fn invalidate_ref_frames(&mut self, first: i64, last: i64) -> bool {
         if !self.ltr_active || first < 0 || first > last {
             return false;
         }
-        // Policy is `rfi::plan_slot_recovery`. Distrust is `ltr_tainted`, never a
-        // cleared mirror: `ltr_slots` tracks the hardware DPB, and RejectedRefList
-        // only names `Some` slots. Filter with `!ltr_tainted` so distrust survives
-        // later losses.
-        let view: Vec<(usize, i64)> = self
-            .ltr_slots
-            .iter()
-            .enumerate()
-            .filter(|&(slot, _)| !self.ltr_tainted[slot])
-            .filter_map(|(s, m)| m.map(|w| (s, w)))
-            .collect();
-        let plan = super::rfi::plan_slot_recovery(&view, first, self.reference_floor.as_ref());
-        for (slot, tainted) in self.ltr_tainted.iter_mut().enumerate() {
-            if plan.tainted & (1 << slot) != 0 {
-                *tainted = true;
-            }
-        }
-        match plan.anchor {
+        match self.ltr.invalidate(first, self.reference_floor.as_ref()) {
             Some((slot, ltr_frame)) => {
-                self.pending_force = Some(slot);
                 tracing::info!(
                     first,
                     last,
@@ -1769,8 +1684,6 @@ impl Encoder for QsvEncoder {
                 true
             }
             None => {
-                // Drop a queued force that now points at nothing clean.
-                self.pending_force = None;
                 tracing::info!(
                     first,
                     last,
@@ -1781,32 +1694,21 @@ impl Encoder for QsvEncoder {
         }
     }
 
-    /// Withdraw anchor trust from every live LTR (trait docs carry the why).
-    /// Distrust is `ltr_tainted`, never a cleared `ltr_slots` entry — the mirror
-    /// tracks the hardware DPB and RejectedRefList only names `Some` slots.
-    /// Taint clears on IDR flush or re-mark. Drop `pending_force` so an unconsumed
-    /// force cannot re-reference a slot this call just distrusted.
     fn set_reference_floor(&mut self, acked: Option<crate::Acked>) {
         self.reference_floor = acked;
     }
 
+    /// Withdraw anchor trust from every live LTR and drop a queued force
+    /// ([`LtrMirror::distrust`]); the trait docs carry the why.
     fn distrust_references(&mut self) {
-        let live = self
-            .ltr_slots
-            .iter()
-            .enumerate()
-            .filter(|&(slot, m)| m.is_some() && !self.ltr_tainted[slot])
-            .count();
-        if live == 0 && self.pending_force.is_none() {
-            return;
+        let live = self.ltr.distrust();
+        if live > 0 {
+            tracing::debug!(
+                live,
+                "QSV LTR-RFI: client reported unrepaired damage — withdrawing anchor trust from \
+                 every live LTR (cleared by the next re-mark or IDR flush)"
+            );
         }
-        self.ltr_tainted = [true; NUM_LTR_SLOTS];
-        self.pending_force = None;
-        tracing::debug!(
-            live,
-            "QSV LTR-RFI: client reported unrepaired damage — withdrawing anchor trust from every \
-             live LTR (cleared by the next re-mark or IDR flush)"
-        );
     }
 
     fn caps(&self) -> EncoderCaps {
@@ -1899,10 +1801,7 @@ impl Encoder for QsvEncoder {
             Ok((ltr, ir, bs_bytes, info)) => {
                 self.ltr_active = ltr;
                 self.ir_active = ir;
-                self.ltr_slots = [None; NUM_LTR_SLOTS];
-                self.ltr_tainted = [false; NUM_LTR_SLOTS];
-                self.next_ltr_slot = 0;
-                self.pending_force = None;
+                self.ltr = LtrMirror::default();
                 let restarted = match self.inner.as_mut() {
                     Some(inner) => {
                         inner.bs_bytes = bs_bytes;
@@ -2174,55 +2073,12 @@ mod tests {
         enc
     }
 
-    /// An IDR empties the mirror, drops a queued force and marks slot 0.
-    #[test]
-    fn an_idr_resets_the_ltr_mirror_and_marks_slot_zero() {
-        let mut enc = ltr_encoder();
-        enc.ltr_slots = [Some(3), Some(5)];
-        enc.ltr_tainted = [true, false];
-        enc.next_ltr_slot = 1;
-        enc.pending_force = Some(1);
-        let step = enc.ltr_step(true, 9);
-        assert_eq!(
-            step,
-            LtrStep {
-                mark_slot: Some(0),
-                ..LtrStep::default()
-            }
-        );
-        assert_eq!(enc.ltr_slots, [Some(9), None]);
-        assert_eq!(enc.ltr_tainted, [false, false]);
-        assert_eq!(enc.next_ltr_slot, 1);
-        assert_eq!(enc.pending_force, None);
-    }
-
-    /// A queued force on a clean slot re-references it and takes the frame's mark. On a tainted
-    /// slot it ships a plain P.
-    #[test]
-    fn a_queued_force_needs_a_clean_slot() {
-        let mut enc = ltr_encoder();
-        enc.ltr_slots = [Some(0), Some(8)];
-        enc.pending_force = Some(0);
-        assert_eq!(
-            enc.ltr_step(false, 16),
-            LtrStep {
-                force: Some((0, 0)),
-                ..LtrStep::default()
-            }
-        );
-        assert_eq!(enc.pending_force, None, "a force is consumed");
-        enc.ltr_tainted = [true, false];
-        enc.pending_force = Some(0);
-        assert_eq!(enc.ltr_step(false, 17), LtrStep::default());
-        assert_eq!(enc.pending_force, None);
-    }
-
     /// Under confirmed references every frame forces the newest confirmed slot and marks the
     /// other; the frame's own mark is never rejected. AV1 keeps the interval.
     #[test]
     fn confirmed_references_force_the_newest_confirmed_slot() {
         let mut enc = ltr_encoder();
-        enc.ltr_slots = [Some(9), Some(10)];
+        enc.ltr.slots = [Some(9), Some(10)];
         enc.reference_floor = Some(crate::Acked {
             last: 10,
             mask: 0xffff,
@@ -2236,8 +2092,8 @@ mod tests {
                 acked: true
             }
         );
-        assert_eq!(enc.ltr_slots, [Some(11), Some(10)]);
-        let c = frame_ctrl(false, step, 11, &enc.ltr_slots, true).expect("ctrl");
+        assert_eq!(enc.ltr.slots, [Some(11), Some(10)]);
+        let c = frame_ctrl(false, step, 11, &enc.ltr.slots, true).expect("ctrl");
         let rejected: Vec<u32> = c.reflist.RejectedRefList[..2]
             .iter()
             .map(|e| e.FrameOrder)
@@ -2245,23 +2101,6 @@ mod tests {
         assert_eq!(rejected, [9, vpl::MFX_FRAMEORDER_UNKNOWN as u32]);
         enc.codec = Codec::Av1;
         assert_eq!(enc.ltr_step(false, 12), LtrStep::default());
-    }
-
-    /// Marks land on the interval, first on a slot holding no trusted picture.
-    #[test]
-    fn a_mark_prefers_a_slot_without_a_trusted_picture() {
-        let mut enc = ltr_encoder();
-        enc.ltr_slots = [Some(0), Some(8)];
-        enc.ltr_tainted = [false, true];
-        assert_eq!(
-            enc.ltr_step(false, 15),
-            LtrStep::default(),
-            "off the interval"
-        );
-        assert_eq!(enc.ltr_step(false, 16).mark_slot, Some(1));
-        assert_eq!(enc.ltr_slots, [Some(0), Some(16)]);
-        assert!(!enc.ltr_tainted[1], "a re-mark clears the taint");
-        assert_eq!(enc.next_ltr_slot, 0);
     }
 
     /// A force rejects the two previous frames and every other mark and caps L0 at one; AV1
@@ -2698,9 +2537,9 @@ mod tests {
             }
             if i == 59 && ltr {
                 assert!(
-                    !enc.ltr_slots.contains(&Some(refused.0 as i64)),
+                    !enc.ltr.slots.contains(&Some(refused.0 as i64)),
                     "mirror claims a mark the hardware never made: {:?}",
-                    enc.ltr_slots
+                    enc.ltr.slots
                 );
             }
         }) else {

@@ -14,6 +14,7 @@
 
 use super::policy::{intra_refresh_period, intra_refresh_requested, ltr_test_force_at};
 use super::{ChromaFormat, Codec, EncodedFrame, Encoder, EncoderCaps};
+use crate::ltr::{LtrMirror, LtrStep, NUM_LTR_SLOTS};
 use crate::retrieve::{poll_budget_ms, AuQueue, RetrieveThread};
 use anyhow::{anyhow, bail, Context, Result};
 use pf_frame::{CapturedFrame, FramePayload, PixelFormat};
@@ -490,10 +491,6 @@ fn usage_from_knobs(codec: Codec) -> i64 {
         _ => ull,
     }
 }
-
-/// User LTR slots. AMD exposes 2; rotating them keeps a pair so a loss can re-reference the newest
-/// mark *before* the loss point.
-const NUM_LTR_SLOTS: usize = 2;
 
 /// LTR loss recovery is on unless `PUNKTFUNK_NO_AMF_LTR=1` or `PUNKTFUNK_INTRA_REFRESH` asked
 /// for intra-refresh instead: AMF has no constrained-intra property, so the two exclude each
@@ -1066,13 +1063,8 @@ pub struct AmfEncoder {
     /// The driver keeps the slots a force leaves out (`LTRMode` 1): a mark awaiting the
     /// client's confirmation survives the forces before it.
     ltr_keep: bool,
-    /// Wire `frame_idx` in each LTR slot (`None` = never marked). Newest pre-loss slot is forced.
-    ltr_slots: [Option<i64>; NUM_LTR_SLOTS],
-    /// Next LTR mark slot (round-robin).
-    next_ltr_slot: usize,
+    ltr: LtrMirror,
     ltr_mark_interval: i64,
-    /// LTR slot the next submit must force-reference. Consumed on that submit.
-    pending_force: Option<usize>,
     /// The newest frame the client confirmed, while the host holds confirmed references.
     reference_floor: Option<crate::Acked>,
     /// `PUNKTFUNK_LTR_FORCE_AT=N`: self-trigger [`Encoder::invalidate_ref_frames`] at that index.
@@ -1159,10 +1151,8 @@ impl AmfEncoder {
             ir_active: false,
             ltr_active: false,
             ltr_keep: false,
-            ltr_slots: [None; NUM_LTR_SLOTS],
-            next_ltr_slot: 0,
+            ltr: LtrMirror::default(),
             ltr_mark_interval: ltr_mark_interval(fps),
-            pending_force: None,
             reference_floor: None,
             ltr_test_force_at: ltr_test_force_at(),
             #[cfg(test)]
@@ -1434,9 +1424,7 @@ impl AmfEncoder {
         self.ltr_active = ltr_active;
         self.ltr_keep = ltr_keep;
         if ltr_active {
-            self.ltr_slots = [None; NUM_LTR_SLOTS];
-            self.next_ltr_slot = 0;
-            self.pending_force = None;
+            self.ltr = LtrMirror::default();
         }
 
         // Bump after successful Init so a failed bring-up never counts.
@@ -1707,24 +1695,19 @@ impl AmfEncoder {
                 "AMF LTR test hook fired invalidate_ref_frames"
             );
         }
+        // An RFI force leaves only its own slot trusted, in either `LTRMode`.
         let LtrStep {
             mark_slot,
-            force_slot,
+            force,
             acked,
         } = if self.ltr_active {
-            ltr_step(
-                &mut self.ltr_slots,
-                &mut self.next_ltr_slot,
-                &mut self.pending_force,
-                forced,
-                cur_idx,
-                self.ltr_mark_interval,
-                self.reference_floor,
-                self.ltr_keep,
-            )
+            let interval = self.ltr_mark_interval;
+            let (floor, keep) = (self.reference_floor, self.ltr_keep);
+            self.ltr.step(forced, cur_idx, interval, floor, keep, true)
         } else {
             LtrStep::default()
         };
+        let force_slot = force.map(|(slot, _)| slot);
         let mut recovery_anchor = force_slot.is_some();
         #[cfg(test)]
         if self.fail_submit_at == Some(cur_idx) {
@@ -1830,7 +1813,7 @@ impl AmfEncoder {
                         "AMF LTR mark rejected"
                     );
                     // The mirror must not claim a slot the hardware never marked.
-                    self.ltr_slots[slot] = None;
+                    self.ltr.slots[slot] = None;
                 }
             }
             if let Some(slot) = force_slot {
@@ -1892,87 +1875,6 @@ impl AmfEncoder {
     }
 }
 
-/// One frame's LTR action, decided before the surface is built.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-struct LtrStep {
-    /// Mark this frame long-term into the slot.
-    mark_slot: Option<usize>,
-    /// Force-reference the slot; the AU is a recovery anchor.
-    force_slot: Option<usize>,
-    /// The force follows the client's confirmations, not an RFI.
-    acked: bool,
-}
-
-/// This frame's LTR mark and force over the slot mirror. An IDR empties the mirror and drops a
-/// queued force. A queued force needs its slot still marked: the taint sweep empties a slot
-/// whose tainted mark the hardware still holds, and forcing it would re-reference the loss. A
-/// force clears every other slot (`LTR_MODE_RESET_UNUSED`, the default: referencing one slot
-/// discards the rest) and takes the frame's mark, which would overwrite it. Under a `floor`
-/// each frame forces the newest confirmed slot ([`super::rfi::ltr_acked_step`]); with `keep`
-/// the driver keeps the other slots and the frame marks a free one, else it marks the one
-/// the force cleared.
-#[allow(clippy::too_many_arguments)]
-fn ltr_step(
-    slots: &mut [Option<i64>; NUM_LTR_SLOTS],
-    next_slot: &mut usize,
-    pending_force: &mut Option<usize>,
-    forced: bool,
-    cur_idx: i64,
-    mark_interval: i64,
-    floor: Option<crate::Acked>,
-    keep: bool,
-) -> LtrStep {
-    let mut step = LtrStep::default();
-    if forced {
-        *slots = [None; NUM_LTR_SLOTS];
-        *next_slot = 0;
-        *pending_force = None;
-    }
-    if let Some(slot) = pending_force.take() {
-        if slots[slot].is_some() {
-            step.force_slot = Some(slot);
-            for (s, marked) in slots.iter_mut().enumerate() {
-                if s != slot {
-                    *marked = None;
-                }
-            }
-        }
-    }
-    if let Some(floor) = floor.filter(|_| step.force_slot.is_none() && !forced) {
-        let (mark, force) = super::rfi::ltr_acked_step(slots, &floor, cur_idx, *next_slot);
-        // A force clears every other slot, so the slot it frees takes this frame.
-        let mark = match force {
-            Some(_) if keep => mark,
-            Some((f, _)) => {
-                for (s, marked) in slots.iter_mut().enumerate() {
-                    if s != f {
-                        *marked = None;
-                    }
-                }
-                Some((f + 1) % NUM_LTR_SLOTS)
-            }
-            None => mark,
-        };
-        if let Some(m) = mark {
-            slots[m] = Some(cur_idx);
-            *next_slot = (m + 1) % NUM_LTR_SLOTS;
-        }
-        return LtrStep {
-            mark_slot: mark,
-            force_slot: force.map(|(f, _)| f),
-            acked: true,
-        };
-    }
-    if step.force_slot.is_none() && (forced || cur_idx % mark_interval == 0) {
-        let trusted = slots.map(|m| m.is_some());
-        let slot = super::rfi::mark_slot(&trusted, *next_slot);
-        slots[slot] = Some(cur_idx);
-        *next_slot = (slot + 1) % NUM_LTR_SLOTS;
-        step.mark_slot = Some(slot);
-    }
-    step
-}
-
 impl Encoder for AmfEncoder {
     fn submit(&mut self, captured: &CapturedFrame) -> Result<()> {
         let submitted = self.try_submit(captured);
@@ -2000,31 +1902,16 @@ impl Encoder for AmfEncoder {
         self.hdr_meta = meta;
     }
 
-    /// Force the next submit to re-reference the newest LTR marked before `[first, last]`.
-    /// `true` = usable pre-loss LTR (caller must not also IDR); `false` = fall back to keyframe.
+    /// Force the next submit to re-reference the newest LTR marked before `[first, last]`
+    /// ([`LtrMirror::invalidate`]); that AU ships `recovery_anchor`. `true` = usable pre-loss
+    /// LTR (caller must not also IDR); `false` = fall back to keyframe.
     fn invalidate_ref_frames(&mut self, first: i64, last: i64) -> bool {
-        // No live LTR (driver declined, or AV1) or a nonsense range → caller IDRs.
+        // No live LTR or a nonsense range → caller IDRs.
         if !self.ltr_active || first < 0 || first > last {
             return false;
         }
-        // Policy is `rfi::plan_slot_recovery`; mechanism is clear the mirror slot. Slots store
-        // wire indexes (`submit_indexed`) so they compare against client `first` across rebuilds.
-        let view: Vec<(usize, i64)> = self
-            .ltr_slots
-            .iter()
-            .enumerate()
-            .filter_map(|(s, m)| m.map(|w| (s, w)))
-            .collect();
-        let plan = super::rfi::plan_slot_recovery(&view, first, self.reference_floor.as_ref());
-        for (slot, marked) in self.ltr_slots.iter_mut().enumerate() {
-            if plan.tainted & (1 << slot) != 0 {
-                *marked = None;
-            }
-        }
-        match plan.anchor {
+        match self.ltr.invalidate(first, self.reference_floor.as_ref()) {
             Some((slot, ltr_frame)) => {
-                // Next submit force-references this slot and ships `recovery_anchor`.
-                self.pending_force = Some(slot);
                 tracing::info!(
                     first,
                     last,
@@ -2035,8 +1922,6 @@ impl Encoder for AmfEncoder {
                 true
             }
             None => {
-                // Sweep may have emptied a queued force's slot — don't force a tainted hardware slot.
-                self.pending_force = None;
                 tracing::info!(
                     first,
                     last,
@@ -2047,23 +1932,21 @@ impl Encoder for AmfEncoder {
         }
     }
 
-    /// Clear every LTR mirror slot and any queued force (would otherwise re-reference the taint).
     fn set_reference_floor(&mut self, acked: Option<crate::Acked>) {
         self.reference_floor = acked;
     }
 
+    /// Withdraw anchor trust from every live LTR and drop a queued force
+    /// ([`LtrMirror::distrust`]); the trait docs carry the why.
     fn distrust_references(&mut self) {
-        let live = self.ltr_slots.iter().filter(|m| m.is_some()).count();
-        if live == 0 && self.pending_force.is_none() {
-            return;
+        let live = self.ltr.distrust();
+        if live > 0 {
+            tracing::debug!(
+                live,
+                "AMF LTR-RFI: client reported unrepaired damage — withdrawing anchor trust from \
+                 every live LTR (cleared by the next re-mark or IDR)"
+            );
         }
-        self.ltr_slots = [None; NUM_LTR_SLOTS];
-        self.pending_force = None;
-        tracing::debug!(
-            live,
-            "AMF LTR-RFI: client reported unrepaired damage — withdrawing anchor trust from every \
-             live LTR (the marking cadence re-marks a clean frame within ~1/4 s)"
-        );
     }
 
     fn caps(&self) -> EncoderCaps {
@@ -2164,9 +2047,7 @@ impl Encoder for AmfEncoder {
                         // Re-Init voids reference history; drop prior LTR marks.
                         self.ltr_active = ltr;
                         self.ltr_keep = keep;
-                        self.ltr_slots = [None; NUM_LTR_SLOTS];
-                        self.next_ltr_slot = 0;
-                        self.pending_force = None;
+                        self.ltr = LtrMirror::default();
                         blocking = set_query_timeout(comp, self.props.query_timeout);
                         comp.init(fmt, self.width as i32, self.height as i32) == sys::AMF_OK
                     }

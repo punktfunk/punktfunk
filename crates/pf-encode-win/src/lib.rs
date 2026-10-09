@@ -19,6 +19,10 @@ pub mod convert;
 #[cfg(target_os = "windows")]
 #[path = "windows/retrieve.rs"]
 mod retrieve;
+// The LTR slot mirror AMF and QSV share. Pure bookkeeping, so its tests also run on Linux.
+#[cfg(any(target_os = "windows", all(test, target_os = "linux")))]
+#[path = "windows/ltr.rs"]
+mod ltr;
 // `#[path]` keeps `crate::*` names flat. Native AMF is unconditional on
 // Windows — `amfrt64.dll` at runtime, like NVENC. See `design/native-amf-encoder.md`.
 #[cfg(target_os = "windows")]
