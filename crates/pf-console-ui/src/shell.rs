@@ -192,8 +192,9 @@ pub struct ConsoleOptions {
     /// The About row's version, verbatim. `None` shows this kit's version: right where the
     /// app ships from this workspace.
     pub version: Option<String>,
-    /// Steam Deck: Steam's keyboard types; this shell never draws one.
-    pub deck: bool,
+    /// The device's own keyboard types into an open field: Steam's on a Steam Deck, tvOS's
+    /// on an Apple TV. This shell never raises its keyboard tray.
+    pub system_keyboard: bool,
     /// A TV (Apple TV, Android TV): rows for a clipboard or a phone's sensors do nothing.
     pub tv: bool,
     /// Host has another UI when the console is off (phone/tablet touch shell).
@@ -232,11 +233,11 @@ pub struct DeviceScreen {
 }
 
 impl ConsoleOptions {
-    pub fn desktop(device_name: String, deck: bool) -> ConsoleOptions {
+    pub fn desktop(device_name: String, system_keyboard: bool) -> ConsoleOptions {
         ConsoleOptions {
             device_name,
             version: None,
-            deck,
+            system_keyboard,
             tv: false,
             fallback_ui: false,
             // The desktop probe reads the session's Vulkan device, which the console does
@@ -443,7 +444,7 @@ impl Shell {
             device: crate::screens::Device {
                 platform: opts.platform,
                 screen: opts.screen,
-                deck: opts.deck,
+                system_keyboard: opts.system_keyboard,
                 tv: opts.tv,
                 fallback_ui: opts.fallback_ui,
                 pyrowave_ok: opts.pyrowave_ok,

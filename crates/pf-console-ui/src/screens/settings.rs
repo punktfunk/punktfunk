@@ -13,11 +13,11 @@
 
 use crate::glyphs::{Hint, HintKey};
 use crate::pointer::Pointer;
-use crate::screens::{Ctx, Outbox, Screen, ScreenView};
+use crate::screens::{Ctx, Outbox, Screen, ScreenView, TextEntry};
 use crate::theme::Fonts;
 use crate::widgets::{
-    column, entry_hints, field_key, permits, type_text, Charset, Entry, Keyboard, ListMsg,
-    MenuList, RowSpec, TabStrip, TAB_STRIP_H,
+    column, field_key, permits, type_text, Charset, Entry, ListMsg, MenuList, RowSpec, TabStrip,
+    TAB_STRIP_H,
 };
 use pf_client_core::menu_nav::{MenuDir, MenuEvent, MenuPulse};
 use pf_client_core::presets::SettingsOverlay;
@@ -56,10 +56,8 @@ pub(crate) struct SettingsScreen {
     strip_focus: bool,
     /// The typed field Y opened, and its digits. Y, not A, so A still cycles.
     typing: Option<(Typing, String)>,
-    /// Tray keyboard. Unused on Deck: Steam's keyboard types (same as add-host).
-    keyboard: Keyboard,
-    /// How far the keyboard tray is up, 0..1, as the last frame left it.
-    seat: f64,
+    /// The typed field's keyboard.
+    keyboard: TextEntry,
 }
 
 impl SettingsScreen {
@@ -80,8 +78,7 @@ impl SettingsScreen {
             overrides: Default::default(),
             strip_focus: false,
             typing: None,
-            keyboard: Keyboard::new(),
-            seat: 0.0,
+            keyboard: TextEntry::default(),
         }
     }
 
@@ -124,9 +121,7 @@ impl SettingsScreen {
 
     fn field_menu(&mut self, ev: MenuEvent, ctx: &mut Ctx) -> Option<MenuPulse> {
         let (_, text) = self.typing.as_mut()?;
-        let (entry, pulse) = self
-            .keyboard
-            .edit_menu(ev, ctx.device.deck, text, Self::admits);
+        let (entry, pulse) = self.keyboard.menu(ev, ctx.device, text, Self::admits);
         if entry != Entry::Stay {
             self.commit_field(ctx);
         }
@@ -209,16 +204,8 @@ impl SettingsScreen {
     /// trays run in this far so the rows bleed under both on one ramp. The keyboard
     /// lifts the bottom reach away, or the tray would slab the keys.
     pub(crate) fn pinned(&self, k: f64) -> (f32, f32) {
-        let bottom = DETAIL_H * k * (1.0 - self.seat.min(1.0));
+        let bottom = DETAIL_H * k * (1.0 - self.keyboard.seated().min(1.0));
         ((TAB_STRIP_H * k) as f32, bottom as f32)
-    }
-
-    fn tray_h(&self, k: f64) -> f64 {
-        if self.seat > 0.0 {
-            (Keyboard::tray_height() + 12.0) * k * self.seat
-        } else {
-            0.0
-        }
     }
 
     /// The rows' band: under the section strip, above the explainer and the keyboard.
@@ -227,7 +214,7 @@ impl SettingsScreen {
             rect.left,
             rect.top + (TAB_STRIP_H * k) as f32,
             rect.right,
-            rect.bottom - (DETAIL_H * k + self.tray_h(k)) as f32,
+            rect.bottom - (DETAIL_H * k + self.keyboard.reserve(k)) as f32,
         )
     }
 
@@ -532,14 +519,13 @@ impl ScreenView for SettingsScreen {
 
     /// Strip first: pills sit above the list, so a press there is never a row.
     fn pointer(&mut self, p: Pointer, ctx: &mut Ctx, fx: &mut Outbox) -> bool {
-        if let Some((_, text)) = self.typing.as_mut().filter(|_| !ctx.device.deck) {
-            let Some(entry) = self.keyboard.edit_pointer(p, text, Self::admits) else {
-                return false;
-            };
-            if entry != Entry::Stay {
+        let tray = (self.typing.as_mut())
+            .and_then(|(_, text)| self.keyboard.pointer(p, ctx.device, text, Self::admits));
+        if let Some(entry) = tray {
+            if entry.is_some_and(|e| e != Entry::Stay) {
                 self.commit_field(ctx);
             }
-            return true;
+            return entry.is_some();
         }
         if let Some(tab) = self.strip.pointer(p) {
             if p.press() {
@@ -619,7 +605,7 @@ impl ScreenView for SettingsScreen {
             } else {
                 "Done"
             };
-            return entry_hints(ctx.device.deck, done);
+            return TextEntry::hints(ctx.device, done);
         }
         // Strip-focused: hints describe the D-pad, not the rows.
         if self.strip_focus {
@@ -686,9 +672,7 @@ impl ScreenView for SettingsScreen {
         fonts: &Fonts,
         ctx: &mut Ctx,
     ) {
-        self.seat = self
-            .keyboard
-            .seat(self.typing.is_some() && !ctx.device.deck, dt);
+        self.keyboard.seat(self.typing.is_some(), ctx.device, dt);
         self.sync_presets(ctx);
         let list_rect = self.list_rect(rect, k);
         let ids = self.row_ids(ctx);
@@ -714,7 +698,7 @@ impl ScreenView for SettingsScreen {
         }
         // Rows run on under the section strip and the explainer, on the shell's trays;
         // with the keyboard up they stay in their band, or a tray would slab the keys.
-        self.list.bleed = self.seat == 0.0;
+        self.list.bleed = self.keyboard.seated() == 0.0;
         self.list.render(
             canvas,
             list_rect,
@@ -725,16 +709,7 @@ impl ScreenView for SettingsScreen {
             // No row focus ring while the tray or the strip holds it.
             self.typing.is_none() && !self.strip_focus,
         );
-        if self.seat > 0.0 {
-            self.keyboard.render(
-                canvas,
-                fonts,
-                f64::from(rect.width()),
-                f64::from(rect.bottom),
-                self.seat,
-                k,
-            );
-        }
+        self.keyboard.render(canvas, fonts, rect, k);
     }
 
     fn title(&self) -> String {

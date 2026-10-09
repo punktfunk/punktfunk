@@ -11,11 +11,9 @@ use super::settings::rows::{adjust, advanced, overrides_row, preset_field, prese
 use crate::glyphs::{Hint, HintKey};
 use crate::model::ConsoleCmd;
 use crate::pointer::Pointer;
-use crate::screens::{Ctx, EditField, Outbox, Screen, ScreenView};
+use crate::screens::{Ctx, EditField, Outbox, Screen, ScreenView, TextEntry};
 use crate::theme::Fonts;
-use crate::widgets::{
-    blurb, entry_hints, field_key, type_text, Entry, Keyboard, ListMsg, MenuList, RowSpec,
-};
+use crate::widgets::{blurb, field_key, type_text, Entry, ListMsg, MenuList, RowSpec};
 use pf_client_core::menu_nav::{MenuEvent, MenuPulse};
 use pf_client_core::presets::SettingsOverlay;
 use skia_safe::{Canvas, Rect};
@@ -207,7 +205,7 @@ pub(crate) struct PresetName {
     overlay: SettingsOverlay,
     name: String,
     list: MenuList,
-    keyboard: Keyboard,
+    keyboard: TextEntry,
     editing: bool,
     error: Option<String>,
 }
@@ -220,7 +218,7 @@ impl PresetName {
             overlay: SettingsOverlay::default(),
             name: String::new(),
             list: MenuList::new(),
-            keyboard: Keyboard::new(),
+            keyboard: TextEntry::default(),
             editing: true,
             error: None,
         }
@@ -324,8 +322,7 @@ impl ScreenView for PresetName {
     fn menu(&mut self, ev: MenuEvent, ctx: &mut Ctx, fx: &mut Outbox) -> Option<MenuPulse> {
         if self.editing {
             let before = self.name.len();
-            let (entry, pulse) =
-                (self.keyboard).edit_menu(ev, ctx.device.deck, &mut self.name, Self::admits);
+            let (entry, pulse) = (self.keyboard).menu(ev, ctx.device, &mut self.name, Self::admits);
             self.typed(before);
             return match entry {
                 Entry::Stay => pulse,
@@ -352,9 +349,11 @@ impl ScreenView for PresetName {
     }
 
     fn pointer(&mut self, p: Pointer, ctx: &mut Ctx, fx: &mut Outbox) -> bool {
-        if self.editing && !ctx.device.deck {
-            let before = self.name.len();
-            let entry = (self.keyboard).edit_pointer(p, &mut self.name, Self::admits);
+        let before = self.name.len();
+        let tray = self
+            .editing
+            .then(|| (self.keyboard).pointer(p, ctx.device, &mut self.name, Self::admits));
+        if let Some(entry) = tray.flatten() {
             self.typed(before);
             match entry {
                 None => return false,
@@ -382,7 +381,7 @@ impl ScreenView for PresetName {
 
     fn hints(&self, ctx: &Ctx) -> Vec<Hint> {
         if self.editing {
-            return entry_hints(ctx.device.deck, "Save");
+            return TextEntry::hints(ctx.device, "Save");
         }
         vec![
             Hint::new(HintKey::Confirm, "Select"),
@@ -404,12 +403,8 @@ impl ScreenView for PresetName {
              cards it is pinned to.",
         );
         let below = blurb(canvas, fonts, text, rect, k);
-        let seat = self.keyboard.seat(self.editing && !ctx.device.deck, dt);
-        let tray_h = if seat > 0.0 {
-            (Keyboard::tray_height() + 12.0) * k * seat
-        } else {
-            0.0
-        };
+        self.keyboard.seat(self.editing, ctx.device, dt);
+        let tray_h = self.keyboard.reserve(k);
         let list_rect = Rect::from_ltrb(
             rect.left,
             below.top,
@@ -422,10 +417,7 @@ impl ScreenView for PresetName {
         let rows = [field, RowSpec::action(action, !self.name.trim().is_empty())];
         self.list
             .render(canvas, list_rect, &rows, fonts, k, dt, !self.editing);
-        if seat > 0.0 {
-            let (w, bottom) = (f64::from(rect.width()), f64::from(rect.bottom));
-            self.keyboard.render(canvas, fonts, w, bottom, seat, k);
-        }
+        self.keyboard.render(canvas, fonts, rect, k);
     }
 
     fn press(&mut self) {

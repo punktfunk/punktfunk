@@ -84,7 +84,7 @@ impl CreateOptions {
         let opts = ConsoleOptions {
             device_name: self.device_name,
             version: None,
-            deck: self.system_keyboard,
+            system_keyboard: self.system_keyboard,
             tv: self.tv,
             fallback_ui: self.fallback_ui,
             pyrowave_ok: self.pyrowave_ok,
