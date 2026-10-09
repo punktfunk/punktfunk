@@ -7,9 +7,11 @@
 //! encoder rate from it, the controller judges delivery against it, and the
 //! simulator spends it: one arithmetic, one file.
 
-/// What the budget prices around each shard: 18 B over a sealed packet's
-/// [`WIRE_OVERHEAD`](crate::packet::WIRE_OVERHEAD). The simulator's scenarios and the
-/// controller behaviour they pin are tuned at 64; moving it re-tunes them.
+/// What the budget prices around each shard. Deliberately 64 B, while a sealed packet
+/// costs [`WIRE_OVERHEAD`](crate::packet::WIRE_OVERHEAD) (46): the controller's
+/// trajectories and the simulator baseline are tuned at 64. Pricing the real 46 is its
+/// own ABR change, validated on the abr-rig, together with the simulator's
+/// `PROBE_PACKET_BYTES`, which still counts the 40-byte v1 header.
 pub const SHARD_WIRE_OVERHEAD: u64 = 64;
 
 /// Floor on an encoder rate. Below this the picture is not worth the packets.
