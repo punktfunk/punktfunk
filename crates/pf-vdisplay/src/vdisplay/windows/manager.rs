@@ -1,5 +1,5 @@
-//! Host-lifetime virtual-display ownership: one process-wide refcount machine
-//! (Idle / Active / Lingering / Pinned), the linger timer, and a typed
+//! Host-lifetime virtual-display ownership: one process-wide slot map whose
+//! slots run [`lifecycle::State`], the linger timer, and a typed
 //! [`ControlDevice`].
 //!
 //! [`VirtualDisplayManager`] is the singleton ([`vdm`]). The session holds a
@@ -29,6 +29,7 @@ use windows::Win32::System::Threading::{
 
 use super::{DisplayOwnership, Mode, VirtualOutput};
 use crate::driver::ControlDevice;
+use crate::lifecycle::{self, Acquire, Release};
 use pf_win_display::win_display::{
     count_other_active, force_extend_topology, isolate_displays_ccd, isolate_displays_ccd_checked,
     resolve_gdi_name, restore_displays_ccd, set_active_mode, set_virtual_primary_ccd,
@@ -119,32 +120,20 @@ impl Monitor {
     }
 }
 
-/// Per-slot machine. Idle is absence from the map.
-enum SlotState {
-    Active {
-        mon: Monitor,
-        refs: u32,
-    },
-    Lingering {
-        mon: Monitor,
-        until: Instant,
-    },
-    /// `keep_alive = forever`: linger timer never tears this down. Reconnect
-    /// still preempts (a reused IddCx swap-chain is dead). Only
-    /// `/display/release` or host shutdown frees it.
-    Pinned {
-        mon: Monitor,
-    },
+/// One live or kept monitor. [`lifecycle::State`] decides every refcount, linger and pin
+/// transition; this file owns the monitor and the driver calls. Idle is absence from the map:
+/// a slot whose `life` reaches Idle leaves it, and is torn down, under the same lock.
+struct Slot {
+    mon: Monitor,
+    life: lifecycle::State,
 }
 
-impl SlotState {
-    fn mon(&self) -> &Monitor {
-        match self {
-            SlotState::Active { mon, .. }
-            | SlotState::Lingering { mon, .. }
-            | SlotState::Pinned { mon } => mon,
-        }
-    }
+/// What an acquire on this slot is, asked of the lifecycle without taking a hold: Create when
+/// empty, Join when Active, Reuse when kept. Windows answers Reuse with preempt-and-recreate:
+/// a reused IddCx swap-chain is dead.
+fn acquire_kind(slot: Option<&Slot>) -> Acquire {
+    let mut life = slot.map_or_else(lifecycle::State::default, |s| s.life);
+    life.acquire()
 }
 
 /// Group topology for the one Windows desktop. First slot isolates and
@@ -378,14 +367,14 @@ fn needs_resize(requested: Mode, committed: Mode, want: Mode) -> bool {
 struct MgrInner {
     /// Live/kept slots, keyed by identity slot (`1..=15`) or `0` for
     /// anonymous/GameStream (at most one; no identity to find another slot by).
-    slots: BTreeMap<u32, SlotState>,
+    slots: BTreeMap<u32, Slot>,
     group: GroupState,
 }
 
 impl MgrInner {
     /// Live target keys in acquire (generation) order — the CCD isolate keep-set + the layout member order.
     fn target_keys(&self) -> Vec<CcdTargetKey> {
-        let mut mons: Vec<&Monitor> = self.slots.values().map(SlotState::mon).collect();
+        let mut mons: Vec<&Monitor> = self.slots.values().map(|s| &s.mon).collect();
         mons.sort_by_key(|m| m.generation);
         mons.iter().map(|m| m.ccd_key()).collect()
     }
@@ -677,18 +666,14 @@ impl VirtualDisplayManager {
         // release and management read waits on this lock meanwhile.
         let dev = self.ensure_device()?;
         let mut inner = self.state.lock().unwrap();
+        let mut kind = acquire_kind(inner.slots.get(&slot));
 
-        // IDD-push: a new connection while THIS slot is Lingering/Pinned is a
-        // reconnect. A reused IddCx swap-chain is dead — preempt and create
-        // fresh. Do not preempt Active: that is a live lease (build-retry or
-        // concurrent session); tearing it churns REMOVE→ADD into 0x80070490.
-        if matches!(
-            inner.slots.get(&slot),
-            Some(SlotState::Lingering { .. } | SlotState::Pinned { .. })
-        ) {
-            if let Some(SlotState::Lingering { mon, .. } | SlotState::Pinned { mon }) =
-                inner.slots.remove(&slot)
-            {
+        // IDD-push: Reuse of a kept (Lingering/Pinned) slot is a reconnect, and a reused IddCx
+        // swap-chain is dead, so preempt and create fresh. Never preempt Active here: that is a
+        // live lease (build-retry or concurrent session), and REMOVE→ADD ends in 0x80070490.
+        if kind == Acquire::Reuse {
+            kind = Acquire::Create;
+            if let Some(Slot { mon, .. }) = inner.slots.remove(&slot) {
                 let old_key = mon.ccd_key();
                 tracing::info!(
                     slot,
@@ -713,9 +698,14 @@ impl VirtualDisplayManager {
         // re-acquires while the old lease is still held, so the slot is Active.
         // Join would hand it a stale target. Preempt; generation-stamped
         // leases no-op on release. WUDFHost death is all-slot shared fate.
-        if matches!(inner.slots.get(&slot), Some(SlotState::Active { mon, .. }) if !wudf_alive(mon.wudf_pid))
+        if kind == Acquire::Join
+            && inner
+                .slots
+                .get(&slot)
+                .is_some_and(|s| !wudf_alive(s.mon.wudf_pid))
         {
-            if let Some(SlotState::Active { mon, .. }) = inner.slots.remove(&slot) {
+            kind = Acquire::Create;
+            if let Some(Slot { mon, .. }) = inner.slots.remove(&slot) {
                 let old_key = mon.ccd_key();
                 tracing::warn!(
                     slot,
@@ -731,14 +721,14 @@ impl VirtualDisplayManager {
 
         // Live monitor on this slot — join (refcount++). Covers concurrent
         // same-client sessions and mid-stream Reconfigure overlap.
-        if matches!(inner.slots.get(&slot), Some(SlotState::Active { .. })) {
+        if kind == Acquire::Join {
             // A different mode is a mid-stream resize. Diff against both
             // [`needs_resize`] sides: negotiated and committed. `mon.mode`
             // alone is not the discriminator — a clamped refresh disagrees
             // for the monitor's life and every rebuild would look like resize.
             let (req_mode, cur_mode) = match inner.slots.get(&slot) {
-                Some(SlotState::Active { mon, .. }) => (mon.requested_mode, mon.mode),
-                _ => unreachable!("just matched Active"),
+                Some(s) => (s.mon.requested_mode, s.mon.mode),
+                None => unreachable!("Join means a live slot"),
             };
             if needs_resize(req_mode, cur_mode, mode) {
                 // In-place first: an already-advertised resolution is CCD-forced
@@ -747,20 +737,18 @@ impl VirtualDisplayManager {
                 // to re-arrival.
                 {
                     let in_place = {
-                        let Some(SlotState::Active { mon, refs }) = inner.slots.get_mut(&slot)
-                        else {
-                            unreachable!("just matched Active");
+                        let Some(Slot { mon, life }) = inner.slots.get_mut(&slot) else {
+                            unreachable!("Join means a live slot");
                         };
                         match self.resize_in_place(&dev, mon, mode) {
                             Ok(()) => {
-                                // +1 ref for the new (build-then-drop) lease;
+                                // One more hold for the new (build-then-drop) lease;
                                 // generation untouched so the old lease stays valid.
-                                *refs += 1;
-                                let refs = *refs;
+                                life.acquire();
                                 let out = self.output_for(slot, mon, quit.clone());
                                 tracing::info!(
                                     slot,
-                                    refs,
+                                    refs = life.refs(),
                                     backend = self.driver.name(),
                                     "virtual monitor resized IN PLACE (identity + swap-chain kept)"
                                 );
@@ -785,8 +773,8 @@ impl VirtualDisplayManager {
                         return Ok(out);
                     }
                 }
-                let Some(SlotState::Active { mon, refs }) = inner.slots.remove(&slot) else {
-                    unreachable!("just matched Active");
+                let Some(Slot { mon, mut life }) = inner.slots.remove(&slot) else {
+                    unreachable!("Join means a live slot");
                 };
                 let new_mon = match self.re_add(&dev, &mut inner, slot, &mon, mode, client_hdr) {
                     ReAdd::Arrived(m) => *m,
@@ -796,13 +784,13 @@ impl VirtualDisplayManager {
                     } => {
                         // Store the recovered monitor, not the one handed in:
                         // that one's driver monitor was REMOVEd, so key /
-                        // target_id / gdi_name are dead. generation/refs kept
+                        // target_id / gdi_name are dead. generation/life kept
                         // so leases stay valid.
                         inner.slots.insert(
                             slot,
-                            SlotState::Active {
+                            Slot {
                                 mon: *recovered,
-                                refs,
+                                life,
                             },
                         );
                         return Err(err).context("mid-stream resize re-arrival");
@@ -819,21 +807,16 @@ impl VirtualDisplayManager {
                     }
                 };
                 // `re_add` preserved generation so both leases match on release.
-                // +1 ref for the new (build-then-drop) lease.
+                // One more hold for the new (build-then-drop) lease.
+                life.acquire();
                 let out = self.output_for(slot, &new_mon, quit);
-                inner.slots.insert(
-                    slot,
-                    SlotState::Active {
-                        mon: new_mon,
-                        refs: refs + 1,
-                    },
-                );
+                inner.slots.insert(slot, Slot { mon: new_mon, life });
                 // Width changed — re-arrange so auto-row siblings do not
                 // overlap (no-op for a single member).
                 self.apply_group_layout(&mut inner);
                 tracing::info!(
                     slot,
-                    refs = refs + 1,
+                    refs = life.refs(),
                     backend = self.driver.name(),
                     "virtual monitor re-arrived for a mid-stream resize"
                 );
@@ -844,9 +827,7 @@ impl VirtualDisplayManager {
             // same dead target back, so the caller's whole retry budget re-reads one failure. The
             // monitor is live, so run the activation ladder again before joining.
             let unresolved = match inner.slots.get(&slot) {
-                Some(SlotState::Active { mon, .. }) if mon.gdi_name.is_none() => {
-                    Some(mon.ccd_key())
-                }
+                Some(s) if s.mon.gdi_name.is_none() => Some(s.mon.ccd_key()),
                 _ => None,
             };
             if let Some(key) = unresolved {
@@ -857,18 +838,18 @@ impl VirtualDisplayManager {
                         gdi_name = %name,
                         "virtual-display target activated on a later acquire"
                     );
-                    if let Some(SlotState::Active { mon, .. }) = inner.slots.get_mut(&slot) {
-                        mon.gdi_name = Some(name);
+                    if let Some(s) = inner.slots.get_mut(&slot) {
+                        s.mon.gdi_name = Some(name);
                     }
                 }
             }
-            let Some(SlotState::Active { mon, refs }) = inner.slots.get_mut(&slot) else {
-                unreachable!("just matched Active");
+            let Some(Slot { mon, life }) = inner.slots.get_mut(&slot) else {
+                unreachable!("Join means a live slot");
             };
-            *refs += 1;
+            life.acquire();
             tracing::info!(
                 slot,
-                refs = *refs,
+                refs = life.refs(),
                 backend = self.driver.name(),
                 "virtual monitor reused (concurrent session)"
             );
@@ -903,7 +884,9 @@ impl VirtualDisplayManager {
         };
         mon.client_fp = client_fp;
         let out = self.output_for(slot, &mon, quit);
-        inner.slots.insert(slot, SlotState::Active { mon, refs: 1 });
+        let mut life = lifecycle::State::default();
+        life.acquire(); // Create: Idle → Active { refs: 1 }
+        inner.slots.insert(slot, Slot { mon, life });
         // Arrange live members and commit desktop origins in one CCD apply.
         // A single member sits at the origin — this no-ops.
         self.apply_group_layout(&mut inner);
@@ -1253,7 +1236,7 @@ impl VirtualDisplayManager {
             .slots
             .iter()
             .map(|(slot, s)| {
-                let m = s.mon();
+                let m = &s.mon;
                 (*slot, m.generation, m.ccd_key(), m.mode.width as i32)
             })
             .collect();
@@ -1273,13 +1256,8 @@ impl VirtualDisplayManager {
             .collect();
         pf_win_display::win_display::apply_source_positions(&positions);
         for (&(slot, ..), p) in ordered.iter().zip(&placements) {
-            if let Some(
-                SlotState::Active { mon, .. }
-                | SlotState::Lingering { mon, .. }
-                | SlotState::Pinned { mon },
-            ) = inner.slots.get_mut(&slot)
-            {
-                mon.position = (p.x, p.y);
+            if let Some(s) = inner.slots.get_mut(&slot) {
+                s.mon.position = (p.x, p.y);
             }
         }
     }
@@ -2029,67 +2007,43 @@ impl VirtualDisplayManager {
         done.store(true, Ordering::SeqCst);
     }
 
-    /// Release a session's hold. The last one applies the creating device's
-    /// `keep_alive` ([`linger_for`]): a window lingers, `forever` pins, off tears
-    /// down now. A QUIT (`quit_now`) skips the window so a reconnect finds Idle
-    /// instead of the Lingering-preempt REMOVE→ADD, but never a pin: only
-    /// `/display/release` frees that. A stale lease is a no-op.
+    /// Release a session's hold through [`lifecycle::State::release`]. The last one applies the
+    /// creating device's `keep_alive` ([`linger_for`]): a window lingers, `forever` pins, off
+    /// tears down now. A QUIT (`quit_now`) skips the window so a reconnect finds Idle instead
+    /// of the Reuse preempt's REMOVE→ADD, but never a pin: only `/display/release` frees that.
+    /// A stale lease, or a release on a kept slot, is a no-op.
     fn release(&self, slot: u32, generation: u64, quit_now: bool) {
         use crate::policy::Linger;
         let mut inner = self.state.lock().unwrap();
-        let stale = match inner.slots.get(&slot) {
-            Some(s) => s.mon().generation != generation,
-            None => true,
-        };
-        if stale {
-            return;
-        }
-        let Some(entry) = inner.slots.remove(&slot) else {
+        let Some(s) = inner
+            .slots
+            .get_mut(&slot)
+            .filter(|s| s.mon.generation == generation)
+        else {
             return;
         };
-        let mon = match entry {
-            SlotState::Active { mon, refs } if refs > 1 => {
-                inner.slots.insert(
-                    slot,
-                    SlotState::Active {
-                        mon,
-                        refs: refs - 1,
-                    },
-                );
-                return;
-            }
-            SlotState::Active { mon, .. } => mon,
-            // Kept slot has no live hold — stale/duplicate release; put it back.
-            other => {
-                inner.slots.insert(slot, other);
-                return;
-            }
-        };
-        match crate::lifecycle::effective_linger(quit_now, linger_for(mon.client_fp)) {
-            Linger::Forever => {
-                tracing::info!(
-                    slot,
-                    "virtual-display: last session left — PINNED (keep_alive=forever); free via /display/release"
-                );
-                inner.slots.insert(slot, SlotState::Pinned { mon });
-            }
-            Linger::For(window) => {
-                tracing::info!(
-                    slot,
-                    linger_ms = window.as_millis() as u64,
-                    "virtual-display: last session left — lingering before teardown"
-                );
-                inner.slots.insert(
-                    slot,
-                    SlotState::Lingering {
-                        mon,
-                        until: Instant::now() + window,
-                    },
-                );
+        let linger = lifecycle::effective_linger(quit_now, linger_for(s.mon.client_fp));
+        match s.life.release(Instant::now(), linger) {
+            Release::Decref | Release::Noop => {}
+            Release::Pin => tracing::info!(
+                slot,
+                "virtual-display: last session left — PINNED (keep_alive=forever); free via /display/release"
+            ),
+            Release::Linger => {
+                if let Linger::For(window) = linger {
+                    tracing::info!(
+                        slot,
+                        linger_ms = window.as_millis() as u64,
+                        "virtual-display: last session left — lingering before teardown"
+                    );
+                }
             }
             // Under the state lock, so a racing `acquire` waits rather than ADD
-            // into an in-flight REMOVE.
-            Linger::Immediate => {
+            // into an in-flight REMOVE. The monitor leaves the map first.
+            Release::Teardown => {
+                let Some(Slot { mon, .. }) = inner.slots.remove(&slot) else {
+                    return;
+                };
                 tracing::info!(
                     slot,
                     quit_now,
@@ -2123,8 +2077,8 @@ impl VirtualDisplayManager {
         let slot = inner
             .slots
             .iter()
-            .filter_map(|(&slot, state)| match state {
-                SlotState::Active { mon, .. }
+            .filter_map(|(&slot, Slot { mon, life })| match life {
+                lifecycle::State::Active { .. }
                     if Some(slot) != own && mon.gdi_name.is_some() && wudf_alive(mon.wudf_pid) =>
                 {
                     let other_mode = (mon.mode.width, mon.mode.height) != (mode.width, mode.height);
@@ -2134,14 +2088,12 @@ impl VirtualDisplayManager {
             })
             .min()
             .map(|(.., slot)| slot)?;
-        let Some(SlotState::Active { mon, refs }) = inner.slots.get_mut(&slot) else {
-            return None;
-        };
-        *refs += 1;
+        let Slot { mon, life } = inner.slots.get_mut(&slot)?;
+        life.acquire();
         tracing::info!(
             slot,
             target = %mon.ccd_key(),
-            refs = *refs,
+            refs = life.refs(),
             "mode-conflict: JOIN — sharing the live display"
         );
         let mut out = self.output_for(slot, mon, None);
@@ -2162,18 +2114,20 @@ impl VirtualDisplayManager {
         if let Some(prev_stop) = prev {
             prev_stop.store(true, Ordering::SeqCst);
             if !self.wait_for_slot_released(slot, Duration::from_secs(3)) {
-                // Prior session still Active. `acquire` preempts Lingering
-                // only (so build-retries join), which would JOIN this stuck
+                // Prior session still Active. `acquire` preempts only a kept
+                // slot (so build-retries join), and would JOIN this stuck
                 // monitor's dead swap-chain. Force-preempt once here under
                 // `setup_lock` — not inside `acquire`, which would re-churn.
                 if let Some(dev) = self.device_handle() {
                     let mut inner = self.state.lock().unwrap();
                     let taken = match inner.slots.get(&slot) {
-                        Some(SlotState::Active { .. }) => inner.slots.remove(&slot),
+                        Some(s) if matches!(s.life, lifecycle::State::Active { .. }) => {
+                            inner.slots.remove(&slot)
+                        }
                         // Raced to Lingering/empty between the wait and here.
                         _ => None,
                     };
-                    if let Some(SlotState::Active { mon, .. }) = taken {
+                    if let Some(Slot { mon, .. }) = taken {
                         tracing::warn!(
                             slot,
                             old_target = mon.target_id,
@@ -2181,7 +2135,7 @@ impl VirtualDisplayManager {
                         );
                         self.teardown_removed(Some(&*dev), &mut inner, mon);
                         // Async departure before the next ADD (same 400 ms
-                        // ceiling as acquire's Lingering-preempt).
+                        // ceiling as acquire's Reuse preempt).
                         thread::sleep(Duration::from_millis(400));
                     }
                 }
@@ -2197,7 +2151,10 @@ impl VirtualDisplayManager {
         loop {
             if !matches!(
                 self.state.lock().unwrap().slots.get(&slot),
-                Some(SlotState::Active { .. })
+                Some(Slot {
+                    life: lifecycle::State::Active { .. },
+                    ..
+                })
             ) {
                 return true;
             }
@@ -2212,10 +2169,10 @@ impl VirtualDisplayManager {
         }
     }
 
-    /// Background timer: tear down a monitor past its linger deadline so a
-    /// physical-screen user gets their screen back. Marked started only once the
-    /// spawn succeeded, as `registry::linux::ensure_timer`: a `Once` would spend
-    /// itself on a failed spawn and leave every kept monitor unreaped.
+    /// Background timer: tear down a monitor whose [`lifecycle::State::poll_expiry`] fires, so a
+    /// physical-screen user gets their screen back. Marked started only once the spawn
+    /// succeeded, as `registry::linux::ensure_timer`: a `Once` would spend itself on a failed
+    /// spawn and leave every kept monitor unreaped.
     fn ensure_linger_timer(&'static self) {
         static STARTED: Mutex<bool> = Mutex::new(false);
         let mut started = STARTED.lock().unwrap_or_else(|e| e.into_inner());
@@ -2232,14 +2189,11 @@ impl VirtualDisplayManager {
                     let now = Instant::now();
                     let expired: Vec<u32> = g
                         .slots
-                        .iter()
-                        .filter_map(|(slot, s)| {
-                            matches!(s, SlotState::Lingering { until, .. } if now >= *until)
-                                .then_some(*slot)
-                        })
+                        .iter_mut()
+                        .filter_map(|(slot, s)| s.life.poll_expiry(now).then_some(*slot))
                         .collect();
                     for slot in expired {
-                        if let Some(SlotState::Lingering { mon, .. }) = g.slots.remove(&slot) {
+                        if let Some(Slot { mon, .. }) = g.slots.remove(&slot) {
                             // Teardown under the state lock. Dropping it
                             // first let a concurrent acquire ADD + isolate
                             // while this REMOVE/restore was in flight; the
@@ -2431,7 +2385,7 @@ fn warn_if_pick_moved(mon: &Monitor) {
 pub(crate) struct ManagedInfo {
     pub backend: &'static str,
     pub mode: (u32, u32, u32),
-    /// `"active"` | `"lingering"` | `"pinned"`.
+    /// [`lifecycle::State::label`].
     pub state: &'static str,
     /// Milliseconds until linger teardown (`None` when active or pinned).
     pub expires_in_ms: Option<u64>,
@@ -2449,21 +2403,19 @@ impl VirtualDisplayManager {
         let mut out: Vec<ManagedInfo> = inner
             .slots
             .iter()
-            .map(|(slot, s)| {
-                let (mon, state, sessions, expires_in_ms) = match s {
-                    SlotState::Active { mon, refs } => (mon, "active", *refs, None),
-                    SlotState::Lingering { mon, until } => {
-                        let ms = until.saturating_duration_since(Instant::now()).as_millis() as u64;
-                        (mon, "lingering", 0u32, Some(ms))
+            .map(|(slot, Slot { mon, life })| {
+                let expires_in_ms = match life {
+                    lifecycle::State::Lingering { until } => {
+                        Some(until.saturating_duration_since(Instant::now()).as_millis() as u64)
                     }
-                    SlotState::Pinned { mon } => (mon, "pinned", 0u32, None),
+                    _ => None,
                 };
                 ManagedInfo {
                     backend: self.driver.name(),
                     mode: (mon.mode.width, mon.mode.height, mon.mode.refresh_hz),
-                    state,
+                    state: life.label(),
                     expires_in_ms,
-                    sessions,
+                    sessions: life.refs(),
                     generation: mon.generation,
                     slot_id: *slot,
                     position: mon.position,
@@ -2476,27 +2428,20 @@ impl VirtualDisplayManager {
 
     /// Tear down kept (Lingering or Pinned) monitors now (`/display/release`).
     /// `slot` is a [`ManagedInfo::generation`]; `None` releases every kept one.
-    /// Active monitors are refused. Returns the number released.
+    /// [`lifecycle::State::force_release`] refuses Active. Returns the number released.
     pub(crate) fn force_release(&self, slot: Option<u64>) -> usize {
         let dev = self.device_handle();
         let mut inner = self.state.lock().unwrap();
         let kept: Vec<u32> = inner
             .slots
-            .iter()
-            .filter_map(|(k, s)| match s {
-                SlotState::Lingering { mon, .. } | SlotState::Pinned { mon }
-                    if slot.is_none_or(|g| g == mon.generation) =>
-                {
-                    Some(*k)
-                }
-                _ => None,
+            .iter_mut()
+            .filter_map(|(k, s)| {
+                (slot.is_none_or(|g| g == s.mon.generation) && s.life.force_release()).then_some(*k)
             })
             .collect();
         let mut released = 0usize;
         for k in kept {
-            if let Some(SlotState::Lingering { mon, .. } | SlotState::Pinned { mon }) =
-                inner.slots.remove(&k)
-            {
+            if let Some(Slot { mon, .. }) = inner.slots.remove(&k) {
                 self.teardown_removed(dev.as_deref(), &mut inner, mon);
                 released += 1;
             }
