@@ -41,12 +41,14 @@ fn gs_game() -> &'static Mutex<Option<Arc<crate::gamelease::LeaseShared>>> {
 
 /// Publish the compat plane's game. The guard retracts it on any stream-loop
 /// exit ([`super::LiveSessionGuard`]'s counterpart).
+#[cfg_attr(not(feature = "gamestream"), allow(dead_code, reason = "compat plane"))]
 pub fn publish_gamestream_game(shared: Arc<crate::gamelease::LeaseShared>) -> GamestreamGameGuard {
     *gs_game().lock().unwrap_or_else(|e| e.into_inner()) = Some(shared);
     GamestreamGameGuard
 }
 
 /// Retracts the compat plane's published game on drop.
+#[cfg_attr(not(feature = "gamestream"), allow(dead_code, reason = "compat plane"))]
 pub struct GamestreamGameGuard;
 
 impl Drop for GamestreamGameGuard {

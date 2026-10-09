@@ -21,6 +21,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 /// `None` only when nothing is available *and* nothing was detected — the
 /// caller turns that into a handshake error.
+#[cfg_attr(windows, allow(dead_code, reason = "Windows has one compositor"))]
 fn pick_compositor(
     pref: CompositorPref,
     available: &[crate::vdisplay::Compositor],
@@ -245,6 +246,7 @@ pub(crate) fn resolve_compositor(
 static LIVE_GAMESCOPE: AtomicUsize = AtomicUsize::new(0);
 
 /// Whether any session holds a [`GamescopeHold`]: a held takeover is then streaming, not kept.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code, reason = "Linux only"))]
 pub(crate) fn gamescope_sessions_live() -> bool {
     LIVE_GAMESCOPE.load(Ordering::SeqCst) > 0
 }

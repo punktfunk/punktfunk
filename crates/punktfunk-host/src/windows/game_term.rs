@@ -44,6 +44,7 @@ const DESKTOP_GENERIC_ALL: u32 = 0x1000_0000;
 /// The calling thread bound to the input desktop. `Drop` rebinds the thread's previous desktop
 /// before the handle closes: `CloseDesktop` fails on a desktop a thread is still bound to.
 pub(super) struct InputDesktop {
+    #[allow(dead_code, reason = "held so the handle closes after Drop rebinds")]
     desk: Owned<HDESK>,
     prev: HDESK,
 }

@@ -71,6 +71,7 @@ impl DetectSpec {
             && self.process_name.is_none()
     }
 
+    #[cfg(test)]
     pub fn steam(appid: u32) -> Self {
         Self {
             steam_appid: Some(appid),
@@ -78,6 +79,7 @@ impl DetectSpec {
         }
     }
 
+    #[cfg(test)]
     pub fn dir(dir: impl Into<PathBuf>) -> Self {
         Self {
             install_dir: Some(dir.into()),
@@ -93,11 +95,13 @@ impl DetectSpec {
     }
 
     /// Windows has no Steam reaper, so the appid alone is not enough there.
+    #[cfg(test)]
     pub fn with_dir(mut self, dir: impl Into<PathBuf>) -> Self {
         self.install_dir = Some(dir.into());
         self
     }
 
+    #[cfg(test)]
     pub fn with_env(mut self, key: impl Into<String>, value: Option<String>) -> Self {
         self.env_marker = Some(EnvMarker {
             key: key.into(),

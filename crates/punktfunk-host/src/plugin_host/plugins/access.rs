@@ -176,6 +176,7 @@ impl PathPolicy {
 #[derive(Clone, Copy)]
 struct PathFacts {
     is_dir: bool,
+    #[cfg_attr(windows, allow(dead_code, reason = "Windows has no owner uid"))]
     owner_uid: Option<u32>,
 }
 
@@ -1033,6 +1034,7 @@ impl AccessStore {
 
     /// [`Self::runner_roots`] for one plugin: what its manifest declares plus its own grants,
     /// which is what its own account or package gets an ACE for.
+    #[cfg_attr(not(windows), allow(dead_code, reason = "Windows grants per plugin"))]
     pub fn plugin_roots(&self, id: &str, manifest: &PluginManifest) -> Vec<RunnerRoot> {
         let access = {
             let _guard = self.lock.lock().unwrap_or_else(|e| e.into_inner());

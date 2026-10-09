@@ -44,6 +44,7 @@ impl Host {
 
 /// Host-lifetime state the planes and the management API share. The Moonlight plane's own
 /// slice is [`AppState::gs`], absent from a native-only build.
+#[cfg_attr(not(feature = "gamestream"), allow(dead_code, reason = "compat plane"))]
 pub struct AppState {
     pub host: Host,
     /// Paired client certificate DERs. Unconditional so a native-only build can still list

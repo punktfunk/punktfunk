@@ -525,12 +525,6 @@ pub(super) fn runner_command() -> Result<(std::path::PathBuf, Vec<String>)> {
     Ok((bun, vec![runner.to_string_lossy().into_owned()]))
 }
 
-/// The ACE a grant carries: `(RX)` for read, `(M)` for write, both inheritable.
-/// Pure so a test pins the string without a real `icacls`.
-fn grant_permission(write: bool) -> &'static str {
-    if write { Ace::Modify } else { Ace::Read }.icacls()
-}
-
 /// The runner's account may reach one directory the operator owns. LocalService holds no ACE
 /// inside a user profile, so without this a launcher installed there reads as not installed.
 pub(super) fn grant(dir: &std::path::Path, write: bool) -> Result<()> {
@@ -597,13 +591,6 @@ pub(super) fn revoke_from(sid: &str, dir: &std::path::Path) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    /// Read grants are read-only ACEs; a write grant is the one that carries Modify.
-    #[test]
-    fn grant_permission_splits_read_from_write() {
-        assert_eq!(super::grant_permission(false), "(OI)(CI)(RX)");
-        assert_eq!(super::grant_permission(true), "(OI)(CI)(M)");
-    }
-
     /// Only an `HKLM` key becomes a named key; `HKCU` and anything malformed name nothing.
     #[test]
     fn named_key_takes_hklm_only() {

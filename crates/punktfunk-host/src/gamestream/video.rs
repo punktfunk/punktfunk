@@ -121,7 +121,8 @@ impl VideoPacketizer {
         b
     }
 
-    /// Test/harness wrapper around [`packetize_into`](Self::packetize_into).
+    /// Test wrapper around [`packetize_into`](Self::packetize_into).
+    #[cfg(test)]
     pub fn packetize(
         &mut self,
         au: &[u8],

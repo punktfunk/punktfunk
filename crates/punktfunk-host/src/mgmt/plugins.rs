@@ -329,30 +329,6 @@ pub(crate) fn installer(id: &str) -> Option<UiCredential> {
     registry().credential_if(id, |u| u.install)
 }
 
-/// Bypass the HTTP router so [`crate::library::ask_plugin_launch`] tests can hit a stub server.
-#[cfg(test)]
-pub(crate) fn register_ui_for_test(id: &str, port: u16, secret: &str) {
-    registry().upsert(
-        id,
-        Valid {
-            title: id.to_string(),
-            version: None,
-            ui: Some(StoredUi {
-                port,
-                secret: secret.to_string(),
-                icon: None,
-                page: true,
-                config: false,
-                game: false,
-                install: false,
-            }),
-            category: None,
-            holds: Vec::new(),
-            hold_timeout: Duration::from_secs(30),
-        },
-    );
-}
-
 /// A title must not smuggle escapes, newlines or bidi marks into a log line or the nav.
 fn sanitize(s: &str) -> String {
     s.chars()

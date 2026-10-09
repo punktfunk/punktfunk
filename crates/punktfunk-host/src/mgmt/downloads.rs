@@ -285,7 +285,7 @@ async fn act(id: String, action: Action, by: Option<String>) -> Response {
     }
     match action {
         Action::Start => {
-            downloads::begin(&id, &title, &provider, &external, by);
+            downloads::begin(&id, &title, by);
             let row = downloads::get(&id);
             (StatusCode::ACCEPTED, Json(row)).into_response()
         }

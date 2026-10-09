@@ -145,7 +145,7 @@ fn await_files(
             _ => format!("Couldn't download {title} — the plugin that lists it didn't answer."),
         });
     }
-    downloads::begin(id, title, provider, external, Some(owner.client.clone()));
+    downloads::begin(id, title, Some(owner.client.clone()));
     let row = crate::session_status::waiting_launch(crate::session_status::GameSnapshot {
         session_id: None,
         client: owner.client.clone(),

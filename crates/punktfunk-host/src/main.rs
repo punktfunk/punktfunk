@@ -9,8 +9,6 @@
 //! Platform backends are `#[cfg]`; the crate still compiles on every workspace
 //! OS. Pin: `design/`. Evidence: this crate's tests and `docs/adr/`.
 
-// Dead methods/paths exist before their backends land.
-#![allow(dead_code)]
 // Keep `unsafe fn` only where a caller can violate a contract (raw pointer / borrowed HANDLE).
 // Workspace lints already require `// SAFETY:` on every `unsafe` block.
 
@@ -65,6 +63,7 @@ mod windows {
         pub(crate) fn topology_reassert_gen() -> u64 {
             0
         }
+        #[cfg_attr(target_os = "linux", allow(dead_code, reason = "macOS reads it"))]
         pub(crate) fn hw_cursor_capable() -> bool {
             false
         }

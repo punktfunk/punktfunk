@@ -69,6 +69,7 @@ pub(super) struct StreamState {
     #[cfg(target_os = "linux")]
     pub(super) next_park_at: std::time::Instant,
     /// Each host-composite outcome is logged once.
+    #[cfg_attr(windows, allow(dead_code, reason = "Windows never composites"))]
     pub(super) composite_log: super::cursor::CompositeLog,
     pub(super) last_forced_idr: Option<std::time::Instant>,
     /// Never re-anchors the IDR cooldown: sustained loss + RFI would swallow IDR pleas forever.
