@@ -8,8 +8,9 @@ use anyhow::Result;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-/// Wait after a failed open or a capture death before the next open.
-const REOPEN_BACKOFF: Duration = Duration::from_secs(2);
+/// Wait after a failed open or a capture death before the next open. The pad-audio streamer
+/// reopens on the same wait.
+pub const REOPEN_BACKOFF: Duration = Duration::from_secs(2);
 
 /// This session's capturer: opened, reopened after a death under [`REOPEN_BACKOFF`], its sink
 /// name published for a later joiner, and parked at the end. Empty chunks from a quiet sink

@@ -9,6 +9,10 @@
 //! Evidence: `design/hi-res-audio.md`, `design/remote-desktop-sweep.md`.
 
 use super::*;
+use crate::native::bitrate::{
+    audio_reserved_kbps, fec_static_override, resolve_bitrate_kbps_for, EncDerive,
+};
+use punktfunk_core::abr::budget::FEC_ADAPTIVE_START;
 
 /// Encode tier and `0xD2` redundancy, budgeted against this session's video kbps.
 ///
@@ -795,8 +799,8 @@ pub(super) async fn negotiate(
             let bitrate_auto = hello.bitrate_kbps == 0 || codec == crate::encode::Codec::PyroWave;
             // `bitrate_kbps` is the wire budget; the prep encoder opens at the derived video
             // rate, snapshotted at Welcome's initial FEC percent. The FEC watcher re-derives.
-            let enc_of = super::EncDerive {
-                audio_kbps: super::audio_reserved_kbps(&welcome),
+            let enc_of = EncDerive {
+                audio_kbps: audio_reserved_kbps(&welcome),
                 shard_payload: welcome.shard_payload,
                 fec_percent: welcome.fec.fec_percent,
                 identity: codec == crate::encode::Codec::PyroWave,

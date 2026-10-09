@@ -7,6 +7,8 @@
 
 use super::recovery::{KeyframeGate, KeyframeVerdict, IDR_COOLDOWN_FULL};
 use super::*;
+use crate::session_status::pack_mode;
+use punktfunk_core::abr::budget::encoder_kbps_for_budget;
 
 /// A keyframe against an ordinary frame, percent, when `--idr-pct` says nothing. Ten times,
 /// which is what rounds 4–7 measured against; a hardware encoder runs `PUNKTFUNK_VBV_FRAMES`
@@ -236,7 +238,7 @@ pub(crate) struct SynthAbrContext {
 /// Stream until the client leaves, `seconds` (`0` = until the client leaves) elapse, or the
 /// send thread goes.
 pub(crate) fn synthetic_abr_stream(ctx: SynthAbrContext) -> Result<()> {
-    boost_thread_priority(true);
+    pf_frame::thread_qos::boost_thread_priority(true);
     let SynthAbrContext {
         common:
             StreamCommon {

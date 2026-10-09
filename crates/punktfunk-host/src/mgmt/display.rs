@@ -690,7 +690,7 @@ const GAME_MODE_SLOT: u64 = (1 << 53) - 1;
 /// The box's own Game Mode, held between sessions by a takeover: a kept row, so Release reaches it.
 #[cfg(target_os = "linux")]
 fn held_game_mode() -> Option<ApiDisplayInfo> {
-    if crate::native::gamescope_sessions_live() {
+    if crate::compositor_route::gamescope_sessions_live() {
         return None;
     }
     let held = crate::vdisplay::held_managed_session()?;
@@ -743,7 +743,7 @@ pub(crate) async fn release_display(
         let released = crate::vdisplay::registry::release(slot);
         #[cfg(target_os = "linux")]
         if slot.is_none_or(|s| s == GAME_MODE_SLOT)
-            && !crate::native::gamescope_sessions_live()
+            && !crate::compositor_route::gamescope_sessions_live()
             && crate::vdisplay::release_managed_session()
         {
             return released + 1;

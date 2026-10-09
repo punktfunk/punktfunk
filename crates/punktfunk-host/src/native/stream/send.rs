@@ -6,6 +6,8 @@
 
 use super::recovery::ResendRing;
 use super::*;
+use crate::native::bitrate::apply_fec_target;
+use crate::session_status::unpack_mode;
 
 /// The AU-level fields of one encoded AU: the same on its whole-AU message and on every
 /// chunk of a streamed one.
@@ -285,7 +287,7 @@ pub(super) fn send_loop(
     timing_conn: Option<crate::native::link::SessionLink>,
     probe_seq: bool,
 ) {
-    boost_thread_priority(false);
+    pf_frame::thread_qos::boost_thread_priority(false);
     let wire = WireLine::new(stats.wire_sock.take());
     let mut session = session;
     session.tap_plaintext(true);

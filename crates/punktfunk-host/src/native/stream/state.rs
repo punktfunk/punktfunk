@@ -17,6 +17,8 @@ use super::cursor::composite_plan;
 use super::cursor::settle_portal_cursor;
 use super::pipeline::{build_pipeline_with_retry, resolve_plan, Pipeline};
 use super::*;
+use crate::native::bitrate::{resolve_bitrate_kbps_for, EncDerive, EncoderCeiling};
+use crate::session_status::pack_mode;
 
 /// (capture_ns, submit_ns) per frame handed to the encoder and not yet polled.
 pub(super) type Inflight = std::collections::VecDeque<(u64, u64)>;
@@ -190,7 +192,7 @@ pub(super) struct StreamState {
     /// Control task's proposal; applied only after the encoder takes its rate.
     pub(super) fec_requested: Arc<AtomicU8>,
     pub(super) live_bitrate: Arc<AtomicU32>,
-    pub(super) encoder_ceiling: Arc<std::sync::Mutex<super::EncoderCeiling>>,
+    pub(super) encoder_ceiling: Arc<std::sync::Mutex<EncoderCeiling>>,
     /// A rate was handed to this encoder after it opened, so a later read-back
     /// is about that retarget. What a pipeline opened at is the build's own
     /// business (`Pipeline::bitrate_kbps`), and is not re-litigated here.
@@ -231,8 +233,8 @@ pub(super) struct StreamState {
 
 impl StreamState {
     /// The encoder-rate derivation for a FEC percentage.
-    pub(super) fn enc_derive(&self, fec: u8) -> super::super::EncDerive {
-        super::super::EncDerive {
+    pub(super) fn enc_derive(&self, fec: u8) -> EncDerive {
+        EncDerive {
             audio_kbps: self.audio_reserved_kbps,
             shard_payload: self.shard_payload,
             fec_percent: fec,
@@ -241,7 +243,7 @@ impl StreamState {
     }
 
     /// [`Self::enc_derive`] at the FEC target in force now.
-    pub(super) fn enc_now(&self) -> super::super::EncDerive {
+    pub(super) fn enc_now(&self) -> EncDerive {
         self.enc_derive(self.fec_target.load(Ordering::Relaxed))
     }
 
@@ -487,7 +489,7 @@ impl StreamState {
         // `PUNKTFUNK_STREAMED_AU=0` reverts to whole-AU sends. Encoder chunking is per-AU.
         // `bitrate_kbps` is the total wire budget; only encoder opens convert via EncDerive.
         let budget_identity = plan.codec == crate::encode::Codec::PyroWave;
-        let enc_derive = move |fec: u8| super::super::EncDerive {
+        let enc_derive = move |fec: u8| EncDerive {
             audio_kbps: audio_reserved_kbps,
             shard_payload,
             fec_percent: fec,

@@ -40,11 +40,27 @@ pub use audio_policy::{apply_audio_policy, AudioSessions};
 pub use games::publish_gamestream_game;
 pub use games::{games, live_games, waiting_launch, GameSnapshot, WaitingRow};
 
+/// Pack `(w, h, hz)` into one atomic word (16|16|16) — one store, not three racy ones.
+pub(crate) fn pack_mode(width: u32, height: u32, refresh_hz: u32) -> u64 {
+    ((width as u64 & 0xffff) << 32)
+        | ((height as u64 & 0xffff) << 16)
+        | (refresh_hz as u64 & 0xffff)
+}
+
+/// [`pack_mode`]'s inverse.
+pub(crate) fn unpack_mode(packed: u64) -> (u32, u32, u32) {
+    (
+        ((packed >> 32) & 0xffff) as u32,
+        ((packed >> 16) & 0xffff) as u32,
+        (packed & 0xffff) as u32,
+    )
+}
+
 /// One live native session. The Arcs are the video loop's own handles, so a
 /// mid-stream mode/bitrate change shows on `/status` with no second write.
 struct LiveSession {
     id: u64,
-    /// Packed `w:16|h:16|hz:16` ([`crate::native::pack_mode`]); live on a mode switch.
+    /// Packed `w:16|h:16|hz:16` ([`pack_mode`]); live on a mode switch.
     mode: Arc<AtomicU64>,
     /// Encoder target, kbps. Same Arc the ABR path writes.
     bitrate_kbps: Arc<AtomicU32>,
@@ -467,7 +483,7 @@ fn next_id() -> u64 {
 
 /// [`crate::events::SessionRef`] for this session; mode is read live.
 fn session_ref(s: &LiveSession) -> crate::events::SessionRef {
-    let (width, height, fps) = crate::native::unpack_mode(s.mode.load(Ordering::Relaxed));
+    let (width, height, fps) = unpack_mode(s.mode.load(Ordering::Relaxed));
     crate::events::SessionRef {
         id: s.id,
         client: s.client.clone(),
@@ -515,7 +531,7 @@ fn bitrate_span(c: &SessionCounters) -> Option<BitrateSpan> {
 /// Everything this session ended up being. Built once, in [`LiveSessionGuard::drop`],
 /// and shared by `session.ended` and `GET /session/last`.
 fn summary(s: &LiveSession) -> SessionSummary {
-    let (width, height, fps) = crate::native::unpack_mode(s.mode.load(Ordering::Relaxed));
+    let (width, height, fps) = unpack_mode(s.mode.load(Ordering::Relaxed));
     SessionSummary {
         id: s.id,
         client: s.client.clone(),
@@ -551,7 +567,7 @@ fn summary(s: &LiveSession) -> SessionSummary {
 /// Inputs for [`register`]. Named fields: half are same-typed `Arc<Atomic…>`
 /// handles, so a transposed pair would compile and report the wrong figure.
 pub struct Registration {
-    /// Packed `w:16|h:16|hz:16` ([`crate::native::pack_mode`]); live on a mode switch.
+    /// Packed `w:16|h:16|hz:16` ([`pack_mode`]); live on a mode switch.
     pub mode: Arc<AtomicU64>,
     /// Encoder target, kbps. Same Arc the ABR path writes.
     pub bitrate_kbps: Arc<AtomicU32>,
@@ -769,7 +785,7 @@ pub fn snapshot() -> Vec<SessionSnapshot> {
     let reg = registry();
     reg.iter()
         .map(|s| {
-            let (width, height, fps) = crate::native::unpack_mode(s.mode.load(Ordering::Relaxed));
+            let (width, height, fps) = unpack_mode(s.mode.load(Ordering::Relaxed));
             SessionSnapshot {
                 id: s.id,
                 client: s.client.clone(),

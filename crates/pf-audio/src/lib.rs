@@ -414,7 +414,7 @@ mod mic_pump;
 // Only the Windows openers reap; macOS has no backend thread at all.
 #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 mod ready;
-pub use capture_lease::{CaptureLease, CaptureRoute, Ready};
+pub use capture_lease::{CaptureLease, CaptureRoute, Ready, REOPEN_BACKOFF};
 pub use mic_pump::{mic_source_id, MicFrame, MicPump};
 
 /// A session's hold on the shared virtual mic as the box's default source. The mic loses the

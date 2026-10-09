@@ -113,7 +113,7 @@ pub fn start(
     if std::thread::Builder::new()
         .name("punktfunk-video".into())
         .spawn(move || {
-            crate::native::boost_thread_priority(true);
+            pf_frame::thread_qos::boost_thread_priority(true);
             // Hold even for video-only viewers — plane parity with native `LiveSessionGuard`.
             let _sleep = crate::sleep_inhibit::hold();
             tracing::info!(?cfg, "video stream starting");
@@ -161,9 +161,9 @@ pub fn start(
             counters.reset();
             let live_session =
                 crate::session_status::register(crate::session_status::Registration {
-                    mode: Arc::new(std::sync::atomic::AtomicU64::new(crate::native::pack_mode(
-                        cfg.width, cfg.height, cfg.fps,
-                    ))),
+                    mode: Arc::new(std::sync::atomic::AtomicU64::new(
+                        crate::session_status::pack_mode(cfg.width, cfg.height, cfg.fps),
+                    )),
                     bitrate_kbps: live.bitrate_kbps.clone(),
                     codec: cfg.codec,
                     stop: stop.clone(),
@@ -277,7 +277,7 @@ fn run(
 ) -> Result<()> {
     pf_frame::session_tuning::on_hot_thread();
     // Every source below resolves the compositor, which cancels a pending Game Mode hand-back.
-    let _gamescope_hold = crate::native::GamescopeHold::new();
+    let _gamescope_hold = crate::compositor_route::GamescopeHold::new();
     // Reject an out-of-range mode before allocating capture/encode buffers.
     encode::validate_dimensions(cfg.codec, cfg.width, cfg.height)
         .context("client-requested video mode")?;
@@ -1024,7 +1024,7 @@ fn spawn_packetizer(
     std::thread::Builder::new()
         .name("punktfunk-pkt".into())
         .spawn(move || {
-            crate::native::boost_thread_priority(false);
+            pf_frame::thread_qos::boost_thread_priority(false);
             let mut shells: Vec<PacketBatch> = Vec::new();
             let mut cur_pct = fec_pct_live.load(std::sync::atomic::Ordering::Relaxed);
             while let Ok(frame) = rx.recv() {
@@ -1078,7 +1078,7 @@ fn spawn_sender(
     std::thread::Builder::new()
         .name("punktfunk-send".into())
         .spawn(move || {
-            crate::native::boost_thread_priority(false);
+            pf_frame::thread_qos::boost_thread_priority(false);
             let mut sent: u64 = 0;
             let mut dropped: u64 = 0;
             use crate::send_pacing as sp;
