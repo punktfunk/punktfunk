@@ -66,6 +66,8 @@ mod wol;
 // Ungated like `wol`: pure `jni` + `punktfunk_core::client` (the reachability probe). Kotlin calls
 // it off the main thread to light saved-host "online" pips independently of mDNS.
 mod probe;
+// Ungated like `wol`: pure `jni` + `punktfunk_core::pyrowave`, so its test runs on the host.
+mod pyrowave_quality;
 
 /// Every `log` record, teed: to logcat (via [`android_logger::AndroidLogger`]) AND into
 /// `pf_client_core::logring` — the source for the console's "Send logs to host" action

@@ -56,6 +56,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedCard
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Slider
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.VerticalDivider
@@ -902,6 +903,9 @@ private fun DisplaySettings(s: Settings, update: (Settings) -> Unit, context: an
 
     // The GPU probe, not a MediaCodec one — PyroWave decodes as Vulkan compute.
     val pyrowaveCapable = remember { VideoDecoders.pyrowaveCapable() }
+    // PyroWave sets its own rate: its quality, after the codec row, stands in for Bitrate. The
+    // stored rate is kept for the other codecs.
+    val pyrowaveOn = s.codec == "pyrowave" && pyrowaveCapable
     // HDR is only meaningful on a panel that can present HDR10; on an SDR display the toggle is
     // disabled (and HDR is never advertised) so the host doesn't send PQ the panel mis-tone-maps.
     val hdrCapable = remember { displaySupportsHdr(context) }
@@ -917,31 +921,21 @@ private fun DisplaySettings(s: Settings, update: (Settings) -> Unit, context: an
                 "distorts it.",
         ) { fit -> update(s.copy(videoFit = fit)) }
 
-        // PyroWave takes its rate from the host, so the row reads Automatic and locks; the stored
-        // rate is kept for the other codecs.
-        val pyrowaveOn = s.codec == "pyrowave" && pyrowaveCapable
         // Custom is read from the stored rate, like the resolution above; the flag only keeps the
         // field open between picking "Custom…" and typing a number.
         val showCustomBitrate = !pyrowaveOn && (customBitratePicked || s.isCustomBitrate())
-        SettingDropdown(
-            label = "Bitrate",
-            options = BITRATE_OPTIONS + (CUSTOM_BITRATE to
-                if (s.isCustomBitrate()) "Custom (${bitrateLabel(s.bitrateKbps)})" else "Custom…"),
-            selected = when {
-                pyrowaveOn -> 0
-                showCustomBitrate -> CUSTOM_BITRATE
-                else -> s.bitrateKbps
-            },
-            field = "bitrate_kbps",
-            caption = if (pyrowaveOn) {
-                "PyroWave sets its own rate from the stream mode."
-            } else {
-                "Automatic lets the host decide."
-            },
-            enabled = !pyrowaveOn,
-        ) { kbps ->
-            customBitratePicked = kbps == CUSTOM_BITRATE
-            if (kbps != CUSTOM_BITRATE) update(s.copy(bitrateKbps = kbps))
+        if (!pyrowaveOn) {
+            SettingDropdown(
+                label = "Bitrate",
+                options = BITRATE_OPTIONS + (CUSTOM_BITRATE to
+                    if (s.isCustomBitrate()) "Custom (${bitrateLabel(s.bitrateKbps)})" else "Custom…"),
+                selected = if (showCustomBitrate) CUSTOM_BITRATE else s.bitrateKbps,
+                field = "bitrate_kbps",
+                caption = "Automatic lets the host decide.",
+            ) { kbps ->
+                customBitratePicked = kbps == CUSTOM_BITRATE
+                if (kbps != CUSTOM_BITRATE) update(s.copy(bitrateKbps = kbps))
+            }
         }
         if (showCustomBitrate) {
             BitrateField(s.bitrateKbps) { kbps -> update(s.copy(bitrateKbps = kbps)) }
@@ -990,12 +984,14 @@ private fun DisplaySettings(s: Settings, update: (Settings) -> Unit, context: an
             smoothing && s.smoothBuffer != d.smoothBuffer,
             s.renderScale != d.renderScale,
             s.codec != d.codec,
+            pyrowaveOn && s.pyrowaveBppX100() != d.pyrowaveBppX100(),
             s.tenBitSdr != d.tenBitSdr,
             s.lowLatencyMode != d.lowLatencyMode,
             s.compositor != d.compositor,
         ),
         fields = setOf(
-            "smooth_buffer", "render_scale", "codec", "ten_bit_sdr", "low_latency_mode", "compositor",
+            "smooth_buffer", "render_scale", "codec", "pyrowave_bpp", "ten_bit_sdr", "low_latency_mode",
+            "compositor",
         ),
     ) {
         if (smoothing) {
@@ -1039,6 +1035,7 @@ private fun DisplaySettings(s: Settings, update: (Settings) -> Unit, context: an
                 "A preference — the host falls back if it can't encode this one."
             },
         ) { c -> update(s.copy(codec = c)) }
+        if (pyrowaveOn) PyroWaveQualityRow(s, update)
 
         // Asks nothing of the panel, so no capability gate: an 8-bit display shows a dithered
         // Main10 stream, and the gain is gradients that do not band. Inert while HDR is on
@@ -1444,6 +1441,45 @@ private fun ToggleRow(
                 )
             }
             Switch(checked = checked, onCheckedChange = onCheckedChange, enabled = enabled)
+        }
+    }
+}
+
+/**
+ * PyroWave quality in Bitrate's place: 0.5 to 2 by tenths, never shown as bits per pixel. The
+ * caption is the rate it needs at the mode a connect would ask; the warning follows while this
+ * device's link is short of it.
+ */
+@Composable
+private fun PyroWaveQualityRow(s: Settings, update: (Settings) -> Unit) {
+    val context = LocalContext.current
+    val link = remember { PyroWaveQuality.link(context) }
+    val (caption, warning) = PyroWaveQuality.lines(s, s.effectiveMode(context), link)
+    val at = PyroWaveQuality.snapped(s.pyrowaveBpp)
+    Column {
+        OverrideBadge("pyrowave_bpp")
+        Text("PyroWave quality", style = MaterialTheme.typography.bodyLarge)
+        Slider(
+            value = at.toFloat(),
+            onValueChange = { v ->
+                val bpp = PyroWaveQuality.snapped(v.toDouble())
+                if (bpp != at) update(s.copy(pyrowaveBpp = bpp))
+            },
+            valueRange = PyroWaveQuality.RANGE,
+            steps = PyroWaveQuality.STEPS,
+        )
+        Text(
+            caption,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        if (warning != null) {
+            Text(
+                warning,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error,
+                modifier = Modifier.padding(top = 4.dp),
+            )
         }
     }
 }

@@ -33,6 +33,7 @@ data class SettingsOverlay(
     val height: Int? = null,
     val hz: Int? = null,
     val bitrateKbps: Int? = null,
+    val pyrowaveBpp: Double? = null,
     val renderScale: Double? = null,
     val videoFit: String? = null,
     /** Android's second screen (a dual-screen handheld's lower panel): off for a preset that
