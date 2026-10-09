@@ -358,26 +358,23 @@ pub(crate) async fn decide_plugin_access(
             // failed download leaves the row for another try.
             if let Some(emulator) = st.access.pending_emulator(&plugin, &req.path) {
                 let target = emulator.clone();
-                match tokio::task::spawn_blocking(move || crate::emulators::install(&target)).await
+                match blocking("emulator manager", move || {
+                    crate::emulators::install(&target)
+                })
+                .await
                 {
                     Ok(Ok(_)) => emit(EventKind::EmulatorsChanged { id: emulator }),
                     Ok(Err(e)) => {
                         return super::emulators::hermir_err(&e, "The emulator didn't install");
                     }
-                    Err(e) => {
-                        tracing::error!("emulator worker panicked: {e}");
-                        return api_error(
-                            StatusCode::INTERNAL_SERVER_ERROR,
-                            "The emulator manager stopped responding",
-                        );
-                    }
+                    Err(resp) => return resp,
                 }
             }
             // Core rows share RetroArch's folder: one yes installs every core asked for there.
             let cores = st.access.pending_cores(&plugin, &req.path);
             if !cores.is_empty() {
                 let batch = cores.clone();
-                let done = tokio::task::spawn_blocking(move || {
+                let done = blocking("emulator manager", move || {
                     batch
                         .iter()
                         .map(|c| crate::emulators::install_core(c).map(|_| ()))
@@ -391,13 +388,7 @@ pub(crate) async fn decide_plugin_access(
                     Ok(Err(e)) => {
                         return super::emulators::hermir_err(&e, "The core didn't install");
                     }
-                    Err(e) => {
-                        tracing::error!("core worker panicked: {e}");
-                        return api_error(
-                            StatusCode::INTERNAL_SERVER_ERROR,
-                            "The emulator manager stopped responding",
-                        );
-                    }
+                    Err(resp) => return resp,
                 }
             }
             st.access

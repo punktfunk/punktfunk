@@ -605,10 +605,10 @@ pub(crate) async fn create_profile(
     }
     let seat = if input.seat && own_desktop {
         let name = input.display_name.clone();
-        match tokio::task::spawn_blocking(move || new_seat(&name)).await {
+        match blocking("seat supervisor", move || new_seat(&name)).await {
             Ok(Ok(id)) => Some(id),
             Ok(Err(refusal)) => return refused(refusal),
-            Err(e) => return api_error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+            Err(resp) => return resp,
         }
     } else {
         None
@@ -699,10 +699,10 @@ pub(crate) async fn delete_profile(
                 },
             );
         }
-        match tokio::task::spawn_blocking(move || drop_seat(&seat)).await {
+        match blocking("seat supervisor", move || drop_seat(&seat)).await {
             Ok(Ok(())) => {}
             Ok(Err(refusal)) => return refused(refusal),
-            Err(e) => return api_error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+            Err(resp) => return resp,
         }
     }
     match profiles.delete(&id, q.erase) {
@@ -739,11 +739,11 @@ pub(crate) async fn set_profile_avatar(
     if profiles.get(&id).is_none() {
         return api_error(StatusCode::NOT_FOUND, "no profile with that id");
     }
-    let stored = tokio::task::spawn_blocking(move || profiles.put_avatar(&id, &body)).await;
+    let stored = blocking("profile store", move || profiles.put_avatar(&id, &body)).await;
     match stored {
         Ok(Ok(_)) => StatusCode::NO_CONTENT.into_response(),
         Ok(Err(e)) => api_error(StatusCode::BAD_REQUEST, &format!("{e:#}")),
-        Err(e) => api_error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+        Err(resp) => resp,
     }
 }
 
@@ -888,9 +888,9 @@ fn has_supervisor() -> bool {
 
 /// One request to the seat supervisor on a blocking thread, or the response that says why not.
 async fn supervisor(command: Command) -> Result<CommandResult, Response> {
-    match tokio::task::spawn_blocking(move || crate::seats::call(command)).await {
-        Ok(Ok(result)) => Ok(result),
-        Ok(Err(e)) => {
+    match blocking("seat supervisor", move || crate::seats::call(command)).await? {
+        Ok(result) => Ok(result),
+        Err(e) => {
             tracing::warn!(code = ?e.code, error = %e.message, "seat supervisor request failed");
             Err(if e.code == ErrorCode::Transport {
                 api_error(
@@ -904,7 +904,6 @@ async fn supervisor(command: Command) -> Result<CommandResult, Response> {
                 )
             })
         }
-        Err(e) => Err(api_error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string())),
     }
 }
 
@@ -1070,11 +1069,11 @@ pub(crate) struct DoorChange {
     )
 )]
 pub(crate) async fn put_door(ApiJson(input): ApiJson<DoorChange>) -> Response {
-    match tokio::task::spawn_blocking(move || crate::door::change(input.on)).await {
+    match blocking("switch", move || crate::door::change(input.on)).await {
         Ok(Ok(crate::door::Outcome::Started)) => StatusCode::ACCEPTED.into_response(),
         Ok(Ok(crate::door::Outcome::Already)) => StatusCode::NO_CONTENT.into_response(),
         Ok(Err(refusal)) => refused(refusal),
-        Err(e) => api_error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+        Err(resp) => resp,
     }
 }
 
@@ -1164,7 +1163,7 @@ pub(crate) async fn stop_profile_seat(
         Ok(found) => found,
         Err(refusal) => return refused(refusal),
     };
-    let stopped = tokio::task::spawn_blocking(move || {
+    let stopped = blocking("seat supervisor", move || {
         let id = pf_seats::SeatId::parse(seat)
             .map_err(|e| SeatError::new(ErrorCode::InvalidRequest, e.to_string()))?;
         let done = crate::seats::call(Command::Stop { id });
@@ -1175,7 +1174,7 @@ pub(crate) async fn stop_profile_seat(
     match stopped {
         Ok(Ok(_)) => {}
         Ok(Err(e)) => return refused(seat_error(e)),
-        Err(e) => return api_error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+        Err(resp) => return resp,
     }
     let Some(profiles) = st.app.profiles.get() else {
         return no_profiles();
@@ -1208,20 +1207,23 @@ pub(crate) async fn end_profile_session(
         Ok(found) => found,
         Err(refusal) => return refused(refusal),
     };
-    let ended = tokio::task::spawn_blocking(move || {
+    let ended = blocking("seat", move || {
         let snap = crate::seats::snapshot();
         let row = snap.seat(&seat).map(|(s, _)| s.clone());
         let done = row.as_ref().is_some_and(crate::seats::end_sessions);
         crate::seats::invalidate();
         done
     })
-    .await
-    .unwrap_or(false);
-    if !ended {
-        return api_error(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "The seat didn't answer. Stop it instead to disconnect whoever plays there.",
-        );
+    .await;
+    match ended {
+        Ok(true) => {}
+        Ok(false) => {
+            return api_error(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "The seat didn't answer. Stop it instead to disconnect whoever plays there.",
+            )
+        }
+        Err(resp) => return resp,
     }
     let Some(profiles) = st.app.profiles.get() else {
         return no_profiles();

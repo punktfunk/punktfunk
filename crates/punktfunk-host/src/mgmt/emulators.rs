@@ -93,20 +93,6 @@ pub(crate) struct RemoveEmulatorRequest {
     pub purge: bool,
 }
 
-async fn blocking<T, F>(f: F) -> Result<T, Response>
-where
-    F: FnOnce() -> T + Send + 'static,
-    T: Send + 'static,
-{
-    tokio::task::spawn_blocking(f).await.map_err(|e| {
-        tracing::error!("emulator worker panicked: {e}");
-        api_error(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "The emulator manager stopped responding",
-        )
-    })
-}
-
 /// A hermir failure as an API error, by what went wrong rather than where.
 pub(crate) fn hermir_err(e: &hermir::Error, what: &str) -> Response {
     let status = match e {
@@ -179,7 +165,7 @@ fn statuses() -> hermir::Result<Vec<EmulatorStatus>> {
     )
 )]
 pub(crate) async fn get_emulators() -> Response {
-    match blocking(statuses).await {
+    match blocking("emulator manager", statuses).await {
         Ok(Ok(rows)) => Json(rows).into_response(),
         Ok(Err(e)) => hermir_err(&e, "The emulators couldn't be listed"),
         Err(r) => r,
@@ -209,7 +195,11 @@ pub(crate) async fn get_emulators() -> Response {
 )]
 pub(crate) async fn install_emulator(Path(id): Path<String>) -> Response {
     let target = id.clone();
-    match blocking(move || crate::emulators::install(&target)).await {
+    match blocking("emulator manager", move || {
+        crate::emulators::install(&target)
+    })
+    .await
+    {
         Ok(Ok(row)) => {
             emit(EventKind::EmulatorsChanged { id });
             Json(ManagedEmulator {
@@ -276,7 +266,7 @@ pub(crate) async fn prepare_emulator(
     let platform = req.platform;
     // No session here: pads not up yet are taken as the default Xbox 360.
     let pad = punktfunk_core::config::GamepadPref::Xbox360;
-    let prepared = blocking(move || {
+    let prepared = blocking("emulator manager", move || {
         crate::emulators::prepare(&id, platform.as_deref(), dir.as_deref(), pad, None)
     })
     .await;
@@ -427,7 +417,11 @@ pub(crate) async fn remove_emulator(
     ApiJson(req): ApiJson<RemoveEmulatorRequest>,
 ) -> Response {
     let target = id.clone();
-    match blocking(move || crate::emulators::remove(&target, req.purge)).await {
+    match blocking("emulator manager", move || {
+        crate::emulators::remove(&target, req.purge)
+    })
+    .await
+    {
         Ok(Ok(())) => {
             emit(EventKind::EmulatorsChanged { id });
             StatusCode::NO_CONTENT.into_response()
@@ -459,7 +453,7 @@ pub(crate) struct EmulatorRegistry(hermir::Registry);
     )
 )]
 pub(crate) async fn get_emulator_registry() -> Response {
-    match blocking(crate::emulators::registry).await {
+    match blocking("emulator manager", crate::emulators::registry).await {
         Ok(Ok(r)) => Json(EmulatorRegistry(r)).into_response(),
         Ok(Err(e)) => hermir_err(&e, "The registry couldn't be read"),
         Err(r) => r,
@@ -527,7 +521,11 @@ pub(crate) async fn get_emulator_firmware(
     if !valid_platform(&q.platform) {
         return api_error(StatusCode::BAD_REQUEST, "That isn't a platform id");
     }
-    match blocking(move || crate::emulators::firmware_status(&id, &q.platform)).await {
+    match blocking("emulator manager", move || {
+        crate::emulators::firmware_status(&id, &q.platform)
+    })
+    .await
+    {
         Ok(Ok(status)) => Json(status.map(|s| {
             FirmwareStatusView {
                 platform: s.platform,
@@ -758,7 +756,11 @@ pub(crate) async fn get_emulator_saves(
         Ok(g) => g,
         Err((status, why)) => return api_error(status, why),
     };
-    match blocking(move || crate::emulators::units(&id, &q.platform, game.as_deref())).await {
+    match blocking("emulator manager", move || {
+        crate::emulators::units(&id, &q.platform, game.as_deref())
+    })
+    .await
+    {
         Ok(Ok(units)) => Json(
             units
                 .into_iter()
@@ -829,7 +831,7 @@ pub(crate) async fn export_emulator_saves(
     let units: Vec<(hermir::SaveKind, String)> =
         req.units.into_iter().map(|u| (u.kind, u.name)).collect();
     let dir = req.dir;
-    let exported = blocking(move || {
+    let exported = blocking("emulator manager", move || {
         crate::emulators::export_units(&id, &req.platform, game.as_deref(), &units, &out)
     })
     .await;
@@ -918,7 +920,7 @@ pub(crate) async fn import_emulator_saves(
     }
     let others = req.others;
     let platform = req.platform;
-    let imported = blocking(move || {
+    let imported = blocking("emulator manager", move || {
         rows.into_iter()
             .map(|(name, file, kinds)| {
                 let step = crate::emulators::import_unit(
@@ -999,9 +1001,10 @@ pub(crate) async fn install_emulator_content(
             Err((status, why)) => return api_error(status, why),
         }
     }
-    let installed =
-        blocking(move || crate::emulators::install_content(&id, &req.platform, &req.kind, &files))
-            .await;
+    let installed = blocking("emulator manager", move || {
+        crate::emulators::install_content(&id, &req.platform, &req.kind, &files)
+    })
+    .await;
     match installed {
         Ok(Ok(steps)) => Json(
             steps
@@ -1046,7 +1049,7 @@ pub(crate) async fn adopt_emulator(
     ApiJson(req): ApiJson<AdoptRequest>,
 ) -> Response {
     let target = id.clone();
-    let adopted = blocking(move || {
+    let adopted = blocking("emulator manager", move || {
         crate::emulators::adopt(&target, std::path::Path::new(&req.exe), !req.forget)
     })
     .await;

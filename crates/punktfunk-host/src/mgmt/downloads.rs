@@ -261,8 +261,10 @@ async fn act(id: String, action: Action, by: Option<String>) -> Response {
     }
     let call = {
         let (provider, id, external) = (provider.clone(), id.clone(), external.clone());
-        tokio::task::spawn_blocking(move || downloads::call(&provider, &id, &external, action))
-            .await
+        blocking("install", move || {
+            downloads::call(&provider, &id, &external, action)
+        })
+        .await
     };
     match call {
         Ok(Ok(())) => {}
@@ -279,13 +281,7 @@ async fn act(id: String, action: Action, by: Option<String>) -> Response {
             tracing::warn!(provider = %provider, action = ?action, error = %e, "plugin install call did not answer");
             return api_error(StatusCode::BAD_GATEWAY, "The plugin didn't answer.");
         }
-        Err(e) => {
-            tracing::error!("install worker panicked: {e}");
-            return api_error(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "The install stopped responding.",
-            );
-        }
+        Err(resp) => return resp,
     }
     match action {
         Action::Start => {
