@@ -252,6 +252,7 @@ fn drive_edge_loss(
             ramp: false,
             probe_only: false,
             pin_kbps: None,
+            floor_kbps: None,
         },
         t0,
     );

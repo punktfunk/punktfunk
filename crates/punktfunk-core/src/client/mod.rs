@@ -295,8 +295,8 @@ pub struct NativeClient {
     audio_buffer_ms: Arc<AtomicU32>,
     /// The stats overlay window. Receipt and 0xCF timings land in it as they are pulled.
     hud: Arc<crate::hud::Stats>,
-    /// ABR armed (Automatic, not rate-pinned PyroWave). Skip per-frame decode measurement when
-    /// false ([`wants_decode_latency`](Self::wants_decode_latency)).
+    /// ABR armed (Automatic). Skip per-frame decode measurement when false
+    /// ([`wants_decode_latency`](Self::wants_decode_latency)).
     wants_decode: bool,
     worker: Option<std::thread::JoinHandle<()>>,
     /// SHA-256 of the cert the host presented. A TOFU caller (`pin = None`) persists this.
@@ -797,11 +797,9 @@ impl NativeClient {
             audio_av_offset_ms: Arc::new(AtomicI64::new(0)),
             audio_buffer_ms: Arc::new(AtomicU32::new(0)),
             hud,
-            // Match the pump: Automatic, not rate-pinned PyroWave, AND host echoed a rate.
-            // Dropping the last term over-advertises against an old host that reports no rate.
-            wants_decode: bitrate_kbps == 0
-                && negotiated.codec != crate::quic::CODEC_PYROWAVE
-                && negotiated.bitrate_kbps > 0,
+            // Match the pump: Automatic AND host echoed a rate. Dropping the last term
+            // over-advertises against an old host that reports no rate.
+            wants_decode: bitrate_kbps == 0 && negotiated.bitrate_kbps > 0,
             host_fingerprint: negotiated.host_fingerprint,
             resolved_compositor: negotiated.compositor,
             resolved_gamepad: negotiated.gamepad,
@@ -1114,7 +1112,8 @@ impl NativeClient {
     }
 
     /// Close the overlay window with everything the connector knows filled in: mode, codec,
-    /// colour, audio format, counters. The caller adds the decoder, display HDR and extras.
+    /// colour, audio format, counters, the link line and the weak-network warning. The caller
+    /// adds the decoder, display HDR and its own extras.
     pub fn hud_snapshot(&self) -> crate::hud::StatsSnapshot {
         // Whole AUs the all-intra drain dropped before the decoder: it fell behind.
         let behind = self.shared.frames.take_skipped();
@@ -1143,6 +1142,15 @@ impl NativeClient {
             role: crate::hud::Role::Muted,
             ..crate::hud::Extra::detail(self.link_line())
         });
+        let floor = self.shared.quality_floor_kbps.load(Ordering::Relaxed);
+        if floor > 0 {
+            s.extras.push(crate::hud::Extra {
+                text: crate::hud::quality_floor_line(floor),
+                tier: crate::hud::StatsVerbosity::Compact,
+                advanced_only: false,
+                role: crate::hud::Role::Warn,
+            });
+        }
         s
     }
 
@@ -1181,8 +1189,8 @@ impl NativeClient {
         acc.count += 1;
     }
 
-    /// Whether [`report_decode_us`](Self::report_decode_us) is used (Automatic, non-PyroWave).
-    /// Constant for the session.
+    /// Whether [`report_decode_us`](Self::report_decode_us) is used (Automatic). Constant for
+    /// the session.
     pub fn wants_decode_latency(&self) -> bool {
         self.wants_decode
     }

@@ -506,6 +506,12 @@ impl BitrateController {
         }
     }
 
+    /// The rate no cut goes under, in place of [`FLOOR_KBPS`]: PyroWave's quality floor
+    /// for the session's mode. A mode switch sets it again.
+    pub(crate) fn set_floor(&mut self, kbps: u32) {
+        self.floor_kbps = kbps;
+    }
+
     /// Size encode thresholds in frame budgets, not the 120 Hz [`ENCODE_RISE_US`]
     /// durations. Ignored for a nonsense rate — the defaults stand. Past 1 MHz the
     /// budget rounds to 0 µs, which the decode check divides by.

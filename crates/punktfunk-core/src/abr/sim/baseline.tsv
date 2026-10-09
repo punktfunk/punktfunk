@@ -63,3 +63,7 @@ wan_lone_loss_nack	0	3	5	17	40	0	0	1000	23629498
 wan_lone_loss_ack	0	3	3	17	38	0	0	1000	7bc5fc3f
 wan_wg_12_nack	0	3	0	0	31	0	0	1000	6edcf0ca
 wan_wg_12_ack	0	3	0	0	31	0	0	1000	6edcf0ca
+pyrowave_auto_10g	0	2	0	0	1	0	0	1000	811c9dc5
+pyrowave_auto_2g5_wall	0	1	0	0	5	0	0	1000	811c9dc5
+pyrowave_auto_wall_moves	0	2	10	596	7	0	0	1000	a704da45
+pyrowave_auto_floor	0	1	0	90850	19	20527	0	1000	811c9dc5

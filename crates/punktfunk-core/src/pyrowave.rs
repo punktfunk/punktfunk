@@ -4,6 +4,10 @@
 
 use crate::config::Mode;
 
+/// The fewest bits per pixel Automatic takes PyroWave to. A session held there tells the
+/// player the network is weak.
+pub const BPP_FLOOR: f64 = 0.5;
+
 /// `bpp` bits per pixel for a 4:2:0 SDR frame at `mode`, kbps. 4:4:4 carries twice the
 /// samples but costs ×1.625, since chroma compresses better than luma; 10-bit planes add 15 %.
 /// Unclamped: the caller bounds it.

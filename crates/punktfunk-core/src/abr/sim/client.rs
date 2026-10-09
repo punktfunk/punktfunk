@@ -85,10 +85,12 @@ pub(super) struct ClientCfg {
     pub rebuild_at_ms: Option<u64>,
     /// `false` = an explicit bitrate, so no controller.
     pub automatic: bool,
-    /// PyroWave Automatic: the pin the Welcome resolved. `Some` runs the
-    /// bring-up ramp as a fit check on it — a measured wall lowers it once,
-    /// every other outcome leaves it, and no controller runs either way.
+    /// PyroWave at an explicit rate: the pin the Welcome resolved. `Some`
+    /// runs the bring-up ramp as a fit check on it — a measured wall lowers it
+    /// once, every other outcome leaves it, and no controller runs either way.
     pub pin_kbps: Option<u32>,
+    /// Automatic PyroWave: the quality floor no cut goes under.
+    pub floor_kbps: Option<u32>,
     pub repair: Repair,
     /// Both ends' Ethernet ports, Mbit/s, as the handshake would report them.
     pub ports: Option<(u32, u32)>,
@@ -113,6 +115,7 @@ impl Default for ClientCfg {
             rebuild_at_ms: None,
             automatic: true,
             pin_kbps: None,
+            floor_kbps: None,
             repair: Repair::Rfi,
             ports: None,
             dead_every_ms: 0,
@@ -159,6 +162,8 @@ pub(super) struct WindowRec {
     pub link_mark_kbps: u32,
     /// Shards lost at the frames' heads.
     pub head: u32,
+    /// Automatic PyroWave's floor while the session is held there.
+    pub quality_floor: Option<u32>,
 }
 
 impl WindowRec {
@@ -273,6 +278,7 @@ impl Client {
                 ramp: cfg.ramp,
                 probe_only: false,
                 pin_kbps: cfg.pin_kbps,
+                floor_kbps: cfg.floor_kbps,
             },
             joined,
         );
@@ -735,6 +741,7 @@ impl Client {
             link_cap: self.abr.abr.link_cap.kbps(),
             link_mark_kbps: self.abr.abr.link_mark_kbps,
             head: w.sample.head,
+            quality_floor: self.abr.quality_floor(),
         });
     }
 }

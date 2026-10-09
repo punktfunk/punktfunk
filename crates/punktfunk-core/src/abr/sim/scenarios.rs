@@ -1302,9 +1302,19 @@ pub(super) fn ramp_cut_short_wan() -> Scenario {
 /// The 4K165 PyroWave pin, 1.6 bpp 4:2:0 8-bit (`resolve_bitrate_kbps_for`).
 const PYROWAVE_PIN_KBPS: u32 = 2_189_721;
 
-/// An Automatic PyroWave session: the pin is the rate, and the ramp only
-/// checks whether it fits. `automatic` is the governor's view — a pin is
-/// never shared — not the client's ask, which `pin_kbps` carries.
+/// The 4K165 PyroWave floor, 0.5 bpp 4:2:0 8-bit.
+fn pyrowave_floor_kbps() -> u32 {
+    let mode = crate::config::Mode {
+        width: 3840,
+        height: 2160,
+        refresh_hz: 165,
+    };
+    crate::pyrowave::kbps_for(&mode, false, 8, crate::pyrowave::BPP_FLOOR)
+}
+
+/// A PyroWave session at an explicit rate: the pin is the rate, and the ramp
+/// only checks whether it fits. A pin is never shared, so the governor reads
+/// it as fixed.
 fn pyrowave_session() -> SessionCfg {
     SessionCfg {
         join_ms: 0,
@@ -1373,6 +1383,89 @@ pub(super) fn pyrowave_pin_holds() -> Scenario {
     };
     sc.sessions[0].host.bringup_ms = 200;
     sc
+}
+
+/// An Automatic PyroWave session: the controller adapts between the floor
+/// and the host's pin, and the host grants what it asks. Every frame is
+/// intra, so a recovery frame costs no more than any other.
+fn pyrowave_auto_session() -> SessionCfg {
+    let mut s = pyrowave_session();
+    s.host.pinned = false;
+    s.host.idr_pct = 100;
+    s.client.automatic = true;
+    s.client.pin_kbps = None;
+    s.client.floor_kbps = Some(pyrowave_floor_kbps());
+    s.client.stream_cap_kbps = PYROWAVE_PIN_KBPS;
+    s
+}
+
+/// One Automatic PyroWave session over `capacity`, a LAN's buffer and delay.
+fn pyrowave_auto(
+    name: &'static str,
+    seed: u64,
+    duration_ms: u64,
+    capacity: Vec<(u64, u32)>,
+    achievable_kbps: u32,
+) -> Scenario {
+    Scenario {
+        name,
+        seed,
+        duration_ms,
+        link: LinkCfg {
+            capacity,
+            buffer_ms: 20,
+            base_delay_ms: 1,
+            ..LinkCfg::default()
+        },
+        sessions: vec![pyrowave_auto_session()],
+        achievable_kbps,
+        blip_at_ms: None,
+    }
+}
+
+/// 10 GbE: nothing walls under the pin, so the session climbs to it.
+pub(super) fn pyrowave_auto_10g() -> Scenario {
+    pyrowave_auto(
+        "pyrowave_auto_10g",
+        0x7A_7B00,
+        60_000,
+        vec![(0, 10_000_000)],
+        PYROWAVE_PIN_KBPS,
+    )
+}
+
+/// 2.5 GbE, under the pin: the ramp's wall licenses `0.7 ×` the link.
+pub(super) fn pyrowave_auto_2g5_wall() -> Scenario {
+    pyrowave_auto(
+        "pyrowave_auto_2g5_wall",
+        0x7A_7C00,
+        60_000,
+        vec![(0, 2_500_000)],
+        wall_ceiling_kbps(2_500_000),
+    )
+}
+
+/// The wall moves under the pin: 10 GbE, 1.5 Gbit/s from 60 s, 10 GbE again
+/// from 120 s. 2.5 GbE would carry the 4K165 pin and move nothing.
+pub(super) fn pyrowave_auto_wall_moves() -> Scenario {
+    pyrowave_auto(
+        "pyrowave_auto_wall_moves",
+        0x7A_7D00,
+        180_000,
+        vec![(0, 10_000_000), (60_000, 1_500_000), (120_000, 10_000_000)],
+        PYROWAVE_PIN_KBPS,
+    )
+}
+
+/// A link under the floor: the session can only hold the floor.
+pub(super) fn pyrowave_auto_floor() -> Scenario {
+    pyrowave_auto(
+        "pyrowave_auto_floor",
+        0x7A_7E00,
+        60_000,
+        vec![(0, 500_000)],
+        pyrowave_floor_kbps(),
+    )
 }
 
 /// A host that advertises the ramp and then answers no step: the client
@@ -1527,6 +1620,10 @@ pub(super) fn all() -> Vec<Scenario> {
     ] {
         table.push(repairing(sc, name, repair));
     }
+    table.push(pyrowave_auto_10g());
+    table.push(pyrowave_auto_2g5_wall());
+    table.push(pyrowave_auto_wall_moves());
+    table.push(pyrowave_auto_floor());
     table
 }
 
@@ -1661,6 +1758,72 @@ mod tests {
     /// video ends the ramp a few steps in, nothing was measured, the pin
     /// stands for the whole session — and the cut-short tail arms no burst
     /// beside the picture, so no later window is ever discarded.
+    /// Automatic PyroWave runs between its floor and the host's pin: a fat
+    /// link opens at the pin, a 2.5 GbE wall opens at the ceiling the ramp
+    /// licensed and loses no frame, a wall that moves under the pin is cut to
+    /// and climbed back from, and a link under the floor holds the floor and
+    /// tells the player on the fourth judged window.
+    #[test]
+    fn automatic_pyrowave_adapts_between_its_floor_and_its_pin() {
+        let floor = pyrowave_floor_kbps();
+        let bounded = |r: &super::super::Run| {
+            r.windows[0]
+                .iter()
+                .all(|w| (floor..=PYROWAVE_PIN_KBPS).contains(&w.rate_kbps))
+        };
+        let quiet = |r: &super::super::Run| r.windows[0].iter().all(|w| w.quality_floor.is_none());
+
+        let r = run(&pyrowave_auto_10g());
+        assert!(bounded(&r) && quiet(&r));
+        assert!(
+            r.windows[0]
+                .iter()
+                .all(|w| w.rate_kbps == PYROWAVE_PIN_KBPS),
+            "nothing walls under the pin"
+        );
+
+        let r = run(&pyrowave_auto_2g5_wall());
+        let (_, s) = r.ramps[0].done.expect("the ramp measured the link");
+        assert!(bounded(&r) && quiet(&r));
+        assert_eq!(
+            r.windows[0].last().expect("the session ran").rate_kbps,
+            wall_ceiling_kbps(s.proven_kbps)
+        );
+        assert!(
+            r.windows[0].iter().all(|w| w.dropped == 0),
+            "the wall's ceiling holds without a lost frame"
+        );
+
+        let r = run(&pyrowave_auto_wall_moves());
+        let at = |t: u64| {
+            r.windows[0]
+                .iter()
+                .rev()
+                .find(|w| w.t_ms <= t)
+                .expect("a window by then")
+                .rate_kbps
+        };
+        assert!(bounded(&r) && quiet(&r));
+        assert_eq!(at(59_000), PYROWAVE_PIN_KBPS);
+        assert!(at(70_000) < 1_500_000, "cut under the moved wall");
+        assert_eq!(at(179_000), PYROWAVE_PIN_KBPS, "and climbed back");
+
+        let r = run(&pyrowave_auto_floor());
+        assert!(
+            r.windows[0].iter().all(|w| w.rate_kbps == floor),
+            "nothing goes under the floor"
+        );
+        let judged: Vec<_> = r.windows[0].iter().filter(|w| !w.discarded).collect();
+        assert!(
+            judged[..3].iter().all(|w| w.quality_floor.is_none()),
+            "three windows are not yet a verdict"
+        );
+        assert!(
+            judged[3..].iter().all(|w| w.quality_floor == Some(floor)),
+            "the fourth tells the player, and it stays"
+        );
+    }
+
     #[test]
     fn the_pyrowave_pin_fits_to_a_wall_and_stands_without_one() {
         let r = run(&pyrowave_pin_fit());
