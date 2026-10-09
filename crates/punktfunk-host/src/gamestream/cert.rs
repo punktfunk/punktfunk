@@ -69,6 +69,7 @@ impl ServerIdentity {
     }
 
     /// In-memory identity; does not touch the config dir.
+    #[cfg(test)]
     pub fn ephemeral() -> Result<ServerIdentity> {
         let (cert_pem, key_pem) = generate()?;
         Self::from_pems(cert_pem, key_pem)

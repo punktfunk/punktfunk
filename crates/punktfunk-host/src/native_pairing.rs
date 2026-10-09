@@ -74,6 +74,7 @@ pub enum ApproveOutcome {
 
 impl ApproveOutcome {
     /// The stored record, or `None` for either refusal.
+    #[cfg(test)]
     pub fn paired(self) -> Option<PairedClient> {
         match self {
             ApproveOutcome::Paired(c) => Some(c),
@@ -197,6 +198,7 @@ impl NativePairing {
     /// Arm with a fresh PIN for `ttl`, unbound (any well-formed attempt consumes it) and with
     /// no access choice. Prefer [`Self::arm_for`] on untrusted LANs — an unbound window is
     /// burnable by any peer.
+    #[cfg(test)]
     pub fn arm(&self, ttl: Duration) -> String {
         self.arm.arm_for(ttl, None, None)
     }
@@ -257,6 +259,7 @@ impl NativePairing {
     /// Listed in the paired set, expiry-blind. An expired guest still shows in the device list
     /// and still short-circuits the approval queue. Admission and enforcement use
     /// [`Self::effective`].
+    #[cfg(test)]
     pub fn is_paired(&self, fp_hex: &str) -> bool {
         self.store.is_paired(fp_hex)
     }
@@ -271,6 +274,7 @@ impl NativePairing {
     /// pairing authority is its cert list, not this store. A row that exists governs as native
     /// (`effective`): mask, reserved bits cleared, expiry → `None`. One snapshot: `is_paired`
     /// then `effective` can race a delete into "listed but expired" for a just-ungoverned row.
+    #[cfg_attr(not(feature = "gamestream"), allow(dead_code, reason = "compat plane"))]
     pub fn moonlight_effective(&self, fp_hex: &str, now_unix: i64) -> Option<u32> {
         match self.store.get(fp_hex) {
             None => Some(GRANT_ALL),
@@ -291,6 +295,7 @@ impl NativePairing {
     /// permanent default. Existing: name-only — grants and expiry stay, so a limited guest
     /// cannot re-pair itself to full control. Widening goes through [`Self::add_with_access`],
     /// [`Self::set_access`], or [`Self::approve_pending`].
+    #[cfg(test)]
     pub fn add(&self, name: &str, fp_hex: &str) -> Result<()> {
         self.add_with_access(name, fp_hex, None)
     }
@@ -426,6 +431,7 @@ impl NativePairing {
     }
 
     /// Live sessions for `fp_hex` right now.
+    #[cfg(test)]
     pub fn live_sessions(&self, fp_hex: &str) -> u32 {
         self.live
             .lock()
@@ -547,6 +553,7 @@ impl NativePairing {
     }
 
     /// Drops expired entries first.
+    #[cfg(test)]
     pub fn pending_contains(&self, fp_hex: &str) -> bool {
         self.approval.pending_contains(fp_hex)
     }

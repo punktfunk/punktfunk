@@ -229,11 +229,6 @@ pub(super) fn runner_sandbox_off() -> bool {
     })
 }
 
-#[cfg(not(target_os = "linux"))]
-pub(super) fn runner_sandbox_off() -> bool {
-    false
-}
-
 #[cfg(target_os = "linux")]
 pub(super) fn restart_runtime() -> Result<()> {
     run_systemctl(&["restart", UNIT])

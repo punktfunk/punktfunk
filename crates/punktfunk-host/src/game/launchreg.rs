@@ -279,6 +279,7 @@ pub fn ending(procs: &LiveProcs) {
 /// The launch died on the spot ([`crate::gamelease`]): un-launch the record so
 /// the next claim starts the title instead of adopting a corpse. Not a removal
 /// — an open [`Claim`] still has to find the record its [`Drop`] decrements.
+#[cfg_attr(target_os = "macos", allow(dead_code, reason = "no watcher on macOS"))]
 pub fn unlaunched(procs: &LiveProcs) {
     let mut recs = reg().records.lock().unwrap_or_else(|e| e.into_inner());
     if let Some(r) = recs.iter_mut().find(|r| Arc::ptr_eq(&r.procs, procs)) {
@@ -542,6 +543,7 @@ impl Claim {
 
     /// Workspace an earlier session gave this launch, for [`Plan::Adopt`] to
     /// focus again. `None` when nothing was placed, or the backend cannot.
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code, reason = "Linux places it"))]
     pub fn workspace(&self) -> Option<i64> {
         let mut found = None;
         self.with_record(|r| found = r.workspace);
@@ -551,6 +553,7 @@ impl Claim {
     /// Record the workspace this launch was placed on. Same claim check as
     /// [`Claim::launched`]: a newer session's placement is not ours to
     /// overwrite.
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code, reason = "Linux places it"))]
     pub fn placed(&self, workspace: i64) {
         self.with_record(|r| {
             if r.claim == self.id {

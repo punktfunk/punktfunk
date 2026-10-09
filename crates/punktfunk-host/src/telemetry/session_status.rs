@@ -65,7 +65,7 @@ struct LiveSession {
     /// Encoder target, kbps. Same Arc the ABR path writes.
     bitrate_kbps: Arc<AtomicU32>,
     codec: Codec,
-    /// Teardown flag ([`stop_all`]).
+    /// Teardown flag.
     stop: Arc<AtomicBool>,
     /// Deliberate-stop flag ([`stop_all_quit`]). Distinct from `stop`: intended
     /// teardown skips display keep-alive linger and trips end-game-on-session-end.
@@ -169,6 +169,7 @@ pub const NO_PAD_SLOT: u8 = u8::MAX;
 /// The compositor head one session streams — where its launch's window stage
 /// places the game.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(not(target_os = "linux"), allow(dead_code, reason = "Linux places it"))]
 pub struct StreamedHead {
     pub compositor: crate::vdisplay::Compositor,
     /// `wl_output.name` of the streamed head.
@@ -176,8 +177,9 @@ pub struct StreamedHead {
 }
 
 impl SessionControls {
-    /// Full control, permanent, unmuted, nothing to tell the client. The shape an
-    /// anonymous (`--open`) session and the tests start from.
+    /// Full control, permanent, unmuted, nothing to tell the client. The shape the
+    /// compat plane's session and the tests start from.
+    #[cfg_attr(not(feature = "gamestream"), allow(dead_code, reason = "compat plane"))]
     pub fn open() -> SessionControls {
         SessionControls {
             grants: Arc::new(AtomicU32::new(punktfunk_core::quic::GRANT_ALL)),
@@ -303,6 +305,7 @@ impl SessionCounters {
     /// what counts as a break in the feed is defined in exactly one place.
     /// Zero the per-session tallies. For a plane that keeps one counter block across
     /// sessions (the compat plane's, which its control loop bumps without a session handle).
+    #[cfg_attr(not(feature = "gamestream"), allow(dead_code, reason = "compat plane"))]
     pub fn reset(&self) {
         for c in [
             &self.input_events,
@@ -572,7 +575,7 @@ pub struct Registration {
     /// Encoder target, kbps. Same Arc the ABR path writes.
     pub bitrate_kbps: Arc<AtomicU32>,
     pub codec: Codec,
-    /// Teardown flag ([`stop_all`]).
+    /// Teardown flag.
     pub stop: Arc<AtomicBool>,
     /// Deliberate-stop flag ([`stop_all_quit`]). Distinct from `stop`.
     pub quit: Arc<AtomicBool>,
@@ -817,15 +820,6 @@ pub fn snapshot() -> Vec<SessionSnapshot> {
             }
         })
         .collect()
-}
-
-/// Tear down every live native session. Best-effort: loops observe the
-/// flag and exit; the guard then clears the entry. Not intended teardown —
-/// prefer [`stop_all_quit`] for an operator action.
-pub fn stop_all() {
-    for s in registry().iter() {
-        s.stop.store(true, Ordering::SeqCst);
-    }
 }
 
 /// Tear down live native sessions for `fp_hex` (lowercase hex cert SHA-256)

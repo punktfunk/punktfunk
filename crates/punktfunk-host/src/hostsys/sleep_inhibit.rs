@@ -22,6 +22,7 @@ use std::time::{Duration, Instant};
 /// Quiet window before the host vetoes suspend. Under Steam's 5 min and KDE's
 /// 10 min idle timers, and long enough that a Sleep confirmation cannot re-arm
 /// mid-click.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code, reason = "Linux only"))]
 const QUIET_BEFORE_VETO: Duration = Duration::from_secs(30);
 
 /// [`watch`] poll interval. Only re-arm waits for a tick; [`note_input`] releases synchronously.
@@ -70,6 +71,7 @@ static LAST_INPUT_MS: AtomicU64 = AtomicU64::new(0);
 /// One relaxed load per input event keeps [`note_input`] off the mutex.
 static VETOING: AtomicBool = AtomicBool::new(false);
 
+#[cfg_attr(not(target_os = "linux"), allow(dead_code, reason = "Linux only"))]
 fn quiet_for(last_input_ms: u64, now_ms: u64) -> bool {
     now_ms.saturating_sub(last_input_ms) >= QUIET_BEFORE_VETO.as_millis() as u64
 }

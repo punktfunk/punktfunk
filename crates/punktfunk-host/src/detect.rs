@@ -17,12 +17,6 @@
 
 use std::sync::OnceLock;
 
-/// Lowercased executable basenames (no `.exe`) of every running process.
-/// Empty means "could not tell", never "nothing is running".
-pub(crate) fn running_process_names() -> Vec<String> {
-    platform::running_processes()
-}
-
 #[cfg(target_os = "windows")]
 #[path = "detect/windows.rs"]
 mod platform;
@@ -64,6 +58,7 @@ impl Product {
 
 /// How a conflicting host was observed on this machine.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(target_os = "macos", allow(dead_code, reason = "macOS scans nothing"))]
 pub enum Evidence {
     /// Process basename observed live.
     Running { process: String },
@@ -146,11 +141,15 @@ pub struct Known {
     /// Lowercase executable basenames, no extension.
     pub processes: &'static [&'static str],
     /// SCM keys under `HKLM\SYSTEM\CurrentControlSet\Services`.
+    #[cfg_attr(not(windows), allow(dead_code, reason = "the Windows scan reads it"))]
     pub win_services: &'static [&'static str],
     /// Install-dir basenames under `%ProgramFiles%` / `%ProgramFiles(x86)%`.
+    #[cfg_attr(not(windows), allow(dead_code, reason = "the Windows scan reads it"))]
     pub win_dirs: &'static [&'static str],
     /// systemd unit basenames without `.service`.
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code, reason = "Linux scans it"))]
     pub linux_units: &'static [&'static str],
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code, reason = "Linux scans it"))]
     pub flatpaks: &'static [&'static str],
 }
 

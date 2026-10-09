@@ -521,6 +521,7 @@ pub(crate) async fn serve(
 
 /// Shutdown wait for the box's session to come back. Bounds a wedge; well inside systemd's
 /// 90 s `TimeoutStopSec`.
+#[cfg_attr(windows, allow(dead_code, reason = "the signal handler is Unix only"))]
 const SHUTDOWN_RESTORE_GRACE: std::time::Duration = std::time::Duration::from_secs(20);
 
 /// Catch `SIGTERM`/`SIGINT`, give the box back, then exit. `exit(0)` runs no destructor, so

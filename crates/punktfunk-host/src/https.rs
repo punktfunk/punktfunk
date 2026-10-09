@@ -36,6 +36,7 @@ pub(crate) struct PeerAddr(pub SocketAddr);
 /// The host address a request arrived on. `/serverinfo` reports that interface's IP and MAC,
 /// which Moonlight stores for Wake-on-LAN; the default route may be a VPN or another NIC.
 #[derive(Clone, Copy)]
+#[cfg_attr(not(feature = "gamestream"), allow(dead_code, reason = "compat plane"))]
 pub(crate) struct LocalAddr(pub SocketAddr);
 
 /// The plugin whose own pipe, and whose own AppContainer, a request came in through: the
@@ -120,7 +121,8 @@ const TLS_HANDSHAKE: u8 = 0x16;
 /// HTTPS server that surfaces the verified client cert to handlers.
 /// `axum_server` cannot expose the peer cert, so this runs the rustls
 /// handshake (tokio-rustls) and attaches [`PeerCertFingerprint`] on every
-/// request. Shared by the nvhttp HTTPS listener and the management API.
+/// request. The nvhttp HTTPS listener; the management API takes [`serve_https_with_plain`].
+#[cfg_attr(not(feature = "gamestream"), allow(dead_code, reason = "compat plane"))]
 pub(crate) async fn serve_https(
     bind: SocketAddr,
     app: Router,
@@ -144,6 +146,7 @@ pub(crate) async fn serve_https_with_plain(
 
 /// Same acceptor without TLS — the plain nvhttp listener (47989). Pre-auth
 /// by protocol; still needs the connection ceilings.
+#[cfg_attr(not(feature = "gamestream"), allow(dead_code, reason = "compat plane"))]
 pub(crate) async fn serve_plain(bind: SocketAddr, app: Router) -> Result<()> {
     serve_governed(bind, app, None, None).await
 }
@@ -670,6 +673,7 @@ fn accept_legacy_moonlight_cert(
 
 /// Mutual-TLS `ServerConfig` with the host cert/key. nvhttp/pairing:
 /// client cert is mandatory.
+#[cfg_attr(not(feature = "gamestream"), allow(dead_code, reason = "compat plane"))]
 pub fn server_config(cert_pem: &str, key_pem: &str) -> Result<Arc<ServerConfig>> {
     build_server_config(cert_pem, key_pem, true)
 }

@@ -59,11 +59,16 @@ pub enum SessionTopology {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum EncoderBackend {
     /// Linux: NVENC vs VAAPI is auto-detected inside `encode::open_video` (not modeled here).
+    #[cfg_attr(windows, allow(dead_code, reason = "Windows always names a backend"))]
     PlatformAuto,
+    #[cfg_attr(not(windows), allow(dead_code, reason = "Windows only"))]
     Nvenc,
+    #[cfg_attr(not(windows), allow(dead_code, reason = "Windows only"))]
     Amf,
+    #[cfg_attr(not(windows), allow(dead_code, reason = "Windows only"))]
     Qsv,
     /// Windows: any vendor's Media Foundation MFT.
+    #[cfg_attr(not(windows), allow(dead_code, reason = "Windows only"))]
     MediaFoundation,
     Software,
 }

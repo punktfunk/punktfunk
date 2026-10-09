@@ -681,11 +681,6 @@ pub fn grant_target(id: &str) -> (PathBuf, bool) {
     (home_of(id), false)
 }
 
-/// True when `path` is an emulator home under the prefix.
-pub fn is_home(path: &Path) -> bool {
-    path.starts_with(prefix())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

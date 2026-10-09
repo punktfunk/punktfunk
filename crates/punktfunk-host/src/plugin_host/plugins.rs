@@ -368,7 +368,8 @@ pub(crate) fn runtime_status() -> RuntimeStatus {
     plat::runtime_status()
 }
 
-/// Has the operator turned the per-plugin sandbox off for the runner? Linux only.
+/// Has the operator turned the per-plugin sandbox off for the runner?
+#[cfg(any(target_os = "linux", windows))]
 pub(crate) fn runner_sandbox_off() -> bool {
     plat::runner_sandbox_off()
 }

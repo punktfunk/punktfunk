@@ -205,16 +205,19 @@ impl OnWindow {
     }
 
     /// Raise the game's first window. Default on.
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code, reason = "Linux places it"))]
     pub fn wants_focus(&self) -> bool {
         self.focus.unwrap_or(true)
     }
 
     /// Full-screen it. Default off — a title that wanted a window keeps one.
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code, reason = "Linux places it"))]
     pub fn wants_fullscreen(&self) -> bool {
         self.fullscreen.unwrap_or(false)
     }
 
     /// Carry it onto the streamed head. Default on.
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code, reason = "Linux places it"))]
     pub fn wants_stream_output(&self) -> bool {
         self.move_to_stream_output.unwrap_or(true)
     }

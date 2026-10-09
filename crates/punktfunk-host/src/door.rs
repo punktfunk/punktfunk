@@ -14,6 +14,7 @@ pub(crate) type Refusal = (StatusCode, String);
 
 /// What a request to switch the door found.
 #[derive(Debug, PartialEq, Eq)]
+#[cfg_attr(not(target_os = "linux"), allow(dead_code, reason = "Linux only"))]
 pub(crate) enum Outcome {
     /// The door was already as asked.
     Already,
@@ -38,6 +39,7 @@ pub(crate) fn change(on: bool) -> Result<Outcome, Refusal> {
 }
 
 /// The unit that switches the door for `user`.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code, reason = "Linux only"))]
 fn unit(on: bool, user: &str) -> String {
     format!(
         "punktfunk-door-{}@{user}.service",
@@ -47,6 +49,7 @@ fn unit(on: bool, user: &str) -> String {
 
 /// A user name `systemctl` takes as an instance and the helper accepts: lowercase letters,
 /// digits, `_`, `-` and `.`, starting with a letter or `_`. Anything else is not started.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code, reason = "Linux only"))]
 fn instance_safe(user: &str) -> bool {
     let mut bytes = user.bytes();
     bytes

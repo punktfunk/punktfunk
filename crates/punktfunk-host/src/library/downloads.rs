@@ -147,8 +147,6 @@ pub struct Download {
 }
 
 struct Row {
-    provider: String,
-    external_id: String,
     view: Download,
     /// Last report, or the host's own start.
     reported: Instant,
@@ -306,8 +304,6 @@ pub fn report(provider: &str, reports: Vec<DownloadReport>) -> usize {
             };
             matched += 1;
             let row = rows.by_app.entry(app.clone()).or_insert_with(|| Row {
-                provider: provider.to_string(),
-                external_id: rep.external_id.clone(),
                 view: Download {
                     app_id: app.clone(),
                     title: title.clone(),
@@ -374,9 +370,9 @@ pub fn report(provider: &str, reports: Vec<DownloadReport>) -> usize {
     matched
 }
 
-/// The host asked `provider` to start `app` and it said yes: a `queued` row until its first
+/// The host asked a plugin to start `app` and it said yes: a `queued` row until its first
 /// report, so a launch waiting on it is held to [`SILENCE`] from now. A live row is left alone.
-pub fn begin(app: &str, title: &str, provider: &str, external_id: &str, by: Option<String>) {
+pub fn begin(app: &str, title: &str, by: Option<String>) {
     let now = Instant::now();
     let stamp = now_rfc3339();
     let fresh = {
@@ -399,8 +395,6 @@ pub fn begin(app: &str, title: &str, provider: &str, external_id: &str, by: Opti
                 rows.by_app.insert(
                     app.to_string(),
                     Row {
-                        provider: provider.to_string(),
-                        external_id: external_id.to_string(),
                         view: Download {
                             app_id: app.to_string(),
                             title: title.to_string(),
@@ -521,14 +515,6 @@ pub fn wait(app: &str, gone: &dyn Fn() -> bool) -> Waited {
             .unwrap_or_else(|e| e.into_inner())
             .0;
     }
-}
-
-/// `provider` and `external_id` of `app`'s row, for an action on a title the catalog dropped.
-pub fn row_owner(app: &str) -> Option<(String, String)> {
-    rows()
-        .by_app
-        .get(app)
-        .map(|r| (r.provider.clone(), r.external_id.clone()))
 }
 
 /// What the host asks of a plugin at `POST /__install`.
@@ -704,8 +690,6 @@ mod tests {
     fn row(state: DownloadState, reported_ago: u64, moved_ago: u64) -> Row {
         let now = Instant::now();
         Row {
-            provider: "p".into(),
-            external_id: "x".into(),
             view: Download {
                 app_id: "a".into(),
                 title: "T".into(),
@@ -820,18 +804,18 @@ mod tests {
     #[test]
     fn a_start_resumes_a_paused_row_and_leaves_a_live_one_alone() {
         put("begin:paused", DownloadState::Paused);
-        begin("begin:paused", "T", "p", "x", Some("console".into()));
+        begin("begin:paused", "T", Some("console".into()));
         let d = get("begin:paused").unwrap();
         assert_eq!(d.state, DownloadState::Queued);
         assert_eq!(d.by.as_deref(), Some("console"));
         assert!(pending("begin:paused"));
 
         put("begin:live", DownloadState::Downloading);
-        begin("begin:live", "T", "p", "x", None);
+        begin("begin:live", "T", None);
         assert_eq!(get("begin:live").unwrap().state, DownloadState::Downloading);
 
-        begin("begin:new", "T", "p", "x", None);
-        assert_eq!(row_owner("begin:new"), Some(("p".into(), "x".into())));
+        begin("begin:new", "T", None);
+        assert!(get("begin:new").is_some());
         removed("begin:new", "T");
         assert!(get("begin:new").is_none());
     }
