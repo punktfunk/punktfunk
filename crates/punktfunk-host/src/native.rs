@@ -1062,42 +1062,10 @@ pub(crate) async fn run_admitted(
     };
     tracing::info!(profile = %resolved.id, name = %resolved.display_name, via = ?resolved.via, "profile");
     profiles.touch(&resolved.id);
-    // A seat profile plays on its seat's host: send the client there, or say why not.
+    if let Some(served) =
+        place_profile(&conn, &mut send, session_fp_hex.clone(), &first, &resolved).await?
     {
-        use crate::seats::placement::{place, Asker, Placement};
-        let fp = session_fp_hex.clone();
-        let follows = first
-            .features
-            .has(punktfunk_core::quic::v2::registry::FEATURE_PROFILES);
-        let who = resolved.clone();
-        let placed = tokio::task::spawn_blocking(move || {
-            let joins = crate::vdisplay::policy::prefs()
-                .get()
-                .effective_for(fp.as_deref())
-                .mode_conflict
-                == crate::vdisplay::policy::ModeConflict::Join;
-            let asker = Asker {
-                fp: fp.as_deref(),
-                follows_redirects: follows,
-                joins,
-            };
-            place(&who, &asker)
-        })
-        .await
-        .context("placement task")?;
-        match placed {
-            Placement::Here => {}
-            Placement::Redirect(to) => {
-                tracing::info!(profile = %resolved.id, seat = %to.seat_name, port = to.port,
-                    "redirected to the profile's seat");
-                redirect(&conn, &mut send, &to).await?;
-                return Ok(Served::Session);
-            }
-            Placement::Refuse(reason) => {
-                close_rejected(&conn, reason).await;
-                anyhow::bail!("seat refused: {reason}");
-            }
-        }
+        return Ok(served);
     }
     spawn_profile_watch(conn.clone(), resolved.id.clone());
     let profile_ref = crate::events::ProfileRef {
@@ -1274,7 +1242,6 @@ pub(crate) async fn run_admitted(
     let preferred_pad_slot = session_fp_hex.as_deref().and_then(|fp| np.pad_slot_of(fp));
     let pad_id =
         crate::inject::pad_pool::PadIdentity::new(session_fp_hex.as_deref(), preferred_pad_slot);
-    let pad_slots = Arc::new(std::sync::atomic::AtomicU16::new(0));
     // Launch verdict lane. Unbounded and opened here so the library resolve below
     // can refuse onto it before the stream thread exists.
     let (launch_outcome_tx, launch_outcome_rx) =
@@ -1291,7 +1258,7 @@ pub(crate) async fn run_admitted(
         )),
         access_tx: Some(access_tx.clone()),
         audio_tx: Some(audio_tx),
-        pad_slots: pad_slots.clone(),
+        pad_slots: Arc::new(std::sync::atomic::AtomicU16::new(0)),
         fingerprint: session_fp_hex.clone(),
         preset: session_preset.clone(),
         profile: Some(profile_ref.clone()),
@@ -1403,56 +1370,24 @@ pub(crate) async fn run_admitted(
         &inj_tx,
         mic_tx,
     );
-    let input_route = planes.input_route.clone();
 
     // Stream loop parks the seat pointer through the same path client input takes.
     #[cfg(target_os = "linux")]
     let input_tx_stream = input_tx.clone();
-    let input_handle = {
-        let conn = conn.clone();
-        let stop = stop.clone();
-        let gamepad = welcome.gamepad;
-        // Read HOST_CAP_PAD_AUDIO back off Welcome so the input thread cannot disagree.
-        let pad_audio_on = welcome.host_caps & punktfunk_core::quic::HOST_CAP_PAD_AUDIO != 0;
-        let grants = session_grants.clone();
-        let frame_map = frame_map.clone();
-        let pad_feed = controls.pads.clone();
-        let counters = counters.clone();
-        let seat_dev = planes.seat_dev.clone();
-        std::thread::Builder::new()
-            .name("punktfunk1-input".into())
-            .spawn({
-                let input_route = input_route.clone();
-                move || {
-                    input_thread(
-                        input_rx,
-                        conn,
-                        input_route,
-                        gamepad,
-                        pad_audio_on,
-                        pad_id,
-                        pad_slots,
-                        Some(pad_tx),
-                        pad_writes,
-                        grants,
-                        frame_map,
-                        pad_feed,
-                        seat_dev,
-                        stop,
-                        counters,
-                    )
-                }
-            })
-            .context("spawn input thread")?
-    };
-    input::spawn_datagram_reader(
-        conn.clone(),
-        session_grants.clone(),
-        counters.clone(),
-        planes.mic_tx.clone(),
-        input_tx,
+    let input_handle = spawn_input_plane(
+        &conn,
+        &stop,
+        &welcome,
+        &controls,
+        &counters,
+        &planes,
+        &frame_map,
+        (input_tx, input_rx),
+        pad_id,
+        pad_tx,
+        pad_writes,
         feedback_tx,
-    );
+    )?;
 
     // Handshake complete: CONNECTED. A client rejected earlier never emits either.
     emit_connected(
@@ -1499,56 +1434,18 @@ pub(crate) async fn run_admitted(
         != 0)
         .then(crate::audio::capture_policy::keep_host_audio_guard);
 
-    // Not for the two frame-arithmetic sources: their clients want nothing else on the wire,
-    // and the rig's budget carries the audio reservation without a capture behind it.
-    // Best-effort: a spawn error must not early-return (threads already up).
-    let audio_handle = if !matches!(
+    let audio_handle = spawn_audio_plane(
+        &conn,
+        &stop,
         opts.source,
-        Punktfunk1Source::Synthetic | Punktfunk1Source::SyntheticAbr(..)
-    ) {
-        let conn = conn.clone();
-        let stop = stop.clone();
-        let cap = audio_cap.clone();
-        let channels = welcome.audio_channels;
-        // Format from Welcome bytes, not a second evaluation of the gate (config + live property).
-        let audio_plane = handshake::AudioPlane::from_welcome(&welcome);
-        // Read the granted bit back off Welcome, then re-derive the same budget rung from it.
-        let budget = handshake::audio_budget(
-            welcome.host_caps & punktfunk_core::quic::HOST_CAP_AUDIO_RED != 0,
-            welcome.bitrate_kbps,
-            channels,
-            audio_plane.layout,
-        );
-        // Isolated session captures its own named sink; `None` is the shared path. A joiner
-        // taps the owner's sink either way: its isolated one, or the one the owner published.
-        let iso_sink = planes.isolation.clone().and_then(|i| i.sink);
-        let tap_from = joined.as_ref().map(|(d, _)| d.audio_sink.clone());
-        let published = audio_sink.clone();
-        let muted = controls.muted.clone();
-        let counters = counters.clone();
-        std::thread::Builder::new()
-            .name("punktfunk1-audio".into())
-            .spawn(move || {
-                audio_thread(
-                    conn,
-                    stop,
-                    cap,
-                    channels,
-                    budget,
-                    audio_plane,
-                    iso_sink,
-                    join_live,
-                    published,
-                    tap_from,
-                    muted,
-                    counters,
-                )
-            })
-            .map_err(|e| tracing::warn!(error = %e, "audio thread spawn failed — session continues without audio"))
-            .ok()
-    } else {
-        None
-    };
+        audio_cap,
+        &welcome,
+        &planes,
+        joined.as_ref().map(|(d, _)| d),
+        &audio_sink,
+        &controls,
+        &counters,
+    );
 
     if welcome.color.is_hdr() {
         send_hdr_baseline(&conn, hello.display_hdr);
@@ -1580,14 +1477,6 @@ pub(crate) async fn run_admitted(
     // Linux `PUNKTFUNK_PIN_CLOCKS`: refcounted vendor clock floor while any session streams.
     #[cfg(target_os = "linux")]
     let _clock_pin = crate::gpuclocks::session_pin();
-    let launch_target = match resolve_launch(hello.launch.as_deref(), &launch_outcome_tx).await? {
-        Some(t) => Some(t),
-        None => home_launch(hello.launch.as_deref(), &resolved),
-    };
-    #[cfg(target_os = "windows")]
-    let launch_for_dp = launch_target.as_ref().and(hello.launch.clone());
-    #[cfg(not(target_os = "windows"))]
-    let launch_for_dp = launch_target.as_ref().and_then(|t| t.command.clone());
     // Stats label: device-fingerprint prefix, else peer IP (anonymous, `--open`).
     let client_label = conn
         .peer_fingerprint()
@@ -1602,35 +1491,26 @@ pub(crate) async fn run_admitted(
         pad: welcome.gamepad,
         pad_slots: Some(controls.pad_slots.clone()),
     };
-    let (prep_cmds, prep_env) = launch_prep(&hello, &welcome, session_preset.as_ref());
-    // Reprieve, claim, prep and the launch hold, before the display opens. `block_in_place`:
-    // operator code is blocking and this is a multi-thread runtime.
-    let crate::session_launch::Prepared {
-        claim: launch_claim,
-        stamp: launch_stamp,
-        prep: _prep,
-        declined,
-        waiting: _waiting,
-    } = tokio::task::block_in_place(|| {
-        crate::session_launch::prepare(
-            launch_target.as_ref(),
-            &launch_owner,
-            &prep_cmds,
-            &prep_env,
-            &|| stop.load(Ordering::Relaxed),
-        )
-    });
-    // The title's files never arrived: stream without it, and say why.
-    let (launch_target, launch_for_dp) = match declined {
-        Some(sentence) => {
-            let _ = launch_outcome_tx.send(punktfunk_core::quic::LaunchOutcome::new(
-                punktfunk_core::quic::LaunchOutcomeKind::Refused,
-                &sentence,
-            ));
-            (None, None)
-        }
-        None => (launch_target, launch_for_dp),
-    };
+    // The prep guard and the waiting row are held to the session's end.
+    let (
+        launch_target,
+        launch_for_dp,
+        crate::session_launch::Prepared {
+            claim: launch_claim,
+            stamp: launch_stamp,
+            prep: _prep,
+            waiting: _waiting,
+            ..
+        },
+    ) = prepare_launch(
+        &hello,
+        &welcome,
+        &resolved,
+        &launch_owner,
+        &launch_outcome_tx,
+        &stop,
+    )
+    .await?;
     // Welcome/acks/HUD speak wire budget. Encoder opens get the derived video rate (`EncDerive`).
     // PyroWave: budget == encoder rate (bpp pin).
     let bitrate_kbps = welcome.bitrate_kbps;
@@ -1677,7 +1557,7 @@ pub(crate) async fn run_admitted(
     #[cfg(target_os = "linux")]
     let isolation_dp = planes.isolation.clone();
     #[cfg(target_os = "linux")]
-    let input_route_dp = input_route.clone();
+    let input_route_dp = planes.input_route.clone();
     #[cfg(target_os = "linux")]
     let inj_shared_tx_dp = inj_tx.clone();
     #[cfg(target_os = "linux")]
@@ -1834,6 +1714,229 @@ pub(crate) async fn run_admitted(
     // After teardown: the last hold out hands the TV's gaming session back.
     drop(gamescope_hold);
     result.map(|()| Served::Session)
+}
+
+/// A seat profile plays on its seat's host: send the client there, or say why not. `Some` when
+/// the session ended in a redirect; `None` when it plays here.
+async fn place_profile(
+    conn: &link::SessionLink,
+    send: &mut link::CtlSend,
+    fp: Option<String>,
+    first: &ClientHello,
+    resolved: &crate::profiles::Resolved,
+) -> Result<Option<Served>> {
+    use crate::seats::placement::{place, Asker, Placement};
+    let follows = first
+        .features
+        .has(punktfunk_core::quic::v2::registry::FEATURE_PROFILES);
+    let who = resolved.clone();
+    let placed = tokio::task::spawn_blocking(move || {
+        let joins = crate::vdisplay::policy::prefs()
+            .get()
+            .effective_for(fp.as_deref())
+            .mode_conflict
+            == crate::vdisplay::policy::ModeConflict::Join;
+        let asker = Asker {
+            fp: fp.as_deref(),
+            follows_redirects: follows,
+            joins,
+        };
+        place(&who, &asker)
+    })
+    .await
+    .context("placement task")?;
+    match placed {
+        Placement::Here => Ok(None),
+        Placement::Redirect(to) => {
+            tracing::info!(profile = %resolved.id, seat = %to.seat_name, port = to.port,
+                "redirected to the profile's seat");
+            redirect(conn, send, &to).await?;
+            Ok(Some(Served::Session))
+        }
+        Placement::Refuse(reason) => {
+            close_rejected(conn, reason).await;
+            anyhow::bail!("seat refused: {reason}");
+        }
+    }
+}
+
+/// The input thread, and the datagram reader that feeds it client input, mic frames and the
+/// client's feedback. Grants, pad slots and the pad feed come from the session's `controls`;
+/// the pointer route, seat devices and mic from its `planes`. Teardown joins the thread.
+#[allow(clippy::too_many_arguments)]
+fn spawn_input_plane(
+    conn: &link::SessionLink,
+    stop: &Arc<AtomicBool>,
+    welcome: &Welcome,
+    controls: &crate::session_status::SessionControls,
+    counters: &Arc<crate::session_status::SessionCounters>,
+    planes: &SessionPlanes,
+    frame_map: &input::FrameMap,
+    (input_tx, input_rx): (
+        std::sync::mpsc::SyncSender<ClientInput>,
+        std::sync::mpsc::Receiver<ClientInput>,
+    ),
+    pad_id: crate::inject::pad_pool::PadIdentity,
+    pad_tx: tokio::sync::mpsc::UnboundedSender<input::PadToClient>,
+    pad_writes: bool,
+    feedback_tx: tokio::sync::mpsc::UnboundedSender<punktfunk_core::quic::v2::dgram::Feedback>,
+) -> Result<std::thread::JoinHandle<()>> {
+    let input_handle = {
+        let conn = conn.clone();
+        let stop = stop.clone();
+        let gamepad = welcome.gamepad;
+        // Read HOST_CAP_PAD_AUDIO back off Welcome so the input thread cannot disagree.
+        let pad_audio_on = welcome.host_caps & punktfunk_core::quic::HOST_CAP_PAD_AUDIO != 0;
+        let grants = controls.grants.clone();
+        let pad_slots = controls.pad_slots.clone();
+        let frame_map = frame_map.clone();
+        let pad_feed = controls.pads.clone();
+        let counters = counters.clone();
+        let seat_dev = planes.seat_dev.clone();
+        let input_route = planes.input_route.clone();
+        std::thread::Builder::new()
+            .name("punktfunk1-input".into())
+            .spawn(move || {
+                input_thread(
+                    input_rx,
+                    conn,
+                    input_route,
+                    gamepad,
+                    pad_audio_on,
+                    pad_id,
+                    pad_slots,
+                    Some(pad_tx),
+                    pad_writes,
+                    grants,
+                    frame_map,
+                    pad_feed,
+                    seat_dev,
+                    stop,
+                    counters,
+                )
+            })
+            .context("spawn input thread")?
+    };
+    input::spawn_datagram_reader(
+        conn.clone(),
+        controls.grants.clone(),
+        counters.clone(),
+        planes.mic_tx.clone(),
+        input_tx,
+        feedback_tx,
+    );
+    Ok(input_handle)
+}
+
+/// The audio thread, except for the two frame-arithmetic sources: their clients want nothing
+/// else on the wire, and the rig's budget carries the audio reservation without a capture
+/// behind it. A joiner (`joined`) taps the owner's sink; `published` is where this session's
+/// thread names the sink it captures. Best-effort: a failed spawn is logged and the session
+/// streams without audio, because the other threads are already up.
+#[allow(clippy::too_many_arguments)]
+fn spawn_audio_plane(
+    conn: &link::SessionLink,
+    stop: &Arc<AtomicBool>,
+    source: Punktfunk1Source,
+    audio_cap: &AudioCapSlot,
+    welcome: &Welcome,
+    planes: &SessionPlanes,
+    joined: Option<&crate::vdisplay::admission::LiveDisplay>,
+    published: &Arc<std::sync::Mutex<Option<String>>>,
+    controls: &crate::session_status::SessionControls,
+    counters: &Arc<crate::session_status::SessionCounters>,
+) -> Option<std::thread::JoinHandle<()>> {
+    if matches!(
+        source,
+        Punktfunk1Source::Synthetic | Punktfunk1Source::SyntheticAbr(..)
+    ) {
+        return None;
+    }
+    let conn = conn.clone();
+    let stop = stop.clone();
+    let cap = audio_cap.clone();
+    let channels = welcome.audio_channels;
+    // Format from Welcome bytes, not a second evaluation of the gate (config + live property).
+    let audio_plane = handshake::AudioPlane::from_welcome(welcome);
+    // Read the granted bit back off Welcome, then re-derive the same budget rung from it.
+    let budget = handshake::audio_budget(
+        welcome.host_caps & punktfunk_core::quic::HOST_CAP_AUDIO_RED != 0,
+        welcome.bitrate_kbps,
+        channels,
+        audio_plane.layout,
+    );
+    // Isolated session captures its own named sink; `None` is the shared path. A joiner
+    // taps the owner's sink either way: its isolated one, or the one the owner published.
+    let iso_sink = planes.isolation.clone().and_then(|i| i.sink);
+    let join_live = joined.is_some();
+    let tap_from = joined.map(|d| d.audio_sink.clone());
+    let published = published.clone();
+    let muted = controls.muted.clone();
+    let counters = counters.clone();
+    std::thread::Builder::new()
+        .name("punktfunk1-audio".into())
+        .spawn(move || {
+            audio_thread(
+                conn,
+                stop,
+                cap,
+                channels,
+                budget,
+                audio_plane,
+                iso_sink,
+                join_live,
+                published,
+                tap_from,
+                muted,
+                counters,
+            )
+        })
+        .map_err(|e| tracing::warn!(error = %e, "audio thread spawn failed — session continues without audio"))
+        .ok()
+}
+
+/// The session's library launch, before the display opens: the title (the one asked for, else
+/// the profile's home), the command the display runs for it, then reprieve, claim, prep and
+/// the launch hold. A title whose files never arrived is dropped and the client told why on
+/// `outcome`; the returned [`Prepared`](crate::session_launch::Prepared) has `declined` taken.
+async fn prepare_launch(
+    hello: &Hello,
+    welcome: &Welcome,
+    profile: &crate::profiles::Resolved,
+    owner: &crate::session_launch::LaunchOwner,
+    outcome: &crate::gamelease::OutcomeTx,
+    stop: &AtomicBool,
+) -> Result<(
+    Option<crate::library::LaunchTarget>,
+    Option<String>,
+    crate::session_launch::Prepared,
+)> {
+    let target = match resolve_launch(hello.launch.as_deref(), outcome).await? {
+        Some(t) => Some(t),
+        None => home_launch(hello.launch.as_deref(), profile),
+    };
+    #[cfg(target_os = "windows")]
+    let command = target.as_ref().and(hello.launch.clone());
+    #[cfg(not(target_os = "windows"))]
+    let command = target.as_ref().and_then(|t| t.command.clone());
+    let (prep_cmds, prep_env) = launch_prep(hello, welcome, owner.preset.as_ref());
+    // `block_in_place`: operator code is blocking and this is a multi-thread runtime.
+    let mut prepared = tokio::task::block_in_place(|| {
+        crate::session_launch::prepare(target.as_ref(), owner, &prep_cmds, &prep_env, &|| {
+            stop.load(Ordering::Relaxed)
+        })
+    });
+    // The title's files never arrived: stream without it, and say why.
+    match prepared.declined.take() {
+        Some(sentence) => {
+            let _ = outcome.send(punktfunk_core::quic::LaunchOutcome::new(
+                punktfunk_core::quic::LaunchOutcomeKind::Refused,
+                &sentence,
+            ));
+            Ok((None, None, prepared))
+        }
+        None => Ok((target, command, prepared)),
+    }
 }
 
 /// What admission resolved for this device: its effective grant mask, deadline and the record's
