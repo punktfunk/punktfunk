@@ -6,6 +6,7 @@
 
 use super::recovery::ResendRing;
 use super::*;
+use crate::native::bitrate::apply_fec_target;
 
 /// The AU-level fields of one encoded AU: the same on its whole-AU message and on every
 /// chunk of a streamed one.

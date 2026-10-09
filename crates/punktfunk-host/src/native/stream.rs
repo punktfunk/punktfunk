@@ -11,6 +11,7 @@
 
 use super::wiring::{SessionShared, StreamEnds};
 use super::*;
+use crate::native::bitrate::apply_fec_target;
 use crate::send_pacing::{frame_driven_enabled, CaptureCredit};
 
 mod cursor;
@@ -156,8 +157,9 @@ pub(super) fn software_stream(
     anyhow::bail!("the software source needs the software encoder, which is Linux-only")
 }
 
-/// Probe ceiling: 10 Gbps / 5 s. Above the session cap ([`MAX_BITRATE_KBPS`], 2 Gbps) so a
-/// probe can show headroom past the rate a session will actually use.
+/// Probe ceiling: 10 Gbps / 5 s. Above the session cap (8 Gbps,
+/// [`MAX_BITRATE_KBPS`](crate::native::bitrate::MAX_BITRATE_KBPS)) so a probe can show headroom
+/// past the rate a session will actually use.
 const MAX_PROBE_KBPS: u32 = 10_000_000;
 const MAX_PROBE_MS: u32 = 5_000;
 /// One pump's send ceiling: a whole catch-up backlog in one batch overruns a ~400 KiB send

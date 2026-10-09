@@ -13,6 +13,7 @@ use super::pipeline::{
 use super::state::{announce_pipeline_gap, StreamState};
 use super::*;
 use crate::encode_recovery::{RebuildBudget, MAX_CAPTURE_REBUILDS, MAX_ENCODER_RESETS};
+use crate::native::bitrate::resolve_bitrate_kbps_for;
 
 /// Isolated gamescope keeps its pinned injector and must not steal the shared backend
 /// (last-write-wins). Everyone else gets the shared sender plus `set_backend_id`.

@@ -7,6 +7,7 @@
 
 use super::recovery::{KeyframeGate, KeyframeVerdict, IDR_COOLDOWN_FULL};
 use super::*;
+use punktfunk_core::abr::budget::encoder_kbps_for_budget;
 
 /// A keyframe against an ordinary frame, percent, when `--idr-pct` says nothing. Ten times,
 /// which is what rounds 4–7 measured against; a hardware encoder runs `PUNKTFUNK_VBV_FRAMES`

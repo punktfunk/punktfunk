@@ -5,6 +5,7 @@
 use super::*;
 #[cfg(target_os = "linux")]
 use crate::capture::OutputLease;
+use crate::native::bitrate::{resolve_bitrate_kbps_for, EncDerive};
 
 /// One built pipeline. `bitrate_kbps` is the rate the encoder actually opened at.
 pub(in crate::native) struct Pipeline {
@@ -109,7 +110,7 @@ pub(in crate::native) fn prepare_display(
     bitrate_auto: bool,
     bit_depth: u8,
     hdr: bool,
-    enc_of: super::EncDerive,
+    enc_of: EncDerive,
     chroma: crate::encode::ChromaFormat,
     codec: crate::encode::Codec,
     shard_payload: u16,
@@ -191,7 +192,7 @@ pub(super) fn build_pipeline_with_retry(
     bitrate_kbps: u32,
     bitrate_auto: bool,
     bit_depth: u8,
-    enc_of: super::EncDerive,
+    enc_of: EncDerive,
     plan: crate::session_plan::SessionPlan,
     quit: &Arc<AtomicBool>,
     stop: &Arc<AtomicBool>,
@@ -443,7 +444,7 @@ pub(super) fn build_pipeline(
     bitrate_kbps: u32,
     bitrate_auto: bool,
     bit_depth: u8,
-    enc_of: super::EncDerive,
+    enc_of: EncDerive,
     plan: crate::session_plan::SessionPlan,
     quit: &Arc<AtomicBool>,
     supersedes: Option<u64>,
@@ -488,7 +489,7 @@ pub(super) fn reattach_pipeline(
     bitrate_kbps: u32,
     bitrate_auto: bool,
     bit_depth: u8,
-    enc_of: super::EncDerive,
+    enc_of: EncDerive,
     plan: crate::session_plan::SessionPlan,
     client_hdr: Option<pf_frame::HdrMeta>,
     wire_seq_base: u32,
@@ -520,7 +521,7 @@ fn attach_pipeline(
     bitrate_kbps: u32,
     bitrate_auto: bool,
     bit_depth: u8,
-    enc_of: super::EncDerive,
+    enc_of: EncDerive,
     plan: crate::session_plan::SessionPlan,
     first_frame_budget: Option<std::time::Duration>,
     trace: Option<&crate::bringup::Trace>,
