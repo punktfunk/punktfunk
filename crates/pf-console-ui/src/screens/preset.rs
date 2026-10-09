@@ -4,8 +4,8 @@
 //! next catalog push.
 //!
 //! The editor shows every row a preset can hold, at the preset's value over the global one.
-//! A change is recorded as an override ([`SettingsOverlay::absorb`]); X clears one, so the
-//! row follows the global value again.
+//! A step pins that row's field ([`SettingsOverlay::pin`]), even at the global value; X clears
+//! it, so the row follows the global value again.
 
 use super::settings::rows::{adjust, advanced, overrides_row, preset_field, preset_rows, row_spec};
 use crate::glyphs::{Hint, HintKey};
@@ -16,6 +16,7 @@ use crate::theme::Fonts;
 use crate::widgets::{blurb, field_key, type_text, Entry, ListMsg, MenuList, RowSpec};
 use pf_client_core::menu_nav::{MenuEvent, MenuPulse};
 use pf_client_core::presets::SettingsOverlay;
+use pf_client_core::trust::Settings;
 use skia_safe::{Canvas, Rect};
 
 fn save(id: &str, name: &str, overlay: &SettingsOverlay) -> ConsoleCmd {
@@ -469,9 +470,9 @@ impl PresetEdit {
         })
     }
 
-    /// Step the row at the preset's value and keep what changed as its override. Android's
-    /// safe-area mode is a device setting no preset holds: a Resolution step that moved only
-    /// that steps on, or Native could never be left.
+    /// Step the row at the preset's value and pin its field when the step moved it, even onto
+    /// the global value. Android's safe-area mode is a device setting no preset holds: a
+    /// Resolution step that moved only that steps on, or Native could never be left.
     fn step(
         &mut self,
         id: super::settings::rows::RowId,
@@ -480,15 +481,19 @@ impl PresetEdit {
         ctx: &mut Ctx,
         fx: &mut Outbox,
     ) -> Option<MenuPulse> {
+        let field = preset_field(id)?;
+        let held = |s: &Settings| {
+            let mut o = SettingsOverlay::default();
+            o.pin(field, s);
+            o
+        };
         let before = self.overlay.apply(ctx.settings);
-        let overlay = &self.overlay;
         let after = self.in_preset(ctx, |ctx| {
             if !adjust(id, delta, wrap, ctx) {
                 return None;
             }
-            let mut held = overlay.clone();
-            held.absorb(&before, ctx.settings);
-            let unheld = id == super::settings::rows::RowId::Resolution && held == *overlay;
+            let unheld = id == super::settings::rows::RowId::Resolution
+                && held(&before) == held(ctx.settings);
             if unheld && !adjust(id, delta, wrap, ctx) {
                 return None;
             }
@@ -497,7 +502,9 @@ impl PresetEdit {
         let Some(after) = after else {
             return Some(MenuPulse::Boundary);
         };
-        self.overlay.absorb(&before, &after);
+        if held(&before) != held(&after) {
+            self.overlay.pin(field, &after);
+        }
         fx.cmds.push(save(&self.id, &self.name, &self.overlay));
         Some(MenuPulse::Move)
     }
@@ -608,7 +615,6 @@ mod tests {
     use crate::screens::settings::rows::RowId;
     use crate::screens::Nav;
     use pf_client_core::menu_nav::MenuDir;
-    use pf_client_core::trust::Settings;
 
     fn with_ctx<R>(f: impl FnOnce(&mut Ctx) -> R) -> R {
         let mut settings = Settings::default();
@@ -626,16 +632,28 @@ mod tests {
         }
     }
 
-    /// A step on a row becomes that row's override and saves; X puts it back on the global.
+    /// A step pins only its row's field and saves, even back on the global value; X puts it
+    /// back on the global.
     #[test]
     fn a_step_overrides_and_x_clears() {
         let mut s = PresetEdit::new("p1".into(), "Couch".into(), SettingsOverlay::default());
         let hdr = with_ctx(|ctx| s.rows(ctx).iter().position(|(_, id)| *id == RowId::Hdr));
         s.list.cursor = hdr.expect("HDR is a preset row");
+        let global = Settings::default().hdr_enabled;
         let mut fx = Outbox::default();
         with_ctx(|ctx| s.menu(MenuEvent::Confirm, ctx, &mut fx));
         let o = saved(&fx);
-        assert_eq!(o.hdr_enabled, Some(!Settings::default().hdr_enabled));
+        let only_hdr = SettingsOverlay {
+            hdr_enabled: Some(!global),
+            ..Default::default()
+        };
+        assert_eq!(o, only_hdr);
+        with_ctx(|ctx| s.menu(MenuEvent::Confirm, ctx, &mut fx));
+        assert_eq!(
+            saved(&fx).hdr_enabled,
+            Some(global),
+            "equal to the global is still a pin"
+        );
         let mut fx = Outbox::default();
         with_ctx(|ctx| s.menu(MenuEvent::Tertiary, ctx, &mut fx));
         assert_eq!(saved(&fx).hdr_enabled, None, "back on the global value");
