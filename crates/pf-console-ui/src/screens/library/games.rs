@@ -18,7 +18,7 @@ use crate::library::{LibraryGame, LibraryPhase, LibraryView, Section};
 use crate::model::{ConsoleCmd, HostRow};
 use crate::pointer::Pointer;
 use crate::screens::card_menu::CardMenu;
-use crate::screens::{ConnectIntent, Ctx, Outbox, Screen};
+use crate::screens::{ConnectIntent, Ctx, Outbox, Screen, ScreenView};
 use crate::theme::{fg, Fonts, W};
 use crate::widgets::{button, button_w, text_tab, ListMsg, MenuList, RowSpec};
 use pf_client_core::menu_nav::{MenuDir, MenuEvent, MenuPulse};
@@ -830,7 +830,7 @@ fn item_pitch(band: &Band, cw: f64, k: f64) -> (f64, f64) {
 /// row up, Up and Down carry it, OK or Back sets it down; Left hides a section, Right
 /// shows it. A pointer press flips the switch.
 pub(crate) struct CustomizeScreen {
-    pub(crate) list: MenuList,
+    list: MenuList,
     held: bool,
 }
 
@@ -849,12 +849,19 @@ impl CustomizeScreen {
         });
     }
 
-    pub(crate) fn menu(
-        &mut self,
-        ev: MenuEvent,
-        ctx: &mut Ctx,
-        fx: &mut Outbox,
-    ) -> Option<MenuPulse> {
+    fn set(&mut self, rows: &mut [(Section, bool)], on: bool, ctx: &mut Ctx) -> Option<MenuPulse> {
+        let i = self.list.cursor.min(rows.len() - 1);
+        if rows[i].1 == on {
+            return Some(MenuPulse::Boundary);
+        }
+        rows[i].1 = on;
+        Self::save(rows, ctx);
+        Some(MenuPulse::Move)
+    }
+}
+
+impl ScreenView for CustomizeScreen {
+    fn menu(&mut self, ev: MenuEvent, ctx: &mut Ctx, fx: &mut Outbox) -> Option<MenuPulse> {
         let mut rows = crate::library::sections(&ctx.settings.library_sections);
         let i = self.list.cursor.min(rows.len() - 1);
         match ev {
@@ -893,17 +900,7 @@ impl CustomizeScreen {
         }
     }
 
-    fn set(&mut self, rows: &mut [(Section, bool)], on: bool, ctx: &mut Ctx) -> Option<MenuPulse> {
-        let i = self.list.cursor.min(rows.len() - 1);
-        if rows[i].1 == on {
-            return Some(MenuPulse::Boundary);
-        }
-        rows[i].1 = on;
-        Self::save(rows, ctx);
-        Some(MenuPulse::Move)
-    }
-
-    pub(crate) fn pointer(&mut self, p: Pointer, ctx: &mut Ctx, _fx: &mut Outbox) -> bool {
+    fn pointer(&mut self, p: Pointer, ctx: &mut Ctx, _fx: &mut Outbox) -> bool {
         let mut rows = crate::library::sections(&ctx.settings.library_sections);
         let (msg, pulse) = self.list.pointer(p, rows.len());
         match msg {
@@ -917,7 +914,7 @@ impl CustomizeScreen {
         }
     }
 
-    pub(crate) fn hints(&self, _ctx: &Ctx) -> Vec<Hint> {
+    fn hints(&self, _ctx: &Ctx) -> Vec<Hint> {
         if self.held {
             return vec![
                 Hint::new(HintKey::Confirm, "Set down"),
@@ -931,7 +928,7 @@ impl CustomizeScreen {
         ]
     }
 
-    pub(crate) fn announcement(&self, ctx: &Ctx) -> Option<String> {
+    fn announcement(&self, ctx: &Ctx) -> Option<String> {
         let rows = crate::library::sections(&ctx.settings.library_sections);
         let (s, on) = rows.get(self.list.cursor)?;
         let state = if *on { "shown" } else { "hidden" };
@@ -941,7 +938,7 @@ impl CustomizeScreen {
         })
     }
 
-    pub(crate) fn render(
+    fn render(
         &mut self,
         canvas: &Canvas,
         rect: Rect,
@@ -962,8 +959,20 @@ impl CustomizeScreen {
         self.list.render(canvas, list, &rows, fonts, k, dt, true);
     }
 
-    pub(crate) fn foot(&self) -> &'static str {
-        "The Games tab shows these in this order. An empty section stays hidden."
+    fn foot(&self, _ctx: &Ctx) -> Option<std::borrow::Cow<'static, str>> {
+        Some("The Games tab shows these in this order. An empty section stays hidden.".into())
+    }
+
+    fn title(&self) -> String {
+        "Customize".into()
+    }
+
+    fn press(&mut self) {
+        self.list.dip();
+    }
+
+    fn pan(&mut self, p: Pointer) -> bool {
+        self.list.pan(p)
     }
 }
 

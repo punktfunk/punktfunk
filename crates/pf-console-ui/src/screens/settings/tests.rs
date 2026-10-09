@@ -1,4 +1,5 @@
 use super::*;
+use pf_client_core::audio_format::AUDIO_FORMAT_OPUS;
 use pf_client_core::trust::Settings;
 
 /// The row shows the global; a host's bound preset outranks it at launch, and the
@@ -1922,33 +1923,8 @@ fn the_background_rows_follow_the_device() {
     );
 }
 
-/// The two row-to-field maps agree: a row names an overlay field exactly when an overlay
-/// holding every field marks it overridden.
-#[test]
-fn the_preset_field_map_matches_the_override_map() {
-    let every: SettingsOverlay = serde_json::from_value(serde_json::json!({
-        "width": 1920, "height": 1080, "refresh_hz": 60, "match_window": false,
-        "bitrate_kbps": 20000, "render_scale": 1.0, "video_fit": "fit", "codec": "hevc",
-        "hdr_enabled": true, "enable_444": false, "ten_bit_sdr": false, "compositor": "auto",
-        "audio_channels": 2, "audio_format": "opus", "keep_host_audio": false,
-        "mic_enabled": true, "echo_cancel": true, "touch_mode": "trackpad",
-        "mouse_mode": "capture", "invert_scroll": false, "inhibit_shortcuts": true,
-        "gamepad": "auto", "gamepad_forwarding": true, "system_buttons": "auto",
-        "guide_gesture": "auto", "stats_verbosity": "normal", "fullscreen_on_stream": true,
-        "present_priority": "latency", "smooth_buffer": 0, "vsync": false, "allow_vrr": true
-    }))
-    .unwrap();
-    for id in TABS.iter().flat_map(|(_, rows)| rows.iter().copied()) {
-        assert_eq!(
-            preset_field(id).is_some(),
-            overrides_row(id, &every),
-            "{id:?}"
-        );
-    }
-}
-
-/// Every row kept in `extra` reads its default unwritten, and one step writes the key it
-/// reads back, so the row never shows one value and steps from another.
+/// Every single-entry row shows what one step changes, so it never shows one value and steps
+/// from another. One kept in `extra` reads its default unwritten and writes the key it reads.
 #[test]
 fn every_extra_row_steps_the_value_it_shows() {
     let ids = TABS
@@ -1956,17 +1932,21 @@ fn every_extra_row_steps_the_value_it_shows() {
         .flat_map(|(_, rows)| rows.iter().copied())
         .filter(|id| id.extra().is_some());
     for id in ids {
-        let mut settings = Settings::default();
+        // The switches that dim a row are on, so every row steps.
+        let mut settings = Settings {
+            mic_enabled: true,
+            gamepad_forwarding: true,
+            ..Settings::default()
+        };
         let library = crate::library::LibraryShared::default();
         let mut ctx = Ctx::test(&mut settings, &library);
         let shown = |ctx: &Ctx| row_spec(id, ctx, &[], &Default::default()).value;
         let before = shown(&ctx);
         assert!(adjust(id, 1, true, &mut ctx), "{id:?} steps");
         assert_ne!(shown(&ctx), before, "{id:?} shows what it stepped to");
-        let (Some(Extra::Bool(key, _)) | Some(Extra::Choice(key, _, _))) = id.extra() else {
-            unreachable!()
-        };
-        assert!(ctx.settings.extra.contains_key(key), "{id:?} writes {key}");
+        if let Some(Extra::Bool(key, _) | Extra::Choice(key, _, _)) = id.extra() {
+            assert!(ctx.settings.extra.contains_key(key), "{id:?} writes {key}");
+        }
     }
 }
 

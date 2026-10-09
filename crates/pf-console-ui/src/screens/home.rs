@@ -24,7 +24,7 @@ use crate::model::{ConsoleCmd, HostRow};
 use crate::pointer::{Pointer, PointerKind};
 use crate::screens::card_menu::CardMenu;
 use crate::screens::library::LibraryScreen;
-use crate::screens::{ConnectIntent, Ctx, Outbox, Screen};
+use crate::screens::{ConnectIntent, Ctx, Outbox, Screen, ScreenView};
 use crate::theme::{accent, edge, fg, fill, stroke, Fonts, PanelStroke, W};
 use crate::widgets::{button, button_w, BUTTON_H};
 use pf_client_core::menu_nav::{MenuDir, MenuEvent, MenuPulse};
@@ -276,19 +276,6 @@ impl HomeScreen {
         }
     }
 
-    /// OK went down: the plate dips under the focused card, verb, or poster.
-    pub(crate) fn press(&mut self) {
-        match self.shelf.as_mut().filter(|_| self.below) {
-            Some(shelf) => shelf.press(),
-            None => self.tree.press(),
-        }
-    }
-
-    /// A finger drag on the games scrolls them.
-    pub(crate) fn pan(&mut self, p: Pointer) -> bool {
-        self.below && self.shelf.as_mut().is_some_and(|s| s.pan(p))
-    }
-
     /// Focus follows the tile key, not the index.
     fn reconcile(&mut self, hosts: &[HostRow]) {
         let keys: Vec<String> = hosts
@@ -353,12 +340,46 @@ impl HomeScreen {
         }
     }
 
-    pub(crate) fn menu(
-        &mut self,
-        ev: MenuEvent,
-        ctx: &mut Ctx,
-        fx: &mut Outbox,
-    ) -> Option<MenuPulse> {
+    /// The painted card under `p`, by key: discovery can reorder the row between draw and
+    /// press.
+    fn pick(&self, p: Pointer, len: usize) -> Option<usize> {
+        let i = self.index_of(self.tree.hit(p.x as f32, p.y as f32)?)?;
+        (i < len).then_some(i)
+    }
+
+    fn step(&mut self, delta: i32, len: usize, clamp: bool) -> Option<MenuPulse> {
+        self.verb = None;
+        match step_cursor(self.cursor, len, delta, clamp) {
+            StepResult::Moved(to) => {
+                self.cursor = to;
+                Some(MenuPulse::Move)
+            }
+            StepResult::Boundary => {
+                self.bump = Spring {
+                    pos: self.bump.pos,
+                    vel: -BUMP_V * f64::from(delta.signum()),
+                };
+                Some(MenuPulse::Boundary)
+            }
+        }
+    }
+}
+
+impl ScreenView for HomeScreen {
+    /// OK went down: the plate dips under the focused card, verb, or poster.
+    fn press(&mut self) {
+        match self.shelf.as_mut().filter(|_| self.below) {
+            Some(shelf) => shelf.press(),
+            None => self.tree.press(),
+        }
+    }
+
+    /// A finger drag on the games scrolls them.
+    fn pan(&mut self, p: Pointer) -> bool {
+        self.below && self.shelf.as_mut().is_some_and(|s| s.pan(p))
+    }
+
+    fn menu(&mut self, ev: MenuEvent, ctx: &mut Ctx, fx: &mut Outbox) -> Option<MenuPulse> {
         self.reconcile(ctx.hosts);
         if self.below && !self.shelf_live(ctx.hosts) {
             self.go_up(false);
@@ -464,7 +485,7 @@ impl HomeScreen {
 
     /// Only the focused card activates. A press that also connected would start a session
     /// for a host that was merely aimed at. A verb acts on the first press.
-    pub(crate) fn pointer(&mut self, p: Pointer, ctx: &mut Ctx, fx: &mut Outbox) -> bool {
+    fn pointer(&mut self, p: Pointer, ctx: &mut Ctx, fx: &mut Outbox) -> bool {
         self.reconcile(ctx.hosts);
         if self.shelf_live(ctx.hosts) && p.hits(self.shelf_rect) {
             let Some(shelf) = self.shelf.as_mut() else {
@@ -537,32 +558,8 @@ impl HomeScreen {
         }
     }
 
-    /// The painted card under `p`, by key: discovery can reorder the row between draw and
-    /// press.
-    fn pick(&self, p: Pointer, len: usize) -> Option<usize> {
-        let i = self.index_of(self.tree.hit(p.x as f32, p.y as f32)?)?;
-        (i < len).then_some(i)
-    }
-
-    fn step(&mut self, delta: i32, len: usize, clamp: bool) -> Option<MenuPulse> {
-        self.verb = None;
-        match step_cursor(self.cursor, len, delta, clamp) {
-            StepResult::Moved(to) => {
-                self.cursor = to;
-                Some(MenuPulse::Move)
-            }
-            StepResult::Boundary => {
-                self.bump = Spring {
-                    pos: self.bump.pos,
-                    vel: -BUMP_V * f64::from(delta.signum()),
-                };
-                Some(MenuPulse::Boundary)
-            }
-        }
-    }
-
     /// The focused tile as a screen reader speaks it: the name, then the line under it.
-    pub(crate) fn announcement(&self, ctx: &Ctx) -> Option<String> {
+    fn announcement(&self, ctx: &Ctx) -> Option<String> {
         if let Some(shelf) = self.shelf() {
             return shelf.announcement(ctx);
         }
@@ -584,7 +581,7 @@ impl HomeScreen {
         })
     }
 
-    pub(crate) fn hints(&self, ctx: &Ctx) -> Vec<Hint> {
+    fn hints(&self, ctx: &Ctx) -> Vec<Hint> {
         if let Some(shelf) = self.shelf() {
             return shelf.hints(ctx);
         }
@@ -613,7 +610,7 @@ impl HomeScreen {
         hints
     }
 
-    pub(crate) fn render(
+    fn render(
         &mut self,
         canvas: &Canvas,
         rect: Rect,
@@ -623,7 +620,7 @@ impl HomeScreen {
         ctx: &mut Ctx,
     ) {
         self.reconcile(ctx.hosts);
-        let reduced = super::settings::reduce_ui_res(
+        let reduced = super::settings::rows::reduce_ui_res(
             ctx.settings,
             ctx.device.platform,
             ctx.device.fallback_ui,
@@ -841,7 +838,7 @@ impl HomeScreen {
             // its own clip, and measures its last row against this edge.
             let games = Rect::from_ltrb(rect.left, games_top as f32, rect.right, rect.bottom);
             if let Some(shelf) = self.shelf.as_mut() {
-                shelf.render(canvas, games, k, dt, fonts, ctx);
+                shelf.draw(canvas, games, k, dt, fonts, ctx);
             }
             self.shelf_rect = games;
             if self.browse && self.shelf.as_ref().is_some_and(|s| s.has_titles()) {
@@ -866,6 +863,10 @@ impl HomeScreen {
                 );
             }
         }
+    }
+
+    fn title(&self) -> String {
+        "Select a Host".into()
     }
 }
 

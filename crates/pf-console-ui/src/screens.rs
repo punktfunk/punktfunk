@@ -362,7 +362,126 @@ pub(crate) enum Screen {
     Profiles(profiles::ProfilesScreen),
 }
 
+/// What every screen answers. The shell reaches the top screen's through [`Screen::view`]
+/// and [`Screen::view_mut`]; the optional ones default to "nothing here".
+pub(crate) trait ScreenView {
+    fn menu(&mut self, ev: MenuEvent, ctx: &mut Ctx, fx: &mut Outbox) -> Option<MenuPulse>;
+
+    /// Mouse/touch in device pixels. `true` if the point landed on this screen's
+    /// furniture, even when the press is a no-op — a stray tap must not fall through.
+    /// `false` only for the empty backdrop.
+    fn pointer(&mut self, p: Pointer, ctx: &mut Ctx, fx: &mut Outbox) -> bool;
+
+    fn hints(&self, ctx: &Ctx) -> Vec<Hint>;
+
+    #[allow(clippy::too_many_arguments)]
+    fn render(
+        &mut self,
+        canvas: &Canvas,
+        rect: Rect,
+        k: f64,
+        dt: f64,
+        fonts: &Fonts,
+        ctx: &mut Ctx,
+    );
+
+    fn title(&self) -> String;
+
+    /// OK went down on a remote: what has focus dips now, before the release acts on it.
+    fn press(&mut self) {}
+
+    /// A finger drag, offered to what the screen scrolls: its menu list, or the library
+    /// grid. `false` scrolls it by ticks, as on the carousels or over a keyboard tray.
+    fn pan(&mut self, _p: Pointer) -> bool {
+        false
+    }
+
+    /// SDL `TextInput` (hardware keyboards; Steam's keyboard under gamescope).
+    fn text_input(&mut self, _text: &str) {}
+
+    /// Raw key while a field is editing (Backspace repeats, Return = done).
+    /// Takes `ctx` because the settings screen commits the typed bitrate on close.
+    fn edit_key(&mut self, _key: crate::input::Key, _ctx: &mut Ctx) -> bool {
+        false
+    }
+
+    /// A text field is open — the run loop keeps SDL text input started.
+    fn editing(&self) -> bool {
+        false
+    }
+
+    /// The field [`Self::editing`] has open.
+    fn edit_field(&self) -> Option<EditField> {
+        None
+    }
+
+    /// One explainer line under the list, painted on the shell's bottom tray.
+    fn foot(&self, _ctx: &Ctx) -> Option<Cow<'static, str>> {
+        None
+    }
+
+    /// What a screen reader should speak for whatever this screen has focused.
+    /// `None` where a screen does not answer: silence beats naming the wrong row.
+    fn announcement(&self, _ctx: &Ctx) -> Option<String> {
+        None
+    }
+}
+
 impl Screen {
+    pub(crate) fn view(&self) -> &dyn ScreenView {
+        match self {
+            Screen::Home(s) => s,
+            Screen::Library(s) => s,
+            Screen::Settings(s) => s,
+            Screen::AddHost(s) => s,
+            Screen::Pair(s) => s,
+            Screen::PinHosts(s) => s,
+            Screen::BindPreset(s) => s,
+            Screen::Players(s) => s,
+            Screen::RingEditor(s) => &**s,
+            Screen::ShortcutEditor(s) => s,
+            Screen::CardMenu(s) => s,
+            Screen::Customize(s) => s,
+            Screen::Palette(s) => s,
+            Screen::Grants(s) => s,
+            Screen::Prompt(s) => s,
+            Screen::Licenses(s) => s,
+            Screen::Search(s) => s,
+            Screen::PresetMenu(s) => s,
+            Screen::PresetName(s) => s,
+            Screen::PresetEdit(s) => s,
+            Screen::InputTest(s) => s,
+            Screen::Profiles(s) => s,
+        }
+    }
+
+    pub(crate) fn view_mut(&mut self) -> &mut dyn ScreenView {
+        match self {
+            Screen::Home(s) => s,
+            Screen::Library(s) => s,
+            Screen::Settings(s) => s,
+            Screen::AddHost(s) => s,
+            Screen::Pair(s) => s,
+            Screen::PinHosts(s) => s,
+            Screen::BindPreset(s) => s,
+            Screen::Players(s) => s,
+            Screen::RingEditor(s) => &mut **s,
+            Screen::ShortcutEditor(s) => s,
+            Screen::CardMenu(s) => s,
+            Screen::Customize(s) => s,
+            Screen::Palette(s) => s,
+            Screen::Grants(s) => s,
+            Screen::Prompt(s) => s,
+            Screen::Licenses(s) => s,
+            Screen::Search(s) => s,
+            Screen::PresetMenu(s) => s,
+            Screen::PresetName(s) => s,
+            Screen::PresetEdit(s) => s,
+            Screen::InputTest(s) => s,
+            Screen::Profiles(s) => s,
+        }
+    }
+
     /// The shelf a launch leaves from: the Games tab's, or the games under the Hosts row.
     pub(crate) fn shelf(&self) -> Option<&library::LibraryScreen> {
         match self {
@@ -372,36 +491,10 @@ impl Screen {
         }
     }
 
-    pub(crate) fn menu(
-        &mut self,
-        ev: MenuEvent,
-        ctx: &mut Ctx,
-        fx: &mut Outbox,
-    ) -> Option<MenuPulse> {
-        match self {
-            Screen::Home(s) => s.menu(ev, ctx, fx),
-            Screen::Library(s) => s.menu(ev, ctx, fx),
-            Screen::Settings(s) => s.menu(ev, ctx, fx),
-            Screen::AddHost(s) => s.menu(ev, ctx, fx),
-            Screen::RingEditor(s) => s.menu(ev, ctx, fx),
-            Screen::ShortcutEditor(s) => s.menu(ev, ctx, fx),
-            Screen::Pair(s) => s.menu(ev, ctx, fx),
-            Screen::PinHosts(s) => s.menu(ev, ctx, fx),
-            Screen::BindPreset(s) => s.menu(ev, ctx, fx),
-            Screen::Players(s) => s.menu(ev, ctx, fx),
-            Screen::CardMenu(s) => s.menu(ev, ctx, fx),
-            Screen::Customize(s) => s.menu(ev, ctx, fx),
-            Screen::Palette(s) => s.menu(ev, ctx, fx),
-            Screen::Grants(s) => s.menu(ev, ctx, fx),
-            Screen::Prompt(s) => s.menu(ev, ctx, fx),
-            Screen::Licenses(s) => s.menu(ev, ctx, fx),
-            Screen::Search(s) => s.menu(ev, ctx, fx),
-            Screen::PresetMenu(s) => s.menu(ev, ctx, fx),
-            Screen::PresetName(s) => s.menu(ev, ctx, fx),
-            Screen::PresetEdit(s) => s.menu(ev, ctx, fx),
-            Screen::InputTest(s) => s.menu(ev, ctx, fx),
-            Screen::Profiles(s) => s.menu(ev, ctx, fx),
-        }
+    /// A finger drag, offered to what the screen scrolls; never while a field is open, where
+    /// it scrolls by ticks over the keyboard tray.
+    pub(crate) fn pan(&mut self, p: Pointer) -> bool {
+        !self.view().editing() && self.view_mut().pan(p)
     }
 
     /// Focus arrives from the shell's tabs above: a screen with its own strip lands there,
@@ -412,174 +505,20 @@ impl Screen {
         }
     }
 
-    /// OK went down on a remote: what has focus dips now, before the release acts on it.
-    pub(crate) fn press(&mut self) {
-        match self {
-            Screen::Home(s) => s.press(),
-            Screen::Library(s) => s.press(),
-            Screen::Settings(s) => s.press(),
-            Screen::AddHost(s) => s.list.dip(),
-            Screen::Pair(s) => s.list.dip(),
-            Screen::PinHosts(s) => s.list.dip(),
-            Screen::BindPreset(s) => s.list.dip(),
-            Screen::CardMenu(s) => s.press(),
-            Screen::Customize(s) => s.list.dip(),
-            Screen::Palette(s) => s.press(),
-            Screen::Profiles(s) => s.press(),
-            Screen::Grants(s) => s.list.dip(),
-            Screen::Prompt(s) => s.list.dip(),
-            Screen::Search(s) => s.list.dip(),
-            Screen::PresetMenu(s) => s.list.dip(),
-            Screen::PresetName(s) => s.list.dip(),
-            Screen::PresetEdit(s) => s.list.dip(),
-            Screen::ShortcutEditor(s) => {
-                if let Some(l) = s.pan_list() {
-                    l.dip()
-                }
-            }
-            Screen::RingEditor(s) => s.pan_list().dip(),
-            Screen::Players(_) | Screen::Licenses(_) | Screen::InputTest(_) => {}
-        }
-    }
-
-    /// A finger drag, offered to what the screen scrolls: its menu list, or the library
-    /// grid. `false` scrolls it by ticks, as on the carousels or over a keyboard tray.
-    pub(crate) fn pan(&mut self, p: Pointer) -> bool {
-        if self.editing() {
-            return false;
-        }
-        match self {
-            Screen::Settings(s) => s.list.pan(p),
-            Screen::AddHost(s) => s.list.pan(p),
-            Screen::Pair(s) => s.list.pan(p),
-            Screen::PinHosts(s) => s.list.pan(p),
-            Screen::BindPreset(s) => s.list.pan(p),
-            Screen::CardMenu(s) => s.list.pan(p),
-            Screen::Customize(s) => s.list.pan(p),
-            Screen::Palette(s) => s.pan(p),
-            Screen::Profiles(s) => s.pan(p),
-            Screen::Grants(s) => s.list.pan(p),
-            Screen::Prompt(s) => s.list.pan(p),
-            Screen::Licenses(s) => s.pan(p),
-            Screen::Search(s) => s.list.pan(p),
-            Screen::PresetMenu(s) => s.list.pan(p),
-            Screen::PresetName(s) => s.list.pan(p),
-            Screen::PresetEdit(s) => s.list.pan(p),
-            Screen::ShortcutEditor(s) => s.pan_list().is_some_and(|l| l.pan(p)),
-            Screen::RingEditor(s) => s.pan_list().pan(p),
-            Screen::Library(s) => s.pan(p),
-            Screen::Home(s) => s.pan(p),
-            Screen::Players(_) | Screen::InputTest(_) => false,
-        }
-    }
-
-    /// Mouse/touch in device pixels. `true` if the point landed on this screen's
-    /// furniture, even when the press is a no-op — a stray tap must not fall through.
-    /// `false` only for the empty backdrop.
-    pub(crate) fn pointer(&mut self, p: Pointer, ctx: &mut Ctx, fx: &mut Outbox) -> bool {
-        match self {
-            Screen::Home(s) => s.pointer(p, ctx, fx),
-            Screen::Library(s) => s.pointer(p, ctx, fx),
-            Screen::Settings(s) => s.pointer(p, ctx, fx),
-            Screen::AddHost(s) => s.pointer(p, ctx, fx),
-            Screen::RingEditor(s) => s.pointer(p, ctx, fx),
-            Screen::ShortcutEditor(s) => s.pointer(p, ctx, fx),
-            Screen::Pair(s) => s.pointer(p, ctx, fx),
-            Screen::PinHosts(s) => s.pointer(p, ctx, fx),
-            Screen::BindPreset(s) => s.pointer(p, ctx, fx),
-            Screen::Players(s) => s.pointer(p, ctx, fx),
-            Screen::CardMenu(s) => s.pointer(p, ctx, fx),
-            Screen::Customize(s) => s.pointer(p, ctx, fx),
-            Screen::Palette(s) => s.pointer(p, ctx, fx),
-            Screen::Profiles(s) => s.pointer(p, ctx, fx),
-            Screen::Grants(s) => s.pointer(p, ctx, fx),
-            Screen::Prompt(s) => s.pointer(p, ctx, fx),
-            Screen::Licenses(s) => s.pointer(p, ctx, fx),
-            Screen::Search(s) => s.pointer(p, ctx, fx),
-            Screen::PresetMenu(s) => s.pointer(p, ctx, fx),
-            Screen::PresetName(s) => s.pointer(p, ctx, fx),
-            Screen::PresetEdit(s) => s.pointer(p, ctx, fx),
-            Screen::InputTest(_) => true,
-        }
-    }
-
-    /// SDL `TextInput` (hardware keyboards; Steam's keyboard under gamescope).
-    pub(crate) fn text_input(&mut self, text: &str) {
-        match self {
-            Screen::AddHost(s) => s.text_input(text),
-            Screen::ShortcutEditor(s) => s.text_input(text),
-            Screen::Pair(s) => s.text_input(text),
-            Screen::Search(s) => s.text_input(text),
-            Screen::PresetName(s) => s.text_input(text),
-            Screen::Settings(s) => s.text_input(text),
-            _ => {}
-        }
-    }
-
-    /// Raw key while a field is editing (Backspace repeats, Return = done).
-    /// Takes `ctx` because the settings screen commits the typed bitrate on close.
-    pub(crate) fn edit_key(&mut self, key: crate::input::Key, ctx: &mut Ctx) -> bool {
-        match self {
-            Screen::AddHost(s) => s.edit_key(key),
-            Screen::ShortcutEditor(s) => s.edit_key(key),
-            Screen::Pair(s) => s.edit_key(key),
-            Screen::Search(s) => s.edit_key(key),
-            Screen::PresetName(s) => s.edit_key(key),
-            Screen::Settings(s) => s.edit_key(key, ctx),
-            _ => false,
-        }
-    }
-
-    /// A text field is open — the run loop keeps SDL text input started.
-    pub(crate) fn editing(&self) -> bool {
-        match self {
-            Screen::AddHost(s) => s.editing(),
-            Screen::ShortcutEditor(s) => s.editing(),
-            Screen::Pair(s) => s.editing(),
-            Screen::Search(s) => s.editing(),
-            Screen::PresetName(s) => s.editing(),
-            Screen::Settings(s) => s.editing(),
-            _ => false,
-        }
-    }
-
-    /// The field [`Self::editing`] has open.
-    pub(crate) fn edit_field(&self) -> Option<EditField> {
-        match self {
-            Screen::AddHost(s) => s.edit_field(),
-            Screen::ShortcutEditor(s) => s.edit_field(),
-            Screen::Pair(s) => s.edit_field(),
-            Screen::Settings(s) => s.edit_field(),
-            Screen::Search(s) => s.edit_field(),
-            Screen::PresetName(s) => s.edit_field(),
-            _ => None,
-        }
-    }
-
-    /// One explainer line under the list, painted on the shell's bottom tray.
-    pub(crate) fn foot(&self, ctx: &Ctx) -> Option<Cow<'static, str>> {
-        match self {
-            Screen::Grants(s) => Some(s.foot().into()),
-            Screen::Players(s) => Some(s.foot(ctx).into()),
-            Screen::PinHosts(s) => s.foot(ctx).map(Cow::from),
-            Screen::BindPreset(s) => s.foot().map(Cow::from),
-            Screen::Customize(s) => Some(s.foot().into()),
-            _ => None,
-        }
-    }
-
     /// How far past the content's top and bottom edges the shell's trays reach in, px:
     /// the depth of a screen's own pinned chrome, so one ramp covers it with the band's.
     pub(crate) fn pinned(&self, k: f64, ctx: &Ctx) -> (f32, f32) {
         match self {
             Screen::Library(s) => s.pinned(k),
             Screen::Settings(s) => s.pinned(k),
-            _ if self.foot(ctx).is_some() => (0.0, (crate::widgets::FOOT_DETAIL_H * k) as f32),
+            _ if self.view().foot(ctx).is_some() => {
+                (0.0, (crate::widgets::FOOT_DETAIL_H * k) as f32)
+            }
             _ => (0.0, 0.0),
         }
     }
 
-    /// A screen's own pinned chrome, drawn by the shell over its trays after [`Self::render`].
+    /// A screen's own pinned chrome, drawn by the shell over its trays after [`ScreenView::render`].
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn render_pinned(
         &mut self,
@@ -594,7 +533,7 @@ impl Screen {
             Screen::Library(s) => s.render_pinned(canvas, rect, k, fonts, ctx),
             Screen::Settings(s) => s.render_pinned(canvas, rect, k, dt, fonts, ctx),
             _ => {
-                let Some(detail) = self.foot(ctx) else {
+                let Some(detail) = self.view().foot(ctx) else {
                     return;
                 };
                 let h = (crate::widgets::FOOT_DETAIL_H * k) as f32;
@@ -618,117 +557,6 @@ impl Screen {
         match self {
             Screen::Home(_) | Screen::Library(_) | Screen::Players(_) => Bg::Aurora,
             _ => Bg::Form,
-        }
-    }
-
-    pub(crate) fn title(&self, _ctx: &Ctx) -> String {
-        match self {
-            Screen::Home(_) => "Select a Host".into(),
-            Screen::Library(s) => s.title(),
-            Screen::Settings(_) => "Settings".into(),
-            Screen::AddHost(s) => s.title(),
-            Screen::RingEditor(s) => s.title(),
-            Screen::ShortcutEditor(s) => s.title(),
-            Screen::Pair(s) => format!("Pair with {}", s.host_name()),
-            Screen::PinHosts(s) => format!("Pin \u{201c}{}\u{201d}", s.preset_name()),
-            Screen::BindPreset(s) => s.heading(),
-            Screen::Players(_) => "Controllers".into(),
-            Screen::CardMenu(s) => s.title(),
-            Screen::Customize(_) => "Customize".into(),
-            Screen::Palette(_) => "Background".into(),
-            Screen::Grants(_) => "Controller access".into(),
-            Screen::Prompt(s) => s.title(),
-            Screen::Licenses(s) => s.title().into(),
-            Screen::Search(s) => s.title(),
-            Screen::PresetMenu(s) => s.title(),
-            Screen::PresetName(s) => s.title(),
-            Screen::PresetEdit(s) => s.title(),
-            Screen::InputTest(_) => "Controller test".into(),
-            Screen::Profiles(s) => s.title(),
-        }
-    }
-
-    /// What a screen reader should speak for whatever this screen has focused.
-    /// `None` where a screen does not answer: silence beats naming the wrong row.
-    pub(crate) fn announcement(&self, ctx: &Ctx) -> Option<String> {
-        match self {
-            Screen::Home(s) => s.announcement(ctx),
-            Screen::Library(s) => s.announcement(ctx),
-            Screen::Customize(s) => s.announcement(ctx),
-            Screen::Palette(s) => s.announcement(ctx),
-            Screen::Profiles(s) => s.announcement(),
-            Screen::Grants(s) => s.announcement(),
-            Screen::Prompt(s) => s.announcement(),
-            Screen::Settings(s) => s.announcement(ctx),
-            Screen::Players(s) => s.announcement(ctx),
-            _ => None,
-        }
-    }
-
-    pub(crate) fn hints(&self, ctx: &Ctx) -> Vec<Hint> {
-        match self {
-            Screen::Home(s) => s.hints(ctx),
-            Screen::Library(s) => s.hints(ctx),
-            Screen::Settings(s) => s.hints(ctx),
-            Screen::AddHost(s) => s.hints(ctx),
-            Screen::RingEditor(s) => s.hints(ctx),
-            Screen::ShortcutEditor(s) => s.hints(ctx),
-            Screen::Pair(s) => s.hints(ctx),
-            Screen::PinHosts(s) => s.hints(ctx),
-            Screen::BindPreset(s) => s.hints(ctx),
-            Screen::Players(s) => s.hints(ctx),
-            Screen::CardMenu(s) => s.hints(ctx),
-            Screen::Customize(s) => s.hints(ctx),
-            Screen::Palette(s) => s.hints(ctx),
-            Screen::Grants(s) => s.hints(ctx),
-            Screen::Prompt(s) => s.hints(ctx),
-            Screen::Licenses(s) => s.hints(ctx),
-            Screen::Search(s) => s.hints(ctx),
-            Screen::PresetMenu(s) => s.hints(ctx),
-            Screen::PresetName(s) => s.hints(ctx),
-            Screen::PresetEdit(s) => s.hints(ctx),
-            Screen::InputTest(s) => s.hints(ctx),
-            Screen::Profiles(s) => s.hints(ctx),
-        }
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    pub(crate) fn render(
-        &mut self,
-        canvas: &Canvas,
-        rect: Rect,
-        k: f64,
-        dt: f64,
-        fonts: &Fonts,
-        ctx: &mut Ctx,
-    ) {
-        match self {
-            Screen::Home(s) => s.render(canvas, rect, k, dt, fonts, ctx),
-            // The shelf view draws its focus outside el: titles to walk are its targets.
-            Screen::Library(s) => {
-                s.render(canvas, rect, k, dt, fonts, ctx);
-                crate::el::claim(usize::from(s.has_titles()));
-            }
-            Screen::Settings(s) => s.render(canvas, rect, k, dt, fonts, ctx),
-            Screen::AddHost(s) => s.render(canvas, rect, k, dt, fonts, ctx),
-            Screen::RingEditor(s) => s.render(canvas, rect, k, dt, fonts, ctx),
-            Screen::ShortcutEditor(s) => s.render(canvas, rect, k, dt, fonts, ctx),
-            Screen::Pair(s) => s.render(canvas, rect, k, dt, fonts, ctx),
-            Screen::PinHosts(s) => s.render(canvas, rect, k, dt, fonts, ctx),
-            Screen::BindPreset(s) => s.render(canvas, rect, k, dt, fonts, ctx),
-            Screen::Players(s) => s.render(canvas, rect, k, dt, fonts, ctx),
-            Screen::CardMenu(s) => s.render(canvas, rect, k, dt, fonts, ctx),
-            Screen::Customize(s) => s.render(canvas, rect, k, dt, fonts, ctx),
-            Screen::Palette(s) => s.render(canvas, rect, k, dt, fonts, ctx),
-            Screen::Grants(s) => s.render(canvas, rect, k, dt, fonts, ctx),
-            Screen::Prompt(s) => s.render(canvas, rect, k, dt, fonts, ctx),
-            Screen::Licenses(s) => s.render(canvas, rect, k, dt, fonts, ctx),
-            Screen::Search(s) => s.render(canvas, rect, k, dt, fonts, ctx),
-            Screen::PresetMenu(s) => s.render(canvas, rect, k, dt, fonts, ctx),
-            Screen::PresetName(s) => s.render(canvas, rect, k, dt, fonts, ctx),
-            Screen::PresetEdit(s) => s.render(canvas, rect, k, dt, fonts, ctx),
-            Screen::InputTest(s) => s.render(canvas, rect, k, dt, fonts, ctx),
-            Screen::Profiles(s) => s.render(canvas, rect, k, dt, fonts, ctx),
         }
     }
 }

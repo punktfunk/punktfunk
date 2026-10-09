@@ -12,7 +12,7 @@ use crate::anim::{approach, Spring, TRAY_C, TRAY_K};
 use crate::glyphs::{Hint, HintKey};
 use crate::pointer::Pointer;
 use crate::ring::draw_keycap_disc;
-use crate::screens::{Ctx, Outbox};
+use crate::screens::{Ctx, Outbox, ScreenView};
 use crate::theme::{accent, fg, fill, on_accent, stroke, Fonts, PanelStroke, W};
 use crate::widgets::{
     entry_hints, field_key, permits, type_text, Charset, Entry, Keyboard, ListMsg, MenuList,
@@ -337,25 +337,6 @@ impl ShortcutEditorScreen {
         }
     }
 
-    pub(crate) fn title(&self) -> String {
-        if self.draft.id.is_some() {
-            "Shortcut".into()
-        } else {
-            "New shortcut".into()
-        }
-    }
-
-    pub(crate) fn editing(&self) -> bool {
-        self.editing_name
-    }
-
-    pub(crate) fn edit_field(&self) -> Option<crate::screens::EditField> {
-        let name = self.draft.label.as_str();
-        self.editing_name
-            .then(|| crate::screens::EditField::new("Name", name, false))
-            .flatten()
-    }
-
     /// The field list, while neither tray covers it.
     pub(super) fn pan_list(&mut self) -> Option<&mut MenuList> {
         (!self.editing_name && !self.picking_key).then_some(&mut self.list)
@@ -407,25 +388,6 @@ impl ShortcutEditorScreen {
         permits(Charset::Free, ch)
     }
 
-    pub(crate) fn text_input(&mut self, typed: &str) {
-        if self.editing_name {
-            type_text(&mut self.draft.label, typed, Self::admits);
-        }
-    }
-
-    pub(crate) fn edit_key(&mut self, key: crate::input::Key) -> bool {
-        if !self.editing_name {
-            return false;
-        }
-        let Some(entry) = field_key(key, &mut self.draft.label) else {
-            return false;
-        };
-        if entry != Entry::Stay {
-            self.editing_name = false;
-        }
-        true
-    }
-
     fn activate(&mut self, row: usize, ctx: &mut Ctx, fx: &mut Outbox) -> Option<MenuPulse> {
         match row {
             ROW_NAME => self.editing_name = true,
@@ -465,13 +427,48 @@ impl ShortcutEditorScreen {
             TrayMsg::None => None,
         }
     }
+}
 
-    pub(crate) fn menu(
-        &mut self,
-        ev: MenuEvent,
-        ctx: &mut Ctx,
-        fx: &mut Outbox,
-    ) -> Option<MenuPulse> {
+impl ScreenView for ShortcutEditorScreen {
+    fn title(&self) -> String {
+        if self.draft.id.is_some() {
+            "Shortcut".into()
+        } else {
+            "New shortcut".into()
+        }
+    }
+
+    fn editing(&self) -> bool {
+        self.editing_name
+    }
+
+    fn edit_field(&self) -> Option<crate::screens::EditField> {
+        let name = self.draft.label.as_str();
+        self.editing_name
+            .then(|| crate::screens::EditField::new("Name", name, false))
+            .flatten()
+    }
+
+    fn text_input(&mut self, typed: &str) {
+        if self.editing_name {
+            type_text(&mut self.draft.label, typed, Self::admits);
+        }
+    }
+
+    fn edit_key(&mut self, key: crate::input::Key, _ctx: &mut Ctx) -> bool {
+        if !self.editing_name {
+            return false;
+        }
+        let Some(entry) = field_key(key, &mut self.draft.label) else {
+            return false;
+        };
+        if entry != Entry::Stay {
+            self.editing_name = false;
+        }
+        true
+    }
+
+    fn menu(&mut self, ev: MenuEvent, ctx: &mut Ctx, fx: &mut Outbox) -> Option<MenuPulse> {
         if self.editing_name {
             let (entry, pulse) =
                 self.keyboard
@@ -497,7 +494,7 @@ impl ShortcutEditorScreen {
         }
     }
 
-    pub(crate) fn pointer(&mut self, p: Pointer, ctx: &mut Ctx, fx: &mut Outbox) -> bool {
+    fn pointer(&mut self, p: Pointer, ctx: &mut Ctx, fx: &mut Outbox) -> bool {
         if self.editing_name && !ctx.device.deck {
             let label = &mut self.draft.label;
             let Some(entry) = self.keyboard.edit_pointer(p, label, Self::admits) else {
@@ -534,7 +531,7 @@ impl ShortcutEditorScreen {
         }
     }
 
-    pub(crate) fn hints(&self, ctx: &Ctx) -> Vec<Hint> {
+    fn hints(&self, ctx: &Ctx) -> Vec<Hint> {
         if self.editing_name {
             return entry_hints(ctx.device.deck, "Done");
         }
@@ -560,7 +557,7 @@ impl ShortcutEditorScreen {
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub(crate) fn render(
+    fn render(
         &mut self,
         canvas: &Canvas,
         rect: Rect,
@@ -652,6 +649,16 @@ impl ShortcutEditorScreen {
                 self.draft.chord.key.as_deref(),
             );
         }
+    }
+
+    fn press(&mut self) {
+        if let Some(l) = self.pan_list() {
+            l.dip()
+        }
+    }
+
+    fn pan(&mut self, p: Pointer) -> bool {
+        self.pan_list().is_some_and(|l| l.pan(p))
     }
 }
 

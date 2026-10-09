@@ -6,7 +6,7 @@
 use crate::glyphs::{Hint, HintKey};
 use crate::model::{ConsoleCmd, HostRow};
 use crate::pointer::Pointer;
-use crate::screens::{Ctx, Outbox};
+use crate::screens::{Ctx, Outbox, ScreenView};
 use crate::theme::Fonts;
 use crate::widgets::{
     blurb, entry_hints, field_key, permits, type_text, Charset, Entry, Keyboard, ListMsg, MenuList,
@@ -25,7 +25,7 @@ enum Field {
 const FIELDS: [Field; 3] = [Field::Name, Field::Address, Field::Port];
 
 pub(crate) struct AddHostScreen {
-    pub(super) list: MenuList,
+    list: MenuList,
     keyboard: Keyboard,
     name: String,
     address: String,
@@ -58,52 +58,12 @@ impl AddHostScreen {
         }
     }
 
-    pub(crate) fn title(&self) -> String {
-        if self.edits.is_some() {
-            "Edit Host".into()
-        } else {
-            "Add Host".into()
-        }
-    }
-
     fn commit_label(&self) -> &'static str {
         if self.edits.is_some() {
             "Save changes"
         } else {
             "Add host"
         }
-    }
-
-    /// A press outside the tray closes it; the row underneath is not activated.
-    pub(crate) fn pointer(&mut self, p: Pointer, ctx: &mut Ctx, fx: &mut Outbox) -> bool {
-        if let Some((f, keyboard, text)) = self.open().filter(|_| !ctx.device.deck) {
-            let Some(entry) = keyboard.edit_pointer(p, text, |t, c| Self::admits(f, t, c)) else {
-                return false;
-            };
-            if entry != Entry::Stay {
-                self.editing = None;
-            }
-            return true;
-        }
-        let (msg, pulse) = self.list.pointer(p, FIELDS.len() + 1);
-        if matches!(msg, ListMsg::None) && pulse.is_none() {
-            return false;
-        }
-        self.activate(msg, fx);
-        true
-    }
-
-    pub(crate) fn editing(&self) -> bool {
-        self.editing.is_some()
-    }
-
-    pub(crate) fn edit_field(&self) -> Option<crate::screens::EditField> {
-        let (label, text) = match self.editing? {
-            Field::Name => ("Name", &self.name),
-            Field::Address => ("Address", &self.address),
-            Field::Port => ("Port", &self.port),
-        };
-        crate::screens::EditField::new(label, text, self.editing == Some(Field::Port))
     }
 
     fn can_add(&self) -> bool {
@@ -132,54 +92,6 @@ impl AddHostScreen {
     /// Whether field `f` takes `ch` after `text`. A port is five digits: u16 max is 65535.
     fn admits(f: Field, text: &str, ch: char) -> bool {
         permits(Self::charset(f), ch) && !(f == Field::Port && text.chars().count() >= 5)
-    }
-
-    pub(crate) fn text_input(&mut self, typed: &str) {
-        if let Some((f, _, text)) = self.open() {
-            type_text(text, typed, |t, c| Self::admits(f, t, c));
-        }
-    }
-
-    pub(crate) fn edit_key(&mut self, key: crate::input::Key) -> bool {
-        let Some((_, _, text)) = self.open() else {
-            return false;
-        };
-        let Some(entry) = field_key(key, text) else {
-            return false;
-        };
-        if entry != Entry::Stay {
-            self.editing = None;
-        }
-        true
-    }
-
-    pub(crate) fn menu(
-        &mut self,
-        ev: MenuEvent,
-        ctx: &mut Ctx,
-        fx: &mut Outbox,
-    ) -> Option<MenuPulse> {
-        let deck = ctx.device.deck;
-        if let Some((f, keyboard, text)) = self.open() {
-            let (entry, pulse) = keyboard.edit_menu(ev, deck, text, |t, c| Self::admits(f, t, c));
-            if entry != Entry::Stay {
-                self.editing = None;
-            }
-            return pulse;
-        }
-
-        if ev == MenuEvent::Back {
-            fx.pop();
-            return None;
-        }
-        let (msg, pulse) = self.list.menu(ev, FIELDS.len() + 1);
-        match msg {
-            ListMsg::Activate => {
-                self.activate(msg, fx);
-                pulse
-            }
-            _ => pulse,
-        }
     }
 
     fn activate(&mut self, msg: ListMsg, fx: &mut Outbox) {
@@ -225,7 +137,111 @@ impl AddHostScreen {
         fx.pop();
     }
 
-    pub(crate) fn hints(&self, ctx: &Ctx) -> Vec<Hint> {
+    fn rows(&self) -> Vec<RowSpec> {
+        let field_row = |label: &str, value: &str, placeholder: &str, f: Field| {
+            let mut row = RowSpec::field(label, value.to_string(), placeholder);
+            row.caret = self.editing == Some(f);
+            row
+        };
+        vec![
+            field_row(
+                "Name",
+                &self.name,
+                "Optional — e.g. Living Room",
+                Field::Name,
+            ),
+            field_row("Address", &self.address, "IP or hostname", Field::Address),
+            field_row("Port", &self.port, "9777", Field::Port),
+            RowSpec::action(self.commit_label(), self.can_add()),
+        ]
+    }
+}
+
+impl ScreenView for AddHostScreen {
+    fn title(&self) -> String {
+        if self.edits.is_some() {
+            "Edit Host".into()
+        } else {
+            "Add Host".into()
+        }
+    }
+
+    /// A press outside the tray closes it; the row underneath is not activated.
+    fn pointer(&mut self, p: Pointer, ctx: &mut Ctx, fx: &mut Outbox) -> bool {
+        if let Some((f, keyboard, text)) = self.open().filter(|_| !ctx.device.deck) {
+            let Some(entry) = keyboard.edit_pointer(p, text, |t, c| Self::admits(f, t, c)) else {
+                return false;
+            };
+            if entry != Entry::Stay {
+                self.editing = None;
+            }
+            return true;
+        }
+        let (msg, pulse) = self.list.pointer(p, FIELDS.len() + 1);
+        if matches!(msg, ListMsg::None) && pulse.is_none() {
+            return false;
+        }
+        self.activate(msg, fx);
+        true
+    }
+
+    fn editing(&self) -> bool {
+        self.editing.is_some()
+    }
+
+    fn edit_field(&self) -> Option<crate::screens::EditField> {
+        let (label, text) = match self.editing? {
+            Field::Name => ("Name", &self.name),
+            Field::Address => ("Address", &self.address),
+            Field::Port => ("Port", &self.port),
+        };
+        crate::screens::EditField::new(label, text, self.editing == Some(Field::Port))
+    }
+
+    fn text_input(&mut self, typed: &str) {
+        if let Some((f, _, text)) = self.open() {
+            type_text(text, typed, |t, c| Self::admits(f, t, c));
+        }
+    }
+
+    fn edit_key(&mut self, key: crate::input::Key, _ctx: &mut Ctx) -> bool {
+        let Some((_, _, text)) = self.open() else {
+            return false;
+        };
+        let Some(entry) = field_key(key, text) else {
+            return false;
+        };
+        if entry != Entry::Stay {
+            self.editing = None;
+        }
+        true
+    }
+
+    fn menu(&mut self, ev: MenuEvent, ctx: &mut Ctx, fx: &mut Outbox) -> Option<MenuPulse> {
+        let deck = ctx.device.deck;
+        if let Some((f, keyboard, text)) = self.open() {
+            let (entry, pulse) = keyboard.edit_menu(ev, deck, text, |t, c| Self::admits(f, t, c));
+            if entry != Entry::Stay {
+                self.editing = None;
+            }
+            return pulse;
+        }
+
+        if ev == MenuEvent::Back {
+            fx.pop();
+            return None;
+        }
+        let (msg, pulse) = self.list.menu(ev, FIELDS.len() + 1);
+        match msg {
+            ListMsg::Activate => {
+                self.activate(msg, fx);
+                pulse
+            }
+            _ => pulse,
+        }
+    }
+
+    fn hints(&self, ctx: &Ctx) -> Vec<Hint> {
         if self.editing.is_some() {
             return entry_hints(ctx.device.deck, "Done");
         }
@@ -235,7 +251,7 @@ impl AddHostScreen {
         ]
     }
 
-    pub(crate) fn render(
+    fn render(
         &mut self,
         canvas: &Canvas,
         rect: Rect,
@@ -288,23 +304,12 @@ impl AddHostScreen {
         }
     }
 
-    fn rows(&self) -> Vec<RowSpec> {
-        let field_row = |label: &str, value: &str, placeholder: &str, f: Field| {
-            let mut row = RowSpec::field(label, value.to_string(), placeholder);
-            row.caret = self.editing == Some(f);
-            row
-        };
-        vec![
-            field_row(
-                "Name",
-                &self.name,
-                "Optional — e.g. Living Room",
-                Field::Name,
-            ),
-            field_row("Address", &self.address, "IP or hostname", Field::Address),
-            field_row("Port", &self.port, "9777", Field::Port),
-            RowSpec::action(self.commit_label(), self.can_add()),
-        ]
+    fn press(&mut self) {
+        self.list.dip();
+    }
+
+    fn pan(&mut self, p: Pointer) -> bool {
+        self.list.pan(p)
     }
 }
 
@@ -361,10 +366,10 @@ mod tests {
 
         s.text_input("deck tower.local");
         assert_eq!(s.address, "decktower.local");
-        s.edit_key(crate::input::Key::Backspace);
+        s.edit_key(crate::input::Key::Backspace, &mut c);
         assert_eq!(s.address, "decktower.loca");
         s.text_input("l");
-        s.edit_key(crate::input::Key::Return);
+        s.edit_key(crate::input::Key::Return, &mut c);
         assert!(s.editing.is_none());
 
         s.list.cursor = 3;

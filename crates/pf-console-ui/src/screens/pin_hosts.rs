@@ -8,7 +8,7 @@
 use crate::glyphs::{Hint, HintKey};
 use crate::model::ConsoleCmd;
 use crate::pointer::Pointer;
-use crate::screens::{Ctx, Outbox};
+use crate::screens::{Ctx, Outbox, ScreenView};
 use crate::theme::{fg, Fonts, W};
 use crate::widgets::{ListMsg, MenuList, RowSpec, FOOT_DETAIL_H};
 use pf_client_core::menu_nav::{MenuEvent, MenuPulse};
@@ -17,7 +17,7 @@ use skia_safe::{Canvas, Rect};
 pub(crate) struct PinHostsScreen {
     preset_id: String,
     preset_name: String,
-    pub(super) list: MenuList,
+    list: MenuList,
 }
 
 /// Saved hosts, primary tiles only: a pinned card is this screen's output, not a row.
@@ -54,31 +54,6 @@ impl PinHostsScreen {
             .any(|r| r.host_key() == key && r.pin.as_ref().is_some_and(|p| p.id == self.preset_id))
     }
 
-    pub(crate) fn menu(
-        &mut self,
-        ev: MenuEvent,
-        ctx: &mut Ctx,
-        fx: &mut Outbox,
-    ) -> Option<MenuPulse> {
-        if ev == MenuEvent::Back {
-            fx.pop();
-            return None;
-        }
-        let indices = host_indices(ctx);
-        let (msg, pulse) = self.list.menu(ev, indices.len());
-        self.toggle(msg, pulse, &indices, ctx, fx)
-    }
-
-    pub(crate) fn pointer(&mut self, p: Pointer, ctx: &mut Ctx, fx: &mut Outbox) -> bool {
-        let indices = host_indices(ctx);
-        let (msg, pulse) = self.list.pointer(p, indices.len());
-        if matches!(msg, ListMsg::None) && pulse.is_none() {
-            return false;
-        }
-        self.toggle(msg, pulse, &indices, ctx, fx);
-        true
-    }
-
     /// Shared by pad and pointer. Left unpins, right pins, A flips; already-in-state is a thud.
     fn toggle(
         &mut self,
@@ -106,8 +81,30 @@ impl PinHostsScreen {
         });
         Some(MenuPulse::Move)
     }
+}
 
-    pub(crate) fn hints(&self, ctx: &Ctx) -> Vec<Hint> {
+impl ScreenView for PinHostsScreen {
+    fn menu(&mut self, ev: MenuEvent, ctx: &mut Ctx, fx: &mut Outbox) -> Option<MenuPulse> {
+        if ev == MenuEvent::Back {
+            fx.pop();
+            return None;
+        }
+        let indices = host_indices(ctx);
+        let (msg, pulse) = self.list.menu(ev, indices.len());
+        self.toggle(msg, pulse, &indices, ctx, fx)
+    }
+
+    fn pointer(&mut self, p: Pointer, ctx: &mut Ctx, fx: &mut Outbox) -> bool {
+        let indices = host_indices(ctx);
+        let (msg, pulse) = self.list.pointer(p, indices.len());
+        if matches!(msg, ListMsg::None) && pulse.is_none() {
+            return false;
+        }
+        self.toggle(msg, pulse, &indices, ctx, fx);
+        true
+    }
+
+    fn hints(&self, ctx: &Ctx) -> Vec<Hint> {
         if host_indices(ctx).is_empty() {
             return vec![Hint::new(HintKey::Back, "Done")];
         }
@@ -117,7 +114,7 @@ impl PinHostsScreen {
         ]
     }
 
-    pub(crate) fn render(
+    fn render(
         &mut self,
         canvas: &Canvas,
         rect: Rect,
@@ -173,10 +170,23 @@ impl PinHostsScreen {
     }
 
     /// The explainer under the list, once there is a list.
-    pub(crate) fn foot(&self, ctx: &Ctx) -> Option<&'static str> {
+    fn foot(&self, ctx: &Ctx) -> Option<std::borrow::Cow<'static, str>> {
         (!host_indices(ctx).is_empty()).then_some(
-            "A pinned preset appears as its own card on the host — one press connects with it.",
+            "A pinned preset appears as its own card on the host — one press connects with it."
+                .into(),
         )
+    }
+
+    fn title(&self) -> String {
+        format!("Pin \u{201c}{}\u{201d}", self.preset_name())
+    }
+
+    fn press(&mut self) {
+        self.list.dip();
+    }
+
+    fn pan(&mut self, p: Pointer) -> bool {
+        self.list.pan(p)
     }
 }
 

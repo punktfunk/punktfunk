@@ -402,8 +402,44 @@ impl SettingsOverlay {
 
     /// Whether this overlay holds a value for `field`, by the names [`Self::clear`] takes.
     pub fn overrides(&self, field: &str) -> bool {
-        let mut cleared = self.clone();
-        cleared.clear(field) && cleared != *self
+        match field {
+            "resolution" => {
+                self.width.is_some() || self.height.is_some() || self.match_window.is_some()
+            }
+            "width" => self.width.is_some(),
+            "height" => self.height.is_some(),
+            "refresh_hz" => self.refresh_hz.is_some(),
+            "match_window" => self.match_window.is_some(),
+            "bitrate_kbps" => self.bitrate_kbps.is_some(),
+            "render_scale" => self.render_scale.is_some(),
+            "video_fit" => self.video_fit.is_some(),
+            "codec" => self.codec.is_some(),
+            "hdr_enabled" => self.hdr_enabled.is_some(),
+            "enable_444" => self.enable_444.is_some(),
+            "ten_bit_sdr" => self.ten_bit_sdr.is_some(),
+            "compositor" => self.compositor.is_some(),
+            "audio_channels" => self.audio_channels.is_some(),
+            "audio_format" => self.audio_format.is_some(),
+            "keep_host_audio" => self.keep_host_audio.is_some(),
+            "mic_enabled" => self.mic_enabled.is_some(),
+            "echo_cancel" => self.echo_cancel.is_some(),
+            "touch_mode" => self.touch_mode.is_some(),
+            "mouse_mode" => self.mouse_mode.is_some(),
+            "invert_scroll" => self.invert_scroll.is_some(),
+            "overlay_actions" => self.overlay_actions.is_some(),
+            "inhibit_shortcuts" => self.inhibit_shortcuts.is_some(),
+            "gamepad" => self.gamepad.is_some(),
+            "gamepad_forwarding" => self.gamepad_forwarding.is_some(),
+            "system_buttons" => self.system_buttons.is_some(),
+            "guide_gesture" => self.guide_gesture.is_some(),
+            "stats_verbosity" => self.stats_verbosity.is_some(),
+            "fullscreen_on_stream" => self.fullscreen_on_stream.is_some(),
+            "present_priority" => self.present_priority.is_some(),
+            "smooth_buffer" => self.smooth_buffer.is_some(),
+            "vsync" => self.vsync.is_some(),
+            "allow_vrr" => self.allow_vrr.is_some(),
+            _ => false,
+        }
     }
 
     /// True when nothing is overridden. Unknown-key carry-through counts:
@@ -604,7 +640,8 @@ pub(crate) fn hex_lower(bytes: &[u8]) -> String {
 mod tests {
     use super::*;
 
-    /// Every name `clear` takes, `pin` takes too, and the two undo each other.
+    /// Every name `clear` takes, `pin` and `overrides` take too, and pin and clear undo each
+    /// other.
     #[test]
     fn pin_and_clear_take_the_same_names() {
         let names = [

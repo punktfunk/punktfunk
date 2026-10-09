@@ -235,10 +235,10 @@ pub(crate) struct LibrarySnapshot {
 pub struct DecodedPoster(skia_safe::Sendable<Image>);
 
 /// Decode a poster on a thread that is not drawing — see
-/// [`crate::screens::library::decode_poster_off_thread`], which this forwards to so the sizing
+/// [`crate::screens::library::art::decode_poster_off_thread`], which this forwards to so the sizing
 /// policy stays with the screen that owns the cache.
 pub fn decode_poster_off_thread(bytes: &[u8], k: f64) -> Option<DecodedPoster> {
-    crate::screens::library::decode_poster_off_thread(bytes, k)
+    crate::screens::library::art::decode_poster_off_thread(bytes, k)
 }
 
 impl DecodedPoster {
