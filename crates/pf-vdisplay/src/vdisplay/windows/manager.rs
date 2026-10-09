@@ -30,10 +30,11 @@ use windows::Win32::System::Threading::{
 use super::{DisplayOwnership, Mode, VirtualOutput};
 use crate::driver::ControlDevice;
 use crate::lifecycle::{self, Acquire, Release};
+use pf_win_display::topology_churn::{self, Finished, Outcome};
 use pf_win_display::win_display::{
-    count_other_active, force_extend_topology, isolate_displays_ccd, isolate_displays_ccd_checked,
-    resolve_gdi_name, restore_displays_ccd, set_active_mode, set_virtual_primary_ccd,
-    wait_mode_settled, wait_target_departed, CcdTargetKey, IsolateOutcome, SavedConfig,
+    count_other_active, force_extend_topology, isolate_displays_ccd_checked, resolve_gdi_name,
+    restore_displays_ccd, set_active_mode, set_virtual_primary_ccd, wait_mode_settled,
+    wait_target_departed, CcdTargetKey, IsolateOutcome, SavedConfig,
 };
 
 #[path = "manager/driver.rs"]
@@ -212,52 +213,45 @@ fn poll_gdi_name(key: CcdTargetKey) -> Option<String> {
 pub(crate) static FAIL_NEXT_ISOLATES: std::sync::atomic::AtomicU32 =
     std::sync::atomic::AtomicU32::new(0);
 
-/// [`isolate_displays_ccd`] with the test seam in front of it. Every call site in this file goes
-/// through here so an injected failure exercises the same gates a real one would.
-fn isolate_displays_ccd_seam(keep: &[CcdTargetKey]) -> Option<SavedConfig> {
-    #[cfg(test)]
-    {
-        use std::sync::atomic::Ordering;
-        if FAIL_NEXT_ISOLATES
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| {
-                (n > 0).then(|| n - 1)
-            })
-            .is_ok()
-        {
-            tracing::warn!(
-                keep = ?keep,
-                "TEST fault injection: forcing isolate_displays_ccd -> None"
-            );
-            return None;
-        }
-    }
-    isolate_displays_ccd(keep)
-}
+/// How long a slot transition's isolate holds descriptor-following: the swap-chain bounce the
+/// write causes lands after the write returns.
+const ISOLATE_HOLD: Duration = Duration::from_secs(3);
 
-/// [`isolate_displays_ccd_checked`] behind the same test seam — the re-assert watchdog's variant,
-/// whose recovery generation must follow the OBSERVED outcome (immunity plan WP10 item 4).
-fn isolate_displays_ccd_checked_seam(
+/// Every CCD isolate in this file, as one topology transaction: descriptor-following holds for
+/// `hold`, and the generation moves only when the verification read saw a path switch off.
+/// Returns the pre-isolate snapshot (`None` when nothing was attempted) and the finished
+/// transaction. Tests fail the next N isolates through [`FAIL_NEXT_ISOLATES`], so an injected
+/// failure passes the same gates a real one does.
+fn isolate_txn(
+    reason: &'static str,
     keep: &[CcdTargetKey],
-) -> Option<(SavedConfig, IsolateOutcome)> {
+    hold: Duration,
+) -> (Option<SavedConfig>, Finished) {
+    let txn = topology_churn::begin(reason, hold);
     #[cfg(test)]
-    {
-        use std::sync::atomic::Ordering;
-        if FAIL_NEXT_ISOLATES
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| {
-                (n > 0).then(|| n - 1)
-            })
-            .is_ok()
-        {
-            return None;
-        }
-    }
-    isolate_displays_ccd_checked(keep)
+    let injected = FAIL_NEXT_ISOLATES
+        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| n.checked_sub(1))
+        .is_ok();
+    #[cfg(not(test))]
+    let injected = false;
+    let isolated = if injected {
+        tracing::warn!(
+            keep = ?keep,
+            reason,
+            "TEST fault injection: forcing the CCD isolate to fail"
+        );
+        None
+    } else {
+        isolate_displays_ccd_checked(keep)
+    };
+    let finished =
+        topology_churn::finish(txn, isolate_txn_outcome(isolated.as_ref().map(|(_, o)| *o)));
+    (isolated.map(|(saved, _)| saved), finished)
 }
 
-/// The transaction outcome an isolate observed (immunity plan WP10 item 4 / WP11): only paths
-/// that verifiably switched off count as a change.
-fn isolate_txn_outcome(outcome: Option<IsolateOutcome>) -> pf_win_display::topology_churn::Outcome {
-    use pf_win_display::topology_churn::Outcome;
+/// The transaction outcome an isolate observed: only a path that verifiably switched off counts
+/// as a change.
+fn isolate_txn_outcome(outcome: Option<IsolateOutcome>) -> Outcome {
     match outcome {
         Some(IsolateOutcome::Verified { deactivated, .. }) if deactivated > 0 => Outcome::Changed,
         Some(IsolateOutcome::Verified { .. } | IsolateOutcome::NothingActive) => Outcome::Unchanged,
@@ -479,16 +473,12 @@ impl MgrInner {
         Some((keep, survivors))
     }
 
-    /// One re-assert, as a topology transaction (immunity plan WP10): descriptor-following
-    /// holds for `hold`, swap-chain bounce included, and the transaction finishes with what
-    /// the verification read observed. Only an observed change bumps
-    /// [`topology_reassert_gen`] and parks the re-lit display's devnode for the session.
+    /// One re-assert through [`isolate_txn`]. Only a finished `Changed` bumps
+    /// [`topology_reassert_gen`] and parks the re-lit display's devnode for the session; a
+    /// change seen past the hold deadline finishes as unknown.
     fn reassert_isolate(&mut self, keep: &[CcdTargetKey], hold: Duration) {
-        use pf_win_display::topology_churn::{self, Outcome};
-        let txn = topology_churn::begin("exclusive-reassert", hold);
-        let outcome = isolate_txn_outcome(isolate_displays_ccd_checked_seam(keep).map(|(_, o)| o));
-        let finished = topology_churn::finish(txn, outcome);
-        if outcome != Outcome::Changed {
+        let (_, finished) = isolate_txn("exclusive-reassert", keep, hold);
+        if finished.outcome != Outcome::Changed {
             return;
         }
         // The forced re-commit hands the IDD path a fresh swap-chain: the session
@@ -1134,7 +1124,7 @@ impl VirtualDisplayManager {
 
     /// Start the exclusive-topology re-assert watchdog (idempotent).
     ///
-    /// A verified [`isolate_displays_ccd`] is not durable: the isolated topology
+    /// A verified [`isolate_displays_ccd_checked`] is not durable: the isolated topology
     /// is deliberately not saved to the CCD database (teardown must restore the
     /// user's layout), so a later re-resolution can bring the stored layout back.
     ///
@@ -1175,7 +1165,7 @@ impl VirtualDisplayManager {
                             );
                             // Close the churn window now — descriptor-following
                             // resumes instead of waiting out the hold expiry.
-                            pf_win_display::topology_churn::release();
+                            topology_churn::release();
                         }
                         Cycle::Conceded => tracing::debug!(
                             survivors,
@@ -1192,7 +1182,7 @@ impl VirtualDisplayManager {
                                  active, the stream continues on the shared desktop, no further \
                                  re-assert"
                             );
-                            pf_win_display::topology_churn::release();
+                            topology_churn::release();
                         }
                         Cycle::Reassert { round } => {
                             tracing::warn!(
@@ -1487,7 +1477,8 @@ impl VirtualDisplayManager {
                 // Re-isolate so the fresh member joins the composited set. Discard the
                 // snapshot unless the first member's isolate failed — then adopt this one,
                 // or teardown cannot restore the physicals.
-                let snap = isolate_displays_ccd_seam(&inner.keep_with(added_key));
+                let (snap, _) =
+                    isolate_txn("sibling-isolate", &inner.keep_with(added_key), ISOLATE_HOLD);
                 if inner.group.ccd_saved.is_none() {
                     if let Some(snap) = snap {
                         tracing::warn!(
@@ -1563,14 +1554,10 @@ impl VirtualDisplayManager {
         if crate::policy::prefs().edid_lock() {
             inner.group.edid_locked = pf_win_display::adl_emul::lock_for_stream();
         }
-        // The acquire isolate is a topology TRANSACTION (immunity plan WP10/WP11):
-        // descriptor-following holds for its deadline, the generation moves only on an
-        // OBSERVED change, and the PnP leases below are stamped with it.
-        let txn = pf_win_display::topology_churn::begin("acquire-isolate", Duration::from_secs(3));
-        let isolated = isolate_displays_ccd_checked_seam(&inner.keep_with(added_key));
-        let outcome = isolated.as_ref().map(|(_, o)| *o);
-        inner.group.ccd_saved = isolated.map(|(saved, _)| saved);
-        let finished = pf_win_display::topology_churn::finish(txn, isolate_txn_outcome(outcome));
+        // The PnP leases below are stamped with this transaction's generation.
+        let (saved, finished) =
+            isolate_txn("acquire-isolate", &inner.keep_with(added_key), ISOLATE_HOLD);
+        inner.group.ccd_saved = saved;
         // After isolate, disable deactivated monitor PnP devnodes so standby wake events do
         // not cascade. Evidence: `windows/monitor_devnode.rs`.
         if crate::policy::prefs().pnp_disable_monitors() {
@@ -1851,7 +1838,7 @@ impl VirtualDisplayManager {
     ///
     /// Call under the `state` lock — it commits a new CCD topology, so it must not interleave with
     /// another slot transition's commit. A *serialization* requirement, not a soundness one: every
-    /// helper it reaches (`isolate_displays_ccd_seam`, `set_virtual_primary_ccd`) is a safe fn, so
+    /// helper it reaches (`isolate_txn`, `set_virtual_primary_ccd`) is a safe fn, so
     /// this body performs no unsafe operation. (`&mut MgrInner` already proves the lock is held.)
     fn reisolate_after_swap(&self, inner: &mut MgrInner, new_target: CcdTargetKey) {
         use crate::policy::Topology;
@@ -1860,7 +1847,7 @@ impl VirtualDisplayManager {
             Topology::Exclusive => {
                 // Grown-set semantics: isolate to the surviving siblings + the new target. The returned
                 // snapshot is DISCARDED — the group keeps the first member's (design §6.1).
-                let _ = isolate_displays_ccd_seam(&inner.keep_with(new_target));
+                let _ = isolate_txn("swap-isolate", &inner.keep_with(new_target), ISOLATE_HOLD);
             }
             Topology::Primary => {
                 // Predecessor held primary. The call recaptures a snapshot, so
@@ -1964,8 +1951,7 @@ impl VirtualDisplayManager {
                 // Re-issue isolate over the shrunk set. Snapshot discarded;
                 // the group keeps the first member's.
                 ShrinkAction::Reisolate => {
-                    let keep = inner.target_keys();
-                    let _ = isolate_displays_ccd_seam(&keep);
+                    let _ = isolate_txn("shrink-isolate", &inner.target_keys(), ISOLATE_HOLD);
                 }
                 // Re-promote a survivor rather than leave primary on a target
                 // about to be REMOVEd. Save/restore the snapshot: the call
