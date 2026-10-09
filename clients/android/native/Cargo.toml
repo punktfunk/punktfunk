@@ -32,12 +32,14 @@ punktfunk-core = { path = "../../../crates/punktfunk-core", features = ["quic"] 
 # visibility patch, so bumping its deps would mean rewriting the vendor rather than a version edit.
 jni = "0.22"
 log = "0.4"
-# LAN host discovery: browse the host's `_punktfunk._udp` mDNS advert — the SAME crate + service the
-# Linux/Windows clients use (`crates/pf-client-core/src/discovery.rs`), replacing Android's per-OEM
-# `NsdManager` system daemon with one tested browse path. Pure Rust (socket2/if-addrs/mio), so it
-# cross-compiles to the Android targets AND builds on the host (the JNI seam links into
-# `cargo build --workspace`). Kotlin keeps only the Wi-Fi `MulticastLock` + permission UX.
-mdns-sd = "0.21"
+# LAN host discovery: `pf_client_core::discovery::try_browse`, the browse the Linux and Windows
+# clients run, in place of Android's per-OEM `NsdManager`. Shared, not in the Android table below,
+# so the JNI seam and its tests build on the Linux and Windows hosts too. Kotlin keeps only the
+# Wi-Fi `MulticastLock` + permission UX. `async-channel` names the browse's event receiver.
+pf-client-core = { path = "../../../crates/pf-client-core", default-features = false, features = [
+    "discovery",
+] }
+async-channel = "2"
 # Shared, NOT in the Android table below: `session::connect` parses the `ConnectRequest`
 # JSON Kotlin hands `nativeConnect`, and that module compiles on the host too — CI's
 # workspace clippy builds this crate as a host cdylib.

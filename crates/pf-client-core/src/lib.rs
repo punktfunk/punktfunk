@@ -25,7 +25,11 @@ pub mod audio_vitals;
 // Priority for threads that feed the device callbacks (decode, pad-audio, WASAPI). rtkit / Realtime portal on Linux, MMCSS on Windows.
 #[cfg(desktop)]
 pub mod audio_rt;
-#[cfg(all(feature = "discovery", any(target_os = "linux", windows)))]
+// mDNS browse of `_punktfunk._udp`. Android folds the same events behind its JNI poll.
+#[cfg(all(
+    feature = "discovery",
+    any(target_os = "linux", windows, target_os = "android")
+))]
 pub mod discovery;
 #[cfg(desktop)]
 pub mod gamepad;
