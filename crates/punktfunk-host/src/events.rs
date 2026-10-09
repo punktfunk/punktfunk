@@ -628,11 +628,8 @@ impl EventKind {
         }
     }
 
+    /// The origin plane, on every event that carries a client, session, stream, game or device.
     pub fn plane(&self) -> Option<Plane> {
-        // Pending the maintainer's decision: `action.invoked` matches no `plane:` filter.
-        if matches!(self, EventKind::ActionInvoked { .. }) {
-            return None;
-        }
         Some(match self.subject()? {
             Subject::Client(c) => c.plane,
             Subject::Session(s) => s.plane,
@@ -1493,11 +1490,7 @@ mod tests {
                 },
                 dev,
             ),
-            // `plane()` leaves action.invoked out until the maintainer decides.
-            (
-                action(Some(device.clone())),
-                [Some("device"), Some("device"), None, None, None],
-            ),
+            (action(Some(device.clone())), dev),
             (action(None), none),
             (
                 EventKind::DisplayCreated {

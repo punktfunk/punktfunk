@@ -1186,7 +1186,7 @@ mod tests {
     #[test]
     #[ignore = "requires an NVIDIA GPU + driver — run on the RTX box (.21)"]
     fn fused_convert_matches_the_cpu_reference() {
-        use crate::imp::tiled_spike::TiledPattern;
+        use crate::imp::tiled_pattern::TiledPattern;
         use crate::imp::vkslot::{SlotFormat, VkSlotBlend};
         use crate::imp::{cuda, proto};
         const W: u32 = 128;

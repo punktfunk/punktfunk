@@ -21,7 +21,7 @@ pub mod gbm;
 pub mod ipc;
 pub mod proto;
 #[cfg(test)]
-mod tiled_spike;
+mod tiled_pattern;
 pub mod vkdev;
 pub mod vkslot;
 pub mod vulkan;

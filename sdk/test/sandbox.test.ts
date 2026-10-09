@@ -111,6 +111,8 @@ describe("refusedRoot", () => {
 			vectors: { path: string; home: string; config_dir: string; refused: boolean }[];
 		};
 		expect(vectors.some((v) => v.config_dir !== paths.configDir)).toBe(true);
+		// No row has `~/.config` under a non-default config dir: the host binds it there, the
+		// sandbox still refuses it. Stricter on purpose, as defense in depth.
 		for (const v of vectors) {
 			expect([v.path, v.config_dir, refusedRoot(v.path, v.home, v.config_dir)]).toEqual([
 				v.path,
