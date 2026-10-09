@@ -220,12 +220,12 @@ pub async fn run(
     #[cfg(target_os = "windows")]
     crate::tray::supervise();
 
-    // HTTPS + token always, including loopback. `parse_serve` always supplies
+    // HTTPS + token always, including loopback. `prepare_serve` always supplies
     // one. Blank is none — fail rather than serve unauthenticated.
     let token = opts
         .token
         .filter(|t| !t.trim().is_empty())
-        .context("management API has no token — internal error: parse_serve must provide one")?;
+        .context("management API has no token — internal error: prepare_serve must provide one")?;
     // Native identity (the cert clients already pin). Client cert optional:
     // a paired client presents a fingerprint; a browser presents none and
     // uses the bearer. See `require_auth`.
