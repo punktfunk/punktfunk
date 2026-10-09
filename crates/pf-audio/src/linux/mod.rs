@@ -1239,7 +1239,7 @@ mod tests {
     /// Each mode's stream properties, read back from the dict PipeWire gets.
     #[test]
     fn capture_props_per_mode() {
-        pf_capture::pwinit::ensure_init();
+        pipewire::init();
         let get = |mode, sink, target| {
             let p = capture_props(mode, sink, "punktfunk-capture-1", target, "240/48000").unwrap();
             let keys = [

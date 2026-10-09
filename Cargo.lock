@@ -3172,7 +3172,6 @@ version = "0.43.1"
 dependencies = [
  "anyhow",
  "opus",
- "pf-capture",
  "pf-frame",
  "pf-host-config",
  "pf-inject",

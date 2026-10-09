@@ -4,11 +4,11 @@
 use anyhow::{Context, Result};
 use pipewire as pw;
 
-/// Init the library, then a main loop and its connection to this session's daemon. `label`
-/// prefixes each error. The core holds its context, so the pair keeps the connection alive;
+/// Init the library (idempotent), then a main loop and its connection to this session's
+/// daemon. `label` prefixes each error. The core holds its context, so the pair keeps the connection alive;
 /// guards and listeners borrow them and stay in the caller's frame.
 pub(super) fn pw_connect(label: &str) -> Result<(pw::main_loop::MainLoopRc, pw::core::CoreRc)> {
-    pf_capture::pwinit::ensure_init();
+    pw::init();
     let mainloop =
         pw::main_loop::MainLoopRc::new(None).with_context(|| format!("{label} MainLoop"))?;
     let context =

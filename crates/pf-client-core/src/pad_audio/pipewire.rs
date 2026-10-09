@@ -88,8 +88,7 @@ fn walk_graph() -> anyhow::Result<(Vec<SinkNode>, Vec<CardDevice>)> {
     use std::cell::{Cell, RefCell};
     use std::rc::Rc;
 
-    static PW_INIT: std::sync::Once = std::sync::Once::new();
-    PW_INIT.call_once(pw::init);
+    pw::init();
 
     let mainloop = pw::main_loop::MainLoopRc::new(None).context("pw MainLoop")?;
     let context = pw::context::ContextRc::new(&mainloop, None).context("pw Context")?;
@@ -267,8 +266,7 @@ fn set_card_profile(device_id: u32, want: ProfileTarget) -> anyhow::Result<u32> 
     use std::cell::{Cell, RefCell};
     use std::rc::Rc;
 
-    static PW_INIT: std::sync::Once = std::sync::Once::new();
-    PW_INIT.call_once(pw::init);
+    pw::init();
 
     let mainloop = pw::main_loop::MainLoopRc::new(None).context("pw MainLoop")?;
     let context = pw::context::ContextRc::new(&mainloop, None).context("pw Context")?;
@@ -495,8 +493,7 @@ fn pin_sink_volume(node_id: u32, channels: u32) -> anyhow::Result<()> {
     use std::cell::{Cell, RefCell};
     use std::rc::Rc;
 
-    static PW_INIT: std::sync::Once = std::sync::Once::new();
-    PW_INIT.call_once(pw::init);
+    pw::init();
 
     let mainloop = pw::main_loop::MainLoopRc::new(None).context("pw MainLoop")?;
     let context = pw::context::ContextRc::new(&mainloop, None).context("pw Context")?;
@@ -781,8 +778,7 @@ fn pad_pw_thread(
     use spa::param::audio::{AudioFormat, AudioInfoRaw};
     use spa::pod::Pod;
 
-    static PW_INIT: std::sync::Once = std::sync::Once::new();
-    PW_INIT.call_once(pw::init);
+    pw::init();
 
     let mainloop = pw::main_loop::MainLoopRc::new(None).context("pw MainLoop")?;
     let context = pw::context::ContextRc::new(&mainloop, None).context("pw Context")?;
