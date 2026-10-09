@@ -1098,6 +1098,11 @@
 // `delivery_flags` and the JNI dial carry it.
 #define PUNKTFUNK_EXT_DELIVERY_PROBE_ONLY 2
 
+// Entry `7` in `ClientHello`: `bpp_x100 u16`, the player's PyroWave quality in hundredths of
+// a bit per pixel. Absent or `0` leaves the host's own; the host holds it inside
+// [`crate::pyrowave::BPP_FLOOR`]..=[`crate::pyrowave::BPP_MAX`].
+#define PUNKTFUNK_EXT_TAG_PYROWAVE_QUALITY 7
+
 // Longest [`SessionPreset::id`], printable ASCII.
 #define PRESET_ID_MAX 32
 

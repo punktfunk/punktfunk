@@ -550,9 +550,9 @@ fn advertised_client_caps(client_caps: u8, audio_rate_hz: u32, audio_bits: u8) -
 
 /// One dial's ask: the `Hello` fields plus how to reach, trust and wait for the host.
 ///
-/// [`ConnectParams::new`] fills what a plain dial sends: host-decided compositor, pad and
-/// bitrate, 8-bit SDR, stereo Opus, HEVC only, no client caps, no launch, anonymous TOFU.
-/// Set the rest by field name.
+/// [`ConnectParams::new`] fills what a plain dial sends: host-decided compositor, pad,
+/// bitrate and PyroWave quality, 8-bit SDR, stereo Opus, HEVC only, no client caps, no
+/// launch, anonymous TOFU. Set the rest by field name.
 pub struct ConnectParams {
     /// IP literal or resolvable hostname.
     pub host: String,
@@ -563,6 +563,9 @@ pub struct ConnectParams {
     pub gamepad: GamepadPref,
     /// Encoder rate in kbps; `0` = host default, and the only value that arms ABR.
     pub bitrate_kbps: u32,
+    /// PyroWave quality in hundredths of a bit per pixel
+    /// ([`crate::quic::EXT_TAG_PYROWAVE_QUALITY`]); `0` leaves the host's own.
+    pub pyrowave_bpp_x100: u16,
     /// [`crate::quic::VIDEO_CAP_10BIT`] / [`crate::quic::VIDEO_CAP_HDR`]; the host upgrades only
     /// on a set bit. `0` = 8-bit BT.709.
     pub video_caps: u8,
@@ -623,6 +626,7 @@ impl ConnectParams {
             compositor: CompositorPref::Auto,
             gamepad: GamepadPref::Auto,
             bitrate_kbps: 0,
+            pyrowave_bpp_x100: 0,
             video_caps: 0,
             audio_channels: 2,
             audio_rate_hz: 0,

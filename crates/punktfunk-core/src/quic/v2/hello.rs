@@ -20,12 +20,13 @@ use crate::error::Result;
 use crate::quic::*;
 
 /// `Start` extension tags and the `ClientHello` tags their values ride under, unchanged.
-const START_EXT: [(u16, u64); 5] = [
+const START_EXT: [(u16, u64); 6] = [
     (EXT_TAG_CLIENT, 19),
     (EXT_TAG_ABR, 20),
     (EXT_TAG_PRESET, 21),
     (EXT_TAG_LINK_FACTS, 22),
     (EXT_TAG_PROBE_ONLY, 24),
+    (EXT_TAG_PYROWAVE_QUALITY, 25),
 ];
 
 /// Wire id of a media suite in `ClientHello` and `ServerHello`.
@@ -656,6 +657,7 @@ mod tests {
                     .to_vec(),
                 ),
                 (EXT_TAG_PROBE_ONLY, vec![1]),
+                (EXT_TAG_PYROWAVE_QUALITY, 120u16.to_le_bytes().to_vec()),
             ],
             resume: Some([3; 16]),
             suites: vec![MediaSuite::ChaCha20Poly1305, MediaSuite::Aes128Gcm],
@@ -675,6 +677,7 @@ mod tests {
             }
         );
         assert!(ext_probe_only(&entries));
+        assert_eq!(ext_pyrowave_bpp_x100(&entries), 120);
 
         let sh = ServerHello {
             welcome: ServerHello::from_body(&Fields::new().bytes(1, &[0; 16]).into_body())
