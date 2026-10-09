@@ -1,179 +1,6 @@
 use super::*;
 use crate::smoke_d3d11::nv12_texture;
 
-/// An IDR empties the mirror, drops a queued force and marks slot 0.
-#[test]
-fn an_idr_resets_the_ltr_mirror_and_marks_slot_zero() {
-    let (mut slots, mut next, mut pending) = ([Some(3), Some(5)], 1, Some(1));
-    let step = ltr_step(&mut slots, &mut next, &mut pending, true, 9, 8, None, false);
-    assert_eq!(
-        step,
-        LtrStep {
-            mark_slot: Some(0),
-            ..LtrStep::default()
-        }
-    );
-    assert_eq!((slots, next, pending), ([Some(9), None], 1, None));
-}
-
-/// A queued force on a marked slot re-references it, clears the other slot and takes the
-/// frame's mark. On a slot the taint sweep emptied it ships a plain P.
-#[test]
-fn a_queued_force_needs_a_marked_slot() {
-    let (mut slots, mut next, mut pending) = ([Some(0), Some(8)], 0, Some(0));
-    let step = ltr_step(
-        &mut slots,
-        &mut next,
-        &mut pending,
-        false,
-        16,
-        8,
-        None,
-        false,
-    );
-    assert_eq!(
-        step,
-        LtrStep {
-            force_slot: Some(0),
-            ..LtrStep::default()
-        }
-    );
-    assert_eq!((slots, pending), ([Some(0), None], None));
-    let (mut slots, mut pending) = ([None, Some(8)], Some(0));
-    let step = ltr_step(
-        &mut slots,
-        &mut next,
-        &mut pending,
-        false,
-        17,
-        8,
-        None,
-        false,
-    );
-    assert_eq!(step, LtrStep::default());
-    assert_eq!(pending, None, "a force is consumed either way");
-}
-
-/// Under confirmed references a frame forces the newest confirmed slot, which clears
-/// the other, and marks into it. With none confirmed and both awaiting it, nothing.
-#[test]
-fn confirmed_references_force_the_newest_confirmed_slot() {
-    let (mut slots, mut next, mut pending) = ([Some(9), Some(10)], 0, None);
-    let step = ltr_step(
-        &mut slots,
-        &mut next,
-        &mut pending,
-        false,
-        11,
-        8,
-        Some(crate::Acked {
-            last: 10,
-            mask: 0xffff,
-        }),
-        false,
-    );
-    assert_eq!(
-        step,
-        LtrStep {
-            mark_slot: Some(0),
-            force_slot: Some(1),
-            acked: true
-        }
-    );
-    assert_eq!((slots, next), ([Some(11), Some(10)], 1));
-    let step = ltr_step(
-        &mut slots,
-        &mut next,
-        &mut pending,
-        false,
-        12,
-        8,
-        Some(crate::Acked {
-            last: 9,
-            mask: 0xffff,
-        }),
-        false,
-    );
-    assert_eq!((step.mark_slot, step.force_slot), (None, None));
-}
-
-/// A driver that keeps unforced slots keeps a mark awaiting confirmation: the frame
-/// marks only a free slot, and the next one forces the newer confirmed frame.
-#[test]
-fn kept_slots_hold_a_mark_until_it_is_confirmed() {
-    let (mut slots, mut next, mut pending) = ([Some(9), Some(10)], 0, None);
-    let step = ltr_step(
-        &mut slots,
-        &mut next,
-        &mut pending,
-        false,
-        11,
-        8,
-        Some(crate::Acked {
-            last: 9,
-            mask: 0xffff,
-        }),
-        true,
-    );
-    assert_eq!((step.mark_slot, step.force_slot), (None, Some(0)));
-    assert_eq!(slots, [Some(9), Some(10)], "10 awaits its confirmation");
-    let step = ltr_step(
-        &mut slots,
-        &mut next,
-        &mut pending,
-        false,
-        12,
-        8,
-        Some(crate::Acked {
-            last: 10,
-            mask: 0xffff,
-        }),
-        true,
-    );
-    assert_eq!((step.mark_slot, step.force_slot), (Some(0), Some(1)));
-    assert_eq!(slots, [Some(12), Some(10)]);
-}
-
-/// Marks land on the interval, first on an empty slot, else round robin.
-#[test]
-fn a_mark_prefers_an_empty_slot() {
-    let (mut slots, mut next, mut pending) = ([Some(0), None], 0, None);
-    let step = ltr_step(
-        &mut slots,
-        &mut next,
-        &mut pending,
-        false,
-        15,
-        8,
-        None,
-        false,
-    );
-    assert_eq!(step, LtrStep::default(), "off the interval");
-    let step = ltr_step(
-        &mut slots,
-        &mut next,
-        &mut pending,
-        false,
-        16,
-        8,
-        None,
-        false,
-    );
-    assert_eq!(step.mark_slot, Some(1));
-    let step = ltr_step(
-        &mut slots,
-        &mut next,
-        &mut pending,
-        false,
-        24,
-        8,
-        None,
-        false,
-    );
-    assert_eq!(step.mark_slot, Some(0), "both marked: the round robin");
-    assert_eq!(slots, [Some(24), Some(16)]);
-}
-
 // Layout of the FFI mirrors lives as `const _: ()` in `amf_sys.rs` (every build). This
 // checks little-endian union payload packing, which a size/align assert cannot express.
 #[test]
@@ -952,15 +779,15 @@ fn amf_refused_submit_forces_idr_live() {
     }
     if ltr {
         assert!(
-            !enc.ltr_slots.contains(&Some(refused_mark as i64)),
+            !enc.ltr.slots.contains(&Some(refused_mark as i64)),
             "mirror claims a mark the hardware never made: {:?}",
-            enc.ltr_slots
+            enc.ltr.slots
         );
     }
     eprintln!(
         "live AMF refused-submit: {} AUs, ltr={ltr}, mirror {:?}",
         aus.len(),
-        enc.ltr_slots
+        enc.ltr.slots
     );
 }
 

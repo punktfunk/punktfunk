@@ -15,7 +15,7 @@
 //! Evidence: `design/media-foundation-encoder.md`.
 
 use super::{ChromaFormat, Codec, EncodedFrame, Encoder, EncoderCaps};
-use crate::retrieve::{AuQueue, FirstAuLog};
+use crate::retrieve::{poll_budget_ms, AuQueue};
 use anyhow::{anyhow, bail, Context, Result};
 use pf_frame::{CapturedFrame, FramePayload, PixelFormat};
 use std::mem::ManuallyDrop;
@@ -494,7 +494,6 @@ struct Inner {
     ring: Vec<ID3D11Texture2D>,
     next: usize,
     frames_submitted: u64,
-    first_au: FirstAuLog,
 }
 
 impl Drop for Inner {
@@ -888,7 +887,6 @@ impl MfEncoder {
             ring,
             next: 0,
             frames_submitted: 0,
-            first_au: FirstAuLog::new("Media Foundation produced its first AU on this session"),
         });
         Ok(())
     }
@@ -1013,21 +1011,13 @@ impl Encoder for MfEncoder {
         }
     }
 
-    /// Wait up to `min(3/4 frame interval, 12 ms)` for the oldest AU. Expiry is `Ok(None)`.
+    /// Wait up to [`poll_budget_ms`] for the callback's oldest AU. Expiry is `Ok(None)`.
+    /// Any AU ends the no-output streak.
     fn poll(&mut self) -> Result<Option<EncodedFrame>> {
-        let budget_ms = (750 / self.fps.max(1)).clamp(1, 12);
-        let au = {
-            let Some(inner) = self.inner.as_mut() else {
-                return Ok(None);
-            };
-            // The same bound as before, now spent on the callback's event rather than on a
-            // sample loop, so nothing else on this thread waits behind it.
-            let au = inner.shared.q.take_ready(budget_ms)?;
-            if let Some(au) = &au {
-                inner.first_au.note(au);
-            }
-            au
+        let Some(inner) = self.inner.as_ref() else {
+            return Ok(None);
         };
+        let au = inner.shared.q.take_ready(poll_budget_ms(self.fps))?;
         if au.is_some() {
             self.resets_without_output = 0;
         }
@@ -1089,7 +1079,6 @@ impl Encoder for MfEncoder {
                 })
         });
         inner.frames_submitted = 0;
-        inner.first_au.rearm();
         if let Err(e) = restarted {
             tracing::warn!(error = %e, "Media Foundation in-place restart failed — dropping the MFT");
             self.inner = None;
