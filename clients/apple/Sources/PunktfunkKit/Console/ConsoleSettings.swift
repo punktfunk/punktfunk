@@ -168,26 +168,29 @@ public enum ConsoleSettings {
 
     // MARK: - the two that differ
 
-    /// The compositor's wire value (`PunktfunkConnection.Compositor`) against the console's name.
-    private static let compositors: [(Int, String)] = [
-        (0, "auto"), (1, "kwin"), (3, "mutter"), (5, "hyprland"), (2, "wlroots"), (4, "gamescope"),
+    /// The compositors and pad kinds the console names. The stored value is the wire value, the
+    /// console's word is the host's name; anything else reads as "auto".
+    private static let compositors: [PunktfunkConnection.Compositor] = [
+        .auto, .kwin, .mutter, .hyprland, .wlroots, .gamescope,
     ]
-    private static let padTypes: [(Int, String)] = [
-        (0, "auto"), (1, "xbox360"), (3, "xboxone"), (2, "dualsense"), (4, "dualshock4"),
-        (6, "steamdeck"), (9, "steamcontroller2"),
+    private static let padTypes: [PunktfunkConnection.GamepadType] = [
+        .auto, .xbox360, .xboxOne, .dualSense, .dualShock4, .steamDeck, .steamController2,
     ]
 
-    static func compositorName(_ tag: Int) -> String {
-        compositors.first { $0.0 == tag }?.1 ?? "auto"
+    static func compositorName(_ tag: Int) -> String { word(tag, compositors, \.canonicalName) }
+    static func compositorTag(_ name: String) -> Int? { tag(name, compositors, \.canonicalName) }
+    static func padTypeName(_ tag: Int) -> String { word(tag, padTypes, \.canonicalName) }
+    static func padTypeTag(_ name: String) -> Int? { tag(name, padTypes, \.canonicalName) }
+
+    private static func word<T: RawRepresentable>(
+        _ tag: Int, _ table: [T], _ name: KeyPath<T, String>
+    ) -> String where T.RawValue == UInt32 {
+        table.first { Int($0.rawValue) == tag }?[keyPath: name] ?? "auto"
     }
-    static func compositorTag(_ name: String) -> Int? {
-        compositors.first { $0.1 == name }?.0
-    }
-    static func padTypeName(_ tag: Int) -> String {
-        padTypes.first { $0.0 == tag }?.1 ?? "auto"
-    }
-    static func padTypeTag(_ name: String) -> Int? {
-        padTypes.first { $0.1 == name }?.0
+    private static func tag<T: RawRepresentable>(
+        _ word: String, _ table: [T], _ name: KeyPath<T, String>
+    ) -> Int? where T.RawValue == UInt32 {
+        table.first { $0[keyPath: name] == word }.map { Int($0.rawValue) }
     }
 }
 
