@@ -40,15 +40,32 @@ export function isUiCredential(rest: string): boolean {
 	return /^plugins\/[^/]+\/ui-credential$/i.test(rest);
 }
 
+/** The files under `routes/api/v1/` whose password gate a seat call goes through (`GATES`). */
+export const GATED_ROUTES = [
+	"hooks.put",
+	"store/install.post",
+	"store/sources/[name].put",
+	"library/custom.post",
+	"library/custom/[id].put",
+	"library/provider/[provider].put",
+] as const;
+
+/**
+ * First segments a seat's host never relays: `proxy_refuses` in
+ * `crates/punktfunk-host/src/mgmt/profiles.rs`. A gated route under one needs no `GATES` entry.
+ */
+export const HOST_REFUSED: readonly string[] = [
+	"native",
+	"pair",
+	"profiles",
+	"update",
+	"actions",
+	"clients",
+];
+
 /** The file under `routes/api/v1/` that gates a call, and the route params it reads. */
 export interface GatedRoute {
-	route:
-		| "hooks.put"
-		| "store/install.post"
-		| "store/sources/[name].put"
-		| "library/custom.post"
-		| "library/custom/[id].put"
-		| "library/provider/[provider].put";
+	route: (typeof GATED_ROUTES)[number];
 	params: Record<string, string>;
 }
 
