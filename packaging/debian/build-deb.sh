@@ -72,6 +72,9 @@ install -Dm0644 packaging/linux/49-punktfunk-update.rules \
                                                    "$STAGE/usr/share/polkit-1/rules.d/49-punktfunk-update.rules"
 # postinst runs this on configure and on the file trigger below (web, runner, bun).
 install -Dm0755 packaging/linux/restart-user-units.sh "$STAGE/usr/libexec/punktfunk/restart-user-units"
+# The host state postinst shares with every other format, and the groups it creates.
+install -Dm0755 packaging/linux/post-install.sh    "$STAGE/usr/libexec/punktfunk/post-install"
+install -Dm0644 packaging/linux/punktfunk.sysusers "$STAGE/usr/lib/sysusers.d/punktfunk.conf"
 install -Dm0644 scripts/60-punktfunk.rules         "$STAGE/usr/lib/udev/rules.d/60-punktfunk.rules"
 install -Dm0644 scripts/60-punktfunk-dualsense.conf "$STAGE/usr/share/wireplumber/wireplumber.conf.d/60-punktfunk-dualsense.conf"
 # ALSA UCM for the DualSense's own sound card — the `SpeakerHaptic` device alsa-ucm-conf has
@@ -279,16 +282,6 @@ cat > "$STAGE/DEBIAN/postinst" <<'EOF'
 #!/bin/sh
 set -e
 if [ "$1" = "configure" ]; then
-    # The (empty) opt-in group for web-console-triggered updates — nobody is auto-added.
-    getent group punktfunk-update >/dev/null 2>&1 || addgroup --system punktfunk-update 2>/dev/null || true
-    # Owns the usbip vhci attach/detach nodes (60-punktfunk.rules). Deliberately NOT 'input':
-    # writing 'attach' materialises an arbitrary emulated USB device — a root-only kernel
-    # primitive that must not ride on the group users are told to join for gamepads
-    # (security-review 2026-08-05 M-4). It is ALSO the group pf-dm-helper authorizes on (its
-    # polkit action must stay allow_any, so membership is the real gate), i.e. what a managed
-    # gamescope takeover needs to stop the display manager. Creating the group is necessary and
-    # NOT sufficient for either use: membership is.
-    getent group punktfunk >/dev/null 2>&1 || addgroup --system punktfunk 2>/dev/null || true
     # NO capability on the host binary — and an active removal of the one 0.26.0-1 granted here.
     #
     # 0.26.0-1 ran `setcap cap_sys_nice=ep` at this point for the GPU-priority lever, and that broke
@@ -329,11 +322,6 @@ if [ "$1" = "configure" ]; then
     if [ -x /usr/bin/punktfunk-encode-worker ]; then
         setcap 'cap_sys_nice=ep' /usr/bin/punktfunk-encode-worker 2>/dev/null || true
     fi
-    # Pick up the /dev/uinput rule without a reboot (best-effort, no-op in containers).
-    udevadm control --reload-rules 2>/dev/null || true
-    udevadm trigger --subsystem-match=misc 2>/dev/null || true
-    # Apply the UDP socket-buffer tuning now (also auto-applied at boot by systemd-sysctl).
-    sysctl -p /usr/lib/sysctl.d/99-punktfunk-net.conf >/dev/null 2>&1 || true
     echo "punktfunk-host installed. Add yourself to the 'input' group for virtual gamepads:"
     echo "    sudo usermod -aG input \"\$USER\"   # then re-login"
     # Naming only the usbip pad here is how a Nobara host shipped broken: its owner had no Deck
@@ -355,50 +343,8 @@ if [ "$1" = "configure" ]; then
         echo "    sudo firewall-cmd --permanent --add-service=punktfunk-native && sudo firewall-cmd --reload"
         echo "    (use punktfunk-gamestream for the Moonlight-compat host)"
     fi
-    # An open firewall keeps the ports a profile had when it was allowed: ufw stores the expanded
-    # rules, firewalld serves the service it last loaded. Name each profile missing a port this
-    # package added. `ufw status verbose` prints expanded ports, so it can tell stale from current.
-    if command -v ufw >/dev/null 2>&1 &&
-       ufw status verbose 2>/dev/null | grep -q 'punktfunk-web' &&
-       ! ufw status verbose 2>/dev/null | grep -q '47993'; then
-        echo ""
-        echo "punktfunk: your ufw rule for 'punktfunk-web' predates TCP 47993 (plugin UIs, served"
-        echo "  from their own origin). Plugin interfaces will not load in the console until:"
-        echo "    sudo ufw app update punktfunk-web && sudo ufw reload"
-    fi
-    if command -v ufw >/dev/null 2>&1 &&
-       ufw status verbose 2>/dev/null | grep -q 'punktfunk-native' &&
-       ! ufw status verbose 2>/dev/null | grep -q '9778'; then
-        echo ""
-        echo "punktfunk: your ufw rule for 'punktfunk-native' predates UDP 9778 (browser streaming)."
-        echo "  A browser cannot connect to this host until:"
-        echo "    sudo ufw app update punktfunk-native && sudo ufw reload"
-    fi
-    # --info-service answers from the definition the daemon loaded, i.e. the stale one.
-    if command -v firewall-cmd >/dev/null 2>&1 &&
-       firewall-cmd --state >/dev/null 2>&1 &&
-       firewall-cmd --query-service=punktfunk-web >/dev/null 2>&1 &&
-       ! firewall-cmd --info-service=punktfunk-web 2>/dev/null | grep -q '47993'; then
-        echo ""
-        echo "punktfunk: the punktfunk-web firewalld service now also covers TCP 47993 (plugin UIs)."
-        echo "  Plugin interfaces will not load in the console until:  sudo firewall-cmd --reload"
-    fi
-    if command -v firewall-cmd >/dev/null 2>&1 &&
-       firewall-cmd --state >/dev/null 2>&1 &&
-       firewall-cmd --query-service=punktfunk-native >/dev/null 2>&1 &&
-       ! firewall-cmd --info-service=punktfunk-native 2>/dev/null | grep -q '9778'; then
-        echo ""
-        echo "punktfunk: the punktfunk-native firewalld service now also covers UDP 9778 (browser"
-        echo "  streaming). A browser cannot connect to this host until:  sudo firewall-cmd --reload"
-    fi
-    # Conflicting Moonlight-compatible host (Sunshine/Apollo/...): reuse the host's own detector so
-    # the warning lives in one place. Exit 1 = found; never fail the install on it.
-    if command -v punktfunk-host >/dev/null 2>&1; then
-        if ! conflict="$(punktfunk-host detect-conflicts 2>/dev/null)"; then
-            echo ""
-            echo "$conflict"
-        fi
-    fi
+    # Groups, udev, sysctl, the stale-firewall notes and the conflict check.
+    /usr/libexec/punktfunk/post-install
 fi
 # Restart the running services. configure restarts all three: dpkg may fold a pending trigger into it.
 case "$1" in configure|triggered) /usr/libexec/punktfunk/restart-user-units ;; esac

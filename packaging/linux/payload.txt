@@ -1,0 +1,56 @@
+# The paths every Linux format ships for a package: <package> <path>. scripts/ci/assert-payload-parity.sh
+# checks each built .deb, .rpm and .pkg.tar.zst against it. A package is the artifact that ships
+# usr/bin/punktfunk-<package>. On Arch, usr/libexec/punktfunk/ reads usr/lib/punktfunk/.
+# Format-specific paths stay out: the deb's data dir is /usr/share/punktfunk-host, rpm ships no ufw
+# profile, the deb no gamescope-session drop-in, and Arch puts the client icon in punktfunk-icons.
+host usr/bin/punktfunk-host
+host usr/bin/punktfunk-encode-worker
+host usr/bin/punktfunk-tray
+host usr/libexec/punktfunk/pf-update
+host usr/libexec/punktfunk/pf-dm-helper
+host usr/libexec/punktfunk/restart-user-units
+host usr/libexec/punktfunk/post-install
+host usr/lib/sysusers.d/punktfunk.conf
+host usr/lib/udev/rules.d/60-punktfunk.rules
+host usr/lib/modules-load.d/punktfunk.conf
+host usr/lib/sysctl.d/99-punktfunk-net.conf
+host usr/lib/systemd/system/punktfunk-update.service
+host usr/lib/systemd/system/user@.service.d/50-punktfunk-nice.conf
+host usr/lib/systemd/user/punktfunk-host.service
+host usr/lib/systemd/user/punktfunk-kde-session.service
+host usr/lib/firewalld/services/punktfunk-gamestream.xml
+host usr/lib/firewalld/services/punktfunk-native.xml
+host usr/lib/firewalld/services/punktfunk-web.xml
+host usr/share/polkit-1/rules.d/49-punktfunk-update.rules
+host usr/share/polkit-1/rules.d/49-punktfunk-power.rules
+host usr/share/polkit-1/actions/io.unom.punktfunk.dm-helper.policy
+host usr/share/wireplumber/wireplumber.conf.d/60-punktfunk-dualsense.conf
+host usr/share/alsa/ucm2/USB-Audio/conf.d/054c-0ce6.conf
+host usr/share/alsa/ucm2/USB-Audio/conf.d/054c-0df2.conf
+host usr/share/alsa/ucm2/USB-Audio/Punktfunk/DualSense-PS5-Haptic.conf
+host usr/share/alsa/ucm2/USB-Audio/Punktfunk/DualSense-PS5-Haptic-HiFi.conf
+host usr/share/applications/io.unom.Punktfunk.Host.desktop
+host usr/share/applications/io.unom.Punktfunk.StartHost.desktop
+host usr/share/icons/hicolor/22x22/apps/punktfunk-tray.png
+host usr/share/icons/hicolor/22x22/apps/punktfunk-tray-degraded.png
+host usr/share/icons/hicolor/22x22/apps/punktfunk-tray-error.png
+host usr/share/icons/hicolor/22x22/apps/punktfunk-tray-stopped.png
+host usr/share/icons/hicolor/22x22/apps/punktfunk-tray-streaming.png
+host usr/share/icons/hicolor/48x48/apps/punktfunk-tray.png
+host usr/share/icons/hicolor/48x48/apps/punktfunk-tray-degraded.png
+host usr/share/icons/hicolor/48x48/apps/punktfunk-tray-error.png
+host usr/share/icons/hicolor/48x48/apps/punktfunk-tray-stopped.png
+host usr/share/icons/hicolor/48x48/apps/punktfunk-tray-streaming.png
+host usr/share/punktfunk/install-kind
+client usr/bin/punktfunk-client
+client usr/bin/punktfunk-session
+client usr/bin/punktfunk
+client usr/libexec/punktfunk/pf-update-client
+client usr/lib/sysusers.d/punktfunk-client.conf
+client usr/lib/udev/rules.d/70-punktfunk-client.rules
+client usr/lib/sysctl.d/99-punktfunk-client-net.conf
+client usr/lib/systemd/system/punktfunk-client-update.service
+client usr/share/polkit-1/rules.d/49-punktfunk-client-update.rules
+client usr/share/applications/io.unom.Punktfunk.desktop
+client usr/share/applications/io.unom.Punktfunk.Console.desktop
+client usr/share/punktfunk-client/install-kind

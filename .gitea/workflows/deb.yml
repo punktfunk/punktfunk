@@ -99,6 +99,8 @@ on:
       - 'packaging/linux/*.service'
       - 'packaging/linux/*.sh'
       - 'packaging/linux/*.tmpfiles'
+      - 'packaging/linux/*.sysusers'
+      - 'packaging/linux/payload.txt'
       - 'packaging/linux/seat-*'
       - 'packaging/linux/door-*'
       - 'packaging/linux/*.ufw'
@@ -132,6 +134,7 @@ on:
       - 'scripts/web-init.sh'
       - 'scripts/alsa-ucm2/**'
       - 'scripts/ci/assert-cap-matrix.sh'
+      - 'scripts/ci/assert-payload-parity.sh'
       - 'scripts/ci/deb-install-smoke.sh'
       - 'scripts/ci/drop-partial-target.sh'
       - 'scripts/ci/ensure-sccache.sh'
@@ -348,6 +351,12 @@ jobs:
           # The plugin/script runner (bun-bundled Effect SDK).
           VERSION="$VERSION" bash packaging/debian/build-scripting-deb.sh
 
+      # Every path packaging/linux/payload.txt names for the client, read out of the built .deb.
+      - name: Assert the shared payload (client .deb)
+        run: |
+          bash scripts/ci/assert-payload-parity.sh --self-test
+          bash scripts/ci/assert-payload-parity.sh dist/punktfunk-client_*.deb
+
       # Visibility only. With the target cache now actually saving release artifacts (see the
       # cache key note above), this is how a regression in that arrangement becomes visible:
       # a run that suddenly reports thousands of misses is a cache that stopped restoring.
@@ -518,6 +527,12 @@ jobs:
         run: |
           bash scripts/ci/assert-cap-matrix.sh --self-test
           bash scripts/ci/assert-cap-matrix.sh dist/punktfunk-host_*.deb
+
+      # Every path packaging/linux/payload.txt names for the host, read out of the built .deb.
+      - name: Assert the shared payload (host .deb)
+        run: |
+          bash scripts/ci/assert-payload-parity.sh --self-test
+          bash scripts/ci/assert-payload-parity.sh dist/punktfunk-host_*.deb
 
       - name: Publish to the Gitea apt registry
         env:

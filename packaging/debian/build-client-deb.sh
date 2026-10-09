@@ -85,7 +85,7 @@ install -Dm0644 scripts/99-punktfunk-client-net.conf \
 # runs): the same root helper the host package ships, under the CLIENT's own paths + its own
 # unit and polkit rule. Separate paths because dpkg refuses two packages owning one file, and a
 # client-only box must be able to install this without punktfunk-host. Opt-in = joining the
-# (shipped-empty) punktfunk-update group; postinst creates it.
+# (shipped-empty) punktfunk-update group (punktfunk.sysusers).
 install -Dm0755 "$UPDATE_BIN"                      "$STAGE/usr/libexec/punktfunk/pf-update-client"
 install -Dm0644 packaging/linux/punktfunk-client-update.service \
                 "$STAGE/usr/lib/systemd/system/punktfunk-client-update.service"
@@ -93,6 +93,9 @@ sed -i 's#/usr/libexec/punktfunk/pf-update#/usr/libexec/punktfunk/pf-update-clie
        "$STAGE/usr/lib/systemd/system/punktfunk-client-update.service"
 install -Dm0644 packaging/linux/49-punktfunk-client-update.rules \
                 "$STAGE/usr/share/polkit-1/rules.d/49-punktfunk-client-update.rules"
+# The punktfunk-update group, from the same file the host package ships under its own name.
+install -Dm0644 packaging/linux/punktfunk.sysusers \
+                "$STAGE/usr/lib/sysusers.d/punktfunk-client.conf"
 # Install-kind + channel marker for the CLIENT, read by `punktfunk-client --check-update`
 # (planning: host-update-from-web-console.md §4.1). Its own directory, matching the RPM. A
 # canary build's version carries `~ciN`; anything else is stable.
@@ -193,10 +196,8 @@ cat > "$STAGE/DEBIAN/postinst" <<'EOF'
 #!/bin/sh
 set -e
 if [ "$1" = "configure" ]; then
-    # The (empty) opt-in group for one-tap client updates — nobody is auto-added. The host
-    # package's postinst creates the same group; addgroup is idempotent, so whichever is
-    # configured first wins and the other is a no-op.
-    getent group punktfunk-update >/dev/null 2>&1 || addgroup --system punktfunk-update 2>/dev/null || true
+    # dpkg applies no sysusers.d file by itself.
+    systemd-sysusers punktfunk-client.conf >/dev/null 2>&1 || true
     # Pick up the DualSense hidraw rule without a reboot (best-effort, no-op in containers).
     udevadm control --reload-rules 2>/dev/null || true
     udevadm trigger --subsystem-match=hidraw 2>/dev/null || true

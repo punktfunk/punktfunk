@@ -79,6 +79,8 @@ on:
       - 'packaging/linux/*.service'
       - 'packaging/linux/*.sh'
       - 'packaging/linux/*.tmpfiles'
+      - 'packaging/linux/*.sysusers'
+      - 'packaging/linux/payload.txt'
       - 'packaging/linux/seat-*'
       - 'packaging/linux/door-*'
       - 'packaging/linux/*.xml'
@@ -109,6 +111,7 @@ on:
       - 'scripts/punktfunk-web.service'
       - 'scripts/web-init.sh'
       - 'scripts/ci/assert-cap-matrix.sh'
+      - 'scripts/ci/assert-payload-parity.sh'
       - 'scripts/ci/check-dualsense-ucm.sh'
       - 'scripts/ci/ensure-sccache.sh'
       - 'scripts/ci/gitea-release.sh'
@@ -313,6 +316,12 @@ jobs:
           # Only the main host package carries binaries; -debuginfo/-debugsource and the
           # client/web/scripting subpackages ship neither and are skipped by the script itself.
           bash scripts/ci/assert-cap-matrix.sh dist/punktfunk-[0-9]*.rpm
+
+      # Every path packaging/linux/payload.txt names, read out of the built host and client rpms.
+      - name: Assert the shared payload (rpm)
+        run: |
+          bash scripts/ci/assert-payload-parity.sh --self-test
+          bash scripts/ci/assert-payload-parity.sh dist/punktfunk-[0-9]*.rpm dist/punktfunk-client-[0-9]*.rpm
 
       - name: Publish to the Gitea RPM registry
         env:

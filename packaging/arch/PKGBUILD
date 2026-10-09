@@ -238,6 +238,10 @@ package_punktfunk-host() {
     "$pkgdir/usr/lib/systemd/system/punktfunk-update.service"
   install -Dm0644 "$R/packaging/linux/49-punktfunk-update.rules" \
     "$pkgdir/usr/share/polkit-1/rules.d/49-punktfunk-update.rules"
+  # The host state punktfunk-host.install shares with every other format, relocated like pf-update,
+  # and the groups it creates (pacman's sysusers hook applies the file too).
+  install -Dm0755 "$R/packaging/linux/post-install.sh" "$pkgdir/usr/lib/punktfunk/post-install"
+  install -Dm0644 "$R/packaging/linux/punktfunk.sysusers" "$pkgdir/usr/lib/sysusers.d/punktfunk.conf"
   # An upgrade of any punktfunk server package restarts the running services, once per transaction.
   install -Dm0755 "$R/packaging/linux/restart-user-units.sh" "$pkgdir/usr/lib/punktfunk/restart-user-units"
   install -Dm0644 "$R/packaging/arch/punktfunk-restart.hook" \
@@ -400,6 +404,9 @@ package_punktfunk-client() {
     "$pkgdir/usr/lib/systemd/system/punktfunk-client-update.service"
   install -Dm0644 "$R/packaging/linux/49-punktfunk-client-update.rules" \
     "$pkgdir/usr/share/polkit-1/rules.d/49-punktfunk-client-update.rules"
+  # The punktfunk-update group, from the file the host ships under its own name.
+  install -Dm0644 "$R/packaging/linux/punktfunk.sysusers" \
+    "$pkgdir/usr/lib/sysusers.d/punktfunk-client.conf"
   # Install-kind + channel marker for the CLIENT, read by `punktfunk-client --check-update`
   # (planning: host-update-from-web-console.md §4.1). Its own directory, matching the RPM (where
   # the host subpackage's %{_datadir}/punktfunk/* glob would otherwise co-own a sibling file) —

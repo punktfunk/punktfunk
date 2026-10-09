@@ -105,8 +105,6 @@ cat > "$STAGE/DEBIAN/postinst" <<'EOF'
 #!/bin/sh
 set -e
 if [ "$1" = "configure" ]; then
-    # The seat users join it and tmpfiles.d names it; the host package creates it too.
-    getent group punktfunk >/dev/null 2>&1 || addgroup --system punktfunk 2>/dev/null || true
     if command -v systemd-tmpfiles >/dev/null 2>&1; then
         systemd-tmpfiles --create /usr/lib/tmpfiles.d/punktfunk-seats.conf || true
     fi
