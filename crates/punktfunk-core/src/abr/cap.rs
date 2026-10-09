@@ -435,7 +435,7 @@ mod tests {
         let cap = c.link_cap.kbps().expect("latched");
         c.on_mode_switch();
         assert_eq!(c.link_cap.kbps(), Some(cap));
-        assert!(c.decode_cap.kbps().is_none());
+        assert!(c.decode.cap.kbps().is_none());
     }
 
     /// The climb holds under a latched wall instead of walking into it.
@@ -699,13 +699,13 @@ mod tests {
         let start = Instant::now();
         let mut tick = 0;
         disarm_encode(&mut c, start, &mut tick);
-        assert_eq!(c.encode_down.reprobe_after(), CAP_REPROBE_WINDOWS_MIN);
+        assert_eq!(c.encode.down.reprobe_after(), CAP_REPROBE_WINDOWS_MIN);
 
         // One window short of the run is not enough.
         clean_run(&mut c, start, &mut tick, CAP_REPROBE_WINDOWS_MIN - 1);
-        assert!(c.encode_down.disarmed());
+        assert!(c.encode.down.disarmed());
         clean_run(&mut c, start, &mut tick, 1);
-        assert!(!c.encode_down.disarmed());
+        assert!(!c.encode.down.disarmed());
 
         // Re-armed: a fresh excursion backs off.
         assert!(encode_choke(&mut c, start, &mut tick, 40_000).is_some());
@@ -720,10 +720,10 @@ mod tests {
         let mut tick = 0;
         disarm_encode(&mut c, start, &mut tick);
         clean_run(&mut c, start, &mut tick, CAP_REPROBE_WINDOWS_MIN);
-        assert!(!c.encode_down.disarmed());
+        assert!(!c.encode.down.disarmed());
         // Re-armed; contention still there.
         disarm_encode(&mut c, start, &mut tick);
-        assert_eq!(c.encode_down.reprobe_after(), CAP_REPROBE_WINDOWS_MIN * 2);
+        assert_eq!(c.encode.down.reprobe_after(), CAP_REPROBE_WINDOWS_MIN * 2);
     }
 
     #[test]
@@ -747,11 +747,11 @@ mod tests {
             .is_some());
         clean_run(&mut c, start, &mut tick, CAP_REPROBE_WINDOWS_MIN - 1);
         assert!(
-            c.encode_down.disarmed(),
+            c.encode.down.disarmed(),
             "the spoiled window must restart the run"
         );
         clean_run(&mut c, start, &mut tick, 1);
-        assert!(!c.encode_down.disarmed());
+        assert!(!c.encode.down.disarmed());
     }
 
     #[test]
@@ -769,7 +769,7 @@ mod tests {
             "the encoder did not follow, so the notch is given back"
         );
         c.on_ack(20_000, None);
-        assert!(c.encode_down.disarmed());
+        assert!(c.encode.down.disarmed());
 
         // Same excursion no longer moves the rate…
         assert_eq!(encode_choke(&mut c, start, &mut tick, 20_000), None);
@@ -796,8 +796,8 @@ mod tests {
             None,
             "a notch the encoder answered asks for nothing back"
         );
-        assert!(!c.encode_down.disarmed());
-        assert!(c.encode_probe.is_none(), "and the step is settled");
+        assert!(!c.encode.down.disarmed());
+        assert!(c.encode.probe.is_none(), "and the step is settled");
         let next = encode_choke(&mut c, start, &mut tick, 40_000)
             .expect("the next rise takes the next notch");
         assert_eq!(next, c.current_kbps - c.current_kbps / 8);
@@ -834,8 +834,8 @@ mod tests {
             }),
             Some(14_000)
         );
-        assert!(c.encode_probe.is_none());
-        assert!(!c.encode_down.disarmed());
+        assert!(c.encode.probe.is_none());
+        assert!(!c.encode.down.disarmed());
     }
 
     #[test]
@@ -853,11 +853,11 @@ mod tests {
         let at = c.current_kbps;
         let r1 = stall_choke(&mut c, start, &mut t).expect("stall damage still backs off");
         assert!(
-            c.decode_cap.kbps().is_none(),
+            c.decode.cap.kbps().is_none(),
             "one starved window must not latch"
         );
         assert_eq!(
-            c.decode_backoff_kbps, 0,
+            c.decode.backoff_kbps, 0,
             "a starved window is not a knee sample — no reference recorded"
         );
         c.on_ack(r1, None);
@@ -865,7 +865,7 @@ mod tests {
         let r2 = stall_choke(&mut c, start, &mut t).expect("second stall edge backs off too");
         c.on_ack(r2, None);
         assert!(
-            c.decode_cap.kbps().is_none(),
+            c.decode.cap.kbps().is_none(),
             "a starved pair at the same rate must not latch a phantom knee"
         );
     }
@@ -884,18 +884,18 @@ mod tests {
         let knee = c.current_kbps;
         let r1 = choke(&mut c, start, &mut t).expect("real choke backs off");
         assert_eq!(
-            c.decode_backoff_kbps, knee,
+            c.decode.backoff_kbps, knee,
             "real choke records the reference"
         );
         c.on_ack(r1, None);
         climb_to(&mut c, start, &mut t, knee - knee / DECODE_CAP_SIMILAR_DIV);
         let r2 = stall_choke(&mut c, start, &mut t).expect("stall edge backs off");
         assert_eq!(
-            c.decode_backoff_kbps, knee,
+            c.decode.backoff_kbps, knee,
             "the starved window must not erase the real reference"
         );
         assert!(
-            c.decode_cap.kbps().is_none(),
+            c.decode.cap.kbps().is_none(),
             "and must not latch against it"
         );
         c.on_ack(r2, None);
@@ -903,7 +903,7 @@ mod tests {
         let rate = c.current_kbps;
         choke(&mut c, start, &mut t).expect("genuine re-climb choke backs off");
         assert_eq!(
-            c.decode_cap.kbps(),
+            c.decode.cap.kbps(),
             Some(rate - rate / 16),
             "the genuine pair still latches around the starved interruption"
         );
@@ -929,7 +929,7 @@ mod tests {
                 // Cap in force at decision time. Re-probe may lift it; the link
                 // ceiling must not.
                 assert!(
-                    k <= c.decode_cap.kbps().unwrap(),
+                    k <= c.decode.cap.kbps().unwrap(),
                     "climb past the decode cap: {k}"
                 );
                 max_req = max_req.max(k);
@@ -958,7 +958,7 @@ mod tests {
             })
             .expect("flush must back off");
         assert_eq!(r1, 350_000);
-        assert!(c.decode_cap.kbps().is_none());
+        assert!(c.decode.cap.kbps().is_none());
         c.on_ack(r1, None);
         // …loss-driven backoff at the re-climbed rate breaks the streak…
         climb_to(&mut c, start, &mut t, 460_000);
@@ -971,9 +971,9 @@ mod tests {
             })
             .expect("loss must back off");
         t += 1;
-        assert!(c.decode_cap.kbps().is_none());
+        assert!(c.decode.cap.kbps().is_none());
         assert_eq!(
-            c.decode_backoff_kbps, 0,
+            c.decode.backoff_kbps, 0,
             "a climbed-to non-decode backoff must reset the knee reference"
         );
         c.on_ack(r2, None);
@@ -988,7 +988,7 @@ mod tests {
             })
             .expect("flush must back off");
         t += 1;
-        assert!(c.decode_cap.kbps().is_none());
+        assert!(c.decode.cap.kbps().is_none());
         c.on_ack(r3, None);
         // …dissimilar climbed-to rates share no knee.
         let dissimilar_target = c.current_kbps + 20_000;
@@ -1001,7 +1001,7 @@ mod tests {
                 ..WindowSample::at(ticks(start, t))
             })
             .expect("flush must back off");
-        assert!(c.decode_cap.kbps().is_none());
+        assert!(c.decode.cap.kbps().is_none());
     }
 
     #[test]
@@ -1023,7 +1023,7 @@ mod tests {
             });
             t += 1;
         }
-        assert_eq!(c.decode_cap.kbps(), Some(knee + knee / 8));
+        assert_eq!(c.decode.cap.kbps(), Some(knee + knee / 8));
     }
 
     #[test]
@@ -1035,7 +1035,7 @@ mod tests {
         let mut t = 0;
         let _ = latch_knee(&mut c, start, &mut t);
         c.on_mode_switch();
-        assert!(c.decode_cap.kbps().is_none());
+        assert!(c.decode.cap.kbps().is_none());
         assert_eq!(c.ceiling_kbps, 900_000);
     }
 
@@ -1074,8 +1074,8 @@ mod tests {
             })
             .expect("flush choke must back off");
         t += 1;
-        assert!(c.decode_cap.kbps().is_none());
-        assert_eq!(c.decode_backoff_kbps, first);
+        assert!(c.decode.cap.kbps().is_none());
+        assert_eq!(c.decode.backoff_kbps, first);
         c.on_ack(r1, None);
         // Two consecutive ~26 ms decode-bad windows: ordinary path, latch.
         climb_to(&mut c, start, &mut t, 440_000);
@@ -1102,7 +1102,7 @@ mod tests {
             Some(((second as u64 * 7 / 10) as u32).max(FLOOR_KBPS))
         );
         assert_eq!(
-            c.decode_cap.kbps(),
+            c.decode.cap.kbps(),
             Some(second - second / 16),
             "two decode-bad windows are knee evidence"
         );
@@ -1121,7 +1121,7 @@ mod tests {
             t += 1;
         }
         let r1 = choke(&mut c, start, &mut t).expect("knee choke must back off");
-        assert_eq!(c.decode_backoff_kbps, 500_000);
+        assert_eq!(c.decode.backoff_kbps, 500_000);
         c.on_ack(r1, None);
         t += 2;
         let r2 = c
@@ -1136,18 +1136,18 @@ mod tests {
             .expect("drain flush must back off");
         t += 1;
         assert!(
-            c.decode_cap.kbps().is_none(),
+            c.decode.cap.kbps().is_none(),
             "a drain backoff must not latch"
         );
         assert_eq!(
-            c.decode_backoff_kbps, 500_000,
+            c.decode.backoff_kbps, 500_000,
             "…nor erase the knee reference"
         );
         c.on_ack(r2, None);
         climb_to(&mut c, start, &mut t, 460_000);
         let rate = c.current_kbps;
         choke(&mut c, start, &mut t).expect("re-climb choke must back off");
-        assert_eq!(c.decode_cap.kbps(), Some(rate - rate / 16));
+        assert_eq!(c.decode.cap.kbps(), Some(rate - rate / 16));
     }
 
     #[test]
@@ -1171,7 +1171,7 @@ mod tests {
             })
             .expect("keyframe storm must back off");
         t += 1;
-        assert!(c.decode_cap.kbps().is_none());
+        assert!(c.decode.cap.kbps().is_none());
         c.on_ack(r1, None);
         climb_to(&mut c, start, &mut t, 280_000);
         let rate = c.current_kbps;
@@ -1184,7 +1184,7 @@ mod tests {
                 ..WindowSample::at(ticks(start, t))
             })
             .expect("second storm must back off");
-        assert_eq!(c.decode_cap.kbps(), Some(rate - rate / 16));
+        assert_eq!(c.decode.cap.kbps(), Some(rate - rate / 16));
     }
 
     #[test]
@@ -1208,7 +1208,7 @@ mod tests {
             })
             .expect("clean storm must back off");
         t += 1;
-        assert_eq!(c.decode_backoff_kbps, 300_000);
+        assert_eq!(c.decode.backoff_kbps, 300_000);
         c.on_ack(r1, None);
         climb_to(&mut c, start, &mut t, 280_000);
         t += 2;
@@ -1221,9 +1221,9 @@ mod tests {
                 ..WindowSample::at(ticks(start, t))
             })
             .expect("lossy storm must back off");
-        assert!(c.decode_cap.kbps().is_none());
+        assert!(c.decode.cap.kbps().is_none());
         assert_eq!(
-            c.decode_backoff_kbps, 0,
+            c.decode.backoff_kbps, 0,
             "a loss-attributed storm must reset the knee reference"
         );
     }
@@ -1260,9 +1260,9 @@ mod tests {
             }),
             Some(350_000)
         );
-        assert!(c.decode_cap.kbps().is_none());
+        assert!(c.decode.cap.kbps().is_none());
         assert_eq!(
-            c.decode_backoff_kbps, 0,
+            c.decode.backoff_kbps, 0,
             "a mixed-attribution backoff must reset the knee reference"
         );
     }

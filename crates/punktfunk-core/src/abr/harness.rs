@@ -95,7 +95,7 @@ pub(super) fn disarm_encode(c: &mut BitrateController, start: Instant, tick: &mu
         "the rate the encoder never answered comes back"
     );
     c.on_ack(restore, None);
-    assert!(c.encode_down.disarmed());
+    assert!(c.encode.down.disarmed());
 }
 
 /// Windows carrying `level` until one asks for a rate, at most `n`. Contention
@@ -178,12 +178,12 @@ pub(super) fn latch_knee(c: &mut BitrateController, start: Instant, tick: &mut u
     }
     let knee = c.current_kbps;
     let r1 = choke(c, start, tick).expect("first choke must back off");
-    assert!(c.decode_cap.kbps().is_none(), "one event must not latch");
+    assert!(c.decode.cap.kbps().is_none(), "one event must not latch");
     c.on_ack(r1, None);
     climb_to(c, start, tick, knee - knee / DECODE_CAP_SIMILAR_DIV);
     let rate = c.current_kbps;
     let r2 = choke(c, start, tick).expect("re-climb choke must back off");
-    assert_eq!(c.decode_cap.kbps(), Some(rate - rate / 16));
+    assert_eq!(c.decode.cap.kbps(), Some(rate - rate / 16));
     c.on_ack(r2, None);
     rate - rate / 16
 }
