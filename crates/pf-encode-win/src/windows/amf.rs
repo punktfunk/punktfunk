@@ -14,7 +14,7 @@
 
 use super::policy::{intra_refresh_period, intra_refresh_requested, ltr_test_force_at};
 use super::{ChromaFormat, Codec, EncodedFrame, Encoder, EncoderCaps};
-use crate::retrieve::{AuQueue, FirstAuLog, RetrieveThread};
+use crate::retrieve::{poll_budget_ms, AuQueue, RetrieveThread};
 use anyhow::{anyhow, bail, Context, Result};
 use pf_frame::{CapturedFrame, FramePayload, PixelFormat};
 use std::collections::VecDeque;
@@ -902,7 +902,7 @@ fn input_ring(
 }
 
 /// Process-wide count of successful `Init`s. A climbing number with no following first-AU log
-/// ([`FirstAuLog`]) is a silent VCN-session wedge.
+/// ([`AuQueue::take_ready`]) is a silent VCN-session wedge.
 static AMF_CONTEXTS_OPENED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 /// How long the retrieve thread lets `QueryOutput` block before it looks at the stop flag. The
@@ -1035,7 +1035,6 @@ struct Inner {
     held: VecDeque<ID3D11Texture2D>,
     /// Last `*InHDRMetadata` pushed to this component — re-push on change or rebuild.
     hdr_pushed: Option<pf_frame::HdrMeta>,
-    first_au: FirstAuLog,
 }
 
 pub struct AmfEncoder {
@@ -1483,7 +1482,6 @@ impl AmfEncoder {
             next: 0,
             held: VecDeque::new(),
             hdr_pushed: None,
-            first_au: FirstAuLog::new("AMF produced its first AU on this context"),
         });
         Ok(())
     }
@@ -2082,25 +2080,14 @@ impl Encoder for AmfEncoder {
         }
     }
 
-    /// Bounded-blocking poll: spin `QueryOutput` with ~250 µs sleeps up to
-    /// `min(3/4 frame interval, 12 ms)`. Expiry is `Ok(None)` — watchdog arbitrates a real wedge.
-    /// Hands out `submit`'s buffered AUs first.
+    /// Wait up to [`poll_budget_ms`] for the retrieve thread's oldest AU. Expiry is `Ok(None)`;
+    /// the watchdog arbitrates a real wedge. Any AU proves this context encodes, which ends
+    /// the no-output streak.
     fn poll(&mut self) -> Result<Option<EncodedFrame>> {
-        // Scope the inner borrow so a produced AU can clear `resets_without_output` on `self`.
-        let au = {
-            let Some(inner) = self.inner.as_mut() else {
-                return Ok(None);
-            };
-            // The same bound as before, now spent on the retrieve thread's event rather than on
-            // a sample loop, so nothing else on this thread waits behind it.
-            let budget_ms = (750 / self.fps.max(1)).clamp(1, 12);
-            let au = inner.retrieve.q.take_ready(budget_ms)?;
-            if let Some(au) = &au {
-                inner.first_au.note(au);
-            }
-            au
+        let Some(inner) = self.inner.as_ref() else {
+            return Ok(None);
         };
-        // Any AU proves this context encodes — reset the no-output streak.
+        let au = inner.retrieve.q.take_ready(poll_budget_ms(self.fps))?;
         if au.is_some() {
             self.resets_without_output = 0;
         }

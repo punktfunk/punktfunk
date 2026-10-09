@@ -16,7 +16,7 @@
 
 use super::policy::{intra_refresh_requested, ltr_test_force_at};
 use super::{ChromaFormat, Codec, EncodedFrame, Encoder, EncoderCaps};
-use crate::retrieve::{AuQueue, FirstAuLog, RetrieveThread};
+use crate::retrieve::{poll_budget_ms, AuQueue, RetrieveThread};
 use anyhow::{anyhow, bail, Context, Result};
 use libvpl_sys as vpl;
 use pf_frame::{CapturedFrame, FramePayload, PixelFormat};
@@ -833,7 +833,6 @@ struct Inner {
     dctx: ID3D11DeviceContext,
     bs_bytes: usize,
     frames_submitted: u64,
-    first_au: FirstAuLog,
     /// Warn once if the runtime hands out array textures (subresource-0 copy would be wrong).
     array_warned: bool,
 }
@@ -1221,7 +1220,6 @@ impl QsvEncoder {
             dctx,
             bs_bytes,
             frames_submitted: 0,
-            first_au: FirstAuLog::new("QSV produced its first AU on this session"),
             array_warned: false,
         });
         Ok(())
@@ -1826,21 +1824,13 @@ impl Encoder for QsvEncoder {
         }
     }
 
-    /// Wait up to `min(3/4 frame interval, 12 ms)` for the oldest AU. Expiry is `Ok(None)`.
+    /// Wait up to [`poll_budget_ms`] for the sync thread's oldest AU. Expiry is `Ok(None)`.
+    /// Any AU ends the no-output streak.
     fn poll(&mut self) -> Result<Option<EncodedFrame>> {
-        let au = {
-            let Some(inner) = self.inner.as_mut() else {
-                return Ok(None);
-            };
-            // The same bound as before, now spent on the sync thread's event rather than inside
-            // `SyncOperation`, so nothing else on this thread waits behind it.
-            let budget_ms = (750 / self.fps.max(1)).clamp(1, 12);
-            let au = inner.retrieve.q.take_ready(budget_ms)?;
-            if let Some(au) = &au {
-                inner.first_au.note(au);
-            }
-            au
+        let Some(inner) = self.inner.as_ref() else {
+            return Ok(None);
         };
+        let au = inner.retrieve.q.take_ready(poll_budget_ms(self.fps))?;
         if au.is_some() {
             self.resets_without_output = 0;
         }
@@ -1903,7 +1893,6 @@ impl Encoder for QsvEncoder {
             }
             inner.retrieve.q.reset();
             inner.frames_submitted = 0;
-            inner.first_au.rearm();
             inner.session.0
         };
         match self.init_encode(rebuilt) {
