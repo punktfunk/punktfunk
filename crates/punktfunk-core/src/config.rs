@@ -392,24 +392,22 @@ pub const fn max_shard_payload() -> usize {
     MAX_DATAGRAM_BYTES - WIRE_OVERHEAD
 }
 
-/// Bytes of a 1500-MTU datagram the default shards leave empty. Growing into them
-/// changes every host's `Welcome::shard_payload`.
-const MTU1500_UNUSED: usize = 18;
+/// Default IPv4 shard payload, even for FEC. It seals to 1454 B, a 1482-byte IP
+/// packet that fits a PPPoE link (MTU 1492) before the MTU probe settles. The 1426
+/// that fills a 1500 MTU would fragment there; either fragment lost drops the datagram.
+/// Changing it changes every host's `Welcome::shard_payload`.
+const DEFAULT_SHARD_PAYLOAD: usize = 1408;
 
-/// Default shard payload whose sealed IPv4/UDP datagram fits a 1500-byte MTU:
-/// `1500 − 20 − 8 − WIRE_OVERHEAD − MTU1500_UNUSED` = 1408. Past the 1426 fit the
-/// kernel IP-fragments every video datagram; either fragment lost drops the datagram.
+/// Default shard payload for an IPv4 peer, `DEFAULT_SHARD_PAYLOAD`.
 pub const fn mtu1500_shard_payload() -> usize {
-    let p = 1500 - 20 - 8 - WIRE_OVERHEAD - MTU1500_UNUSED;
-    p - p % 2 // FEC requires even shards
+    DEFAULT_SHARD_PAYLOAD
 }
 
-/// IPv6 sibling of [`mtu1500_shard_payload`]: `1500 − 40 − 8 − WIRE_OVERHEAD −
-/// MTU1500_UNUSED` = 1388. IPv6 routers never fragment; an oversized datagram is
-/// ICMPv6 Packet-Too-Big or a silent blackhole, not a degrade.
+/// IPv6 sibling of [`mtu1500_shard_payload`]: 20 B less for IPv6's longer header, so
+/// both families put the same 1482-byte IP packet on the wire. IPv6 routers never
+/// fragment; an oversized datagram is ICMPv6 Packet-Too-Big or a silent blackhole.
 pub const fn mtu1500_shard_payload_v6() -> usize {
-    let p = 1500 - 40 - 8 - WIRE_OVERHEAD - MTU1500_UNUSED;
-    p - p % 2 // FEC requires even shards
+    DEFAULT_SHARD_PAYLOAD - (40 - 20)
 }
 
 /// MTU-safe shard payload for `peer`. Genuine IPv6 uses the v6 size; IPv4 and
@@ -598,26 +596,29 @@ mod tests {
         assert!(c.validate().is_err());
     }
 
-    /// Pin 1500-MTU IPv4 math: the sealed default and [`MTU1500_UNUSED`] fill 1472
-    /// (`1500 − 20 − 8`) exactly.
+    /// Pin IPv4 math: the sealed default is 1454 B, so its IP packet fits a PPPoE
+    /// MTU (1492) and the 1500-MTU UDP payload (1472).
     #[test]
     fn mtu1500_shard_payload_never_fragments() {
         let p = mtu1500_shard_payload();
         assert_eq!(p % 2, 0, "FEC requires even shards");
         assert!(p <= max_shard_payload());
         assert_eq!(p, 1408);
-        assert_eq!(sealed_datagram_bytes(p) + MTU1500_UNUSED, 1472);
+        assert_eq!(sealed_datagram_bytes(p), 1454);
+        assert_eq!(sealed_datagram_bytes(p) + 20 + 8, 1482);
+        assert!(sealed_datagram_bytes(p) <= 1472);
     }
 
-    /// Pin IPv6 math: the sealed default and [`MTU1500_UNUSED`] fill 1452
-    /// (`1500 − 40 − 8`) exactly. v6 routers do not fragment, so overshoot blackholes.
+    /// Pin IPv6 math: the same 1482-byte IP packet as IPv4, inside the 1500-MTU v6
+    /// UDP payload (1452). v6 routers do not fragment, so overshoot blackholes.
     #[test]
     fn mtu1500_shard_payload_v6_never_blackholes() {
         let p = mtu1500_shard_payload_v6();
         assert_eq!(p % 2, 0, "FEC requires even shards");
         assert!(p <= max_shard_payload());
         assert_eq!(p, 1388);
-        assert_eq!(sealed_datagram_bytes(p) + MTU1500_UNUSED, 1452);
+        assert_eq!(sealed_datagram_bytes(p) + 40 + 8, 1482);
+        assert!(sealed_datagram_bytes(p) <= 1452);
     }
 
     /// QUIC MTU discovery probes to the IPv4 UDP payload, which the sealed default fits.
