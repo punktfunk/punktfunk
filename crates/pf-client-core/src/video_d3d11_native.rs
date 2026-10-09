@@ -1415,11 +1415,8 @@ mod parity {
 
     use std::collections::HashMap;
 
-    use pf_bitstream::testing::split_h264_aus;
-    use pf_bitstream::testing::split_h265_aus;
-    use pf_bitstream::testing::split_ivf;
-    use pf_dxvadec::H264Planner;
-    use pf_dxvadec::H265Planner;
+    use pf_bitstream::testing::parity;
+    use pf_bitstream::testing::parity::Fixture;
     use sha2::Digest;
     use windows::Win32::d3d11::ID3D11Resource;
     use windows::Win32::d3d11::D3D11_CPU_ACCESS_READ;
@@ -1431,81 +1428,6 @@ mod parity {
 
     use super::*;
 
-    const TEST_25FPS_H264: &[u8] = pf_bitstream::testing::H264_25FPS;
-
-    const TEST_25FPS_H265: &[u8] = pf_bitstream::testing::H265_25FPS;
-
-    /// libavcodec NV12 hashes. Same files as the Vulkan rung, not a copy.
-    const GOLDENS_H264: &str = include_str!("../../pf-vkdecode/tests/data/test-25fps.nv12.sha256");
-
-    /// Host low-delay H.264: `max_num_reorder_frames = 0` and DPB depth equal to the
-    /// reference count, so sliding-window unmark and eviction land in one AU. The
-    /// vendored vector cannot reach that shape. Provenance is in the golden header.
-    const LOWDELAY_H264: &[u8] =
-        include_bytes!("../../pf-vkdecode/tests/data/lowdelay-640x480.h264");
-    const GOLDENS_LOWDELAY: &str =
-        include_str!("../../pf-vkdecode/tests/data/lowdelay-640x480.nv12.sha256");
-    const LOWDELAY_FRAME_COUNT: usize = 120;
-    const GOLDENS_H265: &str =
-        include_str!("../../pf-vkdecode/tests/data/test-25fps-h265.nv12.sha256");
-
-    /// Host low-delay HEVC. `H265Planner` snapshots `dpb_refs` after `decode_rps`,
-    /// so `plan_to_dxva_h265` still releases inline. Provenance is in the golden header.
-    const LOWDELAY_H265: &[u8] =
-        include_bytes!("../../pf-vkdecode/tests/data/lowdelay-640x480.h265");
-    const GOLDENS_LOWDELAY_H265: &str =
-        include_str!("../../pf-vkdecode/tests/data/lowdelay-640x480-h265.nv12.sha256");
-
-    /// Separate from [`LOWDELAY_FRAME_COUNT`]: two encoder runs; a length change
-    /// must fail on its own leg.
-    const LOWDELAY_H265_FRAME_COUNT: usize = 120;
-
-    const FRAME_COUNT: usize = 250;
-
-    /// Main 10: 50 frames of 320x240 HEVC 4:2:0, hashed as tightly packed P010.
-    /// Provenance and why P010 (not `yuv420p10le`) are in the golden header.
-    const TEST_MAIN10_H265: &[u8] = include_bytes!("../../pf-vkdecode/tests/data/test-main10.h265");
-    const GOLDENS_MAIN10: &str =
-        include_str!("../../pf-vkdecode/tests/data/test-main10.p010.sha256");
-    const MAIN10_FRAME_COUNT: usize = 50;
-
-    /// Vendored AV1 vector — IVF, not an elementary stream. Same file as `pf-vkdecode`.
-    const TEST_25FPS_AV1: &[u8] = pf_bitstream::testing::AV1_25FPS;
-
-    /// libavcodec per-delivered-frame NV12 hashes for the AV1 vector (320x240).
-    const GOLDENS_AV1: &str =
-        include_str!("../../pf-vkdecode/tests/data/test-25fps-av1.nv12.sha256");
-
-    /// 250 temporal units, 274 decoded frames, 250 shown. The 24 hidden pictures
-    /// are why the AV1 leg is not a third copy of the other two.
-    const AV1_UNIT_COUNT: usize = 250;
-    const AV1_DECODED_COUNT: usize = 274;
-    const AV1_SHOWN_COUNT: usize = 250;
-
-    const DISPLAY_AV1: (u32, u32) = (320, 240);
-
-    /// Host AV1 at 4K: the only resolution this encoder emits more than one tile
-    /// (`tile_cols = 1, tile_rows = 2`, both in one Tile Group OBU). A file fixture
-    /// is not the wire path — it covers decode, not fragmentation or reassembly.
-    const LOWDELAY_AV1: &[u8] =
-        include_bytes!("../../pf-vkdecode/tests/data/lowdelay-3840x2160.ivf.av1");
-    const GOLDENS_LOWDELAY_AV1: &str =
-        include_str!("../../pf-vkdecode/tests/data/lowdelay-3840x2160-av1.nv12.sha256");
-
-    /// Three counts, never derived from each other. This host emits one shown
-    /// frame per unit, the opposite of the vendored 250 / 274 / 250.
-    const LOWDELAY_AV1_UNIT_COUNT: usize = 60;
-    const LOWDELAY_AV1_DECODED_COUNT: usize = 60;
-    const LOWDELAY_AV1_SHOWN_COUNT: usize = 60;
-    const DISPLAY_LOWDELAY_AV1: (u32, u32) = (3840, 2160);
-
-    fn golden_hashes(file: &'static str) -> Vec<&'static str> {
-        file.lines()
-            .map(str::trim)
-            .filter(|line| !line.is_empty() && !line.starts_with('#'))
-            .collect()
-    }
-
     fn sha256_hex(data: &[u8]) -> String {
         use std::fmt::Write as _;
         sha2::Sha256::digest(data)
@@ -1514,112 +1436,6 @@ mod parity {
                 let _ = write!(out, "{byte:02x}");
                 out
             })
-    }
-
-    /// Decode order and display order as `PicId`s, from a planner run alongside the
-    /// decoder. The planner is deterministic, so these ids match the rung's.
-    struct Order {
-        /// One id per decoded picture, in submission order. One per AU on H.264/H.265;
-        /// one per frame on AV1, where a unit can carry more than one.
-        decode: Vec<u64>,
-        /// Same ids in the planner's output (bumping) order, flush included.
-        display: Vec<u64>,
-        /// Ids each access unit decodes. AV1 only: the production entry takes whole
-        /// temporal units, so the harness needs this without a test accessor. Empty
-        /// on H.264/H.265, where [`Order::decode`] is already one id per unit.
-        per_unit: Vec<Vec<u64>>,
-    }
-
-    fn order_h264(aus: &[&[u8]]) -> Order {
-        let mut planner = H264Planner::new();
-        let mut order = Order {
-            decode: Vec::new(),
-            display: Vec::new(),
-            per_unit: Vec::new(),
-        };
-        for (index, au) in aus.iter().enumerate() {
-            let plan = planner
-                .plan_au(au)
-                .unwrap_or_else(|e| panic!("AU {index}: the clean vector must plan, got {e:?}"));
-            assert_eq!(
-                (plan.picture.display_crop.x, plan.picture.display_crop.y),
-                (0, 0),
-                "AU {index}: this rung refuses a non-zero conformance-window origin \
-                 (`display_of`), so a vector that had one could not be decoded here"
-            );
-            order.decode.push(
-                plan.dpb.stored.unwrap_or_else(|| {
-                    panic!("AU {index}: every picture of this vector is stored")
-                }),
-            );
-            order.display.extend(plan.dpb.outputs.iter().copied());
-        }
-        order.display.extend(planner.flush().outputs);
-        order
-    }
-
-    fn order_h265(aus: &[&[u8]]) -> Order {
-        let mut planner = H265Planner::new();
-        let mut order = Order {
-            decode: Vec::new(),
-            display: Vec::new(),
-            per_unit: Vec::new(),
-        };
-        for (index, au) in aus.iter().enumerate() {
-            let plan = planner
-                .plan_au(au)
-                .unwrap_or_else(|e| panic!("AU {index}: the clean vector must plan, got {e:?}"));
-            assert_eq!(
-                (plan.picture.display_crop.x, plan.picture.display_crop.y),
-                (0, 0),
-                "AU {index}: this rung refuses a non-zero conformance-window origin \
-                 (`display_of`)"
-            );
-            order.decode.push(
-                plan.dpb.stored.unwrap_or_else(|| {
-                    panic!("AU {index}: every picture of this vector is stored")
-                }),
-            );
-            order.display.extend(plan.dpb.outputs.iter().copied());
-        }
-        order.display.extend(planner.flush().outputs);
-        order
-    }
-
-    /// AV1 decode and display orders. One decoded picture per frame, not per unit.
-    /// `display` is the planner's output list; AV1 has no bumping, so no flush.
-    fn order_av1(units: &[&[u8]], render: (u32, u32)) -> Order {
-        let mut planner = pf_dxvadec::Av1Planner::new();
-        let mut order = Order {
-            decode: Vec::new(),
-            display: Vec::new(),
-            per_unit: Vec::new(),
-        };
-        for (index, unit) in units.iter().enumerate() {
-            let plans = planner
-                .plan_au(unit)
-                .unwrap_or_else(|e| panic!("unit {index}: the clean vector must plan, got {e:?}"));
-            let mut this_unit = Vec::new();
-            for plan in &plans {
-                assert!(
-                    plan.warnings.is_empty(),
-                    "unit {index}: a clean vector must plan without warnings, got {:?}",
-                    plan.warnings
-                );
-                assert_eq!(
-                    (plan.picture.render_width, plan.picture.render_height),
-                    render,
-                    "unit {index}: the goldens are the {render:?} render region"
-                );
-                if let Some(id) = plan.dpb.stored {
-                    order.decode.push(id);
-                    this_unit.push(id);
-                }
-                order.display.extend(plan.dpb.outputs.iter().copied());
-            }
-            order.per_unit.push(this_unit);
-        }
-        order
     }
 
     /// LUID of the adapter whose description contains `PF_DXVA_ADAPTER`. Prints
@@ -1757,31 +1573,33 @@ mod parity {
         }
     }
 
-    /// Decode `aus` through a real `NativeD3d11Decoder` and compare the planner's
-    /// display order against libavcodec's goldens.
-    fn parity_run(
-        codec: Codec,
-        stream: StreamFormat,
-        aus: &[&[u8]],
-        order: &Order,
+    /// Hashes in `by_id` that differ from `goldens` along `order`'s display order, the
+    /// first ten printed. A display id nothing decoded panics.
+    fn count_mismatches(
+        by_id: &HashMap<u64, String>,
+        order: &parity::Order,
         goldens: &[&str],
-        expected_aus: usize,
         label: &str,
-    ) {
-        assert_eq!(
-            aus.len(),
-            expected_aus,
-            "{label}: the vector must split into {expected_aus} access units — a \
-             different count means this file's splitter disagrees with pf-bitstream's, \
-             and nothing below it is meaningful"
-        );
-        assert_eq!(
-            order.display.len(),
-            goldens.len(),
-            "{label}: the planner outputs {} pictures, the goldens carry {}",
-            order.display.len(),
-            goldens.len()
-        );
+    ) -> usize {
+        let mut mismatches = 0usize;
+        for (n, (id, golden)) in order.display.iter().zip(goldens.iter()).enumerate() {
+            let got = by_id
+                .get(id)
+                .unwrap_or_else(|| panic!("display frame {n} names PicId {id}, never decoded"));
+            if got != golden {
+                if mismatches < 10 {
+                    eprintln!("{label}: display frame {n} (PicId {id}): {got} != {golden}");
+                }
+                mismatches += 1;
+            }
+        }
+        mismatches
+    }
+
+    /// Decode `f` through a real `NativeD3d11Decoder` and compare the planner's display
+    /// order against libavcodec's goldens.
+    fn parity_run(codec: Codec, stream: StreamFormat, f: &Fixture) {
+        let (aus, order, goldens, label) = (f.split(), f.order(), f.goldens(), f.label);
 
         let luid = pinned_adapter();
         let mut decoder = NativeD3d11Decoder::new(codec, stream, luid, false)
@@ -1816,18 +1634,7 @@ mod parity {
             by_id.insert(order.decode[index], sha256_hex(&bytes));
         }
 
-        let mut mismatches = 0usize;
-        for (n, (id, golden)) in order.display.iter().zip(goldens.iter()).enumerate() {
-            let got = by_id
-                .get(id)
-                .unwrap_or_else(|| panic!("display frame {n} names PicId {id}, never decoded"));
-            if got != golden {
-                if mismatches < 10 {
-                    eprintln!("{label}: display frame {n} (PicId {id}): {got} != {golden}");
-                }
-                mismatches += 1;
-            }
-        }
+        let mismatches = count_mismatches(&by_id, &order, &goldens, label);
         assert_eq!(
             mismatches,
             0,
@@ -1850,41 +1657,12 @@ mod parity {
     /// planner's output list, so hidden pictures are never looked up — a golden of
     /// what libavcodec delivers cannot contain them. Hidden-frame pixels are
     /// reached through production state (`per_unit` / slot map / `held`), the same
-    /// pair `show_existing_frame` reads.
+    /// pair `show_existing_frame` reads. The fixture's three counts are never derived
+    /// from each other, so one harness serves both AV1 shapes.
     ///
     /// The vendored vector has no `show_existing_frame`; that path stays unexercised.
-    fn av1_parity_run(units: &[&[u8]], order: &Order, goldens: &[&str]) {
-        av1_parity_run_against(
-            units,
-            order,
-            goldens,
-            AV1_UNIT_COUNT,
-            AV1_DECODED_COUNT,
-            AV1_SHOWN_COUNT,
-            "AV1",
-        );
-    }
-
-    /// [`av1_parity_run`] with caller-supplied counts. The three are parameters,
-    /// never derived: a harness that computed "hidden = 0" from either stream
-    /// would silently stop checking the other.
-    fn av1_parity_run_against(
-        units: &[&[u8]],
-        order: &Order,
-        goldens: &[&str],
-        unit_count: usize,
-        decoded_count: usize,
-        shown_count: usize,
-        label: &str,
-    ) {
-        assert_eq!(
-            units.len(),
-            unit_count,
-            "{label}: the IVF reader disagrees with the stream's temporal-unit count"
-        );
-        assert_eq!(order.decode.len(), decoded_count);
-        assert_eq!(order.per_unit.len(), units.len());
-        assert_eq!(order.display.len(), goldens.len());
+    fn av1_parity_run(f: &Fixture) {
+        let (units, order, goldens, label) = (f.split(), f.order(), f.goldens(), f.label);
 
         let luid = pinned_adapter();
         let mut decoder = NativeD3d11Decoder::new(Codec::Av1, StreamFormat::SDR_420_8, luid, false)
@@ -1934,37 +1712,27 @@ mod parity {
                 decoded += 1;
             }
         }
-        assert_eq!(decoded, decoded_count);
+        assert_eq!(decoded, f.decoded);
         assert_eq!(
-            presented, shown_count,
+            presented, f.shown,
             "{label}: every unit of this stream shows exactly one frame, so the \
-             production path must have handed back {shown_count} pictures"
+             production path must have handed back {} pictures",
+            f.shown
         );
-        let hidden = decoded_count - presented;
+        let hidden = f.decoded - presented;
         assert_eq!(
             hidden,
-            decoded_count - shown_count,
+            f.decoded - f.shown,
             "{label}: the rung must have decoded {} frames it never handed back — this \
              counts what `decode_av1` RETURNED against what it decoded, so a mismatch \
              on the vendored vector means the `!sub.show` suppression is not working \
              (or it stopped hiding frames, which `the_av1_vector_hides_frames…` would \
              catch first). On a stream with no hidden frames both sides are zero and \
              this is a tautology — deliberately, so one harness serves both shapes",
-            decoded_count - shown_count
+            f.decoded - f.shown
         );
 
-        let mut mismatches = 0usize;
-        for (n, (id, golden)) in order.display.iter().zip(goldens.iter()).enumerate() {
-            let got = by_id
-                .get(id)
-                .unwrap_or_else(|| panic!("display frame {n} names PicId {id}, never decoded"));
-            if got != golden {
-                if mismatches < 10 {
-                    eprintln!("{label}: display frame {n} (PicId {id}): {got} != {golden}");
-                }
-                mismatches += 1;
-            }
-        }
+        let mismatches = count_mismatches(&by_id, &order, &goldens, label);
         assert_eq!(
             mismatches,
             0,
@@ -1987,9 +1755,8 @@ mod parity {
     #[test]
     #[ignore = "diagnostic, needs a Windows D3D11 video device (see module docs)"]
     fn av1_divergence_map() {
-        let units = split_ivf(TEST_25FPS_AV1);
-        let order = order_av1(&units, DISPLAY_AV1);
-        let goldens = golden_hashes(GOLDENS_AV1);
+        let f = parity::AV1;
+        let (units, order, goldens) = (f.split(), f.order(), f.goldens());
 
         let mut facts: HashMap<u64, String> = HashMap::new();
         let mut hidden: std::collections::HashSet<u64> = std::collections::HashSet::new();
@@ -2111,95 +1878,44 @@ mod parity {
     #[test]
     #[ignore = "needs a Windows D3D11 video device (see module docs)"]
     fn av1_every_delivered_frame_hashes_bit_identical_to_libavcodec() {
-        let units = split_ivf(TEST_25FPS_AV1);
-        let order = order_av1(&units, DISPLAY_AV1);
-        av1_parity_run(&units, &order, &golden_hashes(GOLDENS_AV1));
+        av1_parity_run(&parity::AV1);
     }
 
     /// Host AV1 at the only resolution that emits more than one tile (`tile_rows = 2`).
-    /// The vendored vector is 1×1 tiles. A file, not the wire path; see [`LOWDELAY_AV1`].
+    /// The vendored vector is 1×1 tiles. See [`parity::AV1_LOWDELAY`].
     #[test]
     #[ignore = "needs a Windows D3D11 video device (see module docs)"]
     fn low_delay_host_av1_every_frame_hashes_bit_identical_to_libavcodec() {
-        let units = split_ivf(LOWDELAY_AV1);
-        let order = order_av1(&units, DISPLAY_LOWDELAY_AV1);
-        av1_parity_run_against(
-            &units,
-            &order,
-            &golden_hashes(GOLDENS_LOWDELAY_AV1),
-            LOWDELAY_AV1_UNIT_COUNT,
-            LOWDELAY_AV1_DECODED_COUNT,
-            LOWDELAY_AV1_SHOWN_COUNT,
-            "AV1 (low-delay host stream, 4K two-tile)",
-        );
+        av1_parity_run(&parity::AV1_LOWDELAY);
     }
 
     #[test]
     #[ignore = "needs a Windows D3D11 video device (see module docs)"]
     fn h264_every_frame_hashes_bit_identical_to_libavcodec() {
-        let aus = split_h264_aus(TEST_25FPS_H264);
-        let order = order_h264(&aus);
-        parity_run(
-            Codec::H264,
-            StreamFormat::SDR_420_8,
-            &aus,
-            &order,
-            &golden_hashes(GOLDENS_H264),
-            FRAME_COUNT,
-            "H.264",
-        );
+        parity_run(Codec::H264, StreamFormat::SDR_420_8, &parity::H264);
     }
 
     /// Host low-delay H.264. The vendored vector cannot reach CurrPic/RefFrameList
-    /// aliasing; this stream does. See [`LOWDELAY_H264`].
+    /// aliasing; this stream does. See [`parity::H264_LOWDELAY`].
     #[test]
     #[ignore = "needs a Windows D3D11 video device (see module docs)"]
     fn low_delay_host_h264_every_frame_hashes_bit_identical_to_libavcodec() {
-        let aus = split_h264_aus(LOWDELAY_H264);
-        let order = order_h264(&aus);
-        parity_run(
-            Codec::H264,
-            StreamFormat::SDR_420_8,
-            &aus,
-            &order,
-            &golden_hashes(GOLDENS_LOWDELAY),
-            LOWDELAY_FRAME_COUNT,
-            "H.264 (low-delay host stream)",
-        );
+        parity_run(Codec::H264, StreamFormat::SDR_420_8, &parity::H264_LOWDELAY);
     }
 
     #[test]
     #[ignore = "needs a Windows D3D11 video device (see module docs)"]
     fn h265_every_frame_hashes_bit_identical_to_libavcodec() {
-        let aus = split_h265_aus(TEST_25FPS_H265);
-        let order = order_h265(&aus);
-        parity_run(
-            Codec::H265,
-            StreamFormat::SDR_420_8,
-            &aus,
-            &order,
-            &golden_hashes(GOLDENS_H265),
-            FRAME_COUNT,
-            "H.265",
-        );
+        parity_run(Codec::H265, StreamFormat::SDR_420_8, &parity::H265);
     }
 
     /// Host low-delay HEVC. The vendored vector reorders, so it never puts an RPS
-    /// drop and its eviction in one AU. This stream does. See [`LOWDELAY_H265`].
+    /// drop and its eviction in one AU. This stream does; `H265Planner` snapshots
+    /// `dpb_refs` after `decode_rps`, so `plan_to_dxva_h265` still releases inline.
     #[test]
     #[ignore = "needs a Windows D3D11 video device (see module docs)"]
     fn low_delay_host_h265_every_frame_hashes_bit_identical_to_libavcodec() {
-        let aus = split_h265_aus(LOWDELAY_H265);
-        let order = order_h265(&aus);
-        parity_run(
-            Codec::H265,
-            StreamFormat::SDR_420_8,
-            &aus,
-            &order,
-            &golden_hashes(GOLDENS_LOWDELAY_H265),
-            LOWDELAY_H265_FRAME_COUNT,
-            "H.265 (low-delay host stream)",
-        );
+        parity_run(Codec::H265, StreamFormat::SDR_420_8, &parity::H265_LOWDELAY);
     }
 
     /// Ten-bit path. D3D11VA has no per-picture status, so a Main10 stream decoding
@@ -2208,148 +1924,10 @@ mod parity {
     #[test]
     #[ignore = "needs a Windows D3D11 video device (see module docs)"]
     fn main10_every_frame_hashes_bit_identical_to_libavcodec() {
-        let aus = split_h265_aus(TEST_MAIN10_H265);
-        let order = order_h265(&aus);
-        parity_run(
-            Codec::H265,
-            StreamFormat {
-                chroma_format_idc: 1,
-                bit_depth: 10,
-            },
-            &aus,
-            &order,
-            &golden_hashes(GOLDENS_MAIN10),
-            MAIN10_FRAME_COUNT,
-            "HEVC Main 10",
-        );
-    }
-
-    // CPU guards — not `#[ignore]`d. CI notices splitter/golden drift from pf-bitstream.
-
-    #[test]
-    fn the_local_splitter_agrees_with_the_planner_on_both_vectors() {
-        let h264 = split_h264_aus(TEST_25FPS_H264);
-        assert_eq!(h264.len(), FRAME_COUNT, "H.264 vector access units");
-        let order = order_h264(&h264);
-        assert_eq!(order.decode.len(), FRAME_COUNT);
-        assert_eq!(
-            order.display.len(),
-            golden_hashes(GOLDENS_H264).len(),
-            "the H.264 planner's output count must match the golden count"
-        );
-
-        let h265 = split_h265_aus(TEST_25FPS_H265);
-        assert_eq!(h265.len(), FRAME_COUNT, "H.265 vector access units");
-        let order = order_h265(&h265);
-        assert_eq!(order.decode.len(), FRAME_COUNT);
-        assert_eq!(
-            order.display.len(),
-            golden_hashes(GOLDENS_H265).len(),
-            "the H.265 planner's output count must match the golden count"
-        );
-    }
-
-    #[test]
-    fn the_main10_vector_really_is_ten_bit() {
-        let aus = split_h265_aus(TEST_MAIN10_H265);
-        assert_eq!(
-            aus.len(),
-            MAIN10_FRAME_COUNT,
-            "the Main 10 vector is {MAIN10_FRAME_COUNT} access units"
-        );
-        let order = order_h265(&aus);
-        assert_eq!(
-            order.display.len(),
-            golden_hashes(GOLDENS_MAIN10).len(),
-            "the planner's output count must match the Main 10 golden count"
-        );
-
-        // A regenerated 8-bit vector would make the Main10 GPU leg a second 8-bit
-        // run under a ten-bit name, and it would pass if the goldens were regenerated too.
-        let mut planner = H265Planner::new();
-        let plan = planner
-            .plan_au(aus[0])
-            .expect("the Main 10 vector's first access unit must plan");
-        assert_eq!(
-            (
-                plan.picture.chroma_format_idc,
-                plan.picture.bit_depth_luma_minus8,
-                plan.picture.bit_depth_chroma_minus8
-            ),
-            (1, 2, 2),
-            "the Main 10 vector must be 4:2:0 at ten bits"
-        );
-        assert_eq!(
-            (plan.picture.coded_width, plan.picture.coded_height),
-            (320, 240),
-            "the golden frame size is 320x240"
-        );
-    }
-
-    #[test]
-    fn the_ivf_reader_agrees_with_the_planner_and_the_av1_goldens() {
-        let units = split_ivf(TEST_25FPS_AV1);
-        assert_eq!(units.len(), AV1_UNIT_COUNT, "AV1 temporal units");
-        let order = order_av1(&units, DISPLAY_AV1);
-        assert_eq!(
-            order.decode.len(),
-            AV1_DECODED_COUNT,
-            "the AV1 vector decodes 274 frames"
-        );
-        assert_eq!(
-            order.display.len(),
-            golden_hashes(GOLDENS_AV1).len(),
-            "the AV1 planner's output count must match the golden count"
-        );
-        assert_eq!(order.display.len(), AV1_SHOWN_COUNT);
-    }
-
-    #[test]
-    fn the_av1_vector_hides_frames_and_that_is_what_makes_this_leg_different() {
-        // An AU is a temporal unit; 24 of these carry two frames and the extra is
-        // never delivered. If a regenerated vector stopped, `av1_parity_run` would
-        // still pass while proving nothing the H.264 leg does not.
-        let units = split_ivf(TEST_25FPS_AV1);
-        let mut planner = pf_dxvadec::Av1Planner::new();
-        let (mut frames, mut multi_frame_units, mut shown) = (0usize, 0usize, 0usize);
-        for unit in &units {
-            let plans = planner.plan_au(unit).expect("the clean vector plans");
-            if plans.len() > 1 {
-                multi_frame_units += 1;
-            }
-            for plan in &plans {
-                frames += 1;
-                if plan.picture.show_frame {
-                    shown += 1;
-                }
-                assert!(
-                    plan.dpb.stored.is_some(),
-                    "this vector uses no show_existing_frame"
-                );
-            }
-        }
-        assert_eq!(frames, AV1_DECODED_COUNT);
-        assert_eq!(shown, AV1_SHOWN_COUNT);
-        assert_eq!(
-            multi_frame_units,
-            AV1_DECODED_COUNT - AV1_SHOWN_COUNT,
-            "24 units must carry a hidden frame as well as the shown one"
-        );
-    }
-
-    #[test]
-    fn both_vendored_vectors_really_do_reorder() {
-        // The harness reorders because these vectors do. If they stop, hashing in
-        // decode order would be simpler and the docs would be stale.
-        for (name, order) in [
-            ("H.264", order_h264(&split_h264_aus(TEST_25FPS_H264))),
-            ("H.265", order_h265(&split_h265_aus(TEST_25FPS_H265))),
-        ] {
-            assert_ne!(
-                order.decode, order.display,
-                "{name}: this vector no longer reorders — the harness's PicId \
-                 indirection is now unnecessary and its docs are wrong"
-            );
-        }
+        let ten_bit = StreamFormat {
+            chroma_format_idc: 1,
+            bit_depth: 10,
+        };
+        parity_run(Codec::H265, ten_bit, &parity::MAIN10);
     }
 }
