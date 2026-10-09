@@ -179,14 +179,14 @@ fn slot_vram_cost_stays_bounded() {
             [
                 enc.slots[0].y_img,
                 enc.slots[0].uv_img,
-                enc.slots[0].cursor_img,
+                enc.slots[0].cursor.img,
             ]
             .iter()
             .map(|&i| enc.device.get_image_memory_requirements(i).size)
             .sum::<u64>()
                 + enc
                     .device
-                    .get_buffer_memory_requirements(enc.slots[0].cursor_stage)
+                    .get_buffer_memory_requirements(enc.slots[0].cursor.stage)
                     .size
         };
         assert!(per_slot > 0, "{name}: a slot must own real memory");

@@ -382,8 +382,6 @@ pub(super) unsafe fn make_frame(
     direct_planes: bool,
     f: &mut Frame,
 ) -> Result<()> {
-    // "no cursor uploaded yet" sentinel — a real serial may be 0 (see `prep_cursor`).
-    f.cursor_serial = u64::MAX;
     // Padded-copy staging: aligned encode-src filled by a transfer blit each frame.
     // TRANSFER_SRC: `record_pad_blit` self-copies the last visible column.
     if let Some(fmt) = pad_fmt {
@@ -513,34 +511,8 @@ unsafe fn make_frame_csc(
             vk::ImageUsageFlags::STORAGE | vk::ImageUsageFlags::TRANSFER_SRC,
         )?;
     }
-    // Cursor overlay: CURSOR_MAX² RGBA8 + host staging. View/descriptor stay bound;
-    // only the image content changes (`prep_cursor`).
-    (f.cursor_img, f.cursor_mem, f.cursor_view) = make_plain_image(
-        device,
-        mem_props,
-        vk::Format::R8G8B8A8_UNORM,
-        CURSOR_MAX,
-        CURSOR_MAX,
-        vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::TRANSFER_DST,
-    )?;
-    f.cursor_stage = device.create_buffer(
-        &vk::BufferCreateInfo::default()
-            .size((CURSOR_MAX * CURSOR_MAX * 4) as u64)
-            .usage(vk::BufferUsageFlags::TRANSFER_SRC),
-        None,
-    )?;
-    let cs_req = device.get_buffer_memory_requirements(f.cursor_stage);
-    f.cursor_stage_mem = device.allocate_memory(
-        &vk::MemoryAllocateInfo::default()
-            .allocation_size(cs_req.size)
-            .memory_type_index(find_mem(
-                mem_props,
-                cs_req.memory_type_bits,
-                vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
-            )?),
-        None,
-    )?;
-    device.bind_buffer_memory(f.cursor_stage, f.cursor_stage_mem, 0)?;
+    // View and descriptor stay bound; only the image content changes.
+    f.cursor = CursorPlane::new(device, mem_props)?;
     // Y/UV storage fixed; binding 0 (RGB) is rewritten per use. Binding 3 is the static cursor
     // (SHADER_READ_ONLY once prepped).
     let dsls = [csc_dsl];
@@ -557,7 +529,7 @@ unsafe fn make_frame_csc(
         .image_layout(vk::ImageLayout::GENERAL)];
     let cur_info = [vk::DescriptorImageInfo::default()
         .sampler(sampler)
-        .image_view(f.cursor_view)
+        .image_view(f.cursor.view)
         .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)];
     device.update_descriptor_sets(
         &[

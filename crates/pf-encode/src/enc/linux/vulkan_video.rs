@@ -15,6 +15,7 @@
 #![allow(unsafe_op_in_unsafe_fn)]
 #![allow(clippy::too_many_arguments)]
 
+use super::vk_csc::{bind_rgb, csc_layout, CursorPlane};
 use super::vk_util::{
     color_range, find_mem_preferring, import_failure_feeds_latch, imported_acquire_barrier,
     imported_release_barrier, make_host_buffer, make_plain_image, make_view, normalize_cpu_rgb,
@@ -78,9 +79,6 @@ const CSC10_SPV: &[u8] = include_bytes!("rgb2yuv10.spv");
 /// 10-bit SDR twin (`rgb2yuv10_709.comp`): same 10-bit store as [`CSC10_SPV`], BT.709 matrix. For a
 /// Main10 / AV1-10 session that stays SDR — an 8-bit RGB capture widened to a 10-bit 709 stream.
 const CSC10_709_SPV: &[u8] = include_bytes!("rgb2yuv10_709.spv");
-/// Cursor-overlay texture (px). Larger than any pointer; actual `w×h` uploads top-left and the
-/// shader push-constant bounds sampling, so one allocation covers every cursor.
-const CURSOR_MAX: u32 = 256;
 /// DPB ring depth (under RADV `maxDpbSlots=17`); also the RFI recovery window.
 const DPB_SLOTS: u32 = 8;
 /// In-flight captures with GPU work outstanding. 2 overlaps CSC+encode with the next capture;
@@ -694,14 +692,7 @@ struct Frame {
         u32,
     )>,
     cpu_stage: Option<(vk::Buffer, vk::DeviceMemory, u64)>,
-    // Per-slot cursor overlay. Shared would race a prior frame's in-flight CSC read.
-    cursor_img: vk::Image,
-    cursor_mem: vk::DeviceMemory,
-    cursor_view: vk::ImageView,
-    cursor_stage: vk::Buffer,
-    cursor_stage_mem: vk::DeviceMemory,
-    cursor_serial: u64,
-    cursor_ready: bool,
+    cursor: CursorPlane,
     pts_ns: u64,
     keyframe: bool,
     recovery_anchor: bool,
@@ -1641,36 +1632,8 @@ impl VulkanVideoEncoder {
         let shader =
             device.create_shader_module(&vk::ShaderModuleCreateInfo::default().code(&spv), None)?;
         guard.shader = shader;
-        let sb = |b: u32, t: vk::DescriptorType| {
-            vk::DescriptorSetLayoutBinding::default()
-                .binding(b)
-                .descriptor_type(t)
-                .descriptor_count(1)
-                .stage_flags(vk::ShaderStageFlags::COMPUTE)
-        };
-        let bindings = [
-            sb(0, vk::DescriptorType::COMBINED_IMAGE_SAMPLER),
-            sb(1, vk::DescriptorType::STORAGE_IMAGE),
-            sb(2, vk::DescriptorType::STORAGE_IMAGE),
-            sb(3, vk::DescriptorType::COMBINED_IMAGE_SAMPLER),
-        ];
-        let csc_dsl = device.create_descriptor_set_layout(
-            &vk::DescriptorSetLayoutCreateInfo::default().bindings(&bindings),
-            None,
-        )?;
+        let (csc_dsl, csc_layout) = csc_layout(&device)?;
         guard.csc_dsl = csc_dsl;
-        let dsls = [csc_dsl];
-        // Cursor `{ivec2 origin, ivec2 size}` = 16 bytes (`size.x<=0` disables the blend).
-        let pc_ranges = [vk::PushConstantRange::default()
-            .stage_flags(vk::ShaderStageFlags::COMPUTE)
-            .offset(0)
-            .size(16)];
-        let csc_layout = device.create_pipeline_layout(
-            &vk::PipelineLayoutCreateInfo::default()
-                .set_layouts(&dsls)
-                .push_constant_ranges(&pc_ranges),
-            None,
-        )?;
         guard.csc_layout = csc_layout;
         let stage = vk::PipelineShaderStageCreateInfo::default()
             .stage(vk::ShaderStageFlags::COMPUTE)
@@ -1847,138 +1810,6 @@ impl VulkanVideoEncoder {
 }
 
 impl VulkanVideoEncoder {
-    unsafe fn bind_rgb(&self, csc_set: vk::DescriptorSet, rgb_view: vk::ImageView) {
-        let ii0 = [vk::DescriptorImageInfo::default()
-            .sampler(self.sampler)
-            .image_view(rgb_view)
-            .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)];
-        self.device.update_descriptor_sets(
-            &[vk::WriteDescriptorSet::default()
-                .dst_set(csc_set)
-                .dst_binding(0)
-                .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-                .image_info(&ii0)],
-            &[],
-        );
-    }
-
-    /// Refresh slot `slot`'s cursor image and return `[origin_x, origin_y, size_w, size_h]`
-    /// (size 0 ⇒ CSC skips the blend). Upload only when `serial` changed. First use always
-    /// transitions to SHADER_READ_ONLY so binding 3 is a valid layout with no cursor.
-    unsafe fn prep_cursor(
-        &mut self,
-        slot: usize,
-        compute_cmd: vk::CommandBuffer,
-        cursor: Option<&pf_frame::CursorOverlay>,
-    ) -> Result<[i32; 4]> {
-        let dev = self.device.clone();
-        let img = self.frames[slot].cursor_img;
-        let ready = self.frames[slot].cursor_ready;
-        let barrier = |old: vk::ImageLayout, new: vk::ImageLayout, ss, sa, ds, da| {
-            vk::ImageMemoryBarrier2::default()
-                .src_stage_mask(ss)
-                .src_access_mask(sa)
-                .dst_stage_mask(ds)
-                .dst_access_mask(da)
-                .old_layout(old)
-                .new_layout(new)
-                .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-                .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-                .image(img)
-                .subresource_range(color_range(0))
-        };
-        match cursor {
-            Some(c) if !c.rgba.is_empty() => {
-                let cw = c.w.min(CURSOR_MAX);
-                let ch = c.h.min(CURSOR_MAX);
-                if self.frames[slot].cursor_serial != c.serial {
-                    // A PQ session blends the cursor re-encoded as PQ, not its sRGB bytes.
-                    let rgba = if self.spec.is_hdr {
-                        c.pq_rgba()
-                    } else {
-                        c.rgba.clone()
-                    };
-                    let stage = self.frames[slot].cursor_stage;
-                    let stage_mem = self.frames[slot].cursor_stage_mem;
-                    let bytes = (cw as usize) * (ch as usize) * 4;
-                    let ptr =
-                        dev.map_memory(stage_mem, 0, bytes as u64, vk::MemoryMapFlags::empty())?;
-                    std::ptr::copy_nonoverlapping(
-                        rgba.as_ptr(),
-                        ptr as *mut u8,
-                        bytes.min(rgba.len()),
-                    );
-                    dev.unmap_memory(stage_mem);
-                    let old = if ready {
-                        vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL
-                    } else {
-                        vk::ImageLayout::UNDEFINED
-                    };
-                    dev.cmd_pipeline_barrier2(
-                        compute_cmd,
-                        &vk::DependencyInfo::default().image_memory_barriers(&[barrier(
-                            old,
-                            vk::ImageLayout::TRANSFER_DST_OPTIMAL,
-                            vk::PipelineStageFlags2::NONE,
-                            vk::AccessFlags2::NONE,
-                            vk::PipelineStageFlags2::ALL_TRANSFER,
-                            vk::AccessFlags2::TRANSFER_WRITE,
-                        )]),
-                    );
-                    dev.cmd_copy_buffer_to_image(
-                        compute_cmd,
-                        stage,
-                        img,
-                        vk::ImageLayout::TRANSFER_DST_OPTIMAL,
-                        &[vk::BufferImageCopy::default()
-                            .image_subresource(
-                                vk::ImageSubresourceLayers::default()
-                                    .aspect_mask(vk::ImageAspectFlags::COLOR)
-                                    .layer_count(1),
-                            )
-                            .image_extent(vk::Extent3D {
-                                width: cw,
-                                height: ch,
-                                depth: 1,
-                            })],
-                    );
-                    dev.cmd_pipeline_barrier2(
-                        compute_cmd,
-                        &vk::DependencyInfo::default().image_memory_barriers(&[barrier(
-                            vk::ImageLayout::TRANSFER_DST_OPTIMAL,
-                            vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
-                            vk::PipelineStageFlags2::ALL_TRANSFER,
-                            vk::AccessFlags2::TRANSFER_WRITE,
-                            vk::PipelineStageFlags2::COMPUTE_SHADER,
-                            vk::AccessFlags2::SHADER_READ,
-                        )]),
-                    );
-                    self.frames[slot].cursor_serial = c.serial;
-                    self.frames[slot].cursor_ready = true;
-                }
-                Ok([c.x, c.y, cw as i32, ch as i32])
-            }
-            _ => {
-                if !ready {
-                    // UNDEFINED→READ_ONLY once so binding 3 is a valid layout for the guarded read.
-                    dev.cmd_pipeline_barrier2(
-                        compute_cmd,
-                        &vk::DependencyInfo::default().image_memory_barriers(&[barrier(
-                            vk::ImageLayout::UNDEFINED,
-                            vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
-                            vk::PipelineStageFlags2::NONE,
-                            vk::AccessFlags2::NONE,
-                            vk::PipelineStageFlags2::COMPUTE_SHADER,
-                            vk::AccessFlags2::SHADER_READ,
-                        )]),
-                    );
-                    self.frames[slot].cursor_ready = true;
-                }
-                Ok([0, 0, 0, 0])
-            }
-        }
-    }
-
     /// Import a DMA-BUF with usage/profile matching this session's source mode. Native NV12 and
     /// aligned RGB-direct are profiled `VIDEO_ENCODE_SRC`. Padded RGB-direct is transfer-source only.
     unsafe fn import_dmabuf(
@@ -2415,7 +2246,12 @@ impl VulkanVideoEncoder {
                 self.frames[slot].ts_written = true;
             }
 
-            let cursor_pc = self.prep_cursor(slot, compute_cmd, frame.cursor.as_ref())?;
+            let cursor_pc = self.frames[slot].cursor.prep(
+                &dev,
+                compute_cmd,
+                frame.cursor.as_ref(),
+                self.spec.is_hdr,
+            )?;
 
             let (rgb_view, imported) = match &frame.payload {
                 FramePayload::Dmabuf(d) => {
@@ -2518,8 +2354,8 @@ impl VulkanVideoEncoder {
                 // RECORDING (never submitted yet); pool allows reset. The reset discards any
                 // cursor upload recorded here, so the slot forgets it had one.
                 let _ = dev.reset_command_buffer(compute_cmd, vk::CommandBufferResetFlags::empty());
-                self.frames[slot].cursor_serial = 0;
-                self.frames[slot].cursor_ready = false;
+                self.frames[slot].cursor.serial = 0;
+                self.frames[slot].cursor.ready = false;
                 return Err(e);
             }
         };
@@ -2533,13 +2369,13 @@ impl VulkanVideoEncoder {
                     slot,
                     self.sampler,
                     rgb_view,
-                    self.frames[slot].cursor_view,
+                    self.frames[slot].cursor.view,
                     cursor_pc,
                 ),
             ),
             None => (cursor_pc, rgb_view),
         };
-        self.bind_rgb(csc_set, rgb_view);
+        bind_rgb(&dev, self.sampler, csc_set, rgb_view);
 
         // GENERAL for the CSC's targets, prior contents discarded: the picture itself when its
         // planes are written directly, else Y/UV scratch plus the picture as the copies' dst.
@@ -3999,7 +3835,7 @@ impl Encoder for VulkanVideoEncoder {
     fn caps(&self) -> EncoderCaps {
         EncoderCaps {
             supports_rfi: true,
-            // Only CSC composites (`prep_cursor`); a switching session reaches it on the first
+            // Only CSC composites (`CursorPlane::prep`); a switching session reaches it on the first
             // cursor. Native NV12 has no blend.
             blends_cursor: (self.rgb.is_none() || self.cursor_switch) && !self.spec.native_nv12,
             // `set_input_crop` moves an EFC session onto the CSC; a producer's NV12 has no RGB stage.
@@ -4363,11 +4199,7 @@ impl Drop for VkTeardown {
                         device.destroy_buffer(b, None);
                         device.free_memory(m, None);
                     }
-                    device.destroy_image_view(f.cursor_view, None);
-                    device.destroy_image(f.cursor_img, None);
-                    device.free_memory(f.cursor_mem, None);
-                    device.destroy_buffer(f.cursor_stage, None);
-                    device.free_memory(f.cursor_stage_mem, None);
+                    f.cursor.destroy(&device);
                 }
                 device.destroy_command_pool(self.compute_pool, None);
                 device.destroy_command_pool(self.cmd_pool, None);
