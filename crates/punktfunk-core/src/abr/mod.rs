@@ -302,7 +302,8 @@ impl Driver {
         self.window.on_loss_positions(p);
     }
 
-    /// The data socket's drops since it opened.
+    /// The receiver's own drops since the session opened: the kernel socket's and the demux
+    /// queue's. A running total; each window takes its delta.
     pub fn on_sock_drops(&mut self, total: u64) {
         self.window.on_sock_drops(total);
     }

@@ -119,7 +119,8 @@ impl WindowAccumulator {
         self.stats = *st;
     }
 
-    /// The data socket's drops since it opened, as the pump samples them.
+    /// The receiver's own drops since the session opened, as the pump samples them: the kernel
+    /// socket's and the demux queue's. A running total; each window takes its delta.
     pub(crate) fn on_sock_drops(&mut self, total: u64) {
         self.sock_drops = total;
     }
