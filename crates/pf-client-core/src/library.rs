@@ -368,7 +368,7 @@ pub struct RunningGame {
 }
 
 /// One title's download, from `GET /api/v1/status` `downloads[]`.
-#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq)]
 pub struct DownloadProgress {
     #[serde(default)]
     pub app_id: String,

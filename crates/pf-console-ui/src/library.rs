@@ -94,7 +94,7 @@ pub struct LibraryGame {
 }
 
 /// What a shell that reads `/status` itself pushes: `{"downloads": [...], "grants": 255}`.
-#[derive(Debug, Default, serde::Deserialize)]
+#[derive(Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct DownloadsPush {
     #[serde(default)]
     pub downloads: Vec<pf_client_core::library::DownloadProgress>,
