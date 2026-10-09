@@ -34,7 +34,7 @@ use windows::Win32::Graphics::Dxgi::{
 use windows::Win32::System::LibraryLoader::{GetModuleHandleW, GetProcAddress};
 use windows::Win32::System::Threading::{CreateEventW, WaitForSingleObject};
 
-use super::stall::ProbeWindow;
+use crate::stall_model::ProbeWindow;
 
 /// 512 entries ≈ 26 s at 20 Hz (51 s at 100 ms), longer than any stall
 /// window the reporter asks for.

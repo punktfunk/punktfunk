@@ -142,7 +142,7 @@ use cursor_model::deliver_cursor_channel;
 mod descriptor;
 #[path = "idd_push/display.rs"]
 mod display;
-// Stall reporting: the driver-clock verdict, plus DxgKrnl ETW and micro-probes as evidence.
+// Stall reporting over `crate::stall_model`, plus DxgKrnl ETW and micro-probes as evidence.
 #[path = "idd_push/dxgkrnl_etw.rs"]
 mod dxgkrnl_etw;
 #[path = "idd_push/probes.rs"]
@@ -161,9 +161,9 @@ mod clock_boost;
 // In-driver encode: the AU section, `SET_ENCODE`, and the `Encoder` proxy over `ENCODE_CTL`.
 #[path = "idd_push/driver_encode.rs"]
 pub(crate) mod driver_encode;
+use crate::stall_model::{StallEvidence, StallWatch};
 use channel::ChannelBroker;
 use descriptor::{DescriptorPoller, DisplayDescriptor};
-use stall::{StallEvidence, StallWatch};
 
 /// The session's virtual display: its mode, its cursor channel, and its health.
 ///
@@ -272,7 +272,7 @@ pub struct IddPushCapturer {
     stall_watch: StallWatch,
     /// The stalest drain heartbeat (µs) seen since the last fresh frame.
     max_hb_age_us: u64,
-    /// Damage witness for [`stall::StallEvidence::cursor_moved_px`] and the recovery
+    /// Damage witness for [`StallEvidence::cursor_moved_px`] and the recovery
     /// classifier. user32 only, never the display-config lock; the rule itself is
     /// [`crate::cursor_witness`].
     cursor: CursorWitness,
@@ -290,9 +290,6 @@ pub struct IddPushCapturer {
 
 #[cfg(test)]
 mod tests {
-    use super::stall::Stall;
-    use super::*;
-
     /// The `CcdTargetKey` packing must equal `pf_frame::dxgi::pack_luid` — the capture target's
     /// `adapter_luid` (packed by pf-frame) is what pf-capture builds its CCD keys from, so a
     /// divergence would make every display-global helper miss its own target's paths. This crate
@@ -316,301 +313,5 @@ mod tests {
                 "packing diverged for LUID {high:#x}:{low:#x}"
             );
         }
-    }
-
-    /// Feed [`StallWatch`] at `offsets_ms`; metronome is non-damage-idle, as `report` feeds it.
-    fn watch_run(offsets_ms: &[u64]) -> Vec<Option<(Stall, Option<Duration>)>> {
-        let base = Instant::now();
-        let mut w = StallWatch::new();
-        offsets_ms
-            .iter()
-            .map(|ms| {
-                let at = base + Duration::from_millis(*ms);
-                w.note_fresh(at, None).map(|s| {
-                    let period = w.cycle(at, false);
-                    (s, period)
-                })
-            })
-            .collect()
-    }
-
-    fn flow(out: &mut Vec<u64>, start_ms: u64, frames: u64) {
-        out.extend((0..frames).map(|i| start_ms + i * 16));
-    }
-
-    #[test]
-    fn stall_detected_after_active_flow() {
-        // 20 frames of 60 fps, then a 300 ms hole — the resuming frame is a stall.
-        let mut t = Vec::new();
-        flow(&mut t, 0, 20); // last frame at 304 ms
-        t.push(604);
-        let out = watch_run(&t);
-        assert!(out[..20].iter().all(Option::is_none));
-        let (stall, period) = out[20].as_ref().expect("hole after active flow is a stall");
-        assert_eq!(stall.gap.as_millis(), 300);
-        assert!(period.is_none(), "one stall is not a cycle");
-    }
-
-    #[test]
-    fn idle_desktop_gaps_are_not_stalls() {
-        // ~530 ms caret blink: activity gate never opens.
-        let t: Vec<u64> = (0..12).map(|i| i * 530).chain([20_000]).collect();
-        assert!(watch_run(&t).iter().all(Option::is_none));
-    }
-
-    #[test]
-    fn thirty_fps_content_still_qualifies_as_active() {
-        // 33 ms cadence: 8 pre-gap frames span 231 ms ≤ ACTIVE_SPAN.
-        let mut t: Vec<u64> = (0..10).map(|i| i * 33).collect(); // last at 297 ms
-        t.push(497);
-        let out = watch_run(&t);
-        assert!(out[10].is_some(), "30 fps flow must pass the activity gate");
-    }
-
-    /// First degraded-stretch summary, checked after every frame like the capture loop.
-    /// Every frame reports the same 40 ms present→arrival, so the folded tally is
-    /// assertable without modelling which frames land inside the stretch.
-    fn watch_recovery(offsets_ms: &[u64]) -> (StallWatch, Option<super::stall::Recovery>) {
-        let base = Instant::now();
-        let mut w = StallWatch::new();
-        let mut recovery = None;
-        for ms in offsets_ms {
-            w.note_fresh(base + Duration::from_millis(*ms), Some(40));
-            if let Some(r) = w.take_recovery() {
-                recovery.get_or_insert(r);
-            }
-        }
-        (w, recovery)
-    }
-
-    #[test]
-    fn a_degraded_stretch_summarizes_on_recovery() {
-        // ~2 fps phase (10×500 ms holes) after active flow: one summary for the stretch.
-        let mut t = Vec::new();
-        flow(&mut t, 0, 20); // last frame at 304 ms
-        t.extend((1..=10).map(|i| 304 + i * 500)); // 804..5304: ten 500 ms holes
-        t.extend((1..=12).map(|i| 5304 + i * 16)); // sustained flow is back
-        let (_, r) = watch_recovery(&t);
-        let r = r.expect("a multi-hole degraded stretch summarizes at recovery");
-        assert_eq!(r.holes, 10);
-        assert_eq!(r.hole_time.as_millis(), 5000);
-        assert_eq!(r.worst.as_millis(), 500);
-        assert_eq!(r.degraded.as_millis(), 5000);
-        // Every stamped frame reported 40 ms, at least one per hole.
-        assert_eq!(r.arrival_ms().as_deref(), Some("40/40/40"));
-        assert!(r.arrival_n >= r.holes, "n={}", r.arrival_n);
-    }
-
-    #[test]
-    fn a_single_stall_never_summarizes() {
-        // One hole in healthy flow: its stall line covers it; a one-hole stretch must not summarize.
-        let mut t = Vec::new();
-        flow(&mut t, 0, 20);
-        t.push(604); // the lone 300 ms hole
-        t.extend((1..=12).map(|i| 604 + i * 16));
-        let (_, r) = watch_recovery(&t);
-        assert!(
-            r.is_none(),
-            "single stall must not produce a stretch summary"
-        );
-    }
-
-    #[test]
-    fn a_reset_cut_stretch_still_summarizes() {
-        // A reset clears flow history mid-stretch; holes before it must still surface.
-        let mut t = Vec::new();
-        flow(&mut t, 0, 20);
-        t.extend((1..=3).map(|i| 304 + i * 500));
-        let (mut w, r) = watch_recovery(&t);
-        assert!(r.is_none(), "stretch still open — no summary yet");
-        w.reset();
-        let r = w
-            .take_recovery()
-            .expect("reset closes and summarizes the open stretch");
-        assert_eq!(r.holes, 3);
-        assert_eq!(r.hole_time.as_millis(), 1500);
-    }
-
-    #[test]
-    fn a_content_stop_closes_the_stretch_without_folding_the_pause_in() {
-        // Two degraded holes, then a 20 s pause. Summary covers the stretch only.
-        let mut t = Vec::new();
-        flow(&mut t, 0, 20);
-        t.extend([804, 1304, 21_304]);
-        let (_, r) = watch_recovery(&t);
-        let r = r.expect("the content stop closes the stretch");
-        assert_eq!(r.holes, 2);
-        assert_eq!(r.hole_time.as_millis(), 1000);
-        assert_eq!(r.degraded.as_millis(), 1000);
-    }
-
-    #[test]
-    fn metronomic_stalls_self_diagnose() {
-        // ~300 ms DWM holes every 4 s in 60 fps flow. 5 cycles → 4 stalls; the 4th is the period.
-        let mut t = Vec::new();
-        for cycle in 0..5u64 {
-            // ~3.7 s of flow, then the hole to the next cycle.
-            flow(&mut t, cycle * 4_000, 232); // last frame at cycle*4000 + 3696
-        }
-        let out = watch_run(&t);
-        let stalls: Vec<&(Stall, Option<Duration>)> = out.iter().flatten().collect();
-        assert_eq!(stalls.len(), 4, "each cycle boundary is one stall");
-        assert!(stalls[..3].iter().all(|(_, period)| period.is_none()));
-        let period = stalls[3]
-            .1
-            .expect("the 4th evenly-spaced event completes the metronome streak");
-        assert!(
-            (period.as_secs_f64() - 4.0).abs() < 0.3,
-            "period={period:?}"
-        );
-    }
-
-    /// Same four evenly-spaced stalls as [`metronomic_stalls_self_diagnose`], one
-    /// damage-idle: a hand/input pause is not display-disturbance evidence.
-    #[test]
-    fn damage_idle_stalls_do_not_feed_the_metronome() {
-        let base = Instant::now();
-        let mut w = StallWatch::new();
-        let mut periods = Vec::new();
-        for cycle in 0..5u64 {
-            let mut t = Vec::new();
-            flow(&mut t, cycle * 4_000, 232);
-            for ms in t {
-                let at = base + Duration::from_millis(ms);
-                if let Some(_stall) = w.note_fresh(at, None) {
-                    // 2nd stall is damage-idle (cursor still on a dwm-only desktop).
-                    let damage_idle = periods.len() == 1;
-                    periods.push(w.cycle(at, damage_idle));
-                }
-            }
-        }
-        assert_eq!(periods.len(), 4);
-        assert!(
-            periods.iter().all(Option::is_none),
-            "a skipped beat must break the streak: {periods:?}"
-        );
-    }
-
-    #[test]
-    fn reset_swallows_the_restart_gap() {
-        // Restart, then resume 800 ms later: not a stall; detection re-arms after.
-        let base = Instant::now();
-        let at = |ms: u64| base + Duration::from_millis(ms);
-        let mut w = StallWatch::new();
-        for i in 0..20u64 {
-            assert!(w.note_fresh(at(i * 16), None).is_none());
-        }
-        w.reset();
-        assert!(
-            w.note_fresh(at(1_104), None).is_none(),
-            "restart gap swallowed"
-        );
-        for i in 1..20u64 {
-            assert!(w.note_fresh(at(1_104 + i * 16), None).is_none());
-        }
-        assert!(
-            w.note_fresh(at(1_104 + 19 * 16 + 300), None).is_some(),
-            "detection re-armed after the reset"
-        );
-    }
-
-    /// Third stall in 60 s warns; quiet through 300 s re-warn spacing; re-arms after age-out.
-    #[test]
-    fn stall_rate_warn_window_and_rewarn() {
-        let base = Instant::now();
-        let at = |s: u64| base + Duration::from_secs(s);
-        let mut w = StallWatch::new();
-        assert_eq!(w.note_for_rate_warn(at(0)), None);
-        assert_eq!(w.note_for_rate_warn(at(10)), None);
-        assert_eq!(
-            w.note_for_rate_warn(at(20)),
-            Some(3),
-            "third stall in 60 s warns"
-        );
-        assert_eq!(
-            w.note_for_rate_warn(at(30)),
-            None,
-            "inside the re-warn spacing the arm stays quiet"
-        );
-        // Past the spacing: old entries aged out, so RATE_MIN_STALLS again then re-warns.
-        assert_eq!(w.note_for_rate_warn(at(400)), None);
-        assert_eq!(w.note_for_rate_warn(at(401)), None);
-        assert_eq!(
-            w.note_for_rate_warn(at(402)),
-            Some(3),
-            "re-warns after the spacing"
-        );
-    }
-
-    /// [`stall::attribute`] verdict table: the drain heartbeat, then the cursor witness.
-    #[test]
-    fn stall_attribution_verdicts() {
-        use super::stall::{attribute, StallVerdict};
-        let verdict = |gap_ms: u64, hb_age_ms: Option<u64>, moved: Option<u32>| {
-            attribute(
-                Duration::from_millis(gap_ms),
-                &StallEvidence {
-                    max_heartbeat_age_ms: hb_age_ms,
-                    probes: None,
-                    etw: None,
-                    etw_counts: None,
-                    cursor_moved_px: moved,
-                },
-            )
-        };
-        // No encoder open yet: no heartbeat, no verdict.
-        assert_eq!(verdict(300, None, None), StallVerdict::NoTelemetry);
-        // Heartbeat silent for most of the hole → worker starved.
-        assert_eq!(verdict(600, Some(400), None), StallVerdict::WorkerStalled);
-        // ≤16 ms heartbeat; 200 ms silence on a 300 ms gap is under max(gap/2, 250 ms).
-        assert_eq!(verdict(300, Some(200), None), StallVerdict::ComposeSilence);
-        assert_eq!(
-            verdict(300, Some(20), Some(312)),
-            StallVerdict::ComposeSilence
-        );
-        // Long holes scale the bar: 900 ms silence on a 3 s gap is not half.
-        assert_eq!(
-            verdict(3_000, Some(900), None),
-            StallVerdict::ComposeSilence
-        );
-        assert_eq!(
-            verdict(3_000, Some(1_600), None),
-            StallVerdict::WorkerStalled
-        );
-        // The cursor never moved through the hole: nothing was dirty.
-        assert_eq!(verdict(600, Some(16), Some(0)), StallVerdict::DamageIdle);
-        // A starved worker is never demoted by a still cursor.
-        assert_eq!(
-            verdict(600, Some(400), Some(0)),
-            StallVerdict::WorkerStalled
-        );
-    }
-
-    /// With the ETW leg on (`PUNKTFUNK_IDD_DIAG`), a game presenting through the hole keeps
-    /// compose-silence even under a still cursor; dwm-only flow still demotes.
-    #[test]
-    fn a_present_witness_blocks_the_damage_idle_demotion() {
-        use super::dxgkrnl_etw::EtwWindowCounts;
-        use super::stall::{attribute, StallVerdict};
-        let verdict = |dwm_only: bool| {
-            attribute(
-                Duration::from_millis(600),
-                &StallEvidence {
-                    max_heartbeat_age_ms: Some(16),
-                    probes: None,
-                    etw: None,
-                    etw_counts: Some(EtwWindowCounts {
-                        presents: 40,
-                        queue_adds: 0,
-                        present_history: true,
-                        queue_history: true,
-                        flow_dwm_only: dwm_only,
-                    }),
-                    cursor_moved_px: Some(0),
-                },
-            )
-        };
-        assert_eq!(verdict(false), StallVerdict::ComposeSilence);
-        assert_eq!(verdict(true), StallVerdict::DamageIdle);
     }
 }
