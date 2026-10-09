@@ -89,20 +89,6 @@ fn env_value_on(value: &str) -> bool {
     )
 }
 
-#[cfg(test)]
-mod env_tests {
-    /// The host reads `PUNKTFUNK_UPDATE_CHECK=no` as off; every other process must too.
-    #[test]
-    fn env_switches_read_the_hosts_off_grammar() {
-        for off in ["0", "false", "off", "no", "OFF", " No ", "0 "] {
-            assert!(!super::env_value_on(off), "{off:?}");
-        }
-        for on in ["1", "true", "yes", "", "garbage"] {
-            assert!(super::env_value_on(on), "{on:?}");
-        }
-    }
-}
-
 /// C-ABI generation. Mirrors `punktfunk_abi_version()`; embedders abort on mismatch.
 ///
 /// Bump on any breaking change to the C ABI (`punktfunk-ffi`). Additive bumps add
@@ -116,3 +102,17 @@ mod env_tests {
 /// The wire is versioned by ALPN, not by this. Pin the integer in `punktfunk-ffi`
 /// (`abi_version_is_pinned`). Per-bump notes live in `CHANGELOG.md`.
 pub const ABI_VERSION: u32 = 48;
+
+#[cfg(test)]
+mod env_tests {
+    /// The host reads `PUNKTFUNK_UPDATE_CHECK=no` as off; every other process must too.
+    #[test]
+    fn env_switches_read_the_hosts_off_grammar() {
+        for off in ["0", "false", "off", "no", "OFF", " No ", "0 "] {
+            assert!(!super::env_value_on(off), "{off:?}");
+        }
+        for on in ["1", "true", "yes", "", "garbage"] {
+            assert!(super::env_value_on(on), "{on:?}");
+        }
+    }
+}
