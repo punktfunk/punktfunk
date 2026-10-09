@@ -18,7 +18,6 @@ import io.unom.punktfunk.kit.Sc2Capture
 import io.unom.punktfunk.kit.SessionAccess
 import io.unom.punktfunk.kit.SessionEndReason
 import io.unom.punktfunk.models.ActiveSession
-import android.media.audiofx.AudioEffect
 import io.unom.punktfunk.kit.deviceBodyVibrator
 
 /**
@@ -36,7 +35,7 @@ internal class StreamPeripherals(
     private val ring: RingState,
     private val haptics: ConsoleHaptics,
     private val isTv: Boolean,
-    private val micEffects: MutableList<AudioEffect>,
+    private val stopMic: () -> Unit,
     private val keyCapture: () -> KeyCaptureView?,
     private val videoView: () -> SurfaceView?,
     private val containerSize: () -> IntSize,
@@ -372,11 +371,7 @@ internal class StreamPeripherals(
         // an open mic (with the platform's recording indicator lit) feeding a plane the host
         // drops would be the worst kind of lie. Not restarted on a re-grant: the host attaches
         // the mic service at session setup only, so a fresh session is the honest offer.
-        if (grants and SessionAccess.MIC == 0 && ui.micRunning) {
-            releaseMicEffects(micEffects)
-            NativeBridge.nativeStopMic(handle)
-            ui.micRunning = false
-        }
+        if (grants and SessionAccess.MIC == 0 && ui.micRunning) stopMic()
     }
 
     /** Release in the order the handle's lifetime needs; the caller closes the handle after. */
