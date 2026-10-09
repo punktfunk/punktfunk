@@ -1352,7 +1352,7 @@ async fn status_reflects_runtime_state() {
 /// Overrides `PUNKTFUNK_CONFIG_DIR` for one test and restores it on drop, even on panic.
 /// [`ConfigDirOverride::seat`] also points `PUNKTFUNK_LIBRARY_DIR` at a box's library.
 ///
-/// One helper for the whole file: `check-unsafe-hygiene.sh` greps this file for a fixed
+/// One helper for every mgmt test: `check-unsafe-hygiene.sh` greps this file for a fixed
 /// count of `set_var` sites (and prose mentions), all in [`write_env`]. The lock is a field so
 /// Drop restores the env while still holding it — fields drop after `Drop::drop`.
 struct ConfigDirOverride {
@@ -2788,7 +2788,7 @@ fn openapi_document_is_complete_and_checked_in() {
         serde_json::json!([{}])
     );
 
-    let checked_in = include_str!("../../../../api/openapi.json");
+    let checked_in = include_str!("../../../../../api/openapi.json");
     // Structural compare with `info.version` normalized: a version bump must not fail the snapshot.
     // JSON compare also ignores CRLF checkouts on Windows.
     let mut generated = doc;
