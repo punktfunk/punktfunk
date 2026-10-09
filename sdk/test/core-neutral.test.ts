@@ -51,7 +51,7 @@ describe("@punktfunk/host/core", () => {
 		expect(platform).toEqual([]);
 		// And it must not have quietly pulled in the Node half by another name.
 		const names = [...files].map((f) => path.basename(f));
-		for (const nodeOnly of ["config.ts", "runner.ts", "runner-cli.ts", "plugins.ts", "ui.ts", "log-ship.ts"]) {
+		for (const nodeOnly of ["config.ts", "runner.ts", "runner-linux.ts", "runner-windows.ts", "runner-cli.ts", "plugins.ts", "ui.ts", "log-ship.ts"]) {
 			expect(names).not.toContain(nodeOnly);
 		}
 	});
