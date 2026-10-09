@@ -122,14 +122,18 @@ export async function putAndGrant(
 	body: Uint8Array | undefined,
 	form: string,
 ): Promise<{ res: Response | null; access?: GrantOutcome }> {
-	const before = await callPlugin(id, path, "GET");
+	const before = await callPlugin(id, path, { method: "GET" });
 	const prior = before?.ok
 		? ((await before.json().catch(() => null)) as {
 				schema?: unknown;
 				value?: unknown;
 			} | null)
 		: null;
-	const res = await callPlugin(id, path, "PUT", body);
+	const res = await callPlugin(id, path, {
+		method: "PUT",
+		headers: { "content-type": "application/json" },
+		body,
+	});
 	if (!res?.ok || !prior || !body) return { res };
 	let value: unknown;
 	try {
