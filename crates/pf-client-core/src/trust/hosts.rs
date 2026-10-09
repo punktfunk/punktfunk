@@ -598,20 +598,6 @@ pub fn persist_host(
     known.save()
 }
 
-/// Drop the fp-less placeholder for `addr:port`. `--add-host` with no `--fp` stores one;
-/// [`persist_host`] then writes the real pin, so the placeholder would show twice.
-/// No-op, and no disk write, when there is none.
-pub fn forget_placeholder(addr: &str, port: u16) {
-    let mut known = KnownHosts::load();
-    let before = known.hosts.len();
-    known
-        .hosts
-        .retain(|h| !(h.fp_hex.is_empty() && h.addr == addr && h.port == port));
-    if known.hosts.len() != before {
-        let _ = known.save();
-    }
-}
-
 /// Load, [`KnownHosts::add`], save.
 pub fn add_host(edit: &HostEdit) -> Result<()> {
     let mut known = KnownHosts::load();

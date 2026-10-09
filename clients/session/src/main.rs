@@ -199,10 +199,9 @@ mod session_main {
     /// same known-hosts store `--connect` reads, so pairing here is exactly what makes the
     /// later stream connect silently.
     ///
-    /// Deliberately identical in shape and output to `punktfunk-client --pair` (which stays
-    /// the desktop route) — the difference is only that this binary carries no toolkit, so it
-    /// is the one a minimal image installs. Present in the `--no-default-features` build too:
-    /// enrolment must not be the reason an embedded image has to pull in Skia.
+    /// Prints the same `paired {addr}:{port} fp=…` line as `punktfunk pair`; provisioning
+    /// scripts read it. Present in the `--no-default-features` build too: enrolment must not
+    /// be the reason an embedded image has to pull in Skia.
     fn headless_pair(pin: &str) -> u8 {
         let Some(target) = arg_value("--connect") else {
             eprintln!("--pair requires --connect host[:port]");
@@ -233,7 +232,6 @@ mod session_main {
                 ) {
                     eprintln!("couldn't save the host: {e:#}");
                 }
-                trust::forget_placeholder(&addr, port);
                 println!("paired {addr}:{port} fp={fp_hex}");
                 0
             }
