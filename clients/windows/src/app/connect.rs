@@ -9,7 +9,8 @@ use super::style::*;
 use super::{AppCtx, Screen, Svc, Target};
 use crate::trust::{self, KnownHosts};
 use pf_client_core::orchestrate::{
-    trust_route, CancelHandle, ConnectOutcome, TrustRoute, WakeOutcome, WakeWait,
+    trust_route, wake_parked_line, CancelHandle, ConnectOutcome, TrustRoute, WakeOutcome, WakeWait,
+    WAKE_PARKED_HINT,
 };
 use punktfunk_core::reject::RejectReason;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -534,7 +535,7 @@ pub(crate) fn request_access(props: &Svc, target: &Target) {
 /// ([`initiate_waking`]) to a non-advertising saved host with a MAC. A magic packet, a
 /// cancelable "Waking…" screen, and mDNS polled until the host advertises — re-sending the
 /// packet periodically — on a bounded deadline. On reappearance it dials the address the host
-/// came back on; on timeout or Cancel it returns to the host list.
+/// came back on; on timeout it parks on [`wake_parked_page`]; Cancel returns to the host list.
 ///
 /// The cadence is [`WakeWait`] and the advert match `AdvertWatch`, both shared with the GTK
 /// shell (design/client-architecture-split.md §3).
@@ -586,8 +587,7 @@ fn wake_and_connect(
                     return;
                 }
                 Some(WakeOutcome::TimedOut) => {
-                    st.call("The host didn't come online.".to_string());
-                    ss.call(Screen::Hosts);
+                    ss.call(Screen::WakeParked);
                     return;
                 }
                 None => {}
@@ -680,5 +680,42 @@ pub(crate) fn waking_page(ctx: &Arc<AppCtx>, set_screen: &AsyncSetState<Screen>)
         "Sent a wake signal and waiting for the host to come online \u{2014} this can take up to a \
          minute for a sleeping or powered-off machine.",
         vec![cancel_btn.into()],
+    )
+}
+
+/// The parked wake: the host didn't come online in budget. Try again is a fresh wake of the
+/// shared target; Cancel returns to the host list. No hooks.
+pub(crate) fn wake_parked_page(
+    ctx: &Arc<AppCtx>,
+    set_screen: &AsyncSetState<Screen>,
+    set_status: &AsyncSetState<String>,
+) -> Element {
+    let target = ctx.shared.target.lock().unwrap().clone();
+    let retry_btn = {
+        let (ctx, ss, st, target) = (
+            ctx.clone(),
+            set_screen.clone(),
+            set_status.clone(),
+            target.clone(),
+        );
+        button("Try again")
+            .accent()
+            .icon(lucide::icon("rotate-cw"))
+            .on_click(move || wake_and_connect(&ctx, target.clone(), &ss, &st))
+    };
+    let cancel_btn = {
+        let ss = set_screen.clone();
+        button("Cancel")
+            .icon(lucide::icon("x"))
+            .on_click(move || ss.call(Screen::Hosts))
+    };
+    let actions = hstack((retry_btn, cancel_btn))
+        .spacing(8.0)
+        .horizontal_alignment(HorizontalAlignment::Center);
+    notice_page(
+        None,
+        &wake_parked_line(&target.name),
+        WAKE_PARKED_HINT,
+        vec![actions.into()],
     )
 }

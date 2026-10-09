@@ -81,6 +81,8 @@ pub(crate) enum Screen {
     /// Wake-on-LAN "wait until up": a magic packet was sent to an offline saved host and we're
     /// polling mDNS for it to reappear (re-sending periodically) before dialing. Cancelable.
     Waking,
+    /// The wake ran out of budget: Try again replays it for the same target, Cancel goes home.
+    WakeParked,
     Stream,
     Settings,
     /// Open-source / third-party license notices (reached from Settings).
@@ -655,11 +657,12 @@ fn root(cx: &mut RenderCx, ctx: &Arc<AppCtx>) -> Element {
                 set_hosts_rev: set_hosts_rev.clone(),
             },
         ),
-        // connecting_page / request_access_page / waking_page / settings_page / licenses_page /
-        // help_page use no hooks (they never touch `cx`), so calling them inline is sound.
+        // The connecting, request-access, waking, wake-parked, settings, licenses and help pages
+        // use no hooks (they never touch `cx`), so calling them inline is sound.
         Screen::Connecting => connect::connecting_page(ctx, &status),
         Screen::RequestAccess => connect::request_access_page(ctx, &set_screen),
         Screen::Waking => connect::waking_page(ctx, &set_screen),
+        Screen::WakeParked => connect::wake_parked_page(ctx, &set_screen, &set_status),
         Screen::Settings => settings::settings_page(
             ctx,
             &set_screen,
