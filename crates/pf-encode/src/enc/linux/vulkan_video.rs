@@ -1290,64 +1290,13 @@ impl VulkanVideoEncoder {
             max_quality_levels,
             "vulkan-encode: quality level (0 = fastest preset; PUNKTFUNK_VULKAN_QUALITY overrides)"
         );
-        // VBR (average == max) stops CBR bit-stuffing: Vulkan has no filler-suppression
-        // control, so the mode is the only lever. CBR-only drivers keep the loose (1000, 500)
-        // window — tightening CBR starts stuffing earlier.
-        let vbr_advertised =
-            rate_control_modes.contains(vk::VideoEncodeRateControlModeFlagsKHR::VBR);
-        if !vbr_advertised
-            && !rate_control_modes.contains(vk::VideoEncodeRateControlModeFlagsKHR::CBR)
-        {
-            // A driver with neither CBR nor VBR would need the DEFAULT-mode no-layer shape
-            // this backend does not speak. Keep CBR but say so.
-            tracing::warn!(
-                modes = rate_control_modes.as_raw(),
-                "vulkan-encode: driver advertises neither CBR nor VBR — installing CBR anyway \
-                 (pre-existing behaviour; may fail validation on this driver)"
-            );
-        }
-        // `PUNKTFUNK_VULKAN_RC=cbr|vbr`. `vbr` is honoured only when advertised; anything
-        // else means auto.
-        let vbr = match std::env::var("PUNKTFUNK_VULKAN_RC")
-            .unwrap_or_default()
-            .trim()
-            .to_ascii_lowercase()
-            .as_str()
-        {
-            "cbr" => false,
-            _ => vbr_advertised,
-        };
-        let (rc_mode, vbv_ms) = if vbr {
-            (
-                vk::VideoEncodeRateControlModeFlagsKHR::VBR,
-                crate::vbv_window_ms(fps),
-            )
-        } else {
-            (
-                vk::VideoEncodeRateControlModeFlagsKHR::CBR,
-                (1000u32, 500u32),
-            )
-        };
-        tracing::info!(
-            rc_mode = if vbr { "VBR (capped at target)" } else { "CBR" },
-            vbv_window_ms = vbv_ms.0,
-            vbv_initial_ms = vbv_ms.1,
+        let (rc_mode, vbv_ms, bitrate) = rc_plan(
+            rate_control_modes,
+            std::env::var("PUNKTFUNK_VULKAN_RC").ok().as_deref(),
             fps,
+            bitrate,
             hw_max_bitrate,
-            "vulkan-encode: rate control (VBR when the driver offers it — CBR must stuff filler \
-             on calm content; PUNKTFUNK_VULKAN_RC overrides, PUNKTFUNK_VBV_FRAMES scales the VBR \
-             window)"
         );
-        let bitrate = if bitrate > hw_max_bitrate {
-            tracing::warn!(
-                requested = bitrate,
-                cap = hw_max_bitrate,
-                "vulkan-encode: requested bitrate exceeds the driver's maxBitrate — clamping"
-            );
-            hw_max_bitrate
-        } else {
-            bitrate
-        };
         // Enable `VK_EXT_queue_family_foreign` when advertised so dmabuf-acquire FOREIGN src
         // is spec-legal.
         let foreign_ok =
@@ -4281,7 +4230,7 @@ mod reframe_stage;
 mod build;
 use self::build::{
     align_up, build_parameters_av1, build_parameters_h265, make_frame, make_video_image,
-    probe_rgb_direct, probe_yuv_storage_planes, rgb_model_for,
+    probe_rgb_direct, probe_yuv_storage_planes, rc_plan, rgb_model_for,
 };
 
 #[cfg(test)]

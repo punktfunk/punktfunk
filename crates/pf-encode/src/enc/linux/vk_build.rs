@@ -21,6 +21,55 @@ pub(super) fn align_up(v: u64, a: u64) -> u64 {
     v.div_ceil(a) * a
 }
 
+/// The session's rate control as `(mode, (vbv_window_ms, vbv_initial_ms), bitrate)`. VBR
+/// (average == max) when the driver advertises it and `rc_env` (`PUNKTFUNK_VULKAN_RC`) is not
+/// `cbr`: Vulkan cannot suppress CBR's filler, so the mode is the only lever. CBR keeps the loose
+/// (1000, 500) window, since a tighter one starts stuffing earlier. `bitrate` is clamped to the
+/// driver's `hw_max`.
+pub(super) fn rc_plan(
+    modes: vk::VideoEncodeRateControlModeFlagsKHR,
+    rc_env: Option<&str>,
+    fps: u32,
+    bitrate: u64,
+    hw_max: u64,
+) -> (vk::VideoEncodeRateControlModeFlagsKHR, (u32, u32), u64) {
+    use vk::VideoEncodeRateControlModeFlagsKHR as Rc;
+    let vbr_advertised = modes.contains(Rc::VBR);
+    if !vbr_advertised && !modes.contains(Rc::CBR) {
+        // DEFAULT mode needs a no-layer shape this backend does not speak.
+        tracing::warn!(
+            modes = modes.as_raw(),
+            "vulkan-encode: driver advertises neither CBR nor VBR — installing CBR anyway \
+             (pre-existing behaviour; may fail validation on this driver)"
+        );
+    }
+    // `vbr` is honoured only when advertised; anything but `cbr` means auto.
+    let vbr = vbr_advertised && !rc_env.is_some_and(|v| v.trim().eq_ignore_ascii_case("cbr"));
+    let (mode, vbv_ms) = if vbr {
+        (Rc::VBR, crate::vbv_window_ms(fps))
+    } else {
+        (Rc::CBR, (1000, 500))
+    };
+    tracing::info!(
+        rc_mode = if vbr { "VBR (capped at target)" } else { "CBR" },
+        vbv_window_ms = vbv_ms.0,
+        vbv_initial_ms = vbv_ms.1,
+        fps,
+        hw_max_bitrate = hw_max,
+        "vulkan-encode: rate control (VBR when the driver offers it — CBR must stuff filler \
+         on calm content; PUNKTFUNK_VULKAN_RC overrides, PUNKTFUNK_VBV_FRAMES scales the VBR \
+         window)"
+    );
+    if bitrate > hw_max {
+        tracing::warn!(
+            requested = bitrate,
+            cap = hw_max,
+            "vulkan-encode: requested bitrate exceeds the driver's maxBitrate — clamping"
+        );
+    }
+    (mode, vbv_ms, bitrate.min(hw_max))
+}
+
 /// Probe the RGB-direct encode source (`design/vulkan-rgb-direct-encode.md`): can this device
 /// take the captured RGB dmabuf directly, with the VCN EFC doing the CSC, via
 /// `VK_VALVE_video_encode_rgb_conversion`?
