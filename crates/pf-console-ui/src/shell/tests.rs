@@ -1,3 +1,4 @@
+use super::backdrop::{build_mesh_os, FIELD_STEP};
 use super::connect::{
     ASKING_CARD_AFTER, LAUNCH_HOLD_MAX, LAUNCH_NO_LEASE, PROFILES_WAIT, SEAT_POLL,
 };
@@ -1660,7 +1661,7 @@ fn the_backdrop_caches_its_field() {
     let mut frame = |s: &mut Shell, t: f64| {
         s.fake_clock = Some((t, 0.0));
         s.render(surface.canvas(), 1280, 800, &fonts, None, None, &pads);
-        s.field.borrow().as_ref().map(|c| (c.size, c.t))
+        s.backdrop.field.borrow().as_ref().map(|c| (c.size, c.t))
     };
 
     assert_eq!(frame(&mut s, 0.0), Some(((192, 120), 0.0)));
@@ -1676,7 +1677,10 @@ fn the_backdrop_caches_its_field() {
     let mut small = skia_safe::surfaces::raster_n32_premul((480, 300)).unwrap();
     s.fake_clock = Some((2.0, 0.0));
     s.render(small.canvas(), 480, 300, &fonts, None, None, &pads);
-    assert_eq!(s.field.borrow().as_ref().map(|c| c.size), Some((192, 120)));
+    assert_eq!(
+        s.backdrop.field.borrow().as_ref().map(|c| c.size),
+        Some((192, 120))
+    );
 
     // Flag off: still the offscreen, now at the full edge — 1280 wide is 512.
     s.settings
@@ -1684,7 +1688,10 @@ fn the_backdrop_caches_its_field() {
         .insert("android.reduce_ui_resolution".into(), false.into());
     s.fake_clock = Some((3.0, 0.0));
     s.render(surface.canvas(), 1280, 800, &fonts, None, None, &pads);
-    assert_eq!(s.field.borrow().as_ref().map(|c| c.size), Some((512, 320)));
+    assert_eq!(
+        s.backdrop.field.borrow().as_ref().map(|c| c.size),
+        Some((512, 320))
+    );
 }
 
 /// Bounding box of lit pixels: `(left, right, bottom)`. White ink on black, any channel.

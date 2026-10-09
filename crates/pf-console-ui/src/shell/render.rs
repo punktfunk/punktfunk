@@ -80,7 +80,7 @@ impl Shell {
         self.tick_ok();
         // Publish ink before any draw. Widgets read `theme::set_ink`; skipping this
         // paints the previous palette's text on the new field.
-        crate::theme::set_ink(self.ink);
+        crate::theme::set_ink(self.backdrop.ink);
         // Same publish-once contract as ink. Also a local: `LayerEnv` mut-borrows
         // `settings`, so the transition arms cannot read the field.
         let reduce = self.reduce_motion();
@@ -130,11 +130,11 @@ impl Shell {
             Bg::Aurora => 0.0,
             Bg::Form => 1.0,
         };
-        self.bg_mix = approach(self.bg_mix, bg_target, dt, 0.12);
-        if (self.bg_mix - bg_target).abs() < 0.005 {
-            self.bg_mix = bg_target;
+        self.backdrop.bg_mix = approach(self.backdrop.bg_mix, bg_target, dt, 0.12);
+        if (self.backdrop.bg_mix - bg_target).abs() < 0.005 {
+            self.backdrop.bg_mix = bg_target;
         }
-        self.draw_aurora(canvas, full_w, full_h, t, self.bg_mix);
+        self.draw_aurora(canvas, full_w, full_h, t, self.backdrop.bg_mix);
         // Translate only when inset: with none this is the desktop canvas, and
         // screenshot dumps stay byte-identical.
         let inset = ins.left != 0.0 || ins.top != 0.0;
