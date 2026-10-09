@@ -31,20 +31,34 @@ static PunktfunkConfig make_config(uint32_t role, uint32_t drop_period) {
 int main(void) {
     printf("punktfunk C ABI harness (abi_version=%u)\n", punktfunk_abi_version());
 
-    /* PunktfunkConnectOpts: the C compiler agrees with Rust's const-asserted layout, 136 bytes on
-     * 64-bit and 96 on 32-bit with no tail padding, so an appended field never lands in bytes an
+    /* PunktfunkConnectOpts: the C compiler agrees with Rust's const-asserted layout, 144 bytes on
+     * 64-bit and 104 on 32-bit with no tail padding, so an appended field never lands in bytes an
      * older caller's sizeof covered. The size-prefix guard rejects an undersized struct as a
      * status, not a read. The staticlib this links always carries quic. */
 #ifdef PUNKTFUNK_FEATURE_QUIC
-    if (sizeof(PunktfunkConnectOpts) != (sizeof(void *) == 8 ? 136u : 96u)
+    if (sizeof(PunktfunkConnectOpts) != (sizeof(void *) == 8 ? 144u : 104u)
         || offsetof(PunktfunkConnectOpts, video_fit) != (sizeof(void *) == 8 ? 100u : 72u)
         || offsetof(PunktfunkConnectOpts, delivery_flags) != (sizeof(void *) == 8 ? 121u : 85u)
-        || offsetof(PunktfunkConnectOpts, profile_id) != (sizeof(void *) == 8 ? 128u : 92u)) {
-        fprintf(stderr, "FAIL: PunktfunkConnectOpts is %zu bytes, video_fit at %zu, delivery_flags at %zu, profile_id at %zu\n",
+        || offsetof(PunktfunkConnectOpts, profile_id) != (sizeof(void *) == 8 ? 128u : 92u)
+        || offsetof(PunktfunkConnectOpts, pyrowave_bpp_x100) != (sizeof(void *) == 8 ? 136u : 96u)) {
+        fprintf(stderr, "FAIL: PunktfunkConnectOpts is %zu bytes, video_fit at %zu, delivery_flags at %zu, profile_id at %zu, pyrowave_bpp_x100 at %zu\n",
                 sizeof(PunktfunkConnectOpts), offsetof(PunktfunkConnectOpts, video_fit),
                 offsetof(PunktfunkConnectOpts, delivery_flags),
-                offsetof(PunktfunkConnectOpts, profile_id));
+                offsetof(PunktfunkConnectOpts, profile_id),
+                offsetof(PunktfunkConnectOpts, pyrowave_bpp_x100));
         return 1;
+    }
+    /* The PyroWave quality row's rate and warning: 4K120 at 1.6 bits per pixel on an unknown link. */
+    {
+        char line[160];
+        uint32_t kbps = punktfunk_pyrowave_kbps(3840, 2160, 120, false, 8, 160);
+        if (kbps != 1592524u
+            || punktfunk_pyrowave_link_warning(kbps, PUNKTFUNK_IFACE_KIND_UNKNOWN, 0, line, sizeof(line))
+                   != PUNKTFUNK_STATUS_OK
+            || strstr(line, "1.6 Gbit/s") == NULL) {
+            fprintf(stderr, "FAIL: PyroWave quality priced %u kbps, warned \"%s\"\n", (unsigned)kbps, line);
+            return 1;
+        }
     }
     {
         PunktfunkConnectOpts o;

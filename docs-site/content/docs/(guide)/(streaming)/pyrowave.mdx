@@ -43,8 +43,9 @@ PyroWave has no quality setting of its own: its encoder fills each frame's byte 
 Punktfunk sets that budget in **bits per pixel**, so one number means the same picture at every
 resolution and frame rate.
 
-A client that sends its own quality, 0.5 to 2, gets it for that session. For every client that
-sends none, set the host's value in the web console under **Host → Video → PyroWave quality**, or
+Set it on the client under **PyroWave quality**, 0.5 to 2, shown as the rate it needs at your
+stream's mode ([Client settings](/docs/client-settings)). For a client without that row, set the
+host's value in the web console under **Host → Video → PyroWave quality**, or
 with `PUNKTFUNK_PYROWAVE_BPP` in `host.env`: 0.25 to 4, from the next session. Either way a fixed
 bitrate on the client doesn't apply; with **Automatic**, the quality is the most a session uses
 ([Fitting the link](#fitting-the-link)).

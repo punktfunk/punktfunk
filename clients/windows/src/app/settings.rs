@@ -475,16 +475,50 @@ pub(crate) fn refresh_snapshot(ctx: &Arc<AppCtx>) {
         gpus: crate::gpu::adapter_names(),
         speakers,
         mics,
+        native: primary_mode(),
+        link: punktfunk_core::transport::ifinfo::local_link_facts(None),
     };
 }
 
-/// This device's pickable hardware: DXGI adapters and WASAPI endpoints. Probed once per
-/// visit by [`refresh_snapshot`], never on the render each settings commit triggers.
+/// The primary display's current mode in real pixels: what a Native stream asks for here.
+/// `None` when Windows names none.
+fn primary_mode() -> Option<punktfunk_core::Mode> {
+    use windows::Win32::wingdi::DEVMODEW;
+    use windows::Win32::winuser::{EnumDisplaySettingsW, ENUM_CURRENT_SETTINGS};
+    // SAFETY: DEVMODEW is integers, arrays and unions of integers; all-zero is a valid value.
+    let mut dm: DEVMODEW = unsafe { std::mem::zeroed() };
+    dm.dmSize = std::mem::size_of::<DEVMODEW>() as u16;
+    // SAFETY: `dm` is a local with `dmSize` set, the one field the call reads before filling it;
+    // a null device name is the current display device.
+    let ok = unsafe {
+        EnumDisplaySettingsW(
+            windows::core::PCWSTR::null(),
+            ENUM_CURRENT_SETTINGS,
+            &mut dm,
+        )
+    };
+    (ok.as_bool() && dm.dmPelsWidth > 0).then_some(punktfunk_core::Mode {
+        width: dm.dmPelsWidth,
+        height: dm.dmPelsHeight,
+        // 0 and 1 are "the hardware's default".
+        refresh_hz: if dm.dmDisplayFrequency > 1 {
+            dm.dmDisplayFrequency
+        } else {
+            60
+        },
+    })
+}
+
+/// This device's pickable hardware: DXGI adapters and WASAPI endpoints, and the display and
+/// link PyroWave quality prices against. Probed once per visit by [`refresh_snapshot`], never
+/// on the render each settings commit triggers.
 #[derive(Default)]
 pub(crate) struct DeviceProbes {
     gpus: Vec<String>,
     speakers: Vec<pf_client_core::audio::AudioDevice>,
     mics: Vec<pf_client_core::audio::AudioDevice>,
+    native: Option<punktfunk_core::Mode>,
+    link: punktfunk_core::transport::LinkFacts,
 }
 
 /// Which tier-P rows the preset in scope overrides. Plain bools rather than a lookup so the
@@ -495,6 +529,7 @@ struct OverrideFlags {
     refresh_hz: bool,
     render_scale: bool,
     bitrate_kbps: bool,
+    pyrowave_bpp: bool,
     codec: bool,
     hdr_enabled: bool,
     enable_444: bool,
@@ -536,6 +571,7 @@ impl OverrideFlags {
             refresh_hz: o.refresh_hz.is_some(),
             render_scale: o.render_scale.is_some(),
             bitrate_kbps: o.bitrate_kbps.is_some(),
+            pyrowave_bpp: o.pyrowave_bpp.is_some(),
             codec: o.codec.is_some(),
             hdr_enabled: o.hdr_enabled.is_some(),
             enable_444: o.enable_444.is_some(),
@@ -1182,13 +1218,44 @@ fn display_section(cx: &Cx) -> Vec<Element> {
         let (ctx, scope, set_rev) = (ctx.clone(), scope.to_string(), set_rev.clone());
         NumberBox::new(f64::from(s.bitrate_kbps) / 1000.0)
             .range(0.0, 3000.0)
-            // PyroWave sets its own rate; the stored one stays for the other codecs.
-            .enabled(s.codec != "pyrowave")
             .on_value_changed(move |v: f64| {
                 commit(&ctx, &scope, (rev, &set_rev), |s| {
                     s.bitrate_kbps = (v.clamp(0.0, 3000.0) * 1000.0) as u32;
                 });
             })
+    };
+    // PyroWave sets its own rate: its quality stands where Bitrate stood, as the rate it needs
+    // at the mode a connect would ask, never as bits per pixel. The stored bitrate stays for the
+    // other codecs.
+    let pyrowave = s.codec == "pyrowave";
+    let (quality_caption, quality_warning) = {
+        let probes = ctx.probes.lock().unwrap();
+        let native = probes.native.unwrap_or(punktfunk_core::Mode {
+            width: 1920,
+            height: 1080,
+            refresh_hz: 60,
+        });
+        s.pyrowave_quality_lines(native, probes.link)
+    };
+    let quality_control = {
+        use punktfunk_core::pyrowave::{BPP_FLOOR, BPP_MAX};
+        let (ctx, scope, set_rev) = (ctx.clone(), scope.to_string(), set_rev.clone());
+        let slider = Slider::new(s.pyrowave_bpp)
+            .range(BPP_FLOOR, BPP_MAX)
+            .step(0.1)
+            .on_value_changed(move |v: f64| {
+                commit(&ctx, &scope, (rev, &set_rev), |s| {
+                    s.pyrowave_bpp = (v * 10.0).round() / 10.0;
+                });
+            });
+        // Always mounted, empty while the link carries the rate.
+        let warning = text_block(quality_warning.as_deref().unwrap_or(""))
+            .font_size(12.0)
+            .foreground(ThemeRef::SystemCaution)
+            .wrap()
+            .max_width(420.0)
+            .horizontal_alignment(HorizontalAlignment::Left);
+        vstack((Element::from(slider), Element::from(warning))).spacing(4.0)
     };
     let hdr_toggle = setting_toggle(ctx, scope, (rev, set_rev), s.hdr_enabled, |s, on| {
         s.hdr_enabled = on
@@ -1264,56 +1331,56 @@ fn display_section(cx: &Cx) -> Vec<Element> {
         ],
         None,
     );
+    let mut picture = Vec::new();
+    if !pyrowave {
+        picture.push(described_overridable(
+            (rev, set_rev),
+            scope,
+            "bitrate_kbps",
+            "Bitrate (Mb/s, 0 = automatic)",
+            over.bitrate_kbps,
+            bitrate_box,
+            "0 lets the host decide (its default, clamped to what it supports). A host \
+             card\u{2019}s context menu has a network speed test.",
+        ));
+    }
+    picture.extend([
+        described_overridable(
+            (rev, set_rev),
+            scope,
+            "video_fit",
+            "Picture fit",
+            over.video_fit,
+            fit_combo,
+            "When the stream's shape differs from the window. Fit shows the whole \
+             picture with black bars, Crop to fill cuts the edges off, Stretch to \
+             fill distorts it.",
+        ),
+        described_overridable(
+            (rev, set_rev),
+            scope,
+            "hdr_enabled",
+            "10-bit HDR",
+            over.hdr_enabled,
+            hdr_toggle,
+            "HDR10, when the host has HDR content and this display supports it. \
+             With H.264 the stream stays SDR.",
+        ),
+        described_overridable(
+            (rev, set_rev),
+            scope,
+            "present_priority",
+            "Prioritize",
+            over.present_priority,
+            present_combo,
+            "Lowest latency shows each frame the moment the display can take \
+             it \u{2014} a network hiccup becomes an occasional repeated or \
+             skipped frame. Smoothness buffers a little to even those out.",
+        ),
+    ]);
     out.extend(group(
         Some("Picture"),
-        vec![
-            described_overridable(
-                (rev, set_rev),
-                scope,
-                "bitrate_kbps",
-                "Bitrate (Mb/s, 0 = automatic)",
-                over.bitrate_kbps,
-                bitrate_box,
-                if s.codec == "pyrowave" {
-                    "PyroWave sets its own rate from the stream mode."
-                } else {
-                    "0 lets the host decide (its default, clamped to what it supports). A \
-                     host card\u{2019}s context menu has a network speed test."
-                },
-            ),
-            described_overridable(
-                (rev, set_rev),
-                scope,
-                "video_fit",
-                "Picture fit",
-                over.video_fit,
-                fit_combo,
-                "When the stream's shape differs from the window. Fit shows the whole \
-                 picture with black bars, Crop to fill cuts the edges off, Stretch to \
-                 fill distorts it.",
-            ),
-            described_overridable(
-                (rev, set_rev),
-                scope,
-                "hdr_enabled",
-                "10-bit HDR",
-                over.hdr_enabled,
-                hdr_toggle,
-                "HDR10, when the host has HDR content and this display supports it. \
-                 With H.264 the stream stays SDR.",
-            ),
-            described_overridable(
-                (rev, set_rev),
-                scope,
-                "present_priority",
-                "Prioritize",
-                over.present_priority,
-                present_combo,
-                "Lowest latency shows each frame the moment the display can take \
-                 it \u{2014} a network hiccup becomes an occasional repeated or \
-                 skipped frame. Smoothness buffers a little to even those out.",
-            ),
-        ],
+        picture,
         // The one form-level note, exactly as on Apple.
         Some("Display changes apply from the next session."),
     ));
@@ -1355,6 +1422,19 @@ fn display_section(cx: &Cx) -> Vec<Element> {
              bitrate (hundreds of Mb/s) for near-zero decode time, so it wants \
              gigabit Ethernet.",
         ),
+    ]);
+    if pyrowave {
+        advanced.push(described_overridable(
+            (rev, set_rev),
+            scope,
+            "pyrowave_bpp",
+            "PyroWave quality",
+            over.pyrowave_bpp,
+            quality_control,
+            &quality_caption,
+        ));
+    }
+    advanced.extend([
         // First sentence shared with the GTK client (its chroma_row); the constraint
         // sentence names the real gate (host: PyroWave || NVENC).
         described_overridable(
@@ -1434,6 +1514,7 @@ fn display_section(cx: &Cx) -> Vec<Element> {
         smoothing && s.smooth_buffer != d.smooth_buffer,
         s.render_scale != d.render_scale,
         s.codec != d.codec,
+        pyrowave && s.pyrowave_bpp_x100() != d.pyrowave_bpp_x100(),
         s.enable_444 != d.enable_444,
         s.ten_bit_sdr != d.ten_bit_sdr,
         s.vsync != d.vsync,
@@ -1445,6 +1526,7 @@ fn display_section(cx: &Cx) -> Vec<Element> {
     let overridden = over.smooth_buffer
         || over.render_scale
         || over.codec
+        || (pyrowave && over.pyrowave_bpp)
         || over.enable_444
         || over.ten_bit_sdr
         || over.vsync

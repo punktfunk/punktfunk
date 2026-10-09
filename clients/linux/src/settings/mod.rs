@@ -43,6 +43,29 @@ pub struct DeviceProbes {
     pub mics: Vec<pf_client_core::audio::AudioDevice>,
 }
 
+/// The monitor `window` is on as a stream request, in real pixels: what a Native stream asks
+/// for. 1920×1080 at 60 Hz where GDK names no monitor, as the session assumes.
+fn native_mode(window: &gtk::Widget) -> punktfunk_core::Mode {
+    let monitor = window
+        .native()
+        .and_then(|n| n.surface())
+        .and_then(|s| window.display().monitor_at_surface(&s));
+    let Some(m) = monitor else {
+        return punktfunk_core::Mode {
+            width: 1920,
+            height: 1080,
+            refresh_hz: 60,
+        };
+    };
+    let g = m.geometry();
+    let px = |logical: i32| (f64::from(logical.max(0)) * m.scale()).round() as u32;
+    punktfunk_core::Mode {
+        width: px(g.width()),
+        height: px(g.height()),
+        refresh_hz: ((m.refresh_rate().max(0) + 500) / 1000) as u32,
+    }
+}
+
 /// The dialog in a given [`Scope`]. `on_scope` asks the app to open it again in another one:
 /// a scope change closes this dialog, so one path builds the rows.
 pub fn show_scoped(
@@ -76,7 +99,9 @@ pub fn show_scoped(
         dialog: dialog.clone(),
         inline: choice::gamescope_session(),
         preset_scope: active.is_some(),
+        preset_id: active.as_ref().map(|p| p.id.clone()),
         overlay: active.as_ref().map(|p| &p.overrides),
+        native: native_mode(parent.as_ref()),
         store: &store,
         seed: &seed,
         probes,

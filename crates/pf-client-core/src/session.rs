@@ -29,6 +29,8 @@ pub struct SessionParams {
     pub compositor: CompositorPref,
     pub gamepad: GamepadPref,
     pub bitrate_kbps: u32,
+    /// PyroWave quality in hundredths of a bit per pixel; `0` leaves the host's own.
+    pub pyrowave_bpp_x100: u16,
     /// Requested count (2/6/8); the host echoes the resolved value.
     pub audio_channels: u8,
     /// Requested [`AUDIO_FORMATS`] spelling (`"opus"` ordinarily). A request, never a
@@ -156,11 +158,10 @@ pub struct Probes {
 impl SessionParams {
     /// One fill for a resolved spec and a [`Dial`]. Probes stay off the plan.
     ///
-    /// A zero width, height, or refresh inherits `mode`. Refresh 0 becomes
-    /// `mode.refresh_hz.max(30)`. `exclude_codecs` stays 0. `want_444` is the
-    /// switch; caps carry 4:4:4 only when `hevc_444_hardware` is set too.
-    /// HDR caps need the setting and [`Probes::hdr_enabled`]. The panel volume
-    /// follows the probe alone.
+    /// The mode is [`Settings::stream_mode`](crate::trust::Settings::stream_mode) over the
+    /// probed one. `exclude_codecs` stays 0. `want_444` is the switch; caps carry 4:4:4 only
+    /// when `hevc_444_hardware` is set too. HDR caps need the setting and
+    /// [`Probes::hdr_enabled`]. The panel volume follows the probe alone.
     pub fn from_plan(
         settings: &crate::trust::Settings,
         clipboard: bool,
@@ -169,34 +170,7 @@ impl SessionParams {
         dial: Dial,
         probes: Probes,
     ) -> Self {
-        let mode = Mode {
-            width: if settings.width == 0 {
-                probes.mode.width
-            } else {
-                settings.width
-            },
-            height: if settings.height == 0 {
-                probes.mode.height
-            } else {
-                settings.height
-            },
-            refresh_hz: if settings.refresh_hz == 0 {
-                probes.mode.refresh_hz.max(30)
-            } else {
-                settings.refresh_hz
-            },
-        };
-        let (width, height) = punktfunk_core::render_scale::apply(
-            mode.width,
-            mode.height,
-            settings.render_scale,
-            punktfunk_core::render_scale::max_dimension(&settings.codec),
-        );
-        let mode = Mode {
-            width,
-            height,
-            ..mode
-        };
+        let mode = settings.stream_mode(probes.mode);
         let caps_444 = settings.enable_444 && probes.hevc_444_hardware;
         // The CPU rung is 8-bit: without a hardware 10-bit path the host would
         // build a stream this client tears down.
@@ -219,6 +193,7 @@ impl SessionParams {
                 .unwrap_or(CompositorPref::Auto),
             gamepad: probes.gamepad,
             bitrate_kbps: settings.bitrate_kbps,
+            pyrowave_bpp_x100: settings.pyrowave_bpp_x100(),
             audio_channels: settings.audio_channels,
             audio_format: settings.audio_format.clone(),
             preferred_codec: settings.preferred_codec(),
@@ -638,6 +613,7 @@ fn dial(
         compositor: params.compositor,
         gamepad: params.gamepad,
         bitrate_kbps: plan.bitrate_kbps,
+        pyrowave_bpp_x100: params.pyrowave_bpp_x100,
         video_caps: plan.video_caps,
         audio_channels: params.audio_channels,
         audio_rate_hz,

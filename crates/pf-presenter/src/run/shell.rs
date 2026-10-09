@@ -420,6 +420,7 @@ impl Shell {
                 pad_pref: pad.as_ref().map(|p| p.pref),
                 pads: &pads,
                 ring: ring_facts.as_ref(),
+                native: self.native,
             };
             match o.frame(&ctx) {
                 Ok(f) => self.overlay_frame = f,

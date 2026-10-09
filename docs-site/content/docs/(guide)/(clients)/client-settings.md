@@ -47,6 +47,7 @@ Android. Most settings can differ per [preset](/docs/presets-and-links); the exc
 | **Picture fit** | Fit | When the stream's shape differs from the screen: **Fit** adds black bars, **Crop to fill** cuts the edges, **Stretch to fill** distorts. | All. On Android 9, **Crop to fill** squeezes instead. |
 | **Second screen** | On | A dual-screen handheld's lower panel, or a foldable half open, shows the companion panel — or the picture, with **Screens** ([dual-screen handhelds](/docs/input#dual-screen-handhelds)). Off keeps the stream on this screen and leaves the other to the system: for a phone on a TV. A preset can carry it. | Android |
 | **Video codec** | Automatic | Your pick when the host can encode it, otherwise HEVC, then AV1, then H.264. [PyroWave](/docs/pyrowave) is never picked automatically. | All. Apple and Android hide AV1 and PyroWave when the device can't decode them; the console marks them **(unsupported)**. |
+| **PyroWave quality** | 1.6 bits per pixel | Takes **Bitrate**'s place while the codec is PyroWave. The slider reads as the rate it needs at your stream's size and refresh, such as `3840×2160 at 120 Hz: 1.6 Gbit/s`; higher is sharper. A warning says when this device is on Wi-Fi or its port can't carry that rate. On a weak network the stream still sends less. See [Bits per pixel](/docs/pyrowave#bits-per-pixel). | Linux, Windows, console |
 | **10-bit HDR** | On | Off never sends HDR. On sends 10-bit HDR when the host has HDR content and can encode it. See [HDR](/docs/hdr). | All. Android greys it on a screen without HDR10. |
 | **Full chroma (4:4:4)** | Off | Sharper text and thin lines, at more bandwidth. Needs HEVC or PyroWave and a host that can encode it. | Linux, Windows, Mac, iPhone, iPad, Apple TV |
 | **10-bit SDR** | Off | Smoother gradients without HDR, when the host has a 10-bit desktop or allows widening (see [10-bit SDR](/docs/hdr#10-bit-sdr)) and its encoder supports it. HDR takes over when it engages. | All |
@@ -65,8 +66,8 @@ what the link does: a host port faster than this device's, an adapter that drops
 burst, a small receive buffer, a link fault, a queue, Wi-Fi. Where one helps, it offers **paced
 delivery** for that host: the host then spreads each frame's packets instead of sending them in one
 burst, which costs a few milliseconds a frame and is remembered per host, never for every host. A
-host that cannot do it streams as it always has. With PyroWave the bitrate row is greyed: the host
-sets the rate from its [bits per pixel](/docs/pyrowave#bits-per-pixel).
+host that cannot do it streams as it always has. With PyroWave, **PyroWave quality** sets the rate
+instead of **Bitrate**.
 
 ## Audio
 
@@ -176,6 +177,7 @@ it really sends.
 |---|---|
 | A resolution and refresh rate | Builds a display at exactly that mode. A host [streaming a real monitor](/docs/virtual-displays#stream-a-real-monitor-instead) keeps that monitor's mode and your device scales. A size the encoder can't take fails the connect. |
 | A bitrate | Clamps it to 500 kbps – 8 Gbps. PyroWave ignores it. |
+| A PyroWave quality | Holds it between 0.5 and 2 bits per pixel, under its **PyroWave bitrate cap**. A host that doesn't read it uses its own **PyroWave quality**. |
 | A codec | Uses it if it can encode it, otherwise HEVC, AV1, H.264 in that order. |
 | 10-bit HDR | Sends it only for HDR content on an encoder that can; otherwise 8-bit SDR. |
 | 4:4:4 | Sends it only when every requirement is met; otherwise 4:2:0. |

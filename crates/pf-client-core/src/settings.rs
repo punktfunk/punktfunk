@@ -144,6 +144,11 @@ pub struct Settings {
     pub refresh_hz: u32,
     /// Requested encoder bitrate (kbps); 0 = host default.
     pub bitrate_kbps: u32,
+    /// PyroWave quality, bits per pixel in `[BPP_FLOOR, BPP_MAX]`
+    /// ([`punktfunk_core::pyrowave`]). The most a PyroWave session sends; Automatic adapts
+    /// under it.
+    #[serde(default = "default_pyrowave_bpp")]
+    pub pyrowave_bpp: f64,
     /// Host render/encode at `mode × render_scale`; presenter downscales. `> 1`
     /// supersamples; `< 1` under-renders; `1.0` = native. Clamped even, codec max.
     pub render_scale: f64,
@@ -436,6 +441,62 @@ fn default_stats_scale_pct() -> u16 {
     100
 }
 
+fn default_pyrowave_bpp() -> f64 {
+    punktfunk_core::pyrowave::BPP_DEFAULT
+}
+
+impl Settings {
+    /// The mode a connect asks for: a `0` size or refresh takes `native`'s (a refresh under 30
+    /// reads 30), then render scale.
+    pub fn stream_mode(&self, native: punktfunk_core::Mode) -> punktfunk_core::Mode {
+        let pick = |set: u32, native: u32| if set == 0 { native } else { set };
+        let (width, height) = punktfunk_core::render_scale::apply(
+            pick(self.width, native.width),
+            pick(self.height, native.height),
+            self.render_scale,
+            punktfunk_core::render_scale::max_dimension(&self.codec),
+        );
+        punktfunk_core::Mode {
+            width,
+            height,
+            refresh_hz: pick(self.refresh_hz, native.refresh_hz.max(30)),
+        }
+    }
+
+    /// [`Self::pyrowave_bpp`] in the hundredths the dial carries, held inside
+    /// `[BPP_FLOOR, BPP_MAX]`.
+    pub fn pyrowave_bpp_x100(&self) -> u16 {
+        use punktfunk_core::pyrowave::{BPP_FLOOR, BPP_MAX};
+        (self.pyrowave_bpp.clamp(BPP_FLOOR, BPP_MAX) * 100.0).round() as u16
+    }
+
+    /// The PyroWave quality row's caption, `3840×2160 at 120 Hz: 1.3 Gbit/s`, and the warning
+    /// when `link` is short of that rate. The mode is [`Self::stream_mode`] over `native`; 4:4:4
+    /// and 10 bits follow the switches that ask for them.
+    pub fn pyrowave_quality_lines(
+        &self,
+        native: punktfunk_core::Mode,
+        link: punktfunk_core::transport::LinkFacts,
+    ) -> (String, Option<String>) {
+        let mode = self.stream_mode(native);
+        let ten_bit = self.hdr_enabled || self.ten_bit_sdr;
+        let kbps = punktfunk_core::pyrowave::kbps_for(
+            &mode,
+            self.enable_444,
+            if ten_bit { 10 } else { 8 },
+            f64::from(self.pyrowave_bpp_x100()) / 100.0,
+        );
+        let caption = format!(
+            "{}\u{d7}{} at {} Hz: {}",
+            mode.width,
+            mode.height,
+            mode.refresh_hz,
+            punktfunk_core::pyrowave::rate_label(kbps)
+        );
+        (caption, punktfunk_core::pyrowave::link_warning(kbps, link))
+    }
+}
+
 impl Settings {
     /// Overlay tier, resolving pre-tier stores: `show_stats = false` → Off, else Normal.
     pub fn stats_verbosity(&self) -> StatsVerbosity {
@@ -557,6 +618,7 @@ impl Default for Settings {
             height: 0,
             refresh_hz: 0,
             bitrate_kbps: 0,
+            pyrowave_bpp: default_pyrowave_bpp(),
             render_scale: 1.0,
             video_fit: default_video_fit(),
             gamepad: "auto".into(),
@@ -918,6 +980,55 @@ mod tests {
 
     /// One-off beats binding; `""` forces defaults; unknown one-off falls back to
     /// defaults, not the host's preset.
+    /// An older store reads the default quality, the dial carries it in hundredths held inside
+    /// the bounds, and the caption prices the mode a connect would ask at it.
+    #[test]
+    fn pyrowave_quality_reads_as_the_rate_it_needs() {
+        use punktfunk_core::transport::{LinkFacts, IFACE_KIND_ETHERNET};
+        let old: Settings = serde_json::from_str(r#"{"width":1920,"height":1080}"#).unwrap();
+        assert_eq!(old.pyrowave_bpp, 1.6);
+        assert_eq!(old.pyrowave_bpp_x100(), 160);
+        let past = Settings {
+            pyrowave_bpp: 9.0,
+            ..Settings::default()
+        };
+        assert_eq!(past.pyrowave_bpp_x100(), 200);
+        let native = punktfunk_core::Mode {
+            width: 3840,
+            height: 2160,
+            refresh_hz: 120,
+        };
+        let sdr = Settings {
+            hdr_enabled: false,
+            ..Settings::default()
+        };
+        let wire = LinkFacts {
+            kind: IFACE_KIND_ETHERNET,
+            mbps: 2500,
+        };
+        assert_eq!(
+            sdr.pyrowave_quality_lines(native, wire),
+            ("3840\u{d7}2160 at 120 Hz: 1.6 Gbit/s".into(), None)
+        );
+        // A fixed mode and render scale price what the host would build.
+        let half = Settings {
+            width: 1920,
+            height: 1080,
+            refresh_hz: 60,
+            render_scale: 0.5,
+            ..sdr.clone()
+        };
+        assert_eq!(
+            half.pyrowave_quality_lines(native, wire).0,
+            "960\u{d7}540 at 60 Hz: 50 Mbit/s"
+        );
+        let (_, warning) = sdr.pyrowave_quality_lines(native, LinkFacts::default());
+        assert_eq!(
+            warning.as_deref(),
+            Some("Needs 1.6 Gbit/s \u{2014} more than a 1 GbE link carries.")
+        );
+    }
+
     #[test]
     fn preset_resolution_precedence() {
         use crate::presets::{PresetsFile, StreamPreset};

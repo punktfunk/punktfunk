@@ -140,6 +140,7 @@ fn catalog_key(id: RowId) -> Option<&'static str> {
         RowId::Resolution => "resolution",
         RowId::Refresh => "refresh_hz",
         RowId::Bitrate => "bitrate_kbps",
+        RowId::PyroWaveQuality => "pyrowave_bpp",
         RowId::VideoFit => "video_fit",
         RowId::Hdr => "hdr_enabled",
         RowId::PresentPriority => "present_priority",
@@ -803,25 +804,50 @@ fn av1_reads_unsupported_without_a_hardware_decoder() {
     );
 }
 
+/// Under PyroWave the quality stands where Bitrate stood, priced at the stream's mode, and
+/// steps a tenth at a time inside its bounds. The stored bitrate is kept for the other codecs.
 #[test]
-fn bitrate_dims_under_pyrowave() {
+fn pyrowave_quality_takes_the_bitrate_rows_place() {
     let mut settings = Settings {
         codec: "pyrowave".into(),
         bitrate_kbps: 80_000,
+        width: 1920,
+        height: 1080,
+        refresh_hz: 60,
+        hdr_enabled: false,
         ..Settings::default()
     };
     let library = crate::library::LibraryShared::default();
     let mut ctx = Ctx::test(&mut settings, &library);
-    assert!(!row_spec(RowId::Bitrate, &ctx, &[], &Default::default()).enabled);
+    assert!(!row_applies(RowId::Bitrate, &ctx));
+    assert!(row_applies(RowId::PyroWaveQuality, &ctx));
     assert!(
-        !adjust(RowId::Bitrate, 1, false, &mut ctx),
-        "pyrowave = thud"
+        changed(&[RowId::PyroWaveQuality], &ctx).is_empty(),
+        "a size of its own is no changed quality"
     );
-    assert!(!adjust(RowId::Bitrate, 1, true, &mut ctx), "A too");
-    assert_eq!(ctx.settings.bitrate_kbps, 80_000, "the stored rate is kept");
+    let spec = row_spec(RowId::PyroWaveQuality, &ctx, &[], &Default::default());
+    assert_eq!(
+        spec.value.as_deref(),
+        Some("1920\u{d7}1080 at 60 Hz: 199 Mbit/s")
+    );
+    assert!(adjust(RowId::PyroWaveQuality, 1, false, &mut ctx));
+    assert_eq!(ctx.settings.pyrowave_bpp, 1.7);
+    ctx.settings.pyrowave_bpp = 2.0;
+    assert!(
+        !adjust(RowId::PyroWaveQuality, 1, false, &mut ctx),
+        "2.0 is the top"
+    );
+    ctx.settings.pyrowave_bpp = 1.65;
+    assert!(adjust(RowId::PyroWaveQuality, -1, false, &mut ctx));
+    assert_eq!(
+        ctx.settings.pyrowave_bpp, 1.6,
+        "between rungs, down is the rung below"
+    );
 
     ctx.settings.codec = "hevc".into();
-    assert!(row_spec(RowId::Bitrate, &ctx, &[], &Default::default()).enabled);
+    assert!(row_applies(RowId::Bitrate, &ctx));
+    assert!(!row_applies(RowId::PyroWaveQuality, &ctx));
+    assert_eq!(ctx.settings.bitrate_kbps, 80_000, "the stored rate is kept");
     assert!(adjust(RowId::Bitrate, 1, false, &mut ctx));
 }
 
@@ -1527,7 +1553,7 @@ fn every_row_has_exactly_one_tab() {
             seen.push(*id);
         }
     }
-    assert_eq!(seen.len(), 68, "{seen:?}");
+    assert_eq!(seen.len(), 69, "{seen:?}");
     assert!(
         !seen.contains(&RowId::AdvancedChanged),
         "built per tab, never listed"
@@ -1928,7 +1954,8 @@ fn the_background_rows_follow_the_device() {
 fn the_preset_field_map_matches_the_override_map() {
     let every: SettingsOverlay = serde_json::from_value(serde_json::json!({
         "width": 1920, "height": 1080, "refresh_hz": 60, "match_window": false,
-        "bitrate_kbps": 20000, "render_scale": 1.0, "video_fit": "fit", "codec": "hevc",
+        "bitrate_kbps": 20000, "pyrowave_bpp": 1.6, "render_scale": 1.0, "video_fit": "fit",
+        "codec": "hevc",
         "hdr_enabled": true, "enable_444": false, "ten_bit_sdr": false, "compositor": "auto",
         "audio_channels": 2, "audio_format": "opus", "keep_host_audio": false,
         "mic_enabled": true, "echo_cancel": true, "touch_mode": "trackpad",

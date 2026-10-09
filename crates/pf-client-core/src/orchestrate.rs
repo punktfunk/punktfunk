@@ -1582,6 +1582,7 @@ mod tests {
             preset_override: None,
             settings: Settings {
                 bitrate_kbps: 42_000,
+                pyrowave_bpp: 1.2,
                 codec: "av1".into(),
                 enable_444: true,
                 ..Default::default()
@@ -1618,6 +1619,7 @@ mod tests {
         );
         assert_eq!(params.bitrate_kbps, plan.settings.bitrate_kbps);
         assert_ne!(plan.settings.bitrate_kbps, Settings::default().bitrate_kbps);
+        assert_eq!(params.pyrowave_bpp_x100, 120);
         assert_eq!(params.preferred_codec, punktfunk_core::quic::CODEC_AV1);
         assert_ne!(plan.settings.codec, Settings::default().codec);
         assert_eq!(params.exclude_codecs, 0);
