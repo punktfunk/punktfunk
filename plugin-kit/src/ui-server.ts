@@ -14,6 +14,7 @@ import {
 	type HostClientService,
 	PluginInfo,
 } from "./host-client.js";
+import { PAGE_SEGMENT } from "./wire.js";
 
 /**
  * Everything `HttpApiBuilder.layer` needs beyond the router, satisfied from effect core —
@@ -155,11 +156,9 @@ export interface ServeUiGame<S extends Schema.Top> {
 	readonly page?: (entryId: string) => Effect.Effect<string | undefined>;
 }
 
-/** One path segment the console's plugin route can carry: no `/`, nothing to escape. */
+/** `page` when it is one segment the console's plugin route can carry (`PAGE_SEGMENT`). */
 const pageRoute = (page: string | undefined): string | undefined =>
-	page !== undefined && /^[A-Za-z0-9._~-]{1,200}$/.test(page)
-		? page
-		: undefined;
+	page !== undefined && new RegExp(PAGE_SEGMENT).test(page) ? page : undefined;
 
 /**
  * A library id the host accepts: `<store>:<external id>`, both halves non-empty, at most 1024

@@ -1,3 +1,4 @@
+import type { PAGE_SEGMENT } from "@punktfunk/plugin-kit/wire";
 import { useQueries, useQueryClient } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import { toast } from "@unom/ui/toast";
@@ -34,8 +35,10 @@ interface Section {
 	page?: string;
 }
 
-/** One segment the plugin route carries; the kit drops anything else, and so does this. */
-const PAGE_RE = /^[A-Za-z0-9._~-]{1,200}$/;
+/** One segment the plugin route carries; the kit drops anything else, and so does this. Typed
+ * as the kit's own rule, so tsc fails when the two differ. */
+const PAGE: typeof PAGE_SEGMENT = "^[A-Za-z0-9._~-]{1,200}$";
+const PAGE_RE = new RegExp(PAGE);
 
 type Loaded =
 	| { tag: "ready"; section: Section }

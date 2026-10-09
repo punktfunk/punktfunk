@@ -18,7 +18,7 @@ import { DialogButton, Focusable, ModalRoot, Spinner, showModal } from "@decky/u
 import { toaster } from "@decky/api";
 import { FC, useRef, useState } from "react";
 import { trustHost } from "./backend";
-import { HostView } from "./hooks";
+import type { HostView } from "./hosts";
 import { PairModal } from "./pair";
 
 /** User-facing copy for a `trustHost` failure code. */

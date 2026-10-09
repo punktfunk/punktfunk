@@ -1,7 +1,12 @@
 import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import { Glob } from "bun";
 import {
 	encodeRest,
+	GATED_ROUTES,
 	gatedRoute,
+	HOST_REFUSED,
 	isUiCredential,
 	seatCall,
 	seatPath,
@@ -80,4 +85,22 @@ describe("gatedRoute", () => {
 		expect(gatedRoute("POST", "library/page")).toBeNull();
 		expect(gatedRoute("PUT", "library/custom/7/extra")).toBeNull();
 	});
+});
+
+test("every password-gated route is gated through a seat too, or the seat's host refuses it", () => {
+	const root = join(import.meta.dir, "../routes/api/v1");
+	const gated = [...new Glob("**/*.ts").scanSync(root)]
+		.filter((file) =>
+			/from "(\.\.\/)+util\/(confirm|libraryConfirm)"/.test(
+				readFileSync(join(root, file), "utf8"),
+			),
+		)
+		.map((file) => file.replace(/\.ts$/, ""));
+	expect(gated).toEqual(expect.arrayContaining([...GATED_ROUTES]));
+	const unguarded = gated.filter(
+		(route) =>
+			!(GATED_ROUTES as readonly string[]).includes(route) &&
+			!HOST_REFUSED.includes(route.split("/")[0] ?? ""),
+	);
+	expect(unguarded).toEqual([]);
 });

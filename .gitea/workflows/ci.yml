@@ -662,12 +662,13 @@ jobs:
         working-directory: clients/decky
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Typecheck
+      # `test` is the typecheck plus the host-row-vectors replay through mergeHosts.
+      - name: Typecheck + test
         run: |
           corepack enable
           corepack prepare pnpm@9 --activate
           pnpm install --frozen-lockfile
-          pnpm run typecheck
+          pnpm run test
 
   # web/bun.nix and sdk/bun.nix are GENERATED from their bun.lock (bun2nix) and committed; the Nix
   # build fetches node_modules from nothing else. They regenerate only on a local `bun install` that

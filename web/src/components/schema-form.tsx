@@ -13,33 +13,14 @@ import {
 	SelectValue,
 } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
+import { flatten, handed, type JsonSchemaNode } from "@/lib/schema-node";
 import { m } from "@/paraglide/messages";
 
 export type JsonObject = Record<string, unknown>;
 
-export interface JsonSchemaNode {
-	type?: string;
-	title?: string;
-	description?: string;
-	default?: unknown;
-	enum?: string[];
-	/** `pf:path` / `pf:path:write`: a folder the console grants the plugin on save. */
-	format?: string;
-	properties?: Record<string, JsonSchemaNode>;
-	items?: JsonSchemaNode;
-	allOf?: JsonSchemaNode[];
-}
-
 export interface JsonSchemaDoc {
 	schema?: JsonSchemaNode;
 }
-
-/** Plugins built on an effect 4 beta nest a checked field's annotations (`Schema.Int`, `.check(...)`) under `allOf`. */
-const flatten = (node: JsonSchemaNode): JsonSchemaNode =>
-	(node.allOf ?? []).reduce<JsonSchemaNode>(
-		(acc, branch) => Object.assign(acc, branch),
-		{ ...node },
-	);
 
 /** Can this field be a real input? One that can't sends the whole form to the JSON editor. */
 const renderable = (node: JsonSchemaNode): boolean => {
@@ -54,13 +35,6 @@ const renderable = (node: JsonSchemaNode): boolean => {
 	}
 	return false;
 };
-
-const handed = (n: JsonSchemaNode): "read" | "write" | null =>
-	n.format === "pf:path:write"
-		? "write"
-		: n.format === "pf:path"
-			? "read"
-			: null;
 
 /** Explorer's "Copy as path" wraps a path in double quotes; the path itself has none. */
 export const unquote = (s: string): string => s.replace(/^\s*"(.*)"\s*$/, "$1");

@@ -5,17 +5,8 @@
 // A call a gate guards on the box's own host goes through that gate's handler, which forwards to
 // the seat's path (`event.context.seat`, read by `forwardJson`). Everything else relays as the
 // catch-all does. Both read the path as `seatCall` resolved it.
-import {
-	createError,
-	defineEventHandler,
-	getRequestURL,
-	proxyRequest,
-} from "h3";
-import { loopbackTls, mgmtUrl } from "../../../../../../util/auth";
-import {
-	assertHostTokenAccepted,
-	mgmtBearer,
-} from "../../../../../../util/forward";
+import { createError, defineEventHandler, getRequestURL } from "h3";
+import { relayToMgmt } from "../../../../../../util/mgmt";
 import {
 	encodeRest,
 	type GatedRoute,
@@ -59,14 +50,8 @@ export default defineEventHandler((event) => {
 		event.context.params = { ...event.context.params, ...gate.params };
 		return GATES[gate.route](event);
 	}
-	const base = mgmtUrl();
-	return proxyRequest(
+	return relayToMgmt(
 		event,
-		`${base}${seatPath(call.id, encodeRest(call.rest))}${search}`,
-		{
-			fetchOptions: loopbackTls(base) as unknown as RequestInit | undefined,
-			headers: { authorization: mgmtBearer(), cookie: "" },
-			onResponse: (_event, response) => assertHostTokenAccepted(response),
-		},
+		`${seatPath(call.id, encodeRest(call.rest))}${search}`,
 	);
 });

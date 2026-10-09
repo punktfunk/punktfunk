@@ -9,7 +9,7 @@
     "typecheck": "tsc --noEmit --skipLibCheck",
     "package": "pnpm build && bash scripts/package.sh",
     "deploy": "bash scripts/deploy.sh",
-    "test": "pnpm typecheck"
+    "test": "pnpm typecheck && node --experimental-strip-types scripts/test-merge.ts"
   },
   "keywords": [
     "decky",

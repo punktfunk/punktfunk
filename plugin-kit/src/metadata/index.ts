@@ -1,13 +1,11 @@
 // `@punktfunk/plugin-kit/metadata` — the framework for Art & Metadata sources: plugins that fill
 // art and details for library entries other plugins list. See planning
 // `design/metadata-sources.md`.
+export type { Candidate, Image, MetadataStatus } from "../wire.js";
 export {
-	type Candidate,
 	defineMetadataPlugin,
-	type Image,
 	type MetadataPlugin,
 	type MetadataPluginDef,
-	type MetadataStatus,
 	SourceRateLimited,
 	SourceUnauthorized,
 } from "./define.js";

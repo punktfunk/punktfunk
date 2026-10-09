@@ -48,7 +48,7 @@ EnvironmentFile=-%h/.config/punktfunk/web-password
 # The host's ACTUAL mgmt port: `serve` writes this file (mgmt::publish_endpoint) with the port it
 # really bound, so moving the listener — the fix for sharing a box with a Sunshine fork, which owns
 # 47990 as its web UI — needs no edit here. Optional ('-'): an older host never wrote it, and the
-# server's own built-in default (https://127.0.0.1:47990, util/auth.ts) then applies unchanged.
+# server's own built-in default (https://127.0.0.1:47990, util/mgmt.ts) then applies unchanged.
 #
 # Deliberately NOT paired with an `Environment=PUNKTFUNK_MGMT_URL=` default line: whether a file or
 # an Environment= assignment wins is a question of directive order, and the answer differs between

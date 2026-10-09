@@ -17,7 +17,8 @@ import { FaCheck } from "react-icons/fa";
 import { hostsForApp, subscribeCatalog } from "./catalog";
 import { diag } from "./diag";
 import { Game, PunktfunkMark, streamFrom } from "./game";
-import { getHostStore, HostView, subscribeHosts } from "./hooks";
+import { getHostStore, subscribeHosts } from "./hooks";
+import type { HostView } from "./hosts";
 import { collectElements, createRenderPatcher, describe } from "./patch";
 import { isGameStreaming, stopGameStream, subscribeRunning } from "./steam";
 

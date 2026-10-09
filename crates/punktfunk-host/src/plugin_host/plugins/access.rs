@@ -1492,6 +1492,115 @@ mod tests {
         assert_eq!(rule("/run/mediax/games"), Some("protected_path"));
     }
 
+    /// The root rules the runner's sandbox twins (`refusedRoot` in sdk/src/sandbox.ts), on
+    /// canonical absolute paths: the shape rules (`..`, length, not a directory) stay host-only.
+    #[cfg(unix)]
+    fn path_refusal_vectors() -> String {
+        const HOME: &str = "/home/u";
+        const USER_CONFIG: &str = "/home/u/.config/punktfunk";
+        const SYSTEM_CONFIG: &str = "/var/lib/punktfunk";
+        let rows: &[(&str, &[&str])] = &[
+            (
+                USER_CONFIG,
+                &[
+                    "/",
+                    "/home",
+                    "/home/u",
+                    "/proc",
+                    "/proc/1/root",
+                    "/sys/kernel",
+                    "/dev/shm",
+                    "/run",
+                    "/run/media",
+                    "/run/user/1000",
+                    "/run/mediax/games",
+                    "/home/u/.ssh",
+                    "/home/u/.gnupg/private-keys-v1.d",
+                    "/home/u/.config",
+                    "/home/u/.config/punktfunk",
+                    "/home/u/.config/punktfunk/plugin-run",
+                    "/home/u/.config/punktfunk-extra",
+                    "/home/u/.local/share/Steam",
+                    "/home/u/.config/retroarch",
+                    "/home/u/Emu",
+                    "/run/media/u/SD",
+                    "/run/media/deck/SD/Emulation/roms",
+                    "/mnt/games1",
+                    "/tmp/vhclient_response",
+                    "/usr/share/applications",
+                ],
+            ),
+            (
+                SYSTEM_CONFIG,
+                &[
+                    "/var",
+                    "/var/lib",
+                    "/var/lib/punktfunk",
+                    "/var/lib/punktfunk/plugin-run",
+                    "/var/lib/punktfunk-other",
+                    "/var/lib/flatpak",
+                    "/home/u",
+                    "/home/u/.ssh",
+                    "/home/u/.config/punktfunk",
+                    "/home/u/.config/punktfunk-extra",
+                    "/home/u/.config/retroarch",
+                    "/home/u/Games",
+                ],
+            ),
+        ];
+        let facts = PathFacts {
+            is_dir: true,
+            owner_uid: None,
+        };
+        let mut lines = Vec::new();
+        for (config_dir, paths) in rows {
+            let policy = PathPolicy {
+                home: HOME.into(),
+                config_dir: (*config_dir).into(),
+                runtime_dir: Some("/run/user/1000".into()),
+            };
+            for path in *paths {
+                let p = Path::new(path);
+                let rule = refusal_rule(p, p, false, false, &policy, facts);
+                assert!(
+                    matches!(rule, None | Some("broad_root" | "protected_path")),
+                    "{path}: {rule:?}"
+                );
+                lines.push(format!(
+                    "    {{\"path\": \"{path}\", \"home\": \"{HOME}\", \"config_dir\": \"{config_dir}\", \
+                     \"refused\": {}}}",
+                    rule.is_some()
+                ));
+            }
+        }
+        format!(
+            "{{\n  \"$comment\": \"Generated from punktfunk-host plugin_host access::refusal_rule by \
+             path_refusal_vectors_are_checked_in (UPDATE_VECTORS=1 rewrites it). The SDK's sandbox \
+             replays it.\",\n  \"vectors\": [\n{}\n  ]\n}}\n",
+            lines.join(",\n")
+        )
+    }
+
+    /// The `/proc`, `/sys`, `/dev` and `/run` rules are Unix-only, so the file is too.
+    #[cfg(unix)]
+    #[test]
+    fn path_refusal_vectors_are_checked_in() {
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/testdata/path-refusal-vectors.json"
+        );
+        let fresh = path_refusal_vectors();
+        if std::env::var_os("UPDATE_VECTORS").is_some() {
+            std::fs::create_dir_all(Path::new(path).parent().unwrap()).unwrap();
+            std::fs::write(path, &fresh).unwrap();
+        }
+        let on_disk = std::fs::read_to_string(path).unwrap_or_default();
+        assert!(
+            on_disk == fresh,
+            "{path} is stale: rerun with UPDATE_VECTORS=1"
+        );
+    }
+
     fn manifest(reads: &[&str], writes: &[&str]) -> BTreeMap<String, PluginManifest> {
         let m = PluginManifest {
             schema: 1,

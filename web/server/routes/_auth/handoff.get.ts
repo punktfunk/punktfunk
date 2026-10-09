@@ -7,13 +7,9 @@ import {
 	sendRedirect,
 	useSession,
 } from "h3";
-import {
-	mgmtToken,
-	type SessionData,
-	sessionConfig,
-	sessionEpoch,
-} from "../../util/auth";
+import { type SessionData, sessionConfig, sessionEpoch } from "../../util/auth";
 import { verifyHandoff } from "../../util/handoff";
+import { mgmtToken } from "../../util/mgmt";
 
 /** Tickets already redeemed, so a captured one cannot be replayed inside its TTL. Process-lifetime
  * on purpose: a console restart invalidates everything outstanding, which fails closed. Entries
