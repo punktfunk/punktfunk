@@ -935,7 +935,8 @@ fn resolve_bitrate_kbps_under(
             );
         }
         let bpp = pf_host_config::config().pyrowave_bpp;
-        let pin = pyrowave_pin_kbps(mode, chroma, bit_depth, bpp);
+        let pin = punktfunk_core::pyrowave::kbps_for(mode, chroma.is_444(), bit_depth, bpp)
+            .clamp(MIN_BITRATE_KBPS, MAX_BITRATE_KBPS);
         // Open-loop pin can outrun the link. `PUNKTFUNK_PYROWAVE_MAX_MBPS` caps it;
         // unset ⇒ no cap.
         if let Some(ceiling) = ceiling() {
@@ -1024,27 +1025,6 @@ fn audio_reserved_kbps(welcome: &punktfunk_core::quic::Welcome) -> u32 {
         )
         .kbps
     }
-}
-
-/// `bpp` bits per pixel for a 4:2:0 SDR frame. 4:4:4 carries twice the samples but costs
-/// ×1.625, since chroma compresses better than luma; 10-bit planes add 15 %.
-fn pyrowave_pin_kbps(
-    mode: &punktfunk_core::config::Mode,
-    chroma: crate::encode::ChromaFormat,
-    bit_depth: u8,
-    bpp: f64,
-) -> u32 {
-    let mut bpp = bpp;
-    if chroma.is_444() {
-        bpp *= 1.625;
-    }
-    if bit_depth >= 10 {
-        bpp *= 1.15;
-    }
-    let px_per_s =
-        f64::from(mode.width) * f64::from(mode.height) * f64::from(mode.refresh_hz.max(1));
-    // `as` saturates, so a huge mode lands on the clamp.
-    ((px_per_s * bpp / 1000.0) as u32).clamp(MIN_BITRATE_KBPS, MAX_BITRATE_KBPS)
 }
 
 /// `PUNKTFUNK_PYROWAVE_MAX_MBPS` (Mb/s) → kbps. `None` when unset/zero/invalid (no cap).
@@ -3296,33 +3276,22 @@ mod tests {
         );
     }
 
+    /// The bits-per-pixel rule is core's (`punktfunk_core::pyrowave`); the host bounds it.
     #[test]
-    fn pyrowave_pin_follows_the_host_bpp() {
-        use crate::encode::ChromaFormat;
-        use punktfunk_core::config::Mode;
-        let mode = Mode {
-            width: 3840,
-            height: 2160,
-            refresh_hz: 120,
-        };
-        let px = 3840 * 2160 * 120;
-        // 0.5 bpp is Steam's 500 Mbps ceiling at 4K120.
-        assert_eq!(
-            pyrowave_pin_kbps(&mode, ChromaFormat::Yuv420, 8, 0.5),
-            px / 2 / 1000
-        );
-        // 4:4:4 and 10-bit scale from the operator's value, not from 1.6.
-        assert_eq!(
-            pyrowave_pin_kbps(&mode, ChromaFormat::Yuv444, 10, 1.0),
-            (f64::from(px) * 1.625 * 1.15 / 1000.0) as u32
-        );
-        let tiny = Mode {
+    fn a_tiny_pyrowave_pin_lands_on_the_rate_floor() {
+        let tiny = punktfunk_core::config::Mode {
             width: 64,
             height: 64,
             refresh_hz: 1,
         };
         assert_eq!(
-            pyrowave_pin_kbps(&tiny, ChromaFormat::Yuv420, 8, 0.25),
+            resolve_bitrate_kbps_for(
+                crate::encode::Codec::PyroWave,
+                0,
+                &tiny,
+                crate::encode::ChromaFormat::Yuv420,
+                8
+            ),
             MIN_BITRATE_KBPS
         );
     }

@@ -46,6 +46,9 @@ pub mod hud;
 pub mod input;
 pub mod packet;
 pub mod phase;
+// The bits-per-pixel rule host and client share; Rust-only, so the C header stays out of it.
+/// cbindgen:ignore
+pub mod pyrowave;
 pub mod quic;
 pub mod reanchor;
 pub mod reject;
