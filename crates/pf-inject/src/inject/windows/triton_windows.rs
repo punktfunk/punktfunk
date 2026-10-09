@@ -52,7 +52,7 @@ impl TritonWinPad {
         let shm = ShmPad::open(
             index,
             DEVTYPE_TRITON,
-            &neutral_triton_report(),
+            &pf_driver_proto::triton::NEUTRAL_REPORT,
             &SwDeviceProfile {
                 instance: &format!("pf_triton_{index}"),
                 container_tag: 0x5046_4453, // "PFDS"
@@ -133,14 +133,6 @@ impl TritonWinPad {
         });
         (rumble, hidout, resync)
     }
-}
-
-/// Neutral wired-Triton `0x42` state report: report id plus a zero 53-byte
-/// payload. Fresh and unplugged pads start here.
-fn neutral_triton_report() -> [u8; 64] {
-    let mut r = [0u8; 64];
-    r[0] = 0x42;
-    r
 }
 
 /// Windows Triton [`PadProto`]: sealed-channel open, as-is mirroring plus

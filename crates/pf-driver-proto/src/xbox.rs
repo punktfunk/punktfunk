@@ -40,6 +40,22 @@ pub const fn input_len(device_type: u8) -> usize {
     }
 }
 
+/// Input report `0x01` at rest: sticks centred, triggers 0, hat 0 (the NULL state; the logical
+/// range starts at 1), no buttons or Share. A pad serves only its [`input_len`] bytes.
+pub const NEUTRAL_REPORT: [u8; 64] = {
+    let mut r = [0u8; 64];
+    r[0] = 0x01;
+    // LX 0x8000 LE. The Y axes are inverted (+y is up on the wire, down in HID), and mirroring
+    // an even-sized range centres one unit low: LY = RY = 0x7FFF.
+    r[2] = 0x80;
+    r[3] = 0xFF;
+    r[4] = 0x7F;
+    r[6] = 0x80; // RX
+    r[7] = 0xFF;
+    r[8] = 0x7F;
+    r
+};
+
 /// Right stick is `Z`/`Rz`: `xinputhid` maps those to the right stick and ignores `Rx`/`Ry`.
 #[rustfmt::skip]
 pub static SERIES_RDESC: [u8; 248] = [
@@ -221,34 +237,14 @@ mod tests {
         }
     }
 
-    /// Bytes of input report `id` a descriptor declares, id byte included.
-    fn declared_input_len(rdesc: &[u8], id: u8) -> usize {
-        let (mut i, mut bits) = (0, 0usize);
-        let (mut size, mut count, mut cur_id) = (0usize, 0usize, 0u8);
-        while i < rdesc.len() {
-            let prefix = rdesc[i];
-            let n = [0, 1, 2, 4][(prefix & 3) as usize];
-            let data = rdesc[i + 1..i + 1 + n]
-                .iter()
-                .rev()
-                .fold(0usize, |v, b| v << 8 | *b as usize);
-            match prefix & 0xFC {
-                0x74 => size = data,
-                0x94 => count = data,
-                0x84 => cur_id = data as u8,
-                0x80 if cur_id == id => bits += size * count,
-                _ => {}
-            }
-            i += 1 + n;
-        }
-        assert_eq!(bits % 8, 0, "input report {id:#x} is not byte-aligned");
-        1 + bits / 8
-    }
-
     #[test]
     fn xbox_input_lengths_match_their_descriptors() {
-        assert_eq!(declared_input_len(&SERIES_RDESC, 1), SERIES_INPUT_LEN);
-        assert_eq!(declared_input_len(&NO_SHARE_RDESC, 1), NO_SHARE_INPUT_LEN);
+        use crate::rdesc::{report_lens, INPUT};
+        assert_eq!(report_lens(&SERIES_RDESC)[&(INPUT, 1)], SERIES_INPUT_LEN);
+        assert_eq!(
+            report_lens(&NO_SHARE_RDESC)[&(INPUT, 1)],
+            NO_SHARE_INPUT_LEN
+        );
         assert_eq!(input_len(gamepad::DEVTYPE_XBOX), 17);
         assert_eq!(input_len(gamepad::DEVTYPE_XBOX_ELITE), 16);
     }

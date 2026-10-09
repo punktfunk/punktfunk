@@ -13,6 +13,16 @@ pub static RDESC: [u8; 38] = [
     0x08, 0x95, 0x40, 0xb1, 0x02, 0xc0,
 ];
 
+/// Unnumbered input frame at rest: header `[0x01, 0x00, ID_CONTROLLER_DECK_STATE, 64]`, every
+/// control released. SDL drops a Deck frame whose length byte is not 64.
+pub const NEUTRAL_REPORT: [u8; 64] = {
+    let mut r = [0u8; 64];
+    r[0] = 0x01;
+    r[2] = 0x09;
+    r[3] = 0x40;
+    r
+};
+
 /// GET_FEATURE reply to the latched SET_FEATURE `last_set` (command byte first). `0x83` answers
 /// the captured attribute table, `0xAE` answers `serial` under the attribute asked for, and any
 /// other command echoes `last_set`. An empty `last_set` reads as a unit-serial query.
