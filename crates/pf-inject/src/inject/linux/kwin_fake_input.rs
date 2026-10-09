@@ -9,8 +9,7 @@
 //! logical edge is `physical / scale`; a streamed pixel coordinate then lands `scale×`
 //! too far toward the bottom-right. Track each output's logical rectangle via
 //! `xdg-output` and map the normalized client position into it. The target is the head
-//! named by [`crate::stream_output`]; the event's `w×h` is the client's own size and only
-//! picks a head when no name is published.
+//! [`crate::head_pick::pick`] names; a miss maps `w×h` pixels at the origin.
 //!
 //! Pin: install the host `.desktop` and re-login (KWin caches the grant per-exe).
 //! Same path as `krdpserver`. See `docs-site/content/docs/(guide)/(desktops)/kde.md`.
@@ -18,6 +17,7 @@
 #![allow(clippy::all, dead_code, non_camel_case_types, non_snake_case, unused)]
 
 use super::{gs_button_to_evdev, vk_to_evdev, InputEvent, InputInjector};
+use crate::head_pick::{self, HeadFacts};
 use crate::scroll::{ScrollBackend, ScrollMapper, ScrollOp};
 use anyhow::{Context, Result};
 use punktfunk_core::input::InputKind;
@@ -74,31 +74,20 @@ struct Geo {
     logical_h: i32,
 }
 
-/// Head a normalized absolute position lands on: the one named `want` (the newest, when a
-/// supersede briefly leaves two), else a mode equal to `w×h`, else the sole head.
-fn pick<'a>(
-    heads: impl Iterator<Item = &'a Geo> + Clone,
-    want: Option<&str>,
-    w: i32,
-    h: i32,
-) -> Option<&'a Geo> {
-    let usable = heads.filter(|g| g.logical_w > 0 && g.logical_h > 0);
-    if let Some(n) = want {
-        if let Some(named) = usable
-            .clone()
-            .filter(|g| g.output_name.as_deref() == Some(n))
-            .last()
-        {
-            return Some(named);
-        }
-    }
-    if let Some(sized) = usable.clone().find(|g| g.mode_w == w && g.mode_h == h) {
-        return Some(sized);
-    }
-    let mut it = usable;
-    match (it.next(), it.next()) {
-        (Some(only), None) => Some(only),
-        _ => None,
+impl Geo {
+    /// This head for [`head_pick::pick`]; `None` until xdg-output reports a logical size.
+    fn facts(&self) -> Option<HeadFacts<'_>> {
+        let size = |w: i32, h: i32| (w > 0 && h > 0).then(|| (w as u32, h as u32));
+        let (logical_w, logical_h) = size(self.logical_w, self.logical_h)?;
+        Some(HeadFacts {
+            name: self.output_name.as_deref(),
+            x: self.logical_x,
+            y: self.logical_y,
+            logical_w,
+            logical_h,
+            mode: size(self.mode_w, self.mode_h),
+            mapping_id: None,
+        })
     }
 }
 
@@ -340,18 +329,22 @@ impl KwinFakeInjector {
         }
     }
 
-    /// Logical rectangle for a normalized client position: the [`pick`]ed head, else
-    /// `w×h` pixels at the origin (correct at scale 1).
+    /// Logical rectangle for a normalized client position: the [`head_pick::pick`]ed head,
+    /// else `w×h` pixels at the origin (correct at scale 1).
     fn logical_target(&self, phys_w: i32, phys_h: i32) -> (f64, f64, f64, f64) {
-        let want = crate::stream_output();
-        let heads = self.state.outputs.iter().map(|o| &o.geo);
-        match pick(heads, want.as_deref(), phys_w, phys_h) {
-            Some(o) => (
-                o.logical_x as f64,
-                o.logical_y as f64,
-                o.logical_w as f64,
-                o.logical_h as f64,
-            ),
+        let heads: Vec<HeadFacts> = self
+            .state
+            .outputs
+            .iter()
+            .filter_map(|o| o.geo.facts())
+            .collect();
+        let event_wh = Some((phys_w as u32, phys_h as u32));
+        match head_pick::pick(&heads, &crate::stream_target(), event_wh) {
+            Some(i) => {
+                let h = heads[i];
+                let (x, y) = (f64::from(h.x), f64::from(h.y));
+                (x, y, f64::from(h.logical_w), f64::from(h.logical_h))
+            }
             None => (0.0, 0.0, phys_w as f64, phys_h as f64),
         }
     }
@@ -457,50 +450,5 @@ impl InputInjector for KwinFakeInjector {
             .context("wayland dispatch")?;
         self.conn.flush().context("wayland flush")?;
         Ok(())
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn head(name: &str, x: i32, w: i32, h: i32) -> Geo {
-        Geo {
-            output_name: Some(name.into()),
-            mode_w: w,
-            mode_h: h,
-            logical_x: x,
-            logical_w: w,
-            logical_h: h,
-            ..Geo::default()
-        }
-    }
-
-    /// A 1080p TV beside two 1080p monitors drives the streamed head, not the first
-    /// monitor whose mode equals the TV panel.
-    #[test]
-    fn the_named_head_beats_a_size_match() {
-        let heads = [
-            head("DP-2", 0, 1920, 1080),
-            head("DP-1", 1920, 1920, 1080),
-            head("Virtual-punktfunk-1", 3840, 2560, 1440),
-        ];
-        let at = |want| pick(heads.iter(), want, 1920, 1080).map(|g| g.logical_x);
-        assert_eq!(at(Some("Virtual-punktfunk-1")), Some(3840));
-        assert_eq!(at(Some("DP-1")), Some(1920));
-        // Unpublished or vanished: the size ladder.
-        assert_eq!(at(None), Some(0));
-        assert_eq!(at(Some("gone")), Some(0));
-    }
-
-    /// A supersede leaves the old head alive under the same name; the newer one is live.
-    #[test]
-    fn a_shared_name_takes_the_newest_head() {
-        let heads = [
-            head("Virtual-punktfunk-1", 0, 1920, 1080),
-            head("Virtual-punktfunk-1", 1920, 3840, 2160),
-        ];
-        let got = pick(heads.iter(), Some("Virtual-punktfunk-1"), 1920, 1080);
-        assert_eq!(got.map(|g| g.logical_x), Some(1920));
     }
 }

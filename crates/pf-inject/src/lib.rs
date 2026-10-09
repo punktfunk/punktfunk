@@ -37,6 +37,11 @@ pub mod held;
 #[path = "inject/scroll.rs"]
 pub mod scroll;
 
+/// The streamed head absolute input lands on, one rule for every Linux backend. Pure and
+/// ungated like [`scroll`].
+#[path = "inject/head_pick.rs"]
+mod head_pick;
+
 /// Host-session injector. Not `Send`: owns compositor resources and stays on the control
 /// thread that created it.
 pub trait InputInjector {
@@ -204,6 +209,17 @@ pub fn absolute_anchor() -> Option<AbsoluteAnchor> {
         .read()
         .unwrap_or_else(|e| e.into_inner())
         .clone()
+}
+
+/// The session's output name, the streamed mode and the host-wide anchor, read together so
+/// one sample sees one aim.
+#[cfg(target_os = "linux")]
+pub(crate) fn stream_target() -> head_pick::StreamTarget {
+    head_pick::StreamTarget {
+        name: stream_output(),
+        extent: stream_extent(),
+        anchor: absolute_anchor(),
+    }
 }
 
 /// Backend the live session resolved to. Host writes this from `pf_vdisplay::input_backend_id`
