@@ -1476,14 +1476,6 @@ pub(crate) async fn run_admitted(
     // Linux `PUNKTFUNK_PIN_CLOCKS`: refcounted vendor clock floor while any session streams.
     #[cfg(target_os = "linux")]
     let _clock_pin = crate::gpuclocks::session_pin();
-    let launch_target = match resolve_launch(hello.launch.as_deref(), &launch_outcome_tx).await? {
-        Some(t) => Some(t),
-        None => home_launch(hello.launch.as_deref(), &resolved),
-    };
-    #[cfg(target_os = "windows")]
-    let launch_for_dp = launch_target.as_ref().and(hello.launch.clone());
-    #[cfg(not(target_os = "windows"))]
-    let launch_for_dp = launch_target.as_ref().and_then(|t| t.command.clone());
     // Stats label: device-fingerprint prefix, else peer IP (anonymous, `--open`).
     let client_label = conn
         .peer_fingerprint()
@@ -1498,35 +1490,26 @@ pub(crate) async fn run_admitted(
         pad: welcome.gamepad,
         pad_slots: Some(controls.pad_slots.clone()),
     };
-    let (prep_cmds, prep_env) = launch_prep(&hello, &welcome, session_preset.as_ref());
-    // Reprieve, claim, prep and the launch hold, before the display opens. `block_in_place`:
-    // operator code is blocking and this is a multi-thread runtime.
-    let crate::session_launch::Prepared {
-        claim: launch_claim,
-        stamp: launch_stamp,
-        prep: _prep,
-        declined,
-        waiting: _waiting,
-    } = tokio::task::block_in_place(|| {
-        crate::session_launch::prepare(
-            launch_target.as_ref(),
-            &launch_owner,
-            &prep_cmds,
-            &prep_env,
-            &|| stop.load(Ordering::Relaxed),
-        )
-    });
-    // The title's files never arrived: stream without it, and say why.
-    let (launch_target, launch_for_dp) = match declined {
-        Some(sentence) => {
-            let _ = launch_outcome_tx.send(punktfunk_core::quic::LaunchOutcome::new(
-                punktfunk_core::quic::LaunchOutcomeKind::Refused,
-                &sentence,
-            ));
-            (None, None)
-        }
-        None => (launch_target, launch_for_dp),
-    };
+    // The prep guard and the waiting row are held to the session's end.
+    let (
+        launch_target,
+        launch_for_dp,
+        crate::session_launch::Prepared {
+            claim: launch_claim,
+            stamp: launch_stamp,
+            prep: _prep,
+            waiting: _waiting,
+            ..
+        },
+    ) = prepare_launch(
+        &hello,
+        &welcome,
+        &resolved,
+        &launch_owner,
+        &launch_outcome_tx,
+        &stop,
+    )
+    .await?;
     // Welcome/acks/HUD speak wire budget. Encoder opens get the derived video rate (`EncDerive`).
     // PyroWave: budget == encoder rate (bpp pin).
     let bitrate_kbps = welcome.bitrate_kbps;
@@ -1909,6 +1892,50 @@ fn spawn_audio_plane(
         })
         .map_err(|e| tracing::warn!(error = %e, "audio thread spawn failed — session continues without audio"))
         .ok()
+}
+
+/// The session's library launch, before the display opens: the title (the one asked for, else
+/// the profile's home), the command the display runs for it, then reprieve, claim, prep and
+/// the launch hold. A title whose files never arrived is dropped and the client told why on
+/// `outcome`; the returned [`Prepared`](crate::session_launch::Prepared) has `declined` taken.
+async fn prepare_launch(
+    hello: &Hello,
+    welcome: &Welcome,
+    profile: &crate::profiles::Resolved,
+    owner: &crate::session_launch::LaunchOwner,
+    outcome: &crate::gamelease::OutcomeTx,
+    stop: &AtomicBool,
+) -> Result<(
+    Option<crate::library::LaunchTarget>,
+    Option<String>,
+    crate::session_launch::Prepared,
+)> {
+    let target = match resolve_launch(hello.launch.as_deref(), outcome).await? {
+        Some(t) => Some(t),
+        None => home_launch(hello.launch.as_deref(), profile),
+    };
+    #[cfg(target_os = "windows")]
+    let command = target.as_ref().and(hello.launch.clone());
+    #[cfg(not(target_os = "windows"))]
+    let command = target.as_ref().and_then(|t| t.command.clone());
+    let (prep_cmds, prep_env) = launch_prep(hello, welcome, owner.preset.as_ref());
+    // `block_in_place`: operator code is blocking and this is a multi-thread runtime.
+    let mut prepared = tokio::task::block_in_place(|| {
+        crate::session_launch::prepare(target.as_ref(), owner, &prep_cmds, &prep_env, &|| {
+            stop.load(Ordering::Relaxed)
+        })
+    });
+    // The title's files never arrived: stream without it, and say why.
+    match prepared.declined.take() {
+        Some(sentence) => {
+            let _ = outcome.send(punktfunk_core::quic::LaunchOutcome::new(
+                punktfunk_core::quic::LaunchOutcomeKind::Refused,
+                &sentence,
+            ));
+            Ok((None, None, prepared))
+        }
+        None => Ok((target, command, prepared)),
+    }
 }
 
 /// What admission resolved for this device: its effective grant mask, deadline and the record's
