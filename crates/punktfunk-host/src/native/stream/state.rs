@@ -644,194 +644,21 @@ impl StreamState {
             }
         }
 
-        // This session's compositor, by pool generation: a concurrent seat's gamescope is equally
-        // discoverable in `/proc`, so an unscoped launch or watch lands on somebody else's screen.
-        #[cfg(target_os = "linux")]
-        let seat: Option<String> = cur_display_gen.and_then(crate::vdisplay::registry::seat_for);
-        // The head the lease's window stage places the game on. Read here, where capture
-        // has already published it and a later session cannot have re-pointed the
-        // injector's one-per-process slot yet.
-        #[cfg(target_os = "linux")]
-        let streamed_head = crate::inject::stream_output()
-            .map(|output| crate::session_status::StreamedHead { compositor, output });
-        // This acquire spawned gamescope itself, so the launch is its primary child.
-        #[cfg(target_os = "linux")]
-        let nested_spawn = crate::vdisplay::launch_is_nested(compositor, gamescope_route.as_ref())
-            && vd.nested_launch_started();
-        let spawned = crate::session_launch::spawn(
+        let (game_shared, game_life) = spawn_launch_and_lease(
+            &*vd,
+            &vd_params,
+            compositor,
+            cur_display_gen,
+            mode,
+            &conn,
+            &stop,
+            &end_reason,
             launch_target.as_ref(),
             &launch_owner,
-            launch_claim.as_ref(),
-            #[cfg(target_os = "linux")]
-            crate::session_launch::SpawnAt {
-                compositor,
-                nested_spawn,
-                seat: seat.as_deref(),
-                steam_home: isolation.as_ref().and_then(|i| i.steam_home.as_deref()),
-            },
+            launch_claim,
+            launch_stamp,
+            &launch_outcome,
         );
-        let spawned_now = spawned.now;
-        // A Steam launch that ran under a seat profile's home: remember what it streamed at, so
-        // the host can have that Steam up before the profile's next connect. `vd`'s own values,
-        // not the request, because they are the registry's reuse keys.
-        #[cfg(target_os = "linux")]
-        if spawned_now
-            && launch
-                .as_deref()
-                .is_some_and(crate::vdisplay::launch_is_steam)
-        {
-            if let Some(profile) = isolation
-                .as_ref()
-                .and_then(|i| i.steam_home.as_deref())
-                .and_then(|h| h.file_name())
-                .and_then(|n| n.to_str())
-            {
-                crate::native::prewarm::record(profile, mode, vd.hdr(), vd.hw_cursor());
-            }
-        }
-        // This seat's Steam has no account, so the stream shows its sign-in screen and not the
-        // game. Read before the verdict: the player is told what to do, and no client holds this
-        // title's cover over the screen they have to act on.
-        #[cfg(target_os = "linux")]
-        let seat_sign_in = spawned_now
-            && launch
-                .as_deref()
-                .is_some_and(crate::vdisplay::launch_is_steam)
-            && isolation
-                .as_ref()
-                .is_some_and(crate::vdisplay::seat_needs_sign_in);
-        #[cfg(not(target_os = "linux"))]
-        let seat_sign_in = false;
-        if let Some(t) = launch_target.as_ref() {
-            let _ = launch_outcome.send(launch_verdict(
-                &t.game.title,
-                launch_claim.as_ref(),
-                spawned_now,
-                seat_sign_in,
-            ));
-        }
-        // A dedicated Steam session ends on gamescope's own root atoms, never on process shape:
-        // Steam wraps its pre-launch work (shader precompile, the install-script evaluator) in the
-        // same `SteamLaunch AppId=` reaper the game gets, so a scan adopts a tree that was never the
-        // game and reads its exit as the game exiting, seconds before the game starts.
-        #[cfg(target_os = "linux")]
-        let steam_exit_appid: Option<u32> = launch
-            .as_deref()
-            .filter(|_| crate::vdisplay::launch_is_nested(compositor, gamescope_route.as_ref()))
-            .and_then(crate::vdisplay::steam_appid_from_launch);
-        #[cfg(not(target_os = "linux"))]
-        let steam_exit_appid: Option<u32> = None;
-
-        let end_on_game_exit = {
-            let conn = conn.clone();
-            let stop = stop.clone();
-            let quit = quit.clone();
-            let end_reason = end_reason.clone();
-            crate::session_launch::end_on_game_exit(move || {
-                tracing::info!(
-                    "the launched game exited — ending the session cleanly (APP_EXITED)"
-                );
-                crate::events::SessionEndReason::GameExited.latch(&end_reason);
-                conn.close(punktfunk_core::quic::APP_EXITED_CLOSE_CODE, b"game exited");
-                quit.store(true, Ordering::SeqCst);
-                stop.store(true, Ordering::SeqCst);
-            })
-        };
-
-        let game_lease = launch_target.as_ref().map(|target| {
-            let on_exit: crate::gamelease::OnExit = if steam_exit_appid.is_some() {
-                Box::new(|| {
-                    tracing::info!(
-                        "game lease: the launched game exited (status only — this dedicated Steam \
-                         session ends on gamescope's atoms)"
-                    );
-                })
-            } else {
-                Box::new(end_on_game_exit.clone())
-            };
-            let extras = crate::session_launch::LeaseExtras {
-                #[cfg(target_os = "linux")]
-                nested: crate::vdisplay::launch_is_nested(compositor, gamescope_route.as_ref()),
-                // Two seats can play the same title and Steam's reaper looks the same in both,
-                // so recognition narrows to this session's gamescope where it may
-                // ([`crate::gamelease::scan_scope`]).
-                #[cfg(target_os = "linux")]
-                scope_pid: crate::gamelease::scan_scope(
-                    nested_spawn,
-                    launch
-                        .as_deref()
-                        .is_some_and(crate::vdisplay::launch_is_steam),
-                    cur_display_gen.and_then(crate::vdisplay::registry::compositor_pid_for),
-                ),
-                #[cfg(not(target_os = "linux"))]
-                nested: false,
-                #[cfg(not(target_os = "linux"))]
-                scope_pid: None,
-                // The watcher says so when this launch dies on the spot.
-                outcome: Some(launch_outcome.clone()),
-                window: window_source(
-                    #[cfg(target_os = "linux")]
-                    compositor,
-                    #[cfg(target_os = "linux")]
-                    streamed_head.clone(),
-                    #[cfg(target_os = "linux")]
-                    seat.clone(),
-                    target.detect.steam_appid,
-                    target.on_window,
-                ),
-            };
-            crate::session_launch::lease(
-                target,
-                &launch_owner,
-                launch_stamp,
-                launch_claim.as_ref(),
-                spawned,
-                extras,
-                on_exit,
-            )
-        });
-        let game_shared = game_lease.as_ref().map(|l| l.shared());
-        // The atom watcher owns the end and `game.exited` for a dedicated Steam session;
-        // `gamelease` keeps running, so the console still shows what is playing, but it no longer
-        // closes the connection.
-        #[cfg(target_os = "linux")]
-        if let Some(appid) = steam_exit_appid {
-            let stop = stop.clone();
-            let end = end_on_game_exit.clone();
-            let seat = seat.clone();
-            let game = game_shared.clone();
-            let spawned = std::thread::Builder::new()
-                .name("pf1-steamexit".into())
-                .spawn(move || {
-                    if crate::vdisplay::watch_steam_game_exit(appid, seat.as_deref(), &stop) {
-                        if let Some(g) = game.as_deref() {
-                            crate::gamelease::report_exit(g);
-                        }
-                        end();
-                    }
-                });
-            if let Err(e) = spawned {
-                tracing::warn!(error = %e, "dedicated Steam exit watcher not started");
-            }
-        }
-        // The watcher keeps its own grace: the game the player starts after signing in is
-        // followed as any other.
-        if seat_sign_in {
-            if let Some(g) = game_shared.as_ref() {
-                g.launch_hold_ends();
-            }
-            tracing::info!(
-                "this seat's Steam has no account yet — the stream shows its sign-in screen"
-            );
-        }
-        let game_life = game_lease.map(|lease| {
-            crate::gamelease::SessionGuard::new(
-                lease,
-                quit.clone(),
-                conn.peer_fingerprint().map(hex::encode),
-                launch_claim,
-            )
-        });
 
         let perf = pf_host_config::config().perf;
 
@@ -1167,6 +994,216 @@ pub(super) fn adopt_built_bitrate(
     live.store(built, Ordering::Relaxed);
     // The host re-resolved what it encodes; nothing refused the client a rate.
     let _ = retarget.send((built, AckReason::Granted));
+}
+
+/// Launch the session's title on the display it just opened, tell the client the verdict, and
+/// take the game lease that follows it, with the dedicated-Steam exit watcher and the seat
+/// sign-in hold. `vd_params` carries the launch command, route, isolation and quit flag.
+/// Returns the lease's shared view for the registry and the guard that ends it with the
+/// session.
+#[allow(clippy::too_many_arguments)]
+fn spawn_launch_and_lease(
+    vd: &dyn crate::vdisplay::VirtualDisplay,
+    vd_params: &crate::vdisplay::SessionParams,
+    compositor: pf_vdisplay::Compositor,
+    cur_display_gen: Option<u64>,
+    mode: punktfunk_core::Mode,
+    conn: &crate::native::link::SessionLink,
+    stop: &Arc<AtomicBool>,
+    end_reason: &Arc<std::sync::atomic::AtomicU8>,
+    launch_target: Option<&crate::library::LaunchTarget>,
+    launch_owner: &crate::session_launch::LaunchOwner,
+    launch_claim: Option<crate::launchreg::Claim>,
+    launch_stamp: Option<f64>,
+    launch_outcome: &crate::gamelease::OutcomeTx,
+) -> (
+    Option<Arc<crate::gamelease::LeaseShared>>,
+    Option<crate::gamelease::SessionGuard>,
+) {
+    #[cfg(not(target_os = "linux"))]
+    let _ = (vd, compositor, cur_display_gen, mode);
+    #[cfg(target_os = "linux")]
+    let (launch, gamescope_route, isolation) = (
+        vd_params.launch.as_deref(),
+        vd_params.route.as_ref(),
+        vd_params.isolation.as_ref(),
+    );
+    let quit = &vd_params.quit;
+    // This session's compositor, by pool generation: a concurrent seat's gamescope is equally
+    // discoverable in `/proc`, so an unscoped launch or watch lands on somebody else's screen.
+    #[cfg(target_os = "linux")]
+    let seat: Option<String> = cur_display_gen.and_then(crate::vdisplay::registry::seat_for);
+    // The head the lease's window stage places the game on. Read here, where capture
+    // has already published it and a later session cannot have re-pointed the
+    // injector's one-per-process slot yet.
+    #[cfg(target_os = "linux")]
+    let streamed_head = crate::inject::stream_output()
+        .map(|output| crate::session_status::StreamedHead { compositor, output });
+    // This acquire spawned gamescope itself, so the launch is its primary child.
+    #[cfg(target_os = "linux")]
+    let nested_spawn = crate::vdisplay::launch_is_nested(compositor, gamescope_route)
+        && vd.nested_launch_started();
+    let spawned = crate::session_launch::spawn(
+        launch_target,
+        launch_owner,
+        launch_claim.as_ref(),
+        #[cfg(target_os = "linux")]
+        crate::session_launch::SpawnAt {
+            compositor,
+            nested_spawn,
+            seat: seat.as_deref(),
+            steam_home: isolation.and_then(|i| i.steam_home.as_deref()),
+        },
+    );
+    let spawned_now = spawned.now;
+    // A Steam launch that ran under a seat profile's home: remember what it streamed at, so
+    // the host can have that Steam up before the profile's next connect. `vd`'s own values,
+    // not the request, because they are the registry's reuse keys.
+    #[cfg(target_os = "linux")]
+    if spawned_now && launch.is_some_and(crate::vdisplay::launch_is_steam) {
+        if let Some(profile) = isolation
+            .and_then(|i| i.steam_home.as_deref())
+            .and_then(|h| h.file_name())
+            .and_then(|n| n.to_str())
+        {
+            crate::native::prewarm::record(profile, mode, vd.hdr(), vd.hw_cursor());
+        }
+    }
+    // This seat's Steam has no account, so the stream shows its sign-in screen and not the
+    // game. Read before the verdict: the player is told what to do, and no client holds this
+    // title's cover over the screen they have to act on.
+    #[cfg(target_os = "linux")]
+    let seat_sign_in = spawned_now
+        && launch.is_some_and(crate::vdisplay::launch_is_steam)
+        && isolation.is_some_and(crate::vdisplay::seat_needs_sign_in);
+    #[cfg(not(target_os = "linux"))]
+    let seat_sign_in = false;
+    if let Some(t) = launch_target {
+        let _ = launch_outcome.send(launch_verdict(
+            &t.game.title,
+            launch_claim.as_ref(),
+            spawned_now,
+            seat_sign_in,
+        ));
+    }
+    // A dedicated Steam session ends on gamescope's own root atoms, never on process shape:
+    // Steam wraps its pre-launch work (shader precompile, the install-script evaluator) in the
+    // same `SteamLaunch AppId=` reaper the game gets, so a scan adopts a tree that was never the
+    // game and reads its exit as the game exiting, seconds before the game starts.
+    #[cfg(target_os = "linux")]
+    let steam_exit_appid: Option<u32> = launch
+        .filter(|_| crate::vdisplay::launch_is_nested(compositor, gamescope_route))
+        .and_then(crate::vdisplay::steam_appid_from_launch);
+    #[cfg(not(target_os = "linux"))]
+    let steam_exit_appid: Option<u32> = None;
+
+    let end_on_game_exit = {
+        let conn = conn.clone();
+        let stop = stop.clone();
+        let quit = quit.clone();
+        let end_reason = end_reason.clone();
+        crate::session_launch::end_on_game_exit(move || {
+            tracing::info!("the launched game exited — ending the session cleanly (APP_EXITED)");
+            crate::events::SessionEndReason::GameExited.latch(&end_reason);
+            conn.close(punktfunk_core::quic::APP_EXITED_CLOSE_CODE, b"game exited");
+            quit.store(true, Ordering::SeqCst);
+            stop.store(true, Ordering::SeqCst);
+        })
+    };
+
+    let game_lease = launch_target.map(|target| {
+        let on_exit: crate::gamelease::OnExit = if steam_exit_appid.is_some() {
+            Box::new(|| {
+                tracing::info!(
+                    "game lease: the launched game exited (status only — this dedicated Steam \
+                     session ends on gamescope's atoms)"
+                );
+            })
+        } else {
+            Box::new(end_on_game_exit.clone())
+        };
+        let extras = crate::session_launch::LeaseExtras {
+            #[cfg(target_os = "linux")]
+            nested: crate::vdisplay::launch_is_nested(compositor, gamescope_route),
+            // Two seats can play the same title and Steam's reaper looks the same in both,
+            // so recognition narrows to this session's gamescope where it may
+            // ([`crate::gamelease::scan_scope`]).
+            #[cfg(target_os = "linux")]
+            scope_pid: crate::gamelease::scan_scope(
+                nested_spawn,
+                launch.is_some_and(crate::vdisplay::launch_is_steam),
+                cur_display_gen.and_then(crate::vdisplay::registry::compositor_pid_for),
+            ),
+            #[cfg(not(target_os = "linux"))]
+            nested: false,
+            #[cfg(not(target_os = "linux"))]
+            scope_pid: None,
+            // The watcher says so when this launch dies on the spot.
+            outcome: Some(launch_outcome.clone()),
+            window: window_source(
+                #[cfg(target_os = "linux")]
+                compositor,
+                #[cfg(target_os = "linux")]
+                streamed_head.clone(),
+                #[cfg(target_os = "linux")]
+                seat.clone(),
+                target.detect.steam_appid,
+                target.on_window,
+            ),
+        };
+        crate::session_launch::lease(
+            target,
+            launch_owner,
+            launch_stamp,
+            launch_claim.as_ref(),
+            spawned,
+            extras,
+            on_exit,
+        )
+    });
+    let game_shared = game_lease.as_ref().map(|l| l.shared());
+    // The atom watcher owns the end and `game.exited` for a dedicated Steam session;
+    // `gamelease` keeps running, so the console still shows what is playing, but it no longer
+    // closes the connection.
+    #[cfg(target_os = "linux")]
+    if let Some(appid) = steam_exit_appid {
+        let stop = stop.clone();
+        let end = end_on_game_exit.clone();
+        let seat = seat.clone();
+        let game = game_shared.clone();
+        let spawned = std::thread::Builder::new()
+            .name("pf1-steamexit".into())
+            .spawn(move || {
+                if crate::vdisplay::watch_steam_game_exit(appid, seat.as_deref(), &stop) {
+                    if let Some(g) = game.as_deref() {
+                        crate::gamelease::report_exit(g);
+                    }
+                    end();
+                }
+            });
+        if let Err(e) = spawned {
+            tracing::warn!(error = %e, "dedicated Steam exit watcher not started");
+        }
+    }
+    // The watcher keeps its own grace: the game the player starts after signing in is
+    // followed as any other.
+    if seat_sign_in {
+        if let Some(g) = game_shared.as_ref() {
+            g.launch_hold_ends();
+        }
+        tracing::info!(
+            "this seat's Steam has no account yet — the stream shows its sign-in screen"
+        );
+    }
+    let game_life = game_lease.map(|lease| {
+        crate::gamelease::SessionGuard::new(
+            lease,
+            quit.clone(),
+            conn.peer_fingerprint().map(hex::encode),
+            launch_claim,
+        )
+    });
+    (game_shared, game_life)
 }
 
 /// What this session's launch came to, in the client's vocabulary.
