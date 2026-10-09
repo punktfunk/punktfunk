@@ -56,9 +56,9 @@ usbip-sim = { path = "vendor/usbip-sim" }
 # The streamed-output desktop rect (CCD source rect) absolute input maps into — the same
 # resolver the cursor-readback poller uses, so inject and readback always agree.
 pf-win-display = { path = "../pf-win-display" }
-# The gamepad-channel bootstrap reuses the IDD-push WUDFHost verification and the resident-mouse
-# compose-kick hook. Windows-only: both use sites are, and on Linux this dragged pipewire, ashpd,
-# x11rb and wayland into an input crate's closure for nothing.
+# The gamepad-channel bootstrap reuses the IDD-push WUDFHost verification (`open_wudfhost`).
+# Windows-only: the one use site is, and on Linux this would drag pipewire, ashpd, x11rb and
+# wayland into an input crate's closure.
 pf-capture = { path = "../pf-capture" }
 windows = { version = "0.62", features = [
     "Win32_Foundation",

@@ -90,11 +90,10 @@ tokio = { version = "1", optional = true, features = ["rt-multi-thread", "net", 
 # the host vendors; cargo unifies the build.
 opus = { version = "0.4", optional = true }
 
-# `libc` for batched UDP syscalls: `sendmmsg`/`recvmmsg` on Linux (the 1 Gbps+ lever) and the
-# `recv(MSG_DONTWAIT)` drain on the other unix (Apple/BSD) targets, which have no `recvmmsg`
-# (see transport/udp.rs `recv_batch`). Needed on every unix target — non-unix (Windows) uses
-# the scalar fallbacks. Cross-compiles (iOS/tvOS) don't pull libc transitively the way the
-# macOS host build does, so it must be a direct dep here or those slices fail to link `libc::`.
+# `libc` for the unix syscall shims: `poll` on the shared socket (`transport::udp`), the
+# socket and interface readers (`sockstat`, `ifinfo`), and thread priority and hostname in
+# `client`. Cross-compiles (iOS/tvOS) don't pull libc transitively the way the macOS host
+# build does, so it must be a direct dep here or those slices fail to link `libc::`.
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
