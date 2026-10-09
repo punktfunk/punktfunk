@@ -37,6 +37,7 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 $PSNativeCommandUseErrorActionPreference = $false
+. (Join-Path $PSScriptRoot 'signing.ps1')
 
 $subject = 'CN=punktfunk-driver'
 $years   = 10
@@ -89,14 +90,7 @@ $pfxPath = Join-Path $OutDir 'driver.pfx'
 [IO.File]::WriteAllBytes($pfxPath, $pfxBytes)
 
 # -- 3. self-test: can signtool actually sign with it? -----------------------------------------
-function Find-SdkTool([string]$name) {
-    $root = 'C:\Program Files (x86)\Windows Kits\10\bin'
-    Get-ChildItem -Path $root -Recurse -Filter $name -EA SilentlyContinue |
-        Where-Object { $_.FullName -match '\\(10\.0\.\d+\.\d+)\\x64\\' } |
-        Sort-Object { [version]([regex]::Match($_.FullName, '\\(10\.0\.\d+\.\d+)\\x64\\').Groups[1].Value) } |
-        Select-Object -Last 1 -Expand FullName
-}
-$signtool = Find-SdkTool 'signtool.exe'
+$signtool = try { Find-SdkTool 'signtool.exe' } catch { $null }
 $selftest = 'SKIPPED (no signtool on this box)'
 if ($signtool) {
     $scratch = Join-Path $OutDir 'selftest.exe'

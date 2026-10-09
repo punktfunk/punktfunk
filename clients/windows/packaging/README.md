@@ -48,7 +48,8 @@ MSIX requires a strictly 4-part numeric version:
 
 ## Signing
 
-`pack-msix.ps1` picks a backend in this order:
+`pack-msix.ps1` and `pack-client-installer.ps1` pick a backend through
+`packaging/windows/signing.ps1`, in this order:
 
 1. **Azure Artifact Signing** when `AZURE_CODESIGNING_ENDPOINT` / `_ACCOUNT` / `_PROFILE` are all set
    (the workflow sets them; they are not secret). Credentials are the `punktfunk-ci-signing` service
