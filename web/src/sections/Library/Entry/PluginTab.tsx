@@ -4,6 +4,11 @@ import { toast } from "@unom/ui/toast";
 import { ExternalLink } from "lucide-react";
 import { type FC, useState } from "react";
 import type { PluginSummary } from "@/api/gen/model";
+import {
+	pluginSurface,
+	pluginSurfaceOrThrow,
+	refusalText,
+} from "@/api/pluginSurface";
 import { gamePlugins, usePlugins } from "@/api/plugins";
 import { useSeat } from "@/api/seat";
 import {
@@ -47,20 +52,12 @@ const sectionKey = (plugin: string, entry: string) => [
 ];
 
 async function loadSection(plugin: string, entry: string): Promise<Loaded> {
-	const res = await fetch(sectionUrl(plugin, entry), {
-		credentials: "same-origin",
-	});
-	const body = (await res.json().catch(() => null)) as
-		| (Section & { error?: string; issue?: string; noSection?: boolean })
-		| null;
-	if (res.status === 404 && body?.noSection) return { tag: "none" };
-	if (!res.ok) {
-		return {
-			tag: "offline",
-			issue: body?.issue ?? body?.error ?? `${res.status}`,
-		};
+	const r = await pluginSurface<Section | null>(sectionUrl(plugin, entry));
+	if (r.ok) {
+		return { tag: "ready", section: r.body ?? { schema: null, value: {} } };
 	}
-	return { tag: "ready", section: body ?? { schema: null, value: {} } };
+	if (r.status === 404 && r.body?.noSection) return { tag: "none" };
+	return { tag: "offline", issue: refusalText(r.body) };
 }
 
 /** A tab per plugin with a section for this entry. A plugin that answers "none" adds no tab. */
@@ -117,29 +114,19 @@ const PluginTab: FC<{
 		if (!draft) return;
 		setSaving(true);
 		try {
-			const res = await fetch(sectionUrl(plugin.id, entryId), {
-				method: "PUT",
-				credentials: "same-origin",
-				headers: { "content-type": "application/json" },
-				body: JSON.stringify(draft),
-			});
-			const body = (await res.json().catch(() => null)) as {
-				error?: string;
-				issue?: string;
+			const saved = await pluginSurfaceOrThrow<{
 				access?: { refused?: { path: string; error: string }[] };
-			} | null;
-			if (!res.ok) {
-				toast.error(
-					m.library_entry_plugin_save_failed({
-						plugin: plugin.title,
-						issue: body?.issue ?? body?.error ?? `${res.status}`,
-					}),
-				);
-				return;
-			}
-			setRefused(body?.access?.refused ?? []);
+			} | null>(sectionUrl(plugin.id, entryId), { method: "PUT", body: draft });
+			setRefused(saved?.access?.refused ?? []);
 			toast.success(m.library_entry_saved());
 			await qc.invalidateQueries({ queryKey: sectionKey(plugin.id, entryId) });
+		} catch (e) {
+			toast.error(
+				m.library_entry_plugin_save_failed({
+					plugin: plugin.title,
+					issue: e instanceof Error ? e.message : String(e),
+				}),
+			);
 		} finally {
 			setSaving(false);
 		}
