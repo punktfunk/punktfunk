@@ -5,6 +5,7 @@
 use super::{
     pick_pad_sink, pick_profile, props_say_ds5, CardDevice, CardProfile, PadSinkPick, SinkNode,
 };
+use crate::pw_oneshot::{OneShot, TIMEOUT};
 use punktfunk_core::audio::pad_mix::PAD_CHANNELS;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -76,37 +77,29 @@ pub(crate) fn sink_from_props(props: &pipewire::spa::utils::dict::DictRef) -> Op
     })
 }
 
-/// Walk every `Audio/Sink…` node and `Device` on a private mainloop.
+/// Walk every `Audio/Sink…` node and `Device` in one bounded [`OneShot`] query.
 ///
 /// Separate from [`crate::audio::devices`]: that walk publishes name + description only.
 /// Two rounds: a registry `global` announce has `media.class` / `node.name` / `device.id`
 /// but not `audio.channels` or `audio.position` (those live on the bound node's INFO).
 /// Reading the announce yields 0 channels and a needless profile swap.
 fn walk_graph() -> anyhow::Result<(Vec<SinkNode>, Vec<CardDevice>)> {
-    use anyhow::Context;
     use pipewire as pw;
-    use std::cell::{Cell, RefCell};
+    use std::cell::RefCell;
     use std::rc::Rc;
 
-    pw::init();
-
-    let mainloop = pw::main_loop::MainLoopRc::new(None).context("pw MainLoop")?;
-    let context = pw::context::ContextRc::new(&mainloop, None).context("pw Context")?;
-    let core = context
-        .connect_rc(None)
-        .context("pw connect (is PipeWire running in this session?)")?;
-    let registry = core.get_registry_rc().context("pw registry")?;
-
+    let session = OneShot::connect("pad-graph", TIMEOUT)?;
     let sinks: Rc<RefCell<Vec<SinkNode>>> = Rc::default();
     let cards: Rc<RefCell<Vec<CardDevice>>> = Rc::default();
     // Proxies and listeners must outlive the callback that created them.
     let bound: Rc<RefCell<Vec<(pw::node::Node, pw::node::NodeListener)>>> = Rc::default();
 
-    let _reg_listener = registry
+    let _reg_listener = session
+        .registry
         .add_listener_local()
         .global({
             let (registry, sinks, cards, bound) = (
-                registry.clone(),
+                session.registry.clone(),
                 sinks.clone(),
                 cards.clone(),
                 bound.clone(),
@@ -172,23 +165,8 @@ fn walk_graph() -> anyhow::Result<(Vec<SinkNode>, Vec<CardDevice>)> {
         })
         .register();
 
-    // Round 1: globals + bind. Round 2: `info` from those binds. Each parks its sync seq.
-    let awaited: Rc<Cell<Option<pw::spa::utils::result::AsyncSeq>>> = Rc::new(Cell::new(None));
-    let _round_listener = core
-        .add_listener_local()
-        .done({
-            let (mainloop, awaited) = (mainloop.clone(), awaited.clone());
-            move |_, seq| {
-                if awaited.get() == Some(seq) {
-                    mainloop.quit();
-                }
-            }
-        })
-        .register();
-    for _ in 0..2 {
-        awaited.set(Some(core.sync(0).context("pw sync")?));
-        mainloop.run();
-    }
+    session.round()?; // 1: globals replay; sinks get bound
+    session.round()?; // 2: the binds' `info` events land
     let out = (sinks.borrow().clone(), cards.borrow().clone());
     // Drop bound proxies before the core that owns them.
     bound.borrow_mut().clear();
@@ -257,8 +235,8 @@ pub(super) fn restore_profile() {
     }
 }
 
-/// Select a profile, returning the index it had. Three mainloop rounds: registry bind, then
-/// `enum_params`, then `set_param` — each waits on the previous replies.
+/// Select a profile, returning the index it had. Three rounds under one deadline: registry
+/// bind, then `enum_params`, then `set_param` — each waits on the previous replies.
 fn set_card_profile(device_id: u32, want: ProfileTarget) -> anyhow::Result<u32> {
     use anyhow::{anyhow, Context};
     use pipewire as pw;
@@ -266,25 +244,21 @@ fn set_card_profile(device_id: u32, want: ProfileTarget) -> anyhow::Result<u32> 
     use std::cell::{Cell, RefCell};
     use std::rc::Rc;
 
-    pw::init();
-
-    let mainloop = pw::main_loop::MainLoopRc::new(None).context("pw MainLoop")?;
-    let context = pw::context::ContextRc::new(&mainloop, None).context("pw Context")?;
-    let core = context
-        .connect_rc(None)
-        .context("pw connect (is PipeWire running in this session?)")?;
-    let registry = core.get_registry_rc().context("pw registry")?;
-
+    let session = OneShot::connect("pad-profile", TIMEOUT)?;
     let profiles: Rc<RefCell<Vec<CardProfile>>> = Rc::default();
     let active: Rc<Cell<Option<u32>>> = Rc::new(Cell::new(None));
     let device: Rc<RefCell<Option<pw::device::Device>>> = Rc::default();
     let dev_listener: Rc<RefCell<Option<pw::device::DeviceListener>>> = Rc::default();
 
-    let _reg_listener = registry
+    let _reg_listener = session
+        .registry
         .add_listener_local()
         .global({
-            let (registry, device, dev_listener) =
-                (registry.clone(), device.clone(), dev_listener.clone());
+            let (registry, device, dev_listener) = (
+                session.registry.clone(),
+                device.clone(),
+                dev_listener.clone(),
+            );
             let (profiles, active) = (profiles.clone(), active.clone());
             move |g| {
                 if g.id != device_id || g.type_ != pw::types::ObjectType::Device {
@@ -315,36 +289,16 @@ fn set_card_profile(device_id: u32, want: ProfileTarget) -> anyhow::Result<u32> 
         })
         .register();
 
-    // One `done` listener for every round; each parks its sync seq here first.
-    let awaited: Rc<Cell<Option<pw::spa::utils::result::AsyncSeq>>> = Rc::new(Cell::new(None));
-    let _core_listener = core
-        .add_listener_local()
-        .done({
-            let (mainloop, awaited) = (mainloop.clone(), awaited.clone());
-            move |_, seq| {
-                if awaited.get() == Some(seq) {
-                    mainloop.quit();
-                }
-            }
-        })
-        .register();
-    let round = |issue: &dyn Fn() -> anyhow::Result<()>| -> anyhow::Result<()> {
-        issue()?;
-        awaited.set(Some(core.sync(0).context("pw sync")?));
-        mainloop.run();
-        Ok(())
-    };
-
-    round(&|| Ok(()))?; // registry replays globals; the card is bound
-    round(&|| {
+    session.round()?; // registry replays globals; the card is bound
+    {
         let d = device.borrow();
         let d = d
             .as_ref()
             .ok_or_else(|| anyhow!("card {device_id} is not in the PipeWire graph"))?;
         d.enum_params(0, Some(ParamType::EnumProfile), 0, u32::MAX);
         d.enum_params(1, Some(ParamType::Profile), 0, 1);
-        Ok(())
-    })?; // EnumProfile + active Profile
+    }
+    session.round()?; // EnumProfile + active Profile
 
     let previous = active
         .get()
@@ -380,7 +334,7 @@ fn set_card_profile(device_id: u32, want: ProfileTarget) -> anyhow::Result<u32> 
         return Ok(previous);
     }
     let pod = profile_pod(pick).context("serialize Profile pod")?;
-    round(&|| {
+    {
         let d = device.borrow();
         let d = d
             .as_ref()
@@ -390,8 +344,8 @@ fn set_card_profile(device_id: u32, want: ProfileTarget) -> anyhow::Result<u32> 
             0,
             pw::spa::pod::Pod::from_bytes(&pod).ok_or_else(|| anyhow!("bad Profile pod"))?,
         );
-        Ok(())
-    })?; // flush set_param before the loop and its proxies drop
+    }
+    session.round()?; // flush set_param before the loop and its proxies drop
     Ok(previous)
 }
 
@@ -487,24 +441,20 @@ fn unity_volume_pod(channels: u32) -> anyhow::Result<Vec<u8>> {
 /// Pin the pad sink to unity. WirePlumber starts new cards at 0.4 (−24 dB, cubed UI 40%)
 /// globally, so both session ends stack. Not restored: putting −24 dB back would restore the
 /// bug. Failures cost attenuation, never audio. `PUNKTFUNK_PAD_SINK_VOLUME=0` skips.
+/// Two rounds under one deadline: registry bind, then `set_param`.
 fn pin_sink_volume(node_id: u32, channels: u32) -> anyhow::Result<()> {
     use anyhow::{anyhow, Context};
     use pipewire as pw;
-    use std::cell::{Cell, RefCell};
+    use std::cell::RefCell;
     use std::rc::Rc;
 
-    pw::init();
-
-    let mainloop = pw::main_loop::MainLoopRc::new(None).context("pw MainLoop")?;
-    let context = pw::context::ContextRc::new(&mainloop, None).context("pw Context")?;
-    let core = context.connect_rc(None).context("pw connect")?;
-    let registry = core.get_registry_rc().context("pw registry")?;
-
+    let session = OneShot::connect("pad-volume", TIMEOUT)?;
     let node: Rc<RefCell<Option<pw::node::Node>>> = Rc::default();
-    let _reg_listener = registry
+    let _reg_listener = session
+        .registry
         .add_listener_local()
         .global({
-            let (registry, node) = (registry.clone(), node.clone());
+            let (registry, node) = (session.registry.clone(), node.clone());
             move |g| {
                 if g.id != node_id || g.type_ != pw::types::ObjectType::Node {
                     return;
@@ -516,28 +466,9 @@ fn pin_sink_volume(node_id: u32, channels: u32) -> anyhow::Result<()> {
         })
         .register();
 
-    let awaited: Rc<Cell<Option<pw::spa::utils::result::AsyncSeq>>> = Rc::new(Cell::new(None));
-    let _core_listener = core
-        .add_listener_local()
-        .done({
-            let (mainloop, awaited) = (mainloop.clone(), awaited.clone());
-            move |_, seq| {
-                if awaited.get() == Some(seq) {
-                    mainloop.quit();
-                }
-            }
-        })
-        .register();
-    let round = |issue: &dyn Fn() -> anyhow::Result<()>| -> anyhow::Result<()> {
-        issue()?;
-        awaited.set(Some(core.sync(0).context("pw sync")?));
-        mainloop.run();
-        Ok(())
-    };
-
-    round(&|| Ok(()))?; // registry replays globals; the node is bound
+    session.round()?; // registry replays globals; the node is bound
     let pod = unity_volume_pod(channels).context("serialize Props pod")?;
-    round(&|| {
+    {
         let n = node.borrow();
         let n = n
             .as_ref()
@@ -547,8 +478,8 @@ fn pin_sink_volume(node_id: u32, channels: u32) -> anyhow::Result<()> {
             0,
             pw::spa::pod::Pod::from_bytes(&pod).ok_or_else(|| anyhow!("bad Props pod"))?,
         );
-        Ok(())
-    })?; // flush set_param before the loop and its proxies drop
+    }
+    session.round()?; // flush set_param before the loop and its proxies drop
     Ok(())
 }
 
