@@ -43,8 +43,7 @@ host too until you capture again.
 | Start or stop [clipboard sharing](/docs/clipboard) | — | ⌃⌥⇧C | ⌃⌥⇧C | — |
 | Fullscreen | F11 or Alt+Enter | ⌃⌘F | — | — |
 
-On an iPad, ⌘⎋ and every ⌃⌥⇧ shortcut but ⌃⌥⇧C work while input is captured. To start or stop
-clipboard sharing, release input first.
+On an iPad, ⌘⎋ and every ⌃⌥⇧ shortcut work while input is captured.
 
 To see the list without a stream: **Keyboard Shortcuts** in the Linux client's main menu,
 **Shortcuts** on the Windows client's host list, **Settings → About → Stream controls** on

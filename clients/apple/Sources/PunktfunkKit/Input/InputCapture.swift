@@ -147,14 +147,16 @@ public final class InputCapture {
     /// The cross-client ⌃⌥⇧ combos (Ctrl+Alt+Shift on Windows and Linux), fired through
     /// `takeChord` as `macChords`/`padChords` say: Q releases the captured mouse and keyboard, D
     /// disconnects, S cycles the stats tier, A mutes the microphone uplink (M is long since the
-    /// mouse-model flip, so A is "audio in"), O toggles the quick-action ring. Captured, the
-    /// stream swallows the Stream menu's identical key equivalents, so these are the captured
-    /// state's path; released, the menu takes most of them. Main queue.
+    /// mouse-model flip, so A is "audio in"), O toggles the quick-action ring, C starts or stops
+    /// clipboard sharing. Captured, the stream swallows the Stream menu's identical key
+    /// equivalents, so these are the captured state's path; released, the menu takes most of
+    /// them. Main queue.
     public var onReleaseCapture: (() -> Void)?
     public var onDisconnect: (() -> Void)?
     public var onCycleStats: (() -> Void)?
     public var onToggleMicMute: (() -> Void)?
     public var onQuickActions: (() -> Void)?
+    public var onToggleClipboard: (() -> Void)?
 
     /// Fired on ⌃⌘F (macOS) — toggle the streaming window in/out of fullscreen. Detected in the
     /// monitor only WHILE FORWARDING with `inhibit_shortcuts` off: a captured stream view swallows
@@ -191,6 +193,7 @@ public final class InputCapture {
         (0x53, \.onCycleStats, false), // S
         (0x41, \.onToggleMicMute, false), // A
         (0x4F, \.onQuickActions, false), // O
+        (0x43, \.onToggleClipboard, false), // C
     ]
     /// The iPad's chords: no mouse-model flip, and O in both states because its Stream menu has
     /// no Quick Actions item.
@@ -200,6 +203,7 @@ public final class InputCapture {
         (0x53, \.onCycleStats, false), // S
         (0x41, \.onToggleMicMute, false), // A
         (0x4F, \.onQuickActions, true), // O
+        (0x43, \.onToggleClipboard, false), // C
     ]
     #if os(macOS)
     static let chords = macChords

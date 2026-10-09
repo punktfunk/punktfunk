@@ -8,7 +8,8 @@
 //! Presets sync across client versions, so a newer ring must degrade quietly.
 //!
 //! Swift (`OverlayActions.swift`) and Kotlin (`OverlayActions.kt`) mirror this
-//! file; the tests here are the contract they port.
+//! file. All three replay `clients/shared/overlay-actions-vectors.json`; a new
+//! slot id or parse rule lands there first.
 
 use punktfunk_core::config::GamepadPref;
 use serde::{Deserialize, Serialize};
@@ -674,99 +675,89 @@ mod tests {
         assert_eq!(cfg.ring[2], Some(SlotId::Shortcut("s2".into())));
     }
 
-    const FULL: &str = r#"{"v":2,
-        "ring":["end_stream","shortcut:s1","host:power.sleep","stats",null,"pad"],
-        "shortcuts":[{"id":"s1","label":"Task Manager","keys":["ctrl","shift","escape"]}],
-        "pad":{"layout":"sticks","opacity":0.3,"scale":1.2}}"#;
+    /// `clients/shared/overlay-actions-vectors.json`, which the Swift and Kotlin twins replay.
+    fn vectors() -> serde_json::Value {
+        let raw = include_str!("../../../clients/shared/overlay-actions-vectors.json");
+        serde_json::from_str(raw).expect("vector file parses")
+    }
 
-    #[test]
-    fn round_trips_through_json() {
-        let cfg = OverlayConfig::parse(FULL, RingPlatform::Touch);
-        assert_eq!(cfg.ring[1], Some(SlotId::Shortcut("s1".into())));
-        assert_eq!(cfg.ring[2], Some(SlotId::Host("power.sleep".into())));
-        assert_eq!(cfg.ring[4], None);
-        assert_eq!(cfg.pad.layout, "sticks");
-        assert_eq!(
-            cfg.shortcut("s1").unwrap().keys,
-            ["ctrl", "shift", "escape"]
-        );
-        let again = OverlayConfig::parse(&cfg.to_json(), RingPlatform::Touch);
-        assert_eq!(again, cfg);
+    /// JSON equality with every number compared as f32: the blob stores f32s, and each
+    /// client prints them its own way.
+    fn same_json(a: &serde_json::Value, b: &serde_json::Value) -> bool {
+        use serde_json::Value::{Array, Number, Object};
+        match (a, b) {
+            (Number(x), Number(y)) => x.as_f64().map(|v| v as f32) == y.as_f64().map(|v| v as f32),
+            (Array(x), Array(y)) => {
+                x.len() == y.len() && x.iter().zip(y).all(|(x, y)| same_json(x, y))
+            }
+            (Object(x), Object(y)) => {
+                x.len() == y.len()
+                    && x.iter()
+                        .all(|(k, v)| y.get(k).is_some_and(|w| same_json(v, w)))
+            }
+            _ => a == b,
+        }
     }
 
     #[test]
-    fn short_rings_pad_and_long_rings_truncate() {
-        let short = OverlayConfig::parse(r#"{"ring":["mic"]}"#, RingPlatform::Desktop);
-        assert_eq!(short.ring[0], Some(SlotId::Mic));
-        assert!(short.ring[1..].iter().all(Option::is_none));
-        let long = OverlayConfig::parse(
-            r#"{"ring":["mic","mic","mic","mic","mic","mic","stats","stats"]}"#,
-            RingPlatform::Desktop,
-        );
-        assert!(long.ring.iter().all(|s| *s == Some(SlotId::Mic)));
+    fn shared_vectors_parse_and_round_trip() {
+        let file = vectors();
+        for id in file["slot_ids"].as_array().expect("slot_ids") {
+            let id = id.as_str().unwrap();
+            assert_eq!(SlotId::parse(id).map(|s| s.id()).as_deref(), Some(id));
+        }
+        let cases = file["cases"].as_array().expect("cases");
+        assert!(cases.len() >= 10, "the vector file is the contract");
+        for case in cases {
+            let name = case["name"].as_str().unwrap();
+            let platform = match case["platform"].as_str().unwrap() {
+                "touch" => RingPlatform::Touch,
+                "desktop" => RingPlatform::Desktop,
+                other => panic!("{name}: platform {other}"),
+            };
+            let cfg = OverlayConfig::parse(case["blob"].as_str().unwrap(), platform);
+            let ring: Vec<Option<String>> = cfg
+                .ring
+                .iter()
+                .map(|s| s.as_ref().map(SlotId::id))
+                .collect();
+            let want: Vec<Option<String>> = serde_json::from_value(case["ring"].clone()).unwrap();
+            assert_eq!(ring, want, "{name}: ring");
+            let stored: serde_json::Value = serde_json::from_str(&cfg.to_json()).unwrap();
+            assert!(
+                same_json(&stored, &case["round_trip"]),
+                "{name}: stored {stored}"
+            );
+            assert_eq!(
+                OverlayConfig::parse(&cfg.to_json(), platform),
+                cfg,
+                "{name}: reparse"
+            );
+        }
     }
 
     #[test]
-    fn unknown_ids_and_dangling_shortcuts_are_empty_slots() {
-        let cfg = OverlayConfig::parse(
-            r#"{"ring":["teleport","shortcut:nope","host:","stats"]}"#,
-            RingPlatform::Touch,
-        );
-        assert_eq!(cfg.ring[0], None, "a newer client's id degrades to empty");
-        assert_eq!(cfg.ring[1], None, "no such shortcut");
-        assert_eq!(cfg.ring[2], None, "a host id needs a name");
-        assert_eq!(cfg.ring[3], Some(SlotId::Stats));
-    }
-
-    #[test]
-    fn empty_or_broken_blobs_are_the_platform_default() {
-        let touch = OverlayConfig::platform_default(RingPlatform::Touch);
-        let desktop = OverlayConfig::platform_default(RingPlatform::Desktop);
-        assert_eq!(OverlayConfig::parse("", RingPlatform::Touch), touch);
-        assert_eq!(
-            OverlayConfig::parse("{not json", RingPlatform::Desktop),
-            desktop
-        );
-        assert_eq!(touch.ring[5], Some(SlotId::Pad));
-        assert_eq!(desktop.ring[5], Some(SlotId::SendText));
-        let cfg = OverlayConfig::parse(r#"{"v":2,"ring":[]}"#, RingPlatform::Touch);
-        assert_eq!(cfg.pad, PadConfig::default());
-        assert!(cfg.ring.iter().all(Option::is_none));
-    }
-
-    #[test]
-    fn pad_control_tweaks_round_trip_and_carry_unknown_ids() {
-        let blob = r#"{"v":2,"pad":{"layout":"full","opacity":0.45,"scale":1.0,
-            "controls":{"ls":{"x":0.1,"y":0.8,"scale":1.5},"weird":{"hidden":true}},
-            "controls_narrow":{"face":{"scale":0.75}}}}"#;
-        let cfg = OverlayConfig::parse(blob, RingPlatform::Touch);
-        let ls = &cfg.pad.controls["ls"];
-        assert_eq!(
-            (ls.x, ls.y, ls.scale, ls.hidden),
-            (Some(0.1), Some(0.8), Some(1.5), false)
-        );
-        assert!(
-            cfg.pad.controls["weird"].hidden,
-            "an unknown id is data, not an error"
-        );
-        assert_eq!(cfg.pad.controls_narrow["face"].scale, Some(0.75));
-        let json = cfg.to_json();
-        assert!(
-            json.contains("\"weird\""),
-            "a rewrite keeps what it does not know"
-        );
-        assert_eq!(OverlayConfig::parse(&json, RingPlatform::Touch), cfg);
-        let plain = OverlayConfig::platform_default(RingPlatform::Touch).to_json();
-        assert!(!plain.contains("controls"));
-        let sparse = OverlayConfig::parse(
-            r#"{"pad":{"controls":{"rs":{"x":0.5}}}}"#,
-            RingPlatform::Touch,
-        );
-        let out = sparse.to_json();
-        assert!(
-            out.contains(r#""rs":{"x":0.5}"#),
-            "absent fields stay absent: {out}"
-        );
+    fn shared_pad_type_cycle() {
+        let file = vectors();
+        let pref = |v: &serde_json::Value| GamepadPref::from_name(v.as_str().unwrap()).unwrap();
+        let cycle: Vec<GamepadPref> = file["pad_type_cycle"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|row| {
+                let p = pref(&row["name"]);
+                assert_eq!(pad_type_label(p).0, row["label"].as_str().unwrap());
+                p
+            })
+            .collect();
+        assert_eq!(cycle, PAD_TYPE_CYCLE);
+        for (i, &p) in cycle.iter().enumerate() {
+            assert_eq!(next_pad_type(p), cycle[(i + 1) % cycle.len()]);
+        }
+        for name in file["pad_type_outside_cycle"].as_array().unwrap() {
+            assert_eq!(next_pad_type(pref(name)), GamepadPref::Auto, "{name}");
+        }
+        assert_eq!(pad_type_label(GamepadPref::DualShock4).1, "DS4");
     }
 
     #[test]
@@ -814,50 +805,6 @@ mod tests {
         assert_eq!(c.key.as_deref(), Some("a"), "the last grid key wins");
         assert_eq!(c.keys(), keys(&["ctrl", "win", "a"]));
         assert_eq!(Chord::parse(&keys(&["option", "hyper"])).key, None);
-    }
-
-    #[test]
-    fn slot_ids_are_stable_strings() {
-        for id in [
-            "end_stream",
-            "end_game",
-            "disconnect_linger",
-            "touch_mode",
-            "keyboard",
-            "stats",
-            "mic",
-            "pad",
-            "send_text",
-            "guide",
-            "qam",
-            "pad_mouse",
-            "pad_type",
-            "stream_mute",
-            "swap_screens",
-            "host:power.reboot",
-            "shortcut:s2",
-        ] {
-            assert_eq!(SlotId::parse(id).unwrap().id(), id);
-        }
-    }
-
-    #[test]
-    fn the_pad_type_cycle_wraps_and_a_settings_only_type_steps_to_automatic() {
-        let mut seen = vec![GamepadPref::Auto];
-        let mut p = next_pad_type(GamepadPref::Auto);
-        while p != GamepadPref::Auto {
-            seen.push(p);
-            p = next_pad_type(p);
-        }
-        assert_eq!(seen, PAD_TYPE_CYCLE);
-        assert_eq!(
-            next_pad_type(GamepadPref::SteamController2),
-            GamepadPref::Auto
-        );
-        assert_eq!(
-            pad_type_label(GamepadPref::DualShock4),
-            ("DualShock 4", "DS4")
-        );
     }
 
     #[test]

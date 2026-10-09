@@ -8,7 +8,8 @@ import org.json.JSONObject
 /*
  * The in-stream quick-action ring's configuration — the `overlay_actions` setting, one JSON blob
  * (schema v2, design/touch-client-overlay.md §3.2). The Kotlin twin of pf-client-core's
- * `overlay_actions.rs`; the Rust tests are the contract, `OverlayActionsTest` ports them.
+ * `overlay_actions.rs`; `OverlayActionsTest` replays the shared contract,
+ * `clients/shared/overlay-actions-vectors.json`.
  *
  * Parsing never fails: fewer than six slots pad with empty, more are truncated, an unknown id or a
  * dangling `shortcut:` reference is an empty slot, an absent field takes its default, and an

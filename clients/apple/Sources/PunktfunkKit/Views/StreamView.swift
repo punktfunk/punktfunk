@@ -1048,6 +1048,10 @@ public final class StreamLayerView: NSView {
             guard let self, self.window?.isKeyWindow == true else { return }
             NotificationCenter.default.post(name: .punktfunkToggleMicMute, object: self.connection)
         }
+        capture.onToggleClipboard = { [weak self] in
+            guard let self, self.window?.isKeyWindow == true else { return }
+            NotificationCenter.default.post(name: .punktfunkToggleClipboard, object: self.connection)
+        }
         capture.onQuickActions = { [weak self] in
             // The quick-action ring is the session VIEW's, not this layer's — post it (the same
             // routing as the fullscreen and mic chords), so the captured chord and the Stream

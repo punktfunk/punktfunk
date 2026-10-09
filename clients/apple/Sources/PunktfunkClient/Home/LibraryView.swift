@@ -84,6 +84,9 @@ struct LibraryView: View {
     /// Drawn above the tab's sections, inside the scroll, so it moves with the title: the host
     /// filter.
     var tabHeader: AnyView?
+    /// Wake the host and wait for it (the Waking… overlay), then run the closure. Offered when
+    /// auto-wake is off and the host didn't answer; nil offers nothing.
+    var wake: ((StoredHost, @escaping () -> Void) -> Void)?
     #if DEBUG
     /// Shot harness: a canned phase in place of the fetch (`ShotGallery.swift`).
     var shotPhase: ShotLibraryPhase?
@@ -98,6 +101,7 @@ struct LibraryView: View {
     /// Collections place).
     @AppStorage(DefaultsKey.librarySort) private var sortRaw = SettingDefault.librarySort
     @AppStorage(DefaultsKey.libraryGroupBy) private var groupByRaw = ""
+    @AppStorage(DefaultsKey.autoWake) private var autoWake = SettingDefault.autoWake
     @Environment(\.dismiss) private var dismiss
     /// Resolves a pinned shelf's preset NAME for the title (the target carries only its id).
     @ObservedObject private var presets = PresetStore.shared
@@ -136,6 +140,8 @@ struct LibraryView: View {
     /// titles rather than on an empty frame and a spinner.
     @MainActor private static var shown: [String: [GameEntry]] = [:]
     @State private var errorText: String?
+    /// The host didn't answer and auto-wake is off: the shelf offers a wake instead of sending one.
+    @State private var wakeOffered = false
     /// What the host has launched right now, keyed by library id — the `Resume` affordance. Empty
     /// on an older host, an unreachable one, or while the catalog is being served from cache.
     @State private var running: [String: RunningGame] = [:]
@@ -299,6 +305,7 @@ struct LibraryView: View {
             HStack(spacing: 6) {
                 Image(systemName: staleness.symbol)
                 Text(text)
+                wakeButton
             }
             .font(.geist(12, relativeTo: .caption))
             .foregroundStyle(.secondary)
@@ -914,11 +921,24 @@ struct LibraryView: View {
                 .multilineTextAlignment(.center)
                 .foregroundStyle(.secondary)
                 .frame(maxWidth: 420)
-            Button("Retry") { reloadToken += 1 }
-                .glassProminentButtonStyle()
+            HStack(spacing: 12) {
+                wakeButton
+                Button("Retry") { reloadToken += 1 }
+                    .glassProminentButtonStyle()
+            }
         }
         .padding()
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    /// The wake offer: the explicit wake, then a reload once the host answers.
+    @ViewBuilder private var wakeButton: some View {
+        if wakeOffered, let wake {
+            Button("Wake Host") {
+                wake(store.hosts.first { $0.id == host.id } ?? host) { reloadToken += 1 }
+            }
+            .buttonStyle(.bordered)
+        }
     }
 
     private var emptyState: some View {
@@ -978,6 +998,7 @@ struct LibraryView: View {
         }
         loading = true
         errorText = nil
+        wakeOffered = false
         // Dev hook, the twin of the desktop console's `PUNKTFUNK_FAKE_LIBRARY`: a file holding
         // the host's `/api/v1/library` JSON (or the shared collate vectors file, whose `library`
         // array is the same shape) stands in for the host, so the grid, the sort bar and the
@@ -1000,9 +1021,10 @@ struct LibraryView: View {
 
         // The last-known titles go up before the host is asked, marked as remembered, and the
         // box is woken while the player is still choosing: opening the library is the earliest
-        // honest signal that someone intends to play.
+        // honest signal that someone intends to play. Auto-wake off asks once and offers a wake.
         let hostID = current.id.uuidString
-        let events = LibraryLoad.run(target: target, hostID: hostID, wakeMacs: current.wakeMacs)
+        let events = LibraryLoad.run(
+            target: target, hostID: hostID, wakeMacs: current.wakeMacs, autoWake: autoWake)
         for await event in events {
             switch event {
             case .cached(let cached):
@@ -1019,6 +1041,10 @@ struct LibraryView: View {
             case .failed(let error, _):
                 // Titles on screen outrank the error; the staleness note carries the situation.
                 if games.isEmpty { errorText = LibraryLoad.failure(error) }
+                if case .unreachable = error, !autoWake, !current.wakeMacs.isEmpty,
+                   PunktfunkConnection.wakeOnLANAvailable {
+                    wakeOffered = true
+                }
             case .status(let up, let downloads, let grants):
                 applyStatus((up, downloads, grants), for: current)
                 loading = false

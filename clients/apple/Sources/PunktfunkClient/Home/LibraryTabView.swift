@@ -40,6 +40,8 @@ struct LibraryTabView: View {
     /// Stream a saved host's desktop: the Desktops section.
     let onConnectHost: (StoredHost) -> Void
     let showHosts: () -> Void
+    /// The shelf's wake offer (`LibraryView.wake`).
+    var wake: ((StoredHost, @escaping () -> Void) -> Void)? = nil
     #if DEBUG
     /// Shot harness: a canned catalog in place of the fetch.
     var shotPhase: ShotLibraryPhase?
@@ -84,12 +86,12 @@ struct LibraryTabView: View {
         LibraryView(
             store: store, target: shelf, onLaunch: { onLaunch(shelf, $0) },
             onConnect: { onConnectShelf(shelf) }, inTab: true, onConnectHost: onConnectHost,
-            tabHeader: filter(current: shelf), shotPhase: shotPhase)
+            tabHeader: filter(current: shelf), wake: wake, shotPhase: shotPhase)
         #else
         LibraryView(
             store: store, target: shelf, onLaunch: { onLaunch(shelf, $0) },
             onConnect: { onConnectShelf(shelf) }, inTab: true, onConnectHost: onConnectHost,
-            tabHeader: filter(current: shelf))
+            tabHeader: filter(current: shelf), wake: wake)
         #endif
     }
 

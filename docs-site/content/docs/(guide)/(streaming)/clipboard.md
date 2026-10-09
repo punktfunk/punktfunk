@@ -24,7 +24,7 @@ Copy on your device and paste on the host, or the other way round, once three sw
 
 The client reads its switch when a stream starts, so reconnect after changing it. On a Mac,
 **Stream → Share Clipboard** (⌃⌥⇧C) turns it on mid-stream and **Stop Sharing Clipboard** turns
-it off. The same keys work on an iPad with a keyboard while input is released.
+it off. The same keys work on an iPad with a keyboard.
 
 A `PUNKTFUNK_CLIPBOARD` line in `host.env` overrides step 1 and locks it in the console: see
 [Configuration](/docs/configuration).

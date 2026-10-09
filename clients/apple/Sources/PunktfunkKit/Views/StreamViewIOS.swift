@@ -530,11 +530,13 @@ public final class StreamViewController: StreamViewControllerBase {
         capture.onReleaseCapture = { [weak self] in
             self?.setCaptured(false)
         }
-        // ⌃⌥⇧A mutes/unmutes the mic uplink. Session state this controller doesn't own, so it
-        // posts to the app exactly as the macOS chord does, naming its session so only that
-        // window's stream toggles.
+        // ⌃⌥⇧A mutes the mic uplink and ⌃⌥⇧C flips clipboard sharing: session state this
+        // controller doesn't own, posted as the macOS chords are, naming the session.
         capture.onToggleMicMute = { [weak connection] in
             NotificationCenter.default.post(name: .punktfunkToggleMicMute, object: connection)
+        }
+        capture.onToggleClipboard = { [weak connection] in
+            NotificationCenter.default.post(name: .punktfunkToggleClipboard, object: connection)
         }
         // ⌃⌥⇧O toggles the quick-action ring, posted the way the Mac's chord is.
         capture.onQuickActions = { [weak connection] in

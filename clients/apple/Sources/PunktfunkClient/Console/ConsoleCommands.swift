@@ -276,7 +276,7 @@ extension ConsoleModel {
         let autoWake = UserDefaults.standard.object(forKey: DefaultsKey.autoWake) as? Bool
             ?? SettingDefault.autoWake
         let events = LibraryLoad.run(
-            target: target, hostID: host.id.uuidString, wakeMacs: autoWake ? host.wakeMacs : [])
+            target: target, hostID: host.id.uuidString, wakeMacs: host.wakeMacs, autoWake: autoWake)
         fetching = Task { [weak self] in
             for await event in events {
                 // A newer fetch owns the shelf by the time a slow host answers.

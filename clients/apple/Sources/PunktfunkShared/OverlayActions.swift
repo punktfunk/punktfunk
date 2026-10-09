@@ -1,6 +1,7 @@
 // The in-stream quick-action ring's configuration — the `overlay_actions` setting, one JSON blob
 // (schema v2, design/touch-client-overlay.md §3.2). The Swift twin of pf-client-core's
-// `overlay_actions.rs`; the Rust tests are the contract, `OverlayActionsTests` ports them.
+// `overlay_actions.rs`; `OverlayActionsTests` replays the shared contract,
+// `clients/shared/overlay-actions-vectors.json`.
 //
 // Parsing never fails: fewer than six slots pad with empty, more are truncated, an unknown id or
 // a dangling `shortcut:` reference is an empty slot, an absent field takes its default, and an
@@ -20,6 +21,8 @@ public enum SlotId: Equatable, Sendable {
     case padMouse
     /// Step the controller type the host emulates, live, for this stream.
     case padType
+    /// Another client's picks this one does not offer: kept so a rewrite keeps them, drawn disabled.
+    case streamMute, swapScreens
     case host(String)
     case shortcut(String)
 
@@ -39,6 +42,8 @@ public enum SlotId: Equatable, Sendable {
         case .qam: return "qam"
         case .padMouse: return "pad_mouse"
         case .padType: return "pad_type"
+        case .streamMute: return "stream_mute"
+        case .swapScreens: return "swap_screens"
         case .host(let id): return "host:\(id)"
         case .shortcut(let id): return "shortcut:\(id)"
         }
@@ -60,6 +65,8 @@ public enum SlotId: Equatable, Sendable {
         case "qam": return .qam
         case "pad_mouse": return .padMouse
         case "pad_type": return .padType
+        case "stream_mute": return .streamMute
+        case "swap_screens": return .swapScreens
         default:
             if s.hasPrefix("host:"), s.count > 5 { return .host(String(s.dropFirst(5))) }
             if s.hasPrefix("shortcut:"), s.count > 9 { return .shortcut(String(s.dropFirst(9))) }
