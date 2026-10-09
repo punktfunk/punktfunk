@@ -252,62 +252,43 @@ impl VirtualDisplay for GamescopeDisplay {
     }
 
     fn create(&mut self, mode: Mode) -> Result<VirtualOutput> {
-        // This session's route — never the process env, or a second connect retargets this one.
-        let (session_env, node_env) = match self.route.clone() {
-            Some(crate::GamescopeRoute::Managed { client }) => (Some(client), None),
-            Some(crate::GamescopeRoute::Attach { node }) => (None, Some(node)),
-            Some(crate::GamescopeRoute::Spawn) => (None, None),
-            None => (None, None), // no resolver on this path: bare spawn, the ladder default
-        };
         // Sampled once so managed hold, exclusive session-free, and spawn darken cannot disagree.
         let exclusive =
             crate::effective_topology(self.client_fp) == crate::policy::Topology::Exclusive;
-        if let Some(client) = session_env {
-            // A joiner shares the running session. Relaunching it at another mode or HDR would
-            // end the owner's stream.
-            if self.join_live && !managed_session_matches(mode, self.hdr) {
-                bail!(
-                    "join the running gamescope session: it runs at another mode or HDR, and \
-                     relaunching it would end the owner's stream"
-                );
+        // This session's route — never the process env, or a second connect retargets this one.
+        match self.route.clone() {
+            Some(crate::GamescopeRoute::Managed { client }) => {
+                // A joiner shares the running session. Relaunching it at another mode or HDR
+                // would end the owner's stream.
+                if self.join_live && !managed_session_matches(mode, self.hdr) {
+                    bail!(
+                        "join the running gamescope session: it runs at another mode or HDR, \
+                         and relaunching it would end the owner's stream"
+                    );
+                }
+                let out = create_managed_session(&client, mode, self.hdr)?;
+                // Idling autologin leaves the CRTC configured. The hold cannot ride
+                // `pending_restore`: this route is `SessionManaged`, so the registry never picks
+                // it up. Release is [`do_restore_tv_session`].
+                managed_darken_acquire(exclusive);
+                Ok(out)
             }
-            let out = create_managed_session(&client, mode, self.hdr)?;
-            // Idling autologin leaves the CRTC configured. The hold cannot ride `pending_restore`:
-            // this route is `SessionManaged`, so the registry never picks it up. Release is
-            // [`do_restore_tv_session`].
-            managed_darken_acquire(exclusive);
-            return Ok(out);
+            Some(crate::GamescopeRoute::Attach { node }) => create_attach(&node, mode, self.hdr),
+            // No resolver on this path: bare spawn, the ladder default.
+            Some(crate::GamescopeRoute::Spawn) | None => self.create_spawn(mode, exclusive),
         }
-        if let Some(id) = node_env {
-            let node_id: u32 = if id.trim().eq_ignore_ascii_case("auto") {
-                // Headless box: game-mode resolution is ours. Skip and the client gets the box default.
-                ensure_box_gamescope_mode(mode, self.hdr)?
-            } else {
-                id.parse()
-                    .context("PUNKTFUNK_GAMESCOPE_NODE must be a node id or 'auto'")?
-            };
-            point_injector_at_eis(Scope::Box);
-            // Attach mirrors a gamescope that may be lighting the panel. Darkening it would
-            // darken the picture being streamed. Exclusive cannot be served on this route.
-            tracing::info!(node_id, "gamescope: attaching to existing PipeWire node");
-            return Ok(VirtualOutput {
-                node_id,
-                remote_fd: None,
-                preferred_mode: Some((mode.width, mode.height, mode.refresh_hz)),
-                keepalive: Box::new(()),
-                ownership: DisplayOwnership::External,
-                reused_gen: None,
-                pool_gen: None,
-                expect_exact_dims: false,
-                output_name: None, // EIS seat, not a wlr virtual pointer to aim by name
-                input_output: None,
-                seat: None,
-                pid: None,
-            });
-        }
-        check_gamescope_version(); // diagnostic only — warns on known-deadlock-prone versions
-                                   // Resolve once before the gate and hand the same answer to [`spawn`]. Gating on `self.cmd`
-                                   // alone while spawn fell back to `PUNKTFUNK_GAMESCOPE_APP` would pass `--steam` with no instance free.
+    }
+}
+
+impl GamescopeDisplay {
+    /// Bare headless gamescope at `mode`, running [`VirtualDisplay::set_launch_command`]. The
+    /// output owns the process. `exclusive` is the topology `create` sampled.
+    fn create_spawn(&mut self, mode: Mode, exclusive: bool) -> Result<VirtualOutput> {
+        // Diagnostic only: warns on known-deadlock-prone versions.
+        check_gamescope_version();
+        // Resolve once before the gate and hand the same answer to [`spawn`]. Gating on `self.cmd`
+        // alone while spawn fell back to `PUNKTFUNK_GAMESCOPE_APP` would pass `--steam` with no
+        // instance free.
         let app = resolved_spawn_app(self.cmd.as_deref());
         let steam = app.as_deref().is_some_and(is_steam_launch);
         // This session's own Steam home, provisioned on first use. `None` keeps every path below
@@ -410,6 +391,36 @@ impl VirtualDisplay for GamescopeDisplay {
         );
         Ok(out)
     }
+}
+
+/// Capture + inject an already-running gamescope; no lifecycle ownership. `auto` is the box's own
+/// session, set to `mode` first.
+fn create_attach(node: &str, mode: Mode, hdr: bool) -> Result<VirtualOutput> {
+    let node_id: u32 = if node.trim().eq_ignore_ascii_case("auto") {
+        // Headless box: game-mode resolution is ours. Skip and the client gets the box default.
+        ensure_box_gamescope_mode(mode, hdr)?
+    } else {
+        node.parse()
+            .context("PUNKTFUNK_GAMESCOPE_NODE must be a node id or 'auto'")?
+    };
+    point_injector_at_eis(Scope::Box);
+    // Attach mirrors a gamescope that may be lighting the panel. Darkening it would
+    // darken the picture being streamed. Exclusive cannot be served on this route.
+    tracing::info!(node_id, "gamescope: attaching to existing PipeWire node");
+    Ok(VirtualOutput {
+        node_id,
+        remote_fd: None,
+        preferred_mode: Some((mode.width, mode.height, mode.refresh_hz)),
+        keepalive: Box::new(()),
+        ownership: DisplayOwnership::External,
+        reused_gen: None,
+        pool_gen: None,
+        expect_exact_dims: false,
+        output_name: None, // EIS seat, not a wlr virtual pointer to aim by name
+        input_output: None,
+        seat: None,
+        pid: None,
+    })
 }
 
 /// Host-managed session at the client's mode, state in [`Takeover::managed`]. Reuse if mode and
