@@ -102,6 +102,12 @@ pub fn decode(b: &[u8]) -> Option<Dgram<'_>> {
 /// Most shards one NACK names.
 pub const NACK_MAX: usize = 16;
 
+/// Most shards past its parity a frame may lack and still ask for them: a resend of up to
+/// [`NACK_MAX`] shards (~23 KB) costs less than an anchor and a dropped frame. More is a
+/// queue, which a resend would feed. One NACK still names the shards the parity floor covers.
+pub(crate) const NACK_SHORT: u32 = 8;
+const _: () = assert!(NACK_SHORT as usize + crate::config::MIN_RECOVERY_SHARDS <= NACK_MAX);
+
 /// Shards of one frame asked for again, by their index in the AU: data first, then parity.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Nack {

@@ -160,6 +160,8 @@ fi
 # neither leaves the shaper alone.
 if [ -n "$TRACE" ] || [ "$WANDER_PCT" != 0 ]; then
   (
+    # A subshell reseeds RANDOM, so the seed is set here: one PF_RIG_SEED, one capacity trace.
+    if [ -n "${PF_RIG_SEED:-}" ]; then RANDOM=$PF_RIG_SEED; fi
     at=0
     base=$RATE_KBIT
     live=$RATE_KBIT

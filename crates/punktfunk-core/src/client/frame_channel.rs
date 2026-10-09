@@ -496,10 +496,11 @@ impl FrameChannel {
     }
 
     /// Hold every frame after `frame` until it completes or `until` passes: a NACK is out
-    /// for its missing shards, and the decoder must see it before them. One at a time.
+    /// for its missing shards, and the decoder must see it before them. An all-intra stream
+    /// holds too, or a resend landing after a newer frame would show the past. One at a time.
     pub(crate) fn hold(&self, frame: u32, until: Instant) -> bool {
         let mut st = self.inner.lock().unwrap();
-        if st.hold.is_some() || st.all_intra {
+        if st.hold.is_some() {
             return false;
         }
         st.hold = Some(Hold {
@@ -1083,7 +1084,5 @@ mod hold_tests {
         assert!(c.expire_hold(t0 + Duration::from_millis(10)));
         assert_eq!(drain(&c), [6]);
         assert_eq!(c.take_filled(), 0);
-        c.set_all_intra(true);
-        assert!(!c.hold(7, t0), "an all-intra stream holds nothing");
     }
 }
