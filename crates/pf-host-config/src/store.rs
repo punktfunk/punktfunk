@@ -595,13 +595,18 @@ mod tests {
     }
 
     /// A Bool or tri-state row reads through `row_bool`/`row_tri`, never a raw-string reader
-    /// with a grammar of its own that the console does not share.
+    /// with a grammar of its own that the console does not share. A crate without this one
+    /// (a client reading the same name) has no rows and is skipped.
     #[test]
     fn typed_rows_are_read_through_the_typed_readers() {
         let mut stack = vec![Path::new(env!("CARGO_MANIFEST_DIR")).join("..")];
         let mut typed_calls = 0;
         while let Some(p) = stack.pop() {
             if p.is_dir() {
+                let manifest = std::fs::read_to_string(p.join("Cargo.toml"));
+                if manifest.is_ok_and(|m| !m.contains("pf-host-config")) {
+                    continue;
+                }
                 stack.extend(std::fs::read_dir(&p).unwrap().map(|e| e.unwrap().path()));
                 continue;
             }

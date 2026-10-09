@@ -636,7 +636,7 @@ impl Drop for MicStreamer {
 /// Communications stream category; the PipeWire twin gates its echo-cancelled source the
 /// same way.
 fn aec_enabled(echo_cancel: bool) -> bool {
-    echo_cancel && !std::env::var("PUNKTFUNK_NO_AEC").is_ok_and(|v| !v.is_empty() && v != "0")
+    echo_cancel && crate::env_on("PUNKTFUNK_NO_AEC") != Some(true)
 }
 
 fn mic_thread(

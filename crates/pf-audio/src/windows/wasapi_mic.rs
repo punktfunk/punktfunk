@@ -56,7 +56,7 @@ type MicQueue = (Mutex<VecDeque<u8>>, Condvar);
 /// driver's capture side misbehaves while its render side is paused.
 fn mic_always_on() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| std::env::var_os("PUNKTFUNK_MIC_ALWAYS_ON").is_some_and(|v| v != "0"))
+    *ON.get_or_init(|| pf_host_config::env_on("PUNKTFUNK_MIC_ALWAYS_ON") == Some(true))
 }
 
 pub struct WasapiVirtualMic {
@@ -266,7 +266,7 @@ fn repair_pins(minted: bool) {
 /// echo; [`super::wiring_plan`]). Microphone first (inject target), speakers
 /// second (loopback / silent sink). Returns true if either installed. No-op
 /// when the INFs are absent, install is denied (needs admin; host is SYSTEM),
-/// or `PUNKTFUNK_NO_MIC_INSTALL` is set. [`super::wasapi_cap`] installs the
+/// or `PUNKTFUNK_NO_MIC_INSTALL=1`. [`super::wasapi_cap`] installs the
 /// same pair when no silent sink exists.
 pub fn install_steam_audio_pair() -> bool {
     let mic = try_install_steam_audio("SteamStreamingMicrophone.inf");
@@ -348,7 +348,7 @@ fn try_install_steam_audio(inf_name: &str) -> bool {
         DiInstallDriverW, DIINSTALLDRIVER_FLAGS,
     };
 
-    if std::env::var_os("PUNKTFUNK_NO_MIC_INSTALL").is_some() {
+    if pf_host_config::env_on("PUNKTFUNK_NO_MIC_INSTALL") == Some(true) {
         return false;
     }
     let Some(path) = steam_driver_inf_path(inf_name) else {

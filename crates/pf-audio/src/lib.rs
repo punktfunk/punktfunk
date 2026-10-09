@@ -329,7 +329,7 @@ pub struct MicBackendStats {
 /// creep-trims depth.
 pub fn mic_legacy_buffer() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| std::env::var_os("PUNKTFUNK_MIC_LEGACY_BUFFER").is_some_and(|v| v != "0"))
+    *ON.get_or_init(|| pf_host_config::env_on("PUNKTFUNK_MIC_LEGACY_BUFFER") == Some(true))
 }
 
 /// Open a virtual mic (1 or 2 channels). Linux: PipeWire `Audio/Source`. Windows:

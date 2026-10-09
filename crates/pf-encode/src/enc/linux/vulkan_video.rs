@@ -1133,16 +1133,15 @@ impl VulkanVideoEncoder {
                 .context("no compute queue")?;
             (fam as u32, qf[fam].timestamp_valid_bits)
         };
-        // `PUNKTFUNK_PERF` (`"0"` = off). `ts_period_ns==0.0` keeps timestamp sites off the hot path.
-        let ts_period_ns =
-            if std::env::var("PUNKTFUNK_PERF").is_ok_and(|v| v != "0") && compute_ts_bits > 0 {
-                instance
-                    .get_physical_device_properties(pd)
-                    .limits
-                    .timestamp_period as f64
-            } else {
-                0.0
-            };
+        // `PUNKTFUNK_PERF`. `ts_period_ns==0.0` keeps timestamp sites off the hot path.
+        let ts_period_ns = if pf_host_config::config().perf && compute_ts_bits > 0 {
+            instance
+                .get_physical_device_properties(pd)
+                .limits
+                .timestamp_period as f64
+        } else {
+            0.0
+        };
 
         // Encode source before profile: EFC RGB conversion changes profile identity;
         // producer-native NV12 uses the ordinary 4:2:0 profile.

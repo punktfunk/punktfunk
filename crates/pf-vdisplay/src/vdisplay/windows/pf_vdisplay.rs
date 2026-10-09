@@ -1765,7 +1765,7 @@ mod tests {
         // has no subscriber.
         init_test_tracing();
         assert!(
-            std::env::var("PUNKTFUNK_NO_ISOLATE").is_err(),
+            pf_host_config::env_on("PUNKTFUNK_NO_ISOLATE") != Some(true),
             "PUNKTFUNK_NO_ISOLATE forces Topology::Extend — this case needs Exclusive"
         );
         let _topology = ExclusiveTopology::force();

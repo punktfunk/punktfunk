@@ -47,7 +47,7 @@ fn tonemap_peak() -> f32 {
 /// `PUNKTFUNK_DIRECT_PRESENT=0` keeps every lane on the video image: an A/B on one build.
 fn direct_enabled() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| std::env::var("PUNKTFUNK_DIRECT_PRESENT").ok().as_deref() != Some("0"))
+    *ON.get_or_init(|| pf_client_core::env_on("PUNKTFUNK_DIRECT_PRESENT") != Some(false))
 }
 
 /// Where a CSC pass draws.

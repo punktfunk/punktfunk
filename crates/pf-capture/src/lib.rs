@@ -424,7 +424,7 @@ pub struct FastSyntheticCapturer {
     height: u32,
     frame_idx: u64,
     buf: Vec<u8>,
-    /// `PUNKTFUNK_SYNTH_NOISE`: high-entropy noise NVENC cannot compress, so
+    /// `PUNKTFUNK_SYNTH_NOISE=1`: high-entropy noise NVENC cannot compress, so
     /// the encoder hits its CBR target. Default flat/band compresses to ~nothing.
     noise: bool,
     rng: u64,
@@ -438,7 +438,7 @@ impl FastSyntheticCapturer {
             height,
             frame_idx: 0,
             buf: vec![0u8; width as usize * height as usize * 4],
-            noise: std::env::var_os("PUNKTFUNK_SYNTH_NOISE").is_some(),
+            noise: pf_host_config::env_on("PUNKTFUNK_SYNTH_NOISE") == Some(true),
             rng: 0x9e3779b97f4a7c15,
         }
     }

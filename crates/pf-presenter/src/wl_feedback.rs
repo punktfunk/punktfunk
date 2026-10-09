@@ -30,7 +30,7 @@ const CLOCK_MONOTONIC: u32 = 1;
 
 /// On unless `PUNKTFUNK_SURFACE_FEEDBACK=0`: one feedback object per present.
 pub fn enabled() -> bool {
-    std::env::var("PUNKTFUNK_SURFACE_FEEDBACK").map_or(true, |v| v != "0")
+    pf_client_core::env_on("PUNKTFUNK_SURFACE_FEEDBACK") != Some(false)
 }
 
 /// One present the compositor answered: the id the presenter gave it, and when the

@@ -208,6 +208,11 @@ fn gave_up() -> bool {
     UNLATCHED_ATTEMPTS.load(Ordering::SeqCst) >= MAX_UNLATCHED_ATTEMPTS
 }
 
+/// `PUNKTFUNK_NO_AUDIO_MINT=1`: keep the name-based ladder; `=0` mints as if unset.
+fn mint_opted_out() -> bool {
+    pf_host_config::env_on("PUNKTFUNK_NO_AUDIO_MINT") == Some(true)
+}
+
 /// Wiring-plan tier-0: minted endpoint ids, or all-empty while nothing is provisioned.
 pub fn minted_ids() -> wiring_plan::MintedIds {
     match PROVISIONED.get() {
@@ -227,7 +232,7 @@ pub fn provisioned() -> Option<Arc<MintedAudio>> {
 
 /// Starts one process-identity provisioning worker. Idempotent and non-blocking.
 pub fn provision_at_startup() {
-    if std::env::var_os("PUNKTFUNK_NO_AUDIO_MINT").is_some() || gave_up() {
+    if mint_opted_out() || gave_up() {
         return;
     }
     if PROVISIONED.get().is_some() || PROVISIONING.swap(true, Ordering::SeqCst) {
@@ -715,13 +720,10 @@ pub fn discover_driver(needle: &str, inf_name: &str) -> Result<(String, String)>
 
 /// Runs the mic pump's first resolve without racing the startup worker.
 ///
-/// A latched result or `PUNKTFUNK_NO_AUDIO_MINT` returns immediately. Otherwise an in-flight
+/// A latched result or `PUNKTFUNK_NO_AUDIO_MINT=1` returns immediately. Otherwise an in-flight
 /// pass wins, failed passes respect [`RETRY_COOLDOWN`], and the process attempt cap still applies.
 pub fn ensure_blocking() {
-    if std::env::var_os("PUNKTFUNK_NO_AUDIO_MINT").is_some()
-        || PROVISIONED.get().is_some()
-        || gave_up()
-    {
+    if mint_opted_out() || PROVISIONED.get().is_some() || gave_up() {
         return;
     }
     // One SetupAPI/PnP sweep runs at a time inside this process.
