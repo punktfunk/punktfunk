@@ -2,11 +2,13 @@
 //! A D3D11 RGB slot arrives converted: it is the blit source and the `Redraw` picture,
 //! with no video image. A D3D11 planar slot goes through CSC like the native lane.
 //!
-//! [`Presenter::present`] returns `false` when the swapchain is out of date; the
-//! caller recreates with current window state and may retry. One frame in flight:
-//! the submit fence covers the command buffer, staging buffer, and the parked
-//! hardware frame. Hardware lanes import or bind before acquire so a failed
-//! import does not consume the acquire semaphore.
+//! [`Presenter::present`] runs these phases in order: glass gate, HDR follow, import, fence
+//! wait, acquire, retire, bind, plan, record (lane, composite, overlay), submit, park, queue
+//! present. The order is the contract: import before acquire, so a failed import does not
+//! consume the acquire semaphore; the fence wait before any reuse, since one frame is in
+//! flight and its fence covers the command buffer, the staging buffer and the parked
+//! hardware frame; acquire before retiring the picture on screen, so an out-of-date
+//! swapchain still leaves the next `Redraw` its frame.
 //!
 //! HDR follows the frame's PQ flag. No HDR10 surface → CSC shader mode 1
 //! tonemaps onto SDR. Pin peak with `PUNKTFUNK_TONEMAP_PEAK` (default 4.9 ≈
@@ -16,7 +18,7 @@
 
 use super::gpu::*;
 use super::present_timing::SLICE_NS;
-use super::{BusyOn, DirectLast, DirectSrc, FrameInput, Presented, Presenter, Retired};
+use super::{BusyOn, DirectLast, DirectSrc, FrameInput, Presented, Presenter, Retired, VideoImage};
 use crate::csc::csc_rows;
 #[cfg(target_os = "linux")]
 use crate::dmabuf::{self, HwFrame};
@@ -27,6 +29,8 @@ use ash::vk::Handle as _;
 #[cfg(windows)]
 use pf_client_core::video::SlotFormat;
 use pf_client_core::video::{CpuPlanarFrame, NativeVkFrame, NativeVkLayout, RawVkFormat};
+use punktfunk_core::video_fit::Placement;
+use std::ops::ControlFlow;
 
 /// `PUNKTFUNK_TONEMAP_PEAK`, read once: the environment lock and a string per frame is not
 /// a price the CSC record pays. Default 4.9 ≈ 1000 nits / 203-nit reference.
@@ -102,11 +106,56 @@ impl Lane<'_> {
     }
 }
 
-/// The picture's place on the swapchain image for the direct pass.
-#[derive(Clone, Copy)]
-struct DirectPlan {
-    rect: vk::Rect2D,
-    clear: bool,
+/// What one present draws, decided after acquire and before recording.
+struct FramePlan {
+    /// The swapchain image this frame draws into.
+    index: u32,
+    /// The composite's source and its picture size: the video image, or on Windows a D3D11
+    /// RGB slot.
+    source: Option<(vk::Image, u32, u32)>,
+    /// Where `source` lands on the swapchain image; `None` when nothing would show.
+    placement: Option<Placement>,
+    /// A fractional scale the filter ladder (`scale.rs`) draws.
+    filtered: Option<Placement>,
+    /// The planes this frame's CSC samples and how; a `Redraw` replays them.
+    last: Option<DirectLast>,
+    /// The CSC pass draws straight into the swapchain image here.
+    direct: Option<CscTarget>,
+    /// The RGB slot the composite reads: this frame's, or the retained one on `Redraw`.
+    #[cfg(windows)]
+    slot: Option<(crate::d3d11::Imported, u32, u32)>,
+}
+
+impl FramePlan {
+    /// The direct target, or the video image the composite places afterwards.
+    fn csc_target(&self, v: &VideoImage) -> CscTarget {
+        self.direct.unwrap_or_else(|| video_target(v))
+    }
+}
+
+/// The CSC pass into the whole video image.
+fn video_target(v: &VideoImage) -> CscTarget {
+    CscTarget::Video {
+        framebuffer: v.framebuffer,
+        extent: vk::Extent2D {
+            width: v.width,
+            height: v.height,
+        },
+    }
+}
+
+impl DirectSrc {
+    /// The 3-plane CSC pipe (PyroWave, software I420) over the NV12 one.
+    fn planar(self) -> bool {
+        match self {
+            DirectSrc::Native => false,
+            #[cfg(target_os = "linux")]
+            DirectSrc::Dmabuf => false,
+            DirectSrc::Cpu => true,
+            #[cfg(all(any(target_os = "linux", windows), feature = "pyrowave"))]
+            DirectSrc::Pyro => true,
+        }
+    }
 }
 
 /// `PUNKTFUNK_D3D11_NO_MUTEX=1`, read once (debugging only: torn frames).
@@ -167,6 +216,7 @@ impl Presenter {
     /// recreates it (current window state) and may retry. `Busy` hands the frame back:
     /// the swapchain has no image yet (FIFO with no glass stamps to gate on), so the
     /// caller keeps the frame and tries again shortly instead of blocking on the queue.
+    /// The phases run in the module doc's order, which is the contract.
     pub fn present<'a>(
         &mut self,
         window: &sdl3::video::Window,
@@ -188,88 +238,151 @@ impl Presenter {
                 self.resume_swapchain(window)?;
             }
         }
-        // FIFO without present-wait: the queue is policed here rather than by blocking.
-        // Give the previous submit's fence up to 1 ms (it is the frame's real gate, and a
-        // sleep-and-retry either spins or wakes late), then take the image ahead of time;
-        // either one not ready means a refresh has not passed yet. Probed before `input`
-        // is consumed so the frame can go back to the store whole.
+        let input = match self.glass_gate(window, input)? {
+            ControlFlow::Continue(input) => input,
+            ControlFlow::Break(done) => return Ok(done),
+        };
+        self.follow_hdr(window, &input)?;
+        let redraw = matches!(input, FrameInput::Redraw);
+        // Import before acquire: a rejected import must not consume the acquire semaphore.
+        let lane = self.import(input)?;
+        self.wait_fence()?;
+        // Acquire before `retire`: an out-of-date swapchain drops this frame, and the next
+        // `Redraw` must still replay the last one.
+        let Some(index) = self.acquire()? else {
+            // Acquire failed: GPU never saw the import; destroy it here.
+            #[cfg(target_os = "linux")]
+            if let Lane::Dmabuf(f) = lane {
+                f.destroy(&self.device);
+            }
+            self.recreate_swapchain(window)?;
+            return Ok(Presented::Stale);
+        };
+        self.retire(&lane);
+        let cpu_offsets = self.bind(&lane)?;
+        if let Some(o) = overlay {
+            self.bind_overlay(o);
+        }
+        let plan = self.plan(&lane, index)?;
+
+        // SAFETY: `cmd_buf` is owned and idle (fence wait above) and records from `begin` to
+        // `end` here, which is every record fn's precondition. Recording names images, views
+        // and sets this presenter owns (or a live overlay/native frame parked until the next
+        // fence); `bind` and `bind_overlay` pointed the sets at this frame.
+        let native_wait = unsafe {
+            self.device.begin_command_buffer(
+                self.cmd_buf,
+                &vk::CommandBufferBeginInfo::default()
+                    .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT),
+            )?;
+            let native_wait = self.record_lane(&lane, &plan, cpu_offsets);
+            let swap_layout = self.record_composite(&plan);
+            self.record_overlay(overlay, &plan, swap_layout);
+            self.device.end_command_buffer(self.cmd_buf)?;
+            native_wait
+        };
+        // Next CPU upload must transition from SHADER_READ_ONLY_OPTIMAL. Set here after
+        // record, before submit: a submit failure tears the presenter down rather than
+        // re-recording.
+        if let Some(p) = self.cpu_planes.as_mut() {
+            p.initialized = true;
+        }
+        // SAFETY: `cmd_buf` holds the recording ended above, `fence` was reset by
+        // `wait_fence`, and `acquire` took image `index` on `acquire_sem`.
+        unsafe { self.submit(&lane, &plan, native_wait)? };
+        self.park(lane);
+        // SAFETY: the submit above signals `render_sems[index]`.
+        unsafe { self.queue_present(window, index, redraw) }
+    }
+
+    /// FIFO without present-wait: the queue is policed here rather than by blocking.
+    /// Give the previous submit's fence up to 1 ms (it is the frame's real gate, and a
+    /// sleep-and-retry either spins or wakes late), then take the image ahead of time;
+    /// either one not ready means a refresh has not passed yet, and the frame breaks out
+    /// as `Busy`, whole. `Stale` breaks out after a recreate.
+    fn glass_gate<'a>(
+        &mut self,
+        window: &sdl3::video::Window,
+        input: FrameInput<'a>,
+    ) -> Result<ControlFlow<Presented<'a>, FrameInput<'a>>> {
         let nonblocking = self.needs_glass_gate()
             && self.present_timer.is_none()
             && !matches!(input, FrameInput::Redraw);
-        if nonblocking {
-            if self.submitted {
-                // SAFETY: `fence` is owned here; a bounded wait is always legal.
-                match unsafe { self.device.wait_for_fences(&[self.fence], true, 1_000_000) } {
-                    Ok(()) => {}
-                    Err(vk::Result::TIMEOUT) => {
-                        return Ok(Presented::Busy(input, BusyOn::Fence));
-                    }
-                    Err(e) => return Err(e).context("vkWaitForFences"),
+        if !nonblocking {
+            return Ok(ControlFlow::Continue(input));
+        }
+        if self.submitted {
+            // SAFETY: `fence` is owned here; a bounded wait is always legal.
+            match unsafe { self.device.wait_for_fences(&[self.fence], true, 1_000_000) } {
+                Ok(()) => {}
+                Err(vk::Result::TIMEOUT) => {
+                    return Ok(ControlFlow::Break(Presented::Busy(input, BusyOn::Fence)));
                 }
-            }
-            if self.acquired.is_none() {
-                // The non-blocking probe runs only without a present waiter: no swapchain lock.
-                // SAFETY: `swapchain`/`acquire_sem` are owned. No image is held, so every wait
-                // on `acquire_sem` is complete: a present's by its fence (checked above), a
-                // discarded image's by `recreate_swapchain`'s queue drain.
-                match unsafe {
-                    self.swap_d.acquire_next_image(
-                        self.swapchain,
-                        0,
-                        self.acquire_sem,
-                        vk::Fence::null(),
-                    )
-                } {
-                    Ok((index, _)) => self.acquired = Some(index),
-                    Err(vk::Result::NOT_READY) | Err(vk::Result::TIMEOUT) => {
-                        return Ok(Presented::Busy(input, BusyOn::Acquire));
-                    }
-                    Err(vk::Result::ERROR_OUT_OF_DATE_KHR)
-                    | Err(vk::Result::ERROR_FULL_SCREEN_EXCLUSIVE_MODE_LOST_EXT) => {
-                        self.recreate_swapchain(window)?;
-                        return Ok(Presented::Stale);
-                    }
-                    Err(e) => return Err(e).context("vkAcquireNextImageKHR"),
-                }
+                Err(e) => return Err(e).context("vkWaitForFences"),
             }
         }
-        // HDR follows this frame's PQ flag before any work. No HDR10 surface →
-        // PQ stays on the SDR swapchain; CSC shader mode 1 tonemaps.
-        let frame_pq = match &input {
-            FrameInput::Redraw => None,
-            FrameInput::Cpu(f) => Some(f.color.is_pq()),
+        if self.acquired.is_none() {
+            // The non-blocking probe runs only without a present waiter: no swapchain lock.
+            // SAFETY: `swapchain`/`acquire_sem` are owned. No image is held, so every wait
+            // on `acquire_sem` is complete: a present's by its fence (checked above), a
+            // discarded image's by `recreate_swapchain`'s queue drain.
+            match unsafe {
+                self.swap_d.acquire_next_image(
+                    self.swapchain,
+                    0,
+                    self.acquire_sem,
+                    vk::Fence::null(),
+                )
+            } {
+                Ok((index, _)) => self.acquired = Some(index),
+                Err(vk::Result::NOT_READY) | Err(vk::Result::TIMEOUT) => {
+                    return Ok(ControlFlow::Break(Presented::Busy(input, BusyOn::Acquire)));
+                }
+                Err(vk::Result::ERROR_OUT_OF_DATE_KHR)
+                | Err(vk::Result::ERROR_FULL_SCREEN_EXCLUSIVE_MODE_LOST_EXT) => {
+                    self.recreate_swapchain(window)?;
+                    return Ok(ControlFlow::Break(Presented::Stale));
+                }
+                Err(e) => return Err(e).context("vkAcquireNextImageKHR"),
+            }
+        }
+        Ok(ControlFlow::Continue(input))
+    }
+
+    /// HDR follows this frame's PQ flag before any work. No HDR10 surface → PQ stays on
+    /// the SDR swapchain; CSC shader mode 1 tonemaps. A `Redraw` changes nothing.
+    fn follow_hdr(&mut self, window: &sdl3::video::Window, input: &FrameInput) -> Result<()> {
+        let pq = match input {
+            FrameInput::Redraw => return Ok(()),
+            FrameInput::Cpu(f) => f.color.is_pq(),
             #[cfg(target_os = "linux")]
-            FrameInput::Dmabuf(d) => Some(d.color.is_pq()),
+            FrameInput::Dmabuf(d) => d.color.is_pq(),
             #[cfg(windows)]
-            FrameInput::D3d11(d) => Some(d.color.is_pq()),
+            FrameInput::D3d11(d) => d.color.is_pq(),
             #[cfg(all(any(target_os = "linux", windows), feature = "pyrowave"))]
-            FrameInput::PyroWave(f) => Some(f.color.is_pq()),
-            FrameInput::NativeVk(f) => Some(f.color.is_pq()),
+            FrameInput::PyroWave(f) => f.color.is_pq(),
+            FrameInput::NativeVk(f) => f.color.is_pq(),
         };
-        if let Some(pq) = frame_pq {
-            // Once: missing HDR is the surface/compositor, not a host that omitted PQ.
-            if pq && self.hdr10_format.is_none() && !self.hdr_downgrade_warned {
-                self.hdr_downgrade_warned = true;
-                tracing::warn!(
-                    "PQ (HDR10) stream tone-mapped to SDR — the surface offers no HDR10 \
-                     colorspace, so no HDR is committed to the compositor. Under gamescope this \
-                     usually means the gamescope Vulkan WSI layer is not visible in the sandbox."
-                );
-            }
-            let want = pq && self.hdr10_format.is_some();
-            if want != self.hdr_active {
-                self.set_hdr_mode(window, want)?;
-            }
+        // Once: missing HDR is the surface/compositor, not a host that omitted PQ.
+        if pq && self.hdr10_format.is_none() && !self.hdr_downgrade_warned {
+            self.hdr_downgrade_warned = true;
+            tracing::warn!(
+                "PQ (HDR10) stream tone-mapped to SDR — the surface offers no HDR10 \
+                 colorspace, so no HDR is committed to the compositor. Under gamescope this \
+                 usually means the gamescope Vulkan WSI layer is not visible in the sandbox."
+            );
         }
-        let redraw = matches!(input, FrameInput::Redraw);
-        // Import/view before acquire: a reject must fail before this present
-        // consumes the acquire semaphore.
-        let lane = self.import(input)?;
+        let want = pq && self.hdr10_format.is_some();
+        if want != self.hdr_active {
+            self.set_hdr_mode(window, want)?;
+        }
+        Ok(())
+    }
 
-        // One frame in flight: the fence covers the command buffer, the staging
-        // buffer, and the previously submitted hw frame.
-
-        let fence_started = std::time::Instant::now();
+    /// One frame in flight: wait the last submit's fence, which covers the command buffer,
+    /// the staging buffer and the parked hardware frame, then reset it for this submit.
+    fn wait_fence(&mut self) -> Result<()> {
+        let started = std::time::Instant::now();
         // SAFETY: `fence` is owned here. `submitted` means the last `queue_submit`
         // named it; wait idles that submit, then reset is legal.
         unsafe {
@@ -279,12 +392,16 @@ impl Presenter {
             }
             self.device.reset_fences(&[self.fence])?;
         }
-        self.last_fence_us = fence_started.elapsed().as_micros() as u32;
+        self.last_fence_us = started.elapsed().as_micros() as u32;
+        Ok(())
+    }
 
-        // Acquire before anything below retires the picture on screen. An out-of-date
-        // swapchain drops this frame, and the next `Redraw` must still replay the last one.
-        let acquire_started = std::time::Instant::now();
-        // An image taken by the non-blocking probe above is used as is.
+    /// The swapchain image this present draws into: the one the glass gate took, or the
+    /// next one. `None`: the swapchain is out of date and the frame drops. The image stays
+    /// in `acquired` until the submit waits `acquire_sem`, so an error before then leaves
+    /// it for the next present, or for `recreate_swapchain` to retire.
+    fn acquire(&mut self) -> Result<Option<u32>> {
+        let started = std::time::Instant::now();
         let acquired = match self.acquired {
             Some(index) => Ok((index, false)),
             None => {
@@ -297,8 +414,8 @@ impl Presenter {
                     let _swapchain = self.present_timer.as_ref().map(|t| t.swapchain_guard());
                     // SAFETY: `swapchain` and `acquire_sem` are owned here; the guard above is
                     // the swapchain's host sync. No image is held, so every wait on
-                    // `acquire_sem` is complete: a present's by the fence wait above, a
-                    // discarded image's by `recreate_swapchain`'s queue drain.
+                    // `acquire_sem` is complete: a present's by the fence wait before this
+                    // call, a discarded image's by `recreate_swapchain`'s queue drain.
                     let r = unsafe {
                         self.swap_d.acquire_next_image(
                             self.swapchain,
@@ -316,32 +433,27 @@ impl Presenter {
         let (index, _suboptimal) = match acquired {
             Ok(r) => r,
             Err(vk::Result::ERROR_OUT_OF_DATE_KHR)
-            | Err(vk::Result::ERROR_FULL_SCREEN_EXCLUSIVE_MODE_LOST_EXT) => {
-                // Acquire failed: GPU never saw the import; destroy it here.
-                #[cfg(target_os = "linux")]
-                if let Lane::Dmabuf(f) = lane {
-                    f.destroy(&self.device);
-                }
-                self.recreate_swapchain(window)?;
-                return Ok(Presented::Stale);
-            }
+            | Err(vk::Result::ERROR_FULL_SCREEN_EXCLUSIVE_MODE_LOST_EXT) => return Ok(None),
             Err(e) => return Err(e).context("vkAcquireNextImageKHR"),
         };
-        // Held until the submit waits `acquire_sem`: an error before then leaves the image
-        // for the next present, or for `recreate_swapchain` to retire.
         self.acquired = Some(index);
-        self.last_acquire_us = acquire_started.elapsed().as_micros() as u32;
-        // A `Redraw` samples the retired frame again through the direct pass, so it goes
-        // with the next real frame, whose fence covers the redraw's reads too.
-        if !redraw {
+        self.last_acquire_us = started.elapsed().as_micros() as u32;
+        Ok(Some(index))
+    }
+
+    /// Free what the fence wait left idle and this frame supersedes. A `Redraw` samples
+    /// the retired frame again through the direct pass, so it goes with the next real
+    /// frame, whose fence covers the redraw's reads too.
+    fn retire(&mut self, lane: &Lane) {
+        if !matches!(lane, Lane::Redraw) {
             if let Some(old) = self.retired_hw.take() {
                 old.destroy(&self.device);
             }
         }
-        // Nothing is in flight past the wait above: imports of a superseded ring
+        // Nothing is in flight past the fence wait: imports of a superseded ring
         // generation can go now.
         #[cfg(windows)]
-        if let (Lane::D3d11(d, _), Some(hw)) = (&lane, self.hw_win.as_mut()) {
+        if let (Lane::D3d11(d, _), Some(hw)) = (lane, self.hw_win.as_mut()) {
             // The retained slot may name a retired import; a `Redraw` must not sample it.
             if hw.imports.retire_stale(&self.device, d.generation) {
                 self.retained_slot = None;
@@ -351,7 +463,7 @@ impl Presenter {
         // gone, and its cached imports pin the pool's memory until they go too.
         #[cfg(target_os = "linux")]
         if let Some(hw) = self.hw.as_mut() {
-            match &lane {
+            match lane {
                 Lane::Dmabuf(f) => hw.imports.retire_stale(&self.device, f.generation()),
                 l if l.is_hw() && !hw.imports.is_empty() => hw.imports.destroy_all(&self.device),
                 _ => {}
@@ -365,28 +477,34 @@ impl Presenter {
                 p.destroy(&self.device);
             }
         }
+    }
 
-        let cpu_offsets = self.bind(&lane)?;
-        if let Some(o) = overlay {
-            // Descriptor set idle: fence wait above.
-            let infos = [vk::DescriptorImageInfo::default()
-                .image_view(o.view)
-                .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)];
-            let writes = [vk::WriteDescriptorSet::default()
-                .dst_set(self.overlay_pipe.desc_set)
-                .dst_binding(0)
-                .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-                .image_info(&infos)];
-            // SAFETY: overlay `desc_set` is owned here; fence wait above means no
-            // in-flight cmd buf samples it. `writes`/`infos` outlive the call.
-            unsafe { self.device.update_descriptor_sets(&writes, &[]) };
-        }
+    /// Point the overlay pass at `o`. Only after the fence wait, which leaves the
+    /// descriptor set idle.
+    fn bind_overlay(&self, o: &OverlayFrame) {
+        let infos = [vk::DescriptorImageInfo::default()
+            .image_view(o.view)
+            .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)];
+        let writes = [vk::WriteDescriptorSet::default()
+            .dst_set(self.overlay_pipe.desc_set)
+            .dst_binding(0)
+            .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+            .image_info(&infos)];
+        // SAFETY: overlay `desc_set` is owned here; the fence wait before this call means no
+        // in-flight cmd buf samples it. `writes`/`infos` outlive the call.
+        unsafe { self.device.update_descriptor_sets(&writes, &[]) };
+    }
 
-        // Where the picture lands and which path draws it. A fractional scale goes through the
-        // filter ladder (`scale.rs`); whole-number scales blit exactly. The shader samples the
-        // video image and draws through the overlay's framebuffers, so both must exist.
+    /// Where the picture lands on swapchain image `index` and which path draws it. A
+    /// fractional scale goes through the filter ladder (`scale.rs`); whole-number scales
+    /// blit exactly. Both shader paths draw through the overlay's framebuffers, so those
+    /// must exist. Direct CSC into the swapchain image takes the whole picture at an exact
+    /// scale, from a lane that samples on this device; everything else takes the video
+    /// image. A real frame records what it drew direct for the next `Redraw`.
+    fn plan(&mut self, lane: &Lane, index: u32) -> Result<FramePlan> {
+        let redraw = matches!(lane, Lane::Redraw);
         #[cfg(windows)]
-        let slot = match &lane {
+        let slot = match lane {
             Lane::D3d11(d, f) if f.planes.is_none() => Some((*f, d.width, d.height)),
             _ => self.retained_slot.filter(|_| redraw),
         };
@@ -410,10 +528,74 @@ impl Presenter {
             }
             _ => None,
         };
-        // Direct CSC into the swapchain image: the whole picture at an exact scale, from a
-        // lane that samples on this device. A `Redraw` replays the last real frame's planes
-        // while the frame behind them is still held. Everything else takes the video image.
-        let last: Option<DirectLast> = match &lane {
+        let last = self.sampled_planes(lane);
+        let direct = match (last, source, placement) {
+            (Some(_), Some((_, w, h)), Some(p))
+                if direct_enabled()
+                    && targets_ready
+                    && !from_slot
+                    && filtered.is_none()
+                    && p.src_x == 0.0
+                    && p.src_y == 0.0
+                    && p.src_w == f64::from(w)
+                    && p.src_h == f64::from(h) =>
+            {
+                let covered = p.dst_x == 0
+                    && p.dst_y == 0
+                    && p.dst_w == self.extent.width
+                    && p.dst_h == self.extent.height;
+                Some(CscTarget::Direct {
+                    framebuffer: self.overlay_pipe.framebuffers[index as usize],
+                    surface: self.extent,
+                    rect: vk::Rect2D {
+                        offset: vk::Offset2D {
+                            x: p.dst_x as i32,
+                            y: p.dst_y as i32,
+                        },
+                        extent: vk::Extent2D {
+                            width: p.dst_w,
+                            height: p.dst_h,
+                        },
+                    },
+                    clear: !covered,
+                })
+            }
+            _ => None,
+        };
+        if !redraw {
+            self.direct_last = last.filter(|_| direct.is_some());
+        }
+        if let (Some((_, w, h)), Some(p)) = (source, placement) {
+            // A D3D11 RGB ring slot is imported TRANSFER_SRC only, so a fractional scale of it
+            // stays a bilinear blit until the import also asks for SAMPLED.
+            let path = if direct.is_some() {
+                "direct"
+            } else if filtered.is_some() {
+                "filtered"
+            } else if crate::scale::needs_filter(&p) {
+                "bilinear blit"
+            } else {
+                "exact blit"
+            };
+            self.log_placement(w, h, &p, path);
+        }
+        Ok(FramePlan {
+            index,
+            source,
+            placement,
+            filtered,
+            last,
+            direct,
+            #[cfg(windows)]
+            slot,
+        })
+    }
+
+    /// The planes this frame's CSC samples and how. A `Redraw` replays the last direct
+    /// frame's while the frame behind them is still held. `None`: a D3D11 slot, or nothing
+    /// to replay.
+    fn sampled_planes(&self, lane: &Lane) -> Option<DirectLast> {
+        match lane {
             Lane::Redraw => self.direct_last.filter(|l| match l.src {
                 DirectSrc::Native => matches!(self.retired_hw, Some(Retired::NativeVk(_))),
                 #[cfg(target_os = "linux")]
@@ -422,6 +604,9 @@ impl Presenter {
                 #[cfg(all(any(target_os = "linux", windows), feature = "pyrowave"))]
                 DirectSrc::Pyro => matches!(self.retired_hw, Some(Retired::Pyro(_))),
             }),
+            // Depth/packing from the picture format (can change mid-stream): 8-bit math
+            // over P010 decodes and displays the wrong range. `uv_scale` is picture/coded
+            // so a taller decode pool does not show.
             Lane::Native(f) => {
                 let (depth, msb_packed) = csc_depth_packing_or_8bit(f.vk_format);
                 Some(DirectLast {
@@ -435,6 +620,8 @@ impl Presenter {
                     msb_packed,
                 })
             }
+            // Always 8-bit, no MSB packing — R8 planes, whatever the stream signals. PQ
+            // tone-maps through shader mode 1, not 10-bit.
             Lane::Cpu(f) => Some(DirectLast {
                 src: DirectSrc::Cpu,
                 uv_scale: [1.0, 1.0],
@@ -442,6 +629,8 @@ impl Presenter {
                 depth: 8,
                 msb_packed: false,
             }),
+            // Imported images span the full exported (coded) extent; `uv_scale` crops them
+            // to the visible picture.
             #[cfg(target_os = "linux")]
             Lane::Dmabuf(f) => Some(DirectLast {
                 src: DirectSrc::Dmabuf,
@@ -461,778 +650,736 @@ impl Presenter {
                 depth: if f.ten_bit { 10 } else { 8 },
                 msb_packed: f.ten_bit,
             }),
-        };
-        let direct = match (last, source, placement) {
-            (Some(l), Some((_, w, h)), Some(p))
-                if direct_enabled()
-                    && targets_ready
-                    && !from_slot
-                    && filtered.is_none()
-                    && p.src_x == 0.0
-                    && p.src_y == 0.0
-                    && p.src_w == f64::from(w)
-                    && p.src_h == f64::from(h) =>
-            {
-                let covered = p.dst_x == 0
-                    && p.dst_y == 0
-                    && p.dst_w == self.extent.width
-                    && p.dst_h == self.extent.height;
-                let rect = vk::Rect2D {
-                    offset: vk::Offset2D {
-                        x: p.dst_x as i32,
-                        y: p.dst_y as i32,
-                    },
-                    extent: vk::Extent2D {
-                        width: p.dst_w,
-                        height: p.dst_h,
-                    },
-                };
-                Some((
-                    l,
-                    DirectPlan {
-                        rect,
-                        clear: !covered,
-                    },
-                ))
-            }
-            _ => None,
-        };
-        if !redraw {
-            self.direct_last = direct.map(|(l, _)| l);
         }
-        if let (Some((_, w, h)), Some(p)) = (source, placement) {
-            // A D3D11 RGB ring slot is imported TRANSFER_SRC only, so a fractional scale of it
-            // stays a bilinear blit until the import also asks for SAMPLED.
-            let path = if direct.is_some() {
-                "direct"
-            } else if filtered.is_some() {
-                "filtered"
-            } else if crate::scale::needs_filter(&p) {
-                "bilinear blit"
-            } else {
-                "exact blit"
-            };
-            self.log_placement(w, h, &p, path);
-        }
+    }
 
-        let swap_image = self.images[index as usize];
-        let direct_target = direct.map(|(_, plan)| CscTarget::Direct {
-            framebuffer: self.overlay_pipe.framebuffers[index as usize],
-            surface: self.extent,
-            rect: plan.rect,
-            clear: plan.clear,
-        });
-
-        // SAFETY: `cmd_buf` is owned and idle (fence wait above). Recording names
-        // images/views/sets this presenter owns (or a live overlay/native frame
-        // parked until the next fence). Submit and present take `queue` under
-        // `queue_lock`. Builders are locals that outlive each call.
-        unsafe {
-            self.device.begin_command_buffer(
+    /// Record this frame's CSC pass, into `plan.direct` or the video image. Returns the
+    /// native lane's decode-complete timeline wait for the submit.
+    ///
+    /// # Safety
+    /// `self.cmd_buf` is recording, and `bind` pointed the CSC sets at `lane`'s planes.
+    unsafe fn record_lane(
+        &self,
+        lane: &Lane,
+        plan: &FramePlan,
+        cpu_offsets: Option<[usize; 3]>,
+    ) -> Option<(vk::Semaphore, u64)> {
+        // The VideoProcessor already delivered RGB matching the HDR mode: the
+        // composite reads an RGB slot itself (this frame's, or the retained one on
+        // `Redraw`). Cross-API sync is the keyed mutex on submit, not these barriers.
+        #[cfg(windows)]
+        if let Some((f, _, _)) = plan.slot {
+            external_acquire_barrier(
+                &self.device,
                 self.cmd_buf,
-                &vk::CommandBufferBeginInfo::default()
-                    .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT),
-            )?;
-
-            // The VideoProcessor already delivered RGB matching the HDR mode: the
-            // composite reads an RGB slot itself (this frame's, or the retained one on
-            // `Redraw`). Cross-API sync is the keyed mutex on submit, not these barriers.
-            #[cfg(windows)]
-            if let Some((f, _, _)) = slot {
-                external_acquire_barrier(
-                    &self.device,
-                    self.cmd_buf,
-                    f.image,
-                    self.qfi,
-                    vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
-                    vk::PipelineStageFlags::TRANSFER,
-                    vk::AccessFlags::TRANSFER_READ,
-                );
-            }
-
-            let mut native_wait: Option<(vk::Semaphore, u64)> = None;
-            match &lane {
-                // CSC render pass leaves the video image in TRANSFER_SRC for the blit.
+                f.image,
+                self.qfi,
+                vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
+                vk::PipelineStageFlags::TRANSFER,
+                vk::AccessFlags::TRANSFER_READ,
+            );
+        }
+        let mut native_wait = None;
+        // SAFETY: `cmd_buf` is recording and the sets point at `lane` (`# Safety` above).
+        unsafe {
+            match lane {
                 #[cfg(target_os = "linux")]
-                Lane::Dmabuf(f) => {
-                    if let Some(v) = &self.video {
-                        for view_image in [f.luma_image(), f.chroma_image()] {
-                            foreign_acquire_barrier(
-                                &self.device,
-                                self.cmd_buf,
-                                view_image,
-                                self.qfi,
-                            );
-                        }
-                        let extent = vk::Extent2D {
-                            width: v.width,
-                            height: v.height,
-                        };
-                        let ten_bit = f.is_p010();
-                        // Imported images span the full exported (coded) extent; the
-                        // CSC pass crops them to the visible picture.
-                        let target = direct_target.unwrap_or(CscTarget::Video {
-                            framebuffer: v.framebuffer,
-                            extent,
-                        });
-                        self.record_csc(
-                            false,
-                            target,
-                            f.uv_scale(),
-                            f.color,
-                            if ten_bit { 10 } else { 8 },
-                            ten_bit,
-                        );
-                    }
-                }
-
-                // A planar slot is sampled by the CSC pass into the video image; the composite
-                // then reads that, as on the native lane.
+                Lane::Dmabuf(f) => self.record_dmabuf(f, plan),
                 #[cfg(windows)]
-                Lane::D3d11(d, f) => {
-                    if let (Some(v), true) = (&self.video, f.planes.is_some()) {
-                        external_acquire_barrier(
-                            &self.device,
-                            self.cmd_buf,
-                            f.image,
-                            self.qfi,
-                            vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
-                            vk::PipelineStageFlags::FRAGMENT_SHADER,
-                            vk::AccessFlags::SHADER_READ,
-                        );
-                        let (depth, msb_packed) = match d.format {
-                            SlotFormat::P010 => (10, true),
-                            _ => (8, false),
-                        };
-                        let extent = vk::Extent2D {
-                            width: v.width,
-                            height: v.height,
-                        };
-                        let target = CscTarget::Video {
-                            framebuffer: v.framebuffer,
-                            extent,
-                        };
-                        self.record_csc(false, target, [1.0, 1.0], d.color, depth, msb_packed);
-                    }
-                }
-
-                // Image already on this device; layout and semaphore ride the frame.
-                // Pool images are CONCURRENT across graphics+decode, so these are
-                // layout transitions, not queue-family ownership transfers.
-                Lane::Native(f) => {
-                    if let Some(v) = &self.video {
-                        let image = vk::Image::from_raw(f.image);
-                        let decode_layout = match f.layout {
-                            NativeVkLayout::DecodeDst => vk::ImageLayout::VIDEO_DECODE_DST_KHR,
-                            NativeVkLayout::DecodeDpb => vk::ImageLayout::VIDEO_DECODE_DPB_KHR,
-                        };
-                        native_layer_barrier(
-                            &self.device,
-                            self.cmd_buf,
-                            image,
-                            f.layer,
-                            decode_layout,
-                            vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
-                        );
-                        let extent = vk::Extent2D {
-                            width: v.width,
-                            height: v.height,
-                        };
-                        // Depth/packing from the picture format (can change mid-stream).
-                        // 8-bit math over P010 decodes and displays the wrong range.
-                        // `uv_scale` is picture/coded so a taller decode pool does not show.
-                        let (depth, msb_packed) = csc_depth_packing_or_8bit(f.vk_format);
-                        let target = direct_target.unwrap_or(CscTarget::Video {
-                            framebuffer: v.framebuffer,
-                            extent,
-                        });
-                        self.record_csc(
-                            false,
-                            target,
-                            [
-                                f.width as f32 / f.coded_width as f32,
-                                f.height as f32 / f.coded_height as f32,
-                            ],
-                            f.color,
-                            depth,
-                            msb_packed,
-                        );
-                        native_layer_barrier(
-                            &self.device,
-                            self.cmd_buf,
-                            image,
-                            f.layer,
-                            vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
-                            decode_layout,
-                        );
-                        native_wait =
-                            Some((vk::Semaphore::from_raw(f.semaphore), f.semaphore_value));
-                    }
-                }
-
-                // Planes already on this device and in GENERAL for fragment sampling.
+                Lane::D3d11(d, f) => self.record_d3d11(d, f),
+                Lane::Native(f) => native_wait = self.record_native(f, plan),
                 #[cfg(all(any(target_os = "linux", windows), feature = "pyrowave"))]
-                Lane::Pyro(f) => {
-                    if let Some(v) = &self.video {
-                        let extent = vk::Extent2D {
-                            width: v.width,
-                            height: v.height,
-                        };
-                        // 10-bit planes hold MSB-packed codes, PQ or SDR.
-                        let (depth, msb_packed) = if f.ten_bit { (10, true) } else { (8, false) };
-                        let target = direct_target.unwrap_or(CscTarget::Video {
-                            framebuffer: v.framebuffer,
-                            extent,
-                        });
-                        self.record_csc(true, target, [1.0, 1.0], f.color, depth, msb_packed);
-                    }
-                }
-
-                // Tightly packed (`CpuPlanarFrame`): leave `buffer_row_length` zero —
-                // a stride here would be a second place for the layout to be wrong.
-                Lane::Cpu(f) => {
-                    if let (Some(offsets), Some(v), Some(s), Some(p)) =
-                        (cpu_offsets, &self.video, &self.staging, &self.cpu_planes)
-                    {
-                        // Fresh images start UNDEFINED; later uploads start where the
-                        // previous CSC pass left them (SHADER_READ_ONLY_OPTIMAL).
-                        let from = if p.initialized {
-                            vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL
-                        } else {
-                            vk::ImageLayout::UNDEFINED
-                        };
-                        for (i, offset) in offsets.iter().enumerate() {
-                            let (w, h) = f.plane_dims(i);
-                            barrier(
-                                &self.device,
-                                self.cmd_buf,
-                                p.images[i],
-                                from,
-                                vk::ImageLayout::TRANSFER_DST_OPTIMAL,
-                            );
-                            let region = vk::BufferImageCopy::default()
-                                .buffer_offset(*offset as u64)
-                                .image_subresource(subresource_layers())
-                                .image_extent(vk::Extent3D {
-                                    width: w,
-                                    height: h,
-                                    depth: 1,
-                                });
-                            self.device.cmd_copy_buffer_to_image(
-                                self.cmd_buf,
-                                s.buffer,
-                                p.images[i],
-                                vk::ImageLayout::TRANSFER_DST_OPTIMAL,
-                                &[region],
-                            );
-                            barrier(
-                                &self.device,
-                                self.cmd_buf,
-                                p.images[i],
-                                vk::ImageLayout::TRANSFER_DST_OPTIMAL,
-                                vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
-                            );
-                        }
-                        let extent = vk::Extent2D {
-                            width: v.width,
-                            height: v.height,
-                        };
-                        // Always 8-bit, no MSB packing — R8 planes, whatever the stream
-                        // signals. PQ tone-maps through shader mode 1, not 10-bit.
-                        let target = direct_target.unwrap_or(CscTarget::Video {
-                            framebuffer: v.framebuffer,
-                            extent,
-                        });
-                        self.record_csc(true, target, [1.0, 1.0], f.color, 8, false);
-                    }
-                }
-
-                // `Redraw` of a frame drawn direct: the same planes and push constants, no new
-                // decode wait (the last real submit waited it) and no timeline signal (that value
-                // is spent). The native frame returns to its decode layout as on a real frame.
-                // Off the direct path (a new size or fit) the planes go to the video image first:
-                // a direct frame never wrote it.
-                Lane::Redraw => {
-                    let target = direct_target.or_else(|| {
-                        self.video.as_ref().map(|v| CscTarget::Video {
-                            framebuffer: v.framebuffer,
-                            extent: vk::Extent2D {
-                                width: v.width,
-                                height: v.height,
-                            },
-                        })
-                    });
-                    if let (Some(l), Some(target)) = (last, target) {
-                        match l.src {
-                            DirectSrc::Native => {
-                                if let Some(Retired::NativeVk(f)) = &self.retired_hw {
-                                    let image = vk::Image::from_raw(f.image);
-                                    let decode_layout = match f.layout {
-                                        NativeVkLayout::DecodeDst => {
-                                            vk::ImageLayout::VIDEO_DECODE_DST_KHR
-                                        }
-                                        NativeVkLayout::DecodeDpb => {
-                                            vk::ImageLayout::VIDEO_DECODE_DPB_KHR
-                                        }
-                                    };
-                                    native_layer_barrier(
-                                        &self.device,
-                                        self.cmd_buf,
-                                        image,
-                                        f.layer,
-                                        decode_layout,
-                                        vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
-                                    );
-                                    self.record_csc(
-                                        false,
-                                        target,
-                                        l.uv_scale,
-                                        l.color,
-                                        l.depth,
-                                        l.msb_packed,
-                                    );
-                                    native_layer_barrier(
-                                        &self.device,
-                                        self.cmd_buf,
-                                        image,
-                                        f.layer,
-                                        vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
-                                        decode_layout,
-                                    );
-                                }
-                            }
-                            // Planes stay where the first pass left them, owned by this queue.
-                            #[cfg(target_os = "linux")]
-                            DirectSrc::Dmabuf => {
-                                self.record_csc(
-                                    false,
-                                    target,
-                                    l.uv_scale,
-                                    l.color,
-                                    l.depth,
-                                    l.msb_packed,
-                                );
-                            }
-                            DirectSrc::Cpu => {
-                                self.record_csc(
-                                    true,
-                                    target,
-                                    l.uv_scale,
-                                    l.color,
-                                    l.depth,
-                                    l.msb_packed,
-                                );
-                            }
-                            // Planes stay in GENERAL; the held frame keeps them.
-                            #[cfg(all(any(target_os = "linux", windows), feature = "pyrowave"))]
-                            DirectSrc::Pyro => {
-                                self.record_csc(
-                                    true,
-                                    target,
-                                    l.uv_scale,
-                                    l.color,
-                                    l.depth,
-                                    l.msb_packed,
-                                );
-                            }
-                        }
-                    }
-                }
+                Lane::Pyro(_) => self.record_pyro(plan),
+                Lane::Cpu(f) => self.record_cpu(f, cpu_offsets, plan),
+                Lane::Redraw => self.record_redraw(plan),
             }
+        }
+        native_wait
+    }
 
-            let swap_layout = if direct.is_some() {
-                // The direct pass drew the picture, and the letterbox when there is one.
-                vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL
-            } else if let (Some(p), Some(v)) = (filtered, &self.video) {
-                // The CSC pass leaves the video image in TRANSFER_SRC; the blit path and the
-                // next `Redraw` expect it back there.
-                barrier(
-                    &self.device,
+    /// VAAPI planes: acquired from the foreign queue family, then CSC. The pass leaves the
+    /// video image in TRANSFER_SRC for the blit.
+    ///
+    /// # Safety
+    /// `self.cmd_buf` is recording, and the NV12 CSC set points at `f`'s planes.
+    #[cfg(target_os = "linux")]
+    unsafe fn record_dmabuf(&self, f: &HwFrame, plan: &FramePlan) {
+        let (Some(v), Some(l)) = (&self.video, plan.last) else {
+            return;
+        };
+        for view_image in [f.luma_image(), f.chroma_image()] {
+            foreign_acquire_barrier(&self.device, self.cmd_buf, view_image, self.qfi);
+        }
+        // SAFETY: `cmd_buf` is recording and the set points at `f` (`# Safety` above).
+        unsafe { self.record_planes(plan.csc_target(v), l) };
+    }
+
+    /// A planar D3D11 slot goes through the CSC pass into the video image; the composite
+    /// then reads that, as on the native lane. An RGB slot records nothing here.
+    ///
+    /// # Safety
+    /// `self.cmd_buf` is recording, and the NV12 CSC set points at `f`'s planes.
+    #[cfg(windows)]
+    unsafe fn record_d3d11(
+        &self,
+        d: &pf_client_core::video::D3d11Frame,
+        f: &crate::d3d11::Imported,
+    ) {
+        let (Some(v), true) = (&self.video, f.planes.is_some()) else {
+            return;
+        };
+        external_acquire_barrier(
+            &self.device,
+            self.cmd_buf,
+            f.image,
+            self.qfi,
+            vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+            vk::PipelineStageFlags::FRAGMENT_SHADER,
+            vk::AccessFlags::SHADER_READ,
+        );
+        let (depth, msb_packed) = match d.format {
+            SlotFormat::P010 => (10, true),
+            _ => (8, false),
+        };
+        // SAFETY: `cmd_buf` is recording and the set points at `f` (`# Safety` above).
+        unsafe {
+            self.record_csc(
+                false,
+                video_target(v),
+                [1.0, 1.0],
+                d.color,
+                depth,
+                msb_packed,
+            )
+        };
+    }
+
+    /// A Vulkan Video picture, already on this device: its layer goes to
+    /// SHADER_READ_ONLY_OPTIMAL for the CSC pass and back to its decode layout after. Pool
+    /// images are CONCURRENT across graphics+decode, so these are layout transitions, not
+    /// queue-family ownership transfers. Returns the decode-complete timeline value the
+    /// submit waits; a `Redraw` of `f` drops it, since the last real submit spent it.
+    ///
+    /// # Safety
+    /// `self.cmd_buf` is recording, and the NV12 CSC set points at `f`'s plane views.
+    unsafe fn record_native(
+        &self,
+        f: &NativeVkFrame,
+        plan: &FramePlan,
+    ) -> Option<(vk::Semaphore, u64)> {
+        let (Some(v), Some(l)) = (&self.video, plan.last) else {
+            return None;
+        };
+        let image = vk::Image::from_raw(f.image);
+        let decode_layout = match f.layout {
+            NativeVkLayout::DecodeDst => vk::ImageLayout::VIDEO_DECODE_DST_KHR,
+            NativeVkLayout::DecodeDpb => vk::ImageLayout::VIDEO_DECODE_DPB_KHR,
+        };
+        native_layer_barrier(
+            &self.device,
+            self.cmd_buf,
+            image,
+            f.layer,
+            decode_layout,
+            vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+        );
+        // SAFETY: `cmd_buf` is recording and the set points at `f` (`# Safety` above).
+        unsafe { self.record_planes(plan.csc_target(v), l) };
+        native_layer_barrier(
+            &self.device,
+            self.cmd_buf,
+            image,
+            f.layer,
+            vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+            decode_layout,
+        );
+        Some((vk::Semaphore::from_raw(f.semaphore), f.semaphore_value))
+    }
+
+    /// PyroWave planes: already on this device and in GENERAL for fragment sampling.
+    ///
+    /// # Safety
+    /// `self.cmd_buf` is recording, and the planar CSC set points at the frame's planes.
+    #[cfg(all(any(target_os = "linux", windows), feature = "pyrowave"))]
+    unsafe fn record_pyro(&self, plan: &FramePlan) {
+        let (Some(v), Some(l)) = (&self.video, plan.last) else {
+            return;
+        };
+        // SAFETY: `cmd_buf` is recording and the set points at the frame (`# Safety` above).
+        unsafe { self.record_planes(plan.csc_target(v), l) };
+    }
+
+    /// Software planes: upload the staged copy into the three R8 images, then CSC. The
+    /// copy is tightly packed (`CpuPlanarFrame`), so `buffer_row_length` stays zero — a
+    /// stride here would be a second place for the layout to be wrong.
+    ///
+    /// # Safety
+    /// `self.cmd_buf` is recording, `offsets` are this frame's staged planes, and the
+    /// planar CSC set points at the plane images.
+    unsafe fn record_cpu(&self, f: &CpuPlanarFrame, offsets: Option<[usize; 3]>, plan: &FramePlan) {
+        let (Some(offsets), Some(v), Some(s), Some(p), Some(l)) = (
+            offsets,
+            &self.video,
+            &self.staging,
+            &self.cpu_planes,
+            plan.last,
+        ) else {
+            return;
+        };
+        // Fresh images start UNDEFINED; later uploads start where the previous CSC pass
+        // left them (SHADER_READ_ONLY_OPTIMAL).
+        let from = if p.initialized {
+            vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL
+        } else {
+            vk::ImageLayout::UNDEFINED
+        };
+        for (i, offset) in offsets.iter().enumerate() {
+            let (w, h) = f.plane_dims(i);
+            barrier(
+                &self.device,
+                self.cmd_buf,
+                p.images[i],
+                from,
+                vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+            );
+            let region = vk::BufferImageCopy::default()
+                .buffer_offset(*offset as u64)
+                .image_subresource(subresource_layers())
+                .image_extent(vk::Extent3D {
+                    width: w,
+                    height: h,
+                    depth: 1,
+                });
+            // SAFETY: `cmd_buf` is recording (`# Safety` above); the staging buffer and
+            // plane images are owned here and idle past the fence wait.
+            unsafe {
+                self.device.cmd_copy_buffer_to_image(
                     self.cmd_buf,
-                    v.image,
-                    vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
-                    vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
-                );
+                    s.buffer,
+                    p.images[i],
+                    vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+                    &[region],
+                )
+            };
+            barrier(
+                &self.device,
+                self.cmd_buf,
+                p.images[i],
+                vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+                vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+            );
+        }
+        // SAFETY: `cmd_buf` is recording and the set points at the planes (`# Safety` above).
+        unsafe { self.record_planes(plan.csc_target(v), l) };
+    }
+
+    /// `Redraw` of the last real frame: the same planes and push constants, no new decode
+    /// wait (the last real submit waited it) and no timeline signal (that value is spent).
+    /// The native frame returns to its decode layout as on a real frame. Off the direct
+    /// path (a new size or fit) the planes go to the video image first: a direct frame
+    /// never wrote it.
+    ///
+    /// # Safety
+    /// `self.cmd_buf` is recording, and the CSC sets still point at the last real frame's
+    /// planes.
+    unsafe fn record_redraw(&self, plan: &FramePlan) {
+        let (Some(v), Some(l)) = (&self.video, plan.last) else {
+            return;
+        };
+        let target = plan.csc_target(v);
+        // SAFETY: `cmd_buf` is recording and the sets point at the held planes (`# Safety`
+        // above); `retired_hw` keeps the frame behind them alive.
+        unsafe {
+            match l.src {
+                DirectSrc::Native => {
+                    if let Some(Retired::NativeVk(f)) = &self.retired_hw {
+                        self.record_native(f, plan);
+                    }
+                }
+                // Planes stay where the first pass left them, owned by this queue.
+                #[cfg(target_os = "linux")]
+                DirectSrc::Dmabuf => self.record_planes(target, l),
+                DirectSrc::Cpu => self.record_planes(target, l),
+                // Planes stay in GENERAL; the held frame keeps them.
+                #[cfg(all(any(target_os = "linux", windows), feature = "pyrowave"))]
+                DirectSrc::Pyro => self.record_planes(target, l),
+            }
+        }
+    }
+
+    /// CSC of `l`'s planes into `target`, through the pipe their layout needs.
+    ///
+    /// # Safety
+    /// `self.cmd_buf` is recording, and the pipe's set points at `l`'s planes.
+    unsafe fn record_planes(&self, target: CscTarget, l: DirectLast) {
+        // SAFETY: the caller's contract is `record_csc`'s.
+        unsafe {
+            self.record_csc(
+                l.src.planar(),
+                target,
+                l.uv_scale,
+                l.color,
+                l.depth,
+                l.msb_packed,
+            )
+        };
+    }
+
+    /// Put the picture on `plan`'s swapchain image where the direct pass did not: the filter
+    /// ladder for a fractional scale, else a clear around a letterbox and a blit. Returns
+    /// the layout the image is left in.
+    ///
+    /// # Safety
+    /// `self.cmd_buf` is recording, after this frame's CSC pass.
+    unsafe fn record_composite(&self, plan: &FramePlan) -> vk::ImageLayout {
+        if plan.direct.is_some() {
+            // The direct pass drew the picture, and the letterbox when there is one.
+            return vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL;
+        }
+        if let (Some(p), Some(v)) = (plan.filtered, &self.video) {
+            // The CSC pass leaves the video image in TRANSFER_SRC; the blit path and the
+            // next `Redraw` expect it back there.
+            barrier(
+                &self.device,
+                self.cmd_buf,
+                v.image,
+                vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
+                vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+            );
+            // SAFETY: `cmd_buf` is recording (`# Safety` above); `plan` prepared the pass.
+            unsafe {
                 self.scale.record(
                     &self.device,
                     self.cmd_buf,
                     (v.width, v.height),
                     &p,
-                    self.overlay_pipe.framebuffers[index as usize],
+                    self.overlay_pipe.framebuffers[plan.index as usize],
                     self.extent,
-                );
-                barrier(
-                    &self.device,
-                    self.cmd_buf,
-                    v.image,
-                    vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
-                    vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
-                );
-                vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL
-            } else {
-                barrier(
-                    &self.device,
-                    self.cmd_buf,
-                    swap_image,
-                    vk::ImageLayout::UNDEFINED,
-                    vk::ImageLayout::TRANSFER_DST_OPTIMAL,
-                );
-                // A picture that covers the swapchain needs no clear under it: skipping the
-                // full-screen fill and its barrier is a whole pass saved on an iGPU.
-                let covered = matches!(
-                    (source, &placement),
-                    (Some(_), Some(p))
-                        if p.dst_x == 0
-                            && p.dst_y == 0
-                            && p.dst_w == self.extent.width
-                            && p.dst_h == self.extent.height
-                );
-                if !covered {
-                    self.device.cmd_clear_color_image(
-                        self.cmd_buf,
-                        swap_image,
-                        vk::ImageLayout::TRANSFER_DST_OPTIMAL,
-                        &vk::ClearColorValue {
-                            float32: [0.0, 0.0, 0.0, 1.0],
-                        },
-                        &[subresource_range()],
-                    );
-                    // Clear and blit both write the swapchain image; transfer commands carry no
-                    // implicit order. RDNA fast-clears DCC metadata beside the blit, and where
-                    // the clear lands second the tile shows black (the AMD "equaliser" report).
-                    barrier(
-                        &self.device,
-                        self.cmd_buf,
-                        swap_image,
-                        vk::ImageLayout::TRANSFER_DST_OPTIMAL,
-                        vk::ImageLayout::TRANSFER_DST_OPTIMAL,
-                    );
-                }
-                if let (Some((image, _, _)), Some(p)) = (source, placement) {
-                    let corner = |x: f64, y: f64, z: i32| vk::Offset3D {
-                        x: x.round() as i32,
-                        y: y.round() as i32,
-                        z,
-                    };
-                    let blit = vk::ImageBlit::default()
-                        .src_subresource(subresource_layers())
-                        .src_offsets([
-                            corner(p.src_x, p.src_y, 0),
-                            corner(p.src_x + p.src_w, p.src_y + p.src_h, 1),
-                        ])
-                        .dst_subresource(subresource_layers())
-                        .dst_offsets([
-                            corner(f64::from(p.dst_x), f64::from(p.dst_y), 0),
-                            corner(
-                                f64::from(p.dst_x + p.dst_w),
-                                f64::from(p.dst_y + p.dst_h),
-                                1,
-                            ),
-                        ]);
-                    // NEAREST is exact at 1:1 and whole-number scales; LINEAR is the fallback
-                    // for a fractional scale the shader cannot take.
-                    let filter = if crate::scale::needs_filter(&p) {
-                        vk::Filter::LINEAR
-                    } else {
-                        vk::Filter::NEAREST
-                    };
-                    self.device.cmd_blit_image(
-                        self.cmd_buf,
-                        image,
-                        vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
-                        swap_image,
-                        vk::ImageLayout::TRANSFER_DST_OPTIMAL,
-                        &[blit],
-                        filter,
-                    );
-                }
-                vk::ImageLayout::TRANSFER_DST_OPTIMAL
+                )
             };
-            // An HDR switch swaps in a fresh overlay pipe and leaves the swapchain to
-            // `recreate_swapchain`, which keeps the old one while the window has no
-            // extent (a display-topology flip). Until that recreate lands the pipe has
-            // no framebuffers: present the video alone rather than index past them.
-            let overlay =
-                overlay.filter(|_| (index as usize) < self.overlay_pipe.framebuffers.len());
-            if let Some(o) = overlay {
-                // Skia flushed on this queue: same-layout barrier is execution
-                // + memory only (cross-submit visibility).
-                barrier(
-                    &self.device,
-                    self.cmd_buf,
-                    o.image,
-                    vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
-                    vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
-                );
-                barrier(
-                    &self.device,
+            barrier(
+                &self.device,
+                self.cmd_buf,
+                v.image,
+                vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+                vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
+            );
+            return vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL;
+        }
+        let swap_image = self.images[plan.index as usize];
+        barrier(
+            &self.device,
+            self.cmd_buf,
+            swap_image,
+            vk::ImageLayout::UNDEFINED,
+            vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+        );
+        // A picture that covers the swapchain needs no clear under it: skipping the
+        // full-screen fill and its barrier is a whole pass saved on an iGPU.
+        let covered = matches!(
+            (plan.source, &plan.placement),
+            (Some(_), Some(p))
+                if p.dst_x == 0
+                    && p.dst_y == 0
+                    && p.dst_w == self.extent.width
+                    && p.dst_h == self.extent.height
+        );
+        if !covered {
+            // SAFETY: `cmd_buf` is recording (`# Safety` above); the swapchain image was
+            // acquired for this present and is in TRANSFER_DST.
+            unsafe {
+                self.device.cmd_clear_color_image(
                     self.cmd_buf,
                     swap_image,
-                    swap_layout,
-                    vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
-                );
-                self.device.cmd_begin_render_pass(
-                    self.cmd_buf,
-                    &vk::RenderPassBeginInfo::default()
-                        .render_pass(self.overlay_pipe.render_pass)
-                        .framebuffer(self.overlay_pipe.framebuffers[index as usize])
-                        .render_area(vk::Rect2D {
-                            offset: vk::Offset2D { x: 0, y: 0 },
-                            extent: self.extent,
-                        }),
-                    vk::SubpassContents::INLINE,
-                );
-                self.device.cmd_bind_pipeline(
-                    self.cmd_buf,
-                    vk::PipelineBindPoint::GRAPHICS,
-                    self.overlay_pipe.pipeline,
-                );
-                self.device.cmd_set_viewport(
-                    self.cmd_buf,
-                    0,
-                    &[vk::Viewport {
-                        x: 0.0,
-                        y: 0.0,
-                        width: self.extent.width as f32,
-                        height: self.extent.height as f32,
-                        min_depth: 0.0,
-                        max_depth: 1.0,
-                    }],
-                );
-                self.device.cmd_set_scissor(
-                    self.cmd_buf,
-                    0,
-                    &[vk::Rect2D {
-                        offset: vk::Offset2D { x: 0, y: 0 },
-                        extent: self.extent,
-                    }],
-                );
-                self.device.cmd_bind_descriptor_sets(
-                    self.cmd_buf,
-                    vk::PipelineBindPoint::GRAPHICS,
-                    self.overlay_pipe.pipeline_layout,
-                    0,
-                    &[self.overlay_pipe.desc_set],
-                    &[],
-                );
-                self.device.cmd_draw(self.cmd_buf, 3, 1, 0, 0);
-                self.device.cmd_end_render_pass(self.cmd_buf);
+                    vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+                    &vk::ClearColorValue {
+                        float32: [0.0, 0.0, 0.0, 1.0],
+                    },
+                    &[subresource_range()],
+                )
+            };
+            // Clear and blit both write the swapchain image; transfer commands carry no
+            // implicit order. RDNA fast-clears DCC metadata beside the blit, and where
+            // the clear lands second the tile shows black (the AMD "equaliser" report).
+            barrier(
+                &self.device,
+                self.cmd_buf,
+                swap_image,
+                vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+                vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+            );
+        }
+        if let (Some((image, _, _)), Some(p)) = (plan.source, plan.placement) {
+            let corner = |x: f64, y: f64, z: i32| vk::Offset3D {
+                x: x.round() as i32,
+                y: y.round() as i32,
+                z,
+            };
+            let blit = vk::ImageBlit::default()
+                .src_subresource(subresource_layers())
+                .src_offsets([
+                    corner(p.src_x, p.src_y, 0),
+                    corner(p.src_x + p.src_w, p.src_y + p.src_h, 1),
+                ])
+                .dst_subresource(subresource_layers())
+                .dst_offsets([
+                    corner(f64::from(p.dst_x), f64::from(p.dst_y), 0),
+                    corner(
+                        f64::from(p.dst_x + p.dst_w),
+                        f64::from(p.dst_y + p.dst_h),
+                        1,
+                    ),
+                ]);
+            // NEAREST is exact at 1:1 and whole-number scales; LINEAR is the fallback
+            // for a fractional scale the shader cannot take.
+            let filter = if crate::scale::needs_filter(&p) {
+                vk::Filter::LINEAR
             } else {
-                barrier(
-                    &self.device,
+                vk::Filter::NEAREST
+            };
+            // SAFETY: `cmd_buf` is recording (`# Safety` above); the source is in
+            // TRANSFER_SRC and lives until the fence, the swapchain image in TRANSFER_DST.
+            unsafe {
+                self.device.cmd_blit_image(
                     self.cmd_buf,
+                    image,
+                    vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
                     swap_image,
-                    swap_layout,
-                    vk::ImageLayout::PRESENT_SRC_KHR,
-                );
-            }
-            self.device.end_command_buffer(self.cmd_buf)?;
-            // Next CPU upload must transition from SHADER_READ_ONLY_OPTIMAL.
-            // Set here after record, before submit: a submit failure tears the
-            // presenter down rather than re-recording.
-            if let Some(p) = self.cpu_planes.as_mut() {
-                p.initialized = true;
-            }
+                    vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+                    &[blit],
+                    filter,
+                )
+            };
+        }
+        vk::ImageLayout::TRANSFER_DST_OPTIMAL
+    }
 
-            let render_sem = self.render_sems[index as usize];
-            let cmd_bufs = [self.cmd_buf];
-            let mut wait_sems = vec![self.acquire_sem];
-            // The swapchain image is written by the blit (transfer) or by the direct,
-            // scale and overlay passes (colour attachment): both wait the acquire.
-            let mut wait_stages = vec![
-                vk::PipelineStageFlags::TRANSFER | vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
-            ];
-            let mut signal_sems = vec![render_sem];
-            let mut wait_values = vec![0u64];
-            let mut signal_values = vec![0u64];
-            // Wait decode-complete at FRAGMENT_SHADER (`native_layer_barrier`
-            // chain). Signal `value + 1` when reads and layout restore finish
-            // (`mark_presented`). Per-image timelines keep value spaces private.
-            if let Some((sem, value)) = &native_wait {
+    /// Blend `overlay` over `plan`'s swapchain image, which the overlay pass leaves ready to
+    /// present; without one, move the image from `swap_layout` to PRESENT_SRC. An HDR
+    /// switch swaps in a fresh overlay pipe and leaves the swapchain to
+    /// `recreate_swapchain`, which keeps the old one while the window has no extent (a
+    /// display-topology flip). Until that recreate lands the pipe has no framebuffers:
+    /// the video presents alone rather than index past them.
+    ///
+    /// # Safety
+    /// `self.cmd_buf` is recording, after the composite, and `bind_overlay` pointed the
+    /// overlay set at `overlay`.
+    unsafe fn record_overlay(
+        &self,
+        overlay: Option<&OverlayFrame>,
+        plan: &FramePlan,
+        swap_layout: vk::ImageLayout,
+    ) {
+        let index = plan.index as usize;
+        let swap_image = self.images[index];
+        let Some(o) = overlay.filter(|_| index < self.overlay_pipe.framebuffers.len()) else {
+            barrier(
+                &self.device,
+                self.cmd_buf,
+                swap_image,
+                swap_layout,
+                vk::ImageLayout::PRESENT_SRC_KHR,
+            );
+            return;
+        };
+        // Skia flushed on this queue: same-layout barrier is execution
+        // + memory only (cross-submit visibility).
+        barrier(
+            &self.device,
+            self.cmd_buf,
+            o.image,
+            vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+            vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+        );
+        barrier(
+            &self.device,
+            self.cmd_buf,
+            swap_image,
+            swap_layout,
+            vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
+        );
+        let full = vk::Rect2D {
+            offset: vk::Offset2D { x: 0, y: 0 },
+            extent: self.extent,
+        };
+        // SAFETY: `cmd_buf` is recording (`# Safety` above); the pipe, its framebuffer for
+        // `index` and its set are owned here, and the set points at `overlay`.
+        unsafe {
+            self.device.cmd_begin_render_pass(
+                self.cmd_buf,
+                &vk::RenderPassBeginInfo::default()
+                    .render_pass(self.overlay_pipe.render_pass)
+                    .framebuffer(self.overlay_pipe.framebuffers[index])
+                    .render_area(full),
+                vk::SubpassContents::INLINE,
+            );
+            self.device.cmd_bind_pipeline(
+                self.cmd_buf,
+                vk::PipelineBindPoint::GRAPHICS,
+                self.overlay_pipe.pipeline,
+            );
+            self.device.cmd_set_viewport(
+                self.cmd_buf,
+                0,
+                &[vk::Viewport {
+                    x: 0.0,
+                    y: 0.0,
+                    width: self.extent.width as f32,
+                    height: self.extent.height as f32,
+                    min_depth: 0.0,
+                    max_depth: 1.0,
+                }],
+            );
+            self.device.cmd_set_scissor(self.cmd_buf, 0, &[full]);
+            self.device.cmd_bind_descriptor_sets(
+                self.cmd_buf,
+                vk::PipelineBindPoint::GRAPHICS,
+                self.overlay_pipe.pipeline_layout,
+                0,
+                &[self.overlay_pipe.desc_set],
+                &[],
+            );
+            self.device.cmd_draw(self.cmd_buf, 3, 1, 0, 0);
+            self.device.cmd_end_render_pass(self.cmd_buf);
+        }
+    }
+
+    /// Submit the recording: wait the acquire, the native lane's decode timeline and the
+    /// VAAPI decode's fences; signal the image's render semaphore, the native timeline's
+    /// next value and, with present timing, `done_sem`. On Windows the keyed mutex orders a
+    /// D3D11 slot read.
+    ///
+    /// # Safety
+    /// `self.cmd_buf` holds this present's ended recording, `self.fence` is unsignaled,
+    /// and `plan.index` was acquired on `acquire_sem`.
+    unsafe fn submit(
+        &mut self,
+        lane: &Lane,
+        plan: &FramePlan,
+        native_wait: Option<(vk::Semaphore, u64)>,
+    ) -> Result<()> {
+        let render_sem = self.render_sems[plan.index as usize];
+        let cmd_bufs = [self.cmd_buf];
+        let mut wait_sems = vec![self.acquire_sem];
+        // The swapchain image is written by the blit (transfer) or by the direct,
+        // scale and overlay passes (colour attachment): both wait the acquire.
+        let mut wait_stages = vec![
+            vk::PipelineStageFlags::TRANSFER | vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
+        ];
+        let mut signal_sems = vec![render_sem];
+        let mut wait_values = vec![0u64];
+        let mut signal_values = vec![0u64];
+        // Wait decode-complete at FRAGMENT_SHADER (`native_layer_barrier`
+        // chain). Signal `value + 1` when reads and layout restore finish
+        // (`mark_presented`). Per-image timelines keep value spaces private.
+        if let Some((sem, value)) = &native_wait {
+            wait_sems.push(*sem);
+            wait_stages.push(vk::PipelineStageFlags::FRAGMENT_SHADER);
+            wait_values.push(*value);
+            signal_sems.push(*sem);
+            signal_values.push(*value + 1);
+        }
+        // The VAAPI decode's fence, sampled at FRAGMENT_SHADER like the native lane.
+        #[cfg(target_os = "linux")]
+        if let Lane::Dmabuf(f) = lane {
+            for sem in &f.sync_sems {
                 wait_sems.push(*sem);
                 wait_stages.push(vk::PipelineStageFlags::FRAGMENT_SHADER);
-                wait_values.push(*value);
-                signal_sems.push(*sem);
-                signal_values.push(*value + 1);
+                wait_values.push(0);
             }
-            // The VAAPI decode's fence, sampled at FRAGMENT_SHADER like the native lane.
-            #[cfg(target_os = "linux")]
-            if let Lane::Dmabuf(f) = &lane {
-                for sem in &f.sync_sems {
-                    wait_sems.push(*sem);
-                    wait_stages.push(vk::PipelineStageFlags::FRAGMENT_SHADER);
-                    wait_values.push(0);
-                }
+        }
+        // With present timing the submit also signals `done_sem` with the id the
+        // present below will carry: the waiter splits our GPU time from the compositor's.
+        let timed = self.glass_active() && self.done_sem != vk::Semaphore::null();
+        if timed {
+            signal_sems.push(self.done_sem);
+            signal_values.push(self.next_present_id + 1);
+        }
+        let mut timeline = vk::TimelineSemaphoreSubmitInfo::default()
+            .wait_semaphore_values(&wait_values)
+            .signal_semaphore_values(&signal_values);
+        let mut submit = vk::SubmitInfo::default()
+            .wait_semaphores(&wait_sems)
+            .wait_dst_stage_mask(&wait_stages)
+            .command_buffers(&cmd_bufs)
+            .signal_semaphores(&signal_sems);
+        if native_wait.is_some() || timed {
+            submit = submit.push_next(&mut timeline);
+        }
+        // Keyed mutex, key 0 both ways (decode writes under acquire(0)/release(0)
+        // too), on every submit that reads a slot, `Redraw` included. Acquire orders
+        // the read after the decoder's Blt or copy; release unblocks the ring slot.
+        #[cfg(windows)]
+        let keyed_mem;
+        #[cfg(windows)]
+        let keyed_keys = [0u64];
+        #[cfg(windows)]
+        let keyed_timeouts = [2000u32];
+        #[cfg(windows)]
+        let mut keyed_info;
+        #[cfg(windows)]
+        let lane_memory = match lane {
+            Lane::D3d11(_, f) => Some(f.memory),
+            _ => None,
+        };
+        #[cfg(windows)]
+        if let Some(memory) = lane_memory.or(plan.slot.map(|(f, _, _)| f.memory)) {
+            if keyed_mutex_on() {
+                keyed_mem = [memory];
+                keyed_info = vk::Win32KeyedMutexAcquireReleaseInfoKHR::default()
+                    .acquire_syncs(&keyed_mem)
+                    .acquire_keys(&keyed_keys)
+                    .acquire_timeouts(&keyed_timeouts)
+                    .release_syncs(&keyed_mem)
+                    .release_keys(&keyed_keys);
+                submit = submit.push_next(&mut keyed_info);
             }
-            // With present timing the submit also signals `done_sem` with the id the
-            // present below will carry: the waiter splits our GPU time from the compositor's.
-            let timed = self.glass_active() && self.done_sem != vk::Semaphore::null();
-            if timed {
-                signal_sems.push(self.done_sem);
-                signal_values.push(self.next_present_id + 1);
-            }
-            let mut timeline = vk::TimelineSemaphoreSubmitInfo::default()
-                .wait_semaphore_values(&wait_values)
-                .signal_semaphore_values(&signal_values);
-            let mut submit = vk::SubmitInfo::default()
-                .wait_semaphores(&wait_sems)
-                .wait_dst_stage_mask(&wait_stages)
-                .command_buffers(&cmd_bufs)
-                .signal_semaphores(&signal_sems);
-            if native_wait.is_some() || timed {
-                submit = submit.push_next(&mut timeline);
-            }
-            // Keyed mutex, key 0 both ways (decode writes under acquire(0)/release(0)
-            // too), on every submit that reads a slot, `Redraw` included. Acquire orders
-            // the read after the decoder's Blt or copy; release unblocks the ring slot.
-            #[cfg(windows)]
-            let keyed_mem;
-            #[cfg(windows)]
-            let keyed_keys = [0u64];
-            #[cfg(windows)]
-            let keyed_timeouts = [2000u32];
-            #[cfg(windows)]
-            let mut keyed_info;
-            #[cfg(windows)]
-            let lane_memory = match &lane {
-                Lane::D3d11(_, f) => Some(f.memory),
-                _ => None,
-            };
-            #[cfg(windows)]
-            if let Some(memory) = lane_memory.or(slot.map(|(f, _, _)| f.memory)) {
-                if keyed_mutex_on() {
-                    keyed_mem = [memory];
-                    keyed_info = vk::Win32KeyedMutexAcquireReleaseInfoKHR::default()
-                        .acquire_syncs(&keyed_mem)
-                        .acquire_keys(&keyed_keys)
-                        .acquire_timeouts(&keyed_timeouts)
-                        .release_syncs(&keyed_mem)
-                        .release_keys(&keyed_keys);
-                    submit = submit.push_next(&mut keyed_info);
-                }
-            }
-            let submit_started = std::time::Instant::now();
-            let submitted = {
-                // Queue external sync vs the pump's decode submits (`queue_lock`).
-                let _q = self.queue_lock.guard();
-                self.device.queue_submit(self.queue, &[submit], self.fence)
-            };
-            self.last_submit_us = submit_started.elapsed().as_micros() as u32;
-            submitted?;
-            // In the queue: the decode lane's next submit may follow.
-            #[cfg(all(any(target_os = "linux", windows), feature = "pyrowave"))]
-            if let Lane::Pyro(f) = &lane {
-                self.queue_lock.end_present_turn(f.turn);
-            }
-            self.submitted = true;
-            self.acquired = None;
-            // A real frame from any other lane ends the D3D11 picture; `Redraw` keeps it.
-            #[cfg(windows)]
-            {
-                self.retained_slot = slot;
-            }
-            // Park until the fence proves the reads done (next present's wait, or
-            // Drop). A D3D11 slot stays in the import cache. A `Redraw` keeps the parked
-            // frame: it read it again.
-            if !redraw {
-                self.retired_hw = match lane {
-                    #[cfg(target_os = "linux")]
-                    Lane::Dmabuf(f) => Some(Retired::Dmabuf(f)),
-                    // Submit enqueued `value + 1` — `mark_presented` so the decoder waits
-                    // that write-back. Failed submit never reaches here (no phantom signal).
-                    // Park until the fence; Drop sends the release token.
-                    Lane::Native(mut f) => {
-                        f.guard.mark_presented();
-                        Some(Retired::NativeVk(f))
-                    }
-                    #[cfg(all(any(target_os = "linux", windows), feature = "pyrowave"))]
-                    Lane::Pyro(f) => Some(Retired::Pyro(f)),
-                    _ => None,
-                };
-            }
+        }
+        let submit_started = std::time::Instant::now();
+        let submitted = {
+            // Queue external sync vs the pump's decode submits (`queue_lock`).
+            let _q = self.queue_lock.guard();
+            // SAFETY: the caller's contract covers the command buffer, fence and image; the
+            // arrays and chained structs above are locals that outlive the call, and
+            // `queue` is held under `queue_lock`.
+            unsafe { self.device.queue_submit(self.queue, &[submit], self.fence) }
+        };
+        self.last_submit_us = submit_started.elapsed().as_micros() as u32;
+        submitted?;
+        // In the queue: the decode lane's next submit may follow.
+        #[cfg(all(any(target_os = "linux", windows), feature = "pyrowave"))]
+        if let Lane::Pyro(f) = lane {
+            self.queue_lock.end_present_turn(f.turn);
+        }
+        self.submitted = true;
+        self.acquired = None;
+        // A real frame from any other lane ends the D3D11 picture; `Redraw` keeps it.
+        #[cfg(windows)]
+        {
+            self.retained_slot = plan.slot;
+        }
+        Ok(())
+    }
 
-            let swapchains = [self.swapchain];
-            let indices = [index];
-            let present_sems = [render_sem];
-            // Monotonic present id for `PresentTimer`'s `vkWaitForPresentKHR`.
-            let ids = [self.next_present_id + 1];
-            let mut pid_info = vk::PresentIdKHR::default().present_ids(&ids);
-            let mut pid2_info = super::setup::present_wait2::PresentId2::new(&ids);
-            // A stamp only while the swapchain's result queue has room: asking into a
-            // full one fails the present.
-            let ask = self
-                .timing
-                .as_ref()
-                .filter(|t| self.timing_armed && t.may_ask());
-            let timing_info = ask.map_or_else(
-                || super::timing_ext::TimingInfo::stamps(0, 0),
-                |t| t.request(),
-            );
-            let timings_info = super::timing_ext::TimingsInfo::new(&timing_info);
-            let mut present_info = vk::PresentInfoKHR::default()
-                .wait_semaphores(&present_sems)
-                .swapchains(&swapchains)
-                .image_indices(&indices);
-            // The id names the `done_sem` value either way; only present-wait carries it
-            // to the driver, in the struct of the generation the waiter runs on.
-            let glass = self.glass_active();
-            if glass {
-                self.next_present_id += 1;
-            }
-            // The compositor stamps the commit this present makes. Only a waiter's sample
-            // can take it; without one the answers would pile up unread.
+    /// Park the submitted hardware frame until the fence proves its reads done (next
+    /// present's wait, or Drop). A D3D11 slot stays in the import cache. A `Redraw` keeps
+    /// the parked frame: it read it again. Only after a submit that succeeded.
+    fn park(&mut self, lane: Lane) {
+        if matches!(lane, Lane::Redraw) {
+            return;
+        }
+        self.retired_hw = match lane {
             #[cfg(target_os = "linux")]
-            if let Some(fb) = self.feedback.as_mut().filter(|_| glass && !redraw) {
-                fb.request(self.next_present_id);
+            Lane::Dmabuf(f) => Some(Retired::Dmabuf(f)),
+            // Submit enqueued `value + 1` — `mark_presented` so the decoder waits
+            // that write-back. Failed submit never reaches here (no phantom signal).
+            // Park until the fence; Drop sends the release token.
+            Lane::Native(mut f) => {
+                f.guard.mark_presented();
+                Some(Retired::NativeVk(f))
             }
-            if self.present_id2 {
-                // Hand-rolled structs: the chain is empty here, so they are the whole chain.
-                if ask.is_some() {
-                    pid2_info.p_next = (&timings_info) as *const _ as *const std::ffi::c_void;
-                }
-                present_info.p_next = (&pid2_info) as *const _ as *const std::ffi::c_void;
-            } else if self.present_timer.is_some() {
-                present_info = present_info.push_next(&mut pid_info);
+            #[cfg(all(any(target_os = "linux", windows), feature = "pyrowave"))]
+            Lane::Pyro(f) => Some(Retired::Pyro(f)),
+            _ => None,
+        };
+    }
+
+    /// Present image `index` under the next present id, asking for a timing stamp while the
+    /// swapchain's result queue has room. `Stale`: the swapchain was out of date, or its
+    /// stamp queue full, and is recreated.
+    ///
+    /// # Safety
+    /// This present's submit signals `render_sems[index]`.
+    unsafe fn queue_present(
+        &mut self,
+        window: &sdl3::video::Window,
+        index: u32,
+        #[cfg_attr(not(target_os = "linux"), allow(unused_variables))] redraw: bool,
+    ) -> Result<Presented<'static>> {
+        let swapchains = [self.swapchain];
+        let indices = [index];
+        let present_sems = [self.render_sems[index as usize]];
+        // Monotonic present id for `PresentTimer`'s `vkWaitForPresentKHR`.
+        let ids = [self.next_present_id + 1];
+        let mut pid_info = vk::PresentIdKHR::default().present_ids(&ids);
+        let mut pid2_info = super::setup::present_wait2::PresentId2::new(&ids);
+        // A stamp only while the swapchain's result queue has room: asking into a
+        // full one fails the present.
+        let ask = self
+            .timing
+            .as_ref()
+            .filter(|t| self.timing_armed && t.may_ask());
+        let timing_info = ask.map_or_else(
+            || super::timing_ext::TimingInfo::stamps(0, 0),
+            |t| t.request(),
+        );
+        let timings_info = super::timing_ext::TimingsInfo::new(&timing_info);
+        let mut present_info = vk::PresentInfoKHR::default()
+            .wait_semaphores(&present_sems)
+            .swapchains(&swapchains)
+            .image_indices(&indices);
+        // The id names the `done_sem` value either way; only present-wait carries it
+        // to the driver, in the struct of the generation the waiter runs on.
+        let glass = self.glass_active();
+        if glass {
+            self.next_present_id += 1;
+        }
+        // The compositor stamps the commit this present makes. Only a waiter's sample
+        // can take it; without one the answers would pile up unread.
+        #[cfg(target_os = "linux")]
+        if let Some(fb) = self.feedback.as_mut().filter(|_| glass && !redraw) {
+            fb.request(self.next_present_id);
+        }
+        if self.present_id2 {
+            // Hand-rolled structs: the chain is empty here, so they are the whole chain.
+            if ask.is_some() {
+                pid2_info.p_next = (&timings_info) as *const _ as *const std::ffi::c_void;
             }
-            let present_started = std::time::Instant::now();
-            // Same queue external-sync as the submit. Scoped tightly: OUT_OF_DATE
-            // re-enters the lock via `recreate_swapchain`'s queue drain. The swapchain
-            // guard comes first, so a waiter slice never holds off decode submits.
-            let present_res = {
-                let _swapchain = self.present_timer.as_ref().map(|t| t.swapchain_guard());
-                let _q = self.queue_lock.guard();
-                self.swap_d.queue_present(self.queue, &present_info)
-            };
-            self.last_present_us = present_started.elapsed().as_micros() as u32;
-            let asked = ask.is_some();
-            match present_res {
-                Ok(_) => {
-                    // A failed present's id may never signal — claim it only on Ok.
-                    if self.glass_active() {
-                        self.last_presented = Some((self.swapchain, self.next_present_id));
-                    }
-                    self.timing_asked = asked;
-                    if let Some(t) = self.timing.as_ref().filter(|_| asked) {
-                        t.note_asked();
-                    }
-                    Ok(Presented::Shown)
+            present_info.p_next = (&pid2_info) as *const _ as *const std::ffi::c_void;
+        } else if self.present_timer.is_some() {
+            present_info = present_info.push_next(&mut pid_info);
+        }
+        let present_started = std::time::Instant::now();
+        // Same queue external-sync as the submit. Scoped tightly: OUT_OF_DATE
+        // re-enters the lock via `recreate_swapchain`'s queue drain. The swapchain
+        // guard comes first, so a waiter slice never holds off decode submits.
+        let present_res = {
+            let _swapchain = self.present_timer.as_ref().map(|t| t.swapchain_guard());
+            let _q = self.queue_lock.guard();
+            // SAFETY: the caller's contract has the submit signal the waited semaphore; the
+            // chained structs are locals that outlive the call, and `queue` is held under
+            // `queue_lock`.
+            unsafe { self.swap_d.queue_present(self.queue, &present_info) }
+        };
+        self.last_present_us = present_started.elapsed().as_micros() as u32;
+        let asked = ask.is_some();
+        match present_res {
+            Ok(_) => {
+                // A failed present's id may never signal — claim it only on Ok.
+                if self.glass_active() {
+                    self.last_presented = Some((self.swapchain, self.next_present_id));
                 }
-                // The driver counted its result queue differently: stop asking, and take
-                // a swapchain whose queue is empty.
-                Err(super::timing_ext::QUEUE_FULL) => {
-                    tracing::warn!("present stamp queue full; presenting without stamps");
-                    self.timing = None;
-                    self.timing_armed = false;
-                    self.recreate_swapchain(window)?;
-                    Ok(Presented::Stale)
+                self.timing_asked = asked;
+                if let Some(t) = self.timing.as_ref().filter(|_| asked) {
+                    t.note_asked();
                 }
-                Err(vk::Result::ERROR_OUT_OF_DATE_KHR)
-                | Err(vk::Result::ERROR_FULL_SCREEN_EXCLUSIVE_MODE_LOST_EXT) => {
-                    self.recreate_swapchain(window)?;
-                    Ok(Presented::Stale)
-                }
-                Err(e) => Err(e).context("vkQueuePresentKHR"),
+                Ok(Presented::Shown)
             }
+            // The driver counted its result queue differently: stop asking, and take
+            // a swapchain whose queue is empty.
+            Err(super::timing_ext::QUEUE_FULL) => {
+                tracing::warn!("present stamp queue full; presenting without stamps");
+                self.timing = None;
+                self.timing_armed = false;
+                self.recreate_swapchain(window)?;
+                Ok(Presented::Stale)
+            }
+            Err(vk::Result::ERROR_OUT_OF_DATE_KHR)
+            | Err(vk::Result::ERROR_FULL_SCREEN_EXCLUSIVE_MODE_LOST_EXT) => {
+                self.recreate_swapchain(window)?;
+                Ok(Presented::Stale)
+            }
+            Err(e) => Err(e).context("vkQueuePresentKHR"),
         }
     }
 
