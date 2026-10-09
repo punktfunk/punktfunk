@@ -802,7 +802,13 @@ pub(super) async fn negotiate(
                 identity: codec == crate::encode::Codec::PyroWave,
             };
             let trace = bringup.clone();
-            let join_live = joined.is_some();
+            // A joiner's view and fit, as `SessionContext::reframe_to` carries them.
+            let reframe_to = joined.as_ref().map(|(_, view)| {
+                (
+                    punktfunk_core::video_fit::VideoFit::from_wire(hello.video_fit),
+                    *view,
+                )
+            });
             std::thread::Builder::new()
                 .name("punktfunk1-stream".into())
                 .spawn(move || -> Result<()> {
@@ -822,7 +828,7 @@ pub(super) async fn negotiate(
                         chroma,
                         codec,
                         shard_payload,
-                        join_live,
+                        reframe_to,
                         &quit,
                         &stop,
                         &trace,

@@ -191,12 +191,19 @@ fn park_seat(
         tracing::info!(seat = %id, backend = vd.name(), "seat pre-warm skipped — this host streams a physical monitor");
         return Ok(None);
     }
-    vd.set_client_identity(None);
-    vd.set_hdr(rec.hdr);
-    vd.set_hw_cursor(rec.hw_cursor);
-    vd.set_launch_command(Some(PREWARM_LAUNCH.to_string()));
-    vd.set_gamescope_route(route);
-    vd.set_session_isolation(Some(iso));
+    // No client yet: any device's connect to the profile takes this display.
+    crate::vdisplay::SessionParams {
+        client_fp: None,
+        client_hdr: None,
+        hdr: rec.hdr,
+        hw_cursor: rec.hw_cursor,
+        join_live: false,
+        quit: std::sync::Arc::default(),
+        launch: Some(PREWARM_LAUNCH.to_string()),
+        route,
+        isolation: Some(iso),
+    }
+    .apply(&mut *vd);
     Ok(crate::vdisplay::registry::park(&mut vd, rec.mode())?.then_some(key))
 }
 

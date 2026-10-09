@@ -45,7 +45,9 @@ pub(crate) fn emit_display_event(ev: DisplayEvent) {
 pub(crate) mod backend;
 #[cfg(target_os = "linux")]
 pub use backend::SessionCastParts;
-pub use backend::{DisplayOwnership, SessionIsolation, VirtualDisplay, VirtualOutput};
+pub use backend::{
+    DisplayOwnership, SessionIsolation, SessionParams, VirtualDisplay, VirtualOutput,
+};
 /// Negotiated ScreenCast cursor mode of a portal-backed output
 /// ([`VirtualDisplay::last_portal_cursor_mode`]). The verdict is the caller's.
 pub use portal_cursor::Mode as PortalCursorMode;

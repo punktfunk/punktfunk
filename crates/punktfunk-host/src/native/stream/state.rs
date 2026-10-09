@@ -15,7 +15,7 @@
 use super::cursor::composite_plan;
 #[cfg(target_os = "linux")]
 use super::cursor::settle_portal_cursor;
-use super::pipeline::{build_pipeline_with_retry, Pipeline};
+use super::pipeline::{build_pipeline_with_retry, resolve_plan, Pipeline};
 use super::*;
 
 /// (capture_ns, submit_ns) per frame handed to the encoder and not yet polled.
@@ -173,10 +173,9 @@ pub(super) struct StreamState {
     pub(super) budget_identity: bool,
     pub(super) streamed_wire: bool,
     pub(super) perf: bool,
-    pub(super) launch: Option<String>,
+    /// The display request bring-up opened with, launch included.
+    pub(super) vd_params: crate::vdisplay::SessionParams,
     pub(super) client_hdr: Option<pf_frame::HdrMeta>,
-    /// Admitted by `mode_conflict: join`. A rebuild's new display asks to share again.
-    pub(super) join_live: bool,
     /// The live encoder's framing: forwarded cursor positions map through it, and so does
     /// the input thread's absolute input. Written on every encoder open.
     pub(super) frame_map: super::super::input::FrameMap,
@@ -210,11 +209,7 @@ pub(super) struct StreamState {
         tokio::sync::watch::Sender<Option<punktfunk_core::quic::CursorShape>>,
     pub(super) cursor_client_draws: Arc<AtomicBool>,
     #[cfg(target_os = "linux")]
-    pub(super) gamescope_route: Option<crate::vdisplay::GamescopeRoute>,
-    #[cfg(target_os = "linux")]
     pub(super) input_tx: std::sync::mpsc::SyncSender<super::super::input::ClientInput>,
-    #[cfg(target_os = "linux")]
-    pub(super) isolation: Option<crate::vdisplay::SessionIsolation>,
     #[cfg(target_os = "linux")]
     pub(super) input_route: super::super::input::InputRoute,
     #[cfg(target_os = "linux")]
@@ -371,39 +366,19 @@ impl StreamState {
 
     /// Bring the session up: display, pipeline, library launch, game lease, send thread.
     pub(super) fn new(ctx: SessionContext, prepared: Option<PreparedDisplay>) -> Result<Self> {
-        let mut plan = crate::session_plan::SessionPlan::resolve(
+        let plan = resolve_plan(
             ctx.common.bit_depth,
             ctx.common.hdr,
             ctx.common.chroma,
             ctx.common.codec,
-            crate::session_plan::cursor_blend_for(
-                ctx.cursor_forward,
-                ctx.compositor,
-                ctx.common.codec,
-                ctx.common.bit_depth,
-                ctx.common.hdr,
-                ctx.gamescope_route.as_ref(),
-            ),
             ctx.cursor_forward,
             ctx.multi_slice,
-        );
-        // After resolve: a self-painting gamescope node would otherwise get a second XFixes pointer.
-        plan.gamescope_cursor = crate::session_plan::gamescope_cursor_for(
-            ctx.compositor == pf_vdisplay::Compositor::Gamescope,
-            ctx.gamescope_route.as_ref(),
-        );
-        plan.sdr10_native = crate::session_plan::sdr10_native_for(
-            &plan,
             ctx.compositor,
             ctx.gamescope_route.as_ref(),
+            ctx.common.session.shard_payload(),
+            ctx.reframe_to,
+            ctx.join_live,
         );
-        if ctx.common.codec == crate::encode::Codec::PyroWave {
-            plan.wire_chunk = Some(ctx.common.session.shard_payload());
-        }
-        plan.reframe_to = ctx.reframe_to;
-        if ctx.join_live {
-            plan = plan.sharing_live_display();
-        }
         tracing::info!(?plan, "resolved session plan");
         // Automatic PyroWave: the client's ramp closes with one lower pin, so
         // the window lingers past pipeline-ready for it to cross.
@@ -581,22 +556,29 @@ impl StreamState {
             bit_depth,
             "punktfunk/1 virtual display"
         );
+        // Every display this session opens starts from this request; a rebuild swaps in its
+        // own cursor and route, and drops the launch.
+        let vd_params = crate::vdisplay::SessionParams {
+            client_fp: conn.peer_fingerprint(),
+            client_hdr,
+            // HDR verdict, not the depth — a 10-bit SDR session leaves the output SDR.
+            hdr,
+            hw_cursor: cursor_forward || metadata_composite,
+            join_live,
+            quit: quit.clone(),
+            launch: launch.clone(),
+            route: gamescope_route.clone(),
+            #[cfg(target_os = "linux")]
+            isolation: isolation.clone(),
+            #[cfg(not(target_os = "linux"))]
+            isolation: None,
+        };
         let (vd, pipe) = match prepared {
             Some(p) => (p.vd, p.pipeline),
             None => {
                 // Open first: Windows `open` inits the manager; `vdm()` before that panics.
                 let mut vd = crate::vdisplay::open(compositor)?;
-                vd.set_client_identity(conn.peer_fingerprint());
-                vd.set_join_live(join_live);
-                vd.set_client_hdr(client_hdr);
-                // HDR verdict, not the depth — a 10-bit SDR session leaves the output SDR.
-                vd.set_hdr(hdr);
-                vd.set_hw_cursor(cursor_forward || metadata_composite);
-                vd.set_quit_flag(quit.clone());
-                vd.set_launch_command(launch.clone());
-                vd.set_gamescope_route(gamescope_route.clone());
-                #[cfg(target_os = "linux")]
-                vd.set_session_isolation(isolation.clone());
+                vd_params.apply(&mut *vd);
                 // Slot-scoped: preempt only a prior session on THIS client's slot. Held before create.
                 let _idd_setup_guard = crate::windows::idd::setup_guard(
                     plan.capture,
@@ -963,9 +945,8 @@ impl StreamState {
             budget_identity,
             streamed_wire,
             perf,
-            launch,
+            vd_params,
             client_hdr,
-            join_live,
             frame_map,
             #[cfg(target_os = "linux")]
             gamescope_xwayland,
@@ -985,11 +966,7 @@ impl StreamState {
             cursor_shape_tx,
             cursor_client_draws,
             #[cfg(target_os = "linux")]
-            gamescope_route,
-            #[cfg(target_os = "linux")]
             input_tx,
-            #[cfg(target_os = "linux")]
-            isolation,
             #[cfg(target_os = "linux")]
             input_route,
             #[cfg(target_os = "linux")]
