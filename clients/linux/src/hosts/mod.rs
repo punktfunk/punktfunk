@@ -139,12 +139,6 @@ pub enum Act {
     Toast(String),
 }
 
-/// How long each saved-host reachability probe waits, and how often the sweep runs. Presence is
-/// this sweep and nothing else, so a host reached only over a routed network (Tailscale/VPN) —
-/// which never appears on mDNS — shows Online, and a sleeping one shows Offline within a cycle.
-const PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(2500);
-const PROBE_INTERVAL: std::time::Duration = std::time::Duration::from_secs(12);
-
 pub struct HostsInit {
     pub store: Rc<Store>,
     /// The window's navigation, which host pages push onto.
@@ -386,7 +380,7 @@ impl SimpleComponent for HostsPage {
         // The reachability sweep — the only thing presence is made of, since an advert outlives
         // the machine it describes. Each cycle probes every saved host off the main thread
         // (bounded QUIC handshake, then the addresses a silent host left); the first sweep runs
-        // at once, then every `PROBE_INTERVAL`.
+        // at once, then every `trust::PROBE_INTERVAL`.
         {
             let (sender, store) = (sender.clone(), store.clone());
             glib::spawn_future_local(async move {
@@ -403,7 +397,8 @@ impl SimpleComponent for HostsPage {
                         std::thread::Builder::new()
                             .name("punktfunk-probe".into())
                             .spawn(move || {
-                                let results = crate::trust::probe_known(&hosts, PROBE_TIMEOUT);
+                                let results =
+                                    crate::trust::probe_known(&hosts, crate::trust::PROBE_TIMEOUT);
                                 let map: HashMap<String, bool> =
                                     hosts.iter().map(KnownHost::card_key).zip(results).collect();
                                 let _ = tx.send_blocking(map);
@@ -413,7 +408,7 @@ impl SimpleComponent for HostsPage {
                             sender.input(HostsMsg::Probed(map));
                         }
                     }
-                    glib::timeout_future(PROBE_INTERVAL).await;
+                    glib::timeout_future(crate::trust::PROBE_INTERVAL).await;
                 }
             });
         }

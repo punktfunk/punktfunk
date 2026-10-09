@@ -8,8 +8,6 @@ use std::time::Duration;
 
 /// The longest a connect waits for the host's profile list.
 const ASK_BUDGET: Duration = Duration::from_secs(3);
-/// How often the waiting dialog re-reads the seat.
-const SEAT_POLL: Duration = Duration::from_secs(2);
 
 /// A seat coming up: the dialog that shows it, the flag that stops its poll, and the dial
 /// that follows once it is ready.
@@ -64,12 +62,7 @@ impl AppModel {
         let (identity, out) = (self.identity.clone(), sender.input_sender().clone());
         let pin = trust::parse_hex32(&fp_hex);
         std::thread::spawn(move || {
-            let (tx, rx) = std::sync::mpsc::channel();
-            let addr = req.addr.clone();
-            std::thread::spawn(move || {
-                let _ = tx.send(profiles::fetch_enumerate(&addr, mgmt, &identity, pin));
-            });
-            let listed = rx.recv_timeout(ASK_BUDGET).ok().and_then(Result::ok);
+            let listed = profiles::fetch_within(&req.addr, mgmt, &identity, pin, ASK_BUDGET);
             let _ = out.send(done(req, fp_hex, listed));
         });
     }
@@ -231,9 +224,9 @@ impl AppModel {
         }
     }
 
-    /// Opens the dialog that waits for `row`'s seat; `wake` starts a stopped seat first. A
-    /// worker re-reads the seat every [`SEAT_POLL`] until [`AppMsg::SeatPolled`] ends the
-    /// wait or the dialog's Cancel does.
+    /// Opens the dialog that waits for `row`'s seat; `wake` hides its detail until the wake
+    /// answers. A worker runs [`profiles::watch_seat`] and posts each row until
+    /// [`AppMsg::SeatPolled`] ends the wait or the dialog's Cancel does.
     fn wait_for_seat(
         &mut self,
         req: ConnectRequest,
@@ -266,34 +259,12 @@ impl AppModel {
         let mgmt = self.mgmt_port(&fp_hex);
         let (identity, pin) = (self.identity.clone(), trust::parse_hex32(&fp_hex));
         let (out, flag) = (sender.input_sender().clone(), stop.clone());
-        let (addr, id, name) = (req.addr.clone(), row.id.clone(), row.display_name.clone());
+        let (addr, watched) = (req.addr.clone(), row.clone());
         std::thread::spawn(move || {
-            let post = |row| {
-                let _ = out.send(AppMsg::SeatPolled {
-                    stop: flag.clone(),
-                    row,
-                });
-            };
-            if wake {
-                match profiles::wake(&addr, mgmt, &identity, pin, &id) {
-                    Ok(row) => post(Ok(row)),
-                    Err(e) => return post(Err(format!("Couldn't wake {name}'s desk — {e}"))),
-                }
-            }
-            loop {
-                std::thread::sleep(SEAT_POLL);
-                if flag.load(Ordering::Relaxed) {
-                    return;
-                }
-                match profiles::fetch_enumerate(&addr, mgmt, &identity, pin) {
-                    Ok(rows) => match rows.and_then(|r| r.into_iter().find(|p| p.id == id)) {
-                        Some(row) => post(Ok(row)),
-                        None => return post(Err(format!("{name} is gone from this host."))),
-                    },
-                    // A poll that fails waits for the next one.
-                    Err(e) => tracing::debug!(error = %e, "seat poll"),
-                }
-            }
+            profiles::watch_seat(&addr, mgmt, &identity, pin, &watched, &flag, |row| {
+                let stop = flag.clone();
+                out.send(AppMsg::SeatPolled { stop, row }).is_ok()
+            });
         });
         self.seat_wait = Some(SeatWait {
             dialog,

@@ -663,7 +663,6 @@ from the config directory for a true factory reset."
                 if let Err(e) = trust::persist_host(&addr, &addr, port, &fp_hex, true, &[]) {
                     eprintln!("couldn't save the host: {e:#}");
                 }
-                trust::forget_placeholder(&addr, port);
                 println!("paired {addr}:{port} fp={fp_hex}");
                 OK
             }
@@ -1340,7 +1339,6 @@ from the config directory for a true factory reset."
                             ) {
                                 eprintln!("couldn't save the host: {e:#}");
                             }
-                            trust::forget_placeholder(&plan.host.addr, plan.host.port);
                         }
                     }
                 }

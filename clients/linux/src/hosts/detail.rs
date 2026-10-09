@@ -4,7 +4,6 @@
 //! every change it draws; a row being edited keeps what was typed.
 
 use super::card::os_icon_name;
-use super::form::{parse_address, parse_macs, parse_port};
 use super::model::{Preset, Status};
 use super::{saved_request, Act, HostRef, HostsMsg};
 use crate::store::{Changed, Store};
@@ -646,7 +645,7 @@ fn wire_name(ctx: &Ctx, row: &adw::EntryRow) {
 
 fn wire_address(ctx: &Ctx, row: &adw::EntryRow) {
     let ctx = ctx.clone();
-    row.connect_apply(move |row| match parse_address(&row.text()) {
+    row.connect_apply(move |row| match HostEdit::parse_address(&row.text()) {
         Ok((addr, port)) => ctx.edit(|h| {
             h.apply_edit(&HostEdit {
                 addr: Some(addr),
@@ -663,7 +662,7 @@ fn wire_address(ctx: &Ctx, row: &adw::EntryRow) {
 
 fn wire_port(ctx: &Ctx, row: &adw::EntryRow) {
     let ctx = ctx.clone();
-    row.connect_apply(move |row| match parse_port(&row.text()) {
+    row.connect_apply(move |row| match HostEdit::parse_port(&row.text()) {
         Ok(port) => ctx.edit(|h| {
             h.apply_edit(&HostEdit {
                 port: Some(port),
@@ -679,7 +678,7 @@ fn wire_port(ctx: &Ctx, row: &adw::EntryRow) {
 
 fn wire_macs(ctx: &Ctx, row: &adw::EntryRow) {
     let ctx = ctx.clone();
-    row.connect_apply(move |row| match parse_macs(&row.text()) {
+    row.connect_apply(move |row| match HostEdit::parse_macs(&row.text()) {
         Ok(macs) => ctx.edit(|h| {
             h.apply_edit(&HostEdit {
                 macs: Some(macs),

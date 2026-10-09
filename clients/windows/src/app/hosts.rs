@@ -342,18 +342,18 @@ fn status_row_with(
         .into()
 }
 
-/// The in-tile host editor (a ContentDialog can't hold text fields): every per-host
-/// property in one place, mirroring the Apple client's add/edit sheet — name, address,
-/// port, Wake-on-LAN MAC, and whether this machine shares its clipboard with the host.
+/// The host editor sheet (a ContentDialog can't hold text fields): name, address, port,
+/// Wake-on-LAN MACs, preset and clipboard sharing in one place, like the Apple client's sheet.
 ///
-/// Drafts live in refs owned by the page and are read at Save time; the root `edit` state
-/// carries only the target's fingerprint + initial name, so typing doesn't round-trip
-/// through a re-render.
+/// Drafts live in refs owned by the page and are read at Save time, so typing doesn't
+/// round-trip through a re-render. Save checks the connection fields with [`HostEdit::parse`];
+/// a refused value or a failed write goes to the status line and the sheet stays open.
 fn edit_editor(
     who: &HostRef,
     initial_name: &str,
     drafts: EditDrafts,
     set_edit: AsyncSetState<Option<HostRef>>,
+    set_status: AsyncSetState<String>,
 ) -> Element {
     let EditDrafts {
         name: name_draft,
@@ -363,7 +363,7 @@ fn edit_editor(
         clip: clip_draft,
     } = drafts;
     let commit = {
-        let (who, se) = (who.clone(), set_edit.clone());
+        let (who, se, st) = (who.clone(), set_edit.clone(), set_status);
         let (name_draft, addr_draft, port_draft, mac_draft, clip_draft) = (
             name_draft.clone(),
             addr_draft.clone(),
@@ -372,27 +372,34 @@ fn edit_editor(
             clip_draft.clone(),
         );
         move || {
+            let parsed = HostEdit::parse(
+                &addr_draft.borrow(),
+                &port_draft.borrow(),
+                &mac_draft.borrow(),
+            );
+            let edit = match parsed {
+                Ok(edit) => HostEdit {
+                    name: Some(name_draft.borrow().clone()),
+                    ..edit
+                },
+                Err(e) => {
+                    st.call(e.message);
+                    return;
+                }
+            };
             let mut known = KnownHosts::load();
             let target = who.index(&known);
             if let Some(h) = target.and_then(|i| known.hosts.get_mut(i)) {
-                // A cleared box leaves its field as stored, and so does MAC text that doesn't
-                // parse; a cleared MAC box clears the MACs.
-                let port = port_draft
-                    .borrow()
-                    .trim()
-                    .parse::<u16>()
-                    .ok()
-                    .filter(|&p| p != 0);
-                h.apply_edit(&HostEdit {
-                    name: Some(name_draft.borrow().clone()),
-                    addr: Some(addr_draft.borrow().clone()),
-                    port,
-                    macs: pf_client_core::wol::parse_mac_list(&mac_draft.borrow()).ok(),
-                });
+                h.apply_edit(&edit);
                 h.clipboard_sync = *clip_draft.borrow();
             }
-            let _ = known.save();
-            se.call(None);
+            match known.save() {
+                Ok(()) => {
+                    st.call(String::new());
+                    se.call(None);
+                }
+                Err(e) => st.call(format!("Couldn't save the host \u{2014} {e:#}")),
+            }
         }
     };
     // The preset binding: what a plain click on this tile will use. It commits on change
@@ -635,7 +642,13 @@ pub(crate) fn hosts_page(props: &HostsProps, cx: &mut RenderCx) -> Element {
     let add_slot = add_host_slot(props, manual, set_manual, manual_live);
     // The host editor sheet, in its own stable slot (see the add modal's note).
     let edit_slot: Element = if let Some(who) = &props.rename {
-        edit_editor(who, &who.name, drafts, props.set_rename.clone())
+        edit_editor(
+            who,
+            &who.name,
+            drafts,
+            props.set_rename.clone(),
+            props.svc.set_status.clone(),
+        )
     } else {
         border(vstack(Vec::<Element>::new())).into()
     };

@@ -2,6 +2,13 @@
 
 use super::{hex, rekey_addr, KnownHost};
 use punktfunk_core::client::NativeClient;
+use std::time::Duration;
+
+/// How long each probe of a shell's sweep waits. Presence is that sweep and nothing else: a
+/// host reached only over Tailscale or a VPN never advertises on mDNS.
+pub const PROBE_TIMEOUT: Duration = Duration::from_millis(2500);
+/// How often a shell sweeps; a sleeping host shows Offline within one cycle.
+pub const PROBE_INTERVAL: Duration = Duration::from_secs(12);
 
 /// Probe several hosts in parallel — wall-clock is ~one `timeout`, not the sum. Result
 /// index matches `targets`, each `(addr, port, expected_fp_hex)`.

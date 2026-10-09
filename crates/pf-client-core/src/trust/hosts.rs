@@ -235,15 +235,80 @@ impl KnownHost {
     }
 }
 
-/// A person's edit of a saved host: the Add and Edit forms' fields, already validated
-/// ([`crate::wol::parse_mac_list`] for the MACs). `None` leaves a field as stored. An empty
-/// `macs` clears them — a person may, where an advert may only teach one.
+/// A person's edit of a saved host: the Add and Edit forms' fields, already validated by
+/// [`HostEdit::parse`]. `None` leaves a field as stored. An empty `macs` clears them — a person
+/// may, where an advert may only teach one.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct HostEdit {
     pub name: Option<String>,
     pub addr: Option<String>,
     pub port: Option<u16>,
     pub macs: Option<Vec<String>>,
+}
+
+/// Which connection field a typed value failed in.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HostField {
+    Addr,
+    Port,
+    Macs,
+}
+
+/// A typed value the store would refuse, and the sentence that says so.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FieldError {
+    pub field: HostField,
+    pub message: String,
+}
+
+impl HostEdit {
+    /// The connection fields' text as an edit. A pasted `host:port` address wins over the port
+    /// field, and a blank port is the default 9777. `name` stays `None`.
+    pub fn parse(addr: &str, port: &str, macs: &str) -> Result<HostEdit, FieldError> {
+        let at = |field| move |message| FieldError { field, message };
+        let (addr, spelled) = Self::parse_address(addr).map_err(at(HostField::Addr))?;
+        let port = Self::parse_port(port).map_err(at(HostField::Port))?;
+        let macs = Self::parse_macs(macs).map_err(at(HostField::Macs))?;
+        Ok(HostEdit {
+            name: None,
+            addr: Some(addr),
+            port: Some(spelled.unwrap_or(port)),
+            macs: Some(macs),
+        })
+    }
+
+    /// The address field: trimmed, a pasted `host:port` split. `Err` is the sentence to show.
+    pub fn parse_address(text: &str) -> Result<(String, Option<u16>), String> {
+        let addr = text.trim();
+        if addr.is_empty() {
+            return Err("Enter the host's address.".into());
+        }
+        crate::deeplink::split_host_port(addr).ok_or_else(|| {
+            format!(
+                "\u{201c}{addr}\u{201d} isn't an address. Use a name or an IP, like 192.168.1.20."
+            )
+        })
+    }
+
+    /// The port field; blank is the default 9777.
+    pub fn parse_port(text: &str) -> Result<u16, String> {
+        let text = text.trim();
+        if text.is_empty() {
+            return Ok(crate::deeplink::DEFAULT_PORT);
+        }
+        text.parse::<u16>().ok().filter(|&p| p != 0).ok_or_else(|| {
+            format!("\u{201c}{text}\u{201d} isn't a port. Use a number from 1 to 65535.")
+        })
+    }
+
+    /// The Wake-on-LAN field: a list, or empty to clear it.
+    pub fn parse_macs(text: &str) -> Result<Vec<String>, String> {
+        crate::wol::parse_mac_list(text).map_err(|bad| {
+            format!(
+                "\u{201c}{bad}\u{201d} isn't a MAC address. Use six pairs, like aa:bb:cc:dd:ee:ff."
+            )
+        })
+    }
 }
 
 #[derive(Default, Serialize, Deserialize)]
@@ -596,20 +661,6 @@ pub fn persist_host(
     // callers say "Paired" the moment it comes back. A read-only config dir or a sandbox
     // denial used to be announced as success and was gone by the next launch.
     known.save()
-}
-
-/// Drop the fp-less placeholder for `addr:port`. `--add-host` with no `--fp` stores one;
-/// [`persist_host`] then writes the real pin, so the placeholder would show twice.
-/// No-op, and no disk write, when there is none.
-pub fn forget_placeholder(addr: &str, port: u16) {
-    let mut known = KnownHosts::load();
-    let before = known.hosts.len();
-    known
-        .hosts
-        .retain(|h| !(h.fp_hex.is_empty() && h.addr == addr && h.port == port));
-    if known.hosts.len() != before {
-        let _ = known.save();
-    }
 }
 
 /// Load, [`KnownHosts::add`], save.
@@ -1513,5 +1564,37 @@ mod tests {
         assert_eq!(k.hosts[0].name, "Desk");
         assert_eq!(k.hosts[0].mac, macs);
         assert!(k.add(&HostEdit::default()).is_err());
+    }
+
+    fn failed(addr: &str, port: &str, macs: &str) -> Option<HostField> {
+        HostEdit::parse(addr, port, macs).err().map(|e| e.field)
+    }
+
+    #[test]
+    fn typed_fields_become_one_store_edit() {
+        let edit = HostEdit::parse(" desk.lan ", "", "AA-BB-CC-DD-EE-FF").unwrap();
+        assert_eq!(edit.addr.as_deref(), Some("desk.lan"));
+        assert_eq!(edit.port, Some(9777));
+        assert_eq!(edit.macs, Some(vec!["aa:bb:cc:dd:ee:ff".to_string()]));
+        assert_eq!(edit.name, None);
+        // A pasted host:port wins over the port field; an empty MAC field clears.
+        let edit = HostEdit::parse("192.168.1.20:9800", "9777", "").unwrap();
+        assert_eq!(
+            (edit.addr.as_deref(), edit.port),
+            (Some("192.168.1.20"), Some(9800))
+        );
+        assert_eq!(edit.macs, Some(Vec::new()));
+        // A bare IPv6 keeps its colons.
+        let edit = HostEdit::parse("::1", "9777", "").unwrap();
+        assert_eq!((edit.addr.as_deref(), edit.port), (Some("::1"), Some(9777)));
+    }
+
+    #[test]
+    fn a_refused_value_names_its_field() {
+        assert_eq!(failed("  ", "9777", ""), Some(HostField::Addr));
+        assert_eq!(failed("desk", "0", ""), Some(HostField::Port));
+        assert_eq!(failed("desk", "70000", ""), Some(HostField::Port));
+        assert_eq!(failed("desk", "port", ""), Some(HostField::Port));
+        assert_eq!(failed("desk", "9777", "aa:bb"), Some(HostField::Macs));
     }
 }
