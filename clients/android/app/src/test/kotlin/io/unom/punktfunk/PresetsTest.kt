@@ -92,25 +92,19 @@ class PresetsTest {
     }
 
     @Test
-    fun absorbRecordsTheTouchedFieldOnly() {
-        var o = SettingsOverlay()
-
-        // One control fires: before = what it was showing, after = what the user picked.
-        var before = o.apply(base)
-        o = o.absorb(before, before.copy(codec = "av1"))
+    fun pinRecordsTheNamedFieldOnly() {
+        var o = SettingsOverlay().pin("codec", base.copy(codec = "av1", bitrateKbps = 1))
         assertEquals("av1", o.codec)
         assertNull("nothing else may be recorded", o.bitrateKbps)
 
-        // Setting it BACK to the global's value is still an override — the pin case, and the whole
-        // difference between this and diffing against the globals at save time.
-        before = o.apply(base)
-        o = o.absorb(before, before.copy(codec = "hevc"))
-        assertEquals("hevc", o.codec)
+        // Pinning the global's own value is still an override: it survives the global moving.
+        o = o.pin("codec", base)
         assertEquals("hevc", o.apply(base.copy(codec = "h264")).codec)
 
-        // Identical snapshots record nothing.
-        before = o.apply(base)
-        assertEquals(o, o.absorb(before, before))
+        // Width and height are one control, so they pin together.
+        val res = SettingsOverlay().pin(SettingsOverlay.FIELD_RESOLUTION, base)
+        assertEquals(setOf(SettingsOverlay.FIELD_RESOLUTION), res.overridden())
+        assertEquals(o, o.pin("no_such_field", base)) // unknown names are a no-op, never a crash
     }
 
     @Test
