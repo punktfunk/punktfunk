@@ -9,6 +9,7 @@
 use super::style::*;
 use super::{AppCtx, Screen, Target};
 use crate::trust::KnownHosts;
+use pf_client_core::orchestrate::HostTarget;
 use pf_client_core::profiles::{self, Decision, ListedProfile, ProfilePick, SeatGate};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -53,7 +54,7 @@ impl PickerAsk {
     ) -> Self {
         Self {
             id: NEXT_ID.fetch_add(1, Ordering::Relaxed),
-            host: target.name.clone(),
+            host: target.host.name.clone(),
             listed: listed.map(Arc::new),
             saved,
             gone,
@@ -82,12 +83,12 @@ impl PartialEq for SeatWait {
     }
 }
 
-/// Writes `pick` as the host's saved profile (`None` drops it). Every other field stays. A
-/// failure is only logged: it lands mid-connect, where the status line belongs to the connect,
-/// and a lost pick only means the picker asks again.
-pub(crate) fn save_pick(fp_hex: Option<&str>, addr: &str, port: u16, pick: Option<ProfilePick>) {
+/// Writes `pick` as `host`'s saved profile (`None` drops it), on the record its `fp_hex` and
+/// address resolve to. Every other field stays. A failure is only logged: it lands mid-connect,
+/// where the status line belongs to the connect, and a lost pick only means the picker asks again.
+pub(crate) fn save_pick(host: &HostTarget, pick: Option<ProfilePick>) {
     let r = KnownHosts::update(|known| {
-        if let Some(i) = known.resolve_index(fp_hex, addr, port) {
+        if let Some(i) = known.resolve_index(host.fp_hex.as_deref(), &host.addr, host.port) {
             known.hosts[i].profile = pick;
         }
     });
@@ -103,9 +104,10 @@ fn fetch(
     pin: Option<[u8; 32]>,
 ) -> Option<Option<Vec<ListedProfile>>> {
     let mgmt = target
+        .host
         .mgmt_port
         .unwrap_or(pf_client_core::library::DEFAULT_MGMT_PORT);
-    profiles::fetch_within(&target.addr, mgmt, &ctx.identity, pin, FETCH_CUTOFF)
+    profiles::fetch_within(&target.host.addr, mgmt, &ctx.identity, pin, FETCH_CUTOFF)
 }
 
 fn open(ctx: &AppCtx, ask: PickerAsk) {
@@ -183,6 +185,7 @@ pub(crate) fn seat_then(
                 }
             };
             let mgmt = target
+                .host
                 .mgmt_port
                 .unwrap_or(pf_client_core::library::DEFAULT_MGMT_PORT);
             show(None);
@@ -205,7 +208,15 @@ pub(crate) fn seat_then(
                 }
                 waiting
             };
-            profiles::watch_seat(&target.addr, mgmt, &ctx.identity, pin, &row, &cancel, each);
+            profiles::watch_seat(
+                &target.host.addr,
+                mgmt,
+                &ctx.identity,
+                pin,
+                &row,
+                &cancel,
+                each,
+            );
         });
 }
 
@@ -238,11 +249,10 @@ pub(crate) fn then_connect(
                     ..Decision::default()
                 },
             };
-            let fp = target.fp_hex.clone();
             let listed = fetched.flatten();
             if !d.picker {
                 if d.remember != saved {
-                    save_pick(fp.as_deref(), &target.addr, target.port, d.remember);
+                    save_pick(&target.host, d.remember);
                 }
                 let row = row_of(listed.as_deref(), d.send.as_deref());
                 return seat_then(
@@ -263,7 +273,7 @@ pub(crate) fn then_connect(
                 set_status.clone(),
             );
             let on_pick = move |p: ProfilePick| {
-                save_pick(t.fp_hex.as_deref(), &t.addr, t.port, Some(p.clone()));
+                save_pick(&t.host, Some(p.clone()));
                 let row = row_of(rows.as_deref(), Some(&p.id));
                 seat_then(&ctx2, t, pin, &ss, &st, row, move || go(Some(p.id)));
             };
@@ -287,9 +297,9 @@ pub(crate) fn switch(
         .spawn(move || {
             // A box that lists nothing (404) reads as an empty list; a failed fetch as an error.
             let listed = fetch(&ctx, &target, pin).map(Option::unwrap_or_default);
-            let (fp, addr, port) = (target.fp_hex.clone(), target.addr.clone(), target.port);
+            let host = target.host.clone();
             let on_pick = move |p: ProfilePick| {
-                save_pick(fp.as_deref(), &addr, port, Some(p));
+                save_pick(&host, Some(p));
                 done();
             };
             open(

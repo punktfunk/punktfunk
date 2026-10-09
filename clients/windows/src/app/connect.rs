@@ -45,7 +45,7 @@ pub(crate) fn initiate_waking(
 fn send_wake(ctx: &Arc<AppCtx>, target: &Target) -> bool {
     let on = ctx.settings.lock().unwrap().auto_wake;
     if on {
-        crate::wol::wake(&target.mac, target.addr.parse().ok());
+        crate::wol::wake(&target.host.mac, target.host.addr.parse().ok());
     }
     on
 }
@@ -65,8 +65,14 @@ fn initiate_opts(
     // "Streaming to X") — stash it up front, not just on the pairing route.
     *ctx.shared.target.lock().unwrap() = target.clone();
     let known = KnownHosts::load();
-    let fp = target.fp_hex.as_deref();
-    let pin = match trust_route(&known, fp, &target.addr, target.port, target.pair_optional) {
+    let fp = target.host.fp_hex.as_deref();
+    let pin = match trust_route(
+        &known,
+        fp,
+        &target.host.addr,
+        target.host.port,
+        target.pair_optional,
+    ) {
         TrustRoute::Pinned(fp_hex) => trust::parse_hex32(&fp_hex),
         TrustRoute::OfferTofu(_) => None,
         TrustRoute::FingerprintChanged => {
@@ -99,9 +105,9 @@ fn ask_then_connect(
 ) {
     let fp = pin
         .map(|p| trust::hex(&p))
-        .or_else(|| target.fp_hex.clone());
+        .or_else(|| target.host.fp_hex.clone());
     let saved = KnownHosts::load()
-        .resolve(fp.as_deref(), &target.addr, target.port)
+        .resolve(fp.as_deref(), &target.host.addr, target.host.port)
         .filter(|h| h.paired)
         .map(|h| h.profile.clone());
     let Some(saved) = saved else {
@@ -285,6 +291,7 @@ fn connect_spawn(
     let tofu = pin.is_none();
     let fp_hex = pin.map(|p| trust::hex(&p)).or_else(|| {
         target
+            .host
             .fp_hex
             .clone()
             .filter(|f| trust::parse_hex32(f).is_some())
@@ -314,8 +321,11 @@ fn connect_spawn(
     let shared = ctx.shared.clone();
     let (ss, st) = (set_screen.clone(), set_status.clone());
     let target = target.clone();
-    // The closure owns `target`/`fp_hex`; the call itself borrows copies.
-    let (addr, port, fp_arg) = (target.addr.clone(), target.port, fp_hex.clone());
+    // The closure owns `target`/`fp_hex`; the call takes copies, the pin it dials included.
+    let host = HostTarget {
+        fp_hex: Some(fp_hex.clone()),
+        ..target.host.clone()
+    };
     let preset_arg = target.preset.clone();
     let profile_arg = opts.profile.clone();
     // The launch id: an explicit opts pick (the library's tap-to-play), else one riding
@@ -327,9 +337,7 @@ fn connect_spawn(
         launch_arg.clone(),
     );
     let spawned = crate::spawn::spawn_session(
-        &addr,
-        port,
-        &fp_arg,
+        host.clone(),
         opts.connect_timeout.as_secs(),
         launch_arg.as_deref(),
         preset_arg.as_deref(),
@@ -354,16 +362,9 @@ fn connect_spawn(
                     // Request access saves the host PAIRED, plain TOFU pinned but unpaired. A
                     // failed save waits on the status line, which a clean exit leaves for the
                     // host list.
-                    let host = HostTarget {
-                        name: target.name.clone(),
-                        addr: target.addr.clone(),
-                        port: target.port,
-                        mac: target.mac.clone(),
-                        ..HostTarget::default()
-                    };
                     if (persist_paired || tofu)
                         && let Err(e) =
-                            orchestrate::persist_on_ready(&host, &fp_hex, persist_paired)
+                            orchestrate::persist_on_ready(&target.host, &fp_hex, persist_paired)
                     {
                         st.call(format!("Connected, but couldn't save — {e:#}"));
                     }
@@ -376,10 +377,9 @@ fn connect_spawn(
                 SpawnEvent::Stats(s) => *shared.stats.lock().unwrap() = Some(*s),
                 SpawnEvent::Exited(outcome) => {
                     let forget_then = |msg: String| {
-                        let (fp_hex, target) = (fp_hex.clone(), target.clone());
-                        let (ss, st) = (ss.clone(), st.clone());
+                        let (host, ss, st) = (host.clone(), ss.clone(), st.clone());
                         move || {
-                            profiles::save_pick(Some(&fp_hex), &target.addr, target.port, None);
+                            profiles::save_pick(&host, None);
                             st.call(msg);
                             ss.call(Screen::Hosts);
                         }
@@ -486,7 +486,7 @@ pub(crate) fn request_access(props: &Svc, target: &Target) {
     let ctx = &props.ctx;
     // Pin the advertised certificate for a discovered host (defence against a host impostor while
     // we wait); a manually-typed host has no advertised fingerprint, so trust-on-first-use.
-    let pin = target.fp_hex.as_deref().and_then(trust::parse_hex32);
+    let pin = target.host.fp_hex.as_deref().and_then(trust::parse_hex32);
     // A fresh cancel flag per request, installed where the waiting screen's Cancel button can read
     // it back; this request's event loop captures the same `Arc` (via ConnectOpts) below.
     let cancel = Arc::new(AtomicBool::new(false));
@@ -544,10 +544,14 @@ fn wake_and_connect(
             if cancel.load(Ordering::SeqCst) {
                 return;
             }
-            let resolved = adverts.poll(target.fp_hex.as_deref(), &target.addr, target.port);
+            let resolved = adverts.poll(
+                target.host.fp_hex.as_deref(),
+                &target.host.addr,
+                target.host.port,
+            );
             let tick = wait.tick(resolved.is_some());
             if tick.send_packet {
-                crate::wol::wake(&target.mac, target.addr.parse().ok());
+                crate::wol::wake(&target.host.mac, target.host.addr.parse().ok());
             }
             match tick.outcome {
                 Some(WakeOutcome::Online) => {
@@ -556,10 +560,10 @@ fn wake_and_connect(
                     // moves only when the probe sweep hears its pin there — an advert's
                     // address can be another machine's.
                     if let Some((addr, port)) =
-                        resolved.filter(|(a, p)| *a != target.addr || *p != target.port)
+                        resolved.filter(|(a, p)| *a != target.host.addr || *p != target.host.port)
                     {
-                        target.addr = addr;
-                        target.port = port;
+                        target.host.addr = addr;
+                        target.host.port = port;
                     }
                     initiate(&ctx, target, &ss, &st);
                     return;
@@ -578,7 +582,7 @@ fn wake_and_connect(
 
 /// The plain "Connecting…" screen shown while the session worker handshakes. No hooks.
 pub(crate) fn connecting_page(ctx: &Arc<AppCtx>, status: &str) -> Element {
-    let target_name = ctx.shared.target.lock().unwrap().name.clone();
+    let target_name = ctx.shared.target.lock().unwrap().host.name.clone();
     let headline = if target_name.is_empty() {
         "Connecting\u{2026}".to_string()
     } else {
@@ -600,7 +604,7 @@ pub(crate) fn request_access_page(
     ctx: &Arc<AppCtx>,
     set_screen: &AsyncSetState<Screen>,
 ) -> Element {
-    let target_name = ctx.shared.target.lock().unwrap().name.clone();
+    let target_name = ctx.shared.target.lock().unwrap().host.name.clone();
     let headline = if target_name.is_empty() {
         "Waiting for approval\u{2026}".to_string()
     } else {
@@ -634,7 +638,7 @@ pub(crate) fn request_access_page(
 /// poll loop waits for the woken host to reappear on mDNS, plus a Cancel that returns to the host
 /// list and trips the shared cancel flag so the poll loop stops re-sending and tears down. No hooks.
 pub(crate) fn waking_page(ctx: &Arc<AppCtx>, set_screen: &AsyncSetState<Screen>) -> Element {
-    let target_name = ctx.shared.target.lock().unwrap().name.clone();
+    let target_name = ctx.shared.target.lock().unwrap().host.name.clone();
     let headline = if target_name.is_empty() {
         "Waking the host\u{2026}".to_string()
     } else {

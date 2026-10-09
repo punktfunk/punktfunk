@@ -1176,16 +1176,15 @@ from the config directory for a true factory reset."
     /// `SpawnOpts::persist_paired` means in the GTK shell. Every other launch records nothing,
     /// which is correct: a plain connect proves reachability, not a new trust decision.
     fn run_plan(plan: ConnectPlan, exec: bool, persist_paired: bool) -> u8 {
-        if plan.host.fp_hex.is_none() {
+        let Some(fp) = plan.host.pin() else {
             eprintln!(
                 "{} has no pinned fingerprint — punktfunk pair {}",
                 plan.host.name, plan.host.addr
             );
             return NEEDS_INTERACTION;
-        }
+        };
         // Wake first when the host is asleep and we know how to reach it. This is the thing the
         // old exec-style CLI never did: it fired a packet at best and dialled into the void.
-        let fp = plan.host.fp_hex.as_deref().unwrap_or_default();
         if plan.wake
             && !trust::probe_one(
                 &plan.host.addr,
@@ -1232,11 +1231,8 @@ from the config directory for a true factory reset."
                     // is what we are about to rewrite, and the session proved the host holds
                     // exactly this identity by completing a pinned handshake against it.
                     if persist_paired {
-                        if let Some(fp_hex) = &plan.host.fp_hex {
-                            if let Err(e) = orchestrate::persist_on_ready(&plan.host, fp_hex, true)
-                            {
-                                eprintln!("couldn't save the host: {e:#}");
-                            }
+                        if let Err(e) = orchestrate::persist_on_ready(&plan.host, fp, true) {
+                            eprintln!("couldn't save the host: {e:#}");
                         }
                     }
                 }

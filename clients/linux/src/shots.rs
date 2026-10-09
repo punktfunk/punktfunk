@@ -4,6 +4,7 @@ use crate::app::AppModel;
 use crate::hosts::{ConnectRequest, HostsMsg};
 use gtk::glib;
 use gtk::prelude::*;
+use pf_client_core::orchestrate::HostTarget;
 use relm4::prelude::*;
 use std::rc::Rc;
 
@@ -44,17 +45,17 @@ pub fn run_shot(ctx: &ShotCtx, scene: &str) {
     let sender = &ctx.sender;
     // A plausible host for the trust/pair dialogs (fp_hex = 64 hex chars).
     let mock_req = || ConnectRequest {
-        name: "Living Room PC".to_string(),
-        addr: "192.168.1.42".to_string(),
-        port: 9777,
-        fp_hex: Some(
-            "9f8e7d6c5b4a39281706f5e4d3c2b1a0998877665544332211ffeeddccbbaa00".to_string(),
-        ),
+        host: HostTarget {
+            name: "Living Room PC".to_string(),
+            addr: "192.168.1.42".to_string(),
+            port: 9777,
+            fp_hex: Some(
+                "9f8e7d6c5b4a39281706f5e4d3c2b1a0998877665544332211ffeeddccbbaa00".to_string(),
+            ),
+            ..HostTarget::default()
+        },
         pair_optional: true,
-        launch: None,
-        mac: Vec::new(),
-        preset: None,
-        profile: None,
+        ..ConnectRequest::default()
     };
     let mock_advert =
         |key: &str, name: &str, addr: &str, fp: &str| crate::discovery::DiscoveredHost {
@@ -104,9 +105,10 @@ pub fn run_shot(ctx: &ShotCtx, scene: &str) {
         // The first saved host's speed test, on the canned burst.
         "speed" => {
             if let Some(k) = ctx.store.hosts().hosts.first() {
-                sender.input(crate::app::AppMsg::SpeedTest(crate::hosts::saved_request(
-                    k,
-                )));
+                sender.input(crate::app::AppMsg::SpeedTest(ConnectRequest {
+                    host: HostTarget::from(k),
+                    ..ConnectRequest::default()
+                }));
             }
         }
         // A stream from the first saved host: its card and the window's banner.
@@ -114,7 +116,10 @@ pub fn run_shot(ctx: &ShotCtx, scene: &str) {
             let _ = hosts.send(HostsMsg::Probed(mock_online(ctx)));
             if let Some(k) = ctx.store.hosts().hosts.first() {
                 sender.input(crate::app::AppMsg::SessionReady {
-                    req: crate::hosts::saved_request(k),
+                    req: ConnectRequest {
+                        host: HostTarget::from(k),
+                        ..ConnectRequest::default()
+                    },
                     fp_hex: k.fp_hex.clone(),
                     tofu: false,
                     persist_paired: false,

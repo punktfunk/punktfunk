@@ -509,7 +509,10 @@ impl SimpleComponent for AppModel {
             let screen = start::start_screen(&settings, &known);
             drop(settings);
             if let Some(i) = screen.host_index() {
-                let req = hosts::saved_request(&known.hosts[i]);
+                let req = ConnectRequest {
+                    host: HostTarget::from(&known.hosts[i]),
+                    ..ConnectRequest::default()
+                };
                 sender.input(AppMsg::OpenLibrary(req.clone()));
                 // Stream is the library PLUS a connect, never a screen of its own: the session
                 // window is the overlay, so ending it leaves the shelf on screen underneath.
@@ -540,7 +543,7 @@ impl SimpleComponent for AppModel {
                     // Auto-wake off means no packet and no wake-and-wait, just the normal dial
                     // error; the host-card menu's explicit "Wake host" stays ungated.
                     if self.store.settings().auto_wake {
-                        crate::wol::wake(&req.mac, req.addr.parse().ok());
+                        crate::wol::wake(&req.host.mac, req.host.addr.parse().ok());
                         self.wake_fallback = Some(req.clone());
                     }
                     sender.input(AppMsg::Connect(req));
@@ -553,7 +556,7 @@ impl SimpleComponent for AppModel {
             }
             AppMsg::SpeedTest(req) => self.speed_test(req, &sender),
             AppMsg::SwitchProfile(req) => {
-                if let Some(fp_hex) = req.fp_hex.clone() {
+                if let Some(fp_hex) = req.host.pin().map(str::to_string) {
                     self.ask_profile(req, fp_hex, true, &sender);
                 }
             }

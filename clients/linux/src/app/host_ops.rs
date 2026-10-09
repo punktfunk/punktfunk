@@ -14,18 +14,18 @@ impl AppModel {
         // a worker thread, with the outcome routed back as a Toast.
         let identity = self.identity.clone();
         let mgmt = mgmt_port.unwrap_or(pf_client_core::library::DEFAULT_MGMT_PORT);
-        self.toast(&format!("Sending logs to {}…", req.name));
+        self.toast(&format!("Sending logs to {}…", req.host.name));
         let out = sender.input_sender().clone();
         std::thread::Builder::new()
             .name("punktfunk-sendlogs".into())
             .spawn(move || {
                 let msg = pf_client_core::logring::send_bundle(
                     "punktfunk-client",
-                    &req.name,
-                    &req.addr,
+                    &req.host.name,
+                    &req.host.addr,
                     mgmt,
                     &identity,
-                    req.fp_hex.as_deref().unwrap_or_default(),
+                    req.host.fp_hex.as_deref().unwrap_or_default(),
                 );
                 let _ = out.send(AppMsg::Toast(msg));
             })
@@ -51,7 +51,7 @@ impl AppModel {
                 Some(&format!(
                     "This ends every stream from {} and anything running on it. \
                      You'll need to wake or start it again.",
-                    req.name
+                    req.host.name
                 )),
             );
             dialog.add_responses(&[("cancel", "Cancel"), ("go", &label)]);
@@ -76,17 +76,17 @@ impl AppModel {
         }
         // Blocking network on a worker, outcome as a toast — the SendLogs recipe.
         let identity = self.identity.clone();
-        self.toast(&format!("{label} — asking {}…", req.name));
+        self.toast(&format!("{label} — asking {}…", req.host.name));
         let out = sender.input_sender().clone();
         std::thread::Builder::new()
             .name("punktfunk-hostaction".into())
             .spawn(move || {
                 let msg = pf_client_core::host_actions::run(
-                    &req.name,
-                    &req.addr,
+                    &req.host.name,
+                    &req.host.addr,
                     mgmt,
                     &identity,
-                    req.fp_hex.as_deref().unwrap_or_default(),
+                    req.host.fp_hex.as_deref().unwrap_or_default(),
                     &action_id,
                     &label,
                 );

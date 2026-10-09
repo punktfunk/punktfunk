@@ -11,13 +11,14 @@ mod poster;
 mod rows;
 mod tile;
 
-use crate::hosts::{saved_request, ConnectRequest, HostRef};
+use crate::hosts::{ConnectRequest, HostRef};
 use crate::store::Store;
 use adw::prelude::*;
 use gtk::{gdk, gio, glib};
 use pf_client_core::collate::{GroupBy, SortKey};
 use pf_client_core::library::{self, GameEntry, LibraryError, RunningGame};
 use pf_client_core::library_layout as layout;
+use pf_client_core::orchestrate::HostTarget;
 use relm4::prelude::*;
 use rows::Row;
 use std::cell::{Cell, RefCell};
@@ -385,7 +386,7 @@ impl SimpleComponent for LibraryPage {
                     Some(key) => self.select(&key),
                     None => out(LibraryOutput::Toast(format!(
                         "Pair {} to browse its library.",
-                        req.name
+                        req.host.name
                     ))),
                 }
             }
@@ -433,7 +434,7 @@ impl SimpleComponent for LibraryPage {
                 }
             }
             LibraryMsg::ToggleFavorite(id) => {
-                if let Some(fp) = self.shelf().and_then(|s| s.req.fp_hex) {
+                if let Some(fp) = self.shelf().and_then(|s| s.req.host.fp_hex) {
                     self.store
                         .update_settings(|s| layout::toggle_favorite(s, &fp, &id));
                 }
@@ -497,16 +498,16 @@ impl SimpleComponent for LibraryPage {
 
 /// The pin when both have one, else the address.
 fn same_host(a: &ConnectRequest, b: &ConnectRequest) -> bool {
-    match (&a.fp_hex, &b.fp_hex) {
+    match (a.host.pin(), b.host.pin()) {
         (Some(x), Some(y)) => x == y,
-        _ => a.addr == b.addr && a.port == b.port,
+        _ => a.host.addr == b.host.addr && a.host.port == b.host.port,
     }
 }
 
 /// A title or a desktop dials first and wakes on a known MAC: the shelf may be a memory of a
 /// host that has since gone to sleep.
 fn connect(req: ConnectRequest) -> LibraryOutput {
-    if req.mac.is_empty() {
+    if req.host.mac.is_empty() {
         LibraryOutput::Connect(req)
     } else {
         LibraryOutput::WakeConnect(req)
@@ -725,7 +726,7 @@ impl LibraryPage {
         *self.view.selected.borrow_mut() = pick.clone();
         *self.view.favorites.borrow_mut() = self
             .shelf()
-            .and_then(|s| s.req.fp_hex)
+            .and_then(|s| s.req.host.fp_hex)
             .map(|fp| layout::favorites(&settings, &fp))
             .unwrap_or_default();
         self.sort = SortKey::parse(&settings.library_sort);
@@ -753,7 +754,10 @@ impl LibraryPage {
         let (mut shelves, mut desktops) = (Vec::new(), Vec::new());
         for k in self.store.hosts().hosts.iter().filter(|k| k.paired) {
             let key = k.id.clone().unwrap_or_else(|| k.card_key());
-            let req = saved_request(k);
+            let req = ConnectRequest {
+                host: HostTarget::from(k),
+                ..ConnectRequest::default()
+            };
             let shelf = |key: String, label: String, req: ConnectRequest| Shelf {
                 key,
                 host: HostRef::of(k),
@@ -811,6 +815,7 @@ impl LibraryPage {
         self.loaded = Some(shelf.clone());
         let pin = shelf
             .req
+            .host
             .fp_hex
             .as_deref()
             .and_then(crate::trust::parse_hex32);
@@ -818,7 +823,7 @@ impl LibraryPage {
             self.view.games.borrow_mut().clear();
             self.view.running.borrow_mut().clear();
             self.view.art.reset(Some((
-                library::base_url(&shelf.req.addr, shelf.mgmt_port),
+                library::base_url(&shelf.req.host.addr, shelf.mgmt_port),
                 self.identity.clone(),
                 pin,
             )));
@@ -831,11 +836,11 @@ impl LibraryPage {
             return;
         }
         // A sleeping host gets a knock while its remembered shelf is on screen.
-        if self.store.settings().auto_wake && !shelf.req.mac.is_empty() {
-            crate::wol::wake(&shelf.req.mac, shelf.req.addr.parse().ok());
+        if self.store.settings().auto_wake && !shelf.req.host.mac.is_empty() {
+            crate::wol::wake(&shelf.req.host.mac, shelf.req.host.addr.parse().ok());
         }
         let (sender, identity) = (self.view.sender.clone(), self.identity.clone());
-        let (addr, port, fp) = (shelf.req.addr, shelf.mgmt_port, shelf.req.fp_hex);
+        let (addr, port, fp) = (shelf.req.host.addr, shelf.mgmt_port, shelf.req.host.fp_hex);
         std::thread::Builder::new()
             .name("punktfunk-library".into())
             .spawn(move || {
@@ -885,7 +890,7 @@ impl LibraryPage {
             }
             Loaded::Fetched(Err(e)) => {
                 tracing::info!(error = %e, "library not fetched");
-                let name = self.shelf().map(|s| s.req.name).unwrap_or_default();
+                let name = self.shelf().map(|s| s.req.host.name).unwrap_or_default();
                 let pair = matches!(e, LibraryError::PinMismatch | LibraryError::NotPaired);
                 if self.view.games.borrow().is_empty() {
                     w.error.set_description(Some(&failure(&e, &name)));
@@ -989,9 +994,9 @@ impl LibraryPage {
         let shelf = self.shelf()?;
         let url = pf_client_core::deeplink::saved_host_link(
             &self.store.hosts(),
-            shelf.req.fp_hex.as_deref(),
-            &shelf.req.addr,
-            shelf.req.port,
+            shelf.req.host.fp_hex.as_deref(),
+            &shelf.req.host.addr,
+            shelf.req.host.port,
             shelf.req.preset.as_deref(),
             Some(id),
         )?;
@@ -1021,9 +1026,10 @@ impl LibraryPage {
         dialog.connect_response(Some("end"), move |_, _| {
             let (sender, id, identity, title) =
                 (sender.clone(), id.clone(), identity.clone(), title.clone());
-            let (addr, port) = (shelf.req.addr.clone(), shelf.mgmt_port);
+            let (addr, port) = (shelf.req.host.addr.clone(), shelf.mgmt_port);
             let pin = shelf
                 .req
+                .host
                 .fp_hex
                 .as_deref()
                 .and_then(crate::trust::parse_hex32);

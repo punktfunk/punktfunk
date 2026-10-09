@@ -25,7 +25,9 @@ pub struct HostTarget {
     pub name: String,
     pub addr: String,
     pub port: u16,
-    /// `None` = no pin. The session refuses that; only a completed trust ceremony may produce one.
+    /// The [`trust_route`] input. `None` = a typed address, with no record of its own.
+    /// `Some("")` = a card saved without a pin. Else a stored or advertised pin. The session
+    /// refuses to dial without one ([`HostTarget::pin`]).
     pub fp_hex: Option<String>,
     pub mac: Vec<String>,
     pub id: Option<String>,
@@ -35,13 +37,22 @@ pub struct HostTarget {
     pub mgmt_port: Option<u16>,
 }
 
+impl HostTarget {
+    /// The pin to dial with: `fp_hex`, unless it is a saved card's empty one.
+    pub fn pin(&self) -> Option<&str> {
+        self.fp_hex.as_deref().filter(|f| !f.is_empty())
+    }
+}
+
+/// A saved card is never a typed address: an unpinned record maps to `Some("")`, so
+/// [`trust_route`] asks for pairing rather than borrowing the pin saved at its address.
 impl From<&KnownHost> for HostTarget {
     fn from(h: &KnownHost) -> HostTarget {
         HostTarget {
             name: h.name.clone(),
             addr: h.addr.clone(),
             port: h.port,
-            fp_hex: (!h.fp_hex.is_empty()).then(|| h.fp_hex.clone()),
+            fp_hex: Some(h.fp_hex.clone()),
             mac: h.mac.clone(),
             id: h.id.clone(),
             mgmt_port: h.mgmt_port,
@@ -63,10 +74,11 @@ pub enum TrustRoute {
     NeedsPairing,
 }
 
-/// The connect trust gate. `advertised_fp` follows [`KnownHosts::resolve_index`]: `None`
-/// is a typed address and takes the record pinned there; `Some("")` is a card saved
-/// without a pin and has none. A placeholder is no pin, so a fingerprint arriving at one
-/// is a new host, not a changed one.
+/// The connect trust gate. `advertised_fp` is [`HostTarget::fp_hex`] and follows
+/// [`KnownHosts::resolve_index`]: `None` is a typed address and takes the record pinned
+/// there; `Some("")` is a saved card without a pin ([`HostTarget::from`] a placeholder) and
+/// has none. A placeholder is no pin, so a fingerprint arriving at one is a new host, not a
+/// changed one.
 pub fn trust_route(
     known: &KnownHosts,
     advertised_fp: Option<&str>,
@@ -301,9 +313,9 @@ impl ConnectPlan {
             "--connect".into(),
             punktfunk_core::client::join_host_port(&self.host.addr, self.host.port),
         ];
-        if let Some(fp) = &self.host.fp_hex {
+        if let Some(fp) = self.host.pin() {
             args.push("--fp".into());
-            args.push(fp.clone());
+            args.push(fp.to_string());
         }
         if let Some(launch) = &self.launch {
             args.push("--launch".into());
@@ -334,7 +346,7 @@ impl ConnectPlan {
     /// Pump parameters for this plan. Device probes stay off it: the plan is
     /// what a shell serialises, and it must not carry a device handle.
     ///
-    /// The pin is the parsed form of [`HostTarget::fp_hex`]. An unset
+    /// The pin is the parsed form of [`HostTarget::pin`]. An unset
     /// [`Self::connect_timeout_secs`] is [`DEFAULT_CONNECT_TIMEOUT_SECS`].
     pub fn session_params(&self, pin: [u8; 32], probes: Probes) -> SessionParams {
         self.spec(self.clipboard).session_params(
@@ -465,7 +477,7 @@ pub fn plan_from_link(
             );
             // Known but never pinned: the session refuses without a pin. Hand back as
             // ConfirmUnknown so the front-end runs its trust flow.
-            if plan.host.fp_hex.is_none() {
+            if plan.host.pin().is_none() {
                 return Ok(PlanOutcome::ConfirmUnknown(Box::new(UnknownHost {
                     addr: plan.host.addr,
                     port: plan.host.port,
@@ -1366,6 +1378,12 @@ mod tests {
         plan.host.addr = "fd00::5".into();
         plan.host.port = 9800;
         assert_eq!(plan.session_args()[1], "[fd00::5]:9800");
+
+        // A card saved without a pin is `Some("")`, never a typed address, and dials no pin.
+        plan.host = HostTarget::from(&host("Typed", "10.0.0.3", "2", ""));
+        assert_eq!(plan.host.fp_hex.as_deref(), Some(""));
+        assert_eq!(plan.host.pin(), None);
+        assert!(!plan.session_args().contains(&"--fp".to_string()));
     }
 
     /// Unknown host is a prompt, a contradicted pin is a refusal, an unhonorable
@@ -1406,7 +1424,7 @@ mod tests {
             PlanOutcome::Connect(p) => {
                 assert_eq!(p.host.addr, "192.168.1.50");
                 assert_eq!(p.preset_override, None);
-                assert!(p.host.fp_hex.is_some());
+                assert!(p.host.pin().is_some());
             }
             other => panic!("expected a connect, got {other:?}"),
         }
@@ -1416,7 +1434,7 @@ mod tests {
         match plan("punktfunk://connect/Desk").unwrap() {
             PlanOutcome::ConfirmConnect(p) => {
                 assert_eq!(p.host.addr, "192.168.1.50");
-                assert!(p.host.fp_hex.is_some());
+                assert!(p.host.pin().is_some());
             }
             other => panic!("expected a confirm-connect, got {other:?}"),
         }

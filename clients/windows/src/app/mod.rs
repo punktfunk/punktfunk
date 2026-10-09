@@ -64,6 +64,7 @@ use crate::trust::{KnownHosts, Settings};
 use hosts::HostsProps;
 use pf_client_core::discovery::{self, DiscoveredHost, DiscoveryEvent};
 use pf_client_core::gamepad::GamepadService;
+use pf_client_core::orchestrate::HostTarget;
 use pf_client_core::start;
 use speed::{SpeedProps, SpeedState};
 use std::collections::HashMap;
@@ -97,22 +98,13 @@ pub(crate) enum Screen {
 }
 
 /// The host we're about to connect to / pair with / speed-test (carried into those screens
-/// via `Shared::target`).
+/// via `Shared::target`), plus this connect's own asks.
 #[derive(Clone, Default)]
 pub(crate) struct Target {
-    pub(crate) name: String,
-    pub(crate) addr: String,
-    pub(crate) port: u16,
-    pub(crate) fp_hex: Option<String>,
+    /// A saved tile's is [`HostTarget::from`] its record; a discovered one's carries the
+    /// advert's pin, MACs and mgmt port, which the library screen fetches from.
+    pub(crate) host: HostTarget,
     pub(crate) pair_optional: bool,
-    /// Wake-on-LAN MAC(s) for this host (from the saved store or the live advert) — used to send a
-    /// magic packet before connecting to an offline host. Empty when none is known.
-    pub(crate) mac: Vec<String>,
-    /// This host's management-API port (saved store or live advert), where the library screen
-    /// fetches from. `None` = unknown, use [`pf_client_core::library::DEFAULT_MGMT_PORT`]. Carried
-    /// on the target for the same reason as `mac`: the library screen has no `KnownHost` in hand,
-    /// and assuming 47990 there is what made a moved mgmt port work on the LAN but not over a VPN.
-    pub(crate) mgmt_port: Option<u16>,
     /// A ONE-OFF settings preset for this connect ("Connect with"): `Some(id)` overrides the
     /// host's binding for this launch, `Some("")` forces the global defaults on a bound host,
     /// `None` honors the binding. It never rebinds anything — the default changes only through
@@ -445,7 +437,10 @@ fn root(cx: &mut RenderCx, ctx: &Arc<AppCtx>) -> Element {
             );
             let screen = start::start_screen(&settings, &known);
             let Some(i) = screen.host_index() else { return };
-            let target = hosts::saved_target(&known.hosts[i]);
+            let target = Target {
+                host: HostTarget::from(&known.hosts[i]),
+                ..Target::default()
+            };
             library::open_library(&svc, target.clone());
             // Stream is the library PLUS a connect, never a screen of its own: the session
             // window is the overlay, so ending it leaves the shelf on screen underneath.
@@ -855,19 +850,19 @@ fn route_link(
         // and preset kept through the detour (§3.1, as in the GTK shell).
         Ok(PlanOutcome::ConfirmUnknown(u)) => {
             let name = u.name.clone().unwrap_or_else(|| u.addr.clone());
+            // A link carries no mgmt port (nor a MAC), so those stay unknown until an advert
+            // teaches them — same fallback as the hand-added case.
             *ctx.shared.target.lock().unwrap() = Target {
-                name: name.clone(),
-                addr: u.addr.clone(),
-                port: u.port,
-                fp_hex: u.fp.clone(),
-                pair_optional: false,
-                mac: Vec::new(),
-                // A link carries no mgmt port (nor a MAC), so this stays unknown until
-                // an advert teaches it — same fallback as the hand-added case.
-                mgmt_port: None,
+                host: HostTarget {
+                    name: name.clone(),
+                    addr: u.addr.clone(),
+                    port: u.port,
+                    fp_hex: u.fp.clone(),
+                    ..HostTarget::default()
+                },
                 preset: u.preset.clone(),
                 launch: u.launch.clone(),
-                link_profile: None,
+                ..Target::default()
             };
             set_status.call(format!(
                 "{name} isn't paired with this device yet \u{2014} pair it to continue."
@@ -894,22 +889,20 @@ fn dial_link(
     set_status: &AsyncSetState<String>,
 ) {
     let target = Target {
-        name: plan.host.name.clone(),
-        addr: plan.host.addr.clone(),
-        port: plan.host.port,
-        fp_hex: plan.host.fp_hex.clone(),
-        pair_optional: false,
-        mac: plan.host.mac.clone(),
-        mgmt_port: plan.host.mgmt_port,
+        host: plan.host.clone(),
         preset: plan.preset_override.clone(),
         launch: None, // routed explicitly below (initiate_launch*)
         link_profile: plan.profile.clone(),
+        ..Target::default()
     };
     // With a MAC it takes the dial first wake path, so a sleeping host wakes instead of
     // erroring — exactly what clicking its tile would do. The link's `launch=` id must reach
     // the session (`--launch`) — this used to drop it, so a game link opened a plain desktop
     // session.
-    match (plan.launch.clone(), plan.wake && !target.mac.is_empty()) {
+    match (
+        plan.launch.clone(),
+        plan.wake && !target.host.mac.is_empty(),
+    ) {
         (Some(id), true) => {
             connect::initiate_launch_waking(ctx, target, id, set_screen, set_status);
         }
