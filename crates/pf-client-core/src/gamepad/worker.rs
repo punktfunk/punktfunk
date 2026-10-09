@@ -1,23 +1,19 @@
-//! App-lifetime SDL3 gamepad service: Settings pad list, a forwarded slot per connected
-//! pad (a user pin narrows it to one), and in-session buttons/axes, DualSense touchpad +
-//! motion (`0xCC`), rumble, lightbar, DualSense raw effects, and Steam Controller 2 raw
-//! passthrough ([`crate::sc2_capture`]). Held state is zeroed on slot close or detach.
-//!
-//! Idle never opens a device and keeps Valve HIDAPI off ([`set_valve_hidapi`]): the
-//! Deck driver kills lizard mode (trackpad-mouse) at *enumeration*. Settings uses
-//! ID-based metadata getters. Menu mode ([`GamepadService::set_menu_mode`]) is the
-//! exception: the same pads stay open for [`MenuEvent`]s, folded into one sample so any
-//! of them navigates; Valve HIDAPI stays off; an attached session supersedes. This
-//! thread is the single rumble/HID-output consumer. Menu types live in `menu_nav`.
+//! The SDL side of [`GamepadService`](super::GamepadService): the pad list, forwarded
+//! slots, input forwarding, menu navigation, and the rumble/HID-output render. [`run`]
+//! drives a [`Worker`] on its own thread; [`GamepadPump`](super::GamepadPump) drives one
+//! from the caller's loop.
 
-use crate::menu_nav::{ring_sector, MenuNav, MenuSample};
-pub use crate::menu_nav::{MenuDir, MenuEvent, MenuPulse, PadBattery, PadInfo};
+use super::ds5::Ds5Feedback;
+use super::select_gesture::{select_chord, SelectGesture};
+use super::{is_steam_deck, set_valve_hidapi, Ctl, SelectChord, DISCONNECT_HOLD, TAP_PRESS};
+use crate::menu_nav::{
+    ring_sector, MenuEvent, MenuNav, MenuPulse, MenuSample, PadBattery, PadInfo,
+};
 use punktfunk_core::client::{ActuatorQuirks, NativeClient};
 use punktfunk_core::config::GamepadPref;
 use punktfunk_core::input::{gamepad as wire, InputEvent, InputKind};
 use punktfunk_core::quic::{HidOutput, RichInput};
-use std::sync::atomic::{AtomicU8, Ordering};
-use std::sync::mpsc::{Receiver, Sender};
+use std::sync::mpsc::Receiver;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -37,17 +33,6 @@ const ESCAPE_CHORD: [sdl3::gamepad::Button; 4] = [
     sdl3::gamepad::Button::Start,
     sdl3::gamepad::Button::Back,
 ];
-
-/// 1500 ms is long enough to be deliberate over a leave-fullscreen press.
-const DISCONNECT_HOLD: Duration = Duration::from_millis(1500);
-
-/// Hold Select alone this long for a synthetic host Guide ([`SelectGesture`]). The
-/// physical Guide never reaches the host cleanly where the local shell owns it.
-const GUIDE_HOLD: Duration = Duration::from_millis(350);
-
-/// Delay between a held-back Select tap's press and its scheduled release. Core folds
-/// per-transition sends into one `GamepadState`; down+up in one window vanish.
-const TAP_PRESS: Duration = Duration::from_millis(50);
 
 /// Deck actuator keepalive, declared as [`ActuatorQuirks`] at slot open. The built-in
 /// actuator decays inside SDL's ~2 s rumble resend, and an identical `set_rumble` is a
@@ -76,24 +61,6 @@ fn battery_of(pad: &sdl3::gamepad::Gamepad) -> Option<PadBattery> {
         percent: info.percentage.min(100) as u8,
         charging,
     })
-}
-
-/// Valve HIDAPI on/off. The Deck driver sends `ID_CLEAR_DIGITAL_MAPPINGS` +
-/// `TRACKPAD_NONE` at *enumeration* and feeds the lizard-mode watchdog, so the
-/// trackpad-mouse dies while the driver merely runs. Enable only in-session (paddles,
-/// trackpads, gyro). SDL3 applies live; disable restores lizard mode in seconds.
-fn set_valve_hidapi(enabled: bool) {
-    let v = if enabled { "1" } else { "0" };
-    sdl3::hint::set("SDL_JOYSTICK_HIDAPI_STEAMDECK", v);
-    sdl3::hint::set("SDL_JOYSTICK_HIDAPI_STEAM", v);
-}
-
-/// Disable Valve HIDAPI **before** `SDL_Init`. Enumeration is part of joystick init:
-/// setting the hint afterwards detaches the driver only after it has already cleared
-/// lizard mode. [`run`] orders this correctly; the pumped path receives a subsystem
-/// after enumeration, so callers must invoke this with the other pre-init hints.
-pub fn preinit_disable_valve_hidapi() {
-    set_valve_hidapi(false);
 }
 
 /// Log every joystick SDL sees, gamepad or not. A controller SDL has no mapping
@@ -175,348 +142,6 @@ fn declared_kind(setting: GamepadPref, physical: GamepadPref) -> GamepadPref {
 
 /// What SDL's HIDAPI driver calls the Deck's built-in controller.
 const DECK_NAME: &str = "Steam Deck";
-
-/// Steam Deck probe. `SteamDeck=1` short-circuits; else DMI (Valve + Jupiter/Galileo,
-/// readable in the flatpak). Cached — the answer cannot change while we run.
-pub fn is_steam_deck() -> bool {
-    static DECK: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *DECK.get_or_init(|| {
-        // Valve documents the VALUE: desktop Steam exports `SteamDeck=0`, so a presence
-        // check would call every Steam PC a Deck.
-        if std::env::var("SteamDeck").is_ok_and(|v| v.trim() == "1") {
-            return true;
-        }
-        let dmi = |f: &str| std::fs::read_to_string(format!("/sys/class/dmi/id/{f}"));
-        dmi("board_vendor").is_ok_and(|v| v.trim() == "Valve")
-            && dmi("product_name").is_ok_and(|p| matches!(p.trim(), "Jupiter" | "Galileo"))
-    })
-}
-
-enum Ctl {
-    Attach(Arc<NativeClient>),
-    Detach,
-    Pin(Option<String>),
-    KindOverride(GamepadPref),
-    Forwarding(bool),
-    SystemButtons {
-        forward_raw: bool,
-        gesture: bool,
-    },
-    TapButton(u32),
-    /// Pad-audio streams to render: bit0 = haptics, bit1 = speaker. Settings half of
-    /// the tier-A capability declared at slot open.
-    PadAudioPrefs(u8),
-    /// Off drops the host's rumble ([`GamepadService::set_rumble`]).
-    Rumble(bool),
-    MenuMode(bool),
-    MenuRumble(MenuPulse),
-    Mask(bool),
-    /// In-stream ring is up: first forwarded pad → [`MenuEvent`]s. Pair with
-    /// [`Ctl::Mask`] so the same presses never reach the host.
-    RingNav(bool),
-    /// Whether anything is listening for a Select chord ([`GamepadService::set_chords_live`]).
-    ChordsLive(bool),
-}
-
-/// What a Select+button chord on a forwarded pad asks the client for.
-///
-/// [`Ring`](Self::Ring) withholds the press it takes, because A is the dial's own confirm. That
-/// is why the client says whether anything is listening ([`GamepadService::set_chords_live`]):
-/// a chord nothing receives would eat a face button the game was owed.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum SelectChord {
-    /// Select+A — open the quick-action dial. The A press is withheld.
-    Ring,
-    /// Select+X — step the stats overlay's tier. Both presses still reach the game.
-    Stats,
-}
-
-#[derive(Clone)]
-pub struct GamepadService {
-    pads: Arc<Mutex<Vec<PadInfo>>>,
-    active: Arc<Mutex<Option<PadInfo>>>,
-    /// The last [`Self::set_kind_override`], as [`GamepadPref::to_u8`].
-    kind: Arc<AtomicU8>,
-    ctl: Sender<Ctl>,
-    escape_rx: async_channel::Receiver<()>,
-    disconnect_rx: async_channel::Receiver<()>,
-    menu_rx: async_channel::Receiver<MenuEvent>,
-    /// A Select chord while streaming — the second button swallowed. Carries the pad's wire
-    /// index and what it asked for.
-    chord_rx: async_channel::Receiver<(u8, SelectChord)>,
-}
-
-impl GamepadService {
-    pub fn start() -> GamepadService {
-        let pads = Arc::new(Mutex::new(Vec::new()));
-        let active = Arc::new(Mutex::new(None));
-        let (ctl, ctl_rx) = std::sync::mpsc::channel();
-        let (escape_tx, escape_rx) = async_channel::unbounded();
-        let (disconnect_tx, disconnect_rx) = async_channel::unbounded();
-        let (menu_tx, menu_rx) = async_channel::unbounded();
-        let (chord_tx, chord_rx) = async_channel::unbounded();
-        let (p, a) = (pads.clone(), active.clone());
-        if let Err(e) = std::thread::Builder::new()
-            .name("punktfunk-gamepad".into())
-            .spawn(move || {
-                if let Err(e) = run(
-                    p,
-                    a,
-                    &ctl_rx,
-                    &escape_tx,
-                    &disconnect_tx,
-                    &menu_tx,
-                    &chord_tx,
-                ) {
-                    tracing::warn!(error = %e, "gamepad service ended — pads disabled");
-                }
-            })
-        {
-            tracing::warn!(error = %e, "gamepad service start failed");
-        }
-        GamepadService {
-            pads,
-            active,
-            kind: Arc::default(),
-            ctl,
-            escape_rx,
-            disconnect_rx,
-            menu_rx,
-            chord_rx,
-        }
-    }
-
-    /// Caller-pumped variant: SDL grants one thread the event queue, so the session
-    /// binary (video+events on its main thread) cannot use [`start`]. Feed every event
-    /// to [`GamepadPump::handle_event`] and [`GamepadPump::tick`] once per loop.
-    ///
-    /// Valve HIDAPI is held off here too late — `subsystem` means enumeration already
-    /// ran. Call [`preinit_disable_valve_hidapi`] with the other pre-`SDL_Init` hints.
-    /// This still re-asserts off after an earlier session.
-    pub fn pumped(subsystem: sdl3::GamepadSubsystem) -> (GamepadService, GamepadPump) {
-        set_valve_hidapi(false);
-        let pads = Arc::new(Mutex::new(Vec::new()));
-        let active = Arc::new(Mutex::new(None));
-        let (ctl, ctl_rx) = std::sync::mpsc::channel();
-        let (escape_tx, escape_rx) = async_channel::unbounded();
-        let (disconnect_tx, disconnect_rx) = async_channel::unbounded();
-        let (menu_tx, menu_rx) = async_channel::unbounded();
-        let (chord_tx, chord_rx) = async_channel::unbounded();
-        let worker = Worker::new(
-            subsystem,
-            pads.clone(),
-            active.clone(),
-            escape_tx,
-            disconnect_tx,
-            menu_tx,
-            chord_tx,
-        );
-        (
-            GamepadService {
-                pads,
-                active,
-                kind: Arc::default(),
-                ctl,
-                escape_rx,
-                disconnect_rx,
-                menu_rx,
-                chord_rx,
-            },
-            GamepadPump { worker, ctl_rx },
-        )
-    }
-
-    /// Clone of the shared mpmc channel; the stream page spawns a future on it.
-    pub fn escape_events(&self) -> async_channel::Receiver<()> {
-        self.escape_rx.clone()
-    }
-
-    /// Clone of the shared mpmc channel; fires once past [`DISCONNECT_HOLD`].
-    pub fn disconnect_events(&self) -> async_channel::Receiver<()> {
-        self.disconnect_rx.clone()
-    }
-
-    /// Clone of the shared mpmc channel; flowing only while menu mode is on and idle.
-    pub fn menu_events(&self) -> async_channel::Receiver<MenuEvent> {
-        self.menu_rx.clone()
-    }
-
-    /// Select chords on a forwarded pad — both buttons swallowed. One event per chord, carrying
-    /// the pad's wire index and what it asked for. Silent until [`Self::set_chords_live`].
-    pub fn chord_events(&self) -> async_channel::Receiver<(u8, SelectChord)> {
-        self.chord_rx.clone()
-    }
-
-    /// Whether this client can act on a Select chord at all.
-    ///
-    /// Off by default, and off for good on a build with no console UI: the chord swallows the
-    /// button pressed with Select, so claiming one nothing receives eats a face button the game
-    /// was owed. The client turns it on once it has somewhere to send them.
-    pub fn set_chords_live(&self, on: bool) {
-        let _ = self.ctl.send(Ctl::ChordsLive(on));
-    }
-
-    /// Pair with [`Self::set_masked`] so the same presses never reach the host.
-    pub fn set_ring_nav(&self, on: bool) {
-        let _ = self.ctl.send(Ctl::RingNav(on));
-    }
-
-    /// While on and idle, hold the active pad open for [`MenuEvent`]s. An attached
-    /// session supersedes translation.
-    pub fn set_menu_mode(&self, on: bool) {
-        let _ = self.ctl.send(Ctl::MenuMode(on));
-    }
-
-    /// No-op while a session is attached or no pad is open.
-    pub fn menu_rumble(&self, pulse: MenuPulse) {
-        let _ = self.ctl.send(Ctl::MenuRumble(pulse));
-    }
-
-    pub fn pads(&self) -> Vec<PadInfo> {
-        self.pads.lock().unwrap().clone()
-    }
-
-    pub fn active(&self) -> Option<PadInfo> {
-        self.active.lock().unwrap().clone()
-    }
-
-    /// Pin by `PadInfo::key` — `None` = automatic. Survives disconnect; re-applies when
-    /// a matching controller returns.
-    pub fn set_pinned(&self, key: Option<String>) {
-        let _ = self.ctl.send(Ctl::Pin(key));
-    }
-
-    /// Explicit controller-type (`Auto` = per pad). The host builds a pad from its
-    /// [`InputKind::GamepadArrival`] and never swaps a built one, so a change mid-session
-    /// re-plugs each forwarded pad whose declared kind moves.
-    pub fn set_kind_override(&self, pref: GamepadPref) {
-        self.kind.store(pref.to_u8(), Ordering::Relaxed);
-        let _ = self.ctl.send(Ctl::KindOverride(pref));
-    }
-
-    /// The controller-type [`Self::set_kind_override`] last asked for.
-    pub fn kind_override(&self) -> GamepadPref {
-        GamepadPref::from_u8(self.kind.load(Ordering::Relaxed))
-    }
-
-    /// Off holds no slot: no arrival and the hidraw node stays free for a passthrough
-    /// tool (SDL HIDAPI takes it at open). The escape chord listens only on forwarded
-    /// pads; menu navigation is untouched.
-    pub fn set_forwarding(&self, on: bool) {
-        let _ = self.ctl.send(Ctl::Forwarding(on));
-    }
-
-    /// Overlay owns the controller: hold every forwarded pad NEUTRAL. Not
-    /// [`set_forwarding`](Self::set_forwarding) — that sends [`GamepadRemove`](InputKind::GamepadRemove)
-    /// (the game sees an unplug). Masking keeps slots open, flushes held state so a
-    /// stick stops steering, and adopts (does not replay) on the way back.
-    ///
-    /// SDL's own unfocused-window gate cannot fire on a Deck in Gaming Mode:
-    /// gamescope keeps this client focused in its own Xwayland ctx.
-    pub fn set_masked(&self, on: bool) {
-        let _ = self.ctl.send(Ctl::Mask(on));
-    }
-
-    /// `forward_raw` gates physical Guide/QAM onto the wire (off = local shell; on a
-    /// Gaming-Mode host, forwarding opens both overlays). `gesture` arms hold-Select
-    /// ([`GUIDE_HOLD`]) so the host Guide stays reachable.
-    pub fn set_system_buttons(&self, forward_raw: bool, gesture: bool) {
-        let _ = self.ctl.send(Ctl::SystemButtons {
-            forward_raw,
-            gesture,
-        });
-    }
-
-    /// Synthetic host Guide: down now, up [`TAP_PRESS`] later, on the first forwarded
-    /// slot (pad 0 if none). No-op with no session.
-    pub fn tap_guide(&self) {
-        self.tap_button(wire::BTN_GUIDE);
-    }
-
-    /// [`Self::tap_guide`] for any system button — the quick-action ring's route, which
-    /// carries the bit its slot stands for.
-    pub fn tap_button(&self, bit: u32) {
-        let _ = self.ctl.send(Ctl::TapButton(bit));
-    }
-
-    /// Like [`Self::tap_guide`] for `MISC1` (Deck `…`). Harmless on pads that map or
-    /// drop the misc button.
-    pub fn tap_qam(&self) {
-        self.tap_button(wire::BTN_MISC1);
-    }
-
-    /// Tier-A capability bits declared at slot open (DualSense/Edge only; others
-    /// 0). Call before [`Self::attach`]. Default is nothing — an embedder that never
-    /// calls this keeps the wire bytes unchanged.
-    pub fn set_pad_audio_prefs(&self, haptics: bool, speaker: bool) {
-        let bits = (haptics as u8) | ((speaker as u8) << 1);
-        let _ = self.ctl.send(Ctl::PadAudioPrefs(bits));
-    }
-
-    /// Off, the host's rumble never reaches a pad. Call before [`Self::attach`]; the
-    /// default is on.
-    pub fn set_rumble(&self, on: bool) {
-        let _ = self.ctl.send(Ctl::Rumble(on));
-    }
-
-    pub fn attach(&self, connector: Arc<NativeClient>) {
-        let _ = self.ctl.send(Ctl::Attach(connector));
-    }
-
-    pub fn detach(&self) {
-        let _ = self.ctl.send(Ctl::Detach);
-    }
-
-    /// The active pad's kind, or the host default if none. Read *before* attach, when a
-    /// Deck's built-in controls are still Steam Input's pad, which already reads as a Deck.
-    /// A Deck with no pad at all is still a Deck, so paddles and gyro land.
-    pub fn auto_pref(&self) -> GamepadPref {
-        match self.active() {
-            Some(p) => p.pref,
-            None if is_steam_deck() => GamepadPref::SteamDeck,
-            None => GamepadPref::Auto,
-        }
-    }
-}
-
-/// Caller-pumped half of [`GamepadService::pumped`]: events plus a periodic tick.
-pub struct GamepadPump {
-    worker: Worker,
-    ctl_rx: Receiver<Ctl>,
-}
-
-impl GamepadPump {
-    pub fn handle_event(&mut self, event: sdl3::event::Event) {
-        self.worker.handle_event(event);
-    }
-
-    /// Per-wakeup work: ctl drain, chord hold, menu repeat, rumble/HID. ≲30 ms keeps
-    /// chord-hold and haptics inside the threaded worker's tolerances.
-    pub fn tick(&mut self) {
-        let _ = self.worker.drain_ctl(&self.ctl_rx);
-        self.worker.gesture_poll();
-        self.worker.maybe_fire_disconnect();
-        self.worker.menu_poll();
-        self.worker.battery_poll();
-        self.worker.render_feedback();
-    }
-
-    /// Close every forwarded slot now. [`GamepadService::detach`] only posts `Ctl::Detach`;
-    /// without another [`tick`](Self::tick) the flush never runs, and slots have no `Drop`
-    /// that silences them. Closes directly rather than draining ctl: this also runs from
-    /// `Drop`, and `drain_ctl` would `unwrap` a poisoned lock during unwind.
-    pub fn shutdown(&mut self) {
-        self.worker.close_all_slots();
-    }
-}
-
-/// Last-resort silence: a `?` exit skips an explicit [`shutdown`](GamepadPump::shutdown).
-/// Call `shutdown` at the normal exit so the pad goes quiet before a long teardown.
-impl Drop for GamepadPump {
-    fn drop(&mut self) {
-        self.shutdown();
-    }
-}
 
 /// A Deck's pad list: Steam Input's pads are shadows of the built-in controls and of each
 /// external pad SDL already lists (the session clears Steam's device filter). The built-in
@@ -671,99 +296,6 @@ fn env_u8(key: &str) -> Option<u8> {
     }
 }
 
-/// DualSense effects packet (SDL `DS5EffectsState_t`, 47 bytes). Offsets are the USB
-/// output report **minus one**: SDL's payload has no leading report id. Deliberate
-/// second copy — `pf-inject` owns the layout and this crate cannot import it.
-/// [`ds5_offsets_track_the_usb_report`](ds5_feedback_tests) pins the `−1`.
-struct Ds5Feedback;
-
-impl Ds5Feedback {
-    const REPORT_ID_LEN: usize = 1;
-    /// Audio-control region (`ucHeadphoneVolume`…`ucAudioMuteBits`): USB report byte 5.
-    const AUDIO: usize = 5 - Self::REPORT_ID_LEN;
-    const RIGHT_TRIGGER: usize = 11 - Self::REPORT_ID_LEN;
-    const LEFT_TRIGGER: usize = 22 - Self::REPORT_ID_LEN;
-    const PAD_LIGHTS: usize = 44 - Self::REPORT_ID_LEN;
-    /// `ucMicLightMode`: USB report byte 9.
-    const MIC_LED: usize = 9 - Self::REPORT_ID_LEN;
-    /// Audio-control-2 (speaker preamp gain in bits 0..2): USB report byte 38.
-    const AUDIO2: usize = 38 - Self::REPORT_ID_LEN;
-    const LED_RGB: usize = 45 - Self::REPORT_ID_LEN;
-    /// Mode byte plus 10 parameters: the wire's trigger-effect clamp.
-    const TRIGGER_LEN: usize = punktfunk_core::quic::TRIGGER_EFFECT_MAX;
-
-    fn trigger_packet(which: u8, effect: &[u8]) -> [u8; 47] {
-        let mut p = [0u8; 47];
-        let (flag, off) = if which == 1 {
-            (0x04, Self::RIGHT_TRIGGER)
-        } else {
-            (0x08, Self::LEFT_TRIGGER)
-        };
-        p[0] = flag;
-        let n = effect.len().min(Self::TRIGGER_LEN);
-        p[off..off + n].copy_from_slice(&effect[..n]);
-        p
-    }
-
-    fn lightbar_packet(r: u8, g: u8, b: u8) -> [u8; 47] {
-        let mut p = [0u8; 47];
-        p[1] = 0x04; // valid_flag1 lightbar
-        p[Self::LED_RGB] = r;
-        p[Self::LED_RGB + 1] = g;
-        p[Self::LED_RGB + 2] = b;
-        p
-    }
-
-    fn player_packet(bits: u8) -> [u8; 47] {
-        let mut p = [0u8; 47];
-        p[1] = 0x10; // valid_flag1 player LEDs
-        p[Self::PAD_LIGHTS] = bits & 0x1F;
-        p
-    }
-
-    fn mic_led_packet(mode: u8) -> [u8; 47] {
-        let mut p = [0u8; 47];
-        p[1] = 0x01; // valid_flag1 mic-mute LED
-        p[Self::MIC_LED] = mode;
-        p
-    }
-
-    /// All-zero packet: `ucEnableBits1` bits 0/1 stay clear. SDL's rumble path sets both
-    /// ("enable rumble emulation" + "disable audio haptics"), which mutes the 0xD1 coils.
-    fn audio_haptics_packet() -> [u8; 47] {
-        [0u8; 47]
-    }
-
-    /// Point channel 1 (shared headphone-R / mono speaker) at the speaker. Power-on is
-    /// the jack, so the speaker pair is silent until the output path selects it: `0x20`
-    /// (L-L R) keeps a headphone copy, `0x30` (X-X R) mutes the jack.
-    /// Volume `0x64` and preamp `+6 dB` (`2`) are Linux `hid-playstation`'s speaker
-    /// route; the pad's speaker volume range is `0x3D..=0x64`.
-    /// Bits 0/1 stay clear (rumble-emulation / disable-audio-haptics mute the coils).
-    /// The select persists across USB-audio restart; a later [`HidOutput::AudioCtl`]
-    /// still overrides. `PUNKTFUNK_PAD_SPEAKER_PATH` / `_VOLUME` override per run.
-    fn speaker_enable_packet(volume: u8, path: u8) -> [u8; 47] {
-        let mut p = [0u8; 47];
-        // bit5 = ucSpeakerVolume valid, bit7 = audio-control byte valid.
-        p[0] = 0x20 | 0x80;
-        p[1] = 0x80; // audio-control-2 valid
-        p[Self::AUDIO + 1] = volume;
-        p[Self::AUDIO + 3] = path;
-        p[Self::AUDIO2] = 0x02;
-        p
-    }
-
-    /// Fold [`HidOutput::AudioCtl`]: `raw` is report `0x02` bytes 5..=10 → offsets 4..=9.
-    /// `flags` bits 1..4 become `p[0]` bits 4..7. Bit 0 is not replayed — bits 0/1 stay
-    /// clear so audio haptics stay live ([`audio_haptics_packet`]).
-    fn audio_ctl_packet(flags: u8, raw: &[u8; 6]) -> [u8; 47] {
-        let mut p = [0u8; 47];
-        p[0] = (flags & 0x1E) << 3;
-        p[Self::AUDIO..Self::AUDIO + 6].copy_from_slice(raw);
-        p
-    }
-}
-
 /// One forwarded controller while a session is attached. Opening grabs the hidraw node
 /// (SDL HIDAPI); idle/menu never populates slots.
 struct Slot {
@@ -848,112 +380,7 @@ impl Slot {
     }
 }
 
-/// What a button pressed with Select already held asks for, whether or not the guide gesture
-/// is on. Select-first only: A is the ring's own confirm, and X is a face button a game wants.
-/// Once the hold became Guide, both belong to whatever that opened on the host.
-fn select_chord(held: &[u32], bit: u32, select_as_guide: bool) -> Option<SelectChord> {
-    if select_as_guide || !held.contains(&wire::BTN_BACK) {
-        return None;
-    }
-    match bit {
-        wire::BTN_A => Some(SelectChord::Ring),
-        wire::BTN_X => Some(SelectChord::Stats),
-        _ => None,
-    }
-}
-
-/// Hold-Select→guide ([`GUIDE_HOLD`]). Pure: transitions + clock emit `(bit, down)`
-/// pairs. Select alone is pending; another button already down passes through (the
-/// escape chord ends in Select). A button while pending makes it a real Select (deferred
-/// down first). Past [`GUIDE_HOLD`] it is synthetic Guide until release; earlier it is a
-/// tap — press on release, up [`TAP_PRESS`] later (back-to-back folds into nothing).
-#[derive(Default)]
-struct SelectGesture {
-    pending_since: Option<Instant>,
-    as_guide: bool,
-    release_due: Option<Instant>,
-    /// Ring chord: the pending press never went out, so the release is dropped here.
-    swallowed: bool,
-}
-
-impl SelectGesture {
-    /// Returns true when the press is held back. `alone` = no other button held.
-    fn on_select_down(&mut self, now: Instant, alone: bool, out: &mut Vec<(u32, bool)>) -> bool {
-        // A previous tap's scheduled release is still owed: lift it before the new press.
-        if self.release_due.take().is_some() {
-            out.push((wire::BTN_BACK, false));
-        }
-        if alone {
-            self.pending_since = Some(now);
-            return true;
-        }
-        false
-    }
-
-    /// Ring chord: a pending Select never goes out, so its later release is dropped too.
-    fn swallow_for_ring(&mut self) {
-        if self.pending_since.take().is_some() {
-            self.swallowed = true;
-        }
-    }
-
-    /// Pending Select is real after all — deferred down goes out before the new button.
-    fn on_other_down(&mut self, out: &mut Vec<(u32, bool)>) {
-        if self.pending_since.take().is_some() {
-            out.push((wire::BTN_BACK, true));
-        }
-    }
-
-    /// True when the gesture owned this release (caller skips the normal button-up).
-    fn on_select_up(&mut self, now: Instant, out: &mut Vec<(u32, bool)>) -> bool {
-        if self.swallowed {
-            self.swallowed = false;
-            return true;
-        }
-        if self.as_guide {
-            self.as_guide = false;
-            out.push((wire::BTN_GUIDE, false));
-            return true;
-        }
-        if self.pending_since.take().is_some() {
-            out.push((wire::BTN_BACK, true));
-            self.release_due = Some(now + TAP_PRESS);
-            return true;
-        }
-        false
-    }
-
-    fn poll(&mut self, now: Instant, out: &mut Vec<(u32, bool)>) {
-        if let Some(since) = self.pending_since {
-            if now.duration_since(since) >= GUIDE_HOLD {
-                self.pending_since = None;
-                self.as_guide = true;
-                out.push((wire::BTN_GUIDE, true));
-            }
-        }
-        if let Some(due) = self.release_due {
-            if now >= due {
-                self.release_due = None;
-                out.push((wire::BTN_BACK, false));
-            }
-        }
-    }
-
-    /// Slot close / disarm: nothing may stay down (or owed) on the wire.
-    fn flush(&mut self, out: &mut Vec<(u32, bool)>) {
-        self.pending_since = None;
-        self.swallowed = false;
-        if self.as_guide {
-            self.as_guide = false;
-            out.push((wire::BTN_GUIDE, false));
-        }
-        if self.release_due.take().is_some() {
-            out.push((wire::BTN_BACK, false));
-        }
-    }
-}
-
-struct Worker {
+pub(super) struct Worker {
     subsystem: sdl3::GamepadSubsystem,
     pads_out: Arc<Mutex<Vec<PadInfo>>>,
     active_out: Arc<Mutex<Option<PadInfo>>>,
@@ -1397,7 +824,7 @@ impl Worker {
         }
     }
 
-    fn close_all_slots(&mut self) {
+    pub(super) fn close_all_slots(&mut self) {
         while !self.slots.is_empty() {
             self.close_slot_at(0);
         }
@@ -1612,7 +1039,7 @@ impl Worker {
     }
 
     /// Hold threshold and owed tap releases. ~10 ms attached jitter at most.
-    fn gesture_poll(&mut self) {
+    pub(super) fn gesture_poll(&mut self) {
         let Some(c) = self.attached.clone() else {
             self.synthetic_ups.clear();
             return;
@@ -1639,7 +1066,7 @@ impl Worker {
     }
 
     /// Polled so the hold completes, or lets go, without new events — a mask drops them.
-    fn maybe_fire_disconnect(&mut self) {
+    pub(super) fn maybe_fire_disconnect(&mut self) {
         self.rearm_escape();
         if self.disconnect_fired {
             return;
@@ -1777,7 +1204,7 @@ impl Worker {
     }
 
     /// Polled: nothing reports a battery changing. Menu pads only (the ones the console holds).
-    fn battery_poll(&mut self) {
+    pub(super) fn battery_poll(&mut self) {
         // The UI shows one level, for the pad it calls active; with several open that is the
         // only one worth a poll (`publish` matches it back by id).
         let active = self.active_id();
@@ -1809,7 +1236,7 @@ impl Worker {
     }
 
     /// False when the app side is gone and the worker should exit.
-    fn drain_ctl(&mut self, ctl: &Receiver<Ctl>) -> bool {
+    pub(super) fn drain_ctl(&mut self, ctl: &Receiver<Ctl>) -> bool {
         loop {
             match ctl.try_recv() {
                 Ok(Ctl::Attach(c)) => {
@@ -1950,7 +1377,7 @@ impl Worker {
         }
     }
 
-    fn handle_event(&mut self, event: sdl3::event::Event) {
+    pub(super) fn handle_event(&mut self, event: sdl3::event::Event) {
         use sdl3::event::Event;
         use sdl3::gamepad::Button;
         // The overlay owns the pads, or a held local Guide owns this one: drop input
@@ -2203,7 +1630,7 @@ impl Worker {
         }
     }
 
-    fn menu_poll(&mut self) {
+    pub(super) fn menu_poll(&mut self) {
         // Ring: every forwarded pad (masked off the wire) — the ring opens from whichever pad
         // pressed Select+A, which is not always slot 0. Else skip if overlay-masked so the
         // same stick cannot scroll Steam's UI and ours.
@@ -2255,7 +1682,7 @@ impl Worker {
     /// this worker applies them verbatim, or drops them all with rumble off. A raw SC2 hands
     /// its motors to the host's raw writes. A tier-A pad's coils go to whichever of wire
     /// rumble and haptics audio is arriving.
-    fn render_feedback(&mut self) {
+    pub(super) fn render_feedback(&mut self) {
         let Some(connector) = self.attached.clone() else {
             return;
         };
@@ -2384,7 +1811,7 @@ fn hidout_pad(h: &HidOutput) -> u8 {
 }
 
 impl Worker {
-    fn new(
+    pub(super) fn new(
         subsystem: sdl3::GamepadSubsystem,
         pads_out: Arc<Mutex<Vec<PadInfo>>>,
         active_out: Arc<Mutex<Option<PadInfo>>>,
@@ -2428,7 +1855,7 @@ impl Worker {
     }
 }
 
-fn run(
+pub(super) fn run(
     pads_out: Arc<Mutex<Vec<PadInfo>>>,
     active_out: Arc<Mutex<Option<PadInfo>>>,
     ctl: &Receiver<Ctl>,
@@ -2552,143 +1979,6 @@ mod menu_merge_tests {
         assert!(!is_acting(&held(false, MENU_DEADZONE as i16 - 1)));
         assert!(is_acting(&held(false, MENU_DEADZONE as i16 + 1)));
         assert!(is_acting(&held(true, 0)));
-    }
-}
-
-#[cfg(test)]
-mod select_gesture_tests {
-    use super::*;
-
-    #[test]
-    fn a_while_select_is_pending_swallows_both() {
-        let mut g = SelectGesture::default();
-        let mut out = Vec::new();
-        let t = Instant::now();
-        assert!(g.on_select_down(t, true, &mut out));
-        g.swallow_for_ring();
-        assert!(out.is_empty(), "the pending press stays swallowed: {out:?}");
-        assert!(
-            g.on_select_up(t, &mut out),
-            "the release is owned, not forwarded"
-        );
-        assert!(out.is_empty(), "…and emits nothing: {out:?}");
-    }
-
-    #[test]
-    fn select_then_a_or_x_is_a_chord_without_the_guide_gesture() {
-        let held = |b: u32| select_chord(&[wire::BTN_BACK], b, false);
-        assert_eq!(held(wire::BTN_A), Some(SelectChord::Ring));
-        assert_eq!(held(wire::BTN_X), Some(SelectChord::Stats));
-        // Every other face button is the game's, held Select or not.
-        assert_eq!(held(wire::BTN_B), None);
-        assert_eq!(held(wire::BTN_Y), None);
-        assert_eq!(
-            select_chord(&[wire::BTN_LB, wire::BTN_BACK], wire::BTN_A, false),
-            Some(SelectChord::Ring),
-            "other buttons held alongside do not disqualify it"
-        );
-        assert_eq!(select_chord(&[], wire::BTN_A, false), None, "A alone");
-        assert_eq!(
-            select_chord(&[wire::BTN_A], wire::BTN_BACK, false),
-            None,
-            "A first"
-        );
-        assert_eq!(
-            select_chord(&[wire::BTN_BACK], wire::BTN_X, true),
-            None,
-            "Select became Guide"
-        );
-    }
-
-    #[test]
-    fn tap_delivers_press_then_scheduled_release() {
-        let mut g = SelectGesture::default();
-        let t = Instant::now();
-        let mut out = Vec::new();
-        assert!(g.on_select_down(t, true, &mut out), "not held back");
-        assert!(out.is_empty(), "a held-back press sends nothing yet");
-        let up = t + Duration::from_millis(120);
-        assert!(g.on_select_up(up, &mut out));
-        assert_eq!(out, vec![(wire::BTN_BACK, true)]);
-        out.clear();
-        g.poll(up + TAP_PRESS - Duration::from_millis(1), &mut out);
-        assert!(out.is_empty(), "release went out early");
-        g.poll(up + TAP_PRESS, &mut out);
-        assert_eq!(out, vec![(wire::BTN_BACK, false)]);
-    }
-
-    #[test]
-    fn hold_becomes_guide_down_until_release() {
-        let mut g = SelectGesture::default();
-        let t = Instant::now();
-        let mut out = Vec::new();
-        assert!(g.on_select_down(t, true, &mut out));
-        g.poll(t + GUIDE_HOLD - Duration::from_millis(1), &mut out);
-        assert!(out.is_empty(), "guide fired inside the threshold");
-        g.poll(t + GUIDE_HOLD, &mut out);
-        assert_eq!(out, vec![(wire::BTN_GUIDE, true)]);
-        out.clear();
-        g.poll(t + GUIDE_HOLD * 4, &mut out);
-        assert!(out.is_empty());
-        assert!(g.on_select_up(t + GUIDE_HOLD * 5, &mut out));
-        assert_eq!(out, vec![(wire::BTN_GUIDE, false)]);
-    }
-
-    #[test]
-    fn second_button_makes_pending_select_real() {
-        let mut g = SelectGesture::default();
-        let t = Instant::now();
-        let mut out = Vec::new();
-        assert!(g.on_select_down(t, true, &mut out));
-        g.on_other_down(&mut out);
-        assert_eq!(out, vec![(wire::BTN_BACK, true)]);
-        out.clear();
-        assert!(!g.on_select_up(t + Duration::from_millis(200), &mut out));
-        assert!(out.is_empty());
-        g.poll(t + GUIDE_HOLD * 2, &mut out);
-        assert!(out.is_empty());
-    }
-
-    #[test]
-    fn select_inside_a_combo_passes_through() {
-        let mut g = SelectGesture::default();
-        let mut out = Vec::new();
-        assert!(!g.on_select_down(Instant::now(), false, &mut out));
-        assert!(out.is_empty());
-    }
-
-    #[test]
-    fn quick_repress_lifts_owed_release_first() {
-        let mut g = SelectGesture::default();
-        let t = Instant::now();
-        let mut out = Vec::new();
-        assert!(g.on_select_down(t, true, &mut out));
-        assert!(g.on_select_up(t + Duration::from_millis(80), &mut out));
-        out.clear();
-        assert!(g.on_select_down(t + Duration::from_millis(100), true, &mut out));
-        assert_eq!(out, vec![(wire::BTN_BACK, false)]);
-    }
-
-    #[test]
-    fn flush_lifts_synthetic_guide_and_owed_release() {
-        let mut g = SelectGesture::default();
-        let t = Instant::now();
-        let mut out = Vec::new();
-        assert!(g.on_select_down(t, true, &mut out));
-        g.poll(t + GUIDE_HOLD, &mut out);
-        out.clear();
-        g.flush(&mut out);
-        assert_eq!(out, vec![(wire::BTN_GUIDE, false)]);
-        out.clear();
-        assert!(g.on_select_down(t, true, &mut out));
-        assert!(g.on_select_up(t + Duration::from_millis(80), &mut out));
-        out.clear();
-        g.flush(&mut out);
-        assert_eq!(out, vec![(wire::BTN_BACK, false)]);
-        out.clear();
-        assert!(g.on_select_down(t, true, &mut out));
-        g.flush(&mut out);
-        assert!(out.is_empty(), "a never-sent pending Select ghosted a send");
     }
 }
 
@@ -2875,173 +2165,6 @@ mod slot_tests {
         assert_eq!(p[0], 0);
         assert_eq!(&p[4..10], &raw);
         assert_eq!(Ds5Feedback::audio_haptics_packet(), [0u8; 47]);
-    }
-}
-
-#[cfg(test)]
-mod ds5_feedback_tests {
-    use super::*;
-
-    /// SDL payload offsets are USB report offsets minus the leading report id.
-    #[test]
-    fn ds5_offsets_track_the_usb_report() {
-        for (usb, payload) in [
-            (11usize, Ds5Feedback::RIGHT_TRIGGER),
-            (22, Ds5Feedback::LEFT_TRIGGER),
-            (44, Ds5Feedback::PAD_LIGHTS),
-            (45, Ds5Feedback::LED_RGB),
-            (9, Ds5Feedback::MIC_LED),
-            (38, Ds5Feedback::AUDIO2),
-        ] {
-            assert_eq!(payload, usb - 1, "payload offset for USB byte {usb}");
-        }
-        assert_eq!(Ds5Feedback::TRIGGER_LEN, 11);
-    }
-
-    #[test]
-    fn lightbar_sets_only_its_enable_bit_and_its_three_bytes() {
-        let p = Ds5Feedback::lightbar_packet(0x11, 0x22, 0x33);
-        assert_eq!(p.len(), 47);
-        assert_eq!(p[1], 0x04, "valid_flag1 lightbar bit");
-        assert_eq!(p[0], 0, "must not claim any valid_flag0 field");
-        assert_eq!(
-            (
-                p[Ds5Feedback::LED_RGB],
-                p[Ds5Feedback::LED_RGB + 1],
-                p[Ds5Feedback::LED_RGB + 2]
-            ),
-            (0x11, 0x22, 0x33)
-        );
-        let touched = [
-            1,
-            Ds5Feedback::LED_RGB,
-            Ds5Feedback::LED_RGB + 1,
-            Ds5Feedback::LED_RGB + 2,
-        ];
-        assert!(p
-            .iter()
-            .enumerate()
-            .all(|(i, &b)| touched.contains(&i) || b == 0));
-    }
-
-    #[test]
-    fn player_leds_are_masked_to_five_bits() {
-        let p = Ds5Feedback::player_packet(0xFF);
-        assert_eq!(p[1], 0x10, "valid_flag1 player-indicator bit");
-        assert_eq!(
-            p[Ds5Feedback::PAD_LIGHTS],
-            0x1F,
-            "high bits are not ours to set"
-        );
-        let p = Ds5Feedback::player_packet(0b0000_0101);
-        assert_eq!(p[Ds5Feedback::PAD_LIGHTS], 0b0000_0101);
-    }
-
-    /// SDL's `ucEnableBits2` 0x01 enables `ucMicLightMode`; nothing else is claimed.
-    #[test]
-    fn mic_led_sets_only_its_enable_bit_and_mode() {
-        let p = Ds5Feedback::mic_led_packet(2);
-        assert_eq!(p[1], 0x01, "valid_flag1 mic-mute LED bit");
-        assert_eq!(p[0], 0, "must not claim any valid_flag0 field");
-        assert_eq!(p[Ds5Feedback::MIC_LED], 2);
-        assert_eq!(p.iter().filter(|&&b| b != 0).count(), 2);
-    }
-
-    /// which 1 = R2, which 0 = L2; the RIGHT block sits first in the report.
-    #[test]
-    fn trigger_which_selects_the_right_flag_and_offset() {
-        let eff: Vec<u8> = (1..=11).collect();
-
-        let r = Ds5Feedback::trigger_packet(1, &eff);
-        assert_eq!(r[0], 0x04, "valid_flag0 R2 bit");
-        assert_eq!(
-            &r[Ds5Feedback::RIGHT_TRIGGER..Ds5Feedback::RIGHT_TRIGGER + 11],
-            &eff[..]
-        );
-        assert_eq!(
-            r[Ds5Feedback::LEFT_TRIGGER],
-            0,
-            "the other trigger is untouched"
-        );
-
-        let l = Ds5Feedback::trigger_packet(0, &eff);
-        assert_eq!(l[0], 0x08, "valid_flag0 L2 bit");
-        assert_eq!(
-            &l[Ds5Feedback::LEFT_TRIGGER..Ds5Feedback::LEFT_TRIGGER + 11],
-            &eff[..]
-        );
-        assert_eq!(l[Ds5Feedback::RIGHT_TRIGGER], 0);
-    }
-
-    #[test]
-    fn an_oversized_effect_is_clamped_rather_than_overflowing_into_the_next_field() {
-        let long = vec![0xAAu8; 40];
-        let p = Ds5Feedback::trigger_packet(1, &long);
-        assert_eq!(p.len(), 47);
-        assert_eq!(p[Ds5Feedback::RIGHT_TRIGGER + 10], 0xAA);
-        assert_eq!(p[Ds5Feedback::RIGHT_TRIGGER + 11], 0);
-        assert_eq!(p[Ds5Feedback::LEFT_TRIGGER], 0);
-    }
-
-    #[test]
-    fn a_short_effect_leaves_the_rest_of_the_block_zeroed() {
-        let p = Ds5Feedback::trigger_packet(0, &[0x02, 0x99]);
-        assert_eq!(p[Ds5Feedback::LEFT_TRIGGER], 0x02);
-        assert_eq!(p[Ds5Feedback::LEFT_TRIGGER + 1], 0x99);
-        assert!(
-            p[Ds5Feedback::LEFT_TRIGGER + 2..Ds5Feedback::LEFT_TRIGGER + 11]
-                .iter()
-                .all(|&b| b == 0)
-        );
-    }
-
-    /// Empty effect is mode 0x00 = release. The enable bit must still be set, or the pad
-    /// keeps the latched effect.
-    #[test]
-    fn an_empty_effect_is_a_release_not_a_no_op() {
-        let p = Ds5Feedback::trigger_packet(1, &[]);
-        assert_eq!(p[0], 0x04);
-        assert!(
-            p[Ds5Feedback::RIGHT_TRIGGER..Ds5Feedback::RIGHT_TRIGGER + 11]
-                .iter()
-                .all(|&b| b == 0)
-        );
-    }
-}
-
-#[cfg(test)]
-mod reset_packet_tests {
-    use super::*;
-
-    /// Wrong enable flag or a non-zero mode byte leaves the effect latched.
-    #[test]
-    fn reset_packets_release_the_triggers_and_darken_the_lights() {
-        let l = Ds5Feedback::trigger_packet(0, &[0u8; 11]);
-        assert_eq!(l[0], 0x08, "left-trigger enable bit");
-        assert!(
-            l[Ds5Feedback::LEFT_TRIGGER..Ds5Feedback::LEFT_TRIGGER + 11]
-                .iter()
-                .all(|&b| b == 0),
-            "an all-zero block is mode 0x00 = no effect"
-        );
-        let r = Ds5Feedback::trigger_packet(1, &[0u8; 11]);
-        assert_eq!(r[0], 0x04, "right-trigger enable bit");
-        assert!(
-            r[Ds5Feedback::RIGHT_TRIGGER..Ds5Feedback::RIGHT_TRIGGER + 11]
-                .iter()
-                .all(|&b| b == 0)
-        );
-
-        let bar = Ds5Feedback::lightbar_packet(0, 0, 0);
-        assert_eq!(bar[1], 0x04, "lightbar enable bit");
-        assert_eq!(
-            &bar[Ds5Feedback::LED_RGB..Ds5Feedback::LED_RGB + 3],
-            &[0, 0, 0]
-        );
-
-        let pl = Ds5Feedback::player_packet(0);
-        assert_eq!(pl[1], 0x10, "player-LED enable bit");
-        assert_eq!(pl[Ds5Feedback::PAD_LIGHTS], 0);
     }
 }
 
