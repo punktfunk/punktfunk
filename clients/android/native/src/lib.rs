@@ -32,7 +32,7 @@ mod audio;
 // shell over EGL/GLES, on every ABI (the armv7 Skia archive is self-hosted — see Cargo.toml).
 #[cfg(target_os = "android")]
 mod console;
-// "Send logs to host": the log-ring upload (`pf-client-core` is Android-target-only here).
+// "Send logs to host": the log-ring upload. Android-only, like the logcat tee that fills the ring.
 #[cfg(target_os = "android")]
 mod logs;
 // AAudio callback arithmetic, `test`-gated on top of Android so its proof runs off-device.
@@ -40,8 +40,9 @@ mod logs;
 mod audio_format;
 #[cfg(target_os = "android")]
 mod decode;
-// Ungated: pure `mdns-sd` + `jni`, so the browse + its JNI seam link into the host workspace build
-// (and its unit test runs there) exactly like `session`/`stats`. Kotlin only ever calls it on device.
+// Gated like `pf_client_core::discovery`, the browse it folds: the Linux and Windows host builds
+// link the JNI seam and run its tests. Kotlin only ever calls it on device.
+#[cfg(any(target_os = "linux", windows, target_os = "android"))]
 mod discovery;
 mod feedback;
 // `decode`'s hung-decoder checks, `test`-gated like `audio_format` so their proof runs off-device.
@@ -58,7 +59,7 @@ mod pyro;
 mod session;
 mod stats;
 mod sys;
-// Ungated like `discovery`: pure `jni` + `punktfunk_core::wol` (no Android framework), so it links
+// Ungated: pure `jni` + `punktfunk_core::wol` (no Android framework), so it links
 // into the host workspace build too. Kotlin only ever calls it on device.
 mod wol;
 // Ungated like `wol`: pure `jni` + `punktfunk_core::client` (the reachability probe). Kotlin calls

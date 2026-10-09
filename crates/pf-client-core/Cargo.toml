@@ -58,7 +58,6 @@ pf-vkdecode = { path = "../pf-vkdecode", optional = true }
 # default unrepresentable rather than merely fixed — there is no second colour source
 # left to disagree with.
 pf-bitstream = { path = "../pf-bitstream", optional = true }
-async-channel = { version = "2", optional = true }
 
 # M8's software rung, the ladder's last one — no FFmpeg in either half.
 #
@@ -119,8 +118,6 @@ libc = { version = "0.2", optional = true }
 # vocabulary is `punktfunk_core::quic`'s own `CODEC_*` wire bits. The HOST still encodes
 # with libavcodec (`pf-encode`); nothing in this crate does.
 opus = { version = "0.4", optional = true }
-
-mdns-sd = { version = "0.21", optional = true }
 
 # Game-library fetch from the host's management API over mTLS + fingerprint pinning.
 # `ureq` is small + sync (the host uses it too) and its rustls unifies with the
@@ -263,10 +260,13 @@ pf-v4l2dec = { path = "../pf-v4l2dec", features = ["testing"] }
 # Windows, and the JNI client's own swapchain on Android (pyrowave-sys covers all three;
 # it is an empty stub elsewhere). Its own target table rather than the desktop one above,
 # because Android takes this crate `--no-default-features` — no decode ladder, no session
-# pump, just the wavelet lane. `ash` only wraps the owner's existing raw handles.
+# pump, just the wavelet lane and the mDNS browse. `ash` only wraps the owner's existing
+# raw handles.
 [target.'cfg(any(target_os = "linux", windows, target_os = "android"))'.dependencies]
 pyrowave-sys = { path = "../pyrowave-sys", optional = true }
 ash = { workspace = true, optional = true }
+mdns-sd = { version = "0.21", optional = true }
+async-channel = { version = "2", optional = true }
 
 [features]
 # `desktop` separates the full Linux/Windows stack — session pump, the native decode ladder,
@@ -299,7 +299,7 @@ d3d11va = ["dep:pf-dxvadec", "dep:windows"]
 # `discovery` is the mDNS browse (`mdns-sd`, `async-channel`) without the rest of `desktop`.
 # `desktop` includes it, so every desktop consumer is unchanged, and still names
 # `async-channel` for the session and gamepad paths. A shell that only looks for hosts says
-# `features = ["discovery"]`. Android and wasm say nothing — the module stays Linux and Windows.
+# `features = ["discovery"]`, as Android does for its JNI browse. Apple and wasm build without it.
 discovery = ["dep:mdns-sd", "dep:async-channel"]
 # PyroWave client decode ships in every default build (flatpak included; pyrowave-sys is a
 # vendored in-repo tree, offline-safe, and an empty stub off Linux/Windows). The codec is

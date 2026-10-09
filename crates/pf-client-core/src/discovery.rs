@@ -92,29 +92,36 @@ impl AdvertWatch {
     }
 }
 
-/// Continuous browse plus [`Rescan`]. Worker exits when the receiver is
-/// dropped or the daemon dies — polled on a tick, so an empty LAN still stops.
+/// Continuous browse plus [`Rescan`]. A browse that does not start yields a closed receiver.
 pub fn browse() -> (async_channel::Receiver<DiscoveryEvent>, Rescan) {
+    try_browse().unwrap_or_else(|| (async_channel::unbounded().1, Rescan(Arc::default())))
+}
+
+/// [`browse`], or `None` when the daemon, its browse or its worker does not start. The
+/// worker exits when the receiver is dropped or the daemon dies — polled on a 250 ms tick,
+/// so an empty LAN still stops — and shuts the daemon down on its way out.
+pub fn try_browse() -> Option<(async_channel::Receiver<DiscoveryEvent>, Rescan)> {
+    let daemon = ServiceDaemon::new()
+        .inspect_err(|e| tracing::warn!(error = %e, "mDNS daemon failed — discovery disabled"))
+        .ok()?;
+    let mut receiver = match daemon.browse(SERVICE_TYPE) {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::warn!(error = %e, "mDNS browse failed — discovery disabled");
+            let _ = daemon.shutdown();
+            return None;
+        }
+    };
     let (tx, rx) = async_channel::unbounded();
     let flag = Arc::new(AtomicBool::new(false));
     let requested = flag.clone();
-    std::thread::Builder::new()
+    let worker = daemon.clone();
+    let spawned = std::thread::Builder::new()
         .name("punktfunk-mdns".into())
         .spawn(move || {
-            let daemon = match ServiceDaemon::new() {
-                Ok(d) => d,
-                Err(e) => {
-                    tracing::warn!(error = %e, "mDNS daemon failed — discovery disabled");
-                    return;
-                }
-            };
-            let mut receiver = match daemon.browse(SERVICE_TYPE) {
-                Ok(r) => r,
-                Err(e) => {
-                    tracing::warn!(error = %e, "mDNS browse failed — discovery disabled");
-                    return;
-                }
-            };
+            // What the last SearchStarted named: the one line in a bug report that says
+            // whether the browse has any interface at all.
+            let mut announced = String::new();
             // Poll, do not `recv()`: no adverts is the empty-LAN case and
             // ignored events never touch `tx`. A blocking recv would leak this
             // thread, the daemon, and :5353 on every `discover_for` call.
@@ -128,7 +135,7 @@ pub fn browse() -> (async_channel::Receiver<DiscoveryEvent>, Rescan) {
                 if requested.swap(false, Ordering::Relaxed) {
                     // Re-browse REPLACES the listener: replays the cache, puts a
                     // PTR on the wire now, and resets the `Rescan` backoff.
-                    match daemon.browse(SERVICE_TYPE) {
+                    match worker.browse(SERVICE_TYPE) {
                         Ok(r) => receiver = r,
                         Err(e) => tracing::warn!(error = %e, "mDNS rescan failed"),
                     }
@@ -139,6 +146,13 @@ pub fn browse() -> (async_channel::Receiver<DiscoveryEvent>, Rescan) {
                     Err(_) => continue,
                 };
                 let update = match event {
+                    ServiceEvent::SearchStarted(what) => {
+                        if what != announced {
+                            tracing::info!("mDNS browse on {what}");
+                            announced = what;
+                        }
+                        continue;
+                    }
                     ServiceEvent::ServiceResolved(info) => {
                         let props = info.get_properties();
                         let v4: Vec<std::net::Ipv4Addr> =
@@ -162,17 +176,22 @@ pub fn browse() -> (async_channel::Receiver<DiscoveryEvent>, Rescan) {
                     break;
                 }
             }
-            let _ = daemon.shutdown();
-        })
-        .expect("spawn mdns thread");
-    (rx, Rescan(flag))
+            let _ = worker.shutdown();
+        });
+    if let Err(e) = spawned {
+        tracing::warn!(error = %e, "mDNS worker did not start — discovery disabled");
+        let _ = daemon.shutdown();
+        return None;
+    }
+    Some((rx, Rescan(flag)))
 }
 
-/// Folded advert map. Separate from [`discover_for`] so fold is testable offline.
-type Adverts = BTreeMap<String, DiscoveredHost>;
+/// Folded advert map, keyed by [`DiscoveredHost::key`]: one entry per host, however many
+/// instance names it advertises under.
+pub type Adverts = BTreeMap<String, DiscoveredHost>;
 
 /// Refresh wins (newer address). Removal drops by mDNS fullname, not `key`.
-fn fold(adverts: &mut Adverts, event: DiscoveryEvent) {
+pub fn fold(adverts: &mut Adverts, event: DiscoveryEvent) {
     match event {
         DiscoveryEvent::Resolved(host) => {
             adverts.insert(host.key.clone(), host);
@@ -321,9 +340,18 @@ mod tests {
             &mut adverts,
             DiscoveryEvent::Resolved(host("id-1", "desk._punktfunk._udp.local.", "192.168.1.20")),
         );
+        // The same host under a second instance name (an mDNS conflict suffix) that sorts first.
+        fold(
+            &mut adverts,
+            DiscoveryEvent::Resolved(host(
+                "id-1",
+                "desk (2)._punktfunk._udp.local.",
+                "192.168.1.30",
+            )),
+        );
         let out = sorted(adverts);
         assert_eq!(out.len(), 1, "same key must not render twice");
-        assert_eq!(out[0].addr, "192.168.1.20", "the newer address wins");
+        assert_eq!(out[0].addr, "192.168.1.30", "the newest advert wins");
     }
 
     #[test]
