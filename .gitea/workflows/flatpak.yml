@@ -42,6 +42,7 @@ on:
       - 'clients/cli/**'
       - 'crates/punktfunk-core/**'
       - 'crates/pf-client-core/**'
+      - 'crates/pf-client-video/**'
       - 'crates/pf-presenter/**'
       - 'crates/pf-console-ui/**'
       - 'crates/pf-bitstream/**'

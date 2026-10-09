@@ -325,7 +325,7 @@ modules:
       - sed -i '\#"clients/windows",#d' Cargo.toml
       - sed -i '\#"crates/punktfunk-setup-win",#d' Cargo.toml
       - python3 packaging/flatpak/prune-windows-toml.py crates/pf-client-core/Cargo.toml
-          crates/pf-presenter/Cargo.toml
+          crates/pf-client-video/Cargo.toml crates/pf-presenter/Cargo.toml
       # One cargo invocation for both binaries: the shell and the Vulkan session binary it
       # execs for --connect/--browse. Building them together keeps skia-bindings' feature
       # unification identical to a workspace build (the pinned skia-binaries archive's

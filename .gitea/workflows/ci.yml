@@ -158,7 +158,7 @@ jobs:
       # and constant must match.
       #
       # Only shaders whose rebuild command is plain `glslangValidator -V` belong here. The four
-      # pf-client-core blobs are compiled by their build.sh with `glslc -O`, so gating them would
+      # pf-client-video blobs are compiled by their build.sh with `glslc -O`, so gating them would
       # pin this diff to CI's spirv-opt version and go red on a toolchain bump, not on drift.
       #
       # Disassemble to FILES rather than `diff <(…) <(…)`: Gitea's runner executes a step's `run:`
@@ -494,7 +494,8 @@ jobs:
       - name: Clippy for aarch64 (deny warnings)
         run: |
           cargo clippy --target aarch64-unknown-linux-gnu --all-targets --locked \
-            -p punktfunk-core -p punktfunk-ffi -p pf-client-core -p pf-presenter -p pf-console-ui \
+            -p punktfunk-core -p punktfunk-ffi -p pf-client-core -p pf-client-video -p pf-presenter \
+            -p pf-console-ui \
             -p punktfunk-client-session -p punktfunk-client-linux \
             --features punktfunk-ffi/quic -- -D warnings
 

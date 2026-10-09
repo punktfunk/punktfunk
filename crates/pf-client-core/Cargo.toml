@@ -1,6 +1,6 @@
 [package]
 name = "pf-client-core"
-description = "Shared client plumbing (Linux + Windows) — session pump, native video decode, PipeWire/WASAPI audio, SDL3 gamepads, trust store, discovery — extracted from the GTK client so the shells and the Vulkan session binary build on one implementation"
+description = "Shared client plumbing (Linux + Windows) — session pump, PipeWire/WASAPI audio, SDL3 gamepads, trust store, discovery — extracted from the GTK client so the shells and the Vulkan session binary build on one implementation"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -46,71 +46,10 @@ rand = "0.10"
 
 [target.'cfg(any(target_os = "linux", windows))'.dependencies]
 punktfunk-core = { path = "../punktfunk-core", features = ["quic", "serde"] }
-# Native Vulkan Video decode (WP-C of the native-decode program, HEVC added by M3
-# WP-2, AV1 by M7): auto's TOP rung on both desktop OSes since M9 — for every codec it
-# speaks, AV1 included — also pinnable via `PUNKTFUNK_DECODER=native-vulkan` —
-# video_vk_native.rs, running pf-vkdecode's VkH264Decoder/VkH265Decoder/VkAv1Decoder on
-# the presenter's shared device.
-pf-vkdecode = { path = "../pf-vkdecode", optional = true }
-# The one bitstream parser (M1): the SOFTWARE rung reads its per-picture colour
-# signalling, IDR flag and recovery-point SEI from the same `AuPlan` every hardware rung
-# already submits from (`video_software.rs`). That is what makes the swscale BT.601
-# default unrepresentable rather than merely fixed — there is no second colour source
-# left to disagree with.
-pf-bitstream = { path = "../pf-bitstream", optional = true }
-
-# M8's software rung, the ladder's last one — no FFmpeg in either half.
-#
-# H.264: openh264 (BSD-2), already a workspace dependency (the HOST's GPU-less encoder,
-# `pf-encode/src/enc/sw.rs`), so the licence posture and the bundled-source build are
-# both already settled and already compiled by every `--workspace` leg.
-#
-# AV1: rav1d (BSD-2) — dav1d itself, ported to Rust by the ISRG/Prossimo memory-safety
-# project. The plan of record names "dav1d"; the `dav1d` crate reaches it through
-# `dav1d-sys`, which is `system-deps`-only (no vendored build): it needs `dav1d.pc` +
-# headers at build time and `libdav1d.so`/`dav1d.dll` at run time on EVERY client
-# package. That is a new system codec dependency added by the milestone family whose
-# §6 excision checklist exists to delete exactly those. rav1d is the same decoder with
-# none of that: pure Rust, no linker, nothing new in any package.
-#
-# ⚠ Both of these are NEW COMPILE COST on the client packaging legs, which is easy to
-# miss because the workspace already built openh264: every client leg is `-p`-scoped and
-# excludes pf-encode (flatpak's `cargo build -p punktfunk-client-linux -p
-# punktfunk-client-session -p punktfunk-cli`, windows.yml/windows-msix.yml's
-# `-p punktfunk-client-windows …`, deb.yml's client job, packaging/nix's
-# `punktfunk-client`), so all of them compile the bundled OpenH264 tree for the FIRST
-# time here. Only the `--workspace` CI legs and the host packages built it before.
-#
-# `default-features = false` drops two things deliberately:
-#  * `asm` — rav1d's hand-written assembly needs `nasm` at build time, and it is NOT the
-#    same trade openh264 makes next to it: openh264-sys2's `try_compile_nasm` returns
-#    quietly when nasm is missing ("Failed to compile NASM files, not using any
-#    assembly") and the C build still succeeds, whereas rav1d's build.rs PANICS ("NASM
-#    build failed. Make sure you have nasm installed or disable the \"asm\" feature").
-#    So turning `asm` on makes nasm a hard build requirement of every client package,
-#    and `ci/rust-ci.Dockerfile` — the container the client .deb and the workspace CI
-#    build in — does not have it (arch, rpm, nix and the FFmpeg-building noble image
-#    all do; the flatpak GNOME SDK and the Windows runner are not provisioned by
-#    anything in this tree). Making the rung that only ever runs BECAUSE the GPU
-#    already failed a build-breaker for the legs that ship it is the wrong way round.
-#    Turn it back on the day every client leg provisions nasm — and expect a large
-#    speedup when you do; this is dav1d's asm, and the Rust fallbacks are much slower.
-#  * `bitdepth_16` — the CPU rung is 8-bit by contract (`video_software.rs` refuses
-#    anything else rather than mis-scaling it), so building the 10/12-bit half would be
-#    compiling a path the code refuses to take.
-#
-# One packaging risk this DOESN'T carry: rav1d exports dav1d's C ABI as `#[no_mangle]`
-# symbols (`dav1d_open`, `dav1d_send_data`, …), which could in principle interpose on a
-# real libdav1d loaded into the same process. It cannot here — these are Rust `staticlib`
-# symbols in an executable with no `-rdynamic` and no dynamic export table entry, so the
-# loader never offers them to anyone. That changes if pf-client-core ever becomes a
-# `cdylib` or a leg adds `-rdynamic`/`--export-dynamic`; re-check it then.
-openh264 = { version = "0.9", optional = true }
-rav1d = { version = "1", default-features = false, features = ["bitdepth_8"], optional = true }
-# errno names for rav1d's negated-`c_int` returns (`video_software.rs`): `ENOPROTOOPT` —
-# the code a `bitdepth_8`-only build answers a 10-bit stream with — is 92 on Linux and
-# 123 on Windows, and rav1d re-exports only `Dav1dResult`, so the typed enum that would
-# otherwise name it is out of reach. Already in the tree (rav1d's own dependency).
+# The decode ladder (`video`, `video_*`). Optional, so webOS — `target_os = "linux"` without
+# `desktop` — never builds it.
+pf-client-video = { path = "../pf-client-video", default-features = false, optional = true }
+# SIGTERM for the session child (`orchestrate`) and thread priority (`audio_rt`).
 libc = { version = "0.2", optional = true }
 
 # Opus for the audio planes. The VIDEO side has no FFmpeg at all since M10: every decode
@@ -162,25 +101,8 @@ sdl3 = { version = "0.20", features = ["hidapi"], optional = true }
 # core's `quic` already resolves tokio for this crate, `blocking-api` because the callers are
 # plain worker threads, no default `async-io`.
 zbus = { version = "5", default-features = false, features = ["tokio", "blocking-api"], optional = true }
-# Native VAAPI decode (M6 of the native-decode program): the hand-declared libva buffer
-# layouts, the profile/format/surface decisions, the AuPlan → picparams/IQ/slice
-# conversion and the DRM-PRIME export descriptor that `video_vaapi_native` marshals.
-# Cross-platform on purpose — everything decidable without a device is tested by the
-# ordinary macOS and container gates, exactly as pf-dxvadec does for Windows.
-pf-vaapi = { path = "../pf-vaapi", optional = true }
-pf-libva = { path = "../pf-libva", optional = true }
-# V4L2 stateful decode: the hand-declared uAPI and the queue state machine that
-# `video_v4l2` drives with ioctls. Device-free, so its tests run on every gate.
-pf-v4l2dec = { path = "../pf-v4l2dec", optional = true }
-# Its ioctl half: decoder nodes, media requests, buffer mapping, dma-buf export.
-pf-v4l2 = { path = "../pf-v4l2", optional = true }
-# `fence`: the decode's write fence as a sync_file, so the presenter waits it
-# on the GPU instead of the pump blocking in `vaSyncSurface`.
+# `fence`: the pump waits a decode's sync_file before it hands the picture on.
 pf-dmabuf = { path = "../pf-dmabuf", optional = true }
-# libva itself is dlopen'd, never linked (see `video_vaapi_native`'s module docs): the
-# container can then compile and clippy the whole rung without `libva-dev`, and a machine
-# without a VAAPI runtime gets a clean refusal instead of a packaging dependency.
-libloading = { version = "0.9", optional = true }
 # The gamescope overlay watcher (`overlay_focus`): read two CARDINAL properties off a
 # gamescope root window and block on PropertyNotify. `default-features = false` keeps the
 # pure-Rust `RustConnection` — no libxcb link, so no new C dependency on any client package
@@ -193,78 +115,36 @@ socket2 = { version = "0.6", optional = true }
 
 [target.'cfg(windows)'.dependencies]
 wasapi = { version = "0.25", optional = true }
-# Native D3D11VA decode (M5 of the native-decode program): the hand-declared DXVA buffer
-# layouts and the AuPlan → picparams/qmatrix/slice-control conversion that video_d3d11_native
-# submits. Windows-only because the rung is; the crate itself is cross-platform CPU code so
-# its tests run on every CI leg (which is the point — `cfg(windows)` code cannot be tested by
-# the Linux or macOS gates at all).
-pf-dxvadec = { path = "../pf-dxvadec", optional = true }
 # Pad-audio correlation (pad_audio.rs): the HID devnode's ContainerID and a render endpoint's
 # stamped PKEY_Device_ContainerId both live in the registry — read-only, which sidesteps COM
 # property stores entirely (the same version the host pins).
 winreg = { version = "0.56", optional = true }
 sdl3 = { version = "0.20", features = ["hidapi", "build-from-source"], optional = true }
-# D3D11 decode-device plumbing (video_d3d11.rs): device/adapter selection, DXVA probes, and
-# the shared NT-handle hand-off ring `video_d3d11_native` fills. The workspace entry's git rev,
-# so `windows-core` unifies with windows-reactor's. `wasapi` pulls the crates.io copy too;
-# clients/windows/Cargo.toml says why it stays.
+# The OS-clipboard bridge (clipboard.rs) and the reduce-motion query (os_prefs.rs). The
+# workspace entry's pinned rev, so `windows-core` unifies with windows-reactor's. `wasapi`
+# pulls the crates.io copy too; clients/windows/Cargo.toml says why it stays.
 windows = { workspace = true, optional = true, features = [
     # Features are header-named since windows-rs generates from the SDK headers directly
     # (#4689) — one feature per header, replacing the old `Win32_*` namespace features.
-    "d3d11",
-    "d3dcommon",
-    "dxgi",
-    "handleapi",
-    # RECT/HMONITOR for DXGI_OUTPUT_DESC1 (the display-HDR volume query).
-    "windef",
-    # HGLOBAL (clipboard.rs) + HINSTANCE (video_d3d11.rs), and the NT `HANDLE` the shared-surface
-    # hand-off uses. Both headers were used without being declared — they resolved only because
-    # clients/windows enables them on the same pinned rev, so this crate did not build standalone.
+    # Open/Get/SetClipboardData, the sequence number, SystemParametersInfoW.
+    "winuser",
+    # The GlobalAlloc block the clipboard takes ownership of, its HGLOBAL and HANDLE.
+    "winbase",
     "minwindef",
     "winnt",
-    # IDXGIResource1::CreateSharedHandle takes an optional SECURITY_ATTRIBUTES.
-    "minwinbase",
-    # The GlobalAlloc block the clipboard takes ownership of (clipboard.rs).
-    "winbase",
-    # The OS-clipboard bridge (clipboard.rs): Open/Get/SetClipboardData + the sequence
-    # number — all in winuser now.
-    "winuser",
+    # OpenClipboard's HWND.
+    "windef",
 ] }
 
 [target.'cfg(any(target_os = "linux", windows))'.dev-dependencies]
-# The two platform native rungs' frame-hash parity tests compare decoded surfaces against
-# the libavcodec goldens M5 captured — the same SHA-256 list, and the same crate,
-# pf-vkdecode's Vulkan parity legs use (already in the workspace lock). The goldens are
-# checked-in hashes; nothing links FFmpeg to read them.
-#
-# Windows was the only platform here until the VAAPI rung grew a readback: `cfg(windows)`
-# for `video_d3d11_native::parity`, now `cfg(linux)` as well for
-# `video_vaapi_native::parity`. A DEV dependency, so no shipped binary gains anything —
-# which is also part of why the VAAPI readback cannot reach the production video path.
-sha2 = "0.11"
 # `logring`'s bridged-decoder test plants `log`-crate records through the tracing-log
 # bridge and installs a registry subscriber — the full-featured halves the shipping layer
 # deliberately doesn't need.
 log = "0.4"
 tracing-subscriber = { version = "0.3" }
-# `pf_bitstream::testing`: the vendored vectors and access-unit splitters.
-pf-bitstream = { path = "../pf-bitstream", features = ["test-vectors"] }
 
-[target.'cfg(target_os = "linux")'.dev-dependencies]
-# `pf_v4l2dec::testing`: the device-free decoder the V4L2 rung's tests drive.
-pf-v4l2dec = { path = "../pf-v4l2dec", features = ["testing"] }
-
-# PyroWave decode (the opt-in wired-LAN wavelet codec, design/pyrowave-codec-plan.md
-# §4.5) — pure Vulkan compute on the device the frame is presented from, so it builds
-# wherever a Vulkan present path exists: the spawned session presenter on Linux and
-# Windows, and the JNI client's own swapchain on Android (pyrowave-sys covers all three;
-# it is an empty stub elsewhere). Its own target table rather than the desktop one above,
-# because Android takes this crate `--no-default-features` — no decode ladder, no session
-# pump, just the wavelet lane and the mDNS browse. `ash` only wraps the owner's existing
-# raw handles.
+# The mDNS browse (`discovery`), which Android takes without `desktop`.
 [target.'cfg(any(target_os = "linux", windows, target_os = "android"))'.dependencies]
-pyrowave-sys = { path = "../pyrowave-sys", optional = true }
-ash = { workspace = true, optional = true }
 mdns-sd = { version = "0.21", optional = true }
 async-channel = { version = "2", optional = true }
 
@@ -286,16 +166,16 @@ async-channel = { version = "2", optional = true }
 default = ["desktop", "pyrowave"]
 desktop = [
     "punktfunk-core/ureq-tls",
-    "dep:pf-vkdecode", "dep:pf-bitstream", "dep:async-channel", "dep:openh264", "dep:rav1d",
+    "dep:pf-client-video", "pf-client-video/desktop", "dep:async-channel",
     "dep:libc", "dep:opus", "discovery", "dep:ureq", "dep:pf-update-check", "dep:rustls",
     "dep:tracing-subscriber", "dep:tracing-log",
-    "dep:pipewire", "dep:sdl3", "dep:zbus", "dep:pf-vaapi", "dep:pf-libva", "dep:pf-v4l2dec", "dep:pf-v4l2", "dep:libloading", "dep:x11rb", "dep:socket2",
+    "dep:pipewire", "dep:sdl3", "dep:zbus", "dep:x11rb", "dep:socket2",
     "dep:pf-dmabuf",
-    "dep:wasapi", "dep:winreg", "d3d11va",
+    "dep:wasapi", "dep:winreg", "dep:windows", "d3d11va",
 ]
-# DXVA device and native rung. `desktop` includes it. The `windows` header list
-# stays the full set, because clipboard.rs needs `winuser` and `winbase`.
-d3d11va = ["dep:pf-dxvadec", "dep:pf-bitstream", "dep:windows"]
+# pf-client-video's DXVA device and native rung, without the rest of `desktop`, which
+# includes it.
+d3d11va = ["dep:pf-client-video", "pf-client-video/d3d11va"]
 # `discovery` is the mDNS browse (`mdns-sd`, `async-channel`) without the rest of `desktop`.
 # `desktop` includes it, so every desktop consumer is unchanged, and still names
 # `async-channel` for the session and gamepad paths. A shell that only looks for hosts says
@@ -304,12 +184,8 @@ discovery = ["dep:mdns-sd", "dep:async-channel"]
 # PyroWave client decode ships in every default build (flatpak included; pyrowave-sys is a
 # vendored in-repo tree, offline-safe, and an empty stub off Linux/Windows). The codec is
 # still strictly per-session opt-in (Settings codec pick / PUNKTFUNK_PREFER_PYROWAVE=1).
-pyrowave = ["dep:pyrowave-sys", "dep:ash"]
-
-# Headless wavelet decode bench over a `PUNKTFUNK_DUMP_VIDEO` capture.
-[[example]]
-name = "pyrowave_bench"
-required-features = ["pyrowave"]
+# Forwards to pf-client-video, which `desktop` pulls.
+pyrowave = ["pf-client-video?/pyrowave"]
 
 # build.rs names the `portable` and `desktop` module gates.
 [build-dependencies]

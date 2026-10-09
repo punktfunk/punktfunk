@@ -1,7 +1,7 @@
 //! Headless PyroWave decode bench: the client decoder over a `PUNKTFUNK_DUMP_VIDEO`
 //! capture, with no window and no network.
 //!
-//! `cargo run --release -p pf-client-core --example pyrowave_bench -- <capture> [WxH] [bits] [secs]`
+//! `cargo run --release -p pf-client-video --example pyrowave_bench -- <capture> [WxH] [bits] [secs]`
 //!
 //! Prints the frame rate, the per-frame split (parse, record, GPU) and the decoder's own
 //! GPU stage times. `PYROWAVE_BENCH_GPU=<substring>` picks the adapter. A capture comes
@@ -26,9 +26,9 @@ mod bench {
     use anyhow::{Context as _, Result};
     use ash::vk;
     use ash::vk::Handle as _;
-    use pf_client_core::video_color::ColorDesc;
-    use pf_client_core::video_pyrowave::PyroWaveDecoder;
-    use pf_client_core::video_vk::{QueueLock, VulkanDecodeDevice};
+    use pf_client_video::video_color::ColorDesc;
+    use pf_client_video::video_pyrowave::PyroWaveDecoder;
+    use pf_client_video::video_vk::{QueueLock, VulkanDecodeDevice};
     use std::time::{Duration, Instant};
 
     /// One capture AU: byte range, chunk-aligned, complete.

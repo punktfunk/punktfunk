@@ -33,6 +33,7 @@ on:
       - 'crates/pf-bitstream/**'
       - 'crates/pf-capture/**'
       - 'crates/pf-client-core/**'
+      - 'crates/pf-client-video/**'
       - 'crates/pf-clipboard/**'
       - 'crates/pf-console-ui/**'
       - 'crates/pf-dmabuf/**'

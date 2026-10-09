@@ -7,7 +7,7 @@
 //! packet stream decoded by GPU compute into three Y′CbCr planes, and those planes are
 //! sampled straight into a Vulkan swapchain on the same `SurfaceView`
 //! ([`present`]). The decoder itself is the SHARED one the Linux and Windows clients use
-//! (`pf_client_core::video_pyrowave`); only the device and the present path are ours.
+//! (`pf_client_video::video_pyrowave`); only the device and the present path are ours.
 //!
 //! **Intra-only, which removes most of a decode loop.** Every frame stands alone, so
 //! there is no reference chain to lose: no re-anchor freeze, no keyframe requests, no
@@ -29,8 +29,8 @@ mod imp {
     use super::{device::PyroDevice, present::Present};
     use anyhow::{anyhow, Result};
     use ndk::native_window::NativeWindow;
-    use pf_client_core::video_color::ColorDesc;
-    use pf_client_core::video_pyrowave::PyroWaveDecoder;
+    use pf_client_video::video_color::ColorDesc;
+    use pf_client_video::video_pyrowave::PyroWaveDecoder;
     use punktfunk_core::client::NativeClient;
     use punktfunk_core::error::PunktfunkError;
     use std::sync::atomic::{AtomicBool, Ordering};

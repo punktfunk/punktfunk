@@ -1,6 +1,6 @@
 [package]
 name = "pf-dxvadec"
-description = "Native D3D11VA (DXVA) H.264/HEVC/AV1 decode for the Windows clients (M5, M7): the hand-declared DXVA buffer layouts plus AuPlan → picparams/qmatrix/slice-control (AV1: tile-control) conversion — the CPU-testable half; the ID3D11VideoDecoder plumbing lives in pf-client-core’s video_d3d11_native (design/client-native-decode.md §3.4)"
+description = "Native D3D11VA (DXVA) H.264/HEVC/AV1 decode for the Windows clients (M5, M7): the hand-declared DXVA buffer layouts plus AuPlan → picparams/qmatrix/slice-control (AV1: tile-control) conversion — the CPU-testable half; the ID3D11VideoDecoder plumbing lives in pf-client-video’s video_d3d11_native (design/client-native-decode.md §3.4)"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

@@ -105,6 +105,7 @@ on:
       - 'clients/cli/**'
       - 'crates/punktfunk-core/**'
       - 'crates/pf-client-core/**'
+      - 'crates/pf-client-video/**'
       - 'crates/pf-presenter/**'
       - 'crates/pf-console-ui/**'
       - 'crates/pf-bitstream/**'
@@ -125,6 +126,7 @@ on:
       - 'clients/cli/**'
       - 'crates/punktfunk-core/**'
       - 'crates/pf-client-core/**'
+      - 'crates/pf-client-video/**'
       - 'crates/pf-presenter/**'
       - 'crates/pf-console-ui/**'
       - 'crates/pf-bitstream/**'
@@ -302,7 +304,7 @@ jobs:
           # Every crate in the `paths:` trigger above but punktfunk-core is named here: `cargo
           # clippy -p X` BUILDS a dependency but only LINTS the packages it is given. The arm64
           # build has no Skia console and no PyroWave, so those two are x64 only.
-          $pkgs = @('-p','punktfunk-client-windows','-p','punktfunk-client-session','-p','punktfunk-cli','-p','pf-client-core','-p','pf-presenter','-p','pf-bitstream','-p','pf-vkdecode','-p','pf-dxvadec','-p','pf-update-check')
+          $pkgs = @('-p','punktfunk-client-windows','-p','punktfunk-client-session','-p','punktfunk-cli','-p','pf-client-core','-p','pf-client-video','-p','pf-presenter','-p','pf-bitstream','-p','pf-vkdecode','-p','pf-dxvadec','-p','pf-update-check')
           $sf = @()
           if ('${{ matrix.target }}' -eq 'aarch64-pc-windows-msvc') { $sf = @('--no-default-features') } else { $pkgs += @('-p','pf-console-ui','-p','pyrowave-sys') }
           cargo clippy --release --locked @pkgs --all-targets @sf --target ${{ matrix.target }} -- -D warnings
@@ -312,7 +314,7 @@ jobs:
         if: matrix.arch == 'x64'
         shell: pwsh
         run: |
-          cargo fmt -p punktfunk-client-windows -p punktfunk-client-session -p punktfunk-cli -p pf-client-core -p pf-presenter -p pf-console-ui -p pf-dxvadec -- --check
+          cargo fmt -p punktfunk-client-windows -p punktfunk-client-session -p punktfunk-cli -p pf-client-core -p pf-client-video -p pf-presenter -p pf-console-ui -p pf-dxvadec -- --check
           if ($LASTEXITCODE) { throw "rustfmt" }
 
       - name: Test
@@ -320,7 +322,7 @@ jobs:
         if: matrix.arch == 'x64'
         shell: pwsh
         run: |
-          cargo test --profile ci-test --locked -p punktfunk-client-windows -p punktfunk-client-session -p punktfunk-cli -p pf-client-core -p pf-presenter -p pf-console-ui -p pf-dxvadec --target ${{ matrix.target }}
+          cargo test --profile ci-test --locked -p punktfunk-client-windows -p punktfunk-client-session -p punktfunk-cli -p pf-client-core -p pf-client-video -p pf-presenter -p pf-console-ui -p pf-dxvadec --target ${{ matrix.target }}
           if ($LASTEXITCODE) { throw "tests" }
 
       # d3d11va without desktop. The release build above enables desktop, so it never
@@ -331,7 +333,7 @@ jobs:
         if: matrix.arch == 'x64'
         shell: pwsh
         run: |
-          cargo clippy --release --locked -p pf-client-core --no-default-features --features d3d11va --target ${{ matrix.target }} -- -D warnings
+          cargo clippy --release --locked -p pf-client-core -p pf-client-video --no-default-features --features d3d11va --target ${{ matrix.target }} -- -D warnings
           if ($LASTEXITCODE) { throw "d3d11va clippy" }
 
       - name: sccache stats (visibility only)
