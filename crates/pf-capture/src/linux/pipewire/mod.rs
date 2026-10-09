@@ -1,10 +1,12 @@
 //! The PipeWire consumer, confined to its own thread (the PW types are `!Send`).
 //!
-//! [`plan`] resolves the zero-copy negotiation, [`offers`] builds the modifier offers,
-//! [`thread`] runs the stream, [`consume`] turns one buffer into a frame, [`queue`] keeps the
-//! frames until their renders finish, [`hold`] keeps a published buffer from the producer
-//! until encode lets go, and [`pacer`] drives a lazy producer.
+//! [`capturer`] is the front end the encode loop holds, [`plan`] resolves the zero-copy
+//! negotiation, [`offers`] builds the modifier offers, [`thread`] runs the stream, [`consume`]
+//! turns one buffer into a frame, [`queue`] keeps the frames until their renders finish,
+//! [`hold`] keeps a published buffer from the producer until encode lets go, and [`pacer`]
+//! drives a lazy producer.
 
+mod capturer;
 mod consume;
 mod hold;
 mod offers;
@@ -13,12 +15,9 @@ mod plan;
 mod queue;
 mod thread;
 
-pub(super) use consume::{realtime_minus_monotonic_ns, FenceWaitStats};
-pub(super) use plan::{
-    gpu_import, negotiation_plan, ImportOutcome, ImportPolicy, ImportState, NegotiationInputs,
-};
-pub(super) use queue::{wait_ready, FrameQueue, Taken};
-pub(super) use thread::pipewire_thread;
+pub(crate) use capturer::PortalCapturer;
+pub(super) use consume::realtime_minus_monotonic_ns;
+use queue::{FrameQueue, Taken};
 
 use super::pw_cursor::CursorState;
 use super::sync_timeline::SyncDevice;
@@ -26,9 +25,56 @@ use super::{CapturedFrame, PixelFormat};
 use hold::{DeferredRequeue, PoolCensus};
 use pacer::Pacer;
 use pipewire as pw;
-use plan::PassthroughFallbacks;
+use plan::{ImportPolicy, ImportState, PassthroughFallbacks};
 use pw::spa::param::video::{VideoFormat, VideoInfoRaw};
 use std::sync::mpsc::SyncSender;
+
+/// Named bools: four adjacent same-typed args transpose silently and
+/// negotiate the wrong pod family (black screen).
+#[derive(Clone, Copy)]
+struct CaptureOpts {
+    /// `false` forces CPU mmap even when `PUNKTFUNK_ZEROCOPY` is set — the
+    /// session plan does that when 4:4:4 has no zero-copy convert (`SessionPlan::output_format`).
+    allow_zerocopy: bool,
+    /// Tiled dmabufs convert via `ImportKind::Tiled444`, not NV12/RGB.
+    want_444: bool,
+    /// Offer only 10-bit PQ/BT.2020 as LINEAR dmabufs. SHM cannot: Mutter's
+    /// SHM path paints 8-bit ARGB32, and the tiled EGL blit is 8-bit.
+    want_hdr: bool,
+    /// 10-bit SDR: keep packed RGB (skip the NV12 convert) so direct-NVENC widens 8→10. A
+    /// planar 8-bit surface fails a 10-bit NVENC session; packed RGB is the only 8-bit input
+    /// it accepts there.
+    ten_bit_sdr: bool,
+    /// The producer offers 10-bit SDR (gamescope from `+pfhdr26`): its P010 and packed 10-bit
+    /// pods go out under BT.709 ahead of the 8-bit ones, which stay as the fallback.
+    sdr10_native: bool,
+    /// Skip buffers until negotiated size matches `preferred` — KWin virtual
+    /// outputs birth a sacrificial mode then renegotiate (`kwin.rs` `create`).
+    /// `false` elsewhere: Mutter sizes from negotiation; gamescope fixates.
+    expect_exact_dims: bool,
+    /// `true` (KWin): `id == 0` means pointer hidden — producer rewrites
+    /// `SPA_META_Cursor` every buffer. `false` (Mutter): buffers recycle
+    /// the region. See [`CursorState::id0_hides`].
+    cursor_id0_hides: bool,
+    /// Gamescope omits cursor metadata. Its proved tiled formats lead; LINEAR remains fallback.
+    producer_is_gamescope: bool,
+    /// Least dmabuf pool depth to ask for: [`crate::POOL_MIN`], or
+    /// [`crate::KWIN_POOL_MIN`] so KWin's default of 3 cannot win.
+    pool_min: i32,
+    /// Deepest pool the producer serves ([`crate::KWIN_POOL_MAX`]); `None` serves any depth.
+    /// A deeper ask for the raw lane stops here.
+    pool_max: Option<i32>,
+    /// Offer `maxFramerate = 0/1` so KWin records on its own frame signal
+    /// rather than a millisecond-rounded timer. KWin only; see
+    /// [`crate::unpaced_capture`].
+    unpaced: bool,
+    /// Drive the producer as a PipeWire lazy driver when it emits RequestProcess
+    /// (Mutter ≥ 49 virtual monitors): it then paints when it asks, one paint per
+    /// wire interval at most. See [`crate::lazy_capture`].
+    lazy: bool,
+    /// The wire rate ([`crate::VirtualOutputOpts::stream_hz`]); `0` = unknown.
+    stream_hz: u32,
+}
 
 fn map_format(f: VideoFormat) -> Option<PixelFormat> {
     Some(match f {

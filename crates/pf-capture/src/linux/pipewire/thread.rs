@@ -7,7 +7,7 @@ use super::pacer::{wire_interval, Pacer, RawTimer, RequestListener, HEARTBEAT};
 use super::plan::{
     consumer_kind, resolved_capture_arm, ImportState, NegotiationPlan, PassthroughFallbacks,
 };
-use super::{map_format, UserData};
+use super::{map_format, CaptureOpts, UserData};
 use crate::linux::pw_cursor::{update_cursor_meta, CursorState};
 use crate::linux::pw_pods::{
     build_cursor_meta_param, build_damage_meta_param, build_default_format_obj,
@@ -17,7 +17,7 @@ use crate::linux::pw_pods::{
     SPA_VIDEO_TRANSFER_SMPTE2084,
 };
 use crate::linux::sync_timeline::{hand_back, SyncDevice};
-use crate::linux::{CaptureOpts, CaptureSignals};
+use crate::linux::CaptureSignals;
 use crate::ZeroCopyPolicy;
 use anyhow::{Context, Result};
 use pipewire as pw;
