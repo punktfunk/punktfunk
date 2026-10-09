@@ -12,13 +12,15 @@ use std::ffi::c_void;
 use std::mem::offset_of;
 use std::mem::size_of;
 
+pub use crate::config::VA_RT_FORMAT_YUV420;
+pub use crate::config::VA_RT_FORMAT_YUV420_10;
+pub use crate::config::VA_SURFACE_ATTRIB_MEM_TYPE_DRM_PRIME_2;
+
 pub const VA_PROFILE_NONE: i32 = -1;
 pub const VA_ENTRYPOINT_VIDEO_PROC: i32 = 10;
 pub const VA_PROC_PIPELINE_PARAMETER_BUFFER_TYPE: u32 = 41;
 
-/// `VAConfigAttribRTFormat` bits: what a surface pool holds.
-pub const VA_RT_FORMAT_YUV420: u32 = 0x0000_0001;
-pub const VA_RT_FORMAT_YUV420_10: u32 = 0x0000_0100;
+/// `VAConfigAttribRTFormat` bits for packed RGB, which only ingest uses.
 pub const VA_RT_FORMAT_RGB32: u32 = 0x0002_0000;
 pub const VA_RT_FORMAT_RGB32_10: u32 = 0x0020_0000;
 
@@ -26,7 +28,6 @@ pub const VA_RT_FORMAT_RGB32_10: u32 = 0x0020_0000;
 pub const VA_SURFACE_ATTRIB_MEMORY_TYPE: i32 = 6;
 pub const VA_SURFACE_ATTRIB_EXTERNAL_BUFFER_DESCRIPTOR: i32 = 7;
 pub const VA_GENERIC_VALUE_TYPE_POINTER: i32 = 3;
-pub const VA_SURFACE_ATTRIB_MEM_TYPE_DRM_PRIME_2: u32 = 0x4000_0000;
 
 /// `VAProcColorStandardExplicit`: the colour is in the properties, both sides.
 /// Mesa derives a *named* output standard from the input's, so a named BT.2020

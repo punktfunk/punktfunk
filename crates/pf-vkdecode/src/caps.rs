@@ -166,7 +166,7 @@ pub enum MaxLevelIdc {
     /// Valid only over 0…23. `seq_level_idx` is 5 bits; 31 is Annex A's "maximum
     /// parameters" sentinel and outranks even a device at the enum's top. The AV1
     /// gate therefore treats a stream above this ceiling as advisory
-    /// (`VkAv1Decoder::ensure_state`).
+    /// (`VkDecoder::ensure_state`).
     Av1(hh::StdVideoAV1Level),
 }
 
@@ -576,7 +576,7 @@ impl H264ProfileChain {
 /// are all `c_uint`; a bare idc would let one codec's profile build another's
 /// chain. The enum makes that unrepresentable.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum DecodeProfile {
+pub enum DecodeProfile {
     H264(hh::StdVideoH264ProfileIdc),
     H265(H265ProfileKey),
     /// AV1's key also carries `filmGrainSupport`, which is part of the profile,
