@@ -1129,37 +1129,19 @@ fn launch_session(client: &str, unit_name: &str, mode: Mode, hdr: bool) -> Resul
         }
         // A relaunch follows our own failed run; its line must not count toward the box's reset.
         forget_host_short_sessions();
+        let env = bind
+            .map(SessionBind::run_args)
+            .unwrap_or_default()
+            .into_iter()
+            .chain(wsi.setenv_args(hdr))
+            .chain(xkb_setenv_args())
+            .chain(discovery::reaper_path_env().map(|path| format!("--setenv=PATH={path}")))
+            .collect();
+        let flags = our_flags(hdr, game);
         let mut cmd = Command::new("systemd-run");
-        cmd.args(["--user", "--collect", &format!("--unit={unit_name}")]);
-        for arg in bind.map(SessionBind::run_args).unwrap_or_default() {
-            cmd.arg(arg);
-        }
-        for arg in wsi.setenv_args(hdr) {
-            cmd.arg(arg);
-        }
-        for arg in xkb_setenv_args() {
-            cmd.arg(arg);
-        }
-        if let Some(path) = discovery::reaper_path_env() {
-            cmd.arg(format!("--setenv=PATH={path}"));
-        }
-        // Stale desktop DISPLAY/WAYLAND_DISPLAY in the manager env would abort gamescope.
-        cmd.arg("--property=UnsetEnvironment=DISPLAY WAYLAND_DISPLAY")
-            .arg("--setenv=BACKEND=headless")
-            .arg(format!("--setenv=SCREEN_WIDTH={}", mode.width))
-            .arg(format!("--setenv=SCREEN_HEIGHT={}", mode.height))
-            .arg(format!("--setenv=PF_HZ={game}"))
-            // Unquoted: wrapper word-splits. Empty for stock-gamescope SDR.
-            .arg(format!(
-                "--setenv=PF_HDR_ARGS={}",
-                our_flags(hdr, game).join(" ")
-            ))
-            .arg(format!("--setenv=GAMESCOPE_BIN={}", wrapper.display()))
-            .arg("--setenv=DRM_MODE=cvt")
-            .arg(format!("--setenv=CUSTOM_REFRESH_RATES={offered}"))
-            .arg("--")
-            .arg(SESSION_PLUS_BIN)
-            .arg(client);
+        cmd.args(session_unit_args(
+            unit_name, client, mode, game, &offered, &wrapper, &flags, env,
+        ));
         // Without `--wait`, seconds here means a wedged manager — unbounded would pin the connect.
         let status = crate::proc::status_within(&mut cmd, UNIT_VERB_BUDGET).context(
             "launch gamescope-session-plus via `systemd-run --user` (is the user systemd \
@@ -1218,6 +1200,44 @@ fn launch_session(client: &str, unit_name: &str, mode: Mode, hdr: bool) -> Resul
     }
 }
 
+/// `systemd-run` argv for the managed session's transient unit. `env` is the part read from the box
+/// (bind, WSI, XKB, `PATH`), in that order; `flags` is [`our_flags`].
+#[allow(clippy::too_many_arguments)] // one unit spec, one call site
+fn session_unit_args(
+    unit: &str,
+    client: &str,
+    mode: Mode,
+    game: u32,
+    offered: &str,
+    wrapper: &std::path::Path,
+    flags: &[String],
+    env: Vec<String>,
+) -> Vec<String> {
+    let mut args = vec![
+        "--user".to_string(),
+        "--collect".to_string(),
+        format!("--unit={unit}"),
+    ];
+    args.extend(env);
+    args.extend([
+        // Stale desktop DISPLAY/WAYLAND_DISPLAY in the manager env would abort gamescope.
+        "--property=UnsetEnvironment=DISPLAY WAYLAND_DISPLAY".to_string(),
+        "--setenv=BACKEND=headless".to_string(),
+        format!("--setenv=SCREEN_WIDTH={}", mode.width),
+        format!("--setenv=SCREEN_HEIGHT={}", mode.height),
+        format!("--setenv=PF_HZ={game}"),
+        // Unquoted: wrapper word-splits. Empty for stock-gamescope SDR.
+        format!("--setenv=PF_HDR_ARGS={}", flags.join(" ")),
+        format!("--setenv=GAMESCOPE_BIN={}", wrapper.display()),
+        "--setenv=DRM_MODE=cvt".to_string(),
+        format!("--setenv=CUSTOM_REFRESH_RATES={offered}"),
+        "--".to_string(),
+        SESSION_PLUS_BIN.to_string(),
+        client.to_string(),
+    ]);
+    args
+}
+
 /// Unknown reports `true` so a hiccup cannot trigger a relaunch storm. Timeout is that same answer.
 fn unit_starting_or_active(unit: &str) -> bool {
     let Ok(out) = crate::proc::output_within(
@@ -1262,4 +1282,52 @@ pub fn ei_socket_file() -> std::path::PathBuf {
     // libei injector). Compute it under the session env lock so a concurrent session handshake's
     // `apply_session_env` XDG_RUNTIME_DIR retarget can't race this producer-side read.
     crate::with_env_lock(pf_paths::gamescope_ei_socket_file)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_managed_session_unit_argv_keeps_its_shape() {
+        let args = session_unit_args(
+            "punktfunk-gamescope",
+            "steam",
+            Mode {
+                width: 2560,
+                height: 1440,
+                refresh_hz: 120,
+            },
+            60,
+            "60,120",
+            std::path::Path::new("/run/user/1000/gamescope-bin"),
+            &["--hdr-enabled".to_string(), "--adaptive-sync".to_string()],
+            vec![
+                "--property=BindReadOnlyPaths=/w:/usr/bin/gamescope".to_string(),
+                "--setenv=XKB_DEFAULT_LAYOUT=de".to_string(),
+            ],
+        );
+        assert_eq!(
+            args,
+            [
+                "--user",
+                "--collect",
+                "--unit=punktfunk-gamescope",
+                "--property=BindReadOnlyPaths=/w:/usr/bin/gamescope",
+                "--setenv=XKB_DEFAULT_LAYOUT=de",
+                "--property=UnsetEnvironment=DISPLAY WAYLAND_DISPLAY",
+                "--setenv=BACKEND=headless",
+                "--setenv=SCREEN_WIDTH=2560",
+                "--setenv=SCREEN_HEIGHT=1440",
+                "--setenv=PF_HZ=60",
+                "--setenv=PF_HDR_ARGS=--hdr-enabled --adaptive-sync",
+                "--setenv=GAMESCOPE_BIN=/run/user/1000/gamescope-bin",
+                "--setenv=DRM_MODE=cvt",
+                "--setenv=CUSTOM_REFRESH_RATES=60,120",
+                "--",
+                SESSION_PLUS_BIN,
+                "steam",
+            ]
+        );
+    }
 }
