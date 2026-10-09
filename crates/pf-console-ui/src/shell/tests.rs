@@ -1,3 +1,6 @@
+use super::connect::{
+    ASKING_CARD_AFTER, LAUNCH_HOLD_MAX, LAUNCH_NO_LEASE, PROFILES_WAIT, SEAT_POLL,
+};
 use super::*;
 use crate::screens::ScreenView;
 
@@ -2088,19 +2091,19 @@ mod launch_hold {
     fn the_hold_gives_up_on_the_states_that_produced_no_game() {
         let long = LAUNCH_HOLD_MAX + 1.0;
         assert_eq!(
-            crate::shell::launch_gave_up("Eden", Some("exited"), 0.5).as_deref(),
+            crate::shell::connect::launch_gave_up("Eden", Some("exited"), 0.5).as_deref(),
             Some("Eden closed right after starting.")
         );
         assert_eq!(
-            crate::shell::launch_gave_up("Eden", Some("launching"), long).as_deref(),
+            crate::shell::connect::launch_gave_up("Eden", Some("launching"), long).as_deref(),
             Some("Eden is still starting after 2 minutes.")
         );
-        assert!(crate::shell::launch_gave_up("Eden", Some("launching"), 1.0).is_none());
-        assert!(crate::shell::launch_gave_up("Eden", None, 1.0).is_none());
+        assert!(crate::shell::connect::launch_gave_up("Eden", Some("launching"), 1.0).is_none());
+        assert!(crate::shell::connect::launch_gave_up("Eden", None, 1.0).is_none());
         // A launch that worked never produces a sentence, whatever it is doing.
         for word in ["running", "window", "untracked", "grace"] {
             assert!(
-                crate::shell::launch_gave_up("Eden", Some(word), long).is_none(),
+                crate::shell::connect::launch_gave_up("Eden", Some(word), long).is_none(),
                 "{word} is a launch that worked"
             );
         }
