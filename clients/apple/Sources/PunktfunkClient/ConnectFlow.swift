@@ -329,15 +329,14 @@ struct ConnectFlow {
         startSession(host, allowTofu: false, requestAccess: true, approvalReq: req)
     }
 
-    /// Explicit wake-only (the touch card's "Wake Host" menu item / a future gamepad action): fire
-    /// the packet and wait for the host to come online, but don't connect — the user then sees it
-    /// go online and can connect.
-    func wakeOnly(_ host: StoredHost) {
+    /// Explicit wake-only (a host card's or the library's "Wake Host"): fire the packet and wait
+    /// for the host to come online, then run `onOnline`, but don't connect.
+    func wakeOnly(_ host: StoredHost, onOnline: @escaping () -> Void = {}) {
         guard PunktfunkConnection.wakeOnLANAvailable, !host.wakeMacs.isEmpty else { return }
         discovery.start()
         waker.start(
             host: host, connectsAfter: false, macs: host.wakeMacs, lastIP: host.address,
-            isOnline: { await store.isReachable(host, discovery: discovery) }, onOnline: {})
+            isOnline: { await store.isReachable(host, discovery: discovery) }, onOnline: onOnline)
     }
 
     /// Tap a discovered host: save it (so the session has a stored identity and the trust pin

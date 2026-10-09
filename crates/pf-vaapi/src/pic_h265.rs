@@ -427,30 +427,23 @@ pub fn plan_to_va_h265(
         va_reserved: [0; 8],
     };
 
-    // PPS lists win unless only the SPS carried them. No buffer at all when
-    // scaling lists are off — a table of parser zeros would dequantise to zero.
-    let iq_matrix = sps.scaling_list_enabled_flag.then(|| {
-        let sl = if sps.scaling_list_data_present_flag && !pps.scaling_list_data_present_flag {
-            &sps.scaling_list
-        } else {
-            &pps.scaling_list
-        };
-        VaIqMatrixBufferHEVC {
-            scaling_list4x4: sl.scaling_list_4x4,
-            scaling_list8x8: sl.scaling_list_8x8,
-            scaling_list16x16: sl.scaling_list_16x16,
-            // Only matrixIds 0 and 3 exist at 32x32; the parser keeps six slots.
-            scaling_list32x32: [sl.scaling_list_32x32[0], sl.scaling_list_32x32[3]],
-            // libva takes the VALUE, the parser stores `minus8`.
-            scaling_list_dc16x16: std::array::from_fn(|i| {
-                (sl.scaling_list_dc_coef_minus8_16x16[i] + 8) as u8
-            }),
-            scaling_list_dc32x32: [
-                (sl.scaling_list_dc_coef_minus8_32x32[0] + 8) as u8,
-                (sl.scaling_list_dc_coef_minus8_32x32[3] + 8) as u8,
-            ],
-            va_reserved: [0; 4],
-        }
+    // No buffer at all when scaling lists are off — a table of parser zeros
+    // would dequantise to zero.
+    // libva takes the DC VALUE, the parser stores `minus8`. Clamped, not wrapped, as DXVA
+    // and V4L2 do: the parser bounds the coded value, so the clamp is unreachable.
+    let dc = |minus8: i16| (minus8 + 8).clamp(0, 255) as u8;
+    let iq_matrix = plan.active_scaling_lists().map(|sl| VaIqMatrixBufferHEVC {
+        scaling_list4x4: sl.scaling_list_4x4,
+        scaling_list8x8: sl.scaling_list_8x8,
+        scaling_list16x16: sl.scaling_list_16x16,
+        // Only matrixIds 0 and 3 exist at 32x32; the parser keeps six slots.
+        scaling_list32x32: [sl.scaling_list_32x32[0], sl.scaling_list_32x32[3]],
+        scaling_list_dc16x16: sl.scaling_list_dc_coef_minus8_16x16.map(dc),
+        scaling_list_dc32x32: [
+            dc(sl.scaling_list_dc_coef_minus8_32x32[0]),
+            dc(sl.scaling_list_dc_coef_minus8_32x32[3]),
+        ],
+        va_reserved: [0; 4],
     });
 
     Ok(DecodePlanVaH265 {

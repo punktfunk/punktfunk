@@ -234,14 +234,12 @@ pub(crate) async fn list_actions(
     State(st): State<Arc<MgmtState>>,
     Extension(lane): Extension<AuthLane>,
     device: Option<Extension<PairedDevice>>,
-) -> Json<ActionList> {
+) -> Result<Json<ActionList>, Response> {
     let fp = device.as_ref().map(|e| e.0 .0.as_str());
     let power = power_permitted(&st, lane, fp);
     let display = display_permitted(lane, fp);
     // D-Bus and compositor round trips — off the async worker, all of them in one hop.
-    let probed = tokio::task::spawn_blocking(|| BUILTINS.map(|b| probe(b.verb)))
-        .await
-        .expect("action probe task panicked");
+    let probed = blocking("action check", || BUILTINS.map(|b| probe(b.verb))).await?;
     let actions = BUILTINS
         .iter()
         .zip(probed)
@@ -258,7 +256,7 @@ pub(crate) async fn list_actions(
             },
         })
         .collect();
-    Json(ActionList { actions })
+    Ok(Json(ActionList { actions }))
 }
 
 /// One action in flight host-wide (`409` otherwise). The actions end the conversation, so
@@ -364,9 +362,10 @@ pub(crate) async fn invoke_action(
             );
         }
     }
-    let avail = tokio::task::spawn_blocking(move || crate::power::probe(verb))
-        .await
-        .expect("power probe task panicked");
+    let avail = match blocking("power check", move || crate::power::probe(verb)).await {
+        Ok(avail) => avail,
+        Err(resp) => return resp,
+    };
     if !avail.available {
         return api_error(
             StatusCode::CONFLICT,
@@ -441,7 +440,7 @@ async fn invoke_display_next(
     if !cfg!(any(target_os = "linux", target_os = "windows")) {
         return api_error(StatusCode::NOT_IMPLEMENTED, NO_MIRROR);
     }
-    let switched = tokio::task::spawn_blocking(|| {
+    let switched = blocking("monitor switch", || {
         let (from, to) = next_monitor_target().map_err(|r| (StatusCode::CONFLICT, r.into()))?;
         super::display::write_with(|p| p.capture_monitor = Some(to.clone())).map_err(|e| {
             (
@@ -451,16 +450,11 @@ async fn invoke_display_next(
         })?;
         Ok::<_, (StatusCode, String)>((from, to))
     })
-    .await
-    .unwrap_or_else(|e| {
-        Err((
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("Couldn't switch the monitor — {e}"),
-        ))
-    });
+    .await;
     let (from, to) = match switched {
-        Ok(pair) => pair,
-        Err((status, message)) => return api_error(status, &message),
+        Ok(Ok(pair)) => pair,
+        Ok(Err((status, message))) => return api_error(status, &message),
+        Err(resp) => return resp,
     };
     let invoker = device
         .as_ref()

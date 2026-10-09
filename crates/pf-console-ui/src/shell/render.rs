@@ -80,12 +80,12 @@ impl Shell {
         self.tick_ok();
         // Publish ink before any draw. Widgets read `theme::set_ink`; skipping this
         // paints the previous palette's text on the new field.
-        crate::theme::set_ink(self.ink);
+        crate::theme::set_ink(self.backdrop.ink);
         // Same publish-once contract as ink. Also a local: `LayerEnv` mut-borrows
         // `settings`, so the transition arms cannot read the field.
         let reduce = self.reduce_motion();
         crate::theme::set_reduce_motion(reduce);
-        crate::theme::set_reduced_ui(crate::screens::settings::reduce_ui_res(
+        crate::theme::set_reduced_ui(crate::screens::settings::rows::reduce_ui_res(
             &self.settings,
             self.device.platform,
             self.device.fallback_ui,
@@ -130,11 +130,11 @@ impl Shell {
             Bg::Aurora => 0.0,
             Bg::Form => 1.0,
         };
-        self.bg_mix = approach(self.bg_mix, bg_target, dt, 0.12);
-        if (self.bg_mix - bg_target).abs() < 0.005 {
-            self.bg_mix = bg_target;
+        self.backdrop.bg_mix = approach(self.backdrop.bg_mix, bg_target, dt, 0.12);
+        if (self.backdrop.bg_mix - bg_target).abs() < 0.005 {
+            self.backdrop.bg_mix = bg_target;
         }
-        self.draw_aurora(canvas, full_w, full_h, t, self.bg_mix);
+        self.draw_aurora(canvas, full_w, full_h, t, self.backdrop.bg_mix);
         // Translate only when inset: with none this is the desktop canvas, and
         // screenshot dumps stay byte-identical.
         let inset = ins.left != 0.0 || ins.top != 0.0;
@@ -170,6 +170,8 @@ impl Shell {
         };
         let games_ok = self.games_host().is_some();
         let (tab, strip_focus) = (self.tab, self.strip_focus);
+        // A takeover owns B/A while up: the screen's legend would name buttons it ignores.
+        let show_hints = self.takeover().is_none();
         let mut env = LayerEnv {
             strip: &mut self.strip,
             tab,
@@ -191,11 +193,7 @@ impl Shell {
             device: &self.device,
             t,
             glyphs: self.glyphs,
-            // A modal owns B/A while up — do not also show the screen's legend.
-            show_hints: self.connecting.is_none()
-                && self.launching.is_none()
-                && self.seat_wait.is_none()
-                && self.wake.is_none(),
+            show_hints,
             cheap: false,
             root_targets: None,
         };
@@ -513,7 +511,9 @@ impl LayerEnv<'_> {
         crate::el::set_dormant(self.strip_focus && band == Band::Strip);
         let (mut pinned, mut pinned_pic) = ((0.0, 0.0), None);
         let targets = crate::el::census(|| {
-            screen.render(canvas, self.content, self.k, self.dt, self.fonts, &mut ctx);
+            screen
+                .view_mut()
+                .render(canvas, self.content, self.k, self.dt, self.fonts, &mut ctx);
             // Pinned chrome is recorded, not drawn: it goes over the trays, in place, so
             // a slide or a zoom never carries it. Its targets still count here.
             pinned = screen.pinned(self.k, &ctx);
@@ -529,14 +529,14 @@ impl LayerEnv<'_> {
         if band == Band::Strip {
             self.root_targets = Some(targets);
         }
-        self.cheap = crate::screens::settings::reduce_ui_res(
+        self.cheap = crate::screens::settings::rows::reduce_ui_res(
             ctx.settings,
             ctx.device.platform,
             ctx.device.fallback_ui,
         );
-        let title = (band == Band::Title).then(|| screen.title(&ctx));
+        let title = (band == Band::Title).then(|| screen.view().title());
         let hints = if self.show_hints {
-            shortcuts(screen.hints(&ctx), self.glyphs, band == Band::Strip)
+            shortcuts(screen.view().hints(&ctx), self.glyphs, band == Band::Strip)
         } else {
             Vec::new()
         };

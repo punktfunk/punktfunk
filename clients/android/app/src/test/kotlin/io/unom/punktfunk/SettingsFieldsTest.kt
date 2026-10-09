@@ -73,7 +73,7 @@ class SettingsFieldsTest {
     @Test
     fun thePresetOverlayRoundTripsEveryRow() {
         val want = moved()
-        val overlay = SettingsOverlay().absorb(Settings(), want)
+        val overlay = SettingsFields.PRESET.fold(SettingsOverlay()) { o, f -> o.pin(f.key, want) }
         assertEquals(SettingsFields.PRESET_KEYS, overlay.overridden() - SettingsOverlay.FIELD_RESOLUTION + setOf("width", "height"))
         val back = SettingsOverlay.fromJson(JSONObject(overlay.toJson().toString()))
         assertEquals(overlay, back)

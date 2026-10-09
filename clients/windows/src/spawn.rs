@@ -5,7 +5,9 @@
 //! `--window-pos`, the log-file tee for the child's stderr, and [`SpawnEvent`]s for the app's
 //! navigation closure.
 
-use pf_client_core::orchestrate::{self, CancelHandle, ConnectOutcome, SessionEvent};
+use pf_client_core::orchestrate::{
+    self, CancelHandle, ConnectOutcome, ConnectPlan, HostTarget, SessionEvent,
+};
 use std::os::windows::process::CommandExt as _;
 use std::path::PathBuf;
 use std::process::Command;
@@ -20,20 +22,15 @@ pub(crate) enum SpawnEvent {
     Exited(ConnectOutcome),
 }
 
-/// The banner for a session that died without a contract line — a missing runtime DLL, a
-/// crash, or the wrong binary next to the shell. It names the log's real location.
-pub(crate) fn renderer_failed_banner(code: i32) -> String {
-    let log = crate::logfile::path()
+/// Where a banner sends the user for a cause: the log's real location.
+pub(crate) fn log_hint() -> String {
+    crate::logfile::path()
         .map(|p| p.display().to_string())
-        .unwrap_or_else(|| "the client log".into());
-    format!(
-        "The session didn't start (punktfunk-session {}). Check {log}.",
-        ConnectOutcome::exit_phrase(code)
-    )
+        .unwrap_or_else(|| "the client log".into())
 }
 
-/// Spawn the session binary for a connect with `fp_hex` pinned and feed its lifecycle to
-/// `on_event` from a reader thread. `slot` is the handle Disconnect/Cancel kill. `launch`
+/// Spawn the session binary for a connect to `host`, its `fp_hex` the pin it dials, and feed
+/// its lifecycle to `on_event` from a reader thread. `slot` is the handle Disconnect/Cancel kill. `launch`
 /// carries a library title id for the host to launch during the handshake; `preset` is a
 /// ONE-OFF settings-preset pick. `profile` is the shell's answer for who plays: it replaces
 /// the saved pick the plan read, and `None` names none. `Err` = the spawn itself failed (binary missing?) —
@@ -41,11 +38,8 @@ pub(crate) fn renderer_failed_banner(code: i32) -> String {
 ///
 /// The argv and the `--resolved-spec` come from [`orchestrate::session_command`], so this
 /// shell's sessions run from the same effective (preset-aware) settings as every other one.
-#[allow(clippy::too_many_arguments)] // one cohesive spawn spec (session_params precedent)
 pub(crate) fn spawn_session(
-    addr: &str,
-    port: u16,
-    fp_hex: &str,
+    host: HostTarget,
     connect_timeout_secs: u64,
     launch: Option<&str>,
     preset: Option<&str>,
@@ -53,24 +47,13 @@ pub(crate) fn spawn_session(
     slot: CancelHandle,
     on_event: impl FnMut(SpawnEvent) + Send + 'static,
 ) -> Result<(), String> {
-    use pf_client_core::orchestrate::{ConnectPlan, HostTarget};
-    let mut plan = ConnectPlan::for_target(
-        HostTarget {
-            name: String::new(), // display-only; this shell's screens carry their own copy
-            addr: addr.to_string(),
-            port,
-            fp_hex: Some(fp_hex.to_string()),
-            mac: Vec::new(), // wake ran before this spawn (initiate_waking) — not the plan's job
-            id: None,
-            mgmt_port: None, // the library fetch runs in the shell (`Target`), never off a spawn plan
-        },
-        launch.map(str::to_string),
-        preset.map(str::to_string),
-    );
+    let label = format!("{}:{}", host.addr, host.port);
+    let mut plan =
+        ConnectPlan::for_target(host, launch.map(str::to_string), preset.map(str::to_string));
     plan.profile = profile.map(str::to_string);
     plan.connect_timeout_secs = Some(connect_timeout_secs);
     let (cmd, spec_path) = orchestrate::session_command(&plan);
-    spawn(cmd, spec_path, &format!("{addr}:{port}"), slot, on_event)
+    spawn(cmd, spec_path, &label, slot, on_event)
 }
 
 /// Spawn the session binary in `--browse` mode: the console home, in the session window —

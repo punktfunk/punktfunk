@@ -72,8 +72,8 @@ struct HomeView: View {
     @State private var hostActionResult: (ok: Bool, message: String)?
     // How this device shows its own list. `.added` is the default because it is what the grid
     // did before it could sort at all — an update should not rearrange anyone's hosts.
-    @AppStorage(DefaultsKey.hostSort) private var sortRaw = HostSort.added.rawValue
-    @AppStorage(DefaultsKey.hostGrouping) private var groupingRaw = HostGrouping.none.rawValue
+    @AppStorage(DefaultsKey.hostSort) private var sortRaw = SettingDefault.hostSort
+    @AppStorage(DefaultsKey.hostGrouping) private var groupingRaw = SettingDefault.hostGrouping
 
     var body: some View {
         NavigationStack {

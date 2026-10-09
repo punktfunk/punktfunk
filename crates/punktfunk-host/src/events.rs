@@ -70,7 +70,7 @@ pub enum DisconnectReason {
     Error,
 }
 
-/// The settings preset a client dialled with ([`punktfunk_core::quic::EXT_TAG_PRESET`]). The
+/// The settings preset a client dialled with ([`punktfunk_core::quic::SessionPreset`]). The
 /// id is the client's own and stable across a rename, so it is what a hook or plugin keys on
 /// together with the device fingerprint; the name is for people.
 #[derive(Serialize, Deserialize, ToSchema, Clone, Debug, PartialEq, Eq)]
@@ -537,121 +537,106 @@ impl EventKind {
     }
 }
 
+/// The party an event is about: what the hook filter axes read.
+enum Subject<'a> {
+    Client(&'a ClientRef),
+    Session(&'a SessionRef),
+    Stream(&'a StreamRef),
+    Game(&'a GameRefPayload),
+    Device(&'a DeviceRef),
+}
+
 impl EventKind {
-    /// `filter.client` axis. For `session.*` this is the short label (fingerprint prefix or
-    /// peer IP), not [`ClientRef::name`].
-    pub fn client_name(&self) -> Option<&str> {
+    /// No `_` arm: a new kind has to say what it is about before any filter reads it.
+    fn subject(&self) -> Option<Subject<'_>> {
         match self {
             EventKind::ClientConnected { client }
-            | EventKind::ClientDisconnected { client, .. } => Some(&client.name),
+            | EventKind::ClientDisconnected { client, .. } => Some(Subject::Client(client)),
             EventKind::SessionStarted { session } | EventKind::SessionEnded { session, .. } => {
-                Some(&session.client)
+                Some(Subject::Session(session))
             }
             EventKind::StreamStarted { stream } | EventKind::StreamStopped { stream } => {
-                Some(&stream.client)
+                Some(Subject::Stream(stream))
             }
             EventKind::GameLaunching { game }
             | EventKind::GameRunning { game }
             | EventKind::GameWindow { game, .. }
-            | EventKind::GameExited { game, .. } => Some(&game.client),
+            | EventKind::GameExited { game, .. } => Some(Subject::Game(game)),
             EventKind::PairingPending { device }
             | EventKind::PairingCompleted { device }
             | EventKind::PairingDenied { device }
             | EventKind::AccessGranted { device, .. }
             | EventKind::AccessChanged { device, .. }
-            | EventKind::AccessExpired { device } => Some(&device.name),
-            EventKind::ActionInvoked { device, .. } => device.as_ref().map(|d| d.name.as_str()),
-            _ => None,
+            | EventKind::AccessExpired { device } => Some(Subject::Device(device)),
+            EventKind::ActionInvoked { device, .. } => device.as_ref().map(Subject::Device),
+            EventKind::DisplayCreated { .. }
+            | EventKind::DisplayReleased { .. }
+            | EventKind::LibraryChanged { .. }
+            | EventKind::UpdateAvailable { .. }
+            | EventKind::UpdateApplied { .. }
+            | EventKind::EmulatorsChanged { .. }
+            | EventKind::DownloadsChanged { .. }
+            | EventKind::PluginsChanged { .. }
+            | EventKind::StoreChanged
+            | EventKind::SettingsChanged { .. }
+            | EventKind::HostStarted { .. }
+            | EventKind::HostStopping => None,
         }
     }
 
+    /// `filter.client` axis. For `session.*` this is the short label (fingerprint prefix or
+    /// peer IP), not [`ClientRef::name`].
+    pub fn client_name(&self) -> Option<&str> {
+        Some(match self.subject()? {
+            Subject::Client(c) => &c.name,
+            Subject::Session(s) => &s.client,
+            Subject::Stream(s) => &s.client,
+            Subject::Game(g) => &g.client,
+            Subject::Device(d) => &d.name,
+        })
+    }
+
     pub fn fingerprint(&self) -> Option<&str> {
-        match self {
-            EventKind::ClientConnected { client }
-            | EventKind::ClientDisconnected { client, .. } => client.fingerprint.as_deref(),
-            EventKind::PairingPending { device }
-            | EventKind::PairingCompleted { device }
-            | EventKind::PairingDenied { device }
-            | EventKind::AccessGranted { device, .. }
-            | EventKind::AccessChanged { device, .. }
-            | EventKind::AccessExpired { device } => Some(&device.fingerprint),
-            EventKind::ActionInvoked { device, .. } => {
-                device.as_ref().map(|d| d.fingerprint.as_str())
-            }
-            EventKind::SessionStarted { session } | EventKind::SessionEnded { session, .. } => {
-                session.fingerprint.as_deref()
-            }
-            EventKind::StreamStarted { stream } | EventKind::StreamStopped { stream } => {
-                stream.fingerprint.as_deref()
-            }
-            EventKind::GameLaunching { game }
-            | EventKind::GameRunning { game }
-            | EventKind::GameWindow { game, .. }
-            | EventKind::GameExited { game, .. } => game.fingerprint.as_deref(),
-            _ => None,
+        match self.subject()? {
+            Subject::Client(c) => c.fingerprint.as_deref(),
+            Subject::Session(s) => s.fingerprint.as_deref(),
+            Subject::Stream(s) => s.fingerprint.as_deref(),
+            Subject::Game(g) => g.fingerprint.as_deref(),
+            Subject::Device(d) => Some(&d.fingerprint),
         }
     }
 
     /// The profile played as, on the events that carry a client, session, stream or game.
     pub fn profile(&self) -> Option<&ProfileRef> {
-        match self {
-            EventKind::ClientConnected { client }
-            | EventKind::ClientDisconnected { client, .. } => client.profile.as_ref(),
-            EventKind::SessionStarted { session } | EventKind::SessionEnded { session, .. } => {
-                session.profile.as_ref()
-            }
-            EventKind::StreamStarted { stream } | EventKind::StreamStopped { stream } => {
-                stream.profile.as_ref()
-            }
-            EventKind::GameLaunching { game }
-            | EventKind::GameRunning { game }
-            | EventKind::GameWindow { game, .. }
-            | EventKind::GameExited { game, .. } => game.profile.as_ref(),
-            _ => None,
+        match self.subject()? {
+            Subject::Client(c) => c.profile.as_ref(),
+            Subject::Session(s) => s.profile.as_ref(),
+            Subject::Stream(s) => s.profile.as_ref(),
+            Subject::Game(g) => g.profile.as_ref(),
+            Subject::Device(_) => None,
         }
     }
 
     /// The dialled preset, on the events that carry a client, session, stream or game.
     pub fn preset(&self) -> Option<&PresetRef> {
-        match self {
-            EventKind::ClientConnected { client }
-            | EventKind::ClientDisconnected { client, .. } => client.preset.as_ref(),
-            EventKind::SessionStarted { session } | EventKind::SessionEnded { session, .. } => {
-                session.preset.as_ref()
-            }
-            EventKind::StreamStarted { stream } | EventKind::StreamStopped { stream } => {
-                stream.preset.as_ref()
-            }
-            EventKind::GameLaunching { game }
-            | EventKind::GameRunning { game }
-            | EventKind::GameWindow { game, .. }
-            | EventKind::GameExited { game, .. } => game.preset.as_ref(),
-            _ => None,
+        match self.subject()? {
+            Subject::Client(c) => c.preset.as_ref(),
+            Subject::Session(s) => s.preset.as_ref(),
+            Subject::Stream(s) => s.preset.as_ref(),
+            Subject::Game(g) => g.preset.as_ref(),
+            Subject::Device(_) => None,
         }
     }
 
+    /// The origin plane, on every event that carries a client, session, stream, game or device.
     pub fn plane(&self) -> Option<Plane> {
-        match self {
-            EventKind::ClientConnected { client }
-            | EventKind::ClientDisconnected { client, .. } => Some(client.plane),
-            EventKind::SessionStarted { session } | EventKind::SessionEnded { session, .. } => {
-                Some(session.plane)
-            }
-            EventKind::StreamStarted { stream } | EventKind::StreamStopped { stream } => {
-                Some(stream.plane)
-            }
-            EventKind::GameLaunching { game }
-            | EventKind::GameRunning { game }
-            | EventKind::GameWindow { game, .. }
-            | EventKind::GameExited { game, .. } => Some(game.plane),
-            EventKind::PairingPending { device }
-            | EventKind::PairingCompleted { device }
-            | EventKind::PairingDenied { device }
-            | EventKind::AccessGranted { device, .. }
-            | EventKind::AccessChanged { device, .. }
-            | EventKind::AccessExpired { device } => Some(device.plane),
-            _ => None,
-        }
+        Some(match self.subject()? {
+            Subject::Client(c) => c.plane,
+            Subject::Session(s) => s.plane,
+            Subject::Stream(s) => s.plane,
+            Subject::Game(g) => g.plane,
+            Subject::Device(d) => d.plane,
+        })
     }
 
     pub fn app(&self) -> Option<&str> {
@@ -1323,6 +1308,253 @@ mod tests {
             }
             other => panic!("wrong kind: {other:?}"),
         }
+    }
+
+    /// Every kind through the five filter axes. Each subject spells its own name in every
+    /// field, so a row names which payload an axis read.
+    #[test]
+    fn every_kind_answers_the_filter_axes() {
+        let profile = |id: &str| {
+            Some(ProfileRef {
+                id: id.into(),
+                display_name: String::new(),
+            })
+        };
+        let preset = |id: &str| {
+            Some(PresetRef {
+                id: id.into(),
+                name: String::new(),
+            })
+        };
+        let client = ClientRef {
+            name: "client".into(),
+            fingerprint: Some("client".into()),
+            plane: Plane::Native,
+            preset: preset("client"),
+            profile: profile("client"),
+        };
+        let session = SessionRef {
+            id: 1,
+            client: "session".into(),
+            fingerprint: Some("session".into()),
+            mode: String::new(),
+            hdr: false,
+            plane: Plane::Web,
+            preset: preset("session"),
+            profile: profile("session"),
+        };
+        let stream = StreamRef {
+            mode: String::new(),
+            hdr: false,
+            client: "stream".into(),
+            fingerprint: Some("stream".into()),
+            app: None,
+            plane: Plane::Gamestream,
+            preset: preset("stream"),
+            profile: profile("stream"),
+        };
+        let game = GameRefPayload {
+            app: None,
+            title: String::new(),
+            store: None,
+            client: "game".into(),
+            fingerprint: Some("game".into()),
+            plane: Plane::Native,
+            preset: preset("game"),
+            profile: profile("game"),
+        };
+        let device = DeviceRef {
+            name: "device".into(),
+            fingerprint: "device".into(),
+            plane: Plane::Web,
+        };
+        let summary = || {
+            serde_json::from_value::<Box<SessionSummary>>(serde_json::json!({
+                "id": 1, "client": "", "started_unix": 0, "duration_s": 0, "mode": "",
+                "hdr": false, "join": false, "codec": "", "bit_depth": 8, "chroma": "",
+                "bitrate_kbps": 0, "input": { "events": 0, "mic": 0, "rich": 0, "dropped": 0 },
+                "bringup_ms": 0, "ended": "game_exited"
+            }))
+            .unwrap()
+        };
+        let action = |device: Option<DeviceRef>| EventKind::ActionInvoked {
+            id: String::new(),
+            device,
+            outcome: String::new(),
+        };
+        // [client_name, fingerprint, profile, preset, plane]
+        let all = |who: &'static str, plane: &'static str| {
+            [Some(who), Some(who), Some(who), Some(who), Some(plane)]
+        };
+        let dev = [Some("device"), Some("device"), None, None, Some("web")];
+        let none = [None; 5];
+        let rows: Vec<(EventKind, [Option<&str>; 5])> = vec![
+            (
+                EventKind::ClientConnected {
+                    client: client.clone(),
+                },
+                all("client", "native"),
+            ),
+            (
+                EventKind::ClientDisconnected {
+                    client: client.clone(),
+                    reason: DisconnectReason::Quit,
+                },
+                all("client", "native"),
+            ),
+            (
+                EventKind::SessionStarted {
+                    session: session.clone(),
+                },
+                all("session", "web"),
+            ),
+            (
+                EventKind::SessionEnded {
+                    session: session.clone(),
+                    summary: summary(),
+                },
+                all("session", "web"),
+            ),
+            (
+                EventKind::StreamStarted {
+                    stream: stream.clone(),
+                },
+                all("stream", "gamestream"),
+            ),
+            (
+                EventKind::StreamStopped {
+                    stream: stream.clone(),
+                },
+                all("stream", "gamestream"),
+            ),
+            (
+                EventKind::GameLaunching { game: game.clone() },
+                all("game", "native"),
+            ),
+            (
+                EventKind::GameRunning { game: game.clone() },
+                all("game", "native"),
+            ),
+            (
+                EventKind::GameWindow {
+                    game: game.clone(),
+                    title: String::new(),
+                    app_id: String::new(),
+                },
+                all("game", "native"),
+            ),
+            (
+                EventKind::GameExited {
+                    game: game.clone(),
+                    reason: GameEndReason::Exited,
+                },
+                all("game", "native"),
+            ),
+            (
+                EventKind::PairingPending {
+                    device: device.clone(),
+                },
+                dev,
+            ),
+            (
+                EventKind::PairingCompleted {
+                    device: device.clone(),
+                },
+                dev,
+            ),
+            (
+                EventKind::PairingDenied {
+                    device: device.clone(),
+                },
+                dev,
+            ),
+            (
+                EventKind::AccessGranted {
+                    device: device.clone(),
+                    grants: 0,
+                    expires_unix: None,
+                },
+                dev,
+            ),
+            (
+                EventKind::AccessChanged {
+                    device: device.clone(),
+                    grants: 0,
+                    expires_unix: None,
+                },
+                dev,
+            ),
+            (
+                EventKind::AccessExpired {
+                    device: device.clone(),
+                },
+                dev,
+            ),
+            (action(Some(device.clone())), dev),
+            (action(None), none),
+            (
+                EventKind::DisplayCreated {
+                    backend: String::new(),
+                    mode: String::new(),
+                },
+                none,
+            ),
+            (EventKind::DisplayReleased { count: 0 }, none),
+            (
+                EventKind::LibraryChanged {
+                    source: String::new(),
+                },
+                none,
+            ),
+            (
+                EventKind::UpdateAvailable {
+                    version: String::new(),
+                    channel: String::new(),
+                    install_kind: String::new(),
+                },
+                none,
+            ),
+            (
+                EventKind::UpdateApplied {
+                    from: String::new(),
+                    to: String::new(),
+                },
+                none,
+            ),
+            (EventKind::EmulatorsChanged { id: String::new() }, none),
+            (
+                EventKind::DownloadsChanged {
+                    app: String::new(),
+                    title: String::new(),
+                    state: String::new(),
+                },
+                none,
+            ),
+            (EventKind::PluginsChanged { id: String::new() }, none),
+            (EventKind::StoreChanged, none),
+            (EventKind::SettingsChanged { ids: Vec::new() }, none),
+            (
+                EventKind::HostStarted {
+                    version: String::new(),
+                    gamestream: false,
+                },
+                none,
+            ),
+            (EventKind::HostStopping, none),
+        ];
+        for (kind, want) in &rows {
+            let got = [
+                kind.client_name(),
+                kind.fingerprint(),
+                kind.profile().map(|p| p.id.as_str()),
+                kind.preset().map(|p| p.id.as_str()),
+                kind.plane().map(Plane::as_str),
+            ];
+            assert_eq!(&got, want, "{}", kind.name());
+        }
+        // One row per kind, the action.invoked pair counted once.
+        let names: std::collections::BTreeSet<_> = rows.iter().map(|(k, _)| k.name()).collect();
+        assert_eq!(names.len(), rows.len() - 1);
     }
 
     /// Stats recordings store the plane as text, and must spell it as the events do.

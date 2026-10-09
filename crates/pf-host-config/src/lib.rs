@@ -259,7 +259,7 @@ pub struct HostConfig {
     /// `design/per-monitor-portal-capture.md`.
     pub capture_monitor: Option<String>,
     /// `PUNKTFUNK_PORTAL_CURSOR_MODE` — `auto` (default) · `hidden` · `embedded` ·
-    /// `metadata`. Preference, not a command: `pf_frame::cursor_mode::pick` never
+    /// `metadata`. Preference, not a command: `pf_portal::cursor_mode::pick` never
     /// requests a mode the backend does not advertise. `embedded` is the safe pin.
     pub portal_cursor_mode: Option<String>,
     /// `PUNKTFUNK_COMPOSITOR` — explicit compositor override (operator/CI/test).
@@ -357,8 +357,6 @@ impl HostConfig {
     /// value, the rest their env spelling. The id-keyed rows are [`Self::apply_settings`].
     fn from_rows(rows: &[Resolved]) -> Self {
         let val = |k: &str| store::knob_in(rows, k);
-        // Presence, not value.
-        let flag = |k: &str| val(k).is_some();
         let on = |k: &str| val(k).map(|s| is_on(&s));
         let row_bool = |k: &str| store::row_bool_in(rows, k);
         let row_tri = |k: &str| store::row_tri_in(rows, k);
@@ -389,7 +387,7 @@ impl HostConfig {
             audio_quality: val("PUNKTFUNK_AUDIO_QUALITY").map(|s| s.trim().to_lowercase()),
             audio_redundancy: row_tri("PUNKTFUNK_AUDIO_REDUNDANCY"),
             audio_hires: row_bool("PUNKTFUNK_AUDIO_HIRES"),
-            perf: flag("PUNKTFUNK_PERF"),
+            perf: on("PUNKTFUNK_PERF") == Some(true),
             // Defaults to `virtual` — the flagship per-client virtual output. It used to be unset,
             // which fell through to the synthetic test pattern: fine for a dev box that always has
             // a host.env, wrong for a packaged install, whose unit no longer requires that file at
@@ -399,7 +397,7 @@ impl HostConfig {
             capture_monitor: val("PUNKTFUNK_CAPTURE_MONITOR")
                 .map(|s| s.trim().to_string())
                 .filter(|s| !s.is_empty()),
-            // Emptied-to-None. Spellings are parsed by `pf_frame::cursor_mode::parse_pin`.
+            // Emptied-to-None. Spellings are parsed by `pf_portal::cursor_mode::parse_pin`.
             portal_cursor_mode: val("PUNKTFUNK_PORTAL_CURSOR_MODE")
                 .map(|s| s.trim().to_string())
                 .filter(|s| !s.is_empty()),

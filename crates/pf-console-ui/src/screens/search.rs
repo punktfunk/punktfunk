@@ -1,15 +1,13 @@
-//! Find a title on this host's shelf by name. The console's keyboard types it (Steam's on a
-//! Deck); searching swaps this screen for the shelf filtered to the titles whose name
-//! contains it, so Back from the results lands on the whole shelf.
+//! Find a title on this host's shelf by name. The console's keyboard types it, or the
+//! device's own (Steam's on a Deck); searching swaps this screen for the shelf filtered to
+//! the titles whose name contains it, so Back from the results lands on the whole shelf.
 
 use crate::glyphs::{Hint, HintKey};
 use crate::model::HostRow;
 use crate::pointer::Pointer;
-use crate::screens::{Ctx, Outbox, Screen};
+use crate::screens::{Ctx, Outbox, Screen, ScreenView, TextEntry};
 use crate::theme::Fonts;
-use crate::widgets::{
-    blurb, entry_hints, field_key, type_text, Entry, Keyboard, ListMsg, MenuList, RowSpec,
-};
+use crate::widgets::{blurb, field_key, type_text, Entry, ListMsg, MenuList, RowSpec};
 use pf_client_core::menu_nav::{MenuEvent, MenuPulse};
 use skia_safe::{Canvas, Image, Rect};
 use std::collections::HashMap;
@@ -21,8 +19,8 @@ pub(crate) struct SearchScreen {
     host: HostRow,
     /// Covers the shelf already decoded, handed on so the results show them at once.
     art: HashMap<String, Image>,
-    pub(super) list: MenuList,
-    keyboard: Keyboard,
+    list: MenuList,
+    keyboard: TextEntry,
     query: String,
     editing: bool,
 }
@@ -34,107 +32,15 @@ impl SearchScreen {
             host: host.clone(),
             art: art.clone(),
             list: MenuList::new(),
-            keyboard: Keyboard::new(),
+            keyboard: TextEntry::default(),
             query: String::new(),
             editing: true,
         }
     }
 
-    pub(crate) fn title(&self) -> String {
-        format!("Search {}", self.host.name)
-    }
-
-    pub(crate) fn editing(&self) -> bool {
-        self.editing
-    }
-
-    pub(crate) fn edit_field(&self) -> Option<crate::screens::EditField> {
-        let query = self.query.as_str();
-        self.editing
-            .then(|| crate::screens::EditField::new("Title", query, false))
-            .flatten()
-    }
-
     /// A query takes any printable character.
     fn admits(_: &str, ch: char) -> bool {
         !ch.is_control()
-    }
-
-    pub(crate) fn text_input(&mut self, typed: &str) {
-        if self.editing {
-            type_text(&mut self.query, typed, Self::admits);
-        }
-    }
-
-    /// Return closes the keyboard onto the Search row; the next Return searches.
-    pub(crate) fn edit_key(&mut self, key: crate::input::Key) -> bool {
-        if !self.editing {
-            return false;
-        }
-        let Some(entry) = field_key(key, &mut self.query) else {
-            return false;
-        };
-        if entry != Entry::Stay {
-            self.editing = false;
-            self.list.cursor = 1;
-        }
-        true
-    }
-
-    pub(crate) fn menu(
-        &mut self,
-        ev: MenuEvent,
-        ctx: &mut Ctx,
-        fx: &mut Outbox,
-    ) -> Option<MenuPulse> {
-        if self.editing {
-            let deck = ctx.device.deck;
-            let (entry, pulse) = self
-                .keyboard
-                .edit_menu(ev, deck, &mut self.query, Self::admits);
-            return match entry {
-                Entry::Stay => pulse,
-                Entry::Close => {
-                    self.editing = false;
-                    pulse
-                }
-                Entry::Done => self.search(fx),
-            };
-        }
-        if ev == MenuEvent::Back {
-            fx.pop();
-            return None;
-        }
-        let (msg, pulse) = self.list.menu(ev, ROWS);
-        match msg {
-            ListMsg::Activate => self.activate(fx),
-            _ => pulse,
-        }
-    }
-
-    /// A press outside the tray closes it; the row underneath is not activated.
-    pub(crate) fn pointer(&mut self, p: Pointer, ctx: &mut Ctx, fx: &mut Outbox) -> bool {
-        if self.editing && !ctx.device.deck {
-            let Some(entry) = self.keyboard.edit_pointer(p, &mut self.query, Self::admits) else {
-                return false;
-            };
-            match entry {
-                Entry::Stay => {}
-                Entry::Close => self.editing = false,
-                Entry::Done => {
-                    self.search(fx);
-                }
-            }
-            return true;
-        }
-        let (msg, pulse) = self.list.pointer(p, ROWS);
-        if matches!(msg, ListMsg::None) && pulse.is_none() {
-            return false;
-        }
-        if matches!(msg, ListMsg::Activate) {
-            self.activate(fx);
-        }
-        true
     }
 
     fn activate(&mut self, fx: &mut Outbox) -> Option<MenuPulse> {
@@ -158,10 +64,98 @@ impl SearchScreen {
         fx.replace(Screen::Library(shelf));
         Some(MenuPulse::Confirm)
     }
+}
 
-    pub(crate) fn hints(&self, ctx: &Ctx) -> Vec<Hint> {
+impl ScreenView for SearchScreen {
+    fn title(&self) -> String {
+        format!("Search {}", self.host.name)
+    }
+
+    fn editing(&self) -> bool {
+        self.editing
+    }
+
+    fn edit_field(&self) -> Option<crate::screens::EditField> {
+        let query = self.query.as_str();
+        self.editing
+            .then(|| crate::screens::EditField::new("Title", query, false))
+            .flatten()
+    }
+
+    fn text_input(&mut self, typed: &str) {
         if self.editing {
-            return entry_hints(ctx.device.deck, "Search");
+            type_text(&mut self.query, typed, Self::admits);
+        }
+    }
+
+    /// Return closes the keyboard onto the Search row; the next Return searches.
+    fn edit_key(&mut self, key: crate::input::Key, _ctx: &mut Ctx) -> bool {
+        if !self.editing {
+            return false;
+        }
+        let Some(entry) = field_key(key, &mut self.query) else {
+            return false;
+        };
+        if entry != Entry::Stay {
+            self.editing = false;
+            self.list.cursor = 1;
+        }
+        true
+    }
+
+    fn menu(&mut self, ev: MenuEvent, ctx: &mut Ctx, fx: &mut Outbox) -> Option<MenuPulse> {
+        if self.editing {
+            let (entry, pulse) =
+                (self.keyboard).menu(ev, ctx.device, &mut self.query, Self::admits);
+            return match entry {
+                Entry::Stay => pulse,
+                Entry::Close => {
+                    self.editing = false;
+                    pulse
+                }
+                Entry::Done => self.search(fx),
+            };
+        }
+        if ev == MenuEvent::Back {
+            fx.pop();
+            return None;
+        }
+        let (msg, pulse) = self.list.menu(ev, ROWS);
+        match msg {
+            ListMsg::Activate => self.activate(fx),
+            _ => pulse,
+        }
+    }
+
+    /// A press outside the tray closes it; the row underneath is not activated.
+    fn pointer(&mut self, p: Pointer, ctx: &mut Ctx, fx: &mut Outbox) -> bool {
+        let tray = self
+            .editing
+            .then(|| (self.keyboard).pointer(p, ctx.device, &mut self.query, Self::admits));
+        if let Some(entry) = tray.flatten() {
+            match entry {
+                None => return false,
+                Some(Entry::Stay) => {}
+                Some(Entry::Close) => self.editing = false,
+                Some(Entry::Done) => {
+                    self.search(fx);
+                }
+            }
+            return true;
+        }
+        let (msg, pulse) = self.list.pointer(p, ROWS);
+        if matches!(msg, ListMsg::None) && pulse.is_none() {
+            return false;
+        }
+        if matches!(msg, ListMsg::Activate) {
+            self.activate(fx);
+        }
+        true
+    }
+
+    fn hints(&self, ctx: &Ctx) -> Vec<Hint> {
+        if self.editing {
+            return TextEntry::hints(ctx.device, "Search");
         }
         vec![
             Hint::new(HintKey::Confirm, "Select"),
@@ -169,7 +163,7 @@ impl SearchScreen {
         ]
     }
 
-    pub(crate) fn render(
+    fn render(
         &mut self,
         canvas: &Canvas,
         rect: Rect,
@@ -185,12 +179,8 @@ impl SearchScreen {
             rect,
             k,
         );
-        let seat = self.keyboard.seat(self.editing && !ctx.device.deck, dt);
-        let tray_h = if seat > 0.0 {
-            (Keyboard::tray_height() + 12.0) * k * seat
-        } else {
-            0.0
-        };
+        self.keyboard.seat(self.editing, ctx.device, dt);
+        let tray_h = self.keyboard.reserve(k);
         let list_rect = Rect::from_ltrb(
             rect.left,
             below.top,
@@ -205,10 +195,15 @@ impl SearchScreen {
         ];
         self.list
             .render(canvas, list_rect, &rows, fonts, k, dt, !self.editing);
-        if seat > 0.0 {
-            let (w, bottom) = (f64::from(rect.width()), f64::from(rect.bottom));
-            self.keyboard.render(canvas, fonts, w, bottom, seat, k);
-        }
+        self.keyboard.render(canvas, fonts, rect, k);
+    }
+
+    fn press(&mut self) {
+        self.list.dip();
+    }
+
+    fn pan(&mut self, p: Pointer) -> bool {
+        self.list.pan(p)
     }
 }
 
@@ -227,11 +222,11 @@ mod tests {
         }
     }
 
-    fn with_ctx<R>(deck: bool, f: impl FnOnce(&mut Ctx) -> R) -> R {
+    fn with_ctx<R>(system_keyboard: bool, f: impl FnOnce(&mut Ctx) -> R) -> R {
         let mut settings = Settings::default();
         let library = crate::library::LibraryShared::default();
         let device = crate::screens::Device {
-            deck,
+            system_keyboard,
             ..crate::screens::Device::test()
         };
         let mut ctx = Ctx {

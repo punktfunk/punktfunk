@@ -1,21 +1,10 @@
-// The Swift twin of pf-client-core's pad-type cycle test: the same order, the same fallback.
+// The Controller type slot's marks. Its step order and words replay the shared vectors in
+// `OverlayActionsTests.testSharedPadTypeCycle`.
 
 import XCTest
 @testable import PunktfunkKit
 
 final class PadTypeTests: XCTestCase {
-    func testTheCycleWrapsAndASettingsOnlyTypeStepsToAutomatic() {
-        var seen: [PunktfunkConnection.GamepadType] = [.auto]
-        var p = PunktfunkConnection.GamepadType.auto.nextInRing
-        while p != .auto {
-            seen.append(p)
-            p = p.nextInRing
-        }
-        XCTAssertEqual(seen, PunktfunkConnection.GamepadType.ringCycle)
-        XCTAssertEqual(PunktfunkConnection.GamepadType.steamController2.nextInRing, .auto)
-        XCTAssertEqual(PunktfunkConnection.GamepadType.dualShock4.ringLabel, "DualShock 4")
-    }
-
     /// A name with no imageset draws nothing at runtime, so check the catalog itself.
     func testEveryPickedTypeShipsAMark() {
         let catalog = URL(fileURLWithPath: #filePath)

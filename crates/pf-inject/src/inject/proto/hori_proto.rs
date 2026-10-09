@@ -87,7 +87,7 @@ impl HoriState {
                 stick(f.rs_x as i32),
                 stick(-(f.rs_y as i32)),
             ],
-            hat: crate::eightbitdo_proto::hat(f.buttons),
+            hat: crate::dpad::dpad_octant(f.buttons).unwrap_or(0x0F),
             buttons: b,
             rt: f.right_trigger,
             lt: f.left_trigger,
@@ -227,8 +227,9 @@ mod tests {
 
     #[test]
     fn descriptor_declares_the_report() {
-        use crate::rdesc_walk::{payload_len, INPUT, OUTPUT};
-        assert_eq!(payload_len(&RDESC, INPUT, REPORT_ID) + 1, REPORT_LEN);
-        assert_eq!(payload_len(&RDESC, OUTPUT, REPORT_ID), 0);
+        use pf_driver_proto::rdesc::{report_lens, INPUT, OUTPUT};
+        let lens = report_lens(&RDESC);
+        assert_eq!(lens[&(INPUT, REPORT_ID)], REPORT_LEN);
+        assert_eq!(lens.get(&(OUTPUT, REPORT_ID)), None);
     }
 }

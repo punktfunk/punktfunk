@@ -512,7 +512,7 @@ unsafe fn create_view(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::caps::derive_caps;
     use crate::caps::MaxLevelIdc;
@@ -520,7 +520,7 @@ mod tests {
     use crate::caps::VideoFormat;
     use crate::caps::NV12;
 
-    fn caps(coincide: bool, layered: bool) -> DecodeCaps {
+    pub(crate) fn caps(coincide: bool, layered: bool) -> DecodeCaps {
         // Each entry must advertise its role's full usage plus MUTABLE_FORMAT;
         // derivation gates on those. This module's table is downstream of that.
         let entry = |usage: vk::ImageUsageFlags| VideoFormat {

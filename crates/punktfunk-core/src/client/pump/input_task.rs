@@ -400,22 +400,14 @@ mod tests {
     use super::*;
     use crate::input::{gamepad, InputEvent, InputKind};
 
-    async fn loopback() -> (quinn::Endpoint, ClientConn, quinn::Connection) {
-        let server = crate::quic::endpoint::server("127.0.0.1:0".parse().unwrap()).unwrap();
-        let addr = server.local_addr().unwrap();
-        let client = crate::quic::endpoint::client_insecure().unwrap();
-        let accept = tokio::spawn(async move {
-            let conn = server
-                .accept()
-                .await
-                .expect("incoming")
-                .await
-                .expect("host side connects");
-            (server, conn)
-        });
-        let client_conn = client.connect(addr, "punktfunk").unwrap().await.unwrap();
-        let (server, host_conn) = accept.await.unwrap();
-        (server, ClientConn::new(client_conn), host_conn)
+    async fn loopback() -> (
+        quinn::Endpoint,
+        quinn::Endpoint,
+        ClientConn,
+        quinn::Connection,
+    ) {
+        let (server, client, host_conn, client_conn) = crate::quic::test_util::connect_pair().await;
+        (server, client, ClientConn::new(client_conn), host_conn)
     }
 
     /// The input datagram inside a client datagram's kind.
@@ -455,7 +447,7 @@ mod tests {
     /// else does; a closed control lane falls back to the datagram.
     #[tokio::test]
     async fn key_edges_take_the_control_stream_when_the_host_reads_them() {
-        let (_server, client_conn, host_conn) = loopback().await;
+        let (_server, _client, client_conn, host_conn) = loopback().await;
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
         let (ctrl_tx, mut ctrl_rx) = tokio::sync::mpsc::channel(4);
         let client = client(crate::quic::GRANT_ALL);
@@ -559,7 +551,7 @@ mod tests {
     /// while pad 1 still forwards.
     #[tokio::test]
     async fn a_mouse_pad_goes_neutral_and_its_buttons_become_keys() {
-        let (_server, client_conn, host_conn) = loopback().await;
+        let (_server, _client, client_conn, host_conn) = loopback().await;
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
         let (touch_tx, touch_rx) = tokio::sync::mpsc::unbounded_channel();
         let client = client(crate::quic::GRANT_ALL);
@@ -625,7 +617,7 @@ mod tests {
     /// click and touch become the mouse.
     #[tokio::test]
     async fn a_touchpad_mode_pad_plays_while_its_touchpad_clicks() {
-        let (_server, client_conn, host_conn) = loopback().await;
+        let (_server, _client, client_conn, host_conn) = loopback().await;
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
         let (touch_tx, touch_rx) = tokio::sync::mpsc::unbounded_channel();
         let client = client(crate::quic::GRANT_ALL);
@@ -660,7 +652,7 @@ mod tests {
     /// A controller-only session sends its pad and never the key queued ahead of it.
     #[tokio::test]
     async fn a_key_without_the_keyboard_grant_stays_off_the_wire() {
-        let (_server, client_conn, host_conn) = loopback().await;
+        let (_server, _client, client_conn, host_conn) = loopback().await;
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
         let client = client(crate::quic::GRANT_GAMEPAD);
         let task = tokio::spawn(run(
@@ -684,7 +676,7 @@ mod tests {
     /// drives keys: the gate runs after the fold.
     #[tokio::test]
     async fn a_pad_without_the_gamepad_grant_only_reaches_the_host_as_a_mouse() {
-        let (_server, client_conn, host_conn) = loopback().await;
+        let (_server, _client, client_conn, host_conn) = loopback().await;
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
         let client = client(crate::quic::GRANT_POINTER | crate::quic::GRANT_KEYBOARD);
         client.pad_mouse.request(1);
@@ -717,7 +709,7 @@ mod tests {
     /// run between the sends.
     #[tokio::test]
     async fn one_pad_report_leaves_as_one_snapshot() {
-        let (_server, client_conn, host_conn) = loopback().await;
+        let (_server, _client, client_conn, host_conn) = loopback().await;
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
         let client = client(crate::quic::GRANT_ALL);
         let task = tokio::spawn(run(

@@ -1,6 +1,6 @@
 [package]
 name = "pf-vaapi"
-description = "Hand-declared libva buffer layouts, CPU-testable: H.264/HEVC/AV1 decode buffers and profile/format/surface decisions for the Linux clients, plus the encode and VideoProc buffers the host's VAAPI encoder fills; the libva plumbing lives in pf-client-core and pf-libva (design/client-native-decode.md §3.4)"
+description = "Hand-declared libva buffer layouts, CPU-testable: H.264/HEVC/AV1 decode buffers and profile/format/surface decisions for the Linux clients, plus the encode and VideoProc buffers the host's VAAPI encoder fills; the libva plumbing lives in pf-client-video and pf-libva (design/client-native-decode.md §3.4)"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

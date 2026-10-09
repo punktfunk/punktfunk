@@ -7,7 +7,8 @@
 //! [`group_bytes`]; a wait under the sleep floor spins, so the clock holds at multi-gigabit
 //! rates. `PUNKTFUNK_DELIVERY` is the operator's A/B ([`forced`]).
 //!
-//! `PUNKTFUNK_VIDEO_DROP` and the percentile helper live here too.
+//! The frame-driven tick wait ([`wait_next_tick`]), `PUNKTFUNK_VIDEO_DROP` and the
+//! percentile helper live here too.
 
 use std::time::{Duration, Instant};
 
@@ -556,6 +557,67 @@ impl CaptureCredit {
     }
 }
 
+/// How long past `next` the arrival wait runs before a repeat goes out: half an interval
+/// with no measured source cadence, else until 1.25× the source period after the last
+/// submit. A steady slower source gets no repeat between its own frames; a stalled one
+/// re-sends after that same wait.
+fn keepalive_wait(interval: Duration, src_period_ns: Option<u64>) -> Duration {
+    let half = interval.mul_f32(0.5);
+    match src_period_ns {
+        Some(p) => Duration::from_nanos(p)
+            .mul_f32(1.25)
+            .saturating_sub(interval)
+            .max(half),
+        None => half,
+    }
+}
+
+/// Wait for the next tick: the capturer's arrival under the credit pacer, the next access
+/// unit of an encoder that publishes its own, or the fixed-interval sleep to `next`.
+///
+/// `fresh` is a new frame's capture instant. A repeat (`None`) spends no credit and holds no
+/// slot: the real frame after it goes out on arrival. An arrival or an AU restarts the grid
+/// at `next`.
+pub(crate) fn wait_next_tick(
+    capturer: &mut dyn crate::capture::Capturer,
+    enc: &mut dyn crate::encode::Encoder,
+    credit: &mut CaptureCredit,
+    next: &mut Instant,
+    fresh: Option<Instant>,
+    interval: Duration,
+    src_period_ns: Option<u64>,
+) {
+    if !frame_driven_enabled() {
+        return sleep_to_grid(next);
+    }
+    if capturer.supports_arrival_wait() {
+        // Anchor the 0.9× floor to the capture, not `next`: a sync encoder folds encode into cadence.
+        if let Some(t_cap) = fresh {
+            credit.charge();
+            let earliest = std::cmp::max(
+                t_cap + interval.mul_f32(0.9),
+                credit.earliest(Instant::now(), interval),
+            );
+            if let Some(d) = earliest.checked_duration_since(Instant::now()) {
+                std::thread::sleep(d);
+            }
+        }
+        capturer.wait_arrival(*next + keepalive_wait(interval, src_period_ns));
+    } else if enc.ready_aus(*next).is_none() {
+        return sleep_to_grid(next);
+    }
+    // On its own phase the grid would hold a finished frame for up to a period.
+    *next = Instant::now();
+}
+
+/// The fixed-cadence tick, re-anchored when the loop is behind it.
+fn sleep_to_grid(next: &mut Instant) {
+    match next.checked_duration_since(Instant::now()) {
+        Some(d) => std::thread::sleep(d),
+        None => *next = Instant::now(),
+    }
+}
+
 /// Parsed-once `PUNKTFUNK_VIDEO_DROP` (1..=90, else off): discard N % of
 /// sealed wire packets before send. Honored by both video planes.
 pub(crate) fn video_drop_pct() -> u32 {
@@ -1002,6 +1064,17 @@ mod tests {
             after[2].duration_since(after[1]) >= interval.mul_f32(0.999),
             "third post-stall grab must be back on the interval grid"
         );
+    }
+
+    /// A source at 2× the interval gets its next frame before any repeat; one at the
+    /// interval, or none measured, keeps the plain half-interval keep-alive.
+    #[test]
+    fn a_slower_steady_source_outlives_the_keepalive() {
+        let i = Duration::from_micros(8_333);
+        assert_eq!(keepalive_wait(i, None), i.mul_f32(0.5));
+        assert_eq!(keepalive_wait(i, Some(i.as_nanos() as u64)), i.mul_f32(0.5));
+        let two = keepalive_wait(i, Some(2 * i.as_nanos() as u64));
+        assert!(two > i.mul_f32(1.4) && two < i.mul_f32(1.6), "{two:?}");
     }
 
     #[test]

@@ -176,8 +176,9 @@ pub(super) fn refresh_rate_args(session_hz: u32) -> Vec<String> {
     ]
 }
 
-/// No whitespace: both managed paths interpolate this into unquoted `${PF_HDR_ARGS}`.
-fn refresh_rate_list(session_hz: u32, configured: &[u32]) -> String {
+/// `configured` plus `session_hz`, sorted, comma-joined. No whitespace: the managed paths
+/// interpolate it unquoted into `${PF_HDR_ARGS}` and `CUSTOM_REFRESH_RATES`.
+pub(super) fn refresh_rate_list(session_hz: u32, configured: &[u32]) -> String {
     let mut rates = configured.to_vec();
     if !rates.contains(&session_hz) {
         rates.push(session_hz);

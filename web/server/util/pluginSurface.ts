@@ -12,7 +12,8 @@ type Method = "GET" | "PUT" | "POST";
  *
  * `methods` is all that is forwarded (405 otherwise). A PUT with `grantForm` saves through
  * `putAndGrant` and merges its `access` outcome into the answer. `notFound` is the body a plugin's
- * 404 becomes: marked, so the host API's own 404 under `bun run dev` never reads as it.
+ * 404 becomes: marked, so the host API's own 404 under `bun run dev` never reads as it. A plugin's
+ * 401 refuses our secret, not the session, so it answers 502 like an unreachable plugin.
  */
 export async function pluginSurface(
 	event: H3Event,
@@ -37,8 +38,16 @@ export async function pluginSurface(
 	const { res, access } =
 		method === "PUT" && opts.grantForm
 			? await putAndGrant(id, path, body, opts.grantForm)
-			: { res: await callPlugin(id, path, method, body), access: undefined };
-	if (!res) {
+			: {
+					res: await callPlugin(id, path, {
+						method,
+						headers:
+							method === "GET" ? {} : { "content-type": "application/json" },
+						body,
+					}),
+					access: undefined,
+				};
+	if (!res || res.status === 401) {
 		setResponseStatus(event, 502);
 		return { error: `plugin ${id} is not reachable` };
 	}

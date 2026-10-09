@@ -96,8 +96,10 @@ public enum GamepadGlyphs {
             }
         // Nintendo's labels sit transposed on the same positions (bottom = B, right = A,
         // left = Y, top = X) — printing Xbox letters on a Switch pad would name the wrong
-        // physical button, which is worse than a generic glyph.
-        case .switchPro:
+        // physical button, which is worse than a generic glyph. The families match the
+        // console's `GlyphStyle::from_pref`.
+        case .switchPro, .eightBitDoPro2, .eightBitDoPro3, .joyConPair, .switch2Pro,
+             .switch2GameCube:
             switch role {
             case .a: return "b.circle"
             case .b: return "a.circle"
@@ -109,7 +111,7 @@ public enum GamepadGlyphs {
         // is what a client with no remembered pad has. Xbox letters double as the neutral default
         // because they ARE the positional names in `GCExtendedGamepad`.
         case .auto, .xbox360, .xboxOne, .xboxElite, .steamController, .steamDeck,
-             .steamController2, .steamController2Puck:
+             .steamController2, .steamController2Puck, .eightBitDoUltimate2, .horipadSteam:
             switch role {
             case .a: return "a.circle"
             case .b: return "b.circle"

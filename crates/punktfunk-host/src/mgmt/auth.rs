@@ -13,8 +13,8 @@
 //! The tray's `tray-token` (bearer, loopback) is not a lane: it opens `/local/summary` alone.
 
 use super::shared::*;
-use crate::gamestream::tls::PeerCertFingerprint;
-use crate::gamestream::tls::{PeerAddr, PipePlugin};
+use crate::https::PeerCertFingerprint;
+use crate::https::{PeerAddr, PipePlugin};
 use axum::extract::{FromRequestParts, Request};
 use axum::http::header;
 use axum::http::request::Parts;

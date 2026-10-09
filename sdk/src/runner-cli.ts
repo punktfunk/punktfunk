@@ -154,9 +154,9 @@ switch (process.argv[2]) {
 
 // ---- one unit, inside its sandbox (spawned by the supervisor; never run by hand) --------------
 //
-// The other half of `runner.ts`'s sandbox: `bwrap` re-execs this bundle with one unit to run, so a
-// plugin's code gets a process — and a token — of its own. Everything it can see was decided by
-// the argv on the outside; there is nothing left to enforce in here. The exit code is how the
+// The other half of runner-linux.ts's sandbox: `bwrap` re-execs this bundle with one unit to run,
+// so a plugin's code gets a process — and a token — of its own. Everything it can see was decided
+// by the argv on the outside; there is nothing left to enforce in here. The exit code is how the
 // supervisor learns the plugin failed, and what makes it restart on the usual backoff.
 const runUnit = arg("--run-unit");
 if (runUnit) {

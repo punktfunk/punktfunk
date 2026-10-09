@@ -18,6 +18,9 @@
 //! `design/clipboard-and-file-transfer.md`.
 
 use super::*;
+use crate::native::bitrate::{
+    pyrowave_auto_pin_ceiling_kbps, pyrowave_bounds_kbps, resolve_bitrate_kbps, UnrecoveredRun,
+};
 use pf_clipboard::ClipCoordCmd;
 use punktfunk_core::abr::governor::{ShareWindow, NO_SHARE_KBPS};
 use punktfunk_core::quic::v2::{io as v2io, msg as v2msg};
@@ -258,7 +261,7 @@ pub(super) struct Task {
     /// Audio reservation out of the wire budget. With [`Self::wire_bytes`] and
     /// the live mode it is the frame adaptive FEC has to protect.
     pub(super) audio_kbps: u32,
-    /// Client set `EXT_ABR_ACK_REASON` in its `Start` block: its `BitrateChanged`
+    /// Client set `EXT_ABR_ACK_REASON` in its `ClientHello`: its `BitrateChanged`
     /// may carry the reason byte. Clear for every shipped client, which rejects
     /// a longer ack, and for every client behind a host without `HOST_CAP2_EXT`.
     pub(super) ack_reason: bool,
@@ -1377,7 +1380,7 @@ mod tests {
         );
     }
 
-    /// A client whose `ClientHello` carried no `EXT_TAG_ABR` gets an ack without a reason,
+    /// A client whose `ClientHello` set no `abr_features` gets an ack without a reason,
     /// whatever the host knows about the refusal: a 0.43 client rejects any other ack.
     #[test]
     fn a_client_that_did_not_ask_gets_no_reason() {

@@ -229,11 +229,6 @@ pub(super) fn runner_sandbox_off() -> bool {
     })
 }
 
-#[cfg(not(target_os = "linux"))]
-pub(super) fn runner_sandbox_off() -> bool {
-    false
-}
-
 #[cfg(target_os = "linux")]
 pub(super) fn restart_runtime() -> Result<()> {
     run_systemctl(&["restart", UNIT])
@@ -250,10 +245,8 @@ pub(super) fn converge_runner_roots(
     home: &std::path::Path,
     _manifests: &std::collections::BTreeMap<String, manifest::PluginManifest>,
 ) -> Result<bool> {
-    let config = std::env::var_os("XDG_CONFIG_HOME")
-        .map(std::path::PathBuf::from)
-        .filter(|p| p.is_absolute())
-        .unwrap_or_else(|| home.join(".config"));
+    // `home` is `$HOME`, the fallback `xdg_home` reads.
+    let config = pf_paths::xdg_home("XDG_CONFIG_HOME", ".config");
     let dir = config.join(format!("systemd/user/{UNIT}.service.d"));
     let path = dir.join(ROOTS_DROPIN);
     let body = render_roots(roots, &hidden_roots(home));

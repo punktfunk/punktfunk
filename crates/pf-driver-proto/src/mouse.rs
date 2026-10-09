@@ -307,43 +307,10 @@ pub static MOUSE_RDESC: [u8; MOUSE_RDESC_LEN] = [
 mod tests {
     use super::*;
     use crate::gamepad;
-    use alloc::collections::BTreeMap;
-
-    /// Report bytes per `(main-item tag, report id)`, walked the way a HID parser does: global
-    /// items persist (Push/Pop save and restore them), each main item adds size × count bits.
-    fn report_lens(d: &[u8]) -> BTreeMap<(u8, u8), usize> {
-        let (mut size, mut count, mut id) = (0u32, 0u32, 0u8);
-        let mut stack = alloc::vec::Vec::new();
-        let mut bits = BTreeMap::<(u8, u8), u32>::new();
-        let mut i = 0;
-        while i < d.len() {
-            let prefix = d[i];
-            let n = [0, 1, 2, 4][usize::from(prefix & 3)];
-            let mut v = 0u32;
-            for k in 0..n {
-                v |= u32::from(d[i + 1 + k]) << (8 * k);
-            }
-            match prefix & 0xFC {
-                0x74 => size = v,
-                0x94 => count = v,
-                0x84 => id = v as u8,
-                0xA4 => stack.push((size, count, id)),
-                0xB4 => (size, count, id) = stack.pop().unwrap(),
-                tag @ (0x80 | 0x90 | 0xB0) => *bits.entry((tag, id)).or_default() += size * count,
-                _ => {}
-            }
-            i += 1 + n;
-        }
-        bits.into_iter()
-            .map(|(k, b)| (k, 1 + (b as usize).div_ceil(8)))
-            .collect()
-    }
+    use crate::rdesc::{report_lens, FEATURE, INPUT, OUTPUT};
 
     #[test]
     fn descriptor_declares_exactly_the_reports_the_builders_make() {
-        const INPUT: u8 = 0x80;
-        const OUTPUT: u8 = 0x90;
-        const FEATURE: u8 = 0xB0;
         let lens = report_lens(&MOUSE_RDESC);
         assert_eq!(
             lens.into_iter().collect::<alloc::vec::Vec<_>>(),

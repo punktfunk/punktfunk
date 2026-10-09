@@ -14,6 +14,7 @@ use pf_bitstream::h264::DpbUpdate;
 use pf_bitstream::h264::PicId;
 use tracing::debug;
 use tracing::trace;
+use tracing::warn;
 
 use super::DecodeStatus;
 use super::DecodedVkFrame;
@@ -36,9 +37,10 @@ use crate::ring::RING_SLOTS;
 use crate::session::CodecSession;
 use crate::slots::SlotMap;
 
-/// One codec [`VkDecoder`] drives: planner, caps and stream state, plus the
-/// types the shared recording needs. Decoding and flushing are the codec's;
-/// lifecycle, status, release and the decode-op recording are shared.
+/// One codec [`VkDecoder`] drives: planner and stream state, plus the types and
+/// session-shape hooks the shared code needs. Decoding and flushing are the
+/// codec's; lifecycle, caps, session shape, status, release and the decode-op
+/// recording are shared.
 pub trait VkCodec: Sized {
     /// Video session plus the codec's parameters object.
     type Session: CodecSession;
@@ -46,6 +48,10 @@ pub trait VkCodec: Sized {
     type StdRef: Copy;
     /// What [`VkDecoder::take_warnings`] returns.
     type Warning;
+    /// The planned picture a session is shaped from.
+    type Plan;
+    /// What caps are cached by and a session is built for; a change rebuilds both.
+    type ProfileKey: Copy + Eq;
     /// `VkVideoDecode*DpbSlotInfoKHR`, chained onto every bound slot.
     type DpbSlotInfo<'a>: vk::ExtendsVideoReferenceSlotInfoKHR
     where
@@ -69,6 +75,40 @@ pub trait VkCodec: Sized {
     fn snapshot_flags(&self) -> &'static str {
         ""
     }
+
+    fn profile_key(plan: &Self::Plan) -> Result<Self::ProfileKey, VkDecodeError>;
+    fn decode_profile(key: Self::ProfileKey) -> DecodeProfile;
+    /// Caps for `key`, derived for the key's output format.
+    ///
+    /// # Safety
+    ///
+    /// `dev` wraps live handles ([`crate::DeviceHandles`] contract).
+    unsafe fn query_caps(
+        dev: &DecodeDevice,
+        key: Self::ProfileKey,
+    ) -> Result<DecodeCaps, VkDecodeError>;
+    /// Refuse caps that derived but that this codec cannot use for `key`.
+    fn admit(_key: Self::ProfileKey, _caps: &DecodeCaps) -> Result<(), VkDecodeError> {
+        Ok(())
+    }
+    /// The declared level, in the Std code space of the caps' `max_level_idc`.
+    fn stream_level(plan: &Self::Plan) -> u32;
+    /// DPB slots a session for `plan` needs, the setup slot included.
+    fn required_slots(plan: &Self::Plan) -> u32;
+    /// The extent decode writes; pool images round it up to the granularity.
+    fn coded_extent(plan: &Self::Plan) -> vk::Extent2D;
+    /// A session of `slots` DPB slots at `extent` for `key`.
+    ///
+    /// # Safety
+    ///
+    /// `dev` wraps live handles ([`crate::DeviceHandles`] contract).
+    unsafe fn create_session(
+        dev: &DecodeDevice,
+        caps: &DecodeCaps,
+        key: Self::ProfileKey,
+        slots: u32,
+        extent: vk::Extent2D,
+    ) -> Result<Self::Session, VkDecodeError>;
 }
 
 /// One session generation. Extent / DPB / profile renegotiation retires it.
@@ -95,6 +135,8 @@ pub(crate) struct SessionState<C: VkCodec> {
     submitted: u64,
     /// Newest submission's completion token (session drain).
     last_submit: Option<(vk::Semaphore, u64)>,
+    /// The profile the session was built for (renegotiation comparison).
+    key: C::ProfileKey,
     /// Stream coded extent (renegotiation comparison).
     pub(crate) coded_extent: vk::Extent2D,
     /// Granularity-aligned allocation extent (picture resources + frames).
@@ -109,16 +151,17 @@ impl<C: VkCodec> SessionState<C> {
     /// # Safety
     ///
     /// `dec.dev` wraps live handles ([`crate::DeviceHandles`] contract), and
-    /// `session` was created on it for `profile`.
-    pub(crate) unsafe fn create(
+    /// `session` was created on it for `key`.
+    unsafe fn create(
         dec: &VkDecoder<C>,
         caps: &DecodeCaps,
         session: C::Session,
-        profile: DecodeProfile,
+        key: C::ProfileKey,
         required_slots: u32,
         coded_extent: vk::Extent2D,
         image_extent: vk::Extent2D,
     ) -> Result<Self, VkDecodeError> {
+        let profile = C::decode_profile(key);
         let mut pool_plan = plan_pools(caps, required_slots);
         // Test-only: `gpu_parity` copies pictures to the host, and
         // `vkCmdCopyImageToBuffer` needs TRANSFER_SRC — a bit production
@@ -171,6 +214,7 @@ impl<C: VkCodec> SessionState<C> {
             query_marks: vec![u64::MAX; pool_plan.picture_count as usize],
             submitted: 0,
             last_submit: None,
+            key,
             coded_extent,
             image_extent,
             dpb,
@@ -242,8 +286,13 @@ pub(crate) struct Op<S> {
 pub struct VkDecoder<C: VkCodec> {
     pub(crate) dev: DecodeDevice,
     lock: Box<dyn QueueLock>,
-    /// Planner, caps, and the codec's stream state.
+    /// Planner and the codec's stream state.
     pub(crate) codec: C,
+    /// Caps of the last profile asked for, queried once per profile.
+    pub(crate) caps: Option<(C::ProfileKey, DecodeCaps)>,
+    /// The over-ceiling level warning has fired: the level is the stream's, so
+    /// once per decoder.
+    level_advisory_warned: bool,
     pub(crate) state: Option<SessionState<C>>,
     /// Pictures awaiting their planner output verdict, keyed by planner id.
     pub(crate) pending: BTreeMap<PicId, PendingPic>,
@@ -276,6 +325,8 @@ impl<C: VkCodec> VkDecoder<C> {
             dev,
             lock,
             codec,
+            caps: None,
+            level_advisory_warned: false,
             state: None,
             pending: BTreeMap::new(),
             ready: VecDeque::new(),
@@ -703,6 +754,81 @@ impl<C: VkCodec> VkDecoder<C> {
             );
             state.pool.pictures[entry.image].pending = false;
         }
+    }
+
+    /// Caps and session match `plan`'s profile and extent, or the session is
+    /// rebuilt. A declared level above the device ceiling warns once and
+    /// proceeds: encoders over-declare, and no level above the ceiling reaches
+    /// the driver. DPB depth and extent are the real limits, checked in
+    /// [`Self::rebuild_state`].
+    pub(crate) fn ensure_state(&mut self, plan: &C::Plan) -> Result<(), VkDecodeError> {
+        let key = C::profile_key(plan)?;
+        if self.caps.as_ref().map(|(cached, _)| *cached) != Some(key) {
+            // SAFETY: live device (constructor contract).
+            let caps = unsafe { C::query_caps(&self.dev, key)? };
+            self.caps = Some((key, caps));
+        }
+        let caps = &self.caps.as_ref().expect("queried above").1;
+        C::admit(key, caps)?;
+        let ceiling = caps.max_level_idc;
+        let stream_level = C::stream_level(plan);
+        if stream_level > ceiling.code_point() && !self.level_advisory_warned {
+            self.level_advisory_warned = true;
+            warn!(
+                stream_level,
+                %ceiling,
+                "stream declares a level above the device ceiling; the declared level is \
+                 advisory (encoders over-declare), so decode proceeds and no level above \
+                 the ceiling reaches the driver"
+            );
+        }
+        let coded = C::coded_extent(plan);
+        match &self.state {
+            Some(state) if state.coded_extent == coded && state.key == key => Ok(()),
+            _ => self.rebuild_state(plan),
+        }
+    }
+
+    /// Caps for `key` derive on this device and the codec admits them:
+    /// [`Self::ensure_state`]'s query and refusal, asked before any AU.
+    pub(crate) fn probe_key(&self, key: C::ProfileKey) -> Result<(), VkDecodeError> {
+        // SAFETY: the constructor's `DeviceHandles` contract holds for this
+        // decoder's whole lifetime, so the physical device is live.
+        let caps = unsafe { C::query_caps(&self.dev, key)? };
+        C::admit(key, &caps)
+    }
+
+    /// Retire the current generation ([`Self::retire_state`]) and build a fresh
+    /// one shaped by `plan`, on the caps [`Self::ensure_state`] cached.
+    pub(crate) fn rebuild_state(&mut self, plan: &C::Plan) -> Result<(), VkDecodeError> {
+        self.retire_state()?;
+        let (key, caps) = self.caps.as_ref().expect("ensure_state queried caps");
+        let key = *key;
+        let required_slots = C::required_slots(plan);
+        if required_slots > caps.max_dpb_slots {
+            return Err(VkDecodeError::Unsupported(format!(
+                "stream needs {required_slots} DPB slots, device caps at {}",
+                caps.max_dpb_slots
+            )));
+        }
+        let coded = C::coded_extent(plan);
+        let image_extent = session_extent(caps, coded)?;
+        // SAFETY: live device per the constructor contract; the session is
+        // owned by a Drop type the moment it exists.
+        let state = unsafe {
+            let session = C::create_session(&self.dev, caps, key, required_slots, image_extent)?;
+            SessionState::create(
+                self,
+                caps,
+                session,
+                key,
+                required_slots,
+                coded,
+                image_extent,
+            )?
+        };
+        self.state = Some(state);
+        Ok(())
     }
 
     /// Tear down the current generation: drain decode work, retire the picture

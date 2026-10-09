@@ -18,7 +18,7 @@
 use crate::audio::SAMPLE_RATE;
 use {
     super::AUDIO_PORT,
-    crate::audio::{self, AudioCapturer},
+    crate::audio::{self, AudioCapSlot, Ready},
     anyhow::{Context, Result},
     cbc::cipher::{block_padding::Pkcs7, BlockModeEncrypt, KeyIvInit},
     std::net::UdpSocket,
@@ -204,10 +204,6 @@ fn build_fec_rtp(
     p
 }
 
-/// Persistent capturer, reused across streams so the PipeWire thread is not leaked.
-/// A different channel count drops the cache and opens a new one.
-pub type AudioCapSlot = Arc<std::sync::Mutex<Option<Box<dyn AudioCapturer>>>>;
-
 /// Spawn the audio thread. `aes_key` is present only when the client negotiated
 /// AES-CBC audio; `rikeyid` seeds its per-packet IV.
 #[allow(clippy::too_many_arguments)] // one construction site (RTSP PLAY)
@@ -259,7 +255,7 @@ fn run(
     aes_key: Option<&[u8; 16]>,
     rikeyid: i32,
     params: AudioParams,
-    audio_cap: &std::sync::Mutex<Option<Box<dyn AudioCapturer>>>,
+    audio_cap: &AudioCapSlot,
     on_lost: &super::OnSessionLost,
     owner_ip: Option<std::net::IpAddr>,
     av_ping: &[u8; super::AV_PING_LEN],
@@ -281,22 +277,19 @@ fn run(
     tracing::debug!(%client, "audio: client endpoint learned");
 
     let want = layout_for(&params).channels.min(MAX_CAPTURE_CHANNELS) as u32;
-    // Before the parked-capturer check: it compares the policy this guard sets. Outlives `cap`.
+    // Before the parked-capturer check: it compares the policy this guard sets. Outlives `lease`.
     let _keep_host_audio = params
         .host_audio
         .then(crate::audio::capture_policy::keep_host_audio_guard);
     // Always 48 kHz: GameStream Opus has no rate field, and libopus tops out here.
     // Hi-res `0xD3` is native-only (`design/hi-res-audio.md`).
-    let mut cap = match audio::take_parked_capture(audio_cap, want, SAMPLE_RATE) {
-        Some(c) => c,
-        None => audio::open_audio_capture(want, SAMPLE_RATE).context("open audio capture")?,
-    };
-    let result = audio_body(&mut *cap, &sock, aes_key, rikeyid, params, running, on_lost);
-    cap.idle(); // release the Linux stream-sink routing claim between sessions
-                // A failed body may mean a dead capture thread; parked, every later session would reuse it.
-    if result.is_ok() {
-        audio::park_audio_capture(audio_cap, cap); // keeps only a sinkless Linux capturer
-    }
+    let mut lease = audio::CaptureLease::new(want, SAMPLE_RATE, Default::default());
+    lease.open(audio_cap, || !running.load(Ordering::SeqCst));
+    let result = audio_body(
+        &mut lease, &sock, aes_key, rikeyid, params, running, on_lost,
+    );
+    // Releases the routing claim and parks a live capturer; a dead one is already gone.
+    lease.park(audio_cap);
     result
 }
 
@@ -337,7 +330,7 @@ const PACE_REANCHOR: Duration = Duration::from_millis(100);
 
 #[allow(clippy::too_many_arguments)]
 fn audio_body(
-    cap: &mut dyn AudioCapturer,
+    lease: &mut audio::CaptureLease,
     sock: &UdpSocket,
     aes_key: Option<&[u8; 16]>,
     rikeyid: i32,
@@ -367,10 +360,7 @@ fn audio_body(
     } as usize;
     let samples_per_channel = SAMPLE_RATE as usize * frame_ms / 1000;
     let frame_len = samples_per_channel * layout.channels as usize;
-    // Fewer capture channels than the layout (7.1.4) are padded with silence per frame.
-    let cap_ch = cap.channels() as usize;
-    let frame_in = samples_per_channel * cap_ch;
-    let mut acc: Vec<f32> = Vec::with_capacity(frame_in * 4);
+    let mut acc: Vec<f32> = Vec::with_capacity(frame_len * 4);
     let mut out = vec![0u8; (frame_len * 2).max(1400)];
     let mut seq: u16 = 0;
     let mut timestamp: u32 = 0;
@@ -399,12 +389,26 @@ fn audio_body(
         "audio: encoder configured"
     );
 
-    while running.load(Ordering::SeqCst) {
+    let stopped = || !running.load(Ordering::SeqCst);
+    while !stopped() {
+        match lease.ready(stopped) {
+            Ready::Live => {}
+            Ready::Down => continue,
+            // The partial frame and the open FEC block straddle the gap. The next block starts
+            // at `seq % 4 == 0`, so parity stays aligned.
+            Ready::Reopened => {
+                acc.clear();
+                fec_block.clear();
+            }
+        }
         // Bounded so a stop is seen well inside `/resume`'s wait for this thread; a quiet
         // host would otherwise hold port 48000 for the backend's whole 5 s timeout.
-        let chunk = cap
-            .next_chunk_within(STOP_POLL)
-            .context("capture audio chunk")?;
+        let Some(chunk) = lease.next_chunk(Some(STOP_POLL)) else {
+            continue;
+        };
+        // Fewer capture channels than the layout (7.1.4) are padded with silence per frame.
+        let cap_ch = lease.live().channels() as usize;
+        let frame_in = samples_per_channel * cap_ch;
         acc.extend_from_slice(&chunk);
         while acc.len() >= frame_in {
             let mut frame = pad_channels(acc.drain(..frame_in), cap_ch, layout.channels.into());
@@ -716,7 +720,7 @@ mod tests {
     /// Live 5.1 capture → encode → decode. Needs
     /// `pactl load-module module-null-sink sink_name=pf51 channels=6 rate=48000`
     /// as the default sink, then
-    /// `cargo test -p punktfunk-host --lib -- --ignored surround_capture`.
+    /// `cargo test -p punktfunk-host -- --ignored surround_capture`.
     #[cfg(target_os = "linux")]
     #[test]
     #[ignore]

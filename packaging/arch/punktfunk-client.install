@@ -1,13 +1,6 @@
-# pacman scriptlet for the GTK4 client — mirrors build-client-deb.sh's postinst.
-_ensure_update_group() {
-  # The (empty) opt-in group for one-tap client updates — nobody is auto-added. Shared with
-  # punktfunk-host's scriptlet: `groupadd` is idempotent here, so whichever package lands first
-  # creates it and the other is a no-op.
-  getent group punktfunk-update >/dev/null 2>&1 || groupadd --system punktfunk-update 2>/dev/null || true
-}
-
+# pacman scriptlet for the GTK4 client — mirrors build-client-deb.sh's postinst. pacman's own
+# sysusers hook creates punktfunk-update from usr/lib/sysusers.d/punktfunk-client.conf.
 post_install() {
-  _ensure_update_group
   udevadm control --reload-rules 2>/dev/null || true
   udevadm trigger --subsystem-match=hidraw 2>/dev/null || true
   update-desktop-database /usr/share/applications 2>/dev/null || true
@@ -22,7 +15,6 @@ MSG
 }
 
 post_upgrade() {
-  _ensure_update_group
   udevadm control --reload-rules 2>/dev/null || true
   sysctl -p /usr/lib/sysctl.d/99-punktfunk-client-net.conf >/dev/null 2>&1 || true
 }

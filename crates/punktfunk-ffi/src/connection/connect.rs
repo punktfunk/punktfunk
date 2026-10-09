@@ -778,7 +778,7 @@ pub struct PunktfunkConnectOpts {
     pub preset_name: *const std::os::raw::c_char,
     /// Always `0`.
     pub reserved3: u8,
-    /// `2` dials a network check's probes-only session (`EXT_TAG_PROBE_ONLY`). `0` streams,
+    /// `2` dials a network check's probes-only session (`EXT_DELIVERY_PROBE_ONLY`). `0` streams,
     /// which is what a shorter prefix defaults to.
     pub delivery_flags: u8,
     /// Always `0`. Fills what would otherwise be padding, as `reserved0` does.

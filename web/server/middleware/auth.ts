@@ -18,13 +18,12 @@ import {
 	authConfigured,
 	csrfRequestOrigin,
 	isCrossSiteMutation,
-	isPublicPath,
 	SESSION_NAME,
 	type SessionData,
-	safeNextPath,
 	sessionConfig,
 	sessionEpoch,
 } from "../util/auth";
+import { isPublicPath, safeNextPath } from "../util/paths";
 import {
 	consoleOriginPort,
 	consoleOriginScheme,

@@ -503,7 +503,7 @@
 	"diag_attention_link": "Fehlersuche",
 	"diag_attention_more": "und {count} weitere",
 	"diag_takeover_privilege_title": "Übernahme des Display-Managers",
-	"diag_virtual_deck_vhci_title": "Virtueller Steam-Deck-Controller",
+	"diag_virtual_deck_vhci_title": "USB/IP-Controller",
 	"diag_uinput_access_title": "Unterstützung für virtuelle Controller",
 	"diag_server_conflict_title": "Konkurrierender Streaming-Server",
 	"diag_vdisplay_driver_title": "Treiber für virtuelle Anzeige",

@@ -42,14 +42,16 @@ const CLOCK: [&str; RING_SLOTS] = [
     "10 o'clock",
 ];
 
-/// What the settings page hands the editor: the app, the scope being edited, and the revision
-/// counter every commit bumps (the page repaints on it).
+/// What the settings page hands the editor: the app, the scope being edited, the revision
+/// counter every commit bumps (the page repaints on it) and the status line a failed save
+/// lands on.
 #[derive(Clone)]
 pub(super) struct Props {
     pub ctx: Arc<AppCtx>,
     pub scope: String,
     pub rev: u64,
     pub set_rev: AsyncSetState<u64>,
+    pub set_status: AsyncSetState<String>,
 }
 
 impl PartialEq for Props {
@@ -121,7 +123,9 @@ fn write(props: &Props, cfg: &OverlayConfig) {
     commit(
         &props.ctx,
         &props.scope,
+        "overlay_actions",
         (props.rev, &props.set_rev),
+        &props.set_status,
         move |s| {
             s.overlay_actions = blob;
         },
@@ -720,9 +724,14 @@ fn shortcuts(props: &Props, cfg: &OverlayConfig, ui: &Ui, set_ui: &SetState<Ui>)
         let (props, ui, set_ui) = (props.clone(), ui.clone(), set_ui.clone());
         move || {
             if ui.reset_armed {
-                commit(&props.ctx, &props.scope, (props.rev, &props.set_rev), |s| {
-                    s.overlay_actions.clear();
-                });
+                commit(
+                    &props.ctx,
+                    &props.scope,
+                    "overlay_actions",
+                    (props.rev, &props.set_rev),
+                    &props.set_status,
+                    |s| s.overlay_actions.clear(),
+                );
             }
             let mut u = ui.clone();
             u.reset_armed = !ui.reset_armed;

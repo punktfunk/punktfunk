@@ -28,7 +28,7 @@ mod cli {
     };
     use pf_client_core::presets::PresetsFile;
     use pf_client_core::profiles::{self, ListedProfile};
-    use pf_client_core::trust::{self, KnownHost, KnownHosts, Settings};
+    use pf_client_core::trust::{self, AddOutcome, HostEdit, KnownHost, KnownHosts, Settings};
     use pf_client_core::{library, start, wol};
     use std::time::Duration;
 
@@ -663,7 +663,6 @@ from the config directory for a true factory reset."
                 if let Err(e) = trust::persist_host(&addr, &addr, port, &fp_hex, true, &[]) {
                     eprintln!("couldn't save the host: {e:#}");
                 }
-                trust::forget_placeholder(&addr, port);
                 println!("paired {addr}:{port} fp={fp_hex}");
                 OK
             }
@@ -753,68 +752,36 @@ from the config directory for a true factory reset."
                     return UNRESOLVED;
                 };
                 let (addr, port) = split_host_port(&target);
-                // Lowercase, as every pin is stored and matched.
-                let fp = value(args, "--fp").unwrap_or_default().to_ascii_lowercase();
+                let fp = value(args, "--fp").unwrap_or_default();
                 if !fp.is_empty() && trust::parse_hex32(&fp).is_none() {
                     eprintln!("--fp takes the host's 64-hex-digit fingerprint");
                     return UNRESOLVED;
                 }
-                let name = value(args, "--name");
-                let mut known = KnownHosts::load();
-                if let Some(i) = add_target(&known, &addr, port, &fp) {
-                    match merge_saved_host(&mut known, i, &fp, name.as_deref()) {
-                        AddOutcome::Unchanged => {
-                            eprintln!("{addr}:{port} is already saved");
-                            return OK;
-                        }
-                        AddOutcome::Pinned => {
-                            return match known.save() {
-                                Ok(()) => {
-                                    println!("updated {addr}:{port}");
-                                    OK
-                                }
-                                Err(e) => {
-                                    eprintln!("saving: {e:#}");
-                                    CONNECT_FAILED
-                                }
-                            }
-                        }
-                        // The guard held: nothing was overwritten, so file this identity below.
-                        AddOutcome::Conflict => {}
-                    }
-                }
-                // Nothing to merge into here — but a record with this exact FINGERPRINT is this
-                // same host at a new address. Re-point it: a moved host would otherwise file one
-                // record per address it has ever held, and the one its stable id resolves to
-                // keeps an address it has left.
-                if let Some(i) = known
-                    .hosts
-                    .iter()
-                    .position(|h| !fp.is_empty() && h.fp_hex.eq_ignore_ascii_case(&fp))
-                {
-                    let was = format!("{}:{}", known.hosts[i].addr, known.hosts[i].port);
-                    known.hosts[i].move_to(&addr, port);
-                    return match known.save() {
-                        Ok(()) => {
-                            println!("moved {was} to {addr}:{port}");
-                            OK
-                        }
-                        Err(e) => {
-                            eprintln!("saving: {e:#}");
-                            CONNECT_FAILED
-                        }
-                    };
-                }
-                known.hosts.push(KnownHost {
-                    name: name.unwrap_or_else(|| addr.clone()),
-                    addr: addr.clone(),
-                    port,
-                    fp_hex: fp,
+                let edit = HostEdit {
+                    name: value(args, "--name"),
+                    addr: Some(addr.clone()),
+                    port: Some(port),
+                    fp: Some(fp),
                     ..Default::default()
-                });
+                };
+                let mut known = KnownHosts::load();
+                let line = match known.add(&edit) {
+                    // Exits 0: a panel retrying step 1 of request access finds a correct state.
+                    Ok(AddOutcome::Unchanged) => {
+                        eprintln!("{addr}:{port} is already saved");
+                        return OK;
+                    }
+                    Ok(AddOutcome::Added) => format!("added {addr}:{port}"),
+                    Ok(AddOutcome::Pinned | AddOutcome::Edited) => format!("updated {addr}:{port}"),
+                    Ok(AddOutcome::Moved { from }) => format!("moved {from} to {addr}:{port}"),
+                    Err(e) => {
+                        eprintln!("{e:#}");
+                        return UNRESOLVED;
+                    }
+                };
                 match known.save() {
                     Ok(()) => {
-                        println!("added {addr}:{port}");
+                        println!("{line}");
                         OK
                     }
                     Err(e) => {
@@ -848,70 +815,6 @@ from the config directory for a true factory reset."
                 UNRESOLVED
             }
         }
-    }
-
-    /// What `hosts add` did to a record that was ALREADY saved for this address.
-    #[derive(Debug, PartialEq, Eq)]
-    enum AddOutcome {
-        /// Nothing to do — no fingerprint was offered, or the record already carries this one.
-        /// Exits 0 on purpose: a panel retrying step 1 of request access must not have to
-        /// invent an error to show for a state that is already correct.
-        Unchanged,
-        /// The record had no fingerprint and now has this one.
-        Pinned,
-        /// The record carries a DIFFERENT fingerprint. Never overwritten — a second identity
-        /// is filed beside it.
-        Conflict,
-    }
-
-    /// The saved record `hosts add` is ABOUT: the one at this address already carrying this
-    /// fingerprint, or the unpinned placeholder waiting for one.
-    ///
-    /// A record there carrying a DIFFERENT fingerprint is a different host, and is not this
-    /// add's target — a dual-boot box answers on one lease with one MAC and a certificate per
-    /// OS, so the second one is filed beside the first rather than refused for its address.
-    fn add_target(known: &KnownHosts, addr: &str, port: u16, fp: &str) -> Option<usize> {
-        known.hosts.iter().position(|h| {
-            h.addr == addr
-                && h.port == port
-                && (fp.is_empty() || h.fp_hex.is_empty() || h.fp_hex.eq_ignore_ascii_case(fp))
-        })
-    }
-
-    /// `hosts add --fp` against an address that is already saved. The difference between these
-    /// three is a trust decision, not bookkeeping.
-    ///
-    /// Filling in an empty fingerprint is step 1 of request access (design §5): a host found by
-    /// advert is saved by address first and pinned second. Without it the `--fp` is dropped on
-    /// the floor and the launch that follows refuses for want of a pin — which is what this did
-    /// before, silently and with exit 0.
-    ///
-    /// A *different* fingerprint never lands on this record: a changed identity is a decision
-    /// for a person, and quietly overwriting a pin here would be a back door through the
-    /// pinning the rest of the client is built on. `hosts add` files it as its own record —
-    /// see [`add_target`], which is why this outcome should not reach the caller.
-    fn merge_saved_host(
-        known: &mut KnownHosts,
-        i: usize,
-        fp: &str,
-        name: Option<&str>,
-    ) -> AddOutcome {
-        let existing = known.hosts[i].fp_hex.clone();
-        if fp.is_empty() || existing.eq_ignore_ascii_case(fp) {
-            return AddOutcome::Unchanged;
-        }
-        if !existing.is_empty() {
-            return AddOutcome::Conflict;
-        }
-        known.hosts[i].fp_hex = fp.to_string();
-        // Only a record still named after its own address is renamed: a label the user chose is
-        // theirs, and an advert's name must not quietly overwrite it.
-        if let Some(label) = name {
-            if known.hosts[i].name == known.hosts[i].addr {
-                known.hosts[i].name = label.to_string();
-            }
-        }
-        AddOutcome::Pinned
     }
 
     /// `wake <host-ref> [--wait]` — a magic packet, and with `--wait` the bounded wake-and-wait
@@ -1273,16 +1176,15 @@ from the config directory for a true factory reset."
     /// `SpawnOpts::persist_paired` means in the GTK shell. Every other launch records nothing,
     /// which is correct: a plain connect proves reachability, not a new trust decision.
     fn run_plan(plan: ConnectPlan, exec: bool, persist_paired: bool) -> u8 {
-        if plan.host.fp_hex.is_none() {
+        let Some(fp) = plan.host.pin() else {
             eprintln!(
                 "{} has no pinned fingerprint — punktfunk pair {}",
                 plan.host.name, plan.host.addr
             );
             return NEEDS_INTERACTION;
-        }
+        };
         // Wake first when the host is asleep and we know how to reach it. This is the thing the
         // old exec-style CLI never did: it fired a packet at best and dialled into the void.
-        let fp = plan.host.fp_hex.as_deref().unwrap_or_default();
         if plan.wake
             && !trust::probe_one(
                 &plan.host.addr,
@@ -1329,18 +1231,8 @@ from the config directory for a true factory reset."
                     // is what we are about to rewrite, and the session proved the host holds
                     // exactly this identity by completing a pinned handshake against it.
                     if persist_paired {
-                        if let Some(fp_hex) = &plan.host.fp_hex {
-                            if let Err(e) = trust::persist_host(
-                                &plan.host.name,
-                                &plan.host.addr,
-                                plan.host.port,
-                                fp_hex,
-                                true,
-                                &[],
-                            ) {
-                                eprintln!("couldn't save the host: {e:#}");
-                            }
-                            trust::forget_placeholder(&plan.host.addr, plan.host.port);
+                        if let Err(e) = orchestrate::persist_on_ready(&plan.host, fp, true) {
+                            eprintln!("couldn't save the host: {e:#}");
                         }
                     }
                 }
@@ -1840,130 +1732,6 @@ from the config directory for a true factory reset."
                 assert!(USAGE.contains(verb), "USAGE must advertise {verb}");
             }
             assert!(verb_help("bogus").is_none());
-        }
-
-        fn saved(name: &str, addr: &str, fp: &str) -> KnownHost {
-            KnownHost {
-                name: name.into(),
-                addr: addr.into(),
-                port: 9777,
-                fp_hex: fp.into(),
-                ..Default::default()
-            }
-        }
-
-        /// Step 1 of request access: a host saved by address gains the fingerprint its advert
-        /// carried. Before this, `hosts add --fp` on an existing record exited 0 having done
-        /// NOTHING — the launch that followed then refused for want of a pin, and the panel had
-        /// no way to tell why.
-        #[test]
-        fn adding_a_fingerprint_to_a_placeholder_fills_it_in() {
-            let mut known = KnownHosts {
-                hosts: vec![saved("192.168.1.9", "192.168.1.9", "")],
-            };
-            assert_eq!(
-                merge_saved_host(&mut known, 0, "abc123", Some("living-room")),
-                AddOutcome::Pinned
-            );
-            assert_eq!(known.hosts[0].fp_hex, "abc123");
-            assert_eq!(
-                known.hosts[0].name, "living-room",
-                "a record still named after its address takes the offered label"
-            );
-        }
-
-        /// A label the user chose is theirs — an advert's name must not overwrite it.
-        #[test]
-        fn filling_in_a_fingerprint_keeps_a_user_chosen_name() {
-            let mut known = KnownHosts {
-                hosts: vec![saved("Basement rig", "192.168.1.9", "")],
-            };
-            merge_saved_host(&mut known, 0, "abc123", Some("living-room"));
-            assert_eq!(known.hosts[0].name, "Basement rig");
-        }
-
-        /// Idempotent: the panel may retry step 1, and re-offering the fingerprint a record
-        /// already carries is a state that is already correct, not an error to render.
-        #[test]
-        fn re_adding_the_same_fingerprint_changes_nothing() {
-            let mut known = KnownHosts {
-                hosts: vec![saved("desk", "192.168.1.9", "ABC123")],
-            };
-            assert_eq!(
-                merge_saved_host(&mut known, 0, "abc123", None),
-                AddOutcome::Unchanged,
-                "fingerprints compare case-insensitively"
-            );
-            // And a bare `hosts add` with no --fp at all leaves the pin alone.
-            assert_eq!(
-                merge_saved_host(&mut known, 0, "", None),
-                AddOutcome::Unchanged
-            );
-            assert_eq!(known.hosts[0].fp_hex, "ABC123");
-        }
-
-        /// Both OS installs of a dual-boot box answer at one address with a certificate each.
-        /// The second `hosts add --fp` is not about the first's record, so it is filed beside
-        /// it — the pin the user already has must survive, and so must the new one.
-        #[test]
-        fn a_second_identity_at_one_address_is_not_this_adds_target() {
-            let known = KnownHosts {
-                hosts: vec![saved("desk", "192.168.1.9", "abc123")],
-            };
-            assert_eq!(add_target(&known, "192.168.1.9", 9777, "deadbeef"), None);
-            // The same host again, and a placeholder waiting for a pin, both ARE the target.
-            assert_eq!(add_target(&known, "192.168.1.9", 9777, "ABC123"), Some(0));
-            assert_eq!(add_target(&known, "192.168.1.9", 9777, ""), Some(0));
-            let placeholder = KnownHosts {
-                hosts: vec![saved("192.168.1.9", "192.168.1.9", "")],
-            };
-            assert_eq!(
-                add_target(&placeholder, "192.168.1.9", 9777, "abc"),
-                Some(0)
-            );
-        }
-
-        /// A changed identity is a decision for a person. Never a silent overwrite — this is the
-        /// same rule `upsert_trusted` enforces, and a back door here would defeat it everywhere.
-        #[test]
-        fn a_different_fingerprint_is_refused_not_overwritten() {
-            let mut known = KnownHosts {
-                hosts: vec![saved("desk", "192.168.1.9", "abc123")],
-            };
-            assert_eq!(
-                merge_saved_host(&mut known, 0, "deadbeef", None),
-                AddOutcome::Conflict
-            );
-            assert_eq!(
-                known.hosts[0].fp_hex, "abc123",
-                "the pin must survive intact"
-            );
-        }
-
-        /// A host that changed DHCP lease is re-pointed, not filed a second time. Without this
-        /// the record a stable id resolves to keeps an address the host has left, so a launch
-        /// dials into the void while the panel shows the live one.
-        #[test]
-        fn a_known_fingerprint_at_a_new_address_moves_the_record() {
-            let mut known = KnownHosts {
-                hosts: vec![saved("desk", "192.168.1.9", "abc123")],
-            };
-            // Simulates `hosts add 192.168.1.50 --fp abc123` finding no record at that address.
-            let by_addr = known
-                .hosts
-                .iter()
-                .position(|h| h.addr == "192.168.1.50" && h.port == 9777);
-            assert!(
-                by_addr.is_none(),
-                "the new address is not yet on any record"
-            );
-            let by_fp = known
-                .hosts
-                .iter()
-                .position(|h| h.fp_hex.eq_ignore_ascii_case("abc123"));
-            assert_eq!(by_fp, Some(0), "the fingerprint still identifies the host");
-            known.hosts[0].addr = "192.168.1.50".into();
-            assert_eq!(known.hosts.len(), 1, "one host, one record");
         }
 
         #[test]

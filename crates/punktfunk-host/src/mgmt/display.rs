@@ -73,15 +73,11 @@ fn edid_lock_available() -> bool {
 /// gamescope probe beside it, and for the same reason: `available()` walks /proc and forks.
 #[cfg(target_os = "linux")]
 fn keep_monitors_available() -> bool {
-    use crate::vdisplay::Compositor;
     static PRESENT: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *PRESENT.get_or_init(|| {
-        crate::vdisplay::available().iter().any(|c| {
-            matches!(
-                c,
-                Compositor::Kwin | Compositor::Hyprland | Compositor::Wlroots
-            )
-        })
+        crate::vdisplay::available()
+            .iter()
+            .any(|c| c.honours_keep_monitors())
     })
 }
 
@@ -89,22 +85,24 @@ fn keep_monitors_available() -> bool {
 /// (`vdisplay::claim_workspace`)? Cached: see [`keep_monitors_available`].
 #[cfg(target_os = "linux")]
 fn workspace_placement_available() -> bool {
-    use crate::vdisplay::Compositor;
     static PRESENT: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *PRESENT.get_or_init(|| {
         crate::vdisplay::available()
             .iter()
-            .any(|c| matches!(c, Compositor::Hyprland | Compositor::Wlroots))
+            .any(|c| c.places_launch_workspace())
     })
 }
 
-/// Can a backend here start a device's screen at its own scale? Mutter only: KWin and
-/// Windows remember each device's scale themselves. Cached: see [`keep_monitors_available`].
+/// Can a backend here start a device's screen at its own scale? Cached: see
+/// [`keep_monitors_available`].
 #[cfg(target_os = "linux")]
 fn scale_available() -> bool {
     static PRESENT: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *PRESENT
-        .get_or_init(|| crate::vdisplay::available().contains(&crate::vdisplay::Compositor::Mutter))
+    *PRESENT.get_or_init(|| {
+        crate::vdisplay::available()
+            .iter()
+            .any(|c| c.applies_device_scale())
+    })
 }
 
 /// Whether a gamescope backend is usable on this host. Cached: see the call site.
@@ -576,7 +574,7 @@ pub(crate) struct MonitorsResponse {
         (status = UNAUTHORIZED, description = "Missing or invalid bearer token", body = ApiError),
     )
 )]
-pub(crate) async fn get_display_monitors() -> Json<MonitorsResponse> {
+pub(crate) async fn get_display_monitors() -> Result<Json<MonitorsResponse>, Response> {
     let pin_supported = cfg!(any(target_os = "linux", target_os = "windows"));
     // Effective pin (env override, else stored policy): highlight what sessions will mirror.
     // With no mirror backend report `None` even if a pin is stored — highlighting a head
@@ -586,7 +584,7 @@ pub(crate) async fn get_display_monitors() -> Json<MonitorsResponse> {
         .flatten();
     // Shells out / D-Bus / Wayland, and on Windows walks CCD (can serialize on the display-config
     // lock). Off the async worker.
-    let (compositor, listed) = tokio::task::spawn_blocking(|| {
+    let (compositor, listed) = blocking("monitor list", || {
         // No compositor to detect. Label the CCD walk as `windows` instead of Linux XDG advice.
         #[cfg(windows)]
         {
@@ -601,8 +599,7 @@ pub(crate) async fn get_display_monitors() -> Json<MonitorsResponse> {
             Err(e) => (None, Err(e)),
         }
     })
-    .await
-    .unwrap_or_else(|e| (None, Err(anyhow::anyhow!("enumeration task failed: {e}"))));
+    .await?;
     let (monitors, error) = match listed {
         Ok(ms) => (
             ms.into_iter()
@@ -625,13 +622,13 @@ pub(crate) async fn get_display_monitors() -> Json<MonitorsResponse> {
         ),
         Err(e) => (Vec::new(), Some(format!("{e:#}"))),
     };
-    Json(MonitorsResponse {
+    Ok(Json(MonitorsResponse {
         compositor,
         monitors,
         pinned,
         pin_supported,
         error,
-    })
+    }))
 }
 
 /// Request body for `releaseDisplay`.
@@ -692,7 +689,7 @@ const GAME_MODE_SLOT: u64 = (1 << 53) - 1;
 /// The box's own Game Mode, held between sessions by a takeover: a kept row, so Release reaches it.
 #[cfg(target_os = "linux")]
 fn held_game_mode() -> Option<ApiDisplayInfo> {
-    if crate::native::gamescope_sessions_live() {
+    if crate::compositor_route::gamescope_sessions_live() {
         return None;
     }
     let held = crate::vdisplay::held_managed_session()?;
@@ -745,7 +742,7 @@ pub(crate) async fn release_display(
         let released = crate::vdisplay::registry::release(slot);
         #[cfg(target_os = "linux")]
         if slot.is_none_or(|s| s == GAME_MODE_SLOT)
-            && !crate::native::gamescope_sessions_live()
+            && !crate::compositor_route::gamescope_sessions_live()
             && crate::vdisplay::release_managed_session()
         {
             return released + 1;

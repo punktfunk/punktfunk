@@ -22,9 +22,9 @@ must keep. The user-level version is [How it works](/docs/how-it-works).
    AES-GCM (ChaCha20-Poly1305 for clients without hardware AES), and the host paces them out over
    UDP on native threads.
 5. **Decode.** The client's session pump (`pf-client-core`) reassembles and decrypts, then walks the
-   decode ladder: `pf-vkdecode` (Vulkan Video), `pf-vaapi` (Linux) or `pf-dxvadec` (Windows) over
-   `pf-bitstream`'s access-unit plans, then CPU openh264 or rav1d. PyroWave decodes in Vulkan
-   compute.
+   decode ladder (`pf-client-video`): `pf-vkdecode` (Vulkan Video), `pf-vaapi` (Linux) or
+   `pf-dxvadec` (Windows) over `pf-bitstream`'s access-unit plans, then CPU openh264 or rav1d.
+   PyroWave decodes in Vulkan compute.
 6. **Present.** `pf-presenter` draws the picture into an SDL3 window through an ash swapchain, and
    `pf-console-ui` composites the Skia overlay on top. Apple decodes with VideoToolbox and draws
    with Metal; Android uses `AMediaCodec`. Both link `punktfunk-core`.
@@ -141,7 +141,8 @@ HDR over the virtual display.
 | `crates/punktfunk-tray` | Tray status icon |
 | `crates/pf-seats`, `pf-seat-keeper` | Windows seat supervisor, run inside the service; the RDP keeper, its own workspace for IronRDP's lockfile |
 | `crates/punktfunk-setup`, `punktfunk-setup-win` | Guided Linux installer (`install.sh` fetches it); Windows installer wizard |
-| `crates/pf-client-core` | Client plumbing: session pump, decode ladder, audio, gamepads, trust, discovery |
+| `crates/pf-client-core` | Client plumbing: session pump, audio, gamepads, trust, discovery |
+| `crates/pf-client-video` | Decode ladder, Vulkan device handoff, colour maths and PyroWave decode |
 | `crates/pf-bitstream` | Access-unit parsing and decode plans for H.264, HEVC and AV1 |
 | `crates/pf-vkdecode`, `pf-vaapi`, `pf-dxvadec`, `pf-libva` | Native decode rungs and the dlopen'd libva |
 | `crates/pf-presenter` | SDL3 window, Vulkan swapchain, input capture |

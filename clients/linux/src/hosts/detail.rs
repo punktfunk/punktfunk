@@ -4,13 +4,13 @@
 //! every change it draws; a row being edited keeps what was typed.
 
 use super::card::os_icon_name;
-use super::form::{parse_address, parse_macs, parse_port};
 use super::model::{Preset, Status};
-use super::{saved_request, Act, HostRef, HostsMsg};
+use super::{Act, HostRef, HostsMsg};
 use crate::store::{Changed, Store};
 use crate::trust::{HostEdit, KnownHost, KnownHosts};
 use adw::prelude::*;
 use pf_client_core::host_actions::ActionInfo;
+use pf_client_core::orchestrate::HostTarget;
 use pf_client_core::start::StartIn;
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -51,7 +51,10 @@ impl Ctx {
     }
 
     fn request(&self) -> super::ConnectRequest {
-        saved_request(&self.current.borrow())
+        super::ConnectRequest {
+            host: HostTarget::from(&*self.current.borrow()),
+            ..Default::default()
+        }
     }
 
     /// Apply `f` to this record in the store; a failed save says so.
@@ -136,7 +139,7 @@ impl DetailPage {
             let ctx = ctx.clone();
             connect.connect_clicked(move |_| {
                 let req = ctx.request();
-                ctx.act(if !ctx.online.get() && !req.mac.is_empty() {
+                ctx.act(if !ctx.online.get() && !req.host.mac.is_empty() {
                     Act::WakeConnect(req)
                 } else {
                     Act::Connect(req)
@@ -646,7 +649,7 @@ fn wire_name(ctx: &Ctx, row: &adw::EntryRow) {
 
 fn wire_address(ctx: &Ctx, row: &adw::EntryRow) {
     let ctx = ctx.clone();
-    row.connect_apply(move |row| match parse_address(&row.text()) {
+    row.connect_apply(move |row| match HostEdit::parse_address(&row.text()) {
         Ok((addr, port)) => ctx.edit(|h| {
             h.apply_edit(&HostEdit {
                 addr: Some(addr),
@@ -663,7 +666,7 @@ fn wire_address(ctx: &Ctx, row: &adw::EntryRow) {
 
 fn wire_port(ctx: &Ctx, row: &adw::EntryRow) {
     let ctx = ctx.clone();
-    row.connect_apply(move |row| match parse_port(&row.text()) {
+    row.connect_apply(move |row| match HostEdit::parse_port(&row.text()) {
         Ok(port) => ctx.edit(|h| {
             h.apply_edit(&HostEdit {
                 port: Some(port),
@@ -679,7 +682,7 @@ fn wire_port(ctx: &Ctx, row: &adw::EntryRow) {
 
 fn wire_macs(ctx: &Ctx, row: &adw::EntryRow) {
     let ctx = ctx.clone();
-    row.connect_apply(move |row| match parse_macs(&row.text()) {
+    row.connect_apply(move |row| match HostEdit::parse_macs(&row.text()) {
         Ok(macs) => ctx.edit(|h| {
             h.apply_edit(&HostEdit {
                 macs: Some(macs),

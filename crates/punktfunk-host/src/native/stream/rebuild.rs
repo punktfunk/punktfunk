@@ -13,6 +13,8 @@ use super::pipeline::{
 use super::state::{announce_pipeline_gap, StreamState};
 use super::*;
 use crate::encode_recovery::{RebuildBudget, MAX_CAPTURE_REBUILDS, MAX_ENCODER_RESETS};
+use crate::native::bitrate::pyrowave_mode_kbps;
+use crate::session_status::pack_mode;
 
 /// Isolated gamescope keeps its pinned injector and must not steal the shared backend
 /// (last-write-wins). Everyone else gets the shared sender plus `set_backend_id`.
@@ -34,8 +36,9 @@ fn repoint_session_input(
 }
 
 impl StreamState {
-    /// Follow the watcher's latest session switch: rebuild the backend in place, with the cursor
-    /// plan of the compositor it switches to, and keep streaming.
+    /// Follow the watcher's latest session switch: rebuild the backend in place, with the
+    /// session's display request and the cursor plan of the compositor it switches to, and keep
+    /// streaming.
     pub(super) fn on_session_switch(&mut self) {
         let mut switch = None;
         while let Ok(s) = self.session_rx.try_recv() {
@@ -81,13 +84,8 @@ impl StreamState {
         self.close_open_frame();
         let rebuilt = (|| -> Result<(Box<dyn crate::vdisplay::VirtualDisplay>, Pipeline)> {
             let mut new_vd = crate::vdisplay::open(sw.compositor)?;
-            new_vd.set_hw_cursor(hw_cursor);
-            new_vd.set_gamescope_route(switched_route.clone());
-            new_vd.set_join_live(self.join_live);
-            // The HDR verdict, as at session start: a switched-to gamescope launches in it.
-            new_vd.set_hdr(self.plan.hdr);
-            #[cfg(target_os = "linux")]
-            new_vd.set_session_isolation(self.isolation.clone());
+            self.reopen_params(hw_cursor, switched_route)
+                .apply(&mut *new_vd);
             let pipe = build_pipeline_with_retry(
                 &mut new_vd,
                 self.cur_mode,
@@ -307,9 +305,9 @@ impl StreamState {
         #[cfg(not(target_os = "linux"))]
         let _ = (&self.cur_node_id, &self.game_life);
         #[cfg(target_os = "linux")]
-        if self.launch.is_some()
+        if self.vd_params.launch.is_some()
             && crate::session_settings::get().session_on_game_exit
-            && crate::vdisplay::launch_is_nested(self.compositor, self.gamescope_route.as_ref())
+            && crate::vdisplay::launch_is_nested(self.compositor, self.vd_params.route.as_ref())
             && crate::vdisplay::dedicated_game_exited(self.cur_node_id)
         {
             tracing::info!("dedicated game session: the game exited — ending the session cleanly");
@@ -439,8 +437,24 @@ impl StreamState {
         Ok(true)
     }
 
+    /// The request a rebuild opens a display with: the session's, at `hw_cursor` and `route` of
+    /// the compositor it lands on. `launch` is `None`: a rebuild never starts the game again.
+    fn reopen_params(
+        &self,
+        hw_cursor: bool,
+        route: Option<crate::vdisplay::GamescopeRoute>,
+    ) -> crate::vdisplay::SessionParams {
+        crate::vdisplay::SessionParams {
+            hw_cursor,
+            route,
+            launch: None,
+            ..self.vd_params.clone()
+        }
+    }
+
     /// One capture-loss attempt's re-detection: follow the live session's compositor, opening a
-    /// new backend when it changed, re-point input at it and re-derive the cursor plan.
+    /// new backend with the session's request when it changed, re-point input at it and
+    /// re-derive the cursor plan.
     fn retarget_to_live_session(&mut self) {
         let active = crate::vdisplay::detect_active_session();
         crate::vdisplay::observe_session_instance(&active);
@@ -459,6 +473,7 @@ impl StreamState {
         );
         #[cfg(not(target_os = "linux"))]
         crate::inject::set_backend_id(crate::vdisplay::input_backend_id(c));
+        let mut reopened = false;
         if c != self.compositor {
             if matches!(
                 c,
@@ -475,7 +490,7 @@ impl StreamState {
                     );
                     self.vd = v;
                     self.compositor = c;
-                    self.vd.set_hdr(self.plan.hdr);
+                    reopened = true;
                 }
                 Err(e2) => tracing::warn!(error = %format!("{e2:#}"),
                     "capture loss: opening the newly-detected compositor failed — retrying"),
@@ -483,11 +498,14 @@ impl StreamState {
         }
         // Also when only the gamescope route changed: Attach and Spawn differ in who draws.
         let hw_cursor = self.retarget_cursor_plan(self.compositor, rebuilt_route.as_ref());
-        self.vd.set_hw_cursor(hw_cursor);
-        self.vd.set_gamescope_route(rebuilt_route.clone());
-        self.vd.set_join_live(self.join_live);
-        #[cfg(target_os = "linux")]
-        self.vd.set_session_isolation(self.isolation.clone());
+        if reopened {
+            self.reopen_params(hw_cursor, rebuilt_route)
+                .apply(&mut *self.vd);
+        } else {
+            // The live display keeps the rest of its request, launch included.
+            self.vd.set_hw_cursor(hw_cursor);
+            self.vd.set_gamescope_route(rebuilt_route);
+        }
     }
 
     /// The source changed format or size with no client Reconfigure: reopen the encoder at the

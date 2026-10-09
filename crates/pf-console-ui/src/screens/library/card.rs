@@ -6,7 +6,7 @@
 //! or the sort has one. The focus plate is the lift, so the card never grows. The host desk
 //! tile, the section heading and the focused-title band sit here too.
 
-use super::draw_poster_placeholder;
+use super::art::draw_poster_placeholder;
 use crate::library::{store_label, LibraryGame, DESKTOP_ID};
 use crate::model::HostRow;
 use crate::theme::{accent, art_sampling, fg, fill, on_accent, Fonts, PanelStroke, W};

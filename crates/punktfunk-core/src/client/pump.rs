@@ -70,8 +70,7 @@ impl ClientConn {
     ) -> std::result::Result<Vec<u8>, quinn::ConnectionError> {
         loop {
             let b = self.conn.read_datagram().await?;
-            use crate::quic::v2::dgram::{decode, Dgram};
-            if let Some(Dgram::Audio(p) | Dgram::InputState(p) | Dgram::HostEvent(p)) = decode(&b) {
+            if let Some(p) = crate::quic::v2::dgram::client_payload(&b) {
                 return Ok(p.to_vec());
             }
         }
@@ -100,92 +99,83 @@ pub(super) async fn run_pump(args: WorkerArgs) {
         ctrl_send,
         ctrl_recv,
         negotiated,
-        host_caps,
         landed_at,
     } = hs;
+    let welcome = negotiated.welcome;
+    let host_caps = welcome.host_caps;
     let WorkerArgs {
         params,
         shared,
-        audio_tx,
-        rumble_tx,
-        rumble_feed,
-        hidout_tx,
-        pad_audio_tx,
-        hdr_meta_tx,
-        host_timing_tx,
-        cursor_shape_tx,
-        cursor_state_tx,
+        planes,
         input_rx,
         mut mic_rx,
         mut rich_input_rx,
         pad_touch_rx,
         ctrl_rx,
         ctrl_tx,
-        clip_event_tx,
         clip_cmd_rx,
         ready_tx,
-        access_tx,
     } = args;
     let bitrate_kbps = params.bitrate_kbps;
     let clock_rtt_ns = negotiated.clock_rtt_ns;
-    let resolved_bitrate_kbps = negotiated.bitrate_kbps;
-    let negotiated_codec = negotiated.codec;
+    let resolved_bitrate_kbps = welcome.bitrate_kbps;
+    let negotiated_codec = welcome.codec;
     // Host marks idle-keepalive repeats (`USER_FLAG_REPEAT`). Only then is an
     // unflagged AU new content; older hosts keep the legacy window arithmetic.
-    let marks_repeats = negotiated.host_caps2 & crate::quic::HOST_CAP2_REPEAT_MARK != 0;
+    let marks_repeats = welcome.host_caps2 & crate::quic::HOST_CAP2_REPEAT_MARK != 0;
     // Host serves probe requests during its own bring-up: measure the link
     // before the first frame instead of bursting beside it.
-    let serves_ramp = negotiated.host_caps2 & crate::quic::HOST_CAP2_RAMP != 0;
+    let serves_ramp = welcome.host_caps2 & crate::quic::HOST_CAP2_RAMP != 0;
     // Wire budgets: `actual` is wire bytes plus this audio reservation, spent
     // whether video flows or not. PCM is exact; Opus uses the default-tier ladder
     // (a pinned tier skews a few hundred kbps, inside the ¾ utilization gate).
-    let audio_reserved_kbps = if negotiated.audio_codec == crate::quic::AUDIO_CODEC_PCM {
+    let audio_reserved_kbps = if welcome.audio_codec == crate::quic::AUDIO_CODEC_PCM {
         crate::audio::pcm::bitrate_kbps(
-            negotiated.audio_rate_hz,
-            negotiated.audio_bits,
-            negotiated.audio_channels,
+            welcome.audio_rate_hz,
+            welcome.audio_bits,
+            welcome.audio_channels,
         )
     } else {
         crate::audio::plan_audio_budget(
-            negotiated.bitrate_kbps,
-            negotiated.audio_channels,
-            crate::audio::AudioLayout::from_wire(negotiated.audio_layout).unwrap_or_default(),
+            welcome.bitrate_kbps,
+            welcome.audio_channels,
+            crate::audio::AudioLayout::from_wire(welcome.audio_layout).unwrap_or_default(),
             crate::audio::AudioTier::default(),
             host_caps & crate::quic::HOST_CAP_AUDIO_RED != 0,
         )
         .kbps
     };
     // Unchanged across a mode switch; the pump recomputes the stream-shape cap from them.
-    let bit_depth = negotiated.bit_depth;
-    let chroma_format = negotiated.chroma_format;
+    let bit_depth = welcome.bit_depth;
+    let chroma_format = welcome.chroma_format;
     // ABR holds the probe-measured link ceiling to this. Computed here (Welcome
     // geometry); the data pump stays codec-agnostic. PyroWave's is the host's pin,
     // and its floor the same rule at `BPP_FLOOR`.
-    let pyrowave = negotiated.codec == crate::quic::CODEC_PYROWAVE;
+    let pyrowave = welcome.codec == crate::quic::CODEC_PYROWAVE;
     let stream_cap_kbps = if pyrowave {
         resolved_bitrate_kbps
     } else {
         crate::abr::stream_ceiling_kbps(
-            negotiated.mode.width,
-            negotiated.mode.height,
-            negotiated.mode.refresh_hz,
-            negotiated.codec,
-            negotiated.bit_depth,
-            negotiated.chroma_format,
+            welcome.mode.width,
+            welcome.mode.height,
+            welcome.mode.refresh_hz,
+            welcome.codec,
+            welcome.bit_depth,
+            welcome.chroma_format,
         )
     };
     let pyrowave_floor_kbps = pyrowave.then(|| {
         crate::pyrowave::kbps_for(
-            &negotiated.mode,
-            negotiated.chroma_format == crate::quic::CHROMA_IDC_444,
-            negotiated.bit_depth,
+            &welcome.mode,
+            welcome.chroma_format == crate::quic::CHROMA_IDC_444,
+            welcome.bit_depth,
             crate::pyrowave::BPP_FLOOR,
         )
         .min(stream_cap_kbps)
     });
     // ABR encode-threshold unit ([`BitrateController::encode_thresholds`]). Negotiated
     // refresh, not the request still sitting in `shared.mode` (60-for-120 must score at 60).
-    let refresh_hz = negotiated.mode.refresh_hz;
+    let refresh_hz = welcome.mode.refresh_hz;
     // Feedback datagrams leave on this connection from any thread that asks.
     shared.feedback.lock().unwrap().set_refresh(refresh_hz);
     {
@@ -201,23 +191,23 @@ pub(super) async fn run_pump(args: WorkerArgs) {
     // Welcome is the starting encoder target (0 if the host reports none).
     shared
         .live_bitrate_kbps
-        .store(negotiated.bitrate_kbps, Ordering::Relaxed);
+        .store(welcome.bitrate_kbps, Ordering::Relaxed);
     // Seed before the embedder observes us, so `access_grants()` never reads
     // GRANT_ALL on a limited session. Deadline is client wall clock: the wire
     // carries relative `expires_in_secs`, so skew does not move the countdown.
     shared
         .access_grants
-        .store(negotiated.grants, Ordering::Relaxed);
+        .store(welcome.grants, Ordering::Relaxed);
     shared.access_deadline_unix.store(
-        access_deadline_from(wall_clock_ns(), negotiated.expires_in_secs),
+        access_deadline_from(wall_clock_ns(), welcome.expires_in_secs),
         Ordering::Relaxed,
     );
     // Bumped when a re-sync batch is applied; the pump resets staleness and re-arms jump-to-live.
     let clock_gen = Arc::new(AtomicU32::new(0));
     // Normalized scroll only toward HOST_CAP2_SCROLL; an older host gets each
     // event converted once at the outbound seam instead.
-    let normalized_scroll = negotiated.host_caps2 & crate::quic::HOST_CAP2_SCROLL != 0;
-    let _ = ready_tx.send(Ok(negotiated.clone()));
+    let normalized_scroll = welcome.host_caps2 & crate::quic::HOST_CAP2_SCROLL != 0;
+    let _ = ready_tx.send(Ok(negotiated));
 
     // Snapshots only toward GAMEPAD_STATE. Flags 8/9 only toward PAD_AUDIO — an
     // older host reads the whole flags word as the pad index.
@@ -225,7 +215,7 @@ pub(super) async fn run_pump(args: WorkerArgs) {
     let pad_audio_arrivals = host_caps & crate::quic::HOST_CAP_PAD_AUDIO != 0;
     // Key edges ride the control stream toward a host that reads them there, so a lost
     // release cannot hold a key; an older host gets every event as a datagram.
-    let reliable_edges = negotiated.host_caps2 & crate::quic::HOST_CAP2_INPUT_EDGES != 0;
+    let reliable_edges = welcome.host_caps2 & crate::quic::HOST_CAP2_INPUT_EDGES != 0;
     tokio::spawn(input_task::run(
         conn.clone(),
         input_rx,
@@ -303,33 +293,26 @@ pub(super) async fn run_pump(args: WorkerArgs) {
             bitrate_ack: bitrate_ack.clone(),
             pipeline_gap: pipeline_gap.clone(),
             clock_gen: clock_gen.clone(),
-            clip_event_tx: clip_event_tx.clone(),
-            cursor_shape_tx,
+            clip_event_tx: planes.clip_event.clone(),
+            cursor_shape_tx: planes.cursor_shape,
             mode_gen: mode_gen.clone(),
-            access_tx,
-            hidout_tx: hidout_tx.clone(),
+            access_tx: planes.access,
+            hidout_tx: planes.datagram.hidout.clone(),
         }
         .run(),
     );
 
     tokio::spawn(datagram_task::run(
         conn.clone(),
-        audio_tx,
-        rumble_tx,
-        rumble_feed,
-        hidout_tx,
-        pad_audio_tx,
-        hdr_meta_tx,
-        host_timing_tx,
+        planes.datagram,
         encode_lat.clone(),
-        cursor_state_tx,
     ));
 
     // Bulk clip bytes only; metadata rides the control task. Always spawned: a
     // host without HOST_CAP_CLIPBOARD never opens a clip stream, and offers miss.
     tokio::spawn(crate::clipboard::run(
         (*conn).clone(),
-        clip_event_tx,
+        planes.clip_event,
         clip_cmd_rx,
     ));
 

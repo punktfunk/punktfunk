@@ -473,20 +473,28 @@ pub fn wait_target_departed(key: CcdTargetKey, ceiling: std::time::Duration) -> 
 /// (the HDR fullscreen independent-flip otherwise storms `ACCESS_LOST` → black); re-enable on return so
 /// WGC keeps HDR on the normal desktop. Returns true on a successful `DisplayConfigSetDeviceInfo`.
 pub fn set_advanced_color(key: CcdTargetKey, enable: bool) -> bool {
+    set_target_state(
+        key,
+        "advanced-color (HDR)",
+        ccd_info::set_advanced_color_state,
+        enable,
+    )
+}
+
+/// Write one colour state of `key`'s target through `f`; true when the OS took it. `what`
+/// names the state in the log lines.
+fn set_target_state(
+    key: CcdTargetKey,
+    what: &str,
+    f: fn(LUID, u32, bool) -> i32,
+    enable: bool,
+) -> bool {
     let Some(p) = active_path(key) else {
-        tracing::warn!(
-            target = %key,
-            "virtual-display advanced-color: target not in active paths"
-        );
+        tracing::warn!(target = %key, "virtual-display {what}: target not in active paths");
         return false;
     };
-    let rc = ccd_info::set_advanced_color_state(p.targetInfo.adapterId, p.targetInfo.id, enable);
-    tracing::debug!(
-        target = %key,
-        enable,
-        rc,
-        "virtual-display set advanced-color (HDR) state"
-    );
+    let rc = f(p.targetInfo.adapterId, p.targetInfo.id, enable);
+    tracing::debug!(target = %key, enable, rc, "virtual-display set {what} state");
     rc == 0
 }
 
@@ -518,13 +526,7 @@ pub fn wcg_supported(key: CcdTargetKey) -> bool {
 /// Turn SDR wide colour (auto colour management) on or off. True on a successful
 /// `DisplayConfigSetDeviceInfo`; before 24H2 the OS refuses the packet.
 pub fn set_wcg(key: CcdTargetKey, enable: bool) -> bool {
-    let Some(p) = active_path(key) else {
-        tracing::warn!(target = %key, "virtual-display wide colour: target not in active paths");
-        return false;
-    };
-    let rc = ccd_info::set_wcg_state(p.targetInfo.adapterId, p.targetInfo.id, enable);
-    tracing::debug!(target = %key, enable, rc, "virtual-display set wide-colour (WCG) state");
-    rc == 0
+    set_target_state(key, "wide-colour (WCG)", ccd_info::set_wcg_state, enable)
 }
 
 /// Read the virtual-display target's CURRENT advanced-color (HDR) state via the CCD API — i.e. whether HDR is

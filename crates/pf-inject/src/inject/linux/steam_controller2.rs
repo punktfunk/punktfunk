@@ -162,7 +162,7 @@ fn open_transport(
     idx: u8,
     puck: Option<&mut crate::triton_usbip::PuckHubs>,
 ) -> Result<TritonTransport> {
-    if crate::steam_usbip::usbip_preferred() {
+    if crate::triton_usbip::usbip_preferred() {
         let opened = if let Some(hubs) = puck {
             crate::triton_usbip::TritonUsbip::open_puck(idx, hubs)
         } else {

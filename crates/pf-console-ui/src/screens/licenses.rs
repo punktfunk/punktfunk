@@ -9,7 +9,7 @@
 use crate::glyphs::{Hint, HintKey};
 use crate::model::{ConsoleCmd, LicenseSection};
 use crate::pointer::{Pointer, PointerKind};
-use crate::screens::{Ctx, Outbox};
+use crate::screens::{Ctx, Outbox, ScreenView};
 use crate::theme::{edge, fg, Fonts, W};
 use pf_client_core::menu_nav::{MenuDir, MenuEvent, MenuPulse};
 use pf_client_core::shortcuts::{self, Client};
@@ -122,13 +122,6 @@ impl LicensesScreen {
         })
     }
 
-    pub(crate) fn title(&self) -> &'static str {
-        match self.doc {
-            Doc::Licenses => "Open-source licences",
-            Doc::Controls(..) => "Stream controls",
-        }
-    }
-
     pub(crate) fn set_host(&mut self, sections: Vec<LicenseSection>) {
         self.host = Some(sections);
     }
@@ -142,61 +135,6 @@ impl LicensesScreen {
         self.scroll
     }
 
-    pub(crate) fn menu(
-        &mut self,
-        ev: MenuEvent,
-        _ctx: &mut Ctx,
-        fx: &mut Outbox,
-    ) -> Option<MenuPulse> {
-        let page = (self.view_h - self.step).max(self.step);
-        let by = match ev {
-            MenuEvent::Back => {
-                fx.pop();
-                return None;
-            }
-            MenuEvent::Move(MenuDir::Up) => -STEP_LINES * self.step,
-            MenuEvent::Move(MenuDir::Down) => STEP_LINES * self.step,
-            MenuEvent::Move(MenuDir::Left) => -page,
-            MenuEvent::Move(MenuDir::Right) => page,
-            _ => return None,
-        };
-        self.velocity = 0.0;
-        Some(if self.scroll_by(by) {
-            MenuPulse::Move
-        } else {
-            MenuPulse::Boundary
-        })
-    }
-
-    /// A wheel step scrolls; every other press lands on the page and does nothing.
-    pub(crate) fn pointer(&mut self, p: Pointer, _ctx: &mut Ctx, _fx: &mut Outbox) -> bool {
-        if let PointerKind::Scroll { up } = p.kind {
-            let by = STEP_LINES * self.step;
-            self.velocity = 0.0;
-            self.scroll_by(if up { -by } else { by });
-        }
-        true
-    }
-
-    /// A vertical drag moves the text with the finger; its fling coasts.
-    pub(crate) fn pan(&mut self, p: Pointer) -> bool {
-        match p.kind {
-            PointerKind::PanStart { horizontal } => {
-                self.velocity = 0.0;
-                !horizontal
-            }
-            PointerKind::Pan { dy, .. } => {
-                self.scroll_by(-dy);
-                true
-            }
-            PointerKind::Fling { vy, .. } => {
-                self.velocity = -vy;
-                true
-            }
-            _ => false,
-        }
-    }
-
     /// `false` when already at that end.
     fn scroll_by(&mut self, by: f64) -> bool {
         let before = self.scroll;
@@ -206,67 +144,6 @@ impl LicensesScreen {
 
     fn max_scroll(&self) -> f64 {
         (self.tops.last().copied().unwrap_or(0.0) - self.view_h).max(0.0)
-    }
-
-    pub(crate) fn hints(&self, _ctx: &Ctx) -> Vec<Hint> {
-        vec![
-            Hint::new(HintKey::Adjust, "Page"),
-            Hint::new(HintKey::Back, "Done"),
-        ]
-    }
-
-    pub(crate) fn render(
-        &mut self,
-        canvas: &Canvas,
-        rect: Rect,
-        k: f64,
-        dt: f64,
-        fonts: &Fonts,
-        _ctx: &mut Ctx,
-    ) {
-        let (left, right) = (
-            f64::from(rect.left) + edge(k),
-            f64::from(rect.right) - edge(k),
-        );
-        let width = (right - left) as f32;
-        let key = (width, k, self.host.is_some());
-        if self.laid != Some(key) {
-            self.layout(fonts, width, k);
-            self.laid = Some(key);
-        }
-        self.view_h = f64::from(rect.height());
-        self.step = Style::Body.line_height(k);
-        if self.velocity != 0.0 {
-            let moved = self.scroll_by(self.velocity * dt);
-            self.velocity *= (-FLING_DECAY * dt).exp();
-            if !moved || self.velocity.abs() < 20.0 {
-                self.velocity = 0.0;
-            }
-        }
-        self.scroll = self.scroll.min(self.max_scroll());
-
-        canvas.save();
-        canvas.clip_rect(rect, None, true);
-        let top = f64::from(rect.top) - self.scroll;
-        let first = self
-            .tops
-            .partition_point(|t| top + t < f64::from(rect.top) - 40.0 * k);
-        for (line, y) in self
-            .lines
-            .iter()
-            .zip(&self.tops)
-            .skip(first.saturating_sub(1))
-        {
-            let y = top + y;
-            if y > f64::from(rect.bottom) {
-                break;
-            }
-            let (size, w, alpha) = line.style.look();
-            let lh = line.style.line_height(k);
-            let baseline = y + lh * 0.72;
-            fonts.draw(canvas, &line.text, left, baseline, w, size * k, fg(alpha));
-        }
-        canvas.restore();
     }
 
     /// Every logical line, wrapped to `width`: the console's own texts, then the host's.
@@ -350,6 +227,127 @@ impl LicensesScreen {
             }
         }
         self.tops.push(y);
+    }
+}
+
+impl ScreenView for LicensesScreen {
+    fn title(&self) -> String {
+        match self.doc {
+            Doc::Licenses => "Open-source licences",
+            Doc::Controls(..) => "Stream controls",
+        }
+        .into()
+    }
+
+    fn menu(&mut self, ev: MenuEvent, _ctx: &mut Ctx, fx: &mut Outbox) -> Option<MenuPulse> {
+        let page = (self.view_h - self.step).max(self.step);
+        let by = match ev {
+            MenuEvent::Back => {
+                fx.pop();
+                return None;
+            }
+            MenuEvent::Move(MenuDir::Up) => -STEP_LINES * self.step,
+            MenuEvent::Move(MenuDir::Down) => STEP_LINES * self.step,
+            MenuEvent::Move(MenuDir::Left) => -page,
+            MenuEvent::Move(MenuDir::Right) => page,
+            _ => return None,
+        };
+        self.velocity = 0.0;
+        Some(if self.scroll_by(by) {
+            MenuPulse::Move
+        } else {
+            MenuPulse::Boundary
+        })
+    }
+
+    /// A wheel step scrolls; every other press lands on the page and does nothing.
+    fn pointer(&mut self, p: Pointer, _ctx: &mut Ctx, _fx: &mut Outbox) -> bool {
+        if let PointerKind::Scroll { up } = p.kind {
+            let by = STEP_LINES * self.step;
+            self.velocity = 0.0;
+            self.scroll_by(if up { -by } else { by });
+        }
+        true
+    }
+
+    /// A vertical drag moves the text with the finger; its fling coasts.
+    fn pan(&mut self, p: Pointer) -> bool {
+        match p.kind {
+            PointerKind::PanStart { horizontal } => {
+                self.velocity = 0.0;
+                !horizontal
+            }
+            PointerKind::Pan { dy, .. } => {
+                self.scroll_by(-dy);
+                true
+            }
+            PointerKind::Fling { vy, .. } => {
+                self.velocity = -vy;
+                true
+            }
+            _ => false,
+        }
+    }
+
+    fn hints(&self, _ctx: &Ctx) -> Vec<Hint> {
+        vec![
+            Hint::new(HintKey::Adjust, "Page"),
+            Hint::new(HintKey::Back, "Done"),
+        ]
+    }
+
+    fn render(
+        &mut self,
+        canvas: &Canvas,
+        rect: Rect,
+        k: f64,
+        dt: f64,
+        fonts: &Fonts,
+        _ctx: &mut Ctx,
+    ) {
+        let (left, right) = (
+            f64::from(rect.left) + edge(k),
+            f64::from(rect.right) - edge(k),
+        );
+        let width = (right - left) as f32;
+        let key = (width, k, self.host.is_some());
+        if self.laid != Some(key) {
+            self.layout(fonts, width, k);
+            self.laid = Some(key);
+        }
+        self.view_h = f64::from(rect.height());
+        self.step = Style::Body.line_height(k);
+        if self.velocity != 0.0 {
+            let moved = self.scroll_by(self.velocity * dt);
+            self.velocity *= (-FLING_DECAY * dt).exp();
+            if !moved || self.velocity.abs() < 20.0 {
+                self.velocity = 0.0;
+            }
+        }
+        self.scroll = self.scroll.min(self.max_scroll());
+
+        canvas.save();
+        canvas.clip_rect(rect, None, true);
+        let top = f64::from(rect.top) - self.scroll;
+        let first = self
+            .tops
+            .partition_point(|t| top + t < f64::from(rect.top) - 40.0 * k);
+        for (line, y) in self
+            .lines
+            .iter()
+            .zip(&self.tops)
+            .skip(first.saturating_sub(1))
+        {
+            let y = top + y;
+            if y > f64::from(rect.bottom) {
+                break;
+            }
+            let (size, w, alpha) = line.style.look();
+            let lh = line.style.line_height(k);
+            let baseline = y + lh * 0.72;
+            fonts.draw(canvas, &line.text, left, baseline, w, size * k, fg(alpha));
+        }
+        canvas.restore();
     }
 }
 

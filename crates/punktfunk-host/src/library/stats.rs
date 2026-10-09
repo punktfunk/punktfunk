@@ -37,6 +37,7 @@ impl GameStats {
         self.launch_count = self.launch_count.saturating_add(1);
     }
 
+    #[cfg_attr(target_os = "macos", allow(dead_code, reason = "no watcher on macOS"))]
     fn ran(&mut self, delta_ms: u64) {
         self.play_time_ms = self.play_time_ms.saturating_add(delta_ms);
         self.last_run_ms = self.last_run_ms.saturating_add(delta_ms);
@@ -134,6 +135,7 @@ pub fn record_launch(id: &str, profile: Option<&str>) {
 }
 
 /// `id` was seen running for another `delta` since the last call.
+#[cfg_attr(target_os = "macos", allow(dead_code, reason = "no watcher on macOS"))]
 pub fn record_run_time(id: &str, profile: Option<&str>, delta: Duration) {
     if delta.is_zero() {
         return;

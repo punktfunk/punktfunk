@@ -13,7 +13,7 @@
 
 use anyhow::{anyhow, bail, Result};
 use ash::vk;
-use pf_client_core::video_vk::{QueueLock, VulkanDecodeDevice};
+use pf_client_video::video_vk::{QueueLock, VulkanDecodeDevice};
 use std::ffi::CString;
 
 /// Instance extensions, in creation order. `VulkanDecodeDevice::instance_extensions` must

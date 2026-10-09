@@ -29,6 +29,7 @@ use punktfunk_core::quic::{
     endpoint, window_loss_ppm, BitrateChanged, CursorRenderMode, Hello, ProbeRequest, ProbeResult,
     Reconfigure, Reconfigured, SetBitrate, Welcome,
 };
+use punktfunk_core::session::test_frame;
 use punktfunk_core::{CompositorPref, Mode, PunktfunkError, Session};
 use std::io::Write;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64};
@@ -102,7 +103,7 @@ struct Args {
     /// `--launch ID` — ask the host to launch a library title in this session (a store-qualified
     /// id from the host's `GET /api/v1/library`, e.g. `steam:570`). Host resolves it; `None` = none.
     launch: Option<String>,
-    /// `--preset ID:NAME` — the settings preset this session names on `Start`, as a client does.
+    /// `--preset ID:NAME` — the settings preset this session names, as a client does.
     preset: Option<punktfunk_core::quic::SessionPreset>,
     /// `--speed-test KBPS:MS` — after the stream starts, ask the host for a `MS`-millisecond
     /// bandwidth probe burst at `KBPS`, then report measured throughput + loss.
@@ -176,8 +177,7 @@ impl Wire {
     async fn read_datagram(&self) -> Result<Vec<u8>, quinn::ConnectionError> {
         loop {
             let b = self.conn.read_datagram().await?;
-            use punktfunk_core::quic::v2::dgram::{decode, Dgram};
-            if let Some(Dgram::Audio(p) | Dgram::InputState(p) | Dgram::HostEvent(p)) = decode(&b) {
+            if let Some(p) = punktfunk_core::quic::v2::dgram::client_payload(&b) {
                 return Ok(p.to_vec());
             }
         }
@@ -590,14 +590,7 @@ async fn session(mut args: Args) -> Result<()> {
     )
     .await?;
     let mut recv: CtlRx = v2io::FrameReader::new(recv);
-    // The `Start` entries ride the `ClientHello`.
-    let preset = args.preset.as_ref().map(|p| p.encode()).unwrap_or_default();
     let extra = Extra {
-        start_ext: if preset.is_empty() {
-            Vec::new()
-        } else {
-            vec![(punktfunk_core::quic::EXT_TAG_PRESET, preset)]
-        },
         resume: None,
         suites: if std::env::var_os("PUNKTFUNK_CLIENT_CHACHA20").is_some() {
             vec![
@@ -757,7 +750,6 @@ async fn connect(
 
 /// What the `ClientHello` carries beyond the `Hello`.
 struct Extra {
-    start_ext: Vec<(u16, Vec<u8>)>,
     resume: Option<[u8; 16]>,
     suites: Vec<punktfunk_core::crypto::MediaSuite>,
 }
@@ -879,7 +871,12 @@ async fn handshake(
             audio_rate_hz: args.audio_format.map(|(r, _)| r).unwrap_or(0),
             audio_bits: args.audio_format.map(|(_, b)| b).unwrap_or(0),
         },
-        start_ext: extra.start_ext,
+        client_label: None,
+        abr_features: 0,
+        preset: args.preset.clone(),
+        link: Default::default(),
+        probe_only: false,
+        pyrowave_bpp_x100: 0,
         resume: extra.resume,
         suites: extra.suites,
         // A host answers a `Redirect` only to a client that says it follows one.
@@ -1859,8 +1856,12 @@ fn data_plane(
                     }
                 }
                 if expected > 0 {
-                    // Verification mode: deterministic content.
-                    let idx = u32::from_le_bytes(frame.data[0..4].try_into().unwrap());
+                    // Verification mode: deterministic content. A frame under four bytes
+                    // carries no index and checks as zeros.
+                    let idx = frame
+                        .data
+                        .first_chunk()
+                        .map_or(0, |b| u32::from_le_bytes(*b));
                     if frame.data == test_frame(idx, frame.data.len()) {
                         ok += 1;
                     } else {
@@ -1987,18 +1988,6 @@ fn report_side_planes(counters: &Counters) {
             "host→client datagrams (Opus 48 kHz stereo, 5 ms frames; rumble; DualSense HID)"
         );
     }
-}
-
-/// The host's deterministic test frame (mirror of `punktfunk-host::m3::test_frame`).
-fn test_frame(idx: u32, len: usize) -> Vec<u8> {
-    let mut d = vec![0u8; len];
-    if len >= 4 {
-        d[0..4].copy_from_slice(&idx.to_le_bytes());
-    }
-    for (i, b) in d.iter_mut().enumerate().skip(4) {
-        *b = (idx as u8).wrapping_add(i as u8);
-    }
-    d
 }
 
 #[cfg(test)]

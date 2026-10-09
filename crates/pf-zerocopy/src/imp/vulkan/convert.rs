@@ -16,7 +16,7 @@
 
 use super::VkBridge;
 use crate::imp::proto::{ConvertOut, ConvertSrc, CursorRect};
-use crate::imp::vkdev;
+use crate::imp::{drm, vkdev};
 use anyhow::{anyhow, bail, ensure, Context, Result};
 use ash::vk;
 use std::collections::HashMap;
@@ -30,31 +30,6 @@ const CURSOR_MAX_BYTES: u64 = 256 * 256 * 4;
 /// Passes in flight before a command buffer's reuse waits. The host holds at most two
 /// frames ahead of the encoder.
 const FRAMES: usize = 4;
-
-const fn fourcc(a: u8, b: u8, c: u8, d: u8) -> u32 {
-    (a as u32) | ((b as u32) << 8) | ((c as u32) << 16) | ((d as u32) << 24)
-}
-
-/// DRM fourcc → the VkFormat whose channel order matches, so `texelFetch` returns RGB
-/// regardless of the producer's packing. Little-endian packing: XR30 has R in bits 20..29,
-/// which is Vulkan's `A2R10G10B10`; XB30 has R in bits 0..9, `A2B10G10R10`.
-fn vk_format(drm: u32) -> Option<vk::Format> {
-    Some(match drm {
-        x if x == fourcc(b'X', b'R', b'2', b'4') || x == fourcc(b'A', b'R', b'2', b'4') => {
-            vk::Format::B8G8R8A8_UNORM
-        }
-        x if x == fourcc(b'X', b'B', b'2', b'4') || x == fourcc(b'A', b'B', b'2', b'4') => {
-            vk::Format::R8G8B8A8_UNORM
-        }
-        x if x == fourcc(b'X', b'R', b'3', b'0') || x == fourcc(b'A', b'R', b'3', b'0') => {
-            vk::Format::A2R10G10B10_UNORM_PACK32
-        }
-        x if x == fourcc(b'X', b'B', b'3', b'0') || x == fourcc(b'A', b'B', b'3', b'0') => {
-            vk::Format::A2B10G10R10_UNORM_PACK32
-        }
-        _ => return None,
-    })
-}
 
 struct SrcImage {
     image: vk::Image,
@@ -558,8 +533,9 @@ impl VkBridge {
         }
     }
 
-    /// Import (or reuse) the dmabuf as a sampled image with its explicit modifier layout, and
-    /// whether no submitted pass has acquired it yet.
+    /// Import (or reuse) the packed-RGB dmabuf as a sampled image with its explicit modifier
+    /// layout, and whether no submitted pass has acquired it yet. NV12 and P010 are refused:
+    /// the pass samples one plane, and those take the plane copy.
     unsafe fn src_image(&mut self, s: &ConvertSrc) -> Result<(vk::Image, vk::ImageView, bool)> {
         // SAFETY: raw Vulkan on this bridge's own device: every info struct is a local that
         // outlives the call, each fallible step destroys what it created, and the fence wait
@@ -577,7 +553,12 @@ impl VkBridge {
                 self.device.destroy_image(old.image, None);
                 self.device.free_memory(old.memory, None);
             }
-            let fmt = vk_format(s.fourcc)
+            ensure!(
+                !matches!(s.fourcc, drm::NV12 | drm::P010),
+                "the fused convert samples packed RGB, not two-plane fourcc {:#x}",
+                s.fourcc
+            );
+            let fmt = drm::vk_format(s.fourcc)
                 .ok_or_else(|| anyhow!("no VkFormat for dmabuf fourcc {:#x}", s.fourcc))?;
             // SAFETY: `s.fd` is the worker's cached dmabuf fd, open for this synchronous call;
             // the import dups it and keeps no borrow.
@@ -1069,15 +1050,6 @@ mod tests {
         assert_eq!(slot_bytes(&out(2)), 64 * 4 * 150);
         assert_eq!(slot_bytes(&out(3)), 64 * 4 * 50);
         assert_eq!(slot_bytes(&out(5)), 64 * 4 * 75);
-        assert_eq!(
-            vk_format(fourcc(b'X', b'R', b'2', b'4')),
-            Some(vk::Format::B8G8R8A8_UNORM)
-        );
-        assert_eq!(
-            vk_format(fourcc(b'X', b'B', b'3', b'0')),
-            Some(vk::Format::A2B10G10R10_UNORM_PACK32)
-        );
-        assert_eq!(vk_format(0), None);
     }
 
     /// A producer NV12 lands at the slot's layout: one region per plane when the strides match
@@ -1086,7 +1058,7 @@ mod tests {
     fn planar_regions_place_both_planes_in_the_slot() {
         let src = |stride: u32| ConvertSrc {
             fd: 0,
-            fourcc: fourcc(b'N', b'V', b'1', b'2'),
+            fourcc: drm::NV12,
             modifier: 0,
             offset: 64,
             stride,
@@ -1132,7 +1104,7 @@ mod tests {
         assert!(r.iter().all(|r| r.size == 50));
         // P010 copies two bytes a sample, into a mode-5 slot only.
         let p010 = ConvertSrc {
-            fourcc: fourcc(b'P', b'0', b'1', b'0'),
+            fourcc: drm::P010,
             plane1: Some((64 + 256 * 5, 256)),
             ..src(256)
         };
@@ -1214,7 +1186,7 @@ mod tests {
     #[test]
     #[ignore = "requires an NVIDIA GPU + driver — run on the RTX box (.21)"]
     fn fused_convert_matches_the_cpu_reference() {
-        use crate::imp::tiled_spike::TiledPattern;
+        use crate::imp::tiled_pattern::TiledPattern;
         use crate::imp::vkslot::{SlotFormat, VkSlotBlend};
         use crate::imp::{cuda, proto};
         const W: u32 = 128;
@@ -1247,7 +1219,7 @@ mod tests {
         };
         let src = ConvertSrc {
             fd: src_img.fd.as_raw_fd(),
-            fourcc: fourcc(b'X', b'R', b'2', b'4'),
+            fourcc: drm::XR24,
             modifier: src_img.modifier,
             offset: src_img.offset,
             stride: src_img.stride,

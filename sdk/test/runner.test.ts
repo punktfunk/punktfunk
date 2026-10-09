@@ -8,13 +8,12 @@ import * as path from "node:path";
 import { discoverUnits } from "../src/discover.js";
 import { spawnAgainIfKilled, windowsSddlUnsafeReason } from "../src/file-trust.js";
 import {
-	adoptNestedState,
 	describeFailure,
 	inProcessConnect,
 	runner,
 	superviseUnit,
-	writePluginToken,
 } from "../src/runner.js";
+import { adoptNestedState, writePluginToken } from "../src/runner-linux.js";
 
 const TOKEN = "runner-token";
 // Fixtures live under sdk/ so the generated plugin files can resolve "effect" and the SDK.

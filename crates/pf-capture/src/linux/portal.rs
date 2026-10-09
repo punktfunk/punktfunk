@@ -11,8 +11,10 @@
 //! "any head in BT.2100". See `design/per-monitor-portal-capture.md`. The probe
 //! is one session-bus round-trip; call from control-plane threads only.
 
-use crate::portal_rt::{close_session, finish_or_close, within};
 use anyhow::{anyhow, Context, Result};
+use pf_portal::{
+    close_session, finish_or_close, negotiate_cursor_mode, to_ashpd, within, HANDSHAKE_BUDGET,
+};
 use std::future::Future;
 use std::os::fd::OwnedFd;
 
@@ -119,7 +121,7 @@ fn hdr_offer_for(heads: &[(&str, bool)], pinned: Option<&str>) -> bool {
 
 type SetupTx = std::sync::mpsc::Sender<Result<(OwnedFd, u32), String>>;
 
-/// Handshake under [`crate::portal_rt::HANDSHAKE_BUDGET`], hand the fd and node over, park
+/// Handshake under [`HANDSHAKE_BUDGET`], hand the fd and node over, park
 /// on `quit_rx`, then `Session.Close`. ashpd `Session` has no `Drop` and the connection is
 /// process-global, so nothing else ends the cast.
 ///
@@ -143,7 +145,7 @@ pub(super) fn portal_thread(
         }
     };
     rt.block_on(async move {
-        let deadline = tokio::time::Instant::now() + crate::portal_rt::HANDSHAKE_BUDGET;
+        let deadline = tokio::time::Instant::now() + HANDSHAKE_BUDGET;
         let result = if anchored {
             remote_desktop(deadline, want_metadata_cursor, &setup_tx, quit_rx).await
         } else {
@@ -261,13 +263,12 @@ async fn cast<S: ashpd::desktop::screencast::IsScreencastSession>(
     use ashpd::desktop::PersistMode;
     use ashpd::enumflags2::BitFlags;
     prepare.await?;
-    let cursor_mode =
-        crate::portal_rt::negotiate_cursor_mode(screencast, want_metadata_cursor, backend).await;
+    let cursor_mode = negotiate_cursor_mode(screencast, want_metadata_cursor, backend).await;
     screencast
         .select_sources(
             session,
             SelectSourcesOptions::default()
-                .set_cursor_mode(crate::portal_rt::to_ashpd(cursor_mode))
+                .set_cursor_mode(to_ashpd(cursor_mode))
                 // wlroots advertises MONITOR only (`AvailableSourceTypes=1`).
                 // Asking for an unsupported type invalidates the session.
                 .set_sources(BitFlags::from_flag(SourceType::Monitor))

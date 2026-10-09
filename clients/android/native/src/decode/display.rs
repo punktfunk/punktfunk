@@ -153,7 +153,7 @@ pub(super) unsafe fn release_render_callback(ud: *const DisplayTracker) {
 /// receipt/decode stamps and the host capture pts. Records the HUD's `displayed` point:
 /// `end-to-end` = capture→displayed (skew-corrected) and `display` = decoded→displayed
 /// (single-clock local) — and publishes that end-to-end figure for the audio plane to align
-/// against, which is the only place in the client that knows when a frame truly reached glass.
+/// against ([`crate::stats::publish_e2e`]), HUD or not.
 /// Panic-free by construction (poison-proof lock, saturating math) — an unwind out of an
 /// `extern "C"` fn would abort the process.
 unsafe extern "C" fn on_frame_rendered(
@@ -177,33 +177,19 @@ unsafe extern "C" fn on_frame_rendered(
             .unwrap_or_else(std::sync::PoisonError::into_inner),
         pts_us,
     );
-    // Clamped to (0, 10 s) like the e2e sample: a vendor's first render callbacks can carry a
-    // garbage `system_nano` (observed on-glass: an epoch-sized latch max on the session's first
-    // window), and one such sample would poison every max/percentile it lands in.
-    let clamp = |v: i128| (v > 0 && v < 10_000_000_000).then_some((v / 1000) as u64);
-    let latch_us = paired.and_then(|(_, r)| clamp(displayed_ns - r));
+    let pts_ns = pts_us.saturating_mul(1000);
     // Always-on half: the presenter's pf-present line reads these with the HUD off.
-    t.meter.note_latch(latch_us);
-    // The glass-to-glass figure, computed ABOVE the HUD gate: the audio plane steers its ring by it
-    // (see `video_e2e`), and a sync loop that only worked while the overlay was up would be off on
-    // the exact devices that report latency — on a Deck-class report the overlay is precisely what
-    // the field cannot reach. The cost is one relaxed load and some integer arithmetic per confirmed
-    // present (≤ the panel rate); the stats LOCK stays behind the gate, which is what that
-    // early-return was really protecting.
-    let e2e_ns =
-        displayed_ns + t.clock_offset.load(Ordering::Relaxed) as i128 - pts_us as i128 * 1000;
-    // Same (0, 10 s) clamp as every other e2e sample — a vendor's first render callbacks can carry
-    // a garbage `system_nano`, and here that would step the audio ring rather than just a p95.
-    let e2e_valid = e2e_ns > 0 && e2e_ns < 10_000_000_000;
-    if e2e_valid {
-        t.video_e2e.store(e2e_ns as u64, Ordering::Relaxed);
-    }
+    t.meter
+        .note_latch(paired.and_then(|(_, r)| crate::stats::sane_us(displayed_ns - r)));
+    // Above the HUD gate: the audio plane steers by `video_e2e`. Only the stats lock waits for it.
+    let offset = t.clock_offset.load(Ordering::Relaxed);
+    crate::stats::publish_e2e(&t.video_e2e, displayed_ns, offset, pts_ns);
     if !t.stats.enabled() {
-        return; // HUD hidden — skip the stats lock
+        return;
     }
     let (decoded_ns, released_ns) = paired.unwrap_or((0, 0));
     t.stats
-        .note_displayed(pts_us * 1000, decoded_ns, released_ns, displayed_ns);
+        .note_displayed(pts_ns, decoded_ns, released_ns, displayed_ns);
 }
 
 /// React to an output-format change by tagging the Surface with the dataspace the decoder reports,

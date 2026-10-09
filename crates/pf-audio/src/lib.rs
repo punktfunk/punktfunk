@@ -171,6 +171,10 @@ pub fn per_session_sink_possible() -> bool {
     plat::per_session_sink_possible()
 }
 
+/// Host-lifetime capturer slot: [`park_audio_capture`] fills it, [`take_parked_capture`]
+/// drains it.
+pub type AudioCapSlot = std::sync::Arc<std::sync::Mutex<Option<Box<dyn AudioCapturer>>>>;
+
 /// Park a capturer at session end so the next session reuses its PipeWire thread.
 /// A capturer that owns a sink is dropped instead: WirePlumber elects a live sink
 /// from its default history whenever the restored output is missing. Windows drops
@@ -325,7 +329,7 @@ pub struct MicBackendStats {
 /// creep-trims depth.
 pub fn mic_legacy_buffer() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| std::env::var_os("PUNKTFUNK_MIC_LEGACY_BUFFER").is_some_and(|v| v != "0"))
+    *ON.get_or_init(|| pf_host_config::env_on("PUNKTFUNK_MIC_LEGACY_BUFFER") == Some(true))
 }
 
 /// Open a virtual mic (1 or 2 channels). Linux: PipeWire `Audio/Source`. Windows:
@@ -404,8 +408,13 @@ pub mod wiring_plan;
 #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 pub mod capture_policy;
 
+mod capture_lease;
 mod mic_jitter;
 mod mic_pump;
+// Only the Windows openers reap; macOS has no backend thread at all.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+mod ready;
+pub use capture_lease::{CaptureLease, CaptureRoute, Ready, REOPEN_BACKOFF};
 pub use mic_pump::{mic_source_id, MicFrame, MicPump};
 
 /// A session's hold on the shared virtual mic as the box's default source. The mic loses the

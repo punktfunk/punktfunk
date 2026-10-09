@@ -1,23 +1,16 @@
 //! Host → client datagram demux. `try_send` drops the newest packet when the embedder
 //! lags, so a slow consumer never backs up the QUIC receive path.
 
+use super::super::planes::DatagramTx;
 use super::*;
 
-// One parameter per demuxed plane; a struct would only move the field list off the call site.
-#[allow(clippy::too_many_arguments)]
+/// Demux host datagrams onto `planes` until the connection closes. `encode_lat` is the ABR
+/// encode accumulator, fed here and not from the host-timing plane, which is overlay-lossy
+/// and embedder-drained.
 pub(super) async fn run(
     conn: ClientConn,
-    audio_tx: std::sync::mpsc::SyncSender<AudioPacket>,
-    rumble_tx: std::sync::mpsc::SyncSender<RumbleUpdate>,
-    rumble_feed: super::super::rumble::RumbleFeed,
-    hidout_tx: std::sync::mpsc::SyncSender<crate::quic::HidOutput>,
-    pad_audio_tx: std::sync::mpsc::SyncSender<crate::quic::PadAudioFrame>,
-    hdr_meta_tx: std::sync::mpsc::SyncSender<crate::quic::HdrMeta>,
-    host_timing_tx: std::sync::mpsc::SyncSender<crate::quic::HostTiming>,
-    // ABR encode accumulator ([`EncodeLatAcc`]). Fed here, not from `host_timing_tx`
-    // (that channel is overlay-lossy and embedder-drained).
+    planes: DatagramTx,
     encode_lat: Arc<Mutex<super::super::frame_channel::EncodeLatAcc>>,
-    cursor_state_tx: std::sync::mpsc::SyncSender<crate::quic::CursorState>,
 ) {
     // Per-pad seq gate for v2 rumble: a reorder must not restart a stopped motor.
     // v1 has no seq and bypasses (the host's periodic re-send is the only heal).
@@ -33,7 +26,7 @@ pub(super) async fn run(
                 if let Some((seq, pts_ns, opus)) =
                     crate::quic::decode_audio_datagram(&d).filter(|&(seq, ..)| audio_seq.fresh(seq))
                 {
-                    let _ = audio_tx.try_send(AudioPacket {
+                    let _ = planes.audio.try_send(AudioPacket {
                         seq,
                         pts_ns,
                         data: opus.to_vec(),
@@ -46,14 +39,14 @@ pub(super) async fn run(
                 {
                     if audio_red.recover_before(seq, prev.is_some()) {
                         // Copy is the previous protocol frame: seq-1, pts minus one FRAME_MS.
-                        let _ = audio_tx.try_send(AudioPacket {
+                        let _ = planes.audio.try_send(AudioPacket {
                             seq: seq.wrapping_sub(1),
                             pts_ns: pts_ns
                                 .saturating_sub(crate::audio::FRAME_MS as u64 * 1_000_000),
                             data: prev.unwrap_or_default().to_vec(),
                         });
                     }
-                    let _ = audio_tx.try_send(AudioPacket {
+                    let _ = planes.audio.try_send(AudioPacket {
                         seq,
                         pts_ns,
                         data: opus.to_vec(),
@@ -86,8 +79,8 @@ pub(super) async fn run(
                         let ttl = u.envelope.map(|e| e.ttl_ms);
                         // Both consumers: legacy queue is the frozen two-handle C ABI
                         // (`next_rumble`/`next_rumble2`); only the policy engine gets triggers.
-                        let _ = rumble_tx.try_send((u.pad, u.low, u.high, ttl));
-                        rumble_feed.wire_update(
+                        let _ = planes.rumble.try_send((u.pad, u.low, u.high, ttl));
+                        planes.rumble_feed.wire_update(
                             u.pad,
                             u.low,
                             u.high,
@@ -100,12 +93,12 @@ pub(super) async fn run(
             }
             Some(&crate::quic::HIDOUT_MAGIC) => {
                 if let Some(h) = HidOutput::decode(&d) {
-                    let _ = hidout_tx.try_send(h);
+                    let _ = planes.hidout.try_send(h);
                 }
             }
             Some(&crate::quic::PAD_AUDIO_MAGIC) => {
                 if let Some(f) = crate::quic::decode_pad_audio_datagram(&d) {
-                    let _ = pad_audio_tx.try_send(f);
+                    let _ = planes.pad_audio.try_send(f);
                 }
             }
             // Same queue as `0xC9` so seq/pts mean the same; `Welcome::audio_codec` is the
@@ -115,7 +108,7 @@ pub(super) async fn run(
                 if let Some((seq, pts_ns, pcm)) = crate::quic::decode_audio_pcm_datagram(&d)
                     .filter(|&(seq, ..)| audio_seq.fresh(seq))
                 {
-                    let _ = audio_tx.try_send(AudioPacket {
+                    let _ = planes.audio.try_send(AudioPacket {
                         seq,
                         pts_ns,
                         data: pcm.to_vec(),
@@ -124,7 +117,7 @@ pub(super) async fn run(
             }
             Some(&crate::quic::HDR_META_MAGIC) => {
                 if let Some(m) = crate::quic::decode_hdr_meta_datagram(&d) {
-                    let _ = hdr_meta_tx.try_send(m);
+                    let _ = planes.hdr_meta.try_send(m);
                 }
             }
             Some(&crate::quic::HOST_TIMING_MAGIC) => {
@@ -134,12 +127,12 @@ pub(super) async fn run(
                         acc.sum_us += s.encode_us as u64;
                         acc.count += 1;
                     }
-                    let _ = host_timing_tx.try_send(t);
+                    let _ = planes.host_timing.try_send(t);
                 }
             }
             Some(&crate::quic::CURSOR_STATE_MAGIC) => {
                 if let Some(s) = crate::quic::decode_cursor_state_datagram(&d) {
-                    let _ = cursor_state_tx.try_send(s);
+                    let _ = planes.cursor_state.try_send(s);
                 }
             }
             _ => {} // newer host; ignore
@@ -156,39 +149,17 @@ mod tests {
     /// no `AudioRedRecovery`, and only the loop can be wrong about those.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_lossless_datagram_reaches_the_audio_sink() {
-        let server = crate::quic::endpoint::server("127.0.0.1:0".parse().unwrap()).unwrap();
-        let addr = server.local_addr().unwrap();
-        let client = crate::quic::endpoint::client_insecure().unwrap();
-        let accept = tokio::spawn(async move {
-            let incoming = server.accept().await.expect("incoming");
-            (server, incoming.await.expect("host side connects"))
-        });
-        let client_conn = client.connect(addr, "punktfunk").unwrap().await.unwrap();
-        let (_server_ep, host_conn) = accept.await.unwrap();
+        let (_server_ep, _client_ep, host_conn, client_conn) =
+            crate::quic::test_util::connect_pair().await;
 
         // Keep every receiver alive: a closed sink would fail `try_send` for the wrong reason.
-        let (audio_tx, audio_rx) = std::sync::mpsc::sync_channel::<AudioPacket>(8);
-        let (rumble_tx, _rumble_rx) = std::sync::mpsc::sync_channel::<RumbleUpdate>(8);
-        let (hidout_tx, _hidout_rx) = std::sync::mpsc::sync_channel(8);
-        let (pad_audio_tx, _pad_audio_rx) = std::sync::mpsc::sync_channel(8);
-        let (hdr_meta_tx, _hdr_meta_rx) = std::sync::mpsc::sync_channel(8);
-        let (host_timing_tx, _host_timing_rx) = std::sync::mpsc::sync_channel(8);
-        let (cursor_state_tx, _cursor_state_rx) = std::sync::mpsc::sync_channel(8);
-        let rumble_feed =
-            super::super::rumble::RumbleFeed(Arc::new(super::super::rumble::RumbleShared::new()));
+        let (planes, rx) = super::super::planes::channels();
         tokio::spawn(run(
             ClientConn::new(client_conn),
-            audio_tx,
-            rumble_tx,
-            rumble_feed,
-            hidout_tx,
-            pad_audio_tx,
-            hdr_meta_tx,
-            host_timing_tx,
+            planes.datagram,
             Arc::new(Mutex::new(
                 super::super::frame_channel::EncodeLatAcc::default(),
             )),
-            cursor_state_tx,
         ));
 
         // Size from this connection's `max_datagram_size`: the plane is never fragmented,
@@ -216,7 +187,8 @@ mod tests {
             .expect("datagram fits the path");
 
         let got = tokio::task::spawn_blocking(move || {
-            audio_rx.recv_timeout(std::time::Duration::from_secs(5))
+            let audio = rx.audio.into_inner().unwrap();
+            audio.recv_timeout(std::time::Duration::from_secs(5))
         })
         .await
         .unwrap()

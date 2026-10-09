@@ -225,7 +225,7 @@ impl WinScreen {
         let who = self.competitor().unwrap_or("another streaming host");
         Some(format!(
             "{who} detected — punktfunk's management API moves to :{}. {who} keeps :{}.",
-            super::MGMT_PORT_MOVED,
+            crate::choices::DEFAULT_MGMT_PORT,
             super::MGMT_PORT,
         ))
     }

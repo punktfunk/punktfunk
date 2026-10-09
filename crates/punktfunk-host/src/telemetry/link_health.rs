@@ -319,7 +319,7 @@ impl LinkWindow {
     }
 
     /// One closed client report window. `unrecovered_run` is
-    /// [`UnrecoveredRun::report`](crate::native::UnrecoveredRun)'s verdict on it.
+    /// [`UnrecoveredRun::report`](crate::native::bitrate::UnrecoveredRun)'s verdict on it.
     pub fn note_loss(&mut self, loss_ppm: u32, unrecovered_run: u32) {
         self.windows += 1;
         self.loss_ppm_sum += u64::from(loss_ppm);

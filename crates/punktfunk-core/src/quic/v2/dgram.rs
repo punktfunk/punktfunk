@@ -99,6 +99,15 @@ pub fn decode(b: &[u8]) -> Option<Dgram<'_>> {
     }
 }
 
+/// The payload of a datagram a client reads: audio, input state or a host event. `None`
+/// for any other kind, which the client skips.
+pub fn client_payload(b: &[u8]) -> Option<&[u8]> {
+    match decode(b)? {
+        Dgram::Audio(p) | Dgram::InputState(p) | Dgram::HostEvent(p) => Some(p),
+        _ => None,
+    }
+}
+
 /// Most shards one NACK names.
 pub const NACK_MAX: usize = 16;
 
@@ -316,6 +325,19 @@ mod tests {
             decode(&encode(DGRAM_MEDIA, &[9, 9])),
             Some(Dgram::Media(&[9, 9]))
         );
+    }
+
+    /// A client takes audio, input and host events, and skips the kinds the pump handles
+    /// itself.
+    #[test]
+    fn a_client_reads_the_payload_of_the_kinds_it_takes() {
+        let audio = q::encode_audio_datagram(7, 1_000, &[1, 2, 3]);
+        let rumble = q::encode_rumble_datagram(1, 2, 3);
+        assert_eq!(client_payload(&wrap(&audio).unwrap()), Some(&audio[..]));
+        assert_eq!(client_payload(&wrap(&rumble).unwrap()), Some(&rumble[..]));
+        assert_eq!(client_payload(&Feedback::default().encode()), None);
+        assert_eq!(client_payload(&encode(DGRAM_MEDIA, &[9, 9])), None);
+        assert_eq!(client_payload(&[]), None);
     }
 
     #[test]

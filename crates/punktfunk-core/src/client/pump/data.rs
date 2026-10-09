@@ -1225,15 +1225,8 @@ mod tests {
     /// never dropped. The next window must report: discard is one wide.
     #[tokio::test(flavor = "multi_thread", worker_threads = 3)]
     async fn a_host_pipeline_gap_discards_the_report_window_in_flight() {
-        let server = crate::quic::endpoint::server("127.0.0.1:0".parse().unwrap()).unwrap();
-        let addr = server.local_addr().unwrap();
-        let client = crate::quic::endpoint::client_insecure().unwrap();
-        let accept = tokio::spawn(async move {
-            let incoming = server.accept().await.expect("incoming");
-            (server, incoming.await.expect("host side connects"))
-        });
-        let client_conn = client.connect(addr, "punktfunk").unwrap().await.unwrap();
-        let (_server_ep, host_conn) = accept.await.unwrap();
+        let (_server_ep, _client_ep, host_conn, client_conn) =
+            crate::quic::test_util::connect_pair().await;
         // Host opens the control stream (normally the client does during
         // handshake): this host end only writes, so a client-opened
         // stream would stay invisible.
@@ -1248,10 +1241,7 @@ mod tests {
         let pipeline_gap = Arc::new(AtomicU32::new(0));
         // Hold the sender so the task does not exit on a closed channel.
         let (_task_ctrl_tx, task_ctrl_rx) = tokio::sync::mpsc::channel::<CtrlRequest>(8);
-        let (clip_event_tx, _clip_event_rx) = std::sync::mpsc::sync_channel(8);
-        let (cursor_shape_tx, _cursor_shape_rx) = crate::client::planes::shape_queue();
-        let (access_tx, _access_rx) = std::sync::mpsc::sync_channel(8);
-        let (hidout_tx, _hidout_rx) = std::sync::mpsc::sync_channel(8);
+        let (planes, _planes_rx) = crate::client::planes::channels();
         let mode = crate::config::Mode {
             width: 1920,
             height: 1080,
@@ -1267,11 +1257,11 @@ mod tests {
                 bitrate_ack: Arc::new(Mutex::new(AckQueue::new())),
                 pipeline_gap: pipeline_gap.clone(),
                 clock_gen: Arc::new(AtomicU32::new(0)),
-                clip_event_tx,
-                cursor_shape_tx,
+                clip_event_tx: planes.clip_event,
+                cursor_shape_tx: planes.cursor_shape,
                 mode_gen: Arc::new(AtomicU32::new(0)),
-                access_tx,
-                hidout_tx,
+                access_tx: planes.access,
+                hidout_tx: planes.datagram.hidout,
             }
             .run(),
         );

@@ -84,29 +84,16 @@ data class SettingsOverlay(
         SettingsFields.PRESET.fold(base) { s, f -> f.applyOverlay(this, s) }
 
     /**
-     * Record, as overrides, every tier-P field that differs between two settings snapshots.
-     *
-     * The settings UI commits a whole `Settings` per control (`update(s.copy(codec = …))`), so it
-     * can't hand over a list of touched fields — it hands over "what the control was showing" and
-     * "what it shows now", and the only field that can differ is the one the user just touched.
-     *
-     * This is NOT the diff-on-save the design rejects: the comparison is against the EFFECTIVE
-     * settings the control was displaying, not against the globals, so setting a value back to
-     * whatever the global happens to be still records an override — the pin. It only ever adds
-     * overrides; removing one is [clear], a different, explicit operation.
+     * Record one control's value in [from] as its override — even one equal to today's global,
+     * which is the pin. [FIELD_RESOLUTION] is the one alias, covering the width/height pair a single
+     * control drives. An unknown name is a no-op. Removing an override is [clear].
      */
-    fun absorb(before: Settings, after: Settings): SettingsOverlay =
-        SettingsFields.PRESET.fold(this) { o, f -> f.absorb(o, before, after) }
+    fun pin(field: String, from: Settings): SettingsOverlay =
+        SettingsFields.controlRows(field).fold(this) { o, f -> f.pin(o, from) }
 
-    /**
-     * Drop one override by its field name, putting the row back to inheriting. [FIELD_RESOLUTION]
-     * is the one alias, covering the width/height pair a single control drives. An unknown name is
-     * a no-op.
-     */
-    fun clear(field: String): SettingsOverlay = when (field) {
-        FIELD_RESOLUTION -> copy(width = null, height = null)
-        else -> SettingsFields.PRESET.firstOrNull { it.key == field }?.clear(this) ?: this
-    }
+    /** Drop one control's override, putting the row back to inheriting. Same names as [pin]. */
+    fun clear(field: String): SettingsOverlay =
+        SettingsFields.controlRows(field).fold(this) { o, f -> f.clear(o) }
 
     /** The field names this overlay overrides — what the settings rows draw their markers from. */
     fun overridden(): Set<String> = SettingsFields.PRESET

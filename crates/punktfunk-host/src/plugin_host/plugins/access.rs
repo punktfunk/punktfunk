@@ -176,6 +176,7 @@ impl PathPolicy {
 #[derive(Clone, Copy)]
 struct PathFacts {
     is_dir: bool,
+    #[cfg_attr(windows, allow(dead_code, reason = "Windows has no owner uid"))]
     owner_uid: Option<u32>,
 }
 
@@ -434,18 +435,20 @@ fn to_io(e: impl std::fmt::Display) -> io::Error {
     io::Error::other(e.to_string())
 }
 
-/// tmp-write + rename so a reader never sees half a file; the temp is 0600 on Unix before it
-/// becomes the real name. One writer for both files.
 fn write_json_atomic<T: Serialize>(dir: &Path, name: &str, value: &T) -> io::Result<()> {
-    let tmp = dir.join(format!("{name}.tmp"));
-    let body = serde_json::to_string_pretty(value).map_err(to_io)?;
-    std::fs::write(&tmp, body)?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600))?;
+    let body = serde_json::to_vec_pretty(value).map_err(to_io)?;
+    replace(&dir.join(name), &body)
+}
+
+/// The one writer for both files: a per-process synced temp and a rename, so the CLI and the
+/// service never publish each other's half-written temp. Owner-only on Unix. Windows keeps the
+/// directory's inherited ACL: an owner-only DACL would strip the runner's read ACE.
+fn replace(path: &Path, body: &[u8]) -> io::Result<()> {
+    if cfg!(unix) {
+        pf_paths::replace_secret_file(path, body)
+    } else {
+        pf_paths::replace_file(path, body)
     }
-    std::fs::rename(&tmp, dir.join(name))
 }
 
 /// The ACL half of a grant, mapped into `io::Error` for the store's signatures. Runs only
@@ -1031,6 +1034,7 @@ impl AccessStore {
 
     /// [`Self::runner_roots`] for one plugin: what its manifest declares plus its own grants,
     /// which is what its own account or package gets an ACE for.
+    #[cfg_attr(not(windows), allow(dead_code, reason = "Windows grants per plugin"))]
     pub fn plugin_roots(&self, id: &str, manifest: &PluginManifest) -> Vec<RunnerRoot> {
         let access = {
             let _guard = self.lock.lock().unwrap_or_else(|e| e.into_inner());
@@ -1262,14 +1266,7 @@ fn migrate_grants(config_dir: &Path, runner_dir: &Path) -> io::Result<()> {
         return Ok(());
     }
     prepare_runner_dir(runner_dir)?;
-    let tmp = runner_dir.join(format!("{GRANTS_FILE}.tmp"));
-    std::fs::copy(legacy, &tmp)?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600))?;
-    }
-    std::fs::rename(tmp, target)
+    replace(&target, &std::fs::read(legacy)?)
 }
 
 /// Harden the runner directory, then hand the Windows runner its read ACE back.
@@ -1495,6 +1492,115 @@ mod tests {
         assert_eq!(rule("/run/media"), Some("protected_path"));
         assert_eq!(rule("/run/user/1000"), Some("protected_path"));
         assert_eq!(rule("/run/mediax/games"), Some("protected_path"));
+    }
+
+    /// The root rules the runner's sandbox twins (`refusedRoot` in sdk/src/sandbox.ts), on
+    /// canonical absolute paths: the shape rules (`..`, length, not a directory) stay host-only.
+    #[cfg(unix)]
+    fn path_refusal_vectors() -> String {
+        const HOME: &str = "/home/u";
+        const USER_CONFIG: &str = "/home/u/.config/punktfunk";
+        const SYSTEM_CONFIG: &str = "/var/lib/punktfunk";
+        let rows: &[(&str, &[&str])] = &[
+            (
+                USER_CONFIG,
+                &[
+                    "/",
+                    "/home",
+                    "/home/u",
+                    "/proc",
+                    "/proc/1/root",
+                    "/sys/kernel",
+                    "/dev/shm",
+                    "/run",
+                    "/run/media",
+                    "/run/user/1000",
+                    "/run/mediax/games",
+                    "/home/u/.ssh",
+                    "/home/u/.gnupg/private-keys-v1.d",
+                    "/home/u/.config",
+                    "/home/u/.config/punktfunk",
+                    "/home/u/.config/punktfunk/plugin-run",
+                    "/home/u/.config/punktfunk-extra",
+                    "/home/u/.local/share/Steam",
+                    "/home/u/.config/retroarch",
+                    "/home/u/Emu",
+                    "/run/media/u/SD",
+                    "/run/media/deck/SD/Emulation/roms",
+                    "/mnt/games1",
+                    "/tmp/vhclient_response",
+                    "/usr/share/applications",
+                ],
+            ),
+            (
+                SYSTEM_CONFIG,
+                &[
+                    "/var",
+                    "/var/lib",
+                    "/var/lib/punktfunk",
+                    "/var/lib/punktfunk/plugin-run",
+                    "/var/lib/punktfunk-other",
+                    "/var/lib/flatpak",
+                    "/home/u",
+                    "/home/u/.ssh",
+                    "/home/u/.config/punktfunk",
+                    "/home/u/.config/punktfunk-extra",
+                    "/home/u/.config/retroarch",
+                    "/home/u/Games",
+                ],
+            ),
+        ];
+        let facts = PathFacts {
+            is_dir: true,
+            owner_uid: None,
+        };
+        let mut lines = Vec::new();
+        for (config_dir, paths) in rows {
+            let policy = PathPolicy {
+                home: HOME.into(),
+                config_dir: (*config_dir).into(),
+                runtime_dir: Some("/run/user/1000".into()),
+            };
+            for path in *paths {
+                let p = Path::new(path);
+                let rule = refusal_rule(p, p, false, false, &policy, facts);
+                assert!(
+                    matches!(rule, None | Some("broad_root" | "protected_path")),
+                    "{path}: {rule:?}"
+                );
+                lines.push(format!(
+                    "    {{\"path\": \"{path}\", \"home\": \"{HOME}\", \"config_dir\": \"{config_dir}\", \
+                     \"refused\": {}}}",
+                    rule.is_some()
+                ));
+            }
+        }
+        format!(
+            "{{\n  \"$comment\": \"Generated from punktfunk-host plugin_host access::refusal_rule by \
+             path_refusal_vectors_are_checked_in (UPDATE_VECTORS=1 rewrites it). The SDK's sandbox \
+             replays it.\",\n  \"vectors\": [\n{}\n  ]\n}}\n",
+            lines.join(",\n")
+        )
+    }
+
+    /// The `/proc`, `/sys`, `/dev` and `/run` rules are Unix-only, so the file is too.
+    #[cfg(unix)]
+    #[test]
+    fn path_refusal_vectors_are_checked_in() {
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/testdata/path-refusal-vectors.json"
+        );
+        let fresh = path_refusal_vectors();
+        if std::env::var_os("UPDATE_VECTORS").is_some() {
+            std::fs::create_dir_all(Path::new(path).parent().unwrap()).unwrap();
+            std::fs::write(path, &fresh).unwrap();
+        }
+        let on_disk = std::fs::read_to_string(path).unwrap_or_default();
+        assert!(
+            on_disk == fresh,
+            "{path} is stale: rerun with UPDATE_VECTORS=1"
+        );
     }
 
     fn manifest(reads: &[&str], writes: &[&str]) -> BTreeMap<String, PluginManifest> {

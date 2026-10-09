@@ -72,7 +72,7 @@ pub(crate) fn run_netsh(args: &[String]) -> bool {
 }
 
 /// A setting `serve` reads: `flag` in host.env's `PUNKTFUNK_HOST_CMD`, else the last `key=` line,
-/// the same order `parse_serve` applies.
+/// the same order `parse_serve_args` applies.
 pub(super) fn serve_setting<'a>(host_env: &'a str, flag: &str, key: &str) -> Option<&'a str> {
     let last = |name: &str| {
         host_env
@@ -211,7 +211,7 @@ pub(super) fn set_fw_public_marker(allow_public: bool) {
 pub(super) fn active_network_is_public() -> Option<bool> {
     // Full System32 path: CreateProcess searches the launching EXE's directory first, so a
     // planted `powershell.exe` next to the host would run as SYSTEM.
-    let ps = crate::install::sys32(r"WindowsPowerShell\v1.0\powershell.exe");
+    let ps = crate::install::sys32(pf_paths::POWERSHELL);
     let out = std::process::Command::new(&ps)
         .args([
             "-NoProfile",

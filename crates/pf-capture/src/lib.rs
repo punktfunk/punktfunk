@@ -424,7 +424,7 @@ pub struct FastSyntheticCapturer {
     height: u32,
     frame_idx: u64,
     buf: Vec<u8>,
-    /// `PUNKTFUNK_SYNTH_NOISE`: high-entropy noise NVENC cannot compress, so
+    /// `PUNKTFUNK_SYNTH_NOISE=1`: high-entropy noise NVENC cannot compress, so
     /// the encoder hits its CBR target. Default flat/band compresses to ~nothing.
     noise: bool,
     rng: u64,
@@ -438,7 +438,7 @@ impl FastSyntheticCapturer {
             height,
             frame_idx: 0,
             buf: vec![0u8; width as usize * height as usize * 4],
-            noise: std::env::var_os("PUNKTFUNK_SYNTH_NOISE").is_some(),
+            noise: pf_host_config::env_on("PUNKTFUNK_SYNTH_NOISE") == Some(true),
             rng: 0x9e3779b97f4a7c15,
         }
     }
@@ -570,71 +570,12 @@ pub fn capturer_delivers_sdr10() -> bool {
     false
 }
 
-/// Which HDR capture source a `want_hdr` negotiation failure belongs to.
-/// The latch is per source so a portal-monitor failure cannot disable the
-/// virtual-output path, and vice versa, until host restart.
+// The per-source HDR latch lives in pf-frame so pf-vdisplay reads it without this crate.
 #[cfg(target_os = "linux")]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum HdrSource {
-    /// GNOME 50+ portal monitor mirror (`open_portal_monitor` with `want_hdr`).
-    PortalMonitor,
-    /// Compositor virtual output (`open_virtual_output` with `want_hdr`): gamescope's
-    /// PipeWire node with the carried `pipewire-hdr` patch, or a Hyprland head that
-    /// would not light in 10-bit HDR.
-    VirtualOutput,
-}
+pub use pf_frame::hdr::{
+    clear_virtual_output_hdr_latch, hdr_capture_failed, note_hdr_capture_failed, HdrSource,
+};
 
-/// Per-source latch: `want_hdr` failed to negotiate the 10-bit PQ offer.
-/// Later sessions fall back to SDR instead of re-running the 10 s timeout.
-/// `PortalMonitor` sticks until host restart. `VirtualOutput` lasts until a
-/// gamescope display is torn down ([`clear_virtual_output_hdr_latch`]).
-#[cfg(target_os = "linux")]
-static HDR_CAPTURE_FAILED: [std::sync::atomic::AtomicBool; 2] = [
-    std::sync::atomic::AtomicBool::new(false),
-    std::sync::atomic::AtomicBool::new(false),
-];
-
-#[cfg(target_os = "linux")]
-impl HdrSource {
-    fn slot(self) -> usize {
-        match self {
-            HdrSource::PortalMonitor => 0,
-            HdrSource::VirtualOutput => 1,
-        }
-    }
-}
-
-#[cfg(target_os = "linux")]
-pub fn hdr_capture_failed(source: HdrSource) -> bool {
-    HDR_CAPTURE_FAILED[source.slot()].load(std::sync::atomic::Ordering::Relaxed)
-}
-
-/// Latches SDR for `source`. Public so pf-vdisplay's teardown test can arm it.
-#[cfg(target_os = "linux")]
-pub fn note_hdr_capture_failed(source: HdrSource) {
-    if !HDR_CAPTURE_FAILED[source.slot()].swap(true, std::sync::atomic::Ordering::Relaxed) {
-        match source {
-            HdrSource::PortalMonitor => tracing::warn!(
-                "HDR capture negotiation failed on the monitor mirror — this host will offer SDR \
-                 for that source for the rest of the process lifetime (restart the host after \
-                 fixing the monitor's HDR mode to retry)"
-            ),
-            HdrSource::VirtualOutput => tracing::warn!(
-                "HDR capture negotiation failed on the virtual output — this host will offer SDR \
-                 for virtual outputs until a gamescope display is torn down or the host restarts \
-                 (gamescope: is the spawned build punktfunk's? see packaging/gamescope)"
-            ),
-        }
-    }
-}
-
-/// Re-arms gamescope HDR: each spawn is a new compositor. The registry calls this when a
-/// gamescope display is torn down. The portal latch has no such event and stays.
-#[cfg(target_os = "linux")]
-pub fn clear_virtual_output_hdr_latch() {
-    HDR_CAPTURE_FAILED[HdrSource::VirtualOutput.slot()]
-        .store(false, std::sync::atomic::Ordering::Relaxed);
-}
 #[cfg(target_os = "windows")]
 pub fn capturer_supports_444(encoder_ingests_rgb_444: bool) -> bool {
     // IDD-push is full-chroma RGB (BGRA SDR, Rgb10a2 HDR). Only a backend that
@@ -706,11 +647,6 @@ pub mod dxgi;
 #[cfg(target_os = "windows")]
 #[path = "windows/idd_push.rs"]
 mod idd_push;
-// WUDFHost duplication target — open with the shared rights mask, then prove the image path.
-// Reused by the host gamepad-channel bootstrap (`inject::windows::gamepad_raii`); re-export so
-// that reach stays a leaf.
-#[cfg(target_os = "windows")]
-pub use idd_push::{open_wudfhost, verify_is_wudfhost};
 // The AU section's reader half. Pure over a mapped view, so its tests run on every target.
 #[path = "windows/au_reader.rs"]
 mod au_reader;
@@ -718,6 +654,13 @@ mod au_reader;
 // same reason: the rule that decides whether a silent desktop resets gets tests on every target.
 #[path = "windows/cursor_witness.rs"]
 mod cursor_witness;
+// The IDD-push stall model: holes in DWM delivery and their verdicts. Pure over `Instant`s,
+// so its tests run on every target; `idd_push/stall.rs` writes the report.
+#[path = "windows/stall_model.rs"]
+mod stall_model;
+// The GDI cursor poller's planes-to-RGBA rasterisers, pure over `&[u8]` for the same reason.
+#[path = "windows/cursor_raster.rs"]
+mod cursor_raster;
 #[cfg(target_os = "windows")]
 pub use idd_push::driver_encode::{open_driver_encoder, DriverEncodeOpenError, DriverEncodeParams};
 // A monitor the host did not create, captured and encoded by a capture worker.
@@ -729,11 +672,6 @@ pub use wgc::{open_wgc, open_worker_encoder, WgcSource, WorkerEndpoint, WorkerPr
 #[cfg(target_os = "linux")]
 #[path = "linux/mod.rs"]
 mod linux;
-/// ScreenCast handshake bounds and cursor-mode negotiation, shared with pf-vdisplay.
-/// They run on `pf_portal`'s never-dropped runtime.
-#[cfg(target_os = "linux")]
-#[path = "linux/portal_rt.rs"]
-pub mod portal_rt;
 // GNOME BT.2100 colour-mode probe — host gate for offering HDR on the portal
 // monitor path (`open_portal_monitor` `want_hdr`).
 #[cfg(target_os = "linux")]

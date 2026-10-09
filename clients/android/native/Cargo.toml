@@ -32,12 +32,14 @@ punktfunk-core = { path = "../../../crates/punktfunk-core", features = ["quic"] 
 # visibility patch, so bumping its deps would mean rewriting the vendor rather than a version edit.
 jni = "0.22"
 log = "0.4"
-# LAN host discovery: browse the host's `_punktfunk._udp` mDNS advert — the SAME crate + service the
-# Linux/Windows clients use (`crates/pf-client-core/src/discovery.rs`), replacing Android's per-OEM
-# `NsdManager` system daemon with one tested browse path. Pure Rust (socket2/if-addrs/mio), so it
-# cross-compiles to the Android targets AND builds on the host (the JNI seam links into
-# `cargo build --workspace`). Kotlin keeps only the Wi-Fi `MulticastLock` + permission UX.
-mdns-sd = "0.21"
+# LAN host discovery: `pf_client_core::discovery::try_browse`, the browse the Linux and Windows
+# clients run, in place of Android's per-OEM `NsdManager`. Shared, not in the Android table below,
+# so the JNI seam and its tests build on the Linux and Windows hosts too. Kotlin keeps only the
+# Wi-Fi `MulticastLock` + permission UX. `async-channel` names the browse's event receiver.
+pf-client-core = { path = "../../../crates/pf-client-core", default-features = false, features = [
+    "discovery",
+] }
+async-channel = "2"
 # Shared, NOT in the Android table below: `session::connect` parses the `ConnectRequest`
 # JSON Kotlin hands `nativeConnect`, and that module compiles on the host too — CI's
 # workspace clippy builds this crate as a host cdylib.
@@ -89,9 +91,6 @@ ndk = { version = "0.9", features = ["media", "audio", "nativewindow", "api-leve
 ndk-sys = { version = "0.6", features = ["media"] }
 # setpriority/gettid to raise the decode thread toward URGENT_DISPLAY (see decode::boost_thread_priority).
 libc = "0.2"
-# Opus decode for pad audio (0xD1); the main audio plane and the mic uplink run in core. Same
-# crate the host + Linux client use; opusic-sys builds its bundled libopus static via cmake.
-opus = "0.4"
 # Tier-A pad audio (WP9). Android's audio framework denylists the DualSense's output by VID/PID,
 # so the pad's isochronous endpoint is driven directly on the fd `UsbDeviceConnection` hands over.
 # Our own crates, developed openly because the hole they fill — isochronous USB in Rust — is an
@@ -105,11 +104,11 @@ usbfs-iso = { git = "https://github.com/unom-io/usbfs-iso", rev = "ff5468ac68cea
 # Linux/Windows session binary shows, drawn here through Skia's GL backend on an EGL surface
 # (`src/console/`). `default-features = false` turns its Vulkan overlay off — this host owns the
 # surface. `pf-client-core` for the portable types the shell speaks (settings, menu events,
-# overlay actions); `default-features = false` like every other consumer — then `pyrowave` back
-# on by name, which is the ONE piece of the desktop half this client takes: the shared Vulkan
-# wavelet decoder behind `src/pyro/` (design/pyrowave-codec-plan.md). It brings the vendored
-# C++/Vulkan codec into the `.so` on the 64-bit ABIs (arm64-v8a, x86_64) and nothing at all on
-# armeabi-v7a, where pyrowave-sys stubs itself out — see its build.rs.
+# overlay actions). `pf-client-video` with `pyrowave` and without `desktop`: the shared Vulkan
+# wavelet decoder behind `src/pyro/` (design/pyrowave-codec-plan.md) and its colour, queue-lock
+# and SPIR-V modules, no decode ladder. It brings the vendored C++/Vulkan codec into the `.so` on
+# the 64-bit ABIs (arm64-v8a, x86_64) and nothing at all on armeabi-v7a, where pyrowave-sys
+# stubs itself out — see its build.rs.
 #
 # All three shipping ABIs. rust-skia publishes prebuilt Skia archives for aarch64/x86_64 but NOT
 # armv7-linux-androideabi (the 32-bit TV boxes) — that one comes from OUR mirror
@@ -120,7 +119,8 @@ usbfs-iso = { git = "https://github.com/unom-io/usbfs-iso", rev = "ff5468ac68cea
 # multi-minute source build, and every ABI's log must show `DOWNLOAD AND INSTALL SUCCEEDED`.
 # (Continues the `cfg(target_os = "android")` table above — TOML allows a table header once.)
 pf-console-ui = { path = "../../../crates/pf-console-ui", default-features = false }
-pf-client-core = { path = "../../../crates/pf-client-core", default-features = false, features = [
+pf-client-core = { path = "../../../crates/pf-client-core", default-features = false }
+pf-client-video = { path = "../../../crates/pf-client-video", default-features = false, features = [
     "pyrowave",
 ] }
 # The PyroWave lane's own Vulkan: device bring-up, swapchain on the `SurfaceView`, and the

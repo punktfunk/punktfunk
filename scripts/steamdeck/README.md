@@ -42,7 +42,8 @@ serving HTTPS (HTTP/1.1 over TLS) with the host's identity cert), so its service
 | Script | What it does |
 |--------|--------------|
 | `install.sh` | Idempotent installer: ensure the `pf2` distrobox + toolchain → build host + web + **plugin runner** → write config → build the **HDR gamescope** below → tune sysctl + udev + `vhci-hcd` + `input` group and **register it on SteamOS's atomic-update keep list** (sudo) → install + start `punktfunk-host` / `punktfunk-web` systemd **user** services with linger, plus the **rebuild check** below. |
-| `update.sh` | Rebuild everything from the current source and restart the services (config + pairings persist). `--pull` does `git pull` first, on the branch the checkout follows: `stable` (releases, the default) or `main` (canary). Also retrofits anything a newer install.sh writes (runner, HDR gamescope, keep-list registration, rebuild check) onto older installs. |
+| `update.sh` | Rebuild everything from the current source and restart the services (config + pairings persist). `--pull` does `git pull` first, on the branch the checkout follows: `stable` (releases, the default) or `main` (canary). Also retrofits anything a newer install.sh writes (runner, HDR gamescope, keep-list registration, rebuild check) onto older installs, and re-applies the system tuning and the host unit from the checkout. |
+| `lib.sh` | Sourced by `install.sh`, `update.sh` and `rebuild-check.sh`: the build paths, the log helpers, `apply_system_tuning` (the repo's `/etc` files, groups and capabilities, every run) and `write_host_unit`. |
 | `build-version.sh` | The version a build reports: a release tag's `X.Y.Z`, else the canary base (`scripts/ci/pf-version.sh`) plus the commit, so the console and the channel's feed agree. |
 | `heal-box.sh` | Run by `install.sh` and `update.sh` before they enter the box: if its `fuse-overlayfs` helper died, podman reuses the dead mount on every start (`transport endpoint is not connected`). This detaches it so the next start remounts. A no-op on a healthy box. |
 | `install-tray.sh` | Run by `install.sh` and `update.sh`: build the status tray (`punktfunk-tray`) in its own cargo run and install it user-scoped. The host writes its autostart entry, so it shows in the Desktop-mode panel from the next login. Best-effort: a failure warns and the host runs without it. |
@@ -70,9 +71,11 @@ default `pf2`), `PUNKTFUNK_MGMT_PORT` (47990), `PUNKTFUNK_WEB_PORT` (47992).
 - **Config:** `~/.config/punktfunk/host.env` (encoder/compositor) and `web.env` (generated web login
   password + session secret). Trust material (`cert.pem`, `mgmt-token`, `punktfunk1-paired.json`) lives
   here too and persists across updates.
-- **Services:** `~/.config/systemd/user/punktfunk-host.service` (runs `serve --mgmt-bind
-  0.0.0.0:47990`, `+ --open` if chosen — the native `punktfunk/1` plane is always on; GameStream
-  follows the console's setting, and `update.sh` moves an older unit's `--gamestream` into it),
+- **Services:** `~/.config/systemd/user/punktfunk-host.service` — `scripts/punktfunk-host.service`
+  with the Deck's `ExecStart` (`serve --mgmt-bind 0.0.0.0:47990`, `+ --open` if chosen — the native
+  `punktfunk/1` plane is always on; GameStream follows the console's setting, and `update.sh` moves
+  an older unit's `--gamestream` into it) and the session environment in
+  `punktfunk-host.service.d/steamdeck.conf`,
   `punktfunk-web.service`, `punktfunk-rebuild-check.service` (post-OS-update self-heal, enabled), and
   `punktfunk-scripting.service` (plugin runner, **opt-in** — enable it once you use plugins/scripts).
   Linger is enabled so they run without a login session.
@@ -90,16 +93,18 @@ default `pf2`), `PUNKTFUNK_MGMT_PORT` (47990), `PUNKTFUNK_WEB_PORT` (47992).
   stale absolute override would break session spawning, not just HDR. HDR is attempted by
   default when present; `PUNKTFUNK_GAMESCOPE_HDR=0` in `host.env` forces SDR. Verify with
   `punktfunk-host hdr-probe`.
-- **System tuning (sudo):** `/etc/sysctl.d/99-punktfunk-net.conf` (32 MB UDP buffers — the #1
-  high-bitrate lever), `/etc/udev/rules.d/60-punktfunk.rules` (`uinput`/`uhid` access),
+- **System tuning (sudo, re-applied by every `install.sh` and `update.sh` run):**
+  `/etc/sysctl.d/99-punktfunk-net.conf` (32 MB UDP buffers — the #1 high-bitrate lever),
+  `/etc/systemd/system/user@.service.d/50-punktfunk-nice.conf` (nice-limit headroom for the host's
+  data-plane threads), `/etc/udev/rules.d/60-punktfunk.rules` (`uinput`/`uhid` access),
   `/etc/modules-load.d/punktfunk.conf` (`vhci-hcd` for the native Deck pad), `$USER` in the `input`
-  group **and in `punktfunk`** — the latter created here if missing, because the udev rule
-  `chgrp`s the vhci `attach`/`detach` nodes to it and a rule that names a nonexistent group fails
-  silently, leaving the native Deck pad unable to attach (the deb/rpm/arch scriptlets `groupadd` it;
-  nothing on this path did until now). It is separate from `input` on purpose: writing `attach`
-  materialises an arbitrary emulated USB device (security-review 2026-08-05 M-4). Drop it with
-  `sudo gpasswd -d "$USER" punktfunk` if you would rather stream without that pad.
-  Plus `/etc/atomic-update.conf.d/punktfunk.conf`, which registers the three files on
+  group **and in `punktfunk`** — the latter created from `packaging/linux/punktfunk.sysusers` (the
+  file the packages ship) if missing, because the udev rule `chgrp`s the vhci `attach`/`detach`
+  nodes to it and a rule that names a nonexistent group fails silently, leaving the native Deck pad
+  unable to attach. It is separate from `input` on purpose: writing `attach` materialises an
+  arbitrary emulated USB device. Drop it with `sudo gpasswd -d "$USER" punktfunk` if you would
+  rather stream without that pad.
+  Plus `/etc/atomic-update.conf.d/punktfunk.conf`, which registers the four files on
   SteamOS's atomic-update keep list so A/B OS updates carry them over (verified: without it an
   update silently strips them — pads degrade to Xbox 360, buffers drop to 208 KB).
 

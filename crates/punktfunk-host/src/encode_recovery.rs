@@ -1,6 +1,8 @@
 //! Encoder and capture recovery policy both encode loops share: the silent-wedge watch with
-//! its in-place reset budget, and the time a capture loss may spend rebuilding.
+//! its in-place reset budget, the submit-error and ladder-rung hooks around it, and the time a
+//! capture loss may spend rebuilding.
 
+use anyhow::Context as _;
 use std::time::{Duration, Instant};
 
 /// In-place encoder rebuilds and capture-loss rebuilds before a session ends.
@@ -88,6 +90,115 @@ impl EncoderWatchdog {
     }
 }
 
+/// Rebuild the encoder in place, drop what it owed (`on_reset`) and ask for an IDR.
+/// `false` = no in-place reset.
+pub(crate) fn reset_stalled_encoder(
+    enc: &mut dyn crate::encode::Encoder,
+    on_reset: impl FnOnce(),
+) -> bool {
+    if !enc.reset() {
+        return false;
+    }
+    on_reset();
+    enc.request_keyframe();
+    true
+}
+
+/// A failed submit. A [`crate::encode::TerminalEncoderError`] ends the session at once: a
+/// rebuild cannot fix a configuration. Anything else spends one in-place `reset` and returns
+/// its backoff; `Err` once the budget is spent.
+pub(crate) fn on_submit_error(
+    watchdog: &mut EncoderWatchdog,
+    e: anyhow::Error,
+    interval: Duration,
+    reset: impl FnOnce() -> bool,
+) -> anyhow::Result<Duration> {
+    if e.downcast_ref::<crate::encode::TerminalEncoderError>()
+        .is_some()
+    {
+        tracing::error!(
+            error = %format!("{e:#}"),
+            "encoder failed with a deterministic configuration error — ending the video \
+             session without rebuild attempts (see the error for the remedy)");
+        return Err(e).context("encoder submit");
+    }
+    let Some(backoff) = watchdog.recover(interval, reset) else {
+        tracing::error!(
+            error = %format!("{e:#}"),
+            resets = watchdog.resets(),
+            "encoder did not recover after repeated in-place rebuilds — ending the video \
+             session (see the error above for the cause)");
+        return Err(e).context("encoder submit");
+    };
+    tracing::warn!(error = %format!("{e:#}"), reset = watchdog.resets(),
+        max = MAX_ENCODER_RESETS,
+        "encoder submit failed — encoder rebuilt in place, forcing an IDR");
+    Ok(backoff)
+}
+
+/// Run the rung the capturer's ladder parked during this tick's `try_latest` and hand its
+/// outcome straight back. Call it right after the grab, before the submit: the rung owns the
+/// encoder this tick would feed. `on_reset` drops what a reset forfeited.
+pub(crate) fn run_parked_stage(
+    capturer: &mut dyn crate::capture::Capturer,
+    enc: &mut dyn crate::encode::Encoder,
+    watchdog: &mut EncoderWatchdog,
+    on_reset: impl FnOnce(),
+) {
+    if let Some(stage) = capturer.take_pending_stage() {
+        let outcome = run_loop_stage(stage, enc, on_reset);
+        capturer.stage_done(stage, outcome);
+        watchdog.restart();
+    }
+}
+
+/// The ladder rungs whose actuator the loop owns because the encoder or the display manager
+/// does. `EncoderReset` is [`reset_stalled_encoder`] plus a bounded wait for the first access
+/// unit — the rung's whole cost, one IDR included. `DriverCycle` reaps the WUDFHost and reloads
+/// the adapter (seconds, the display black for the cycle); the capturer then ends, and the
+/// loop's capture-loss path rebuilds against the fresh host or ends the stream.
+fn run_loop_stage(
+    stage: pf_frame::recovery::Stage,
+    enc: &mut dyn crate::encode::Encoder,
+    on_reset: impl FnOnce(),
+) -> pf_frame::recovery::StageOutcome {
+    use pf_frame::recovery::{Stage, StageOutcome, ENCODER_RESET_FIRST_AU};
+    match stage {
+        Stage::EncoderReset => {
+            let t0 = Instant::now();
+            if !reset_stalled_encoder(enc, on_reset) {
+                return StageOutcome::Failed;
+            }
+            let first_au = enc.ready_aus(t0 + ENCODER_RESET_FIRST_AU).map(|n| n > 0);
+            tracing::warn!(
+                cost_ms = t0.elapsed().as_millis() as u64,
+                first_au,
+                "recovery: encoder reset applied — one IDR plus the first-AU wait"
+            );
+            StageOutcome::Applied
+        }
+        #[cfg(target_os = "windows")]
+        Stage::DriverCycle => {
+            let t0 = Instant::now();
+            match crate::vdisplay::driver::force_driver_cycle() {
+                Ok(()) => {
+                    tracing::warn!(
+                        cost_ms = t0.elapsed().as_millis() as u64,
+                        "recovery: driver cycle — adapter reloaded, display black for the cycle; \
+                         the session rebuilds against the fresh WUDFHost"
+                    );
+                    StageOutcome::Applied
+                }
+                Err(e) => {
+                    tracing::error!(error = %format!("{e:#}"), "recovery: driver cycle failed");
+                    StageOutcome::Failed
+                }
+            }
+        }
+        _ => StageOutcome::Unsupported,
+    }
+}
+
 /// Attach-only window after a capture loss. Session detection can still be stale, and a
 /// rebuild acting on a stale "Gaming" answer restarts gamescope-session.target — on SteamOS
 /// that steals the seat back from the session the user just switched to.
@@ -171,5 +282,22 @@ mod tests {
             w.stalled(1, 2, ms(16)).is_none(),
             "a reset restarts the watch"
         );
+    }
+
+    /// A configuration error ends the session without spending a reset; any other submit
+    /// error resets in place and backs off.
+    #[test]
+    fn a_terminal_submit_error_spends_no_reset() {
+        let ms = Duration::from_millis;
+        let mut w = EncoderWatchdog::new();
+        let terminal = anyhow::Error::new(crate::encode::TerminalEncoderError).context("open");
+        let ended = on_submit_error(&mut w, terminal, ms(8), || {
+            panic!("reset on a terminal error")
+        });
+        assert!(ended.is_err());
+        assert_eq!(w.resets(), 0);
+        let busy = on_submit_error(&mut w, anyhow::anyhow!("busy"), ms(8), || true);
+        assert_eq!(busy.unwrap(), ms(100));
+        assert_eq!(w.resets(), 1);
     }
 }

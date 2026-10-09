@@ -3,10 +3,11 @@
 //! Pure functions of stream shape, split out like `pf-dxvadec::config` so ordinary
 //! gates run them — not `cfg(target_os = "linux")` FFI that only a box compiles.
 //!
-//! Constants are libva 2.23.0 enumerators.
+//! Constants are libva 2.23.0 enumerators, each declared once here at one integer
+//! type; [`crate::enc_h265`] and [`crate::vpp`] re-export the ones they share.
 
 /// `VAEntrypointVLD`. Full bitstream decode; the only entry point this rung uses.
-pub const VA_ENTRYPOINT_VLD: u32 = 1;
+pub const VA_ENTRYPOINT_VLD: i32 = 1;
 
 pub const VA_PROFILE_H264_MAIN: i32 = 6;
 pub const VA_PROFILE_H264_HIGH: i32 = 7;
@@ -17,9 +18,17 @@ pub const VA_PROFILE_HEVC_MAIN10: i32 = 18;
 pub const VA_PROFILE_AV1_PROFILE0: i32 = 32;
 pub const VA_PROFILE_AV1_PROFILE1: i32 = 33;
 
+/// `VAConfigAttribRTFormat` bits: what a surface pool holds.
 pub const VA_RT_FORMAT_YUV420: u32 = 0x0000_0001;
 pub const VA_RT_FORMAT_YUV444: u32 = 0x0000_0004;
 pub const VA_RT_FORMAT_YUV420_10: u32 = 0x0000_0100;
+
+/// `VAConfigAttribRTFormat`. Measured; 0 is a real enumerator, not "left unset".
+pub const VA_CONFIG_ATTRIB_RT_FORMAT: u32 = 0;
+
+/// Yields [`crate::VaDrmPrimeSurfaceDescriptor`], on export and on dmabuf import.
+/// The older `DRM_PRIME` (0x2000_0000) is a different, smaller structure.
+pub const VA_SURFACE_ATTRIB_MEM_TYPE_DRM_PRIME_2: u32 = 0x4000_0000;
 
 /// Mirrors `pf-dxvadec::Codec` locally; this crate must not depend on the Windows one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

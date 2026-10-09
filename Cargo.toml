@@ -17,6 +17,7 @@ members = [
     "crates/pf-bitstream",
     "crates/pf-bitstream/vendor/cros-codecs",
     "crates/pf-client-core",
+    "crates/pf-client-video",
     "crates/pf-clipboard",
     "crates/pf-presenter",
     "crates/pf-console-ui",

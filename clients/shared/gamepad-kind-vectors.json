@@ -1,0 +1,39 @@
+{
+  "$comment": "Gamepad kinds, pinned by punktfunk-core config::tests::gamepad_kind_vectors and the Swift GamepadMotionReachTests. value is the wire byte and PUNKTFUNK_GAMEPAD_*; name is GamepadPref::as_str; aliases are the other names from_name takes (trimmed, any case); has_motion is GamepadPref::has_motion. Hand-written: a new kind adds a row here.",
+  "kinds": [
+    {"value": 0, "name": "auto", "aliases": ["default"], "has_motion": true},
+    {"value": 1, "name": "xbox360", "aliases": ["xbox", "x360", "uinput"], "has_motion": false},
+    {"value": 2, "name": "dualsense", "aliases": ["ds", "ps5"], "has_motion": true},
+    {"value": 3, "name": "xboxone", "aliases": ["xbox-one", "xone", "xbox1", "series", "xboxseries"], "has_motion": false},
+    {"value": 4, "name": "dualshock4", "aliases": ["dualshock", "ds4", "ps4"], "has_motion": true},
+    {"value": 5, "name": "steamcontroller", "aliases": ["steam-controller", "steamcon"], "has_motion": true},
+    {"value": 6, "name": "steamdeck", "aliases": ["steam-deck", "deck"], "has_motion": true},
+    {"value": 7, "name": "dualsenseedge", "aliases": ["dualsense-edge", "edge", "dsedge"], "has_motion": true},
+    {"value": 8, "name": "switchpro", "aliases": ["switch-pro", "switch", "procontroller", "pro-controller"], "has_motion": true},
+    {"value": 9, "name": "steamcontroller2", "aliases": ["steam-controller-2", "steamcon2", "sc2", "ibex"], "has_motion": true},
+    {"value": 10, "name": "steamcontroller2puck", "aliases": ["steam-controller-2-puck", "sc2puck", "ibexpuck"], "has_motion": true},
+    {"value": 11, "name": "xboxelite", "aliases": ["xbox-elite", "elite", "xboxelite2", "elite2"], "has_motion": false},
+    {"value": 12, "name": "8bitdoultimate2", "aliases": ["8bitdo-ultimate-2", "ultimate2"], "has_motion": true},
+    {"value": 13, "name": "8bitdopro2", "aliases": ["8bitdo-pro-2", "pro2"], "has_motion": true},
+    {"value": 14, "name": "8bitdopro3", "aliases": ["8bitdo-pro-3", "pro3"], "has_motion": true},
+    {"value": 15, "name": "horipadsteam", "aliases": ["horipad-steam", "hori"], "has_motion": true},
+    {"value": 16, "name": "joyconpair", "aliases": ["joycon-pair", "joycons"], "has_motion": true},
+    {"value": 17, "name": "switch2pro", "aliases": ["switch2-pro", "procontroller2"], "has_motion": true},
+    {"value": 18, "name": "switch2gamecube", "aliases": ["switch2-gamecube", "gamecube"], "has_motion": false}
+  ],
+  "rejected_names": ["ds5", "", "xbox 360", "elite3"],
+  "motion_reaches": [
+    {"why": "mixed pads under Auto: the echo is Xbox, but this pad declared a DualSense", "declared": "dualsense", "asked": "xbox360", "resolved": "xbox360", "want": true},
+    {"why": "the pad that declared Xbox has no motion plane", "declared": "xbox360", "asked": "xbox360", "resolved": "xbox360", "want": false},
+    {"why": "a Windows host folds the Switch Pro to Xbox 360; declared == asked, so the echo catches it", "declared": "switchpro", "asked": "switchpro", "resolved": "xbox360", "want": false},
+    {"why": "a host that builds the Switch Pro", "declared": "switchpro", "asked": "switchpro", "resolved": "switchpro", "want": true},
+    {"why": "a host with no usable /dev/uhid folds the DualSense", "declared": "dualsense", "asked": "dualsense", "resolved": "xbox360", "want": false},
+    {"why": "Hello asked Auto; a later pad is judged on its own declaration", "declared": "dualsense", "asked": "auto", "resolved": "xbox360", "want": true},
+    {"why": "Hello asked Auto; an Xbox declaration has no plane whatever the echo", "declared": "xbox360", "asked": "auto", "resolved": "dualsense", "want": false},
+    {"why": "an old host echoes Auto, which must not suppress", "declared": "dualsense", "asked": "dualsense", "resolved": "auto", "want": true},
+    {"why": "under an Auto echo the declaration still speaks when it has no plane", "declared": "xbox360", "asked": "dualsense", "resolved": "auto", "want": false},
+    {"why": "an Elite echo is the Elite, not the unknown Auto", "declared": "auto", "asked": "auto", "resolved": "xboxelite", "want": false},
+    {"why": "the Switch 2 GameCube pad has no gyro", "declared": "switch2gamecube", "asked": "switch2gamecube", "resolved": "switch2gamecube", "want": false},
+    {"why": "a Switch 2 Pro the host builds", "declared": "switch2pro", "asked": "switch2pro", "resolved": "switch2pro", "want": true}
+  ]
+}

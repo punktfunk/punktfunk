@@ -171,8 +171,8 @@ clients/linux/src/app/mod.rs:1
 clients/linux/src/app/spawn.rs:1
 clients/session/src/main.rs:4
 crates/pf-console-ui/src/screens/settings/tests.rs:1
-crates/pf-encode-win/src/windows/nvenc.rs:4
-crates/pf-encode/src/enc/linux/nvenc_cuda.rs:2
+crates/pf-encode-win/src/windows/nvenc_tests.rs:4
+crates/pf-encode/src/enc/linux/nvenc_cuda_tests.rs:2
 crates/pf-encode/src/enc/linux/worker.rs:1
 crates/pf-inject/src/inject/linux/steam_gadget.rs:5
 crates/pf-vdisplay/src/lib.rs:1
@@ -185,8 +185,8 @@ crates/punktfunk-core/src/quic/endpoint.rs:2
 crates/punktfunk-host/src/hostsys/identity.rs:3
 crates/punktfunk-host/src/library/art.rs:2
 crates/punktfunk-host/src/main.rs:2
-crates/punktfunk-host/src/mgmt/tests.rs:2
-crates/punktfunk-host/src/native.rs:2
+crates/punktfunk-host/src/mgmt/tests/mod.rs:2
+crates/punktfunk-host/src/native/tests.rs:2
 crates/punktfunk-host/src/windows/service/host_env.rs:1
 packaging/windows/drivers/pf-vdisplay/src/encode/thread.rs:1
 BASELINE

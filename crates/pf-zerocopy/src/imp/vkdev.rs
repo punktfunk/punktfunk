@@ -232,8 +232,9 @@ fn pick_cuda_device<T: Copy>(
         .map(|d| d.0)
 }
 
-/// The first memory type in `type_bits` with every flag in `flags`.
-pub(crate) fn memory_type(
+/// The first memory type in `type_bits` with every flag in `flags`. A miss is an error, never
+/// index 0: that type may sit outside `type_bits` or lack a flag the caller relies on.
+pub fn memory_type(
     mem_props: &vk::PhysicalDeviceMemoryProperties,
     type_bits: u32,
     flags: vk::MemoryPropertyFlags,

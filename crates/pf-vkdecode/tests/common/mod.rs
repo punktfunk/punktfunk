@@ -16,9 +16,9 @@
 //! Compiled as `mod common;` of each test binary (Cargo does not auto-discover
 //! this file), so `#![deny(clippy::undocumented_unsafe_blocks)]` applies here.
 
-// Smoke never reads `Setup::pd`; parity never passes `DecodeFamilyIsFine`.
-// A test binary has no `pub` dead-code exemption.
-#![allow(dead_code)]
+// Smoke never reads `Setup::pd`; parity never passes `DecodeFamilyIsFine` or splits IVF.
+// A test binary has no `pub` exemption for dead code or unused re-exports.
+#![allow(dead_code, unused_imports)]
 
 use std::io::Cursor;
 

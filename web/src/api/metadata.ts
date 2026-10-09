@@ -1,34 +1,19 @@
 // An Art & Metadata source's own surface (`/__metadata/*` on the plugin), through the console's
-// `/api/plugin-metadata/<id>/<route>` BFF. Hand-written: the plugin serves it, not the host API.
+// `/api/plugin-metadata/<id>/<route>` BFF. The plugin serves it, not the host API, so its shapes
+// come from the kit's wire.ts.
+import type {
+	Candidate as SourceCandidate,
+	Image as SourceImage,
+	MetadataStatus as SourceStatus,
+} from "@punktfunk/plugin-kit/wire";
 import { useQuery } from "@tanstack/react-query";
+import { pluginSurfaceOrThrow } from "./pluginSurface";
 
-export interface SourceStatus {
-	ready: boolean;
-	/** Why the source is not filling anything, in the plugin's words. */
-	reason?: string;
-	wanted: number;
-	found: number;
-	lastRun?: number;
-	searchable: boolean;
-}
+export type { SourceCandidate, SourceImage, SourceStatus };
 
 export interface SourceMatch {
 	match: { key: string; label: string } | null;
 	pinned: boolean;
-}
-
-export interface SourceCandidate {
-	key: string;
-	label: string;
-	thumb: string | null;
-}
-
-export interface SourceImage {
-	url: string;
-	thumb?: string;
-	label?: string;
-	width?: number;
-	height?: number;
 }
 
 const url = (
@@ -40,30 +25,12 @@ const url = (
 	return `/api/plugin-metadata/${id}/${route}${qs ? `?${qs}` : ""}`;
 };
 
-async function call<T>(
+const call = <T>(
 	id: string,
 	route: string,
 	params: Record<string, string>,
-	init?: { method: "PUT" | "POST"; body: unknown },
-): Promise<T> {
-	const res = await fetch(url(id, route, params), {
-		credentials: "same-origin",
-		...(init
-			? {
-					method: init.method,
-					headers: { "content-type": "application/json" },
-					body: JSON.stringify(init.body),
-				}
-			: {}),
-	});
-	const body = (await res.json().catch(() => null)) as
-		| (T & { error?: string; issue?: string })
-		| null;
-	if (!res.ok || body === null) {
-		throw new Error(body?.issue ?? body?.error ?? `${res.status}`);
-	}
-	return body;
-}
+	send?: { method: "PUT" | "POST"; body: unknown },
+): Promise<T> => pluginSurfaceOrThrow<T>(url(id, route, params), send);
 
 export const sourceKey = (id: string, ...rest: string[]) => [
 	"metadata-source",

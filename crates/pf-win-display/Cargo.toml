@@ -21,6 +21,8 @@ publish = false
 # crate's declared closure for one type.
 punktfunk-core = { path = "../punktfunk-core", default-features = false }
 pf-paths = { path = "../pf-paths" }
+# The WUDFHost open + image-path proof report through `anyhow` like their callers.
+anyhow = "1"
 tracing = "0.1"
 # The pnp-disabled-monitors state file (a `Vec<String>` of instance ids) is serialized as JSON.
 serde_json = "1"

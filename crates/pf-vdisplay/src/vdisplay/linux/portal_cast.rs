@@ -9,9 +9,7 @@
 
 use crate::portal_cursor::Mode;
 use anyhow::{anyhow, bail, Context, Result};
-use pf_capture::portal_rt::{
-    close_session, finish_or_close, within, CAST_CLOSE_BUDGET, HANDSHAKE_BUDGET,
-};
+use pf_portal::{close_session, finish_or_close, within, CAST_CLOSE_BUDGET, HANDSHAKE_BUDGET};
 use std::os::fd::OwnedFd;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender};
@@ -183,7 +181,7 @@ fn portal_thread(
                     .select_sources(
                         &session,
                         SelectSourcesOptions::default()
-                            .set_cursor_mode(pf_capture::portal_rt::to_ashpd(cursor_mode))
+                            .set_cursor_mode(pf_portal::to_ashpd(cursor_mode))
                             // Both offer MONITOR; the picker selects our output.
                             .set_sources(BitFlags::from_flag(SourceType::Monitor))
                             .set_multiple(false)

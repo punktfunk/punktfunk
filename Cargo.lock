@@ -3172,7 +3172,6 @@ version = "0.43.1"
 dependencies = [
  "anyhow",
  "opus",
- "pf-capture",
  "pf-frame",
  "pf-host-config",
  "pf-inject",
@@ -3229,29 +3228,18 @@ name = "pf-client-core"
 version = "0.43.1"
 dependencies = [
  "anyhow",
- "ash",
  "async-channel",
  "cfg_aliases 0.2.2",
  "libc",
- "libloading 0.9.0",
  "log",
  "mdns-sd",
- "openh264",
  "opus",
- "pf-bitstream",
+ "pf-client-video",
  "pf-dmabuf",
- "pf-dxvadec",
- "pf-libva",
  "pf-update-check",
- "pf-v4l2",
- "pf-v4l2dec",
- "pf-vaapi",
- "pf-vkdecode",
  "pipewire",
  "punktfunk-core",
- "pyrowave-sys",
  "rand 0.10.3",
- "rav1d",
  "rustls",
  "sdl3",
  "serde",
@@ -3267,6 +3255,32 @@ dependencies = [
  "winreg 0.56.0",
  "x11rb",
  "zbus",
+]
+
+[[package]]
+name = "pf-client-video"
+version = "0.43.1"
+dependencies = [
+ "anyhow",
+ "ash",
+ "cfg_aliases 0.2.2",
+ "libc",
+ "libloading 0.9.0",
+ "openh264",
+ "pf-bitstream",
+ "pf-dmabuf",
+ "pf-dxvadec",
+ "pf-libva",
+ "pf-v4l2",
+ "pf-v4l2dec",
+ "pf-vaapi",
+ "pf-vkdecode",
+ "punktfunk-core",
+ "pyrowave-sys",
+ "rav1d",
+ "sha2 0.11.0",
+ "tracing",
+ "windows 0.62.2 (git+https://github.com/microsoft/windows-rs?rev=acb5a1a7441033d9312b16842af02eb0c2b403dc)",
 ]
 
 [[package]]
@@ -3447,7 +3461,6 @@ dependencies = [
  "futures-util",
  "libc",
  "parking_lot",
- "pf-capture",
  "pf-driver-proto",
  "pf-host-config",
  "pf-paths",
@@ -3501,7 +3514,11 @@ dependencies = [
 name = "pf-portal"
 version = "0.43.1"
 dependencies = [
+ "anyhow",
+ "ashpd",
+ "pf-host-config",
  "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -3606,7 +3623,6 @@ dependencies = [
  "futures-util",
  "hex",
  "libc",
- "pf-capture",
  "pf-driver-proto",
  "pf-frame",
  "pf-gpu",
@@ -3644,6 +3660,7 @@ dependencies = [
 name = "pf-win-display"
 version = "0.43.1"
 dependencies = [
+ "anyhow",
  "pf-paths",
  "punktfunk-core",
  "serde_json",
@@ -3932,14 +3949,14 @@ dependencies = [
  "android_logger",
  "anyhow",
  "ash",
+ "async-channel",
  "jni",
  "libc",
  "log",
- "mdns-sd",
  "ndk",
  "ndk-sys",
- "opus",
  "pf-client-core",
+ "pf-client-video",
  "pf-console-ui",
  "punktfunk-core",
  "serde",
@@ -4021,7 +4038,6 @@ dependencies = [
  "if-addrs",
  "libc",
  "opus",
- "pf-bitstream",
  "proptest",
  "quinn",
  "rcgen",
@@ -4037,7 +4053,6 @@ dependencies = [
  "tracing",
  "ureq",
  "windows-sys 0.61.2",
- "zerocopy 0.8.61",
  "zeroize",
 ]
 

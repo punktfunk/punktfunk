@@ -25,7 +25,9 @@ pub struct HostTarget {
     pub name: String,
     pub addr: String,
     pub port: u16,
-    /// `None` = no pin. The session refuses that; only a completed trust ceremony may produce one.
+    /// The [`trust_route`] input. `None` = a typed address, with no record of its own.
+    /// `Some("")` = a card saved without a pin. Else a stored or advertised pin. The session
+    /// refuses to dial without one ([`HostTarget::pin`]).
     pub fp_hex: Option<String>,
     pub mac: Vec<String>,
     pub id: Option<String>,
@@ -35,13 +37,22 @@ pub struct HostTarget {
     pub mgmt_port: Option<u16>,
 }
 
+impl HostTarget {
+    /// The pin to dial with: `fp_hex`, unless it is a saved card's empty one.
+    pub fn pin(&self) -> Option<&str> {
+        self.fp_hex.as_deref().filter(|f| !f.is_empty())
+    }
+}
+
+/// A saved card is never a typed address: an unpinned record maps to `Some("")`, so
+/// [`trust_route`] asks for pairing rather than borrowing the pin saved at its address.
 impl From<&KnownHost> for HostTarget {
     fn from(h: &KnownHost) -> HostTarget {
         HostTarget {
             name: h.name.clone(),
             addr: h.addr.clone(),
             port: h.port,
-            fp_hex: (!h.fp_hex.is_empty()).then(|| h.fp_hex.clone()),
+            fp_hex: Some(h.fp_hex.clone()),
             mac: h.mac.clone(),
             id: h.id.clone(),
             mgmt_port: h.mgmt_port,
@@ -63,10 +74,11 @@ pub enum TrustRoute {
     NeedsPairing,
 }
 
-/// The connect trust gate. `advertised_fp` follows [`KnownHosts::resolve_index`]: `None`
-/// is a typed address and takes the record pinned there; `Some("")` is a card saved
-/// without a pin and has none. A placeholder is no pin, so a fingerprint arriving at one
-/// is a new host, not a changed one.
+/// The connect trust gate. `advertised_fp` is [`HostTarget::fp_hex`] and follows
+/// [`KnownHosts::resolve_index`]: `None` is a typed address and takes the record pinned
+/// there; `Some("")` is a saved card without a pin ([`HostTarget::from`] a placeholder) and
+/// has none. A placeholder is no pin, so a fingerprint arriving at one is a new host, not a
+/// changed one.
 pub fn trust_route(
     known: &KnownHosts,
     advertised_fp: Option<&str>,
@@ -90,6 +102,83 @@ pub fn trust_route(
         Some(fp) if pair_optional => TrustRoute::OfferTofu(fp.to_string()),
         Some(_) => TrustRoute::NeedsPairing,
     }
+}
+
+/// What a pinned dial shows when its stored pin is rejected, before or after the dial.
+pub const FINGERPRINT_CHANGED: &str = "Host fingerprint changed — re-pair with a PIN to continue";
+
+/// Where a finished connect goes. Each front-end draws its own surface per arm.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ExitRoute {
+    /// A clean end, or our own kill: back to the hosts with nothing to say.
+    Silent,
+    /// Back to the hosts with this sentence.
+    Banner(String),
+    /// Pairing is the only way past a rejected pin: the pair screen or dialog, with this sentence.
+    Repair(String),
+    /// The host refused profile `id` as unknown. A seat host says so for a stale seat too, so
+    /// its list is read again: one more dial while it lists `id`, else
+    /// [`ExitRoute::ForgetProfileThen`] with `msg`.
+    RedialProfile { id: String, msg: String },
+    /// Drop the host's saved profile pick, then this banner.
+    ForgetProfileThen(String),
+    /// The dial-first attempt to a quiet host failed: wake-and-wait.
+    Wake,
+}
+
+/// The post-dial half of [`trust_route`]: where a session exit leads. `tofu` = the dial
+/// pinned an advertised fingerprint. `retry_profile` = the profile the dial named, unless the
+/// dial was already the retry. `wake_armed` = a dial-first wake armed for this dial, with
+/// auto-wake read once when it armed, and no ready since. `log` names this shell's log for a
+/// session that died silently.
+pub fn exit_route(
+    outcome: &ConnectOutcome,
+    tofu: bool,
+    retry_profile: Option<&str>,
+    wake_armed: bool,
+    log: &str,
+) -> ExitRoute {
+    use punktfunk_core::reject::RejectReason;
+    match outcome {
+        ConnectOutcome::Ended(None) | ConnectOutcome::Cancelled => ExitRoute::Silent,
+        ConnectOutcome::Ended(Some(reason)) => ExitRoute::Banner(reason.clone()),
+        // The host answered and refused: never a wake.
+        ConnectOutcome::Refused { msg, reason } if *reason == RejectReason::ProfileUnknown => {
+            match retry_profile {
+                Some(id) => ExitRoute::RedialProfile {
+                    id: id.to_string(),
+                    msg: msg.clone(),
+                },
+                None => ExitRoute::ForgetProfileThen(msg.clone()),
+            }
+        }
+        ConnectOutcome::Refused { msg, .. } => ExitRoute::Banner(msg.clone()),
+        o if wake_armed && o.warrants_wake() => ExitRoute::Wake,
+        ConnectOutcome::TrustRejected(msg) if tofu => ExitRoute::Repair(msg.clone()),
+        ConnectOutcome::TrustRejected(_) => ExitRoute::Repair(FINGERPRINT_CHANGED.into()),
+        ConnectOutcome::ConnectFailed(msg) => {
+            ExitRoute::Banner(format!("Couldn't connect — {msg}"))
+        }
+        ConnectOutcome::RendererFailed { code: -1 } => ExitRoute::Banner(
+            "Stream session was killed — out of memory, or stopped by the system".into(),
+        ),
+        ConnectOutcome::RendererFailed { code } => {
+            ExitRoute::Banner(ConnectOutcome::died_banner(*code, log))
+        }
+    }
+}
+
+/// Save the pin a ready session proved: request access saves it `paired`, a TOFU dial
+/// unpaired. The target's MACs ride along, so a host first reached by TOFU keeps Wake-on-LAN.
+pub fn persist_on_ready(target: &HostTarget, fp: &str, paired: bool) -> anyhow::Result<()> {
+    crate::trust::persist_host(
+        &target.name,
+        &target.addr,
+        target.port,
+        fp,
+        paired,
+        &target.mac,
+    )
 }
 
 /// One session, every policy question already answered. Front-ends do not re-decide.
@@ -224,9 +313,9 @@ impl ConnectPlan {
             "--connect".into(),
             punktfunk_core::client::join_host_port(&self.host.addr, self.host.port),
         ];
-        if let Some(fp) = &self.host.fp_hex {
+        if let Some(fp) = self.host.pin() {
             args.push("--fp".into());
-            args.push(fp.clone());
+            args.push(fp.to_string());
         }
         if let Some(launch) = &self.launch {
             args.push("--launch".into());
@@ -257,7 +346,7 @@ impl ConnectPlan {
     /// Pump parameters for this plan. Device probes stay off it: the plan is
     /// what a shell serialises, and it must not carry a device handle.
     ///
-    /// The pin is the parsed form of [`HostTarget::fp_hex`]. An unset
+    /// The pin is the parsed form of [`HostTarget::pin`]. An unset
     /// [`Self::connect_timeout_secs`] is [`DEFAULT_CONNECT_TIMEOUT_SECS`].
     pub fn session_params(&self, pin: [u8; 32], probes: Probes) -> SessionParams {
         self.spec(self.clipboard).session_params(
@@ -388,7 +477,7 @@ pub fn plan_from_link(
             );
             // Known but never pinned: the session refuses without a pin. Hand back as
             // ConfirmUnknown so the front-end runs its trust flow.
-            if plan.host.fp_hex.is_none() {
+            if plan.host.pin().is_none() {
                 return Ok(PlanOutcome::ConfirmUnknown(Box::new(UnknownHost {
                     addr: plan.host.addr,
                     port: plan.host.port,
@@ -462,6 +551,15 @@ pub enum WakeOutcome {
     /// "didn't wake in 90 s" is often "give it 10 more".
     TimedOut,
 }
+
+/// The parked headline on [`WakeOutcome::TimedOut`]: `Desk didn't wake`. The console's
+/// wake card (`pf-console-ui`, no `desktop` cfg) spells the same two lines itself.
+pub fn wake_parked_line(name: &str) -> String {
+    format!("{name} didn't wake")
+}
+
+/// The sentence under [`wake_parked_line`], above Try Again / Cancel.
+pub const WAKE_PARKED_HINT: &str = "Check its power settings, or wake it manually and try again.";
 
 impl Default for WakeWait {
     fn default() -> WakeWait {
@@ -597,6 +695,13 @@ impl ConnectOutcome {
             ConnectOutcome::RendererFailed { code } => *code != -1,
             _ => false,
         }
+    }
+
+    /// The banner for a session that died without a contract line: a missing runtime, a
+    /// crash, or the wrong binary. `log` names where the cause is.
+    pub fn died_banner(code: i32, log: &str) -> String {
+        let how = Self::exit_phrase(code);
+        format!("The session didn't start (punktfunk-session {how}). Check {log}.")
     }
 
     /// How a session that died silently went, for a banner. An NTSTATUS crash reads in
@@ -1108,6 +1213,81 @@ mod tests {
         }
     }
 
+    /// Every exit routes one way on every shell: a rejected pin always repairs, a profile
+    /// refusal redials once, and only an armed dial that failed wakes.
+    #[test]
+    fn exit_route_decides_once_for_every_shell() {
+        use punktfunk_core::reject::RejectReason as R;
+        use ConnectOutcome as O;
+        use ExitRoute::*;
+        let refused = |reason| O::Refused {
+            msg: "no".into(),
+            reason,
+        };
+        let banner = |s: &str| Banner(s.into());
+        let died = Banner(O::died_banner(1, "the client log"));
+        let changed = Repair(FINGERPRINT_CHANGED.into());
+        let redial = RedialProfile {
+            id: "kid".into(),
+            msg: "no".into(),
+        };
+        for (outcome, tofu, retry, armed, want) in [
+            (O::Ended(None), false, None, true, Silent),
+            (O::Cancelled, false, None, true, Silent),
+            (
+                O::Ended(Some("bye".into())),
+                false,
+                None,
+                false,
+                banner("bye"),
+            ),
+            (
+                O::TrustRejected("pin".into()),
+                true,
+                None,
+                false,
+                Repair("pin".into()),
+            ),
+            (O::TrustRejected("pin".into()), false, None, true, changed),
+            (refused(R::ProfileUnknown), false, Some("kid"), true, redial),
+            (
+                refused(R::ProfileUnknown),
+                false,
+                None,
+                false,
+                ForgetProfileThen("no".into()),
+            ),
+            (refused(R::Busy), false, Some("kid"), true, banner("no")),
+            (O::ConnectFailed("gone".into()), false, None, true, Wake),
+            (
+                O::ConnectFailed("gone".into()),
+                false,
+                None,
+                false,
+                banner("Couldn't connect — gone"),
+            ),
+            (O::RendererFailed { code: 1 }, false, None, true, Wake),
+            (O::RendererFailed { code: 1 }, false, None, false, died),
+            (
+                O::RendererFailed { code: -1 },
+                false,
+                None,
+                true,
+                banner("Stream session was killed — out of memory, or stopped by the system"),
+            ),
+        ] {
+            let got = exit_route(&outcome, tofu, retry, armed, "the client log");
+            assert_eq!(
+                got, want,
+                "{outcome:?}, tofu {tofu}, retry {retry:?}, armed {armed}"
+            );
+        }
+        assert_eq!(
+            O::died_banner(1, "C:\\logs\\client.log"),
+            "The session didn't start (punktfunk-session exited with code 1). Check C:\\logs\\client.log."
+        );
+    }
+
     /// Packet at 0 and every 6 s, presence each second, 90 s of budget, park (not
     /// an error) at the end.
     #[test]
@@ -1207,6 +1387,12 @@ mod tests {
         plan.host.addr = "fd00::5".into();
         plan.host.port = 9800;
         assert_eq!(plan.session_args()[1], "[fd00::5]:9800");
+
+        // A card saved without a pin is `Some("")`, never a typed address, and dials no pin.
+        plan.host = HostTarget::from(&host("Typed", "10.0.0.3", "2", ""));
+        assert_eq!(plan.host.fp_hex.as_deref(), Some(""));
+        assert_eq!(plan.host.pin(), None);
+        assert!(!plan.session_args().contains(&"--fp".to_string()));
     }
 
     /// Unknown host is a prompt, a contradicted pin is a refusal, an unhonorable
@@ -1247,7 +1433,7 @@ mod tests {
             PlanOutcome::Connect(p) => {
                 assert_eq!(p.host.addr, "192.168.1.50");
                 assert_eq!(p.preset_override, None);
-                assert!(p.host.fp_hex.is_some());
+                assert!(p.host.pin().is_some());
             }
             other => panic!("expected a connect, got {other:?}"),
         }
@@ -1257,7 +1443,7 @@ mod tests {
         match plan("punktfunk://connect/Desk").unwrap() {
             PlanOutcome::ConfirmConnect(p) => {
                 assert_eq!(p.host.addr, "192.168.1.50");
-                assert!(p.host.fp_hex.is_some());
+                assert!(p.host.pin().is_some());
             }
             other => panic!("expected a confirm-connect, got {other:?}"),
         }

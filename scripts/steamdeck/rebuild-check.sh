@@ -15,8 +15,8 @@ set -euo pipefail
 
 # systemd user units get a minimal PATH — distrobox commonly lives in ~/.local/bin.
 export PATH="$HOME/.local/bin:$PATH"
-SRC="${PUNKTFUNK_SRC:-$HOME/punktfunk}"
-BIN="$SRC/target-steamos/release/punktfunk-host"
+# shellcheck source-path=SCRIPTDIR source=lib.sh
+. "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
 NEED=0
 if [ ! -x "$BIN" ]; then

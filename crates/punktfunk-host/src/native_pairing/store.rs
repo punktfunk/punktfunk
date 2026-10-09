@@ -61,6 +61,7 @@ pub struct Access {
 }
 
 impl PairedClients {
+    #[cfg(test)]
     fn contains(&self, fp_hex: &str) -> bool {
         self.clients
             .iter()
@@ -160,6 +161,7 @@ impl TrustStore {
     }
 
     /// Present in the store, including expired records. Use [`Self::effective`] for authorization.
+    #[cfg(test)]
     pub(super) fn is_paired(&self, fp_hex: &str) -> bool {
         self.lock().clients.contains(fp_hex)
     }
@@ -194,6 +196,7 @@ impl TrustStore {
     /// Pair with no access choice. A new fingerprint gets full/permanent; an existing
     /// one updates the name only. Widening grants requires [`Self::add_with_access`]
     /// or [`Self::set_access`].
+    #[cfg(test)]
     pub(super) fn add(&self, name: &str, fp_hex: &str) -> Result<()> {
         self.add_with_access(name, fp_hex, None)
     }

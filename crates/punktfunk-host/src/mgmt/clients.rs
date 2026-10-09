@@ -1,7 +1,6 @@
 //! Paired Moonlight clients and the GameStream pairing PIN flow.
 
 use super::shared::*;
-use sha2::{Digest, Sha256};
 
 /// A paired (certificate-pinned) Moonlight client.
 #[derive(Serialize, ToSchema)]
@@ -90,7 +89,7 @@ pub(crate) fn client_info(
     der: &[u8],
     labels: &std::collections::BTreeMap<String, String>,
 ) -> PairedClient {
-    let fingerprint = hex::encode(Sha256::digest(der));
+    let fingerprint = hex::encode(crate::https::sha256(der));
     let label = labels.get(&fingerprint).cloned();
     match x509_parser::parse_x509_certificate(der) {
         Ok((_, x509)) => PairedClient {
@@ -159,7 +158,7 @@ pub(crate) async fn rename_client(
     let paired = st.app.paired.lock().unwrap_or_else(|e| e.into_inner());
     let Some(der) = paired
         .iter()
-        .find(|der| hex::encode(Sha256::digest(der)).eq_ignore_ascii_case(&fingerprint))
+        .find(|der| hex::encode(crate::https::sha256(der)).eq_ignore_ascii_case(&fingerprint))
         .cloned()
     else {
         return api_error(
@@ -214,7 +213,7 @@ pub(crate) async fn unpair_client(
     }
     let mut paired = st.app.paired.lock().unwrap_or_else(|e| e.into_inner());
     let before = paired.len();
-    paired.retain(|der| !hex::encode(Sha256::digest(der)).eq_ignore_ascii_case(&fingerprint));
+    paired.retain(|der| !hex::encode(crate::https::sha256(der)).eq_ignore_ascii_case(&fingerprint));
     if paired.len() < before {
         // Without this, a restart would resurrect the pairing and silently re-open the
         // control port.
@@ -273,10 +272,7 @@ pub(crate) async fn unpair_all_clients(State(st): State<Arc<MgmtState>>) -> Resp
     if paired.is_empty() {
         return Json(UnpairAllResult { unpaired: 0 }).into_response();
     }
-    let removed: Vec<[u8; 32]> = paired
-        .iter()
-        .map(|der| Sha256::digest(der).into())
-        .collect();
+    let removed: Vec<[u8; 32]> = paired.iter().map(|der| crate::https::sha256(der)).collect();
     paired.clear();
     // Persist under the lock, as the single unpair does: a pairing resurrected by a restart
     // would silently re-open the control port.

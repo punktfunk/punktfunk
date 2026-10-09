@@ -41,7 +41,6 @@ reed-solomon-simd = "3.1"      # GF(2^16) Leopard-RS, SIMD, O(n log n) — the w
 # parity is decodable by a stock Moonlight client. (reed-solomon-erasure is Vandermonde and is
 # NOT interoperable.) See vendor/fec-rs/LICENSE (BSD-2-Clause).
 fec-rs = { path = "vendor/fec-rs" }
-pf-bitstream = { path = "../pf-bitstream" }
 aes-gcm = "0.11"               # AES-128-GCM session crypto, matches GameStream
 crc32fast = "1"                # DualSense Bluetooth output-report CRC (`audio::pad_bt`)
 # ChaCha20-Poly1305 session crypto, negotiated by clients without hardware AES (the soft-AES
@@ -51,7 +50,6 @@ crc32fast = "1"                # DualSense Bluetooth output-report CRC (`audio::
 chacha20poly1305 = "0.11"
 # Optional for chacha-aws-lc-rs.
 aws-lc-rs = { workspace = true, optional = true }
-zerocopy = { version = "0.8", features = ["derive"] }
 socket2 = { version = "0.6", features = [
     "all",
 ] } # SO_SNDBUF/SO_RCVBUF growth (default UDP buffers too small for 4K/5K bursts) + DSCP/SO_PRIORITY media QoS
@@ -91,21 +89,17 @@ tokio = { version = "1", optional = true, features = ["rt-multi-thread", "net", 
 # the host vendors; cargo unifies the build.
 opus = { version = "0.4", optional = true }
 
-# `libc` for batched UDP syscalls: `sendmmsg`/`recvmmsg` on Linux (the 1 Gbps+ lever) and the
-# `recv(MSG_DONTWAIT)` drain on the other unix (Apple/BSD) targets, which have no `recvmmsg`
-# (see transport/udp.rs `recv_batch`). Needed on every unix target — non-unix (Windows) uses
-# the scalar fallbacks. Cross-compiles (iOS/tvOS) don't pull libc transitively the way the
-# macOS host build does, so it must be a direct dep here or those slices fail to link `libc::`.
+# `libc` for the unix syscall shims: `poll` on the shared socket (`transport::udp`), the
+# socket and interface readers (`sockstat`, `ifinfo`), and thread priority and hostname in
+# `client`. Cross-compiles (iOS/tvOS) don't pull libc transitively the way the macOS host
+# build does, so it must be a direct dep here or those slices fail to link `libc::`.
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
-# Windows UDP Send Offload (USO): `WSASendMsg` + `UDP_SEND_MSG_SIZE` is the Windows analogue of
-# Linux UDP GSO — the 1 Gbps+ send lever (the host otherwise sends one packet per `send` syscall,
-# which caps throughput at high packet rates). See transport/udp.rs.
 [target.'cfg(windows)'.dependencies]
-# windows-sys (raw FFI, the quinn-udp choice): the high-level `windows` crate doesn't bind the
-# `WSASendMsg` extension function. WinSock feature gives WSASendMsg + WSAMSG/WSABUF/CMSGHDR.
-# Win32_System_IO too: WSASendMsg's signature references OVERLAPPED, so it's gated on that feature.
+# windows-sys (raw FFI, the quinn-udp choice). WinSock: `WSAPoll` (transport/udp.rs) and the
+# socket type the QoS and adapter calls take. Win32_System_IO: `QOSSetFlow`'s signature
+# references OVERLAPPED, so it's gated on that feature.
 # Win32_NetworkManagement_QoS + Win32_Foundation: the qWAVE flow API for real on-the-wire DSCP
 # marking (transport/qos_windows.rs) — plain IP_TOS is stripped by the Windows stack.
 windows-sys = { workspace = true, features = [

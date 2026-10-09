@@ -22,7 +22,7 @@ pub(crate) struct HudSample {
 /// the app back to the host list, same as the child's window closing). No hooks.
 pub(crate) fn session_page(ctx: &Arc<super::AppCtx>, hud: &HudSample) -> Element {
     use super::style::{avatar, card, pill, Pill};
-    let host = ctx.shared.target.lock().unwrap().name.clone();
+    let host = ctx.shared.target.lock().unwrap().host.name.clone();
     let browse = ctx.shared.browse.load(std::sync::atomic::Ordering::SeqCst);
     let title = match (browse, host.is_empty()) {
         (true, true) => "Console library".to_string(),

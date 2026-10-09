@@ -210,111 +210,6 @@ impl SettingsOverlay {
         s
     }
 
-    /// Pin every tier-P field that changed between two effective snapshots.
-    /// Compare against what the control showed, not globals — equal-to-global
-    /// is still a pin. Only adds; removal is `clear`.
-    pub fn absorb(&mut self, before: &Settings, after: &Settings) {
-        if after.width != before.width {
-            self.width = Some(after.width);
-        }
-        if after.height != before.height {
-            self.height = Some(after.height);
-        }
-        if after.refresh_hz != before.refresh_hz {
-            self.refresh_hz = Some(after.refresh_hz);
-        }
-        if after.match_window != before.match_window {
-            self.match_window = Some(after.match_window);
-        }
-        if after.bitrate_kbps != before.bitrate_kbps {
-            self.bitrate_kbps = Some(after.bitrate_kbps);
-        }
-        if after.pyrowave_bpp != before.pyrowave_bpp {
-            self.pyrowave_bpp = Some(after.pyrowave_bpp);
-        }
-        if after.render_scale != before.render_scale {
-            self.render_scale = Some(after.render_scale);
-        }
-        if after.video_fit != before.video_fit {
-            self.video_fit = Some(after.video_fit.clone());
-        }
-        if after.codec != before.codec {
-            self.codec = Some(after.codec.clone());
-        }
-        if after.hdr_enabled != before.hdr_enabled {
-            self.hdr_enabled = Some(after.hdr_enabled);
-        }
-        if after.enable_444 != before.enable_444 {
-            self.enable_444 = Some(after.enable_444);
-        }
-        if after.ten_bit_sdr != before.ten_bit_sdr {
-            self.ten_bit_sdr = Some(after.ten_bit_sdr);
-        }
-        if after.compositor != before.compositor {
-            self.compositor = Some(after.compositor.clone());
-        }
-        if after.audio_channels != before.audio_channels {
-            self.audio_channels = Some(after.audio_channels);
-        }
-        if after.audio_format != before.audio_format {
-            self.audio_format = Some(after.audio_format.clone());
-        }
-        if after.keep_host_audio != before.keep_host_audio {
-            self.keep_host_audio = Some(after.keep_host_audio);
-        }
-        if after.mic_enabled != before.mic_enabled {
-            self.mic_enabled = Some(after.mic_enabled);
-        }
-        if after.echo_cancel != before.echo_cancel {
-            self.echo_cancel = Some(after.echo_cancel);
-        }
-        if after.touch_mode != before.touch_mode {
-            self.touch_mode = Some(after.touch_mode.clone());
-        }
-        if after.mouse_mode != before.mouse_mode {
-            self.mouse_mode = Some(after.mouse_mode.clone());
-        }
-        if after.invert_scroll != before.invert_scroll {
-            self.invert_scroll = Some(after.invert_scroll);
-        }
-        if after.overlay_actions != before.overlay_actions {
-            self.overlay_actions = Some(after.overlay_actions.clone());
-        }
-        if after.inhibit_shortcuts != before.inhibit_shortcuts {
-            self.inhibit_shortcuts = Some(after.inhibit_shortcuts);
-        }
-        if after.gamepad != before.gamepad {
-            self.gamepad = Some(after.gamepad.clone());
-        }
-        if after.gamepad_forwarding != before.gamepad_forwarding {
-            self.gamepad_forwarding = Some(after.gamepad_forwarding);
-        }
-        if after.system_buttons != before.system_buttons {
-            self.system_buttons = Some(after.system_buttons.clone());
-        }
-        if after.guide_gesture != before.guide_gesture {
-            self.guide_gesture = Some(after.guide_gesture.clone());
-        }
-        if after.stats_verbosity() != before.stats_verbosity() {
-            self.stats_verbosity = Some(after.stats_verbosity());
-        }
-        if after.fullscreen_on_stream != before.fullscreen_on_stream {
-            self.fullscreen_on_stream = Some(after.fullscreen_on_stream);
-        }
-        if after.present_priority != before.present_priority {
-            self.present_priority = Some(after.present_priority.clone());
-        }
-        if after.smooth_buffer != before.smooth_buffer {
-            self.smooth_buffer = Some(after.smooth_buffer);
-        }
-        if after.vsync != before.vsync {
-            self.vsync = Some(after.vsync);
-        }
-        if after.allow_vrr != before.allow_vrr {
-            self.allow_vrr = Some(after.allow_vrr);
-        }
-    }
-
     /// Drop one override by serialised field name. `resolution` is the alias
     /// for the width/height/match-window tri-state one control drives.
     pub fn clear(&mut self, field: &str) -> bool {
@@ -412,8 +307,45 @@ impl SettingsOverlay {
 
     /// Whether this overlay holds a value for `field`, by the names [`Self::clear`] takes.
     pub fn overrides(&self, field: &str) -> bool {
-        let mut cleared = self.clone();
-        cleared.clear(field) && cleared != *self
+        match field {
+            "resolution" => {
+                self.width.is_some() || self.height.is_some() || self.match_window.is_some()
+            }
+            "width" => self.width.is_some(),
+            "height" => self.height.is_some(),
+            "refresh_hz" => self.refresh_hz.is_some(),
+            "match_window" => self.match_window.is_some(),
+            "bitrate_kbps" => self.bitrate_kbps.is_some(),
+            "pyrowave_bpp" => self.pyrowave_bpp.is_some(),
+            "render_scale" => self.render_scale.is_some(),
+            "video_fit" => self.video_fit.is_some(),
+            "codec" => self.codec.is_some(),
+            "hdr_enabled" => self.hdr_enabled.is_some(),
+            "enable_444" => self.enable_444.is_some(),
+            "ten_bit_sdr" => self.ten_bit_sdr.is_some(),
+            "compositor" => self.compositor.is_some(),
+            "audio_channels" => self.audio_channels.is_some(),
+            "audio_format" => self.audio_format.is_some(),
+            "keep_host_audio" => self.keep_host_audio.is_some(),
+            "mic_enabled" => self.mic_enabled.is_some(),
+            "echo_cancel" => self.echo_cancel.is_some(),
+            "touch_mode" => self.touch_mode.is_some(),
+            "mouse_mode" => self.mouse_mode.is_some(),
+            "invert_scroll" => self.invert_scroll.is_some(),
+            "overlay_actions" => self.overlay_actions.is_some(),
+            "inhibit_shortcuts" => self.inhibit_shortcuts.is_some(),
+            "gamepad" => self.gamepad.is_some(),
+            "gamepad_forwarding" => self.gamepad_forwarding.is_some(),
+            "system_buttons" => self.system_buttons.is_some(),
+            "guide_gesture" => self.guide_gesture.is_some(),
+            "stats_verbosity" => self.stats_verbosity.is_some(),
+            "fullscreen_on_stream" => self.fullscreen_on_stream.is_some(),
+            "present_priority" => self.present_priority.is_some(),
+            "smooth_buffer" => self.smooth_buffer.is_some(),
+            "vsync" => self.vsync.is_some(),
+            "allow_vrr" => self.allow_vrr.is_some(),
+            _ => false,
+        }
     }
 
     /// True when nothing is overridden. Unknown-key carry-through counts:
@@ -522,6 +454,15 @@ impl PresetsFile {
         self.save_to(&config_dir()?)
     }
 
+    /// Load the catalog, apply `f`, save: a shell's edit, so another process's write in
+    /// between survives.
+    pub fn update<R>(f: impl FnOnce(&mut PresetsFile) -> R) -> anyhow::Result<R> {
+        let mut catalog = Self::load();
+        let r = f(&mut catalog);
+        catalog.save()?;
+        Ok(r)
+    }
+
     /// The mirror goes first. If it fails, the save fails before the new file changes, so no
     /// later load prefers a stale mirror over an edit that was reported saved.
     fn save_to(&mut self, dir: &Path) -> anyhow::Result<()> {
@@ -614,7 +555,8 @@ pub(crate) fn hex_lower(bytes: &[u8]) -> String {
 mod tests {
     use super::*;
 
-    /// Every name `clear` takes, `pin` takes too, and the two undo each other.
+    /// Every name `clear` takes, `pin` and `overrides` take too, and pin and clear undo each
+    /// other.
     #[test]
     fn pin_and_clear_take_the_same_names() {
         let names = [
@@ -784,54 +726,14 @@ mod tests {
     }
 
     #[test]
-    fn absorb_records_the_touched_field_only() {
-        let base = Settings {
-            bitrate_kbps: 20000,
-            codec: "hevc".into(),
-            ..Default::default()
-        };
-        let mut o = SettingsOverlay::default();
-
-        let before = o.apply(&base);
-        let mut after = before.clone();
-        after.codec = "av1".into();
-        o.absorb(&before, &after);
-        assert_eq!(o.codec.as_deref(), Some("av1"));
-        assert_eq!(o.bitrate_kbps, None, "nothing else may be recorded");
-
-        // Back to the global's value is still a pin — not a diff against globals at save.
-        let before = o.apply(&base);
-        let mut after = before.clone();
-        after.codec = "hevc".into();
-        o.absorb(&before, &after);
-        assert_eq!(o.codec.as_deref(), Some("hevc"));
-        let mut moved = base.clone();
-        moved.codec = "h264".into();
-        assert_eq!(o.apply(&moved).codec, "hevc");
-
-        // Stats tier goes through the resolver, not the legacy bool.
-        let before = o.apply(&base);
-        let mut after = before.clone();
-        after.set_stats_verbosity(StatsVerbosity::Detailed);
-        o.absorb(&before, &after);
-        assert_eq!(o.stats_verbosity, Some(StatsVerbosity::Detailed));
-
-        let before = o.apply(&base);
-        let mut o2 = o.clone();
-        o2.absorb(&before, &before);
-        assert_eq!(o2, o);
-    }
-
-    #[test]
     fn echo_cancel_is_a_first_class_override() {
         let base = Settings::default();
         assert!(base.echo_cancel, "the setting ships on");
 
         let mut o = SettingsOverlay::default();
-        let before = o.apply(&base);
-        let mut after = before.clone();
+        let mut after = base.clone();
         after.echo_cancel = false;
-        o.absorb(&before, &after);
+        o.pin("echo_cancel", &after);
         assert_eq!(o.echo_cancel, Some(false));
         assert!(!o.apply(&base).echo_cancel);
         assert!(
@@ -861,10 +763,9 @@ mod tests {
         let blob = r#"{"v":2,"ring":["mic"]}"#;
 
         let mut o = SettingsOverlay::default();
-        let before = o.apply(&base);
-        let mut after = before.clone();
+        let mut after = base.clone();
         after.overlay_actions = blob.into();
-        o.absorb(&before, &after);
+        o.pin("overlay_actions", &after);
         assert_eq!(o.overlay_actions.as_deref(), Some(blob));
         assert_eq!(o.apply(&base).overlay_actions, blob);
         assert!(o.extra.is_empty());
@@ -892,10 +793,9 @@ mod tests {
         );
 
         let mut o = SettingsOverlay::default();
-        let before = o.apply(&base);
-        let mut after = before.clone();
+        let mut after = base.clone();
         after.audio_format = crate::audio_format::AUDIO_FORMAT_LOSSLESS_96.into();
-        o.absorb(&before, &after);
+        o.pin("audio_format", &after);
         assert_eq!(o.audio_format.as_deref(), Some("lossless96"));
         assert_eq!(o.apply(&base).audio_format, "lossless96");
         assert!(
@@ -929,10 +829,9 @@ mod tests {
         assert_eq!(old_store.video_fit, "fit");
 
         let mut o = SettingsOverlay::default();
-        let before = o.apply(&base);
-        let mut after = before.clone();
+        let mut after = base.clone();
         after.video_fit = "crop".into();
-        o.absorb(&before, &after);
+        o.pin("video_fit", &after);
         assert_eq!(o.video_fit.as_deref(), Some("crop"));
         assert_eq!(o.apply(&base).video_fit, "crop");
         assert!(o.extra.is_empty());
@@ -948,14 +847,11 @@ mod tests {
     fn presentation_cluster_is_first_class() {
         let base = Settings::default();
         let mut o = SettingsOverlay::default();
-        let before = o.apply(&base);
-        let mut after = before.clone();
+        let mut after = base.clone();
         after.present_priority = "smooth".into();
-        o.absorb(&before, &after);
-        let before = o.apply(&base);
-        let mut after = before.clone();
         after.smooth_buffer = 1;
-        o.absorb(&before, &after);
+        o.pin("present_priority", &after);
+        o.pin("smooth_buffer", &after);
         assert_eq!(o.present_priority.as_deref(), Some("smooth"));
         assert_eq!(o.smooth_buffer, Some(1));
         assert!(
@@ -1018,7 +914,7 @@ mod tests {
         let mut o = SettingsOverlay::default();
         let mut after = base.clone();
         after.gamepad_forwarding = false;
-        o.absorb(&base, &after);
+        o.pin("gamepad_forwarding", &after);
         assert_eq!(o.gamepad_forwarding, Some(false));
         assert!(!o.apply(&base).gamepad_forwarding);
 

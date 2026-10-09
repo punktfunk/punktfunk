@@ -7,73 +7,21 @@
 //! Named tests below assert on the command list and step order so they keep
 //! meaning when wording moves. Traps live in `design/installer-v2-windows.md`.
 
-use std::path::Path;
+mod common;
 
+use common::{fresh, golden, public_network, upgrade};
 use punktfunk_setup::plan::Level;
 use punktfunk_setup::platform::windows::args::InnoArgs;
 use punktfunk_setup::platform::windows::choices::{NetworkAnswer, WinChoices};
 use punktfunk_setup::platform::windows::plan::{self, Artifact, WinAction, WinPlan};
-use punktfunk_setup::platform::windows::{
-    exec, report, NetCategory, NetProfile, TaskState, WinFacts, WinInstall,
-};
+use punktfunk_setup::platform::windows::{exec, report, TaskState, WinFacts, WinInstall};
 use punktfunk_setup::seam::Env;
 use punktfunk_setup::ui::Plain;
-
-fn fresh() -> WinFacts {
-    WinFacts {
-        os_build: 26200,
-        arch: "x64".into(),
-        installed: None,
-        host_env_present: false,
-        web_password_present: false,
-        mgmt_bind_set: false,
-        competing_hosts: vec![],
-        mgmt_port_in_use: false,
-        networks: vec![NetProfile {
-            name: "Home".into(),
-            category: NetCategory::Private,
-        }],
-        steam_audio_drivers: true,
-        tray_autostart: false,
-        vulkan_layer_registered: false,
-        web_task: TaskState::Absent,
-        scripting_task: TaskState::Absent,
-        inno_uninstaller: false,
-        client_installed: None,
-    }
-}
-
-fn upgrade() -> WinFacts {
-    WinFacts {
-        installed: Some(WinInstall {
-            version: Some("0.34.0".into()),
-            location: Some(r"C:\Program Files\punktfunk\".into()),
-        }),
-        host_env_present: true,
-        web_password_present: true,
-        tray_autostart: true,
-        vulkan_layer_registered: true,
-        web_task: TaskState::Disabled,
-        scripting_task: TaskState::Enabled,
-        inno_uninstaller: true,
-        ..fresh()
-    }
-}
 
 fn sunshine() -> WinFacts {
     WinFacts {
         competing_hosts: vec!["SunshineService".into()],
         mgmt_port_in_use: true,
-        ..fresh()
-    }
-}
-
-fn public_network() -> WinFacts {
-    WinFacts {
-        networks: vec![NetProfile {
-            name: "Netzwerk 2".into(),
-            category: NetCategory::Public,
-        }],
         ..fresh()
     }
 }
@@ -90,23 +38,6 @@ fn render(facts: &WinFacts, choices: &WinChoices, artifact: Artifact, uninstall:
         report::outro(&ui, facts, choices, artifact);
     }
     buf.borrow().clone()
-}
-
-fn golden(name: &str, actual: &str) {
-    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/golden")
-        .join(format!("{name}.txt"));
-    if std::env::var_os("UPDATE_GOLDEN").is_some() {
-        std::fs::write(&path, actual).expect("write golden");
-        return;
-    }
-    let expected = std::fs::read_to_string(&path).unwrap_or_else(|_| {
-        panic!("no golden for {name} — run UPDATE_GOLDEN=1 cargo test -p punktfunk-setup")
-    });
-    assert_eq!(
-        actual, expected,
-        "golden {name} changed (UPDATE_GOLDEN=1 to accept)"
-    );
 }
 
 fn host_plan(facts: &WinFacts, choices: &WinChoices) -> WinPlan {

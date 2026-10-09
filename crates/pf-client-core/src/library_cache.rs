@@ -53,15 +53,7 @@ pub(crate) fn cache_subdir(name: &str) -> Option<PathBuf> {
     }
     #[cfg(not(windows))]
     {
-        let base = std::env::var("XDG_CACHE_HOME")
-            .ok()
-            .filter(|s| !s.is_empty())
-            .map(PathBuf::from)
-            .or_else(|| {
-                std::env::var("HOME")
-                    .ok()
-                    .map(|h| PathBuf::from(h).join(".cache"))
-            })?;
+        let base = crate::paths::xdg_home("XDG_CACHE_HOME", ".cache")?;
         Some(base.join("punktfunk").join(name))
     }
 }

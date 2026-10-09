@@ -29,7 +29,6 @@ import {
 	useUpdateProfile,
 } from "@/api/gen/profiles/profiles";
 import { useDialogs } from "@/components/dialogs";
-import { usePasswordFailure } from "@/components/password-confirm";
 import { apiErrorMessage } from "@/lib/errors";
 import { useLocale } from "@/lib/i18n";
 import { m } from "@/paraglide/messages";
@@ -82,7 +81,6 @@ export const SectionProfiles: FC = () => {
 		query: { enabled: seatHost && seatsOn, refetchInterval: 60_000 },
 	});
 	const [doorAsk, setDoorAsk] = useState<boolean | null>(null);
-	const doorFailure = usePasswordFailure();
 	useEffect(() => {
 		if (switching === null || host.data?.door !== switching) return;
 		setSwitching(null);
@@ -113,7 +111,6 @@ export const SectionProfiles: FC = () => {
 	const [adding, setAdding] = useState(false);
 	const [removing, setRemoving] = useState<ProfileAdmin | null>(null);
 	const [versions, setVersions] = useState<Record<string, number>>({});
-	const removeFailure = usePasswordFailure();
 
 	const refresh = () =>
 		qc.invalidateQueries({ queryKey: getListProfilesQueryKey() });
@@ -166,14 +163,7 @@ export const SectionProfiles: FC = () => {
 	const changeDoor = useMutation({
 		mutationFn: (v: { on: boolean; password: string }) =>
 			setDoor({ on: v.on, password: v.password } as DoorChange),
-		onSuccess: (_done, v) => {
-			doorFailure.reset();
-			setDoorAsk(null);
-			setSwitching(v.on);
-		},
-		onError: (e) => {
-			if (!doorFailure.classify(e)) failed(m.profiles_door_failed())(e);
-		},
+		onSuccess: (_done, v) => setSwitching(v.on),
 	});
 	const act = (p: ProfileAdmin, a: SeatAct) =>
 		seatAct.mutate({ id: p.id, act: a });
@@ -238,20 +228,10 @@ export const SectionProfiles: FC = () => {
 		);
 	};
 
-	const onRemove = (id: string, erase: boolean, password: string) =>
-		remove.mutate(
-			{ id, erase, password },
-			{
-				onSuccess: () => {
-					removeFailure.reset();
-					setRemoving(null);
-					refresh();
-				},
-				onError: (e) => {
-					if (!removeFailure.classify(e)) failed(m.profiles_remove_failed())(e);
-				},
-			},
-		);
+	const onRemove = async (id: string, erase: boolean, password: string) => {
+		await remove.mutateAsync({ id, erase, password });
+		refresh();
+	};
 
 	const busyId =
 		(update.isPending ? update.variables?.id : undefined) ??
@@ -282,10 +262,7 @@ export const SectionProfiles: FC = () => {
 						? {
 								on: door,
 								changing: switching !== null,
-								onChange: () => {
-									doorFailure.reset();
-									setDoorAsk(!door);
-								},
+								onChange: () => setDoorAsk(!door),
 							}
 						: undefined
 				}
@@ -301,10 +278,7 @@ export const SectionProfiles: FC = () => {
 						},
 					)
 				}
-				onRemove={(p) => {
-					removeFailure.reset();
-					setRemoving(p);
-				}}
+				onRemove={setRemoving}
 				busyId={busyId}
 			/>
 			<AddProfileDialog
@@ -335,11 +309,9 @@ export const SectionProfiles: FC = () => {
 			<DoorDialog
 				open={doorAsk !== null}
 				turningOn={doorAsk === true}
-				isPending={changeDoor.isPending}
-				failure={doorFailure.failure}
-				onConfirm={(password) =>
-					doorAsk !== null && changeDoor.mutate({ on: doorAsk, password })
-				}
+				onConfirm={async (password) => {
+					await changeDoor.mutateAsync({ on: doorAsk === true, password });
+				}}
 				onCancel={() => setDoorAsk(null)}
 			/>
 			<RemoveProfileDialog
@@ -347,8 +319,6 @@ export const SectionProfiles: FC = () => {
 				profile={removing}
 				onCancel={() => setRemoving(null)}
 				onRemove={onRemove}
-				isPending={remove.isPending}
-				failure={removeFailure.failure}
 			/>
 		</>
 	);

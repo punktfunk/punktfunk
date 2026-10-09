@@ -53,21 +53,21 @@ impl WasapiLoopbackCapturer {
         anyhow::ensure!(rate_hz > 0, "audio capture rate must be positive");
         let (tx, rx) = sync_channel::<Vec<f32>>(64);
         let stop = Arc::new(AtomicBool::new(false));
-        // Handshake: a missing render endpoint is Err (native plane retries), not a silent dead thread.
-        let (ready_tx, ready_rx) = sync_channel::<Result<()>>(1);
         let stop_t = stop.clone();
         let active = Arc::new(AtomicBool::new(true));
         let active_t = active.clone();
         // Honest until the endpoint is read; also the final answer on the common 48 kHz path.
         let opened_rate = Arc::new(AtomicU32::new(rate_hz));
         let opened_rate_t = opened_rate.clone();
-        let join = thread::Builder::new()
-            .name("punktfunk-wasapi-audio".into())
-            .spawn(move || {
+        // 30 s: first open may auto-install the Steam Streaming pair (two driver installs, ~5 s each).
+        let ((), join) = crate::ready::spawn_ready(
+            "punktfunk-wasapi-audio",
+            Duration::from_secs(30),
+            move |ready| {
                 if let Err(e) = capture_thread(
                     tx,
                     stop_t,
-                    ready_tx,
+                    ready,
                     channels,
                     rate_hz,
                     active_t,
@@ -75,33 +75,27 @@ impl WasapiLoopbackCapturer {
                 ) {
                     tracing::error!(error = %format!("{e:#}"), "wasapi loopback thread failed");
                 }
-            })
-            .context("spawn wasapi audio thread")?;
-        // 30 s: first open may auto-install the Steam Streaming pair (two driver installs, ~5 s each).
-        match ready_rx.recv_timeout(Duration::from_secs(30)) {
-            Ok(Ok(())) => {
-                // Settled rate, not `rate_hz` — a log must not print one rate while the stream carries another.
-                tracing::info!(
-                    channels,
-                    rate_hz = opened_rate.load(Ordering::Relaxed),
-                    "WASAPI loopback capture: f32"
-                );
-                Ok(WasapiLoopbackCapturer {
-                    chunks: rx,
-                    channels,
-                    stop,
-                    join: Some(join),
-                    active,
-                    opened_rate,
-                })
-            }
-            Ok(Err(e)) => Err(e),
-            Err(_) => {
-                // Otherwise it captures for the process lifetime with the playback default still parked.
+            },
+            |join| {
+                // Unstopped, it captures for the process lifetime with the playback default parked.
                 stop.store(true, Ordering::SeqCst);
-                Err(anyhow!("wasapi loopback init timed out"))
-            }
-        }
+                crate::ready::reap_timed_out("wasapi loopback", join)
+            },
+        )?;
+        // Settled rate, not `rate_hz` — a log must not print one rate while the stream carries another.
+        tracing::info!(
+            channels,
+            rate_hz = opened_rate.load(Ordering::Relaxed),
+            "WASAPI loopback capture: f32"
+        );
+        Ok(WasapiLoopbackCapturer {
+            chunks: rx,
+            channels,
+            stop,
+            join: Some(join),
+            active,
+            opened_rate,
+        })
     }
 }
 
@@ -259,8 +253,9 @@ fn capture_thread(
     // `THREAD_PRIORITY_HIGHEST` boost as the paced sender; a no-op if refused.
     pf_frame::thread_qos::boost_thread_priority(true);
     let mut live = LiveCapture::new();
-    // Each `capture_once` is one open + inner loop. First open gets [`FIRST_OPEN_ATTEMPTS`]
-    // tries before `open()` surfaces Err; the native plane then retries the whole open.
+    // Each pass is one plan, open and loop. First open gets [`FIRST_OPEN_ATTEMPTS`] tries
+    // before `open()` surfaces Err; later failures back off, or wait on the endpoint set for
+    // [`PlanUnsatisfiable`].
     let mut ready = Some(ready);
     let mut mode = TargetMode::Assert;
     let mut failures: u64 = 0;
@@ -270,17 +265,20 @@ fn capture_thread(
     let mut unsat_logged: Option<u64> = None;
     while !stop.load(Ordering::Relaxed) {
         let attempt = Instant::now();
-        match capture_once(
-            &tx,
-            &stop,
-            &mut ready,
-            channels,
-            rate_hz,
-            mode,
-            &active,
-            &opened_rate,
-            &mut live.voice,
-        ) {
+        let open = prepare_plan(mode);
+        let pass =
+            open_loopback(&open, channels, rate_hz, &opened_rate, &mut ready).and_then(|opened| {
+                run_loop(
+                    opened,
+                    &open,
+                    channels,
+                    &tx,
+                    &stop,
+                    &active,
+                    &mut live.voice,
+                )
+            });
+        match pass {
             Ok(Next::Stopped) => break,
             Ok(Next::Reopen(m)) => {
                 mode = m;
@@ -611,30 +609,26 @@ impl DefaultWatch {
     }
 }
 
-/// One endpoint open + capture loop. First open: [`FIRST_OPEN_ATTEMPTS`] then fatal via `ready`.
-/// Later: capped backoff, or an endpoint-set wait for [`PlanUnsatisfiable`].
-#[allow(clippy::too_many_arguments)]
-fn capture_once(
-    tx: &SyncSender<Vec<f32>>,
-    stop: &AtomicBool,
-    ready: &mut Option<SyncSender<Result<()>>>,
-    channels: u32,
-    rate_hz: u32,
-    mode: TargetMode,
-    active: &AtomicBool,
-    opened_rate: &AtomicU32,
-    voice: &mut voice_route::VoiceRoute,
-) -> Result<Next> {
-    // 4 bytes per f32 sample, interleaved.
-    let block_align = channels as usize * 4;
+/// One open's wiring plan and the decisions read with it, so the open and its loop agree.
+struct OpenPlan {
+    wired: audio_control::WiredPlan,
+    /// Capture the plan's loopback endpoint, not the default render ([`binding`]).
+    bind_plan: bool,
+    /// May park the playback default on that endpoint ([`binding`]).
+    assert_plan: bool,
+    keep_default: bool,
+    seat: bool,
+    /// Bound to the plan's last-resort pick, whose loopback is known-silent.
+    last_resort: bool,
+}
+
+/// Plans this open. Client-only audio wants a silent sink with working loopback, so a plan
+/// without one tries the Steam pair, once per INF state, and re-plans.
+fn prepare_plan(mode: TargetMode) -> OpenPlan {
     let keep_default = audio_control::keep_default_devices();
     let seat = pf_paths::seat::is_seat_host();
     let (bind_plan, assert_plan) = binding(mode, keep_default, seat);
-    let mut plan = audio_control::wire_now_full(assert_plan);
-
-    // Client-only audio wants a silent sink with working loopback. Latch is once per INF-STATE,
-    // not once per process: an attempt while Steam was absent re-arms when the driver INFs
-    // appear. Those files are invisible to the endpoint-set fingerprint, so nothing else retries.
+    let mut wired = audio_control::wire_now_full(assert_plan);
     if assert_plan && !audio_control::host_audio_requested() {
         // Without the minted-id half of [`silent_loopback`], a minted session re-attempts a
         // Steam-pair install it does not need.
@@ -643,24 +637,11 @@ fn capture_once(
                 .as_ref()
                 .is_some_and(|(n, id)| silent_loopback(n, id))
         };
-        static TRIED_WITH_INFS: Mutex<Option<bool>> = Mutex::new(None);
-        let should_try = !have_silent(&plan.wiring) && {
-            let infs = super::wasapi_mic::steam_infs_present();
-            let mut tried = TRIED_WITH_INFS.lock().unwrap();
-            let go = match *tried {
-                None => true,
-                Some(had_infs) => !had_infs && infs,
-            };
-            if go {
-                *tried = Some(infs);
-            }
-            go
-        };
-        if should_try {
+        if !have_silent(&wired.wiring) && super::wasapi_mic::steam_pair_install_due() {
             if super::wasapi_mic::install_steam_audio_pair() {
-                plan = audio_control::wire_now_full(true);
+                wired = audio_control::wire_now_full(true);
             }
-            if !have_silent(&plan.wiring) {
+            if !have_silent(&wired.wiring) {
                 tracing::info!(
                     "no silent virtual sink for client-only audio — desktop audio will also play \
                      on the host (install Steam, whose Remote Play streaming drivers provide one)"
@@ -668,14 +649,42 @@ fn capture_once(
             }
         }
     }
-    let wiring = &plan.wiring;
     // Last resort belongs to the plan's pick: a capture that follows the default never lands on
     // Steam Speakers, because `judge_default` calls them `excluded_from_loopback`.
-    let last_resort = bind_plan && wiring.loopback_last_resort;
-    let plan_fp = plan.fingerprint;
+    let last_resort = bind_plan && wired.wiring.loopback_last_resort;
+    OpenPlan {
+        wired,
+        bind_plan,
+        assert_plan,
+        keep_default,
+        seat,
+        last_resort,
+    }
+}
 
+/// A started loopback stream. Fields drop in order: capture client, event, audio client.
+struct OpenedLoopback {
+    capture: wasapi::AudioCaptureClient,
+    event: wasapi::Handle,
+    client: wasapi::AudioClient,
+    en: DeviceEnumerator,
+    dev_name: String,
+    dev_id: String,
+    engine_hz: Option<u32>,
+    open_hz: u32,
+}
+
+/// Opens and starts the loopback stream on this plan's endpoint, then fires `ready`: `take`
+/// empties it on the first open that starts, so it fires once and before any loop runs.
+fn open_loopback(
+    open: &OpenPlan,
+    channels: u32,
+    rate_hz: u32,
+    opened_rate: &AtomicU32,
+    ready: &mut Option<SyncSender<Result<()>>>,
+) -> Result<OpenedLoopback> {
     let en = DeviceEnumerator::new().context("DeviceEnumerator")?;
-    let (device, dev_name, dev_id) = choose_endpoint(&plan, bind_plan, &en)?;
+    let (device, dev_name, dev_id) = choose_endpoint(&open.wired, open.bind_plan, &en)?;
 
     let mut audio_client = device.get_iaudioclient().context("IAudioClient")?;
     let mut engine = audio_client.get_mixformat().ok();
@@ -768,8 +777,8 @@ fn capture_once(
         let _ = r.send(Ok(()));
     }
     tracing::info!(device = %dev_name,
-        follow = !bind_plan,
-        last_resort,
+        follow = !open.bind_plan,
+        last_resort = open.last_resort,
         // Asked vs settled — they differ only when an upward request was declined.
         requested_hz = rate_hz,
         opened_hz = open_hz,
@@ -780,17 +789,36 @@ fn capture_once(
         buffer_ms = used_period as f32 / 10_000.0,
         min_buffer_ms = min_period as f32 / 10_000.0,
         "audio loopback capturing");
-    if let Some(why) = &wiring.loopback_narrowing {
+    if let Some(why) = &open.wired.wiring.loopback_narrowing {
         tracing::warn!(device = %dev_name,
             "capturing an endpoint that {why} — the stream cannot sound better than this source");
     }
+    Ok(OpenedLoopback {
+        capture: capture_client,
+        event: h_event,
+        client: audio_client,
+        en,
+        dev_name,
+        dev_id,
+        engine_hz,
+        open_hz,
+    })
+}
 
-    // The operator's own output, while this capture owns the defaults: voice apps get pinned
-    // to it, and `host_and_client` renders the mix to it (the plan kept the silent sink).
-    let host_out = (bind_plan && !keep_default)
+/// The operator's own output, while this capture owns the defaults: voice apps get pinned to
+/// it, and `host_and_client` renders the mix to it (the plan kept the silent sink). The render
+/// opens only when the capture is silent on the host: a plan that fell back to real hardware
+/// is already audible, and a second render would play the mix twice.
+fn host_output(
+    open: &OpenPlan,
+    opened: &OpenedLoopback,
+    channels: u32,
+    voice: &mut voice_route::VoiceRoute,
+) -> Option<Playthrough> {
+    let host_out = (open.bind_plan && !open.keep_default)
         .then(audio_control::parked_previous_render)
         .flatten()
-        .filter(|id| *id != dev_id);
+        .filter(|id| *id != opened.dev_id);
     if let Some(id) = &host_out {
         voice.arm(id);
     } else if voice_route::wanted() {
@@ -803,44 +831,111 @@ fn capture_once(
             )
         });
     }
-    // Only when the capture is silent on the host: a plan that fell back to real hardware
-    // is already audible, and a second render would play the mix twice.
-    let mut playthrough = match &host_out {
+    match &host_out {
         Some(id) if audio_control::playthrough_requested() => {
-            if silent_loopback(&dev_name, &dev_id) {
-                Playthrough::open(id, channels, open_hz)
+            if silent_loopback(&opened.dev_name, &opened.dev_id) {
+                Playthrough::open(id, channels, opened.open_hz)
             } else {
-                tracing::info!(device = %dev_name,
+                tracing::info!(device = %opened.dev_name,
                     "host playthrough not needed — the captured endpoint is audible on the host");
                 None
             }
         }
         _ => None,
-    };
+    }
+}
 
-    // Seed is the default right after open. If Assert's park did not stick, converge: follow a
-    // capturable default, warn once on a dud. Only a later CHANGE of that id reacts, so a
-    // permanently-denied default set cannot reopen-loop.
-    let seen_default = default_render(&en).map(|(_, id)| id);
-    if assert_plan {
-        if let Some(d) = seen_default.as_deref() {
-            if d != dev_id {
-                match judge_default(wiring, d) {
-                    DefaultKind::Capturable(name) => {
-                        tracing::info!(default = %name, planned = %dev_name,
-                            "could not park the default playback on the planned endpoint — \
-                             capturing the actual default instead (audio audible on the host)");
-                        return Ok(Next::Reopen(TargetMode::Follow));
-                    }
-                    DefaultKind::Dud(name) => tracing::warn!(default = %name, planned = %dev_name,
-                        "default playback stayed on an endpoint whose loopback cannot work — \
-                         capturing the planned endpoint; desktop audio may be silent"),
-                    DefaultKind::Unknown => {}
+/// Assert's park did not stick when `default`, read right after open, is another endpoint.
+/// `Some` follows a capturable default; a dud warns and keeps the planned endpoint.
+fn converge_default(
+    wiring: &wiring_plan::Wiring,
+    (dev_name, dev_id): (&str, &str),
+    default: Option<&str>,
+) -> Option<Next> {
+    let d = default.filter(|d| *d != dev_id)?;
+    match judge_default(wiring, d) {
+        DefaultKind::Capturable(name) => {
+            tracing::info!(default = %name, planned = %dev_name,
+                "could not park the default playback on the planned endpoint — \
+                 capturing the actual default instead (audio audible on the host)");
+            Some(Next::Reopen(TargetMode::Follow))
+        }
+        DefaultKind::Dud(name) => {
+            tracing::warn!(default = %name, planned = %dev_name,
+                "default playback stayed on an endpoint whose loopback cannot work — \
+                 capturing the planned endpoint; desktop audio may be silent");
+            None
+        }
+        DefaultKind::Unknown => None,
+    }
+}
+
+/// Reads every ready packet into `bytes`, zeroing SILENT ones, and scores holes and empty
+/// reads. `true` when any packet was ready.
+fn read_packets(
+    capture: &wasapi::AudioCaptureClient,
+    bytes: &mut VecDeque<u8>,
+    block_align: usize,
+    gaps: &mut LoopbackGaps,
+    stats: &mut CaptureStats,
+) -> Result<bool> {
+    let mut saw = false;
+    loop {
+        match capture.get_next_packet_size() {
+            Ok(Some(0)) | Ok(None) => return Ok(saw),
+            Ok(Some(_n)) => {
+                saw = true;
+                let before = bytes.len();
+                let info = capture
+                    .read_from_device_to_deque(bytes)
+                    .context("read loopback")?;
+                // WASAPI: a SILENT packet's data is not defined; it is silence.
+                if info.flags.silent {
+                    bytes.range_mut(before..).for_each(|b| *b = 0);
+                }
+                let frames = ((bytes.len() - before) / block_align) as u64;
+                if frames == 0 {
+                    // Packet-ready then zero frames: a spinning tap looks like a quiet desktop.
+                    stats.missed_dequeues += 1;
+                } else if let Some(lost) = gaps.packet(
+                    Instant::now(),
+                    info.index,
+                    frames,
+                    info.flags.data_discontinuity,
+                    info.flags.silent,
+                ) {
+                    stats.observe_gap(lost);
                 }
             }
+            Err(e) => return Err(anyhow!("get_next_packet_size: {e}")),
+        }
+    }
+}
+
+/// Streams `opened` until stop, a default change [`DefaultWatch`] follows, or a last-resort
+/// plan's endpoint set moving. The default seen right after open seeds the watch: only a
+/// later CHANGE of that id reacts, so a permanently-denied default set cannot reopen-loop.
+fn run_loop(
+    opened: OpenedLoopback,
+    open: &OpenPlan,
+    channels: u32,
+    tx: &SyncSender<Vec<f32>>,
+    stop: &AtomicBool,
+    active: &AtomicBool,
+    voice: &mut voice_route::VoiceRoute,
+) -> Result<Next> {
+    let wiring = &open.wired.wiring;
+    let ids = (opened.dev_name.as_str(), opened.dev_id.as_str());
+    let mut playthrough = host_output(open, &opened, channels, voice);
+    let seen_default = default_render(&opened.en).map(|(_, id)| id);
+    if open.assert_plan {
+        if let Some(next) = converge_default(wiring, ids, seen_default.as_deref()) {
+            return Ok(next);
         }
     }
 
+    // 4 bytes per f32 sample, interleaved.
+    let block_align = channels as usize * 4;
     let mut bytes: VecDeque<u8> = VecDeque::new();
     let mut last_fp_check = Instant::now();
     // 30 s with zero packets: a broken loopback looks like a quiet desktop. Info, not warn —
@@ -852,7 +947,7 @@ fn capture_once(
     // concatenates across the hole (click + permanent A/V offset).
     let mut stats = CaptureStats::default();
     let mut last_stats = Instant::now();
-    let mut gaps = LoopbackGaps::new(engine_hz, open_hz);
+    let mut gaps = LoopbackGaps::new(opened.engine_hz, opened.open_hz);
     let mut watch = DefaultWatch {
         seen: seen_default,
         fight: FightDamper::new(Instant::now()),
@@ -860,52 +955,29 @@ fn capture_once(
     };
     loop {
         if stop.load(Ordering::Relaxed) {
-            audio_client.stop_stream().ok();
+            opened.client.stop_stream().ok();
             return Ok(Next::Stopped);
         }
         // Events fire only while audio renders; finite timeout keeps `stop` and the watchdog alive.
-        let _ = h_event.wait_for_event(100);
+        let _ = opened.event.wait_for_event(100);
         voice.tick();
-        loop {
-            match capture_client.get_next_packet_size() {
-                Ok(Some(0)) | Ok(None) => break,
-                Ok(Some(_n)) => {
-                    saw_packets = true;
-                    let before = bytes.len();
-                    let info = capture_client
-                        .read_from_device_to_deque(&mut bytes)
-                        .context("read loopback")?;
-                    // WASAPI: a SILENT packet's data is not defined; it is silence.
-                    if info.flags.silent {
-                        bytes.range_mut(before..).for_each(|b| *b = 0);
-                    }
-                    let frames = ((bytes.len() - before) / block_align) as u64;
-                    if frames == 0 {
-                        // Packet-ready then zero frames: a spinning tap looks like a quiet desktop.
-                        stats.missed_dequeues += 1;
-                    } else if let Some(lost) = gaps.packet(
-                        Instant::now(),
-                        info.index,
-                        frames,
-                        info.flags.data_discontinuity,
-                        info.flags.silent,
-                    ) {
-                        stats.observe_gap(lost);
-                    }
-                }
-                Err(e) => return Err(anyhow!("get_next_packet_size: {e}")),
-            }
-        }
+        saw_packets |= read_packets(
+            &opened.capture,
+            &mut bytes,
+            block_align,
+            &mut gaps,
+            &mut stats,
+        )?;
         if !saw_packets && !silence_noted && opened_at.elapsed() >= Duration::from_secs(30) {
             silence_noted = true;
-            if last_resort {
-                tracing::warn!(device = %dev_name,
+            if open.last_resort {
+                tracing::warn!(device = %opened.dev_name,
                     "no audio captured in the first 30 s from the LAST-RESORT loopback — the \
                      Steam Streaming Speakers' loopback is known-silent, so desktop audio is \
                      most likely not reaching the client; attach any output device to give the \
                      plan a working endpoint (it re-plans on the change)");
             } else {
-                tracing::info!(device = %dev_name,
+                tracing::info!(device = %opened.dev_name,
                     "no audio captured in the first 30 s — fine if the host is quiet; if it \
                      should be playing audio, this endpoint's loopback may be broken (set \
                      PUNKTFUNK_HOST_AUDIO=1 to prefer real hardware)");
@@ -931,29 +1003,25 @@ fn capture_once(
         }
         // Gaps here come from WASAPI discontinuity, not callback cadence: an idle-then-resume
         // endpoint is not a gap ([`LOOPBACK_IDLE_AFTER`]).
-        stats.flush_window(&mut last_stats, open_hz, Some(dev_name.as_str()));
+        stats.flush_window(&mut last_stats, opened.open_hz, Some(ids.0));
 
         // A seat has no operator default: the box's is somebody else's, and following it
         // streams their audio.
-        if !seat {
-            if let Some(next) = watch.tick(
-                &en,
-                wiring,
-                (dev_name.as_str(), dev_id.as_str()),
-                keep_default,
-                assert_plan,
-            ) {
-                audio_client.stop_stream().ok();
+        if !open.seat {
+            if let Some(next) =
+                watch.tick(&opened.en, wiring, ids, open.keep_default, open.assert_plan)
+            {
+                opened.client.stop_stream().ok();
                 return Ok(next);
             }
         }
 
         // Last-resort is a stopgap: any endpoint-set change may unlock a real plan. Preferred
         // endpoints don't watch this — mid-stream re-routing is the default-device watchdog.
-        if last_resort && last_fp_check.elapsed() >= ENDPOINT_POLL_EVERY {
+        if open.last_resort && last_fp_check.elapsed() >= ENDPOINT_POLL_EVERY {
             last_fp_check = Instant::now();
-            if audio_control::endpoint_fingerprint() != plan_fp {
-                audio_client.stop_stream().ok();
+            if audio_control::endpoint_fingerprint() != open.wired.fingerprint {
+                opened.client.stop_stream().ok();
                 tracing::info!(
                     "endpoint set changed while capturing the last-resort loopback — re-planning"
                 );

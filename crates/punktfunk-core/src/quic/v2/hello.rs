@@ -1,14 +1,13 @@
-//! The v2 handshake: `ClientHello` → `ServerHello` → `Ready`, carrying what `punktfunk/1` spread
-//! over `Hello`, `Start`'s extension block and `Welcome`.
+//! The handshake: `ClientHello` → `ServerHello` → `Ready`.
 //!
-//! Both ends keep `punktfunk/1`'s structs as the model: a [`ClientHello`] decodes to a [`Hello`]
-//! plus the `Start` extension entries, a [`ServerHello`] to a [`Welcome`]. Decoding applies the
-//! same folding `punktfunk/1`'s decoders do (unknown codec to HEVC, unsupported rate to 48 kHz,
-//! bad name to none), so host and client logic sees what it always saw;
-//! `tests::v1_and_v2_decode_alike` holds the two wires to that.
+//! A [`ClientHello`] decodes to a [`Hello`] plus what the client adds beside it, a
+//! [`ServerHello`] to a [`Welcome`]. Decoding folds what this build cannot honour onto its
+//! default (unknown codec to HEVC, unsupported rate to 48 kHz, bad name to none), so host and
+//! client logic only sees values it can act on; `tests::hellos_settle_after_one_trip` pins that
+//! one trip settles both.
 //!
-//! What only `punktfunk/1` carries is absent here: the wire version (ALPN picks the wire), the
-//! data port (media rides the QUIC path) and the session key (both ends derive it).
+//! The hellos carry no wire version (ALPN picks the wire), no data port (media rides the QUIC
+//! path) and no session key (both ends derive it).
 
 use super::features::FeatureSet;
 use super::field::*;
@@ -18,16 +17,6 @@ use crate::config::{CompositorPref, FecConfig, FecScheme, GamepadPref, Mode};
 use crate::crypto::MediaSuite;
 use crate::error::Result;
 use crate::quic::*;
-
-/// `Start` extension tags and the `ClientHello` tags their values ride under, unchanged.
-const START_EXT: [(u16, u64); 6] = [
-    (EXT_TAG_CLIENT, 19),
-    (EXT_TAG_ABR, 20),
-    (EXT_TAG_PRESET, 21),
-    (EXT_TAG_LINK_FACTS, 22),
-    (EXT_TAG_PROBE_ONLY, 24),
-    (EXT_TAG_PYROWAVE_QUALITY, 25),
-];
 
 /// Wire id of a media suite in `ClientHello` and `ServerHello`.
 fn suite_id(s: MediaSuite) -> u8 {
@@ -49,8 +38,21 @@ fn suite_of(id: u8) -> Option<MediaSuite> {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ClientHello {
     pub hello: Hello,
-    /// The entries a client adds ([`EXT_TAG_CLIENT`] and after), by tag.
-    pub start_ext: Vec<(u16, Vec<u8>)>,
+    /// What the client calls itself ([`client_label`]): its build and the shell that dialled
+    /// (`"android 0.38.0 console/library"`). A label for the host's log, never a fact it acts
+    /// on: two sessions from one device are told apart here instead of by capture.
+    pub client_label: Option<String>,
+    /// ABR protocol features the client reads, one bit each ([`EXT_ABR_ACK_REASON`] is bit 0).
+    /// A later feature takes another bit rather than a field of its own; `0` reads none.
+    pub abr_features: u8,
+    /// The settings preset this session was dialled with; `None` streams with plain settings.
+    pub preset: Option<SessionPreset>,
+    /// What this client's OS says about its end of the path. The default is unknown.
+    pub link: LinkFacts,
+    /// A diagnostic session: serve probes from the punched data plane, never build a pipeline.
+    pub probe_only: bool,
+    /// The player's PyroWave quality in hundredths of a bit per pixel; `0` leaves the host's.
+    pub pyrowave_bpp_x100: u16,
     /// The session this client held, to take back after a drop.
     pub resume: Option<[u8; 16]>,
     /// Media AEADs the client takes, most wanted first. Empty on a carrier that encrypts.
@@ -59,16 +61,6 @@ pub struct ClientHello {
     pub features: FeatureSet,
     /// The profile this device asks to play as. `None` asks nothing.
     pub profile: Option<String>,
-}
-
-impl ClientHello {
-    /// The extension entries as the host reads `Start`'s: `(tag, value)`.
-    pub fn ext_entries(&self) -> Vec<(u16, &[u8])> {
-        self.start_ext
-            .iter()
-            .map(|(t, v)| (*t, v.as_slice()))
-            .collect()
-    }
 }
 
 impl V2Message for ClientHello {
@@ -116,17 +108,27 @@ impl V2Message for ClientHello {
             .u8(16, h.audio_bits)
             .u8(17, h.audio_layout)
             .u8(18, h.video_fit);
-        for (v1, v2) in START_EXT {
-            if let Some((_, v)) = self.start_ext.iter().find(|(t, _)| *t == v1) {
-                f = f.bytes(v2, v);
-            }
-        }
+        // A default value is left out: absence reads back as the same thing.
+        let label = self.client_label.as_deref().filter(|l| !l.is_empty());
+        let preset = self.preset.as_ref().map(SessionPreset::encode);
+        let link = (self.link != LinkFacts::default()).then(|| self.link.encode());
         // An id is never truncated: a cut one would name another profile or none.
         let profile = self
             .profile
             .as_deref()
             .filter(|p| p.len() <= PROFILE_ID_MAX);
-        f.when(profile.is_some(), |f| f.str(23, profile.unwrap_or("")))
+        // Tag 24 goes before 23; `tests::start_extensions_and_session_fields_ride_along` pins it.
+        f.when(label.is_some(), |f| f.str(19, label.unwrap_or("")))
+            .when(self.abr_features != 0, |f| f.u8(20, self.abr_features))
+            .when(preset.is_some(), |f| {
+                f.bytes(21, preset.as_deref().unwrap_or_default())
+            })
+            .when(link.is_some(), |f| f.bytes(22, &link.unwrap_or_default()))
+            .when(self.probe_only, |f| f.u8(24, 1))
+            .when(self.pyrowave_bpp_x100 != 0, |f| {
+                f.bytes(25, &self.pyrowave_bpp_x100.to_le_bytes())
+            })
+            .when(profile.is_some(), |f| f.str(23, profile.unwrap_or("")))
     }
 
     fn from_body(body: &[u8]) -> Result<Self> {
@@ -149,7 +151,10 @@ impl V2Message for ClientHello {
             audio_layout: 0,
             video_fit: 0,
         };
-        let (mut resume, mut suites, mut start_ext) = (None, Vec::new(), Vec::new());
+        let (mut resume, mut suites) = (None, Vec::new());
+        let (mut client_label, mut abr_features, mut preset) = (None, 0, None);
+        let (mut link, mut probe_only) = (LinkFacts::default(), false);
+        let mut pyrowave_bpp_x100 = 0u16;
         let mut features = FeatureSet::default();
         let mut profile = None;
         let mut seen = Vec::new();
@@ -186,12 +191,25 @@ impl V2Message for ClientHello {
                 16 => h.audio_bits = u8_of(v)?,
                 17 => h.audio_layout = u8_of(v)?,
                 18 => h.video_fit = u8_of(v)?,
-                23 => profile = label(v, PROFILE_ID_MAX),
-                _ => {
-                    if let Some((v1, _)) = START_EXT.iter().find(|(_, v2)| *v2 == tag) {
-                        start_ext.push((*v1, v.to_vec()));
-                    }
+                // What the client adds informs and never gates: a bad value is its default.
+                19 => {
+                    client_label = Some(crate::quic::client_label(&String::from_utf8_lossy(v)))
+                        .filter(|l| !l.is_empty())
                 }
+                20 => abr_features = v.first().copied().unwrap_or(0),
+                21 => preset = SessionPreset::decode(v),
+                22 => link = LinkFacts::decode(v),
+                23 => profile = label(v, PROFILE_ID_MAX),
+                24 => probe_only = true,
+                // A short value is no ask, never a failed handshake.
+                25 => {
+                    pyrowave_bpp_x100 = v
+                        .get(..2)
+                        .and_then(|b| b.try_into().ok())
+                        .map(u16::from_le_bytes)
+                        .unwrap_or(0)
+                }
+                _ => {}
             }
         }
         // Fold what this build cannot honour onto its default.
@@ -204,7 +222,12 @@ impl V2Message for ClientHello {
         }
         Ok(ClientHello {
             hello: h,
-            start_ext,
+            client_label,
+            abr_features,
+            preset,
+            link,
+            probe_only,
+            pyrowave_bpp_x100,
             resume,
             suites,
             features,
@@ -571,7 +594,7 @@ mod tests {
         /// changes nothing.
         #[test]
         fn hellos_settle_after_one_trip(h in hello_strategy(), w in welcome_strategy()) {
-            let ch = ClientHello { hello: h, start_ext: vec![], resume: None, suites: vec![], features: FeatureSet::default(), profile: None };
+            let ch = ClientHello { hello: h, client_label: None, abr_features: 0, preset: None, link: LinkFacts::default(), probe_only: false, pyrowave_bpp_x100: 0, resume: None, suites: vec![], features: FeatureSet::default(), profile: None };
             let once = ClientHello::from_body(&ch.fields().into_body()).unwrap();
             let twice = ClientHello::from_body(&once.fields().into_body()).unwrap();
             prop_assert_eq!(twice, once);
@@ -616,9 +639,45 @@ mod tests {
         assert_eq!(back.profile.as_deref(), Some("9a3f1c2b7e40"));
     }
 
+    /// What a client adds is left out at its default, and a value this build cannot use reads
+    /// as that default instead of failing the handshake.
+    #[test]
+    fn client_additions_skip_defaults_and_fold_bad_values() {
+        let tags = |ch: &ClientHello| {
+            let body = ch.fields().into_body();
+            let mut r = FieldReader::new(&body);
+            let mut tags = Vec::new();
+            while let Some((tag, _)) = r.next_field().unwrap() {
+                tags.push(tag);
+            }
+            tags
+        };
+        let mut ch = ClientHello::from_body(&Fields::new().into_body()).unwrap();
+        ch.client_label = Some(String::new());
+        assert!(tags(&ch).iter().all(|t| !(19..=25).contains(t)));
+        ch.probe_only = true;
+        assert!(tags(&ch).contains(&24));
+        ch.pyrowave_bpp_x100 = 120;
+        assert!(tags(&ch).contains(&25));
+
+        let read = |tag, v: &[u8]| {
+            ClientHello::from_body(&Fields::new().bytes(tag, v).into_body()).unwrap()
+        };
+        // A bit this build does not know is ignored; bit 0 still reads.
+        let future = read(20, &[EXT_ABR_ACK_REASON | 0xF0]);
+        assert_eq!(future.abr_features & EXT_ABR_ACK_REASON, EXT_ABR_ACK_REASON);
+        assert_eq!(read(20, &[]).abr_features, 0);
+        assert_eq!(read(19, b"  deck\n").client_label.as_deref(), Some("deck"));
+        assert_eq!(read(19, b"\n").client_label, None);
+        assert_eq!(read(21, &[9, b'x']).preset, None);
+        assert!(read(24, &[]).probe_only);
+        assert_eq!(read(25, &[120, 0]).pyrowave_bpp_x100, 120);
+        // A short value is no ask, never a failed handshake.
+        assert_eq!(read(25, &[7]).pyrowave_bpp_x100, 0);
+    }
+
     #[test]
     fn start_extensions_and_session_fields_ride_along() {
-        let preset = SessionPreset::new("p1", "Couch").unwrap().encode();
         let ch = ClientHello {
             hello: Hello {
                 mode: Mode {
@@ -643,41 +702,31 @@ mod tests {
                 audio_layout: 0,
                 video_fit: 0,
             },
-            start_ext: vec![
-                (EXT_TAG_CLIENT, b"android 0.43".to_vec()),
-                (EXT_TAG_ABR, vec![EXT_ABR_ACK_REASON]),
-                (EXT_TAG_PRESET, preset.clone()),
-                (
-                    EXT_TAG_LINK_FACTS,
-                    LinkFacts {
-                        kind: IFACE_KIND_ETHERNET,
-                        mbps: 2_500,
-                    }
-                    .encode()
-                    .to_vec(),
-                ),
-                (EXT_TAG_PROBE_ONLY, vec![1]),
-                (EXT_TAG_PYROWAVE_QUALITY, 120u16.to_le_bytes().to_vec()),
-            ],
+            client_label: Some("android 0.43".into()),
+            abr_features: EXT_ABR_ACK_REASON,
+            preset: SessionPreset::new("p1", "Couch"),
+            link: LinkFacts {
+                kind: IFACE_KIND_ETHERNET,
+                mbps: 2_500,
+            },
+            probe_only: true,
+            pyrowave_bpp_x100: 120,
             resume: Some([3; 16]),
             suites: vec![MediaSuite::ChaCha20Poly1305, MediaSuite::Aes128Gcm],
             features: FeatureSet::default().with(reg::FEATURE_STREAM_CONFIG),
             profile: None,
         };
+        // The bytes on the wire are pinned: a change here is a wire change.
+        let frame: String = ch.encode_v2().iter().map(|b| format!("{b:02x}")).collect();
+        assert_eq!(
+            frame,
+            "01408301100303030303030303030303030303030302020100030c80070000380400003c000000040100\
+             05010006040000000007044465636b090540400000010a01020b01020c01000e0280050f0480bb0000\
+             100110110100120100130c616e64726f696420302e3433140101150902703105436f756368160501c4\
+             09000018010119027800"
+        );
         let back = ClientHello::from_body(&ch.fields().into_body()).unwrap();
         assert_eq!(back, ch);
-        let entries = back.ext_entries();
-        assert_eq!(ext_abr_features(&entries), EXT_ABR_ACK_REASON);
-        assert_eq!(SessionPreset::from_ext(&entries).unwrap().name, "Couch");
-        assert_eq!(
-            LinkFacts::from_ext(&entries).unwrap(),
-            LinkFacts {
-                kind: IFACE_KIND_ETHERNET,
-                mbps: 2_500,
-            }
-        );
-        assert!(ext_probe_only(&entries));
-        assert_eq!(ext_pyrowave_bpp_x100(&entries), 120);
 
         let sh = ServerHello {
             welcome: ServerHello::from_body(&Fields::new().bytes(1, &[0; 16]).into_body())

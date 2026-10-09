@@ -12,10 +12,9 @@
 //! the optional control plane.
 
 // `unsafe` is crate-denied. Parsers of network bytes stay safe Rust. Carve-outs are
-// only `client` (`extern "C"`) and transport syscall shims that move caller-owned
-// buffers (`udp/{apple,linux,windows}`, `qos_windows`) and the socket and interface
-// readers (`ifinfo`, `sockstat`). A wire parser may not add a
-// carve-out; SAFETY proofs sit next to each `unsafe`.
+// only `client` (thread ids, QoS pins, hostname), `crash_windows`, and the transport
+// syscall shims (`udp`, `qos_windows`, `ifinfo`, `sockstat`). A wire parser may not add
+// a carve-out; SAFETY proofs sit next to each `unsafe`.
 #![deny(unsafe_code)]
 #![forbid(unsafe_op_in_unsafe_fn)]
 
@@ -35,6 +34,9 @@ pub mod config;
 #[path = "crash_windows.rs"]
 pub mod crash;
 pub mod crypto;
+// Stored decoder-pin migration, shared by the decode ladder and every settings screen.
+/// cbindgen:ignore
+pub mod decoder_pref;
 pub mod discovery;
 pub mod error;
 pub mod fec;
@@ -75,6 +77,21 @@ pub use error::{PunktfunkError, PunktfunkStatus, Result};
 pub use session::{Frame, Session};
 pub use stats::Stats;
 
+/// Explicit-off for a `PUNKTFUNK_*` switch: trimmed, case-insensitive `0`/`false`/`off`/`no`
+/// are off, any other present value is on, unset is `None`. A kill switch reads
+/// `!= Some(false)`, an opt-in `== Some(true)`. `pf-host-config` applies the same rule to
+/// the host's rows; this one is for every process that has only the environment.
+pub fn env_on(name: &str) -> Option<bool> {
+    std::env::var(name).ok().map(|v| env_value_on(&v))
+}
+
+fn env_value_on(value: &str) -> bool {
+    !matches!(
+        value.trim().to_ascii_lowercase().as_str(),
+        "0" | "false" | "off" | "no"
+    )
+}
+
 /// C-ABI generation. Mirrors `punktfunk_abi_version()`; embedders abort on mismatch.
 ///
 /// Bump on any breaking change to the C ABI (`punktfunk-ffi`). Additive bumps add
@@ -88,3 +105,17 @@ pub use stats::Stats;
 /// The wire is versioned by ALPN, not by this. Pin the integer in `punktfunk-ffi`
 /// (`abi_version_is_pinned`). Per-bump notes live in `CHANGELOG.md`.
 pub const ABI_VERSION: u32 = 49;
+
+#[cfg(test)]
+mod env_tests {
+    /// The host reads `PUNKTFUNK_UPDATE_CHECK=no` as off; every other process must too.
+    #[test]
+    fn env_switches_read_the_hosts_off_grammar() {
+        for off in ["0", "false", "off", "no", "OFF", " No ", "0 "] {
+            assert!(!super::env_value_on(off), "{off:?}");
+        }
+        for on in ["1", "true", "yes", "", "garbage"] {
+            assert!(super::env_value_on(on), "{on:?}");
+        }
+    }
+}

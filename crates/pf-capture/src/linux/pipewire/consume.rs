@@ -497,13 +497,70 @@ fn second_plane(
     Ok(Some((c1.offset(), c1.stride().max(0) as u32)))
 }
 
+/// What became of a frame offered under a hold ([`publish_held`]).
+enum Held {
+    /// Published as a held dmabuf: the frame ends here.
+    Published,
+    /// No hold was free while this pool can hold: dropped and counted in `held_drops`.
+    Dropped,
+    /// This pool can never hold: the caller's fallback takes the frame.
+    NoHold,
+}
+
+/// Publish `dup` as a held dmabuf, so the producer cannot rewrite a buffer the encoder still
+/// reads. A shortage is not a broken frame: every hold is with the encoder and the next
+/// arrival takes the one that comes back, so the frame drops. A CPU copy on this thread would
+/// starve the requeues that end the shortage, and a tiled rebuild asks KWin for a new output
+/// each time. Only a pool that can never hold falls through, or nothing would stream.
+fn publish_held(
+    ud: &mut UserData,
+    a: &mut Arrival,
+    fmt: PixelFormat,
+    fourcc: u32,
+    dup: OwnedFd,
+    (offset, stride): (u32, u32),
+    plane1: Option<(u32, u32)>,
+) -> Held {
+    let Some(hold) = ud.try_defer(a.pw_buf, a.stream) else {
+        if holds_possible(zerocopy_hold_enabled(), ud.pool.live) {
+            ud.held_drops += 1;
+            return Held::Dropped;
+        }
+        return Held::NoHold;
+    };
+    let frame = CapturedFrame {
+        provenance: Default::default(),
+        width: a.w as u32,
+        height: a.h as u32,
+        pts_ns: a.pts_ns,
+        format: fmt,
+        payload: FramePayload::Dmabuf(DmabufFrame {
+            fd: dup,
+            fourcc,
+            modifier: ud.modifier,
+            offset,
+            stride,
+            plane1,
+            hold: Some(hold),
+            health: ud.signals.health.clone(),
+            rebuild: ud.signals.broken.clone(),
+        }),
+        // RGB→NV12 backends blend cursor-as-metadata. Gamescope burns the pointer in;
+        // native NV12/P010 has none.
+        cursor: ud.cursor.overlay(),
+    };
+    ud.publish(frame, a.fence.take());
+    Held::Published
+}
+
 /// Raw DMA-BUF passthrough: packed RGB for GPU CSC, or producer NV12/P010 without another
 /// convert. `true` = the frame ends here, published or dropped; `false` = take the CPU de-pad.
 /// A broken frame names its reason: a silent fall-through CPU-touches every frame on a session
 /// that negotiated zero-copy.
 fn try_passthrough(ud: &mut UserData, a: &mut Arrival) -> bool {
-    let (datas, w, h) = (&*a.datas, a.w, a.h);
+    let (w, h) = (a.w, a.h);
     let reason = 'passthrough: {
+        let datas = &*a.datas;
         let Some(fmt) = ud.format else {
             break 'passthrough PassthroughFallback::NoFormat;
         };
@@ -529,47 +586,16 @@ fn try_passthrough(ud: &mut UserData, a: &mut Arrival) -> bool {
         {
             break 'passthrough PassthroughFallback::UnalignedPitch;
         }
-        // Dup so the fd outlives SPA recycle. Content stability is `try_defer`: a raw
-        // frame is published only under a hold, so the producer can never rewrite a
-        // DMA-BUF the encoder still reads. No hold — shallow pool or
-        // PUNKTFUNK_ZEROCOPY_HOLD=0 — is a safe CPU fallback, never an unsafe publish.
+        // Dup so the fd outlives SPA recycle; `publish_held` keeps the content stable.
+        // No hold (shallow pool or PUNKTFUNK_ZEROCOPY_HOLD=0) is a safe CPU fallback.
         let Some(dup) = dup_data_fd(&datas[0]) else {
             break 'passthrough PassthroughFallback::DupFailed;
         };
-        let Some(hold) = ud.try_defer(a.pw_buf, a.stream) else {
-            // A shortage, not a broken frame: drop it as the import lane does — every hold
-            // is with the encoder, the next arrival takes the one that comes back. The CPU
-            // copy on this thread starves the requeues that would end the shortage; a
-            // tiled rebuild asks KWin for a new output each time.
-            // Only a pool that can never hold falls through, or nothing would stream.
-            if holds_possible(zerocopy_hold_enabled(), ud.pool.live) {
-                ud.held_drops += 1;
-                return true;
-            }
-            break 'passthrough PassthroughFallback::NoHold;
-        };
-        let frame = CapturedFrame {
-            provenance: Default::default(),
-            width: w as u32,
-            height: h as u32,
-            pts_ns: a.pts_ns,
-            format: fmt,
-            payload: FramePayload::Dmabuf(DmabufFrame {
-                fd: dup,
-                fourcc,
-                modifier: ud.modifier,
-                offset,
-                stride,
-                plane1,
-                hold: Some(hold),
-                health: ud.signals.health.clone(),
-                rebuild: ud.signals.broken.clone(),
-            }),
-            // RGB→NV12 backends blend cursor-as-metadata. Gamescope burns the pointer in;
-            // native NV12/P010 has none.
-            cursor: ud.cursor.overlay(),
-        };
-        ud.publish(frame, a.fence.take());
+        match publish_held(ud, a, fmt, fourcc, dup, (offset, stride), plane1) {
+            Held::Published => {}
+            Held::Dropped => return true,
+            Held::NoHold => break 'passthrough PassthroughFallback::NoHold,
+        }
         // Once per geometry, not once: a resize renegotiates the pool, and a stale
         // stride against a new size is a sheared picture.
         static LAST: std::sync::Mutex<(usize, usize, u32, u32)> =
@@ -586,7 +612,7 @@ fn try_passthrough(ud: &mut UserData, a: &mut Arrival) -> bool {
                 offset,
                 stride,
                 // The held buffer's own fd: the consumer may already have closed the dup.
-                fd_size = data_fd(&datas[0]).map_or(0, |fd| pf_dmabuf::byte_len(fd).unwrap_or(0)),
+                fd_size = data_fd(&a.datas[0]).map_or(0, |fd| pf_dmabuf::byte_len(fd).unwrap_or(0)),
                 modifier = ud.modifier,
                 fourcc = format_args!("{:#010x}", fourcc),
                 source = match fmt {
@@ -611,112 +637,97 @@ fn try_passthrough(ud: &mut UserData, a: &mut Arrival) -> bool {
 /// which withdraws the planar offer. `true` = the frame ends here; `false` = take the CPU
 /// de-pad.
 fn try_gpu_hold(ud: &mut UserData, a: &mut Arrival) -> bool {
-    let (datas, w, h) = (&*a.datas, a.w, a.h);
-    let mut gpu_import_broken = false;
-    if ud.signals.has_importer.load(Ordering::Relaxed) {
-        if let Some(fmt) = ud.format {
-            let hdr_tiled = fmt.is_rgb10() && ud.modifier != 0;
-            if hdr_tiled && !ud.hdr_tiled_raw {
-                warn_once(
-                    "10-bit frame arrived with a tiled modifier — the GPU de-tile blit is 8-bit, \
-                     so this stream falls back to the CPU path (the producer ignored our \
-                     LINEAR-only 10-bit offer)",
-                );
-            }
-            if datas[0].type_() == pw::spa::buffer::DataType::DmaBuf
-                && (!hdr_tiled || ud.hdr_tiled_raw)
-            {
-                let Some(fourcc) = pf_frame::drm_fourcc(fmt) else {
-                    return true; // format has no DRM fourcc mapping — skip the frame
-                };
-                let plane = pf_zerocopy::DmabufPlane {
-                    fd: datas[0].fd(),
-                    offset: datas[0].chunk().offset(),
-                    stride: datas[0].chunk().stride().max(0) as u32,
-                };
-                let Ok(plane1) = second_plane(fmt, datas) else {
-                    return true;
-                };
-                // An in-process importer's GL context is current on this thread only.
-                let consumer_imports = !ud.signals.importer_in_process.load(Ordering::Relaxed);
-                if let Some(dup) = consumer_imports.then(|| dup_data_fd(&datas[0])).flatten() {
-                    if let Some(hold) = ud.try_defer(a.pw_buf, a.stream) {
-                        let frame = CapturedFrame {
-                            provenance: Default::default(),
-                            width: w as u32,
-                            height: h as u32,
-                            pts_ns: a.pts_ns,
-                            format: fmt,
-                            payload: FramePayload::Dmabuf(DmabufFrame {
-                                fd: dup,
-                                fourcc,
-                                modifier: ud.modifier,
-                                offset: plane.offset,
-                                stride: plane.stride,
-                                plane1,
-                                hold: Some(hold),
-                                health: ud.signals.health.clone(),
-                                rebuild: ud.signals.broken.clone(),
-                            }),
-                            cursor: ud.cursor.overlay(),
-                        };
-                        ud.publish(frame, a.fence.take());
-                        return true;
-                    }
-                    if holds_possible(zerocopy_hold_enabled(), ud.pool.live) {
-                        ud.held_drops += 1;
-                        return true;
-                    }
-                }
-                if matches!(fmt, PixelFormat::Nv12 | PixelFormat::P010) {
-                    let health = &ud.signals.health;
-                    if health.note_raw_import_failure(ud.modifier, "producer NV12 without a hold") {
-                        ud.signals.broken.store(true, Ordering::Relaxed);
-                    }
-                    return true;
-                }
-                wait_here(a.fence.take());
-                let cell = ud.signals.importer.clone();
-                let mut guard = cell.lock().unwrap_or_else(|e| e.into_inner());
-                if let Some(importer) = guard.as_mut() {
-                    match gpu_import(
-                        importer,
-                        ud.import_policy,
-                        &mut ud.import_state,
-                        &ud.signals,
-                        fmt,
-                        w as u32,
-                        h as u32,
-                        plane,
-                        ud.modifier,
-                    ) {
-                        ImportOutcome::Frame(devbuf, out_fmt) => {
-                            let frame = CapturedFrame {
-                                provenance: Default::default(),
-                                width: w as u32,
-                                height: h as u32,
-                                pts_ns: a.pts_ns,
-                                format: out_fmt,
-                                payload: FramePayload::Cuda(devbuf),
-                                cursor: ud.cursor.overlay(),
-                            };
-                            ud.publish(frame, None);
-                            return true;
-                        }
-                        ImportOutcome::Dropped => return true,
-                        ImportOutcome::ImporterLost => gpu_import_broken = true,
-                    }
-                }
-                if gpu_import_broken {
-                    *guard = None;
-                }
-            }
+    if !ud.signals.has_importer.load(Ordering::Relaxed) {
+        return false;
+    }
+    let Some(fmt) = ud.format else {
+        return false;
+    };
+    let hdr_tiled = fmt.is_rgb10() && ud.modifier != 0;
+    if hdr_tiled && !ud.hdr_tiled_raw {
+        warn_once(
+            "10-bit frame arrived with a tiled modifier — the GPU de-tile blit is 8-bit, \
+             so this stream falls back to the CPU path (the producer ignored our \
+             LINEAR-only 10-bit offer)",
+        );
+        return false;
+    }
+    let datas = &*a.datas;
+    if datas[0].type_() != pw::spa::buffer::DataType::DmaBuf {
+        return false;
+    }
+    let Some(fourcc) = pf_frame::drm_fourcc(fmt) else {
+        return true; // format has no DRM fourcc mapping — skip the frame
+    };
+    let plane = pf_zerocopy::DmabufPlane {
+        fd: datas[0].fd(),
+        offset: datas[0].chunk().offset(),
+        stride: datas[0].chunk().stride().max(0) as u32,
+    };
+    let Ok(plane1) = second_plane(fmt, datas) else {
+        return true;
+    };
+    // An in-process importer's GL context is current on this thread only.
+    let consumer_imports = !ud.signals.importer_in_process.load(Ordering::Relaxed);
+    if let Some(dup) = consumer_imports.then(|| dup_data_fd(&datas[0])).flatten() {
+        let held = publish_held(
+            ud,
+            a,
+            fmt,
+            fourcc,
+            dup,
+            (plane.offset, plane.stride),
+            plane1,
+        );
+        if !matches!(held, Held::NoHold) {
+            return true;
         }
     }
-    if gpu_import_broken {
-        ud.signals.has_importer.store(false, Ordering::Relaxed);
+    if matches!(fmt, PixelFormat::Nv12 | PixelFormat::P010) {
+        let health = &ud.signals.health;
+        if health.note_raw_import_failure(ud.modifier, "producer NV12 without a hold") {
+            ud.signals.broken.store(true, Ordering::Relaxed);
+        }
+        return true;
     }
-    false
+    wait_here(a.fence.take());
+    let cell = ud.signals.importer.clone();
+    let mut guard = cell.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(importer) = guard.as_mut() else {
+        return false;
+    };
+    match gpu_import(
+        importer,
+        ud.import_policy,
+        &mut ud.import_state,
+        &ud.signals,
+        fmt,
+        a.w as u32,
+        a.h as u32,
+        plane,
+        ud.modifier,
+    ) {
+        ImportOutcome::Frame(devbuf, out_fmt) => {
+            let frame = CapturedFrame {
+                provenance: Default::default(),
+                width: a.w as u32,
+                height: a.h as u32,
+                pts_ns: a.pts_ns,
+                format: out_fmt,
+                payload: FramePayload::Cuda(devbuf),
+                cursor: ud.cursor.overlay(),
+            };
+            ud.publish(frame, None);
+            true
+        }
+        ImportOutcome::Dropped => true,
+        ImportOutcome::ImporterLost => {
+            *guard = None;
+            drop(guard);
+            ud.signals.has_importer.store(false, Ordering::Relaxed);
+            false
+        }
+    }
 }
 
 /// The CPU lane: wait the render out, de-pad one packed plane out of the mapped buffer, blit

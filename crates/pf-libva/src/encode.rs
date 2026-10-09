@@ -21,6 +21,10 @@ use anyhow::anyhow;
 use anyhow::bail;
 use anyhow::Context as _;
 use anyhow::Result;
+use pf_vaapi::config::VA_CONFIG_ATTRIB_RT_FORMAT;
+use pf_vaapi::config::VA_PROFILE_H264_HIGH;
+use pf_vaapi::config::VA_RT_FORMAT_YUV420;
+use pf_vaapi::config::VA_RT_FORMAT_YUV420_10;
 use pf_vaapi::enc_h264 as vah;
 use pf_vaapi::enc_h265 as vahevc;
 use pf_vaapi::enc_h265::HevcFeatures;
@@ -34,20 +38,16 @@ use pf_vaapi::hevc::HevcSlice;
 use pf_vaapi::vpp::rt_format_for;
 use pf_vaapi::vpp::VA_RT_FORMAT_RGB32;
 use pf_vaapi::vpp::VA_RT_FORMAT_RGB32_10;
-use pf_vaapi::vpp::VA_RT_FORMAT_YUV420;
-use pf_vaapi::vpp::VA_RT_FORMAT_YUV420_10;
 
 use crate::vpp::Vpp;
 use crate::Display;
 use crate::DmabufSource;
 use crate::VaBufferId;
+use crate::VaConfigAttrib;
 use crate::VaContextId;
 use crate::VaSurfaceId;
 use crate::VA_INVALID_ID;
-use crate::VA_PROGRESSIVE;
 
-const VA_PROFILE_H264_HIGH: c_int = 7;
-const VA_CONFIG_ATTRIB_RT_FORMAT: u32 = 0;
 const VA_CONFIG_ATTRIB_RATE_CONTROL: u32 = 5;
 const VA_CONFIG_ATTRIB_ENC_PACKED_HEADERS: u32 = 10;
 /// `VASurfaceStatus`: work is still queued against the surface.
@@ -59,14 +59,6 @@ const VA_STATUS_ERROR_UNIMPLEMENTED: c_int = 0x0000_0014;
 /// `vaSyncBuffer`: the exact coded output is not complete at the requested deadline.
 const VA_STATUS_ERROR_TIMEDOUT: c_int = 0x0000_0026;
 const VA_TIMEOUT_INFINITE: u64 = u64::MAX;
-
-/// `VAConfigAttrib`: a type/value pair, and the shape `vaCreateConfig` takes.
-#[repr(C)]
-#[derive(Clone, Copy, Debug)]
-struct VaConfigAttrib {
-    kind: u32,
-    value: u32,
-}
 
 /// Which codec a session opens, and the facts only that codec needs.
 #[derive(Clone, Copy, Debug)]
@@ -204,7 +196,8 @@ impl Encoder {
     /// Four lets VideoProc for the next frame overlap prior encode work under contention.
     const CODED_BUFS: usize = 4;
 
-    /// Open a session on `display`.
+    /// Open a session on `display`. An error destroys the config and context made
+    /// here; the surfaces and coded buffers go with the display, which this owns.
     pub fn new(display: Display, params: SessionParams, codec: CodecParams) -> Result<Self> {
         let coded_w = i32::from(params.width_in_mbs()) * 16;
         let coded_h = i32::from(params.height_in_mbs()) * 16;
@@ -352,22 +345,7 @@ impl Encoder {
                 value: packed,
             },
         ];
-
-        let mut config = VA_INVALID_ID;
-        // SAFETY: `attribs` is a live array of `attribs.len()` `VAConfigAttrib`, the
-        // profile and entrypoint are libva enum values, and `config` is a local the
-        // call writes through. Nothing here outlives the call but `config`.
-        let status = unsafe {
-            (display.va.create_config)(
-                display.display,
-                profile,
-                entrypoint,
-                attribs.as_ptr() as *mut c_void,
-                attribs.len() as c_int,
-                &mut config,
-            )
-        };
-        display.va.check("vaCreateConfig", status)?;
+        let config = display.create_config(profile, entrypoint, &attribs)?;
 
         let slot_count = usize::from(params.slots.max(1));
         let surface_count = Self::SURFACES + slot_count + 1;
@@ -387,23 +365,8 @@ impl Encoder {
             )
         };
         display.va.check("vaCreateSurfaces", status)?;
-
-        let mut context = VA_INVALID_ID;
-        // SAFETY: `config` and every id in `surfaces` were just created on this
-        // display; `context` is a local written through.
-        let status = unsafe {
-            (display.va.create_context)(
-                display.display,
-                config,
-                coded_w,
-                coded_h,
-                VA_PROGRESSIVE as c_int,
-                surfaces.as_mut_ptr(),
-                surface_count as c_int,
-                &mut context,
-            )
-        };
-        display.va.check("vaCreateContext", status)?;
+        let context =
+            display.create_context(config.id(), coded_w as u32, coded_h as u32, &mut surfaces)?;
 
         // A coded buffer must hold the largest picture the session can emit. An IDR
         // at a low QP is far bigger than the average rate suggests; the uncompressed
@@ -417,7 +380,7 @@ impl Encoder {
             let status = unsafe {
                 (display.va.create_buffer)(
                     display.display,
-                    context,
+                    context.id(),
                     vah::VA_ENC_CODED_BUFFER_TYPE,
                     coded_size,
                     1,
@@ -433,6 +396,7 @@ impl Encoder {
         let vpp = Vpp::new(&display, params.width, params.height)?;
 
         let recon = surfaces.split_off(Self::SURFACES);
+        let (config, context) = (config.keep(), context.keep());
         Ok(Self {
             display,
             codec,

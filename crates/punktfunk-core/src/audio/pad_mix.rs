@@ -1,10 +1,10 @@
-//! DualSense pad audio (`0xD1`), the platform-free half: the mixer that interleaves the haptics
-//! and speaker lanes into the pad's four-channel frame, seq-gap PLC sizing, and the liveness
-//! clock that hands the coils between haptics and wire rumble. Decoding and the sink stay in
-//! each client.
+//! DualSense pad audio (`0xD1`), the platform-free half: the per-kind Opus decode stage with
+//! seq-gap PLC, the mixer that interleaves the haptics and speaker lanes into the pad's
+//! four-channel frame, and the liveness clock that hands the coils between haptics and wire
+//! rumble. The sink, pad latching and tallies stay in each client.
 
 use crate::audio::{AudioGapTracker, SAMPLE_RATE_HZ};
-use crate::quic::{PAD_AUDIO_KIND_HAPTICS, PAD_AUDIO_KIND_SPEAKER};
+use crate::quic::{PadAudioFrame, PAD_AUDIO_KIND_HAPTICS, PAD_AUDIO_KIND_SPEAKER};
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::OnceLock;
@@ -130,6 +130,125 @@ pub fn plc_frames(gaps: &mut AudioGapTracker, seq: u32, frame_samples: usize) ->
     }
     gaps.set_frame_us((frame_samples as u64 * 1_000_000 / SAMPLE_RATE_HZ as u64) as u32);
     gaps.missing_before(seq)
+}
+
+/// Largest Opus frame per channel: 120 ms at 48 kHz. [`PadDecode::decode_frame`]'s `pcm` holds
+/// this many stereo frames.
+pub const MAX_FRAME_SAMPLES: usize = 5_760;
+
+/// A sample type libopus decodes into: `i16` for a usbfs sink, `f32` for PipeWire and WASAPI.
+#[cfg(feature = "quic")]
+pub trait PadSample: Copy + Default {
+    fn decode(dec: &mut opus::Decoder, opus: &[u8], pcm: &mut [Self]) -> opus::Result<usize>;
+}
+
+#[cfg(feature = "quic")]
+impl PadSample for i16 {
+    fn decode(dec: &mut opus::Decoder, opus: &[u8], pcm: &mut [i16]) -> opus::Result<usize> {
+        dec.decode(opus, pcm, false)
+    }
+}
+
+#[cfg(feature = "quic")]
+impl PadSample for f32 {
+    fn decode(dec: &mut opus::Decoder, opus: &[u8], pcm: &mut [f32]) -> opus::Result<usize> {
+        dec.decode_float(opus, pcm, false)
+    }
+}
+
+/// One kind's stereo 48 kHz decoder, its seq-gap tracker, and the last decoded frame size, the
+/// unit PLC synthesises in.
+#[cfg(feature = "quic")]
+struct KindStream {
+    dec: opus::Decoder,
+    gaps: AudioGapTracker,
+    frame_samples: usize,
+}
+
+/// The decode stage of one rendered pad: both kinds' Opus streams into a [`QuadMixer`]. The
+/// player's settings gate each kind; a kind's decoder is created on its first frame.
+#[cfg(feature = "quic")]
+pub struct PadDecode {
+    haptics: bool,
+    speaker: bool,
+    kinds: [Option<KindStream>; 2],
+}
+
+#[cfg(feature = "quic")]
+impl PadDecode {
+    pub fn new(haptics: bool, speaker: bool) -> PadDecode {
+        PadDecode {
+            haptics,
+            speaker,
+            kinds: [None, None],
+        }
+    }
+
+    /// Whether the settings render `kind`. The host sends only the kinds this client declared;
+    /// the re-check keeps a stale host from forcing one.
+    pub fn wants(&self, kind: u8) -> bool {
+        match kind {
+            PAD_AUDIO_KIND_HAPTICS => self.haptics,
+            PAD_AUDIO_KIND_SPEAKER => self.speaker,
+            _ => false,
+        }
+    }
+
+    /// Conceal the seq gap before `frame`, then decode it, all into `mixer`. A frozen seq (host
+    /// gate closed) sends nothing and conceals nothing. Returns the samples per channel `frame`
+    /// decoded to, at the front of `pcm`; `None` for an unwanted kind, an empty (DTX) payload or
+    /// a decode error. `pcm` holds [`MAX_FRAME_SAMPLES`] stereo frames.
+    pub fn decode_frame<S: PadSample>(
+        &mut self,
+        frame: &PadAudioFrame,
+        pcm: &mut [S],
+        mixer: &mut QuadMixer<S>,
+    ) -> Option<usize> {
+        if !self.wants(frame.kind) {
+            return None;
+        }
+        let st = match &mut self.kinds[usize::from(frame.kind)] {
+            Some(st) => st,
+            slot @ None => match opus::Decoder::new(SAMPLE_RATE_HZ, opus::Channels::Stereo) {
+                Ok(dec) => slot.insert(KindStream {
+                    dec,
+                    gaps: AudioGapTracker::new(),
+                    frame_samples: 0,
+                }),
+                Err(e) => {
+                    tracing::warn!(error = %e, kind = frame.kind, "pad-audio opus decoder");
+                    return None;
+                }
+            },
+        };
+        let plc = st.frame_samples * 2;
+        for _ in 0..plc_frames(&mut st.gaps, frame.seq, st.frame_samples) {
+            match S::decode(&mut st.dec, &[], &mut pcm[..plc]) {
+                Ok(n) => mixer.push(frame.kind, &pcm[..n * 2], Instant::now()),
+                Err(_) => break,
+            }
+        }
+        if frame.opus.is_empty() {
+            return None;
+        }
+        match S::decode(&mut st.dec, &frame.opus, pcm) {
+            Ok(n) => {
+                st.frame_samples = n;
+                mixer.push(frame.kind, &pcm[..n * 2], Instant::now());
+                Some(n)
+            }
+            Err(e) => {
+                tracing::debug!(error = %e, kind = frame.kind, "pad-audio opus decode");
+                None
+            }
+        }
+    }
+}
+
+/// Whether `frame` hands the coils to haptics: a haptics payload with a sink open to play it.
+/// An empty keep-alive is no evidence, so it never takes the coils from rumble.
+pub fn is_haptics_evidence(frame: &PadAudioFrame, sink_open: bool) -> bool {
+    frame.kind == PAD_AUDIO_KIND_HAPTICS && !frame.opus.is_empty() && sink_open
 }
 
 /// The host gates haptics at −60 dBFS with a 250 ms hangover, so a title that only rumbles sends
@@ -322,6 +441,50 @@ mod tests {
         assert_eq!(plc_frames(&mut g, 7, 0), 0);
         assert_eq!(plc_frames(&mut g, 12, 0), 0);
         assert_eq!(plc_frames(&mut g, 13, 480), 0);
+    }
+
+    fn frame(kind: u8, seq: u32, opus: &[u8]) -> PadAudioFrame {
+        let wire = crate::quic::encode_pad_audio_datagram(0, kind, seq, 0, opus);
+        crate::quic::decode_pad_audio_datagram(&wire).expect("a whole pad-audio datagram")
+    }
+
+    /// An off kind decodes nothing; a seq gap conceals in the stream's own frames before the
+    /// frame that revealed it; DTX decodes nothing. Both sample types share one decoder.
+    #[cfg(feature = "quic")]
+    #[test]
+    fn the_stage_gates_kinds_and_conceals_gaps_before_decoding() {
+        let mut enc = opus::Encoder::new(48_000, opus::Channels::Stereo, opus::Application::Audio)
+            .expect("opus encoder");
+        let packet = enc
+            .encode_vec_float(&[0.0f32; 480 * 2], 4_000)
+            .expect("encode one 10 ms stereo frame");
+        let mut stage = PadDecode::new(false, true);
+        let mut pcm = vec![0f32; MAX_FRAME_SAMPLES * 2];
+        let mut m = QuadMixer::<f32>::new(4_800);
+        let hap = frame(PAD_AUDIO_KIND_HAPTICS, 0, &packet);
+        assert_eq!(stage.decode_frame(&hap, &mut pcm, &mut m), None);
+        assert_eq!(m.ready_frames(), 0, "haptics are off");
+        let spk = |seq| frame(PAD_AUDIO_KIND_SPEAKER, seq, &packet);
+        assert_eq!(stage.decode_frame(&spk(0), &mut pcm, &mut m), Some(480));
+        assert_eq!(stage.decode_frame(&spk(3), &mut pcm, &mut m), Some(480));
+        assert_eq!(m.ready_frames(), 480 * 4, "seq 1 and 2 concealed");
+        let dtx = frame(PAD_AUDIO_KIND_SPEAKER, 4, &[]);
+        assert_eq!(stage.decode_frame(&dtx, &mut pcm, &mut m), None);
+        assert_eq!(m.ready_frames(), 480 * 4);
+        let mut pcm16 = vec![0i16; MAX_FRAME_SAMPLES * 2];
+        let mut m16 = QuadMixer::<i16>::new(4_800);
+        assert_eq!(stage.decode_frame(&spk(5), &mut pcm16, &mut m16), Some(480));
+    }
+
+    #[test]
+    fn only_a_rendered_haptics_payload_is_evidence() {
+        let hap = frame(PAD_AUDIO_KIND_HAPTICS, 0, &[1]);
+        assert!(is_haptics_evidence(&hap, true));
+        assert!(!is_haptics_evidence(&hap, false), "no sink renders it");
+        let keep_alive = frame(PAD_AUDIO_KIND_HAPTICS, 0, &[]);
+        assert!(!is_haptics_evidence(&keep_alive, true));
+        let speaker = frame(PAD_AUDIO_KIND_SPEAKER, 0, &[1]);
+        assert!(!is_haptics_evidence(&speaker, true));
     }
 
     #[test]

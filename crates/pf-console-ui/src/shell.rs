@@ -11,31 +11,32 @@ use crate::anim::{springs, Spring};
 use crate::glyphs::GlyphStyle;
 use crate::library::LibraryShared;
 use crate::model::{
-    ConsoleBus, ConsoleCmd, ConsoleShared, HostRow, PairPhase, ProfilesAnswer, SpeedPhase,
-    SpeedStatus, WakeStatus,
+    ConsoleBus, ConsoleCmd, ConsoleShared, HostRow, PairPhase, SpeedPhase, SpeedStatus, WakeStatus,
 };
-use crate::palette::{field_camera, field_motion, field_sksl, palette, VIOLET_FIELD};
 use crate::platform::Platform;
 #[cfg(test)]
 use crate::pointer::DRAG_TICK_DP;
 use crate::pointer::{Pointer, PointerKind, Touch};
 use crate::screens::home::HomeScreen;
-use crate::screens::{Bg, ConnectIntent, Ctx, Nav, Outbox, ProfileAsk, Screen, Seated};
+use crate::screens::{Bg, ConnectIntent, Ctx, Nav, Outbox, Screen};
 use crate::store::SettingsStore;
-use anyhow::{anyhow, Result};
+use anyhow::Result;
 use pf_client_core::console::OverlayAction;
 use pf_client_core::menu_nav::{MenuDir, MenuEvent, MenuPulse, PadInfo};
-use pf_client_core::profiles::{seat_gate, SeatGate};
 use pf_client_core::start;
 use pf_client_core::trust;
-use skia_safe::{Canvas, Color4f, Data, Image, Paint, Rect, RuntimeEffect, Surface};
-use std::cell::RefCell;
+use skia_safe::{Canvas, Color4f, Image, Rect};
 use std::collections::VecDeque;
 use std::sync::Arc;
 use std::time::Instant;
 
+mod backdrop;
+mod connect;
 mod overlays;
 mod render;
+
+use backdrop::Backdrop;
+use connect::{Asking, Connecting, Launching, SeatWait};
 
 /// Reduced-motion nav: 0.22 s, critically damped. `render.rs` draws it as a
 /// crossfade (no slide, no scale). Instant swap would drop the only spatial cue.
@@ -110,16 +111,6 @@ impl Tab {
     }
 }
 
-/// Long edge of the backdrop's offscreen, px. The field is a pure function of `xy/u_res`
-/// and soft, so a small buffer blitted up holds the same picture at any glass size — its
-/// per-pixel noise never scales with a 4K surface. The reduced interface takes a quarter of
-/// 384's pixels: on a 2025 LG TV the noise costs ~29 ms of GPU at 384 and ~8 ms at 192.
-const FIELD_EDGE: f64 = 512.0;
-const FIELD_EDGE_REDUCED: f64 = 192.0;
-/// Seconds between backdrop re-renders (~25 Hz). The field morphs slowly, so the step is
-/// invisible; a frozen (reduce-motion) field renders once.
-const FIELD_STEP: f64 = 0.04;
-
 /// Paint recipe for a transition. Distinct from spring direction: a reversed
 /// push still paints as a push.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -191,132 +182,8 @@ struct Toast {
     seat: Spring,
 }
 
-/// A connect waiting on its box's profile list (§10.1) before it dials.
-struct Asking {
-    intent: ConnectIntent,
-    ask: ProfileAsk,
-    since: f64,
-}
-
-/// Seconds a connect waits for the profile list before it dials with the card's saved pick.
-const PROFILES_WAIT: f64 = 3.0;
-/// A list slower than this puts the connect card up; a fast one shows nothing.
-const ASKING_CARD_AFTER: f64 = 0.25;
-
-/// A connect waiting for its profile's seat to come up (§9.2). There is no timeout: Back is
-/// the way out.
-struct SeatWait {
-    intent: ConnectIntent,
-    mgmt: u16,
-    /// The profile's id and name, for the poll and the title.
-    id: String,
-    name: String,
-    /// The progress line the host last gave.
-    detail: Option<String>,
-    /// When the list was last asked for.
-    polled: f64,
-    /// Takeover fade-in, 0 → 1.
-    appear: f64,
-}
-
-/// Seconds between asks for the profile list while a seat comes up.
-const SEAT_POLL: f64 = 2.0;
-
-struct Connecting {
-    title: String,
-    appear: f64,
-    /// Host is parked pending operator approval. Takeover title is
-    /// "Waiting for approval", not "Connecting".
-    request_access: bool,
-}
-
-/// Where the launch hold asks after its title: the shelf's host, on the
-/// management lane the shelf already reads `/status` from.
-struct LaunchHost {
-    id: String,
-    addr: String,
-    mgmt: u16,
-    fp_hex: String,
-}
-
-/// One screen from the press to the game: the cover leaves its shelf tile, and
-/// holds — through the dial, then over the stream — until the game is up.
-///
-/// Every launch begins with the launcher's own window (Steam booting, a
-/// desktop) — the first thing a player used to see of a game. The host tells
-/// `launching` from `running` per lease (`punktfunk-host::gamelease`), and a
-/// paired client may read it, so the hold polls that until it changes.
-///
-/// Raised at the press rather than at the first frame, because the shelf is
-/// only on screen then — it is the one moment the cover has somewhere to fly
-/// FROM — and holding from there means the launcher is never seen at all.
-/// Replaces the [`Connecting`] card for a game launch; the two would otherwise
-/// be two takeovers for one act.
-struct Launching {
-    host: LaunchHost,
-    title: String,
-    /// `PC · 2024 · Steam` — where the host filed it, in the order a player scans it.
-    facts: String,
-    /// Studio, and the genres joined; either may be empty, and an older host sends neither.
-    developer: String,
-    genres: String,
-    /// Backdrop and copy fade, 0 → 1.
-    appear: f64,
-    /// The cover's flight out of its tile, 0 (tile) → 1 (settled).
-    flight: Spring,
-    /// The tile it leaves, in the shell's layout space. Empty = no tile to
-    /// leave (a keyboard launch off a culled row), so it arrives in place.
-    from: Rect,
-    /// The dial landed. Before it, a press cancels the connect and there is no
-    /// session to ask the host about; after it, a press shows the stream.
-    connected: bool,
-    since: f64,
-    last_poll: f64,
-    /// `status_gen` when the hold began; a state read before that describes
-    /// an earlier launch of the same title and must not end this one.
-    base_gen: u64,
-    /// `status_gen` when the last poll went out — the next waits for it to move.
-    poll_gen: u64,
-    /// The game is up and the host is waiting for its window.
-    window_wait: bool,
-    /// The title's files, while the host fetches them before it opens the stream.
-    download: Option<pf_client_core::library::DownloadProgress>,
-    /// Why the hold gave up, once it has. Latched: the hold holds the screen and says this
-    /// instead of sliding away onto a desktop nobody asked for.
-    failed: Option<String>,
-}
-
-/// Why the hold is giving up, in one sentence, or `None` while it should keep waiting.
-///
-/// `state` is the host's own `games[]` word for this title, `None` when the host lists nothing
-/// for it at all — which is what a refused launch looks like from here. The touch shell's
-/// `launchGaveUp` says the same three sentences, so a report quotes one line whichever shell
-/// it came from. `running`, `untracked` and `grace` keep waiting or reveal: those launches worked.
-fn launch_gave_up(title: &str, state: Option<&str>, elapsed: f64) -> Option<String> {
-    match state {
-        None if elapsed >= LAUNCH_NO_LEASE => Some(format!(
-            "The host didn't start {title} — nothing is running for it."
-        )),
-        Some("launching") if elapsed >= LAUNCH_HOLD_MAX => {
-            Some(format!("{title} is still starting after 2 minutes."))
-        }
-        Some("exited") => Some(format!("{title} closed right after starting.")),
-        _ => None,
-    }
-}
-
-/// Poll interval for the launch hold, and the retry when an answer never lands.
-const LAUNCH_POLL: f64 = 1.0;
 /// Seconds between `/status` reads while a shelf tile shows a live download.
 const DOWNLOADS_POLL: f64 = 2.0;
-const LAUNCH_POLL_STALL: f64 = 5.0;
-/// The host lists nothing for the title: the launch did not resolve
-/// (no recipe, launcher missing). The host logs it and streams on; so do we.
-const LAUNCH_NO_LEASE: f64 = 15.0;
-/// A game still `launching`, or `running` without its window, this long is one
-/// the player wants to see for themselves — a cold Steam boot with shader work
-/// runs to minutes, and the host waits five for it.
-const LAUNCH_HOLD_MAX: f64 = 120.0;
 
 /// Host-supplied construction options.
 pub struct ConsoleOptions {
@@ -325,8 +192,9 @@ pub struct ConsoleOptions {
     /// The About row's version, verbatim. `None` shows this kit's version: right where the
     /// app ships from this workspace.
     pub version: Option<String>,
-    /// Steam Deck: Steam's keyboard types; this shell never draws one.
-    pub deck: bool,
+    /// The device's own keyboard types into an open field: Steam's on a Steam Deck, tvOS's
+    /// on an Apple TV. This shell never raises its keyboard tray.
+    pub system_keyboard: bool,
     /// A TV (Apple TV, Android TV): rows for a clipboard or a phone's sensors do nothing.
     pub tv: bool,
     /// Host has another UI when the console is off (phone/tablet touch shell).
@@ -365,11 +233,11 @@ pub struct DeviceScreen {
 }
 
 impl ConsoleOptions {
-    pub fn desktop(device_name: String, deck: bool) -> ConsoleOptions {
+    pub fn desktop(device_name: String, system_keyboard: bool) -> ConsoleOptions {
         ConsoleOptions {
             device_name,
             version: None,
-            deck,
+            system_keyboard,
             tv: false,
             fallback_ui: false,
             // The desktop probe reads the session's Vulkan device, which the console does
@@ -404,6 +272,18 @@ pub const DEFAULT_GPU_CACHE_BYTES: usize = 160 << 20;
 /// It is a ceiling, not an allocation, and the shell hands its covers back
 /// before a stream takes the GPU.
 pub const MIN_GPU_CACHE_BYTES: usize = 96 << 20;
+
+/// The full-screen card that owns input, in the order input checks them. Asking and
+/// connecting coexist (the card shows after a beat), and a woken host goes on to connect.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Takeover {
+    Launching,
+    Asking,
+    SeatWait,
+    Connecting,
+    Wake,
+    Speed,
+}
 
 pub(crate) struct Shell {
     /// `stack[0]` is [`Self::tab`]'s root.
@@ -478,26 +358,8 @@ pub(crate) struct Shell {
     /// Fingerprint of a first pairing whose shelf has not opened yet. See
     /// [`Self::open_first_paired_library`].
     first_pair: Option<String>,
-    mesh: RuntimeEffect,
-    /// Palette id baked into `mesh`. [`Self::sync`] recompiles when
-    /// `settings.ui_palette` moves.
-    mesh_palette: String,
-    /// OS-theme revision baked into `mesh` while follow-system is on.
-    /// `None` for a curated palette. Pair with `mesh_palette` so `sync`
-    /// rebuilds only on the row step or a real theme change.
-    mesh_os: Option<u64>,
-    /// Palette ground × 0.4. `col*0.6 + lift` leaves the ground unchanged
-    /// and pulls the bright pools down: form screens lose contrast, not colour.
-    mesh_lift: [f32; 3],
-    /// Backdrop scrim: rgb = vignette target (black on dark, white on pale),
-    /// a = strength. Kept with the ink.
-    mesh_scrim: [f32; 4],
-    /// Text/accent/glass for this palette, published once per frame
-    /// (see [`crate::theme::set_ink`]).
-    ink: crate::theme::Ink,
-    /// 0 = launcher aurora, 1 = form field. Chased so the backdrop settles
-    /// with the screen transition.
-    bg_mix: f64,
+    /// The field behind every screen and takeover.
+    backdrop: Backdrop,
     glyphs: GlyphStyle,
     /// Last input device (pad or keys), noted at [`Shell::note_input_source`]
     /// and [`Shell::key`]. `None` until anything drives: then the connected
@@ -527,10 +389,6 @@ pub(crate) struct Shell {
     /// The aurora phase *is* the clock; wall time never agrees across dumps.
     #[cfg(test)]
     pub(crate) fake_clock: Option<(f64, f64)>,
-    /// The reduced backdrop's retained pass — [`Shell::draw_field_reduced`]. A cell
-    /// because the takeover chain borrows overlay state while it draws, so `&mut self`
-    /// never reaches here.
-    field: RefCell<Option<FieldCache>>,
 }
 
 impl Shell {
@@ -556,11 +414,13 @@ impl Shell {
             }
         };
         let settings = store.load();
-        let (mesh, mesh_lift, mesh_scrim, ink) = build_mesh(&settings.ui_palette)?;
-        let bg_mix = match stack.last().expect("non-empty").background() {
-            Bg::Aurora => 0.0,
-            Bg::Form => 1.0,
-        };
+        let backdrop = Backdrop::new(
+            &settings.ui_palette,
+            match stack.last().expect("non-empty").background() {
+                Bg::Aurora => 0.0,
+                Bg::Form => 1.0,
+            },
+        )?;
         Ok(Shell {
             tab: Tab::of(&stack[0]),
             stack,
@@ -579,15 +439,13 @@ impl Shell {
             downloads_polled: f64::NEG_INFINITY,
             bus,
             actions: VecDeque::new(),
-            mesh_palette: settings.ui_palette.clone(),
-            mesh_os: None,
             settings,
             store,
             device: crate::screens::Device {
                 platform: opts.platform,
                 screen: opts.screen,
                 native_mode: None,
-                deck: opts.deck,
+                system_keyboard: opts.system_keyboard,
                 tv: opts.tv,
                 fallback_ui: opts.fallback_ui,
                 pyrowave_ok: opts.pyrowave_ok,
@@ -615,11 +473,7 @@ impl Shell {
             speed_view: overlays::SpeedView::default(),
             toast: None,
             first_pair: None,
-            mesh,
-            mesh_lift,
-            mesh_scrim,
-            ink,
-            bg_mix,
+            backdrop,
             glyphs: GlyphStyle::Keyboard,
             input_source: None,
             chip: None,
@@ -635,7 +489,6 @@ impl Shell {
             last_input: Instant::now(),
             #[cfg(test)]
             fake_clock: None,
-            field: RefCell::new(None),
         })
     }
 
@@ -665,7 +518,7 @@ impl Shell {
         self.root_targets = None;
         self.stack = stack;
         self.motion = Motion::None;
-        self.bg_mix = match self.stack.last().expect("non-empty").background() {
+        self.backdrop.bg_mix = match self.stack.last().expect("non-empty").background() {
             Bg::Aurora => 0.0,
             Bg::Form => 1.0,
         };
@@ -715,28 +568,34 @@ impl Shell {
     /// whose Back belongs to the system when the console does not want it (tvOS's Menu)
     /// asks before it binds.
     pub(crate) fn at_root(&self) -> bool {
-        self.stack.len() == 1
-            && self.strip_focus
-            && self.connecting.is_none()
-            && self.launching.is_none()
-            && self.asking.is_none()
-            && self.seat_wait.is_none()
-            && self.wake.is_none()
-            && self.speed.is_none()
+        self.stack.len() == 1 && self.strip_focus && self.takeover().is_none()
+    }
+
+    /// The takeover that owns input: the first one up, in [`Takeover`]'s order.
+    pub(crate) fn takeover(&self) -> Option<Takeover> {
+        let up = [
+            (self.launching.is_some(), Takeover::Launching),
+            (self.asking.is_some(), Takeover::Asking),
+            (self.seat_wait.is_some(), Takeover::SeatWait),
+            (self.connecting.is_some(), Takeover::Connecting),
+            (self.wake.is_some(), Takeover::Wake),
+            (self.speed.is_some(), Takeover::Speed),
+        ];
+        up.into_iter().find_map(|(on, t)| on.then_some(t))
     }
 
     pub(crate) fn editing(&self) -> bool {
         !self.in_stream
             && self.connecting.is_none()
             && !self.holds_stream()
-            && self.stack.last().is_some_and(Screen::editing)
+            && self.stack.last().is_some_and(|s| s.view().editing())
     }
 
     pub(crate) fn edit_field(&self) -> Option<crate::screens::EditField> {
         if !self.editing() {
             return None;
         }
-        self.stack.last()?.edit_field()
+        self.stack.last()?.view().edit_field()
     }
 
     /// What a screen reader should speak for the focused row. `None` while a takeover owns
@@ -747,21 +606,14 @@ impl Shell {
     /// screen — the per-frame-work-that-changes-nothing shape this shell has
     /// already paid to remove once.
     pub(crate) fn focus_announcement(&mut self) -> Option<String> {
-        if self.in_stream
-            || self.holds_stream()
-            || self.connecting.is_some()
-            || self.asking.is_some()
-            || self.seat_wait.is_some()
-            || self.wake.is_some()
-            || self.speed.is_some()
-        {
+        if self.in_stream || self.takeover().is_some() {
             return None;
         }
         if self.strip_focus && self.stack.len() == 1 {
             return Some(format!("{} tab", self.tab.name()));
         }
         let (ctx, screen) = self.ctx_and_top();
-        screen.announcement(&ctx)
+        screen.view().announcement(&ctx)
     }
 
     /// The top screen and a [`Ctx`] over the rest of the shell, borrowed apart.
@@ -794,202 +646,6 @@ impl Shell {
         self.actions.pop_front()
     }
 
-    pub(crate) fn set_connecting(&mut self, title: Option<String>) {
-        match title {
-            Some(title) => {
-                self.last_connect_title = Some(title.clone());
-                self.connecting = Some(Connecting {
-                    title,
-                    appear: 0.0,
-                    request_access: false,
-                })
-            }
-            None => self.connecting = None,
-        }
-    }
-
-    pub(crate) fn session_failed(&mut self, msg: &str) {
-        self.connecting = None;
-        self.launching = None;
-        self.in_stream = false;
-        self.reask = None;
-        if let Some(intent) = self.reask_now.take() {
-            self.reasking = true;
-            return self.start_connect(intent);
-        }
-        self.show_toast_kind(format!("Couldn't connect — {msg}"), ToastKind::Error);
-    }
-
-    /// The box no longer has the profile the last connect named: forget the card's pick and
-    /// ask its list once more. A second miss fails as any other refusal does.
-    pub(crate) fn profile_gone(&mut self) {
-        let Some(intent) = self.reask.take() else {
-            return;
-        };
-        if let Some(ask) = &intent.ask {
-            self.send_cmd(ConsoleCmd::SetProfile {
-                key: ask.key.clone(),
-                profile: None,
-            });
-        }
-        self.reask_now = Some(intent);
-    }
-
-    pub(crate) fn session_streaming(&mut self) {
-        self.connecting = None;
-        self.reask = None;
-        let t = self.t();
-        let reads = self.library.status_gen();
-        let Some(l) = &mut self.launching else {
-            self.in_stream = true;
-            return;
-        };
-        l.connected = true;
-        // The host has no lease to report until the session that launched the title
-        // exists, so the "never listed it" clock only starts making sense here — and a read
-        // taken before it, while the files downloaded, is not this session's answer.
-        l.since = t;
-        l.base_gen = reads;
-        l.last_poll = t - LAUNCH_POLL_STALL;
-        l.download = None;
-        self.in_stream = false;
-    }
-
-    /// The hold for a launched title, or `None` when there is nothing to wait for: a launcher
-    /// tile (the host never tracks those), or a title the shelf no longer lists.
-    ///
-    /// Every platform, not just the desktop. The console is the launch screen wherever it is
-    /// the launcher — a host that has a stream view of its own waits for
-    /// [`OverlayAction::ShowStream`] before switching to it, rather than drawing a second
-    /// launch screen of its own on top of this one.
-    fn launch_hold(&self, host: LaunchHost, from: Rect) -> Option<Launching> {
-        let snap = self.library.snapshot();
-        let g = snap.games.iter().find(|g| g.id == host.id)?;
-        if g.launcher {
-            return None;
-        }
-        let year = g.year.map(|y| y.to_string());
-        let facts = [
-            g.platform.as_deref(),
-            year.as_deref(),
-            Some(crate::library::store_label(&g.store)),
-        ]
-        .into_iter()
-        .flatten()
-        .collect::<Vec<_>>()
-        .join(" \u{b7} ");
-        let t = self.t();
-        let reads = self.library.status_gen();
-        Some(Launching {
-            host,
-            title: g.title.clone(),
-            facts,
-            developer: g.developer.clone().unwrap_or_default(),
-            genres: g.genres.join(" \u{b7} "),
-            appear: 0.0,
-            flight: Spring::rest(0.0),
-            from,
-            connected: false,
-            since: t,
-            // The first poll goes out on the next frame.
-            last_poll: t - LAUNCH_POLL_STALL,
-            base_gen: reads,
-            poll_gen: reads,
-            window_wait: false,
-            download: None,
-            failed: None,
-        })
-    }
-
-    /// Drop the hold and let the stream through.
-    fn reveal_stream(&mut self) {
-        self.launching = None;
-        self.in_stream = true;
-        // Hosts that swap to a stream view of their own have been holding the session since
-        // the dial landed; this is what releases it. A host that composites this console over
-        // its stream ignores it.
-        self.actions.push_back(OverlayAction::ShowStream);
-    }
-
-    /// One frame of the launch hold: reveal when the host has answered, or
-    /// when it never will; else keep the poll going.
-    fn tick_launch(&mut self) {
-        let t = self.t();
-        let reads = self.library.status_gen();
-        let Some(l) = &self.launching else { return };
-        if l.failed.is_some() {
-            return;
-        }
-        let fresh = reads > l.base_gen;
-        let download = fresh
-            .then(|| self.library.launch_download(&l.host.id))
-            .flatten();
-        // Before the dial lands the host may be fetching the title's files: the only thing to
-        // read is how far they are. The lease is the SESSION's, so a title that was already up
-        // would otherwise read as "running" and reveal a stream that does not exist.
-        if !l.connected {
-            if let Some(l) = &mut self.launching {
-                l.download = download.filter(|d| d.live());
-            }
-            self.poll_launch(t, reads);
-            return;
-        }
-        let state = fresh
-            .then(|| self.library.launch_state(&l.host.id))
-            .flatten();
-        let elapsed = t - l.since;
-        let window_wait = matches!(&state, Some((s, true)) if s == "running");
-        let word = state.as_ref().map(|(s, _)| s.as_str());
-        // A launch that produced no game ends with a sentence, not by sliding away: a bare
-        // desktop reads the same whether the host refused it or the game is merely slow. A
-        // download that stopped is that sentence, at once.
-        let stopped = word
-            .is_none()
-            .then(|| download.and_then(|d| d.stopped(&l.title)))
-            .flatten();
-        if let Some(why) = stopped.or_else(|| launch_gave_up(&l.title, word, elapsed)) {
-            if let Some(l) = &mut self.launching {
-                l.failed = Some(why);
-            }
-            return;
-        }
-        let done = match word {
-            // Both handled above, once they run out of patience.
-            Some("launching") => false,
-            // A Proton prefix or a splash can sit behind a running process for a minute.
-            Some("running") if window_wait => elapsed >= LAUNCH_HOLD_MAX,
-            // window, running, untracked, grace: the host has said all it will.
-            Some(_) => true,
-            None => false,
-        };
-        if done {
-            self.reveal_stream();
-            return;
-        }
-        self.poll_launch(t, reads);
-        if let Some(l) = &mut self.launching {
-            l.window_wait = window_wait;
-        }
-    }
-
-    /// Ask the host again once the last answer landed, or once it is overdue.
-    fn poll_launch(&mut self, t: f64, reads: u64) {
-        let Some(l) = &self.launching else { return };
-        let waited = t - l.last_poll;
-        if (reads != l.poll_gen && waited >= LAUNCH_POLL) || waited >= LAUNCH_POLL_STALL {
-            let poll = ConsoleCmd::RefreshRunning {
-                addr: l.host.addr.clone(),
-                mgmt: l.host.mgmt,
-                fp_hex: l.host.fp_hex.clone(),
-            };
-            if let Some(l) = &mut self.launching {
-                l.last_poll = t;
-                l.poll_gen = reads;
-            }
-            self.bus.send(poll);
-        }
-    }
-
     pub(crate) fn device_name(&self) -> &str {
         &self.device.name
     }
@@ -997,47 +653,6 @@ impl Shell {
     /// The OS's answer when the host read one, else the console's own row.
     pub(crate) fn reduce_motion(&self) -> bool {
         crate::os_theme::os_reduce_motion().unwrap_or(self.settings.reduce_motion)
-    }
-
-    pub(crate) fn session_ended(&mut self, reason: Option<&str>) {
-        self.connecting = None;
-        self.launching = None;
-        self.in_stream = false;
-        // Stack survives a stream, so nothing else refreshes the running set:
-        // without this the Resume badge still names the title they just quit.
-        // Catalog is left alone — a re-fetch would swap the shelf for a spinner.
-        if let Some(lib) = self.stack.last().and_then(Screen::shelf) {
-            self.bus.send(ConsoleCmd::RefreshRunning {
-                addr: lib.host_addr().to_string(),
-                mgmt: lib.host_mgmt_port(),
-                fp_hex: lib.host_fp_hex().to_string(),
-            });
-        }
-        if let Some(reason) = reason {
-            self.show_toast(format!("Session ended — {reason}"));
-        }
-    }
-
-    /// Client is redialing on its own (codec fallback). Raise the connecting
-    /// modal: nothing sends `Launch` for this retry, so without it the shell
-    /// is not streaming, not connecting, and a live pump is behind the
-    /// console — A would launch a second session. Back → `CancelConnect`.
-    ///
-    /// `appear = 1.0`: the retry follows a live stream; fading in is a flash.
-    pub(crate) fn session_reconnecting(&mut self, msg: &str) {
-        self.in_stream = false;
-        self.launching = None;
-        self.connecting = Some(Connecting {
-            // `None` only if the shell never raised the connect (`--connect`
-            // has no console). Prefer a codec-change name over empty string.
-            title: self
-                .last_connect_title
-                .clone()
-                .unwrap_or_else(|| "the host".to_string()),
-            appear: 1.0,
-            request_access: false,
-        });
-        self.show_toast(msg.to_string());
     }
 
     fn show_toast(&mut self, text: String) {
@@ -1054,7 +669,7 @@ impl Shell {
     }
 
     fn sync(&mut self) {
-        self.sync_backdrop();
+        self.backdrop.sync(&self.settings);
         self.sync_hosts();
         if let Some(text) = self.console.take_notice() {
             self.show_toast(text);
@@ -1090,43 +705,6 @@ impl Shell {
             mgmt: lib.host_mgmt_port(),
             fp_hex: lib.host_fp_hex().to_string(),
         });
-    }
-
-    /// Settings writes palette/follow-OS into `self.settings`; recompile here so the
-    /// backdrop re-colours live. A rejected compile keeps the field that is drawing (never
-    /// black) and still advances bookkeeping so a broken build warns once, not once per frame.
-    fn sync_backdrop(&mut self) {
-        let (os_rev, os) = crate::os_theme::os_theme();
-        let want_os = if self.settings.follow_os_theme {
-            os
-        } else {
-            None
-        };
-        if let Some(t) = want_os {
-            if self.mesh_os != Some(os_rev) {
-                match build_mesh_os(&t) {
-                    Ok(look) => self.apply_look(look),
-                    Err(e) => tracing::warn!("console: OS theme rejected: {e}"),
-                }
-                self.mesh_os = Some(os_rev);
-            }
-        } else if self.mesh_os.is_some() || self.settings.ui_palette != self.mesh_palette {
-            match build_mesh(&self.settings.ui_palette) {
-                Ok(look) => self.apply_look(look),
-                Err(e) => {
-                    tracing::warn!(
-                        "console: {} palette rejected: {e}",
-                        self.settings.ui_palette
-                    );
-                }
-            }
-            self.mesh_os = None;
-            self.mesh_palette = self.settings.ui_palette.clone();
-        }
-    }
-
-    fn apply_look(&mut self, (mesh, lift, scrim, ink): MeshLook) {
-        (self.mesh, self.mesh_lift, self.mesh_scrim, self.ink) = (mesh, lift, scrim, ink);
     }
 
     /// The row's order is a setting too: re-arrange when either the list or it moves.
@@ -1327,203 +905,11 @@ impl Shell {
         self.mount(Tab::Games, root);
     }
 
-    /// Every connect starts here. One that asks first waits for the box's profile list
-    /// ([`Self::tick_asking`]); the rest dial now.
-    pub(crate) fn start_connect(&mut self, mut intent: ConnectIntent) {
-        let Some(ask) = intent.ask.take().filter(|_| self.device.profiles) else {
-            return self.dial_when_seated(intent);
-        };
-        // An answer left from an earlier ask is not this one's.
-        self.console.take_profiles(&intent.fp_hex);
-        self.send_cmd(ConsoleCmd::FetchProfiles {
-            addr: intent.addr.clone(),
-            mgmt: ask.mgmt,
-            fp_hex: intent.fp_hex.clone(),
-        });
-        let since = self.t();
-        self.asking = Some(Asking { intent, ask, since });
-    }
-
-    /// The asking connect, once its list lands: §10.1 through `picker_decision`. No answer
-    /// in [`PROFILES_WAIT`], or a failed one, dials with the card's saved pick.
-    fn tick_asking(&mut self) {
-        let Some(a) = &self.asking else { return };
-        let answer = self.console.take_profiles(&a.intent.fp_hex);
-        let waited = self.t() - a.since;
-        if answer.is_none() && waited < PROFILES_WAIT {
-            if waited >= ASKING_CARD_AFTER && self.connecting.is_none() {
-                let title = a.intent.title.clone();
-                self.set_connecting(Some(title));
-            }
-            return;
-        }
-        let Some(Asking {
-            mut intent, ask, ..
-        }) = self.asking.take()
-        else {
-            return;
-        };
-        self.connecting = None;
-        // A first ask may come back `profile-unknown` and ask again; the second may not.
-        let first = !std::mem::take(&mut self.reasking);
-        self.reask = first.then(|| ConnectIntent {
-            profile: None,
-            seat: None,
-            ask: Some(ProfileAsk {
-                saved: None,
-                ..ask.clone()
-            }),
-            ..intent.clone()
-        });
-        let listed = match answer {
-            Some(ProfilesAnswer::Listed(l)) if !l.is_empty() => Some(l),
-            Some(ProfilesAnswer::Listed(_) | ProfilesAnswer::NoProfiles) => None,
-            Some(ProfilesAnswer::Failed(_)) | None => return self.dial(intent),
-        };
-        // The row as it stands now: a shelf's copy predates a pick made since it opened.
-        let saved = self
-            .hosts
-            .iter()
-            .find(|h| h.host_key() == ask.key)
-            .map_or_else(|| ask.saved.clone(), |h| h.profile.clone());
-        let d = pf_client_core::profiles::picker_decision(listed.as_deref(), saved.as_ref(), None);
-        let seat = d
-            .send
-            .as_deref()
-            .zip(listed.as_deref())
-            .and_then(|(id, l)| l.iter().find(|p| p.id == id))
-            .map(|row| Seated {
-                row: row.clone(),
-                mgmt: ask.mgmt,
-            });
-        if d.picker {
-            let screen = crate::screens::profiles::ProfilesScreen::before(
-                intent,
-                ProfileAsk { saved, ..ask },
-                listed.unwrap_or_default(),
-                d.gone,
-            );
-            return self.apply_nav(Nav::Push(Box::new(Screen::Profiles(screen))));
-        }
-        if d.remember != saved {
-            self.send_cmd(ConsoleCmd::SetProfile {
-                key: ask.key,
-                profile: d.remember,
-            });
-        }
-        intent.profile = d.send;
-        intent.seat = seat;
-        self.dial_when_seated(intent);
-    }
-
-    /// The picked profile's seat decides the dial (§9.2): dial now, wake a stopped seat, or
-    /// wait for a starting one. An unavailable seat says why and does not dial.
-    fn dial_when_seated(&mut self, mut intent: ConnectIntent) {
-        let Some(Seated { row, mgmt }) = intent.seat.take() else {
-            return self.dial(intent);
-        };
-        let detail = match seat_gate(&row) {
-            SeatGate::Dial => return self.dial(intent),
-            SeatGate::Refuse(line) => return self.show_toast_kind(line, ToastKind::Error),
-            SeatGate::Wake => {
-                self.send_cmd(ConsoleCmd::WakeProfile {
-                    addr: intent.addr.clone(),
-                    mgmt,
-                    fp_hex: intent.fp_hex.clone(),
-                    id: row.id.clone(),
-                });
-                None
-            }
-            SeatGate::Wait { detail } => detail,
-        };
-        // An answer left from an earlier ask is not this wait's.
-        self.console.take_profiles(&intent.fp_hex);
-        self.seat_wait = Some(SeatWait {
-            intent,
-            mgmt,
-            id: row.id,
-            name: row.display_name,
-            detail,
-            polled: self.t(),
-            appear: 0.0,
-        });
-    }
-
-    /// While a seat comes up: read the profile list every [`SEAT_POLL`] seconds. `ready` or
-    /// `occupied` dials; `unavailable` says why and stops. A failed read waits for the next.
-    fn tick_seat_wait(&mut self) {
-        let Some(mut w) = self.seat_wait.take() else {
-            return;
-        };
-        if let Some(ProfilesAnswer::Listed(listed)) = self.console.take_profiles(&w.intent.fp_hex) {
-            // A profile the box no longer lists dials as it stands: the host answers for it.
-            let gate = listed.iter().find(|p| p.id == w.id).map(seat_gate);
-            match gate {
-                None | Some(SeatGate::Dial) => return self.dial(w.intent),
-                Some(SeatGate::Refuse(line)) => {
-                    return self.show_toast_kind(line, ToastKind::Error);
-                }
-                Some(SeatGate::Wait { detail }) => w.detail = detail,
-                Some(SeatGate::Wake) => {}
-            }
-        }
-        let now = self.t();
-        if now - w.polled >= SEAT_POLL {
-            w.polled = now;
-            self.send_cmd(ConsoleCmd::FetchProfiles {
-                addr: w.intent.addr.clone(),
-                mgmt: w.mgmt,
-                fp_hex: w.intent.fp_hex.clone(),
-            });
-        }
-        self.seat_wait = Some(w);
-    }
-
-    fn dial(&mut self, intent: ConnectIntent) {
-        // A game launch comes off a shelf, which knows both the host's management
-        // port and where it just drew the tile. A picker on top is leaving: its shelf is under it.
-        let shelf = self
-            .stack
-            .iter()
-            .rev()
-            .find(|s| !matches!(s, Screen::Profiles(_)))
-            .and_then(Screen::shelf);
-        let launch = match (&intent.launch, shelf) {
-            (Some(id), Some(lib)) => Some((
-                LaunchHost {
-                    id: id.clone(),
-                    addr: intent.addr.clone(),
-                    mgmt: lib.host_mgmt_port(),
-                    fp_hex: intent.fp_hex.clone(),
-                },
-                lib.tile_rect(id),
-            )),
-            _ => None,
-        };
-        self.launching = launch.and_then(|(host, from)| self.launch_hold(host, from));
-        if self.launching.is_none() {
-            self.set_connecting(Some(intent.title.clone()));
-            if let Some(c) = &mut self.connecting {
-                c.request_access = intent.request_access;
-            }
-        }
-        self.actions.push_back(OverlayAction::Launch {
-            addr: intent.addr,
-            port: intent.port,
-            fp_hex: intent.fp_hex,
-            launch: intent.launch,
-            title: intent.title,
-            request_access: intent.request_access,
-            preset: intent.preset,
-            profile: intent.profile,
-        });
-    }
-
     /// The strip's share of a menu event: L1/R1 from anywhere but a text field, every
     /// direction while the strip has focus. `None` leaves the event to the screen. Over a
     /// root with nothing to focus, Down stays on the strip and OK is the screen's.
     fn tab_menu(&mut self, ev: MenuEvent) -> Option<Option<MenuPulse>> {
-        let editing = self.stack.last().is_some_and(Screen::editing);
+        let editing = self.stack.last().is_some_and(|s| s.view().editing());
         match ev {
             MenuEvent::JumpBack if !editing => return Some(self.step_tab(-1)),
             MenuEvent::JumpForward if !editing => return Some(self.step_tab(1)),
@@ -1764,15 +1150,16 @@ impl Shell {
         pulse.filter(|_| self.settings.pad_rumble)
     }
 
-    /// OK went down on what has focus: its plate and the element dip.
+    /// OK went down on what has focus: its plate and the element dip. Under a takeover
+    /// nothing dips: its card has the input, and the screen beneath is hidden.
     fn dip(&mut self) {
-        if self.connecting.is_some() || self.launching.is_some() || self.seat_wait.is_some() {
+        if self.takeover().is_some() {
             return;
         }
         if self.strip_focus && self.stack.len() == 1 {
             self.strip.press();
         } else if let Some(s) = self.stack.last_mut() {
-            s.press();
+            s.view_mut().press();
         }
     }
 
@@ -1800,85 +1187,8 @@ impl Shell {
     fn menu_event(&mut self, ev: MenuEvent) -> Option<MenuPulse> {
         self.last_input = Instant::now();
         self.sync();
-        // The launch hold owns the buttons while it is up: before the dial lands B
-        // cancels it, as the connect card's B does; after, any press shows the stream.
-        if let Some(l) = &self.launching {
-            if l.connected {
-                if matches!(ev, MenuEvent::Confirm | MenuEvent::Back) {
-                    self.reveal_stream();
-                    return Some(MenuPulse::Confirm);
-                }
-            } else if ev == MenuEvent::Back {
-                self.launching = None;
-                self.actions.push_back(OverlayAction::CancelConnect);
-                return Some(MenuPulse::Confirm);
-            }
-            return None;
-        }
-        if self.asking.is_some() {
-            if ev != MenuEvent::Back {
-                return None;
-            }
-            // Nothing has dialed yet: no cancel to send.
-            self.asking = None;
-            self.connecting = None;
-            return Some(MenuPulse::Confirm);
-        }
-        if self.seat_wait.is_some() {
-            if ev != MenuEvent::Back {
-                return None;
-            }
-            // Nothing has dialed yet: no cancel to send.
-            self.seat_wait = None;
-            return Some(MenuPulse::Confirm);
-        }
-        if self.connecting.is_some() {
-            if ev == MenuEvent::Back {
-                // Drop the takeover here, not on the next `session_phase`.
-                // The dial is blocking on the host; a dropped cancel never
-                // sends a phase. Cancel is local; `CancelConnect` still goes
-                // out and hosts already handle a dial that lands after it.
-                self.connecting = None;
-                self.actions.push_back(OverlayAction::CancelConnect);
-                return Some(MenuPulse::Confirm);
-            }
-            return None;
-        }
-        if let Some(w) = &self.wake {
-            match ev {
-                MenuEvent::Back => {
-                    self.bus.send(ConsoleCmd::CancelWake);
-                    self.wake = None;
-                    self.wake_optimistic = false;
-                    return Some(MenuPulse::Confirm);
-                }
-                MenuEvent::Confirm if w.timed_out => {
-                    self.bus.send(ConsoleCmd::Wake {
-                        key: w.key.clone(),
-                        then_connect: w.then_connect,
-                    });
-                    return Some(MenuPulse::Confirm);
-                }
-                _ => return None,
-            }
-        }
-        if self.speed.is_some() {
-            match ev {
-                // Dismissing mid-burst abandons the measurement, not the burst: the host
-                // finishes it either way, and `advance_speed` drops the late report.
-                MenuEvent::Back => {
-                    self.close_speed();
-                    return Some(MenuPulse::Confirm);
-                }
-                MenuEvent::Confirm => {
-                    let kbps = self.speed_recommendation()?;
-                    let text = self.apply_speed_bitrate(kbps);
-                    self.close_speed();
-                    self.show_toast(text);
-                    return Some(MenuPulse::Confirm);
-                }
-                _ => return None,
-            }
+        if let Some(t) = self.takeover() {
+            return self.takeover_menu(t, ev);
         }
         // Back is always heard by the transition (`nav_back`). Other events
         // wait until the spring is past `NAV_INPUT_OPENS` so a double-tapped
@@ -1899,20 +1209,72 @@ impl Shell {
         let mut fx = Outbox::default();
         let pulse = {
             let (mut ctx, top) = self.ctx_and_top();
-            top.menu(ev, &mut ctx, &mut fx)
+            top.view_mut().menu(ev, &mut ctx, &mut fx)
         };
         // Up that a root screen bumps or leaves unanswered lands on its tab.
         let to_strip = self.stack.len() == 1
             && ev == MenuEvent::Move(MenuDir::Up)
             && matches!(pulse, Some(MenuPulse::Boundary) | None)
             && fx.nav.is_none()
-            && !self.stack[0].editing();
+            && !self.stack[0].view().editing();
         self.apply(fx);
         if to_strip {
             self.strip_focus = true;
             return Some(MenuPulse::Move);
         }
         pulse
+    }
+
+    /// A menu event while takeover `t` owns the input. B drops every card; the launch
+    /// hold before its dial lands and the connect card also cancel the dial. After the
+    /// dial lands, A or B on the launch hold shows the stream.
+    fn takeover_menu(&mut self, t: Takeover, ev: MenuEvent) -> Option<MenuPulse> {
+        match (t, ev) {
+            (Takeover::Launching, MenuEvent::Confirm | MenuEvent::Back)
+                if self.launching.as_ref().is_some_and(|l| l.connected) =>
+            {
+                self.reveal_stream();
+            }
+            (Takeover::Launching, MenuEvent::Back) => {
+                self.launching = None;
+                self.actions.push_back(OverlayAction::CancelConnect);
+            }
+            // Dropped here, not on the next `session_phase`: a dial blocked on the host
+            // never sends one. Hosts handle a dial that lands after the cancel.
+            (Takeover::Connecting, MenuEvent::Back) => {
+                self.connecting = None;
+                self.actions.push_back(OverlayAction::CancelConnect);
+            }
+            // Nothing has dialed yet: no cancel to send.
+            (Takeover::Asking, MenuEvent::Back) => {
+                self.asking = None;
+                self.connecting = None;
+            }
+            (Takeover::SeatWait, MenuEvent::Back) => self.seat_wait = None,
+            (Takeover::Wake, MenuEvent::Back) => {
+                self.bus.send(ConsoleCmd::CancelWake);
+                self.wake = None;
+                self.wake_optimistic = false;
+            }
+            (Takeover::Wake, MenuEvent::Confirm) => {
+                let w = self.wake.as_ref().filter(|w| w.timed_out)?;
+                self.bus.send(ConsoleCmd::Wake {
+                    key: w.key.clone(),
+                    then_connect: w.then_connect,
+                });
+            }
+            // Dismissing mid-burst abandons the measurement, not the burst: the host
+            // finishes it either way, and `advance_speed` drops the late report.
+            (Takeover::Speed, MenuEvent::Back) => self.close_speed(),
+            (Takeover::Speed, MenuEvent::Confirm) => {
+                let kbps = self.speed_recommendation()?;
+                let text = self.apply_speed_bitrate(kbps);
+                self.close_speed();
+                self.show_toast(text);
+            }
+            _ => return None,
+        }
+        Some(MenuPulse::Confirm)
     }
 
     /// Mouse and touch, device pixels. `true` = consumed.
@@ -1927,48 +1289,43 @@ impl Shell {
             y: p.y - f64::from(self.last_insets.1),
             kind: p.kind,
         };
-        // Right button is B, including on modal cards, but not on a root: a
-        // right-click there is too easy to fire by accident.
-        if let Some(l) = &self.launching {
-            let connected = l.connected;
-            if connected && (p.press() || p.kind == PointerKind::Back) {
-                self.reveal_stream();
-            } else if !connected && p.kind == PointerKind::Back {
-                self.launching = None;
-                self.actions.push_back(OverlayAction::CancelConnect);
+        // A takeover swallows every pointer event: clicking through a connect card onto
+        // the library would start a second session. Right button is its B.
+        match self.takeover() {
+            Some(Takeover::Launching) => {
+                let connected = self.launching.as_ref().is_some_and(|l| l.connected);
+                if connected && (p.press() || p.kind == PointerKind::Back) {
+                    self.reveal_stream();
+                } else if !connected && p.kind == PointerKind::Back {
+                    self.launching = None;
+                    self.actions.push_back(OverlayAction::CancelConnect);
+                }
+                return true;
             }
-            return true;
+            Some(_) if p.kind == PointerKind::Back => {
+                self.handle_menu(MenuEvent::Back);
+                return true;
+            }
+            // Cancel is the one button on the seat wait; the rest of it is not clickable.
+            Some(Takeover::SeatWait) => {
+                let on_cancel = self
+                    .hint_rects
+                    .iter()
+                    .any(|(key, r)| *key == crate::glyphs::HintKey::Back && p.hits(*r));
+                if p.press() && on_cancel {
+                    self.handle_menu(MenuEvent::Back);
+                }
+                return true;
+            }
+            Some(_) => return true,
+            None => {}
         }
+        // Right button is B, but not on a root: a right-click there is too easy to fire
+        // by accident.
         if p.kind == PointerKind::Back {
-            if self.stack.len() > 1
-                || self.connecting.is_some()
-                || self.asking.is_some()
-                || self.seat_wait.is_some()
-                || self.wake.is_some()
-                || self.speed.is_some()
-            {
+            if self.stack.len() > 1 {
                 self.handle_menu(MenuEvent::Back);
             }
-            return true;
-        }
-        // Cancel is the one button on the seat wait; the rest of it is not clickable.
-        if self.seat_wait.is_some() {
-            let on_cancel = self
-                .hint_rects
-                .iter()
-                .any(|(key, r)| *key == crate::glyphs::HintKey::Back && p.hits(*r));
-            if p.press() && on_cancel {
-                self.handle_menu(MenuEvent::Back);
-            }
-            return true;
-        }
-        // Clicking through a connect takeover onto the library would start
-        // a second session. Same early return as the menu path.
-        if self.connecting.is_some()
-            || self.asking.is_some()
-            || self.wake.is_some()
-            || self.speed.is_some()
-        {
             return true;
         }
         if !matches!(self.motion, Motion::None) {
@@ -2039,7 +1396,7 @@ impl Shell {
         let mut fx = Outbox::default();
         let consumed = {
             let (mut ctx, top) = self.ctx_and_top();
-            top.pointer(p, &mut ctx, &mut fx)
+            top.view_mut().pointer(p, &mut ctx, &mut fx)
         };
         self.apply(fx);
         consumed
@@ -2059,12 +1416,12 @@ impl Shell {
         self.input_source = Some(crate::console::InputSource::Keys);
         if self.editing() {
             let (mut ctx, top) = self.ctx_and_top();
-            if top.edit_key(key, &mut ctx) {
+            if top.view_mut().edit_key(key, &mut ctx) {
                 return true;
             }
             // Editing consumed nothing: arrows still drive the OSK grid.
         }
-        let editing = self.stack.last().is_some_and(Screen::editing);
+        let editing = self.stack.last().is_some_and(|s| s.view().editing());
         let ev = match key {
             S::Left => MenuEvent::Move(MenuDir::Left),
             S::Right => MenuEvent::Move(MenuDir::Right),
@@ -2090,7 +1447,7 @@ impl Shell {
     pub(crate) fn text_input(&mut self, text: &str) {
         self.last_input = Instant::now();
         if let Some(top) = self.stack.last_mut() {
-            top.text_input(text);
+            top.view_mut().text_input(text);
         }
     }
 
@@ -2141,7 +1498,7 @@ impl Shell {
     /// measures well above what a webOS TV will keep.
     fn apply_speed_bitrate(&mut self, kbps: u32) -> String {
         self.settings = self.store.load();
-        let ceiling = crate::screens::settings::bitrate_ceiling_kbps(self.device.platform);
+        let ceiling = crate::screens::settings::rows::bitrate_ceiling_kbps(self.device.platform);
         self.settings.bitrate_kbps = kbps.min(ceiling);
         self.store.save(&self.settings);
         format!(
@@ -2386,143 +1743,15 @@ impl Shell {
         }
     }
 
-    /// The field as a paint for an `w`×`h` target — `u_res` is the TARGET's pixels,
-    /// the shader's `xy/u_res` normalises everything, so the reduced pass's small
-    /// offscreen renders the same picture the full surface would.
-    /// `passes` is the shader's work per pixel: 2 hits the displaced surface, 1 the plain
-    /// sphere — the reduced path's saving on a TV, where the offscreen hides the difference.
-    fn aurora_paint(&self, w: f64, h: f64, t: f64, calm: f64, passes: f32) -> Option<Paint> {
-        // Matches the SkSL block: u_res, u_tc, u_lift, u_scrim, u_cam, then `field_motion`'s
-        // u_rot0..2, u_mot, u_wmot.
-        let (focal, scale) = field_camera(w / h.max(1.0));
-        let head: [f32; 16] = [
-            w as f32,
-            h as f32,
-            t as f32,
-            calm as f32,
-            self.mesh_lift[0],
-            self.mesh_lift[1],
-            self.mesh_lift[2],
-            0.0,
-            self.mesh_scrim[0],
-            self.mesh_scrim[1],
-            self.mesh_scrim[2],
-            self.mesh_scrim[3],
-            focal as f32,
-            scale as f32,
-            passes,
-            0.0,
-        ];
-        let mut uniforms = [0.0f32; 36];
-        uniforms[..16].copy_from_slice(&head);
-        uniforms[16..].copy_from_slice(&field_motion(t));
-        let words = uniforms.map(f32::to_ne_bytes);
-        let bytes = words.as_flattened();
-        self.mesh
-            .make_shader(Data::new_copy(bytes), &[], None)
-            .map(|shader| {
-                let mut paint = crate::theme::shaded();
-                paint.set_shader(shader);
-                paint
-            })
-    }
-
     fn draw_aurora(&self, canvas: &Canvas, w: f64, h: f64, t: f64, calm: f64) {
         // One clock read: the takeover's `draw_aurora` inherits it.
         let t = self.field_clock(t);
-        let reduced = crate::screens::settings::reduce_ui_res(
+        let reduced = crate::screens::settings::rows::reduce_ui_res(
             &self.settings,
             self.device.platform,
             self.device.fallback_ui,
         );
-        let mut cache = self.field.borrow_mut();
-        // The reduced interface takes a smaller buffer and one pass over the sphere.
-        let (edge, passes) = if reduced {
-            (FIELD_EDGE_REDUCED, 1.0)
-        } else {
-            (FIELD_EDGE, 2.0)
-        };
-        self.draw_field(canvas, &mut cache, w, h, t, calm, edge, passes);
-    }
-
-    /// The field into a ≤`edge`-px offscreen, blitted up with bilinear sampling.
-    /// Re-rendered only when an input moved — size, palette, calm, or the clock past
-    /// [`FIELD_STEP`]. The takeover's `calm = 0` and the base field's share one slot: when
-    /// both differ each gets a small re-render a frame, still a fraction of a surface pass.
-    #[allow(clippy::too_many_arguments)]
-    fn draw_field(
-        &self,
-        canvas: &Canvas,
-        cache: &mut Option<FieldCache>,
-        w: f64,
-        h: f64,
-        t: f64,
-        calm: f64,
-        edge: f64,
-        passes: f32,
-    ) {
-        let scale = (edge / w.max(h)).min(1.0);
-        let size = ((w * scale).ceil() as i32, (h * scale).ceil() as i32);
-        // `t < c.t` is the test clock rewinding, not a direction the field moves.
-        let stale = cache.as_ref().is_none_or(|c| {
-            c.size != size
-                || c.calm != calm
-                || c.mesh.0 != self.mesh_palette
-                || c.mesh.1 != self.mesh_os
-                || t - c.t >= FIELD_STEP
-                || t < c.t
-        });
-        if stale {
-            if let Some(mut surface) = field_surface(canvas, size) {
-                // u_res is the offscreen's own pixels — `aurora_paint` is resolution-free.
-                if let Some(paint) =
-                    self.aurora_paint(size.0 as f64, size.1 as f64, t, calm, passes)
-                {
-                    surface
-                        .canvas()
-                        .draw_rect(Rect::from_wh(size.0 as f32, size.1 as f32), &paint);
-                    *cache = Some(FieldCache {
-                        surface,
-                        size,
-                        t,
-                        calm,
-                        mesh: (self.mesh_palette.clone(), self.mesh_os),
-                    });
-                }
-                // A rejected shader keeps whatever the cache held: a stale field beats black.
-            } else {
-                // No offscreen (context teardown): a full-surface draw is the fallback,
-                // never a black frame.
-                match self.aurora_paint(w, h, t, calm, passes) {
-                    Some(paint) => {
-                        canvas.draw_rect(Rect::from_wh(w as f32, h as f32), &paint);
-                    }
-                    None => {
-                        canvas.clear(Color4f::new(0.0, 0.0, 0.0, 1.0));
-                    }
-                }
-                return;
-            }
-        }
-        match cache {
-            Some(c) => {
-                canvas.draw_image_rect_with_sampling_options(
-                    c.surface.image_snapshot(),
-                    None,
-                    Rect::from_wh(w as f32, h as f32),
-                    skia_safe::SamplingOptions::new(
-                        skia_safe::FilterMode::Linear,
-                        skia_safe::MipmapMode::None,
-                    ),
-                    &crate::theme::shaded(),
-                );
-            }
-            // Stale with nothing cached means the shader rejected — the direct path's
-            // own answer.
-            None => {
-                canvas.clear(Color4f::new(0.0, 0.0, 0.0, 1.0));
-            }
-        }
+        self.backdrop.draw(canvas, w, h, t, calm, reduced);
     }
 }
 
@@ -2589,78 +1818,6 @@ fn stand_in_poster() -> Option<Image> {
     surface.canvas().clear(Color4f::new(0.4, 0.3, 0.6, 1.0));
     let image = surface.image_snapshot();
     image.with_default_mipmaps().or(Some(image))
-}
-
-/// The reduced backdrop's retained pass: the offscreen and the inputs it was rendered
-/// from — anything that moves one of them is what a re-render keys on.
-struct FieldCache {
-    surface: Surface,
-    /// The offscreen's pixel size (`FIELD_EDGE`-scaled from the surface it blits to).
-    size: (i32, i32),
-    /// Clock and calm mix baked into the current contents.
-    t: f64,
-    calm: f64,
-    /// `mesh`'s provenance (palette id, OS-theme revision) — a palette change must
-    /// re-render even with the clock frozen.
-    mesh: (String, Option<u64>),
-}
-
-/// The reduced backdrop's offscreen, on `canvas`'s own backend ([`crate::blur::offscreen`]).
-/// A raster offscreen under a GPU canvas runs the field's SkSL on the CPU, several frames'
-/// worth on a TV.
-fn field_surface(canvas: &Canvas, size: (i32, i32)) -> Option<Surface> {
-    crate::blur::offscreen(canvas, size.0, size.1)
-}
-
-/// Compile the mesh for a palette and the lift, scrim, and ink it decides.
-/// `uniform_size` is checked: [`Shell::draw_aurora`] hand-packs the buffer
-/// and a silent layout change would feed the field garbage.
-type MeshLook = (RuntimeEffect, [f32; 3], [f32; 4], crate::theme::Ink);
-
-fn build_mesh(palette_id: &str) -> Result<MeshLook> {
-    let p = palette(palette_id);
-    compile_mesh(
-        p.stops.unwrap_or(&VIOLET_FIELD),
-        crate::theme::Ink::of(p),
-        p.ground,
-    )
-}
-
-/// Follow-system field: a quiet ramp from the theme's own colours, not the
-/// curated hue arcs. The desk colour is the point.
-fn build_mesh_os(t: &crate::os_theme::OsTheme) -> Result<MeshLook> {
-    use crate::os_theme::Rgb;
-    let (bg, fg, ac) = (t.background, t.foreground, t.accent);
-    // A pale field shades toward its text colour, not black: darkening a pastel strands
-    // dark ink on it (see `theme::Ink` scrim).
-    let stops = if t.light {
-        [bg.mix(fg, 0.10), bg.mix(ac, 0.18), bg]
-    } else {
-        [bg.mix(Rgb(0.0, 0.0, 0.0), 0.35), bg.mix(ac, 0.30), bg]
-    };
-    let rgb = |Rgb(r, g, b)| (r, g, b);
-    compile_mesh(&stops.map(rgb), crate::theme::Ink::of_os(t), rgb(bg))
-}
-
-fn compile_mesh(
-    stops: &[(f64, f64, f64)],
-    ink: crate::theme::Ink,
-    ground: (f64, f64, f64),
-) -> Result<MeshLook> {
-    let effect = RuntimeEffect::make_for_shader(field_sksl(ground, stops), None)
-        .map_err(|e| anyhow!("backdrop SkSL: {e}"))?;
-    anyhow::ensure!(
-        effect.uniform_size() == 144,
-        "mesh uniform block is {} bytes, expected 144 (u_res … u_cam, u_rot0..2, u_mot, u_wmot)",
-        effect.uniform_size()
-    );
-    let g = ground;
-    Ok((
-        effect,
-        [(g.0 * 0.4) as f32, (g.1 * 0.4) as f32, (g.2 * 0.4) as f32],
-        [ink.scrim.r, ink.scrim.g, ink.scrim.b, ink.scrim.a],
-        ink,
-    ))
 }
 
 #[cfg(test)]

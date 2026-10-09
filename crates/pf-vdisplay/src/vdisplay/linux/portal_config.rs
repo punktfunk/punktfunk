@@ -29,11 +29,11 @@ const PRIOR: &str = "# punktfunk: previous";
 const PRIOR_NONE: &str = "(none)";
 
 /// `$XDG_CONFIG_HOME`, else `$HOME/.config`: where xdpw and xdph read their config.
+/// Never a path relative to the cwd.
 pub(crate) fn user_config_dir() -> Result<std::path::PathBuf> {
-    std::env::var_os("XDG_CONFIG_HOME")
-        .map(std::path::PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join(".config")))
-        .ok_or_else(|| anyhow::anyhow!("neither XDG_CONFIG_HOME nor HOME set"))
+    Some(pf_paths::xdg_home("XDG_CONFIG_HOME", ".config"))
+        .filter(|dir| dir.is_absolute())
+        .ok_or_else(|| anyhow::anyhow!("neither XDG_CONFIG_HOME nor HOME is an absolute path"))
 }
 
 fn opens(line: &str, block: Block<'_>) -> bool {

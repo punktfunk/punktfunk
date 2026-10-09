@@ -77,8 +77,8 @@ struct StreamCommands: Commands {
             .keyboardShortcut("a", modifiers: [.control, .option, .shift])
             .disabled(session?.isStreaming != true || session?.micAvailable != true)
             // Mid-session clipboard flip (design/clipboard-and-file-transfer.md §5.3). Greyed
-            // when the host doesn't advertise the cap (older host / operator policy off). On iPad
-            // there is no menu bar to show it in, but a hardware keyboard still reaches it.
+            // when the host doesn't advertise the cap (older host / operator policy off). Captured,
+            // InputCapture's chord path handles the combo first; this item is the released path.
             Button(session?.clipboardOn == true ? "Stop Sharing Clipboard" : "Share Clipboard") {
                 session?.toggleClipboard()
             }

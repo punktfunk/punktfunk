@@ -344,6 +344,72 @@ public enum DefaultsKey {
     public static let backgroundTimeoutMinutes = "punktfunk.backgroundTimeoutMinutes"
 }
 
+/// What a `DefaultsKey` reads as before anything wrote it. The app's `@AppStorage`, the console's
+/// settings document and `EffectiveSettings` all start here, so a default lives once.
+public enum SettingDefault {
+    // Session settings (`EffectiveSettings`). A size or rate of 0 is Native.
+    public static let streamWidth = 0
+    public static let streamHeight = 0
+    public static let streamHz = 0
+    public static let matchWindow = false
+    public static let bitrateKbps = 0
+    /// PyroWave quality, bits per pixel; the host's own default.
+    public static let pyrowaveBpp = 1.6
+    public static let renderScale = 1.0
+    public static let videoFit = VideoFit.fit.rawValue
+    public static let codec = "auto"
+    public static let hdrEnabled = true
+    public static let compositor = 0
+    public static let audioChannels = 2
+    public static let audioFormat = AudioFormatChoice.opus.rawValue
+    public static let micEnabled = false
+    public static let echoCancel = true
+    public static let keepHostAudio = false
+    public static let touchMode = "trackpad"
+    public static let mouseMode = "capture"
+    public static let invertScroll = false
+    public static let overlayActions = ""
+    public static let inhibitShortcuts = true
+    public static let gamepadType = 0
+    public static let gamepadForwarding = true
+    public static let sc2Capture = false
+    public static let systemButtons = "auto"
+    public static let guideGesture = "auto"
+    public static let statsVerbosity = "normal"
+    public static let fullscreenWhileStreaming = true
+    public static let enable444 = false
+    public static let tenBitSdr = false
+    public static let presentPriority = "latency"
+    public static let smoothBuffer = 0
+    public static let vsync = false
+    public static let allowVRR = true
+    public static let modifierLayout = ModifierLayout.mac.rawValue
+    public static let speakerUID = ""
+    public static let micUID = ""
+    public static let micChannel = 0
+    public static let pointerCapture = true
+    // App preferences, read where they are used.
+    public static let padRumble = true
+    public static let advancedStats = false
+    public static let fullscreenAlways = false
+    public static let uiPalette = "violet"
+    public static let librarySort = ""
+    public static let librarySections = ""
+    public static let startIn = StartIn.hosts.stored
+    public static let autoWake = true
+    public static let gamepadUIEnabled = true
+    public static let backgroundKeepAlive = false
+    public static let backgroundTimeoutMinutes = 10
+    public static let hudPlacement = "topTrailing"
+    public static let statsScalePct = 100
+    public static let exitHint = true
+    public static let showAdvanced = false
+    public static let hostSort = HostSort.added.rawValue
+    public static let hostGrouping = HostGrouping.none.rawValue
+    public static let rumbleOnDevice = false
+    public static let gyroFromDevice = false
+}
+
 extension Notification.Name {
     /// Posted by the app's Stream menu ("Release Mouse", ⌃⌥⇧Q): the key window's stream view
     /// releases input capture if it holds it. Only reachable while NOT captured (a captured
@@ -379,6 +445,11 @@ extension Notification.Name {
     /// live session's owner (ContentView) flips the session's mic mute. Released, the menu item
     /// handles the same combo directly; both end at `SessionModel.toggleMicMute`.
     public static let punktfunkToggleMicMute = Notification.Name("io.unom.punktfunk.toggle-mic-mute")
+
+    /// Posted by InputCapture's chord path (⌃⌥⇧C) while input is CAPTURED (`object` is the
+    /// session's connection). ContentView flips that session's clipboard sharing; released, the
+    /// Stream menu item handles the same combo.
+    public static let punktfunkToggleClipboard = Notification.Name("io.unom.punktfunk.toggle-clipboard")
 
     /// Posted by the Live Activity's / Shortcuts' End-stream intent (`EndStreamIntent.perform`,
     /// which runs in the app's process): the app tears the active session down deliberately

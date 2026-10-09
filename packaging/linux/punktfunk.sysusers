@@ -1,0 +1,10 @@
+# The system groups punktfunk ships (sysusers.d(5)). pacman and rpm apply this file on install;
+# packaging/linux/post-install.sh, the deb client postinst and the Steam Deck scripts run
+# systemd-sysusers on it.
+#
+# punktfunk owns the usbip vhci attach/detach nodes (60-punktfunk.rules) and is the group
+# pf-dm-helper's polkit action authorizes. It is not 'input': writing attach materialises an
+# arbitrary emulated USB device. Nobody is added; joining is the opt-in.
+g punktfunk -
+# Members may start the update units through polkit (49-punktfunk-*update.rules). Shipped empty.
+g punktfunk-update -

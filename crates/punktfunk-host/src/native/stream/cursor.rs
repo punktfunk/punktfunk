@@ -87,6 +87,7 @@ fn park_pointer(
 
 /// Which host-composite outcomes have been logged; each is said once per session.
 #[derive(Default)]
+#[cfg_attr(windows, allow(dead_code, reason = "Windows never composites"))]
 pub(super) struct CompositeLog {
     pub(super) saw_overlay: bool,
     pub(super) saw_none: bool,

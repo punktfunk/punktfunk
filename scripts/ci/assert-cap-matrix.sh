@@ -126,6 +126,25 @@ scriptlet_worker_grant() {
 
 # --- per-format extractors ---------------------------------------------------------------------
 
+# payload_listing <artifact>: the payload's paths, one per line, relative to / ("usr/bin/…"), for
+# every format above. Empty when it cannot be read. assert-payload-parity.sh reads through it too.
+# A .deb without dpkg-deb is an `ar` of two tarballs that libarchive reads; Apple's `ar` rewrites
+# the archive and loses members, so it is never used.
+payload_listing() {
+  case "$1" in
+    *.pkg.tar.zst|*.pkg.tar.xz) bsdtar -tf "$1" 2>/dev/null || tar -tf "$1" 2>/dev/null ;;
+    *.deb)
+      if command -v dpkg-deb >/dev/null 2>&1; then
+        dpkg-deb --fsys-tarfile "$1" 2>/dev/null | tar -tf - 2>/dev/null
+      else
+        bsdtar -xOf "$1" 'data.tar*' 2>/dev/null | bsdtar -tf - 2>/dev/null
+      fi ;;
+    *.rpm) rpm -qp --qf '[%{FILENAMES}\n]' "$1" 2>/dev/null ;;
+    *.raw) unsquashfs -no-progress -l "$1" 2>/dev/null ;;
+  esac | sed -e 's#^\./##' -e 's#^/##' -e 's#^squashfs-root/##' -e 's#^squashfs-root$##' -e 's#/$##' \
+    | grep . || true
+}
+
 # An artifact whose payload could not be listed must FAIL, never "skip": a reader that silently
 # produces nothing would wave through the exact package this script exists to reject.
 require_listing() {
@@ -140,7 +159,7 @@ require_listing() {
 check_arch_pkg() {
   local pkg="$1" label; label="$(basename "$pkg")"
   local list scriptlet worker_present=0 host_grant worker_grant
-  list="$(bsdtar -tf "$pkg" 2>/dev/null || tar -tf "$pkg" 2>/dev/null || true)"
+  list="$(payload_listing "$pkg")"
   require_listing "$label" "$list" || return 1
   case "$list" in *"$WORKER_REL"*) worker_present=1 ;; esac
   case "$list" in *"$HOST_REL"*) ;; *)
@@ -161,17 +180,14 @@ check_deb() {
   local deb="$1" label; label="$(basename "$deb")"
   local list postinst worker_present=0 host_grant worker_grant
   if command -v dpkg-deb >/dev/null 2>&1; then
-    list="$(dpkg-deb -c "$deb" 2>/dev/null || true)"
     postinst="$(dpkg-deb --info "$deb" postinst 2>/dev/null || true)"
   elif command -v bsdtar >/dev/null 2>&1; then
-    # dpkg-less fallback: a .deb is an `ar` archive of two tarballs, and libarchive reads both
-    # layers. (GNU `ar`/`ar p` is NOT used — Apple's ar rewrites the archive and loses members.)
-    list="$(bsdtar -xOf "$deb" 'data.tar*' 2>/dev/null | bsdtar -tf - 2>/dev/null || true)"
     postinst="$(bsdtar -xOf "$deb" 'control.tar*' 2>/dev/null | bsdtar -xOf - './postinst' 'postinst' 2>/dev/null || true)"
   else
     err "$label: neither dpkg-deb nor bsdtar available — cannot read this package"
     return 1
   fi
+  list="$(payload_listing "$deb")"
   require_listing "$label" "$list" || return 1
   case "$list" in *"$WORKER_REL"*) worker_present=1 ;; esac
   case "$list" in *"$HOST_REL"*) ;; *)
@@ -242,7 +258,7 @@ check_sysext_raw() {
     err "$label: a filesystem that stores security.capability."
     return 1
   fi
-  list="$(unsquashfs -no-progress -l "$raw" 2>/dev/null || true)"
+  list="$(payload_listing "$raw")"
   require_listing "$label" "$list" || return 1
   case "$list" in *"$WORKER_REL"*) worker_present=1 ;; esac
   case "$list" in

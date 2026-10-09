@@ -735,7 +735,7 @@ impl Client {
             request_kbps: request,
             cut_from_kbps: request.filter(|&k| k < was).map(|_| was),
             discarded: w.discarded,
-            encode_disarmed: self.abr.abr.encode_down.disarmed(),
+            encode_disarmed: self.abr.abr.encode.down.disarmed(),
             delay: w.sample.delay,
             link_cap: self.abr.abr.link_cap.kbps(),
             link_mark_kbps: self.abr.abr.link_mark_kbps,

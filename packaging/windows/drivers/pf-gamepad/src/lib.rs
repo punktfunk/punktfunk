@@ -25,7 +25,7 @@ use pf_driver_proto::gamepad::{
     DEVTYPE_JOYCON_LEFT, DEVTYPE_JOYCON_RIGHT, DEVTYPE_STEAMDECK, PadShm, pad_serial,
 };
 use pf_driver_proto::switch::is_switch;
-use pf_driver_proto::{deck, dualsense, dualshock4};
+use pf_driver_proto::{deck, dualsense, dualshock4, triton, xbox};
 use pf_driver_proto::{eightbitdo, hori};
 use pf_umdf_util::channel::{ChannelClient, ChannelConfig};
 use pf_umdf_util::hid::{
@@ -207,104 +207,38 @@ fn hid_attrs(devtype: u8) -> [u8; 32] {
 fn input_report_len(devtype: u8) -> usize {
     match devtype {
         4..=6 => pf_driver_proto::xbox::input_len(devtype),
-        // = `triton::input_len(0x42)`, the largest input the 372-byte descriptor declares.
-        7 => 54,
+        7 => TRITON_STATE_LEN,
         DEVTYPE_8BITDO_ULTIMATE2..=DEVTYPE_8BITDO_PRO3 => eightbitdo::REPORT_LEN,
         _ => 64,
     }
 }
 
-// Neutral DualSense input report 0x01 (64 bytes): sticks centered (0x80), triggers 0, dpad neutral (8).
-const NEUTRAL_REPORT: [u8; 64] = {
-    let mut r = [0u8; 64];
-    r[0] = 0x01; // report id
-    r[1] = 0x80; // LX
-    r[2] = 0x80; // LY
-    r[3] = 0x80; // RX
-    r[4] = 0x80; // RY
-    // r[5]=L2, r[6]=R2 = 0; r[7] = seq counter = 0
-    r[8] = 0x08; // buttons[0]: low nibble = dpad hat (8 = neutral), high nibble = face buttons (0)
-    // Touch contacts lifted (bit 7). SDL keys touch on that bit alone, so a zero byte is a
-    // finger held at (0, 0) until the host attaches.
-    r[33] = 0x80;
-    r[37] = 0x80;
-    // The rest of a USB pad at rest, as pf-inject's `serialize_state` writes it: IMU temperature,
-    // no trigger effect (zone 9), charge complete, USB data + power.
-    r[32] = 0x14;
-    r[42] = 0x09;
-    r[43] = 0x09;
-    r[53] = 0x2A;
-    r[54] = 0x18;
-    r
-};
-// Neutral DualShock 4 input report 0x01: sticks centered (0x80); the dpad hat is in byte 5 (low
-// nibble), so a neutral hat (8) lands there instead of byte 8.
-const DS4_NEUTRAL_REPORT: [u8; 64] = {
-    let mut r = [0u8; 64];
-    r[0] = 0x01; // report id
-    r[1] = 0x80; // LX
-    r[2] = 0x80; // LY
-    r[3] = 0x80; // RX
-    r[4] = 0x80; // RY
-    r[5] = 0x08; // buttons[0]: low nibble = dpad hat (8 = neutral), high nibble = face buttons (0)
-    r[30] = 0x1B; // status: cable + battery 11 = wired, full — zero reads as 0 % on battery
-    r[33] = 1; // one touch frame, both contacts lifted (bit 7) — see NEUTRAL_REPORT
-    r[35] = 0x80;
-    r[39] = 0x80;
-    r
-};
-// Neutral Steam Deck input frame (unnumbered): header [0x01, 0x00, ID_CONTROLLER_DECK_STATE=0x09,
-// length 64], everything released. SDL drops a Deck frame whose length byte is not 64.
-const DECK_NEUTRAL_REPORT: [u8; 64] = {
-    let mut r = [0u8; 64];
-    r[0] = 0x01;
-    r[2] = 0x09;
-    r[3] = 0x40;
-    r
-};
-// Neutral Xbox input report 0x01: both sticks centred (0x8000 on a 0..65535 axis), triggers 0,
-// hat 0 (the descriptor's NULL state — the logical range starts at 1), no buttons or Share held.
-// Only the first [`input_report_len`] bytes are ever served.
-const XBOX_NEUTRAL_REPORT: [u8; 64] = {
-    let mut r = [0u8; 64];
-    r[0] = 0x01; // report id
-    r[2] = 0x80; // LX = 0x8000 (little-endian)
-    r[3] = 0xFF; // LY = 0x7FFF — the Y axes are INVERTED (+y is up on the wire, down in HID),
-    r[4] = 0x7F; //   and mirroring an even-sized range centres one unit low. See `xbox_proto`.
-    r[6] = 0x80; // RX = 0x8000
-    r[7] = 0xFF; // RY = 0x7FFF
-    r[8] = 0x7F;
-    r
-};
-// Neutral wired-Triton 0x42 state report: id + an all-zero payload — the same canned shape the
-// host's `neutral_triton_report` (triton_windows.rs) seeds the section with. `static`, not
-// `const` like its siblings, so the timer's completion path can serve
-// `&TRITON_NEUTRAL_REPORT[..54]` as a `'static` slice (a const would borrow a temporary).
-static TRITON_NEUTRAL_REPORT: [u8; 64] = {
-    let mut r = [0u8; 64];
-    r[0] = 0x42; // ID_CONTROLLER_STATE, the wired Triton's input state report
-    r
-};
+/// The wired Triton's largest input, `0x42`; hidclass sizes its read buffer from it.
+const TRITON_STATE_LEN: usize = triton::input_len(0x42).unwrap();
+/// `static`, not `const`: the timer serves a slice of it that outlives the match arm.
+static TRITON_NEUTRAL_REPORT: [u8; 64] = triton::NEUTRAL_REPORT;
+
+/// The identity's at-rest report, fed to games while no host is attached.
 fn neutral_report(devtype: u8) -> [u8; 64] {
     match devtype {
-        1 => DS4_NEUTRAL_REPORT,
-        3 => DECK_NEUTRAL_REPORT,
+        1 => dualshock4::NEUTRAL_REPORT,
+        3 => deck::NEUTRAL_REPORT,
         // One S and Elite serve its first 16 bytes; Series adds a zero Share byte.
-        4..=6 => XBOX_NEUTRAL_REPORT,
-        7 => TRITON_NEUTRAL_REPORT,
+        4..=6 => xbox::NEUTRAL_REPORT,
+        7 => triton::NEUTRAL_REPORT,
         dt @ (8 | DEVTYPE_JOYCON_LEFT | DEVTYPE_JOYCON_RIGHT) => {
             pf_driver_proto::switch::neutral_report(dt)
         }
         DEVTYPE_8BITDO_ULTIMATE2..=DEVTYPE_8BITDO_PRO3 => eightbitdo::NEUTRAL_REPORT,
         DEVTYPE_HORIPAD_STEAM => hori::NEUTRAL_REPORT,
-        _ => NEUTRAL_REPORT, // DualSense and Edge share the report 0x01 shape
+        _ => dualsense::NEUTRAL_REPORT, // DualSense and Edge share the report 0x01 shape
     }
 }
 
 static MANUAL_QUEUE: AtomicPtr<WDFQUEUE__> = AtomicPtr::new(core::ptr::null_mut());
 /// The latest input report the host pushed (report `0x01`) via shared memory; the timer delivers it
 /// to pended game READ_REPORTs. Defaults to neutral until the host connects.
-static INPUT_REPORT: std::sync::Mutex<[u8; 64]> = std::sync::Mutex::new(NEUTRAL_REPORT);
+static INPUT_REPORT: std::sync::Mutex<[u8; 64]> = std::sync::Mutex::new(dualsense::NEUTRAL_REPORT);
 /// Whether [`INPUT_REPORT`] holds a value no pended READ_REPORT has been completed with yet. Set
 /// only when the latch actually CHANGES, cleared only when a request is actually completed, so a
 /// tick that finds no read pended leaves the report undelivered rather than losing it. Consulted
@@ -817,7 +751,10 @@ extern "C" fn evt_io_device_control(
         // report it still owes. Before any host publish the latch is the neutral default anyway.
         IOCTL_UMDF_HID_GET_INPUT_REPORT => {
             let dt = device_type();
-            let mut report = INPUT_REPORT.lock().map(|g| *g).unwrap_or(NEUTRAL_REPORT);
+            let mut report = INPUT_REPORT
+                .lock()
+                .map(|g| *g)
+                .unwrap_or(dualsense::NEUTRAL_REPORT);
             // The pad's clock as of now, not the host's stamp: a poll must agree with the stream.
             // The counter is not advanced — a poll is not a report in the interrupt pipeline.
             pf_driver_proto::gamepad::stamp_report_clock(
@@ -831,7 +768,7 @@ extern "C" fn evt_io_device_control(
                 // variable-length and id-first; an undeclared latched id falls back to neutral.
                 match pf_driver_proto::triton::input_len(report[0]) {
                     Some(len) => &report[..len],
-                    None => &TRITON_NEUTRAL_REPORT[..54],
+                    None => &TRITON_NEUTRAL_REPORT[..TRITON_STATE_LEN],
                 }
             } else {
                 &report[..input_report_len(dt)]
@@ -907,7 +844,10 @@ static SWITCH_REPLIES: std::sync::Mutex<std::collections::VecDeque<[u8; 64]>> =
 /// Answer a Switch `0x80` command or `0x01` subcommand as the pad would, on the latched `0x30`
 /// header. The host never sees the handshake; it reads the same report for rumble.
 fn queue_switch_reply(output: &[u8]) {
-    let latched = INPUT_REPORT.lock().map(|g| *g).unwrap_or(NEUTRAL_REPORT);
+    let latched = INPUT_REPORT
+        .lock()
+        .map(|g| *g)
+        .unwrap_or(dualsense::NEUTRAL_REPORT);
     let Some(reply) = pf_driver_proto::switch::reply(&latched, output, device_type(), pad_index())
     else {
         return;
@@ -930,7 +870,7 @@ fn serve_switch_reply(queue: WDFQUEUE, now: u64) -> bool {
     let Some(request) = (unsafe { wdf::retrieve_next_request(queue) }) else {
         return false;
     };
-    let mut report = q.pop_front().unwrap_or(NEUTRAL_REPORT);
+    let mut report = q.pop_front().unwrap_or(dualsense::NEUTRAL_REPORT);
     let serial = REPORT_SERIAL.fetch_add(1, Ordering::Relaxed);
     pf_driver_proto::gamepad::stamp_report_clock(device_type(), &mut report, serial, now);
     let st = request.copy_to_output(&report);
@@ -1375,7 +1315,10 @@ fn tick(queue: WDFQUEUE) {
     // SAFETY: `queue` is the manual queue from EvtDeviceAdd, live until the ticker is joined in
     // EvtDeviceSelfManagedIoCleanup — the exact contract `retrieve_next_request` needs.
     if let Some(request) = unsafe { wdf::retrieve_next_request(queue) } {
-        let mut report = INPUT_REPORT.lock().map(|g| *g).unwrap_or(NEUTRAL_REPORT);
+        let mut report = INPUT_REPORT
+            .lock()
+            .map(|g| *g)
+            .unwrap_or(dualsense::NEUTRAL_REPORT);
         let serial = REPORT_SERIAL.fetch_add(1, Ordering::Relaxed);
         pf_driver_proto::gamepad::stamp_report_clock(dt, &mut report, serial, now);
         // Serve exactly what this identity's descriptor declares — `copy_to_output` REFUSES a
@@ -1393,7 +1336,7 @@ fn tick(queue: WDFQUEUE) {
             // length fits; a latched id the descriptor doesn't declare falls back to neutral.
             match pf_driver_proto::triton::input_len(report[0]) {
                 Some(len) => &report[..len],
-                None => &TRITON_NEUTRAL_REPORT[..54],
+                None => &TRITON_NEUTRAL_REPORT[..TRITON_STATE_LEN],
             }
         } else {
             &report[..input_report_len(dt)]

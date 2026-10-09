@@ -16,14 +16,12 @@
 //! Wi-Fi `MulticastLock` + permission UX, Keystore identity).
 //!
 //! JNI symbols map to `io.unom.punktfunk.kit.NativeBridge` in the `:kit` Gradle module
-//! (`clients/android`). The surface: the native-link proof (`abiVersion`/`coreVersion`), mDNS host
-//! discovery ([`discovery`]), and the session lifecycle in [`session`] — connect/pair + the trust
-//! surface, the per-plane pumps (video → AMediaCodec, audio ↔ AAudio, mic uplink), input, and
-//! rumble/HID feedback ([`feedback`]), and mid-session mode renegotiation.
+//! (`clients/android`). The surface: mDNS host discovery ([`discovery`]) and the session lifecycle
+//! in [`session`] — connect/pair + the trust surface, the per-plane pumps (video → AMediaCodec,
+//! audio ↔ AAudio, mic uplink), input, and rumble/HID feedback ([`feedback`]), and mid-session
+//! mode renegotiation.
 
-use jni::errors::LogErrorAndDefault;
-use jni::objects::{JObject, JString};
-use jni::sys::jint;
+use jni::objects::JObject;
 use jni::EnvUnowned;
 
 #[cfg(target_os = "android")]
@@ -34,7 +32,7 @@ mod audio;
 // shell over EGL/GLES, on every ABI (the armv7 Skia archive is self-hosted — see Cargo.toml).
 #[cfg(target_os = "android")]
 mod console;
-// "Send logs to host": the log-ring upload (`pf-client-core` is Android-target-only here).
+// "Send logs to host": the log-ring upload. Android-only, like the logcat tee that fills the ring.
 #[cfg(target_os = "android")]
 mod logs;
 // AAudio callback arithmetic, `test`-gated on top of Android so its proof runs off-device.
@@ -42,8 +40,9 @@ mod logs;
 mod audio_format;
 #[cfg(target_os = "android")]
 mod decode;
-// Ungated: pure `mdns-sd` + `jni`, so the browse + its JNI seam link into the host workspace build
-// (and its unit test runs there) exactly like `session`/`stats`. Kotlin only ever calls it on device.
+// Gated like `pf_client_core::discovery`, the browse it folds: the Linux and Windows host builds
+// link the JNI seam and run its tests. Kotlin only ever calls it on device.
+#[cfg(any(target_os = "linux", windows, target_os = "android"))]
 mod discovery;
 mod feedback;
 // `decode`'s hung-decoder checks, `test`-gated like `audio_format` so their proof runs off-device.
@@ -60,7 +59,7 @@ mod pyro;
 mod session;
 mod stats;
 mod sys;
-// Ungated like `discovery`: pure `jni` + `punktfunk_core::wol` (no Android framework), so it links
+// Ungated: pure `jni` + `punktfunk_core::wol` (no Android framework), so it links
 // into the host workspace build too. Kotlin only ever calls it on device.
 mod wol;
 // Ungated like `wol`: pure `jni` + `punktfunk_core::client` (the reachability probe). Kotlin calls
@@ -111,7 +110,7 @@ impl log::Log for RingTee {
 pub extern "system" fn JNI_OnLoad(
     _vm: *mut jni::sys::JavaVM,
     _reserved: *mut std::ffi::c_void,
-) -> jint {
+) -> jni::sys::jint {
     let logcat = android_logger::AndroidLogger::new(
         android_logger::Config::default()
             .with_max_level(log::LevelFilter::Info)
@@ -126,27 +125,6 @@ pub extern "system" fn JNI_OnLoad(
         punktfunk_core::ABI_VERSION
     );
     jni::sys::JNI_VERSION_1_6
-}
-
-/// `NativeBridge.abiVersion(): Int` — the core's C-ABI version. A non-error return is the
-/// scaffold's proof that `System.loadLibrary` found the `.so`, the JNI symbol resolved, and the
-/// linked `punktfunk-core` is the one we expect.
-#[unsafe(no_mangle)]
-pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_abiVersion(
-    _env: EnvUnowned,
-    _this: JObject,
-) -> jint {
-    punktfunk_core::ABI_VERSION as jint
-}
-
-/// `NativeBridge.coreVersion(): String` — the crate version, proving JNI string marshaling works.
-#[unsafe(no_mangle)]
-pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_coreVersion<'local>(
-    mut env: EnvUnowned<'local>,
-    _this: JObject<'local>,
-) -> JString<'local> {
-    env.with_env(|env| env.new_string(env!("CARGO_PKG_VERSION")))
-        .resolve::<LogErrorAndDefault>()
 }
 
 /// `NativeBridge.nativeConsoleAvailable(): Boolean` — whether this `.so` carries the Skia

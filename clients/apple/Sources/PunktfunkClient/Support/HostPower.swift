@@ -49,14 +49,11 @@ final class HostPowerStore: ObservableObject {
         // Stamp BEFORE the request, so a slow or hanging host cannot make every pass ask again.
         if let at = askedAt[key], Date().timeIntervalSince(at) < Self.ttl { return }
         // The demo host serves no management API.
-        guard !DemoMode.isDemo(host), let pin = host.pinnedSHA256,
-              let identity = (try? ClientIdentityStore.shared.load())?.identity
+        guard !DemoMode.isDemo(host), case .success(let target) = MgmtTarget.make(host: host)
         else { return }
         askedAt[key] = Date()
         Task { @MainActor in
-            let found = await LibraryClient.actions(
-                address: host.address, port: host.effectiveMgmtPort,
-                certPEM: identity.certPEM, keyPEM: identity.keyPEM, hostFingerprint: pin)
+            let found = await LibraryClient.actions(target)
             byHost[key] = found
         }
     }
@@ -75,21 +72,14 @@ final class HostPowerStore: ObservableObject {
     /// Success means the host ACCEPTED it — it now ends every session and acts about a second
     /// later, so this is the last word this device will get on the subject.
     func invoke(_ action: HostAction, on host: StoredHost) async -> (ok: Bool, message: String) {
-        guard let identity = (try? ClientIdentityStore.shared.load())?.identity else {
-            return (false, "Connect to this host once first — host actions use the identity "
-                + "created on the first connect.")
-        }
-        guard let pin = host.pinnedSHA256 else {
-            return (false, "Pair with \(host.displayName) first — host actions only go to a "
-                + "paired host.")
-        }
-        invalidate(host)
         do {
-            try await LibraryClient.invokeAction(
-                id: action.id, address: host.address, port: host.effectiveMgmtPort,
-                certPEM: identity.certPEM, keyPEM: identity.keyPEM, hostFingerprint: pin)
+            let target = try MgmtTarget.make(host: host).get()
+            invalidate(host)
+            try await LibraryClient.invokeAction(id: action.id, on: target)
             log.info("host action \(action.id, privacy: .public) accepted by \(host.displayName, privacy: .public)")
             return (true, "\(host.displayName): \(action.label) — on its way")
+        } catch let missing as MgmtTargetMissing {
+            return (false, missing.sentence)
         } catch {
             let why = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
             log.warning("host action \(action.id, privacy: .public) refused by \(host.displayName, privacy: .public): \(why, privacy: .public)")

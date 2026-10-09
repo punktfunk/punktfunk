@@ -1,5 +1,5 @@
 // The HUD-corner model persisted by Settings and read wherever the overlay is placed
-// (ContentView, StreamHUDView).
+// (StreamScene, StreamHUDView).
 
 import SwiftUI
 

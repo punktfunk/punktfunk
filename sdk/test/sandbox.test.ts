@@ -25,6 +25,7 @@ const paths = {
 	bun: "/usr/lib/punktfunk-bun/bun",
 	runner: "/usr/share/punktfunk-scripting/runner-cli.js",
 	home: "/home/u",
+	configDir: "/home/u/.config/punktfunk",
 };
 
 const manifest = (over: Partial<PluginManifest> = {}): PluginManifest => ({
@@ -66,7 +67,7 @@ describe("refusedRoot", () => {
 			"/home/u/.config/punktfunk-extra",
 			"/home/u/Games/../.ssh",
 		]) {
-			expect([p, refusedRoot(p, "/home/u")]).toEqual([p, true]);
+			expect([p, refusedRoot(p, "/home/u", paths.configDir)]).toEqual([p, true]);
 		}
 	});
 
@@ -80,7 +81,7 @@ describe("refusedRoot", () => {
 			"/tmp/vhclient_response",
 			"/usr/share/applications",
 		]) {
-			expect([p, refusedRoot(p, "/home/u")]).toEqual([p, false]);
+			expect([p, refusedRoot(p, "/home/u", paths.configDir)]).toEqual([p, false]);
 		}
 	});
 
@@ -92,11 +93,32 @@ describe("refusedRoot", () => {
 		fs.symlinkSync(path.join(root, "var/home"), path.join(root, "home"));
 		const home = path.join(root, "home/u");
 		try {
-			expect(refusedRoot(real, home)).toBe(true);
-			expect(refusedRoot(path.join(real, ".ssh"), home)).toBe(true);
-			expect(refusedRoot(path.join(real, "Games"), home)).toBe(false);
+			const config = path.join(home, ".config", "punktfunk");
+			expect(refusedRoot(real, home, config)).toBe(true);
+			expect(refusedRoot(path.join(real, ".ssh"), home, config)).toBe(true);
+			expect(refusedRoot(path.join(real, "Games"), home, config)).toBe(false);
 		} finally {
 			fs.rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	test("refuses what the host's refusal_rule refuses, wherever the config dir is", () => {
+		const file = path.join(
+			import.meta.dir,
+			"../../crates/punktfunk-host/testdata/path-refusal-vectors.json",
+		);
+		const { vectors } = JSON.parse(fs.readFileSync(file, "utf8")) as {
+			vectors: { path: string; home: string; config_dir: string; refused: boolean }[];
+		};
+		expect(vectors.some((v) => v.config_dir !== paths.configDir)).toBe(true);
+		// No row has `~/.config` under a non-default config dir: the host binds it there, the
+		// sandbox still refuses it. Stricter on purpose, as defense in depth.
+		for (const v of vectors) {
+			expect([v.path, v.config_dir, refusedRoot(v.path, v.home, v.config_dir)]).toEqual([
+				v.path,
+				v.config_dir,
+				v.refused,
+			]);
 		}
 	});
 

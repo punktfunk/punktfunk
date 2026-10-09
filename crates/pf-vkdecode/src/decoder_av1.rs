@@ -30,17 +30,14 @@ use pf_bitstream::av1::NUM_REF_SLOTS;
 use pf_bitstream::h264::DisplayCrop;
 use tracing::debug;
 use tracing::trace;
-use tracing::warn;
 
 use crate::caps::derive_caps;
 use crate::caps::query_caps;
 use crate::caps::DecodeCaps;
 use crate::caps::DecodeProfile;
 use crate::caps_av1::Av1ProfileKey;
-use crate::decoder::core::session_extent;
 use crate::decoder::core::PendingPic;
 use crate::decoder::core::ScopeRef;
-use crate::decoder::core::SessionState;
 use crate::decoder::core::VkCodec;
 use crate::decoder::core::VkDecoder;
 use crate::decoder::DecodedVkFrame;
@@ -144,18 +141,14 @@ enum FrameOutcome {
     SkippedAwaitingKey,
 }
 
-/// AV1 planner, caps, and stream state of a [`VkAv1Decoder`].
+/// AV1 planner and stream state of a [`VkAv1Decoder`].
 pub struct Av1 {
     planner: Av1Planner,
-    /// Caps per profile key. Bit-depth or film-grain change is a new key.
-    caps: Option<(Av1ProfileKey, DecodeCaps)>,
     /// Skip until the next decoded key. The planner has no `flush`, so after a
     /// recovery its store still names the emptied slots.
     /// Per-frame skip, per-AU error: [`VkDecodeError::AwaitingKeyAv1`].
     /// `Ok(None)` would reset the demotion streak.
     awaiting_key: bool,
-    /// Over-declared-level warning, once per decoder (`ensure_state` runs per AU).
-    level_advisory_warned: bool,
 }
 
 /// Native Vulkan Video AV1 decoder. A decoded AU is a temporal unit.
@@ -165,6 +158,9 @@ impl VkCodec for Av1 {
     type Session = VideoSessionAv1;
     type StdRef = hh::StdVideoDecodeAV1ReferenceInfo;
     type Warning = PlanWarning;
+    type Plan = AuPlan;
+    /// A bit-depth or film-grain change is a new key.
+    type ProfileKey = Av1ProfileKey;
     type DpbSlotInfo<'a> = vk::VideoDecodeAV1DpbSlotInfoKHR<'a>;
     const LABEL: &'static str = "av1";
 
@@ -206,6 +202,82 @@ impl VkCodec for Av1 {
             ""
         }
     }
+
+    fn profile_key(plan: &AuPlan) -> Result<Av1ProfileKey, VkDecodeError> {
+        profile_key_for(plan)
+    }
+
+    fn decode_profile(key: Av1ProfileKey) -> DecodeProfile {
+        DecodeProfile::Av1(key)
+    }
+
+    /// A failed query of a film-grain key names the grain ([`caps_query_error`]).
+    unsafe fn query_caps(
+        dev: &DecodeDevice,
+        key: Av1ProfileKey,
+    ) -> Result<DecodeCaps, VkDecodeError> {
+        // SAFETY: fn contract.
+        let raw = unsafe { query_caps(dev, DecodeProfile::Av1(key)) }
+            .map_err(|r| caps_query_error(r, key))?;
+        let wanted = key
+            .output_format()
+            .expect("the key's constructor gated the sampling/depth combination");
+        Ok(derive_caps(&raw, wanted)?)
+    }
+
+    /// Applied grain needs an output distinct from the reconstructed reference,
+    /// DISTINCT reported or not: an in-place device would grain its own
+    /// references. The refusal lets the ladder demote.
+    fn admit(key: Av1ProfileKey, caps: &DecodeCaps) -> Result<(), VkDecodeError> {
+        if key.film_grain && caps.coincide {
+            return Err(VkDecodeError::Unsupported(
+                "AV1 film grain needs an output picture apart from the reference, and this \
+                 device decodes in place"
+                    .into(),
+            ));
+        }
+        Ok(())
+    }
+
+    /// `seq_level_idx` 31 is Annex A's "maximum parameters", not a level; it
+    /// lands above every ceiling and only warns. Sequence headers carry no
+    /// level to the driver.
+    fn stream_level(plan: &AuPlan) -> u32 {
+        u32::from(stream_level_idx(plan))
+    }
+
+    /// AV1 never renegotiates DPB depth: [`REQUIRED_SLOTS`].
+    fn required_slots(_plan: &AuPlan) -> u32 {
+        REQUIRED_SLOTS
+    }
+
+    /// Superres upscales after reconstruction, so pool images hold
+    /// `upscaled_width` × `frame_height`. A change rebuilds the session; a
+    /// mid-sequence size override with scaled refs is outside the envelope:
+    /// rebuild plus the key-frame wait (`Av1::awaiting_key`).
+    fn coded_extent(plan: &AuPlan) -> vk::Extent2D {
+        vk::Extent2D {
+            width: plan.picture.upscaled_width,
+            height: plan.picture.frame_height,
+        }
+    }
+
+    unsafe fn create_session(
+        dev: &DecodeDevice,
+        caps: &DecodeCaps,
+        key: Av1ProfileKey,
+        slots: u32,
+        extent: vk::Extent2D,
+    ) -> Result<VideoSessionAv1, VkDecodeError> {
+        let config = SessionConfigAv1 {
+            max_coded_extent: extent,
+            max_dpb_slots: slots,
+            max_active_references: (slots - 1).min(caps.max_active_references),
+            profile: key,
+        };
+        // SAFETY: fn contract.
+        Ok(unsafe { VideoSessionAv1::create(dev, caps, config)? })
+    }
 }
 
 impl VkDecoder<Av1> {
@@ -228,15 +300,14 @@ impl VkDecoder<Av1> {
         dev.require_codec_op(vk::VideoCodecOperationFlagsKHR::DECODE_AV1, "AV1 decode")?;
         let codec = Av1 {
             planner: Av1Planner::new(),
-            caps: None,
             awaiting_key: false,
-            level_advisory_warned: false,
         };
         Ok(Self::with_codec(dev, lock, codec))
     }
 
     /// Caps check before any AU. `film_grain` is part of the AV1 decode profile;
     /// missing it here is a construction failure, not a mid-stream error streak.
+    /// Grain on a device that decodes in place fails here too, as at the first AU.
     ///
     /// Negotiated facts are a hint (the sequence header is authoritative). Extent,
     /// DPB depth, and a disagreeing header still fail at the first AU. Declared
@@ -247,15 +318,11 @@ impl VkDecoder<Av1> {
         bit_depth: u8,
         film_grain: bool,
     ) -> Result<(), VkDecodeError> {
-        let key = Av1ProfileKey::from_negotiated(chroma_format_idc, bit_depth, film_grain)?;
-        // SAFETY: the constructor `DeviceHandles` contract holds for this lifetime.
-        let raw = unsafe { query_caps(&self.dev, DecodeProfile::Av1(key)) }
-            .map_err(|r| caps_query_error(r, key))?;
-        let wanted = key
-            .output_format()
-            .expect("from_negotiated gated the sampling/depth combination");
-        derive_caps(&raw, wanted)?;
-        Ok(())
+        self.probe_key(Av1ProfileKey::from_negotiated(
+            chroma_format_idc,
+            bit_depth,
+            film_grain,
+        )?)
     }
 
     /// One temporal unit: plan every frame, then decode, settle, or skip each.
@@ -425,98 +492,6 @@ impl VkDecoder<Av1> {
         }
         Ok(FrameOutcome::Decoded)
     }
-
-    /// Session/caps match this plan's extent and profile. A declared level above
-    /// the device ceiling warns once and proceeds (`seq_level_idx` 31 is not a
-    /// level).
-    fn ensure_state(&mut self, plan: &AuPlan) -> Result<(), VkDecodeError> {
-        let key = profile_key_for(plan)?;
-        if self.codec.caps.as_ref().map(|(k, _)| *k) != Some(key) {
-            let wanted = key
-                .output_format()
-                .expect("from_stream gated the sampling/depth combination");
-            // SAFETY: live device (constructor contract).
-            let raw = unsafe { query_caps(&self.dev, DecodeProfile::Av1(key)) }
-                .map_err(|r| caps_query_error(r, key))?;
-            self.codec.caps = Some((key, derive_caps(&raw, wanted)?));
-        }
-        // Applied grain needs an output distinct from the reconstructed reference, DISTINCT
-        // reported or not: an in-place device would grain its own references. Let the ladder demote.
-        if key.film_grain && self.codec.caps.as_ref().is_some_and(|(_, c)| c.coincide) {
-            return Err(VkDecodeError::Unsupported(
-                "AV1 film grain needs an output picture apart from the reference, and this \
-                 device decodes in place"
-                    .into(),
-            ));
-        }
-        // Declared level above maxLevel is not a refusal: extent and DPB depth
-        // are the physical facts. `seq_level_idx` 31 is Annex A's "maximum
-        // parameters", not a level; sequence headers carry none to the driver.
-        let caps_max_level = self
-            .codec
-            .caps
-            .as_ref()
-            .expect("queried above")
-            .1
-            .max_level_idc;
-        let stream_level = u32::from(stream_level_idx(plan));
-        if stream_level > caps_max_level.code_point() && !self.codec.level_advisory_warned {
-            self.codec.level_advisory_warned = true;
-            warn!(
-                stream_level,
-                ceiling = %caps_max_level,
-                "stream declares an AV1 level above the device ceiling — the declared \
-                 level is advisory (seq_level_idx 31 means \"maximum parameters\", and \
-                 encoders over-declare); proceeding, since the level never reaches the \
-                 driver"
-            );
-        }
-        let coded = coded_extent(plan);
-        match &self.state {
-            Some(state) if state.coded_extent == coded && state.session.config.profile == key => {
-                Ok(())
-            }
-            _ => self.rebuild_state(plan),
-        }
-    }
-
-    /// Retire the current generation ([`VkDecoder::retire_state`]) and build a
-    /// fresh session. AV1 never renegotiates DPB depth: [`REQUIRED_SLOTS`].
-    fn rebuild_state(&mut self, plan: &AuPlan) -> Result<(), VkDecodeError> {
-        self.retire_state()?;
-        let (key, caps) = self.codec.caps.as_ref().expect("ensure_state queried caps");
-        let key = *key;
-        if REQUIRED_SLOTS > caps.max_dpb_slots {
-            return Err(VkDecodeError::Unsupported(format!(
-                "AV1 needs {REQUIRED_SLOTS} DPB slots, device caps at {}",
-                caps.max_dpb_slots
-            )));
-        }
-        let coded = coded_extent(plan);
-        let image_extent = session_extent(caps, coded)?;
-        let config = SessionConfigAv1 {
-            max_coded_extent: image_extent,
-            max_dpb_slots: REQUIRED_SLOTS,
-            max_active_references: (REQUIRED_SLOTS - 1).min(caps.max_active_references),
-            profile: key,
-        };
-        // SAFETY: live device per the constructor contract; the session is
-        // owned by a Drop type the moment it exists.
-        let state = unsafe {
-            let session = VideoSessionAv1::create(&self.dev, caps, config)?;
-            SessionState::create(
-                self,
-                caps,
-                session,
-                DecodeProfile::Av1(key),
-                REQUIRED_SLOTS,
-                coded,
-                image_extent,
-            )?
-        };
-        self.state = Some(state);
-        Ok(())
-    }
 }
 
 /// Name a failed caps query. Do not re-query with grain off: that would decode
@@ -560,17 +535,6 @@ fn whole_unit_skipped(planned: usize, skipped: usize) -> bool {
 /// Operating point 0 is the full stream (non-scalable default; hosts emit one).
 fn stream_level_idx(plan: &AuPlan) -> u8 {
     plan.sequence.operating_points[0].seq_level_idx
-}
-
-/// Decode output extent: superres upscales after reconstruction, so pool images
-/// hold `upscaled_width` × `frame_height`. One extent per session generation;
-/// `ensure_state` rebuilds on change. Mid-sequence size override with scaled
-/// refs is outside the envelope: rebuild + the key-frame wait (`Av1::awaiting_key`).
-fn coded_extent(plan: &AuPlan) -> vk::Extent2D {
-    vk::Extent2D {
-        width: plan.picture.upscaled_width,
-        height: plan.picture.frame_height,
-    }
 }
 
 impl ScopeRef for VkRefAv1 {
@@ -840,7 +804,7 @@ mod tests {
             .next()
             .expect("a frame");
 
-        let extent = coded_extent(&plan);
+        let extent = Av1::coded_extent(&plan);
         assert_eq!(
             (extent.width, extent.height),
             (plan.picture.upscaled_width, plan.picture.frame_height),
@@ -876,6 +840,18 @@ mod tests {
 
         assert!(31 > ceiling.code_point());
         assert_eq!(format!("{ceiling}"), "AV1 Std level 23");
+    }
+
+    /// The refusal `probe_stream_support` and `ensure_state` both run.
+    #[test]
+    fn film_grain_is_refused_only_on_a_device_that_decodes_in_place() {
+        use crate::images::tests::caps;
+        let grain = Av1ProfileKey::from_negotiated(1, 8, true).unwrap();
+        let plain = Av1ProfileKey::from_negotiated(1, 8, false).unwrap();
+        let err = Av1::admit(grain, &caps(true, false)).unwrap_err();
+        assert!(matches!(err, VkDecodeError::Unsupported(_)), "{err:?}");
+        assert!(Av1::admit(grain, &caps(false, false)).is_ok());
+        assert!(Av1::admit(plain, &caps(true, false)).is_ok());
     }
 
     #[test]

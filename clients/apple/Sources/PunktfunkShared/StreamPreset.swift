@@ -155,7 +155,9 @@ public struct SettingsOverlay: Codable, Equatable, Sendable {
 
     // MARK: Codable
 
-    private enum Key: String, CaseIterable {
+    /// Every overlay key, as serialized. `SharedFoundationTests` walks it through the decode,
+    /// encode, `OverlayField.clear` and `isOverridden` switches.
+    enum Key: String, CaseIterable {
         case width, height
         case refreshHz = "refresh_hz"
         case matchWindow = "match_window"

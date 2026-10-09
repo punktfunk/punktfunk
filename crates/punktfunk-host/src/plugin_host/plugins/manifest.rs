@@ -83,6 +83,7 @@ impl PluginManifest {
     /// Whether what it lists belongs to one account: a path under `~` or a key under `HKCU`.
     /// Such a source answers for whoever the runner is, so a seat reading the box's catalog
     /// leaves it out.
+    #[cfg_attr(not(windows), allow(dead_code, reason = "a Windows seat reads it"))]
     pub fn per_account(&self) -> bool {
         self.reads
             .iter()

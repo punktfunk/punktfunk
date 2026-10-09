@@ -47,7 +47,7 @@ import { statSync } from "node:fs";
  * @param {string} base
  * @returns {string | null}
  */
-function dirPrefix(p, base) {
+export function dirPrefix(p, base) {
 	if (p === base) return ""; // bare relative name
 	if (!p.endsWith(base)) return null;
 	const sep = p[p.length - base.length - 1];

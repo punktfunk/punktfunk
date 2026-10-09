@@ -5,7 +5,7 @@
 //! Evidence: `design/gamestream-host-plan.md`.
 
 // Moonlight modules and `rusty_enet`/`rsa` exist only with `feature = "gamestream"`.
-// Ports, pairing persistence and `tls` stay in every build.
+// Ports and pairing persistence stay in every build; `tls` is the crate's `https`.
 #[cfg(feature = "gamestream")]
 pub mod apps;
 // Non-Linux builds get a stub `start` inside this module.
@@ -36,7 +36,11 @@ mod rtsp;
 mod serverinfo;
 #[cfg(feature = "gamestream")]
 pub(crate) mod stream;
-pub(crate) mod tls;
+#[cfg(all(feature = "gamestream", any(target_os = "windows", test)))]
+mod uso;
+// The GameStream modules name it by this path.
+#[cfg(feature = "gamestream")]
+pub(crate) use crate::https as tls;
 #[cfg(feature = "gamestream")]
 mod video;
 
@@ -141,14 +145,20 @@ pub const APP_VERSION: &str = "7.1.431.-1";
 pub const GFE_VERSION: &str = "3.23.0.74";
 /// `ServerCodecModeSupport` bits from moonlight-common-c `src/Limelight.h`:
 /// SCM_H264 0x1, SCM_HEVC 0x100, SCM_HEVC_MAIN10 0x200, SCM_AV1_MAIN8 0x10000, SCM_AV1_MAIN10 0x20000.
+#[cfg_attr(not(feature = "gamestream"), allow(dead_code, reason = "compat plane"))]
 pub const SCM_H264: u32 = 0x0000_0001;
+#[cfg_attr(not(feature = "gamestream"), allow(dead_code, reason = "compat plane"))]
 pub const SCM_HEVC: u32 = 0x0000_0100;
+#[cfg_attr(not(feature = "gamestream"), allow(dead_code, reason = "compat plane"))]
 pub const SCM_HEVC_MAIN10: u32 = 0x0000_0200;
+#[cfg_attr(not(feature = "gamestream"), allow(dead_code, reason = "compat plane"))]
 pub const SCM_AV1_MAIN8: u32 = 0x0001_0000;
+#[cfg_attr(not(feature = "gamestream"), allow(dead_code, reason = "compat plane"))]
 pub const SCM_AV1_MAIN10: u32 = 0x0002_0000;
 /// SDR baseline: H.264 + HEVC Main + AV1 Main 8-bit. HEVC Main10 is layered at runtime by
 /// `serverinfo::codec_mode_support` only when [`host_hdr_capable`] is true — a non-HDR host
 /// must not advertise a mode it cannot produce. 4:4:4 stays off; stock Moonlight is 4:2:0.
+#[cfg_attr(not(feature = "gamestream"), allow(dead_code, reason = "compat plane"))]
 pub const SERVER_CODEC_MODE_SUPPORT: u32 = SCM_H264 | SCM_HEVC | SCM_AV1_MAIN8;
 
 /// Whether this host can deliver an HDR (10-bit BT.2020 PQ) GameStream.
@@ -193,11 +203,13 @@ pub fn host_hdr_capable() -> bool {
 }
 
 /// See [`GsState::video_hdr`].
+#[cfg_attr(not(feature = "gamestream"), allow(dead_code, reason = "compat plane"))]
 pub type VideoHdr = std::sync::Arc<std::sync::Mutex<Option<pf_frame::HdrMeta>>>;
 
 /// Cumulative client-loss telemetry from the control stream's periodic `0x0201` loss-stats.
 /// Control thread adds; video thread's 1 Hz step reads deltas — no lock, no reset.
 #[derive(Default)]
+#[cfg_attr(not(feature = "gamestream"), allow(dead_code, reason = "compat plane"))]
 pub struct GsLossStats {
     pub lost: std::sync::atomic::AtomicU64,
     /// A report with `lost == 0` is a healthy heartbeat.
@@ -206,6 +218,7 @@ pub struct GsLossStats {
 
 /// Client `/launch` parameters, shared with RTSP and the media stages.
 #[derive(Clone, Copy, Debug)]
+#[cfg_attr(not(feature = "gamestream"), allow(dead_code, reason = "compat plane"))]
 pub struct LaunchSession {
     /// AES-128 key for RTSP/control/video/audio (`rikey`).
     pub gcm_key: [u8; 16],
@@ -312,6 +325,7 @@ impl AppState {
 
 /// Callback media threads invoke on a UDP send error: ends the whole session via
 /// [`AppState::end_session`], not just the noticing thread. Built by the RTSP PLAY handler.
+#[cfg_attr(not(feature = "gamestream"), allow(dead_code, reason = "compat plane"))]
 pub(crate) type OnSessionLost = Arc<dyn Fn() + Send + Sync>;
 
 /// Bind the ENet control port iff at least one pairing exists. Crate-visible so mgmt

@@ -6,6 +6,7 @@
 //! [`crate::trust::KnownHost::profile`]: shown on the host card, never applied unseen.
 
 use serde::{Deserialize, Serialize};
+use std::time::Duration;
 
 /// The pick a device remembers for a box. Shown on the card, so it carries the name.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -16,7 +17,7 @@ pub struct ProfilePick {
 }
 
 /// A seat profile's state right now. A word the host adds later reads as [`SeatState::Other`].
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SeatState {
     #[default]
@@ -30,7 +31,7 @@ pub enum SeatState {
 }
 
 /// A profile's own seat. Absent for one that plays on the box's own session.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Seat {
     pub state: SeatState,
@@ -43,7 +44,7 @@ pub struct Seat {
 }
 
 /// One row of `enumerate`. Every field defaults, so a host that adds one never fails the list.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ListedProfile {
     pub id: String,
@@ -194,6 +195,9 @@ pub enum SeatGate {
     Refuse(String),
 }
 
+/// How often a client re-reads the list while a seat comes up.
+pub const SEAT_POLL: Duration = Duration::from_secs(2);
+
 /// The gate for `p`'s seat, as `enumerate` lists it.
 pub fn seat_gate(p: &ListedProfile) -> SeatGate {
     let Some(seat) = &p.seat else {
@@ -264,9 +268,93 @@ pub fn wake(
     serde_json::from_str(&body).map_err(|e| LibraryError::Unreachable(format!("bad JSON: {e}")))
 }
 
+/// [`fetch_enumerate`] cut off at `budget`; blocks the calling thread. `None`: the read failed
+/// or came late. A late read finishes on its own thread into nothing.
+#[cfg(desktop)]
+pub fn fetch_within(
+    addr: &str,
+    mgmt_port: u16,
+    identity: &(String, String),
+    pin: Option<[u8; 32]>,
+    budget: Duration,
+) -> Option<Option<Vec<ListedProfile>>> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    let (addr, identity) = (addr.to_string(), identity.clone());
+    std::thread::Builder::new()
+        .name("pf-profiles-fetch".into())
+        .spawn(move || {
+            let _ = tx.send(fetch_enumerate(&addr, mgmt_port, &identity, pin));
+        })
+        .ok()?;
+    match rx.recv_timeout(budget) {
+        Ok(Ok(listed)) => Some(listed),
+        Ok(Err(e)) => {
+            tracing::info!(error = %e, "profile list unavailable");
+            None
+        }
+        Err(_) => {
+            tracing::info!("profile list late");
+            None
+        }
+    }
+}
+
+/// Follows `row`'s seat on the calling thread: [`wake`]s a stopped seat first, then hands
+/// `each` that row and every row `enumerate` lists for it, one per [`SEAT_POLL`]. Ends when
+/// `each` returns `false`, when `stop` is set after a sleep, or after an `Err`: the line that
+/// ends the wait (the wake failed, or the host no longer lists the profile). A failed read
+/// waits for the next.
+#[cfg(desktop)]
+pub fn watch_seat(
+    addr: &str,
+    mgmt_port: u16,
+    identity: &(String, String),
+    pin: Option<[u8; 32]>,
+    row: &ListedProfile,
+    stop: &std::sync::atomic::AtomicBool,
+    mut each: impl FnMut(Result<ListedProfile, String>) -> bool,
+) {
+    let name = &row.display_name;
+    let mut row = row.clone();
+    if seat_gate(&row) == SeatGate::Wake {
+        match wake(addr, mgmt_port, identity, pin, &row.id) {
+            Ok(woken) => row = woken,
+            Err(e) => {
+                each(Err(format!("Couldn't wake {name}'s desk \u{2014} {e}")));
+                return;
+            }
+        }
+    }
+    if !each(Ok(row.clone())) {
+        return;
+    }
+    loop {
+        std::thread::sleep(SEAT_POLL);
+        if stop.load(std::sync::atomic::Ordering::SeqCst) {
+            return;
+        }
+        let listed = match fetch_enumerate(addr, mgmt_port, identity, pin) {
+            Ok(listed) => listed,
+            Err(e) => {
+                tracing::debug!(error = %e, "seat poll");
+                continue;
+            }
+        };
+        let Some(polled) = listed.into_iter().flatten().find(|p| p.id == row.id) else {
+            each(Err(format!("{name} is gone from this host.")));
+            return;
+        };
+        if !each(Ok(polled)) {
+            return;
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(desktop)]
+    use std::sync::atomic::AtomicBool;
 
     #[test]
     fn a_seat_is_dialed_woken_waited_for_or_refused() {
@@ -350,5 +438,32 @@ mod tests {
         assert_eq!(rows[0].note().as_deref(), Some("In use by Ben's Apple TV"));
         assert_eq!(rows[1].seat.as_ref().unwrap().state, SeatState::Other);
         assert_eq!(initials("anna lena x"), "AL");
+    }
+
+    #[cfg(desktop)]
+    #[test]
+    fn a_seat_watch_hands_on_the_first_row_or_the_wake_failure() {
+        let row = |state: &str| -> ListedProfile {
+            serde_json::from_value(serde_json::json!({
+                "id": "kid", "display_name": "Kid", "seat": { "state": state },
+            }))
+            .unwrap()
+        };
+        // An empty identity fails every request before it leaves this machine.
+        let (bad, stop) = ((String::new(), String::new()), AtomicBool::new(false));
+        let mut seen = Vec::new();
+        watch_seat("127.0.0.1", 1, &bad, None, &row("stopped"), &stop, |r| {
+            seen.push(r);
+            true
+        });
+        assert!(
+            matches!(&seen[..], [Err(l)] if l.starts_with("Couldn't wake Kid's desk \u{2014} "))
+        );
+        seen.clear();
+        watch_seat("127.0.0.1", 1, &bad, None, &row("starting"), &stop, |r| {
+            seen.push(r);
+            false
+        });
+        assert_eq!(seen, vec![Ok(row("starting"))]);
     }
 }

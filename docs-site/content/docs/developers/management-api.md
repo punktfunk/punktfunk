@@ -135,7 +135,7 @@ Handlers live in `crates/punktfunk-host/src/mgmt/`. Annotate a new handler with
 `#[utoipa::path]` and add it to `api_router_parts` in `crates/punktfunk-host/src/mgmt.rs`.
 
 1. Classify the route for the plugin and paired-device lanes: add a row to `EXPECTED` in
-   `every_route_is_classified_for_the_plugin_and_cert_lanes` (`mgmt/tests.rs`), and to
+   `every_route_is_classified_for_the_plugin_and_cert_lanes` (`mgmt/tests/routes.rs`), and to
    `plugin_may_access` or `cert_may_access` in `mgmt/auth.rs` if that lane may call it. An
    unclassified route fails the test.
 2. Regenerate the spec and every copy of it:

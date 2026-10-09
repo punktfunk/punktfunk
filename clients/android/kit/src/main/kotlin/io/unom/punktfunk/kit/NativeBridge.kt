@@ -11,12 +11,6 @@ object NativeBridge {
         System.loadLibrary("punktfunk_android")
     }
 
-    /** punktfunk-core C-ABI version. A successful call proves the native library is linked. */
-    external fun abiVersion(): Int
-
-    /** punktfunk-core crate version string. */
-    external fun coreVersion(): String
-
     /**
      * Mint a fresh persistent self-signed identity, returned as
      * `"<certPem>\n-----PUNKTFUNK-KEY-----\n<keyPem>"`, or `""` on error. Kotlin persists it
@@ -183,30 +177,12 @@ object NativeBridge {
     external fun nativeProbe(host: String, port: Int, timeoutMs: Int): String?
 
     /**
-     * Start a bandwidth speed test on [handle]: the host bursts filler over the real data plane at
-     * [targetKbps] of goodput for [durationMs] (each clamped host-side to ≤ 3 Gbps / ≤ 5 s),
-     * **briefly pausing video**. Measuring over the stream's own path is the point — the answer is
-     * about the link this host's stream will take, not about generic throughput.
-     *
-     * Non-blocking: poll [nativeProbeResult] until it reports done. Starting a probe resets any
-     * prior measurement. Returns false on a dead handle. Cheap; safe on the main thread.
-     */
-    external fun nativeSpeedTest(handle: Long, targetKbps: Int, durationMs: Int): Boolean
-
-    /**
-     * The current speed-test measurement, partial until `[0] != 0.0`:
-     * `[done, throughputKbps, lossPct, hostDropPct, elapsedMs, recvBytes]`. Zeros before any
-     * probe, null on a dead handle. Cheap (one lock + a copy); safe to poll on the main thread.
-     */
-    external fun nativeProbeResult(handle: Long): DoubleArray?
-
-    /**
      * Run the network check over this session and return its report: `[ceilingKbps, wall,
      * hasClean, cleanRateKbps, cleanLossPct, cleanJitterUs, clientIfaceKind, clientLinkMbps,
      * clientRcvbufKb, hostIfaceKind, hostLinkMbps, hostSndbufKb, nLegs, burstsLossPct,
-     * cappedLossPct, nFindings]` then `[id, severity, n0, n1, n2]` per finding. Blocking
-     * for ten to twenty seconds — call it off the main thread. Null on a dead handle or when the
-     * check could not run.
+     * cappedLossPct, nFindings]`, `[id, severity, n0, n1, n2]` per finding, then
+     * `recommendedKbps`. Blocking for ten to twenty seconds — call it off the main thread. Null on
+     * a dead handle or when the check could not run.
      */
     external fun nativeNetworkCheck(handle: Long): DoubleArray?
 
@@ -574,10 +550,6 @@ object NativeBridge {
     /** One mouse-button transition. button: 1=left 2=middle 3=right 4=X1 5=X2. */
     external fun nativeSendPointerButton(handle: Long, button: Int, down: Boolean)
 
-    /** One scroll step. axis: 0=vertical 1=horizontal. delta: signed, 120-scaled, +=up/right.
-     *  Legacy embedder API — production capture uses [nativeSendNormalizedScroll]. */
-    external fun nativeSendScroll(handle: Long, axis: Int, delta: Int, precise: Boolean)
-
     /**
      * One normalized scroll step (`InputKind::Scroll`). [axis]: 0=vertical 1=horizontal. [delta]:
      * signed Q24.8 in the source's unit — 120-per-detent for Wheel/Unknown, DIP for the rest.
@@ -830,9 +802,6 @@ object NativeBridge {
      * document. EGL/Skia failures arrive later as a `{"dead": …}` event.
      */
     external fun nativeConsoleCreate(optionsJson: String): Long
-
-    /** Stop the render thread (joined) and free. Stop + join the event poll thread FIRST. */
-    external fun nativeConsoleDestroy(handle: Long)
 
     /** The SurfaceView's surface is up. */
     external fun nativeConsoleSurfaceCreated(handle: Long, surface: android.view.Surface)

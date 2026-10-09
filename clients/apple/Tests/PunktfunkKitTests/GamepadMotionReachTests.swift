@@ -1,8 +1,8 @@
-// Whether a given pad's motion can reach the game. The Swift half of punktfunk-core's
-// `pad_motion_reaches` — same rows as `config::tests::motion_reach_is_answered_per_pad_not_per_session`,
-// because a client that disagrees with the host about this either kills a working gyro or keeps
-// streaming ~250 Hz of samples nobody reads, and both failures are silent.
+// Replays `clients/shared/gamepad-kind-vectors.json` against the Swift `GamepadType`: wire value,
+// names, motion plane and the per-pad motion answer. Core's `config::tests::gamepad_kind_vectors`
+// reads the same file, so a kind core adds and Swift lacks fails here.
 
+import Foundation
 import PunktfunkCore
 import XCTest
 
@@ -10,69 +10,94 @@ import XCTest
 
 final class GamepadMotionReachTests: XCTestCase {
     private typealias Pad = PunktfunkConnection.GamepadType
+    private typealias Obj = [String: Any]
 
-    func testOnlyTheXboxClassesLackAMotionPlane() {
-        for kind: Pad in [.xbox360, .xboxOne, .xboxElite] {
-            XCTAssertFalse(kind.hasMotion, "\(kind) should have no motion plane")
+    /// Read from the source tree, never copied into the bundle: a copy drifts.
+    private static func vectors() throws -> Obj {
+        let url = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent() // PunktfunkKitTests
+            .deletingLastPathComponent() // Tests
+            .deletingLastPathComponent() // apple
+            .deletingLastPathComponent() // clients
+            .appendingPathComponent("shared/gamepad-kind-vectors.json")
+        let raw = try JSONSerialization.jsonObject(with: Data(contentsOf: url))
+        return try XCTUnwrap(raw as? Obj)
+    }
+
+    private static func rows(_ key: String) throws -> [Obj] {
+        try XCTUnwrap(try vectors()[key] as? [Obj], "\(key) section")
+    }
+
+    /// Swift raw values must be literals, so this is the guard that they are the header's.
+    func testRawValuesAreTheHeaderConstants() {
+        let header: [(Pad, Int32)] = [
+            (.auto, PUNKTFUNK_GAMEPAD_AUTO), (.xbox360, PUNKTFUNK_GAMEPAD_XBOX360),
+            (.dualSense, PUNKTFUNK_GAMEPAD_DUALSENSE), (.xboxOne, PUNKTFUNK_GAMEPAD_XBOXONE),
+            (.dualShock4, PUNKTFUNK_GAMEPAD_DUALSHOCK4),
+            (.steamController, PUNKTFUNK_GAMEPAD_STEAMCONTROLLER),
+            (.steamDeck, PUNKTFUNK_GAMEPAD_STEAMDECK),
+            (.dualSenseEdge, PUNKTFUNK_GAMEPAD_DUALSENSEEDGE),
+            (.switchPro, PUNKTFUNK_GAMEPAD_SWITCHPRO),
+            (.steamController2, PUNKTFUNK_GAMEPAD_STEAMCONTROLLER2),
+            (.steamController2Puck, PUNKTFUNK_GAMEPAD_STEAMCONTROLLER2_PUCK),
+            (.xboxElite, PUNKTFUNK_GAMEPAD_XBOXELITE),
+            (.eightBitDoUltimate2, PUNKTFUNK_GAMEPAD_8BITDO_ULTIMATE2),
+            (.eightBitDoPro2, PUNKTFUNK_GAMEPAD_8BITDO_PRO2),
+            (.eightBitDoPro3, PUNKTFUNK_GAMEPAD_8BITDO_PRO3),
+            (.horipadSteam, PUNKTFUNK_GAMEPAD_HORIPAD_STEAM),
+            (.joyConPair, PUNKTFUNK_GAMEPAD_JOYCON_PAIR),
+            (.switch2Pro, PUNKTFUNK_GAMEPAD_SWITCH2_PRO),
+            (.switch2GameCube, PUNKTFUNK_GAMEPAD_SWITCH2_GAMECUBE),
+        ]
+        for (pad, value) in header {
+            XCTAssertEqual(pad.rawValue, UInt32(value), "\(pad)")
         }
-        for kind: Pad in [
-            .dualSense, .dualShock4, .dualSenseEdge, .switchPro,
-            .steamController, .steamDeck, .steamController2,
-        ] {
-            XCTAssertTrue(kind.hasMotion, "\(kind) should carry motion")
+        XCTAssertEqual(
+            Pad.allCases.map(\.rawValue), Array(0...UInt32(PUNKTFUNK_GAMEPAD_SWITCH2_GAMECUBE)))
+    }
+
+    func testEveryKindAnswersWhatCoreAnswers() throws {
+        let kinds = try Self.rows("kinds")
+        XCTAssertEqual(kinds.count, Pad.allCases.count, "one row per kind, no more, no fewer")
+        for row in kinds {
+            let value = try XCTUnwrap((row["value"] as? NSNumber)?.uint32Value)
+            let pad = try XCTUnwrap(Pad(rawValue: value), "kind \(value) has no Swift case")
+            let name = try XCTUnwrap(row["name"] as? String)
+            XCTAssertEqual(pad.canonicalName, name)
+            XCTAssertEqual(pad.hasMotion, row["has_motion"] as? Bool, name)
+            for alias in [name] + (row["aliases"] as? [String] ?? []) {
+                XCTAssertEqual(Pad(name: alias), pad, alias)
+                XCTAssertEqual(Pad(name: " \(alias.uppercased()) "), pad, alias)
+            }
         }
-        // Unknown must not suppress: an older host that omitted the echo may well have resolved a
-        // DualSense, and silently killing its gyro is worse than sending into a void.
-        XCTAssertTrue(Pad.auto.hasMotion)
+        for name in try XCTUnwrap(try Self.vectors()["rejected_names"] as? [String]) {
+            XCTAssertNil(Pad(name: name), name)
+        }
     }
 
-    /// The per-pad question, case by case. Each row is a session a player can actually sit down to;
-    /// the comment says which of the three inputs decides it.
-    func testMotionReachIsAnsweredPerPadNotPerSession() {
-        // The case this predicate exists for, and the one a session-level check gets WRONG:
-        // "Automatic" with mixed pads. The handshake carries the active pad's kind (an X-Box pad),
-        // so the echo says X-Box 360 — but pad 1 declared a DualSense and the host built it one,
-        // with a motion plane. Reading the echo here kills a gyro that works.
-        XCTAssertTrue(Pad.motionReaches(declared: .dualSense, asked: .xbox360, resolved: .xbox360))
-        // Its mirror: the pad that DID declare the X-Box kind still has nowhere to put motion.
-        XCTAssertFalse(Pad.motionReaches(declared: .xbox360, asked: .xbox360, resolved: .xbox360))
-
-        // An explicit Switch Pro against a WINDOWS host, which folds it to X-Box 360. Declared ==
-        // asked, so the echo is this pad's answer and catches a fold nothing local could predict.
-        XCTAssertFalse(
-            Pad.motionReaches(declared: .switchPro, asked: .switchPro, resolved: .xbox360))
-        // The same declaration against a Linux host that builds it: unchanged, motion reaches.
-        XCTAssertTrue(
-            Pad.motionReaches(declared: .switchPro, asked: .switchPro, resolved: .switchPro))
-
-        // A DualSense wish on a host with no usable /dev/uhid degrades the same way.
-        XCTAssertFalse(
-            Pad.motionReaches(declared: .dualSense, asked: .dualSense, resolved: .xbox360))
-
-        // Nobody connected at dial time, so the handshake asked `.auto` and the host resolved it
-        // from its own env. A pad that shows up later declares its own kind and is judged on that.
-        XCTAssertTrue(Pad.motionReaches(declared: .dualSense, asked: .auto, resolved: .xbox360))
-        XCTAssertFalse(Pad.motionReaches(declared: .xbox360, asked: .auto, resolved: .dualSense))
-
-        // An old host that echoes nothing leaves `.auto`, which must not suppress.
-        XCTAssertTrue(Pad.motionReaches(declared: .dualSense, asked: .dualSense, resolved: .auto))
-        // Even then the declaration still speaks when it is the thing without a plane.
-        XCTAssertFalse(Pad.motionReaches(declared: .xbox360, asked: .dualSense, resolved: .auto))
+    /// The per-pad question, row by row; each `why` says which of the three inputs decides it.
+    func testMotionReachIsAnsweredPerPadNotPerSession() throws {
+        let rows = try Self.rows("motion_reaches")
+        XCTAssertGreaterThan(rows.count, 8, "the vector file is the contract; keep it rich")
+        for row in rows {
+            let why = row["why"] as? String ?? "?"
+            func pad(_ key: String) throws -> Pad {
+                try XCTUnwrap(Pad(name: row[key] as? String ?? ""), "\(why): \(key)")
+            }
+            XCTAssertEqual(
+                Pad.motionReaches(
+                    declared: try pad("declared"), asked: try pad("asked"),
+                    resolved: try pad("resolved")),
+                row["want"] as? Bool, why)
+        }
     }
 
-    /// An Elite echo decodes as the Elite, not as the unknown `.auto` that assumes a gyro.
-    func testAnEliteEchoHasNoMotionPlane() {
-        let echo = Pad(rawValue: UInt32(PUNKTFUNK_GAMEPAD_XBOXELITE)) ?? .auto
-        XCTAssertFalse(Pad.motionReaches(declared: .auto, asked: .auto, resolved: echo))
-    }
-
-    /// The env/dev hooks take the host's `GamepadPref` / `CompositorPref::from_name` names.
-    func testNamesMatchTheHostParser() {
-        XCTAssertEqual(Pad(name: " Elite2 "), .xboxElite)
-        XCTAssertEqual(Pad(name: "xone"), .xboxOne)
-        XCTAssertEqual(Pad(name: "xbox1"), .xboxOne)
-        XCTAssertNil(Pad(name: "ds5"))
+    /// The console's compositor names are the host's `CompositorPref` names.
+    func testCompositorNamesRoundTrip() {
         typealias Comp = PunktfunkConnection.Compositor
+        for comp in Comp.allCases {
+            XCTAssertEqual(Comp(name: comp.canonicalName), comp)
+        }
         XCTAssertEqual(Comp(name: "plasma"), .kwin)
         XCTAssertEqual(Comp(name: "wlr"), .wlroots)
         XCTAssertEqual(Comp(name: " detect "), .auto)

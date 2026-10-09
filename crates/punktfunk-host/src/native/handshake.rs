@@ -9,6 +9,11 @@
 //! Evidence: `design/hi-res-audio.md`, `design/remote-desktop-sweep.md`.
 
 use super::*;
+use crate::native::bitrate::{
+    audio_reserved_kbps, fec_static_override, resolve_bitrate_kbps_for, session_pyrowave_bpp,
+    EncDerive,
+};
+use punktfunk_core::abr::budget::FEC_ADAPTIVE_START;
 
 /// Encode tier and `0xD2` redundancy, budgeted against this session's video kbps.
 ///
@@ -311,17 +316,16 @@ fn codec_miss_note(miss: punktfunk_core::quic::CodecMiss, preferred: &str, picke
 pub(super) struct Negotiated {
     pub(super) hello: Hello,
     pub(super) welcome: Welcome,
-    /// What the client calls itself (`EXT_TAG_CLIENT` on `Start`); `None` from one that sent no
-    /// block. Log only: two dialers from one device are told apart by that line.
+    /// What the client calls itself; `None` from one that sent no label. Log only: two dialers
+    /// from one device are told apart by that line.
     pub(super) client_label: Option<String>,
-    /// `EXT_TAG_PRESET` on `Start`: the settings preset the client dialled with.
+    /// The settings preset the client dialled with.
     pub(super) preset: Option<crate::events::PresetRef>,
-    /// `EXT_TAG_ABR` on `Start` (`0` = absent): the ABR wire features this client reads.
+    /// The ABR wire features this client reads (`0` = none).
     pub(super) abr_features: u8,
-    /// `EXT_TAG_LINK_FACTS` on `Start`: the client's end of the path. `None` from a client
-    /// that sent no tag.
-    pub(super) client_link: Option<punktfunk_core::quic::LinkFacts>,
-    /// `EXT_TAG_PROBE_ONLY` on `Start`: a diagnostic session.
+    /// The client's end of the path; the default from a client that said nothing.
+    pub(super) client_link: punktfunk_core::quic::LinkFacts,
+    /// A diagnostic session.
     pub(super) probe_only: bool,
     /// PyroWave's bits per pixel for this session: the client's quality, else the host's.
     pub(super) pyrowave_bpp: f64,
@@ -550,9 +554,7 @@ pub(super) async fn negotiate(
 
     // After depth + chroma: PyroWave Automatic is a ~bpp pin that scales with both, at the
     // client's quality when it sent one.
-    let pyrowave_bpp = session_pyrowave_bpp(punktfunk_core::quic::ext_pyrowave_bpp_x100(
-        &first.ext_entries(),
-    ));
+    let pyrowave_bpp = session_pyrowave_bpp(first.pyrowave_bpp_x100);
     let bitrate_kbps = resolve_bitrate_kbps_for(
         codec,
         hello.bitrate_kbps,
@@ -574,12 +576,12 @@ pub(super) async fn negotiate(
     // A browser's video rides this connection's datagrams, which are smaller than a UDP payload
     // (QUIC and HTTP/3 framing come out of the same budget). Ask, falling back to the 1200 every
     // QUIC path guarantees; a shard that does not fit is dropped at send, and FEC cannot cover all.
+    // The budget is net of the kind varint, and the carrier seals, so a packet adds its header.
     if conn.is_web() {
         let budget = conn.max_datagram_size().unwrap_or(1200);
-        shard_payload = shard_payload.min(punktfunk_core::config::shard_payload_for_udp_budget(
-            budget,
-            conn.remote_address().ip(),
-        ));
+        let p = budget.saturating_sub(punktfunk_core::packet::V2_HEADER_LEN);
+        shard_payload =
+            shard_payload.min((p - p % 2).max(punktfunk_core::config::MIN_SHARD_PAYLOAD));
     }
 
     // ChaCha20 when the client asked (`VIDEO_CAP_CHACHA20`, soft-AES armv7) and the operator
@@ -808,14 +810,20 @@ pub(super) async fn negotiate(
             let bitrate_auto = hello.bitrate_kbps == 0;
             // `bitrate_kbps` is the wire budget; the prep encoder opens at the derived video
             // rate, snapshotted at Welcome's initial FEC percent. The FEC watcher re-derives.
-            let enc_of = super::EncDerive {
-                audio_kbps: super::audio_reserved_kbps(&welcome),
+            let enc_of = EncDerive {
+                audio_kbps: audio_reserved_kbps(&welcome),
                 shard_payload: welcome.shard_payload,
                 fec_percent: welcome.fec.fec_percent,
                 identity: codec == crate::encode::Codec::PyroWave,
             };
             let trace = bringup.clone();
-            let join_live = joined.is_some();
+            // A joiner's view and fit, as `SessionContext::reframe_to` carries them.
+            let reframe_to = joined.as_ref().map(|(_, view)| {
+                (
+                    punktfunk_core::video_fit::VideoFit::from_wire(hello.video_fit),
+                    *view,
+                )
+            });
             std::thread::Builder::new()
                 .name("punktfunk1-stream".into())
                 .spawn(move || -> Result<()> {
@@ -836,7 +844,7 @@ pub(super) async fn negotiate(
                         codec,
                         pyrowave_bpp,
                         shard_payload,
-                        join_live,
+                        reframe_to,
                         &quit,
                         &stop,
                         &trace,
@@ -864,36 +872,17 @@ pub(super) async fn negotiate(
     let (ty, body) = recv.read_frame().await?;
     punktfunk_core::quic::v2::msg::decode::<Ready>(ty, &body)
         .map_err(|e| anyhow!("Ready decode: {e:?}"))?;
-    // The entries the `ClientHello` carried. An unknown tag is skipped, and absence says
-    // nothing.
-    let start_ext: Vec<(u16, &[u8])> = first
-        .start_ext
-        .iter()
-        .map(|(tag, v)| (*tag, v.as_slice()))
-        .collect();
-    // What the client calls itself, when it sent one. A label for the log.
-    let client_label = start_ext
-        .iter()
-        .find(|(tag, _)| *tag == punktfunk_core::quic::EXT_TAG_CLIENT)
-        .map(|(_, v)| punktfunk_core::quic::client_label(&String::from_utf8_lossy(v)))
-        .filter(|s| !s.is_empty());
-    // Which ABR wire features this client understands. Bits it does not set are bits it
-    // cannot read, and bits this host does not know are ignored.
-    let abr_features = punktfunk_core::quic::ext_abr_features(&start_ext);
-    let preset = punktfunk_core::quic::SessionPreset::from_ext(&start_ext).map(Into::into);
-    let client_link = punktfunk_core::quic::LinkFacts::from_ext(&start_ext);
-    let probe_only = punktfunk_core::quic::ext_probe_only(&start_ext);
     bringup.mark("start");
     // `wire_mtu::spawn_watch` is started by `serve_session` once the control-task channels
     // exist; it also drives mid-session shard renegotiation (needs the control writer).
     Ok(Negotiated {
         hello,
         welcome,
-        client_label,
-        preset,
-        abr_features,
-        client_link,
-        probe_only,
+        client_label: first.client_label.clone(),
+        preset: first.preset.clone().map(Into::into),
+        abr_features: first.abr_features,
+        client_link: first.link,
+        probe_only: first.probe_only,
         pyrowave_bpp,
         host_link,
         compositor,

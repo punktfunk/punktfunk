@@ -50,6 +50,25 @@ pub static RDESC: [u8; 507] = [
     0xB1, 0x02, 0xC0,
 ];
 
+/// Input report `0x01` at rest: sticks centred, hat neutral (8) in byte 5, accel 1 g up, wired
+/// and full, one touch frame with both contacts lifted (see [`crate::dualsense::NEUTRAL_REPORT`]).
+pub const NEUTRAL_REPORT: [u8; 64] = {
+    let mut r = [0u8; 64];
+    r[0] = 0x01;
+    r[1] = 0x80; // LX
+    r[2] = 0x80; // LY
+    r[3] = 0x80; // RX
+    r[4] = 0x80; // RY
+    r[5] = 0x08; // low nibble: hat; high nibble: face buttons
+    r[21] = 0x10; // accel Y = 10000: 1 g at FEATURE_CALIBRATION's scale
+    r[22] = 0x27;
+    r[30] = 0x1B; // cable + battery 11; zero reads as 0 % on battery
+    r[33] = 1;
+    r[35] = 0x80;
+    r[39] = 0x80;
+    r
+};
+
 /// Report `0x12` pairing info: MAC at bytes 1..7, LSB first. Without a valid reply
 /// `dualshock4_create()` creates no input devices. Serve [`pairing_reply`].
 #[rustfmt::skip]

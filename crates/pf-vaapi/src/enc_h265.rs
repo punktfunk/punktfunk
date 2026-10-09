@@ -7,10 +7,10 @@
 use std::mem::offset_of;
 use std::mem::size_of;
 
+pub use crate::config::VA_PROFILE_HEVC_MAIN;
+pub use crate::config::VA_PROFILE_HEVC_MAIN10;
 pub use crate::va_h265::VaPictureHEVC;
 
-pub const VA_PROFILE_HEVC_MAIN: i32 = 17;
-pub const VA_PROFILE_HEVC_MAIN10: i32 = 18;
 pub const VA_CONFIG_ATTRIB_ENC_HEVC_FEATURES: u32 = 50;
 pub const VA_CONFIG_ATTRIB_ENC_HEVC_BLOCK_SIZES: u32 = 51;
 /// `VAConfigAttribPredictionDirection`: `BI_NOT_EMPTY` set means every inter

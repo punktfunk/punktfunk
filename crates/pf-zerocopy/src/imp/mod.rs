@@ -13,6 +13,7 @@
 
 pub mod client;
 pub mod cuda;
+pub mod drm;
 pub mod egl;
 pub mod gbm;
 // Shared worker rails (SEQPACKET ± `SCM_RIGHTS`, pinned-exe spawn, reaping).
@@ -20,7 +21,7 @@ pub mod gbm;
 pub mod ipc;
 pub mod proto;
 #[cfg(test)]
-mod tiled_spike;
+mod tiled_pattern;
 pub mod vkdev;
 pub mod vkslot;
 pub mod vulkan;
@@ -482,17 +483,12 @@ pub fn zero_copy_health(identity: u64) -> ZeroCopyHealth {
     health
 }
 
-/// DRM FourCC from a four-byte name, little-endian (`b"XR24"`).
-const fn fourcc(c: &[u8; 4]) -> u32 {
-    (c[0] as u32) | ((c[1] as u32) << 8) | ((c[2] as u32) << 16) | ((c[3] as u32) << 24)
-}
-
 pub fn probe() -> anyhow::Result<()> {
     let _importer = EglImporter::new()?;
     let ctx = cuda::context()?;
     tracing::info!(cuda_ctx = ?ctx, "zero-copy probe OK — EGL display + CUDA context initialized");
     let mut worker = client::RemoteImporter::spawn()?;
-    let modifiers = worker.supported_modifiers(fourcc(b"XR24")).len();
+    let modifiers = worker.supported_modifiers(drm::XR24).len();
     tracing::info!(
         modifiers,
         "zero-copy probe OK — worker spawned, handshake + modifier query"

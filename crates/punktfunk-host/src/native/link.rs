@@ -398,12 +398,6 @@ pub(crate) enum DatagramSend {
     Unavailable,
 }
 
-impl DatagramSend {
-    pub(crate) fn is_sent(self) -> bool {
-        self == DatagramSend::Sent
-    }
-}
-
 /// Why a connection ended, in the terms callers actually branch on: our own close codes ride an
 /// application close, and a timeout is the one transport failure worth telling apart from the
 /// rest. Everything else is noise for a log line.

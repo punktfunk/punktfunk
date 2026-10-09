@@ -155,7 +155,8 @@ impl DsState {
     }
 
     /// GameStream/XInput frame → DualSense fields. Invert Y in i16 (XInput `+y` is up, DualSense
-    /// `0` is up) before the 8-bit quantise. Touch and motion come from rich-input, not this frame.
+    /// `0` is up) before the 8-bit quantise. Opposing D-pad presses cancel; hat `8` is centred.
+    /// Touch and motion come from rich-input, not this frame.
     pub fn from_gamepad(
         buttons: u32,
         lx: i16,
@@ -178,14 +179,9 @@ impl DsState {
             ry: to_u8(ry.saturating_neg()),
             l2: lt,
             r2: rt,
+            dpad: crate::dpad::dpad_octant(buttons).unwrap_or(8),
             ..DsState::neutral()
         };
-        s.set_dpad(
-            on(gs::BTN_DPAD_UP),
-            on(gs::BTN_DPAD_DOWN),
-            on(gs::BTN_DPAD_LEFT),
-            on(gs::BTN_DPAD_RIGHT),
-        );
         let mut b0 = 0;
         if on(gs::BTN_A) {
             b0 |= btn0::CROSS;
@@ -257,21 +253,6 @@ impl DsState {
                 f.right_trigger,
             )
         }
-    }
-
-    pub fn set_dpad(&mut self, up: bool, down: bool, left: bool, right: bool) {
-        // DualSense hat: 0=N,1=NE,2=E,3=SE,4=S,5=SW,6=W,7=NW,8=neutral.
-        self.dpad = match (up, right, down, left) {
-            (true, false, false, false) => 0,
-            (true, true, false, false) => 1,
-            (false, true, false, false) => 2,
-            (false, true, true, false) => 3,
-            (false, false, true, false) => 4,
-            (false, false, true, true) => 5,
-            (false, false, false, true) => 6,
-            (true, false, false, true) => 7,
-            _ => 8,
-        };
     }
 
     /// One rich event into this state. Shared by every DualSense-family backend; `touch_w`/

@@ -15,8 +15,10 @@
 use super::cursor::composite_plan;
 #[cfg(target_os = "linux")]
 use super::cursor::settle_portal_cursor;
-use super::pipeline::{build_pipeline_with_retry, Pipeline};
+use super::pipeline::{build_pipeline_with_retry, resolve_plan, Pipeline};
 use super::*;
+use crate::native::bitrate::{pyrowave_mode_kbps, EncDerive, EncoderCeiling};
+use crate::session_status::pack_mode;
 
 /// (capture_ns, submit_ns) per frame handed to the encoder and not yet polled.
 pub(super) type Inflight = std::collections::VecDeque<(u64, u64)>;
@@ -67,6 +69,7 @@ pub(super) struct StreamState {
     #[cfg(target_os = "linux")]
     pub(super) next_park_at: std::time::Instant,
     /// Each host-composite outcome is logged once.
+    #[cfg_attr(windows, allow(dead_code, reason = "Windows never composites"))]
     pub(super) composite_log: super::cursor::CompositeLog,
     pub(super) last_forced_idr: Option<std::time::Instant>,
     /// Never re-anchors the IDR cooldown: sustained loss + RFI would swallow IDR pleas forever.
@@ -173,10 +176,9 @@ pub(super) struct StreamState {
     pub(super) budget_identity: bool,
     pub(super) streamed_wire: bool,
     pub(super) perf: bool,
-    pub(super) launch: Option<String>,
+    /// The display request bring-up opened with, launch included.
+    pub(super) vd_params: crate::vdisplay::SessionParams,
     pub(super) client_hdr: Option<pf_frame::HdrMeta>,
-    /// Admitted by `mode_conflict: join`. A rebuild's new display asks to share again.
-    pub(super) join_live: bool,
     /// The live encoder's framing: forwarded cursor positions map through it, and so does
     /// the input thread's absolute input. Written on every encoder open.
     pub(super) frame_map: super::super::input::FrameMap,
@@ -191,7 +193,7 @@ pub(super) struct StreamState {
     /// Control task's proposal; applied only after the encoder takes its rate.
     pub(super) fec_requested: Arc<AtomicU8>,
     pub(super) live_bitrate: Arc<AtomicU32>,
-    pub(super) encoder_ceiling: Arc<std::sync::Mutex<super::EncoderCeiling>>,
+    pub(super) encoder_ceiling: Arc<std::sync::Mutex<EncoderCeiling>>,
     /// A rate was handed to this encoder after it opened, so a later read-back
     /// is about that retarget. What a pipeline opened at is the build's own
     /// business (`Pipeline::bitrate_kbps`), and is not re-litigated here.
@@ -210,11 +212,7 @@ pub(super) struct StreamState {
         tokio::sync::watch::Sender<Option<punktfunk_core::quic::CursorShape>>,
     pub(super) cursor_client_draws: Arc<AtomicBool>,
     #[cfg(target_os = "linux")]
-    pub(super) gamescope_route: Option<crate::vdisplay::GamescopeRoute>,
-    #[cfg(target_os = "linux")]
     pub(super) input_tx: std::sync::mpsc::SyncSender<super::super::input::ClientInput>,
-    #[cfg(target_os = "linux")]
-    pub(super) isolation: Option<crate::vdisplay::SessionIsolation>,
     #[cfg(target_os = "linux")]
     pub(super) input_route: super::super::input::InputRoute,
     #[cfg(target_os = "linux")]
@@ -236,8 +234,8 @@ pub(super) struct StreamState {
 
 impl StreamState {
     /// The encoder-rate derivation for a FEC percentage.
-    pub(super) fn enc_derive(&self, fec: u8) -> super::super::EncDerive {
-        super::super::EncDerive {
+    pub(super) fn enc_derive(&self, fec: u8) -> EncDerive {
+        EncDerive {
             audio_kbps: self.audio_reserved_kbps,
             shard_payload: self.shard_payload,
             fec_percent: fec,
@@ -246,7 +244,7 @@ impl StreamState {
     }
 
     /// [`Self::enc_derive`] at the FEC target in force now.
-    pub(super) fn enc_now(&self) -> super::super::EncDerive {
+    pub(super) fn enc_now(&self) -> EncDerive {
         self.enc_derive(self.fec_target.load(Ordering::Relaxed))
     }
 
@@ -371,40 +369,20 @@ impl StreamState {
 
     /// Bring the session up: display, pipeline, library launch, game lease, send thread.
     pub(super) fn new(ctx: SessionContext, prepared: Option<PreparedDisplay>) -> Result<Self> {
-        let mut plan = crate::session_plan::SessionPlan::resolve(
+        let plan = resolve_plan(
             ctx.common.bit_depth,
             ctx.common.hdr,
             ctx.common.chroma,
             ctx.common.codec,
-            crate::session_plan::cursor_blend_for(
-                ctx.cursor_forward,
-                ctx.compositor,
-                ctx.common.codec,
-                ctx.common.bit_depth,
-                ctx.common.hdr,
-                ctx.gamescope_route.as_ref(),
-            ),
             ctx.cursor_forward,
             ctx.multi_slice,
-        );
-        // After resolve: a self-painting gamescope node would otherwise get a second XFixes pointer.
-        plan.gamescope_cursor = crate::session_plan::gamescope_cursor_for(
-            ctx.compositor == pf_vdisplay::Compositor::Gamescope,
-            ctx.gamescope_route.as_ref(),
-        );
-        plan.sdr10_native = crate::session_plan::sdr10_native_for(
-            &plan,
             ctx.compositor,
             ctx.gamescope_route.as_ref(),
+            ctx.pyrowave_bpp,
+            ctx.common.session.shard_payload(),
+            ctx.reframe_to,
+            ctx.join_live,
         );
-        plan.pyrowave_bpp = ctx.pyrowave_bpp;
-        if ctx.common.codec == crate::encode::Codec::PyroWave {
-            plan.wire_chunk = Some(ctx.common.session.shard_payload());
-        }
-        plan.reframe_to = ctx.reframe_to;
-        if ctx.join_live {
-            plan = plan.sharing_live_display();
-        }
         tracing::info!(?plan, "resolved session plan");
         // Explicit-rate PyroWave: the client's ramp closes with one lower pin,
         // so the window lingers past pipeline-ready for it to cross.
@@ -514,7 +492,7 @@ impl StreamState {
         // `PUNKTFUNK_STREAMED_AU=0` reverts to whole-AU sends. Encoder chunking is per-AU.
         // `bitrate_kbps` is the total wire budget; only encoder opens convert via EncDerive.
         let budget_identity = plan.codec == crate::encode::Codec::PyroWave;
-        let enc_derive = move |fec: u8| super::super::EncDerive {
+        let enc_derive = move |fec: u8| EncDerive {
             audio_kbps: audio_reserved_kbps,
             shard_payload,
             fec_percent: fec,
@@ -583,22 +561,29 @@ impl StreamState {
             bit_depth,
             "punktfunk/1 virtual display"
         );
+        // Every display this session opens starts from this request; a rebuild swaps in its
+        // own cursor and route, and drops the launch.
+        let vd_params = crate::vdisplay::SessionParams {
+            client_fp: conn.peer_fingerprint(),
+            client_hdr,
+            // HDR verdict, not the depth — a 10-bit SDR session leaves the output SDR.
+            hdr,
+            hw_cursor: cursor_forward || metadata_composite,
+            join_live,
+            quit: quit.clone(),
+            launch: launch.clone(),
+            route: gamescope_route.clone(),
+            #[cfg(target_os = "linux")]
+            isolation: isolation.clone(),
+            #[cfg(not(target_os = "linux"))]
+            isolation: None,
+        };
         let (vd, pipe) = match prepared {
             Some(p) => (p.vd, p.pipeline),
             None => {
                 // Open first: Windows `open` inits the manager; `vdm()` before that panics.
                 let mut vd = crate::vdisplay::open(compositor)?;
-                vd.set_client_identity(conn.peer_fingerprint());
-                vd.set_join_live(join_live);
-                vd.set_client_hdr(client_hdr);
-                // HDR verdict, not the depth — a 10-bit SDR session leaves the output SDR.
-                vd.set_hdr(hdr);
-                vd.set_hw_cursor(cursor_forward || metadata_composite);
-                vd.set_quit_flag(quit.clone());
-                vd.set_launch_command(launch.clone());
-                vd.set_gamescope_route(gamescope_route.clone());
-                #[cfg(target_os = "linux")]
-                vd.set_session_isolation(isolation.clone());
+                vd_params.apply(&mut *vd);
                 // Slot-scoped: preempt only a prior session on THIS client's slot. Held before create.
                 let _idd_setup_guard = crate::windows::idd::setup_guard(
                     plan.capture,
@@ -662,194 +647,21 @@ impl StreamState {
             }
         }
 
-        // This session's compositor, by pool generation: a concurrent seat's gamescope is equally
-        // discoverable in `/proc`, so an unscoped launch or watch lands on somebody else's screen.
-        #[cfg(target_os = "linux")]
-        let seat: Option<String> = cur_display_gen.and_then(crate::vdisplay::registry::seat_for);
-        // The head the lease's window stage places the game on. Read here, where capture
-        // has already published it and a later session cannot have re-pointed the
-        // injector's one-per-process slot yet.
-        #[cfg(target_os = "linux")]
-        let streamed_head = crate::inject::stream_output()
-            .map(|output| crate::session_status::StreamedHead { compositor, output });
-        // This acquire spawned gamescope itself, so the launch is its primary child.
-        #[cfg(target_os = "linux")]
-        let nested_spawn = crate::vdisplay::launch_is_nested(compositor, gamescope_route.as_ref())
-            && vd.nested_launch_started();
-        let spawned = crate::session_launch::spawn(
+        let (game_shared, game_life) = spawn_launch_and_lease(
+            &*vd,
+            &vd_params,
+            compositor,
+            cur_display_gen,
+            mode,
+            &conn,
+            &stop,
+            &end_reason,
             launch_target.as_ref(),
             &launch_owner,
-            launch_claim.as_ref(),
-            #[cfg(target_os = "linux")]
-            crate::session_launch::SpawnAt {
-                compositor,
-                nested_spawn,
-                seat: seat.as_deref(),
-                steam_home: isolation.as_ref().and_then(|i| i.steam_home.as_deref()),
-            },
+            launch_claim,
+            launch_stamp,
+            &launch_outcome,
         );
-        let spawned_now = spawned.now;
-        // A Steam launch that ran under a seat profile's home: remember what it streamed at, so
-        // the host can have that Steam up before the profile's next connect. `vd`'s own values,
-        // not the request, because they are the registry's reuse keys.
-        #[cfg(target_os = "linux")]
-        if spawned_now
-            && launch
-                .as_deref()
-                .is_some_and(crate::vdisplay::launch_is_steam)
-        {
-            if let Some(profile) = isolation
-                .as_ref()
-                .and_then(|i| i.steam_home.as_deref())
-                .and_then(|h| h.file_name())
-                .and_then(|n| n.to_str())
-            {
-                crate::native::prewarm::record(profile, mode, vd.hdr(), vd.hw_cursor());
-            }
-        }
-        // This seat's Steam has no account, so the stream shows its sign-in screen and not the
-        // game. Read before the verdict: the player is told what to do, and no client holds this
-        // title's cover over the screen they have to act on.
-        #[cfg(target_os = "linux")]
-        let seat_sign_in = spawned_now
-            && launch
-                .as_deref()
-                .is_some_and(crate::vdisplay::launch_is_steam)
-            && isolation
-                .as_ref()
-                .is_some_and(crate::vdisplay::seat_needs_sign_in);
-        #[cfg(not(target_os = "linux"))]
-        let seat_sign_in = false;
-        if let Some(t) = launch_target.as_ref() {
-            let _ = launch_outcome.send(launch_verdict(
-                &t.game.title,
-                launch_claim.as_ref(),
-                spawned_now,
-                seat_sign_in,
-            ));
-        }
-        // A dedicated Steam session ends on gamescope's own root atoms, never on process shape:
-        // Steam wraps its pre-launch work (shader precompile, the install-script evaluator) in the
-        // same `SteamLaunch AppId=` reaper the game gets, so a scan adopts a tree that was never the
-        // game and reads its exit as the game exiting, seconds before the game starts.
-        #[cfg(target_os = "linux")]
-        let steam_exit_appid: Option<u32> = launch
-            .as_deref()
-            .filter(|_| crate::vdisplay::launch_is_nested(compositor, gamescope_route.as_ref()))
-            .and_then(crate::vdisplay::steam_appid_from_launch);
-        #[cfg(not(target_os = "linux"))]
-        let steam_exit_appid: Option<u32> = None;
-
-        let end_on_game_exit = {
-            let conn = conn.clone();
-            let stop = stop.clone();
-            let quit = quit.clone();
-            let end_reason = end_reason.clone();
-            crate::session_launch::end_on_game_exit(move || {
-                tracing::info!(
-                    "the launched game exited — ending the session cleanly (APP_EXITED)"
-                );
-                crate::events::SessionEndReason::GameExited.latch(&end_reason);
-                conn.close(punktfunk_core::quic::APP_EXITED_CLOSE_CODE, b"game exited");
-                quit.store(true, Ordering::SeqCst);
-                stop.store(true, Ordering::SeqCst);
-            })
-        };
-
-        let game_lease = launch_target.as_ref().map(|target| {
-            let on_exit: crate::gamelease::OnExit = if steam_exit_appid.is_some() {
-                Box::new(|| {
-                    tracing::info!(
-                        "game lease: the launched game exited (status only — this dedicated Steam \
-                         session ends on gamescope's atoms)"
-                    );
-                })
-            } else {
-                Box::new(end_on_game_exit.clone())
-            };
-            let extras = crate::session_launch::LeaseExtras {
-                #[cfg(target_os = "linux")]
-                nested: crate::vdisplay::launch_is_nested(compositor, gamescope_route.as_ref()),
-                // Two seats can play the same title and Steam's reaper looks the same in both,
-                // so recognition narrows to this session's gamescope where it may
-                // ([`crate::gamelease::scan_scope`]).
-                #[cfg(target_os = "linux")]
-                scope_pid: crate::gamelease::scan_scope(
-                    nested_spawn,
-                    launch
-                        .as_deref()
-                        .is_some_and(crate::vdisplay::launch_is_steam),
-                    cur_display_gen.and_then(crate::vdisplay::registry::compositor_pid_for),
-                ),
-                #[cfg(not(target_os = "linux"))]
-                nested: false,
-                #[cfg(not(target_os = "linux"))]
-                scope_pid: None,
-                // The watcher says so when this launch dies on the spot.
-                outcome: Some(launch_outcome.clone()),
-                window: window_source(
-                    #[cfg(target_os = "linux")]
-                    compositor,
-                    #[cfg(target_os = "linux")]
-                    streamed_head.clone(),
-                    #[cfg(target_os = "linux")]
-                    seat.clone(),
-                    target.detect.steam_appid,
-                    target.on_window,
-                ),
-            };
-            crate::session_launch::lease(
-                target,
-                &launch_owner,
-                launch_stamp,
-                launch_claim.as_ref(),
-                spawned,
-                extras,
-                on_exit,
-            )
-        });
-        let game_shared = game_lease.as_ref().map(|l| l.shared());
-        // The atom watcher owns the end and `game.exited` for a dedicated Steam session;
-        // `gamelease` keeps running, so the console still shows what is playing, but it no longer
-        // closes the connection.
-        #[cfg(target_os = "linux")]
-        if let Some(appid) = steam_exit_appid {
-            let stop = stop.clone();
-            let end = end_on_game_exit.clone();
-            let seat = seat.clone();
-            let game = game_shared.clone();
-            let spawned = std::thread::Builder::new()
-                .name("pf1-steamexit".into())
-                .spawn(move || {
-                    if crate::vdisplay::watch_steam_game_exit(appid, seat.as_deref(), &stop) {
-                        if let Some(g) = game.as_deref() {
-                            crate::gamelease::report_exit(g);
-                        }
-                        end();
-                    }
-                });
-            if let Err(e) = spawned {
-                tracing::warn!(error = %e, "dedicated Steam exit watcher not started");
-            }
-        }
-        // The watcher keeps its own grace: the game the player starts after signing in is
-        // followed as any other.
-        if seat_sign_in {
-            if let Some(g) = game_shared.as_ref() {
-                g.launch_hold_ends();
-            }
-            tracing::info!(
-                "this seat's Steam has no account yet — the stream shows its sign-in screen"
-            );
-        }
-        let game_life = game_lease.map(|lease| {
-            crate::gamelease::SessionGuard::new(
-                lease,
-                quit.clone(),
-                conn.peer_fingerprint().map(hex::encode),
-                launch_claim,
-            )
-        });
 
         let perf = pf_host_config::config().perf;
 
@@ -871,9 +683,7 @@ impl StreamState {
         )));
         let force_idr = Arc::new(AtomicBool::new(false));
         let send_spread_us = Arc::new(AtomicU32::new(0));
-        let send_spread_send = Arc::clone(&send_spread_us);
         let wire_rekeys = Arc::new(AtomicU32::new(0));
-        let wire_rekeys_send = Arc::clone(&wire_rekeys);
         let driver_dropped = Arc::new(AtomicU64::new(0));
         let send_stats = SendStats {
             rec: stats.clone(),
@@ -891,34 +701,22 @@ impl StreamState {
             driver_dropped: driver_dropped.clone(),
             counters: counters.clone(),
         };
-        // Pipeline, launch and lease are up: take the data plane back. A step
-        // in flight finishes first, which is ≤ 50 ms.
-        let (session, probe_rx) = ramp.finish();
-        let send_thread = std::thread::Builder::new()
-            .name("punktfunk-send".into())
-            .spawn({
-                let stop = stop.clone();
-                let fec_target_send = fec_target.clone();
-                move || {
-                    send_loop(
-                        session,
-                        frame_rx,
-                        probe_rx,
-                        probe_result_tx,
-                        stop,
-                        perf,
-                        send_spread_send,
-                        wire_rekeys_send,
-                        slice_wire,
-                        fec_target_send,
-                        shard_rx,
-                        send_stats,
-                        timing_conn,
-                        probe_seq,
-                    )
-                }
-            })
-            .context("spawn send thread")?;
+        // Pipeline, launch and lease are up.
+        let send_thread = spawn_send_thread(
+            ramp,
+            frame_rx,
+            probe_result_tx,
+            &stop,
+            perf,
+            &send_spread_us,
+            &wire_rekeys,
+            slice_wire,
+            &fec_target,
+            shard_rx,
+            send_stats,
+            timing_conn,
+            probe_seq,
+        )?;
 
         let capture_health: Arc<std::sync::Mutex<Option<pf_capture::CaptureHealth>>> =
             Arc::new(std::sync::Mutex::new(None));
@@ -965,9 +763,8 @@ impl StreamState {
             budget_identity,
             streamed_wire,
             perf,
-            launch,
+            vd_params,
             client_hdr,
-            join_live,
             frame_map,
             #[cfg(target_os = "linux")]
             gamescope_xwayland,
@@ -987,11 +784,7 @@ impl StreamState {
             cursor_shape_tx,
             cursor_client_draws,
             #[cfg(target_os = "linux")]
-            gamescope_route,
-            #[cfg(target_os = "linux")]
             input_tx,
-            #[cfg(target_os = "linux")]
-            isolation,
             #[cfg(target_os = "linux")]
             input_route,
             #[cfg(target_os = "linux")]
@@ -1190,6 +983,262 @@ pub(super) fn adopt_built_bitrate(
     live.store(built, Ordering::Relaxed);
     // The host re-resolved what it encodes; nothing refused the client a rate.
     let _ = retarget.send((built, AckReason::Granted));
+}
+
+/// The send thread: take the data plane back from the bring-up ramp, then send what the encode
+/// loop queues on `frame_rx`. A ramp step in flight finishes first, which is ≤ 50 ms.
+#[allow(clippy::too_many_arguments)]
+fn spawn_send_thread(
+    ramp: ramp::RampServer,
+    frame_rx: std::sync::mpsc::Receiver<SendMsg>,
+    probe_result_tx: tokio::sync::mpsc::UnboundedSender<ProbeResult>,
+    stop: &Arc<AtomicBool>,
+    perf: bool,
+    send_spread_us: &Arc<AtomicU32>,
+    wire_rekeys: &Arc<AtomicU32>,
+    slice_wire: bool,
+    fec_target: &Arc<std::sync::atomic::AtomicU8>,
+    shard_rx: std::sync::mpsc::Receiver<usize>,
+    send_stats: SendStats,
+    timing_conn: Option<crate::native::link::SessionLink>,
+    probe_seq: bool,
+) -> Result<std::thread::JoinHandle<()>> {
+    let (session, probe_rx) = ramp.finish();
+    let stop = stop.clone();
+    let send_spread_us = send_spread_us.clone();
+    let wire_rekeys = wire_rekeys.clone();
+    let fec_target = fec_target.clone();
+    std::thread::Builder::new()
+        .name("punktfunk-send".into())
+        .spawn(move || {
+            send_loop(
+                session,
+                frame_rx,
+                probe_rx,
+                probe_result_tx,
+                stop,
+                perf,
+                send_spread_us,
+                wire_rekeys,
+                slice_wire,
+                fec_target,
+                shard_rx,
+                send_stats,
+                timing_conn,
+                probe_seq,
+            )
+        })
+        .context("spawn send thread")
+}
+
+/// Launch the session's title on the display it just opened, tell the client the verdict, and
+/// take the game lease that follows it, with the dedicated-Steam exit watcher and the seat
+/// sign-in hold. `vd_params` carries the launch command, route, isolation and quit flag.
+/// Returns the lease's shared view for the registry and the guard that ends it with the
+/// session.
+#[allow(clippy::too_many_arguments)]
+fn spawn_launch_and_lease(
+    vd: &dyn crate::vdisplay::VirtualDisplay,
+    vd_params: &crate::vdisplay::SessionParams,
+    compositor: pf_vdisplay::Compositor,
+    cur_display_gen: Option<u64>,
+    mode: punktfunk_core::Mode,
+    conn: &crate::native::link::SessionLink,
+    stop: &Arc<AtomicBool>,
+    end_reason: &Arc<std::sync::atomic::AtomicU8>,
+    launch_target: Option<&crate::library::LaunchTarget>,
+    launch_owner: &crate::session_launch::LaunchOwner,
+    launch_claim: Option<crate::launchreg::Claim>,
+    launch_stamp: Option<f64>,
+    launch_outcome: &crate::gamelease::OutcomeTx,
+) -> (
+    Option<Arc<crate::gamelease::LeaseShared>>,
+    Option<crate::gamelease::SessionGuard>,
+) {
+    #[cfg(not(target_os = "linux"))]
+    let _ = (vd, compositor, cur_display_gen, mode);
+    #[cfg(target_os = "linux")]
+    let (launch, gamescope_route, isolation) = (
+        vd_params.launch.as_deref(),
+        vd_params.route.as_ref(),
+        vd_params.isolation.as_ref(),
+    );
+    let quit = &vd_params.quit;
+    // This session's compositor, by pool generation: a concurrent seat's gamescope is equally
+    // discoverable in `/proc`, so an unscoped launch or watch lands on somebody else's screen.
+    #[cfg(target_os = "linux")]
+    let seat: Option<String> = cur_display_gen.and_then(crate::vdisplay::registry::seat_for);
+    // The head the lease's window stage places the game on. Read here, where capture
+    // has already published it and a later session cannot have re-pointed the
+    // injector's one-per-process slot yet.
+    #[cfg(target_os = "linux")]
+    let streamed_head = crate::inject::stream_output()
+        .map(|output| crate::session_status::StreamedHead { compositor, output });
+    // This acquire spawned gamescope itself, so the launch is its primary child.
+    #[cfg(target_os = "linux")]
+    let nested_spawn = crate::vdisplay::launch_is_nested(compositor, gamescope_route)
+        && vd.nested_launch_started();
+    let spawned = crate::session_launch::spawn(
+        launch_target,
+        launch_owner,
+        launch_claim.as_ref(),
+        #[cfg(target_os = "linux")]
+        crate::session_launch::SpawnAt {
+            compositor,
+            nested_spawn,
+            seat: seat.as_deref(),
+            steam_home: isolation.and_then(|i| i.steam_home.as_deref()),
+        },
+    );
+    let spawned_now = spawned.now;
+    // A Steam launch that ran under a seat profile's home: remember what it streamed at, so
+    // the host can have that Steam up before the profile's next connect. `vd`'s own values,
+    // not the request, because they are the registry's reuse keys.
+    #[cfg(target_os = "linux")]
+    if spawned_now && launch.is_some_and(crate::vdisplay::launch_is_steam) {
+        if let Some(profile) = isolation
+            .and_then(|i| i.steam_home.as_deref())
+            .and_then(|h| h.file_name())
+            .and_then(|n| n.to_str())
+        {
+            crate::native::prewarm::record(profile, mode, vd.hdr(), vd.hw_cursor());
+        }
+    }
+    // This seat's Steam has no account, so the stream shows its sign-in screen and not the
+    // game. Read before the verdict: the player is told what to do, and no client holds this
+    // title's cover over the screen they have to act on.
+    #[cfg(target_os = "linux")]
+    let seat_sign_in = spawned_now
+        && launch.is_some_and(crate::vdisplay::launch_is_steam)
+        && isolation.is_some_and(crate::vdisplay::seat_needs_sign_in);
+    #[cfg(not(target_os = "linux"))]
+    let seat_sign_in = false;
+    if let Some(t) = launch_target {
+        let _ = launch_outcome.send(launch_verdict(
+            &t.game.title,
+            launch_claim.as_ref(),
+            spawned_now,
+            seat_sign_in,
+        ));
+    }
+    // A dedicated Steam session ends on gamescope's own root atoms, never on process shape:
+    // Steam wraps its pre-launch work (shader precompile, the install-script evaluator) in the
+    // same `SteamLaunch AppId=` reaper the game gets, so a scan adopts a tree that was never the
+    // game and reads its exit as the game exiting, seconds before the game starts.
+    #[cfg(target_os = "linux")]
+    let steam_exit_appid: Option<u32> = launch
+        .filter(|_| crate::vdisplay::launch_is_nested(compositor, gamescope_route))
+        .and_then(crate::vdisplay::steam_appid_from_launch);
+    #[cfg(not(target_os = "linux"))]
+    let steam_exit_appid: Option<u32> = None;
+
+    let end_on_game_exit = {
+        let conn = conn.clone();
+        let stop = stop.clone();
+        let quit = quit.clone();
+        let end_reason = end_reason.clone();
+        crate::session_launch::end_on_game_exit(move || {
+            tracing::info!("the launched game exited — ending the session cleanly (APP_EXITED)");
+            crate::events::SessionEndReason::GameExited.latch(&end_reason);
+            conn.close(punktfunk_core::quic::APP_EXITED_CLOSE_CODE, b"game exited");
+            quit.store(true, Ordering::SeqCst);
+            stop.store(true, Ordering::SeqCst);
+        })
+    };
+
+    let game_lease = launch_target.map(|target| {
+        let on_exit: crate::gamelease::OnExit = if steam_exit_appid.is_some() {
+            Box::new(|| {
+                tracing::info!(
+                    "game lease: the launched game exited (status only — this dedicated Steam \
+                     session ends on gamescope's atoms)"
+                );
+            })
+        } else {
+            Box::new(end_on_game_exit.clone())
+        };
+        let extras = crate::session_launch::LeaseExtras {
+            #[cfg(target_os = "linux")]
+            nested: crate::vdisplay::launch_is_nested(compositor, gamescope_route),
+            // Two seats can play the same title and Steam's reaper looks the same in both,
+            // so recognition narrows to this session's gamescope where it may
+            // ([`crate::gamelease::scan_scope`]).
+            #[cfg(target_os = "linux")]
+            scope_pid: crate::gamelease::scan_scope(
+                nested_spawn,
+                launch.is_some_and(crate::vdisplay::launch_is_steam),
+                cur_display_gen.and_then(crate::vdisplay::registry::compositor_pid_for),
+            ),
+            #[cfg(not(target_os = "linux"))]
+            nested: false,
+            #[cfg(not(target_os = "linux"))]
+            scope_pid: None,
+            // The watcher says so when this launch dies on the spot.
+            outcome: Some(launch_outcome.clone()),
+            window: window_source(
+                #[cfg(target_os = "linux")]
+                compositor,
+                #[cfg(target_os = "linux")]
+                streamed_head.clone(),
+                #[cfg(target_os = "linux")]
+                seat.clone(),
+                target.detect.steam_appid,
+                target.on_window,
+            ),
+        };
+        crate::session_launch::lease(
+            target,
+            launch_owner,
+            launch_stamp,
+            launch_claim.as_ref(),
+            spawned,
+            extras,
+            on_exit,
+        )
+    });
+    let game_shared = game_lease.as_ref().map(|l| l.shared());
+    // The atom watcher owns the end and `game.exited` for a dedicated Steam session;
+    // `gamelease` keeps running, so the console still shows what is playing, but it no longer
+    // closes the connection.
+    #[cfg(target_os = "linux")]
+    if let Some(appid) = steam_exit_appid {
+        let stop = stop.clone();
+        let end = end_on_game_exit.clone();
+        let seat = seat.clone();
+        let game = game_shared.clone();
+        let spawned = std::thread::Builder::new()
+            .name("pf1-steamexit".into())
+            .spawn(move || {
+                if crate::vdisplay::watch_steam_game_exit(appid, seat.as_deref(), &stop) {
+                    if let Some(g) = game.as_deref() {
+                        crate::gamelease::report_exit(g);
+                    }
+                    end();
+                }
+            });
+        if let Err(e) = spawned {
+            tracing::warn!(error = %e, "dedicated Steam exit watcher not started");
+        }
+    }
+    // The watcher keeps its own grace: the game the player starts after signing in is
+    // followed as any other.
+    if seat_sign_in {
+        if let Some(g) = game_shared.as_ref() {
+            g.launch_hold_ends();
+        }
+        tracing::info!(
+            "this seat's Steam has no account yet — the stream shows its sign-in screen"
+        );
+    }
+    let game_life = game_lease.map(|lease| {
+        crate::gamelease::SessionGuard::new(
+            lease,
+            quit.clone(),
+            conn.peer_fingerprint().map(hex::encode),
+            launch_claim,
+        )
+    });
+    (game_shared, game_life)
 }
 
 /// What this session's launch came to, in the client's vocabulary.

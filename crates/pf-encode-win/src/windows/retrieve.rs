@@ -86,14 +86,24 @@ pub struct Out<P, X = ()> {
     pub extra: X,
 }
 
+/// How long `poll` waits for an AU: three quarters of a frame interval, 1 to 12 ms.
+pub fn poll_budget_ms(fps: u32) -> u32 {
+    (750 / fps.max(1)).clamp(1, 12)
+}
+
 /// The finished-AU queue and the [`Ready`] that announces it.
 pub struct AuQueue<P, X = ()> {
     out: Mutex<Out<P, X>>,
     have: Ready,
+    backend: &'static str,
+    /// The first AU since the open or the last [`Self::reset`] is logged. A context line with
+    /// no first-AU line after it is a silent hardware wedge.
+    first_au_logged: AtomicBool,
 }
 
 impl<P, X: Default> AuQueue<P, X> {
-    pub fn new(backend: &str) -> Result<Self> {
+    /// `backend` names the encoder in this queue's errors and its first-AU line.
+    pub fn new(backend: &'static str) -> Result<Self> {
         let have = Ready::new().ok_or_else(|| anyhow!("{backend}: no completion event"))?;
         Ok(Self {
             out: Mutex::new(Out {
@@ -103,6 +113,8 @@ impl<P, X: Default> AuQueue<P, X> {
                 extra: X::default(),
             }),
             have,
+            backend,
+            first_au_logged: AtomicBool::new(false),
         })
     }
 }
@@ -134,13 +146,15 @@ impl<P, X> AuQueue<P, X> {
     }
 
     /// Forfeit everything owed: a restart voids the reference chain, so the AUs behind it no
-    /// longer decode against what the client holds. `extra` is the backend's to reset.
+    /// longer decode against what the client holds. The restarted encoder's first AU is logged
+    /// again. `extra` is the backend's to reset.
     pub fn reset(&self) {
         let mut g = self.lock();
         g.pending.clear();
         g.ready.clear();
         g.err = None;
         self.have.clear();
+        self.first_au_logged.store(false, Ordering::Relaxed);
     }
 
     /// The oldest finished AU, or the source's failure. Clears the signal as the queue empties.
@@ -157,14 +171,23 @@ impl<P, X> AuQueue<P, X> {
     }
 
     /// [`Self::pop_ready`], waiting up to `wait_ms` on the signal for the source to produce one.
+    /// Logs the first AU since the open or the last [`Self::reset`].
     pub fn take_ready(&self, wait_ms: u32) -> Result<Option<EncodedFrame>> {
-        if let Some(au) = self.pop_ready()? {
-            return Ok(Some(au));
+        let au = match self.pop_ready()? {
+            None if self.have.wait(wait_ms) => self.pop_ready()?,
+            au => au,
+        };
+        if let Some(au) = &au {
+            if !self.first_au_logged.swap(true, Ordering::Relaxed) {
+                tracing::info!(
+                    bytes = au.data.len(),
+                    keyframe = au.keyframe,
+                    "{} produced its first AU on this session",
+                    self.backend
+                );
+            }
         }
-        if !self.have.wait(wait_ms) {
-            return Ok(None);
-        }
-        self.pop_ready()
+        Ok(au)
     }
 
     /// Wait until `ready` holds, the source fails, or `budget` passes. The source makes the
@@ -237,37 +260,6 @@ impl Drop for RetrieveThread {
     }
 }
 
-/// The one-shot first-AU log. A context-created line with no first-AU line after it is a
-/// silent hardware wedge.
-pub struct FirstAuLog {
-    msg: &'static str,
-    logged: bool,
-}
-
-impl FirstAuLog {
-    /// `msg` is the whole line, e.g. `"QSV produced its first AU on this session"`.
-    pub const fn new(msg: &'static str) -> Self {
-        Self { msg, logged: false }
-    }
-
-    pub fn note(&mut self, au: &EncodedFrame) {
-        if !self.logged {
-            self.logged = true;
-            tracing::info!(
-                bytes = au.data.len(),
-                keyframe = au.keyframe,
-                "{}",
-                self.msg
-            );
-        }
-    }
-
-    /// Log again for the next first AU, after an in-place restart.
-    pub fn rearm(&mut self) {
-        self.logged = false;
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -311,5 +303,24 @@ mod tests {
             .unwrap_err()
             .to_string()
             .starts_with("test stalled for 0 ms with 1 frame(s)"));
+    }
+
+    #[test]
+    fn a_reset_rearms_the_first_au_log() {
+        let q: AuQueue<u32> = AuQueue::new("test").unwrap();
+        let logged = || q.first_au_logged.load(Ordering::Relaxed);
+        assert!(q.take_ready(0).unwrap().is_none());
+        assert!(!logged(), "no AU yet");
+        q.publish(&mut q.lock(), au());
+        assert!(q.take_ready(0).unwrap().is_some());
+        assert!(logged());
+        q.reset();
+        assert!(!logged());
+    }
+
+    #[test]
+    fn the_poll_budget_is_three_quarters_of_a_frame_within_1_to_12_ms() {
+        let budgets = [0, 30, 60, 120, 240, 1000].map(poll_budget_ms);
+        assert_eq!(budgets, [12, 12, 12, 6, 3, 1]);
     }
 }

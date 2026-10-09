@@ -43,20 +43,20 @@ pub(crate) fn pair_page(props: &Svc, cx: &mut RenderCx) -> Element {
                 std::thread::spawn(move || {
                     let current = || ctx3.shared.pair_gen.load(Ordering::SeqCst) == generation;
                     match trust::pair_with_host(
-                        &target3.addr,
-                        target3.port,
+                        &target3.host.addr,
+                        target3.host.port,
                         &ctx3.identity,
                         &pin,
                         &trust::device_name(),
                     ) {
                         Ok(fp) => {
                             let saved = trust::persist_host(
-                                &target3.name,
-                                &target3.addr,
-                                target3.port,
+                                &target3.host.name,
+                                &target3.host.addr,
+                                target3.host.port,
                                 &trust::hex(&fp),
                                 true,
-                                &target3.mac,
+                                &target3.host.mac,
                             );
                             if !current() {
                                 return;
@@ -101,14 +101,14 @@ pub(crate) fn pair_page(props: &Svc, cx: &mut RenderCx) -> Element {
     let content = card(vstack((
         grid((
             // `Target` holds no OS chain, so the pairing card keeps the monogram.
-            avatar(&target.name, "")
+            avatar(&target.host.name, "")
                 .grid_column(0)
                 .vertical_alignment(VerticalAlignment::Center),
             vstack((
-                text_block(format!("Pair with {}", target.name))
+                text_block(format!("Pair with {}", target.host.name))
                     .font_size(20.0)
                     .semibold(),
-                text_block(format!("{}:{}", target.addr, target.port))
+                text_block(format!("{}:{}", target.host.addr, target.host.port))
                     .font_size(12.0)
                     .foreground(ThemeRef::SecondaryText),
             ))

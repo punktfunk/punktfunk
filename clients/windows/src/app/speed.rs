@@ -4,7 +4,7 @@
 
 use super::lucide;
 use super::style::*;
-use super::{Screen, Svc};
+use super::{saved, Screen, Svc};
 use crate::trust::KnownHosts;
 use pf_client_core::presets::PresetsFile;
 use windows_reactor::*;
@@ -61,9 +61,9 @@ pub(crate) fn speed_page(props: &SpeedProps, cx: &mut RenderCx) -> Element {
                 .name("pf-speedtest".into())
                 .spawn(move || {
                     let outcome = pf_client_core::speed::run_network_check_with(
-                        &target.addr,
-                        target.port,
-                        target.fp_hex.as_deref(),
+                        &target.host.addr,
+                        target.host.port,
+                        target.host.fp_hex.as_deref(),
                         identity,
                         |_| {},
                     );
@@ -99,10 +99,10 @@ pub(crate) fn speed_page(props: &SpeedProps, cx: &mut RenderCx) -> Element {
             .on_click(move || ss.call(Screen::Hosts))
             .horizontal_alignment(HorizontalAlignment::Center)
     };
-    let headline = if target.name.is_empty() {
+    let headline = if target.host.name.is_empty() {
         "Network speed test".to_string()
     } else {
-        format!("Network speed test \u{00B7} {}", target.name)
+        format!("Network speed test \u{00B7} {}", target.host.name)
     };
 
     match &props.state {
@@ -142,7 +142,11 @@ pub(crate) fn speed_page(props: &SpeedProps, cx: &mut RenderCx) -> Element {
             // it: the one-off this test was started with, else the host's binding.
             let target = ctx.shared.target.lock().unwrap().clone();
             let bound = KnownHosts::load()
-                .resolve(target.fp_hex.as_deref(), &target.addr, target.port)
+                .resolve(
+                    target.host.fp_hex.as_deref(),
+                    &target.host.addr,
+                    target.host.port,
+                )
                 .and_then(|h| h.preset_id.clone());
             let preset = match target.preset.as_deref() {
                 Some("") => None,
@@ -164,16 +168,13 @@ pub(crate) fn speed_page(props: &SpeedProps, cx: &mut RenderCx) -> Element {
                 }
             };
             let write_preset = |id: String| {
-                let ss = set_screen.clone();
+                let (ss, st) = (set_screen.clone(), props.svc.set_status.clone());
                 move || {
-                    let mut catalog = PresetsFile::load();
-                    if let Some(slot) = catalog.presets.iter_mut().find(|x| x.id == id) {
-                        slot.overrides.bitrate_kbps = Some(kbps);
-                        if let Err(e) = catalog.save() {
-                            tracing::warn!(error = %format!("{e:#}"),
-                                "saving the measured bitrate");
-                        }
-                    }
+                    let r = super::settings::update_preset(&id, |p| {
+                        p.overrides.bitrate_kbps = Some(kbps)
+                    });
+                    // The host list it returns to redraws anyway; no revision to bump.
+                    saved(r, &st, None);
                     ss.call(Screen::Hosts);
                 }
             };

@@ -613,8 +613,8 @@ fn takeover_privilege() -> HostCheck {
         .with_remedy(Remedy {
             text: format!(
                 "Add the user to the “{group}” group, then restart the computer. The same group \
-                 gates the virtual Steam Deck pad's usbip nodes, which can present arbitrary \
-                 emulated USB devices — join it only on a machine you trust."
+                 gates the USB/IP pads' nodes, which can present arbitrary emulated USB devices \
+                 — join it only on a machine you trust."
             ),
             command: Some(format!("sudo usermod -aG {group} {user}")),
             // Helper reads the user database and is satisfied at once; this process keeps the
@@ -652,27 +652,55 @@ fn takeover_inapplicable_reason(why: TakeoverInapplicable) -> &'static str {
     }
 }
 
+/// What a player loses while USB/IP pads can't attach.
+const USBIP_PAD_IMPACT: &str = "USB/IP pads can't attach. Steam Input then never sees a virtual \
+     Steam Deck or Steam Controller, so nothing in Game Mode can be navigated with a pad, and \
+     Switch 2 pads fall back to the Switch Pro.";
+
+/// The same with the Steam and DualSense gates off: only a Switch 2 pad still asks for USB/IP.
+const SWITCH2_ONLY_IMPACT: &str = "Switch 2 pads fall back to the Switch Pro. USB/IP is off for \
+     Steam and DualSense pads, so nothing else changes.";
+
+/// Whether a gate still asks for a USB/IP pad: the Steam gate (on by default) or the DualSense
+/// row. A client can always ask for a Switch 2 pad, which degrades instead.
+#[cfg(target_os = "linux")]
+fn usbip_gate_open() -> bool {
+    pf_inject::steam_usbip::usbip_preferred() || pf_inject::dualsense_usbip::usbip_preferred()
+}
+
+#[cfg(not(target_os = "linux"))]
+fn usbip_gate_open() -> bool {
+    false
+}
+
 fn virtual_deck_vhci() -> HostCheck {
     let id = ids::VIRTUAL_DECK_VHCI;
     let group = PUNKTFUNK_GROUP;
     match crate::inject::vhci_probe() {
         VhciVerdict::Inapplicable { why } => HostCheck::inapplicable(id, why),
-        VhciVerdict::Ok => HostCheck::ok(id, "The virtual Steam Deck controller can attach."),
-        VhciVerdict::ModuleMissing => HostCheck::problem(
-            id,
-            CheckStatus::Fail,
-            Severity::Warning,
-            "The vhci_hcd kernel module is not loaded",
-            "The virtual Steam Deck controller cannot attach, so Steam Input never sees it — in \
-             Game Mode that means nothing can be navigated with a pad.",
-        )
-        .with_remedy(Remedy {
-            text: "Load the vhci_hcd module (the packages install a modules-load rule that does \
-                   this at boot; on an unpackaged install, load it by hand)."
-                .to_string(),
-            command: Some("sudo modprobe vhci-hcd".to_string()),
-            relogin_required: false,
-        }),
+        VhciVerdict::Ok => HostCheck::ok(id, "USB/IP pads can attach."),
+        VhciVerdict::ModuleMissing => {
+            // Both gates off leaves only the Switch 2 fallback: a note, not a warning.
+            let (severity, impact) = if usbip_gate_open() {
+                (Severity::Warning, USBIP_PAD_IMPACT)
+            } else {
+                (Severity::Info, SWITCH2_ONLY_IMPACT)
+            };
+            HostCheck::problem(
+                id,
+                CheckStatus::Fail,
+                severity,
+                "The vhci_hcd kernel module is not loaded",
+                impact,
+            )
+            .with_remedy(Remedy {
+                text: "Load the vhci_hcd module (the packages install a modules-load rule that \
+                       does this at boot; on an unpackaged install, load it by hand)."
+                    .to_string(),
+                command: Some("sudo modprobe vhci-hcd".to_string()),
+                relogin_required: false,
+            })
+        }
         // Node exists, not writable. The three causes need different remedies; only userdb vs
         // process groups can tell them apart.
         VhciVerdict::NotWritable { path } => not_writable_check(id, group, path),
@@ -689,8 +717,7 @@ fn not_writable_check(id: &str, group: &str, path: String) -> HostCheck {
             .with_param("group", group)
             .with_param("path", path.clone())
     };
-    let pad_impact = "The virtual Steam Deck controller cannot attach, so Steam Input never sees \
-                      it — in Game Mode that means nothing can be navigated with a pad.";
+    let pad_impact = USBIP_PAD_IMPACT;
 
     match (in_userdb, in_process) {
         (Some(true), Some(false)) => {
@@ -733,11 +760,7 @@ fn not_writable_check(id: &str, group: &str, path: String) -> HostCheck {
 
         // User database unreachable. Do not guess a cause; a wrong remedy costs more than a
         // vague one.
-        _ => base(
-            "The virtual Steam Deck controller's attach node is not writable",
-            pad_impact,
-        )
-        .with_remedy(Remedy {
+        _ => base("The USB/IP pads' attach node is not writable", pad_impact).with_remedy(Remedy {
             text: format!(
                 "Check that this machine's user is in the “{group}” group and that the udev rule \
                  granting it access to the vhci nodes is installed, then restart the computer."

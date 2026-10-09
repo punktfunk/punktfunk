@@ -18,11 +18,10 @@ const serverDir = fileURLToPath(new URL("./server", import.meta.url));
 // route-rule proxies it (below). Override the upstream with PUNKTFUNK_MGMT_URL.
 const MGMT_URL = process.env.PUNKTFUNK_MGMT_URL ?? "https://127.0.0.1:47990";
 
-// Dev-only `/plugin-ui/<id>/**` reverse proxy — the vite-dev counterpart of the Bun/Nitro route
-// (server/routes/plugin-ui/[...].ts), which can't run in dev because it uses Bun's `tls` fetch
-// option. Same contract: look up the plugin's {port, secret} from the management API server-side,
-// inject the secret, strip the cookie, dial 127.0.0.1 only, stream the response (SSE included).
-// Needs PUNKTFUNK_MGMT_TOKEN in the dev environment (like talking to any token-required host).
+// Dev-only `/plugin-ui/<id>/**` proxy: the route (server/routes/plugin-ui/[...].ts) needs Bun's
+// `tls` fetch option. Same secret, cookie strip and 127.0.0.1-only dial, but it skips `callPlugin`:
+// no host relay for a port-0 (viaHost) plugin and no 401 retry. Needs PUNKTFUNK_MGMT_TOKEN in the
+// dev environment.
 function pluginUiDevProxy(): Plugin {
 	const fetchCred = (
 		id: string,

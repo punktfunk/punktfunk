@@ -29,13 +29,11 @@ mod qos_windows;
 pub mod shared;
 #[cfg(not(target_family = "wasm"))]
 pub mod sockstat;
+#[cfg(feature = "quic")]
 mod udp;
 
 pub use loopback::{loopback_drop_head, loopback_drop_tail, loopback_pair, LoopbackTransport};
 pub use qos::{grow_socket_buffers, set_dscp_default, set_media_qos, MediaClass, QosFlow};
-/// Windows-only USO batch send for a caller that owns its connected socket (GameStream video).
-#[cfg(target_os = "windows")]
-pub use udp::send_uso_all;
 
 /// A datagram transport. `recv` is non-blocking: `Ok(None)` means no packet
 /// is available, so the decode/present thread never blocks here.

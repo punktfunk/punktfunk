@@ -17,6 +17,7 @@ use super::gbm_pool::{render_node_for, GbmPool};
 use super::{CaptureSignals, FrameSlot};
 use anyhow::{anyhow, bail, Context, Result};
 use pf_frame::{CapturedFrame, DmabufFrame, FramePayload, HdrMeta, PixelFormat};
+use pf_zerocopy::drm;
 use std::os::fd::{AsRawFd, OwnedFd};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::SyncSender;
@@ -215,41 +216,35 @@ pub(super) struct OutputColor {
     pub max_fall: Option<u32>,
 }
 
-/// BT.2020 primaries and D65 white, CIE xy × 1e6.
-const BT2020_XY: [(i32, i32); 4] = [
-    (708_000, 292_000),
-    (170_000, 797_000),
-    (131_000, 46_000),
-    (312_700, 329_000),
-];
-
 impl OutputColor {
     /// BT.2020 under the PQ curve — the one encoding the stream's HDR path carries.
     pub(super) fn is_hdr10(&self) -> bool {
         self.primaries == Primaries::Bt2020 as u32 && self.tf == TransferFunction::St2084Pq as u32
     }
 
-    /// ST.2086 + CLL block for this description. Mastering values when the compositor sent
-    /// them (Hyprland forwards the panel's EDID); otherwise the generic 1000-nit HDR10 block
-    /// the PipeWire path also claims. CIE xy × 1e6 → 1/50000 units is a divide by 20.
+    /// ST.2086 + CLL block for this description: [`pf_frame::hdr::generic_hdr10`] with each
+    /// field the compositor sent written over it (Hyprland forwards the panel's EDID).
+    /// CIE xy × 1e6 → 1/50000 units is a divide by 20.
     pub(super) fn hdr_meta(&self) -> HdrMeta {
-        let xy = |(x, y): (i32, i32)| {
-            [
-                (x / 20).clamp(0, 50_000) as u16,
-                (y / 20).clamp(0, 50_000) as u16,
-            ]
-        };
-        let [r, g, b, w] = self.target_primaries.unwrap_or(BT2020_XY);
-        let (min, max) = self.target_luminance.unwrap_or((50, 1000));
-        let nits = |v: Option<u32>| v.unwrap_or(0).min(u32::from(u16::MAX)) as u16;
-        HdrMeta {
-            display_primaries: [xy(g), xy(b), xy(r)],
-            white_point: xy(w),
-            max_display_mastering_luminance: max.saturating_mul(10_000),
-            min_display_mastering_luminance: min,
-            max_cll: nits(self.max_cll),
-            max_fall: nits(self.max_fall),
+        let mut m = pf_frame::hdr::generic_hdr10();
+        if let Some([r, g, b, w]) = self.target_primaries {
+            let xy = |(x, y): (i32, i32)| {
+                [
+                    (x / 20).clamp(0, 50_000) as u16,
+                    (y / 20).clamp(0, 50_000) as u16,
+                ]
+            };
+            m.display_primaries = [xy(g), xy(b), xy(r)];
+            m.white_point = xy(w);
         }
+        if let Some((min, max)) = self.target_luminance {
+            m.min_display_mastering_luminance = min;
+            m.max_display_mastering_luminance = max.saturating_mul(10_000);
+        }
+        let nits = |v: u32| v.min(u32::from(u16::MAX)) as u16;
+        m.max_cll = self.max_cll.map_or(m.max_cll, nits);
+        m.max_fall = self.max_fall.map_or(m.max_fall, nits);
+        m
     }
 }
 
@@ -630,18 +625,12 @@ fn needs_cuda_import(policy: &crate::ZeroCopyPolicy) -> bool {
     policy.backend_is_gpu && !policy.backend_is_vaapi && !policy.pyrowave_session
 }
 
+/// The pixel format of a buffer this capture allocates: packed RGB only, never the
+/// two-plane NV12/P010 a PipeWire producer may offer. The 10-bit pair is the HDR capture,
+/// PQ by the output's description.
 fn fourcc_to_pixel(fourcc: u32) -> Option<PixelFormat> {
-    // `XR24`/`AR24` are little-endian BGRx/BGRA, which is what the encoders ingest; the
-    // 10-bit pair is the HDR capture, PQ by the output's description.
-    match &fourcc.to_le_bytes() {
-        b"XR24" => Some(PixelFormat::Bgrx),
-        b"AR24" => Some(PixelFormat::Bgra),
-        b"XB24" => Some(PixelFormat::Rgbx),
-        b"AB24" => Some(PixelFormat::Rgba),
-        b"XB30" => Some(PixelFormat::X2Bgr10),
-        b"XR30" => Some(PixelFormat::X2Rgb10),
-        _ => None,
-    }
+    PixelFormat::from_drm_fourcc(fourcc)
+        .filter(|f| !matches!(f, PixelFormat::Nv12 | PixelFormat::P010))
 }
 
 /// Fourccs to allocate, by preference. SDR is the packed-RGB pair every encoder ingests.
@@ -649,25 +638,29 @@ fn fourcc_to_pixel(fourcc: u32) -> Option<PixelFormat> {
 /// Hyprland hands out `XBGR2101010` for a 10-bit head anyway.
 fn wanted_fourccs(hdr: bool) -> [u32; 2] {
     if hdr {
-        [u32::from_le_bytes(*b"XB30"), u32::from_le_bytes(*b"XR30")]
+        [drm::XB30, drm::XR30]
     } else {
-        [u32::from_le_bytes(*b"XR24"), u32::from_le_bytes(*b"AR24")]
+        [drm::XR24, drm::AR24]
     }
 }
 
-pub(super) struct WlHandles {
-    pub(super) slot: FrameSlot,
-    pub(super) wake: std::sync::mpsc::Receiver<()>,
-    pub(super) signals: CaptureSignals,
-    pub(super) quit: Arc<AtomicBool>,
-    pub(super) join: std::thread::JoinHandle<()>,
+// The encode loop's end of the thread `spawn` starts.
+mod capturer;
+pub(crate) use capturer::WlCapturer;
+
+struct WlHandles {
+    slot: FrameSlot,
+    wake: std::sync::mpsc::Receiver<()>,
+    signals: CaptureSignals,
+    quit: Arc<AtomicBool>,
+    join: std::thread::JoinHandle<()>,
     /// The output's mastering volume once a 10-bit PQ pool is up; `None` on an SDR capture.
-    pub(super) hdr_meta: Option<HdrMeta>,
+    hdr_meta: Option<HdrMeta>,
 }
 
 /// Spawn the capture thread for `output_name`. `want_hdr` asks for the output's packed
 /// 10-bit buffer and fails unless its description is BT.2020 PQ.
-pub(super) fn spawn(
+fn spawn(
     output_name: String,
     policy: crate::ZeroCopyPolicy,
     want_hdr: bool,
@@ -733,6 +726,8 @@ pub(super) fn spawn(
     })
 }
 
+/// The capture thread's body. A setup failure goes to the opener through `started`, which
+/// falls back to the portal; a failure once streaming ends the loop and marks it broken.
 #[allow(clippy::too_many_arguments)]
 fn run(
     output_name: &str,
@@ -744,9 +739,61 @@ fn run(
     quit: &AtomicBool,
     started: std::sync::mpsc::Sender<Result<Option<HdrMeta>>>,
 ) -> Result<()> {
+    match open(output_name, &policy, want_hdr, signals) {
+        Ok(opened) => {
+            let _ = started.send(Ok(opened.hdr_meta));
+            pump(opened, &slot, &wake, signals, quit)
+        }
+        Err(e) => {
+            let _ = started.send(Err(e));
+            Ok(())
+        }
+    }
+}
+
+/// A capture session ready to stream: what [`open`] set up and [`pump`] drives. Fields drop
+/// in declaration order: the buffers and the pool before the importer, every proxy before
+/// the connection.
+struct Opened {
+    /// Buffers the encoder does not hold; a returned one writes to `wake_r`.
+    free: Arc<FreeList>,
+    /// Each pool buffer wrapped as a `wl_buffer` once; they live as long as the pool.
+    buffers: Vec<wl_buffer::WlBuffer>,
+    pool: GbmPool,
+    importer: Option<pf_zerocopy::Importer>,
+    /// NVENC converts the held dmabuf itself; the importer only named the modifiers.
+    raw_lane: bool,
+    fourcc: u32,
+    format: PixelFormat,
+    size: (u32, u32),
+    hdr_meta: Option<HdrMeta>,
+    session: CaptureSession,
+    source: CaptureSource,
+    /// Kept bound to see the head re-lit (`image_description_changed`).
+    _cm_out: Option<CmOutput>,
+    st: State,
+    _registry: wl_registry::WlRegistry,
+    qh: QueueHandle<State>,
+    queue: EventQueue<State>,
+    conn: Connection,
+    /// Read end of the wakeup pipe: the setup waits and the frame loop's poll.
+    wake_r: OwnedFd,
+}
+
+/// Bind the globals, read the output's colour, start the session and build the pool, up to
+/// each buffer wrapped as a `wl_buffer`. Every failure keeps the portal path.
+///
+/// The streaming and negotiated signals are stored before this returns: the opener must not
+/// see a capturer that is not streaming yet.
+fn open(
+    output_name: &str,
+    policy: &crate::ZeroCopyPolicy,
+    want_hdr: bool,
+    signals: &CaptureSignals,
+) -> Result<Opened> {
     // One pipe for both waits below: the bounded constraints wait, and the frame loop's
     // "a buffer came back" wakeup.
-    let (quit_pipe_r, wake_w) = pipe().context("wakeup pipe")?;
+    let (wake_r, wake_w) = pipe().context("wakeup pipe")?;
     let conn = Connection::connect_to_env().context("wayland connect")?;
     let mut queue = conn.new_event_queue();
     let qh = queue.handle();
@@ -755,52 +802,35 @@ fn run(
     queue.roundtrip(&mut st).context("registry roundtrip")?;
     queue.roundtrip(&mut st).context("output-name roundtrip")?;
 
-    let setup = (|| -> Result<_> {
-        let source_mgr = st.source_mgr.clone().ok_or_else(|| {
-            anyhow!("compositor has no ext_output_image_capture_source_manager_v1")
-        })?;
-        let capture_mgr = st
-            .capture_mgr
-            .clone()
-            .ok_or_else(|| anyhow!("compositor has no ext_image_copy_capture_manager_v1"))?;
-        let linux_dmabuf = st
-            .linux_dmabuf
-            .clone()
-            .ok_or_else(|| anyhow!("compositor has no zwp_linux_dmabuf_v1 (v3+)"))?;
-        let output = st
-            .output_named(output_name)
-            .ok_or_else(|| {
-                anyhow!(
-                    "no wl_output named {output_name} (have: {:?})",
-                    st.outputs
-                        .iter()
-                        .filter_map(|(_, n)| n.clone())
-                        .collect::<Vec<_>>()
-                )
-            })?
-            .clone();
-        Ok((source_mgr, capture_mgr, linux_dmabuf, output))
-    })();
-    let (source_mgr, capture_mgr, linux_dmabuf, output) = match setup {
-        Ok(v) => v,
-        Err(e) => {
-            let _ = started.send(Err(e));
-            return Ok(());
-        }
-    };
+    let source_mgr = st
+        .source_mgr
+        .clone()
+        .ok_or_else(|| anyhow!("compositor has no ext_output_image_capture_source_manager_v1"))?;
+    let capture_mgr = st
+        .capture_mgr
+        .clone()
+        .ok_or_else(|| anyhow!("compositor has no ext_image_copy_capture_manager_v1"))?;
+    let linux_dmabuf = st
+        .linux_dmabuf
+        .clone()
+        .ok_or_else(|| anyhow!("compositor has no zwp_linux_dmabuf_v1 (v3+)"))?;
+    let output = st
+        .output_named(output_name)
+        .ok_or_else(|| {
+            anyhow!(
+                "no wl_output named {output_name} (have: {:?})",
+                st.outputs
+                    .iter()
+                    .filter_map(|(_, n)| n.clone())
+                    .collect::<Vec<_>>()
+            )
+        })?
+        .clone();
 
     // The output's colour comes first: an HDR session has nothing to capture on an SDR head,
     // and the `wp_color_management_output_v1` stays bound to see the head re-lit.
     let color = match st.color_mgr.clone() {
-        Some(mgr) => {
-            match fetch_output_color(&conn, &mut queue, &mut st, &qh, &mgr, &output, &quit_pipe_r) {
-                Ok(v) => v,
-                Err(e) => {
-                    let _ = started.send(Err(e));
-                    return Ok(());
-                }
-            }
-        }
+        Some(mgr) => fetch_output_color(&conn, &mut queue, &mut st, &qh, &mgr, &output, &wake_r)?,
         None => None,
     };
     let _cm_out = color.as_ref().map(|(o, _)| o.clone());
@@ -808,22 +838,16 @@ fn run(
     let hdr = match (want_hdr, color) {
         (false, _) => false,
         (true, Some(c)) if c.is_hdr10() => true,
-        (true, Some(c)) => {
-            let _ = started.send(Err(anyhow!(
-                "output {output_name} is not lit in HDR (primaries {} / transfer {}) — the \
-                 session negotiated BT.2020 PQ",
-                c.primaries,
-                c.tf
-            )));
-            return Ok(());
-        }
-        (true, None) => {
-            let _ = started.send(Err(anyhow!(
-                "compositor describes no colour for output {output_name} (no \
-                 wp_color_management_v1) — HDR capture needs it"
-            )));
-            return Ok(());
-        }
+        (true, Some(c)) => bail!(
+            "output {output_name} is not lit in HDR (primaries {} / transfer {}) — the \
+             session negotiated BT.2020 PQ",
+            c.primaries,
+            c.tf
+        ),
+        (true, None) => bail!(
+            "compositor describes no colour for output {output_name} (no \
+             wp_color_management_v1) — HDR capture needs it"
+        ),
     };
 
     let source = source_mgr.create_source(&output, &qh, ());
@@ -836,17 +860,15 @@ fn run(
         (),
     );
     // Constraints arrive as a batch ending in `done`.
-    let got_constraints = pump_until(
+    if !pump_until(
         &conn,
         &mut queue,
         &mut st,
-        &quit_pipe_r,
+        &wake_r,
         Duration::from_secs(3),
         |s| s.constraints_done,
-    )?;
-    if !got_constraints {
-        let _ = started.send(Err(anyhow!("capture session sent no buffer constraints")));
-        return Ok(());
+    )? {
+        bail!("capture session sent no buffer constraints");
     }
 
     // NVENC's raw lane converts the held dmabuf into its slot in one pass, as libva and
@@ -856,37 +878,21 @@ fn run(
     let raw_lane = policy.nvenc_raw_dmabuf
         && !signals.health.raw_disabled()
         && !signals.health.passthrough_tiled_refused();
-    let mut importer = if needs_cuda_import(&policy) {
-        match pf_zerocopy::Importer::new_for_capture() {
-            Ok(i) => Some(i),
-            Err(e) => {
-                let _ = started.send(Err(anyhow!(
-                    "this session's encoder needs the GPU importer, which did not start: {e:#}"
-                )));
-                return Ok(());
-            }
-        }
+    let mut importer = if needs_cuda_import(policy) {
+        let importer = pf_zerocopy::Importer::new_for_capture().map_err(|e| {
+            anyhow!("this session's encoder needs the GPU importer, which did not start: {e:#}")
+        })?;
+        Some(importer)
     } else {
         None
     };
     // Only direct-SDK NVENC reads packed 10-bit PQ off a CUDA import; any other arm would
     // encode the words as garbage.
     if hdr && importer.is_some() && !raw_lane && !policy.hdr_cuda_ok {
-        let _ = started.send(Err(anyhow!(
-            "this session's encoder takes no 10-bit PQ through the GPU importer"
-        )));
-        return Ok(());
+        bail!("this session's encoder takes no 10-bit PQ through the GPU importer");
     }
-    let build = build_pool(&st, importer.as_mut(), &policy, hdr);
-    let (pool, fourcc, format, (w, h)) = match build {
-        Ok(v) => v,
-        Err(e) => {
-            let _ = started.send(Err(e));
-            return Ok(());
-        }
-    };
+    let (pool, fourcc, format, (w, h)) = build_pool(&st, importer.as_mut(), policy, hdr)?;
 
-    // Wrap each dmabuf as a wl_buffer once; they live as long as the pool.
     let mut buffers: Vec<wl_buffer::WlBuffer> = Vec::with_capacity(pool.bos.len());
     for bo in &pool.bos {
         let params = linux_dmabuf.create_params(&qh, ());
@@ -935,26 +941,57 @@ fn run(
         hdr,
         "direct wayland capture: the compositor fills our dmabufs, no portal in the path"
     );
-    let _ = started.send(Ok(hdr_meta));
+    Ok(Opened {
+        free,
+        buffers,
+        pool,
+        importer,
+        raw_lane,
+        fourcc,
+        format,
+        size: (w, h),
+        hdr_meta,
+        session,
+        source,
+        _cm_out,
+        st,
+        _registry,
+        qh,
+        queue,
+        conn,
+        wake_r,
+    })
+}
 
+/// The frame loop: arm a capture whenever none is outstanding and a buffer is free, and hand
+/// each ready one to `slot`. Ends on `quit` or a stopped session; a failed frame, a resize
+/// or a re-lit head ends it with an error, and the capture rebuilds.
+fn pump(
+    mut o: Opened,
+    slot: &FrameSlot,
+    wake: &SyncSender<()>,
+    signals: &CaptureSignals,
+    quit: &AtomicBool,
+) -> Result<()> {
+    let (w, h) = o.size;
     let mut frame: Option<(CaptureFrame, usize)> = None;
     let mut delivered: u64 = 0;
     // Clocks drift by microseconds over a long session; re-paired on the same cadence as
     // the portal path's provenance window.
     let mut rt_minus_mono_ns = super::pipewire::realtime_minus_monotonic_ns();
     let mut repaired = std::time::Instant::now();
-    while !quit.load(Ordering::Relaxed) && !st.stopped {
+    while !quit.load(Ordering::Relaxed) && !o.st.stopped {
         // Arm whenever nothing is outstanding and a buffer is free. A returned buffer
         // wakes the poll below, so this runs the moment the encoder lets go.
         if frame.is_none() {
-            if let Some(idx) = free.take() {
-                let f = session.create_frame(&qh, ());
-                f.attach_buffer(&buffers[idx]);
+            if let Some(idx) = o.free.take() {
+                let f = o.session.create_frame(&o.qh, ());
+                f.attach_buffer(&o.buffers[idx]);
                 f.damage_buffer(0, 0, w as i32, h as i32);
                 f.capture();
-                st.ready = false;
-                st.failed = None;
-                st.presented_ns = None;
+                o.st.ready = false;
+                o.st.failed = None;
+                o.st.presented_ns = None;
                 frame = Some((f, idx));
             }
         }
@@ -962,115 +999,123 @@ fn run(
             rt_minus_mono_ns = super::pipewire::realtime_minus_monotonic_ns();
             repaired = std::time::Instant::now();
         }
-        conn.flush().context("wayland flush")?;
-        wait_readable(&conn, &quit_pipe_r, POLL_SLICE)?;
-        drain(&quit_pipe_r);
-        queue.dispatch_pending(&mut st).context("dispatch")?;
-        if let Some(reason) = st.failed.take() {
+        o.conn.flush().context("wayland flush")?;
+        wait_readable(&o.conn, &o.wake_r, POLL_SLICE)?;
+        drain(&o.wake_r);
+        o.queue.dispatch_pending(&mut o.st).context("dispatch")?;
+        if let Some(reason) = o.st.failed.take() {
             if let Some((f, idx)) = frame.take() {
                 f.destroy();
-                free.put(idx);
+                o.free.put(idx);
             }
             bail!("compositor failed the capture frame (reason {reason})");
         }
-        if st.resized {
+        if o.st.resized {
             bail!("capture source changed size — rebuilding the capture");
         }
-        if st.color_changed {
+        if o.st.color_changed {
             bail!("output colour description changed — rebuilding the capture");
         }
-        if st.ready {
-            st.ready = false;
-            let Some((f, idx)) = frame.take() else {
-                continue;
-            };
-            f.destroy();
-            let bo = &pool.bos[idx];
-            let modifier = if bo.modifier == pf_zerocopy::gbm::DRM_FORMAT_MOD_INVALID {
-                0
-            } else {
-                bo.modifier
-            };
-            let payload = if let Some(imp) = importer.as_mut().filter(|_| !raw_lane) {
-                // The import reads the buffer synchronously here, so the buffer goes
-                // straight back to the pool: the CUDA payload owns whatever it needed.
-                let plane = pf_zerocopy::DmabufPlane {
-                    fd: bo.fd.as_raw_fd(),
-                    offset: bo.offset,
-                    stride: bo.stride,
-                };
-                let (kind, modifier) = match modifier {
-                    0 => (pf_zerocopy::ImportKind::Linear, None),
-                    m => (pf_zerocopy::ImportKind::Tiled, Some(m)),
-                };
-                let imported = imp.import(kind, &plane, w, h, fourcc, modifier);
-                free.put(idx);
-                match imported {
-                    Ok(buf) => FramePayload::Cuda(buf),
-                    Err(e) => bail!("GPU import of the captured dmabuf failed: {e:#}"),
-                }
-            } else {
-                // The frame owns and closes the dup; the pool keeps its own fd.
-                let fd = bo
-                    .fd
-                    .try_clone()
-                    .context("dup the capture dmabuf (raise the host's NOFILE)")?;
-                let hold: pf_frame::FrameHold = Arc::new(BufHold {
-                    list: free.clone(),
-                    idx,
-                });
-                FramePayload::Dmabuf(DmabufFrame {
-                    fd,
-                    fourcc,
-                    modifier,
-                    offset: bo.offset,
-                    stride: bo.stride,
-                    plane1: None,
-                    hold: Some(hold),
-                    health: signals.health.clone(),
-                    rebuild: signals.broken.clone(),
-                })
-            };
-            // The compositor stamps `presentation_time` on CLOCK_MONOTONIC; the wire
-            // speaks realtime-since-epoch. `wire_pts` rebases it and falls back to the
-            // delivery stamp when the result is implausible, exactly as the portal path
-            // does for `SPA_META_Header`.
-            let delivery_ns = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .map(|d| d.as_nanos() as u64)
-                .unwrap_or(0);
-            let pts_ns = crate::pts_provenance::wire_pts(
-                st.presented_ns.take().map(|p| p as i64),
-                delivery_ns,
-                rt_minus_mono_ns,
-            )
-            .pts_ns;
-            let captured = CapturedFrame {
-                provenance: Default::default(),
-                width: w,
-                height: h,
-                pts_ns,
-                format,
-                payload,
-                cursor: signals.cursor_live.lock().ok().and_then(|c| c.clone()),
-            };
-            if let Ok(mut s) = slot.lock() {
-                *s = Some(captured);
-            }
-            let _ = wake.try_send(());
-            delivered += 1;
-            if delivered == 1 {
-                tracing::info!("direct wayland capture: first frame delivered");
-            }
+        if !o.st.ready {
+            continue;
+        }
+        o.st.ready = false;
+        let Some((f, idx)) = frame.take() else {
+            continue;
+        };
+        f.destroy();
+        let payload = o.deliver(idx, signals)?;
+        // The compositor stamps `presentation_time` on CLOCK_MONOTONIC; the wire
+        // speaks realtime-since-epoch. `wire_pts` rebases it and falls back to the
+        // delivery stamp when the result is implausible, exactly as the portal path
+        // does for `SPA_META_Header`.
+        let delivery_ns = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_nanos() as u64)
+            .unwrap_or(0);
+        let pts_ns = crate::pts_provenance::wire_pts(
+            o.st.presented_ns.take().map(|p| p as i64),
+            delivery_ns,
+            rt_minus_mono_ns,
+        )
+        .pts_ns;
+        let captured = CapturedFrame {
+            provenance: Default::default(),
+            width: w,
+            height: h,
+            pts_ns,
+            format: o.format,
+            payload,
+            cursor: signals.cursor_live.lock().ok().and_then(|c| c.clone()),
+        };
+        if let Ok(mut s) = slot.lock() {
+            *s = Some(captured);
+        }
+        let _ = wake.try_send(());
+        delivered += 1;
+        if delivered == 1 {
+            tracing::info!("direct wayland capture: first frame delivered");
         }
     }
     if let Some((f, idx)) = frame.take() {
         f.destroy();
-        free.put(idx);
+        o.free.put(idx);
     }
-    session.destroy();
-    source.destroy();
+    o.session.destroy();
+    o.source.destroy();
     Ok(())
+}
+
+impl Opened {
+    /// The payload for buffer `idx`, which the compositor just filled. A CUDA import reads
+    /// it here and hands it straight back to the pool; the raw lane passes the dmabuf on
+    /// under a [`BufHold`] that returns it when the encoder lets go.
+    fn deliver(&mut self, idx: usize, signals: &CaptureSignals) -> Result<FramePayload> {
+        let bo = &self.pool.bos[idx];
+        let modifier = if bo.modifier == pf_zerocopy::gbm::DRM_FORMAT_MOD_INVALID {
+            0
+        } else {
+            bo.modifier
+        };
+        let (w, h) = self.size;
+        if let Some(imp) = self.importer.as_mut().filter(|_| !self.raw_lane) {
+            let plane = pf_zerocopy::DmabufPlane {
+                fd: bo.fd.as_raw_fd(),
+                offset: bo.offset,
+                stride: bo.stride,
+            };
+            let (kind, modifier) = match modifier {
+                0 => (pf_zerocopy::ImportKind::Linear, None),
+                m => (pf_zerocopy::ImportKind::Tiled, Some(m)),
+            };
+            let imported = imp.import(kind, &plane, w, h, self.fourcc, modifier);
+            self.free.put(idx);
+            return match imported {
+                Ok(buf) => Ok(FramePayload::Cuda(buf)),
+                Err(e) => bail!("GPU import of the captured dmabuf failed: {e:#}"),
+            };
+        }
+        // The frame owns and closes the dup; the pool keeps its own fd.
+        let fd = bo
+            .fd
+            .try_clone()
+            .context("dup the capture dmabuf (raise the host's NOFILE)")?;
+        let hold: pf_frame::FrameHold = Arc::new(BufHold {
+            list: self.free.clone(),
+            idx,
+        });
+        Ok(FramePayload::Dmabuf(DmabufFrame {
+            fd,
+            fourcc: self.fourcc,
+            modifier,
+            offset: bo.offset,
+            stride: bo.stride,
+            plane1: None,
+            hold: Some(hold),
+            health: signals.health.clone(),
+            rebuild: signals.broken.clone(),
+        }))
+    }
 }
 
 /// Intersect each constrained fourcc with its consumer list, then allocate that pool.
@@ -1189,11 +1234,7 @@ mod tests {
     use super::{choose_format, fourcc_to_pixel, wanted_fourccs, OutputColor};
     use super::{Primaries, TransferFunction};
     use pf_frame::PixelFormat;
-
-    const XR24: u32 = u32::from_le_bytes(*b"XR24");
-    const AR24: u32 = u32::from_le_bytes(*b"AR24");
-    const XB30: u32 = u32::from_le_bytes(*b"XB30");
-    const XR30: u32 = u32::from_le_bytes(*b"XR30");
+    use pf_zerocopy::drm::{AR24, NV12, P010, XB30, XR24, XR30};
 
     fn pq() -> OutputColor {
         OutputColor {
@@ -1221,16 +1262,21 @@ mod tests {
 
     #[test]
     fn a_description_without_mastering_data_yields_the_generic_hdr10_block() {
-        let m = pq().hdr_meta();
-        // The same block `PortalCapturer::hdr_meta` claims: BT.2020, D65, 1000 / 0.005 nits.
-        assert_eq!(
-            m.display_primaries,
-            [[8500, 39850], [6550, 2300], [35400, 14600]]
-        );
-        assert_eq!(m.white_point, [15635, 16450]);
-        assert_eq!(m.max_display_mastering_luminance, 10_000_000);
-        assert_eq!(m.min_display_mastering_luminance, 50);
-        assert_eq!((m.max_cll, m.max_fall), (0, 0));
+        assert_eq!(pq().hdr_meta(), pf_frame::hdr::generic_hdr10());
+    }
+
+    /// Only the fields the compositor sent replace the fallback's.
+    #[test]
+    fn a_partial_description_keeps_the_fallback_for_the_rest() {
+        let c = OutputColor {
+            max_cll: Some(600),
+            ..pq()
+        };
+        let want = pf_frame::HdrMeta {
+            max_cll: 600,
+            ..pf_frame::hdr::generic_hdr10()
+        };
+        assert_eq!(c.hdr_meta(), want);
     }
 
     #[test]
@@ -1313,6 +1359,7 @@ mod tests {
     fn only_the_packed_rgb_fourccs_the_encoders_ingest_map_to_a_pixel_format() {
         assert_eq!(fourcc_to_pixel(XR24), Some(PixelFormat::Bgrx));
         assert_eq!(fourcc_to_pixel(AR24), Some(PixelFormat::Bgra));
-        assert_eq!(fourcc_to_pixel(u32::from_le_bytes(*b"NV12")), None);
+        assert_eq!(fourcc_to_pixel(NV12), None);
+        assert_eq!(fourcc_to_pixel(P010), None);
     }
 }

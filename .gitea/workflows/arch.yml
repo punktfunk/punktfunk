@@ -33,6 +33,7 @@ on:
       - 'crates/pf-bitstream/**'
       - 'crates/pf-capture/**'
       - 'crates/pf-client-core/**'
+      - 'crates/pf-client-video/**'
       - 'crates/pf-clipboard/**'
       - 'crates/pf-console-ui/**'
       - 'crates/pf-dmabuf/**'
@@ -103,6 +104,7 @@ on:
       - 'scripts/web-init.sh'
       - 'scripts/alsa-ucm2/**'
       - 'scripts/ci/assert-cap-matrix.sh'
+      - 'scripts/ci/assert-payload-parity.sh'
       - 'scripts/ci/gitea-release.sh'
       - 'scripts/ci/pf-version.sh'
       - 'scripts/ci/retry.sh'
@@ -337,6 +339,14 @@ jobs:
         run: |
           bash scripts/ci/assert-cap-matrix.sh --self-test
           bash scripts/ci/assert-cap-matrix.sh "$GITHUB_WORKSPACE"/dist/punktfunk-host-*.pkg.tar.zst
+
+      # Every path packaging/linux/payload.txt names, read out of the built packages
+      # (usr/libexec/punktfunk/ is usr/lib/punktfunk/ here).
+      - name: Assert the shared payload (Arch packages)
+        run: |
+          bash scripts/ci/assert-payload-parity.sh --self-test
+          bash scripts/ci/assert-payload-parity.sh "$GITHUB_WORKSPACE"/dist/punktfunk-host-*.pkg.tar.zst \
+            "$GITHUB_WORKSPACE"/dist/punktfunk-client-*.pkg.tar.zst
 
       # The patched gamescope punktfunk-host depends on (packaging/gamescope) — a separate pkgbase
       # with a completely different dependency set, published into the same repo.

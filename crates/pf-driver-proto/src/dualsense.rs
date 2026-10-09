@@ -58,6 +58,29 @@ pub static EDGE_RDESC: [u8; 389] = [
     0x09, 0x53, 0xB1, 0x02, 0xC0,
 ];
 
+/// Input report `0x01` of a USB pad at rest, as pf-inject's encoder writes a neutral state:
+/// sticks centred, hat neutral (8), accel 1 g up, touch contacts lifted, no trigger effect,
+/// charging on USB power. The Edge serves the same bytes.
+pub const NEUTRAL_REPORT: [u8; 64] = {
+    let mut r = [0u8; 64];
+    r[0] = 0x01;
+    r[1] = 0x80; // LX
+    r[2] = 0x80; // LY
+    r[3] = 0x80; // RX
+    r[4] = 0x80; // RY
+    r[8] = 0x08; // low nibble: hat; high nibble: face buttons
+    r[24] = 0x10; // accel Y = 10000: 1 g at FEATURE_CALIBRATION's scale
+    r[25] = 0x27;
+    r[32] = 0x14; // IMU temperature
+    r[33] = 0x80; // contact lifted; SDL reads a zero byte as a finger held at (0, 0)
+    r[37] = 0x80;
+    r[42] = 0x09; // R2, then L2: zone 9
+    r[43] = 0x09;
+    r[53] = 0x2A; // charge complete
+    r[54] = 0x18; // USB data + power
+    r
+};
+
 /// Report `0x05` motion calibration: id plus the 40 bytes the descriptor declares. It states the
 /// wire's 20 LSB per °/s and 10000 LSB per g.
 #[rustfmt::skip]

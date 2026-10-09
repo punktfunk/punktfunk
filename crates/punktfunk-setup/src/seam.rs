@@ -30,8 +30,8 @@ pub struct BasePaths {
 impl BasePaths {
     pub fn from_env() -> Self {
         let home = std::env::var_os("HOME").map_or_else(|| PathBuf::from("/root"), PathBuf::from);
-        let config = std::env::var_os("XDG_CONFIG_HOME")
-            .map(PathBuf::from)
+        let config = Some(pf_paths::xdg_home("XDG_CONFIG_HOME", ".config"))
+            .filter(|c| c.is_absolute())
             .unwrap_or_else(|| home.join(".config"));
         let etc_root = std::env::var_os("PUNKTFUNK_INSTALL_ETC")
             .map_or_else(|| PathBuf::from("/"), PathBuf::from);
@@ -208,18 +208,15 @@ impl SystemRunner {
     // trait so demo mode and the tests cannot be bypassed by accident.
     #[allow(clippy::disallowed_methods)]
     fn command(&self, program: &str) -> std::process::Command {
-        // Windows: a bare tool name becomes its System32 path. The engine runs elevated
-        // from the download directory, which `CreateProcess` searches before `%PATH%`.
+        // Windows: a bare tool name becomes its System32 path, PowerShell one level down.
+        // The engine runs elevated from the download directory, which `CreateProcess`
+        // searches before `%PATH%`.
         #[cfg(windows)]
-        let program = &if program.contains(['\\', '/']) {
-            program.to_string()
-        } else {
-            let exe = if program.contains('.') {
-                program.to_string()
-            } else {
-                format!("{program}.exe")
-            };
-            crate::platform::windows::sys::system32(&exe)
+        let program = &match program {
+            p if p.contains(['\\', '/']) => p.to_string(),
+            "powershell" | "powershell.exe" => pf_paths::system32(pf_paths::POWERSHELL),
+            p if p.contains('.') => pf_paths::system32(p),
+            p => pf_paths::system32(&format!("{p}.exe")),
         };
         let mut c = std::process::Command::new(program);
         // CREATE_NO_WINDOW: a fresh hidden console per child. The one inherited from the

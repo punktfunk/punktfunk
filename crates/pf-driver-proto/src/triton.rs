@@ -166,6 +166,14 @@ pub const fn input_len(report_id: u8) -> Option<usize> {
     }
 }
 
+/// Wired `0x42` state report at rest: the id and an all-zero payload, of which a pad serves
+/// `input_len(0x42)` bytes.
+pub const NEUTRAL_REPORT: [u8; 64] = {
+    let mut r = [0u8; 64];
+    r[0] = 0x42;
+    r
+};
+
 /// Declared wire length (id byte included) of each OUTPUT report. hidclass pads every write
 /// to `OutputReportByteLength` (64), so the host trims before forwarding — a 0x80 rumble is
 /// 10 bytes on GATT, not 64. Unknown id returns 64: no trim, never guess a length.

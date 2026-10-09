@@ -368,7 +368,7 @@ mod pool {
         fn drop(&mut self) {
             #[cfg(target_os = "linux")]
             if self.backend == "gamescope" {
-                pf_capture::clear_virtual_output_hdr_latch();
+                pf_frame::hdr::clear_virtual_output_hdr_latch();
             }
         }
     }
@@ -857,7 +857,7 @@ mod pool {
         #[cfg(target_os = "linux")]
         #[test]
         fn tearing_down_gamescope_rearms_its_hdr_but_not_the_portal_latch() {
-            use pf_capture::{hdr_capture_failed, note_hdr_capture_failed, HdrSource};
+            use pf_frame::hdr::{hdr_capture_failed, note_hdr_capture_failed, HdrSource};
             note_hdr_capture_failed(HdrSource::VirtualOutput);
             note_hdr_capture_failed(HdrSource::PortalMonitor);
             drop(test_entry("gamescope", 1, None));
@@ -2237,24 +2237,21 @@ mod linux {
             let es = r.entries.lock().unwrap();
             es.iter()
                 .filter_map(|e| {
-                    let (state, expires_in_ms, sessions) = match e.life {
-                        lifecycle::State::Active { refs } => ("active", None, refs),
-                        lifecycle::State::Lingering { until } => (
-                            "lingering",
-                            Some(until.saturating_duration_since(now).as_millis() as u64),
-                            0,
-                        ),
-                        lifecycle::State::Pinned => ("pinned", None, 0),
+                    let expires_in_ms = match e.life {
                         lifecycle::State::Idle => return None,
+                        lifecycle::State::Lingering { until } => {
+                            Some(until.saturating_duration_since(now).as_millis() as u64)
+                        }
+                        lifecycle::State::Active { .. } | lifecycle::State::Pinned => None,
                     };
                     Some(Row {
                         generation: e.generation,
                         backend: e.backend,
                         mode: e.mode,
                         identity_slot: e.identity_slot,
-                        state,
+                        state: e.life.label(),
                         expires_in_ms,
-                        sessions,
+                        sessions: e.life.refs(),
                     })
                 })
                 .collect()

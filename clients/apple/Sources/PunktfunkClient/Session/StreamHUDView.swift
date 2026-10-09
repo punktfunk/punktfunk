@@ -1,7 +1,7 @@
 // The streaming overlay HUD: the core formats every stats line (`SessionModel.hudLines`, one
 // vocabulary for every client) and this view paints them by role on one glass card, beside the
 // Apple-only chrome (the tvOS access line, the capture hints, the buttons). `.off` never
-// reaches this view (ContentView gates the overlay on the tier).
+// reaches this view (StreamScene gates the overlay on the tier).
 
 import PunktfunkKit
 import SwiftUI
@@ -20,7 +20,7 @@ struct StreamHUDView: View {
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     var body: some View {
-        // .off is gated upstream (ContentView only mounts the HUD when the tier is on) —
+        // .off is gated upstream (StreamScene only mounts the HUD when the tier is on) —
         // render nothing if it ever slips through.
         if verbosity != .off {
             // ONE shared glass card wraps the tier-dependent content, so a verbosity change MORPHS
@@ -80,11 +80,11 @@ struct StreamHUDView: View {
             // couch surface where every extra overlay competes with the picture keeps the
             // fact with the other session facts. Absent for full-and-permanent sessions
             // (every old host): today's overlay must not change there.
-            if model.accessLimited {
-                Text(model.accessRemainingSecs == 0
-                    ? "access \(model.accessLevel.label.lowercased())"
-                    : "access \(model.accessLevel.label.lowercased()) · ends in "
-                        + SessionModel.accessCountdown(model.accessRemainingSecs))
+            if model.notices.accessLimited {
+                Text(model.notices.accessRemainingSecs == 0
+                    ? "access \(model.notices.accessLevel.label.lowercased())"
+                    : "access \(model.notices.accessLevel.label.lowercased()) · ends in "
+                        + SessionModel.accessCountdown(model.notices.accessRemainingSecs))
                     .font(hudFont(.caption2))
                     .foregroundStyle(.secondary)
             }
@@ -256,40 +256,40 @@ struct StreamBadgeStack: View {
     var body: some View {
         VStack(spacing: 8) {
             // How to leave, for a few seconds at stream start.
-            if captureEnabled, model.exitHintShown {
+            if captureEnabled, model.notices.exitHint.isShown {
                 ExitHintBadge(text: model.exitHintText).transition(Self.pop)
             }
             // A forwarded pad has a gyro this session's virtual controller cannot carry. Shown
             // briefly at every stats tier, on every platform: the gyro otherwise just does
             // nothing, and the fix is a setting, so the hint has to name it.
-            if captureEnabled, model.motionUnreachableKind != nil {
+            if captureEnabled, model.notices.motionUnreachable.isShown {
                 MotionUnreachableBadge().transition(Self.pop)
             }
             // The SC2 passthrough's claim edge, the capture's only visible trace.
-            if captureEnabled, model.sc2CapturedHint {
+            if captureEnabled, model.notices.sc2Captured.isShown {
                 Sc2CapturedBadge().transition(Self.pop)
             }
             // The Touch (passthrough) model met a host that drops contacts; the fingers run the
             // trackpad engine instead, and this says so once.
-            if captureEnabled, model.touchFallbackNotice {
+            if captureEnabled, model.notices.touchFallback.isShown {
                 TouchFallbackBadge().transition(Self.pop)
             }
             // The expiry warning (T−5 m / T−1 m, per-client access §7), every platform and tier:
             // a dead pad must read as ended access while it can still be fixed.
-            if captureEnabled, let warning = model.accessWarning {
+            if captureEnabled, let warning = model.notices.accessWarning.value {
                 AccessWarningBadge(text: warning).transition(Self.pop)
             }
             // The host's word on a launch that did not give the player their game.
-            if captureEnabled, let notice = model.launchNotice {
+            if captureEnabled, let notice = model.notices.launch.value {
                 AccessWarningBadge(text: notice, icon: "exclamationmark.triangle")
                     .transition(Self.pop)
             }
             #if !os(tvOS)
             // The access chip rides the stats tier for a LIMITED session only; a
             // full-and-permanent one never mounts it. tvOS states it in the stats overlay.
-            if captureEnabled && statsVerbosity != .off && model.accessLimited {
+            if captureEnabled && statsVerbosity != .off && model.notices.accessLimited {
                 AccessChipBadge(
-                    label: model.accessLevel.label, remainingSecs: model.accessRemainingSecs)
+                    label: model.notices.accessLevel.label, remainingSecs: model.notices.accessRemainingSecs)
                     .transition(Self.pop)
             }
             // Up for as long as the mic is muted, at every stats tier (see MicMutedBadge).
@@ -302,13 +302,13 @@ struct StreamBadgeStack: View {
         // The badges' visibility drivers, the stats tier included (the access chip rides it). A
         // badge whose driver is missing here pops in unanimated.
         .animation(.easeOut(duration: 0.2), value: model.micMuted)
-        .animation(.easeOut(duration: 0.2), value: model.accessWarning)
-        .animation(.easeOut(duration: 0.2), value: model.launchNotice)
-        .animation(.easeOut(duration: 0.2), value: model.accessLimited)
+        .animation(.easeOut(duration: 0.2), value: model.notices.accessWarning.value)
+        .animation(.easeOut(duration: 0.2), value: model.notices.launch.value)
+        .animation(.easeOut(duration: 0.2), value: model.notices.accessLimited)
         .animation(.easeOut(duration: 0.2), value: statsVerbosity)
-        .animation(.easeOut(duration: 0.2), value: model.motionUnreachableKind)
-        .animation(.easeOut(duration: 0.2), value: model.sc2CapturedHint)
-        .animation(.easeOut(duration: 0.6), value: model.exitHintShown)
+        .animation(.easeOut(duration: 0.2), value: model.notices.motionUnreachable.value)
+        .animation(.easeOut(duration: 0.2), value: model.notices.sc2Captured.isShown)
+        .animation(.easeOut(duration: 0.6), value: model.notices.exitHint.isShown)
     }
 }
 

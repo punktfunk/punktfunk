@@ -64,13 +64,10 @@ pub struct ImportSupport {
 
 /// Planar slots on this vendor? A planar D3D11 import loses the Vulkan device on NVIDIA
 /// and on Intel however it is consumed, so both stay on the RGB ring.
-/// `PUNKTFUNK_D3D11_PLANAR=0|1` overrides it both ways.
+/// `PUNKTFUNK_D3D11_PLANAR=1|0` overrides it both ways.
 pub fn planar_allowed(vendor_id: u32) -> bool {
-    match std::env::var("PUNKTFUNK_D3D11_PLANAR").as_deref() {
-        Ok("0") => false,
-        Ok("1") => true,
-        _ => !matches!(vendor_id, 0x10DE | 0x8086),
-    }
+    pf_client_core::env_on("PUNKTFUNK_D3D11_PLANAR")
+        .unwrap_or(!matches!(vendor_id, 0x10DE | 0x8086))
 }
 
 /// Ask the driver, once at setup, which D3D11 slot formats import here.

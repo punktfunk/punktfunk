@@ -57,7 +57,7 @@ classify() {
                 .cargo/*|Cargo.toml|Cargo.lock|rust-toolchain.toml|rustfmt.toml|\
                 clients/linux/*|clients/session/*|clients/shared/*|\
                 crates/punktfunk-core/*|crates/punktfunk-ffi/*|\
-                crates/pf-bitstream/*|crates/pf-client-core/*|crates/pf-console-ui/*|\
+                crates/pf-bitstream/*|crates/pf-client-core/*|crates/pf-client-video/*|crates/pf-console-ui/*|\
                 crates/pf-dmabuf/*|crates/pf-dxvadec/*|crates/pf-libva/*|crates/pf-presenter/*|\
                 crates/pf-update-check/*|crates/pf-vaapi/*|crates/pf-v4l2dec/*|crates/pf-v4l2/*|crates/pf-vkdecode/*|\
                 crates/pyrowave-sys/*|ci/rust-ci-arm64cross.Dockerfile|\
@@ -67,7 +67,7 @@ classify() {
             esac
             case "$path" in
                 web/*|api/openapi.json|scripts/ci/retry.sh|clients/shared/library-id-vectors.json|\
-                crates/punktfunk-host/src/library/custom.rs|\
+                crates/punktfunk-host/src/library/custom.rs|plugin-kit/src/wire.ts|\
                 crates/punktfunk-core/testdata/grant-vectors.json|\
                 crates/punktfunk-core/testdata/gamepad-button-vectors.json)
                     web=true
@@ -80,12 +80,13 @@ classify() {
             esac
             case "$path" in
                 sdk/*|plugin-kit/*|api/openapi.json|scripts/ci/retry.sh|\
-                clients/shared/library-id-vectors.json)
+                clients/shared/library-id-vectors.json|\
+                crates/punktfunk-host/testdata/path-refusal-vectors.json)
                     sdk_plugin_kit=true
                     ;;
             esac
             case "$path" in
-                clients/decky/*)
+                clients/decky/*|clients/shared/host-row-vectors.json)
                     decky_typecheck=true
                     ;;
             esac
@@ -146,6 +147,9 @@ self_test() {
         'rust=true rust_arm64=false web=false docs_site=false sdk_plugin_kit=false decky_typecheck=false'
     check client-shared 'clients/shared/deeplink-vectors.json' \
         'rust=true rust_arm64=true web=false docs_site=false sdk_plugin_kit=false decky_typecheck=false'
+    # Decky replays the host rows through its own merge.
+    check host-row-vectors 'clients/shared/host-row-vectors.json' \
+        'rust=true rust_arm64=true web=false docs_site=false sdk_plugin_kit=false decky_typecheck=true'
     check library-id-vectors 'clients/shared/library-id-vectors.json' \
         'rust=true rust_arm64=true web=true docs_site=false sdk_plugin_kit=true decky_typecheck=false'
     # The host's unprivileged launch kinds and the console's copy: each side's test reads the other.
@@ -157,6 +161,12 @@ self_test() {
         'rust=true rust_arm64=true web=true docs_site=false sdk_plugin_kit=false decky_typecheck=false'
     check gamepad-button-vectors 'crates/punktfunk-core/testdata/gamepad-button-vectors.json' \
         'rust=true rust_arm64=true web=true docs_site=false sdk_plugin_kit=false decky_typecheck=false'
+    # The console types the plugin surfaces from the kit's wire.ts.
+    check plugin-surface 'plugin-kit/src/wire.ts' \
+        'rust=false rust_arm64=false web=true docs_site=false sdk_plugin_kit=true decky_typecheck=false'
+    # The runner's sandbox replays the host's path refusals.
+    check path-refusal-vectors 'crates/punktfunk-host/testdata/path-refusal-vectors.json' \
+        'rust=true rust_arm64=false web=false docs_site=false sdk_plugin_kit=true decky_typecheck=false'
     check openapi 'api/openapi.json' \
         'rust=true rust_arm64=false web=true docs_site=false sdk_plugin_kit=true decky_typecheck=false'
     check platforms 'data/platforms.json' \

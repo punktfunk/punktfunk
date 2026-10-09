@@ -272,9 +272,7 @@ fn degrade_steam_on_conflict(chosen: GamepadPref) -> GamepadPref {
     let Some(product) = steam_backend_product(chosen) else {
         return chosen;
     };
-    let forced = std::env::var("PUNKTFUNK_STEAM_FORCE")
-        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-        .unwrap_or(false);
+    let forced = pf_host_config::env_on("PUNKTFUNK_STEAM_FORCE") == Some(true);
     if !forced && physical_steam_product_present(product) {
         let conflict = format!("28DE:{product:04X}");
         tracing::warn!(

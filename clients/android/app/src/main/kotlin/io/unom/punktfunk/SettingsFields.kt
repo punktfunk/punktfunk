@@ -5,7 +5,7 @@ import org.json.JSONObject
 
 /**
  * The one list of [Settings] fields. Every place that walks the fields — the prefs store, the
- * preset overlay's apply/absorb/clear/JSON, the console document both ways — loops over this,
+ * preset overlay's apply/pin/clear/JSON, the console document both ways — loops over this,
  * so a new field is one row here plus its two data-class properties. `SettingsFieldsTest`
  * checks by reflection that no property is missing from the table.
  */
@@ -131,6 +131,11 @@ internal object SettingsFields {
     /** The overlay's JSON keys — everything else in a stored overlay is carried through. */
     val PRESET_KEYS: Set<String> = PRESET.map { it.key }.toSet()
 
+    /** The tier-P rows one control drives: [FIELD_RESOLUTION] is the width/height pair. */
+    fun controlRows(field: String): List<Field<*>> = PRESET.filter {
+        if (field == FIELD_RESOLUTION) it.key == "width" || it.key == "height" else it.key == field
+    }
+
     /** Legacy prefs keys, read once as a migration default and never written. */
     private const val K_HUD = "stats_hud_enabled"
     private const val K_TRACKPAD = "trackpad_mode"
@@ -158,9 +163,8 @@ internal object SettingsFields {
         fun applyOverlay(o: SettingsOverlay, base: Settings): Settings =
             overlay?.get?.invoke(o)?.let { set(base, it) } ?: base
 
-        /** Record an override when the field moved between [before] and [after]. */
-        fun absorb(o: SettingsOverlay, before: Settings, after: Settings): SettingsOverlay =
-            if (overlay != null && get(after) != get(before)) overlay.set(o, get(after)) else o
+        /** [from]'s value as this field's override. */
+        fun pin(o: SettingsOverlay, from: Settings): SettingsOverlay = overlay?.set?.invoke(o, get(from)) ?: o
 
         fun clear(o: SettingsOverlay): SettingsOverlay = overlay?.set?.invoke(o, null) ?: o
         fun isOverridden(o: SettingsOverlay): Boolean = overlay?.get?.invoke(o) != null

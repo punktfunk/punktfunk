@@ -16,62 +16,62 @@ import Foundation
 
 public struct EffectiveSettings: Equatable, Sendable {
     // Tier P — presetable (design §3). A size or rate of 0 is Native, resolved by `streamMode`.
-    public var width = 0
-    public var height = 0
-    public var refreshHz = 0
-    public var matchWindow = false
-    public var bitrateKbps = 0
+    public var width = SettingDefault.streamWidth
+    public var height = SettingDefault.streamHeight
+    public var refreshHz = SettingDefault.streamHz
+    public var matchWindow = SettingDefault.matchWindow
+    public var bitrateKbps = SettingDefault.bitrateKbps
     /// PyroWave quality, bits per pixel (`DefaultsKey.pyrowaveBpp`).
-    public var pyrowaveBpp = 1.6
-    public var renderScale = 1.0
+    public var pyrowaveBpp = SettingDefault.pyrowaveBpp
+    public var renderScale = SettingDefault.renderScale
     /// A `VideoFit` raw value; unknown reads as fit.
-    public var videoFit = VideoFit.fit.rawValue
-    public var codec = "auto"
-    public var hdrEnabled = true
-    public var compositor = 0
-    public var audioChannels = 2
+    public var videoFit = SettingDefault.videoFit
+    public var codec = SettingDefault.codec
+    public var hdrEnabled = SettingDefault.hdrEnabled
+    public var compositor = SettingDefault.compositor
+    public var audioChannels = SettingDefault.audioChannels
     /// An `AudioFormatChoice` raw value. `"opus"` — the default — is byte-for-byte the session
     /// every build before the lossless plane ran.
-    public var audioFormat = AudioFormatChoice.opus.rawValue
-    public var micEnabled = false
-    public var echoCancel = true
-    public var keepHostAudio = false
-    public var touchMode = "trackpad"
-    public var mouseMode = "capture"
-    public var invertScroll = false
+    public var audioFormat = SettingDefault.audioFormat
+    public var micEnabled = SettingDefault.micEnabled
+    public var echoCancel = SettingDefault.echoCancel
+    public var keepHostAudio = SettingDefault.keepHostAudio
+    public var touchMode = SettingDefault.touchMode
+    public var mouseMode = SettingDefault.mouseMode
+    public var invertScroll = SettingDefault.invertScroll
     /// Cross-client `overlay_actions`: the ring blob, empty = the platform default.
-    public var overlayActions = ""
+    public var overlayActions = SettingDefault.overlayActions
     /// Cross-client `inhibit_shortcuts` (default on): system chords reach the host while input is
     /// captured. See `DefaultsKey.inhibitShortcuts` — on macOS this is the ⌘-chord passthrough.
-    public var inhibitShortcuts = true
-    public var gamepadType = 0
-    public var gamepadForwarding = true
+    public var inhibitShortcuts = SettingDefault.inhibitShortcuts
+    public var gamepadType = SettingDefault.gamepadType
+    public var gamepadForwarding = SettingDefault.gamepadForwarding
     /// Steam Controller 2 as-is passthrough (`DefaultsKey.sc2Capture`, default off). Read at
     /// connect beside `gamepadForwarding`. Deliberately NOT presetable (no overlay field): the
     /// toggle is about hardware this device captures, not about how a host is streamed.
-    public var sc2Capture = false
+    public var sc2Capture = SettingDefault.sc2Capture
     /// Cross-client `system_buttons`: "auto" | "forward" | "local".
-    public var systemButtons = "auto"
+    public var systemButtons = SettingDefault.systemButtons
     /// Cross-client `guide_gesture`: "auto" | "on" | "off".
-    public var guideGesture = "auto"
+    public var guideGesture = SettingDefault.guideGesture
     /// A `StatsVerbosity` raw value; the enum lives in PunktfunkKit, which this module can't see.
-    public var statsVerbosity = "normal"
-    public var fullscreenWhileStreaming = true
-    public var enable444 = false
+    public var statsVerbosity = SettingDefault.statsVerbosity
+    public var fullscreenWhileStreaming = SettingDefault.fullscreenWhileStreaming
+    public var enable444 = SettingDefault.enable444
     /// Cross-client `ten_bit_sdr`. Subsumed by `hdrEnabled`, which advertises the depth already.
-    public var tenBitSdr = false
-    public var presentPriority = "latency"
-    public var smoothBuffer = 0
-    public var vsync = false
-    public var allowVRR = true
-    public var modifierLayout = "mac"
+    public var tenBitSdr = SettingDefault.tenBitSdr
+    public var presentPriority = SettingDefault.presentPriority
+    public var smoothBuffer = SettingDefault.smoothBuffer
+    public var vsync = SettingDefault.vsync
+    public var allowVRR = SettingDefault.allowVRR
+    public var modifierLayout = SettingDefault.modifierLayout
     // Tier G — this device's endpoints and hardware. Session-consumed, so they ride along, but
     // never presetable: a preset is about how a host is streamed, not about which speaker this
     // Mac uses.
-    public var speakerUID = ""
-    public var micUID = ""
-    public var micChannel = 0
-    public var pointerCapture = true
+    public var speakerUID = SettingDefault.speakerUID
+    public var micUID = SettingDefault.micUID
+    public var micChannel = SettingDefault.micChannel
+    public var pointerCapture = SettingDefault.pointerCapture
     /// The preset this resolution came from, when one applied — the HUD names it so "which
     /// preset am I on?" is answerable mid-session, and the one-off/binding distinction never has
     /// to be guessed from the settings themselves.
@@ -148,7 +148,7 @@ public struct EffectiveSettings: Equatable, Sendable {
         if let legacy = defaults.object(forKey: DefaultsKey.hudEnabled) as? Bool, !legacy {
             return "off"
         }
-        return "normal"
+        return SettingDefault.statsVerbosity
     }
 
     /// The `system_buttons` policy resolved for this platform: forward the raw guide (and

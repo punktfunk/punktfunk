@@ -3,6 +3,7 @@
 //! [`DisplayOwnership`] is who may pool or tear an output down. [`VirtualOutput`] is the created
 //! capture target plus the RAII keepalive that releases the compositor resource. [`VirtualDisplay`]
 //! is the boxed trait `super::open` returns; per-backend `impl`s and the factory stay in `super`.
+//! [`SessionParams`] is what a session sets on one before `create`.
 //!
 //! Pin a backend by name (`"kwin"`, `"mutter"`, `"wlroots"`, `"gamescope"`). Evidence:
 //! `design/gamemode-and-dedicated-sessions.md`, `design/display-management.md`.
@@ -178,6 +179,46 @@ impl VirtualOutput {
             #[cfg(target_os = "linux")]
             pid: None,
         }
+    }
+}
+
+/// One session's display request: every per-session [`VirtualDisplay`] setter, in one value.
+/// No `Default`, so an open site that forgets a field does not compile. [`Self::apply`] hands
+/// it to a backend before its `create`.
+#[derive(Clone)]
+pub struct SessionParams {
+    /// [`VirtualDisplay::set_client_identity`]: per-device topology, KWin slot, Mutter scale.
+    pub client_fp: Option<[u8; 32]>,
+    /// [`VirtualDisplay::set_client_hdr`].
+    pub client_hdr: Option<pf_frame::HdrMeta>,
+    /// [`VirtualDisplay::set_hdr`]: the session's HDR verdict, not its depth.
+    pub hdr: bool,
+    /// [`VirtualDisplay::set_hw_cursor`].
+    pub hw_cursor: bool,
+    /// [`VirtualDisplay::set_join_live`].
+    pub join_live: bool,
+    /// [`VirtualDisplay::set_quit_flag`].
+    pub quit: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    /// [`VirtualDisplay::set_launch_command`]. `None` on a rebuild: it must not start the game again.
+    pub launch: Option<String>,
+    /// [`VirtualDisplay::set_gamescope_route`].
+    pub route: Option<crate::GamescopeRoute>,
+    /// [`VirtualDisplay::set_session_isolation`].
+    pub isolation: Option<SessionIsolation>,
+}
+
+impl SessionParams {
+    /// Hand every field to `vd`'s setter. Call it before `vd`'s next `create`.
+    pub fn apply(&self, vd: &mut dyn VirtualDisplay) {
+        vd.set_client_identity(self.client_fp);
+        vd.set_join_live(self.join_live);
+        vd.set_client_hdr(self.client_hdr);
+        vd.set_hdr(self.hdr);
+        vd.set_hw_cursor(self.hw_cursor);
+        vd.set_quit_flag(self.quit.clone());
+        vd.set_launch_command(self.launch.clone());
+        vd.set_gamescope_route(self.route.clone());
+        vd.set_session_isolation(self.isolation.clone());
     }
 }
 
@@ -386,6 +427,38 @@ pub(crate) fn stash_topology_restore(
 ) {
     if slot.is_none() {
         *slot = prepared;
+    }
+}
+
+/// Apply [`crate::policy::Topology`] where the only desk change is disabling heads (Hyprland,
+/// wlroots). `disable(ours)` returns the heads it turned off; a restore of exactly those lands
+/// in `slot` through [`stash_topology_restore`]. The last step of `create`: nothing fails after
+/// it, so no path disables heads and then unwinds past the hand-off.
+///
+/// `primary` logs and runs as `extend`: Wayland has no primary output, only a focused one, and
+/// the streamed head already holds focus.
+pub(crate) fn apply_exclusive(
+    tag: &str,
+    client_fp: Option<[u8; 32]>,
+    ours: &str,
+    slot: &mut Option<Box<dyn FnOnce() + Send>>,
+    disable: fn(&str) -> Vec<String>,
+    restore: fn(&[String]),
+) {
+    use crate::policy::Topology;
+    match crate::effective_topology(client_fp) {
+        Topology::Extend | Topology::Auto => {}
+        Topology::Primary => tracing::info!(
+            "{tag}: `topology: primary` has no equivalent here — Wayland has no primary output, \
+             only a focused one, which the streamed head already holds. Treating it as `extend`; \
+             use `exclusive` to disable the operator's heads."
+        ),
+        Topology::Exclusive => {
+            let disabled = disable(ours);
+            let prepared = (!disabled.is_empty())
+                .then(|| Box::new(move || restore(&disabled)) as Box<dyn FnOnce() + Send>);
+            stash_topology_restore(slot, prepared);
+        }
     }
 }
 

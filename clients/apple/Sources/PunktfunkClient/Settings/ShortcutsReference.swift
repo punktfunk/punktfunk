@@ -46,7 +46,8 @@ enum ShortcutsCatalog {
         #if os(tvOS)
         return false // no app-accessible microphone
         #else
-        guard UserDefaults.standard.object(forKey: DefaultsKey.micEnabled) as? Bool ?? false
+        guard UserDefaults.standard.object(forKey: DefaultsKey.micEnabled) as? Bool
+            ?? SettingDefault.micEnabled
         else { return false }
         switch AVCaptureDevice.authorizationStatus(for: .audio) {
         case .authorized, .notDetermined: return true

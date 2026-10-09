@@ -12,11 +12,10 @@ use crate::anim::{approach, Spring, TRAY_C, TRAY_K};
 use crate::glyphs::{Hint, HintKey};
 use crate::pointer::Pointer;
 use crate::ring::draw_keycap_disc;
-use crate::screens::{Ctx, Outbox};
+use crate::screens::{Ctx, Outbox, ScreenView, TextEntry};
 use crate::theme::{accent, fg, fill, on_accent, stroke, Fonts, PanelStroke, W};
 use crate::widgets::{
-    entry_hints, field_key, permits, type_text, Charset, Entry, Keyboard, ListMsg, MenuList,
-    RowSpec, ROW_MAX_W,
+    field_key, permits, type_text, Charset, Entry, ListMsg, MenuList, RowSpec, ROW_MAX_W,
 };
 use pf_client_core::menu_nav::{MenuDir, MenuEvent, MenuPulse};
 use pf_client_core::overlay_actions::{
@@ -311,8 +310,8 @@ impl KeyTray {
 pub(crate) struct ShortcutEditorScreen {
     draft: Draft,
     list: MenuList,
-    /// Own tray; a Deck uses Steam's keyboard instead.
-    keyboard: Keyboard,
+    /// The name's keyboard.
+    keyboard: TextEntry,
     keys: KeyTray,
     editing_name: bool,
     picking_key: bool,
@@ -330,30 +329,11 @@ impl ShortcutEditorScreen {
         ShortcutEditorScreen {
             draft,
             list,
-            keyboard: Keyboard::new(),
+            keyboard: TextEntry::default(),
             keys: KeyTray::new(),
             editing_name: false,
             picking_key: false,
         }
-    }
-
-    pub(crate) fn title(&self) -> String {
-        if self.draft.id.is_some() {
-            "Shortcut".into()
-        } else {
-            "New shortcut".into()
-        }
-    }
-
-    pub(crate) fn editing(&self) -> bool {
-        self.editing_name
-    }
-
-    pub(crate) fn edit_field(&self) -> Option<crate::screens::EditField> {
-        let name = self.draft.label.as_str();
-        self.editing_name
-            .then(|| crate::screens::EditField::new("Name", name, false))
-            .flatten()
     }
 
     /// The field list, while neither tray covers it.
@@ -407,25 +387,6 @@ impl ShortcutEditorScreen {
         permits(Charset::Free, ch)
     }
 
-    pub(crate) fn text_input(&mut self, typed: &str) {
-        if self.editing_name {
-            type_text(&mut self.draft.label, typed, Self::admits);
-        }
-    }
-
-    pub(crate) fn edit_key(&mut self, key: crate::input::Key) -> bool {
-        if !self.editing_name {
-            return false;
-        }
-        let Some(entry) = field_key(key, &mut self.draft.label) else {
-            return false;
-        };
-        if entry != Entry::Stay {
-            self.editing_name = false;
-        }
-        true
-    }
-
     fn activate(&mut self, row: usize, ctx: &mut Ctx, fx: &mut Outbox) -> Option<MenuPulse> {
         match row {
             ROW_NAME => self.editing_name = true,
@@ -465,17 +426,51 @@ impl ShortcutEditorScreen {
             TrayMsg::None => None,
         }
     }
+}
 
-    pub(crate) fn menu(
-        &mut self,
-        ev: MenuEvent,
-        ctx: &mut Ctx,
-        fx: &mut Outbox,
-    ) -> Option<MenuPulse> {
+impl ScreenView for ShortcutEditorScreen {
+    fn title(&self) -> String {
+        if self.draft.id.is_some() {
+            "Shortcut".into()
+        } else {
+            "New shortcut".into()
+        }
+    }
+
+    fn editing(&self) -> bool {
+        self.editing_name
+    }
+
+    fn edit_field(&self) -> Option<crate::screens::EditField> {
+        let name = self.draft.label.as_str();
+        self.editing_name
+            .then(|| crate::screens::EditField::new("Name", name, false))
+            .flatten()
+    }
+
+    fn text_input(&mut self, typed: &str) {
         if self.editing_name {
-            let (entry, pulse) =
-                self.keyboard
-                    .edit_menu(ev, ctx.device.deck, &mut self.draft.label, Self::admits);
+            type_text(&mut self.draft.label, typed, Self::admits);
+        }
+    }
+
+    fn edit_key(&mut self, key: crate::input::Key, _ctx: &mut Ctx) -> bool {
+        if !self.editing_name {
+            return false;
+        }
+        let Some(entry) = field_key(key, &mut self.draft.label) else {
+            return false;
+        };
+        if entry != Entry::Stay {
+            self.editing_name = false;
+        }
+        true
+    }
+
+    fn menu(&mut self, ev: MenuEvent, ctx: &mut Ctx, fx: &mut Outbox) -> Option<MenuPulse> {
+        if self.editing_name {
+            let label = &mut self.draft.label;
+            let (entry, pulse) = self.keyboard.menu(ev, ctx.device, label, Self::admits);
             if entry != Entry::Stay {
                 self.editing_name = false;
             }
@@ -497,16 +492,15 @@ impl ShortcutEditorScreen {
         }
     }
 
-    pub(crate) fn pointer(&mut self, p: Pointer, ctx: &mut Ctx, fx: &mut Outbox) -> bool {
-        if self.editing_name && !ctx.device.deck {
-            let label = &mut self.draft.label;
-            let Some(entry) = self.keyboard.edit_pointer(p, label, Self::admits) else {
-                return false;
-            };
-            if entry != Entry::Stay {
+    fn pointer(&mut self, p: Pointer, ctx: &mut Ctx, fx: &mut Outbox) -> bool {
+        let tray = self
+            .editing_name
+            .then(|| (self.keyboard).pointer(p, ctx.device, &mut self.draft.label, Self::admits));
+        if let Some(entry) = tray.flatten() {
+            if entry.is_some_and(|e| e != Entry::Stay) {
                 self.editing_name = false;
             }
-            return true;
+            return entry.is_some();
         }
         if self.picking_key {
             if !self.keys.covers(p) {
@@ -534,9 +528,9 @@ impl ShortcutEditorScreen {
         }
     }
 
-    pub(crate) fn hints(&self, ctx: &Ctx) -> Vec<Hint> {
+    fn hints(&self, ctx: &Ctx) -> Vec<Hint> {
         if self.editing_name {
-            return entry_hints(ctx.device.deck, "Done");
+            return TextEntry::hints(ctx.device, "Done");
         }
         if self.picking_key {
             return vec![
@@ -560,7 +554,7 @@ impl ShortcutEditorScreen {
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub(crate) fn render(
+    fn render(
         &mut self,
         canvas: &Canvas,
         rect: Rect,
@@ -609,12 +603,9 @@ impl ShortcutEditorScreen {
         );
 
         // Shrink the list by whichever tray is seated so the edited row stays in view.
-        let seat_kb = self
-            .keyboard
-            .seat(self.editing_name && !ctx.device.deck, dt);
+        self.keyboard.seat(self.editing_name, ctx.device, dt);
         let seat_keys = self.keys.seat(self.picking_key, dt);
-        let tray_h = (Keyboard::tray_height() + 12.0) * k * seat_kb
-            + (KeyTray::tray_height() + 12.0) * k * seat_keys;
+        let tray_h = self.keyboard.reserve(k) + (KeyTray::tray_height() + 12.0) * k * seat_keys;
         let list_rect = Rect::from_ltrb(
             rect.left,
             top + 2.0 * r + 22.0 * kf,
@@ -631,16 +622,7 @@ impl ShortcutEditorScreen {
             dt,
             !self.editing_name && !self.picking_key,
         );
-        if seat_kb > 0.0 {
-            self.keyboard.render(
-                canvas,
-                fonts,
-                f64::from(rect.width()),
-                f64::from(rect.bottom),
-                seat_kb,
-                k,
-            );
-        }
+        self.keyboard.render(canvas, fonts, rect, k);
         if seat_keys > 0.0 {
             self.keys.render(
                 canvas,
@@ -652,6 +634,16 @@ impl ShortcutEditorScreen {
                 self.draft.chord.key.as_deref(),
             );
         }
+    }
+
+    fn press(&mut self) {
+        if let Some(l) = self.pan_list() {
+            l.dip()
+        }
+    }
+
+    fn pan(&mut self, p: Pointer) -> bool {
+        self.pan_list().is_some_and(|l| l.pan(p))
     }
 }
 

@@ -368,7 +368,7 @@ pub struct RunningGame {
 }
 
 /// One title's download, from `GET /api/v1/status` `downloads[]`.
-#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq)]
 pub struct DownloadProgress {
     #[serde(default)]
     pub app_id: String,
@@ -572,9 +572,13 @@ pub enum InstallOutcome {
 }
 
 impl InstallOutcome {
-    /// A non-2xx answer: the host's sentence when it sent one, else the route is missing.
-    pub fn from_reply(code: u16, message: Option<String>) -> InstallOutcome {
-        match (code, message) {
+    /// A non-2xx answer: the host's sentence from its `{"error": …}` body when it sent one,
+    /// else the route is missing.
+    pub fn from_reply(code: u16, body: &str) -> InstallOutcome {
+        let said = serde_json::from_str::<serde_json::Value>(body)
+            .ok()
+            .and_then(|v| v["error"].as_str().map(str::to_string));
+        match (code, said) {
             (200..=299, _) => InstallOutcome::Done,
             (_, Some(m)) if !m.is_empty() => InstallOutcome::Refused(m),
             (401 | 404 | 405, _) => InstallOutcome::Unsupported,
@@ -642,13 +646,8 @@ pub fn change_install(
     };
     match reply {
         Ok(mut r) => {
-            let message = r
-                .body_mut()
-                .read_to_string()
-                .ok()
-                .and_then(|b| serde_json::from_str::<serde_json::Value>(&b).ok())
-                .and_then(|v| v["message"].as_str().map(str::to_string));
-            InstallOutcome::from_reply(r.status().as_u16(), message)
+            let body = r.body_mut().read_to_string().unwrap_or_default();
+            InstallOutcome::from_reply(r.status().as_u16(), &body)
         }
         Err(e) => InstallOutcome::Failed(classify(e).to_string()),
     }
@@ -1450,27 +1449,34 @@ mod tests {
 
     #[test]
     fn an_install_answer_reads_in_the_hosts_words() {
-        let notice = |code, message: Option<&str>, action| {
-            InstallOutcome::from_reply(code, message.map(str::to_string)).notice(action, "Quail")
-        };
+        let notice =
+            |code, body, action| InstallOutcome::from_reply(code, body).notice(action, "Quail");
         assert_eq!(
-            notice(202, None, InstallAction::Install),
+            notice(202, "", InstallAction::Install),
             "Downloading Quail."
         );
         assert_eq!(
-            notice(204, None, InstallAction::Remove),
+            notice(204, "", InstallAction::Remove),
             "Removed Quail. Saves stay on the host."
         );
         assert_eq!(
-            notice(409, Some("Quit Quail first."), InstallAction::Remove),
+            notice(
+                409,
+                r#"{"error":"Quit Quail first."}"#,
+                InstallAction::Remove
+            ),
             "Quit Quail first."
         );
         assert_eq!(
-            notice(404, None, InstallAction::Pause),
+            notice(404, "", InstallAction::Pause),
             "This host needs an update to manage games from here."
         );
         assert_eq!(
-            notice(500, None, InstallAction::Pause),
+            notice(
+                500,
+                r#"{"message":"not the envelope"}"#,
+                InstallAction::Pause
+            ),
             "Couldn't pause Quail \u{2014} the host refused it (500)"
         );
     }

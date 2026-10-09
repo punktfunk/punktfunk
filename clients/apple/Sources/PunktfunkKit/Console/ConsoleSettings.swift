@@ -21,10 +21,12 @@ public enum ConsoleSettings {
     public static func document(_ defaults: UserDefaults = .standard) -> [String: Any] {
         var j = base(defaults)
         for field in fields { field.write(&j, defaults) }
-        j["compositor"] = compositorName(defaults.object(forKey: DefaultsKey.compositor) as? Int ?? 0)
-        j["gamepad"] = padTypeName(defaults.object(forKey: DefaultsKey.gamepadType) as? Int ?? 0)
+        j["compositor"] = compositorName(
+            defaults.object(forKey: DefaultsKey.compositor) as? Int ?? SettingDefault.compositor)
+        j["gamepad"] = padTypeName(
+            defaults.object(forKey: DefaultsKey.gamepadType) as? Int ?? SettingDefault.gamepadType)
         // Derived, never stored: the overlay is off when its tier is.
-        j["show_stats"] = (defaults.string(forKey: DefaultsKey.statsVerbosity) ?? "normal") != "off"
+        j["show_stats"] = EffectiveSettings.storedStatsVerbosity(defaults) != "off"
         // The OS answers this one, so the shell shows no row for it (`platform.rs`).
         j["reduce_motion"] = reduceMotion
         j["default_host"] = (defaults.string(forKey: DefaultsKey.defaultHost)).flatMap {
@@ -102,93 +104,111 @@ public enum ConsoleSettings {
         }
     }
 
-    /// Defaults match the app's own `@AppStorage` declarations: a key nobody has written yet
-    /// must read as what the touch UI shows, or the first console frame would offer to change
-    /// a setting the player never set.
+    /// Defaults are `SettingDefault`'s, which the app's `@AppStorage` reads too: a key nobody has
+    /// written yet must read as what the touch UI shows, or the first console frame would offer
+    /// to change a setting the player never set.
     private static let fields: [Field] = [
-        .int("width", DefaultsKey.streamWidth, 0),
-        .int("height", DefaultsKey.streamHeight, 0),
-        .int("refresh_hz", DefaultsKey.streamHz, 0),
-        .bool("match_window", DefaultsKey.matchWindow, false),
-        .int("bitrate_kbps", DefaultsKey.bitrateKbps, 0),
-        .double("pyrowave_bpp", DefaultsKey.pyrowaveBpp, 1.6),
-        .double("render_scale", DefaultsKey.renderScale, 1.0),
-        .string("video_fit", DefaultsKey.videoFit, "fit"),
-        .string("codec", DefaultsKey.codec, "auto"),
-        .bool("hdr_enabled", DefaultsKey.hdrEnabled, true),
-        .bool("enable_444", DefaultsKey.enable444, false),
-        .bool("ten_bit_sdr", DefaultsKey.tenBitSdr, false),
-        .int("audio_channels", DefaultsKey.audioChannels, 2),
-        .string("audio_format", DefaultsKey.audioFormat, "opus"),
-        .bool("mic_enabled", DefaultsKey.micEnabled, false),
-        .bool("echo_cancel", DefaultsKey.echoCancel, true),
-        .bool("keep_host_audio", DefaultsKey.keepHostAudio, false),
-        .string("speaker_device", DefaultsKey.speakerUID, ""),
-        .string("mic_device", DefaultsKey.micUID, ""),
-        .string("touch_mode", DefaultsKey.touchMode, "trackpad"),
-        .string("mouse_mode", DefaultsKey.mouseMode, "capture"),
-        .bool("invert_scroll", DefaultsKey.invertScroll, false),
-        .string("overlay_actions", DefaultsKey.overlayActions, ""),
-        .bool("inhibit_shortcuts", DefaultsKey.inhibitShortcuts, true),
-        .bool("gamepad_forwarding", DefaultsKey.gamepadForwarding, true),
-        .bool("pad_rumble", DefaultsKey.padRumble, true),
-        .string("system_buttons", DefaultsKey.systemButtons, "auto"),
-        .string("guide_gesture", DefaultsKey.guideGesture, "auto"),
-        .string("stats_verbosity", DefaultsKey.statsVerbosity, "normal"),
-        .bool("advanced_stats", DefaultsKey.advancedStats, false),
-        .bool("fullscreen_on_stream", DefaultsKey.fullscreenWhileStreaming, true),
-        .bool("fullscreen_always", DefaultsKey.fullscreenAlways, false),
-        .string("present_priority", DefaultsKey.presentPriority, "latency"),
-        .int("smooth_buffer", DefaultsKey.smoothBuffer, 0),
-        .bool("vsync", DefaultsKey.vsync, false),
-        .bool("allow_vrr", DefaultsKey.allowVRR, true),
-        .string("ui_palette", DefaultsKey.uiPalette, "violet"),
-        .string("library_sort", DefaultsKey.librarySort, ""),
-        .string("library_sections", DefaultsKey.librarySections, ""),
+        .int("width", DefaultsKey.streamWidth, SettingDefault.streamWidth),
+        .int("height", DefaultsKey.streamHeight, SettingDefault.streamHeight),
+        .int("refresh_hz", DefaultsKey.streamHz, SettingDefault.streamHz),
+        .bool("match_window", DefaultsKey.matchWindow, SettingDefault.matchWindow),
+        .int("bitrate_kbps", DefaultsKey.bitrateKbps, SettingDefault.bitrateKbps),
+        .double("pyrowave_bpp", DefaultsKey.pyrowaveBpp, SettingDefault.pyrowaveBpp),
+        .double("render_scale", DefaultsKey.renderScale, SettingDefault.renderScale),
+        .string("video_fit", DefaultsKey.videoFit, SettingDefault.videoFit),
+        .string("codec", DefaultsKey.codec, SettingDefault.codec),
+        .bool("hdr_enabled", DefaultsKey.hdrEnabled, SettingDefault.hdrEnabled),
+        .bool("enable_444", DefaultsKey.enable444, SettingDefault.enable444),
+        .bool("ten_bit_sdr", DefaultsKey.tenBitSdr, SettingDefault.tenBitSdr),
+        .int("audio_channels", DefaultsKey.audioChannels, SettingDefault.audioChannels),
+        .string("audio_format", DefaultsKey.audioFormat, SettingDefault.audioFormat),
+        .bool("mic_enabled", DefaultsKey.micEnabled, SettingDefault.micEnabled),
+        .bool("echo_cancel", DefaultsKey.echoCancel, SettingDefault.echoCancel),
+        .bool("keep_host_audio", DefaultsKey.keepHostAudio, SettingDefault.keepHostAudio),
+        .string("speaker_device", DefaultsKey.speakerUID, SettingDefault.speakerUID),
+        .string("mic_device", DefaultsKey.micUID, SettingDefault.micUID),
+        .string("touch_mode", DefaultsKey.touchMode, SettingDefault.touchMode),
+        .string("mouse_mode", DefaultsKey.mouseMode, SettingDefault.mouseMode),
+        .bool("invert_scroll", DefaultsKey.invertScroll, SettingDefault.invertScroll),
+        .string("overlay_actions", DefaultsKey.overlayActions, SettingDefault.overlayActions),
+        .bool("inhibit_shortcuts", DefaultsKey.inhibitShortcuts, SettingDefault.inhibitShortcuts),
+        .bool(
+            "gamepad_forwarding", DefaultsKey.gamepadForwarding,
+            SettingDefault.gamepadForwarding),
+        .bool("pad_rumble", DefaultsKey.padRumble, SettingDefault.padRumble),
+        .string("system_buttons", DefaultsKey.systemButtons, SettingDefault.systemButtons),
+        .string("guide_gesture", DefaultsKey.guideGesture, SettingDefault.guideGesture),
+        // The tier the stream reads: an install from before the tiers keeps its overlay off.
+        Field(
+            write: { j, d in j["stats_verbosity"] = EffectiveSettings.storedStatsVerbosity(d) },
+            read: { j, d in
+                if let v = j["stats_verbosity"] as? String {
+                    d.set(v, forKey: DefaultsKey.statsVerbosity)
+                }
+            }),
+        .bool("advanced_stats", DefaultsKey.advancedStats, SettingDefault.advancedStats),
+        .bool(
+            "fullscreen_on_stream", DefaultsKey.fullscreenWhileStreaming,
+            SettingDefault.fullscreenWhileStreaming),
+        .bool("fullscreen_always", DefaultsKey.fullscreenAlways, SettingDefault.fullscreenAlways),
+        .string("present_priority", DefaultsKey.presentPriority, SettingDefault.presentPriority),
+        .int("smooth_buffer", DefaultsKey.smoothBuffer, SettingDefault.smoothBuffer),
+        .bool("vsync", DefaultsKey.vsync, SettingDefault.vsync),
+        .bool("allow_vrr", DefaultsKey.allowVRR, SettingDefault.allowVRR),
+        .string("ui_palette", DefaultsKey.uiPalette, SettingDefault.uiPalette),
+        .string("library_sort", DefaultsKey.librarySort, SettingDefault.librarySort),
+        .string("library_sections", DefaultsKey.librarySections, SettingDefault.librarySections),
         // Unset stays unset: the console's own default is the Games tab's grid.
         .string("library_view", DefaultsKey.libraryView, ""),
-        .string("start_in", DefaultsKey.startIn, StartIn.hosts.stored),
-        .bool("auto_wake", DefaultsKey.autoWake, true),
+        .string("start_in", DefaultsKey.startIn, SettingDefault.startIn),
+        .bool("auto_wake", DefaultsKey.autoWake, SettingDefault.autoWake),
         // The console's own off switch lands on the touch, TV or Mac UI.
-        .bool("gamepad_ui_enabled", DefaultsKey.gamepadUIEnabled, true),
-        .bool("background_keep_alive", DefaultsKey.backgroundKeepAlive, false),
-        .int("background_timeout_minutes", DefaultsKey.backgroundTimeoutMinutes, 10),
-        .string("hud_placement", DefaultsKey.hudPlacement, "topTrailing"),
-        .int("stats_scale_pct", DefaultsKey.statsScalePct, 100),
-        .bool("exit_hint", DefaultsKey.exitHint, true),
-        .bool("show_advanced", DefaultsKey.showAdvanced, false),
-        .string("host_sort", DefaultsKey.hostSort, "added"),
-        .string("host_grouping", DefaultsKey.hostGrouping, "none"),
+        .bool("gamepad_ui_enabled", DefaultsKey.gamepadUIEnabled, SettingDefault.gamepadUIEnabled),
+        .bool(
+            "background_keep_alive", DefaultsKey.backgroundKeepAlive,
+            SettingDefault.backgroundKeepAlive),
+        .int(
+            "background_timeout_minutes", DefaultsKey.backgroundTimeoutMinutes,
+            SettingDefault.backgroundTimeoutMinutes),
+        .string("hud_placement", DefaultsKey.hudPlacement, SettingDefault.hudPlacement),
+        .int("stats_scale_pct", DefaultsKey.statsScalePct, SettingDefault.statsScalePct),
+        .bool("exit_hint", DefaultsKey.exitHint, SettingDefault.exitHint),
+        .bool("show_advanced", DefaultsKey.showAdvanced, SettingDefault.showAdvanced),
+        .string("host_sort", DefaultsKey.hostSort, SettingDefault.hostSort),
+        .string("host_grouping", DefaultsKey.hostGrouping, SettingDefault.hostGrouping),
         .string("gamepad_ui_mode", DefaultsKey.gamepadUIMode, GamepadUIEnvironment.modeWhenConnected),
         // `Settings::extra` (flattened, so plain top-level keys). The `android.` prefix is
         // where these were first written; the console reads the same names here.
-        .bool("android.rumble_on_phone", DefaultsKey.rumbleOnDevice, false),
-        .bool("android.gyro_on_phone", DefaultsKey.gyroFromDevice, false),
-        .bool("android.sc2_capture", DefaultsKey.sc2Capture, false),
+        .bool("android.rumble_on_phone", DefaultsKey.rumbleOnDevice, SettingDefault.rumbleOnDevice),
+        .bool("android.gyro_on_phone", DefaultsKey.gyroFromDevice, SettingDefault.gyroFromDevice),
+        .bool("android.sc2_capture", DefaultsKey.sc2Capture, SettingDefault.sc2Capture),
     ]
 
     // MARK: - the two that differ
 
-    /// The compositor's wire value (`PunktfunkConnection.Compositor`) against the console's name.
-    private static let compositors: [(Int, String)] = [
-        (0, "auto"), (1, "kwin"), (3, "mutter"), (5, "hyprland"), (2, "wlroots"), (4, "gamescope"),
+    /// The compositors and pad kinds the console names. The stored value is the wire value, the
+    /// console's word is the host's name; anything else reads as "auto".
+    private static let compositors: [PunktfunkConnection.Compositor] = [
+        .auto, .kwin, .mutter, .hyprland, .wlroots, .gamescope,
     ]
-    private static let padTypes: [(Int, String)] = [
-        (0, "auto"), (1, "xbox360"), (3, "xboxone"), (2, "dualsense"), (4, "dualshock4"),
-        (6, "steamdeck"), (9, "steamcontroller2"),
+    private static let padTypes: [PunktfunkConnection.GamepadType] = [
+        .auto, .xbox360, .xboxOne, .dualSense, .dualShock4, .steamDeck, .steamController2,
     ]
 
-    static func compositorName(_ tag: Int) -> String {
-        compositors.first { $0.0 == tag }?.1 ?? "auto"
+    static func compositorName(_ tag: Int) -> String { word(tag, compositors, \.canonicalName) }
+    static func compositorTag(_ name: String) -> Int? { tag(name, compositors, \.canonicalName) }
+    static func padTypeName(_ tag: Int) -> String { word(tag, padTypes, \.canonicalName) }
+    static func padTypeTag(_ name: String) -> Int? { tag(name, padTypes, \.canonicalName) }
+
+    private static func word<T: RawRepresentable>(
+        _ tag: Int, _ table: [T], _ name: KeyPath<T, String>
+    ) -> String where T.RawValue == UInt32 {
+        table.first { Int($0.rawValue) == tag }?[keyPath: name] ?? "auto"
     }
-    static func compositorTag(_ name: String) -> Int? {
-        compositors.first { $0.1 == name }?.0
-    }
-    static func padTypeName(_ tag: Int) -> String {
-        padTypes.first { $0.0 == tag }?.1 ?? "auto"
-    }
-    static func padTypeTag(_ name: String) -> Int? {
-        padTypes.first { $0.1 == name }?.0
+    private static func tag<T: RawRepresentable>(
+        _ word: String, _ table: [T], _ name: KeyPath<T, String>
+    ) -> Int? where T.RawValue == UInt32 {
+        table.first { $0[keyPath: name] == word }.map { Int($0.rawValue) }
     }
 }
 

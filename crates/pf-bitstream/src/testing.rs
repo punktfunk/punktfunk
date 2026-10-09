@@ -1,10 +1,13 @@
 //! Test support for the decoder crates: the vendored cros-codecs vectors, the
-//! Annex-B and IVF access-unit splitters, and authored H.264 fixtures.
+//! Annex-B and IVF access-unit splitters, authored H.264 fixtures, and the
+//! libavcodec parity fixtures in [`parity`].
 //!
 //! Behind the `test-vectors` feature, which a crate turns on from its
 //! `[dev-dependencies]`, so no shipped build carries the vectors.
 
 use cros_codecs::bitstream_utils::IvfIterator;
+
+pub mod parity;
 
 pub const H264_25FPS: &[u8] =
     include_bytes!("../vendor/cros-codecs/src/codec/h264/test_data/test-25fps.h264");

@@ -31,8 +31,6 @@ const HELPER_TIMEOUT: Duration = Duration::from_secs(30 * 60);
 struct HelperResult {
     ok: bool,
     #[serde(default)]
-    before_version: String,
-    #[serde(default)]
     after_version: String,
     #[serde(default)]
     changed: bool,

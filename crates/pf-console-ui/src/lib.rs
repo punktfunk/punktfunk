@@ -29,6 +29,9 @@
     target_vendor = "apple",
     target_family = "wasm"
 ))]
+// Android has no native TLS, so std wraps a `const { }` thread-local initializer in a plain
+// fn and clippy asks for the `const` the source already has.
+#![cfg_attr(target_os = "android", allow(clippy::missing_const_for_thread_local))]
 
 pub mod anim;
 pub mod art_stats;
@@ -66,7 +69,7 @@ mod skia_overlay;
 /// same rows out its own way (the webOS pointer UI's page map). Same kit terms as
 /// [`widgets`]: one consumer, no stability promise.
 pub mod settings_rows {
-    pub use crate::screens::settings::{
+    pub use crate::screens::settings::rows::{
         adjust, advanced, changed, detail, row_applies, row_on, row_spec, RowId,
     };
     pub use crate::screens::{Ctx, Device};

@@ -124,6 +124,7 @@ impl DriverStages {
     }
 
     /// Start the next window.
+    #[cfg_attr(not(feature = "gamestream"), allow(dead_code, reason = "compat plane"))]
     pub(crate) fn reset(&mut self) {
         *self = DriverStages::default();
     }

@@ -16,7 +16,7 @@ import {
 	useStoreJobs,
 } from "@/api/store";
 import { useDialogs } from "@/components/dialogs";
-import { usePasswordFailure } from "@/components/password-confirm";
+import { passwordFailure } from "@/components/password-confirm";
 import { SeatScope, SeatTitle } from "@/components/seat-scope";
 import { Stagger } from "@/components/stagger";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -70,7 +70,6 @@ const Store: FC = () => {
 	// The catalog entry awaiting its install confirmation, and the raw-spec dialog's open state.
 	const [target, setTarget] = useState<CatalogEntry | null>(null);
 	const [specOpen, setSpecOpen] = useState(false);
-	const specRefusal = usePasswordFailure();
 	// The job the host is running for us, if any. Cleared by the operator, not by completion — a
 	// finished job's log is the only record of what happened.
 	const [jobId, setJobId] = useState<string | null>(null);
@@ -127,20 +126,17 @@ const Store: FC = () => {
 	};
 
 	const onConfirmSpec = async (spec: string, password: string) => {
-		specRefusal.reset();
 		try {
 			const { job } = await install.mutateAsync({
 				spec,
 				accept_unverified: true,
 				password,
 			});
-			setSpecOpen(false);
 			setJobId(job);
 		} catch (e) {
 			// A refused password keeps the dialog open with everything the operator typed still in
-			// it; anything else is an ordinary install failure.
-			if (specRefusal.classify(e)) return;
-			setSpecOpen(false);
+			// it; anything else closes it as an ordinary install failure.
+			if (passwordFailure(e)) throw e;
 			failed(e, m.store_install_failed());
 		}
 	};
@@ -339,12 +335,7 @@ const Store: FC = () => {
 				/>
 				<SpecInstallDialog
 					open={specOpen}
-					isPending={install.isPending}
-					failure={specRefusal.failure}
-					onCancel={() => {
-						setSpecOpen(false);
-						specRefusal.reset();
-					}}
+					onClose={() => setSpecOpen(false)}
 					onConfirm={onConfirmSpec}
 				/>
 			</div>

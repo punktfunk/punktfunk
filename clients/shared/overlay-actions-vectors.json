@@ -1,0 +1,155 @@
+{
+  "$comment": "The overlay_actions blob, replayed by pf-client-core overlay_actions::tests, the Android OverlayActionsTest and the Apple OverlayActionsTests. Each case parses `blob` for `platform`, expects the ring's wire ids (null is an empty slot), and expects toJSON of that parse to equal `round_trip` as JSON, numbers compared as f32. `slot_ids` parse and print back unchanged on every client, offered or not, so a rewrite never drops another client's pick. The pad-type rows are the Controller type slot's step order and its words; a type outside the cycle steps to Automatic. Hand-written: a new slot id or a new parse rule adds a row here first.",
+  "slot_ids": [
+    "end_stream", "end_game", "disconnect_linger", "touch_mode", "keyboard", "stats", "mic", "pad",
+    "send_text", "guide", "qam", "pad_mouse", "pad_type", "stream_mute", "swap_screens",
+    "host:power.reboot", "shortcut:s2"
+  ],
+  "cases": [
+    {
+      "name": "a full blob keeps every field",
+      "platform": "touch",
+      "blob": "{\"v\":2,\"ring\":[\"end_stream\",\"shortcut:s1\",\"host:power.sleep\",\"stats\",null,\"pad\"],\"shortcuts\":[{\"id\":\"s1\",\"label\":\"Task Manager\",\"keys\":[\"ctrl\",\"shift\",\"escape\"]}],\"pad\":{\"layout\":\"sticks\",\"opacity\":0.3,\"scale\":1.2}}",
+      "ring": ["end_stream", "shortcut:s1", "host:power.sleep", "stats", null, "pad"],
+      "round_trip": {
+        "v": 2,
+        "ring": ["end_stream", "shortcut:s1", "host:power.sleep", "stats", null, "pad"],
+        "shortcuts": [{"id": "s1", "label": "Task Manager", "keys": ["ctrl", "shift", "escape"]}],
+        "pad": {"layout": "sticks", "opacity": 0.3, "scale": 1.2}
+      }
+    },
+    {
+      "name": "an id this client does not offer survives a rewrite",
+      "platform": "touch",
+      "blob": "{\"v\":2,\"ring\":[\"stream_mute\",\"swap_screens\",\"pad_type\",\"pad_mouse\",\"guide\",\"qam\"]}",
+      "ring": ["stream_mute", "swap_screens", "pad_type", "pad_mouse", "guide", "qam"],
+      "round_trip": {
+        "v": 2,
+        "ring": ["stream_mute", "swap_screens", "pad_type", "pad_mouse", "guide", "qam"],
+        "shortcuts": [],
+        "pad": {"layout": "full", "opacity": 0.45, "scale": 1}
+      }
+    },
+    {
+      "name": "a short ring pads with empty slots",
+      "platform": "desktop",
+      "blob": "{\"ring\":[\"mic\"]}",
+      "ring": ["mic", null, null, null, null, null],
+      "round_trip": {
+        "v": 2,
+        "ring": ["mic", null, null, null, null, null],
+        "shortcuts": [],
+        "pad": {"layout": "full", "opacity": 0.45, "scale": 1}
+      }
+    },
+    {
+      "name": "a long ring truncates",
+      "platform": "desktop",
+      "blob": "{\"ring\":[\"mic\",\"mic\",\"mic\",\"mic\",\"mic\",\"mic\",\"stats\",\"stats\"]}",
+      "ring": ["mic", "mic", "mic", "mic", "mic", "mic"],
+      "round_trip": {
+        "v": 2,
+        "ring": ["mic", "mic", "mic", "mic", "mic", "mic"],
+        "shortcuts": [],
+        "pad": {"layout": "full", "opacity": 0.45, "scale": 1}
+      }
+    },
+    {
+      "name": "an unknown id, a dangling shortcut and a nameless host action are empty slots",
+      "platform": "touch",
+      "blob": "{\"ring\":[\"teleport\",\"shortcut:nope\",\"host:\",\"stats\"]}",
+      "ring": [null, null, null, "stats", null, null],
+      "round_trip": {
+        "v": 2,
+        "ring": [null, null, null, "stats", null, null],
+        "shortcuts": [],
+        "pad": {"layout": "full", "opacity": 0.45, "scale": 1}
+      }
+    },
+    {
+      "name": "a shortcut with no id is dropped and a missing label stores empty",
+      "platform": "touch",
+      "blob": "{\"ring\":[\"shortcut:s2\"],\"shortcuts\":[{\"id\":\"s2\",\"keys\":[\"alt\",\"f4\"]},{\"id\":\"\",\"keys\":[\"a\"]}]}",
+      "ring": ["shortcut:s2", null, null, null, null, null],
+      "round_trip": {
+        "v": 2,
+        "ring": ["shortcut:s2", null, null, null, null, null],
+        "shortcuts": [{"id": "s2", "label": "", "keys": ["alt", "f4"]}],
+        "pad": {"layout": "full", "opacity": 0.45, "scale": 1}
+      }
+    },
+    {
+      "name": "an empty blob is the touch default",
+      "platform": "touch",
+      "blob": "",
+      "ring": ["end_stream", "keyboard", "touch_mode", "stats", "mic", "pad"],
+      "round_trip": {
+        "v": 2,
+        "ring": ["end_stream", "keyboard", "touch_mode", "stats", "mic", "pad"],
+        "shortcuts": [],
+        "pad": {"layout": "full", "opacity": 0.45, "scale": 1}
+      }
+    },
+    {
+      "name": "a broken blob is the desktop default",
+      "platform": "desktop",
+      "blob": "{not json",
+      "ring": ["end_stream", "disconnect_linger", "touch_mode", "stats", "mic", "send_text"],
+      "round_trip": {
+        "v": 2,
+        "ring": ["end_stream", "disconnect_linger", "touch_mode", "stats", "mic", "send_text"],
+        "shortcuts": [],
+        "pad": {"layout": "full", "opacity": 0.45, "scale": 1}
+      }
+    },
+    {
+      "name": "an empty ring is six empty slots and the default pad",
+      "platform": "touch",
+      "blob": "{\"v\":2,\"ring\":[]}",
+      "ring": [null, null, null, null, null, null],
+      "round_trip": {
+        "v": 2,
+        "ring": [null, null, null, null, null, null],
+        "shortcuts": [],
+        "pad": {"layout": "full", "opacity": 0.45, "scale": 1}
+      }
+    },
+    {
+      "name": "pad tweaks round-trip and keep a control id this client does not know",
+      "platform": "touch",
+      "blob": "{\"v\":2,\"pad\":{\"layout\":\"full\",\"opacity\":0.45,\"scale\":1.0,\"controls\":{\"ls\":{\"x\":0.1,\"y\":0.8,\"scale\":1.5},\"weird\":{\"hidden\":true}},\"controls_narrow\":{\"face\":{\"scale\":0.75}}}}",
+      "ring": [null, null, null, null, null, null],
+      "round_trip": {
+        "v": 2,
+        "ring": [null, null, null, null, null, null],
+        "shortcuts": [],
+        "pad": {
+          "layout": "full", "opacity": 0.45, "scale": 1,
+          "controls": {"ls": {"x": 0.1, "y": 0.8, "scale": 1.5}, "weird": {"hidden": true}},
+          "controls_narrow": {"face": {"scale": 0.75}}
+        }
+      }
+    },
+    {
+      "name": "an absent tweak field stays absent",
+      "platform": "touch",
+      "blob": "{\"pad\":{\"controls\":{\"rs\":{\"x\":0.5}}}}",
+      "ring": [null, null, null, null, null, null],
+      "round_trip": {
+        "v": 2,
+        "ring": [null, null, null, null, null, null],
+        "shortcuts": [],
+        "pad": {"layout": "full", "opacity": 0.45, "scale": 1, "controls": {"rs": {"x": 0.5}}}
+      }
+    }
+  ],
+  "pad_type_cycle": [
+    {"name": "auto", "label": "Automatic"},
+    {"name": "xbox360", "label": "Xbox 360"},
+    {"name": "xboxone", "label": "Xbox One"},
+    {"name": "dualsense", "label": "DualSense"},
+    {"name": "dualshock4", "label": "DualShock 4"},
+    {"name": "steamdeck", "label": "Steam Deck"}
+  ],
+  "pad_type_outside_cycle": ["steamcontroller2", "switchpro", "dualsenseedge"]
+}

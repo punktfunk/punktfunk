@@ -7,6 +7,9 @@
 //! sequences have their own tests in `ui::theme`. Goldens live under
 //! `tests/golden/tui-*.txt`; regenerate with `UPDATE_GOLDEN=1`.
 
+mod common;
+
+use common::golden;
 use punktfunk_setup::choices::{Choices, Pins};
 use punktfunk_setup::demo;
 use punktfunk_setup::report;
@@ -41,22 +44,6 @@ fn drive_all(preset: &str, keys: &[Key]) -> (String, Step, Screen, Vec<String>) 
         tui.settings(&mut screen, 0)
     };
     (term.screen().to_string(), step, screen, term.frames.clone())
-}
-
-fn golden(name: &str, actual: &str) {
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/golden")
-        .join(format!("{name}.txt"));
-    if std::env::var_os("UPDATE_GOLDEN").is_some() {
-        std::fs::write(&path, actual).expect("write golden");
-        return;
-    }
-    let want = std::fs::read_to_string(&path)
-        .unwrap_or_else(|_| panic!("no golden for {name} — run UPDATE_GOLDEN=1"));
-    assert_eq!(
-        actual, want,
-        "golden {name} changed (UPDATE_GOLDEN=1 to accept)"
-    );
 }
 
 #[test]

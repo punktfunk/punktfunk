@@ -43,8 +43,8 @@ pub(crate) const WORKSPACE_VERSION: &str = env!("CARGO_PKG_VERSION");
 /// PipeWire pools are ≤ ~16 buffers. Eviction is recoverable ([`FromWorker::NeedFd`]).
 const FD_CACHE_CAP: usize = 64;
 
-/// Encoder blend texture is 256×256 RGBA (`pyrowave.rs::CURSOR_MAX`).
-const CURSOR_UPLOAD_MAX: usize = 256 * 256 * 4;
+/// The encoder's cursor texture: `CURSOR_MAX`² RGBA.
+const CURSOR_UPLOAD_MAX: usize = (super::vk_csc::CURSOR_MAX as usize).pow(2) * 4;
 
 /// What `VK_KHR_global_priority` produced. Logged on the host: the worker's
 /// `tracing` is inherited stderr, and the in-process INERT wording names the

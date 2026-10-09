@@ -200,6 +200,7 @@ fn ethtool_wol_has_magic(iface: &str) -> Option<bool> {
 }
 
 /// Does the current Wake-on setting include `g` (MagicPacket)? `None` if the field is absent.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code, reason = "Linux only"))]
 fn parse_ethtool_wol(text: &str) -> Option<bool> {
     for line in text.lines() {
         let t = line.trim();
@@ -216,6 +217,7 @@ fn parse_ethtool_wol(text: &str) -> Option<bool> {
 /// `WoWLAN is disabled` / `WoWLAN is enabled:` plus `* wake up on magic packet`.
 /// `* wake up on anything` counts too (every frame, magic included). Enabled with
 /// only other triggers is not armed. `None` when the output says nothing about WoWLAN.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code, reason = "Linux only"))]
 fn parse_iw_wowlan(text: &str) -> Option<bool> {
     let mut seen = false;
     let mut magic = false;

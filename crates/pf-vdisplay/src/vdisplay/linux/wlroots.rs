@@ -19,6 +19,7 @@
 //! (`scripts/headless/portals.conf`).
 
 use super::{DisplayOwnership, Mode, VirtualDisplay, VirtualOutput};
+use crate::monitors::DISABLE_BUDGET;
 use crate::portal_cast::StopGuard;
 use anyhow::{anyhow, bail, Context, Result};
 use std::os::fd::OwnedFd;
@@ -140,28 +141,6 @@ impl WlrootsDisplay {
         let stream = crate::portal_cast::stream_existing_output(&SELECTOR, name, self.hw_cursor)?;
         self.last_cursor_mode = stream.cursor_mode;
         Ok(stream.into_cast())
-    }
-
-    /// Apply [`crate::policy::Topology`] for `ours` and stash the restore the registry runs
-    /// when the group empties ([`Drop`] is the backstop).
-    ///
-    /// Last step of [`create`](VirtualDisplay::create): nothing fails after it, so no
-    /// path disables heads and then unwinds past the restore hand-off. Physical heads
-    /// stay lit through the portal handshake (same as `extend`).
-    fn apply_topology(&mut self, ours: &str) {
-        use crate::policy::Topology;
-        match crate::effective_topology(self.client_fp) {
-            Topology::Extend | Topology::Auto => {}
-            Topology::Primary => warn_primary_is_not_expressible(),
-            Topology::Exclusive => {
-                let disabled = disable_other_heads(ours);
-                let prepared = (!disabled.is_empty()).then(|| {
-                    Box::new(move || restore_heads(&disabled)) as Box<dyn FnOnce() + Send>
-                });
-                // First restore wins: retry loops must not replace attempt 1's list.
-                crate::backend::stash_topology_restore(&mut self.pending_restore, prepared);
-            }
-        }
     }
 }
 
@@ -291,7 +270,14 @@ impl VirtualDisplay for WlrootsDisplay {
             "sway headless output ready"
         );
         // Last: no failure path unwinds past the restore hand-off.
-        self.apply_topology(&name);
+        crate::backend::apply_exclusive(
+            "wlroots",
+            self.client_fp,
+            &name,
+            &mut self.pending_restore,
+            disable_other_heads,
+            restore_heads,
+        );
         // The registry pools the output and hands the cast to the session; a direct
         // caller keeps both.
         let (remote_fd, keepalive): (Option<OwnedFd>, Box<dyn Send>) = if self.handoff_cast {
@@ -590,66 +576,22 @@ fn workspace_argv(n: &str) -> [&str; 3] {
     ["workspace", "number", n]
 }
 
-/// `topology: primary` has no expression here: Wayland has no primary output, and
-/// sway's nearest equivalent is the focused output, which [`focus_output`] already
-/// points at the streamed head. Log and treat as extend. `exclusive` actually
-/// changes the desk.
-fn warn_primary_is_not_expressible() {
-    tracing::info!(
-        "wlroots: `topology: primary` has no equivalent here — Wayland has no primary output and \
-         sway has only a FOCUSED output, which the streamed head already holds. Treating it as \
-         `extend`; use `exclusive` to actually disable the operator's heads."
-    );
-}
-
-/// Disable every head [`crate::monitors::darkens`] names for `exclusive`. Returns
-/// those actually disabled ([`restore_heads`]). One refusal costs that screen, not
-/// the session. `keep_monitors` stays lit.
+/// Disable the heads an `exclusive` session darkens ([`crate::monitors::disable_for_exclusive`]),
+/// returning the ones [`restore_heads`] re-enables. `keep_monitors` stays lit.
 ///
-/// `managed` is the `HEADLESS-` prefix, so a concurrent session's output is never
-/// blacked out. The prefix is blunt: sway's own bootstrap `HEADLESS-1` is spared
-/// too. Leaving a headless box's only screen lit is the cheaper failure.
+/// `managed` is [`is_managed_output`], so a concurrent session's output is never blacked out.
+/// The prefix is blunt: sway's own bootstrap `HEADLESS-1` is spared too. Leaving a headless
+/// box's only screen lit is the cheaper failure.
 fn disable_other_heads(ours: &str) -> Vec<String> {
-    let heads = match list_monitors() {
-        Ok(h) => h,
-        Err(e) => {
-            tracing::warn!(
-                error = %format!("{e:#}"),
-                "wlroots: could not enumerate outputs for `topology: exclusive` — leaving the \
-                 operator's heads enabled (the session still streams, as `extend`)"
-            );
-            return Vec::new();
-        }
-    };
     let keep = crate::policy::prefs().get().keep_monitors;
-    let targets = crate::monitors::heads_to_darken(&heads, ours, &keep);
-    if targets.is_empty() {
-        tracing::info!(
-            "wlroots: `topology: exclusive` had nothing to disable — no enabled output besides the \
-             headless and kept ones (a headless box, or a sibling session already took the desk)"
-        );
-        return Vec::new();
-    }
-    let mut disabled = Vec::new();
-    for name in targets {
-        match disable_head(&name) {
-            Ok(()) => disabled.push(name),
-            Err(e) => tracing::warn!(
-                output = %name, error = %format!("{e:#}"),
-                "wlroots: output not disabled for `topology: exclusive` — it stays lit"
-            ),
-        }
-    }
-    if !disabled.is_empty() {
-        tracing::info!(
-            ?disabled,
-            "wlroots: `topology: exclusive` — the streamed output is now the desk"
-        );
-        // Disable moves workspaces; sway picks a new focus. Re-assert ours so
-        // launches still land on the stream.
-        focus_output(ours);
-    }
-    disabled
+    crate::monitors::disable_for_exclusive(
+        "wlroots",
+        list_monitors(),
+        ours,
+        &keep,
+        disable_head,
+        focus_output,
+    )
 }
 
 /// `swaymsg output <name> disable`, then read back. A bad command already fails
@@ -674,44 +616,23 @@ fn dpms_argv(name: &str, on: bool) -> [&str; 4] {
     ["output", name, "dpms", if on { "on" } else { "off" }]
 }
 
-/// DPMS every non-ours, non-sibling head for a **gamescope** `Topology::Exclusive`
-/// ([`crate::panel_dpms`]).
+/// `output <name> dpms on|off`. Sway's dpms sets state, so every accepted call counts as a change.
+fn set_dpms(name: &str, on: bool) -> Result<bool> {
+    swaymsg(&dpms_argv(name, on)).map(|_| true)
+}
+
+/// DPMS every head but a sibling's for a **gamescope** `exclusive` stream
+/// ([`crate::monitors::dpms_others`]).
 ///
-/// Not [`disable_other_heads`]: gamescope is its own compositor and owns no sway
-/// output, so disable would move workspaces for a stream that is not on this
-/// compositor. Empty `ours` still spares a concurrent session's `HEADLESS-*`. No
-/// keep list: the gamescope darken ignores `keep_monitors` on every compositor.
-/// Returns the heads actually changed. One refusal costs a lit screen, not the stream.
+/// Not [`disable_other_heads`]: gamescope owns no sway output, so a disable would move
+/// workspaces for a stream that is not on this compositor.
 pub(crate) fn dpms_other_heads(on: bool) -> Vec<String> {
-    let Ok(heads) = list_monitors() else {
-        return Vec::new();
-    };
-    let mut changed = Vec::new();
-    for name in crate::monitors::heads_to_darken(&heads, "", &[]) {
-        match swaymsg(&dpms_argv(&name, on)) {
-            Ok(_) => changed.push(name),
-            Err(e) => tracing::warn!(
-                output = %name, error = %format!("{e:#}"),
-                "wlroots: output not blanked for `topology: exclusive`"
-            ),
-        }
-    }
-    changed
+    crate::monitors::dpms_others("wlroots", list_monitors(), |n| set_dpms(n, on))
 }
 
 /// `dpms on` for exactly `names`, the heads [`dpms_other_heads`] darkened. The ones that took it.
 pub(crate) fn relight_heads(names: &[String]) -> Vec<String> {
-    names
-        .iter()
-        .filter(|name| match swaymsg(&dpms_argv(name, true)) {
-            Ok(_) => true,
-            Err(e) => {
-                tracing::warn!(output = %name, error = %format!("{e:#}"), "wlroots: output not re-lit");
-                false
-            }
-        })
-        .cloned()
-        .collect()
+    crate::monitors::relight("wlroots", names, |n| set_dpms(n, true))
 }
 
 /// `output <name> enable`. Sway keeps a disabled output's config, so this restores
@@ -719,9 +640,6 @@ pub(crate) fn relight_heads(names: &[String]) -> Vec<String> {
 fn enable_argv(name: &str) -> [&str; 3] {
     ["output", name, "enable"]
 }
-
-/// 3 s for `disable`/`enable` to show in `get_outputs`. A miss is reported, never assumed.
-const DISABLE_BUDGET: Duration = Duration::from_secs(3);
 
 fn wait_head_enabled_is(name: &str, want: bool, timeout: Duration) -> bool {
     let deadline = Instant::now() + timeout;
@@ -795,9 +713,6 @@ impl Drop for OutputGuard {
 /// connect forever; these calls run on the stream thread, whose only end is return.
 /// Every call site already has a failed-query path.
 const SWAYMSG_BUDGET: Duration = Duration::from_secs(5);
-
-/// 10 s for `systemctl --user try-restart` (waits for the job; result is ignored).
-const PORTAL_RESTART_BUDGET: Duration = Duration::from_secs(10);
 
 /// The IPC tool with its socket on the child only. `Command::env` avoids a process
 /// `setenv` racing every `getenv` on a live host. `sock` is `None` when no IPC is
@@ -914,8 +829,7 @@ pub(crate) fn list_monitors() -> Result<Vec<crate::monitors::PhysicalMonitor>> {
                     .or_else(|| o.get("focused").and_then(|v| v.as_bool()))
                     .unwrap_or(false),
                 enabled: o.get("active").and_then(|v| v.as_bool()).unwrap_or(true),
-                // Prefix match only; a sway-owned bootstrap HEADLESS-* counts too.
-                managed: connector.starts_with("HEADLESS-"),
+                managed: is_managed_output(&connector),
                 connector,
             })
         })
@@ -1004,13 +918,9 @@ fn give_back_chooser(path: &std::path::Path) -> bool {
     changed
 }
 
-/// Bounded: `systemctl --user` blocks on the job queue, and this can run on the
-/// stream thread. A timeout means xdpw picks the config up when it next starts.
+/// Bounded and fire-and-forget: a timeout means xdpw reads the new config when it next starts.
 fn restart_xdpw() {
-    let _ = crate::proc::status_within(
-        Command::new("systemctl").args(["--user", "try-restart", "xdg-desktop-portal-wlr.service"]),
-        PORTAL_RESTART_BUDGET,
-    );
+    crate::gamescope::systemctl_user(&["try-restart", "xdg-desktop-portal-wlr.service"]);
 }
 
 #[cfg(test)]
@@ -1166,9 +1076,8 @@ mod tests {
             scale: 1.0,
             primary: false,
             enabled,
-            // The real `list_monitors` derives this from the `HEADLESS-` prefix; mirror it here so
-            // the fixture can't drift into asserting a rule the backend doesn't actually apply.
-            managed: connector.starts_with("HEADLESS-"),
+            // The rule the real `list_monitors` applies, so the fixture cannot drift from it.
+            managed: is_managed_output(connector),
         }
     }
 

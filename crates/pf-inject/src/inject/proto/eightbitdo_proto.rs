@@ -7,6 +7,7 @@
 //! (4096 LSB/g, ±2000 °/s full scale), and a µs IMU clock on the models that declare one.
 //! Offsets follow `SDL_hidapi_8bitdo.c`; `tests/motion_contract.rs` pins the units.
 
+use crate::dpad::dpad_octant;
 use pf_driver_proto::eightbitdo as wire;
 pub use pf_driver_proto::eightbitdo::{
     caps_reply, FEATURE_CAPS, REPORT_ID, REPORT_LEN, RUMBLE_ID, VENDOR,
@@ -196,7 +197,7 @@ impl EightBitDoState {
             }
         }
         EightBitDoState {
-            hat: hat(f.buttons),
+            hat: dpad_octant(f.buttons).unwrap_or(0x0F),
             // SDL passes Y through: down is positive. The wire is up-positive.
             sticks: [
                 stick(f.ls_x as i32),
@@ -268,30 +269,6 @@ impl EightBitDoState {
             r[27..31].copy_from_slice(&t.to_le_bytes());
         }
         r
-    }
-}
-
-/// D-pad bits → hat 0..7 clockwise from up, `0x0F` centred. Opposite directions cancel.
-/// The HORIPAD uses the same encoding.
-pub(crate) fn hat(buttons: u32) -> u8 {
-    let up = buttons & gs::BTN_DPAD_UP != 0;
-    let down = buttons & gs::BTN_DPAD_DOWN != 0;
-    let left = buttons & gs::BTN_DPAD_LEFT != 0;
-    let right = buttons & gs::BTN_DPAD_RIGHT != 0;
-    let v = up && !down;
-    let d = down && !up;
-    let l = left && !right;
-    let r = right && !left;
-    match (v, r, d, l) {
-        (true, false, _, false) => 0,
-        (true, true, _, _) => 1,
-        (false, true, false, _) => 2,
-        (_, true, true, _) => 3,
-        (false, false, true, false) => 4,
-        (_, _, true, true) => 5,
-        (false, _, false, true) => 6,
-        (true, _, _, true) => 7,
-        _ => 0x0F,
     }
 }
 
@@ -377,8 +354,6 @@ mod tests {
         );
         assert_eq!(s.buttons[1], b9::BACK | b9::START | b9::GUIDE);
         assert_eq!(s.hat, 1);
-        assert_eq!(hat(gs::BTN_DPAD_LEFT), 6);
-        assert_eq!(hat(gs::BTN_DPAD_UP | gs::BTN_DPAD_DOWN), 0x0F);
     }
 
     /// SDL reads a stick byte as `raw * 257 - 32768`, Y down-positive.
@@ -433,7 +408,7 @@ mod tests {
     /// its buffers from the descriptor, and SDL enables gyro only for a 34-byte report.
     #[test]
     fn descriptor_declares_the_report_sizes() {
-        use crate::rdesc_walk::{payload_len, FEATURE, INPUT, OUTPUT};
+        use pf_driver_proto::rdesc::{report_lens, FEATURE, INPUT, OUTPUT};
         for m in [Model::Ultimate2, Model::Pro2, Model::Pro3] {
             let d = m.rdesc();
             assert_eq!(
@@ -441,14 +416,15 @@ mod tests {
                 [0x05, 0x01, 0x09, 0x05, 0xA1, 0x01],
                 "Game Pad collection"
             );
-            assert_eq!(payload_len(d, INPUT, REPORT_ID) + 1, REPORT_LEN);
-            assert_eq!(payload_len(d, OUTPUT, RUMBLE_ID), 4);
+            let lens = report_lens(d);
+            assert_eq!(lens[&(INPUT, REPORT_ID)], REPORT_LEN);
+            assert_eq!(lens[&(OUTPUT, RUMBLE_ID)], 5);
         }
-        let caps = payload_len(Model::Pro2.rdesc(), FEATURE, FEATURE_CAPS);
-        assert_eq!(caps + 1, caps_reply(Model::Pro2.devtype(), 0).len());
+        let caps = report_lens(Model::Pro2.rdesc())[&(FEATURE, FEATURE_CAPS)];
+        assert_eq!(caps, caps_reply(Model::Pro2.devtype(), 0).len());
         assert_eq!(
-            payload_len(Model::Ultimate2.rdesc(), FEATURE, FEATURE_CAPS),
-            0
+            report_lens(Model::Ultimate2.rdesc()).get(&(FEATURE, FEATURE_CAPS)),
+            None
         );
     }
 }

@@ -69,15 +69,6 @@ pub enum GameOnNewLaunch {
     End,
 }
 
-impl GameOnNewLaunch {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Keep => "keep",
-            Self::End => "end",
-        }
-    }
-}
-
 /// Default reconnect window before `Always` ends a game. 300 s covers a Wi-Fi
 /// roam or a client restart; being wrong costs unsaved progress.
 const DEFAULT_GRACE_SECS: u32 = 300;

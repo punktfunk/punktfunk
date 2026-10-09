@@ -84,7 +84,7 @@ impl CreateOptions {
         let opts = ConsoleOptions {
             device_name: self.device_name,
             version: None,
-            deck: self.system_keyboard,
+            system_keyboard: self.system_keyboard,
             tv: self.tv,
             fallback_ui: self.fallback_ui,
             pyrowave_ok: self.pyrowave_ok,
@@ -129,7 +129,7 @@ impl EntryJson {
 /// The connected controllers: `{"label": "DualSense", "pref": 1, "pads": [{name, key, pref,
 /// steam_virtual, battery: {percent, charging} | null, detail, forwarded, rumble}], "others":
 /// [{name, kind, detail}]}`.
-#[derive(serde::Deserialize)]
+#[derive(serde::Serialize, serde::Deserialize)]
 pub struct PadsJson {
     #[serde(default)]
     label: Option<String>,
@@ -143,7 +143,7 @@ pub struct PadsJson {
     others: Vec<crate::OtherDevice>,
 }
 
-#[derive(serde::Deserialize)]
+#[derive(serde::Serialize, serde::Deserialize)]
 struct PadJson {
     name: String,
     key: String,
@@ -161,7 +161,7 @@ struct PadJson {
     rumble: bool,
 }
 
-#[derive(serde::Deserialize)]
+#[derive(serde::Serialize, serde::Deserialize)]
 struct BatteryJson {
     percent: u8,
     charging: bool,
@@ -469,28 +469,84 @@ mod tests {
         );
     }
 
-    /// The codes Kotlin and Swift send. A new code lands here and in both shims' callers.
+    /// `clients/shared/console-bridge-vectors.json`: the contract Kotlin and Swift replay.
+    fn vectors() -> serde_json::Value {
+        serde_json::from_str(include_str!(
+            "../../../clients/shared/console-bridge-vectors.json"
+        ))
+        .unwrap()
+    }
+
+    /// The vector file's `codes` table, each list indexed by code. A new code lands there and in
+    /// both shims' callers.
+    #[test]
+    fn the_shared_code_table_decodes_as_named() {
+        use MenuDir::*;
+        let file = vectors();
+        let table =
+            |k: &str| -> Vec<String> { serde_json::from_value(file["codes"][k].clone()).unwrap() };
+        let menu = table("menu");
+        for (code, name) in menu.iter().enumerate() {
+            let want = match name.as_str() {
+                "up" => MenuCode::Menu(MenuEvent::Move(Up)),
+                "down" => MenuCode::Menu(MenuEvent::Move(Down)),
+                "left" => MenuCode::Menu(MenuEvent::Move(Left)),
+                "right" => MenuCode::Menu(MenuEvent::Move(Right)),
+                "confirm" => MenuCode::Menu(MenuEvent::Confirm),
+                "back" => MenuCode::Menu(MenuEvent::Back),
+                "secondary" => MenuCode::Menu(MenuEvent::Secondary),
+                "tertiary" => MenuCode::Menu(MenuEvent::Tertiary),
+                "jump_back" => MenuCode::Menu(MenuEvent::JumpBack),
+                "jump_forward" => MenuCode::Menu(MenuEvent::JumpForward),
+                "ok_down" => MenuCode::Ok(true),
+                "ok_up" => MenuCode::Ok(false),
+                _ => panic!("menu code {code} names {name}"),
+            };
+            assert_eq!(menu_code(code as u8), Some(want), "menu {code}");
+        }
+        let phase = table("phase");
+        for (code, name) in phase.iter().enumerate() {
+            let p = phase_code(code as u8, "m");
+            let decoded = match name.as_str() {
+                "connecting" => matches!(p, Some(SessionPhase::Connecting)),
+                "streaming" => matches!(p, Some(SessionPhase::Streaming)),
+                "failed" => matches!(p, Some(SessionPhase::Failed("m"))),
+                "ended" => matches!(p, Some(SessionPhase::Ended(Some("m")))),
+                "reconnecting" => matches!(p, Some(SessionPhase::Reconnecting("m"))),
+                "profile_gone" => {
+                    code == usize::from(PHASE_PROFILE_GONE)
+                        && matches!(p, Some(SessionPhase::Failed("m")))
+                }
+                _ => panic!("phase code {code} names {name}"),
+            };
+            assert!(decoded, "phase {code} is {name}");
+        }
+        assert!(matches!(phase_code(3, ""), Some(SessionPhase::Ended(None))));
+        let stale = table("stale");
+        for (code, name) in stale.iter().enumerate() {
+            let want = match name.as_str() {
+                "fresh" => Stale::No,
+                "waking" => Stale::Waking,
+                "offline" => Stale::Offline,
+                _ => panic!("stale code {code} names {name}"),
+            };
+            assert_eq!(stale_code(code as u8), want, "stale {code}");
+        }
+        for code in 0..=u8::MAX {
+            let known = |n: usize| usize::from(code) < n;
+            assert_eq!(menu_code(code).is_some(), known(menu.len()), "menu {code}");
+            let phase_known = phase_code(code, "").is_some();
+            assert_eq!(phase_known, known(phase.len()), "phase {code}");
+            if !known(stale.len()) {
+                assert_eq!(stale_code(code), Stale::No, "stale {code}");
+            }
+        }
+    }
+
+    /// The pointer and key codes Kotlin and Swift send. A new code lands here and in both
+    /// shims' callers.
     #[test]
     fn codes_decode_to_the_documented_inputs() {
-        use MenuDir::*;
-        let menu = [
-            MenuEvent::Move(Up),
-            MenuEvent::Move(Down),
-            MenuEvent::Move(Left),
-            MenuEvent::Move(Right),
-            MenuEvent::Confirm,
-            MenuEvent::Back,
-            MenuEvent::Secondary,
-            MenuEvent::Tertiary,
-            MenuEvent::JumpBack,
-            MenuEvent::JumpForward,
-        ];
-        for (code, ev) in menu.into_iter().enumerate() {
-            assert_eq!(menu_code(code as u8), Some(MenuCode::Menu(ev)));
-        }
-        assert_eq!(menu_code(10), Some(MenuCode::Ok(true)));
-        assert_eq!(menu_code(11), Some(MenuCode::Ok(false)));
-
         let (x, y, dy) = (1.0, 2.0, 3.0);
         let pointer = [
             PointerInput::Move { x, y },
@@ -545,35 +601,110 @@ mod tests {
 
         for code in 0..=u8::MAX {
             let known = |n: usize| usize::from(code) < n;
-            assert_eq!(
-                menu_code(code).is_some(),
-                known(menu.len() + 2),
-                "menu {code}"
-            );
             assert_eq!(pointer_code(code, x, y, dy).is_some(), known(pointer.len()));
             assert_eq!(key_code(code).is_some(), known(keys.len()), "key {code}");
-            assert_eq!(phase_code(code, "").is_some(), known(6), "phase {code}");
         }
-        assert!(matches!(
-            phase_code(2, "lost"),
-            Some(SessionPhase::Failed("lost"))
-        ));
-        assert!(matches!(
-            phase_code(PHASE_PROFILE_GONE, "gone"),
-            Some(SessionPhase::Failed("gone"))
-        ));
-        assert!(matches!(phase_code(3, ""), Some(SessionPhase::Ended(None))));
-        assert!(matches!(
-            phase_code(3, "gone"),
-            Some(SessionPhase::Ended(Some("gone")))
-        ));
-        assert!(matches!(
-            phase_code(4, "retry"),
-            Some(SessionPhase::Reconnecting("retry"))
-        ));
-        assert_eq!(stale_code(1), Stale::Waking);
-        assert_eq!(stale_code(2), Stale::Offline);
-        assert_eq!(stale_code(0), Stale::No);
-        assert_eq!(stale_code(9), Stale::No);
+    }
+
+    /// The variant names serde's derive gives `ConsoleCmd`, as it hands them to
+    /// `deserialize_enum`.
+    fn command_names() -> &'static [&'static str] {
+        struct Names(&'static [&'static str]);
+        impl<'de> serde::Deserializer<'de> for &mut Names {
+            type Error = serde::de::value::Error;
+            fn deserialize_any<V: serde::de::Visitor<'de>>(
+                self,
+                _: V,
+            ) -> Result<V::Value, Self::Error> {
+                Err(serde::de::Error::custom("not an enum"))
+            }
+            fn deserialize_enum<V: serde::de::Visitor<'de>>(
+                self,
+                _: &'static str,
+                variants: &'static [&'static str],
+                _: V,
+            ) -> Result<V::Value, Self::Error> {
+                self.0 = variants;
+                Err(serde::de::Error::custom("listed"))
+            }
+            serde::forward_to_deserialize_any! {
+                bool i8 i16 i32 i64 i128 u8 u16 u32 u64 u128 f32 f64 char str string bytes
+                byte_buf option unit unit_struct newtype_struct seq tuple tuple_struct map
+                struct identifier ignored_any
+            }
+        }
+        let mut names = Names(&[]);
+        let _ = <crate::ConsoleCmd as serde::Deserialize>::deserialize(&mut names);
+        names.0
+    }
+
+    /// The console is the producer: each sample is exactly what serde sends, and every
+    /// variant has one.
+    #[test]
+    fn every_command_has_a_sample_serde_sends_verbatim() {
+        let file = vectors();
+        let mut sampled = std::collections::BTreeSet::new();
+        for s in file["commands"].as_array().unwrap() {
+            let cmd: crate::ConsoleCmd =
+                serde_json::from_value(s.clone()).unwrap_or_else(|e| panic!("{s}: {e}"));
+            assert_eq!(serde_json::to_value(&cmd).unwrap(), *s, "{cmd:?}");
+            let name = s
+                .as_str()
+                .or_else(|| s.as_object()?.keys().next().map(String::as_str))
+                .unwrap();
+            assert!(sampled.insert(name), "two samples for {name}");
+        }
+        let all: std::collections::BTreeSet<&str> = command_names().iter().copied().collect();
+        assert_eq!(sampled, all);
+    }
+
+    /// Every key of `want` comes back in `got` with its value; `got` may add defaults.
+    fn keeps(want: &serde_json::Value, got: &serde_json::Value) -> bool {
+        use serde_json::Value::{Array, Object};
+        match (want, got) {
+            (Object(w), Object(g)) => w.iter().all(|(k, v)| g.get(k).is_some_and(|g| keeps(v, g))),
+            (Array(w), Array(g)) => w.len() == g.len() && w.iter().zip(g).all(|(w, g)| keeps(w, g)),
+            _ => want == got,
+        }
+    }
+
+    fn read_back<T: serde::Serialize + serde::de::DeserializeOwned>(
+        sample: &serde_json::Value,
+    ) -> serde_json::Value {
+        let v: T =
+            serde_json::from_value(sample.clone()).unwrap_or_else(|e| panic!("{sample}: {e}"));
+        serde_json::to_value(v).unwrap()
+    }
+
+    /// The hosts are the producers: each sample parses, and no key in it is one the type drops.
+    #[test]
+    fn every_pushed_model_keeps_its_sample() {
+        let file = vectors();
+        for (model, samples) in file["models"].as_object().unwrap() {
+            for s in samples.as_array().unwrap() {
+                let got = match model.as_str() {
+                    "PairPhase" => read_back::<crate::PairPhase>(s),
+                    "WakeStatus" => read_back::<crate::WakeStatus>(s),
+                    "SpeedPhase" => read_back::<crate::SpeedPhase>(s),
+                    "ProfilesAnswer" => read_back::<crate::ProfilesAnswer>(s),
+                    "LibraryPhase" => read_back::<crate::LibraryPhase>(s),
+                    "DownloadsPush" => read_back::<crate::DownloadsPush>(s),
+                    "PadsJson" => read_back::<PadsJson>(s),
+                    "Settings" => read_back::<Settings>(s),
+                    _ => panic!("no type reads {model}"),
+                };
+                assert!(keeps(s, &got), "{model}: {s} reads back as {got}");
+            }
+        }
+        let doc = &file["models"]["Settings"][0];
+        let settings: Settings = serde_json::from_value(doc.clone()).unwrap();
+        for key in file["settings_extra_keys"].as_array().unwrap() {
+            let key = key.as_str().unwrap();
+            assert_eq!(
+                settings.extra.get(key),
+                Some(&doc[key]),
+                "{key} rides Settings::extra"
+            );
+        }
     }
 }

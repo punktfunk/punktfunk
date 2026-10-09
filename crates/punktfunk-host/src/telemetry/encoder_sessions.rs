@@ -136,7 +136,6 @@ fn nvml() -> Option<&'static Nvml> {
 /// One live encoder session on an NVIDIA GPU.
 #[derive(Clone, Debug)]
 pub struct Session {
-    pub pid: u32,
     /// Image name (`NVIDIA Overlay.exe`, `obs64`), or `pid <n>` when unreadable.
     pub process: String,
     pub codec: &'static str,
@@ -208,7 +207,6 @@ pub fn list() -> Vec<Session> {
         .map(|raw| {
             let name = process_name(raw.pid);
             Session {
-                pid: raw.pid,
                 ours: is_ours(raw.pid, name.as_deref()),
                 process: name.unwrap_or_else(|| format!("pid {}", raw.pid)),
                 codec: codec_name(raw.codec_type),
@@ -275,7 +273,6 @@ mod tests {
     #[test]
     fn describe_names_each_session() {
         let s = Session {
-            pid: 7,
             process: "NVIDIA Overlay.exe".into(),
             codec: "HEVC",
             width: 2560,

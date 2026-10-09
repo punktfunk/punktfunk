@@ -24,6 +24,7 @@ pub enum PowerVerb {
 }
 
 /// Exit status that asks the Windows service supervisor for an immediate relaunch.
+#[cfg_attr(not(windows), allow(dead_code, reason = "Windows service reads it"))]
 pub const RESTART_EXIT_CODE: u32 = 75;
 
 /// The `punktfunk-host*.service` user unit a `/proc/self/cgroup` places this process in.
@@ -81,6 +82,7 @@ pub struct Availability {
 }
 
 impl Availability {
+    #[cfg_attr(target_os = "macos", allow(dead_code, reason = "no power on macOS"))]
     fn yes() -> Availability {
         Availability {
             available: true,

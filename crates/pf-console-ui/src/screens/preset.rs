@@ -4,20 +4,19 @@
 //! next catalog push.
 //!
 //! The editor shows every row a preset can hold, at the preset's value over the global one.
-//! A change is recorded as an override ([`SettingsOverlay::absorb`]); X clears one, so the
-//! row follows the global value again.
+//! A step pins that row's field ([`SettingsOverlay::pin`]), even at the global value; X clears
+//! it, so the row follows the global value again.
 
-use super::settings::{adjust, advanced, overrides_row, preset_field, preset_rows, row_spec};
+use super::settings::rows::{adjust, advanced, overrides_row, preset_field, preset_rows, row_spec};
 use crate::glyphs::{Hint, HintKey};
 use crate::model::ConsoleCmd;
 use crate::pointer::Pointer;
-use crate::screens::{Ctx, EditField, Outbox, Screen};
+use crate::screens::{Ctx, EditField, Outbox, Screen, ScreenView, TextEntry};
 use crate::theme::Fonts;
-use crate::widgets::{
-    blurb, entry_hints, field_key, type_text, Entry, Keyboard, ListMsg, MenuList, RowSpec,
-};
+use crate::widgets::{blurb, field_key, type_text, Entry, ListMsg, MenuList, RowSpec};
 use pf_client_core::menu_nav::{MenuEvent, MenuPulse};
 use pf_client_core::presets::SettingsOverlay;
+use pf_client_core::trust::Settings;
 use skia_safe::{Canvas, Rect};
 
 fn save(id: &str, name: &str, overlay: &SettingsOverlay) -> ConsoleCmd {
@@ -48,7 +47,7 @@ const ITEMS: [Item; 4] = [Item::Edit, Item::Rename, Item::Pin, Item::Delete];
 pub(crate) struct PresetMenu {
     id: String,
     name: String,
-    pub(super) list: MenuList,
+    list: MenuList,
     /// Delete fires on the second press.
     armed: bool,
     /// When `name` was last read back from the store: a rename lands through the host.
@@ -64,33 +63,6 @@ impl PresetMenu {
             armed: false,
             read_at: 0.0,
         }
-    }
-
-    pub(crate) fn title(&self) -> String {
-        format!("Preset {}", quoted(&self.name))
-    }
-
-    pub(crate) fn menu(
-        &mut self,
-        ev: MenuEvent,
-        ctx: &mut Ctx,
-        fx: &mut Outbox,
-    ) -> Option<MenuPulse> {
-        if ev == MenuEvent::Back {
-            fx.pop();
-            return None;
-        }
-        let (msg, pulse) = self.list.menu(ev, ITEMS.len());
-        self.dispatch(msg, pulse, ctx, fx)
-    }
-
-    pub(crate) fn pointer(&mut self, p: Pointer, ctx: &mut Ctx, fx: &mut Outbox) -> bool {
-        let (msg, pulse) = self.list.pointer(p, ITEMS.len());
-        if matches!(msg, ListMsg::None) && pulse.is_none() {
-            return false;
-        }
-        self.dispatch(msg, pulse, ctx, fx);
-        true
     }
 
     /// Shared by pad and pointer. Arming is per row: focus on any other row disarms Delete.
@@ -146,15 +118,39 @@ impl PresetMenu {
         }
         Some(MenuPulse::Confirm)
     }
+}
 
-    pub(crate) fn hints(&self, _ctx: &Ctx) -> Vec<Hint> {
+impl ScreenView for PresetMenu {
+    fn title(&self) -> String {
+        format!("Preset {}", quoted(&self.name))
+    }
+
+    fn menu(&mut self, ev: MenuEvent, ctx: &mut Ctx, fx: &mut Outbox) -> Option<MenuPulse> {
+        if ev == MenuEvent::Back {
+            fx.pop();
+            return None;
+        }
+        let (msg, pulse) = self.list.menu(ev, ITEMS.len());
+        self.dispatch(msg, pulse, ctx, fx)
+    }
+
+    fn pointer(&mut self, p: Pointer, ctx: &mut Ctx, fx: &mut Outbox) -> bool {
+        let (msg, pulse) = self.list.pointer(p, ITEMS.len());
+        if matches!(msg, ListMsg::None) && pulse.is_none() {
+            return false;
+        }
+        self.dispatch(msg, pulse, ctx, fx);
+        true
+    }
+
+    fn hints(&self, _ctx: &Ctx) -> Vec<Hint> {
         vec![
             Hint::new(HintKey::Confirm, "Select"),
             Hint::new(HintKey::Back, "Back"),
         ]
     }
 
-    pub(crate) fn render(
+    fn render(
         &mut self,
         canvas: &Canvas,
         rect: Rect,
@@ -192,6 +188,14 @@ impl PresetMenu {
             .collect();
         self.list.render(canvas, rect, &rows, fonts, k, dt, true);
     }
+
+    fn press(&mut self) {
+        self.list.dip();
+    }
+
+    fn pan(&mut self, p: Pointer) -> bool {
+        self.list.pan(p)
+    }
 }
 
 // --- the name --------------------------------------------------------------------------------
@@ -201,8 +205,8 @@ pub(crate) struct PresetName {
     id: Option<String>,
     overlay: SettingsOverlay,
     name: String,
-    pub(super) list: MenuList,
-    keyboard: Keyboard,
+    list: MenuList,
+    keyboard: TextEntry,
     editing: bool,
     error: Option<String>,
 }
@@ -215,7 +219,7 @@ impl PresetName {
             overlay: SettingsOverlay::default(),
             name: String::new(),
             list: MenuList::new(),
-            keyboard: Keyboard::new(),
+            keyboard: TextEntry::default(),
             editing: true,
             error: None,
         }
@@ -230,26 +234,6 @@ impl PresetName {
         }
     }
 
-    pub(crate) fn title(&self) -> String {
-        match self.id {
-            Some(_) => "Rename Preset".into(),
-            None => "New Preset".into(),
-        }
-    }
-
-    pub(crate) fn editing(&self) -> bool {
-        self.editing
-    }
-
-    pub(crate) fn edit_field(&self) -> Option<EditField> {
-        let field = EditField {
-            label: "Name".into(),
-            text: self.name.clone(),
-            digits: false,
-        };
-        self.editing.then_some(field)
-    }
-
     /// A name is up to 40 printable characters.
     fn admits(text: &str, ch: char) -> bool {
         !ch.is_control() && text.chars().count() < 40
@@ -260,93 +244,6 @@ impl PresetName {
         if self.name.len() > before {
             self.error = None;
         }
-    }
-
-    pub(crate) fn text_input(&mut self, typed: &str) {
-        if self.editing {
-            let before = self.name.len();
-            type_text(&mut self.name, typed, Self::admits);
-            self.typed(before);
-        }
-    }
-
-    /// Return closes the keyboard onto Save; the next Return saves.
-    pub(crate) fn edit_key(&mut self, key: crate::input::Key) -> bool {
-        if !self.editing {
-            return false;
-        }
-        let Some(entry) = field_key(key, &mut self.name) else {
-            return false;
-        };
-        if entry != Entry::Stay {
-            self.editing = false;
-            self.list.cursor = 1;
-        }
-        true
-    }
-
-    pub(crate) fn menu(
-        &mut self,
-        ev: MenuEvent,
-        ctx: &mut Ctx,
-        fx: &mut Outbox,
-    ) -> Option<MenuPulse> {
-        if self.editing {
-            let before = self.name.len();
-            let (entry, pulse) =
-                (self.keyboard).edit_menu(ev, ctx.device.deck, &mut self.name, Self::admits);
-            self.typed(before);
-            return match entry {
-                Entry::Stay => pulse,
-                Entry::Close => {
-                    self.editing = false;
-                    pulse
-                }
-                Entry::Done => self.save(ctx, fx),
-            };
-        }
-        if ev == MenuEvent::Back {
-            fx.pop();
-            return None;
-        }
-        let (msg, pulse) = self.list.menu(ev, 2);
-        match msg {
-            ListMsg::Activate if self.list.cursor == 0 => {
-                self.editing = true;
-                Some(MenuPulse::Confirm)
-            }
-            ListMsg::Activate => self.save(ctx, fx),
-            _ => pulse,
-        }
-    }
-
-    pub(crate) fn pointer(&mut self, p: Pointer, ctx: &mut Ctx, fx: &mut Outbox) -> bool {
-        if self.editing && !ctx.device.deck {
-            let before = self.name.len();
-            let entry = (self.keyboard).edit_pointer(p, &mut self.name, Self::admits);
-            self.typed(before);
-            match entry {
-                None => return false,
-                Some(Entry::Stay) => {}
-                Some(Entry::Close) => self.editing = false,
-                Some(Entry::Done) => {
-                    self.save(ctx, fx);
-                }
-            }
-            return true;
-        }
-        let (msg, pulse) = self.list.pointer(p, 2);
-        if matches!(msg, ListMsg::None) && pulse.is_none() {
-            return false;
-        }
-        if matches!(msg, ListMsg::Activate) {
-            if self.list.cursor == 0 {
-                self.editing = true;
-            } else {
-                self.save(ctx, fx);
-            }
-        }
-        true
     }
 
     /// A name no other preset has, any case. A new preset opens its editor next.
@@ -377,10 +274,115 @@ impl PresetName {
         }
         Some(MenuPulse::Confirm)
     }
+}
 
-    pub(crate) fn hints(&self, ctx: &Ctx) -> Vec<Hint> {
+impl ScreenView for PresetName {
+    fn title(&self) -> String {
+        match self.id {
+            Some(_) => "Rename Preset".into(),
+            None => "New Preset".into(),
+        }
+    }
+
+    fn editing(&self) -> bool {
+        self.editing
+    }
+
+    fn edit_field(&self) -> Option<EditField> {
+        let field = EditField {
+            label: "Name".into(),
+            text: self.name.clone(),
+            digits: false,
+        };
+        self.editing.then_some(field)
+    }
+
+    fn text_input(&mut self, typed: &str) {
         if self.editing {
-            return entry_hints(ctx.device.deck, "Save");
+            let before = self.name.len();
+            type_text(&mut self.name, typed, Self::admits);
+            self.typed(before);
+        }
+    }
+
+    /// Return closes the keyboard onto Save; the next Return saves.
+    fn edit_key(&mut self, key: crate::input::Key, _ctx: &mut Ctx) -> bool {
+        if !self.editing {
+            return false;
+        }
+        let Some(entry) = field_key(key, &mut self.name) else {
+            return false;
+        };
+        if entry != Entry::Stay {
+            self.editing = false;
+            self.list.cursor = 1;
+        }
+        true
+    }
+
+    fn menu(&mut self, ev: MenuEvent, ctx: &mut Ctx, fx: &mut Outbox) -> Option<MenuPulse> {
+        if self.editing {
+            let before = self.name.len();
+            let (entry, pulse) = (self.keyboard).menu(ev, ctx.device, &mut self.name, Self::admits);
+            self.typed(before);
+            return match entry {
+                Entry::Stay => pulse,
+                Entry::Close => {
+                    self.editing = false;
+                    pulse
+                }
+                Entry::Done => self.save(ctx, fx),
+            };
+        }
+        if ev == MenuEvent::Back {
+            fx.pop();
+            return None;
+        }
+        let (msg, pulse) = self.list.menu(ev, 2);
+        match msg {
+            ListMsg::Activate if self.list.cursor == 0 => {
+                self.editing = true;
+                Some(MenuPulse::Confirm)
+            }
+            ListMsg::Activate => self.save(ctx, fx),
+            _ => pulse,
+        }
+    }
+
+    fn pointer(&mut self, p: Pointer, ctx: &mut Ctx, fx: &mut Outbox) -> bool {
+        let before = self.name.len();
+        let tray = self
+            .editing
+            .then(|| (self.keyboard).pointer(p, ctx.device, &mut self.name, Self::admits));
+        if let Some(entry) = tray.flatten() {
+            self.typed(before);
+            match entry {
+                None => return false,
+                Some(Entry::Stay) => {}
+                Some(Entry::Close) => self.editing = false,
+                Some(Entry::Done) => {
+                    self.save(ctx, fx);
+                }
+            }
+            return true;
+        }
+        let (msg, pulse) = self.list.pointer(p, 2);
+        if matches!(msg, ListMsg::None) && pulse.is_none() {
+            return false;
+        }
+        if matches!(msg, ListMsg::Activate) {
+            if self.list.cursor == 0 {
+                self.editing = true;
+            } else {
+                self.save(ctx, fx);
+            }
+        }
+        true
+    }
+
+    fn hints(&self, ctx: &Ctx) -> Vec<Hint> {
+        if self.editing {
+            return TextEntry::hints(ctx.device, "Save");
         }
         vec![
             Hint::new(HintKey::Confirm, "Select"),
@@ -388,7 +390,7 @@ impl PresetName {
         ]
     }
 
-    pub(crate) fn render(
+    fn render(
         &mut self,
         canvas: &Canvas,
         rect: Rect,
@@ -402,12 +404,8 @@ impl PresetName {
              cards it is pinned to.",
         );
         let below = blurb(canvas, fonts, text, rect, k);
-        let seat = self.keyboard.seat(self.editing && !ctx.device.deck, dt);
-        let tray_h = if seat > 0.0 {
-            (Keyboard::tray_height() + 12.0) * k * seat
-        } else {
-            0.0
-        };
+        self.keyboard.seat(self.editing, ctx.device, dt);
+        let tray_h = self.keyboard.reserve(k);
         let list_rect = Rect::from_ltrb(
             rect.left,
             below.top,
@@ -420,10 +418,15 @@ impl PresetName {
         let rows = [field, RowSpec::action(action, !self.name.trim().is_empty())];
         self.list
             .render(canvas, list_rect, &rows, fonts, k, dt, !self.editing);
-        if seat > 0.0 {
-            let (w, bottom) = (f64::from(rect.width()), f64::from(rect.bottom));
-            self.keyboard.render(canvas, fonts, w, bottom, seat, k);
-        }
+        self.keyboard.render(canvas, fonts, rect, k);
+    }
+
+    fn press(&mut self) {
+        self.list.dip();
+    }
+
+    fn pan(&mut self, p: Pointer) -> bool {
+        self.list.pan(p)
     }
 }
 
@@ -433,7 +436,7 @@ pub(crate) struct PresetEdit {
     id: String,
     name: String,
     overlay: SettingsOverlay,
-    pub(super) list: MenuList,
+    list: MenuList,
 }
 
 impl PresetEdit {
@@ -444,10 +447,6 @@ impl PresetEdit {
             overlay,
             list: MenuList::new(),
         }
-    }
-
-    pub(crate) fn title(&self) -> String {
-        format!("Preset {}", quoted(&self.name))
     }
 
     /// `f` sees `ctx.settings` as the preset streams them: the overlay over the global.
@@ -461,7 +460,7 @@ impl PresetEdit {
 
     /// The preset's rows. An advanced one shows under Show advanced, or while this preset
     /// overrides it, so no override is ever out of sight.
-    fn rows(&self, ctx: &mut Ctx) -> Vec<(&'static str, super::settings::RowId)> {
+    fn rows(&self, ctx: &mut Ctx) -> Vec<(&'static str, super::settings::rows::RowId)> {
         let overlay = &self.overlay;
         self.in_preset(ctx, |ctx| {
             let all = ctx.settings.show_advanced;
@@ -471,12 +470,52 @@ impl PresetEdit {
         })
     }
 
-    pub(crate) fn menu(
+    /// Step the row at the preset's value and pin its field when the step moved it, even onto
+    /// the global value. Android's safe-area mode is a device setting no preset holds: a
+    /// Resolution step that moved only that steps on, or Native could never be left.
+    fn step(
         &mut self,
-        ev: MenuEvent,
+        id: super::settings::rows::RowId,
+        delta: i32,
+        wrap: bool,
         ctx: &mut Ctx,
         fx: &mut Outbox,
     ) -> Option<MenuPulse> {
+        let field = preset_field(id)?;
+        let held = |s: &Settings| {
+            let mut o = SettingsOverlay::default();
+            o.pin(field, s);
+            o
+        };
+        let before = self.overlay.apply(ctx.settings);
+        let after = self.in_preset(ctx, |ctx| {
+            if !adjust(id, delta, wrap, ctx) {
+                return None;
+            }
+            let unheld = id == super::settings::rows::RowId::Resolution
+                && held(&before) == held(ctx.settings);
+            if unheld && !adjust(id, delta, wrap, ctx) {
+                return None;
+            }
+            Some(ctx.settings.clone())
+        });
+        let Some(after) = after else {
+            return Some(MenuPulse::Boundary);
+        };
+        if held(&before) != held(&after) {
+            self.overlay.pin(field, &after);
+        }
+        fx.cmds.push(save(&self.id, &self.name, &self.overlay));
+        Some(MenuPulse::Move)
+    }
+}
+
+impl ScreenView for PresetEdit {
+    fn title(&self) -> String {
+        format!("Preset {}", quoted(&self.name))
+    }
+
+    fn menu(&mut self, ev: MenuEvent, ctx: &mut Ctx, fx: &mut Outbox) -> Option<MenuPulse> {
         if ev == MenuEvent::Back {
             fx.pop();
             return None;
@@ -503,7 +542,7 @@ impl PresetEdit {
         self.step(id, delta, wrap, ctx, fx)
     }
 
-    pub(crate) fn pointer(&mut self, p: Pointer, ctx: &mut Ctx, fx: &mut Outbox) -> bool {
+    fn pointer(&mut self, p: Pointer, ctx: &mut Ctx, fx: &mut Outbox) -> bool {
         let rows = self.rows(ctx);
         let (msg, pulse) = self.list.pointer(p, rows.len());
         if matches!(msg, ListMsg::None) && pulse.is_none() {
@@ -515,40 +554,7 @@ impl PresetEdit {
         true
     }
 
-    /// Step the row at the preset's value and keep what changed as its override. Android's
-    /// safe-area mode is a device setting no preset holds: a Resolution step that moved only
-    /// that steps on, or Native could never be left.
-    fn step(
-        &mut self,
-        id: super::settings::RowId,
-        delta: i32,
-        wrap: bool,
-        ctx: &mut Ctx,
-        fx: &mut Outbox,
-    ) -> Option<MenuPulse> {
-        let before = self.overlay.apply(ctx.settings);
-        let overlay = &self.overlay;
-        let after = self.in_preset(ctx, |ctx| {
-            if !adjust(id, delta, wrap, ctx) {
-                return None;
-            }
-            let mut held = overlay.clone();
-            held.absorb(&before, ctx.settings);
-            let unheld = id == super::settings::RowId::Resolution && held == *overlay;
-            if unheld && !adjust(id, delta, wrap, ctx) {
-                return None;
-            }
-            Some(ctx.settings.clone())
-        });
-        let Some(after) = after else {
-            return Some(MenuPulse::Boundary);
-        };
-        self.overlay.absorb(&before, &after);
-        fx.cmds.push(save(&self.id, &self.name, &self.overlay));
-        Some(MenuPulse::Move)
-    }
-
-    pub(crate) fn hints(&self, ctx: &Ctx) -> Vec<Hint> {
+    fn hints(&self, ctx: &Ctx) -> Vec<Hint> {
         let _ = ctx;
         vec![
             Hint::new(HintKey::Adjust, "Change"),
@@ -557,7 +563,7 @@ impl PresetEdit {
         ]
     }
 
-    pub(crate) fn render(
+    fn render(
         &mut self,
         canvas: &Canvas,
         rect: Rect,
@@ -593,15 +599,22 @@ impl PresetEdit {
         self.list
             .render(canvas, list_rect, &rows, fonts, k, dt, true);
     }
+
+    fn press(&mut self) {
+        self.list.dip();
+    }
+
+    fn pan(&mut self, p: Pointer) -> bool {
+        self.list.pan(p)
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::screens::settings::RowId;
+    use crate::screens::settings::rows::RowId;
     use crate::screens::Nav;
     use pf_client_core::menu_nav::MenuDir;
-    use pf_client_core::trust::Settings;
 
     fn with_ctx<R>(f: impl FnOnce(&mut Ctx) -> R) -> R {
         let mut settings = Settings::default();
@@ -619,16 +632,28 @@ mod tests {
         }
     }
 
-    /// A step on a row becomes that row's override and saves; X puts it back on the global.
+    /// A step pins only its row's field and saves, even back on the global value; X puts it
+    /// back on the global.
     #[test]
     fn a_step_overrides_and_x_clears() {
         let mut s = PresetEdit::new("p1".into(), "Couch".into(), SettingsOverlay::default());
         let hdr = with_ctx(|ctx| s.rows(ctx).iter().position(|(_, id)| *id == RowId::Hdr));
         s.list.cursor = hdr.expect("HDR is a preset row");
+        let global = Settings::default().hdr_enabled;
         let mut fx = Outbox::default();
         with_ctx(|ctx| s.menu(MenuEvent::Confirm, ctx, &mut fx));
         let o = saved(&fx);
-        assert_eq!(o.hdr_enabled, Some(!Settings::default().hdr_enabled));
+        let only_hdr = SettingsOverlay {
+            hdr_enabled: Some(!global),
+            ..Default::default()
+        };
+        assert_eq!(o, only_hdr);
+        with_ctx(|ctx| s.menu(MenuEvent::Confirm, ctx, &mut fx));
+        assert_eq!(
+            saved(&fx).hdr_enabled,
+            Some(global),
+            "equal to the global is still a pin"
+        );
         let mut fx = Outbox::default();
         with_ctx(|ctx| s.menu(MenuEvent::Tertiary, ctx, &mut fx));
         assert_eq!(saved(&fx).hdr_enabled, None, "back on the global value");

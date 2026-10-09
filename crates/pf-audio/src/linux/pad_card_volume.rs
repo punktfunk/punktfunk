@@ -22,10 +22,7 @@ const INTERVAL: Duration = Duration::from_secs(1);
 
 /// Detached: the caller is the capture-thread open path, and waiting there drops pad audio.
 pub fn spawn_pin(pad: u8) {
-    if matches!(
-        std::env::var("PUNKTFUNK_PAD_SINK_VOLUME").as_deref(),
-        Ok("0" | "false" | "off" | "no")
-    ) {
+    if pf_host_config::env_on("PUNKTFUNK_PAD_SINK_VOLUME") == Some(false) {
         return;
     }
     if let Err(e) = std::thread::Builder::new()

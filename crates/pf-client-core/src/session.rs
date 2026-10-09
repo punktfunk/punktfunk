@@ -14,6 +14,7 @@ use crate::video::{DecodedFrame, DecodedImage, Decoder};
 use punktfunk_core::client::{ConnectParams, FrameOrder, NativeClient};
 use punktfunk_core::config::{CompositorPref, GamepadPref, Mode};
 use punktfunk_core::reanchor::{GateVerdict, ReanchorGate};
+use punktfunk_core::session::Frame;
 use punktfunk_core::PunktfunkError;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -501,7 +502,7 @@ fn connect_plan(params: &SessionParams) -> ConnectPlan {
     #[allow(unused_mut)]
     let mut preferred = params.preferred_codec;
     #[cfg(all(any(target_os = "linux", windows), feature = "pyrowave"))]
-    if std::env::var("PUNKTFUNK_PREFER_PYROWAVE").as_deref() == Ok("1") {
+    if crate::env_on("PUNKTFUNK_PREFER_PYROWAVE") == Some(true) {
         if params.vulkan.as_ref().is_some_and(|v| v.pyrowave_decode) {
             preferred = punktfunk_core::quic::CODEC_PYROWAVE;
         } else {
@@ -951,6 +952,8 @@ impl KeyframeAsk {
     }
 }
 
+/// The session thread: dial, open the decoder and the plane threads, run [`Pump`] until
+/// the session ends, then send exactly one terminal event.
 fn pump(
     params: SessionParams,
     ev_tx: async_channel::Sender<SessionEvent>,
@@ -986,25 +989,18 @@ fn pump(
     });
     // Welcome's access advert, straight after Connected so the embedder can gate
     // capture before it engages. Old hosts decode to full-control/permanent.
-    let mut access = crate::access::SessionAccess::from_connector(&connector);
+    let access = crate::access::SessionAccess::from_connector(&connector);
     let _ = ev_tx.send_blocking(SessionEvent::Access {
         access,
         notice: None,
     });
 
-    let mut decoder = match open_decoder(&params.decoder, params.vulkan.as_ref(), &connector) {
+    let decoder = match open_decoder(&params.decoder, params.vulkan.as_ref(), &connector) {
         Ok(d) => d,
         Err(e) => {
             // No rung for this codec at all (no hardware HEVC, or pinned software on
-            // an HEVC session). Same answer as the mid-stream case below.
-            let refusal = e.downcast_ref::<crate::video::NoSoftwareRung>().map(|nr| {
-                codec_fallback_event(
-                    connector.codec,
-                    advertised_codecs,
-                    nr.loss(),
-                    &e.to_string(),
-                )
-            });
+            // an HEVC session). Same answer as the mid-stream case in `Pump::on_frame`.
+            let refusal = exhausted(&e, connector.codec, advertised_codecs);
             // Audio / pad / clipboard / mic are built below, so this is vacuously
             // joined. Drop in the same order as the pump's end path so a reconnect
             // on this event finds the same world whichever refusal site produced it.
@@ -1022,13 +1018,7 @@ fn pump(
     if let Some(msg) = amd_vulkan_hdr_notice(&decoder, params.vulkan.as_ref(), &connector) {
         let _ = ev_tx.send_blocking(SessionEvent::Notice(msg));
     }
-    let force_software = params.force_software.clone();
-    let PlaneThreads {
-        audio_thread,
-        pad_audio_thread,
-        clipboard_thread,
-        mut mic_uplink,
-    } = spawn_plane_threads(
+    let planes = spawn_plane_threads(
         &connector,
         &stop,
         access,
@@ -1046,7 +1036,7 @@ fn pump(
     // `PUNKTFUNK_DEBUG_RECONFIGURE=WxH@HZ:SECS` — request one mid-stream mode
     // switch N seconds in, so a headless session can exercise the resize path.
     let pump_start = Instant::now();
-    let mut debug_reconfig = std::env::var("PUNKTFUNK_DEBUG_RECONFIGURE")
+    let debug_reconfig = std::env::var("PUNKTFUNK_DEBUG_RECONFIGURE")
         .ok()
         .and_then(|s| {
             let parsed = parse_debug_reconfigure(&s);
@@ -1055,476 +1045,619 @@ fn pump(
             }
             parsed
         });
-    let mut total_frames = 0u64;
-    // Newest frame index handed to the decoder — the staleness bar for late partials.
-    let mut newest_decoded_idx: Option<u32> = None;
-    let mut window_start = Instant::now();
-    // The pin-unsustainable notice goes out once per session.
-    let mut pin_noticed = false;
-    // Decoder overrun: skips and decodes at the last window close, and the run of
-    // windows in which a tenth of the stream was skipped.
-    let (mut behind_seen, mut decoded_seen, mut overrun_secs) = (0u64, 0u64, 0u32);
-    let mut overrun_noticed = false;
-    // The last launch verdict turned into a notice: each verdict is said once.
-    let mut launch_told: Option<punktfunk_core::quic::LaunchOutcome> = None;
-    // Report decode stage to ABR only when armed. Constant for the session.
-    let wants_decode = connector.wants_decode_latency();
-    // The hardware decode submitted last, handed on when its pixels are done.
-    let mut in_flight: Option<InFlight> = None;
-    // Host marks a re-encoded hold (`USER_FLAG_REPEAT`); an older host never sets the bit.
-    let marks_repeats = connector.host_caps2() & punktfunk_core::quic::HOST_CAP2_REPEAT_MARK != 0;
-    // What actually decoded the last frame — VAAPI can demote mid-session.
-    let mut dec_path: &'static str = "";
-    let mut kf = KeyframeAsk::default();
-    // PyroWave AUs decode independently, so a late one is still worth showing.
-    let all_intra = connector.codec == punktfunk_core::quic::CODEC_PYROWAVE;
-    // Freeze-until-reanchor. Armed on any loss signal, withholds concealed frames
-    // until a clean re-anchor. Owns the no-output streak and overdue-freeze
-    // backstop. Seeded with the current drop count so the first `poll` is not a loss.
-    let mut gate = ReanchorGate::new(connector.frames_dropped());
-    // Fixture capture of every AU as it reaches `decode_frame` (`au_dump.rs`).
-    // This is what the host sent. `PUNKTFUNK_AU_FAULT` injects one level down, so
-    // a faulted run's fixture is the clean bitstream and will not replay the damage.
-    let mut au_dump = crate::au_dump::AuDump::from_env(connector.codec);
-    // Decode-order watermark at the latest freeze arm. A frame at or below this
-    // was decoded before the loss; its recovery SEI must not lift that freeze.
-    // Re-stamped when `gate.arms()` moves, not on the overdue backstop (that
-    // re-asks without re-arming — discarding an in-flight heal would be wrong).
-    let mut gate_arms = gate.arms();
-    let mut arm_decode_order: u64 = 0;
-    // Set when the ladder ran out of rungs. `Some` is the only way the pump ends
-    // with a retry attached.
-    let mut codec_fallback: Option<SessionEvent> = None;
-    // Set when the host refused setup before any frame while it may still be waking.
-    let mut not_ready = false;
+    // Seeded with the current drop count so the first `poll` is not a loss.
+    let gate = ReanchorGate::new(connector.frames_dropped());
+    let mut p = Pump {
+        in_flight: None,
+        // This is what the host sent. `PUNKTFUNK_AU_FAULT` injects one level down, so
+        // a faulted run's fixture is the clean bitstream and will not replay the damage.
+        au_dump: crate::au_dump::AuDump::from_env(connector.codec),
+        gate_arms: gate.arms(),
+        gate,
+        arm_decode_order: 0,
+        kf: KeyframeAsk::default(),
+        notices: WindowNotices::default(),
+        window_start: Instant::now(),
+        total_frames: 0,
+        newest_decoded_idx: None,
+        dec_path: "",
+        codec_fallback: None,
+        not_ready: false,
+        debug_reconfig,
+        pump_start,
+        access,
+        planes,
+        decoder,
+        wants_decode: connector.wants_decode_latency(),
+        marks_repeats: connector.host_caps2() & punktfunk_core::quic::HOST_CAP2_REPEAT_MARK != 0,
+        all_intra: connector.codec == punktfunk_core::quic::CODEC_PYROWAVE,
+        advertised_codecs,
+        connector,
+        mic,
+        stop,
+        frame_tx,
+        ev_tx,
+        params,
+    };
+    let end = p.run();
+    p.finish(end);
+}
 
-    let end: Option<String> = loop {
-        if stop.load(Ordering::SeqCst) {
-            break None;
+/// What the pump does after one AU.
+enum Pass {
+    /// Run the end-of-pass drains, then pull the next frame.
+    Drain,
+    /// The AU was dropped before decode: pull the next frame at once.
+    Skip,
+    /// The session is over. `Some` is the reason the user reads.
+    End(Option<String>),
+}
+
+/// The pump's state between passes. Fields drop in declaration order: the frame in
+/// flight before its decoder, the uplink and the decoder before the connector.
+struct Pump {
+    /// The hardware decode submitted last, handed on when its pixels are done.
+    in_flight: Option<InFlight>,
+    /// Fixture capture of every AU as it reaches `decode_frame` (`au_dump.rs`).
+    au_dump: Option<crate::au_dump::AuDump>,
+    /// Freeze-until-reanchor. Armed on any loss signal, withholds concealed frames
+    /// until a clean re-anchor. Owns the no-output streak and overdue-freeze backstop.
+    gate: ReanchorGate,
+    /// `gate.arms()` when `arm_decode_order` was last stamped.
+    gate_arms: u64,
+    /// Decode-order watermark at the latest freeze arm. A frame at or below this
+    /// was decoded before the loss; its recovery SEI must not lift that freeze.
+    /// Re-stamped when `gate.arms()` moves, not on the overdue backstop (that
+    /// re-asks without re-arming — discarding an in-flight heal would be wrong).
+    arm_decode_order: u64,
+    kf: KeyframeAsk,
+    notices: WindowNotices,
+    window_start: Instant,
+    total_frames: u64,
+    /// Newest frame index handed to the decoder — the staleness bar for late partials.
+    newest_decoded_idx: Option<u32>,
+    /// What actually decoded the last frame — VAAPI can demote mid-session.
+    dec_path: &'static str,
+    /// Set when the ladder ran out of rungs. `Some` is the only way the pump ends
+    /// with a retry attached.
+    codec_fallback: Option<SessionEvent>,
+    /// Set when the host refused setup before any frame while it may still be waking.
+    not_ready: bool,
+    /// The `PUNKTFUNK_DEBUG_RECONFIGURE` switch still to send, and when.
+    debug_reconfig: Option<(Mode, Duration)>,
+    pump_start: Instant,
+    access: crate::access::SessionAccess,
+    planes: PlaneThreads,
+    decoder: Decoder,
+    /// Report decode stage to ABR only when armed. Constant for the session.
+    wants_decode: bool,
+    /// Host marks a re-encoded hold (`USER_FLAG_REPEAT`); an older host never sets the bit.
+    marks_repeats: bool,
+    /// PyroWave AUs decode independently, so a late one is still worth showing.
+    all_intra: bool,
+    advertised_codecs: u8,
+    connector: Arc<NativeClient>,
+    mic: MicControl,
+    stop: Arc<AtomicBool>,
+    frame_tx: async_channel::Sender<DecodedFrame>,
+    ev_tx: async_channel::Sender<SessionEvent>,
+    params: SessionParams,
+}
+
+impl Pump {
+    /// Pull, decode and hand on frames until the session ends. `Some` is the reason the
+    /// user reads. Each pass ends with the host-timing drain, the loss check and the
+    /// 1-second window, unless its AU was dropped before decode.
+    fn run(&mut self) -> Option<String> {
+        loop {
+            if self.stop.load(Ordering::SeqCst) {
+                return None;
+            }
+            self.debug_reconfigure();
+            self.on_access_update();
+            // A decode still on the GPU is polled every half millisecond and handed on the
+            // moment its pixels are done. 50 ms bounds a wedged one.
+            let decoder = &mut self.decoder;
+            let done = self.in_flight.take_if(|p| {
+                hw_done_now(decoder, &p.hw) || now_ns().saturating_sub(p.received_ns) > 50_000_000
+            });
+            if let Some(p) = done {
+                hand_on(p, &self.frame_tx, &self.connector, self.wants_decode);
+            }
+            // Otherwise 20 ms: audio has its own thread, so this only bounds stop-flag
+            // responsiveness and the per-iteration recovery check.
+            let frame_wait = if self.in_flight.is_some() {
+                Duration::from_micros(500)
+            } else {
+                Duration::from_millis(20)
+            };
+            match self.connector.next_frame(frame_wait) {
+                Ok(frame) => match self.on_frame(frame) {
+                    Pass::Drain => {}
+                    Pass::Skip => continue,
+                    Pass::End(end) => return end,
+                },
+                Err(PunktfunkError::NoFrame) => {}
+                Err(PunktfunkError::Closed) => return self.on_closed(),
+                Err(e) => {
+                    tracing::warn!(error = %e, "session pump failed");
+                    return Some("The stream stopped unexpectedly".to_string());
+                }
+            }
+
+            // Drain per-AU 0xCF timings; the connector matches each to its frame for the overlay.
+            while self.connector.next_host_timing(Duration::ZERO).is_ok() {}
+
+            // Loss recovery + overdue backstop through the shared gate. A drop-count
+            // climb arms the freeze (decoder conceals and returns Ok). Overdue freeze
+            // re-asks while holding: never resume to gray. 100 ms throttle; infinite GOP
+            // means the only recovery keyframe is one we request.
+            let dropped = self.connector.frames_dropped();
+            let now = Instant::now();
+            if self.gate.poll(dropped, now) && self.kf.ask(now, &self.connector) {
+                tracing::debug!(
+                    dropped,
+                    "requested keyframe (loss recovery / overdue re-anchor)"
+                );
+            }
+            self.connector.flush_frame_recovery();
+
+            if self.window_start.elapsed() >= Duration::from_secs(1) {
+                self.tick_window();
+            }
         }
-        if let Some((mode, delay)) = debug_reconfig {
-            if pump_start.elapsed() >= delay {
+    }
+
+    /// Send the `PUNKTFUNK_DEBUG_RECONFIGURE` mode switch once its delay has passed.
+    fn debug_reconfigure(&mut self) {
+        if let Some((mode, delay)) = self.debug_reconfig {
+            if self.pump_start.elapsed() >= delay {
                 tracing::info!(
                     ?mode,
                     "PUNKTFUNK_DEBUG_RECONFIGURE: requesting mid-stream mode switch"
                 );
-                if let Err(e) = connector.request_mode(mode) {
+                if let Err(e) = self.connector.request_mode(mode) {
                     tracing::warn!(error = ?e, "debug mode switch request failed");
                 }
-                debug_reconfig = None;
+                self.debug_reconfig = None;
             }
         }
-        // Mid-session access updates. Drain and re-read once — latest wins; the
-        // connector already folded every update. The mic uplink follows its grant live.
-        {
-            let mut updated = false;
-            while connector.next_access_update(Duration::ZERO).is_ok() {
-                updated = true;
-            }
-            if updated {
-                let prev = access;
-                access = crate::access::SessionAccess::from_connector(&connector);
-                let notice = crate::access::update_notice(prev.grants, &access, Instant::now());
-                let mic_on = params.mic_enabled && access.allows(punktfunk_core::quic::GRANT_MIC);
-                if !mic_on && mic_uplink.is_some() {
-                    tracing::info!("MIC grant removed mid-session — stopping the mic uplink");
-                    mic_uplink = None;
-                    mic.set_live(false);
-                } else if mic_on && mic_uplink.is_none() {
-                    mic_uplink = audio::MicStreamer::spawn(
-                        connector.clone(),
-                        mic.flag(),
-                        params.echo_cancel,
-                    )
-                    .map_err(|e| tracing::warn!(error = %e, "mic uplink disabled"))
-                    .ok();
-                    mic.set_live(mic_uplink.is_some());
-                }
-                let _ = ev_tx.send_blocking(SessionEvent::Access { access, notice });
-            }
+    }
+
+    /// Mid-session access updates. Drain and re-read once — latest wins; the connector
+    /// already folded every update. The mic uplink follows its grant live.
+    fn on_access_update(&mut self) {
+        let mut updated = false;
+        while self.connector.next_access_update(Duration::ZERO).is_ok() {
+            updated = true;
         }
-        // A decode still on the GPU is polled every half millisecond and handed on the
-        // moment its pixels are done. 50 ms bounds a wedged one.
-        let done = in_flight.take_if(|p| {
-            hw_done_now(&mut decoder, &p.hw) || now_ns().saturating_sub(p.received_ns) > 50_000_000
+        if !updated {
+            return;
+        }
+        let prev = self.access;
+        self.access = crate::access::SessionAccess::from_connector(&self.connector);
+        let notice = crate::access::update_notice(prev.grants, &self.access, Instant::now());
+        let mic_on = self.params.mic_enabled && self.access.allows(punktfunk_core::quic::GRANT_MIC);
+        let uplink = &mut self.planes.mic_uplink;
+        if !mic_on && uplink.is_some() {
+            tracing::info!("MIC grant removed mid-session — stopping the mic uplink");
+            *uplink = None;
+            self.mic.set_live(false);
+        } else if mic_on && uplink.is_none() {
+            *uplink = audio::MicStreamer::spawn(
+                self.connector.clone(),
+                self.mic.flag(),
+                self.params.echo_cancel,
+            )
+            .map_err(|e| tracing::warn!(error = %e, "mic uplink disabled"))
+            .ok();
+            self.mic.set_live(uplink.is_some());
+        }
+        let _ = self.ev_tx.send_blocking(SessionEvent::Access {
+            access: self.access,
+            notice,
         });
-        if let Some(p) = done {
-            hand_on(p, &frame_tx, &connector, wants_decode);
-        }
-        // Otherwise 20 ms: audio has its own thread, so this only bounds stop-flag
-        // responsiveness and the per-iteration recovery check.
-        let frame_wait = if in_flight.is_some() {
-            Duration::from_micros(500)
-        } else {
-            Duration::from_millis(20)
-        };
-        match connector.next_frame(frame_wait) {
-            Ok(frame) => {
-                // Reassembly completion, stamped by the core session as the AU crossed
-                // `poll_frame`. Stamping here at the pull would fold pre-decode queue
-                // wait into `host+network` (client backlog looking like network).
-                // 0 = a core predating the stamp; fall back to the pull instant.
-                let received_ns = if frame.received_ns > 0 {
-                    frame.received_ns
-                } else {
-                    now_ns()
-                };
-                // Host numbers frames consecutively, so a jump means a frame is missing
-                // and this AU references a picture we never decoded. Arm the freeze at
-                // the first such frame — ~120 ms before `frames_dropped` — so concealment
-                // never reaches the screen. The connector asks for the RFI.
-                match connector.observe_frame_index(frame.frame_index) {
-                    // Credited arm: the reassembler books these lost frames into
-                    // `frames_dropped` up to ~120 ms from now; the credit keeps that
-                    // climb from re-freezing a stream the RFI anchor healed. A gap that finds
-                    // the ask window open spends it on the RFI; later gaps do not hold it shut.
-                    FrameOrder::Gap(gap) => {
-                        let now = Instant::now();
-                        gate.arm_expecting_drops(now, u64::from(gap));
-                        kf.claim(now);
-                        tracing::trace!(
-                            gap,
-                            "frame gap — RFI recovery, holding last frame until re-anchor"
-                        );
-                    }
-                    // A whole AU behind one already decoded: decoding it now rewinds the
-                    // DPB (H.264 reads it as a frame_num wrap, HEVC's RPS unmarks the
-                    // newer picture). PyroWave AUs decode independently, so it keeps them.
-                    FrameOrder::Straggler if !all_intra => {
-                        tracing::trace!(
-                            index = frame.frame_index,
-                            "skipping a straggler AU that arrived behind a decoded one"
-                        );
-                        continue;
-                    }
-                    FrameOrder::InOrder | FrameOrder::Straggler => {}
-                }
-                // A partial that lost the race (a newer frame already decoded) is time
-                // travel — skip it. Completes keep the normal path.
-                if !frame.complete
-                    && newest_decoded_idx
-                        .is_some_and(|n: u32| n.wrapping_sub(frame.frame_index) <= u32::MAX / 2)
-                {
-                    continue;
-                }
-                newest_decoded_idx = Some(match newest_decoded_idx {
-                    Some(n) if frame.frame_index.wrapping_sub(n) > u32::MAX / 2 => n,
-                    _ => frame.frame_index,
-                });
-                if let Some(d) = au_dump.as_mut() {
-                    if !d.write(&frame.data, frame.flags, frame.complete) {
-                        au_dump = None;
-                    }
-                }
-                // Re-stamp the arm watermark before this AU decodes, so it names the
-                // newest picture that existed when the freeze was armed. Arms above
-                // happened this iteration; sites below run after decode.
-                if gate.arms() != gate_arms {
-                    gate_arms = gate.arms();
-                    arm_decode_order = decoder.decode_order();
-                }
-                match decoder.decode_frame(&frame.data, frame.flags, frame.complete) {
-                    Ok(Some(image)) => {
-                        // Decoder's own re-anchor first: a recovery-point SEI is the
-                        // only clean point an intra-refresh session has. Pair by decode
-                        // order — a DPB flush after a failed AU hands back pictures
-                        // decoded before the loss, which arrive after the arm.
-                        let local = match image.decode_order() {
-                            Some(order) if order <= arm_decode_order => {
-                                tracing::trace!(
-                                    order,
-                                    arm_decode_order,
-                                    "discarding the local recovery of a frame decoded before \
-                                     the loss"
-                                );
-                                punktfunk_core::reanchor::LocalRecovery::NONE
-                            }
-                            _ => image.local_recovery(),
-                        };
-                        if gate.on_local_recovery(local) {
-                            decoder.forgive_unclean();
-                            tracing::debug!(
-                                "re-anchored on the stream's own recovery point SEI — no IDR needed"
-                            );
-                        }
-                        // Shared freeze gate, corroborated: a frame predicting from a picture
-                        // this decoder concealed is held whatever the wire says, and refuses a
-                        // host RECOVERY_ANCHOR. If that arms an unfrozen gate (a lift landed
-                        // before the damaged chain drained), ask for the IDR now rather than
-                        // at the 500 ms backstop.
-                        let evidence = image.anchor_evidence();
-                        if evidence == punktfunk_core::reanchor::AnchorEvidence::ReferencesDamaged
-                            && frame.flags & punktfunk_core::packet::USER_FLAG_RECOVERY_ANCHOR != 0
-                        {
-                            tracing::debug!(
-                                "refused a host recovery anchor: this AU predicts from a picture \
-                                 this decoder had to conceal — holding for a real IDR"
-                            );
-                        }
-                        let now = Instant::now();
-                        let was_holding = gate.is_holding();
-                        let present = gate.on_decoded_corroborated(
-                            frame.flags,
-                            image.is_keyframe(),
-                            evidence,
-                            now,
-                        ) == GateVerdict::Present;
-                        // A wave lift: the planner's damaged-chain marks are stale from here,
-                        // or every later host anchor is refused until an IDR.
-                        if was_holding && present && gate.lifted_by_marks() {
-                            decoder.forgive_unclean();
-                            tracing::debug!(
-                                "re-anchored on intra refresh marks — forgetting the damaged \
-                                 reference chain"
-                            );
-                        }
-                        if !present && !was_holding {
-                            tracing::debug!(
-                                "damaged reference chain reached an unfrozen gate — holding, \
-                                 requesting keyframe"
-                            );
-                            kf.ask(now, &connector);
-                        }
-                        total_frames += 1;
-                        dec_path = image.path_label();
-                        if total_frames == 1 {
-                            let (width, height) = image.dimensions();
-                            tracing::info!(width, height, path = dec_path, "first frame decoded");
-                        }
-                        // Hardware rungs return at submission. A picture is handed on when its
-                        // own fence completes, so the presenter never waits on a decode; the
-                        // next AU is submitted meanwhile, so the decoder always has a picture
-                        // queued behind the one it is working on.
-                        let hw_fence = match &image {
-                            // Native rung: decode signals `semaphore_value` when pixels
-                            // are ready (presenter write-back is `+ 1`).
-                            DecodedImage::NativeVk(f) => {
-                                HwDone::Timeline(f.semaphore, f.semaphore_value)
-                            }
-                            // VAAPI ships the decode's write fence as a sync_file; a dup
-                            // outlives the frame's move to the presenter.
-                            #[cfg(target_os = "linux")]
-                            DecodedImage::NativeDmabuf(d) => d
-                                .sync_fds
-                                .first()
-                                .and_then(|fd| fd.try_clone().ok())
-                                .map_or(HwDone::Cpu, HwDone::SyncFile),
-                            _ => HwDone::Cpu,
-                        };
-                        let next = InFlight {
-                            hw: hw_fence,
-                            received_ns,
-                            pts_ns: frame.pts_ns,
-                            repeat: marks_repeats
-                                && frame.flags & punktfunk_core::packet::USER_FLAG_REPEAT != 0,
-                            image: present.then_some(image),
-                        };
-                        // This AU is submitted; the one before it goes on first, in order.
-                        if let Some(prev) = in_flight.take() {
-                            wait_hw_done(&mut decoder, &prev.hw);
-                            hand_on(prev, &frame_tx, &connector, wants_decode);
-                        }
-                        // A CPU decode is done already. Intel on i915 waits at once: that
-                        // wait is the media clock boost, and its GEM wait covers the ring.
-                        if matches!(next.hw, HwDone::Cpu) || decoder.hw_wait_boosted() {
-                            wait_hw_done(&mut decoder, &next.hw);
-                            hand_on(next, &frame_tx, &connector, wants_decode);
-                        } else {
-                            in_flight = Some(next);
-                        }
-                    }
-                    // No output under one-in/one-out LOW_DELAY means wedged on missing
-                    // references with no reassembler drop. The gate counts the streak
-                    // and, once it trips, arms the freeze and asks for an IDR.
-                    Ok(None) => {
-                        let now = Instant::now();
-                        if gate.on_no_output(now) && kf.ask(now, &connector) {
-                            tracing::debug!("requested keyframe (decoder produced no output)");
-                        }
-                    }
-                    // Last rung gone for this codec. Feeding more AUs would freeze the
-                    // screen forever. Break; the terminal event carries the retry.
-                    Err(e) if e.downcast_ref::<crate::video::NoSoftwareRung>().is_some() => {
-                        let loss = e
-                            .downcast_ref::<crate::video::NoSoftwareRung>()
-                            .expect("just matched")
-                            .loss();
-                        codec_fallback = Some(codec_fallback_event(
-                            connector.codec,
-                            advertised_codecs,
-                            loss,
-                            &e.to_string(),
-                        ));
-                        break None;
-                    }
-                    // Survivable (loss until the next IDR/RFI) — keep feeding.
-                    Err(e) => {
-                        tracing::debug!(error = %e, "decode error (recovering)");
-                        let now = Instant::now();
-                        if gate.on_no_output(now) && kf.ask(now, &connector) {
-                            tracing::debug!("requested keyframe (decode error recovery)");
-                        }
-                    }
-                }
-                // Presenter: hardware frames cannot be displayed. Demote here, on the
-                // decoder's thread. Decode succeeds in that state, so error-streak
-                // demotion never fires.
-                if force_software.swap(false, Ordering::Relaxed) {
-                    if let Err(e) = decoder.force_software() {
-                        // No software rung (HEVC, PyroWave): reconnect without the codec, as
-                        // the decode arm does, or the next Hello asks for it again.
-                        if let Some(nr) = e.downcast_ref::<crate::video::NoSoftwareRung>() {
-                            codec_fallback = Some(codec_fallback_event(
-                                connector.codec,
-                                advertised_codecs,
-                                nr.loss(),
-                                &e.to_string(),
-                            ));
-                            break None;
-                        }
-                        break Some(format!("software decoder rebuild: {e}"));
-                    }
-                }
-                // Infinite GOP has no periodic keyframe, so a rebuilt/erroring decoder
-                // stays gray until we ask. Arm only when not already holding: this flag
-                // fires per damaged AU, and every `arm` zeroes recovery-mark counts.
-                // A genuine new loss still re-arms via a frame-index gap or drop climb.
-                if decoder.take_keyframe_request() {
-                    let now = Instant::now();
-                    if !gate.is_holding() {
-                        gate.arm(now);
-                    }
-                    if kf.ask(now, &connector) {
-                        tracing::debug!("requested keyframe (decoder recovery)");
-                    }
-                }
+    }
+
+    /// Order one AU against the frames already decoded. False drops it before decode:
+    /// a straggler a reference codec would rewind on, or a partial a newer frame beat.
+    fn admit(&mut self, frame: &Frame) -> bool {
+        // Host numbers frames consecutively, so a jump means a frame is missing
+        // and this AU references a picture we never decoded. Arm the freeze at
+        // the first such frame — ~120 ms before `frames_dropped` — so concealment
+        // never reaches the screen. The connector asks for the RFI.
+        match self.connector.observe_frame_index(frame.frame_index) {
+            // Credited arm: the reassembler books these lost frames into
+            // `frames_dropped` up to ~120 ms from now; the credit keeps that
+            // climb from re-freezing a stream the RFI anchor healed. A gap that finds
+            // the ask window open spends it on the RFI; later gaps do not hold it shut.
+            FrameOrder::Gap(gap) => {
+                let now = Instant::now();
+                self.gate.arm_expecting_drops(now, u64::from(gap));
+                self.kf.claim(now);
+                tracing::trace!(
+                    gap,
+                    "frame gap — RFI recovery, holding last frame until re-anchor"
+                );
             }
-            Err(PunktfunkError::NoFrame) => {}
-            // `None` means normal finish to every embedder. Only an ending that went
-            // wrong should carry a message.
-            Err(PunktfunkError::Closed) => {
-                use punktfunk_core::client::PunktfunkEndReason as End;
-                // A typed mid-session rejection names itself — access expiry would
-                // otherwise file under HostError as "the host ended with an error".
-                if let Some(reason) = connector.end_reject() {
-                    not_ready = total_frames == 0
-                        && reason == punktfunk_core::reject::RejectReason::SetupFailed
-                        && params.waking();
-                    break Some(crate::trust::reject_message(
-                        reason,
-                        connector.end_reject_said(),
-                    ));
+            // A whole AU behind one already decoded: decoding it now rewinds the
+            // DPB (H.264 reads it as a frame_num wrap, HEVC's RPS unmarks the
+            // newer picture). PyroWave AUs decode independently, so it keeps them.
+            FrameOrder::Straggler if !self.all_intra => {
+                tracing::trace!(
+                    index = frame.frame_index,
+                    "skipping a straggler AU that arrived behind a decoded one"
+                );
+                return false;
+            }
+            FrameOrder::InOrder | FrameOrder::Straggler => {}
+        }
+        // A partial that lost the race (a newer frame already decoded) is time
+        // travel — skip it. Completes keep the normal path.
+        if !frame.complete
+            && self
+                .newest_decoded_idx
+                .is_some_and(|n: u32| n.wrapping_sub(frame.frame_index) <= u32::MAX / 2)
+        {
+            return false;
+        }
+        self.newest_decoded_idx = Some(match self.newest_decoded_idx {
+            Some(n) if frame.frame_index.wrapping_sub(n) > u32::MAX / 2 => n,
+            _ => frame.frame_index,
+        });
+        true
+    }
+
+    /// One AU off the wire: order it, decode it, then demote or ask for a keyframe as
+    /// the decoder says. The gate watermark is re-stamped before the decode.
+    fn on_frame(&mut self, frame: Frame) -> Pass {
+        // Reassembly completion, stamped by the core session as the AU crossed
+        // `poll_frame`. Stamping here at the pull would fold pre-decode queue
+        // wait into `host+network` (client backlog looking like network).
+        // 0 = a core predating the stamp; fall back to the pull instant.
+        let received_ns = if frame.received_ns > 0 {
+            frame.received_ns
+        } else {
+            now_ns()
+        };
+        if !self.admit(&frame) {
+            return Pass::Skip;
+        }
+        if let Some(d) = self.au_dump.as_mut() {
+            if !d.write(&frame.data, frame.flags, frame.complete) {
+                self.au_dump = None;
+            }
+        }
+        // Re-stamp the arm watermark before this AU decodes, so it names the
+        // newest picture that existed when the freeze was armed. Arms above
+        // happened this iteration; sites below run after decode.
+        if self.gate.arms() != self.gate_arms {
+            self.gate_arms = self.gate.arms();
+            self.arm_decode_order = self.decoder.decode_order();
+        }
+        match self
+            .decoder
+            .decode_frame(&frame.data, frame.flags, frame.complete)
+        {
+            Ok(Some(image)) => self.on_decoded(image, &frame, received_ns),
+            // No output under one-in/one-out LOW_DELAY means wedged on missing
+            // references with no reassembler drop. The gate counts the streak
+            // and, once it trips, arms the freeze and asks for an IDR.
+            Ok(None) => {
+                let now = Instant::now();
+                if self.gate.on_no_output(now) && self.kf.ask(now, &self.connector) {
+                    tracing::debug!("requested keyframe (decoder produced no output)");
                 }
-                break match connector.end_reason() {
-                    End::GameExited => None,
-                    End::Local | End::HostEnded => None,
-                    End::HostError => Some("The host ended the session with an error".to_string()),
-                    End::Lost => Some("Connection lost".to_string()),
-                    // No verdict (older core, or the close raced the read): keep this
-                    // arm's historic wording rather than inventing a new one.
-                    End::None => Some("Host ended the session".to_string()),
-                };
             }
             Err(e) => {
-                tracing::warn!(error = %e, "session pump failed");
-                break Some("The stream stopped unexpectedly".to_string());
-            }
-        }
-
-        // Drain per-AU 0xCF timings; the connector matches each to its frame for the overlay.
-        while connector.next_host_timing(Duration::ZERO).is_ok() {}
-
-        // Loss recovery + overdue backstop through the shared gate. A drop-count
-        // climb arms the freeze (decoder conceals and returns Ok). Overdue freeze
-        // re-asks while holding: never resume to gray. 100 ms throttle; infinite GOP
-        // means the only recovery keyframe is one we request.
-        let dropped = connector.frames_dropped();
-        let now = Instant::now();
-        if gate.poll(dropped, now) && kf.ask(now, &connector) {
-            tracing::debug!(
-                dropped,
-                "requested keyframe (loss recovery / overdue re-anchor)"
-            );
-        }
-        connector.flush_frame_recovery();
-
-        if window_start.elapsed() >= Duration::from_secs(1) {
-            let pin_kbps = connector.unsustainable_pin_kbps();
-            if pin_kbps != 0 && !pin_noticed {
-                pin_noticed = true;
-                let _ = ev_tx.try_send(SessionEvent::Notice(format!(
-                    "This device can't keep up with the pinned {} Mbps. Set the bitrate to \
-                     Automatic or lower it.",
-                    pin_kbps / 1000
-                )));
-            }
-            let (behind, decoded) = (
-                connector.frames_behind() - behind_seen,
-                total_frames - decoded_seen,
-            );
-            behind_seen += behind;
-            decoded_seen += decoded;
-            overrun_secs = if behind * 10 >= behind + decoded && behind > 0 {
-                overrun_secs + 1
-            } else {
-                0
-            };
-            // Five seconds running is the device, not a hitch. Said once.
-            if overrun_secs == 5 && !overrun_noticed {
-                overrun_noticed = true;
-                let m = connector.mode();
-                let _ = ev_tx.try_send(SessionEvent::Notice(format!(
-                    "This device can't keep up with this stream at {}×{}. Lower the \
-                     resolution or the refresh rate.",
-                    m.width, m.height
-                )));
-            }
-            if let Some(outcome) = connector.launch_outcome() {
-                if launch_told.as_ref() != Some(&outcome) {
-                    if let Some(n) = outcome.notice() {
-                        let _ = ev_tx.try_send(SessionEvent::Notice(n.to_string()));
-                    }
-                    launch_told = Some(outcome);
+                // Last rung gone for this codec. Feeding more AUs would freeze the
+                // screen forever. End; the terminal event carries the retry.
+                if let Some(ev) = exhausted(&e, self.connector.codec, self.advertised_codecs) {
+                    self.codec_fallback = Some(ev);
+                    return Pass::End(None);
+                }
+                // Survivable (loss until the next IDR/RFI) — keep feeding.
+                tracing::debug!(error = %e, "decode error (recovering)");
+                let now = Instant::now();
+                if self.gate.on_no_output(now) && self.kf.ask(now, &self.connector) {
+                    tracing::debug!("requested keyframe (decode error recovery)");
                 }
             }
-            let _ = ev_tx.try_send(SessionEvent::DecodeFacts(DecodeFacts {
-                decoder: dec_path,
-                health: decoder.decode_health(),
-            }));
-            window_start = Instant::now();
         }
-    };
+        self.after_decode()
+    }
 
-    tracing::info!(
-        total_frames,
-        reason = end.as_deref().unwrap_or("user"),
-        "session ended"
-    );
-    stop.store(true, Ordering::SeqCst);
-    // About to drop the uplink — stop claiming a mute surface, so an embedder still
-    // holding the handle cannot draw a muted mic that no longer exists.
-    mic.set_live(false);
-    if let Some(t) = audio_thread {
-        let _ = t.join(); // exits within its 100 ms pull timeout once `stop` is set
+    /// After a decode that keeps the session: the software demotion the presenter asked
+    /// for, then the keyframe the decoder asked for.
+    fn after_decode(&mut self) -> Pass {
+        // Presenter: hardware frames cannot be displayed. Demote here, on the
+        // decoder's thread. Decode succeeds in that state, so error-streak
+        // demotion never fires.
+        if self.params.force_software.swap(false, Ordering::Relaxed) {
+            if let Err(e) = self.decoder.force_software() {
+                // No software rung (HEVC, PyroWave): reconnect without the codec, as
+                // the decode arm does, or the next Hello asks for it again.
+                self.codec_fallback = exhausted(&e, self.connector.codec, self.advertised_codecs);
+                return Pass::End(match self.codec_fallback {
+                    Some(_) => None,
+                    None => Some(format!("software decoder rebuild: {e}")),
+                });
+            }
+        }
+        // Infinite GOP has no periodic keyframe, so a rebuilt/erroring decoder
+        // stays gray until we ask. Arm only when not already holding: this flag
+        // fires per damaged AU, and every `arm` zeroes recovery-mark counts.
+        // A genuine new loss still re-arms via a frame-index gap or drop climb.
+        if self.decoder.take_keyframe_request() {
+            let now = Instant::now();
+            if !self.gate.is_holding() {
+                self.gate.arm(now);
+            }
+            if self.kf.ask(now, &self.connector) {
+                tracing::debug!("requested keyframe (decoder recovery)");
+            }
+        }
+        Pass::Drain
     }
-    if let Some(t) = pad_audio_thread {
-        let _ = t.join(); // exits within its 10 ms pull timeout once `stop` is set
+
+    /// A decoded picture: settle the freeze gate, then hand the previous frame in flight
+    /// on before this one is handed on or queued.
+    fn on_decoded(&mut self, image: DecodedImage, frame: &Frame, received_ns: u64) {
+        // Decoder's own re-anchor first: a recovery-point SEI is the
+        // only clean point an intra-refresh session has. Pair by decode
+        // order — a DPB flush after a failed AU hands back pictures
+        // decoded before the loss, which arrive after the arm.
+        let local = match image.decode_order() {
+            Some(order) if order <= self.arm_decode_order => {
+                tracing::trace!(
+                    order,
+                    arm_decode_order = self.arm_decode_order,
+                    "discarding the local recovery of a frame decoded before the loss"
+                );
+                punktfunk_core::reanchor::LocalRecovery::NONE
+            }
+            _ => image.local_recovery(),
+        };
+        if self.gate.on_local_recovery(local) {
+            self.decoder.forgive_unclean();
+            tracing::debug!("re-anchored on the stream's own recovery point SEI — no IDR needed");
+        }
+        // Shared freeze gate, corroborated: a frame predicting from a picture
+        // this decoder concealed is held whatever the wire says, and refuses a
+        // host RECOVERY_ANCHOR. If that arms an unfrozen gate (a lift landed
+        // before the damaged chain drained), ask for the IDR now rather than
+        // at the 500 ms backstop.
+        let evidence = image.anchor_evidence();
+        if evidence == punktfunk_core::reanchor::AnchorEvidence::ReferencesDamaged
+            && frame.flags & punktfunk_core::packet::USER_FLAG_RECOVERY_ANCHOR != 0
+        {
+            tracing::debug!(
+                "refused a host recovery anchor: this AU predicts from a picture this decoder \
+                 had to conceal — holding for a real IDR"
+            );
+        }
+        let now = Instant::now();
+        let was_holding = self.gate.is_holding();
+        let present =
+            self.gate
+                .on_decoded_corroborated(frame.flags, image.is_keyframe(), evidence, now)
+                == GateVerdict::Present;
+        // A wave lift: the planner's damaged-chain marks are stale from here,
+        // or every later host anchor is refused until an IDR.
+        if was_holding && present && self.gate.lifted_by_marks() {
+            self.decoder.forgive_unclean();
+            tracing::debug!(
+                "re-anchored on intra refresh marks — forgetting the damaged reference chain"
+            );
+        }
+        if !present && !was_holding {
+            tracing::debug!(
+                "damaged reference chain reached an unfrozen gate — holding, requesting keyframe"
+            );
+            self.kf.ask(now, &self.connector);
+        }
+        self.total_frames += 1;
+        self.dec_path = image.path_label();
+        if self.total_frames == 1 {
+            let (width, height) = image.dimensions();
+            tracing::info!(width, height, path = self.dec_path, "first frame decoded");
+        }
+        // Hardware rungs return at submission. A picture is handed on when its
+        // own fence completes, so the presenter never waits on a decode; the
+        // next AU is submitted meanwhile, so the decoder always has a picture
+        // queued behind the one it is working on.
+        let hw_fence = match &image {
+            // Native rung: decode signals `semaphore_value` when pixels
+            // are ready (presenter write-back is `+ 1`).
+            DecodedImage::NativeVk(f) => HwDone::Timeline(f.semaphore, f.semaphore_value),
+            // VAAPI ships the decode's write fence as a sync_file; a dup
+            // outlives the frame's move to the presenter.
+            #[cfg(target_os = "linux")]
+            DecodedImage::NativeDmabuf(d) => d
+                .sync_fds
+                .first()
+                .and_then(|fd| fd.try_clone().ok())
+                .map_or(HwDone::Cpu, HwDone::SyncFile),
+            _ => HwDone::Cpu,
+        };
+        let next = InFlight {
+            hw: hw_fence,
+            received_ns,
+            pts_ns: frame.pts_ns,
+            repeat: self.marks_repeats
+                && frame.flags & punktfunk_core::packet::USER_FLAG_REPEAT != 0,
+            image: present.then_some(image),
+        };
+        // This AU is submitted; the one before it goes on first, in order.
+        if let Some(prev) = self.in_flight.take() {
+            wait_hw_done(&mut self.decoder, &prev.hw);
+            hand_on(prev, &self.frame_tx, &self.connector, self.wants_decode);
+        }
+        // A CPU decode is done already. Intel on i915 waits at once: that
+        // wait is the media clock boost, and its GEM wait covers the ring.
+        if matches!(next.hw, HwDone::Cpu) || self.decoder.hw_wait_boosted() {
+            wait_hw_done(&mut self.decoder, &next.hw);
+            hand_on(next, &self.frame_tx, &self.connector, self.wants_decode);
+        } else {
+            self.in_flight = Some(next);
+        }
     }
-    if let Some(t) = clipboard_thread {
-        let _ = t.join(); // exits within its next_clip wait once `stop` is set
+
+    /// The connector closed. `None` means normal finish to every embedder; only an
+    /// ending that went wrong carries a message.
+    fn on_closed(&mut self) -> Option<String> {
+        use punktfunk_core::client::PunktfunkEndReason as End;
+        // A typed mid-session rejection names itself — access expiry would
+        // otherwise file under HostError as "the host ended with an error".
+        if let Some(reason) = self.connector.end_reject() {
+            self.not_ready = self.total_frames == 0
+                && reason == punktfunk_core::reject::RejectReason::SetupFailed
+                && self.params.waking();
+            return Some(crate::trust::reject_message(
+                reason,
+                self.connector.end_reject_said(),
+            ));
+        }
+        match self.connector.end_reason() {
+            End::GameExited => None,
+            End::Local | End::HostEnded => None,
+            End::HostError => Some("The host ended the session with an error".to_string()),
+            End::Lost => Some("Connection lost".to_string()),
+            // No verdict (older core, or the close raced the read): keep this
+            // arm's historic wording rather than inventing a new one.
+            End::None => Some("Host ended the session".to_string()),
+        }
     }
-    // Codec-exhaustion end is sent here, after those threads have joined, so a
-    // reconnect never has two sessions' threads on the same connector.
-    let last = match codec_fallback {
-        Some(ev) => ev,
-        None if not_ready => SessionEvent::HostNotReady(end.unwrap_or_default()),
-        None => SessionEvent::Ended(end),
-    };
-    let _ = ev_tx.send_blocking(last);
+
+    /// Close the 1-second window: the notices it owes, then the decode facts.
+    fn tick_window(&mut self) {
+        let c = &self.connector;
+        for notice in self.notices.tick(
+            c.frames_behind(),
+            self.total_frames,
+            c.unsustainable_pin_kbps(),
+            c.mode(),
+            c.launch_outcome(),
+        ) {
+            let _ = self.ev_tx.try_send(SessionEvent::Notice(notice));
+        }
+        let _ = self.ev_tx.try_send(SessionEvent::DecodeFacts(DecodeFacts {
+            decoder: self.dec_path,
+            health: self.decoder.decode_health(),
+        }));
+        self.window_start = Instant::now();
+    }
+
+    /// Raise `stop`, join the plane threads, then send the terminal event: a reconnect
+    /// on it never finds two sessions' threads on one connector.
+    fn finish(self, end: Option<String>) {
+        tracing::info!(
+            total_frames = self.total_frames,
+            reason = end.as_deref().unwrap_or("user"),
+            "session ended"
+        );
+        self.stop.store(true, Ordering::SeqCst);
+        // About to drop the uplink — stop claiming a mute surface, so an embedder still
+        // holding the handle cannot draw a muted mic that no longer exists.
+        self.mic.set_live(false);
+        if let Some(t) = self.planes.audio_thread {
+            let _ = t.join(); // exits within its 100 ms pull timeout once `stop` is set
+        }
+        if let Some(t) = self.planes.pad_audio_thread {
+            let _ = t.join(); // exits within its 10 ms pull timeout once `stop` is set
+        }
+        if let Some(t) = self.planes.clipboard_thread {
+            let _ = t.join(); // exits within its next_clip wait once `stop` is set
+        }
+        let last = match self.codec_fallback {
+            Some(ev) => ev,
+            None if self.not_ready => SessionEvent::HostNotReady(end.unwrap_or_default()),
+            None => SessionEvent::Ended(end),
+        };
+        let _ = self.ev_tx.send_blocking(last);
+    }
+}
+
+/// The once-per-condition notices the pump checks each second. Pure: the pump reads the
+/// connector and sends what [`Self::tick`] returns.
+#[derive(Default)]
+struct WindowNotices {
+    /// The pin-unsustainable notice went out; it is said once per session.
+    pin_noticed: bool,
+    /// Skips and decodes at the last window close.
+    behind_seen: u64,
+    decoded_seen: u64,
+    /// The run of windows in which a tenth of the stream was skipped.
+    overrun_secs: u32,
+    overrun_noticed: bool,
+    /// The last launch verdict turned into a notice: each verdict is said once.
+    launch_told: Option<punktfunk_core::quic::LaunchOutcome>,
+}
+
+impl WindowNotices {
+    /// Close one window and return the toast lines it owes, in order. `behind` and
+    /// `decoded` are the session's running totals of skipped and decoded frames;
+    /// `pin_kbps` is the pinned bitrate this device could not keep up with, 0 for none.
+    fn tick(
+        &mut self,
+        behind: u64,
+        decoded: u64,
+        pin_kbps: u32,
+        mode: Mode,
+        launch: Option<punktfunk_core::quic::LaunchOutcome>,
+    ) -> Vec<String> {
+        let mut notices = Vec::new();
+        if pin_kbps != 0 && !self.pin_noticed {
+            self.pin_noticed = true;
+            notices.push(format!(
+                "This device can't keep up with the pinned {} Mbps. Set the bitrate to \
+                 Automatic or lower it.",
+                pin_kbps / 1000
+            ));
+        }
+        let (behind, decoded) = (behind - self.behind_seen, decoded - self.decoded_seen);
+        self.behind_seen += behind;
+        self.decoded_seen += decoded;
+        self.overrun_secs = if behind * 10 >= behind + decoded && behind > 0 {
+            self.overrun_secs + 1
+        } else {
+            0
+        };
+        // Five seconds running is the device, not a hitch. Said once.
+        if self.overrun_secs == 5 && !self.overrun_noticed {
+            self.overrun_noticed = true;
+            notices.push(format!(
+                "This device can't keep up with this stream at {}×{}. Lower the \
+                 resolution or the refresh rate.",
+                mode.width, mode.height
+            ));
+        }
+        if let Some(outcome) = launch {
+            if self.launch_told.as_ref() != Some(&outcome) {
+                if let Some(n) = outcome.notice() {
+                    notices.push(n.to_string());
+                }
+                self.launch_told = Some(outcome);
+            }
+        }
+        notices
+    }
+}
+
+/// The terminal event when `e` says the negotiated codec ran out of decode rungs;
+/// `None` for any other error. Every refusal site goes through here, so all produce
+/// the same retry.
+fn exhausted(e: &anyhow::Error, negotiated: u8, advertised: u8) -> Option<SessionEvent> {
+    let nr = e.downcast_ref::<crate::video::NoSoftwareRung>()?;
+    Some(codec_fallback_event(
+        negotiated,
+        advertised,
+        nr.loss(),
+        &e.to_string(),
+    ))
 }
 
 /// Terminal event for a codec that exhausted the decode ladder, and bump telemetry.
-/// One place for both refusal sites so they produce the same retry.
 fn codec_fallback_event(
     negotiated: u8,
     advertised: u8,
@@ -1617,10 +1750,7 @@ fn spawn_audio(
     .ok()?;
     // A/V sync. This thread holds the packet's host capture `pts_ns`, the ring
     // depth, and the video e2e figure. `PUNKTFUNK_NO_AV_SYNC` is the escape hatch.
-    let av_sync_enabled = !matches!(
-        std::env::var("PUNKTFUNK_NO_AV_SYNC").as_deref(),
-        Ok("1") | Ok("true")
-    );
+    let av_sync_enabled = crate::env_on("PUNKTFUNK_NO_AV_SYNC") != Some(true);
     let sync_cell = player.sync_cell();
     // Device-callback counters. Logged from this thread, on wall clock — the
     // PipeWire callback runs on the graph's realtime loop and formats nothing.
@@ -1997,6 +2127,67 @@ mod tests {
         assert_eq!(mic.toggle(), None);
     }
 
+    fn mode_1080p() -> Mode {
+        Mode {
+            width: 1920,
+            height: 1080,
+            refresh_hz: 60,
+        }
+    }
+
+    /// The pin notice names the pin in Mbps and goes out once per session.
+    #[test]
+    fn the_pin_notice_is_said_once() {
+        let mut w = WindowNotices::default();
+        assert!(w.tick(0, 60, 0, mode_1080p(), None).is_empty());
+        let said = w.tick(0, 120, 50_000, mode_1080p(), None);
+        assert_eq!(said.len(), 1);
+        assert!(said[0].contains("50 Mbps"), "{}", said[0]);
+        assert!(w.tick(0, 180, 50_000, mode_1080p(), None).is_empty());
+    }
+
+    /// Five windows in a row with a tenth of the stream skipped is the device, not a
+    /// hitch. A clean window restarts the run; the notice goes out once.
+    #[test]
+    fn five_overrun_windows_in_a_row_name_the_resolution_once() {
+        let mut w = WindowNotices::default();
+        let (mut behind, mut decoded) = (0u64, 0u64);
+        let mut close = |w: &mut WindowNotices, skipped: u64| {
+            behind += skipped;
+            decoded += 10 - skipped;
+            w.tick(behind, decoded, 0, mode_1080p(), None)
+        };
+        for skipped in [1, 1, 1, 1, 0, 1, 1, 1, 1] {
+            assert!(close(&mut w, skipped).is_empty());
+        }
+        let said = close(&mut w, 1);
+        assert_eq!(said.len(), 1, "the fifth overrun window in a row");
+        assert!(said[0].contains("1920×1080"), "{}", said[0]);
+        for _ in 0..10 {
+            assert!(close(&mut w, 5).is_empty(), "said once per session");
+        }
+    }
+
+    /// Each launch verdict is said once; one that needs no words says nothing.
+    #[test]
+    fn each_launch_verdict_is_said_once() {
+        use punktfunk_core::quic::{LaunchOutcome, LaunchOutcomeKind};
+        let mut w = WindowNotices::default();
+        let spawned = LaunchOutcome::new(LaunchOutcomeKind::Spawned, "Started.");
+        assert!(w.tick(0, 0, 0, mode_1080p(), Some(spawned)).is_empty());
+        let failed = LaunchOutcome::new(LaunchOutcomeKind::Failed, "The game closed at once.");
+        assert_eq!(
+            w.tick(0, 0, 0, mode_1080p(), Some(failed.clone())),
+            ["The game closed at once."]
+        );
+        assert!(w.tick(0, 0, 0, mode_1080p(), Some(failed)).is_empty());
+        let refused = LaunchOutcome::new(LaunchOutcomeKind::Refused, "Nothing to run.");
+        assert_eq!(
+            w.tick(0, 0, 0, mode_1080p(), Some(refused)),
+            ["Nothing to run."]
+        );
+    }
+
     /// HEVC reconnect as the terminal event both refusal sites produce. Pins that
     /// the retry never re-offers the failed codec, the message is user-facing, and
     /// the counter moves once per occurrence.
@@ -2089,5 +2280,32 @@ mod tests {
         // Excluding twice is idempotent — a second fallback ORs into the existing value.
         let full = CODEC_H264 | CODEC_HEVC | CODEC_AV1;
         assert_eq!((full & !CODEC_HEVC) & !CODEC_HEVC, CODEC_H264 | CODEC_AV1);
+    }
+
+    /// Only a last-rung refusal ends the session with a retry; any other decode error
+    /// leaves the counter alone.
+    #[test]
+    fn only_a_last_rung_refusal_is_exhausted() {
+        use crate::video::NoSoftwareRung;
+        use punktfunk_core::quic::{CODEC_H264, CODEC_HEVC};
+        let _guard = FALLBACK_COUNTER.lock().unwrap_or_else(|e| e.into_inner());
+        let advertised = CODEC_H264 | CODEC_HEVC;
+        let before = codec_fallbacks();
+        let survivable = anyhow::anyhow!("decode error");
+        assert!(exhausted(&survivable, CODEC_HEVC, advertised).is_none());
+        assert_eq!(codec_fallbacks(), before);
+
+        let last_rung = anyhow::Error::from(NoSoftwareRung {
+            codec: CODEC_HEVC,
+            shape: None,
+        });
+        assert!(matches!(
+            exhausted(&last_rung, CODEC_HEVC, advertised),
+            Some(SessionEvent::CodecFallback {
+                retry_caps: CODEC_H264,
+                ..
+            })
+        ));
+        assert_eq!(codec_fallbacks(), before + 1);
     }
 }

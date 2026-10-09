@@ -8,8 +8,8 @@
 
 use super::choices::{NetworkAnswer, WinChoices};
 use super::plan::Artifact;
-use super::{WinFacts, MGMT_PORT_MOVED};
-use crate::choices::{LAN_BIND, LOOPBACK_BIND};
+use super::WinFacts;
+use crate::choices::{DEFAULT_MGMT_PORT, LAN_BIND, LOOPBACK_BIND};
 use crate::facts::DOCS;
 use crate::ui::Reporter;
 
@@ -128,7 +128,7 @@ pub fn footnotes(facts: &WinFacts, choices: &WinChoices) -> Vec<String> {
     let mut notes = Vec::new();
     if facts.needs_coexistence() {
         notes.push(format!(
-            "Running next to Sunshine/Apollo: punktfunk's management API is on :{MGMT_PORT_MOVED} — {DOCS}/switching-from-sunshine"
+            "Running next to Sunshine/Apollo: punktfunk's management API is on :{DEFAULT_MGMT_PORT} — {DOCS}/switching-from-sunshine"
         ));
     }
     if matches!(choices.network, NetworkAnswer::Skip)

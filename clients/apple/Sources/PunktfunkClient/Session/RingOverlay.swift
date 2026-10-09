@@ -310,6 +310,12 @@ func spec(_ slot: SlotId, _ cfg: OverlayConfig, _ a: RingActions) -> SlotSpec {
         return SlotSpec(id: "pad_type", label: "Controller type", icon: "dpad", mark: type.mark,
                         enabled: a.padTypeAvailable(), reason: "No controller is connected",
                         toggle: true, state: type.ringLabel)
+    case .streamMute:
+        return SlotSpec(id: "stream_mute", label: "Mute this stream", icon: "speaker.wave.2",
+                        enabled: false, reason: "Not on this device")
+    case .swapScreens:
+        return SlotSpec(id: "swap_screens", label: "Swap screens", icon: "arrow.up.arrow.down",
+                        enabled: false, reason: "Dual-screen handhelds only")
     case .host(let id):
         let act = a.hostActions().first { $0.id == id }
         // Three power actions, three glyphs — the same icon on all three made them one button.
@@ -617,7 +623,7 @@ struct RingOverlay: View {
         case .stats: actions.cycleStats()
         case .mic: actions.toggleMic()
         case .pad: actions.togglePad()
-        case .sendText: break
+        case .sendText, .streamMute, .swapScreens: break
         // The host's own overlay is taking the screen: close first, like End stream.
         case .guide: state.close(); actions.tapPadButton(GamepadWire.guide)
         case .qam: state.close(); actions.tapPadButton(GamepadWire.misc1)

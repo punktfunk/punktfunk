@@ -47,24 +47,16 @@ fn output_latency_ns(stream: &pipewire::stream::Stream, stride: usize) -> u64 {
     frames.saturating_mul(1_000_000_000 * u64::from(t.rate.num)) / u64::from(t.rate.denom)
 }
 
-/// `(sinks, sources)` via one registry roundtrip on a private mainloop. Caller treats `Err` as no pickers.
+/// `(sinks, sources)` from one bounded registry round. Caller treats `Err` as no pickers.
 pub fn devices() -> Result<(Vec<AudioDevice>, Vec<AudioDevice>)> {
-    use pipewire as pw;
+    use crate::pw_oneshot::{OneShot, TIMEOUT};
     use std::cell::RefCell;
     use std::rc::Rc;
 
-    static PW_INIT: std::sync::Once = std::sync::Once::new();
-    PW_INIT.call_once(pw::init);
-
-    let mainloop = pw::main_loop::MainLoopRc::new(None).context("pw MainLoop")?;
-    let context = pw::context::ContextRc::new(&mainloop, None).context("pw Context")?;
-    let core = context
-        .connect_rc(None)
-        .context("pw connect (is PipeWire running in this session?)")?;
-    let registry = core.get_registry_rc().context("pw registry")?;
-
+    let session = OneShot::connect("audio-devices", TIMEOUT)?;
     let found: Rc<RefCell<(Vec<AudioDevice>, Vec<AudioDevice>)>> = Rc::default();
-    let _reg_listener = registry
+    let _reg_listener = session
+        .registry
         .add_listener_local()
         .global({
             let found = found.clone();
@@ -93,21 +85,7 @@ pub fn devices() -> Result<(Vec<AudioDevice>, Vec<AudioDevice>)> {
         })
         .register();
 
-    // Registry globals arrive asynchronously; `core.sync` is the point they have all been delivered.
-    let pending = core.sync(0).context("pw sync")?;
-    let _core_listener = core
-        .add_listener_local()
-        .done({
-            let mainloop = mainloop.clone();
-            move |_, seq| {
-                if seq == pending {
-                    mainloop.quit();
-                }
-            }
-        })
-        .register();
-    mainloop.run();
-
+    session.round()?; // the globals replay
     let result = found.borrow().clone();
     Ok(result)
 }
@@ -254,8 +232,7 @@ fn pw_thread(
     use spa::param::audio::{AudioFormat, AudioInfoRaw};
     use spa::pod::Pod;
 
-    static PW_INIT: std::sync::Once = std::sync::Once::new();
-    PW_INIT.call_once(pw::init);
+    pw::init();
 
     let channels = fmt.channels as usize;
 
@@ -557,7 +534,7 @@ struct MicData {
 /// Settings toggle, with `PUNKTFUNK_NO_AEC=1` as a one-way override off.
 /// The env var wins — escape hatch for a misbehaving canceller; nothing turns AEC back on.
 fn aec_enabled(echo_cancel: bool) -> bool {
-    echo_cancel && !std::env::var("PUNKTFUNK_NO_AEC").is_ok_and(|v| !v.is_empty() && v != "0")
+    echo_cancel && crate::env_on("PUNKTFUNK_NO_AEC") != Some(true)
 }
 
 /// Capture `target.object`: Settings pick (`PUNKTFUNK_AUDIO_SOURCE`) first, else
@@ -609,8 +586,7 @@ fn mic_thread(
     use spa::param::audio::{AudioFormat, AudioInfoRaw};
     use spa::pod::Pod;
 
-    static PW_INIT: std::sync::Once = std::sync::Once::new();
-    PW_INIT.call_once(pw::init);
+    pw::init();
 
     // The callback drains every frame it fills, so no backlog builds to self-heal.
     let mic = punktfunk_core::audio::mic::MicEncoder::new(false)

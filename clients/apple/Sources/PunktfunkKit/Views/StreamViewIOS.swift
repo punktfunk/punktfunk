@@ -38,6 +38,7 @@ public struct StreamView: UIViewControllerRepresentable {
     private let connection: PunktfunkConnection
     private let captureEnabled: Bool
     private let onCaptureChange: ((Bool) -> Void)?
+    private let onDisconnectRequest: (() -> Void)?
     private let onDial: ((DialEvent) -> Void)?
     private let onFrame: (@Sendable (AccessUnit) -> Void)?
     private let onSessionEnd: (@Sendable () -> Void)?
@@ -48,10 +49,8 @@ public struct StreamView: UIViewControllerRepresentable {
     private var theaterRenderers: TheaterRenderers?
     #endif
 
-    /// `onDisconnectRequest` exists for call-site parity with the macOS StreamView (the
-    /// captured-state ⌃⌥⇧D combo is detected by the macOS NSEvent monitor only); on iOS a
-    /// hardware keyboard reaches Disconnect through the Stream menu's key equivalent instead,
-    /// so the parameter is accepted and unused here.
+    /// `onDisconnectRequest` (main queue) is the captured-state ⌃⌥⇧D from an iPad keyboard,
+    /// as on the macOS StreamView; released, the Stream menu's key equivalent disconnects.
     public init(
         connection: PunktfunkConnection,
         captureEnabled: Bool = true,
@@ -67,6 +66,7 @@ public struct StreamView: UIViewControllerRepresentable {
         self.connection = connection
         self.captureEnabled = captureEnabled
         self.onCaptureChange = onCaptureChange
+        self.onDisconnectRequest = onDisconnectRequest
         self.onDial = onDial
         self.onFrame = onFrame
         self.onSessionEnd = onSessionEnd
@@ -90,6 +90,7 @@ public struct StreamView: UIViewControllerRepresentable {
         controller.setTheater(theaterRenderers)
         #endif
         controller.onCaptureChange = onCaptureChange
+        controller.onDisconnectRequest = onDisconnectRequest
         controller.onDial = onDial
         controller.captureEnabled = captureEnabled
         controller.endToEndMeter = endToEndMeter
@@ -101,6 +102,7 @@ public struct StreamView: UIViewControllerRepresentable {
 
     public func updateUIViewController(_ controller: StreamViewController, context: Context) {
         controller.onCaptureChange = onCaptureChange
+        controller.onDisconnectRequest = onDisconnectRequest
         controller.onDial = onDial
         controller.captureEnabled = captureEnabled
         controller.endToEndMeter = endToEndMeter
@@ -204,6 +206,8 @@ public final class StreamViewController: StreamViewControllerBase {
     }
 
     var onCaptureChange: ((Bool) -> Void)?
+    /// The captured-state ⌃⌥⇧D (see `StreamView.init`).
+    var onDisconnectRequest: (() -> Void)?
     /// The two-finger twist turning the quick-action ring (forwarded from the stream view).
     var onDial: ((DialEvent) -> Void)?
     /// Resize-overlay START: forwarded to the Match-window follower so a scene resize drives the
@@ -526,16 +530,22 @@ public final class StreamViewController: StreamViewControllerBase {
         capture.onReleaseCapture = { [weak self] in
             self?.setCaptured(false)
         }
-        // ⌃⌥⇧A mutes/unmutes the mic uplink. Session state this controller doesn't own, so it
-        // posts to the app exactly as the macOS chord does, naming its session so only that
-        // window's stream toggles.
+        // ⌃⌥⇧A mutes the mic uplink and ⌃⌥⇧C flips clipboard sharing: session state this
+        // controller doesn't own, posted as the macOS chords are, naming the session.
         capture.onToggleMicMute = { [weak connection] in
             NotificationCenter.default.post(name: .punktfunkToggleMicMute, object: connection)
+        }
+        capture.onToggleClipboard = { [weak connection] in
+            NotificationCenter.default.post(name: .punktfunkToggleClipboard, object: connection)
         }
         // ⌃⌥⇧O toggles the quick-action ring, posted the way the Mac's chord is.
         capture.onQuickActions = { [weak connection] in
             NotificationCenter.default.post(name: .punktfunkToggleQuickActions, object: connection)
         }
+        // ⌃⌥⇧D and ⌃⌥⇧S take the Mac's routes: the session's disconnect, and this session's
+        // stats cycle.
+        capture.onDisconnect = { [weak self] in self?.onDisconnectRequest?() }
+        capture.onCycleStats = { [weak connection] in StatsVerbosity.requestCycle(for: connection) }
         capture.onPreempted = { [weak self] in
             self?.setCaptured(false)
         }

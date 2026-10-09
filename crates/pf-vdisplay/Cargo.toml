@@ -22,6 +22,9 @@ punktfunk-core = { path = "../punktfunk-core", default-features = false }
 # identity and the CTA-861.3 luminance fields on Windows. A leaf: no QUIC, no codec.
 pf-frame = { path = "../pf-frame" }
 pf-host-config = { path = "../pf-host-config" }
+# The never-dropped portal runtime, the bounded ScreenCast handshake steps and the cursor
+# negotiation (Linux); `cursor_mode::Mode` is public on every platform.
+pf-portal = { path = "../pf-portal" }
 pf-paths = { path = "../pf-paths" }
 pf-win-display = { path = "../pf-win-display" }
 anyhow = "1"
@@ -52,11 +55,6 @@ libc = "0.2"
 # runtime; the gamescope restore worker + portal handshakes use tokio too.
 ashpd = { version = "0.13", features = ["screencast", "remote_desktop"] }
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "net", "time"] }
-# The ScreenCast handshake bounds and cursor negotiation (`pf_capture::portal_rt`), and the
-# gamescope HDR capture latch.
-pf-capture = { path = "../pf-capture" }
-# The shared, never-dropped portal runtime every cast parks on.
-pf-portal = { path = "../pf-portal" }
 futures-util = "0.3"
 # KWin virtual-output creation via the privileged `zkde_screencast_unstable_v1` protocol (vendored in
 # `protocols/`); the generated interface tables reference `wayland-backend`.

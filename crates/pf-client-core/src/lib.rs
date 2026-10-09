@@ -12,8 +12,9 @@
 
 // Every `unsafe` block and `unsafe impl` in this crate carries a `// SAFETY:` proof.
 
+// The session pump's decoder-input capture, so `session` keeps naming `crate::au_dump`.
 #[cfg(desktop)]
-mod au_dump;
+use pf_client_video::au_dump;
 #[cfg(all(desktop, target_os = "linux"))]
 pub mod audio;
 #[cfg(all(desktop, windows))]
@@ -25,18 +26,23 @@ pub mod audio_vitals;
 // Priority for threads that feed the device callbacks (decode, pad-audio, WASAPI). rtkit / Realtime portal on Linux, MMCSS on Windows.
 #[cfg(desktop)]
 pub mod audio_rt;
-#[cfg(all(feature = "discovery", any(target_os = "linux", windows)))]
+// mDNS browse of `_punktfunk._udp`. Android folds the same events behind its JNI poll.
+#[cfg(all(
+    feature = "discovery",
+    any(target_os = "linux", windows, target_os = "android")
+))]
 pub mod discovery;
 #[cfg(desktop)]
 pub mod gamepad;
 // Menu-event synthesizer and pad descriptors. Desktop `gamepad` re-exports them; Android feeds the same synthesizer from Kotlin samples (`design/android-skia-console-port.md`).
 #[cfg(portable)]
 pub mod menu_nav;
-// Audio-format vocabulary (`session` re-exports) and decoder-preference migration (`video` re-exports). Split out so the platform-bound modules stay platform-bound.
+// Audio-format vocabulary (`session` re-exports). Split out so the platform-bound modules stay platform-bound.
 #[cfg(portable)]
 pub mod audio_format;
+// Stored decoder-pref migration, for the Skia settings screen on every target.
 #[cfg(portable)]
-pub mod decoder_pref;
+pub use punktfunk_core::decoder_pref;
 // Console actions, pointer input, and session phases. Shared by the Vulkan overlay and the Android GL host.
 #[cfg(portable)]
 pub mod console;
@@ -55,9 +61,9 @@ pub mod library_cache;
 // Poster bytes on disk behind the shells' texture maps, so the cached catalog above has covers.
 #[cfg(desktop)]
 pub mod art_cache;
-// Host power actions (`design/host-actions.md`). Android gets the row type and labels; ureq stays desktop-gated (Android uses OkHttp).
 /// A network check's findings in words, for every shell.
 pub mod findings;
+// Host power actions (`design/host-actions.md`). Android gets the row type and labels; ureq stays desktop-gated (Android uses OkHttp).
 #[cfg(portable)]
 pub mod host_actions;
 // Log ring (note/render, std only) on every platform. `send_to_host` stays desktop-gated; Android posts via OkHttp (`SkiaConsole.sendLogs`).
@@ -103,6 +109,9 @@ pub mod shortcuts;
 // DualSense voice-coil + speaker on the pad's 4-ch device (0xD1 plane): correlation, per-session renderer, tier-A registry the gamepad worker feeds.
 #[cfg(desktop)]
 pub mod pad_audio;
+// One bounded PipeWire registry query, for the device pickers and the pad-audio graph walks.
+#[cfg(all(desktop, target_os = "linux"))]
+mod pw_oneshot;
 // Raw HID beside an SDL slot: Steam Controller 2 passthrough, the descriptor log, the DualSense Bluetooth audio writer.
 #[cfg(desktop)]
 mod sc2_capture;
@@ -119,6 +128,8 @@ pub mod settings;
 // sends; Android measures through its own JNI session instead.
 #[cfg(desktop)]
 pub mod speed;
+// The XDG and System32 path rules, as the host's pf-paths applies them.
+mod paths;
 #[cfg(portable)]
 pub mod trust;
 // Profiles on a box and the picker rule every shell shares (`design/profiles-and-seats.md` §10).
@@ -134,62 +145,22 @@ pub mod library_layout;
 // Linux only: Windows ships inside the host installer, macOS through `clients/apple`.
 #[cfg(all(desktop, target_os = "linux"))]
 pub mod update;
-#[cfg(desktop)]
-pub mod video;
-// Decode counters, picture shape, and the DXGI driver-version split.
-// Built for `desktop`, or Windows `d3d11va` alone. `video` re-exports them
-// when the ladder is built; this module is the path when it is not.
-#[cfg(any(desktop, all(feature = "d3d11va", windows)))]
-pub mod video_types;
-// Colour vocabulary + the CSC coefficient rows. Portable (no ash, no decode ladder): the
-// PyroWave lane needs them on Android too, where `video` itself is not built.
-#[cfg(any(target_os = "linux", windows, target_os = "android"))]
-pub mod video_color;
-// The `VkDevice` handoff + shared queue lock. `video` re-exports both, so desktop call
-// sites are unchanged; Android names this module directly.
-#[cfg(any(target_os = "linux", windows, target_os = "android"))]
-pub mod video_vk;
-// Committed SPIR-V for the presenter shaders. Here rather than in pf-presenter because the
-// Android PyroWave lane builds the same planar CSC pipeline without that crate.
-#[cfg(any(target_os = "linux", windows, target_os = "android"))]
-pub mod video_csc_spv;
-#[cfg(desktop)]
-mod video_software;
-// Native VAAPI: pf-vaapi plans into dlopen'd libva, DRM-PRIME dmabufs for the presenter.
-// Only VAAPI rung; `auto` reaches it when vendor order puts VAAPI first, or pin `PUNKTFUNK_DECODER=native-vaapi`. Evidence: `video`.
-#[cfg(all(desktop, target_os = "linux"))]
-pub mod video_vaapi_native;
-// V4L2 decode: the hardware rung of SoCs with no Vulkan Video and no VA-API. `auto` reaches it after both; pin `PUNKTFUNK_DECODER=native-v4l2`.
-#[cfg(all(desktop, target_os = "linux"))]
-mod video_v4l2;
-// The stateless half of that rung: HEVC on decoders that take parsed slices (Raspberry Pi 5, RK3588).
-#[cfg(all(desktop, target_os = "linux"))]
-mod video_v4l2_hevc;
-// Native Vulkan Video (H.264/H.265/AV1) on the presenter's device. Auto's top rung on both desktop OSes; pin `PUNKTFUNK_DECODER=native-vulkan`. Evidence: `video`.
-#[cfg(desktop)]
-mod video_vk_native;
 // OS clipboard bridge (`design/clipboard-and-file-transfer.md`). Session clients; Windows-real, stub elsewhere.
 #[cfg(desktop)]
 pub mod clipboard;
-// D3D11 decode-device: shareable-texture hand-off ring, device creation, `display_hdr_volume`. `video_d3d11_native` and `clients/session` build on it.
+// The decode ladder lives in pf-client-video; these keep the `video` and `video_*` paths.
+#[cfg(desktop)]
+pub use pf_client_video as video;
+#[cfg(all(desktop, feature = "pyrowave"))]
+pub use pf_client_video::video_pyrowave;
+#[cfg(all(desktop, target_os = "linux"))]
+pub use pf_client_video::video_vaapi_native;
+#[cfg(any(desktop, all(feature = "d3d11va", windows)))]
+pub use pf_client_video::{video_color, video_csc_spv, video_types, video_vk};
 #[cfg(all(feature = "d3d11va", windows))]
-pub mod video_d3d11;
-// Native D3D11VA: `ID3D11VideoDecoder` from pf-bitstream plans into `video_d3d11`'s hand-off ring.
-// Only DXVA rung; in `auto` for H.264/H.265/AV1. Pin `PUNKTFUNK_DECODER=native-d3d11va`. Evidence: `video`.
-#[cfg(all(feature = "d3d11va", windows))]
-pub mod video_d3d11_native;
-// PyroWave: Vulkan compute on the device the frame is presented from (no fds, no dmabuf,
-// no D3D11 interop). Linux + Windows + Android; Apple Metal is a separate port.
-// 64-bit Android only, mirroring pyrowave-sys's own gate: Vulkan's armv7 calling
-// convention has no bindgen representation, so the sys crate is an empty stub there.
-#[cfg(all(
-    any(
-        target_os = "linux",
-        windows,
-        all(target_os = "android", target_pointer_width = "64")
-    ),
-    feature = "pyrowave"
-))]
-pub mod video_pyrowave;
+pub use pf_client_video::{video_d3d11, video_d3d11_native};
 
 pub mod wol;
+
+/// The `PUNKTFUNK_*` switch grammar every process shares.
+pub use punktfunk_core::env_on;

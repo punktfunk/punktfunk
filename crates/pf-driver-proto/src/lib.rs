@@ -83,6 +83,7 @@ pub mod eightbitdo;
 pub mod gamepad;
 pub mod hori;
 pub mod mouse;
+pub mod rdesc;
 pub mod switch;
 pub mod triton;
 pub mod xbox;

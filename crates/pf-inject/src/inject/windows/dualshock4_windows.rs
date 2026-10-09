@@ -9,8 +9,7 @@
 
 use super::dualsense_proto::DsState;
 use super::dualshock4_proto::{
-    parse_ds4_output, serialize_state, Ds4Encoder, Ds4Feedback, DS4_INPUT_REPORT_LEN, DS4_TOUCH_H,
-    DS4_TOUCH_W,
+    parse_ds4_output, Ds4Encoder, Ds4Feedback, DS4_TOUCH_H, DS4_TOUCH_W,
 };
 use super::gamepad_raii::SwDeviceProfile;
 use super::pad_shm::ShmPad;
@@ -29,12 +28,10 @@ pub struct Ds4WinPad {
 
 impl Ds4WinPad {
     fn open(index: u8) -> Result<Ds4WinPad> {
-        let mut neutral = [0u8; DS4_INPUT_REPORT_LEN];
-        serialize_state(&mut neutral, &DsState::neutral(), 0, 0);
         let shm = ShmPad::open(
             index,
             pf_driver_proto::gamepad::DEVTYPE_DUALSHOCK4,
-            &neutral,
+            &pf_driver_proto::dualshock4::NEUTRAL_REPORT,
             &SwDeviceProfile {
                 instance: &format!("pf_ds4_{index}"),
                 container_tag: 0x5046_4453, // "PFDS"

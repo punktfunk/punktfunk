@@ -3,7 +3,7 @@
 //! Kotlin side — its mTLS OkHttp client (`mtlsHttpClient`, the library/art path) already
 //! owns HTTPS-to-the-pinned-host on this platform, and `logring::send_to_host`'s ureq
 //! agent is deliberately desktop-only. Android-gated (unlike [`crate::wol`]/[`crate::probe`])
-//! because `pf-client-core` is an Android-target dependency of this crate.
+//! with the logcat tee that fills the ring.
 
 use jni::errors::LogErrorAndDefault;
 use jni::objects::{JObject, JString};

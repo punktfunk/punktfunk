@@ -9,6 +9,7 @@
 use super::style::*;
 use super::{AppCtx, Screen, Target};
 use crate::trust::KnownHosts;
+use pf_client_core::orchestrate::HostTarget;
 use pf_client_core::profiles::{self, Decision, ListedProfile, ProfilePick, SeatGate};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -17,8 +18,6 @@ use windows_reactor::*;
 
 /// How long a connect waits for the host's list before it dials as it would have.
 const FETCH_CUTOFF: Duration = Duration::from_secs(3);
-/// How often the waiting sheet re-reads the seat.
-const SEAT_POLL: Duration = Duration::from_secs(2);
 static NEXT_ID: AtomicU64 = AtomicU64::new(1);
 
 /// What a pick does: saves it, then connects (or just closes, for "Switch profile…").
@@ -55,7 +54,7 @@ impl PickerAsk {
     ) -> Self {
         Self {
             id: NEXT_ID.fetch_add(1, Ordering::Relaxed),
-            host: target.name.clone(),
+            host: target.host.name.clone(),
             listed: listed.map(Arc::new),
             saved,
             gone,
@@ -84,17 +83,16 @@ impl PartialEq for SeatWait {
     }
 }
 
-/// Writes `pick` as the host's saved profile (`None` drops it). Every other field stays.
-pub(crate) fn save_pick(fp_hex: Option<&str>, addr: &str, port: u16, pick: Option<ProfilePick>) {
-    let mut known = KnownHosts::load();
-    let Some(i) = known.resolve_index(fp_hex, addr, port) else {
-        return;
-    };
-    if known.hosts[i].profile == pick {
-        return;
-    }
-    known.hosts[i].profile = pick;
-    if let Err(e) = known.save() {
+/// Writes `pick` as `host`'s saved profile (`None` drops it), on the record its `fp_hex` and
+/// address resolve to. Every other field stays. A failure is only logged: it lands mid-connect,
+/// where the status line belongs to the connect, and a lost pick only means the picker asks again.
+pub(crate) fn save_pick(host: &HostTarget, pick: Option<ProfilePick>) {
+    let r = KnownHosts::update(|known| {
+        if let Some(i) = known.resolve_index(host.fp_hex.as_deref(), &host.addr, host.port) {
+            known.hosts[i].profile = pick;
+        }
+    });
+    if let Err(e) = r {
         tracing::warn!(error = %format!("{e:#}"), "saving the profile pick");
     }
 }
@@ -105,29 +103,11 @@ fn fetch(
     target: &Target,
     pin: Option<[u8; 32]>,
 ) -> Option<Option<Vec<ListedProfile>>> {
-    let addr = target.addr.clone();
     let mgmt = target
+        .host
         .mgmt_port
         .unwrap_or(pf_client_core::library::DEFAULT_MGMT_PORT);
-    let identity = ctx.identity.clone();
-    let (tx, rx) = std::sync::mpsc::channel();
-    std::thread::Builder::new()
-        .name("pf-profiles-fetch".into())
-        .spawn(move || {
-            let _ = tx.send(profiles::fetch_enumerate(&addr, mgmt, &identity, pin));
-        })
-        .ok()?;
-    match rx.recv_timeout(FETCH_CUTOFF) {
-        Ok(Ok(listed)) => Some(listed),
-        Ok(Err(e)) => {
-            tracing::info!(error = %e, "profile list unavailable");
-            None
-        }
-        Err(_) => {
-            tracing::info!("profile list late");
-            None
-        }
-    }
+    profiles::fetch_within(&target.host.addr, mgmt, &ctx.identity, pin, FETCH_CUTOFF)
 }
 
 fn open(ctx: &AppCtx, ask: PickerAsk) {
@@ -167,16 +147,15 @@ pub(crate) fn seat_then(
     go: impl FnOnce() + Send + 'static,
 ) {
     let Some(row) = row else { return go() };
-    let wake = match profiles::seat_gate(&row) {
+    match profiles::seat_gate(&row) {
         SeatGate::Dial => return go(),
         SeatGate::Refuse(line) => {
             set_status.call(line);
             set_screen.call(Screen::Hosts);
             return;
         }
-        SeatGate::Wake => true,
-        SeatGate::Wait { .. } => false,
-    };
+        SeatGate::Wake | SeatGate::Wait { .. } => {}
+    }
     let Some(set_seat) = ctx.shared.set_seat.lock().unwrap().clone() else {
         return go();
     };
@@ -206,49 +185,38 @@ pub(crate) fn seat_then(
                 }
             };
             let mgmt = target
+                .host
                 .mgmt_port
                 .unwrap_or(pf_client_core::library::DEFAULT_MGMT_PORT);
-            let mut row = row;
             show(None);
-            if wake {
-                match profiles::wake(&target.addr, mgmt, &ctx.identity, pin, &row.id) {
-                    Ok(woken) => row = woken,
-                    Err(e) => {
-                        return stop(format!(
-                            "Couldn't wake {}'s desk \u{2014} {e}",
-                            row.display_name
-                        ));
-                    }
+            let mut go = Some(go);
+            let mut dial = || {
+                if let Some(go) = go.take().filter(|_| !cancel.load(Ordering::SeqCst)) {
+                    set_seat.call(None);
+                    go();
                 }
-            }
-            loop {
-                match profiles::seat_gate(&row) {
-                    SeatGate::Dial => {
-                        if !cancel.load(Ordering::SeqCst) {
-                            set_seat.call(None);
-                            go();
-                        }
-                        return;
-                    }
-                    SeatGate::Refuse(line) => return stop(line),
-                    SeatGate::Wait { detail } => show(detail),
-                    SeatGate::Wake => show(None),
+            };
+            // `true` keeps the watch going: the seat is still coming up.
+            let each = |polled: std::result::Result<ListedProfile, String>| {
+                let gate = polled.map(|r| profiles::seat_gate(&r));
+                let waiting = matches!(gate, Ok(SeatGate::Wait { .. } | SeatGate::Wake));
+                match gate {
+                    Ok(SeatGate::Wait { detail }) => show(detail),
+                    Ok(SeatGate::Wake) => show(None),
+                    Ok(SeatGate::Dial) => dial(),
+                    Ok(SeatGate::Refuse(line)) | Err(line) => stop(line),
                 }
-                std::thread::sleep(SEAT_POLL);
-                if cancel.load(Ordering::SeqCst) {
-                    return;
-                }
-                match profiles::fetch_enumerate(&target.addr, mgmt, &ctx.identity, pin) {
-                    Ok(listed) => match row_of(listed.as_deref(), Some(&row.id)) {
-                        Some(polled) => row = polled,
-                        None => {
-                            return stop(format!("{} is gone from this host.", row.display_name))
-                        }
-                    },
-                    // A poll that fails waits for the next one.
-                    Err(e) => tracing::debug!(error = %e, "seat poll"),
-                }
-            }
+                waiting
+            };
+            profiles::watch_seat(
+                &target.host.addr,
+                mgmt,
+                &ctx.identity,
+                pin,
+                &row,
+                &cancel,
+                each,
+            );
         });
 }
 
@@ -281,11 +249,10 @@ pub(crate) fn then_connect(
                     ..Decision::default()
                 },
             };
-            let fp = target.fp_hex.clone();
             let listed = fetched.flatten();
             if !d.picker {
                 if d.remember != saved {
-                    save_pick(fp.as_deref(), &target.addr, target.port, d.remember);
+                    save_pick(&target.host, d.remember);
                 }
                 let row = row_of(listed.as_deref(), d.send.as_deref());
                 return seat_then(
@@ -306,7 +273,7 @@ pub(crate) fn then_connect(
                 set_status.clone(),
             );
             let on_pick = move |p: ProfilePick| {
-                save_pick(t.fp_hex.as_deref(), &t.addr, t.port, Some(p.clone()));
+                save_pick(&t.host, Some(p.clone()));
                 let row = row_of(rows.as_deref(), Some(&p.id));
                 seat_then(&ctx2, t, pin, &ss, &st, row, move || go(Some(p.id)));
             };
@@ -330,9 +297,9 @@ pub(crate) fn switch(
         .spawn(move || {
             // A box that lists nothing (404) reads as an empty list; a failed fetch as an error.
             let listed = fetch(&ctx, &target, pin).map(Option::unwrap_or_default);
-            let (fp, addr, port) = (target.fp_hex.clone(), target.addr.clone(), target.port);
+            let host = target.host.clone();
             let on_pick = move |p: ProfilePick| {
-                save_pick(fp.as_deref(), &addr, port, Some(p));
+                save_pick(&host, Some(p));
                 done();
             };
             open(

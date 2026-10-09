@@ -22,7 +22,14 @@ import { HostClient, type PluginInfo } from "../host-client.js";
 import { definePluginKit, type PluginKitDef } from "../runtime.js";
 import { type LastSync, makeSyncEngine } from "../sync-engine.js";
 import { serveUi, validEntryId } from "../ui-server.js";
-import { ART_KINDS, type ArtKind, type MetadataEntry } from "../wire.js";
+import {
+	ART_KINDS,
+	type ArtKind,
+	type Candidate,
+	type Image,
+	type MetadataEntry,
+	type MetadataStatus,
+} from "../wire.js";
 import {
 	type Found,
 	identityOf,
@@ -36,22 +43,6 @@ import {
 	Verdict,
 	wanted,
 } from "./rules.js";
-
-/** One game a search offers for "wrong game?". `key` becomes the operator's pin. */
-export interface Candidate {
-	readonly key: string;
-	readonly label: string;
-	readonly thumb?: string | null;
-}
-
-/** One image a source offers for a slot of a match. */
-export interface Image {
-	readonly url: string;
-	readonly thumb?: string;
-	readonly label?: string;
-	readonly width?: number;
-	readonly height?: number;
-}
 
 /** Fail a lookup with this when the source asks to slow down: the round stops and retries later. */
 export class SourceRateLimited extends Data.TaggedError("SourceRateLimited")<{
@@ -106,18 +97,6 @@ export interface MetadataPluginDef<S extends Schema.Top> {
 	/** Lookups in flight at once. Default 4. */
 	readonly concurrency?: number;
 	readonly commands?: Record<string, CliCommand<never>>;
-}
-
-/** `GET /__metadata/status`: the console's status line for this source. */
-export interface MetadataStatus {
-	readonly ready: boolean;
-	/** Why the source is not filling anything, in words. */
-	readonly reason?: string;
-	/** Entries worth a lookup, and how many of them this source has something for. */
-	readonly wanted: number;
-	readonly found: number;
-	readonly lastRun?: number;
-	readonly searchable: boolean;
 }
 
 export interface MetadataPlugin {

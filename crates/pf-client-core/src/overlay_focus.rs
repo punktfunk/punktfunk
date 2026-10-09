@@ -52,7 +52,7 @@ impl OverlayFocus {
     /// `PUNKTFUNK_OVERLAY_MASK=0`. The caller then keeps its window-focus path,
     /// which is the right signal everywhere the compositor actually moves focus.
     pub fn start() -> Option<OverlayFocus> {
-        if std::env::var("PUNKTFUNK_OVERLAY_MASK").is_ok_and(|v| v == "0" || v == "false") {
+        if crate::env_on("PUNKTFUNK_OVERLAY_MASK") == Some(false) {
             tracing::info!("overlay input mask disabled by PUNKTFUNK_OVERLAY_MASK");
             return None;
         }

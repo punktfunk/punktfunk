@@ -2,14 +2,15 @@
 //! `tests/golden/win-silent-*.txt` on every OS (`UPDATE_GOLDEN=1 cargo test` regenerates),
 //! plus the D5/D12 rules a silent run must keep whatever the wording does.
 
+mod common;
+
 use std::path::Path;
 
+use common::{fresh, golden, public_network, upgrade_without_inno};
 use punktfunk_setup::platform::windows::args::InnoArgs;
 use punktfunk_setup::platform::windows::exec::{FakePayload, Subst, WinExecutor};
 use punktfunk_setup::platform::windows::plan::Artifact;
-use punktfunk_setup::platform::windows::{
-    silent, FakeNet, NetCategory, NetProfile, TaskState, WinFacts, WinInstall,
-};
+use punktfunk_setup::platform::windows::{silent, FakeNet, WinFacts};
 use punktfunk_setup::seam::{BasePaths, Env, FakeRunner};
 use punktfunk_setup::ui::Plain;
 
@@ -21,56 +22,6 @@ const UPDATER_ARGS: [&str; 5] = [
     "/SP-",
     r"/LOG=C:\ProgramData\punktfunk\logs\update-0.36.0.log",
 ];
-
-fn fresh() -> WinFacts {
-    WinFacts {
-        os_build: 26200,
-        arch: "x64".into(),
-        installed: None,
-        host_env_present: false,
-        web_password_present: false,
-        mgmt_bind_set: false,
-        competing_hosts: vec![],
-        mgmt_port_in_use: false,
-        networks: vec![NetProfile {
-            name: "Home".into(),
-            category: NetCategory::Private,
-        }],
-        steam_audio_drivers: true,
-        tray_autostart: false,
-        vulkan_layer_registered: false,
-        web_task: TaskState::Absent,
-        scripting_task: TaskState::Absent,
-        inno_uninstaller: false,
-        client_installed: None,
-    }
-}
-
-fn upgrade() -> WinFacts {
-    WinFacts {
-        installed: Some(WinInstall {
-            version: Some("0.34.0".into()),
-            location: Some(r"C:\Program Files\punktfunk\".into()),
-        }),
-        host_env_present: true,
-        web_password_present: true,
-        tray_autostart: true,
-        vulkan_layer_registered: true,
-        web_task: TaskState::Disabled,
-        scripting_task: TaskState::Enabled,
-        ..fresh()
-    }
-}
-
-fn public_network() -> WinFacts {
-    WinFacts {
-        networks: vec![NetProfile {
-            name: "Netzwerk 2".into(),
-            category: NetCategory::Public,
-        }],
-        ..fresh()
-    }
-}
 
 fn args(list: &[&str]) -> InnoArgs {
     InnoArgs::parse(&list.iter().map(|s| (*s).to_string()).collect::<Vec<_>>())
@@ -110,23 +61,6 @@ fn transcript(
     (outcome, text)
 }
 
-fn golden(name: &str, actual: &str) {
-    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/golden")
-        .join(format!("{name}.txt"));
-    if std::env::var_os("UPDATE_GOLDEN").is_some() {
-        std::fs::write(&path, actual).expect("write golden");
-        return;
-    }
-    let expected = std::fs::read_to_string(&path).unwrap_or_else(|_| {
-        panic!("no golden for {name} — run UPDATE_GOLDEN=1 cargo test -p punktfunk-setup")
-    });
-    assert_eq!(
-        actual, expected,
-        "golden {name} changed (UPDATE_GOLDEN=1 to accept)"
-    );
-}
-
 // The fielded spawn, dry: the subcommand lines the runner smoke (WP3.3) will assert on.
 #[test]
 fn golden_silent_fresh_is_the_updater_spawn() {
@@ -160,7 +94,7 @@ fn golden_silent_public_warns_and_never_touches_the_profile() {
 #[test]
 fn golden_silent_mergetasks_reconfigures_an_upgrade() {
     let (outcome, text) = transcript(
-        &upgrade(),
+        &upgrade_without_inno(),
         Artifact::Host,
         false,
         &args(&[
@@ -179,7 +113,13 @@ fn golden_silent_mergetasks_reconfigures_an_upgrade() {
 
 #[test]
 fn golden_silent_uninstall() {
-    let (outcome, text) = transcript(&upgrade(), Artifact::Host, true, &args(&UPDATER_ARGS), true);
+    let (outcome, text) = transcript(
+        &upgrade_without_inno(),
+        Artifact::Host,
+        true,
+        &args(&UPDATER_ARGS),
+        true,
+    );
     assert_eq!(outcome, Ok(()));
     golden("win-silent-uninstall", &text);
     assert!(text.contains("service uninstall"));

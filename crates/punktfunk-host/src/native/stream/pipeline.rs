@@ -5,6 +5,7 @@
 use super::*;
 #[cfg(target_os = "linux")]
 use crate::capture::OutputLease;
+use crate::native::bitrate::{pyrowave_mode_kbps, resolve_bitrate_kbps_for, EncDerive};
 
 /// One built pipeline. `bitrate_kbps` is the rate the encoder actually opened at.
 pub(in crate::native) struct Pipeline {
@@ -45,9 +46,61 @@ pub(in crate::native) type PrepHandle = (
     std::thread::JoinHandle<Result<()>>,
 );
 
-/// Build display + pipeline at Welcome time. Same setters as [`StreamState::new`]'s inline arm,
-/// `pyrowave_bpp` the session's. Windows-only by policy (`handshake.rs` never spawns it
-/// elsewhere), not by construction.
+/// A virtual-display session's plan on `compositor`, `pyrowave_bpp` the session's. Bring-up
+/// and the Welcome-time prep both resolve here, so a prepared pipeline is built from the plan
+/// its session runs.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn resolve_plan(
+    bit_depth: u8,
+    hdr: bool,
+    chroma: crate::encode::ChromaFormat,
+    codec: crate::encode::Codec,
+    cursor_forward: bool,
+    multi_slice: bool,
+    compositor: crate::vdisplay::Compositor,
+    route: Option<&crate::vdisplay::GamescopeRoute>,
+    pyrowave_bpp: f64,
+    shard_payload: usize,
+    reframe_to: Option<(punktfunk_core::video_fit::VideoFit, (u32, u32))>,
+    join_live: bool,
+) -> crate::session_plan::SessionPlan {
+    let mut plan = crate::session_plan::SessionPlan::resolve(
+        bit_depth,
+        hdr,
+        chroma,
+        codec,
+        crate::session_plan::cursor_blend_for(
+            cursor_forward,
+            compositor,
+            codec,
+            bit_depth,
+            hdr,
+            route,
+        ),
+        cursor_forward,
+        multi_slice,
+    );
+    // After resolve: a self-painting gamescope node would otherwise get a second XFixes pointer.
+    plan.gamescope_cursor = crate::session_plan::gamescope_cursor_for(
+        compositor == pf_vdisplay::Compositor::Gamescope,
+        route,
+    );
+    plan.sdr10_native = crate::session_plan::sdr10_native_for(&plan, compositor, route);
+    plan.pyrowave_bpp = pyrowave_bpp;
+    if codec == crate::encode::Codec::PyroWave {
+        plan.wire_chunk = Some(shard_payload);
+    }
+    plan.reframe_to = reframe_to;
+    if join_live {
+        plan.sharing_live_display()
+    } else {
+        plan
+    }
+}
+
+/// Build display + pipeline at Welcome time, with the plan and display request bring-up would
+/// use. `reframe_to` is `Some` for a session `mode_conflict: join` admitted. Windows-only by
+/// policy (`handshake.rs` never spawns it elsewhere), not by construction.
 #[allow(clippy::too_many_arguments)]
 pub(in crate::native) fn prepare_display(
     compositor: crate::vdisplay::Compositor,
@@ -60,51 +113,50 @@ pub(in crate::native) fn prepare_display(
     bitrate_auto: bool,
     bit_depth: u8,
     hdr: bool,
-    enc_of: super::EncDerive,
+    enc_of: EncDerive,
     chroma: crate::encode::ChromaFormat,
     codec: crate::encode::Codec,
     pyrowave_bpp: f64,
     shard_payload: u16,
-    join_live: bool,
+    reframe_to: Option<(punktfunk_core::video_fit::VideoFit, (u32, u32))>,
     quit: &Arc<AtomicBool>,
     stop: &Arc<AtomicBool>,
     trace: &crate::bringup::Trace,
 ) -> Result<PreparedDisplay> {
-    let mut plan = crate::session_plan::SessionPlan::resolve(
+    let join_live = reframe_to.is_some();
+    let plan = resolve_plan(
         bit_depth,
         hdr,
         chroma,
         codec,
-        crate::session_plan::cursor_blend_for(
-            cursor_forward,
-            compositor,
-            codec,
-            bit_depth,
-            hdr,
-            None,
-        ),
         cursor_forward,
         multi_slice,
-    );
-    plan.gamescope_cursor = crate::session_plan::gamescope_cursor_for(
-        compositor == pf_vdisplay::Compositor::Gamescope,
+        compositor,
         None,
+        pyrowave_bpp,
+        shard_payload as usize,
+        reframe_to,
+        join_live,
     );
-    plan.sdr10_native = crate::session_plan::sdr10_native_for(&plan, compositor, None);
-    plan.pyrowave_bpp = pyrowave_bpp;
-    if codec == crate::encode::Codec::PyroWave {
-        plan.wire_chunk = Some(shard_payload as usize);
-    }
-    if join_live {
-        plan = plan.sharing_live_display();
-    }
+    let (_, metadata_composite) = super::cursor::composite_plan(
+        &plan,
+        cursor_forward,
+        compositor == pf_vdisplay::Compositor::Gamescope,
+    );
     let mut vd = crate::vdisplay::open(compositor)?;
-    vd.set_client_identity(client_identity);
-    vd.set_join_live(join_live);
-    vd.set_client_hdr(client_hdr);
-    vd.set_hdr(hdr);
-    vd.set_hw_cursor(cursor_forward);
-    vd.set_quit_flag(quit.clone());
+    crate::vdisplay::SessionParams {
+        client_fp: client_identity,
+        client_hdr,
+        hdr,
+        hw_cursor: cursor_forward || metadata_composite,
+        join_live,
+        quit: quit.clone(),
+        // Only Linux nests a launch in `create`, and Linux never preps.
+        launch: None,
+        route: None,
+        isolation: None,
+    }
+    .apply(&mut *vd);
     let _idd_setup_guard = crate::windows::idd::setup_guard(
         plan.capture,
         client_identity,
@@ -145,7 +197,7 @@ pub(super) fn build_pipeline_with_retry(
     bitrate_kbps: u32,
     bitrate_auto: bool,
     bit_depth: u8,
-    enc_of: super::EncDerive,
+    enc_of: EncDerive,
     plan: crate::session_plan::SessionPlan,
     quit: &Arc<AtomicBool>,
     stop: &Arc<AtomicBool>,
@@ -397,7 +449,7 @@ pub(super) fn build_pipeline(
     bitrate_kbps: u32,
     bitrate_auto: bool,
     bit_depth: u8,
-    enc_of: super::EncDerive,
+    enc_of: EncDerive,
     plan: crate::session_plan::SessionPlan,
     quit: &Arc<AtomicBool>,
     supersedes: Option<u64>,
@@ -442,7 +494,7 @@ pub(super) fn reattach_pipeline(
     bitrate_kbps: u32,
     bitrate_auto: bool,
     bit_depth: u8,
-    enc_of: super::EncDerive,
+    enc_of: EncDerive,
     plan: crate::session_plan::SessionPlan,
     client_hdr: Option<pf_frame::HdrMeta>,
     wire_seq_base: u32,
@@ -474,7 +526,7 @@ fn attach_pipeline(
     bitrate_kbps: u32,
     bitrate_auto: bool,
     bit_depth: u8,
-    enc_of: super::EncDerive,
+    enc_of: EncDerive,
     plan: crate::session_plan::SessionPlan,
     first_frame_budget: Option<std::time::Duration>,
     trace: Option<&crate::bringup::Trace>,

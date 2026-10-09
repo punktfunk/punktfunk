@@ -20,8 +20,7 @@
 
 use std::ops::Range;
 
-use cros_codecs::codec::h265::parser::Pps;
-use cros_codecs::codec::h265::parser::Sps;
+use cros_codecs::codec::h265::parser::ScalingLists;
 use pf_bitstream::h265::AuPlan;
 use pf_bitstream::h265::PicId;
 use pf_bitstream::h265::RefPic;
@@ -217,30 +216,9 @@ fn dxva_ref(slot: u8, rp: &RefPic) -> DxvaRefH265 {
     }
 }
 
-/// `DXVA_Qmatrix_HEVC` for a sequence that enables scaling lists.
-///
-/// 7.4.5 activation, in the order the spec resolves it:
-///
-/// 1. the PPS's, when it codes scaling list data;
-/// 2. otherwise the SPS's, when it codes scaling list data;
-/// 3. otherwise the Table 7-5/7-6 default lists.
-///
-/// libavcodec folds 1 and 2 into a ternary and stops: its parser seeds an SPS
-/// that codes nothing with the defaults, so leg 3 never has to be spelled out.
-/// cros-codecs does not — `ScalingLists` defaults to zeros and an SPS only
-/// fills under `scaling_list_enabled_flag && sps_scaling_list_data_present_flag`.
-/// Copying the ternary hands the driver 64 zeros per list on a legal "enabled,
-/// nothing coded" stream, and every residual dequantizes to nothing.
-///
-/// Leg 3 is the PPS lists, which this parser default-fills (Table 7-5/7-6 plus
-/// DC of 16) whenever the PPS codes none. SPS-coded data wins only when the
-/// PPS coded none; the PPS copy carries both leg 1 and leg 3.
-fn quantization_matrices(sps: &Sps, pps: &Pps) -> QmatrixHevc {
-    let sl = if sps.scaling_list_data_present_flag && !pps.scaling_list_data_present_flag {
-        &sps.scaling_list
-    } else {
-        &pps.scaling_list
-    };
+/// `DXVA_Qmatrix_HEVC` from the picture's active lists
+/// ([`AuPlan::active_scaling_lists`]).
+fn quantization_matrices(sl: &ScalingLists) -> QmatrixHevc {
     let mut qm = QmatrixHevc::zeroed();
     qm.ucScalingLists0 = sl.scaling_list_4x4;
     qm.ucScalingLists1 = sl.scaling_list_8x8;
@@ -484,9 +462,7 @@ pub fn plan_to_dxva_h265(
 
     // Built only when scaling lists are enabled; that is the only case the
     // buffer is submitted (see `DecodePlanDxvaH265::qmatrix`).
-    let qm = sps
-        .scaling_list_enabled_flag
-        .then(|| quantization_matrices(sps, pps));
+    let qm = plan.active_scaling_lists().map(quantization_matrices);
 
     let slice_ranges: Vec<Range<usize>> = plan.slices.iter().map(|s| s.nal.clone()).collect();
 

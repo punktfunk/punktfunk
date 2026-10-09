@@ -74,6 +74,18 @@ pub fn scroll_pattern_nv12(w: usize, h: usize, frame: usize) -> Vec<u8> {
     nv12
 }
 
+/// The pattern as R10G10B10A2 (`X2Bgr10`), `w * h * 4` bytes: each 8-bit channel widened by
+/// two bits, alpha opaque. For the 10-bit soaks.
+pub fn scroll_pattern_rgb10(w: usize, h: usize, frame: usize) -> Vec<u8> {
+    let mut px = scroll_pattern(w, h, frame);
+    for p in px.chunks_exact_mut(4) {
+        let (b, g, r) = (u32::from(p[0]), u32::from(p[1]), u32::from(p[2]));
+        let v = (r << 2) | ((g << 2) << 10) | ((b << 2) << 20) | (3 << 30);
+        p.copy_from_slice(&v.to_le_bytes());
+    }
+    px
+}
+
 /// Write `aus` to `path` with the `.idx` sidecar a `PUNKTFUNK_DUMP_VIDEO` capture carries
 /// (`offset len flags complete` per access unit), so a field hasher splits any codec's stream
 /// by access unit.
@@ -86,6 +98,34 @@ pub fn write_capture(path: &str, aus: &[&[u8]]) -> std::io::Result<()> {
     }
     std::fs::write(path, &data)?;
     std::fs::write(format!("{path}.idx"), idx)
+}
+
+/// Write the full stream to `{stem}.{ext}` and the view without the `lost` frames to
+/// `{stem}-dropS.{ext}`, each with its `.idx` sidecar.
+#[cfg(any(test, feature = "test-support"))]
+fn write_views(stem: &str, codec: crate::Codec, aus: &[crate::EncodedFrame], lost: &[usize]) {
+    let ext = match codec {
+        crate::Codec::H264 => "h264",
+        crate::Codec::Av1 => "obu",
+        _ => "h265",
+    };
+    let full: Vec<&[u8]> = aus.iter().map(|a| a.data.as_slice()).collect();
+    let view: Vec<&[u8]> = aus
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| !lost.contains(i))
+        .map(|(_, a)| a.data.as_slice())
+        .collect();
+    write_capture(&format!("{stem}.{ext}"), &full).expect("write");
+    write_capture(&format!("{stem}-dropS.{ext}"), &view).expect("write");
+}
+
+#[cfg(any(test, feature = "test-support"))]
+fn csv(v: &[usize]) -> String {
+    v.iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join(",")
 }
 
 /// The LTR anchor soak both slot-RFI backends run on hardware, from the environment:
@@ -220,12 +260,6 @@ impl Soak {
         if self.acked {
             anchors = (0..=last).filter(|&i| aus[i].recovery_anchor).collect();
         }
-        let csv = |v: &[usize]| {
-            v.iter()
-                .map(ToString::to_string)
-                .collect::<Vec<_>>()
-                .join(",")
-        };
         let Soak {
             w, h, fps, mbps, ..
         } = self;
@@ -250,23 +284,284 @@ impl Soak {
             assert!(aus[1..].iter().all(|a| !a.keyframe), "no IDR under acks");
         }
         if let Ok(dir) = std::env::var("PUNKTFUNK_SMOKE_DIR") {
-            let ext = match self.codec {
-                crate::Codec::H264 => "h264",
-                crate::Codec::Av1 => "obu",
-                _ => "h265",
-            };
-            let full: Vec<&[u8]> = aus.iter().map(|a| a.data.as_slice()).collect();
-            let view: Vec<&[u8]> = aus
-                .iter()
-                .enumerate()
-                .filter(|(i, _)| !lost.contains(i))
-                .map(|(_, a)| a.data.as_slice())
-                .collect();
             let mode = if self.acked { "acked" } else { "anchor" };
-            write_capture(&format!("{dir}/{name}-{mode}.{ext}"), &full).expect("write");
-            write_capture(&format!("{dir}/{name}-{mode}-dropS.{ext}"), &view).expect("write");
+            write_views(&format!("{dir}/{name}-{mode}"), self.codec, &aus, &lost);
         }
     }
+}
+
+/// The NVENC wave soak both sessions run on hardware: `PF_WAVE_SOAK` (12) waves, each
+/// answering a frame lost `PF_WAVE_LAG` (2) ahead of its start, then `PF_WAVE_GAP` (12) plain
+/// frames. `PF_WAVE_SMOKE=WxH[:bits[:fps[:mbps]]]` (`256x256:8:120:1`; `10` bits has the
+/// caller feed 10-bit frames). `PF_WAVE_SPOIL=1` loses a frame inside every sweep so the wave
+/// queued behind it must be exact; `PF_WAVE_IDR=1` forces an IDR into every wave, which
+/// flushes it. `PF_WAVE_ANCHOR=1` answers each loss with an RFI anchor instead (leave
+/// `PUNKTFUNK_NVENC_IR_ALWAYS` unset), and only it takes another lag or `PF_WAVE_CODEC=av1`:
+/// NVENC AV1 never waves.
+#[cfg(all(any(test, feature = "test-support"), feature = "nvenc"))]
+pub struct WaveSoak {
+    pub w: u32,
+    pub h: u32,
+    pub ten_bit: bool,
+    pub fps: u32,
+    pub mbps: u64,
+    pub codec: crate::Codec,
+    waves: usize,
+    gap: usize,
+    lag: usize,
+    spoil: bool,
+    idr: bool,
+    anchor: bool,
+}
+
+#[cfg(all(any(test, feature = "test-support"), feature = "nvenc"))]
+impl WaveSoak {
+    pub fn from_env() -> WaveSoak {
+        let shape = std::env::var("PF_WAVE_SMOKE").unwrap_or_else(|_| "256x256:8:120:1".into());
+        let count = |k: &str, d: usize| {
+            std::env::var(k)
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(d)
+        };
+        let on = |k: &str| std::env::var(k).is_ok_and(|v| v == "1");
+        let mut parts = shape.split(':');
+        let (w, h) = parts
+            .next()
+            .and_then(|s| s.split_once('x'))
+            .map(|(w, h)| (w.parse::<u32>().unwrap(), h.parse::<u32>().unwrap()))
+            .expect("PF_WAVE_SMOKE=WxH[:bits[:fps[:mbps]]]");
+        let soak = WaveSoak {
+            w,
+            h,
+            ten_bit: parts.next().is_some_and(|b| b == "10"),
+            fps: parts.next().map_or(60, |f| f.parse().unwrap()),
+            mbps: parts
+                .next()
+                .map_or(if w >= 1920 { 86 } else { 10 }, |m| m.parse().unwrap()),
+            codec: if std::env::var("PF_WAVE_CODEC").is_ok_and(|c| c == "av1") {
+                crate::Codec::Av1
+            } else {
+                crate::Codec::H265
+            },
+            waves: count("PF_WAVE_SOAK", 12),
+            gap: count("PF_WAVE_GAP", 12),
+            lag: count("PF_WAVE_LAG", 2),
+            spoil: on("PF_WAVE_SPOIL"),
+            idr: on("PF_WAVE_IDR"),
+            anchor: on("PF_WAVE_ANCHOR"),
+        };
+        assert!(
+            soak.lag >= 1 && (soak.lag == 2 || soak.anchor),
+            "PF_WAVE_LAG=1.. with PF_WAVE_ANCHOR=1"
+        );
+        assert_ne!(
+            soak.anchor,
+            on("PUNKTFUNK_NVENC_IR_ALWAYS"),
+            "PUNKTFUNK_NVENC_IR_ALWAYS=1 makes every ask a wave; PF_WAVE_ANCHOR=1 wants anchors"
+        );
+        assert!(
+            !(soak.anchor && (soak.spoil || soak.idr)),
+            "PF_WAVE_ANCHOR runs alone"
+        );
+        assert!(
+            soak.codec != crate::Codec::Av1 || soak.anchor,
+            "NVENC AV1 never waves: soak it with PF_WAVE_ANCHOR=1"
+        );
+        soak
+    }
+
+    /// Drive `enc`, whose session `session` reaches, with `frame(i)` and check every AU: IDRs
+    /// only where forced, recovery marks on every wave start and unspoiled close, the close
+    /// bit on those closes, anchors where asked. The full stream and the view without the
+    /// lost frames land in `PUNKTFUNK_SMOKE_DIR` (default `.`) as `{name}-wave.*` and
+    /// `{name}-wave-dropS.*`, with the `.idx` sidecars `gpu_parity`'s field hashers read.
+    pub fn run<E: crate::Encoder>(
+        &self,
+        name: &str,
+        enc: &mut E,
+        session: fn(&E) -> &crate::nvenc_session::NvSession,
+        mut frame: impl FnMut(usize) -> pf_frame::CapturedFrame,
+    ) {
+        let WaveSoak {
+            waves,
+            gap,
+            lag,
+            spoil,
+            idr,
+            anchor,
+            ..
+        } = *self;
+        assert!(
+            enc.caps().supports_rfi,
+            "{name}: the GPU invalidates references"
+        );
+        let cycle = session(enc).wave_cycle() as usize;
+        assert!(cycle >= 2 || anchor, "the wave is on");
+        assert!(
+            cycle > 3 || !spoil,
+            "the spoiling loss lands inside the sweep"
+        );
+        // Wave k starts at lag + 1 + k * period; its lost frame is `lag` before that. A
+        // spoiled wave is followed by the queued one, so its period holds two cycles.
+        let period = if spoil {
+            2 * cycle + gap
+        } else {
+            cycle.max(lag) + gap
+        };
+        let base = lag + 1;
+        let last = base + waves * period;
+        let (mut m, mut aus) = (WaveMarks::default(), Vec::new());
+        for i in 0..=last {
+            match (i >= base && (i - base) / period < waves).then(|| (i - base) % period) {
+                Some(0) => {
+                    let l = (i - lag) as i64;
+                    assert!(enc.invalidate_ref_frames(l, l), "the ask is answered");
+                    m.lost.push(i - lag);
+                    let s = session(enc);
+                    if anchor {
+                        assert!(s.pending_anchor && s.wave.is_none(), "an anchor");
+                        m.anchors.push(i);
+                    } else {
+                        assert_eq!(s.wave.map(|w| w.index), Some(0), "a fresh wave");
+                        m.starts.push(i);
+                        if !spoil && !idr {
+                            m.closes.push(i + cycle - 1);
+                        }
+                    }
+                }
+                Some(2) if idr => {
+                    enc.request_keyframe();
+                    m.idrs.push(i);
+                }
+                Some(3) if spoil => {
+                    let l = (i - 1) as i64;
+                    assert!(enc.invalidate_ref_frames(l, l), "a loss inside the sweep");
+                    let s = session(enc);
+                    assert!(s.wave_spoiled && s.wave_queued, "spoiled, one queued");
+                    m.lost.push(i - 1);
+                    m.starts.push(i - 3 + cycle);
+                    m.closes.push(i - 3 + 2 * cycle - 1);
+                }
+                _ => {}
+            }
+            enc.submit_indexed(&frame(i), i as u32).expect("submit");
+            while let Some(au) = enc.poll().expect("poll") {
+                aus.push(au);
+            }
+            if m.idrs.last() == Some(&i) {
+                assert!(session(enc).wave.is_none(), "the IDR flushed the wave");
+            }
+        }
+        enc.flush().ok();
+        while let Ok(Some(au)) = enc.poll() {
+            aus.push(au);
+        }
+        assert_eq!(aus.len(), last + 1, "one AU per submitted frame");
+        m.check(&aus);
+        let dir = std::env::var("PUNKTFUNK_SMOKE_DIR").unwrap_or_else(|_| ".".into());
+        write_views(&format!("{dir}/{name}-wave"), self.codec, &aus, &m.lost);
+        println!(
+            "{name} wave soak: {}x{} {}-bit {} fps {} Mbps {:?} cycle={cycle} gap={gap} \
+             waves={waves} aus={} lost={} closes={} anchors={} spoil={spoil} idrs={}",
+            self.w,
+            self.h,
+            if self.ten_bit { 10 } else { 8 },
+            self.fps,
+            self.mbps,
+            self.codec,
+            aus.len(),
+            csv(&m.lost),
+            csv(&m.closes),
+            csv(&m.anchors),
+            csv(&m.idrs)
+        );
+    }
+}
+
+/// Where a wave soak put its losses, and the AUs that must carry a mark for them.
+#[cfg(all(any(test, feature = "test-support"), feature = "nvenc"))]
+#[derive(Default)]
+struct WaveMarks {
+    lost: Vec<usize>,
+    starts: Vec<usize>,
+    closes: Vec<usize>,
+    idrs: Vec<usize>,
+    anchors: Vec<usize>,
+}
+
+#[cfg(all(any(test, feature = "test-support"), feature = "nvenc"))]
+impl WaveMarks {
+    /// IDRs only where forced, recovery marks on every wave start and unspoiled close, the
+    /// close bit on those closes, anchors where asked.
+    fn check(&self, aus: &[crate::EncodedFrame]) {
+        for (i, au) in aus.iter().enumerate() {
+            assert_eq!(
+                au.keyframe,
+                i == 0 || self.idrs.contains(&i),
+                "AU {i}: IDRs only where forced"
+            );
+            assert_eq!(
+                au.recovery_point,
+                self.starts.contains(&i) || self.closes.contains(&i),
+                "AU {i}: marks on every start and unspoiled close"
+            );
+            assert_eq!(
+                au.recovery_close,
+                self.closes.contains(&i),
+                "AU {i}: the close bit on every unspoiled close"
+            );
+            assert_eq!(
+                au.recovery_anchor,
+                self.anchors.contains(&i),
+                "AU {i}: anchors where asked"
+            );
+        }
+    }
+}
+
+/// Encode four frames, then per entry of `rates` retarget in place and encode four more.
+/// The opening IDR must stay the only keyframe: `resetEncoder=0` / `forceIDR=0` never
+/// restart the stream. The tail drained after `flush` counts toward the last run.
+#[cfg(any(test, feature = "test-support"))]
+pub fn reconfigure_no_idr(
+    enc: &mut dyn crate::Encoder,
+    mut frame: impl FnMut(usize) -> pf_frame::CapturedFrame,
+    rates: &[u64],
+) {
+    const RUN: usize = 4;
+    for run in 0..=rates.len() {
+        if let Some(bps) = run.checked_sub(1).map(|k| rates[k]) {
+            assert!(
+                enc.reconfigure_bitrate(bps),
+                "the in-place reconfigure to {bps} bps must succeed"
+            );
+        }
+        let (mut aus, mut keyframes) = (0usize, 0usize);
+        let mut take = |au: crate::EncodedFrame| {
+            aus += 1;
+            keyframes += usize::from(au.keyframe);
+        };
+        for i in run * RUN..(run + 1) * RUN {
+            enc.submit_indexed(&frame(i), i as u32).expect("submit");
+            while let Some(au) = enc.poll().expect("poll") {
+                take(au);
+            }
+        }
+        if run == rates.len() {
+            enc.flush().ok();
+            while let Ok(Some(au)) = enc.poll() {
+                take(au);
+            }
+        }
+        assert!(aus > 0, "run {run}: no AUs");
+        assert_eq!(
+            keyframes,
+            usize::from(run == 0),
+            "run {run}: the opening IDR only — an in-place rate retarget must not emit one"
+        );
+    }
+    println!("reconfigure: {rates:?} bps in place, no IDR after the opening one");
 }
 
 /// Fail unless the `impl` block at `marker` in `impl_src` writes every [`crate::Encoder`]

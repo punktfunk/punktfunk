@@ -349,6 +349,19 @@ public final class PunktfunkConnection: @unchecked Sendable {
             default: return nil
             }
         }
+
+        /// The host's `CompositorPref::as_str` name: what the console writes.
+        public var canonicalName: String {
+            switch self {
+            case .auto: return "auto"
+            case .kwin: return "kwin"
+            case .wlroots: return "wlroots"
+            case .mutter: return "mutter"
+            case .gamescope: return "gamescope"
+            case .hyprland: return "hyprland"
+            case .windows: return "windows"
+            }
+        }
     }
 
     /// Which virtual gamepad the host creates for this session's pads (the
@@ -358,7 +371,8 @@ public final class PunktfunkConnection: @unchecked Sendable {
     /// adaptive-trigger / player-LED) writes come back on the HID-output plane
     /// (`nextHidOutput`). `.xboxOne` is an X-Box-Series-glyph variant of `.xbox360` (same
     /// buttons/sticks/triggers + rumble, no touchpad/motion/lightbar). The host's actual
-    /// choice is `resolvedGamepad`.
+    /// choice is `resolvedGamepad`. `clients/shared/gamepad-kind-vectors.json` pins every case
+    /// against core's `GamepadPref`; a test pins the raw values to the header.
     public enum GamepadType: UInt32, CaseIterable, Sendable {
         case auto = 0
         case xbox360 = 1
@@ -397,9 +411,18 @@ public final class PunktfunkConnection: @unchecked Sendable {
         /// Xbox Elite Series 2 (Windows UMDF hosts; other hosts fold it to `.xbox360`). No picker
         /// offers it; it exists so the host's echo and the dev hook's name round-trip.
         case xboxElite = 11
+        // The host-built pads below are never captured here. They exist so the echo and the dev
+        // hook's name round-trip and the motion answer matches the host's.
+        case eightBitDoUltimate2 = 12
+        case eightBitDoPro2 = 13
+        case eightBitDoPro3 = 14
+        case horipadSteam = 15
+        case joyConPair = 16
+        case switch2Pro = 17
+        case switch2GameCube = 18
 
-        /// Loose name parsing for env/dev hooks: the same names as the host's
-        /// `GamepadPref::from_name`.
+        /// Loose name parsing for env/dev hooks: the host's `GamepadPref::from_name` names,
+        /// trimmed and in any case.
         public init?(name: String) {
             switch name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
             case "auto", "default": self = .auto
@@ -417,13 +440,46 @@ public final class PunktfunkConnection: @unchecked Sendable {
             case "dualsenseedge", "dualsense-edge", "edge", "dsedge": self = .dualSenseEdge
             case "switchpro", "switch-pro", "switch", "procontroller", "pro-controller":
                 self = .switchPro
+            case "8bitdoultimate2", "8bitdo-ultimate-2", "ultimate2": self = .eightBitDoUltimate2
+            case "8bitdopro2", "8bitdo-pro-2", "pro2": self = .eightBitDoPro2
+            case "8bitdopro3", "8bitdo-pro-3", "pro3": self = .eightBitDoPro3
+            case "horipadsteam", "horipad-steam", "hori": self = .horipadSteam
+            case "joyconpair", "joycon-pair", "joycons": self = .joyConPair
+            case "switch2pro", "switch2-pro", "procontroller2": self = .switch2Pro
+            case "switch2gamecube", "switch2-gamecube", "gamecube": self = .switch2GameCube
             default: return nil
+            }
+        }
+
+        /// The host's `GamepadPref::as_str` name: what the console and the dev hook write.
+        public var canonicalName: String {
+            switch self {
+            case .auto: return "auto"
+            case .xbox360: return "xbox360"
+            case .dualSense: return "dualsense"
+            case .xboxOne: return "xboxone"
+            case .dualShock4: return "dualshock4"
+            case .steamController: return "steamcontroller"
+            case .steamDeck: return "steamdeck"
+            case .dualSenseEdge: return "dualsenseedge"
+            case .switchPro: return "switchpro"
+            case .steamController2: return "steamcontroller2"
+            case .steamController2Puck: return "steamcontroller2puck"
+            case .xboxElite: return "xboxelite"
+            case .eightBitDoUltimate2: return "8bitdoultimate2"
+            case .eightBitDoPro2: return "8bitdopro2"
+            case .eightBitDoPro3: return "8bitdopro3"
+            case .horipadSteam: return "horipadsteam"
+            case .joyConPair: return "joyconpair"
+            case .switch2Pro: return "switch2pro"
+            case .switch2GameCube: return "switch2gamecube"
             }
         }
 
         /// Whether this backend has a motion plane at all — whether a `sendMotion` sample to a
         /// host running it can reach the game, or is decoded and dropped. Mirrors the host's
-        /// `GamepadPref::has_motion`; no X-Box pad, Elite included, has a gyro in its HID contract.
+        /// `GamepadPref::has_motion`: no X-Box pad, Elite included, and not the Switch 2 GameCube
+        /// pad has a gyro in its HID contract.
         ///
         /// This answers for ONE backend. To ask it of a particular pad, go through
         /// `PunktfunkConnection.motionReaches(declared:)` — `resolvedGamepad` is not that pad's
@@ -437,9 +493,11 @@ public final class PunktfunkConnection: @unchecked Sendable {
         public var hasMotion: Bool {
             switch self {
             case .auto: return true // unknown; assume it can, see above
-            case .xbox360, .xboxOne, .xboxElite: return false
+            case .xbox360, .xboxOne, .xboxElite, .switch2GameCube: return false
             case .dualSense, .dualShock4, .dualSenseEdge, .switchPro,
-                 .steamController, .steamDeck, .steamController2, .steamController2Puck:
+                 .steamController, .steamDeck, .steamController2, .steamController2Puck,
+                 .eightBitDoUltimate2, .eightBitDoPro2, .eightBitDoPro3, .horipadSteam,
+                 .joyConPair, .switch2Pro:
                 return true
             }
         }

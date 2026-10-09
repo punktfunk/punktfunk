@@ -12,6 +12,7 @@ use super::*;
 
 /// The shared pipeline; a host with no pad source has no use for it.
 #[cfg(any(target_os = "windows", target_os = "linux", test))]
+#[cfg_attr(target_os = "macos", allow(dead_code, reason = "tests only on macOS"))]
 mod engine;
 #[cfg(target_os = "windows")]
 #[path = "pad_audio/windows.rs"]
@@ -75,7 +76,7 @@ impl ShowGen {
     }
 }
 
-#[cfg(any(target_os = "windows", test))]
+#[cfg(target_os = "windows")]
 pub(super) static SHOWN: ShowGen = ShowGen::new();
 
 /// [`stop`](PadAudioHandle::stop) flags and joins; [`signal`](PadAudioHandle::signal) only flags

@@ -12,7 +12,7 @@
 
 use crate::capture::{self, Capturer, SyntheticCapturer};
 use crate::encode::{self, Codec, EncodedFrame, Encoder};
-use anyhow::{anyhow, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use punktfunk_core::packet::{FLAG_PIC, FLAG_SOF};
 use punktfunk_core::{Config, Role, Session};
 use std::fs::File;
@@ -53,6 +53,124 @@ pub struct Options {
     /// Set this and `PUNKTFUNK_PYROWAVE_STREAMED_AU=1` to drain via `poll_chunk` and
     /// the streamed-AU loopback; without both, that path cannot run here.
     pub wire_chunk: Option<usize>,
+}
+
+/// `spike` flags. A bad value is an error.
+pub fn parse_spike(args: &[String]) -> Result<Options> {
+    let mut source = Source::Portal;
+    let mut width = 1920u32;
+    let mut height = 1080u32;
+    let mut fps = 60u32;
+    let mut seconds = 5u32;
+    let mut codec = Codec::H265;
+    let mut hdr = false;
+    let mut bitrate_mbps = 20u64;
+    let mut out: Option<PathBuf> = None;
+    let mut loopback = true;
+    let mut wire_chunk: Option<usize> = None;
+
+    let mut i = 0;
+    while i < args.len() {
+        let arg = args[i].as_str();
+        let mut next = || {
+            i += 1;
+            args.get(i)
+                .cloned()
+                .ok_or_else(|| anyhow::anyhow!("missing value for {arg}"))
+        };
+        match arg {
+            "--source" => {
+                source = match next()?.as_str() {
+                    "synthetic" => Source::Synthetic,
+                    "synthetic-nv12" => Source::SyntheticNv12,
+                    "portal" => Source::Portal,
+                    // `kwin-virtual` is what this was called when only KWin had one.
+                    "virtual" | "kwin-virtual" => Source::Virtual,
+                    other => {
+                        bail!(
+                            "unknown --source '{other}' \
+                             (synthetic|synthetic-nv12|portal|virtual)"
+                        )
+                    }
+                }
+            }
+            "--width" => {
+                width = next()?
+                    .parse()
+                    .map_err(|_| anyhow::anyhow!("bad --width"))?
+            }
+            "--height" => {
+                height = next()?
+                    .parse()
+                    .map_err(|_| anyhow::anyhow!("bad --height"))?
+            }
+            "--fps" => fps = next()?.parse().map_err(|_| anyhow::anyhow!("bad --fps"))?,
+            "--seconds" => {
+                seconds = next()?
+                    .parse()
+                    .map_err(|_| anyhow::anyhow!("bad --seconds"))?
+            }
+            "--codec" => {
+                codec = match next()?.as_str() {
+                    "h264" => Codec::H264,
+                    "h265" | "hevc" => Codec::H265,
+                    "av1" => Codec::Av1,
+                    // Needs `pyrowave` and `PUNKTFUNK_ENCODER=pyrowave` (raw-dmabuf passthrough).
+                    "pyrowave" => Codec::PyroWave,
+                    other => bail!("unknown --codec '{other}' (h264|h265|av1|pyrowave)"),
+                }
+            }
+            "--hdr" => hdr = true,
+            "--bitrate" => {
+                bitrate_mbps = next()?
+                    .parse()
+                    .map_err(|_| anyhow::anyhow!("bad --bitrate (Mbps)"))?
+            }
+            "--out" => out = Some(PathBuf::from(next()?)),
+            "--no-loopback" => loopback = false,
+            "--wire-chunk" => {
+                let v: usize = next()?
+                    .parse()
+                    .map_err(|_| anyhow::anyhow!("bad --wire-chunk (bytes)"))?;
+                wire_chunk = (v > 0).then_some(v);
+            }
+            "-h" | "--help" => {
+                crate::print_usage();
+                std::process::exit(0);
+            }
+            other => bail!("unknown argument '{other}' (try --help)"),
+        }
+        i += 1;
+    }
+
+    if fps == 0 || width == 0 || height == 0 || seconds == 0 {
+        bail!("--fps/--width/--height/--seconds must be > 0");
+    }
+
+    let out = out.unwrap_or_else(|| {
+        let ext = match codec {
+            Codec::H264 => "h264",
+            Codec::H265 => "h265",
+            Codec::Av1 => "obu",
+            // Concatenated packets; not an FFmpeg-playable stream.
+            Codec::PyroWave => "pyrowave",
+        };
+        std::env::temp_dir().join(format!("punktfunk-spike.{ext}"))
+    });
+
+    Ok(Options {
+        source,
+        width,
+        height,
+        fps,
+        seconds,
+        codec,
+        hdr,
+        bitrate_bps: bitrate_mbps.saturating_mul(1_000_000),
+        out,
+        loopback,
+        wire_chunk,
+    })
 }
 
 pub fn run(opts: Options) -> Result<()> {

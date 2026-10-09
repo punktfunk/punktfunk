@@ -1,7 +1,7 @@
 //! Persistent worker that AES-GCM-seals the back half of a large frame while the
 //! send thread seals the front. [`Session`](super::Session) owns the split;
 //! this module owns the lane and [`seal_wire_slice`]. Byte-identical to a
-//! sequential pass; pinned by `zero_copy_seal_matches_wrapper_path`.
+//! sequential pass; pinned by `zero_copy_seal_matches_one_by_one_path`.
 
 use crate::crypto::SessionCrypto;
 use crate::error::Result;

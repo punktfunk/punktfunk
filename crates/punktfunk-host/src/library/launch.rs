@@ -43,6 +43,7 @@ pub struct LaunchTarget {
     pub command: Option<String>,
     /// Open this launch on an empty workspace of the streamed head, where the
     /// compositor can place it ([`crate::library::OnWindow::own_workspace`]).
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code, reason = "Linux places it"))]
     pub own_workspace: bool,
     /// The entry's own placement block, applied to the game's first window.
     /// `own_workspace` above is the workspace key already resolved against the
@@ -97,16 +98,10 @@ fn exec_recipe(entry: &GameEntry) -> Option<ExecRecipe> {
 // Lives here so URI construction stays with launch (design D1). Unparseable
 // or hostile → `None`, never a partial command.
 
-/// Digits-only Steam appid (or 64-bit [`shortcut_gameid`]). Shared kind because
+/// Digits-only Steam appid, or a non-Steam shortcut's 64-bit gameid. Shared kind because
 /// `rungameid` takes either. Both platform recipe maps use it.
 pub(crate) fn valid_steam_appid(value: &str) -> bool {
     !value.is_empty() && value.bytes().all(|b| b.is_ascii_digit())
-}
-
-/// 64-bit `rungameid` for a non-Steam shortcut: high dword = 32-bit appid,
-/// low dword = marker `0x0200_0000`. The bare 32-bit appid does not launch it.
-pub(crate) fn shortcut_gameid(appid: u32) -> u64 {
-    ((appid as u64) << 32) | 0x0200_0000
 }
 
 /// `steam_ui` values (design D4). Closed set, validated inbound and outbound
@@ -263,19 +258,10 @@ mod tests {
     #[test]
     fn steam_appid_validation_accepts_appids_and_shortcut_gameids() {
         assert!(valid_steam_appid("570"));
-        assert!(valid_steam_appid(
-            &shortcut_gameid(2_456_789_012).to_string()
-        ));
+        assert!(valid_steam_appid("10551828459745705984"));
         assert!(!valid_steam_appid(""));
         assert!(!valid_steam_appid("570; rm -rf ~"));
         assert!(!valid_steam_appid("-1"));
-    }
-    /// Launch vocabulary, not enumeration: the scanner supplies the 32-bit appid only.
-    #[test]
-    fn shortcut_gameid_composes_appid_and_marker() {
-        let id = shortcut_gameid(0x8000_0000);
-        assert_eq!(id >> 32, 0x8000_0000, "high dword is the shortcut appid");
-        assert_eq!(id & 0xFFFF_FFFF, 0x0200_0000, "low dword is the marker");
     }
     #[test]
     fn rockstar_uninstall_entries_name_their_title() {

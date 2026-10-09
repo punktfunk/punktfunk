@@ -1,6 +1,9 @@
 //! A short-lived PipeWire connection for one registry query on the calling thread: connect,
 //! run sync [`rounds`](OneShot::round), drop. All rounds share one deadline, and a core error
 //! ends the query, so a sick-but-connected daemon never wedges the caller.
+//!
+//! Twin of pf-client-core's `pw_oneshot.rs`, which copies this file because clients never link
+//! host crates. A fix to one belongs in both.
 
 use anyhow::{anyhow, bail, Context, Result};
 use pipewire as pw;
@@ -28,14 +31,7 @@ pub(super) struct OneShot {
 impl OneShot {
     /// `timeout` bounds every [`round`](Self::round) together, not each one.
     pub(super) fn connect(label: &'static str, timeout: Duration) -> Result<OneShot> {
-        pf_capture::pwinit::ensure_init();
-        let mainloop =
-            pw::main_loop::MainLoopRc::new(None).with_context(|| format!("{label} MainLoop"))?;
-        let context = pw::context::ContextRc::new(&mainloop, None)
-            .with_context(|| format!("{label} Context"))?;
-        let core = context
-            .connect_rc(None)
-            .with_context(|| format!("{label} connect (is PipeWire running in this session?)"))?;
+        let (mainloop, core) = super::pw_setup::pw_connect(label)?;
         let registry = core
             .get_registry_rc()
             .with_context(|| format!("{label} registry"))?;

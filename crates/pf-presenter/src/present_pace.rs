@@ -478,7 +478,7 @@ enum PaceMode {
 /// A/B for the pacing, and the way out where a panel takes it badly.
 fn vrr_latency_pacing() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| std::env::var("PUNKTFUNK_VRR_PACE").map_or(true, |v| v != "0"))
+    *ON.get_or_init(|| pf_client_core::env_on("PUNKTFUNK_VRR_PACE") != Some(false))
 }
 
 /// Plays frames on the source cadence: a [`CadenceClock`] plus the two client

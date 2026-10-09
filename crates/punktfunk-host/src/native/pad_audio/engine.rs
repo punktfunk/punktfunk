@@ -188,8 +188,8 @@ fn build_lanes(kinds: u8) -> Result<Vec<Lane>, opus::Error> {
     Ok(lanes)
 }
 
-/// Capture death reopens with [`INJECTOR_REOPEN_BACKOFF`] (encoders + seq kept). ConnectionLost
-/// or a gone datagram path ends the thread; a single TooLarge costs that frame only.
+/// Capture death reopens after [`crate::audio::REOPEN_BACKOFF`] (encoders + seq kept).
+/// ConnectionLost or a gone datagram path ends the thread; one TooLarge costs that frame only.
 pub(super) fn pad_audio_thread<C: crate::audio::AudioCapturer>(
     conn: super::link::SessionLink,
     pad: u8,
@@ -198,7 +198,7 @@ pub(super) fn pad_audio_thread<C: crate::audio::AudioCapturer>(
     stop: Arc<AtomicBool>,
 ) {
     // Same boost as session send: live pad audio is a ≤10 ms cadence.
-    crate::native::boost_thread_priority(false);
+    pf_frame::thread_qos::boost_thread_priority(false);
     let mut lanes = match build_lanes(kinds) {
         Ok(l) => l,
         Err(e) => {
@@ -227,7 +227,7 @@ pub(super) fn pad_audio_thread<C: crate::audio::AudioCapturer>(
     );
     'session: while !stop.load(Ordering::SeqCst) {
         if capturer.is_none() {
-            if last_failed.is_some_and(|t| t.elapsed() < INJECTOR_REOPEN_BACKOFF) {
+            if last_failed.is_some_and(|t| t.elapsed() < crate::audio::REOPEN_BACKOFF) {
                 std::thread::sleep(std::time::Duration::from_millis(200));
                 continue;
             }

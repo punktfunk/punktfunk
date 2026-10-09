@@ -311,6 +311,7 @@ pub fn launch_session_command(
 }
 
 /// A user manager to open a scope under; without one `systemd-run --user` fails the launch.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code, reason = "Linux only"))]
 fn user_manager_up() -> bool {
     std::env::var_os("XDG_RUNTIME_DIR")
         .is_some_and(|dir| std::path::Path::new(&dir).join("systemd/private").exists())

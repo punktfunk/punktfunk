@@ -12,20 +12,6 @@
 use super::shared::*;
 use crate::store::{self, index, jobs, manifest, sources};
 
-async fn blocking<T, F>(f: F) -> Result<T, Response>
-where
-    F: FnOnce() -> T + Send + 'static,
-    T: Send + 'static,
-{
-    tokio::task::spawn_blocking(f).await.map_err(|e| {
-        tracing::error!("plugin-store worker panicked: {e}");
-        api_error(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "The plugin store stopped responding",
-        )
-    })
-}
-
 // ---------------------------------------------------------------- wire shapes
 
 /// The console greys out rows this host cannot install.
@@ -377,7 +363,7 @@ fn an_update_is_only_ever_newer() {
     )
 )]
 pub(crate) async fn get_catalog() -> Response {
-    match blocking(|| build_catalog(false)).await {
+    match blocking("plugin store", || build_catalog(false)).await {
         Ok(c) => Json(c).into_response(),
         Err(e) => e,
     }
@@ -398,7 +384,7 @@ pub(crate) async fn get_catalog() -> Response {
     )
 )]
 pub(crate) async fn refresh_catalog() -> Response {
-    match blocking(|| build_catalog(true)).await {
+    match blocking("plugin store", || build_catalog(true)).await {
         Ok(c) => {
             crate::events::emit(crate::events::EventKind::StoreChanged);
             Json(c).into_response()
@@ -425,7 +411,7 @@ pub(crate) async fn refresh_catalog() -> Response {
 pub(crate) async fn list_installed() -> Response {
     // Lease registry is in-memory; read it here, not inside `spawn_blocking`.
     let live: Vec<String> = super::plugins::live_plugin_ids();
-    match blocking(move || build_installed(&live)).await {
+    match blocking("plugin store", move || build_installed(&live)).await {
         Ok(v) => Json(v).into_response(),
         Err(e) => e,
     }
@@ -463,7 +449,7 @@ pub(crate) async fn install_plugin(
             req.spec.as_deref(),
         ) {
             (Some(source), Some(id), None) => {
-                let found = match blocking({
+                let found = match blocking("plugin store", {
                     let (source, id) = (source.to_string(), id.to_string());
                     move || store::find_entry(&source, &id)
                 })
@@ -542,7 +528,7 @@ pub(crate) async fn uninstall_plugin(
     // `@scope/plugin-*` also matches `@punktfunk/plugin-kit`, a library plugins depend on.
     // Only a top-level install (`installed_packages`) may be removed.
     let pkg = req.pkg.clone();
-    let known = match blocking(move || {
+    let known = match blocking("plugin store", move || {
         store::installed_packages(&store::plugins_dir())
             .iter()
             .any(|p| p.pkg == pkg)
@@ -617,7 +603,7 @@ pub(crate) async fn get_job(Path(id): Path<String>) -> Response {
     )
 )]
 pub(crate) async fn list_sources() -> Response {
-    match blocking(|| {
+    match blocking("plugin store", || {
         store::cached_catalogs()
             .into_iter()
             .map(|st| SourceView {
@@ -667,7 +653,7 @@ pub(crate) async fn put_source(
         url: input.url,
         public_key: input.public_key.filter(|k| !k.trim().is_empty()),
     };
-    let saved = blocking(move || {
+    let saved = blocking("plugin store", move || {
         let r = sources::put(source);
         if r.is_ok() {
             // A redefined source must not keep serving the old cache.
@@ -706,7 +692,7 @@ pub(crate) async fn delete_source(Path(name): Path<String>) -> Response {
             "the built-in source cannot be removed",
         );
     }
-    let removed = blocking(move || {
+    let removed = blocking("plugin store", move || {
         let r = sources::remove(&name);
         if matches!(r, Ok(true)) {
             store::drop_source_cache(&name);
@@ -740,7 +726,7 @@ pub(crate) async fn delete_source(Path(name): Path<String>) -> Response {
     )
 )]
 pub(crate) async fn get_runtime() -> Response {
-    match blocking(runtime_view).await {
+    match blocking("plugin store", runtime_view).await {
         Ok(v) => Json(v).into_response(),
         Err(e) => e,
     }
@@ -761,9 +747,10 @@ pub(crate) async fn get_runtime() -> Response {
     )
 )]
 pub(crate) async fn set_runtime(ApiJson(req): ApiJson<RuntimeRequest>) -> Response {
-    let switched =
-        blocking(move || crate::plugins::set_runtime_enabled(req.enabled).map(|()| runtime_view()))
-            .await;
+    let switched = blocking("plugin store", move || {
+        crate::plugins::set_runtime_enabled(req.enabled).map(|()| runtime_view())
+    })
+    .await;
     match switched {
         Err(e) => e,
         Ok(Err(e)) => api_error(StatusCode::BAD_REQUEST, &format!("{e:#}")),

@@ -93,6 +93,15 @@ pub struct VaSurfaceAttrib {
     pub value: VaGenericValue,
 }
 
+/// `VAConfigAttrib`: a type/value pair, the shape `vaCreateConfig` and
+/// `vaGetConfigAttributes` take. `kind` is a `pf_vaapi` `VA_CONFIG_ATTRIB_*`.
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct VaConfigAttrib {
+    pub kind: u32,
+    pub value: u32,
+}
+
 /// Measured by `pf-vaapi/layout-probe.c`.
 pub const VA_SURFACE_ATTRIB_PIXEL_FORMAT: c_int = 1;
 pub const VA_GENERIC_VALUE_TYPE_INTEGER: c_int = 1;
@@ -105,6 +114,8 @@ const _: () = {
     assert!(size_of::<VaSurfaceAttrib>() == 24);
     assert!(std::mem::offset_of!(VaSurfaceAttrib, flags) == 4);
     assert!(std::mem::offset_of!(VaSurfaceAttrib, value) == 8);
+    assert!(size_of::<VaConfigAttrib>() == 8);
+    assert!(std::mem::offset_of!(VaConfigAttrib, value) == 4);
 };
 
 /// libva entry points from `libva.so.2` / `libva-drm.so.2`. Absent library is a
@@ -442,8 +453,10 @@ impl Display {
     /// Asked before `vaCreateConfig` so an unsupported profile is a named refusal,
     /// not a driver status code.
     pub fn require_entrypoint(&self, profile: c_int) -> Result<()> {
-        let vld = pf_vaapi::VA_ENTRYPOINT_VLD as c_int;
-        if !self.entrypoints(profile)?.contains(&vld) {
+        if !self
+            .entrypoints(profile)?
+            .contains(&pf_vaapi::VA_ENTRYPOINT_VLD)
+        {
             bail!("this device has no VLD decode entrypoint for VAProfile {profile}");
         }
         Ok(())
@@ -516,6 +529,75 @@ impl Display {
             // destroyed exactly once — the submission's list is consumed here.
             unsafe { (self.va.destroy_buffer)(self.display, b) };
         }
+    }
+
+    /// `vaCreateConfig`; libva copies `attribs` before returning. An empty slice
+    /// passes null, as VideoProc's attribute-less config does.
+    pub fn create_config(
+        &self,
+        profile: c_int,
+        entrypoint: c_int,
+        attribs: &[VaConfigAttrib],
+    ) -> Result<VaObject<'_>> {
+        let list = if attribs.is_empty() {
+            std::ptr::null_mut()
+        } else {
+            attribs.as_ptr().cast_mut().cast::<c_void>()
+        };
+        let mut id: VaConfigId = VA_INVALID_ID;
+        // SAFETY: a live display; `list` is null with a zero count or `attribs` with
+        // its length, which the driver only reads; `id` is a local written through.
+        self.va.check("vaCreateConfig", unsafe {
+            (self.va.create_config)(
+                self.display,
+                profile,
+                entrypoint,
+                list,
+                attribs.len() as c_int,
+                &mut id,
+            )
+        })?;
+        Ok(VaObject {
+            display: self,
+            id,
+            destroy: self.va.destroy_config,
+        })
+    }
+
+    /// `vaCreateContext` over `targets`, which libva copies; an empty slice pins
+    /// none, as VideoProc wants. The surfaces stay the caller's to destroy.
+    pub fn create_context(
+        &self,
+        config: VaConfigId,
+        width: u32,
+        height: u32,
+        targets: &mut [VaSurfaceId],
+    ) -> Result<VaObject<'_>> {
+        let pinned = if targets.is_empty() {
+            std::ptr::null_mut()
+        } else {
+            targets.as_mut_ptr()
+        };
+        let mut id: VaContextId = VA_INVALID_ID;
+        // SAFETY: a live display and a config created on it; `pinned` is null with a
+        // zero count or `targets` with its length; `id` is a local written through.
+        self.va.check("vaCreateContext", unsafe {
+            (self.va.create_context)(
+                self.display,
+                config,
+                width as c_int,
+                height as c_int,
+                VA_PROGRESSIVE as c_int,
+                pinned,
+                targets.len() as c_int,
+                &mut id,
+            )
+        })?;
+        Ok(VaObject {
+            display: self,
+            id,
+            destroy: self.va.destroy_context,
+        })
     }
 
     /// One surface of `fourcc` in an `rt_format` pool; `None` lets the driver pick.
@@ -694,6 +776,36 @@ impl Display {
             }
             Ok(())
         })
+    }
+}
+
+/// A config or context destroyed on drop, so a constructor's early return frees it
+/// even on a display that outlives the constructor. [`Self::keep`] hands the id to
+/// an owner that destroys it in libva's order.
+#[must_use]
+pub struct VaObject<'d> {
+    display: &'d Display,
+    id: c_uint,
+    destroy: unsafe extern "C" fn(VaDisplay, c_uint) -> VaStatus,
+}
+
+impl VaObject<'_> {
+    pub fn id(&self) -> c_uint {
+        self.id
+    }
+
+    pub fn keep(self) -> c_uint {
+        let id = self.id;
+        std::mem::forget(self);
+        id
+    }
+}
+
+impl Drop for VaObject<'_> {
+    fn drop(&mut self) {
+        // SAFETY: `id` was created on this display by the call that chose `destroy`,
+        // and `keep` forgets the guard, so this runs at most once per id.
+        unsafe { (self.destroy)(self.display.display, self.id) };
     }
 }
 

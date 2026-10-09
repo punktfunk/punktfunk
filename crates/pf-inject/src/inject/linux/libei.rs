@@ -15,6 +15,7 @@
 //! normal key events.
 
 use super::{gs_button_to_evdev, vk_to_evdev, InputInjector};
+use crate::head_pick::{self, HeadFacts, StreamTarget};
 use crate::held::HeldInput;
 use crate::scroll::{mutter_axis_calls, ScrollBackend, ScrollMapper, ScrollOp};
 use crate::AbsoluteAnchor;
@@ -178,24 +179,12 @@ enum Keepalive {
     Socket,
 }
 
-/// Bounds `Session.Close` so a wedged portal cannot hang the worker's exit.
-const CLOSE_BUDGET: Duration = Duration::from_secs(3);
-
 impl Keepalive {
+    /// Ends the session. The portal's `Session.Close` is bounded by `pf_portal::close_session`
+    /// so a wedged portal cannot hang the worker's exit.
     async fn close(self) {
         match self {
-            Keepalive::Portal(session) => {
-                match tokio::time::timeout(CLOSE_BUDGET, session.close()).await {
-                    Ok(Ok(())) => {}
-                    Ok(Err(e)) => {
-                        tracing::warn!(error = %e, "libei: closing the RemoteDesktop session failed")
-                    }
-                    Err(_) => tracing::warn!(
-                        budget_s = CLOSE_BUDGET.as_secs(),
-                        "libei: the portal did not answer Session.Close in time"
-                    ),
-                }
-            }
+            Keepalive::Portal(session) => pf_portal::close_session(session.close()).await,
             Keepalive::Mutter(conn) => drop(conn),
             Keepalive::Socket => {}
         }
@@ -427,72 +416,19 @@ async fn connect_socket_file(file: &std::path::Path) -> Result<(UnixStream, Opti
     }
 }
 
-/// Region to map absolute coordinates into. The device advertises one region per
-/// logical monitor; `first()` is whichever output the compositor announced first.
-///
-/// Most identifying first:
-/// 1. [`AbsoluteAnchor::mapping_id`] — protocol key correlating a region with a stream.
-/// 2. Anchor origin — two outputs can share a size, never a top-left. A mirrored
-///    physical monitor's region is not the client's size (`design/per-monitor-portal-capture.md`).
-/// 3. The streamed head's mode (`extent`, [`crate::stream_extent`]), then the event's own
-///    `w`×`h` — ambiguous once two heads share a mode. The event's size alone is the
-///    client's rect: a GameStream window the size of the operator's monitor lands there.
-/// 4. `first()`.
-///
-/// An unmatched anchor falls through: the region set is the truth. The caller logs
-/// the miss ([`anchor_missed`]).
-fn region_for_mode<'a>(
-    regions: &'a [reis::event::Region],
-    extent: Option<(u16, u16)>,
-    w: f32,
-    h: f32,
-    anchor: Option<&AbsoluteAnchor>,
-) -> Option<&'a reis::event::Region> {
-    if let Some(a) = anchor {
-        if let Some(id) = a.mapping_id.as_deref() {
-            if let Some(r) = regions.iter().find(|r| r.mapping_id.as_deref() == Some(id)) {
-                return Some(r);
-            }
-        }
-        if let Some((x, y)) = a.origin {
-            // EI region offsets are unsigned; a negative origin matches nothing
-            // rather than wrapping to a huge u32 that could hit a real region.
-            if x >= 0 && y >= 0 {
-                if let Some(r) = regions.iter().find(|r| r.x == x as u32 && r.y == y as u32) {
-                    return Some(r);
-                }
-            }
-        }
-    }
-    let by_size = |w: f32, h: f32| {
-        regions
-            .iter()
-            .find(|r| r.width as f32 == w && r.height as f32 == h)
-            // Display scale shrinks the EI region to logical pixels (Mutter: 1280×800
-            // at 1.5 → 853×533). Exact size then misses; without this rung we take
-            // `regions.first()` — the wrong monitor whenever another region sorts first.
-            .or_else(|| regions.iter().find(|r| scaled_region_match(r, w, h)))
-    };
-    extent
-        .and_then(|(ew, eh)| by_size(f32::from(ew), f32::from(eh)))
-        .or_else(|| by_size(w, h))
-        .or_else(|| regions.first())
-}
-
-/// True when `r` is the streamed `w`×`h` surface advertised at display scale > 1.
-/// ±2 logical px of slack covers per-axis floor (Mutter: 1280/1.5 → 853). Scales
-/// 1..=4 (fractional 1.25/1.5/1.75 included); 1.0 is the exact rung, and >4 is
-/// not a real display scale — matching it would pick the wrong monitor.
-fn scaled_region_match(r: &reis::event::Region, w: f32, h: f32) -> bool {
-    let (rw, rh) = (r.width as f32, r.height as f32);
-    if rw < 1.0 || rh < 1.0 {
-        return false;
-    }
-    let s = w / rw;
-    if !(1.0..=4.0).contains(&s) {
-        return false;
-    }
-    (rh * s - h).abs() <= 2.0 * s
+/// EI regions as [`HeadFacts`]: one per logical monitor, a `mapping_id` but no name or mode.
+fn region_facts(regions: &[reis::event::Region]) -> Vec<HeadFacts<'_>> {
+    regions
+        .iter()
+        .map(|r| HeadFacts {
+            mapping_id: r.mapping_id.as_deref(),
+            x: i32::try_from(r.x).unwrap_or(i32::MAX),
+            y: i32::try_from(r.y).unwrap_or(i32::MAX),
+            logical_w: r.width,
+            logical_h: r.height,
+            ..HeadFacts::default()
+        })
+        .collect()
 }
 
 /// Log which region absolute coordinates landed in, once per distinct region so
@@ -512,25 +448,6 @@ fn note_abs_region(region: &reis::event::Region, anchor: Option<&AbsoluteAnchor>
         anchor_mapping_id = ?anchor.and_then(|a| a.mapping_id.clone()),
         "libei: absolute input maps into this output"
     );
-}
-
-/// True when the anchor names an output this region set does not have. Drives
-/// the one-shot warning: a miss must be in the log, not inferred from clicks.
-fn anchor_missed(regions: &[reis::event::Region], anchor: Option<&AbsoluteAnchor>) -> bool {
-    let Some(a) = anchor else {
-        return false;
-    };
-    if let Some(id) = a.mapping_id.as_deref() {
-        if regions.iter().any(|r| r.mapping_id.as_deref() == Some(id)) {
-            return false;
-        }
-    }
-    if let Some((x, y)) = a.origin {
-        if x >= 0 && y >= 0 && regions.iter().any(|r| r.x == x as u32 && r.y == y as u32) {
-            return false;
-        }
-    }
-    true
 }
 
 struct DeviceSlot {
@@ -573,7 +490,7 @@ struct EiState {
 static LAST_WARNED_ANCHOR: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
 
 /// Warn once per distinct anchor that it names no advertised EIS region, so
-/// absolute coordinates fell back to size matching. See [`region_for_mode`].
+/// absolute coordinates fell back to size matching. See [`head_pick::pick`].
 fn warn_anchor_miss(anchor: &AbsoluteAnchor, regions: &[reis::event::Region]) {
     let key = format!("{anchor:?}");
     let mut last = LAST_WARNED_ANCHOR.lock().unwrap_or_else(|e| e.into_inner());
@@ -756,7 +673,7 @@ impl EiState {
                     keyboard = dev.has_capability(DeviceCapability::Keyboard),
                     button = dev.has_capability(DeviceCapability::Button),
                     scroll = dev.has_capability(DeviceCapability::Scroll),
-                    // One region per logical monitor; `region_for_mode` picks per event.
+                    // One region per logical monitor; `abs_point` picks per event.
                     // Log them so a mis-mapped pointer is diagnosable from the journal.
                     regions = ?dev
                         .regions()
@@ -926,15 +843,9 @@ impl EiState {
         }
     }
 
-    /// [`abs_point`] with this session's anchor, streamed mode and output hint.
+    /// [`abs_point`] with this session's stream target and output hint.
     fn map_abs(&self, regions: &[reis::event::Region], ev: &InputEvent) -> Option<(f32, f32)> {
-        abs_point(
-            regions,
-            crate::stream_extent(),
-            crate::absolute_anchor().as_ref(),
-            self.output_hint,
-            ev,
-        )
+        abs_point(regions, &crate::stream_target(), self.output_hint, ev)
     }
 
     /// Emit `ev` on device `idx` in its own frame, and note what the compositor now holds.
@@ -1058,14 +969,14 @@ fn capability_for(kind: InputKind) -> Option<DeviceCapability> {
 /// Where an absolute sample (pointer or touch) lands in compositor space. `x`/`y` are client
 /// pixels and `flags` packs the client surface w/h; `None` for a zero-sized surface.
 ///
-/// The normalized position maps into the region [`region_for_mode`] picks. [`sane_region`]
-/// rejects gamescope's INT32_MAX "raw" region, where a center tap would become x≈1e9. Without
-/// a usable region it scales into the relay-file output `hint`, then passes raw client pixels.
-/// An anchor that names no region warns once ([`warn_anchor_miss`]).
+/// The normalized position maps into the region [`head_pick::pick`] names, else the first
+/// region: EI must name one. [`sane_region`] rejects gamescope's INT32_MAX "raw" region,
+/// where a center tap would become x≈1e9. Without a usable region it scales into the
+/// relay-file output `hint`, then passes raw client pixels. An anchor that names no region
+/// warns once ([`warn_anchor_miss`]).
 fn abs_point(
     regions: &[reis::event::Region],
-    extent: Option<(u16, u16)>,
-    anchor: Option<&AbsoluteAnchor>,
+    target: &StreamTarget,
     hint: Option<(u32, u32)>,
     ev: &InputEvent,
 ) -> Option<(f32, f32)> {
@@ -1073,27 +984,29 @@ fn abs_point(
     if w == 0 || h == 0 {
         return None;
     }
-    let (w, h) = (w as f32, h as f32);
-    let nx = (ev.x as f32 / w).clamp(0.0, crate::ABS_EDGE);
-    let ny = (ev.y as f32 / h).clamp(0.0, crate::ABS_EDGE);
-    if let Some(a) = anchor.filter(|a| anchor_missed(regions, Some(a))) {
+    let nx = (ev.x as f32 / w as f32).clamp(0.0, crate::ABS_EDGE);
+    let ny = (ev.y as f32 / h as f32).clamp(0.0, crate::ABS_EDGE);
+    let heads = region_facts(regions);
+    let anchor = target.anchor.as_ref();
+    if let Some(a) = anchor.filter(|a| !head_pick::anchor_matches(&heads, a)) {
         warn_anchor_miss(a, regions);
     }
-    Some(
-        match region_for_mode(regions, extent, w, h, anchor).filter(|r| sane_region(r)) {
-            Some(region) => {
-                note_abs_region(region, anchor);
-                (
-                    region.x as f32 + nx * region.width as f32,
-                    region.y as f32 + ny * region.height as f32,
-                )
-            }
-            None => match hint {
-                Some((ow, oh)) => (nx * ow as f32, ny * oh as f32),
-                None => (ev.x as f32, ev.y as f32),
-            },
+    let picked = head_pick::pick(&heads, target, Some((w, h)))
+        .map(|i| &regions[i])
+        .or_else(|| regions.first());
+    Some(match picked.filter(|r| sane_region(r)) {
+        Some(region) => {
+            note_abs_region(region, anchor);
+            (
+                region.x as f32 + nx * region.width as f32,
+                region.y as f32 + ny * region.height as f32,
+            )
+        }
+        None => match hint {
+            Some((ow, oh)) => (nx * ow as f32, ny * oh as f32),
+            None => (ev.x as f32, ev.y as f32),
         },
-    )
+    })
 }
 
 #[cfg(test)]
@@ -1111,131 +1024,6 @@ mod tests {
         }
     }
 
-    /// Two heads at the same size: size matching is a coin flip. Origin picks.
-    #[test]
-    fn the_origin_disambiguates_two_same_size_monitors() {
-        let regions = [
-            region(0, 0, 1920, 1080, None),
-            region(1920, 0, 1920, 1080, None),
-        ];
-        let anchor = AbsoluteAnchor {
-            origin: Some((1920, 0)),
-            mapping_id: None,
-        };
-        let picked = region_for_mode(&regions, None, 1920.0, 1080.0, Some(&anchor)).unwrap();
-        assert_eq!((picked.x, picked.y), (1920, 0));
-        // No anchor takes the first same-sized region — required for the
-        // client-sized virtual-output path.
-        let picked = region_for_mode(&regions, None, 1920.0, 1080.0, None).unwrap();
-        assert_eq!((picked.x, picked.y), (0, 0));
-    }
-
-    /// A GameStream client sends its own window rect, which can be the operator's monitor size.
-    /// The streamed head's mode picks first; the event's size is the fallback.
-    #[test]
-    fn the_streamed_mode_outranks_the_client_rect() {
-        let regions = [
-            region(0, 0, 1920, 1080, None),    // the operator's monitor
-            region(1920, 0, 3840, 2160, None), // the streamed head
-        ];
-        let picked = region_for_mode(&regions, Some((3840, 2160)), 1920.0, 1080.0, None).unwrap();
-        assert_eq!(picked.x, 1920);
-        let picked = region_for_mode(&regions, None, 1920.0, 1080.0, None).unwrap();
-        assert_eq!(picked.x, 0);
-        // A published mode no region matches falls back to the event's size.
-        let picked = region_for_mode(&regions, Some((1280, 720)), 3840.0, 2160.0, None).unwrap();
-        assert_eq!(picked.x, 1920);
-    }
-
-    /// `mapping_id` outranks origin: a stale/rounded origin must not override
-    /// the protocol's stream↔region key.
-    #[test]
-    fn mapping_id_outranks_the_origin() {
-        let regions = [
-            region(0, 0, 1920, 1080, Some("head-a")),
-            region(1920, 0, 1920, 1080, Some("head-b")),
-        ];
-        let anchor = AbsoluteAnchor {
-            origin: Some((0, 0)),
-            mapping_id: Some("head-b".into()),
-        };
-        let picked = region_for_mode(&regions, None, 1920.0, 1080.0, Some(&anchor)).unwrap();
-        assert_eq!(picked.mapping_id.as_deref(), Some("head-b"));
-    }
-
-    /// Display scale shrinks the EI region to logical pixels. Without the scaled
-    /// rung the ladder takes `regions.first()`. 1280×800 at 1.5 is 853×533.
-    #[test]
-    fn a_scaled_output_beats_the_first_region_fallback() {
-        let regions = [
-            region(0, 0, 1462, 1044, None),    // first() would pick this
-            region(1462, 0, 1920, 1080, None), // physical
-            region(3382, 0, 853, 533, None),   // 1280×800 at 1.5
-        ];
-        let picked = region_for_mode(&regions, None, 1280.0, 800.0, None).unwrap();
-        assert_eq!((picked.width, picked.height), (853, 533));
-        let regions = [
-            region(0, 0, 1920, 1080, None),
-            region(1920, 0, 640, 400, None),
-        ];
-        let picked = region_for_mode(&regions, None, 1280.0, 800.0, None).unwrap();
-        assert_eq!((picked.width, picked.height), (640, 400));
-        // Wrong aspect is not a consistent scale — fallback stays `regions.first()`.
-        let regions = [
-            region(0, 0, 1000, 1000, None),
-            region(1000, 0, 640, 200, None),
-        ];
-        let picked = region_for_mode(&regions, None, 1280.0, 800.0, None).unwrap();
-        assert_eq!((picked.width, picked.height), (1000, 1000));
-    }
-
-    /// A mirrored monitor's region is not the streamed size; origin is what finds it.
-    #[test]
-    fn the_anchor_finds_a_monitor_the_streamed_size_does_not_match() {
-        let regions = [
-            region(0, 0, 1920, 1080, None),
-            region(1920, 0, 3840, 2160, None),
-        ];
-        let anchor = AbsoluteAnchor {
-            origin: Some((1920, 0)),
-            mapping_id: None,
-        };
-        let picked = region_for_mode(&regions, None, 1280.0, 720.0, Some(&anchor)).unwrap();
-        assert_eq!((picked.width, picked.height), (3840, 2160));
-    }
-
-    /// Unmatched anchor falls through the ladder (size, then first) and is reported.
-    #[test]
-    fn an_unmatched_anchor_falls_back_and_is_reported() {
-        let regions = [region(0, 0, 1920, 1080, None)];
-        let anchor = AbsoluteAnchor {
-            origin: Some((5000, 5000)),
-            mapping_id: None,
-        };
-        assert!(anchor_missed(&regions, Some(&anchor)));
-        let picked = region_for_mode(&regions, None, 1920.0, 1080.0, Some(&anchor)).unwrap();
-        assert_eq!((picked.x, picked.y), (0, 0), "fell back to the size match");
-        let ok = AbsoluteAnchor {
-            origin: Some((0, 0)),
-            mapping_id: None,
-        };
-        assert!(!anchor_missed(&regions, Some(&ok)));
-        assert!(!anchor_missed(&regions, None), "no anchor is not a miss");
-    }
-
-    /// EI offsets are unsigned; a negative origin must match nothing, not wrap.
-    #[test]
-    fn a_negative_origin_matches_nothing_rather_than_wrapping() {
-        let regions = [region(0, 0, 1920, 1080, None)];
-        let anchor = AbsoluteAnchor {
-            origin: Some((-1920, 0)),
-            mapping_id: None,
-        };
-        assert!(anchor_missed(&regions, Some(&anchor)));
-        let picked = region_for_mode(&regions, None, 1920.0, 1080.0, Some(&anchor)).unwrap();
-        assert_eq!((picked.x, picked.y), (0, 0));
-    }
-
     /// Pointer and touch share one ladder: the picked region, else the output hint, else
     /// raw client pixels. A zero-sized surface maps nowhere.
     #[test]
@@ -1248,20 +1036,27 @@ mod tests {
             y: 540,
             flags: (1920 << 16) | 1080,
         };
+        let none = StreamTarget::default();
         let head = [region(1920, 0, 3840, 2160, None)];
+        assert_eq!(abs_point(&head, &none, None, &ev), Some((3840.0, 1080.0)));
+        // No region matches: EI must name one, so the first takes it.
+        let unmatched = [
+            region(0, 0, 1000, 1000, None),
+            region(1000, 0, 640, 200, None),
+        ];
         assert_eq!(
-            abs_point(&head, None, None, None, &ev),
-            Some((3840.0, 1080.0))
+            abs_point(&unmatched, &none, None, &ev),
+            Some((500.0, 500.0))
         );
         // gamescope's "raw" sentinel is no region to normalize into.
         let raw = [region(0, 0, i32::MAX as u32, i32::MAX as u32, None)];
         assert_eq!(
-            abs_point(&raw, None, None, Some((1280, 800)), &ev),
+            abs_point(&raw, &none, Some((1280, 800)), &ev),
             Some((640.0, 400.0))
         );
-        assert_eq!(abs_point(&raw, None, None, None, &ev), Some((960.0, 540.0)));
+        assert_eq!(abs_point(&raw, &none, None, &ev), Some((960.0, 540.0)));
         let zero = InputEvent { flags: 0, ..ev };
-        assert_eq!(abs_point(&head, None, None, None, &zero), None);
+        assert_eq!(abs_point(&head, &none, None, &zero), None);
     }
 
     /// An empty anchor is the same as none — callers may build one unconditionally.

@@ -43,8 +43,7 @@ host too until you capture again.
 | Start or stop [clipboard sharing](/docs/clipboard) | — | ⌃⌥⇧C | ⌃⌥⇧C | — |
 | Fullscreen | F11 or Alt+Enter | ⌃⌘F | — | — |
 
-On an iPad only ⌃⌥⇧Q, ⌃⌥⇧O and ⌘⎋ always work while input is captured. If another shortcut doesn't
-respond, release input first.
+On an iPad, ⌘⎋ and every ⌃⌥⇧ shortcut work while input is captured.
 
 To see the list without a stream: **Keyboard Shortcuts** in the Linux client's main menu,
 **Shortcuts** on the Windows client's host list, **Settings → About → Stream controls** on

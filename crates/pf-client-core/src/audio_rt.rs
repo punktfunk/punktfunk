@@ -147,7 +147,7 @@ impl Boost {
 /// leaves every thread as it was (an A/B, and the way out if a driver spins).
 pub fn boost_and_log(what: &'static str) {
     static OFF: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    if *OFF.get_or_init(|| std::env::var_os("PUNKTFUNK_THREAD_BOOST").is_some_and(|v| v == "0")) {
+    if *OFF.get_or_init(|| crate::env_on("PUNKTFUNK_THREAD_BOOST") == Some(false)) {
         tracing::info!(
             thread = what,
             "thread priority left alone (PUNKTFUNK_THREAD_BOOST=0)"

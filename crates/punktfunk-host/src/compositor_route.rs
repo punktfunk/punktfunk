@@ -5,6 +5,9 @@
 //! explicit name wins only when that backend is available; `Auto` and a miss
 //! fall back to the detected graphical session.
 //!
+//! [`GamescopeHold`] counts the sessions, on either plane, that may stream a
+//! gamescope the host took over. The last one dropped hands Game Mode back.
+//!
 //! Pin with `PUNKTFUNK_COMPOSITOR`. A pin names a backend, not a running
 //! session, and outranks dedicated-launch and auto-follow. Leave it unset
 //! except for CI and single-session appliances.
@@ -14,9 +17,11 @@
 
 use anyhow::Result;
 use punktfunk_core::config::CompositorPref;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 /// `None` only when nothing is available *and* nothing was detected — the
 /// caller turns that into a handshake error.
+#[cfg_attr(windows, allow(dead_code, reason = "Windows has one compositor"))]
 fn pick_compositor(
     pref: CompositorPref,
     available: &[crate::vdisplay::Compositor],
@@ -234,6 +239,35 @@ pub(crate) fn resolve_compositor(
             ),
         }
         Ok((chosen, route))
+    }
+}
+
+/// Live sessions, on either plane, that may stream a gamescope the host took over.
+static LIVE_GAMESCOPE: AtomicUsize = AtomicUsize::new(0);
+
+/// Whether any session holds a [`GamescopeHold`]: a held takeover is then streaming, not kept.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code, reason = "Linux only"))]
+pub(crate) fn gamescope_sessions_live() -> bool {
+    LIVE_GAMESCOPE.load(Ordering::SeqCst) > 0
+}
+
+/// One count in [`LIVE_GAMESCOPE`], taken before the session resolves its compositor. Resolving
+/// cancels a pending Game Mode hand-back; the last hold dropped, on any path, schedules it again.
+pub(crate) struct GamescopeHold;
+
+impl GamescopeHold {
+    pub(crate) fn new() -> Self {
+        LIVE_GAMESCOPE.fetch_add(1, Ordering::SeqCst);
+        GamescopeHold
+    }
+}
+
+impl Drop for GamescopeHold {
+    fn drop(&mut self) {
+        // A `join` session still shows the owner's game after the owner leaves.
+        if LIVE_GAMESCOPE.fetch_sub(1, Ordering::SeqCst) == 1 {
+            crate::vdisplay::restore_managed_session();
+        }
     }
 }
 

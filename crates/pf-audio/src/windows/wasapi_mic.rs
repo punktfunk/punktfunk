@@ -22,9 +22,9 @@ use super::{audio_control, MicBackendStats, VirtualMic, SAMPLE_RATE};
 use anyhow::{anyhow, Context, Result};
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
-use std::sync::mpsc::{sync_channel, SyncSender};
+use std::sync::mpsc::SyncSender;
 use std::sync::{Arc, Condvar, Mutex};
-use std::thread::{self, JoinHandle};
+use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 use wasapi::{Direction, SampleType, StreamMode, WaveFormat};
 
@@ -56,7 +56,7 @@ type MicQueue = (Mutex<VecDeque<u8>>, Condvar);
 /// driver's capture side misbehaves while its render side is paused.
 fn mic_always_on() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| std::env::var_os("PUNKTFUNK_MIC_ALWAYS_ON").is_some_and(|v| v != "0"))
+    *ON.get_or_init(|| pf_host_config::env_on("PUNKTFUNK_MIC_ALWAYS_ON") == Some(true))
 }
 
 pub struct WasapiVirtualMic {
@@ -93,42 +93,33 @@ impl WasapiVirtualMic {
         let stop = Arc::new(AtomicBool::new(false));
         let alive = Arc::new(AtomicBool::new(true));
         let ring = Arc::new(RingShared::default());
-        // Ready channel: a missing device must surface as Err (pump retries),
-        // not a silent dead thread.
-        let (ready_tx, ready_rx) = sync_channel::<Result<String>>(1);
         let (q, st, rg, al) = (queue.clone(), stop.clone(), ring.clone(), alive.clone());
-        let join = thread::Builder::new()
-            .name("punktfunk-wasapi-mic".into())
-            .spawn(move || {
-                if let Err(e) = render_thread(q, st, rg, ready_tx) {
+        let (name, join) = crate::ready::spawn_ready(
+            "punktfunk-wasapi-mic",
+            Duration::from_secs(5),
+            move |ready| {
+                if let Err(e) = render_thread(q, st, rg, ready) {
                     tracing::error!(error = %format!("{e:#}"), "wasapi virtual-mic thread failed");
                 }
                 // Drop and device error both: this instance is done; the pump reopens.
                 al.store(false, Ordering::Release);
-            })
-            .context("spawn wasapi mic thread")?;
-        match ready_rx.recv_timeout(Duration::from_secs(5)) {
-            Ok(Ok(name)) => {
-                tracing::info!(device = %name,
-                    "WASAPI virtual mic ready (client mic → this device's render endpoint)");
-                Ok(WasapiVirtualMic {
-                    queue,
-                    stop,
-                    alive,
-                    ring,
-                    join: Some(join),
-                })
-            }
-            // The thread sent this and is already unwinding to its own `alive` store.
-            Ok(Err(e)) => Err(e),
-            Err(_) => {
-                // Nothing owns the thread on this path — no `WasapiVirtualMic` was built, so
-                // `Drop` never runs. Unset, it holds its render client forever and the pump's
-                // next retry spawns another. Detached: it exits at its next `stop` check.
+            },
+            |join| {
+                // No `WasapiVirtualMic` owns the thread here, so no `Drop` stops it: unset, it
+                // holds its render client forever.
                 stop.store(true, Ordering::SeqCst);
-                Err(anyhow!("wasapi virtual-mic init timed out"))
-            }
-        }
+                crate::ready::reap_timed_out("wasapi virtual-mic", join)
+            },
+        )?;
+        tracing::info!(device = %name,
+            "WASAPI virtual mic ready (client mic → this device's render endpoint)");
+        Ok(WasapiVirtualMic {
+            queue,
+            stop,
+            alive,
+            ring,
+            join: Some(join),
+        })
     }
 }
 
@@ -275,12 +266,32 @@ fn repair_pins(minted: bool) {
 /// echo; [`super::wiring_plan`]). Microphone first (inject target), speakers
 /// second (loopback / silent sink). Returns true if either installed. No-op
 /// when the INFs are absent, install is denied (needs admin; host is SYSTEM),
-/// or `PUNKTFUNK_NO_MIC_INSTALL` is set. [`super::wasapi_cap`] installs the
+/// or `PUNKTFUNK_NO_MIC_INSTALL=1`. [`super::wasapi_cap`] installs the
 /// same pair when no silent sink exists.
 pub fn install_steam_audio_pair() -> bool {
     let mic = try_install_steam_audio("SteamStreamingMicrophone.inf");
     let spk = try_install_steam_audio("SteamStreamingSpeakers.inf");
     mic || spk
+}
+
+/// The capture side's install latch: `None` until it tries, then whether the INFs existed.
+static TRIED_WITH_INFS: Mutex<Option<bool>> = Mutex::new(None);
+
+/// Whether desktop-audio capture may try [`install_steam_audio_pair`] now, marking the try.
+/// Once per INF state, not once per process: a try made while Steam was absent re-arms when
+/// the INFs appear. Those files are invisible to the endpoint-set fingerprint, so nothing
+/// else retries.
+pub(super) fn steam_pair_install_due() -> bool {
+    let infs = steam_infs_present();
+    let mut tried = TRIED_WITH_INFS.lock().unwrap();
+    let go = match *tried {
+        None => true,
+        Some(had_infs) => !had_infs && infs,
+    };
+    if go {
+        *tried = Some(infs);
+    }
+    go
 }
 
 /// NUL-terminated UTF-16 path of a Steam Remote Play INF under
@@ -312,9 +323,7 @@ pub fn steam_driver_inf_path(inf_name: &str) -> Option<Vec<u16>> {
     Some(path)
 }
 
-/// Whether Steam's streaming-audio INFs exist. Files are not endpoints, so
-/// the capture install latch keys on this instead of staying once-per-process
-/// ([`super::wasapi_cap`]) — Steam installed mid-run would otherwise be missed.
+/// Whether Steam's streaming-audio INFs exist: the state [`steam_pair_install_due`] keys on.
 pub fn steam_infs_present() -> bool {
     use std::os::windows::ffi::OsStringExt;
     ["SteamStreamingMicrophone.inf", "SteamStreamingSpeakers.inf"]
@@ -339,7 +348,7 @@ fn try_install_steam_audio(inf_name: &str) -> bool {
         DiInstallDriverW, DIINSTALLDRIVER_FLAGS,
     };
 
-    if std::env::var_os("PUNKTFUNK_NO_MIC_INSTALL").is_some() {
+    if pf_host_config::env_on("PUNKTFUNK_NO_MIC_INSTALL") == Some(true) {
         return false;
     }
     let Some(path) = steam_driver_inf_path(inf_name) else {

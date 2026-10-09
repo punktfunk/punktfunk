@@ -2,7 +2,8 @@ package io.unom.punktfunk
 
 import android.content.Context
 import io.unom.punktfunk.kit.NativeBridge
-import io.unom.punktfunk.kit.library.mgmtBase
+import io.unom.punktfunk.kit.library.MgmtReply
+import io.unom.punktfunk.kit.library.mgmtCall
 import io.unom.punktfunk.kit.security.ClientIdentity
 import io.unom.punktfunk.kit.security.KnownHost
 import okhttp3.MediaType.Companion.toMediaType
@@ -54,26 +55,18 @@ object SendLogs {
         fpHex: String,
         hostName: String,
     ): String {
-        val err = runCatching {
+        val reply = mgmtCall(identity, addr, mgmtPort, fpHex) { base ->
             val body = NativeBridge.nativeRenderLogs(header(context))
-            val client = io.unom.punktfunk.kit.library.mtlsHttpClient(
-                identity.certPem, identity.privateKeyPem, addr, fpHex,
-            )
-            val req = Request.Builder()
-                .url("${mgmtBase(addr, mgmtPort)}/api/v1/client-logs")
+            Request.Builder()
+                .url("$base/api/v1/client-logs")
                 .post(body.toRequestBody("text/plain; charset=utf-8".toMediaType()))
                 .build()
-            client.newCall(req).execute().use { resp ->
-                // The host answers 201 Created, not 200 — this is a route that STORES a bundle
-                // (`mgmt/client_logs.rs`). Any 2xx is a success; OkHttp's own predicate spares us
-                // a second hand-written list of codes to get wrong.
-                if (resp.isSuccessful) "" else "the host refused the upload (${resp.code})"
-            }
-        }.getOrElse { it.message ?: "the upload didn't go through" }
-        return if (err.isEmpty()) {
+        }
+        // The host answers 201 Created: the route STORES a bundle, so any 2xx is a success.
+        return if (reply is MgmtReply.Answer && reply.ok) {
             "Logs sent to $hostName — download them from its web console's Logs page"
         } else {
-            "Couldn't send logs — $err"
+            "Couldn't send logs — ${reply.why}"
         }
     }
 }

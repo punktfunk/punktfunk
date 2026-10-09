@@ -9,6 +9,8 @@
 //!
 //! SEI and AV1 metadata builders feed the NVENC and Vulkan Video encoders; display
 //! conversion the Windows capturers; the PQ cursor re-encode the Linux HDR blends.
+//! On Linux, `HdrSource` latches a failed HDR offer per source for capture and the
+//! virtual displays.
 
 /// SMPTE ST.2086 mastering volume + CEA-861.3 content light level, in HDR10
 /// SEI fixed-point units. Field-for-field the wire `punktfunk_core::quic::HdrMeta`;
@@ -85,13 +87,16 @@ pub fn vdisplay_luminance_fields(m: &HdrMeta) -> (u32, u32, u32) {
     )
 }
 
-/// BT.2020 / D65 / 1000-nit HDR10 default until the source display is read.
+/// The HDR10 block every capturer claims when the source names no mastering volume:
+/// BT.2020 / D65, 1000 / 0.005 nits, MaxCLL 1000, MaxFALL 400. A CLL of 0/0 reads as
+/// "unknown" and leaves the display tone-mapping blind, so the light levels match the
+/// 1000-nit peak.
 pub fn generic_hdr10() -> HdrMeta {
     HdrMeta {
         display_primaries: [[8500, 39850], [6550, 2300], [35400, 14600]], // BT.2020 G, B, R
         white_point: [15635, 16450],                                      // D65
         max_display_mastering_luminance: 10_000_000,                      // 1000 nits
-        min_display_mastering_luminance: 1,                               // 0.0001 nits
+        min_display_mastering_luminance: 50,                              // 0.005 nits
         max_cll: 1000,
         max_fall: 400,
     }
@@ -279,6 +284,72 @@ pub fn pq_rgba_cached(rgba: &std::sync::Arc<Vec<u8>>) -> std::sync::Arc<Vec<u8>>
     pq
 }
 
+/// Which HDR capture source a `want_hdr` negotiation failure belongs to.
+/// The latch is per source so a portal-monitor failure cannot disable the
+/// virtual-output path, and vice versa, until host restart.
+#[cfg(target_os = "linux")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HdrSource {
+    /// GNOME 50+ portal monitor mirror (`open_portal_monitor` with `want_hdr`).
+    PortalMonitor,
+    /// Compositor virtual output (`open_virtual_output` with `want_hdr`): gamescope's
+    /// PipeWire node with the carried `pipewire-hdr` patch, or a Hyprland head that
+    /// would not light in 10-bit HDR.
+    VirtualOutput,
+}
+
+/// Per-source latch: `want_hdr` failed to negotiate the 10-bit PQ offer.
+/// Later sessions fall back to SDR instead of re-running the 10 s timeout.
+/// `PortalMonitor` sticks until host restart. `VirtualOutput` lasts until a
+/// gamescope display is torn down ([`clear_virtual_output_hdr_latch`]).
+#[cfg(target_os = "linux")]
+static HDR_CAPTURE_FAILED: [std::sync::atomic::AtomicBool; 2] = [
+    std::sync::atomic::AtomicBool::new(false),
+    std::sync::atomic::AtomicBool::new(false),
+];
+
+#[cfg(target_os = "linux")]
+impl HdrSource {
+    fn slot(self) -> usize {
+        match self {
+            HdrSource::PortalMonitor => 0,
+            HdrSource::VirtualOutput => 1,
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+pub fn hdr_capture_failed(source: HdrSource) -> bool {
+    HDR_CAPTURE_FAILED[source.slot()].load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// Latches SDR for `source`, warning once per latch.
+#[cfg(target_os = "linux")]
+pub fn note_hdr_capture_failed(source: HdrSource) {
+    if !HDR_CAPTURE_FAILED[source.slot()].swap(true, std::sync::atomic::Ordering::Relaxed) {
+        match source {
+            HdrSource::PortalMonitor => tracing::warn!(
+                "HDR capture negotiation failed on the monitor mirror — this host will offer SDR \
+                 for that source for the rest of the process lifetime (restart the host after \
+                 fixing the monitor's HDR mode to retry)"
+            ),
+            HdrSource::VirtualOutput => tracing::warn!(
+                "HDR capture negotiation failed on the virtual output — this host will offer SDR \
+                 for virtual outputs until a gamescope display is torn down or the host restarts \
+                 (gamescope: is the spawned build punktfunk's? see packaging/gamescope)"
+            ),
+        }
+    }
+}
+
+/// Re-arms gamescope HDR: each spawn is a new compositor. The registry calls this when a
+/// gamescope display is torn down. The portal latch has no such event and stays.
+#[cfg(target_os = "linux")]
+pub fn clear_virtual_output_hdr_latch() {
+    HDR_CAPTURE_FAILED[HdrSource::VirtualOutput.slot()]
+        .store(false, std::sync::atomic::Ordering::Relaxed);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -327,7 +398,7 @@ mod tests {
         assert_eq!((be16(11), be16(13)), (8585, 3015));
         assert_eq!((be16(15), be16(17)), (20493, 21561));
         assert_eq!(be32(19), 1000 << 8, "1000 nits in 24.8");
-        assert_eq!(be32(23), 2, "0.0001 nits in 18.14");
+        assert_eq!(be32(23), 82, "0.005 nits in 18.14");
         assert_eq!(obus[27], 0x80);
         assert_eq!(&obus[28..], &[0x2a, 6, 1, 0x03, 0xe8, 0x01, 0x90, 0x80]);
     }
@@ -395,7 +466,7 @@ mod tests {
         assert_eq!(&p[4..6], &6550u16.to_be_bytes());
         assert_eq!(&p[12..14], &15635u16.to_be_bytes());
         assert_eq!(&p[16..20], &10_000_000u32.to_be_bytes());
-        assert_eq!(&p[20..24], &1u32.to_be_bytes());
+        assert_eq!(&p[20..24], &50u32.to_be_bytes());
     }
 
     #[test]

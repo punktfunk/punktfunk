@@ -5,6 +5,7 @@
 //! clone each of [`SessionShared`]. A new per-session value is added here, not at every hand-off.
 
 use super::*;
+use crate::native::bitrate::EncoderCeiling;
 
 /// The mode epoch `epoch` delivers, from the stream thread. `corrects`: it is not what the client
 /// was last told, so a client without `StreamConfig` gets a second `Reconfigured`.

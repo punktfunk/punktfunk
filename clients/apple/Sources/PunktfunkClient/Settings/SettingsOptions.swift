@@ -113,7 +113,6 @@ enum SettingsOptions {
         ("Lowest latency", "latency"),
         ("Smoothness", "smooth"),
     ]
-    static let presentPriorityDefault = "latency"
 
     /// Smoothness's jitter-buffer sizes (`DefaultsKey.smoothBuffer`; 0 = Automatic, currently 2
     /// frames). The ms hints derive from the chosen refresh setting — each buffered frame costs

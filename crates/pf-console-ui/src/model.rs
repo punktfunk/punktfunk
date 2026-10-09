@@ -265,7 +265,7 @@ struct ConsoleState {
 }
 
 /// What a host answered [`ConsoleCmd::FetchProfiles`] with.
-#[derive(Clone, Debug, PartialEq, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum ProfilesAnswer {
     Listed(Vec<pf_client_core::profiles::ListedProfile>),
     /// The box has no profiles: a 404, or a host too old to ask.

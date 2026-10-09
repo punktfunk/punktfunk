@@ -545,6 +545,13 @@ mod vk_intra_refresh;
 #[cfg(target_os = "linux")]
 #[path = "enc/linux/vk_util.rs"]
 mod vk_util;
+// The cursor plane and CSC layout PyroWave and Vulkan Video share.
+#[cfg(all(
+    target_os = "linux",
+    any(feature = "vulkan-encode", feature = "pyrowave")
+))]
+#[path = "enc/linux/vk_csc.rs"]
+mod vk_csc;
 // PyroWave: Vulkan-compute intra wavelet. Explicit `PUNKTFUNK_ENCODER=pyrowave`.
 // See `design/pyrowave-codec-plan.md`.
 #[cfg(all(target_os = "linux", feature = "pyrowave"))]
