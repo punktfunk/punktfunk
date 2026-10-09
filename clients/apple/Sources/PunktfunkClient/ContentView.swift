@@ -866,7 +866,8 @@ struct ContentView: View {
                         onPaired: handlePaired, onLaunchTitle: launchTitle,
                         onConnectShelf: connectFromShelf, wake: { flow.wakeOnly($0) }),
                     onLaunch: launchTitle, onConnectShelf: connectFromShelf,
-                    onConnectHost: { flow.connect($0, preset: .inherit, fromLibrary: true) })
+                    onConnectHost: { flow.connect($0, preset: .inherit, fromLibrary: true) },
+                    wake: { flow.wakeOnly($0, onOnline: $1) })
                 // On appear too: `returnToLibrary` writes the shelf while the stream is still up.
                 .onAppear(perform: showShelfInSidebar)
                 .onChange(of: libraryTarget) { _, _ in showShelfInSidebar() }
@@ -966,7 +967,7 @@ struct ContentView: View {
         LibraryTabView(
             store: store, onLaunch: launchTitle, onConnectShelf: connectFromShelf,
             onConnectHost: { flow.connect($0, preset: .inherit, fromLibrary: true) },
-            showHosts: { touchTab = .hosts })
+            showHosts: { touchTab = .hosts }, wake: { flow.wakeOnly($0, onOnline: $1) })
     }
     #endif
 

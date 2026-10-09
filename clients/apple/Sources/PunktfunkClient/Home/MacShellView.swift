@@ -19,6 +19,7 @@ struct MacShellView<Hosts: View>: View {
     let onLaunch: (LibraryTarget, String) -> Void
     let onConnectShelf: (LibraryTarget) -> Void
     let onConnectHost: (StoredHost) -> Void
+    var wake: ((StoredHost, @escaping () -> Void) -> Void)? = nil
     #if DEBUG
     /// Shot harness: a canned catalog for the Library row.
     var libraryShotPhase: ShotLibraryPhase?
@@ -42,11 +43,12 @@ struct MacShellView<Hosts: View>: View {
                 LibraryTabView(
                     store: store, onLaunch: onLaunch, onConnectShelf: onConnectShelf,
                     onConnectHost: onConnectHost, showHosts: { selection = .hosts },
-                    shotPhase: libraryShotPhase)
+                    wake: wake, shotPhase: libraryShotPhase)
                 #else
                 LibraryTabView(
                     store: store, onLaunch: onLaunch, onConnectShelf: onConnectShelf,
-                    onConnectHost: onConnectHost, showHosts: { selection = .hosts })
+                    onConnectHost: onConnectHost, showHosts: { selection = .hosts },
+                    wake: wake)
                 #endif
             }
         }
