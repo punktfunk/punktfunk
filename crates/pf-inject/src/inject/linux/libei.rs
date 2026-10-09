@@ -178,24 +178,12 @@ enum Keepalive {
     Socket,
 }
 
-/// Bounds `Session.Close` so a wedged portal cannot hang the worker's exit.
-const CLOSE_BUDGET: Duration = Duration::from_secs(3);
-
 impl Keepalive {
+    /// Ends the session. The portal's `Session.Close` is bounded by `pf_portal::close_session`
+    /// so a wedged portal cannot hang the worker's exit.
     async fn close(self) {
         match self {
-            Keepalive::Portal(session) => {
-                match tokio::time::timeout(CLOSE_BUDGET, session.close()).await {
-                    Ok(Ok(())) => {}
-                    Ok(Err(e)) => {
-                        tracing::warn!(error = %e, "libei: closing the RemoteDesktop session failed")
-                    }
-                    Err(_) => tracing::warn!(
-                        budget_s = CLOSE_BUDGET.as_secs(),
-                        "libei: the portal did not answer Session.Close in time"
-                    ),
-                }
-            }
+            Keepalive::Portal(session) => pf_portal::close_session(session.close()).await,
             Keepalive::Mutter(conn) => drop(conn),
             Keepalive::Socket => {}
         }

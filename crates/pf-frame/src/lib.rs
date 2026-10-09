@@ -5,12 +5,11 @@
 //! each other. GPU payloads own the backends below: `FramePayload::Cuda` is a
 //! [`pf_zerocopy::DeviceBuffer`], `FramePayload::D3d11` a [`dxgi::D3d11Frame`].
 //!
-//! Same seam: [`hdr`] (HDR10 static metadata / SEI), [`metronome`] (periodic-stall
-//! detector), [`pace`] (stream-rate credit and timestamps for a faster panel),
-//! [`thread_qos`], [`session_tuning`], [`cursor_mode`] (ScreenCast cursor ladder), and on
-//! Windows [`dxgi`] (capture identity + D3D11 device) and [`privilege`] (token privileges).
+//! Same seam: [`hdr`] (HDR10 static metadata / SEI, the HDR capture latch),
+//! [`metronome`] (periodic-stall detector), [`pace`] (stream-rate credit and timestamps
+//! for a faster panel), [`thread_qos`], [`session_tuning`], and on Windows [`dxgi`]
+//! (capture identity + D3D11 device) and [`privilege`] (token privileges).
 
-pub mod cursor_mode;
 pub mod hdr;
 pub use hdr::HdrMeta;
 pub mod health;

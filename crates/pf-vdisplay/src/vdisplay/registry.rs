@@ -368,7 +368,7 @@ mod pool {
         fn drop(&mut self) {
             #[cfg(target_os = "linux")]
             if self.backend == "gamescope" {
-                pf_capture::clear_virtual_output_hdr_latch();
+                pf_frame::hdr::clear_virtual_output_hdr_latch();
             }
         }
     }
@@ -857,7 +857,7 @@ mod pool {
         #[cfg(target_os = "linux")]
         #[test]
         fn tearing_down_gamescope_rearms_its_hdr_but_not_the_portal_latch() {
-            use pf_capture::{hdr_capture_failed, note_hdr_capture_failed, HdrSource};
+            use pf_frame::hdr::{hdr_capture_failed, note_hdr_capture_failed, HdrSource};
             note_hdr_capture_failed(HdrSource::VirtualOutput);
             note_hdr_capture_failed(HdrSource::PortalMonitor);
             drop(test_entry("gamescope", 1, None));

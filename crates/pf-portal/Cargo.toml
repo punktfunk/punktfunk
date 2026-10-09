@@ -1,18 +1,25 @@
-# The one process-lifetime tokio runtime every xdg-desktop-portal call runs on, in a leaf so the
-# libei injector (pf-inject) shares it with capture and the virtual displays without compiling
-# the PipeWire capture stack. Content is Linux-only; the crate compiles to an empty lib elsewhere.
+# The one process-lifetime tokio runtime every xdg-desktop-portal call runs on, plus the bounded
+# handshake steps and the ScreenCast cursor negotiation, in a leaf so the libei injector (pf-inject)
+# and the virtual displays share them with capture without compiling the PipeWire capture stack.
+# Linux-only except the pure cursor ladder (`cursor_mode`), which compiles everywhere.
 [package]
 name = "pf-portal"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license = "MIT OR Apache-2.0"
-description = "punktfunk host: the never-dropped tokio runtime every xdg-desktop-portal call runs on."
+description = "punktfunk host: the never-dropped tokio runtime every xdg-desktop-portal call runs on, and its bounded handshake steps."
 publish = false
 
 [target.'cfg(target_os = "linux")'.dependencies]
 # `enable_all` turns on the IO and time drivers the zbus reader and the handshake timeouts need.
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "net", "time"] }
+# `screencast` for the cursor negotiation; capture, pf-inject and pf-vdisplay already enable it.
+ashpd = { version = "0.13", features = ["screencast"] }
+anyhow = "1"
+tracing = "0.1"
+# `PUNKTFUNK_PORTAL_CURSOR_MODE`, read by the cursor negotiation.
+pf-host-config = { path = "../pf-host-config" }
 
 [lints]
 workspace = true

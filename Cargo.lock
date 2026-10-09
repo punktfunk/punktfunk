@@ -3499,7 +3499,11 @@ dependencies = [
 name = "pf-portal"
 version = "0.43.1"
 dependencies = [
+ "anyhow",
+ "ashpd",
+ "pf-host-config",
  "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -3604,7 +3608,6 @@ dependencies = [
  "futures-util",
  "hex",
  "libc",
- "pf-capture",
  "pf-driver-proto",
  "pf-frame",
  "pf-gpu",

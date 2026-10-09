@@ -1,14 +1,14 @@
-//! Bounded ScreenCast handshake steps and the cursor-mode negotiation, shared by
-//! capture and the virtual displays. They run on [`pf_portal::portal_runtime`],
-//! the one runtime ashpd's process-global connection lives on.
+//! Bounded portal handshake steps and the ScreenCast cursor-mode negotiation,
+//! shared by capture, the virtual displays and the libei injector. They run on
+//! [`crate::portal_runtime`], the one runtime ashpd's process-global connection lives on.
 //!
 //! Every ScreenCast handshake shares [`HANDSHAKE_BUDGET`] with its bounded
 //! steps ([`within`], [`finish_or_close`], [`close_session`]) and the
 //! cursor-mode negotiation ([`negotiate_cursor_mode`]).
 
+use crate::cursor_mode::{parse_pin, pick, Mode, Pin};
 use ashpd::desktop::screencast::{CursorMode, Screencast};
 use ashpd::enumflags2::BitFlags;
-use pf_frame::cursor_mode::{parse_pin, pick, Mode, Pin};
 use std::future::Future;
 use std::time::Duration;
 
@@ -28,7 +28,7 @@ pub async fn close_session(close: impl Future<Output = ashpd::Result<()>>) {
         Ok(Ok(())) => {}
         Ok(Err(e)) => tracing::warn!(
             error = %e,
-            "closing the portal session failed — the next cast may find the portal busy"
+            "closing the portal session failed — the next session may find the portal busy"
         ),
         Err(_) => tracing::warn!(
             budget_s = CAST_CLOSE_BUDGET.as_secs(),
@@ -138,7 +138,7 @@ fn want(hw_cursor: bool, backend: &str) -> Mode {
 }
 
 /// The `SelectSources` cursor mode for every portal cast, through the one
-/// ladder in [`pf_frame::cursor_mode`]. Never an unadvertised bit: the portal
+/// ladder in [`crate::cursor_mode`]. Never an unadvertised bit: the portal
 /// closes a session that asks for one. An empty or failed read requests
 /// `Embedded`; the mode is fixed for the session.
 pub async fn negotiate_cursor_mode(proxy: &Screencast, hw_cursor: bool, backend: &str) -> Mode {

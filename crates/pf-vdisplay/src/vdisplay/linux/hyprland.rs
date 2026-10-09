@@ -1524,7 +1524,7 @@ fn apply_monitor_rule(name: &str, mode: Mode, colour: Option<HdrRule>) -> Result
         "Hyprland did not light the streamed head in 10-bit HDR — streaming SDR; this host \
          offers SDR until it restarts"
     );
-    pf_capture::note_hdr_capture_failed(pf_capture::HdrSource::VirtualOutput);
+    pf_frame::hdr::note_hdr_capture_failed(pf_frame::hdr::HdrSource::VirtualOutput);
     set_monitor_rule(name, mode, None).map(|()| None)
 }
 

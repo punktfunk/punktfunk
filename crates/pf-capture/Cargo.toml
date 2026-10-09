@@ -33,7 +33,7 @@ pipewire = { version = "0.10", features = ["v0_3_49"] }
 libc = "0.2"
 # The dmabuf read-ready fence wait before a frame is handed on.
 pf-dmabuf = { path = "../pf-dmabuf" }
-# The shared, never-dropped portal runtime the handshakes park on.
+# The shared, never-dropped portal runtime, the bounded handshake steps and the cursor negotiation.
 pf-portal = { path = "../pf-portal" }
 # ashpd 0.13 uses the tokio runtime for the one-time portal handshake (control plane).
 # `sync` is for the `tokio::sync::oneshot` quit channels in the portal/linux capture paths. It used
