@@ -18,6 +18,9 @@ One `KEY=value` per line; `#` starts a comment and keys are case-sensitive. The 
 when it starts, so an edit does nothing until you restart it. A console setting set here shows as
 locked in the console until you remove the line.
 
+Unless its row says otherwise, an on/off variable is off at `0`, `false`, `off` or `no` (any case)
+and on at any other value, so `PUNKTFUNK_NO_MIC_INSTALL=0` still installs the virtual microphone.
+
 Resolution and bitrate aren't host settings — the client picks them. See [Bitrate](#bitrate).
 
 ## Settings in the web console
@@ -199,8 +202,8 @@ Env-only additions to the **Game Mode** rows above. See [gamescope](/docs/gamesc
 | `PUNKTFUNK_STREAM_SINK` | unset · `stream` · `0` | Linux: where desktop audio is captured. Unset, the host creates **Punktfunk Stream Speaker**, makes it the default while streaming and records it. `stream` uses a capture stream in its place; `0` records your current default output. |
 | `PUNKTFUNK_MIC_DEVICE` | name substring | Windows: the device the client's microphone is routed to. |
 | `PUNKTFUNK_MIC_LEGACY_BUFFER` | `1` | Fixed microphone buffering instead of the adaptive one. If the mic only sounds right with this set, report it. |
-| `PUNKTFUNK_NO_MIC_INSTALL` | set | Windows: don't install the virtual microphone. |
-| `PUNKTFUNK_NO_AUDIO_MINT` | set | Windows: don't create the host's own audio endpoints from Steam's streaming-audio driver; pick devices by name instead. |
+| `PUNKTFUNK_NO_MIC_INSTALL` | `1` | Windows: don't install the virtual microphone. |
+| `PUNKTFUNK_NO_AUDIO_MINT` | `1` | Windows: don't create the host's own audio endpoints from Steam's streaming-audio driver; pick devices by name instead. |
 
 ## Windows host
 

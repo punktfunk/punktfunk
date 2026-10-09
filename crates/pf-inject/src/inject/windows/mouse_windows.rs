@@ -386,7 +386,7 @@ pub(crate) fn ensure_resident() {
     use std::sync::OnceLock;
     static STARTED: OnceLock<()> = OnceLock::new();
     STARTED.get_or_init(|| {
-        if std::env::var_os("PUNKTFUNK_NO_VIRTUAL_MOUSE").is_some_and(|v| v != "0") {
+        if pf_host_config::env_on("PUNKTFUNK_NO_VIRTUAL_MOUSE") == Some(true) {
             tracing::info!(
                 "virtual HID mouse disabled (PUNKTFUNK_NO_VIRTUAL_MOUSE) — with no physical \
                  pointer attached, Windows will not draw a cursor into the stream"

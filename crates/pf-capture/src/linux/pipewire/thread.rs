@@ -476,8 +476,9 @@ fn log_resolved_arm(
              zero-copy is off for this capture ({}); set PUNKTFUNK_ZEROCOPY=1 to restore the \
              dmabuf default",
             consumer.as_str(),
-            if std::env::var_os("PUNKTFUNK_ZEROCOPY").is_some() {
-                "PUNKTFUNK_ZEROCOPY is set falsy"
+            // The knob's own grammar decided (`pf_zerocopy`); a set-but-on value is not the cause.
+            if !pf_zerocopy::enabled() {
+                "PUNKTFUNK_ZEROCOPY is off"
             } else if opts.want_hdr && !policy.hdr_cuda_ok {
                 // `build_importer` drops HDR when the encoder cannot take packed 10-bit
                 // CUDA. Naming the output format would send the reader to the wrong knob.

@@ -660,12 +660,7 @@ pub(super) fn runner_sandbox_off() -> bool {
 /// Write or remove [`SANDBOX_OFF_MARKER`] from this process's environment. The serving host
 /// alone calls it: its environment is `host.env`.
 pub(super) fn publish_sandbox_override() {
-    let off = std::env::var("PUNKTFUNK_PLUGIN_SANDBOX").is_ok_and(|v| {
-        matches!(
-            v.trim().to_ascii_lowercase().as_str(),
-            "0" | "off" | "false"
-        )
-    });
+    let off = pf_host_config::env_on("PUNKTFUNK_PLUGIN_SANDBOX") == Some(false);
     let marker = pf_paths::config_dir()
         .join(RUNNER_DATA_DIR)
         .join(SANDBOX_OFF_MARKER);
