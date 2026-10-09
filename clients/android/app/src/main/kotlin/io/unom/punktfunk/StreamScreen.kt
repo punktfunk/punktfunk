@@ -306,10 +306,9 @@ fun StreamScreen(session: ActiveSession, onSessionEnded: (SessionEndReason) -> U
     // Host-gone watchdog and the live access level.
     SessionWatchEffect(handle, initialAccess, ui, peripherals, onSessionEnded)
 
-    // One-shot teardown guard. Both the SurfaceView callback and DisposableEffect tear down on the
-    // way out, but `nativeClose` frees the handle — so once it's closed, NO path may touch the handle
-    // again (use-after-free → SIGSEGV: the consistent back-while-streaming crash). Both run on the
-    // main thread, so a plain flag is race-free; AtomicBoolean just makes the intent explicit.
+    // Set as onDispose starts: it stops every plane and queues the close. The surfaceDestroyed that
+    // follows must not restart the keep-alive drain, as the handle stays live until that close runs.
+    // A closed handle makes every native call a no-op; this flag is only about that order.
     val closed = remember { AtomicBoolean(false) }
     // The mic opens off the UI thread (AAudio input opens can take hundreds of ms), one start at a
     // time. Every stop bumps `micGen`, so a start that lost its surface meanwhile undoes itself.
@@ -331,7 +330,7 @@ fun StreamScreen(session: ActiveSession, onSessionEnded: (SessionEndReason) -> U
         // The panel's refresh pin, unbuffered input dispatch and the render-rate vote.
         streamWindow.pinDisplay()
         onDispose {
-            closed.set(true) // from here the handle gets freed; surfaceDestroyed must not touch it
+            closed.set(true) // a later surfaceDestroyed stops nothing more and starts no drain
             micGen.incrementAndGet()
             micStarter.shutdown()
             peripherals.stop()
@@ -710,10 +709,8 @@ fun StreamScreen(session: ActiveSession, onSessionEnded: (SessionEndReason) -> U
                             }
 
                             override fun surfaceDestroyed(holder: SurfaceHolder) {
-                                // Surface gone (backgrounding, or on the way out). Stop the threads that
-                                // render to it — but only while the session is still open. Once
-                                // DisposableEffect has closed it, the handle is freed; dereferencing it
-                                // here is the use-after-free that crashed on back-navigation.
+                                // Surface gone: backgrounding, or on the way out. Stop the threads
+                                // that render to it. On the way out onDispose already did; see `closed`.
                                 if (!closed.get()) {
                                     micGen.incrementAndGet()
                                     releaseMicEffects(micEffects)
