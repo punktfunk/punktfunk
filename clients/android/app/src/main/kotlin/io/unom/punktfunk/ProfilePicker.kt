@@ -125,6 +125,30 @@ suspend fun stillListed(identity: ClientIdentity, host: KnownHost, id: String): 
         HostProfiles.fetch(identity, host.address, host.effectiveMgmtPort, host.fpHex)
     }.let { it is ProfilesAnswer.Listed && it.rows.any { r -> r.id == id } }
 
+/** The one redial a seat host's `profile-unknown` earns, for every touch connect. */
+object ProfileRetry {
+    /**
+     * After the dial as [choice] to [record] failed with [token]: true when a seat host refused a
+     * stale seat of a profile that [listed] still finds, and this dial was not already the
+     * [redial]. The caller then dials once more as `choice.id`; the dial reads the seat afresh.
+     * Otherwise a `profile-unknown` clears [record]'s saved pick, so the next connect asks again.
+     */
+    suspend fun afterRefusal(
+        token: String,
+        record: KnownHost?,
+        choice: ProfileChoice.Dial,
+        redial: Boolean,
+        store: KnownHostStore,
+        listed: suspend (KnownHost, String) -> Boolean,
+    ): Boolean {
+        if (token != "profile-unknown" || record == null) return false
+        val id = choice.id
+        if (!redial && id != null && listed(record, id)) return true
+        HostRecords.savePick(store, record, null)
+        return false
+    }
+}
+
 /**
  * The profile a connect to [host] dials as: asks the host who plays on it, applies
  * [pickerDecision], then [seatGate] to the profile that plays. A failed or late answer dials
