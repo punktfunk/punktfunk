@@ -180,9 +180,9 @@ object NativeBridge {
      * Run the network check over this session and return its report: `[ceilingKbps, wall,
      * hasClean, cleanRateKbps, cleanLossPct, cleanJitterUs, clientIfaceKind, clientLinkMbps,
      * clientRcvbufKb, hostIfaceKind, hostLinkMbps, hostSndbufKb, nLegs, burstsLossPct,
-     * cappedLossPct, nFindings]` then `[id, severity, n0, n1, n2]` per finding. Blocking
-     * for ten to twenty seconds — call it off the main thread. Null on a dead handle or when the
-     * check could not run.
+     * cappedLossPct, nFindings]`, `[id, severity, n0, n1, n2]` per finding, then
+     * `recommendedKbps`. Blocking for ten to twenty seconds — call it off the main thread. Null on
+     * a dead handle or when the check could not run.
      */
     external fun nativeNetworkCheck(handle: Long): DoubleArray?
 

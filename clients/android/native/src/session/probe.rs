@@ -17,8 +17,8 @@ use jni::EnvUnowned;
 ///
 /// Layout: `[ceilingKbps, wall, hasClean, cleanRateKbps, cleanLossPct, cleanJitterUs,
 /// clientIfaceKind, clientLinkMbps, clientRcvbufKb, hostIfaceKind, hostLinkMbps,
-/// hostSndbufKb, nLegs, burstsLossPct, cappedLossPct, nFindings]` then five per finding:
-/// `[id, severity, n0, n1, n2]`.
+/// hostSndbufKb, nLegs, burstsLossPct, cappedLossPct, nFindings]`, five per finding
+/// `[id, severity, n0, n1, n2]`, then `recommendedKbps` (the core's headroom under the ceiling).
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeNetworkCheck<'local>(
     mut env: EnvUnowned<'local>,
@@ -72,6 +72,7 @@ pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeNetworkChec
                 f64::from(f.numbers[2]),
             ]);
         }
+        values.push(f64::from(health::recommended_kbps(r.speed.ceiling_kbps)));
         let arr = env.new_double_array(values.len())?;
         arr.set_region(env, 0, &values)?;
         Ok(arr)

@@ -1,0 +1,18 @@
+{
+  "$comment": "A network-check finding (id, its three figures) → the sentence every shell shows, pinned by pf-client-core findings, the Kotlin SpeedTestTest and the Swift SpeedTestView tests. Figures round the f64 value half-to-even with a '.' separator in every locale; 15 and 25 hundredths sit on and near a tie. An id the build doesn't know reads 'Finding N.'.",
+  "cases": [
+    {"id": 1, "numbers": [2500, 1000, 0], "sentence": "The host's port is faster than this device's (2500 vs 1000 Mbit/s), so bursts overflow the switch between them."},
+    {"id": 1, "numbers": [0, 1000, 0], "sentence": "The host's port is faster than this device's, so bursts overflow the switch between them."},
+    {"id": 2, "numbers": [150, 0, 0], "sentence": "This device drops the start of every burst (1.5 % lost) — the adapter's power saving is the usual cause."},
+    {"id": 2, "numbers": [15, 0, 0], "sentence": "This device drops the start of every burst (0.1 % lost) — the adapter's power saving is the usual cause."},
+    {"id": 3, "numbers": [40, 208, 0], "sentence": "This device's own receive buffer dropped 40 packets; the system caps it at 208 KB."},
+    {"id": 3, "numbers": [0, 208, 0], "sentence": "The system caps this device's receive buffer at 208 KB."},
+    {"id": 4, "numbers": [25, 0, 0], "sentence": "Loss at a rate no link refuses (0.2 %): check the cable, the port or the adapter driver."},
+    {"id": 5, "numbers": [2500, 45000, 0], "sentence": "Something on the path buffers instead of dropping (2 ms spread); keep the bitrate under 45 Mbit/s."},
+    {"id": 6, "numbers": [12, 4096, 0], "sentence": "The host's send buffer refused 12 packets; raise its limit."},
+    {"id": 6, "numbers": [0, 4096, 0], "sentence": "The host's send buffer is capped at 4096 KB; raise its limit."},
+    {"id": 7, "numbers": [35, 0, 0], "sentence": "This device is on Wi-Fi; bursts lose 0.3 %."},
+    {"id": 7, "numbers": [0, 0, 0], "sentence": "This device is on Wi-Fi."},
+    {"id": 9, "numbers": [1, 2, 3], "sentence": "Finding 9."}
+  ]
+}
