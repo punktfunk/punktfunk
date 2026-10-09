@@ -1433,56 +1433,18 @@ pub(crate) async fn run_admitted(
         != 0)
         .then(crate::audio::capture_policy::keep_host_audio_guard);
 
-    // Not for the two frame-arithmetic sources: their clients want nothing else on the wire,
-    // and the rig's budget carries the audio reservation without a capture behind it.
-    // Best-effort: a spawn error must not early-return (threads already up).
-    let audio_handle = if !matches!(
+    let audio_handle = spawn_audio_plane(
+        &conn,
+        &stop,
         opts.source,
-        Punktfunk1Source::Synthetic | Punktfunk1Source::SyntheticAbr(..)
-    ) {
-        let conn = conn.clone();
-        let stop = stop.clone();
-        let cap = audio_cap.clone();
-        let channels = welcome.audio_channels;
-        // Format from Welcome bytes, not a second evaluation of the gate (config + live property).
-        let audio_plane = handshake::AudioPlane::from_welcome(&welcome);
-        // Read the granted bit back off Welcome, then re-derive the same budget rung from it.
-        let budget = handshake::audio_budget(
-            welcome.host_caps & punktfunk_core::quic::HOST_CAP_AUDIO_RED != 0,
-            welcome.bitrate_kbps,
-            channels,
-            audio_plane.layout,
-        );
-        // Isolated session captures its own named sink; `None` is the shared path. A joiner
-        // taps the owner's sink either way: its isolated one, or the one the owner published.
-        let iso_sink = planes.isolation.clone().and_then(|i| i.sink);
-        let tap_from = joined.as_ref().map(|(d, _)| d.audio_sink.clone());
-        let published = audio_sink.clone();
-        let muted = controls.muted.clone();
-        let counters = counters.clone();
-        std::thread::Builder::new()
-            .name("punktfunk1-audio".into())
-            .spawn(move || {
-                audio_thread(
-                    conn,
-                    stop,
-                    cap,
-                    channels,
-                    budget,
-                    audio_plane,
-                    iso_sink,
-                    join_live,
-                    published,
-                    tap_from,
-                    muted,
-                    counters,
-                )
-            })
-            .map_err(|e| tracing::warn!(error = %e, "audio thread spawn failed — session continues without audio"))
-            .ok()
-    } else {
-        None
-    };
+        audio_cap,
+        &welcome,
+        &planes,
+        joined.as_ref().map(|(d, _)| d),
+        &audio_sink,
+        &controls,
+        &counters,
+    );
 
     if welcome.color.is_hdr() {
         send_hdr_baseline(&conn, hello.display_hdr);
@@ -1880,6 +1842,73 @@ fn spawn_input_plane(
         feedback_tx,
     );
     Ok(input_handle)
+}
+
+/// The audio thread, except for the two frame-arithmetic sources: their clients want nothing
+/// else on the wire, and the rig's budget carries the audio reservation without a capture
+/// behind it. A joiner (`joined`) taps the owner's sink; `published` is where this session's
+/// thread names the sink it captures. Best-effort: a failed spawn is logged and the session
+/// streams without audio, because the other threads are already up.
+#[allow(clippy::too_many_arguments)]
+fn spawn_audio_plane(
+    conn: &link::SessionLink,
+    stop: &Arc<AtomicBool>,
+    source: Punktfunk1Source,
+    audio_cap: &AudioCapSlot,
+    welcome: &Welcome,
+    planes: &SessionPlanes,
+    joined: Option<&crate::vdisplay::admission::LiveDisplay>,
+    published: &Arc<std::sync::Mutex<Option<String>>>,
+    controls: &crate::session_status::SessionControls,
+    counters: &Arc<crate::session_status::SessionCounters>,
+) -> Option<std::thread::JoinHandle<()>> {
+    if matches!(
+        source,
+        Punktfunk1Source::Synthetic | Punktfunk1Source::SyntheticAbr(..)
+    ) {
+        return None;
+    }
+    let conn = conn.clone();
+    let stop = stop.clone();
+    let cap = audio_cap.clone();
+    let channels = welcome.audio_channels;
+    // Format from Welcome bytes, not a second evaluation of the gate (config + live property).
+    let audio_plane = handshake::AudioPlane::from_welcome(welcome);
+    // Read the granted bit back off Welcome, then re-derive the same budget rung from it.
+    let budget = handshake::audio_budget(
+        welcome.host_caps & punktfunk_core::quic::HOST_CAP_AUDIO_RED != 0,
+        welcome.bitrate_kbps,
+        channels,
+        audio_plane.layout,
+    );
+    // Isolated session captures its own named sink; `None` is the shared path. A joiner
+    // taps the owner's sink either way: its isolated one, or the one the owner published.
+    let iso_sink = planes.isolation.clone().and_then(|i| i.sink);
+    let join_live = joined.is_some();
+    let tap_from = joined.map(|d| d.audio_sink.clone());
+    let published = published.clone();
+    let muted = controls.muted.clone();
+    let counters = counters.clone();
+    std::thread::Builder::new()
+        .name("punktfunk1-audio".into())
+        .spawn(move || {
+            audio_thread(
+                conn,
+                stop,
+                cap,
+                channels,
+                budget,
+                audio_plane,
+                iso_sink,
+                join_live,
+                published,
+                tap_from,
+                muted,
+                counters,
+            )
+        })
+        .map_err(|e| tracing::warn!(error = %e, "audio thread spawn failed — session continues without audio"))
+        .ok()
 }
 
 /// What admission resolved for this device: its effective grant mask, deadline and the record's
