@@ -136,6 +136,10 @@ pub mod library_layout;
 pub mod update;
 #[cfg(desktop)]
 pub mod video;
+// What this client can decode and advertise: rung evidence, admission and the Hello gates.
+// `video` re-exports every item.
+#[cfg(desktop)]
+mod video_caps;
 // Decode counters, picture shape, and the DXGI driver-version split.
 // Built for `desktop`, or Windows `d3d11va` alone. `video` re-exports them
 // when the ladder is built; this module is the path when it is not.
