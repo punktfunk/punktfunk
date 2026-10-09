@@ -7,7 +7,8 @@ import PunktfunkKit
 import SwiftUI
 
 struct LibrarySectionsPanel: View {
-    @AppStorage(DefaultsKey.librarySections) private var storedLayout = ""
+    @AppStorage(DefaultsKey.librarySections) private var storedLayout =
+        SettingDefault.librarySections
     #if DEBUG
     /// Shot harness: a layout that never touches the device's own.
     var shotLayout: String?

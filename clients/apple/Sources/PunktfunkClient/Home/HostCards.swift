@@ -313,7 +313,7 @@ struct HostCardView: View {
     var pinnedPreset: StreamPreset? = nil
     /// What the host has up right now (`NowPlayingStore`), if anything.
     var nowPlaying: String? = nil
-    @AppStorage(DefaultsKey.autoWake) private var autoWake = true
+    @AppStorage(DefaultsKey.autoWake) private var autoWake = SettingDefault.autoWake
 
     /// The preset this card announces: a pinned card's own, else the host's binding.
     private var shownPreset: StreamPreset? {

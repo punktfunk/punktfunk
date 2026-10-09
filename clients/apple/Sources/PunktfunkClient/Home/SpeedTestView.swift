@@ -39,7 +39,7 @@ struct SpeedTestView: View {
     var shotRun: (phase: SpeedTestPhase, trace: PunktfunkConnection.ProbeTrace)?
     #endif
 
-    @AppStorage(DefaultsKey.bitrateKbps) private var bitrateKbps = 0
+    @AppStorage(DefaultsKey.bitrateKbps) private var bitrateKbps = SettingDefault.bitrateKbps
     /// The catalog, so Apply writes the layer this host reads its bitrate from.
     @ObservedObject private var presets = PresetStore.shared
     @State private var phase: SpeedTestPhase = .idle

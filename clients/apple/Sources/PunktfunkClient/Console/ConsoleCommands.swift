@@ -273,7 +273,8 @@ extension ConsoleModel {
         artShown = []
         bridge.push(.libraryBegin, "{}")
         // The session binary's console wakes on the same switch.
-        let autoWake = UserDefaults.standard.object(forKey: DefaultsKey.autoWake) as? Bool ?? true
+        let autoWake = UserDefaults.standard.object(forKey: DefaultsKey.autoWake) as? Bool
+            ?? SettingDefault.autoWake
         let events = LibraryLoad.run(
             target: target, hostID: host.id.uuidString, wakeMacs: autoWake ? host.wakeMacs : [])
         fetching = Task { [weak self] in

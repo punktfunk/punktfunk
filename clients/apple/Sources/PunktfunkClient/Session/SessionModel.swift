@@ -651,7 +651,8 @@ final class SessionModel: ObservableObject {
 
     /// Show the exit hint at stream start, unless it is turned off.
     private func noteStreamStart() {
-        if UserDefaults.standard.object(forKey: DefaultsKey.exitHint) as? Bool ?? true {
+        if UserDefaults.standard.object(forKey: DefaultsKey.exitHint) as? Bool
+            ?? SettingDefault.exitHint {
             flash(\.exitHint, true)
         } else {
             notices.exitHint.clear()

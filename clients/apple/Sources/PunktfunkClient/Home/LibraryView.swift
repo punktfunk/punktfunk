@@ -96,7 +96,7 @@ struct LibraryView: View {
     /// The touch grid's sort (the shared `library_sort` key, the same one the console's bar
     /// writes) and its grouping (touch-only — sections are the touch analogue of the console's
     /// Collections place).
-    @AppStorage(DefaultsKey.librarySort) private var sortRaw = ""
+    @AppStorage(DefaultsKey.librarySort) private var sortRaw = SettingDefault.librarySort
     @AppStorage(DefaultsKey.libraryGroupBy) private var groupByRaw = ""
     @Environment(\.dismiss) private var dismiss
     /// Resolves a pinned shelf's preset NAME for the title (the target carries only its id).
@@ -105,7 +105,8 @@ struct LibraryView: View {
     /// Resume row) and FEEDS: its own `/status` fetch below is the freshest one anybody has.
     @ObservedObject private var nowPlayingStore = NowPlayingStore.shared
     @ObservedObject private var favorites = LibraryFavorites.shared
-    @AppStorage(DefaultsKey.librarySections) private var sectionsRaw = ""
+    @AppStorage(DefaultsKey.librarySections) private var sectionsRaw =
+        SettingDefault.librarySections
     @State private var search = ""
     @State private var showCustomize = false
     /// The title whose details sheet is up (the title menu's Details…).
