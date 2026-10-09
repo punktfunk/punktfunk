@@ -8,9 +8,9 @@ import {
 	authConfigured,
 	csrfRequestOrigin,
 	isCrossSiteMutation,
-	safeNextPath,
 	verifyUiPassword,
 } from "./auth";
+import { safeNextPath } from "./paths";
 
 describe("safeNextPath", () => {
 	test("keeps a same-origin path with its query and hash", () => {

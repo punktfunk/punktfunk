@@ -1,7 +1,7 @@
 // `/api/v1/profiles/<id>/proxy/<rest>` reaches a seat's own host through the box. The box forwards
 // it with the admin bearer, so the routes that ask for the console password on the box's own host
 // ask on the seat's too: `gatedRoute` names the one that guards `rest`.
-import { normalizePath } from "./auth";
+import { normalizePath } from "./paths";
 
 /** A profile id as the host accepts one: ASCII letters and digits, at most 64. */
 const ID = /^[A-Za-z0-9]{1,64}$/;

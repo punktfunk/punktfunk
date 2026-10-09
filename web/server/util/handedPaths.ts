@@ -2,16 +2,13 @@
 // and the grant that follows a save. Only paths new in that save are granted: the form's old value
 // came from the plugin, and a path the plugin filled in itself is not the operator's word. A save
 // that drops a path lets the form go of it; the host keeps what another form or the operator holds.
+import {
+	flatten,
+	handed,
+	type JsonSchemaNode,
+} from "../../src/lib/schema-node";
 import { mgmtFetch } from "./forward";
 import { callPlugin } from "./pluginProxy";
-
-interface Node {
-	type?: string;
-	format?: string;
-	properties?: Record<string, Node>;
-	items?: Node;
-	allOf?: Node[];
-}
 
 export interface HandedPath {
 	path: string;
@@ -23,19 +20,16 @@ export interface GrantOutcome {
 	refused: { path: string; error: string }[];
 }
 
-// Plugins built on an effect 4 beta nest a checked field's annotations under `allOf`.
-const flatten = (n: Node): Node =>
-	(n.allOf ?? []).reduce<Node>((acc, b) => Object.assign(acc, b), { ...n });
-
 /** Every handed path in `value`, found by walking `schema` (the kit's `{schema: {…}}` document). */
 export function handedPaths(schema: unknown, value: unknown): HandedPath[] {
 	const out = new Map<string, HandedPath>();
-	const walk = (raw: Node | undefined, v: unknown): void => {
+	const walk = (raw: JsonSchemaNode | undefined, v: unknown): void => {
 		if (!raw) return;
 		const n = flatten(raw);
-		if (n.format === "pf:path" || n.format === "pf:path:write") {
+		const access = handed(n);
+		if (access) {
 			const path = typeof v === "string" ? v.trim() : "";
-			const write = n.format === "pf:path:write";
+			const write = access === "write";
 			if (path) out.set(path, { path, write: write || !!out.get(path)?.write });
 		} else if (n.type === "array" && Array.isArray(v)) {
 			for (const item of v) walk(n.items, item);
@@ -44,7 +38,7 @@ export function handedPaths(schema: unknown, value: unknown): HandedPath[] {
 				walk(child, (v as Record<string, unknown>)[k]);
 		}
 	};
-	walk((schema as { schema?: Node } | null)?.schema, value);
+	walk((schema as { schema?: JsonSchemaNode } | null)?.schema, value);
 	return [...out.values()];
 }
 
