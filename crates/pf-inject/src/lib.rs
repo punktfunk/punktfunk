@@ -669,6 +669,9 @@ fn libei_ei_source() -> libei::EiSource {
 #[cfg(target_os = "windows")]
 #[path = "inject/windows/channel_proof.rs"]
 pub mod channel_proof;
+/// Wire D-pad bits → the hat octant every HID pad codec reports.
+#[path = "inject/proto/dpad.rs"]
+mod dpad;
 #[cfg(target_os = "linux")]
 #[path = "inject/linux/dualsense.rs"]
 pub mod dualsense;

@@ -87,7 +87,7 @@ impl HoriState {
                 stick(f.rs_x as i32),
                 stick(-(f.rs_y as i32)),
             ],
-            hat: crate::eightbitdo_proto::hat(f.buttons),
+            hat: crate::dpad::dpad_octant(f.buttons).unwrap_or(0x0F),
             buttons: b,
             rt: f.right_trigger,
             lt: f.left_trigger,
