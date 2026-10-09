@@ -2,87 +2,76 @@ package io.unom.punktfunk
 
 import io.unom.punktfunk.kit.Gamepad
 import java.io.File
+import org.json.JSONArray
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * The Kotlin twin of pf-client-core's `overlay_actions` tests — the same blobs, the same
- * outcomes, so the two parsers cannot drift. Run: `./gradlew :app:testDebugUnitTest`.
+ * Replays `clients/shared/overlay-actions-vectors.json`, which the Rust and Swift parsers replay
+ * too, so the three cannot drift. A new case belongs in that file. Run:
+ * `./gradlew :app:testDebugUnitTest`.
  */
 class OverlayActionsTest {
-    private val full = """{"v":2,
-        "ring":["end_stream","shortcut:s1","host:power.sleep","stats",null,"pad"],
-        "shortcuts":[{"id":"s1","label":"Task Manager","keys":["ctrl","shift","escape"]}],
-        "pad":{"layout":"sticks","opacity":0.3,"scale":1.2}}"""
+    private val vectors: JSONObject by lazy {
+        // The module directory is the working directory, so clients/ is two levels up.
+        val file = File("../../shared/overlay-actions-vectors.json")
+        assertTrue("the vector file must be reachable at ${file.absolutePath}", file.isFile)
+        JSONObject(file.readText())
+    }
 
-    @Test
-    fun roundTripsThroughJson() {
-        val cfg = OverlayConfig.parse(full)
-        assertEquals(SlotId.Shortcut("s1"), cfg.ring[1])
-        assertEquals(SlotId.Host("power.sleep"), cfg.ring[2])
-        assertNull(cfg.ring[4])
-        assertEquals("sticks", cfg.pad.layout)
-        assertEquals(listOf("ctrl", "shift", "escape"), cfg.shortcut("s1")!!.keys)
-        assertEquals(cfg, OverlayConfig.parse(cfg.toJson()))
+    /** JSON equality with every number compared as a Float: each client prints the floats its own way. */
+    private fun sameJson(a: Any?, b: Any?): Boolean = when {
+        a is Number && b is Number -> a.toFloat() == b.toFloat()
+        a is JSONArray && b is JSONArray ->
+            a.length() == b.length() && (0 until a.length()).all { sameJson(a.get(it), b.get(it)) }
+        a is JSONObject && b is JSONObject -> a.keys().asSequence().toSet().let { keys ->
+            keys == b.keys().asSequence().toSet() && keys.all { sameJson(a.get(it), b.get(it)) }
+        }
+        else -> a == b
     }
 
     @Test
-    fun shortRingsPadAndLongRingsTruncate() {
-        val short = OverlayConfig.parse("""{"ring":["mic"]}""", RingPlatform.DESKTOP)
-        assertEquals(SlotId.Mic, short.ring[0])
-        assertTrue(short.ring.drop(1).all { it == null })
-        assertEquals(6, short.ring.size)
-        val long = OverlayConfig.parse(
-            """{"ring":["mic","mic","mic","mic","mic","mic","stats","stats"]}""",
-            RingPlatform.DESKTOP,
-        )
-        assertEquals(6, long.ring.size)
-        assertTrue(long.ring.all { it == SlotId.Mic })
+    fun sharedVectorsParseAndRoundTrip() {
+        val ids = vectors.getJSONArray("slot_ids")
+        for (i in 0 until ids.length()) {
+            assertEquals(ids.getString(i), SlotId.parse(ids.getString(i))?.id)
+        }
+        val cases = vectors.getJSONArray("cases")
+        assertTrue("the vector file is the contract", cases.length() >= 10)
+        for (i in 0 until cases.length()) {
+            val case = cases.getJSONObject(i)
+            val name = case.getString("name")
+            val platform = when (val p = case.getString("platform")) {
+                "touch" -> RingPlatform.TOUCH
+                "desktop" -> RingPlatform.DESKTOP
+                else -> error("$name: platform $p")
+            }
+            val cfg = OverlayConfig.parse(case.getString("blob"), platform)
+            val ring = case.getJSONArray("ring")
+            val want = (0 until ring.length()).map { if (ring.isNull(it)) null else ring.getString(it) }
+            assertEquals("$name: ring", want, cfg.ring.map { it?.id })
+            val stored = JSONObject(cfg.toJson())
+            assertTrue("$name: stored $stored", sameJson(stored, case.getJSONObject("round_trip")))
+            assertEquals("$name: reparse", cfg, OverlayConfig.parse(cfg.toJson(), platform))
+        }
     }
 
     @Test
-    fun unknownIdsAndDanglingShortcutsAreEmptySlots() {
-        val cfg = OverlayConfig.parse("""{"ring":["teleport","shortcut:nope","host:","stats"]}""")
-        assertNull("a newer client's id degrades to empty", cfg.ring[0])
-        assertNull("no such shortcut", cfg.ring[1])
-        assertNull("a host id needs a name", cfg.ring[2])
-        assertEquals(SlotId.Stats, cfg.ring[3])
-    }
-
-    @Test
-    fun emptyOrBrokenBlobsAreThePlatformDefault() {
-        val touch = OverlayConfig.platformDefault(RingPlatform.TOUCH)
-        val desktop = OverlayConfig.platformDefault(RingPlatform.DESKTOP)
-        assertEquals(touch, OverlayConfig.parse(""))
-        assertEquals(touch, OverlayConfig.parse(null))
-        assertEquals(desktop, OverlayConfig.parse("{not json", RingPlatform.DESKTOP))
-        assertEquals(SlotId.Pad, touch.ring[5])
-        assertEquals(SlotId.SendText, desktop.ring[5])
-        val cfg = OverlayConfig.parse("""{"v":2,"ring":[]}""")
-        assertEquals(PadConfig(), cfg.pad)
-        assertTrue(cfg.ring.all { it == null })
-    }
-
-    /** The Kotlin port of `pad_control_tweaks_round_trip_and_carry_unknown_ids`. */
-    @Test
-    fun padControlTweaksRoundTripAndCarryUnknownIds() {
-        val blob = """{"v":2,"pad":{"layout":"full","opacity":0.45,"scale":1.0,
-            "controls":{"ls":{"x":0.1,"y":0.8,"scale":1.5},"weird":{"hidden":true}},
-            "controls_narrow":{"face":{"scale":0.75}}}}"""
-        val cfg = OverlayConfig.parse(blob)
-        assertEquals(PadTweak(x = 0.1f, y = 0.8f, scale = 1.5f), cfg.pad.controls["ls"])
-        assertTrue("an unknown id is data, not an error", cfg.pad.controls["weird"]!!.hidden)
-        assertEquals(0.75f, cfg.pad.controlsNarrow["face"]!!.scale)
-        val json = cfg.toJson()
-        assertTrue("a rewrite keeps what it does not know", "weird" in json)
-        assertEquals(cfg, OverlayConfig.parse(json))
-        val plain = OverlayConfig.platformDefault(RingPlatform.TOUCH).toJson()
-        assertTrue("an untouched pad keeps its blob clean", "controls" !in plain)
-        val sparse = OverlayConfig.parse("""{"pad":{"controls":{"rs":{"x":0.5}}}}""").toJson()
-        assertTrue("absent fields stay absent: $sparse", """"rs":{"x":0.5}""" in sparse)
+    fun sharedPadTypeCycle() {
+        fun pref(name: String) = Gamepad.PREFS.first { it.name == name }.wire
+        val rows = vectors.getJSONArray("pad_type_cycle")
+        val cycle = (0 until rows.length()).map { i ->
+            val row = rows.getJSONObject(i)
+            pref(row.getString("name")).also { assertEquals(row.getString("label"), padTypeLabel(it)) }
+        }
+        assertEquals(cycle, PAD_TYPE_CYCLE.toList())
+        cycle.forEachIndexed { i, p -> assertEquals(cycle[(i + 1) % cycle.size], nextPadType(p)) }
+        val outside = vectors.getJSONArray("pad_type_outside_cycle")
+        for (i in 0 until outside.length()) {
+            assertEquals(outside.getString(i), Gamepad.PREF_AUTO, nextPadType(pref(outside.getString(i))))
+        }
     }
 
     /** Every case Rust's `key_vk` wrote; `../../../` from the module directory is the repo root. */
@@ -107,29 +96,5 @@ class OverlayActionsTest {
         assertEquals("PgUp", keyLegend("pageup"))
         assertEquals("F4", keyLegend("f4"))
         assertEquals("←", keyLegend("left"))
-    }
-
-    @Test
-    fun slotIdsAreStableStrings() {
-        for (id in listOf(
-            "end_stream", "end_game", "disconnect_linger", "touch_mode", "keyboard", "stats", "mic", "pad",
-            "send_text", "guide", "qam", "pad_mouse", "pad_type", "stream_mute", "swap_screens",
-            "host:power.reboot", "shortcut:s2",
-        )) {
-            assertEquals(id, SlotId.parse(id)!!.id)
-        }
-    }
-
-    @Test
-    fun padTypeCycleWrapsAndASettingsOnlyTypeStepsToAutomatic() {
-        val seen = mutableListOf(Gamepad.PREF_AUTO)
-        var p = nextPadType(Gamepad.PREF_AUTO)
-        while (p != Gamepad.PREF_AUTO) {
-            seen += p
-            p = nextPadType(p)
-        }
-        assertEquals(PAD_TYPE_CYCLE.toList(), seen)
-        assertEquals(Gamepad.PREF_AUTO, nextPadType(Gamepad.PREF_STEAMCONTROLLER2))
-        assertEquals("DualShock 4", padTypeLabel(Gamepad.PREF_DUALSHOCK4))
     }
 }
