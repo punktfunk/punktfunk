@@ -1,6 +1,6 @@
-//! Forward-compat mapping for stored decoder-preference strings. Lives here
-//! because the Skia settings screen reads it on Android, where `video` does
-//! not build. `video` re-exports the function under its old name.
+//! Forward-compat mapping for stored decoder-preference strings. pf-client-core
+//! compiles this file into its portable half too: the Skia settings screen reads
+//! it on targets that never build this crate. `video` re-exports the function.
 
 /// Map stored `vulkan` / `vaapi` / `d3d11va` pins onto the matching `native-*`
 /// family. Those names selected libavcodec's rungs; refusing them would turn

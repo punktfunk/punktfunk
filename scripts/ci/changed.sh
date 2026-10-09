@@ -57,7 +57,7 @@ classify() {
                 .cargo/*|Cargo.toml|Cargo.lock|rust-toolchain.toml|rustfmt.toml|\
                 clients/linux/*|clients/session/*|clients/shared/*|\
                 crates/punktfunk-core/*|crates/punktfunk-ffi/*|\
-                crates/pf-bitstream/*|crates/pf-client-core/*|crates/pf-console-ui/*|\
+                crates/pf-bitstream/*|crates/pf-client-core/*|crates/pf-client-video/*|crates/pf-console-ui/*|\
                 crates/pf-dmabuf/*|crates/pf-dxvadec/*|crates/pf-libva/*|crates/pf-presenter/*|\
                 crates/pf-update-check/*|crates/pf-vaapi/*|crates/pf-v4l2dec/*|crates/pf-v4l2/*|crates/pf-vkdecode/*|\
                 crates/pyrowave-sys/*|ci/rust-ci-arm64cross.Dockerfile|\

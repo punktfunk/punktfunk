@@ -15,7 +15,7 @@ use std::io::BufWriter;
 use std::io::Write;
 use std::path::Path;
 
-pub(crate) struct AuDump {
+pub struct AuDump {
     data: BufWriter<std::fs::File>,
     idx: BufWriter<std::fs::File>,
     offset: u64,
@@ -35,7 +35,7 @@ fn codec_ext(codec: u8) -> &'static str {
 impl AuDump {
     /// `PUNKTFUNK_DUMP_VIDEO` directory. `None` if unset or the files could not
     /// be created; both cases are already logged.
-    pub(crate) fn from_env(codec: u8) -> Option<AuDump> {
+    pub fn from_env(codec: u8) -> Option<AuDump> {
         let dir = std::env::var_os("PUNKTFUNK_DUMP_VIDEO")?;
         let stamp = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -78,7 +78,7 @@ impl AuDump {
     }
 
     /// Append one AU. `false` means log-and-disable: the caller must drop the dump.
-    pub(crate) fn write(&mut self, au: &[u8], flags: u32, complete: bool) -> bool {
+    pub fn write(&mut self, au: &[u8], flags: u32, complete: bool) -> bool {
         let r = self.data.write_all(au).and_then(|()| {
             writeln!(
                 self.idx,

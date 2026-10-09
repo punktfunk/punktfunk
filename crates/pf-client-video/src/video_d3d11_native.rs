@@ -1401,7 +1401,7 @@ mod parity {
     //! Frame-hash parity against libavcodec software decode.
     //!
     //! `#[ignore]`d: needs a real D3D11 video device. On Windows:
-    //! `cargo test -p pf-client-core --lib video_d3d11_native -- --ignored --nocapture`
+    //! `cargo test -p pf-client-video --lib video_d3d11_native -- --ignored --nocapture`
     //! Pin a GPU with `PF_DXVA_ADAPTER=<adapter description substring>`.
     //!
     //! Hashes the decode surface before `VideoProcessorBlt`. Goldens are libavcodec's

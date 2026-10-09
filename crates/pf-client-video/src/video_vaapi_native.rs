@@ -2722,7 +2722,7 @@ mod tests {
 #[cfg(test)]
 mod parity {
     //! Ignored frame-parity tests against libavcodec goldens in `pf-vkdecode/tests/data`.
-    //! Run: `cargo test -p pf-client-core --lib video_vaapi_native -- --include-ignored --nocapture`.
+    //! Run: `cargo test -p pf-client-video --lib video_vaapi_native -- --include-ignored --nocapture`.
     //! Pin a GPU with `PUNKTFUNK_VAAPI_DEVICE=/dev/dri/renderD…`.
     //!
     //! Seven H.264 / H.265 / Main10 / AV1 legs hash every delivered frame, flush
