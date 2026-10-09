@@ -48,8 +48,8 @@ use crate::video::DmabufFrame;
 use crate::video::DmabufPlane;
 use crate::video::DrmFrameGuard;
 use crate::video::FrameGuard;
-use crate::video_v4l2::colour_of;
-use crate::video_v4l2::display_of;
+use crate::video_color::ColorDesc;
+use crate::video_types::display_of;
 use crate::video_v4l2::Facts;
 use crate::video_v4l2::Release;
 use crate::video_v4l2::V4l2FrameGuard;
@@ -142,11 +142,7 @@ impl<D: OpenedStateless> StatelessHevc<D> {
     pub(crate) fn decode(&mut self, au: &[u8]) -> Result<Option<DecodedImage>> {
         self.drain_releases();
         let result = self.decode_inner(au);
-        match &result {
-            Ok(Some((_, damaged))) => self.health.note(*damaged, false, 0),
-            Ok(None) => {}
-            Err(_) => self.health.note(false, true, 0),
-        }
+        self.health.note_outcome(&result);
         Ok(result?.and_then(|(image, _)| image))
     }
 
@@ -165,7 +161,7 @@ impl<D: OpenedStateless> StatelessHevc<D> {
         let facts = Facts {
             keyframe: pic.is_idr,
             references_clean: pic.references_clean,
-            color: colour_of(&pic.colour),
+            color: ColorDesc::from(&pic.colour),
             display: display_of(pic.display_crop)?,
             damaged: plan.warnings.iter().any(PlanWarning::is_integrity),
         };

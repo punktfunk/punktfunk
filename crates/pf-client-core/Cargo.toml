@@ -295,7 +295,7 @@ desktop = [
 ]
 # DXVA device and native rung. `desktop` includes it. The `windows` header list
 # stays the full set, because clipboard.rs needs `winuser` and `winbase`.
-d3d11va = ["dep:pf-dxvadec", "dep:windows"]
+d3d11va = ["dep:pf-dxvadec", "dep:pf-bitstream", "dep:windows"]
 # `discovery` is the mDNS browse (`mdns-sd`, `async-channel`) without the rest of `desktop`.
 # `desktop` includes it, so every desktop consumer is unchanged, and still names
 # `async-channel` for the session and gamepad paths. A shell that only looks for hosts says

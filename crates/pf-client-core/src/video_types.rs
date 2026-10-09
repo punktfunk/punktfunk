@@ -1,4 +1,5 @@
-//! Decode counters, the Welcome picture shape, and the DXGI driver version.
+//! Decode counters, the per-AU facts every native rung shares, the Welcome picture
+//! shape, and the DXGI driver version.
 //!
 //! `video` re-exports these, so existing paths stay. `d3d11va` names
 //! them without building the Vulkan ladder. `ColorDesc` stays in `video_color`.
@@ -55,6 +56,18 @@ impl DecodeHealth {
         }
     }
 
+    /// Fold a rung's `(output, damaged)` answer for one AU. `Ok(None)` carries no
+    /// verdict (buffering, RASL skip, the wait for an IDR). `Err` is a refusal only,
+    /// not also a clean AU that would reset the run.
+    #[cfg(all(desktop, target_os = "linux"))]
+    pub(crate) fn note_outcome<T>(&mut self, outcome: &anyhow::Result<Option<(T, bool)>>) {
+        match outcome {
+            Ok(Some((_, damaged))) => self.note(*damaged, false, 0),
+            Ok(None) => {}
+            Err(_) => self.note(false, true, 0),
+        }
+    }
+
     /// One correctly-decoded frame discarded unshown. Separate from [`Self::note`]:
     /// several frames can drop inside one AU that still shipped a picture. Never touches [`Self::run`].
     /// True when this drop should warn: the first in full, then one per [`DROP_WARN_EVERY`].
@@ -80,6 +93,39 @@ const DROP_WARN_EVERY: u64 = 300;
 pub(crate) fn trim_deliverable<F>(queue: &mut std::collections::VecDeque<F>, cap: usize) -> Vec<F> {
     let excess = queue.len().saturating_sub(cap);
     queue.drain(..excess).collect()
+}
+
+/// A native rung's pf-bitstream planner, chosen once per session by codec.
+pub(crate) enum AnyPlanner {
+    H264(Box<pf_bitstream::h264::H264Planner>),
+    H265(Box<pf_bitstream::h265::H265Planner>),
+    Av1(Box<pf_bitstream::av1::Av1Planner>),
+}
+
+impl AnyPlanner {
+    /// The gate lifted on intra refresh marks: the planner's damaged-chain marks are
+    /// stale (`CleanLedger::clear`).
+    pub(crate) fn forgive_unclean(&mut self) {
+        match self {
+            AnyPlanner::H264(p) => p.forgive_unclean(),
+            AnyPlanner::H265(p) => p.forgive_unclean(),
+            AnyPlanner::Av1(p) => p.forgive_unclean(),
+        }
+    }
+}
+
+/// The visible size of an H.264/H.265 picture's conformance window. Every rung
+/// samples planes from (0,0), so a window with another origin is refused rather
+/// than shown shifted.
+pub(crate) fn display_of(crop: pf_bitstream::h264::DisplayCrop) -> anyhow::Result<(u32, u32)> {
+    if crop.x != 0 || crop.y != 0 {
+        anyhow::bail!(
+            "conformance window at ({}, {}): the rung hands the picture over uncropped",
+            crop.x,
+            crop.y
+        );
+    }
+    Ok((crop.width, crop.height))
 }
 
 /// Picture shape the host resolved in Welcome, before any AU arrives.
@@ -128,4 +174,39 @@ pub fn umd_version_parts(raw: i64) -> [u16; 4] {
 pub(crate) fn next_pool_generation() -> u32 {
     static NEXT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(1);
     NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod tests {
+    use super::*;
+    use pf_bitstream::h264::DisplayCrop;
+
+    #[test]
+    fn only_a_planned_au_is_a_verdict() {
+        let mut health = DecodeHealth::default();
+        health.note_outcome(&Ok(Some(((), true))));
+        health.note_outcome::<()>(&Ok(None));
+        assert_eq!(
+            (health.damaged, health.run),
+            (1, 1),
+            "a RASL skip leaves the run alone"
+        );
+        health.note_outcome::<()>(&Err(anyhow::anyhow!("refused")));
+        assert_eq!((health.refused, health.run), (1, 2));
+        health.note_outcome(&Ok(Some(((), false))));
+        assert_eq!(health.run, 0, "a clean AU ends the run");
+    }
+
+    #[test]
+    fn a_conformance_window_off_the_origin_is_refused() {
+        let crop = |x, y| DisplayCrop {
+            x,
+            y,
+            width: 1912,
+            height: 1080,
+        };
+        assert_eq!(display_of(crop(0, 0)).unwrap(), (1912, 1080));
+        assert!(display_of(crop(8, 0)).is_err());
+        assert!(display_of(crop(0, 8)).is_err());
+    }
 }

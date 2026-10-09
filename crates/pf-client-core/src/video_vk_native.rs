@@ -437,15 +437,8 @@ fn project_frame(frame: &DecodedVkFrame, guard: NativeReleaseGuard) -> NativeVkF
         coded_height: frame.coded_height,
         crop_x: frame.crop.x,
         crop_y: frame.crop.y,
-        // Active SPS/VUI per frame, never latched: HDR can switch PQ/BT.2020 in-band
-        // after an SDR Welcome. pf-bitstream infers E.2.1 unspecified (2/2/2, limited);
-        // `csc_rows` maps that to BT.709-limited SDR.
-        color: ColorDesc {
-            primaries: frame.colour.colour_primaries,
-            transfer: frame.colour.transfer_characteristics,
-            matrix: frame.colour.matrix_coefficients,
-            full_range: frame.colour.video_full_range,
-        },
+        // Per frame, never latched: HDR can switch PQ in-band after an SDR Welcome.
+        color: ColorDesc::from(&frame.colour),
         keyframe: frame.is_idr,
         poc: frame.poc,
         // Recovery-point SEI for this picture (`RecoveryWatch` at plan time). Separate

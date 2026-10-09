@@ -11,9 +11,8 @@
 //! has no HEVC decoder; [`last_rung_verdict`] reconnects with a codec this
 //! build can finish. The gates and their evidence live in `video_caps`.
 
-// Windows-only: the D3D11VA pin bails when win32 external-memory import is missing.
-#[cfg(windows)]
 use anyhow::bail;
+use anyhow::Context as _;
 use anyhow::Result;
 #[cfg(target_os = "linux")]
 use std::os::fd::RawFd;
@@ -576,7 +575,7 @@ pub struct Decoder {
     /// This backend has delivered at least one frame. A never-delivered rung is
     /// one the session never had; its streak must not cost the rung below. Reset on swap.
     delivered: bool,
-    /// Presenter's device, so demotion can build native Vulkan mid-stream.
+    /// Presenter's device: a demotion rebuild reads every device fact from here.
     /// Cloned once per session; handles outlive every pump ([`VulkanDecodeDevice`]).
     vk: Option<VulkanDecodeDevice>,
     /// Negotiated picture shape for a mid-stream native rebuild ([`StreamFormat`]).
@@ -585,15 +584,6 @@ pub struct Decoder {
     /// [`RUNG_BIT_NATIVE_PLATFORM`]). The two native rungs sit in opposite vendor
     /// order; without this they could bounce the session. An entered rung is never re-entered.
     entered_rungs: u8,
-    /// Presenter can import win32 external memory, so D3D11VA frames reach the screen. Kept for Vulkan→D3D11VA demotion.
-    #[cfg(windows)]
-    d3d11_import: bool,
-    /// Presenter adapter LUID ([`VulkanDecodeDevice::adapter_luid`]) so demotion lands on the same GPU.
-    #[cfg(windows)]
-    adapter_luid: Option<[u8; 8]>,
-    /// [`VulkanDecodeDevice::d3d11_hdr10`], for the same demotion rebuild.
-    #[cfg(windows)]
-    d3d11_hdr10: bool,
 }
 
 /// Native Vulkan ran this session — see [`Decoder::entered_rungs`].
@@ -679,6 +669,61 @@ fn native_vaapi_codec(wire: u8) -> Option<pf_vaapi::Codec> {
         punktfunk_core::quic::CODEC_AV1 => Some(pf_vaapi::Codec::Av1),
         _ => None,
     }
+}
+
+/// Build `rung` for `wire` on the presenter's device and log it active. Pin, auto and
+/// demotion all build here; each keeps its own admission gate and failure log. `Err` is
+/// a rung that cannot run: no decoder for the codec, no device it needs, or a failed init.
+fn build_rung(
+    rung: NativeRung,
+    wire: u8,
+    stream: StreamFormat,
+    vk: Option<&VulkanDecodeDevice>,
+) -> Result<Backend> {
+    let (decoder, backend) = match rung {
+        NativeRung::Vulkan => {
+            let vk = vk.context("no presenter device")?;
+            let (codec, _) =
+                native_codec(wire).context("no Vulkan Video decoder for this codec")?;
+            let d = NativeVulkanDecoder::new(vk, codec, stream)?;
+            (rung.name(), Backend::NativeVulkan(Box::new(d)))
+        }
+        #[cfg(windows)]
+        NativeRung::D3d11va => {
+            // A DXVA frame reaches the screen only through the presenter's win32 import.
+            let v = vk.filter(|v| v.d3d11_import).context(
+                "the presenter's device lacks the win32 external-memory import extensions",
+            )?;
+            let codec = native_d3d11_codec(wire).context("no DXVA decoder for this codec")?;
+            let d = crate::video_d3d11_native::NativeD3d11Decoder::new(
+                codec,
+                stream,
+                v.adapter_luid,
+                v.d3d11_hdr10,
+            )?
+            .with_planar(v.d3d11_nv12, v.d3d11_p010);
+            (d.name(), Backend::NativeD3d11va(Box::new(d)))
+        }
+        #[cfg(target_os = "linux")]
+        NativeRung::Vaapi => {
+            let codec = native_vaapi_codec(wire).context("no VAAPI decoder for this codec")?;
+            let d = NativeVaapiDecoder::new_for_presenter(codec, stream, vk.map(|v| v.vendor_id))?;
+            (d.name(), Backend::NativeVaapi(Box::new(d)))
+        }
+        #[cfg(target_os = "linux")]
+        NativeRung::V4l2 => {
+            let d = crate::video_v4l2::NativeV4l2Decoder::new(wire, stream)?;
+            (d.name(), Backend::NativeV4l2(Box::new(d)))
+        }
+        other => bail!("{} is not a hardware rung on this OS", other.name()),
+    };
+    tracing::info!(
+        codec = wire_codec_name(wire),
+        decoder,
+        "{} hardware decode active",
+        rung.name()
+    );
+    Ok(backend)
 }
 
 /// Log what `PUNKTFUNK_AU_FAULT` will do, including when the answer is nothing.
@@ -792,12 +837,6 @@ impl Decoder {
                  same hardware path"
             );
         }
-        #[cfg(windows)]
-        let (d3d11_import, adapter_luid, d3d11_hdr10) = (
-            vk.is_some_and(|v| v.d3d11_import),
-            vk.and_then(|v| v.adapter_luid),
-            vk.is_some_and(|v| v.d3d11_hdr10),
-        );
         let done = |backend: Backend| {
             // One exit every backend leaves through, so a session that never
             // reaches the native constructor still reports `PUNKTFUNK_AU_FAULT`.
@@ -814,94 +853,48 @@ impl Decoder {
                 delivered: false,
                 vk: vk.cloned(),
                 stream,
-                #[cfg(windows)]
-                d3d11_import,
-                #[cfg(windows)]
-                adapter_luid,
-                #[cfg(windows)]
-                d3d11_hdr10,
             })
         };
+        // A pin's failure warns: it must not be quieter than auto's, which only informs.
+        let pinned = |rung: NativeRung| match build_rung(rung, wire, stream, vk) {
+            Ok(backend) => Some(backend),
+            Err(e) => {
+                tracing::warn!(reason = %format!("{e:#}"),
+                    "{} init failed — demoting to the standard ladder", rung.name());
+                None
+            }
+        };
+        let auto = |rung: NativeRung| match build_rung(rung, wire, stream, vk) {
+            Ok(backend) => Some(backend),
+            Err(e) => {
+                tracing::info!(reason = %format!("{e:#}"),
+                    "{} unavailable — continuing down the ladder", rung.name());
+                None
+            }
+        };
         let codec_name = wire_codec_name(wire);
-        #[cfg(target_os = "linux")]
-        let presenter_vendor = vk.map(|v| v.vendor_id);
         // Pins first: a pin skips vendor order. Refusal or init failure logs and
-        // continues as `auto` — a pin's failure must not be quieter than auto's.
+        // continues as `auto`.
         let mut choice = choice;
         #[cfg(windows)]
         if choice == crate::video_d3d11_native::DECODER_PIN {
-            match (native_d3d11_codec(wire), vk.filter(|v| v.d3d11_import)) {
-                (Some(codec), Some(v)) => match crate::video_d3d11_native::NativeD3d11Decoder::new(
-                    codec,
-                    stream,
-                    v.adapter_luid,
-                    v.d3d11_hdr10,
-                )
-                .map(|d| d.with_planar(v.d3d11_nv12, v.d3d11_p010))
-                {
-                    Ok(d) => {
-                        tracing::info!(
-                            codec = codec_name,
-                            decoder = d.name(),
-                            "native D3D11VA hardware decode active \
-                                 (pf-dxvadec, shared-texture hand-off)"
-                        );
-                        return done(Backend::NativeD3d11va(Box::new(d)));
-                    }
-                    Err(e) => tracing::warn!(reason = %format!("{e:#}"),
-                            "native D3D11VA init failed — demoting to the standard ladder"),
-                },
-                (None, _) => tracing::warn!(
-                    codec = codec_name,
-                    "PUNKTFUNK_DECODER=native-d3d11va refused (needs an H.264, HEVC or \
-                     AV1 session) — standard ladder"
-                ),
-                (_, None) => tracing::warn!(
-                    "PUNKTFUNK_DECODER=native-d3d11va refused (the presenter's device lacks \
-                     the win32 external-memory import extensions) — standard ladder"
-                ),
+            if let Some(b) = pinned(NativeRung::D3d11va) {
+                return done(b);
             }
             choice = "auto".to_string();
         }
         // Native VAAPI pin. Unverified; the pin is how a lab run reaches it when Vulkan is first.
         #[cfg(target_os = "linux")]
         if choice == crate::video_vaapi_native::DECODER_PIN {
-            match native_vaapi_codec(wire) {
-                Some(codec) => {
-                    match NativeVaapiDecoder::new_for_presenter(codec, stream, presenter_vendor) {
-                        Ok(d) => {
-                            tracing::info!(
-                                codec = codec_name,
-                                decoder = d.name(),
-                                "native VAAPI hardware decode active (pf-vaapi, zero-copy dmabuf)"
-                            );
-                            return done(Backend::NativeVaapi(Box::new(d)));
-                        }
-                        Err(e) => tracing::warn!(reason = %format!("{e:#}"),
-                            "native VAAPI init failed — demoting to the standard ladder"),
-                    }
-                }
-                None => tracing::warn!(
-                    codec = codec_name,
-                    "PUNKTFUNK_DECODER=native-vaapi refused (needs an H.264, HEVC or \
-                     AV1 session) — standard ladder"
-                ),
+            if let Some(b) = pinned(NativeRung::Vaapi) {
+                return done(b);
             }
             choice = "auto".to_string();
         }
         #[cfg(target_os = "linux")]
         if choice == crate::video_v4l2::DECODER_PIN {
-            match crate::video_v4l2::NativeV4l2Decoder::new(wire, stream) {
-                Ok(d) => {
-                    tracing::info!(
-                        codec = codec_name,
-                        decoder = d.name(),
-                        "native V4L2 hardware decode active"
-                    );
-                    return done(Backend::NativeV4l2(Box::new(d)));
-                }
-                Err(e) => tracing::warn!(reason = %format!("{e:#}"),
-                    "native V4L2 init failed — demoting to the standard ladder"),
+            if let Some(b) = pinned(NativeRung::V4l2) {
+                return done(b);
             }
             choice = "auto".to_string();
         }
@@ -914,19 +907,8 @@ impl Decoder {
                 vk.map_or(0, |v| v.decode_video_caps),
             ) {
                 native_tried = true;
-                let vk = vk.expect("gate demands video_decode, so vk is Some");
-                let (codec, _) = native_codec(wire).expect("the gate admitted this codec");
-                match NativeVulkanDecoder::new(vk, codec, stream) {
-                    Ok(n) => {
-                        tracing::info!(
-                            codec = codec_name,
-                            "native Vulkan Video hardware decode active \
-                             (pf-vkdecode, presenter-shared device)"
-                        );
-                        return done(Backend::NativeVulkan(Box::new(n)));
-                    }
-                    Err(e) => tracing::warn!(reason = %format!("{e:#}"),
-                        "native Vulkan decode init failed — demoting to the standard ladder"),
+                if let Some(b) = pinned(NativeRung::Vulkan) {
+                    return done(b);
                 }
             } else {
                 // The gate is an AND of three; name all three. `video_decode=true`
@@ -949,30 +931,14 @@ impl Decoder {
         // Linux VAAPI rung, once: Intel/unknown take it before Vulkan, everyone
         // else after — NVIDIA and non-importing presenters never (`vaapi_auto_ok`).
         #[cfg(target_os = "linux")]
-        let vaapi_rung = |choice: &str| -> Result<Option<Backend>> {
+        let vaapi_rung = || {
             if !vaapi_auto_ok(vk) {
                 tracing::info!(
                     "native VAAPI outside the presenter's automatic safety gate (pin overrides)"
                 );
-                return Ok(None);
+                return None;
             }
-            if let Some(codec) = native_vaapi_codec(wire) {
-                match NativeVaapiDecoder::new_for_presenter(codec, stream, presenter_vendor) {
-                    Ok(d) => {
-                        tracing::info!(
-                            codec = codec_name,
-                            decoder = d.name(),
-                            "native VAAPI hardware decode active (pf-vaapi, zero-copy dmabuf)"
-                        );
-                        return Ok(Some(Backend::NativeVaapi(Box::new(d))));
-                    }
-                    Err(e) => tracing::info!(reason = %format!("{e:#}"),
-                        "native VAAPI unavailable — continuing down the ladder"),
-                }
-            }
-            // `choice` is unread: a native pin is handled above, so by here it is the auto family.
-            let _ = choice;
-            Ok(None)
+            auto(NativeRung::Vaapi)
         };
         // Linux `auto`: VAAPI first unless Vulkan Video is the established
         // answer (NVIDIA: no usable VAAPI; VanGogh: VAAPI chroma-fringes).
@@ -995,7 +961,7 @@ impl Decoder {
             .then_some(NativeRung::Vulkan);
             if native_rung_admitted(NativeRung::Vaapi, wire, below) {
                 vaapi_tried = true;
-                if let Some(b) = vaapi_rung(&choice)? {
+                if let Some(b) = vaapi_rung() {
                     return done(b);
                 }
             } else {
@@ -1012,42 +978,14 @@ impl Decoder {
         // Windows `auto`: D3D11VA first unless Vulkan Video is the established
         // answer (NVIDIA/AMD). Intel advertises Vulkan Video, so the cap gate
         // alone does not keep it off that rung; DXVA is the path Windows players exercise.
+        // A DXVA frame reaches the screen only through the presenter's win32 import.
         #[cfg(windows)]
-        let d3d11_rung = |choice: &str| -> Result<Option<Backend>> {
-            let Some(v) = vk.filter(|v| v.d3d11_import) else {
-                // A pin that cannot work must log: a DXVA frame reaches the screen
-                // only through the presenter's win32 import.
-                if choice == crate::video_d3d11_native::DECODER_PIN {
-                    bail!(
-                        "PUNKTFUNK_DECODER=native-d3d11va but the presenter's device lacks the \
-                         win32 external-memory import extensions — see the presenter log"
-                    );
-                }
-                return Ok(None);
-            };
-            if let Some(codec) = native_d3d11_codec(wire) {
-                match crate::video_d3d11_native::NativeD3d11Decoder::new(
-                    codec,
-                    stream,
-                    v.adapter_luid,
-                    v.d3d11_hdr10,
-                )
-                .map(|d| d.with_planar(v.d3d11_nv12, v.d3d11_p010))
-                {
-                    Ok(d) => {
-                        tracing::info!(
-                            codec = codec_name,
-                            decoder = d.name(),
-                            "native D3D11VA hardware decode active \
-                             (pf-dxvadec, shared-texture hand-off)"
-                        );
-                        return Ok(Some(Backend::NativeD3d11va(Box::new(d))));
-                    }
-                    Err(e) => tracing::info!(reason = %format!("{e:#}"),
-                        "native D3D11VA unavailable — continuing down the ladder"),
-                }
+        let d3d11_rung = || {
+            if vk.is_some_and(|v| v.d3d11_import) {
+                auto(NativeRung::D3d11va)
+            } else {
+                None
             }
-            Ok(None)
         };
         #[cfg(windows)]
         let mut d3d11_tried = false;
@@ -1061,7 +999,7 @@ impl Decoder {
             && native_rung_admitted(NativeRung::D3d11va, wire, None)
         {
             d3d11_tried = true;
-            if let Some(b) = d3d11_rung(&choice)? {
+            if let Some(b) = d3d11_rung() {
                 return done(b);
             }
         }
@@ -1075,49 +1013,29 @@ impl Decoder {
                 vk.map_or(0, |v| v.decode_video_caps),
             )
         {
-            let vk = vk.expect("gate demands video_decode, so vk is Some");
-            let (codec, _) = native_codec(wire).expect("the gate admitted this codec");
-            match NativeVulkanDecoder::new(vk, codec, stream) {
-                Ok(n) => {
-                    tracing::info!(
-                        codec = codec_name,
-                        "native Vulkan Video hardware decode active \
-                         (pf-vkdecode auto rung, presenter-shared device)"
-                    );
-                    return done(Backend::NativeVulkan(Box::new(n)));
-                }
-                Err(e) => tracing::info!(reason = %format!("{e:#}"),
-                    "native Vulkan decode unavailable — continuing down the ladder"),
+            if let Some(b) = auto(NativeRung::Vulkan) {
+                return done(b);
             }
         }
         // VAAPI after Vulkan when that rung was not already tried.
         // `vaapi_auto_ok` may skip it to the final software attempt.
         #[cfg(target_os = "linux")]
         if choice != "software" && !vaapi_tried {
-            if let Some(b) = vaapi_rung(&choice)? {
+            if let Some(b) = vaapi_rung() {
                 return done(b);
             }
         }
         // V4L2 last: it is the rung of devices that have neither of the above.
         #[cfg(target_os = "linux")]
         if choice != "software" && v4l2_auto_ok(vk) {
-            match crate::video_v4l2::NativeV4l2Decoder::new(wire, stream) {
-                Ok(d) => {
-                    tracing::info!(
-                        codec = codec_name,
-                        decoder = d.name(),
-                        "native V4L2 hardware decode active"
-                    );
-                    return done(Backend::NativeV4l2(Box::new(d)));
-                }
-                Err(e) => tracing::info!(reason = %format!("{e:#}"),
-                    "native V4L2 unavailable — continuing down the ladder"),
+            if let Some(b) = auto(NativeRung::V4l2) {
+                return done(b);
             }
         }
         // D3D11VA fallback when Vulkan is missing or failed. `d3d11_tried` skips the Intel/unknown first try.
         #[cfg(windows)]
         if choice != "software" && !d3d11_tried {
-            if let Some(b) = d3d11_rung(&choice)? {
+            if let Some(b) = d3d11_rung() {
                 return done(b);
             }
         }
@@ -1220,12 +1138,6 @@ impl Decoder {
             stream: StreamFormat::SDR_420_8,
             entered_rungs: 0,
             retiring: None,
-            #[cfg(windows)]
-            d3d11_import: false,
-            #[cfg(windows)]
-            adapter_luid: None,
-            #[cfg(windows)]
-            d3d11_hdr10: false,
         })
     }
 
@@ -1247,25 +1159,19 @@ impl Decoder {
         self.delivered = false;
     }
 
-    /// Demote from the failing `from` rung onto `built`, the `(decoder, backend)` of the
-    /// rung named `rung`. False when it could not be built: the ladder tries the next one.
-    fn demote_into(
-        &mut self,
-        e: &anyhow::Error,
-        from: &str,
-        rung: &str,
-        built: Result<(&'static str, Backend)>,
-    ) -> bool {
-        match built {
-            Ok((decoder, backend)) => {
-                tracing::warn!(error = %format!("{e:#}"), fails = self.vaapi_fails, from, decoder,
-                    "hardware decode failing repeatedly — demoting to {rung}");
+    /// Demote from the failing `from` rung onto `rung`, built on this session's device.
+    /// False when it could not be built: the ladder tries the next one.
+    fn demote_into(&mut self, e: &anyhow::Error, from: &str, rung: NativeRung) -> bool {
+        match build_rung(rung, self.wire_codec, self.stream, self.vk.as_ref()) {
+            Ok(backend) => {
+                tracing::warn!(error = %format!("{e:#}"), fails = self.vaapi_fails, from,
+                    "hardware decode failing repeatedly — demoting to {}", rung.name());
                 self.install(backend);
                 true
             }
             Err(why) => {
                 tracing::info!(reason = %format!("{why:#}"),
-                    "{rung} unavailable for demotion — continuing down the ladder");
+                    "{} unavailable for demotion — continuing down the ladder", rung.name());
                 false
             }
         }
@@ -1426,67 +1332,31 @@ impl Decoder {
                     #[cfg(target_os = "linux")]
                     if self.entered_rungs & RUNG_BIT_NATIVE_PLATFORM == 0
                         && vaapi_auto_ok(self.vk.as_ref())
+                        && self.demote_into(&e, which, NativeRung::Vaapi)
                     {
-                        if let Some(codec) = native_vaapi_codec(self.wire_codec) {
-                            let built = NativeVaapiDecoder::new_for_presenter(
-                                codec,
-                                self.stream,
-                                self.vk.as_ref().map(|v| v.vendor_id),
-                            )
-                            .map(|d| (d.name(), Backend::NativeVaapi(Box::new(d))));
-                            if self.demote_into(&e, which, "native VAAPI", built) {
-                                return Ok(None);
-                            }
-                        }
+                        return Ok(None);
                     }
                     #[cfg(windows)]
-                    if self.entered_rungs & RUNG_BIT_NATIVE_PLATFORM == 0 && self.d3d11_import {
-                        if let Some(codec) = native_d3d11_codec(self.wire_codec) {
-                            let (nv12, p010) = self
-                                .vk
-                                .as_ref()
-                                .map_or((false, false), |v| (v.d3d11_nv12, v.d3d11_p010));
-                            let built = crate::video_d3d11_native::NativeD3d11Decoder::new(
-                                codec,
-                                self.stream,
-                                self.adapter_luid,
-                                self.d3d11_hdr10,
-                            )
-                            .map(|d| {
-                                let d = d.with_planar(nv12, p010);
-                                (d.name(), Backend::NativeD3d11va(Box::new(d)))
-                            });
-                            if self.demote_into(&e, which, "native D3D11VA", built) {
-                                return Ok(None);
-                            }
-                        }
+                    if self.entered_rungs & RUNG_BIT_NATIVE_PLATFORM == 0
+                        && self.vk.as_ref().is_some_and(|v| v.d3d11_import)
+                        && self.demote_into(&e, which, NativeRung::D3d11va)
+                    {
+                        return Ok(None);
                     }
                     // Failing platform native on Intel/unknown has Vulkan below it.
                     // Only fires from a native platform rung.
                     if self.entered_rungs & RUNG_BIT_NATIVE_VULKAN == 0
                         && self.is_native_platform_rung()
-                    {
-                        if let Some(v) = self.vk.clone().filter(|v| v.video_decode) {
-                            if native_vulkan_gate(
-                                "auto",
+                        && self.vk.as_ref().is_some_and(|v| {
+                            native_vulkan_usable(
                                 self.wire_codec,
-                                true,
+                                v.video_decode,
                                 v.decode_video_caps,
-                            ) {
-                                let (codec, _) =
-                                    native_codec(self.wire_codec).expect("the gate admitted it");
-                                let built =
-                                    NativeVulkanDecoder::new(&v, codec, self.stream).map(|n| {
-                                        (
-                                            NativeRung::Vulkan.name(),
-                                            Backend::NativeVulkan(Box::new(n)),
-                                        )
-                                    });
-                                if self.demote_into(&e, which, "native Vulkan Video", built) {
-                                    return Ok(None);
-                                }
-                            }
-                        }
+                            )
+                        })
+                        && self.demote_into(&e, which, NativeRung::Vulkan)
+                    {
+                        return Ok(None);
                     }
                     tracing::warn!(error = %format!("{e:#}"), fails = self.vaapi_fails,
                         "{which} decode failing repeatedly — demoting to software");

@@ -27,6 +27,21 @@ impl ColorDesc {
     }
 }
 
+/// The active SPS/VUI or sequence header, per picture, never latched: HDR can flip
+/// to PQ in-band. pf-bitstream infers E.2.1 for an absent VUI, so the code points
+/// are always meaningful (2/2/2 limited, never zero).
+#[cfg(any(desktop, all(feature = "d3d11va", windows)))]
+impl From<&pf_bitstream::h264::ColourDescription> for ColorDesc {
+    fn from(c: &pf_bitstream::h264::ColourDescription) -> ColorDesc {
+        ColorDesc {
+            primaries: c.colour_primaries,
+            transfer: c.transfer_characteristics,
+            matrix: c.matrix_coefficients,
+            full_range: c.video_full_range,
+        }
+    }
+}
+
 /// Shader rows: `rgb[i] = dot(r[i].xyz, yuv) + r[i].w`.
 ///
 /// `depth` is the limited-range ladder: 8-bit 16/235/240 over 255, 10-bit
