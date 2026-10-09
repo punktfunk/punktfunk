@@ -106,25 +106,15 @@ pub(super) async fn run_pump(args: WorkerArgs) {
     let WorkerArgs {
         params,
         shared,
-        audio_tx,
-        rumble_tx,
-        rumble_feed,
-        hidout_tx,
-        pad_audio_tx,
-        hdr_meta_tx,
-        host_timing_tx,
-        cursor_shape_tx,
-        cursor_state_tx,
+        planes,
         input_rx,
         mut mic_rx,
         mut rich_input_rx,
         pad_touch_rx,
         ctrl_rx,
         ctrl_tx,
-        clip_event_tx,
         clip_cmd_rx,
         ready_tx,
-        access_tx,
     } = args;
     let bitrate_kbps = params.bitrate_kbps;
     let clock_rtt_ns = negotiated.clock_rtt_ns;
@@ -288,33 +278,26 @@ pub(super) async fn run_pump(args: WorkerArgs) {
             bitrate_ack: bitrate_ack.clone(),
             pipeline_gap: pipeline_gap.clone(),
             clock_gen: clock_gen.clone(),
-            clip_event_tx: clip_event_tx.clone(),
-            cursor_shape_tx,
+            clip_event_tx: planes.clip_event.clone(),
+            cursor_shape_tx: planes.cursor_shape,
             mode_gen: mode_gen.clone(),
-            access_tx,
-            hidout_tx: hidout_tx.clone(),
+            access_tx: planes.access,
+            hidout_tx: planes.datagram.hidout.clone(),
         }
         .run(),
     );
 
     tokio::spawn(datagram_task::run(
         conn.clone(),
-        audio_tx,
-        rumble_tx,
-        rumble_feed,
-        hidout_tx,
-        pad_audio_tx,
-        hdr_meta_tx,
-        host_timing_tx,
+        planes.datagram,
         encode_lat.clone(),
-        cursor_state_tx,
     ));
 
     // Bulk clip bytes only; metadata rides the control task. Always spawned: a
     // host without HOST_CAP_CLIPBOARD never opens a clip stream, and offers miss.
     tokio::spawn(crate::clipboard::run(
         (*conn).clone(),
-        clip_event_tx,
+        planes.clip_event,
         clip_cmd_rx,
     ));
 

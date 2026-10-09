@@ -1199,10 +1199,7 @@ mod tests {
         let pipeline_gap = Arc::new(AtomicU32::new(0));
         // Hold the sender so the task does not exit on a closed channel.
         let (_task_ctrl_tx, task_ctrl_rx) = tokio::sync::mpsc::channel::<CtrlRequest>(8);
-        let (clip_event_tx, _clip_event_rx) = std::sync::mpsc::sync_channel(8);
-        let (cursor_shape_tx, _cursor_shape_rx) = crate::client::planes::shape_queue();
-        let (access_tx, _access_rx) = std::sync::mpsc::sync_channel(8);
-        let (hidout_tx, _hidout_rx) = std::sync::mpsc::sync_channel(8);
+        let (planes, _planes_rx) = crate::client::planes::channels();
         let mode = crate::config::Mode {
             width: 1920,
             height: 1080,
@@ -1218,11 +1215,11 @@ mod tests {
                 bitrate_ack: Arc::new(Mutex::new(AckQueue::new())),
                 pipeline_gap: pipeline_gap.clone(),
                 clock_gen: Arc::new(AtomicU32::new(0)),
-                clip_event_tx,
-                cursor_shape_tx,
+                clip_event_tx: planes.clip_event,
+                cursor_shape_tx: planes.cursor_shape,
                 mode_gen: Arc::new(AtomicU32::new(0)),
-                access_tx,
-                hidout_tx,
+                access_tx: planes.access,
+                hidout_tx: planes.datagram.hidout,
             }
             .run(),
         );
