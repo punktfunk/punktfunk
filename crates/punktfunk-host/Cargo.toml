@@ -247,10 +247,6 @@ ashpd = { version = "0.13", features = ["screencast", "remote_desktop", "setting
 # Verified unused before removal: zero `use`/path references across src/ + build.rs.
 
 [target.'cfg(target_os = "windows")'.dependencies]
-# Windows UDP Send Offload for GameStream video (gamestream/uso.rs): `WSASendMsg` +
-# `UDP_SEND_MSG_SIZE`, the Windows analogue of Linux UDP GSO. Win32_System_IO because
-# WSASendMsg's signature references OVERLAPPED.
-windows-sys = { workspace = true, features = ["Win32_Networking_WinSock", "Win32_System_IO"] }
 # Windows host backends. `windows` covers the Win32/CCD APIs the SudoVDA virtual-display backend
 # drives (SetupAPI device enumeration, DeviceIoControl IOCTLs, QueryDisplayConfig name resolution);
 # capture/encode/input/audio backends extend the feature set as they land.
@@ -290,6 +286,7 @@ windows = { version = "0.62", features = [
     # Who listens on a plugin's registered loopback port (plugins/windows.rs): the launch dial
     # carries the UI secret, so the listener must still be the LocalService runner.
     "Win32_NetworkManagement_IpHelper",
+    # WSASendMsg + UDP_SEND_MSG_SIZE: UDP Send Offload for GameStream video (gamestream/uso.rs).
     "Win32_Networking_WinSock",
     "Win32_System_Threading",
     # The capture worker's three pipes (windows/capture_worker.rs).

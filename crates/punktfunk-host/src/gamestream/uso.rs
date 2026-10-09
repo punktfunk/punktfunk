@@ -56,8 +56,9 @@ fn uso_unsupported(e: &std::io::Error) -> bool {
 #[cfg(target_os = "windows")]
 fn send_one_uso(socket: &std::net::UdpSocket, buf: &[u8], seg_size: u16) -> std::io::Result<()> {
     use std::os::windows::io::AsRawSocket;
-    use windows_sys::Win32::Networking::WinSock::{
-        WSASendMsg, CMSGHDR, IPPROTO_UDP, UDP_SEND_MSG_SIZE, WSABUF, WSAMSG,
+    use windows::core::PSTR;
+    use windows::Win32::Networking::WinSock::{
+        WSASendMsg, CMSGHDR, IPPROTO_UDP, SOCKET, UDP_SEND_MSG_SIZE, WSABUF, WSAMSG,
     };
     let align_usize = std::mem::align_of::<usize>();
     let align_hdr = std::mem::align_of::<CMSGHDR>();
@@ -72,7 +73,7 @@ fn send_one_uso(socket: &std::net::UdpSocket, buf: &[u8], seg_size: u16) -> std:
 
     let mut data = WSABUF {
         len: buf.len() as u32,
-        buf: buf.as_ptr() as *mut u8, // WSASendMsg only reads it
+        buf: PSTR(buf.as_ptr() as *mut u8), // WSASendMsg only reads it
     };
     let mut msg = WSAMSG {
         name: std::ptr::null_mut(),
@@ -81,7 +82,7 @@ fn send_one_uso(socket: &std::net::UdpSocket, buf: &[u8], seg_size: u16) -> std:
         dwBufferCount: 1,
         Control: WSABUF {
             len: 0,
-            buf: ctrl.0.as_mut_ptr(),
+            buf: PSTR(ctrl.0.as_mut_ptr()),
         },
         dwFlags: 0,
     };
@@ -96,18 +97,18 @@ fn send_one_uso(socket: &std::net::UdpSocket, buf: &[u8], seg_size: u16) -> std:
     unsafe {
         let cmsg = ctrl.0.as_mut_ptr() as *mut CMSGHDR;
         (*cmsg).cmsg_len = cmsg_len;
-        (*cmsg).cmsg_level = IPPROTO_UDP;
+        (*cmsg).cmsg_level = IPPROTO_UDP.0;
         (*cmsg).cmsg_type = UDP_SEND_MSG_SIZE;
         let data_ptr = (cmsg as usize + cmsgdata_align(hdr)) as *mut u32;
         std::ptr::write_unaligned(data_ptr, seg_size as u32);
         msg.Control.len = space as u32;
         let mut sent = 0u32;
         let rc = WSASendMsg(
-            socket.as_raw_socket() as usize,
+            SOCKET(socket.as_raw_socket() as usize),
             &msg,
             0,
-            &mut sent,
-            std::ptr::null_mut(),
+            Some(&mut sent),
+            None,
             None,
         );
         if rc != 0 {
