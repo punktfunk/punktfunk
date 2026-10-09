@@ -955,45 +955,38 @@ impl ServiceState {
             .ok();
     }
 
+    /// A manual entry has no pin: it edits the placeholder at its address or files one. A
+    /// record pinned there is another identity and keeps its name.
     fn save_host(&mut self, name: String, addr: String, port: u16) {
         let mut known = trust::KnownHosts::load();
-        // A manual entry has no pin yet: it renames the placeholder at its address or
-        // adds one. A record pinned there is another identity — the other OS of a
-        // dual-boot box — and keeps its name.
-        if let Some(h) = known
-            .placeholder_at(&addr, port)
-            .and_then(|i| known.hosts.get_mut(i))
-        {
-            if !name.is_empty() {
-                h.name = name;
-            }
-        } else {
-            known.hosts.push(trust::KnownHost {
-                name: if name.is_empty() { addr.clone() } else { name },
-                addr,
-                port,
-                ..Default::default()
-            });
+        let edit = trust::HostEdit {
+            name: Some(name),
+            addr: Some(addr),
+            port: Some(port),
+            ..Default::default()
+        };
+        if let Err(e) = known.add(&edit) {
+            tracing::warn!(error = %format!("{e:#}"), "typed host not saved");
+            return;
         }
         self.save_known(&known);
         self.last_probe = Instant::now() - Duration::from_secs(60); // probe it now
     }
 
+    /// Edited in place, never removed and re-added: the pin, the learned MACs, the pinned
+    /// cards and the preset binding hang off this record. A blank name is no edit.
     fn update_host(&mut self, key: String, name: String, addr: String, port: u16) {
         let mut known = trust::KnownHosts::load();
         let Some(h) = index_for_key(&known, &key).and_then(|i| known.hosts.get_mut(i)) else {
             tracing::warn!(%key, "edit for an unknown host — ignoring");
             return;
         };
-        // Edited IN PLACE rather than removed and re-added: the fingerprint, the
-        // learned MAC, the pinned cards and the preset binding all hang off this
-        // entry, and re-adding would silently unpair a host the user only renamed.
-        h.name = if name.trim().is_empty() {
-            addr.clone()
-        } else {
-            name
-        };
-        h.move_to(&addr, port);
+        h.apply_edit(&trust::HostEdit {
+            name: Some(name),
+            addr: Some(addr),
+            port: Some(port),
+            ..Default::default()
+        });
         self.save_known(&known);
         self.last_probe = Instant::now() - Duration::from_secs(60); // the address moved
     }

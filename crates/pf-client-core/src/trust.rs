@@ -29,7 +29,7 @@ pub use crate::settings::{
 };
 pub use hosts::{
     add_host, learn_from_advert, learn_mgmt_port_by_fp, persist_host, rekey_addr, touch_last_used,
-    FieldError, HostEdit, HostField, KnownHost, KnownHosts, PREV_ADDRS_MAX,
+    AddOutcome, FieldError, HostEdit, HostField, KnownHost, KnownHosts, PREV_ADDRS_MAX,
 };
 #[cfg(not(target_family = "wasm"))]
 pub use identity::{device_name, load_or_create_identity, pair_with_host};

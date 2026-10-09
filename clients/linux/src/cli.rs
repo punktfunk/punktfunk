@@ -260,6 +260,7 @@ pub fn headless_set_host(selector: &str) -> glib::ExitCode {
         addr: arg_value("--addr"),
         port,
         macs,
+        fp: None,
     };
     let Some(sel) = parse_selector(selector) else {
         return fail(format!("no usable port in {selector:?}"));

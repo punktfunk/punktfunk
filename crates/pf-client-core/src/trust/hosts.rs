@@ -252,6 +252,24 @@ pub struct HostEdit {
     pub addr: Option<String>,
     pub port: Option<u16>,
     pub macs: Option<Vec<String>>,
+    /// An advertised pin to save the host under (`hosts add --fp`). Only
+    /// [`KnownHosts::add`] reads it; an edit never re-pins a record.
+    pub fp: Option<String>,
+}
+
+/// What [`KnownHosts::add`] did to the store.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum AddOutcome {
+    /// A new record: a placeholder, or pinned to the offered fingerprint.
+    Added,
+    /// The placeholder at this address took the offered fingerprint.
+    Pinned,
+    /// The record pinned to the offered fingerprint moved here from `from` (`addr:port`).
+    Moved { from: String },
+    /// The placeholder at this address took a typed name, port or MACs.
+    Edited,
+    /// Already saved as asked. Not an error: a panel retrying a save finds this state.
+    Unchanged,
 }
 
 /// Which connection field a typed value failed in.
@@ -271,17 +289,17 @@ pub struct FieldError {
 
 impl HostEdit {
     /// The connection fields' text as an edit. A pasted `host:port` address wins over the port
-    /// field, and a blank port is the default 9777. `name` stays `None`.
+    /// field, and a blank port is the default 9777. `name` and `fp` stay `None`.
     pub fn parse(addr: &str, port: &str, macs: &str) -> Result<HostEdit, FieldError> {
         let at = |field| move |message| FieldError { field, message };
         let (addr, spelled) = Self::parse_address(addr).map_err(at(HostField::Addr))?;
         let port = Self::parse_port(port).map_err(at(HostField::Port))?;
         let macs = Self::parse_macs(macs).map_err(at(HostField::Macs))?;
         Ok(HostEdit {
-            name: None,
             addr: Some(addr),
             port: Some(spelled.unwrap_or(port)),
             macs: Some(macs),
+            ..Default::default()
         })
     }
 
@@ -558,28 +576,58 @@ impl KnownHosts {
         }
     }
 
-    /// Save a host a person typed in, without dialing it. A record already at `addr:port`
-    /// takes the edit; otherwise an unpinned placeholder, which the first trust decision
-    /// pins ([`upsert_trusted`](Self::upsert_trusted) retires it then, keeping its MACs).
-    /// Returns its index.
-    pub fn add(&mut self, edit: &HostEdit) -> Result<usize> {
+    /// Save a host without dialing it. An address is not an identity: a record pinned at
+    /// `addr:port` may be the other OS of a dual-boot box, so only the placeholder there takes
+    /// the edit. With no pin offered, that placeholder, else a new one. With a pin: the record
+    /// already pinned to it here, else the placeholder here, else the record pinned to it
+    /// elsewhere moves here, else a new pinned record. A pin never replaces another.
+    ///
+    /// An offered pin's name is an advert's: it lands only on a record still named after its
+    /// address. The first trust decision pins a placeholder
+    /// ([`upsert_trusted`](Self::upsert_trusted) retires it then, keeping its MACs).
+    pub fn add(&mut self, edit: &HostEdit) -> Result<AddOutcome> {
         let addr = edit.addr.as_deref().map(str::trim).unwrap_or_default();
         anyhow::ensure!(!addr.is_empty(), "empty host address");
-        let port = edit.port.unwrap_or(9777);
-        let i = match self.index_by_addr(addr, port) {
-            Some(i) => i,
-            None => {
-                self.hosts.push(KnownHost {
-                    name: addr.to_string(),
-                    addr: addr.to_string(),
-                    port,
-                    ..Default::default()
+        let port = edit.port.unwrap_or(crate::deeplink::DEFAULT_PORT);
+        let fp = edit.fp.as_deref().unwrap_or_default().trim();
+        let pinned_to = |h: &KnownHost| !fp.is_empty() && h.fp_hex.eq_ignore_ascii_case(fp);
+        if self
+            .hosts
+            .iter()
+            .any(|h| pinned_to(h) && h.addr == addr && h.port == port)
+        {
+            return Ok(AddOutcome::Unchanged);
+        }
+        if let Some(i) = self.placeholder_at(addr, port) {
+            let h = &mut self.hosts[i];
+            if fp.is_empty() {
+                return Ok(match h.apply_edit(edit) {
+                    true => AddOutcome::Edited,
+                    false => AddOutcome::Unchanged,
                 });
-                self.hosts.len() - 1
             }
+            h.fp_hex = fp.to_ascii_lowercase();
+            let label = edit.name.as_deref().map(str::trim).unwrap_or_default();
+            if !label.is_empty() && h.name == h.addr {
+                h.name = label.to_string();
+            }
+            return Ok(AddOutcome::Pinned);
+        }
+        if let Some(h) = self.hosts.iter_mut().find(|h| pinned_to(h)) {
+            let from = format!("{}:{}", h.addr, h.port);
+            h.move_to(addr, port);
+            return Ok(AddOutcome::Moved { from });
+        }
+        let mut h = KnownHost {
+            name: addr.to_string(),
+            addr: addr.to_string(),
+            port,
+            fp_hex: fp.to_ascii_lowercase(),
+            ..Default::default()
         };
-        self.hosts[i].apply_edit(edit);
-        Ok(i)
+        h.apply_edit(edit);
+        self.hosts.push(h);
+        Ok(AddOutcome::Added)
     }
 
     /// [`upsert`](Self::upsert) for an authorised trust decision (PIN, TOFU accept,
@@ -1531,6 +1579,7 @@ mod tests {
             addr: Some("192.168.1.20".into()),
             port: Some(9800),
             macs: Some(typed.clone()),
+            ..Default::default()
         }));
         assert_eq!(h.name, "Den");
         assert_eq!((h.addr.as_str(), h.port), ("192.168.1.20", 9800));
@@ -1568,16 +1617,17 @@ mod tests {
             macs: Some(macs.clone()),
             ..Default::default()
         };
-        let i = k.add(&edit).unwrap();
-        assert_eq!(k.hosts[i].name, "192.168.1.9");
-        assert!(k.hosts[i].fp_hex.is_empty());
-        assert_eq!(k.hosts[i].mac, macs);
+        assert_eq!(k.add(&edit).unwrap(), AddOutcome::Added);
+        assert_eq!(k.hosts[0].name, "192.168.1.9");
+        assert!(k.hosts[0].fp_hex.is_empty());
+        assert_eq!(k.hosts[0].mac, macs);
+        assert_eq!(k.add(&edit).unwrap(), AddOutcome::Unchanged);
 
         let named = HostEdit {
             name: Some("Desk".into()),
             ..edit.clone()
         };
-        assert_eq!(k.add(&named).unwrap(), i);
+        assert_eq!(k.add(&named).unwrap(), AddOutcome::Edited);
         assert_eq!(k.hosts.len(), 1);
         assert_eq!(k.hosts[0].name, "Desk");
 
@@ -1594,6 +1644,84 @@ mod tests {
         assert_eq!(k.hosts[0].name, "Desk");
         assert_eq!(k.hosts[0].mac, macs);
         assert!(k.add(&HostEdit::default()).is_err());
+    }
+
+    /// `add` files a pin once and never over another. A placeholder takes an advertised pin,
+    /// and its label only while named after its address; the same pin again changes nothing; a
+    /// moved lease re-points the record; the other OS of a dual-boot box is filed beside the
+    /// first. A typed address never edits the record pinned there: not its name, not its MACs.
+    #[test]
+    fn add_files_a_pin_once_and_never_over_another() {
+        use AddOutcome::*;
+        let learned = vec!["aa:bb:cc:dd:ee:ff".to_string()];
+        let at = "192.168.1.9";
+        let moved = Moved {
+            from: format!("{at}:9777"),
+        };
+        for (seed, (addr, fp, name), want, after) in [
+            (
+                (at, at, ""),
+                (at, "ABC123", Some("Den")),
+                Pinned,
+                vec![("Den", at, "abc123")],
+            ),
+            (
+                ("Rig", at, ""),
+                (at, "abc123", Some("Den")),
+                Pinned,
+                vec![("Rig", at, "abc123")],
+            ),
+            (
+                ("Desk", at, "ABC123"),
+                (at, "abc123", Some("Den")),
+                Unchanged,
+                vec![("Desk", at, "ABC123")],
+            ),
+            (
+                ("Desk", at, "abc123"),
+                (at, "beef", None),
+                Added,
+                vec![("Desk", at, "abc123"), (at, at, "beef")],
+            ),
+            (
+                ("Desk", at, "abc123"),
+                ("192.168.1.50", "abc123", None),
+                moved,
+                vec![("Desk", "192.168.1.50", "abc123")],
+            ),
+            (
+                ("Win", at, "abc123"),
+                (at, "", Some("Linux")),
+                Added,
+                vec![("Win", at, "abc123"), ("Linux", at, "")],
+            ),
+        ] {
+            let (name0, addr0, fp0) = seed;
+            let mut k = KnownHosts {
+                hosts: vec![KnownHost {
+                    name: name0.into(),
+                    addr: addr0.into(),
+                    fp_hex: fp0.into(),
+                    mac: learned.clone(),
+                    ..Default::default()
+                }],
+            };
+            let edit = HostEdit {
+                name: name.map(str::to_string),
+                addr: Some(addr.into()),
+                macs: fp.is_empty().then(|| vec!["01:02:03:04:05:06".into()]),
+                fp: Some(fp.into()),
+                ..Default::default()
+            };
+            assert_eq!(k.add(&edit).unwrap(), want, "{seed:?} + {addr} {fp}");
+            let got: Vec<_> = k
+                .hosts
+                .iter()
+                .map(|h| (h.name.as_str(), h.addr.as_str(), h.fp_hex.as_str()))
+                .collect();
+            assert_eq!(got, after, "{seed:?} + {addr} {fp}");
+            assert_eq!(k.hosts[0].mac, learned, "{seed:?} + {addr} {fp}");
+        }
     }
 
     fn failed(addr: &str, port: &str, macs: &str) -> Option<HostField> {
