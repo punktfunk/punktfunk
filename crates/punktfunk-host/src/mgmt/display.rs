@@ -73,15 +73,11 @@ fn edid_lock_available() -> bool {
 /// gamescope probe beside it, and for the same reason: `available()` walks /proc and forks.
 #[cfg(target_os = "linux")]
 fn keep_monitors_available() -> bool {
-    use crate::vdisplay::Compositor;
     static PRESENT: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *PRESENT.get_or_init(|| {
-        crate::vdisplay::available().iter().any(|c| {
-            matches!(
-                c,
-                Compositor::Kwin | Compositor::Hyprland | Compositor::Wlroots
-            )
-        })
+        crate::vdisplay::available()
+            .iter()
+            .any(|c| c.honours_keep_monitors())
     })
 }
 
@@ -89,22 +85,24 @@ fn keep_monitors_available() -> bool {
 /// (`vdisplay::claim_workspace`)? Cached: see [`keep_monitors_available`].
 #[cfg(target_os = "linux")]
 fn workspace_placement_available() -> bool {
-    use crate::vdisplay::Compositor;
     static PRESENT: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *PRESENT.get_or_init(|| {
         crate::vdisplay::available()
             .iter()
-            .any(|c| matches!(c, Compositor::Hyprland | Compositor::Wlroots))
+            .any(|c| c.places_launch_workspace())
     })
 }
 
-/// Can a backend here start a device's screen at its own scale? Mutter only: KWin and
-/// Windows remember each device's scale themselves. Cached: see [`keep_monitors_available`].
+/// Can a backend here start a device's screen at its own scale? Cached: see
+/// [`keep_monitors_available`].
 #[cfg(target_os = "linux")]
 fn scale_available() -> bool {
     static PRESENT: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *PRESENT
-        .get_or_init(|| crate::vdisplay::available().contains(&crate::vdisplay::Compositor::Mutter))
+    *PRESENT.get_or_init(|| {
+        crate::vdisplay::available()
+            .iter()
+            .any(|c| c.applies_device_scale())
+    })
 }
 
 /// Whether a gamescope backend is usable on this host. Cached: see the call site.
