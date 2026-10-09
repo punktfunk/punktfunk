@@ -18,7 +18,7 @@
 use super::vk_util::{
     color_range, find_mem_preferring, import_failure_feeds_latch, imported_acquire_barrier,
     imported_release_barrier, make_host_buffer, make_plain_image, make_view, normalize_cpu_rgb,
-    pixel_to_vk, reject_dmabuf,
+    pixel_to_vk, reject_dmabuf, ImportCache,
 };
 use crate::rfi::Wave;
 use crate::{Codec, EncodedFrame, Encoder, EncoderCaps};
@@ -711,7 +711,7 @@ struct Frame {
     /// "producer must not rewrite" across the async GPU read; the host's clone dies at the
     /// next capture, which with a ring of 2 is before this slot finishes.
     src_hold: Option<pf_frame::FrameHold>,
-    /// The dmabuf this slot reads while it is in flight, by [`CachedImport`] key.
+    /// The dmabuf this slot reads while it is in flight, by [`ImportCache`] key.
     src_key: Option<(u64, u64)>,
 }
 
@@ -789,8 +789,7 @@ pub struct VulkanVideoEncoder {
     csc_dsl: vk::DescriptorSetLayout,
     csc_pool: vk::DescriptorPool,
     sampler: vk::Sampler,
-    // Keyed by (st_dev, st_ino): PipeWire dups a new fd per frame, same inode.
-    import_cache: Vec<CachedImport>,
+    import_cache: ImportCache,
 
     frames: Vec<Frame>,
     ring: usize,                // next slot to record into
@@ -1806,7 +1805,7 @@ impl VulkanVideoEncoder {
             csc_dsl,
             csc_pool,
             sampler,
-            import_cache: Vec::new(),
+            import_cache: ImportCache::default(),
             frames,
             ring: 0,
             in_flight: VecDeque::new(),
@@ -2051,14 +2050,9 @@ impl VulkanVideoEncoder {
         }
     }
 
-    /// Import a dmabuf, reusing a cached import when the same underlying buffer recurs. Keyed by
-    /// `(st_dev, st_ino)` because each `DmabufFrame` owns a fresh dup (new fd, same inode).
-    /// `fresh` is true only on first import (UNDEFINED old-layout preserves modifier-tiled data).
-    ///
-    /// A miss keeps only the imports that frames in flight read; a repeat hits the newest. Every
-    /// other buffer is back with the producer. RADV lists every resident import in every
-    /// submission, and amdgpu orders that submission against whatever paints any of them: the
-    /// producer's next render into a released buffer waits on this encode, or this encode on it.
+    /// Import a dmabuf through [`ImportCache`]. A deterministic packed import refusal rebuilds
+    /// this capture on its safe offer; transient OOM and native NV12 stay out of that sticky
+    /// verdict.
     unsafe fn import_cached(
         &mut self,
         d: &pf_frame::DmabufFrame,
@@ -2067,66 +2061,33 @@ impl VulkanVideoEncoder {
     ) -> Result<(vk::Image, vk::ImageView, bool)> {
         // fstat failed → uncacheable sentinel; still owned by the cache and freed on evict/Drop.
         let key = pf_zerocopy::fd_identity(d.fd.as_fd()).unwrap_or((u64::MAX, self.enc_count));
-        if let Some(pos) = self.import_cache.iter().position(|e| e.key == key) {
-            if self.import_cache[pos].extent == (cw, ch) {
-                // Most recently used last: eviction takes the front.
-                let e = self.import_cache.remove(pos);
-                let hit = (e.img, e.view, false);
-                self.import_cache.push(e);
-                return Ok(hit);
-            }
-            // Key hit, wrong extent: inode now names a different allocation. Evict rather than
-            // hand out a stale-sized image. In-flight frames may still read the old image, so
-            // idle the device before destroying.
-            let _ = self.device.device_wait_idle();
-            let e = self.import_cache.remove(pos);
-            self.device.destroy_image_view(e.view, None);
-            self.device.destroy_image(e.img, None);
-            self.device.free_memory(e.mem, None);
-        }
-        let t0 = std::time::Instant::now();
-        // A deterministic packed import refusal rebuilds this capture on its safe offer.
-        // Transient OOM and native NV12 stay out of that sticky verdict.
-        let (img, mem, view) = match self.import_dmabuf(d, cw, ch) {
-            Ok(t) => {
-                if !self.spec.native_nv12 {
-                    d.health.note_raw_import_ok();
-                }
-                t
-            }
-            Err(e) => {
-                if !self.spec.native_nv12 && import_failure_feeds_latch(&e) {
-                    reject_dmabuf(d, &format!("{e:#}"));
-                }
-                return Err(e);
-            }
-        };
-        // Least recently used first. The frames in flight are the last ones submitted, so their
-        // imports are the newest entries and none is evicted. Destroying an image the GPU reads
-        // is a use-after-free, so a victim found in flight still idles the device first.
-        while self.import_cache.len() > self.in_flight.len() {
-            let e = self.import_cache.remove(0);
-            let read = |&s: &usize| self.frames[s].src_key == Some(e.key);
-            if self.in_flight.iter().any(read) {
-                let _ = self.device.device_wait_idle();
-            }
-            self.device.destroy_image_view(e.view, None);
-            self.device.destroy_image(e.img, None);
-            self.device.free_memory(e.mem, None);
-        }
-        self.import_cache.push(CachedImport {
+        // Out while `import_dmabuf` borrows `self`. A panic leaks the entries, never frees one.
+        let mut cache = std::mem::take(&mut self.import_cache);
+        let got = cache.get_or_import(
+            &self.device,
             key,
-            extent: (cw, ch),
-            img,
-            mem,
-            view,
-        });
-        tracing::debug!(
-            resident = self.import_cache.len(),
-            miss_us = t0.elapsed().as_micros() as u64,
-            "vulkan-encode: imported a new dmabuf buffer"
+            (cw, ch),
+            || {
+                let packed = !self.spec.native_nv12;
+                let r = self.import_dmabuf(d, cw, ch);
+                match &r {
+                    Ok(_) if packed => d.health.note_raw_import_ok(),
+                    Err(e) if packed && import_failure_feeds_latch(e) => {
+                        reject_dmabuf(d, &format!("{e:#}"))
+                    }
+                    _ => {}
+                }
+                r
+            },
+            |k| {
+                self.in_flight
+                    .iter()
+                    .any(|&s| self.frames[s].src_key == Some(k))
+            },
+            self.in_flight.len(),
         );
-        Ok((img, view, true))
+        self.import_cache = cache;
+        got
     }
 
     /// Per-slot CPU-capture RGB image + staging, recreated on format/size change.
@@ -4197,13 +4158,7 @@ impl Encoder for VulkanVideoEncoder {
         }
         // Only safe point outside teardown to drop the import cache (device idle).
         // SAFETY: device idle (waits above); each entry is owned by the cache, destroyed once.
-        unsafe {
-            for e in std::mem::take(&mut self.import_cache) {
-                self.device.destroy_image_view(e.view, None);
-                self.device.destroy_image(e.img, None);
-                self.device.free_memory(e.mem, None);
-            }
-        }
+        unsafe { self.import_cache.clear(&self.device) };
         self.in_flight.clear();
         self.pending.clear();
         for f in &mut self.frames {
@@ -4315,16 +4270,6 @@ impl Encoder for VulkanVideoEncoder {
     }
 }
 
-/// Cached dmabuf import ([`VulkanVideoEncoder::import_cached`]). Keyed by `(st_dev, st_ino)`;
-/// a key hit must also prove the cached image still matches the caller's extent.
-struct CachedImport {
-    key: (u64, u64),
-    extent: (u32, u32),
-    img: vk::Image,
-    mem: vk::DeviceMemory,
-    view: vk::ImageView,
-}
-
 /// Every destructible Vulkan object, destroyed in dependency order. Both teardown paths run
 /// through it: `open_inner` mirrors objects as created so an early `?` unwinds exactly what was
 /// built; [`VulkanVideoEncoder`]'s `Drop` rebuilds one from its fields. Null handles (a failed
@@ -4334,7 +4279,7 @@ struct VkTeardown {
     // Set together (wrapper constructors after `create_device` are infallible).
     device: Option<ash::Device>,
     vq_dev: Option<ash::khr::video_queue::Device>,
-    import_cache: Vec<CachedImport>,
+    import_cache: ImportCache,
     frames: Vec<Frame>,
     compute_pool: vk::CommandPool,
     cmd_pool: vk::CommandPool,
@@ -4360,7 +4305,7 @@ impl VkTeardown {
             instance: Some(instance),
             device: None,
             vq_dev: None,
-            import_cache: Vec::new(),
+            import_cache: ImportCache::default(),
             frames: Vec::new(),
             compute_pool: vk::CommandPool::null(),
             cmd_pool: vk::CommandPool::null(),
@@ -4388,11 +4333,7 @@ impl Drop for VkTeardown {
         unsafe {
             if let Some(device) = self.device.take() {
                 let _ = device.device_wait_idle();
-                for e in std::mem::take(&mut self.import_cache) {
-                    device.destroy_image_view(e.view, None);
-                    device.destroy_image(e.img, None);
-                    device.free_memory(e.mem, None);
-                }
+                self.import_cache.clear(&device);
                 for f in std::mem::take(&mut self.frames) {
                     device.destroy_semaphore(f.csc_sem, None);
                     device.destroy_fence(f.fence, None);

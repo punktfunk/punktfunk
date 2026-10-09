@@ -22,7 +22,7 @@
 use super::vk_util::{
     color_range, import_failure_feeds_latch, import_rgb_dmabuf, imported_acquire_barrier,
     imported_release_barrier, make_host_buffer, make_plain_image, normalize_cpu_rgb, pixel_to_vk,
-    reject_dmabuf, select_physical_device,
+    reject_dmabuf, select_physical_device, ImportCache, ImportRejected,
 };
 use crate::pyrowave_ffi::{packetize, pw_check};
 use crate::pyrowave_wire::{AuStream, FrameBudget};
@@ -472,10 +472,9 @@ pub struct PyroWaveEncoder {
     csc_pool: vk::DescriptorPool,
     sampler: vk::Sampler,
 
-    // Per-buffer dmabuf-import cache keyed by (st_dev, st_ino). Not per-slot: it
-    // retains the VkImage/VkDeviceMemory per inode, which is what makes two slots
-    // sampling the same imported buffer safe.
-    import_cache: Vec<(u64, u64, vk::Image, vk::DeviceMemory, vk::ImageView)>,
+    // Per-buffer, not per-slot: it retains the VkImage/VkDeviceMemory per inode, which is
+    // what makes two slots sampling the same imported buffer safe.
+    import_cache: ImportCache,
     /// 3→4 expansion for 24-bpp CPU payloads. Consumed inside `submit_frame` before
     /// return, so no GPU work reads it.
     cpu_expand: Vec<u8>,
@@ -1106,7 +1105,7 @@ impl PyroWaveEncoder {
             csc_dsl: vk::DescriptorSetLayout::null(),
             csc_pool: vk::DescriptorPool::null(),
             sampler: vk::Sampler::null(),
-            import_cache: Vec::new(),
+            import_cache: ImportCache::default(),
             cpu_expand: Vec::new(),
             cmd_pool: vk::CommandPool::null(),
             slots: (0..SLOTS).map(|_| Slot::null()).collect(),
@@ -1539,16 +1538,9 @@ impl PyroWaveEncoder {
         }
     }
 
-    /// Import a dmabuf, reusing the cached import when the same buffer recurs. Keyed by
-    /// `(st_dev, st_ino)`: each `DmabufFrame` owns a fresh dup of the same inode. A hit is
-    /// always the right size, because `submit_frame` refuses a frame off the session mode.
-    /// `fresh` is true only on first import.
-    ///
-    /// A miss keeps only the imports that frames in flight read; a repeat hits the newest.
-    /// Every other buffer is back with the producer. RADV lists every resident import in
-    /// every submission, and amdgpu orders that submission against whatever paints any of
-    /// them: the producer's next render into a released buffer waits on this encode, or
-    /// this encode on it.
+    /// Import a dmabuf through [`ImportCache`]. A deterministic refusal feeds this capture's
+    /// latch and carries [`ImportRejected`], which the encode worker forwards as a rebuild.
+    /// Transient OOM stays out of that sticky verdict.
     unsafe fn import_cached(
         &mut self,
         d: &pf_frame::DmabufFrame,
@@ -1556,48 +1548,24 @@ impl PyroWaveEncoder {
         ch: u32,
     ) -> Result<(vk::Image, vk::ImageView, bool)> {
         let key = pf_zerocopy::fd_identity(d.fd.as_fd()).unwrap_or((u64::MAX, self.frame_count));
-        if let Some(pos) = self.import_cache.iter().position(|e| (e.0, e.1) == key) {
-            // Most recently used last: eviction takes the front.
-            let e = self.import_cache.remove(pos);
-            self.import_cache.push(e);
-            return Ok((e.2, e.4, false));
-        }
-        let t0 = std::time::Instant::now();
-        // Deterministic import refusal rebuilds this capture on its safe offer.
-        // Transient OOM stays out of the sticky verdict.
-        let (img, mem, view) =
-            match import_rgb_dmabuf(&self.device, &self.ext_fd, &self.mem_props, d, cw, ch) {
+        self.import_cache.get_or_import(
+            &self.device,
+            key,
+            (cw, ch),
+            || match import_rgb_dmabuf(&self.device, &self.ext_fd, &self.mem_props, d, cw, ch) {
                 Ok(t) => {
                     d.health.note_raw_import_ok();
-                    t
+                    Ok(t)
                 }
-                Err(e) => {
-                    if import_failure_feeds_latch(&e) {
-                        reject_dmabuf(d, &format!("{e:#}"));
-                        return Err(e.context(super::vk_util::ImportRejected));
-                    }
-                    return Err(e);
+                Err(e) if import_failure_feeds_latch(&e) => {
+                    reject_dmabuf(d, &format!("{e:#}"));
+                    Err(e.context(ImportRejected))
                 }
-            };
-        // Least recently used first. The frames in flight are the last ones submitted, so
-        // their imports are the newest entries and none is evicted; a victim found in flight
-        // still idles the device before it is destroyed.
-        while self.import_cache.len() > self.inflight.len() {
-            let (dev, ino, oi, om, ov) = self.import_cache.remove(0);
-            if self.inflight.iter().any(|f| f.src_key == Some((dev, ino))) {
-                let _ = self.device.device_wait_idle();
-            }
-            self.device.destroy_image_view(ov, None);
-            self.device.destroy_image(oi, None);
-            self.device.free_memory(om, None);
-        }
-        self.import_cache.push((key.0, key.1, img, mem, view));
-        tracing::debug!(
-            resident = self.import_cache.len(),
-            miss_us = t0.elapsed().as_micros() as u64,
-            "pyrowave: imported a new dmabuf buffer"
-        );
-        Ok((img, view, true))
+                Err(e) => Err(e),
+            },
+            |k| self.inflight.iter().any(|f| f.src_key == Some(k)),
+            self.inflight.len(),
+        )
     }
 
     /// CPU RGB staging. Per-slot: a host write while the previous frame's copy is
@@ -1665,8 +1633,8 @@ impl PyroWaveEncoder {
         let dev = self.device.clone();
         let (w, h) = (self.width, self.height);
         // No alignment: a mismatch smears (`rgb2yuv.comp` clamps; CPU uploads min(len,need)).
-        // `import_cached` keys on inode without rechecking extent. A PipeWire size change
-        // is not always transient (`reset()` reopens at the same dimensions).
+        // A PipeWire size change is not always transient (`reset()` reopens at the same
+        // dimensions).
         if frame.width != w || frame.height != h {
             bail!(
                 "pyrowave: frame {}x{} != session mode {w}x{h} — refusing a mismatched encode \
@@ -2270,11 +2238,7 @@ impl Drop for PyroWaveEncoder {
                 }
             }
             pw::pyrowave_device_destroy(self.pw_dev);
-            for (_, _, i, m, v) in self.import_cache.drain(..) {
-                self.device.destroy_image_view(v, None);
-                self.device.destroy_image(i, None);
-                self.device.free_memory(m, None);
-            }
+            self.import_cache.clear(&self.device);
             // Failed open leaves a partial prefix; `vkDestroy*(VK_NULL_HANDLE)` is a no-op.
             for sl in std::mem::take(&mut self.slots) {
                 if let Some((i, m, v, _)) = sl.cpu_img {

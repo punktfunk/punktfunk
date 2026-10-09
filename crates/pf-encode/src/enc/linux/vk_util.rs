@@ -393,6 +393,97 @@ pub(crate) fn reject_dmabuf(d: &pf_frame::DmabufFrame, reason: &str) {
     }
 }
 
+/// One dmabuf import and the extent it was imported at.
+struct CachedImport {
+    key: (u64, u64),
+    extent: (u32, u32),
+    img: vk::Image,
+    mem: vk::DeviceMemory,
+    view: vk::ImageView,
+}
+
+impl CachedImport {
+    unsafe fn destroy(self, dev: &ash::Device) {
+        dev.destroy_image_view(self.view, None);
+        dev.destroy_image(self.img, None);
+        dev.free_memory(self.mem, None);
+    }
+}
+
+/// Dmabuf imports reused while the same buffer recurs, least recently used first. Keyed by
+/// `(st_dev, st_ino)`: each `DmabufFrame` owns a fresh dup of the same inode. The cache owns
+/// every entry; [`ImportCache::clear`] frees them.
+#[derive(Default)]
+pub(crate) struct ImportCache {
+    entries: Vec<CachedImport>,
+}
+
+impl ImportCache {
+    /// The import cached for `key` at `extent`, else `import()`'s, as `(image, view, fresh)`;
+    /// `fresh` is true only on first import. A key hit at another extent names another
+    /// allocation, so it is evicted, never handed out.
+    ///
+    /// A miss keeps `keep` older imports, those frames in flight read; a repeat hits the newest.
+    /// Every other buffer is back with the producer. RADV lists every resident import in every
+    /// submission, and amdgpu orders that submission against whatever paints any of them.
+    /// Destroying an image the GPU reads is a use-after-free, so a victim `in_flight` reports
+    /// idles the device first.
+    ///
+    /// # Safety
+    /// `dev` created every cached handle and `import()`'s.
+    pub(crate) unsafe fn get_or_import(
+        &mut self,
+        dev: &ash::Device,
+        key: (u64, u64),
+        extent: (u32, u32),
+        import: impl FnOnce() -> Result<(vk::Image, vk::DeviceMemory, vk::ImageView)>,
+        in_flight: impl Fn((u64, u64)) -> bool,
+        keep: usize,
+    ) -> Result<(vk::Image, vk::ImageView, bool)> {
+        if let Some(pos) = self.entries.iter().position(|e| e.key == key) {
+            // Most recently used last: eviction takes the front.
+            let e = self.entries.remove(pos);
+            if e.extent == extent {
+                let hit = (e.img, e.view, false);
+                self.entries.push(e);
+                return Ok(hit);
+            }
+            let _ = dev.device_wait_idle();
+            e.destroy(dev);
+        }
+        let t0 = std::time::Instant::now();
+        let (img, mem, view) = import()?;
+        // The frames in flight are the last ones submitted: their imports are the newest.
+        while self.entries.len() > keep {
+            let e = self.entries.remove(0);
+            if in_flight(e.key) {
+                let _ = dev.device_wait_idle();
+            }
+            e.destroy(dev);
+        }
+        self.entries.push(CachedImport {
+            key,
+            extent,
+            img,
+            mem,
+            view,
+        });
+        tracing::debug!(
+            resident = self.entries.len(),
+            miss_us = t0.elapsed().as_micros() as u64,
+            "imported a new dmabuf buffer"
+        );
+        Ok((img, view, true))
+    }
+
+    /// Destroy every entry. The device must be idle.
+    pub(crate) unsafe fn clear(&mut self, dev: &ash::Device) {
+        for e in self.entries.drain(..) {
+            e.destroy(dev);
+        }
+    }
+}
+
 /// Caller destroys all three returned handles.
 pub(crate) unsafe fn import_rgb_dmabuf(
     device: &ash::Device,
