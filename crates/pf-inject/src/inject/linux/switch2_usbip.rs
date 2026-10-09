@@ -4,17 +4,17 @@
 //! `0x05` and rumble, vendor interface 1 a bulk command channel they must claim. UHID has no
 //! USB parent and no bulk interface, so this is the one transport; the host falls back to the
 //! Switch Pro identity without `vhci_hcd` ([`available`]). The codec is
-//! [`super::switch2_proto`]; attach is [`super::steam_usbip::attach_device`].
+//! [`super::switch2_proto`]; attach is [`super::usbip::attach_device`].
 //!
 //! Each interrupt-IN poll serves the latest state with a fresh sequence byte and µs clock.
 //! bInterval 4 on an absolute deadline paces the polls at the 250 Hz SDL calibrates its sensor
 //! clock against; relative sleeps drift to about 5 ms and SDL then misreads the gyro scale.
 
-use super::steam_usbip::{attach_device, boxed, UsbipAttachment};
 use super::switch2_proto::{
     bulk_reply, parse_rumble, rdesc, serial, Command, Model, Switch2State, REPORT_INTERVAL_MS,
     VENDOR,
 };
+use super::usbip::{attach_device, boxed, ep, hid_class_descriptor, UsbipAttachment};
 use crate::uhid_manager::{PadFeedback, PadProto, UhidManager};
 use anyhow::Result;
 use parking_lot::Mutex;
@@ -28,9 +28,9 @@ use usbip_sim::{
     Version,
 };
 
-/// Whether this host can attach a USB/IP device at all.
+/// Whether this host can attach a USB/IP device at all. The Switch 2 pads' only gate.
 pub fn available() -> bool {
-    super::steam_usbip::vhci_base().is_some()
+    super::usbip::vhci_base().is_some()
 }
 
 /// Host writes since the last [`Switch2Usbip::service`] drain.
@@ -63,9 +63,7 @@ impl HidHandler {
 impl UsbInterfaceHandler for HidHandler {
     /// bcdHID 1.11, country 0, one report descriptor.
     fn get_class_specific_descriptor(&self) -> Vec<u8> {
-        let len = rdesc(self.model).len() as u16;
-        let [lo, hi] = len.to_le_bytes();
-        vec![0x09, 0x21, 0x11, 0x01, 0x00, 0x01, 0x22, lo, hi]
+        hid_class_descriptor(0x0111, 0, rdesc(self.model).len())
     }
 
     fn handle_urb(
@@ -159,12 +157,6 @@ fn build_device(
     state: &Arc<Mutex<Switch2State>>,
     feedback: &Arc<Mutex<Switch2Feedback>>,
 ) -> UsbDevice {
-    let ep = |address: u8, attributes: u8, interval: u8| UsbEndpoint {
-        address,
-        attributes,
-        max_packet_size: 64,
-        interval,
-    };
     let mut dev = UsbDevice::new(0);
     dev.vendor_id = VENDOR;
     dev.product_id = model.product();
@@ -184,8 +176,8 @@ fn build_device(
         0x00,
         None,
         vec![
-            ep(0x81, 0x03, REPORT_INTERVAL_MS),
-            ep(0x03, 0x03, REPORT_INTERVAL_MS),
+            ep(0x81, 0x03, 64, REPORT_INTERVAL_MS),
+            ep(0x03, 0x03, 64, REPORT_INTERVAL_MS),
         ],
         boxed(HidHandler {
             model,
@@ -200,7 +192,7 @@ fn build_device(
         0x00,
         0x00,
         None,
-        vec![ep(0x82, 0x02, 0), ep(0x02, 0x02, 0)],
+        vec![ep(0x82, 0x02, 64, 0), ep(0x02, 0x02, 64, 0)],
         boxed(BulkHandler {
             model,
             index,

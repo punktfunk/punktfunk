@@ -606,7 +606,7 @@ impl PadChannel {
     /// can tell a UMDF host restart from a different claimant without trusting a pid.
     /// The `SYNCHRONIZE` right that makes that probe work comes with the shared open.
     fn deliver_to(&self, pid: u32) -> Result<(u32, OwnedHandle)> {
-        let process = pf_capture::open_wudfhost(pid, "gamepad-channel")?;
+        let process = pf_win_display::open_wudfhost(pid, "gamepad-channel")?;
         let mut remote = HANDLE::default();
         // SAFETY: `self.data.raw_handle()` is the live section handle this channel owns;
         // `process` is the live PROCESS_DUP_HANDLE target; `&mut remote` is a valid out-param.

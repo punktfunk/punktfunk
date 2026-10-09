@@ -3447,7 +3447,6 @@ dependencies = [
  "futures-util",
  "libc",
  "parking_lot",
- "pf-capture",
  "pf-driver-proto",
  "pf-host-config",
  "pf-paths",
@@ -3644,6 +3643,7 @@ dependencies = [
 name = "pf-win-display"
 version = "0.43.1"
 dependencies = [
+ "anyhow",
  "pf-paths",
  "punktfunk-core",
  "serde_json",

@@ -14,13 +14,13 @@
 //!
 //! Pin the topologies with [`tests::device_matches_wired_capture`] and
 //! [`tests::device_matches_puck_capture`]. Attach is
-//! [`super::steam_usbip::attach_device`].
+//! [`super::usbip::attach_device`].
 
-use super::steam_usbip::{attach_device, boxed, UsbipAttachment};
 use super::triton_proto::{
     identity_for, parse_triton_rumble, serialize_triton_state, triton_feature_reply, triton_serial,
     triton_unit_id, Sc2Identity, TritonState, TRITON_RDESC, TRITON_STATE_LEN,
 };
+use super::usbip::{attach_device, boxed, ep, hid_class_descriptor, UsbipAttachment};
 use anyhow::Result;
 use parking_lot::Mutex;
 use std::any::Any;
@@ -32,6 +32,11 @@ use usbip_sim::{
     Direction, SetupPacket, UsbDevice, UsbEndpoint, UsbInterface, UsbInterfaceHandler, UsbSpeed,
     Version,
 };
+
+/// Default on, on the Deck's knob: `PUNKTFUNK_STEAM_USBIP=0`/`false` keeps the SC2 on UHID.
+pub fn usbip_preferred() -> bool {
+    super::steam_usbip::usbip_preferred()
+}
 
 const TRITON_VENDOR: u16 = 0x28DE;
 const TRITON_WIRED_PRODUCT: u16 = 0x1302;
@@ -140,22 +145,6 @@ impl InputReports {
         }
         None
     }
-}
-
-/// HID class descriptor: bcdHID 1.11, country 0. Do not reuse the Deck helper (1.10 / country 33).
-fn triton_hid_desc() -> Vec<u8> {
-    let l = TRITON_RDESC.len() as u16;
-    vec![
-        0x09,
-        0x21,
-        0x11,
-        0x01,
-        0,
-        1,
-        0x22,
-        (l & 0xff) as u8,
-        (l >> 8) as u8,
-    ]
 }
 
 /// Feature GET reply for a Puck slot: report 2 answers the dongle's queries, report 1 the pad's.
@@ -278,7 +267,7 @@ impl TritonHandler {
 
 impl UsbInterfaceHandler for TritonHandler {
     fn get_class_specific_descriptor(&self) -> Vec<u8> {
-        triton_hid_desc()
+        hid_class_descriptor(0x0111, 0, TRITON_RDESC.len()) // as the wired pad
     }
 
     fn handle_urb(
@@ -512,14 +501,9 @@ fn build_triton_device(
     feedback: &Arc<Mutex<TritonUsbFeedback>>,
     identity: Option<&Arc<Sc2Identity>>,
 ) -> UsbDevice {
-    let ep = |addr: u8| UsbEndpoint {
-        address: addr,
-        attributes: 0x03, // interrupt
-        max_packet_size: 64,
-        // Full-speed bInterval is milliseconds, not the HS 2^(n-1)×125 µs exponent.
-        // 1 = 1 kHz. Do not "fix" to 4: that is 4 ms / 250 Hz on FS.
-        interval: 1,
-    };
+    // Interrupt, 64 bytes. Full-speed bInterval is milliseconds, not the HS 2^(n-1)×125 µs
+    // exponent: 1 = 1 kHz. Do not "fix" to 4: that is 4 ms / 250 Hz on FS.
+    let interrupt = |addr: u8| ep(addr, 0x03, 64, 1);
     let mut dev = UsbDevice::new(0);
     dev.vendor_id = TRITON_VENDOR;
     dev.product_id = TRITON_WIRED_PRODUCT;
@@ -544,7 +528,7 @@ fn build_triton_device(
         0x00,
         0x00,
         None, // iInterface = 0
-        vec![ep(0x81), ep(0x01)],
+        vec![interrupt(0x81), interrupt(0x01)],
         boxed(TritonHandler {
             reports: reports.clone(),
             feedback: feedback.clone(),
@@ -557,18 +541,8 @@ fn build_triton_device(
 
 /// Puck `28DE:1304`: slot `n` is interface `n + 2`, each driven by its [`PuckSlot`].
 fn build_puck_device(serial: &str, slots: &[PuckSlot; 4]) -> UsbDevice {
-    let interrupt = |addr: u8, interval: u8| UsbEndpoint {
-        address: addr,
-        attributes: 0x03,
-        max_packet_size: 64,
-        interval,
-    };
-    let bulk = |addr: u8| UsbEndpoint {
-        address: addr,
-        attributes: 0x02,
-        max_packet_size: 64,
-        interval: 0,
-    };
+    let interrupt = |addr: u8, interval: u8| ep(addr, 0x03, 64, interval);
+    let bulk = |addr: u8| ep(addr, 0x02, 64, 0);
 
     let mut dev = UsbDevice::new(0);
     dev.vendor_id = TRITON_VENDOR;
@@ -596,12 +570,7 @@ fn build_puck_device(serial: &str, slots: &[PuckSlot; 4]) -> UsbDevice {
         0x02,
         0x00,
         None,
-        vec![UsbEndpoint {
-            address: 0x81,
-            attributes: 0x03,
-            max_packet_size: 16,
-            interval: 10,
-        }],
+        vec![ep(0x81, 0x03, 16, 10)],
         boxed(CdcControlHandler),
     );
     dev = dev.with_interface(
@@ -751,7 +720,7 @@ impl Drop for TritonUsbip {
 }
 
 impl TritonUsbip {
-    /// Attach a wired SC2 via `vhci_hcd` (root + module; [`super::steam_usbip::attach_device`]).
+    /// Attach a wired SC2 via `vhci_hcd` (root + module; [`super::usbip::attach_device`]).
     /// `index` varies only the serial.
     pub fn open(index: u8) -> Result<TritonUsbip> {
         let reports = Arc::new(Mutex::new(InputReports::new(neutral_report())));
@@ -932,7 +901,7 @@ mod tests {
             .map(|e| (e.address, e.attributes, e.max_packet_size, e.interval))
             .collect();
         assert_eq!(eps, vec![(0x81, 3, 64, 1), (0x01, 3, 64, 1)]);
-        let hid = triton_hid_desc();
+        let hid = &i.class_specific_descriptor;
         assert_eq!(&hid[2..4], &[0x11, 0x01]);
         assert_eq!(
             u16::from_le_bytes([hid[7], hid[8]]) as usize,
@@ -1255,7 +1224,7 @@ mod tests {
     #[test]
     #[ignore = "attaches a real vhci_hcd device; needs root + vhci_hcd"]
     fn usbip_triton_enumerates_and_tears_down() {
-        super::super::steam_usbip::ensure_modules();
+        super::super::usbip::ensure_modules();
         let mut pad = TritonUsbip::open(0).expect("open TritonUsbip (root + vhci_hcd?)");
         let mut st = TritonState::neutral();
         let raw: &[u8] = &[0x42, 1, 0x01, 0, 0, 0]; // A held; truncated length is accepted

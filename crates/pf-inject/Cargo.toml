@@ -43,7 +43,7 @@ wayland-backend = "0.3"
 # libei (EI sender) for the portable input path on KWin/GNOME (RemoteDesktop portal) + gamescope-EI.
 reis = { version = "0.7.1", features = ["tokio"] }
 futures-util = "0.3"
-# `macros` is for the `tokio::select!` in the libei and steam_usbip worker loops. It used to be
+# `macros` is for the `tokio::select!` in the libei and usbip worker loops. It used to be
 # absent and compile anyway, borrowed from punktfunk-core's `quic` feature via unification — i.e. an
 # unrelated crate dropping it would have broken this one.
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "net", "time", "macros"] }
@@ -54,12 +54,9 @@ usbip-sim = { path = "vendor/usbip-sim" }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 # The streamed-output desktop rect (CCD source rect) absolute input maps into — the same
-# resolver the cursor-readback poller uses, so inject and readback always agree.
+# resolver the cursor-readback poller uses, so inject and readback always agree. Also the
+# WUDFHost open + proof the gamepad-channel bootstrap shares with the IDD-push channel.
 pf-win-display = { path = "../pf-win-display" }
-# The gamepad-channel bootstrap reuses the IDD-push WUDFHost verification (`open_wudfhost`).
-# Windows-only: the one use site is, and on Linux this would drag pipewire, ashpd, x11rb and
-# wayland into an input crate's closure.
-pf-capture = { path = "../pf-capture" }
 windows = { version = "0.62", features = [
     "Win32_Foundation",
     "Win32_Security",

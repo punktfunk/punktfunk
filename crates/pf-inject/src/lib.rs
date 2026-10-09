@@ -472,7 +472,8 @@ pub enum VhciVerdict {
     Inapplicable { why: &'static str },
 }
 
-/// Probe the vhci attach node: module present, writable by this process.
+/// Probe the vhci attach node for the virtual Deck: its gate on, module present, writable
+/// by this process.
 ///
 /// Writability is what attach will attempt. `60-punktfunk.rules` `chgrp punktfunk` +
 /// `chmod 0660`, so only a process that actually carries the group gets `W_OK`.
@@ -485,7 +486,7 @@ pub fn vhci_probe() -> VhciVerdict {
             why: "the virtual Steam Deck's usbip transport is disabled (PUNKTFUNK_STEAM_USBIP=0)",
         };
     }
-    let Some(base) = steam_usbip::vhci_base() else {
+    let Some(base) = usbip::vhci_base() else {
         return VhciVerdict::ModuleMissing;
     };
     let attach = base.join("attach");
@@ -893,6 +894,11 @@ pub mod uhid_manager;
 #[cfg(target_os = "linux")]
 #[path = "inject/linux/uinput_abi.rs"]
 mod uinput_abi;
+/// USB/IP attach on `vhci_hcd` shared by every usbip pad: the emulation server, the import
+/// handshake and the vhci sysfs ports.
+#[cfg(target_os = "linux")]
+#[path = "inject/linux/usbip.rs"]
+mod usbip;
 /// Byte-level tracing of the USB/IP socket (`PUNKTFUNK_USBIP_TRACE`). A framing bug in that
 /// stream is only visible as damage the kernel notices later, so the wire itself has to be
 /// recoverable.
