@@ -411,7 +411,7 @@ pub mod capture_policy;
 mod capture_lease;
 mod mic_jitter;
 mod mic_pump;
-pub use capture_lease::{CaptureLease, CaptureRoute, Ready};
+pub use capture_lease::{CaptureLease, CaptureRoute, Ready, REOPEN_BACKOFF};
 pub use mic_pump::{mic_source_id, MicFrame, MicPump};
 
 /// A session's hold on the shared virtual mic as the box's default source. The mic loses the

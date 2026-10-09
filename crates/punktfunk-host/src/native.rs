@@ -2317,9 +2317,6 @@ async fn teardown(
     }
 }
 
-/// Reopen backoff after a host-lifetime capturer dies. Mic has its own ([`crate::audio::MicPump`]).
-const INJECTOR_REOPEN_BACKOFF: std::time::Duration = std::time::Duration::from_secs(2);
-
 /// Integer Hz from `1/effective_hz` (exact). Differs from the request when e.g. KWin caps at 60.
 fn interval_hz(interval: std::time::Duration) -> u32 {
     (1.0 / interval.as_secs_f64()).round() as u32
