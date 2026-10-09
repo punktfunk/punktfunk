@@ -610,7 +610,7 @@ const DM_VERB_BUDGET: Duration = Duration::from_secs(30);
 
 /// Status-blind `systemctl --user` (callers fire-and-forget) but not time-blind: a wedged manager
 /// must not pin the stream thread.
-fn systemctl_user(args: &[&str]) {
+pub(crate) fn systemctl_user(args: &[&str]) {
     let _ = crate::proc::status_within(
         Command::new("systemctl").arg("--user").args(args),
         UNIT_VERB_BUDGET,

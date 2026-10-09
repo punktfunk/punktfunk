@@ -243,6 +243,115 @@ pub(crate) fn heads_to_darken(
         .collect()
 }
 
+/// How long a head's disable, or the call that undoes it, has to show in the compositor's
+/// listing. A miss is reported, never assumed.
+pub(crate) const DISABLE_BUDGET: std::time::Duration = std::time::Duration::from_secs(3);
+
+/// Disable every head [`heads_to_darken`] names for an `exclusive` session; the ones that went
+/// dark are the restore's input. A listing error or a refused head leaves that screen lit, never
+/// the session down. `tag` prefixes the log lines.
+///
+/// `refocus(ours)` runs once anything went dark: the compositor re-homes workspaces and picks a
+/// new focus, and launches must still land on the stream.
+pub(crate) fn disable_for_exclusive(
+    tag: &str,
+    heads: Result<Vec<PhysicalMonitor>>,
+    ours: &str,
+    keep: &[String],
+    disable: impl Fn(&str) -> Result<()>,
+    refocus: impl FnOnce(&str),
+) -> Vec<String> {
+    let heads = match heads {
+        Ok(h) => h,
+        Err(e) => {
+            tracing::warn!(
+                error = %format!("{e:#}"),
+                "{tag}: heads not listed for `topology: exclusive` — they stay lit and the session \
+                 streams as `extend`"
+            );
+            return Vec::new();
+        }
+    };
+    let targets = heads_to_darken(&heads, ours, keep);
+    if targets.is_empty() {
+        tracing::info!(
+            "{tag}: `topology: exclusive` had nothing to disable — no enabled head besides the \
+             managed and kept ones (a headless box, or a sibling session already took the desk)"
+        );
+        return Vec::new();
+    }
+    let disabled: Vec<String> = targets
+        .into_iter()
+        .filter(|name| match disable(name) {
+            Ok(()) => true,
+            Err(e) => {
+                tracing::warn!(
+                    output = %name, error = %format!("{e:#}"),
+                    "{tag}: head not disabled for `topology: exclusive` — it stays lit"
+                );
+                false
+            }
+        })
+        .collect();
+    if !disabled.is_empty() {
+        tracing::info!(
+            ?disabled,
+            "{tag}: `topology: exclusive` — the streamed output is now the desk"
+        );
+        refocus(ours);
+    }
+    disabled
+}
+
+/// Blank every head but a managed sibling's for a gamescope `exclusive` stream
+/// ([`crate::panel_dpms`]); the result is what [`relight`] wakes. Only heads `set` reports it
+/// changed are recorded, so a toggling dispatcher never wakes a head this call left alone.
+///
+/// No `ours` and no keep list: gamescope owns no head on this compositor, and its darken
+/// ignores `keep_monitors` on every compositor.
+pub(crate) fn dpms_others(
+    tag: &str,
+    heads: Result<Vec<PhysicalMonitor>>,
+    set: impl Fn(&str) -> Result<bool>,
+) -> Vec<String> {
+    let Ok(heads) = heads else {
+        return Vec::new();
+    };
+    heads_to_darken(&heads, "", &[])
+        .into_iter()
+        .filter(|name| match set(name) {
+            Ok(changed) => changed,
+            Err(e) => {
+                tracing::warn!(
+                    output = %name, error = %format!("{e:#}"),
+                    "{tag}: head not blanked for `topology: exclusive`"
+                );
+                false
+            }
+        })
+        .collect()
+}
+
+/// Wake exactly `names`, the heads [`dpms_others`] blanked, with `set`. The ones now on, an
+/// already-lit head included.
+pub(crate) fn relight(
+    tag: &str,
+    names: &[String],
+    set: impl Fn(&str) -> Result<bool>,
+) -> Vec<String> {
+    names
+        .iter()
+        .filter(|name| match set(name) {
+            Ok(_) => true,
+            Err(e) => {
+                tracing::warn!(output = %name, error = %format!("{e:#}"), "{tag}: head not re-lit");
+                false
+            }
+        })
+        .cloned()
+        .collect()
+}
+
 /// A [`resolve`] miss, typed so the host can hand the client a sentence naming the
 /// pin rather than the operator chain. `available` empty = the compositor reports
 /// no monitors at all.
@@ -341,6 +450,42 @@ mod tests {
             heads_to_darken(&heads, "PF-1-1", &["hdmi-a-1".into()]),
             ["DP-1"]
         );
+    }
+
+    /// Only heads the primitive accepted come back; refocus runs once, only after a disable.
+    #[test]
+    fn exclusive_returns_the_heads_that_went_dark_and_refocuses_once() {
+        let heads = vec![mon("DP-1"), mon("HDMI-A-1"), mon("PF-1-1")];
+        let refocused = std::cell::RefCell::new(Vec::new());
+        let refuse_hdmi = |n: &str| match n {
+            "HDMI-A-1" => Err(anyhow::anyhow!("refused")),
+            _ => Ok(()),
+        };
+        let got = disable_for_exclusive("t", Ok(heads), "PF-1-1", &[], refuse_hdmi, |o| {
+            refocused.borrow_mut().push(o.to_string())
+        });
+        assert_eq!(got, ["DP-1"]);
+        assert_eq!(*refocused.borrow(), ["PF-1-1"]);
+
+        let unlisted = Err(anyhow::anyhow!("gone"));
+        let none = disable_for_exclusive("t", unlisted, "x", &[], refuse_hdmi, |_| {
+            panic!("nothing went dark, so nothing refocuses")
+        });
+        assert!(none.is_empty());
+    }
+
+    /// DPMS records only heads `set` changed; relight counts every head that took the call.
+    #[test]
+    fn dpms_records_only_changed_heads_and_relight_counts_every_accepted_one() {
+        let set = |n: &str| match n {
+            "DP-1" => Ok(true),
+            "DP-2" => Ok(false),
+            _ => Err(anyhow::anyhow!("refused")),
+        };
+        let heads = vec![mon("DP-1"), mon("DP-2"), mon("DP-3")];
+        assert_eq!(dpms_others("t", Ok(heads), set), ["DP-1"]);
+        let names = ["DP-1".to_string(), "DP-2".into(), "DP-3".into()];
+        assert_eq!(relight("t", &names, set), ["DP-1", "DP-2"]);
     }
 
     #[test]

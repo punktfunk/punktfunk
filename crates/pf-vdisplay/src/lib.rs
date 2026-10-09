@@ -109,22 +109,35 @@ pub enum Compositor {
 }
 
 impl Compositor {
-    /// Wire / management id; matches [`punktfunk_core::CompositorPref::as_str`].
+    /// Wire / management id: the [`punktfunk_core::CompositorPref`] spelling.
     pub fn id(self) -> &'static str {
-        match self {
-            Compositor::Kwin => "kwin",
-            Compositor::Wlroots => "wlroots",
-            Compositor::Mutter => "mutter",
-            Compositor::Gamescope => "gamescope",
-            Compositor::Hyprland => "hyprland",
-            Compositor::Windows => "windows",
-        }
+        self.as_pref().as_str()
     }
 
     /// True unless this backend can stand a session up from nothing ([`Compositor::Gamescope`]).
     /// Desktop backends attach over IPC; with no compositor running, `create` can only fail.
     pub fn needs_live_session(self) -> bool {
         !matches!(self, Compositor::Gamescope)
+    }
+
+    /// Keeps a `keep_monitors` head lit under `exclusive`: its exclusive path filters through
+    /// `monitors::darkens`. Mutter's sole-monitor config and Windows never read the list.
+    pub fn honours_keep_monitors(self) -> bool {
+        matches!(
+            self,
+            Compositor::Kwin | Compositor::Hyprland | Compositor::Wlroots
+        )
+    }
+
+    /// Puts a launch on a workspace of its own (`claim_workspace`).
+    pub fn places_launch_workspace(self) -> bool {
+        matches!(self, Compositor::Hyprland | Compositor::Wlroots)
+    }
+
+    /// Starts a device's screen at its own scale. Mutter only: KWin and Windows remember each
+    /// device's scale themselves.
+    pub fn applies_device_scale(self) -> bool {
+        matches!(self, Compositor::Mutter)
     }
 
     pub fn label(self) -> &'static str {
