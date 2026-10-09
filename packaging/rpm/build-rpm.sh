@@ -69,7 +69,7 @@ git archive --format=tar.gz --prefix="punktfunk-${PF_VERSION}/" \
 # extra unused symbols is harmless; a missing one fails the link. Only when /usr/lib64 is writable
 # (CI image runs as root) — COPR/mock provides the real cuda-cudart-devel stub instead.
 if [ "${PF_WITHOUT_HOST:-0}" != "1" ] && [ "$(id -u)" = 0 ] && [ -d /usr/lib64 ]; then
-  CU_SYMS="$(grep -rhoE '\bcu[A-Z][A-Za-z0-9_]*' crates/punktfunk-host/src/ | sort -u || true)"
+  CU_SYMS="$(grep -rhoE '\bcu[A-Z][A-Za-z0-9_]*' crates/host/punktfunk-host/src/ | sort -u || true)"
   if [ -n "$CU_SYMS" ]; then
     STUB_C="$(mktemp --suffix=.c)"
     for s in $CU_SYMS; do printf 'int %s(void){return 0;}\n' "$s" >> "$STUB_C"; done

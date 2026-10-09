@@ -10,7 +10,7 @@
 # Why an installer and not MSIX (like the client): the host installs a LocalSystem SCM service that
 # CreateProcessAsUserW's into the interactive session for secure-desktop capture, and bundles a
 # kernel/IDD driver — neither is expressible in MSIX's sandbox. The real install logic already lives
-# in `punktfunk-host service install` (crates/punktfunk-host/src/service.rs); the installer just lays
+# in `punktfunk-host service install` (crates/host/punktfunk-host/src/service.rs); the installer just lays
 # the exe down and calls it elevated. Packaging internals: packaging/windows/README.md.
 #
 # Registry (public reads, unom org): https://git.unom.io/unom/-/packages  (generic group)
@@ -68,35 +68,35 @@ on:
     # The crate lines are the Windows host + tray build closure. scripts/ci/check-workflow-paths.py
     # fails CI when one is missing, in either leg.
     paths:
-      - 'crates/punktfunk-host/**'
-      - 'crates/punktfunk-core/**'
-      - 'crates/punktfunk-ffi/**'
-      - 'crates/punktfunk-tray/**'
-      - 'crates/punktfunk-capture-worker/**'
-      - 'crates/pf-bitstream/**'
-      - 'crates/pf-encode/**'
-      - 'crates/pf-encode-core/**'
-      - 'crates/pf-encode-win/**'
-      - 'crates/pf-encode-session/**'
-      - 'crates/libvpl-sys/**'
-      - 'crates/pf-frame/**'
-      - 'crates/pf-gpu/**'
-      - 'crates/pf-zerocopy/**'
-      - 'crates/pf-host-config/**'
-      - 'crates/pf-capture/**'
-      - 'crates/pf-win-display/**'
-      - 'crates/pf-vdisplay/**'
-      - 'crates/pf-portal/**'
-      - 'crates/pf-inject/**'
-      - 'crates/pf-audio/**'
-      - 'crates/pf-paths/**'
-      - 'crates/pf-paths-win/**'
-      - 'crates/pf-seats/**'
-      - 'crates/pf-seat-keeper/**'
-      - 'crates/pf-driver-proto/**'
-      - 'crates/pf-clipboard/**'
-      - 'crates/pf-update-check/**'
-      - 'crates/pyrowave-sys/**'
+      - 'crates/client/punktfunk-ffi/**'
+      - 'crates/codec/libvpl-sys/**'
+      - 'crates/codec/pf-bitstream/**'
+      - 'crates/codec/pyrowave-sys/**'
+      - 'crates/core/pf-update-check/**'
+      - 'crates/core/punktfunk-core/**'
+      - 'crates/host/pf-audio/**'
+      - 'crates/host/pf-capture/**'
+      - 'crates/host/pf-clipboard/**'
+      - 'crates/host/pf-driver-proto/**'
+      - 'crates/host/pf-encode/**'
+      - 'crates/host/pf-encode-core/**'
+      - 'crates/host/pf-encode-session/**'
+      - 'crates/host/pf-encode-win/**'
+      - 'crates/host/pf-frame/**'
+      - 'crates/host/pf-gpu/**'
+      - 'crates/host/pf-host-config/**'
+      - 'crates/host/pf-inject/**'
+      - 'crates/host/pf-paths/**'
+      - 'crates/host/pf-paths-win/**'
+      - 'crates/host/pf-portal/**'
+      - 'crates/host/pf-seat-keeper/**'
+      - 'crates/host/pf-seats/**'
+      - 'crates/host/pf-vdisplay/**'
+      - 'crates/host/pf-win-display/**'
+      - 'crates/host/pf-zerocopy/**'
+      - 'crates/host/punktfunk-capture-worker/**'
+      - 'crates/host/punktfunk-host/**'
+      - 'crates/install/punktfunk-tray/**'
       - 'tools/display-disturb/**'
       - 'packaging/windows/**'
       - 'scripts/windows/**'
@@ -110,35 +110,35 @@ on:
   # code meets a compiler before merge.
   pull_request:
     paths:
-      - 'crates/punktfunk-host/**'
-      - 'crates/punktfunk-core/**'
-      - 'crates/punktfunk-ffi/**'
-      - 'crates/punktfunk-tray/**'
-      - 'crates/punktfunk-capture-worker/**'
-      - 'crates/pf-bitstream/**'
-      - 'crates/pf-encode/**'
-      - 'crates/pf-encode-core/**'
-      - 'crates/pf-encode-win/**'
-      - 'crates/pf-encode-session/**'
-      - 'crates/libvpl-sys/**'
-      - 'crates/pf-frame/**'
-      - 'crates/pf-gpu/**'
-      - 'crates/pf-zerocopy/**'
-      - 'crates/pf-host-config/**'
-      - 'crates/pf-capture/**'
-      - 'crates/pf-win-display/**'
-      - 'crates/pf-vdisplay/**'
-      - 'crates/pf-portal/**'
-      - 'crates/pf-inject/**'
-      - 'crates/pf-audio/**'
-      - 'crates/pf-paths/**'
-      - 'crates/pf-paths-win/**'
-      - 'crates/pf-seats/**'
-      - 'crates/pf-seat-keeper/**'
-      - 'crates/pf-driver-proto/**'
-      - 'crates/pf-clipboard/**'
-      - 'crates/pf-update-check/**'
-      - 'crates/pyrowave-sys/**'
+      - 'crates/client/punktfunk-ffi/**'
+      - 'crates/codec/libvpl-sys/**'
+      - 'crates/codec/pf-bitstream/**'
+      - 'crates/codec/pyrowave-sys/**'
+      - 'crates/core/pf-update-check/**'
+      - 'crates/core/punktfunk-core/**'
+      - 'crates/host/pf-audio/**'
+      - 'crates/host/pf-capture/**'
+      - 'crates/host/pf-clipboard/**'
+      - 'crates/host/pf-driver-proto/**'
+      - 'crates/host/pf-encode/**'
+      - 'crates/host/pf-encode-core/**'
+      - 'crates/host/pf-encode-session/**'
+      - 'crates/host/pf-encode-win/**'
+      - 'crates/host/pf-frame/**'
+      - 'crates/host/pf-gpu/**'
+      - 'crates/host/pf-host-config/**'
+      - 'crates/host/pf-inject/**'
+      - 'crates/host/pf-paths/**'
+      - 'crates/host/pf-paths-win/**'
+      - 'crates/host/pf-portal/**'
+      - 'crates/host/pf-seat-keeper/**'
+      - 'crates/host/pf-seats/**'
+      - 'crates/host/pf-vdisplay/**'
+      - 'crates/host/pf-win-display/**'
+      - 'crates/host/pf-zerocopy/**'
+      - 'crates/host/punktfunk-capture-worker/**'
+      - 'crates/host/punktfunk-host/**'
+      - 'crates/install/punktfunk-tray/**'
       - 'tools/display-disturb/**'
       - 'packaging/windows/**'
       - 'scripts/windows/**'
@@ -230,13 +230,13 @@ jobs:
           cargo clippy --release --locked -p punktfunk-host -p punktfunk-tray --features nvenc,qsv --target x86_64-pc-windows-msvc -- -D warnings; if ($LASTEXITCODE) { throw "host clippy" }
           cargo clippy --release --locked -p pf-encode -p pf-encode-core -p pf-encode-win -p pf-encode-session -p pf-capture -p pf-vdisplay -p pf-win-display -p pf-inject -p pf-audio -p pf-seats -p display-disturb --all-targets --features nvenc,qsv --target x86_64-pc-windows-msvc -- -D warnings; if ($LASTEXITCODE) { throw "subsystem clippy" }
           # The seat keeper is its own workspace (IronRDP's lockfile); see its Cargo.toml.
-          cargo clippy --release --locked --manifest-path crates/pf-seat-keeper/Cargo.toml --target x86_64-pc-windows-msvc -- -D warnings; if ($LASTEXITCODE) { throw "seat keeper clippy" }
+          cargo clippy --release --locked --manifest-path crates/host/pf-seat-keeper/Cargo.toml --target x86_64-pc-windows-msvc -- -D warnings; if ($LASTEXITCODE) { throw "seat keeper clippy" }
 
       - name: Format check
         # Cheap, needs no compile, and the Linux lane cannot see these crates' Windows modules.
         run: |
           cargo fmt -p punktfunk-host -p pf-encode -p pf-encode-core -p pf-encode-win -p pf-encode-session -p pf-capture -p pf-vdisplay -p pf-win-display -p pf-inject -p pf-audio -p pf-seats -p punktfunk-tray -p punktfunk-capture-worker --check; if ($LASTEXITCODE) { throw "fmt" }
-          cargo fmt --manifest-path crates/pf-seat-keeper/Cargo.toml --check; if ($LASTEXITCODE) { throw "seat keeper fmt" }
+          cargo fmt --manifest-path crates/host/pf-seat-keeper/Cargo.toml --check; if ($LASTEXITCODE) { throw "seat keeper fmt" }
 
       - name: Test (pf-capture + pf-vdisplay + pf-win-display, Windows)
         # The crates whose Windows test binaries link against nothing this runner lacks —
@@ -387,7 +387,7 @@ jobs:
         shell: pwsh
         # punktfunk-seat-keeper.exe, from its own workspace into the same CARGO_TARGET_DIR, so
         # it lands beside punktfunk-host.exe where the pack script takes it.
-        run: cargo build --release --locked --manifest-path crates/pf-seat-keeper/Cargo.toml --target ${{ matrix.target }}
+        run: cargo build --release --locked --manifest-path crates/host/pf-seat-keeper/Cargo.toml --target ${{ matrix.target }}
 
       - name: Build (release, capture worker)
         shell: pwsh
@@ -409,7 +409,7 @@ jobs:
           cargo clippy --release --locked -p punktfunk-host -p punktfunk-tray ${{ matrix.host_flags }} --target $t -- -D warnings; if ($LASTEXITCODE) { throw "host clippy" }
           cargo clippy --release --locked -p punktfunk-capture-worker --target $t -- -D warnings; if ($LASTEXITCODE) { throw "capture worker clippy" }
           cargo clippy --release --locked -p pf-encode -p pf-encode-core -p pf-encode-win -p pf-encode-session -p pf-capture -p pf-vdisplay -p pf-win-display -p pf-inject -p pf-audio -p pf-seats -p display-disturb --all-targets ${{ matrix.encode_flags }} --target $t -- -D warnings; if ($LASTEXITCODE) { throw "subsystem clippy" }
-          cargo clippy --release --locked --manifest-path crates/pf-seat-keeper/Cargo.toml --target $t -- -D warnings; if ($LASTEXITCODE) { throw "seat keeper clippy" }
+          cargo clippy --release --locked --manifest-path crates/host/pf-seat-keeper/Cargo.toml --target $t -- -D warnings; if ($LASTEXITCODE) { throw "seat keeper clippy" }
 
       - name: Test (pf-capture, Windows)
         if: matrix.arch == 'x64'

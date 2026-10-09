@@ -1,33 +1,23 @@
-// PyroWave native Metal decoder — the Apple twin of pf-client-core's Vulkan decoder
-// (crates/pf-client-core/src/video_pyrowave.rs), reimplemented on the presenter's own MTLDevice
-// so decode + CSC + present share one device with zero interop (design/pyrowave-codec-plan.md
-// §4.7). No upstream C/C++ ships in the app: the bitstream parse below reimplements
-// pyrowave_decoder.cpp's push_packet/decode_packet walk, and the two compute kernels
-// (MetalWaveletShaders.swift) are hand-ported from the vendored GLSL. The §4.2 upstream pin
-// covers this hand-port: a vendored bump means re-diffing two decode shaders and the two 8-byte
-// header structs, and it is already a protocol-version event.
+// PyroWave native Metal decoder: the Apple twin of the Vulkan decoder in
+// crates/client/pf-client-video/src/video_pyrowave.rs, on the presenter's own MTLDevice so decode,
+// CSC and present share one device. The packet walk ports pyrowave_decoder.cpp's
+// push_packet/decode_packet; MetalWaveletShaders.swift hand-ports the vendored GLSL. A vendored
+// PyroWave bump means re-diffing both decode shaders and the two 8-byte header structs.
 //
-// Wire shape (all fixed by the host encoder, punktfunk-host encode/linux/pyrowave.rs):
-// • One AU = one frame = a self-delimiting stream of packets. Each packet is one 32x32
-//   coefficient block for one (component, level, band), self-sized by its 8-byte
-//   BitstreamHeader; a per-frame START_OF_FRAME sequence header carries dims + total block
-//   count + the VUI bits (chroma 4:2:0, BT.709/BT.2020, limited/full).
-// • With `USER_FLAG_CHUNK_ALIGNED` (Phase 4) the AU is a whole number of `shard_payload`-sized
-//   windows, each 4-byte-prefixed (used-len u16 LE + kind u16 LE): kind 0 = whole packets,
-//   1/2/3 = FRAG chain for a packet bigger than one window. A missing shard of a partial frame
-//   arrives as an all-zero window (used = 0) → skipped, its blocks reconstruct as zeros
-//   (localized blur, the Phase-4 design intent). The reassembler enables partial delivery
-//   core-side automatically for PyroWave sessions.
-// • Decode acceptance mirrors upstream decode_is_ready(allow_partial=true): a frame with no
-//   SOF or with no more than half its blocks is dropped rather than decoded to garbage.
+// Wire shape (fixed by the host encoder, pf-encode's enc/linux/pyrowave.rs):
+// • One AU is one frame of packets, each one 32x32 coefficient block for one (component, level,
+//   band), sized by its 8-byte BitstreamHeader. A per-frame START_OF_FRAME header carries dims,
+//   the block count and the VUI bits (4:2:0, BT.709/BT.2020, limited/full).
+// • With `USER_FLAG_CHUNK_ALIGNED` the AU is whole `shard_payload` windows, each prefixed with
+//   used-len u16 LE + kind u16 LE: kind 0 = whole packets, 1/2/3 = a FRAG chain. A lost shard
+//   arrives as an all-zero window and is skipped; its blocks decode as zeros (local blur).
+// • A frame with no SOF, or with half its blocks or fewer, is dropped, as upstream's
+//   decode_is_ready(allow_partial=true) does.
 //
-// GPU structure per frame (mirroring pyrowave_decoder.cpp's barriers): one concurrent compute
-// encoder with all ~42 dequant dispatches (each writes a distinct band layer — no intra-stage
-// hazards), then one concurrent encoder per iDWT level (5) — encoder boundaries provide the
-// write→sampled-read synchronization the Vulkan version expresses as pipeline barriers. The
-// output is a ring of 4 plane sets (Y full-res + Cb/Cr half-res R8Unorm); ring depth plus
-// same-queue hazard tracking keeps a set alive while the presenter still samples it (the same
-// scheme as the Vulkan client's ring).
+// GPU, per frame: one concurrent encoder for the ~42 dequant dispatches (distinct band layers),
+// then one per iDWT level; encoder boundaries stand in for Vulkan's pipeline barriers. Output is
+// a ring of 4 plane sets (Y full-res, Cb/Cr half-res R8Unorm); ring depth plus same-queue hazard
+// tracking keeps a set alive while the presenter samples it.
 
 #if canImport(Metal)
 import Foundation

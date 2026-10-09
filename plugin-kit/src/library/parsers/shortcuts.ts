@@ -1,6 +1,6 @@
 // Steam's BINARY `shortcuts.vdf` — the user's "Add a Non-Steam Game to My Library" entries.
 //
-// Ported from the host's in-tree scanner (crates/punktfunk-host/src/library/steam.rs), together
+// Ported from the host's in-tree scanner (crates/host/punktfunk-host/src/library/steam.rs), together
 // with its unit tests, which are the real specification here: the format is undocumented, and the
 // two id derivations below (`shortcutAppId`, `shortcutGameId`) are the difference between a
 // shortcut that launches and one that silently does nothing.

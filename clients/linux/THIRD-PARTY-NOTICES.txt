@@ -14,12 +14,12 @@ Total third-party crates: 475
 ----------------------------------------------------------------------------
 VENDORED THIRD-PARTY SOURCE (inside first-party crates)
 ----------------------------------------------------------------------------
-  Lucide 0.462.0 (icon path data, crates/pf-console-ui) — https://lucide.dev
-  Kenney Input Prompts 1.5 (controller outlines, crates/pf-console-ui) — https://kenney.nl/assets/input-prompts
-  pyrowave (vendored, crates/pyrowave-sys) — https://github.com/Themaister/pyrowave
-  Granite subset (vendored, crates/pyrowave-sys) — https://github.com/Themaister/Granite
-  volk (vendored, crates/pyrowave-sys) — https://github.com/zeux/volk
-  Vulkan-Headers (vendored, crates/pyrowave-sys) — https://github.com/KhronosGroup/Vulkan-Headers
+  Lucide 0.462.0 (icon path data, crates/client/pf-console-ui) — https://lucide.dev
+  Kenney Input Prompts 1.5 (controller outlines, crates/client/pf-console-ui) — https://kenney.nl/assets/input-prompts
+  pyrowave (vendored, crates/codec/pyrowave-sys) — https://github.com/Themaister/pyrowave
+  Granite subset (vendored, crates/codec/pyrowave-sys) — https://github.com/Themaister/Granite
+  volk (vendored, crates/codec/pyrowave-sys) — https://github.com/zeux/volk
+  Vulkan-Headers (vendored, crates/codec/pyrowave-sys) — https://github.com/KhronosGroup/Vulkan-Headers
   Font Awesome Free brand icons (vendored, assets/os-icons) — https://fontawesome.com
   Simple Icons (vendored, assets/os-icons) — https://simpleicons.org
   Bazzite logo (vendored, assets/os-icons) — https://github.com/ublue-os/bazzite
@@ -6459,7 +6459,7 @@ DEALINGS IN THE SOFTWARE.
 
 
 ----------------------------------------------------------------------------
-The following license (LICENSE) applies to: Granite subset (vendored, crates/pyrowave-sys)
+The following license (LICENSE) applies to: Granite subset (vendored, crates/codec/pyrowave-sys)
 ----------------------------------------------------------------------------
 Copyright (c) 2017-2026 Hans-Kristian Arntzen
 
@@ -7033,10 +7033,10 @@ SOFTWARE.
 
 
 ----------------------------------------------------------------------------
-The following license (KENNEY-LICENSE) applies to: Kenney Input Prompts 1.5 (controller outlines, crates/pf-console-ui)
+The following license (KENNEY-LICENSE) applies to: Kenney Input Prompts 1.5 (controller outlines, crates/client/pf-console-ui)
 ----------------------------------------------------------------------------
 Kenney Input Prompts 1.5 — the controller outlines of the console's device marks
-(`PAD_*` in crates/pf-console-ui/src/icons.rs) are refit from the pack's
+(`PAD_*` in crates/client/pf-console-ui/src/icons.rs) are refit from the pack's
 `Vector/controller_*.svg` files. Created and distributed by Kenney (www.kenney.nl),
 https://kenney.nl/assets/input-prompts.
 
@@ -7707,7 +7707,7 @@ the following restrictions:
 
 
 ----------------------------------------------------------------------------
-The following license (LUCIDE-LICENSE) applies to: Lucide 0.462.0 (icon path data, crates/pf-console-ui)
+The following license (LUCIDE-LICENSE) applies to: Lucide 0.462.0 (icon path data, crates/client/pf-console-ui)
 ----------------------------------------------------------------------------
 ISC License
 
@@ -8956,7 +8956,7 @@ DEALINGS IN THE SOFTWARE.
 
 
 ----------------------------------------------------------------------------
-The following license (LICENSE) applies to: pyrowave (vendored, crates/pyrowave-sys)
+The following license (LICENSE) applies to: pyrowave (vendored, crates/codec/pyrowave-sys)
 ----------------------------------------------------------------------------
 Copyright (c) 2025 Hans-Kristian Arntzen
 
@@ -12272,7 +12272,7 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 
 ----------------------------------------------------------------------------
-The following license (LICENSE.md) applies to: volk (vendored, crates/pyrowave-sys)
+The following license (LICENSE.md) applies to: volk (vendored, crates/codec/pyrowave-sys)
 ----------------------------------------------------------------------------
 Copyright (c) 2018-2026 Arseny Kapoulkine
 
@@ -12296,7 +12296,7 @@ SOFTWARE.
 
 
 ----------------------------------------------------------------------------
-The following license (LICENSE.md) applies to: Vulkan-Headers (vendored, crates/pyrowave-sys)
+The following license (LICENSE.md) applies to: Vulkan-Headers (vendored, crates/codec/pyrowave-sys)
 ----------------------------------------------------------------------------
 Copyright 2015-2026 The Khronos Group Inc.
 

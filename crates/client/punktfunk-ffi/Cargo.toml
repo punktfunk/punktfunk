@@ -1,0 +1,40 @@
+[package]
+name = "punktfunk-ffi"
+description = "punktfunk's stable C ABI over punktfunk-core, plus the demo-mode loopback host"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[lib]
+name = "punktfunk_ffi"
+# `lib`       — the Apple static library links it whole; the host's tests call it from Rust.
+# `staticlib` — `libpunktfunk_ffi.a` for the C test harness and static embedding.
+# `cdylib`    — `libpunktfunk_ffi.{so,dylib}` for dynamic C embedding.
+crate-type = ["lib", "cdylib", "staticlib"]
+
+[features]
+default = []
+# The connection API, pairing and the demo host: everything behind core's control plane.
+quic = ["punktfunk-core/quic", "dep:opus", "dep:quinn", "dep:rand", "dep:rcgen", "dep:tokio"]
+
+[dependencies]
+punktfunk-core = { path = "../../core/punktfunk-core" }
+pf-bitstream = { path = "../../codec/pf-bitstream" }
+# The backend `punktfunk_set_log_callback` installs (`log::set_logger` + `log::Log`). tracing's
+# `log` feature mirrors every event as a `log` record while no tracing subscriber is installed,
+# which is how core's lines reach the callback.
+log = "0.4"
+tracing = { version = "0.1", default-features = false, features = ["std", "log"] }
+# The demo host: a quinn endpoint on its own runtime and a fresh self-signed certificate,
+# Opus silence on the audio plane.
+opus = { version = "0.4", optional = true }
+quinn = { workspace = true, optional = true }
+rand = { version = "0.10", optional = true }
+rcgen = { workspace = true, optional = true }
+tokio = { version = "1", optional = true, features = ["rt-multi-thread", "macros", "time"] }
+
+[lints]
+workspace = true

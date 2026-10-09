@@ -779,12 +779,12 @@ object NativeBridge {
      */
     external fun nativeNextHidout(handle: Long, buf: java.nio.ByteBuffer): Int
 
-    // ---- The Skia console UI (crates/pf-console-ui over EGL/GLES — clients/android/native/src/console) ----
+    // ---- The Skia console UI (crates/client/pf-console-ui over EGL/GLES — clients/android/native/src/console) ----
     //
     // The same console shell the Linux/Windows session binary shows, drawn by native onto a
     // SurfaceView. Kotlin keeps the services and feeds the console's models as JSON in the model
     // types' own serde shape (HostRow, LibraryGame, ConsoleCmd, OverlayAction, Settings — see
-    // `crates/pf-console-ui/src/model.rs` and `pf-client-core/src/trust.rs`); what the console
+    // `crates/client/pf-console-ui/src/model.rs` and `pf-client-core/src/trust.rs`); what the console
     // raises comes back through [nativeConsoleNextEvent]. Every call is main-thread-safe and cheap
     // except the two polls, which block ~100 ms and belong on their own threads.
 

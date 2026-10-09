@@ -7,7 +7,7 @@
       "type": "library",
       "name": "pyrowave",
       "version": "c0b997f84ced7bd827ca737aa5145f4ec811de8d",
-      "description": "GPU wavelet codec, vendored at crates/pyrowave-sys/vendor/pyrowave (pruned tree) with local patches from crates/pyrowave-sys/patches/; commits recorded in vendor/pyrowave/PUNKTFUNK-VENDOR.txt",
+      "description": "GPU wavelet codec, vendored at crates/codec/pyrowave-sys/vendor/pyrowave (pruned tree) with local patches from crates/codec/pyrowave-sys/patches/; commits recorded in vendor/pyrowave/PUNKTFUNK-VENDOR.txt",
       "licenses": [
         {
           "license": {
@@ -88,7 +88,7 @@
       "type": "library",
       "name": "libvpl",
       "version": "2.17.0",
-      "description": "Intel oneVPL dispatcher, vendored at crates/libvpl-sys/vendor/libvpl",
+      "description": "Intel oneVPL dispatcher, vendored at crates/codec/libvpl-sys/vendor/libvpl",
       "licenses": [
         {
           "license": {
@@ -107,7 +107,7 @@
       "type": "library",
       "name": "fec-rs",
       "version": "0.1.0",
-      "description": "Reed-Solomon FEC, forked at crates/punktfunk-core/vendor/fec-rs with the Cauchy generator matrix Moonlight's nanors uses",
+      "description": "Reed-Solomon FEC, forked at crates/core/punktfunk-core/vendor/fec-rs with the Cauchy generator matrix Moonlight's nanors uses",
       "licenses": [
         {
           "license": {
@@ -126,7 +126,7 @@
       "type": "library",
       "name": "cros-codecs",
       "version": "5ff6d693ffae0b36935b8fc13092c733b4c2646f",
-      "description": "H.264/H.265/AV1/VP9 parser layer, vendored at crates/pf-bitstream/vendor/cros-codecs with the deviations in its PROVENANCE.md",
+      "description": "H.264/H.265/AV1/VP9 parser layer, vendored at crates/codec/pf-bitstream/vendor/cros-codecs with the deviations in its PROVENANCE.md",
       "licenses": [
         {
           "license": {
@@ -145,7 +145,7 @@
       "type": "library",
       "name": "usbip",
       "version": "0.8.0",
-      "description": "USB/IP server simulation, vendored and trimmed as usbip-sim at crates/pf-inject/vendor/usbip-sim; changes listed in its NOTICE",
+      "description": "USB/IP server simulation, vendored and trimmed as usbip-sim at crates/host/pf-inject/vendor/usbip-sim; changes listed in its NOTICE",
       "licenses": [
         {
           "license": {

@@ -21,7 +21,7 @@ agreements and installation notes stay under normal code review.
 - **`ProductCode: {7C9E6A52-…}_is1`** — the ARP key keeps Inno's `<AppId>_is1` name forever. This
   is what correlates an installed host with the package for `winget list` / `winget upgrade`, and
   it is what lets an Inno-installed host upgrade onto the engine. **It must track `HOST_ARP_KEY` in
-  `crates/punktfunk-setup/src/platform/windows/mod.rs`** — if that GUID ever changes, change it
+  `crates/install/punktfunk-setup/src/platform/windows/mod.rs`** — if that GUID ever changes, change it
   here too or upgrades silently stop being detected.
 - **`interactive` is in `InstallModes`.** `winget install unom.PunktfunkHost --interactive` runs the
   full existing wizard: every task checkbox and the web-console password page.
@@ -49,7 +49,7 @@ Task names: `installdriver`, `installgamepad`, `installhdrlayer`,
 
 ## Three installer behaviours that exist for this path
 
-All three live in `crates/punktfunk-setup/src/platform/windows/` and also fix the plain
+All three live in `crates/install/punktfunk-setup/src/platform/windows/` and also fix the plain
 double-click upgrade path:
 
 - **A competing host moves our port; it never aborts.** Sunshine/Apollo on the box means both want

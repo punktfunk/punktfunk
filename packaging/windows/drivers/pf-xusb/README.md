@@ -70,7 +70,7 @@ the whole build/sign/stage flow in CI. The manual steps:
 
 ## Host integration (done)
 
-`crates/punktfunk-host/src/inject/windows/gamepad_windows.rs` is the Windows `GamepadManager` (used by
+`crates/host/punktfunk-host/src/inject/windows/gamepad_windows.rs` is the Windows `GamepadManager` (used by
 `PadBackend::Xbox360`): it SwDeviceCreate's the `pf_xusb` companion, delivers the unnamed DATA
 section over the sealed channel (`PadChannel`), writes
 the XInput state from the client's gamepad frame (already XInput-convention) and forwards rumble. There

@@ -131,8 +131,8 @@ own systemd unit or scheduled task.
 
 ## Changing the API
 
-Handlers live in `crates/punktfunk-host/src/mgmt/`. Annotate a new handler with
-`#[utoipa::path]` and add it to `api_router_parts` in `crates/punktfunk-host/src/mgmt.rs`.
+Handlers live in `crates/host/punktfunk-host/src/mgmt/`. Annotate a new handler with
+`#[utoipa::path]` and add it to `api_router_parts` in `crates/host/punktfunk-host/src/mgmt.rs`.
 
 1. Classify the route for the plugin and paired-device lanes: add a row to `EXPECTED` in
    `every_route_is_classified_for_the_plugin_and_cert_lanes` (`mgmt/tests/routes.rs`), and to

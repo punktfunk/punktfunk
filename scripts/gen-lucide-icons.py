@@ -7,7 +7,7 @@ Each icon carries BOTH forms it is drawn in: the folded path (Skia on the consol
 GTK shell) and the icon font's codepoint, read from <svg-dir>/font/info.json (the WinUI shell,
 which has no vector element and draws the glyph instead).
 
-The output is `crates/pf-client-core/src/lucide.rs` — ONE table for every Rust client, so the
+The output is `crates/client/pf-client-core/src/lucide.rs` — ONE table for every Rust client, so the
 Skia console and the GTK shell cannot draw a mark differently. Generated outright rather than
 printed for pasting: 32 paths of up to 1 kB each is a transcription error waiting to happen,
 and a mangled character is a silently wrong icon rather than a build failure.

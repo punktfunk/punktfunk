@@ -1,0 +1,45 @@
+# The `Encoder` contract and what the Linux and Windows backends share: the encoder knobs, the
+# slot-RFI and loss-recovery policy, the direct-NVENC session and the PyroWave wire framing.
+# Speaks pf-frame only, so pf-encode (Linux) and pf-encode-win (Windows, inside the IddCx driver)
+# both build on it without QUIC or GPU inventory.
+[package]
+name = "pf-encode-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license = "MIT OR Apache-2.0"
+description = "punktfunk video encode contract: the Encoder trait and the policy its backends share."
+publish = false
+
+[dependencies]
+pf-frame = { path = "../pf-frame" }
+# The `EncodeKnobs` block the host sends in SET_ENCODE; this crate reads its knobs from it.
+pf-driver-proto = { path = "../pf-driver-proto" }
+anyhow = "1"
+tracing = "0.1"
+# `nvEncodeAPI` types for `nvenc_core`/`nvenc_status`/`nvenc_session`, which serve the Linux CUDA
+# and the Windows D3D11 backend alike.
+nvidia-video-codec-sdk = { version = "0.4", features = ["ci-check"], optional = true }
+
+[target.'cfg(any(target_os = "linux", target_os = "windows"))'.dependencies]
+# The packetize step both PyroWave backends share (`pyrowave_ffi`), only under `pyrowave`.
+pyrowave-sys = { path = "../../codec/pyrowave-sys", optional = true }
+
+[dev-dependencies]
+# Reads `clients/shared/render-scale-vectors.json`.
+serde_json = "1"
+
+[features]
+default = []
+# The shared direct-NVENC glue and session; entry points resolved at runtime.
+nvenc = ["dep:nvidia-video-codec-sdk"]
+# The PyroWave wire framing and packetize step.
+pyrowave = ["dep:pyrowave-sys"]
+# Linux Vulkan Video in pf-encode shares `rfi` and `vbv_window_ms`; the gate mirrors pf-encode's.
+vulkan-encode = []
+# Helpers for the backends' tests: `pyrowave_wire::unwindow`, the `pyrowave_ffi::oracle` decoder,
+# and the `smoke_pattern` drivers. Never in a shipped build.
+test-support = []
+
+[lints]
+workspace = true

@@ -168,15 +168,15 @@ jobs:
       - name: Shader SPIR-V drift gate (pf-zerocopy, pf-encode)
         run: |
           apt-get install -y --no-install-recommends glslang-tools spirv-tools
-          for p in crates/pf-zerocopy/src/imp/rgb2nv12_buf \
-                   crates/pf-zerocopy/src/imp/cursor_blend \
-                   crates/pf-zerocopy/src/imp/convert_img \
-                   crates/pf-zerocopy/src/imp/reframe_buf \
-                   crates/pf-encode/src/enc/linux/reframe \
-                   crates/pf-encode/src/enc/linux/rgb2yuv \
-                   crates/pf-encode/src/enc/linux/rgb2yuv10 \
-                   crates/pf-encode/src/enc/linux/rgb2yuv10_709 \
-                   crates/pf-encode/src/enc/linux/rgb2yuv444; do
+          for p in crates/host/pf-zerocopy/src/imp/rgb2nv12_buf \
+                   crates/host/pf-zerocopy/src/imp/cursor_blend \
+                   crates/host/pf-zerocopy/src/imp/convert_img \
+                   crates/host/pf-zerocopy/src/imp/reframe_buf \
+                   crates/host/pf-encode/src/enc/linux/reframe \
+                   crates/host/pf-encode/src/enc/linux/rgb2yuv \
+                   crates/host/pf-encode/src/enc/linux/rgb2yuv10 \
+                   crates/host/pf-encode/src/enc/linux/rgb2yuv10_709 \
+                   crates/host/pf-encode/src/enc/linux/rgb2yuv444; do
             s=${p##*/}
             glslangValidator -V "$p.comp" -o "/tmp/$s.spv" >/dev/null
             spirv-dis --no-header "$p.spv"      | grep -v OpSourceExtension > "/tmp/$s.committed"
@@ -357,7 +357,7 @@ jobs:
           cargo test -p pf-encode -p pf-encode-core --locked --features nvenc,vulkan-encode,pyrowave
 
       - name: C ABI harness (standalone link proof)
-        run: bash crates/punktfunk-ffi/tests/c/run.sh
+        run: bash crates/client/punktfunk-ffi/tests/c/run.sh
 
       - name: sccache stats (visibility only)
         run: sccache --show-stats

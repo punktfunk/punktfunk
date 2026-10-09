@@ -1,0 +1,195 @@
+[package]
+name = "pf-client-core"
+description = "Shared client plumbing (Linux + Windows) — session pump, PipeWire/WASAPI audio, SDL3 gamepads, trust store, discovery — extracted from the GTK client so the shells and the Vulkan session binary build on one implementation"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+# Linux + Windows: the Vulkan session client builds on both; `cargo build --workspace`
+# stays green on macOS (the Mac client lives in clients/apple) — there this crate is
+# `wol` plus stubs-free emptiness. `wol` is pure std and stays cross-platform, matching
+# the old main.rs. Audio is the one per-OS swap: PipeWire on Linux, WASAPI on Windows
+# (same public surface — see lib.rs).
+#
+# Android (design/android-skia-console-port.md, WP1): the Skia console shell
+# (`pf-console-ui`) now runs inside the Android client too, and everything IT needs from
+# this crate is data — `trust::Settings`, the menu-event vocabulary + synthesizer, the
+# library model, the deep-link grammar, the overlay action/session-phase types. Those
+# modules are gated `cfg(portable)` in lib.rs (build.rs); the session pump, decoders,
+# audio, SDL gamepad service and the ureq fetches stay desktop-only, so this block carries
+# only what the portable modules touch. `quic` (not `ureq-tls`): `trust` names
+# `NativeClient`/`endpoint` for identity + pairing; nothing here fetches over HTTPS.
+# Apple targets take the same subset: the console crate builds for the Mac, iOS and tvOS.
+[target.'cfg(any(target_os = "android", target_vendor = "apple"))'.dependencies]
+punktfunk-core = { path = "../../core/punktfunk-core", features = ["quic", "serde"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+anyhow = "1"
+tracing = "0.1"
+# `profiles` mints profile ids.
+rand = "0.10"
+
+# The web client (design/web-client-implementation-plan.md WP0.1), `wasm32-unknown-emscripten`.
+# The same portable subset Android takes, minus `quic`: WebTransport IS the QUIC layer there, so
+# quinn/tokio/aws-lc-rs never build for this target and `trust`'s three identity/pair/probe
+# entry points are `cfg`'d out with them.
+[target.'cfg(target_family = "wasm")'.dependencies]
+punktfunk-core = { path = "../../core/punktfunk-core", features = ["serde"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+anyhow = "1"
+tracing = "0.1"
+rand = "0.10"
+
+[target.'cfg(any(target_os = "linux", windows))'.dependencies]
+punktfunk-core = { path = "../../core/punktfunk-core", features = ["quic", "serde"] }
+# The decode ladder (`video`, `video_*`). Optional, so webOS — `target_os = "linux"` without
+# `desktop` — never builds it.
+pf-client-video = { path = "../pf-client-video", default-features = false, optional = true }
+# SIGTERM for the session child (`orchestrate`) and thread priority (`audio_rt`).
+libc = { version = "0.2", optional = true }
+
+# Opus for the audio planes. The VIDEO side has no FFmpeg at all since M10: every decode
+# rung is native (pf-vkdecode / pf-dxvadec / pf-vaapi / openh264+rav1d) and the codec
+# vocabulary is `punktfunk_core::quic`'s own `CODEC_*` wire bits. The HOST still encodes
+# with libavcodec (`pf-encode`); nothing in this crate does.
+opus = { version = "0.4", optional = true }
+
+# Game-library fetch from the host's management API over mTLS + fingerprint pinning.
+# `ureq` is small + sync (the host uses it too) and its rustls unifies with the
+# workspace's (quinn's) 0.23; the pinning verifier mirrors core's private `PinVerify`.
+ureq = { workspace = true, optional = true, features = ["gzip"] }
+# Signed update-manifest fetch/verify + the install-kind ladder, shared with the host so one
+# trust rule serves both (crates/core/pf-update-check).
+pf-update-check = { path = "../../core/pf-update-check", optional = true }
+rustls = { workspace = true, optional = true, features = ["logging", "tls12"] }
+# Art-cache keys (`art_cache`): the SHA-256 of a poster URL. Already in the tree —
+# punktfunk-core's `tls` hashes certificates with the same version.
+sha2 = "0.11"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+anyhow = "1"
+tracing = "0.1"
+# `logring::RingLayer` — the ONE tracing layer feeding the ring — and `logring::init_tracing`,
+# the subscriber the session binary and both desktop shells install around it. Default
+# features: their `tracing-log` makes `init()` forward `log`-crate records, and `tracing-log`
+# below is the layer's bridge-normalization half. Android/Apple builds are untouched — this is
+# the desktop target block.
+tracing-subscriber = { version = "0.3", optional = true, features = ["env-filter"] }
+tracing-log = { version = "0.2", optional = true }
+# Stable ids for profiles and host records (profiles.rs) — the OS RNG only. No uuid crate: the
+# v4 layout is four lines.
+rand = "0.10"
+
+# Gamepads: capture + feedback (full DualSense fidelity — touchpad/motion/triggers/LEDs
+# need the hidapi driver). Linux links the system SDL3; Windows builds it from source
+# (no system SDL3 there — same choice as clients/windows).
+[target.'cfg(target_os = "linux")'.dependencies]
+# `v0_3_49` for `Buffer::requested` — the graph's per-cycle frame ask, without which the
+# playback callback can only size writes from the buffer CEILING (quantum-limit, ~170 ms).
+# Pure cfg gate; needs libpipewire ≥ 0.3.49 (2022-03) at runtime, which every ship target
+# (SteamOS, flatpak runtimes, Arch, Ubuntu ≥ 22.10) clears.
+pipewire = { version = "0.10", features = ["v0_3_49"], optional = true }
+sdl3 = { version = "0.20", features = ["hidapi"], optional = true }
+# Audio-thread priority (`audio_rt`): one blocking D-Bus call per boosted thread — the Realtime
+# PORTAL (session bus) inside a flatpak, where the sandbox's PID namespace makes a direct rtkit
+# call unresolvable, and rtkit (system bus) outside one. The same zbus, features and backend
+# choice as `pf-frame`'s `thread_qos` (which the host uses for the same purpose): `tokio` because
+# core's `quic` already resolves tokio for this crate, `blocking-api` because the callers are
+# plain worker threads, no default `async-io`.
+zbus = { version = "5", default-features = false, features = ["tokio", "blocking-api"], optional = true }
+# `fence`: the pump waits a decode's sync_file before it hands the picture on.
+pf-dmabuf = { path = "../../core/pf-dmabuf", optional = true }
+# The gamescope overlay watcher (`overlay_focus`): read two CARDINAL properties off a
+# gamescope root window and block on PropertyNotify. `default-features = false` keeps the
+# pure-Rust `RustConnection` — no libxcb link, so no new C dependency on any client package
+# — the same stance pf-capture and pf-vdisplay already take on this crate. No extension
+# features: root-window properties and an event mask are core X11.
+x11rb = { version = "0.14", default-features = false, optional = true }
+# `overlay_focus` dials gamescope's abstract X socket with a deadline: std's connect has none,
+# and a listener that never accepts (a desktop's idle Xwayland socket) would park the watcher.
+socket2 = { version = "0.6", optional = true }
+
+[target.'cfg(windows)'.dependencies]
+wasapi = { version = "0.25", optional = true }
+# Pad-audio correlation (pad_audio.rs): the HID devnode's ContainerID and a render endpoint's
+# stamped PKEY_Device_ContainerId both live in the registry — read-only, which sidesteps COM
+# property stores entirely (the same version the host pins).
+winreg = { version = "0.56", optional = true }
+sdl3 = { version = "0.20", features = ["hidapi", "build-from-source"], optional = true }
+# The OS-clipboard bridge (clipboard.rs) and the reduce-motion query (os_prefs.rs). The
+# workspace entry's pinned rev, so `windows-core` unifies with windows-reactor's. `wasapi`
+# pulls the crates.io copy too; clients/windows/Cargo.toml says why it stays.
+windows = { workspace = true, optional = true, features = [
+    # Features are header-named since windows-rs generates from the SDK headers directly
+    # (#4689) — one feature per header, replacing the old `Win32_*` namespace features.
+    # Open/Get/SetClipboardData, the sequence number, SystemParametersInfoW.
+    "winuser",
+    # The GlobalAlloc block the clipboard takes ownership of, its HGLOBAL and HANDLE.
+    "winbase",
+    "minwindef",
+    "winnt",
+    # OpenClipboard's HWND.
+    "windef",
+] }
+
+[target.'cfg(any(target_os = "linux", windows))'.dev-dependencies]
+# `logring`'s bridged-decoder test plants `log`-crate records through the tracing-log
+# bridge and installs a registry subscriber — the full-featured halves the shipping layer
+# deliberately doesn't need.
+log = "0.4"
+tracing-subscriber = { version = "0.3" }
+
+# The mDNS browse (`discovery`), which Android takes without `desktop`.
+[target.'cfg(any(target_os = "linux", windows, target_os = "android"))'.dependencies]
+mdns-sd = { version = "0.21", optional = true }
+async-channel = { version = "2", optional = true }
+
+[features]
+# `desktop` separates the full Linux/Windows stack — session pump, the native decode ladder,
+# audio, SDL gamepads, the ureq fetches — from the PORTABLE subset the console shell needs
+# (settings, menu events, the library model, deep links, the log ring). ON by default, so every
+# desktop consumer is unchanged; `--no-default-features` yields the portable half.
+#
+# 🛑 The split cannot be spelled `cfg(target_os)`, which is what it used to be: webOS is
+# `target_os = "linux"` and so resolved the desktop block — Vulkan video, PipeWire, SDL3,
+# openh264, rav1d — none of which exist on a TV. Android escaped that only because it has an OS
+# name of its own to test (design/webos-skia-console-port.md §2.1).
+#
+# Consumers that take `default-features = false` AND want the desktop half must now say
+# `features = ["desktop"]`: clients/cli, clients/windows, clients/session, crates/client/pf-presenter.
+# The two that want the portable half — crates/client/pf-console-ui, clients/android/native — say
+# nothing, which is the point.
+default = ["desktop", "pyrowave"]
+desktop = [
+    "punktfunk-core/ureq-tls",
+    "dep:pf-client-video", "pf-client-video/desktop", "dep:async-channel",
+    "dep:libc", "dep:opus", "discovery", "dep:ureq", "dep:pf-update-check", "dep:rustls",
+    "dep:tracing-subscriber", "dep:tracing-log",
+    "dep:pipewire", "dep:sdl3", "dep:zbus", "dep:x11rb", "dep:socket2",
+    "dep:pf-dmabuf",
+    "dep:wasapi", "dep:winreg", "dep:windows", "d3d11va",
+]
+# pf-client-video's DXVA device and native rung, without the rest of `desktop`, which
+# includes it.
+d3d11va = ["dep:pf-client-video", "pf-client-video/d3d11va"]
+# `discovery` is the mDNS browse (`mdns-sd`, `async-channel`) without the rest of `desktop`.
+# `desktop` includes it, so every desktop consumer is unchanged, and still names
+# `async-channel` for the session and gamepad paths. A shell that only looks for hosts says
+# `features = ["discovery"]`, as Android does for its JNI browse. Apple and wasm build without it.
+discovery = ["dep:mdns-sd", "dep:async-channel"]
+# PyroWave client decode ships in every default build (flatpak included; pyrowave-sys is a
+# vendored in-repo tree, offline-safe, and an empty stub off Linux/Windows). The codec is
+# still strictly per-session opt-in (Settings codec pick / PUNKTFUNK_PREFER_PYROWAVE=1).
+# Forwards to pf-client-video, which `desktop` pulls.
+pyrowave = ["pf-client-video?/pyrowave"]
+
+# build.rs names the `portable` and `desktop` module gates.
+[build-dependencies]
+cfg_aliases = "0.2"
+
+[lints]
+workspace = true

@@ -1,0 +1,41 @@
+# The seat keeper: holds one seat's loopback RDP session open, and records TermService's
+# leaf pin (`trust`). Its own workspace and lockfile, as packaging/windows/drivers is:
+# IronRDP pins picky 7.0.0-rc.25 and earlier, which pin a release-candidate aes-gcm that
+# cannot share a lockfile with punktfunk-core's aes-gcm 0.11. The supervisor in
+# crates/host/pf-seats spawns it beside punktfunk-host.exe and hands it its bootstrap on stdin.
+[workspace]
+resolver = "2"
+
+# The main workspace's unsafe discipline, restated: its [workspace.lints] does not reach here.
+[workspace.lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+
+[workspace.lints.clippy]
+undocumented_unsafe_blocks = "deny"
+
+[package]
+name = "punktfunk-seat-keeper"
+description = "Holds a punktfunk seat's loopback RDP session open"
+version = "0.0.1"
+edition = "2024"
+rust-version = "1.89"
+license = "MIT OR Apache-2.0"
+publish = false
+
+[target.'cfg(windows)'.dependencies]
+hex = "0.4"
+# Exact pins: the keeper drives IronRDP's connector state by hand, which moves between minors.
+ironrdp = { version = "=0.17.0", default-features = false, features = ["connector", "graphics", "pdu", "session"] }
+ironrdp-blocking = "=0.10.0"
+pf-seats = { path = "../pf-seats" }
+rustls = { version = "0.23", default-features = false, features = ["aws_lc_rs", "prefer-post-quantum", "std"] }
+x509-cert = { version = "0.2", default-features = false, features = ["std"] }
+zeroize = "1"
+
+[lints]
+workspace = true
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1

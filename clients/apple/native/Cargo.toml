@@ -15,16 +15,16 @@ name = "punktfunk_apple"
 crate-type = ["staticlib"]
 
 [dependencies]
-punktfunk-ffi = { path = "../../../crates/punktfunk-ffi", features = ["quic"] }
+punktfunk-ffi = { path = "../../../crates/client/punktfunk-ffi", features = ["quic"] }
 
 # The console: the shell every other client shows, drawn through Skia's Metal backend into a
 # texture Swift hands over (`src/console.rs`). `metal` + `ganesh` + `textlayout` = the prebuilt key
 # `ganesh-jpegd-jpege-metal-pdf-textlayout`; build-xcframework.sh fetches and SHA-verifies each slice's.
 [target.'cfg(target_vendor = "apple")'.dependencies]
-pf-console-ui = { path = "../../../crates/pf-console-ui", default-features = false, features = [
+pf-console-ui = { path = "../../../crates/client/pf-console-ui", default-features = false, features = [
     "metal",
 ] }
-pf-client-core = { path = "../../../crates/pf-client-core", default-features = false }
+pf-client-core = { path = "../../../crates/client/pf-client-core", default-features = false }
 skia-safe = { version = "0.153", features = ["metal", "ganesh", "textlayout"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

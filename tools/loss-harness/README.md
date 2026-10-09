@@ -1,6 +1,6 @@
 # loss-harness
 
-A **FEC loss-resilience sweep** for [`punktfunk-core`](../../crates/punktfunk-core/README.md). It
+A **FEC loss-resilience sweep** for [`punktfunk-core`](../../crates/core/punktfunk-core/README.md). It
 drives access units through the in-process loopback at increasing packet-loss rates — for **both** FEC
 schemes (GF(2⁸) and GF(2¹⁶)) — and reports how many frames survive.
 

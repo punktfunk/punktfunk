@@ -4,7 +4,7 @@
 // Names come from the host's own `BUTTON_MAP` (pf-inject `linux/gamepad.rs`), so a line here
 // reads the way the same press reads in an evdev dump. A wire bit with no evdev counterpart
 // (the D-pad, which the uinput pad emits as a hat) keeps its wire name. Both tables are
-// pinned by `crates/punktfunk-core/testdata/gamepad-button-vectors.json`.
+// pinned by `crates/core/punktfunk-core/testdata/gamepad-button-vectors.json`.
 
 import type { PadFrame } from "@/api/gen/model/padFrame";
 

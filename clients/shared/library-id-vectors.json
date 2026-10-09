@@ -1,5 +1,5 @@
 {
-  "$comment": "Library entry ids and art URLs the host accepts (crates/punktfunk-host/src/library/metadata.rs `valid_entry_id`, `valid_remote_url`). The console BFF, the console and the plugin kit reject early with the same rule; each suite runs every case. `value` is the string, or its prefix when `fill` is repeated `count` times after it. Lengths are UTF-8 bytes. Read by: metadata.rs tests, web/server/util/pluginProxy.test.ts, web/src/api/metadata.test.ts, plugin-kit/test/library-ids.test.ts.",
+  "$comment": "Library entry ids and art URLs the host accepts (crates/host/punktfunk-host/src/library/metadata.rs `valid_entry_id`, `valid_remote_url`). The console BFF, the console and the plugin kit reject early with the same rule; each suite runs every case. `value` is the string, or its prefix when `fill` is repeated `count` times after it. Lengths are UTF-8 bytes. Read by: metadata.rs tests, web/server/util/pluginProxy.test.ts, web/src/api/metadata.test.ts, plugin-kit/test/library-ids.test.ts.",
   "entry_ids": [
     {
       "value": "steam:570",

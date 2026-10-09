@@ -1,0 +1,76 @@
+# Host audio (plan §W6): desktop capture (PipeWire stream sink / WASAPI loopback), the virtual
+# microphone, pad audio and the Windows wiring plan, behind the AudioCapturer / VirtualMic traits.
+# Consumes punktfunk_core::audio and never reaches the orchestrator: the voice-chat pin's host
+# services arrive through `voice_route::HOST_HOOKS`, set at host startup.
+[package]
+name = "pf-audio"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license = "MIT OR Apache-2.0"
+description = "punktfunk host audio: PipeWire/WASAPI capture, the virtual microphone, pad audio and the Windows wiring plan."
+publish = false
+
+[dependencies]
+# `audio` (Opus layouts, gain) lives outside the `quic` feature.
+punktfunk-core = { path = "../../core/punktfunk-core", default-features = false }
+pf-host-config = { path = "../pf-host-config" }
+# Real-time priority for the capture and mic threads.
+pf-frame = { path = "../pf-frame" }
+anyhow = "1"
+tracing = "0.1"
+# Opus encode for both audio planes — stereo (`opus::Encoder`) and 5.1/7.1 (`opus::MSEncoder`) —
+# and the mic pump's decode. The crate vendors libopus (cmake-built from source), so it builds on
+# Windows MSVC and macOS too.
+opus = "0.4"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+# One version across the workspace: pipewire-sys and libspa-sys carry a `links` key. Its
+# `init()` is OnceLock-guarded in 0.10.1, so callers need no wrapper; recheck on a bump.
+# `v0_3_49`: `Buffer::requested`, the virtual mic's per-cycle quantum.
+pipewire = { version = "0.10", features = ["v0_3_49"] }
+# The USB/IP DualSense's audio channel, and its pairing reply for the `{mac}` sink template.
+pf-inject = { path = "../pf-inject" }
+# `state_dir`: the pre-claim audio defaults, kept for the host start after a crash.
+pf-paths = { path = "../pf-paths" }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+# Config dir, owner-private writes, the seat marker and `pnputil /remove-device`.
+pf-paths = { path = "../pf-paths" }
+# `multi_sz` for the minted devnodes' hardware id.
+pf-win-display = { path = "../pf-win-display" }
+# WASAPI loopback capture and the virtual-mic render.
+wasapi = "0.25"
+# Device-parameter reads and the uninstall sweep of minted devnodes.
+winreg = "0.56"
+# The seat marker on minted devnodes is a SHA-256 of the seat id (minted.rs).
+sha2 = "0.11"
+# Restart AudioEndpointBuilder + Audiosrv so re-stamped pad endpoints are served.
+windows-service = "0.8"
+windows = { version = "0.62", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    # The MMDevices ACL repair on pad endpoints (pad_endpoint.rs).
+    "Win32_Security_Authorization",
+    # SetupAPI devnode create/bind/enumerate (devnode_api.rs).
+    "Win32_Devices_DeviceAndDriverInstallation",
+    "Win32_Devices_Properties",
+    # CoCreateInstance(PolicyConfigClient): the default playback/recording endpoints via the
+    # undocumented IPolicyConfig (audio_control.rs).
+    "Win32_System_Com",
+    # IMMDevice + IPropertyStore stamp the DualSense identity onto minted endpoints; PROPVARIANT
+    # lives in StructuredStorage and is gated on Variant.
+    "Win32_Media_Audio",
+    "Win32_UI_Shell_PropertiesSystem",
+    "Win32_System_Com_StructuredStorage",
+    "Win32_System_Variant",
+    "Win32_System_Registry",
+    "Win32_System_Environment",
+    # The voice-chat pin: a voice app's session (ProcessIdToSessionId) and the per-app output
+    # pin through RoGetActivationFactory(AudioPolicyConfig) (voice_route.rs).
+    "Win32_System_RemoteDesktop",
+    "Win32_System_WinRT",
+] }
+
+[lints]
+workspace = true

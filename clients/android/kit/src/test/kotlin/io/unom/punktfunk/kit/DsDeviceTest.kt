@@ -157,7 +157,7 @@ class DsDeviceTest {
      * A calibration feature report in the pads' USB layout: report id, three gyro bias words, six
      * INTERLEAVED gyro plus/minus words, the two speed words, six accel plus/minus words — all
      * little-endian i16, exactly what [DsDevice.MotionCal.parse] reads and what
-     * `crates/pf-inject/tests/motion_contract.rs` writes from the other end.
+     * `crates/host/pf-inject/tests/motion_contract.rs` writes from the other end.
      */
     private fun calBlob(
         id: Int,

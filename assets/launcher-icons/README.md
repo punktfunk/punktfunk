@@ -28,7 +28,7 @@ A plugin sends the **name** of a mark, never its bytes, and never a URL.
 
 The obvious alternative — a plugin ships its own `icon.svg` and the host's art proxy serves it —
 is closed by construction, and deliberately: `local_art_bytes` serves what the bytes *are*
-(`sniff_image_type`, `crates/punktfunk-host/src/library/art.rs`), and SVG is not on that list
+(`sniff_image_type`, `crates/host/punktfunk-host/src/library/art.rs`), and SVG is not on that list
 because it is script-capable XML and the web console renders library art in a browser. Widening
 that sniff to admit SVG would trade a rendering nicety for a stored-XSS surface.
 

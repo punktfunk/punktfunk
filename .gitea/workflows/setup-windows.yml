@@ -10,20 +10,20 @@ on:
   push:
     branches: [main]
     paths:
-      - "crates/punktfunk-setup/**"
-      - "crates/punktfunk-setup-win/**"
-      - "crates/pf-paths/**"
-      - "crates/pf-paths-win/**"
-      - "crates/pf-host-config/**"
+      - "crates/install/punktfunk-setup/**"
+      - "crates/install/punktfunk-setup-win/**"
+      - "crates/host/pf-paths/**"
+      - "crates/host/pf-paths-win/**"
+      - "crates/host/pf-host-config/**"
       - "data/platforms.json"
       - ".gitea/workflows/setup-windows.yml"
   pull_request:
     paths:
-      - "crates/punktfunk-setup/**"
-      - "crates/punktfunk-setup-win/**"
-      - "crates/pf-paths/**"
-      - "crates/pf-paths-win/**"
-      - "crates/pf-host-config/**"
+      - "crates/install/punktfunk-setup/**"
+      - "crates/install/punktfunk-setup-win/**"
+      - "crates/host/pf-paths/**"
+      - "crates/host/pf-paths-win/**"
+      - "crates/host/pf-host-config/**"
       - "data/platforms.json"
       - ".gitea/workflows/setup-windows.yml"
 

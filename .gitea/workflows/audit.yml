@@ -52,7 +52,7 @@ on:
       - 'packaging/windows/pf-vkhdr-layer/Cargo.lock'
       - 'tools/win-input-matrix/Cargo.lock'
       - 'tools/hid-descriptor-dump/Cargo.lock'
-      - 'crates/pf-seat-keeper/Cargo.lock'
+      - 'crates/host/pf-seat-keeper/Cargo.lock'
       - 'web/bun.lock'
       - 'docs-site/bun.lock'
       - 'sdk/bun.lock'
@@ -62,7 +62,7 @@ on:
       - 'compliance/vendored-components.md'
       - '.gitea/workflows/audit.yml'
   workflow_dispatch:
-# NOTE on the `paths:` list above and the `miri:` job: `crates/pf-driver-proto/**` is deliberately
+# NOTE on the `paths:` list above and the `miri:` job: `crates/host/pf-driver-proto/**` is deliberately
 # NOT listed, even though that crate is what the Miri job exists to watch. `paths:` is a
 # WORKFLOW-level filter — adding it would fire all six jobs (three bun trees, pnpm, cargo-audit,
 # the license gate) on every driver-proto edit, onto a fleet where 37 of 46 jobs contend for
@@ -98,7 +98,7 @@ jobs:
           cargo audit --deny unsound --file packaging/windows/pf-vkhdr-layer/Cargo.lock
           cargo audit --deny unsound --file tools/win-input-matrix/Cargo.lock
           cargo audit --deny unsound --file tools/hid-descriptor-dump/Cargo.lock
-          cargo audit --deny unsound --file crates/pf-seat-keeper/Cargo.lock
+          cargo audit --deny unsound --file crates/host/pf-seat-keeper/Cargo.lock
 
   # cargo-audit matches registry crates by name and version, so a vendored tree has no feed but
   # its row in compliance/vendored-components.md. Every `vendor/<tree>` needs one.
@@ -228,7 +228,7 @@ jobs:
           command -v cargo-about >/dev/null 2>&1 || cargo install --locked cargo-about --version 0.9.1 --features cli
           cargo about generate about.hbs --fail -o /dev/null
           cargo about generate -m packaging/windows/drivers/Cargo.toml -c about.toml about.hbs --fail -o /dev/null
-          cargo about generate -m crates/pf-seat-keeper/Cargo.toml -c about.toml about.hbs --fail -o /dev/null
+          cargo about generate -m crates/host/pf-seat-keeper/Cargo.toml -c about.toml about.hbs --fail -o /dev/null
 
   # ── Miri ─────────────────────────────────────────────────────────────────────────────────────
   # WHAT THIS BUYS, precisely — one thing, and it is worth having:
@@ -406,7 +406,7 @@ jobs:
           [ "$ok" = 1 ] || echo "::warning::miri (punktfunk-core fec::gf8, AVX2/SSSE3) did not pass — non-blocking; see design/rust-safety-programme.md §7"
 
   # ASAN + LSAN over the C ABI harness — §6.1 of design/rust-safety-programme.md, its rank-1
-  # tooling item. crates/punktfunk-ffi/tests/c/run.sh already proves the staticlib links and
+  # tooling item. crates/client/punktfunk-ffi/tests/c/run.sh already proves the staticlib links and
   # round-trips 4 frames byte-exact from C on every push (ci.yml); PF_SAN=address rebuilds BOTH
   # sides instrumented — the staticlib on nightly with -Zsanitizer/-Zbuild-std (std itself
   # included), the harness with clang -fsanitize — so ASAN sees the seam a Rust-only tool cannot,
@@ -478,6 +478,6 @@ jobs:
           set -o pipefail
           ok=1
           PF_SAN=address PF_SAN_TOOLCHAIN="$SAN_TOOLCHAIN" \
-            bash crates/punktfunk-ffi/tests/c/run.sh 2>&1 | tee /tmp/asan-harness.log || ok=0
+            bash crates/client/punktfunk-ffi/tests/c/run.sh 2>&1 | tee /tmp/asan-harness.log || ok=0
           grep -q 'PASS: 4 frames round-tripped byte-exact' /tmp/asan-harness.log || ok=0
           [ "$ok" = 1 ] || echo "::warning::c-abi-asan did not pass — non-blocking on day one; see design/rust-safety-programme.md §6.1. An LSAN report here means the C ABI's into_raw/from_raw contract broke."

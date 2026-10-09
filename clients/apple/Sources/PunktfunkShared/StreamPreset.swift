@@ -1,6 +1,6 @@
 // Client settings presets — named bundles of setting overrides applied on top of the global
 // defaults (design/client-settings-profiles.md §4). The Swift half of the model whose Rust
-// original is `crates/pf-client-core/src/presets.rs`; the two are mirrored field for field so a
+// original is `crates/client/pf-client-core/src/presets.rs`; the two are mirrored field for field so a
 // future export/import has one shape to speak.
 //
 // A preset overrides only the fields the user touched; everything else keeps following the

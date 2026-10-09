@@ -5,7 +5,7 @@
 // this pad" is answered by looking, not by an evdev dump on the box.
 //
 // Read-only, and open only while it is on screen — the host publishes nothing with nobody
-// attached (`crates/punktfunk-host/src/pad_feed.rs`).
+// attached (`crates/host/punktfunk-host/src/pad_feed.rs`).
 
 import { Copy, Pause, Play } from "lucide-react";
 import { type FC, useEffect, useState } from "react";

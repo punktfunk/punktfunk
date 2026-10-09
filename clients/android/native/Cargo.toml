@@ -17,7 +17,7 @@ crate-type = ["cdylib"]
 # The whole protocol/transport/FEC/crypto + the embeddable NativeClient connector. `quic` pulls
 # the punktfunk/1 control plane, whose TLS runs on aws-lc-rs (see punktfunk-core/Cargo.toml) —
 # aws-lc-sys cross-compiles for all three ABIs with the NDK clang cargo-ndk already exports.
-punktfunk-core = { path = "../../../crates/punktfunk-core", features = ["quic"] }
+punktfunk-core = { path = "../../../crates/core/punktfunk-core", features = ["quic"] }
 # 0.22, NOT 0.21 — and the version is load-bearing beyond currency: `rustls-platform-verifier`
 # (via quinn-proto, for Android cert verification) already depends on jni 0.22, so pinning 0.21
 # here compiled TWO jni copies into the one .so. Matching it collapses them and, with them, the
@@ -36,7 +36,7 @@ log = "0.4"
 # clients run, in place of Android's per-OEM `NsdManager`. Shared, not in the Android table below,
 # so the JNI seam and its tests build on the Linux and Windows hosts too. Kotlin keeps only the
 # Wi-Fi `MulticastLock` + permission UX. `async-channel` names the browse's event receiver.
-pf-client-core = { path = "../../../crates/pf-client-core", default-features = false, features = [
+pf-client-core = { path = "../../../crates/client/pf-client-core", default-features = false, features = [
     "discovery",
 ] }
 async-channel = "2"
@@ -49,7 +49,7 @@ serde_json = "1"
 # ARMv7 TV boxes use software AES. Add the faster streaming backend only to that ABI; arm64 keeps
 # its hardware-accelerated AES path and the emulator does not pay for an unused backend.
 [target.'cfg(all(target_os = "android", target_arch = "arm"))'.dependencies]
-punktfunk-core = { path = "../../../crates/punktfunk-core", features = ["chacha-aws-lc-rs"] }
+punktfunk-core = { path = "../../../crates/core/punktfunk-core", features = ["chacha-aws-lc-rs"] }
 
 # Android-only deps. Gated so `cargo build --workspace` on the Linux/macOS dev boxes + CI still
 # compiles this crate (as a host cdylib) — the Android-framework glue (logging, AMediaCodec + AAudio
@@ -118,9 +118,9 @@ usbfs-iso = { git = "https://github.com/unom-io/usbfs-iso", rev = "ff5468ac68cea
 # silently builds Skia from source — so an armeabi-v7a build WITHOUT the mirror url is a
 # multi-minute source build, and every ABI's log must show `DOWNLOAD AND INSTALL SUCCEEDED`.
 # (Continues the `cfg(target_os = "android")` table above — TOML allows a table header once.)
-pf-console-ui = { path = "../../../crates/pf-console-ui", default-features = false }
-pf-client-core = { path = "../../../crates/pf-client-core", default-features = false }
-pf-client-video = { path = "../../../crates/pf-client-video", default-features = false, features = [
+pf-console-ui = { path = "../../../crates/client/pf-console-ui", default-features = false }
+pf-client-core = { path = "../../../crates/client/pf-client-core", default-features = false }
+pf-client-video = { path = "../../../crates/client/pf-client-video", default-features = false, features = [
     "pyrowave",
 ] }
 # The PyroWave lane's own Vulkan: device bring-up, swapchain on the `SurfaceView`, and the

@@ -62,7 +62,7 @@ object DsDevice {
      * controller has. The scale is per unit; only the pad knows it.
      *
      * The arithmetic is `hid-playstation`'s, and the host's contract test
-     * (`crates/pf-inject/tests/motion_contract.rs`, `SonyImuCalibration`) is the same math read
+     * (`crates/host/pf-inject/tests/motion_contract.rs`, `SonyImuCalibration`) is the same math read
      * from the other end — it applies it to the blobs our *virtual* pads declare and asserts they
      * land on the wire constants. Per axis: gyro `raw × speed_2x × 20 / (|plus − bias| +
      * |minus − bias|)`, accel `(raw − (plus − range/2)) × 20000 / range`, where `range = plus −

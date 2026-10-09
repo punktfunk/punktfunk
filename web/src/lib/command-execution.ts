@@ -4,7 +4,7 @@
 
 /**
  * Launch kinds the host builds a command for from a validated value. Mirrors
- * `UNPRIVILEGED_LAUNCH_KINDS` in crates/punktfunk-host/src/library/custom.rs; a test pins the two.
+ * `UNPRIVILEGED_LAUNCH_KINDS` in crates/host/punktfunk-host/src/library/custom.rs; a test pins the two.
  * Any other kind is privileged, so a kind the host adds prompts until it lands here.
  */
 export const UNPRIVILEGED_LAUNCH_KINDS: readonly string[] = [

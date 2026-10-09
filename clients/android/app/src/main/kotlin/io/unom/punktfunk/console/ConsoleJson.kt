@@ -25,7 +25,7 @@ import org.json.JSONObject
 
 /**
  * The JSON that crosses into the Skia console — written in the console's OWN model shapes
- * (`crates/pf-console-ui/src/model.rs` `HostRow`/`WakeStatus`/`PairPhase`, `library.rs`
+ * (`crates/client/pf-console-ui/src/model.rs` `HostRow`/`WakeStatus`/`PairPhase`, `library.rs`
  * `LibraryGame`/`LibraryPhase`, `pf-client-core/src/trust.rs` `Settings`/`KnownHosts`), so there
  * is no Android-side mirror type to drift; the Rust structs deserialize these directly.
  * `clients/shared/console-bridge-vectors.json` holds a sample of each pushed model these write.

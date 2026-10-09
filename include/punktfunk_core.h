@@ -1,4 +1,4 @@
-/* punktfunk C ABI — see crates/punktfunk-ffi/src/lib.rs */
+/* punktfunk C ABI — see crates/client/punktfunk-ffi/src/lib.rs */
 
 #ifndef PUNKTFUNK_CORE_H
 #define PUNKTFUNK_CORE_H
@@ -831,7 +831,7 @@
 // `design/pyrowave-codec-plan.md`). Deliberately absent from [`resolve_codec`]'s ladder:
 // selected only when the client also names it [`Hello::preferred_codec`] (or the operator
 // forces the mask). The bit means the bitstream of the vendored pin
-// (`crates/pyrowave-sys/vendor/pyrowave/PUNKTFUNK-VENDOR.txt`); upstream has no version
+// (`crates/codec/pyrowave-sys/vendor/pyrowave/PUNKTFUNK-VENDOR.txt`); upstream has no version
 // field, so a bitstream-changing vendor bump bumps the punktfunk protocol instead.
 #define PUNKTFUNK_CODEC_PYROWAVE 8
 

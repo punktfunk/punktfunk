@@ -26,20 +26,20 @@ on:
     branches: [main]
     paths:
       - '.gitea/workflows/windows-drivers.yml'
-      - 'crates/pf-driver-proto/**'
+      - 'crates/host/pf-driver-proto/**'
       # The driver hosts the encoder backends, so a change to them is a driver change.
-      - 'crates/pf-encode-core/**'
-      - 'crates/pf-encode-win/**'
-      - 'crates/pf-encode-session/**'
+      - 'crates/host/pf-encode-core/**'
+      - 'crates/host/pf-encode-session/**'
+      - 'crates/host/pf-encode-win/**'
       # …and the crates those backends compile against: pf-frame owns the frame vocabulary
       # their signatures take, pf-zerocopy and pf-dmabuf sit under it, and the two -sys crates are the
       # QSV and PyroWave features. Unlisted, a change to any of them reached main with no
       # driver build behind it — the Cargo.lock-luck gap the host lane already closed.
-      - 'crates/pf-frame/**'
-      - 'crates/pf-zerocopy/**'
-      - 'crates/pf-dmabuf/**'
-      - 'crates/libvpl-sys/**'
-      - 'crates/pyrowave-sys/**'
+      - 'crates/codec/libvpl-sys/**'
+      - 'crates/codec/pyrowave-sys/**'
+      - 'crates/core/pf-dmabuf/**'
+      - 'crates/host/pf-frame/**'
+      - 'crates/host/pf-zerocopy/**'
       - 'packaging/windows/drivers/**'
       # Every build job below runs these, and they sit beside the driver tree rather than in it.
       - 'packaging/windows/drivers-cargo.ps1'
@@ -48,20 +48,20 @@ on:
   pull_request:
     paths:
       - '.gitea/workflows/windows-drivers.yml'
-      - 'crates/pf-driver-proto/**'
+      - 'crates/host/pf-driver-proto/**'
       # The driver hosts the encoder backends, so a change to them is a driver change.
-      - 'crates/pf-encode-core/**'
-      - 'crates/pf-encode-win/**'
-      - 'crates/pf-encode-session/**'
+      - 'crates/host/pf-encode-core/**'
+      - 'crates/host/pf-encode-session/**'
+      - 'crates/host/pf-encode-win/**'
       # …and the crates those backends compile against: pf-frame owns the frame vocabulary
       # their signatures take, pf-zerocopy and pf-dmabuf sit under it, and the two -sys crates are the
       # QSV and PyroWave features. Unlisted, a change to any of them reached main with no
       # driver build behind it — the Cargo.lock-luck gap the host lane already closed.
-      - 'crates/pf-frame/**'
-      - 'crates/pf-zerocopy/**'
-      - 'crates/pf-dmabuf/**'
-      - 'crates/libvpl-sys/**'
-      - 'crates/pyrowave-sys/**'
+      - 'crates/codec/libvpl-sys/**'
+      - 'crates/codec/pyrowave-sys/**'
+      - 'crates/core/pf-dmabuf/**'
+      - 'crates/host/pf-frame/**'
+      - 'crates/host/pf-zerocopy/**'
       - 'packaging/windows/drivers/**'
       # Every build job below runs these, and they sit beside the driver tree rather than in it.
       - 'packaging/windows/drivers-cargo.ps1'

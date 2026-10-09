@@ -7,7 +7,7 @@ import java.nio.charset.StandardCharsets
 
 /**
  * The `punktfunk://` URL grammar (design/client-deep-links.md §2). A **port**, not a new design:
- * the Rust `crates/pf-client-core/src/deeplink.rs` is the reference, Swift keeps a third copy, and
+ * the Rust `crates/client/pf-client-core/src/deeplink.rs` is the reference, Swift keeps a third copy, and
  * all three are held together by `clients/shared/deeplink-vectors.json`, which each language's test
  * suite runs verbatim — so the three parsers cannot drift into three different security postures.
  *

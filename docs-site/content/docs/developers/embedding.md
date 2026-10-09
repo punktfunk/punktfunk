@@ -19,7 +19,7 @@ cargo build -p punktfunk-ffi --features quic --release
 One build writes both library kinds to `target/release/`: `libpunktfunk_ffi.a` (static),
 `libpunktfunk_ffi.so` / `.dylib` / `punktfunk_ffi.dll` (dynamic). `cargo run -p gen-headers`
 regenerates the header from
-[`punktfunk-ffi`](https://git.unom.io/unom/punktfunk/src/branch/main/crates/punktfunk-ffi/src/lib.rs)
+[`punktfunk-ffi`](https://git.unom.io/unom/punktfunk/src/branch/main/crates/client/punktfunk-ffi/src/lib.rs)
 with cbindgen; the header is checked in, and CI fails when it is stale.
 
 Compile your code with `-DPUNKTFUNK_FEATURE_QUIC`. The whole client API (`punktfunk_connect*`,
@@ -221,5 +221,5 @@ int main(int argc, char **argv) {
 
 A real client throttles the keyframe request, persists the identity and `host_fp`, and runs audio
 and feedback on their own threads. For a complete client over the same API, read
-[`crates/pf-client-core/src/session.rs`](https://git.unom.io/unom/punktfunk/src/branch/main/crates/pf-client-core/src/session.rs).
-`bash crates/punktfunk-ffi/tests/c/run.sh` proves the static library links from C on your machine.
+[`crates/client/pf-client-core/src/session.rs`](https://git.unom.io/unom/punktfunk/src/branch/main/crates/client/pf-client-core/src/session.rs).
+`bash crates/client/punktfunk-ffi/tests/c/run.sh` proves the static library links from C on your machine.

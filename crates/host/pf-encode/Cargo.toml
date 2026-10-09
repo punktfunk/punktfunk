@@ -1,0 +1,95 @@
+# Hardware/software video encode (plan §7 / §W6): the per-vendor backends (NVENC, VAAPI, AMF, QSV,
+# Vulkan-Video, PyroWave, openh264) behind one `Encoder` trait + `open_video` selector, extracted
+# from the host so it depends on the shared frame vocabulary (pf-frame) rather than living inside
+# the orchestrator. Speaks pf-frame (CapturedFrame/PixelFormat/dxgi identity) and pf-zerocopy
+# (CUDA), never pf-capture — the capture→encode edge is one-way (plan §2.4).
+[package]
+name = "pf-encode"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license = "MIT OR Apache-2.0"
+description = "punktfunk host video encode: NVENC/VAAPI/AMF/QSV/Vulkan-Video/PyroWave/openh264 backends behind one Encoder trait."
+publish = false
+
+[dependencies]
+# `quic::{HdrMeta, resolve_codec, Welcome, CODEC_*}` and `video_fit` live outside the `quic`
+# feature, so the encoder crate never builds quinn, rustls or opus.
+punktfunk-core = { path = "../../core/punktfunk-core", default-features = false }
+pf-frame = { path = "../pf-frame" }
+# The `Encoder` contract and what every backend shares; re-exported wholesale from `lib.rs`.
+pf-encode-core = { path = "../pf-encode-core" }
+pf-gpu = { path = "../pf-gpu" }
+pf-host-config = { path = "../pf-host-config" }
+pf-zerocopy = { path = "../pf-zerocopy" }
+anyhow = "1"
+tracing = "0.1"
+
+[dev-dependencies]
+# A test writer for the NVENC backend's unit tests (`with_test_writer().try_init()`).
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+# Shared test drivers: the PyroWave window walk and decoder, the trait-forwarding guard.
+pf-encode-core = { path = "../pf-encode-core", features = ["test-support"] }
+
+[target.'cfg(target_os = "windows")'.dev-dependencies]
+# The QSV live e2e drives the REAL HdrP010Converter output (an RTV-written, ring-profile P010
+# texture) into the encoder — the one seam the CPU-upload tests can't reach.
+pf-capture = { path = "../pf-capture" }
+
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+# The encode-worker protocol tests measure what an AU costs as a serde_json body — the reason the
+# access units ride a memfd instead (enc/linux/worker.rs).
+serde_json = "1"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+# The native VAAPI encoder (enc/linux/vaapi_native.rs): the libva session and its pure half.
+pf-libva = { path = "../../codec/pf-libva" }
+pf-vaapi = { path = "../../codec/pf-vaapi" }
+# The `punktfunk-encode-worker` protocol (enc/linux/worker.rs). The framing is pf-zerocopy's
+# `ipc`, which is generic over the serde body; the message enums live here and version separately.
+serde = { version = "1", features = ["derive"] }
+# Software H.264 (openh264, BSD-2) — the GPU-less encode path. Linux only: on Windows the
+# pf-vdisplay driver encodes, and it needs a render adapter to exist at all.
+openh264 = "0.9"
+libc = "0.2"
+# `memfd_create` without a raw-fd adoption.
+rustix = { version = "1", features = ["fs"] }
+# Vulkan bindings for the raw Vulkan-Video encode + PyroWave compute backends (feature-gated below;
+# the dep stays unconditional to mirror the host's Linux target — unused-but-declared is harmless).
+ash = { workspace = true }
+# `libnvidia-encode.so.1` is dlopen'd at runtime for the direct-SDK NVENC/CUDA backend.
+libloading = "0.9"
+# Direct-SDK NVENC (raw `sys::nvEncodeAPI` types; entry points resolved at runtime). `ci-check` =
+# vendored bindings, no CUDA toolkit at build.
+nvidia-video-codec-sdk = { version = "0.4", features = ["ci-check"], optional = true }
+# PyroWave (opt-in wired-LAN wavelet codec) — vendored codec + bindgen'd C API, only under `pyrowave`.
+pyrowave-sys = { path = "../../codec/pyrowave-sys", optional = true }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+# The native NVENC/AMF/QSV/Media Foundation/PyroWave backends and their SDK bindings; re-exported
+# wholesale from `lib.rs`.
+pf-encode-win = { path = "../pf-encode-win" }
+# The live tests' adapter walk.
+windows = { version = "0.62", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Direct3D",
+    "Win32_Graphics_Direct3D11",
+    "Win32_Graphics_Dxgi",
+    "Win32_Graphics_Dxgi_Common",
+] }
+
+[features]
+default = []
+# NVENC hardware encode (Linux CUDA + Windows D3D11); entry points resolved at runtime.
+nvenc = ["dep:nvidia-video-codec-sdk", "pf-encode-core/nvenc", "pf-encode-win/nvenc"]
+# Raw Vulkan-Video HEVC/AV1 encode on Linux (reuses the `ash` bindings; no new dep).
+vulkan-encode = ["pf-encode-core/vulkan-encode"]
+# PyroWave — the opt-in wired-LAN intra-only wavelet codec (Linux encode backend).
+pyrowave = ["dep:pyrowave-sys", "pf-encode-core/pyrowave", "pf-encode-win/pyrowave"]
+# Native Intel QSV via the statically linked VPL dispatcher (Windows; runtime GPU
+# libs come from the Intel driver store; design/native-qsv-encoder.md). ⚠ Like `nvenc`: hand
+# builds need this feature or an Intel box has no QSV path.
+qsv = ["pf-encode-win/qsv"]
+
+[lints]
+workspace = true

@@ -115,7 +115,7 @@ handshake time (irrevocable — a PQ stream handed to an 8-bit encoder is a deli
 and whether the host must composite the cursor before the encoder is even opened. Both answers
 must therefore be static properties of the resolved binary, not optimistic negotiations. The host
 runs `<gamescope> --version` once per boot and reads the revision — see `gamescope_patch_level()`
-in `crates/pf-vdisplay/src/vdisplay/linux/gamescope/discovery.rs`.
+in `crates/host/pf-vdisplay/src/vdisplay/linux/gamescope/discovery.rs`.
 
 The number is a **monotonic patch-set revision**, so one probe answers every capability:
 

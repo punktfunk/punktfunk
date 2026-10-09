@@ -9,7 +9,7 @@
 #
 # NOTHING IS RASTERIZED. Each shell draws the marks as vectors, in the form it can:
 #
-#   Skia console   folds the path with Skia    -> crates/pf-client-core/src/lucide.rs
+#   Skia console   folds the path with Skia    -> crates/client/pf-client-core/src/lucide.rs
 #   GTK shell      folds the path with gsk     -> the same table
 #   WinUI shell    draws Lucide's icon FONT    -> the same table's codepoints
 #                                              +  clients/windows/packaging/assets/lucide.ttf
@@ -27,7 +27,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 MASTERS=assets/lucide
-TABLE=crates/pf-client-core/src/lucide.rs
+TABLE=crates/client/pf-client-core/src/lucide.rs
 # The MSIX layout's Assets\ — pack-msix.ps1 copies this whole directory in, and the installer
 # and the portable zip are packed from that same layout, so one copy reaches all three. The
 # dev-build copy is the Windows client's build.rs, which stages it next to the exe.

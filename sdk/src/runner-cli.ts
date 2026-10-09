@@ -19,7 +19,7 @@
 //
 // Package-op flags: --exact pins the resolved version instead of a caret range, and
 // --registry @scope=https://… maps a scope to its registry in bunfig.toml. Both exist for the
-// plugin store (crates/punktfunk-host/src/plugin_host/store), which installs one reviewed version
+// plugin store (crates/host/punktfunk-host/src/plugin_host/store), which installs one reviewed version
 // of a package that may live on somebody else's registry — but they are ordinary CLI flags too.
 import { Effect, Fiber } from "effect";
 import { publishedMgmtUrl } from "./config.js";

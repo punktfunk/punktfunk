@@ -1,5 +1,5 @@
 {
-  "$comment": "Cross-language contract for video placement (design/video-fit-and-scaling.md §2.1). The Rust (crates/punktfunk-core/src/video_fit.rs), Swift, Kotlin and TypeScript ports each run every case. `view` is device pixels of the drawing surface, `frame` the decoded frame. `dst` is [x, y, w, h] in view pixels and always lies inside the view; `src` is [x, y, w, h] of the visible frame region (compare within 1e-4). `kernel` is [x, y]. Each `to_frame` row is [view_x, view_y, frame_x, frame_y]. Centring floors the origin; sizes round half away from zero.",
+  "$comment": "Cross-language contract for video placement (design/video-fit-and-scaling.md §2.1). The Rust (crates/core/punktfunk-core/src/video_fit.rs), Swift, Kotlin and TypeScript ports each run every case. `view` is device pixels of the drawing surface, `frame` the decoded frame. `dst` is [x, y, w, h] in view pixels and always lies inside the view; `src` is [x, y, w, h] of the visible frame region (compare within 1e-4). `kernel` is [x, y]. Each `to_frame` row is [view_x, view_y, frame_x, frame_y]. Centring floors the origin; sizes round half away from zero.",
   "version": 1,
   "cases": [
     {

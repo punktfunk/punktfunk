@@ -35,7 +35,7 @@ import javax.net.ssl.X509TrustManager
 // paired client presents its persistent cert/key (the same identity the host paired over QUIC), and
 // the host's self-signed cert is pinned by SHA-256(DER). Reads the library and what is running;
 // writes go through [mgmtCall]. Mirrors the GameEntry/Artwork schema in
-// crates/punktfunk-host/src/library.rs.
+// crates/host/punktfunk-host/src/library.rs.
 
 /** The management API's default port — matches `mgmt::DEFAULT_PORT` on the host and the Apple client. */
 const val DEFAULT_MGMT_PORT = 47990

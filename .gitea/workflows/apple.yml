@@ -94,11 +94,11 @@ on:
     # per-step gates). Heavy on the shared mac-mini runner, hence the tight paths filter.
     branches: [main]
     paths:
-      - 'crates/punktfunk-core/**'
-      - 'crates/punktfunk-ffi/**'
-      - 'crates/pf-console-ui/**'
-      - 'crates/pf-client-core/**'
-      - 'crates/pf-bitstream/**'
+      - 'crates/client/pf-client-core/**'
+      - 'crates/client/pf-console-ui/**'
+      - 'crates/client/punktfunk-ffi/**'
+      - 'crates/codec/pf-bitstream/**'
+      - 'crates/core/punktfunk-core/**'
       - 'clients/apple/**'
       - 'clients/shared/**'
       - 'scripts/build-xcframework.sh'
@@ -117,11 +117,11 @@ on:
     tags: ['v*']
   pull_request:
     paths:
-      - 'crates/punktfunk-core/**'
-      - 'crates/punktfunk-ffi/**'
-      - 'crates/pf-console-ui/**'
-      - 'crates/pf-client-core/**'
-      - 'crates/pf-bitstream/**'
+      - 'crates/client/pf-client-core/**'
+      - 'crates/client/pf-console-ui/**'
+      - 'crates/client/punktfunk-ffi/**'
+      - 'crates/codec/pf-bitstream/**'
+      - 'crates/core/punktfunk-core/**'
       - 'clients/apple/**'
       - 'clients/shared/**'
       - 'scripts/build-xcframework.sh'

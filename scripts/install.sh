@@ -8,7 +8,7 @@
 # `punktfunk-setup` binary, verifies its sha256 and execs it with every argument and every
 # PUNKTFUNK_INSTALL_* variable untouched. The installer itself — distro detection, the guided
 # screen, the plan it runs, uninstall, channel switching — lives in that binary
-# (crates/punktfunk-setup, design/installer-v2.md).
+# (crates/install/punktfunk-setup, design/installer-v2.md).
 #
 # THE STUB NEVER GROWS A FLAG. The binary owns the interface, so a copy of this file cached
 # years ago keeps working against a newer installer. Anything that looks like a new option

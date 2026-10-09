@@ -12,7 +12,7 @@
 #   GTK shell      symbolic SVG, black fill  -> clients/linux/data/icons/scalable/actions/
 #   Windows shell  PNG, h=128, mid-grey      -> clients/windows/assets/launchers/
 #   Apple clients  vector PDF, black fill    -> clients/apple/.../LauncherIcons.xcassets/
-#   Host           600x800 PNG tile          -> crates/punktfunk-host/assets/gamestream/
+#   Host           600x800 PNG tile          -> crates/host/punktfunk-host/assets/gamestream/
 #
 # The host tile is the console's coverless poster baked for Moonlight, which decodes raster only.
 #
@@ -36,7 +36,7 @@ APPLE=clients/apple/Sources/PunktfunkKit/Resources/LauncherIcons.xcassets
 WIN_GREY='#8A8F98'
 WIN_HEIGHT=128
 
-HOST=crates/punktfunk-host/assets/gamestream
+HOST=crates/host/punktfunk-host/assets/gamestream
 # pf-console-ui `card_face` on the default dark palette: accent #8678F5 at 0.38 (launcher) and
 # 0.20 (desktop) over black. 3:4, and not a size Moonlight treats as its placeholder.
 HOST_LAUNCHER_FACE='#332E5D'
@@ -123,8 +123,8 @@ python3 scripts/gen_launcher_icon_tables.py
 # The Rust registry goes through rustfmt: `cargo fmt --all --check` is a CI gate, and a
 # GENERATED file that fails it would fail the build every time someone re-ran this script.
 if command -v rustfmt >/dev/null 2>&1; then
-  rustfmt --edition 2021 crates/pf-console-ui/src/launcher_icons.rs
-  log "  rustfmt'd crates/pf-console-ui/src/launcher_icons.rs"
+  rustfmt --edition 2021 crates/client/pf-console-ui/src/launcher_icons.rs
+  log "  rustfmt'd crates/client/pf-console-ui/src/launcher_icons.rs"
 else
   log "  rustfmt not found — run 'cargo fmt' before committing"
 fi
@@ -134,6 +134,6 @@ log "Remember: a NEW token also has to be added to each client's shipped-token l
 log "  clients/linux/src/library/poster.rs, clients/linux/data/resources.gresource.xml,"
 log "  clients/windows/src/app/launcher_icons.rs,"
 log "  clients/apple/.../PunktfunkKit/LauncherIcon.swift,"
-log "  crates/punktfunk-host/src/gamestream/apps.rs (tile_png)"
+log "  crates/host/punktfunk-host/src/gamestream/apps.rs (tile_png)"
 log "  (the three inline registries above pick it up automatically)"
 log "  — and to the plugin that emits the tile."

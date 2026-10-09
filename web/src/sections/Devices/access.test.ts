@@ -21,7 +21,7 @@ const vectors = JSON.parse(
 	readFileSync(
 		join(
 			import.meta.dir,
-			"../../../../crates/punktfunk-core/testdata/grant-vectors.json",
+			"../../../../crates/core/punktfunk-core/testdata/grant-vectors.json",
 		),
 		"utf8",
 	),

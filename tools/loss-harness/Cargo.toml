@@ -9,7 +9,7 @@ authors.workspace = true
 repository.workspace = true
 
 [dependencies]
-punktfunk-core = { path = "../../crates/punktfunk-core" }
+punktfunk-core = { path = "../../crates/core/punktfunk-core" }
 
 [lints]
 workspace = true

@@ -73,7 +73,7 @@ final class OverlayActionsTests: XCTestCase {
     func testKeyVkMatchesTheRustVectors() throws {
         var url = URL(fileURLWithPath: #filePath)
         for _ in 0..<5 { url.deleteLastPathComponent() }
-        url.appendPathComponent("crates/punktfunk-core/testdata/key-vk-vectors.json")
+        url.appendPathComponent("crates/core/punktfunk-core/testdata/key-vk-vectors.json")
         let cases = try JSONDecoder().decode(KeyVkVectors.self, from: Data(contentsOf: url)).cases
         XCTAssertFalse(cases.isEmpty)
         let wrong = cases.filter { keyVk($0.name) != $0.vk }.map {

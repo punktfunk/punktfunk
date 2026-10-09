@@ -12,7 +12,7 @@ repository.workspace = true
 # The `adl-emul` subcommand is a printer around `pf_win_display::adl_emul` — one ADL FFI surface
 # shared with the host's `edid_lock` display-policy axis, so the probe a reporter runs and the
 # toggle the console flips exercise byte-identical driver calls.
-pf-win-display = { path = "../../crates/pf-win-display" }
+pf-win-display = { path = "../../crates/host/pf-win-display" }
 windows = { version = "0.62", features = [
     "Win32_Devices_Display",
     "Win32_Graphics_Gdi",

@@ -1,4 +1,4 @@
-// Golden colour-bar fixtures — the SAME bytes as crates/pf-client-core/tests/bars-*.h265
+// Golden colour-bar fixtures — the SAME bytes as crates/client/pf-client-core/tests/bars-*.h265
 // (one 256×64 LOSSLESS x265 IDR of 8 saturated bars per signaling variant; generated
 // offline with ffmpeg/libx265, RGB→YUV matched to the declared VUI so the original RGB
 // is recoverable ±1 code). Regenerate both together — the Rust and Swift golden tests

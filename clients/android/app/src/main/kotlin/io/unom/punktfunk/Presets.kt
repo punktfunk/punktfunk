@@ -9,7 +9,7 @@ import org.json.JSONObject
 /**
  * Client settings presets — named bundles of setting overrides applied on top of the global
  * [Settings] (design/client-settings-profiles.md §4). The Kotlin mirror of
- * `crates/pf-client-core/src/presets.rs`; the model is the same on every client, so get it right
+ * `crates/client/pf-client-core/src/presets.rs`; the model is the same on every client, so get it right
  * here rather than re-deciding it.
  *
  * A preset overrides only the fields the user touched; everything else keeps following the global

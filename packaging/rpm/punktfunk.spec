@@ -97,7 +97,7 @@ BuildRequires:  pkgconfig(sdl3)
 # client's pf-ffvk, whose bindgen ran over FFmpeg's libavutil/hwcontext_vulkan.h — and M10 deleted
 # it with the rest of the client's FFmpeg. Nothing has replaced that need: pf-vkdecode/pf-presenter
 # reach Vulkan through ash (loader dlopen'd, no headers), and pyrowave-sys builds against its own
-# vendored copy (crates/pyrowave-sys/build.rs).
+# vendored copy (crates/codec/pyrowave-sys/build.rs).
 # The HOST links the NVIDIA CUDA driver lib (-lcuda) via FFI, so libcuda.so must be present
 # at LINK time. A normal NVIDIA host (or Bazzite -nvidia) has it; a headless COPR/koji builder
 # without a GPU does NOT — point %build at the CUDA toolkit stub (…/stubs/libcuda.so) there,
@@ -543,7 +543,7 @@ install -Dm0644 packaging/bazzite/punktfunk-ds-inhibit.cil \
 # packages when the BASE changes, so a frozen Bazzite base pins punktfunk forever. The script
 # forces a re-resolve of just this layer (--uninstall + --install of the same names in one
 # transaction). It is exactly the command pf-update-check hands an rpm-ostree host
-# (`sudo /usr/share/punktfunk/update-punktfunk.sh`, crates/pf-update-check/src/detect.rs), so it
+# (`sudo /usr/share/punktfunk/update-punktfunk.sh`, crates/core/pf-update-check/src/detect.rs), so it
 # has to exist at that path — an ostree box has no repo checkout to run it from. It only shells
 # out to rpm-ostree/rpm/systemctl, so the installed copy is self-contained. Top level, not
 # bazzite/, because the hint (and any Fedora-Atomic host) names that path.

@@ -4,7 +4,7 @@
 #
 # Separate from the main cargo workspace (own [workspace] root) because driver crates are cdylibs built
 # with the WDK toolchain (cargo-wdk / wdk-build) on Windows only. Path-deps the shared ABI crate
-# crates/pf-driver-proto from the main tree.
+# crates/host/pf-driver-proto from the main tree.
 [workspace]
 resolver = "2"
 members = ["wdk-iddcx", "pf-umdf-util", "pf-vdisplay", "pf-gamepad", "pf-xusb", "pf-mouse"]
@@ -37,15 +37,15 @@ wdk-sys = "0.5.1"
 wdk-build = "0.5.1"
 wdk-iddcx = { path = "wdk-iddcx" }
 pf-umdf-util = { path = "pf-umdf-util" }
-pf-driver-proto = { path = "../../../crates/pf-driver-proto" }
+pf-driver-proto = { path = "../../../crates/host/pf-driver-proto" }
 # The Windows encoder backends, reached the same way: pf-vdisplay links them into the shipped
 # DLL. `pf-frame` is named alongside it because it owns the frame vocabulary those backends'
 # signatures take (`CapturedFrame`/`PixelFormat`); pf-encode-win does not re-export it.
-pf-encode-win = { path = "../../../crates/pf-encode-win" }
-pf-frame = { path = "../../../crates/pf-frame" }
+pf-encode-win = { path = "../../../crates/host/pf-encode-win" }
+pf-frame = { path = "../../../crates/host/pf-frame" }
 # The encode session those backends run in: the loop, the AU writer and the slot targets, shared
 # with the capture worker so neither side has its own.
-pf-encode-session = { path = "../../../crates/pf-encode-session" }
+pf-encode-session = { path = "../../../crates/host/pf-encode-session" }
 
 # Vendored windows-drivers-rs 0.5.1 (the published, self-contained crates) + an added `iddcx`
 # ApiSubset (M1 — bindgens iddcx/1.10/IddCx.h reusing wdk_default for WDF type-identity). Redirect ALL

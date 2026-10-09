@@ -77,7 +77,7 @@ class OverlayActionsTest {
     /** Every case Rust's `key_vk` wrote; `../../../` from the module directory is the repo root. */
     @Test
     fun keyVkMatchesTheRustVectors() {
-        val file = File("../../../crates/punktfunk-core/testdata/key-vk-vectors.json")
+        val file = File("../../../crates/core/punktfunk-core/testdata/key-vk-vectors.json")
         assertTrue("the vector file must be reachable at ${file.absolutePath}", file.isFile)
         val cases = JSONObject(file.readText()).getJSONArray("cases")
         assertTrue("the vector file has cases", cases.length() > 0)

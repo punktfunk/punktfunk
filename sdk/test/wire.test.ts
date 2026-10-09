@@ -1,5 +1,5 @@
 // The wire schemas must decode EXACTLY what the host emits — the JSON literals here are the
-// Rust side's snapshot-test strings (crates/punktfunk-host/src/events.rs), the schema gate.
+// Rust side's snapshot-test strings (crates/host/punktfunk-host/src/events.rs), the schema gate.
 import { describe, expect, test } from "bun:test";
 import { decodeHostEvent, kindMatches } from "../src/wire.js";
 

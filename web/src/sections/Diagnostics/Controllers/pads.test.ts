@@ -33,7 +33,7 @@ const vectors = JSON.parse(
 	readFileSync(
 		join(
 			import.meta.dir,
-			"../../../../../crates/punktfunk-core/testdata/gamepad-button-vectors.json",
+			"../../../../../crates/core/punktfunk-core/testdata/gamepad-button-vectors.json",
 		),
 		"utf8",
 	),

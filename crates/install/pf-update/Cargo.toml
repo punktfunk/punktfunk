@@ -1,0 +1,25 @@
+[package]
+name = "pf-update"
+description = "Root helper for web-console-triggered host updates: runs the distro package manager against the punktfunk packages, gates on the new binary actually running, and reports a result record. Deliberately tiny — root runs these few hundred lines, never the host's dependency tree."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "pf-update"
+path = "src/main.rs"
+
+# The zero-parameter invariant lives in the DEPENDENCY LIST too: no HTTP client, no TLS, no
+# argument parsing beyond one subcommand — the helper fetches nothing and parses no remote
+# data; the package manager's own signature chain gates every payload.
+[target.'cfg(target_os = "linux")'.dependencies]
+# The marker contract only: `verify` is the network half.
+pf-update-check = { path = "../../core/pf-update-check", default-features = false }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[lints]
+workspace = true

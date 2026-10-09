@@ -12,7 +12,7 @@ describe("command-execution gate", () => {
 	test("matches the host's unprivileged launch kinds", () => {
 		const repo = join(import.meta.dir, "..", "..", "..");
 		const rust = readFileSync(
-			join(repo, "crates/punktfunk-host/src/library/custom.rs"),
+			join(repo, "crates/host/punktfunk-host/src/library/custom.rs"),
 			"utf8",
 		);
 		const body = rust.match(

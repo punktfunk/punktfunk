@@ -7,7 +7,7 @@ desktop library page. It does not stream. Every session runs in the sibling
 
 Rust end to end, no C ABI. The UI-agnostic plumbing — session pump, the native decode ladder,
 PipeWire audio, SDL3 gamepads and keymap, trust store, mDNS discovery, library client,
-Wake-on-LAN — is `crates/pf-client-core`, shared with the session binary.
+Wake-on-LAN — is `crates/client/pf-client-core`, shared with the session binary.
 
 Installing it is [the docs site](https://docs.punktfunk.unom.io/docs/install-client)'s job;
 building the packages is [`packaging/`](../../packaging/)'s.

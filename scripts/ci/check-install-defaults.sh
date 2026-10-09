@@ -1,5 +1,5 @@
 #!/bin/sh
-# Derived defaults for the guided installer (crates/punktfunk-setup, issue #431).
+# Derived defaults for the guided installer (crates/install/punktfunk-setup, issue #431).
 # Faked os-release + --dry-run --yes --no-start: each family must print the summary that
 # --yes would actually take, and that summary must appear before the first sudo.
 # DISPLAY / WAYLAND_DISPLAY / XDG_SESSION_TYPE are pinned per case so a graphical seat on

@@ -14,11 +14,11 @@ authors.workspace = true
 repository.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]
-pf-vdisplay = { path = "../../crates/pf-vdisplay" }
-pf-capture = { path = "../../crates/pf-capture" }
-pf-frame = { path = "../../crates/pf-frame" }
-pf-inject = { path = "../../crates/pf-inject" }
-punktfunk-core = { path = "../../crates/punktfunk-core", features = ["quic"] }
+pf-vdisplay = { path = "../../crates/host/pf-vdisplay" }
+pf-capture = { path = "../../crates/host/pf-capture" }
+pf-frame = { path = "../../crates/host/pf-frame" }
+pf-inject = { path = "../../crates/host/pf-inject" }
+punktfunk-core = { path = "../../crates/core/punktfunk-core", features = ["quic"] }
 anyhow = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

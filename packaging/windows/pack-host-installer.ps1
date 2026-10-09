@@ -74,9 +74,9 @@ $exe = Join-Path $TargetDir 'punktfunk-host.exe'
 if (-not (Test-Path $exe)) { throw "missing build artifact 'punktfunk-host.exe' in $TargetDir (did 'cargo build --release -p punktfunk-host --features nvenc' run?)" }
 $trayExe = Join-Path $TargetDir 'punktfunk-tray.exe'
 if (-not (Test-Path $trayExe)) { throw "missing build artifact 'punktfunk-tray.exe' in $TargetDir (did 'cargo build --release -p punktfunk-tray' run?)" }
-# The seat keeper builds in its own workspace (crates/pf-seat-keeper) into the same target dir.
+# The seat keeper builds in its own workspace (crates/host/pf-seat-keeper) into the same target dir.
 $keeperExe = Join-Path $TargetDir 'punktfunk-seat-keeper.exe'
-if (-not (Test-Path $keeperExe)) { throw "missing build artifact 'punktfunk-seat-keeper.exe' in $TargetDir (did 'cargo build --release --manifest-path crates/pf-seat-keeper/Cargo.toml' run?)" }
+if (-not (Test-Path $keeperExe)) { throw "missing build artifact 'punktfunk-seat-keeper.exe' in $TargetDir (did 'cargo build --release --manifest-path crates/host/pf-seat-keeper/Cargo.toml' run?)" }
 # The host starts this beside itself to capture a monitor it did not create (a pinned monitor, a
 # shared screen). Without it those sessions fail; everything else streams.
 $workerExe = Join-Path $TargetDir 'punktfunk-capture-worker.exe'

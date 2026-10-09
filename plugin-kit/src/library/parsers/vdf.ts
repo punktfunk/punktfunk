@@ -1,6 +1,6 @@
 // Valve Data Format (text) — the flat-field reader Steam's `libraryfolders.vdf` and
 // `appmanifest_<appid>.acf` need, ported from the host's in-tree scanner
-// (crates/punktfunk-host/src/library/steam.rs `vdf_value` / `vdf_paths` / `scan_manifests`).
+// (crates/host/punktfunk-host/src/library/steam.rs `vdf_value` / `vdf_paths` / `scan_manifests`).
 //
 // Deliberately NOT a full VDF parser. Every field these files expose that a library plugin cares
 // about sits on one line as `"key"  "value"`, and a real parser would be a much larger surface to

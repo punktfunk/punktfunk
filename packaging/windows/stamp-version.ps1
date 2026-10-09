@@ -3,7 +3,7 @@
   Write a version into a built punktfunk-host binary's version slot.
 
 .DESCRIPTION
-  The slot is crates/punktfunk-host/src/version.rs: a marker, then 64 NUL-padded bytes. CI
+  The slot is crates/host/punktfunk-host/src/version.rs: a marker, then 64 NUL-padded bytes. CI
   stamps the finished binary instead of handing cargo a per-run version, which would recompile
   the host on every run. Run it before signing: it rewrites bytes inside the image.
 

@@ -31,10 +31,10 @@ ui = ["dep:pf-console-ui", "dep:serde_json"]
 # switch that turns the wavelet codec on, and it enables it explicitly on each. Inheriting their
 # defaults instead would make `--no-default-features` a lie — the Windows ARM64 leg builds that
 # way precisely to skip the vendored PyroWave C++, which has no ARM64 SIMD path.
-pf-presenter = { path = "../../crates/pf-presenter", default-features = false }
-pf-console-ui = { path = "../../crates/pf-console-ui", optional = true }
-pf-client-core = { path = "../../crates/pf-client-core", default-features = false, features = ["desktop"] }
-punktfunk-core = { path = "../../crates/punktfunk-core", features = ["quic"] }
+pf-presenter = { path = "../../crates/client/pf-presenter", default-features = false }
+pf-console-ui = { path = "../../crates/client/pf-console-ui", optional = true }
+pf-client-core = { path = "../../crates/client/pf-client-core", default-features = false, features = ["desktop"] }
+punktfunk-core = { path = "../../crates/core/punktfunk-core", features = ["quic"] }
 # The fake-library dev hook (`PUNKTFUNK_FAKE_LIBRARY`, browse mode) parses GameEntry JSON.
 serde_json = { version = "1", optional = true }
 tracing = "0.1"

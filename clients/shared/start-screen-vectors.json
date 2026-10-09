@@ -1,5 +1,5 @@
 {
-  "$comment": "Cross-language contract for the start-screen policy (design/default-host.md §3). The Rust (crates/pf-client-core/src/start.rs), Swift (PunktfunkShared/StartScreen.swift) and Kotlin (kit/link/StartScreen.kt) resolvers each run every case in their own suite, so the three cannot drift into three different landings. A host is reduced to the three things the policy reads: its stable id, whether it is paired, and whether it holds a pin — each store spells the pin differently (hex string, Data, base64), the policy only asks whether there is one. `host_index` is absent when there is no default host.",
+  "$comment": "Cross-language contract for the start-screen policy (design/default-host.md §3). The Rust (crates/client/pf-client-core/src/start.rs), Swift (PunktfunkShared/StartScreen.swift) and Kotlin (kit/link/StartScreen.kt) resolvers each run every case in their own suite, so the three cannot drift into three different landings. A host is reduced to the three things the policy reads: its stable id, whether it is paired, and whether it holds a pin — each store spells the pin differently (hex string, Data, base64), the policy only asks whether there is one. `host_index` is absent when there is no default host.",
   "version": 1,
   "cases": [
     {

@@ -9,7 +9,7 @@ use std::process::ExitCode;
 
 /// (crate dir, header) pairs, relative to the workspace root.
 const HEADERS: [(&str, &str); 2] = [
-    ("crates/punktfunk-ffi", "include/punktfunk_core.h"),
+    ("crates/client/punktfunk-ffi", "include/punktfunk_core.h"),
     ("clients/apple/native", "include/punktfunk_console.h"),
 ];
 

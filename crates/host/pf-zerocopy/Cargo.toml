@@ -1,0 +1,45 @@
+# The Linux GPU zero-copy plumbing (plan §9 / §W6), extracted into a leaf crate so the shared
+# frame vocabulary (pf-frame `FramePayload::Cuda`), the encode backends (CUDA copies/context),
+# and the capture import machinery can all reach it WITHOUT the host orchestrator in between.
+# Content is Linux-only; the crate compiles to an empty lib elsewhere so dependents can carry a
+# plain (non-target-gated) dependency.
+[package]
+name = "pf-zerocopy"
+version.workspace = true
+edition.workspace = true
+# Inherit the workspace MSRV: clippy keys MSRV-gated lints off it (without this, e.g.
+# `manual_is_multiple_of` fires on code the host crate compiles clean).
+rust-version.workspace = true
+license = "MIT OR Apache-2.0"
+description = "punktfunk host Linux zero-copy GPU plumbing: CUDA context/buffers, EGL/Vulkan dmabuf import, and the isolated import worker."
+publish = false
+
+[target.'cfg(target_os = "linux")'.dependencies]
+anyhow = "1"
+tracing = "0.1"
+libc = "0.2"
+# `libcuda.so.1` is dlopen'd at runtime (NOT link-time) so one Linux binary runs on NVIDIA
+# (zero-copy via CUDA) AND on AMD/Intel (VAAPI, no NVIDIA driver present) — see `cuda::ffi`.
+libloading = "0.9"
+# EGL imports the PipeWire dmabuf, CUDA maps it (`dynamic` = load the NVIDIA libEGL at runtime).
+khronos-egl = { version = "6", features = ["dynamic"] }
+# Vulkan bridge for LINEAR dmabufs (gamescope): VK_EXT_external_memory_dma_buf import,
+# GPU-copy into an exportable allocation, export OPAQUE_FD → cuImportExternalMemory.
+ash = { workspace = true }
+# The isolated import worker's control protocol: small serde_json blobs over a Unix socket
+# (SCM_RIGHTS carries the fds; pixels never cross the socket).
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# The worker maps the cursor memfd through the shared read-only mapping.
+pf-dmabuf = { path = "../../core/pf-dmabuf" }
+# Safe fd syscalls: the worker socket (SCM_RIGHTS framing), fstat, memfd seals.
+rustix = { version = "1", features = ["fs", "net"] }
+# Push-constant blocks as bytes without a hand-written `from_raw_parts`.
+bytemuck = { version = "1", features = ["derive"] }
+
+# Linux-only like the code under test: the render-node scan is exercised against a fixture tree.
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+tempfile = "3"
+
+[lints]
+workspace = true

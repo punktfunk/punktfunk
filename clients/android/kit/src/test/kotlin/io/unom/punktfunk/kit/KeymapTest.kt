@@ -47,13 +47,13 @@ class KeymapTest {
     }
 
     /**
-     * `crates/punktfunk-core/testdata/evdev-vk-vectors.json`, which core's `evdev_to_vk` writes:
+     * `crates/core/punktfunk-core/testdata/evdev-vk-vectors.json`, which core's `evdev_to_vk` writes:
      * every scancode this table maps agrees with it, and every layout-variant key (digits,
      * letters, OEM punctuation) core maps is covered here.
      */
     @Test
     fun matchesTheCoreVectors() {
-        val file = File("../../../crates/punktfunk-core/testdata/evdev-vk-vectors.json")
+        val file = File("../../../crates/core/punktfunk-core/testdata/evdev-vk-vectors.json")
         assertTrue("the vector file must be reachable at ${file.absolutePath}", file.isFile)
         val cases = JSONObject(file.readText()).getJSONArray("cases")
         val oem = (0xBA..0xC0) + (0xDB..0xDE) + 0xE2
