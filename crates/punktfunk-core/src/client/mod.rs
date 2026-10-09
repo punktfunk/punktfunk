@@ -1,6 +1,6 @@
-//! Embeddable `punktfunk/1` client connector, behind the `quic` feature.
+//! Embeddable `punktfunk/2` client connector, behind the `quic` feature.
 //!
-//! [`NativeClient::connect`] runs QUIC handshake ([`crate::quic`]), UDP data plane
+//! [`NativeClient::connect`] runs QUIC handshake ([`crate::quic`]), the data plane
 //! ([`crate::session::Session`] on a native thread), and input datagrams. The surface is
 //! pull reassembled access units, push input. Platform clients link via the C ABI
 //! (`punktfunk_connect` in `punktfunk-ffi`); `punktfunk-probe` is the Rust-native consumer.
@@ -648,7 +648,7 @@ impl ConnectParams {
 }
 
 impl NativeClient {
-    /// Dial a `punktfunk/1` host and block until the handshake lands, `timeout` passes or
+    /// Dial a `punktfunk/2` host and block until the handshake lands, `timeout` passes or
     /// `cancel` is set. A host that turns the dial away is [`PunktfunkError::Rejected`].
     ///
     /// The host may answer below the ask: open the audio device from

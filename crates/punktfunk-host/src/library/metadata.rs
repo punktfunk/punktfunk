@@ -11,8 +11,7 @@
 //! from one. [`GameEntry::filled`] names where each borrowed value came from.
 
 use super::*;
-use std::collections::HashMap;
-use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
+use std::sync::{Arc, Mutex, MutexGuard};
 
 /// Longest URL a source or a pick may store.
 const URL_MAX: usize = 2048;
@@ -167,29 +166,39 @@ fn lock() -> MutexGuard<'static, ()> {
 }
 
 type Stamp = (Option<SystemTime>, u64);
-type OverlayCache = Mutex<HashMap<String, (Stamp, Arc<Overlay>)>>;
 
-/// Parsed overlays keyed by source, re-read when the file's mtime or length moves. Every art
-/// request merges its entry, so parsing megabytes per cover would dominate a grid load.
-fn load_overlay(source: &str) -> Arc<Overlay> {
-    static CACHE: OnceLock<OverlayCache> = OnceLock::new();
-    let path = overlay_path(source);
-    let Ok(md) = std::fs::metadata(&path) else {
+/// Parsed overlays by file, with the mtime and length they were read at.
+static OVERLAYS: Mutex<BTreeMap<PathBuf, (Stamp, Arc<Overlay>)>> = Mutex::new(BTreeMap::new());
+
+/// An overlay file's parse, re-read when its mtime or length moves. Every art request merges
+/// its entry, so parsing megabytes per cover would dominate a grid load. Writers go through
+/// [`save_overlay`], which drops the entry.
+fn load_overlay(path: &Path) -> Arc<Overlay> {
+    let Ok(md) = std::fs::metadata(path) else {
         return Arc::default();
     };
     let stamp = (md.modified().ok(), md.len());
-    let cache = CACHE.get_or_init(Default::default);
-    if let Some((s, o)) = cache.lock().unwrap_or_else(|e| e.into_inner()).get(source) {
+    if let Some((s, o)) = OVERLAYS.lock().unwrap_or_else(|e| e.into_inner()).get(path) {
         if *s == stamp {
             return o.clone();
         }
     }
-    let overlay = Arc::new(read_json_or_default::<Overlay>(&path));
-    cache
+    let overlay = Arc::new(read_json_or_default::<Overlay>(path));
+    OVERLAYS
         .lock()
         .unwrap_or_else(|e| e.into_inner())
-        .insert(source.to_string(), (stamp, overlay.clone()));
+        .insert(path.to_path_buf(), (stamp, overlay.clone()));
     overlay
+}
+
+fn save_overlay(path: &Path, json: &str) -> Result<()> {
+    save_json(path, json)?;
+    // Two saves inside one mtime tick can leave the same stamp on different bytes.
+    OVERLAYS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .remove(path);
+    Ok(())
 }
 
 fn emit_changed(source: &str) {
@@ -333,7 +342,7 @@ pub fn put_metadata(source: &str, input: MetadataInput) -> Result<(usize, usize)
     let path = overlay_path(source);
     let changed = std::fs::read_to_string(&path).map_or(true, |old| old != json);
     if changed {
-        save_json(&path, &json)?;
+        save_overlay(&path, &json)?;
     }
     let mut settings: Settings = read_json_or_default(&settings_path());
     let placed = place_source(&mut settings.sources, source, input.matching);
@@ -373,7 +382,7 @@ pub fn list_metadata_sources() -> Vec<MetadataSourceInfo> {
         .sources
         .into_iter()
         .map(|s| MetadataSourceInfo {
-            entries: load_overlay(&s.id).entries.len(),
+            entries: load_overlay(&overlay_path(&s.id)).entries.len(),
             id: s.id,
             matching: s.matching,
             enabled: s.enabled,
@@ -440,7 +449,7 @@ impl Fills {
             .into_iter()
             .filter(|s| s.enabled)
             .map(|s| {
-                let overlay = load_overlay(&s.id);
+                let overlay = load_overlay(&overlay_path(&s.id));
                 (s, overlay)
             })
             .collect();
@@ -784,6 +793,25 @@ mod tests {
         for (url, valid) in cases("urls") {
             assert_eq!(valid_remote_url(&url), valid, "url {url:?}");
         }
+    }
+
+    /// A rewrite of the same length inside one mtime tick keeps the stamp; the save drops the
+    /// cached parse, so readers still see the new bytes.
+    #[test]
+    fn a_same_stamp_rewrite_reads_fresh() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("stamp.json");
+        let doc =
+            |url: &str| format!(r#"{{"entries":{{"steam:1":{{"art":{{"portrait":"{url}"}}}}}}}}"#);
+        let read = || load_overlay(&path).entries["steam:1"].art.portrait.clone();
+        save_overlay(&path, &doc("https://a/1.png")).unwrap();
+        let tick = std::fs::metadata(&path).unwrap().modified().unwrap();
+        assert_eq!(read().as_deref(), Some("https://a/1.png"));
+        save_overlay(&path, &doc("https://a/2.png")).unwrap();
+        let file = std::fs::File::options().write(true).open(&path).unwrap();
+        file.set_modified(tick).unwrap();
+        drop(file);
+        assert_eq!(read().as_deref(), Some("https://a/2.png"));
     }
 
     /// The persisted shapes are what an operator may hand-edit — pin them.

@@ -434,18 +434,20 @@ fn to_io(e: impl std::fmt::Display) -> io::Error {
     io::Error::other(e.to_string())
 }
 
-/// tmp-write + rename so a reader never sees half a file; the temp is 0600 on Unix before it
-/// becomes the real name. One writer for both files.
 fn write_json_atomic<T: Serialize>(dir: &Path, name: &str, value: &T) -> io::Result<()> {
-    let tmp = dir.join(format!("{name}.tmp"));
-    let body = serde_json::to_string_pretty(value).map_err(to_io)?;
-    std::fs::write(&tmp, body)?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600))?;
+    let body = serde_json::to_vec_pretty(value).map_err(to_io)?;
+    replace(&dir.join(name), &body)
+}
+
+/// The one writer for both files: a per-process synced temp and a rename, so the CLI and the
+/// service never publish each other's half-written temp. Owner-only on Unix. Windows keeps the
+/// directory's inherited ACL: an owner-only DACL would strip the runner's read ACE.
+fn replace(path: &Path, body: &[u8]) -> io::Result<()> {
+    if cfg!(unix) {
+        pf_paths::replace_secret_file(path, body)
+    } else {
+        pf_paths::replace_file(path, body)
     }
-    std::fs::rename(&tmp, dir.join(name))
 }
 
 /// The ACL half of a grant, mapped into `io::Error` for the store's signatures. Runs only
@@ -1262,14 +1264,7 @@ fn migrate_grants(config_dir: &Path, runner_dir: &Path) -> io::Result<()> {
         return Ok(());
     }
     prepare_runner_dir(runner_dir)?;
-    let tmp = runner_dir.join(format!("{GRANTS_FILE}.tmp"));
-    std::fs::copy(legacy, &tmp)?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600))?;
-    }
-    std::fs::rename(tmp, target)
+    replace(&target, &std::fs::read(legacy)?)
 }
 
 /// Harden the runner directory, then hand the Windows runner its read ACE back.

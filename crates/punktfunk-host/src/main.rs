@@ -25,10 +25,6 @@ mod devtest;
 /// Structured health verdicts — design/web-console-diagnostics.md.
 #[forbid(unsafe_code)]
 mod diagnostics;
-// `#[path]` keeps `crate::*` names flat while files live under `src/linux/`.
-#[cfg(target_os = "linux")]
-#[path = "linux/drm_sync.rs"]
-mod drm_sync;
 // Everything Windows-only lives under `src/windows/`; the flat names below keep every
 // `crate::install::*` path unchanged. Off Windows, `windows::entry` is the no-op twin.
 #[cfg(target_os = "windows")]
@@ -124,6 +120,7 @@ use game::{
     stream_marker,
 };
 mod gamestream;
+// `#[path]` keeps `crate::*` names flat while files live under `src/linux/`.
 #[cfg(target_os = "linux")]
 #[path = "linux/gpuclocks.rs"]
 mod gpuclocks;

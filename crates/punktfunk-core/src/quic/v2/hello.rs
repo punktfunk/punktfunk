@@ -1,14 +1,13 @@
-//! The v2 handshake: `ClientHello` → `ServerHello` → `Ready`, carrying what `punktfunk/1` spread
-//! over `Hello`, `Start`'s extension block and `Welcome`.
+//! The handshake: `ClientHello` → `ServerHello` → `Ready`.
 //!
-//! Both ends keep `punktfunk/1`'s structs as the model: a [`ClientHello`] decodes to a [`Hello`]
-//! plus the `Start` extension entries, a [`ServerHello`] to a [`Welcome`]. Decoding applies the
-//! same folding `punktfunk/1`'s decoders do (unknown codec to HEVC, unsupported rate to 48 kHz,
-//! bad name to none), so host and client logic sees what it always saw;
-//! `tests::v1_and_v2_decode_alike` holds the two wires to that.
+//! A [`ClientHello`] decodes to a [`Hello`] plus the client's extension entries by `EXT_TAG_*`
+//! id (wire tags 19–22 and 24), a [`ServerHello`] to a [`Welcome`]. Decoding folds what this
+//! build cannot honour onto its default (unknown codec to HEVC, unsupported rate to 48 kHz,
+//! bad name to none), so host and client logic only sees values it can act on;
+//! `tests::hellos_settle_after_one_trip` pins that one trip settles both.
 //!
-//! What only `punktfunk/1` carries is absent here: the wire version (ALPN picks the wire), the
-//! data port (media rides the QUIC path) and the session key (both ends derive it).
+//! The hellos carry no wire version (ALPN picks the wire), no data port (media rides the QUIC
+//! path) and no session key (both ends derive it).
 
 use super::features::FeatureSet;
 use super::field::*;

@@ -716,7 +716,7 @@ mod tests {
     /// Live 5.1 capture → encode → decode. Needs
     /// `pactl load-module module-null-sink sink_name=pf51 channels=6 rate=48000`
     /// as the default sink, then
-    /// `cargo test -p punktfunk-host --lib -- --ignored surround_capture`.
+    /// `cargo test -p punktfunk-host -- --ignored surround_capture`.
     #[cfg(target_os = "linux")]
     #[test]
     #[ignore]

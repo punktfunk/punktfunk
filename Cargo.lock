@@ -4021,7 +4021,6 @@ dependencies = [
  "if-addrs",
  "libc",
  "opus",
- "pf-bitstream",
  "proptest",
  "quinn",
  "rcgen",
