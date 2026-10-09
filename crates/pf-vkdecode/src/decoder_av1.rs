@@ -307,6 +307,7 @@ impl VkDecoder<Av1> {
 
     /// Caps check before any AU. `film_grain` is part of the AV1 decode profile;
     /// missing it here is a construction failure, not a mid-stream error streak.
+    /// Grain on a device that decodes in place fails here too, as at the first AU.
     ///
     /// Negotiated facts are a hint (the sequence header is authoritative). Extent,
     /// DPB depth, and a disagreeing header still fail at the first AU. Declared
@@ -839,6 +840,18 @@ mod tests {
 
         assert!(31 > ceiling.code_point());
         assert_eq!(format!("{ceiling}"), "AV1 Std level 23");
+    }
+
+    /// The refusal `probe_stream_support` and `ensure_state` both run.
+    #[test]
+    fn film_grain_is_refused_only_on_a_device_that_decodes_in_place() {
+        use crate::images::tests::caps;
+        let grain = Av1ProfileKey::from_negotiated(1, 8, true).unwrap();
+        let plain = Av1ProfileKey::from_negotiated(1, 8, false).unwrap();
+        let err = Av1::admit(grain, &caps(true, false)).unwrap_err();
+        assert!(matches!(err, VkDecodeError::Unsupported(_)), "{err:?}");
+        assert!(Av1::admit(grain, &caps(false, false)).is_ok());
+        assert!(Av1::admit(plain, &caps(true, false)).is_ok());
     }
 
     #[test]

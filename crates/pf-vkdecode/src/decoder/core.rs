@@ -789,13 +789,13 @@ impl<C: VkCodec> VkDecoder<C> {
         }
     }
 
-    /// Caps for `key` derive on this device: [`Self::ensure_state`]'s query,
-    /// asked before any AU.
+    /// Caps for `key` derive on this device and the codec admits them:
+    /// [`Self::ensure_state`]'s query and refusal, asked before any AU.
     pub(crate) fn probe_key(&self, key: C::ProfileKey) -> Result<(), VkDecodeError> {
         // SAFETY: the constructor's `DeviceHandles` contract holds for this
         // decoder's whole lifetime, so the physical device is live.
-        unsafe { C::query_caps(&self.dev, key)? };
-        Ok(())
+        let caps = unsafe { C::query_caps(&self.dev, key)? };
+        C::admit(key, &caps)
     }
 
     /// Retire the current generation ([`Self::retire_state`]) and build a fresh
