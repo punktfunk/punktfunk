@@ -1082,19 +1082,13 @@ fn launch_session(client: &str, unit_name: &str, mode: Mode, hdr: bool) -> Resul
     }
     let wrapper = write_gamescope_bin_wrapper()?;
     stop_session(unit_name); // clear any stale unit + relay so a relaunch is clean
-    let hz = mode.refresh_hz.max(1);
-    // Headless `--nested-refresh` IS the output refresh. `CUSTOM_REFRESH_RATES` is the offered set,
-    // inert on stock gamescope; it cannot fix a wrong nested-refresh.
+                             // Headless `--nested-refresh` IS the output refresh. `CUSTOM_REFRESH_RATES` is the offered set,
+                             // inert on stock gamescope; it cannot fix a wrong nested-refresh.
     let game = game_hz(mode.refresh_hz);
-    let offered = {
-        let mut r = pf_host_config::config().gamescope_refresh_rates.clone();
-        if !r.contains(&hz) {
-            r.push(hz);
-        }
-        r.sort_unstable();
-        r.dedup();
-        r.iter().map(u32::to_string).collect::<Vec<_>>().join(",")
-    };
+    let offered = refresh_rate_list(
+        mode.refresh_hz.max(1),
+        &pf_host_config::config().gamescope_refresh_rates,
+    );
     // `mut`: the backstop drops the bind and relaunches; an armed bind can stop the session starting.
     let mut bind = arm_session_bind(&wrapper);
     let wsi = WsiPlan::resolve();
