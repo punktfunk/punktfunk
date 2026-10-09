@@ -1,0 +1,531 @@
+//! Display: resolution, picture, decoding, presentation and host output.
+
+use super::{
+    advanced_group, commit, described_labeled, described_overridable, group, presets,
+    setting_combo, setting_toggle, Cx,
+};
+use crate::trust::Settings;
+use windows_reactor::*;
+
+/// Sizes by family; the Resolution combo lists one family at a time behind the Aspect combo.
+/// `(0, 0)` = the native size of the display the window is on, resolved at connect.
+use punktfunk_core::resolutions::{aspect_of, nearest, ASPECTS};
+/// `0` = the display's native refresh, resolved at connect.
+const REFRESH: &[u32] = &[0, 30, 60, 90, 120, 144, 165, 240];
+/// Render-scale multipliers. `1.0` = Native; applied at connect and each match-window resize.
+use punktfunk_core::render_scale::PRESETS as RENDER_SCALES;
+
+/// A compact label for a render-scale multiplier: "Native" / "1.5×" / "2× (supersample)".
+fn render_scale_label(scale: f64) -> String {
+    if scale == 1.0 {
+        "Native".to_string()
+    } else if scale > 1.0 {
+        format!("{scale}\u{00D7} (supersample)")
+    } else {
+        format!("{scale}\u{00D7}")
+    }
+}
+/// Decode backend presets: `(stored value, display label)`.
+// A stored legacy value that matches no preset (the D3D11VA-era "hardware", and since M10
+// the bare "vulkan"/"d3d11va" that named libavcodec's rungs) shows as Automatic — which is
+// how the session's ladder reads "hardware", and near enough for the other two, which
+// `pf_client_core::video::migrate_decoder_pref` maps onto the entries below anyway.
+const DECODERS: &[(&str, &str)] = &[
+    ("auto", "Automatic (GPU, fall back to CPU)"),
+    ("native-vulkan", "Hardware (Vulkan Video)"),
+    ("native-d3d11va", "Hardware (Direct3D 11 / DXVA)"),
+    ("software", "Software (CPU)"),
+];
+/// Preferred-codec presets: `(stored value, display label)`. Soft — the host falls back if it
+/// can't encode the chosen codec.
+const CODECS: &[(&str, &str)] = &[
+    ("auto", "Automatic"),
+    ("hevc", "HEVC (H.265)"),
+    ("h264", "H.264 (AVC)"),
+    ("av1", "AV1"),
+    // Preference-only by design: `resolve_codec` never auto-picks PyroWave, and asking for
+    // it on a host or device that can't do it simply falls back down the ladder to HEVC.
+    ("pyrowave", "PyroWave (wired LAN)"),
+];
+/// `video_fit`: `(stored value, display label)`. Unknown values show as Fit.
+const VIDEO_FITS: &[(&str, &str)] = &[
+    ("fit", "Fit"),
+    ("crop", "Crop to fill"),
+    ("stretch", "Stretch to fill"),
+];
+/// Presentation intent: `(stored value, display label)` — the `present_priority` key the
+/// Apple and Android clients share, so one preset means the same thing everywhere.
+const PRESENT_PRIORITIES: &[(&str, &str)] =
+    &[("latency", "Lowest latency"), ("smooth", "Smoothness")];
+/// Smoothness buffer depth in frames: `(stored value, display label)`. `0` = Automatic,
+/// which resolves to 2 (`PresentPriority::resolve`). No millisecond hints — the cost is
+/// one refresh per frame, and the refresh isn't known here when the mode is Native.
+const SMOOTH_BUFFERS: &[(u8, &str)] = &[
+    (0, "Automatic"),
+    (1, "1 frame"),
+    (2, "2 frames"),
+    (3, "3 frames"),
+];
+/// Host compositor presets: `(stored value, display label)`. Advisory — the host falls back to
+/// auto-detect when the choice is unavailable. Only meaningful against a Linux host.
+const COMPOSITORS: &[(&str, &str)] = &[
+    ("auto", "Automatic"),
+    ("kwin", "KWin"),
+    ("mutter", "Mutter (GNOME)"),
+    ("hyprland", "Hyprland"),
+    ("wlroots", "wlroots (Sway/River)"),
+    ("gamescope", "gamescope"),
+];
+
+/// Display: resolution, quality, decoding, presentation, host output.
+pub(super) fn display_section(cx: &Cx) -> Vec<Element> {
+    let Cx {
+        ctx,
+        scope,
+        rev,
+        set_rev,
+        ref s,
+        ref over,
+        preset_mode,
+        ..
+    } = *cx;
+    // The Aspect combo picks a family and lands on its size nearest the current height. The
+    // Resolution combo is the D1 tri-state — Native, Match window (a virtual index 1, stored
+    // as the `match_window` flag) — then that family's sizes.
+    let family = aspect_of(s.width, s.height).unwrap_or(0);
+    let aspect_combo = setting_combo(
+        ctx,
+        scope,
+        (rev, set_rev),
+        ASPECTS.iter().map(|a| a.label.to_string()).collect(),
+        family,
+        |s, i| {
+            s.match_window = false;
+            (s.width, s.height) = nearest(i, s.height);
+        },
+    );
+    // Native, Match window, the family's sizes, then Custom…, which shows Width and Height.
+    // A size no family lists is Custom whatever the flag says.
+    let sizes = ASPECTS[family].sizes;
+    let custom_i = sizes.len() + 2;
+    let custom =
+        !s.match_window && s.width != 0 && (cx.custom_res || !sizes.contains(&(s.width, s.height)));
+    let (res_names, res_i) = {
+        let names: Vec<String> = ["Native display".to_string(), "Match window".to_string()]
+            .into_iter()
+            .chain(sizes.iter().map(|&(w, h)| format!("{w} \u{00D7} {h}")))
+            .chain(["Custom\u{2026}".to_string()])
+            .collect();
+        let i = if s.match_window {
+            1
+        } else if custom {
+            custom_i
+        } else {
+            sizes
+                .iter()
+                .position(|&(w, h)| w == s.width && h == s.height)
+                .map_or(0, |i| i + 2)
+        };
+        (names, i)
+    };
+    let res_combo = {
+        let set_custom = cx.set_custom_res.clone();
+        setting_combo(ctx, scope, (rev, set_rev), res_names, res_i, move |s, i| {
+            set_custom.call(i == custom_i);
+            s.match_window = i == 1;
+            (s.width, s.height) = match i {
+                0 | 1 => (0, 0),
+                // Custom starts from the size shown, or 1080p from Native.
+                i if i == custom_i && s.width == 0 => (1920, 1080),
+                i if i == custom_i => (s.width, s.height),
+                i => sizes[i - 2],
+            };
+        })
+    };
+    // Each box writes its side through the shared rule, keeping the other side as stored.
+    let size_box = |value: u32, min: u32, width: bool| {
+        let (ctx, scope, set_rev) = (ctx.clone(), scope.to_string(), set_rev.clone());
+        NumberBox::new(f64::from(value))
+            .range(f64::from(min), 8192.0)
+            .on_value_changed(move |v: f64| {
+                commit(&ctx, &scope, (rev, &set_rev), |s| {
+                    let typed = v.clamp(0.0, 8192.0) as u32;
+                    let (w, h) = if width {
+                        (typed, s.height)
+                    } else {
+                        (s.width, typed)
+                    };
+                    (s.width, s.height) = punktfunk_core::resolutions::custom(w, h, &s.codec);
+                    s.match_window = false;
+                });
+            })
+    };
+    let res_control: Element = if custom {
+        vstack((
+            Element::from(res_combo),
+            hstack((
+                size_box(s.width, punktfunk_core::resolutions::MIN_WIDTH, true)
+                    .header("Width")
+                    .width(120.0),
+                text_block("\u{00D7}").vertical_alignment(VerticalAlignment::Bottom),
+                size_box(s.height, punktfunk_core::resolutions::MIN_HEIGHT, false)
+                    .header("Height")
+                    .width(120.0),
+            ))
+            .spacing(8.0),
+        ))
+        .spacing(8.0)
+        .into()
+    } else {
+        res_combo.into()
+    };
+    let (hz_names, hz_i) = {
+        let names: Vec<String> = REFRESH
+            .iter()
+            .map(|&r| {
+                if r == 0 {
+                    "Native".into()
+                } else {
+                    format!("{r} Hz")
+                }
+            })
+            .collect();
+        let i = REFRESH.iter().position(|&r| r == s.refresh_hz).unwrap_or(0);
+        (names, i)
+    };
+    let hz_combo = setting_combo(ctx, scope, (rev, set_rev), hz_names, hz_i, |s, i| {
+        s.refresh_hz = REFRESH[i];
+    });
+    let (scale_names, scale_i) = {
+        let names: Vec<String> = RENDER_SCALES
+            .iter()
+            .map(|&x| render_scale_label(x))
+            .collect();
+        let i = RENDER_SCALES
+            .iter()
+            .position(|&x| (x - s.render_scale).abs() < 1e-6)
+            .unwrap_or_else(|| RENDER_SCALES.iter().position(|&x| x == 1.0).unwrap());
+        (names, i)
+    };
+    let scale_combo = setting_combo(ctx, scope, (rev, set_rev), scale_names, scale_i, |s, i| {
+        s.render_scale = RENDER_SCALES[i];
+    });
+    let (comp_names, comp_i) = presets(COMPOSITORS, |v| *v == s.compositor);
+    let comp_combo = setting_combo(ctx, scope, (rev, set_rev), comp_names, comp_i, |s, i| {
+        s.compositor = COMPOSITORS[i].0.to_string();
+    });
+    // Migrated for the LOOKUP only (the store is left alone): a pre-M10 settings file
+    // holds `vulkan`/`d3d11va`, which match no preset — the combo would show Automatic and
+    // a save would silently rewrite the user's hardware preference to `auto`.
+    let stored_decoder = pf_client_core::video::migrate_decoder_pref(&s.decoder);
+    let (dec_names, dec_i) = presets(DECODERS, |v| *v == stored_decoder);
+    let decoder_combo = setting_combo(ctx, scope, (rev, set_rev), dec_names, dec_i, |s, i| {
+        s.decoder = DECODERS[i].0.to_string();
+    });
+    // GPU picker, only on a multi-GPU box (hybrid laptop, eGPU): which adapter decodes + presents.
+    // Stored as the adapter description; empty = automatic (the window's monitor's adapter).
+    let gpus = ctx.probes.lock().unwrap().gpus.clone();
+    let gpu_combo = (gpus.len() > 1).then(|| {
+        let mut names = vec!["Automatic (the display's GPU)".to_string()];
+        names.extend(gpus.iter().cloned());
+        let current = gpus
+            .iter()
+            .position(|n| *n == s.adapter)
+            .map_or(0, |i| i + 1);
+        let gpus = gpus.clone();
+        setting_combo(ctx, scope, (rev, set_rev), names, current, move |s, i| {
+            s.adapter = if i == 0 {
+                String::new()
+            } else {
+                gpus[i - 1].clone()
+            };
+        })
+    });
+    let (codec_names, codec_i) = presets(CODECS, |v| *v == s.codec);
+    let codec_combo = setting_combo(ctx, scope, (rev, set_rev), codec_names, codec_i, |s, i| {
+        s.codec = CODECS[i].0.to_string();
+    });
+    // Free-form Mb/s (0 = host default) instead of presets, so a speed-test recommendation
+    // round-trips exactly. Through `commit` like every other row: writing `ctx.settings`
+    // directly here would edit the GLOBAL defaults from inside a preset scope (and record
+    // no override, so the row could never say "Overridden here").
+    let bitrate_box = {
+        let (ctx, scope, set_rev) = (ctx.clone(), scope.to_string(), set_rev.clone());
+        NumberBox::new(f64::from(s.bitrate_kbps) / 1000.0)
+            .range(0.0, 3000.0)
+            // PyroWave sets its own rate; the stored one stays for the other codecs.
+            .enabled(s.codec != "pyrowave")
+            .on_value_changed(move |v: f64| {
+                commit(&ctx, &scope, (rev, &set_rev), |s| {
+                    s.bitrate_kbps = (v.clamp(0.0, 3000.0) * 1000.0) as u32;
+                });
+            })
+    };
+    let hdr_toggle = setting_toggle(ctx, scope, (rev, set_rev), s.hdr_enabled, |s, on| {
+        s.hdr_enabled = on
+    });
+    let ten_bit_sdr_toggle = setting_toggle(ctx, scope, (rev, set_rev), s.ten_bit_sdr, |s, on| {
+        s.ten_bit_sdr = on
+    });
+    let chroma_toggle = setting_toggle(ctx, scope, (rev, set_rev), s.enable_444, |s, on| {
+        s.enable_444 = on
+    });
+    // Presentation intent (design/desktop-presentation-rebuild.md). The buffer row is
+    // rendered only under Smoothness — `commit` bumps the revision, so flipping the
+    // intent re-renders the section and the row appears/disappears with it.
+    let (fit_names, fit_i) = presets(VIDEO_FITS, |v| *v == s.video_fit);
+    let fit_combo = setting_combo(ctx, scope, (rev, set_rev), fit_names, fit_i, |s, i| {
+        s.video_fit = VIDEO_FITS[i].0.to_string();
+    });
+    let (present_names, present_i) = presets(PRESENT_PRIORITIES, |v| *v == s.present_priority);
+    let present_combo = setting_combo(
+        ctx,
+        scope,
+        (rev, set_rev),
+        present_names,
+        present_i,
+        |s, i| s.present_priority = PRESENT_PRIORITIES[i].0.to_string(),
+    );
+    let smoothing = s.present_priority == "smooth";
+    let (buffer_names, buffer_i) = presets(SMOOTH_BUFFERS, |v| *v == s.smooth_buffer);
+    let buffer_combo = setting_combo(
+        ctx,
+        scope,
+        (rev, set_rev),
+        buffer_names,
+        buffer_i,
+        |s, i| s.smooth_buffer = SMOOTH_BUFFERS[i].0,
+    );
+    let vsync_toggle = setting_toggle(ctx, scope, (rev, set_rev), s.vsync, |s, on| s.vsync = on);
+    let vrr_toggle = setting_toggle(ctx, scope, (rev, set_rev), s.allow_vrr, |s, on| {
+        s.allow_vrr = on
+    });
+
+    let mut out = group(
+        Some("Resolution"),
+        vec![
+            described_labeled(
+                "Aspect ratio",
+                aspect_combo,
+                "Which shapes the Resolution list offers. Picking one moves to its \
+                 size nearest the current height.",
+            ),
+            described_overridable(
+                (rev, set_rev),
+                scope,
+                "resolution",
+                "Resolution",
+                over.resolution,
+                res_control,
+                "The host drives a real virtual output at exactly this size \u{2014} true \
+                 pixels, no scaling. \u{201C}Native display\u{201D} follows the monitor this \
+                 window is on; \u{201C}Match window\u{201D} keeps the picture pixel-exact \
+                 (1:1) through every resize.",
+            ),
+            described_overridable(
+                (rev, set_rev),
+                scope,
+                "refresh_hz",
+                "Refresh rate",
+                over.refresh_hz,
+                hz_combo,
+                "\u{201C}Native\u{201D} resolves to this display\u{2019}s refresh rate at \
+                 connect.",
+            ),
+        ],
+        None,
+    );
+    out.extend(group(
+        Some("Picture"),
+        vec![
+            described_overridable(
+                (rev, set_rev),
+                scope,
+                "bitrate_kbps",
+                "Bitrate (Mb/s, 0 = automatic)",
+                over.bitrate_kbps,
+                bitrate_box,
+                if s.codec == "pyrowave" {
+                    "PyroWave sets its own rate from the stream mode."
+                } else {
+                    "0 lets the host decide (its default, clamped to what it supports). A \
+                     host card\u{2019}s context menu has a network speed test."
+                },
+            ),
+            described_overridable(
+                (rev, set_rev),
+                scope,
+                "video_fit",
+                "Picture fit",
+                over.video_fit,
+                fit_combo,
+                "When the stream's shape differs from the window. Fit shows the whole \
+                 picture with black bars, Crop to fill cuts the edges off, Stretch to \
+                 fill distorts it.",
+            ),
+            described_overridable(
+                (rev, set_rev),
+                scope,
+                "hdr_enabled",
+                "10-bit HDR",
+                over.hdr_enabled,
+                hdr_toggle,
+                "HDR10, when the host has HDR content and this display supports it. \
+                 With H.264 the stream stays SDR.",
+            ),
+            described_overridable(
+                (rev, set_rev),
+                scope,
+                "present_priority",
+                "Prioritize",
+                over.present_priority,
+                present_combo,
+                "Lowest latency shows each frame the moment the display can take \
+                 it \u{2014} a network hiccup becomes an occasional repeated or \
+                 skipped frame. Smoothness buffers a little to even those out.",
+            ),
+        ],
+        // The one form-level note, exactly as on Apple.
+        Some("Display changes apply from the next session."),
+    ));
+
+    let d = Settings::default();
+    let mut advanced = Vec::new();
+    if smoothing {
+        advanced.push(described_overridable(
+            (rev, set_rev),
+            scope,
+            "smooth_buffer",
+            "Smoothness buffer",
+            over.smooth_buffer,
+            buffer_combo,
+            "Frames held back before showing. Each one absorbs about a refresh of \
+             network hiccup and adds a refresh of delay. Automatic holds two.",
+        ));
+    }
+    advanced.extend([
+        described_overridable(
+            (rev, set_rev),
+            scope,
+            "render_scale",
+            "Render scale",
+            over.render_scale,
+            scale_combo,
+            "Above native supersamples for sharpness; below renders lighter on the \
+             host and the link. This device resamples the result to the window.",
+        ),
+        described_overridable(
+            (rev, set_rev),
+            scope,
+            "codec",
+            "Video codec",
+            over.codec,
+            codec_combo,
+            "A preference \u{2014} the host falls back if it can\u{2019}t encode it. \
+             PyroWave is the low-latency wavelet codec for a WIRED link: it trades \
+             bitrate (hundreds of Mb/s) for near-zero decode time, so it wants \
+             gigabit Ethernet.",
+        ),
+        // First sentence shared with the GTK client (its chroma_row); the constraint
+        // sentence names the real gate (host: PyroWave || NVENC).
+        described_overridable(
+            (rev, set_rev),
+            scope,
+            "enable_444",
+            "Full chroma (4:4:4)",
+            over.enable_444,
+            chroma_toggle,
+            "Full-colour video: crisp small text and thin lines, at more bandwidth. \
+             Requires an NVIDIA host (NVENC) or the PyroWave codec \u{2014} other \
+             encoders stream 4:2:0.",
+        ),
+        described_overridable(
+            (rev, set_rev),
+            scope,
+            "ten_bit_sdr",
+            "10-bit SDR",
+            over.ten_bit_sdr,
+            ten_bit_sdr_toggle,
+            "Smoother gradients without HDR \u{2014} the picture is encoded at 10-bit \
+             precision. Needs an NVIDIA host; HDR takes over when it engages.",
+        ),
+        described_overridable(
+            (rev, set_rev),
+            scope,
+            "vsync",
+            "V-Sync",
+            over.vsync,
+            vsync_toggle,
+            "Tear-free. Turning it off removes the wait for the screen\u{2019}s refresh \
+             \u{2014} the lowest possible delay, at the cost of visible tearing. Not \
+             every driver offers it; the stats overlay names the mode actually in use.",
+        ),
+        described_overridable(
+            (rev, set_rev),
+            scope,
+            "allow_vrr",
+            "Follow variable refresh",
+            over.allow_vrr,
+            vrr_toggle,
+            "On a VRR/FreeSync/G-Sync screen, let the panel refresh in step with the \
+             stream instead of on a fixed cadence. Applies to fullscreen sessions; \
+             harmless on a fixed-refresh screen.",
+        ),
+        described_overridable(
+            (rev, set_rev),
+            scope,
+            "compositor",
+            "Host compositor",
+            over.compositor,
+            comp_combo,
+            "The backend the host uses for its virtual output (Linux hosts only). A \
+             specific choice falls back to auto-detection when that backend \
+             isn\u{2019}t available.",
+        ),
+    ]);
+    // Decoder and GPU are facts about THIS device's hardware — never per preset.
+    if !preset_mode {
+        advanced.push(described_labeled(
+            "Video decoder",
+            decoder_combo,
+            "Automatic picks the hardware path this GPU does best \u{2014} Direct3D 11 on \
+             Intel, Vulkan Video on NVIDIA and AMD \u{2014} and falls back to the CPU. \
+             Change it only when debugging.",
+        ));
+        if let Some(c) = gpu_combo {
+            advanced.push(described_labeled(
+                "GPU",
+                c,
+                "Which adapter decodes and presents the stream. Automatic uses the GPU \
+                 driving this window\u{2019}s display.",
+            ));
+        }
+    }
+    let changed = [
+        smoothing && s.smooth_buffer != d.smooth_buffer,
+        s.render_scale != d.render_scale,
+        s.codec != d.codec,
+        s.enable_444 != d.enable_444,
+        s.ten_bit_sdr != d.ten_bit_sdr,
+        s.vsync != d.vsync,
+        s.allow_vrr != d.allow_vrr,
+        s.compositor != d.compositor,
+        stored_decoder != d.decoder,
+        !s.adapter.is_empty(),
+    ];
+    let overridden = over.smooth_buffer
+        || over.render_scale
+        || over.codec
+        || over.enable_444
+        || over.ten_bit_sdr
+        || over.vsync
+        || over.allow_vrr
+        || over.compositor;
+    out.extend(advanced_group(
+        cx,
+        advanced,
+        changed.into_iter().filter(|c| *c).count(),
+        overridden,
+    ));
+    out
+}
