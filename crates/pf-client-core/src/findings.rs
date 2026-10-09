@@ -1,10 +1,12 @@
 //! A network check's finding in words, from its id and figures
 //! ([`punktfunk_core::client::health::FindingId`] as a byte). Every shell shows the same
-//! sentence: what did not happen, then the next move.
+//! sentence: what did not happen, then the next move. `clients/shared/finding-vectors.json`
+//! pins the wording and the figures for the Kotlin and Swift copies.
 
-/// The sentence for finding `id` with its three figures.
+/// The sentence for finding `id` with its three figures. An id this build doesn't know
+/// reads `Finding {id}.`; its figures carry no unit to show them with.
 pub fn text(id: u8, numbers: [u32; 3]) -> String {
-    let [a, b, c] = numbers;
+    let [a, b, _] = numbers;
     let pct = |x: u32| f64::from(x) / 100.0;
     match id {
         1 => {
@@ -59,7 +61,7 @@ pub fn text(id: u8, numbers: [u32; 3]) -> String {
                 "This device is on Wi-Fi.".to_string()
             }
         }
-        _ => format!("Finding {id} ({a}, {b}, {c})."),
+        _ => format!("Finding {id}."),
     }
 }
 
@@ -67,19 +69,31 @@ pub fn text(id: u8, numbers: [u32; 3]) -> String {
 mod tests {
     use super::*;
 
-    /// Every id has a sentence that ends with a full stop and names its figure where it
-    /// has one; an unknown id still says something.
+    /// The shared vectors: every known id, both branches where a figure can be zero, the
+    /// rounding ties, and an unknown id.
     #[test]
-    fn every_finding_has_a_sentence() {
-        for id in 1..=7u8 {
-            let s = text(id, [2500, 1000, 150]);
-            assert!(s.ends_with('.'), "{id}: {s}");
-            assert!(!s.contains("Finding"), "{id} is known: {s}");
+    fn shared_vectors() {
+        let raw = include_str!("../../../clients/shared/finding-vectors.json");
+        let file: serde_json::Value = serde_json::from_str(raw).expect("vector file parses");
+        let cases = file["cases"].as_array().expect("cases array");
+        for case in cases {
+            let n: Vec<u32> = case["numbers"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|v| v.as_u64().unwrap() as u32)
+                .collect();
+            let id = case["id"].as_u64().unwrap() as u8;
+            assert_eq!(
+                text(id, [n[0], n[1], n[2]]),
+                case["sentence"].as_str().unwrap()
+            );
         }
-        assert!(text(1, [2500, 1000, 0]).contains("2500 vs 1000"));
-        assert!(text(2, [150, 0, 0]).contains("1.5 %"));
-        assert!(text(3, [40, 208, 0]).contains("40 packets"));
-        assert!(text(7, [0, 0, 0]).ends_with("Wi-Fi."));
-        assert!(text(9, [1, 2, 3]).starts_with("Finding 9"));
+        let ids: Vec<u64> = cases.iter().map(|c| c["id"].as_u64().unwrap()).collect();
+        assert!(
+            (1..=7).all(|id| ids.contains(&id)),
+            "every known id has a row"
+        );
+        assert!(ids.iter().any(|&id| id > 7), "an unknown id has a row");
     }
 }

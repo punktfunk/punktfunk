@@ -4,6 +4,8 @@ import android.content.Context
 import io.unom.punktfunk.kit.NativeBridge
 import io.unom.punktfunk.kit.security.ClientIdentity
 import io.unom.punktfunk.kit.security.KnownHost
+import java.math.BigDecimal
+import java.math.RoundingMode
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
@@ -58,9 +60,9 @@ sealed interface SpeedTestPhase {
 
     /**
      * [throughputKbps] is what the link carries; [lossPct] is the clean round's at a rate the
-     * link holds (`0.0` with no round). [recommendedKbps] is 70 % of the ceiling — headroom for
-     * the FEC overhead and for the loss a real stream will meet, the same margin the desktop
-     * clients apply. [findings] is what the check found, by id.
+     * link holds (`0.0` with no round). [recommendedKbps] is the core's headroom under the
+     * ceiling, for the FEC overhead and the loss a real stream will meet. [findings] is what the
+     * check found, by id.
      */
     data class Done(
         val throughputKbps: Int,
@@ -84,13 +86,15 @@ data class CleanRound(val rateKbps: Int, val lossPct: Double, val jitterUs: Int)
  */
 data class Finding(val id: Int, val severity: Int, val numbers: List<Int>)
 
-/** The network check's flat report ([NativeBridge.nativeNetworkCheck]) as a [SpeedTestPhase.Done]. */
+/**
+ * The network check's flat report ([NativeBridge.nativeNetworkCheck]) as a [SpeedTestPhase.Done];
+ * null when it is short of its header, its findings or the trailing recommendation.
+ */
 fun parseNetworkCheck(v: DoubleArray): SpeedTestPhase.Done? {
     if (v.size < 16) return null
-    val ceilingKbps = v[0].toInt()
     val clean = if (v[2] != 0.0) CleanRound(v[3].toInt(), v[4], v[5].toInt()) else null
     val n = v[15].toInt()
-    if (v.size < 16 + n * 5) return null
+    if (v.size < 16 + n * 5 + 1) return null
     val findings = (0 until n).map { i ->
         val base = 16 + i * 5
         Finding(
@@ -100,11 +104,9 @@ fun parseNetworkCheck(v: DoubleArray): SpeedTestPhase.Done? {
         )
     }
     return SpeedTestPhase.Done(
-        throughputKbps = ceilingKbps,
+        throughputKbps = v[0].toInt(),
         lossPct = clean?.lossPct ?: 0.0,
-        // Integer arithmetic in this order (not `* 0.7`) so the recommendation matches the
-        // desktop clients' to the kilobit.
-        recommendedKbps = ceilingKbps / 10 * 7,
+        recommendedKbps = v[16 + n * 5].toInt(),
         wall = v[1] != 0.0,
         clean = clean,
         findings = findings,
@@ -113,12 +115,12 @@ fun parseNetworkCheck(v: DoubleArray): SpeedTestPhase.Done? {
 
 /**
  * A finding in words — what did not happen, then the next move — the same sentences every
- * shell shows.
+ * shell shows, pinned by `clients/shared/finding-vectors.json`.
  */
 fun findingText(id: Int, numbers: List<Int>): String {
     val a = numbers.getOrElse(0) { 0 }
     val b = numbers.getOrElse(1) { 0 }
-    val pct = { x: Int -> x / 100.0 }
+    val pct = { x: Int -> fixed(x / 100.0, 1) }
     return when (id) {
         1 -> if (a > 0 && b > 0) {
             "The host's port is faster than this device's ($a vs $b Mbit/s), so bursts overflow " +
@@ -126,26 +128,33 @@ fun findingText(id: Int, numbers: List<Int>): String {
         } else {
             "The host's port is faster than this device's, so bursts overflow the switch between them."
         }
-        2 -> "This device drops the start of every burst (%.1f %% lost) — the adapter's power saving " +
-            "is the usual cause.".let { it.format(pct(a)) }
+        2 -> "This device drops the start of every burst (${pct(a)} % lost) — the adapter's power " +
+            "saving is the usual cause."
         3 -> if (a > 0) {
             "This device's own receive buffer dropped $a packets; the system caps it at $b KB."
         } else {
             "The system caps this device's receive buffer at $b KB."
         }
-        4 -> "Loss at a rate no link refuses (%.1f %%): check the cable, the port or the adapter driver."
-            .format(pct(a))
-        5 -> "Something on the path buffers instead of dropping (%.0f ms spread); keep the bitrate under %.0f Mbit/s."
-            .format(a / 1000.0, b / 1000.0)
+        4 -> "Loss at a rate no link refuses (${pct(a)} %): check the cable, the port or the adapter driver."
+        5 -> "Something on the path buffers instead of dropping (${fixed(a / 1000.0, 0)} ms spread); " +
+            "keep the bitrate under ${fixed(b / 1000.0, 0)} Mbit/s."
         6 -> if (a > 0) {
             "The host's send buffer refused $a packets; raise its limit."
         } else {
             "The host's send buffer is capped at $b KB; raise its limit."
         }
-        7 -> if (a > 0) "This device is on Wi-Fi; bursts lose %.1f %%.".format(pct(a)) else "This device is on Wi-Fi."
+        7 -> if (a > 0) "This device is on Wi-Fi; bursts lose ${pct(a)} %." else "This device is on Wi-Fi."
         else -> "Finding $id."
     }
 }
+
+/**
+ * [x] to [places] decimals the way Rust's `{:.N}` and C's `%.Nf` print it: the exact binary value,
+ * ties to even, `.` in every locale. `String.format` rounds the shortest decimal half-up instead,
+ * so 0.15 would read 0.2 here and 0.1 in the console.
+ */
+private fun fixed(x: Double, places: Int): String =
+    BigDecimal(x).setScale(places, RoundingMode.HALF_EVEN).toPlainString()
 
 /**
  * Connect to [host]:[port] as a diagnostic session, run the network check, and report. Suspends

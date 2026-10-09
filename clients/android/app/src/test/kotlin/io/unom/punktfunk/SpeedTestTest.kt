@@ -1,6 +1,9 @@
 package io.unom.punktfunk
 
 import io.unom.punktfunk.kit.security.KnownHost
+import java.io.File
+import java.util.Locale
+import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -120,11 +123,12 @@ class SpeedTestTest {
 
     @Test
     fun theFlatReportParsesIntoFindings() {
-        // Header of 16, then one finding of five: a faster host port.
+        // Header of 16, one finding of five (a faster host port), then the core's recommendation.
         val v = doubleArrayOf(
             940_000.0, 1.0, 1.0, 470_000.0, 0.0, 300.0, 1.0, 1000.0, 32_768.0, 1.0, 2500.0,
             32_768.0, 2.0, 2.0, 0.1, 1.0,
             1.0, 2.0, 2500.0, 1000.0, 200.0,
+            658_000.0,
         )
         val done = parseNetworkCheck(v)!!
         assertEquals(940_000, done.throughputKbps)
@@ -133,21 +137,31 @@ class SpeedTestTest {
         assertEquals(658_000, done.recommendedKbps)
         assertEquals(1, done.findings.size)
         assertEquals(listOf(2500, 1000, 200), done.findings[0].numbers)
-        assertTrue(findingText(1, done.findings[0].numbers).contains("2500 vs 1000"))
-        assertTrue(findingText(7, listOf(0, 0, 0)).endsWith("Wi-Fi."))
-        // A report short of its header, or of its findings, is no report.
+        // A report short of its header, its findings or its recommendation is no report.
         assertEquals(null, parseNetworkCheck(doubleArrayOf(1.0, 2.0)))
         assertEquals(null, parseNetworkCheck(v.copyOf(20)))
+        assertEquals(null, parseNetworkCheck(v.copyOf(21)))
     }
 
+    /** `clients/shared/finding-vectors.json`: the sentence the console and every shell show. */
     @Test
-    fun theRecommendationLeavesHeadroom() {
-        // 70 % of measured, in the desktop clients' integer order — a stream needs room for the
-        // FEC overhead and for the loss a burst measurement doesn't see.
-        val done = SpeedTestPhase.Done(throughputKbps = 100_000, lossPct = 0.4, recommendedKbps = 100_000 / 10 * 7)
-        assertEquals(70_000, done.recommendedKbps)
-        assertEquals(100.0, done.measuredMbps, 0.001)
-        assertEquals(70.0, done.recommendedMbps, 0.001)
-        assertTrue(done.recommendedKbps < done.throughputKbps)
+    fun everyFindingVectorAgrees() {
+        // Gradle runs unit tests with the module dir as cwd (clients/android/app).
+        val file = File("../../shared/finding-vectors.json")
+        assertTrue("the shared vector file must be reachable at ${file.absolutePath}", file.isFile)
+        val cases = JSONObject(file.readText()).getJSONArray("cases")
+        // A comma-decimal locale must not reach the figures.
+        val was = Locale.getDefault()
+        Locale.setDefault(Locale.GERMANY)
+        try {
+            for (i in 0 until cases.length()) {
+                val case = cases.getJSONObject(i)
+                val n = case.getJSONArray("numbers")
+                val numbers = (0 until n.length()).map(n::getInt)
+                assertEquals("$case", case.getString("sentence"), findingText(case.getInt("id"), numbers))
+            }
+        } finally {
+            Locale.setDefault(was)
+        }
     }
 }
