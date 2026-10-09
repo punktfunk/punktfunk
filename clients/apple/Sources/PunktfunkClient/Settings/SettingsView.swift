@@ -25,79 +25,82 @@ struct SettingsView: View {
     #if os(macOS)
     @State private var macTab: MacTab = .general
     #endif
-    @AppStorage(DefaultsKey.streamWidth) var width = 0
-    @AppStorage(DefaultsKey.streamHeight) var height = 0
-    @AppStorage(DefaultsKey.streamHz) var hz = 0
+    @AppStorage(DefaultsKey.streamWidth) var width = SettingDefault.streamWidth
+    @AppStorage(DefaultsKey.streamHeight) var height = SettingDefault.streamHeight
+    @AppStorage(DefaultsKey.streamHz) var hz = SettingDefault.streamHz
     // Opt-in (default OFF): the explicit mode below is used and never auto-resized. When ON, a
     // windowed session instead streams at the window's native pixels (1:1, no scaling) so it stays
     // pixel-exact rather than the presenter resampling a fixed-mode frame into the window.
-    @AppStorage(DefaultsKey.matchWindow) var matchWindow = false
+    @AppStorage(DefaultsKey.matchWindow) var matchWindow = SettingDefault.matchWindow
     // Render-resolution multiplier: the host renders/encodes at chosen-resolution × this, and the
     // presenter downscales (> 1 = supersampling for sharpness) or upscales (< 1 = a lighter host /
     // link). 1.0 = Native (the prior behaviour).
-    @AppStorage(DefaultsKey.renderScale) var renderScale = 1.0
-    @AppStorage(DefaultsKey.videoFit) var videoFit = VideoFit.fit.rawValue
-    @AppStorage(DefaultsKey.compositor) var compositor = 0
-    @AppStorage(DefaultsKey.gamepadType) var gamepadType = 0
-    @AppStorage(DefaultsKey.gamepadForwarding) var gamepadForwarding = true
-    @AppStorage(DefaultsKey.padRumble) var padRumble = true
-    @AppStorage(DefaultsKey.systemButtons) var systemButtons = "auto"
-    @AppStorage(DefaultsKey.guideGesture) var guideGesture = "auto"
-    @AppStorage(DefaultsKey.bitrateKbps) var bitrateKbps = 0
-    @AppStorage(DefaultsKey.presentPriority) var presentPriority =
-        SettingsOptions.presentPriorityDefault
-    @AppStorage(DefaultsKey.smoothBuffer) var smoothBuffer = 0
+    @AppStorage(DefaultsKey.renderScale) var renderScale = SettingDefault.renderScale
+    @AppStorage(DefaultsKey.videoFit) var videoFit = SettingDefault.videoFit
+    @AppStorage(DefaultsKey.compositor) var compositor = SettingDefault.compositor
+    @AppStorage(DefaultsKey.gamepadType) var gamepadType = SettingDefault.gamepadType
+    @AppStorage(DefaultsKey.gamepadForwarding) var gamepadForwarding =
+        SettingDefault.gamepadForwarding
+    @AppStorage(DefaultsKey.padRumble) var padRumble = SettingDefault.padRumble
+    @AppStorage(DefaultsKey.systemButtons) var systemButtons = SettingDefault.systemButtons
+    @AppStorage(DefaultsKey.guideGesture) var guideGesture = SettingDefault.guideGesture
+    @AppStorage(DefaultsKey.bitrateKbps) var bitrateKbps = SettingDefault.bitrateKbps
+    @AppStorage(DefaultsKey.presentPriority) var presentPriority = SettingDefault.presentPriority
+    @AppStorage(DefaultsKey.smoothBuffer) var smoothBuffer = SettingDefault.smoothBuffer
     #if os(macOS)
-    @AppStorage(DefaultsKey.vsync) var vsync = false
+    @AppStorage(DefaultsKey.vsync) var vsync = SettingDefault.vsync
     #endif
     #if !os(tvOS)
-    @AppStorage(DefaultsKey.allowVRR) var allowVRR = true
+    @AppStorage(DefaultsKey.allowVRR) var allowVRR = SettingDefault.allowVRR
     #endif
-    @AppStorage(DefaultsKey.hdrEnabled) var hdrEnabled = true
-    @AppStorage(DefaultsKey.enable444) var enable444 = false
-    @AppStorage(DefaultsKey.tenBitSdr) var tenBitSdr = false
+    @AppStorage(DefaultsKey.hdrEnabled) var hdrEnabled = SettingDefault.hdrEnabled
+    @AppStorage(DefaultsKey.enable444) var enable444 = SettingDefault.enable444
+    @AppStorage(DefaultsKey.tenBitSdr) var tenBitSdr = SettingDefault.tenBitSdr
     /// The gamepad library's arrangement — a device preference, stored as the cross-client
     /// `library_view` value.
     @AppStorage(DefaultsKey.libraryView) var libraryViewRaw = LibraryArrangement.shelf.stored
-    @AppStorage(DefaultsKey.startIn) var startInRaw = StartIn.hosts.stored
+    @AppStorage(DefaultsKey.startIn) var startInRaw = SettingDefault.startIn
     @AppStorage(DefaultsKey.defaultHost) var defaultHostID = ""
-    @AppStorage(DefaultsKey.fullscreenWhileStreaming) var fullscreenWhileStreaming = true
-    @AppStorage(DefaultsKey.fullscreenAlways) var fullscreenAlways = false
-    @AppStorage(DefaultsKey.micEnabled) var micEnabled = false
-    @AppStorage(DefaultsKey.echoCancel) var echoCancel = true
-    @AppStorage(DefaultsKey.keepHostAudio) var keepHostAudio = false
-    @AppStorage(DefaultsKey.audioChannels) var audioChannels = 2
-    @AppStorage(DefaultsKey.audioFormat) var audioFormat = AudioFormatChoice.opus.rawValue
-    @AppStorage(DefaultsKey.codec) var codec = "auto"
+    @AppStorage(DefaultsKey.fullscreenWhileStreaming) var fullscreenWhileStreaming =
+        SettingDefault.fullscreenWhileStreaming
+    @AppStorage(DefaultsKey.fullscreenAlways) var fullscreenAlways = SettingDefault.fullscreenAlways
+    @AppStorage(DefaultsKey.micEnabled) var micEnabled = SettingDefault.micEnabled
+    @AppStorage(DefaultsKey.echoCancel) var echoCancel = SettingDefault.echoCancel
+    @AppStorage(DefaultsKey.keepHostAudio) var keepHostAudio = SettingDefault.keepHostAudio
+    @AppStorage(DefaultsKey.audioChannels) var audioChannels = SettingDefault.audioChannels
+    @AppStorage(DefaultsKey.audioFormat) var audioFormat = SettingDefault.audioFormat
+    @AppStorage(DefaultsKey.codec) var codec = SettingDefault.codec
     // The overlay tier's raw string (the pickers tag by rawValue); the absent-key default runs
     // the legacy-hudEnabled migration (same pattern as ContentView/StreamCommands).
     @AppStorage(DefaultsKey.statsVerbosity) var statsVerbosityRaw = StatsVerbosity.current.rawValue
-    @AppStorage(DefaultsKey.hudPlacement) var hudPlacement = HUDPlacement.topTrailing.rawValue
-    @AppStorage(DefaultsKey.advancedStats) var advancedStats = false
-    @AppStorage(DefaultsKey.statsScalePct) var statsScalePct = 100
-    @AppStorage(DefaultsKey.exitHint) var exitHint = true
+    @AppStorage(DefaultsKey.hudPlacement) var hudPlacement = SettingDefault.hudPlacement
+    @AppStorage(DefaultsKey.advancedStats) var advancedStats = SettingDefault.advancedStats
+    @AppStorage(DefaultsKey.statsScalePct) var statsScalePct = SettingDefault.statsScalePct
+    @AppStorage(DefaultsKey.exitHint) var exitHint = SettingDefault.exitHint
     /// Lists each category's advanced rows (`advancedSection`). Device-wide, never a preset's.
-    @AppStorage(DefaultsKey.showAdvanced) var showAdvanced = false
+    @AppStorage(DefaultsKey.showAdvanced) var showAdvanced = SettingDefault.showAdvanced
     @ObservedObject var gamepads = GamepadManager.shared
-    @AppStorage(DefaultsKey.gamepadUIEnabled) var gamepadUIEnabled = true
+    @AppStorage(DefaultsKey.gamepadUIEnabled) var gamepadUIEnabled = SettingDefault.gamepadUIEnabled
     /// When the switch above takes over — read (and shown) only while it is on.
     @AppStorage(DefaultsKey.gamepadUIMode) var gamepadUIMode =
         GamepadUIEnvironment.modeWhenConnected
     /// The gamepad UI's background palette. Edited here on tvOS only (`controllersSection`) —
     /// every other platform reaches it through the gamepad settings screen, which an Apple TV
     /// without a controller cannot open.
-    @AppStorage(DefaultsKey.uiPalette) var uiPalette = "violet"
-    @AppStorage(DefaultsKey.autoWake) var autoWakeEnabled = true
-    @AppStorage(DefaultsKey.backgroundKeepAlive) var backgroundKeepAlive = false
-    @AppStorage(DefaultsKey.backgroundTimeoutMinutes) var backgroundTimeoutMinutes = 10
+    @AppStorage(DefaultsKey.uiPalette) var uiPalette = SettingDefault.uiPalette
+    @AppStorage(DefaultsKey.autoWake) var autoWakeEnabled = SettingDefault.autoWake
+    @AppStorage(DefaultsKey.backgroundKeepAlive) var backgroundKeepAlive =
+        SettingDefault.backgroundKeepAlive
+    @AppStorage(DefaultsKey.backgroundTimeoutMinutes) var backgroundTimeoutMinutes =
+        SettingDefault.backgroundTimeoutMinutes
     #if !os(tvOS)
     // Keyboard & mouse forwarding (macOS + a hardware keyboard/mouse on iPad). Invert-scroll flips
     // both wheel axes; modifier-layout relocates the ⌥/⌘ → Alt/Super roles by physical position.
-    @AppStorage(DefaultsKey.invertScroll) var invertScroll = false
-    @AppStorage(DefaultsKey.modifierLayout) var modifierLayout = ModifierLayout.mac.rawValue
+    @AppStorage(DefaultsKey.invertScroll) var invertScroll = SettingDefault.invertScroll
+    @AppStorage(DefaultsKey.modifierLayout) var modifierLayout = SettingDefault.modifierLayout
     #endif
     // The quick-action ring's blob — every platform, tvOS included (the pad opens the ring there).
-    @AppStorage(DefaultsKey.overlayActions) var overlayActions = ""
+    @AppStorage(DefaultsKey.overlayActions) var overlayActions = SettingDefault.overlayActions
     /// The quick-actions editor, as a sheet (the detail column is not a NavigationStack).
     @State var showQuickActions = false
     #if DEBUG && !os(tvOS)
@@ -108,10 +111,10 @@ struct SettingsView: View {
     @State var homeButtonKept = false
     #endif
     #if os(iOS) || os(visionOS)
-    @AppStorage(DefaultsKey.pointerCapture) var pointerCapture = true
-    @AppStorage(DefaultsKey.touchMode) var touchMode = TouchInputMode.trackpad.rawValue
-    @AppStorage(DefaultsKey.rumbleOnDevice) var rumbleOnDevice = false
-    @AppStorage(DefaultsKey.gyroFromDevice) var gyroFromDevice = false
+    @AppStorage(DefaultsKey.pointerCapture) var pointerCapture = SettingDefault.pointerCapture
+    @AppStorage(DefaultsKey.touchMode) var touchMode = SettingDefault.touchMode
+    @AppStorage(DefaultsKey.rumbleOnDevice) var rumbleOnDevice = SettingDefault.rumbleOnDevice
+    @AppStorage(DefaultsKey.gyroFromDevice) var gyroFromDevice = SettingDefault.gyroFromDevice
     // The sidebar selection drives the detail pane on iPad and the pushed sub-page on iPhone.
     // Width class decides the initial value: nil on iPhone (show the category list first),
     // General on iPad (a two-column layout should never open with an empty detail).
@@ -147,16 +150,16 @@ struct SettingsView: View {
     #endif
     /// Steam Controller 2 passthrough (device tier). Every platform shows the row, so the
     /// storage sits outside the per-platform blocks.
-    @AppStorage(DefaultsKey.sc2Capture) var sc2Capture = false
+    @AppStorage(DefaultsKey.sc2Capture) var sc2Capture = SettingDefault.sc2Capture
     #if os(macOS)
-    @AppStorage(DefaultsKey.mouseMode) var mouseMode = MouseInputMode.capture.rawValue
+    @AppStorage(DefaultsKey.mouseMode) var mouseMode = SettingDefault.mouseMode
     /// Cross-client `inhibit_shortcuts` — here, the ⌘-chord passthrough (⌘Q & co. reach the host
     /// instead of the app menu while captured). macOS-only: it is the one platform whose window
     /// system hands a plain app no keyboard grab, so the client has to claim the chords itself.
-    @AppStorage(DefaultsKey.inhibitShortcuts) var inhibitShortcuts = true
-    @AppStorage(DefaultsKey.speakerUID) var speakerUID = ""
-    @AppStorage(DefaultsKey.micUID) var micUID = ""
-    @AppStorage(DefaultsKey.micChannel) var micChannel = 0
+    @AppStorage(DefaultsKey.inhibitShortcuts) var inhibitShortcuts = SettingDefault.inhibitShortcuts
+    @AppStorage(DefaultsKey.speakerUID) var speakerUID = SettingDefault.speakerUID
+    @AppStorage(DefaultsKey.micUID) var micUID = SettingDefault.micUID
+    @AppStorage(DefaultsKey.micChannel) var micChannel = SettingDefault.micChannel
     @State var outputDevices: [AudioDevice] = []
     @State var inputDevices: [AudioDevice] = []
     // Input channels of the selected mic — drives the "Microphone channel" picker, which only

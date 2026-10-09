@@ -32,8 +32,6 @@ enum MgmtTransportError: Error, Sendable {
     /// The host's certificate did not hash to the pinned fingerprint — an impostor, or a host
     /// that was reinstalled/re-keyed since pairing.
     case pinMismatch
-    /// No fingerprint to pin: the host is unpaired, so nothing it presents can be verified.
-    case unpinned
     case connection(String)
     case timedOut
     case tooLarge
@@ -45,59 +43,13 @@ enum MgmtTransport {
     /// a few MB; anything past this is not a poster and not a library payload.
     static let maxResponseBytes = 16 * 1024 * 1024
 
-    /// `GET https://host:port/path`, authenticated by mTLS (`identity`) and pinned by
-    /// `pinnedHostFingerprint`. A nil pin throws `unpinned` before any socket opens.
+    /// One request to `https://host:port/path`, authenticated by mTLS (`identity`) and pinned by
+    /// `pin`. A `body` goes out with `contentType` and a length.
     ///
     /// Runs over a pooled keep-alive connection. A connection the host has since dropped is
     /// indistinguishable from a live one until we write to it, so a REUSED connection that fails
     /// is retried, up to once per pooled socket; a fresh connection that fails is a real error.
-    static func get(
-        host: String,
-        port: UInt16,
-        path: String,
-        identity: SecIdentity,
-        pinnedHostFingerprint: Data?,
-        timeout: TimeInterval = 15
-    ) async throws -> HTTPResponse {
-        try await request(
-            host: host, port: port, method: "GET", path: path, body: nil, contentType: nil,
-            identity: identity, pinnedHostFingerprint: pinnedHostFingerprint, timeout: timeout)
-    }
-
-    /// `POST https://host:port/path` with a body — same transport, trust and retry rule as `get`.
-    /// The one write a paired device may make is the client-log upload, which is idempotent in
-    /// the only sense that matters (a retried bundle is a second bundle, not a corrupted one).
-    static func post(
-        host: String,
-        port: UInt16,
-        path: String,
-        body: Data,
-        contentType: String,
-        identity: SecIdentity,
-        pinnedHostFingerprint: Data?,
-        timeout: TimeInterval = 15
-    ) async throws -> HTTPResponse {
-        try await request(
-            host: host, port: port, method: "POST", path: path, body: body,
-            contentType: contentType, identity: identity,
-            pinnedHostFingerprint: pinnedHostFingerprint, timeout: timeout)
-    }
-
-    /// `DELETE https://host:port/path` — same transport, trust and retry rule as `get`.
-    static func delete(
-        host: String,
-        port: UInt16,
-        path: String,
-        identity: SecIdentity,
-        pinnedHostFingerprint: Data?,
-        timeout: TimeInterval = 15
-    ) async throws -> HTTPResponse {
-        try await request(
-            host: host, port: port, method: "DELETE", path: path, body: nil, contentType: nil,
-            identity: identity, pinnedHostFingerprint: pinnedHostFingerprint, timeout: timeout)
-    }
-
-    private static func request(
+    static func request(
         host: String,
         port: UInt16,
         method: String,
@@ -105,13 +57,12 @@ enum MgmtTransport {
         body: Data?,
         contentType: String?,
         identity: SecIdentity,
-        pinnedHostFingerprint: Data?,
-        timeout: TimeInterval
+        pin: Data,
+        timeout: TimeInterval = 15
     ) async throws -> HTTPResponse {
         guard let nwPort = NWEndpoint.Port(rawValue: port) else {
             throw MgmtTransportError.invalidPort(port)
         }
-        guard let pin = pinnedHostFingerprint else { throw MgmtTransportError.unpinned }
         let key = "\(unbracketed(host)):\(port):\(hex(pin))"
         var lastError: Error = MgmtTransportError.connection("no attempt made")
 
@@ -276,7 +227,7 @@ final class MgmtConnection: @unchecked Sendable {
     /// False once the connection has failed; the pool discards these instead of handing them out.
     private(set) var isHealthy = true
     /// Has this connection completed at least one request? Drives the retry-once rule in
-    /// `MgmtTransport.get` — only a connection the host may have dropped since is worth retrying.
+    /// `MgmtTransport.request` — only a connection the host may have dropped since is worth retrying.
     var hasServedRequest: Bool { servedRequest }
 
     /// A nil `identity` presents no client certificate. Only the pool's tests pass one: they

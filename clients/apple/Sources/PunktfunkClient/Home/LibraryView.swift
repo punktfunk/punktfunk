@@ -96,7 +96,7 @@ struct LibraryView: View {
     /// The touch grid's sort (the shared `library_sort` key, the same one the console's bar
     /// writes) and its grouping (touch-only — sections are the touch analogue of the console's
     /// Collections place).
-    @AppStorage(DefaultsKey.librarySort) private var sortRaw = ""
+    @AppStorage(DefaultsKey.librarySort) private var sortRaw = SettingDefault.librarySort
     @AppStorage(DefaultsKey.libraryGroupBy) private var groupByRaw = ""
     @Environment(\.dismiss) private var dismiss
     /// Resolves a pinned shelf's preset NAME for the title (the target carries only its id).
@@ -105,7 +105,8 @@ struct LibraryView: View {
     /// Resume row) and FEEDS: its own `/status` fetch below is the freshest one anybody has.
     @ObservedObject private var nowPlayingStore = NowPlayingStore.shared
     @ObservedObject private var favorites = LibraryFavorites.shared
-    @AppStorage(DefaultsKey.librarySections) private var sectionsRaw = ""
+    @AppStorage(DefaultsKey.librarySections) private var sectionsRaw =
+        SettingDefault.librarySections
     @State private var search = ""
     @State private var showCustomize = false
     /// The title whose details sheet is up (the title menu's Details…).
@@ -753,17 +754,13 @@ struct LibraryView: View {
         }
     }
 
-    /// Ask the host to change `game`'s files. A refusal says why; a removal turns the tile to
-    /// "not installed" here, and `/status` is read again either way.
+    /// Ask the host to change `game`'s files. A refusal, or no way to ask, says why; a removal
+    /// turns the tile to "not installed" here, and `/status` is read again either way.
     private func changeInstall(_ game: GameEntry, _ action: InstallAction) {
-        guard let identity = (try? ClientIdentityStore.shared.load())?.identity,
-              let pin = host.pinnedSHA256 else { return }
-        let current = host
+        guard let target = MgmtTarget.make(host: host).target(orSay: { endGameNotice = $0 })
+        else { return }
         Task {
-            let outcome = await LibraryClient.changeInstall(
-                appID: game.id, action: action, address: current.address,
-                port: current.effectiveMgmtPort, certPEM: identity.certPEM,
-                keyPEM: identity.keyPEM, hostFingerprint: pin)
+            let outcome = await LibraryClient.changeInstall(appID: game.id, action: action, on: target)
             if outcome == .done, action == .remove, let i = games.firstIndex(where: { $0.id == game.id }) {
                 games[i].install?.state = "missing"
             }
@@ -774,13 +771,9 @@ struct LibraryView: View {
 
     /// What the host runs and downloads, and what this device may do there.
     private func refreshStatus() async {
-        guard let identity = (try? ClientIdentityStore.shared.load())?.identity else { return }
         let current = host
-        let status = await LibraryClient.status(
-            address: current.address, port: current.effectiveMgmtPort,
-            certPEM: identity.certPEM, keyPEM: identity.keyPEM,
-            hostFingerprint: current.pinnedSHA256)
-        applyStatus(status, for: current)
+        guard case .success(let target) = MgmtTarget.make(host: current) else { return }
+        applyStatus(await LibraryClient.status(target), for: current)
     }
 
     private func applyStatus(
@@ -806,15 +799,14 @@ struct LibraryView: View {
         game.id != LibraryCollation.desktopID && running[game.id]?.endable == true
     }
 
-    /// Ask the host to end `game`. Gone either way drops the badge; a refusal says why.
+    /// Ask the host to end `game`. Gone either way drops the badge; a refusal, or no way to ask,
+    /// says why.
     private func endGame(_ game: GameEntry) {
-        guard let identity = (try? ClientIdentityStore.shared.load())?.identity,
-              let pin = host.pinnedSHA256 else { return }
         let current = host
+        guard let target = MgmtTarget.make(host: current).target(orSay: { endGameNotice = $0 })
+        else { return }
         Task {
-            let outcome = await LibraryClient.endGame(
-                appID: game.id, address: current.address, port: current.effectiveMgmtPort,
-                certPEM: identity.certPEM, keyPEM: identity.keyPEM, hostFingerprint: pin)
+            let outcome = await LibraryClient.endGame(appID: game.id, on: target)
             if outcome.gameGone {
                 running[game.id] = nil
                 nowPlayingStore.invalidate(current)
@@ -996,121 +988,42 @@ struct LibraryView: View {
             return
         }
         let current = store.hosts.first { $0.id == host.id } ?? host
-        // mTLS uses this client's persistent identity (the host paired it over QUIC). No identity
-        // yet → the user hasn't connected/paired, which is also when there's nothing to browse.
-        guard let identity = (try? ClientIdentityStore.shared.load())?.identity else {
+        guard let target = MgmtTarget.make(host: current).target(orSay: { errorText = $0 }) else {
             games = []
-            errorText = "Connect to this host once first — the library uses the identity created "
-                + "on pairing to authenticate."
-            loading = false
-            return
-        }
-        // Beyond the client identity, require the HOST's pinned fingerprint. MgmtTransport refuses a
-        // pin-less host; this check only names the remedy. A host can hold a client identity yet no
-        // host pin (abandoned pairing, or after "Forget Identity").
-        guard current.pinnedSHA256 != nil else {
-            games = []
-            errorText = "Pair with this host before browsing its library."
             loading = false
             return
         }
         // Built ahead of the first suspension: a remounted shelf draws its restored tiles
         // before `load()` resumes, and every poster needs this waiting. The fetch's outcome
         // doesn't gate it — cached posters render with the host still down.
-        artLoader = try? LibraryArtLoader(
-            address: current.address,
-            port: current.effectiveMgmtPort,
-            certPEM: identity.certPEM,
-            keyPEM: identity.keyPEM,
-            hostFingerprint: current.pinnedSHA256)
+        artLoader = LibraryArtLoader(target)
 
-        // Show the catalog we already have BEFORE talking to the host. A library is the screen a
-        // player uses to decide what to play, and an empty one while a sleeping box boots is the
-        // opposite of useful — so the last-known titles go up immediately, marked as remembered,
-        // and are replaced the moment the host answers.
-        if let cached = await LibraryCache.shared?.load(hostID: current.id.uuidString) {
-            games = cached.games.launchersFirst
-            servedFromCacheAt = cached.fetchedAt
-            Self.shown[current.id.uuidString] = games
-        }
-        // ...and wake the box while the player is still choosing. Waking has always been bound to
-        // CONNECTING, which is too late to help: by then they have picked a title and are waiting
-        // out a cold boot. Opening the library is the earliest honest signal that someone intends
-        // to play.
-        //
-        // Sent up front and unconditionally rather than only when the host looks offline — the
-        // same shape as the client core's own `orchestrate` path, and for the same reason: a magic
-        // packet is a single fire-and-forget datagram that an already-awake machine ignores, so
-        // waiting to find out whether it is needed costs more than sending it.
-        let waking = !current.wakeMacs.isEmpty && PunktfunkConnection.wakeOnLANAvailable
-        if waking {
-            let (macs, address) = (current.wakeMacs, current.address)
-            DispatchQueue.global(qos: .userInitiated).async { // blocking sends — off main
-                PunktfunkConnection.wakeOnLAN(macs: macs, lastKnownIP: address)
-            }
-        }
-
-        // A woken box takes 20–60 s to answer, so one attempt would almost always land on a host
-        // that is still POSTing. Retry across that window when we sent a packet; without one, ask
-        // exactly once and report what happened, as before.
-        let attempts = waking ? 12 : 1
-        for attempt in 0..<attempts {
-            if Task.isCancelled { break }
-            do {
-                // `launchersFirst` groups launcher entries ahead of titles once, here, so the grid
-                // inherits the D4 ordering.
-                let fetched = try await LibraryClient.fetch(
-                    address: current.address,
-                    port: current.effectiveMgmtPort,
-                    certPEM: identity.certPEM,
-                    keyPEM: identity.keyPEM,
-                    hostFingerprint: current.pinnedSHA256
-                ).launchersFirst
+        // The last-known titles go up before the host is asked, marked as remembered, and the
+        // box is woken while the player is still choosing: opening the library is the earliest
+        // honest signal that someone intends to play.
+        let hostID = current.id.uuidString
+        let events = LibraryLoad.run(target: target, hostID: hostID, wakeMacs: current.wakeMacs)
+        for await event in events {
+            switch event {
+            case .cached(let cached):
+                games = cached.games
+                servedFromCacheAt = cached.fetchedAt
+                Self.shown[hostID] = games
+            case .waking:
+                break
+            case .fetched(let fetched):
                 games = fetched
                 servedFromCacheAt = nil
                 errorText = nil
-                await LibraryCache.shared?.store(fetched, hostID: current.id.uuidString)
-                Self.shown[current.id.uuidString] = games
-                break
-            } catch {
-                // Anything other than "can't reach it" is settled — a rejected certificate does not
-                // become acceptable by waiting, and retrying an unpaired host twelve times just
-                // delays telling the user what is actually wrong.
-                let unreachable: Bool
-                if case .unreachable = error as? LibraryError { unreachable = true } else {
-                    unreachable = false
-                }
-                let more = unreachable && attempt + 1 < attempts
-                if !more {
-                    // A cached catalog outranks the error: the titles on screen are still the right
-                    // ones to choose from, and replacing them with a red message because the host
-                    // is asleep is precisely what this cache exists to prevent. The staleness note
-                    // carries the situation instead.
-                    if games.isEmpty {
-                        // `LibraryError` reports a phrase; this state has no title of its
-                        // own, so it supplies the frame the console shells get for free.
-                        let why = (error as? LibraryError)?.errorDescription
-                            ?? error.localizedDescription
-                        errorText = "Couldn't load the library — \(why)"
-                    }
-                    break
-                }
-                try? await Task.sleep(nanoseconds: 5 * NSEC_PER_SEC)
+                Self.shown[hostID] = games
+            case .failed(let error, _):
+                // Titles on screen outrank the error; the staleness note carries the situation.
+                if games.isEmpty { errorText = LibraryLoad.failure(error) }
+            case .status(let up, let downloads, let grants):
+                applyStatus((up, downloads, grants), for: current)
+                loading = false
             }
         }
-        // Left mid-load: the next appearance loads again, so ask the host nothing more.
-        if Task.isCancelled { return }
-
-        // What's up on the host right now — never fatal, and deliberately after the catalog so a
-        // slow `/status` can't hold the titles back.
-        let status = await LibraryClient.status(
-            address: current.address,
-            port: current.effectiveMgmtPort,
-            certPEM: identity.certPEM,
-            keyPEM: identity.keyPEM,
-            hostFingerprint: current.pinnedSHA256)
-        applyStatus(status, for: current)
-        loading = false
     }
 
     #if DEBUG

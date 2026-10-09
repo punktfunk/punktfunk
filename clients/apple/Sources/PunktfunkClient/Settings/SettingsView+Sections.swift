@@ -594,7 +594,7 @@ extension SettingsView {
             settingPicker(
                 "Prioritize",
                 options: SettingsOptions.presentPriorities.map { option in
-                    (label: option.tag == SettingsOptions.presentPriorityDefault
+                    (label: option.tag == SettingDefault.presentPriority
                         ? "\(option.label) (default)" : option.label, tag: option.tag)
                 },
                 selection: scoped(SettingsFields.presentPriority))

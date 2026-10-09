@@ -12,7 +12,7 @@ import SwiftUI
 import XCTest
 
 @testable import PunktfunkKit
-import PunktfunkShared
+@testable import PunktfunkShared
 
 final class SharedFoundationTests: XCTestCase {
     // MARK: - StoredHost JSON codec
@@ -486,6 +486,44 @@ final class SharedFoundationTests: XCTestCase {
         XCTAssertNil(overlay.matchWindow)
         XCTAssertTrue(overlay.isEmpty)
         XCTAssertFalse(OverlayField.clear("no_such_field", in: &overlay))
+    }
+
+    /// Each overlay key set alone decodes into a field, reads overridden on its own row only,
+    /// survives an encode-decode round trip, and `clear` empties the overlay again. Pins the
+    /// hand-written decode, encode, clear and isOverridden switches to one key list.
+    func testEveryOverlayKeySetsClearsAndRoundTrips() throws {
+        let samples: [Any] = [true, 7, 1.5, "x"]
+        for key in SettingsOverlay.Key.allCases {
+            let name = key.rawValue
+            let decoded = samples.lazy.compactMap { sample -> SettingsOverlay? in
+                guard let data = try? JSONSerialization.data(withJSONObject: [name: sample]),
+                      let overlay = try? JSONDecoder().decode(SettingsOverlay.self, from: data),
+                      !overlay.isEmpty
+                else { return nil }
+                return overlay
+            }.first
+            guard var overlay = decoded else {
+                XCTFail("\(name) decodes into no field")
+                continue
+            }
+            for other in SettingsOverlay.Key.allCases {
+                XCTAssertEqual(
+                    OverlayField.isOverridden(other.rawValue, in: overlay), other == key,
+                    "\(name) set, \(other.rawValue) row")
+            }
+            let again = try JSONDecoder().decode(
+                SettingsOverlay.self, from: JSONEncoder().encode(overlay))
+            XCTAssertEqual(again, overlay, name)
+            XCTAssertTrue(OverlayField.clear(name, in: &overlay), name)
+            XCTAssertTrue(overlay.isEmpty, name)
+        }
+    }
+
+    /// The defaults that live as raw strings in the dependency-free module still name a case.
+    func testStringDefaultsNameRealCases() {
+        XCTAssertNotNil(TouchInputMode(rawValue: SettingDefault.touchMode))
+        XCTAssertNotNil(MouseInputMode(rawValue: SettingDefault.mouseMode))
+        XCTAssertNotNil(StatsVerbosity(rawValue: SettingDefault.statsVerbosity))
     }
 
     /// A catalog round-trips, and what this build can't represent survives it: an unknown overlay

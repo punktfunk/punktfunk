@@ -19,19 +19,17 @@ enum ProfileFetch {
     static let wait: TimeInterval = 3
 
     /// Ask `host` for its profiles, giving up after `seconds` (nil waits for the transport).
-    /// `mgmt` overrides the saved management port, as the console's row carries it.
+    /// `mgmt` overrides the saved management port, as the console's row carries it. An unpaired
+    /// host fails without a request.
     static func list(
         _ host: StoredHost, mgmt: UInt16? = nil, within seconds: TimeInterval? = nil
     ) async -> ProfileAnswer {
-        guard let identity = (try? ClientIdentityStore.shared.load())?.identity else {
+        guard case .success(let target) = MgmtTarget.make(host: host, port: mgmt) else {
             return .failed
         }
         let ask: @Sendable () async -> ProfileAnswer = {
             do {
-                let rows = try await LibraryClient.profiles(
-                    address: host.address, port: mgmt ?? host.effectiveMgmtPort,
-                    certPEM: identity.certPEM, keyPEM: identity.keyPEM,
-                    hostFingerprint: host.pinnedSHA256)
+                let rows = try await LibraryClient.profiles(target)
                 // An empty list is a box with no profiles to choose from.
                 return .listed(rows?.isEmpty == false ? rows : nil)
             } catch {
@@ -55,14 +53,11 @@ enum ProfileFetch {
 extension ProfileFetch {
     /// Start profile `id`'s stopped seat on `host`. false: the host didn't take the call.
     static func wake(_ host: StoredHost, mgmt: UInt16? = nil, id: String) async -> Bool {
-        guard let identity = (try? ClientIdentityStore.shared.load())?.identity else {
+        guard case .success(let target) = MgmtTarget.make(host: host, port: mgmt) else {
             return false
         }
         do {
-            try await LibraryClient.wakeProfile(
-                id: id, address: host.address, port: mgmt ?? host.effectiveMgmtPort,
-                certPEM: identity.certPEM, keyPEM: identity.keyPEM,
-                hostFingerprint: host.pinnedSHA256)
+            try await LibraryClient.wakeProfile(id: id, on: target)
             return true
         } catch {
             return false

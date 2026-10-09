@@ -428,4 +428,51 @@ final class LibraryClientTests: XCTestCase {
         XCTAssertEqual(LibraryClient.baseURL(address: "[fd7a:115c::1]", port: 47990),
                        "https://[fd7a:115c::1]:47990")
     }
+
+    // MARK: - Management call preamble
+
+    func testMgmtTargetNamesWhatIsMissing() {
+        let unpaired = StoredHost(name: "Desk", address: "192.168.1.70")
+        let identity = ClientIdentity(certPEM: "", keyPEM: "")
+        XCTAssertEqual(MgmtTarget.make(host: unpaired, identity: nil).failure, .identity)
+        XCTAssertEqual(MgmtTarget.make(host: unpaired, identity: identity).failure, .pairing("Desk"))
+        var paired = unpaired
+        paired.pinnedSHA256 = Data(repeating: 1, count: 32)
+        XCTAssertEqual(MgmtTarget.make(host: paired, identity: identity).failure, .keychain)
+    }
+
+    func testExpectOKFoldsTheCertificateRefusals() {
+        func status(_ code: Int, _ ok: Set<Int> = [200]) -> String {
+            let response = HTTPResponse(status: code, headers: [:], body: Data())
+            do {
+                try LibraryClient.expectOK(response, ok)
+                return "ok"
+            } catch {
+                return "\(error)"
+            }
+        }
+        XCTAssertEqual(status(200), "ok")
+        XCTAssertEqual(status(202, [200, 202]), "ok")
+        XCTAssertEqual(status(202), "http(202)")
+        XCTAssertEqual(status(401), "unauthorized")
+        XCTAssertEqual(status(403), "unauthorized")
+        XCTAssertEqual(status(500), "http(500)")
+    }
+
+    /// The host refuses an install in its `ApiError` envelope; the player reads its sentence.
+    func testInstallRefusalCarriesTheHostSentence() {
+        let body = Data(#"{"error":"Not enough space on the host."}"#.utf8)
+        XCTAssertEqual(
+            InstallOutcome.from(status: 409, message: LibraryClient.hostReason(body)),
+            .refused("Not enough space on the host."))
+        XCTAssertNil(LibraryClient.hostReason(Data(#"{"error":""}"#.utf8)))
+        XCTAssertNil(LibraryClient.hostReason(Data()))
+    }
+}
+
+private extension Result {
+    var failure: Failure? {
+        if case .failure(let error) = self { return error }
+        return nil
+    }
 }

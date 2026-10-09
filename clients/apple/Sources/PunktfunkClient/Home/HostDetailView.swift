@@ -45,7 +45,7 @@ struct HostDetailView: View {
     var only: HostSection?
     @ObservedObject private var nowPlaying = NowPlayingStore.shared
     @AppStorage(DefaultsKey.defaultHost) private var defaultHostID = ""
-    @AppStorage(DefaultsKey.autoWake) private var autoWake = true
+    @AppStorage(DefaultsKey.autoWake) private var autoWake = SettingDefault.autoWake
     @Environment(\.dismiss) private var dismiss
     @State private var confirmForget = false
     @State private var confirmRemove = false
