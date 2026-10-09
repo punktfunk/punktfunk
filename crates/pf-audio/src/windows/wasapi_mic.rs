@@ -274,6 +274,26 @@ pub fn install_steam_audio_pair() -> bool {
     mic || spk
 }
 
+/// The capture side's install latch: `None` until it tries, then whether the INFs existed.
+static TRIED_WITH_INFS: Mutex<Option<bool>> = Mutex::new(None);
+
+/// Whether desktop-audio capture may try [`install_steam_audio_pair`] now, marking the try.
+/// Once per INF state, not once per process: a try made while Steam was absent re-arms when
+/// the INFs appear. Those files are invisible to the endpoint-set fingerprint, so nothing
+/// else retries.
+pub(super) fn steam_pair_install_due() -> bool {
+    let infs = steam_infs_present();
+    let mut tried = TRIED_WITH_INFS.lock().unwrap();
+    let go = match *tried {
+        None => true,
+        Some(had_infs) => !had_infs && infs,
+    };
+    if go {
+        *tried = Some(infs);
+    }
+    go
+}
+
 /// NUL-terminated UTF-16 path of a Steam Remote Play INF under
 /// `%CommonProgramFiles(x86)%\Steam\drivers\Windows10\{arch}\`. Shared with
 /// [`super::pad_endpoint`] (`UpdateDriverForPlugAndPlayDevicesW` when no
@@ -303,9 +323,7 @@ pub fn steam_driver_inf_path(inf_name: &str) -> Option<Vec<u16>> {
     Some(path)
 }
 
-/// Whether Steam's streaming-audio INFs exist. Files are not endpoints, so
-/// the capture install latch keys on this instead of staying once-per-process
-/// ([`super::wasapi_cap`]) — Steam installed mid-run would otherwise be missed.
+/// Whether Steam's streaming-audio INFs exist: the state [`steam_pair_install_due`] keys on.
 pub fn steam_infs_present() -> bool {
     use std::os::windows::ffi::OsStringExt;
     ["SteamStreamingMicrophone.inf", "SteamStreamingSpeakers.inf"]
