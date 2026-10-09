@@ -17,10 +17,11 @@
     4. pack the unelevated client wizard over the same stage, sign the setup.exe,
     5. emit CLIENT_SETUP_PATH / CLIENT_ZIP_PATH to GITHUB_ENV for the publish step.
 
-  Signing backend precedence is identical to pack-msix.ps1 / pack-host-installer.ps1 (Azure
-  Artifact Signing -> supplied .pfx -> ephemeral self-signed; fail closed on v* tags). No .cer is
-  exported here: unlike an MSIX, a plain exe RUNS regardless of signer trust — an untrusted
-  signature only costs a SmartScreen warning, so canary self-signed builds need nothing imported.
+  Signing goes through packaging/windows/signing.ps1, shared with pack-msix.ps1 and
+  pack-host-installer.ps1 (Azure Artifact Signing -> supplied .pfx -> ephemeral self-signed; fail
+  closed on v* tags). No .cer is exported here: unlike an MSIX, a plain exe RUNS regardless of
+  signer trust — an untrusted signature only costs a SmartScreen warning, so canary self-signed
+  builds need nothing imported.
 
 .EXAMPLE
   pwsh -File pack-client-installer.ps1 -Version 0.2.137.0 -Arch x64 `
@@ -45,45 +46,18 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
-# Keep the "check $LASTEXITCODE myself" model (see pack-host-installer.ps1): pwsh 7.4 must not
-# turn a non-zero native exit into a terminating error before Sign-File's timestamp retry runs.
+# Keep the "check $LASTEXITCODE myself" model: a non-zero native exit must not throw before the
+# script reads it.
 $PSNativeCommandUseErrorActionPreference = $false
+. (Join-Path $PSScriptRoot '..\..\..\packaging\windows\signing.ps1')
+# A throw anywhere below must not leave the decoded signing key in $OutDir.
+trap { Remove-SigningPfx; break }
 
 if ($Version -notmatch '^\d+\.\d+\.\d+\.\d+$') {
     throw "Version must be 4-part numeric (Major.Minor.Build.Revision); got '$Version'."
 }
 
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
-
-# --- locate signtool (Windows SDK) — same finder as the sibling scripts -----------------------
-function Find-SdkTool([string]$name) {
-    $root = 'C:\Program Files (x86)\Windows Kits\10\bin'
-    $hit = Get-ChildItem -Path $root -Recurse -Filter $name -ErrorAction SilentlyContinue |
-        Where-Object { $_.FullName -match '\\(10\.0\.\d+\.\d+)\\x64\\' } |
-        Sort-Object { [version]([regex]::Match($_.FullName, '\\(10\.0\.\d+\.\d+)\\x64\\').Groups[1].Value) } |
-        Select-Object -Last 1
-    if (-not $hit) { throw "$name not found under $root - install the Windows 10/11 SDK." }
-    $hit.FullName
-}
-function Find-AzureDlib([string]$Explicit) {
-    if ($Explicit) {
-        if (-not (Test-Path $Explicit)) { throw "AZURE_CODESIGNING_DLIB points at a missing file: $Explicit" }
-        return (Resolve-Path $Explicit).Path
-    }
-    $roots = @(
-        (Join-Path $env:USERPROFILE '.nuget\packages\microsoft.trusted.signing.client'),
-        'C:\trusted-signing\microsoft.trusted.signing.client'
-    ) | Where-Object { $_ -and (Test-Path $_) }
-    $hit = $roots | ForEach-Object { Get-ChildItem -Path $_ -Recurse -Filter 'Azure.CodeSigning.Dlib.dll' -ErrorAction SilentlyContinue } |
-        Where-Object { $_.FullName -match '\\bin\\x64\\' } |
-        Sort-Object LastWriteTime | Select-Object -Last 1
-    if (-not $hit) {
-        throw ("Azure.CodeSigning.Dlib.dll not found. Install the signing client on this box, e.g. " +
-               "``nuget install Microsoft.Trusted.Signing.Client -OutputDirectory " +
-               "`$env:USERPROFILE\.nuget\packages``, or set AZURE_CODESIGNING_DLIB to its full path.")
-    }
-    $hit.FullName
-}
 
 # --- stage the runtime file set (the portable layout = what the installer lays down) ----------
 # Explicit list, not a wildcard copy: the MSIX layout also holds AppxManifest.xml and the tile
@@ -106,93 +80,16 @@ $licSrc = Join-Path $LayoutDir 'licenses'
 if (-not (Test-Path $licSrc)) { throw "missing licenses\ in $LayoutDir (did pack-msix.ps1 run first?)" }
 Copy-Item $licSrc (Join-Path $stage 'licenses') -Recurse -Force
 
-# --- signing backend, same precedence + fail-closed rule as pack-msix.ps1 ---------------------
-$requireCert = if ($RequireSignedCert -eq 'auto') { $env:GITHUB_REF -like 'refs/tags/v*' }
-               else { [Convert]::ToBoolean($RequireSignedCert) }
-if ($NoSign -and $requireCert) {
-    throw "release build ($env:GITHUB_REF) with -NoSign - refusing to publish an unsigned installer."
-}
-$pfxPath = Join-Path $OutDir 'signing.pfx'
-$azureMetadata = Join-Path $OutDir 'azure-codesigning.json'
-$signMode = 'none'
-$signtool = $null
-if (-not $NoSign) {
-    $signtool = Find-SdkTool 'signtool.exe'
-    Write-Host "signtool: $signtool"
-    if ($AzureEndpoint -and $AzureAccount -and $AzureProfile) {
-        $signMode = 'azure'
-        $AzureDlib = Find-AzureDlib $AzureDlib
-        @{
-            Endpoint               = $AzureEndpoint
-            CodeSigningAccountName = $AzureAccount
-            CertificateProfileName = $AzureProfile
-        } | ConvertTo-Json | Set-Content -Path $azureMetadata -Encoding utf8
-        Write-Host "signing via Azure Artifact Signing: $AzureAccount/$AzureProfile at $AzureEndpoint"
-        foreach ($v in 'AZURE_TENANT_ID', 'AZURE_CLIENT_ID', 'AZURE_CLIENT_SECRET') {
-            if (-not [Environment]::GetEnvironmentVariable($v)) {
-                throw ("Azure signing selected but $v is not set. The dlib authenticates with " +
-                       "DefaultAzureCredential; without the service-principal trio it falls through to " +
-                       "an interactive login that cannot complete on a runner and hangs the build.")
-            }
-        }
-    }
-    elseif ($PfxBase64) {
-        $signMode = 'pfx'
-        Write-Host "signing with supplied code-signing cert (MSIX_CERT_PFX_B64)"
-        [IO.File]::WriteAllBytes($pfxPath, [Convert]::FromBase64String($PfxBase64))
-    }
-    elseif ($requireCert) {
-        throw ("release build ($env:GITHUB_REF) with neither AZURE_CODESIGNING_* nor MSIX_CERT_PFX_B64 - " +
-               "refusing to fall back to an ephemeral self-signed cert. Restore the signing secrets " +
-               "(packaging/windows/README.md), or pass -RequireSignedCert false if this really is a test build.")
-    }
-    else {
-        $signMode = 'selfsigned'
-        Write-Host "no MSIX_CERT_PFX_B64 -> generating an ephemeral self-signed cert (subject $Publisher)"
-        if (-not $PfxPassword) { $PfxPassword = 'punktfunk' }
-        $tmp = New-SelfSignedCertificate -Type Custom -Subject $Publisher `
-            -KeyUsage DigitalSignature -FriendlyName 'punktfunk client installer (self-signed)' `
-            -CertStoreLocation 'Cert:\CurrentUser\My' `
-            -TextExtension @('2.5.29.37={text}1.3.6.1.5.5.7.3.3', '2.5.29.19={text}')
-        $sec = ConvertTo-SecureString -String $PfxPassword -Force -AsPlainText
-        Export-PfxCertificate -Cert "Cert:\CurrentUser\My\$($tmp.Thumbprint)" -FilePath $pfxPath -Password $sec | Out-Null
-        Remove-Item "Cert:\CurrentUser\My\$($tmp.Thumbprint)" -Force
-    }
-}
-
-# Timestamp policy matches the sibling scripts: best-effort for a long-lived .pfx, MANDATORY under
-# Azure signing (those leaf certs expire in ~3 days; untimestamped signatures die with them).
-function Sign-File([string]$Path) {
-    if ($NoSign) { return }
-    if ($signMode -eq 'azure') {
-        $signArgs = @('sign', '/fd', 'SHA256', '/dlib', $AzureDlib, '/dmdf', $azureMetadata)
-        $ts = 'http://timestamp.acs.microsoft.com'
-    }
-    else {
-        $signArgs = @('sign', '/fd', 'SHA256', '/f', $pfxPath)
-        if ($PfxPassword) { $signArgs += @('/p', $PfxPassword) }
-        $ts = 'http://timestamp.digicert.com'
-    }
-    # UAC names a signed file by /d. The exe's own FileDescription stays the one source.
-    $desc = (Get-Item $Path).VersionInfo.FileDescription
-    if ($desc) { $signArgs += @('/d', $desc) }
-    $signArgs += @('/du', 'https://punktfunk.unom.io')
-    & $signtool ($signArgs + @('/tr', $ts, '/td', 'SHA256', $Path))
-    if ($LASTEXITCODE -eq 0) { return }
-    if ($signMode -eq 'azure') {
-        throw ("timestamped sign failed for $Path ($LASTEXITCODE) - NOT retrying without a timestamp. " +
-               "An Azure signing cert is valid for ~3 days; an untimestamped signature would go " +
-               "untrusted within days of release.")
-    }
-    Write-Warning "timestamped sign failed for $Path - retrying without a timestamp"
-    & $signtool ($signArgs + @($Path))
-    if ($LASTEXITCODE -ne 0) { throw "signtool sign failed for $Path ($LASTEXITCODE)" }
-}
+# --- signing backend (signing.ps1: Azure, then MSIX_CERT_PFX_B64, then ephemeral) -------------
+$signing = Resolve-SigningMode -OutDir $OutDir -Publisher $Publisher `
+    -FriendlyName 'punktfunk client installer (self-signed)' `
+    -PfxBase64 $PfxBase64 -PfxPassword $PfxPassword -AzureEndpoint $AzureEndpoint -AzureAccount $AzureAccount `
+    -AzureProfile $AzureProfile -AzureDlib $AzureDlib -RequireSignedCert $RequireSignedCert -NoSign:$NoSign
 
 # --- sign the inner exes, zip the stage (portable build), then build + sign the installer ------
 # SDL3.dll arrives unsigned; the WinAppRuntime bootstrap is already Microsoft-signed.
 foreach ($f in $required | Where-Object { $_ -like '*.exe' -or $_ -eq 'SDL3.dll' }) {
-    Sign-File (Join-Path $stage $f)
+    Sign-File $signing (Join-Path $stage $f)
 }
 
 $zip = Join-Path $OutDir "punktfunk-client-windows_${Version}_${Arch}-portable.zip"
@@ -234,23 +131,23 @@ $packer = Join-Path $wizTarget 'x86_64-pc-windows-msvc\release\punktfunk-setup-p
 $unins = Join-Path $stage 'unins000.exe'
 & $packer pack-uninstaller --exe $wizExe --runtime $wizRel --version $Version --artifact client --out $unins
 if ($LASTEXITCODE -ne 0) { throw "pack-uninstaller failed ($LASTEXITCODE)" }
-Sign-File $unins
+Sign-File $signing $unins
 & $packer pack --exe $wizExe --runtime $wizRel --app $stage --version $Version --artifact client --out $setup
 if ($LASTEXITCODE -ne 0) { throw "pack failed ($LASTEXITCODE)" }
 & $packer inspect $setup
 if ($LASTEXITCODE -ne 0) { throw "inspect failed ($LASTEXITCODE)" }
 if (-not (Test-Path $setup)) { throw "expected installer not produced: $setup" }
-Sign-File $setup
-Remove-Item $pfxPath -Force -ErrorAction SilentlyContinue
-Remove-Item $azureMetadata -Force -ErrorAction SilentlyContinue
+Sign-File $signing $setup
+Remove-SigningPfx
+Remove-Item $signing.Metadata -Force -ErrorAction SilentlyContinue
 
 Write-Host ""
 Write-Host "==> installer: $setup"
-if ($signMode -eq 'azure') {
+if ($signing.Mode -eq 'azure') {
     Write-Host "==> signed by a publicly trusted CA."
 }
-elseif ($signMode -ne 'none') {
-    Write-Host "==> $signMode-signed: the exe still runs everywhere; expect a SmartScreen prompt on canary builds."
+elseif ($signing.Mode -ne 'none') {
+    Write-Host "==> $($signing.Mode)-signed: the exe still runs everywhere; expect a SmartScreen prompt on canary builds."
 }
 if ($env:GITHUB_ENV) {
     "CLIENT_SETUP_PATH=$setup" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8

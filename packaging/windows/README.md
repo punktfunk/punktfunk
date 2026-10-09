@@ -123,7 +123,8 @@ Vulkan HDR layer are signed with
 a named publisher in the UAC prompt and there is no `.cer` to import — `HOST_CER_PATH` is simply not
 emitted in this mode (every consumer already guards on `Test-Path`).
 
-`pack-host-installer.ps1` resolves a backend in this order, first match wins:
+`signing.ps1` resolves the backend for all three app packers (this installer, the client installer
+and the MSIX), first match wins:
 
 | order | backend | selected by |
 | --- | --- | --- |
