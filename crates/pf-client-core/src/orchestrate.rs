@@ -92,6 +92,83 @@ pub fn trust_route(
     }
 }
 
+/// What a pinned dial shows when its stored pin is rejected, before or after the dial.
+pub const FINGERPRINT_CHANGED: &str = "Host fingerprint changed — re-pair with a PIN to continue";
+
+/// Where a finished connect goes. Each front-end draws its own surface per arm.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ExitRoute {
+    /// A clean end, or our own kill: back to the hosts with nothing to say.
+    Silent,
+    /// Back to the hosts with this sentence.
+    Banner(String),
+    /// Pairing is the only way past a rejected pin: the pair screen or dialog, with this sentence.
+    Repair(String),
+    /// The host refused profile `id` as unknown. A seat host says so for a stale seat too, so
+    /// its list is read again: one more dial while it lists `id`, else
+    /// [`ExitRoute::ForgetProfileThen`] with `msg`.
+    RedialProfile { id: String, msg: String },
+    /// Drop the host's saved profile pick, then this banner.
+    ForgetProfileThen(String),
+    /// The dial-first attempt to a quiet host failed: wake-and-wait.
+    Wake,
+}
+
+/// The post-dial half of [`trust_route`]: where a session exit leads. `tofu` = the dial
+/// pinned an advertised fingerprint. `retry_profile` = the profile the dial named, unless the
+/// dial was already the retry. `wake_armed` = a dial-first wake armed for this dial, with
+/// auto-wake read once when it armed, and no ready since. `log` names this shell's log for a
+/// session that died silently.
+pub fn exit_route(
+    outcome: &ConnectOutcome,
+    tofu: bool,
+    retry_profile: Option<&str>,
+    wake_armed: bool,
+    log: &str,
+) -> ExitRoute {
+    use punktfunk_core::reject::RejectReason;
+    match outcome {
+        ConnectOutcome::Ended(None) | ConnectOutcome::Cancelled => ExitRoute::Silent,
+        ConnectOutcome::Ended(Some(reason)) => ExitRoute::Banner(reason.clone()),
+        // The host answered and refused: never a wake.
+        ConnectOutcome::Refused { msg, reason } if *reason == RejectReason::ProfileUnknown => {
+            match retry_profile {
+                Some(id) => ExitRoute::RedialProfile {
+                    id: id.to_string(),
+                    msg: msg.clone(),
+                },
+                None => ExitRoute::ForgetProfileThen(msg.clone()),
+            }
+        }
+        ConnectOutcome::Refused { msg, .. } => ExitRoute::Banner(msg.clone()),
+        o if wake_armed && o.warrants_wake() => ExitRoute::Wake,
+        ConnectOutcome::TrustRejected(msg) if tofu => ExitRoute::Repair(msg.clone()),
+        ConnectOutcome::TrustRejected(_) => ExitRoute::Repair(FINGERPRINT_CHANGED.into()),
+        ConnectOutcome::ConnectFailed(msg) => {
+            ExitRoute::Banner(format!("Couldn't connect — {msg}"))
+        }
+        ConnectOutcome::RendererFailed { code: -1 } => ExitRoute::Banner(
+            "Stream session was killed — out of memory, or stopped by the system".into(),
+        ),
+        ConnectOutcome::RendererFailed { code } => {
+            ExitRoute::Banner(ConnectOutcome::died_banner(*code, log))
+        }
+    }
+}
+
+/// Save the pin a ready session proved: request access saves it `paired`, a TOFU dial
+/// unpaired. The target's MACs ride along, so a host first reached by TOFU keeps Wake-on-LAN.
+pub fn persist_on_ready(target: &HostTarget, fp: &str, paired: bool) -> anyhow::Result<()> {
+    crate::trust::persist_host(
+        &target.name,
+        &target.addr,
+        target.port,
+        fp,
+        paired,
+        &target.mac,
+    )
+}
+
 /// One session, every policy question already answered. Front-ends do not re-decide.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ConnectPlan {
@@ -597,6 +674,13 @@ impl ConnectOutcome {
             ConnectOutcome::RendererFailed { code } => *code != -1,
             _ => false,
         }
+    }
+
+    /// The banner for a session that died without a contract line: a missing runtime, a
+    /// crash, or the wrong binary. `log` names where the cause is.
+    pub fn died_banner(code: i32, log: &str) -> String {
+        let how = Self::exit_phrase(code);
+        format!("The session didn't start (punktfunk-session {how}). Check {log}.")
     }
 
     /// How a session that died silently went, for a banner. An NTSTATUS crash reads in
@@ -1106,6 +1190,81 @@ mod tests {
             let got = trust_route(&known, fp, addr, 9777, optional);
             assert_eq!(got, want, "{fp:?} at {addr}, optional {optional}");
         }
+    }
+
+    /// Every exit routes one way on every shell: a rejected pin always repairs, a profile
+    /// refusal redials once, and only an armed dial that failed wakes.
+    #[test]
+    fn exit_route_decides_once_for_every_shell() {
+        use punktfunk_core::reject::RejectReason as R;
+        use ConnectOutcome as O;
+        use ExitRoute::*;
+        let refused = |reason| O::Refused {
+            msg: "no".into(),
+            reason,
+        };
+        let banner = |s: &str| Banner(s.into());
+        let died = Banner(O::died_banner(1, "the client log"));
+        let changed = Repair(FINGERPRINT_CHANGED.into());
+        let redial = RedialProfile {
+            id: "kid".into(),
+            msg: "no".into(),
+        };
+        for (outcome, tofu, retry, armed, want) in [
+            (O::Ended(None), false, None, true, Silent),
+            (O::Cancelled, false, None, true, Silent),
+            (
+                O::Ended(Some("bye".into())),
+                false,
+                None,
+                false,
+                banner("bye"),
+            ),
+            (
+                O::TrustRejected("pin".into()),
+                true,
+                None,
+                false,
+                Repair("pin".into()),
+            ),
+            (O::TrustRejected("pin".into()), false, None, true, changed),
+            (refused(R::ProfileUnknown), false, Some("kid"), true, redial),
+            (
+                refused(R::ProfileUnknown),
+                false,
+                None,
+                false,
+                ForgetProfileThen("no".into()),
+            ),
+            (refused(R::Busy), false, Some("kid"), true, banner("no")),
+            (O::ConnectFailed("gone".into()), false, None, true, Wake),
+            (
+                O::ConnectFailed("gone".into()),
+                false,
+                None,
+                false,
+                banner("Couldn't connect — gone"),
+            ),
+            (O::RendererFailed { code: 1 }, false, None, true, Wake),
+            (O::RendererFailed { code: 1 }, false, None, false, died),
+            (
+                O::RendererFailed { code: -1 },
+                false,
+                None,
+                true,
+                banner("Stream session was killed — out of memory, or stopped by the system"),
+            ),
+        ] {
+            let got = exit_route(&outcome, tofu, retry, armed, "the client log");
+            assert_eq!(
+                got, want,
+                "{outcome:?}, tofu {tofu}, retry {retry:?}, armed {armed}"
+            );
+        }
+        assert_eq!(
+            O::died_banner(1, "C:\\logs\\client.log"),
+            "The session didn't start (punktfunk-session exited with code 1). Check C:\\logs\\client.log."
+        );
     }
 
     /// Packet at 0 and every 6 s, presence each second, 90 s of budget, park (not

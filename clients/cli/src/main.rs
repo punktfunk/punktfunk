@@ -1233,14 +1233,8 @@ from the config directory for a true factory reset."
                     // exactly this identity by completing a pinned handshake against it.
                     if persist_paired {
                         if let Some(fp_hex) = &plan.host.fp_hex {
-                            if let Err(e) = trust::persist_host(
-                                &plan.host.name,
-                                &plan.host.addr,
-                                plan.host.port,
-                                fp_hex,
-                                true,
-                                &[],
-                            ) {
+                            if let Err(e) = orchestrate::persist_on_ready(&plan.host, fp_hex, true)
+                            {
                                 eprintln!("couldn't save the host: {e:#}");
                             }
                         }

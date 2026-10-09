@@ -17,7 +17,9 @@ use crate::store::{Changed, Store};
 use crate::trust;
 use adw::prelude::*;
 use gtk::{gdk, gio, glib};
-use pf_client_core::orchestrate::{trust_route, ConnectOutcome, TrustRoute};
+use pf_client_core::orchestrate::{
+    self, trust_route, ConnectOutcome, ExitRoute, HostTarget, TrustRoute, FINGERPRINT_CHANGED,
+};
 use pf_client_core::profiles::{ListedProfile as ProfileRow, ProfilePick};
 use pf_client_core::settings::GamepadUi;
 use pf_client_core::start;

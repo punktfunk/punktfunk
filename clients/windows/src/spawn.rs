@@ -20,16 +20,11 @@ pub(crate) enum SpawnEvent {
     Exited(ConnectOutcome),
 }
 
-/// The banner for a session that died without a contract line — a missing runtime DLL, a
-/// crash, or the wrong binary next to the shell. It names the log's real location.
-pub(crate) fn renderer_failed_banner(code: i32) -> String {
-    let log = crate::logfile::path()
+/// Where a banner sends the user for a cause: the log's real location.
+pub(crate) fn log_hint() -> String {
+    crate::logfile::path()
         .map(|p| p.display().to_string())
-        .unwrap_or_else(|| "the client log".into());
-    format!(
-        "The session didn't start (punktfunk-session {}). Check {log}.",
-        ConnectOutcome::exit_phrase(code)
-    )
+        .unwrap_or_else(|| "the client log".into())
 }
 
 /// Spawn the session binary for a connect with `fp_hex` pinned and feed its lifecycle to

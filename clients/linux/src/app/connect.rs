@@ -20,7 +20,7 @@ impl AppModel {
         match route {
             TrustRoute::Pinned(fp_hex) => self.ask_profile(req, fp_hex, false, sender),
             TrustRoute::FingerprintChanged => {
-                self.toast("Host fingerprint changed — re-pair with a PIN to continue");
+                self.toast(FINGERPRINT_CHANGED);
                 crate::app::gate::pin_dialog(&self.window, sender, self.identity.clone(), req);
             }
             TrustRoute::OfferTofu(_) => crate::app::gate::tofu_dialog(&self.window, sender, req),
@@ -68,6 +68,8 @@ impl AppModel {
         }
     }
 
+    /// The child is streaming. A request-access or TOFU pin is saved now, with the request's
+    /// MACs.
     pub(super) fn session_ready(
         &mut self,
         req: ConnectRequest,
@@ -90,22 +92,21 @@ impl AppModel {
         // the dial-first wake fallback exists to rule out. Left armed, it turns a
         // later ordinary failure into a spurious "waking…".
         self.wake_fallback = None;
-        if persist_paired {
-            // Request-access: the operator approved this device — a trusted
-            // PAIRED host from now on, like after a PIN ceremony.
-            let saved = trust::persist_host(&req.name, &req.addr, req.port, &fp_hex, true, &[]);
+        // Request access: the operator's approval is the pairing. TOFU: ready proved the
+        // advertised fingerprint. Either way the stream is up on a pin carried in memory, so
+        // a failed save says so, or the host is gone at the next launch.
+        if persist_paired || tofu {
+            let target = HostTarget {
+                name: req.name.clone(),
+                addr: req.addr.clone(),
+                port: req.port,
+                mac: req.mac.clone(),
+                ..HostTarget::default()
+            };
+            let saved = orchestrate::persist_on_ready(&target, &fp_hex, persist_paired);
             self.store.reload(Changed::Hosts);
             match saved {
-                Ok(()) => self.toast("Approved — connected"),
-                // The stream is up (the pin was carried in memory), but nothing was
-                // written — say so, or the host is simply gone at the next launch.
-                Err(e) => self.toast(&format!("Connected, but couldn't save — {e:#}")),
-            }
-        } else if tofu {
-            // The advertised fingerprint proved itself on a real connect.
-            let saved = trust::persist_host(&req.name, &req.addr, req.port, &fp_hex, false, &[]);
-            self.store.reload(Changed::Hosts);
-            match saved {
+                Ok(()) if persist_paired => self.toast("Approved — connected"),
                 Ok(()) => self.toast(&format!(
                     "Trusted on first use — fingerprint {}…",
                     &fp_hex[..16.min(fp_hex.len())]
@@ -116,6 +117,8 @@ impl AppModel {
         self.hosts.emit(HostsMsg::Refresh);
     }
 
+    /// The child is gone: release `busy` and open the surface [`orchestrate::exit_route`]
+    /// picks.
     pub(super) fn session_exited(
         &mut self,
         req: ConnectRequest,
@@ -130,56 +133,41 @@ impl AppModel {
         self.session = None;
         self.streaming.hide();
         self.hosts.emit(HostsMsg::SetSession(None));
-        // The dial-first wake fallback (armed by `WakeConnect`, consumed on every exit):
-        // a failed dial to the non-advertising host it was armed for falls into the
-        // visible wake-and-wait instead of an error alert. Matched by fingerprint (else
-        // address) so a stale armed request can never redirect another host's failure.
+        // The dial-first wake fallback (armed by `WakeConnect`, consumed on every exit). Matched
+        // by fingerprint (else address) so a stale armed request can never redirect another
+        // host's failure.
         let cancelled = std::mem::take(&mut self.session_cancelled);
         let retry = self.retry_profile.take();
-        let wake_fb = self
-            .wake_fallback
-            .take()
-            .filter(|fb| match (&fb.fp_hex, &req.fp_hex) {
-                (Some(a), Some(b)) => a == b,
-                _ => fb.addr == req.addr && fb.port == req.port,
-            });
-        match ConnectOutcome::from_exit(code, error, ended, cancelled) {
-            // A clean end, or our own kill (request-access cancel) — the toast
-            // already said so.
-            ConnectOutcome::Ended(None) | ConnectOutcome::Cancelled => {}
-            ConnectOutcome::Ended(Some(reason)) => self.hosts.emit(HostsMsg::ShowError(reason)),
-            // The host answered and refused: never a wake. A profile it no longer has is
-            // forgotten, after one more look at its list.
-            ConnectOutcome::Refused { msg, reason } => {
-                let unknown = reason == punktfunk_core::reject::RejectReason::ProfileUnknown;
-                if let (true, Some(id), Some(fp_hex)) = (unknown, retry, req.fp_hex.clone()) {
-                    return self.reask_profile(req, fp_hex, id, msg, sender);
-                }
-                if unknown {
-                    self.forget_profile(&req);
-                }
-                self.hosts.emit(HostsMsg::ShowError(msg));
-            }
-            o if wake_fb.is_some() && o.warrants_wake() => {
-                crate::app::gate::wake_and_connect(&self.window, sender, req)
-            }
-            ConnectOutcome::TrustRejected(_) if !tofu => {
-                // The stored pin no longer matches (rotated cert or impostor).
-                self.toast("Host fingerprint changed — re-pair with a PIN to continue");
+        let wake_armed =
+            self.wake_fallback
+                .take()
+                .is_some_and(|fb| match (&fb.fp_hex, &req.fp_hex) {
+                    (Some(a), Some(b)) => a == b,
+                    _ => fb.addr == req.addr && fb.port == req.port,
+                });
+        let outcome = ConnectOutcome::from_exit(code, error, ended, cancelled);
+        match orchestrate::exit_route(
+            &outcome,
+            tofu,
+            retry.as_deref(),
+            wake_armed,
+            "the client log",
+        ) {
+            ExitRoute::Silent => {}
+            ExitRoute::Banner(msg) => self.hosts.emit(HostsMsg::ShowError(msg)),
+            ExitRoute::Repair(msg) => {
+                self.toast(&msg);
                 crate::app::gate::pin_dialog(&self.window, sender, self.identity.clone(), req);
             }
-            ConnectOutcome::TrustRejected(msg) | ConnectOutcome::ConnectFailed(msg) => self
-                .hosts
-                .emit(HostsMsg::ShowError(format!("Couldn't connect — {msg}"))),
-            ConnectOutcome::RendererFailed { code: -1 } => self.hosts.emit(HostsMsg::ShowError(
-                "Stream session was killed — out of memory, or stopped by the system".into(),
-            )),
-            ConnectOutcome::RendererFailed { code } => {
-                let how = ConnectOutcome::exit_phrase(code);
-                self.hosts.emit(HostsMsg::ShowError(format!(
-                    "The session didn't start ({how}). Check the client log."
-                )))
+            ExitRoute::RedialProfile { id, msg } => match req.fp_hex.clone() {
+                Some(fp_hex) => self.reask_profile(req, fp_hex, id, msg, sender),
+                None => self.hosts.emit(HostsMsg::ShowError(msg)),
+            },
+            ExitRoute::ForgetProfileThen(msg) => {
+                self.forget_profile(&req);
+                self.hosts.emit(HostsMsg::ShowError(msg));
             }
+            ExitRoute::Wake => crate::app::gate::wake_and_connect(&self.window, sender, req),
         }
     }
 
