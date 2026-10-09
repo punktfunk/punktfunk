@@ -442,13 +442,13 @@ async fn the_relay_takes_a_page_root_and_its_paths() {
 async fn attach_channel(app: Router, id: &str) -> tokio::io::DuplexStream {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     let (mut plugin, host_io) = tokio::io::duplex(1 << 16);
-    tokio::spawn(crate::gamestream::tls::serve_conn(
+    tokio::spawn(crate::https::serve_conn(
         host_io,
         app,
         PeerCertFingerprint(None),
         PeerAddr("127.0.0.1:1".parse().unwrap()),
         None,
-        Some(crate::gamestream::tls::PipePlugin(id.into())),
+        Some(crate::https::PipePlugin(id.into())),
     ));
     let attach = format!(
         "GET /api/v1/plugins/{id}/ui/attach HTTP/1.1\r\nhost: punktfunk.host\r\n\

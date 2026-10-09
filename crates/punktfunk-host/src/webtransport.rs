@@ -23,9 +23,6 @@ pub(crate) mod mgmt;
 mod session;
 
 pub(crate) use datagrams::WebTransportPlane;
-// The management tests still name the digest by this path.
-#[cfg(test)]
-pub(crate) use crate::https::sha256;
 
 use anyhow::{Context, Result};
 use std::net::SocketAddr;

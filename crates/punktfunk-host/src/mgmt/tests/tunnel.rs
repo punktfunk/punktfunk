@@ -109,7 +109,7 @@ async fn a_tunnelled_device_token_reads_the_library_and_no_more() {
         Arc::new(crate::native_pairing::NativePairing::load_with(Some(path), None, false).unwrap());
     let key = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).unwrap();
     let spki = key.subject_public_key_info();
-    let fp = hex::encode(crate::webtransport::sha256(&spki));
+    let fp = hex::encode(crate::https::sha256(&spki));
     np.add("Samsung TV", &fp).unwrap();
     let app = test_app_native(test_state(), np);
     let lan: std::net::SocketAddr = "192.168.5.63:40100".parse().unwrap();
@@ -202,7 +202,7 @@ async fn a_paired_device_key_buys_the_cert_lane_and_no_more() {
         Arc::new(crate::native_pairing::NativePairing::load_with(Some(path), None, false).unwrap());
     let key = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).unwrap();
     let spki = key.subject_public_key_info();
-    let fp = hex::encode(crate::webtransport::sha256(&spki));
+    let fp = hex::encode(crate::https::sha256(&spki));
     let app = test_app_native(test_state(), np.clone());
 
     // The exchange, as the page runs it.

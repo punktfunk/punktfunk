@@ -45,9 +45,9 @@ use super::*;
 const LAN_KNOCK: std::net::IpAddr = std::net::IpAddr::V4(std::net::Ipv4Addr::new(192, 168, 1, 44));
 #[cfg(feature = "gamestream")]
 use crate::gamestream::cert::ServerIdentity;
-use crate::gamestream::tls::{PeerAddr, PeerCertFingerprint};
 use crate::gamestream::{LaunchSession, HTTPS_PORT, HTTP_PORT};
 use crate::host::Host;
+use crate::https::{PeerAddr, PeerCertFingerprint};
 use axum::body::Body;
 use axum::http::{Method, StatusCode};
 use http_body_util::BodyExt;
