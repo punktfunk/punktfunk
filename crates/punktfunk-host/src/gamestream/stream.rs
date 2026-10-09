@@ -862,21 +862,20 @@ fn gs_session_plan(cfg: &StreamConfig, cursor_blend: bool) -> crate::session_pla
 }
 
 /// The session's encoder for `frame` — at the client's size when a larger head is mirrored
-/// (`session_plan::open_encoder_fitted`). An IDD-push source has no pixels to submit — the
-/// driver encodes — so it gets the driver's encoder, which then owes access units through
-/// `ready_aus`; its wire domain continues at `wire_seq_base` (the loop's `au_seq`).
-#[allow(clippy::too_many_arguments)]
+/// (`session_plan::open_encoder_fitted`) — bounded by the capturer's ring depth. An IDD-push
+/// source has no pixels to submit — the driver encodes — so it gets the driver's encoder, which
+/// then owes access units through `ready_aus`; its wire domain continues at `wire_seq_base` (the
+/// loop's `au_seq`).
 fn gs_open_encoder(
     plan: &crate::session_plan::SessionPlan,
     capturer: &dyn Capturer,
     frame: &crate::capture::CapturedFrame,
     cfg: &StreamConfig,
     enc_bps: u64,
-    cursor_blend: bool,
     wire_seq_base: u32,
 ) -> Result<Box<dyn encode::Encoder>> {
-    if plan.capture.encodes_remotely() {
-        return crate::windows::idd::open_driver_encoder(
+    let mut enc = if plan.capture.encodes_remotely() {
+        crate::windows::idd::open_driver_encoder(
             plan,
             capturer,
             (frame.width, frame.height),
@@ -885,18 +884,14 @@ fn gs_open_encoder(
             gs_bit_depth(frame.format),
             None,
             wire_seq_base,
-        );
-    }
-    let (enc, _) = crate::session_plan::open_encoder_fitted(
-        frame,
-        (cfg.width, cfg.height),
-        None,
-        |width, height| {
+        )?
+    } else {
+        crate::session_plan::open_encoder_fitted(frame, (cfg.width, cfg.height), None, |w, h| {
             encode::open_video(
                 cfg.codec,
                 frame.format,
-                width,
-                height,
+                w,
+                h,
                 cfg.fps,
                 enc_bps,
                 frame.is_cuda(),
@@ -904,11 +899,15 @@ fn gs_open_encoder(
                 cfg.hdr,
                 // Stock Moonlight cannot decode 4:4:4.
                 encode::ChromaFormat::Yuv420,
-                cursor_blend,
+                plan.cursor_blend,
                 cfg.slices,
             )
-        },
-    )?;
+        })?
+        .0
+    };
+    // Without this, an in-place backend bounds itself by an env cap and the capturer rotates
+    // a texture out from under a live encode — torn frames, never an error.
+    enc.set_input_ring_depth(capturer.pipeline_depth().max(1));
     Ok(enc)
 }
 
@@ -1179,6 +1178,86 @@ impl KeyframeGate {
     }
 }
 
+/// The access units' side of the Moonlight wire: frame numbering, units in flight and the IDR
+/// gate. Apart from the encoder, so a reset hook can borrow it while the encoder is borrowed.
+struct GsWire {
+    /// Wire frameIndex of the next batch. The loop owns it, so RFI stays 1:1 with Moonlight
+    /// across encoder rebuilds.
+    au_seq: u32,
+    /// Submitted, not yet polled; the next submit is numbered `au_seq + inflight`.
+    inflight: u32,
+    /// Without RFI each request is a full IDR. One IDR resolves pending loss; NVENC
+    /// invalidate is never rate-limited.
+    keyframes: KeyframeGate,
+}
+
+impl GsWire {
+    /// The encoder restarted: what it had in flight is gone, and its IDR settles the gate.
+    fn after_reset(&mut self) {
+        self.inflight = 0;
+        self.keyframes.emitted(Instant::now());
+    }
+}
+
+/// The session's encoder and the loop state that follows it across reopens.
+struct GsEncoder {
+    enc: Box<dyn encode::Encoder>,
+    /// Format and size it runs at. The source can change under the loop with nothing
+    /// negotiating it.
+    src: (capture::PixelFormat, u32, u32),
+    /// Fixed per encoder; one without NVENC RFI skips the always-false invalidate.
+    supports_rfi: bool,
+    wire: GsWire,
+    /// Submit/poll failure, a stall or a ladder rung rebuilds in place.
+    watchdog: EncoderWatchdog,
+}
+
+impl GsEncoder {
+    /// [`gs_open_encoder`] for `frame`. Numbering starts at 1: Moonlight rejects frame 0, so
+    /// an opening IDR numbered 0 never decodes.
+    fn open(
+        plan: &crate::session_plan::SessionPlan,
+        capturer: &dyn Capturer,
+        frame: &capture::CapturedFrame,
+        cfg: &StreamConfig,
+        enc_bps: u64,
+        keyframes: KeyframeGate,
+    ) -> Result<Self> {
+        let au_seq = 1;
+        let enc = gs_open_encoder(plan, capturer, frame, cfg, enc_bps, au_seq)?;
+        Ok(GsEncoder {
+            src: (frame.format, frame.width, frame.height),
+            supports_rfi: enc.caps().supports_rfi,
+            enc,
+            wire: GsWire {
+                au_seq,
+                inflight: 0,
+                keyframes,
+            },
+            watchdog: EncoderWatchdog::new(),
+        })
+    }
+
+    /// Replace the encoder at `frame`'s mode, numbered on from `au_seq`. The new one opens on
+    /// an IDR; the old one's access units in flight died with it.
+    fn reopen(
+        &mut self,
+        plan: &crate::session_plan::SessionPlan,
+        capturer: &dyn Capturer,
+        frame: &capture::CapturedFrame,
+        cfg: &StreamConfig,
+        enc_bps: u64,
+    ) -> Result<()> {
+        self.enc = gs_open_encoder(plan, capturer, frame, cfg, enc_bps, self.wire.au_seq)?;
+        self.src = (frame.format, frame.width, frame.height);
+        self.supports_rfi = self.enc.caps().supports_rfi;
+        self.enc.request_keyframe();
+        self.wire.after_reset();
+        self.watchdog.on_au();
+        Ok(())
+    }
+}
+
 /// Re-opens the virtual source on capture loss: the new capturer and its `cursor_blend`. Takes
 /// the old capturer's keepalive when the loss left its display up.
 type GsRebuild<'a> = &'a dyn Fn(Option<Box<dyn Send>>) -> Result<(Box<dyn Capturer>, bool)>;
@@ -1192,7 +1271,7 @@ fn stream_body(
     // Virtual-display: re-open on capture loss. `None` for portal/synthetic — propagate.
     rebuild: Option<GsRebuild<'_>>,
     // Encoder composites cursor bitmaps. `false` = pointer is embedded (or absent).
-    mut cursor_blend: bool,
+    cursor_blend: bool,
     sock: &UdpSocket,
     cfg: StreamConfig,
     running: &Arc<AtomicBool>,
@@ -1237,27 +1316,19 @@ fn stream_body(
     let mut adapt_lost_seen: u64 = 0;
     // Software paths refuse in-place retarget; raising FEC then overshoots the budget.
     let mut adapt_supported = true;
-    // Wire frameIndex owned here. `submit_indexed(au_seq + enc_inflight)` keeps RFI 1:1
-    // with Moonlight across in-place rebuilds. Starts at 1: Moonlight rejects frame 0, so
-    // an opening IDR numbered 0 never decodes.
-    let mut au_seq: u32 = 1;
-    let mut enc_inflight: u32 = 0;
+    // Compositors emit on damage; re-encode the last frame or a static desktop starves the client.
+    let target_fps = cfg.fps.clamp(1, 240);
+    let frame_interval = Duration::from_secs_f64(1.0 / target_fps as f64);
     let mut plan = gs_session_plan(&cfg, cursor_blend);
-    let mut enc = gs_open_encoder(
+    let mut video = GsEncoder::open(
         &plan,
         &**capturer,
         &frame,
         &cfg,
         enc_bps,
-        cursor_blend,
-        au_seq,
+        KeyframeGate::new(keyframe_coalesce_window(frame_interval)),
     )
     .context("open video encoder for stream")?;
-    // Without this, an in-place backend bounds itself by an env cap and the capturer rotates
-    // a texture out from under a live encode — torn frames, never an error.
-    enc.set_input_ring_depth(capturer.pipeline_depth().max(1));
-    // Source can change size/format under this loop with nothing negotiating it.
-    let mut enc_src = (frame.format, frame.width, frame.height);
     let mut pk = VideoPacketizer::new(cfg.packet_size, fec_pct, cfg.min_fec);
     if cfg.encrypt_video {
         match gcm_key {
@@ -1267,9 +1338,6 @@ fn stream_body(
         }
     }
 
-    // Compositors emit on damage; re-encode the last frame or a static desktop starves the client.
-    let target_fps = cfg.fps.clamp(1, 240);
-    let frame_interval = Duration::from_secs_f64(1.0 / target_fps as f64);
     let mut fps_count: u32 = 0;
     let mut fps_t = Instant::now();
     let stream_start = Instant::now();
@@ -1318,17 +1386,9 @@ fn stream_body(
     let mut next_frame = Instant::now();
     // Loop-local so a mid-stream rebuild cannot reopen the overshoot.
     let mut cap_credit = crate::send_pacing::CaptureCredit::new(Instant::now());
-    // Session-fixed; query once so encoders without NVENC RFI skip the always-false invalidate.
-    let mut supports_rfi = enc.caps().supports_rfi;
 
     // A delivered frame clears this; a permanently dead source ends the stream after the cap.
     let mut rebuilds: u32 = 0;
-    // Submit/poll failure, a stall or a ladder rung rebuilds in place.
-    let mut watchdog = EncoderWatchdog::new();
-
-    // Without RFI each request is a full IDR. One IDR resolves pending loss; NVENC
-    // invalidate is never rate-limited.
-    let mut keyframes = KeyframeGate::new(keyframe_coalesce_window(frame_interval));
     let mut published_hdr: Option<pf_frame::HdrMeta> = None;
     // Same 500 ms cadence the native loop publishes on.
     let mut health_published_at = Instant::now();
@@ -1352,12 +1412,14 @@ fn stream_body(
         let measure = perf || stats.is_armed();
         let mut fresh = false;
         // The encoder's clocks go to the capturer's ladder before the grab, its rung after.
-        capturer.observe_encoder(enc.telemetry());
+        capturer.observe_encoder(video.enc.telemetry());
         let cap_result = capturer.try_latest();
-        run_parked_stage(&mut **capturer, &mut *enc, &mut watchdog, || {
-            enc_inflight = 0;
-            keyframes.emitted(Instant::now());
-        });
+        run_parked_stage(
+            &mut **capturer,
+            &mut *video.enc,
+            &mut video.watchdog,
+            || video.wire.after_reset(),
+        );
         match cap_result {
             Ok(Some(f)) => {
                 frame = f;
@@ -1391,7 +1453,6 @@ fn stream_body(
                     let _probe = budget.probe_scope();
                     match rebuild(keepalive.take()) {
                         Ok((c, blend)) => {
-                            cursor_blend = blend;
                             plan = gs_session_plan(&cfg, blend);
                             break c;
                         }
@@ -1409,25 +1470,10 @@ fn stream_body(
                 *capturer = new_cap;
                 capturer.set_active(true);
                 frame = capturer.next_frame().context("first frame after rebuild")?;
-                enc = gs_open_encoder(
-                    &plan,
-                    &**capturer,
-                    &frame,
-                    &cfg,
-                    enc_bps,
-                    cursor_blend,
-                    au_seq,
-                )
-                .context("reopen encoder after rebuild")?;
-                enc.set_input_ring_depth(capturer.pipeline_depth().max(1));
-                enc_src = (frame.format, frame.width, frame.height);
-                supports_rfi = enc.caps().supports_rfi;
-                enc.request_keyframe();
-                keyframes.emitted(Instant::now());
+                video
+                    .reopen(&plan, &**capturer, &frame, &cfg, enc_bps)
+                    .context("reopen encoder after rebuild")?;
                 next_frame = Instant::now();
-                // Old encoder died with in-flight AUs; numbering restarts at `au_seq`.
-                enc_inflight = 0;
-                watchdog.on_au();
                 tracing::info!("gamestream: source rebuilt — stream continues");
                 continue;
             }
@@ -1436,7 +1482,7 @@ fn stream_body(
         // Blend the live pointer, not the one this frame was captured with: a still desktop
         // repeats its frame while pointer-only buffers (Mutter) or XFixes move it.
         #[cfg(target_os = "linux")]
-        if cursor_blend {
+        if plan.cursor_blend {
             capturer.set_cursor_forward(false);
             frame.cursor = capturer.cursor();
         }
@@ -1446,41 +1492,25 @@ fn stream_body(
         // Source changed size/format with nothing negotiating it. The encoder cannot follow a
         // resolution change in place; reopen at the delivered size. GameStream has no mid-stream
         // mode message — the client is not told.
-        if enc_src != (frame.format, frame.width, frame.height) {
-            match gs_open_encoder(
-                &plan,
-                &**capturer,
-                &frame,
-                &cfg,
-                enc_bps,
-                cursor_blend,
-                au_seq,
-            ) {
-                Ok(e) => {
+        let from = video.src;
+        if from != (frame.format, frame.width, frame.height) {
+            match video.reopen(&plan, &**capturer, &frame, &cfg, enc_bps) {
+                Ok(()) => {
                     tracing::info!(
-                        from = %format!("{}x{} {:?}", enc_src.1, enc_src.2, enc_src.0),
+                        from = %format!("{}x{} {:?}", from.1, from.2, from.0),
                         to = %format!("{}x{} {:?}", frame.width, frame.height, frame.format),
                         negotiated = ?(cfg.width, cfg.height),
                         "gamestream: the capture source changed mode mid-stream — reopened the \
                          encoder at the delivered size (the client is not told; a strict decoder \
                          may not follow — see the note at this guard)"
                     );
-                    enc = e;
-                    enc_src = (frame.format, frame.width, frame.height);
-                    enc.set_input_ring_depth(capturer.pipeline_depth().max(1));
-                    supports_rfi = enc.caps().supports_rfi;
-                    enc.request_keyframe();
-                    keyframes.emitted(Instant::now());
-                    // Old encoder died with in-flight AUs; numbering restarts at `au_seq`.
-                    enc_inflight = 0;
-                    watchdog.on_au();
                 }
                 Err(e) => {
                     // First failed open is a settling driver; spend the shared reset budget.
-                    let Some(backoff) = watchdog.spend(frame_interval) else {
+                    let Some(backoff) = video.watchdog.spend(frame_interval) else {
                         return Err(e).context("reopen encoder at the source's new mode");
                     };
-                    tracing::warn!(error = %format!("{e:#}"), reset = watchdog.resets(),
+                    tracing::warn!(error = %format!("{e:#}"), reset = video.watchdog.resets(),
                         max = MAX_ENCODER_RESETS,
                         "gamestream: reopening the encoder at the source's new mode failed — retrying");
                     next_frame = Instant::now() + backoff;
@@ -1494,7 +1524,7 @@ fn stream_body(
             // Wider than RFI_MAX_RANGE is a phantom range — keyframe, never a force-reference.
             let width = (last as u32).wrapping_sub(first as u32);
             if width > punktfunk_core::packet::RFI_MAX_RANGE
-                || !(supports_rfi && enc.invalidate_ref_frames(first, last))
+                || !(video.supports_rfi && video.enc.invalidate_ref_frames(first, last))
             {
                 want_keyframe = true;
             }
@@ -1506,8 +1536,8 @@ fn stream_body(
         if capturer.take_reference_risk() {
             want_keyframe = true;
         }
-        if keyframes.due(want_keyframe, Instant::now()) {
-            enc.request_keyframe();
+        if video.wire.keyframes.due(want_keyframe, Instant::now()) {
+            video.enc.request_keyframe();
         } else if want_keyframe {
             tracing::debug!("video: keyframe request held (IDR still in flight)");
         }
@@ -1515,7 +1545,7 @@ fn stream_body(
         let hdr_meta = capturer
             .hdr_meta()
             .filter(|_| gs_bit_depth(frame.format) == 10);
-        enc.set_hdr_meta(hdr_meta);
+        video.enc.set_hdr_meta(hdr_meta);
         if hdr_meta != published_hdr {
             published_hdr = hdr_meta;
             *video_hdr.lock().unwrap() = hdr_meta;
@@ -1524,24 +1554,26 @@ fn stream_body(
         // it owes — waited for after a fresh frame, never on a repeat; every other backend
         // takes this tick's frame.
         let au_wait = if fresh { tick + frame_interval } else { tick };
-        let owed = enc.ready_aus(au_wait);
+        let owed = video.enc.ready_aus(au_wait);
         let submitted = match owed {
             Some(_) => Ok(()),
-            None => enc.submit_indexed(&frame, au_seq.wrapping_add(enc_inflight)),
+            None => video
+                .enc
+                .submit_indexed(&frame, video.wire.au_seq.wrapping_add(video.wire.inflight)),
         };
         if let Err(e) = submitted {
             // Owed AUs died with the discarded state. IDR bypasses coalesce: the client must resync.
-            let backoff = on_submit_error(&mut watchdog, e, frame_interval, || {
-                reset_stalled_encoder(&mut *enc, || {
-                    enc_inflight = 0;
-                    keyframes.emitted(Instant::now());
-                })
+            let backoff = on_submit_error(&mut video.watchdog, e, frame_interval, || {
+                reset_stalled_encoder(&mut *video.enc, || video.wire.after_reset())
             })?;
             next_frame = Instant::now() + backoff;
             std::thread::sleep(backoff);
             continue;
         }
-        enc_inflight = enc_inflight.wrapping_add(owed.map_or(1, |n| n as u32));
+        video.wire.inflight = video
+            .wire
+            .inflight
+            .wrapping_add(owed.map_or(1, |n| n as u32));
         let t_enc = tick.elapsed();
 
         // 90 kHz RTP from wall-clock so a variable capture rate stays correct.
@@ -1550,7 +1582,7 @@ fn stream_body(
         // Carry a poll error to stall recovery after already-drained AUs are handed off.
         let mut poll_err: Option<anyhow::Error> = None;
         loop {
-            let au = match enc.poll() {
+            let au = match video.enc.poll() {
                 Ok(Some(au)) => au,
                 Ok(None) => break,
                 Err(e) => {
@@ -1563,10 +1595,10 @@ fn stream_body(
             } else {
                 FrameType::P
             };
-            let idx = au_seq.wrapping_add(aus.len() as u32);
+            let idx = video.wire.au_seq.wrapping_add(aus.len() as u32);
             aus.push((au.data, ft, idx));
-            enc_inflight = enc_inflight.saturating_sub(1);
-            watchdog.on_au();
+            video.wire.inflight = video.wire.inflight.saturating_sub(1);
+            video.watchdog.on_au();
         }
         let t_pkt = tick.elapsed();
 
@@ -1580,14 +1612,14 @@ fn stream_body(
             }) {
                 Ok(()) => {
                     sent_batches += 1;
-                    au_seq = au_seq.wrapping_add(batch_len);
+                    video.wire.au_seq = video.wire.au_seq.wrapping_add(batch_len);
                 }
                 Err(std::sync::mpsc::TrySendError::Full(_)) => {
                     dropped_batches += 1;
-                    keyframes.owe();
+                    video.wire.keyframes.owe();
                     // Spend the indexes: the encoder numbered these frames, and the gap is how
                     // Moonlight learns they are lost instead of decoding past a missing reference.
-                    au_seq = au_seq.wrapping_add(batch_len);
+                    video.wire.au_seq = video.wire.au_seq.wrapping_add(batch_len);
                     if dropped_batches.is_power_of_two() {
                         tracing::warn!(
                             dropped_batches,
@@ -1606,22 +1638,21 @@ fn stream_body(
         } else {
             capturer.pipeline_depth().max(1)
         };
-        let stalled = watchdog.stalled(enc_inflight as usize, depth, frame_interval);
+        let stalled = video
+            .watchdog
+            .stalled(video.wire.inflight as usize, depth, frame_interval);
         if poll_err.is_some() || stalled.is_some() {
             let why = match &poll_err {
                 Some(e) => format!("poll failed: {e:#}"),
                 None => stalled.unwrap_or_default(),
             };
-            let Some(backoff) = watchdog.recover(frame_interval, || {
-                reset_stalled_encoder(&mut *enc, || {
-                    enc_inflight = 0;
-                    keyframes.emitted(Instant::now());
-                })
+            let Some(backoff) = video.watchdog.recover(frame_interval, || {
+                reset_stalled_encoder(&mut *video.enc, || video.wire.after_reset())
             }) else {
                 return Err(poll_err.unwrap_or_else(|| anyhow::anyhow!("{why}")))
                     .context("encoder stalled — in-place rebuild unavailable or exhausted");
             };
-            tracing::warn!(reset = watchdog.resets(), max = MAX_ENCODER_RESETS, %why,
+            tracing::warn!(reset = video.watchdog.resets(), max = MAX_ENCODER_RESETS, %why,
                 "encode stall detected — encoder rebuilt in place, forcing an IDR");
             next_frame = Instant::now() + backoff;
             std::thread::sleep(backoff);
@@ -1644,7 +1675,7 @@ fn stream_body(
             v_send.push(enqueue_us as u32);
             if owed.is_some() {
                 driver.note(crate::stats_recorder::DriverSample::from_telemetry(
-                    enc.telemetry().as_ref(),
+                    video.enc.telemetry().as_ref(),
                 ));
             }
         }
@@ -1674,7 +1705,8 @@ fn stream_body(
                     "video: streaming"
                 );
             }
-            let driver_dropped = enc
+            let driver_dropped = video
+                .enc
                 .telemetry()
                 .map_or(last_driver_dropped, |t| t.dropped_total);
             // The host sees no receiver loss, FEC recovery or EAGAIN here: those stay absent.
@@ -1745,7 +1777,7 @@ fn stream_body(
                 adapt_lost_seen = lost_total;
                 if adapt.step(lost_delta) {
                     let new_enc = gs_encoder_bps(adapt.budget_kbps, adapt.fec_pct, cfg.packet_size);
-                    if enc.reconfigure_bitrate(new_enc) {
+                    if video.enc.reconfigure_bitrate(new_enc) {
                         enc_bps = new_enc;
                         fec_pct_live.store(adapt.fec_pct, std::sync::atomic::Ordering::Relaxed);
                         stream_bps.store(new_enc, std::sync::atomic::Ordering::Relaxed);
@@ -1783,7 +1815,7 @@ fn stream_body(
         next_frame += frame_interval;
         crate::send_pacing::wait_next_tick(
             &mut **capturer,
-            &mut *enc,
+            &mut *video.enc,
             &mut cap_credit,
             &mut next_frame,
             fresh.then_some(tick),
