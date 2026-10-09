@@ -20,17 +20,14 @@ use pf_bitstream::h264::H264Planner;
 use pf_bitstream::h264::PlanWarning;
 use tracing::debug;
 use tracing::trace;
-use tracing::warn;
 
 use crate::caps::derive_caps;
 use crate::caps::query_caps;
 use crate::caps::DecodeCaps;
 use crate::caps::DecodeProfile;
 use crate::caps::NV12;
-use crate::decoder::core::session_extent;
 use crate::decoder::core::PendingPic;
 use crate::decoder::core::ScopeRef;
-use crate::decoder::core::SessionState;
 use crate::decoder::core::VkCodec;
 use crate::decoder::core::VkDecoder;
 use crate::decoder::DecodedVkFrame;
@@ -50,18 +47,13 @@ use crate::session::ParamsAction;
 use crate::session::SessionConfig;
 use crate::session::VideoSession;
 
-/// H.264 planner, caps, and stream state of a [`VkH264Decoder`].
+/// H.264 planner and stream state of a [`VkH264Decoder`].
 pub struct H264 {
     planner: H264Planner,
-    /// Caps per Std profile idc, queried once per profile.
-    caps: Option<(hh::StdVideoH264ProfileIdc, DecodeCaps)>,
     /// Outstanding recovery-point SEI ([`crate::recovery`]). Survives session
     /// rebuilds: a fact about the stream, not Vulkan objects. Distinct from the
     /// decoder's DPB-recovery latch.
     recovery_watch: RecoveryWatch,
-    /// Over-declared-level warning already fired (once per decoder; the SPS
-    /// does not change per AU).
-    level_clamp_warned: bool,
 }
 
 /// Native Vulkan Video H.264 decoder.
@@ -71,6 +63,9 @@ impl VkCodec for H264 {
     type Session = VideoSession;
     type StdRef = hh::StdVideoDecodeH264ReferenceInfo;
     type Warning = PlanWarning;
+    type Plan = AuPlan;
+    /// The Std profile idc.
+    type ProfileKey = hh::StdVideoH264ProfileIdc;
     type DpbSlotInfo<'a> = vk::VideoDecodeH264DpbSlotInfoKHR<'a>;
     const LABEL: &'static str = "h264";
 
@@ -92,6 +87,57 @@ impl VkCodec for H264 {
 
     fn forgive_unclean(&mut self) {
         self.planner.forgive_unclean();
+    }
+
+    fn profile_key(plan: &AuPlan) -> Result<Self::ProfileKey, VkDecodeError> {
+        std_profile_for(plan)
+    }
+
+    fn decode_profile(key: Self::ProfileKey) -> DecodeProfile {
+        DecodeProfile::H264(key)
+    }
+
+    /// Every H.264 profile asks for NV12.
+    unsafe fn query_caps(
+        dev: &DecodeDevice,
+        key: Self::ProfileKey,
+    ) -> Result<DecodeCaps, VkDecodeError> {
+        // SAFETY: fn contract.
+        let raw = unsafe { query_caps(dev, DecodeProfile::H264(key)) }?;
+        Ok(derive_caps(&raw, NV12)?)
+    }
+
+    fn stream_level(plan: &AuPlan) -> u32 {
+        level_to_std(plan.picture.level_idc)
+    }
+
+    fn required_slots(plan: &AuPlan) -> u32 {
+        plan.picture.max_dpb_frames as u32 + 1
+    }
+
+    fn coded_extent(plan: &AuPlan) -> vk::Extent2D {
+        vk::Extent2D {
+            width: plan.picture.coded_width,
+            height: plan.picture.coded_height,
+        }
+    }
+
+    unsafe fn create_session(
+        dev: &DecodeDevice,
+        caps: &DecodeCaps,
+        key: Self::ProfileKey,
+        slots: u32,
+        extent: vk::Extent2D,
+    ) -> Result<VideoSession, VkDecodeError> {
+        let config = SessionConfig {
+            max_coded_extent: extent,
+            max_dpb_slots: slots,
+            max_active_references: (slots - 1).min(caps.max_active_references),
+            std_profile_idc: key,
+            max_level_idc: caps.max_level_idc.code_point(),
+        };
+        // SAFETY: fn contract.
+        Ok(unsafe { VideoSession::create(dev, caps, config)? })
     }
 }
 
@@ -118,16 +164,14 @@ impl VkDecoder<H264> {
         // the profile every host encodes, so an unusable device refuses the rung
         // before its first AU. A stream in another profile re-queries at its SPS.
         // SAFETY: live device (the `wrap` contract above).
-        let raw = unsafe { query_caps(&dev, DecodeProfile::H264(H264_PROFILE_HIGH)) }
-            .map_err(VkDecodeError::from)?;
-        let caps = Some((H264_PROFILE_HIGH, derive_caps(&raw, NV12)?));
+        let caps = unsafe { H264::query_caps(&dev, H264_PROFILE_HIGH)? };
         let codec = H264 {
             planner: H264Planner::new(),
-            caps,
             recovery_watch: RecoveryWatch::new(),
-            level_clamp_warned: false,
         };
-        Ok(Self::with_codec(dev, lock, codec))
+        let mut dec = Self::with_codec(dev, lock, codec);
+        dec.caps = Some((H264_PROFILE_HIGH, caps));
+        Ok(dec)
     }
 
     /// One AU: plan, fold recovery-point SEI, submit. Zero-reorder: the
@@ -272,97 +316,6 @@ impl VkDecoder<H264> {
 
         self.settle(&plan.dpb.outputs, &plan.dpb.removed);
         Ok(self.ready.pop_front())
-    }
-
-    /// Session/caps for this plan match its extent + profile, and the stream
-    /// sits inside the device's level ceiling. DPB-depth mismatches surface
-    /// later as `CapacityMismatch` and take the same rebuild path.
-    fn ensure_state(&mut self, plan: &AuPlan) -> Result<(), VkDecodeError> {
-        let std_profile = std_profile_for(plan)?;
-        if self.codec.caps.as_ref().map(|(p, _)| *p) != Some(std_profile) {
-            // SAFETY: live device (constructor contract).
-            let raw = unsafe { query_caps(&self.dev, DecodeProfile::H264(std_profile)) }
-                .map_err(VkDecodeError::from)?;
-            self.codec.caps = Some((std_profile, derive_caps(&raw, NV12)?));
-        }
-        // A declared level above `maxLevelIdc` is not a refusal — encoders
-        // over-claim. Real demands (extent, DPB depth) are checked in
-        // `rebuild_state`; parameter sets clamp to `max_level_idc` so the
-        // driver never sees a level above caps. Compare within one codec's Std.
-        let caps_max_level = self
-            .codec
-            .caps
-            .as_ref()
-            .expect("queried above")
-            .1
-            .max_level_idc;
-        let stream_level = level_to_std(plan.picture.level_idc);
-        if stream_level > caps_max_level.code_point() && !self.codec.level_clamp_warned {
-            self.codec.level_clamp_warned = true;
-            warn!(
-                stream_level,
-                ceiling = %caps_max_level,
-                "stream declares an H.264 level above the device ceiling — the \
-                 declared level is advisory (over-declared by some encoders); \
-                 proceeding with the parameter sets clamped to the ceiling"
-            );
-        }
-        let coded = vk::Extent2D {
-            width: plan.picture.coded_width,
-            height: plan.picture.coded_height,
-        };
-        match &self.state {
-            Some(state)
-                if state.coded_extent == coded
-                    && state.session.config.std_profile_idc == std_profile =>
-            {
-                Ok(())
-            }
-            _ => self.rebuild_state(plan),
-        }
-    }
-
-    /// Retire the current generation ([`VkDecoder::retire_state`]) and build a
-    /// fresh one shaped by `plan`.
-    fn rebuild_state(&mut self, plan: &AuPlan) -> Result<(), VkDecodeError> {
-        self.retire_state()?;
-        let (std_profile, caps) = self.codec.caps.as_ref().expect("ensure_state queried caps");
-        let std_profile = *std_profile;
-        let required_slots = plan.picture.max_dpb_frames as u32 + 1;
-        if required_slots > caps.max_dpb_slots {
-            return Err(VkDecodeError::Unsupported(format!(
-                "stream needs {required_slots} DPB slots, device caps at {}",
-                caps.max_dpb_slots
-            )));
-        }
-        let coded = vk::Extent2D {
-            width: plan.picture.coded_width,
-            height: plan.picture.coded_height,
-        };
-        let image_extent = session_extent(caps, coded)?;
-        let config = SessionConfig {
-            max_coded_extent: image_extent,
-            max_dpb_slots: required_slots,
-            max_active_references: (required_slots - 1).min(caps.max_active_references),
-            std_profile_idc: std_profile,
-            max_level_idc: caps.max_level_idc.code_point(),
-        };
-        // SAFETY: live device per the constructor contract; the session is
-        // owned by a Drop type the moment it exists.
-        let state = unsafe {
-            let session = VideoSession::create(&self.dev, caps, config)?;
-            SessionState::create(
-                self,
-                caps,
-                session,
-                DecodeProfile::H264(std_profile),
-                required_slots,
-                coded,
-                image_extent,
-            )?
-        };
-        self.state = Some(state);
-        Ok(())
     }
 }
 

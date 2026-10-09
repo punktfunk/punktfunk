@@ -24,17 +24,14 @@ use pf_bitstream::h265::PlanError;
 use pf_bitstream::h265::PlanWarning;
 use tracing::debug;
 use tracing::trace;
-use tracing::warn;
 
 use crate::caps::derive_caps;
 use crate::caps::query_caps;
 use crate::caps::DecodeCaps;
 use crate::caps::DecodeProfile;
 use crate::caps_h265::H265ProfileKey;
-use crate::decoder::core::session_extent;
 use crate::decoder::core::PendingPic;
 use crate::decoder::core::ScopeRef;
-use crate::decoder::core::SessionState;
 use crate::decoder::core::VkCodec;
 use crate::decoder::core::VkDecoder;
 use crate::decoder::DecodedVkFrame;
@@ -54,17 +51,12 @@ use crate::session_h265::SessionConfigH265;
 use crate::session_h265::VideoSessionH265;
 use crate::session_h265::VpsSource;
 
-/// H.265 planner, caps, and stream state of a [`VkH265Decoder`].
+/// H.265 planner and stream state of a [`VkH265Decoder`].
 pub struct H265 {
     planner: H265Planner,
-    /// Caps per profile key. A Main→Main 10 switch is a different key and re-queries.
-    caps: Option<(H265ProfileKey, DecodeCaps)>,
     /// Outstanding recovery-point SEI ([`crate::recovery`]): stream prediction
     /// structure, unrelated to the decoder's DPB-recovery latch.
     recovery_watch: RecoveryWatch,
-    /// Over-declared-level warning has fired. Once per decoder: the condition is
-    /// a property of the stream's SPS, so repeating it per AU is noise.
-    level_clamp_warned: bool,
     /// [`VkH265Decoder::refuse_multi_slice`].
     single_slice: bool,
 }
@@ -76,6 +68,9 @@ impl VkCodec for H265 {
     type Session = VideoSessionH265;
     type StdRef = hh::StdVideoDecodeH265ReferenceInfo;
     type Warning = PlanWarning;
+    type Plan = AuPlan;
+    /// A Main→Main 10 switch is a different key: it re-queries and rebuilds.
+    type ProfileKey = H265ProfileKey;
     type DpbSlotInfo<'a> = vk::VideoDecodeH265DpbSlotInfoKHR<'a>;
     const LABEL: &'static str = "h265";
 
@@ -97,6 +92,60 @@ impl VkCodec for H265 {
 
     fn forgive_unclean(&mut self) {
         self.planner.forgive_unclean();
+    }
+
+    fn profile_key(plan: &AuPlan) -> Result<H265ProfileKey, VkDecodeError> {
+        profile_key_for(plan)
+    }
+
+    fn decode_profile(key: H265ProfileKey) -> DecodeProfile {
+        DecodeProfile::H265(key)
+    }
+
+    /// Picture format is the key's: Main → NV12, Main 10 → P010, 4:4:4 → two-plane.
+    unsafe fn query_caps(
+        dev: &DecodeDevice,
+        key: H265ProfileKey,
+    ) -> Result<DecodeCaps, VkDecodeError> {
+        let wanted = key
+            .output_format()
+            .expect("the key's constructor gated the chroma/depth combination");
+        // SAFETY: fn contract.
+        let raw = unsafe { query_caps(dev, DecodeProfile::H265(key)) }?;
+        Ok(derive_caps(&raw, wanted)?)
+    }
+
+    fn stream_level(plan: &AuPlan) -> u32 {
+        level_to_std_h265(plan.picture.level_idc)
+    }
+
+    fn required_slots(plan: &AuPlan) -> u32 {
+        plan.picture.max_dpb_frames as u32 + 1
+    }
+
+    fn coded_extent(plan: &AuPlan) -> vk::Extent2D {
+        vk::Extent2D {
+            width: plan.picture.coded_width,
+            height: plan.picture.coded_height,
+        }
+    }
+
+    unsafe fn create_session(
+        dev: &DecodeDevice,
+        caps: &DecodeCaps,
+        key: H265ProfileKey,
+        slots: u32,
+        extent: vk::Extent2D,
+    ) -> Result<VideoSessionH265, VkDecodeError> {
+        let config = SessionConfigH265 {
+            max_coded_extent: extent,
+            max_dpb_slots: slots,
+            max_active_references: (slots - 1).min(caps.max_active_references),
+            profile: key,
+            max_level_idc: caps.max_level_idc.code_point(),
+        };
+        // SAFETY: fn contract.
+        Ok(unsafe { VideoSessionH265::create(dev, caps, config)? })
     }
 }
 
@@ -126,9 +175,7 @@ impl VkDecoder<H265> {
         dev.require_codec_op(vk::VideoCodecOperationFlagsKHR::DECODE_H265, "H.265 decode")?;
         let codec = H265 {
             planner: H265Planner::new(),
-            caps: None,
             recovery_watch: RecoveryWatch::new(),
-            level_clamp_warned: false,
             single_slice: false,
         };
         Ok(Self::with_codec(dev, lock, codec))
@@ -158,17 +205,10 @@ impl VkDecoder<H265> {
         chroma_format_idc: u8,
         bit_depth_luma_minus8: u8,
     ) -> Result<(), VkDecodeError> {
-        let key = H265ProfileKey::from_negotiated(chroma_format_idc, bit_depth_luma_minus8)?;
-        let wanted = key
-            .output_format()
-            .expect("from_negotiated gated the chroma/depth combination");
-        // SAFETY: the constructor's `DeviceHandles` contract holds for this
-        // decoder's whole lifetime, so the physical device is live — the same
-        // proof `ensure_state`'s identical call carries.
-        let raw = unsafe { query_caps(&self.dev, DecodeProfile::H265(key)) }
-            .map_err(VkDecodeError::from)?;
-        derive_caps(&raw, wanted)?;
-        Ok(())
+        self.probe_key(H265ProfileKey::from_negotiated(
+            chroma_format_idc,
+            bit_depth_luma_minus8,
+        )?)
     }
 
     /// One AU: plan, fold recovery-point SEI, submit.
@@ -336,97 +376,6 @@ impl VkDecoder<H265> {
 
         self.settle(&plan.dpb.outputs, &plan.dpb.removed);
         Ok(self.ready.pop_front())
-    }
-
-    /// Session/caps for this plan exist and match its extent + profile.
-    /// DPB-depth mismatches surface later as `plan_to_vk_h265`'s
-    /// `CapacityMismatch` and take the same rebuild path.
-    fn ensure_state(&mut self, plan: &AuPlan) -> Result<(), VkDecodeError> {
-        let key = profile_key_for(plan)?;
-        if self.codec.caps.as_ref().map(|(k, _)| *k) != Some(key) {
-            let wanted = key
-                .output_format()
-                .expect("from_stream gated the chroma/depth combination");
-            // SAFETY: live device (constructor contract).
-            let raw = unsafe { query_caps(&self.dev, DecodeProfile::H265(key)) }
-                .map_err(VkDecodeError::from)?;
-            self.codec.caps = Some((key, derive_caps(&raw, wanted)?));
-        }
-        // A declared level above `maxLevelIdc` is not a refusal. SPS level is
-        // a claim; encoders over-declare. Real limits are coded extent and DPB
-        // depth in `rebuild_state`. Parameter sets clamp to the ceiling so the
-        // driver never sees a level above its caps.
-        let caps_max_level = self
-            .codec
-            .caps
-            .as_ref()
-            .expect("queried above")
-            .1
-            .max_level_idc;
-        let stream_level = level_to_std_h265(plan.picture.level_idc);
-        if stream_level > caps_max_level.code_point() && !self.codec.level_clamp_warned {
-            self.codec.level_clamp_warned = true;
-            warn!(
-                stream_level,
-                ceiling = %caps_max_level,
-                "stream declares an H.265 level above the device ceiling — the \
-                 declared level is advisory (over-declared by some encoders); \
-                 proceeding with the parameter sets clamped to the ceiling"
-            );
-        }
-        let coded = vk::Extent2D {
-            width: plan.picture.coded_width,
-            height: plan.picture.coded_height,
-        };
-        match &self.state {
-            Some(state) if state.coded_extent == coded && state.session.config.profile == key => {
-                Ok(())
-            }
-            _ => self.rebuild_state(plan),
-        }
-    }
-
-    /// Retire the current generation ([`VkDecoder::retire_state`]) and build a
-    /// fresh one shaped by `plan`.
-    fn rebuild_state(&mut self, plan: &AuPlan) -> Result<(), VkDecodeError> {
-        self.retire_state()?;
-        let (key, caps) = self.codec.caps.as_ref().expect("ensure_state queried caps");
-        let key = *key;
-        let required_slots = plan.picture.max_dpb_frames as u32 + 1;
-        if required_slots > caps.max_dpb_slots {
-            return Err(VkDecodeError::Unsupported(format!(
-                "stream needs {required_slots} DPB slots, device caps at {}",
-                caps.max_dpb_slots
-            )));
-        }
-        let coded = vk::Extent2D {
-            width: plan.picture.coded_width,
-            height: plan.picture.coded_height,
-        };
-        let image_extent = session_extent(caps, coded)?;
-        let config = SessionConfigH265 {
-            max_coded_extent: image_extent,
-            max_dpb_slots: required_slots,
-            max_active_references: (required_slots - 1).min(caps.max_active_references),
-            profile: key,
-            max_level_idc: caps.max_level_idc.code_point(),
-        };
-        // SAFETY: live device per the constructor contract; the session is
-        // owned by a Drop type the moment it exists.
-        let state = unsafe {
-            let session = VideoSessionH265::create(&self.dev, caps, config)?;
-            SessionState::create(
-                self,
-                caps,
-                session,
-                DecodeProfile::H265(key),
-                required_slots,
-                coded,
-                image_extent,
-            )?
-        };
-        self.state = Some(state);
-        Ok(())
     }
 }
 
