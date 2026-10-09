@@ -1,19 +1,6 @@
-# pacman install scriptlet — mirrors the RPM %post / deb postinst.
-_ensure_update_group() {
-  # The (empty) opt-in group for web-console-triggered updates — nobody is auto-added.
-  getent group punktfunk-update >/dev/null 2>&1 || groupadd --system punktfunk-update 2>/dev/null || true
-}
-
-_ensure_punktfunk_group() {
-  # Owns the usbip vhci attach/detach nodes (60-punktfunk.rules). Separate from 'input' on
-  # purpose: writing 'attach' materialises an arbitrary emulated USB device, which is a root-only
-  # kernel primitive and must not ride on the group users are told to join for gamepads
-  # (security-review 2026-08-05 M-4). It is ALSO the group pf-dm-helper authorizes on (its polkit
-  # action must stay allow_any, so membership is the real gate), i.e. what a managed gamescope
-  # takeover needs to stop the display manager. Creating the group is necessary and NOT sufficient
-  # for either use: membership is.
-  getent group punktfunk >/dev/null 2>&1 || groupadd --system punktfunk 2>/dev/null || true
-}
+# pacman install scriptlet: the capabilities and the first-run hints. The host state every format
+# shares (groups, udev, sysctl, firewall notes, conflict check) is usr/lib/punktfunk/post-install,
+# called root-relative because pacman runs this from the install root.
 
 # NO capability on the host binary — and an active removal of the one 0.26.0-1 granted.
 #
@@ -83,14 +70,8 @@ _grant_worker_sched_capability() {
 }
 
 post_install() {
-  _ensure_update_group
-  _ensure_punktfunk_group
   _revoke_sched_capability
   _grant_worker_sched_capability
-  udevadm control --reload-rules 2>/dev/null || true
-  udevadm trigger --subsystem-match=misc 2>/dev/null || true
-  # Apply the UDP socket-buffer tuning now (also auto-applied at boot by systemd-sysctl).
-  sysctl -p /usr/lib/sysctl.d/99-punktfunk-net.conf >/dev/null 2>&1 || true
   cat <<'MSG'
 punktfunk-host installed.
   1. Add yourself to the 'input' group for virtual gamepads:
@@ -129,85 +110,12 @@ MSG
        sudo firewall-cmd --reload
 MSG
   fi
-  # Conflicting Moonlight-compatible host (Sunshine/Apollo/...): reuse the host's own detector so
-  # the warning lives in one place. Exit 1 = found; never fail the install on it.
-  if command -v punktfunk-host >/dev/null 2>&1; then
-    if ! conflict="$(punktfunk-host detect-conflicts 2>/dev/null)"; then
-      printf '\n%s\n' "$conflict"
-    fi
-  fi
+  usr/lib/punktfunk/post-install
 }
 
 post_upgrade() {
-  _ensure_update_group
-  # Also on UPGRADE, not just post_install: 'punktfunk' was introduced in 0.25.0, so every box that
-  # reached it by `pacman -Syu` from 0.24.x ran only this function and never got the group at all —
-  # leaving 60-punktfunk.rules to chgrp to a nonexistent group, the vhci attach/detach nodes
-  # root-only, and the virtual Steam Deck pad silently unable to attach. groupadd is idempotent, so
-  # this is a no-op on boxes that installed fresh.
-  _ensure_punktfunk_group
-  # Strip the cap_sys_nice 0.26.0-1 granted: it makes the host unidentifiable to KWin (see above).
   _revoke_sched_capability
-  # And (re-)grant it to the encode worker. On UPGRADE too, and this one is not belt-and-braces:
-  # pacman writes a REPLACED binary as a new inode, file capabilities live on the inode, so the
-  # grant is gone after every single upgrade unless it is re-applied here.
+  # A replaced binary is a new inode, and the old grant went with the old one.
   _grant_worker_sched_capability
-  udevadm control --reload-rules 2>/dev/null || true
-  sysctl -p /usr/lib/sysctl.d/99-punktfunk-net.conf >/dev/null 2>&1 || true
-  _warn_stale_firewall_ports
-}
-
-# An open firewall keeps the ports a profile had when it was allowed: ufw stores the expanded rules,
-# and a running firewalld serves the service it last loaded. Name each profile that lacks a port this
-# package added, with the command that refreshes it. The running firewall stays the operator's call.
-_warn_stale_firewall_ports() {
-  # `ufw status verbose` prints each rule with its EXPANDED ports — "47992/tcp (punktfunk-web)"
-  # before the refresh, "47992,47993/tcp (punktfunk-web)" after — so one listing answers both "is
-  # the profile allowed at all" and "does that rule know the new port". (Plain `ufw status` prints
-  # the profile NAME instead, which cannot tell the two apart.)
-  if command -v ufw >/dev/null 2>&1 &&
-     ufw status verbose 2>/dev/null | grep -q 'punktfunk-web' &&
-     ! ufw status verbose 2>/dev/null | grep -q '47993'; then
-    cat <<'MSG'
-
-punktfunk: your ufw rule for 'punktfunk-web' predates TCP 47993, the separate origin plugin UIs
-are served from. Until it is refreshed, plugin interfaces will not load in the web console:
-     sudo ufw app update punktfunk-web && sudo ufw reload
-MSG
-  fi
-  if command -v ufw >/dev/null 2>&1 &&
-     ufw status verbose 2>/dev/null | grep -q 'punktfunk-native' &&
-     ! ufw status verbose 2>/dev/null | grep -q '9778'; then
-    cat <<'MSG'
-
-punktfunk: your ufw rule for 'punktfunk-native' predates UDP 9778, browser streaming. Until it is
-refreshed, a browser cannot connect to this host:
-     sudo ufw app update punktfunk-native && sudo ufw reload
-MSG
-  fi
-  # `--info-service` asks the DAEMON, which answers from the definition it loaded at its last
-  # (re)start — precisely the stale copy we are warning about. The file on disk already says 47993.
-  if command -v firewall-cmd >/dev/null 2>&1 &&
-     firewall-cmd --state >/dev/null 2>&1 &&
-     firewall-cmd --query-service=punktfunk-web >/dev/null 2>&1 &&
-     ! firewall-cmd --info-service=punktfunk-web 2>/dev/null | grep -q '47993'; then
-    cat <<'MSG'
-
-punktfunk: the punktfunk-web firewalld service now also covers TCP 47993, the separate origin
-plugin UIs are served from. Reload so the running firewall picks it up, or plugin interfaces will
-not load in the web console:
-     sudo firewall-cmd --reload
-MSG
-  fi
-  if command -v firewall-cmd >/dev/null 2>&1 &&
-     firewall-cmd --state >/dev/null 2>&1 &&
-     firewall-cmd --query-service=punktfunk-native >/dev/null 2>&1 &&
-     ! firewall-cmd --info-service=punktfunk-native 2>/dev/null | grep -q '9778'; then
-    cat <<'MSG'
-
-punktfunk: the punktfunk-native firewalld service now also covers UDP 9778, browser streaming.
-Reload so the running firewall picks it up, or a browser cannot connect to this host:
-     sudo firewall-cmd --reload
-MSG
-  fi
+  usr/lib/punktfunk/post-install
 }

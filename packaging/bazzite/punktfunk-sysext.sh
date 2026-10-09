@@ -209,13 +209,17 @@ post_merge() {
     echo "!! (an OS release the image doesn't match? 'punktfunk-sysext update' fetches the right one)" >&2
     return 1
   fi
-  # What the RPM scriptlets would have done: pick up the uinput/uhid rule + the UDP buffer
-  # sysctl now, no reboot. At boot the image's punktfunk-sysctl.service re-applies the sysctl.
-  udevadm control --reload 2>/dev/null || :
-  udevadm trigger --subsystem-match=misc 2>/dev/null || :
-  for f in /usr/lib/sysctl.d/99-punktfunk-net.conf /usr/lib/sysctl.d/99-punktfunk-client-net.conf; do
-    [ -f "$f" ] && sysctl -q -p "$f" 2>/dev/null || :
-  done
+  # The host state every package format shares: groups, udev, sysctl, the seat directories, the
+  # ds_inhibit SELinux module, firewall notes. An image older than that helper carries the same
+  # steps in its own copy of this script.
+  if [ -x /usr/libexec/punktfunk/post-install ]; then
+    /usr/libexec/punktfunk/post-install
+  else
+    /usr/bin/punktfunk-sysext reapply || :
+  fi
+  if [ -f /usr/lib/sysctl.d/99-punktfunk-client-net.conf ]; then
+    sysctl -q -p /usr/lib/sysctl.d/99-punktfunk-client-net.conf 2>/dev/null || :
+  fi
   # polkitd keeps the rules it read at boot and misses a merge swapping /usr under it, so a rule
   # an update adds (the door switch's) refuses until reboot. Restarting it rereads them.
   systemctl try-restart polkit.service 2>/dev/null || :
@@ -235,21 +239,6 @@ post_merge() {
   install -Dm0644 /usr/lib/modules-load.d/punktfunk.conf /etc/modules-load.d/punktfunk.conf 2>/dev/null || :
   install -Dm0644 /usr/lib/udev/rules.d/60-punktfunk.rules /etc/udev/rules.d/60-punktfunk.rules 2>/dev/null || :
   udevadm control --reload 2>/dev/null || :
-  # The (empty) opt-in group for web-console-triggered updates (the sysext ships the pf-update
-  # helper + unit + polkit rule in its /usr; the group can't ride an image) — nobody is auto-added.
-  getent group punktfunk-update >/dev/null 2>&1 || groupadd --system punktfunk-update 2>/dev/null || :
-  # 'punktfunk' owns the vhci attach/detach nodes the rule we just mirrored into /etc chgrp's to.
-  # A group cannot ride an image either (/etc/group is host state), and the deb/rpm scriptlets that
-  # would normally create it never run on an image-based install — so without this the chgrp fails,
-  # attach/detach stay root-only and the virtual Steam Deck pad never attaches. Deliberately NOT
-  # 'input': writing 'attach' materialises an arbitrary emulated USB device (review 2026-08-05 M-4),
-  # so it stays a group users join on purpose — see `ujust add-user-to-input-group` for the other one.
-  getent group punktfunk >/dev/null 2>&1 || groupadd --system punktfunk 2>/dev/null || :
-  # The seat supervisor's directories and modes: the RPM's %post does this, and a sysext's
-  # tmpfiles.d only exists once merged. The daemon is not enabled here; the console turns seats on.
-  if [ -f /usr/lib/tmpfiles.d/punktfunk-seats.conf ]; then
-    systemd-tmpfiles --create /usr/lib/tmpfiles.d/punktfunk-seats.conf 2>/dev/null || :
-  fi
   # Creating the group is necessary but NOT sufficient, and the difference is invisible until a
   # stream fails: `pf-dm-helper` gates on MEMBERSHIP, so a host whose user never joined gets
   # "stopping the display manager needs privilege" on every managed takeover — sddm's autologin
@@ -275,22 +264,6 @@ post_merge() {
   # Re-fire the vhci rule against the (possibly already-present) controller so attach/detach pick up
   # the input-group ownership even when the module's original add event predated the reloaded rule.
   udevadm trigger --subsystem-match=platform --sysname-match='vhci_hcd.*' 2>/dev/null || :
-  # ds_inhibit dontaudit drop-in (Bazzite ships steamos-manager; keyed on its binary): Valve's
-  # ds_inhibit walks /proc/*/fd on every open/close of a hid-playstation hidraw — exactly what the
-  # virtual DualSense is — and SELinux denies steamos_manager_t that walk at ~324 AVCs/sec;
-  # setroubleshootd amplifies the flood into a box-wide stall that starves the stream (gamescope
-  # 0 fps, encode submit ~150 ms/frame). The policy STORE is host state (/var/lib/selinux), so the
-  # image carries only the CIL source and the module must be inserted here. Keyed on the module
-  # NAME for idempotence (a policy rebuild costs seconds every merge otherwise — if the rules ever
-  # change, RENAME the file and every reference so existing installs converge). Rationale and the
-  # dontaudit-vs-allow choice: the .cil header / packaging/bazzite/README.md.
-  if command -v semodule >/dev/null 2>&1 && [ -e /usr/lib/steamos-manager ] \
-     && [ -f /usr/share/punktfunk/selinux/punktfunk-ds-inhibit.cil ] \
-     && ! semodule -l 2>/dev/null | grep -qx punktfunk-ds-inhibit; then
-    echo "installing SELinux drop-in 'punktfunk-ds-inhibit' (silences the steamos-manager ds_inhibit audit flood)…"
-    semodule -i /usr/share/punktfunk/selinux/punktfunk-ds-inhibit.cil \
-      || echo "!! semodule -i failed — the ds_inhibit audit flood stays live; see packaging/bazzite/README.md" >&2
-  fi
   # The /etc payload a sysext can't carry. The gamescope-session drop-in is %config(noreplace):
   # only seed it, never clobber a local edit. Older images also copied a global tray autostart
   # entry; the host now writes a per-user one.

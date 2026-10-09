@@ -402,6 +402,9 @@ install -Dm0755 target/release/pf-update %{buildroot}%{_libexecdir}/punktfunk/pf
 install -Dm0644 packaging/linux/punktfunk-update.service %{buildroot}%{_unitdir}/punktfunk-update.service
 install -Dm0644 packaging/linux/49-punktfunk-update.rules %{buildroot}%{_datadir}/polkit-1/rules.d/49-punktfunk-update.rules
 install -Dm0755 packaging/linux/restart-user-units.sh %{buildroot}%{_libexecdir}/punktfunk/restart-user-units
+# The host state %%post shares with every other format, and the groups (rpm applies the file).
+install -Dm0755 packaging/linux/post-install.sh %{buildroot}%{_libexecdir}/punktfunk/post-install
+install -Dm0644 packaging/linux/punktfunk.sysusers %{buildroot}%{_sysusersdir}/punktfunk.conf
 
 # The seat supervisor: a root daemon and the helpers its units run. Installed, never enabled.
 install -Dm0755 target/release/punktfunk-seats %{buildroot}%{_libexecdir}/punktfunk/punktfunk-seats
@@ -504,6 +507,8 @@ sed -i 's#%{_libexecdir}/punktfunk/pf-update#%{_libexecdir}/punktfunk/pf-update-
        %{buildroot}%{_unitdir}/punktfunk-client-update.service
 install -Dm0644 packaging/linux/49-punktfunk-client-update.rules \
                 %{buildroot}%{_datadir}/polkit-1/rules.d/49-punktfunk-client-update.rules
+# The punktfunk-update group, from the file the host ships under its own name.
+install -Dm0644 packaging/linux/punktfunk.sysusers %{buildroot}%{_sysusersdir}/punktfunk-client.conf
 # Install-kind + channel marker for the CLIENT, read by `punktfunk-client --check-update`. Its
 # own DIRECTORY, not just its own filename: the host subpackage claims %{_datadir}/%{name}/*
 # with a glob, so a sibling file there would be owned by both and `dnf install punktfunk
@@ -530,8 +535,8 @@ install -Dm0755 packaging/bazzite/kde-desktop-setup.sh %{buildroot}%{_datadir}/%
 # SELinux dontaudit drop-in for Bazzite/SteamOS: Valve's ds_inhibit (steamos-manager) walks
 # /proc/*/fd on every open/close of a hid-playstation hidraw — our virtual DualSense — and the
 # denied walk sprays ~324 AVCs/sec, which setroubleshootd amplifies into a box-wide stall that
-# starves the stream. Shipped as CIL source (the policy STORE is host state); inserted by %%post
-# below / punktfunk-sysext post_merge where steamos-manager exists. See the file's header.
+# starves the stream. Shipped as CIL source (the policy STORE is host state); inserted by
+# post-install.sh where steamos-manager exists. See the file's header.
 install -Dm0644 packaging/bazzite/punktfunk-ds-inhibit.cil \
                 %{buildroot}%{_datadir}/%{name}/selinux/punktfunk-ds-inhibit.cil
 # Layered-update helper for rpm-ostree hosts: `rpm-ostree upgrade` only re-resolves layered
@@ -671,6 +676,8 @@ install -Dm0755 "$(command -v bun)" %{buildroot}%{_libexecdir}/punktfunk-bun/bun
 %{_libexecdir}/punktfunk/pf-dm-helper
 %{_libexecdir}/punktfunk/pf-update
 %{_libexecdir}/punktfunk/restart-user-units
+%{_libexecdir}/punktfunk/post-install
+%{_sysusersdir}/punktfunk.conf
 %{_unitdir}/punktfunk-update.service
 %{_datadir}/polkit-1/rules.d/49-punktfunk-update.rules
 %{_datadir}/polkit-1/rules.d/49-punktfunk-power.rules
@@ -730,6 +737,7 @@ install -Dm0755 "$(command -v bun)" %{buildroot}%{_libexecdir}/punktfunk-bun/bun
 %{_libexecdir}/punktfunk/pf-update-client
 %{_unitdir}/punktfunk-client-update.service
 %{_datadir}/polkit-1/rules.d/49-punktfunk-client-update.rules
+%{_sysusersdir}/punktfunk-client.conf
 %dir %{_datadir}/punktfunk-client
 %{_datadir}/punktfunk-client/install-kind
 
@@ -764,10 +772,6 @@ install -Dm0755 "$(command -v bun)" %{buildroot}%{_libexecdir}/punktfunk-bun/bun
 %endif
 
 %post client
-# The (empty) opt-in group for one-tap client updates — nobody is auto-added. Also created by
-# the host subpackage's %%post; groupadd is idempotent, so whichever lands first wins and the
-# other is a no-op.
-getent group punktfunk-update >/dev/null 2>&1 || groupadd --system punktfunk-update 2>/dev/null || :
 # Pick up the DualSense hidraw rule without a reboot (best-effort; on rpm-ostree it
 # applies on the next boot into the layered deployment).
 udevadm control --reload-rules 2>/dev/null || :
@@ -782,32 +786,6 @@ update-desktop-database %{_datadir}/applications >/dev/null 2>&1 || :
 
 %if %{with host}
 %post
-# The (empty) opt-in group for web-console-triggered updates — nobody is auto-added.
-getent group punktfunk-update >/dev/null 2>&1 || groupadd --system punktfunk-update 2>/dev/null || :
-# Owns the usbip vhci attach/detach nodes (60-punktfunk.rules). Deliberately NOT 'input': writing
-# 'attach' materialises an arbitrary emulated USB device — a root-only kernel primitive that must
-# not ride on the group users are told to join for gamepads (security-review 2026-08-05 M-4).
-# It is ALSO the group `pf-dm-helper` authorizes on (the polkit action must stay `allow_any`, so
-# membership is the real gate) — so it is what a managed gamescope takeover needs to stop the
-# display manager. Creating it is necessary and NOT sufficient for either use: membership is.
-getent group punktfunk >/dev/null 2>&1 || groupadd --system punktfunk 2>/dev/null || :
-# Reload udev so /dev/uinput picks up the new rule without a reboot (best-effort).
-udevadm control --reload-rules 2>/dev/null || :
-udevadm trigger --subsystem-match=misc 2>/dev/null || :
-# Apply the UDP socket-buffer tuning (also auto-applied at boot by systemd-sysctl; on rpm-ostree
-# it takes effect on the next boot into the layered deployment).
-sysctl -p %{_prefix}/lib/sysctl.d/99-punktfunk-net.conf >/dev/null 2>&1 || :
-# Bazzite/SteamOS only (keyed on the steamos-manager binary): insert the ds_inhibit dontaudit
-# drop-in — Valve's ds_inhibit walks /proc on every open/close of our virtual DualSense's hidraw,
-# the denied walk sprays AVCs, and setroubleshootd amplifies that into a box-wide stall (see
-# packaging/bazzite/punktfunk-ds-inhibit.cil). Keyed on the module NAME for idempotence (a policy
-# rebuild costs seconds — rename the file if the rules ever change). Best-effort and never fatal:
-# rpm-ostree's scriptlet sandbox may refuse semodule; the sysext post_merge and the README's
-# manual command cover that path.
-if command -v semodule >/dev/null 2>&1 && [ -e /usr/lib/steamos-manager ] &&
-   ! semodule -l 2>/dev/null | grep -qx punktfunk-ds-inhibit; then
-    semodule -i %{_datadir}/%{name}/selinux/punktfunk-ds-inhibit.cil >/dev/null 2>&1 || :
-fi
 echo "punktfunk installed. Add yourself to the 'input' group (sudo usermod -aG input \$USER)"
 # Naming only the usbip pad here is how a Nobara host shipped broken: its owner had no Deck pad, so
 # they correctly skipped this group — and then every managed gamescope takeover degraded silently,
@@ -825,32 +803,9 @@ if command -v firewall-cmd >/dev/null 2>&1; then
     echo "    sudo firewall-cmd --permanent --add-service=punktfunk-gamestream && sudo firewall-cmd --reload"
     echo "    (use punktfunk-native for the native-only host)"
 fi
-# A running firewalld serves the service it last loaded, so a port this upgrade added to the XML is
-# closed until a reload. `--info-service` asks the daemon, i.e. reads that stale copy.
-if command -v firewall-cmd >/dev/null 2>&1 &&
-   firewall-cmd --state >/dev/null 2>&1 &&
-   firewall-cmd --query-service=punktfunk-web >/dev/null 2>&1 &&
-   ! firewall-cmd --info-service=punktfunk-web 2>/dev/null | grep -q '47993'; then
-    echo ""
-    echo "punktfunk: the punktfunk-web firewalld service now also covers TCP 47993 (plugin UIs)."
-    echo "  Plugin interfaces will not load in the console until:  sudo firewall-cmd --reload"
-fi
-if command -v firewall-cmd >/dev/null 2>&1 &&
-   firewall-cmd --state >/dev/null 2>&1 &&
-   firewall-cmd --query-service=punktfunk-native >/dev/null 2>&1 &&
-   ! firewall-cmd --info-service=punktfunk-native 2>/dev/null | grep -q '9778'; then
-    echo ""
-    echo "punktfunk: the punktfunk-native firewalld service now also covers UDP 9778 (browser"
-    echo "  streaming). A browser cannot connect to this host until:  sudo firewall-cmd --reload"
-fi
-# Conflicting Moonlight-compatible host (Sunshine/Apollo/...): reuse the host's own detector so the
-# warning stays in one place. Exit 1 = something found; never fail the install on it.
-if command -v punktfunk-host >/dev/null 2>&1; then
-    if ! conflict="$(punktfunk-host detect-conflicts 2>/dev/null)"; then
-        echo ""
-        echo "$conflict"
-    fi
-fi
+# Groups, udev, sysctl, the ds_inhibit SELinux module, the stale-firewall notes and the conflict
+# check: the steps every format shares (packaging/linux/post-install.sh).
+%{_libexecdir}/punktfunk/post-install
 
 # Any punktfunk server package update restarts the running services, once per transaction.
 %transfiletriggerin -- %{_bindir}/punktfunk-host %{_datadir}/punktfunk-web %{_datadir}/punktfunk-scripting %{_libexecdir}/punktfunk-bun
@@ -859,8 +814,6 @@ fi
 
 %if %{with host}
 %post seats
-# The seat users join it and tmpfiles.d names it; the host package creates it too.
-getent group punktfunk >/dev/null 2>&1 || groupadd --system punktfunk 2>/dev/null || :
 systemd-tmpfiles --create %{_tmpfilesdir}/punktfunk-seats.conf >/dev/null 2>&1 || :
 
 %preun seats
