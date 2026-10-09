@@ -655,19 +655,23 @@ fn wanted_fourccs(hdr: bool) -> [u32; 2] {
     }
 }
 
-pub(super) struct WlHandles {
-    pub(super) slot: FrameSlot,
-    pub(super) wake: std::sync::mpsc::Receiver<()>,
-    pub(super) signals: CaptureSignals,
-    pub(super) quit: Arc<AtomicBool>,
-    pub(super) join: std::thread::JoinHandle<()>,
+// The encode loop's end of the thread `spawn` starts.
+mod capturer;
+pub(crate) use capturer::WlCapturer;
+
+struct WlHandles {
+    slot: FrameSlot,
+    wake: std::sync::mpsc::Receiver<()>,
+    signals: CaptureSignals,
+    quit: Arc<AtomicBool>,
+    join: std::thread::JoinHandle<()>,
     /// The output's mastering volume once a 10-bit PQ pool is up; `None` on an SDR capture.
-    pub(super) hdr_meta: Option<HdrMeta>,
+    hdr_meta: Option<HdrMeta>,
 }
 
 /// Spawn the capture thread for `output_name`. `want_hdr` asks for the output's packed
 /// 10-bit buffer and fails unless its description is BT.2020 PQ.
-pub(super) fn spawn(
+fn spawn(
     output_name: String,
     policy: crate::ZeroCopyPolicy,
     want_hdr: bool,
