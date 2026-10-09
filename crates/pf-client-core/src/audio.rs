@@ -534,7 +534,7 @@ struct MicData {
 /// Settings toggle, with `PUNKTFUNK_NO_AEC=1` as a one-way override off.
 /// The env var wins — escape hatch for a misbehaving canceller; nothing turns AEC back on.
 fn aec_enabled(echo_cancel: bool) -> bool {
-    echo_cancel && !std::env::var("PUNKTFUNK_NO_AEC").is_ok_and(|v| !v.is_empty() && v != "0")
+    echo_cancel && crate::env_on("PUNKTFUNK_NO_AEC") != Some(true)
 }
 
 /// Capture `target.object`: Settings pick (`PUNKTFUNK_AUDIO_SOURCE`) first, else

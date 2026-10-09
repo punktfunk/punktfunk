@@ -1477,14 +1477,12 @@ pub(super) fn pick_formats(
 ) -> Result<(vk::SurfaceFormatKHR, Option<vk::SurfaceFormatKHR>)> {
     // `PUNKTFUNK_HDR10=0` refuses the HDR10 swapchain; PQ stays shader-tonemapped.
     // Compositors advertise HDR10 on SDR desktops.
-    let colorspace_ext = colorspace_ext
-        && !std::env::var("PUNKTFUNK_HDR10")
-            .is_ok_and(|v| matches!(v.as_str(), "0" | "false" | "off" | "no"));
+    let colorspace_ext = colorspace_ext && pf_client_core::env_on("PUNKTFUNK_HDR10") != Some(false);
     // SAFETY: read-only query; `pdev` and `surface` are live on this instance.
     let formats = unsafe { surface_i.get_physical_device_surface_formats(pdev, surface) }?;
     let mut sdr = None;
     // `PUNKTFUNK_SDR_8BIT=1`: an 8-bit SDR swapchain. A compositor may scan out only those.
-    let eight_bit = std::env::var("PUNKTFUNK_SDR_8BIT").is_ok_and(|v| v != "0");
+    let eight_bit = pf_client_core::env_on("PUNKTFUNK_SDR_8BIT") == Some(true);
     let ranked: &[vk::Format] = if eight_bit {
         &[vk::Format::B8G8R8A8_UNORM, vk::Format::R8G8B8A8_UNORM]
     } else {
@@ -1600,28 +1598,25 @@ fn serve_offered(pref: PresentPref, modes: &[vk::PresentModeKHR]) -> PresentPref
 
 /// `PUNKTFUNK_VRR_FIFO=1` opts into the FIFO-first ladder for variable-refresh panels.
 fn vrr_fifo_opt_in() -> bool {
-    std::env::var("PUNKTFUNK_VRR_FIFO").is_ok_and(|v| v != "0")
+    pf_client_core::env_on("PUNKTFUNK_VRR_FIFO") == Some(true)
 }
 
 /// `PUNKTFUNK_PRESENT_WAIT2=1`: time presents with `VK_KHR_present_wait2`.
 fn present_wait2_opt_in() -> bool {
-    std::env::var("PUNKTFUNK_PRESENT_WAIT2").is_ok_and(|v| v != "0")
+    pf_client_core::env_on("PUNKTFUNK_PRESENT_WAIT2") == Some(true)
 }
 
 /// Whether to read the engine's display stamps (`VK_EXT_present_timing`) where the surface
 /// reports them. On by default on Linux; `PUNKTFUNK_PRESENT_TIMING=1` or `0` decides
 /// anywhere.
 fn present_timing_wanted() -> bool {
-    match std::env::var("PUNKTFUNK_PRESENT_TIMING") {
-        Ok(v) => v != "0",
-        Err(_) => cfg!(target_os = "linux"),
-    }
+    pf_client_core::env_on("PUNKTFUNK_PRESENT_TIMING").unwrap_or(cfg!(target_os = "linux"))
 }
 
 /// `PUNKTFUNK_FULLSCREEN_EXCLUSIVE=1`: take the monitor with `VK_EXT_full_screen_exclusive`.
 #[cfg(windows)]
 fn fullscreen_exclusive_opt_in() -> bool {
-    std::env::var("PUNKTFUNK_FULLSCREEN_EXCLUSIVE").is_ok_and(|v| v != "0")
+    pf_client_core::env_on("PUNKTFUNK_FULLSCREEN_EXCLUSIVE") == Some(true)
 }
 
 /// Resolve the present mode. `PUNKTFUNK_PRESENT_MODE` pins one; otherwise the first

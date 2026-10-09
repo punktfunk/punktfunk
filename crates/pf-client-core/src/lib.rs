@@ -163,3 +163,31 @@ pub use pf_client_video::{video_color, video_csc_spv, video_types, video_vk};
 pub use pf_client_video::{video_d3d11, video_d3d11_native};
 
 pub mod wol;
+
+/// Explicit-off for a client `PUNKTFUNK_*` var, the host's grammar: trimmed, case-insensitive
+/// `0`/`false`/`off`/`no` are off, any other present value is on, unset is `None`. A kill
+/// switch reads `!= Some(false)`, an opt-in `== Some(true)`.
+pub fn env_on(name: &str) -> Option<bool> {
+    std::env::var(name).ok().map(|v| is_on(&v))
+}
+
+fn is_on(value: &str) -> bool {
+    !matches!(
+        value.trim().to_ascii_lowercase().as_str(),
+        "0" | "false" | "off" | "no"
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    /// The host reads `PUNKTFUNK_UPDATE_CHECK=no` as off; the client must too.
+    #[test]
+    fn env_switches_read_the_hosts_off_grammar() {
+        for off in ["0", "false", "off", "no", "OFF", " No ", "0 "] {
+            assert!(!super::is_on(off), "{off:?}");
+        }
+        for on in ["1", "true", "yes", "", "garbage"] {
+            assert!(super::is_on(on), "{on:?}");
+        }
+    }
+}

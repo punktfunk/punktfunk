@@ -195,10 +195,7 @@ enum ProfileTarget {
 /// User-visible, reverted at session end, `save = false` so WirePlumber does not remember it.
 /// `PUNKTFUNK_PAD_AUDIO_PROFILE=0` leaves the card alone.
 fn ensure_pro_audio(device_id: u32) -> anyhow::Result<()> {
-    if matches!(
-        std::env::var("PUNKTFUNK_PAD_AUDIO_PROFILE").as_deref(),
-        Ok("0" | "false" | "off" | "no")
-    ) {
+    if crate::env_on("PUNKTFUNK_PAD_AUDIO_PROFILE") == Some(false) {
         anyhow::bail!(
             "the DualSense card has no four-channel profile active and \
              PUNKTFUNK_PAD_AUDIO_PROFILE=0 forbids moving it — switch the controller to \
@@ -485,10 +482,7 @@ fn pin_sink_volume(node_id: u32, channels: u32) -> anyhow::Result<()> {
 
 /// Pin the picked node to unity on every (re)correlation — a profile change remints nodes.
 fn pin_picked(name: String, sinks: &[SinkNode]) -> String {
-    if matches!(
-        std::env::var("PUNKTFUNK_PAD_SINK_VOLUME").as_deref(),
-        Ok("0" | "false" | "off" | "no")
-    ) {
+    if crate::env_on("PUNKTFUNK_PAD_SINK_VOLUME") == Some(false) {
         return name;
     }
     // `split_parent` is a name on another node's proplist; there may be no bindable object.

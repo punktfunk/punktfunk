@@ -527,7 +527,7 @@ fn connect_plan(params: &SessionParams) -> ConnectPlan {
     #[allow(unused_mut)]
     let mut preferred = params.preferred_codec;
     #[cfg(all(any(target_os = "linux", windows), feature = "pyrowave"))]
-    if std::env::var("PUNKTFUNK_PREFER_PYROWAVE").as_deref() == Ok("1") {
+    if crate::env_on("PUNKTFUNK_PREFER_PYROWAVE") == Some(true) {
         if params.vulkan.as_ref().is_some_and(|v| v.pyrowave_decode) {
             preferred = punktfunk_core::quic::CODEC_PYROWAVE;
         } else {

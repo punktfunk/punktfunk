@@ -276,7 +276,8 @@ The host also reads debugging variables not listed here; they change between rel
 
 ## Client-side (native clients)
 
-Read by the Linux and Windows clients, the Decky plugin and the `punktfunk` CLI — not the host. `PUNKTFUNK_AUDIO_HIRES` and `PUNKTFUNK_CONFIG_DIR` are also read by the host, each for its own files.
+Read by the Linux and Windows clients, the Decky plugin and the `punktfunk` CLI — not the host. `PUNKTFUNK_AUDIO_HIRES` and `PUNKTFUNK_CONFIG_DIR` are also read by the host, each for its own files. On/off variables read
+like the host's: `0`, `false`, `off` or `no` (any case) is off, any other value on.
 
 | Variable | Values | What it does |
 |---|---|---|
