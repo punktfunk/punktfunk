@@ -69,7 +69,6 @@ use speed::{SpeedProps, SpeedState};
 use std::collections::HashMap;
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
 use windows_reactor::*;
 
 #[derive(Clone, PartialEq)]
@@ -610,7 +609,7 @@ fn root(cx: &mut RenderCx, ctx: &Arc<AppCtx>) -> Element {
                         // (nobody sees the pips) and one of these hosts is mid-stream —
                         // probing it is pure noise. Sleep through and sweep after it ends.
                         if shared.session.lock().unwrap().is_running() {
-                            std::thread::sleep(Duration::from_secs(12));
+                            std::thread::sleep(crate::trust::PROBE_INTERVAL);
                             continue;
                         }
                         // `probe_known`, not a probe per host: it fans out, asks who answered
@@ -621,11 +620,11 @@ fn root(cx: &mut RenderCx, ctx: &Arc<AppCtx>) -> Element {
                             .into_iter()
                             .filter(|h| !h.addr.is_empty())
                             .collect();
-                        let online = crate::trust::probe_known(&hosts, Duration::from_millis(2500));
+                        let online = crate::trust::probe_known(&hosts, crate::trust::PROBE_TIMEOUT);
                         let map: HashMap<String, bool> =
                             hosts.iter().map(|h| h.card_key()).zip(online).collect();
                         set_probed.call(map);
-                        std::thread::sleep(Duration::from_secs(12));
+                        std::thread::sleep(crate::trust::PROBE_INTERVAL);
                     }
                 })
                 .ok();

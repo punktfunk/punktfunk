@@ -219,8 +219,8 @@ struct SeatWait {
     appear: f64,
 }
 
-/// Seconds between asks for the profile list while a seat comes up.
-const SEAT_POLL: f64 = 2.0;
+/// [`pf_client_core::profiles::SEAT_POLL`] on this file's seconds clock.
+const SEAT_POLL: f64 = pf_client_core::profiles::SEAT_POLL.as_secs_f64();
 
 struct Connecting {
     title: String,
