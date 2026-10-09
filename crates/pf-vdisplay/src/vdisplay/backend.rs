@@ -389,6 +389,38 @@ pub(crate) fn stash_topology_restore(
     }
 }
 
+/// Apply [`crate::policy::Topology`] where the only desk change is disabling heads (Hyprland,
+/// wlroots). `disable(ours)` returns the heads it turned off; a restore of exactly those lands
+/// in `slot` through [`stash_topology_restore`]. The last step of `create`: nothing fails after
+/// it, so no path disables heads and then unwinds past the hand-off.
+///
+/// `primary` logs and runs as `extend`: Wayland has no primary output, only a focused one, and
+/// the streamed head already holds focus.
+pub(crate) fn apply_exclusive(
+    tag: &str,
+    client_fp: Option<[u8; 32]>,
+    ours: &str,
+    slot: &mut Option<Box<dyn FnOnce() + Send>>,
+    disable: fn(&str) -> Vec<String>,
+    restore: fn(&[String]),
+) {
+    use crate::policy::Topology;
+    match crate::effective_topology(client_fp) {
+        Topology::Extend | Topology::Auto => {}
+        Topology::Primary => tracing::info!(
+            "{tag}: `topology: primary` has no equivalent here — Wayland has no primary output, \
+             only a focused one, which the streamed head already holds. Treating it as `extend`; \
+             use `exclusive` to disable the operator's heads."
+        ),
+        Topology::Exclusive => {
+            let disabled = disable(ours);
+            let prepared = (!disabled.is_empty())
+                .then(|| Box::new(move || restore(&disabled)) as Box<dyn FnOnce() + Send>);
+            stash_topology_restore(slot, prepared);
+        }
+    }
+}
+
 #[cfg(test)]
 mod topology_restore_tests {
     use super::stash_topology_restore;

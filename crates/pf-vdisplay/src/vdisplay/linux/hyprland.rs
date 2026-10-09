@@ -18,6 +18,7 @@
 //! an error.
 
 use super::{DisplayOwnership, Mode, SessionCastParts, VirtualDisplay, VirtualOutput};
+use crate::monitors::DISABLE_BUDGET;
 use crate::portal_cast::StopGuard;
 use anyhow::{bail, Context, Result};
 use std::collections::HashMap;
@@ -209,28 +210,6 @@ impl HyprlandDisplay {
         )))
     }
 
-    /// Apply [`crate::policy::Topology`] for `ours` and stash the restore the
-    /// registry runs on real teardown. Called at the END of `create` so nothing
-    /// can fail after it and unwind past the hand-off. Physical heads stay lit
-    /// through the portal handshake — that is also `extend`.
-    fn apply_topology(&mut self, ours: &str) {
-        use crate::policy::Topology;
-        match crate::effective_topology(self.client_fp) {
-            Topology::Extend | Topology::Auto => {}
-            Topology::Primary => warn_primary_is_not_expressible(),
-            Topology::Exclusive => {
-                let disabled = disable_other_heads(ours);
-                let prepared = (!disabled.is_empty()).then(|| {
-                    Box::new(move || restore_heads(&disabled)) as Box<dyn FnOnce() + Send>
-                });
-                // First restore wins: the retry loop calls `create` up to eight
-                // times on this instance, and only attempt 1 has heads to disable.
-                // A plain assignment overwrote it with attempt 2's `None`.
-                crate::backend::stash_topology_restore(&mut self.pending_restore, prepared);
-            }
-        }
-    }
-
     /// Record `name` and return the output whose workspace it replaces.
     fn replace_output(&mut self, name: &str) -> Option<String> {
         self.prev_output.replace(name.to_string())
@@ -398,7 +377,14 @@ impl VirtualDisplay for HyprlandDisplay {
             "hyprland headless output ready"
         );
         // Last, so no failure path unwinds past the restore hand-off.
-        self.apply_topology(&name);
+        crate::backend::apply_exclusive(
+            "hyprland",
+            self.client_fp,
+            &name,
+            &mut self.pending_restore,
+            disable_other_heads,
+            restore_heads,
+        );
         // Hyprland gives each replacement an empty workspace. Carry the active
         // workspace only after every fallible setup step has completed.
         if let Some(prev) = self.replace_output(&name) {
@@ -731,60 +717,19 @@ fn focus_argv(name: &str) -> [&str; 3] {
     ["dispatch", "focusmonitor", name]
 }
 
-/// `topology: primary` has no expression here. Wayland has no primary output;
-/// Hyprland's nearest is the focused monitor, which [`focus_output`] already
-/// points at the streamed head. Distinct from `exclusive`, which changes the desk.
-fn warn_primary_is_not_expressible() {
-    tracing::info!(
-        "hyprland: `topology: primary` has no equivalent here — Wayland has no primary output and \
-         Hyprland has only a FOCUSED monitor, which the streamed head already holds. Treating it \
-         as `extend`; use `exclusive` to actually disable the operator's heads."
-    );
-}
-
-/// DPMS every head that is not ours and not a sibling's, for a **gamescope**
-/// session honoring `Topology::Exclusive` — see [`crate::panel_dpms`].
+/// DPMS every head but a sibling's for a **gamescope** `exclusive` stream
+/// ([`crate::monitors::dpms_others`]). Records only heads [`dpms_one`] moved: the
+/// dispatcher toggles, so a re-light of an untouched head would darken it.
 ///
-/// Distinct from [`disable_other_heads`]: disabling a Hyprland head's only
-/// known undo is re-reading the operator's whole config ([`restore_heads`]),
-/// dropping every runtime override. DPMS is a separate axis (`dispatch dpms on
-/// <name>` does not re-enable a *disabled* head). A gamescope spawn owns no
-/// Hyprland output, hence empty `ours`. No keep list: the gamescope darken
-/// ignores `keep_monitors` on every compositor.
+/// Not [`disable_other_heads`]: a disabled Hyprland head's only undo is re-reading the
+/// whole config ([`restore_heads`]). `dispatch dpms on` does not re-enable a disabled head.
 pub(crate) fn dpms_other_heads(on: bool) -> Vec<String> {
-    let Ok(heads) = list_monitors() else {
-        return Vec::new();
-    };
-    let mut changed = Vec::new();
-    for name in crate::monitors::heads_to_darken(&heads, "", &[]) {
-        match dpms_one(&name, on) {
-            // Only a head this call moved. The dispatcher toggles, so "fixing"
-            // one already in the wanted state would break it, and the re-light
-            // would then toggle a head we never darkened.
-            Ok(true) => changed.push(name),
-            Ok(false) => {}
-            Err(e) => tracing::warn!(
-                output = %name, error = %format!("{e:#}"),
-                "hyprland: monitor not blanked for `topology: exclusive`"
-            ),
-        }
-    }
-    changed
+    crate::monitors::dpms_others("hyprland", list_monitors(), |n| dpms_one(n, on))
 }
 
 /// DPMS on for exactly `names`, the heads [`dpms_other_heads`] darkened. The ones now on.
 pub(crate) fn relight_heads(names: &[String]) -> Vec<String> {
-    names
-        .iter()
-        .filter(|name| match dpms_one(name, true) {
-            Ok(_) => true,
-            Err(e) => {
-                tracing::warn!(output = %name, error = %format!("{e:#}"), "hyprland: monitor not re-lit");
-                false
-            }
-        })
-        .cloned()
-        .collect()
+    crate::monitors::relight("hyprland", names, |n| dpms_one(n, true))
 }
 
 /// DPMS state Hyprland reports for `name` (`hyprctl -j monitors all`'s
@@ -1165,51 +1110,19 @@ fn lua_workspace_focus_expr(ws: &str) -> String {
     format!("hl.dsp.focus({{ workspace = \"{ws}\" }})")
 }
 
-/// Disable every head [`crate::monitors::darkens`] names for an `exclusive`
-/// session, returning the ones actually disabled (input to [`restore_heads`]).
-/// `managed` is [`is_managed_output`], so a concurrent session is never blacked
-/// out, and `keep_monitors` stays lit. Best-effort per head.
+/// Disable the heads an `exclusive` session darkens ([`crate::monitors::disable_for_exclusive`]),
+/// returning the ones [`restore_heads`] re-enables. `managed` is [`is_managed_output`], so a
+/// concurrent session is never blacked out; `keep_monitors` stays lit.
 fn disable_other_heads(ours: &str) -> Vec<String> {
-    let heads = match list_monitors() {
-        Ok(h) => h,
-        Err(e) => {
-            tracing::warn!(
-                error = %format!("{e:#}"),
-                "hyprland: could not enumerate monitors for `topology: exclusive` — leaving the \
-                 operator's heads enabled (the session still streams, as `extend`)"
-            );
-            return Vec::new();
-        }
-    };
     let keep = crate::policy::prefs().get().keep_monitors;
-    let targets = crate::monitors::heads_to_darken(&heads, ours, &keep);
-    if targets.is_empty() {
-        tracing::info!(
-            "hyprland: `topology: exclusive` had nothing to disable — no enabled head besides the \
-             managed and kept ones (a headless box, or a sibling session already took the desk)"
-        );
-        return Vec::new();
-    }
-    let mut disabled = Vec::new();
-    for name in targets {
-        match disable_head(&name) {
-            Ok(()) => disabled.push(name),
-            Err(e) => tracing::warn!(
-                output = %name, error = %format!("{e:#}"),
-                "hyprland: head not disabled for `topology: exclusive` — it stays lit"
-            ),
-        }
-    }
-    if !disabled.is_empty() {
-        tracing::info!(
-            ?disabled,
-            "hyprland: `topology: exclusive` — the streamed output is now the desk"
-        );
-        // Disabling re-homes workspaces and the compositor picks the new
-        // focus. Re-assert ours so window placement still lands on the stream.
-        focus_output(ours);
-    }
-    disabled
+    crate::monitors::disable_for_exclusive(
+        "hyprland",
+        list_monitors(),
+        ours,
+        &keep,
+        disable_head,
+        focus_output,
+    )
 }
 
 /// Disable one head, both config eras, confirming by read-back.
@@ -1274,10 +1187,6 @@ fn wait_head_disabled(name: &str, timeout: Duration) -> bool {
 fn head_is_enabled(name: &str) -> Result<Option<bool>> {
     Ok(monitor(name, true)?.map(|m| !m.get("disabled").and_then(|v| v.as_bool()).unwrap_or(false)))
 }
-
-/// How long a `disable` (or the `reload` that undoes it) has to show up in
-/// `hyprctl -j monitors all`. A miss is reported, never assumed.
-const DISABLE_BUDGET: Duration = Duration::from_secs(3);
 
 /// Re-enable the heads an `exclusive` session disabled. Run **before** that
 /// member's output is removed, so Hyprland never sees zero enabled outputs.
@@ -1348,10 +1257,6 @@ impl Drop for OutputGuard {
 /// run on the session's stream thread; a hung query wedges the session. Five
 /// seconds is generous next to a healthy call (single-digit milliseconds).
 const HYPRCTL_BUDGET: Duration = Duration::from_secs(5);
-
-/// Budget for the one-shot xdph restart. `systemctl --user try-restart` waits
-/// for the user manager's job; the result is already ignored.
-const PORTAL_RESTART_BUDGET: Duration = Duration::from_secs(10);
 
 /// Run `hyprctl <args>`, returning stdout. `HYPRLAND_INSTANCE_SIGNATURE` is set
 /// on this child ([`hyprctl_command`]), not exported into the host. Non-zero on
@@ -1859,18 +1764,9 @@ fn restore_xdph_config() {
     restart_xdph();
 }
 
-/// Bounded: `systemctl --user` blocks on the user manager's job queue, and
-/// this runs on the session's stream thread. A timeout just means xdph picks
-/// the new config up whenever it next starts.
+/// Bounded and fire-and-forget: a timeout means xdph reads the new config when it next starts.
 fn restart_xdph() {
-    let _ = crate::proc::status_within(
-        Command::new("systemctl").args([
-            "--user",
-            "try-restart",
-            "xdg-desktop-portal-hyprland.service",
-        ]),
-        PORTAL_RESTART_BUDGET,
-    );
+    crate::gamescope::systemctl_user(&["try-restart", "xdg-desktop-portal-hyprland.service"]);
 }
 
 #[cfg(test)]
