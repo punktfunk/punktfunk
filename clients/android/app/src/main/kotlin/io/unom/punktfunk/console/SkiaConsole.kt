@@ -834,48 +834,52 @@ object SkiaConsole {
         }
     }
 
+    /** Runs what the console queued. A unit variant is a bare string, one with fields `{"Name": {…}}`. */
     private fun drainCommands() {
         val arr = runCatching { JSONArray(NativeBridge.nativeConsoleDrainCmds(handle)) }.getOrNull() ?: return
         for (i in 0 until arr.length()) {
             when (val c = arr.opt(i)) {
-                is String -> when (c) {
-                    "CancelWake" -> { wakeGen.incrementAndGet(); NativeBridge.nativeConsoleSetWake(handle, "null") }
-                    "Probe" -> { resumeDiscovery(); pushHosts() }
-                    "LoadLicenses" -> loadLicenses()
-                }
-                is JSONObject -> {
-                    c.optJSONObject("FetchLibrary")?.let { fetchLibrary(it, refreshOnly = false) }
-                    c.optJSONObject("RefreshRunning")?.let { fetchLibrary(it, refreshOnly = true) }
-                    c.optJSONObject("Pair")?.let(::pair)
-                    c.optJSONObject("SendLogs")?.let(::sendLogs)
-                    c.optJSONObject("SpeedTest")?.let(::speedTest)
-                    c.optJSONObject("HostAction")?.let(::hostAction)
-                    c.optJSONObject("EndGame")?.let(this::endGame)
-                    c.optJSONObject("Install")?.let(this::changeInstall)
-                    c.optJSONObject("SaveHost")?.let(::saveHost)
-                    c.optJSONObject("UpdateHost")?.let(::updateHost)
-                    c.optJSONObject("ForgetHost")?.let(::forgetHost)
-                    c.optJSONObject("UnpairHost")?.let(::unpairHost)
-                    c.optJSONObject("SavePreset")?.let(::savePreset)
-                    c.optJSONObject("DeletePreset")?.let {
-                        presetStore.delete(it.optString("id"))
-                        pushPresets()
-                    }
-                    c.optJSONObject("Wake")?.let(::wake)
-                    c.optJSONObject("SetPin")?.let(::setPin)
-                    c.optJSONObject("FetchProfiles")?.let(::fetchProfiles)
-                    c.optJSONObject("WakeProfile")?.let(::wakeProfile)
-                    c.optJSONObject("SetProfile")?.let(::setProfile)
-                    c.optJSONObject("BindPreset")?.let(::bindPreset)
-                    c.optJSONObject("SetClipboard")?.let(::setClipboard)
-                    c.optJSONObject("PadTest")?.let {
-                        padTest = if (it.optBoolean("on")) PadTestReading() else null
-                    }
-                    c.optJSONObject("PadAction")?.let { onPadAction?.invoke(it.optString("action"), it.optString("pad_key")) }
-                }
+                is String -> commands[c]?.invoke(JSONObject())
+                is JSONObject -> for (name in c.keys()) c.optJSONObject(name)?.let { commands[name]?.invoke(it) }
             }
         }
     }
+
+    /**
+     * Every `ConsoleCmd` this shell runs, by serde name. `clients/shared/console-bridge-vectors.json`
+     * holds one of each; a name missing here must be in [ignoredCommands].
+     */
+    internal val commands: Map<String, (JSONObject) -> Unit> = mapOf(
+        "CancelWake" to { _ -> wakeGen.incrementAndGet(); NativeBridge.nativeConsoleSetWake(handle, "null") },
+        "Probe" to { _ -> resumeDiscovery(); pushHosts() },
+        "LoadLicenses" to { _ -> loadLicenses() },
+        "FetchLibrary" to { c -> fetchLibrary(c, refreshOnly = false) },
+        "RefreshRunning" to { c -> fetchLibrary(c, refreshOnly = true) },
+        "Pair" to ::pair,
+        "SendLogs" to ::sendLogs,
+        "SpeedTest" to ::speedTest,
+        "HostAction" to ::hostAction,
+        "EndGame" to this::endGame,
+        "Install" to this::changeInstall,
+        "SaveHost" to ::saveHost,
+        "UpdateHost" to ::updateHost,
+        "ForgetHost" to ::forgetHost,
+        "UnpairHost" to ::unpairHost,
+        "SavePreset" to ::savePreset,
+        "DeletePreset" to { c -> presetStore.delete(c.optString("id")); pushPresets() },
+        "Wake" to ::wake,
+        "SetPin" to ::setPin,
+        "FetchProfiles" to ::fetchProfiles,
+        "WakeProfile" to ::wakeProfile,
+        "SetProfile" to ::setProfile,
+        "BindPreset" to ::bindPreset,
+        "SetClipboard" to ::setClipboard,
+        "PadTest" to { c -> padTest = if (c.optBoolean("on")) PadTestReading() else null },
+        "PadAction" to { c -> onPadAction?.invoke(c.optString("action"), c.optString("pad_key")) },
+    )
+
+    /** `ConsoleCmd`s this shell drops: it raises no prompt, so no `PromptAnswer` comes back. */
+    internal val ignoredCommands = setOf("PromptAnswer")
 
     private fun hostForKey(key: String): KnownHost? {
         val primary = ConsoleJson.hostKey(key)
@@ -971,11 +975,7 @@ object SkiaConsole {
             } else {
                 HostProfiles.fetch(id, addr, mgmt, fp)
             }
-            val json = when (answer) {
-                is ProfilesAnswer.Listed -> JSONObject().put("Listed", JSONArray(answer.rows.map(ConsoleJson::profileRow))).toString()
-                ProfilesAnswer.NoProfiles -> "\"NoProfiles\""
-                is ProfilesAnswer.Failed -> JSONObject().put("Failed", answer.why).toString()
-            }
+            val json = ConsoleJson.profilesAnswer(answer)
             main.post { if (handle != 0L) NativeBridge.nativeConsoleSetProfiles(handle, fp, json) }
         }
     }
@@ -1048,49 +1048,13 @@ object SkiaConsole {
         }
     }
 
-    /** The phase in `SpeedPhase`'s serde shape: unit variants are bare strings. */
     private fun advanceSpeed(key: String, p: SpeedTestPhase) {
-        val json = when (p) {
-            SpeedTestPhase.Connecting -> "\"Connecting\""
-            SpeedTestPhase.Measuring -> "\"Measuring\""
-            is SpeedTestPhase.Failed -> JSONObject().put("Failed", p.message).toString()
-            is SpeedTestPhase.Done -> JSONObject().put(
-                "Done",
-                JSONObject()
-                    .put("throughput_kbps", p.throughputKbps)
-                    .put("wall", p.wall)
-                    .put(
-                        "clean",
-                        p.clean?.let {
-                            JSONObject()
-                                .put("rate_kbps", it.rateKbps)
-                                .put("loss_pct", it.lossPct)
-                                .put("jitter_us", it.jitterUs)
-                        } ?: JSONObject.NULL,
-                    )
-                    .put("recommended_kbps", p.recommendedKbps)
-                    .put(
-                        "findings",
-                        org.json.JSONArray().also { arr ->
-                            p.findings.forEach { f ->
-                                arr.put(
-                                    JSONObject()
-                                        .put("id", f.id)
-                                        .put("severity", f.severity)
-                                        .put("numbers", org.json.JSONArray(f.numbers)),
-                                )
-                            }
-                        },
-                    ),
-            ).toString()
-        }
-        NativeBridge.nativeConsoleAdvanceSpeed(handle, key, json)
+        NativeBridge.nativeConsoleAdvanceSpeed(handle, key, ConsoleJson.speedPhase(p))
     }
 
-    /** A mid-burst figure for the console's graph, as `SpeedPhase::Progress`. */
+    /** A mid-burst figure for the console's graph. */
     private fun advanceSpeedProgress(key: String, kbps: Int) {
-        val json = JSONObject().put("Progress", JSONObject().put("kbps", kbps)).toString()
-        NativeBridge.nativeConsoleAdvanceSpeed(handle, key, json)
+        NativeBridge.nativeConsoleAdvanceSpeed(handle, key, ConsoleJson.speedProgress(kbps))
     }
 
     /**
