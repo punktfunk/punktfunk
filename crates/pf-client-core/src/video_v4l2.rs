@@ -48,6 +48,8 @@ use crate::video::FrameGuard;
 use crate::video::StreamFormat;
 use crate::video::V4l2Summary;
 use crate::video_color::ColorDesc;
+use crate::video_types::display_of;
+use crate::video_types::AnyPlanner;
 
 /// `PUNKTFUNK_DECODER=native-v4l2`.
 pub(crate) const DECODER_PIN: &str = "native-v4l2";
@@ -292,12 +294,6 @@ struct Shape {
     bit_depth: u8,
 }
 
-enum Planner {
-    H264(Box<pf_bitstream::h264::H264Planner>),
-    H265(Box<pf_bitstream::h265::H265Planner>),
-    Av1(Box<pf_bitstream::av1::Av1Planner>),
-}
-
 /// The planner's answer for one access unit.
 enum Planned {
     /// Queue it; `Some` when a picture is expected back.
@@ -395,7 +391,7 @@ impl NativeV4l2Decoder {
 pub(crate) struct StatefulRung<D: Opened = Node> {
     wire: u8,
     node: PathBuf,
-    planner: Planner,
+    planner: AnyPlanner,
     session: Option<Session<D>>,
     next_stamp: u64,
     health: DecodeHealth,
@@ -407,39 +403,17 @@ pub(crate) struct StatefulRung<D: Opened = Node> {
     release_rx: mpsc::Receiver<Release>,
 }
 
-pub(crate) fn colour_of(c: &pf_bitstream::h264::ColourDescription) -> ColorDesc {
-    ColorDesc {
-        primaries: c.colour_primaries,
-        transfer: c.transfer_characteristics,
-        matrix: c.matrix_coefficients,
-        full_range: c.video_full_range,
-    }
-}
-
-/// The visible size of a cropped picture. Planes are sampled from (0,0), so
-/// a crop with another origin is refused rather than shown shifted.
-pub(crate) fn display_of(crop: pf_bitstream::h264::DisplayCrop) -> Result<(u32, u32)> {
-    if crop.x != 0 || crop.y != 0 {
-        bail!(
-            "conformance window at ({}, {}) — this rung hands the buffer over uncropped",
-            crop.x,
-            crop.y
-        );
-    }
-    Ok((crop.width, crop.height))
-}
-
 impl<D: Opened> StatefulRung<D> {
     /// The rung over the decoder at `node`, opened on the first access unit.
     fn on_node(wire: u8, node: PathBuf) -> StatefulRung<D> {
         let planner = match wire {
             punktfunk_core::quic::CODEC_H264 => {
-                Planner::H264(Box::new(pf_bitstream::h264::H264Planner::new()))
+                AnyPlanner::H264(Box::new(pf_bitstream::h264::H264Planner::new()))
             }
             punktfunk_core::quic::CODEC_HEVC => {
-                Planner::H265(Box::new(pf_bitstream::h265::H265Planner::new()))
+                AnyPlanner::H265(Box::new(pf_bitstream::h265::H265Planner::new()))
             }
-            _ => Planner::Av1(Box::new(pf_bitstream::av1::Av1Planner::new())),
+            _ => AnyPlanner::Av1(Box::new(pf_bitstream::av1::Av1Planner::new())),
         };
         let (release_tx, release_rx) = mpsc::channel();
         StatefulRung {
@@ -462,9 +436,9 @@ impl<D: Opened> StatefulRung<D> {
 
     pub(crate) fn name(&self) -> &'static str {
         match self.planner {
-            Planner::H264(_) => "native-v4l2 h264",
-            Planner::H265(_) => "native-v4l2 h265",
-            Planner::Av1(_) => "native-v4l2 av1",
+            AnyPlanner::H264(_) => "native-v4l2 h264",
+            AnyPlanner::H265(_) => "native-v4l2 h265",
+            AnyPlanner::Av1(_) => "native-v4l2 av1",
         }
     }
 
@@ -477,11 +451,7 @@ impl<D: Opened> StatefulRung<D> {
     }
 
     pub(crate) fn forgive_unclean(&mut self) {
-        match &mut self.planner {
-            Planner::H264(p) => p.forgive_unclean(),
-            Planner::H265(p) => p.forgive_unclean(),
-            Planner::Av1(p) => p.forgive_unclean(),
-        }
+        self.planner.forgive_unclean();
     }
 
     /// One access unit in, at most one picture out. `Ok(None)` is the decoder
@@ -489,11 +459,7 @@ impl<D: Opened> StatefulRung<D> {
     pub(crate) fn decode(&mut self, au: &[u8]) -> Result<Option<DmabufFrame>> {
         self.drain_releases();
         let result = self.decode_inner(au);
-        match &result {
-            Ok(Some((_, damaged))) => self.health.note(*damaged, false, 0),
-            Ok(None) => {}
-            Err(_) => self.health.note(false, true, 0),
-        }
+        self.health.note_outcome(&result);
         Ok(result?.and_then(|(frame, _)| frame))
     }
 
@@ -548,7 +514,7 @@ impl<D: Opened> StatefulRung<D> {
     /// its own parse; this only tells the pump what the picture is.
     fn plan(&mut self, au: &[u8]) -> Result<Planned> {
         match &mut self.planner {
-            Planner::H264(p) => {
+            AnyPlanner::H264(p) => {
                 let plan = match p.plan_au(au) {
                     Ok(plan) => plan,
                     Err(e) if e.awaits_idr() => return Ok(Planned::AwaitKeyframe),
@@ -563,7 +529,7 @@ impl<D: Opened> StatefulRung<D> {
                     Some(Facts {
                         keyframe: pic.is_idr,
                         references_clean: pic.references_clean,
-                        color: colour_of(&pic.colour),
+                        color: ColorDesc::from(&pic.colour),
                         display: display_of(pic.display_crop)?,
                         damaged: plan
                             .warnings
@@ -572,7 +538,7 @@ impl<D: Opened> StatefulRung<D> {
                     }),
                 ))
             }
-            Planner::H265(p) => {
+            AnyPlanner::H265(p) => {
                 let plan = match p.plan_au(au) {
                     Ok(plan) => plan,
                     Err(pf_bitstream::h265::PlanError::RaslSkipped { .. }) => {
@@ -590,7 +556,7 @@ impl<D: Opened> StatefulRung<D> {
                     Some(Facts {
                         keyframe: pic.is_idr,
                         references_clean: pic.references_clean,
-                        color: colour_of(&pic.colour),
+                        color: ColorDesc::from(&pic.colour),
                         display: display_of(pic.display_crop)?,
                         damaged: plan
                             .warnings
@@ -599,7 +565,7 @@ impl<D: Opened> StatefulRung<D> {
                     }),
                 ))
             }
-            Planner::Av1(p) => {
+            AnyPlanner::Av1(p) => {
                 let plans = p.plan_au(au).map_err(|e| anyhow!("{e}"))?;
                 let Some(first) = plans.first() else {
                     return Ok(Planned::Skip);
@@ -622,7 +588,7 @@ impl<D: Opened> StatefulRung<D> {
                 let facts = shown.map(|plan| Facts {
                     keyframe: plan.picture.is_key,
                     references_clean: plan.picture.references_clean,
-                    color: colour_of(&plan.picture.colour),
+                    color: ColorDesc::from(&plan.picture.colour),
                     display: (
                         plan.picture.render_width.min(plan.picture.upscaled_width),
                         plan.picture.render_height.min(plan.picture.frame_height),

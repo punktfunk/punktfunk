@@ -226,7 +226,6 @@ impl H264Software {
                     }
                     .into());
                 }
-                let c = plan.picture.colour;
                 // Fold recovery even if openh264 emits nothing: the watch counts
                 // `frame_num`. Skipping one leaves the count owing; a late lift is safe.
                 let mark = self.recovery.note_h264(
@@ -236,12 +235,7 @@ impl H264Software {
                 );
                 Ok(AuFacts {
                     is_idr: plan.picture.is_idr,
-                    color: Some(ColorDesc {
-                        primaries: c.colour_primaries,
-                        transfer: c.transfer_characteristics,
-                        matrix: c.matrix_coefficients,
-                        full_range: c.video_full_range,
-                    }),
+                    color: Some(ColorDesc::from(&plan.picture.colour)),
                     recovery: punktfunk_core::reanchor::LocalRecovery {
                         sei_here: mark.sei_here,
                         is_recovery_point: mark.is_recovery_point,

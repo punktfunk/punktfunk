@@ -37,7 +37,7 @@ use windows::Win32::dxgi::{
 
 use crate::video_color::ColorDesc;
 use crate::video_d3d11::{create_device, D3d11Frame, HandoffRing, HandoffSource};
-use crate::video_types::{DecodeHealth, StreamFormat};
+use crate::video_types::{display_of, AnyPlanner, DecodeHealth, StreamFormat};
 
 /// Decode-pool bind flag. The pool takes this flag alone.
 const BIND_DECODER: u32 = 0x200;
@@ -53,14 +53,6 @@ const E_PENDING: i32 = 0x8000_000A_u32 as i32;
 
 /// Pin string for this rung.
 pub const DECODER_PIN: &str = "native-d3d11va";
-
-/// Per-codec planner, chosen once at construction. Session, pool, and submission stay
-/// codec-agnostic; forking them per codec would fork the machinery that is hard to get right.
-enum Planner {
-    H264(Box<pf_dxvadec::H264Planner>),
-    H265(Box<pf_dxvadec::H265Planner>),
-    Av1(Box<pf_dxvadec::Av1Planner>),
-}
 
 /// Geometry and colour of a decoded picture, for the hand-off. Split from [`Submission`]
 /// because AV1 `show_existing_frame` (5.9.2) carries none of its own: the shown frame's
@@ -182,7 +174,8 @@ pub struct NativeD3d11Decoder {
     /// ring must outlive the decode surfaces it converted.
     session: Option<Session>,
     handoff: HandoffRing,
-    planner: Planner,
+    /// Chosen once by codec. Session, pool and submission stay codec-agnostic.
+    planner: AnyPlanner,
     codec: Codec,
     /// `StatusReportFeedbackNumber`, monotonic from 1. 0 is an unwritten buffer; never a tag.
     status_id: u32,
@@ -230,9 +223,9 @@ impl NativeD3d11Decoder {
             .context("context lacks ID3D11VideoContext (created without VIDEO_SUPPORT)")?;
         profile_supported(&video_device, profile)?;
         let planner = match codec {
-            Codec::H264 => Planner::H264(Box::new(pf_dxvadec::H264Planner::new())),
-            Codec::H265 => Planner::H265(Box::new(pf_dxvadec::H265Planner::new())),
-            Codec::Av1 => Planner::Av1(Box::new(pf_dxvadec::Av1Planner::new())),
+            Codec::H264 => AnyPlanner::H264(Box::new(pf_dxvadec::H264Planner::new())),
+            Codec::H265 => AnyPlanner::H265(Box::new(pf_dxvadec::H265Planner::new())),
+            Codec::Av1 => AnyPlanner::Av1(Box::new(pf_dxvadec::Av1Planner::new())),
         };
         tracing::info!(
             ?codec,
@@ -285,11 +278,7 @@ impl NativeD3d11Decoder {
     /// The gate lifted on intra refresh marks: the planner's damaged-chain marks are stale
     /// (`CleanLedger::clear`).
     pub fn forgive_unclean(&mut self) {
-        match &mut self.planner {
-            Planner::H264(p) => p.forgive_unclean(),
-            Planner::H265(p) => p.forgive_unclean(),
-            Planner::Av1(p) => p.forgive_unclean(),
-        }
+        self.planner.forgive_unclean();
     }
 
     /// Plan, convert, and submit one access unit.
@@ -299,7 +288,7 @@ impl NativeD3d11Decoder {
     /// `Err` would demote on the lossy links this rung exists to handle. `Err` is a
     /// decoder that could not run — streak-eligible, counted as `refused`.
     pub fn decode(&mut self, au: &[u8]) -> Result<Option<D3d11Frame>> {
-        if matches!(self.planner, Planner::Av1(_)) {
+        if matches!(self.planner, AnyPlanner::Av1(_)) {
             return self.decode_av1(au);
         }
         let submission = match self.plan(au) {
@@ -365,7 +354,7 @@ impl NativeD3d11Decoder {
     /// `Err`. Nothing from the unit is presented.
     fn decode_av1(&mut self, au: &[u8]) -> Result<Option<D3d11Frame>> {
         let plans = match &mut self.planner {
-            Planner::Av1(planner) => match planner.plan_au(au) {
+            AnyPlanner::Av1(planner) => match planner.plan_au(au) {
                 Ok(plans) => plans,
                 Err(e) => {
                     self.health.note(false, true, 0);
@@ -535,7 +524,7 @@ impl NativeD3d11Decoder {
             release_after_decode: dxva.release_after_decode,
             codec: Codec::Av1,
             facts: PictureFacts {
-                colour: colour_of(plan.picture.colour),
+                colour: ColorDesc::from(&plan.picture.colour),
                 keyframe: plan.picture.is_key,
                 references_clean: plan.picture.references_clean,
                 // Render size: AV1 display region (conformance-window crop on the other
@@ -580,11 +569,12 @@ impl NativeD3d11Decoder {
 
     /// Plan one AU and convert it, rebuilding the session when shape moved.
     /// `Ok(None)` is a RASL skip or the idle wait for an IDR; neither feeds the decoder.
+    /// A conformance window off (0,0) is an `Err`: the blit takes a size, not an origin.
     fn plan(&mut self, au: &[u8]) -> Result<Option<Submission>> {
         self.status_id = self.status_id.wrapping_add(1).max(1);
         let status_id = self.status_id;
         match &mut self.planner {
-            Planner::H264(planner) => {
+            AnyPlanner::H264(planner) => {
                 let plan = match planner.plan_au(au) {
                     Ok(plan) => plan,
                     // Nothing to feed until the IDR and its parameter sets land — a
@@ -600,6 +590,7 @@ impl NativeD3d11Decoder {
                     .warnings
                     .iter()
                     .any(pf_dxvadec::PlanWarning::is_integrity);
+                let (width, height) = display_of(plan.picture.display_crop)?;
                 let session = ensure_session(
                     &mut self.session,
                     &self.device,
@@ -628,18 +619,18 @@ impl NativeD3d11Decoder {
                     release_after_decode: dxva.release_after_decode,
                     codec: Codec::H264,
                     facts: PictureFacts {
-                        colour: colour_of(plan.picture.colour),
+                        colour: ColorDesc::from(&plan.picture.colour),
                         keyframe: plan.picture.is_idr,
                         references_clean: plan.picture.references_clean,
-                        width: plan.picture.display_crop.width,
-                        height: plan.picture.display_crop.height,
+                        width,
+                        height,
                     },
                     concealed,
                     av1: None,
                     show: true,
                 }))
             }
-            Planner::H265(planner) => {
+            AnyPlanner::H265(planner) => {
                 let plan = match planner.plan_au(au) {
                     Ok(plan) => plan,
                     // Leading pictures after a CRA join: spec says decode and output
@@ -660,6 +651,7 @@ impl NativeD3d11Decoder {
                     .warnings
                     .iter()
                     .any(pf_dxvadec::PlanWarningH265::is_integrity);
+                let (width, height) = display_of(plan.picture.display_crop)?;
                 let session = ensure_session(
                     &mut self.session,
                     &self.device,
@@ -695,12 +687,12 @@ impl NativeD3d11Decoder {
                     release_after_decode: Vec::new(),
                     codec: Codec::H265,
                     facts: PictureFacts {
-                        colour: colour_of(plan.picture.colour),
+                        colour: ColorDesc::from(&plan.picture.colour),
                         // IDR only, as on every rung: a CRA's leading pictures may not decode.
                         keyframe: plan.picture.is_idr,
                         references_clean: plan.picture.references_clean,
-                        width: plan.picture.display_crop.width,
-                        height: plan.picture.display_crop.height,
+                        width,
+                        height,
                     },
                     concealed,
                     av1: None,
@@ -708,7 +700,7 @@ impl NativeD3d11Decoder {
                 }))
             }
             // An AV1 AU is a temporal unit (`Vec` of plans). Walked by [`Self::decode_av1`].
-            Planner::Av1(_) => bail!(
+            AnyPlanner::Av1(_) => bail!(
                 "an AV1 temporal unit is planned frame by frame (decode_av1), not through plan()"
             ),
         }
@@ -964,20 +956,6 @@ impl NativeD3d11Decoder {
         }
         .ok()
         .context("SubmitDecoderBuffers")
-    }
-}
-
-/// pf-bitstream H.273 code points as the presenter's [`ColorDesc`].
-///
-/// Per picture, never latched at session start: an HDR desktop can switch to
-/// PQ/BT.2020 in-band with a new SPS. pf-bitstream applies E.2.1 "unspecified"
-/// inference, so these are always meaningful code points.
-fn colour_of(colour: pf_dxvadec::ColourDescription) -> ColorDesc {
-    ColorDesc {
-        primaries: colour.colour_primaries,
-        transfer: colour.transfer_characteristics,
-        matrix: colour.matrix_coefficients,
-        full_range: colour.video_full_range,
     }
 }
 
@@ -1566,9 +1544,8 @@ mod parity {
             assert_eq!(
                 (plan.picture.display_crop.x, plan.picture.display_crop.y),
                 (0, 0),
-                "AU {index}: this rung hands the blit a size and no origin, so a \
-                 non-zero conformance-window offset would be cropped from the wrong \
-                 corner — by the rung, not just by this harness"
+                "AU {index}: this rung refuses a non-zero conformance-window origin \
+                 (`display_of`), so a vector that had one could not be decoded here"
             );
             order.decode.push(
                 plan.dpb.stored.unwrap_or_else(|| {
@@ -1595,8 +1572,8 @@ mod parity {
             assert_eq!(
                 (plan.picture.display_crop.x, plan.picture.display_crop.y),
                 (0, 0),
-                "AU {index}: a non-zero conformance-window offset is cropped from the \
-                 wrong corner by this rung"
+                "AU {index}: this rung refuses a non-zero conformance-window origin \
+                 (`display_of`)"
             );
             order.decode.push(
                 plan.dpb.stored.unwrap_or_else(|| {

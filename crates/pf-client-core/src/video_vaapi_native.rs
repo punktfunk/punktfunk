@@ -38,7 +38,9 @@ use crate::video::DrmFrameGuard;
 use crate::video::FrameGuard;
 use crate::video::StreamFormat;
 use crate::video_color::ColorDesc;
+use crate::video_types::display_of;
 use crate::video_types::trim_deliverable;
+use crate::video_types::AnyPlanner;
 
 /// `PUNKTFUNK_DECODER=native-vaapi`. Skips the vendor order so a box that would
 /// pick Vulkan first can still reach this rung; gating the pin would make the
@@ -72,22 +74,6 @@ struct StreamShape {
     max_dpb_frames: usize,
     chroma_format_idc: u8,
     bit_depth: u8,
-}
-
-enum Planner {
-    H264(Box<pf_vaapi::H264Planner>),
-    H265(Box<pf_vaapi::H265Planner>),
-    Av1(Box<pf_vaapi::Av1Planner>),
-}
-
-impl Planner {
-    fn name(&self) -> &'static str {
-        match self {
-            Planner::H264(_) => "native-vaapi h264",
-            Planner::H265(_) => "native-vaapi h265",
-            Planner::Av1(_) => "native-vaapi av1",
-        }
-    }
 }
 
 /// Token a shipped frame hands back. A retired pool's index must not free a
@@ -378,7 +364,7 @@ fn max_deliverable(s: &Session) -> usize {
 
 pub(crate) struct NativeVaapiDecoder {
     display: Display,
-    planner: Planner,
+    planner: AnyPlanner,
     session: Option<Session>,
     /// Surplus of a multi-picture bump, oldest first. Bounded by [`max_deliverable`].
     /// PRIME fds keep pixels alive across a rebuild; stale-generation tokens are
@@ -443,9 +429,9 @@ impl NativeVaapiDecoder {
         let va = Libva::load().context("libva")?;
         let display = Display::open_for_vendor(va, presenter_vendor)?;
         let planner = match codec {
-            pf_vaapi::Codec::H264 => Planner::H264(Box::new(pf_vaapi::H264Planner::new())),
-            pf_vaapi::Codec::H265 => Planner::H265(Box::new(pf_vaapi::H265Planner::new())),
-            pf_vaapi::Codec::Av1 => Planner::Av1(Box::new(pf_vaapi::Av1Planner::new())),
+            pf_vaapi::Codec::H264 => AnyPlanner::H264(Box::new(pf_vaapi::H264Planner::new())),
+            pf_vaapi::Codec::H265 => AnyPlanner::H265(Box::new(pf_vaapi::H265Planner::new())),
+            pf_vaapi::Codec::Av1 => AnyPlanner::Av1(Box::new(pf_vaapi::Av1Planner::new())),
         };
         let (release_tx, release_rx) = mpsc::channel();
         Ok(NativeVaapiDecoder {
@@ -468,7 +454,11 @@ impl NativeVaapiDecoder {
     }
 
     pub(crate) fn name(&self) -> &'static str {
-        self.planner.name()
+        match self.planner {
+            AnyPlanner::H264(_) => "native-vaapi h264",
+            AnyPlanner::H265(_) => "native-vaapi h265",
+            AnyPlanner::Av1(_) => "native-vaapi av1",
+        }
     }
 
     pub(crate) fn health(&self) -> DecodeHealth {
@@ -482,11 +472,7 @@ impl NativeVaapiDecoder {
     /// The gate lifted on intra refresh marks: the planner's damaged-chain marks are stale
     /// (`CleanLedger::clear`).
     pub(crate) fn forgive_unclean(&mut self) {
-        match &mut self.planner {
-            Planner::H264(p) => p.forgive_unclean(),
-            Planner::H265(p) => p.forgive_unclean(),
-            Planner::Av1(p) => p.forgive_unclean(),
-        }
+        self.planner.forgive_unclean();
     }
 
     fn drain_releases(&mut self) {
@@ -504,18 +490,13 @@ impl NativeVaapiDecoder {
     pub(crate) fn decode(&mut self, au: &[u8]) -> Result<Option<DmabufFrame>> {
         self.drain_releases();
         let result = match self.planner {
-            Planner::H264(_) => self.decode_h264(au),
-            Planner::H265(_) => self.decode_h265(au),
+            AnyPlanner::H264(_) => self.decode_h264(au),
+            AnyPlanner::H265(_) => self.decode_h265(au),
             // AV1's "AU" is a temporal unit and may carry several frames.
-            Planner::Av1(_) => self.decode_av1(au),
+            AnyPlanner::Av1(_) => self.decode_av1(au),
         };
-        // One verdict, here. Damage is reported by the codec arm; a failure after a
-        // clean plan is a refusal only — not also a clean AU that would reset the run.
-        match &result {
-            Ok(Some((_, damaged))) => self.health.note(*damaged, false, 0),
-            Ok(None) => {}
-            Err(_) => self.health.note(false, true, 0),
-        }
+        // One verdict, here. Damage is reported by the codec arm.
+        self.health.note_outcome(&result);
         // Codec arms return exported frames only on `Ok`; an error never reaches the queue.
         let Some((fresh, damaged)) = result? else {
             return Ok(None);
@@ -575,15 +556,15 @@ impl NativeVaapiDecoder {
         };
         // Two types (`h264::DpbUpdate` / `h265::DpbUpdate`), same shape.
         let (outputs, removed) = match planner {
-            Planner::H264(p) => {
+            AnyPlanner::H264(p) => {
                 let update = p.flush();
                 (update.outputs, update.removed)
             }
-            Planner::H265(p) => {
+            AnyPlanner::H265(p) => {
                 let update = p.flush();
                 (update.outputs, update.removed)
             }
-            Planner::Av1(_) => (Vec::new(), Vec::new()),
+            AnyPlanner::Av1(_) => (Vec::new(), Vec::new()),
         };
         let claimed = settle(s, &outputs, &removed);
         for picture in claimed {
@@ -614,7 +595,7 @@ impl NativeVaapiDecoder {
 
     fn decode_h264(&mut self, au: &[u8]) -> Result<Option<(Vec<DmabufFrame>, bool)>> {
         let plan = match &mut self.planner {
-            Planner::H264(p) => match p.plan_au(au) {
+            AnyPlanner::H264(p) => match p.plan_au(au) {
                 Ok(plan) => plan,
                 Err(e) if e.awaits_idr() => return Ok(self.idle_until_idr(e)),
                 Err(e) => return Err(anyhow!("{e:?}")),
@@ -643,7 +624,7 @@ impl NativeVaapiDecoder {
             damaged,
             keyframe: pic.is_idr,
             references_clean: pic.references_clean,
-            color: colour_of(&pic.colour),
+            color: ColorDesc::from(&pic.colour),
             stored: plan.dpb.stored,
             outputs: &plan.dpb.outputs,
             removed: &plan.dpb.removed,
@@ -655,12 +636,10 @@ impl NativeVaapiDecoder {
 
     fn decode_h265(&mut self, au: &[u8]) -> Result<Option<(Vec<DmabufFrame>, bool)>> {
         let plan = match &mut self.planner {
-            Planner::H265(p) => match p.plan_au(au) {
+            AnyPlanner::H265(p) => match p.plan_au(au) {
                 Ok(plan) => plan,
-                // Spec 8.1.3 NOTE: skipped RASL is Ok, never a re-anchor.
-                Err(pf_vaapi::PlanErrorH265::RaslSkipped { .. }) => {
-                    return Ok(Some((Vec::new(), false)))
-                }
+                // Spec 8.1.3 NOTE: a skipped RASL is no loss, so no re-anchor and no verdict.
+                Err(pf_vaapi::PlanErrorH265::RaslSkipped { .. }) => return Ok(None),
                 Err(e) if e.awaits_idr() => return Ok(self.idle_until_idr(e)),
                 Err(e) => return Err(anyhow!("{e:?}")),
             },
@@ -688,7 +667,7 @@ impl NativeVaapiDecoder {
             damaged,
             keyframe: pic.is_idr,
             references_clean: pic.references_clean,
-            color: colour_of(&pic.colour),
+            color: ColorDesc::from(&pic.colour),
             stored: plan.dpb.stored,
             outputs: &plan.dpb.outputs,
             removed: &plan.dpb.removed,
@@ -755,7 +734,7 @@ impl NativeVaapiDecoder {
     /// groups bind nothing ([`Self::frame_av1`]).
     fn decode_av1(&mut self, au: &[u8]) -> Result<Option<(Vec<DmabufFrame>, bool)>> {
         let plans = match &mut self.planner {
-            Planner::Av1(p) => p.plan_au(au).map_err(|e| anyhow!("{e}"))?,
+            AnyPlanner::Av1(p) => p.plan_au(au).map_err(|e| anyhow!("{e}"))?,
             _ => unreachable!("dispatched on the planner's own arm"),
         };
         let mut shown: Vec<DmabufFrame> = Vec::new();
@@ -809,7 +788,7 @@ impl NativeVaapiDecoder {
         let facts = PictureFacts {
             keyframe: plan.picture.is_key,
             references_clean: plan.picture.references_clean,
-            color: colour_of(&plan.picture.colour),
+            color: ColorDesc::from(&plan.picture.colour),
             display: (
                 plan.picture.render_width.min(plan.picture.upscaled_width),
                 plan.picture.render_height.min(plan.picture.frame_height),
@@ -976,16 +955,6 @@ fn as_ptr<T>(value: &T) -> (*const c_void, usize) {
     ((value as *const T).cast::<c_void>(), size_of::<T>())
 }
 
-/// Active SPS/VUI, per frame, never latched: HDR can flip in-band at unchanged size.
-fn colour_of(c: &pf_vaapi::ColourDescription) -> ColorDesc {
-    ColorDesc {
-        primaries: c.colour_primaries,
-        transfer: c.transfer_characteristics,
-        matrix: c.matrix_coefficients,
-        full_range: c.video_full_range,
-    }
-}
-
 fn shape_of(
     coded_width: u32,
     coded_height: u32,
@@ -994,21 +963,12 @@ fn shape_of(
     chroma_format_idc: u8,
     bit_depth: u8,
 ) -> Result<StreamShape> {
-    // Nothing downstream carries an origin; planes are sampled from (0,0). Refuse
-    // rather than crop from the wrong corner.
-    if crop.x != 0 || crop.y != 0 {
-        bail!(
-            "conformance window at ({}, {}) — this rung hands the surface over \
-             uncropped and cannot express a non-zero origin",
-            crop.x,
-            crop.y
-        );
-    }
+    let (display_width, display_height) = display_of(crop)?;
     Ok(StreamShape {
         coded_width,
         coded_height,
-        display_width: crop.width,
-        display_height: crop.height,
+        display_width,
+        display_height,
         max_dpb_frames,
         chroma_format_idc,
         bit_depth,
