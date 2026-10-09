@@ -36,6 +36,8 @@ mod rtsp;
 mod serverinfo;
 #[cfg(feature = "gamestream")]
 pub(crate) mod stream;
+#[cfg(all(feature = "gamestream", any(target_os = "windows", test)))]
+mod uso;
 // nvhttp and the management tests name it by this path.
 #[cfg(any(feature = "gamestream", test))]
 pub(crate) use crate::https as tls;
