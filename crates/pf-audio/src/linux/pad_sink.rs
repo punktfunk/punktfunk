@@ -19,6 +19,7 @@
 //! Env: `PUNKTFUNK_PAD_SINK_NAME` / `_DESC` / `_SPLIT_NAME` / `_PARENT_CLASS`.
 //! Channel map: [`PadNode::channel_map`].
 
+use super::pw_setup::{f32_format_pod, pw_connect};
 use anyhow::{anyhow, Context, Result};
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -419,28 +420,6 @@ fn mono_position() -> [u32; 64] {
     pos
 }
 
-fn format_pod(channels: u32, positions: [u32; 64]) -> Result<Vec<u8>> {
-    use pipewire as pw;
-    use pw::spa::param::audio::{AudioFormat, AudioInfoRaw};
-    let mut info = AudioInfoRaw::new();
-    info.set_format(AudioFormat::F32LE);
-    info.set_rate(crate::SAMPLE_RATE);
-    info.set_channels(channels);
-    info.set_position(positions);
-    let obj = pw::spa::pod::Object {
-        type_: pw::spa::utils::SpaTypes::ObjectParamFormat.as_raw(),
-        id: pw::spa::param::ParamType::EnumFormat.as_raw(),
-        properties: info.into(),
-    };
-    Ok(pw::spa::pod::serialize::PodSerializer::serialize(
-        std::io::Cursor::new(Vec::new()),
-        &pw::spa::pod::Value::Object(obj),
-    )
-    .context("serialize pad-sink format pod")?
-    .0
-    .into_inner())
-}
-
 /// Shared `process()` body. A macro so the PipeWire stream type never has to
 /// be named (it is only reachable through the builder's inference).
 macro_rules! pad_process {
@@ -497,13 +476,7 @@ fn pad_sink_thread(
     use spa::pod::Pod;
 
     let result = (|| -> Result<()> {
-        pf_capture::pwinit::ensure_init();
-        let mainloop = pw::main_loop::MainLoopRc::new(None).context("pw pad-sink MainLoop")?;
-        let context =
-            pw::context::ContextRc::new(&mainloop, None).context("pw pad-sink Context")?;
-        let core = context
-            .connect_rc(None)
-            .context("pw pad-sink connect (is PipeWire running in this session?)")?;
+        let (mainloop, core) = pw_connect("pw pad-sink")?;
 
         let _quit_guard = quit_rx.attach(mainloop.loop_(), {
             let mainloop = mainloop.clone();
@@ -662,12 +635,12 @@ fn pad_sink_thread(
             .context("register pad-sink speaker listener")?;
 
         // RT_PROCESS: a sink must join its producers' driver group or
-        // `process()` never fires on a busy graph (see mic connect in mod.rs).
+        // `process()` never fires on a busy graph (see the mic connect in mic.rs).
         let flags = pw::stream::StreamFlags::AUTOCONNECT
             | pw::stream::StreamFlags::MAP_BUFFERS
             | pw::stream::StreamFlags::RT_PROCESS;
 
-        let parent_fmt = format_pod(PAD_CHANNELS, aux_positions())?;
+        let parent_fmt = f32_format_pod(crate::SAMPLE_RATE, PAD_CHANNELS, aux_positions())?;
         let mut parent_params = [Pod::from_bytes(&parent_fmt).context("parent pod from bytes")?];
         parent
             .connect(
@@ -678,7 +651,7 @@ fn pad_sink_thread(
             )
             .context("pw pad-sink parent connect")?;
 
-        let haptic_fmt = format_pod(PAD_CHANNELS, positioned_quad())?;
+        let haptic_fmt = f32_format_pod(crate::SAMPLE_RATE, PAD_CHANNELS, positioned_quad())?;
         let mut haptic_params = [Pod::from_bytes(&haptic_fmt).context("haptic pod from bytes")?];
         haptic
             .connect(
@@ -689,7 +662,7 @@ fn pad_sink_thread(
             )
             .context("pw pad-sink haptic connect")?;
 
-        let speaker_fmt = format_pod(1, mono_position())?;
+        let speaker_fmt = f32_format_pod(crate::SAMPLE_RATE, 1, mono_position())?;
         let mut speaker_params = [Pod::from_bytes(&speaker_fmt).context("speaker pod from bytes")?];
         speaker
             .connect(
