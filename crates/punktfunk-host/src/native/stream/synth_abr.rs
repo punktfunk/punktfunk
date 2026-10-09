@@ -7,6 +7,7 @@
 
 use super::recovery::{KeyframeGate, KeyframeVerdict, IDR_COOLDOWN_FULL};
 use super::*;
+use crate::session_status::pack_mode;
 use punktfunk_core::abr::budget::encoder_kbps_for_budget;
 
 /// A keyframe against an ordinary frame, percent, when `--idr-pct` says nothing. Ten times,

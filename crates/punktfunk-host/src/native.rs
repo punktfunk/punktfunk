@@ -35,7 +35,7 @@ pub(crate) mod link;
 /// A seat's Steam, up before its client asks (`design/steam-seats-warm-launch-implementation-plan.md`).
 #[cfg(target_os = "linux")]
 pub(crate) mod prewarm;
-use crate::compositor_route::resolve_compositor;
+use crate::compositor_route::{resolve_compositor, GamescopeHold};
 
 /// GameStream presents the same virtual pad and must pick `windows_xbox_hid` from this definition.
 pub(crate) mod gamepad;
@@ -2320,51 +2320,8 @@ async fn teardown(
     }
 }
 
-/// Live sessions, on either plane, that may stream a gamescope the host took over.
-static LIVE_GAMESCOPE: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-
-/// Whether any session holds a [`GamescopeHold`]: a held takeover is then streaming, not kept.
-pub(crate) fn gamescope_sessions_live() -> bool {
-    LIVE_GAMESCOPE.load(Ordering::SeqCst) > 0
-}
-
-/// One count in [`LIVE_GAMESCOPE`], taken before the session resolves its compositor. Resolving
-/// cancels a pending Game Mode hand-back; the last hold dropped, on any path, schedules it again.
-pub(crate) struct GamescopeHold;
-
-impl GamescopeHold {
-    pub(crate) fn new() -> Self {
-        LIVE_GAMESCOPE.fetch_add(1, Ordering::SeqCst);
-        GamescopeHold
-    }
-}
-
-impl Drop for GamescopeHold {
-    fn drop(&mut self) {
-        // A `join` session still shows the owner's game after the owner leaves.
-        if LIVE_GAMESCOPE.fetch_sub(1, Ordering::SeqCst) == 1 {
-            crate::vdisplay::restore_managed_session();
-        }
-    }
-}
-
 /// Reopen backoff after a host-lifetime capturer dies. Mic has its own ([`crate::audio::MicPump`]).
 const INJECTOR_REOPEN_BACKOFF: std::time::Duration = std::time::Duration::from_secs(2);
-
-/// Pack `(w, h, hz)` into one atomic word (16|16|16) — one store, not three racy ones.
-pub(crate) fn pack_mode(width: u32, height: u32, refresh_hz: u32) -> u64 {
-    ((width as u64 & 0xffff) << 32)
-        | ((height as u64 & 0xffff) << 16)
-        | (refresh_hz as u64 & 0xffff)
-}
-
-pub(crate) fn unpack_mode(packed: u64) -> (u32, u32, u32) {
-    (
-        ((packed >> 32) & 0xffff) as u32,
-        ((packed >> 16) & 0xffff) as u32,
-        (packed & 0xffff) as u32,
-    )
-}
 
 /// Integer Hz from `1/effective_hz` (exact). Differs from the request when e.g. KWin caps at 60.
 fn interval_hz(interval: std::time::Duration) -> u32 {
@@ -2608,6 +2565,7 @@ mod tests {
 
     #[test]
     fn live_mode_pack_roundtrips_and_interval_recovers_hz() {
+        use crate::session_status::{pack_mode, unpack_mode};
         // Pack → unpack is exact for real modes.
         for (w, h, hz) in [(1280u32, 720u32, 60u32), (3840, 2160, 144), (320, 200, 24)] {
             assert_eq!(unpack_mode(pack_mode(w, h, hz)), (w, h, hz));

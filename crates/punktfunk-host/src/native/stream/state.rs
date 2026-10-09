@@ -18,6 +18,7 @@ use super::cursor::settle_portal_cursor;
 use super::pipeline::{build_pipeline_with_retry, resolve_plan, Pipeline};
 use super::*;
 use crate::native::bitrate::{resolve_bitrate_kbps_for, EncDerive, EncoderCeiling};
+use crate::session_status::pack_mode;
 
 /// (capture_ns, submit_ns) per frame handed to the encoder and not yet polled.
 pub(super) type Inflight = std::collections::VecDeque<(u64, u64)>;

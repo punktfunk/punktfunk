@@ -161,9 +161,9 @@ pub fn start(
             counters.reset();
             let live_session =
                 crate::session_status::register(crate::session_status::Registration {
-                    mode: Arc::new(std::sync::atomic::AtomicU64::new(crate::native::pack_mode(
-                        cfg.width, cfg.height, cfg.fps,
-                    ))),
+                    mode: Arc::new(std::sync::atomic::AtomicU64::new(
+                        crate::session_status::pack_mode(cfg.width, cfg.height, cfg.fps),
+                    )),
                     bitrate_kbps: live.bitrate_kbps.clone(),
                     codec: cfg.codec,
                     stop: stop.clone(),
@@ -277,7 +277,7 @@ fn run(
 ) -> Result<()> {
     pf_frame::session_tuning::on_hot_thread();
     // Every source below resolves the compositor, which cancels a pending Game Mode hand-back.
-    let _gamescope_hold = crate::native::GamescopeHold::new();
+    let _gamescope_hold = crate::compositor_route::GamescopeHold::new();
     // Reject an out-of-range mode before allocating capture/encode buffers.
     encode::validate_dimensions(cfg.codec, cfg.width, cfg.height)
         .context("client-requested video mode")?;
