@@ -1191,6 +1191,59 @@ mod tests {
         assert!(caps.coincide && caps.layered_dpb);
     }
 
+    /// `derive_caps` never reads the codec. Each codec's device derives the same
+    /// arrangement, passes its own DPB depth and level through, and takes a
+    /// 10-bit or 4:4:4 format only when it lists that format.
+    #[test]
+    fn every_codec_device_derives_through_the_same_rules() {
+        let devices = [
+            (
+                MaxLevelIdc::H264(hh::StdVideoH264LevelIdc_STD_VIDEO_H264_LEVEL_IDC_6_2),
+                17,
+            ),
+            (
+                MaxLevelIdc::H265(hh::StdVideoH265LevelIdc_STD_VIDEO_H265_LEVEL_IDC_6_2),
+                17,
+            ),
+            (
+                MaxLevelIdc::Av1(hh::StdVideoAV1Level_STD_VIDEO_AV1_LEVEL_5_1),
+                9,
+            ),
+        ];
+        for (max_level, max_dpb_slots) in devices {
+            let nv12_only = RawCaps {
+                max_level,
+                max_dpb_slots,
+                coincide_formats: vec![entry(NV12, COINCIDE_USAGE)],
+                ..radv_like()
+            };
+            let caps = derive_caps(&nv12_only, NV12).unwrap();
+            assert!(caps.coincide && !caps.layered_dpb);
+            assert_eq!(caps.max_dpb_slots, max_dpb_slots);
+            assert_eq!(caps.max_level_idc, max_level);
+
+            for wanted in [P010, YUV444_8, YUV444_10] {
+                assert_eq!(
+                    derive_caps(&nv12_only, wanted).unwrap_err(),
+                    CapsError::NoFormat {
+                        mode: "coincide (DPB|DST|SAMPLED)",
+                        wanted
+                    }
+                );
+                let listed = RawCaps {
+                    coincide_formats: vec![
+                        entry(NV12, COINCIDE_USAGE),
+                        entry(wanted, COINCIDE_USAGE),
+                    ],
+                    ..nv12_only.clone()
+                };
+                let caps = derive_caps(&listed, wanted).unwrap();
+                assert_eq!(caps.output_format, wanted);
+                assert_eq!(Some(caps.plane_view_formats), plane_formats(wanted));
+            }
+        }
+    }
+
     #[test]
     fn zero_alignments_normalize_to_one_so_ring_math_never_divides_by_zero() {
         let mut raw = radv_like();
