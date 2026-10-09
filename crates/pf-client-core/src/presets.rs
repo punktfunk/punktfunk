@@ -548,6 +548,15 @@ impl PresetsFile {
         self.save_to(&config_dir()?)
     }
 
+    /// Load the catalog, apply `f`, save: a shell's edit, so another process's write in
+    /// between survives.
+    pub fn update<R>(f: impl FnOnce(&mut PresetsFile) -> R) -> anyhow::Result<R> {
+        let mut catalog = Self::load();
+        let r = f(&mut catalog);
+        catalog.save()?;
+        Ok(r)
+    }
+
     /// The mirror goes first. If it fails, the save fails before the new file changes, so no
     /// later load prefers a stale mirror over an edit that was reported saved.
     fn save_to(&mut self, dir: &Path) -> anyhow::Result<()> {

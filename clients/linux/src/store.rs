@@ -69,12 +69,10 @@ impl Store {
         self.presets.borrow()
     }
 
-    /// Re-read the hosts file, apply `f`, save, and tell the listeners.
+    /// [`KnownHosts::update`], then tell the listeners.
     pub fn update_hosts<R>(&self, f: impl FnOnce(&mut KnownHosts) -> R) -> anyhow::Result<R> {
-        let mut known = KnownHosts::read();
-        let r = f(&mut known);
-        known.save()?;
-        self.set(Changed::Hosts, known, &self.hosts);
+        let r = KnownHosts::update(f)?;
+        self.reload(Changed::Hosts);
         Ok(r)
     }
 
@@ -88,12 +86,10 @@ impl Store {
         r
     }
 
-    /// Re-read the preset catalog, apply `f`, save, and tell the listeners.
+    /// [`PresetsFile::update`], then tell the listeners.
     pub fn update_presets<R>(&self, f: impl FnOnce(&mut PresetsFile) -> R) -> anyhow::Result<R> {
-        let mut catalog = PresetsFile::load();
-        let r = f(&mut catalog);
-        catalog.save()?;
-        self.set(Changed::Presets, catalog, &self.presets);
+        let r = PresetsFile::update(f)?;
+        self.reload(Changed::Presets);
         Ok(r)
     }
 

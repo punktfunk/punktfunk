@@ -67,7 +67,7 @@ use pf_client_core::gamepad::GamepadService;
 use pf_client_core::start;
 use speed::{SpeedProps, SpeedState};
 use std::collections::HashMap;
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, AtomicU64};
 use std::sync::{Arc, Mutex};
 use windows_reactor::*;
 
@@ -153,6 +153,20 @@ impl PartialEq for Svc {
     fn eq(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.ctx, &other.ctx)
     }
+}
+
+/// Finish a store write from a page: bump `rev`, so the page redraws from the files it reads
+/// while drawing, and put a failure on the status line. `Some` holds what the edit returned.
+pub(crate) fn saved<R, E: std::fmt::Display>(
+    r: std::result::Result<R, E>,
+    set_status: &AsyncSetState<String>,
+    rev: Option<(u64, &AsyncSetState<u64>)>,
+) -> Option<R> {
+    if let Some((rev, set_rev)) = rev {
+        set_rev.call(rev + 1);
+    }
+    r.map_err(|e| set_status.call(format!("Couldn't save \u{2014} {e:#}")))
+        .ok()
 }
 
 /// Cross-thread shell state driven off the UI thread: the current target, the live spawned
@@ -409,17 +423,18 @@ fn root(cx: &mut RenderCx, ctx: &Arc<AppCtx>) -> Element {
     // below can deliver anything: a link queued at startup is explicit intent and wins, and
     // `pending()` reads the queue WITHOUT draining it so the router still gets it.
     cx.use_effect((), {
-        let (ctx, set_screen, set_library, set_status) = (
-            ctx.clone(),
-            set_screen.clone(),
-            set_library.clone(),
-            set_status.clone(),
-        );
+        let svc = Svc {
+            ctx: ctx.clone(),
+            set_screen: set_screen.clone(),
+            set_status: set_status.clone(),
+            set_speed: set_speed.clone(),
+            set_library: set_library.clone(),
+        };
         move || {
             if crate::deeplink::pending() {
                 return;
             }
-            let settings = ctx.settings.lock().unwrap().clone();
+            let settings = svc.ctx.settings.lock().unwrap().clone();
             let known = pf_client_core::trust::KnownHosts::load();
             let (default, source) = start::default_host_with_source(&settings, &known);
             tracing::info!(
@@ -431,21 +446,16 @@ fn root(cx: &mut RenderCx, ctx: &Arc<AppCtx>) -> Element {
             let screen = start::start_screen(&settings, &known);
             let Some(i) = screen.host_index() else { return };
             let target = hosts::saved_target(&known.hosts[i]);
-            // The same three steps the "Browse library" menu item takes, in the same order.
-            *ctx.shared.target.lock().unwrap() = target.clone();
-            library::start_fetch(&ctx, &set_library);
-            set_screen.call(Screen::Library);
+            library::open_library(&svc, target.clone());
             // Stream is the library PLUS a connect, never a screen of its own: the session
             // window is the overlay, so ending it leaves the shelf on screen underneath.
             if matches!(screen, start::Start::Stream(_)) {
-                connect::initiate_waking(&ctx, target, &set_screen, &set_status);
+                connect::initiate_waking(&svc.ctx, target, &svc.set_screen, &svc.set_status);
             }
         }
     });
 
-    // Route an arriving link. Parsing, preset resolution and every refusal rule (only a stable
-    // record id dials unattended) live in `plan_from_link`. This end turns the outcome into the
-    // call a tile click makes, so a link gets the tile's wake, trust and error handling.
+    // Route an arriving link (`route_link`).
     cx.use_effect(deep_link.clone(), {
         let (ctx, set_screen, set_status, set_deep_link, set_link_confirm) = (
             ctx.clone(),
@@ -460,86 +470,14 @@ fn root(cx: &mut RenderCx, ctx: &Arc<AppCtx>) -> Element {
                 return;
             };
             set_deep_link.call(None);
-            let refuse = |msg: String| {
-                tracing::info!(%msg, "deep link refused");
-                set_status.call(msg);
-                set_screen.call(Screen::Hosts);
-            };
-            let link = match pf_client_core::deeplink::parse(&url) {
-                Ok(l) => l,
-                Err(e) => return refuse(e.message()),
-            };
-            // Rule 2 of §3: never preempt a live session. Only this layer knows one is running,
-            // which is why the brain leaves the check here: the child itself, or a connect
-            // still waiting on a wake or an approval. The screen stays where it is.
-            let busy = matches!(
-                screen_now,
-                Screen::Stream | Screen::Connecting | Screen::Waking | Screen::RequestAccess
-            ) || ctx.shared.session.lock().unwrap().is_running();
-            if busy {
-                let msg = "A session is already running \u{2014} end it first.";
-                tracing::info!(msg, "deep link refused");
-                set_status.call(msg.into());
-                return;
-            }
-            let known = KnownHosts::load();
-            let plan = pf_client_core::orchestrate::plan_from_link(
-                &link,
-                &known,
-                &pf_client_core::presets::PresetsFile::load(),
-                &ctx.settings.lock().unwrap().clone(),
+            route_link(
+                &ctx,
+                &url,
+                &screen_now,
+                &set_screen,
+                &set_status,
+                &set_link_confirm,
             );
-            use pf_client_core::orchestrate::PlanOutcome;
-            match plan {
-                Ok(PlanOutcome::Connect(mut p)) => {
-                    // The plan's profile is the link's `as=`, else the saved pick: only the
-                    // link's own wins over the picker.
-                    p.profile = link.as_profile.clone();
-                    dial_link(&ctx, &p, &set_screen, &set_status)
-                }
-                // The link named a saved, pinned host by its LABEL or its ADDRESS rather than
-                // by its record id. This app registers the `punktfunk` scheme (AppxManifest's
-                // windows.protocol / the installer's URL Protocol key), so any web page can
-                // hand us such a URL, and both of those references are guessable — it may not
-                // dial on its own. Arm the confirmation instead; OK runs `dial_link` on the
-                // very same plan, so the confirmed link and an id-referenced one are one code
-                // path. Deliberately NOT the PIN ceremony below: this host is already pinned,
-                // and re-pairing it would throw that pin away.
-                Ok(PlanOutcome::ConfirmConnect(mut p)) => {
-                    p.profile = link.as_profile.clone();
-                    set_link_confirm.call(Some(p))
-                }
-                // Known but never pinned, or unknown: a link may not pair or trust on its own,
-                // so it opens the PIN ceremony seeded with what it CLAIMED: the name as claimed,
-                // the fingerprint pre-filling the pin (verified, not blind TOFU), and the launch
-                // and preset kept through the detour (§3.1, as in the GTK shell).
-                Ok(PlanOutcome::ConfirmUnknown(u)) => {
-                    let name = u.name.clone().unwrap_or_else(|| u.addr.clone());
-                    *ctx.shared.target.lock().unwrap() = Target {
-                        name: name.clone(),
-                        addr: u.addr.clone(),
-                        port: u.port,
-                        fp_hex: u.fp.clone(),
-                        pair_optional: false,
-                        mac: Vec::new(),
-                        // A link carries no mgmt port (nor a MAC), so this stays unknown until
-                        // an advert teaches it — same fallback as the hand-added case.
-                        mgmt_port: None,
-                        preset: u.preset.clone(),
-                        launch: u.launch.clone(),
-                        link_profile: None,
-                    };
-                    set_status.call(format!(
-                        "{name} isn't paired with this device yet \u{2014} pair it to continue."
-                    ));
-                    set_screen.call(Screen::Pair);
-                }
-                Ok(PlanOutcome::Unsupported(route)) => refuse(format!(
-                    "Punktfunk can't open \u{201c}{}\u{201d} links yet.",
-                    route.as_str()
-                )),
-                Err(e) => refuse(e.message()),
-            }
         }
     });
 
@@ -631,35 +569,15 @@ fn root(cx: &mut RenderCx, ctx: &Arc<AppCtx>) -> Element {
         }
     });
 
-    // Screen-entrance animation: each navigation slides the new screen up a few px while fading it
-    // in (the Windows-Settings drill-in). It's a manual tween, not a composition animation, because
-    // reactor's DSL exposes no static transform/translation setter and its one-shot animations run
-    // from the visual's CURRENT value (a shown element is already at opacity 1, so nothing to fade
-    // from). So a worker thread steps a 0 → 1 `progress` after each navigation; the wrapper maps it
-    // to opacity (= progress) and a top margin (= (1-progress)·offset). The page components are
-    // memoised on unchanged props, so each step is just a cheap root re-render updating two props.
-    // A generation guard (bumped per navigation) stops a superseded tween so rapid nav can't fight.
+    // Screen entrance (the Windows-Settings drill-in): each navigation tweens `progress` 0 → 1,
+    // which the wrapper maps to opacity and a top margin. The page components are memoised on
+    // unchanged props, so each step is a cheap root re-render updating two props.
     let anim_gen = cx.use_ref(std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)));
     let (anim, set_anim) = cx.use_async_state((Option::<Screen>::None, 1.0f64));
     cx.use_effect(screen.clone(), {
         let (s, set_anim, generation) =
             (screen.clone(), set_anim.clone(), anim_gen.borrow().clone());
-        move || {
-            use std::sync::atomic::Ordering::SeqCst;
-            let mine = generation.fetch_add(1, SeqCst) + 1;
-            std::thread::spawn(move || {
-                const STEPS: u32 = 14;
-                for i in 0..=STEPS {
-                    if generation.load(SeqCst) != mine {
-                        return; // a newer navigation superseded this tween
-                    }
-                    let p = f64::from(i) / f64::from(STEPS);
-                    let eased = 1.0 - (1.0 - p).powi(3); // ease-out cubic
-                    set_anim.call((Some(s.clone()), eased));
-                    std::thread::sleep(std::time::Duration::from_millis(16));
-                }
-            });
-        }
+        move || spawn_tween(generation, 14, move |p| set_anim.call((Some(s.clone()), p)))
     });
     // Progress for THIS screen: 0 until the tween for it starts (fresh navigation starts hidden +
     // offset, no flash), 1 once settled. A stale value for another screen reads as 0.
@@ -681,22 +599,7 @@ fn root(cx: &mut RenderCx, ctx: &Arc<AppCtx>) -> Element {
             set_nav_anim.clone(),
             nav_gen.borrow().clone(),
         );
-        move || {
-            use std::sync::atomic::Ordering::SeqCst;
-            let mine = generation.fetch_add(1, SeqCst) + 1;
-            std::thread::spawn(move || {
-                const STEPS: u32 = 14;
-                for i in 0..=STEPS {
-                    if generation.load(SeqCst) != mine {
-                        return; // a newer section switch superseded this tween
-                    }
-                    let p = f64::from(i) / f64::from(STEPS);
-                    let eased = 1.0 - (1.0 - p).powi(3);
-                    set_nav_anim.call((s.clone(), eased));
-                    std::thread::sleep(std::time::Duration::from_millis(16));
-                }
-            });
-        }
+        move || spawn_tween(generation, 14, move |p| set_nav_anim.call((s.clone(), p)))
     });
     let nav_progress = if nav_anim.0 == settings_nav {
         nav_anim.1
@@ -704,32 +607,20 @@ fn root(cx: &mut RenderCx, ctx: &Arc<AppCtx>) -> Element {
         0.0
     };
 
-    // "Add host" modal entrance: the same manual tween as the screen navigation (see above for
-    // why it can't be a composition animation), stepping 0 → 1 when the modal opens. The hosts
-    // page maps it to the modal's opacity + a downward start offset (the slide-up) and the
-    // scrim's fade. Closing resets to 0 instantly — the modal unmounts, nothing to animate.
+    // "Add host" modal entrance: the same tween, 0 → 1 when the modal opens, which the hosts page
+    // maps to the modal's opacity, its slide-up and the scrim's fade. Closing stops a running
+    // tween and resets to 0 at once: the modal unmounts, nothing to animate.
     let add_gen = cx.use_ref(std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)));
     let (add_anim, set_add_anim) = cx.use_async_state(0.0f64);
     cx.use_effect(show_add, {
         let (set_add_anim, generation) = (set_add_anim.clone(), add_gen.borrow().clone());
         move || {
-            use std::sync::atomic::Ordering::SeqCst;
-            let mine = generation.fetch_add(1, SeqCst) + 1;
             if !show_add {
+                generation.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                 set_add_anim.call(0.0);
                 return;
             }
-            std::thread::spawn(move || {
-                const STEPS: u32 = 12;
-                for i in 0..=STEPS {
-                    if generation.load(SeqCst) != mine {
-                        return; // reopened/closed mid-tween — a newer run owns the value
-                    }
-                    let p = f64::from(i) / f64::from(STEPS);
-                    set_add_anim.call(1.0 - (1.0 - p).powi(3)); // ease-out cubic
-                    std::thread::sleep(std::time::Duration::from_millis(16));
-                }
-            });
+            spawn_tween(generation, 12, move |p| set_add_anim.call(p));
         }
     });
 
@@ -784,6 +675,7 @@ fn root(cx: &mut RenderCx, ctx: &Arc<AppCtx>) -> Element {
             &set_settings_custom_res,
             settings_rev,
             &set_settings_rev,
+            &set_status,
             nav_progress,
         ),
         Screen::Licenses => licenses::licenses_page(ctx, &set_screen),
@@ -880,6 +772,114 @@ fn root(cx: &mut RenderCx, ctx: &Arc<AppCtx>) -> Element {
         profiles::seat_slot(&seat, &set_seat),
     ])
     .into()
+}
+
+/// Step an ease-out cubic 0 → 1 over `steps` 16 ms frames on a worker thread, handing each
+/// value to `set`. A manual tween, not a composition animation: reactor's DSL has no static
+/// transform setter, and its one-shot animations start from the visual's current value, so a
+/// shown element has nothing to fade from. Each call bumps `generation`, and a tween stops once
+/// a newer one has bumped it, so rapid navigation never has two fighting.
+fn spawn_tween(generation: Arc<AtomicU64>, steps: u32, set: impl Fn(f64) + Send + 'static) {
+    use std::sync::atomic::Ordering::SeqCst;
+    let mine = generation.fetch_add(1, SeqCst) + 1;
+    std::thread::spawn(move || {
+        for i in 0..=steps {
+            if generation.load(SeqCst) != mine {
+                return;
+            }
+            let p = f64::from(i) / f64::from(steps);
+            set(1.0 - (1.0 - p).powi(3));
+            std::thread::sleep(std::time::Duration::from_millis(16));
+        }
+    });
+}
+
+/// Route an arriving link. Parsing, preset resolution and every refusal rule (only a stable
+/// record id dials unattended) live in `plan_from_link`. This end turns the outcome into the
+/// call a tile click makes, so a link gets the tile's wake, trust and error handling.
+fn route_link(
+    ctx: &Arc<AppCtx>,
+    url: &str,
+    screen_now: &Screen,
+    set_screen: &AsyncSetState<Screen>,
+    set_status: &AsyncSetState<String>,
+    set_link_confirm: &AsyncSetState<Option<Box<pf_client_core::orchestrate::ConnectPlan>>>,
+) {
+    let refuse = |msg: String| {
+        tracing::info!(%msg, "deep link refused");
+        set_status.call(msg);
+        set_screen.call(Screen::Hosts);
+    };
+    let link = match pf_client_core::deeplink::parse(url) {
+        Ok(l) => l,
+        Err(e) => return refuse(e.message()),
+    };
+    // Rule 2 of §3: never preempt a live session. Only this layer knows one is running,
+    // which is why the brain leaves the check here: the child itself, or a connect
+    // still waiting on a wake or an approval. The screen stays where it is.
+    let busy = matches!(
+        screen_now,
+        Screen::Stream | Screen::Connecting | Screen::Waking | Screen::RequestAccess
+    ) || ctx.shared.session.lock().unwrap().is_running();
+    if busy {
+        let msg = "A session is already running \u{2014} end it first.";
+        tracing::info!(msg, "deep link refused");
+        set_status.call(msg.into());
+        return;
+    }
+    let known = KnownHosts::load();
+    let plan = pf_client_core::orchestrate::plan_from_link(
+        &link,
+        &known,
+        &pf_client_core::presets::PresetsFile::load(),
+        &ctx.settings.lock().unwrap().clone(),
+    );
+    use pf_client_core::orchestrate::PlanOutcome;
+    match plan {
+        Ok(PlanOutcome::Connect(mut p)) => {
+            // The plan's profile is the link's `as=`, else the saved pick: only the
+            // link's own wins over the picker.
+            p.profile = link.as_profile.clone();
+            dial_link(ctx, &p, set_screen, set_status)
+        }
+        // A pinned host named by its label or address, which any web page could guess: arm
+        // the confirmation, whose OK runs `dial_link` on this same plan. Not the PIN
+        // ceremony: re-pairing would throw the pin away.
+        Ok(PlanOutcome::ConfirmConnect(mut p)) => {
+            p.profile = link.as_profile.clone();
+            set_link_confirm.call(Some(p))
+        }
+        // Known but never pinned, or unknown: a link may not pair or trust on its own,
+        // so it opens the PIN ceremony seeded with what it CLAIMED: the name as claimed,
+        // the fingerprint pre-filling the pin (verified, not blind TOFU), and the launch
+        // and preset kept through the detour (§3.1, as in the GTK shell).
+        Ok(PlanOutcome::ConfirmUnknown(u)) => {
+            let name = u.name.clone().unwrap_or_else(|| u.addr.clone());
+            *ctx.shared.target.lock().unwrap() = Target {
+                name: name.clone(),
+                addr: u.addr.clone(),
+                port: u.port,
+                fp_hex: u.fp.clone(),
+                pair_optional: false,
+                mac: Vec::new(),
+                // A link carries no mgmt port (nor a MAC), so this stays unknown until
+                // an advert teaches it — same fallback as the hand-added case.
+                mgmt_port: None,
+                preset: u.preset.clone(),
+                launch: u.launch.clone(),
+                link_profile: None,
+            };
+            set_status.call(format!(
+                "{name} isn't paired with this device yet \u{2014} pair it to continue."
+            ));
+            set_screen.call(Screen::Pair);
+        }
+        Ok(PlanOutcome::Unsupported(route)) => refuse(format!(
+            "Punktfunk can't open \u{201c}{}\u{201d} links yet.",
+            route.as_str()
+        )),
+        Err(e) => refuse(e.message()),
+    }
 }
 
 /// Run a resolved link plan: the same four calls a host tile's click makes, so a link gets the
