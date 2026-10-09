@@ -166,3 +166,11 @@ final class ClientIdentityStore: @unchecked Sendable {
         return SecItemAdd(legacy as CFDictionary, nil)
     }
 }
+
+extension MgmtTarget {
+    /// `host`'s management API as this device's stored identity. Blocking Keychain work on the
+    /// first load; the app warms both halves at launch.
+    static func make(host: StoredHost, port: UInt16? = nil) -> Result<MgmtTarget, MgmtTargetMissing> {
+        make(host: host, port: port, identity: (try? ClientIdentityStore.shared.load())?.identity)
+    }
+}

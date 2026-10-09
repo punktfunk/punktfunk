@@ -252,14 +252,13 @@ extension ConsoleModel {
             pushArt(DemoMode.games) { try? await art.data(for: $0) }
             return
         }
-        guard let identity = (try? ClientIdentityStore.shared.load())?.identity else {
+        guard let target = MgmtTarget.make(host: host, port: mgmt).target(orSay: { why in
+            if refreshOnly { return }
             bridge.push(
                 .libraryPhase,
                 ConsoleJSON.libraryError(
-                    title: "No identity", body: "This device has no client certificate yet.",
-                    canRetry: false))
-            return
-        }
+                    title: "Couldn't load the library", body: why, canRetry: false))
+        }) else { return }
         // A running-titles refresh must not cut a list fetch short; only a new fetch does.
         if !refreshOnly {
             fetching?.cancel()
@@ -274,11 +273,9 @@ extension ConsoleModel {
             if let cached, serial == self.fetchSerial {
                 bridge.push(.libraryCached, ConsoleJSON.libraryGames(cached.games))
                 // The cached covers go up with the cached shelf, not after the host's answer.
-                loadArt(cached.games, host: host, identity: identity, mgmt: mgmt, cachedOnly: true)
+                loadArt(cached.games, target: target, cachedOnly: true)
             }
-            let status = await LibraryClient.status(
-                address: addr, port: mgmt, certPEM: identity.certPEM, keyPEM: identity.keyPEM,
-                hostFingerprint: host.pinnedSHA256)
+            let status = await LibraryClient.status(target)
             let running = status.games
             // A newer fetch owns the shelf by the time a slow host answers: not its titles.
             guard serial == self.fetchSerial else { return }
@@ -286,14 +283,11 @@ extension ConsoleModel {
             bridge.push(.libraryRunning, ConsoleJSON.runningGames(running))
             if refreshOnly { return }
             do {
-                let games = try await LibraryClient.fetch(
-                    address: addr, port: mgmt, certPEM: identity.certPEM, keyPEM: identity.keyPEM,
-                    hostFingerprint: host.pinnedSHA256
-                ).launchersFirst
+                let games = try await LibraryClient.fetch(target).launchersFirst
                 bridge.push(.libraryGames, ConsoleJSON.libraryGames(games))
                 bridge.push(.libraryPhase, games.isEmpty ? "\"Empty\"" : "\"Ready\"")
                 await LibraryCache.shared?.store(games, hostID: host.id.uuidString)
-                loadArt(games, host: host, identity: identity, mgmt: mgmt)
+                loadArt(games, target: target)
             } catch {
                 // A newer fetch owns the shelf now.
                 if Task.isCancelled { return }
@@ -313,14 +307,8 @@ extension ConsoleModel {
 
     /// Posters, as they arrive. The shell decodes each at the size it draws. `cachedOnly`
     /// asks the disk cache alone, for a shelf whose host has not answered.
-    private func loadArt(
-        _ games: [GameEntry], host: StoredHost, identity: ClientIdentity, mgmt: UInt16,
-        cachedOnly: Bool = false
-    ) {
-        guard let loader = try? LibraryArtLoader(
-            address: host.address, port: mgmt, certPEM: identity.certPEM,
-            keyPEM: identity.keyPEM, hostFingerprint: host.pinnedSHA256)
-        else { return }
+    private func loadArt(_ games: [GameEntry], target: MgmtTarget, cachedOnly: Bool = false) {
+        let loader = LibraryArtLoader(target)
         pushArt(games) { url in
             if cachedOnly { return await loader.cached(for: url) }
             return try? await loader.data(for: url)
@@ -357,7 +345,7 @@ extension ConsoleModel {
             return
         }
         Task { [weak self] in
-            let answer = await ProfileFetch.list(host, mgmt: mgmt > 0 ? mgmt : nil)
+            let answer = await ProfileFetch.list(host, mgmt: mgmt)
             switch answer {
             case .listed(let rows?):
                 let data = try? JSONEncoder().encode(rows)
@@ -374,7 +362,7 @@ extension ConsoleModel {
     /// Starts a profile's stopped seat. The shell polls `FetchProfiles` for `ready` itself.
     private func wakeProfile(addr: String, mgmt: UInt16, fp: String, id: String) {
         guard let host = host(fp: fp, addr: addr, port: 0) else { return }
-        Task { _ = await ProfileFetch.wake(host, mgmt: mgmt > 0 ? mgmt : nil, id: id) }
+        Task { _ = await ProfileFetch.wake(host, mgmt: mgmt, id: id) }
     }
 
     private func pushProfiles(_ fp: String, _ answer: Any) {
@@ -473,12 +461,11 @@ extension ConsoleModel {
     /// End a title this device launched, say how it went, then re-read what the host runs so
     /// the poster's badge follows.
     private func endGame(addr: String, mgmt: UInt16, fp: String, appID: String, title: String) {
-        guard let host = host(fp: fp, addr: addr, port: 0), let pin = host.pinnedSHA256,
-              let identity = (try? ClientIdentityStore.shared.load())?.identity else { return }
+        guard let host = host(fp: fp, addr: addr, port: 0),
+              let target = MgmtTarget.make(host: host, port: mgmt).target(orSay: notice)
+        else { return }
         Task { [weak self] in
-            let outcome = await LibraryClient.endGame(
-                appID: appID, address: addr, port: mgmt,
-                certPEM: identity.certPEM, keyPEM: identity.keyPEM, hostFingerprint: pin)
+            let outcome = await LibraryClient.endGame(appID: appID, on: target)
             self?.notice(outcome.notice(title: title))
             self?.fetchLibrary(addr: addr, mgmt: mgmt, fp: fp, refreshOnly: true)
         }
@@ -489,12 +476,11 @@ extension ConsoleModel {
     private func changeInstall(
         addr: String, mgmt: UInt16, fp: String, appID: String, title: String, action: InstallAction
     ) {
-        guard let host = host(fp: fp, addr: addr, port: 0), let pin = host.pinnedSHA256,
-              let identity = (try? ClientIdentityStore.shared.load())?.identity else { return }
+        guard let host = host(fp: fp, addr: addr, port: 0),
+              let target = MgmtTarget.make(host: host, port: mgmt).target(orSay: notice)
+        else { return }
         Task { [weak self] in
-            let outcome = await LibraryClient.changeInstall(
-                appID: appID, action: action, address: addr, port: mgmt,
-                certPEM: identity.certPEM, keyPEM: identity.keyPEM, hostFingerprint: pin)
+            let outcome = await LibraryClient.changeInstall(appID: appID, action: action, on: target)
             self?.notice(outcome.notice(action, title: title))
             let removed = outcome == .done && action == .remove
             self?.fetchLibrary(addr: addr, mgmt: mgmt, fp: fp, refreshOnly: !removed)

@@ -417,7 +417,7 @@ public struct RunningGame: Codable, Hashable, Sendable {
     public var awaitingWindow: Bool?
     /// The live session streaming it; absent for a game nobody streams.
     public var sessionID: UInt64?
-    /// This device may end it (``LibraryClient/endGame(appID:address:port:certPEM:keyPEM:hostFingerprint:)``):
+    /// This device may end it (``LibraryClient/endGame(appID:on:)``):
     /// a game it launched. Absent from a host that predates the field.
     public var endable: Bool?
 
@@ -575,34 +575,16 @@ public enum LibraryClient {
         return games
     }
 
-    /// The host's catalog, walked by `GET /api/v1/library/page` and authenticated by **mTLS**:
-    /// the client presents its paired cert/key PEM and the host's self-signed cert is pinned by
-    /// `hostFingerprint` (SHA-256 of its DER). A host older than the paged route refuses it on
-    /// this lane, so `GET /api/v1/library` answers whole instead.
-    /// `hostFingerprint == nil` throws `unauthorized`: an unpaired host is never trusted.
-    public static func fetch(
-        address: String,
-        port: UInt16 = punktfunkDefaultMgmtPort,
-        certPEM: String,
-        keyPEM: String,
-        hostFingerprint: Data?
-    ) async throws -> [GameEntry] {
-        guard let base = URL(string: "\(baseURL(address: address, port: port))/api/v1/library")
+    /// The host's catalog, walked by `GET /api/v1/library/page`. A host older than the paged
+    /// route refuses it on this lane, so `GET /api/v1/library` answers whole instead.
+    public static func fetch(_ target: MgmtTarget) async throws -> [GameEntry] {
+        guard let base = URL(
+            string: "\(baseURL(address: target.address, port: target.port))/api/v1/library")
         else { throw LibraryError.unreachable("invalid host address") }
-        let identity = try clientIdentity(certPEM: certPEM, keyPEM: keyPEM)
         let body: (String) async throws -> Data = { path in
-            let response = try await send(
-                path: path, address: address, port: port,
-                identity: identity, hostFingerprint: hostFingerprint)
-            switch response.status {
-            case 200:
-                return response.body
-            // Both are the host declining this certificate, with the same remedy.
-            case 401, 403:
-                throw LibraryError.unauthorized
-            default:
-                throw LibraryError.http(response.status)
-            }
+            let response = try await send(path, to: target)
+            try expectOK(response)
+            return response.body
         }
         var games: [GameEntry]
         do {
@@ -621,96 +603,42 @@ public enum LibraryClient {
 
     /// The profiles on this host, from `GET /api/v1/profiles/enumerate`, in host order. nil: the
     /// box has no profiles (a 404, or a host too old to know the route).
-    public static func profiles(
-        address: String,
-        port: UInt16 = punktfunkDefaultMgmtPort,
-        certPEM: String,
-        keyPEM: String,
-        hostFingerprint: Data?
-    ) async throws -> [ListedProfile]? {
-        let identity = try clientIdentity(certPEM: certPEM, keyPEM: keyPEM)
-        let response = try await send(
-            path: "/api/v1/profiles/enumerate", address: address, port: port,
-            identity: identity, hostFingerprint: hostFingerprint)
-        switch response.status {
-        case 200:
-            do {
-                return try JSONDecoder().decode([ListedProfile].self, from: response.body)
-            } catch {
-                throw LibraryError.unreachable("bad JSON")
-            }
-        case 404:
-            return nil
-        case 401, 403:
-            throw LibraryError.unauthorized
-        default:
-            throw LibraryError.http(response.status)
+    public static func profiles(_ target: MgmtTarget) async throws -> [ListedProfile]? {
+        let response = try await send("/api/v1/profiles/enumerate", to: target)
+        if response.status == 404 { return nil }
+        try expectOK(response)
+        do {
+            return try JSONDecoder().decode([ListedProfile].self, from: response.body)
+        } catch {
+            throw LibraryError.unreachable("bad JSON")
         }
     }
 
     /// Start profile `id`'s stopped seat: `POST /api/v1/profiles/{id}/wake`. The host answers the
     /// row, `starting` until the seat is up; the caller reads progress from the list.
-    public static func wakeProfile(
-        id: String,
-        address: String,
-        port: UInt16 = punktfunkDefaultMgmtPort,
-        certPEM: String,
-        keyPEM: String,
-        hostFingerprint: Data?
-    ) async throws {
-        let identity = try clientIdentity(certPEM: certPEM, keyPEM: keyPEM)
+    public static func wakeProfile(id: String, on target: MgmtTarget) async throws {
         let escaped = id.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? id
         let response = try await send(
-            path: "/api/v1/profiles/\(escaped)/wake", address: address, port: port,
-            identity: identity, hostFingerprint: hostFingerprint,
+            "/api/v1/profiles/\(escaped)/wake", to: target, method: "POST",
             body: (Data(), "application/json"))
-        switch response.status {
-        case 200, 202:
-            return
-        case 401, 403:
-            throw LibraryError.unauthorized
-        default:
-            throw LibraryError.http(response.status)
-        }
+        try expectOK(response, [200, 202])
     }
 
-    /// What the host currently has running, from `GET /api/v1/status`.
-    ///
-    /// Same lane, same identity, no new host work: `/status` is already on the paired-certificate
-    /// allowlist (the host's `mgmt::auth::cert_may_access`) alongside `/library`, and has carried a
-    /// `games[]` array since the session⇄game lifetime work. The client simply never read it — so a
-    /// player had no way to see, from the device they browse on, that something was already up.
-    ///
-    /// Best-effort by contract: an older host, an unreachable one, or a shape we don't recognize
-    /// yields an empty list rather than an error. Nothing here is worth failing a library screen
-    /// over — the worst case is a Resume badge that doesn't appear.
-    public static func running(
-        address: String,
-        port: UInt16 = punktfunkDefaultMgmtPort,
-        certPEM: String,
-        keyPEM: String,
-        hostFingerprint: Data?
-    ) async -> [RunningGame] {
-        await status(
-            address: address, port: port, certPEM: certPEM, keyPEM: keyPEM,
-            hostFingerprint: hostFingerprint
-        ).games
+    /// What the host currently has running, from `GET /api/v1/status`. Best-effort, as
+    /// ``status(_:)``: the worst case is a Resume badge that doesn't appear.
+    public static func running(_ target: MgmtTarget) async -> [RunningGame] {
+        await status(target).games
     }
 
     /// `GET /api/v1/status`: the launched titles and the host's downloads, kept apart because a
-    /// launch the host declined over its download has no game row left to carry it. Best-effort,
-    /// as ``running(address:port:certPEM:keyPEM:hostFingerprint:)``.
+    /// launch the host declined over its download has no game row left to carry it.
+    ///
+    /// Best-effort by contract: an older host, an unreachable one, or a shape we don't recognize
+    /// yields empty lists rather than an error. Nothing here is worth failing a screen over.
     public static func status(
-        address: String,
-        port: UInt16 = punktfunkDefaultMgmtPort,
-        certPEM: String,
-        keyPEM: String,
-        hostFingerprint: Data?
+        _ target: MgmtTarget
     ) async -> (games: [RunningGame], downloads: [HostDownload], grants: UInt32?) {
-        guard let identity = try? clientIdentity(certPEM: certPEM, keyPEM: keyPEM),
-              let response = try? await send(
-                  path: "/api/v1/status", address: address, port: port,
-                  identity: identity, hostFingerprint: hostFingerprint),
+        guard let response = try? await send("/api/v1/status", to: target),
               response.status == 200,
               let status = try? JSONDecoder().decode(HostStatus.self, from: response.body)
         else { return ([], [], nil) }
@@ -718,106 +646,62 @@ public enum LibraryClient {
     }
 
     /// Start, resume, pause or remove a title's download (`/api/v1/library/install/{id}`). Never
-    /// throws: every outcome is something to tell the player.
+    /// throws: every outcome is something to tell the player, a refusal in the host's words.
     public static func changeInstall(
-        appID: String,
-        action: InstallAction,
-        address: String,
-        port: UInt16 = punktfunkDefaultMgmtPort,
-        certPEM: String,
-        keyPEM: String,
-        hostFingerprint: Data
+        appID: String, action: InstallAction, on target: MgmtTarget
     ) async -> InstallOutcome {
         var allowed = CharacterSet.urlPathAllowed
         allowed.remove("/")
         let id = appID.addingPercentEncoding(withAllowedCharacters: allowed) ?? appID
         let path = "/api/v1/library/install/\(id)"
+        let empty = (data: Data(), contentType: "application/json")
         do {
-            let identity = try clientIdentity(certPEM: certPEM, keyPEM: keyPEM)
             let response: HTTPResponse
             switch action {
             case .install, .resume:
-                response = try await send(
-                    path: path, address: address, port: port, identity: identity,
-                    hostFingerprint: hostFingerprint, body: (Data(), "application/json"))
+                response = try await send(path, to: target, method: "POST", body: empty)
             case .pause:
-                response = try await send(
-                    path: path + "/pause", address: address, port: port, identity: identity,
-                    hostFingerprint: hostFingerprint, body: (Data(), "application/json"))
+                response = try await send(path + "/pause", to: target, method: "POST", body: empty)
             case .remove:
-                response = try await send(
-                    path: path, address: address, port: port, identity: identity,
-                    hostFingerprint: hostFingerprint, delete: true)
+                response = try await send(path, to: target, method: "DELETE")
             }
-            let json = try? JSONSerialization.jsonObject(with: response.body) as? [String: Any]
-            return .from(status: response.status, message: json?["message"] as? String)
+            return .from(status: response.status, message: hostReason(response.body))
         } catch {
             return .failed((error as? LocalizedError)?.errorDescription ?? error.localizedDescription)
         }
     }
 
     /// Upload this client's recent log (`ClientLogRing`) to the host — `POST /api/v1/client-logs`,
-    /// the one WRITE a paired certificate may make (the host's `mgmt/client_logs.rs`). Same lane
-    /// and identity as the library; the host files the bundle under this device and shows it on
-    /// its web console's Logs page next to its own log. Returns the stored bundle id (empty for a
-    /// host that predates the id in the reply).
+    /// the host's `mgmt/client_logs.rs`. The host files the bundle under this device and shows it
+    /// on its web console's Logs page next to its own log. Returns the stored bundle id (empty for
+    /// a host that predates the id in the reply).
     ///
     /// The app's previous run goes first as its own bundle, best effort, and is dropped once
     /// stored: after a freeze or a kill it is the run the report is about.
-    ///
-    /// `hostFingerprint` is required, not optional: this is an outbound write carrying the
-    /// device's diagnostics, and it goes to the host the user paired with.
-    public static func sendLogs(
-        address: String,
-        port: UInt16 = punktfunkDefaultMgmtPort,
-        certPEM: String,
-        keyPEM: String,
-        hostFingerprint: Data
-    ) async throws -> String {
-        let identity = try clientIdentity(certPEM: certPEM, keyPEM: keyPEM)
+    public static func sendLogs(to target: MgmtTarget) async throws -> String {
+        let plain = "text/plain; charset=utf-8"
         if let file = ClientLogFile.shared, let previous = file.previousRun(),
            let stored = try? await send(
-               path: "/api/v1/client-logs", address: address, port: port,
-               identity: identity, hostFingerprint: hostFingerprint,
-               body: (Data(previous.utf8), "text/plain; charset=utf-8")),
+               "/api/v1/client-logs", to: target, method: "POST", body: (Data(previous.utf8), plain)),
            stored.status == 200 || stored.status == 201 {
             file.dropPrevious()
         }
         let body = Data(ClientLogRing.render(header: ClientLogRing.header()).utf8)
         let response = try await send(
-            path: "/api/v1/client-logs", address: address, port: port,
-            identity: identity, hostFingerprint: hostFingerprint,
-            body: (body, "text/plain; charset=utf-8"))
-        switch response.status {
-        case 200, 201:
-            let json = try? JSONSerialization.jsonObject(with: response.body) as? [String: Any]
-            return json?["id"] as? String ?? ""
-        case 401, 403:
-            throw LibraryError.unauthorized
-        default:
-            throw LibraryError.http(response.status)
-        }
+            "/api/v1/client-logs", to: target, method: "POST", body: (body, plain))
+        try expectOK(response, [200, 201])
+        let json = try? JSONSerialization.jsonObject(with: response.body) as? [String: Any]
+        return json?["id"] as? String ?? ""
     }
 
     /// What this host lets THIS device do to it — sleep, restart, shut it down
     /// (`design/host-actions.md` §7) — from `GET /api/v1/actions`.
     ///
     /// Only the PERMITTED rows come back: the host is the only judge of whether this device's
-    /// access carries the Host-power grant, and a row it would refuse is not this client's to
-    /// render. Best-effort by contract, like ``running(address:port:certPEM:keyPEM:hostFingerprint:)``
-    /// — an older host (no such route), an unreachable one, or a shape we don't recognise yields
-    /// an empty list. A missing menu row costs a menu row; a thrown error would cost the screen.
-    public static func actions(
-        address: String,
-        port: UInt16 = punktfunkDefaultMgmtPort,
-        certPEM: String,
-        keyPEM: String,
-        hostFingerprint: Data?
-    ) async -> [HostAction] {
-        guard let identity = try? clientIdentity(certPEM: certPEM, keyPEM: keyPEM),
-              let response = try? await send(
-                  path: "/api/v1/actions", address: address, port: port,
-                  identity: identity, hostFingerprint: hostFingerprint),
+    /// access carries the Host-power grant. Best-effort, like ``status(_:)``: a missing menu row
+    /// costs a menu row; a thrown error would cost the screen.
+    public static func actions(_ target: MgmtTarget) async -> [HostAction] {
+        guard let response = try? await send("/api/v1/actions", to: target),
               response.status == 200,
               let list = try? JSONDecoder().decode(HostActionList.self, from: response.body)
         else { return [] }
@@ -827,22 +711,12 @@ public enum LibraryClient {
     /// End one title on the host, live session included (`POST /api/v1/game/end`). The host ends
     /// it only if this device launched it. Never throws: every outcome is something to tell the
     /// player.
-    public static func endGame(
-        appID: String,
-        address: String,
-        port: UInt16 = punktfunkDefaultMgmtPort,
-        certPEM: String,
-        keyPEM: String,
-        hostFingerprint: Data
-    ) async -> GameEndOutcome {
+    public static func endGame(appID: String, on target: MgmtTarget) async -> GameEndOutcome {
         let body = (try? JSONSerialization.data(
             withJSONObject: ["app_id": appID, "streaming": true])) ?? Data()
         do {
-            let identity = try clientIdentity(certPEM: certPEM, keyPEM: keyPEM)
             let response = try await send(
-                path: "/api/v1/game/end", address: address, port: port,
-                identity: identity, hostFingerprint: hostFingerprint,
-                body: (body, "application/json"))
+                "/api/v1/game/end", to: target, method: "POST", body: (body, "application/json"))
             return .from(status: response.status)
         } catch {
             return .failed((error as? LocalizedError)?.errorDescription ?? error.localizedDescription)
@@ -853,38 +727,17 @@ public enum LibraryClient {
     ///
     /// Returning normally means the host ACCEPTED it (202) — it now ends every session and acts
     /// about a second later, so this is the last word the client will get. A refusal throws
-    /// with the host's own sentence ("another device is streaming from this host right now"),
-    /// which tells a person what to do where a bare status code would not.
-    ///
-    /// The body stays empty by design: the id is the whole request, and no request field ever
-    /// reaches the host's privileged path.
-    public static func invokeAction(
-        id: String,
-        address: String,
-        port: UInt16 = punktfunkDefaultMgmtPort,
-        certPEM: String,
-        keyPEM: String,
-        hostFingerprint: Data
-    ) async throws {
-        let identity = try clientIdentity(certPEM: certPEM, keyPEM: keyPEM)
+    /// with the host's own sentence ("another device is streaming from this host right now").
+    /// The body stays empty: the id is the whole request.
+    public static func invokeAction(id: String, on target: MgmtTarget) async throws {
         let escaped = id.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? id
         let response = try await send(
-            path: "/api/v1/actions/\(escaped)", address: address, port: port,
-            identity: identity, hostFingerprint: hostFingerprint,
+            "/api/v1/actions/\(escaped)", to: target, method: "POST",
             body: (Data(), "application/json"))
-        switch response.status {
-        case 200, 202:
-            return
-        case 401, 403:
-            throw LibraryError.unauthorized
-        default:
-            // The `ApiError` envelope carries the host's reason; prefer it over the code.
-            let json = try? JSONSerialization.jsonObject(with: response.body) as? [String: Any]
-            if let why = json?["error"] as? String, !why.isEmpty {
-                throw LibraryError.unreachable(why)
-            }
-            throw LibraryError.http(response.status)
+        if ![200, 202, 401, 403].contains(response.status), let why = hostReason(response.body) {
+            throw LibraryError.unreachable(why)
         }
+        try expectOK(response, [200, 202])
     }
 
     /// Just the slice of `/status` this client reads. Everything else on that payload is the
@@ -907,49 +760,38 @@ public enum LibraryClient {
         return bare.contains(":") ? "https://[\(bare)]:\(port)" : "https://\(bare):\(port)"
     }
 
-    /// Build the paired identity, restating any keychain failure in the UI's vocabulary.
-    static func clientIdentity(certPEM: String, keyPEM: String) throws -> SecIdentity {
-        do {
-            return try ClientTLS.makeIdentity(certPEM: certPEM, keyPEM: keyPEM)
-        } catch {
-            throw LibraryError.unreachable(
-                (error as? LocalizedError)?.errorDescription ?? error.localizedDescription)
-        }
-    }
-
     /// Build and cache the TLS identity ahead of the first request. Blocking Keychain work:
     /// call off the main actor, so the callers on it find the pair built.
     public static func warmIdentity(_ identity: ClientIdentity) {
         _ = try? ClientTLS.makeIdentity(certPEM: identity.certPEM, keyPEM: identity.keyPEM)
     }
 
-    /// One request against the host — a GET, or a POST when `body` is given — with transport
-    /// failures mapped onto `LibraryError`.
+    /// Throws unless the host answered one of `ok`. 401 and 403 are both the host declining this
+    /// certificate, with the same remedy.
+    static func expectOK(_ response: HTTPResponse, _ ok: Set<Int> = [200]) throws {
+        if ok.contains(response.status) { return }
+        if response.status == 401 || response.status == 403 { throw LibraryError.unauthorized }
+        throw LibraryError.http(response.status)
+    }
+
+    /// The host's own sentence from its `ApiError` envelope (`{"error": "..."}`), if it sent one.
+    static func hostReason(_ body: Data) -> String? {
+        let json = try? JSONSerialization.jsonObject(with: body) as? [String: Any]
+        return (json?["error"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+    }
+
+    /// One request against `target`, with transport failures mapped onto `LibraryError`.
     static func send(
-        path: String, address: String, port: UInt16,
-        identity: SecIdentity, hostFingerprint: Data?,
-        body: (data: Data, contentType: String)? = nil,
-        delete: Bool = false
+        _ path: String, to target: MgmtTarget, method: String = "GET",
+        body: (data: Data, contentType: String)? = nil
     ) async throws -> HTTPResponse {
         do {
-            if delete {
-                return try await MgmtTransport.delete(
-                    host: address, port: port, path: path,
-                    identity: identity, pinnedHostFingerprint: hostFingerprint)
-            }
-            if let body {
-                return try await MgmtTransport.post(
-                    host: address, port: port, path: path, body: body.data,
-                    contentType: body.contentType,
-                    identity: identity, pinnedHostFingerprint: hostFingerprint)
-            }
-            return try await MgmtTransport.get(
-                host: address, port: port, path: path,
-                identity: identity, pinnedHostFingerprint: hostFingerprint)
+            return try await MgmtTransport.request(
+                host: target.address, port: target.port, method: method, path: path,
+                body: body?.data, contentType: body?.contentType,
+                identity: target.identity, pin: target.pin)
         } catch MgmtTransportError.pinMismatch {
             throw LibraryError.pinMismatch
-        } catch MgmtTransportError.unpinned {
-            throw LibraryError.unauthorized
         } catch MgmtTransportError.timedOut {
             throw LibraryError.unreachable("timed out")
         } catch let error as MgmtTransportError {
@@ -1046,10 +888,7 @@ final class ArtFlights: @unchecked Sendable {
 ///
 /// Built once per library screen and reused across a whole grid's worth of posters.
 public final class LibraryArtLoader: LibraryArtSource, @unchecked Sendable {
-    private let address: String
-    private let port: UInt16
-    private let identity: SecIdentity
-    private let hostFingerprint: Data?
+    private let target: MgmtTarget
     /// Third-party origins only, with the system's normal certificate validation and no URLCache
     /// (`ArtCache` owns persistence). Process-wide and never invalidated: a fetch that outlives
     /// `close()` would otherwise create a task on a dead session, which raises.
@@ -1064,17 +903,8 @@ public final class LibraryArtLoader: LibraryArtSource, @unchecked Sendable {
     /// its art twice on a cold cache. Failures are deliberately not remembered.
     private let flights = ArtFlights()
 
-    public init(
-        address: String,
-        port: UInt16 = punktfunkDefaultMgmtPort,
-        certPEM: String,
-        keyPEM: String,
-        hostFingerprint: Data?
-    ) throws {
-        self.address = address
-        self.port = port
-        self.identity = try LibraryClient.clientIdentity(certPEM: certPEM, keyPEM: keyPEM)
-        self.hostFingerprint = hostFingerprint
+    public init(_ target: MgmtTarget) {
+        self.target = target
     }
 
     /// Image bytes for one art URL, cached on disk after the first fetch. A miss propagates the
@@ -1083,7 +913,8 @@ public final class LibraryArtLoader: LibraryArtSource, @unchecked Sendable {
         // Inline art never leaves the manifest — decode it here rather than probe a cache that
         // could never hold it.
         if url.scheme?.lowercased() == "data" { return try Self.inlineBytes(url) }
-        let key = Self.cacheKey(for: url, hostAddress: address, hostPort: port, pin: hostFingerprint)
+        let key = Self.cacheKey(
+            for: url, hostAddress: target.address, hostPort: target.port, pin: target.pin)
         if let cache, let cached = await cache.data(forKey: key) { return cached }
         let fetched = try await flights.value(for: key) { try await self.fetch(url) }
         if let cache { await cache.store(fetched, forKey: key) }
@@ -1094,7 +925,8 @@ public final class LibraryArtLoader: LibraryArtSource, @unchecked Sendable {
     /// powered-off host costs a full request timeout per poster it is asked for.
     public func cached(for url: URL) async -> Data? {
         if url.scheme?.lowercased() == "data" { return try? Self.inlineBytes(url) }
-        let key = Self.cacheKey(for: url, hostAddress: address, hostPort: port, pin: hostFingerprint)
+        let key = Self.cacheKey(
+            for: url, hostAddress: target.address, hostPort: target.port, pin: target.pin)
         return await cache?.data(forKey: key)
     }
 
@@ -1113,7 +945,7 @@ public final class LibraryArtLoader: LibraryArtSource, @unchecked Sendable {
     /// don't sit on open TLS sockets the user is finished with.
     public func close() async {
         await MgmtConnectionPool.shared.closeAll(
-            matching: "\(MgmtTransport.unbracketed(address)):\(port):")
+            matching: "\(MgmtTransport.unbracketed(target.address)):\(target.port):")
     }
 
     /// The cache entry's identity. A HOST-origin URL is `pin | path` — the machine, not the
@@ -1140,7 +972,7 @@ public final class LibraryArtLoader: LibraryArtSource, @unchecked Sendable {
     }
 
     private func fetch(_ url: URL) async throws -> Data {
-        guard Self.isHostOrigin(url, address: address, port: port) else {
+        guard Self.isHostOrigin(url, address: target.address, port: target.port) else {
             // A library entry names its own art URL, so this is host-supplied. Web schemes and
             // inline `data:` only — a `file:` URL would make the client read its own container and
             // cache the result as a poster — and the same ceiling the pinned path enforces, since
@@ -1173,9 +1005,7 @@ public final class LibraryArtLoader: LibraryArtSource, @unchecked Sendable {
             if data.count > ceiling { throw MgmtTransportError.tooLarge }
             return data
         }
-        let response = try await LibraryClient.send(
-            path: Self.requestPath(url), address: address, port: port,
-            identity: identity, hostFingerprint: hostFingerprint)
+        let response = try await LibraryClient.send(Self.requestPath(url), to: target)
         guard response.status == 200 else { throw LibraryError.http(response.status) }
         return response.body
     }

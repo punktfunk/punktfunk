@@ -1105,13 +1105,10 @@ final class SessionModel: ObservableObject {
     /// Ask the host what this stream plays. Best-effort: a failed read keeps the last answer.
     func refreshStreamedGame() {
         guard let host = activeHost, !DemoMode.isDemo(host),
-              let identity = (try? ClientIdentityStore.shared.load())?.identity else { return }
-        let port = connection.map(\.hostMgmtPort).flatMap { $0 > 0 ? $0 : nil } ?? host.effectiveMgmtPort
+              case .success(let target) = MgmtTarget.make(host: host, port: connection?.hostMgmtPort)
+        else { return }
         Task { [weak self] in
-            let games = await LibraryClient.running(
-                address: host.address, port: port,
-                certPEM: identity.certPEM, keyPEM: identity.keyPEM,
-                hostFingerprint: host.pinnedSHA256)
+            let games = await LibraryClient.running(target)
             guard let self, self.activeHost?.id == host.id, self.phase == .streaming else { return }
             self.streamedGame = games.first(where: \.streamedHere)
         }
@@ -1120,13 +1117,10 @@ final class SessionModel: ObservableObject {
     /// End the streamed game on the host, then the stream. A refusal keeps the stream and says why.
     func endStreamedGame() {
         guard let game = streamedGame, let appID = game.appID, let host = activeHost,
-              let pin = host.pinnedSHA256,
-              let identity = (try? ClientIdentityStore.shared.load())?.identity else { return }
-        let port = connection.map(\.hostMgmtPort).flatMap { $0 > 0 ? $0 : nil } ?? host.effectiveMgmtPort
+              case .success(let target) = MgmtTarget.make(host: host, port: connection?.hostMgmtPort)
+        else { return }
         Task { [weak self] in
-            let outcome = await LibraryClient.endGame(
-                appID: appID, address: host.address, port: port,
-                certPEM: identity.certPEM, keyPEM: identity.keyPEM, hostFingerprint: pin)
+            let outcome = await LibraryClient.endGame(appID: appID, on: target)
             guard let self, self.activeHost?.id == host.id else { return }
             if outcome.gameGone {
                 self.disconnect()
@@ -1159,8 +1153,8 @@ final class SessionModel: ObservableObject {
             }
             return
         }
-        let port = connection.map(\.hostMgmtPort).flatMap { $0 > 0 ? $0 : nil } ?? host.effectiveMgmtPort
-        guard let identity = (try? ClientIdentityStore.shared.load())?.identity else {
+        guard case .success(let target) = MgmtTarget.make(host: host, port: connection?.hostMgmtPort)
+        else {
             revealStream()
             return
         }
@@ -1168,10 +1162,7 @@ final class SessionModel: ObservableObject {
         launchWatch = Task { [weak self] in
             var began = Date()
             while !Task.isCancelled {
-                let status = await LibraryClient.status(
-                    address: host.address, port: port,
-                    certPEM: identity.certPEM, keyPEM: identity.keyPEM,
-                    hostFingerprint: host.pinnedSHA256)
+                let status = await LibraryClient.status(target)
                 let game = status.games.first { $0.appID == hold.id }
                 let state = game?.state
                 let download = status.downloads.first { $0.appID == hold.id }

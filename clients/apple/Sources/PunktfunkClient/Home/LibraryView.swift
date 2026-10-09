@@ -753,17 +753,13 @@ struct LibraryView: View {
         }
     }
 
-    /// Ask the host to change `game`'s files. A refusal says why; a removal turns the tile to
-    /// "not installed" here, and `/status` is read again either way.
+    /// Ask the host to change `game`'s files. A refusal, or no way to ask, says why; a removal
+    /// turns the tile to "not installed" here, and `/status` is read again either way.
     private func changeInstall(_ game: GameEntry, _ action: InstallAction) {
-        guard let identity = (try? ClientIdentityStore.shared.load())?.identity,
-              let pin = host.pinnedSHA256 else { return }
-        let current = host
+        guard let target = MgmtTarget.make(host: host).target(orSay: { endGameNotice = $0 })
+        else { return }
         Task {
-            let outcome = await LibraryClient.changeInstall(
-                appID: game.id, action: action, address: current.address,
-                port: current.effectiveMgmtPort, certPEM: identity.certPEM,
-                keyPEM: identity.keyPEM, hostFingerprint: pin)
+            let outcome = await LibraryClient.changeInstall(appID: game.id, action: action, on: target)
             if outcome == .done, action == .remove, let i = games.firstIndex(where: { $0.id == game.id }) {
                 games[i].install?.state = "missing"
             }
@@ -774,13 +770,9 @@ struct LibraryView: View {
 
     /// What the host runs and downloads, and what this device may do there.
     private func refreshStatus() async {
-        guard let identity = (try? ClientIdentityStore.shared.load())?.identity else { return }
         let current = host
-        let status = await LibraryClient.status(
-            address: current.address, port: current.effectiveMgmtPort,
-            certPEM: identity.certPEM, keyPEM: identity.keyPEM,
-            hostFingerprint: current.pinnedSHA256)
-        applyStatus(status, for: current)
+        guard case .success(let target) = MgmtTarget.make(host: current) else { return }
+        applyStatus(await LibraryClient.status(target), for: current)
     }
 
     private func applyStatus(
@@ -806,15 +798,14 @@ struct LibraryView: View {
         game.id != LibraryCollation.desktopID && running[game.id]?.endable == true
     }
 
-    /// Ask the host to end `game`. Gone either way drops the badge; a refusal says why.
+    /// Ask the host to end `game`. Gone either way drops the badge; a refusal, or no way to ask,
+    /// says why.
     private func endGame(_ game: GameEntry) {
-        guard let identity = (try? ClientIdentityStore.shared.load())?.identity,
-              let pin = host.pinnedSHA256 else { return }
         let current = host
+        guard let target = MgmtTarget.make(host: current).target(orSay: { endGameNotice = $0 })
+        else { return }
         Task {
-            let outcome = await LibraryClient.endGame(
-                appID: game.id, address: current.address, port: current.effectiveMgmtPort,
-                certPEM: identity.certPEM, keyPEM: identity.keyPEM, hostFingerprint: pin)
+            let outcome = await LibraryClient.endGame(appID: game.id, on: target)
             if outcome.gameGone {
                 running[game.id] = nil
                 nowPlayingStore.invalidate(current)
@@ -996,33 +987,15 @@ struct LibraryView: View {
             return
         }
         let current = store.hosts.first { $0.id == host.id } ?? host
-        // mTLS uses this client's persistent identity (the host paired it over QUIC). No identity
-        // yet → the user hasn't connected/paired, which is also when there's nothing to browse.
-        guard let identity = (try? ClientIdentityStore.shared.load())?.identity else {
+        guard let target = MgmtTarget.make(host: current).target(orSay: { errorText = $0 }) else {
             games = []
-            errorText = "Connect to this host once first — the library uses the identity created "
-                + "on pairing to authenticate."
-            loading = false
-            return
-        }
-        // Beyond the client identity, require the HOST's pinned fingerprint. MgmtTransport refuses a
-        // pin-less host; this check only names the remedy. A host can hold a client identity yet no
-        // host pin (abandoned pairing, or after "Forget Identity").
-        guard current.pinnedSHA256 != nil else {
-            games = []
-            errorText = "Pair with this host before browsing its library."
             loading = false
             return
         }
         // Built ahead of the first suspension: a remounted shelf draws its restored tiles
         // before `load()` resumes, and every poster needs this waiting. The fetch's outcome
         // doesn't gate it — cached posters render with the host still down.
-        artLoader = try? LibraryArtLoader(
-            address: current.address,
-            port: current.effectiveMgmtPort,
-            certPEM: identity.certPEM,
-            keyPEM: identity.keyPEM,
-            hostFingerprint: current.pinnedSHA256)
+        artLoader = LibraryArtLoader(target)
 
         // Show the catalog we already have BEFORE talking to the host. A library is the screen a
         // player uses to decide what to play, and an empty one while a sleeping box boots is the
@@ -1059,13 +1032,7 @@ struct LibraryView: View {
             do {
                 // `launchersFirst` groups launcher entries ahead of titles once, here, so the grid
                 // inherits the D4 ordering.
-                let fetched = try await LibraryClient.fetch(
-                    address: current.address,
-                    port: current.effectiveMgmtPort,
-                    certPEM: identity.certPEM,
-                    keyPEM: identity.keyPEM,
-                    hostFingerprint: current.pinnedSHA256
-                ).launchersFirst
+                let fetched = try await LibraryClient.fetch(target).launchersFirst
                 games = fetched
                 servedFromCacheAt = nil
                 errorText = nil
@@ -1103,13 +1070,7 @@ struct LibraryView: View {
 
         // What's up on the host right now — never fatal, and deliberately after the catalog so a
         // slow `/status` can't hold the titles back.
-        let status = await LibraryClient.status(
-            address: current.address,
-            port: current.effectiveMgmtPort,
-            certPEM: identity.certPEM,
-            keyPEM: identity.keyPEM,
-            hostFingerprint: current.pinnedSHA256)
-        applyStatus(status, for: current)
+        applyStatus(await LibraryClient.status(target), for: current)
         loading = false
     }
 
