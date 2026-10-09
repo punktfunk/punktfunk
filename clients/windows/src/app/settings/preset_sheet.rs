@@ -1,7 +1,8 @@
 //! The preset UI: the scope bar, the Edit-preset sheet and the delete confirmation.
 
-use crate::app::lucide;
+use super::{update_preset, Cx};
 use crate::app::style::*;
+use crate::app::{lucide, saved};
 use crate::trust::KnownHosts;
 use pf_client_core::presets::{PresetsFile, StreamPreset};
 use windows_reactor::*;
@@ -38,7 +39,7 @@ pub(crate) fn hex_color(hex: &str) -> Option<Color> {
 }
 
 /// The colour row: one tappable swatch per palette entry, the current one ringed.
-fn colour_swatches(preset: &StreamPreset, rev: u64, set_rev: &AsyncSetState<u64>) -> Element {
+fn colour_swatches(cx: &Cx, preset: &StreamPreset) -> Element {
     let current = preset.accent.clone().unwrap_or_default();
     let mut row: Vec<Element> = vec![text_block("Colour")
         .font_size(12.0)
@@ -56,7 +57,8 @@ fn colour_swatches(preset: &StreamPreset, rev: u64, set_rev: &AsyncSetState<u64>
             g: 128,
             b: 128,
         });
-        let (id, set_rev, hex_owned) = (preset.id.clone(), set_rev.clone(), hex.to_string());
+        let (id, hex_owned) = (preset.id.clone(), hex.to_string());
+        let (rev, set_rev, set_status) = (cx.rev, cx.set_rev.clone(), cx.set_status.clone());
         row.push(
             // Size on the BORDER itself: sized only via its child, the border gets squeezed
             // by the sheet's layout and the discs render as squashed ovals.
@@ -73,14 +75,10 @@ fn colour_swatches(preset: &StreamPreset, rev: u64, set_rev: &AsyncSetState<u64>
                 .border_thickness(uniform(if selected { 2.0 } else { 1.0 }))
                 .tooltip(*name)
                 .on_tapped(move || {
-                    let mut catalog = PresetsFile::load();
-                    if let Some(p) = catalog.presets.iter_mut().find(|p| p.id == id) {
-                        p.accent = (!hex_owned.is_empty()).then(|| hex_owned.clone());
-                        if let Err(e) = catalog.save() {
-                            tracing::warn!(error = %format!("{e:#}"), "saving the preset colour");
-                        }
-                    }
-                    set_rev.call(rev + 1);
+                    let r = update_preset(&id, |p| {
+                        p.accent = (!hex_owned.is_empty()).then(|| hex_owned.clone())
+                    });
+                    saved(r, &set_status, Some((rev, &set_rev)));
                 })
                 .into(),
         );
@@ -88,22 +86,34 @@ fn colour_swatches(preset: &StreamPreset, rev: u64, set_rev: &AsyncSetState<u64>
     hstack(row).spacing(8.0).into()
 }
 
+/// Rename preset `id`. Names are unique case-insensitively, since menus keyed by name would be
+/// ambiguous otherwise: a collision does not commit, and the box keeps what was typed.
+fn rename(id: &str, name: String) -> std::result::Result<(), impl std::fmt::Display> {
+    PresetsFile::update(|catalog| {
+        if !catalog.name_taken(&name, Some(id))
+            && let Some(p) = catalog.presets.iter_mut().find(|p| p.id == id)
+        {
+            p.name = name;
+        }
+    })
+}
+
 /// The Edit-preset modal: a scrim + centered card, the same in-tree overlay the Add-host
 /// modal uses (ContentDialog is text-only in windows-reactor — no room for a text field or
 /// the swatch row). Every control in it commits in place, exactly like the settings rows, so
 /// the modal needs no draft state and Close is the only way out — there is nothing to cancel.
-/// The one deferred repaint is the preset NAME: renaming commits as you type but the pane's
-/// scope dropdown refreshes on Close (one revision bump), so the ComboBox is not remounted
-/// under the user mid-keystroke.
+/// The one deferred repaint is the preset NAME: renaming commits as you type but the bar's
+/// scope dropdown refreshes on Close (one revision bump), so it is not remounted under the
+/// user mid-keystroke.
 pub(super) fn edit_preset_modal(
+    cx: &Cx,
     preset: Option<&StreamPreset>,
     switcher: Option<ComboBox>,
     set_scope: &AsyncSetState<String>,
     set_delete: &AsyncSetState<Option<String>>,
     set_edit: &AsyncSetState<bool>,
-    rev: u64,
-    set_rev: &AsyncSetState<u64>,
 ) -> Element {
+    let (rev, set_rev) = (cx.rev, cx.set_rev);
     let mut rows: Vec<Element> = vec![text_block(if switcher.is_some() {
         "Presets"
     } else {
@@ -128,7 +138,7 @@ pub(super) fn edit_preset_modal(
     if let Some(preset) = preset {
         let id = preset.id.clone();
         let name_box = {
-            let id = id.clone();
+            let (id, set_status) = (id.clone(), cx.set_status.clone());
             text_box(&preset.name)
                 .header("Name")
                 .placeholder_text("Preset name")
@@ -137,20 +147,12 @@ pub(super) fn edit_preset_modal(
                     if name.is_empty() {
                         return;
                     }
-                    let mut catalog = PresetsFile::load();
-                    // Names are unique case-insensitively — menus keyed by name are ambiguous
-                    // otherwise. A collision simply doesn't commit; the box keeps what was typed.
-                    if catalog.name_taken(&name, Some(&id)) {
-                        return;
-                    }
-                    if let Some(p) = catalog.presets.iter_mut().find(|p| p.id == id) {
-                        p.name = name;
-                        let _ = catalog.save();
-                    }
+                    // No revision bump: the bar picks the name up when the sheet closes.
+                    saved(rename(&id, name), &set_status, None);
                 })
         };
         rows.push(name_box.into());
-        rows.push(colour_swatches(preset, rev, set_rev));
+        rows.push(colour_swatches(cx, preset));
     }
     rows.push(
         text_block(
@@ -169,15 +171,14 @@ pub(super) fn edit_preset_modal(
         buttons.push(
             {
                 let (id, set_scope) = (id.clone(), set_scope.clone());
+                let (set_rev, set_status) = (set_rev.clone(), cx.set_status.clone());
                 button("Duplicate")
                     .icon(lucide::icon("copy"))
                     .on_click(move || {
-                        let mut catalog = PresetsFile::load();
-                        let Some(new_id) = catalog.duplicate(&id) else {
-                            return;
-                        };
-                        if catalog.save().is_ok() {
-                            // The sheet stays open and now edits the copy — scope follows it.
+                        let r = PresetsFile::update(|catalog| catalog.duplicate(&id));
+                        // The sheet stays open and now edits the copy — scope follows it.
+                        if let Some(new_id) = saved(r, &set_status, Some((rev, &set_rev))).flatten()
+                        {
                             set_scope.call(new_id);
                         }
                     })
@@ -265,6 +266,7 @@ pub(super) fn edit_preset_modal(
 /// The bar above the page: the preset's colour chip and one native DropDownButton that picks
 /// the scope, creates a preset or opens the sheet.
 pub(super) fn scope_bar(
+    cx: &Cx,
     active: Option<&StreamPreset>,
     set_scope: &AsyncSetState<String>,
     set_edit: &AsyncSetState<bool>,
@@ -285,6 +287,7 @@ pub(super) fn scope_bar(
     };
     let switcher = {
         let (set_scope, set_edit) = (set_scope.clone(), set_edit.clone());
+        let (rev, set_rev, set_status) = (cx.rev, cx.set_rev.clone(), cx.set_status.clone());
         let pairs = scope_pairs.clone();
         let mut items = vec![menu_item(SCOPE_DEFAULT)];
         for (_, name) in &pairs {
@@ -303,15 +306,17 @@ pub(super) fn scope_bar(
                     // A new preset takes an auto-numbered name and lands straight in
                     // the sheet to be named — creation and naming are one gesture, and
                     // there is no half-created state a Cancel would have to unwind.
-                    let mut catalog = PresetsFile::load();
-                    let name = (1..)
-                        .map(|n| format!("Preset {n}"))
-                        .find(|n| !catalog.name_taken(n, None))
-                        .unwrap_or_else(|| "Preset".to_string());
-                    let preset = StreamPreset::new(name);
-                    let new_id = preset.id.clone();
-                    catalog.presets.push(preset);
-                    if catalog.save().is_ok() {
+                    let r = PresetsFile::update(|catalog| {
+                        let name = (1..)
+                            .map(|n| format!("Preset {n}"))
+                            .find(|n| !catalog.name_taken(n, None))
+                            .unwrap_or_else(|| "Preset".to_string());
+                        let preset = StreamPreset::new(name);
+                        let new_id = preset.id.clone();
+                        catalog.presets.push(preset);
+                        new_id
+                    });
+                    if let Some(new_id) = saved(r, &set_status, Some((rev, &set_rev))) {
                         set_scope.call(new_id);
                         set_edit.call(true);
                     }
@@ -360,6 +365,7 @@ pub(super) fn scope_bar(
 /// `remove_child` runs, so the backend `RemoveAt()`s a visual child that does not exist
 /// (E_BOUNDS, a main-thread panic on every delete). A mounted dialog is never removed.
 pub(super) fn delete_dialog(
+    cx: &Cx,
     delete_pending: &Option<String>,
     set_scope: &AsyncSetState<String>,
     set_delete: &AsyncSetState<Option<String>>,
@@ -406,6 +412,7 @@ pub(super) fn delete_dialog(
         set_delete.clone(),
         set_edit.clone(),
     );
+    let (rev, set_rev, set_status) = (cx.rev, cx.set_rev.clone(), cx.set_status.clone());
     ContentDialog::new("Delete preset?")
         .content(body)
         .primary_button_text("Delete")
@@ -419,12 +426,11 @@ pub(super) fn delete_dialog(
             let Some(id) = id.clone() else {
                 return;
             };
-            let mut catalog = PresetsFile::load();
-            catalog.presets.retain(|p| p.id != id);
             // Bindings and pins are left dangling on purpose: they resolve as "no
             // preset" everywhere, and rewriting every host record here would be a
             // second, racier source of truth.
-            if catalog.save().is_ok() {
+            let r = PresetsFile::update(|catalog| catalog.presets.retain(|p| p.id != id));
+            if saved(r, &set_status, Some((rev, &set_rev))).is_some() {
                 set_scope.call(String::new());
                 // The preset the sheet was showing is gone — without this, the
                 // still-armed flag would pop the sheet open on the NEXT preset pick.

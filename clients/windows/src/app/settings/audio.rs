@@ -21,29 +21,26 @@ pub(super) fn audio_section(cx: &Cx) -> Vec<Element> {
     let Cx {
         ctx,
         scope,
-        rev,
-        set_rev,
         ref s,
-        ref over,
         preset_mode,
         ..
     } = *cx;
     let (ac_names, ac_i) = presets(AUDIO_CHANNELS, |v| *v == s.audio_channels);
-    let channels_combo = setting_combo(ctx, scope, (rev, set_rev), ac_names, ac_i, |s, i| {
+    let channels_combo = setting_combo(cx, scope, "audio_channels", ac_names, ac_i, |s, i| {
         s.audio_channels = AUDIO_CHANNELS[i].0;
     });
     // The lossless-audio opt-in. An unknown stored value (a newer client's row, arriving through a
     // shared preset) shows as Opus — which is what the session resolves it to as well, so the row
     // and the wire agree rather than the combo silently rewriting the user's choice on save.
     let (af_names, af_i) = presets(AUDIO_FORMATS, |v| *v == s.audio_format);
-    let format_combo = setting_combo(ctx, scope, (rev, set_rev), af_names, af_i, |s, i| {
+    let format_combo = setting_combo(cx, scope, "audio_format", af_names, af_i, |s, i| {
         s.audio_format = AUDIO_FORMATS[i].0.to_string();
     });
     let keep_host_audio_toggle =
-        setting_toggle(ctx, scope, (rev, set_rev), s.keep_host_audio, |s, on| {
+        setting_toggle(cx, scope, "keep_host_audio", s.keep_host_audio, |s, on| {
             s.keep_host_audio = on
         });
-    let mic_toggle = setting_toggle(ctx, scope, (rev, set_rev), s.mic_enabled, |s, on| {
+    let mic_toggle = setting_toggle(cx, scope, "mic_enabled", s.mic_enabled, |s, on| {
         s.mic_enabled = on
     });
     // Endpoint pickers (the WASAPI probe — the GTK client's PipeWire twins): visible
@@ -55,7 +52,8 @@ pub(super) fn audio_section(cx: &Cx) -> Vec<Element> {
         let p = ctx.probes.lock().unwrap();
         (p.speakers.clone(), p.mics.clone())
     };
-    let dev_combo = |saved: &str,
+    let dev_combo = |field: &'static str,
+                     saved: &str,
                      devs: &[pf_client_core::audio::AudioDevice],
                      apply: fn(&mut Settings, String)| {
         let mut names = vec!["System default".to_string()];
@@ -70,16 +68,18 @@ pub(super) fn audio_section(cx: &Cx) -> Vec<Element> {
         }
         (keys.len() > 1).then(|| {
             let current = keys.iter().position(|k| k == saved).unwrap_or(0);
-            setting_combo(ctx, scope, (rev, set_rev), names, current, move |s, i| {
+            setting_combo(cx, scope, field, names, current, move |s, i| {
                 apply(s, keys[i.min(keys.len() - 1)].clone());
             })
         })
     };
-    let speaker_combo = dev_combo(&s.speaker_device, &speakers, |s, v| s.speaker_device = v);
-    let mic_dev_combo = dev_combo(&s.mic_device, &mics, |s, v| s.mic_device = v);
+    let speaker_combo = dev_combo("speaker_device", &s.speaker_device, &speakers, |s, v| {
+        s.speaker_device = v
+    });
+    let mic_dev_combo = dev_combo("mic_device", &s.mic_device, &mics, |s, v| s.mic_device = v);
     // Echo cancellation is meaningless without an uplink, so it greys out with the mic above
     // it. Every commit bumps `rev` and re-renders this screen, so the two stay in step live.
-    let echo_toggle = setting_toggle(ctx, scope, (rev, set_rev), s.echo_cancel, |s, on| {
+    let echo_toggle = setting_toggle(cx, scope, "echo_cancel", s.echo_cancel, |s, on| {
         s.echo_cancel = on
     })
     .enabled(s.mic_enabled);
@@ -88,11 +88,9 @@ pub(super) fn audio_section(cx: &Cx) -> Vec<Element> {
         None,
         [
             Some(described_overridable(
-                (rev, set_rev),
-                scope,
+                cx,
                 "audio_channels",
                 "Audio channels",
-                over.audio_channels,
                 channels_combo,
                 "The speaker layout requested from the host. It downmixes if its own \
                  output has fewer channels.",
@@ -112,11 +110,9 @@ pub(super) fn audio_section(cx: &Cx) -> Vec<Element> {
                 })
                 .flatten(),
             Some(described_overridable(
-                (rev, set_rev),
-                scope,
+                cx,
                 "mic_enabled",
                 "Stream microphone",
-                over.mic_enabled,
                 mic_toggle,
                 "This device\u{2019}s microphone feeds the host\u{2019}s virtual mic. \
                  Ctrl+Alt+Shift+V mutes and unmutes it during a stream.",
@@ -146,11 +142,9 @@ pub(super) fn audio_section(cx: &Cx) -> Vec<Element> {
     // QUIC datagram at the default MTU (design/hi-res-audio.md §4.2).
     if stereo {
         advanced.push(described_overridable(
-            (rev, set_rev),
-            scope,
+            cx,
             "audio_format",
             "Audio quality",
-            over.audio_format,
             format_combo,
             "Lossless sends uncompressed PCM instead of Opus \u{2014} bit-exact, at \
              2.3\u{2013}4.6 Mb/s taken off the top of the link and outside the \
@@ -161,21 +155,17 @@ pub(super) fn audio_section(cx: &Cx) -> Vec<Element> {
     }
     advanced.extend([
         described_overridable(
-            (rev, set_rev),
-            scope,
+            cx,
             "keep_host_audio",
             "Keep host audio playing",
-            over.keep_host_audio,
             keep_host_audio_toggle,
             "The host\u{2019}s own speakers or headphones keep playing while you stream \
              \u{2014} both ends hear the same audio. Needs a host on 0.32 or newer.",
         ),
         described_overridable(
-            (rev, set_rev),
-            scope,
+            cx,
             "echo_cancel",
             "Echo cancellation",
-            over.echo_cancel,
             echo_toggle,
             "Keeps the host\u{2019}s audio, playing from this machine\u{2019}s speakers, \
              from being picked up and sent straight back. Turn it off if your microphone \
@@ -191,7 +181,9 @@ pub(super) fn audio_section(cx: &Cx) -> Vec<Element> {
         cx,
         advanced,
         changed.into_iter().filter(|c| *c).count(),
-        over.audio_format || over.keep_host_audio || over.echo_cancel,
+        ["audio_format", "keep_host_audio", "echo_cancel"]
+            .into_iter()
+            .any(|f| cx.overrides(f)),
     ));
     out
 }

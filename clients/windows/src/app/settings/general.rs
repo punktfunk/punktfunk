@@ -39,16 +39,12 @@ fn start_in_help() -> String {
 /// General: session, statistics.
 pub(super) fn general_section(cx: &Cx) -> Vec<Element> {
     let Cx {
-        ctx,
         scope,
-        rev,
-        set_rev,
         ref s,
-        ref over,
         preset_mode,
         ..
     } = *cx;
-    let auto_wake_toggle = setting_toggle(ctx, scope, (rev, set_rev), s.auto_wake, |s, on| {
+    let auto_wake_toggle = setting_toggle(cx, scope, "auto_wake", s.auto_wake, |s, on| {
         s.auto_wake = on
     });
     // Where a bare launch opens. A device preference like auto-wake beside it: which host this
@@ -63,23 +59,23 @@ pub(super) fn general_section(cx: &Cx) -> Vec<Element> {
             .iter()
             .position(|v| *v == want)
             .unwrap_or(1);
-        setting_combo(ctx, scope, (rev, set_rev), names, current, |s, i| {
+        setting_combo(cx, scope, "start_in", names, current, |s, i| {
             s.start_in = start::StartIn::ALL[i].as_str().to_string();
         })
     };
     let fullscreen_toggle = setting_toggle(
-        ctx,
+        cx,
         scope,
-        (rev, set_rev),
+        "fullscreen_on_stream",
         s.fullscreen_on_stream,
         |s, on| s.fullscreen_on_stream = on,
     );
 
     let (hud_names, hud_i) = presets(STATS_TIERS, |v| *v == s.stats_verbosity());
-    let hud_combo = setting_combo(ctx, scope, (rev, set_rev), hud_names, hud_i, |s, i| {
+    let hud_combo = setting_combo(cx, scope, "stats_verbosity", hud_names, hud_i, |s, i| {
         s.set_stats_verbosity(STATS_TIERS[i].0);
     });
-    let advanced_toggle = setting_toggle(ctx, scope, (rev, set_rev), s.advanced_stats, |s, on| {
+    let advanced_toggle = setting_toggle(cx, scope, "advanced_stats", s.advanced_stats, |s, on| {
         s.advanced_stats = on
     });
     // Explorer hands a URL to the default browser; best-effort, like About's log folder.
@@ -92,11 +88,9 @@ pub(super) fn general_section(cx: &Cx) -> Vec<Element> {
     let mut out = group(
         Some("Session"),
         vec![described_overridable(
-            (rev, set_rev),
-            scope,
+            cx,
             "fullscreen_on_stream",
             "Start streams fullscreen",
-            over.fullscreen_on_stream,
             fullscreen_toggle,
             "Go fullscreen when a session starts; F11 or Alt+Enter switches back \
                  live.",
@@ -120,11 +114,9 @@ pub(super) fn general_section(cx: &Cx) -> Vec<Element> {
         None,
     );
     let mut stats_rows = vec![described_overridable(
-        (rev, set_rev),
-        scope,
+        cx,
         "stats_verbosity",
         "Statistics overlay",
-        over.stats_verbosity,
         hud_combo,
         "Live session stats in a corner overlay \u{2014} Compact is a one-line pill, \
          Detailed adds the stage breakdown. Ctrl+Alt+Shift+S cycles the tiers any time.",
@@ -134,7 +126,7 @@ pub(super) fn general_section(cx: &Cx) -> Vec<Element> {
     }
     out.extend(group(Some("Statistics"), stats_rows, None));
     // Device-wide, and shown in both scopes: it changes what this page lists, not a stream.
-    let show_toggle = setting_toggle(ctx, "", (rev, set_rev), s.show_advanced, |s, on| {
+    let show_toggle = setting_toggle(cx, "", "show_advanced", s.show_advanced, |s, on| {
         s.show_advanced = on
     });
     out.extend(group(
@@ -150,9 +142,9 @@ pub(super) fn general_section(cx: &Cx) -> Vec<Element> {
     if !preset_mode {
         let corner = s.hud_corner(HudCorner::TopLeft);
         let corner_combo = setting_combo(
-            ctx,
+            cx,
             scope,
-            (rev, set_rev),
+            "hud_placement",
             HudCorner::ALL
                 .iter()
                 .map(|c| c.label().to_string())
@@ -165,14 +157,14 @@ pub(super) fn general_section(cx: &Cx) -> Vec<Element> {
         );
         let pct = (stats_scale(s.stats_scale_pct) * 100.0).round() as u16;
         let size_combo = setting_combo(
-            ctx,
+            cx,
             scope,
-            (rev, set_rev),
+            "stats_scale_pct",
             STATS_SCALE_PCTS.iter().map(|p| format!("{p} %")).collect(),
             STATS_SCALE_PCTS.iter().position(|p| *p == pct).unwrap_or(1),
             |s, i| s.stats_scale_pct = STATS_SCALE_PCTS[i],
         );
-        let hint_toggle = setting_toggle(ctx, scope, (rev, set_rev), s.exit_hint, |s, on| {
+        let hint_toggle = setting_toggle(cx, scope, "exit_hint", s.exit_hint, |s, on| {
             s.exit_hint = on
         });
         let changed = usize::from(s.advanced_stats)

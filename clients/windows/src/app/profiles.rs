@@ -82,17 +82,16 @@ impl PartialEq for SeatWait {
     }
 }
 
-/// Writes `pick` as the host's saved profile (`None` drops it). Every other field stays.
+/// Writes `pick` as the host's saved profile (`None` drops it). Every other field stays. A
+/// failure is only logged: it lands mid-connect, where the status line belongs to the connect,
+/// and a lost pick only means the picker asks again.
 pub(crate) fn save_pick(fp_hex: Option<&str>, addr: &str, port: u16, pick: Option<ProfilePick>) {
-    let mut known = KnownHosts::load();
-    let Some(i) = known.resolve_index(fp_hex, addr, port) else {
-        return;
-    };
-    if known.hosts[i].profile == pick {
-        return;
-    }
-    known.hosts[i].profile = pick;
-    if let Err(e) = known.save() {
+    let r = KnownHosts::update(|known| {
+        if let Some(i) = known.resolve_index(fp_hex, addr, port) {
+            known.hosts[i].profile = pick;
+        }
+    });
+    if let Err(e) = r {
         tracing::warn!(error = %format!("{e:#}"), "saving the profile pick");
     }
 }

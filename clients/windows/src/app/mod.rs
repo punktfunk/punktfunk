@@ -155,6 +155,20 @@ impl PartialEq for Svc {
     }
 }
 
+/// Finish a store write from a page: bump `rev`, so the page redraws from the files it reads
+/// while drawing, and put a failure on the status line. `Some` holds what the edit returned.
+pub(crate) fn saved<R, E: std::fmt::Display>(
+    r: std::result::Result<R, E>,
+    set_status: &AsyncSetState<String>,
+    rev: Option<(u64, &AsyncSetState<u64>)>,
+) -> Option<R> {
+    if let Some((rev, set_rev)) = rev {
+        set_rev.call(rev + 1);
+    }
+    r.map_err(|e| set_status.call(format!("Couldn't save \u{2014} {e:#}")))
+        .ok()
+}
+
 /// Cross-thread shell state driven off the UI thread: the current target, the live spawned
 /// session child (Disconnect/Cancel kill it) and its latest stats line, plus the connect-flow
 /// cancel flag and the discovery/library/speed-test generation guards.
@@ -661,6 +675,7 @@ fn root(cx: &mut RenderCx, ctx: &Arc<AppCtx>) -> Element {
             &set_settings_custom_res,
             settings_rev,
             &set_settings_rev,
+            &set_status,
             nav_progress,
         ),
         Screen::Licenses => licenses::licenses_page(ctx, &set_screen),

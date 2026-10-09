@@ -22,32 +22,29 @@ mod preset_sheet;
 pub(crate) use preset_sheet::hex_color;
 
 use super::lucide;
+use super::saved;
 use super::style::*;
 use super::{AppCtx, Screen};
 use crate::trust::Settings;
-use pf_client_core::presets::{PresetsFile, StreamPreset};
+use pf_client_core::presets::{PresetsFile, SettingsOverlay, StreamPreset};
 use std::sync::Arc;
 use windows_reactor::*;
 
-/// Persist one control's edit into the layer being edited.
-///
-/// This shell commits PER CONTROL (unlike the GTK one, which writes when its dialog closes),
-/// so it can't hand the preset a list of touched fields. It hands over the effective settings
-/// before and after instead, and [`SettingsOverlay::absorb`] records the field that moved —
-/// the comparison is against what the control was SHOWING, so picking a value that happens to
-/// equal the global still records an override (the pin the design asks for).
+/// Persist one control's edit into the layer being edited: the defaults, or the preset's
+/// overrides. In preset scope the edit pins the control's `field` at its new value, also when
+/// that equals the global. An event that moved nothing (a combo mounting, a list rebuilt in
+/// place) pins nothing: this shell has no quiet flag around its own updates.
 ///
 /// Every commit ends by bumping the revision: a preset-scope edit changes what the page
 /// should SHOW (the row's Overridden marker, the catalog behind the controls) without
-/// changing any state the page reads, so without the bump no render pass runs and the
-/// marker only appears after some unrelated re-render — the exact bug the Linux client
-/// fixed in "the override marker appears on touch". Bumping on global-scope edits too is
-/// deliberate: it is one code path, a same-value repaint is cheap, and it also refreshes
-/// rows whose displayed effective value derives from the field just written.
+/// changing any state the page reads, so without the bump no render pass runs. Global edits
+/// bump too, which also refreshes rows whose shown value derives from the field just written.
 pub(super) fn commit(
     ctx: &Arc<AppCtx>,
     scope: &str,
+    field: &str,
     rev: (u64, &AsyncSetState<u64>),
+    set_status: &AsyncSetState<String>,
     edit: impl FnOnce(&mut Settings),
 ) {
     if scope.is_empty() {
@@ -62,28 +59,36 @@ pub(super) fn commit(
         rev.1.call(rev.0 + 1);
         return;
     }
-    let mut catalog = PresetsFile::load();
-    // The same rebase as the global arm above: `base` is what `absorb`'s before/after
-    // effective settings derive from, and the snapshot is not the file — another process
-    // (session resize, console UI, Decky) may have moved a global under us. The historical
-    // rebase fix ("settings saves stop reverting each other") covered the whole-file
-    // writers but missed this arm.
+    // The same rebase as the global arm above: the preset's effective values derive from
+    // `base`, and another process (session resize, console UI, Decky) may have moved a
+    // global under the snapshot.
     let base = {
         let mut s = ctx.settings.lock().unwrap();
         *s = Settings::load();
         s.clone()
     };
-    let Some(p) = catalog.presets.iter_mut().find(|p| p.id == scope) else {
-        return; // deleted from under us; the next render falls back to the defaults scope
-    };
-    let before = p.overrides.apply(&base);
-    let mut after = before.clone();
-    edit(&mut after);
-    p.overrides.absorb(&before, &after);
-    if let Err(e) = catalog.save() {
-        tracing::warn!(error = %format!("{e:#}"), "saving the preset catalog");
-    }
-    rev.1.call(rev.0 + 1);
+    let r = update_preset(scope, |p| {
+        let before = p.overrides.apply(&base);
+        let mut after = before.clone();
+        edit(&mut after);
+        if after != before {
+            p.overrides.pin(field, &after);
+        }
+    });
+    saved(r, set_status, Some(rev));
+}
+
+/// [`PresetsFile::update`] on the preset `id`. A preset deleted from under us is left alone:
+/// the next render falls back to the defaults scope.
+pub(crate) fn update_preset(
+    id: &str,
+    f: impl FnOnce(&mut StreamPreset),
+) -> std::result::Result<(), impl std::fmt::Display> {
+    PresetsFile::update(|catalog| {
+        if let Some(p) = catalog.presets.iter_mut().find(|p| p.id == id) {
+            f(p);
+        }
+    })
 }
 
 /// Re-base the process-lifetime settings snapshot on the file, and re-probe this device's
@@ -112,85 +117,6 @@ pub(crate) struct DeviceProbes {
     mics: Vec<pf_client_core::audio::AudioDevice>,
 }
 
-/// Which tier-P rows the preset in scope overrides. Plain bools rather than a lookup so the
-/// call sites read as `over.codec` — the row and its flag stay visibly paired.
-#[derive(Default)]
-struct OverrideFlags {
-    resolution: bool,
-    refresh_hz: bool,
-    render_scale: bool,
-    bitrate_kbps: bool,
-    codec: bool,
-    hdr_enabled: bool,
-    enable_444: bool,
-    ten_bit_sdr: bool,
-    compositor: bool,
-    audio_channels: bool,
-    audio_format: bool,
-    keep_host_audio: bool,
-    mic_enabled: bool,
-    echo_cancel: bool,
-    touch_mode: bool,
-    mouse_mode: bool,
-    invert_scroll: bool,
-    inhibit_shortcuts: bool,
-    gamepad: bool,
-    gamepad_forwarding: bool,
-    system_buttons: bool,
-    guide_gesture: bool,
-    stats_verbosity: bool,
-    fullscreen_on_stream: bool,
-    video_fit: bool,
-    present_priority: bool,
-    smooth_buffer: bool,
-    vsync: bool,
-    allow_vrr: bool,
-    /// The whole ring: a preset that touches it owns all of it (D10).
-    overlay_actions: bool,
-}
-
-impl OverrideFlags {
-    fn of(preset: Option<&StreamPreset>) -> OverrideFlags {
-        let Some(o) = preset.map(|p| &p.overrides) else {
-            return OverrideFlags::default();
-        };
-        OverrideFlags {
-            // One control drives the width/height/match-window tri-state, so any of the three
-            // marks the row.
-            resolution: o.width.is_some() || o.height.is_some() || o.match_window.is_some(),
-            refresh_hz: o.refresh_hz.is_some(),
-            render_scale: o.render_scale.is_some(),
-            bitrate_kbps: o.bitrate_kbps.is_some(),
-            codec: o.codec.is_some(),
-            hdr_enabled: o.hdr_enabled.is_some(),
-            enable_444: o.enable_444.is_some(),
-            ten_bit_sdr: o.ten_bit_sdr.is_some(),
-            compositor: o.compositor.is_some(),
-            audio_channels: o.audio_channels.is_some(),
-            audio_format: o.audio_format.is_some(),
-            keep_host_audio: o.keep_host_audio.is_some(),
-            mic_enabled: o.mic_enabled.is_some(),
-            echo_cancel: o.echo_cancel.is_some(),
-            touch_mode: o.touch_mode.is_some(),
-            mouse_mode: o.mouse_mode.is_some(),
-            invert_scroll: o.invert_scroll.is_some(),
-            inhibit_shortcuts: o.inhibit_shortcuts.is_some(),
-            gamepad: o.gamepad.is_some(),
-            gamepad_forwarding: o.gamepad_forwarding.is_some(),
-            system_buttons: o.system_buttons.is_some(),
-            guide_gesture: o.guide_gesture.is_some(),
-            stats_verbosity: o.stats_verbosity.is_some(),
-            fullscreen_on_stream: o.fullscreen_on_stream.is_some(),
-            video_fit: o.video_fit.is_some(),
-            present_priority: o.present_priority.is_some(),
-            smooth_buffer: o.smooth_buffer.is_some(),
-            vsync: o.vsync.is_some(),
-            allow_vrr: o.allow_vrr.is_some(),
-            overlay_actions: o.overlay_actions.is_some(),
-        }
-    }
-}
-
 /// The layer the settings screen is editing, resolved for display: `None` = the defaults.
 pub(super) fn active_preset(scope: &str) -> Option<StreamPreset> {
     (!scope.is_empty())
@@ -203,26 +129,22 @@ pub(super) fn active_preset(scope: &str) -> Option<StreamPreset> {
 // must sit BETWEEN the label and the input, and a widget-embedded header allows nothing
 // between itself and its box.
 fn setting_combo(
-    ctx: &Arc<AppCtx>,
+    cx: &Cx,
     scope: &str,
-    rev: (u64, &AsyncSetState<u64>),
+    field: &'static str,
     names: Vec<String>,
     current: usize,
     apply: impl Fn(&mut Settings, usize) + 'static,
 ) -> ComboBox {
-    let (ctx, scope) = (ctx.clone(), scope.to_string());
-    let (rev, set_rev) = (rev.0, rev.1.clone());
     let max = names.len().saturating_sub(1);
+    let write = committer(cx, scope, field, move |s, i: usize| apply(s, i.min(max)));
     ComboBox::new(names)
         .selected_index(current as i32)
         .on_selection_changed(move |i: i32| {
             // -1 is "nothing selected", which an in-place items rebuild raises: not a pick.
-            let Ok(i) = usize::try_from(i) else {
-                return;
-            };
-            commit(&ctx, &scope, (rev, &set_rev), |s| {
-                apply(s, i.min(max));
-            });
+            if let Ok(i) = usize::try_from(i) {
+                write(i);
+            }
         })
 }
 
@@ -236,53 +158,54 @@ fn presets<V>(table: &[(V, &str)], is_current: impl Fn(&V) -> bool) -> (Vec<Stri
 /// A `ToggleSwitch` bound to one boolean settings field (label rendered by the row — see
 /// [`setting_combo`]'s note).
 fn setting_toggle(
-    ctx: &Arc<AppCtx>,
+    cx: &Cx,
     scope: &str,
-    rev: (u64, &AsyncSetState<u64>),
+    field: &'static str,
     on: bool,
     apply: impl Fn(&mut Settings, bool) + 'static,
 ) -> ToggleSwitch {
-    let (ctx, scope) = (ctx.clone(), scope.to_string());
-    let (rev, set_rev) = (rev.0, rev.1.clone());
     ToggleSwitch::new(on)
         .on_content("On")
         .off_content("Off")
-        .on_toggled(move |v: bool| {
-            commit(&ctx, &scope, (rev, &set_rev), |s| apply(s, v));
-        })
+        .on_toggled(committer(cx, scope, field, apply))
 }
 
-/// One field: the control with its explanation directly underneath (Apple's `described`).
-///
-/// The caption goes BELOW the control on purpose. An earlier revision put guidance only in
-/// hover tooltips because a paragraph *above* a control reads as that control's label — true,
-/// but a caption under it reads as a caption, which is how every Windows Settings page and
-/// the Apple client both do it. Width-capped for the same reason Apple caps at 360pt: a
-/// full-width caption runs into the control column and the whole cell reads as one block.
-/// [`described_labeled`], plus the override marker and reset a preset-scope row carries: the caption
-/// says the preset changes this one, and the button is the only way back to inheriting.
-/// An override is recorded when a control's committed value differs from what it was
-/// SHOWING (`SettingsOverlay::absorb` diffs against the effective snapshot — see `commit`);
-/// WinUI change events don't fire on a no-op re-selection, so every reachable edit marks
-/// its row, and "not overridden" needs an explicit Reset. (Linux marks a literal no-op
-/// touch too — unobservable here, the one intentional divergence.)
-fn described_overridable(
-    rev: (u64, &AsyncSetState<u64>),
+/// What a row's change event runs: [`commit`] of `apply` into `scope`, pinning `field`.
+fn committer<T: 'static>(
+    cx: &Cx,
     scope: &str,
     field: &'static str,
+    apply: impl Fn(&mut Settings, T) + 'static,
+) -> impl Fn(T) + 'static {
+    let (ctx, scope) = (cx.ctx.clone(), scope.to_string());
+    let (rev, set_rev, set_status) = (cx.rev, cx.set_rev.clone(), cx.set_status.clone());
+    move |v| {
+        commit(&ctx, &scope, field, (rev, &set_rev), &set_status, |s| {
+            apply(s, v)
+        })
+    }
+}
+
+/// One field a preset can override: [`described_labeled`] plus, while the preset in scope
+/// overrides `field`, the Overridden marker whose Reset is the only way back to inheriting.
+/// Captions sit below their control, as on every Windows Settings page and the Apple client.
+/// A control's edit pins `field` ([`commit`]); WinUI raises no change event on a no-op
+/// re-selection, so "not overridden" needs the Reset.
+fn described_overridable(
+    cx: &Cx,
+    field: &'static str,
     label: &str,
-    overridden: bool,
     control: impl Into<Element>,
     caption: &str,
 ) -> Element {
-    if scope.is_empty() || !overridden {
+    if !cx.overrides(field) {
         return described_labeled(label, control, caption);
     }
     // The marker is one left-aligned capsule on its own line between label and control, so
     // every row's marker sits alike whatever the control's width: "Overridden" and "Reset"
     // as segments of one tinted pill, all of it the tap target.
-    let (rev, set_rev) = (rev.0, rev.1.clone());
-    let scope = scope.to_string();
+    let (rev, set_rev, set_status) = (cx.rev, cx.set_rev.clone(), cx.set_status.clone());
+    let scope = cx.scope.to_string();
     let reset_pill = border(
         hstack((
             text_block("Overridden")
@@ -309,16 +232,12 @@ fn described_overridable(
     .padding(edges(10.0, 3.0, 10.0, 3.0))
     .tooltip("Overridden by this preset \u{2014} Reset returns it to Default settings")
     .on_tapped(move || {
-        let mut catalog = PresetsFile::load();
-        if let Some(p) = catalog.presets.iter_mut().find(|p| p.id == scope) {
+        let r = update_preset(&scope, |p| {
             p.overrides.clear(field);
-            if let Err(e) = catalog.save() {
-                tracing::warn!(error = %format!("{e:#}"), "clearing an override");
-            }
-        }
+        });
         // The catalog changed behind the controls, and nothing the page reads as state
-        // did — bump the revision so the row re-renders showing the inherited value.
-        set_rev.call(rev + 1);
+        // did: the bump re-renders the row showing the inherited value.
+        saved(r, &set_status, Some((rev, &set_rev)));
     });
     vstack((
         row_label(label),
@@ -413,27 +332,48 @@ fn advanced_group(cx: &Cx, fields: Vec<Element>, changed: usize, overridden: boo
         1 => "1 advanced setting changed".to_string(),
         n => format!("{n} advanced settings changed"),
     };
-    let (ctx, rev, set_rev) = (cx.ctx.clone(), cx.rev, cx.set_rev.clone());
+    let (ctx, rev, set_rev, set_status) = (
+        cx.ctx.clone(),
+        cx.rev,
+        cx.set_rev.clone(),
+        cx.set_status.clone(),
+    );
     let show = button(label).on_click(move || {
         // Device-wide, so the global layer whatever the scope.
-        commit(&ctx, "", (rev, &set_rev), |s| s.show_advanced = true);
+        commit(
+            &ctx,
+            "",
+            "show_advanced",
+            (rev, &set_rev),
+            &set_status,
+            |s| s.show_advanced = true,
+        );
     });
     group(None, vec![show.into()], None)
 }
 
-/// What every section's rows read: the layer in scope, its effective values, which of them
-/// the preset overrides, and the revision a commit bumps.
+/// What every section's rows read: the layer in scope, its effective values, the preset's
+/// overrides, the revision a commit bumps and the status line a failed save lands on.
 struct Cx<'a> {
     ctx: &'a Arc<AppCtx>,
     scope: &'a str,
     rev: u64,
     set_rev: &'a AsyncSetState<u64>,
+    set_status: &'a AsyncSetState<String>,
     s: Settings,
-    over: OverrideFlags,
+    /// The preset's overrides; `None` in the defaults scope.
+    overlay: Option<&'a SettingsOverlay>,
     preset_mode: bool,
     /// Resolution sits on Custom… though the stored size is a listed one.
     custom_res: bool,
     set_custom_res: &'a AsyncSetState<bool>,
+}
+
+impl Cx<'_> {
+    /// Whether the preset in scope overrides `field`, by [`SettingsOverlay::clear`]'s names.
+    fn overrides(&self, field: &str) -> bool {
+        self.overlay.is_some_and(|o| o.overrides(field))
+    }
 }
 
 /// The settings screen: a stock WinUI `NavigationView` (the Windows-Settings sidebar pattern) —
@@ -458,6 +398,7 @@ pub(crate) fn settings_page(
     set_custom_res: &AsyncSetState<bool>,
     rev: u64,
     set_rev: &AsyncSetState<u64>,
+    set_status: &AsyncSetState<String>,
     progress: f64,
 ) -> Element {
     // The layer being edited. A scope pointing at a deleted preset degrades to the defaults,
@@ -468,9 +409,6 @@ pub(crate) fn settings_page(
         None => "",
     };
     let preset_mode = active.is_some();
-    // Which rows this preset overrides — the marker + reset each of them carries. In the
-    // defaults scope nothing is marked, and `described_overridable` degrades to `described_labeled`.
-    let over = OverrideFlags::of(active.as_ref());
     // Every control shows the EFFECTIVE value: the global underneath with this preset's
     // overrides on top, so a row the preset doesn't override reads as the live global.
     let s = {
@@ -486,8 +424,9 @@ pub(crate) fn settings_page(
         scope,
         rev,
         set_rev,
+        set_status,
         s,
-        over,
+        overlay: active.as_ref().map(|p| &p.overrides),
         preset_mode,
         custom_res,
         set_custom_res,
@@ -532,7 +471,7 @@ pub(crate) fn settings_page(
             .tag("about")
             .icon(lucide::icon("circle-help")),
     ];
-    let scope_bar = preset_sheet::scope_bar(active.as_ref(), set_scope, set_edit);
+    let scope_bar = preset_sheet::scope_bar(&cx, active.as_ref(), set_scope, set_edit);
 
     // The card is keyed by section, so a pane switch remounts it (a reused ComboBox loses its
     // selection). The content column carries the section entrance and the category title, so
@@ -565,7 +504,7 @@ pub(crate) fn settings_page(
     .opacity(progress)
     .margin(edges(0.0, (1.0 - progress) * 22.0, 0.0, 0.0));
     let content: Element = scrolled.into();
-    let confirm = preset_sheet::delete_dialog(delete_pending, set_scope, set_delete, set_edit);
+    let confirm = preset_sheet::delete_dialog(&cx, delete_pending, set_scope, set_delete, set_edit);
     let nav = NavigationView::new(items, content)
         .pane_title("Settings")
         .selected_tag(section)
@@ -586,15 +525,7 @@ pub(crate) fn settings_page(
     let sheet_slot: Element = if edit_open && preset_mode {
         // The preset sheet — "Edit preset…" in the bar. The bar owns the scope choice,
         // so the sheet carries only the preset being edited.
-        preset_sheet::edit_preset_modal(
-            active.as_ref(),
-            None,
-            set_scope,
-            set_delete,
-            set_edit,
-            rev,
-            set_rev,
-        )
+        preset_sheet::edit_preset_modal(&cx, active.as_ref(), None, set_scope, set_delete, set_edit)
     } else {
         border(vstack(Vec::<Element>::new())).into()
     };
@@ -624,87 +555,4 @@ pub(crate) fn settings_page(
     ])
     .rows([GridLength::Auto, GridLength::STAR])
     .into()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use pf_client_core::presets::SettingsOverlay;
-
-    /// Every overlay field maps to its row flag — including the tri-state resolution
-    /// (any of width/height/match_window marks the one Resolution row) and the 4:4:4
-    /// switch added for GTK parity. A field that records without marking its row is the
-    /// original Overridden-row bug wearing a new face.
-    #[test]
-    fn override_flags_mirror_the_overlay() {
-        let none = OverrideFlags::of(None);
-        assert!(!none.resolution && !none.enable_444 && !none.codec);
-
-        let mut p = StreamPreset::new("t".to_string());
-        p.overrides = SettingsOverlay {
-            match_window: Some(true),
-            enable_444: Some(true),
-            codec: Some("hevc".into()),
-            bitrate_kbps: Some(20000),
-            ..Default::default()
-        };
-        let f = OverrideFlags::of(Some(&p));
-        assert!(f.resolution, "match_window alone marks the Resolution row");
-        assert!(f.enable_444);
-        assert!(f.codec);
-        assert!(f.bitrate_kbps);
-        assert!(!f.hdr_enabled && !f.compositor && !f.render_scale);
-
-        let mut p2 = StreamPreset::new("t2".to_string());
-        p2.overrides = SettingsOverlay {
-            width: Some(3840),
-            height: Some(2160),
-            ..Default::default()
-        };
-        assert!(OverrideFlags::of(Some(&p2)).resolution);
-
-        // The audio pair: the mic and its echo canceller are separate overrides, so a preset
-        // can pin one without claiming the other.
-        let mut p3 = StreamPreset::new("t3".to_string());
-        p3.overrides = SettingsOverlay {
-            echo_cancel: Some(false),
-            ..Default::default()
-        };
-        let f3 = OverrideFlags::of(Some(&p3));
-        assert!(f3.echo_cancel);
-        assert!(!f3.mic_enabled);
-
-        // Channels and format are likewise independent — a "lossless on this host" preset that
-        // leaves the layout following the global is valid, and the two are separate keys in the
-        // catalog every client shares.
-        let mut p3b = StreamPreset::new("t3b".to_string());
-        p3b.overrides = SettingsOverlay {
-            audio_format: Some(pf_client_core::session::AUDIO_FORMAT_LOSSLESS_96.into()),
-            ..Default::default()
-        };
-        let f3b = OverrideFlags::of(Some(&p3b));
-        assert!(f3b.audio_format);
-        assert!(!f3b.audio_channels);
-
-        // The presentation pair, likewise independent: pinning the intent doesn't claim
-        // the buffer (a "Smoothness, whatever the global buffer is" preset is valid).
-        let mut p4 = StreamPreset::new("t4".to_string());
-        p4.overrides = SettingsOverlay {
-            present_priority: Some("smooth".into()),
-            ..Default::default()
-        };
-        let f4 = OverrideFlags::of(Some(&p4));
-        assert!(f4.present_priority);
-        assert!(!f4.smooth_buffer);
-
-        // V-Sync and VRR are independent of each other and of the intent pair.
-        let mut p5 = StreamPreset::new("t5".to_string());
-        p5.overrides = SettingsOverlay {
-            vsync: Some(false),
-            ..Default::default()
-        };
-        let f5 = OverrideFlags::of(Some(&p5));
-        assert!(f5.vsync);
-        assert!(!f5.allow_vrr && !f5.present_priority);
-    }
 }

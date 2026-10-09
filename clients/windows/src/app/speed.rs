@@ -4,7 +4,7 @@
 
 use super::lucide;
 use super::style::*;
-use super::{Screen, Svc};
+use super::{saved, Screen, Svc};
 use crate::trust::KnownHosts;
 use pf_client_core::presets::PresetsFile;
 use windows_reactor::*;
@@ -164,16 +164,13 @@ pub(crate) fn speed_page(props: &SpeedProps, cx: &mut RenderCx) -> Element {
                 }
             };
             let write_preset = |id: String| {
-                let ss = set_screen.clone();
+                let (ss, st) = (set_screen.clone(), props.svc.set_status.clone());
                 move || {
-                    let mut catalog = PresetsFile::load();
-                    if let Some(slot) = catalog.presets.iter_mut().find(|x| x.id == id) {
-                        slot.overrides.bitrate_kbps = Some(kbps);
-                        if let Err(e) = catalog.save() {
-                            tracing::warn!(error = %format!("{e:#}"),
-                                "saving the measured bitrate");
-                        }
-                    }
+                    let r = super::settings::update_preset(&id, |p| {
+                        p.overrides.bitrate_kbps = Some(kbps)
+                    });
+                    // The host list it returns to redraws anyway; no revision to bump.
+                    saved(r, &st, None);
                     ss.call(Screen::Hosts);
                 }
             };

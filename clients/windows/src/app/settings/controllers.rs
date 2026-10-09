@@ -38,10 +38,7 @@ pub(super) fn controllers_section(cx: &Cx) -> Vec<Element> {
     let Cx {
         ctx,
         scope,
-        rev,
-        set_rev,
         ref s,
-        ref over,
         preset_mode,
         ..
     } = *cx;
@@ -97,39 +94,42 @@ pub(super) fn controllers_section(cx: &Cx) -> Vec<Element> {
             // forwarded. Every commit bumps `rev` and re-renders, so they follow it live.
             .enabled(s.gamepad_forwarding)
     };
-    let pad_forward_toggle =
-        setting_toggle(ctx, scope, (rev, set_rev), s.gamepad_forwarding, |s, on| {
-            s.gamepad_forwarding = on
-        });
+    let pad_forward_toggle = setting_toggle(
+        cx,
+        scope,
+        "gamepad_forwarding",
+        s.gamepad_forwarding,
+        |s, on| s.gamepad_forwarding = on,
+    );
     // The two DualSense pad-audio rows, GTK parity. The session binary this shell spawns has
     // honoured both all along; only the rows were missing here. Global scope only, like GTK's:
     // no override marker exists for either, so a preset-scope toggle would be discarded.
-    let pad_haptics_toggle = setting_toggle(ctx, scope, (rev, set_rev), s.pad_haptics, |s, on| {
+    let pad_haptics_toggle = setting_toggle(cx, scope, "pad_haptics", s.pad_haptics, |s, on| {
         s.pad_haptics = on
     });
-    let pad_rumble_toggle = setting_toggle(ctx, scope, (rev, set_rev), s.pad_rumble, |s, on| {
+    let pad_rumble_toggle = setting_toggle(cx, scope, "pad_rumble", s.pad_rumble, |s, on| {
         s.pad_rumble = on
     })
     .enabled(s.gamepad_forwarding);
     let pad_speaker_toggle = setting_toggle(
-        ctx,
+        cx,
         scope,
-        (rev, set_rev),
+        "pad_speaker",
         pf_client_core::pad_audio::speaker_active(&s.pad_speaker),
         |s, on| s.pad_speaker = if on { "pad".into() } else { "off".into() },
     );
     let (pad_names, pad_i) = presets(GAMEPADS, |v| {
         GamepadPref::from_name(v) == GamepadPref::from_name(&s.gamepad)
     });
-    let pad_combo = setting_combo(ctx, scope, (rev, set_rev), pad_names, pad_i, |s, i| {
+    let pad_combo = setting_combo(cx, scope, "gamepad", pad_names, pad_i, |s, i| {
         s.gamepad = GAMEPADS[i].0.to_string();
     })
     .enabled(s.gamepad_forwarding);
     let (sysbtn_names, sysbtn_i) = presets(SYSTEM_BUTTONS, |v| *v == s.system_buttons);
     let sysbtn_combo = setting_combo(
-        ctx,
+        cx,
         scope,
-        (rev, set_rev),
+        "system_buttons",
         sysbtn_names,
         sysbtn_i,
         |s, i| {
@@ -139,9 +139,9 @@ pub(super) fn controllers_section(cx: &Cx) -> Vec<Element> {
     .enabled(s.gamepad_forwarding);
     let (gesture_names, gesture_i) = presets(GUIDE_GESTURES, |v| *v == s.guide_gesture);
     let gesture_combo = setting_combo(
-        ctx,
+        cx,
         scope,
-        (rev, set_rev),
+        "guide_gesture",
         gesture_names,
         gesture_i,
         |s, i| {
@@ -194,11 +194,9 @@ pub(super) fn controllers_section(cx: &Cx) -> Vec<Element> {
                 )
             }),
             Some(described_overridable(
-                (rev, set_rev),
-                scope,
+                cx,
                 "gamepad",
                 "Controller type",
-                over.gamepad,
                 pad_combo,
                 "The virtual pad created on the host. Automatic matches your controller \
                  \u{2014} a DualSense keeps adaptive triggers, lightbar, touchpad and \
@@ -224,11 +222,9 @@ pub(super) fn controllers_section(cx: &Cx) -> Vec<Element> {
         // Whether ANY controller is forwarded — presetable, so it renders in both scopes
         // (a "Work" preset can decline what "Game" forwards).
         described_overridable(
-            (rev, set_rev),
-            scope,
+            cx,
             "gamepad_forwarding",
             "Forward controllers",
-            over.gamepad_forwarding,
             pad_forward_toggle,
             "Sends controllers connected to this PC to the host. Turn it off when your \
              controller already reaches the host another way \u{2014} USB passthrough \
@@ -249,11 +245,9 @@ pub(super) fn controllers_section(cx: &Cx) -> Vec<Element> {
     }
     advanced.extend([
         described_overridable(
-            (rev, set_rev),
-            scope,
+            cx,
             "system_buttons",
             "Guide button",
-            over.system_buttons,
             sysbtn_combo,
             "Where the guide (Xbox/PS) and quick-access presses go while streaming. \
              Automatic sends them to the host \u{2014} except on devices whose own overlay \
@@ -261,11 +255,9 @@ pub(super) fn controllers_section(cx: &Cx) -> Vec<Element> {
              below reaches the host.",
         ),
         described_overridable(
-            (rev, set_rev),
-            scope,
+            cx,
             "guide_gesture",
             "Hold Select for guide",
-            over.guide_gesture,
             gesture_combo,
             "Hold Select on its own to press the host's guide button \u{2014} keep holding \
              for a Gaming-Mode host's quick-access menu. A Select tap still goes through, \
@@ -299,7 +291,9 @@ pub(super) fn controllers_section(cx: &Cx) -> Vec<Element> {
         cx,
         advanced,
         changed.into_iter().filter(|c| *c).count(),
-        over.gamepad_forwarding || over.system_buttons || over.guide_gesture,
+        ["gamepad_forwarding", "system_buttons", "guide_gesture"]
+            .into_iter()
+            .any(|f| cx.overrides(f)),
     ));
     out
 }

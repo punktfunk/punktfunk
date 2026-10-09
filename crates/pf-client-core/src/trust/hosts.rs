@@ -185,6 +185,14 @@ impl KnownHost {
         out
     }
 
+    /// Pin (`on`) or unpin preset `id`'s tile. A pin is kept once, at the end of the list.
+    pub fn set_pinned(&mut self, id: &str, on: bool) {
+        self.pinned_presets.retain(|x| x != id);
+        if on {
+            self.pinned_presets.push(id.to_string());
+        }
+    }
+
     /// This title's binding, if it has one. Not resolved against the catalog here —
     /// [`resolve_preset`](crate::settings::resolve_preset) drops a dangling id, the same
     /// way it does for `preset_id`.
@@ -366,6 +374,16 @@ impl KnownHosts {
         #[cfg(all(desktop, target_os = "linux"))]
         crate::omarchy_menu::sync_if_enabled();
         Ok(())
+    }
+
+    /// Re-read the store, apply `f`, save: a shell's edit, so another process's write in
+    /// between survives. Records that lack an id get one in the same write.
+    pub fn update<R>(f: impl FnOnce(&mut KnownHosts) -> R) -> Result<R> {
+        let mut known = Self::read();
+        known.mint_missing_ids();
+        let r = f(&mut known);
+        known.save()?;
+        Ok(r)
     }
 
     /// The record pinned to `fp_hex`. An empty fingerprint is not a key — it would match
@@ -788,6 +806,18 @@ pub fn learn_mgmt_port_by_fp(fp_hex: &str, mgmt_port: u16) {
 mod tests {
     use super::*;
     use crate::trust::parse_hex32;
+
+    #[test]
+    fn set_pinned_keeps_one_entry_per_preset() {
+        let mut h = KnownHost::default();
+        h.set_pinned("a", true);
+        h.set_pinned("b", true);
+        h.set_pinned("a", true);
+        assert_eq!(h.pinned_presets, ["b", "a"]);
+        h.set_pinned("b", false);
+        h.set_pinned("gone", false);
+        assert_eq!(h.pinned_presets, ["a"]);
+    }
 
     /// Unpaired placeholders must not share the empty pin as a key: each would show the
     /// last-probed one's pip.

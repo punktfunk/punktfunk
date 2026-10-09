@@ -7,7 +7,7 @@ use super::library::open_library;
 use super::lucide;
 use super::speed::SpeedState;
 use super::style::*;
-use super::{Screen, Svc, Target};
+use super::{saved, Screen, Svc, Target};
 use crate::trust::{HostEdit, KnownHosts, Settings};
 use pf_client_core::discovery::DiscoveredHost;
 use pf_client_core::profiles::ProfilePick;
@@ -345,12 +345,13 @@ fn status_row_with(
 /// round-trip through a re-render. Save checks the connection fields with [`HostEdit::parse`];
 /// a refused value or a failed write goes to the status line and the sheet stays open.
 fn edit_editor(
+    props: &HostsProps,
     who: &HostRef,
     initial_name: &str,
     drafts: EditDrafts,
-    set_edit: AsyncSetState<Option<HostRef>>,
-    set_status: AsyncSetState<String>,
 ) -> Element {
+    let (set_edit, set_status) = (props.set_rename.clone(), props.svc.set_status.clone());
+    let (hosts_rev, set_hosts_rev) = (props.hosts_rev, props.set_hosts_rev.clone());
     let EditDrafts {
         name: name_draft,
         addr: addr_draft,
@@ -359,7 +360,8 @@ fn edit_editor(
         clip: clip_draft,
     } = drafts;
     let commit = {
-        let (who, se, st) = (who.clone(), set_edit.clone(), set_status);
+        let (who, se, st) = (who.clone(), set_edit.clone(), set_status.clone());
+        let set_hosts_rev = set_hosts_rev.clone();
         let (name_draft, addr_draft, port_draft, mac_draft, clip_draft) = (
             name_draft.clone(),
             addr_draft.clone(),
@@ -383,18 +385,15 @@ fn edit_editor(
                     return;
                 }
             };
-            let mut known = KnownHosts::load();
-            let target = who.index(&known);
-            if let Some(h) = target.and_then(|i| known.hosts.get_mut(i)) {
-                h.apply_edit(&edit);
-                h.clipboard_sync = *clip_draft.borrow();
-            }
-            match known.save() {
-                Ok(()) => {
-                    st.call(String::new());
-                    se.call(None);
+            let r = KnownHosts::update(|known| {
+                if let Some(h) = who.index(known).and_then(|i| known.hosts.get_mut(i)) {
+                    h.apply_edit(&edit);
+                    h.clipboard_sync = *clip_draft.borrow();
                 }
-                Err(e) => st.call(format!("Couldn't save the host \u{2014} {e:#}")),
+            });
+            if saved(r, &st, Some((hosts_rev, &set_hosts_rev))).is_some() {
+                st.call(String::new());
+                se.call(None);
             }
         }
     };
@@ -419,7 +418,8 @@ fn edit_editor(
             .as_ref()
             .and_then(|id| ids.iter().position(|i| i == id))
             .unwrap_or(0);
-        let who = who.clone();
+        let (who, set_status, set_hosts_rev) =
+            (who.clone(), set_status.clone(), set_hosts_rev.clone());
         ComboBox::new(names)
             .header("Preset")
             .selected_index(current as i32)
@@ -428,12 +428,12 @@ fn edit_editor(
                 let Some(id) = usize::try_from(i).ok().and_then(|i| ids.get(i)) else {
                     return;
                 };
-                let mut known = KnownHosts::load();
-                let target = who.index(&known);
-                if let Some(h) = target.and_then(|i| known.hosts.get_mut(i)) {
-                    h.preset_id = (!id.is_empty()).then(|| id.clone());
-                    let _ = known.save();
-                }
+                let r = KnownHosts::update(|known| {
+                    if let Some(h) = who.index(known).and_then(|i| known.hosts.get_mut(i)) {
+                        h.preset_id = (!id.is_empty()).then(|| id.clone());
+                    }
+                });
+                saved(r, &set_status, Some((hosts_rev, &set_hosts_rev)));
             })
     };
     let field = |label: &str, value: String, placeholder: &str, draft: HookRef<String>| {
@@ -638,13 +638,7 @@ pub(crate) fn hosts_page(props: &HostsProps, cx: &mut RenderCx) -> Element {
     let add_slot = add_host_slot(props, manual, set_manual, manual_live);
     // The host editor sheet, in its own stable slot (see the add modal's note).
     let edit_slot: Element = if let Some(who) = &props.rename {
-        edit_editor(
-            who,
-            &who.name,
-            drafts,
-            props.set_rename.clone(),
-            props.svc.set_status.clone(),
-        )
+        edit_editor(props, who, &who.name, drafts)
     } else {
         border(vstack(Vec::<Element>::new())).into()
     };
@@ -1038,22 +1032,7 @@ fn saved_menu(
                     }
                 }
                 MenuAction::Pin(id, on) => {
-                    let on = *on;
-                    tracing::info!(pin = %id, host = %who.name, on, "pin toggle");
-                    let mut known = KnownHosts::load();
-                    let target = who.index(&known);
-                    if let Some(h) = target.and_then(|i| known.hosts.get_mut(i)) {
-                        h.pinned_presets.retain(|x| x != id);
-                        if on {
-                            h.pinned_presets.push(id.clone());
-                        }
-                        if let Err(e) = known.save() {
-                            tracing::warn!(error = %format!("{e:#}"), "saving a pin");
-                        }
-                    }
-                    // The store changed behind the tiles and nothing the page reads as state
-                    // did: the bump makes the pinned tile appear (or vanish) now.
-                    set_hosts_rev.call(hosts_rev + 1);
+                    pin_tile(&svc, &who, id, *on, (hosts_rev, &set_hosts_rev))
                 }
                 // Whole-file writer: rebase on the store before mutating, or a setting
                 // another surface just wrote is reverted.
@@ -1079,6 +1058,19 @@ fn saved_menu(
                 MenuAction::Forget => sf.call(Some(who.clone())),
             }
         })
+}
+
+/// Pin (`on`) or unpin preset `id`'s tile on the host `who` names. The store changes behind
+/// the tiles and nothing the page reads as state does, so the bump is what makes the tile
+/// appear or vanish now rather than on the next discovery tick.
+fn pin_tile(svc: &Svc, who: &HostRef, id: &str, on: bool, rev: (u64, &AsyncSetState<u64>)) {
+    tracing::info!(pin = %id, host = %who.name, on, "pin toggle");
+    let r = KnownHosts::update(|known| {
+        if let Some(h) = who.index(known).and_then(|i| known.hosts.get_mut(i)) {
+            h.set_pinned(id, on);
+        }
+    });
+    saved(r, &svc.set_status, Some(rev));
 }
 
 /// Runs one of the host's own actions on a worker thread, the outcome on the status line.
@@ -1190,22 +1182,13 @@ fn pinned_tile(
                     .to_url();
                     pf_client_core::clipboard::set_text(&url);
                 }
-                other if other == unpin_item => {
-                    tracing::info!(pin = %pin_id, host = %unpin_who.name, on = false, "pin toggle");
-                    let mut known = KnownHosts::load();
-                    let target = unpin_who.index(&known);
-                    if let Some(h) = target.and_then(|i| known.hosts.get_mut(i)) {
-                        h.pinned_presets.retain(|x| x != &pin_id);
-                        if let Err(e) = known.save() {
-                            tracing::warn!(
-                                error = %format!("{e:#}"), "saving a pin"
-                            );
-                        }
-                    }
-                    // Same reason as the primary tile's toggle: nothing the page reads
-                    // as state changed, so the bump is what makes this tile vanish NOW.
-                    set_hosts_rev.call(hosts_rev + 1);
-                }
+                other if other == unpin_item => pin_tile(
+                    &svc,
+                    &unpin_who,
+                    &pin_id,
+                    false,
+                    (hosts_rev, &set_hosts_rev),
+                ),
                 _ => {}
             })
     };
