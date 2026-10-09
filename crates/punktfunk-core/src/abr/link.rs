@@ -102,6 +102,12 @@ impl LinkRate {
         self.calm = 0;
     }
 
+    /// Tail loss in a window where a frame died: the calm count starts over. The
+    /// controller's cut and mark own the rate.
+    pub(crate) fn tail_loss(&mut self) {
+        self.calm = 0;
+    }
+
     /// A window without tail loss.
     pub(crate) fn calm_window(&mut self) {
         self.calm += 1;

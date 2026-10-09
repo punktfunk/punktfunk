@@ -147,7 +147,8 @@ pub struct Feedback {
     pub head: u32,
     pub mid: u32,
     pub tail: u32,
-    /// Packets the client's own receive buffer dropped over the window.
+    /// Packets the client itself dropped over the window: its kernel socket's and its demux
+    /// queue's.
     pub sock_drops: u32,
     /// The rate the client holds the link to carry, kbps; `0` = not measured yet. A level,
     /// not a count: it rides any feedback, with or without a window.

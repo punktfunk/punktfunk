@@ -75,6 +75,8 @@ pub(crate) struct ClientShared {
     /// A clone of the data socket: the same socket as the pump's, so its receive drops and
     /// buffer grant can be read on demand without touching the pump.
     pub(crate) data_sock: Mutex<Option<std::net::UdpSocket>>,
+    /// The demux thread's counters for that socket: its full queue drops packets here too.
+    pub(crate) demux: Mutex<Option<Arc<crate::transport::shared::SharedStats>>>,
     /// The address the host's packets arrive at, where `data_sock` is unconnected
     /// (`punktfunk/2`'s shared socket) and its own address names no interface.
     pub(crate) local_ip: Mutex<Option<std::net::IpAddr>>,
@@ -147,6 +149,7 @@ impl ClientShared {
             draining: AtomicBool::new(false),
             probe_only: AtomicBool::new(false),
             data_sock: Mutex::default(),
+            demux: Mutex::default(),
             local_ip: Mutex::default(),
             v2_session: Mutex::default(),
             anchor: Mutex::default(),

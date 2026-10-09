@@ -311,19 +311,26 @@ impl DataPump {
             lp.abr
                 .set_ports(host.facts(), *self.shared.client_link.lock().unwrap());
         }
-        // One syscall per sample: often enough for a window, rare enough for the hot loop.
+        // One syscall per sample: often enough for a window, rare enough for the hot loop. The
+        // receiver's drops are the kernel socket's, where the OS keeps a figure, and the demux
+        // queue's.
         if lp.sock_read.elapsed() >= Duration::from_millis(100) {
             lp.sock_read = Instant::now();
-            let drops = self
+            let kernel = self
                 .shared
                 .data_sock
                 .lock()
                 .unwrap()
                 .as_ref()
                 .and_then(crate::transport::sockstat::socket_drops);
-            if let Some(d) = drops {
-                lp.abr.on_sock_drops(d);
-            }
+            let demux = self
+                .shared
+                .demux
+                .lock()
+                .unwrap()
+                .as_ref()
+                .map_or(0, |s| s.media_dropped.load(Ordering::Relaxed));
+            lp.abr.on_sock_drops(kernel.unwrap_or(0) + demux);
         }
         // One delay sample per frame that opened since the last iteration,
         // whether or not it ever completed. Same offset and same sign test
@@ -1171,6 +1178,35 @@ mod tests {
         shared.shutdown.store(true, Ordering::SeqCst);
         pump_thread.join().unwrap();
         assert_eq!(seen, [1, 2, 3]);
+    }
+
+    /// A full demux queue's drops are the receiver's own: the window reports them as
+    /// `sock_drops`, with or without a kernel figure beside them.
+    #[test]
+    fn demux_queue_drops_report_as_the_receivers_own() {
+        let mode = crate::config::Mode {
+            width: 1920,
+            height: 1080,
+            refresh_hz: 60,
+        };
+        let (_host_tp, session) = idle_client_session(crate::quic::wall_clock_ns());
+        let shared = Arc::new(ClientShared::new(mode));
+        let demux = Arc::new(crate::transport::shared::SharedStats::default());
+        demux.media_dropped.store(40, Ordering::Relaxed);
+        *shared.demux.lock().unwrap() = Some(demux);
+        let (pump, _ctrl_rx, fb_rx) = test_pump(session, shared.clone(), crate::quic::CODEC_HEVC);
+        let pump_thread = std::thread::spawn(move || pump.run());
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let report = loop {
+            match fb_rx.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
+                Ok(fb) if fb.window != 0 => break Some(fb),
+                Ok(_) => {}
+                Err(_) => break None,
+            }
+        };
+        shared.shutdown.store(true, Ordering::SeqCst);
+        pump_thread.join().unwrap();
+        assert_eq!(report.map(|fb| fb.sock_drops), Some(40));
     }
 
     /// Host-rebuild repair, end to end: a real [`PipelineGap`] on a real
