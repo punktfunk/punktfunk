@@ -8,7 +8,7 @@ use crate::hosts::ConnectRequest;
 use crate::trust;
 use adw::prelude::*;
 use gtk::glib;
-use pf_client_core::orchestrate::{WakeOutcome, WakeWait};
+use pf_client_core::orchestrate::{wake_parked_line, WakeOutcome, WakeWait, WAKE_PARKED_HINT};
 use relm4::prelude::*;
 
 /// The waiting dialog plus its Cancel handler. Both halves are needed to dismiss it: a bare
@@ -20,8 +20,8 @@ pub type WaitingSlot =
 /// Wake-and-wait: the FALLBACK after a failed dial to a non-advertising saved host with a
 /// known MAC (`AppMsg::WakeConnect` dials first — mDNS absence ≠ unreachable). A magic packet,
 /// then mDNS polled until the host advertises — re-sending every few seconds up to a timeout —
-/// and back into the trust gate, dialling the address it came back on. A "Waking…" dialog
-/// lets the user cancel.
+/// and back into the trust gate, dialling the address it came back on. The "Waking…" dialog
+/// offers Cancel; on a timeout it parks with Try Again, a fresh wake of the same request.
 ///
 /// The cadence is [`WakeWait`] and the advert match `AdvertWatch`, both shared with the WinUI
 /// shell (design/client-architecture-split.md §3).
@@ -46,7 +46,7 @@ pub fn wake_and_connect(
     }
     waiting.present(Some(window));
 
-    let sender = sender.clone();
+    let (window, sender) = (window.clone(), sender.clone());
     glib::spawn_future_local(async move {
         use std::time::Duration;
         let mut adverts = crate::discovery::AdvertWatch::start();
@@ -78,11 +78,15 @@ pub fn wake_and_connect(
                     return;
                 }
                 Some(WakeOutcome::TimedOut) => {
-                    waiting.close();
-                    sender.input(AppMsg::Toast(format!(
-                        "Couldn't reach “{}” — is it powered and on the network?",
-                        req.name
-                    )));
+                    // Park in the same dialog. Cancel stays its close response.
+                    waiting.set_heading(Some(&wake_parked_line(&req.name)));
+                    waiting.set_body(WAKE_PARKED_HINT);
+                    waiting.add_response("retry", "Try Again");
+                    waiting.set_response_appearance("retry", adw::ResponseAppearance::Suggested);
+                    waiting.set_default_response(Some("retry"));
+                    waiting.connect_response(Some("retry"), move |_, _| {
+                        wake_and_connect(&window, &sender, req.clone())
+                    });
                     return;
                 }
                 None => {}

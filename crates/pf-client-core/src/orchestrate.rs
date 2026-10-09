@@ -463,6 +463,15 @@ pub enum WakeOutcome {
     TimedOut,
 }
 
+/// The parked headline on [`WakeOutcome::TimedOut`]: `Desk didn't wake`. The console's
+/// wake card (`pf-console-ui`, no `desktop` cfg) spells the same two lines itself.
+pub fn wake_parked_line(name: &str) -> String {
+    format!("{name} didn't wake")
+}
+
+/// The sentence under [`wake_parked_line`], above Try Again / Cancel.
+pub const WAKE_PARKED_HINT: &str = "Check its power settings, or wake it manually and try again.";
+
 impl Default for WakeWait {
     fn default() -> WakeWait {
         WakeWait {

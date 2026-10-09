@@ -122,15 +122,27 @@ pub(crate) fn page_header(title: &str, action: Button) -> Element {
     .into()
 }
 
-/// A full-screen centred "busy" scene: spinner, headline, secondary detail line, and optional
-/// trailing elements (e.g. a Cancel button). Shared by Connecting / RequestAccess / SpeedTest.
+/// A full-screen centred "busy" scene: [`notice_page`] under a spinner. Shared by Connecting /
+/// RequestAccess / Waking / SpeedTest.
 pub(crate) fn busy_page(headline: &str, detail: &str, extra: Vec<Element>) -> Element {
-    let mut children: Vec<Element> = vec![
-        ProgressRing::indeterminate()
-            .width(48.0)
-            .height(48.0)
-            .horizontal_alignment(HorizontalAlignment::Center)
-            .into(),
+    let ring = ProgressRing::indeterminate()
+        .width(48.0)
+        .height(48.0)
+        .horizontal_alignment(HorizontalAlignment::Center)
+        .into();
+    notice_page(Some(ring), headline, detail, extra)
+}
+
+/// A full-screen centred scene: an optional lead visual, headline, secondary detail line, and
+/// trailing elements (e.g. a Cancel button).
+pub(crate) fn notice_page(
+    lead: Option<Element>,
+    headline: &str,
+    detail: &str,
+    extra: Vec<Element>,
+) -> Element {
+    let mut children: Vec<Element> = lead.into_iter().collect();
+    children.extend([
         text_block(headline)
             .font_size(18.0)
             .semibold()
@@ -142,7 +154,7 @@ pub(crate) fn busy_page(headline: &str, detail: &str, extra: Vec<Element>) -> El
             .foreground(ThemeRef::SecondaryText)
             .horizontal_alignment(HorizontalAlignment::Center)
             .into(),
-    ];
+    ]);
     children.extend(extra);
     // max_width + side margins so the text column reads well wide AND wraps instead of
     // clipping narrow.
