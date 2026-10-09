@@ -8,7 +8,7 @@
 use crate::glyphs::{Hint, HintKey};
 use crate::model::ConsoleCmd;
 use crate::pointer::Pointer;
-use crate::screens::{Ctx, Outbox};
+use crate::screens::{Ctx, Outbox, ScreenView};
 use crate::theme::{fg, Fonts, W};
 use crate::widgets::{ListMsg, MenuList, RowSpec, FOOT_DETAIL_H};
 use pf_client_core::menu_nav::{MenuEvent, MenuPulse};
@@ -30,7 +30,7 @@ pub(crate) struct BindPresetScreen {
     /// Set when the menu was raised on a title rather than the host tile. Same catalog
     /// and same radio behaviour either way — only the binding it writes differs.
     game: Option<GameSubject>,
-    pub(super) list: MenuList,
+    list: MenuList,
 }
 
 impl BindPresetScreen {
@@ -65,14 +65,6 @@ impl BindPresetScreen {
         &self.host_name
     }
 
-    /// Stack title: the subject the user picked is the one named.
-    pub(crate) fn heading(&self) -> String {
-        match &self.game {
-            Some(g) => format!("Preset for {}", g.title),
-            None => format!("Default for {}", self.host_name()),
-        }
-    }
-
     /// Read from the model, never remembered: the row's chip and its `game_presets`
     /// ARE the state, so the checkmark cannot disagree with what the carousel shows.
     fn bound(&self, ctx: &Ctx) -> Option<String> {
@@ -93,29 +85,6 @@ impl BindPresetScreen {
 
     fn len(&self) -> usize {
         self.presets.len() + 1
-    }
-
-    pub(crate) fn menu(
-        &mut self,
-        ev: MenuEvent,
-        ctx: &mut Ctx,
-        fx: &mut Outbox,
-    ) -> Option<MenuPulse> {
-        if ev == MenuEvent::Back {
-            fx.pop();
-            return None;
-        }
-        let (msg, pulse) = self.list.menu(ev, self.len());
-        self.choose(msg, pulse, ctx, fx)
-    }
-
-    pub(crate) fn pointer(&mut self, p: Pointer, ctx: &mut Ctx, fx: &mut Outbox) -> bool {
-        let (msg, pulse) = self.list.pointer(p, self.len());
-        if matches!(msg, ListMsg::None) && pulse.is_none() {
-            return false;
-        }
-        self.choose(msg, pulse, ctx, fx);
-        true
     }
 
     /// Radio, not toggle: re-selecting the bound row is a boundary; ◀/▶ do nothing.
@@ -146,8 +115,36 @@ impl BindPresetScreen {
             }
         }
     }
+}
 
-    pub(crate) fn hints(&self, _ctx: &Ctx) -> Vec<Hint> {
+impl ScreenView for BindPresetScreen {
+    /// Stack title: the subject the user picked is the one named.
+    fn title(&self) -> String {
+        match &self.game {
+            Some(g) => format!("Preset for {}", g.title),
+            None => format!("Default for {}", self.host_name()),
+        }
+    }
+
+    fn menu(&mut self, ev: MenuEvent, ctx: &mut Ctx, fx: &mut Outbox) -> Option<MenuPulse> {
+        if ev == MenuEvent::Back {
+            fx.pop();
+            return None;
+        }
+        let (msg, pulse) = self.list.menu(ev, self.len());
+        self.choose(msg, pulse, ctx, fx)
+    }
+
+    fn pointer(&mut self, p: Pointer, ctx: &mut Ctx, fx: &mut Outbox) -> bool {
+        let (msg, pulse) = self.list.pointer(p, self.len());
+        if matches!(msg, ListMsg::None) && pulse.is_none() {
+            return false;
+        }
+        self.choose(msg, pulse, ctx, fx);
+        true
+    }
+
+    fn hints(&self, _ctx: &Ctx) -> Vec<Hint> {
         if self.presets.is_empty() {
             return vec![Hint::new(HintKey::Back, "Done")];
         }
@@ -162,7 +159,7 @@ impl BindPresetScreen {
         ]
     }
 
-    pub(crate) fn render(
+    fn render(
         &mut self,
         canvas: &Canvas,
         rect: Rect,
@@ -234,14 +231,22 @@ impl BindPresetScreen {
     }
 
     /// The explainer under the list, once there is a list.
-    pub(crate) fn foot(&self) -> Option<&'static str> {
+    fn foot(&self, _ctx: &Ctx) -> Option<std::borrow::Cow<'static, str>> {
         if self.presets.is_empty() {
             None
         } else if self.game.is_some() {
-            Some("What this title streams with, overriding the host's default. A pinned card still keeps its own.")
+            Some("What this title streams with, overriding the host's default. A pinned card still keeps its own.".into())
         } else {
-            Some("What a plain press on this host's tile connects with. Pinned cards keep their own.")
+            Some("What a plain press on this host's tile connects with. Pinned cards keep their own.".into())
         }
+    }
+
+    fn press(&mut self) {
+        self.list.dip();
+    }
+
+    fn pan(&mut self, p: Pointer) -> bool {
+        self.list.pan(p)
     }
 }
 
@@ -363,7 +368,7 @@ mod tests {
             },
             vec![("p1".into(), "Work".into()), ("p2".into(), "Game".into())],
         );
-        assert_eq!(s.heading(), "Preset for Halo");
+        assert_eq!(s.title(), "Preset for Halo");
 
         // Row 2 is p2, which this title already uses: a boundary, not a second write.
         let mut fx = Outbox::default();

@@ -11,7 +11,7 @@ use super::settings::rows::{adjust, advanced, overrides_row, preset_field, prese
 use crate::glyphs::{Hint, HintKey};
 use crate::model::ConsoleCmd;
 use crate::pointer::Pointer;
-use crate::screens::{Ctx, EditField, Outbox, Screen};
+use crate::screens::{Ctx, EditField, Outbox, Screen, ScreenView};
 use crate::theme::Fonts;
 use crate::widgets::{
     blurb, entry_hints, field_key, type_text, Entry, Keyboard, ListMsg, MenuList, RowSpec,
@@ -48,7 +48,7 @@ const ITEMS: [Item; 4] = [Item::Edit, Item::Rename, Item::Pin, Item::Delete];
 pub(crate) struct PresetMenu {
     id: String,
     name: String,
-    pub(super) list: MenuList,
+    list: MenuList,
     /// Delete fires on the second press.
     armed: bool,
     /// When `name` was last read back from the store: a rename lands through the host.
@@ -64,33 +64,6 @@ impl PresetMenu {
             armed: false,
             read_at: 0.0,
         }
-    }
-
-    pub(crate) fn title(&self) -> String {
-        format!("Preset {}", quoted(&self.name))
-    }
-
-    pub(crate) fn menu(
-        &mut self,
-        ev: MenuEvent,
-        ctx: &mut Ctx,
-        fx: &mut Outbox,
-    ) -> Option<MenuPulse> {
-        if ev == MenuEvent::Back {
-            fx.pop();
-            return None;
-        }
-        let (msg, pulse) = self.list.menu(ev, ITEMS.len());
-        self.dispatch(msg, pulse, ctx, fx)
-    }
-
-    pub(crate) fn pointer(&mut self, p: Pointer, ctx: &mut Ctx, fx: &mut Outbox) -> bool {
-        let (msg, pulse) = self.list.pointer(p, ITEMS.len());
-        if matches!(msg, ListMsg::None) && pulse.is_none() {
-            return false;
-        }
-        self.dispatch(msg, pulse, ctx, fx);
-        true
     }
 
     /// Shared by pad and pointer. Arming is per row: focus on any other row disarms Delete.
@@ -146,15 +119,39 @@ impl PresetMenu {
         }
         Some(MenuPulse::Confirm)
     }
+}
 
-    pub(crate) fn hints(&self, _ctx: &Ctx) -> Vec<Hint> {
+impl ScreenView for PresetMenu {
+    fn title(&self) -> String {
+        format!("Preset {}", quoted(&self.name))
+    }
+
+    fn menu(&mut self, ev: MenuEvent, ctx: &mut Ctx, fx: &mut Outbox) -> Option<MenuPulse> {
+        if ev == MenuEvent::Back {
+            fx.pop();
+            return None;
+        }
+        let (msg, pulse) = self.list.menu(ev, ITEMS.len());
+        self.dispatch(msg, pulse, ctx, fx)
+    }
+
+    fn pointer(&mut self, p: Pointer, ctx: &mut Ctx, fx: &mut Outbox) -> bool {
+        let (msg, pulse) = self.list.pointer(p, ITEMS.len());
+        if matches!(msg, ListMsg::None) && pulse.is_none() {
+            return false;
+        }
+        self.dispatch(msg, pulse, ctx, fx);
+        true
+    }
+
+    fn hints(&self, _ctx: &Ctx) -> Vec<Hint> {
         vec![
             Hint::new(HintKey::Confirm, "Select"),
             Hint::new(HintKey::Back, "Back"),
         ]
     }
 
-    pub(crate) fn render(
+    fn render(
         &mut self,
         canvas: &Canvas,
         rect: Rect,
@@ -192,6 +189,14 @@ impl PresetMenu {
             .collect();
         self.list.render(canvas, rect, &rows, fonts, k, dt, true);
     }
+
+    fn press(&mut self) {
+        self.list.dip();
+    }
+
+    fn pan(&mut self, p: Pointer) -> bool {
+        self.list.pan(p)
+    }
 }
 
 // --- the name --------------------------------------------------------------------------------
@@ -201,7 +206,7 @@ pub(crate) struct PresetName {
     id: Option<String>,
     overlay: SettingsOverlay,
     name: String,
-    pub(super) list: MenuList,
+    list: MenuList,
     keyboard: Keyboard,
     editing: bool,
     error: Option<String>,
@@ -230,26 +235,6 @@ impl PresetName {
         }
     }
 
-    pub(crate) fn title(&self) -> String {
-        match self.id {
-            Some(_) => "Rename Preset".into(),
-            None => "New Preset".into(),
-        }
-    }
-
-    pub(crate) fn editing(&self) -> bool {
-        self.editing
-    }
-
-    pub(crate) fn edit_field(&self) -> Option<EditField> {
-        let field = EditField {
-            label: "Name".into(),
-            text: self.name.clone(),
-            digits: false,
-        };
-        self.editing.then_some(field)
-    }
-
     /// A name is up to 40 printable characters.
     fn admits(text: &str, ch: char) -> bool {
         !ch.is_control() && text.chars().count() < 40
@@ -260,93 +245,6 @@ impl PresetName {
         if self.name.len() > before {
             self.error = None;
         }
-    }
-
-    pub(crate) fn text_input(&mut self, typed: &str) {
-        if self.editing {
-            let before = self.name.len();
-            type_text(&mut self.name, typed, Self::admits);
-            self.typed(before);
-        }
-    }
-
-    /// Return closes the keyboard onto Save; the next Return saves.
-    pub(crate) fn edit_key(&mut self, key: crate::input::Key) -> bool {
-        if !self.editing {
-            return false;
-        }
-        let Some(entry) = field_key(key, &mut self.name) else {
-            return false;
-        };
-        if entry != Entry::Stay {
-            self.editing = false;
-            self.list.cursor = 1;
-        }
-        true
-    }
-
-    pub(crate) fn menu(
-        &mut self,
-        ev: MenuEvent,
-        ctx: &mut Ctx,
-        fx: &mut Outbox,
-    ) -> Option<MenuPulse> {
-        if self.editing {
-            let before = self.name.len();
-            let (entry, pulse) =
-                (self.keyboard).edit_menu(ev, ctx.device.deck, &mut self.name, Self::admits);
-            self.typed(before);
-            return match entry {
-                Entry::Stay => pulse,
-                Entry::Close => {
-                    self.editing = false;
-                    pulse
-                }
-                Entry::Done => self.save(ctx, fx),
-            };
-        }
-        if ev == MenuEvent::Back {
-            fx.pop();
-            return None;
-        }
-        let (msg, pulse) = self.list.menu(ev, 2);
-        match msg {
-            ListMsg::Activate if self.list.cursor == 0 => {
-                self.editing = true;
-                Some(MenuPulse::Confirm)
-            }
-            ListMsg::Activate => self.save(ctx, fx),
-            _ => pulse,
-        }
-    }
-
-    pub(crate) fn pointer(&mut self, p: Pointer, ctx: &mut Ctx, fx: &mut Outbox) -> bool {
-        if self.editing && !ctx.device.deck {
-            let before = self.name.len();
-            let entry = (self.keyboard).edit_pointer(p, &mut self.name, Self::admits);
-            self.typed(before);
-            match entry {
-                None => return false,
-                Some(Entry::Stay) => {}
-                Some(Entry::Close) => self.editing = false,
-                Some(Entry::Done) => {
-                    self.save(ctx, fx);
-                }
-            }
-            return true;
-        }
-        let (msg, pulse) = self.list.pointer(p, 2);
-        if matches!(msg, ListMsg::None) && pulse.is_none() {
-            return false;
-        }
-        if matches!(msg, ListMsg::Activate) {
-            if self.list.cursor == 0 {
-                self.editing = true;
-            } else {
-                self.save(ctx, fx);
-            }
-        }
-        true
     }
 
     /// A name no other preset has, any case. A new preset opens its editor next.
@@ -377,8 +275,112 @@ impl PresetName {
         }
         Some(MenuPulse::Confirm)
     }
+}
 
-    pub(crate) fn hints(&self, ctx: &Ctx) -> Vec<Hint> {
+impl ScreenView for PresetName {
+    fn title(&self) -> String {
+        match self.id {
+            Some(_) => "Rename Preset".into(),
+            None => "New Preset".into(),
+        }
+    }
+
+    fn editing(&self) -> bool {
+        self.editing
+    }
+
+    fn edit_field(&self) -> Option<EditField> {
+        let field = EditField {
+            label: "Name".into(),
+            text: self.name.clone(),
+            digits: false,
+        };
+        self.editing.then_some(field)
+    }
+
+    fn text_input(&mut self, typed: &str) {
+        if self.editing {
+            let before = self.name.len();
+            type_text(&mut self.name, typed, Self::admits);
+            self.typed(before);
+        }
+    }
+
+    /// Return closes the keyboard onto Save; the next Return saves.
+    fn edit_key(&mut self, key: crate::input::Key, _ctx: &mut Ctx) -> bool {
+        if !self.editing {
+            return false;
+        }
+        let Some(entry) = field_key(key, &mut self.name) else {
+            return false;
+        };
+        if entry != Entry::Stay {
+            self.editing = false;
+            self.list.cursor = 1;
+        }
+        true
+    }
+
+    fn menu(&mut self, ev: MenuEvent, ctx: &mut Ctx, fx: &mut Outbox) -> Option<MenuPulse> {
+        if self.editing {
+            let before = self.name.len();
+            let (entry, pulse) =
+                (self.keyboard).edit_menu(ev, ctx.device.deck, &mut self.name, Self::admits);
+            self.typed(before);
+            return match entry {
+                Entry::Stay => pulse,
+                Entry::Close => {
+                    self.editing = false;
+                    pulse
+                }
+                Entry::Done => self.save(ctx, fx),
+            };
+        }
+        if ev == MenuEvent::Back {
+            fx.pop();
+            return None;
+        }
+        let (msg, pulse) = self.list.menu(ev, 2);
+        match msg {
+            ListMsg::Activate if self.list.cursor == 0 => {
+                self.editing = true;
+                Some(MenuPulse::Confirm)
+            }
+            ListMsg::Activate => self.save(ctx, fx),
+            _ => pulse,
+        }
+    }
+
+    fn pointer(&mut self, p: Pointer, ctx: &mut Ctx, fx: &mut Outbox) -> bool {
+        if self.editing && !ctx.device.deck {
+            let before = self.name.len();
+            let entry = (self.keyboard).edit_pointer(p, &mut self.name, Self::admits);
+            self.typed(before);
+            match entry {
+                None => return false,
+                Some(Entry::Stay) => {}
+                Some(Entry::Close) => self.editing = false,
+                Some(Entry::Done) => {
+                    self.save(ctx, fx);
+                }
+            }
+            return true;
+        }
+        let (msg, pulse) = self.list.pointer(p, 2);
+        if matches!(msg, ListMsg::None) && pulse.is_none() {
+            return false;
+        }
+        if matches!(msg, ListMsg::Activate) {
+            if self.list.cursor == 0 {
+                self.editing = true;
+            } else {
+                self.save(ctx, fx);
+            }
+        }
+        true
+    }
+
+    fn hints(&self, ctx: &Ctx) -> Vec<Hint> {
         if self.editing {
             return entry_hints(ctx.device.deck, "Save");
         }
@@ -388,7 +390,7 @@ impl PresetName {
         ]
     }
 
-    pub(crate) fn render(
+    fn render(
         &mut self,
         canvas: &Canvas,
         rect: Rect,
@@ -425,6 +427,14 @@ impl PresetName {
             self.keyboard.render(canvas, fonts, w, bottom, seat, k);
         }
     }
+
+    fn press(&mut self) {
+        self.list.dip();
+    }
+
+    fn pan(&mut self, p: Pointer) -> bool {
+        self.list.pan(p)
+    }
 }
 
 // --- the settings ----------------------------------------------------------------------------
@@ -433,7 +443,7 @@ pub(crate) struct PresetEdit {
     id: String,
     name: String,
     overlay: SettingsOverlay,
-    pub(super) list: MenuList,
+    list: MenuList,
 }
 
 impl PresetEdit {
@@ -444,10 +454,6 @@ impl PresetEdit {
             overlay,
             list: MenuList::new(),
         }
-    }
-
-    pub(crate) fn title(&self) -> String {
-        format!("Preset {}", quoted(&self.name))
     }
 
     /// `f` sees `ctx.settings` as the preset streams them: the overlay over the global.
@@ -469,50 +475,6 @@ impl PresetEdit {
                 .filter(|(_, id)| all || !advanced(*id) || overrides_row(*id, overlay))
                 .collect()
         })
-    }
-
-    pub(crate) fn menu(
-        &mut self,
-        ev: MenuEvent,
-        ctx: &mut Ctx,
-        fx: &mut Outbox,
-    ) -> Option<MenuPulse> {
-        if ev == MenuEvent::Back {
-            fx.pop();
-            return None;
-        }
-        let rows = self.rows(ctx);
-        let focused = rows.get(self.list.cursor).map(|(_, id)| *id);
-        if ev == MenuEvent::Tertiary {
-            let field = focused.and_then(preset_field)?;
-            if !self.overlay.clear(field) {
-                return Some(MenuPulse::Boundary);
-            }
-            fx.cmds.push(save(&self.id, &self.name, &self.overlay));
-            return Some(MenuPulse::Confirm);
-        }
-        let (msg, pulse) = self.list.menu(ev, rows.len());
-        let (delta, wrap) = match msg {
-            ListMsg::Adjust(delta) => (delta, false),
-            ListMsg::Activate => (1, true),
-            ListMsg::None => return pulse,
-        };
-        let Some(id) = focused else {
-            return pulse;
-        };
-        self.step(id, delta, wrap, ctx, fx)
-    }
-
-    pub(crate) fn pointer(&mut self, p: Pointer, ctx: &mut Ctx, fx: &mut Outbox) -> bool {
-        let rows = self.rows(ctx);
-        let (msg, pulse) = self.list.pointer(p, rows.len());
-        if matches!(msg, ListMsg::None) && pulse.is_none() {
-            return false;
-        }
-        if let (ListMsg::Activate, Some((_, id))) = (msg, rows.get(self.list.cursor)) {
-            self.step(*id, 1, true, ctx, fx);
-        }
-        true
     }
 
     /// Step the row at the preset's value and keep what changed as its override. Android's
@@ -547,8 +509,53 @@ impl PresetEdit {
         fx.cmds.push(save(&self.id, &self.name, &self.overlay));
         Some(MenuPulse::Move)
     }
+}
 
-    pub(crate) fn hints(&self, ctx: &Ctx) -> Vec<Hint> {
+impl ScreenView for PresetEdit {
+    fn title(&self) -> String {
+        format!("Preset {}", quoted(&self.name))
+    }
+
+    fn menu(&mut self, ev: MenuEvent, ctx: &mut Ctx, fx: &mut Outbox) -> Option<MenuPulse> {
+        if ev == MenuEvent::Back {
+            fx.pop();
+            return None;
+        }
+        let rows = self.rows(ctx);
+        let focused = rows.get(self.list.cursor).map(|(_, id)| *id);
+        if ev == MenuEvent::Tertiary {
+            let field = focused.and_then(preset_field)?;
+            if !self.overlay.clear(field) {
+                return Some(MenuPulse::Boundary);
+            }
+            fx.cmds.push(save(&self.id, &self.name, &self.overlay));
+            return Some(MenuPulse::Confirm);
+        }
+        let (msg, pulse) = self.list.menu(ev, rows.len());
+        let (delta, wrap) = match msg {
+            ListMsg::Adjust(delta) => (delta, false),
+            ListMsg::Activate => (1, true),
+            ListMsg::None => return pulse,
+        };
+        let Some(id) = focused else {
+            return pulse;
+        };
+        self.step(id, delta, wrap, ctx, fx)
+    }
+
+    fn pointer(&mut self, p: Pointer, ctx: &mut Ctx, fx: &mut Outbox) -> bool {
+        let rows = self.rows(ctx);
+        let (msg, pulse) = self.list.pointer(p, rows.len());
+        if matches!(msg, ListMsg::None) && pulse.is_none() {
+            return false;
+        }
+        if let (ListMsg::Activate, Some((_, id))) = (msg, rows.get(self.list.cursor)) {
+            self.step(*id, 1, true, ctx, fx);
+        }
+        true
+    }
+
+    fn hints(&self, ctx: &Ctx) -> Vec<Hint> {
         let _ = ctx;
         vec![
             Hint::new(HintKey::Adjust, "Change"),
@@ -557,7 +564,7 @@ impl PresetEdit {
         ]
     }
 
-    pub(crate) fn render(
+    fn render(
         &mut self,
         canvas: &Canvas,
         rect: Rect,
@@ -592,6 +599,14 @@ impl PresetEdit {
         let list_rect = Rect::from_ltrb(rect.left, below.top, rect.right, rect.bottom);
         self.list
             .render(canvas, list_rect, &rows, fonts, k, dt, true);
+    }
+
+    fn press(&mut self) {
+        self.list.dip();
+    }
+
+    fn pan(&mut self, p: Pointer) -> bool {
+        self.list.pan(p)
     }
 }
 

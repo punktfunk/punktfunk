@@ -11,7 +11,7 @@ use crate::glyphs::{Hint, HintKey};
 use crate::icons::{by_name, draw_icon_weight};
 use crate::palette::{Palette, PALETTES, VIOLET_FIELD};
 use crate::pointer::{Pointer, PointerKind};
-use crate::screens::{Ctx, Outbox};
+use crate::screens::{Ctx, Outbox, ScreenView};
 use crate::theme::{edge, fill, stroke, Fonts, W};
 use pf_client_core::menu_nav::{MenuDir, MenuEvent, MenuPulse};
 use skia_safe::{Canvas, ClipOp, Color4f, Point, RRect, Rect, TileMode};
@@ -67,13 +67,10 @@ impl PaletteScreen {
             None => Some(MenuPulse::Boundary),
         }
     }
+}
 
-    pub(crate) fn menu(
-        &mut self,
-        ev: MenuEvent,
-        ctx: &mut Ctx,
-        fx: &mut Outbox,
-    ) -> Option<MenuPulse> {
+impl ScreenView for PaletteScreen {
+    fn menu(&mut self, ev: MenuEvent, ctx: &mut Ctx, fx: &mut Outbox) -> Option<MenuPulse> {
         match ev {
             // Nothing that way: a thud, not silence.
             MenuEvent::Move(dir) => self.step(dir).or(Some(MenuPulse::Boundary)),
@@ -86,15 +83,15 @@ impl PaletteScreen {
         }
     }
 
-    pub(crate) fn press(&mut self) {
+    fn press(&mut self) {
         self.tree.press();
     }
 
-    pub(crate) fn pan(&mut self, p: Pointer) -> bool {
+    fn pan(&mut self, p: Pointer) -> bool {
         self.tree.drag(Id::new(GRID, 0), p)
     }
 
-    pub(crate) fn pointer(&mut self, p: Pointer, ctx: &mut Ctx, _fx: &mut Outbox) -> bool {
+    fn pointer(&mut self, p: Pointer, ctx: &mut Ctx, _fx: &mut Outbox) -> bool {
         match p.kind {
             PointerKind::Scroll { up } => {
                 let step = if up { -80.0 } else { 80.0 };
@@ -126,7 +123,7 @@ impl PaletteScreen {
         }
     }
 
-    pub(crate) fn announcement(&self, ctx: &Ctx) -> Option<String> {
+    fn announcement(&self, ctx: &Ctx) -> Option<String> {
         let p = &PALETTES[self.cursor];
         let tone = if p.light { "light" } else { "dark" };
         let state = if ctx.settings.ui_palette == p.id {
@@ -137,14 +134,14 @@ impl PaletteScreen {
         Some(format!("{}, {tone}{state}", p.name))
     }
 
-    pub(crate) fn hints(&self, _ctx: &Ctx) -> Vec<Hint> {
+    fn hints(&self, _ctx: &Ctx) -> Vec<Hint> {
         vec![
             Hint::new(HintKey::Confirm, "Select"),
             Hint::new(HintKey::Back, "Done"),
         ]
     }
 
-    pub(crate) fn render(
+    fn render(
         &mut self,
         canvas: &Canvas,
         rect: Rect,
@@ -240,6 +237,10 @@ impl PaletteScreen {
             .map(|i| tree.rect(card_id(i)).unwrap_or_else(Rect::new_empty))
             .collect();
         self.tree = tree;
+    }
+
+    fn title(&self) -> String {
+        "Background".into()
     }
 }
 

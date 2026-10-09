@@ -29,7 +29,7 @@ use crate::library::{
 };
 use crate::model::{ConsoleCmd, HostRow};
 use crate::pointer::{Pointer, PointerKind};
-use crate::screens::{ConnectIntent, Ctx, Outbox};
+use crate::screens::{ConnectIntent, Ctx, Outbox, ScreenView};
 use crate::theme::{art_sampling, edge, fg, fill, stroke, Fonts, W};
 use crate::widgets::{button, button_w, BUTTON_H};
 use pf_client_core::menu_nav::{MenuDir, MenuEvent, MenuPulse};
@@ -607,11 +607,6 @@ impl LibraryScreen {
         }
     }
 
-    /// OK went down: the plate dips under the focused poster.
-    pub(crate) fn press(&mut self) {
-        self.grid.get_mut().press();
-    }
-
     /// The row has focus (`true`) or has handed it down. A quiet shelf rests on its top
     /// row, where the pad leaves it: a pointer can leave from any row.
     pub(crate) fn set_quiet(&mut self, quiet: bool) {
@@ -800,18 +795,6 @@ impl LibraryScreen {
         self.len()
     }
 
-    pub(crate) fn title(&self) -> String {
-        let mut t = match &self.host.pin {
-            Some(p) => format!("{} \u{b7} {}", self.host.name, p.name),
-            None => self.host.name.clone(),
-        };
-        if let Some(label) = &self.filter_label {
-            t.push_str(" \u{b7} ");
-            t.push_str(label);
-        }
-        t
-    }
-
     /// One collated group. Call before first render so the whole library never flashes.
     pub(crate) fn set_filter(&mut self, key: crate::collate::GroupKey, label: String) {
         self.filter = Some(key);
@@ -995,40 +978,6 @@ impl LibraryScreen {
         out
     }
 
-    /// The pad. Off the field, [`games`] routes it between lines; on it, the grid or the
-    /// shelf moves its cursor. Under the Hosts row the home owns the lines.
-    pub(crate) fn menu(
-        &mut self,
-        ev: MenuEvent,
-        ctx: &mut Ctx,
-        fx: &mut Outbox,
-    ) -> Option<MenuPulse> {
-        self.sync(ctx.library);
-        self.adopt_settings(ctx);
-        if self.embedded {
-            if matches!(self.phase, LibraryPhase::Ready) {
-                return self.grid_menu(ev, fx);
-            }
-            if ev == MenuEvent::Back {
-                fx.pop();
-            }
-            return None;
-        }
-        if let Some(pulse) = self.zone_menu(ev, ctx, fx) {
-            return pulse;
-        }
-        match self.view_mode {
-            LibraryView::Grid => self.grid_menu(ev, fx),
-            LibraryView::Shelf => match ev {
-                MenuEvent::Move(MenuDir::Left) => self.step(-1, false),
-                MenuEvent::Move(MenuDir::Right) => self.step(1, false),
-                MenuEvent::JumpBack => self.step(-JUMP, true),
-                MenuEvent::JumpForward => self.step(JUMP, true),
-                _ => self.ready_action(ev, fx),
-            },
-        }
-    }
-
     /// The grid's own D-pad: cells, rows and pages. Its edges belong to [`games`].
     fn grid_menu(&mut self, ev: MenuEvent, fx: &mut Outbox) -> Option<MenuPulse> {
         match ev {
@@ -1040,15 +989,6 @@ impl LibraryScreen {
             MenuEvent::JumpForward => self.grid_move(GridDir::PageForward),
             _ => self.ready_action(ev, fx),
         }
-    }
-
-    /// A finger drag on the screen's scroll: the lines follow it and a lift flings them.
-    pub(crate) fn pan(&mut self, p: Pointer) -> bool {
-        let taken = self.grid.get_mut().drag(Id::new(GRID, 0), p);
-        if taken && matches!(p.kind, PointerKind::PanStart { .. }) {
-            self.follow = false;
-        }
-        taken
     }
 
     fn grid_move(&mut self, dir: GridDir) -> Option<MenuPulse> {
@@ -1166,59 +1106,6 @@ impl LibraryScreen {
         }
     }
 
-    /// Hover focuses; a press on the focused card launches, on another brings it to focus.
-    pub(crate) fn pointer(&mut self, p: Pointer, ctx: &mut Ctx, fx: &mut Outbox) -> bool {
-        match p.kind {
-            PointerKind::Scroll { up } => {
-                // One card on the shelf, one row on the grid.
-                if self.view_mode == LibraryView::Grid {
-                    self.grid_move(if up { GridDir::Up } else { GridDir::Down });
-                } else {
-                    self.step(if up { -1 } else { 1 }, false);
-                }
-                true
-            }
-            // Hover focuses, so the press that follows opens the card rather than reaching
-            // it. A touchscreen sends Press with no Move first, so its two-press path stands.
-            PointerKind::Move => {
-                if let Some(same) = self.zone_pointer(p, false) {
-                    return !same;
-                }
-                match self.card_under(p) {
-                    Some(i) if i != self.cursor as usize || self.zone != Zone::Grid => {
-                        self.cursor = i as i32;
-                        self.zone = Zone::Grid;
-                        self.seat_grid_col();
-                        true
-                    }
-                    _ => false,
-                }
-            }
-            PointerKind::Press => {
-                if let Some(ok) = self.zone_pointer(p, true) {
-                    if ok {
-                        self.menu(MenuEvent::Confirm, ctx, fx);
-                    }
-                    return true;
-                }
-                match self.card_under(p) {
-                    Some(i) if i == self.cursor as usize && self.zone == Zone::Grid => {
-                        self.menu(MenuEvent::Confirm, ctx, fx);
-                        true
-                    }
-                    Some(i) => {
-                        self.cursor = i as i32;
-                        self.zone = Zone::Grid;
-                        self.seat_grid_col();
-                        true
-                    }
-                    None => false,
-                }
-            }
-            _ => false,
-        }
-    }
-
     /// The card under `p`, nearest the cursor first — shelf covers can overlap, and
     /// first-by-index would pick a buried one. Geometry is a frame old, so a refresh that
     /// shortened the shelf cannot produce an index past its end.
@@ -1258,71 +1145,9 @@ impl LibraryScreen {
             .count()
     }
 
-    /// What a screen reader speaks: a pill and whether it is applied, the state's button,
-    /// or the title the band shows. Nothing while a plain shelf is still loading.
-    pub(crate) fn announcement(&self, ctx: &Ctx) -> Option<String> {
-        match self.zone {
-            Zone::Bar(i) if !self.embedded => {
-                let pill = bar::Pill::all(true)[i];
-                let group = match pill {
-                    bar::Pill::Sort(_) => "Sort",
-                    bar::Pill::View(_) => "View",
-                    bar::Pill::Search => return Some("Search titles".into()),
-                };
-                let on = self.applied().contains(&i);
-                let state = if on { ", selected" } else { "" };
-                return Some(format!("{group} {}{state}", pill.label()));
-            }
-            Zone::State if !self.embedded => return self.state_action().map(str::to_string),
-            _ => {}
-        }
-        if !self.embedded {
-            if let Some(title) = self.zone_title(ctx) {
-                return Some(title);
-            }
-        }
-        if !matches!(self.phase, LibraryPhase::Ready) {
-            return None;
-        }
-        let game = self.focused()?;
-        Some(if game.id == crate::library::DESKTOP_ID {
-            self.desktop_caption()
-        } else {
-            game.title.clone()
-        })
-    }
-
-    pub(crate) fn hints(&self, ctx: &Ctx) -> Vec<Hint> {
-        if !self.embedded {
-            if let Some(hints) = self.zone_hints(ctx) {
-                return hints;
-            }
-        }
-        if !matches!(self.phase, LibraryPhase::Ready) || self.focused().is_none() {
-            return vec![Hint::new(HintKey::Back, "Back")];
-        }
-        let desktop = self
-            .focused()
-            .is_some_and(|g| g.id == crate::library::DESKTOP_ID);
-        let running = self.focused().is_some_and(|g| g.running);
-        let launcher = self.focused().is_some_and(|g| g.launcher);
-        let ok = match (desktop, running, launcher) {
-            // The desktop tile resumes when the host has a game up, and it is the ONE tile
-            // that never launches anything.
-            (true, _, _) if !self.host.running.is_empty() => "Resume",
-            (true, _, _) => "Stream",
-            (_, true, _) => "Resume",
-            (_, false, true) => "Open",
-            (_, false, false) => "Play",
-        };
-        vec![
-            Hint::new(HintKey::Confirm, ok),
-            Hint::new(HintKey::Secondary, "Options"),
-            Hint::new(HintKey::Back, "Back"),
-        ]
-    }
-
-    pub(crate) fn render(
+    /// The shelf or grid without the focus claim: Home draws an embedded shelf through this,
+    /// the Games tab through [`ScreenView::render`].
+    pub(crate) fn draw(
         &mut self,
         canvas: &Canvas,
         rect: Rect,
@@ -2115,6 +1940,194 @@ impl LibraryScreen {
             );
         }
         el
+    }
+}
+
+impl ScreenView for LibraryScreen {
+    /// OK went down: the plate dips under the focused poster.
+    fn press(&mut self) {
+        self.grid.get_mut().press();
+    }
+
+    fn title(&self) -> String {
+        let mut t = match &self.host.pin {
+            Some(p) => format!("{} \u{b7} {}", self.host.name, p.name),
+            None => self.host.name.clone(),
+        };
+        if let Some(label) = &self.filter_label {
+            t.push_str(" \u{b7} ");
+            t.push_str(label);
+        }
+        t
+    }
+
+    /// The pad. Off the field, [`games`] routes it between lines; on it, the grid or the
+    /// shelf moves its cursor. Under the Hosts row the home owns the lines.
+    fn menu(&mut self, ev: MenuEvent, ctx: &mut Ctx, fx: &mut Outbox) -> Option<MenuPulse> {
+        self.sync(ctx.library);
+        self.adopt_settings(ctx);
+        if self.embedded {
+            if matches!(self.phase, LibraryPhase::Ready) {
+                return self.grid_menu(ev, fx);
+            }
+            if ev == MenuEvent::Back {
+                fx.pop();
+            }
+            return None;
+        }
+        if let Some(pulse) = self.zone_menu(ev, ctx, fx) {
+            return pulse;
+        }
+        match self.view_mode {
+            LibraryView::Grid => self.grid_menu(ev, fx),
+            LibraryView::Shelf => match ev {
+                MenuEvent::Move(MenuDir::Left) => self.step(-1, false),
+                MenuEvent::Move(MenuDir::Right) => self.step(1, false),
+                MenuEvent::JumpBack => self.step(-JUMP, true),
+                MenuEvent::JumpForward => self.step(JUMP, true),
+                _ => self.ready_action(ev, fx),
+            },
+        }
+    }
+
+    /// A finger drag on the screen's scroll: the lines follow it and a lift flings them.
+    fn pan(&mut self, p: Pointer) -> bool {
+        let taken = self.grid.get_mut().drag(Id::new(GRID, 0), p);
+        if taken && matches!(p.kind, PointerKind::PanStart { .. }) {
+            self.follow = false;
+        }
+        taken
+    }
+
+    /// Hover focuses; a press on the focused card launches, on another brings it to focus.
+    fn pointer(&mut self, p: Pointer, ctx: &mut Ctx, fx: &mut Outbox) -> bool {
+        match p.kind {
+            PointerKind::Scroll { up } => {
+                // One card on the shelf, one row on the grid.
+                if self.view_mode == LibraryView::Grid {
+                    self.grid_move(if up { GridDir::Up } else { GridDir::Down });
+                } else {
+                    self.step(if up { -1 } else { 1 }, false);
+                }
+                true
+            }
+            // Hover focuses, so the press that follows opens the card rather than reaching
+            // it. A touchscreen sends Press with no Move first, so its two-press path stands.
+            PointerKind::Move => {
+                if let Some(same) = self.zone_pointer(p, false) {
+                    return !same;
+                }
+                match self.card_under(p) {
+                    Some(i) if i != self.cursor as usize || self.zone != Zone::Grid => {
+                        self.cursor = i as i32;
+                        self.zone = Zone::Grid;
+                        self.seat_grid_col();
+                        true
+                    }
+                    _ => false,
+                }
+            }
+            PointerKind::Press => {
+                if let Some(ok) = self.zone_pointer(p, true) {
+                    if ok {
+                        self.menu(MenuEvent::Confirm, ctx, fx);
+                    }
+                    return true;
+                }
+                match self.card_under(p) {
+                    Some(i) if i == self.cursor as usize && self.zone == Zone::Grid => {
+                        self.menu(MenuEvent::Confirm, ctx, fx);
+                        true
+                    }
+                    Some(i) => {
+                        self.cursor = i as i32;
+                        self.zone = Zone::Grid;
+                        self.seat_grid_col();
+                        true
+                    }
+                    None => false,
+                }
+            }
+            _ => false,
+        }
+    }
+
+    /// What a screen reader speaks: a pill and whether it is applied, the state's button,
+    /// or the title the band shows. Nothing while a plain shelf is still loading.
+    fn announcement(&self, ctx: &Ctx) -> Option<String> {
+        match self.zone {
+            Zone::Bar(i) if !self.embedded => {
+                let pill = bar::Pill::all(true)[i];
+                let group = match pill {
+                    bar::Pill::Sort(_) => "Sort",
+                    bar::Pill::View(_) => "View",
+                    bar::Pill::Search => return Some("Search titles".into()),
+                };
+                let on = self.applied().contains(&i);
+                let state = if on { ", selected" } else { "" };
+                return Some(format!("{group} {}{state}", pill.label()));
+            }
+            Zone::State if !self.embedded => return self.state_action().map(str::to_string),
+            _ => {}
+        }
+        if !self.embedded {
+            if let Some(title) = self.zone_title(ctx) {
+                return Some(title);
+            }
+        }
+        if !matches!(self.phase, LibraryPhase::Ready) {
+            return None;
+        }
+        let game = self.focused()?;
+        Some(if game.id == crate::library::DESKTOP_ID {
+            self.desktop_caption()
+        } else {
+            game.title.clone()
+        })
+    }
+
+    fn hints(&self, ctx: &Ctx) -> Vec<Hint> {
+        if !self.embedded {
+            if let Some(hints) = self.zone_hints(ctx) {
+                return hints;
+            }
+        }
+        if !matches!(self.phase, LibraryPhase::Ready) || self.focused().is_none() {
+            return vec![Hint::new(HintKey::Back, "Back")];
+        }
+        let desktop = self
+            .focused()
+            .is_some_and(|g| g.id == crate::library::DESKTOP_ID);
+        let running = self.focused().is_some_and(|g| g.running);
+        let launcher = self.focused().is_some_and(|g| g.launcher);
+        let ok = match (desktop, running, launcher) {
+            // The desktop tile resumes when the host has a game up, and it is the ONE tile
+            // that never launches anything.
+            (true, _, _) if !self.host.running.is_empty() => "Resume",
+            (true, _, _) => "Stream",
+            (_, true, _) => "Resume",
+            (_, false, true) => "Open",
+            (_, false, false) => "Play",
+        };
+        vec![
+            Hint::new(HintKey::Confirm, ok),
+            Hint::new(HintKey::Secondary, "Options"),
+            Hint::new(HintKey::Back, "Back"),
+        ]
+    }
+
+    // The shelf view draws its focus outside el: titles to walk are its targets.
+    fn render(
+        &mut self,
+        canvas: &Canvas,
+        rect: Rect,
+        k: f64,
+        dt: f64,
+        fonts: &Fonts,
+        ctx: &mut Ctx,
+    ) {
+        self.draw(canvas, rect, k, dt, fonts, ctx);
+        crate::el::claim(usize::from(self.has_titles()));
     }
 }
 

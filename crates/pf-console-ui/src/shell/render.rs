@@ -513,7 +513,9 @@ impl LayerEnv<'_> {
         crate::el::set_dormant(self.strip_focus && band == Band::Strip);
         let (mut pinned, mut pinned_pic) = ((0.0, 0.0), None);
         let targets = crate::el::census(|| {
-            screen.render(canvas, self.content, self.k, self.dt, self.fonts, &mut ctx);
+            screen
+                .view_mut()
+                .render(canvas, self.content, self.k, self.dt, self.fonts, &mut ctx);
             // Pinned chrome is recorded, not drawn: it goes over the trays, in place, so
             // a slide or a zoom never carries it. Its targets still count here.
             pinned = screen.pinned(self.k, &ctx);
@@ -534,9 +536,9 @@ impl LayerEnv<'_> {
             ctx.device.platform,
             ctx.device.fallback_ui,
         );
-        let title = (band == Band::Title).then(|| screen.title(&ctx));
+        let title = (band == Band::Title).then(|| screen.view().title());
         let hints = if self.show_hints {
-            shortcuts(screen.hints(&ctx), self.glyphs, band == Band::Strip)
+            shortcuts(screen.view().hints(&ctx), self.glyphs, band == Band::Strip)
         } else {
             Vec::new()
         };

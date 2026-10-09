@@ -10,7 +10,7 @@
 use crate::glyphs::{Hint, HintKey};
 use crate::pointer::{Pointer, PointerKind};
 use crate::ring::{EditEvent, Ring, LABEL_H};
-use crate::screens::{Ctx, Outbox, Screen};
+use crate::screens::{Ctx, Outbox, Screen, ScreenView};
 use crate::theme::{card_face, edge, fg, fill, focus_halo, stroke, Fonts};
 use crate::widgets::{ListMsg, MenuList, RowSpec, ROW_MAX_W};
 use pf_client_core::menu_nav::{MenuDir, MenuEvent, MenuPulse};
@@ -103,10 +103,6 @@ impl RingEditorScreen {
         s.ring.edit_at(0.0, 0.0);
         s.adopt(&ctx.settings.overlay_actions, ctx.device.platform);
         s
-    }
-
-    pub(crate) fn title(&self) -> String {
-        "Quick actions".into()
     }
 
     /// Parse `blob` into the ring. Empty is replaced with this platform's default JSON:
@@ -296,13 +292,14 @@ impl RingEditorScreen {
         let id = id.clone();
         self.pick(p.slot, &id, ctx);
     }
+}
 
-    pub(crate) fn menu(
-        &mut self,
-        ev: MenuEvent,
-        ctx: &mut Ctx,
-        fx: &mut Outbox,
-    ) -> Option<MenuPulse> {
+impl ScreenView for RingEditorScreen {
+    fn title(&self) -> String {
+        "Quick actions".into()
+    }
+
+    fn menu(&mut self, ev: MenuEvent, ctx: &mut Ctx, fx: &mut Outbox) -> Option<MenuPulse> {
         if let MenuEvent::Sector(s) = ev {
             self.stick = s;
         }
@@ -374,7 +371,7 @@ impl RingEditorScreen {
         }
     }
 
-    pub(crate) fn pointer(&mut self, p: Pointer, ctx: &mut Ctx, fx: &mut Outbox) -> bool {
+    fn pointer(&mut self, p: Pointer, ctx: &mut Ctx, fx: &mut Outbox) -> bool {
         if let Some(pk) = self.picker.as_mut() {
             // Modal: eat every pointer event. A press outside the card dismisses it.
             if p.hits(pk.rect) || matches!(p.kind, PointerKind::Scroll { .. }) {
@@ -410,7 +407,7 @@ impl RingEditorScreen {
         false
     }
 
-    pub(crate) fn hints(&self, _ctx: &Ctx) -> Vec<Hint> {
+    fn hints(&self, _ctx: &Ctx) -> Vec<Hint> {
         if self.picker.is_some() {
             return vec![
                 Hint::new(HintKey::Confirm, "Choose"),
@@ -447,7 +444,7 @@ impl RingEditorScreen {
         }
     }
 
-    pub(crate) fn render(
+    fn render(
         &mut self,
         canvas: &Canvas,
         rect: Rect,
@@ -575,6 +572,14 @@ impl RingEditorScreen {
             canvas.restore();
             pk.rect = card;
         }
+    }
+
+    fn press(&mut self) {
+        self.pan_list().dip();
+    }
+
+    fn pan(&mut self, p: Pointer) -> bool {
+        self.pan_list().pan(p)
     }
 }
 

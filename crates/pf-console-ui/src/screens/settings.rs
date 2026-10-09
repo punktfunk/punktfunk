@@ -13,7 +13,7 @@
 
 use crate::glyphs::{Hint, HintKey};
 use crate::pointer::Pointer;
-use crate::screens::{Ctx, Outbox, Screen};
+use crate::screens::{Ctx, Outbox, Screen, ScreenView};
 use crate::theme::Fonts;
 use crate::widgets::{
     column, entry_hints, field_key, permits, type_text, Charset, Entry, Keyboard, ListMsg,
@@ -40,7 +40,7 @@ enum Typing {
 }
 
 pub(crate) struct SettingsScreen {
-    pub(super) list: MenuList,
+    list: MenuList,
     strip: TabStrip,
     tab: usize,
     /// Per-tab cursor so a detour does not reset the one you left.
@@ -85,45 +85,9 @@ impl SettingsScreen {
         }
     }
 
-    /// True while the typed field is open; the run loop keeps SDL text input started.
-    pub(crate) fn editing(&self) -> bool {
-        self.typing.is_some()
-    }
-
-    pub(crate) fn edit_field(&self) -> Option<crate::screens::EditField> {
-        let (typing, text) = self.typing.as_ref()?;
-        let label = match typing {
-            Typing::Bitrate => "Bitrate in Mbps",
-            Typing::Width => "Width in pixels",
-            Typing::Height(_) => "Height in pixels",
-        };
-        crate::screens::EditField::new(label, text, true)
-    }
-
     /// Digits only; four is 2000 Mbps and 8192 px, the ceilings.
     fn admits(text: &str, ch: char) -> bool {
         permits(Charset::Digits, ch) && text.chars().count() < 4
-    }
-
-    /// SDL text into the open field.
-    pub(crate) fn text_input(&mut self, typed: &str) {
-        if let Some((_, text)) = self.typing.as_mut() {
-            type_text(text, typed, Self::admits);
-        }
-    }
-
-    /// Every way out of the field commits it: the typed number is the setting.
-    pub(crate) fn edit_key(&mut self, key: crate::input::Key, ctx: &mut Ctx) -> bool {
-        let Some((_, text)) = self.typing.as_mut() else {
-            return false;
-        };
-        let Some(entry) = field_key(key, text) else {
-            return false;
-        };
-        if entry != Entry::Stay {
-            self.commit_field(ctx);
-        }
-        true
     }
 
     /// Close the field, or move from the width to the height. Empty or `0` abandons the edit:
@@ -272,15 +236,6 @@ impl SettingsScreen {
         self.strip_focus = true;
     }
 
-    /// OK went down on the focused row: it dips before the release acts.
-    pub(crate) fn press(&mut self) {
-        if self.strip_focus {
-            self.strip.press();
-        } else if self.typing.is_none() {
-            self.list.dip();
-        }
-    }
-
     #[cfg(test)]
     pub(crate) fn tab_for_test(&self) -> usize {
         self.tab
@@ -309,79 +264,6 @@ impl SettingsScreen {
         self.list
             .jump_to(self.tab_cursors[self.tab].min(len.saturating_sub(1)));
         Some(MenuPulse::Move)
-    }
-
-    /// Strip first: pills sit above the list, so a press there is never a row.
-    pub(crate) fn pointer(&mut self, p: Pointer, ctx: &mut Ctx, fx: &mut Outbox) -> bool {
-        if let Some((_, text)) = self.typing.as_mut().filter(|_| !ctx.device.deck) {
-            let Some(entry) = self.keyboard.edit_pointer(p, text, Self::admits) else {
-                return false;
-            };
-            if entry != Entry::Stay {
-                self.commit_field(ctx);
-            }
-            return true;
-        }
-        if let Some(tab) = self.strip.pointer(p) {
-            if p.press() {
-                self.show_tab(tab, ctx);
-            }
-            return true;
-        }
-        // A press on the rows takes D-pad focus back from the strip.
-        if p.press() {
-            self.strip_focus = false;
-        }
-        let ids = self.row_ids(ctx);
-        self.clamp_cursor(ids.len());
-        let (msg, pulse) = self.list.pointer(p, ids.len());
-        if matches!(msg, ListMsg::None) && pulse.is_none() {
-            return false;
-        }
-        self.apply_row(msg, pulse, &ids, ctx, fx);
-        true
-    }
-
-    pub(crate) fn menu(
-        &mut self,
-        ev: MenuEvent,
-        ctx: &mut Ctx,
-        fx: &mut Outbox,
-    ) -> Option<MenuPulse> {
-        if self.typing.is_some() {
-            return self.field_menu(ev, ctx);
-        }
-        if self.strip_focus {
-            return self.sections_menu(ev, ctx, fx);
-        }
-        match ev {
-            MenuEvent::JumpBack => return self.switch_tab(-1, ctx),
-            MenuEvent::JumpForward => return self.switch_tab(1, ctx),
-            // Back and Up from row 0 focus the sections, not a boundary.
-            MenuEvent::Back => {
-                self.strip_focus = true;
-                return Some(MenuPulse::Move);
-            }
-            MenuEvent::Move(MenuDir::Up) if self.list.cursor == 0 => {
-                self.strip_focus = true;
-                return Some(MenuPulse::Move);
-            }
-            _ => {}
-        }
-        let ids = self.row_ids(ctx);
-        self.clamp_cursor(ids.len());
-        // Y opens the typed bitrate or size. Not the bitrate under PyroWave: the row is inert.
-        if ev == MenuEvent::Secondary {
-            let typing = match ids.get(self.list.cursor) {
-                Some(RowId::Bitrate) if ctx.settings.codec != "pyrowave" => Typing::Bitrate,
-                Some(RowId::Resolution) => Typing::Width,
-                _ => return None,
-            };
-            self.typing = Some((typing, String::new()));
-            return Some(MenuPulse::Confirm);
-        }
-        let (msg, pulse) = self.list.menu(ev, ids.len());
-        self.apply_row(msg, pulse, &ids, ctx, fx)
     }
 
     /// The D-pad on the section strip: Left/Right walk it, wrapping; Down returns to the
@@ -558,9 +440,167 @@ impl SettingsScreen {
         }
     }
 
+    /// The section tabs on the margin, under the shell's tabs, and the explainer on the
+    /// rows' inner column. The shell draws these over its trays, after [`Self::render`].
+    pub(crate) fn render_pinned(
+        &mut self,
+        canvas: &Canvas,
+        rect: Rect,
+        k: f64,
+        dt: f64,
+        fonts: &Fonts,
+        ctx: &Ctx,
+    ) {
+        let list_rect = self.list_rect(rect, k);
+        let col = column(list_rect, k);
+        let inner = f64::from(col.left) + 16.0 * k;
+        let labels: Vec<&str> = TABS.iter().map(|(name, _)| *name).collect();
+        self.strip.render(
+            canvas,
+            Rect::from_ltrb(rect.left, rect.top, rect.right, list_rect.top),
+            &labels,
+            self.tab,
+            self.strip_focus,
+            fonts,
+            k,
+            dt,
+        );
+        let ids = self.row_ids(ctx);
+        let focused = ids.get(self.list.cursor).copied();
+        let detail = focused.map_or("", |id| detail(id, ctx));
+        // The explainer under the list, led by the row's mark; above the keyboard when up.
+        crate::widgets::Foot {
+            detail: Some(detail),
+            mark: focused.map(row_icon),
+            ..Default::default()
+        }
+        .paint(
+            canvas,
+            fonts,
+            Rect::from_ltrb(rect.left, list_rect.bottom, rect.right, rect.bottom),
+            (inner, f64::from(col.right)),
+            k,
+        );
+    }
+}
+
+impl ScreenView for SettingsScreen {
+    /// True while the typed field is open; the run loop keeps SDL text input started.
+    fn editing(&self) -> bool {
+        self.typing.is_some()
+    }
+
+    fn edit_field(&self) -> Option<crate::screens::EditField> {
+        let (typing, text) = self.typing.as_ref()?;
+        let label = match typing {
+            Typing::Bitrate => "Bitrate in Mbps",
+            Typing::Width => "Width in pixels",
+            Typing::Height(_) => "Height in pixels",
+        };
+        crate::screens::EditField::new(label, text, true)
+    }
+
+    /// SDL text into the open field.
+    fn text_input(&mut self, typed: &str) {
+        if let Some((_, text)) = self.typing.as_mut() {
+            type_text(text, typed, Self::admits);
+        }
+    }
+
+    /// Every way out of the field commits it: the typed number is the setting.
+    fn edit_key(&mut self, key: crate::input::Key, ctx: &mut Ctx) -> bool {
+        let Some((_, text)) = self.typing.as_mut() else {
+            return false;
+        };
+        let Some(entry) = field_key(key, text) else {
+            return false;
+        };
+        if entry != Entry::Stay {
+            self.commit_field(ctx);
+        }
+        true
+    }
+
+    /// OK went down on the focused row: it dips before the release acts.
+    fn press(&mut self) {
+        if self.strip_focus {
+            self.strip.press();
+        } else if self.typing.is_none() {
+            self.list.dip();
+        }
+    }
+
+    /// Strip first: pills sit above the list, so a press there is never a row.
+    fn pointer(&mut self, p: Pointer, ctx: &mut Ctx, fx: &mut Outbox) -> bool {
+        if let Some((_, text)) = self.typing.as_mut().filter(|_| !ctx.device.deck) {
+            let Some(entry) = self.keyboard.edit_pointer(p, text, Self::admits) else {
+                return false;
+            };
+            if entry != Entry::Stay {
+                self.commit_field(ctx);
+            }
+            return true;
+        }
+        if let Some(tab) = self.strip.pointer(p) {
+            if p.press() {
+                self.show_tab(tab, ctx);
+            }
+            return true;
+        }
+        // A press on the rows takes D-pad focus back from the strip.
+        if p.press() {
+            self.strip_focus = false;
+        }
+        let ids = self.row_ids(ctx);
+        self.clamp_cursor(ids.len());
+        let (msg, pulse) = self.list.pointer(p, ids.len());
+        if matches!(msg, ListMsg::None) && pulse.is_none() {
+            return false;
+        }
+        self.apply_row(msg, pulse, &ids, ctx, fx);
+        true
+    }
+
+    fn menu(&mut self, ev: MenuEvent, ctx: &mut Ctx, fx: &mut Outbox) -> Option<MenuPulse> {
+        if self.typing.is_some() {
+            return self.field_menu(ev, ctx);
+        }
+        if self.strip_focus {
+            return self.sections_menu(ev, ctx, fx);
+        }
+        match ev {
+            MenuEvent::JumpBack => return self.switch_tab(-1, ctx),
+            MenuEvent::JumpForward => return self.switch_tab(1, ctx),
+            // Back and Up from row 0 focus the sections, not a boundary.
+            MenuEvent::Back => {
+                self.strip_focus = true;
+                return Some(MenuPulse::Move);
+            }
+            MenuEvent::Move(MenuDir::Up) if self.list.cursor == 0 => {
+                self.strip_focus = true;
+                return Some(MenuPulse::Move);
+            }
+            _ => {}
+        }
+        let ids = self.row_ids(ctx);
+        self.clamp_cursor(ids.len());
+        // Y opens the typed bitrate or size. Not the bitrate under PyroWave: the row is inert.
+        if ev == MenuEvent::Secondary {
+            let typing = match ids.get(self.list.cursor) {
+                Some(RowId::Bitrate) if ctx.settings.codec != "pyrowave" => Typing::Bitrate,
+                Some(RowId::Resolution) => Typing::Width,
+                _ => return None,
+            };
+            self.typing = Some((typing, String::new()));
+            return Some(MenuPulse::Confirm);
+        }
+        let (msg, pulse) = self.list.menu(ev, ids.len());
+        self.apply_row(msg, pulse, &ids, ctx, fx)
+    }
+
     /// What a screen reader speaks: the section while the strip holds focus, otherwise the
     /// focused row's label and the value drawn beside it.
-    pub(crate) fn announcement(&self, ctx: &Ctx) -> Option<String> {
+    fn announcement(&self, ctx: &Ctx) -> Option<String> {
         if self.strip_focus {
             return Some(format!("{} section", TABS[self.tab].0));
         }
@@ -572,7 +612,7 @@ impl SettingsScreen {
         })
     }
 
-    pub(crate) fn hints(&self, ctx: &Ctx) -> Vec<Hint> {
+    fn hints(&self, ctx: &Ctx) -> Vec<Hint> {
         if let Some((typing, _)) = &self.typing {
             let done = if *typing == Typing::Width {
                 "Next"
@@ -637,7 +677,7 @@ impl SettingsScreen {
         hints
     }
 
-    pub(crate) fn render(
+    fn render(
         &mut self,
         canvas: &Canvas,
         rect: Rect,
@@ -697,47 +737,12 @@ impl SettingsScreen {
         }
     }
 
-    /// The section tabs on the margin, under the shell's tabs, and the explainer on the
-    /// rows' inner column. The shell draws these over its trays, after [`Self::render`].
-    pub(crate) fn render_pinned(
-        &mut self,
-        canvas: &Canvas,
-        rect: Rect,
-        k: f64,
-        dt: f64,
-        fonts: &Fonts,
-        ctx: &Ctx,
-    ) {
-        let list_rect = self.list_rect(rect, k);
-        let col = column(list_rect, k);
-        let inner = f64::from(col.left) + 16.0 * k;
-        let labels: Vec<&str> = TABS.iter().map(|(name, _)| *name).collect();
-        self.strip.render(
-            canvas,
-            Rect::from_ltrb(rect.left, rect.top, rect.right, list_rect.top),
-            &labels,
-            self.tab,
-            self.strip_focus,
-            fonts,
-            k,
-            dt,
-        );
-        let ids = self.row_ids(ctx);
-        let focused = ids.get(self.list.cursor).copied();
-        let detail = focused.map_or("", |id| detail(id, ctx));
-        // The explainer under the list, led by the row's mark; above the keyboard when up.
-        crate::widgets::Foot {
-            detail: Some(detail),
-            mark: focused.map(row_icon),
-            ..Default::default()
-        }
-        .paint(
-            canvas,
-            fonts,
-            Rect::from_ltrb(rect.left, list_rect.bottom, rect.right, rect.bottom),
-            (inner, f64::from(col.right)),
-            k,
-        );
+    fn title(&self) -> String {
+        "Settings".into()
+    }
+
+    fn pan(&mut self, p: Pointer) -> bool {
+        self.list.pan(p)
     }
 }
 

@@ -10,7 +10,8 @@
 use crate::glyphs::{Hint, HintKey};
 use crate::model::PadTestState;
 use crate::pad_art::{self, PadArt, Part};
-use crate::screens::{Ctx, Outbox};
+use crate::pointer::Pointer;
+use crate::screens::{Ctx, Outbox, ScreenView};
 use crate::theme::{accent, card_face, fg, fill, on_accent, over, shaded, stroke, Fonts, W};
 use crate::widgets::blurb;
 use pf_client_core::menu_nav::{MenuEvent, MenuPulse};
@@ -70,25 +71,22 @@ impl InputTestScreen {
         }
         self.state = state;
     }
+}
 
+impl ScreenView for InputTestScreen {
     /// Only a remote or keyboard reaches here while the test is on: its Back leaves.
-    pub(crate) fn menu(
-        &mut self,
-        ev: MenuEvent,
-        _ctx: &mut Ctx,
-        fx: &mut Outbox,
-    ) -> Option<MenuPulse> {
+    fn menu(&mut self, ev: MenuEvent, _ctx: &mut Ctx, fx: &mut Outbox) -> Option<MenuPulse> {
         if ev == MenuEvent::Back {
             fx.pop();
         }
         None
     }
 
-    pub(crate) fn hints(&self, _ctx: &Ctx) -> Vec<Hint> {
+    fn hints(&self, _ctx: &Ctx) -> Vec<Hint> {
         vec![Hint::new(HintKey::Back, "Hold to finish")]
     }
 
-    pub(crate) fn render(
+    fn render(
         &mut self,
         canvas: &Canvas,
         rect: Rect,
@@ -131,6 +129,15 @@ impl InputTestScreen {
         let y = top + h + gap + line * 0.5;
         let cx = f64::from(rect.center_x());
         fonts.draw(canvas, &last, cx - tw / 2.0, y, W::Regular, size, fg(0.6));
+    }
+
+    fn title(&self) -> String {
+        "Controller test".into()
+    }
+
+    /// The whole screen is the test: no tap falls through to the backdrop.
+    fn pointer(&mut self, _p: Pointer, _ctx: &mut Ctx, _fx: &mut Outbox) -> bool {
+        true
     }
 }
 

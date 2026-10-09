@@ -7,14 +7,14 @@ use crate::glyphs::{Hint, HintKey};
 use crate::model::ConsoleCmd;
 use crate::pointer::Pointer;
 use crate::screens::players::{PadAction, PASSTHROUGH};
-use crate::screens::{Ctx, Outbox};
+use crate::screens::{Ctx, Outbox, ScreenView};
 use crate::theme::Fonts;
 use crate::widgets::{ListMsg, MenuList, RowSpec};
 use pf_client_core::menu_nav::{MenuEvent, MenuPulse};
 use skia_safe::{Canvas, Rect};
 
 pub(crate) struct GrantsScreen {
-    pub(super) list: MenuList,
+    list: MenuList,
 }
 
 impl GrantsScreen {
@@ -22,29 +22,6 @@ impl GrantsScreen {
         GrantsScreen {
             list: MenuList::new(),
         }
-    }
-
-    pub(crate) fn menu(
-        &mut self,
-        ev: MenuEvent,
-        _ctx: &mut Ctx,
-        fx: &mut Outbox,
-    ) -> Option<MenuPulse> {
-        if ev == MenuEvent::Back {
-            fx.pop();
-            return None;
-        }
-        let (msg, pulse) = self.list.menu(ev, PASSTHROUGH.len());
-        self.run(msg, pulse, fx)
-    }
-
-    pub(crate) fn pointer(&mut self, p: Pointer, _ctx: &mut Ctx, fx: &mut Outbox) -> bool {
-        let (msg, pulse) = self.list.pointer(p, PASSTHROUGH.len());
-        if matches!(msg, ListMsg::None) && pulse.is_none() {
-            return false;
-        }
-        self.run(msg, pulse, fx);
-        true
     }
 
     /// Shared by pad and pointer. Adjust is a boundary: a row runs or it does not.
@@ -67,20 +44,40 @@ impl GrantsScreen {
             ListMsg::None => pulse,
         }
     }
+}
 
-    pub(crate) fn announcement(&self) -> Option<String> {
+impl ScreenView for GrantsScreen {
+    fn menu(&mut self, ev: MenuEvent, _ctx: &mut Ctx, fx: &mut Outbox) -> Option<MenuPulse> {
+        if ev == MenuEvent::Back {
+            fx.pop();
+            return None;
+        }
+        let (msg, pulse) = self.list.menu(ev, PASSTHROUGH.len());
+        self.run(msg, pulse, fx)
+    }
+
+    fn pointer(&mut self, p: Pointer, _ctx: &mut Ctx, fx: &mut Outbox) -> bool {
+        let (msg, pulse) = self.list.pointer(p, PASSTHROUGH.len());
+        if matches!(msg, ListMsg::None) && pulse.is_none() {
+            return false;
+        }
+        self.run(msg, pulse, fx);
+        true
+    }
+
+    fn announcement(&self, _ctx: &Ctx) -> Option<String> {
         let (_, label, verb) = PASSTHROUGH[self.list.cursor];
         Some(format!("{label}, {verb}"))
     }
 
-    pub(crate) fn hints(&self, _ctx: &Ctx) -> Vec<Hint> {
+    fn hints(&self, _ctx: &Ctx) -> Vec<Hint> {
         vec![
             Hint::new(HintKey::Confirm, PASSTHROUGH[self.list.cursor].2),
             Hint::new(HintKey::Back, "Done"),
         ]
     }
 
-    pub(crate) fn render(
+    fn render(
         &mut self,
         canvas: &Canvas,
         rect: Rect,
@@ -101,8 +98,20 @@ impl GrantsScreen {
     }
 
     /// Why the focused row exists.
-    pub(crate) fn foot(&self) -> &'static str {
-        detail(PASSTHROUGH[self.list.cursor].0)
+    fn foot(&self, _ctx: &Ctx) -> Option<std::borrow::Cow<'static, str>> {
+        Some(detail(PASSTHROUGH[self.list.cursor].0).into())
+    }
+
+    fn title(&self) -> String {
+        "Controller access".into()
+    }
+
+    fn press(&mut self) {
+        self.list.dip();
+    }
+
+    fn pan(&mut self, p: Pointer) -> bool {
+        self.list.pan(p)
     }
 }
 
@@ -162,7 +171,7 @@ mod tests {
             }]
         );
         assert_eq!(
-            s.announcement().as_deref(),
+            s.announcement(&ctx).as_deref(),
             Some("Steam Controller 2 over USB, Grant")
         );
         let mut fx = Outbox::default();

@@ -728,14 +728,14 @@ impl Shell {
         !self.in_stream
             && self.connecting.is_none()
             && !self.holds_stream()
-            && self.stack.last().is_some_and(Screen::editing)
+            && self.stack.last().is_some_and(|s| s.view().editing())
     }
 
     pub(crate) fn edit_field(&self) -> Option<crate::screens::EditField> {
         if !self.editing() {
             return None;
         }
-        self.stack.last()?.edit_field()
+        self.stack.last()?.view().edit_field()
     }
 
     /// What a screen reader should speak for the focused row. `None` while a takeover owns
@@ -760,7 +760,7 @@ impl Shell {
             return Some(format!("{} tab", self.tab.name()));
         }
         let (ctx, screen) = self.ctx_and_top();
-        screen.announcement(&ctx)
+        screen.view().announcement(&ctx)
     }
 
     /// The top screen and a [`Ctx`] over the rest of the shell, borrowed apart.
@@ -1522,7 +1522,7 @@ impl Shell {
     /// direction while the strip has focus. `None` leaves the event to the screen. Over a
     /// root with nothing to focus, Down stays on the strip and OK is the screen's.
     fn tab_menu(&mut self, ev: MenuEvent) -> Option<Option<MenuPulse>> {
-        let editing = self.stack.last().is_some_and(Screen::editing);
+        let editing = self.stack.last().is_some_and(|s| s.view().editing());
         match ev {
             MenuEvent::JumpBack if !editing => return Some(self.step_tab(-1)),
             MenuEvent::JumpForward if !editing => return Some(self.step_tab(1)),
@@ -1771,7 +1771,7 @@ impl Shell {
         if self.strip_focus && self.stack.len() == 1 {
             self.strip.press();
         } else if let Some(s) = self.stack.last_mut() {
-            s.press();
+            s.view_mut().press();
         }
     }
 
@@ -1898,14 +1898,14 @@ impl Shell {
         let mut fx = Outbox::default();
         let pulse = {
             let (mut ctx, top) = self.ctx_and_top();
-            top.menu(ev, &mut ctx, &mut fx)
+            top.view_mut().menu(ev, &mut ctx, &mut fx)
         };
         // Up that a root screen bumps or leaves unanswered lands on its tab.
         let to_strip = self.stack.len() == 1
             && ev == MenuEvent::Move(MenuDir::Up)
             && matches!(pulse, Some(MenuPulse::Boundary) | None)
             && fx.nav.is_none()
-            && !self.stack[0].editing();
+            && !self.stack[0].view().editing();
         self.apply(fx);
         if to_strip {
             self.strip_focus = true;
@@ -2038,7 +2038,7 @@ impl Shell {
         let mut fx = Outbox::default();
         let consumed = {
             let (mut ctx, top) = self.ctx_and_top();
-            top.pointer(p, &mut ctx, &mut fx)
+            top.view_mut().pointer(p, &mut ctx, &mut fx)
         };
         self.apply(fx);
         consumed
@@ -2058,12 +2058,12 @@ impl Shell {
         self.input_source = Some(crate::console::InputSource::Keys);
         if self.editing() {
             let (mut ctx, top) = self.ctx_and_top();
-            if top.edit_key(key, &mut ctx) {
+            if top.view_mut().edit_key(key, &mut ctx) {
                 return true;
             }
             // Editing consumed nothing: arrows still drive the OSK grid.
         }
-        let editing = self.stack.last().is_some_and(Screen::editing);
+        let editing = self.stack.last().is_some_and(|s| s.view().editing());
         let ev = match key {
             S::Left => MenuEvent::Move(MenuDir::Left),
             S::Right => MenuEvent::Move(MenuDir::Right),
@@ -2089,7 +2089,7 @@ impl Shell {
     pub(crate) fn text_input(&mut self, text: &str) {
         self.last_input = Instant::now();
         if let Some(top) = self.stack.last_mut() {
-            top.text_input(text);
+            top.view_mut().text_input(text);
         }
     }
 

@@ -16,7 +16,7 @@ use crate::glyphs::{device_icon, Hint};
 use crate::model::{ConsoleCmd, OtherDevice};
 use crate::platform::Platform;
 use crate::pointer::{Pointer, PointerKind};
-use crate::screens::{Ctx, Outbox, Screen};
+use crate::screens::{Ctx, Outbox, Screen, ScreenView};
 use crate::theme::{accent, edge, fg, Fonts, PanelStroke, W};
 use pf_client_core::menu_nav::{MenuEvent, MenuPulse, PadInfo};
 use skia_safe::{Canvas, Rect};
@@ -142,13 +142,10 @@ impl PlayersScreen {
             .and_then(|id| all.iter().copied().find(|t| target_id(*t, ctx.pads) == id))
             .unwrap_or(all[0])
     }
+}
 
-    pub(crate) fn menu(
-        &mut self,
-        ev: MenuEvent,
-        ctx: &mut Ctx,
-        fx: &mut Outbox,
-    ) -> Option<MenuPulse> {
+impl ScreenView for PlayersScreen {
+    fn menu(&mut self, ev: MenuEvent, ctx: &mut Ctx, fx: &mut Outbox) -> Option<MenuPulse> {
         let at = self.focused(ctx);
         self.tree.set_focus(Some(target_id(at, ctx.pads)));
         match ev {
@@ -167,7 +164,7 @@ impl PlayersScreen {
     }
 
     /// Hover focuses; a press acts on what it lands on.
-    pub(crate) fn pointer(&mut self, p: Pointer, ctx: &mut Ctx, fx: &mut Outbox) -> bool {
+    fn pointer(&mut self, p: Pointer, ctx: &mut Ctx, fx: &mut Outbox) -> bool {
         let Some(id) = self.tree.hit(p.x as f32, p.y as f32) else {
             return false;
         };
@@ -184,7 +181,7 @@ impl PlayersScreen {
         true
     }
 
-    pub(crate) fn announcement(&self, ctx: &Ctx) -> Option<String> {
+    fn announcement(&self, ctx: &Ctx) -> Option<String> {
         Some(match self.focused(ctx) {
             Target::Pad(i) => format!("{}, {}", ctx.pads[i].name, pad_detail(&ctx.pads[i])),
             Target::NoPads => "No controller connected".into(),
@@ -194,11 +191,11 @@ impl PlayersScreen {
         })
     }
 
-    pub(crate) fn hints(&self, _ctx: &Ctx) -> Vec<Hint> {
+    fn hints(&self, _ctx: &Ctx) -> Vec<Hint> {
         Vec::new()
     }
 
-    pub(crate) fn render(
+    fn render(
         &mut self,
         canvas: &Canvas,
         rect: Rect,
@@ -267,8 +264,12 @@ impl PlayersScreen {
     }
 
     /// What the focus is. Grant rows run under it on a short screen.
-    pub(crate) fn foot(&self, ctx: &Ctx) -> String {
-        detail(self.focused(ctx), ctx, &self.others)
+    fn foot(&self, ctx: &Ctx) -> Option<std::borrow::Cow<'static, str>> {
+        Some(detail(self.focused(ctx), ctx, &self.others).into())
+    }
+
+    fn title(&self) -> String {
+        "Controllers".into()
     }
 }
 

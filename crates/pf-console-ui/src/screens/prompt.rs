@@ -9,7 +9,7 @@
 use crate::glyphs::{Hint, HintKey};
 use crate::model::ConsoleCmd;
 use crate::pointer::Pointer;
-use crate::screens::{Ctx, Outbox};
+use crate::screens::{Ctx, Outbox, ScreenView};
 use crate::theme::Fonts;
 use crate::widgets::{blurb, ListMsg, MenuList, RowSpec};
 use pf_client_core::menu_nav::{MenuEvent, MenuPulse};
@@ -26,7 +26,7 @@ pub struct Prompt {
 
 pub(crate) struct PromptScreen {
     prompt: Prompt,
-    pub(super) list: MenuList,
+    list: MenuList,
     /// The shell's own exit question: its first row quits, and the app hears no answer.
     exit: bool,
 }
@@ -50,33 +50,6 @@ impl PromptScreen {
                 choices: vec!["Exit".into(), "Cancel".into()],
             })
         }
-    }
-
-    pub(crate) fn title(&self) -> String {
-        self.prompt.title.clone()
-    }
-
-    pub(crate) fn menu(
-        &mut self,
-        ev: MenuEvent,
-        _ctx: &mut Ctx,
-        fx: &mut Outbox,
-    ) -> Option<MenuPulse> {
-        if ev == MenuEvent::Back {
-            self.answer(None, fx);
-            return None;
-        }
-        let (msg, pulse) = self.list.menu(ev, self.prompt.choices.len());
-        self.run(msg, pulse, fx)
-    }
-
-    pub(crate) fn pointer(&mut self, p: Pointer, _ctx: &mut Ctx, fx: &mut Outbox) -> bool {
-        let (msg, pulse) = self.list.pointer(p, self.prompt.choices.len());
-        if matches!(msg, ListMsg::None) && pulse.is_none() {
-            return false;
-        }
-        self.run(msg, pulse, fx);
-        true
     }
 
     fn run(
@@ -106,13 +79,37 @@ impl PromptScreen {
         }
         fx.pop();
     }
+}
 
-    pub(crate) fn announcement(&self) -> Option<String> {
+impl ScreenView for PromptScreen {
+    fn title(&self) -> String {
+        self.prompt.title.clone()
+    }
+
+    fn menu(&mut self, ev: MenuEvent, _ctx: &mut Ctx, fx: &mut Outbox) -> Option<MenuPulse> {
+        if ev == MenuEvent::Back {
+            self.answer(None, fx);
+            return None;
+        }
+        let (msg, pulse) = self.list.menu(ev, self.prompt.choices.len());
+        self.run(msg, pulse, fx)
+    }
+
+    fn pointer(&mut self, p: Pointer, _ctx: &mut Ctx, fx: &mut Outbox) -> bool {
+        let (msg, pulse) = self.list.pointer(p, self.prompt.choices.len());
+        if matches!(msg, ListMsg::None) && pulse.is_none() {
+            return false;
+        }
+        self.run(msg, pulse, fx);
+        true
+    }
+
+    fn announcement(&self, _ctx: &Ctx) -> Option<String> {
         let choice = self.prompt.choices.get(self.list.cursor)?;
         Some(format!("{} {choice}", self.prompt.message))
     }
 
-    pub(crate) fn hints(&self, _ctx: &Ctx) -> Vec<Hint> {
+    fn hints(&self, _ctx: &Ctx) -> Vec<Hint> {
         let choice = self.prompt.choices.get(self.list.cursor);
         let mut hints = Vec::new();
         if let Some(choice) = choice {
@@ -122,7 +119,7 @@ impl PromptScreen {
         hints
     }
 
-    pub(crate) fn render(
+    fn render(
         &mut self,
         canvas: &Canvas,
         rect: Rect,
@@ -139,6 +136,14 @@ impl PromptScreen {
             .collect();
         let rest = blurb(canvas, fonts, &self.prompt.message, rect, k);
         self.list.render(canvas, rest, &rows, fonts, k, dt, true);
+    }
+
+    fn press(&mut self) {
+        self.list.dip();
+    }
+
+    fn pan(&mut self, p: Pointer) -> bool {
+        self.list.pan(p)
     }
 }
 

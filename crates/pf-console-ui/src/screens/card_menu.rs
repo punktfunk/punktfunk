@@ -13,7 +13,7 @@ use crate::glyphs::{Hint, HintKey};
 use crate::library::LibraryGame;
 use crate::model::{ConsoleCmd, HostRow};
 use crate::pointer::Pointer;
-use crate::screens::{Ctx, Outbox, Screen};
+use crate::screens::{Ctx, Outbox, Screen, ScreenView};
 use crate::store::SettingsStore;
 use crate::theme::{edge, fg, Fonts, W};
 use crate::widgets::{blurb, ListMsg, MenuList, RowSpec, TabStrip, TAB_STRIP_H};
@@ -96,7 +96,7 @@ pub(crate) struct CardMenu {
     /// retarget Forget onto whatever slid into the slot.
     subject: Subject,
     mode: Mode,
-    pub(super) list: MenuList,
+    list: MenuList,
     /// A destructive row armed on the first press fires on the second. `Option<Action>`:
     /// arming Forget must not fire Restart if the cursor moved.
     armed: Option<Action>,
@@ -175,35 +175,10 @@ impl CardMenu {
         Some(MenuPulse::Move)
     }
 
-    /// OK went down: the plate under the focused tab or row dips.
-    pub(crate) fn press(&mut self) {
-        if self.strip_focus {
-            self.strip.press();
-        } else {
-            self.list.dip();
-        }
-    }
-
     fn host(&self) -> &HostRow {
         match &self.subject {
             Subject::Host(h) => h,
             Subject::Game { host, .. } => host,
-        }
-    }
-
-    pub(crate) fn title(&self) -> String {
-        let name = match &self.subject {
-            Subject::Host(h) => match &h.pin {
-                Some(p) => format!("{} \u{b7} {}", h.name, p.name),
-                None => h.name.clone(),
-            },
-            Subject::Game { game, .. } => game.title.clone(),
-        };
-        match (self.mode, &self.subject) {
-            (Mode::Details, Subject::Game { .. }) | (Mode::Menu, _) => name,
-            (Mode::Details, _) => format!("{name} \u{b7} Details"),
-            (Mode::ConnectWith, Subject::Game { .. }) => format!("Play {name} with"),
-            (Mode::ConnectWith, _) => format!("Connect to {name} with"),
         }
     }
 
@@ -493,65 +468,6 @@ impl CardMenu {
             Action::Host(i) => self.host().actions.get(i).is_none_or(|act| act.available),
             _ => true,
         }
-    }
-
-    pub(crate) fn menu(
-        &mut self,
-        ev: MenuEvent,
-        ctx: &mut Ctx,
-        fx: &mut Outbox,
-    ) -> Option<MenuPulse> {
-        if ev == MenuEvent::Back {
-            fx.pop();
-            return None;
-        }
-        if self.tabbed() {
-            // Up from the first row stands on the section tabs; there Left and Right walk
-            // them and Down or OK returns. L1/R1 walk them from anywhere.
-            let n = self.sections(ctx.store).len();
-            let tab = self.tab as i32;
-            match (ev, self.strip_focus) {
-                (MenuEvent::JumpBack, _) => return self.show_tab(tab - 1, n),
-                (MenuEvent::JumpForward, _) => return self.show_tab(tab + 1, n),
-                (MenuEvent::Move(MenuDir::Up), false) if self.list.cursor == 0 => {
-                    self.strip_focus = true;
-                    return Some(MenuPulse::Move);
-                }
-                (MenuEvent::Move(MenuDir::Left), true) => return self.show_tab(tab - 1, n),
-                (MenuEvent::Move(MenuDir::Right), true) => return self.show_tab(tab + 1, n),
-                (MenuEvent::Move(MenuDir::Down) | MenuEvent::Confirm, true) => {
-                    self.strip_focus = false;
-                    return Some(MenuPulse::Move);
-                }
-                (MenuEvent::Move(_), true) => return Some(MenuPulse::Boundary),
-                (_, true) => return None,
-                _ => {}
-            }
-        }
-        let actions = self.actions(ctx.store, ctx.device.tv);
-        let (msg, pulse) = self.list.menu(ev, actions.len());
-        self.dispatch(msg, pulse, &actions, ctx, fx)
-    }
-
-    pub(crate) fn pointer(&mut self, p: Pointer, ctx: &mut Ctx, fx: &mut Outbox) -> bool {
-        if self.tabbed() {
-            if let Some(tab) = self.strip.pointer(p) {
-                if p.press() {
-                    self.show_tab(tab as i32, self.sections(ctx.store).len());
-                }
-                return true;
-            }
-            if p.press() {
-                self.strip_focus = false;
-            }
-        }
-        let actions = self.actions(ctx.store, ctx.device.tv);
-        let (msg, pulse) = self.list.pointer(p, actions.len());
-        if matches!(msg, ListMsg::None) && pulse.is_none() {
-            return false;
-        }
-        self.dispatch(msg, pulse, &actions, ctx, fx);
-        true
     }
 
     fn dispatch(
@@ -878,13 +794,6 @@ impl CardMenu {
         }
     }
 
-    pub(crate) fn hints(&self, _ctx: &Ctx) -> Vec<Hint> {
-        vec![
-            Hint::new(HintKey::Confirm, "Choose"),
-            Hint::new(HintKey::Back, "Close"),
-        ]
-    }
-
     fn blurb(&self) -> String {
         match (&self.subject, self.mode) {
             (_, Mode::ConnectWith) => "This connect only; the card keeps its own preset.".into(),
@@ -899,8 +808,96 @@ impl CardMenu {
             (Subject::Game { host, .. }, _) => format!("On {}.", host.name),
         }
     }
+}
 
-    pub(crate) fn render(
+impl ScreenView for CardMenu {
+    /// OK went down: the plate under the focused tab or row dips.
+    fn press(&mut self) {
+        if self.strip_focus {
+            self.strip.press();
+        } else {
+            self.list.dip();
+        }
+    }
+
+    fn title(&self) -> String {
+        let name = match &self.subject {
+            Subject::Host(h) => match &h.pin {
+                Some(p) => format!("{} \u{b7} {}", h.name, p.name),
+                None => h.name.clone(),
+            },
+            Subject::Game { game, .. } => game.title.clone(),
+        };
+        match (self.mode, &self.subject) {
+            (Mode::Details, Subject::Game { .. }) | (Mode::Menu, _) => name,
+            (Mode::Details, _) => format!("{name} \u{b7} Details"),
+            (Mode::ConnectWith, Subject::Game { .. }) => format!("Play {name} with"),
+            (Mode::ConnectWith, _) => format!("Connect to {name} with"),
+        }
+    }
+
+    fn menu(&mut self, ev: MenuEvent, ctx: &mut Ctx, fx: &mut Outbox) -> Option<MenuPulse> {
+        if ev == MenuEvent::Back {
+            fx.pop();
+            return None;
+        }
+        if self.tabbed() {
+            // Up from the first row stands on the section tabs; there Left and Right walk
+            // them and Down or OK returns. L1/R1 walk them from anywhere.
+            let n = self.sections(ctx.store).len();
+            let tab = self.tab as i32;
+            match (ev, self.strip_focus) {
+                (MenuEvent::JumpBack, _) => return self.show_tab(tab - 1, n),
+                (MenuEvent::JumpForward, _) => return self.show_tab(tab + 1, n),
+                (MenuEvent::Move(MenuDir::Up), false) if self.list.cursor == 0 => {
+                    self.strip_focus = true;
+                    return Some(MenuPulse::Move);
+                }
+                (MenuEvent::Move(MenuDir::Left), true) => return self.show_tab(tab - 1, n),
+                (MenuEvent::Move(MenuDir::Right), true) => return self.show_tab(tab + 1, n),
+                (MenuEvent::Move(MenuDir::Down) | MenuEvent::Confirm, true) => {
+                    self.strip_focus = false;
+                    return Some(MenuPulse::Move);
+                }
+                (MenuEvent::Move(_), true) => return Some(MenuPulse::Boundary),
+                (_, true) => return None,
+                _ => {}
+            }
+        }
+        let actions = self.actions(ctx.store, ctx.device.tv);
+        let (msg, pulse) = self.list.menu(ev, actions.len());
+        self.dispatch(msg, pulse, &actions, ctx, fx)
+    }
+
+    fn pointer(&mut self, p: Pointer, ctx: &mut Ctx, fx: &mut Outbox) -> bool {
+        if self.tabbed() {
+            if let Some(tab) = self.strip.pointer(p) {
+                if p.press() {
+                    self.show_tab(tab as i32, self.sections(ctx.store).len());
+                }
+                return true;
+            }
+            if p.press() {
+                self.strip_focus = false;
+            }
+        }
+        let actions = self.actions(ctx.store, ctx.device.tv);
+        let (msg, pulse) = self.list.pointer(p, actions.len());
+        if matches!(msg, ListMsg::None) && pulse.is_none() {
+            return false;
+        }
+        self.dispatch(msg, pulse, &actions, ctx, fx);
+        true
+    }
+
+    fn hints(&self, _ctx: &Ctx) -> Vec<Hint> {
+        vec![
+            Hint::new(HintKey::Confirm, "Choose"),
+            Hint::new(HintKey::Back, "Close"),
+        ]
+    }
+
+    fn render(
         &mut self,
         canvas: &Canvas,
         rect: Rect,
@@ -957,6 +954,10 @@ impl CardMenu {
             self.strip
                 .render(canvas, r, &sections, tab, focused, fonts, k, dt);
         }
+    }
+
+    fn pan(&mut self, p: Pointer) -> bool {
+        self.list.pan(p)
     }
 }
 

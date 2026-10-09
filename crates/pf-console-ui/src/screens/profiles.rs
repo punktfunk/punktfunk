@@ -10,7 +10,7 @@ use crate::el::{Axis, El, Id, Tree};
 use crate::glyphs::{Hint, HintKey};
 use crate::model::{ConsoleCmd, HostRow, ProfilesAnswer};
 use crate::pointer::{Pointer, PointerKind};
-use crate::screens::{ConnectIntent, Ctx, Outbox, ProfileAsk, Seated};
+use crate::screens::{ConnectIntent, Ctx, Outbox, ProfileAsk, ScreenView, Seated};
 use crate::theme::{edge, fg, fill, Fonts, W};
 use pf_client_core::menu_nav::{MenuDir, MenuEvent, MenuPulse};
 use pf_client_core::profiles::{initials, ListedProfile, ProfilePick};
@@ -136,10 +136,6 @@ impl ProfilesScreen {
         }
     }
 
-    pub(crate) fn title(&self) -> String {
-        format!("Who\u{2019}s playing on {}?", self.ask.name)
-    }
-
     /// Save the focused profile; a waiting connect goes on as it.
     fn choose(&mut self, fx: &mut Outbox) -> Option<MenuPulse> {
         let row = self.listed().get(self.cursor)?.clone();
@@ -178,12 +174,26 @@ impl ProfilesScreen {
         Some(MenuPulse::Move)
     }
 
-    pub(crate) fn menu(
-        &mut self,
-        ev: MenuEvent,
-        _ctx: &mut Ctx,
-        fx: &mut Outbox,
-    ) -> Option<MenuPulse> {
+    /// The line over the grid: the gone pick, else what stands in for a list.
+    fn line(&self) -> Option<String> {
+        match &self.state {
+            State::Waiting => Some("Loading profiles\u{2026}".into()),
+            State::NoProfiles => Some(format!("{} has no profiles.", self.ask.name)),
+            State::Failed(why) => Some(format!("Couldn't load the profiles \u{2014} {why}")),
+            State::Listed(_) => self
+                .gone
+                .as_ref()
+                .map(|name| format!("{name} is gone from this host.")),
+        }
+    }
+}
+
+impl ScreenView for ProfilesScreen {
+    fn title(&self) -> String {
+        format!("Who\u{2019}s playing on {}?", self.ask.name)
+    }
+
+    fn menu(&mut self, ev: MenuEvent, _ctx: &mut Ctx, fx: &mut Outbox) -> Option<MenuPulse> {
         match ev {
             MenuEvent::Move(dir) => self.step(dir).or(Some(MenuPulse::Boundary)),
             MenuEvent::Confirm => self.choose(fx).or(Some(MenuPulse::Boundary)),
@@ -195,16 +205,16 @@ impl ProfilesScreen {
         }
     }
 
-    pub(crate) fn press(&mut self) {
+    fn press(&mut self) {
         self.tree.press();
     }
 
-    pub(crate) fn pan(&mut self, p: Pointer) -> bool {
+    fn pan(&mut self, p: Pointer) -> bool {
         self.tree.drag(Id::new(GRID, 0), p)
     }
 
     /// Hover focuses; a press on the focused circle picks it.
-    pub(crate) fn pointer(&mut self, p: Pointer, _ctx: &mut Ctx, fx: &mut Outbox) -> bool {
+    fn pointer(&mut self, p: Pointer, _ctx: &mut Ctx, fx: &mut Outbox) -> bool {
         match p.kind {
             PointerKind::Scroll { up } => {
                 self.tree
@@ -234,7 +244,7 @@ impl ProfilesScreen {
         }
     }
 
-    pub(crate) fn announcement(&self) -> Option<String> {
+    fn announcement(&self, _ctx: &Ctx) -> Option<String> {
         let p = self.listed().get(self.cursor)?;
         let mut say = p.display_name.clone();
         if self.ask.saved.as_ref().is_some_and(|s| s.id == p.id) {
@@ -246,7 +256,7 @@ impl ProfilesScreen {
         Some(say)
     }
 
-    pub(crate) fn hints(&self, _ctx: &Ctx) -> Vec<Hint> {
+    fn hints(&self, _ctx: &Ctx) -> Vec<Hint> {
         let mut hints = Vec::new();
         if !self.listed().is_empty() {
             let verb = if self.then.is_some() {
@@ -260,20 +270,7 @@ impl ProfilesScreen {
         hints
     }
 
-    /// The line over the grid: the gone pick, else what stands in for a list.
-    fn line(&self) -> Option<String> {
-        match &self.state {
-            State::Waiting => Some("Loading profiles\u{2026}".into()),
-            State::NoProfiles => Some(format!("{} has no profiles.", self.ask.name)),
-            State::Failed(why) => Some(format!("Couldn't load the profiles \u{2014} {why}")),
-            State::Listed(_) => self
-                .gone
-                .as_ref()
-                .map(|name| format!("{name} is gone from this host.")),
-        }
-    }
-
-    pub(crate) fn render(
+    fn render(
         &mut self,
         canvas: &Canvas,
         rect: Rect,
@@ -526,7 +523,10 @@ mod tests {
         assert!(s.waiting());
         s.set_answer(ProfilesAnswer::Listed(listed()));
         assert_eq!(s.listed()[0].id, "kid");
-        assert_eq!(s.announcement().as_deref(), Some("Kid, selected"));
+        assert_eq!(
+            with_ctx(|ctx| s.announcement(ctx)).as_deref(),
+            Some("Kid, selected")
+        );
         s.cursor = 1;
         let mut fx = Outbox::default();
         with_ctx(|ctx| s.menu(MenuEvent::Confirm, ctx, &mut fx));
@@ -588,7 +588,7 @@ mod tests {
         };
         s.set_answer(ProfilesAnswer::Listed(vec![busy]));
         assert_eq!(
-            s.announcement().as_deref(),
+            with_ctx(|ctx| s.announcement(ctx)).as_deref(),
             Some("Kid, In use by Ben's Apple TV")
         );
         s.set_answer(ProfilesAnswer::NoProfiles);
