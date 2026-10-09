@@ -126,7 +126,7 @@ fn reap_ghost_monitors() -> u32 {
         $n = 0; foreach ($d in $g) { $LASTEXITCODE = 1; if (Test-Path $pnp) { & $pnp /remove-device $d.InstanceId *> $null }; if ($LASTEXITCODE -eq 0) { $n++ } }; \
         Write-Output ($g.Count.ToString() + ' ' + $n)";
     // Full-path powershell: LocalSystem PATH need not include System32.
-    let ps = pf_paths::system32(r"WindowsPowerShell\v1.0\powershell.exe");
+    let ps = pf_paths::system32(pf_paths::POWERSHELL);
     // Bounded: this runs under the manager's `device` mutex (driver open) and under its `state`
     // lock (the ADD slot-exhaustion retry), so a wedged Get-PnpDevice would block every acquire,
     // release and `/display/state`. `output_within` kills the whole tree on the deadline.
@@ -224,7 +224,7 @@ fn reload_vdisplay_adapter() -> AdapterCycle {
             Write-Output ('RELOADED restart ' + (Get-PnpDevice -InstanceId $id).Status) } \
         else { Enable-PnpDevice -InstanceId $id -Confirm:$false; \
             Write-Output ('REFUSED devnodes=' + $all.Count + ' live=' + $live.Count + ' status=' + $ad.Status + ' problem=' + $ad.ConfigManagerErrorCode + ' restart_exit=' + $rx + ' ' + $err) }";
-    let ps = pf_paths::system32(r"WindowsPowerShell\v1.0\powershell.exe");
+    let ps = pf_paths::system32(pf_paths::POWERSHELL);
     let pin = LAST_INSTANCE_ID
         .lock()
         .unwrap_or_else(|e| e.into_inner())

@@ -56,7 +56,7 @@ fn extract_and_run(exe: &Path, data: &[u8], payload: &[u8]) -> Result<ExitCode, 
     {
         // Absolute: `CreateProcess` searches the cwd before `%PATH%`, and setup runs elevated.
         // The target is `root`, the extract dir — never `SystemRoot`.
-        let _ = std::process::Command::new(sys::system32("icacls.exe"))
+        let _ = std::process::Command::new(pf_paths::system32("icacls.exe"))
             .arg(&root)
             .args(["/setowner", "*S-1-5-32-544", "/T", "/C", "/Q"])
             .stdout(std::process::Stdio::null())

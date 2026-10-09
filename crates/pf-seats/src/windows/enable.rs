@@ -12,6 +12,7 @@ use super::util::{backend_error, WinResult};
 use super::{keeper, seats_enabled, server_edition, SEATS_KEY};
 use crate::backend::BackendError;
 use crate::ipc::Diagnostic;
+use pf_paths::POWERSHELL;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::Duration;
@@ -37,7 +38,6 @@ const PACKAGE: [&str; 3] = [
 /// The RDP listener takes a moment to come up after `fDenyTSConnections` flips.
 const TRUST_ATTEMPTS: u32 = 3;
 const TRUST_RETRY: Duration = Duration::from_secs(2);
-const POWERSHELL: &str = r"WindowsPowerShell\v1.0\powershell.exe";
 /// Role, licensing and a GPU as three `0`/`1` flags. The licensing types 2 and 4 are Per
 /// Device and Per User; an adapter named `Microsoft …` is the basic or remote display driver.
 const PROBE: &str = "$ProgressPreference='SilentlyContinue'; \

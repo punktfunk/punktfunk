@@ -1,14 +1,16 @@
-//! The distro's `os-release`, read once. Shared so the host and the injector
-//! identify the distro the same way.
+//! The distro's `os-release`, read once. Shared so the host, the injector and
+//! the installer identify the distro the same way.
 
 use std::sync::OnceLock;
 
-/// The `os-release` keys the host reads. Values are unquoted, not sanitized.
+/// The `os-release` keys the host and the installer read. Values are unquoted,
+/// not sanitized.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct OsRelease {
     pub id: Option<String>,
     /// Most-similar-first, per os-release(5).
     pub id_like: Vec<String>,
+    pub version_id: Option<String>,
     pub pretty_name: Option<String>,
     pub name: Option<String>,
 }
@@ -25,6 +27,7 @@ impl OsRelease {
             match key {
                 "ID" => os.id = Some(value),
                 "ID_LIKE" => os.id_like = value.split_whitespace().map(String::from).collect(),
+                "VERSION_ID" => os.version_id = Some(value),
                 "PRETTY_NAME" => os.pretty_name = Some(value),
                 "NAME" => os.name = Some(value),
                 _ => {}
@@ -77,8 +80,10 @@ mod tests {
         assert_eq!(os.id.as_deref(), Some("steamos"));
         assert_eq!(os.pretty_name.as_deref(), Some("SteamOS Holo"));
         assert!(os.is("steamos") && os.is("arch") && os.is("SteamOS"));
-        let derivative = OsRelease::parse("ID=bazzite\nID_LIKE=\"fedora steamos\"\n");
+        let derivative =
+            OsRelease::parse("ID=bazzite\nID_LIKE=\"fedora steamos\"\nVERSION_ID='43'\n");
         assert_eq!(derivative.id_like, ["fedora", "steamos"]);
+        assert_eq!(derivative.version_id.as_deref(), Some("43"));
         assert!(derivative.is("steamos"));
         assert!(!derivative.is("steam"));
     }

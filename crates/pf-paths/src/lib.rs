@@ -108,14 +108,13 @@ pub fn state_dir() -> PathBuf {
     xdg_home("XDG_STATE_HOME", ".local/state").join("punktfunk")
 }
 
-/// `$var` when it holds an absolute path, else `$HOME/<fallback>`. The XDG base-dir spec
-/// ignores an empty or relative value.
-#[cfg(not(windows))]
-fn xdg_home(var: &str, fallback: &str) -> PathBuf {
+/// `$var` when it holds an absolute path, else `$HOME/<fallback>`, else `.`. The XDG
+/// base-dir spec ignores an empty or relative value. A caller that must not land in the
+/// cwd checks `is_absolute()`. Ungated: string work only.
+pub fn xdg_home(var: &str, fallback: &str) -> PathBuf {
     xdg_home_from(std::env::var_os(var), std::env::var_os("HOME"), fallback)
 }
 
-#[cfg(not(windows))]
 fn xdg_home_from(
     value: Option<std::ffi::OsString>,
     home: Option<std::ffi::OsString>,
@@ -332,13 +331,16 @@ pub fn restrict_existing_secret_file(_path: &std::path::Path) {}
 ///
 /// `CreateProcess` searches the exe's directory and the cwd before `PATH`, and the callers run
 /// elevated or as SYSTEM, so a system tool is never spawned by bare name. `rel` may carry a
-/// subdirectory (`WindowsPowerShell\v1.0\powershell.exe`). Ungated: string work only.
+/// subdirectory ([`POWERSHELL`]). Ungated: string work only.
 pub fn system32(rel: &str) -> String {
     let root = std::env::var("SystemRoot")
         .or_else(|_| std::env::var("WINDIR"))
         .unwrap_or_else(|_| r"C:\Windows".to_string());
     format!(r"{root}\System32\{rel}")
 }
+
+/// Windows PowerShell under System32, for [`system32`].
+pub const POWERSHELL: &str = r"WindowsPowerShell\v1.0\powershell.exe";
 
 /// `pnputil /remove-device` by absolute path: an uninstaller must not depend on `%PATH%`.
 /// `Err` carries pnputil's exit status and message, or why it did not run.
@@ -704,7 +706,7 @@ mod tests {
             p.len() > r"\System32\icacls.exe".len(),
             "a root, not a bare name: {p}"
         );
-        let ps = system32(r"WindowsPowerShell\v1.0\powershell.exe");
+        let ps = system32(POWERSHELL);
         assert!(
             ps.ends_with(r"\System32\WindowsPowerShell\v1.0\powershell.exe"),
             "{ps}"

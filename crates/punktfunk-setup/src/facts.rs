@@ -149,7 +149,7 @@ pub enum Floor {
     Confirm(String),
 }
 
-/// `/etc/os-release`, parsed the way `.`-sourcing it would read.
+/// The `os-release` fields the plan reads. `--facts` and the plan goldens serialize this shape.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OsRelease {
     pub id: String,
@@ -159,39 +159,27 @@ pub struct OsRelease {
 }
 
 impl OsRelease {
+    /// Read with the host's parser, so the installer and the host name a distro alike.
+    /// `pretty` falls back to `id`.
     pub fn parse(text: &str) -> Self {
-        let mut os = OsRelease::default();
-        for line in text.lines() {
-            let line = line.trim();
-            let Some((key, value)) = line.split_once('=') else {
-                continue;
-            };
-            if key.starts_with('#') {
-                continue;
-            }
-            let value = value.trim();
-            let value = value
-                .strip_prefix('"')
-                .and_then(|v| v.strip_suffix('"'))
-                .or_else(|| value.strip_prefix('\'').and_then(|v| v.strip_suffix('\'')))
-                .unwrap_or(value)
-                .to_string();
-            match key.trim() {
-                "ID" => os.id = value,
-                "ID_LIKE" => os.id_like = value,
-                "VERSION_ID" => os.version_id = value,
-                "PRETTY_NAME" => os.pretty = value,
-                _ => {}
-            }
+        let os = pf_host_config::os_release::OsRelease::parse(text);
+        let id = os.id.unwrap_or_default();
+        OsRelease {
+            pretty: os
+                .pretty_name
+                .filter(|p| !p.is_empty())
+                .unwrap_or_else(|| id.clone()),
+            id_like: os.id_like.join(" "),
+            version_id: os.version_id.unwrap_or_default(),
+            id,
         }
-        if os.pretty.is_empty() {
-            os.pretty = os.id.clone();
-        }
-        os
     }
 
+    /// Whether `ID` or an `ID_LIKE` token is `needle`, ignoring ASCII case.
     pub fn like(&self, needle: &str) -> bool {
-        self.id == needle || self.id_like.split_whitespace().any(|w| w == needle)
+        std::iter::once(self.id.as_str())
+            .chain(self.id_like.split_whitespace())
+            .any(|t| t.eq_ignore_ascii_case(needle))
     }
 
     /// `VERSION_ID` before the first dot, as a number. `0` when it is not one.
@@ -598,7 +586,7 @@ mod tests {
         assert_eq!(os.id, "arch");
         assert_eq!(os.version_id, "40");
         assert_eq!(os.pretty, "arch");
-        assert!(os.like("arch"));
+        assert!(os.like("arch") && os.like("Arch"));
         assert!(!os.like("debian"));
     }
 

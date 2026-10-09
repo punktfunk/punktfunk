@@ -8,8 +8,11 @@
 //! Named `trap_*` tests assert on the command list, not the rendering, so they stay
 //! meaningful when the text moves. See `design/installer-v2.md`.
 
+mod common;
+
 use std::path::Path;
 
+use common::golden;
 use punktfunk_setup::choices::{Action, Choices, Pins};
 use punktfunk_setup::exec::{Executor, Opts};
 use punktfunk_setup::facts::{Channel, Facts, Family, Firewall, Nvidia, OsRelease};
@@ -131,24 +134,6 @@ fn render(facts: &Facts, choices: &Choices) -> String {
         report::verify(&ui, &run, facts, choices, &outcome, opts);
     }
     buf.borrow().clone()
-}
-
-fn golden(name: &str, actual: &str) {
-    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/golden")
-        .join(format!("{name}.txt"));
-    if std::env::var_os("UPDATE_GOLDEN").is_some() {
-        std::fs::create_dir_all(path.parent().expect("golden dir")).expect("create golden dir");
-        std::fs::write(&path, actual).expect("write golden");
-        return;
-    }
-    let expected = std::fs::read_to_string(&path).unwrap_or_else(|_| {
-        panic!("no golden for {name} — run UPDATE_GOLDEN=1 cargo test -p punktfunk-setup")
-    });
-    assert_eq!(
-        actual, expected,
-        "golden {name} changed (UPDATE_GOLDEN=1 to accept)"
-    );
 }
 
 fn check(name: &str, facts: &Facts, pins: &Pins) {

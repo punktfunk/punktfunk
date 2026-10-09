@@ -13,7 +13,8 @@
 use serde::{Deserialize, Serialize};
 
 use super::choices::{NetworkAnswer, WinChoices};
-use super::{TaskState, WinFacts, MGMT_PORT_MOVED};
+use super::{TaskState, WinFacts};
+use crate::choices::DEFAULT_MGMT_PORT;
 use crate::facts::DOCS;
 use crate::plan::Level;
 
@@ -363,7 +364,7 @@ fn host_install(facts: &WinFacts, choices: &WinChoices) -> WinPlan {
     }
     // The host writes host.env and opens the firewall for the port in one place.
     if facts.needs_coexistence() {
-        service.push(format!("--mgmt-bind=0.0.0.0:{MGMT_PORT_MOVED}"));
+        service.push(format!("--mgmt-bind=0.0.0.0:{DEFAULT_MGMT_PORT}"));
     }
     if let Some(addr) = &choices.web_bind {
         service.push(format!("--web-bind={addr}"));
@@ -567,7 +568,7 @@ fn coexist_steps(facts: &WinFacts, choices: &WinChoices) -> Vec<WinAction> {
         ),
         note(
             Level::Ok,
-            format!("PUNKTFUNK_MGMT_BIND=0.0.0.0:{MGMT_PORT_MOVED} — the service step writes it to host.env and opens the firewall for it"),
+            format!("PUNKTFUNK_MGMT_BIND=0.0.0.0:{DEFAULT_MGMT_PORT} — the service step writes it to host.env and opens the firewall for it"),
         ),
         note(
             Level::Ok,
