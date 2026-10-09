@@ -42,11 +42,9 @@
 
 use punktfunk_core::audio::pad_mix::HapticsLiveness;
 #[cfg(target_os = "android")]
-use punktfunk_core::audio::pad_mix::{plc_frames, QuadMixer, PAD_CHANNELS};
-#[cfg(target_os = "android")]
-use punktfunk_core::audio::AudioGapTracker;
-#[cfg(target_os = "android")]
-use punktfunk_core::quic::{PAD_AUDIO_KIND_HAPTICS, PAD_AUDIO_KIND_SPEAKER};
+use punktfunk_core::audio::pad_mix::{
+    is_haptics_evidence, PadDecode, QuadMixer, MAX_FRAME_SAMPLES, PAD_CHANNELS,
+};
 
 #[cfg(target_os = "android")]
 use punktfunk_core::client::NativeClient;
@@ -67,10 +65,6 @@ const SAMPLE_RATE: u32 = 48_000;
 /// *decoder* backlog when the USB side stalls, not stream latency. Overflow drops the oldest.
 #[cfg_attr(not(target_os = "android"), allow(dead_code))]
 const MAX_BUFFER_FRAMES: usize = (SAMPLE_RATE as usize / 1000) * 60;
-
-/// Largest Opus frame this decodes in one call: 120 ms at 48 kHz, the codec's maximum.
-#[cfg_attr(not(target_os = "android"), allow(dead_code))]
-const MAX_FRAME_SAMPLES: usize = 5760;
 
 /// How much audio to keep in flight on the USB endpoint.
 ///
@@ -133,17 +127,6 @@ pub(crate) fn clear_haptics_liveness(pad: u8) {
 /// outright. Frame arrival is the signal that tells the two cases apart, and it costs nothing.
 pub(crate) fn haptics_owns_coils(pad: u8) -> bool {
     haptics_armed(pad) && HAPTICS.live(pad)
-}
-
-// ---- decode + packet loss concealment ---------------------------------------------------------
-
-#[cfg(target_os = "android")]
-/// Per-kind decode state: a stereo 48 kHz Opus decoder, the seq-gap tracker, and the last decoded
-/// frame size, which is the unit PLC synthesises in.
-struct KindStream {
-    dec: opus::Decoder,
-    gaps: AudioGapTracker,
-    frame_samples: usize,
 }
 
 // ---- the USB sink ------------------------------------------------------------------------------
@@ -483,9 +466,9 @@ fn pump(
     playback: &mut uac_host::Playback<'_>,
 ) {
     let mut mixer = QuadMixer::<i16>::new(MAX_BUFFER_FRAMES);
-    let mut streams: [Option<KindStream>; 2] = [None, None];
+    let mut stage = PadDecode::new(haptics, speaker);
     let mut tally = Tally::new();
-    let mut pcm: Vec<i16> = Vec::with_capacity(MAX_FRAME_SAMPLES * 2);
+    let mut pcm = vec![0i16; MAX_FRAME_SAMPLES * 2];
     let mut out: Vec<i16> = Vec::with_capacity(MAX_BUFFER_FRAMES * PAD_CHANNELS);
 
     while !stop.load(Ordering::Relaxed) {
@@ -526,42 +509,21 @@ fn pump(
                 continue;
             }
 
-            // The settings gate each kind independently: haptics off but speaker on is a legitimate
-            // configuration, and the host may still be sending both.
-            let wanted = match frame.kind {
-                PAD_AUDIO_KIND_HAPTICS => haptics,
-                PAD_AUDIO_KIND_SPEAKER => speaker,
-                _ => false,
-            };
-            if !wanted {
+            // Haptics off with the speaker on is a legitimate setup, and the host may send both.
+            if !stage.wants(frame.kind) {
                 continue;
             }
 
-            // A real haptics frame is the evidence that the game is driving the coils, and therefore
-            // that wire rumble must stand down for this pad (see `haptics_owns_coils`). Stamped on
-            // arrival rather than after decode so a decoder hiccup cannot hand the coils back
-            // mid-effect; concealment never reaches here, so PLC still does not count.
-            if frame.kind == PAD_AUDIO_KIND_HAPTICS {
+            // Stamped on arrival, so a decoder hiccup cannot hand the coils back mid-effect. The
+            // sink is open for the whole pump.
+            if is_haptics_evidence(&frame, true) {
                 HAPTICS.note(pad);
             }
 
             tally.frames_in += 1;
-            let k = usize::from(frame.kind).min(1);
-            let st = match &mut streams[k] {
-                Some(s) => s,
-                slot @ None => match opus::Decoder::new(SAMPLE_RATE, opus::Channels::Stereo) {
-                    Ok(dec) => slot.insert(KindStream {
-                        dec,
-                        gaps: AudioGapTracker::default(),
-                        frame_samples: 0,
-                    }),
-                    Err(e) => {
-                        log::warn!("pad audio: no Opus decoder for kind {}: {e}", frame.kind);
-                        continue;
-                    }
-                },
-            };
-            decode_into(st, &frame, &mut pcm, &mut mixer, &mut tally);
+            if let Some(n) = stage.decode_frame(&frame, &mut pcm, &mut mixer) {
+                tally.decoded(&pcm[..n * 2]);
+            }
         }
 
         // Hand over whole frames only. `write` stages any remainder internally, so a partial
@@ -583,48 +545,6 @@ fn pump(
         stats.short_bytes,
         mixer.dropped_frames(),
     );
-}
-
-/// Conceal whatever the sequence numbers say is missing, then decode what arrived, into the
-/// mixer. An empty payload is DTX silence: the tracker has already accounted for the sequence.
-#[cfg(target_os = "android")]
-fn decode_into(
-    st: &mut KindStream,
-    frame: &punktfunk_core::quic::PadAudioFrame,
-    pcm: &mut Vec<i16>,
-    mixer: &mut QuadMixer<i16>,
-    tally: &mut Tally,
-) {
-    let missing = plc_frames(&mut st.gaps, frame.seq, st.frame_samples);
-    for _ in 0..missing {
-        pcm.resize(st.frame_samples * 2, 0);
-        match st.dec.decode(&[], pcm, false) {
-            Ok(n) => mixer.push(frame.kind, &pcm[..n * 2], Instant::now()),
-            Err(_) => break,
-        }
-    }
-    if frame.opus.is_empty() {
-        return;
-    }
-    pcm.resize(MAX_FRAME_SAMPLES * 2, 0);
-    match st.dec.decode(&frame.opus, pcm, false) {
-        Ok(n) => {
-            st.frame_samples = n;
-            tally.samples_in += n as u64;
-            // Peak of what actually decoded: distinguishes "frames arriving but silent" (a
-            // host-side routing problem) from "frames arriving with signal that is not reaching
-            // the actuators" (a problem here).
-            tally.peak = tally.peak.max(
-                pcm[..n * 2]
-                    .iter()
-                    .map(|s| i32::from(s.abs()))
-                    .max()
-                    .unwrap_or(0),
-            );
-            mixer.push(frame.kind, &pcm[..n * 2], Instant::now());
-        }
-        Err(e) => log::debug!("pad audio: opus decode failed: {e}"),
-    }
 }
 
 /// One write to the endpoint. `false` = the stream is gone. A SHORT write is back-pressure, not
@@ -701,6 +621,14 @@ impl Tally {
         );
         self.last_report = std::time::Instant::now();
         self.peak = 0;
+    }
+
+    /// Count one decoded frame and its peak. The peak tells "frames arriving but silent" (host
+    /// routing) from "signal that does not reach the actuators" (here).
+    fn decoded(&mut self, stereo: &[i16]) {
+        self.samples_in += (stereo.len() / 2) as u64;
+        let peak = stereo.iter().map(|s| i32::from(s.abs())).max();
+        self.peak = self.peak.max(peak.unwrap_or(0));
     }
 
     fn short_write(&mut self, wrote: usize, len: usize) {

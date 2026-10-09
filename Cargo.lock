@@ -3955,7 +3955,6 @@ dependencies = [
  "log",
  "ndk",
  "ndk-sys",
- "opus",
  "pf-client-core",
  "pf-client-video",
  "pf-console-ui",
