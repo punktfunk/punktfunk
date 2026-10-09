@@ -10,6 +10,7 @@ use super::link::LossDraw;
 use super::Rng;
 use crate::abr::{Driver, DriverConfig, ProbeReport};
 use crate::client::frame_channel::JumpToLive;
+use crate::quic::v2::dgram::NACK_SHORT;
 use crate::stats::Stats;
 use std::collections::VecDeque;
 use std::time::{Duration, Instant};
@@ -26,8 +27,6 @@ pub(super) const PROBE_FRAME: u32 = u32::MAX;
 /// Stall the client reports with a host pipeline rebuild. ABR only logs it;
 /// what the rebuild costs is the discarded window and the lost reference.
 const REBUILD_GAP_MS: u32 = 400;
-/// Most shards past parity a NACK asks for (`design/loss-repair-nack-ack.md` D2).
-const NACK_MAX_BEYOND: u32 = 2;
 /// The acked chain stays engaged this long after the last loss (D5).
 const ACK_HOLD_MS: u64 = 10_000;
 /// Frames back an acked reference can reach: Vulkan Video's DPB. Past it the
@@ -40,7 +39,7 @@ pub(super) enum Repair {
     /// Today: the frame is lost and the client asks until a recovery frame lands.
     #[default]
     Rfi,
-    /// A frame at most [`NACK_MAX_BEYOND`] short, on a round trip inside one
+    /// A frame at most [`NACK_SHORT`] short, on a round trip inside one
     /// frame period, gets the shards resent and completes a round trip later.
     /// Anything else falls to [`Repair::Rfi`].
     Nack,
@@ -496,7 +495,7 @@ impl Client {
         let mut skipped = false;
         if unrecoverable && !f.forced {
             match self.cfg.repair {
-                Repair::Nack if beyond <= NACK_MAX_BEYOND && rtt_ms <= period_ms => {
+                Repair::Nack if beyond <= NACK_SHORT && rtt_ms <= period_ms => {
                     unrecoverable = false;
                     repaired = lost;
                     arrived += beyond;
@@ -860,7 +859,7 @@ mod tests {
         );
     }
 
-    /// NACK closes a frame two short on a round trip inside a frame period and
+    /// NACK closes a frame eight short on a round trip inside a frame period and
     /// leaves the rest to the ask; the acked chain skips a loss once engaged.
     #[test]
     fn a_nack_closes_a_short_frame_and_the_acked_chain_skips_a_lost_one() {
@@ -884,11 +883,11 @@ mod tests {
         // 45 000 bytes at 10 %: 32 data, 4 parity. 60 Hz: a 16 ms period.
         let mut c = with(Repair::Nack);
         c.expect(&frame(1, 45_000, 10), 0);
-        c.complete(1, short(2), 10, 16);
-        assert_eq!(c.stats.frames_dropped, 0, "two past parity, resent");
-        assert_eq!(c.resent_bytes, 2 * (1408 + SHARD_WIRE_OVERHEAD));
+        c.complete(1, short(8), 10, 16);
+        assert_eq!(c.stats.frames_dropped, 0, "eight past parity, resent");
+        assert_eq!(c.resent_bytes, 8 * (1408 + SHARD_WIRE_OVERHEAD));
         assert!(!c.awaiting_idr);
-        for (beyond, rtt) in [(3, 16), (1, 17)] {
+        for (beyond, rtt) in [(9, 16), (1, 17)] {
             let mut c = with(Repair::Nack);
             c.expect(&frame(1, 45_000, 10), 0);
             c.complete(1, short(beyond), 10, rtt);

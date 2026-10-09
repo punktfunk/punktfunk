@@ -9,6 +9,7 @@
 use super::super::*;
 use super::*;
 use crate::abr::{Action, DriverConfig, ProbeReport};
+use crate::quic::v2::dgram::NACK_SHORT;
 
 /// Data-plane pump on a blocking thread. `try_send` drops the newest frame
 /// when the embedder lags. [`FLAG_PROBE`] filler goes to the probe accumulator,
@@ -63,10 +64,6 @@ pub(super) struct DataPump {
     /// confirmed, so the next frame skips a lost one and its tail asks nothing.
     pub(super) on_anchors: bool,
 }
-
-/// Most shards past its parity a frame may lack and still ask for them; more is
-/// congestion, which a resend would feed.
-const NACK_SHORT: u32 = 2;
 
 /// Closed windows held for an embedder that has not read them. Forty-eight
 /// seconds at the report cadence: enough that a client polling once a second
@@ -660,16 +657,15 @@ impl DataPump {
     /// encode is the anchor. A frame at most [`NACK_SHORT`] shards past its parity, on a
     /// round trip inside a frame interval, asks for its missing shards instead, and the
     /// frames after it wait for them. One that completed meanwhile asks nothing. The decode
-    /// side's gap still arms the freeze. All-intra frames reference nothing, and a stream
-    /// nobody decodes yet starts on an IDR: neither asks.
+    /// side's gap still arms the freeze. An all-intra frame references nothing, so it asks
+    /// only for its shards: the next frame is its recovery. A stream nobody decodes yet
+    /// starts on an IDR and asks nothing.
     fn ask_for_short_tails(&mut self) {
         let tails: Vec<u32> = self.session.take_short_tails().collect();
-        if tails.is_empty()
-            || self.negotiated_codec == crate::quic::CODEC_PYROWAVE
-            || !self.shared.frames.consumer_seen()
-        {
+        if tails.is_empty() || !self.shared.frames.consumer_seen() {
             return;
         }
+        let all_intra = self.negotiated_codec == crate::quic::CODEC_PYROWAVE;
         let now = Instant::now();
         for idx in tails {
             if !self.session.frame_in_flight(idx) {
@@ -685,7 +681,7 @@ impl DataPump {
                     continue;
                 }
             }
-            if self.on_anchors {
+            if self.on_anchors || all_intra {
                 continue;
             }
             let ask = self.shared.rfi.lock().unwrap().tail_short(idx, now);
@@ -1055,25 +1051,30 @@ mod tests {
 
     /// Frames short of their parity on a round trip inside a frame interval ask for their
     /// missing shards, and the host's resend completes them in order: every 50th frame loses
-    /// three data shards, every frame arrives, none is dropped, no RFI goes out. Six lost is
-    /// congestion: an RFI, as without NACK. A frame that completed before its tail was read
-    /// asks nothing.
+    /// sixteen data shards, eight past its parity; every frame arrives, none is dropped, no
+    /// RFI goes out. Nine past is congestion: an RFI, as without NACK. A PyroWave frame asks
+    /// for its shards the same way. A frame that completed before its tail was read asks
+    /// nothing.
     #[test]
     fn short_frames_ask_for_their_shards_and_complete_in_order() {
+        use crate::quic::{CODEC_HEVC, CODEC_PYROWAVE};
         use crate::transport::Transport;
         let mode = crate::config::Mode {
             width: 1920,
             height: 1080,
             refresh_hz: 60,
         };
-        for (lost, expect_rfi) in [(3usize, false), (6, true)] {
+        for (codec, lost, expect_rfi) in [
+            (CODEC_HEVC, 16usize, false),
+            (CODEC_HEVC, 17, true),
+            (CODEC_PYROWAVE, 16, false),
+        ] {
             let origin = crate::quic::wall_clock_ns();
             let (host_tp, session) = idle_client_session(origin);
             let shared = Arc::new(ClientShared::new(mode));
             let _ = shared.frames.pop(Duration::ZERO); // a decoder is attached
             shared.rtt_us.store(10_000, Ordering::Relaxed);
-            let (mut pump, _ctrl_rx, fb_rx) =
-                test_pump(session, shared.clone(), crate::quic::CODEC_HEVC);
+            let (mut pump, _ctrl_rx, fb_rx) = test_pump(session, shared.clone(), codec);
             pump.nack = true;
             let pump_thread = std::thread::spawn(move || pump.run());
 
@@ -1085,8 +1086,8 @@ mod tests {
             )
             .unwrap();
             host.tap_plaintext(true);
-            // 8 KiB in 1 KiB shards: one block of 8 data and 2 parity, in wire order.
-            let frame = vec![7u8; 8 * 1024];
+            // 32 KiB in 1 KiB shards: one block of 32 data and 8 parity, in wire order.
+            let frame = vec![7u8; 32 * 1024];
             let (mut nacks, mut rfis, mut got) = (0, 0, Vec::new());
             for i in 0..100u32 {
                 let wires = host
@@ -1129,8 +1130,9 @@ mod tests {
                     "{lost} lost: {rfis} RFIs, {nacks} NACKs"
                 );
             } else {
-                assert_eq!(got, (0..100).collect::<Vec<u32>>(), "every frame, in order");
-                assert_eq!((nacks > 0, rfis), (true, 0));
+                let all = (0..100).collect::<Vec<u32>>();
+                assert_eq!(got, all, "codec {codec}: every frame, in order");
+                assert_eq!((nacks > 0, rfis), (true, 0), "codec {codec}");
                 assert_eq!(shared.frames_dropped.load(Ordering::Relaxed), 0);
             }
         }
