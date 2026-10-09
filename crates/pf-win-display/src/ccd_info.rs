@@ -1,5 +1,5 @@
-//! Typed `DisplayConfigGetDeviceInfo` / `DisplayConfigSetDeviceInfo` packets: one builder and
-//! one SAFETY proof behind every per-target read and the advanced-colour write.
+//! Typed `DisplayConfigGetDeviceInfo` / `DisplayConfigSetDeviceInfo` packets: one builder, one
+//! SAFETY proof behind every per-target read ([`get`]) and one behind every write ([`set`]).
 
 use std::mem::size_of;
 
@@ -108,6 +108,16 @@ fn get<T: Packet>(adapter: LUID, id: u32) -> Option<T> {
     (rc == 0).then_some(p)
 }
 
+/// Write `p` to the target its header names. The raw `DisplayConfigSetDeviceInfo` result: 0 is
+/// success.
+fn set<T: Packet>(mut p: T) -> i32 {
+    p.header().size = size_of::<T>() as u32;
+    // SAFETY: `header.size` is `size_of::<T>()` (stamped above) and the pointer covers the whole
+    // local packet (`Packet`: the header is its first field), so the OS reads only inside it.
+    // The local outlives this synchronous call, which retains nothing.
+    unsafe { DisplayConfigSetDeviceInfo((&p as *const T).cast()) }
+}
+
 /// A NUL-terminated UTF-16 field as a `String`, up to the first NUL.
 pub(crate) fn utf16z(buf: &[u16]) -> String {
     let len = buf.iter().position(|&c| c == 0).unwrap_or(buf.len());
@@ -154,9 +164,7 @@ pub(crate) fn advanced_color_info2(adapter: LUID, target_id: u32) -> Option<Adva
 pub(crate) fn set_wcg_state(adapter: LUID, target_id: u32, enable: bool) -> i32 {
     let mut s = packet::<SetWcgState>(adapter, target_id);
     s.value = enable as u32;
-    // SAFETY: as `set_advanced_color_state` — the OS reads this packet's own size behind its
-    // header and retains nothing.
-    unsafe { DisplayConfigSetDeviceInfo((&s as *const SetWcgState).cast()) }
+    set(s)
 }
 
 /// The target's SDR white level (1000 = 80 nits); `None` when unreported.
@@ -170,11 +178,7 @@ pub(crate) fn sdr_white_level(adapter: LUID, target_id: u32) -> Option<u32> {
 /// result: 0 is success.
 pub(crate) fn set_advanced_color_state(adapter: LUID, target_id: u32, enable: bool) -> i32 {
     let mut s = packet::<DISPLAYCONFIG_SET_ADVANCED_COLOR_STATE>(adapter, target_id);
-    // Bit 0 is `enableAdvancedColor`.
+    // Bit 0 of the union is `enableAdvancedColor`.
     s.Anonymous.value = enable as u32;
-    // SAFETY: `header.size` is this packet's size and the pointer covers the whole local
-    // (`Packet`: the header is its first field); the OS reads that many bytes and retains nothing.
-    unsafe {
-        DisplayConfigSetDeviceInfo((&s as *const DISPLAYCONFIG_SET_ADVANCED_COLOR_STATE).cast())
-    }
+    set(s)
 }
