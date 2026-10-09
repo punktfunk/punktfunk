@@ -484,24 +484,20 @@ pub enum VhciVerdict {
     ModuleMissing,
     /// Node present; this process cannot write it. Why is the host's question.
     NotWritable { path: String },
-    /// Virtual-Deck-over-usbip does not apply here.
+    /// No pad attaches over USB/IP on this OS.
     Inapplicable { why: &'static str },
 }
 
-/// Probe the vhci attach node for the virtual Deck: its gate on, module present, writable
-/// by this process.
+/// Probe the vhci attach node for the USB/IP pads: module present, writable by this process.
 ///
+/// Probed whatever the Deck, SC2 and DualSense gates say: a client can always ask for a
+/// Switch 2 pad, which has no other USB transport.
 /// Writability is what attach will attempt. `60-punktfunk.rules` `chgrp punktfunk` +
 /// `chmod 0660`, so only a process that actually carries the group gets `W_OK`.
 #[cfg(target_os = "linux")]
 pub fn vhci_probe() -> VhciVerdict {
     use std::os::unix::ffi::OsStrExt;
 
-    if !steam_usbip::usbip_preferred() {
-        return VhciVerdict::Inapplicable {
-            why: "the virtual Steam Deck's usbip transport is disabled (PUNKTFUNK_STEAM_USBIP=0)",
-        };
-    }
     let Some(base) = usbip::vhci_base() else {
         return VhciVerdict::ModuleMissing;
     };
@@ -527,7 +523,7 @@ pub fn vhci_probe() -> VhciVerdict {
 #[cfg(not(target_os = "linux"))]
 pub fn vhci_probe() -> VhciVerdict {
     VhciVerdict::Inapplicable {
-        why: "the virtual Steam Deck's usbip transport is Linux-only",
+        why: "USB/IP pads are a Linux feature.",
     }
 }
 
