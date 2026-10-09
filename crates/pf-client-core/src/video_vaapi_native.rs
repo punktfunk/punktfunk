@@ -49,15 +49,17 @@ pub(crate) const DECODER_PIN: &str = "native-vaapi";
 use pf_libva::Display;
 use pf_libva::Libva;
 use pf_libva::VaBufferId;
+use pf_libva::VaConfigAttrib;
 use pf_libva::VaConfigId;
 use pf_libva::VaContextId;
 use pf_libva::VaGenericValue;
 use pf_libva::VaSurfaceAttrib;
 use pf_libva::VaSurfaceId;
 use pf_libva::VA_INVALID_ID;
-use pf_libva::VA_PROGRESSIVE;
 use pf_libva::VA_SURFACE_ATTRIB_PIXEL_FORMAT;
 use pf_libva::VA_SURFACE_ATTRIB_SETTABLE;
+use pf_vaapi::config::VA_CONFIG_ATTRIB_RT_FORMAT;
+use pf_vaapi::config::VA_SURFACE_ATTRIB_MEM_TYPE_DRM_PRIME_2;
 
 /// Anything that sizes or configures a session. A change rebuilds the whole
 /// thing — a half-rebuilt session hands out surfaces the pool does not have.
@@ -223,6 +225,8 @@ impl Session {
         }
     }
 
+    /// An error destroys everything made here: the display is shared and outlives
+    /// a refused session.
     fn build(d: &Display, codec: pf_vaapi::Codec, shape: StreamShape) -> Result<Session> {
         let profile = pf_vaapi::profile_for(codec, shape.chroma_format_idc, shape.bit_depth)
             .map_err(|e| anyhow!("{e}"))?;
@@ -237,132 +241,74 @@ impl Session {
 
         // Named rather than default: on Main 10 the driver default is 8-bit, and
         // writing 10-bit samples into an 8-bit surface is silent narrowing.
-        let mut attrib = VaConfigAttrib {
+        let rt = VaConfigAttrib {
             kind: VA_CONFIG_ATTRIB_RT_FORMAT,
             value: rt_format,
         };
-        let mut config: VaConfigId = VA_INVALID_ID;
-        // SAFETY: a live display; `attrib` and `config` are locals that outlive the
-        // call, and the count matches the slice length.
-        d.va.check("vaCreateConfig", unsafe {
-            (d.va.create_config)(
+        let config = d.create_config(profile.value, pf_vaapi::VA_ENTRYPOINT_VLD, &[rt])?;
+
+        let count = pf_vaapi::surface_count(shape.max_dpb_frames);
+        let mut surfaces: Vec<VaSurfaceId> = vec![VA_INVALID_ID; count];
+        let mut pixel = VaSurfaceAttrib {
+            kind: VA_SURFACE_ATTRIB_PIXEL_FORMAT,
+            flags: VA_SURFACE_ATTRIB_SETTABLE,
+            // Integer arm is i32; every fourcc here has the top bit clear.
+            value: VaGenericValue::integer(fourcc as i32),
+        };
+        // Coded size: a display-sized pool is short by granule padding and smears rows.
+        // SAFETY: live display; the surface array and the attribute outlive the
+        // call and the counts match their lengths.
+        d.va.check("vaCreateSurfaces", unsafe {
+            (d.va.create_surfaces)(
                 d.display,
-                profile.value,
-                pf_vaapi::VA_ENTRYPOINT_VLD as c_int,
-                (&mut attrib as *mut VaConfigAttrib).cast::<c_void>(),
+                rt_format,
+                shape.coded_width,
+                shape.coded_height,
+                surfaces.as_mut_ptr(),
+                count as c_uint,
+                &mut pixel,
                 1,
-                &mut config,
             )
         })?;
-
-        // Every early return must destroy what was created; one closure, one unwind.
-        let built = (|| -> Result<Session> {
-            let count = pf_vaapi::surface_count(shape.max_dpb_frames);
-            let mut surfaces: Vec<VaSurfaceId> = vec![VA_INVALID_ID; count];
-            let mut pixel = VaSurfaceAttrib {
-                kind: VA_SURFACE_ATTRIB_PIXEL_FORMAT,
-                flags: VA_SURFACE_ATTRIB_SETTABLE,
-                // Integer arm is i32; every fourcc here has the top bit clear.
-                value: VaGenericValue::integer(fourcc as i32),
-            };
-            // Coded size: a display-sized pool is short by granule padding and smears rows.
-            // SAFETY: live display; the surface array and the attribute outlive the
-            // call and the counts match their lengths.
-            d.va.check("vaCreateSurfaces", unsafe {
-                (d.va.create_surfaces)(
-                    d.display,
-                    rt_format,
-                    shape.coded_width,
-                    shape.coded_height,
-                    surfaces.as_mut_ptr(),
-                    count as c_uint,
-                    &mut pixel,
-                    1,
-                )
-            })?;
-
-            let mut context: VaContextId = VA_INVALID_ID;
-            // SAFETY: live display and the config/surfaces just created; `context` is
-            // a local that outlives the call. libva copies the surface array.
-            let status = unsafe {
-                (d.va.create_context)(
-                    d.display,
-                    config,
-                    shape.coded_width as c_int,
-                    shape.coded_height as c_int,
-                    VA_PROGRESSIVE as c_int,
-                    surfaces.as_mut_ptr(),
-                    count as c_int,
-                    &mut context,
-                )
-            };
-            if let Err(e) = d.va.check("vaCreateContext", status) {
-                // SAFETY: destroying the surfaces this closure just created, on the
-                // unwind path, before they are moved into a Session.
+        let (width, height) = (shape.coded_width, shape.coded_height);
+        let context = match d.create_context(config.id(), width, height, &mut surfaces) {
+            Ok(context) => context,
+            Err(e) => {
+                // SAFETY: the surfaces created above, destroyed once; no Session has them.
                 unsafe {
-                    (d.va.destroy_surfaces)(
-                        d.display,
-                        surfaces.as_mut_ptr(),
-                        surfaces.len() as c_int,
-                    )
+                    (d.va.destroy_surfaces)(d.display, surfaces.as_mut_ptr(), count as c_int)
                 };
                 return Err(e);
             }
+        };
 
-            let slots = pf_vaapi::SlotMap::new(shape.max_dpb_frames);
-            let slot_count = slots.capacity();
-            tracing::info!(
-                node = %d.path,
-                va = format_args!("{}.{}", d.version.0, d.version.1),
-                profile = profile.name,
-                coded = format_args!("{}x{}", shape.coded_width, shape.coded_height),
-                display = format_args!("{}x{}", shape.display_width, shape.display_height),
-                bit_depth = shape.bit_depth,
-                surfaces = count,
-                dpb_slots = slot_count,
-                "native VAAPI decode session built"
-            );
-            Ok(Session {
-                shape,
-                config,
-                context,
-                surfaces,
-                held: vec![false; count],
-                slot_surface: vec![None; slot_count],
-                pending: Vec::new(),
-                slots,
-                fourcc,
-                generation: 0,
-            })
-        })();
-        if built.is_err() {
-            // SAFETY: destroying the config created above, on the unwind path; no
-            // Session took ownership of it.
-            unsafe { (d.va.destroy_config)(d.display, config) };
-        }
-        built
+        let slots = pf_vaapi::SlotMap::new(shape.max_dpb_frames);
+        let slot_count = slots.capacity();
+        tracing::info!(
+            node = %d.path,
+            va = format_args!("{}.{}", d.version.0, d.version.1),
+            profile = profile.name,
+            coded = format_args!("{}x{}", shape.coded_width, shape.coded_height),
+            display = format_args!("{}x{}", shape.display_width, shape.display_height),
+            bit_depth = shape.bit_depth,
+            surfaces = count,
+            dpb_slots = slot_count,
+            "native VAAPI decode session built"
+        );
+        Ok(Session {
+            shape,
+            config: config.keep(),
+            context: context.keep(),
+            surfaces,
+            held: vec![false; count],
+            slot_surface: vec![None; slot_count],
+            pending: Vec::new(),
+            slots,
+            fourcc,
+            generation: 0,
+        })
     }
 }
-
-/// 8 bytes, `{type, value}` at 0 and 4 (`pf-vaapi/layout-probe.c`).
-#[repr(C)]
-#[derive(Clone, Copy)]
-struct VaConfigAttrib {
-    kind: c_int,
-    value: c_uint,
-}
-
-/// Measured. 0 is a real enumerator, not "left unset".
-const VA_CONFIG_ATTRIB_RT_FORMAT: c_int = 0;
-
-/// Yields [`pf_vaapi::VaDrmPrimeSurfaceDescriptor`]. The older `DRM_PRIME`
-/// (0x2000_0000) hands back a different, smaller structure.
-const VA_SURFACE_ATTRIB_MEM_TYPE_DRM_PRIME_2: c_uint = 0x4000_0000;
-
-const _: () = {
-    assert!(size_of::<VaConfigAttrib>() == 8);
-    assert!(std::mem::offset_of!(VaConfigAttrib, value) == 4);
-};
 
 /// Carry-over bound: the DPB's own depth. A bump can leave at most that many
 /// frames behind the one that ships now. The queue inherits the DPB claim

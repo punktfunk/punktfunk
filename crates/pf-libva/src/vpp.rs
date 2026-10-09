@@ -5,8 +5,7 @@
 //! at the session's size is encoded as imported instead (`Encoder::submit_dmabuf`).
 //! A larger source — a mirrored head — is scaled down on the same pass.
 
-use std::os::raw::c_int;
-
+use anyhow::Context as _;
 use anyhow::Result;
 use pf_vaapi::vpp::VaProcPipelineParameterBuffer;
 use pf_vaapi::vpp::VaRectangle;
@@ -19,8 +18,6 @@ use crate::Display;
 use crate::VaConfigId;
 use crate::VaContextId;
 use crate::VaSurfaceId;
-use crate::VA_INVALID_ID;
-use crate::VA_PROGRESSIVE;
 
 pub struct Vpp {
     config: VaConfigId,
@@ -33,43 +30,17 @@ pub struct Vpp {
 
 impl Vpp {
     /// Open a VideoProc context on `display` writing `width`×`height` visible pictures.
+    /// No render targets are pinned: the target is named per picture.
     pub fn new(display: &Display, width: u32, height: u32) -> Result<Self> {
-        let mut config = VA_INVALID_ID;
-        // SAFETY: live display; no attributes, so the null and the zero count agree;
-        // `config` is a local written through.
-        display.va.check("vaCreateConfig(VideoProc)", unsafe {
-            (display.va.create_config)(
-                display.display,
-                VA_PROFILE_NONE,
-                VA_ENTRYPOINT_VIDEO_PROC,
-                std::ptr::null_mut(),
-                0,
-                &mut config,
-            )
-        })?;
-        let mut context = VA_INVALID_ID;
-        // SAFETY: `config` was just created on this display. No render targets are
-        // pinned — the target is named per picture — so the null and zero agree.
-        let status = unsafe {
-            (display.va.create_context)(
-                display.display,
-                config,
-                width as c_int,
-                height as c_int,
-                VA_PROGRESSIVE as c_int,
-                std::ptr::null_mut(),
-                0,
-                &mut context,
-            )
-        };
-        if let Err(e) = display.va.check("vaCreateContext(VideoProc)", status) {
-            // SAFETY: the config created above, destroyed once.
-            unsafe { (display.va.destroy_config)(display.display, config) };
-            return Err(e);
-        }
+        let config = display
+            .create_config(VA_PROFILE_NONE, VA_ENTRYPOINT_VIDEO_PROC, &[])
+            .context("VideoProc")?;
+        let context = display
+            .create_context(config.id(), width, height, &mut [])
+            .context("VideoProc")?;
         Ok(Self {
-            config,
-            context,
+            context: context.keep(),
+            config: config.keep(),
             width,
             height,
             crop: None,
