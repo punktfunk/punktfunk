@@ -176,7 +176,8 @@ pub fn serialize_xbox_state(s: &XboxState) -> [u8; XBOX_REPORT_LEN] {
     r
 }
 
-/// At-rest pose. Must match the driver's `XBOX_NEUTRAL_REPORT` (see `neutral_matches_a_zeroed_state`).
+/// At-rest pose: the first [`XBOX_REPORT_LEN`] bytes of
+/// [`pf_driver_proto::xbox::NEUTRAL_REPORT`], which the driver serves before the first frame.
 pub fn neutral_xbox_report() -> [u8; XBOX_REPORT_LEN] {
     serialize_xbox_state(&XboxState::default())
 }
@@ -453,19 +454,10 @@ mod tests {
     }
 
     #[test]
-    fn neutral_matches_a_zeroed_state() {
+    fn neutral_is_the_drivers_neutral_report() {
         assert_eq!(
             neutral_xbox_report(),
-            serialize_xbox_state(&XboxState::default())
+            pf_driver_proto::xbox::NEUTRAL_REPORT[..XBOX_REPORT_LEN]
         );
-        let r = neutral_xbox_report();
-        assert_eq!(r[13], 0, "hat NULL");
-        assert_eq!(r[14..], [0, 0, 0], "no buttons, no Share");
-        // Must match the driver's `XBOX_NEUTRAL_REPORT`; a drift is a different at-rest pose before the first frame.
-        assert_eq!(r[0], 0x01);
-        assert_eq!([r[1], r[2]], [0x00, 0x80], "LX = 0x8000");
-        assert_eq!([r[3], r[4]], [0xFF, 0x7F], "LY = 0x7FFF (inverted centre)");
-        assert_eq!([r[5], r[6]], [0x00, 0x80], "RX = 0x8000");
-        assert_eq!([r[7], r[8]], [0xFF, 0x7F], "RY = 0x7FFF (inverted centre)");
     }
 }

@@ -433,7 +433,7 @@ mod tests {
     /// its buffers from the descriptor, and SDL enables gyro only for a 34-byte report.
     #[test]
     fn descriptor_declares_the_report_sizes() {
-        use crate::rdesc_walk::{payload_len, FEATURE, INPUT, OUTPUT};
+        use pf_driver_proto::rdesc::{report_lens, FEATURE, INPUT, OUTPUT};
         for m in [Model::Ultimate2, Model::Pro2, Model::Pro3] {
             let d = m.rdesc();
             assert_eq!(
@@ -441,14 +441,15 @@ mod tests {
                 [0x05, 0x01, 0x09, 0x05, 0xA1, 0x01],
                 "Game Pad collection"
             );
-            assert_eq!(payload_len(d, INPUT, REPORT_ID) + 1, REPORT_LEN);
-            assert_eq!(payload_len(d, OUTPUT, RUMBLE_ID), 4);
+            let lens = report_lens(d);
+            assert_eq!(lens[&(INPUT, REPORT_ID)], REPORT_LEN);
+            assert_eq!(lens[&(OUTPUT, RUMBLE_ID)], 5);
         }
-        let caps = payload_len(Model::Pro2.rdesc(), FEATURE, FEATURE_CAPS);
-        assert_eq!(caps + 1, caps_reply(Model::Pro2.devtype(), 0).len());
+        let caps = report_lens(Model::Pro2.rdesc())[&(FEATURE, FEATURE_CAPS)];
+        assert_eq!(caps, caps_reply(Model::Pro2.devtype(), 0).len());
         assert_eq!(
-            payload_len(Model::Ultimate2.rdesc(), FEATURE, FEATURE_CAPS),
-            0
+            report_lens(Model::Ultimate2.rdesc()).get(&(FEATURE, FEATURE_CAPS)),
+            None
         );
     }
 }

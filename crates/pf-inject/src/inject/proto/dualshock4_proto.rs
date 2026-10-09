@@ -126,6 +126,25 @@ mod tests {
     use super::*;
     use crate::dualsense_proto::Touch;
 
+    /// The driver serves these until the host writes: a still pad with no trigger effect,
+    /// accel zero, through each Sony encoder.
+    #[test]
+    fn the_drivers_neutral_reports_are_a_still_pad() {
+        use crate::dualsense_proto as ds;
+        let still = DsState {
+            accel: [0; 3],
+            ..DsState::neutral()
+        };
+        let mut r = [0u8; ds::DS_INPUT_REPORT_LEN];
+        ds::serialize_state(&mut r, &still, 0, 0);
+        ds::DsTriggers::default().stamp(&mut r, 0, 0);
+        assert_eq!(r, pf_driver_proto::dualsense::NEUTRAL_REPORT);
+
+        let mut r = [0u8; DS4_INPUT_REPORT_LEN];
+        serialize_state(&mut r, &still, 0, 0);
+        assert_eq!(r, pf_driver_proto::dualshock4::NEUTRAL_REPORT);
+    }
+
     /// A contact past the pad clamps to the DS4 extent (1919 × 941), not the DualSense one.
     #[test]
     fn touch_clamps_to_the_ds4_extent() {

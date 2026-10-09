@@ -578,13 +578,10 @@ pub fn deck_serial(index: u8) -> String {
     pf_driver_proto::gamepad::pad_serial(pf_driver_proto::gamepad::DEVTYPE_STEAMDECK, index)
 }
 
-/// Header only (controls released). Real-USB transports stream this until the first [`serialize_deck_state`].
+/// Header only (controls released), as the Windows driver serves it. Real-USB transports
+/// stream this until the first [`serialize_deck_state`].
 pub fn neutral_deck_report() -> [u8; STEAM_REPORT_LEN] {
-    let mut r = [0u8; STEAM_REPORT_LEN];
-    r[0] = 0x01;
-    r[2] = ID_CONTROLLER_DECK_STATE;
-    r[3] = DECK_STATE_LEN;
-    r
+    pf_driver_proto::deck::NEUTRAL_REPORT
 }
 
 /// HID feature GET_REPORT for the real-USB Deck (gadget + usbip). Serving the real `0x83` blob

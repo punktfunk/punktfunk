@@ -784,10 +784,6 @@ mod pad_shm_ring;
 /// everywhere or nowhere.
 #[path = "inject/pad_slots.rs"]
 pub mod pad_slots;
-/// Report-descriptor walk for the codec tests.
-#[cfg(test)]
-#[path = "inject/proto/rdesc_walk.rs"]
-mod rdesc_walk;
 /// Per-seat device visibility ([`seat_dev::SeatDev`]): the symlinks a sandboxed seat's Steam
 /// resolves its pads through, and the host-wide lock every create takes.
 ///

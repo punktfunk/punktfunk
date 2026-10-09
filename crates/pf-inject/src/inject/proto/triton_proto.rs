@@ -346,6 +346,22 @@ pub fn identity_for(slot: u8) -> Option<std::sync::Arc<Sc2Identity>> {
 mod tests {
     use super::*;
 
+    /// A still pad's typed fallback is the idle `0x42` the driver serves, at the length the
+    /// descriptor declares.
+    #[test]
+    fn a_still_pad_is_the_drivers_neutral_report() {
+        let mut s = [0u8; TRITON_STATE_LEN];
+        serialize_triton_state(&mut s, &TritonState::neutral(), 0);
+        assert_eq!(
+            s[..],
+            pf_driver_proto::triton::NEUTRAL_REPORT[..TRITON_STATE_LEN]
+        );
+        assert_eq!(
+            pf_driver_proto::triton::input_len(0x42),
+            Some(TRITON_STATE_LEN)
+        );
+    }
+
     /// A raw report goes out as-is and leaves the synth sequence alone; the typed fallback
     /// bumps it.
     #[test]
