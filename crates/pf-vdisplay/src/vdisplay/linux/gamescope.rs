@@ -1182,7 +1182,14 @@ fn launch_session(client: &str, unit_name: &str, mode: Mode, hdr: bool) -> Resul
             );
         }
         // Wrapper SIGKILLs a gamescope that missed its 5 s handshake; no Restart=. Don't wait on a corpse.
-        if !unit_starting_or_active(unit_name) {
+        // Unknown and `deactivating` count as alive, so a hiccup cannot start a relaunch storm.
+        let alive = unit_state(unit_name).is_none_or(|s| {
+            matches!(
+                s.as_str(),
+                "active" | "activating" | "reloading" | "deactivating"
+            )
+        });
+        if !alive {
             tracing::warn!(
                 unit = unit_name,
                 "gamescope session: transient unit died (missed the wrapper's 5 s gamescope \
@@ -1238,32 +1245,15 @@ fn session_unit_args(
     args
 }
 
-/// Unknown reports `true` so a hiccup cannot trigger a relaunch storm. Timeout is that same answer.
-fn unit_starting_or_active(unit: &str) -> bool {
-    let Ok(out) = crate::proc::output_within(
-        Command::new("systemctl").args(["--user", "is-active", unit]),
-        UNIT_STATE_BUDGET,
-    ) else {
-        return true;
-    };
-    matches!(
-        String::from_utf8_lossy(&out.stdout).trim(),
-        "active" | "activating" | "reloading" | "deactivating"
-    )
-}
-
-/// [`unit_starting_or_active`]'s opposite bias: unknown and timeout report `false`.
-fn unit_known_active(unit: &str) -> bool {
-    crate::proc::output_within(
+/// `systemctl --user is-active`'s word for `unit`; `None` when the manager did not answer in
+/// budget. Each caller picks how an unknown state and `deactivating` read.
+fn unit_state(unit: &str) -> Option<String> {
+    let out = crate::proc::output_within(
         Command::new("systemctl").args(["--user", "is-active", unit]),
         UNIT_STATE_BUDGET,
     )
-    .is_ok_and(|out| {
-        matches!(
-            String::from_utf8_lossy(&out.stdout).trim(),
-            "active" | "activating" | "reloading"
-        )
-    })
+    .ok()?;
+    Some(String::from_utf8_lossy(&out.stdout).trim().to_string())
 }
 
 fn stop_session(unit_name: &str) {

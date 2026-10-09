@@ -290,7 +290,11 @@ pub fn restore_takeover_on_startup() {
     let record = read_takeover_record();
     // A fresh host owns no session unit. One left running holds Steam with nothing to stop it, and
     // reads as the box's own session to the hand-back check below.
-    if !record.as_ref().is_some_and(|s| s.managed_session) && unit_known_active(SESSION_UNIT) {
+    // Unknown and `deactivating` read as not running.
+    if !record.as_ref().is_some_and(|s| s.managed_session)
+        && unit_state(SESSION_UNIT)
+            .is_some_and(|s| matches!(s.as_str(), "active" | "activating" | "reloading"))
+    {
         tracing::warn!(
             "gamescope: stopping a managed session a previous host instance left running"
         );
