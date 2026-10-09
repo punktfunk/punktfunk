@@ -107,6 +107,9 @@ pub mod shortcuts;
 // DualSense voice-coil + speaker on the pad's 4-ch device (0xD1 plane): correlation, per-session renderer, tier-A registry the gamepad worker feeds.
 #[cfg(desktop)]
 pub mod pad_audio;
+// One bounded PipeWire registry query, for the device pickers and the pad-audio graph walks.
+#[cfg(all(desktop, target_os = "linux"))]
+mod pw_oneshot;
 // Raw HID beside an SDL slot: Steam Controller 2 passthrough, the descriptor log, the DualSense Bluetooth audio writer.
 #[cfg(desktop)]
 mod sc2_capture;

@@ -1,6 +1,9 @@
 //! A short-lived PipeWire connection for one registry query on the calling thread: connect,
 //! run sync [`rounds`](OneShot::round), drop. All rounds share one deadline, and a core error
 //! ends the query, so a sick-but-connected daemon never wedges the caller.
+//!
+//! Twin of pf-client-core's `pw_oneshot.rs`, which copies this file because clients never link
+//! host crates. A fix to one belongs in both.
 
 use anyhow::{anyhow, bail, Context, Result};
 use pipewire as pw;
