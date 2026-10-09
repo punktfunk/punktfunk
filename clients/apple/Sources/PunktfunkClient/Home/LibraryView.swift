@@ -997,81 +997,32 @@ struct LibraryView: View {
         // doesn't gate it — cached posters render with the host still down.
         artLoader = LibraryArtLoader(target)
 
-        // Show the catalog we already have BEFORE talking to the host. A library is the screen a
-        // player uses to decide what to play, and an empty one while a sleeping box boots is the
-        // opposite of useful — so the last-known titles go up immediately, marked as remembered,
-        // and are replaced the moment the host answers.
-        if let cached = await LibraryCache.shared?.load(hostID: current.id.uuidString) {
-            games = cached.games.launchersFirst
-            servedFromCacheAt = cached.fetchedAt
-            Self.shown[current.id.uuidString] = games
-        }
-        // ...and wake the box while the player is still choosing. Waking has always been bound to
-        // CONNECTING, which is too late to help: by then they have picked a title and are waiting
-        // out a cold boot. Opening the library is the earliest honest signal that someone intends
-        // to play.
-        //
-        // Sent up front and unconditionally rather than only when the host looks offline — the
-        // same shape as the client core's own `orchestrate` path, and for the same reason: a magic
-        // packet is a single fire-and-forget datagram that an already-awake machine ignores, so
-        // waiting to find out whether it is needed costs more than sending it.
-        let waking = !current.wakeMacs.isEmpty && PunktfunkConnection.wakeOnLANAvailable
-        if waking {
-            let (macs, address) = (current.wakeMacs, current.address)
-            DispatchQueue.global(qos: .userInitiated).async { // blocking sends — off main
-                PunktfunkConnection.wakeOnLAN(macs: macs, lastKnownIP: address)
-            }
-        }
-
-        // A woken box takes 20–60 s to answer, so one attempt would almost always land on a host
-        // that is still POSTing. Retry across that window when we sent a packet; without one, ask
-        // exactly once and report what happened, as before.
-        let attempts = waking ? 12 : 1
-        for attempt in 0..<attempts {
-            if Task.isCancelled { break }
-            do {
-                // `launchersFirst` groups launcher entries ahead of titles once, here, so the grid
-                // inherits the D4 ordering.
-                let fetched = try await LibraryClient.fetch(target).launchersFirst
+        // The last-known titles go up before the host is asked, marked as remembered, and the
+        // box is woken while the player is still choosing: opening the library is the earliest
+        // honest signal that someone intends to play.
+        let hostID = current.id.uuidString
+        let events = LibraryLoad.run(target: target, hostID: hostID, wakeMacs: current.wakeMacs)
+        for await event in events {
+            switch event {
+            case .cached(let cached):
+                games = cached.games
+                servedFromCacheAt = cached.fetchedAt
+                Self.shown[hostID] = games
+            case .waking:
+                break
+            case .fetched(let fetched):
                 games = fetched
                 servedFromCacheAt = nil
                 errorText = nil
-                await LibraryCache.shared?.store(fetched, hostID: current.id.uuidString)
-                Self.shown[current.id.uuidString] = games
-                break
-            } catch {
-                // Anything other than "can't reach it" is settled — a rejected certificate does not
-                // become acceptable by waiting, and retrying an unpaired host twelve times just
-                // delays telling the user what is actually wrong.
-                let unreachable: Bool
-                if case .unreachable = error as? LibraryError { unreachable = true } else {
-                    unreachable = false
-                }
-                let more = unreachable && attempt + 1 < attempts
-                if !more {
-                    // A cached catalog outranks the error: the titles on screen are still the right
-                    // ones to choose from, and replacing them with a red message because the host
-                    // is asleep is precisely what this cache exists to prevent. The staleness note
-                    // carries the situation instead.
-                    if games.isEmpty {
-                        // `LibraryError` reports a phrase; this state has no title of its
-                        // own, so it supplies the frame the console shells get for free.
-                        let why = (error as? LibraryError)?.errorDescription
-                            ?? error.localizedDescription
-                        errorText = "Couldn't load the library — \(why)"
-                    }
-                    break
-                }
-                try? await Task.sleep(nanoseconds: 5 * NSEC_PER_SEC)
+                Self.shown[hostID] = games
+            case .failed(let error, _):
+                // Titles on screen outrank the error; the staleness note carries the situation.
+                if games.isEmpty { errorText = LibraryLoad.failure(error) }
+            case .status(let up, let downloads, let grants):
+                applyStatus((up, downloads, grants), for: current)
+                loading = false
             }
         }
-        // Left mid-load: the next appearance loads again, so ask the host nothing more.
-        if Task.isCancelled { return }
-
-        // What's up on the host right now — never fatal, and deliberately after the catalog so a
-        // slow `/status` can't hold the titles back.
-        applyStatus(await LibraryClient.status(target), for: current)
-        loading = false
     }
 
     #if DEBUG

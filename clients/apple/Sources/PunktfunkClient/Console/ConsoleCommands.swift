@@ -230,7 +230,8 @@ extension ConsoleModel {
     // MARK: - library
 
     /// The shelf's catalog, its cached copy first so the grid is never empty while the fetch
-    /// runs, then what the host answers. `refreshOnly` asks about running titles alone.
+    /// runs, then what the host answers; a sleeping host is woken when auto-wake is on.
+    /// `refreshOnly` asks about running titles alone.
     func fetchLibrary(addr: String, mgmt: UInt16, fp: String, refreshOnly: Bool) {
         guard let host = host(fp: fp, addr: addr, port: 0) else { return }
         if !refreshOnly { fetchSerial += 1 }
@@ -260,49 +261,59 @@ extension ConsoleModel {
                     title: "Couldn't load the library", body: why, canRetry: false))
         }) else { return }
         // A running-titles refresh must not cut a list fetch short; only a new fetch does.
-        if !refreshOnly {
-            fetching?.cancel()
-            artTask?.cancel()
-            artShown = []
-            bridge.push(.libraryBegin, "{}")
-        }
-        let task = Task { [weak self] in
-            guard let self else { return }
-            var cached: CachedLibrary?
-            if !refreshOnly { cached = await LibraryCache.shared?.load(hostID: host.id.uuidString) }
-            if let cached, serial == self.fetchSerial {
-                bridge.push(.libraryCached, ConsoleJSON.libraryGames(cached.games))
-                // The cached covers go up with the cached shelf, not after the host's answer.
-                loadArt(cached.games, target: target, cachedOnly: true)
+        if refreshOnly {
+            Task { [weak self] in
+                let status = await LibraryClient.status(target)
+                self?.pushStatus(status, serial: serial)
             }
-            let status = await LibraryClient.status(target)
-            let running = status.games
-            // A newer fetch owns the shelf by the time a slow host answers: not its titles.
-            guard serial == self.fetchSerial else { return }
-            bridge.push(.libraryDownloads, ConsoleJSON.downloads(status.downloads, grants: status.grants))
-            bridge.push(.libraryRunning, ConsoleJSON.runningGames(running))
-            if refreshOnly { return }
-            do {
-                let games = try await LibraryClient.fetch(target).launchersFirst
-                bridge.push(.libraryGames, ConsoleJSON.libraryGames(games))
-                bridge.push(.libraryPhase, games.isEmpty ? "\"Empty\"" : "\"Ready\"")
-                await LibraryCache.shared?.store(games, hostID: host.id.uuidString)
-                loadArt(games, target: target)
-            } catch {
-                // A newer fetch owns the shelf now.
-                if Task.isCancelled { return }
-                // The cached shelf stays up, marked offline, with the covers the cache held.
-                if cached != nil {
+            return
+        }
+        fetching?.cancel()
+        artTask?.cancel()
+        artShown = []
+        bridge.push(.libraryBegin, "{}")
+        // The session binary's console wakes on the same switch.
+        let autoWake = UserDefaults.standard.object(forKey: DefaultsKey.autoWake) as? Bool ?? true
+        let events = LibraryLoad.run(
+            target: target, hostID: host.id.uuidString, wakeMacs: autoWake ? host.wakeMacs : [])
+        fetching = Task { [weak self] in
+            for await event in events {
+                // A newer fetch owns the shelf by the time a slow host answers.
+                guard let self, serial == self.fetchSerial else { return }
+                switch event {
+                case .cached(let cached):
+                    bridge.push(.libraryCached, ConsoleJSON.libraryGames(cached.games))
+                    // The cached covers go up with the cached shelf, not after the host's answer.
+                    loadArt(cached.games, target: target, cachedOnly: true)
+                case .waking:
+                    bridge.push(.libraryStale, "1")
+                case .fetched(let games):
+                    bridge.push(.libraryGames, ConsoleJSON.libraryGames(games))
+                    bridge.push(.libraryPhase, games.isEmpty ? "\"Empty\"" : "\"Ready\"")
+                    loadArt(games, target: target)
+                case .failed(_, hadCache: true):
+                    // The cached shelf stays up, marked offline, with the covers the cache held.
                     bridge.push(.libraryStale, "2")
-                    return
+                case .failed(let error, hadCache: false):
+                    bridge.push(
+                        .libraryPhase,
+                        ConsoleJSON.libraryError(
+                            title: "Couldn't load the library",
+                            body: error.errorDescription ?? "", canRetry: true))
+                case .status(let games, let downloads, let grants):
+                    pushStatus((games, downloads, grants), serial: serial)
                 }
-                bridge.push(
-                    .libraryPhase,
-                    ConsoleJSON.libraryError(
-                        title: "Couldn't read the library", body: "\(error)", canRetry: true))
             }
         }
-        if !refreshOnly { fetching = task }
+    }
+
+    /// What the host runs and downloads, unless a newer fetch owns the shelf.
+    private func pushStatus(
+        _ status: (games: [RunningGame], downloads: [HostDownload], grants: UInt32?), serial: Int
+    ) {
+        guard serial == fetchSerial else { return }
+        bridge.push(.libraryDownloads, ConsoleJSON.downloads(status.downloads, grants: status.grants))
+        bridge.push(.libraryRunning, ConsoleJSON.runningGames(status.games))
     }
 
     /// Posters, as they arrive. The shell decodes each at the size it draws. `cachedOnly`
