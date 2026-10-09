@@ -1778,34 +1778,17 @@ fn stream_body(
             fps_count = 0;
             fps_t = Instant::now();
         }
-        // Absolute clock. Behind a slow frame: resync to now rather than bursting to catch up.
+        // One interval past the last wake: the grid's next tick and the keep-alive's anchor.
         next_frame += frame_interval;
-        let frame_driven = crate::send_pacing::frame_driven_enabled();
-        if frame_driven && capturer.supports_arrival_wait() {
-            // 0.9× floor leaves jitter headroom; credit pins the long-run average so a faster
-            // mirrored panel cannot overdrive the wire. +0.5× deadline keeps static-desktop
-            // re-encode at ~1.5×interval (client liveness).
-            cap_credit.charge();
-            let earliest = std::cmp::max(
-                tick + frame_interval.mul_f32(0.9),
-                cap_credit.earliest(Instant::now(), frame_interval),
-            );
-            if let Some(d) = earliest.checked_duration_since(Instant::now()) {
-                std::thread::sleep(d);
-            }
-            capturer.wait_arrival(tick + frame_interval.mul_f32(1.5));
-            // Arrivals are the clock; re-anchor so a rebuild back to fixed cadence stays sane.
-            next_frame = Instant::now() + frame_interval;
-        } else if frame_driven && enc.ready_aus(next_frame).is_some() {
-            // An encoder that publishes its own access units: one landed or the period ran
-            // out. On its own phase the grid holds a finished AU for up to a period.
-            next_frame = Instant::now();
-        } else {
-            match next_frame.checked_duration_since(Instant::now()) {
-                Some(d) => std::thread::sleep(d),
-                None => next_frame = Instant::now(),
-            }
-        }
+        crate::send_pacing::wait_next_tick(
+            &mut **capturer,
+            &mut *enc,
+            &mut cap_credit,
+            &mut next_frame,
+            fresh.then_some(tick),
+            frame_interval,
+            None,
+        );
     }
     Ok(())
 }
