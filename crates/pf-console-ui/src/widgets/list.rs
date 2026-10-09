@@ -385,6 +385,15 @@ pub fn blurb(canvas: &Canvas, fonts: &Fonts, text: &str, rect: Rect, k: f64) -> 
     )
 }
 
+/// The gutter a status dot takes before every row, when any row has one.
+fn dot_gutter(rows: &[RowSpec], k: f64) -> f64 {
+    if rows.iter().any(|r| r.dot) {
+        16.0 * k
+    } else {
+        0.0
+    }
+}
+
 /// The list's scroll node, and row `i`'s cell in it.
 const LIST: &str = "menu-list";
 fn row_id(i: usize) -> Id {
@@ -764,7 +773,9 @@ impl MenuList {
     }
 
     /// Draw the rows in `rect`. `active` is false when a keyboard tray parks
-    /// focus: rows keep their look, the focus ring rests.
+    /// focus: rows keep their look, the focus ring rests. The steps run in this order:
+    /// [`Self::advance`] reads the pending snap and step before [`Self::paint_rows`]
+    /// takes the snap for the layout.
     #[allow(clippy::too_many_arguments)]
     pub fn render(
         &mut self,
@@ -776,6 +787,16 @@ impl MenuList {
         dt: f64,
         active: bool,
     ) {
+        self.advance(rows, dt, active);
+        let scroll_settled = self.paint_rows(canvas, rect, rows, fonts, k, dt, active);
+        self.record_geometry(rows, k, dot_gutter(rows, k));
+        self.settled = self.settled(rows, active, scroll_settled);
+    }
+
+    /// One frame of the entrance, focus, knob, bump and slip springs, then the values
+    /// as drawn. A pending snap drops every row's history; a pending step arms the slip
+    /// only when the focused row's value really changed.
+    fn advance(&mut self, rows: &[RowSpec], dt: f64, active: bool) {
         let reduce = crate::theme::reduce_motion();
         // Own clock: `render` gets `dt` but never the shell's `t`.
         self.age += dt;
@@ -876,17 +897,28 @@ impl MenuList {
         self.shown.clear();
         self.shown
             .extend(rows.iter().map(|r| r.value.clone().unwrap_or_default()));
+    }
 
+    /// Lays the rows out as cells in a scroll column, follows focus with the scroll and
+    /// paints. Takes the pending snap, which seats the scroll at once. Returns whether
+    /// the scroll is at rest.
+    #[allow(clippy::too_many_arguments)]
+    fn paint_rows(
+        &mut self,
+        canvas: &Canvas,
+        rect: Rect,
+        rows: &[RowSpec],
+        fonts: &Fonts,
+        k: f64,
+        dt: f64,
+        active: bool,
+    ) -> bool {
         // Rows are cells in a scroll column, `ROW_GAP` apart, a header band above a
         // sectioned row. Each cell's painter draws the row as it always has.
         let list = Id::new(LIST, 0);
         let col = column(rect, k);
         let row_w = f64::from(col.width());
-        let dot_gutter = if rows.iter().any(|r| r.dot) {
-            16.0 * k
-        } else {
-            0.0
-        };
+        let dot_gutter = dot_gutter(rows, k);
         let snap = std::mem::take(&mut self.snap);
         self.tree.get_mut().tick(dt as f32);
         // The viewport holds the plate's outset around the column; rows never reach the
@@ -968,8 +1000,12 @@ impl MenuList {
             });
         }
         drop(tree);
+        scroll_settled
+    }
 
-        // What a pointer hits: the cells as painted, not the drawing's ease.
+    /// What a pointer hits: the cells as laid out, not the drawing's ease, with their
+    /// trailing buttons and slider tracks. A row scrolled out of view has none.
+    fn record_geometry(&mut self, rows: &[RowSpec], k: f64, dot_gutter: f64) {
         let tree = self.tree.get_mut();
         self.geom = (0..rows.len())
             .map(|i| tree.rect(row_id(i)).unwrap_or_else(Rect::new_empty))
@@ -990,16 +1026,19 @@ impl MenuList {
                 false => track_rect(*cell, row, k, dot_gutter),
             })
             .collect();
+    }
 
+    /// Nothing is still moving: entrance, focus, plate, bump, slip, scroll and knobs.
+    fn settled(&self, rows: &[RowSpec], active: bool, scroll_settled: bool) -> bool {
         let cursor = if active { Some(self.cursor) } else { None };
         let focus_target = |i: usize| if Some(i) == cursor { 1.0 } else { 0.0 };
-        self.settled = self.entrance.is_none()
+        self.entrance.is_none()
             && self
                 .focus
                 .iter()
                 .enumerate()
                 .all(|(i, f)| *f == focus_target(i))
-            && !self.tree.get_mut().plate_busy()
+            && !self.tree.borrow().plate_busy()
             && self.bump.pos == 0.0
             && self.bump.vel == 0.0
             && self.slip.pos == 0.0
@@ -1008,7 +1047,7 @@ impl MenuList {
                 .knobs
                 .iter()
                 .zip(rows)
-                .all(|(knob, r)| !matches!(r.control, Control::Toggle(on) if *knob != f64::from(u8::from(on))));
+                .all(|(knob, r)| !matches!(r.control, Control::Toggle(on) if *knob != f64::from(u8::from(on))))
     }
 
     /// One row at `cell`, its laid-out rect. Bump, entrance rise and focus scale move
