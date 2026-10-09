@@ -1181,9 +1181,7 @@ impl State {
             if let Some(m) = meter {
                 // Same formula + clamp as the HUD's capture→decoded headline in `note_decoded_pts`.
                 let e2e_ns = o.decoded_ns + clock_offset as i128 - o.pts_us as i128 * 1000;
-                let e2e_us =
-                    (e2e_ns > 0 && e2e_ns < 10_000_000_000).then_some((e2e_ns / 1000) as u64);
-                m.note_decode(feed_us, codec_us, e2e_us);
+                m.note_decode(feed_us, codec_us, crate::stats::sane_us(e2e_ns));
             }
         }
     }
