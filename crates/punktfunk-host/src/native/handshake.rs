@@ -311,17 +311,16 @@ fn codec_miss_note(miss: punktfunk_core::quic::CodecMiss, preferred: &str, picke
 pub(super) struct Negotiated {
     pub(super) hello: Hello,
     pub(super) welcome: Welcome,
-    /// What the client calls itself (`EXT_TAG_CLIENT` on `Start`); `None` from one that sent no
-    /// block. Log only: two dialers from one device are told apart by that line.
+    /// What the client calls itself; `None` from one that sent no label. Log only: two dialers
+    /// from one device are told apart by that line.
     pub(super) client_label: Option<String>,
-    /// `EXT_TAG_PRESET` on `Start`: the settings preset the client dialled with.
+    /// The settings preset the client dialled with.
     pub(super) preset: Option<crate::events::PresetRef>,
-    /// `EXT_TAG_ABR` on `Start` (`0` = absent): the ABR wire features this client reads.
+    /// The ABR wire features this client reads (`0` = none).
     pub(super) abr_features: u8,
-    /// `EXT_TAG_LINK_FACTS` on `Start`: the client's end of the path. `None` from a client
-    /// that sent no tag.
-    pub(super) client_link: Option<punktfunk_core::quic::LinkFacts>,
-    /// `EXT_TAG_PROBE_ONLY` on `Start`: a diagnostic session.
+    /// The client's end of the path; the default from a client that said nothing.
+    pub(super) client_link: punktfunk_core::quic::LinkFacts,
+    /// A diagnostic session.
     pub(super) probe_only: bool,
     /// This host's end of the path, for every `StreamConfig`.
     pub(super) host_link: punktfunk_core::quic::HostLink,
@@ -856,36 +855,17 @@ pub(super) async fn negotiate(
     let (ty, body) = recv.read_frame().await?;
     punktfunk_core::quic::v2::msg::decode::<Ready>(ty, &body)
         .map_err(|e| anyhow!("Ready decode: {e:?}"))?;
-    // The entries the `ClientHello` carried. An unknown tag is skipped, and absence says
-    // nothing.
-    let start_ext: Vec<(u16, &[u8])> = first
-        .start_ext
-        .iter()
-        .map(|(tag, v)| (*tag, v.as_slice()))
-        .collect();
-    // What the client calls itself, when it sent one. A label for the log.
-    let client_label = start_ext
-        .iter()
-        .find(|(tag, _)| *tag == punktfunk_core::quic::EXT_TAG_CLIENT)
-        .map(|(_, v)| punktfunk_core::quic::client_label(&String::from_utf8_lossy(v)))
-        .filter(|s| !s.is_empty());
-    // Which ABR wire features this client understands. Bits it does not set are bits it
-    // cannot read, and bits this host does not know are ignored.
-    let abr_features = punktfunk_core::quic::ext_abr_features(&start_ext);
-    let preset = punktfunk_core::quic::SessionPreset::from_ext(&start_ext).map(Into::into);
-    let client_link = punktfunk_core::quic::LinkFacts::from_ext(&start_ext);
-    let probe_only = punktfunk_core::quic::ext_probe_only(&start_ext);
     bringup.mark("start");
     // `wire_mtu::spawn_watch` is started by `serve_session` once the control-task channels
     // exist; it also drives mid-session shard renegotiation (needs the control writer).
     Ok(Negotiated {
         hello,
         welcome,
-        client_label,
-        preset,
-        abr_features,
-        client_link,
-        probe_only,
+        client_label: first.client_label.clone(),
+        preset: first.preset.clone().map(Into::into),
+        abr_features: first.abr_features,
+        client_link: first.link,
+        probe_only: first.probe_only,
         host_link,
         compositor,
         gamescope_route,

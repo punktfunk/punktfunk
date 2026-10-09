@@ -1645,15 +1645,13 @@ pub(crate) async fn run_admitted(
     .await
     .map_err(|_| anyhow!("handshake timed out after {HANDSHAKE_TIMEOUT:?}"))??;
     let (ctrl_send, ctrl_recv) = (send, recv);
-    if let Some(link) = client_link {
-        tracing::info!(
-            client_kind = link.kind,
-            client_mbps = link.mbps,
-            host_kind = host_link.iface_kind,
-            host_mbps = host_link.link_mbps,
-            "link facts of both ends"
-        );
-    }
+    tracing::info!(
+        client_kind = client_link.kind,
+        client_mbps = client_link.mbps,
+        host_kind = host_link.iface_kind,
+        host_mbps = host_link.link_mbps,
+        "link facts of both ends"
+    );
     let join_live = joined.is_some();
     let reframe_to = joined.as_ref().map(|(_, view)| {
         (
@@ -1702,7 +1700,7 @@ pub(crate) async fn run_admitted(
         source,
         crate::send_pacing::Ports::of(
             (host_link.iface_kind, host_link.link_mbps),
-            client_link.map_or((0, 0), |l| (l.kind, l.mbps)),
+            (client_link.kind, client_link.mbps),
         ),
     );
     // Shard renegotiation only if `Hello::max_shard_payload` and not PyroWave (PyroWave pins
@@ -4537,7 +4535,11 @@ mod tests {
         };
         let hello = ClientHello {
             hello,
-            start_ext: Vec::new(),
+            client_label: None,
+            abr_features: 0,
+            preset: None,
+            link: Default::default(),
+            probe_only: false,
             resume: None,
             suites: Vec::new(),
             features: Default::default(),

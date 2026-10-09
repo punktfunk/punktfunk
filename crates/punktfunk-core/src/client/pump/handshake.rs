@@ -158,23 +158,15 @@ async fn dial(
             .open_bi()
             .await
             .map_err(|e| PunktfunkError::Io(std::io::Error::other(e.to_string())))?;
-        let label = super::super::client_label();
-        // Core decides the ABR byte for every embedder: the controller that reads the ack's
-        // reason is this crate's, so no client app can leave it clear and make one host
-        // answer two ways.
-        let abr = [crate::quic::EXT_ABR_ACK_REASON];
-        let preset = p.preset.as_ref().map(|s| s.encode()).unwrap_or_default();
         // Every dial says what its OS knows about this end of the path.
         let link = conn
             .local_ip()
             .map(crate::transport::ifinfo::link_facts)
             .unwrap_or_default();
-        let link_facts = link.encode();
         use crate::quic::v2::features::FeatureSet;
         use crate::quic::v2::hello::{ClientHello, Ready, ServerHello};
         use crate::quic::v2::{io as v2io, msg::V2Message, registry};
         v2io::write_stream_type(&mut send, registry::STREAM_CONTROL).await?;
-        let entries = crate::quic::start_ext(&label, &abr, &preset, &link_facts, p.probe_only);
         let wants_chacha = p.video_caps & crate::quic::VIDEO_CAP_CHACHA20 != 0;
         // Resumable reader: `select!` and the clock-sync timeout can both interrupt a
         // read; a lost partial frame would misalign the stream for the session.
@@ -217,8 +209,14 @@ async fn dial(
                 // How this client fills its view; a host framing for another device reframes to it.
                 video_fit: p.video_fit.wire(),
             },
-            // The `Start` entries: every host reads them.
-            start_ext: entries.iter().map(|(t, v)| (*t, v.to_vec())).collect(),
+            client_label: Some(super::super::client_label()),
+            // Core decides the ABR byte for every embedder: the controller that reads the ack's
+            // reason is this crate's, so no client app can leave it clear and make one host
+            // answer two ways.
+            abr_features: crate::quic::EXT_ABR_ACK_REASON,
+            preset: p.preset.clone(),
+            link,
+            probe_only: p.probe_only,
             resume: crate::client::resume::peek(host, port),
             suites: if wants_chacha {
                 vec![MediaSuite::ChaCha20Poly1305, MediaSuite::Aes128Gcm]

@@ -76,11 +76,11 @@ use self::worker::{ClientShared, WorkerArgs};
 
 /// What this client calls itself in the host's `handshake complete` line: build plus the shell
 /// and path that dialled. Process-wide because it describes the embedder, not one session; set it
-/// before the dial. Empty (the default) sends no `Start` extension at all.
+/// before the dial. Empty (the default) sends no label.
 static CLIENT_LABEL: Mutex<String> = Mutex::new(String::new());
 
-/// Set the label [`EXT_TAG_CLIENT`](crate::quic::EXT_TAG_CLIENT) carries. Bounded and stripped
-/// on the way in, so the wire never has to trust the caller.
+/// Set the label [`ClientHello::client_label`](crate::quic::v2::hello::ClientHello::client_label)
+/// carries. Bounded and stripped on the way in, so the wire never has to trust the caller.
 pub fn set_client_label(label: &str) {
     *CLIENT_LABEL.lock().unwrap_or_else(|e| e.into_inner()) = crate::quic::client_label(label);
 }
@@ -571,8 +571,8 @@ pub struct ConnectParams {
     pub pin: Option<[u8; 32]>,
     /// PEM cert + PKCS#8 key ([`endpoint::generate_identity`]); `None` = anonymous.
     pub identity: Option<(String, String)>,
-    /// Settings preset this dial names ([`crate::quic::EXT_TAG_PRESET`]); the host shows it and
-    /// hands it to hooks, the stream is unchanged. `None` names none.
+    /// Settings preset this dial names; the host shows it and hands it to hooks, the stream is
+    /// unchanged. `None` names none.
     pub preset: Option<crate::quic::SessionPreset>,
     /// A diagnostic session ([`crate::quic::EXT_DELIVERY_PROBE_ONLY`]): the host serves probes
     /// from the punched data plane and never builds a pipeline.

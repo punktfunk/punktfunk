@@ -1,7 +1,10 @@
 //! The handshake's values: what a client asks for ([`Hello`]), what the host answers
-//! ([`Welcome`]), and the entries a client adds ([`EXT_TAG_CLIENT`] and the tags after it).
-//! Their wire form is [`super::v2::hello`]; a field a peer leaves out reads as its default.
+//! ([`Welcome`]), and what a [`ClientHello`] adds beside them ([`SessionPreset`], [`LinkFacts`],
+//! [`client_label`]). Their wire form is [`super::v2::hello`]; a field a peer leaves out reads
+//! as its default.
 
+#[cfg(doc)]
+use super::v2::hello::ClientHello;
 use super::*;
 use crate::config::{CompositorPref, Config, FecConfig, GamepadPref, Mode, Role};
 
@@ -92,20 +95,10 @@ pub const AUDIO_CODEC_FLAC_RESERVED: u8 = 1;
 /// `2` because [`AUDIO_CODEC_FLAC_RESERVED`] holds `1`.
 pub const AUDIO_CODEC_PCM: u8 = 2;
 
-// Tags `0` and `1` are spent. An id is never reused for a second meaning: a peer that skips
-// an unknown id cannot tell two meanings apart.
-
-/// Entry `2` in `ClientHello`: what the client calls itself, UTF-8, no NUL — its build and
-/// the shell that dialled (`"android 0.38.0 console/library"`). A label for the host's log, never
-/// a fact it acts on: two sessions from one device are told apart here instead of by capture.
-/// Bounded by [`EXT_CLIENT_MAX`]; a longer value is truncated on a char boundary by
-/// [`client_label`].
-pub const EXT_TAG_CLIENT: u16 = 2;
-
-/// Longest [`EXT_TAG_CLIENT`] value in UTF-8 bytes. A log field, so short.
+/// Longest [`ClientHello::client_label`] in UTF-8 bytes. A log field, so short.
 pub const EXT_CLIENT_MAX: usize = 96;
 
-/// `s` as an [`EXT_TAG_CLIENT`] value: trimmed, control characters dropped, truncated to
+/// `s` as a [`ClientHello::client_label`]: trimmed, control characters dropped, truncated to
 /// [`EXT_CLIENT_MAX`] on a char boundary. Empty in means empty out, which is "say nothing".
 pub fn client_label(s: &str) -> String {
     let mut out: String = s.trim().chars().filter(|c| !c.is_control()).collect();
@@ -115,64 +108,36 @@ pub fn client_label(s: &str) -> String {
     out
 }
 
-/// Entry `3` in `ClientHello`: one byte of ABR protocol features the client understands,
-/// as a bitfield ([`EXT_ABR_ACK_REASON`] is bit 0). A later feature takes another bit here
-/// rather than a tag of its own, so the host reads one byte and answers what it recognises.
-/// An absent tag, an empty value or a zero byte is a client that understands none of them —
-/// which is every client shipped so far.
-pub const EXT_TAG_ABR: u16 = 3;
-
-/// [`EXT_TAG_ABR`] bit 0: the client reads the reason byte on
+/// [`ClientHello::abr_features`] bit 0: the client reads the reason byte on
 /// [`BitrateChanged`](super::control::BitrateChanged). The host sends that tenth byte only
 /// toward this bit, because every client without it rejects an ack of any other length.
 /// Core sets it for every embedder that links the controller reading it, not the embedder.
 pub const EXT_ABR_ACK_REASON: u8 = 0x01;
 
-/// Entry `4` in `ClientHello`: the settings preset this session was dialled with, as
-/// [`SessionPreset::encode`] writes it. The id is the client's own and stable across a rename;
-/// the name is for people. The host shows it and hands it to hooks and plugins; it changes
-/// nothing about the stream. Absent when the client streams with its plain settings.
-pub const EXT_TAG_PRESET: u16 = 4;
-
-/// Entry `5` in `ClientHello`: `kind ‖ mbps u32`, what this client's OS says about its end
-/// of the path ([`LinkFacts`]). Every dial sends it; a short value reads the missing fields
-/// as zero.
-pub const EXT_TAG_LINK_FACTS: u16 = 5;
-
-/// Entry `6` in `ClientHello`, on a diagnostic session only: serve probes from the punched
-/// data plane and never build a pipeline.
-pub const EXT_TAG_PROBE_ONLY: u16 = 6;
-
-/// The connect-options bit that dials a diagnostic session ([`EXT_TAG_PROBE_ONLY`]): the FFI
-/// `delivery_flags` and the JNI dial carry it.
+/// The connect-options bit that dials a diagnostic session ([`ClientHello::probe_only`]): the
+/// FFI `delivery_flags` and the JNI dial carry it.
 pub const EXT_DELIVERY_PROBE_ONLY: u8 = 0x02;
 
 pub use crate::transport::LinkFacts;
 
 impl LinkFacts {
-    /// [`EXT_TAG_LINK_FACTS`]'s value.
+    /// [`ClientHello::link`] on the wire: `kind ‖ mbps u32`.
     pub fn encode(&self) -> [u8; 5] {
         let m = self.mbps.to_le_bytes();
         [self.kind, m[0], m[1], m[2], m[3]]
     }
 
-    /// The client's facts among `entries`; `None` when the tag is absent or empty.
-    pub fn from_ext(entries: &[(u16, &[u8])]) -> Option<LinkFacts> {
-        let (_, v) = entries.iter().find(|(tag, _)| *tag == EXT_TAG_LINK_FACTS)?;
+    /// What [`encode`](Self::encode) wrote. A short value reads the missing fields as zero.
+    pub fn decode(v: &[u8]) -> LinkFacts {
         let mut mbps = [0u8; 4];
         for (d, s) in mbps.iter_mut().zip(v.iter().skip(1)) {
             *d = *s;
         }
-        Some(LinkFacts {
-            kind: *v.first()?,
+        LinkFacts {
+            kind: v.first().copied().unwrap_or(0),
             mbps: u32::from_le_bytes(mbps),
-        })
+        }
     }
-}
-
-/// Whether `entries` dial a diagnostic session ([`EXT_TAG_PROBE_ONLY`]).
-pub fn ext_probe_only(entries: &[(u16, &[u8])]) -> bool {
-    entries.iter().any(|(tag, _)| *tag == EXT_TAG_PROBE_ONLY)
 }
 
 /// Longest [`SessionPreset::id`], printable ASCII.
@@ -180,7 +145,9 @@ pub const PRESET_ID_MAX: usize = 32;
 /// Longest [`SessionPreset::name`] in UTF-8 bytes.
 pub const PRESET_NAME_MAX: usize = 64;
 
-/// The preset a session was dialled with ([`EXT_TAG_PRESET`]).
+/// The preset a session was dialled with ([`ClientHello::preset`]). The id is the client's own
+/// and stable across a rename; the name is for people. The host shows it and hands it to hooks
+/// and plugins; it changes nothing about the stream.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SessionPreset {
     pub id: String,
@@ -214,10 +181,9 @@ impl SessionPreset {
         out
     }
 
-    /// The preset in a decoded block, re-bounded as [`new`](Self::new) does. A malformed
-    /// value is no preset, never a failed handshake: the tag informs, it does not gate.
-    pub fn from_ext(entries: &[(u16, &[u8])]) -> Option<SessionPreset> {
-        let (_, v) = entries.iter().find(|(tag, _)| *tag == EXT_TAG_PRESET)?;
+    /// What [`encode`](Self::encode) wrote, re-bounded as [`new`](Self::new) does. A malformed
+    /// value is no preset, never a failed handshake: the preset informs, it does not gate.
+    pub fn decode(v: &[u8]) -> Option<SessionPreset> {
         let (&id_len, rest) = v.split_first()?;
         let id = rest.get(..id_len as usize)?;
         let (&name_len, rest) = rest.get(id_len as usize..)?.split_first()?;
@@ -227,42 +193,6 @@ impl SessionPreset {
             &String::from_utf8_lossy(name),
         )
     }
-}
-
-/// The entries a client adds to its `ClientHello`: label, ABR features, the preset, its link
-/// facts and the probes-only mark. An empty label or preset is left out rather than sent
-/// empty.
-#[cfg(any(feature = "quic", test))]
-pub(crate) fn start_ext<'a>(
-    label: &'a str,
-    abr: &'a [u8],
-    preset: &'a [u8],
-    link: &'a [u8],
-    probe_only: bool,
-) -> Vec<(u16, &'a [u8])> {
-    let mut out: Vec<(u16, &[u8])> = Vec::with_capacity(5);
-    if !label.is_empty() {
-        out.push((EXT_TAG_CLIENT, label.as_bytes()));
-    }
-    out.push((EXT_TAG_ABR, abr));
-    if !preset.is_empty() {
-        out.push((EXT_TAG_PRESET, preset));
-    }
-    out.push((EXT_TAG_LINK_FACTS, link));
-    if probe_only {
-        out.push((EXT_TAG_PROBE_ONLY, &[1]));
-    }
-    out
-}
-
-/// The ABR feature byte among `entries`; `0` when the tag is absent or empty.
-/// Both ends read the byte through this so a missing tag and a zero byte cannot diverge.
-pub fn ext_abr_features(entries: &[(u16, &[u8])]) -> u8 {
-    entries
-        .iter()
-        .find(|(tag, _)| *tag == EXT_TAG_ABR)
-        .and_then(|(_, v)| v.first().copied())
-        .unwrap_or(0)
 }
 
 /// `host → client`: the complete session offer.
@@ -433,70 +363,35 @@ mod tests {
         assert_eq!(AUDIO_CODEC_PCM, 2);
     }
 
-    /// The label comes first, the ABR byte and the link facts always ride, the probes-only
-    /// mark only on a diagnostic dial, and nothing empty is sent.
     #[test]
-    fn start_entries_skip_what_is_empty() {
-        let abr = [EXT_ABR_ACK_REASON];
-        let facts = LinkFacts {
-            kind: 1,
-            mbps: 1_000,
-        }
-        .encode();
-        let ext = start_ext("android 0.38.0", &abr, &[], &facts, false);
-        assert_eq!(ext.len(), 3);
-        assert_eq!(ext[0].0, EXT_TAG_CLIENT);
-        assert_eq!(ext_abr_features(&ext), EXT_ABR_ACK_REASON);
-        assert_eq!(
-            LinkFacts::from_ext(&ext),
-            Some(LinkFacts {
-                kind: 1,
-                mbps: 1_000
-            })
-        );
-        assert!(!ext_probe_only(&ext));
-        let probe = start_ext("", &abr, &[], &facts, true);
-        assert_eq!(probe.len(), 3);
-        assert!(ext_probe_only(&probe));
-    }
-
-    #[test]
-    fn a_preset_rides_start_and_reads_back_bounded() {
+    fn a_preset_reads_back_bounded() {
         let preset = SessionPreset::new("3f9a0c11e2b4", "Docked").unwrap();
-        let bytes = preset.encode();
-        let abr = [EXT_ABR_ACK_REASON];
-        let got = start_ext("deck", &abr, &bytes, &[], false);
-        assert_eq!(SessionPreset::from_ext(&got), Some(preset));
-        assert_eq!(
-            SessionPreset::from_ext(&start_ext("", &abr, &[], &[], false)),
-            None
-        );
+        assert_eq!(SessionPreset::decode(&preset.encode()), Some(preset));
         // A hostile value is bounded, never a failed handshake.
         let long = SessionPreset::new(&"a".repeat(99), &"\u{7}n".repeat(99)).unwrap();
         assert_eq!(long.id.len(), PRESET_ID_MAX);
         assert!(long.name.len() <= PRESET_NAME_MAX && !long.name.contains('\u{7}'));
-        assert_eq!(
-            SessionPreset::from_ext(&[(EXT_TAG_PRESET, &[9, b'x'][..])]),
-            None
-        );
-        assert_eq!(SessionPreset::from_ext(&[(EXT_TAG_PRESET, &[][..])]), None);
+        assert_eq!(SessionPreset::decode(&[9, b'x']), None);
+        assert_eq!(SessionPreset::decode(&[]), None);
         assert_eq!(SessionPreset::new(" ", "Docked"), None);
     }
 
-    /// The tag is one byte of features, and a bit this host does not know is a bit it
-    /// ignores — bit 0 is still served.
+    /// A short link value reads its missing fields as zero.
     #[test]
-    fn an_abr_tag_with_unknown_bits_still_asks_for_the_ack_reason() {
-        let future = [EXT_ABR_ACK_REASON | 0xF0];
+    fn link_facts_read_back_from_short_values() {
+        let facts = LinkFacts {
+            kind: 1,
+            mbps: 1_000,
+        };
+        assert_eq!(LinkFacts::decode(&facts.encode()), facts);
         assert_eq!(
-            ext_abr_features(&[(EXT_TAG_ABR, &future[..])]) & EXT_ABR_ACK_REASON,
-            1
+            LinkFacts::decode(&[2, 0xe8]),
+            LinkFacts {
+                kind: 2,
+                mbps: 0xe8
+            }
         );
-        // Absent, empty, or zero: a client that reads no ABR feature at all.
-        assert_eq!(ext_abr_features(&[]), 0);
-        assert_eq!(ext_abr_features(&[(EXT_TAG_ABR, &[][..])]), 0);
-        assert_eq!(ext_abr_features(&[(EXT_TAG_ABR, &[0][..])]), 0);
-        assert_eq!(ext_abr_features(&[(EXT_TAG_CLIENT, &[1][..])]), 0);
+        assert_eq!(LinkFacts::decode(&[]), LinkFacts::default());
     }
 
     #[test]

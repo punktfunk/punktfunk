@@ -12,8 +12,8 @@
 //! `VIDEO_CAP_MULTI_SLICE` is the last `video_caps` bit; `HOST_CAP_AUDIO_HIRES` is the
 //! last `host_caps` bit — further host caps already use `host_caps2`. Evidence: `design/`.
 //!
-//! A new `*_CAP_*`, `CODEC_*` or `EXT_TAG_*` constant goes in the matching table in
-//! `tests::CAP_TABLES` / `tests::EXT_TAGS`; `every_cap_constant_is_tabled` fails until it does.
+//! A new `*_CAP_*` or `CODEC_*` constant goes in the matching table in `tests::CAP_TABLES`;
+//! `every_cap_constant_is_tabled` fails until it does.
 
 /// [`Hello::video_caps`]: client can decode Main10. Without [`VIDEO_CAP_HDR`] this is
 /// 10-bit SDR — Main10 under a BT.709 SDR VUI; neither display's colour state is touched.
@@ -392,17 +392,8 @@ mod tests {
         ),
     ];
 
-    /// The `ClientHello` entry tag space: ids, not bits, so they only have to differ.
-    const EXT_TAGS: &[(&str, u16)] = &[
-        ("EXT_TAG_CLIENT", EXT_TAG_CLIENT),
-        ("EXT_TAG_ABR", EXT_TAG_ABR),
-        ("EXT_TAG_LINK_FACTS", EXT_TAG_LINK_FACTS),
-        ("EXT_TAG_PROBE_ONLY", EXT_TAG_PROBE_ONLY),
-        ("EXT_TAG_PRESET", EXT_TAG_PRESET),
-    ];
-
-    /// Within a byte, each constant is one bit and no bit is spent twice; tags are distinct
-    /// ids. A peer reads a byte it did not write, so a collision is silent on both ends.
+    /// Within a byte, each constant is one bit and no bit is spent twice. A peer reads a byte
+    /// it did not write, so a collision is silent on both ends.
     #[test]
     fn cap_bytes_are_distinct_single_bits() {
         for (byte, consts) in CAP_TABLES {
@@ -417,50 +408,34 @@ mod tests {
                 taken |= bit;
             }
         }
-        for (i, (name, id)) in EXT_TAGS.iter().enumerate() {
-            let earlier = &EXT_TAGS[..i];
-            assert!(
-                !earlier.iter().any(|(_, seen)| seen == id),
-                "{name} = {id} is already taken"
-            );
-        }
     }
 
-    /// The tables above cover every constant declared under these prefixes. Reads the two
-    /// sources at compile time, so a bit added without a table entry fails here by name.
+    /// The tables above cover every constant declared under these prefixes. Reads this
+    /// source at compile time, so a bit added without a table entry fails here by name.
     /// A prefix nobody tables is a whole new byte and wants its own table and its own line.
     #[test]
     fn every_cap_constant_is_tabled() {
-        let sources: [(&str, &[&str]); 2] = [
-            (
-                include_str!("caps.rs"),
-                &[
-                    "VIDEO_CAP_",
-                    "CLIENT_CAP_",
-                    "HOST_CAP_",
-                    "HOST_CAP2_",
-                    "CODEC_",
-                ],
-            ),
-            (include_str!("handshake.rs"), &["EXT_TAG_"]),
+        let prefixes = [
+            "VIDEO_CAP_",
+            "CLIENT_CAP_",
+            "HOST_CAP_",
+            "HOST_CAP2_",
+            "CODEC_",
         ];
-        for (src, prefixes) in sources {
-            for line in src.lines() {
-                let Some(name) = line
-                    .strip_prefix("pub const ")
-                    .and_then(|rest| rest.split(':').next())
-                else {
-                    continue;
-                };
-                if !prefixes.iter().any(|p| name.starts_with(p)) {
-                    continue;
-                }
-                let tabled = CAP_TABLES
-                    .iter()
-                    .any(|(_, cs)| cs.iter().any(|(n, _)| *n == name))
-                    || EXT_TAGS.iter().any(|(n, _)| *n == name);
-                assert!(tabled, "{name} is missing from the capability tables");
+        for line in include_str!("caps.rs").lines() {
+            let Some(name) = line
+                .strip_prefix("pub const ")
+                .and_then(|rest| rest.split(':').next())
+            else {
+                continue;
+            };
+            if !prefixes.iter().any(|p| name.starts_with(p)) {
+                continue;
             }
+            let tabled = CAP_TABLES
+                .iter()
+                .any(|(_, cs)| cs.iter().any(|(n, _)| *n == name));
+            assert!(tabled, "{name} is missing from the capability tables");
         }
     }
 
