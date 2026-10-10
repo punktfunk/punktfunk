@@ -3,12 +3,12 @@
 //! motion (`0xCC`), rumble, lightbar, DualSense raw effects, and Steam Controller 2 raw
 //! passthrough ([`crate::sc2_capture`]). Held state is zeroed on slot close or detach.
 //!
-//! Idle never opens a device and keeps Valve HIDAPI off ([`set_valve_hidapi`]): the
-//! Deck driver kills lizard mode (trackpad-mouse) at *enumeration*. Settings uses
-//! ID-based metadata getters. Menu mode ([`GamepadService::set_menu_mode`]) is the
-//! exception: the same pads stay open for [`MenuEvent`]s, folded into one sample so any
-//! of them navigates; Valve HIDAPI stays off; an attached session supersedes. This
-//! thread is the single rumble/HID-output consumer. Menu types live in `menu_nav`.
+//! Idle never opens a device and keeps the Deck's HIDAPI driver off ([`set_valve_hidapi`]):
+//! it kills lizard mode (trackpad-mouse) at *enumeration*. Settings uses ID-based metadata
+//! getters. Menu mode ([`GamepadService::set_menu_mode`]) is the exception: every pad stays
+//! open for [`MenuEvent`]s, folded into one sample so any of them navigates; the Deck
+//! driver stays off; an attached session supersedes. This thread is the single
+//! rumble/HID-output consumer. Menu types live in `menu_nav`.
 //!
 //! `worker` owns SDL and the forwarded slots; `ds5` builds the DualSense effects packets;
 //! `select_gesture` is the hold-Select state machine.
@@ -39,17 +39,20 @@ const GUIDE_HOLD: Duration = Duration::from_millis(350);
 /// per-transition sends into one `GamepadState`; down+up in one window vanish.
 const TAP_PRESS: Duration = Duration::from_millis(50);
 
-/// Valve HIDAPI on/off. The Deck driver sends `ID_CLEAR_DIGITAL_MAPPINGS` +
+/// The Deck's HIDAPI driver on/off. It sends `ID_CLEAR_DIGITAL_MAPPINGS` +
 /// `TRACKPAD_NONE` at *enumeration* and feeds the lizard-mode watchdog, so the
 /// trackpad-mouse dies while the driver merely runs. Enable only in-session (paddles,
 /// trackpads, gyro). SDL3 applies live; disable restores lizard mode in seconds.
+///
+/// The Steam Controller drivers (SC1, SC2) stay on: they touch lizard mode only on open,
+/// and without them an idle Steam Controller exists only as Steam Input's virtual pad.
 fn set_valve_hidapi(enabled: bool) {
     let v = if enabled { "1" } else { "0" };
     sdl3::hint::set("SDL_JOYSTICK_HIDAPI_STEAMDECK", v);
-    sdl3::hint::set("SDL_JOYSTICK_HIDAPI_STEAM", v);
+    sdl3::hint::set("SDL_JOYSTICK_HIDAPI_STEAM", "1");
 }
 
-/// Disable Valve HIDAPI **before** `SDL_Init`. Enumeration is part of joystick init:
+/// Disable the Deck driver **before** `SDL_Init`. Enumeration is part of joystick init:
 /// setting the hint afterwards detaches the driver only after it has already cleared
 /// lizard mode. [`run`] orders this correctly; the pumped path receives a subsystem
 /// after enumeration, so callers must invoke this with the other pre-init hints.

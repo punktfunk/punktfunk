@@ -146,7 +146,7 @@ const DECK_NAME: &str = "Steam Deck";
 /// A Deck's pad list: Steam Input's pads are shadows of the built-in controls and of each
 /// external pad SDL already lists (the session clears Steam's device filter). The built-in
 /// controller is listed once: the raw 28DE:1205 when a session has it, else one Steam pad.
-/// A pad only Steam can see (a Steam Controller while Valve HIDAPI is off) gets no card.
+/// A Steam Controller is listed raw too: its SDL drivers stay on while the Deck's is off.
 fn fold_deck_shadows(list: &mut Vec<PadInfo>) {
     let mut stand_in = !list
         .iter()
@@ -444,27 +444,28 @@ fn attached_slot<'a>(
 }
 
 impl Worker {
-    fn active_id(&self) -> Option<u32> {
-        // Pin matches by stable key (most-recent wins if two share one); unmatched falls
-        // through to automatic without being cleared.
-        if let Some(key) = &self.pinned {
-            if let Some(id) = self
-                .order
-                .iter()
-                .rev()
-                .copied()
-                .find(|&id| self.pad_info(id).is_some_and(|p| &p.key == key))
-            {
-                return Some(id);
-            }
-        }
-        // Most recently connected, but never Steam Input's virtual pad while a real one exists.
+    /// The pinned pad, matched by stable key (most recent wins if two share one). An
+    /// unmatched pin is `None` here and falls through to automatic without being cleared.
+    fn pinned_id(&self) -> Option<u32> {
+        let key = self.pinned.as_ref()?;
         self.order
             .iter()
             .rev()
             .copied()
-            .find(|&id| self.pad_info(id).is_some_and(|p| !p.steam_virtual))
-            .or_else(|| self.order.last().copied())
+            .find(|&id| self.pad_info(id).is_some_and(|p| &p.key == key))
+    }
+
+    /// The pin, else the most recently connected pad, but never Steam Input's virtual pad
+    /// while a real one exists.
+    fn active_id(&self) -> Option<u32> {
+        self.pinned_id().or_else(|| {
+            self.order
+                .iter()
+                .rev()
+                .copied()
+                .find(|&id| self.pad_info(id).is_some_and(|p| !p.steam_virtual))
+                .or_else(|| self.order.last().copied())
+        })
     }
 
     /// ID-based metadata — no device open (an open would grab the hardware).
@@ -516,24 +517,8 @@ impl Worker {
         if !self.forwarding {
             return Vec::new();
         }
-        self.candidate_ids()
-    }
-
-    /// [`forwarded_ids`](Self::forwarded_ids) without the forwarding gate — what menu mode
-    /// holds open. Console navigation is local, so a user who turned wire forwarding off
-    /// still drives the launcher with the pad in their hands.
-    fn candidate_ids(&self) -> Vec<u32> {
-        if let Some(key) = &self.pinned {
-            if let Some(id) = self
-                .order
-                .iter()
-                .rev()
-                .copied()
-                .find(|&id| self.pad_info(id).is_some_and(|p| &p.key == key))
-            {
-                return vec![id];
-            }
-            // Unmatched pin falls through to Automatic; the pin itself is not cleared.
+        if let Some(id) = self.pinned_id() {
+            return vec![id];
         }
         let real: Vec<u32> = self
             .order
@@ -550,6 +535,15 @@ impl Worker {
         self.order.clone()
     }
 
+    /// What menu mode holds open: the pin, else every pad, Steam Input's virtual ones too.
+    /// Navigation folds them into one sample, so a shadow beside its real pad costs nothing,
+    /// and idle a Deck's built-in controls exist only as a virtual pad. Console navigation is
+    /// local, so a user who turned wire forwarding off still drives the launcher.
+    fn menu_ids(&self) -> Vec<u32> {
+        self.pinned_id()
+            .map_or_else(|| self.order.clone(), |id| vec![id])
+    }
+
     /// The one place that opens (= grabs) hardware. Dropping a handle is `SDL_CloseGamepad`;
     /// on a Deck the firmware watchdog then restores lizard mode.
     fn sync_open(&mut self) {
@@ -561,7 +555,7 @@ impl Worker {
         }
         self.close_all_slots();
         let want = if self.menu_mode {
-            self.candidate_ids()
+            self.menu_ids()
         } else {
             Vec::new()
         };
@@ -1243,8 +1237,8 @@ impl Worker {
                     self.attached = Some(c);
                     self.reset_chord();
 
-                    // Valve HIDAPI only in-session. Not with forwarding off: enumeration
-                    // kills the Deck trackpad-mouse and grabs hardware a passthrough needs.
+                    // The Deck driver only in-session. Not with forwarding off: its enumeration
+                    // kills the trackpad-mouse and grabs hardware a passthrough needs.
                     if self.forwarding {
                         set_valve_hidapi(true);
                     }
@@ -1328,7 +1322,7 @@ impl Worker {
                     self.forwarding = on;
                     self.reset_chord();
 
-                    // ON: enable Valve HIDAPI before `sync_open` or a Deck pad opens under
+                    // ON: enable the Deck driver before `sync_open` or a Deck pad opens under
                     // its old identity. OFF: disable after, so no slot outlives the driver.
                     let attached = self.attached.is_some();
                     if on && attached {
