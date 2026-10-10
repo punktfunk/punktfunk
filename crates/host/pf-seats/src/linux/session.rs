@@ -448,17 +448,17 @@ mod tests {
         );
     }
 
-    /// The codes Steam reads as "nothing to do", under each name the script is bound to.
+    /// The codes Steam reads as "nothing to do", under each name the script is bound to. `sh`
+    /// reads the file: executing it races another test thread's fork (`ETXTBSY`).
     #[test]
     fn the_update_helper_reports_nothing_to_do() {
-        use std::os::unix::fs::PermissionsExt as _;
         let dir = std::env::temp_dir().join(format!("pf-no-update-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let code = |name: &str, args: &[&str]| {
             let path = dir.join(name);
             std::fs::write(&path, NO_UPDATE_SCRIPT).unwrap();
-            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
-            std::process::Command::new(&path)
+            std::process::Command::new("sh")
+                .arg(&path)
                 .args(args)
                 .status()
                 .unwrap()
