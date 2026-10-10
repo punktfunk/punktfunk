@@ -556,8 +556,20 @@ fn instance_id_from_path(path: &str) -> Option<String> {
     Some(id.replace('#', "\\"))
 }
 
-/// Enumerate, open the first active interface, and complete the version handshake — one
-/// synchronous unit so [`probe_device`] can bound it. "Openable" means the driver answered.
+/// Whether this process drives the devnode `instance_id`. The remoting stack makes one seat
+/// devnode per RDP session (`SWD\REMOTEDISPLAYENUM\…&SESSIONID_0012`). A seat host drives only
+/// its own session's; any other host drives none of them.
+fn drives(instance_id: Option<&str>, seat_session: Option<u32>) -> bool {
+    let id = instance_id.unwrap_or_default().to_ascii_uppercase();
+    if !id.starts_with(r"SWD\REMOTEDISPLAYENUM\") {
+        return seat_session.is_none();
+    }
+    seat_session.is_some_and(|own| id.ends_with(&format!("&SESSIONID_{own:04}")))
+}
+
+/// Enumerate, open the first active interface this process drives ([`drives`]), and complete
+/// the version handshake — one synchronous unit so [`probe_device`] can bound it. "Openable"
+/// means the driver answered.
 fn probe_sync() -> Probe {
     let mut probe = Probe {
         opened: None,
@@ -584,8 +596,13 @@ fn probe_sync() -> Probe {
         }
     };
 
+    let seat_session = super::identity::is_seat_session_marker(
+        std::env::var_os("PUNKTFUNK_SEAT_SESSION").as_deref(),
+    )
+    .then(pf_win_display::own_session_id)
+    .flatten();
     // Every instance, not index 0: after an upgrade a Code-10 node can sit at 0 while the live
-    // interface is later. First `SPINT_ACTIVE` + openable wins.
+    // interface is later. The first `SPINT_ACTIVE` interface this process drives and opens wins.
     for index in 0..64u32 {
         let mut idata = SP_DEVICE_INTERFACE_DATA {
             cbSize: size_of::<SP_DEVICE_INTERFACE_DATA>() as u32,
@@ -625,31 +642,44 @@ fn probe_sync() -> Probe {
         // `[u16; 1]` (FAM stub), so `.as_ptr()` would tag two bytes while `CreateFileW` reads
         // the full NUL-terminated path — everything past `[0]` OOB, and the compiler may fold
         // the zero-init into an empty device name.
-        let opened = unsafe {
+        let filled = unsafe {
             (*detail).cbSize = size_of::<SP_DEVICE_INTERFACE_DETAIL_DATA_W>() as u32;
             SetupDiGetDeviceInterfaceDetailW(hdev.0, &idata, Some(detail), required, None, None)
-                .context("SetupDiGetDeviceInterfaceDetailW(pf-vdisplay)")
-                .and_then(|()| {
-                    CreateFileW(
-                        PCWSTR((&raw const (*detail).DevicePath).cast::<u16>()),
-                        0xC000_0000, // GENERIC_READ | GENERIC_WRITE
-                        FILE_SHARE_READ | FILE_SHARE_WRITE,
-                        None,
-                        OPEN_EXISTING,
-                        FILE_FLAGS_AND_ATTRIBUTES(0),
-                        None,
-                    )
-                    .context("CreateFileW(pf-vdisplay device)")
-                })
         };
+        if let Err(e) = filled.context("SetupDiGetDeviceInterfaceDetailW(pf-vdisplay)") {
+            probe.last_err = Some(e);
+            continue;
+        }
+        // SAFETY: `detail` still aliases `buf`, and `DevicePath` is the NUL-terminated path the
+        // call above filled in.
+        let instance_id =
+            unsafe { PCWSTR((&raw const (*detail).DevicePath).cast::<u16>()).to_string() }
+                .ok()
+                .and_then(|p| instance_id_from_path(&p));
+        if !drives(instance_id.as_deref(), seat_session) {
+            // A seat host waits for its own devnode as not ready; absent would reload another's.
+            probe.active -= 1;
+            probe.inactive += u32::from(seat_session.is_some());
+            continue;
+        }
+        // SAFETY: as above; `CreateFileW` reads the whole NUL-terminated `DevicePath`.
+        let opened = unsafe {
+            CreateFileW(
+                PCWSTR((&raw const (*detail).DevicePath).cast::<u16>()),
+                0xC000_0000, // GENERIC_READ | GENERIC_WRITE
+                FILE_SHARE_READ | FILE_SHARE_WRITE,
+                None,
+                OPEN_EXISTING,
+                FILE_FLAGS_AND_ATTRIBUTES(0),
+                None,
+            )
+        }
+        .context("CreateFileW(pf-vdisplay device)");
         match opened {
             Ok(h) => {
                 // The devnode behind this interface, for a later reload while it is hostless
-                // and has no interface left to ask. SAFETY: `detail` still aliases `buf`, and
-                // `DevicePath` is the NUL-terminated path the call above filled in.
-                let path =
-                    unsafe { PCWSTR((&raw const (*detail).DevicePath).cast::<u16>()).to_string() };
-                if let Some(id) = path.ok().and_then(|p| instance_id_from_path(&p)) {
+                // and has no interface left to ask.
+                if let Some(id) = instance_id {
                     *LAST_INSTANCE_ID.lock().unwrap_or_else(|e| e.into_inner()) = Some(id);
                 }
                 // SAFETY: `h` is the handle `CreateFileW` just returned to this call and nothing
@@ -1320,6 +1350,19 @@ mod tests {
     use super::*;
     use std::thread;
     use std::time::Duration;
+
+    #[test]
+    fn a_seat_host_drives_only_its_own_session_s_devnode() {
+        let seat = Some(r"SWD\REMOTEDISPLAYENUM\RDPIDD_INDIRECTDISPLAY&SESSIONID_0012");
+        let root = Some(r"ROOT\DISPLAY\0000");
+        assert!(drives(root, None));
+        assert!(drives(None, None));
+        assert!(!drives(seat, None));
+        assert!(drives(seat, Some(12)));
+        assert!(!drives(seat, Some(2)));
+        assert!(!drives(root, Some(12)));
+        assert!(!drives(None, Some(12)));
+    }
 
     /// A probe past its budget is reported wedged and later probes fail fast without a second
     /// worker; the count clears when the abandoned worker returns, and probing resumes. A count

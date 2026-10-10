@@ -165,18 +165,23 @@ pub fn os_build() -> u32 {
 /// phrase the mismatch without hiding later display-operation errors.
 #[cfg(target_os = "windows")]
 pub fn console_session_mismatch() -> Option<(u32, u32)> {
-    use windows::Win32::System::RemoteDesktop::{
-        ProcessIdToSessionId, WTSGetActiveConsoleSessionId,
-    };
-    use windows::Win32::System::Threading::GetCurrentProcessId;
-    let mut own: u32 = 0;
-    // SAFETY: `own` is a live local out-param for this synchronous call; no pointer escapes it.
-    if unsafe { ProcessIdToSessionId(GetCurrentProcessId(), &mut own) }.is_err() {
-        return None;
-    }
+    use windows::Win32::System::RemoteDesktop::WTSGetActiveConsoleSessionId;
+    let own = own_session_id()?;
     // SAFETY: takes no arguments and returns the console session id by value.
     let console = unsafe { WTSGetActiveConsoleSessionId() };
     (console != 0xFFFF_FFFF && own != console).then_some((own, console))
+}
+
+/// The session this process runs in; `None` when Windows can't say.
+#[cfg(target_os = "windows")]
+pub fn own_session_id() -> Option<u32> {
+    use windows::Win32::System::RemoteDesktop::ProcessIdToSessionId;
+    use windows::Win32::System::Threading::GetCurrentProcessId;
+    let mut own: u32 = 0;
+    // SAFETY: `own` is a live local out-param for this synchronous call; no pointer escapes it.
+    unsafe { ProcessIdToSessionId(GetCurrentProcessId(), &mut own) }
+        .ok()
+        .map(|()| own)
 }
 
 #[cfg(test)]
