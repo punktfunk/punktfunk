@@ -549,7 +549,13 @@ impl SimpleComponent for AppModel {
             }
             AppMsg::Pair(req) => {
                 if !self.busy {
-                    crate::app::gate::pin_dialog(&self.window, &sender, self.identity.clone(), req);
+                    crate::app::gate::pin_dialog(
+                        &self.window,
+                        &sender,
+                        self.identity.clone(),
+                        req,
+                        false,
+                    );
                 }
             }
             AppMsg::SpeedTest(req) => self.speed_test(req, &sender),

@@ -510,19 +510,34 @@ pub(crate) fn request_access(props: &Svc, target: &Target) {
         if cancel.load(Ordering::SeqCst) {
             return;
         }
-        st.call(match result {
-            Ok(fp) => match trust::persist_host(
-                &target.host.name,
-                &target.host.addr,
-                target.host.port,
-                &trust::hex(&fp),
-                true,
-                &target.host.mac,
-            ) {
-                Ok(()) => format!("Paired with {}", target.host.name),
-                Err(e) => format!("Paired, but couldn't save — {e:#}"),
-            },
-            Err(e) => trust::access_error_message(&e),
+        let fp = match result {
+            Ok(fp) => fp,
+            Err(e) => {
+                st.call(trust::access_error_message(&e));
+                ss.call(Screen::Hosts);
+                return;
+            }
+        };
+        let saved = trust::persist_host(
+            &target.host.name,
+            &target.host.addr,
+            target.host.port,
+            &trust::hex(&fp),
+            true,
+            &target.host.mac,
+        );
+        // Only a link's request streams; `connect` clears the status line, so a save error
+        // goes after it.
+        if target.from_link {
+            connect(&ctx, &target, Some(fp), &ss, &st);
+            if let Err(e) = saved {
+                st.call(format!("Paired, but couldn't save — {e:#}"));
+            }
+            return;
+        }
+        st.call(match saved {
+            Ok(()) => format!("Paired with {}", target.host.name),
+            Err(e) => format!("Paired, but couldn't save — {e:#}"),
         });
         ss.call(Screen::Hosts);
     });

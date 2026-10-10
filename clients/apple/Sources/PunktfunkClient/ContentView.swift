@@ -83,6 +83,9 @@ struct ContentView: View {
     @State private var liveActivity = SessionActivityController()
     #endif
     @State private var pairingTarget: StoredHost?
+    /// A link's connect, waiting on the PIN pairing it detoured through (`pairingBinding`
+    /// drops it when the pair screen closes).
+    @State private var pairThen: (@MainActor (StoredHost) -> Void)?
     /// A fresh `pair=required`/unknown host the user tapped: drives the choice between no-PIN
     /// delegated approval ("Request Access") and the SPAKE2 PIN ceremony (rule 3b).
     @State private var approvalChoice: ApprovalRequest?
@@ -211,7 +214,10 @@ struct ContentView: View {
                     DispatchQueue.main.async { flow.requestAccess(req) }
                 }
                 Button("Pair with PIN…") {
-                    DispatchQueue.main.async { pairingTarget = req.host }
+                    DispatchQueue.main.async {
+                        pairThen = req.thenConnect
+                        pairingTarget = req.host
+                    }
                 }
                 Button("Cancel", role: .cancel) {}
             } message: { req in
@@ -273,7 +279,7 @@ struct ContentView: View {
         } else {
             flow.connect(
                 confirm.host, launchID: confirm.launch, preset: confirm.preset,
-                profile: .ask(link: confirm.asProfile))
+                profile: .ask(link: confirm.asProfile), fromLink: true)
         }
     }
 
@@ -630,12 +636,25 @@ struct ContentView: View {
     /// macOS has no shell, so the sheet stays and switches its CONTENT by mode instead.
     private var touchPairingTarget: Binding<StoredHost?> {
         #if os(macOS)
-        Binding(get: { consoleOwnsScreen ? nil : pairingTarget }, set: { pairingTarget = $0 })
+        Binding(
+            get: { consoleOwnsScreen ? nil : pairingTarget },
+            set: { pairingBinding.wrappedValue = $0 })
         #else
         Binding(
             get: { gamepadUIActive ? nil : pairingTarget },
-            set: { pairingTarget = $0 })
+            set: { pairingBinding.wrappedValue = $0 })
         #endif
+    }
+
+    /// `pairingTarget` for every pair screen: closing one drops a link's waiting connect, so a
+    /// cancelled link never streams after a later pairing of the same host.
+    private var pairingBinding: Binding<StoredHost?> {
+        Binding(
+            get: { pairingTarget },
+            set: {
+                pairingTarget = $0
+                if $0 == nil { pairThen = nil }
+            })
     }
 
     private var approvalChoicePresented: Binding<Bool> {
@@ -764,7 +783,7 @@ struct ContentView: View {
         case .proceed(let host, let selection):
             flow.connect(
                 host, launchID: link.launch, preset: selection,
-                profile: .ask(link: link.asProfile))
+                profile: .ask(link: link.asProfile), fromLink: true)
         }
     }
 
@@ -846,7 +865,7 @@ struct ContentView: View {
                     store: store, selection: $macDestination,
                     hosts: HomeView(
                         store: store, model: model, discovery: discovery,
-                        showAddHost: $showAddHost, pairingTarget: $pairingTarget,
+                        showAddHost: $showAddHost, pairingTarget: pairingBinding,
                         speedTestTarget: $speedTestTarget, libraryTarget: $libraryTarget,
                         connect: { flow.connect($0, preset: $1) },
                         connectDiscovered: flow.connectDiscovered,
@@ -882,7 +901,7 @@ struct ContentView: View {
     private var console: some View {
         ConsoleHomeView(
             store: store, model: model, discovery: discovery, waker: waker,
-            entry: $libraryTarget, notice: $deepLinkNotice, pairing: $pairingTarget,
+            entry: $libraryTarget, notice: $deepLinkNotice, pairing: pairingBinding,
             linkConfirm: $deepLinkConfirm, runLink: runDeepLinkConfirm,
             onFailed: { consoleFailed = true }, onPaired: handlePaired,
             connect: { flow.connect($0, preset: $1, profile: .send($2)) },
@@ -898,7 +917,7 @@ struct ContentView: View {
     private var touchHome: some View {
         HomeView(
             store: store, model: model, discovery: discovery,
-            showAddHost: $showAddHost, pairingTarget: $pairingTarget,
+            showAddHost: $showAddHost, pairingTarget: pairingBinding,
             speedTestTarget: $speedTestTarget, libraryTarget: $libraryTarget,
             showSettings: $showSettings,
             connect: { flow.connect($0, preset: $1) }, connectDiscovered: flow.connectDiscovered,
@@ -1074,12 +1093,17 @@ struct ContentView: View {
         flow.connect(shelf.host, preset: shelf.preset, fromLibrary: true)
     }
 
-    /// Pairing ceremony succeeded — pin the host. Pairing never starts a stream; the next tap
-    /// does. The guard backstops a stale ceremony surfacing after dismissal (PairSheet also
-    /// self-discards those).
+    /// Pairing ceremony succeeded — pin the host. Only a link's pairing goes on to stream;
+    /// otherwise the next tap does. The guard backstops a stale ceremony surfacing after
+    /// dismissal (PairSheet also self-discards those).
     private func handlePaired(_ host: StoredHost, fingerprint: Data) {
         guard pairingTarget?.id == host.id else { return }
         store.pin(host.id, fingerprint: fingerprint)
+        guard let then = pairThen else { return }
+        pairThen = nil
+        var pinned = host
+        pinned.pinnedSHA256 = fingerprint
+        then(pinned)
     }
 
     // MARK: - First-run + dev hooks

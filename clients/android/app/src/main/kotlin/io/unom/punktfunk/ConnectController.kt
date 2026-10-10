@@ -364,7 +364,7 @@ internal class ConnectController(
     /**
      * The no-PIN "request access" path: the host parks the request until the operator approves
      * it in its console or web UI. Approval saves the host as paired, like a PIN ceremony, and
-     * never starts a stream. Cancel returns the UI at once; a late answer is dropped.
+     * streams only for a link. Cancel returns the UI at once; a late answer is dropped.
      */
     fun requestAccess(target: PendingTrust) {
         pendingTrust = null
@@ -389,7 +389,11 @@ internal class ConnectController(
             if (fp.isNotEmpty()) {
                 knownHostStore.trust(target.host, target.port, target.name, fp, paired = true)
                 refreshHosts()
-                notice = "Paired with ${target.name}"
+                if (target.fromLink) {
+                    doConnect(target.host, target.port, target.name, fp, target.preset, target.launch)
+                } else {
+                    notice = "Paired with ${target.name}"
+                }
             } else {
                 // Cause-specific: an operator denial, an approval timeout, and a request that
                 // never reached the host are different problems with different fixes.
@@ -486,12 +490,16 @@ internal class ConnectController(
         )
     }
 
-    /** The PIN ceremony finished with [fp]: save the host as paired. Pairing never streams. */
+    /** The PIN ceremony finished with [fp]: save the host as paired. Only a link's pairing streams. */
     fun paired(pt: PendingTrust, fp: String) {
         knownHostStore.trust(pt.host, pt.port, pt.name, fp, paired = true)
         refreshHosts()
         pendingTrust = null
-        notice = "Paired with ${pt.name}"
+        if (pt.fromLink) {
+            doConnect(pt.host, pt.port, pt.name, fp, pt.preset, pt.launch)
+        } else {
+            notice = "Paired with ${pt.name}"
+        }
     }
 
     /** The OK on a link that named a saved host by a guessable reference: the card's own dial. */
@@ -553,6 +561,7 @@ internal class ConnectController(
                     pendingTrust = PendingTrust(
                         resolved.host.address, resolved.host.port, resolved.host.name,
                         link.fp, PendingTrust.Kind.REQUEST_ACCESS, presetRef, link.launch,
+                        fromLink = true,
                     )
                     return
                 }
@@ -576,6 +585,7 @@ internal class ConnectController(
                 PendingTrust.Kind.REQUEST_ACCESS,
                 presetRef,
                 link.launch,
+                fromLink = true,
             )
             HostResolution.Ambiguous ->
                 status = "More than one saved host is called “${link.hostRef}” — " +

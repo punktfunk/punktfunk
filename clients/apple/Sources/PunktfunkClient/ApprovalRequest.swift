@@ -9,4 +9,7 @@ struct ApprovalRequest {
     let advertisedFingerprint: Data?
     /// Tells this request's answer from a later one's.
     var token = UUID()
+    /// A link's connect, run with the newly pinned host once pairing lands. Nil for every other
+    /// way in: pairing alone never streams.
+    var thenConnect: (@MainActor (StoredHost) -> Void)?
 }

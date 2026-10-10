@@ -159,12 +159,14 @@ pub fn tofu_dialog(
 
 /// The SPAKE2 ceremony: the host is armed and displays a 4-digit PIN; proving knowledge
 /// of it pins the host's certificate (and registers ours) with no offline-guessable
-/// transcript. Success persists the host as paired; it never starts a stream.
+/// transcript. Success persists the host as paired, and streams only when `then_connect`
+/// (a link that asked to connect).
 pub fn pin_dialog(
     window: &adw::ApplicationWindow,
     sender: &ComponentSender<AppModel>,
     identity: (String, String),
     req: ConnectRequest,
+    then_connect: bool,
 ) {
     let entry = gtk::Entry::builder()
         .input_purpose(gtk::InputPurpose::Digits)
@@ -234,12 +236,19 @@ pub fn pin_dialog(
                         true,
                         &[],
                     );
-                    // Pairing never streams: the host's list watch shows it paired, and the
-                    // next Connect dials it.
                     sender.input(AppMsg::Toast(match saved {
+                        Ok(()) if then_connect => "Paired — connecting…".into(),
                         Ok(()) => format!("Paired with {}", req.host.name),
                         Err(e) => format!("Paired, but couldn't save — {e:#}"),
                     }));
+                    if then_connect {
+                        sender.input(AppMsg::StartSession {
+                            req,
+                            fp_hex,
+                            tofu: false,
+                            opts: SpawnOpts::default(),
+                        });
+                    }
                 }
                 Ok(Err(msg)) => sender.input(AppMsg::Toast(msg)),
                 Err(_) => {}

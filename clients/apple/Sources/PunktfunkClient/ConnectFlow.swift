@@ -45,11 +45,11 @@ struct ConnectFlow {
     /// `preset` is this connect's one-off pick ("Connect with ▸", a pinned card, a link's
     /// `preset=`). `.inherit` — the default, and what a plain card tap passes — falls through to
     /// the host's binding. A one-off NEVER rebinds the host: rebinding is always an explicit act
-    /// in the edit sheet (design §5.2).
+    /// in the edit sheet (design §5.2). `fromLink`: a pairing on the way resumes this connect.
     func connect(
         _ host: StoredHost, launchID: String? = nil,
         preset: PresetSelection = .inherit, allowTofu: Bool? = nil,
-        fromLibrary: Bool = false, profile: ProfileChoice = .ask()
+        fromLibrary: Bool = false, profile: ProfileChoice = .ask(), fromLink: Bool = false
     ) {
         // A pinned host dials on its stored fingerprint. An unpinned one may TOFU only when the
         // caller says so, or when its live advert says `pair=optional` (rule 3a); any other gets
@@ -61,8 +61,18 @@ struct ConnectFlow {
             if !tofuOK {
                 // pair=required / unknown policy / manual entry (rule 3b): never a silent
                 // connect — offer no-PIN delegated approval or the PIN ceremony.
+                var then: (@MainActor (StoredHost) -> Void)?
+                if fromLink {
+                    let flow = self
+                    then = { pinned in
+                        flow.connect(
+                            pinned, launchID: launchID, preset: preset,
+                            fromLibrary: fromLibrary, profile: profile)
+                    }
+                }
                 approvalChoice = ApprovalRequest(
-                    host: host, advertisedFingerprint: advertisedFingerprint(for: host))
+                    host: host, advertisedFingerprint: advertisedFingerprint(for: host),
+                    thenConnect: then)
                 return
             }
         }
@@ -316,8 +326,8 @@ struct ConnectFlow {
 
     /// The no-PIN delegated-approval flow: ask the host, which parks the request until the
     /// operator approves it in the console, under the cancelable "Waiting for approval" prompt.
-    /// Approval pins the host as paired; it never starts a stream. The advertised certificate is
-    /// the pin (impostor defence during the long wait); a typed host has none, so first use.
+    /// Approval pins the host as paired and streams only for a link. The advertised certificate
+    /// is the pin (impostor defence during the long wait); a typed host has none, so first use.
     func requestAccess(_ req: ApprovalRequest) {
         guard !model.isBusy else { return }
         awaitingApproval = req
@@ -338,6 +348,9 @@ struct ConnectFlow {
             switch result {
             case .success(let fingerprint):
                 store.pin(req.host.id, fingerprint: fingerprint)
+                var pinned = req.host
+                pinned.pinnedSHA256 = fingerprint
+                req.thenConnect?(pinned)
             case .failure(let error):
                 model.errorMessage = ConnectOffer.failureMessage(
                     error, hostName: req.host.displayName, pinned: false, requestAccess: true,
