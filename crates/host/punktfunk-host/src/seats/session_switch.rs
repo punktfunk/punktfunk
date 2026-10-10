@@ -5,7 +5,8 @@
 //! would rewrite the box's own login. A seat host owns the name on the seat's bus instead; the
 //! runner's `steamos-session-select` calls it too. The desktop keeps running in Game Mode, so a
 //! switch only moves each of the seat's live sessions between its KWin output and a gamescope of
-//! its own, in place. The mode is kept in the config dir for the next start.
+//! its own, in place. That gamescope outlives a disconnect, as the box's Game Mode keeps Steam.
+//! The mode is kept in the config dir for the next start.
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -82,6 +83,7 @@ pub(crate) fn spawn() {
     let mode_file = pf_paths::config_dir().join("seat-session");
     let saved = std::fs::read_to_string(&mode_file).unwrap_or_default();
     GAME.store(saved.trim() == "game" || !has_desktop(), Ordering::Relaxed);
+    crate::vdisplay::registry::set_seat_game_mode(in_game_mode());
     let service = SessionManagement {
         mode_file,
         has_desktop: has_desktop(),
@@ -114,7 +116,8 @@ struct SessionManagement {
 
 impl SessionManagement {
     /// Every switch reaches every session, so one a failed rebuild left behind catches up; a
-    /// session already there ignores it.
+    /// session already there ignores it. Game Mode outlives a disconnect until the switch to
+    /// the desktop, which also ends the one a disconnect left running.
     fn switch(&self, game: bool) -> fdo::Result<()> {
         if !game && !self.has_desktop {
             return Err(fdo::Error::Failed("this seat has no desktop".into()));
@@ -126,9 +129,14 @@ impl SessionManagement {
                     "seat: mode not saved, so the next start opens the last saved one");
             }
         }
+        crate::vdisplay::registry::set_seat_game_mode(game);
         let mut followers = FOLLOWERS.lock().unwrap_or_else(|e| e.into_inner());
         followers.retain(|follow| follow(game));
         tracing::info!(mode, sessions = followers.len(), "seat: switched mode");
+        drop(followers);
+        if !game {
+            crate::vdisplay::registry::release_seat_game_mode();
+        }
         Ok(())
     }
 }

@@ -259,7 +259,9 @@ system-range user, `pf-seat-<n>`, with a logind session of its own, a headless c
   The desktop keeps running in Game Mode. A switch moves the seat's own live sessions in place
   between its KWin output and a gamescope the host spawns with `steam -gamepadui -steamos3`, so the
   stream continues; a device joined to the screen is ended and joins the new one on reconnect. The
-  seat's sessions use shared input and audio, never an isolated gamescope.
+  seat's sessions use shared input and audio, never an isolated gamescope. That gamescope and its
+  Steam outlive a disconnect, whatever `keep_alive` says, and the next connect from any device
+  takes them over; the switch to the desktop or a deliberate quit ends them.
 
   Steam's update helpers escalate through pkexec, which a seat is refused, and its first-run setup
   stops on that. A seat never updates the box, so the supervisor binds

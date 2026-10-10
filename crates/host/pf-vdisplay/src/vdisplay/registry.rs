@@ -147,6 +147,22 @@ pub fn parked_isolations() -> Vec<String> {
     linux::parked_isolations()
 }
 
+/// A seat in Game Mode keeps its own gamescope through a disconnect, whatever `keep_alive`
+/// says, as the box's Game Mode keeps Steam. Set by the seat host's mode switch.
+#[cfg(target_os = "linux")]
+static SEAT_GAME_MODE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+#[cfg(target_os = "linux")]
+pub fn set_seat_game_mode(on: bool) {
+    SEAT_GAME_MODE.store(on, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// The switch to the desktop: tear down the Game Mode display a disconnect left kept.
+#[cfg(target_os = "linux")]
+pub fn release_seat_game_mode() -> usize {
+    linux::release_seat_game_mode()
+}
+
 /// Cheap lock-read of the host's managed virtual displays.
 pub fn snapshot() -> Snapshot {
     #[cfg(target_os = "windows")]
@@ -689,6 +705,12 @@ mod pool {
         }
     }
 
+    /// A seat's own Game Mode display, which a release keeps like a parked one: its gamescope
+    /// while the seat is in Game Mode. A light seat's is isolated and keeps the console's rules.
+    pub(super) fn is_seat_game_mode(e: &Entry, seat_game_mode: bool) -> bool {
+        seat_game_mode && e.backend == "gamescope" && e.isolation.is_none()
+    }
+
     /// Flattened live/kept row so group/layout math runs outside the pool lock.
     pub(super) struct Row {
         pub(super) generation: u64,
@@ -879,6 +901,18 @@ mod pool {
                 release_linger(false, false, Linger::Immediate),
                 Linger::Immediate
             );
+        }
+
+        /// Only the seat's own gamescope, and only while the seat is in Game Mode.
+        #[test]
+        fn a_seats_game_mode_display_is_its_unisolated_gamescope() {
+            let own = test_entry("gamescope", 1, None);
+            assert!(is_seat_game_mode(&own, true));
+            assert!(!is_seat_game_mode(&own, false));
+            let mut light = test_entry("gamescope", 2, None);
+            light.isolation = Some("ab12cd34".into());
+            assert!(!is_seat_game_mode(&light, true));
+            assert!(!is_seat_game_mode(&test_entry("kwin", 3, None), true));
         }
 
         #[test]
@@ -1415,9 +1449,9 @@ mod linux {
 
     use super::pool::{
         assemble_displays, assign_group_ids, budget_count, drain_where, group_key,
-        hand_off_restore, in_group, join_target, kept_to_evict, kept_to_retire, kept_verdict,
-        park_mode_for, position_for_new, release_linger, reuse_keys_match, slot_key, slot_state,
-        take_expired, Drained, Entry, Held, Kept, Row, Slot,
+        hand_off_restore, in_group, is_seat_game_mode, join_target, kept_to_evict, kept_to_retire,
+        kept_verdict, park_mode_for, position_for_new, release_linger, reuse_keys_match, slot_key,
+        slot_state, take_expired, Drained, Entry, Held, Kept, Row, Slot,
     };
     use super::DisplayInfo;
     use crate::lifecycle::{self, Release};
@@ -2149,7 +2183,8 @@ mod linux {
         _lease: Box<dyn Send>,
     }
 
-    /// [`DisplayLease`] drop: lifecycle decides linger / pin / teardown.
+    /// [`DisplayLease`] drop: lifecycle decides linger / pin / teardown. A seat's own Game Mode
+    /// display is kept like a parked one unless the client quit on purpose.
     /// Torn-down keepalive drops after the lock is released.
     fn release(generation: u64, force_immediate: bool) {
         let Some(r) = REG.get() else { return };
@@ -2158,10 +2193,12 @@ mod linux {
             let Some(idx) = es.iter().position(|e| e.generation == generation) else {
                 return; // stale lease (entry reused + re-stamped, or already gone) — no-op
             };
+            let seat_keeps = !force_immediate
+                && is_seat_game_mode(&es[idx], super::SEAT_GAME_MODE.load(Ordering::Relaxed));
             // Resolved here, not before the lookup: the answer belongs to the display's
             // OWNER, and the entry is what names it.
             let linger = release_linger(
-                es[idx].parked,
+                es[idx].parked || seat_keeps,
                 force_immediate,
                 linger_for(es[idx].identity_slot),
             );
@@ -2338,6 +2375,17 @@ mod linux {
 
     /// Tear down kept (lingering/pinned) entries — all, or one by generation —
     /// with keepalive drops outside the lock. Shared by [`force_release`] and [`retire`].
+    pub(super) fn release_seat_game_mode() -> usize {
+        let Some(r) = REG.get() else { return 0 };
+        let released = {
+            let mut es = r.entries.lock().unwrap();
+            drain_where(&mut es, |e| {
+                e.backend == "gamescope" && e.isolation.is_none() && e.life.force_release()
+            })
+        };
+        released.finish("the seat switched to its desktop")
+    }
+
     fn release_kept(slot: Option<u64>, why: &'static str) -> usize {
         let Some(r) = REG.get() else { return 0 };
         let released = {
