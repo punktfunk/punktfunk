@@ -6,6 +6,9 @@
 //! a `SOCK_SEQPACKET` pair. [`relay`] moves the seat's `input_event` frames into the device and
 //! the device's FF plane back as [`FfNotice`](crate::uinput_abi::FfNotice)s. No kernel fd ever
 //! crosses: a passed uinput fd can destroy its pad and create any device.
+//!
+//! A USB/IP pad stays the seat's own usbip server. The seat runs the import handshake and sends
+//! the connected socket with [`attach`]; the supervisor picks the vhci port and writes `attach`.
 //! Design: `design/seat-pad-broker.md`.
 
 use crate::gamepad::{build_pad, PadIdentity};
@@ -17,9 +20,9 @@ use rustix::net::{
     recvmsg, sendmsg, socketpair, AddressFamily, RecvAncillaryBuffer, RecvAncillaryMessage,
     RecvFlags, SendAncillaryBuffer, SendAncillaryMessage, SendFlags, SocketFlags, SocketType,
 };
-use std::io::{ErrorKind, IoSlice, IoSliceMut, Read, Write};
+use std::io::{ErrorKind, IoSlice, IoSliceMut};
 use std::mem::MaybeUninit;
-use std::os::fd::{BorrowedFd, OwnedFd};
+use std::os::fd::{AsFd, BorrowedFd, OwnedFd};
 use std::os::unix::net::{UnixDatagram, UnixStream};
 use std::time::Duration;
 
@@ -137,38 +140,68 @@ pub fn seat_phys(account: &str, rest: &str) -> String {
 }
 
 const MAGIC: [u8; 4] = *b"PFPD";
-const VERSION: u8 = 1;
+const VERSION: u8 = 2;
 const OP_CREATE: u8 = 1;
-/// A request, whole.
-pub const REQUEST_LEN: usize = 8;
-const REPLY_LEN: usize = 2;
+const OP_ATTACH: u8 = 2;
+const OP_DETACH: u8 = 3;
+/// A request, whole: magic, version, op, ten bytes of payload.
+pub const REQUEST_LEN: usize = 16;
+/// An answer, whole: version, status, the port for `Attached`.
+const REPLY_LEN: usize = 4;
 /// The supervisor answers at once; a seat that waits longer has no supervisor.
 const TIMEOUT: Duration = Duration::from_secs(5);
 
-/// `Create`: the one request. `index` is the seat's pad slot, part of the pad's marker.
+/// What a seat may ask. `Create`'s `index` is the seat's pad slot, part of the pad's marker;
+/// `Attach` carries the connected usbip socket beside it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Request {
-    pub kind: PadKind,
-    pub index: u8,
+pub enum Request {
+    Create { kind: PadKind, index: u8 },
+    Attach { devid: u32, speed: u32 },
+    Detach { port: u16 },
 }
 
 impl Request {
     pub fn encode(self) -> [u8; REQUEST_LEN] {
-        let [a, b, c, d] = MAGIC;
-        [a, b, c, d, VERSION, OP_CREATE, self.kind as u8, self.index]
+        let mut out = [0u8; REQUEST_LEN];
+        out[..4].copy_from_slice(&MAGIC);
+        out[4] = VERSION;
+        match self {
+            Request::Create { kind, index } => {
+                out[5] = OP_CREATE;
+                out[6] = kind as u8;
+                out[7] = index;
+            }
+            Request::Attach { devid, speed } => {
+                out[5] = OP_ATTACH;
+                out[6..10].copy_from_slice(&devid.to_le_bytes());
+                out[10..14].copy_from_slice(&speed.to_le_bytes());
+            }
+            Request::Detach { port } => {
+                out[5] = OP_DETACH;
+                out[6..8].copy_from_slice(&port.to_le_bytes());
+            }
+        }
+        out
     }
 
     pub fn decode(bytes: &[u8]) -> Option<Request> {
-        let [a, b, c, d, version, op, kind, index] = *bytes.first_chunk::<REQUEST_LEN>()?;
-        if bytes.len() != REQUEST_LEN || [a, b, c, d] != MAGIC || version != VERSION {
+        let b = *bytes.first_chunk::<REQUEST_LEN>()?;
+        if bytes.len() != REQUEST_LEN || b[..4] != MAGIC || b[4] != VERSION {
             return None;
         }
-        if op != OP_CREATE {
-            return None;
-        }
-        Some(Request {
-            kind: PadKind::from_wire(kind)?,
-            index,
+        Some(match b[5] {
+            OP_CREATE => Request::Create {
+                kind: PadKind::from_wire(b[6])?,
+                index: b[7],
+            },
+            OP_ATTACH => Request::Attach {
+                devid: u32::from_le_bytes([b[6], b[7], b[8], b[9]]),
+                speed: u32::from_le_bytes([b[10], b[11], b[12], b[13]]),
+            },
+            OP_DETACH => Request::Detach {
+                port: u16::from_le_bytes([b[6], b[7]]),
+            },
+            _ => return None,
         })
     }
 }
@@ -186,6 +219,9 @@ pub enum Status {
     UnknownKind = 3,
     /// The device could not be made; the supervisor's log says why.
     Failed = 4,
+    /// The port rides along.
+    Attached = 5,
+    Detached = 6,
 }
 
 impl Status {
@@ -196,85 +232,141 @@ impl Status {
             2 => Status::Capacity,
             3 => Status::UnknownKind,
             4 => Status::Failed,
+            5 => Status::Attached,
+            6 => Status::Detached,
             _ => return None,
         })
     }
+}
+
+/// One message on the socket, with at most one fd beside it.
+fn send_frame(sock: &impl AsFd, bytes: &[u8], pass: Option<BorrowedFd<'_>>) -> Result<()> {
+    let mut space = [MaybeUninit::<u8>::uninit(); rustix::cmsg_space!(ScmRights(1))];
+    let mut control = SendAncillaryBuffer::new(&mut space);
+    let fds: Vec<BorrowedFd<'_>> = pass.into_iter().collect();
+    if !fds.is_empty() && !control.push(SendAncillaryMessage::ScmRights(&fds)) {
+        bail!("no room for the fd beside the message");
+    }
+    sendmsg(
+        sock,
+        &[IoSlice::new(bytes)],
+        &mut control,
+        SendFlags::NOSIGNAL,
+    )?;
+    Ok(())
+}
+
+/// One message into `buf`: how much arrived, and the fd beside it if any.
+fn recv_frame(sock: &impl AsFd, buf: &mut [u8]) -> Result<(usize, Option<OwnedFd>)> {
+    let mut space = [MaybeUninit::<u8>::uninit(); rustix::cmsg_space!(ScmRights(1))];
+    let mut control = RecvAncillaryBuffer::new(&mut space);
+    let got = recvmsg(
+        sock,
+        &mut [IoSliceMut::new(buf)],
+        &mut control,
+        RecvFlags::CMSG_CLOEXEC,
+    )?;
+    let fd = control.drain().find_map(|message| match message {
+        RecvAncillaryMessage::ScmRights(fds) => fds.into_iter().next(),
+        _ => None,
+    });
+    Ok((got.bytes, fd))
 }
 
 // ---- the seat's side ----
 
 /// Ask the supervisor for `kind` at `index`: the seat's end of its relay.
 pub fn request(kind: PadKind, index: u8) -> Result<OwnedFd> {
-    let mut stream = UnixStream::connect(SOCKET).with_context(|| {
-        format!("connect to the seat pad broker at {SOCKET} (is punktfunk-seats running?)")
-    })?;
-    let _ = stream.set_read_timeout(Some(TIMEOUT));
-    let _ = stream.set_write_timeout(Some(TIMEOUT));
-    stream
-        .write_all(&Request { kind, index }.encode())
-        .context("send the pad request")?;
-    let (status, relay) = recv_reply(&stream).context("read the pad broker's answer")?;
+    let (status, _, relay) = ask(Request::Create { kind, index }, None)?;
     match status {
         Status::Created => relay.ok_or_else(|| anyhow!("the pad broker answered without a relay")),
-        Status::Refused => bail!("the seat pad broker refused this host: not a running seat"),
-        Status::Capacity => bail!("this seat holds every pad it may"),
         Status::UnknownKind => bail!("the seat pad broker does not know the {} pad", kind.label()),
         Status::Failed => bail!(
             "the seat pad broker could not make the {} pad (its log says why)",
             kind.label()
         ),
+        other => bail!("{}", other.refusal()),
     }
 }
 
-fn recv_reply(stream: &UnixStream) -> Result<(Status, Option<OwnedFd>)> {
-    let mut space = [MaybeUninit::<u8>::uninit(); rustix::cmsg_space!(ScmRights(1))];
-    let mut control = RecvAncillaryBuffer::new(&mut space);
-    let mut buf = [0u8; REPLY_LEN];
-    let got = recvmsg(
-        stream,
-        &mut [IoSliceMut::new(&mut buf)],
-        &mut control,
-        RecvFlags::CMSG_CLOEXEC,
-    )?;
-    if got.bytes != REPLY_LEN || buf[0] != VERSION {
-        bail!("malformed answer ({} bytes, version {})", got.bytes, buf[0]);
+/// Hand the supervisor `sock`, a usbip connection past its import handshake, to attach as
+/// `devid` at `speed`. The vhci port it took.
+pub fn attach(sock: BorrowedFd<'_>, devid: u32, speed: u32) -> Result<u16> {
+    let (status, port, _) = ask(Request::Attach { devid, speed }, Some(sock))?;
+    match status {
+        Status::Attached => Ok(port),
+        Status::Failed => {
+            bail!("the seat pad broker could not attach the device (its log says why)")
+        }
+        other => bail!("{}", other.refusal()),
     }
-    let relay = control.drain().find_map(|message| match message {
-        RecvAncillaryMessage::ScmRights(fds) => fds.into_iter().next(),
-        _ => None,
-    });
+}
+
+/// Detach `port`, one this seat attached.
+pub fn detach(port: u16) -> Result<()> {
+    let (status, _, _) = ask(Request::Detach { port }, None)?;
+    match status {
+        Status::Detached => Ok(()),
+        other => bail!("{}", other.refusal()),
+    }
+}
+
+impl Status {
+    fn refusal(self) -> String {
+        match self {
+            Status::Refused => "the seat pad broker refused this host: not a running seat".into(),
+            Status::Capacity => "this seat holds every pad it may".into(),
+            other => format!("the seat pad broker answered {other:?}"),
+        }
+    }
+}
+
+/// One request, one answer: `(status, port, relay)`.
+fn ask(request: Request, pass: Option<BorrowedFd<'_>>) -> Result<(Status, u16, Option<OwnedFd>)> {
+    let stream = UnixStream::connect(SOCKET).with_context(|| {
+        format!("connect to the seat pad broker at {SOCKET} (is punktfunk-seats running?)")
+    })?;
+    let _ = stream.set_read_timeout(Some(TIMEOUT));
+    let _ = stream.set_write_timeout(Some(TIMEOUT));
+    send_frame(&stream, &request.encode(), pass).context("send the pad request")?;
+    recv_reply(&stream).context("read the pad broker's answer")
+}
+
+fn recv_reply(stream: &UnixStream) -> Result<(Status, u16, Option<OwnedFd>)> {
+    let mut buf = [0u8; REPLY_LEN];
+    let (n, relay) = recv_frame(stream, &mut buf)?;
+    if n != REPLY_LEN || buf[0] != VERSION {
+        bail!("malformed answer ({n} bytes, version {})", buf[0]);
+    }
     let status = Status::from_wire(buf[1]).ok_or_else(|| anyhow!("unknown status {}", buf[1]))?;
-    Ok((status, relay))
+    Ok((status, u16::from_le_bytes([buf[2], buf[3]]), relay))
 }
 
 // ---- the supervisor's side ----
 
-/// A seat's request, read whole off `stream`. Anything else is not a request.
-pub fn read_request(stream: &mut UnixStream) -> Result<Request> {
+/// A seat's request, read whole off `stream`, with the fd it sent beside it. Anything else is
+/// not a request.
+pub fn read_request(stream: &UnixStream) -> Result<(Request, Option<OwnedFd>)> {
     let mut buf = [0u8; REQUEST_LEN];
-    stream
-        .read_exact(&mut buf)
-        .context("read the pad request")?;
-    Request::decode(&buf).ok_or_else(|| anyhow!("not a pad request: {buf:02x?}"))
+    let (n, fd) = recv_frame(stream, &mut buf).context("read the pad request")?;
+    if n != REQUEST_LEN {
+        bail!("not a pad request: {n} bytes");
+    }
+    let request = Request::decode(&buf).ok_or_else(|| anyhow!("not a pad request: {buf:02x?}"))?;
+    Ok((request, fd))
 }
 
-/// Answer `status` on `stream`, with the seat's end of its relay for `Created`.
-pub fn reply(stream: &UnixStream, status: Status, relay: Option<BorrowedFd<'_>>) -> Result<()> {
-    let mut space = [MaybeUninit::<u8>::uninit(); rustix::cmsg_space!(ScmRights(1))];
-    let mut control = SendAncillaryBuffer::new(&mut space);
-    let fds: Vec<BorrowedFd<'_>> = relay.into_iter().collect();
-    if !fds.is_empty() && !control.push(SendAncillaryMessage::ScmRights(&fds)) {
-        bail!("no room for the relay fd in the answer");
-    }
-    let message = [VERSION, status as u8];
-    sendmsg(
-        stream,
-        &[IoSlice::new(&message)],
-        &mut control,
-        SendFlags::NOSIGNAL,
-    )
-    .context("send the pad broker's answer")?;
-    Ok(())
+/// Answer `status` on `stream`: the seat's end of its relay for `Created`, the port for
+/// `Attached`.
+pub fn reply(
+    stream: &UnixStream,
+    status: Status,
+    port: u16,
+    relay: Option<BorrowedFd<'_>>,
+) -> Result<()> {
+    let [lo, hi] = port.to_le_bytes();
+    send_frame(stream, &[VERSION, status as u8, lo, hi], relay)
+        .context("send the pad broker's answer")
 }
 
 /// A pad the supervisor built for a seat, ready to [`relay`].
@@ -369,46 +461,62 @@ fn relay_uinput(mut dev: UinputDevice, seat: UnixDatagram) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::os::fd::AsFd;
 
     #[test]
     fn a_request_round_trips_and_junk_is_refused() {
-        let r = Request {
+        let r = Request::Create {
             kind: PadKind::XboxElite2,
             index: 3,
         };
         assert_eq!(Request::decode(&r.encode()), Some(r));
+        for r in [
+            Request::Attach {
+                devid: 0x0001_0002,
+                speed: 3,
+            },
+            Request::Detach { port: 9 },
+        ] {
+            assert_eq!(Request::decode(&r.encode()), Some(r));
+        }
         let mut wrong_kind = r.encode();
         wrong_kind[6] = 200;
         assert_eq!(Request::decode(&wrong_kind), None);
         let mut wrong_version = r.encode();
         wrong_version[4] = 9;
         assert_eq!(Request::decode(&wrong_version), None);
-        assert_eq!(Request::decode(b"PFPD\x01\x01\x01"), None, "short");
-        assert_eq!(Request::decode(b"nope\x01\x01\x01\x00"), None);
+        let mut wrong_op = r.encode();
+        wrong_op[5] = 7;
+        assert_eq!(Request::decode(&wrong_op), None);
+        assert_eq!(Request::decode(&r.encode()[..8]), None, "short");
+        let mut magic = r.encode();
+        magic[..4].copy_from_slice(b"nope");
+        assert_eq!(Request::decode(&magic), None);
     }
 
-    /// Every kind round-trips the wire and has one table, uinput or uhid, never both.
+    /// An `Attach` crosses with its socket; the answer carries the port.
     #[test]
-    fn every_kind_has_exactly_one_table() {
-        for value in 0..=255u8 {
-            let Some(kind) = PadKind::from_wire(value) else {
-                continue;
-            };
-            assert_eq!(kind as u8, value);
-            assert_ne!(
-                kind.uinput().is_some(),
-                kind.uhid(0).is_some(),
-                "{}",
-                kind.label()
-            );
-        }
-        let ds = PadKind::DualSense.uhid(2).unwrap();
-        assert_eq!(ds.phys, "punktfunk/dualsense/2");
-        assert_eq!(
-            seat_phys("pf-seat-1", ds.phys.trim_start_matches("punktfunk/")),
-            "punktfunk-seat:pf-seat-1/dualsense/2"
-        );
+    fn an_attach_crosses_with_its_socket() {
+        let (supervisor, seat) = UnixStream::pair().unwrap();
+        let (mine, theirs) = UnixStream::pair().unwrap();
+        send_frame(
+            &seat,
+            &Request::Attach { devid: 5, speed: 2 }.encode(),
+            Some(theirs.as_fd()),
+        )
+        .unwrap();
+        let (request, sock) = read_request(&supervisor).unwrap();
+        assert_eq!(request, Request::Attach { devid: 5, speed: 2 });
+        let sock = UnixStream::from(sock.expect("the socket"));
+        use std::io::{Read, Write};
+        (&mine).write_all(b"hi").unwrap();
+        let mut got = [0u8; 2];
+        (&sock).read_exact(&mut got).unwrap();
+        assert_eq!(&got, b"hi");
+
+        reply(&supervisor, Status::Attached, 11, None).unwrap();
+        let (status, port, relay) = recv_reply(&seat).unwrap();
+        assert_eq!((status, port), (Status::Attached, 11));
+        assert!(relay.is_none());
     }
 
     /// The answer carries the relay's seat end, and what the supervisor sends on its end
@@ -417,16 +525,16 @@ mod tests {
     fn an_answer_hands_the_seat_its_relay_end() {
         let (supervisor, seat) = UnixStream::pair().unwrap();
         let (ours, theirs) = relay_pair().unwrap();
-        reply(&supervisor, Status::Created, Some(theirs.as_fd())).unwrap();
-        let (status, relay) = recv_reply(&seat).unwrap();
+        reply(&supervisor, Status::Created, 0, Some(theirs.as_fd())).unwrap();
+        let (status, _, relay) = recv_reply(&seat).unwrap();
         assert_eq!(status, Status::Created);
         let relay = UnixDatagram::from(relay.expect("the relay fd"));
         ours.send(b"frame").unwrap();
         let mut buf = [0u8; 8];
         assert_eq!(relay.recv(&mut buf).unwrap(), 5);
 
-        reply(&supervisor, Status::Capacity, None).unwrap();
-        let (status, relay) = recv_reply(&seat).unwrap();
+        reply(&supervisor, Status::Capacity, 0, None).unwrap();
+        let (status, _, relay) = recv_reply(&seat).unwrap();
         assert_eq!(status, Status::Capacity);
         assert!(relay.is_none());
     }

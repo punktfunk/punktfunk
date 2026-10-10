@@ -3,14 +3,16 @@
 //!
 //! The socket file is world-connectable; the gate is `SO_PEERCRED`: a peer whose uid is not a
 //! running seat's (the owner's row included) is closed unanswered. A seat holds at most
-//! [`MAX_PER_SEAT`] pads; past that the answer is `capacity`. A pad lives as long as its relay
-//! thread: the seat hanging up, or its host dying, ends both.
+//! [`MAX_PER_SEAT`] pads and [`vhci::MAX_PER_SEAT`] USB devices; past that the answer is
+//! `capacity`. A pad lives as long as its relay thread, a USB device as long as its connection:
+//! the seat hanging up, or its host dying, ends both.
 
-use pf_inject::pad_broker::{self, Status};
+use crate::vhci;
+use pf_inject::pad_broker::{self, PadKind, Request, Status};
 use pf_seats::linux::{socket, LinuxBackend};
 use pf_seats::SeatService;
 use std::collections::HashMap;
-use std::os::fd::AsFd;
+use std::os::fd::{AsFd, OwnedFd};
 use std::os::unix::fs::PermissionsExt as _;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::Path;
@@ -88,7 +90,7 @@ pub fn serve(listener: UnixListener, service: Arc<SeatService<LinuxBackend>>) {
     }
 }
 
-fn handle(service: &SeatService<LinuxBackend>, mut stream: UnixStream) {
+fn handle(service: &SeatService<LinuxBackend>, stream: UnixStream) {
     let uid = match socket::peer_uid(&stream) {
         Ok(uid) => uid,
         Err(error) => {
@@ -102,33 +104,52 @@ fn handle(service: &SeatService<LinuxBackend>, mut stream: UnixStream) {
     };
     let _ = stream.set_read_timeout(Some(REQUEST_TIMEOUT));
     let _ = stream.set_write_timeout(Some(REQUEST_TIMEOUT));
-    let request = match pad_broker::read_request(&mut stream) {
-        Ok(request) => request,
+    let (request, fd) = match pad_broker::read_request(&stream) {
+        Ok(read) => read,
         Err(error) => {
-            tracing::debug!(%error, account, "pads socket request");
+            tracing::debug!(error = %format!("{error:#}"), account, "pads socket request");
             return;
         }
     };
-    let answer = |status: Status| {
-        if let Err(error) = pad_broker::reply(&stream, status, None) {
-            tracing::debug!(%error, account, "pads socket answer");
+    match request {
+        Request::Create { kind, index } => create(stream, uid, &account, kind, index),
+        Request::Attach { devid, speed } => attach(stream, &account, fd, devid, speed),
+        Request::Detach { port } => {
+            let status = match vhci::detach(&account, port) {
+                Ok(()) => Status::Detached,
+                Err(error) => {
+                    tracing::warn!(error = %format!("{error:#}"), account, port, "seat vhci detach refused");
+                    Status::Failed
+                }
+            };
+            answer(&stream, &account, status);
         }
-    };
+    }
+}
+
+fn answer(stream: &UnixStream, account: &str, status: Status) {
+    if let Err(error) = pad_broker::reply(stream, status, 0, None) {
+        tracing::debug!(error = %format!("{error:#}"), account, "pads socket answer");
+    }
+}
+
+/// A uinput or uhid pad, relayed until the seat hangs up.
+fn create(stream: UnixStream, uid: u32, account: &str, kind: PadKind, index: u8) {
     let Some(_slot) = Slot::take(uid) else {
         tracing::warn!(
             account,
             cap = MAX_PER_SEAT,
             "seat asked for one pad too many"
         );
-        answer(Status::Capacity);
+        answer(&stream, account, Status::Capacity);
         return;
     };
-    let pad = match pad_broker::build(request.kind, request.index, &account) {
+    let pad = match pad_broker::build(kind, index, account) {
         Ok(pad) => pad,
         Err(error) => {
-            tracing::warn!(error = %format!("{error:#}"), account, pad = request.kind.label(),
+            tracing::warn!(error = %format!("{error:#}"), account, pad = kind.label(),
                 "seat pad not made");
-            answer(Status::Failed);
+            answer(&stream, account, Status::Failed);
             return;
         }
     };
@@ -136,29 +157,52 @@ fn handle(service: &SeatService<LinuxBackend>, mut stream: UnixStream) {
         Ok(pair) => pair,
         Err(error) => {
             tracing::warn!(error = %format!("{error:#}"), account, "seat pad relay not made");
-            answer(Status::Failed);
+            answer(&stream, account, Status::Failed);
             return;
         }
     };
-    if let Err(error) = pad_broker::reply(&stream, Status::Created, Some(theirs.as_fd())) {
+    if let Err(error) = pad_broker::reply(&stream, Status::Created, 0, Some(theirs.as_fd())) {
         tracing::warn!(error = %format!("{error:#}"), account, "seat pad not handed over");
         return;
     }
     drop(theirs);
     drop(stream);
-    tracing::info!(
-        account,
-        pad = request.kind.label(),
-        index = request.index,
-        "seat pad made"
-    );
+    tracing::info!(account, pad = kind.label(), index, "seat pad made");
     pad_broker::relay(pad, ours);
-    tracing::info!(
-        account,
-        pad = request.kind.label(),
-        index = request.index,
-        "seat pad released"
-    );
+    tracing::info!(account, pad = kind.label(), index, "seat pad released");
+}
+
+/// The seat's usbip socket on a vhci port, held until its connection ends.
+fn attach(stream: UnixStream, account: &str, sock: Option<OwnedFd>, devid: u32, speed: u32) {
+    let Some(sock) = sock else {
+        tracing::warn!(account, "seat asked to attach without a socket");
+        answer(&stream, account, Status::Failed);
+        return;
+    };
+    let port = match vhci::attach(account, sock.as_fd(), devid, speed) {
+        Ok(Some(port)) => port,
+        Ok(None) => {
+            tracing::warn!(
+                account,
+                cap = vhci::MAX_PER_SEAT,
+                "seat asked for one USB device too many"
+            );
+            answer(&stream, account, Status::Capacity);
+            return;
+        }
+        Err(error) => {
+            tracing::warn!(error = %format!("{error:#}"), account, "seat USB device not attached");
+            answer(&stream, account, Status::Failed);
+            return;
+        }
+    };
+    if let Err(error) = pad_broker::reply(&stream, Status::Attached, port, None) {
+        tracing::warn!(error = %format!("{error:#}"), account, port, "seat USB attach not answered");
+    }
+    drop(stream);
+    tracing::info!(account, port, "seat USB device attached");
+    vhci::watch(port, sock);
+    tracing::info!(account, port, "seat USB device gone");
 }
 
 #[cfg(test)]

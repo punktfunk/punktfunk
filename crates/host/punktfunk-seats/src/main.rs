@@ -20,6 +20,8 @@ fn main() -> std::process::ExitCode {
 
 #[cfg(target_os = "linux")]
 mod pads;
+#[cfg(target_os = "linux")]
+mod vhci;
 
 #[cfg(target_os = "linux")]
 mod linux {
@@ -77,7 +79,10 @@ mod linux {
         let command = match verb.as_str() {
             "serve" => return serve(&socket_path, steam_source),
             "fence" => {
-                pf_seats::linux::fence::run();
+                let devpath = std::env::var("DEVPATH").unwrap_or_default();
+                if !crate::vhci::fence(&devpath) {
+                    pf_seats::linux::fence::run();
+                }
                 return Ok(());
             }
             "list" => Command::List,
@@ -177,6 +182,7 @@ mod linux {
         let listener = socket::bind(socket_path)
             .map_err(|e| format!("bind {}: {e}", socket_path.display()))?;
         // The pad broker: a seat host's pads, made here and relayed to it.
+        crate::vhci::prepare();
         let pads_path = std::path::Path::new(pads::SOCKET_PATH);
         let pads_listener =
             pads::bind(pads_path).map_err(|e| format!("bind {}: {e}", pads_path.display()))?;

@@ -501,6 +501,11 @@ pub fn vhci_probe() -> VhciVerdict {
     let Some(base) = usbip::vhci_base() else {
         return VhciVerdict::ModuleMissing;
     };
+    // A seat attaches through the supervisor's pad broker.
+    if pf_paths::seat::is_seat_host() && std::path::Path::new(pf_paths::seat::PADS_SOCKET).exists()
+    {
+        return VhciVerdict::Ok;
+    }
     let attach = base.join("attach");
     let Ok(c_path) = std::ffi::CString::new(attach.as_os_str().as_bytes()) else {
         return VhciVerdict::NotWritable {
@@ -914,7 +919,7 @@ mod uinput_abi;
 /// handshake and the vhci sysfs ports.
 #[cfg(target_os = "linux")]
 #[path = "inject/linux/usbip.rs"]
-mod usbip;
+pub mod usbip;
 /// Byte-level tracing of the USB/IP socket (`PUNKTFUNK_USBIP_TRACE`). A framing bug in that
 /// stream is only visible as damage the kernel notices later, so the wire itself has to be
 /// recoverable.

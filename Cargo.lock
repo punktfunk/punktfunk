@@ -4178,9 +4178,11 @@ dependencies = [
 name = "punktfunk-seats"
 version = "0.43.1"
 dependencies = [
+ "anyhow",
  "pf-inject",
  "pf-paths",
  "pf-seats",
+ "rustix",
  "tracing",
 ]
 

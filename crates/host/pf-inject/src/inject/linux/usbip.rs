@@ -9,7 +9,7 @@ use anyhow::{bail, Context, Result};
 use std::collections::HashSet;
 use std::io::{Read, Write};
 use std::net::TcpStream;
-use std::os::fd::AsRawFd;
+use std::os::fd::{AsFd, AsRawFd, RawFd};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{Arc, Mutex};
@@ -173,16 +173,23 @@ async fn run_server(
 }
 
 /// Drop detaches the `vhci_hcd` port first so the kernel tears the device down
-/// before the socket and server go.
+/// before the socket and server go. A seat's port is the supervisor's to detach.
 pub(crate) struct UsbipAttachment {
     vhci_port: u16,
     /// Holds the fd handed to `vhci_hcd`. CLI attach is `None` — the CLI already passed its fd.
     _client_sock: Option<TcpStream>,
     _server: ServerThread,
+    brokered: bool,
 }
 
 impl Drop for UsbipAttachment {
     fn drop(&mut self) {
+        if self.brokered {
+            if let Err(e) = crate::pad_broker::detach(self.vhci_port) {
+                tracing::debug!(port = self.vhci_port, error = %format!("{e:#}"), "seat vhci detach");
+            }
+            return;
+        }
         // The kernel frees a port when its connection dies, and another pad can hold it by now:
         // detach only while it still carries our socket. A CLI attach has no fd to compare.
         if let Some(sock) = &self._client_sock {
@@ -246,10 +253,18 @@ fn attach_in_process(dev: UsbDevice, label: &str) -> Result<UsbipAttachment> {
     let (devid, speed) = import_handshake(&mut sock).context("usbip import handshake")?;
 
     // Kernel vhci rx/tx honour SO_RCVTIMEO/SO_SNDTIMEO; handshake timeouts would idle-kill the device.
-    let vhci_port = vhci_find_free_port(speed).context("find a free vhci port")?;
     sock.set_read_timeout(None).ok();
     sock.set_write_timeout(None).ok();
-    vhci_attach(vhci_port, sock.as_raw_fd(), devid, speed).context("write vhci_hcd attach")?;
+    // A seat can't write `attach`; the supervisor attaches the socket for it.
+    let brokered = pf_paths::seat::is_seat_host();
+    let vhci_port = if brokered {
+        crate::pad_broker::attach(sock.as_fd(), devid, speed)
+            .context("attach through the seat pad broker")?
+    } else {
+        let port = vhci_find_free_port(speed).context("find a free vhci port")?;
+        vhci_attach(port, sock.as_raw_fd(), devid, speed).context("write vhci_hcd attach")?;
+        port
+    };
 
     tracing::info!(
         label,
@@ -260,6 +275,7 @@ fn attach_in_process(dev: UsbDevice, label: &str) -> Result<UsbipAttachment> {
         vhci_port,
         _client_sock: Some(sock),
         _server: server,
+        brokered,
     })
 }
 
@@ -286,6 +302,7 @@ fn attach_via_cli(dev: UsbDevice, label: &str) -> Result<UsbipAttachment> {
         vhci_port,
         _client_sock: None,
         _server: server,
+        brokered: false,
     })
 }
 
@@ -380,7 +397,7 @@ fn usbip_attach_cli() -> Result<()> {
 }
 
 /// `vhci_hcd.0` or legacy `vhci_hcd`. Shared with [`crate::vhci_probe`] so the paths cannot drift.
-pub(crate) fn vhci_base() -> Option<PathBuf> {
+pub fn vhci_base() -> Option<PathBuf> {
     for p in [
         "/sys/devices/platform/vhci_hcd.0",
         "/sys/devices/platform/vhci_hcd",
@@ -420,23 +437,41 @@ fn parse_status_row(line: &str) -> Option<(u16, bool, u32)> {
 const VDEV_ST_NULL: u32 = 4;
 
 /// Whether `port` is in use on socket `fd`. An unreadable `status` answers yes, the old detach.
-fn vhci_port_holds(port: u16, fd: std::os::fd::RawFd) -> bool {
+pub fn vhci_port_holds(port: u16, fd: RawFd) -> bool {
     read_status().map_or(true, |s| s.lines().any(|l| row_holds(l, port, fd)))
 }
 
 /// One `status` row is `port`, in use, on socket `fd` (its `sockfd` column).
-fn row_holds(line: &str, port: u16, fd: std::os::fd::RawFd) -> bool {
+fn row_holds(line: &str, port: u16, fd: RawFd) -> bool {
+    used_row(line).is_some_and(|(p, sockfd, _)| p == port && sockfd == fd)
+}
+
+/// `(port, sockfd, busid)` of every port in use. The sockfd is the attaching process's number.
+pub fn vhci_used_rows() -> Vec<(u16, RawFd, String)> {
+    read_status()
+        .unwrap_or_default()
+        .lines()
+        .filter_map(used_row)
+        .collect()
+}
+
+/// One row in use. A port attached but not yet addressed shows sockfd 0 and busid `0-0`.
+fn used_row(line: &str) -> Option<(u16, RawFd, String)> {
+    let (port, _, sta) = parse_status_row(line)?;
+    if sta == VDEV_ST_NULL {
+        return None;
+    }
     let t: Vec<&str> = line.split_whitespace().collect();
-    let sockfd = match t.first() {
-        Some(&"hs") | Some(&"ss") => t.get(5),
-        _ => t.get(4),
+    let at = if matches!(t.first(), Some(&"hs") | Some(&"ss")) {
+        5
+    } else {
+        4
     };
-    parse_status_row(line).is_some_and(|(p, _, sta)| p == port && sta != VDEV_ST_NULL)
-        && sockfd.and_then(|s| s.parse::<std::os::fd::RawFd>().ok()) == Some(fd)
+    Some((port, t.get(at)?.parse().ok()?, (*t.get(at + 1)?).to_owned()))
 }
 
 /// Free port matching speed (`usbip_speed >= 5` is SuperSpeed).
-fn vhci_find_free_port(usbip_speed: u32) -> Result<u16> {
+pub fn vhci_find_free_port(usbip_speed: u32) -> Result<u16> {
     let want_ss = usbip_speed >= 5;
     let status = read_status()?;
     for line in status.lines() {
@@ -482,14 +517,14 @@ fn wait_for_new_port(before: &HashSet<u16>) -> Result<u16> {
     }
 }
 
-fn vhci_attach(port: u16, sockfd: i32, devid: u32, speed: u32) -> Result<()> {
+pub fn vhci_attach(port: u16, sockfd: i32, devid: u32, speed: u32) -> Result<()> {
     let base = vhci_base().context("vhci_hcd sysfs not present")?;
     let line = format!("{port} {sockfd} {devid} {speed}");
     std::fs::write(base.join("attach"), line)
         .with_context(|| format!("write vhci_hcd attach (port {port}) — root?"))
 }
 
-fn vhci_detach(port: u16) -> Result<()> {
+pub fn vhci_detach(port: u16) -> Result<()> {
     let base = vhci_base().context("vhci_hcd sysfs not present")?;
     std::fs::write(base.join("detach"), format!("{port}")).context("write vhci_hcd detach")
 }
@@ -526,6 +561,11 @@ mod tests {
         assert!(!row_holds("hs  0000 006 002 00010002 000018 1-1", 0, 17));
         assert!(!row_holds("hs  0000 004 000 00000000 000000 0-0", 0, 0));
         assert!(row_holds("0001 006 002 00010002 000017 1-1", 1, 17));
+        assert_eq!(
+            used_row("ss  0008 006 005 000b0002 000009 12-1"),
+            Some((8, 9, "12-1".into()))
+        );
+        assert_eq!(used_row("hs  0001 004 000 00000000 000000 0-0"), None);
     }
 
     #[test]

@@ -20,7 +20,9 @@ pf-seats = { path = "../pf-seats" }
 tracing = "0.1"
 
 [target.'cfg(target_os = "linux")'.dependencies]
+anyhow = "1"
 pf-inject = { path = "../pf-inject" }
+rustix = { version = "1", features = ["event"] }
 
 [lints]
 workspace = true

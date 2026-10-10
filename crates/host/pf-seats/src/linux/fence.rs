@@ -1,7 +1,8 @@
 //! `punktfunk-seats fence`: udev's `IMPORT{program}` for a seat's pad
 //! (`packaging/linux/65-punktfunk-seats.rules`). It reads the device's `phys` out of sysfs and
 //! prints the seat user it names, so the rule can hand the node to that user alone. A device it
-//! cannot map prints nothing, and the node keeps the distro's rules.
+//! cannot map prints nothing, and the node keeps the distro's rules. A device under a vhci port
+//! is the binary's to map, by the port the supervisor recorded.
 
 use super::accounts;
 use std::path::{Path, PathBuf};
@@ -19,16 +20,19 @@ pub fn run() {
             .strip_prefix("/")
             .unwrap_or(Path::new(&devpath)),
     );
-    let Some(account) = seat_of_sysfs(&dev) else {
-        return;
-    };
-    let Ok(Some(user)) = accounts::lookup(&account) else {
-        return;
-    };
-    if user.uid == 0 {
-        return;
+    if let Some(account) = seat_of_sysfs(&dev) {
+        print_for(&account);
     }
-    print!("{}", lines(&account, user.uid));
+}
+
+/// The rule's lines for `account`, when it names a user other than root.
+pub fn print_for(account: &str) {
+    let Ok(Some(user)) = accounts::lookup(account) else {
+        return;
+    };
+    if user.uid != 0 {
+        print!("{}", lines(account, user.uid));
+    }
 }
 
 /// What the rule reads: the user, its uid and the seat name the node goes on.

@@ -28,6 +28,8 @@ CapabilityBoundingSet=CAP_CHOWN CAP_DAC_OVERRIDE CAP_DAC_READ_SEARCH CAP_FOWNER 
 NoNewPrivileges=yes
 PrivateTmp=yes
 ProtectKernelTunables=yes
+# The pad broker attaches a seat's USB devices and gates the vhci hubs.
+ReadWritePaths=-/sys/devices/platform/vhci_hcd.0
 ProtectKernelModules=yes
 ProtectControlGroups=yes
 RestrictAddressFamilies=AF_UNIX AF_INET AF_NETLINK
