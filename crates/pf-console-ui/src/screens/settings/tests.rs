@@ -996,6 +996,7 @@ fn an_off_ladder_rate_steps_to_its_neighbour() {
     assert_eq!(ctx.settings.bitrate_kbps, 4_000);
 }
 
+/// A, OK or Y opens the typed rate; any rate up to the ceiling is stored.
 #[test]
 fn a_typed_bitrate_is_stored_and_clamped() {
     let mut settings = Settings::default();
@@ -1014,8 +1015,9 @@ fn a_typed_bitrate_is_stored_and_clamped() {
         .iter()
         .position(|id| *id == RowId::Bitrate)
         .expect("the bitrate row");
-    s.menu(MenuEvent::Secondary, &mut ctx, &mut fx);
-    assert!(s.editing(), "Y opens the field");
+    s.menu(MenuEvent::Confirm, &mut ctx, &mut fx);
+    assert!(s.editing(), "A opens the field: a remote has no Y");
+    assert_eq!(ctx.settings.bitrate_kbps, 0, "and steps nothing");
     s.text_input("13x7"); // digits only: 'x' is refused
     assert!(s.edit_key(crate::input::Key::Return, &mut ctx));
     assert!(!s.editing(), "Return closes it");

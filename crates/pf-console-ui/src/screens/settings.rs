@@ -3,7 +3,8 @@
 //! One row per setting, in the sections of [`TABS`], named in a strip of tabs over the
 //! list. Up from the first row, or B from any, reaches the sections; Left/Right there
 //! switch them, Down returns. Left/right steps the focused value (clamped); A cycles
-//! wrapping; L1/R1 change section; B on the sections closes. Every change writes the
+//! wrapping, except on Bitrate, where it types a rate; L1/R1 change section; B on the
+//! sections closes. Every change writes the
 //! store immediately so desktop shells round-trip the same file.
 //! Each section remembers its cursor. Presets lists the catalog and ends on New preset;
 //! a preset's own screens ([`super::preset`]) edit it through the host.
@@ -29,8 +30,8 @@ use rows::*;
 /// The explainer band under the rows, design units.
 const DETAIL_H: f64 = crate::widgets::FOOT_DETAIL_H;
 
-/// What the open typed field sets. Y opens it on Bitrate, or on Resolution for a width and then
-/// a height.
+/// What the open typed field sets. A or Y opens it on Bitrate; Y on Resolution, for a width
+/// and then a height.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Typing {
     Bitrate,
@@ -54,7 +55,7 @@ pub(crate) struct SettingsScreen {
     overrides: std::collections::HashMap<String, SettingsOverlay>,
     /// D-pad focus on the section strip. TV remotes have no shoulders and no Tab key.
     strip_focus: bool,
-    /// The typed field Y opened, and its digits. Y, not A, so A still cycles.
+    /// The open typed field and its digits.
     typing: Option<(Typing, String)>,
     /// The typed field's keyboard.
     keyboard: TextEntry,
@@ -408,6 +409,11 @@ impl SettingsScreen {
                     ListMsg::None => pulse,
                 };
             }
+            // A remote has no Y: its OK types a rate, as a click does.
+            RowId::Bitrate if matches!(msg, ListMsg::Activate) => {
+                self.typing = Some((Typing::Bitrate, String::new()));
+                return Some(MenuPulse::Confirm);
+            }
             _ => {}
         }
         // Cursor moves must not touch the disk.
@@ -642,7 +648,7 @@ impl ScreenView for SettingsScreen {
             ],
             Some(RowId::Bitrate) => vec![
                 Hint::new(HintKey::Adjust, "Adjust"),
-                Hint::new(HintKey::Secondary, "Type a rate"),
+                Hint::new(HintKey::Confirm, "Custom rate"),
                 Hint::new(HintKey::Back, "Done"),
             ],
             Some(RowId::Resolution) => vec![

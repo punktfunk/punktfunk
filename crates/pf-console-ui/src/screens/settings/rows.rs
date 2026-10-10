@@ -1564,7 +1564,8 @@ pub fn detail(id: RowId, ctx: &Ctx) -> &'static str {
              sends less on its own."
         }
         RowId::Bitrate => {
-            "Automatic uses the host's default (20 Mbps). Y types an exact rate, up to 2 Gbps."
+            "Automatic adapts to the network as you play. Press to type a fixed rate, up to \
+             2 Gbps."
         }
         RowId::Compositor => {
             "Which compositor drives the virtual output — honored only if available on the host."
