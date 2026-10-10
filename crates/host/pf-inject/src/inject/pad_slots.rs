@@ -241,6 +241,17 @@ impl<P> PadSlots<P> {
         }
     }
 
+    /// Drop slot `idx` now, with its seat's view of it: the pad's relay ended, so the next
+    /// frame's [`Self::ensure`] makes another.
+    pub fn remove(&mut self, idx: usize) {
+        if idx >= MAX_PADS {
+            return;
+        }
+        self.pads[idx] = None;
+        self.exposed[idx] = None;
+        self.inactive_since[idx] = None;
+    }
+
     /// Live pads, not the fixed [`MAX_PADS`] slots. A failed create leaves the
     /// slot empty; measuring without this count is measuring some other process's pad.
     pub fn live(&self) -> usize {

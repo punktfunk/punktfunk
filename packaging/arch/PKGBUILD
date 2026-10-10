@@ -439,6 +439,8 @@ package_punktfunk-seats() {
     install -Dm0644 "$R/packaging/linux/$f" "$pkgdir/usr/lib/systemd/system/$f"
   done
   install -Dm0644 "$R/packaging/linux/punktfunk-seats.tmpfiles" "$pkgdir/usr/lib/tmpfiles.d/punktfunk-seats.conf"
+  # A seat's pads: udev hands each one to its seat's user alone.
+  install -Dm0644 "$R/packaging/linux/65-punktfunk-seats.rules" "$pkgdir/usr/lib/udev/rules.d/65-punktfunk-seats.rules"
   # The door: the box's host as a system service, and the root helper the console turns it on with.
   install -Dm0755 "$R/packaging/linux/door-helper" "$pkgdir/usr/libexec/punktfunk/door-helper"
   for f in punktfunk-door.service punktfunk-web-door.service punktfunk-door-on@.service punktfunk-door-off@.service; do

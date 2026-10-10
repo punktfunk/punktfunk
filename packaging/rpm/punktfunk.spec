@@ -415,6 +415,8 @@ for f in punktfunk-seats.service punktfunk-seat@.service; do
   install -Dm0644 packaging/linux/$f %{buildroot}%{_unitdir}/$f
 done
 install -Dm0644 packaging/linux/punktfunk-seats.tmpfiles %{buildroot}%{_tmpfilesdir}/punktfunk-seats.conf
+# A seat's pads: udev hands each one to its seat's user alone.
+install -Dm0644 packaging/linux/65-punktfunk-seats.rules %{buildroot}%{_udevrulesdir}/65-punktfunk-seats.rules
 # The door: the box's host as a system service, and the root helper the console turns it on with.
 install -Dm0755 packaging/linux/door-helper %{buildroot}%{_libexecdir}/punktfunk/door-helper
 for f in punktfunk-door.service punktfunk-web-door.service punktfunk-door-on@.service punktfunk-door-off@.service; do
@@ -715,6 +717,7 @@ install -Dm0755 "$(command -v bun)" %{buildroot}%{_libexecdir}/punktfunk-bun/bun
 %{_unitdir}/punktfunk-door-off@.service
 %{_datadir}/polkit-1/rules.d/49-punktfunk-door.rules
 %{_tmpfilesdir}/punktfunk-seats.conf
+%{_udevrulesdir}/65-punktfunk-seats.rules
 %endif
 
 %files client

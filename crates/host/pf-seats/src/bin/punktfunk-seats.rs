@@ -17,7 +17,7 @@ fn main() -> std::process::ExitCode {
 #[cfg(target_os = "linux")]
 mod linux {
     use pf_seats::ipc::{Command, CommandResult, DiagnosticLevel};
-    use pf_seats::linux::{socket, LinuxBackend, SOCKET_PATH};
+    use pf_seats::linux::{pads, socket, LinuxBackend, SOCKET_PATH};
     use pf_seats::{CreateSeat, SeatId};
     use std::path::PathBuf;
     use std::process::ExitCode;
@@ -32,7 +32,8 @@ mod linux {
         \x20 adopt-owner <account>       make a user the box owner's row\n\
         \x20 start <id> | stop <id> | delete <id>\n\
         \x20 doctor                      what a seat needs and what is missing\n\
-        \x20 seating                     whether seats are on\n";
+        \x20 seating                     whether seats are on\n\
+        \x20 fence                       udev's IMPORT{program}: whose a seat's pad is\n";
 
     pub fn main() -> ExitCode {
         match run(std::env::args().skip(1).collect()) {
@@ -67,6 +68,10 @@ mod linux {
         };
         let command = match verb.as_str() {
             "serve" => return serve(&socket_path, steam_source),
+            "fence" => {
+                pf_seats::linux::fence::run();
+                return Ok(());
+            }
             "list" => Command::List,
             "create" => {
                 let name = argument.ok_or(format!("create needs a name\n{USAGE}"))?;
@@ -163,6 +168,15 @@ mod linux {
         service.backend().prepare_owners(&service.ledger());
         let listener = socket::bind(socket_path)
             .map_err(|e| format!("bind {}: {e}", socket_path.display()))?;
+        // The pad broker: a seat host's pads, made here and relayed to it.
+        let pads_path = std::path::Path::new(pads::SOCKET_PATH);
+        let pads_listener =
+            pads::bind(pads_path).map_err(|e| format!("bind {}: {e}", pads_path.display()))?;
+        let for_pads = Arc::clone(&service);
+        std::thread::Builder::new()
+            .name("seat-pads".into())
+            .spawn(move || pads::serve(pads_listener, for_pads))
+            .map_err(|e| format!("start the pad broker: {e}"))?;
         notify_ready();
         // A request that arrives while autostart seats come up waits in the socket's queue.
         if let Err(error) = service.reconcile_startup() {

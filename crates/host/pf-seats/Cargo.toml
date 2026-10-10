@@ -29,6 +29,11 @@ zeroize = "1"
 [target.'cfg(unix)'.dependencies]
 rustix = { version = "1", features = ["fs", "net"] }
 
+# The pad broker builds a seat's pads from pf-inject's own tables and relays them
+# (`design/seat-pad-broker.md`); the unsafe device code stays in that crate.
+[target.'cfg(target_os = "linux")'.dependencies]
+pf-inject = { path = "../pf-inject" }
+
 [target.'cfg(windows)'.dependencies]
 windows-service = "0.8"
 winreg = "0.56"

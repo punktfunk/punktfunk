@@ -96,6 +96,9 @@ pub fn follows_contract() -> bool {
     is_seat_host() && !is_owner_seat()
 }
 
+/// The seat supervisor's pad broker: a seat host asks here for the pads it cannot make itself.
+pub const PADS_SOCKET: &str = "/run/punktfunk/pads.sock";
+
 static DOOR: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 /// Marks this process as the door (`serve --door`).

@@ -761,6 +761,11 @@ pub mod hori_windows;
 #[cfg(target_os = "windows")]
 #[path = "inject/windows/mouse_windows.rs"]
 pub mod mouse_windows;
+/// The seat pad broker: the wire a seat host asks the supervisor for a pad on, and the relay
+/// the supervisor runs for it ([`pad_broker::relay`]).
+#[cfg(target_os = "linux")]
+#[path = "inject/linux/pad_broker.rs"]
+pub mod pad_broker;
 /// Virtual-pad creation-retry ([`pad_gate::PadGate`]), driven by [`pad_slots`]. Replaces a
 /// per-backend permanent `broken` latch with capped-backoff retry.
 ///

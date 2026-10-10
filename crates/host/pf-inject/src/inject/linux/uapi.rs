@@ -65,6 +65,22 @@ pub(crate) fn ioctl_with<T: Pod>(
     check(unsafe { libc::ioctl(fd.as_raw_fd(), req as _, std::ptr::from_mut(arg)) })
 }
 
+/// `ioctl(fd, req, s)` for a request that reads a NUL-terminated string through its argument.
+/// Panics on a request that encodes a copy out to the caller.
+pub(crate) fn ioctl_cstr(
+    fd: BorrowedFd<'_>,
+    req: libc::c_ulong,
+    s: &std::ffi::CStr,
+) -> io::Result<libc::c_int> {
+    assert!(
+        req >> 31 == 0,
+        "ioctl {req:#x}: the kernel writes through its argument"
+    );
+    // SAFETY: every caller's `req` reads the bytes at the pointer up to their NUL and writes
+    // through nothing; `s` outlives the call, and `fd` is borrowed, so it stays open.
+    check(unsafe { libc::ioctl(fd.as_raw_fd(), req as _, s.as_ptr()) })
+}
+
 /// Open a device node read-write and non-blocking; std adds `O_CLOEXEC`.
 pub(crate) fn open_nonblock(path: &str) -> io::Result<File> {
     OpenOptions::new()

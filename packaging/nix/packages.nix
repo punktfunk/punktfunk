@@ -251,7 +251,7 @@ in
   # rules with the /usr/libexec path rewritten to this store path. The NixOS module installs them
   # through `systemd.packages` and `systemd.tmpfiles.packages`. The door's files ride along: its
   # two host and console units still name /usr/bin, which the module points at its own packages.
-  # Pure Rust, so no GPU runpath.
+  # No GPU runpath: it links pf-inject for the pads it builds, not the capture or encode stack.
   punktfunk-seats = craneLib.buildPackage (
     commonArgs
     // {
@@ -271,6 +271,10 @@ in
             --replace-fail /usr/libexec/punktfunk "$out/libexec/punktfunk"
         done
         install -Dm0644 packaging/linux/punktfunk-seats.tmpfiles "$out/lib/tmpfiles.d/punktfunk-seats.conf"
+        # A seat's pads: the rule runs `punktfunk-seats fence` from this store path.
+        install -Dm0644 packaging/linux/65-punktfunk-seats.rules "$out/lib/udev/rules.d/65-punktfunk-seats.rules"
+        substituteInPlace "$out/lib/udev/rules.d/65-punktfunk-seats.rules" \
+          --replace-fail /usr/libexec/punktfunk "$out/libexec/punktfunk"
         install -Dm0755 packaging/linux/door-helper "$out/libexec/punktfunk/door-helper"
         substituteInPlace "$out/libexec/punktfunk/door-helper" \
           --replace-fail /usr/libexec/punktfunk "$out/libexec/punktfunk"

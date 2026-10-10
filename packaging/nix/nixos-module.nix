@@ -954,6 +954,9 @@ in
 
       systemd.packages = [ cfg.seats.package ];
       systemd.tmpfiles.packages = [ cfg.seats.package ];
+      # The seats' pad fence; its helper resolves the seat user with getent.
+      services.udev.packages = [ cfg.seats.package ];
+      services.udev.path = [ pkgs.getent ];
 
       systemd.services.punktfunk-seats = {
         wantedBy = [ "multi-user.target" ];

@@ -1,0 +1,10 @@
+# punktfunk seats: a pad the supervisor made for a seat belongs to that seat's user alone.
+#
+# The supervisor stamps `phys` with the seat's account; `punktfunk-seats fence` turns that into
+# the user. The node is then the user's, 0600, and on a seat of its own: `uaccess` (73-seat-late)
+# finds no session there and grants no ACL, so neither the box's own Steam nor another seat sees
+# it, and a distro rule that opens every hidraw or input node (`MODE="0666"`) loses to `:=`.
+ACTION=="add", SUBSYSTEM=="input", KERNEL=="event*|js*", ATTRS{phys}=="punktfunk-seat:*", \
+    IMPORT{program}="/usr/libexec/punktfunk/punktfunk-seats fence"
+ACTION=="add", SUBSYSTEM=="input", ENV{PF_SEAT_USER}=="?*", OWNER:="$env{PF_SEAT_USER}", \
+    GROUP:="root", MODE:="0600", TAG-="uaccess", ENV{ID_SEAT}="$env{PF_SEAT}"

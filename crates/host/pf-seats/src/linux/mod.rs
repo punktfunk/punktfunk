@@ -11,9 +11,15 @@
 //! The owner's row is the box owner's own account, adopted. Its unit runs the owner's host in a
 //! headless `background` session, and never while the owner sits at the machine: a login of theirs
 //! on a seat ends the unit, and the owner's own user host serves the row from then on.
+//!
+//! A seat's pads are the daemon's too: its host asks [`pads`] for them, and [`fence`] gives udev
+//! the user each one belongs to.
 
 mod accounts;
+pub mod fence;
 mod logind;
+#[cfg(target_os = "linux")]
+pub mod pads;
 mod session;
 mod shared;
 pub mod socket;
@@ -79,27 +85,33 @@ struct Inner {
     acl_dirty: AtomicBool,
 }
 
-/// What the keep-level thread needs of a running seat.
+/// What the keep-level thread and the pad broker need of a running seat.
 #[derive(Clone, Debug)]
 struct Tracked {
     /// Who reads its trust copy.
     reader: shared::Reader,
     /// The owner's account, for the owner's row: its physical login ends the unit.
     owner: Option<String>,
+    /// The seat's user: what the pad broker admits, and what its pads are stamped with.
+    uid: u32,
+    account: String,
 }
 
 impl Tracked {
     fn of(seat: &Seat, passwd: &accounts::Passwd) -> Self {
-        if seat.owner {
-            Self {
-                reader: shared::Reader::person(passwd.uid, passwd.gid),
-                owner: Some(seat.account.clone()),
-            }
+        let (reader, owner) = if seat.owner {
+            (
+                shared::Reader::person(passwd.uid, passwd.gid),
+                Some(seat.account.clone()),
+            )
         } else {
-            Self {
-                reader: shared::Reader::group(passwd.gid),
-                owner: None,
-            }
+            (shared::Reader::group(passwd.gid), None)
+        };
+        Self {
+            reader,
+            owner,
+            uid: passwd.uid,
+            account: seat.account.clone(),
         }
     }
 }
@@ -187,6 +199,17 @@ impl LinuxBackend {
         let service = SeatService::open(&root, self)?;
         shared::make_dir(&root, 0o711)?;
         Ok(service)
+    }
+
+    /// The account of the running seat whose user is `uid`: whom the pad broker serves.
+    pub fn running_account(&self, uid: u32) -> Option<String> {
+        self.inner
+            .running
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .values()
+            .find(|tracked| tracked.uid == uid)
+            .map(|tracked| tracked.account.clone())
     }
 
     fn track(&self, id: &SeatId, tracked: Tracked) {
