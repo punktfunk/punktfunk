@@ -123,7 +123,7 @@ fn main() {
     // The shared SDL gamepad service (pf-client-core). The shell only enumerates pads (Settings
     // list) and persists the pin; the spawned punktfunk-session runs the SAME service and does the
     // actual forwarding — so, unlike the old shell fork, we never `attach()` here. Idle it stays
-    // hands-off the hardware (id-getter metadata, no device open, Valve HIDAPI drivers off).
+    // hands-off the hardware (id-getter metadata, no device open, the Deck HIDAPI driver off).
     let gamepad = pf_client_core::gamepad::GamepadService::start();
     // From here this process IS the shell: queue the link it was launched with (the router
     // picks it up once the window is live) and start listening for links from later instances.
