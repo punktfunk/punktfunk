@@ -6,10 +6,9 @@
 //! [`MAX_PER_SEAT`] pads; past that the answer is `capacity`. A pad lives as long as its relay
 //! thread: the seat hanging up, or its host dying, ends both.
 
-use super::socket;
-use super::LinuxBackend;
-use crate::service::SeatService;
 use pf_inject::pad_broker::{self, Status};
+use pf_seats::linux::{socket, LinuxBackend};
+use pf_seats::SeatService;
 use std::collections::HashMap;
 use std::os::fd::AsFd;
 use std::os::unix::fs::PermissionsExt as _;
@@ -184,10 +183,12 @@ mod tests {
 
     #[test]
     fn the_pads_socket_is_open_to_every_local_user() {
-        let temp = tempfile::tempdir().unwrap();
-        let path = temp.path().join("pads.sock");
+        let dir = std::env::temp_dir().join(format!("pf-pads-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("pads.sock");
         let _listener = bind(&path).unwrap();
         let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode, 0o666);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

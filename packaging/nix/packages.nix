@@ -256,7 +256,7 @@ in
     commonArgs
     // {
       pname = "punktfunk-seats";
-      cargoExtraArgs = "--locked -p pf-seats --bin punktfunk-seats";
+      cargoExtraArgs = "--locked -p punktfunk-seats --bin punktfunk-seats";
 
       postInstall = ''
         install -d "$out/libexec/punktfunk"

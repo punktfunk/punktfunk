@@ -31,19 +31,20 @@ pub fn peer_allowed(peer_uid: u32, punktfunk_uid: Option<u32>) -> bool {
     peer_uid == 0 || punktfunk_uid == Some(peer_uid)
 }
 
+/// The uid behind `stream` (`SO_PEERCRED`): what admits a request here and on the pad broker.
 #[cfg(target_os = "linux")]
-pub(super) fn peer_uid(stream: &UnixStream) -> std::io::Result<u32> {
+pub fn peer_uid(stream: &UnixStream) -> std::io::Result<u32> {
     Ok(rustix::net::sockopt::socket_peercred(stream)?.uid.as_raw())
 }
 
 #[cfg(not(target_os = "linux"))]
-pub(super) fn peer_uid(_stream: &UnixStream) -> std::io::Result<u32> {
+pub fn peer_uid(_stream: &UnixStream) -> std::io::Result<u32> {
     Err(std::io::Error::other("peer credentials need Linux"))
 }
 
 /// Binds `path`, replacing a stale socket file. Fails when another process answers on it.
 /// The file keeps the default mode; the caller sets who may connect.
-pub(super) fn bind_fresh(path: &Path) -> std::io::Result<UnixListener> {
+pub fn bind_fresh(path: &Path) -> std::io::Result<UnixListener> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }

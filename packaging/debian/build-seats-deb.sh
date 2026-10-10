@@ -19,7 +19,7 @@ cd "$ROOTDIR"
 BIN="target/release/$PKG"
 if [ ! -x "$BIN" ]; then
   echo "==> building $PKG (release)"
-  cargo build --release --locked -p pf-seats
+  cargo build --release --locked -p punktfunk-seats
 fi
 
 STAGE="$(mktemp -d)"

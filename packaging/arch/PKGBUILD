@@ -113,12 +113,12 @@ build() {
   # and fall back to the in-process encoder on any mismatch. Co-built here on purpose: v1 accepts
   # that the worker shares the host's dependency graph (same package, same sonames, no new break
   # class), so cargo's feature unification across this one invocation is harmless.
-  # `-p pf-seats` is the seat supervisor's binary. punktfunk-host already links its library, so
-  # this adds the one executable and no feature unification.
+  # `-p punktfunk-seats` is the seat supervisor's binary. punktfunk-host already links its
+  # library and pf-inject, so this adds the one executable and no feature unification.
   cargo build --release --locked --features punktfunk-host/nvenc,punktfunk-host/vulkan-encode \
     -p punktfunk-host -p punktfunk-encode-worker \
     -p punktfunk-client-linux -p punktfunk-client-session -p punktfunk-cli \
-    -p pf-update -p pf-seats
+    -p pf-update -p punktfunk-seats
   # The status tray in its OWN cargo invocation — load-bearing, not tidiness. Cargo unifies features
   # across everything in one build, so co-building the tray with the host pulls the host's
   # ashpd -> zbus/tokio onto the tray's shared zbus; the tray (ksni async-io + blocking, no tokio

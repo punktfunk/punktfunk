@@ -1,7 +1,11 @@
 //! `punktfunk-seats`: the Linux seat supervisor and the operator's client for it.
 //!
 //! `serve` is the root daemon (`punktfunk-seats.service`). The other verbs send one request to
-//! its socket, as the box host does, and print the answer.
+//! its socket, as the box host does, and print the answer. The pad broker, [`pads`], is the
+//! daemon's too; it lives here rather than in `pf-seats` because it links `pf-inject`, whose
+//! dependencies the Windows seat keeper's own workspace cannot resolve beside IronRDP.
+
+#![forbid(unsafe_code)]
 
 #[cfg(not(target_os = "linux"))]
 fn main() -> std::process::ExitCode {
@@ -15,9 +19,13 @@ fn main() -> std::process::ExitCode {
 }
 
 #[cfg(target_os = "linux")]
+mod pads;
+
+#[cfg(target_os = "linux")]
 mod linux {
+    use crate::pads;
     use pf_seats::ipc::{Command, CommandResult, DiagnosticLevel};
-    use pf_seats::linux::{pads, socket, LinuxBackend, SOCKET_PATH};
+    use pf_seats::linux::{socket, LinuxBackend, SOCKET_PATH};
     use pf_seats::{CreateSeat, SeatId};
     use std::path::PathBuf;
     use std::process::ExitCode;

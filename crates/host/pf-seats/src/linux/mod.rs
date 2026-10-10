@@ -12,14 +12,13 @@
 //! headless `background` session, and never while the owner sits at the machine: a login of theirs
 //! on a seat ends the unit, and the owner's own user host serves the row from then on.
 //!
-//! A seat's pads are the daemon's too: its host asks [`pads`] for them, and [`fence`] gives udev
-//! the user each one belongs to.
+//! A seat's pads are the daemon's too: its host asks the pad broker in the `punktfunk-seats`
+//! binary for them ([`LinuxBackend::running_account`] is its gate), and [`fence`] gives udev the
+//! user each one belongs to.
 
 mod accounts;
 pub mod fence;
 mod logind;
-#[cfg(target_os = "linux")]
-pub mod pads;
 mod session;
 mod shared;
 pub mod socket;

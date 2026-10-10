@@ -3550,7 +3550,6 @@ version = "0.43.1"
 dependencies = [
  "aws-lc-rs",
  "hex",
- "pf-inject",
  "pf-paths",
  "rand 0.10.3",
  "rustix",
@@ -4173,6 +4172,16 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+]
+
+[[package]]
+name = "punktfunk-seats"
+version = "0.43.1"
+dependencies = [
+ "pf-inject",
+ "pf-paths",
+ "pf-seats",
+ "tracing",
 ]
 
 [[package]]

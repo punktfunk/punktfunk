@@ -285,7 +285,7 @@ export PUNKTFUNK_BUILD_VERSION="%{version}-%{release}"
 cargo build --release --locked --features punktfunk-host/nvenc,punktfunk-host/vulkan-encode \
   -p punktfunk-host -p punktfunk-encode-worker \
   -p punktfunk-client-linux -p punktfunk-client-session -p punktfunk-cli \
-  -p pf-update -p pf-seats
+  -p pf-update -p punktfunk-seats
 %else
 # Client-only (aarch64): no host crate, so none of the encode features apply. pf-update still
 # builds — the client subpackage ships its own copy for `punktfunk-client --apply-update`.

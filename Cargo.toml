@@ -48,6 +48,9 @@ members = [
     "crates/host/pf-paths",
     "crates/host/pf-paths-win",
     "crates/host/pf-seats",
+    # The seat supervisor's binary, apart from its library: it links pf-inject for the pads it
+    # builds, which the Windows seat keeper's own workspace cannot resolve beside IronRDP.
+    "crates/host/punktfunk-seats",
     "crates/install/punktfunk-setup",
     # The Windows installer wizard (WinUI 3 over the same engine). Stub bin off-Windows.
     "crates/install/punktfunk-setup-win",
