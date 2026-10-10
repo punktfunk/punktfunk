@@ -245,7 +245,8 @@ system-range user, `pf-seat-<n>`, with a logind session of its own, a headless c
   binds must descend from the unit; a process started through `systemd-run --user` or a user
   service doesn't see them. The daemon repairs the ACL mask under `games/` after a seat stops and
   every 10 minutes, because a file created with mode `0644` is otherwise read-only to the other
-  seats.
+  seats. A seat other than the owner's sees an empty `/run/media`: Steam in Game Mode adopts
+  every mounted drive with a `steamapps` as a library, and the owner's drives are read-only to it.
 - **Stopping.** `pam_systemd` moves the runner into the session's scope, so stopping the unit
   can't reach it. The runner ends its children on `SIGTERM`, and `seat-reap` ends the session
   by the id the runner recorded.

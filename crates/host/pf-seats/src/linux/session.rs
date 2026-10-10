@@ -3,7 +3,8 @@
 //! `punktfunk-seat@<user>.service` runs the seat's user in a logind session. The supervisor
 //! writes its files under `/run` before each start: `punktfunk/seats/<user>.env`, the seat
 //! contract the host reads plus its management token; a drop-in that binds the seat's private
-//! `compatdata`, `shadercache` and `downloading` over the shared games folder's; and one that
+//! `compatdata`, `shadercache` and `downloading` over the shared games folder's and hides the
+//! box's mounted drives; and one that
 //! binds [`NO_UPDATE`] over Steam's OS and firmware update helpers. All are rewritten from the
 //! ledger on a start, so a reboot that empties `/run` loses nothing.
 
@@ -123,11 +124,13 @@ pub(super) fn render_env(seat: &Seat, home: &Path, box_dir: &Path, token: &str) 
     out
 }
 
-/// The drop-in that gives the unit its private prefix directories.
+/// The drop-in that gives the unit its private prefix directories, and an empty `/run/media`.
+/// A SteamOS-mode Steam adopts every mounted drive holding a `steamapps` as a library; the
+/// owner's is read-only to a seat, so its updates, installs and Proton all fail there.
 pub(super) fn render_binds(box_dir: &Path, id: &SeatId) -> String {
     let seat = shared::seat_dir(box_dir, id);
     let shared_steamapps = shared::games_dir(box_dir).join("steamapps");
-    let mut out = String::from("[Service]\n");
+    let mut out = String::from("[Service]\nTemporaryFileSystem=/run/media:ro\n");
     for name in PRIVATE_DIRS {
         out.push_str(&format!(
             "BindPaths={}:{}\n",
@@ -427,6 +430,7 @@ mod tests {
         assert_eq!(
             render_binds(Path::new("/var/lib/punktfunk"), &id),
             "[Service]\n\
+             TemporaryFileSystem=/run/media:ro\n\
              BindPaths=/var/lib/punktfunk/seats/0123456789abcdef0123456789abcdef/compatdata:/var/lib/punktfunk/games/steamapps/compatdata\n\
              BindPaths=/var/lib/punktfunk/seats/0123456789abcdef0123456789abcdef/shadercache:/var/lib/punktfunk/games/steamapps/shadercache\n\
              BindPaths=/var/lib/punktfunk/seats/0123456789abcdef0123456789abcdef/downloading:/var/lib/punktfunk/games/steamapps/downloading\n"
