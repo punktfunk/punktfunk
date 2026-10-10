@@ -551,6 +551,7 @@ impl PlatformBackend for LinuxBackend {
 
     fn doctor(&self, ledger: &Ledger) -> Result<Vec<Diagnostic>, BackendError> {
         let mut out = self.prerequisites();
+        out.extend(fence::diagnostics());
         for seat in &ledger.seats {
             let found = accounts::lookup(&seat.account)?;
             let owned = found.as_ref().is_some_and(|found| {

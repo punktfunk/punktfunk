@@ -268,6 +268,13 @@ impl UinputDevice {
         })
     }
 
+    /// A created pad's `/dev/uinput` fd, as systemd's fd store hands it back.
+    pub(crate) fn adopt(fd: OwnedFd) -> UinputDevice {
+        UinputDevice {
+            inner: Inner::Kernel(File::from(fd)),
+        }
+    }
+
     /// The seat's end of a relay the supervisor answered ([`crate::pad_broker::request`]).
     pub(crate) fn relayed(fd: OwnedFd) -> Result<UinputDevice> {
         let sock = UnixDatagram::from(fd);

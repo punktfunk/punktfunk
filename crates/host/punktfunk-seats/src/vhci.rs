@@ -17,16 +17,6 @@ use std::sync::{Mutex, MutexGuard};
 pub const MAP: &str = "/run/punktfunk/pads/vhci";
 /// Ports one seat may hold: four of a 16-port controller leaves the box and the others theirs.
 pub const MAX_PER_SEAT: usize = 4;
-/// The fence rule that lifts the gate. Without it the gate stays down, or the owner's own
-/// virtual Deck would never configure.
-const RULE: &str = "65-punktfunk-seats.rules";
-const RULE_DIRS: [&str; 5] = [
-    "/etc/udev/rules.d",
-    "/run/udev/rules.d",
-    "/usr/lib/udev/rules.d",
-    "/lib/udev/rules.d",
-    "/usr/local/lib/udev/rules.d",
-];
 
 /// Port choice and the map change together.
 static LOCK: Mutex<()> = Mutex::new(());
@@ -44,11 +34,9 @@ pub fn prepare() {
         tracing::warn!(%error, dir = MAP, "vhci port map not made");
     }
     prune(dir, &usbip::vhci_used_rows());
-    if !RULE_DIRS.iter().any(|d| Path::new(d).join(RULE).exists()) {
-        tracing::warn!(
-            rule = RULE,
-            "seat USB devices are not class-gated: the udev rule is missing"
-        );
+    // The fence rule lifts the gate; without it the owner's own virtual Deck never configures.
+    if !pf_seats::linux::fence::rule_installed() {
+        tracing::warn!("seat USB devices are not class-gated: the udev fence rule is missing");
         return;
     }
     let Some(entries) = usbip::vhci_base().and_then(|base| std::fs::read_dir(base).ok()) else {

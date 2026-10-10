@@ -5,10 +5,57 @@
 //! is the binary's to map, by the port the supervisor recorded.
 
 use super::accounts;
+use crate::ipc::{Diagnostic, DiagnosticLevel};
 use std::path::{Path, PathBuf};
 
 /// What the supervisor stamps on a seat's pad: `punktfunk-seat:<account>/<index>`.
 const PHYS_PREFIX: &str = "punktfunk-seat:";
+/// This module's udev rule, and where distros keep udev rules.
+const RULE: &str = "65-punktfunk-seats.rules";
+const RULE_DIRS: [&str; 5] = [
+    "/etc/udev/rules.d",
+    "/run/udev/rules.d",
+    "/usr/lib/udev/rules.d",
+    "/lib/udev/rules.d",
+    "/usr/local/lib/udev/rules.d",
+];
+
+/// Whether udev has the fence rule. Without it a seat's pads keep the distro's permissions.
+pub fn rule_installed() -> bool {
+    RULE_DIRS
+        .iter()
+        .any(|dir| Path::new(dir).join(RULE).exists())
+}
+
+/// The doctor's rows for seat pads: the fence rule, and the broker's socket.
+pub fn diagnostics() -> Vec<Diagnostic> {
+    let row = |ok: bool, code: &str, good: &str, bad: &str| Diagnostic {
+        level: if ok {
+            DiagnosticLevel::Info
+        } else {
+            DiagnosticLevel::Warning
+        },
+        code: code.into(),
+        message: if ok { good } else { bad }.into(),
+        seat_id: None,
+    };
+    vec![
+        row(
+            rule_installed(),
+            "pad_fence",
+            "the seat pad fence rule is installed",
+            "The seat pad fence rule isn't installed, so the box's own Steam can open a seat's \
+             controllers. Reinstall the punktfunk-seats package.",
+        ),
+        row(
+            Path::new(pf_paths::seat::PADS_SOCKET).exists(),
+            "pad_broker",
+            "the pad broker is listening",
+            "The pad broker isn't listening, so a seat gets no controller. Restart \
+             punktfunk-seats.",
+        ),
+    ]
+}
 
 /// The udev program. Never fails: udev takes the lines it gets.
 pub fn run() {

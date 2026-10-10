@@ -261,7 +261,8 @@ system-range user, `pf-seat-<n>`, with a logind session of its own, a headless c
   `65-punktfunk-seats.rules` runs `punktfunk-seats fence` on every `input` and `hidraw` node
   that carries it: the node becomes that user's, `0600`, on a seat of its own, so neither the
   box's own Steam nor another seat sees it. A box without the daemon gives a seat no pad; the
-  seat host says so.
+  seat host says so. The daemon parks each relayed pad's fds in systemd's fd store, so a
+  restart of the daemon keeps a seat's pads; `punktfunk-seats list` shows what each seat holds.
 - **USB pads.** A USB/IP pad (the virtual Deck, the SC2, the Switch 2) stays the seat host's own
   usbip server. The seat runs the import handshake and sends the connected socket with an
   `Attach`; the daemon picks the vhci port, records it in `/run/punktfunk/pads/vhci/<port>` and

@@ -137,7 +137,10 @@ mod linux {
             );
         };
         match result {
-            CommandResult::List { seats } => seats.iter().for_each(line),
+            CommandResult::List { seats } => {
+                seats.iter().for_each(line);
+                pads::listing().iter().for_each(|pad| println!("{pad}"));
+            }
             CommandResult::Created { seat }
             | CommandResult::Started { seat }
             | CommandResult::Stopped { seat } => line(seat),
@@ -183,6 +186,7 @@ mod linux {
             .map_err(|e| format!("bind {}: {e}", socket_path.display()))?;
         // The pad broker: a seat host's pads, made here and relayed to it.
         crate::vhci::prepare();
+        pads::resume();
         let pads_path = std::path::Path::new(pads::SOCKET_PATH);
         let pads_listener =
             pads::bind(pads_path).map_err(|e| format!("bind {}: {e}", pads_path.display()))?;

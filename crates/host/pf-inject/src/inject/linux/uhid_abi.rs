@@ -194,6 +194,15 @@ impl UhidDevice {
         result.context(what.to_owned())
     }
 
+    /// A created device's `/dev/uhid` fd, as systemd's fd store hands it back.
+    pub fn adopt(fd: OwnedFd) -> UhidDevice {
+        UhidDevice {
+            fd: File::from(fd),
+            relayed: false,
+            dead: false,
+        }
+    }
+
     /// Open `/dev/uhid` non-blocking and create the device.
     pub fn open(c: &Create2) -> Result<UhidDevice> {
         let fd = OpenOptions::new()

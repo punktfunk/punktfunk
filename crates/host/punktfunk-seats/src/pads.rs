@@ -5,16 +5,17 @@
 //! running seat's (the owner's row included) is closed unanswered. A seat holds at most
 //! [`MAX_PER_SEAT`] pads and [`vhci::MAX_PER_SEAT`] USB devices; past that the answer is
 //! `capacity`. A pad lives as long as its relay thread, a USB device as long as its connection:
-//! the seat hanging up, or its host dying, ends both.
+//! the seat hanging up, or its host dying, ends both. A relayed pad also sits in systemd's fd
+//! store, so a supervisor restart picks it up again ([`resume`]).
 
 use crate::vhci;
-use pf_inject::pad_broker::{self, PadKind, Request, Status};
+use pf_inject::pad_broker::{self, BrokeredPad, PadKind, Request, Status};
 use pf_seats::linux::{socket, LinuxBackend};
 use pf_seats::SeatService;
 use std::collections::HashMap;
 use std::os::fd::{AsFd, OwnedFd};
 use std::os::unix::fs::PermissionsExt as _;
-use std::os::unix::net::{UnixListener, UnixStream};
+use std::os::unix::net::{UnixDatagram, UnixListener, UnixStream};
 use std::path::Path;
 use std::sync::{Arc, LazyLock, Mutex};
 use std::time::Duration;
@@ -24,28 +25,31 @@ pub const SOCKET_PATH: &str = pf_paths::seat::PADS_SOCKET;
 pub const MAX_PER_SEAT: usize = 8;
 /// A seat sends its request at once; one that doesn't is not a seat host.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
+/// One file per relayed pad, `<account> <index> <kind>`, for `punktfunk-seats list`.
+const RELAYED: &str = "/run/punktfunk/pads/relayed";
 
-/// Pads held per uid, for the life of their relays.
-static HELD: LazyLock<Mutex<HashMap<u32, usize>>> = LazyLock::new(Mutex::default);
+/// Pads held per account, for the life of their relays.
+static HELD: LazyLock<Mutex<HashMap<String, usize>>> = LazyLock::new(Mutex::default);
 
-/// One of `uid`'s pad slots, given back on drop.
-struct Slot(u32);
+/// One of an account's pad slots, given back on drop.
+struct Slot(String);
 
 impl Slot {
-    fn take(uid: u32) -> Option<Slot> {
-        admit(&mut HELD.lock().unwrap_or_else(|e| e.into_inner()), uid).then_some(Slot(uid))
+    fn take(account: &str) -> Option<Slot> {
+        admit(&mut HELD.lock().unwrap_or_else(|e| e.into_inner()), account)
+            .then(|| Slot(account.to_owned()))
     }
 }
 
 impl Drop for Slot {
     fn drop(&mut self) {
-        release(&mut HELD.lock().unwrap_or_else(|e| e.into_inner()), self.0);
+        release(&mut HELD.lock().unwrap_or_else(|e| e.into_inner()), &self.0);
     }
 }
 
-/// Counts one more pad for `uid`; `false` at the cap.
-fn admit(held: &mut HashMap<u32, usize>, uid: u32) -> bool {
-    let count = held.entry(uid).or_insert(0);
+/// Counts one more pad for `account`; `false` at the cap.
+fn admit(held: &mut HashMap<String, usize>, account: &str) -> bool {
+    let count = held.entry(account.to_owned()).or_insert(0);
     if *count >= MAX_PER_SEAT {
         return false;
     }
@@ -53,13 +57,108 @@ fn admit(held: &mut HashMap<u32, usize>, uid: u32) -> bool {
     true
 }
 
-fn release(held: &mut HashMap<u32, usize>, uid: u32) {
-    if let Some(count) = held.get_mut(&uid) {
+fn release(held: &mut HashMap<String, usize>, account: &str) {
+    if let Some(count) = held.get_mut(account) {
         *count = count.saturating_sub(1);
         if *count == 0 {
-            held.remove(&uid);
+            held.remove(account);
         }
     }
+}
+
+/// Relays again every pad systemd kept across a supervisor restart. At start, before the
+/// socket answers.
+pub fn resume() {
+    let _ = std::fs::remove_dir_all(RELAYED);
+    for kept in pad_broker::kept() {
+        let Some(slot) = Slot::take(&kept.account) else {
+            pad_broker::forget(&kept.name);
+            continue;
+        };
+        tracing::info!(
+            account = kept.account,
+            pad = kept.kind.label(),
+            index = kept.index,
+            "seat pad kept across a restart"
+        );
+        let spawned = std::thread::Builder::new()
+            .name("seat-pad".into())
+            .spawn(move || {
+                let _slot = slot;
+                run_relay(
+                    &kept.name,
+                    &kept.account,
+                    kept.kind,
+                    kept.index,
+                    kept.pad,
+                    kept.relay,
+                );
+            });
+        if let Err(error) = spawned {
+            tracing::warn!(%error, "kept seat pad thread did not start");
+        }
+    }
+}
+
+/// Relays `pad` until its seat hangs up, listed for `list` and in systemd's fd store meanwhile.
+fn run_relay(
+    name: &str,
+    account: &str,
+    kind: PadKind,
+    index: u8,
+    pad: BrokeredPad,
+    relay: UnixDatagram,
+) {
+    let record =
+        pad_broker::parse_store_name(name).map(|(serial, ..)| Path::new(RELAYED).join(serial));
+    if let Some(record) = &record {
+        let written = std::fs::create_dir_all(RELAYED)
+            .and_then(|()| std::fs::write(record, format!("{account} {index} {}\n", kind as u8)));
+        if let Err(error) = written {
+            tracing::debug!(%error, "seat pad not listed");
+        }
+    }
+    pad_broker::relay(pad, relay);
+    pad_broker::forget(name);
+    if let Some(record) = &record {
+        let _ = std::fs::remove_file(record);
+    }
+    tracing::info!(account, pad = kind.label(), index, "seat pad released");
+}
+
+/// `list`'s lines for what the seats hold: `pad <account> <kind> #<index>` and
+/// `usb <account> port <n>`.
+pub fn listing() -> Vec<String> {
+    let rows = |dir: &str| {
+        std::fs::read_dir(dir)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .filter_map(|e| {
+                Some((
+                    e.file_name().into_string().ok()?,
+                    std::fs::read_to_string(e.path()).ok()?,
+                ))
+            })
+            .collect::<Vec<_>>()
+    };
+    let mut out: Vec<String> = rows(RELAYED)
+        .into_iter()
+        .filter_map(|(_, row)| {
+            let mut words = row.split_whitespace();
+            let (account, index) = (words.next()?, words.next()?);
+            let kind = PadKind::from_wire(words.next()?.parse().ok()?)?;
+            Some(format!("pad {account} {} #{index}", kind.label()))
+        })
+        .collect();
+    out.extend(rows(vhci::MAP).into_iter().filter_map(|(port, row)| {
+        Some(format!(
+            "usb {} port {port}",
+            row.split_whitespace().next()?
+        ))
+    }));
+    out.sort();
+    out
 }
 
 /// Binds `path`, replacing a stale socket file, open to every local user: the peer's uid is
@@ -112,7 +211,7 @@ fn handle(service: &SeatService<LinuxBackend>, stream: UnixStream) {
         }
     };
     match request {
-        Request::Create { kind, index } => create(stream, uid, &account, kind, index),
+        Request::Create { kind, index } => create(stream, &account, kind, index),
         Request::Attach { devid, speed } => attach(stream, &account, fd, devid, speed),
         Request::Detach { port } => {
             let status = match vhci::detach(&account, port) {
@@ -134,8 +233,8 @@ fn answer(stream: &UnixStream, account: &str, status: Status) {
 }
 
 /// A uinput or uhid pad, relayed until the seat hangs up.
-fn create(stream: UnixStream, uid: u32, account: &str, kind: PadKind, index: u8) {
-    let Some(_slot) = Slot::take(uid) else {
+fn create(stream: UnixStream, account: &str, kind: PadKind, index: u8) {
+    let Some(_slot) = Slot::take(account) else {
         tracing::warn!(
             account,
             cap = MAX_PER_SEAT,
@@ -168,8 +267,9 @@ fn create(stream: UnixStream, uid: u32, account: &str, kind: PadKind, index: u8)
     drop(theirs);
     drop(stream);
     tracing::info!(account, pad = kind.label(), index, "seat pad made");
-    pad_broker::relay(pad, ours);
-    tracing::info!(account, pad = kind.label(), index, "seat pad released");
+    let name = pad_broker::store_name(kind, index, account);
+    pad_broker::keep(&name, &pad, &ours);
+    run_relay(&name, account, kind, index, pad, ours);
 }
 
 /// The seat's usbip socket on a vhci port, held until its connection ends.
@@ -213,16 +313,22 @@ mod tests {
     fn a_seat_holds_at_most_the_cap_and_gets_slots_back() {
         let mut held = HashMap::new();
         for _ in 0..MAX_PER_SEAT {
-            assert!(admit(&mut held, 987));
+            assert!(admit(&mut held, "pf-seat-1"));
         }
-        assert!(!admit(&mut held, 987), "one too many");
-        assert!(admit(&mut held, 988), "another seat has its own cap");
-        release(&mut held, 987);
-        assert!(admit(&mut held, 987));
+        assert!(!admit(&mut held, "pf-seat-1"), "one too many");
+        assert!(
+            admit(&mut held, "pf-seat-2"),
+            "another seat has its own cap"
+        );
+        release(&mut held, "pf-seat-1");
+        assert!(admit(&mut held, "pf-seat-1"));
         for _ in 0..=MAX_PER_SEAT {
-            release(&mut held, 987);
+            release(&mut held, "pf-seat-1");
         }
-        assert!(!held.contains_key(&987), "a seat with no pads is forgotten");
+        assert!(
+            !held.contains_key("pf-seat-1"),
+            "a seat with no pads is forgotten"
+        );
     }
 
     #[test]

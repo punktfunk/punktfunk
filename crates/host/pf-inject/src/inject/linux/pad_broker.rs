@@ -17,13 +17,17 @@ use crate::uinput_abi::{UinputDevice, INPUT_EVENT_LEN};
 use anyhow::{anyhow, bail, Context, Result};
 use rustix::event::{poll, PollFd, PollFlags};
 use rustix::net::{
-    recvmsg, sendmsg, socketpair, AddressFamily, RecvAncillaryBuffer, RecvAncillaryMessage,
-    RecvFlags, SendAncillaryBuffer, SendAncillaryMessage, SendFlags, SocketFlags, SocketType,
+    recvmsg, sendmsg, sendmsg_addr, socket_with, socketpair, AddressFamily, RecvAncillaryBuffer,
+    RecvAncillaryMessage, RecvFlags, SendAncillaryBuffer, SendAncillaryMessage, SendFlags,
+    SocketAddrUnix, SocketFlags, SocketType,
 };
+use std::collections::HashMap;
 use std::io::{ErrorKind, IoSlice, IoSliceMut};
 use std::mem::MaybeUninit;
-use std::os::fd::{AsFd, BorrowedFd, OwnedFd};
+use std::os::fd::{AsFd, BorrowedFd, FromRawFd, OwnedFd, RawFd};
 use std::os::unix::net::{UnixDatagram, UnixStream};
+use std::path::Path;
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::time::Duration;
 
 pub use pf_paths::seat::PADS_SOCKET as SOCKET;
@@ -411,6 +415,156 @@ pub fn relay_pair() -> Result<(UnixDatagram, OwnedFd)> {
     Ok((UnixDatagram::from(ours), theirs))
 }
 
+// ---- across a supervisor restart ----
+
+/// systemd's first passed fd.
+const LISTEN_FDS_START: RawFd = 3;
+
+impl BrokeredPad {
+    fn kernel_fd(&self) -> BorrowedFd<'_> {
+        match &self.dev {
+            Brokered::Uinput(dev) => dev.as_fd(),
+            Brokered::Uhid(dev) => dev.as_fd(),
+        }
+    }
+}
+
+/// A relayed pad's name in systemd's fd store, `pad/<serial>/<kind>/<index>/<account>`: `/k`
+/// on the kernel fd, `/r` on the supervisor's relay end. The serial is unique per process.
+pub fn store_name(kind: PadKind, index: u8, account: &str) -> String {
+    static NEXT: AtomicU32 = AtomicU32::new(0);
+    let serial = NEXT.fetch_add(1, Ordering::Relaxed);
+    let pid = std::process::id();
+    format!("pad/{pid}-{serial}/{}/{index}/{account}", kind as u8)
+}
+
+/// What a stored name says: `(serial, kind, index, account)`.
+pub fn parse_store_name(name: &str) -> Option<(&str, PadKind, u8, &str)> {
+    let mut parts = name.split('/');
+    if parts.next()? != "pad" {
+        return None;
+    }
+    let serial = parts.next()?;
+    let kind = PadKind::from_wire(parts.next()?.parse().ok()?)?;
+    let index = parts.next()?.parse().ok()?;
+    let account = parts.next()?;
+    parts
+        .next()
+        .is_none()
+        .then_some((serial, kind, index, account))
+}
+
+/// Parks `pad` and its relay end in systemd's fd store under `name`, so a supervisor restart
+/// keeps both ([`kept`]). Not under systemd, nothing happens.
+pub fn keep(name: &str, pad: &BrokeredPad, relay: &UnixDatagram) {
+    notify(
+        &format!("FDSTORE=1\nFDNAME={name}/k"),
+        Some(pad.kernel_fd()),
+    );
+    notify(&format!("FDSTORE=1\nFDNAME={name}/r"), Some(relay.as_fd()));
+}
+
+/// Takes `name`'s fds out of the store: the pad is gone.
+pub fn forget(name: &str) {
+    notify(&format!("FDSTOREREMOVE=1\nFDNAME={name}/k"), None);
+    notify(&format!("FDSTOREREMOVE=1\nFDNAME={name}/r"), None);
+}
+
+/// One message to systemd's notify socket, with `fd` beside it. A path socket only, which is
+/// what systemd hands a system service.
+fn notify(message: &str, fd: Option<BorrowedFd<'_>>) {
+    let Some(path) =
+        std::env::var_os("NOTIFY_SOCKET").filter(|p| !p.as_encoded_bytes().starts_with(b"@"))
+    else {
+        return;
+    };
+    let mut space = [MaybeUninit::<u8>::uninit(); rustix::cmsg_space!(ScmRights(1))];
+    let mut control = SendAncillaryBuffer::new(&mut space);
+    let fds: Vec<BorrowedFd<'_>> = fd.into_iter().collect();
+    if !fds.is_empty() && !control.push(SendAncillaryMessage::ScmRights(&fds)) {
+        return;
+    }
+    let sent = SocketAddrUnix::new(Path::new(&path)).and_then(|addr| {
+        let sock = socket_with(
+            AddressFamily::UNIX,
+            SocketType::DGRAM,
+            SocketFlags::CLOEXEC,
+            None,
+        )?;
+        sendmsg_addr(
+            &sock,
+            &addr,
+            &[IoSlice::new(message.as_bytes())],
+            &mut control,
+            SendFlags::NOSIGNAL,
+        )
+    });
+    if let Err(error) = sent {
+        tracing::debug!(%error, "systemd fd store not told");
+    }
+}
+
+/// A pad the previous supervisor relayed, from systemd's fd store.
+pub struct KeptPad {
+    pub name: String,
+    pub kind: PadKind,
+    pub index: u8,
+    pub account: String,
+    pub pad: BrokeredPad,
+    pub relay: UnixDatagram,
+}
+
+/// The pads systemd kept across a restart (`LISTEN_FDS`, `LISTEN_FDNAMES`). A kernel fd whose
+/// relay end systemd dropped (the seat hung up) is forgotten and closed, which destroys the
+/// pad. Once per process; a second call finds nothing.
+pub fn kept() -> Vec<KeptPad> {
+    static TAKEN: AtomicBool = AtomicBool::new(false);
+    let env = |name: &str| std::env::var(name).unwrap_or_default();
+    let ours = env("LISTEN_PID").parse::<u32>().ok() == Some(std::process::id());
+    let count = env("LISTEN_FDS").parse::<RawFd>().unwrap_or(0);
+    if !ours || count <= 0 || TAKEN.swap(true, Ordering::SeqCst) {
+        return Vec::new();
+    }
+    let names = env("LISTEN_FDNAMES");
+    let mut names = names.split(':');
+    let (mut kernels, mut relays) = (HashMap::new(), HashMap::new());
+    for raw in LISTEN_FDS_START..LISTEN_FDS_START + count {
+        // SAFETY: systemd passes fds 3 through 3 + LISTEN_FDS - 1 to the process LISTEN_PID
+        // names, this one. Nothing else here owns them, and `TAKEN` adopts each once.
+        let fd = unsafe { OwnedFd::from_raw_fd(raw) };
+        let _ = rustix::io::fcntl_setfd(&fd, rustix::io::FdFlags::CLOEXEC);
+        match names.next().unwrap_or("").rsplit_once('/') {
+            Some((stem, "k")) => kernels.insert(stem.to_owned(), fd),
+            Some((stem, "r")) => relays.insert(stem.to_owned(), fd),
+            _ => None,
+        };
+    }
+    let mut out = Vec::new();
+    for (name, kernel) in kernels {
+        let (Some(relay), Some((_, kind, index, account))) =
+            (relays.remove(&name), parse_store_name(&name))
+        else {
+            forget(&name);
+            continue;
+        };
+        let dev = if kind.uinput().is_some() {
+            Brokered::Uinput(UinputDevice::adopt(kernel))
+        } else {
+            Brokered::Uhid(UhidDevice::adopt(kernel))
+        };
+        out.push(KeptPad {
+            account: account.to_owned(),
+            name,
+            kind,
+            index,
+            pad: BrokeredPad { dev },
+            relay: UnixDatagram::from(relay),
+        });
+    }
+    relays.into_keys().for_each(|name| forget(&name));
+    out
+}
+
 /// Move the seat's events into the pad and the pad's back, until the seat hangs up. Blocks:
 /// one thread per relayed pad. A seat that stops reading loses what it missed, never the pad.
 pub fn relay(pad: BrokeredPad, seat: UnixDatagram) {
@@ -513,6 +667,24 @@ mod tests {
         assert_eq!(
             seat_phys("pf-seat-1", ds.phys.trim_start_matches("punktfunk/")),
             "punktfunk-seat:pf-seat-1/dualsense/2"
+        );
+    }
+
+    /// A stored pad's name carries what a restarted supervisor needs to relay it again.
+    #[test]
+    fn a_store_name_round_trips() {
+        let a = store_name(PadKind::DualSense, 2, "pf-seat-1");
+        let b = store_name(PadKind::DualSense, 2, "pf-seat-1");
+        assert_ne!(a, b, "unique per pad");
+        let (serial, kind, index, account) = parse_store_name(&a).unwrap();
+        assert!(!serial.contains(['/', ':']));
+        assert_eq!((kind, index, account), (PadKind::DualSense, 2, "pf-seat-1"));
+        assert!(!a.contains(':'), "systemd's LISTEN_FDNAMES separator");
+        assert_eq!(parse_store_name("pad/1-0/200/0/x"), None, "unknown kind");
+        assert_eq!(
+            parse_store_name("pad/1-0/10/0/x/k"),
+            None,
+            "a suffix is not a name"
         );
     }
 
