@@ -167,6 +167,11 @@ pub trait PadProto {
 
     /// Backend logs success; the manager logs create-gate failures.
     fn open(&mut self, idx: u8) -> Result<Self::Pad>;
+    /// `false` once the pad is gone under the backend: a seat's relay the supervisor dropped.
+    /// The manager then makes it again. Default: a pad lives until unplugged.
+    fn alive(&self, _pad: &Self::Pad) -> bool {
+        true
+    }
     /// Fold one button/stick frame into a new state, preserving from `prev` every field that
     /// arrives on the rich plane (touch / motion). Paddle remap applies here too.
     fn merge_frame(&self, prev: &Self::State, f: &GamepadFrame) -> Self::State;
@@ -440,6 +445,17 @@ impl<B: PadProto> UhidManager<B> {
                 continue;
             };
             let fb = self.backend.service(pad, i as u8);
+            if !self.backend.alive(pad) {
+                // The seat supervisor restarted: its next answer is a new pad, made by `ensure`.
+                tracing::warn!(
+                    backend = B::LABEL,
+                    index = i,
+                    "virtual pad lost its relay — making it again"
+                );
+                self.slots.remove(i);
+                self.reset_pad(i);
+                continue;
+            }
             if fb.resync {
                 // Output-report ring overflowed: feedback state is unknown beyond what the drain
                 // salvaged. Silence the pad first (an unsaved plane must not stay latched; salvage

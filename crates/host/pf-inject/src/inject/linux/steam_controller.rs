@@ -17,7 +17,7 @@ use super::steam_proto::{
     btn, parse_steam_output, sc_from_gamepad, serial_reply, serialize_deck_state,
     serialize_sc_state, SteamModel, SteamState, STEAMDECK_RDESC, STEAM_REPORT_LEN, STEAM_VENDOR,
 };
-use crate::uhid_abi::{Create2, UhidDevice, UhidEvent};
+use crate::uhid_abi::{UhidDevice, UhidEvent};
 use crate::uhid_manager::{PadFeedback, PadProto, UhidManager};
 use anyhow::Result;
 use punktfunk_core::quic::RichInput;
@@ -47,6 +47,25 @@ fn try_clear_lizard_mode() {
     }
 }
 
+/// The `CREATE2` identity of pad `index` as `model`: what this host opens, and what the seat
+/// broker builds for a seat.
+pub(crate) fn identity(index: u8, model: SteamModel) -> crate::uhid_abi::Identity {
+    let (name, phys, uniq) = match model {
+        SteamModel::Deck => ("Steam Deck", "steam", "steam"),
+        SteamModel::Controller => ("Steam Controller", "steamctrl", "steamctrl"),
+    };
+    crate::uhid_abi::Identity {
+        bus: crate::uhid_abi::BUS_USB,
+        name: format!("Punktfunk {name} {index}"),
+        phys: format!("punktfunk/{phys}/{index}"),
+        uniq: format!("punktfunk-{uniq}-{index}"),
+        rdesc: STEAMDECK_RDESC,
+        vendor: STEAM_VENDOR,
+        product: model.product(),
+        version: 0x0100,
+    }
+}
+
 /// Virtual Steam Deck or classic Steam Controller on `/dev/uhid`. Drop unbinds `hid-steam`.
 pub struct SteamDeckPad {
     dev: UhidDevice,
@@ -67,20 +86,11 @@ impl SteamDeckPad {
         if model == SteamModel::Deck {
             try_clear_lizard_mode();
         }
-        let (name, phys, uniq) = match model {
-            SteamModel::Deck => ("Steam Deck", "steam", "steam"),
-            SteamModel::Controller => ("Steam Controller", "steamctrl", "steamctrl"),
+        let kind = match model {
+            SteamModel::Deck => crate::pad_broker::PadKind::SteamDeck,
+            SteamModel::Controller => crate::pad_broker::PadKind::SteamController,
         };
-        let dev = UhidDevice::open(&Create2 {
-            bus: crate::uhid_abi::BUS_USB,
-            name: &format!("Punktfunk {name} {index}"),
-            phys: &format!("punktfunk/{phys}/{index}"),
-            uniq: &format!("punktfunk-{uniq}-{index}"),
-            rdesc: STEAMDECK_RDESC,
-            vendor: STEAM_VENDOR,
-            product: model.product(),
-            version: 0x0100,
-        })?;
+        let dev = UhidDevice::open_kind(kind, index, &identity(index, model))?;
         Ok(SteamDeckPad {
             dev,
             model,
@@ -252,8 +262,22 @@ fn open_transport(idx: u8) -> Result<DeckTransport> {
 #[derive(Default)]
 pub struct SteamProto;
 
+impl DeckTransport {
+    /// `false` once a uhid pad's relay to the seat supervisor ended.
+    fn alive(&self) -> bool {
+        match self {
+            DeckTransport::Uhid(pad) => pad.dev.alive(),
+            _ => true,
+        }
+    }
+}
+
 impl PadProto for SteamProto {
     type Pad = DeckTransport;
+
+    fn alive(&self, pad: &DeckTransport) -> bool {
+        pad.alive()
+    }
     type State = SteamState;
     const LABEL: &'static str = "Steam Deck";
     const DEVICE: &'static str = "Steam Deck";
@@ -323,6 +347,10 @@ impl Default for ScProto {
 
 impl PadProto for ScProto {
     type Pad = SteamDeckPad;
+
+    fn alive(&self, pad: &SteamDeckPad) -> bool {
+        pad.dev.alive()
+    }
     type State = SteamState;
     const LABEL: &'static str = "Steam Controller";
     const DEVICE: &'static str = "Steam Controller";

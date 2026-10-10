@@ -15,7 +15,8 @@ use super::dualsense_proto::{
     DS_FEATURE_FIRMWARE, DS_PRODUCT, DS_TOUCH_H, DS_TOUCH_W, DS_VENDOR, DUALSENSE_EDGE_RDESC,
     DUALSENSE_RDESC,
 };
-use crate::uhid_abi::{Create2, UhidDevice, UhidEvent};
+use crate::pad_broker::PadKind;
+use crate::uhid_abi::{Identity, UhidDevice, UhidEvent};
 use crate::uhid_manager::{PadFeedback, PadProto, UhidManager};
 use anyhow::Result;
 use punktfunk_core::quic::RichInput;
@@ -55,6 +56,21 @@ impl DsUhidIdentity {
     }
 }
 
+/// The `CREATE2` identity of pad `index` as `id`: what this host opens, and what the seat
+/// broker builds for a seat.
+pub(crate) fn identity(index: u8, id: &DsUhidIdentity) -> Identity {
+    Identity {
+        bus: crate::uhid_abi::BUS_USB,
+        name: format!("Punktfunk {} {index}", id.name),
+        phys: format!("punktfunk/{}/{index}", id.phys),
+        uniq: format!("punktfunk-{}-{index}", id.slug),
+        rdesc: id.rdesc,
+        vendor: DS_VENDOR,
+        product: id.product,
+        version: 0x0100,
+    }
+}
+
 /// Virtual DualSense on `/dev/uhid`. Drop unbinds `hid-playstation`.
 pub struct DualSensePad {
     dev: UhidDevice,
@@ -66,16 +82,12 @@ impl DualSensePad {
     /// `index` is only for unique name/uniq; identity is `id`. The uniq is cosmetic:
     /// `hid-playstation` replaces it with the pairing-report MAC ([`ds_pairing_reply`]).
     pub fn open(index: u8, id: &DsUhidIdentity) -> Result<DualSensePad> {
-        let dev = UhidDevice::open(&Create2 {
-            bus: crate::uhid_abi::BUS_USB,
-            name: &format!("Punktfunk {} {index}", id.name),
-            phys: &format!("punktfunk/{}/{index}", id.phys),
-            uniq: &format!("punktfunk-{}-{index}", id.slug),
-            rdesc: id.rdesc,
-            vendor: DS_VENDOR,
-            product: id.product,
-            version: 0x0100,
-        })?;
+        let kind = if id.device_type == DEVTYPE_DUALSENSE_EDGE {
+            PadKind::DualSenseEdge
+        } else {
+            PadKind::DualSense
+        };
+        let dev = UhidDevice::open_kind(kind, index, &identity(index, id))?;
         Ok(DualSensePad {
             dev,
             device_type: id.device_type,
@@ -156,8 +168,22 @@ impl Default for DsLinuxProto {
     }
 }
 
+impl DsTransport {
+    /// `false` once a uhid pad's relay to the seat supervisor ended.
+    fn alive(&self) -> bool {
+        match self {
+            DsTransport::Uhid(pad) => pad.dev.alive(),
+            DsTransport::Usbip(_) => true,
+        }
+    }
+}
+
 impl PadProto for DsLinuxProto {
     type Pad = DsTransport;
+
+    fn alive(&self, pad: &DsTransport) -> bool {
+        pad.alive()
+    }
     type State = DsState;
     const LABEL: &'static str = "DualSense";
     const DEVICE: &'static str = "DualSense";
@@ -220,6 +246,10 @@ pub struct DsEdgeLinuxProto;
 
 impl PadProto for DsEdgeLinuxProto {
     type Pad = DualSensePad;
+
+    fn alive(&self, pad: &DualSensePad) -> bool {
+        pad.dev.alive()
+    }
     type State = DsState;
     const LABEL: &'static str = "DualSense Edge";
     const DEVICE: &'static str = "DualSense Edge";

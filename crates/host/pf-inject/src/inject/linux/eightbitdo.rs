@@ -9,7 +9,7 @@ use super::eightbitdo_proto::{
     caps_reply, parse_rumble, EightBitDoState, Model, FEATURE_CAPS, VENDOR,
 };
 use crate::sensor_clock::SensorClock;
-use crate::uhid_abi::{Create2, UhidDevice, UhidEvent, BUS_BLUETOOTH, BUS_USB};
+use crate::uhid_abi::{UhidDevice, UhidEvent, BUS_BLUETOOTH, BUS_USB};
 use crate::uhid_manager::{PadFeedback, PadProto, UhidManager};
 use anyhow::Result;
 use punktfunk_core::input::GamepadFrame;
@@ -24,24 +24,35 @@ pub struct EightBitDoPad {
 
 impl EightBitDoPad {
     pub fn open(model: Model, index: u8) -> Result<EightBitDoPad> {
-        let dev = UhidDevice::open(&Create2 {
-            bus: if model.bluetooth() {
-                BUS_BLUETOOTH
-            } else {
-                BUS_USB
-            },
-            name: model.name(),
-            phys: &format!("punktfunk/8bitdo/{index}"),
-            uniq: &format!("punktfunk-8bitdo-{index}"),
-            rdesc: model.rdesc(),
-            vendor: VENDOR as u32,
-            product: model.product() as u32,
-            version: 0x0100,
-        })?;
+        let kind = match model {
+            Model::Ultimate2 => crate::pad_broker::PadKind::EightBitDoUltimate2,
+            Model::Pro2 => crate::pad_broker::PadKind::EightBitDoPro2,
+            Model::Pro3 => crate::pad_broker::PadKind::EightBitDoPro3,
+        };
+        let dev = UhidDevice::open_kind(kind, index, &identity(model, index))?;
         Ok(EightBitDoPad {
             dev,
             clock: SensorClock::micros(),
         })
+    }
+}
+
+/// The `CREATE2` identity of pad `index` as `model`: what this host opens, and what the seat
+/// broker builds for a seat.
+pub(crate) fn identity(model: Model, index: u8) -> crate::uhid_abi::Identity {
+    crate::uhid_abi::Identity {
+        bus: if model.bluetooth() {
+            BUS_BLUETOOTH
+        } else {
+            BUS_USB
+        },
+        name: model.name().to_owned(),
+        phys: format!("punktfunk/8bitdo/{index}"),
+        uniq: format!("punktfunk-8bitdo-{index}"),
+        rdesc: model.rdesc(),
+        vendor: VENDOR as u32,
+        product: model.product() as u32,
+        version: 0x0100,
     }
 }
 
@@ -58,6 +69,10 @@ impl EightBitDoProto {
 
 impl PadProto for EightBitDoProto {
     type Pad = EightBitDoPad;
+
+    fn alive(&self, pad: &EightBitDoPad) -> bool {
+        pad.dev.alive()
+    }
     type State = EightBitDoState;
     const LABEL: &'static str = "8BitDo";
     const DEVICE: &'static str = "8BitDo";

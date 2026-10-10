@@ -6,5 +6,8 @@
 # it, and a distro rule that opens every hidraw or input node (`MODE="0666"`) loses to `:=`.
 ACTION=="add", SUBSYSTEM=="input", KERNEL=="event*|js*", ATTRS{phys}=="punktfunk-seat:*", \
     IMPORT{program}="/usr/libexec/punktfunk/punktfunk-seats fence"
-ACTION=="add", SUBSYSTEM=="input", ENV{PF_SEAT_USER}=="?*", OWNER:="$env{PF_SEAT_USER}", \
+# A uhid pad's hidraw node: the stamp is the HID device's `phys`, which the helper reads.
+ACTION=="add", SUBSYSTEM=="hidraw", DEVPATH=="/devices/virtual/misc/uhid/*", \
+    IMPORT{program}="/usr/libexec/punktfunk/punktfunk-seats fence"
+ACTION=="add", SUBSYSTEM=="input|hidraw", ENV{PF_SEAT_USER}=="?*", OWNER:="$env{PF_SEAT_USER}", \
     GROUP:="root", MODE:="0600", TAG-="uaccess", ENV{ID_SEAT}="$env{PF_SEAT}"

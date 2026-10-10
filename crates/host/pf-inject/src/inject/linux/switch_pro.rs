@@ -16,12 +16,48 @@ use super::switch_proto::{
     parse_output, player_leds_bits, serialize_for, Half, SwitchOutput, SwitchState, SWITCH_PRODUCT,
     SWITCH_VENDOR,
 };
-use crate::uhid_abi::{Create2, UhidDevice, UhidEvent};
+use crate::uhid_abi::{UhidDevice, UhidEvent};
 use crate::uhid_manager::{PadFeedback, PadProto, UhidManager};
 use anyhow::Result;
 use pf_driver_proto::gamepad::DEVTYPE_SWITCH_PRO;
 use pf_driver_proto::switch as wire;
 use punktfunk_core::quic::{HidOutput, RichInput};
+
+/// The `CREATE2` identity of pad `index`, a Pro (`None`) or one Joy-Con half: what this host
+/// opens, and what the seat broker builds for a seat. A Pro is a USB pad, so `hid-nintendo`
+/// runs its USB probe; a Joy-Con half is a Bluetooth one, as the real pads are.
+pub(crate) fn identity(index: u8, half: Option<Half>) -> crate::uhid_abi::Identity {
+    let (bus, product, name, tag) = match half {
+        None => (
+            crate::uhid_abi::BUS_USB,
+            SWITCH_PRODUCT,
+            "Switch Pro Controller",
+            "switchpro",
+        ),
+        Some(Half::Left) => (
+            crate::uhid_abi::BUS_BLUETOOTH,
+            Half::Left.product(),
+            "Joy-Con (L)",
+            "joycon-l",
+        ),
+        Some(Half::Right) => (
+            crate::uhid_abi::BUS_BLUETOOTH,
+            Half::Right.product(),
+            "Joy-Con (R)",
+            "joycon-r",
+        ),
+    };
+    crate::uhid_abi::Identity {
+        bus,
+        name: format!("Punktfunk {name} {index}"),
+        phys: format!("punktfunk/{tag}/{index}"),
+        uniq: format!("punktfunk-{tag}-{index}"),
+        rdesc: &wire::RDESC,
+        vendor: SWITCH_VENDOR,
+        product,
+        version: 0x0200, // bcdDevice 2.00
+    }
+}
 
 /// One virtual Switch pad on `/dev/uhid`: a Pro Controller or one Joy-Con half. Drop unbinds
 /// `hid-nintendo`.
@@ -41,36 +77,13 @@ impl SwitchPad {
     /// `index` is name/uniq and the virtual MAC. A Pro is a USB pad, so `hid-nintendo` runs its
     /// USB probe; a Joy-Con half is a Bluetooth one, as the real pads are.
     pub fn open(index: u8, device_type: u8) -> Result<SwitchPad> {
-        let (bus, product, name, tag) = match Half::of(device_type) {
-            None => (
-                crate::uhid_abi::BUS_USB,
-                SWITCH_PRODUCT,
-                "Switch Pro Controller",
-                "switchpro",
-            ),
-            Some(Half::Left) => (
-                crate::uhid_abi::BUS_BLUETOOTH,
-                Half::Left.product(),
-                "Joy-Con (L)",
-                "joycon-l",
-            ),
-            Some(Half::Right) => (
-                crate::uhid_abi::BUS_BLUETOOTH,
-                Half::Right.product(),
-                "Joy-Con (R)",
-                "joycon-r",
-            ),
+        let half = Half::of(device_type);
+        let kind = match half {
+            None => crate::pad_broker::PadKind::SwitchPro,
+            Some(Half::Left) => crate::pad_broker::PadKind::JoyConLeft,
+            Some(Half::Right) => crate::pad_broker::PadKind::JoyConRight,
         };
-        let dev = UhidDevice::open(&Create2 {
-            bus,
-            name: &format!("Punktfunk {name} {index}"),
-            phys: &format!("punktfunk/{tag}/{index}"),
-            uniq: &format!("punktfunk-{tag}-{index}"),
-            rdesc: &wire::RDESC,
-            vendor: SWITCH_VENDOR,
-            product,
-            version: 0x0200, // bcdDevice 2.00
-        })?;
+        let dev = UhidDevice::open_kind(kind, index, &identity(index, half))?;
         Ok(SwitchPad {
             dev,
             device_type,
@@ -156,6 +169,10 @@ impl Default for SwitchProProto {
 
 impl PadProto for SwitchProProto {
     type Pad = SwitchPad;
+
+    fn alive(&self, pad: &SwitchPad) -> bool {
+        pad.dev.alive()
+    }
     type State = SwitchState;
     const LABEL: &'static str = "Switch Pro";
     const DEVICE: &'static str = "Switch Pro Controller";
@@ -214,6 +231,10 @@ pub struct JoyConPairProto;
 
 impl PadProto for JoyConPairProto {
     type Pad = JoyConPair;
+
+    fn alive(&self, pad: &JoyConPair) -> bool {
+        pad.left.dev.alive() && pad.right.dev.alive()
+    }
     type State = SwitchState;
     const LABEL: &'static str = "Joy-Con pair";
     const DEVICE: &'static str = "Joy-Con pair";

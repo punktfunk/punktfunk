@@ -5,12 +5,27 @@
 
 use super::hori_proto::{serial, HoriState, NAME, PRODUCT, RDESC, REPORT_PERIOD, VENDOR};
 use crate::sensor_clock::SensorClock;
-use crate::uhid_abi::{Create2, UhidDevice, UhidEvent, BUS_USB};
+use crate::uhid_abi::{UhidDevice, UhidEvent, BUS_USB};
 use crate::uhid_manager::{PadFeedback, PadProto, UhidManager};
 use anyhow::Result;
 use punktfunk_core::input::GamepadFrame;
 use punktfunk_core::quic::RichInput;
 use std::time::{Duration, Instant};
+
+/// The `CREATE2` identity of pad `index`: what this host opens, and what the seat broker
+/// builds for a seat.
+pub(crate) fn identity(index: u8) -> crate::uhid_abi::Identity {
+    crate::uhid_abi::Identity {
+        bus: BUS_USB,
+        name: NAME.to_owned(),
+        phys: format!("punktfunk/horipad/{index}"),
+        uniq: format!("punktfunk-horipad-{index}"),
+        rdesc: &RDESC,
+        vendor: VENDOR as u32,
+        product: PRODUCT as u32,
+        version: 0x0100,
+    }
+}
 
 /// Drop destroys the device.
 pub struct HoriPad {
@@ -21,16 +36,11 @@ pub struct HoriPad {
 
 impl HoriPad {
     pub fn open(index: u8) -> Result<HoriPad> {
-        let dev = UhidDevice::open(&Create2 {
-            bus: BUS_USB,
-            name: NAME,
-            phys: &format!("punktfunk/horipad/{index}"),
-            uniq: &format!("punktfunk-horipad-{index}"),
-            rdesc: &RDESC,
-            vendor: VENDOR as u32,
-            product: PRODUCT as u32,
-            version: 0x0100,
-        })?;
+        let dev = UhidDevice::open_kind(
+            crate::pad_broker::PadKind::HoripadSteam,
+            index,
+            &identity(index),
+        )?;
         Ok(HoriPad {
             dev,
             clock: SensorClock::micros(),
@@ -44,6 +54,10 @@ pub struct HoriProto;
 
 impl PadProto for HoriProto {
     type Pad = HoriPad;
+
+    fn alive(&self, pad: &HoriPad) -> bool {
+        pad.dev.alive()
+    }
     type State = HoriState;
     const LABEL: &'static str = "HORIPAD";
     const DEVICE: &'static str = "HORIPAD for Steam";

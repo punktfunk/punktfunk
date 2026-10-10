@@ -14,10 +14,25 @@ use super::triton_proto::{
     parse_triton_rumble, strip_report_prefix, triton_feature_reply, triton_serial, triton_unit_id,
     TritonState, TRITON_RDESC, TRITON_VENDOR, TRITON_WIRED_PRODUCT,
 };
-use crate::uhid_abi::{Create2, UhidDevice, UhidEvent};
+use crate::uhid_abi::{UhidDevice, UhidEvent};
 use crate::uhid_manager::{PadFeedback, PadProto, UhidManager};
 use anyhow::Result;
 use punktfunk_core::quic::{HidOutput, RichInput, HID_RAW_FEATURE, HID_RAW_OUTPUT};
+
+/// The `CREATE2` identity of pad `index`: what this host opens, and what the seat broker
+/// builds for a seat. Steam matches VID/PID, not the product string.
+pub(crate) fn identity(index: u8) -> crate::uhid_abi::Identity {
+    crate::uhid_abi::Identity {
+        bus: crate::uhid_abi::BUS_USB,
+        name: format!("Punktfunk Steam Controller 2 {index}"),
+        phys: format!("punktfunk/triton/{index}"),
+        uniq: format!("punktfunk-triton-{index}"),
+        rdesc: TRITON_RDESC,
+        vendor: TRITON_VENDOR,
+        product: TRITON_WIRED_PRODUCT,
+        version: 0x0100,
+    }
+}
 
 /// `/dev/uhid` Triton pad. Drop destroys the device.
 pub struct TritonPad {
@@ -38,16 +53,11 @@ impl TritonPad {
     /// Steam matches VID/PID, not the product string; the name keeps the Punktfunk prefix
     /// every virtual pad uses.
     pub fn open(index: u8) -> Result<TritonPad> {
-        let dev = UhidDevice::open(&Create2 {
-            bus: crate::uhid_abi::BUS_USB,
-            name: &format!("Punktfunk Steam Controller 2 {index}"),
-            phys: &format!("punktfunk/triton/{index}"),
-            uniq: &format!("punktfunk-triton-{index}"),
-            rdesc: TRITON_RDESC,
-            vendor: TRITON_VENDOR,
-            product: TRITON_WIRED_PRODUCT,
-            version: 0x0100,
-        })?;
+        let dev = UhidDevice::open_kind(
+            crate::pad_broker::PadKind::SteamController2,
+            index,
+            &identity(index),
+        )?;
         Ok(TritonPad {
             dev,
             seq: 0,
@@ -200,8 +210,22 @@ impl TritonProto {
     }
 }
 
+impl TritonTransport {
+    /// `false` once a uhid pad's relay to the seat supervisor ended.
+    fn alive(&self) -> bool {
+        match self {
+            TritonTransport::Uhid(pad) => pad.dev.alive(),
+            _ => true,
+        }
+    }
+}
+
 impl PadProto for TritonProto {
     type Pad = TritonTransport;
+
+    fn alive(&self, pad: &TritonTransport) -> bool {
+        pad.alive()
+    }
     type State = TritonState;
     const LABEL: &'static str = "Steam Controller 2";
     const DEVICE: &'static str = "Steam Controller 2";

@@ -122,14 +122,15 @@ impl PadIdentity {
         }
     }
 
-    /// The identity a broker request names: the supervisor builds from this table, never from
-    /// anything the seat sent.
-    pub(crate) const fn of(kind: PadKind) -> PadIdentity {
-        match kind {
+    /// The identity a broker request names, `None` for a kind that is not a uinput pad: the
+    /// supervisor builds from this table, never from anything the seat sent.
+    pub(crate) const fn of(kind: PadKind) -> Option<PadIdentity> {
+        Some(match kind {
             PadKind::Xbox360 => PadIdentity::xbox360(),
             PadKind::XboxOne => PadIdentity::xbox_one(),
             PadKind::XboxElite2 => PadIdentity::elite2(),
-        }
+            _ => return None,
+        })
     }
 
     pub(crate) fn log(&self) -> &'static str {

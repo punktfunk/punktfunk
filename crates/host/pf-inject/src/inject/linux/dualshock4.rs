@@ -14,10 +14,25 @@ use super::dualshock4_proto::{
     ds4_pairing_reply, parse_ds4_output, Ds4Encoder, Ds4Feedback, DS4_FEATURE_CALIBRATION,
     DS4_FEATURE_FIRMWARE, DS4_PRODUCT, DS4_RDESC, DS4_TOUCH_H, DS4_TOUCH_W, DS4_VENDOR,
 };
-use crate::uhid_abi::{Create2, UhidDevice, UhidEvent};
+use crate::uhid_abi::{UhidDevice, UhidEvent};
 use crate::uhid_manager::{PadFeedback, PadProto, UhidManager};
 use anyhow::Result;
 use punktfunk_core::quic::{HidOutput, RichInput};
+
+/// The `CREATE2` identity of pad `index`: what this host opens, and what the seat broker
+/// builds for a seat.
+pub(crate) fn identity(index: u8) -> crate::uhid_abi::Identity {
+    crate::uhid_abi::Identity {
+        bus: crate::uhid_abi::BUS_USB,
+        name: format!("Punktfunk DualShock 4 {index}"),
+        phys: format!("punktfunk/dualshock4/{index}"),
+        uniq: format!("punktfunk-ds4-{index}"),
+        rdesc: DS4_RDESC,
+        vendor: DS4_VENDOR as u32,
+        product: DS4_PRODUCT as u32,
+        version: 0x0100,
+    }
+}
 
 /// Drop unbinds `hid-playstation`.
 pub struct DualShock4Pad {
@@ -29,16 +44,11 @@ impl DualShock4Pad {
     /// `index` is only the name/uniq suffix, not a HID slot. The uniq is cosmetic;
     /// `hid-playstation` keys uniqueness off the pairing-report MAC.
     pub fn open(index: u8) -> Result<DualShock4Pad> {
-        let dev = UhidDevice::open(&Create2 {
-            bus: crate::uhid_abi::BUS_USB,
-            name: &format!("Punktfunk DualShock 4 {index}"),
-            phys: &format!("punktfunk/dualshock4/{index}"),
-            uniq: &format!("punktfunk-ds4-{index}"),
-            rdesc: DS4_RDESC,
-            vendor: DS4_VENDOR as u32,
-            product: DS4_PRODUCT as u32,
-            version: 0x0100,
-        })?;
+        let dev = UhidDevice::open_kind(
+            crate::pad_broker::PadKind::DualShock4,
+            index,
+            &identity(index),
+        )?;
         Ok(DualShock4Pad {
             dev,
             enc: Ds4Encoder::default(),
@@ -91,6 +101,10 @@ impl Default for Ds4LinuxProto {
 
 impl PadProto for Ds4LinuxProto {
     type Pad = DualShock4Pad;
+
+    fn alive(&self, pad: &DualShock4Pad) -> bool {
+        pad.dev.alive()
+    }
     type State = DsState;
     const LABEL: &'static str = "DualShock 4";
     const DEVICE: &'static str = "DualShock 4";

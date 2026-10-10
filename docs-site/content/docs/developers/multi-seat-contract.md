@@ -250,15 +250,18 @@ system-range user, `pf-seat-<n>`, with a logind session of its own, a headless c
 - **Stopping.** `pam_systemd` moves the runner into the session's scope, so stopping the unit
   can't reach it. The runner ends its children on `SIGTERM`, and `seat-reap` ends the session
   by the id the runner recorded.
-- **Pads.** A seat user can't open `/dev/uinput`: it is the console user's. A seat host asks
-  the daemon's pad broker, `/run/punktfunk/pads.sock`, for a pad by kind, and the daemon builds
-  it from its own tables, keeps the kernel fd and hands the seat one end of a relay socket. The
-  seat sends its `input_event` frames down it and reads rumble back; the pad lives until the seat
-  hangs up. The socket admits a running seat's user only (the owner's row included), eight pads
-  per seat. The daemon stamps each pad's `phys` as `punktfunk-seat:<account>/<index>`, and
-  `65-punktfunk-seats.rules` runs `punktfunk-seats fence` on it: the node becomes that user's,
-  `0600`, on a seat of its own, so neither the box's own Steam nor another seat sees it. A box
-  without the daemon gives a seat no pad; the seat host says so.
+- **Pads.** A seat user can't open `/dev/uinput` or `/dev/uhid`: they are the console user's.
+  A seat host asks the daemon's pad broker, `/run/punktfunk/pads.sock`, for a pad by kind, and
+  the daemon builds it from its own tables, keeps the kernel fd and hands the seat one end of a
+  relay socket. A uinput pad's relay carries the seat's `input_event` frames down and rumble
+  back; a uhid pad's carries the same `uhid_event`s the seat would write and read, minus
+  `CREATE2` and `DESTROY`, which stay the daemon's. The pad lives until the seat hangs up. The
+  socket admits a running seat's user only (the owner's row included), eight pads per seat. The
+  daemon stamps each pad's `phys` as `punktfunk-seat:<account>/…`, and
+  `65-punktfunk-seats.rules` runs `punktfunk-seats fence` on every `input` and `hidraw` node
+  that carries it: the node becomes that user's, `0600`, on a seat of its own, so neither the
+  box's own Steam nor another seat sees it. A box without the daemon gives a seat no pad; the
+  seat host says so.
 - **Game Mode.** The seat host keeps the seat's mode, `desktop` or `game`, in `seat-session` in
   its config directory, and starts in the one it ran last. It owns
   `com.steampowered.SteamOSManager1` on the seat's session bus and serves `SessionManagement1`,
