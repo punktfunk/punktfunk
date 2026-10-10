@@ -1556,10 +1556,11 @@ pub(crate) async fn run_admitted(
             let launch_outcome = launch_outcome_tx.clone();
             // Re-points input across compositor switches and hands identity to backends.
             #[cfg(target_os = "linux")]
-            let (isolation, input_route, inj_session_tx) = (
+            let (isolation, input_route, inj_session_tx, follows_seat) = (
                 planes.isolation.clone(),
                 planes.input_route.clone(),
                 planes.inj_session_tx.clone(),
+                plays_seat_mode(&resolved),
             );
             move |common| SessionContext {
                 common,
@@ -1597,6 +1598,8 @@ pub(crate) async fn run_admitted(
                 inj_shared_tx: inj_tx,
                 #[cfg(target_os = "linux")]
                 inj_session_tx,
+                #[cfg(target_os = "linux")]
+                follows_seat,
             }
         };
         // Explicit-rate PyroWave: the client's ramp closes with one lower pin.
@@ -2126,8 +2129,10 @@ impl SessionPlanes {
                         mic_source: None,
                         ..i
                     }),
+                // A seat's own session stays on shared planes: a switch moves it to the desktop.
                 None => compositor
                     .filter(|c| crate::compositor_route::session_is_isolated(*c, route))
+                    .filter(|_| !plays_seat_mode(profile))
                     .map(|_| {
                         // The profile is the seat: its first session takes the seat's id and
                         // home, a concurrent second one `<seat>-2` and the box's Steam.
@@ -2289,19 +2294,48 @@ async fn resolve_launch(
     Ok(found)
 }
 
-/// What a bare connect opens: Big Picture for a seat profile whose home is `bigpicture`. A
-/// connect that named a title, or the owner's, opens nothing more.
+/// What a bare connect opens: Steam's Game Mode on a seat in Game Mode, else Big Picture for a
+/// seat profile whose home is `bigpicture`. A connect that named a title opens nothing more.
 fn home_launch(
     asked: Option<&str>,
     profile: &crate::profiles::Resolved,
 ) -> Option<crate::library::LaunchTarget> {
-    if asked.is_some() || !opens_big_picture(profile) {
+    if asked.is_some() {
+        return None;
+    }
+    #[cfg(target_os = "linux")]
+    if opens_game_mode(profile) {
+        return crate::library::game_mode_launch();
+    }
+    if !opens_big_picture(profile) {
         return None;
     }
     #[cfg(not(windows))]
     return crate::library::big_picture_launch();
     #[cfg(windows)]
     None
+}
+
+/// A seat in Game Mode, connected to by the seat's own profile.
+#[cfg(target_os = "linux")]
+fn opens_game_mode(profile: &crate::profiles::Resolved) -> bool {
+    crate::seats::session_switch::in_game_mode() && plays_seat_mode(profile)
+}
+
+/// The seat's own profile, or the owner on the owner's row: its sessions play the seat's desktop
+/// or Game Mode on shared planes and follow a switch. A light seat on the owner's row keeps a
+/// gamescope of its own.
+#[cfg(target_os = "linux")]
+pub(crate) fn plays_seat_mode(profile: &crate::profiles::Resolved) -> bool {
+    use crate::profiles::{OsAccount, SeatTier};
+    pf_paths::seat::is_seat_host()
+        && !matches!(
+            profile.os_account,
+            OsAccount::Seat {
+                tier: SeatTier::Light,
+                ..
+            }
+        )
 }
 
 /// A seat profile whose bare connect opens Big Picture in its own gamescope.

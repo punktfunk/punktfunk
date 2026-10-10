@@ -69,6 +69,15 @@ pub fn big_picture_launch() -> Option<LaunchTarget> {
     })
 }
 
+/// Steam as the box's Game Mode runs it: what a seat in Game Mode opens on a bare connect.
+/// `-steamos3` puts "Switch to Desktop" in its power menu, which the seat answers itself.
+#[cfg(target_os = "linux")]
+pub fn game_mode_launch() -> Option<LaunchTarget> {
+    let mut target = big_picture_launch()?;
+    target.command = Some("steam -gamepadui -steamos3 steam://open/bigpicture".into());
+    Some(target)
+}
+
 /// Map a store-qualified library id to a [`LaunchTarget`] from the host's library.
 /// `None` = unknown id, or on Linux a title with no runnable recipe.
 ///

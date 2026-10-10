@@ -100,6 +100,10 @@ What turning it on does:
   join its group, `punktfunk-games`, at your next login. To share a game you already have, open
   Steam's **Settings → Storage**, add that folder and move the game there. Each seat keeps its own
   Proton prefixes and shader cache.
+- **A seat has Game Mode too.** **Return to Gaming Mode** on a seat's desktop opens Steam's Game
+  Mode on that seat, and Steam's **Switch to Desktop** goes back. The stream carries on, and
+  neither touches the box's own session. The desktop's apps keep running underneath. A seat starts
+  in the mode it was last in.
 
 Turning it off copies the files back to your home and your own host serves the box again. Seats of
 their own stay on the box, stopped, and come back with the switch.

@@ -215,6 +215,10 @@ tempfile = "3"
 # The C ABI, driven from Rust by the native plane's connection round-trip tests (native.rs).
 punktfunk-ffi = { path = "../../client/punktfunk-ffi", features = ["quic"] }
 
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+# A bus-less connection pair for the seat's session switch test (`seats/session_switch.rs`).
+zbus = { version = "5", default-features = false, features = ["tokio", "p2p"] }
+
 # Opus for the pad-audio encoder (`native::pad_audio`) and `opus::Error` on the audio planes; the
 # desktop encoder and the mic pump live in pf-audio. The crate vendors libopus (cmake-built from
 # source — no system lib, no vcpkg), so it builds on Windows MSVC too (needs CMake + NASM, both on
@@ -237,6 +241,8 @@ libc = "0.2"
 # (design/web-console-overhaul.md §7) — the only cross-desktop source for the desktop's own
 # mode and accent. `inhibit` vetoes the desktop's idle suspend during a stream.
 ashpd = { version = "0.13", features = ["screencast", "remote_desktop", "settings", "inhibit"] }
+# A seat serves steamos-manager's session switch on its own bus (`seats/session_switch.rs`).
+zbus = { version = "5", default-features = false, features = ["tokio"] }
 # (ashpd 0.13 drives the one-time portal handshake on tokio; the unconditional `tokio = "full"`
 # in [dependencies] already covers that — this block used to re-declare a strict subset of it.)
 # NOTE: the Wayland stack (wayland-client / -protocols{,-wlr,-misc} / -scanner / -backend),

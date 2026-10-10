@@ -310,6 +310,9 @@ pub fn serve(
         // Hook runner consumes the live event tail for the host's lifetime. Spawned
         // before `host.started` so operator hooks observe the full lifecycle.
         tokio::spawn(crate::hooks::runner());
+        // A Linux seat answers "Return to Gaming Mode" itself, so the box's login is never asked.
+        #[cfg(target_os = "linux")]
+        crate::seats::session_switch::spawn();
         // The browser plane, when the operator asked for it. The native plane spawns it, because
         // a browser runs the native session on the native plane's state. The long-lived identity
         // signs the plane's throwaway certificate, so a paired browser can check it against the
