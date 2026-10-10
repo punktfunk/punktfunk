@@ -31,7 +31,7 @@ use crate::library::LibraryShared;
 use crate::model::{ConsoleCmd, HostRow};
 use crate::pointer::Pointer;
 use crate::theme::Fonts;
-use crate::widgets::{Entry, Keyboard};
+use crate::widgets::{Entry, Keyboard, ROW_H};
 use pf_client_core::menu_nav::{MenuEvent, MenuPulse};
 use pf_client_core::{menu_nav::PadInfo, trust};
 use skia_safe::{Canvas, Rect};
@@ -209,9 +209,17 @@ impl TextEntry {
         self.seat
     }
 
-    /// The height the tray takes from the bottom of the screen, its gap included.
+    /// The height the tray takes from the bottom of the screen: the keys, and the open
+    /// field's slot over them, each with its gap.
     pub(crate) fn reserve(&self, k: f64) -> f64 {
-        (Keyboard::tray_height() + 12.0) * k * self.seat
+        (Keyboard::tray_height() + 12.0 + ROW_H + 12.0) * k * self.seat
+    }
+
+    /// The open field's slot for [`crate::widgets::MenuList::lift`]: its top, riding the
+    /// tray just over the keys, and how far the tray is up. `None` while it is down.
+    pub(crate) fn lift(&self, rect: Rect, k: f64) -> Option<(f32, f64)> {
+        let top = f64::from(rect.bottom) - (Keyboard::tray_height() + 12.0 + ROW_H) * k * self.seat;
+        (self.seat > 0.0).then_some((top as f32, self.seat.min(1.0)))
     }
 
     /// Draws the tray rising from the bottom of `rect`, while it is up at all.

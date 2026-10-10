@@ -170,13 +170,23 @@ enum SettingsOptions {
     // MARK: - Bitrate
 
     /// Discrete bitrate steps for the surfaces with no Slider (tvOS pushed pickers, the gamepad
-    /// settings' left/right cycling), up to the same 3 Gbps ceiling the slider has.
+    /// settings' left/right cycling), up to the same 3 Gbps ceiling the slider has. 5 Mbps
+    /// apart to 50, where most links settle.
     static let bitratePresets: [(label: String, tag: Int)] = [
         ("Automatic", 0),
+        ("5 Mbps", 5_000),
         ("10 Mbps", 10_000),
+        ("15 Mbps", 15_000),
         ("20 Mbps", 20_000),
+        ("25 Mbps", 25_000),
+        ("30 Mbps", 30_000),
+        ("35 Mbps", 35_000),
         ("40 Mbps", 40_000),
+        ("45 Mbps", 45_000),
+        ("50 Mbps", 50_000),
+        ("60 Mbps", 60_000),
         ("80 Mbps", 80_000),
+        ("100 Mbps", 100_000),
         ("150 Mbps", 150_000),
         ("300 Mbps", 300_000),
         ("500 Mbps", 500_000),

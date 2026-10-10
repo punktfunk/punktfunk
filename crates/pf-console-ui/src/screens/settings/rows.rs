@@ -645,12 +645,12 @@ pub(super) const REFRESH: [u32; 8] = [0, 30, 60, 90, 120, 144, 165, 240];
 /// Render-scale multipliers; `1.0` = Native.
 use punktfunk_core::render_scale::PRESETS as RENDER_SCALES;
 use punktfunk_core::video_fit::VideoFit;
-/// Left/right rungs in kbps. Denser below ~20 Mbps; ceiling 2 Gbps. Off-ladder
-/// values go through the Y field rather than a longer ladder.
-pub(super) const BITRATES: [u32; 30] = [
+/// Left/right rungs in kbps: 5 Mbps apart to 50, 10 to 100, where most links settle;
+/// ceiling 2 Gbps. Off-ladder values go through the typed field rather than a longer ladder.
+pub(super) const BITRATES: [u32; 34] = [
     0, 1_000, 2_000, 3_000, 4_000, 5_000, 6_000, 8_000, 10_000, 12_000, 15_000, 20_000, 25_000,
-    30_000, 40_000, 50_000, 60_000, 80_000, 100_000, 125_000, 150_000, 200_000, 250_000, 300_000,
-    400_000, 500_000, 750_000, 1_000_000, 1_500_000, 2_000_000,
+    30_000, 35_000, 40_000, 45_000, 50_000, 60_000, 70_000, 80_000, 90_000, 100_000, 125_000,
+    150_000, 200_000, 250_000, 300_000, 400_000, 500_000, 750_000, 1_000_000, 1_500_000, 2_000_000,
 ];
 /// Typed-field ceiling in Mbps — the ladder's top. Host range is 500 kbps–8 Gbps.
 const CUSTOM_MAX_MBPS: u32 = 2_000;
@@ -1564,7 +1564,8 @@ pub fn detail(id: RowId, ctx: &Ctx) -> &'static str {
              sends less on its own."
         }
         RowId::Bitrate => {
-            "Automatic uses the host's default (20 Mbps). Y types an exact rate, up to 2 Gbps."
+            "Automatic adapts to the network as you play. Press to type a fixed rate, up to \
+             2 Gbps."
         }
         RowId::Compositor => {
             "Which compositor drives the virtual output — honored only if available on the host."

@@ -1002,12 +1002,21 @@ fun Settings.preferredCodec(): Int = when (codec) {
     else -> 0
 }
 
-/** (kbps, label). `0` = host default. */
+/** (kbps, label). `0` = Automatic. 5 Mbps apart to 50, where most links settle. */
 val BITRATE_OPTIONS = listOf(
     0 to "Automatic",
+    5_000 to "5 Mbps",
     10_000 to "10 Mbps",
+    15_000 to "15 Mbps",
     20_000 to "20 Mbps",
+    25_000 to "25 Mbps",
+    30_000 to "30 Mbps",
+    35_000 to "35 Mbps",
+    40_000 to "40 Mbps",
+    45_000 to "45 Mbps",
     50_000 to "50 Mbps",
+    60_000 to "60 Mbps",
+    80_000 to "80 Mbps",
     100_000 to "100 Mbps",
     150_000 to "150 Mbps",
     200_000 to "200 Mbps",

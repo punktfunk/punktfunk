@@ -613,6 +613,7 @@ impl ScreenView for ShortcutEditorScreen {
             rect.bottom - tray_h as f32,
         );
         let rows = rows(&self.draft, self.editing_name, self.picking_key);
+        self.list.lift = self.keyboard.lift(rect, k);
         self.list.render(
             canvas,
             list_rect,
