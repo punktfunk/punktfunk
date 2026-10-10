@@ -1,10 +1,11 @@
 //! A seat's systemd unit: its environment file, its bind-mount drop-in and its state.
 //!
 //! `punktfunk-seat@<user>.service` runs the seat's user in a logind session. The supervisor
-//! writes two files under `/run` before each start: `punktfunk/seats/<user>.env`, the seat
-//! contract the host reads plus its management token, and a drop-in that binds the seat's private
-//! `compatdata`, `shadercache` and `downloading` over the shared games folder's. Both are
-//! rewritten from the ledger on a start, so a reboot that empties `/run` loses nothing.
+//! writes its files under `/run` before each start: `punktfunk/seats/<user>.env`, the seat
+//! contract the host reads plus its management token; a drop-in that binds the seat's private
+//! `compatdata`, `shadercache` and `downloading` over the shared games folder's; and one that
+//! binds [`NO_UPDATE`] over Steam's OS and firmware update helpers. All are rewritten from the
+//! ledger on a start, so a reboot that empties `/run` loses nothing.
 
 use super::{err, run, shared};
 use crate::backend::BackendError;
@@ -20,6 +21,25 @@ pub(super) const DROPIN_ROOT: &str = "/run/systemd/system";
 
 /// The seat directories bound over the shared `steamapps` folder of the same name.
 pub(super) const PRIVATE_DIRS: [&str; 3] = ["compatdata", "shadercache", "downloading"];
+
+/// What a seat's Steam runs in place of [`UPDATE_HELPERS`]. They escalate through pkexec, which
+/// a seat's session is refused, and Steam's first-run setup stops on that failure. A seat never
+/// updates the box, so each answers "nothing to do": 7 from `steamos-update`, else 0.
+pub(super) const NO_UPDATE: &str = "/run/punktfunk/seat-no-update";
+const NO_UPDATE_SCRIPT: &str = "#!/bin/sh\n\
+# A punktfunk seat never updates the box's OS or firmware.\n\
+if [ \"${0##*/}\" = steamos-update ]; then\n\
+    case \" $* \" in *\" --supports-duplicate-detection \"*) exit 0 ;; esac\n\
+    exit 7\n\
+fi\n\
+exit 0\n";
+
+/// Steam's update helpers, by the absolute paths it calls them on SteamOS-like distros.
+const UPDATE_HELPERS: [&str; 3] = [
+    "/usr/bin/steamos-polkit-helpers/steamos-update",
+    "/usr/bin/steamos-polkit-helpers/jupiter-biosupdate",
+    "/usr/bin/jupiter-initial-firmware-update",
+];
 
 pub(super) fn unit(account: &str) -> String {
     format!("punktfunk-seat@{account}.service")
@@ -118,6 +138,17 @@ pub(super) fn render_binds(box_dir: &Path, id: &SeatId) -> String {
     out
 }
 
+/// The drop-in that binds [`NO_UPDATE`] over each update helper `present` on this box. `None`
+/// when none is: a bind onto a missing path fails the unit.
+pub(super) fn render_updates(present: impl Fn(&Path) -> bool) -> Option<String> {
+    let binds: String = UPDATE_HELPERS
+        .iter()
+        .filter(|helper| present(Path::new(helper)))
+        .map(|helper| format!("BindReadOnlyPaths={NO_UPDATE}:{helper}\n"))
+        .collect();
+    (!binds.is_empty()).then(|| format!("[Service]\n{binds}"))
+}
+
 /// The owner's drop-in: a `background` session, so the monitor's own login stays the one logind
 /// and polkit treat as the user's display.
 pub(super) fn render_class() -> &'static str {
@@ -168,7 +199,8 @@ pub(super) fn write_env(
     Ok(())
 }
 
-/// Writes both files for `seat`, then reloads systemd when the drop-in changed.
+/// Writes the environment file and the drop-ins for `seat`, then reloads systemd when a drop-in
+/// changed. Every seat, the owner's included, gets the update helpers' binds.
 pub(super) fn write_unit_files(
     seat: &Seat,
     home: &Path,
@@ -184,8 +216,18 @@ pub(super) fn write_unit_files(
         ("binds.conf", render_binds(box_dir, &seat.id))
     };
     let dropin = dropin_dir(&seat.account).join(name);
-    let changed = write_if_changed(&dropin, &contents, 0o644)
+    let mut changed = write_if_changed(&dropin, &contents, 0o644)
         .map_err(|e| io("write the seat unit drop-in", e))?;
+    let updates = dropin_dir(&seat.account).join("updates.conf");
+    match render_updates(|helper| helper.is_file()) {
+        Some(binds) => {
+            write_if_changed(Path::new(NO_UPDATE), NO_UPDATE_SCRIPT, 0o755)
+                .map_err(|e| io("write the seat's update helper", e))?;
+            changed |= write_if_changed(&updates, &binds, 0o644)
+                .map_err(|e| io("write the seat unit drop-in", e))?;
+        }
+        None => changed |= std::fs::remove_file(&updates).is_ok(),
+    }
     if changed {
         daemon_reload()?;
     }
@@ -389,6 +431,47 @@ mod tests {
              BindPaths=/var/lib/punktfunk/seats/0123456789abcdef0123456789abcdef/shadercache:/var/lib/punktfunk/games/steamapps/shadercache\n\
              BindPaths=/var/lib/punktfunk/seats/0123456789abcdef0123456789abcdef/downloading:/var/lib/punktfunk/games/steamapps/downloading\n"
         );
+    }
+
+    #[test]
+    fn only_the_update_helpers_on_this_box_are_bound() {
+        assert_eq!(render_updates(|_| false), None);
+        assert_eq!(
+            render_updates(|p| p.starts_with("/usr/bin/steamos-polkit-helpers")).unwrap(),
+            "[Service]\n\
+             BindReadOnlyPaths=/run/punktfunk/seat-no-update:/usr/bin/steamos-polkit-helpers/steamos-update\n\
+             BindReadOnlyPaths=/run/punktfunk/seat-no-update:/usr/bin/steamos-polkit-helpers/jupiter-biosupdate\n"
+        );
+    }
+
+    /// The codes Steam reads as "nothing to do", under each name the script is bound to.
+    #[test]
+    fn the_update_helper_reports_nothing_to_do() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let dir = std::env::temp_dir().join(format!("pf-no-update-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let code = |name: &str, args: &[&str]| {
+            let path = dir.join(name);
+            std::fs::write(&path, NO_UPDATE_SCRIPT).unwrap();
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+            std::process::Command::new(&path)
+                .args(args)
+                .status()
+                .unwrap()
+                .code()
+        };
+        assert_eq!(
+            code("steamos-update", &["--enable-duplicate-detection", "check"]),
+            Some(7)
+        );
+        assert_eq!(code("steamos-update", &[]), Some(7));
+        assert_eq!(
+            code("steamos-update", &["--supports-duplicate-detection"]),
+            Some(0)
+        );
+        assert_eq!(code("jupiter-biosupdate", &["check"]), Some(0));
+        assert_eq!(code("jupiter-initial-firmware-update", &["check"]), Some(0));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

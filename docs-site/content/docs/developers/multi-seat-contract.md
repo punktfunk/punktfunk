@@ -261,6 +261,12 @@ system-range user, `pf-seat-<n>`, with a logind session of its own, a headless c
   stream continues; a device joined to the screen is ended and joins the new one on reconnect. The
   seat's sessions use shared input and audio, never an isolated gamescope.
 
+  Steam's update helpers escalate through pkexec, which a seat is refused, and its first-run setup
+  stops on that. A seat never updates the box, so the supervisor binds
+  `/run/punktfunk/seat-no-update` over each of `steamos-polkit-helpers/steamos-update`,
+  `steamos-polkit-helpers/jupiter-biosupdate` and `jupiter-initial-firmware-update` the box has:
+  "nothing to do", 7 from `steamos-update` and 0 from the others.
+
 `punktfunk-seats doctor` checks systemd, logind, the groups, a GPU render node, a compositor and
 the installed unit.
 
