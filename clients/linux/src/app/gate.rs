@@ -369,14 +369,12 @@ fn request_access(
         if cancel.load(std::sync::atomic::Ordering::SeqCst) {
             return;
         }
+        // `persist_on_ready` keeps what the advert taught, the wake MACs among it.
         let msg = match result {
-            Ok(fp) => match trust::persist_host(
-                &req.host.name,
-                &req.host.addr,
-                req.host.port,
+            Ok(fp) => match pf_client_core::orchestrate::persist_on_ready(
+                &req.host,
                 &trust::hex(&fp),
                 true,
-                &[],
             ) {
                 Ok(()) => format!("Paired with {}", req.host.name),
                 Err(e) => format!("Paired, but couldn't save — {e:#}"),

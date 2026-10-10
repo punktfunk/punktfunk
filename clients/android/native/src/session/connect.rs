@@ -839,7 +839,7 @@ pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeRequestAcce
                 (&cert, &key),
                 pin,
                 &name,
-                Duration::from_secs(185),
+                pf_client_core::trust::REQUEST_ACCESS_TIMEOUT,
                 None,
             ) {
                 Ok(host_fp) => hex(&host_fp),

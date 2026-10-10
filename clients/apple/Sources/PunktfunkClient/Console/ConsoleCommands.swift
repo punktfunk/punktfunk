@@ -452,6 +452,7 @@ extension ConsoleModel {
 
     private func pair(addr: String, port: UInt16, pin: String, deviceName: String) {
         bridge.push(.pair, ConsoleJSON.pairBusy)
+        accessRequest = UUID() // a request still waiting answers no screen now
         ceremony.run(host: addr, port: port, pin: pin, clientName: deviceName) { [weak self] cert in
             self?.paired(addr: addr, port: port, cert: cert)
         }

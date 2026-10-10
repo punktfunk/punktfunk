@@ -190,7 +190,10 @@ impl NativeClient {
                 }
             };
             let cancelled = async {
-                while !cancel.as_ref().is_some_and(|c| c.load(Ordering::SeqCst)) {
+                let Some(cancel) = &cancel else {
+                    return std::future::pending().await;
+                };
+                while !cancel.load(Ordering::SeqCst) {
                     tokio::time::sleep(Duration::from_millis(50)).await;
                 }
             };

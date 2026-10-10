@@ -213,7 +213,7 @@ impl V2Message for ClientHello {
                         .map(u16::from_le_bytes)
                         .unwrap_or(0)
                 }
-                26 => access_only = true,
+                26 => access_only = v.first() == Some(&1),
                 _ => {}
             }
         }
@@ -681,6 +681,7 @@ mod tests {
         // A short value is no ask, never a failed handshake.
         assert_eq!(read(25, &[7]).pyrowave_bpp_x100, 0);
         assert!(read(26, &[1]).access_only);
+        assert!(!read(26, &[0]).access_only);
         assert!(!read(24, &[]).access_only);
     }
 

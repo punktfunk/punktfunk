@@ -723,10 +723,6 @@ pub(crate) enum Served {
     Access,
 }
 
-/// Handshake → input/audio → data plane. RAII teardown. A first-message PairRequest is
-/// the pairing ceremony instead, and an access-only hello ends at the pairing gate.
-// Distinct host-lifetime handles from `serve`; a context struct would hide the lifetimes.
-#[allow(clippy::too_many_arguments)]
 /// The sentence a person reads when setup fails, or `None` where the host has no
 /// wording better than the client's own generic one. Every close that carries text
 /// goes through here: the reason bytes reach a user, and an `anyhow` chain is
@@ -742,6 +738,8 @@ pub(crate) fn setup_failed_sentence(e: &anyhow::Error) -> Option<String> {
         .map(|d| d.user_message())
 }
 
+/// Handshake → input/audio → data plane. RAII teardown. A first-message PairRequest is
+/// the pairing ceremony instead, and an access-only hello ends at the pairing gate.
 // One session's whole context, threaded down rather than bundled: every argument is owned by a
 // different part of the host and none of them share a lifetime.
 #[allow(clippy::too_many_arguments)]
