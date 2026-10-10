@@ -695,6 +695,7 @@ impl ScreenView for SettingsScreen {
         // Rows run on under the section strip and the explainer, on the shell's trays;
         // with the keyboard up they stay in their band, or a tray would slab the keys.
         self.list.bleed = self.keyboard.seated() == 0.0;
+        self.list.lift = self.keyboard.lift(rect, k);
         self.list.render(
             canvas,
             list_rect,

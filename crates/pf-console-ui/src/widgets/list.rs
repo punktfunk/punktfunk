@@ -593,6 +593,12 @@ pub struct MenuList {
     /// Rows run on past the list's rect to the layer's edges, under whatever the screen
     /// draws after the list; a [`tray`] there treats them. The resting layout does not move.
     pub bleed: bool,
+    /// The caret row's slot over a keyboard tray, set each frame: its top, device px, and
+    /// how far the row has come, 0–1. The row leaves its cell for it and paints past the
+    /// soft edges, so no fade ever covers the field being typed.
+    pub lift: Option<(f32, f64)>,
+    /// The row [`Self::lift`] carries; held while the tray drops after the field closes.
+    lifted: Option<usize>,
 }
 
 impl Default for MenuList {
@@ -623,6 +629,8 @@ impl MenuList {
             tracks_geom: Vec::new(),
             settled: false,
             bleed: false,
+            lift: None,
+            lifted: None,
         }
     }
 
@@ -788,6 +796,10 @@ impl MenuList {
         active: bool,
     ) {
         self.advance(rows, dt, active);
+        self.lifted = self
+            .lift
+            .and(rows.iter().position(|r| r.caret).or(self.lifted))
+            .filter(|i| *i < rows.len());
         let scroll_settled = self.paint_rows(canvas, rect, rows, fonts, k, dt, active);
         self.record_geometry(rows, k, dot_gutter(rows, k));
         self.settled = self.settled(rows, active, scroll_settled);
@@ -955,7 +967,9 @@ impl MenuList {
             })
             .children(rows.iter().enumerate().map(|(i, row)| {
                 let cell = El::paint(move |canvas, cell| {
-                    this.paint_row(canvas, fonts, i, row, cell, k, dot_gutter);
+                    if this.lifted != Some(i) {
+                        this.paint_row(canvas, fonts, i, row, cell, k, dot_gutter);
+                    }
                 })
                 .id(row_id(i))
                 .focusable((14.0 * k) as f32)
@@ -998,6 +1012,13 @@ impl MenuList {
             soft_scroll(canvas, view, rect, scrolled, k, || {
                 tree.paint_focus(canvas, frame, k as f32, dt, false);
             });
+        }
+        // The lifted row travels from its cell, or from the slot if scrolled out of view.
+        if let (Some(i), Some((slot, t))) = (this.lifted, this.lift) {
+            let from = tree.rect(row_id(i)).map_or(slot, |r| r.top);
+            let top = from + (slot - from) * t as f32;
+            let cell = Rect::from_xywh(col.left, top, row_w as f32, (ROW_H * k) as f32);
+            this.paint_row(canvas, fonts, i, &rows[i], cell, k, dot_gutter);
         }
         drop(tree);
         scroll_settled
@@ -1550,6 +1571,51 @@ mod tests {
         let (_, pulse) = list.menu(MenuEvent::Move(MenuDir::Up), 2);
         assert!(matches!(pulse, Some(MenuPulse::Move)));
         assert_eq!(list.cursor, 0);
+    }
+
+    /// The field being typed leaves its cell for the slot over the keyboard, below the
+    /// list's rect, where no soft edge reaches it.
+    #[test]
+    fn a_lifted_caret_row_leaves_its_cell_for_the_slot() {
+        let fonts = crate::theme::build_fonts().unwrap();
+        let (w, h) = (900, 600);
+        let mut surface = skia_safe::surfaces::raster_n32_premul((w, h)).unwrap();
+        let rect = Rect::from_xywh(0.0, 0.0, w as f32, 200.0);
+        let clear = skia_safe::Color4f::new(0.0, 0.0, 0.0, 1.0);
+        let mut rows = value_rows(&["Native", "Automatic", "20 Mbps", "Balanced", "On", "Off"]);
+        rows[2].caret = true;
+        let mut settle = |lift| {
+            let mut list = MenuList::new();
+            list.jump_to(2);
+            list.lift = lift;
+            for _ in 0..240 {
+                surface.canvas().clear(clear);
+                list.render(
+                    surface.canvas(),
+                    rect,
+                    &rows,
+                    &fonts,
+                    1.0,
+                    1.0 / 60.0,
+                    false,
+                );
+            }
+            let cell = list.row_rect(2).expect("the field's cell is in view");
+            (read_back(&mut surface, w, h), cell)
+        };
+        let (still, cell) = settle(None);
+        let (lifted, _) = settle(Some((480.0, 1.0)));
+        let x = (cell.left as i32, cell.right as i32);
+        let slot = (480, 480 + ROW_H as i32);
+        assert!(
+            band_diff(&lifted, &still, w, x, slot) > 0,
+            "the row draws at its slot"
+        );
+        let cell_y = (cell.top as i32, cell.bottom as i32);
+        assert!(
+            band_diff(&lifted, &still, w, x, cell_y) > 0,
+            "and leaves its cell"
+        );
     }
 
     /// Stepping one row must leave every other row's pixels unchanged. One

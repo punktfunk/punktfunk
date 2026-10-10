@@ -193,6 +193,7 @@ impl ScreenView for SearchScreen {
             field,
             RowSpec::action("Search", !self.query.trim().is_empty()),
         ];
+        self.list.lift = self.keyboard.lift(rect, k);
         self.list
             .render(canvas, list_rect, &rows, fonts, k, dt, !self.editing);
         self.keyboard.render(canvas, fonts, rect, k);

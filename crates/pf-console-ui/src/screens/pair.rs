@@ -339,6 +339,7 @@ impl ScreenView for PairScreen {
             rect.bottom - tray_h as f32 - status_h as f32,
         );
         let rows = self.rows();
+        self.list.lift = self.keyboard.lift(rect, k);
         self.list.render(
             canvas,
             list_rect,
