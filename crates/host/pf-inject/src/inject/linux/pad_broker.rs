@@ -493,6 +493,29 @@ mod tests {
         assert_eq!(Request::decode(&magic), None);
     }
 
+    /// Every kind round-trips the wire and has one table, uinput or uhid, never both.
+    #[test]
+    fn every_kind_has_exactly_one_table() {
+        for value in 0..=255u8 {
+            let Some(kind) = PadKind::from_wire(value) else {
+                continue;
+            };
+            assert_eq!(kind as u8, value);
+            assert_ne!(
+                kind.uinput().is_some(),
+                kind.uhid(0).is_some(),
+                "{}",
+                kind.label()
+            );
+        }
+        let ds = PadKind::DualSense.uhid(2).unwrap();
+        assert_eq!(ds.phys, "punktfunk/dualsense/2");
+        assert_eq!(
+            seat_phys("pf-seat-1", ds.phys.trim_start_matches("punktfunk/")),
+            "punktfunk-seat:pf-seat-1/dualsense/2"
+        );
+    }
+
     /// An `Attach` crosses with its socket; the answer carries the port.
     #[test]
     fn an_attach_crosses_with_its_socket() {
