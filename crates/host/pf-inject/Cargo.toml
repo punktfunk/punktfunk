@@ -51,6 +51,8 @@ tokio = { version = "1", features = ["rt", "rt-multi-thread", "net", "time", "ma
 xkbcommon = "0.9"
 # Vendored + trimmed usbip server core — presents a virtual Steam Deck over USB/IP for Steam Input.
 usbip-sim = { path = "vendor/usbip-sim" }
+# The seat pad broker's relay (`pad_broker`): fd passing over its socket and the relay's poll.
+rustix = { version = "1", features = ["net", "event"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 # The streamed-output desktop rect (CCD source rect) absolute input maps into — the same

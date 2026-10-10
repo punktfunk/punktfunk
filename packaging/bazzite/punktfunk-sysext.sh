@@ -238,6 +238,8 @@ post_merge() {
   # (re)apply now, no reboot, for this session.
   install -Dm0644 /usr/lib/modules-load.d/punktfunk.conf /etc/modules-load.d/punktfunk.conf 2>/dev/null || :
   install -Dm0644 /usr/lib/udev/rules.d/60-punktfunk.rules /etc/udev/rules.d/60-punktfunk.rules 2>/dev/null || :
+  # The seats' pad fence, for the same reason: a pad made after boot must meet the rule.
+  install -Dm0644 /usr/lib/udev/rules.d/65-punktfunk-seats.rules /etc/udev/rules.d/65-punktfunk-seats.rules 2>/dev/null || :
   udevadm control --reload 2>/dev/null || :
   # Creating the group is necessary but NOT sufficient, and the difference is invisible until a
   # stream fails: `pf-dm-helper` gates on MEMBERSHIP, so a host whose user never joined gets

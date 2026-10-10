@@ -3468,6 +3468,7 @@ dependencies = [
  "pf-win-display",
  "punktfunk-core",
  "reis",
+ "rustix",
  "serde_json",
  "tokio",
  "tracing",
@@ -4171,6 +4172,16 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+]
+
+[[package]]
+name = "punktfunk-seats"
+version = "0.43.1"
+dependencies = [
+ "pf-inject",
+ "pf-paths",
+ "pf-seats",
+ "tracing",
 ]
 
 [[package]]

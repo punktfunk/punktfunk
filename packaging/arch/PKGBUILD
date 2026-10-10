@@ -113,12 +113,12 @@ build() {
   # and fall back to the in-process encoder on any mismatch. Co-built here on purpose: v1 accepts
   # that the worker shares the host's dependency graph (same package, same sonames, no new break
   # class), so cargo's feature unification across this one invocation is harmless.
-  # `-p pf-seats` is the seat supervisor's binary. punktfunk-host already links its library, so
-  # this adds the one executable and no feature unification.
+  # `-p punktfunk-seats` is the seat supervisor's binary. punktfunk-host already links its
+  # library and pf-inject, so this adds the one executable and no feature unification.
   cargo build --release --locked --features punktfunk-host/nvenc,punktfunk-host/vulkan-encode \
     -p punktfunk-host -p punktfunk-encode-worker \
     -p punktfunk-client-linux -p punktfunk-client-session -p punktfunk-cli \
-    -p pf-update -p pf-seats
+    -p pf-update -p punktfunk-seats
   # The status tray in its OWN cargo invocation — load-bearing, not tidiness. Cargo unifies features
   # across everything in one build, so co-building the tray with the host pulls the host's
   # ashpd -> zbus/tokio onto the tray's shared zbus; the tray (ksni async-io + blocking, no tokio
@@ -439,6 +439,8 @@ package_punktfunk-seats() {
     install -Dm0644 "$R/packaging/linux/$f" "$pkgdir/usr/lib/systemd/system/$f"
   done
   install -Dm0644 "$R/packaging/linux/punktfunk-seats.tmpfiles" "$pkgdir/usr/lib/tmpfiles.d/punktfunk-seats.conf"
+  # A seat's pads: udev hands each one to its seat's user alone.
+  install -Dm0644 "$R/packaging/linux/65-punktfunk-seats.rules" "$pkgdir/usr/lib/udev/rules.d/65-punktfunk-seats.rules"
   # The door: the box's host as a system service, and the root helper the console turns it on with.
   install -Dm0755 "$R/packaging/linux/door-helper" "$pkgdir/usr/libexec/punktfunk/door-helper"
   for f in punktfunk-door.service punktfunk-web-door.service punktfunk-door-on@.service punktfunk-door-off@.service; do

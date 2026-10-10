@@ -8,32 +8,20 @@
 //! [`GamepadManager::pump_rumble`] must run every tick — a game's `EVIOCSFF` BLOCKS until
 //! we answer `UI_END_FF_UPLOAD`. Mixdown is `(low, high)` for the host to send back.
 //!
-//! The uinput ABI and device live in [`crate::uinput_abi`]; the FF upload protocol is this
-//! file's own.
+//! The uinput ABI, the device and the FF upload protocol live in [`crate::uinput_abi`]; the
+//! mixdown is this file's own. On a seat the device is the supervisor's relay
+//! ([`crate::pad_broker`]), built from [`build_pad`] there.
 
+use crate::pad_broker::PadKind;
 use crate::pad_slots::PadSlots;
-use crate::uapi;
 use crate::uinput_abi::{
-    AbsInfo, InputId, UinputDevice, EV_ABS, EV_KEY, EV_SYN, SYN_REPORT, UI_SET_EVBIT, UI_SET_FFBIT,
-    UI_SET_KEYBIT,
+    AbsInfo, FfNotice, InputId, UinputDevice, EV_ABS, EV_FF, EV_KEY, EV_SYN, FF_GAIN, FF_RUMBLE,
+    SYN_REPORT, UI_SET_EVBIT, UI_SET_FFBIT, UI_SET_KEYBIT,
 };
 use anyhow::Result;
 use punktfunk_core::input::{gamepad, GamepadFrame, MAX_PADS};
 use std::collections::HashMap;
-use std::os::fd::AsFd;
 use std::time::{Duration, Instant};
-
-const UI_BEGIN_FF_UPLOAD: libc::c_ulong = 0xc068_55c8;
-const UI_END_FF_UPLOAD: libc::c_ulong = 0x4068_55c9;
-const UI_BEGIN_FF_ERASE: libc::c_ulong = 0xc00c_55ca;
-const UI_END_FF_ERASE: libc::c_ulong = 0x400c_55cb;
-
-const EV_FF: u16 = 0x15;
-const EV_UINPUT: u16 = 0x0101;
-const UI_FF_UPLOAD: u16 = 1;
-const UI_FF_ERASE: u16 = 2;
-const FF_RUMBLE: u16 = 0x50;
-const FF_GAIN: u16 = 0x60;
 
 const ABS_X: u16 = 0x00;
 const ABS_Y: u16 = 0x01;
@@ -87,6 +75,8 @@ const BUTTON_MAP: [(u32, u16); 15] = [
 /// is not in evdev `FF_RUMBLE`.
 #[derive(Clone, Copy)]
 pub struct PadIdentity {
+    /// What a seat asks the broker for.
+    kind: PadKind,
     vendor: u16,
     product: u16,
     version: u16,
@@ -98,6 +88,7 @@ impl PadIdentity {
     /// Kernel `xpad` table entry `045e:028e`. SDL/Steam map it with no extra config.
     pub const fn xbox360() -> PadIdentity {
         PadIdentity {
+            kind: PadKind::Xbox360,
             vendor: 0x045e,
             product: 0x028e,
             version: 0x0110,
@@ -109,6 +100,7 @@ impl PadIdentity {
     /// Kernel `xpad` table entry `045e:02ea`. One/Series glyphs; XInput-identical otherwise.
     pub const fn xbox_one() -> PadIdentity {
         PadIdentity {
+            kind: PadKind::XboxOne,
             vendor: 0x045e,
             product: 0x02ea,
             version: 0x0408,
@@ -121,6 +113,7 @@ impl PadIdentity {
     /// evdev mapping names `BTN_TRIGGER_HAPPY5-8` as the paddles; the 360 and One S rows do not.
     pub const fn elite2() -> PadIdentity {
         PadIdentity {
+            kind: PadKind::XboxElite2,
             vendor: 0x045e,
             product: 0x0b00,
             version: 0x0511,
@@ -128,6 +121,75 @@ impl PadIdentity {
             log: "X-Box One Elite 2 pad",
         }
     }
+
+    /// The identity a broker request names: the supervisor builds from this table, never from
+    /// anything the seat sent.
+    pub(crate) const fn of(kind: PadKind) -> PadIdentity {
+        match kind {
+            PadKind::Xbox360 => PadIdentity::xbox360(),
+            PadKind::XboxOne => PadIdentity::xbox_one(),
+            PadKind::XboxElite2 => PadIdentity::elite2(),
+        }
+    }
+
+    pub(crate) fn log(&self) -> &'static str {
+        self.log
+    }
+}
+
+/// The uinput pad `identity` describes, with `phys` stamped on it when the supervisor builds
+/// one for a seat. The rumble plane is on: `ff_effects_max` must be > 0 or FF uploads are never
+/// delivered.
+pub(crate) fn build_pad(identity: PadIdentity, phys: Option<&str>) -> Result<UinputDevice> {
+    let dev = UinputDevice::open()?;
+    dev.set_bits(UI_SET_EVBIT, "UI_SET_EVBIT", &[EV_KEY, EV_ABS, EV_FF])?;
+    dev.set_bits(
+        UI_SET_KEYBIT,
+        "UI_SET_KEYBIT",
+        &BUTTON_MAP.map(|(_, key)| key),
+    )?;
+    dev.set_bits(UI_SET_FFBIT, "UI_SET_FFBIT", &[FF_RUMBLE, FF_GAIN])?;
+
+    let stick = AbsInfo {
+        minimum: -32768,
+        maximum: 32767,
+        fuzz: 16,
+        flat: 128,
+        ..Default::default()
+    };
+    let trigger = AbsInfo {
+        minimum: 0,
+        maximum: 255,
+        ..Default::default()
+    };
+    let hat = AbsInfo {
+        minimum: -1,
+        maximum: 1,
+        ..Default::default()
+    };
+    for (code, info) in [
+        (ABS_X, stick),
+        (ABS_Y, stick),
+        (ABS_RX, stick),
+        (ABS_RY, stick),
+        (ABS_Z, trigger),
+        (ABS_RZ, trigger),
+        (ABS_HAT0X, hat),
+        (ABS_HAT0Y, hat),
+    ] {
+        dev.abs(code, info)?;
+    }
+    if let Some(phys) = phys {
+        dev.set_phys(phys)?;
+    }
+    let id = InputId {
+        bustype: 0x0003, // BUS_USB
+        vendor: identity.vendor,
+        product: identity.product,
+        version: identity.version,
+    };
+    dev.create(id, identity.name, 16)?;
+    Ok(dev)
 }
 
 impl Default for PadIdentity {
@@ -135,52 +197,6 @@ impl Default for PadIdentity {
         PadIdentity::xbox360()
     }
 }
-
-/// `struct ff_effect` (48 bytes; the union starts at offset 16).
-#[repr(C)]
-#[derive(Clone, Copy, Default)]
-struct FfEffect {
-    type_: u16,
-    id: i16,
-    direction: u16,
-    trigger_button: u16,
-    trigger_interval: u16,
-    replay_length: u16,
-    replay_delay: u16,
-    _pad: u16,
-    /// Union; for `FF_RUMBLE`: `u16 strong_magnitude` at [0..2], `u16 weak_magnitude` at [2..4].
-    u: [u8; 32],
-}
-
-#[repr(C)]
-#[derive(Clone, Copy, Default)]
-struct UinputFfUpload {
-    request_id: u32,
-    retval: i32,
-    effect: FfEffect,
-    old: FfEffect,
-}
-
-#[repr(C)]
-#[derive(Clone, Copy, Default)]
-struct UinputFfErase {
-    request_id: u32,
-    retval: i32,
-    effect_id: u32,
-}
-
-// `<linux/uinput.h>` FF layouts, the sizes the upload/erase ioctl numbers encode.
-const _: () = {
-    assert!(std::mem::size_of::<FfEffect>() == 48);
-    assert!(std::mem::size_of::<UinputFfUpload>() == 104);
-    assert!(std::mem::size_of::<UinputFfErase>() == 12);
-};
-
-// SAFETY: `#[repr(C)]` integers and byte arrays; the sizes above are the field sums, so
-// neither struct has padding.
-unsafe impl uapi::Pod for UinputFfUpload {}
-// SAFETY: as `UinputFfUpload`.
-unsafe impl uapi::Pod for UinputFfErase {}
 
 /// Played-effect window: `replay.delay` of silence, then `replay.length` of rumble.
 #[derive(Clone, Copy)]
@@ -241,6 +257,41 @@ impl FfState {
         self.last_activity = Instant::now();
     }
 
+    /// Fold one thing the game did into the table. Every notice is activity.
+    fn apply(&mut self, notice: FfNotice) {
+        self.note_activity();
+        match notice {
+            FfNotice::Upload {
+                id,
+                strong,
+                weak,
+                replay_ms,
+                delay_ms,
+            } => {
+                let slot = self.effects.entry(id).or_insert(Effect {
+                    strong: 0,
+                    weak: 0,
+                    playing: None,
+                    replay_ms: 0,
+                    delay_ms: 0,
+                });
+                slot.strong = strong;
+                slot.weak = weak;
+                slot.replay_ms = replay_ms;
+                slot.delay_ms = delay_ms;
+            }
+            FfNotice::Erase { id } => {
+                self.effects.remove(&id);
+            }
+            FfNotice::Gain(gain) => self.gain = gain.min(0xFFFF),
+            FfNotice::Play { id, on } => {
+                if let Some(e) = self.effects.get_mut(&id) {
+                    e.playing = on.then(|| e.window(Instant::now()));
+                }
+            }
+        }
+    }
+
     /// `Some` only when mixed `(low, high)` changed since last call.
     fn mix(&mut self, now: Instant, idle: Option<Duration>) -> Option<(u16, u16)> {
         let quiet_since = |t: Instant| idle.is_some_and(|d| now.duration_since(t) >= d);
@@ -288,64 +339,35 @@ pub struct VirtualPad {
 }
 
 impl VirtualPad {
+    /// On a seat the supervisor builds the device and this holds its relay; the box's own host
+    /// opens `/dev/uinput` itself.
     pub fn create(index: usize, identity: PadIdentity) -> Result<VirtualPad> {
-        let dev = UinputDevice::open()?;
-        dev.set_bits(UI_SET_EVBIT, "UI_SET_EVBIT", &[EV_KEY, EV_ABS, EV_FF])?;
-        dev.set_bits(
-            UI_SET_KEYBIT,
-            "UI_SET_KEYBIT",
-            &BUTTON_MAP.map(|(_, key)| key),
-        )?;
-        dev.set_bits(UI_SET_FFBIT, "UI_SET_FFBIT", &[FF_RUMBLE, FF_GAIN])?;
-
-        let stick = AbsInfo {
-            minimum: -32768,
-            maximum: 32767,
-            fuzz: 16,
-            flat: 128,
-            ..Default::default()
+        let dev = if pf_paths::seat::is_seat_host() {
+            let relay = crate::pad_broker::request(identity.kind, index as u8)?;
+            tracing::info!(
+                index,
+                pad = identity.log,
+                "virtual gamepad created (seat broker relay)"
+            );
+            UinputDevice::relayed(relay)?
+        } else {
+            let dev = build_pad(identity, None)?;
+            tracing::info!(
+                index,
+                pad = identity.log,
+                "virtual gamepad created (uinput)"
+            );
+            dev
         };
-        let trigger = AbsInfo {
-            minimum: 0,
-            maximum: 255,
-            ..Default::default()
-        };
-        let hat = AbsInfo {
-            minimum: -1,
-            maximum: 1,
-            ..Default::default()
-        };
-        for (code, info) in [
-            (ABS_X, stick),
-            (ABS_Y, stick),
-            (ABS_RX, stick),
-            (ABS_RY, stick),
-            (ABS_Z, trigger),
-            (ABS_RZ, trigger),
-            (ABS_HAT0X, hat),
-            (ABS_HAT0Y, hat),
-        ] {
-            dev.abs(code, info)?;
-        }
-
-        let id = InputId {
-            bustype: 0x0003, // BUS_USB
-            vendor: identity.vendor,
-            product: identity.product,
-            version: identity.version,
-        };
-        // `ff_effects_max` must be > 0 or FF uploads are never delivered.
-        dev.create(id, identity.name, 16)?;
-        tracing::info!(
-            index,
-            pad = identity.log,
-            "virtual gamepad created (uinput)"
-        );
-
         Ok(VirtualPad {
             dev,
             ff: FfState::new(),
         })
+    }
+
+    /// `false` once the supervisor dropped this pad's relay.
+    pub(crate) fn alive(&self) -> bool {
+        self.dev.alive()
     }
 
     pub fn apply(&mut self, f: &GamepadFrame) {
@@ -372,68 +394,11 @@ impl VirtualPad {
         self.dev.emit(EV_SYN, SYN_REPORT, 0);
     }
 
-    /// Non-blocking FF protocol on this pad's fd. `Some` when mixed `(low, high)` changed.
+    /// Drain the FF plane into the table. `Some` when mixed `(low, high)` changed.
     fn pump_ff(&mut self) -> Option<(u16, u16)> {
-        let fd = self.dev.as_fd();
-        while let Some((type_, code, value)) = self.dev.read_event() {
-            match (type_, code) {
-                (EV_UINPUT, UI_FF_UPLOAD) => {
-                    self.ff.note_activity();
-                    let mut up = UinputFfUpload {
-                        request_id: value as u32,
-                        ..Default::default()
-                    };
-                    if uapi::ioctl_with(fd, UI_BEGIN_FF_UPLOAD, &mut up).is_ok() {
-                        let e = up.effect;
-                        // ff-core assigns a slot before uinput sees the request. A local
-                        // counter would fight the kernel's id space.
-                        debug_assert!(e.id >= 0, "uinput handed us an unassigned FF effect id");
-                        if e.type_ == FF_RUMBLE {
-                            let strong = u16::from_ne_bytes([e.u[0], e.u[1]]);
-                            let weak = u16::from_ne_bytes([e.u[2], e.u[3]]);
-                            let slot = self.ff.effects.entry(e.id).or_insert(Effect {
-                                strong: 0,
-                                weak: 0,
-                                playing: None,
-                                replay_ms: 0,
-                                delay_ms: 0,
-                            });
-                            slot.strong = strong;
-                            slot.weak = weak;
-                            slot.replay_ms = e.replay_length;
-                            slot.delay_ms = e.replay_delay;
-                        }
-                        up.effect.id = e.id; // hand the assigned slot back to the kernel
-                        up.retval = 0;
-                        let _ = uapi::ioctl_with(fd, UI_END_FF_UPLOAD, &mut up);
-                    }
-                }
-                (EV_UINPUT, UI_FF_ERASE) => {
-                    self.ff.note_activity();
-                    let mut er = UinputFfErase {
-                        request_id: value as u32,
-                        ..Default::default()
-                    };
-                    if uapi::ioctl_with(fd, UI_BEGIN_FF_ERASE, &mut er).is_ok() {
-                        self.ff.effects.remove(&(er.effect_id as i16));
-                        er.retval = 0;
-                        let _ = uapi::ioctl_with(fd, UI_END_FF_ERASE, &mut er);
-                    }
-                }
-                (EV_FF, FF_GAIN) => {
-                    self.ff.note_activity();
-                    self.ff.gain = (value as u32).min(0xFFFF);
-                }
-                (EV_FF, code) => {
-                    self.ff.note_activity();
-                    if let Some(e) = self.ff.effects.get_mut(&(code as i16)) {
-                        e.playing = (value != 0).then(|| e.window(Instant::now()));
-                    }
-                }
-                _ => {}
-            }
+        while let Some(notice) = self.dev.next_ff() {
+            self.ff.apply(notice);
         }
-
         self.ff
             .mix(Instant::now(), crate::uhid_manager::rumble_idle_timeout())
     }
@@ -490,8 +455,17 @@ impl GamepadManager {
                     return; // this event WAS the unplug
                 }
                 self.ensure(idx);
-                if let Some(pad) = self.slots.get_mut(idx) {
+                let lost_relay = self.slots.get_mut(idx).is_some_and(|pad| {
                     pad.apply(f);
+                    !pad.alive()
+                });
+                // The supervisor restarted: its next answer is a new pad, made by `ensure`.
+                if lost_relay {
+                    tracing::warn!(
+                        index = idx,
+                        "virtual gamepad lost its relay — making it again"
+                    );
+                    self.slots.remove(idx);
                 }
             }
         }
@@ -523,8 +497,10 @@ impl GamepadManager {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::uapi;
     use crate::uinput_abi::input_event;
     use std::io::Write;
+    use std::os::fd::AsFd;
     use std::time::Duration;
 
     /// Every key the generic pad emits is the row `gamepad-button-vectors.json` gives its

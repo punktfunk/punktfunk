@@ -1,0 +1,26 @@
+# The seat supervisor's binary: the root daemon, the operator's client for it, and the pad
+# broker, which links pf-inject to build a seat's pads. The library it drives stays in pf-seats,
+# which the Windows seat keeper's own workspace resolves beside IronRDP; pf-inject's graph (aes-gcm
+# through punktfunk-core) does not fit next to the keeper's pinned picky.
+[package]
+name = "punktfunk-seats"
+description = "punktfunk seat supervisor: the root daemon, its CLI and the seat pad broker"
+version.workspace = true
+edition.workspace = true
+license = "MIT OR Apache-2.0"
+publish = false
+
+[[bin]]
+name = "punktfunk-seats"
+path = "src/main.rs"
+
+[dependencies]
+pf-paths = { path = "../pf-paths" }
+pf-seats = { path = "../pf-seats" }
+tracing = "0.1"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+pf-inject = { path = "../pf-inject" }
+
+[lints]
+workspace = true

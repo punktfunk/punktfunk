@@ -495,10 +495,10 @@ jobs:
           # host. Unlike the tray it shares the host's dependency graph by design (v1 accepts that
           # the worker shares the host dependency graph), so feature unification here is harmless.
           #
-          # pf-seats is the seat supervisor's binary. punktfunk-host already links its library, so
-          # this adds no feature unification, only the one executable.
+          # punktfunk-seats is the seat supervisor's binary. punktfunk-host already links its
+          # library and pf-inject, so this adds no feature unification, only the one executable.
           cargo build --release --locked --features punktfunk-host/nvenc,punktfunk-host/vulkan-encode \
-            -p punktfunk-host -p punktfunk-encode-worker -p pf-seats
+            -p punktfunk-host -p punktfunk-encode-worker -p punktfunk-seats
 
       - name: Build host .deb
         run: |
