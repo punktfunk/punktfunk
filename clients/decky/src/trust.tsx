@@ -3,21 +3,18 @@
 // Two ways in, in the order the GTK dialog and the console's pair screen offer them:
 //
 //   • REQUEST ACCESS (default) — no PIN. Save the host with the fingerprint it ADVERTISED,
-//     then launch. The host parks that connect until its operator approves this Deck in the
-//     console or web UI, admits it, and the stream starts by itself. It is not a second
-//     pairing ceremony; it is an ordinary identified connect with a stretched budget, which
-//     is why it costs no ceremony surface here at all.
+//     then ask. The host parks the request until its operator approves this Deck in the
+//     console or web UI; the Deck is then paired, and the next Connect streams.
 //   • USE A PIN INSTEAD — the existing gamepad-navigable keypad (pair.tsx).
 //
-// NO FINGERPRINT, NO REQUEST ACCESS. The parked connect pins the advertised fingerprint, and
-// that pin is the only thing standing between a 185 s wait and an impostor answering for the
-// host. A host typed in by address advertises nothing, so it gets the PIN path only — and is
+// NO FINGERPRINT, NO REQUEST ACCESS. The request pins the advertised fingerprint, and that pin
+// is the only thing standing between a 185 s wait and an impostor answering for the host. A host typed in by address advertises nothing, so it gets the PIN path only — and is
 // told why, rather than being shown a button that could only fail. Under no circumstances does
 // this sheet trust-on-first-use its way past a missing fingerprint.
 import { DialogButton, Focusable, ModalRoot, Spinner, showModal } from "@decky/ui";
 import { toaster } from "@decky/api";
 import { FC, useRef, useState } from "react";
-import { trustHost } from "./backend";
+import { requestAccess, trustHost } from "./backend";
 import type { HostView } from "./hosts";
 import { PairModal } from "./pair";
 
@@ -65,10 +62,10 @@ export const TrustSheet: FC<{
   const canTrustDirectly = hasIdentity && !needsApproval;
 
   /**
-   * Pin the advertised identity, then stream.
+   * Pin the advertised identity, then get in.
    *
-   * `approval` is what differs between the two doors, and it is not cosmetic: it decides whether
-   * the launch waits ~185 s for an operator AND whether the record ends up marked paired.
+   * `approval` waits ~185 s for an operator and ends paired, with no stream. Without it the host
+   * takes new devices, so the stream starts at once and the record stays trusted.
    */
   const letIn = async (approval: boolean) => {
     setBusy(true);
@@ -84,17 +81,29 @@ export const TrustSheet: FC<{
         return;
       }
       changed();
-      // Step 2: the launch. Under approval it PARKS — and the session's plain connecting screen
-      // looks identical whether it is parked or hanging, so say what is about to happen BEFORE
-      // it starts. That toast is a patch over that, and the real fix belongs in the session.
-      if (approval) {
-        toaster.toast({
-          title: "Punktfunk",
-          body: `Approve this Deck in ${h.name}’s console — the stream starts by itself`,
-          duration: 10_000,
-        });
+      if (!approval) {
+        stream({});
+        closeModal?.();
+        return;
       }
-      stream({ requestAccess: approval });
+      // Step 2: the request, pinned to that fingerprint. It parks until somebody answers.
+      toaster.toast({
+        title: "Punktfunk",
+        body: `Approve this Deck in ${h.name}’s console`,
+        duration: 10_000,
+      });
+      const res = await requestAccess(h.addr, h.port, "Steam Deck");
+      if (!res.ok) {
+        setError(
+          res.error === "client-outdated"
+            ? trustErrorBody(res.error, h.name)
+            : (res.detail ?? `${h.name} didn’t let this Deck in`),
+        );
+        setBusy(false);
+        return;
+      }
+      toaster.toast({ title: "Punktfunk", body: `Paired with ${h.name}` });
+      changed();
       closeModal?.();
     } catch (e) {
       setError(String(e));
@@ -105,17 +114,9 @@ export const TrustSheet: FC<{
   const usePin = () => {
     // Hand off to the keypad. Closing first keeps one modal on screen at a time, which is what
     // the gamepad focus model expects.
-    const { host: h, onStream: stream, onChanged: changed } = props.current;
+    const { host: h, onChanged: changed } = props.current;
     closeModal?.();
-    showModal(
-      <PairModal
-        host={h}
-        onPaired={() => {
-          changed();
-          stream({});
-        }}
-      />,
-    );
+    showModal(<PairModal host={h} onPaired={changed} />);
   };
 
   return (
@@ -156,7 +157,7 @@ export const TrustSheet: FC<{
       {canRequestAccess && (
         <div style={{ opacity: 0.6, fontSize: "0.85em", marginTop: "0.8em" }}>
           Request access asks {host.name}’s operator to approve this Deck in its console or web
-          UI. No PIN to type — the stream starts as soon as they do.
+          UI. No PIN to type — this Deck is paired as soon as they do.
         </div>
       )}
     </ModalRoot>

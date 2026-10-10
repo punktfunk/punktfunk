@@ -49,6 +49,9 @@ final class ConsoleModel: ObservableObject, ConsoleViewDelegate {
     let actions: Actions
     /// The pairing ceremony the console's PIN screen drives.
     let ceremony = PairCeremony()
+    /// The request access whose answer the Pair screen waits on; a later pairing of either
+    /// kind supersedes it.
+    var accessRequest = UUID()
     private let pads = GamepadMenuInput(manager: .shared)
     private let haptics = MenuHaptics(manager: .shared)
     /// When the pad last drove the console. A pulse from a remote, keyboard or finger is

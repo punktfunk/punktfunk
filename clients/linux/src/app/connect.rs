@@ -21,11 +21,23 @@ impl AppModel {
             TrustRoute::Pinned(fp_hex) => self.ask_profile(req, fp_hex, false, sender),
             TrustRoute::FingerprintChanged => {
                 self.toast(FINGERPRINT_CHANGED);
-                crate::app::gate::pin_dialog(&self.window, sender, self.identity.clone(), req);
+                crate::app::gate::pin_dialog(
+                    &self.window,
+                    sender,
+                    self.identity.clone(),
+                    req,
+                    false,
+                );
             }
             TrustRoute::OfferTofu(_) => crate::app::gate::tofu_dialog(&self.window, sender, req),
             TrustRoute::NeedsPairing => {
-                crate::app::gate::approval_dialog(&self.window, sender, self.waiting.clone(), req);
+                crate::app::gate::approval_dialog(
+                    &self.window,
+                    sender,
+                    self.waiting.clone(),
+                    self.identity.clone(),
+                    req,
+                );
             }
         }
     }
@@ -152,7 +164,13 @@ impl AppModel {
             ExitRoute::Banner(msg) => self.hosts.emit(HostsMsg::ShowError(msg)),
             ExitRoute::Repair(msg) => {
                 self.toast(&msg);
-                crate::app::gate::pin_dialog(&self.window, sender, self.identity.clone(), req);
+                crate::app::gate::pin_dialog(
+                    &self.window,
+                    sender,
+                    self.identity.clone(),
+                    req,
+                    false,
+                );
             }
             ExitRoute::RedialProfile { id, msg } => match req.host.pin().map(str::to_string) {
                 Some(fp_hex) => self.reask_profile(req, fp_hex, id, msg, sender),
@@ -334,7 +352,13 @@ impl AppModel {
                     "{} isn't paired with this device yet — pair it to continue.",
                     req.host.name
                 ));
-                crate::app::gate::pin_dialog(&self.window, sender, self.identity.clone(), req);
+                crate::app::gate::pin_dialog(
+                    &self.window,
+                    sender,
+                    self.identity.clone(),
+                    req,
+                    true,
+                );
             }
             Ok(PlanOutcome::Unsupported(route)) => self.toast(&format!(
                 "Punktfunk can't open “{}” links yet.",

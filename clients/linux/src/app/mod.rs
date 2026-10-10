@@ -176,8 +176,6 @@ pub enum AppMsg {
     ToggleFullscreen,
     /// The console child exited; `Some` carries why it ended badly.
     ConsoleExited(Option<String>),
-    /// Request-access Cancel: the child was killed; release busy quietly.
-    CancelPending,
     /// Upload the client log ring to this paired host (`logring::send_to_host`); the
     /// outcome lands as a Toast either way. The mgmt port rides along when an advert has one.
     SendLogs(ConnectRequest, Option<u16>),
@@ -551,7 +549,13 @@ impl SimpleComponent for AppModel {
             }
             AppMsg::Pair(req) => {
                 if !self.busy {
-                    crate::app::gate::pin_dialog(&self.window, &sender, self.identity.clone(), req);
+                    crate::app::gate::pin_dialog(
+                        &self.window,
+                        &sender,
+                        self.identity.clone(),
+                        req,
+                        false,
+                    );
                 }
             }
             AppMsg::SpeedTest(req) => self.speed_test(req, &sender),
@@ -646,14 +650,6 @@ impl SimpleComponent for AppModel {
                         .emit(HostsMsg::ShowError(format!("Console UI ended — {e}")));
                 }
                 self.hosts.emit(HostsMsg::Refresh);
-            }
-            AppMsg::CancelPending => {
-                // The child is being killed by the handler that sent this; its exit is ours.
-                self.session_cancelled = true;
-                self.close_waiting();
-                self.busy = false;
-                self.hosts.emit(HostsMsg::SetSession(None));
-                self.toast("Cancelled — the request may still be pending on the host.");
             }
             AppMsg::ShowPreferences => sender.input(AppMsg::ShowPreferencesScoped(
                 crate::settings::Scope::Defaults,

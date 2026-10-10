@@ -492,6 +492,7 @@ pub(crate) async fn serve(
                     "closed before the control handshake (reachability probe)"
                 ),
                 Ok(Served::Management) => tracing::debug!(%peer, "management connection closed"),
+                Ok(Served::Access) => tracing::info!(%peer, "access request answered"),
                 Err(e) => {
                     // Typed setup-failed close so the client does not see a bare mid-frame drop.
                     // First-wins: a gate that already closed, or a peer close, makes this a no-op.
@@ -641,20 +642,41 @@ const PENDING_APPROVAL_WAIT: std::time::Duration = std::time::Duration::from_sec
 /// How often a parked `punktfunk/2` knock is told the host is still deciding.
 const PENDING_EVERY: std::time::Duration = std::time::Duration::from_secs(10);
 
-/// Park an unpaired knock until the console decides. The caller holds no session slot while
-/// it waits. A `punktfunk/2` client hears `Pending` on `v2` meanwhile, every [`PENDING_EVERY`].
+/// [`wait_for_approval`], then a session slot like any fresh client's (waits if busy).
 ///
-/// `Ok(Ok(_))` is an approval, with a slot taken like any fresh client's (waits if busy).
-/// `Ok(Err(reason))` is the refusal to send. `Err` means the client left before a decision.
+/// `Ok(Ok(_))` is an approval with its slot. `Ok(Err(reason))` is the refusal to send.
+/// `Err` means the client left before a decision.
 pub(crate) async fn park_knock(
     conn: &link::SessionLink,
-    mut send: Option<&mut link::CtlSend>,
+    send: Option<&mut link::CtlSend>,
     np: &NativePairing,
     label: &str,
     fp_hex: &str,
     profile: Option<&str>,
     sem: &Arc<tokio::sync::Semaphore>,
 ) -> Result<Result<tokio::sync::OwnedSemaphorePermit, punktfunk_core::reject::RejectReason>> {
+    if let Err(reason) = wait_for_approval(conn, send, np, label, fp_hex, profile).await? {
+        return Ok(Err(reason));
+    }
+    tracing::info!(name = %label, fingerprint = %fp_hex,
+        "device approved in console — admitting session (no reconnect)");
+    let permit = sem.clone().acquire_owned().await;
+    Ok(Ok(permit.expect("session semaphore is never closed")))
+}
+
+/// Park an unpaired knock until the console decides, holding no session slot. A
+/// `punktfunk/2` client hears `Pending` on `v2` meanwhile, every [`PENDING_EVERY`].
+///
+/// `Ok(Ok(()))` is an approval. `Ok(Err(reason))` is the refusal to send. `Err` means the
+/// client left before a decision.
+pub(crate) async fn wait_for_approval(
+    conn: &link::SessionLink,
+    mut send: Option<&mut link::CtlSend>,
+    np: &NativePairing,
+    label: &str,
+    fp_hex: &str,
+    profile: Option<&str>,
+) -> Result<Result<(), punktfunk_core::reject::RejectReason>> {
     use punktfunk_core::reject::RejectReason;
     if np.pairing_refused() {
         tracing::info!(name = %label, fingerprint = %fp_hex,
@@ -681,12 +703,7 @@ pub(crate) async fn park_knock(
         }
     };
     let reason = match decision {
-        PairingDecision::Approved => {
-            tracing::info!(name = %label, fingerprint = %fp_hex,
-                "device approved in console — admitting session (no reconnect)");
-            let permit = sem.clone().acquire_owned().await;
-            return Ok(Ok(permit.expect("session semaphore is never closed")));
-        }
+        PairingDecision::Approved => return Ok(Ok(())),
         PairingDecision::Denied => RejectReason::Denied,
         // The device can knock again.
         PairingDecision::TimedOut => RejectReason::ApprovalTimeout,
@@ -702,12 +719,10 @@ pub(crate) enum Served {
     Session,
     ProbeClose,
     Management,
+    /// An access-only hello, answered without a session.
+    Access,
 }
 
-/// Handshake → input/audio → data plane. RAII teardown. A first-message PairRequest is
-/// the pairing ceremony instead.
-// Distinct host-lifetime handles from `serve`; a context struct would hide the lifetimes.
-#[allow(clippy::too_many_arguments)]
 /// The sentence a person reads when setup fails, or `None` where the host has no
 /// wording better than the client's own generic one. Every close that carries text
 /// goes through here: the reason bytes reach a user, and an `anyhow` chain is
@@ -723,6 +738,8 @@ pub(crate) fn setup_failed_sentence(e: &anyhow::Error) -> Option<String> {
         .map(|d| d.user_message())
 }
 
+/// Handshake → input/audio → data plane. RAII teardown. A first-message PairRequest is
+/// the pairing ceremony instead, and an access-only hello ends at the pairing gate.
 // One session's whole context, threaded down rather than bundled: every argument is owned by a
 // different part of the host and none of them share a lifetime.
 #[allow(clippy::too_many_arguments)]
@@ -770,12 +787,18 @@ async fn serve_session(
 
     // A slot only once the peer has spoken: one that stalls the handshake holds none, so it
     // cannot queue paired clients behind it. A full host still accepts, so the waiter sees a
-    // live path (keep-alive) instead of a silent dial timeout.
-    let mut permit = sem
-        .clone()
-        .acquire_owned()
-        .await
-        .expect("session semaphore is never closed");
+    // live path (keep-alive) instead of a silent dial timeout. An access-only hello never
+    // takes one, so a busy host or seat cannot turn it away.
+    let access_only = first.access_only;
+    let mut permit = match access_only {
+        true => None,
+        false => Some(
+            sem.clone()
+                .acquire_owned()
+                .await
+                .expect("session semaphore is never closed"),
+        ),
+    };
     // Pairing gate outside the handshake future: approval wait must not be bound by
     // HANDSHAKE_TIMEOUT, and the NVENC permit is released while parked.
     if opts.require_pairing {
@@ -811,16 +834,32 @@ async fn serve_session(
             );
             drop(permit);
             let asked = first.profile.as_deref();
-            permit =
-                match park_knock(&conn, Some(&mut send), np, &label, &fp_hex, asked, &sem).await? {
-                    Ok(permit) => permit,
-                    Err(reason) => {
-                        close_rejected(&conn, reason).await;
-                        anyhow::bail!("pairing request refused: {reason}");
-                    }
-                };
+            let decision = if access_only {
+                wait_for_approval(&conn, Some(&mut send), np, &label, &fp_hex, asked)
+                    .await?
+                    .map(|()| None)
+            } else {
+                park_knock(&conn, Some(&mut send), np, &label, &fp_hex, asked, &sem)
+                    .await?
+                    .map(Some)
+            };
+            permit = match decision {
+                Ok(permit) => permit,
+                Err(reason) => {
+                    close_rejected(&conn, reason).await;
+                    anyhow::bail!("pairing request refused: {reason}");
+                }
+            };
         }
     }
+    let Some(permit) = permit else {
+        conn.refuse(
+            punktfunk_core::reject::ACCESS_GRANTED_CLOSE_CODE,
+            "access granted",
+        )
+        .await;
+        return Ok(Served::Access);
+    };
     // Admitted. From here the session is the same on every carrier.
     let host = SessionHost {
         opts: Arc::clone(opts),

@@ -4,6 +4,7 @@
     {"FetchLibrary": {"addr": "10.0.0.2", "mgmt": 47990, "fp_hex": "ab12"}},
     {"RefreshRunning": {"addr": "10.0.0.2", "mgmt": 47990, "fp_hex": "ab12"}},
     {"Pair": {"addr": "10.0.0.2", "port": 9777, "pin": "1234", "device_name": "Pixel"}},
+    {"RequestAccess": {"addr": "10.0.0.2", "port": 9777, "fp_hex": "ab12", "device_name": "Pixel"}},
     {"SendLogs": {"addr": "10.0.0.2", "mgmt": 47990, "fp_hex": "ab12", "host_name": "Desk"}},
     {"SpeedTest": {"key": "ab12", "addr": "10.0.0.2", "port": 9777, "fp_hex": "ab12", "host_name": "Desk"}},
     {"SaveHost": {"name": "Attic", "addr": "10.0.0.9", "port": 9777}},

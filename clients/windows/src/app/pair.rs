@@ -32,7 +32,7 @@ pub(crate) fn pair_page(props: &Svc, cx: &mut RenderCx) -> Element {
             live_pin.clone(),
             target.clone(),
         );
-        button("Pair & Connect")
+        button("Pair")
             .accent()
             .icon(lucide::icon("check"))
             .on_click(move || {
@@ -61,12 +61,21 @@ pub(crate) fn pair_page(props: &Svc, cx: &mut RenderCx) -> Element {
                             if !current() {
                                 return;
                             }
-                            connect(&ctx3, &target3, Some(fp), &ss, &st);
-                            // After `connect`, which clears the status line. The stream runs
-                            // on the pin in memory; the next launch asks for a PIN again.
-                            if let Err(e) = saved {
-                                st.call(format!("Paired, but couldn't save — {e:#}"));
+                            // Only a link's pairing streams; elsewhere the saved host's
+                            // Connect dials it. `connect` clears the status line, so a save
+                            // error goes after it.
+                            if target3.from_link {
+                                connect(&ctx3, &target3, Some(fp), &ss, &st);
+                                if let Err(e) = saved {
+                                    st.call(format!("Paired, but couldn't save — {e:#}"));
+                                }
+                                return;
                             }
+                            st.call(match saved {
+                                Ok(()) => format!("Paired with {}", target3.host.name),
+                                Err(e) => format!("Paired, but couldn't save — {e:#}"),
+                            });
+                            ss.call(Screen::Hosts);
                         }
                         Err(e) => {
                             if !current() {

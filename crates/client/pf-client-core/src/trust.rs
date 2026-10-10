@@ -32,8 +32,13 @@ pub use hosts::{
     AddOutcome, FieldError, HostEdit, HostField, KnownHost, KnownHosts, PREV_ADDRS_MAX,
 };
 #[cfg(not(target_family = "wasm"))]
-pub use identity::{device_name, load_or_create_identity, pair_with_host};
-pub use messages::{connect_reject_message, pair_error_message, reject_message};
+pub use identity::{
+    device_name, load_or_create_identity, pair_with_host, request_access_to_host,
+    REQUEST_ACCESS_TIMEOUT,
+};
+pub use messages::{
+    access_error_message, connect_reject_message, pair_error_message, reject_message,
+};
 #[cfg(not(target_family = "wasm"))]
 pub use probe::{probe_known, probe_one, probe_reachable_many, PROBE_INTERVAL, PROBE_TIMEOUT};
 pub use punktfunk_core::fp::{hex, parse_hex32};

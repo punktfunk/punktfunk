@@ -42,6 +42,11 @@ extension ConsoleModel {
             pair(
                 addr: a["addr"] as? String ?? "", port: port(a["port"]),
                 pin: a["pin"] as? String ?? "", deviceName: a["device_name"] as? String ?? "")
+        case "RequestAccess":
+            requestAccess(
+                addr: a["addr"] as? String ?? "", port: port(a["port"]),
+                fpHex: a["fp_hex"] as? String ?? "",
+                deviceName: a["device_name"] as? String ?? "")
         case "SendLogs":
             sendLogs(fp: a["fp_hex"] as? String ?? "", addr: a["addr"] as? String ?? "")
         case "SaveHost":
@@ -447,19 +452,53 @@ extension ConsoleModel {
 
     private func pair(addr: String, port: UInt16, pin: String, deviceName: String) {
         bridge.push(.pair, ConsoleJSON.pairBusy)
+        accessRequest = UUID() // a request still waiting answers no screen now
         ceremony.run(host: addr, port: port, pin: pin, clientName: deviceName) { [weak self] cert in
-            guard let self else { return }
-            guard var host = host(fp: "", addr: addr, port: port) else {
-                bridge.push(.pair, ConsoleJSON.pairFailed("That host is no longer saved."))
-                return
-            }
-            host.pinnedSHA256 = cert
-            store.update(host)
-            actions.paired(host, cert)
-            let fp = cert.map { String(format: "%02x", $0) }.joined()
-            bridge.push(.pair, ConsoleJSON.pairPaired(key: fp))
-            pushHosts()
+            self?.paired(addr: addr, port: port, cert: cert)
         }
+    }
+
+    /// No PIN: wait for the host's operator, pinned to the advertised fingerprint. Never streams.
+    private func requestAccess(addr: String, port: UInt16, fpHex: String, deviceName: String) {
+        bridge.push(.pair, ConsoleJSON.pairBusy)
+        let token = UUID()
+        accessRequest = token
+        let pin = Data(hexString: fpHex).flatMap { $0.count == 32 ? $0 : nil }
+        let name = deviceName.isEmpty ? DeviceName.current : deviceName
+        Task { @MainActor [weak self] in
+            let result = await Task.detached(priority: .userInitiated) {
+                Result {
+                    let identity = try ClientIdentityStore.shared.loadForPairing()
+                    return try PunktfunkKit.requestAccess(
+                        host: addr, port: port, identity: identity, pinSHA256: pin, name: name)
+                }
+            }.value
+            guard let self, accessRequest == token else { return }
+            switch result {
+            case .success(let cert):
+                paired(addr: addr, port: port, cert: cert)
+            case .failure(let error):
+                let hostName = host(fp: "", addr: addr, port: port)?.displayName ?? addr
+                let why = ConnectOffer.failureMessage(
+                    error, hostName: hostName, pinned: false, requestAccess: true,
+                    callerRecovers: false)
+                bridge.push(.pair, ConsoleJSON.pairFailed(why ?? ""))
+            }
+        }
+    }
+
+    /// Pin the saved host at `addr:port` to `cert` and tell the Pair screen.
+    private func paired(addr: String, port: UInt16, cert: Data) {
+        guard var host = host(fp: "", addr: addr, port: port) else {
+            bridge.push(.pair, ConsoleJSON.pairFailed("That host is no longer saved."))
+            return
+        }
+        host.pinnedSHA256 = cert
+        store.update(host)
+        actions.paired(host, cert)
+        let fp = cert.map { String(format: "%02x", $0) }.joined()
+        bridge.push(.pair, ConsoleJSON.pairPaired(key: fp))
+        pushHosts()
     }
 
     private func sendLogs(fp: String, addr: String) {

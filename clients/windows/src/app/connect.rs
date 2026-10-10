@@ -478,35 +478,69 @@ pub(crate) fn open_console(
     }
 }
 
-/// The no-PIN "request access" flow: open an identified connect that the host PARKS until the
-/// operator approves this device in its console (or web UI), showing a cancelable "waiting"
-/// screen meanwhile. On approval the SAME connection is admitted (no reconnect) and the host is
-/// saved as paired, so later connects are silent.
+/// The no-PIN "request access" flow: ask the host, which parks the request until the operator
+/// approves this device in its console (or web UI), under a cancelable "waiting" screen.
+/// Approval saves the host as paired, so later connects are silent. It never starts a stream.
 pub(crate) fn request_access(props: &Svc, target: &Target) {
     let ctx = &props.ctx;
     // Pin the advertised certificate for a discovered host (defence against a host impostor while
     // we wait); a manually-typed host has no advertised fingerprint, so trust-on-first-use.
     let pin = target.host.fp_hex.as_deref().and_then(trust::parse_hex32);
-    // A fresh cancel flag per request, installed where the waiting screen's Cancel button can read
-    // it back; this request's event loop captures the same `Arc` (via ConnectOpts) below.
+    // A fresh cancel flag per request, where the waiting screen's Cancel button reads it.
     let cancel = Arc::new(AtomicBool::new(false));
     *ctx.shared.cancel.lock().unwrap() = Some(cancel.clone());
-    connect_with(
-        ctx,
-        target,
-        pin,
-        &props.set_screen,
-        &props.set_status,
-        ConnectOpts {
-            // Must exceed the host's approval window (PENDING_APPROVAL_WAIT) so a slow operator
-            // approval still lands on this connection rather than timing the client out first.
-            connect_timeout: Duration::from_secs(185),
-            persist_paired: true,
-            awaiting_approval: true,
-            cancel: Some(cancel),
-            ..ConnectOpts::default()
-        },
+    *ctx.shared.target.lock().unwrap() = target.clone();
+    props.set_status.call(String::new());
+    props.set_screen.call(Screen::RequestAccess);
+    let (ctx, ss, st, target) = (
+        ctx.clone(),
+        props.set_screen.clone(),
+        props.set_status.clone(),
+        target.clone(),
     );
+    std::thread::spawn(move || {
+        let result = trust::request_access_to_host(
+            &target.host.addr,
+            target.host.port,
+            &ctx.identity,
+            pin,
+            &trust::device_name(),
+            Some(cancel.clone()),
+        );
+        if cancel.load(Ordering::SeqCst) {
+            return;
+        }
+        let fp = match result {
+            Ok(fp) => fp,
+            Err(e) => {
+                st.call(trust::access_error_message(&e));
+                ss.call(Screen::Hosts);
+                return;
+            }
+        };
+        let saved = trust::persist_host(
+            &target.host.name,
+            &target.host.addr,
+            target.host.port,
+            &trust::hex(&fp),
+            true,
+            &target.host.mac,
+        );
+        // Only a link's request streams; `connect` clears the status line, so a save error
+        // goes after it.
+        if target.from_link {
+            connect(&ctx, &target, Some(fp), &ss, &st);
+            if let Err(e) = saved {
+                st.call(format!("Paired, but couldn't save — {e:#}"));
+            }
+            return;
+        }
+        st.call(match saved {
+            Ok(()) => format!("Paired with {}", target.host.name),
+            Err(e) => format!("Paired, but couldn't save — {e:#}"),
+        });
+        ss.call(Screen::Hosts);
+    });
 }
 
 /// The Wake-on-LAN "wait until up" flow: the FALLBACK after a failed dial-first attempt
@@ -596,9 +630,8 @@ pub(crate) fn connecting_page(ctx: &Arc<AppCtx>, status: &str) -> Element {
 }
 
 /// The cancelable "waiting for approval" screen (request-access flow): a spinner + guidance while
-/// the identified connect sits parked on the host, plus a Cancel that returns to the host list and
-/// trips the shared cancel flag so the parked connect tears down silently if it resolves after the
-/// user has walked away. No hooks.
+/// the request sits parked on the host, plus a Cancel that returns to the host list and trips the
+/// shared cancel flag, which withdraws the request. No hooks.
 pub(crate) fn request_access_page(
     ctx: &Arc<AppCtx>,
     set_screen: &AsyncSetState<Screen>,
@@ -614,21 +647,17 @@ pub(crate) fn request_access_page(
         button("Cancel")
             .icon(lucide::icon("x"))
             .on_click(move || {
-                // Return the UI immediately; trip the flag this request's event loop
-                // captured so it tears down silently when the connect resolves (see
-                // ConnectOpts::cancel). Killing the parked session child IS the abort.
                 if let Some(c) = ctx.shared.cancel.lock().unwrap().as_ref() {
                     c.store(true, Ordering::SeqCst);
                 }
-                ctx.shared.session.lock().unwrap().kill();
                 ss.call(Screen::Hosts);
             })
             .horizontal_alignment(HorizontalAlignment::Center)
     };
     busy_page(
         &headline,
-        "Approve this device in the host's console or web UI \u{2014} it connects automatically \
-         once you approve it. No PIN needed.",
+        "Approve this device in the host's console or web UI \u{2014} it is paired once you \
+         approve it. No PIN needed.",
         vec![cancel_btn.into()],
     )
 }

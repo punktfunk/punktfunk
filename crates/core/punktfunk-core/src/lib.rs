@@ -104,7 +104,7 @@ fn env_value_on(value: &str) -> bool {
 ///
 /// The wire is versioned by ALPN, not by this. Pin the integer in `punktfunk-ffi`
 /// (`abi_version_is_pinned`). Per-bump notes live in `CHANGELOG.md`.
-pub const ABI_VERSION: u32 = 49;
+pub const ABI_VERSION: u32 = 50;
 
 #[cfg(test)]
 mod env_tests {

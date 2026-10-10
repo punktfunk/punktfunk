@@ -412,6 +412,7 @@ mod tests {
             suites: Vec::new(),
             features: Default::default(),
             profile: None,
+            access_only: false,
         }
         .encode_v2()
     }

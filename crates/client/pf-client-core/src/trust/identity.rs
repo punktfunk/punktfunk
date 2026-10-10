@@ -136,6 +136,32 @@ pub fn pair_with_host(
     )
 }
 
+/// The host waits 180 s for its operator to decide; this outlasts it so the client hears
+/// the host's own timeout.
+pub const REQUEST_ACCESS_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(185);
+
+/// Request access without a PIN: blocks until the host's operator approves this device or
+/// refuses it. `pin` is the advertised fingerprint (`None` trusts on first use); setting
+/// `cancel` withdraws the request. Returns the host certificate fingerprint. Never streams.
+pub fn request_access_to_host(
+    addr: &str,
+    port: u16,
+    identity: &(String, String),
+    pin: Option<[u8; 32]>,
+    device_name: &str,
+    cancel: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+) -> std::result::Result<[u8; 32], punktfunk_core::PunktfunkError> {
+    NativeClient::request_access(
+        addr,
+        port,
+        (&identity.0, &identity.1),
+        pin,
+        device_name,
+        REQUEST_ACCESS_TIMEOUT,
+        cancel,
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

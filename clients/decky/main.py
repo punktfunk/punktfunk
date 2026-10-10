@@ -868,6 +868,29 @@ class Plugin:
         decky.logger.warning("pairing failed (rc=%s): %s", rc, detail)
         return {"ok": False, "error": _cli_error(rc, err), "detail": detail}
 
+    async def request_access(self, addr: str, port: int, name: str = "Steam Deck") -> dict:
+        """No-PIN pairing (``punktfunk pair <addr:port> --request-access --name LABEL``).
+
+        Waits up to ~185 s for the host's operator to approve this Deck, pinned to the
+        fingerprint ``trust_host`` saved. Never streams. Same result shape as ``pair``; on
+        failure ``detail`` is the CLI's sentence for the user. A client too old for the flag
+        asks for a PIN instead, which comes back ``client-outdated``."""
+        rc, out, err = await _run_cli(
+            ["pair", f"{addr}:{int(port)}", "--request-access", "--name", name],
+            timeout=200.0,
+        )
+        if rc == 0:
+            fp = ""
+            for token in out.split():
+                if token.startswith("fp="):
+                    fp = token[3:]
+            decky.logger.info("access granted by %s:%s", addr, port)
+            return {"ok": True, "fp": fp}
+        detail = (err.strip().splitlines() or ["the request failed"])[-1]
+        decky.logger.warning("request access failed (rc=%s): %s", rc, detail)
+        error = "client-outdated" if rc == 6 and "--pin" in err else _cli_error(rc, err)
+        return {"ok": False, "error": error, "detail": detail}
+
     async def trust_host(self, addr: str, port: int, fp: str, name: str = "") -> dict:
         """Step 1 of request access: save the host with the fingerprint it ADVERTISED
         (``punktfunk hosts add <addr:port> --fp <hex> --name <label>``).

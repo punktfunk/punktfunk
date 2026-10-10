@@ -20,7 +20,7 @@ final class PairCeremony: ObservableObject {
 
     /// Dismissing the presenting screen must abandon an in-flight ceremony: the blocking `pair()`
     /// call can't be interrupted, so its completion checks this token and self-discards — a late
-    /// success must NOT pin and auto-connect to a host the user cancelled out of. A fresh token
+    /// success must NOT pin a host the user cancelled out of. A fresh token
     /// per attempt, so abandoning one attempt can't silence the next.
     private var token = Token()
 
@@ -28,9 +28,9 @@ final class PairCeremony: ObservableObject {
         var cancelled = false
     }
 
-    /// Run the ceremony. `onPaired` receives the host's now-VERIFIED fingerprint — the caller pins
-    /// it and connects; no manual fingerprint comparison is needed, because the host proved itself
-    /// with the same PIN.
+    /// Run the ceremony. `onPaired` receives the host's now-VERIFIED fingerprint for the caller to
+    /// pin; no manual fingerprint comparison is needed, because the host proved itself with the
+    /// same PIN.
     func run(
         host address: String, port: UInt16, pin rawPIN: String, clientName rawName: String,
         onPaired: @escaping (Data) -> Void

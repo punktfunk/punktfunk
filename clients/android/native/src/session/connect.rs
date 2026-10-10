@@ -803,6 +803,58 @@ pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativePair<'local
     .resolve::<LogErrorAndDefault>()
 }
 
+/// `NativeBridge.nativeRequestAccess(host, port, certPem, keyPem, pinHex, name): String` — ask
+/// for access with no PIN and wait for the host's operator. `pinHex` is the advertised
+/// fingerprint, `""` to trust on first use. Returns the host fingerprint (64-hex) to persist as
+/// paired, or `""` with the cause in `nativeTakeLastError`. Never streams. Blocking.
+#[unsafe(no_mangle)]
+#[allow(clippy::too_many_arguments)]
+pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeRequestAccess<'local>(
+    mut env: EnvUnowned<'local>,
+    _this: JObject<'local>,
+    host: JString<'local>,
+    port: jint,
+    cert_pem: JString<'local>,
+    key_pem: JString<'local>,
+    pin_hex: JString<'local>,
+    name: JString<'local>,
+) -> JString<'local> {
+    env.with_env(|env| -> jni::errors::Result<JString<'local>> {
+        let g = |e: &jni::Env<'local>, j: &JString<'local>| -> String {
+            j.try_to_string(e).unwrap_or_default()
+        };
+        let host = g(env, &host);
+        let cert = g(env, &cert_pem);
+        let key = g(env, &key_pem);
+        let pin = punktfunk_core::fp::parse_hex32(&g(env, &pin_hex));
+        let name = g(env, &name);
+
+        let out = if host.is_empty() || cert.is_empty() || key.is_empty() {
+            log::error!("nativeRequestAccess: missing host/identity");
+            String::new()
+        } else {
+            match NativeClient::request_access(
+                &host,
+                port as u16,
+                (&cert, &key),
+                pin,
+                &name,
+                pf_client_core::trust::REQUEST_ACCESS_TIMEOUT,
+                None,
+            ) {
+                Ok(host_fp) => hex(&host_fp),
+                Err(e) => {
+                    log::error!("nativeRequestAccess to {host}:{port} failed: {e}");
+                    note_error(&e);
+                    String::new()
+                }
+            }
+        };
+        env.new_string(out)
+    })
+    .resolve::<LogErrorAndDefault>()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -2,7 +2,7 @@
 //! delegated (request-access) approval. The trust GATE itself is `orchestrate::trust_route`;
 //! `AppModel::connect` opens these surfaces for it, each resolving into typed [`AppMsg`]s.
 
-use crate::app::spawn::{CancelHandle, SpawnOpts};
+use crate::app::spawn::SpawnOpts;
 use crate::app::{AppModel, AppMsg};
 use crate::hosts::ConnectRequest;
 use crate::trust;
@@ -159,12 +159,14 @@ pub fn tofu_dialog(
 
 /// The SPAKE2 ceremony: the host is armed and displays a 4-digit PIN; proving knowledge
 /// of it pins the host's certificate (and registers ours) with no offline-guessable
-/// transcript. Success persists the host as paired and connects.
+/// transcript. Success persists the host as paired, and streams only when `then_connect`
+/// (a link that asked to connect).
 pub fn pin_dialog(
     window: &adw::ApplicationWindow,
     sender: &ComponentSender<AppModel>,
     identity: (String, String),
     req: ConnectRequest,
+    then_connect: bool,
 ) {
     let entry = gtk::Entry::builder()
         .input_purpose(gtk::InputPurpose::Digits)
@@ -235,17 +237,18 @@ pub fn pin_dialog(
                         &[],
                     );
                     sender.input(AppMsg::Toast(match saved {
-                        Ok(()) => "Paired — connecting…".into(),
-                        // The ceremony succeeded and this session will connect; the pairing
-                        // just did not reach the disk, so the next launch will ask again.
+                        Ok(()) if then_connect => "Paired — connecting…".into(),
+                        Ok(()) => format!("Paired with {}", req.host.name),
                         Err(e) => format!("Paired, but couldn't save — {e:#}"),
                     }));
-                    sender.input(AppMsg::StartSession {
-                        req,
-                        fp_hex,
-                        tofu: false,
-                        opts: SpawnOpts::default(),
-                    });
+                    if then_connect {
+                        sender.input(AppMsg::StartSession {
+                            req,
+                            fp_hex,
+                            tofu: false,
+                            opts: SpawnOpts::default(),
+                        });
+                    }
                 }
                 Ok(Err(msg)) => sender.input(AppMsg::Toast(msg)),
                 Err(_) => {}
@@ -255,13 +258,13 @@ pub fn pin_dialog(
     dialog.present(Some(window));
 }
 
-/// A fresh host that requires pairing: "Request access" (connect and wait for the
-/// operator to click Approve in the host's console — delegated approval) or the PIN
-/// ceremony.
+/// A fresh host that requires pairing: "Request access" (wait for the operator to click
+/// Approve in the host's console — delegated approval) or the PIN ceremony.
 pub fn approval_dialog(
     window: &adw::ApplicationWindow,
     sender: &ComponentSender<AppModel>,
     waiting_slot: WaitingSlot,
+    identity: (String, String),
     req: ConnectRequest,
 ) {
     let dialog = adw::AlertDialog::new(
@@ -284,43 +287,44 @@ pub fn approval_dialog(
     let window = window.clone();
     let sender = sender.clone();
     dialog.connect_response(None, move |_, response| match response {
-        "request" => request_access(&window, &sender, waiting_slot.clone(), req.clone()),
+        "request" => request_access(
+            &window,
+            &sender,
+            waiting_slot.clone(),
+            identity.clone(),
+            req.clone(),
+        ),
         "pin" => sender.input(AppMsg::Pair(req.clone())),
         _ => {}
     });
     dialog.present(Some(&parent));
 }
 
-/// The no-PIN "request access" flow: the session child opens an identified connect the
-/// host PARKS until the operator approves it in the console; a cancelable "waiting"
-/// dialog covers the wait. On approval the same connection is admitted and the host is
-/// saved as paired. Cancel kills the child (the only abort a parked connect has).
+/// The no-PIN "request access" flow: ask the host, which parks the request until the
+/// operator approves it in the console, under a cancelable "waiting" dialog. Approval
+/// saves the host as paired and never starts a stream.
 ///
-/// The pinned fingerprint is the advertised one for a discovered host (defence against
-/// an impostor while we wait). A manually-typed host has no advertised fingerprint —
-/// the session binary refuses pinless connects, so this path requires the advert; a
-/// manual entry's Request Access rides the same flow only when a fingerprint exists.
+/// The pin is the advertised fingerprint (defence against an impostor while we wait), so a
+/// manually-typed host, which has none, pairs with a PIN instead.
 fn request_access(
     window: &adw::ApplicationWindow,
     sender: &ComponentSender<AppModel>,
     waiting_slot: WaitingSlot,
+    identity: (String, String),
     req: ConnectRequest,
 ) {
-    let Some(fp_hex) = req.host.pin().map(str::to_string) else {
-        // No fingerprint to pin (manual entry): the strict child can't do a
-        // trust-on-approval connect — route to the PIN ceremony instead.
+    let Some(pin) = req.host.pin().and_then(trust::parse_hex32) else {
         sender.input(AppMsg::Toast(
             "No advertised identity for this host — pair with a PIN instead.".into(),
         ));
         sender.input(AppMsg::Pair(req));
         return;
     };
-    let cancel = CancelHandle::default();
+    let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     let waiting = adw::AlertDialog::new(
         Some("Waiting for Approval"),
         Some(&format!(
-            "Approve “{}” in {}’s console or web UI.\n\nThis device is waiting to be let in — it \
-             connects automatically once you approve it.",
+            "Approve “{}” in {}’s console or web UI.\n\nThis device is paired once you approve it.",
             glib::host_name(),
             req.host.name
         )),
@@ -328,29 +332,55 @@ fn request_access(
     waiting.add_responses(&[("cancel", "Cancel")]);
     waiting.set_close_response("cancel");
     let handler = {
-        let sender = sender.clone();
         let cancel = cancel.clone();
         waiting.connect_response(Some("cancel"), move |_, _| {
-            cancel.kill();
-            sender.input(AppMsg::CancelPending);
+            cancel.store(true, std::sync::atomic::Ordering::SeqCst);
         })
     };
     waiting.present(Some(window));
-    // The handler rides with the dialog: `close()` emits the close response, so whoever
-    // dismisses this on a child event must disconnect before closing (`close_waiting`).
-    *waiting_slot.borrow_mut() = Some((waiting, handler));
+    // `close()` emits the close response, so the answer below disconnects before closing.
+    *waiting_slot.borrow_mut() = Some((waiting.clone(), handler));
 
-    sender.input(AppMsg::StartSession {
-        req,
-        fp_hex,
-        tofu: false,
-        opts: SpawnOpts {
-            // Must exceed the host's approval window (PENDING_APPROVAL_WAIT) so a slow
-            // operator approval still lands on this connection.
-            connect_timeout_secs: Some(185),
-            persist_paired: true,
-            cancel: Some(cancel),
-            ..SpawnOpts::default()
-        },
+    let (tx, rx) = async_channel::bounded(1);
+    let (host, port) = (req.host.addr.clone(), req.host.port);
+    let asked = cancel.clone();
+    std::thread::spawn(move || {
+        let r = trust::request_access_to_host(
+            &host,
+            port,
+            &identity,
+            Some(pin),
+            &trust::device_name(),
+            Some(asked),
+        );
+        let _ = tx.send_blocking(r);
+    });
+    let sender = sender.clone();
+    glib::spawn_future_local(async move {
+        let Ok(result) = rx.recv().await else {
+            return;
+        };
+        // A later request may own the slot by now; only close this one's dialog.
+        let mine = waiting_slot.borrow_mut().take_if(|(w, _)| *w == waiting);
+        if let Some((w, handler)) = mine {
+            w.disconnect(handler);
+            w.close();
+        }
+        if cancel.load(std::sync::atomic::Ordering::SeqCst) {
+            return;
+        }
+        // `persist_on_ready` keeps what the advert taught, the wake MACs among it.
+        let msg = match result {
+            Ok(fp) => match pf_client_core::orchestrate::persist_on_ready(
+                &req.host,
+                &trust::hex(&fp),
+                true,
+            ) {
+                Ok(()) => format!("Paired with {}", req.host.name),
+                Err(e) => format!("Paired, but couldn't save — {e:#}"),
+            },
+            Err(e) => trust::access_error_message(&e),
+        };
+        sender.input(AppMsg::Toast(msg));
     });
 }

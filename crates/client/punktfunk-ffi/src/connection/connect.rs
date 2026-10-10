@@ -1326,6 +1326,68 @@ pub unsafe extern "C" fn punktfunk_pair(
     })
 }
 
+/// Request access without a PIN: blocks until the host's operator approves this device,
+/// refuses it, or `timeout_ms` passes. Never starts a stream. On success the host fingerprint
+/// is written to `host_sha256_out` — persist it as paired, like [`punktfunk_pair`]'s.
+/// A refusal is its `PUNKTFUNK_STATUS_REJECTED_*` code.
+///
+/// # Safety
+/// `host`/`client_cert_pem`/`client_key_pem`/`name` are NUL-terminated UTF-8; `pin_sha256`
+/// is NULL (trust on first use) or valid for 32 bytes; `host_sha256_out` is writable for
+/// 32 bytes.
+#[cfg(feature = "quic")]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn punktfunk_request_access(
+    host: *const std::os::raw::c_char,
+    port: u16,
+    client_cert_pem: *const std::os::raw::c_char,
+    client_key_pem: *const std::os::raw::c_char,
+    pin_sha256: *const u8,
+    name: *const std::os::raw::c_char,
+    host_sha256_out: *mut u8,
+    timeout_ms: u32,
+) -> PunktfunkStatus {
+    guard(|| {
+        let (Ok(Some(host)), Ok(Some(cert)), Ok(Some(key)), Ok(Some(name))) = (
+            // SAFETY: pointers are caller-supplied and null-checked on this path.
+            unsafe { opt_cstr(host) },
+            // SAFETY: pointers are caller-supplied and null-checked on this path.
+            unsafe { opt_cstr(client_cert_pem) },
+            // SAFETY: pointers are caller-supplied and null-checked on this path.
+            unsafe { opt_cstr(client_key_pem) },
+            // SAFETY: pointers are caller-supplied and null-checked on this path.
+            unsafe { opt_cstr(name) },
+        ) else {
+            return PunktfunkStatus::NullPointer;
+        };
+        if host_sha256_out.is_null() {
+            return PunktfunkStatus::NullPointer;
+        }
+        let pin = (!pin_sha256.is_null()).then(|| {
+            let mut p = [0u8; 32];
+            // SAFETY: a non-null pin is valid for 32 bytes (caller contract); copied out here.
+            p.copy_from_slice(unsafe { std::slice::from_raw_parts(pin_sha256, 32) });
+            p
+        });
+        match punktfunk_core::client::NativeClient::request_access(
+            host,
+            port,
+            (cert, key),
+            pin,
+            name,
+            std::time::Duration::from_millis(timeout_ms as u64),
+            None,
+        ) {
+            Ok(fp) => {
+                // SAFETY: `host_sha256_out` is non-null here and writable for 32 bytes.
+                unsafe { put_sha256(host_sha256_out, fp) };
+                PunktfunkStatus::Ok
+            }
+            Err(e) => e.status(),
+        }
+    })
+}
+
 #[cfg(all(test, feature = "quic"))]
 mod tests {
     use super::*;

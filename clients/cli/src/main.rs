@@ -104,6 +104,10 @@ punktfunk pair <host[:port]> — enrol this device with a host (PIN ceremony)
 
   --pin -       read the PIN from stdin (one line). Without it the command asks,
                 and refuses (exit 6) when there is no terminal to ask on
+  --request-access
+                no PIN: wait (up to ~185 s) for somebody to approve this device
+                in the host's console or web UI. Pins the fingerprint saved for
+                the host (`hosts add --fp`) if there is one. Never streams
   --name LABEL  the label the host files this device under
                 (default: this machine's name)
 
@@ -627,12 +631,16 @@ from the config directory for a true factory reset."
 
     /// Run the SPAKE2 ceremony, prompting on a terminal or reading `--pin -` from stdin.
     /// Literal PIN arguments are refused because process command lines are public metadata.
+    /// `--request-access` pairs with no PIN once the host's operator approves.
     fn pair(args: &[String]) -> u8 {
         let Some(target) = positional(args, 0) else {
-            eprintln!("usage: punktfunk pair <host[:port]> [--pin -]");
+            eprintln!("usage: punktfunk pair <host[:port]> [--pin - | --request-access]");
             return UNRESOLVED;
         };
         let (addr, port) = split_host_port(&target);
+        if has(args, "--request-access") {
+            return request_access(args, &addr, port);
+        }
         let pin = match value(args, "--pin").as_deref() {
             Some("-") => read_pin(None),
             Some(_) => {
@@ -657,17 +665,51 @@ from the config directory for a true factory reset."
             }
         };
         let name = value(args, "--name").unwrap_or_else(trust::device_name);
-        match trust::pair_with_host(&addr, port, &identity, &pin, &name) {
+        let paired = trust::pair_with_host(&addr, port, &identity, &pin, &name);
+        report_paired(
+            &addr,
+            port,
+            paired.map_err(|e| trust::pair_error_message(&e)),
+        )
+    }
+
+    /// `pair --request-access`: wait for the host's operator, pinned to the fingerprint saved
+    /// for this host (`hosts add --fp`), else trusting the first one it presents.
+    fn request_access(args: &[String], addr: &str, port: u16) -> u8 {
+        let identity = match trust::load_or_create_identity() {
+            Ok(i) => i,
+            Err(e) => {
+                eprintln!("client identity: {e:#}");
+                return CONNECT_FAILED;
+            }
+        };
+        let name = value(args, "--name").unwrap_or_else(trust::device_name);
+        let pin = KnownHosts::load()
+            .hosts
+            .iter()
+            .find(|h| h.addr == addr && h.port == port)
+            .and_then(|h| trust::parse_hex32(&h.fp_hex));
+        eprintln!("waiting for {addr} to approve this device…");
+        let paired = trust::request_access_to_host(addr, port, &identity, pin, &name, None);
+        report_paired(
+            addr,
+            port,
+            paired.map_err(|e| trust::access_error_message(&e)),
+        )
+    }
+
+    fn report_paired(addr: &str, port: u16, paired: Result<[u8; 32], String>) -> u8 {
+        match paired {
             Ok(fp) => {
                 let fp_hex = trust::hex(&fp);
-                if let Err(e) = trust::persist_host(&addr, &addr, port, &fp_hex, true, &[]) {
+                if let Err(e) = trust::persist_host(addr, addr, port, &fp_hex, true, &[]) {
                     eprintln!("couldn't save the host: {e:#}");
                 }
                 println!("paired {addr}:{port} fp={fp_hex}");
                 OK
             }
-            Err(e) => {
-                eprintln!("{}", trust::pair_error_message(&e));
+            Err(msg) => {
+                eprintln!("{msg}");
                 TRUST_REJECTED
             }
         }

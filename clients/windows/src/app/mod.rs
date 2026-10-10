@@ -119,6 +119,8 @@ pub(crate) struct Target {
     /// A link's `as=`: the profile this connect plays as, an id or a name. It wins over the
     /// saved pick for this connect only.
     pub(crate) link_profile: Option<String>,
+    /// Opened by a link: a pairing on its way continues into this connect.
+    pub(crate) from_link: bool,
 }
 
 /// Stable app services handed to the page components as props. Each routed screen that uses
@@ -865,6 +867,7 @@ fn route_link(
                 },
                 preset: u.preset.clone(),
                 launch: u.launch.clone(),
+                from_link: true,
                 ..Target::default()
             };
             set_status.call(format!(

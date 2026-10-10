@@ -126,7 +126,7 @@ internal fun AddHostSheet(
 /**
  * The SPAKE2 PIN ceremony dialog. Runs [NativeBridge.nativePair] off the UI thread itself (the
  * pin/name/error state is dialog-local); on success hands the host's verified fingerprint to
- * [onPaired], which saves + connects. Dismissal is blocked while a pair attempt is in flight.
+ * [onPaired], which saves it. Dismissal is blocked while a pair attempt is in flight.
  */
 @Composable
 internal fun PairPinDialog(
@@ -179,7 +179,7 @@ internal fun PairPinDialog(
                             }
                             pairing = false
                             if (fp.isNotEmpty()) {
-                                onPaired(fp) // verified host fp — caller saves + connects
+                                onPaired(fp) // verified host fp — caller saves it
                             } else {
                                 // Cause-specific: wrong PIN vs not-armed vs unreachable.
                                 err = ConnectErrors.pairMessage(NativeBridge.nativeTakeLastError())

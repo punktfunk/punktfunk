@@ -65,7 +65,7 @@ struct PairSheet: View {
                 if busy {
                     ProgressView()
                 }
-                Button("Pair & Connect") { runCeremony() }
+                Button("Pair") { runCeremony() }
                     .disabled(busy || pin.trimmingCharacters(in: .whitespaces).isEmpty)
             }
             .padding(.top, 12)
@@ -149,7 +149,7 @@ struct PairSheet: View {
                         .controlSize(.small)
                         .padding(.trailing, 8)
                 }
-                Button("Pair & Connect") { runCeremony() }
+                Button("Pair") { runCeremony() }
                     .glassProminentButtonStyle()
                     #if !os(tvOS)
                     .keyboardShortcut(.defaultAction)
@@ -202,7 +202,7 @@ struct PairSheet: View {
 #if DEBUG
 extension PairSheet {
     /// Screenshot-harness seed (`ShotScenes`). A capture of the untouched sheet shows an empty PIN
-    /// field, a DISABLED "Pair & Connect", and — because the client name defaults to the device's
+    /// field, a DISABLED "Pair", and — because the client name defaults to the device's
     /// own — whatever the capture simulator happens to be called (`pf-shot-iphone-6.9` reached App
     /// Store Connect that way). Seeding both fields captures the ceremony as a user meets it,
     /// mid-entry, with a live primary button.

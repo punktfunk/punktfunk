@@ -177,9 +177,13 @@ pub fn run_shot(ctx: &ShotCtx, scene: &str) {
             }
         }
         "trust" | "04-trust" => crate::app::gate::tofu_dialog(&ctx.window, sender, mock_req()),
-        "pair" | "05-pair" => {
-            crate::app::gate::pin_dialog(&ctx.window, sender, ctx.identity.clone(), mock_req())
-        }
+        "pair" | "05-pair" => crate::app::gate::pin_dialog(
+            &ctx.window,
+            sender,
+            ctx.identity.clone(),
+            mock_req(),
+            false,
+        ),
         "addhost" | "06-addhost" => {
             let _ = hosts.send(HostsMsg::ShowAddHost);
         }

@@ -92,6 +92,17 @@ pub fn pair_error_message(err: &punktfunk_core::PunktfunkError) -> String {
     }
 }
 
+/// One sentence for a failed access request. A request has no PIN, so a crypto failure is
+/// the host not matching its advert.
+pub fn access_error_message(err: &punktfunk_core::PunktfunkError) -> String {
+    match err {
+        punktfunk_core::PunktfunkError::Crypto => {
+            "The host didn't present the identity it advertised. Pair with its PIN instead.".into()
+        }
+        other => pair_error_message(other),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

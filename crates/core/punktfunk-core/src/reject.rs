@@ -45,6 +45,9 @@ pub const NO_SEAT_CLOSE_CODE: u32 = 0x6D;
 pub const SEAT_OCCUPIED_CLOSE_CODE: u32 = 0x6E;
 /// The profile's seat can't run: removed, or its host would not start.
 pub const SEAT_UNAVAILABLE_CLOSE_CODE: u32 = 0x6F;
+/// Not a rejection: the answer to an access-only hello. This device may connect now.
+/// 0x70 and 0x71 are stream codes.
+pub const ACCESS_GRANTED_CLOSE_CODE: u32 = 0x72;
 
 /// One row per [`RejectReason`]: variant, close code, FFI token, sentence. Every
 /// table below comes from these rows, so a new reason cannot miss one.
@@ -166,7 +169,17 @@ mod tests {
     fn foreign_codes_stay_untyped() {
         // Bare closes, pair-done, and 0x51/0x52 (deliberate-end) must never
         // decode as a rejection. The 0x60 block is full; 0x70 is the clipboard's.
-        for code in [0u32, 1, 0x41, 0x51, 0x52, 0x5f, 0x70, u32::MAX] {
+        for code in [
+            0u32,
+            1,
+            0x41,
+            0x51,
+            0x52,
+            0x5f,
+            0x70,
+            ACCESS_GRANTED_CLOSE_CODE,
+            u32::MAX,
+        ] {
             assert_eq!(RejectReason::from_close_code(code), None);
         }
     }

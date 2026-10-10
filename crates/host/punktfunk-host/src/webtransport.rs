@@ -374,7 +374,11 @@ async fn session(
     let peer = connection.remote_address();
     match session::run(connection.clone(), serving.clone(), sem).await {
         Ok(crate::native::Served::Session) => tracing::info!(%peer, "browser session complete"),
-        Ok(crate::native::Served::ProbeClose | crate::native::Served::Management) => {}
+        Ok(
+            crate::native::Served::ProbeClose
+            | crate::native::Served::Management
+            | crate::native::Served::Access,
+        ) => {}
         Err(e) => {
             // The typed close the native plane would send, and the same code and sentence on a
             // stream first: WebKit hands a page nothing about an application close, so the
