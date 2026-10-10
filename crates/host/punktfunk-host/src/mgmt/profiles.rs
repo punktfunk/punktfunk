@@ -220,7 +220,7 @@ fn seated(seats: &Snapshot, id: &str) -> SeatPublic {
     };
     let port = seat.native_port;
     if !seats.on {
-        let why = if seats.desktop_edition {
+        let why = if seats.single_session {
             "This Windows edition serves one person at a time."
         } else {
             "This host needs seats turned on for a second profile."
@@ -1343,7 +1343,7 @@ mod tests {
         }
         Snapshot {
             on,
-            desktop_edition: false,
+            single_session: false,
             seats: vec![seat],
             occupants,
         }
@@ -1385,7 +1385,7 @@ mod tests {
         let gone = seated(&snap(true, RuntimeState::Running, false), &"f".repeat(32));
         assert_eq!(gone.state, SeatState::Unavailable);
         let desktop = Snapshot {
-            desktop_edition: true,
+            single_session: true,
             ..snap(false, RuntimeState::Stopped, false)
         };
         assert_eq!(

@@ -58,10 +58,10 @@ pub(crate) fn enabled() -> bool {
     }
 }
 
-fn desktop_edition() -> bool {
+fn single_session() -> bool {
     #[cfg(windows)]
     {
-        pf_seats::windows::server_edition() == Some(false)
+        pf_seats::windows::server_edition() == Some(false) && !pf_seats::windows::session_wrapper()
     }
     #[cfg(not(windows))]
     {
@@ -86,8 +86,8 @@ pub(crate) fn list() -> Result<Vec<pf_seats::Seat>, ApiError> {
 pub(crate) struct Snapshot {
     /// The operator turned seats on.
     pub on: bool,
-    /// A desktop edition of Windows, which serves one session and so no seat.
-    pub desktop_edition: bool,
+    /// A desktop edition of Windows with no Remote Desktop wrapper: one session, so no seat.
+    pub single_session: bool,
     pub seats: Vec<pf_seats::Seat>,
     /// Seat id → who streams there, for each running seat whose host answered.
     pub occupants: BTreeMap<String, Vec<Occupant>>,
@@ -160,7 +160,7 @@ pub(crate) fn snapshot() -> Arc<Snapshot> {
         .collect();
     let snap = Arc::new(Snapshot {
         on: enabled(),
-        desktop_edition: desktop_edition(),
+        single_session: single_session(),
         seats,
         occupants,
     });

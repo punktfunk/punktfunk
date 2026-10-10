@@ -9,7 +9,7 @@
 //! seats go off.
 
 use super::util::{backend_error, WinResult};
-use super::{keeper, seats_enabled, server_edition, SEATS_KEY};
+use super::{keeper, seats_enabled, server_edition, session_wrapper, SEATS_KEY};
 use crate::backend::BackendError;
 use crate::ipc::Diagnostic;
 use pf_paths::POWERSHELL;
@@ -50,14 +50,25 @@ const PROBE: &str = "$ProgressPreference='SilentlyContinue'; \
     '{0} {1} {2}' -f [int]$role, [int]($mode -in 2,4), [int]$gpu";
 
 /// The prerequisites for seats, one diagnostic each: info when met, an error with the next move
-/// when not. A desktop edition of Windows has no role or licensing to ask about.
+/// when not. A desktop edition runs seats only through a Remote Desktop wrapper the operator
+/// installed, a warning, and has no role or licensing to ask about.
 pub(super) fn checks() -> Vec<Diagnostic> {
     let mut checks = Vec::new();
-    match server_edition() {
-        Some(true) => checks.push(Diagnostic::info(
-            "windows_server",
-            "This is Windows Server.",
-        )),
+    let server = match server_edition() {
+        Some(true) => {
+            checks.push(Diagnostic::info(
+                "windows_server",
+                "This is Windows Server.",
+            ));
+            true
+        }
+        Some(false) if session_wrapper() => {
+            checks.push(Diagnostic::warning(
+                "windows_server",
+                "A Remote Desktop wrapper lets this desktop edition of Windows run seats. Only Windows Server is supported.",
+            ));
+            false
+        }
         Some(false) => {
             checks.push(Diagnostic::error(
                 "windows_server",
@@ -72,7 +83,7 @@ pub(super) fn checks() -> Vec<Diagnostic> {
             ));
             return checks;
         }
-    }
+    };
     let Some([role, licensing, gpu]) = probe() else {
         checks.push(Diagnostic::error(
             "probe",
@@ -80,18 +91,20 @@ pub(super) fn checks() -> Vec<Diagnostic> {
         ));
         return checks;
     };
-    checks.push(check(
-        role,
-        "rds_role",
-        "The Remote Desktop Session Host role is installed.",
-        "The Remote Desktop Session Host role isn't installed. Add it in Server Manager, then try again.",
-    ));
-    checks.push(check(
-        licensing,
-        "rds_licensing",
-        "Remote Desktop licensing is set.",
-        "Remote Desktop licensing isn't set. Choose Per Device or Per User in Server Manager, then try again.",
-    ));
+    if server {
+        checks.push(check(
+            role,
+            "rds_role",
+            "The Remote Desktop Session Host role is installed.",
+            "The Remote Desktop Session Host role isn't installed. Add it in Server Manager, then try again.",
+        ));
+        checks.push(check(
+            licensing,
+            "rds_licensing",
+            "Remote Desktop licensing is set.",
+            "Remote Desktop licensing isn't set. Choose Per Device or Per User in Server Manager, then try again.",
+        ));
+    }
     checks.push(check(
         gpu,
         "gpu",

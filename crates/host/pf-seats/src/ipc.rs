@@ -176,6 +176,13 @@ impl Diagnostic {
         }
     }
 
+    pub fn warning(code: impl Into<String>, message: impl Into<String>) -> Self {
+        Self {
+            level: DiagnosticLevel::Warning,
+            ..Self::info(code, message)
+        }
+    }
+
     pub fn error(code: impl Into<String>, message: impl Into<String>) -> Self {
         Self {
             level: DiagnosticLevel::Error,

@@ -75,6 +75,29 @@ pub fn server_edition() -> Option<bool> {
     Some(!product.eq_ignore_ascii_case("WinNT"))
 }
 
+/// Whether TermService loads a DLL other than `termsrv.dll`: a Remote Desktop wrapper the
+/// operator installed, which lets a desktop edition run a session per seat. We ship none.
+pub fn session_wrapper() -> bool {
+    RegKey::predef(HKEY_LOCAL_MACHINE)
+        .open_subkey_with_flags(
+            r"SYSTEM\CurrentControlSet\Services\TermService\Parameters",
+            KEY_QUERY_VALUE | KEY_WOW64_64KEY,
+        )
+        .and_then(|key| key.get_value::<String, _>("ServiceDll"))
+        .is_ok_and(|dll| wraps_termsrv(&dll))
+}
+
+/// `ServiceDll` names a DLL other than `termsrv.dll`. An in-place patch of `termsrv.dll` keeps
+/// the stock name, so it reads as no wrapper.
+fn wraps_termsrv(service_dll: &str) -> bool {
+    let name = service_dll
+        .trim()
+        .rsplit(['\\', '/'])
+        .next()
+        .unwrap_or_default();
+    !name.is_empty() && !name.eq_ignore_ascii_case("termsrv.dll")
+}
+
 fn termservice_running() -> WinResult<bool> {
     let manager = ServiceManager::local_computer(None::<&str>, ServiceManagerAccess::CONNECT)
         .map_err(|error| io_error("termservice", "open Service Control Manager", error))?;
@@ -289,10 +312,14 @@ impl WindowsBackend {
                 "session_provider",
                 "Windows Server runs concurrent seat sessions itself",
             ),
+            Some(false) if session_wrapper() => Diagnostic::warning(
+                "session_provider",
+                "a Remote Desktop wrapper runs concurrent seat sessions on this desktop edition; \
+                 only Windows Server is supported",
+            ),
             Some(false) => Diagnostic::error(
                 "session_provider",
-                "this Windows edition runs one session at a time and no session provider is \
-                 built yet, so it can't mint a seat session",
+                "this Windows edition runs one session at a time, so it can't mint a seat session",
             ),
             None => Diagnostic::error(
                 "session_provider",
@@ -482,5 +509,19 @@ fn seat_diagnostic(level: DiagnosticLevel, code: &str, message: String, seat: &S
         code: code.into(),
         message,
         seat_id: Some(seat.id.clone()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::wraps_termsrv;
+
+    #[test]
+    fn only_a_dll_other_than_termsrv_is_a_wrapper() {
+        assert!(!wraps_termsrv(r"%SystemRoot%\System32\termsrv.dll"));
+        assert!(!wraps_termsrv(r"C:\Windows\System32\TermSrv.dll "));
+        assert!(!wraps_termsrv(""));
+        assert!(wraps_termsrv(r"%ProgramFiles%\RDP Wrapper\TermWrap.dll"));
+        assert!(wraps_termsrv(r"%ProgramFiles%\RDP Wrapper\rdpwrap.dll"));
     }
 }
