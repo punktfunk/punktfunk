@@ -9,11 +9,19 @@
 //! [`set_report_data`] and [`output_data`] honour the kernel's `size` field.
 //! A fixed window truncates a long report or parses stale bytes past a short
 //! one in a reused event buffer.
+//!
+//! On a seat the kernel fd is the supervisor's ([`crate::pad_broker`]): [`UhidDevice::relayed`]
+//! is one end of a `SOCK_SEQPACKET` pair that carries the same events both ways, and
+//! [`UhidDevice::relay`] is the supervisor's loop between the other end and `/dev/uhid`. Only
+//! what a device answers with crosses from the seat; a `CREATE2` or `DESTROY` of its own is
+//! dropped, so the seat can never rebind the driver.
 
 use anyhow::{Context, Result};
 use std::fs::{File, OpenOptions};
-use std::io::{Read, Write};
+use std::io::{ErrorKind, Read, Write};
+use std::os::fd::{AsFd, OwnedFd};
 use std::os::unix::fs::OpenOptionsExt;
+use std::os::unix::net::UnixDatagram;
 
 pub const UHID_PATH: &str = "/dev/uhid";
 
@@ -72,6 +80,38 @@ pub fn output_data(ev: &[u8]) -> &[u8] {
     &ev[4.min(end)..end]
 }
 
+/// What a seat may write to its relay: a device's answers. `CREATE2` and `DESTROY` stay the
+/// supervisor's.
+const SEAT_MAY_WRITE: [u32; 3] = [UHID_INPUT2, UHID_GET_REPORT_REPLY, UHID_SET_REPORT_REPLY];
+
+/// A [`Create2`] that owns its strings: what a backend builds for its pad, and what the broker
+/// builds for a seat's, with the seat's marker in `phys`.
+pub struct Identity {
+    pub bus: u16,
+    pub name: String,
+    pub phys: String,
+    pub uniq: String,
+    pub rdesc: &'static [u8],
+    pub vendor: u32,
+    pub product: u32,
+    pub version: u32,
+}
+
+impl Identity {
+    pub fn as_create2(&self) -> Create2<'_> {
+        Create2 {
+            bus: self.bus,
+            name: &self.name,
+            phys: &self.phys,
+            uniq: &self.uniq,
+            rdesc: self.rdesc,
+            vendor: self.vendor,
+            product: self.product,
+            version: self.version,
+        }
+    }
+}
+
 /// `UHID_CREATE2` identity: what the kernel driver binds on. Strings truncate to the kernel's
 /// fields (name 128, phys and uniq 64).
 pub struct Create2<'a> {
@@ -98,12 +138,62 @@ pub enum UhidEvent<'a> {
     SetReport(&'a [u8]),
 }
 
-/// One `/dev/uhid` device. Drop sends `UHID_DESTROY`, which unbinds the kernel driver.
+/// One `/dev/uhid` device. Drop sends `UHID_DESTROY`, which unbinds the kernel driver. A
+/// [`relayed`](Self::relayed) device is the seat's end of the supervisor's relay: the same
+/// events, and its drop closes the relay, which is its destroy.
 pub struct UhidDevice {
     fd: File,
+    relayed: bool,
+    /// The supervisor hung up: the pad is gone, and the manager makes another.
+    dead: bool,
 }
 
 impl UhidDevice {
+    /// `kind` as a seat gets it (the supervisor builds `id` from its own table, stamped), else
+    /// `id` opened here.
+    pub fn open_kind(
+        kind: crate::pad_broker::PadKind,
+        index: u8,
+        id: &Identity,
+    ) -> Result<UhidDevice> {
+        if pf_paths::seat::is_seat_host() {
+            return UhidDevice::relayed(crate::pad_broker::request(kind, index)?);
+        }
+        UhidDevice::open(&id.as_create2())
+    }
+
+    /// The seat's end of a relay the supervisor answered.
+    pub fn relayed(fd: OwnedFd) -> Result<UhidDevice> {
+        let sock = UnixDatagram::from(fd);
+        sock.set_nonblocking(true)
+            .context("set the pad relay non-blocking")?;
+        Ok(UhidDevice {
+            fd: File::from(OwnedFd::from(sock)),
+            relayed: true,
+            dead: false,
+        })
+    }
+
+    /// `false` once the supervisor dropped this device's relay. A kernel device is always alive.
+    pub fn alive(&self) -> bool {
+        !self.dead
+    }
+
+    /// A write's error, kept: a hung-up relay reads as dead.
+    fn wrote(&mut self, result: std::io::Result<()>, what: &str) -> Result<()> {
+        if let Err(e) = &result {
+            if self.relayed
+                && matches!(
+                    e.kind(),
+                    ErrorKind::BrokenPipe | ErrorKind::ConnectionReset | ErrorKind::NotConnected
+                )
+            {
+                self.dead = true;
+            }
+        }
+        result.context(what.to_owned())
+    }
+
     /// Open `/dev/uhid` non-blocking and create the device.
     pub fn open(c: &Create2) -> Result<UhidDevice> {
         let fd = OpenOptions::new()
@@ -114,7 +204,11 @@ impl UhidDevice {
             .with_context(|| {
                 format!("open {UHID_PATH} (is the 60-punktfunk.rules uhid rule installed + are you in 'input'?)")
             })?;
-        let mut dev = UhidDevice { fd };
+        let mut dev = UhidDevice {
+            fd,
+            relayed: false,
+            dead: false,
+        };
         let mut ev = [0u8; UHID_EVENT_SIZE];
         ev[0..4].copy_from_slice(&UHID_CREATE2.to_ne_bytes());
         // uhid_create2_req at 4: name[128] phys[64] uniq[64] rd_size bus vid pid version country rd_data.
@@ -140,7 +234,8 @@ impl UhidDevice {
         // uhid_input2_req: size u16 at 4, data at 6.
         ev[4..6].copy_from_slice(&(data.len() as u16).to_ne_bytes());
         ev[6..6 + data.len()].copy_from_slice(data);
-        self.fd.write_all(&ev).context("write UHID_INPUT2")
+        let wrote = self.fd.write_all(&ev);
+        self.wrote(wrote, "write UHID_INPUT2")
     }
 
     /// Answer a GET_REPORT: `Some(data)`, or `None` (EIO) for a report this pad does not have.
@@ -156,9 +251,8 @@ impl UhidDevice {
         ev[8..10].copy_from_slice(&err.to_ne_bytes());
         ev[10..12].copy_from_slice(&(data.len() as u16).to_ne_bytes());
         ev[OFF_DATA..OFF_DATA + data.len()].copy_from_slice(data);
-        self.fd
-            .write_all(&ev)
-            .context("write UHID_GET_REPORT_REPLY")
+        let wrote = self.fd.write_all(&ev);
+        self.wrote(wrote, "write UHID_GET_REPORT_REPLY")
     }
 
     fn reply_set_report(&mut self, id: u32) -> Result<()> {
@@ -166,9 +260,8 @@ impl UhidDevice {
         ev[0..4].copy_from_slice(&UHID_SET_REPORT_REPLY.to_ne_bytes());
         // uhid_set_report_reply_req: id u32 [4..8], err u16 [8..10].
         ev[4..8].copy_from_slice(&id.to_ne_bytes());
-        self.fd
-            .write_all(&ev)
-            .context("write UHID_SET_REPORT_REPLY")
+        let wrote = self.fd.write_all(&ev);
+        self.wrote(wrote, "write UHID_SET_REPORT_REPLY")
     }
 
     /// Drain every pending kernel request without blocking, oldest first. A SET_REPORT is
@@ -177,6 +270,10 @@ impl UhidDevice {
     pub fn poll(&mut self, mut on_event: impl FnMut(&mut UhidDevice, UhidEvent<'_>)) {
         let mut ev = [0u8; UHID_EVENT_SIZE];
         while let Ok(n) = self.fd.read(&mut ev) {
+            if n == 0 && self.relayed {
+                self.dead = true; // the relay's other end closed
+                break;
+            }
             if n < UHID_EVENT_SIZE {
                 break;
             }
@@ -195,10 +292,71 @@ impl UhidDevice {
             }
         }
     }
+
+    /// The supervisor's side of a seat's relay: `seat`'s events into the kernel, the kernel's
+    /// to `seat`, until the seat hangs up. Blocks; drop destroys the device. Only what a device
+    /// answers with crosses from the seat, and only whole events.
+    pub fn relay(self, seat: UnixDatagram) {
+        use rustix::event::{poll, PollFd, PollFlags};
+        let _ = seat.set_nonblocking(true);
+        let mut ev = [0u8; UHID_EVENT_SIZE];
+        loop {
+            let mut fds = [
+                PollFd::new(&seat, PollFlags::IN),
+                PollFd::new(&self.fd, PollFlags::IN),
+            ];
+            match poll(&mut fds, None) {
+                Ok(_) => {}
+                Err(rustix::io::Errno::INTR) => continue,
+                Err(_) => return,
+            }
+            let (from_seat, from_kernel) = (fds[0].revents(), fds[1].revents());
+            if from_seat.intersects(PollFlags::IN | PollFlags::HUP | PollFlags::ERR) {
+                match seat.recv(&mut ev) {
+                    Ok(0) => return,
+                    Ok(n) => {
+                        let type_ = u32::from_ne_bytes([ev[0], ev[1], ev[2], ev[3]]);
+                        if n == UHID_EVENT_SIZE && SEAT_MAY_WRITE.contains(&type_) {
+                            let _ = (&self.fd).write_all(&ev);
+                        } else {
+                            tracing::debug!(type_, n, "uhid relay: dropped what the seat sent");
+                        }
+                    }
+                    Err(e) if e.kind() == ErrorKind::WouldBlock => {}
+                    Err(_) => return,
+                }
+            }
+            if from_kernel.intersects(PollFlags::IN) {
+                while let Ok(n) = (&self.fd).read(&mut ev) {
+                    if n < UHID_EVENT_SIZE {
+                        break;
+                    }
+                    match seat.send(&ev) {
+                        Ok(_) => {}
+                        Err(e) if e.kind() == ErrorKind::WouldBlock => {}
+                        Err(_) => return,
+                    }
+                }
+            }
+            if from_kernel.intersects(PollFlags::ERR | PollFlags::HUP | PollFlags::NVAL) {
+                return;
+            }
+        }
+    }
+}
+
+impl AsFd for UhidDevice {
+    fn as_fd(&self) -> std::os::fd::BorrowedFd<'_> {
+        self.fd.as_fd()
+    }
 }
 
 impl Drop for UhidDevice {
     fn drop(&mut self) {
+        // A relayed device's destroy is the socket closing; the supervisor never takes DESTROY.
+        if self.relayed {
+            return;
+        }
         let mut ev = [0u8; UHID_EVENT_SIZE];
         ev[0..4].copy_from_slice(&UHID_DESTROY.to_ne_bytes());
         let _ = self.fd.write_all(&ev);
@@ -222,9 +380,73 @@ mod tests {
         (
             UhidDevice {
                 fd: File::from(OwnedFd::from(dev)),
+                relayed: false,
+                dead: false,
             },
             kernel,
         )
+    }
+
+    /// `SOCK_SEQPACKET`, as the relay's pairs are: a peer's close reads as end-of-file, which
+    /// a datagram pair never reports.
+    fn seqpacket_pair() -> (UnixDatagram, UnixDatagram) {
+        let (a, b) = rustix::net::socketpair(
+            rustix::net::AddressFamily::UNIX,
+            rustix::net::SocketType::SEQPACKET,
+            rustix::net::SocketFlags::CLOEXEC,
+            None,
+        )
+        .expect("socketpair");
+        (UnixDatagram::from(a), UnixDatagram::from(b))
+    }
+
+    /// The supervisor's relay passes a device's answers through and nothing else, and a seat
+    /// whose relay hung up reads as dead.
+    #[test]
+    fn the_relay_passes_answers_only_and_a_hangup_is_death() {
+        let (kernel_side, kernel) = seqpacket_pair();
+        let (sup_end, seat_end) = seqpacket_pair();
+        let supervisor = UhidDevice {
+            fd: File::from(OwnedFd::from(kernel_side)),
+            relayed: false,
+            dead: false,
+        };
+        let relay = std::thread::spawn(move || supervisor.relay(sup_end));
+        let mut seat = UhidDevice::relayed(OwnedFd::from(seat_end)).unwrap();
+        kernel.set_nonblocking(true).unwrap();
+
+        seat.write_input(&[1, 2, 3]).unwrap();
+        let mut got = blank();
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        assert_eq!(kernel.recv(&mut got).unwrap(), UHID_EVENT_SIZE);
+        assert_eq!(event_type(&got), UHID_INPUT2);
+
+        let mut create = blank();
+        create[0..4].copy_from_slice(&UHID_CREATE2.to_ne_bytes());
+        (&seat.fd).write_all(&create).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        assert!(
+            kernel.recv(&mut got).is_err(),
+            "a CREATE2 from the seat never reaches the kernel"
+        );
+
+        let mut out = blank();
+        out[0..4].copy_from_slice(&UHID_OUTPUT.to_ne_bytes());
+        kernel.send(&out).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        let mut seen = 0;
+        seat.poll(|_, ev| {
+            if let UhidEvent::Output(_) = ev {
+                seen += 1;
+            }
+        });
+        assert_eq!(seen, 1);
+        assert!(seat.alive());
+
+        drop(kernel);
+        relay.join().unwrap();
+        seat.poll(|_, _| {});
+        assert!(!seat.alive(), "the supervisor's relay ended");
     }
 
     fn event_type(ev: &[u8]) -> u32 {

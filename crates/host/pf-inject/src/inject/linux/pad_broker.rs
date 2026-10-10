@@ -9,6 +9,7 @@
 //! Design: `design/seat-pad-broker.md`.
 
 use crate::gamepad::{build_pad, PadIdentity};
+use crate::uhid_abi::{Identity, UhidDevice};
 use crate::uinput_abi::{UinputDevice, INPUT_EVENT_LEN};
 use anyhow::{anyhow, bail, Context, Result};
 use rustix::event::{poll, PollFd, PollFlags};
@@ -24,13 +25,27 @@ use std::time::Duration;
 
 pub use pf_paths::seat::PADS_SOCKET as SOCKET;
 
-/// A pad a seat may ask for. The number is the wire value: append, never renumber.
+/// A pad a seat may ask for. The number is the wire value: append, never renumber. 1–9 are
+/// uinput pads, the rest uhid.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
 pub enum PadKind {
     Xbox360 = 1,
     XboxOne = 2,
     XboxElite2 = 3,
+    DualSense = 10,
+    DualSenseEdge = 11,
+    DualShock4 = 12,
+    SteamDeck = 13,
+    SteamController = 14,
+    SteamController2 = 15,
+    SwitchPro = 16,
+    JoyConLeft = 17,
+    JoyConRight = 18,
+    EightBitDoUltimate2 = 19,
+    EightBitDoPro2 = 20,
+    EightBitDoPro3 = 21,
+    HoripadSteam = 22,
 }
 
 impl PadKind {
@@ -39,13 +54,86 @@ impl PadKind {
             1 => PadKind::Xbox360,
             2 => PadKind::XboxOne,
             3 => PadKind::XboxElite2,
+            10 => PadKind::DualSense,
+            11 => PadKind::DualSenseEdge,
+            12 => PadKind::DualShock4,
+            13 => PadKind::SteamDeck,
+            14 => PadKind::SteamController,
+            15 => PadKind::SteamController2,
+            16 => PadKind::SwitchPro,
+            17 => PadKind::JoyConLeft,
+            18 => PadKind::JoyConRight,
+            19 => PadKind::EightBitDoUltimate2,
+            20 => PadKind::EightBitDoPro2,
+            21 => PadKind::EightBitDoPro3,
+            22 => PadKind::HoripadSteam,
+            _ => return None,
+        })
+    }
+
+    /// The uinput identity of a uinput kind.
+    fn uinput(self) -> Option<PadIdentity> {
+        PadIdentity::of(self)
+    }
+
+    /// The uhid identity of a uhid kind at `index`, as the backend itself builds it.
+    fn uhid(self, index: u8) -> Option<Identity> {
+        use crate::eightbitdo_proto::Model;
+        use crate::steam_proto::SteamModel;
+        Some(match self {
+            PadKind::DualSense => {
+                crate::dualsense::identity(index, &crate::dualsense::DsUhidIdentity::dualsense())
+            }
+            PadKind::DualSenseEdge => crate::dualsense::identity(
+                index,
+                &crate::dualsense::DsUhidIdentity::dualsense_edge(),
+            ),
+            PadKind::DualShock4 => crate::dualshock4::identity(index),
+            PadKind::SteamDeck => crate::steam_controller::identity(index, SteamModel::Deck),
+            PadKind::SteamController => {
+                crate::steam_controller::identity(index, SteamModel::Controller)
+            }
+            PadKind::SteamController2 => crate::steam_controller2::identity(index),
+            PadKind::SwitchPro => crate::switch_pro::identity(index, None),
+            PadKind::JoyConLeft => {
+                crate::switch_pro::identity(index, Some(crate::switch_proto::Half::Left))
+            }
+            PadKind::JoyConRight => {
+                crate::switch_pro::identity(index, Some(crate::switch_proto::Half::Right))
+            }
+            PadKind::EightBitDoUltimate2 => crate::eightbitdo::identity(Model::Ultimate2, index),
+            PadKind::EightBitDoPro2 => crate::eightbitdo::identity(Model::Pro2, index),
+            PadKind::EightBitDoPro3 => crate::eightbitdo::identity(Model::Pro3, index),
+            PadKind::HoripadSteam => crate::hori_steam::identity(index),
             _ => return None,
         })
     }
 
     pub fn label(self) -> &'static str {
-        PadIdentity::of(self).log()
+        match self {
+            PadKind::Xbox360 | PadKind::XboxOne | PadKind::XboxElite2 => {
+                PadIdentity::of(self).map_or("Xbox pad", |id| id.log())
+            }
+            PadKind::DualSense => "DualSense",
+            PadKind::DualSenseEdge => "DualSense Edge",
+            PadKind::DualShock4 => "DualShock 4",
+            PadKind::SteamDeck => "Steam Deck",
+            PadKind::SteamController => "Steam Controller",
+            PadKind::SteamController2 => "Steam Controller 2",
+            PadKind::SwitchPro => "Switch Pro",
+            PadKind::JoyConLeft => "Joy-Con (L)",
+            PadKind::JoyConRight => "Joy-Con (R)",
+            PadKind::EightBitDoUltimate2 => "8BitDo Ultimate 2",
+            PadKind::EightBitDoPro2 => "8BitDo Pro 2",
+            PadKind::EightBitDoPro3 => "8BitDo Pro 3",
+            PadKind::HoripadSteam => "HORIPAD Steam",
+        }
     }
+}
+
+/// The marker on a seat's pad: `punktfunk-seat:<account>/<rest>`, what the udev fence reads.
+pub fn seat_phys(account: &str, rest: &str) -> String {
+    format!("punktfunk-seat:{account}/{rest}")
 }
 
 const MAGIC: [u8; 4] = *b"PFPD";
@@ -191,14 +279,31 @@ pub fn reply(stream: &UnixStream, status: Status, relay: Option<BorrowedFd<'_>>)
 
 /// A pad the supervisor built for a seat, ready to [`relay`].
 pub struct BrokeredPad {
-    dev: UinputDevice,
+    dev: Brokered,
+}
+
+enum Brokered {
+    Uinput(UinputDevice),
+    Uhid(UhidDevice),
 }
 
 /// Build `kind` as the supervisor, stamped as `account`'s pad `index`. The udev fence reads
 /// the stamp (`packaging/linux/65-punktfunk-seats.rules`).
 pub fn build(kind: PadKind, index: u8, account: &str) -> Result<BrokeredPad> {
-    let phys = format!("punktfunk-seat:{account}/{index}");
-    let dev = build_pad(PadIdentity::of(kind), Some(&phys))?;
+    let dev = if let Some(identity) = kind.uinput() {
+        Brokered::Uinput(build_pad(
+            identity,
+            Some(&seat_phys(account, &index.to_string())),
+        )?)
+    } else {
+        let mut id = kind
+            .uhid(index)
+            .ok_or_else(|| anyhow!("no table for the {} pad", kind.label()))?;
+        // The backend's own `punktfunk/<tag>/<index>`, under the seat's name.
+        let own = id.phys.trim_start_matches("punktfunk/").to_owned();
+        id.phys = seat_phys(account, &own);
+        Brokered::Uhid(UhidDevice::open(&id.as_create2())?)
+    };
     Ok(BrokeredPad { dev })
 }
 
@@ -214,10 +319,17 @@ pub fn relay_pair() -> Result<(UnixDatagram, OwnedFd)> {
     Ok((UnixDatagram::from(ours), theirs))
 }
 
-/// Move frames from `seat` into the pad and its FF plane back, until the seat hangs up. Blocks:
-/// one thread per relayed pad. A seat that stops reading its notices loses them, never the pad.
+/// Move the seat's events into the pad and the pad's back, until the seat hangs up. Blocks:
+/// one thread per relayed pad. A seat that stops reading loses what it missed, never the pad.
 pub fn relay(pad: BrokeredPad, seat: UnixDatagram) {
-    let mut dev = pad.dev;
+    match pad.dev {
+        Brokered::Uinput(dev) => relay_uinput(dev, seat),
+        Brokered::Uhid(dev) => dev.relay(seat),
+    }
+}
+
+/// Frames from `seat` to the kernel whole; the FF plane back as [`FfNotice`]s.
+fn relay_uinput(mut dev: UinputDevice, seat: UnixDatagram) {
     let _ = seat.set_nonblocking(true);
     let mut frame = vec![0u8; INPUT_EVENT_LEN * 64];
     loop {
@@ -274,6 +386,29 @@ mod tests {
         assert_eq!(Request::decode(&wrong_version), None);
         assert_eq!(Request::decode(b"PFPD\x01\x01\x01"), None, "short");
         assert_eq!(Request::decode(b"nope\x01\x01\x01\x00"), None);
+    }
+
+    /// Every kind round-trips the wire and has one table, uinput or uhid, never both.
+    #[test]
+    fn every_kind_has_exactly_one_table() {
+        for value in 0..=255u8 {
+            let Some(kind) = PadKind::from_wire(value) else {
+                continue;
+            };
+            assert_eq!(kind as u8, value);
+            assert_ne!(
+                kind.uinput().is_some(),
+                kind.uhid(0).is_some(),
+                "{}",
+                kind.label()
+            );
+        }
+        let ds = PadKind::DualSense.uhid(2).unwrap();
+        assert_eq!(ds.phys, "punktfunk/dualsense/2");
+        assert_eq!(
+            seat_phys("pf-seat-1", ds.phys.trim_start_matches("punktfunk/")),
+            "punktfunk-seat:pf-seat-1/dualsense/2"
+        );
     }
 
     /// The answer carries the relay's seat end, and what the supervisor sends on its end

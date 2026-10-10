@@ -135,13 +135,7 @@ fn degrade_if_no_uhid(chosen: GamepadPref) -> GamepadPref {
         chosen,
         GamepadPref::SteamController2 | GamepadPref::SteamController2Puck
     ) && crate::inject::switch2_usbip::available();
-    if needs_uhid
-        && !sc2_on_usbip
-        && std::fs::OpenOptions::new()
-            .write(true)
-            .open("/dev/uhid")
-            .is_err()
-    {
+    if needs_uhid && !sc2_on_usbip && !uhid_reachable() {
         tracing::warn!(
             wanted = chosen.as_str(),
             "/dev/uhid not writable — falling back to the X-Box 360 pad"
@@ -149,6 +143,19 @@ fn degrade_if_no_uhid(chosen: GamepadPref) -> GamepadPref {
         return GamepadPref::Xbox360;
     }
     chosen
+}
+
+/// Can this host make a uhid pad? A seat asks the supervisor's broker, so its socket is what
+/// counts there; the box's own host opens `/dev/uhid` (and drops it: nothing is created).
+#[cfg(target_os = "linux")]
+fn uhid_reachable() -> bool {
+    if pf_paths::seat::is_seat_host() {
+        return std::path::Path::new(pf_paths::seat::PADS_SOCKET).exists();
+    }
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open("/dev/uhid")
+        .is_ok()
 }
 
 #[cfg(not(target_os = "linux"))]
