@@ -27,7 +27,7 @@ path = "src/bin/punktfunk-console.rs"
 [target.'cfg(windows)'.dependencies]
 # The protocol core, linked directly (no C ABI) — same as the GTK Linux client. NativeClient
 # is Sync (mutexed plane receivers), so it drops into a UI app cleanly.
-punktfunk-core = { path = "../../crates/punktfunk-core", features = ["quic"] }
+punktfunk-core = { path = "../../crates/core/punktfunk-core", features = ["quic"] }
 # The shared client service layer: the trust/settings stores (ONE `Settings` struct for the
 # shell and the spawned session binary — src/trust.rs re-exports it) and the game-library
 # data model (fetch + art pipeline) behind the library page.
@@ -41,7 +41,7 @@ punktfunk-core = { path = "../../crates/punktfunk-core", features = ["quic"] }
 # and cargo's feature unification turns it back on for the shared pf-client-core whenever that
 # binary is in the same build (x64). On the ARM64 leg both are built --no-default-features, so
 # nothing enables it and the C++ is never compiled.
-pf-client-core = { path = "../../crates/pf-client-core", default-features = false, features = ["desktop"] }
+pf-client-core = { path = "../../crates/client/pf-client-core", default-features = false, features = ["desktop"] }
 
 # WinUI 3 UI via windows-reactor (a declarative React-like framework backed by WinUI). The
 # windows-rs rev is the workspace entry's (root Cargo.toml). `wasapi` (via pf-client-core) still

@@ -10,7 +10,7 @@
 // registration, the CLI verbs including the parity gate — comes from `defineLibraryPlugin`. That is
 // what makes six repos cost nothing in duplication.
 //
-// Ported from crates/punktfunk-host/src/library/lutris.rs, with two deliberate changes:
+// Ported from crates/host/punktfunk-host/src/library/lutris.rs, with two deliberate changes:
 //   * art is emitted as `file://` URLs instead of inlined `data:` URLs. The host proxies the bytes,
 //     so the reconcile payload stays tiny — inlining covers is what blew the host's 2 MB body limit
 //     at 49 titles during the playnite work, and it is exactly why the POSIX art path exists (G4).

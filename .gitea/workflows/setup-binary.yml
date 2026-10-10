@@ -17,17 +17,17 @@ on:
     branches: [main]
     tags: ['v*']
     paths:
-      - crates/punktfunk-setup/**
-      - crates/pf-host-config/**
-      - crates/pf-paths/**
+      - crates/install/punktfunk-setup/**
+      - crates/host/pf-host-config/**
+      - crates/host/pf-paths/**
       - data/platforms.json
       - Cargo.lock
       - .gitea/workflows/setup-binary.yml
   pull_request:
     paths:
-      - crates/punktfunk-setup/**
-      - crates/pf-host-config/**
-      - crates/pf-paths/**
+      - crates/install/punktfunk-setup/**
+      - crates/host/pf-host-config/**
+      - crates/host/pf-paths/**
       - data/platforms.json
       - Cargo.lock
       - .gitea/workflows/setup-binary.yml

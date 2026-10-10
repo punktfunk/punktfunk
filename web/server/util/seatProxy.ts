@@ -52,7 +52,7 @@ export const GATED_ROUTES = [
 
 /**
  * First segments a seat's host never relays: `proxy_refuses` in
- * `crates/punktfunk-host/src/mgmt/profiles.rs`. A gated route under one needs no `GATES` entry.
+ * `crates/host/punktfunk-host/src/mgmt/profiles.rs`. A gated route under one needs no `GATES` entry.
  */
 export const HOST_REFUSED: readonly string[] = [
 	"native",

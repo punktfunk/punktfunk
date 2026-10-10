@@ -23,9 +23,9 @@ on:
     paths:
       - scripts/install.sh
       - data/platforms.json
-      - crates/punktfunk-setup/**
-      - crates/pf-host-config/**
-      - crates/pf-paths/**
+      - crates/install/punktfunk-setup/**
+      - crates/host/pf-host-config/**
+      - crates/host/pf-paths/**
       - ci/omarchy/**
       - packaging/linux/omarchy/punktfunk-omarchy
       - packaging/linux/omarchy/selftest.sh
@@ -34,9 +34,9 @@ on:
     paths:
       - scripts/install.sh
       - data/platforms.json
-      - crates/punktfunk-setup/**
-      - crates/pf-host-config/**
-      - crates/pf-paths/**
+      - crates/install/punktfunk-setup/**
+      - crates/host/pf-host-config/**
+      - crates/host/pf-paths/**
       - ci/omarchy/**
       - packaging/linux/omarchy/punktfunk-omarchy
       - packaging/linux/omarchy/selftest.sh

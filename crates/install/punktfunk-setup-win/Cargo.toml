@@ -1,0 +1,85 @@
+# The Windows installer wizard (design/installer-v2-windows.md D2): the punktfunk-setup
+# engine behind a WinUI 3 (windows-reactor) step frame, shipped self-contained as a single
+# extract-and-run exe. Grown from the S1 spike; the S2 overlay/pack modules land with WP3.1.
+[package]
+name = "punktfunk-setup-win"
+description = "Windows installer wizard: the punktfunk-setup engine behind a WinUI 3 step frame"
+version.workspace = true
+edition.workspace = true
+# Not workspace-inherited (1.85): windows-reactor at the pinned rev declares rust-version
+# 1.95+. rust-toolchain.toml pins 1.96, so this records reality — same note as clients/windows.
+rust-version = "1.96"
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+publish = false
+
+# NOT `punktfunk-setup`: the Linux engine crate already builds a binary of that name, and two
+# same-named bins collide in one workspace target dir on the Windows lanes. The pack step
+# (WP3.1) names the shipped artifact (`punktfunk-host-setup-<ver>.exe`) anyway.
+[[bin]]
+name = "punktfunk-setup-win"
+path = "src/main.rs"
+
+# The client artifact's twin (M4): the same source, but build.rs gives only the host bin the
+# requireAdministrator manifest — the client installs per user and never elevates (D1/D2).
+[[bin]]
+name = "punktfunk-setup-client"
+path = "src/main.rs"
+
+# The console-subsystem packer: PowerShell's `&` neither waits for nor captures a GUI exe
+# (S2), so every tool verb lives in a sibling bin.
+[[bin]]
+name = "punktfunk-setup-pack"
+path = "src/bin/pack.rs"
+
+[dependencies]
+punktfunk-setup = { path = "../punktfunk-setup" }
+# The extract root's ancestors under `%ProgramData%` are re-owned and locked the way the host
+# locks its config dir; a planted parent otherwise keeps FILE_DELETE_CHILD over the root.
+pf-paths = { path = "../../host/pf-paths" }
+# The same admin-only-source check the host runs, for the extract root's ancestors.
+pf-paths-win = { path = "../../host/pf-paths-win" }
+# The D3 sandwich (WP3.1): tar + xz (liblzma, built statically — S2 chose xz over zstd by
+# 60 MB on the installed tree) + the footer sha. Cross-platform so the pack step and its
+# tests run on every lane; the Linux musl engine keeps its own tiny dep set (D4).
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.11"
+tar = "0.4"
+tempfile = "3"
+xz2 = { version = "0.1", features = ["static"] }
+
+# The windows-rs rev is the workspace entry's, shared with clients/windows.
+[target.'cfg(windows)'.dependencies]
+windows-reactor = { workspace = true }
+windows = { workspace = true, features = [
+    # `UISettings.AnimationsEnabled` — the D9 slide honours the system animation switch.
+    "UI_ViewManagement",
+    # Done's Copy button: the password onto the clipboard.
+    "ApplicationModel_DataTransfer",
+    # The admin-only extract dir (WP3.1): an SDDL-built descriptor handed to CreateDirectoryW,
+    # so the dir passes the host's `ensure_admin_only_source` by construction.
+    "fileapi",
+    "sddl",
+    "winbase",
+    # The bootstrap asks its own token whether it is elevated: the host extracts into the
+    # admin-only ProgramData dir, the per-user client into LOCALAPPDATA.
+    "handleapi",
+    "processthreadsapi",
+    "securitybaseapi",
+] }
+
+[target.'cfg(windows)'.build-dependencies]
+windows-reactor-setup = { workspace = true }
+# The branded icon (the client's build.rs pattern) — Apps & features and the taskbar show it.
+winresource = "0.1"
+
+# The headless harness the flow tests drive the whole wizard through — same pair as
+# clients/windows' reactor_semantics suite.
+[target.'cfg(windows)'.dev-dependencies]
+windows-reactor = { workspace = true, features = ["test"] }
+test_reactor = { workspace = true }
+
+[lints]
+workspace = true

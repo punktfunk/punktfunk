@@ -18,7 +18,7 @@
 #      the page owning its feature) or the baseline below raised in the same commit, making
 #      "undocumented" a decision instead of an accident. Shrink the gap? Lower the baseline.
 #   4. Every command the host-cli.md tables list must still exist as a string literal in
-#      crates/punktfunk-host (same "docs describing removed things" class as gate 2).
+#      crates/host/punktfunk-host (same "docs describing removed things" class as gate 2).
 #   5. data/platforms.json (the single source for install/port facts that docs, the website
 #      download page and the guided installer consume) must parse, and docs-site/src/data/
 #      platforms.json — the snapshot the <Install/> and <Ports/> MDX components render from
@@ -97,8 +97,8 @@ fi
 grep -E '^\|' 'docs-site/content/docs/(reference)/host-cli.md' | awk -F'|' '{print $2}' \
     | grep -oE '`[a-z0-9-]+`|`--[a-z-]+`' | tr -d '`' | sort -u > "$tmp/cli-cmds"
 while IFS= read -r cmd; do
-    if ! git grep -qF "\"$cmd\"" -- crates/punktfunk-host; then
-        echo "::error::host-cli.md documents \`$cmd\` but crates/punktfunk-host has no \"$cmd\" literal — removed or renamed; fix the docs page"
+    if ! git grep -qF "\"$cmd\"" -- crates/host/punktfunk-host; then
+        echo "::error::host-cli.md documents \`$cmd\` but crates/host/punktfunk-host has no \"$cmd\" literal — removed or renamed; fix the docs page"
         fail=1
     fi
 done < "$tmp/cli-cmds"
@@ -127,7 +127,7 @@ fi
 #
 # The install lines moved with the behaviour. The binary embeds data/platforms.json and generates
 # its commands from it, so they are verbatim by construction rather than by a substring check —
-# crates/punktfunk-setup/tests/plan_goldens.rs asserts it, and the detection and channel matrices
+# crates/install/punktfunk-setup/tests/plan_goldens.rs asserts it, and the detection and channel matrices
 # that used to live below are now scripts/ci/check-installer-behavior.sh, run in the rust lane
 # where a binary can be built.
 if ! sh -n scripts/install.sh; then

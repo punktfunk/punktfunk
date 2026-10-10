@@ -1,5 +1,5 @@
 // Profiles on a box: what `GET /api/v1/profiles/enumerate` lists, when a connect shows the picker,
-// and which id its hello carries. A port of `crates/pf-client-core/src/profiles.rs`; both run
+// and which id its hello carries. A port of `crates/client/pf-client-core/src/profiles.rs`; both run
 // `clients/shared/profile-picker-vectors.json`, so `pickerDecision` cannot drift from the rule
 // the other clients follow. The saved pick is `StoredHost.pickedProfile`: shown on the card,
 // never applied unseen.

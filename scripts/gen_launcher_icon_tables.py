@@ -6,7 +6,7 @@ wrong logo, so these files are generated outright, with their commentary baked i
 
     web/src/components/launcher-icon.tsx           web console, inline SVG
     clients/android/.../components/LauncherIcons.kt Android, Compose ImageVector via PathParser
-    crates/pf-console-ui/src/launcher_icons.rs      in-session console UI, Skia Path::from_svg
+    crates/client/pf-console-ui/src/launcher_icons.rs      in-session console UI, Skia Path::from_svg
 
 The baked derivatives (GTK / Windows / Apple) come from gen-launcher-icons.sh, which calls this.
 
@@ -134,7 +134,7 @@ rows = "\n".join(
     f'    ("{t}", {w:g}.0, {h:g}.0, "{d}"),' for t, d, w, h in MARKS
 )
 write(
-    "crates/pf-console-ui/src/launcher_icons.rs",
+    "crates/client/pf-console-ui/src/launcher_icons.rs",
     f"""{comment(BANNER, "//!")}
 //!
 //! Brand mark a `role: "launcher"` tile draws, resolved from the entry's

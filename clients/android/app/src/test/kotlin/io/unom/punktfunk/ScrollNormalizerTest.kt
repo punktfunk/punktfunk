@@ -117,7 +117,7 @@ class ScrollNormalizerTest {
     /** Every sequence Rust's `ScrollAccumulator` wrote; `../../../` from the module is the root. */
     @Test
     fun matchesTheRustVectors() {
-        val file = File("../../../crates/punktfunk-core/testdata/scroll-vectors.json")
+        val file = File("../../../crates/core/punktfunk-core/testdata/scroll-vectors.json")
         assertTrue("the vector file must be reachable at ${file.absolutePath}", file.isFile)
         val cases = JSONObject(file.readText()).getJSONArray("cases")
         assertTrue("the vector file has cases", cases.length() > 0)

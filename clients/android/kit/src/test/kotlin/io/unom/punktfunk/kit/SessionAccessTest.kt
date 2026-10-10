@@ -7,7 +7,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * Pure JVM test of [SessionAccess] against `crates/punktfunk-core/testdata/grant-vectors.json`,
+ * Pure JVM test of [SessionAccess] against `crates/core/punktfunk-core/testdata/grant-vectors.json`,
  * which core writes: the bit values are the wire, and the preset label is derived from the mask
  * by the rule every client shares. Run: `./gradlew :kit:testDebugUnitTest`.
  */
@@ -15,7 +15,7 @@ class SessionAccessTest {
 
     private val vectors: JSONObject by lazy {
         // Gradle runs unit tests with the module dir as cwd; `../../../` is the repo root.
-        val file = File("../../../crates/punktfunk-core/testdata/grant-vectors.json")
+        val file = File("../../../crates/core/punktfunk-core/testdata/grant-vectors.json")
         assertTrue("the vector file must be reachable at ${file.absolutePath}", file.isFile)
         JSONObject(file.readText())
     }

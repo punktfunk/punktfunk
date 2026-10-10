@@ -59,7 +59,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 
 /**
- * The Skia console (`crates/pf-console-ui`, drawn by native over EGL — design
+ * The Skia console (`crates/client/pf-console-ui`, drawn by native over EGL — design
  * `android-skia-console-port.md`) as this app holds it: ONE instance for the process, created
  * lazily and never torn down while the app lives, so the console's screen stack survives a trip
  * through the stream exactly as the desktop's does (the shelf is where you left it when the game

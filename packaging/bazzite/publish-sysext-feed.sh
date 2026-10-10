@@ -74,7 +74,7 @@ read_manifest() {
 # them happily and merges the result over /usr. punktfunk-sysext(8) refuses a manifest whose FEED is
 # not the feed it fetched and one whose SERIAL is below the highest it has accepted, which is the
 # same channel-binding + monotonic-serial pair the Rust updater enforces on its own manifest
-# (crates/pf-update-check/src/manifest.rs). Comment lines, so a `#`-skipping checksum reader and the
+# (crates/core/pf-update-check/src/manifest.rs). Comment lines, so a `#`-skipping checksum reader and the
 # clients' image-line parsers are both unaffected by them.
 bind_manifest() {
   local serial prev

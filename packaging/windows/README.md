@@ -3,7 +3,7 @@
 A one-file, signed `setup.exe` for the punktfunk streaming **host** on Windows, published to Gitea's
 generic package registry (`punktfunk-host-windows`) by `.gitea/workflows/windows-host.yml`.
 
-> The installer is the `crates/punktfunk-setup-win` engine exe, packed by
+> The installer is the `crates/install/punktfunk-setup-win` engine exe, packed by
 > `pack-host-installer.ps1`. Inno Setup is gone; the silent flags, the ARP key and
 > `unins000.exe` it froze are kept, so a fielded Inno install upgrades onto it unchanged.
 
@@ -13,7 +13,7 @@ generic package registry (`punktfunk-host-windows`) by `.gitea/workflows/windows
 ## Windows 11 22H2+ only (no Windows 10)
 
 The installer refuses anything below **Windows 11 22H2 (build 22621)** — `MIN_HOST_BUILD` in
-`crates/punktfunk-setup/src/platform/windows/plan.rs`, checked before the plan touches the box.
+`crates/install/punktfunk-setup/src/platform/windows/plan.rs`, checked before the plan touches the box.
 The floor comes from the
 **pf-vdisplay** driver: it is built against the **IddCx 1.10** class extension (the HDR `*2` DDIs +
 the FP16 adapter cap, linked via the 1.10 `IddCxStub`, no runtime `IddCxGetVersion` downgrade), and
@@ -188,7 +188,7 @@ $dll = Get-ChildItem C:\Windows\System32\DriverStore\FileRepository\pf_vdisplay*
 ```
 
 Why stable matters here. The installer trusts the `.cer` that ships in the bundle
-(`certutil -addstore -f Root` + `TrustedPublisher`, `crates/punktfunk-host/src/windows/install.rs`),
+(`certutil -addstore -f Root` + `TrustedPublisher`, `crates/host/punktfunk-host/src/windows/install.rs`),
 which is unavoidable for a self-signed cert — a self-signed leaf is its own root, so the chain only
 validates if the root is present. That means the signature does **not** authenticate the download:
 anyone who can alter the bundle can put their own cert next to their own driver. What a stable cert

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Emit the inline OS-mark registries from the assets/os-icons masters.
 
-    crates/pf-console-ui/src/os_marks.rs                in-session console UI, Skia Path::from_svg
+    crates/client/pf-console-ui/src/os_marks.rs                in-session console UI, Skia Path::from_svg
     web/src/components/os-icon.tsx                      web console, inline SVG
     clients/decky/src/os-icon.tsx                       Decky plugin, inline SVG
     clients/android/.../components/OsIcons.kt           Android, Compose ImageVector via PathParser
@@ -105,7 +105,7 @@ mod tests {{
 }}
 """
 
-path = write("crates/pf-console-ui/src/os_marks.rs", body)
+path = write("crates/client/pf-console-ui/src/os_marks.rs", body)
 
 # CI fmt-gates the whole tree, so a generator that emits anything rustfmt would rewrite leaves
 # every regeneration one dirty file away from a blocked commit. Formatting the output here is

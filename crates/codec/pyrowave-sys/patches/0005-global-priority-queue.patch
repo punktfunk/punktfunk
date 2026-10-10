@@ -1,0 +1,166 @@
+Elevated global-priority encode queue — PUNKTFUNK LOCAL PATCH.
+
+Not upstream. PyroWave's wavelet encode runs on the GPU's compute/shader cores, so a GPU-bound
+game starves it: `pyrowave_encoder_encode_gpu_synchronous` spikes from ~2 ms to ~15 ms under a
+95%+ game load and the stream framerate collapses (NVENC is immune — it uses the separate encoder
+ASIC). A WDDM *process* scheduling-priority raise does not help (it orders packet submission, not
+hardware preemption). This requests a global-priority Vulkan *queue* — the actual NVIDIA compute-
+preemption lever — on the pyrowave encode device.
+
+`Context::create_device` (the pyrowave path uses plain vkCreateDevice, not the vpCreateDevice
+profile path): enable VK_KHR_global_priority (or the EXT alias), chain a
+VkDeviceQueueGlobalPriorityCreateInfoKHR into every queue-create-info, and a create loop that tries
+`PYROWAVE_QUEUE_PRIORITY` (off|high|realtime, default realtime) → HIGH → no-priority, downgrading on
+VK_ERROR_NOT_PERMITTED_KHR so a refused class NEVER regresses the encoder. Gated on !inherit_info
+(only the fresh encoder device). This Granite copy is vendored solely for the PyroWave codec.
+
+UPSTREAM STATUS (pyrowave c0b997f8 / Granite 1b2d1801, "Add support for realtime compute queues").
+Upstream now offers pyrowave_create_device_by_compat2(.., global_priority, ..), which sets
+CONTEXT_CREATION_ENABLE_COMPUTE_{REALTIME,HIGH}_GLOBAL_PRIORITY_BIT. It is NOT a drop-in for this patch:
+it only elevates when the instance and device are Vulkan 1.4 (it reads globalPriorityQuery), it
+requests the class for the compute queue family only, it aliases the transfer queue onto the compute
+queue and it switches the encode to the async compute queue. The default entry, by_compat, passes
+MEDIUM, so dropping this patch would silently demote the Windows encoder from the realtime
+default. This block therefore stays, and stands down when the caller used the upstream flags.
+It also downgrades on VK_ERROR_INITIALIZATION_FAILED (a class the driver does not list), as
+upstream's own ladder does. Retire it when the Windows backend calls compat2 and the queue switch
+has been measured on-glass.
+
+NOTE: on an RTX 4090 / Windows / WDDM this did not reduce the spikes (the graphics-vs-compute
+preemption granularity is the wall) — kept because it is correct, harmless (graceful fallback), and
+may help other GPUs/drivers. Reduce the encode's GPU cost (4:2:0/8-bit) or use H.265 for a
+GPU-saturated game. **That measurement is Windows/WDDM and does NOT transfer to Linux** — a
+different driver stack with a different preemption model.
+
+MEASURED ON LINUX/NVIDIA 2026-08-08, and it comes out the OTHER WAY: the elevated queue DOES cut
+the tail. RTX 5070 Ti (driver 610.57.04), GRID 2 benchmark loop saturating the GPU at 54-87 %,
+PyroWave 1080p, same binary in both arms (the only difference is CAP_SYS_NICE, i.e. whether the
+class is granted at all), steady-state windows of 30 frames:
+
+  arm                       p50        p99        worst frame
+  default priority (refused) ~2.6 ms   ~6.4 ms    9.5 ms
+  REALTIME granted           ~3.2 ms   ~4.4 ms    5.4 ms      (repeat: p50 ~3.35, p99 ~4.8)
+
+So on this stack the priority class buys a materially tighter TAIL — p99 down ~30 %, worst frame
+roughly halved — at the cost of ~0.6 ms on the median. For a streaming encoder that is the right
+side of the trade: the tail is what shows up as a visible hitch. Do NOT delete this patch on the
+strength of the RTX 4090/WDDM result above; the two stacks disagree.
+
+Caveats, so the number is not over-read: the arms were not interleaved and the background game
+load drifted between them, capture was frame-starved (~2.5 fps) so this measures encode latency
+under contention rather than a full-rate stream, and it is two granted runs against one refused
+run. The direction was consistent across all 25 measurement windows.
+
+NOTE 2 — WHERE THIS PATCH IS ACTUALLY LIVE. It is gated `if (!inherit_info)`, and only the WINDOWS
+path leaves `inherit_info` null: `crates/host/pf-encode/src/enc/windows/pyrowave.rs` calls
+`pyrowave_create_device_by_compat`, so Granite builds the device itself and this block runs.
+**On LINUX it has never done anything.** `crates/host/pf-encode/src/enc/linux/pyrowave.rs::open_inner`
+passes its own instance/device create-infos into `pyrowave_device_create_info`, Granite's
+`MyDeviceFactory::get_existing_create_info()` returns them, `create_device` takes the inherit
+branch, and the whole block above is skipped. The Linux request is therefore wired natively in
+**`crates/host/pf-encode/src/enc/linux/pyrowave.rs`** (search `queue_priority_candidates`), which
+implements the SAME env grammar and the SAME downgrade ladder so one knob means one thing on both
+platforms. If you change the grammar here, change it there in the same commit.
+
+diff --git a/crates/codec/pyrowave-sys/vendor/pyrowave/Granite/vulkan/context.cpp b/crates/codec/pyrowave-sys/vendor/pyrowave/Granite/vulkan/context.cpp
+index 1e81032..9bccdde 100644
+--- a/crates/codec/pyrowave-sys/vendor/pyrowave/Granite/vulkan/context.cpp
++++ b/crates/codec/pyrowave-sys/vendor/pyrowave/Granite/vulkan/context.cpp
+@@ -2248,6 +2248,53 @@ bool Context::create_device(VkPhysicalDevice gpu_, VkSurfaceKHR surface,
+ 		vpGetProfileProperties(profile.profile, &props);
+ #endif
+ 
++	// PUNKTFUNK PATCH (patches/0005-global-priority-queue.patch, NOT upstream): request a high
++	// global-priority queue so PyroWave's compute-shader encode can PREEMPT a GPU-bound game on
++	// the shared shader cores. A WDDM process-priority raise does not help (it only orders packet
++	// submission, not hardware preemption); a global-priority queue is the actual NVIDIA compute-
++	// preemption lever. `PYROWAVE_QUEUE_PRIORITY` = off | high | realtime (default realtime). The
++	// device-create loop below downgrades on NOT_PERMITTED, so a refused class NEVER fails the
++	// encoder — it just runs at default priority. Only the fresh encoder device (no inherit_info)
++	// is affected; this Granite copy is vendored solely for the PyroWave codec.
++	// Skipped when the caller asked for a class through upstream's own
++	// CONTEXT_CREATION_ENABLE_COMPUTE_*_GLOBAL_PRIORITY_BIT flags (pyrowave_create_device_by_compat2).
++	Util::SmallVector<VkQueueGlobalPriorityKHR> pf_priority_candidates;
++	Util::SmallVector<VkDeviceQueueGlobalPriorityCreateInfoKHR> pf_global_priority_infos;
++	if (!inherit_info && (flags & CONTEXT_CREATION_ENABLE_COMPUTE_HIGH_GLOBAL_PRIORITY_BIT) == 0)
++	{
++		const char *pf_gp_ext = nullptr;
++		if (has_extension(VK_KHR_GLOBAL_PRIORITY_EXTENSION_NAME))
++			pf_gp_ext = VK_KHR_GLOBAL_PRIORITY_EXTENSION_NAME;
++		else if (has_extension(VK_EXT_GLOBAL_PRIORITY_EXTENSION_NAME))
++			pf_gp_ext = VK_EXT_GLOBAL_PRIORITY_EXTENSION_NAME;
++		std::string pf_prio;
++		if (!Util::get_environment("PYROWAVE_QUEUE_PRIORITY", pf_prio))
++			pf_prio = "realtime";
++		for (auto &pf_ch : pf_prio)
++			if (pf_ch >= 'A' && pf_ch <= 'Z')
++				pf_ch = char(pf_ch + 32);
++		if (pf_gp_ext && pf_prio != "off")
++		{
++			if (pf_prio == "high")
++			{
++				pf_priority_candidates.push_back(VK_QUEUE_GLOBAL_PRIORITY_HIGH_KHR);
++			}
++			else
++			{
++				pf_priority_candidates.push_back(VK_QUEUE_GLOBAL_PRIORITY_REALTIME_KHR);
++				pf_priority_candidates.push_back(VK_QUEUE_GLOBAL_PRIORITY_HIGH_KHR);
++			}
++			enabled_extensions.push_back(pf_gp_ext);
++			pf_global_priority_infos.resize(queue_infos.size());
++			for (size_t pf_i = 0; pf_i < queue_infos.size(); pf_i++)
++			{
++				pf_global_priority_infos[pf_i] = { VK_STRUCTURE_TYPE_DEVICE_QUEUE_GLOBAL_PRIORITY_CREATE_INFO_KHR };
++				pf_global_priority_infos[pf_i].globalPriority = pf_priority_candidates.front();
++				queue_infos[pf_i].pNext = &pf_global_priority_infos[pf_i];
++			}
++		}
++	}
++
+ 	if (inherit_info)
+ 	{
+ 		device_info.enabledExtensionCount = inherit_info->enabledExtensionCount;
+@@ -2297,7 +2344,42 @@ bool Context::create_device(VkPhysicalDevice gpu_, VkSurfaceKHR surface,
+ 		}
+ 		else
+ 		{
+-			VkResult vr = vkCreateDevice(gpu, &device_info, nullptr, &device);
++			// PUNKTFUNK: try the requested global-priority class, downgrade through the
++			// candidate list when the driver refuses it, then finally create with none.
++			// Upstream's own ladder below handles only the flag-driven request.
++			VkResult vr;
++			if (pf_priority_candidates.empty())
++			{
++				vr = vkCreateDevice(gpu, &device_info, nullptr, &device);
++			}
++			else
++			{
++				const auto pf_refused = [](VkResult r) {
++					return r == VK_ERROR_NOT_PERMITTED || r == VK_ERROR_INITIALIZATION_FAILED;
++				};
++				vr = VK_ERROR_NOT_PERMITTED;
++				for (size_t pf_a = 0; pf_a < pf_priority_candidates.size(); pf_a++)
++				{
++					for (auto &pf_gp : pf_global_priority_infos)
++						pf_gp.globalPriority = pf_priority_candidates[pf_a];
++					device = VK_NULL_HANDLE;
++					vr = vkCreateDevice(gpu, &device_info, nullptr, &device);
++					if (!pf_refused(vr))
++						break;
++					LOGW("PyroWave: global queue priority %u not permitted; downgrading.\n",
++						unsigned(pf_priority_candidates[pf_a]));
++				}
++				if (pf_refused(vr))
++				{
++					for (auto &pf_qi : queue_infos)
++						pf_qi.pNext = nullptr;
++					device = VK_NULL_HANDLE;
++					vr = vkCreateDevice(gpu, &device_info, nullptr, &device);
++					LOGW("PyroWave: all global queue priorities refused; default priority.\n");
++				}
++				else
++					LOGI("PyroWave: encode device created with an elevated global queue priority.\n");
++			}
+ 
+ 			if ((vr == VK_ERROR_INITIALIZATION_FAILED || vr == VK_ERROR_NOT_PERMITTED) &&
+ 			    global_prio_info.globalPriority == VK_QUEUE_GLOBAL_PRIORITY_REALTIME)

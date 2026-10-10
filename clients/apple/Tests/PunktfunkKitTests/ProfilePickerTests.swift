@@ -1,5 +1,5 @@
 // The profile picker's rule, replayed from `clients/shared/profile-picker-vectors.json` (the
-// vectors `crates/pf-client-core/src/profiles.rs` runs too), plus how a host row decodes.
+// vectors `crates/client/pf-client-core/src/profiles.rs` runs too), plus how a host row decodes.
 
 import XCTest
 @testable import PunktfunkShared

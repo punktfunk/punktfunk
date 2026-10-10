@@ -124,7 +124,7 @@ let
   # Cargo unifies features across every package in a single `cargo build`, so co-building the tray
   # with the host would pull the host's `ashpd → zbus/tokio` onto the tray's SHARED `zbus`. The tray
   # deliberately runs zbus on `ksni`'s `async-io` executor with the `blocking` API and no tokio
-  # runtime (see crates/punktfunk-tray/Cargo.toml), so a tokio-flavoured zbus panics at startup:
+  # runtime (see crates/install/punktfunk-tray/Cargo.toml), so a tokio-flavoured zbus panics at startup:
   # "there is no reactor running, must be called from the context of a Tokio 1.x runtime". A separate
   # invocation keeps the tray's zbus on async-io. (The host package copies this binary into its $out.)
   punktfunk-tray = craneLib.buildPackage (

@@ -30,12 +30,12 @@ echo "==> gen-third-party-notices.py -> $OUT" >&2
 # The root file also names the seat keeper's crates: a separate workspace the host installer ships.
 # No host build fetches them, and the generator reads metadata offline. A version bump leaves
 # the keeper's lockfile naming the old pf-seats and pf-paths.
-cargo fetch --locked --manifest-path crates/pf-seat-keeper/Cargo.toml >&2 || {
-    echo "::error::crates/pf-seat-keeper/Cargo.lock is stale — run: cargo update --manifest-path crates/pf-seat-keeper/Cargo.toml -p pf-seats -p pf-paths" >&2
+cargo fetch --locked --manifest-path crates/host/pf-seat-keeper/Cargo.toml >&2 || {
+    echo "::error::crates/host/pf-seat-keeper/Cargo.lock is stale — run: cargo update --manifest-path crates/host/pf-seat-keeper/Cargo.toml -p pf-seats -p pf-paths" >&2
     exit 1
 }
 python3 scripts/gen-third-party-notices.py --out "$OUT" --manifest Cargo.toml \
-    --manifest crates/pf-seat-keeper/Cargo.toml
+    --manifest crates/host/pf-seat-keeper/Cargo.toml
 echo "==> wrote $OUT" >&2
 
 # Regenerate the per-client in-tree copies. EVERY client has one now, because every client SHOWS

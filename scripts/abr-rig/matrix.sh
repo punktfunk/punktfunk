@@ -50,5 +50,5 @@ cell default-slow 2000000 wave:16 300
 
 echo
 echo "baseline row for the same scenario:"
-head -1 "$HERE/../../crates/punktfunk-core/src/abr/sim/baseline.tsv"
-grep -h "^$PROFILE	" "$HERE/../../crates/punktfunk-core/src/abr/sim/baseline.tsv" | sed 's/^/sim  /'
+head -1 "$HERE/../../crates/core/punktfunk-core/src/abr/sim/baseline.tsv"
+grep -h "^$PROFILE	" "$HERE/../../crates/core/punktfunk-core/src/abr/sim/baseline.tsv" | sed 's/^/sim  /'

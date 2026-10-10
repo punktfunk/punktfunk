@@ -1,5 +1,5 @@
 // Swift wrapper around the punktfunk-core C ABI's post-loss re-anchor gate
-// (`punktfunk_reanchor_gate_*`, ABI v6). The shared Rust gate (crates/punktfunk-core/src/reanchor.rs)
+// (`punktfunk_reanchor_gate_*`, ABI v6). The shared Rust gate (crates/core/punktfunk-core/src/reanchor.rs)
 // is what the Linux/Windows desktop pump and the Android client use directly; the Swift clients reach
 // it across the C ABI so the freeze-until-reanchor policy is defined ONCE for every platform.
 //

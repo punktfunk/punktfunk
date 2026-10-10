@@ -1,6 +1,6 @@
 // The library-provider wire schemas — a browser-safe module (no node imports) so plugin
 // CONTRACTS can share these types with their UIs. Mirrors the host's `ProviderEntryInput`
-// (crates/punktfunk-host library/custom.rs); test/wire-contract.test.ts pins the fields. Identity
+// (crates/host/punktfunk-host library/custom.rs); test/wire-contract.test.ts pins the fields. Identity
 // codecs: plain JSON shapes, so values pass through unencoded.
 import { Schema } from "effect";
 

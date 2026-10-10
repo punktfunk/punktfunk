@@ -263,7 +263,7 @@ final class ScrollCaptureTests: XCTestCase {
     func testMatchesTheRustVectors() throws {
         var url = URL(fileURLWithPath: #filePath)
         for _ in 0..<5 { url.deleteLastPathComponent() }
-        url.appendPathComponent("crates/punktfunk-core/testdata/scroll-vectors.json")
+        url.appendPathComponent("crates/core/punktfunk-core/testdata/scroll-vectors.json")
         let cases = try JSONDecoder().decode(ScrollVectors.self, from: Data(contentsOf: url)).cases
         var replayed = 0
         var wrong: [String] = []

@@ -4,7 +4,7 @@
 //    exact wire semantics of pyrowave_decoder.cpp's push_packet walk + the Phase-4
 //    chunk-aligned framing (4-byte window prefix, FRAG chains, zeroed missing shards).
 //
-// 2. Golden-frame PSNR tests (Metal GPU): host-encoded fixtures (crates/punktfunk-host
+// 2. Golden-frame PSNR tests (Metal GPU): host-encoded fixtures (crates/host/punktfunk-host
 //    encode/linux/pyrowave.rs `pyrowave_dump_golden`, run on a Vulkan box) decoded by the
 //    Metal port and PSNR-matched against upstream's own decoder output. Float wavelet math is
 //    not bit-exact across implementations (upstream ships precision variants), so the gate is

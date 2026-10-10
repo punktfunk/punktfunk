@@ -4,7 +4,7 @@
 One master per controller, front-on, in millimetres. Paint order is document order, and each
 element's class names its part (assets/pads/README.md). Two tables come out of it:
 
-    crates/pf-console-ui/src/pad_art.rs           console input test, Skia
+    crates/client/pf-console-ui/src/pad_art.rs           console input test, Skia
     web/src/sections/Diagnostics/Controllers/padArt.ts        web console Controllers page, inline SVG
 
 Usage: python3 scripts/gen_pad_art.py     (from anywhere; paths are repo-relative)
@@ -22,7 +22,7 @@ import xml.etree.ElementTree as ET
 from svg_marks import ROOT, comment, write
 
 MASTERS = ROOT / "assets" / "pads"
-RUST = "crates/pf-console-ui/src/pad_art.rs"
+RUST = "crates/client/pf-console-ui/src/pad_art.rs"
 TS = "web/src/sections/Diagnostics/Controllers/padArt.ts"
 NS = "{http://www.w3.org/2000/svg}"
 

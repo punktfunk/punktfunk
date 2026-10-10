@@ -3,8 +3,8 @@
 *.pdb
 .DS_Store
 # generated C header is checked in (see include/), build artifacts are not
-/crates/*/target
-/crates/*/vendor/*/target
+/crates/*/*/target
+/crates/*/*/vendor/*/target
 /tools/*/target
 /packaging/windows/pf-vkhdr-layer/target
 node_modules/
@@ -44,8 +44,8 @@ __pycache__/
 .direnv/
 
 # Gradle build output inside the vendored pyrowave Granite Android platform (regenerated, never ours to commit)
-/crates/pyrowave-sys/vendor/pyrowave/Granite/application/platforms/android/**/.gradle/
-/crates/pyrowave-sys/vendor/pyrowave/Granite/application/platforms/android/**/build/
+/crates/codec/pyrowave-sys/vendor/pyrowave/Granite/application/platforms/android/**/.gradle/
+/crates/codec/pyrowave-sys/vendor/pyrowave/Granite/application/platforms/android/**/build/
 
 # Editor state; the VS Code Swift extension regenerates launch.json
 .vscode/

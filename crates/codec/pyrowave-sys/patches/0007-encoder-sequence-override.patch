@@ -1,0 +1,123 @@
+Encoder wire-sequence override — PUNKTFUNK LOCAL PATCH.
+
+Not upstream. Exposes `Encoder::set_next_sequence(uint32_t)` (and a
+`pyrowave_encoder_set_next_sequence` C entry) so the caller can stamp the 3-bit wire sequence
+counter itself instead of relying on the encoder object's private one.
+
+WHY IT EXISTS. PyroWave's `Encoder` structurally cannot hold two frames in flight: `Encoder::Impl`
+owns ONE each of `wavelet_img_high_res`, `bucket_buffer`, `meta_buffer`, `block_stat_buffer`,
+`payload_data` and `quant_buffer`, and `Impl::encode` OPENS by discarding them — an image barrier
+with `VK_IMAGE_LAYOUT_UNDEFINED` as the old layout (a written promise nothing else is reading it)
+plus three `fill_buffer` clears. Two `encode()` calls recorded into two command buffers and
+submitted to the same queue have no execution dependency in Vulkan, so encode N+1's DWT would
+overwrite the bands and zero the RDO buckets while encode N's block packing still reads them.
+
+So overlapping frames means TWO encoder handles on one device, alternated — which is fine for
+every resource above, because each handle gets its own. It is NOT fine for `sequence_count`, which
+also lives on `Impl` and is stamped into every block header (pyrowave_encoder.cpp `packing_push`).
+Two alternating handles each count 1,2,3... independently, so the wire sees 1,1,2,2,3,3...
+
+That is silently fatal on the decode side. `pyrowave_decoder.cpp` computes
+`diff = (hdr.sequence - last_seq) & 0x7` and treats `restart = diff != 0`, so a REPEATED value
+reads as "more blocks of the same frame": `clear()` never runs, `decoded_frame_for_current_sequence`
+stays true, and every second frame is swallowed. The symptom is "it works, just at half rate, with
+occasional mixed-frame blocks" — the kind of failure that passes a smoke test. It would hit every
+client, since pf-client-core and the Apple Metal hand-port parse the same field.
+
+WHAT IT DOES. `set_next_sequence(seq)` stores `(seq - 1) & SequenceCountMask`, because
+`Impl::encode` pre-increments before stamping — the setter's contract is about the next ENCODE, not
+the next store. The Rust side keeps one monotonic counter across both handles and calls this before
+each encode, so the wire sequence increments by exactly 1 mod 8 regardless of which handle produced
+the frame.
+
+INERT WHEN UNUSED. Nothing calls it unless the caller does, so the single-handle paths — including
+the whole Windows backend — behave exactly as before. No `.def` change is needed: the C API is
+built as a static archive (crates/codec/pyrowave-sys/CMakeLists.txt).
+
+Upstream status: not reported. It is a hook for a use case upstream explicitly designed against
+("For low-latency use cases, overlapping frames in encode is meaningless due to latency and the
+encoder is so fast anyway" — pyrowave.h). That reasoning holds at 1080p60 and stops holding at 4K
+or under a GPU-bound game, which is what PW5 measured.
+
+diff --git a/crates/codec/pyrowave-sys/vendor/pyrowave/pyrowave.h b/crates/codec/pyrowave-sys/vendor/pyrowave/pyrowave.h
+index 4bd2975..a30676a 100644
+--- a/crates/codec/pyrowave-sys/vendor/pyrowave/pyrowave.h
++++ b/crates/codec/pyrowave-sys/vendor/pyrowave/pyrowave.h
+@@ -576,6 +576,19 @@ PYROWAVE_PUBLIC_API pyrowave_result
+ pyrowave_encoder_compute_block_active_words(pyrowave_encoder encoder,
+ 		int bands, uint32_t *words, size_t word_count);
+ 
++// PUNKTFUNK LOCAL EXTENSION (patches/0007-encoder-sequence-override.patch), not upstream.
++// The wire sequence counter is 3 bits (PyroWave::SequenceCountMask, pyrowave_common.hpp);
++// exported here so callers mask with the codec's own value instead of a copied literal.
++#define PYROWAVE_SEQUENCE_MASK 0x7u
++
++// Overrides the 3-bit wire sequence counter the NEXT encode will stamp into every block header.
++// The counter lives on the encoder object, so a caller that alternates TWO encoders to overlap
++// frames emits 1,1,2,2,3,3... and the decoder — which restarts a frame only when the value
++// CHANGES — reads the repeat as more blocks of the same frame and silently swallows every second
++// frame. Stamp a single monotonic counter across the handles with this. Value is masked to 3 bits.
++PYROWAVE_PUBLIC_API pyrowave_result
++pyrowave_encoder_set_next_sequence(pyrowave_encoder encoder, uint32_t sequence);
++
+ // Implementation ensures GPU is idle before destroying objects.
+ PYROWAVE_PUBLIC_API void
+ pyrowave_encoder_destroy(pyrowave_encoder encoder);
+diff --git a/crates/codec/pyrowave-sys/vendor/pyrowave/pyrowave_c.cpp b/crates/codec/pyrowave-sys/vendor/pyrowave/pyrowave_c.cpp
+index ded4fa8..8dc897d 100644
+--- a/crates/codec/pyrowave-sys/vendor/pyrowave/pyrowave_c.cpp
++++ b/crates/codec/pyrowave-sys/vendor/pyrowave/pyrowave_c.cpp
+@@ -1547,6 +1547,17 @@ pyrowave_encoder_packetize(pyrowave_encoder encoder, pyrowave_packet *packets, s
+ 			encoder, packets, packet_boundary, 0, out_packets, bitstream, size);
+ }
+ 
++// PUNKTFUNK LOCAL EXTENSION (patches/0007-encoder-sequence-override.patch), not upstream.
++pyrowave_result
++pyrowave_encoder_set_next_sequence(pyrowave_encoder encoder, uint32_t sequence)
++{
++	Util::set_thread_logging_interface(&null_logger);
++	if (!encoder)
++		return PYROWAVE_ERROR_GENERIC;
++	encoder->encoder.set_next_sequence(sequence);
++	return PYROWAVE_SUCCESS;
++}
++
+ void pyrowave_encoder_destroy(pyrowave_encoder encoder)
+ {
+ 	auto *device = encoder->device;
+diff --git a/crates/codec/pyrowave-sys/vendor/pyrowave/pyrowave_encoder.cpp b/crates/codec/pyrowave-sys/vendor/pyrowave/pyrowave_encoder.cpp
+index 8b5d7a9..e8bebe2 100644
+--- a/crates/codec/pyrowave-sys/vendor/pyrowave/pyrowave_encoder.cpp
++++ b/crates/codec/pyrowave-sys/vendor/pyrowave/pyrowave_encoder.cpp
+@@ -1269,6 +1269,14 @@ bool Encoder::encode(CommandBuffer &cmd, const ViewBuffers &views, const Bitstre
+ 	return impl->encode(cmd, views, buffers);
+ }
+ 
++// PUNKTFUNK: see the declaration in pyrowave_encoder.hpp. Impl::encode PRE-increments
++// (sequence_count = (sequence_count + 1) & mask before stamping), so store one less than the value
++// the caller wants stamped — the setter's contract is about the next ENCODE, not the next store.
++void Encoder::set_next_sequence(uint32_t sequence)
++{
++	impl->sequence_count = (sequence - 1) & SequenceCountMask;
++}
++
+ const Vulkan::ImageView &Encoder::get_wavelet_band(int component, int level)
+ {
+ 	return *impl->component_layer_views[component][level];
+diff --git a/crates/codec/pyrowave-sys/vendor/pyrowave/pyrowave_encoder.hpp b/crates/codec/pyrowave-sys/vendor/pyrowave/pyrowave_encoder.hpp
+index 355f82c..1f3b32d 100644
+--- a/crates/codec/pyrowave-sys/vendor/pyrowave/pyrowave_encoder.hpp
++++ b/crates/codec/pyrowave-sys/vendor/pyrowave/pyrowave_encoder.hpp
+@@ -37,6 +37,12 @@ public:
+ 	bool init(Vulkan::Device *device, int width, int height, ChromaSubsampling chroma);
+ 	bool encode(Vulkan::CommandBuffer &cmd, const ViewBuffers &views, const BitstreamBuffers &buffers);
+ 
++	// PUNKTFUNK: override the 3-bit wire sequence counter the NEXT encode will stamp.
++	// The counter is per-Encoder, so alternating two encoder objects to overlap frames emits
++	// 1,1,2,2,3,3... and the decoder reads a repeated value as "more blocks of the same frame".
++	// See crates/codec/pyrowave-sys/patches/0007-encoder-sequence-override.patch.
++	void set_next_sequence(uint32_t sequence);
++
+ 	// Debug hackery
+ 	const Vulkan::ImageView &get_wavelet_band(int component, int level);
+ 	bool encode_pre_transformed(Vulkan::CommandBuffer &cmd, const BitstreamBuffers &buffers, float quant_scale);

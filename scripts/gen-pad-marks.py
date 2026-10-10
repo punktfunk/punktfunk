@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Console pad outlines -> the Apple clients' template vector imagesets.
 
-The outlines live as 24-unit path data in crates/pf-console-ui/src/icons.rs (`PAD_*`, Kenney
+The outlines live as 24-unit path data in crates/client/pf-console-ui/src/icons.rs (`PAD_*`, Kenney
 Input Prompts 1.5, CC0). The Skia console strokes them and Android reads them over JNI; the
 Apple clients need a vector PDF, stroked at the console's 1.5 weight, in PadMarks.xcassets.
 
@@ -18,7 +18,7 @@ import sys
 import tempfile
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
-ICONS = ROOT / "crates/pf-console-ui/src/icons.rs"
+ICONS = ROOT / "crates/client/pf-console-ui/src/icons.rs"
 OUT = ROOT / "clients/apple/Sources/PunktfunkKit/Resources/PadMarks.xcassets"
 
 # The types the Controller type quick action steps through: asset name -> `icons.rs` const.

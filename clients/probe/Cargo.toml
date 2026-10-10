@@ -9,10 +9,10 @@ authors.workspace = true
 repository.workspace = true
 
 [dependencies]
-punktfunk-core = { path = "../../crates/punktfunk-core", features = ["quic"] }
+punktfunk-core = { path = "../../crates/core/punktfunk-core", features = ["quic"] }
 # Same identity files as the desktop client. Default features would pull the desktop
 # ladder into this binary; the probe only needs the store.
-pf-client-core = { path = "../../crates/pf-client-core", default-features = false }
+pf-client-core = { path = "../../crates/client/pf-client-core", default-features = false }
 quinn = { workspace = true }
 tokio = { version = "1", features = ["rt-multi-thread", "net", "time", "macros"] }
 anyhow = "1"

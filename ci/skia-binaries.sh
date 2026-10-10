@@ -6,7 +6,7 @@
 # The builder images run this at build time. A job runs it again because it may be on the
 # previous image; with the archives present it only checks their digests.
 #
-# Bump the pins with skia-safe in crates/pf-console-ui/Cargo.toml. Same archives and sums as
+# Bump the pins with skia-safe in crates/client/pf-console-ui/Cargo.toml. Same archives and sums as
 # packaging/flatpak/io.unom.Punktfunk.yml.
 #
 # Usage: sh ci/skia-binaries.sh <target-triple>...

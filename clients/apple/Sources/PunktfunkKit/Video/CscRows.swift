@@ -1,5 +1,5 @@
 // The Y′CbCr→RGB conversion as three shader rows, ported from pf-client-core's `csc_rows`
-// (crates/pf-client-core/src/video_color.rs) — the ONE coefficient implementation every
+// (crates/client/pf-client-core/src/video_color.rs) — the ONE coefficient implementation every
 // punktfunk presenter derives its CSC from. `clients/shared/csc-vectors.json`, which the Rust
 // side writes, holds this port to it (`CscRowsTests`).
 //

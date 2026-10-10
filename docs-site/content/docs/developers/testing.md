@@ -33,7 +33,7 @@ Two traps:
 | Area | Command |
 |---|---|
 | FEC under loss, no network | `cargo run -p loss-harness` |
-| C ABI links from C | `bash crates/punktfunk-ffi/tests/c/run.sh` |
+| C ABI links from C | `bash crates/client/punktfunk-ffi/tests/c/run.sh` |
 | Scroll, wire and compatibility | `cargo test -p punktfunk-core --features quic scroll` |
 | Scroll, host mapping (any OS) | `cargo test -p pf-inject --lib scroll` |
 | Touch and scroll in the presenter (macOS too) | `cargo test -p pf-presenter --no-default-features` |

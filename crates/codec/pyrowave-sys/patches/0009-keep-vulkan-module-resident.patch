@@ -1,0 +1,87 @@
+Keep a dlopen reference to libvulkan on every init_loader path — PUNKTFUNK LOCAL PATCH.
+
+Not upstream. `Context::init_loader` only dlopens the loader when it must resolve
+`vkGetInstanceProcAddr` itself (`addr == nullptr`). When the first call arrives with a
+caller-owned `addr` — `pyrowave_create_device` passes the embedder's — no module
+reference is taken at all, yet `volkInitializeCustom` binds every global trampoline
+(vkEnumerateInstanceVersion and friends) through that address, and the trampolines
+live in libvulkan.so.1.
+
+The embedder's handle is not ours to keep alive: ash::Entry owns a
+libloading::Library, and when the last Entry drops the loader's refcount hits zero
+and dlclose unmaps libvulkan. `loader_init_once` still reads true, so the next
+`init_loader(nullptr)` early-returns and `volkGetInstanceVersion` jumps into
+unmapped memory. Reproduces deterministically on Linux: create + destroy a
+handle-based device, then call `pyrowave_create_default_device` — SIGSEGV inside
+volkGetInstanceVersion.
+
+WHAT IT DOES. Hoists the POSIX module dlopen out of the `!addr` branch so a
+reference is held on every path, exactly like the Windows branch's static
+LoadLibrary HMODULE that is never freed. The held module honors the same
+GRANITE_VULKAN_LIBRARY override and soname fallback order as upstream. When `addr`
+is supplied the dlopen is best-effort: a caller whose procs live outside
+libvulkan.so.1 can steer the hold via GRANITE_VULKAN_LIBRARY. libvulkan is a
+process-global loader — a permanent reference is the intended lifetime.
+
+diff --git a/crates/codec/pyrowave-sys/vendor/pyrowave/Granite/vulkan/context.cpp b/crates/codec/pyrowave-sys/vendor/pyrowave/Granite/vulkan/context.cpp
+index e76839b..1e81032 100644
+--- a/crates/codec/pyrowave-sys/vendor/pyrowave/Granite/vulkan/context.cpp
++++ b/crates/codec/pyrowave-sys/vendor/pyrowave/Granite/vulkan/context.cpp
+@@ -215,29 +215,38 @@ bool Context::init_loader(PFN_vkGetInstanceProcAddr addr, bool force_reload)
+ 	if (loader_init_once && !force_reload && !addr)
+ 		return true;
+ 
+-	if (!addr)
+-	{
+ #ifndef _WIN32
+-		static void *module;
+-		if (!module)
+-		{
+-			auto vulkan_path = Util::get_environment_string("GRANITE_VULKAN_LIBRARY", "");
+-			if (!vulkan_path.empty())
+-				module = dlopen(vulkan_path.c_str(), RTLD_LOCAL | RTLD_LAZY);
++	// PUNKTFUNK LOCAL PATCH (patches/0009-keep-vulkan-module-resident.patch), not upstream.
++	// volkInitializeCustom binds the global procs through `addr`, but the trampolines it
++	// resolves live in libvulkan.so.1. When the first init arrives with a caller-owned
++	// `addr` (pyrowave_create_device's GetInstanceProcAddr), upstream holds no dlopen
++	// reference: the caller's last dlclose unmaps the library, and the early-return above
++	// then re-enters with dangling globals — a jump into unmapped memory.
++	static void *module;
++	if (!module)
++	{
++		auto vulkan_path = Util::get_environment_string("GRANITE_VULKAN_LIBRARY", "");
++		if (!vulkan_path.empty())
++			module = dlopen(vulkan_path.c_str(), RTLD_LOCAL | RTLD_LAZY);
+ #ifdef __APPLE__
+-			if (!module)
+-				module = dlopen("libvulkan.1.dylib", RTLD_LOCAL | RTLD_LAZY);
+-			if (!module)
+-				module = dlopen("libMoltenVK.dylib", RTLD_LOCAL | RTLD_LAZY);
++		if (!module)
++			module = dlopen("libvulkan.1.dylib", RTLD_LOCAL | RTLD_LAZY);
++		if (!module)
++			module = dlopen("libMoltenVK.dylib", RTLD_LOCAL | RTLD_LAZY);
+ #else
+-			if (!module)
+-				module = dlopen("libvulkan.so.1", RTLD_LOCAL | RTLD_LAZY);
+-			if (!module)
+-				module = dlopen("libvulkan.so", RTLD_LOCAL | RTLD_LAZY);
++		if (!module)
++			module = dlopen("libvulkan.so.1", RTLD_LOCAL | RTLD_LAZY);
++		if (!module)
++			module = dlopen("libvulkan.so", RTLD_LOCAL | RTLD_LAZY);
+ #endif
+-			if (!module)
+-				return false;
+-		}
++	}
++#endif
++
++	if (!addr)
++	{
++#ifndef _WIN32
++		if (!module)
++			return false;
+ 
+ 		addr = reinterpret_cast<PFN_vkGetInstanceProcAddr>(dlsym(module, "vkGetInstanceProcAddr"));
+ 		if (!addr)

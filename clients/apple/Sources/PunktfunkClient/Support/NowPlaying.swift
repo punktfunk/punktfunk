@@ -1,6 +1,6 @@
 // What each paired host has UP right now (`GET /api/v1/status`), so a host card can say so
 // before anybody connects — the Apple port of the console's `HostRow::running`
-// (crates/pf-console-ui/src/model.rs), fed by the same route on the same mTLS lane.
+// (crates/client/pf-console-ui/src/model.rs), fed by the same route on the same mTLS lane.
 //
 // A sibling of `HostPowerStore` with a far shorter fuse: what a host may be asked to do changes
 // when an operator edits access, but what it is PLAYING changes while somebody is looking at the

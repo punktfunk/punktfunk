@@ -48,7 +48,7 @@ TRAY_BIN="target/release/punktfunk-tray"
 # when the existing artifact was already resolved that way, and rebuilds it when it wasn't.
 echo "==> building punktfunk-tray (release, own invocation — see comment above)"
 cargo build --release -p punktfunk-tray --locked
-# The web-console-update root helper (dep-free; see crates/pf-update).
+# The web-console-update root helper (dep-free; see crates/install/pf-update).
 echo "==> building pf-update (release)"
 cargo build --release -p pf-update --locked
 

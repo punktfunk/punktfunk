@@ -16,7 +16,7 @@
 // `pf://` parses as an alias so a hand-typed or legacy link still works, but nothing ever *emits*
 // or registers it (design/client-deep-links.md §2).
 //
-// This is a port of `crates/pf-client-core/src/deeplink.rs`, and the two are held together by
+// This is a port of `crates/client/pf-client-core/src/deeplink.rs`, and the two are held together by
 // `clients/shared/deeplink-vectors.json` — 44 cases including every refusal code, run verbatim by
 // both test suites. Change one parser and the other's suite fails, which is the point: three
 // parsers that drift are three different security postures.

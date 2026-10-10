@@ -1,0 +1,11 @@
+Kenney Input Prompts 1.5 — the controller outlines of the console's device marks
+(`PAD_*` in crates/client/pf-console-ui/src/icons.rs) are refit from the pack's
+`Vector/controller_*.svg` files. Created and distributed by Kenney (www.kenney.nl),
+https://kenney.nl/assets/input-prompts.
+
+License: Creative Commons Zero, CC0 1.0 Universal
+https://creativecommons.org/publicdomain/zero/1.0/ — no attribution required; this
+notice is provided for provenance.
+
+Controller names are trademarks of their respective owners. The marks are device
+silhouettes that identify the connected controller; they carry no manufacturer logo.

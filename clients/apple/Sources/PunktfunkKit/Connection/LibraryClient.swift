@@ -8,7 +8,7 @@
 // read-only library route by its **mTLS certificate** — no bearer token. The host binds this read
 // surface to the LAN by DEFAULT (the bearer-gated admin surface stays loopback-only), so a paired
 // client browses a host's library with no operator step. This mirrors the GameEntry/Artwork/
-// LaunchSpec schema in `crates/punktfunk-host/src/library.rs`.
+// LaunchSpec schema in `crates/host/punktfunk-host/src/library.rs`.
 
 import Foundation
 // `punktfunkDefaultMgmtPort` (and StoredHost/DefaultsKey) now live in PunktfunkShared so the

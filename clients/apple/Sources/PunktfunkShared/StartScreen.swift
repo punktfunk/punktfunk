@@ -1,6 +1,6 @@
 // Where a bare launch opens: the host list, the default host's library, or its stream.
 //
-// The Swift half of the cross-client start-screen policy — `crates/pf-client-core/src/start.rs`
+// The Swift half of the cross-client start-screen policy — `crates/client/pf-client-core/src/start.rs`
 // is the other, and `clients/shared/start-screen-vectors.json` holds them to the same answers.
 // Lives in the dependency-free shared module because a widget or an App Intent that wants to
 // act on "your host" needs the same resolution the app boots with.

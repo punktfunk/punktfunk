@@ -3,12 +3,10 @@
 //! and stamp the build version the update check compares against.
 
 fn main() {
-    // Build provenance, identical to the host's (crates/punktfunk-host/build.rs): the packaging
-    // jobs set PUNKTFUNK_BUILD_VERSION to the full package version (`0.23.0~ci10250.gab12cd34`
-    // on deb, `0.23.0-0.ci10250.g…` on rpm, …), a plain `cargo build` falls back to the crate
-    // version. This is what `--version` prints and what `--check-update` compares against the
-    // signed manifest — and the canary suffix is load-bearing there, because canary channels
-    // compare CI run numbers rather than patch fields (pf_update_check::version).
+    // Build provenance, as in crates/host/punktfunk-host/build.rs: packaging sets
+    // PUNKTFUNK_BUILD_VERSION to the full package version; a plain `cargo build` uses the crate's.
+    // `--version` prints it and `--check-update` compares it with the signed manifest. Canary
+    // channels compare the CI run number in its suffix (pf_update_check::version).
     let version = std::env::var("PUNKTFUNK_BUILD_VERSION")
         .ok()
         .filter(|v| !v.trim().is_empty())

@@ -1,7 +1,7 @@
 # yaml-language-server: $schema=https://aka.ms/winget-manifest.installer.1.6.0.schema.json
 #
 # Installer manifest for the Windows host: punktfunk-setup-win, the self-contained engine exe
-# (crates/punktfunk-setup-win, packed by packaging/windows/pack-host-installer.ps1).
+# (crates/install/punktfunk-setup-win, packed by packaging/windows/pack-host-installer.ps1).
 # It speaks the Inno Setup silent dialect verbatim (design/installer-v2-windows.md D5) and keeps
 # Inno's ARP key + unins000.exe (D6), which is why everything below except InstallerType reads
 # as it did for the Inno Setup years.
@@ -54,7 +54,7 @@ InstallerSwitches:
   Log: /LOG="<LOGPATH>"
 
 # The ARP entry stays under Inno's `<AppId>_is1` name forever (HOST_ARP_KEY in
-# crates/punktfunk-setup/src/platform/windows/mod.rs): this is what correlates an installed host
+# crates/install/punktfunk-setup/src/platform/windows/mod.rs): this is what correlates an installed host
 # with the package for `winget list` / `winget upgrade`, across the Inno -> engine boundary too.
 ProductCode: '{7C9E6A52-1F4B-4E8D-A3C7-2B5D8F1E0A93}_is1'
 # The engine upgrades in place (it follows InstallLocation) — do not uninstall first, that would

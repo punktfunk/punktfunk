@@ -5,7 +5,7 @@ import io.unom.punktfunk.kit.security.KnownHost
 /**
  * Where a bare launch opens: the host list, the default host's library, or its stream.
  *
- * The Kotlin third of the cross-client start-screen policy — `crates/pf-client-core/src/start.rs`
+ * The Kotlin third of the cross-client start-screen policy — `crates/client/pf-client-core/src/start.rs`
  * and `PunktfunkShared/StartScreen.swift` are the other two, and
  * `clients/shared/start-screen-vectors.json` holds all three to the same answers. It lives beside
  * [DeepLinks] because it resolves the same kind of reference: a stable host record id.

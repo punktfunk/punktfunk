@@ -22,7 +22,7 @@
 # ⚠️ Kept deliberately free of any dependency on the pinned rev. The pin moved past upstream's
 # `vulkan_get_rgb10_capture_format()` (`ff6b924`, after 3.16.25) to fix red/blue on NVIDIA, and it
 # would have been natural to have patch `0001` call it — that is what the host-side note in
-# `crates/pf-capture/src/linux/pw_pods.rs` proposes. It does NOT, precisely so this derivation
+# `crates/host/pf-capture/src/linux/pw_pods.rs` proposes. It does NOT, precisely so this derivation
 # keeps building against a nixpkgs that still pins 3.16.25, where that symbol does not exist and
 # the failure would be an opaque C++ error rather than a patch conflict. Patch `0001` gets the
 # same outcome version-independently by offering `xBGR_210LE` ahead of `xRGB_210LE`.

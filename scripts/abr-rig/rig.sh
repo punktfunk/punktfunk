@@ -222,8 +222,8 @@ echo
 echo "== $PROFILE: ${SECONDS_RUN}s on a ${RATE_KBIT}kbit/${DELAY_MS}ms/${BUFFER_MS}ms path =="
 # The host's columns sum its whole-minute `link health` lines for that probe's session.
 printf '%s\tunrec_10min\trfi_10min\tidr_10min\tkf_req_10min\n' \
-  "$(head -1 /w/crates/punktfunk-core/src/abr/sim/baseline.tsv)"
-grep -h "^$PROFILE	" /w/crates/punktfunk-core/src/abr/sim/baseline.tsv \
+  "$(head -1 /w/crates/core/punktfunk-core/src/abr/sim/baseline.tsv)"
+grep -h "^$PROFILE	" /w/crates/core/punktfunk-core/src/abr/sim/baseline.tsv \
   | sed 's/^/sim  /' || true
 clean() { sed 's/\x1b\[[0-9;]*m//g' "$@"; }
 # Host session ids rise in open order, so the k-th probe to open owns the k-th id.

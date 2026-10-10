@@ -55,7 +55,7 @@ case "${ID:-}${ID_LIKE:-}" in
     *steamos*|*arch*) ok "SteamOS / Arch base detected (${PRETTY_NAME:-unknown})" ;;
     *) warn "This installer targets SteamOS; '${PRETTY_NAME:-unknown}' may differ — on a normal distro use the apt/rpm packages instead." ;;
 esac
-[ -d "$SRC/crates/punktfunk-host" ] || die "no punktfunk source at $SRC. Clone or rsync it there first, or pass --src=DIR (see scripts/steamdeck/README.md)."
+[ -d "$SRC/crates/host/punktfunk-host" ] || die "no punktfunk source at $SRC. Clone or rsync it there first, or pass --src=DIR (see scripts/steamdeck/README.md)."
 ok "source: $SRC"
 if ! have distrobox; then
     die "distrobox not found. Install it once (no root needed):

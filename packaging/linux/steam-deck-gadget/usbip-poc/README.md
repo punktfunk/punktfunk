@@ -3,7 +3,7 @@
 Presents a real 3-interface USB Steam Deck (`28DE:1205`, controller on **interface 2**) over the
 usbip protocol via the `usbip` crate, so `vhci_hcd` can attach it **locally** — the Secure-Boot-clean,
 universal alternative to `dummy_hcd`+`raw_gadget` (which Bazzite/Fedora don't ship). Reuses the exact
-captured descriptors + feature contract from `crates/punktfunk-host/src/inject/linux/steam_gadget.rs`.
+captured descriptors + feature contract from `crates/host/punktfunk-host/src/inject/linux/steam_gadget.rs`.
 
 **Validated live on Bazzite (2026-06-29):** `vhci_hcd` enumerates it, `hid-steam` binds it + reads the
 serial + makes the `Steam Deck` evdevs, stable (1 connect / 0 disconnect), and **Steam promotes it**

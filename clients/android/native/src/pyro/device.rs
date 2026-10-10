@@ -7,7 +7,7 @@
 //! (`super::present`). Nothing here touches the MediaCodec path.
 //!
 //! The feature set is not ours to choose — it mirrors `pf-presenter`'s probe exactly
-//! (`crates/pf-presenter/src/vk/setup.rs`), because pyrowave 0.4.0 reconstructs the
+//! (`crates/client/pf-presenter/src/vk/setup.rs`), because pyrowave 0.4.0 reconstructs the
 //! create-infos from what we report and reads those features to pick its kernels. A
 //! device that misses one is not a slower device, it is a device the codec refuses.
 

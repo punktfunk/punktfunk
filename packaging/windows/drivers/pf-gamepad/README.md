@@ -15,7 +15,7 @@ DualSense a near-native feel with **no external gamepad dependencies** (no ViGEm
 Shipping: the driver is one member of the in-tree driver workspace
 ([`packaging/windows/drivers/`](../../README.md)), built from source in CI, and bundled +
 `pnputil`-installed by the Windows host [installer](../../README.md). The host feeds it over a shared
-memory channel from `crates/pf-inject/src/inject/windows/pad_shm.rs`. The same UMDF driver also
+memory channel from `crates/host/pf-inject/src/inject/windows/pad_shm.rs`. The same UMDF driver also
 serves the **DualShock 4** identity per a `device_type` byte the host stamps.
 
 This README captures the driver-authoring lore — the bugs and the signing recipe that make a
@@ -28,7 +28,7 @@ This crate builds as a member of the [`packaging/windows/drivers/`](../../driver
 uses the published **crates.io `wdk`/`wdk-sys`/`wdk-build`** (0.4/0.5) — not the old dev-box
 `windows-drivers-rs` path-deps. It's a separate cargo workspace from the main tree because driver
 crates are cdylibs built with the WDK toolchain on Windows only; it path-deps the shared ABI crate
-[`crates/pf-driver-proto`](../../../../crates/pf-driver-proto/README.md).
+[`crates/host/pf-driver-proto`](../../../../crates/host/pf-driver-proto/README.md).
 
 ## Build / sign / install recipe (the one that actually loads)
 

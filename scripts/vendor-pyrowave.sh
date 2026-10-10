@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Re-vendors PyroWave (+ the minimal Granite subset it builds against) into
-# crates/pyrowave-sys/vendor/pyrowave. Network access required; run manually,
+# crates/codec/pyrowave-sys/vendor/pyrowave. Network access required; run manually,
 # never from CI or build.rs (the flatpak/CI builders are offline — that is the
 # whole reason the tree is committed).
 #
@@ -17,7 +17,7 @@ PYROWAVE_COMMIT=c0b997f84ced7bd827ca737aa5145f4ec811de8d
 # that commit; recorded here for the vendor manifest only.
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-DEST="$REPO_ROOT/crates/pyrowave-sys/vendor/pyrowave"
+DEST="$REPO_ROOT/crates/codec/pyrowave-sys/vendor/pyrowave"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
@@ -37,7 +37,7 @@ rm -f Granite/third_party/volk/.git Granite/third_party/khronos/vulkan-headers/.
 find . -name .gitignore -delete
 
 # Everything below is never entered by the standalone configure that
-# crates/pyrowave-sys/CMakeLists.txt performs (GRANITE_SHIPPING=ON,
+# crates/codec/pyrowave-sys/CMakeLists.txt performs (GRANITE_SHIPPING=ON,
 # GRANITE_RENDERER=OFF, GRANITE_PLATFORM=null, no PYROWAVE_DEVEL) — verified
 # empirically: configure fails loudly if a needed dir goes missing.
 # third_party/renderdoc stays: Granite adds it unconditionally.
@@ -60,13 +60,13 @@ mkdir -p "$(dirname "$DEST")"
 rm -rf "$DEST"
 cp -a "$WORK/pyrowave" "$DEST"
 
-# Local patches on top of the pin (crates/pyrowave-sys/patches/*.patch, applied
+# Local patches on top of the pin (crates/codec/pyrowave-sys/patches/*.patch, applied
 # in order). Each patch documents its upstream status; drop it when a vendor
 # bump includes the fix.
 # Patch 0002 carries a regenerated shaders/slangmosh.hpp, so it conflicts whenever
 # upstream regenerates the bank. Re-apply its .comp hunk, then rebuild the bank with
 # the Granite slangmosh that reproduces upstream's committed bank byte for byte.
-for p in "$REPO_ROOT"/crates/pyrowave-sys/patches/*.patch; do
+for p in "$REPO_ROOT"/crates/codec/pyrowave-sys/patches/*.patch; do
   [ -e "$p" ] || continue
   git -C "$REPO_ROOT" apply "$p"
   echo "applied $(basename "$p")"
@@ -85,7 +85,7 @@ rm -rf list in the script; Granite/video keeps only scaler.cpp and .hpp).
 All parts are MIT-licensed (pyrowave, Granite) or Apache-2.0/MIT (volk,
 Vulkan-Headers).
 
-Local patches (crates/pyrowave-sys/patches/, re-applied on re-vendor).
+Local patches (crates/codec/pyrowave-sys/patches/, re-applied on re-vendor).
 These are OUR fixes — kept local by decision (we vendor anyway), not filed
 upstream. The numbers are stable names that code and tests cite; a retired
 number is never reused.
@@ -124,7 +124,7 @@ number is never reused.
     class never regresses the encoder. Gated on !inherit_info, so it is live
     only on the Windows path (pyrowave_create_device_by_compat, where Granite
     builds its own device); Linux passes its own create-infos and the same
-    request lives in crates/pf-encode/src/enc/linux/pyrowave.rs
+    request lives in crates/host/pf-encode/src/enc/linux/pyrowave.rs
     (queue_priority_candidates). Change one, change both. Upstream's compat2
     request (c0b997f8) is opt-in, needs Vulkan 1.4 and moves the encode to the
     async compute queue, so it does not replace this; the patch stands down

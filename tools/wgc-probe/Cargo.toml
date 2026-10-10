@@ -15,7 +15,7 @@ repository.workspace = true
 [target.'cfg(target_os = "windows")'.dependencies]
 # The display inventory the host pins on and the compose canary its recovery ladder draws, so the
 # probe names monitors and forces a compose exactly as a WGC session's host will.
-pf-win-display = { path = "../../crates/pf-win-display" }
+pf-win-display = { path = "../../crates/host/pf-win-display" }
 windows = { version = "0.62", features = [
     "Foundation",
     "Foundation_Metadata",

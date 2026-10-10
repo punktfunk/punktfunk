@@ -7,7 +7,7 @@
 # 0 0 579 136. The mark itself is drawn live as two ellipses; only the non-elliptical parts
 # are rasters. Needs rsvg-convert (brew install librsvg). Run from the repo root, commit.
 set -eu
-out=crates/punktfunk-setup-win/assets
+out=crates/install/punktfunk-setup-win/assets
 mkdir -p "$out"
 
 overlap='M647.84,590.737c-64.853,17.403 -136.871,0.597 -187.885,-50.416c-51.013,-51.013 -67.819,-123.032 -50.416,-187.885c64.853,-17.403 136.871,-0.597 187.885,50.416c51.013,51.013 67.819,123.032 50.416,187.885Z'

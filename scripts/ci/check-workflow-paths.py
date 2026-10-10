@@ -37,7 +37,7 @@ BUILDS = [
      ["punktfunk-client-windows", "punktfunk-client-session", "punktfunk-cli"], None),
     ("windows-drivers", "packaging/windows/drivers/Cargo.toml", "x86_64-pc-windows-msvc",
      None, None),
-    ("windows-host", "crates/pf-seat-keeper/Cargo.toml", "x86_64-pc-windows-msvc", None, None),
+    ("windows-host", "crates/host/pf-seat-keeper/Cargo.toml", "x86_64-pc-windows-msvc", None, None),
     ("setup-windows", "Cargo.toml", "x86_64-pc-windows-msvc",
      ["punktfunk-setup", "punktfunk-setup-win"], None),
     ("macos-host", "Cargo.toml", "aarch64-apple-darwin",

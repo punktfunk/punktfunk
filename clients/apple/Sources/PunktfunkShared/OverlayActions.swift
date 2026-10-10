@@ -90,7 +90,7 @@ public struct OverlayShortcut: Equatable, Sendable {
 
 /// The Windows virtual-key code a shortcut key name stands for (the wire speaks VKs); `nil` for
 /// a name this build does not know. Twin of the Rust `key_vk`: `OverlayActionsTests` replays
-/// `crates/punktfunk-core/testdata/key-vk-vectors.json`, so a new name lands there first.
+/// `crates/core/punktfunk-core/testdata/key-vk-vectors.json`, so a new name lands there first.
 public func keyVk(_ name: String) -> UInt32? {
     let n = name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
     switch n {

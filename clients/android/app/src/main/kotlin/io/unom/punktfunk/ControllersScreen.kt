@@ -70,7 +70,7 @@ import kotlinx.coroutines.delay
  * device itself.
  *
  * The TOUCH presentation, and since 2026-08 the only one: the console reaches the same answer
- * through its own Skia screen (`crates/pf-console-ui/src/screens/controllers.rs`), which keeps the
+ * through its own Skia screen (`crates/client/pf-console-ui/src/screens/controllers.rs`), which keeps the
  * console's input on the page instead of suspending it behind a Compose takeover. What this screen
  * still owns alone is the live input test - the console receives only the aggregated navigation
  * sample, which is nowhere near a per-device axis/trigger readout. Everything the console DOES

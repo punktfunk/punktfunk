@@ -13,8 +13,8 @@ authors.workspace = true
 repository.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]
-pf-inject = { path = "../../crates/pf-inject" }
-punktfunk-core = { path = "../../crates/punktfunk-core", features = ["quic"] }
+pf-inject = { path = "../../crates/host/pf-inject" }
+punktfunk-core = { path = "../../crates/core/punktfunk-core", features = ["quic"] }
 anyhow = "1"
 rustix = { version = "1", features = ["event"] }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

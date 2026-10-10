@@ -33,7 +33,7 @@
 # feed it fetched, or whose SERIAL is below the highest this box has accepted. Without both, anyone
 # who can write the registry WITHOUT the key (a leaked write:package token) copies the canary
 # manifest + images into the stable path, or puts last month's back, and every box verifies it
-# happily. Same two rules the Rust updater enforces (crates/pf-update-check/src/manifest.rs).
+# happily. Same two rules the Rust updater enforces (crates/core/pf-update-check/src/manifest.rs).
 set -euo pipefail
 
 REGISTRY="${PUNKTFUNK_SYSEXT_REGISTRY:-https://git.unom.io/api/packages/unom/generic/punktfunk-sysext}"
@@ -83,7 +83,7 @@ feed_name() {
 feed_url() { echo "$REGISTRY/$(feed_name)"; }
 
 # The highest manifest serial ever accepted for a feed — the anti-rollback floor, persisted the way
-# the Rust updater persists its own per-channel `serial_floor` (crates/punktfunk-host/src/update.rs).
+# the Rust updater persists its own per-channel `serial_floor` (crates/host/punktfunk-host/src/update.rs).
 # Per FEED, never global: serials are publish timestamps, so a canary publish would otherwise raise
 # the floor above the next stable manifest and lock the stable channel out.
 serial_floor() {

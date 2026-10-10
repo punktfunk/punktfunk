@@ -25,10 +25,10 @@ console = []
 # the UI-agnostic plumbing this shell shares with the session binary. No `pyrowave`: the
 # default feature set CMake-builds a vendored C++ tree for a decoder that only the session
 # binary runs, and this crate decodes nothing. Same shape as cli/session/windows.
-pf-client-core = { path = "../../crates/pf-client-core", default-features = false, features = [
+pf-client-core = { path = "../../crates/client/pf-client-core", default-features = false, features = [
     "desktop",
 ] }
-punktfunk-core = { path = "../../crates/punktfunk-core", features = ["quic"] }
+punktfunk-core = { path = "../../crates/core/punktfunk-core", features = ["quic"] }
 
 # UI shell. GTK 4.20 is already the package floor (Ubuntu 26.04, Fedora 43, GNOME 50), and
 # every such target ships libadwaita ≥ 1.8: Spinner, WrapBox, ToggleGroup, ShortcutsDialog.

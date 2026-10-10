@@ -105,7 +105,7 @@ describe("refusedRoot", () => {
 	test("refuses what the host's refusal_rule refuses, wherever the config dir is", () => {
 		const file = path.join(
 			import.meta.dir,
-			"../../crates/punktfunk-host/testdata/path-refusal-vectors.json",
+			"../../crates/host/punktfunk-host/testdata/path-refusal-vectors.json",
 		);
 		const { vectors } = JSON.parse(fs.readFileSync(file, "utf8")) as {
 			vectors: { path: string; home: string; config_dir: string; refused: boolean }[];
