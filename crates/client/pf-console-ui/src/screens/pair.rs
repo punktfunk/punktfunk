@@ -9,7 +9,7 @@
 use crate::glyphs::{Hint, HintKey};
 use crate::model::{ConsoleCmd, HostRow, PairPhase};
 use crate::pointer::Pointer;
-use crate::screens::{ConnectIntent, Ctx, Outbox, ScreenView, TextEntry};
+use crate::screens::{Ctx, Outbox, ScreenView, TextEntry};
 use crate::theme::{fg, Fonts, ERROR, W};
 use crate::widgets::{
     blurb, field_key, permits, type_text, Charset, Entry, ListMsg, MenuList, RowSpec,
@@ -44,6 +44,8 @@ pub(crate) struct PairScreen {
     editing: Option<Field>,
     /// Local Busy so a second A cannot double-submit before the service thread sees the command.
     busy: bool,
+    /// The busy pairing is a request access, waiting on the host's operator.
+    requesting: bool,
     error: Option<String>,
 }
 
@@ -60,6 +62,7 @@ impl PairScreen {
             device: device_name.to_string(),
             editing: None,
             busy: false,
+            requesting: false,
             error: None,
         }
     }
@@ -106,6 +109,14 @@ impl PairScreen {
         !self.pin.trim().is_empty() && !self.busy
     }
 
+    /// The name the host lists this device under: the typed one, else the device's own.
+    fn device_name(&self, ctx: &Ctx) -> String {
+        match self.device.trim() {
+            "" => ctx.device.name.clone(),
+            typed => typed.to_string(),
+        }
+    }
+
     /// The open field, its text, and the keyboard that types into it.
     fn open(&mut self) -> Option<(Field, &mut TextEntry, &mut String)> {
         let f = self.editing?;
@@ -141,35 +152,27 @@ impl PairScreen {
             ListMsg::Activate => {
                 match roles.get(self.list.cursor) {
                     Some(Role::RequestAccess) if !self.busy => {
-                        // Leave so a canceled or finished approval returns to Home, not here.
-                        fx.connect = Some(ConnectIntent {
+                        self.busy = true;
+                        self.requesting = true;
+                        self.error = None;
+                        fx.cmds.push(ConsoleCmd::RequestAccess {
                             addr: self.addr.clone(),
                             port: self.port,
                             fp_hex: self.fp_hex.clone(),
-                            launch: None,
-                            title: self.host_name.clone(),
-                            request_access: true,
-                            preset: None,
-                            profile: None,
-                            ask: None,
-                            seat: None,
+                            device_name: self.device_name(ctx),
                         });
-                        fx.pop();
                     }
                     Some(Role::Pin) => self.editing = Some(Field::Pin),
                     Some(Role::Device) => self.editing = Some(Field::Device),
                     Some(Role::Pair) if self.can_pair() => {
                         self.busy = true;
+                        self.requesting = false;
                         self.error = None;
                         fx.cmds.push(ConsoleCmd::Pair {
                             addr: self.addr.clone(),
                             port: self.port,
                             pin: self.pin.trim().to_string(),
-                            device_name: if self.device.trim().is_empty() {
-                                ctx.device.name.clone()
-                            } else {
-                                self.device.trim().to_string()
-                            },
+                            device_name: self.device_name(ctx),
                         });
                     }
                     _ => {
@@ -200,7 +203,11 @@ impl PairScreen {
             .into_iter()
             .map(|role| match role {
                 Role::RequestAccess => {
-                    let mut r = RowSpec::action("Request access — approve on the host", !self.busy);
+                    let label = match self.busy && self.requesting {
+                        true => "Waiting for approval…",
+                        false => "Request access — approve on the host",
+                    };
+                    let mut r = RowSpec::action(label, !self.busy);
                     r.header = Some("No PIN needed");
                     r
                 }
@@ -222,9 +229,14 @@ impl PairScreen {
                     device.caret = self.editing == Some(Field::Device);
                     device
                 }
-                Role::Pair => {
-                    RowSpec::action(if self.busy { "Pairing…" } else { "Pair" }, self.can_pair())
-                }
+                Role::Pair => RowSpec::action(
+                    if self.busy && !self.requesting {
+                        "Pairing…"
+                    } else {
+                        "Pair"
+                    },
+                    self.can_pair(),
+                ),
             })
             .collect()
     }
@@ -353,9 +365,13 @@ impl ScreenView for PairScreen {
         let status_y = f64::from(rect.bottom) - tray_h - status_h + 6.0 * k;
         if self.busy {
             crate::theme::spinner(canvas, cx - 70.0 * k, status_y + 8.0 * k, 7.0 * k, ctx.t);
+            let waiting = match self.requesting {
+                true => "Approve this device in the host's console",
+                false => "Pairing… confirm the PIN on the host",
+            };
             fonts.centered(
                 canvas,
-                "Pairing… confirm the PIN on the host",
+                waiting,
                 W::Regular,
                 13.0 * k,
                 fg(0.55),
@@ -438,7 +454,7 @@ mod tests {
     }
 
     #[test]
-    fn request_access_connects_and_leaves() {
+    fn request_access_pairs_without_connecting() {
         let mut host = host();
         host.fp_hex = "abcd".into();
         let mut settings = Settings::default();
@@ -456,10 +472,14 @@ mod tests {
         s.list.cursor = 0;
         let mut fx = Outbox::default();
         s.menu(MenuEvent::Confirm, &mut ctx, &mut fx);
-        let intent = fx.connect.expect("request-access raises a connect intent");
-        assert!(intent.request_access);
-        assert_eq!(intent.fp_hex, "abcd");
-        assert!(matches!(fx.nav, Some(crate::screens::Nav::Pop)));
+        assert!(matches!(
+            fx.cmds.first(),
+            Some(ConsoleCmd::RequestAccess { fp_hex, device_name, .. })
+                if fp_hex == "abcd" && device_name == "deck"
+        ));
+        assert!(fx.connect.is_none(), "a request never streams");
+        assert!(fx.nav.is_none(), "the screen waits for the answer");
+        assert!(s.busy && s.requesting);
     }
 
     #[test]

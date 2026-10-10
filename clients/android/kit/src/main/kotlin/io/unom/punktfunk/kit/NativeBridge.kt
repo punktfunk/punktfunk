@@ -74,6 +74,21 @@ object NativeBridge {
     ): String
 
     /**
+     * Ask for access with no PIN and wait (up to ~185 s) for the host's operator to approve.
+     * [pinHex] is the advertised fingerprint, `""` to trust on first use. Returns the host's
+     * fingerprint (64-hex) to persist as paired, or `""` with the cause in [nativeTakeLastError].
+     * Never streams. Blocking — call off the main thread.
+     */
+    external fun nativeRequestAccess(
+        host: String,
+        port: Int,
+        certPem: String,
+        keyPem: String,
+        pinHex: String,
+        name: String,
+    ): String
+
+    /**
      * The native client's recent log ring rendered as one text bundle, oldest first,
      * prefixed by [header] (this app's identity line) — the body for "Send logs to host"
      * (`POST /api/v1/client-logs` over the same mTLS client the library fetch uses).

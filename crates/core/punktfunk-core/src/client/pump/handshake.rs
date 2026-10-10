@@ -229,6 +229,7 @@ async fn dial(
                 .with(registry::FEATURE_PAD_WRITES)
                 .with(registry::FEATURE_PROFILES),
             profile: p.profile.clone(),
+            access_only: false,
         };
         v2io::send(&mut send, &hello).await?;
         // The hello carried the resume id, so the entry is spent now, not by a dial that died.

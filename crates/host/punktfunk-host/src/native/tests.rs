@@ -1089,6 +1089,114 @@ fn delegated_approval_admits_after_knock() {
     host.join().unwrap().unwrap();
 }
 
+/// An access request parks like a knock, and approval answers it without a session. Once
+/// approved, the next request is answered at once.
+#[test]
+fn access_request_pairs_without_a_session() {
+    let _registry = crate::session_status::tests::registry_lock();
+    let _serial = SESSION_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    use punktfunk_core::client::NativeClient;
+    use punktfunk_core::quic::endpoint;
+
+    let store = std::env::temp_dir().join(format!("pf-access-test-{}.json", std::process::id()));
+    let _ = std::fs::remove_file(&store);
+    let np = Arc::new(NativePairing::load_with(Some(store.clone()), None, false).unwrap());
+    let np_host = np.clone();
+    let host = std::thread::spawn(move || {
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .enable_all()
+            .build()
+            .unwrap();
+        rt.block_on(serve(
+            Punktfunk1Options {
+                port: 19795,
+                source: Punktfunk1Source::Synthetic,
+                seconds: 0,
+                frames: 25,
+                max_sessions: 2,
+                max_concurrent: 1,
+                require_pairing: true,
+                allow_pairing: false,
+                pairing_pin: None,
+                paired_store: None,
+                idle_timeout: None,
+                mdns: false,
+            },
+            0,
+            np_host,
+            test_profiles(),
+            StatsRecorder::new(
+                std::env::temp_dir().join(format!("pf-access-stats-{}", std::process::id())),
+            ),
+            crate::identity::ephemeral().unwrap(),
+            None,
+        ))
+    });
+    std::thread::sleep(std::time::Duration::from_millis(500));
+    let (cert, key) = endpoint::generate_identity().unwrap();
+    let expected_fp = hex::encode(endpoint::fingerprint_of_pem(&cert).unwrap());
+
+    let np_approve = np.clone();
+    let expect_fp = expected_fp.clone();
+    let approver = std::thread::spawn(move || {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(8);
+        let pend = loop {
+            if let Some(p) = np_approve
+                .pending()
+                .into_iter()
+                .find(|p| p.fingerprint == expect_fp)
+            {
+                break p;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the request must park"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(40));
+        };
+        assert_eq!(pend.name, "Access Deck");
+        np_approve
+            .approve_pending(pend.id, None, None)
+            .unwrap()
+            .paired()
+            .expect("pending id must approve");
+    });
+    let ask = || {
+        NativeClient::request_access(
+            "127.0.0.1",
+            19795,
+            (&cert, &key),
+            None,
+            "Access Deck",
+            std::time::Duration::from_secs(15),
+            None,
+        )
+    };
+    let host_fp = ask().expect("approval answers the parked request");
+    approver.join().unwrap();
+    assert_ne!(host_fp, [0; 32]);
+    assert!(np.is_paired(&expected_fp), "approval pairs the device");
+
+    let started = std::time::Instant::now();
+    assert_eq!(ask().expect("an approved device is answered"), host_fp);
+    assert!(started.elapsed() < std::time::Duration::from_secs(5));
+
+    let connected = crate::events::bus()
+        .subscribe(0)
+        .catch_up
+        .into_iter()
+        .any(|e| match e.kind {
+            crate::events::EventKind::ClientConnected { client } => {
+                client.fingerprint.as_deref() == Some(expected_fp.as_str())
+            }
+            _ => false,
+        });
+    assert!(!connected, "an access request never starts a session");
+    let _ = std::fs::remove_file(&store);
+    host.join().unwrap().unwrap();
+}
+
 /// Right PIN pairs; paired identity gets a session; anonymous does not.
 #[test]
 fn pairing_ceremony_and_gate() {
@@ -1304,6 +1412,7 @@ async fn raw_session(
         suites: Vec::new(),
         features: Default::default(),
         profile: None,
+        access_only: false,
     };
     v2io::send(&mut send, &hello).await.expect("ClientHello");
     let welcome = loop {

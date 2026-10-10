@@ -582,7 +582,20 @@ impl ServiceState {
                 port,
                 pin,
                 device_name,
-            } => self.pair(addr, port, pin, device_name),
+            } => self.run_pairing(addr, port, trust::pair_error_message, move |a, p, id| {
+                trust::pair_with_host(a, p, id, &pin, &device_name)
+            }),
+            ConsoleCmd::RequestAccess {
+                addr,
+                port,
+                fp_hex,
+                device_name,
+            } => {
+                let pin = trust::parse_hex32(&fp_hex);
+                self.run_pairing(addr, port, trust::access_error_message, move |a, p, id| {
+                    trust::request_access_to_host(a, p, id, pin, &device_name, None)
+                })
+            }
             ConsoleCmd::SaveHost { name, addr, port } => self.save_host(name, addr, port),
             ConsoleCmd::UpdateHost {
                 key,
@@ -904,7 +917,17 @@ impl ServiceState {
             .ok();
     }
 
-    fn pair(&self, addr: String, port: u16, pin: String, device_name: String) {
+    /// Run one pairing (`ask`: the PIN ceremony or a request access) on its own thread and
+    /// report it as Busy, then Paired or Failed. A later pairing makes this answer stale.
+    fn run_pairing(
+        &self,
+        addr: String,
+        port: u16,
+        wording: fn(&punktfunk_core::PunktfunkError) -> String,
+        ask: impl FnOnce(&str, u16, &(String, String)) -> Result<[u8; 32], punktfunk_core::PunktfunkError>
+            + Send
+            + 'static,
+    ) {
         // What the list calls each identity at this address (advert or store), picked
         // once the ceremony says which one answered: both OS installs of a dual-boot
         // box sit here, and the first row is not necessarily this one.
@@ -923,7 +946,7 @@ impl ServiceState {
             .name("punktfunk-pair".into())
             .spawn(move || {
                 let current = || pair_gen.load(Ordering::SeqCst) == generation;
-                match trust::pair_with_host(&addr, port, &identity, &pin, &device_name) {
+                match ask(&addr, port, &identity) {
                     Ok(fp) => {
                         let fp_hex = trust::hex(&fp);
                         let name = named
@@ -947,7 +970,7 @@ impl ServiceState {
                         // Cause-specific wording (wrong PIN vs not-armed vs unreachable
                         // vs a typed host rejection) — shared with every other surface.
                         if current() {
-                            console.set_pair(PairPhase::Failed(trust::pair_error_message(&e)));
+                            console.set_pair(PairPhase::Failed(wording(&e)));
                         }
                     }
                 }

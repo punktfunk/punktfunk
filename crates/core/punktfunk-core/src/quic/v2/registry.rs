@@ -329,6 +329,10 @@ mod tests {
             "SEAT_UNAVAILABLE_CLOSE_CODE",
             crate::reject::SEAT_UNAVAILABLE_CLOSE_CODE,
         ),
+        (
+            "ACCESS_GRANTED_CLOSE_CODE",
+            crate::reject::ACCESS_GRANTED_CLOSE_CODE,
+        ),
         ("CLIP_CANCELLED_CODE", 0x70),
         ("STOP_UNKNOWN_STREAM", STOP_UNKNOWN_STREAM),
     ];

@@ -7,4 +7,6 @@ import PunktfunkKit
 struct ApprovalRequest {
     let host: StoredHost
     let advertisedFingerprint: Data?
+    /// Tells this request's answer from a later one's.
+    var token = UUID()
 }

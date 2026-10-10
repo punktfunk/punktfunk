@@ -25,7 +25,13 @@ impl AppModel {
             }
             TrustRoute::OfferTofu(_) => crate::app::gate::tofu_dialog(&self.window, sender, req),
             TrustRoute::NeedsPairing => {
-                crate::app::gate::approval_dialog(&self.window, sender, self.waiting.clone(), req);
+                crate::app::gate::approval_dialog(
+                    &self.window,
+                    sender,
+                    self.waiting.clone(),
+                    self.identity.clone(),
+                    req,
+                );
             }
         }
     }

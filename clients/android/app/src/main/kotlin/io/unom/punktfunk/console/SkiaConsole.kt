@@ -164,6 +164,7 @@ object SkiaConsole {
 
     /** The wake-and-wait loop in flight, if any. */
     private var wakeGen = AtomicLong(0)
+    private val pairGen = AtomicLong(0)
 
     // ---- availability -------------------------------------------------------------------
 
@@ -856,6 +857,7 @@ object SkiaConsole {
         "FetchLibrary" to { c -> fetchLibrary(c, refreshOnly = false) },
         "RefreshRunning" to { c -> fetchLibrary(c, refreshOnly = true) },
         "Pair" to ::pair,
+        "RequestAccess" to ::requestAccess,
         "SendLogs" to ::sendLogs,
         "SpeedTest" to ::speedTest,
         "HostAction" to ::hostAction,
@@ -1078,17 +1080,42 @@ object SkiaConsole {
     }
 
     private fun pair(c: JSONObject) {
-        val addr = c.optString("addr"); val port = c.optInt("port")
         val pin = c.optString("pin"); val name = c.optString("device_name")
+        runPairing(c, ConnectErrors::pairMessage) { id, addr, port ->
+            NativeBridge.nativePair(addr, port, id.certPem, id.privateKeyPem, pin, name)
+        }
+    }
+
+    /** No PIN: wait for the host's operator, pinned to the advertised fingerprint. Never streams. */
+    private fun requestAccess(c: JSONObject) {
+        val fpHex = c.optString("fp_hex"); val name = c.optString("device_name")
+        runPairing(c, { ConnectErrors.connectMessage(it, requestAccess = true) }) { id, addr, port ->
+            NativeBridge.nativeRequestAccess(addr, port, id.certPem, id.privateKeyPem, fpHex, name)
+        }
+    }
+
+    /**
+     * One pairing off the main thread ([ask] returns the host fingerprint, or `""`), reported Busy,
+     * then Paired or Failed. A later pairing makes this one's answer stale.
+     */
+    private fun runPairing(
+        c: JSONObject,
+        wording: (String) -> String,
+        ask: (ClientIdentity, String, Int) -> String,
+    ) {
+        val addr = c.optString("addr"); val port = c.optInt("port")
         val id = identity
         if (id == null) {
             NativeBridge.nativeConsoleSetPair(handle, ConsoleJson.pairFailed(identities.blockedMessage()))
             return
         }
+        val gen = pairGen.incrementAndGet()
         NativeBridge.nativeConsoleSetPair(handle, ConsoleJson.pairBusy())
         ioPool.execute {
-            val fp = runCatching { NativeBridge.nativePair(addr, port, id.certPem, id.privateKeyPem, pin, name) }.getOrDefault("")
+            val fp = runCatching { ask(id, addr, port) }.getOrDefault("")
+            val err = if (fp.isEmpty()) NativeBridge.nativeTakeLastError() else ""
             main.post {
+                if (pairGen.get() != gen) return@post
                 if (fp.isNotEmpty()) {
                     // Named once the ceremony says who answered: the address may carry both OS
                     // installs of a dual-boot box, and the first record there is not this one.
@@ -1100,7 +1127,7 @@ object SkiaConsole {
                     pushHosts(); pushKnownHosts()
                     NativeBridge.nativeConsoleSetPair(handle, ConsoleJson.pairPaired(fp))
                 } else {
-                    NativeBridge.nativeConsoleSetPair(handle, ConsoleJson.pairFailed(ConnectErrors.pairMessage(NativeBridge.nativeTakeLastError())))
+                    NativeBridge.nativeConsoleSetPair(handle, ConsoleJson.pairFailed(wording(err)))
                 }
             }
         }

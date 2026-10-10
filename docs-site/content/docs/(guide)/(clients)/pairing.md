@@ -11,7 +11,8 @@ its own after that. There are no accounts and nothing leaves your network.
 1. On the new device, pick the host and choose **Request access**.
 2. In the console, open **Devices**. The device is listed under **Waiting for approval**.
 3. Click **Approve**, set its [access](#choosing-access-when-you-admit-a-device), enter your
-   **Console password** and click **Approve**. The device connects straight away.
+   **Console password** and click **Approve**. The device is now paired, even while another
+   device is streaming. Pick the host on it to start streaming.
 
 **Deny** only dismisses the request; the device can ask again. Requests expire after 10 minutes.
 

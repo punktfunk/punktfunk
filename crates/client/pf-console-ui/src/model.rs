@@ -446,6 +446,14 @@ pub enum ConsoleCmd {
         pin: String,
         device_name: String,
     },
+    /// No-PIN pairing: wait for the host's operator to approve this device, pinned to the
+    /// advertised `fp_hex`. Reports like [`Self::Pair`]: Busy, then Paired or Failed. Never streams.
+    RequestAccess {
+        addr: String,
+        port: u16,
+        fp_hex: String,
+        device_name: String,
+    },
     /// Upload the log ring to this paired host's management API. Same transport as
     /// [`Self::FetchLibrary`]; the result is a notice toast. For platforms whose own
     /// logs are unreachable.

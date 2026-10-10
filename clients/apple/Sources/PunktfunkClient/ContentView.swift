@@ -226,20 +226,18 @@ struct ContentView: View {
             } message: {
                 Text(model.errorMessage ?? "")
             }
-            // The delegated-approval wait: the host holds the connection open until the operator
-            // approves it. Cancel returns the UI at once; the in-flight connect is left to time out
-            // and its late result is discarded by SessionModel's connect guard (disconnect resets
-            // the phase/host it checks).
+            // The delegated-approval wait: the host holds the request until the operator approves
+            // it. Cancel returns the UI at once; `ConnectFlow.requestAccess` drops the late answer.
             .alert(
                 "Waiting for approval",
                 isPresented: awaitingApprovalPresented,
                 presenting: awaitingApproval
             ) { _ in
-                Button("Cancel", role: .cancel) { model.disconnect() }
+                Button("Cancel", role: .cancel) {}
             } message: { req in
                 Text("Approve \u{201C}\(DeviceName.current)\u{201D} in \(req.host.displayName)'s "
-                    + "web console (port 47992 → Pairing). This device connects automatically once "
-                    + "you approve it — no need to reconnect.")
+                    + "web console (port 47992 → Pairing). This device is paired once you "
+                    + "approve it.")
             }
             // Who is playing: shown by a connect when its host lists several profiles.
             .sheet(item: $profileAsk) { ProfilePickerView(ask: $0) }
@@ -457,12 +455,6 @@ struct ContentView: View {
                 // A session actually started — remember it on the card ("Connected … ago"
                 // plus the accent ring on the most recent host).
                 guard let host = model.activeHost else { break }
-                // Delegated approval just succeeded: the operator let this device in, so pin the
-                // host's observed fingerprint and remember it as paired — future connects are then
-                // silent (rule 1), exactly like after a PIN/TOFU success. Dismisses the wait prompt.
-                let approvedFingerprint = awaitingApproval?.host.id == host.id
-                    ? model.connection?.hostFingerprint : nil
-                if awaitingApproval?.host.id == host.id { awaitingApproval = nil }
                 // The session's Welcome names the library's port without an mDNS advert, so a
                 // host reached by address over a VPN has one too. 0 is not advertised.
                 let liveMgmtPort = model.connection?.hostMgmtPort
@@ -470,13 +462,8 @@ struct ContentView: View {
                 // On the next run-loop turn: a store write inside `.onChange` publishes from
                 // within a view update.
                 DispatchQueue.main.async {
-                    store.markConnected(
-                        host.id, mgmtPort: liveMgmtPort, fingerprint: approvedFingerprint)
+                    store.markConnected(host.id, mgmtPort: liveMgmtPort)
                 }
-            case .idle:
-                // The delegated-approval connect failed, timed out, or was cancelled — drop the
-                // wait prompt (SessionModel surfaces any error via `errorMessage`).
-                if awaitingApproval != nil { awaitingApproval = nil }
             default:
                 break
             }

@@ -369,7 +369,7 @@
 //
 // The wire is versioned by ALPN, not by this. Pin the integer in `punktfunk-ffi`
 // (`abi_version_is_pinned`). Per-bump notes live in `CHANGELOG.md`.
-#define PUNKTFUNK_ABI_VERSION 49
+#define PUNKTFUNK_ABI_VERSION 50
 
 // This client silenced its own speakers (`client::NativeClient::set_audio_muted`). The host
 // keeps sending, so a session joined to the same sink still hears the game.
@@ -1203,6 +1203,10 @@
 
 // The profile's seat can't run: removed, or its host would not start.
 #define SEAT_UNAVAILABLE_CLOSE_CODE 111
+
+// Not a rejection: the answer to an access-only hello. This device may connect now.
+// 0x70 and 0x71 are stream codes.
+#define ACCESS_GRANTED_CLOSE_CODE 114
 
 // Under-render floor; presenter upscales.
 #define PUNKTFUNK_MIN_SCALE 0.5
@@ -2584,6 +2588,26 @@ PunktfunkStatus punktfunk_pair(const char *host,
                                const char *name,
                                uint8_t *host_sha256_out,
                                uint32_t timeout_ms);
+#endif
+
+#if defined(PUNKTFUNK_FEATURE_QUIC)
+// Request access without a PIN: blocks until the host's operator approves this device,
+// refuses it, or `timeout_ms` passes. Never starts a stream. On success the host fingerprint
+// is written to `host_sha256_out` — persist it as paired, like [`punktfunk_pair`]'s.
+// A refusal is its `PUNKTFUNK_STATUS_REJECTED_*` code.
+//
+// # Safety
+// `host`/`client_cert_pem`/`client_key_pem`/`name` are NUL-terminated UTF-8; `pin_sha256`
+// is NULL (trust on first use) or valid for 32 bytes; `host_sha256_out` is writable for
+// 32 bytes.
+PunktfunkStatus punktfunk_request_access(const char *host,
+                                         uint16_t port,
+                                         const char *client_cert_pem,
+                                         const char *client_key_pem,
+                                         const uint8_t *pin_sha256,
+                                         const char *name,
+                                         uint8_t *host_sha256_out,
+                                         uint32_t timeout_ms);
 #endif
 
 #if defined(PUNKTFUNK_FEATURE_QUIC)

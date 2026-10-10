@@ -1512,7 +1512,9 @@ impl Shell {
             if let ConsoleCmd::FetchLibrary { fp_hex, .. } = &cmd {
                 self.note_fetch(fp_hex);
             }
-            if let ConsoleCmd::Pair { addr, port, .. } = &cmd {
+            if let ConsoleCmd::Pair { addr, port, .. }
+            | ConsoleCmd::RequestAccess { addr, port, .. } = &cmd
+            {
                 self.pairing = Some((addr.clone(), *port));
             }
             if let ConsoleCmd::FetchProfiles { fp_hex, .. } = &cmd {

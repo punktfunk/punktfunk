@@ -348,8 +348,8 @@ mod abi_version_tests {
     #[test]
     fn abi_version_is_pinned() {
         // Current ABI. A bump must update this pin.
-        assert_eq!(punktfunk_core::ABI_VERSION, 49);
-        assert_eq!(super::punktfunk_abi_version(), 49);
+        assert_eq!(punktfunk_core::ABI_VERSION, 50);
+        assert_eq!(super::punktfunk_abi_version(), 50);
     }
 
     /// The C cap and the wire's are one number.

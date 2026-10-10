@@ -314,19 +314,36 @@ struct ConnectFlow {
         }
     }
 
-    /// The no-PIN delegated-approval flow: open an identified connect the host parks until the
-    /// operator approves it in the console, showing the cancelable "Waiting for approval" prompt
-    /// meanwhile. On success the SAME connection is admitted (no reconnect) and ContentView pins
-    /// the host as paired when the session starts streaming.
+    /// The no-PIN delegated-approval flow: ask the host, which parks the request until the
+    /// operator approves it in the console, under the cancelable "Waiting for approval" prompt.
+    /// Approval pins the host as paired; it never starts a stream. The advertised certificate is
+    /// the pin (impostor defence during the long wait); a typed host has none, so first use.
     func requestAccess(_ req: ApprovalRequest) {
         guard !model.isBusy else { return }
-        // Pin the advertised certificate for a discovered host (impostor defence during the long
-        // wait); a manually-typed host has no advertised fingerprint, so trust-on-first-use.
-        var host = req.host
-        host.pinnedSHA256 = req.advertisedFingerprint
-        // `awaitingApproval` is set inside startSessionDirect (after any wake), so it never stacks
-        // under the "Waking…" overlay.
-        startSession(host, allowTofu: false, requestAccess: true, approvalReq: req)
+        awaitingApproval = req
+        let (store, model, awaiting) = (store, model, $awaitingApproval)
+        let (address, port, pin) = (req.host.address, req.host.port, req.advertisedFingerprint)
+        Task { @MainActor in
+            let result = await Task.detached(priority: .userInitiated) {
+                Result {
+                    let identity = try ClientIdentityStore.shared.loadForPairing()
+                    return try PunktfunkKit.requestAccess(
+                        host: address, port: port, identity: identity, pinSHA256: pin,
+                        name: DeviceName.current)
+                }
+            }.value
+            // Cancelled, or a later request owns the prompt.
+            guard awaiting.wrappedValue?.token == req.token else { return }
+            awaiting.wrappedValue = nil
+            switch result {
+            case .success(let fingerprint):
+                store.pin(req.host.id, fingerprint: fingerprint)
+            case .failure(let error):
+                model.errorMessage = ConnectOffer.failureMessage(
+                    error, hostName: req.host.displayName, pinned: false, requestAccess: true,
+                    callerRecovers: false)
+            }
+        }
     }
 
     /// Explicit wake-only (a host card's or the library's "Wake Host"): fire the packet and wait

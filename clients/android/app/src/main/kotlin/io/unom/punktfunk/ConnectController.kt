@@ -362,10 +362,9 @@ internal class ConnectController(
     }
 
     /**
-     * The no-PIN "request access" path: an identified connect the host parks until the operator
-     * approves it in its console or web UI. Approval admits the same connection, so success saves
-     * the host as paired: the approval is the pairing. Cancel returns the UI at once, and a late
-     * result closes silently through the attempt's flag.
+     * The no-PIN "request access" path: the host parks the request until the operator approves
+     * it in its console or web UI. Approval saves the host as paired, like a PIN ceremony, and
+     * never starts a stream. Cancel returns the UI at once; a late answer is dropped.
      */
     fun requestAccess(target: PendingTrust) {
         pendingTrust = null
@@ -374,33 +373,23 @@ internal class ConnectController(
         awaiting = req
         connecting = true
         status = null
-        pauseBrowse() // same, for the session parked behind the console hold
         scope.launch {
             // Pin the advertised fingerprint for a discovered host (defence against an impostor while
             // we wait); a manually-typed host has none, so trust-on-first-use.
             val pinHex = target.advertisedFp ?: ""
-            // A host being trusted for the first time can't have a binding yet, so this is always
-            // the plain defaults — a preset only ever enters via a later, deliberate choice.
-            val handle = connectNative(
-                id, target.host, target.port, pinHex, REQUEST_ACCESS_TIMEOUT_MS,
-                preset = null, launch = target.launch,
-            )
-            // Cancelled while we were parked: tear the (possibly just-approved) session down and
-            // don't touch UI a fresh action may now own.
-            if (req.cancelled.get()) {
-                if (handle != 0L) withContext(Dispatchers.IO) { NativeBridge.nativeClose(handle) }
-                return@launch
+            val fp = withContext(Dispatchers.IO) {
+                NativeBridge.nativeRequestAccess(
+                    target.host, target.port, id.certPem, id.privateKeyPem, pinHex, deviceName(context),
+                )
             }
+            // Cancelled while we waited: don't touch UI a fresh action may now own.
+            if (req.cancelled.get()) return@launch
             awaiting = null
             connecting = false
-            if (handle != 0L) {
-                // Approved — save the host as PAIRED, pinning the fingerprint it presented, so
-                // future connects are silent (exactly like after a PIN ceremony).
-                val record = SessionFactory.pinPresented(
-                    handle, target.host, target.port, target.name, paired = true, knownHostStore,
-                )?.also { refreshHosts() }
-                    ?: knownHostStore.resolve("", target.host, target.port)
-                onConnected(session(handle, record, preset = null))
+            if (fp.isNotEmpty()) {
+                knownHostStore.trust(target.host, target.port, target.name, fp, paired = true)
+                refreshHosts()
+                notice = "Paired with ${target.name}"
             } else {
                 // Cause-specific: an operator denial, an approval timeout, and a request that
                 // never reached the host are different problems with different fixes.
@@ -408,17 +397,15 @@ internal class ConnectController(
                     NativeBridge.nativeTakeLastError(),
                     requestAccess = true,
                 )
-                resumeBrowse()
             }
         }
     }
 
-    /** Cancel on "Waiting for approval…". The request may still stand on the host, so the browse resumes. */
+    /** Cancel on "Waiting for approval…": the UI returns at once and the answer is dropped. */
     fun cancelApproval() {
         awaiting?.cancelled?.set(true)
         awaiting = null
         connecting = false
-        resumeBrowse()
     }
 
     /**
