@@ -2,7 +2,8 @@
 //!
 //! Bazzite and SteamOS switch session under a live stream, which changes the compositor and the
 //! capture backend. The watcher only signals ([`SessionSwitch`]); the env is applied on the
-//! encode thread, so nothing here ever `setenv`s.
+//! encode thread, so nothing here ever `setenv`s. A Linux seat switches by itself and signals
+//! the same way ([`SessionSwitch::seat`]).
 
 use super::*;
 
@@ -10,7 +11,35 @@ use super::*;
 pub(super) struct SessionSwitch {
     pub(super) kind: crate::vdisplay::ActiveKind,
     pub(super) compositor: crate::vdisplay::Compositor,
-    pub(super) env: crate::vdisplay::SessionEnv,
+    /// The new session's env. `None` on a seat: its desktop keeps running under Game Mode.
+    pub(super) env: Option<crate::vdisplay::SessionEnv>,
+    /// What the new display starts. Only a seat entering Game Mode starts anything.
+    pub(super) launch: Option<String>,
+}
+
+impl SessionSwitch {
+    /// A seat's switch (`seats/session_switch.rs`): its own gamescope with Steam, or its desktop.
+    #[cfg(target_os = "linux")]
+    pub(super) fn seat(game: bool) -> Self {
+        use crate::vdisplay::{ActiveKind, Compositor};
+        SessionSwitch {
+            kind: if game {
+                ActiveKind::Gaming
+            } else {
+                ActiveKind::DesktopKde
+            },
+            compositor: if game {
+                Compositor::Gamescope
+            } else {
+                Compositor::Kwin
+            },
+            env: None,
+            launch: game
+                .then(crate::library::game_mode_launch)
+                .flatten()
+                .and_then(|t| t.command),
+        }
+    }
 }
 
 /// `PUNKTFUNK_SESSION_WATCH` on/off wins. Auto is on for Bazzite/SteamOS (they flip
@@ -59,7 +88,8 @@ pub(super) fn session_watcher_loop(
                             .send(SessionSwitch {
                                 kind: cur,
                                 compositor: comp,
-                                env: active.env,
+                                env: Some(active.env),
+                                launch: None,
                             })
                             .is_err()
                         {

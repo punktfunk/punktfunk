@@ -249,6 +249,17 @@ system-range user, `pf-seat-<n>`, with a logind session of its own, a headless c
 - **Stopping.** `pam_systemd` moves the runner into the session's scope, so stopping the unit
   can't reach it. The runner ends its children on `SIGTERM`, and `seat-reap` ends the session
   by the id the runner recorded.
+- **Game Mode.** The seat host keeps the seat's mode, `desktop` or `game`, in `seat-session` in
+  its config directory, and starts in the one it ran last. It owns
+  `com.steampowered.SteamOSManager1` on the seat's session bus and serves `SessionManagement1`,
+  which `steamosctl` and Steam call; `steamos-session-select` and `steamos-desktop-return`, first
+  on the seat's `PATH`, call it too. A switch never reaches the box's login. The runner masks the
+  seat user's own `steamos-manager.service` for the session.
+
+  The desktop keeps running in Game Mode. A switch moves the seat's own live sessions in place
+  between its KWin output and a gamescope the host spawns with `steam -gamepadui -steamos3`, so the
+  stream continues; a device joined to the screen is ended and joins the new one on reconnect. The
+  seat's sessions use shared input and audio, never an isolated gamescope.
 
 `punktfunk-seats doctor` checks systemd, logind, the groups, a GPU render node, a compositor and
 the installed unit.

@@ -574,6 +574,9 @@ pub(super) struct SessionContext {
     pub(super) inj_shared_tx: std::sync::mpsc::Sender<punktfunk_core::input::InputEvent>,
     #[cfg(target_os = "linux")]
     pub(super) inj_session_tx: Option<std::sync::mpsc::Sender<punktfunk_core::input::InputEvent>>,
+    /// The seat's own session: it follows the seat's Game Mode switch (`seats/session_switch.rs`).
+    #[cfg(target_os = "linux")]
+    pub(super) follows_seat: bool,
 }
 
 /// The virtual-display session: bring up, then tick until the client leaves.

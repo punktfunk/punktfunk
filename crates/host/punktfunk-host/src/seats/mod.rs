@@ -9,6 +9,8 @@
 #[cfg(any(windows, target_os = "linux"))]
 pub(crate) mod lifecycle;
 pub(crate) mod placement;
+#[cfg(target_os = "linux")]
+pub(crate) mod session_switch;
 
 use crate::profiles::OsAccount;
 use pf_seats::ipc::{ApiError, Command, CommandResult, ErrorCode};

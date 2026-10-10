@@ -6,6 +6,10 @@
 # The desktop mirrors scripts/headless/run-headless-kde.sh; without kwin_wayland the host starts
 # gamescope itself.
 #
+# Game Mode is the host's: it answers steamos-manager's session switch on the seat's bus and moves
+# its streams between this desktop and a gamescope of its own, so the desktop keeps running.
+# steamos-session-select and steamos-desktop-return on PATH call the host the same way.
+#
 # pam_systemd moves this process and its children into the session's scope, so stopping the unit
 # signals only this script. It records the session id for seat-reap and kills its own children on
 # SIGTERM; seat-reap kills whatever is left.
@@ -54,6 +58,36 @@ cleanup() {
     exit 0
 }
 trap cleanup TERM INT
+
+# The session switches of distros without steamos-manager, for this seat: Steam's fallback and
+# Nobara's shortcut call these by name, and they ask the host as steamosctl does. The seat's own
+# steamos-manager is masked so the host keeps its name.
+install_switch_commands() {
+    local bin="$RUNTIME_DIRECTORY/bin"
+    mkdir -p "$bin"
+    cat >"$bin/steamos-session-select" <<'EOF'
+#!/usr/bin/env bash
+case "${0##*/} ${1-}" in
+"steamos-session-select gamescope" | "steamos-session-select " | "steamos-desktop-return "*)
+    method=SwitchToGameMode ;;
+"steamos-session-select plasma"* | "steamos-session-select desktop")
+    method=SwitchToDesktopMode ;;
+"steamos-session-select persistent" | "steamos-session-select oneshot")
+    exit 0 ;;
+*)
+    echo "!! Unrecognized session '${1-}'" >&2
+    exit 1 ;;
+esac
+exec busctl --address="$DBUS_SESSION_BUS_ADDRESS" call com.steampowered.SteamOSManager1 \
+    /com/steampowered/SteamOSManager1 com.steampowered.SteamOSManager1.SessionManagement1 "$method"
+EOF
+    chmod 755 "$bin/steamos-session-select"
+    ln -sf steamos-session-select "$bin/steamos-desktop-return"
+    export PATH="$bin:$PATH"
+    # The owner's row has a bus of its own, where nothing activates it.
+    [[ -z "$OWNER" ]] && systemctl --user mask --runtime --now steamos-manager.service >/dev/null 2>&1
+    return 0
+}
 
 # The owner's settings (host.env), under the seat contract: the contract's variables keep the
 # values the supervisor wrote.
@@ -219,6 +253,7 @@ if [[ -n "$OWNER" ]]; then
     systemctl --user stop punktfunk-host.service 2>/dev/null || true
     mark_ready_when_serving
 fi
+install_switch_commands
 if command -v kwin_wayland >/dev/null 2>&1; then
     start_kwin
 else

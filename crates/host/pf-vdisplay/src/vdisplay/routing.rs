@@ -169,6 +169,7 @@ pub fn input_backend_id(chosen: Compositor) -> &'static str {
 /// The operator-pinned (`PUNKTFUNK_COMPOSITOR`) path calls this alone — it
 /// leaves input routing to the operator's knob, but `create` still needs a
 /// route or it falls through to a bare spawn on a box pinned to managed.
+/// A seat host always spawns, whatever the box runs or the operator set.
 #[cfg(target_os = "linux")]
 #[must_use = "the resolved gamescope route must reach the backend instance (set_gamescope_route)"]
 pub fn resolve_gamescope_route(
@@ -177,6 +178,11 @@ pub fn resolve_gamescope_route(
 ) -> Option<GamescopeRoute> {
     if chosen != Compositor::Gamescope {
         return None;
+    }
+    // A seat owns no box session to manage or attach to: its gamescope is always its own.
+    if pf_paths::seat::is_seat_host() {
+        tracing::info!("gamescope sub-mode: spawn, as every seat does");
+        return Some(GamescopeRoute::Spawn);
     }
     {
         // `operator_gamescope` takes ENV_LOCK itself; the mutex is not reentrant.

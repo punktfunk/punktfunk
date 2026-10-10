@@ -109,6 +109,9 @@ pub(super) struct StreamState {
     // ---- teardown order, which is field order: the status registration ends first, then
     // the send thread, then game policy, then capture, encoder, display ----
     _watcher: Option<std::thread::JoinHandle<()>>,
+    /// `Some(joined)` on the seat's own session, which follows the seat's mode.
+    #[cfg(target_os = "linux")]
+    seat_join: Option<bool>,
     pub(super) live_session: crate::session_status::LiveSessionGuard,
     // ---- the send thread ----
     /// The one strong handle: a client's NACK reaches the send thread through a weak one,
@@ -476,6 +479,8 @@ impl StreamState {
             inj_shared_tx,
             #[cfg(target_os = "linux")]
             inj_session_tx,
+            #[cfg(target_os = "linux")]
+            follows_seat,
         } = ctx;
         // The data plane is punched and idle until the send thread starts.
         // Answer the client's bring-up ramp on it meanwhile: it measures the
@@ -883,12 +888,30 @@ impl StreamState {
             deescalate_backoff: super::encode::DEESCALATE_BACKOFF_START,
             live_session,
             _watcher: None,
+            #[cfg(target_os = "linux")]
+            seat_join: follows_seat.then_some(join_live),
             game_life,
         })
     }
 
-    /// Follow a mid-stream Gaming↔Desktop switch unless `PUNKTFUNK_COMPOSITOR` pins the backend.
+    /// Follow a mid-stream Gaming↔Desktop switch: the seat's own, else the box's unless
+    /// `PUNKTFUNK_COMPOSITOR` pins the backend. A device joined to a seat's screen ends instead,
+    /// and its reconnect joins the new one.
     fn spawn_session_watcher(&mut self) {
+        #[cfg(target_os = "linux")]
+        if let Some(joined) = self.seat_join {
+            let (session_tx, session_rx) = std::sync::mpsc::channel::<SessionSwitch>();
+            self.session_rx = session_rx;
+            let stop = self.stop.clone();
+            crate::seats::session_switch::follow(Box::new(move |game| {
+                if joined {
+                    stop.store(true, Ordering::SeqCst);
+                    return false;
+                }
+                session_tx.send(SessionSwitch::seat(game)).is_ok()
+            }));
+            return;
+        }
         if !(session_watch_enabled() && pf_host_config::config().compositor.is_none()) {
             return;
         }

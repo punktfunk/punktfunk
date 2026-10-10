@@ -17,7 +17,8 @@ use crate::native::bitrate::pyrowave_mode_kbps;
 use crate::session_status::pack_mode;
 
 /// Isolated gamescope keeps its pinned injector and must not steal the shared backend
-/// (last-write-wins). Everyone else gets the shared sender plus `set_backend_id`.
+/// (last-write-wins). Everyone else gets the shared sender plus `set_backend_id`; a seat's
+/// desktop keeps the backend its runner picked.
 #[cfg(target_os = "linux")]
 fn repoint_session_input(
     input_route: &super::input::InputRoute,
@@ -30,15 +31,17 @@ fn repoint_session_input(
         Some(tx) => input_route.set(tx.clone()),
         None => {
             input_route.set(shared.clone());
-            crate::inject::set_backend_id(crate::vdisplay::input_backend_id(compositor));
+            crate::inject::set_backend_id(&crate::seats::session_switch::input_backend_id(
+                compositor,
+            ));
         }
     }
 }
 
 impl StreamState {
-    /// Follow the watcher's latest session switch: rebuild the backend in place, with the
-    /// session's display request and the cursor plan of the compositor it switches to, and keep
-    /// streaming.
+    /// Follow the latest session switch, the watcher's or the seat's: rebuild the backend in
+    /// place, with the session's display request, the switch's launch and the cursor plan of the
+    /// compositor it switches to, and keep streaming.
     pub(super) fn on_session_switch(&mut self) {
         let mut switch = None;
         while let Ok(s) = self.session_rx.try_recv() {
@@ -53,11 +56,13 @@ impl StreamState {
         tracing::info!(from = self.compositor.id(), to = sw.compositor.id(), kind = ?sw.kind,
             "session switch — rebuilding backend in place");
         // Only writer is not safety: `setenv` races every concurrent `getenv` in the process.
-        crate::vdisplay::apply_session_env(&crate::vdisplay::ActiveSession {
-            kind: sw.kind,
-            env: sw.env,
-            compositor_pid: None,
-        });
+        if let Some(env) = sw.env {
+            crate::vdisplay::apply_session_env(&crate::vdisplay::ActiveSession {
+                kind: sw.kind,
+                env,
+                compositor_pid: None,
+            });
+        }
         let switched_route = crate::vdisplay::resolve_gamescope_route(sw.compositor, false);
         #[cfg(target_os = "linux")]
         repoint_session_input(
@@ -84,8 +89,11 @@ impl StreamState {
         self.close_open_frame();
         let rebuilt = (|| -> Result<(Box<dyn crate::vdisplay::VirtualDisplay>, Pipeline)> {
             let mut new_vd = crate::vdisplay::open(sw.compositor)?;
-            self.reopen_params(hw_cursor, switched_route)
-                .apply(&mut *new_vd);
+            let params = crate::vdisplay::SessionParams {
+                launch: sw.launch.clone(),
+                ..self.reopen_params(hw_cursor, switched_route)
+            };
+            params.apply(&mut *new_vd);
             let pipe = build_pipeline_with_retry(
                 &mut new_vd,
                 self.cur_mode,

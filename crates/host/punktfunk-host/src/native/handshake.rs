@@ -903,7 +903,8 @@ async fn wait_released(stops: &[Arc<std::sync::atomic::AtomicBool>]) {
     }
 }
 
-/// Compositor for Welcome plus the gamescope route as a value; synthetic has neither.
+/// Compositor for Welcome plus the gamescope route as a value; synthetic has neither. A seat's
+/// own profile gets the seat's mode.
 async fn negotiate_compositor(
     source: Punktfunk1Source,
     hello: &Hello,
@@ -916,6 +917,10 @@ async fn negotiate_compositor(
     // Resolve now so Welcome reports the backend we will drive. Synthetic has no compositor.
     // Blocking probes → spawn_blocking.
     let compositor = match source {
+        #[cfg(target_os = "linux")]
+        Punktfunk1Source::Virtual if super::plays_seat_mode(profile) => {
+            Some(crate::seats::session_switch::connect_route())
+        }
         Punktfunk1Source::Virtual => {
             let pref = hello.compositor;
             // Dedicated gamescope only if the launch id resolves to a command; an unknown id
