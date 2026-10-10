@@ -1087,14 +1087,12 @@ struct ContentView: View {
         flow.connect(shelf.host, preset: shelf.preset, fromLibrary: true)
     }
 
-    /// Pairing ceremony succeeded — pin the host and connect. The guard backstops a stale
-    /// ceremony surfacing after dismissal (PairSheet also self-discards those).
+    /// Pairing ceremony succeeded — pin the host. Pairing never starts a stream; the next tap
+    /// does. The guard backstops a stale ceremony surfacing after dismissal (PairSheet also
+    /// self-discards those).
     private func handlePaired(_ host: StoredHost, fingerprint: Data) {
         guard pairingTarget?.id == host.id else { return }
         store.pin(host.id, fingerprint: fingerprint)
-        var pinned = host
-        pinned.pinnedSHA256 = fingerprint
-        flow.connect(pinned)
     }
 
     // MARK: - First-run + dev hooks

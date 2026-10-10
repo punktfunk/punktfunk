@@ -499,12 +499,12 @@ internal class ConnectController(
         )
     }
 
-    /** The PIN ceremony finished with [fp]: save the host as paired, then dial it. */
+    /** The PIN ceremony finished with [fp]: save the host as paired. Pairing never streams. */
     fun paired(pt: PendingTrust, fp: String) {
         knownHostStore.trust(pt.host, pt.port, pt.name, fp, paired = true)
         refreshHosts()
         pendingTrust = null
-        doConnect(pt.host, pt.port, pt.name, fp, pt.preset, pt.launch)
+        notice = "Paired with ${pt.name}"
     }
 
     /** The OK on a link that named a saved host by a guessable reference: the card's own dial. */

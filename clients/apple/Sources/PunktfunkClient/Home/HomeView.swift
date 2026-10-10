@@ -32,7 +32,7 @@ struct HomeView: View {
     /// card tap (the host's binding), an explicit pick from "Connect with ▸" or a pinned card.
     let connect: (StoredHost, PresetSelection) -> Void
     let connectDiscovered: (DiscoveredHost) -> Void
-    /// Pairing succeeded (tvOS PairSheet route) — pin + connect (ContentView guards staleness).
+    /// Pairing succeeded (tvOS PairSheet route) — pin it (ContentView guards staleness).
     let onPaired: (StoredHost, Data) -> Void
     /// Picked a title in the (experimental) library — start a session that launches it, with the
     /// shelf's preset (a pinned card's own; the host's binding on its primary card).

@@ -21,6 +21,7 @@ its own after that. There are no accounts and nothing leaves your network.
    click **Show PIN**. It shows a 4-digit PIN for two minutes.
 2. On the device, pick the host, choose **Pair with PIN…** or **Use a PIN instead…**, and type
    the PIN.
+3. The host now shows as paired. Pick it again to start streaming.
 
 If the PIN runs out, click **Pair a device** again. A `punktfunk://` link can't pair a device.
 

@@ -105,17 +105,9 @@ export const TrustSheet: FC<{
   const usePin = () => {
     // Hand off to the keypad. Closing first keeps one modal on screen at a time, which is what
     // the gamepad focus model expects.
-    const { host: h, onStream: stream, onChanged: changed } = props.current;
+    const { host: h, onChanged: changed } = props.current;
     closeModal?.();
-    showModal(
-      <PairModal
-        host={h}
-        onPaired={() => {
-          changed();
-          stream({});
-        }}
-      />,
-    );
+    showModal(<PairModal host={h} onPaired={changed} />);
   };
 
   return (

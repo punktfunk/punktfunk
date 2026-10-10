@@ -159,7 +159,7 @@ pub fn tofu_dialog(
 
 /// The SPAKE2 ceremony: the host is armed and displays a 4-digit PIN; proving knowledge
 /// of it pins the host's certificate (and registers ours) with no offline-guessable
-/// transcript. Success persists the host as paired and connects.
+/// transcript. Success persists the host as paired; it never starts a stream.
 pub fn pin_dialog(
     window: &adw::ApplicationWindow,
     sender: &ComponentSender<AppModel>,
@@ -234,18 +234,12 @@ pub fn pin_dialog(
                         true,
                         &[],
                     );
+                    // Pairing never streams: the host's list watch shows it paired, and the
+                    // next Connect dials it.
                     sender.input(AppMsg::Toast(match saved {
-                        Ok(()) => "Paired — connecting…".into(),
-                        // The ceremony succeeded and this session will connect; the pairing
-                        // just did not reach the disk, so the next launch will ask again.
+                        Ok(()) => format!("Paired with {}", req.host.name),
                         Err(e) => format!("Paired, but couldn't save — {e:#}"),
                     }));
-                    sender.input(AppMsg::StartSession {
-                        req,
-                        fp_hex,
-                        tofu: false,
-                        opts: SpawnOpts::default(),
-                    });
                 }
                 Ok(Err(msg)) => sender.input(AppMsg::Toast(msg)),
                 Err(_) => {}
