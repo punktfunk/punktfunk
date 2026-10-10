@@ -11,7 +11,7 @@
   + sudo pacman-key --lsign-key E0CA04465C99C936E0B0C6510A317015A34DDD69
   + grep -q '^\[punktfunk\]' /etc/pacman.conf || printf '\n[punktfunk]\nServer = https://git.unom.io/api/packages/unom/arch/$repo/$arch\n' | sudo tee -a /etc/pacman.conf >/dev/null
   + sudo pacman -Sy
-  + sudo pacman -S --noconfirm punktfunk-host punktfunk-web punktfunk-scripting
+  + sudo pacman -S --noconfirm --needed punktfunk-host punktfunk-web punktfunk-scripting
 ==> Checking for Sunshine / Apollo / Vibeshine
   ok No conflicting game-streaming host detected.
 ==> Options (each one can be changed later)

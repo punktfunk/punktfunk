@@ -380,6 +380,9 @@ impl Executor<'_> {
 
     /// A package the target does not carry cannot be named (the transaction aborts) or kept
     /// (files collide), so a switch installs exactly what the target offers and removes the rest.
+    /// `--needed` leaves a package already at the target's version alone: reinstalling it reads
+    /// pacman's cache, which can hold the other channel's build of that version and then fails
+    /// this repo's signature.
     fn pacman_switch(&self, pkgs: &[String], facts: &Facts) -> Result<(), Failed> {
         let mut want = String::new();
         let mut drop = String::new();
@@ -404,7 +407,7 @@ impl Executor<'_> {
         if !drop.is_empty() {
             self.shell(&format!("sudo pacman -Rdd{drop}"), facts)?;
         }
-        self.shell(&format!("sudo pacman -S{want}"), facts)
+        self.shell(&format!("sudo pacman -S --needed{want}"), facts)
     }
 
     /// A container has no logind: enable-linger fails and would mean nothing. `--dry-run`
