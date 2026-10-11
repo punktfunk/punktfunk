@@ -16,7 +16,7 @@ short; the version-bump commit retitles it. Older sections stay as they are.
 
 ## v0.44.0
 
-602 commits since v0.43.1. **punktfunk/2 only**: the ALPN is the wire version now. **C ABI 50.**
+604 commits since v0.43.1. **punktfunk/2 only**: the ALPN is the wire version now. **C ABI 50.**
 Driver protocol floor stays 9. Profiles and seats arrive on Windows and Linux; video, audio and
 control share UDP 9777.
 Deep dive: `git log v0.43.1..v0.44.0`
