@@ -1,0 +1,7 @@
+• Needs Punktfunk 0.44 on your host: update the host first.
+• Profiles: pick who is playing, and a profile can have its own desktop.
+• PyroWave quality replaces the bitrate row and adapts to your network.
+• Fewer freezes on a lossy link: missing packets are sent again.
+• Change the controller type mid-stream from the quick-action dial.
+• Pairing saves the host; Connect starts the stream.
+• Fire TV and Android TV no longer go black after a decoder error.
