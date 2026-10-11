@@ -365,14 +365,14 @@ Either side can be the reason one of these didn't happen:
 
 ## Mixing versions
 
-Update a host and its clients in any order; paired devices stay paired. A feature one end doesn't
+Update the host first, then its clients; paired devices stay paired. A feature one end doesn't
 know is not offered, and the session goes ahead without it — see
 [Things both ends have to agree on](#things-both-ends-have-to-agree-on).
 
 | Contract | Current | Rule |
 |---|---|---|
-| Native protocol | **`punktfunk/2`** | Client and host must both speak it. A host refuses an older client with "update both". |
-| C ABI version | **44** | Between an app and the core library it ships with. |
+| Native protocol | **`punktfunk/2`** | A 0.44 host streams to 0.43 apps and newer. A 0.44 app needs a 0.44 host: an older one shows as offline, and connecting says "update both". |
+| C ABI version | **50** | Between an app and the core library it ships with. |
 | Windows display-driver protocol | **9** | Host and driver must match; the installer updates both. |
 | Windows virtual-gamepad channel | **3** | Host and pad driver must match; same installer. |
 

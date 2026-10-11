@@ -64,11 +64,9 @@ Android. Most settings can differ per [preset](/docs/presets-and-links); the exc
 jitter at half of that, a rate the link holds — and suggests a bitrate (Android: **Network speed
 test**; Linux and Apple: on the host page). On the Linux and Windows session shells it also names
 what the link does: a host port faster than this device's, an adapter that drops the start of each
-burst, a small receive buffer, a link fault, a queue, Wi-Fi. Where one helps, it offers **paced
-delivery** for that host: the host then spreads each frame's packets instead of sending them in one
-burst, which costs a few milliseconds a frame and is remembered per host, never for every host. A
-host that cannot do it streams as it always has. With PyroWave, **PyroWave quality** sets the rate
-instead of **Bitrate**.
+burst, a small receive buffer, a link fault, a queue, Wi-Fi. There is nothing to switch on: the host
+paces every frame at the link rate this device measures. With PyroWave, **PyroWave quality** sets
+the rate instead of **Bitrate**.
 
 ## Audio
 
