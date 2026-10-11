@@ -97,10 +97,11 @@ What turning it on does:
   seconds and your own session hosts you. Streams on the background session end, and the client
   reconnects. Nothing on your monitor is closed.
 - **The console is the door's.** It listens on the same port with the same password.
-- **Games share one folder.** Seats install Steam games into `/var/lib/punktfunk-seats/games`, and you
-  join its group, `punktfunk-games`, at your next login. To share a game you already have, open
-  Steam's **Settings → Storage**, add that folder and move the game there. Each seat keeps its own
-  Proton prefixes and shader cache.
+- **Seats see your games.** Every seat shows your Steam libraries: its Steam plays, updates and
+  runs Proton from them while the files stay yours. A library on a filesystem other than btrfs,
+  ext4, xfs or f2fs stays hidden from seats. New games a seat installs go to
+  `/var/lib/punktfunk-seats/games`, and you join its group, `punktfunk-games`, at your next login. Each
+  seat keeps its own Proton prefixes and shader cache.
 - **A seat has Game Mode too.** **Return to Gaming Mode** on a seat's desktop opens Steam's Game
   Mode on that seat, and Steam's **Switch to Desktop** goes back. The stream carries on, and
   neither touches the box's own session. The desktop's apps keep running underneath, and Steam

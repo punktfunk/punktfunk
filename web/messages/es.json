@@ -1337,7 +1337,7 @@
 	"seat_open_profiles": "Abrir Perfiles",
 	"profiles_door": "Accesible sin iniciar sesión",
 	"profiles_door_hint": "Un dispositivo emparejado puede iniciar tu sesión mientras la pantalla de bloqueo permanece en tu monitor.",
-	"profiles_door_games": "Los puestos comparten juegos en /var/lib/punktfunk/games. Muévelos allí en Steam bajo Parámetros → Almacenamiento.",
+	"profiles_door_games": "Los puestos ven tus bibliotecas de Steam e instalan los juegos nuevos en /var/lib/punktfunk-seats/games.",
 	"profiles_door_off_hint": "Tu propia sesión atenderá al equipo de nuevo y los archivos volverán a ella.",
 	"profiles_door_on": "Activar",
 	"profiles_door_off": "Desactivar",

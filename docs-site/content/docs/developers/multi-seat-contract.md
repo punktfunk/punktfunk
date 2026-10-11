@@ -6,8 +6,7 @@ description: How the host runs seats — on Windows the supervisor in the servic
 The rules between the host and its seat supervisor, which runs one host per seat so several people
 can play on one box. A normal install has one host on the console session, and none of this applies
 to it. Windows seats need Windows Server and a CAL per seat; see
-[Windows host → Good to know](/docs/windows-host#good-to-know). Linux seats are
-[further down](#linux-seats).
+[Seats on Windows](/docs/windows-seats). Linux seats are [further down](#linux-seats).
 
 ## The supervisor
 
@@ -56,7 +55,7 @@ never a paired device or a plugin.
 
 | Request | Does |
 |---|---|
-| `GET /api/v1/profiles/seating` | Returns `enabled`, `platform` (`windows`, `linux` on a door, or `other`) and `checks`: Windows Server, the Remote Desktop Session Host role, licensing and a graphics card. |
+| `GET /api/v1/profiles/seating` | Returns `enabled`, `platform` (`windows`, `linux` on a door, or `other`) and `checks`: Windows Server, the Remote Desktop Session Host role, licensing and a graphics card. A desktop edition whose TermService loads a wrapper DLL instead of `termsrv.dll` passes with a warning and skips the role and licensing checks. |
 | `PUT /api/v1/profiles/seating` with `{"enabled": true, "allow_rdp_from_network": false}` | Turns seats on. |
 | The same with `"prepare": true` | First installs `RDS-RD-Server` and sets licensing to Per User where missing, then turns seats on. A role that needs a restart answers a `restart` error and leaves seats off. |
 | `PUT /api/v1/profiles/seating` with `{"enabled": false}` | Stops every seat and turns seats off. The accounts stay. |
