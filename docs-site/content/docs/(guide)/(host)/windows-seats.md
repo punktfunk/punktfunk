@@ -87,6 +87,10 @@ games. Seats install nothing twice: their Steam lists the PC's game folders firs
 Don't pin `steam.exe` from `C:\Program Files (x86)\Steam` on a seat, or start it from File Explorer:
 that starts the PC's Steam and closes the other one.
 
+Two gaps remain ([#1873](https://git.unom.io/unom/punktfunk/issues/1873)). Starting Steam on the PC
+closes a seat's Steam, so start the PC's first. And a Steam already open on a seat takes no
+shortcut, link or library launch: open it from its tray icon and start the game there.
+
 ## Windows 11
 
 Windows 11 runs one desktop at a time, so everyone there plays on the owner's: under **Add
