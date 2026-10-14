@@ -684,46 +684,37 @@ fn resolve_gs_app(app: Option<&super::apps::AppEntry>) -> Option<crate::library:
     })
 }
 
-/// Cursor-as-metadata only where the encoder composites `frame.cursor` and the compositor
-/// cannot embed the pointer itself. Gamescope carries no metadata cursor either way. Shared by
-/// `set_hw_cursor`, the pooled mirror and [`gs_cursor_blend`] so they cannot drift.
+/// Cursor-as-metadata where the encoder draws the pointer and the compositor is not gamescope,
+/// which carries no metadata cursor either way. Shared by `set_hw_cursor` and the pooled
+/// mirror.
 fn host_composites_metadata_cursor(
     compositor: crate::vdisplay::Compositor,
     cfg: &StreamConfig,
 ) -> bool {
-    compositor != crate::vdisplay::Compositor::Gamescope
-        && !crate::session_plan::compositor_embeds_pointer(compositor)
-        && blend_capable_metadata_cursor(cfg)
+    compositor != crate::vdisplay::Compositor::Gamescope && gs_cursor_blend(compositor, None, cfg)
 }
 
-/// The encoder draws the pointer: a metadata cursor the compositor cannot embed, or gamescope's
-/// XFixes pointer when its node carries none. One rule for the plan, the reader and `stream_body`.
+/// [`cursor_blend_for`](crate::session_plan::cursor_blend_for) at this plane's shape: no
+/// cursor channel, depth 10 only with HDR.
 fn gs_cursor_blend(
     compositor: crate::vdisplay::Compositor,
     route: Option<&crate::vdisplay::GamescopeRoute>,
     cfg: &StreamConfig,
 ) -> bool {
-    host_composites_metadata_cursor(compositor, cfg)
-        || crate::session_plan::gamescope_cursor_for(
-            compositor == crate::vdisplay::Compositor::Gamescope,
-            route,
-        )
+    crate::session_plan::cursor_blend_for(
+        false,
+        compositor,
+        cfg.codec,
+        if cfg.hdr { 10 } else { 8 },
+        cfg.hdr,
+        route,
+    )
 }
 
-/// Cursor-as-metadata only where this session's encode backend composites `frame.cursor`.
-/// The answer when no compositor is known; [`host_composites_metadata_cursor`] adds the
-/// compositor. GameStream has no cursor channel.
+/// Cursor-as-metadata where this session's encode backend composites `frame.cursor`: the
+/// answer when no compositor is known.
 fn blend_capable_metadata_cursor(cfg: &StreamConfig) -> bool {
-    #[cfg(target_os = "linux")]
-    {
-        let cuda_planned = !crate::encode::linux_zero_copy_is_vaapi() && crate::zerocopy::enabled();
-        crate::encode::cursor_blend_capable(cfg.codec, cuda_planned, cfg.hdr, cfg.hdr)
-    }
-    #[cfg(not(target_os = "linux"))]
-    {
-        let _ = cfg;
-        false
-    }
+    crate::session_plan::encoder_blends_cursor(cfg.codec, if cfg.hdr { 10 } else { 8 }, cfg.hdr)
 }
 
 /// An opened virtual source.

@@ -291,6 +291,21 @@ pub(crate) fn cursor_blend_for(
         if compositor_embeds_pointer(compositor) {
             return false;
         }
+        encoder_blends_cursor(codec, bit_depth, hdr)
+    }
+}
+
+/// The encode backend this session plans composites `frame.cursor`: the blend term of
+/// [`cursor_blend_for`], for a caller that knows no compositor yet. Never off Linux.
+#[cfg(any(target_os = "linux", feature = "gamestream"))]
+pub(crate) fn encoder_blends_cursor(codec: crate::encode::Codec, bit_depth: u8, hdr: bool) -> bool {
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = (codec, bit_depth, hdr);
+        false
+    }
+    #[cfg(target_os = "linux")]
+    {
         // Same CUDA-payload prediction as `handshake::cursor_forward`: NVIDIA plus
         // the zero-copy switch. Only a CUDA payload reaches the blend.
         let cuda_planned = !crate::encode::linux_zero_copy_is_vaapi() && crate::zerocopy::enabled();
@@ -302,6 +317,7 @@ pub(crate) fn cursor_blend_for(
 /// `Embedded`, KWin `POINTER_EMBEDDED`). Mutter cannot: a virtual stream drops its
 /// software cursor whenever a physical head holds a hardware one, and cursor-only
 /// motion schedules no re-record (mutter#4939). Gamescope has its own arm.
+#[cfg(target_os = "linux")]
 pub(crate) fn compositor_embeds_pointer(compositor: pf_vdisplay::Compositor) -> bool {
     use pf_vdisplay::Compositor;
     matches!(
@@ -509,6 +525,34 @@ mod tests {
         }
         assert!(!compositor_embeds_pointer(Compositor::Mutter));
         assert!(!compositor_embeds_pointer(Compositor::Gamescope));
+    }
+
+    /// Native passes its cursor channel and its own depth; GameStream no channel and depth 10
+    /// only with HDR. Without a channel the rule is the compositor's arm, then the encoder's.
+    #[cfg(any(target_os = "linux", feature = "gamestream"))]
+    #[test]
+    fn the_blend_rule_takes_both_loops_arguments() {
+        use pf_vdisplay::Compositor;
+        let linux = cfg!(target_os = "linux");
+        for c in [Compositor::Kwin, Compositor::Mutter, Compositor::Gamescope] {
+            let gamescope = c == Compositor::Gamescope;
+            for hdr in [false, true] {
+                let gs_depth = if hdr { 10 } else { 8 };
+                let gamestream = cursor_blend_for(false, c, Codec::H265, gs_depth, hdr, None);
+                let encoder_arm =
+                    c == Compositor::Mutter && encoder_blends_cursor(Codec::H265, gs_depth, hdr);
+                let want = linux
+                    && if gamescope {
+                        gamescope_cursor_for(true, None)
+                    } else {
+                        encoder_arm
+                    };
+                assert_eq!(gamestream, want, "{c:?} hdr={hdr}");
+                let native = cursor_blend_for(true, c, Codec::H265, 10, hdr, None);
+                let want = linux && (!gamescope || gamescope_cursor_for(true, None));
+                assert_eq!(native, want, "{c:?} hdr={hdr}");
+            }
+        }
     }
 
     #[cfg(target_os = "linux")]
