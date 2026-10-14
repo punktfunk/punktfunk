@@ -1293,6 +1293,19 @@ pub(super) fn publish_gamescope_xwayland(
     });
 }
 
+/// The session registry's client label, on every plane: the 12-hex prefix of the device's
+/// certificate fingerprint, else its address, so one device reads the same on both planes and
+/// unpairing it finds its sessions. Empty with neither.
+pub(crate) fn session_client_label(
+    fingerprint_hex: Option<&str>,
+    peer: Option<std::net::IpAddr>,
+) -> String {
+    fingerprint_hex
+        .map(|fp| fp[..12.min(fp.len())].to_string())
+        .or_else(|| peer.map(|ip| ip.to_string()))
+        .unwrap_or_default()
+}
+
 /// Announce a host-local rebuild gap so the client does not score a straddling window as congestion.
 pub(super) fn announce_pipeline_gap(gap: &tokio::sync::mpsc::UnboundedSender<u32>, gap_ms: u32) {
     if gap_ms == 0 {
@@ -1343,6 +1356,19 @@ fn window_source(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Native passes the connection's fingerprint and address; GameStream the paired
+    /// certificate's fingerprint, if read, and the launch owner's address, if bound.
+    #[test]
+    fn both_planes_label_a_client_alike() {
+        let fp = "0123456789abcdef".repeat(4);
+        let ip = std::net::IpAddr::from([192, 168, 1, 21]);
+        assert_eq!(session_client_label(Some(&fp), Some(ip)), "0123456789ab");
+        assert_eq!(session_client_label(None, Some(ip)), "192.168.1.21");
+        assert_eq!(session_client_label(Some(&fp), None), "0123456789ab");
+        assert_eq!(session_client_label(Some("abc"), None), "abc");
+        assert_eq!(session_client_label(None, None), "");
+    }
 
     #[test]
     fn adopting_a_rebuilt_rate_tells_the_client() {

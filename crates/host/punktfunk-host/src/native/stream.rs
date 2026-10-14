@@ -36,6 +36,7 @@ pub(crate) mod shared {
         count_capture_loss, follow_source_mode, rebuild_after_capture_loss, CaptureLossRebuild,
         SourceFollow,
     };
+    pub(crate) use super::state::session_client_label;
     pub(crate) use crate::native::bitrate::{encoder_bps_for_budget, WireFraming};
 }
 // `control.rs` bounds its spacing exemption by the same step length.
@@ -44,6 +45,7 @@ use self::send::{send_loop, AuMeta, ChunkMsg, FrameMsg, SendMsg, SendStats};
 // `native.rs` asks before offering a mid-stream reconfig.
 pub(crate) use self::send::reconfig_allowed;
 use self::session_watch::{session_watch_enabled, session_watcher_loop, SessionSwitch};
+pub(super) use self::state::session_client_label;
 use self::state::StreamState;
 // `main.rs` parses the content script; `native.rs` builds the context and dispatches.
 pub(super) use self::synth_abr::{synthetic_abr_stream, SynthAbrContext};

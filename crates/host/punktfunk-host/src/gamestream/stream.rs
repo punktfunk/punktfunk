@@ -19,7 +19,8 @@ use crate::encode_recovery::{
 };
 use crate::native::pipeline::{
     count_capture_loss, encoder_bps_for_budget, follow_source_mode, open_session_encoder,
-    rebuild_after_capture_loss, CaptureLossRebuild, SourceFollow, WireFraming,
+    rebuild_after_capture_loss, session_client_label, CaptureLossRebuild, SourceFollow,
+    WireFraming,
 };
 use anyhow::{Context, Result};
 use std::net::UdpSocket;
@@ -174,14 +175,7 @@ pub fn start(
                     // reads here exactly as `/cancel` does.
                     life: lifecycle.clone(),
                     force_idr: force_idr.clone(),
-                    // The 12-hex prefix native uses, so one device reads the same on both planes
-                    // — and unpairing it mid-stream finds this session too.
-                    client: life
-                        .fingerprint
-                        .as_deref()
-                        .map(|fp| fp[..12.min(fp.len())].to_string())
-                        .or_else(|| life.owner_ip.map(|ip| ip.to_string()))
-                        .unwrap_or_default(),
+                    client: session_client_label(life.fingerprint.as_deref(), life.owner_ip),
                     client_name: (!client_label.is_empty()).then(|| client_label.clone()),
                     plane: crate::events::Plane::Gamestream,
                     hdr: cfg.hdr,
