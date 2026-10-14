@@ -72,6 +72,8 @@ mod control;
 mod cursor_fwd;
 
 mod stream;
+#[cfg(feature = "gamestream")]
+pub(crate) use stream::shared as pipeline;
 use stream::{
     reconfig_allowed, software_stream, synthetic_abr_stream, synthetic_stream, virtual_stream,
     SessionContext, StreamCommon, SynthAbrContext,

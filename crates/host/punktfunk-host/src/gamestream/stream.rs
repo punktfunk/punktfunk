@@ -15,8 +15,9 @@ use crate::capture::{self, Capturer, FastSyntheticCapturer};
 use crate::encode::{self, Codec};
 use crate::encode_recovery::{
     on_submit_error, reset_stalled_encoder, run_parked_stage, EncoderWatchdog, RebuildBudget,
-    MAX_CAPTURE_REBUILDS, MAX_ENCODER_RESETS,
+    MAX_ENCODER_RESETS,
 };
+use crate::native::pipeline::{count_capture_loss, rebuild_after_capture_loss, CaptureLossRebuild};
 use anyhow::{Context, Result};
 use std::net::UdpSocket;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -432,29 +433,41 @@ fn run(
         // The output the stream captures now, for a re-attach after a loss that leaves it up.
         #[cfg(target_os = "linux")]
         let attached = std::cell::RefCell::new((compositor, gamescope_route.clone(), lease));
-        // A handed-back keepalive re-attaches to its output first: on KWin every create is a new
-        // virtual output, and a burst of them wedges the compositor. Otherwise re-detect the live
+        // A handed-back keepalive re-attaches to its output: on KWin every create is a new
+        // virtual output, and a burst of them wedges the compositor. `None` re-detects the live
         // compositor so a Desktop↔Game switch is followed. WxH is locked at ANNOUNCE.
         let rebuild = |keepalive: Option<Box<dyn Send>>| {
-            #[cfg(target_os = "linux")]
             if let Some(keepalive) = keepalive {
-                let (c, route, lease) = attached.borrow().clone();
-                if let Some(lease) = lease {
-                    match gs_capture_output(lease.into_output(keepalive), &cfg, c, route.as_ref()) {
+                #[cfg(target_os = "linux")]
+                {
+                    let (c, route, lease) = attached.borrow().clone();
+                    let lease = lease.context("no output to re-attach to")?;
+                    return match gs_capture_output(
+                        lease.into_output(keepalive),
+                        &cfg,
+                        c,
+                        route.as_ref(),
+                    ) {
                         Ok(capturer) => {
                             tracing::info!(
-                                "gamestream: capture loss — re-attached to the live output, no new \
-                                 display"
+                                "gamestream: capture loss — re-attached to the live output, no \
+                                 new display"
                             );
-                            return Ok((capturer, gs_cursor_blend(c, route.as_ref(), &cfg)));
+                            Ok((capturer, gs_cursor_blend(c, route.as_ref(), &cfg)))
                         }
-                        Err(e) => tracing::warn!(error = %format!("{e:#}"),
-                            "gamestream: re-attach to the live output failed — creating another"),
-                    }
+                        Err(e) => {
+                            tracing::warn!(error = %format!("{e:#}"),
+                                "gamestream: re-attach to the live output failed — creating another");
+                            Err(e)
+                        }
+                    };
+                }
+                #[cfg(not(target_os = "linux"))]
+                {
+                    drop(keepalive);
+                    anyhow::bail!("no output to re-attach to");
                 }
             }
-            #[cfg(not(target_os = "linux"))]
-            let _ = keepalive;
             let s = open_gs_virtual_source(cfg, app, target.as_ref(), &life.quit, false)?;
             let blend = gs_cursor_blend(s.compositor, s.route.as_ref(), &cfg);
             #[cfg(target_os = "linux")]
@@ -1253,9 +1266,41 @@ impl GsEncoder {
     }
 }
 
-/// Re-opens the virtual source on capture loss: the new capturer and its `cursor_blend`. Takes
-/// the old capturer's keepalive when the loss left its display up.
+/// Re-opens the virtual source on capture loss: the new capturer and its `cursor_blend`. With
+/// the old capturer's keepalive it only re-attaches to the output the loss left up.
 type GsRebuild<'a> = &'a dyn Fn(Option<Box<dyn Send>>) -> Result<(Box<dyn Capturer>, bool)>;
+
+/// GameStream's side of [`rebuild_after_capture_loss`]: the loop's re-open closure, judged on
+/// the compositor live at the loss.
+struct GsLossRebuild<'a> {
+    rebuild: GsRebuild<'a>,
+    running: &'a AtomicBool,
+    live: Option<crate::vdisplay::Compositor>,
+}
+
+impl CaptureLossRebuild for GsLossRebuild<'_> {
+    type Built = (Box<dyn Capturer>, bool);
+
+    fn plane(&self) -> crate::events::Plane {
+        crate::events::Plane::Gamestream
+    }
+
+    fn reattach(&mut self, keepalive: Box<dyn Send>) -> Option<Self::Built> {
+        (self.rebuild)(Some(keepalive)).ok()
+    }
+
+    fn build(&mut self) -> Result<Self::Built> {
+        (self.rebuild)(None)
+    }
+
+    fn ending(&self) -> bool {
+        !self.running.load(Ordering::SeqCst)
+    }
+
+    fn budget_compositor(&self) -> Option<crate::vdisplay::Compositor> {
+        self.live
+    }
+}
 
 /// Encode loop over a borrowed capturer. Send is a dedicated thread so a send spike cannot
 /// stall capture/encode.
@@ -1644,46 +1689,32 @@ impl GsLoop<'_> {
         }))
     }
 
-    /// Rebuild a lost source in place — send, packetizer, socket and RTP survive — and reopen
-    /// the encoder on its first frame. `Err` with no rebuild to run, once
-    /// [`MAX_CAPTURE_REBUILDS`] are spent, or when no source comes up within the budget.
+    /// Rebuild a lost source in place ([`rebuild_after_capture_loss`]) — send, packetizer,
+    /// socket and RTP survive — and reopen the encoder on its first frame. `Err` with no
+    /// rebuild to run, once [`count_capture_loss`] has spent the rebuilds, or when no source
+    /// comes up within the budget.
     fn rebuild_source(&mut self, e: anyhow::Error) -> Result<()> {
         let Some(rebuild) = self.rebuild else {
             return Err(e).context("capture frame");
         };
-        self.rebuilds += 1;
-        if self.rebuilds > MAX_CAPTURE_REBUILDS {
-            return Err(e).context("capture lost — rebuild attempts exhausted");
-        }
-        tracing::warn!(error = %format!("{e:#}"), rebuild = self.rebuilds,
-            "gamestream: capture lost — rebuilding source in place (following a session switch)");
+        let keepalive = count_capture_loss(
+            crate::events::Plane::Gamestream,
+            &mut self.rebuilds,
+            e,
+            &mut **self.capturer,
+        )?;
         // The budget follows the session live at the loss; `detect_active_session`
         // answers `none` off Linux, where gamescope does not exist.
         let budget = RebuildBudget::start();
-        let live =
-            crate::vdisplay::compositor_for_kind(crate::vdisplay::detect_active_session().kind);
-        // The import side broke under a live display: re-attach instead of creating one.
-        let mut keepalive = e
-            .downcast_ref::<pf_capture::DisplayStillAlive>()
-            .and_then(|_| self.capturer.take_keepalive());
-        let new_cap = loop {
-            let _probe = budget.probe_scope();
-            match rebuild(keepalive.take()) {
-                Ok((c, blend)) => {
-                    self.plan = gs_session_plan(&self.cfg, blend);
-                    break c;
-                }
-                Err(e2) => {
-                    if !self.running.load(Ordering::SeqCst) || budget.expired(live) {
-                        return Err(e2)
-                            .context("capture lost — no source within the rebuild budget");
-                    }
-                    tracing::warn!(error = %format!("{e2:#}"),
-                        "gamestream: source not up yet — retrying");
-                    std::thread::sleep(Duration::from_millis(500));
-                }
-            }
+        let mut loss = GsLossRebuild {
+            rebuild,
+            running: self.running,
+            live: crate::vdisplay::compositor_for_kind(
+                crate::vdisplay::detect_active_session().kind,
+            ),
         };
+        let (new_cap, blend) = rebuild_after_capture_loss(&mut loss, keepalive, &budget)?;
+        self.plan = gs_session_plan(&self.cfg, blend);
         *self.capturer = new_cap;
         self.capturer.set_active(true);
         self.frame = self

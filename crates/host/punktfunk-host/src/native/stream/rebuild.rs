@@ -18,6 +18,151 @@ use crate::encode_recovery::{RebuildBudget, MAX_CAPTURE_REBUILDS, MAX_ENCODER_RE
 use crate::native::bitrate::pyrowave_mode_kbps;
 use crate::session_status::pack_mode;
 
+/// How long a capture-loss rebuild waits after a failed attempt.
+const LOSS_RETRY: std::time::Duration = std::time::Duration::from_millis(500);
+
+/// Count a capture loss against [`MAX_CAPTURE_REBUILDS`]: `Err` once they are spent. `Ok`
+/// carries the lost capturer's keepalive when the import side broke under a display that is
+/// still up, for [`rebuild_after_capture_loss`] to re-attach with.
+pub(crate) fn count_capture_loss(
+    plane: crate::events::Plane,
+    rebuilds: &mut u32,
+    e: anyhow::Error,
+    capturer: &mut dyn crate::capture::Capturer,
+) -> Result<Option<Box<dyn Send>>> {
+    *rebuilds += 1;
+    if *rebuilds > MAX_CAPTURE_REBUILDS {
+        return Err(e).context("capture lost — rebuild attempts exhausted");
+    }
+    tracing::warn!(error = %format!("{e:#}"), rebuild = *rebuilds, plane = plane.as_str(),
+        "capture lost — rebuilding in place");
+    Ok(e.downcast_ref::<pf_capture::DisplayStillAlive>()
+        .and_then(|_| capturer.take_keepalive()))
+}
+
+/// One stream loop's side of [`rebuild_after_capture_loss`].
+pub(crate) trait CaptureLossRebuild {
+    /// What a rebuild hands the loop.
+    type Built;
+    fn plane(&self) -> crate::events::Plane;
+    /// Capture again on the output the loss left up. `None` = it could not; the loop logs why.
+    fn reattach(&mut self, keepalive: Box<dyn Send>) -> Option<Self::Built>;
+    /// One attempt at a new source.
+    fn build(&mut self) -> Result<Self::Built>;
+    /// The session is ending: stop retrying.
+    fn ending(&self) -> bool;
+    /// The compositor the budget is judged on ([`RebuildBudget::expired`]).
+    fn budget_compositor(&self) -> Option<crate::vdisplay::Compositor>;
+}
+
+/// Rebuild after a counted capture loss: re-attach with `keepalive` first, then build every
+/// [`LOSS_RETRY`] until a source comes up, the session ends or `budget` runs out.
+pub(crate) fn rebuild_after_capture_loss<L: CaptureLossRebuild>(
+    l: &mut L,
+    keepalive: Option<Box<dyn Send>>,
+    budget: &RebuildBudget,
+) -> Result<L::Built> {
+    if let Some(built) = keepalive.and_then(|k| l.reattach(k)) {
+        return Ok(built);
+    }
+    loop {
+        let _probe = budget.probe_scope();
+        match l.build() {
+            Ok(built) => return Ok(built),
+            Err(e) => {
+                if l.ending() || budget.expired(l.budget_compositor()) {
+                    return Err(e)
+                        .context("capture lost — no source came up within the rebuild budget");
+                }
+                tracing::warn!(error = %format!("{e:#}"), plane = l.plane().as_str(),
+                    "capture lost — no source up yet, retrying");
+                std::thread::sleep(LOSS_RETRY);
+            }
+        }
+    }
+}
+
+impl CaptureLossRebuild for StreamState {
+    type Built = Pipeline;
+
+    fn plane(&self) -> crate::events::Plane {
+        self.conn.plane()
+    }
+
+    /// Re-attach before creating another display: on KWin a create is a new virtual output, and
+    /// a burst of them wedges the compositor into placeholder screens.
+    #[cfg(target_os = "linux")]
+    fn reattach(&mut self, keepalive: Box<dyn Send>) -> Option<Pipeline> {
+        let lease = self.lease.clone()?;
+        let enc_of = self.enc_now();
+        match reattach_pipeline(
+            &mut self.vd,
+            lease,
+            keepalive,
+            self.cur_mode,
+            self.bitrate_kbps,
+            self.bitrate_auto,
+            self.bit_depth,
+            enc_of,
+            self.plan,
+            self.client_hdr,
+            self.clock.au_seq,
+        ) {
+            Ok(p) => {
+                tracing::info!(
+                    node_id = p.node_id,
+                    "capture loss: re-attached to the live output — no new display"
+                );
+                Some(p)
+            }
+            Err(e2) => {
+                tracing::warn!(error = %format!("{e2:#}"),
+                    "capture loss: re-attach to the live output failed — creating another");
+                None
+            }
+        }
+    }
+
+    /// Only a Linux capturer hands back a keepalive.
+    #[cfg(not(target_os = "linux"))]
+    fn reattach(&mut self, _keepalive: Box<dyn Send>) -> Option<Pipeline> {
+        None
+    }
+
+    /// Re-detect the live compositor unless `PUNKTFUNK_COMPOSITOR` pins it, then build once.
+    fn build(&mut self) -> Result<Pipeline> {
+        if pf_host_config::config().compositor.is_none() {
+            self.retarget_to_live_session();
+        }
+        let enc_of = self.enc_now();
+        build_pipeline_with_retry(
+            &mut self.vd,
+            self.cur_mode,
+            self.bitrate_kbps,
+            self.bitrate_auto,
+            self.bit_depth,
+            enc_of,
+            self.plan,
+            self.life.quit_flag(),
+            self.life.stop_flag(),
+            self.cur_display_gen,
+            1,
+            None,
+            self.client_hdr,
+            self.clock.au_seq,
+        )
+    }
+
+    fn ending(&self) -> bool {
+        self.life.stopping()
+    }
+
+    /// The compositor this session runs on now: each attempt's re-detection can move it.
+    fn budget_compositor(&self) -> Option<crate::vdisplay::Compositor> {
+        Some(self.compositor)
+    }
+}
+
 /// Isolated gamescope keeps its pinned injector and must not steal the shared backend
 /// (last-write-wins). Everyone else gets the shared sender plus `set_backend_id`; a seat's
 /// desktop keeps the backend its runner picked.
@@ -286,8 +431,9 @@ impl StreamState {
     }
 
     /// Capture failed. On Linux a dedicated game session whose game exited emits `game.exited`
-    /// and ends cleanly (`Ok(false)`); otherwise rebuild within a budget, re-detecting the live
-    /// compositor each attempt. `Err` = the rebuild budget or the rebuild count is exhausted.
+    /// and ends cleanly (`Ok(false)`); otherwise [`rebuild_after_capture_loss`], re-detecting
+    /// the live compositor each attempt. `Err` = the rebuild budget or the rebuild count is
+    /// exhausted.
     pub(super) fn on_capture_lost(&mut self, e: anyhow::Error) -> Result<bool> {
         #[cfg(not(target_os = "linux"))]
         let _ = (&self.cur_node_id, &self.game_life);
@@ -306,15 +452,14 @@ impl StreamState {
                 .close(punktfunk_core::quic::APP_EXITED_CLOSE_CODE, b"game exited");
             return Ok(false);
         }
-        self.capture_rebuilds += 1;
-        if self.capture_rebuilds > MAX_CAPTURE_REBUILDS {
-            return Err(e).context("capture lost — rebuild attempts exhausted");
-        }
-        tracing::warn!(error = %format!("{e:#}"), rebuild = self.capture_rebuilds,
-            "capture lost — rebuilding pipeline in place");
-        // Retry within the budget while the QUIC keepalive holds the connection, re-detecting
-        // the live compositor each attempt. The client stays connected, frozen on the last
-        // frame, and resumes — no reconnect.
+        let keepalive = count_capture_loss(
+            self.conn.plane(),
+            &mut self.capture_rebuilds,
+            e,
+            &mut *self.capturer,
+        )?;
+        // The QUIC keepalive holds the connection: the client stays frozen on the last frame
+        // and resumes, no reconnect.
         let budget = RebuildBudget::start();
         if pf_host_config::config().compositor.is_some() {
             let active = crate::vdisplay::detect_active_session();
@@ -330,77 +475,7 @@ impl StreamState {
             }
         }
         self.close_open_frame();
-        let pipe = 'built: {
-            // The import side broke under a display that is still up: re-attach to it
-            // before creating another. On KWin a create is a new virtual output, and #1443
-            // shows a burst of them wedging the compositor into placeholder screens.
-            #[cfg(target_os = "linux")]
-            if e.downcast_ref::<pf_capture::DisplayStillAlive>().is_some() {
-                if let (Some(lease), Some(keepalive)) =
-                    (self.lease.clone(), self.capturer.take_keepalive())
-                {
-                    let enc_of = self.enc_now();
-                    match reattach_pipeline(
-                        &mut self.vd,
-                        lease,
-                        keepalive,
-                        self.cur_mode,
-                        self.bitrate_kbps,
-                        self.bitrate_auto,
-                        self.bit_depth,
-                        enc_of,
-                        self.plan,
-                        self.client_hdr,
-                        self.clock.au_seq,
-                    ) {
-                        Ok(p) => {
-                            tracing::info!(
-                                node_id = p.node_id,
-                                "capture loss: re-attached to the live output — no new display"
-                            );
-                            break 'built p;
-                        }
-                        Err(e2) => tracing::warn!(error = %format!("{e2:#}"),
-                            "capture loss: re-attach to the live output failed — creating another"),
-                    }
-                }
-            }
-            loop {
-                if pf_host_config::config().compositor.is_none() {
-                    self.retarget_to_live_session();
-                }
-                let _probe = budget.probe_scope();
-                let enc_of = self.enc_now();
-                match build_pipeline_with_retry(
-                    &mut self.vd,
-                    self.cur_mode,
-                    self.bitrate_kbps,
-                    self.bitrate_auto,
-                    self.bit_depth,
-                    enc_of,
-                    self.plan,
-                    self.life.quit_flag(),
-                    self.life.stop_flag(),
-                    self.cur_display_gen,
-                    1,
-                    None,
-                    self.client_hdr,
-                    self.clock.au_seq,
-                ) {
-                    Ok(p) => break 'built p,
-                    Err(e2) => {
-                        if self.life.stopping() || budget.expired(Some(self.compositor)) {
-                            return Err(e2).context(
-                                "capture lost — no compositor came up within the rebuild budget",
-                            );
-                        }
-                        tracing::warn!(error = %format!("{e2:#}"),
-                        "capture lost — new session not up yet, retrying");
-                        std::thread::sleep(std::time::Duration::from_millis(500));
-                    }
-                }
-            }
-        };
+        let pipe = rebuild_after_capture_loss(self, keepalive, &budget)?;
         let built = pipe.bitrate_kbps;
         self.swap_pipeline(Next::Pipeline(pipe), SwapReason::CaptureLost);
         #[cfg(target_os = "linux")]
@@ -560,5 +635,139 @@ impl StreamState {
         );
         self.tell_delivered(actual, true);
         Ok(true)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::events::Plane;
+    use crate::vdisplay::Compositor;
+    use std::collections::VecDeque;
+
+    /// A capturer whose output is still up: it holds a keepalive until asked for it.
+    struct Lost(Option<Box<dyn Send>>);
+
+    impl crate::capture::Capturer for Lost {
+        fn next_frame(&mut self) -> Result<crate::capture::CapturedFrame> {
+            anyhow::bail!("lost")
+        }
+        fn take_keepalive(&mut self) -> Option<Box<dyn Send>> {
+            self.0.take()
+        }
+    }
+
+    /// One loop's arguments: the native loop judges the budget on the compositor it runs on,
+    /// GameStream on the one live at the loss.
+    struct Fake {
+        plane: Plane,
+        compositor: Option<Compositor>,
+        reattaches: bool,
+        builds: VecDeque<Result<&'static str>>,
+        ending: bool,
+        calls: Vec<&'static str>,
+    }
+
+    impl CaptureLossRebuild for Fake {
+        type Built = &'static str;
+        fn plane(&self) -> Plane {
+            self.plane
+        }
+        fn reattach(&mut self, _keepalive: Box<dyn Send>) -> Option<&'static str> {
+            self.calls.push("reattach");
+            self.reattaches.then_some("reattached")
+        }
+        fn build(&mut self) -> Result<&'static str> {
+            self.calls.push("build");
+            self.builds.pop_front().expect("a scripted build")
+        }
+        fn ending(&self) -> bool {
+            self.ending
+        }
+        fn budget_compositor(&self) -> Option<Compositor> {
+            self.compositor
+        }
+    }
+
+    fn loops() -> [Fake; 2] {
+        let fake = |plane, compositor| Fake {
+            plane,
+            compositor,
+            reattaches: false,
+            builds: VecDeque::new(),
+            ending: false,
+            calls: Vec::new(),
+        };
+        [
+            fake(Plane::Native, Some(Compositor::Kwin)),
+            fake(Plane::Gamestream, None),
+        ]
+    }
+
+    #[test]
+    fn a_capture_loss_spends_the_rebuild_count_then_fails() {
+        for l in loops() {
+            let mut rebuilds = 0;
+            for _ in 0..MAX_CAPTURE_REBUILDS {
+                let lost = anyhow::anyhow!("stream error");
+                let kept = count_capture_loss(l.plane, &mut rebuilds, lost, &mut Lost(None));
+                assert!(kept.expect("within the count").is_none());
+            }
+            let lost = anyhow::anyhow!("stream error");
+            let e = count_capture_loss(l.plane, &mut rebuilds, lost, &mut Lost(None))
+                .err()
+                .expect("past the count");
+            assert!(format!("{e:#}").contains("rebuild attempts exhausted"));
+        }
+    }
+
+    #[test]
+    fn only_a_display_still_alive_hands_back_the_keepalive() {
+        for l in loops() {
+            let mut rebuilds = 0;
+            let alive = anyhow::anyhow!("import failed").context(pf_capture::DisplayStillAlive);
+            let mut cap = Lost(Some(Box::new(())));
+            let kept = count_capture_loss(l.plane, &mut rebuilds, alive, &mut cap).unwrap();
+            assert!(kept.is_some());
+            let mut cap = Lost(Some(Box::new(())));
+            let gone = anyhow::anyhow!("compositor went away");
+            let kept = count_capture_loss(l.plane, &mut rebuilds, gone, &mut cap).unwrap();
+            assert!(kept.is_none());
+            assert!(cap.0.is_some(), "a dead display keeps its keepalive");
+        }
+    }
+
+    #[test]
+    fn a_rebuild_reattaches_first_then_builds_until_one_comes_up() {
+        let budget = RebuildBudget::start();
+        for mut l in loops() {
+            l.reattaches = true;
+            let got = rebuild_after_capture_loss(&mut l, Some(Box::new(())), &budget).unwrap();
+            assert_eq!((got, &l.calls[..]), ("reattached", &["reattach"][..]));
+        }
+        for mut l in loops() {
+            l.builds = [Err(anyhow::anyhow!("not up yet")), Ok("built")].into();
+            let got = rebuild_after_capture_loss(&mut l, Some(Box::new(())), &budget).unwrap();
+            assert_eq!(got, "built");
+            assert_eq!(l.calls, ["reattach", "build", "build"]);
+        }
+        for mut l in loops() {
+            l.builds = [Ok("built")].into();
+            rebuild_after_capture_loss(&mut l, None, &budget).unwrap();
+            assert_eq!(l.calls, ["build"], "no keepalive, no re-attach");
+        }
+    }
+
+    #[test]
+    fn an_ending_session_stops_retrying() {
+        let budget = RebuildBudget::start();
+        for mut l in loops() {
+            l.ending = true;
+            l.builds = [Err(anyhow::anyhow!("not up yet"))].into();
+            let e = rebuild_after_capture_loss(&mut l, None, &budget)
+                .expect_err("an ending session gives up");
+            assert!(format!("{e:#}").contains("within the rebuild budget"));
+            assert_eq!(l.calls, ["build"]);
+        }
     }
 }

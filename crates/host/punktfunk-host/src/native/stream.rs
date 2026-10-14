@@ -28,6 +28,13 @@ mod state;
 mod swap;
 mod synth_abr;
 pub(super) use self::pipeline::{prepare_display, PrepHandle, PreparedDisplay};
+/// The pipeline steps both stream loops take, for GameStream as `crate::native::pipeline`.
+#[cfg(feature = "gamestream")]
+pub(crate) mod shared {
+    pub(crate) use super::rebuild::{
+        count_capture_loss, rebuild_after_capture_loss, CaptureLossRebuild,
+    };
+}
 // `control.rs` bounds its spacing exemption by the same step length.
 pub(crate) use self::ramp::RAMP_STEP_MAX_MS;
 use self::send::{send_loop, AuMeta, ChunkMsg, FrameMsg, SendMsg, SendStats};
