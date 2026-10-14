@@ -141,20 +141,8 @@ impl CaptureLossRebuild for StreamState {
     #[cfg(target_os = "linux")]
     fn reattach(&mut self, keepalive: Box<dyn Send>) -> Option<Pipeline> {
         let lease = self.lease.clone()?;
-        let enc_of = self.enc_now();
-        match reattach_pipeline(
-            &mut self.vd,
-            lease,
-            keepalive,
-            self.cur_mode,
-            self.bitrate_kbps,
-            self.bitrate_auto,
-            self.bit_depth,
-            enc_of,
-            self.plan,
-            self.client_hdr,
-            self.clock.au_seq,
-        ) {
+        let req = self.build_request(self.cur_mode, self.bitrate_kbps);
+        match reattach_pipeline(&mut self.vd, lease, keepalive, &req) {
             Ok(p) => {
                 tracing::info!(
                     node_id = p.node_id,
@@ -181,22 +169,15 @@ impl CaptureLossRebuild for StreamState {
         if pf_host_config::config().compositor.is_none() {
             self.retarget_to_live_session();
         }
-        let enc_of = self.enc_now();
+        let req = self.build_request(self.cur_mode, self.bitrate_kbps);
         build_pipeline_with_retry(
             &mut self.vd,
-            self.cur_mode,
-            self.bitrate_kbps,
-            self.bitrate_auto,
-            self.bit_depth,
-            enc_of,
-            self.plan,
+            &req,
             self.life.quit_flag(),
             self.life.stop_flag(),
             self.cur_display_gen,
             1,
             None,
-            self.client_hdr,
-            self.clock.au_seq,
         )
     }
 
@@ -288,21 +269,15 @@ impl StreamState {
                 ..self.reopen_params(hw_cursor, switched_route)
             };
             params.apply(&mut *new_vd);
+            let req = self.build_request(self.cur_mode, self.bitrate_kbps);
             let pipe = build_pipeline_with_retry(
                 &mut new_vd,
-                self.cur_mode,
-                self.bitrate_kbps,
-                self.bitrate_auto,
-                self.bit_depth,
-                self.enc_now(),
-                self.plan,
+                &req,
                 self.life.quit_flag(),
                 self.life.stop_flag(),
                 None,
                 8,
                 None,
-                self.client_hdr,
-                self.clock.au_seq,
             )?;
             Ok((new_vd, pipe))
         })();
@@ -366,22 +341,15 @@ impl StreamState {
         #[cfg(not(target_os = "windows"))]
         let fast_done = false;
         let mut built_bitrate = mode_bitrate;
-        let enc_of = self.enc_now();
+        let req = self.build_request(new_mode, mode_bitrate);
         let rebuilt = fast_done
             || match build_pipeline(
                 &mut self.vd,
-                new_mode,
-                mode_bitrate,
-                self.bitrate_auto,
-                self.bit_depth,
-                enc_of,
-                self.plan,
+                &req,
                 self.life.quit_flag(),
                 self.cur_display_gen,
                 None,
                 Some(resize_trace.as_ref()),
-                self.client_hdr,
-                self.clock.au_seq,
             ) {
                 Ok(next_pipe) => {
                     built_bitrate = next_pipe.bitrate_kbps;
@@ -443,21 +411,14 @@ impl StreamState {
             // The in-place recovery proves the OS resumed presenting by waiting for a NEWER
             // frame, which an idle desktop never produces — so its failure is not evidence
             // the display is gone.
-            let enc_of = self.enc_now();
+            let req = self.build_request(self.cur_mode, self.bitrate_kbps);
             match build_pipeline(
                 &mut self.vd,
-                self.cur_mode,
-                self.bitrate_kbps,
-                self.bitrate_auto,
-                self.bit_depth,
-                enc_of,
-                self.plan,
+                &req,
                 self.life.quit_flag(),
                 self.cur_display_gen,
                 None,
                 Some(trace.as_ref()),
-                self.client_hdr,
-                self.clock.au_seq,
             ) {
                 Ok(next_pipe) => {
                     let built = next_pipe.bitrate_kbps;

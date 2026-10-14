@@ -806,57 +806,47 @@ pub(super) async fn negotiate(
     let prep: Option<super::stream::PrepHandle> = match (source, compositor) {
         (Punktfunk1Source::Virtual, Some(comp)) if cfg!(target_os = "windows") => {
             let (ctx_tx, ctx_rx) = std::sync::mpsc::sync_channel::<SessionContext>(1);
-            let client_identity = conn.peer_fingerprint();
-            let client_hdr = hello.display_hdr.map(crate::encode::hdr_meta_from_wire);
-            // Read back off Welcome so the prepared display and session wiring cannot disagree.
-            let cursor_fw = welcome.host_caps & punktfunk_core::quic::HOST_CAP_CURSOR != 0;
-            // Same bit SessionContext reads; a different max_slices would change the wire mid-flow.
-            let multi_slice = hello.video_caps & punktfunk_core::quic::VIDEO_CAP_MULTI_SLICE != 0;
-            let (mode, shard_payload) = (hello.mode, welcome.shard_payload);
-            // Sampled here so the closure need not capture `hello`. The build may re-resolve
-            // if the source delivers a different size.
-            let bitrate_auto = hello.bitrate_kbps == 0;
-            // `bitrate_kbps` is the wire budget; the prep encoder opens at the derived video
-            // rate, snapshotted at Welcome's initial FEC percent. The FEC watcher re-derives.
-            let enc_of = EncDerive {
-                audio_kbps: audio_reserved_kbps(&welcome),
+            let prep = super::stream::DisplayPrep {
+                compositor: comp,
+                mode: hello.mode,
+                client_identity: conn.peer_fingerprint(),
+                client_hdr: hello.display_hdr.map(crate::encode::hdr_meta_from_wire),
+                // Read back off Welcome so the prepared display and session wiring cannot
+                // disagree.
+                cursor_forward: welcome.host_caps & punktfunk_core::quic::HOST_CAP_CURSOR != 0,
+                // Same bit SessionContext reads; a different max_slices would change the wire
+                // mid-flow.
+                multi_slice: hello.video_caps & punktfunk_core::quic::VIDEO_CAP_MULTI_SLICE != 0,
+                bitrate_kbps,
+                // The build may re-resolve if the source delivers a different size.
+                bitrate_auto: hello.bitrate_kbps == 0,
+                bit_depth,
+                hdr: session_hdr,
+                // `bitrate_kbps` is the wire budget; the prep encoder opens at the derived video
+                // rate, snapshotted at Welcome's initial FEC percent. The FEC watcher re-derives.
+                enc_of: EncDerive {
+                    audio_kbps: audio_reserved_kbps(&welcome),
+                    shard_payload: welcome.shard_payload,
+                    fec_percent: welcome.fec.fec_percent,
+                    identity: codec == crate::encode::Codec::PyroWave,
+                },
+                chroma,
+                codec,
+                pyrowave_bpp,
                 shard_payload: welcome.shard_payload,
-                fec_percent: welcome.fec.fec_percent,
-                identity: codec == crate::encode::Codec::PyroWave,
+                // A joiner's view and fit, as `SessionContext::reframe_to` carries them.
+                reframe_to: joined.as_ref().map(|(_, view)| {
+                    (
+                        punktfunk_core::video_fit::VideoFit::from_wire(hello.video_fit),
+                        *view,
+                    )
+                }),
             };
             let trace = bringup.clone();
-            // A joiner's view and fit, as `SessionContext::reframe_to` carries them.
-            let reframe_to = joined.as_ref().map(|(_, view)| {
-                (
-                    punktfunk_core::video_fit::VideoFit::from_wire(hello.video_fit),
-                    *view,
-                )
-            });
             std::thread::Builder::new()
                 .name("punktfunk1-stream".into())
                 .spawn(move || -> Result<()> {
-                    let prepared = super::stream::prepare_display(
-                        comp,
-                        mode,
-                        client_identity,
-                        client_hdr,
-                        cursor_fw,
-                        multi_slice,
-                        bitrate_kbps,
-                        bitrate_auto,
-                        bit_depth,
-                        session_hdr,
-                        // `enc_of` after the depth pair; before `bit_depth` does not compile on Windows.
-                        enc_of,
-                        chroma,
-                        codec,
-                        pyrowave_bpp,
-                        shard_payload,
-                        reframe_to,
-                        &quit,
-                        &stop,
-                        &trace,
-                    );
+                    let prepared = super::stream::prepare_display(prep, &quit, &stop, &trace);
                     let Ok(ctx) = ctx_rx.recv() else {
                         // Handshake abort / punch failure: dropping `prepared` hands the monitor
                         // to keep-alive, like a normal session end.
