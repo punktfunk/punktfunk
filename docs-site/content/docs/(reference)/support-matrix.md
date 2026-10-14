@@ -372,7 +372,7 @@ know is not offered, and the session goes ahead without it — see
 | Contract | Current | Rule |
 |---|---|---|
 | Native protocol | **`punktfunk/2`** | A 0.44 host streams to 0.43 apps and newer. A 0.44 app needs a 0.44 host: an older one shows as offline, and connecting says "update both". |
-| C ABI version | **50** | Between an app and the core library it ships with. |
+| C ABI version | **55** | Between an app and the core library it ships with. |
 | Windows display-driver protocol | **9** | Host and driver must match; the installer updates both. |
 | Windows virtual-gamepad channel | **3** | Host and pad driver must match; same installer. |
 

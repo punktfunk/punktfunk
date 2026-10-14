@@ -16,9 +16,9 @@ short; the version-bump commit retitles it. Older sections stay as they are.
 
 ## v0.44.0
 
-604 commits since v0.43.1. **punktfunk/2 only**: the ALPN is the wire version now. **C ABI 50.**
+1025 commits since v0.43.1. **punktfunk/2 only**: the ALPN is the wire version now. **C ABI 55.**
 Driver protocol floor stays 9. Profiles and seats arrive on Windows and Linux; video, audio and
-control share UDP 9777.
+control share UDP 9777; niri joins the host compositors.
 Deep dive: `git log v0.43.1..v0.44.0`
 
 ### Versions
@@ -26,17 +26,17 @@ Deep dive: `git log v0.43.1..v0.44.0`
 | | v0.43.1 | v0.44.0 | Notes |
 |---|---|---|---|
 | Wire protocol | 2 | **punktfunk/2** | streams use ALPN `pkf2` alone; `pkf1` answers PIN pairing only. `WIRE_VERSION` and `PUNKTFUNK_WIRE_VERSION` are gone. mDNS still says `proto=punktfunk/1` and adds `wire=2` |
-| C ABI | 43 | **50** | 44 drops the punktfunk/1 session API; 45 `punktfunk_connection_set_sc2_gate`; 46 `PunktfunkConnectOpts.profile_id`, `punktfunk_connection_profile` and four reject statuses; 47 drops `punktfunk_connection_report_phase`; 48 reshapes the network-check report; 49 appends `pyrowave_bpp_x100`; 50 `punktfunk_request_access` |
-| C headers | — | — | `punktfunk_core.h` loses the `PUNKTFUNK_MSG_*`, `PUNKTFUNK_CIPHER_*` and old `PUNKTFUNK_EXT_TAG_*` ids; gains the profile, SC2 gate, pad-identity, link-facts and PyroWave helpers. `punktfunk_console.h` gains `PUNKTFUNK_CONSOLE_PUSH_PROFILES` (20) |
+| C ABI | 43 | **55** | 44 drops the punktfunk/1 session API; 45 `punktfunk_connection_set_sc2_gate`; 46 `PunktfunkConnectOpts.profile_id`, `punktfunk_connection_profile` and four reject statuses; 47 drops `punktfunk_connection_report_phase`; 48 reshapes the network-check report; 49 appends `pyrowave_bpp_x100`; 50 `punktfunk_request_access`; 51 `punktfunk_connection_holds_screen_awake`; 52 `punktfunk_connection_recovery_*`; 53 drops `punktfunk_reanchor_gate_*` and `punktfunk_connection_note_frame_index(_ex)`; 54 `punktfunk_sc1_identity_request` and `punktfunk_sc1_ble_*`; 55 `PUNKTFUNK_COMPOSITOR_NIRI` |
+| C headers | — | — | `punktfunk_core.h` loses the `PUNKTFUNK_MSG_*`, `PUNKTFUNK_CIPHER_*` and old `PUNKTFUNK_EXT_TAG_*` ids; gains the profile, SC2 and 2015 Steam Controller, pad-identity, link-facts, PyroWave, screen-awake and recovery-driver calls, `PUNKTFUNK_ANCHOR_EVIDENCE_*` and `PUNKTFUNK_COMPOSITOR_NIRI` (7). `punktfunk_console.h` gains `PUNKTFUNK_CONSOLE_PUSH_PROFILES` (20); pair, wake and library pushes carry the request's `req` |
 | Rust edition / MSRV | 2024 / 1.85 | **2024 / 1.85** | unchanged; the seat keeper's own workspace says 1.89 |
-| Workspace crate dirs | 39 | **45** | grouped as `crates/{core,codec,client,host,install}/`; package names unchanged. New: `pf-client-video`, `pf-encode-session`, `pf-seats`, `punktfunk-seats`, `punktfunk-capture-worker`, `pf-seat-keeper` (own workspace and lock) |
-| Virtual-display driver protocol | 9 | **9** | unchanged; the reference-floor op and the NVENC preset byte go only to a driver that declares them |
-| Windows virtual-gamepad channel | 3 | **3** | unchanged; a Steam Controller 2 enumerates as `VID_28DE&PID_1302` with the 0.44 driver |
+| Workspace crate dirs | 39 | **46** | grouped as `crates/{core,codec,client,host,install}/`; package names unchanged. New: `pf-client-video`, `pf-encode-session`, `pf-seats`, `punktfunk-seats`, `punktfunk-capture-worker`, `pf-seat-audio` (`pf_seat_audio.dll`, x64 and x86), `pf-seat-keeper` (own workspace and lock) |
+| Virtual-display driver protocol | 9 | **9** | unchanged; the reference-floor op and the NVENC preset byte go only to a driver that declares them. `SetEncodeRequest`'s tail pad carries the slice count; an older side sends or reads 0 |
+| Windows virtual-gamepad channel | 3 | **3** | unchanged; with the 0.44 driver (rev 6) a Steam Controller 2 enumerates as `VID_28DE&PID_1302` and a 2015 Steam Controller as `pf_steamcontroller`; an older driver folds the 2015 pad to an Xbox 360 pad |
 | Plugin index schema | 1 | **1** | unchanged. The manifest stays `schema: 1` and gains optional `registry` and machine roots such as `%ProgramData%` |
-| Host event schema | 1 | **1** | unchanged; client, session, stream and game payloads carry an optional `profile`, and `HookFilter` takes one |
-| `api/openapi.json` | 0.43.1 | **0.44.0** | `/profiles` family, `/emulators/{catalog,{id}/adopt,content,firmware,saves}`, `/plugins/{id}/ui/attach`; `/local/summary` needs the per-start `tray-token`. Nothing removed |
+| Host event schema | 1 | **1** | unchanged; client, session, stream and game payloads carry an optional `profile`, and `HookFilter` takes one. `session.ended` can end as `stolen` |
+| `api/openapi.json` | 0.43.1 | **0.44.0** | `/profiles` family, `/emulators/{catalog,{id}/adopt,content,firmware,saves}`, `/plugins/{id}/ui/attach`; `/local/summary` needs the per-start `tray-token`. `/status` session rows carry `phase`; `SeatingChange.prepare`, `SeatCheck.seat_name`. 403 for a plugin-lane write to another provider's custom row and for a profile wake without its grant. Nothing removed |
 | gamescope patch level (`+pfhdrN`) | 31 | **31** | unchanged; bundled libdrm 2.4.134 and xkbcommon 1.13.2 |
-| `@punktfunk/host` (SDK) | 0.3.3 | **0.4.0** | peer `effect` ^4.0.1; profile and emulator routes, `ProfileRef` on events; optional `undici` ^8 |
+| `@punktfunk/host` (SDK) | 0.3.3 | **0.4.0** | peer `effect` ^4.0.1; profile and emulator routes, `ProfileRef` on events; optional `undici` ^8. The session `phase`, `stolen` and seating `prepare` types ship with the next SDK cut |
 | `@punktfunk/plugin-kit` | 0.11.0 | **0.13.0** | 0.12.0: `ServeUiGame.page`, the `emulator` launch kind. 0.12.1: `HKCU\` keys under a user profile. 0.13.0: peers `effect` ^4.0.1 and `@punktfunk/host` ^0.4.0, exports the console-surface types from `wire` |
 
 ### Breaking
@@ -45,13 +45,18 @@ Deep dive: `git log v0.43.1..v0.44.0`
   pair. A 0.43 host refuses a 0.44 client with `WireVersionMismatch`. With `PUNKTFUNK_PROTOCOL=2`
   it connects and then loses recovery: do not run that pair.
 - **One port.** The second UDP socket, the hole-punch, `--data-port` and `PUNKTFUNK_DATA_PORT`
-  are gone. `service install` deletes the Windows "Punktfunk UDP (data plane)" rule. Seats add
-  UDP 9779–9782.
+  are gone. `service install` deletes the Windows "Punktfunk UDP (data plane)" rule and syncs a
+  "Punktfunk Browser" rule for UDP 9778 while Browser streaming is on. Seats add UDP 9779–9782.
+- **Display linger.** A Windows host with no saved keep-alive removes a client's display at once,
+  as Linux does; it used to keep it 10 s. `PUNKTFUNK_MONITOR_LINGER_MS` keeps it, now on Linux too.
+- **Console bridge.** A producer copies `req` from `Pair`, `RequestAccess`, `Wake` and
+  `FetchLibrary` onto its answers.
 - **Feedback datagram.** Loss, link rate and recovery asks ride `DGRAM_FEEDBACK`. A 0.44 host
   still reads a 0.43 client's control frames 0x27, 0x2E, 0x2F, 0x36 and 0x37.
-- **C ABI 50.** Rebuild. Gone: `punktfunk_session_new`, `punktfunk_send_input`,
+- **C ABI 55.** Rebuild. Gone: `punktfunk_session_new`, `punktfunk_send_input`,
   `punktfunk_set_input_callback`, `punktfunk_host_poll_input`, `punktfunk_connection_report_phase`,
-  `PUNKTFUNK_CLIENT_CAP_PHASE_LOCK`. `PunktfunkConfig` loses `phase`, `encrypt`, `key` and `salt`.
+  `PUNKTFUNK_CLIENT_CAP_PHASE_LOCK`, `punktfunk_reanchor_gate_*` and
+  `punktfunk_connection_note_frame_index(_ex)`: report to `punktfunk_connection_recovery_*`. `PunktfunkConfig` loses `phase`, `encrypt`, `key` and `salt`.
   `PunktfunkHealthReport` drops `has_host` and `PunktfunkHealthFinding` drops `profile`;
   `PunktfunkConnectOpts.delivery_profile` is reserved.
 - **One on/off grammar.** Every boolean `PUNKTFUNK_*` reads `0`, `false`, `off`, `no` (trimmed,
@@ -60,12 +65,17 @@ Deep dive: `git log v0.43.1..v0.44.0`
 - **Pacing.** Unset `PUNKTFUNK_DELIVERY` paces every session at the link rate; `burst` restores the
   old default. `PUNKTFUNK_PACE_BURST_KB` is gone and `PUNKTFUNK_PACE_FACTOR=0` no longer means a
   deadline-only spread. `PUNKTFUNK_PHASE_LOCK` and `PUNKTFUNK_CLIENT_PHASE_LOCK` are gone.
-- **Windows plugins need a manifest.** Each plugin runs in its own AppContainer; one without a
-  `punktfunk` block does not start. RTSS Frame Cap needs a second `icacls` grant (plugins guide).
+- **Plugins need a manifest and a sandbox.** Each Windows plugin runs in its own AppContainer; one
+  without a `punktfunk` block does not start. RTSS Frame Cap needs a second `icacls` grant. A box
+  that can't build a sandbox stops the runner with exit status 78; the systemd unit, the NixOS
+  module and `scripting-run.cmd` leave it stopped (`RestartPreventExitStatus=78`).
 - **Linux packages.** Seats ship as `punktfunk-seats` (recommended on rpm and deb, optional on
   Arch, `services.punktfunk.seats.enable` on NixOS). The host writes the tray autostart entry;
   packages no longer do. deb, rpm, pacman and the sysext share one post-install helper and one
-  sysusers.d file.
+  sysusers.d file. The seat service keeps its state in root's `/var/lib/punktfunk-seats` (tmpfiles
+  `0711`, moved there on first start) and the update unit needs `StateDirectory=punktfunk-update`.
+  `packaging/linux/capabilities.txt` lists each binary's capabilities; Arch gains the optional
+  `biri-git` for niri.
 - **Plugins move to effect 4.0.1.** `@punktfunk/plugin-kit` 0.13 and `@punktfunk/host` 0.4 peer
   effect ^4.0.1, which drops the beta's `effect/unstable/http`; import `effect/http`. SDK 0.3.3
   fails at import under effect 4.0.1.
@@ -83,11 +93,13 @@ Deep dive: `git log v0.43.1..v0.44.0`
 - Changed: `PUNKTFUNK_VDISPLAY_HZ_MULT` 0 is automatic; `PUNKTFUNK_DELIVERY` takes
   `auto|wake|burst|capped|smooth`; `PUNKTFUNK_GSO` is on everywhere; `PUNKTFUNK_PAD_SPEAKER_VOLUME`
   defaults to `0x64`; `PUNKTFUNK_CAPTURE_MONITOR` takes `\\.\DISPLAY1`; Windows host.env reads
-  `PUNKTFUNK_PLUGIN_SANDBOX=off`.
+  `PUNKTFUNK_PLUGIN_SANDBOX=off`; `PUNKTFUNK_MONITOR_LINGER_MS` has no default and counts on Linux;
+  `PUNKTFUNK_COMPOSITOR` takes `niri` (or `biri`); `PUNKTFUNK_VK_QUEUE_PRIORITY` defaults to `high`;
+  `PUNKTFUNK_ENCODE_WORKER` also runs the NVIDIA frame convert.
 - Removed: `PUNKTFUNK_PROTOCOL`, `PUNKTFUNK_DATA_PORT`, `PUNKTFUNK_PACE_BURST_KB`,
   `PUNKTFUNK_PHASE_LOCK`, `PUNKTFUNK_CLIENT_PHASE_LOCK`, `PUNKTFUNK_RECVMSG_X`.
-- CLI: `punktfunk launch --as <profile>`, `punktfunk profiles`, `punktfunk-probe --as`;
-  `punktfunk-seats list|doctor`. Android: `setprop debug.punktfunk.low_latency_key mtk-boost`.
+- CLI: `punktfunk launch --as <profile>`, `punktfunk profiles`, `punktfunk pair --request-access
+  --fp`, `punktfunk-probe --as`; `punktfunk-seats list|doctor`; `punktfunk-host seats off` (Windows). Android: `setprop debug.punktfunk.low_latency_key mtk-boost`.
 
 ---
 
