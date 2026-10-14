@@ -17,7 +17,9 @@ use crate::encode_recovery::{
     on_submit_error, reset_stalled_encoder, run_parked_stage, EncoderWatchdog, RebuildBudget,
     MAX_ENCODER_RESETS,
 };
-use crate::native::pipeline::{count_capture_loss, rebuild_after_capture_loss, CaptureLossRebuild};
+use crate::native::pipeline::{
+    count_capture_loss, open_session_encoder, rebuild_after_capture_loss, CaptureLossRebuild,
+};
 use anyhow::{Context, Result};
 use std::net::UdpSocket;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -852,25 +854,28 @@ fn gs_capture_output(
     Ok(capturer)
 }
 
-/// Shared [`SessionPlan`](crate::session_plan::SessionPlan) at this plane's shape: 4:2:0,
-/// depth 10 only with HDR, no cursor-forward (GameStream has no client cursor channel).
+/// Shared [`SessionPlan`](crate::session_plan::SessionPlan) at this plane's shape: 4:2:0 (stock
+/// Moonlight cannot decode 4:4:4), depth 10 only with HDR, no cursor-forward (GameStream has no
+/// client cursor channel), and exactly the slices the client asked for: a TV decoder wedges on
+/// more.
 fn gs_session_plan(cfg: &StreamConfig, cursor_blend: bool) -> crate::session_plan::SessionPlan {
-    crate::session_plan::SessionPlan::resolve(
-        if cfg.hdr { 10 } else { 8 },
-        cfg.hdr,
-        encode::ChromaFormat::Yuv420,
-        cfg.codec,
-        cursor_blend,
-        false,
-        cfg.slices > 1,
-    )
+    crate::session_plan::SessionPlan {
+        max_slices: cfg.slices,
+        ..crate::session_plan::SessionPlan::resolve(
+            if cfg.hdr { 10 } else { 8 },
+            cfg.hdr,
+            encode::ChromaFormat::Yuv420,
+            cfg.codec,
+            cursor_blend,
+            false,
+            cfg.slices > 1,
+        )
+    }
 }
 
-/// The session's encoder for `frame` — at the client's size when a larger head is mirrored
-/// (`session_plan::open_encoder_fitted`) — bounded by the capturer's ring depth. An IDD-push
-/// source has no pixels to submit — the driver encodes — so it gets the driver's encoder, which
-/// then owes access units through `ready_aus`; its wire domain continues at `wire_seq_base` (the
-/// loop's `au_seq`).
+/// [`open_session_encoder`] for `frame` at the client's negotiated size, rate and depth. An
+/// IDD-push source gets the driver's encoder, which then owes access units through
+/// `ready_aus`; its wire domain continues at `wire_seq_base` (the loop's `au_seq`).
 fn gs_open_encoder(
     plan: &crate::session_plan::SessionPlan,
     capturer: &dyn Capturer,
@@ -879,40 +884,17 @@ fn gs_open_encoder(
     enc_bps: u64,
     wire_seq_base: u32,
 ) -> Result<Box<dyn encode::Encoder>> {
-    let mut enc = if plan.capture.encodes_remotely() {
-        crate::windows::idd::open_driver_encoder(
-            plan,
-            capturer,
-            (frame.width, frame.height),
-            cfg.fps,
-            enc_bps,
-            gs_bit_depth(frame.format),
-            None,
-            wire_seq_base,
-        )?
-    } else {
-        crate::session_plan::open_encoder_fitted(frame, (cfg.width, cfg.height), None, |w, h| {
-            encode::open_video(
-                cfg.codec,
-                frame.format,
-                w,
-                h,
-                cfg.fps,
-                enc_bps,
-                frame.is_cuda(),
-                gs_bit_depth(frame.format),
-                cfg.hdr,
-                // Stock Moonlight cannot decode 4:4:4.
-                encode::ChromaFormat::Yuv420,
-                plan.cursor_blend,
-                cfg.slices,
-            )
-        })?
-        .0
-    };
-    // Without this, an in-place backend bounds itself by an env cap and the capturer rotates
-    // a texture out from under a live encode — torn frames, never an error.
-    enc.set_input_ring_depth(capturer.pipeline_depth().max(1));
+    let (enc, _) = open_session_encoder(
+        plan,
+        capturer,
+        frame,
+        (cfg.width, cfg.height),
+        cfg.fps,
+        |_, _| enc_bps,
+        gs_bit_depth(frame.format),
+        None,
+        wire_seq_base,
+    )?;
     Ok(enc)
 }
 
@@ -2337,6 +2319,33 @@ mod tests {
                 .expect("sender must return spent batches to the pool");
         }
         assert_eq!(spread.lock().unwrap().len(), 3, "per-frame spread recorded");
+    }
+
+    fn cfg(slices: u32, hdr: bool) -> StreamConfig {
+        StreamConfig {
+            width: 1920,
+            height: 1080,
+            fps: 60,
+            packet_size: 1392,
+            bitrate_kbps: 20_000,
+            codec: Codec::H265,
+            min_fec: 0,
+            hdr,
+            slices,
+            encrypt_video: false,
+        }
+    }
+
+    /// The plan the shared encoder open reads: 4:2:0 at the client's own slice count.
+    #[test]
+    fn the_plan_keeps_the_clients_slice_count() {
+        for slices in [1, 2, 4] {
+            let plan = gs_session_plan(&cfg(slices, false), false);
+            assert_eq!(plan.max_slices, slices);
+            assert_eq!(plan.chroma, encode::ChromaFormat::Yuv420);
+            assert_eq!(plan.bit_depth, 8);
+        }
+        assert_eq!(gs_session_plan(&cfg(1, true), false).bit_depth, 10);
     }
 
     /// Framing (32 B per 1376 B payload) and FEC parity fit inside the configured wire budget.

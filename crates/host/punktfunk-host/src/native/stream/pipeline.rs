@@ -376,13 +376,50 @@ pub(super) fn pacing_hz(session_hz: u32, achieved_hz: u32) -> u32 {
     achieved_hz.min(session_hz).max(1)
 }
 
+/// What [`open_session_encoder`] asks [`crate::encode::open_video`] for.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct VideoOpen {
+    codec: crate::encode::Codec,
+    format: pf_frame::PixelFormat,
+    width: u32,
+    height: u32,
+    hz: u32,
+    bitrate_bps: u64,
+    cuda: bool,
+    bit_depth: u8,
+    hdr: bool,
+    chroma: crate::encode::ChromaFormat,
+    cursor_blend: bool,
+    max_slices: u32,
+}
+
+impl VideoOpen {
+    fn open(self) -> Result<Box<dyn crate::encode::Encoder>> {
+        crate::encode::open_video(
+            self.codec,
+            self.format,
+            self.width,
+            self.height,
+            self.hz,
+            self.bitrate_bps,
+            self.cuda,
+            self.bit_depth,
+            self.hdr,
+            self.chroma,
+            self.cursor_blend,
+            self.max_slices,
+        )
+    }
+}
+
 /// Open the session's encoder for `frame` — framed for a joiner, or at the client's `negotiated`
 /// size when a larger head is mirrored (`session_plan::open_encoder_fitted`) — with the plan's
-/// chunking and the capturer's ring depth applied, and return the framing it encodes. `bitrate_bps` is asked
-/// for that size. An IDD-push source gets the driver's encoder instead, its wire-index domain
-/// continuing at `wire_seq_base` (the loop's `au_seq`).
+/// chunking, slice ceiling and the capturer's ring depth applied, and return the framing it
+/// encodes. `bitrate_bps` is asked for that size. An IDD-push source gets the driver's encoder
+/// instead, its wire-index domain continuing at `wire_seq_base` (the loop's `au_seq`). Both
+/// stream loops open here: GameStream's plan carries the client's own slice count.
 #[allow(clippy::too_many_arguments)]
-pub(super) fn open_session_encoder(
+pub(crate) fn open_session_encoder(
     plan: &crate::session_plan::SessionPlan,
     capturer: &dyn crate::capture::Capturer,
     frame: &crate::capture::CapturedFrame,
@@ -392,6 +429,37 @@ pub(super) fn open_session_encoder(
     bit_depth: u8,
     client_hdr: Option<pf_frame::HdrMeta>,
     wire_seq_base: u32,
+) -> Result<(
+    Box<dyn crate::encode::Encoder>,
+    punktfunk_core::video_fit::Reframe,
+)> {
+    open_session_encoder_with(
+        plan,
+        capturer,
+        frame,
+        negotiated,
+        hz,
+        bitrate_bps,
+        bit_depth,
+        client_hdr,
+        wire_seq_base,
+        VideoOpen::open,
+    )
+}
+
+/// [`open_session_encoder`] through `open_video`, which a test replaces.
+#[allow(clippy::too_many_arguments)]
+fn open_session_encoder_with(
+    plan: &crate::session_plan::SessionPlan,
+    capturer: &dyn crate::capture::Capturer,
+    frame: &crate::capture::CapturedFrame,
+    negotiated: (u32, u32),
+    hz: u32,
+    bitrate_bps: impl Fn(u32, u32) -> u64,
+    bit_depth: u8,
+    client_hdr: Option<pf_frame::HdrMeta>,
+    wire_seq_base: u32,
+    mut open_video: impl FnMut(VideoOpen) -> Result<Box<dyn crate::encode::Encoder>>,
 ) -> Result<(
     Box<dyn crate::encode::Encoder>,
     punktfunk_core::video_fit::Reframe,
@@ -419,20 +487,20 @@ pub(super) fn open_session_encoder(
         negotiated,
         plan.reframe_to,
         |width, height| {
-            crate::encode::open_video(
-                plan.codec,
-                frame.format,
+            open_video(VideoOpen {
+                codec: plan.codec,
+                format: frame.format,
                 width,
                 height,
                 hz,
-                bitrate_bps(width, height),
-                frame.is_cuda(),
+                bitrate_bps: bitrate_bps(width, height),
+                cuda: frame.is_cuda(),
                 bit_depth,
-                plan.hdr,
-                plan.chroma,
-                plan.cursor_blend,
-                plan.max_slices,
-            )
+                hdr: plan.hdr,
+                chroma: plan.chroma,
+                cursor_blend: plan.cursor_blend,
+                max_slices: plan.max_slices,
+            })
         },
     )?;
     if let Some(c) = plan.wire_chunk {
@@ -690,6 +758,99 @@ fn attach_pipeline(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::capture::Capturer;
+
+    /// Encodes nothing.
+    struct NullEnc;
+
+    impl crate::encode::Encoder for NullEnc {
+        fn submit(&mut self, _frame: &crate::capture::CapturedFrame) -> Result<()> {
+            Ok(())
+        }
+        fn poll(&mut self) -> Result<Option<crate::encode::EncodedFrame>> {
+            Ok(None)
+        }
+        fn flush(&mut self) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    fn plan(
+        chroma: crate::encode::ChromaFormat,
+        hdr: bool,
+        max_slices: u32,
+    ) -> crate::session_plan::SessionPlan {
+        crate::session_plan::SessionPlan {
+            capture: crate::session_plan::CaptureBackend::Portal,
+            topology: crate::session_plan::SessionTopology::SingleProcess,
+            encoder: crate::session_plan::EncoderBackend::Software,
+            bit_depth: if hdr { 10 } else { 8 },
+            hdr,
+            chroma,
+            codec: crate::encode::Codec::H265,
+            wire_chunk: None,
+            pyrowave_bpp: 0.0,
+            cursor_blend: true,
+            cursor_forward: false,
+            gamescope_cursor: false,
+            sdr10_native: false,
+            max_slices,
+            reframe_to: None,
+        }
+    }
+
+    /// Native opens a 4:4:4 HDR session at its own depth and a rate per encoded size;
+    /// GameStream a 4:2:0 one at the client's slice count, the frame's depth and one rate.
+    #[test]
+    fn both_loops_open_the_encoder_their_plan_names() {
+        let mut cap = crate::capture::SyntheticCapturer::new(64, 32, 60);
+        let frame = cap.next_frame().expect("a synthetic frame");
+        let want =
+            |plan: &crate::session_plan::SessionPlan, hz, bitrate_bps, bit_depth| VideoOpen {
+                codec: plan.codec,
+                format: frame.format,
+                width: 64,
+                height: 32,
+                hz,
+                bitrate_bps,
+                cuda: false,
+                bit_depth,
+                hdr: plan.hdr,
+                chroma: plan.chroma,
+                cursor_blend: true,
+                max_slices: plan.max_slices,
+            };
+        let open = |plan: &crate::session_plan::SessionPlan,
+                    hz,
+                    bitrate_bps: fn(u32, u32) -> u64,
+                    bit_depth| {
+            let mut asked = Vec::new();
+            let (_, reframe) = open_session_encoder_with(
+                plan,
+                &cap,
+                &frame,
+                (64, 32),
+                hz,
+                bitrate_bps,
+                bit_depth,
+                None,
+                1,
+                |v| {
+                    asked.push(v);
+                    Ok(Box::new(NullEnc))
+                },
+            )
+            .expect("an encoder");
+            assert!(reframe.is_full());
+            asked
+        };
+        let native = plan(crate::encode::ChromaFormat::Yuv444, true, 32);
+        let asked = open(&native, 120, |w, h| u64::from(w * h), 10);
+        assert_eq!(asked, [want(&native, 120, 64 * 32, 10)]);
+        let gamestream = plan(crate::encode::ChromaFormat::Yuv420, false, 4);
+        let asked = open(&gamestream, 60, |_, _| 16_287_878, 8);
+        assert_eq!(asked, [want(&gamestream, 60, 16_287_878, 8)]);
+    }
 
     #[test]
     fn pacing_never_exceeds_the_session_rate_or_the_display() {

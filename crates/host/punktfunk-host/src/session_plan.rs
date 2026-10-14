@@ -123,8 +123,9 @@ pub struct SessionPlan {
     pub sdr10_native: bool,
     /// Encoder slice-count ceiling from [`VIDEO_CAP_MULTI_SLICE`](punktfunk_core::quic::VIDEO_CAP_MULTI_SLICE):
     /// 32 when the bit is set (backend default; no client-side cap), 1 when not
-    /// (single-slice frames for TV-SoC decoders). Applied to every encoder this
-    /// plan opens so slicing cannot change shape across a rebuild.
+    /// (single-slice frames for TV-SoC decoders). GameStream sets the client's own
+    /// count. Applied to every encoder this plan opens so slicing cannot change shape
+    /// across a rebuild.
     pub max_slices: u32,
     /// A joiner's own view and fit: the encoder frames the owner's picture for it. `None`
     /// streams the source as captured, or a mirrored head fitted to the negotiated size.

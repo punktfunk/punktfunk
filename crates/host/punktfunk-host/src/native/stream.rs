@@ -31,6 +31,7 @@ pub(super) use self::pipeline::{prepare_display, PrepHandle, PreparedDisplay};
 /// The pipeline steps both stream loops take, for GameStream as `crate::native::pipeline`.
 #[cfg(feature = "gamestream")]
 pub(crate) mod shared {
+    pub(crate) use super::pipeline::open_session_encoder;
     pub(crate) use super::rebuild::{
         count_capture_loss, rebuild_after_capture_loss, CaptureLossRebuild,
     };
