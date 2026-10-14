@@ -386,144 +386,9 @@ pub(super) async fn negotiate(
 ) -> Result<Negotiated> {
     let mut hello = first.hello.clone();
     // Pairing ran before this future: a client here is paired, or the host is `--open`.
-
-    // GPU-probed host codecs ∩ client advertised, honoring preference. A software host is
-    // H.264-only — refuse rather than send a stream an HEVC-only client cannot decode.
-    let host_codecs = crate::encode::host_wire_caps();
-    let codec_bit =
-            punktfunk_core::quic::resolve_codec(hello.video_codecs, host_codecs, hello.preferred_codec)
-                .ok_or_else(|| {
-                anyhow!(
-                    "no shared video codec: client advertised 0x{:02x}, host can emit 0x{:02x} \
-                     (a software-encode host produces H.264 — the client must advertise CODEC_H264)",
-                    hello.video_codecs,
-                    host_codecs
-                )
-            })?;
-    let codec = crate::encode::codec_from_wire(codec_bit);
-    // `preferred=` is the answer to "why not AV1?": the pick alone never says whether the
-    // client asked for something else, and this is the line an operator greps.
-    let preferred = codec_pref_label(hello.preferred_codec);
-    tracing::info!(
-        ?codec,
-        preferred,
-        client_codecs = format_args!("0x{:02x}", hello.video_codecs),
-        host_codecs = format_args!("0x{host_codecs:02x}"),
-        "video codec negotiated"
-    );
-    if let Some(miss) = punktfunk_core::quic::codec_preference_miss(
-        hello.video_codecs,
-        host_codecs,
-        hello.preferred_codec,
-    ) {
-        tracing::info!(
-            "{}",
-            codec_miss_note(miss, preferred, punktfunk_core::hud::codec_label(codec_bit))
-        );
-    }
-
-    // The operator's cap for this device, applied BEFORE mode-conflict and before Welcome
-    // — the client is then told the mode it actually gets, rather than asking for 4K120,
-    // being told yes, and receiving something else (§6.3 P2).
-    {
-        let fp = crate::vdisplay::policy::fp_hex(conn.peer_fingerprint());
-        let want = (hello.mode.width, hello.mode.height, hello.mode.refresh_hz);
-        let capped = crate::vdisplay::policy::prefs().cap_mode(fp.as_deref(), want);
-        if capped != want {
-            tracing::info!(
-                requested = %format_args!("{}x{}@{}", want.0, want.1, want.2),
-                granted = %format_args!("{}x{}@{}", capped.0, capped.1, capped.2),
-                "per-device mode cap applied"
-            );
-            hello.mode.width = capped.0;
-            hello.mode.height = capped.1;
-            hello.mode.refresh_hz = capped.2;
-        }
-    }
-
-    // Mode-conflict before Welcome. Same-client reconnect never conflicts. This session
-    // registers in the live set only once its data plane is up, so a later client can steal it.
-    let mut joined = None;
-    {
-        use crate::vdisplay::admission::{
-            admit, preempt_resumed, preempt_same_identity, Admission,
-        };
-        let peer_fp = conn.peer_fingerprint();
-
-        // Own prior session (QUIC idle has not fired), and on `punktfunk/2` the exact session a
-        // `resume` names. Stop them and wait for their release, so this reconnect reuses the
-        // kept display. Runs before we register, so we never stop ourselves.
-        let mut own_zombies = preempt_same_identity(peer_fp);
-        if let Some(id) = first.resume {
-            for s in preempt_resumed(id, peer_fp) {
-                if !own_zombies.iter().any(|z| Arc::ptr_eq(z, &s)) {
-                    own_zombies.push(s);
-                }
-            }
-        }
-        if !own_zombies.is_empty() {
-            tracing::info!(
-                    count = own_zombies.len(),
-                    "reconnect: preempting this client's own zombie session(s) so the kept display is reused"
-                );
-            for z in &own_zombies {
-                z.store(true, Ordering::SeqCst);
-            }
-            wait_released(&own_zombies).await;
-        }
-
-        match admit(peer_fp) {
-            Admission::Separate => {}
-            Admission::Join(m, display) => {
-                tracing::info!(
-                    requested =
-                        %format_args!("{}x{}@{}", hello.mode.width, hello.mode.height, hello.mode.refresh_hz),
-                    live = %format_args!("{}x{}@{}", m.0, m.1, m.2),
-                    "mode-conflict: JOIN — admitting at the live display's mode"
-                );
-                let view = (hello.mode.width, hello.mode.height);
-                hello.mode.width = m.0;
-                hello.mode.height = m.1;
-                hello.mode.refresh_hz = m.2;
-                // On gamescope the owner's game is the shared screen; this client's own title
-                // would land in it.
-                if display.compositor == Some(crate::vdisplay::Compositor::Gamescope)
-                    && hello.launch.take().is_some()
-                {
-                    tracing::info!(
-                        "mode-conflict: JOIN — this client's launch dropped; it shares the owner's game"
-                    );
-                }
-                joined = Some((display, view));
-            }
-            Admission::Steal(victims) => {
-                // A mode this session cannot encode fails below anyway: check it before the
-                // victims lose their stream for nothing. A steal keeps the requested mode.
-                crate::encode::validate_dimensions(codec, hello.mode.width, hello.mode.height)
-                    .context("client-requested mode")?;
-                crate::encode::validate_refresh(hello.mode.refresh_hz)
-                    .context("client-requested mode")?;
-                tracing::info!(
-                    victims = victims.len(),
-                    "mode-conflict: STEAL — preempting the live session(s)"
-                );
-                // The registry names the end first; the flag alone also reaches a victim
-                // still in bring-up, and the compat plane's own flag.
-                crate::session_status::stolen(&victims);
-                for v in &victims {
-                    v.store(true, Ordering::SeqCst);
-                }
-                wait_released(&victims).await;
-            }
-            Admission::Reject(reason) => {
-                tracing::warn!("mode-conflict: REJECT — {reason}");
-                // Typed refusal: BUSY + reason bytes. The client reads `ApplicationClosed`,
-                // not a bare drop, so the UI can name the live session.
-                conn.refuse(REJECT_BUSY_CODE, &reason).await;
-                anyhow::bail!("{reason}");
-            }
-        }
-    }
+    let (codec_bit, codec) = pick_codec(&hello)?;
+    cap_mode(conn, &mut hello);
+    let joined = admit_mode(conn, first, &mut hello, codec).await?;
 
     crate::encode::validate_dimensions(codec, hello.mode.width, hello.mode.height)
         .context("client-requested mode")?;
@@ -653,70 +518,20 @@ pub(super) async fn negotiate(
         audio_channels,
         // Negotiated codec; the client must not assume HEVC.
         codec: codec_bit,
-        // Sequence-gated gamepad snapshots; capable clients send those, not per-transition events.
-        // Clipboard only when operator policy and a platform backend both exist, and never to a
-        // browser: its transfers ride quinn streams.
-        host_caps: punktfunk_core::quic::HOST_CAP_GAMEPAD_STATE
-            | if pf_clipboard::cap_advertised() && conn.as_quic().is_some() {
-                punktfunk_core::quic::HOST_CAP_CLIPBOARD
-            } else {
-                0
-            }
-            // Text injection only where the backend can type (SendInput UNICODE; wlroots keymap).
-            // Clients without the bit keep VK-synthesis for IME.
-            | if crate::inject::text_input_supported() {
-                punktfunk_core::quic::HOST_CAP_TEXT_INPUT
-            } else {
-                0
-            }
-            // Client turns its local renderer on only when it sees this bit; serve_session
-            // wires forwarding by reading the bit back.
-            | if cursor_forward(
-                hello.client_caps,
+        host_caps: welcome_host_caps(
+            conn,
+            &hello,
+            WelcomeVideo {
                 compositor,
                 codec,
                 bit_depth,
-                session_hdr,
-                joined.is_some(),
-            ) {
-                punktfunk_core::quic::HOST_CAP_CURSOR
-            } else {
-                0
-            }
-            // Pen batches → per-session uinput tablet. Without the bit, clients fold pen into
-            // touch/pointer and `NativeClient::send_pen` refuses.
-            | if crate::inject::pen_supported() && pen_reaches(compositor) {
-                punktfunk_core::quic::HOST_CAP_PEN
-            } else {
-                0
-            }
-            // `0xD2` only when offered, budgeted, and not PCM: it is undefined on `0xD3` and
-            // the client has no PCM-side decoder for it. Stated here, not left to the audio thread.
-            | if !audio_plane.is_pcm()
-                && audio_budget(
-                    redundancy_offered(hello.client_caps),
-                    bitrate_kbps,
-                    audio_channels,
-                    audio_plane.layout,
-                )
-                .redundancy
-            {
-                punktfunk_core::quic::HOST_CAP_AUDIO_RED
-            } else {
-                0
-            }
-            | if super::pad_audio::host_cap(hello.client_caps) {
-                punktfunk_core::quic::HOST_CAP_PAD_AUDIO
-            } else {
-                0
-            }
-            // Set only when the gate resolved to PCM, not "host could". `0x80` is the last
-            // `host_caps` bit; the next capability needs a second byte and an ABI bump.
-            | if audio_plane.is_pcm() {
-                punktfunk_core::quic::HOST_CAP_AUDIO_HIRES
-            } else {
-                0
+                hdr: session_hdr,
+                joined: joined.is_some(),
             },
+            &audio_plane,
+            bitrate_kbps,
+            audio_channels,
+        ),
         // `0` keeps the client's saved port: the standalone binary has no management API, and a
         // seat's answers on loopback only, so the box's stays the one its library comes from.
         mgmt_port: if pf_paths::seat::role().is_seat_host() {
@@ -735,39 +550,7 @@ pub(super) async fn negotiate(
         audio_frame_us: audio_plane.frame_us,
         // The coupling the encoder runs.
         audio_layout: audio_plane.layout.wire(),
-        // Idle-keepalive re-encodes are marked `USER_FLAG_REPEAT` so client ABR treats an
-        // unflagged AU as new content.
-        host_caps2: punktfunk_core::quic::HOST_CAP2_REPEAT_MARK
-            // The control loop feeds key edges into the input queue, so a client sends
-            // them there and a lost release cannot hold a key.
-            | punktfunk_core::quic::HOST_CAP2_INPUT_EDGES
-            // Without the bit the client falls back to trackpad instead of sending contacts
-            // the injector cannot land (wlroots) or cannot create a device for (Windows < 1809).
-            | if crate::inject::touch_supported() {
-                punktfunk_core::quic::HOST_CAP2_TOUCH
-            } else {
-                0
-            }
-            // Without the bit the client converts Scroll to MouseScroll before the wire.
-            | if crate::inject::scroll_supported() {
-                punktfunk_core::quic::HOST_CAP2_SCROLL
-            } else {
-                0
-            }
-            // Invites the client's `Start` extension block, which is where it names itself.
-            | punktfunk_core::quic::HOST_CAP2_EXT
-            // The virtual path punches its data plane two to three seconds before its
-            // pipeline exists, and serves the client's bring-up ramp in that gap. The
-            // rate-following source holds its first frame back for the same span
-            // (`--bringup-ms`) so the rig measures the ramp the way a display session
-            // runs it. The byte-pattern source has no such gap: video leaves at once.
-            | match source {
-                Punktfunk1Source::Virtual => punktfunk_core::quic::HOST_CAP2_RAMP,
-                Punktfunk1Source::SyntheticAbr(shape) if shape.serve_ramp => {
-                    punktfunk_core::quic::HOST_CAP2_RAMP
-                }
-                _ => 0,
-            },
+        host_caps2: welcome_host_caps2(source),
     };
     // The suite goes out in the `ServerHello` and keys the media. A browser's media goes
     // unsealed, inside WebTransport's own encryption.
@@ -800,12 +583,10 @@ pub(super) async fn negotiate(
     bringup.mark("welcome");
 
     // Display prep now: mode is final in Welcome; nothing in create→encoder needs Start or
-    // the punched socket. The prep thread becomes the stream thread. Windows only — Linux
-    // binds launch before create (gamescope nests the command), which must not run if Start
-    // never arrives. A dropped channel releases the monitor into keep-alive like a normal end.
+    // the punched socket. Windows only — Linux binds launch before create (gamescope nests the
+    // command), which must not run if Start never arrives.
     let prep: Option<super::stream::PrepHandle> = match (source, compositor) {
         (Punktfunk1Source::Virtual, Some(comp)) if cfg!(target_os = "windows") => {
-            let (ctx_tx, ctx_rx) = std::sync::mpsc::sync_channel::<SessionContext>(1);
             let prep = super::stream::DisplayPrep {
                 compositor: comp,
                 mode: hello.mode,
@@ -842,27 +623,7 @@ pub(super) async fn negotiate(
                     )
                 }),
             };
-            let trace = bringup.clone();
-            std::thread::Builder::new()
-                .name("punktfunk1-stream".into())
-                .spawn(move || -> Result<()> {
-                    let prepared = super::stream::prepare_display(prep, &quit, &stop, &trace);
-                    let Ok(ctx) = ctx_rx.recv() else {
-                        // Handshake abort / punch failure: dropping `prepared` hands the monitor
-                        // to keep-alive, like a normal session end.
-                        return Ok(());
-                    };
-                    match prepared {
-                        Ok(p) => virtual_stream(ctx, Some(p)),
-                        Err(e) => Err(e),
-                    }
-                })
-                .map(|handle| (ctx_tx, handle))
-                .map_err(|e| {
-                    tracing::warn!(error = %e,
-                        "display-prep thread spawn failed — falling back to inline bring-up")
-                })
-                .ok()
+            super::stream::spawn_display_prep(prep, quit, stop, bringup.clone())
         }
         _ => None,
     };
@@ -899,6 +660,273 @@ async fn wait_released(stops: &[Arc<std::sync::atomic::AtomicBool>]) {
     while !crate::vdisplay::admission::all_gone(stops) && tokio::time::Instant::now() < deadline {
         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
     }
+}
+
+/// GPU-probed host codecs ∩ client advertised, honoring preference: the wire bit and the codec.
+/// A software host is H.264-only — refuse rather than send a stream an HEVC-only client cannot
+/// decode.
+fn pick_codec(hello: &Hello) -> Result<(u8, crate::encode::Codec)> {
+    let host_codecs = crate::encode::host_wire_caps();
+    let codec_bit =
+            punktfunk_core::quic::resolve_codec(hello.video_codecs, host_codecs, hello.preferred_codec)
+                .ok_or_else(|| {
+                anyhow!(
+                    "no shared video codec: client advertised 0x{:02x}, host can emit 0x{:02x} \
+                     (a software-encode host produces H.264 — the client must advertise CODEC_H264)",
+                    hello.video_codecs,
+                    host_codecs
+                )
+            })?;
+    let codec = crate::encode::codec_from_wire(codec_bit);
+    // `preferred=` is the answer to "why not AV1?": the pick alone never says whether the
+    // client asked for something else, and this is the line an operator greps.
+    let preferred = codec_pref_label(hello.preferred_codec);
+    tracing::info!(
+        ?codec,
+        preferred,
+        client_codecs = format_args!("0x{:02x}", hello.video_codecs),
+        host_codecs = format_args!("0x{host_codecs:02x}"),
+        "video codec negotiated"
+    );
+    if let Some(miss) = punktfunk_core::quic::codec_preference_miss(
+        hello.video_codecs,
+        host_codecs,
+        hello.preferred_codec,
+    ) {
+        tracing::info!(
+            "{}",
+            codec_miss_note(miss, preferred, punktfunk_core::hud::codec_label(codec_bit))
+        );
+    }
+    Ok((codec_bit, codec))
+}
+
+/// The operator's cap for this device, applied before mode-conflict and before Welcome: the
+/// client is told the mode it actually gets, not a yes to 4K120 and then something else.
+fn cap_mode(conn: &super::link::SessionLink, hello: &mut Hello) {
+    let fp = crate::vdisplay::policy::fp_hex(conn.peer_fingerprint());
+    let want = (hello.mode.width, hello.mode.height, hello.mode.refresh_hz);
+    let capped = crate::vdisplay::policy::prefs().cap_mode(fp.as_deref(), want);
+    if capped != want {
+        tracing::info!(
+            requested = %format_args!("{}x{}@{}", want.0, want.1, want.2),
+            granted = %format_args!("{}x{}@{}", capped.0, capped.1, capped.2),
+            "per-device mode cap applied"
+        );
+        hello.mode.width = capped.0;
+        hello.mode.height = capped.1;
+        hello.mode.refresh_hz = capped.2;
+    }
+}
+
+/// Mode-conflict before Welcome: stop this client's own earlier sessions, then join, steal or
+/// refuse a live one. `Some` = joined: the owner's display and the size this client asked for.
+/// Same-client reconnect never conflicts. This session registers in the live set only once its
+/// data plane is up, so a later client can steal it.
+async fn admit_mode(
+    conn: &super::link::SessionLink,
+    first: &ClientHello,
+    hello: &mut Hello,
+    codec: crate::encode::Codec,
+) -> Result<Option<(crate::vdisplay::admission::LiveDisplay, (u32, u32))>> {
+    use crate::vdisplay::admission::{admit, preempt_resumed, preempt_same_identity, Admission};
+    let peer_fp = conn.peer_fingerprint();
+
+    // Own prior session (QUIC idle has not fired), and on `punktfunk/2` the exact session a
+    // `resume` names. Stop them and wait for their release, so this reconnect reuses the
+    // kept display. Runs before we register, so we never stop ourselves.
+    let mut own_zombies = preempt_same_identity(peer_fp);
+    if let Some(id) = first.resume {
+        for s in preempt_resumed(id, peer_fp) {
+            if !own_zombies.iter().any(|z| Arc::ptr_eq(z, &s)) {
+                own_zombies.push(s);
+            }
+        }
+    }
+    if !own_zombies.is_empty() {
+        tracing::info!(
+            count = own_zombies.len(),
+            "reconnect: preempting this client's own zombie session(s) so the kept display is reused"
+        );
+        for z in &own_zombies {
+            z.store(true, Ordering::SeqCst);
+        }
+        wait_released(&own_zombies).await;
+    }
+
+    match admit(peer_fp) {
+        Admission::Separate => Ok(None),
+        Admission::Join(m, display) => {
+            tracing::info!(
+                requested =
+                    %format_args!("{}x{}@{}", hello.mode.width, hello.mode.height, hello.mode.refresh_hz),
+                live = %format_args!("{}x{}@{}", m.0, m.1, m.2),
+                "mode-conflict: JOIN — admitting at the live display's mode"
+            );
+            let view = (hello.mode.width, hello.mode.height);
+            hello.mode.width = m.0;
+            hello.mode.height = m.1;
+            hello.mode.refresh_hz = m.2;
+            // On gamescope the owner's game is the shared screen; this client's own title
+            // would land in it.
+            if display.compositor == Some(crate::vdisplay::Compositor::Gamescope)
+                && hello.launch.take().is_some()
+            {
+                tracing::info!(
+                    "mode-conflict: JOIN — this client's launch dropped; it shares the owner's game"
+                );
+            }
+            Ok(Some((display, view)))
+        }
+        Admission::Steal(victims) => {
+            // A mode this session cannot encode fails below anyway: check it before the
+            // victims lose their stream for nothing. A steal keeps the requested mode.
+            crate::encode::validate_dimensions(codec, hello.mode.width, hello.mode.height)
+                .context("client-requested mode")?;
+            crate::encode::validate_refresh(hello.mode.refresh_hz)
+                .context("client-requested mode")?;
+            tracing::info!(
+                victims = victims.len(),
+                "mode-conflict: STEAL — preempting the live session(s)"
+            );
+            // The registry names the end first; the flag alone also reaches a victim
+            // still in bring-up, and the compat plane's own flag.
+            crate::session_status::stolen(&victims);
+            for v in &victims {
+                v.store(true, Ordering::SeqCst);
+            }
+            wait_released(&victims).await;
+            Ok(None)
+        }
+        Admission::Reject(reason) => {
+            tracing::warn!("mode-conflict: REJECT — {reason}");
+            // Typed refusal: BUSY + reason bytes. The client reads `ApplicationClosed`,
+            // not a bare drop, so the UI can name the live session.
+            conn.refuse(REJECT_BUSY_CODE, &reason).await;
+            anyhow::bail!("{reason}");
+        }
+    }
+}
+
+/// The video the Welcome describes, for [`welcome_host_caps`].
+struct WelcomeVideo {
+    compositor: Option<crate::vdisplay::Compositor>,
+    codec: crate::encode::Codec,
+    bit_depth: u8,
+    hdr: bool,
+    joined: bool,
+}
+
+/// `Welcome::host_caps`: what this host does for this session. `0x80` is the last bit; the next
+/// capability needs a second byte and an ABI bump.
+fn welcome_host_caps(
+    conn: &super::link::SessionLink,
+    hello: &Hello,
+    video: WelcomeVideo,
+    audio_plane: &AudioPlane,
+    bitrate_kbps: u32,
+    audio_channels: u8,
+) -> u8 {
+    // Sequence-gated gamepad snapshots; capable clients send those, not per-transition events.
+    punktfunk_core::quic::HOST_CAP_GAMEPAD_STATE
+        // Clipboard only when operator policy and a platform backend both exist, and never to a
+        // browser: its transfers ride quinn streams.
+        | if pf_clipboard::cap_advertised() && conn.as_quic().is_some() {
+            punktfunk_core::quic::HOST_CAP_CLIPBOARD
+        } else {
+            0
+        }
+        // Text injection only where the backend can type (SendInput UNICODE; wlroots keymap).
+        // Clients without the bit keep VK-synthesis for IME.
+        | if crate::inject::text_input_supported() {
+            punktfunk_core::quic::HOST_CAP_TEXT_INPUT
+        } else {
+            0
+        }
+        // Client turns its local renderer on only when it sees this bit; serve_session
+        // wires forwarding by reading the bit back.
+        | if cursor_forward(
+            hello.client_caps,
+            video.compositor,
+            video.codec,
+            video.bit_depth,
+            video.hdr,
+            video.joined,
+        ) {
+            punktfunk_core::quic::HOST_CAP_CURSOR
+        } else {
+            0
+        }
+        // Pen batches → per-session uinput tablet. Without the bit, clients fold pen into
+        // touch/pointer and `NativeClient::send_pen` refuses.
+        | if crate::inject::pen_supported() && pen_reaches(video.compositor) {
+            punktfunk_core::quic::HOST_CAP_PEN
+        } else {
+            0
+        }
+        // `0xD2` only when offered, budgeted, and not PCM: it is undefined on `0xD3` and
+        // the client has no PCM-side decoder for it. Stated here, not left to the audio thread.
+        | if !audio_plane.is_pcm()
+            && audio_budget(
+                redundancy_offered(hello.client_caps),
+                bitrate_kbps,
+                audio_channels,
+                audio_plane.layout,
+            )
+            .redundancy
+        {
+            punktfunk_core::quic::HOST_CAP_AUDIO_RED
+        } else {
+            0
+        }
+        | if super::pad_audio::host_cap(hello.client_caps) {
+            punktfunk_core::quic::HOST_CAP_PAD_AUDIO
+        } else {
+            0
+        }
+        // Set only when the gate resolved to PCM, not "host could".
+        | if audio_plane.is_pcm() {
+            punktfunk_core::quic::HOST_CAP_AUDIO_HIRES
+        } else {
+            0
+        }
+}
+
+/// `Welcome::host_caps2`.
+fn welcome_host_caps2(source: Punktfunk1Source) -> u8 {
+    // Idle-keepalive re-encodes are marked `USER_FLAG_REPEAT` so client ABR treats an
+    // unflagged AU as new content.
+    punktfunk_core::quic::HOST_CAP2_REPEAT_MARK
+        // The control loop feeds key edges into the input queue, so a client sends
+        // them there and a lost release cannot hold a key.
+        | punktfunk_core::quic::HOST_CAP2_INPUT_EDGES
+        // Without the bit the client falls back to trackpad instead of sending contacts
+        // the injector cannot land (wlroots) or cannot create a device for (Windows < 1809).
+        | if crate::inject::touch_supported() {
+            punktfunk_core::quic::HOST_CAP2_TOUCH
+        } else {
+            0
+        }
+        // Without the bit the client converts Scroll to MouseScroll before the wire.
+        | if crate::inject::scroll_supported() {
+            punktfunk_core::quic::HOST_CAP2_SCROLL
+        } else {
+            0
+        }
+        // Invites the client's `Start` extension block, which is where it names itself.
+        | punktfunk_core::quic::HOST_CAP2_EXT
+        // The virtual path punches its data plane two to three seconds before its
+        // pipeline exists, and serves the client's bring-up ramp in that gap. The
+        // rate-following source holds its first frame back for the same span
+        // (`--bringup-ms`) so the rig measures the ramp the way a display session
+        // runs it. The byte-pattern source has no such gap: video leaves at once.
+        | match source {
+            Punktfunk1Source::Virtual => punktfunk_core::quic::HOST_CAP2_RAMP,
+            Punktfunk1Source::SyntheticAbr(shape) if shape.serve_ramp => {
+                punktfunk_core::quic::HOST_CAP2_RAMP
+            }
+            _ => 0,
+        }
 }
 
 /// Compositor for Welcome plus the gamescope route as a value; synthetic has neither. A seat's

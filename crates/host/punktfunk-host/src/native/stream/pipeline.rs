@@ -215,6 +215,34 @@ pub(in crate::native) fn prepare_display(
     Ok(PreparedDisplay { vd, pipeline })
 }
 
+/// Run [`prepare_display`] on the thread that becomes the stream thread once Start delivers its
+/// [`SessionContext`]. A dropped sender (handshake abort, punch failure) drops what was built,
+/// which hands the monitor to keep-alive like a normal session end. `None` when the thread
+/// does not spawn: bring-up then builds inline. Compiled on every host; only Windows calls it.
+pub(in crate::native) fn spawn_display_prep(
+    prep: DisplayPrep,
+    quit: Arc<AtomicBool>,
+    stop: Arc<AtomicBool>,
+    trace: Arc<crate::bringup::Trace>,
+) -> Option<PrepHandle> {
+    let (ctx_tx, ctx_rx) = std::sync::mpsc::sync_channel::<SessionContext>(1);
+    std::thread::Builder::new()
+        .name("punktfunk1-stream".into())
+        .spawn(move || -> Result<()> {
+            let prepared = prepare_display(prep, &quit, &stop, &trace);
+            let Ok(ctx) = ctx_rx.recv() else {
+                return Ok(());
+            };
+            virtual_stream(ctx, Some(prepared?))
+        })
+        .map(|handle| (ctx_tx, handle))
+        .map_err(|e| {
+            tracing::warn!(error = %e,
+                "display-prep thread spawn failed — falling back to inline bring-up")
+        })
+        .ok()
+}
+
 /// A first attempt's first-frame budget; later attempts wait the capturer's own default.
 const FIRST_ATTEMPT_FRAME_BUDGET: std::time::Duration = std::time::Duration::from_millis(2500);
 

@@ -27,7 +27,7 @@ mod session_watch;
 mod state;
 mod swap;
 mod synth_abr;
-pub(super) use self::pipeline::{prepare_display, DisplayPrep, PrepHandle, PreparedDisplay};
+pub(super) use self::pipeline::{spawn_display_prep, DisplayPrep, PrepHandle, PreparedDisplay};
 /// The pipeline steps both stream loops take, for GameStream as `crate::native::pipeline`.
 #[cfg(feature = "gamestream")]
 pub(crate) mod shared {
