@@ -18,8 +18,8 @@ use crate::encode_recovery::{
     MAX_ENCODER_RESETS,
 };
 use crate::native::pipeline::{
-    count_capture_loss, encoder_bps_for_budget, open_session_encoder, rebuild_after_capture_loss,
-    CaptureLossRebuild, WireFraming,
+    count_capture_loss, encoder_bps_for_budget, follow_source_mode, open_session_encoder,
+    rebuild_after_capture_loss, CaptureLossRebuild, SourceFollow, WireFraming,
 };
 use anyhow::{Context, Result};
 use std::net::UdpSocket;
@@ -1713,18 +1713,24 @@ impl GsLoop<'_> {
         )
     }
 
-    /// The source changed size or format with nothing negotiating it. The encoder cannot follow
-    /// a resolution change in place, so it reopens at the delivered size; GameStream has no
-    /// mid-stream mode message, so the client is not told. `false` when a failed reopen spent
-    /// this tick backing off.
+    /// [`follow_source_mode`]: the encoder cannot follow a resolution change in place, so it
+    /// reopens at the delivered size. GameStream has no mid-stream mode message, so the client
+    /// is not told. `false` when a failed reopen spent this tick backing off.
     fn follow_source_mode(&mut self) -> Result<bool> {
         let from = self.video.src;
         let to = (self.frame.format, self.frame.width, self.frame.height);
-        if from == to {
-            return Ok(true);
-        }
-        match self.reopen_encoder() {
-            Ok(()) => {
+        let followed = follow_source_mode(
+            self,
+            from,
+            to,
+            self.frame_interval,
+            Self::reopen_encoder,
+            |lp| (&mut lp.video.watchdog, &mut lp.next_frame),
+        )?;
+        match followed {
+            SourceFollow::Unchanged => Ok(true),
+            SourceFollow::BackedOff => Ok(false),
+            SourceFollow::Reopened(()) => {
                 tracing::info!(
                     from = %format!("{}x{} {:?}", from.1, from.2, from.0),
                     to = %format!("{}x{} {:?}", to.1, to.2, to.0),
@@ -1734,17 +1740,6 @@ impl GsLoop<'_> {
                      may not follow — see the note at this guard)"
                 );
                 Ok(true)
-            }
-            Err(e) => {
-                // First failed open is a settling driver; spend the shared reset budget.
-                let Some(backoff) = self.video.watchdog.spend(self.frame_interval) else {
-                    return Err(e).context("reopen encoder at the source's new mode");
-                };
-                tracing::warn!(error = %format!("{e:#}"), reset = self.video.watchdog.resets(),
-                    max = MAX_ENCODER_RESETS,
-                    "gamestream: reopening the encoder at the source's new mode failed — retrying");
-                self.back_off(backoff);
-                Ok(false)
             }
         }
     }

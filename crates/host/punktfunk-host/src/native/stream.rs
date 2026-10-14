@@ -33,7 +33,8 @@ pub(super) use self::pipeline::{prepare_display, PrepHandle, PreparedDisplay};
 pub(crate) mod shared {
     pub(crate) use super::pipeline::open_session_encoder;
     pub(crate) use super::rebuild::{
-        count_capture_loss, rebuild_after_capture_loss, CaptureLossRebuild,
+        count_capture_loss, follow_source_mode, rebuild_after_capture_loss, CaptureLossRebuild,
+        SourceFollow,
     };
     pub(crate) use crate::native::bitrate::{encoder_bps_for_budget, WireFraming};
 }

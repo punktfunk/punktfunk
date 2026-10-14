@@ -14,7 +14,9 @@ use super::pipeline::{
 use super::state::{announce_pipeline_gap, StreamState};
 use super::swap::{Next, SwapReason};
 use super::*;
-use crate::encode_recovery::{RebuildBudget, MAX_CAPTURE_REBUILDS, MAX_ENCODER_RESETS};
+use crate::encode_recovery::{
+    EncoderWatchdog, RebuildBudget, MAX_CAPTURE_REBUILDS, MAX_ENCODER_RESETS,
+};
 use crate::native::bitrate::pyrowave_mode_kbps;
 use crate::session_status::pack_mode;
 
@@ -80,6 +82,51 @@ pub(crate) fn rebuild_after_capture_loss<L: CaptureLossRebuild>(
             }
         }
     }
+}
+
+/// A source's pixel format and size.
+pub(crate) type SourceMode = (pf_frame::PixelFormat, u32, u32);
+
+/// What [`follow_source_mode`] did this tick.
+pub(crate) enum SourceFollow<T> {
+    /// The source still runs at the encoder's mode.
+    Unchanged,
+    /// The encoder reopened at the source's mode; the loop adopts what `reopen` built.
+    Reopened(T),
+    /// The reopen failed and the tick went on the backoff.
+    BackedOff,
+}
+
+/// The source moved `from` the encoder's mode `to` another with nothing negotiating it:
+/// `reopen` the encoder at it. A failed reopen spends the shared reset budget, moves the
+/// loop's next tick past the backoff and sleeps through it; `Err` once the budget is spent.
+/// `retry` lends the loop's watchdog and next-tick clock.
+pub(crate) fn follow_source_mode<S, T>(
+    s: &mut S,
+    from: SourceMode,
+    to: SourceMode,
+    interval: std::time::Duration,
+    reopen: impl FnOnce(&mut S) -> Result<T>,
+    retry: impl FnOnce(&mut S) -> (&mut EncoderWatchdog, &mut std::time::Instant),
+) -> Result<SourceFollow<T>> {
+    if from == to {
+        return Ok(SourceFollow::Unchanged);
+    }
+    let e = match reopen(s) {
+        Ok(t) => return Ok(SourceFollow::Reopened(t)),
+        Err(e) => e,
+    };
+    let (watchdog, next) = retry(s);
+    // A first failed open is a settling driver.
+    let Some(backoff) = watchdog.spend(interval) else {
+        return Err(e).context("encoder reopen at the source's new mode");
+    };
+    tracing::warn!(error = %format!("{e:#}"), reset = watchdog.resets(),
+        max = MAX_ENCODER_RESETS,
+        "reopening the encoder at the source's new mode failed — retrying");
+    *next = std::time::Instant::now() + backoff;
+    std::thread::sleep(backoff);
+    Ok(SourceFollow::BackedOff)
 }
 
 impl CaptureLossRebuild for StreamState {
@@ -564,54 +611,53 @@ impl StreamState {
         }
     }
 
-    /// The source changed format or size with no client Reconfigure: reopen the encoder at the
-    /// delivered size and make it the session's mode, PyroWave's rate re-resolved for it as on
-    /// a mode switch. `Ok(false)` = the reopen failed and the tick is spent on the backoff.
+    /// [`follow_source_mode`]: reopen the encoder at the delivered size and make it the
+    /// session's mode, PyroWave's rate re-resolved for it as on a mode switch, and tell the
+    /// client. `Ok(false)` = the reopen failed and the tick is spent on the backoff.
     pub(super) fn follow_source_mode(&mut self) -> Result<bool> {
-        if self.enc_src == (self.frame.format, self.frame.width, self.frame.height) {
-            return Ok(true);
-        }
-        let actual = self.delivered_mode();
-        let src_kbps = if self.plan.codec == crate::encode::Codec::PyroWave {
-            let running = self.bitrate_auto.then_some(self.bitrate_kbps);
-            pyrowave_mode_kbps(running, &actual, &self.plan)
-        } else {
-            self.bitrate_kbps
-        };
-        self.close_open_frame();
-        // The encoder's rate, not the wire budget: FEC, framing and audio ride on top of it.
-        let ed = self.enc_now();
-        let opened = open_session_encoder(
-            &self.plan,
-            &*self.capturer,
-            &self.frame,
-            (self.negotiated.width, self.negotiated.height),
-            actual.refresh_hz,
-            |_, _| ed.enc_kbps(src_kbps) as u64 * 1000,
-            self.bit_depth,
-            self.client_hdr,
-            self.clock.au_seq,
-        )
-        .with_context(|| {
-            format!(
-                "the capture source changed to {}x{} {:?} mid-session and the encoder could not \
-                 be reopened at it",
-                self.frame.width, self.frame.height, self.frame.format
-            )
-        });
-        let (enc, reframe) = match opened {
-            Ok(opened) => opened,
-            Err(e) => {
-                let Some(backoff) = self.clock.watchdog.spend(self.interval) else {
-                    return Err(e).context("encoder reopen at the source's new mode");
+        let to = (self.frame.format, self.frame.width, self.frame.height);
+        let followed = follow_source_mode(
+            self,
+            self.enc_src,
+            to,
+            self.interval,
+            |st| {
+                let actual = st.delivered_mode();
+                let src_kbps = if st.plan.codec == crate::encode::Codec::PyroWave {
+                    let running = st.bitrate_auto.then_some(st.bitrate_kbps);
+                    pyrowave_mode_kbps(running, &actual, &st.plan)
+                } else {
+                    st.bitrate_kbps
                 };
-                tracing::warn!(error = %format!("{e:#}"), reset = self.clock.watchdog.resets(),
-                    max = MAX_ENCODER_RESETS,
-                    "reopening the encoder at the source's new mode failed — retrying");
-                self.next = std::time::Instant::now() + backoff;
-                std::thread::sleep(backoff);
-                return Ok(false);
-            }
+                st.close_open_frame();
+                // The encoder's rate, not the wire budget: FEC, framing and audio ride on it.
+                let ed = st.enc_now();
+                let (enc, reframe) = open_session_encoder(
+                    &st.plan,
+                    &*st.capturer,
+                    &st.frame,
+                    (st.negotiated.width, st.negotiated.height),
+                    actual.refresh_hz,
+                    |_, _| ed.enc_kbps(src_kbps) as u64 * 1000,
+                    st.bit_depth,
+                    st.client_hdr,
+                    st.clock.au_seq,
+                )
+                .with_context(|| {
+                    format!(
+                        "the capture source changed to {}x{} {:?} mid-session and the encoder \
+                         could not be reopened at it",
+                        st.frame.width, st.frame.height, st.frame.format
+                    )
+                })?;
+                Ok((enc, reframe, actual, src_kbps))
+            },
+            |st| (&mut st.clock.watchdog, &mut st.next),
+        )?;
+        let (enc, reframe, actual, src_kbps) = match followed {
+            SourceFollow::Unchanged => return Ok(true),
+            SourceFollow::BackedOff => return Ok(false),
+            SourceFollow::Reopened(opened) => opened,
         };
         tracing::info!(
             from = %format!("{}x{} {:?}", self.enc_src.1, self.enc_src.2, self.enc_src.0),
@@ -755,6 +801,58 @@ mod tests {
             l.builds = [Ok("built")].into();
             rebuild_after_capture_loss(&mut l, None, &budget).unwrap();
             assert_eq!(l.calls, ["build"], "no keepalive, no re-attach");
+        }
+    }
+
+    /// A loop's watchdog, next tick and how often it reopened.
+    struct Ticks {
+        watchdog: EncoderWatchdog,
+        next: std::time::Instant,
+        reopens: u32,
+    }
+
+    /// Native follows at the session's interval, GameStream at the client's frame interval;
+    /// both reopen only on a moved source and back off on a failed reopen until the reset
+    /// budget is spent.
+    #[test]
+    fn both_loops_follow_a_moved_source() {
+        use pf_frame::PixelFormat;
+        let small = (PixelFormat::Bgra, 1280, 720);
+        let large = (PixelFormat::Bgra, 1920, 1080);
+        let mut ticks = Ticks {
+            watchdog: EncoderWatchdog::new(),
+            next: std::time::Instant::now(),
+            reopens: 0,
+        };
+        fn retry(t: &mut Ticks) -> (&mut EncoderWatchdog, &mut std::time::Instant) {
+            (&mut t.watchdog, &mut t.next)
+        }
+        for interval in [1.0 / 120.0, 1.0 / 60.0].map(std::time::Duration::from_secs_f64) {
+            let ok = |t: &mut Ticks| {
+                t.reopens += 1;
+                Ok(())
+            };
+            let same = follow_source_mode(&mut ticks, small, small, interval, ok, retry).unwrap();
+            assert!(matches!(same, SourceFollow::Unchanged));
+            assert_eq!(ticks.reopens, 0);
+            let moved = follow_source_mode(&mut ticks, small, large, interval, ok, retry).unwrap();
+            assert!(matches!(moved, SourceFollow::Reopened(())));
+            assert_eq!(ticks.reopens, 1);
+            ticks.reopens = 0;
+
+            let before = std::time::Instant::now();
+            let fail = |_: &mut Ticks| -> Result<()> { anyhow::bail!("driver settling") };
+            let held = follow_source_mode(&mut ticks, small, large, interval, fail, retry).unwrap();
+            assert!(matches!(held, SourceFollow::BackedOff));
+            assert!(ticks.next >= before + std::time::Duration::from_millis(100));
+            for _ in 1..MAX_ENCODER_RESETS {
+                ticks.watchdog.spend(interval);
+            }
+            let e = follow_source_mode(&mut ticks, small, large, interval, fail, retry)
+                .err()
+                .expect("the reset budget is spent");
+            assert!(format!("{e:#}").contains("source's new mode"));
+            ticks.watchdog.on_au();
         }
     }
 
