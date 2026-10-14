@@ -16,7 +16,7 @@ short; the version-bump commit retitles it. Older sections stay as they are.
 
 ## v0.44.0
 
-1109 commits since v0.43.1. **punktfunk/2 only**: the ALPN is the wire version now. **C ABI 55.**
+1114 commits since v0.43.1. **punktfunk/2 only**: the ALPN is the wire version now. **C ABI 55.**
 Driver protocol floor stays 9. Profiles and seats arrive on Windows and Linux; video, audio and
 control share UDP 9777; niri joins the host compositors.
 Deep dive: `git log v0.43.1..v0.44.0`
@@ -34,9 +34,9 @@ Deep dive: `git log v0.43.1..v0.44.0`
 | Windows virtual-gamepad channel | 3 | **3** | unchanged; with the 0.44 driver (rev 6) a Steam Controller 2 enumerates as `VID_28DE&PID_1302` and a 2015 Steam Controller as `pf_steamcontroller`; an older driver folds the 2015 pad to an Xbox 360 pad |
 | Plugin index schema | 1 | **1** | unchanged. The manifest stays `schema: 1` and gains optional `registry` and machine roots such as `%ProgramData%` |
 | Host event schema | 1 | **1** | unchanged; client, session, stream and game payloads carry an optional `profile`, and `HookFilter` takes one. `session.ended` can end as `stolen` |
-| `api/openapi.json` | 0.43.1 | **0.44.0** | `/profiles` family, `/emulators/{catalog,{id}/adopt,content,firmware,saves}`, `/plugins/{id}/ui/attach`; `/local/summary` needs the per-start `tray-token`. `/status` session rows carry `phase`; `SeatingChange.prepare`, `SeatCheck.seat_name`. 403 for a plugin-lane write to another provider's custom row and for a profile wake without its grant. Nothing removed |
+| `api/openapi.json` | 0.43.1 | **0.44.0** | `/profiles` family, `/emulators/{catalog,{id}/adopt,content,firmware,saves}`, `/plugins/{id}/ui/attach`; `/local/summary` needs the per-start `tray-token`. `/status` session rows carry `phase`; `SeatingChange.prepare`, `SeatCheck.seat_name`, `HostInfo.door_unavailable`. 403 for a plugin-lane write to another provider's custom row and for a profile wake without its grant. Nothing removed |
 | gamescope patch level (`+pfhdrN`) | 31 | **31** | unchanged; bundled libdrm 2.4.134 and xkbcommon 1.13.2 |
-| `@punktfunk/host` (SDK) | 0.3.3 | **0.4.0** | peer `effect` ^4.0.1; profile and emulator routes, `ProfileRef` on events; optional `undici` ^8. The session `phase`, `stolen` and seating `prepare` types ship with the next SDK cut |
+| `@punktfunk/host` (SDK) | 0.3.3 | **0.4.0** | peer `effect` ^4.0.1; profile and emulator routes, `ProfileRef` on events; optional `undici` ^8. The session `phase`, `stolen`, seating `prepare` and `door_unavailable` types ship with the next SDK cut |
 | `@punktfunk/plugin-kit` | 0.11.0 | **0.13.0** | 0.12.0: `ServeUiGame.page`, the `emulator` launch kind. 0.12.1: `HKCU\` keys under a user profile. 0.13.0: peers `effect` ^4.0.1 and `@punktfunk/host` ^0.4.0, exports the console-surface types from `wire` |
 
 ### Breaking
@@ -69,8 +69,9 @@ Deep dive: `git log v0.43.1..v0.44.0`
   without a `punktfunk` block does not start. RTSS Frame Cap needs a second `icacls` grant. A box
   that can't build a sandbox stops the runner with exit status 78; the systemd unit, the NixOS
   module and `scripting-run.cmd` leave it stopped (`RestartPreventExitStatus=78`).
-- **Linux packages.** Seats ship as `punktfunk-seats` (recommended on rpm and deb, optional on
-  Arch, `services.punktfunk.seats.enable` on NixOS). The host writes the tray autostart entry;
+- **Linux packages.** Seats ship as `punktfunk-seats`, which the host requires at its own version
+  on rpm, deb and Arch; the seats package no longer requires the host. NixOS sets
+  `services.punktfunk.seats.enable`. The host writes the tray autostart entry;
   packages no longer do. deb, rpm, pacman and the sysext share one post-install helper and one
   sysusers.d file. The seat service keeps its state in root's `/var/lib/punktfunk-seats` (tmpfiles
   `0711`, moved there on first start) and the update unit needs `StateDirectory=punktfunk-update`.

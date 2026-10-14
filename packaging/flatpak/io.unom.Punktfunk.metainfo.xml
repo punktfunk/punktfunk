@@ -84,7 +84,7 @@
   </branding>
 
   <releases>
-    <release version="0.44.0" date="2026-10-14">
+    <release version="0.44.0" date="2026-10-15">
       <url type="details">https://git.unom.io/unom/punktfunk/releases/tag/v0.44.0</url>
       <description>
         <p>Profiles let everyone on the host pick who is playing, every stream uses one port, and lost packets are sent again instead of freezing the picture. Needs a 0.44 host.</p>
