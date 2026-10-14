@@ -35,6 +35,7 @@ pub(crate) mod shared {
     pub(crate) use super::rebuild::{
         count_capture_loss, rebuild_after_capture_loss, CaptureLossRebuild,
     };
+    pub(crate) use crate::native::bitrate::{encoder_bps_for_budget, WireFraming};
 }
 // `control.rs` bounds its spacing exemption by the same step length.
 pub(crate) use self::ramp::RAMP_STEP_MAX_MS;

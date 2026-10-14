@@ -212,6 +212,46 @@ fn resolve_bitrate_kbps_under(
     resolve_bitrate_kbps(requested)
 }
 
+/// How a plane's video rides the wire, for [`encoder_bps_for_budget`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum WireFraming {
+    /// Native: sealed shards of `payload` bytes, priced at the budget's 64 B a shard and rounded
+    /// down to the kbps ([`encoder_kbps_for_budget`]).
+    Shards,
+    /// Moonlight: a 32 B RTP and FEC header on each `payload` bytes, to the bit.
+    #[cfg(feature = "gamestream")]
+    Moonlight,
+}
+
+/// Encoder rate (bps) under a `budget_kbps` wire budget: `audio_kbps` comes off the top,
+/// `framing` and `fec_percent` parity fit inside the rest. Floored at [`MIN_BITRATE_KBPS`].
+pub(crate) fn encoder_bps_for_budget(
+    budget_kbps: u32,
+    audio_kbps: u32,
+    fec_percent: u8,
+    payload: usize,
+    framing: WireFraming,
+) -> u64 {
+    match framing {
+        WireFraming::Shards => {
+            let payload = u16::try_from(payload).unwrap_or(u16::MAX);
+            u64::from(encoder_kbps_for_budget(
+                budget_kbps,
+                audio_kbps,
+                fec_percent,
+                payload,
+            )) * 1000
+        }
+        #[cfg(feature = "gamestream")]
+        WireFraming::Moonlight => {
+            let payload = payload.max(1) as u64;
+            let video = u64::from(budget_kbps.saturating_sub(audio_kbps)) * 1000 * payload * 100
+                / ((payload + 32) * (100 + u64::from(fec_percent)));
+            video.max(u64::from(MIN_BITRATE_KBPS) * 1000)
+        }
+    }
+}
+
 /// Budget↔encoder at one moment: session constants plus a snapshot of adaptive FEC,
 /// taken at each encoder touch. Stream loop re-derives when the live percent moves.
 #[derive(Clone, Copy, Debug)]
@@ -224,16 +264,19 @@ pub(super) struct EncDerive {
 }
 
 impl EncDerive {
+    /// [`encoder_bps_for_budget`] in kbps, over sealed shards.
     pub(super) fn enc_kbps(&self, budget_kbps: u32) -> u32 {
         if self.identity {
             budget_kbps
         } else {
-            encoder_kbps_for_budget(
+            let bps = encoder_bps_for_budget(
                 budget_kbps,
                 self.audio_kbps,
                 self.fec_percent,
-                self.shard_payload,
-            )
+                self.shard_payload.into(),
+                WireFraming::Shards,
+            );
+            (bps / 1000) as u32
         }
     }
 
@@ -744,6 +787,38 @@ mod tests {
         assert_eq!(at(Some(1_000)), floor);
         assert_eq!(at(Some(u32::MAX)), pin);
         assert_eq!(at(Some(floor + 1)), floor + 1);
+    }
+
+    /// Native prices sealed shards at 64 B with audio off the top, to the kbps; GameStream
+    /// prices Moonlight's 32 B header with no audio in the budget, to the bit. Both floor at
+    /// the minimum encoder rate.
+    #[test]
+    fn both_loops_derive_the_encoder_rate_under_their_wire_budget() {
+        let native = EncDerive {
+            audio_kbps: 512,
+            shard_payload: 1408,
+            fec_percent: 10,
+            identity: false,
+        };
+        let bps = encoder_bps_for_budget(20_000, 512, 10, 1408, WireFraming::Shards);
+        assert_eq!(
+            bps,
+            u64::from(encoder_kbps_for_budget(20_000, 512, 10, 1408)) * 1000
+        );
+        assert_eq!(u64::from(native.enc_kbps(20_000)) * 1000, bps);
+        assert_eq!(
+            encoder_bps_for_budget(0, 512, 10, 1408, WireFraming::Shards),
+            500_000
+        );
+        #[cfg(feature = "gamestream")]
+        {
+            // 20 Mbps, 20 % FEC, packetSize 1392: 20e6 × 1376/1408 × 100/120.
+            let moonlight =
+                |kbps, fec| encoder_bps_for_budget(kbps, 0, fec, 1376, WireFraming::Moonlight);
+            assert_eq!(moonlight(20_000, 20), 16_287_878);
+            assert_eq!(moonlight(20_000, 0), 20_000_000 * 1376 / 1408);
+            assert_eq!(moonlight(0, 20), 500_000);
+        }
     }
 
     /// PyroWave's wire budget is its encoder rate, so a granted ask reaches the encoder's

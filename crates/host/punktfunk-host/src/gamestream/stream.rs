@@ -18,7 +18,8 @@ use crate::encode_recovery::{
     MAX_ENCODER_RESETS,
 };
 use crate::native::pipeline::{
-    count_capture_loss, open_session_encoder, rebuild_after_capture_loss, CaptureLossRebuild,
+    count_capture_loss, encoder_bps_for_budget, open_session_encoder, rebuild_after_capture_loss,
+    CaptureLossRebuild, WireFraming,
 };
 use anyhow::{Context, Result};
 use std::net::UdpSocket;
@@ -2082,14 +2083,16 @@ impl GsLoop<'_> {
     }
 }
 
-/// Encoder rate under the client's wire budget: 32 B framing per `packetSize + 16 − 32`
-/// payload bytes plus FEC parity. No audio reservation (Moonlight bitrate is video-only).
-/// Floor 500 kbps: a degenerate ask still streams.
+/// [`encoder_bps_for_budget`] under the client's wire budget, `packetSize + 16 − 32` payload
+/// bytes a packet. No audio reservation: Moonlight's bitrate is video-only.
 fn gs_encoder_bps(bitrate_kbps: u32, fec_pct: u8, packet_size: usize) -> u64 {
-    let pps = (packet_size + 16).saturating_sub(32).max(1) as u64;
-    let blocksize = pps + 32;
-    let video = bitrate_kbps as u64 * 1000 * pps * 100 / (blocksize * (100 + fec_pct as u64));
-    video.max(500_000)
+    encoder_bps_for_budget(
+        bitrate_kbps,
+        0,
+        fec_pct,
+        (packet_size + 16).saturating_sub(32),
+        WireFraming::Moonlight,
+    )
 }
 
 /// `PUNKTFUNK_GAMESTREAM_ADAPT` off pins the GameStream plane's loss adaptation off — FEC
