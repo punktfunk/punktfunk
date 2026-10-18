@@ -499,17 +499,23 @@ jobs:
                 unom "${ref#unom:}"
             done
           fi
-          # Marked after the re-pull, which would reset a ref to the remote's commit. A ref that
-          # already carries the marker keeps its commit, so this writes once per legacy ref.
+          # Marked after the re-pull, which would reset a ref to the remote's commit. A legacy ref
+          # is marked once APP_ID has its branch on this arch, else the rebase lands on nothing.
+          # A marker without that target goes back to its parent: same tree, same timestamp.
           for dir in "$PWD/repo/refs/heads/app/$LEGACY_APP_ID/${{ matrix.arch }}"/*; do
             [ -e "$dir" ] || continue
             ref="app/$LEGACY_APP_ID/${{ matrix.arch }}/${dir##*/}"
-            if ostree --repo="$PWD/repo" show --print-metadata-key=ostree.endoflife-rebase "$ref" \
-              >/dev/null 2>&1; then
-              continue
+            marked=
+            ostree --repo="$PWD/repo" show --print-metadata-key=ostree.endoflife-rebase "$ref" \
+              >/dev/null 2>&1 && marked=1
+            if [ -e "$PWD/repo/refs/heads/app/$APP_ID/${{ matrix.arch }}/${dir##*/}" ]; then
+              [ -n "$marked" ] || flatpak build-commit-from --src-ref="$ref" \
+                --end-of-life-rebase="$LEGACY_APP_ID=$APP_ID" \
+                --gpg-sign="$KEYID" --gpg-homedir="$GNUPGHOME" "$PWD/repo" "$ref"
+            elif [ -n "$marked" ]; then
+              bash scripts/ci/retry.sh 5 ostree --repo="$PWD/repo" pull --mirror --depth=1 unom "$ref"
+              ostree --repo="$PWD/repo" reset "$ref" "$ref^"
             fi
-            flatpak build-commit-from --src-ref="$ref" --end-of-life-rebase="$LEGACY_APP_ID=$APP_ID" \
-              --gpg-sign="$KEYID" --gpg-homedir="$GNUPGHOME" "$PWD/repo" "$ref"
           done
           flatpak build-update-repo --generate-static-deltas \
             --gpg-sign="$KEYID" --gpg-homedir="$GNUPGHOME" "$PWD/repo"
@@ -531,13 +537,15 @@ jobs:
           # Two refs, one per channel. Both descriptor files are regenerated every run and rsync'd
           # without --delete; the repo SUMMARY carries both branches because the build was seeded
           # from the live repo above (so build-update-repo below re-signs a summary listing every
-          # published channel, not just this run's). The stable ref resolves for good once any
-          # release has built the `stable` branch. A box installs ONE; `flatpak update` then tracks
-          # that channel's branch.
+          # published channel, not just this run's). Each names the id that publishes its branch:
+          # LEGACY_APP_ID until a build of APP_ID lands there. A box installs ONE; `flatpak update`
+          # then tracks that channel's branch.
           write_ref() {  # <filename> <branch> <title>
+            id=$LEGACY_APP_ID
+            ls -d "$PWD/repo/refs/heads/app/$APP_ID"/*/"$2" >/dev/null 2>&1 && id=$APP_ID
             cat > "site/$1" <<EOF
           [Flatpak Ref]
-          Name=$APP_ID
+          Name=$id
           Branch=$2
           Url=$REPO_URL/repo/
           Title=$3
@@ -549,7 +557,7 @@ jobs:
           }
           write_ref "${APP_ID}.flatpakref"        stable "Punktfunk"
           write_ref "${APP_ID}.canary.flatpakref" canary "Punktfunk (Canary)"
-          # The CamelCase file names old links and docs use, installing APP_ID.
+          # The CamelCase file names old links and docs use.
           write_ref "${LEGACY_APP_ID}.flatpakref"        stable "Punktfunk"
           write_ref "${LEGACY_APP_ID}.Canary.flatpakref" canary "Punktfunk (Canary)"
           cat > site/index.html <<EOF
