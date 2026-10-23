@@ -161,8 +161,6 @@ private struct CurveScreen: View {
         // is a moment: once a drag or a new picture has settled, the height is pinned for one
         // layout and let go again.
         .frame(minHeight: snap, maxHeight: snap)
-        // Only as deep as the stop's curve: the system bar and handles sit on the box's front edge.
-        .frame(depth: depth)
         .task(id: [width, CGFloat(target.aspect ?? 0)]) {
             guard width > 0, let aspect = target.aspect else { return }
             try? await Task.sleep(for: .milliseconds(400))
@@ -170,15 +168,6 @@ private struct CurveScreen: View {
             try? await Task.sleep(for: .milliseconds(400))
             snap = nil
         }
-    }
-
-    /// The box depth in points that holds the stored stop at this width; nil before the first
-    /// layout.
-    private var depth: CGFloat? {
-        guard width > 0 else { return nil }
-        let meters = CurveShape.depth(
-            width: Float(metrics.convert(width, to: .meters)), radius: ScreenCurve(name: screen).radius)
-        return metrics.convert(CGFloat(meters), from: .meters).rounded(.up)
     }
 
     /// One pinch, held or tapped, on the screen: the session's touch model takes it from there.

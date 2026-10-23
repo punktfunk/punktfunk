@@ -275,24 +275,22 @@ struct ContentView: View {
             }
             #endif
             #if os(visionOS)
-            // The volume takes its size from this content. The Home resizes freely in a thin box,
-            // so the system bar and handles sit on its panel; a stream sizes the box itself.
+            // The volume takes its smallest and largest size from this content, and any axis held
+            // to one size holds the corner handle. The Home's flat 2D has no depth of its own, so
+            // it declares a range in all three axes; a stream's reader is flexible already.
             .frame(
                 minWidth: model.connection == nil ? 640 : nil,
                 maxWidth: model.connection == nil ? .infinity : nil,
                 minHeight: model.connection == nil ? 360 : nil,
                 maxHeight: model.connection == nil ? .infinity : nil)
-            .frame(depth: model.connection == nil ? Self.homeDepth : nil)
+            .frame(
+                minDepth: model.connection == nil ? 0 : nil,
+                maxDepth: model.connection == nil ? .infinity : nil)
             // The Home sits on the system glass; a stream is a square-cornered rectangle, like
             // the monitor it shows.
             .glassBackgroundEffect(displayMode: model.phase == .streaming ? .never : .always)
             #endif
     }
-
-    #if os(visionOS)
-    /// The Home's box depth, points: thin, so the bar under it is the bar under the panel.
-    private static let homeDepth: CGFloat = 40
-    #endif
 
     /// The confirmed link's action: exactly what a `.known` (id-referenced) link would have done,
     /// one tap later.

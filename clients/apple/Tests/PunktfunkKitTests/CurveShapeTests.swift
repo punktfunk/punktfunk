@@ -42,17 +42,6 @@ final class CurveShapeTests: XCTestCase {
         XCTAssertEqual(lifted.halfChord, 0.8, accuracy: 1e-5)
     }
 
-    func testTheDeclaredDepthHoldsEveryStop() {
-        // Flat needs only the faces' room and the ring's lift.
-        XCTAssertEqual(CurveShape.depth(width: 1.62, radius: nil), 0.04, accuracy: 1e-6)
-        for curve in ScreenCurve.allCases {
-            guard let radius = curve.radius else { continue }
-            let depth = CurveShape.depth(width: 1.62, radius: radius)
-            let held = CurveShape(box: [1.62, 2, depth], aspect: 16 / 9, radius: radius)
-            XCTAssertEqual(held.radius ?? 0, radius, accuracy: 1e-3, "\(curve.label)")
-        }
-    }
-
     func testOlderStoredNamesMapToStops() {
         XCTAssertEqual(ScreenCurve(name: "curved"), .r1800)
         XCTAssertEqual(ScreenCurve(name: "window"), .flat)
