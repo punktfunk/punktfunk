@@ -275,11 +275,24 @@ struct ContentView: View {
             }
             #endif
             #if os(visionOS)
+            // The volume takes its size from this content. The Home resizes freely in a thin box,
+            // so the system bar and handles sit on its panel; a stream sizes the box itself.
+            .frame(
+                minWidth: model.connection == nil ? 640 : nil,
+                maxWidth: model.connection == nil ? .infinity : nil,
+                minHeight: model.connection == nil ? 360 : nil,
+                maxHeight: model.connection == nil ? .infinity : nil)
+            .frame(depth: model.connection == nil ? Self.homeDepth : nil)
             // The Home sits on the system glass; a stream is a square-cornered rectangle, like
             // the monitor it shows.
             .glassBackgroundEffect(displayMode: model.phase == .streaming ? .never : .always)
             #endif
     }
+
+    #if os(visionOS)
+    /// The Home's box depth, points: thin, so the bar under it is the bar under the panel.
+    private static let homeDepth: CGFloat = 40
+    #endif
 
     /// The confirmed link's action: exactly what a `.known` (id-referenced) link would have done,
     /// one tap later.
@@ -1005,7 +1018,7 @@ struct ContentView: View {
                 .animation(.easeInOut(duration: 0.22), value: model.resizing)
                 .overlay {
                     if pendingFingerprint != nil {
-                        Color.black.opacity(0.45).overPicture()
+                        Color.black.opacity(0.45)
                     }
                 }
                 // The resize spinner rides over the (blurred) stream; suppressed under the trust
@@ -1040,7 +1053,6 @@ struct ContentView: View {
                         model.rejectTrust()
                         pairingTarget = host
                     })
-                    .overPicture()
             }
         }
         #if os(macOS)
@@ -1193,17 +1205,6 @@ struct ContentView: View {
             effective.bitrateKbps = v
         }
         model.connect(to: host, effective: effective, gamepad: pad, autoTrust: true)
-        #endif
-    }
-}
-
-private extension View {
-    /// visionOS: lift 2D from the volume's middle depth to its front face, over the picture.
-    @ViewBuilder func overPicture() -> some View {
-        #if os(visionOS)
-        offset(z: PunktfunkClientApp.frontFace)
-        #else
-        self
         #endif
     }
 }

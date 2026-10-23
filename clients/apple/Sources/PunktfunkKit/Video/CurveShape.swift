@@ -60,6 +60,15 @@ public struct CurveShape: Equatable {
         return [min(max(u, 0), 1), min(max(v, 0), 1)]
     }
 
+    /// The box depth, metres, that holds `radius` across a box `width` metres wide: the arc's sag,
+    /// the faces' room and the ring's lift. Flat needs only the room and the lift.
+    public static func depth(width: Float, radius: Float?) -> Float {
+        let room = 2 * margin + ringLift
+        guard let radius else { return room }
+        let half = min(max(width / 2 - margin, 0), radius)
+        return radius - sqrt(radius * radius - half * half) + room
+    }
+
     private static func arc(
         chord: Float, sag: Float, radius: Float?
     ) -> (radius: Float?, halfAngle: Float, length: Float) {

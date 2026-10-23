@@ -13,12 +13,6 @@ import SwiftUI
 struct PunktfunkClientApp: App {
     /// The main window's scene, for a host window that finds none open.
     static let mainSceneID = "main"
-    #if os(visionOS)
-    /// SwiftUI lays 2D content, sheets included, at the volume's middle depth; the picture sits
-    /// on the front face. 2D drawn over the picture lifts by this: half the 612 pt box, less a
-    /// margin.
-    static let frontFace: CGFloat = 300
-    #endif
 
     #if os(macOS)
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
@@ -109,10 +103,10 @@ struct PunktfunkClientApp: App {
         #endif
         #if os(visionOS)
         // A volume: the Home with its own glass, a stream's picture a mesh on the front face, flat
-        // or curved. It sizes to its content, so a stream holds it to the picture's shape. 612 pt
-        // ≈ 0.45 m holds 1000R at a 1.6 m chord. Dynamic scaling grows it with distance.
+        // or curved. It sizes to its content, depth included: thin for the Home and a flat
+        // picture, as deep as a curve needs. Dynamic scaling grows it with distance.
         .windowStyle(.volumetric)
-        .defaultSize(width: 1280, height: 720, depth: 612)
+        .defaultSize(width: 1280, height: 720, depth: 40)
         .defaultWorldScaling(.dynamic)
         .windowResizability(.contentSize)
         #endif
