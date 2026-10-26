@@ -334,12 +334,18 @@ jobs:
         if: >-
           (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.publish == 'true'))
           && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
+        env:
+          PLAY_HOLD_PRODUCTION: ${{ vars.PLAY_HOLD_PRODUCTION }}
         run: |
           eval "$(bash scripts/ci/pf-version.sh)"   # -> PF_BASE (one minor ahead of the latest stable tag)
           case "$GITHUB_REF" in
             refs/tags/v*) VN="${GITHUB_REF_NAME#v}"; TRACK="production"; ALSO="" ;;
             *)            VN="${PF_BASE}-ci${GITHUB_RUN_NUMBER}"; TRACK="beta"; ALSO="alpha" ;;
           esac
+          # A new production release replaces the one still in Google's review. With the repo
+          # variable PLAY_HOLD_PRODUCTION=true it lands on `internal`, which Play does not review;
+          # android-promote.yml moves that versionCode to production once the review is done.
+          if [ "$TRACK" = production ] && [ "$PLAY_HOLD_PRODUCTION" = true ]; then TRACK="internal"; fi
           echo "VERSION_NAME=$VN" >> "$GITHUB_ENV"
           echo "PLAY_TRACK=$TRACK" >> "$GITHUB_ENV"
           echo "PLAY_ALSO_TRACK=$ALSO" >> "$GITHUB_ENV"
