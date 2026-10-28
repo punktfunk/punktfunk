@@ -143,7 +143,7 @@ pub fn stats_line(s: &crate::library::GameStats, now_ms: u64) -> Option<String> 
 
 /// Where a host's favorites live in the settings document's `extra` map.
 fn favorites_key(fp_hex: &str) -> String {
-    format!("favorites.{fp_hex}")
+    format!("{}{fp_hex}", crate::settings::FAVORITES_PREFIX)
 }
 
 /// The titles marked favorite on host `fp_hex` from this device, in marking order.

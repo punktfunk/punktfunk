@@ -207,6 +207,7 @@
 	"console_preset_bind_default": "Par défaut",
 	"console_preset_bind_game_hint": "Le préréglage de streaming de ce jeu, à la place de celui de l’hôte ; une carte épinglée garde le sien.",
 	"console_hint_preset_options": "Options…",
+	"console_hint_reset": "Réinitialiser…",
 	"console_pad_sc2_usb": "Steam Controller 2 en USB",
 	"console_pad_ds_usb": "DualSense / DualShock en USB",
 	"console_pad_ds_haptics": "Test haptique DualSense",

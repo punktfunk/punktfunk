@@ -1,19 +1,24 @@
-//! General: the session, the console, Omarchy, the statistics overlay, Show advanced.
+//! General: the session, the console, Omarchy, the statistics overlay, Show advanced, and
+//! the reset that ends the page.
 
 use super::{Build, PageB};
 use crate::settings::choice::set_row_subtitle;
 use crate::settings::field::Field;
+use crate::settings::presets::NextScope;
 use crate::settings::spec::{self, Page};
 use crate::settings::tables::{at, index};
+use crate::settings::Scope;
 use crate::store::Store;
+use crate::trust::Settings;
 use adw::prelude::*;
 use pf_client_core::settings::GamepadUi;
 use pf_client_core::start::{self, StartIn};
 use pf_client_core::trust::{HudCorner, StatsVerbosity};
 use pf_l10n::{client, common, desktop};
 use punktfunk_core::hud::STATS_SCALE_PCTS;
+use std::rc::Rc;
 
-pub fn general(b: &mut Build, switcher: adw::PreferencesGroup) {
+pub fn general(b: &mut Build, switcher: adw::PreferencesGroup, next: &NextScope) {
     let mut p = b.page(Page::General, "preferences-system-symbolic");
     // The scope switcher heads the first page: it is about which layer you edit.
     p.page.add(&switcher);
@@ -85,7 +90,49 @@ pub fn general(b: &mut Build, switcher: adw::PreferencesGroup) {
     if !b.preset_scope {
         p.advanced_row(&clear_art_row(&b.dialog));
     }
+    let page = p.page.clone();
     b.finish(p);
+    if !b.preset_scope {
+        page.add(&reset_group(&b.dialog, b.store, next));
+    }
+}
+
+/// The page's last group: every setting back to a fresh install's value, asked first. The
+/// dialog then opens again on the defaults, so each row shows them.
+fn reset_group(
+    dialog: &adw::PreferencesDialog,
+    store: &Rc<Store>,
+    next: &NextScope,
+) -> adw::PreferencesGroup {
+    let row = adw::ButtonRow::builder()
+        .title(client::prefs_reset_all())
+        .build();
+    row.add_css_class("destructive-action");
+    let (weak, store, next) = (dialog.downgrade(), store.clone(), next.clone());
+    row.connect_activated(move |_| {
+        let Some(dialog) = weak.upgrade() else { return };
+        let confirm = adw::AlertDialog::new(
+            Some(client::prefs_reset_all_title()),
+            Some(client::prefs_reset_all_body()),
+        );
+        confirm.add_responses(&[
+            ("cancel", common::common_cancel()),
+            ("reset", common::common_reset()),
+        ]);
+        confirm.set_response_appearance("reset", adw::ResponseAppearance::Destructive);
+        confirm.set_default_response(Some("cancel"));
+        confirm.set_close_response("cancel");
+        let (store, next, d) = (store.clone(), next.clone(), dialog.clone());
+        confirm.connect_response(Some("reset"), move |_, _| {
+            store.update_settings(Settings::reset_to_defaults);
+            *next.borrow_mut() = Some(Scope::Defaults);
+            d.close();
+        });
+        confirm.present(Some(&dialog));
+    });
+    let group = adw::PreferencesGroup::new();
+    group.add(&row);
+    group
 }
 
 fn session(b: &mut Build, p: &mut PageB) {

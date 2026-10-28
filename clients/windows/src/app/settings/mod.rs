@@ -422,6 +422,8 @@ struct Cx<'a> {
     /// Render scale sits on Custom… though the stored scale is a listed stop.
     custom_scale: bool,
     set_custom_scale: &'a AsyncSetState<bool>,
+    /// Raises the reset confirmation.
+    set_reset: &'a AsyncSetState<bool>,
 }
 
 impl Cx<'_> {
@@ -464,6 +466,7 @@ pub(crate) fn settings_page(shell: &Shell) -> View {
     let (set_edit, set_rev) = (shell.set(Msg::SettingsEdit), shell.set(Msg::SettingsRev));
     let (set_custom_res, set_custom_scale) =
         (shell.set(Msg::CustomRes), shell.set(Msg::CustomScale));
+    let set_reset = shell.set(Msg::SettingsReset);
     // The layer being edited. A scope pointing at a deleted preset degrades to the defaults,
     // the same rule a dangling host binding follows.
     let active = active_preset(&shell.settings_scope);
@@ -496,6 +499,7 @@ pub(crate) fn settings_page(shell: &Shell) -> View {
         set_custom_res: &set_custom_res,
         custom_scale: shell.custom_scale,
         set_custom_scale: &set_custom_scale,
+        set_reset: &set_reset,
     };
     // The selected section's content, grouped exactly like the Apple client's categories
     // (SettingsCategory + SettingsView+Sections.swift). Each section builds only its own rows.
@@ -596,7 +600,11 @@ pub(crate) fn settings_page(shell: &Shell) -> View {
     Grid::new()
         .children((
             vstack(bars).grid_row(0),
-            Grid::new().children((nav, sheet_slot)).grid_row(1),
+            // One dialog per view: the reset's rides the inner grid, the delete's the outer.
+            Grid::new()
+                .children((nav, sheet_slot))
+                .grid_row(1)
+                .content_dialog(general::reset_dialog(&cx, shell.settings_reset)),
         ))
         .rows([GridLength::Auto, GridLength::STAR])
         .content_dialog(preset_sheet::delete_dialog(

@@ -177,6 +177,7 @@
 	"console_preset_bind_in_use": "Marker on the preset a game is bound to.",
 	"console_preset_bind_default": "Marker on a host's default preset.",
 	"console_hint_preset_options": "Hint bar on a preset row: Confirm opens its menu.",
+	"console_hint_reset": "Hint bar on the reset row of the console's settings: Confirm opens the confirmation.",
 	"console_pad_sc2_usb": "Controller access list (Android console): the USB grant row.",
 	"console_pad_ds_usb": "Controller access list (Android console): the USB grant row.",
 	"console_pad_ds_haptics": "Controller access list (Android console): a row that plays a test tone through the pad.",

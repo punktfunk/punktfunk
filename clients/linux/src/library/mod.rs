@@ -30,7 +30,7 @@ use std::rc::Rc;
 const MAX_WIDTH: i32 = 2400;
 
 /// The `Settings::extra` key the chosen shelf is kept under, on this device only.
-const SHELF_KEY: &str = "library_shelf";
+const SHELF_KEY: &str = pf_client_core::settings::LIBRARY_SHELF_KEY;
 
 /// One shelf: a paired host's library, streamed with its binding or a pinned preset.
 #[derive(Clone, Debug, PartialEq)]

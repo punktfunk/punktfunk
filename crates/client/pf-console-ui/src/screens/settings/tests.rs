@@ -1463,6 +1463,41 @@ fn moved_rows_read_the_pseudo_language() {
     });
 }
 
+/// The reset ends General, below the advanced count, and OK on it asks before anything moves.
+#[test]
+fn the_reset_ends_general_and_asks_first() {
+    let mut settings = Settings {
+        advanced_stats: true,
+        ..Settings::default()
+    };
+    let library = crate::library::LibraryShared::default();
+    let store = crate::store::SnapshotStore::new(settings.clone(), Vec::new());
+    let mut ctx = Ctx {
+        store: &store,
+        ..Ctx::test(&mut settings, &library)
+    };
+    let mut s = SettingsScreen::with_presets(Vec::new());
+    s.tab = tab_of(RowId::ResetSettings);
+    let ids = s.row_ids(&ctx);
+    assert_eq!(
+        ids[ids.len() - 2..],
+        [RowId::AdvancedChanged, RowId::ResetSettings]
+    );
+    assert!(s.spec(RowId::ResetSettings, &ids, &ctx).danger);
+
+    s.list.jump_to(ids.len() - 1);
+    let mut fx = Outbox::default();
+    s.menu(MenuEvent::Confirm, &mut ctx, &mut fx);
+    assert!(matches!(
+        fx.nav,
+        Some(crate::screens::Nav::Push(ref p)) if matches!(**p, Screen::Prompt(_))
+    ));
+    assert!(
+        ctx.settings.advanced_stats,
+        "nothing resets before the answer"
+    );
+}
+
 /// A platform's own fresh value is not a change: Android starts the pad speaker off.
 #[test]
 fn a_platform_default_is_not_counted_as_changed() {
@@ -1633,6 +1668,8 @@ fn platform_row_split_hides_only_the_other_platforms_concepts() {
         vec![
             RowId::FullscreenMode,
             RowId::Fullscreen,
+            // The host app owns the store, and its own Settings resets it.
+            RowId::ResetSettings,
             RowId::Screens,
             RowId::Screen,
             RowId::Chroma444,
@@ -1963,7 +2000,7 @@ fn every_row_has_exactly_one_tab() {
             seen.push(*id);
         }
     }
-    assert_eq!(seen.len(), 73, "{seen:?}");
+    assert_eq!(seen.len(), 74, "{seen:?}");
     assert!(
         !seen.contains(&RowId::AdvancedChanged),
         "built per tab, never listed"

@@ -213,6 +213,7 @@
 	"console_preset_bind_default": "Default",
 	"console_preset_bind_game_hint": "What this game streams with, instead of the host's default; a pinned card keeps its own.",
 	"console_hint_preset_options": "Options…",
+	"console_hint_reset": "Reset…",
 	"console_pad_sc2_usb": "Steam Controller 2 over USB",
 	"console_pad_ds_usb": "DualSense / DualShock over USB",
 	"console_pad_ds_haptics": "DualSense haptics self-test",

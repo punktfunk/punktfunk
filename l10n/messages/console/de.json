@@ -213,6 +213,7 @@
 	"console_preset_bind_default": "Standard",
 	"console_preset_bind_game_hint": "Womit dieses Spiel streamt, statt mit dem Standard des Hosts; eine angeheftete Karte behält ihre eigene.",
 	"console_hint_preset_options": "Optionen…",
+	"console_hint_reset": "Zurücksetzen…",
 	"console_pad_sc2_usb": "Steam Controller 2 über USB",
 	"console_pad_ds_usb": "DualSense / DualShock über USB",
 	"console_pad_ds_haptics": "DualSense-Haptiktest",

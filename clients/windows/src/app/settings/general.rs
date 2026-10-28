@@ -1,8 +1,9 @@
-//! General: session, console and statistics, plus the device-wide rows a preset never carries.
+//! General: session, console and statistics, plus the device-wide rows a preset never carries
+//! and the reset that ends the page.
 
 use super::{
-    advanced_group, described_labeled, described_overridable, group, presets, rows, setting_combo,
-    setting_toggle, Cx,
+    advanced_group, commit, described_labeled, described_overridable, group, presets, rows,
+    setting_combo, setting_toggle, Cx,
 };
 use crate::app::style::*;
 use crate::trust::{KnownHosts, Settings};
@@ -258,6 +259,57 @@ pub(super) fn general_section(cx: &Cx) -> Vec<View> {
             changed,
             false,
         ));
+        // The page's last row. A preset resets row by row, so only Default settings has it.
+        let set_reset = cx.set_reset.clone();
+        let reset = button(client::prefs_reset_all()).on_click(move || set_reset.call(true));
+        out.extend(group(
+            cx.pal,
+            None,
+            vec![described_labeled(
+                cx.pal,
+                common::common_reset(),
+                reset,
+                client::prefs_reset_all_hint(),
+            )],
+            None,
+        ));
     }
     out
+}
+
+/// Asks before a reset, which puts every setting back to a fresh install's value.
+pub(super) fn reset_dialog(cx: &Cx, open: bool) -> ContentDialog {
+    let (ctx, rev, set_rev, set_status) = (
+        cx.ctx.clone(),
+        cx.rev,
+        cx.set_rev.clone(),
+        cx.set_status.clone(),
+    );
+    let (set_reset, set_custom_res, set_custom_scale) = (
+        cx.set_reset.clone(),
+        cx.set_custom_res.clone(),
+        cx.set_custom_scale.clone(),
+    );
+    ContentDialog::new()
+        .title(client::prefs_reset_all_title())
+        .content(client::prefs_reset_all_body())
+        .primary_button_text(common::common_reset())
+        .close_button_text(common::common_cancel())
+        .is_open(open)
+        .on_closed(move |r: ContentDialogResult| {
+            set_reset.call(false);
+            if r != ContentDialogResult::Primary {
+                return;
+            }
+            set_custom_res.call(false);
+            set_custom_scale.call(false);
+            commit(
+                &ctx,
+                "",
+                "",
+                (rev, &set_rev),
+                &set_status,
+                Settings::reset_to_defaults,
+            );
+        })
 }

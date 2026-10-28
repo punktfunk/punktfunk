@@ -402,6 +402,12 @@ pub const FULLSCREEN_ALWAYS_KEY: &str = "fullscreen_always";
 pub const GAMEPAD_UI_KEY: &str = "gamepad_ui_enabled";
 pub const GAMEPAD_UI_MODE_KEY: &str = "gamepad_ui_mode";
 
+/// [`Settings::extra`] records rather than settings, which [`Settings::reset_to_defaults`] keeps:
+/// the GTK window's size, the library shelf it last showed, and each host's favorites.
+pub const SHELL_WINDOW_KEY: &str = "shell_window";
+pub const LIBRARY_SHELF_KEY: &str = "library_shelf";
+pub const FAVORITES_PREFIX: &str = "favorites.";
+
 /// The rate Fixed stores under PyroWave, kbps. The host pins the session at the quality, so
 /// only "not zero" counts. If the host picks another codec the session is Automatic
 /// ([`punktfunk_core::quic::session_bitrate_kbps`]).
@@ -590,6 +596,24 @@ impl Settings {
         let mode = if always { "always" } else { "connected" };
         self.extra
             .insert(GAMEPAD_UI_MODE_KEY.into(), serde_json::Value::from(mode));
+    }
+
+    /// Every setting back to a fresh install's value, `extra` settings included. Keeps what is
+    /// not a setting: the default host, the window sizes and the `extra` records. Pairing,
+    /// trust and presets live in other files.
+    pub fn reset_to_defaults(&mut self) {
+        let record = |k: &str| {
+            k.starts_with(FAVORITES_PREFIX) || k == SHELL_WINDOW_KEY || k == LIBRARY_SHELF_KEY
+        };
+        let mut extra = std::mem::take(&mut self.extra);
+        extra.retain(|k, _| record(k));
+        *self = Settings {
+            default_host: self.default_host.take(),
+            last_window_w: self.last_window_w,
+            last_window_h: self.last_window_h,
+            extra,
+            ..Settings::default()
+        };
     }
 
     fn extra_bool(&self, key: &str, default: bool) -> bool {
@@ -1022,6 +1046,63 @@ mod tests {
         s.set_gamepad_ui_enabled(true);
         s.extra.insert(GAMEPAD_UI_MODE_KEY.into(), "later".into());
         assert_eq!(s.gamepad_ui(), GamepadUi::WithController);
+    }
+
+    /// A reset reads back as a fresh install, `extra` settings included, and keeps the default
+    /// host, the window sizes and the per-host records. Pairing lives in another file.
+    #[test]
+    fn a_reset_restores_defaults_and_keeps_host_records() {
+        let _guard = crate::trust::store_health_lock();
+        let path = crate::presets::tests::scratch_dir("settings-reset").join("settings.json");
+        let mut changed = Settings {
+            width: 2560,
+            height: 1440,
+            codec: "av1".into(),
+            hdr_enabled: false,
+            show_advanced: true,
+            default_host: Some("desk".into()),
+            last_window_w: 1600,
+            last_window_h: 900,
+            ..Settings::default()
+        };
+        changed.set_fullscreen_always(true);
+        changed.set_gamepad_ui_enabled(false);
+        changed.set_gamepad_ui_always(true);
+        for (key, value) in [
+            ("host_sort", "name".into()),
+            ("frob_mode", "fancy".into()),
+            ("favorites.ab12", serde_json::json!(["game-1"])),
+            (SHELL_WINDOW_KEY, serde_json::json!([1200, 800, 0])),
+            (LIBRARY_SHELF_KEY, "ab12".into()),
+        ] {
+            changed.extra.insert(key.into(), value);
+        }
+        changed.save_at(&path);
+
+        let reset = Settings::update_at(&path, |s| {
+            s.reset_to_defaults();
+            true
+        });
+        let kept = |k: &str| reset.extra.get(k).cloned();
+        assert_eq!(kept("favorites.ab12"), Some(serde_json::json!(["game-1"])));
+        assert_eq!(
+            kept(SHELL_WINDOW_KEY),
+            Some(serde_json::json!([1200, 800, 0]))
+        );
+        assert_eq!(kept(LIBRARY_SHELF_KEY), Some("ab12".into()));
+        let fresh = Settings {
+            default_host: Some("desk".into()),
+            last_window_w: 1600,
+            last_window_h: 900,
+            extra: reset.extra.clone(),
+            ..Settings::default()
+        };
+        assert_eq!(reset, fresh, "every setting is back to its default");
+        assert_eq!(reset.extra.len(), 3, "the extra settings are gone");
+        assert!(!reset.fullscreen_always());
+        assert_eq!(reset.gamepad_ui(), GamepadUi::WithController);
+        assert_eq!(load_json_or_default::<Settings>(&path), reset, "and saved");
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
     }
 
     /// Unknown keys survive load→save. An empty flatten map adds nothing, so files

@@ -151,6 +151,8 @@ pub enum RowId {
     /// Action row, last on a tab while its advanced rows are hidden and some differ from a fresh
     /// install: says how many, and shows them.
     AdvancedChanged,
+    /// Action row, last on General: every setting back to a fresh install's, asked first.
+    ResetSettings,
 }
 
 /// Rows the tabs list only under Show advanced: their default is right for nearly everyone,
@@ -528,6 +530,7 @@ pub(super) const TABS: [(Section, &[RowId]); 7] = [
             RowId::StatsSize,
             RowId::ExitHint,
             RowId::ReduceUiResolution,
+            RowId::ResetSettings,
         ],
     ),
     (
@@ -957,6 +960,8 @@ pub fn row_on(id: RowId, platform: crate::platform::Platform) -> bool {
         // That client's own audio plane and its remote's missing second button.
         RowId::AudioRoute | RowId::CursorGestures => &[WebOS],
         RowId::FullscreenMode => &[Apple],
+        // Where the console owns the settings file. A host app keeps its own store and reset.
+        RowId::ResetSettings => &[Desktop],
         // Main10 at BT.709 asks nothing of the panel, and MediaCodec and NDL both decode it from
         // the SPS.
         RowId::TenBitSdr => &[Desktop, Android, WebOS, Apple, Ps5],
@@ -1216,6 +1221,7 @@ pub(super) fn row_icon(id: RowId) -> &'static str {
         RowId::ShowAdvanced | RowId::AdvancedChanged => "wrench",
         RowId::StatsSize => "chart-column",
         RowId::ExitHint => "log-out",
+        RowId::ResetSettings => "undo-2",
         RowId::Preset(_) | RowId::NewPreset => "settings",
     }
 }
@@ -1327,6 +1333,12 @@ fn row_spec_base(id: RowId, ctx: &Ctx, presets: &[(String, String)]) -> RowSpec 
         RowId::AdvancedChanged => return RowSpec::action(String::new(), true),
         RowId::StreamControls => return RowSpec::action(m::about_stream_controls(), true),
         RowId::Licenses => return RowSpec::action(m::about_licenses(), true),
+        RowId::ResetSettings => {
+            return RowSpec {
+                danger: true,
+                ..RowSpec::action(m::prefs_reset_all(), true)
+            };
+        }
         RowId::QuickActions => return RowSpec::action(m::player_overlay_actions(), true),
         // Opens the cards: the value names the pick, no ‹ › to step it.
         RowId::Palette => {
@@ -1637,6 +1649,7 @@ fn row_spec_base(id: RowId, ctx: &Ctx, presets: &[(String, String)]) -> RowSpec 
         | RowId::AdvancedChanged
         | RowId::StreamControls
         | RowId::Licenses
+        | RowId::ResetSettings
         | RowId::QuickActions
         | RowId::LibrarySections
         | RowId::Palette
@@ -1822,6 +1835,7 @@ pub fn detail(id: RowId, ctx: &Ctx) -> Cow<'static, str> {
         RowId::Controllers => console::console_prefs_controllers_hint().into(),
         RowId::StreamControls => m::about_stream_controls_hint().into(),
         RowId::Licenses => m::about_licenses_hint().into(),
+        RowId::ResetSettings => m::prefs_reset_all_hint().into(),
         RowId::LibrarySections => m::player_library_sections_hint().into(),
         RowId::Version => console::console_about_version_hint().into(),
         RowId::Preset(_) => console::console_preset_row_hint().into(),
@@ -2150,6 +2164,7 @@ pub fn adjust(id: RowId, delta: i32, wrap: bool, ctx: &mut Ctx) -> bool {
         | RowId::AdvancedChanged
         | RowId::StreamControls
         | RowId::Licenses
+        | RowId::ResetSettings
         | RowId::QuickActions
         | RowId::LibrarySections
         | RowId::Palette
