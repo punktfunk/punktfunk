@@ -970,6 +970,32 @@ extension SettingsView {
         }
     }
 
+    /// General's last section: every setting back to a fresh install's value, asked first. A
+    /// preset resets row by row, so only Default settings has it.
+    @ViewBuilder var resetSection: some View {
+        if !inPresetScope {
+            Section {
+                Button(L10n.prefsResetAll, role: .destructive) { confirmingReset = true }
+                    .alert(L10n.prefsResetAllTitle, isPresented: $confirmingReset) {
+                        Button(L10n.commonCancel, role: .cancel) {}
+                        Button(L10n.commonReset, role: .destructive) { resetAllSettings() }
+                    } message: {
+                        Text(L10n.prefsResetAllBody)
+                    }
+            }
+        }
+    }
+
+    private func resetAllSettings() {
+        SettingDefault.resetAll()
+        // This tier's @AppStorage default was read at launch, from the value just removed.
+        statsVerbosityRaw = SettingDefault.statsVerbosity
+        #if os(iOS) || os(visionOS) || os(macOS)
+        customMode = false
+        customScaleMode = false
+        #endif
+    }
+
     private var generalChanged: Int {
         [advancedStats, hudPlacement != HUDPlacement.topTrailing.rawValue, statsScalePct != 100,
          !exitHint].filter { $0 }.count
