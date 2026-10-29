@@ -1189,6 +1189,11 @@ struct ContentView: View {
            let v = Int(kbps) {
             effective.bitrateKbps = v
         }
+        // PUNKTFUNK_HDR=1|0: the global HDR switch is the only one a record-less connect
+        // sees, so an unattended HDR run needs this.
+        if let hdr = ProcessInfo.processInfo.environment["PUNKTFUNK_HDR"] {
+            effective.hdrEnabled = hdr == "1"
+        }
         model.connect(to: host, effective: effective, gamepad: pad, autoTrust: true)
         #endif
     }

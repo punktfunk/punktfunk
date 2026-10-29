@@ -28,6 +28,18 @@ import os
 /// stdout is the cheapest reliable capture channel.
 let presentDebug = ProcessInfo.processInfo.environment["PUNKTFUNK_PRESENT_DEBUG"] == "1"
 
+extension Stage2Pipeline {
+    /// PUNKTFUNK_DEADLINE_SLACK_MS, as seconds; 0 unless a DEBUG build is asked.
+    nonisolated static let deadlineSlack: CFTimeInterval = {
+        #if DEBUG
+        return (ProcessInfo.processInfo.environment["PUNKTFUNK_DEADLINE_SLACK_MS"]
+            .flatMap(Double.init) ?? 0) / 1000
+        #else
+        return 0
+        #endif
+    }()
+}
+
 /// The pf-present line's os_log mirror (subsystem io.unom.punktfunk, category "present") — the
 /// SessionModel "stats" mirror's sibling, so DEADLINE sessions stream their pacing decomposition
 /// to Console.app wirelessly with no env var / Xcode attach. Always on for deadline pacing (the
@@ -1996,19 +2008,34 @@ public final class Stage2Pipeline {
             }
             // What became of the last drawable this thread handled, for the late line.
             var lastFate = "presented"
+            // The newest vend's pass, parked on the GPU until its pick (MetalVideoPresenter.park).
+            var parked: ParkedPass?
             // Per-iteration autorelease pool — same contract as the arrival/glass loop (the
             // vended drawable and its retinue are autoreleased objects on a runloop-less thread).
             while !token.isStopped { autoreleasepool {
                 // Wake on a signal, or when the stashed drawable's pick passes: one no frame
                 // claimed goes back to the pool then.
-                let margin = pacer.margin
+                // PUNKTFUNK_DEADLINE_SLACK_MS (DEBUG probe): pick that much past the margin,
+                // into the slack the display keeps after Apple's deadline; `late` says how much
+                // there is.
+                let margin = pacer.margin - Stage2Pipeline.deadlineSlack
                 let cutoff = { (v: VendedDrawable) in
                     DeadlinePacer.cutoff(vendAt: v.vendAt, deadline: v.deadline, margin: margin)
                 }
                 let untilPick = stash.peek { cutoff($0) - CACurrentMediaTime() } ?? 0.1
                 let signaled =
                     renderSignal.wait(timeout: .now() + min(max(untilPick, 0), 0.1)) == .success
-                if stash.take(where: { CACurrentMediaTime() > cutoff($0) }) != nil {
+                // Late latch: the newest vend's pass goes to the GPU now, and an older one it
+                // replaced runs as a discard; the pick then only names the frame.
+                if let vend = stash.peek({ $0 }), parked?.drawable !== vend.drawable {
+                    if let old = parked { presenter.skip(old) }
+                    parked = presenter.park(vend.drawable)
+                }
+                if let vend = stash.take(where: { CACurrentMediaTime() > cutoff($0) }) {
+                    if let p = parked, p.drawable === vend.drawable {
+                        presenter.skip(p)
+                        parked = nil
+                    }
                     watchdog.noteVend(at: CACurrentMediaTime()) // the link is alive, just unclaimed
                     pacer.noteExpired()
                     lastFate = "expired"
@@ -2103,6 +2130,10 @@ public final class Stage2Pipeline {
                     watchdog.noteVend(at: now)
                     ring.putBack(frame)
                     pacer.noteSkip()
+                    if let p = parked, p.drawable === drawable {
+                        presenter.skip(p)
+                        parked = nil
+                    }
                     lastFate = "skipped"
                     debugStats?.flushIfDue(ring: ring, gate: nil)
                     return
@@ -2152,7 +2183,20 @@ public final class Stage2Pipeline {
                         endToEnd: endToEndMeter, clockOffset: clockOffset, hud: hud,
                         stats: debugStats)
                 }
-                let rendered = presenter.render(shown.image, into: drawable, onPresented: onGlass)
+                // A parked pass takes the frame by name; one it cannot take is skipped and the
+                // frame retries on the next vend, as a failed render does.
+                let rendered: Bool
+                if let p = parked, p.drawable === drawable {
+                    parked = nil
+                    if case .video(let buffer, let isHDR) = shown.image {
+                        rendered = presenter.latch(p, buffer, isHDR: isHDR, onPresented: onGlass)
+                    } else {
+                        presenter.skip(p)
+                        rendered = false
+                    }
+                } else {
+                    rendered = presenter.render(shown.image, into: drawable, onPresented: onGlass)
+                }
                 lastFate = rendered ? "presented" : "failed"
                 let renderTook = CACurrentMediaTime() - renderStarted
                 pacer.noteRender(seconds: renderTook)
@@ -2168,6 +2212,7 @@ public final class Stage2Pipeline {
                 }
                 debugStats?.flushIfDue(ring: ring, gate: nil)
             } }
+            presenter.flushParked()
         }
         renderThread.name = "punktfunk-stage2-render"
         renderThread.qualityOfService = .userInteractive
