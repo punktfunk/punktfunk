@@ -40,6 +40,8 @@ declare const SteamClient: {
     SetShortcutStartDir(appId: number, dir: string): void;
     SetShortcutIcon(appId: number, iconPath: string): void;
     SetAppLaunchOptions(appId: number, options: string): void;
+    // An empty name removes the app's forced compatibility tool.
+    SpecifyCompatTool?(appId: number, toolName: string): void;
     // assetType: 0 = grid (portrait capsule), 1 = hero, 2 = logo, 3 = wide grid.
     SetCustomArtworkForApp(
       appId: number,
@@ -464,8 +466,8 @@ interface ShortcutRole {
 /**
  * Ensure a role's shortcut exists and points at the current plugin dir: reuse the remembered
  * appId only while the shortcut is alive (a stale id must fall through, not be repointed), else
- * adopt or mint one. Then rewrite exe, start dir and name, visibility and art. Throws when the
- * launch wrapper is missing.
+ * adopt or mint one. Then rewrite exe, start dir, name, compatibility tool, visibility and art.
+ * Throws when the launch wrapper is missing.
  */
 async function ensureShortcutOnce(role: ShortcutRole): Promise<Ensured> {
   const info = await runnerInfo();
@@ -494,6 +496,8 @@ async function ensureShortcutOnce(role: ShortcutRole): Promise<Ensured> {
   SteamClient.Apps.SetShortcutExe(appId, SHELL);
   SteamClient.Apps.SetShortcutStartDir(appId, startDir);
   SteamClient.Apps.SetShortcutName(appId, role.name);
+  // A compatibility tool runs the wrapper in a container with no flatpak, so the launch dies.
+  SteamClient.Apps.SpecifyCompatTool?.(appId, "");
   if (role.launchOptions) {
     SteamClient.Apps.SetAppLaunchOptions(appId, role.launchOptions(info.runner, info.client_bin));
   }
