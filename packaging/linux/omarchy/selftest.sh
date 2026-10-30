@@ -248,10 +248,25 @@ fi
 echo "lan_sources / ufw"
 
 {
-  printf '%s\n' 192.168.0.0/16 10.0.0.0/8 172.16.0.0/12 tailscale0
+  printf '%s\n' 192.168.0.0/16 10.0.0.0/8 172.16.0.0/12 tailscale0 wt0
 } > "$WORK/expected-lan"
 lan_sources > "$WORK/actual-lan"
-check "lan_sources preinstalls the tailscale0 rule" "$WORK/expected-lan" "$WORK/actual-lan"
+check "lan_sources preinstalls the tailscale0 and wt0 rules" "$WORK/expected-lan" "$WORK/actual-lan"
+
+# A CIDR takes a `from` rule and an interface an `in on` rule; `remove` must name each the same way.
+sudo() { printf '%s\n' "$*" >> "$WORK/actual-ufw"; }
+ufw_rule 10.0.0.0/8 app punktfunk-native
+ufw_rule wt0 app punktfunk-native
+ufw_unrule 10.0.0.0/8 app punktfunk-native
+ufw_unrule wt0 app punktfunk-native
+unset -f sudo
+{
+  printf '%s\n' "ufw allow from 10.0.0.0/8 to any app punktfunk-native comment $TAG"
+  printf '%s\n' "ufw allow in on wt0 to any app punktfunk-native comment $TAG"
+  printf '%s\n' "ufw --force delete allow from 10.0.0.0/8 to any app punktfunk-native"
+  printf '%s\n' "ufw --force delete allow in on wt0 to any app punktfunk-native"
+} > "$WORK/expected-ufw"
+check "a CIDR and an interface each get their own ufw rule" "$WORK/expected-ufw" "$WORK/actual-ufw"
 
 echo "moved mgmt port"
 

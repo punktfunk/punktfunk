@@ -89,18 +89,19 @@ edits YOUR config. It will ask for sudo where it genuinely needs it (ufw, group 
 # ── ufw (D4) ───────────────────────────────────────────────────────────────────────────────────
 #
 # LAN-scoped rules tagged so `remove` can find them, using the package's app profiles so the port
-# list lives in one place. Ufw accepts a named interface before it exists; that rule stays dormant
-# until tailscale0 appears and remains scoped to that interface.
+# list lives in one place. Ufw accepts a named interface before it exists; such a rule stays dormant
+# until the interface appears and remains scoped to it.
 
-# RFC1918 plus tailscale0. The interface rule is safe to install before the link exists.
+# RFC1918 plus the Tailscale and NetBird interfaces. Their rules are safe to install before the
+# link exists.
 lan_sources() {
-  printf '%s\n' 192.168.0.0/16 10.0.0.0/8 172.16.0.0/12 tailscale0
+  printf '%s\n' 192.168.0.0/16 10.0.0.0/8 172.16.0.0/12 tailscale0 wt0
 }
 
 ufw_rule() {  # ufw_rule <source> <to-any spec…> — idempotent (ufw dedupes identical rules)
   local src="$1"; shift
-  if [[ "$src" == tailscale0 ]]; then
-    sudo ufw allow in on tailscale0 to any "$@" comment "$TAG" >/dev/null
+  if [[ "$src" != */* ]]; then
+    sudo ufw allow in on "$src" to any "$@" comment "$TAG" >/dev/null
   else
     sudo ufw allow from "$src" to any "$@" comment "$TAG" >/dev/null
   fi
@@ -108,8 +109,8 @@ ufw_rule() {  # ufw_rule <source> <to-any spec…> — idempotent (ufw dedupes i
 
 ufw_unrule() {  # ufw_unrule <source> <to-any spec…>
   local src="$1"; shift
-  if [[ "$src" == tailscale0 ]]; then
-    sudo ufw --force delete allow in on tailscale0 to any "$@" >/dev/null 2>&1 || true
+  if [[ "$src" != */* ]]; then
+    sudo ufw --force delete allow in on "$src" to any "$@" >/dev/null 2>&1 || true
   else
     sudo ufw --force delete allow from "$src" to any "$@" >/dev/null 2>&1 || true
   fi

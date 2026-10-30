@@ -353,7 +353,8 @@ in
           The address the console listens on: `0.0.0.0` for every interface, `127.0.0.1` for this
           machine only, or one address such as a VPN interface. The plugin-UI origin on 47993
           follows it, always. On any bind the console answers only peers on the local network or a
-          VPN (RFC 1918, link-local, IPv6 unique-local, Tailscale's 100.64/10), never the internet.
+          VPN (RFC 1918, link-local, IPv6 unique-local, Tailscale's or NetBird's 100.64/10), never
+          the internet.
 
           This is the imperative install's `PUNKTFUNK_UI_BIND` in `host.env`; on NixOS the option
           is the source and `host.env` is not read by the console.
