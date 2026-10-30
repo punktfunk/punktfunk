@@ -243,13 +243,16 @@ impl AscSink {
         };
         let pacing = sysprop(c"debug.punktfunk.asc_pacing").is_none_or(|v| v != "0");
         let hold = sysprop(c"debug.punktfunk.asc_hold_chain").as_deref() == Some("1");
+        let hold_band_ns = sysprop(c"debug.punktfunk.asc_hold_band_us")
+            .and_then(|v| v.parse::<i64>().ok())
+            .map(|us| us.clamp(0, 50_000) * 1000);
         #[cfg(debug_assertions)]
         let jitter_us = sysprop(c"debug.punktfunk.asc_jitter_us")
             .and_then(|v| v.parse::<u64>().ok())
             .unwrap_or(0)
             .min(50_000);
         log::info!(
-            "asc: backend up — {}, reader usage {} ({}x{} @ {} Hz src, panel seed {} Hz, dataspace {:#x}, pacing {}, hold chain {})",
+            "asc: backend up — {}, reader usage {} ({}x{} @ {} Hz src, panel seed {} Hz, dataspace {:#x}, pacing {}, hold chain {}, hold band {})",
             match priority {
                 PresentPriority::Latency => "latency (one-MAD cushion)".to_string(),
                 PresentPriority::Smooth { buffer } => format!("smooth (buffer {buffer})"),
@@ -262,6 +265,7 @@ impl AscSink {
             dataspace,
             if pacing { "on" } else { "OFF (sysprop)" },
             if hold { "ON (sysprop)" } else { "off" },
+            hold_band_ns.map_or("auto".to_string(), |ns| format!("{} µs (sysprop)", ns / 1000)),
         );
         Some(AscSink {
             reader,
@@ -279,7 +283,7 @@ impl AscSink {
                 super::cushion_tail(),
             ),
             budget: AscBudget::default(),
-            slots: Slots::new(panel_hz, priority, pacing, hold),
+            slots: Slots::new(panel_hz, priority, pacing, hold, hold_band_ns),
             downrate: Downrate::new(panel_hz),
             downrated: false,
             verdicts: Verdicts::default(),
@@ -412,9 +416,9 @@ impl AscSink {
         #[cfg(debug_assertions)]
         let now_mono = self.inject_jitter(now_mono);
         let earliest = due_ns.map_or(now_mono, |d| d.max(now_mono));
-        let (target, slot) = self
-            .slots
-            .next_target(earliest, self.downrated, &mut self.counters);
+        let (target, slot) =
+            self.slots
+                .next_target(earliest, now_mono, self.downrated, &mut self.counters);
         let seq = self.next_seq;
         self.sync_layers();
         let (src_w, src_h, dataspace, frame_rate) =

@@ -350,7 +350,8 @@ const fn shr_toward_zero(v: i64, shift: u8) -> i64 {
     }
 }
 
-/// Lead samples beyond this are a stalled compositor, not a work duration.
+/// A present − latch span beyond this while no period is known is a stalled
+/// compositor, not a lead.
 const LEAD_MAX_NS: i64 = 50_000_000;
 
 /// Present-phased vsync grid plus the lead the compositor needs ahead of it.
@@ -363,8 +364,10 @@ const LEAD_MAX_NS: i64 = 50_000_000;
 /// not teach a slower panel. Slots are integer indices on the grid; a
 /// presenter that targets `present_ns(slot) − period/2` is ready for `slot`
 /// and not for `slot − 1` with half a period of tolerance either side.
-/// `lead_ns` is a decaying maximum of present − latch, the apply-ahead a slot
-/// needs.
+/// `lead_ns` is a decaying maximum of present − latch taken within one
+/// period, the apply-ahead a slot needs: the compositor latches for the next
+/// vsync, so whole periods beyond are the display's own delay (a Shield TV:
+/// one or two refreshes, for minutes), which no earlier apply shortens.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SlotClock {
     period_ns: i64,
@@ -414,7 +417,12 @@ impl SlotClock {
     /// tenths of the period is the panel running faster than stated and
     /// narrows it; anything closer is fence jitter (250 µs on the A024).
     pub fn observe(&mut self, present_ns: i64, latch_ns: i64) -> i64 {
-        let sample = present_ns - latch_ns;
+        let span = present_ns - latch_ns;
+        let sample = match self.period_ns {
+            // Folded into (0, period]: a whole period reads as one, not none.
+            p if p > 0 && span > 0 => (span - 1).rem_euclid(p) + 1,
+            _ => span,
+        };
         if (0..=LEAD_MAX_NS).contains(&sample) {
             if sample > self.lead_ns {
                 self.lead_ns = sample;
@@ -1071,7 +1079,7 @@ mod slot_clock_tests {
     }
 
     #[test]
-    fn lead_is_a_decaying_maximum() {
+    fn lead_is_a_decaying_maximum_within_one_period() {
         let mut c = phased();
         let v = 1_000_000_000;
         c.observe(v + P, v + P - 6_000_000);
@@ -1080,8 +1088,22 @@ mod slot_clock_tests {
             c.observe(v + i * P, v + i * P - LEAD);
         }
         assert!(c.lead_ns() < 4_500_000 && c.lead_ns() >= LEAD);
-        c.observe(v + 40 * P, v + 40 * P - LEAD_MAX_NS - 1);
-        assert!(c.lead_ns() < 4_500_000, "a stalled sample is ignored");
+        // On glass two refreshes after a latch one lead ahead of its own vsync: the display's
+        // delay, not a longer lead.
+        c.observe(v + 40 * P, v + 40 * P - LEAD - 2 * P);
+        assert!(
+            c.lead_ns() < 4_500_000,
+            "whole periods beyond are the display's"
+        );
+        c.observe(v + 41 * P, v + 41 * P - P);
+        assert_eq!(c.lead_ns(), P, "a whole period is a whole period, not none");
+        let mut unphased = SlotClock::seeded(0);
+        unphased.observe(v, v - LEAD_MAX_NS - 1);
+        assert_eq!(
+            unphased.lead_ns(),
+            0,
+            "no period: a stalled span is ignored"
+        );
     }
 
     #[test]
