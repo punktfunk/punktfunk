@@ -382,8 +382,14 @@ async fn a_knock_shows_the_profile_it_named() {
         .unwrap(),
     );
     let app = test_app_native(state, np.clone());
-    np.note_pending("Kid's iPad", "aa11", Some(LAN_KNOCK), Some(&owner));
-    np.note_pending("Stranger", "bb22", Some(LAN_KNOCK), Some("ffffffffffff"));
+    np.note_pending("Kid's iPad", "aa11", Some(LAN_KNOCK), None, Some(&owner));
+    np.note_pending(
+        "Stranger",
+        "bb22",
+        Some(LAN_KNOCK),
+        None,
+        Some("ffffffffffff"),
+    );
     let (_, b) = send(&app, get_req("/api/v1/native/pending")).await;
     assert_eq!(b[0]["profile"]["id"], owner.as_str(), "{b}");
     assert_eq!(b[0]["profile"]["display_name"], owner_name.as_str());

@@ -173,9 +173,15 @@ impl std::ops::Deref for V2Link {
 pub(crate) enum SessionLink {
     /// The native plane: datagrams carry a kind, and media rides the connection's own socket.
     QuicV2(quinn::Connection, Arc<V2Link>),
-    /// The browser plane: the same protocol over one WebTransport session, and the device
-    /// fingerprint its key signature proved (`None` before admission and under `serve --open`).
-    Web(wtransport::Connection, Option<[u8; 32]>, Arc<V2Session>),
+    /// The browser plane: the same protocol over one WebTransport session, the device
+    /// fingerprint its key signature proved (`None` before admission and under `serve --open`),
+    /// and the browser a bridge dials for ([`Self::client_addr`]).
+    Web(
+        wtransport::Connection,
+        Option<[u8; 32]>,
+        Arc<V2Session>,
+        Option<IpAddr>,
+    ),
 }
 
 impl SessionLink {
@@ -211,7 +217,7 @@ impl SessionLink {
             },
             // Not the quinn connection: a WebTransport datagram carries a session-id prefix, so
             // it has to go through the layer that writes one.
-            SessionLink::Web(c, _, v2) => {
+            SessionLink::Web(c, _, v2, _) => {
                 let Some(payload) = v2.outgoing(payload) else {
                     return DatagramSend::TooLarge;
                 };
@@ -256,6 +262,15 @@ impl SessionLink {
 
     pub(crate) fn remote_address(&self) -> SocketAddr {
         self.quic().remote_address()
+    }
+
+    /// The browser a bridge dials for, as the bridge names it (`pf-client-addr`). It only ever
+    /// tightens a knock's source. `None` on the native plane and for a direct browser.
+    pub(crate) fn client_addr(&self) -> Option<IpAddr> {
+        match self {
+            SessionLink::QuicV2(..) => None,
+            SessionLink::Web(.., addr) => *addr,
+        }
     }
 
     /// Local address the connection arrived on, for binding a data socket on the same NIC.
@@ -350,7 +365,7 @@ impl SessionLink {
     pub(crate) fn v2_session(&self) -> &Arc<V2Session> {
         match self {
             SessionLink::QuicV2(_, v2) => &v2.s,
-            SessionLink::Web(_, _, v2) => v2,
+            SessionLink::Web(_, _, v2, _) => v2,
         }
     }
 
@@ -367,7 +382,7 @@ impl SessionLink {
     pub(crate) fn peer_fingerprint(&self) -> Option<[u8; 32]> {
         match self {
             SessionLink::QuicV2(c, _) => punktfunk_core::quic::endpoint::peer_fingerprint(c),
-            SessionLink::Web(_, fp, _) => *fp,
+            SessionLink::Web(_, fp, ..) => *fp,
         }
     }
 
