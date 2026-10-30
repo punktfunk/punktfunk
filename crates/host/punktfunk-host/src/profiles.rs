@@ -864,7 +864,9 @@ impl Profiles {
         let path = dir.join(format!("{id}.{ext}"));
         pf_paths::replace_file(&path, bytes)
             .with_context(|| format!("write {}", path.display()))?;
-        let url = format!("/api/v1/profiles/{id}/avatar");
+        let tag = etag(bytes);
+        // The tag makes a new picture a new URL, so a client's cache keyed by URL never lags.
+        let url = format!("/api/v1/profiles/{id}/avatar?v={tag}");
         let set = self.mutate(|file| {
             let p = find_mut(file, id)?;
             p.avatar = Some(url.clone());
@@ -876,7 +878,7 @@ impl Profiles {
             return Err(e);
         }
         remove_avatar_files(&dir, id, Some(ext));
-        Ok(etag(bytes))
+        Ok(tag)
     }
 
     pub fn avatar(&self, id: &str) -> Option<Avatar> {
