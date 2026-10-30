@@ -478,6 +478,40 @@ pub(super) fn pacing_hz(session_hz: u32, achieved_hz: u32) -> u32 {
     achieved_hz.min(session_hz).max(1)
 }
 
+/// Log a display that runs below the rate the session asked. A mirrored head
+/// ([`DisplayOwnership::External`]) was asked for none and runs at its own: that is a fact
+/// about the head, not a compositor refusing a request.
+fn report_achieved_hz(
+    ownership: crate::vdisplay::DisplayOwnership,
+    display_hz: u32,
+    achieved_hz: u32,
+    session_hz: u32,
+) {
+    if achieved_hz < session_hz {
+        if ownership == crate::vdisplay::DisplayOwnership::External {
+            tracing::info!(
+                head = achieved_hz,
+                session = session_hz,
+                "the mirrored head runs below the session rate — encoding at the head's rate"
+            );
+        } else {
+            tracing::warn!(
+                requested = display_hz,
+                achieved = achieved_hz,
+                session = session_hz,
+                "compositor did not honor the requested refresh — encoding at the achieved rate"
+            );
+        }
+    } else if achieved_hz < display_hz {
+        tracing::info!(
+            requested = display_hz,
+            achieved = achieved_hz,
+            session = session_hz,
+            "compositor did not honor the multiplied display refresh — the session rate is unaffected"
+        );
+    }
+}
+
 /// Open the session's encoder for `frame` on `encoder`, the session's resolution — framed for a
 /// joiner, or at the client's `negotiated` size when a larger head is mirrored
 /// (`session_plan::open_encoder_fitted`) — with the plan's chunking, slice ceiling and the
@@ -666,21 +700,12 @@ fn attach_pipeline(
         .map(|(_, _, hz)| hz)
         .filter(|&hz| hz > 0)
         .unwrap_or(display_mode.refresh_hz);
-    if achieved_hz < mode.refresh_hz {
-        tracing::warn!(
-            requested = display_mode.refresh_hz,
-            achieved = achieved_hz,
-            session = mode.refresh_hz,
-            "compositor did not honor the requested refresh — encoding at the achieved rate"
-        );
-    } else if achieved_hz < display_mode.refresh_hz {
-        tracing::info!(
-            requested = display_mode.refresh_hz,
-            achieved = achieved_hz,
-            session = mode.refresh_hz,
-            "compositor did not honor the multiplied display refresh — the session rate is unaffected"
-        );
-    }
+    report_achieved_hz(
+        vout.ownership,
+        display_mode.refresh_hz,
+        achieved_hz,
+        mode.refresh_hz,
+    );
     let effective_hz = pacing_hz(mode.refresh_hz, achieved_hz);
     // A mirrored KWin head is still KWin's stream: its id 0 hides the pointer.
     let cursor_id0_hides = vd.producer() == pf_vdisplay::Compositor::Kwin.id();
