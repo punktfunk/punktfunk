@@ -1,8 +1,9 @@
-//! The data pump's ABR side: what [`crate::abr::Driver`] hears each iteration, what its tick
-//! asks for, and the windows it closes, published for the embedder.
+//! The data pump's side of [`crate::abr::feed`]: what the feed hears each iteration, what its
+//! tick asks for, and the windows it closes, published for the app.
 
 use super::*;
-use crate::abr::{Action, DriverConfig, ProbeReport};
+use crate::abr::feed::{Facts, Feed, Inputs};
+use crate::abr::{Action, ProbeReport, Tick};
 
 /// Closed windows held for an embedder that has not read them. Forty-eight
 /// seconds at the report cadence: enough that a client polling once a second
@@ -10,59 +11,33 @@ use crate::abr::{Action, DriverConfig, ProbeReport};
 pub(crate) const ABR_TRAJECTORY_WINDOWS: usize = 64;
 
 impl DataPump {
-    /// The session's ABR driver, with the three environment overrides read
-    /// once. Automatic is a session with no embedder rate and a host that
-    /// echoed one: PyroWave's adapts between its floor and the host's pin.
-    /// An explicit-rate PyroWave session runs at the pin, which the bring-up
-    /// ramp may lower once; no controller runs for it.
-    pub(super) fn driver(&self, session_start: Instant) -> crate::abr::Driver {
-        let automatic = self.bitrate_kbps == 0;
-        let pyrowave = self.negotiated_codec == crate::quic::CODEC_PYROWAVE;
-        let pin_kbps = (pyrowave && !automatic)
-            .then_some(self.resolved_bitrate_kbps)
-            .filter(|&pin| pin > 0);
-        let mut driver = crate::abr::Driver::new(
-            DriverConfig {
-                start_kbps: if automatic {
-                    self.resolved_bitrate_kbps
-                } else {
-                    0
-                },
-                ceiling_cap_kbps: env_u32("PUNKTFUNK_ABR_MAX_MBPS")
-                    .map(|m| m.saturating_mul(1_000)),
-                stream_cap_kbps: self.stream_cap_kbps,
-                refresh_hz: self.refresh_hz,
+    /// The session's ABR feed, from what the Welcome negotiated and both ends' ports.
+    pub(super) fn feed(&self, session_start: Instant) -> Feed {
+        Feed::new(
+            Facts {
+                bitrate_kbps: self.bitrate_kbps,
+                resolved_bitrate_kbps: self.resolved_bitrate_kbps,
                 codec: self.negotiated_codec,
                 bit_depth: self.bit_depth,
                 chroma_format: self.chroma_format,
+                refresh_hz: self.refresh_hz,
+                stream_cap_kbps: self.stream_cap_kbps,
+                pyrowave_floor_kbps: self.pyrowave_floor_kbps,
                 audio_reserved_kbps: self.audio_reserved_kbps,
                 marks_repeats: self.marks_repeats,
-                probe: std::env::var("PUNKTFUNK_ABR_PROBE").map_or(true, |v| v != "0"),
-                probe_target_kbps: env_u32("PUNKTFUNK_ABR_PROBE_KBPS"),
-                ramp: self.serves_ramp,
+                serves_ramp: self.serves_ramp,
                 probe_only: self.shared.probe_only(),
-                pin_kbps,
-                floor_kbps: self.pyrowave_floor_kbps.filter(|_| automatic),
             },
-            session_start,
-        );
-        driver.set_ports(
-            self.shared.host_link.lock().unwrap().facts(),
+            *self.shared.host_link.lock().unwrap(),
             *self.shared.client_link.lock().unwrap(),
-        );
-        driver
+            session_start,
+        )
     }
 
-    /// Everything the driver hears before this iteration's tick, in the order it hears it.
-    /// The frame this iteration's delays are read in goes first, so a step moves what was
-    /// read before it; the control task's events are drained once, next; host timings come
-    /// after the shard delays they settle. Returns whether a probe burst is in flight.
-    pub(super) fn feed_driver(&mut self, lp: &mut PumpLoop, clock_offset_ns: i64) -> bool {
-        // Where the monotonic clock stops while the device sleeps, waking reads as a forward
-        // step of the sleep's length.
-        let mono_ns = lp.session_start.elapsed().as_nanos() as i128;
-        lp.abr
-            .on_clock(now_realtime_ns() - mono_ns + i128::from(clock_offset_ns));
+    /// Read what the feed hears this iteration and tick it. The control task's events are
+    /// drained once, first; every read precedes the tick, in the order the driver hears it.
+    /// Returns whether a probe burst is in flight, and the tick.
+    pub(super) fn feed_driver(&mut self, lp: &mut PumpLoop, clock_offset_ns: i64) -> (bool, Tick) {
         let events = drain_events(&self.events);
         // Re-sync invalidates the staleness run under the old offset.
         if events.resynced {
@@ -76,26 +51,16 @@ impl DataPump {
         if events.resync_rejected {
             lp.standing_lat.resync_rejected();
         }
-        // Drain here, not at the report tick, so the in-flight window
-        // (the one the rebuild corrupted) is the one we can still drop.
-        if let Some(gap_ms) = events.gap_ms {
-            lp.abr.on_pipeline_gap(gap_ms);
-        }
         // Mirror drop/FEC counters every iteration, not only on a
         // produced frame — a total-loss drought completes no AU.
         let st = self.session.stats();
-        lp.abr.on_stats(&st);
-        lp.abr.on_loss_positions(self.session.take_loss_positions());
-        let host = *self.shared.host_link.lock().unwrap();
-        if host != lp.host_link {
-            lp.host_link = host;
-            lp.abr
-                .set_ports(host.facts(), *self.shared.client_link.lock().unwrap());
-        }
+        let loss_positions = self.session.take_loss_positions();
+        let host_link = *self.shared.host_link.lock().unwrap();
+        let client_link = *self.shared.client_link.lock().unwrap();
         // One syscall per sample: often enough for a window, rare enough for the hot loop. The
         // receiver's drops are the kernel socket's, where the OS keeps a figure, and the demux
         // queue's.
-        if lp.sock_read.elapsed() >= Duration::from_millis(100) {
+        let sock_drops = (lp.sock_read.elapsed() >= Duration::from_millis(100)).then(|| {
             lp.sock_read = Instant::now();
             let kernel = self
                 .shared
@@ -111,18 +76,11 @@ impl DataPump {
                 .unwrap()
                 .as_ref()
                 .map_or(0, |s| s.media_dropped.load(Ordering::Relaxed));
-            lp.abr.on_sock_drops(kernel.unwrap_or(0) + demux);
-        }
+            kernel.unwrap_or(0) + demux
+        });
         // One delay sample per frame that opened since the last iteration,
-        // whether or not it ever completed. Same offset and same sign test
-        // as a completed AU's; without an offset there is no delay to read,
-        // but the samples are still drained.
-        for (pts_ns, raw_ns) in self.session.take_shard_delays() {
-            let owd_ns = i128::from(raw_ns) + i128::from(clock_offset_ns);
-            if clock_offset_ns != 0 && owd_ns > 0 {
-                lp.abr.on_shard_owd(pts_ns, owd_ns);
-            }
-        }
+        // whether or not it ever completed.
+        let shard_delays = self.session.take_shard_delays().collect();
         lp.watch_ingress(&st);
         self.shared
             .frames_dropped
@@ -131,36 +89,38 @@ impl DataPump {
             .fec_recovered
             .store(st.fec_recovered_shards, Ordering::Relaxed);
         let (probe_active, probe_duration_ms, probe_report) = self.mirror_probe(&st);
-        lp.abr
-            .on_probe_active(probe_active, probe_duration_ms, Instant::now());
-        if let Some(r) = probe_report {
-            lp.abr.on_probe_result(r, Instant::now());
-        }
         if let Some(m) = events.mode {
-            lp.abr.on_mode_switch(m.width, m.height, m.refresh_hz);
             self.shared
                 .feedback
                 .lock()
                 .unwrap_or_else(|e| e.into_inner())
                 .set_refresh(m.refresh_hz);
         }
-        for (acked, why) in events.acks {
-            lp.abr.on_ack(acked, why);
-        }
         // Drain even when the controller is off, so the accumulators
         // stay bounded and no count leaks into a later window.
         let dec = std::mem::take(&mut *self.shared.decode_lat.lock().unwrap());
-        lp.abr.on_decode_latency(dec.sum_us, dec.count);
         let enc = std::mem::take(&mut *self.encode_lat.lock().unwrap());
-        lp.abr.on_encode_latency(enc.sum_us, enc.count);
-        for t in &enc.timings {
-            lp.abr.on_host_timing(t);
-        }
-        lp.abr
-            .on_keyframe_asks(self.shared.recovery_kf.swap(0, Ordering::Relaxed));
-        lp.abr
-            .on_starved_keyframe_asks(self.shared.starved_kf.swap(0, Ordering::Relaxed));
-        probe_active
+        let tick = lp.feed.tick(Inputs {
+            clock_offset_ns,
+            gap_ms: events.gap_ms,
+            stats: st,
+            loss_positions,
+            host_link,
+            client_link,
+            sock_drops,
+            shard_delays,
+            probe_active,
+            probe_duration_ms,
+            probe_report,
+            mode: events.mode,
+            acks: events.acks,
+            decode_lat: (dec.sum_us, dec.count),
+            encode_lat: (enc.sum_us, enc.count),
+            host_timings: enc.timings,
+            keyframe_asks: self.shared.recovery_kf.swap(0, Ordering::Relaxed),
+            starved_keyframe_asks: self.shared.starved_kf.swap(0, Ordering::Relaxed),
+        });
+        (probe_active, tick)
     }
 
     /// Copy the session's probe counters into the shared [`ProbeState`].
@@ -323,7 +283,7 @@ impl DataPump {
                 .draining
                 .store(window.sample.sock_drops > 0, Ordering::Relaxed);
         }
-        let abr = &lp.abr;
+        let abr = &lp.feed.driver;
         // Published at the first window, not the moment the ramp
         // stopped: the rate it opened at is the one the host acked,
         // and that ack is still in flight while the ramp finishes.
@@ -350,20 +310,7 @@ impl DataPump {
             if q.len() == ABR_TRAJECTORY_WINDOWS {
                 q.pop_front();
             }
-            q.push_back(crate::abr::WindowRecord {
-                t_ms: window
-                    .sample
-                    .now
-                    .duration_since(lp.session_start)
-                    .as_millis() as u64,
-                // The rate the window ran at: the ask has not been
-                // acked yet, so it is not this window's rate.
-                rate_kbps: abr.target_kbps(),
-                request_kbps,
-                sample: window.sample,
-                discarded: window.discarded,
-                reason: abr.reason(),
-            });
+            q.push_back(lp.feed.record(&window, request_kbps));
         }
         // No-op clock flush suspected a wall-clock step: re-sync
         // once. The 60 s periodic covers everything else.
@@ -414,15 +361,17 @@ impl DataPump {
         // The overlay names why Automatic sits low; the cut
         // stands until the host grants a climb.
         self.shared.rate_cut.store(
-            lp.abr
+            lp.feed
+                .driver
                 .last_cut()
                 .and_then(crate::hud::RateCut::of_reason)
                 .map_or(0, |c| c as u8),
             Ordering::Relaxed,
         );
-        self.shared
-            .quality_floor_kbps
-            .store(lp.abr.quality_floor().unwrap_or(0), Ordering::Relaxed);
+        self.shared.quality_floor_kbps.store(
+            lp.feed.driver.quality_floor().unwrap_or(0),
+            Ordering::Relaxed,
+        );
         if let Some(perf) = lp.perf.as_mut() {
             if let Some(p) = self.session.take_pump_perf() {
                 let per_pkt_ns = |ns: u64| ns.checked_div(p.packets).unwrap_or(0);
@@ -442,14 +391,6 @@ impl DataPump {
             perf.log_and_clear();
         }
     }
-}
-
-/// A positive `u32` from the environment. Unset, zero or garbage is `None`.
-fn env_u32(key: &str) -> Option<u32> {
-    std::env::var(key)
-        .ok()
-        .and_then(|v| v.trim().parse::<u32>().ok())
-        .filter(|&v| v > 0)
 }
 
 /// The control task's events since the last iteration, folded the way the pump applies them.

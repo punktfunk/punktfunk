@@ -3,8 +3,8 @@
 //!
 //! Dedicated user-interactive thread. Newest-frame drop on embedder lag.
 //! [`FLAG_PROBE`] filler never enters the decoder. The ABR window is
-//! assembled by [`crate::abr::Driver`]: [`abr_feed`] feeds it events and
-//! sends what it asks for. [`recovery_asks`] asks for what a short frame lost.
+//! assembled by [`crate::abr::feed::Feed`]: [`abr_feed`] reads what it hears
+//! and sends what it asks for. [`recovery_asks`] asks for what a short frame lost.
 
 use super::super::*;
 use super::*;
@@ -75,8 +75,8 @@ const HOLD_MAX: usize = 16;
 
 /// What one pump run carries from iteration to iteration.
 struct PumpLoop {
-    abr: crate::abr::Driver,
-    session_start: Instant,
+    /// Each frame goes to its driver here; the rest in [`DataPump::feed_driver`].
+    feed: crate::abr::feed::Feed,
     jump: JumpToLive,
     /// Loss-free OWD elevation the jump detectors tolerate (< QUEUE_HIGH,
     /// < FLUSH_LATENCY). Otherwise it reads as permanent extra latency.
@@ -96,8 +96,6 @@ struct PumpLoop {
     last_epoch: Option<u8>,
     /// When the socket's drop count was last read.
     sock_read: Instant,
-    /// The host's facts the driver last had: its `StreamConfig` moves them.
-    host_link: crate::quic::HostLink,
     /// `PUNKTFUNK_PERF`: recv/decrypt/reassemble split plus AU inter-arrival
     /// jitter. Jump-to-live only fires after the stream is already behind.
     perf: Option<PerfWindow>,
@@ -186,10 +184,8 @@ impl DataPump {
         self.shared
             .frames
             .set_all_intra(self.negotiated_codec == crate::quic::CODEC_PYROWAVE);
-        let session_start = Instant::now();
         let mut lp = PumpLoop {
-            abr: self.driver(session_start),
-            session_start,
+            feed: self.feed(Instant::now()),
             jump: JumpToLive::new(),
             standing_lat: StandingLatency::new(),
             rx_gap: super::rx_gap::RxGap::new(Instant::now()),
@@ -199,7 +195,6 @@ impl DataPump {
             awaiting_idr: false,
             last_epoch: None,
             sock_read: Instant::now(),
-            host_link: Default::default(),
             perf: std::env::var("PUNKTFUNK_PERF")
                 .is_ok_and(|v| v != "0")
                 .then(PerfWindow::default),
@@ -208,9 +203,8 @@ impl DataPump {
             // Reloaded every iteration so a mid-stream re-sync hits the
             // next frame's latency math.
             let clock_offset_ns = self.shared.clock_offset.load(Ordering::Relaxed);
-            let probe_active = self.feed_driver(&mut lp, clock_offset_ns);
-            let tick = lp.abr.tick(Instant::now());
-            let request_kbps = self.dispatch(&mut lp.abr, tick.actions);
+            let (probe_active, tick) = self.feed_driver(&mut lp, clock_offset_ns);
+            let request_kbps = self.dispatch(&mut lp.feed.driver, tick.actions);
             if let Some(window) = tick.window {
                 self.close_window(&mut lp, window, request_kbps);
             }
@@ -321,7 +315,8 @@ impl DataPump {
         if is_au {
             self.on_anchors = frame.flags & crate::packet::USER_FLAG_RECOVERY_ANCHOR != 0;
             // Repeats are the host's idle keepalive, not new content.
-            lp.abr
+            lp.feed
+                .driver
                 .on_au(frame.flags & crate::packet::USER_FLAG_REPEAT != 0);
             if let Some(perf) = lp.perf.as_mut() {
                 perf.note_au(Instant::now());
@@ -443,7 +438,7 @@ impl DataPump {
         // Mean capture→received delay. Rising delay under
         // zero loss is queue growth — the pre-loss signal.
         if clock_offset_ns != 0 && lat_ns > 0 {
-            lp.abr.on_owd(frame.pts_ns, lat_ns);
+            lp.feed.driver.on_owd(frame.pts_ns, lat_ns);
             // Window MINIMUM, not mean: a standing state
             // elevates the floor. 10 s clamp matches hn stats.
             if lat_ns < 10_000_000_000 {
@@ -464,7 +459,7 @@ impl DataPump {
             "receive backlog stopped draining — jumped to live (flush + keyframe)"
         );
         let shed = lp.jump.after_flush(trip, flushed, dropped);
-        shed.tell(trip, &mut lp.abr);
+        shed.tell(trip, &mut lp.feed.driver);
         match shed {
             Shed::Noop { disarmed: false } => {}
             Shed::Noop { disarmed: true } => tracing::warn!(

@@ -2,8 +2,8 @@
 //!
 //! [`Driver`] is the whole of it: events in — a completed AU, a stats
 //! snapshot, a latency sample, an ack — and actions out of [`Driver::tick`].
-//! An embedder owns no policy, so two clients cannot drift apart. The pump
-//! runs it on the 750 ms cadence of the client's feedback window;
+//! An embedder owns no policy, so two clients cannot drift apart: each runs it
+//! through [`feed`](crate::abr::feed), on the 750 ms cadence of the client's feedback window;
 //! FEC absorbs short random loss, and the controller asks the host for a
 //! different encoder rate via [`crate::quic::SetBitrate`] when congestion
 //! persists.
@@ -26,6 +26,7 @@ mod sim;
 pub mod budget;
 mod cap;
 mod controller;
+pub mod feed;
 pub mod governor;
 mod growth;
 #[cfg(test)]
