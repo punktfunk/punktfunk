@@ -224,7 +224,20 @@ const HostRow: FC<{ host: HostView; refresh: () => void }> = ({ host, refresh })
           <ButtonItem
             layout="below"
             onClick={() => void startStream(host, { profileId: p.id }, p.display_name)}
-            label={`● ${p.display_name}`}
+            label={
+              <span style={{ display: "inline-flex", alignItems: "center", gap: "0.4em" }}>
+                {p.picture ? (
+                  <img
+                    src={p.picture}
+                    alt=""
+                    style={{ width: "1.2em", height: "1.2em", borderRadius: "50%", objectFit: "cover" }}
+                  />
+                ) : (
+                  "●"
+                )}
+                {p.display_name}
+              </span>
+            }
             description={p.note ?? undefined}
           >
             <FaPlay style={{ marginRight: "0.5em" }} />

@@ -951,8 +951,9 @@ class Plugin:
     async def profiles(self, ref: str) -> dict:
         """Who plays on the host (``punktfunk profiles <host-ref> --json``).
 
-        ``{ok: True, profiles: [{id, display_name, accent, owner, note}], picked}``. A host
-        without profiles answers ``unresolved``, which the panel reads as "no chips"."""
+        ``{ok: True, profiles: [{id, display_name, accent, owner, note, picture}], picked}``,
+        a picture being a data URL or null. A host without profiles answers ``unresolved``,
+        which the panel reads as "no chips"."""
         ref = str(ref).strip()
         if not ref or ref.startswith("-"):
             return {"ok": False, "error": "unresolved", "detail": "bad host reference"}
