@@ -182,6 +182,12 @@ dependencies {
 // images, not to diff goldens, so always capture rather than verify.
 tasks.withType<Test>().configureEach {
     systemProperty("roborazzi.test.record", "true")
+    // Maven Central limits Robolectric's 213 MB runtime jar per IP, and every CI job fetches it
+    // from one address. Google's mirror serves the same artifact.
+    systemProperty(
+        "robolectric.dependency.repo.url",
+        "https://maven-central.storage-download.googleapis.com/maven2",
+    )
     // Robolectric 4.17's FileDescriptor shadow reads the JDK's SharedSecrets, which java.base does
     // not export to the unnamed module.
     jvmArgs("--add-exports=java.base/jdk.internal.access=ALL-UNNAMED")
