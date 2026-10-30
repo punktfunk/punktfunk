@@ -401,11 +401,16 @@ fn note_client_mismatch(h: &HookEntry, ev: &crate::events::EventKind, kind: &str
     }
 }
 
+/// Fires every hook `ev` matches, and the env-var mirrors. A seat's event fires none: it is on
+/// this bus for the plugins, and hooks run on this host's own.
 fn dispatch(
     ev: &crate::events::HostEvent,
     sem: &std::sync::Arc<tokio::sync::Semaphore>,
     debounce: &mut HashMap<u64, Instant>,
 ) {
+    if ev.seat.is_some() {
+        return;
+    }
     let kind = ev.kind.name();
     let cfg = store().get();
     for h in &cfg.hooks {

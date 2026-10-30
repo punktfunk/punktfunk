@@ -48,8 +48,9 @@ pub(crate) struct Prepared {
 /// knows whether this session spawns: reprieve this client's copy left from a dropped
 /// session, claim and name the launch record, wait for a title that isn't installed to
 /// download, run the prep steps (HDR toggle, sink switch), then hold `game.launching` when
-/// this session will spawn. `gone` reports the session ending during the wait. Blocking:
-/// prep and holds run operator code, and a download takes as long as it takes.
+/// this session will spawn, a seat's saves crossing to the owner's plugins and back around it.
+/// `gone` reports the session ending during the wait. Blocking: prep and holds run operator
+/// code, and a download takes as long as it takes.
 pub(crate) fn prepare(
     target: Option<&LaunchTarget>,
     owner: &LaunchOwner,
@@ -89,6 +90,7 @@ pub(crate) fn prepare(
     }
     let prep = (!prep.is_empty()).then(|| crate::hooks::run_prep(prep, prep_env));
     if let Some(t) = target.filter(|_| claim.as_ref().is_some_and(|c| c.must_spawn())) {
+        crate::emulators::exchange::before_hold(t.game.id.as_deref());
         crate::holds::launching(crate::events::GameRefPayload {
             app: t.game.id.clone(),
             title: t.game.title.clone(),
@@ -99,6 +101,7 @@ pub(crate) fn prepare(
             preset: owner.preset.clone(),
             profile: owner.profile.clone(),
         });
+        crate::emulators::exchange::after_hold(t.game.id.as_deref());
         // After the holds: they stage the firmware this places.
         if let Some(id) = t.game.id.as_deref() {
             crate::emulators::prepare_launch(id, owner.pad, owner.pad_slots.as_deref());

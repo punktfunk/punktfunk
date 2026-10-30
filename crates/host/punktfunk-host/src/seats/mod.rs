@@ -475,8 +475,17 @@ pub(crate) fn forward(
     seat: &pf_seats::Seat,
     call: crate::mgmt::owner::Forwarded,
 ) -> Option<crate::mgmt::owner::Answer> {
+    forward_within(seat, call, PROXY_TIMEOUT)
+}
+
+/// [`forward`], answered within `timeout` rather than [`PROXY_TIMEOUT`].
+pub(crate) fn forward_within(
+    seat: &pf_seats::Seat,
+    call: crate::mgmt::owner::Forwarded,
+    timeout: Duration,
+) -> Option<crate::mgmt::owner::Answer> {
     use crate::mgmt::owner::Answer;
-    let timeout = (!call.stream).then_some(PROXY_TIMEOUT);
+    let timeout = (!call.stream).then_some(timeout);
     let client =
         crate::ctl::client::Client::seat(seat_pin(seat)?, &host_dir(seat), seat.mgmt_port, timeout)
             .ok()?;

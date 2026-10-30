@@ -39,6 +39,27 @@ describe("launch hold", () => {
 		expect(seen).toEqual(["steam:570 Docked"]);
 	});
 
+	test("hands the handler the whole event, a seat's included", async () => {
+		const seen: unknown[] = [];
+		const handle = makeHoldHandler({
+			"game.launching": (game, event) =>
+				Effect.sync(() => {
+					seen.push([game.title, event.seat, event.game.profile?.id]);
+				}),
+		});
+		const seat = {
+			...launching,
+			seat: "9a3f1c2b7e40",
+			hold: "c0ffee",
+			game: {
+				...launching.game,
+				profile: { id: "9a3f1c2b7e40", display_name: "Anna" },
+			},
+		};
+		expect((await handle(post(seat))).status).toBe(204);
+		expect(seen).toEqual([["Dota 2", "9a3f1c2b7e40", "9a3f1c2b7e40"]]);
+	});
+
 	test("refuses what is not a held stage", async () => {
 		const handle = makeHoldHandler({});
 		expect((await handle(post(launching))).status).toBe(404);

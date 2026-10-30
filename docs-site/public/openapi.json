@@ -1679,7 +1679,7 @@
           "emulators"
         ],
         "summary": "Check a platform's firmware",
-        "description": "Whether the best copy of the emulator has the platform's firmware, each file hashed against\nthe good dumps the catalog knows. `null` when the platform needs none.",
+        "description": "Whether the best copy of the emulator has the platform's firmware, each file hashed against\nthe good dumps the catalog knows. `null` when the platform needs none. With `profile`, that\nseat's copy; a Linux seat answers once its host has checked it at a launch.",
         "operationId": "getEmulatorFirmware",
         "parameters": [
           {
@@ -1696,6 +1696,15 @@
             "in": "query",
             "description": "A catalog platform id or alias, like `ps2`",
             "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "profile",
+            "in": "query",
+            "description": "A profile with a seat of its own: that seat's copies, on the host with the plugins",
+            "required": false,
             "schema": {
               "type": "string"
             }
@@ -1740,7 +1749,17 @@
             }
           },
           "404": {
-            "description": "Not in the catalog",
+            "description": "Not in the catalog, a profile with no seat, or a seat that hasn't checked it yet",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`profile` on a seat host",
             "content": {
               "application/json": {
                 "schema": {
@@ -2023,7 +2042,7 @@
           "emulators"
         ],
         "summary": "List a platform's saves",
-        "description": "The save units of the platform on the best copy of the emulator: name, kind, size and a\nstamp that changes with the save. A plugin needs the operator's save grant.",
+        "description": "The save units of the platform on the best copy of the emulator: name, kind, size and a\nstamp that changes with the save. A plugin needs the operator's save grant. With `profile`,\nthat seat's units; a Linux seat's are what its host exported at its last launch or exit.",
         "operationId": "getEmulatorSaves",
         "parameters": [
           {
@@ -2048,6 +2067,15 @@
             "name": "game",
             "in": "query",
             "description": "The game's folder, for an emulator that keeps saves beside its games",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "profile",
+            "in": "query",
+            "description": "A profile with a seat of its own: that seat's copies, on the host with the plugins",
             "required": false,
             "schema": {
               "type": "string"
@@ -2099,7 +2127,17 @@
             }
           },
           "404": {
-            "description": "Not in the catalog",
+            "description": "Not in the catalog, or a profile with no seat",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`profile` on a seat host",
             "content": {
               "application/json": {
                 "schema": {
@@ -2117,7 +2155,7 @@
           "emulators"
         ],
         "summary": "Copy saves out",
-        "description": "Writes each named unit into `dir`: the save file, or a tar of a save folder with nothing in\nits headers that differs between machines. A plugin's `dir` is inside its own state folder.",
+        "description": "Writes each named unit into `dir`: the save file, or a tar of a save folder with nothing in\nits headers that differs between machines. A plugin's `dir` is inside its own state folder.\nWith `profile`, that seat's units; a Linux seat's files are its host's last export, and a\nunit it didn't export is left out.",
         "operationId": "exportEmulatorSaves",
         "parameters": [
           {
@@ -2125,6 +2163,15 @@
             "in": "path",
             "description": "The catalog id",
             "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "profile",
+            "in": "query",
+            "description": "A profile with a seat of its own: that seat's copies, on the host with the plugins",
+            "required": false,
             "schema": {
               "type": "string"
             }
@@ -2185,7 +2232,17 @@
             }
           },
           "404": {
-            "description": "Not in the catalog",
+            "description": "Not in the catalog, or a profile with no seat",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`profile` on a seat host",
             "content": {
               "application/json": {
                 "schema": {
@@ -2203,7 +2260,7 @@
           "emulators"
         ],
         "summary": "Put saves back",
-        "description": "Each unit goes where the emulator keeps it, in the first of its kinds with a place for its\nname; what was there is kept in hermir's save backups. A unit with no place yet is a step\nthat says so. A plugin's files are inside its own state folder.",
+        "description": "Each unit goes where the emulator keeps it, in the first of its kinds with a place for its\nname; what was there is kept in hermir's save backups. A unit with no place yet is a step\nthat says so. A plugin's files are inside its own state folder. With `profile`, into that\nseat's copies; a Linux seat's host puts each back before its next game starts, and the step\nsays so.",
         "operationId": "importEmulatorSaves",
         "parameters": [
           {
@@ -2211,6 +2268,15 @@
             "in": "path",
             "description": "The catalog id",
             "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "profile",
+            "in": "query",
+            "description": "A profile with a seat of its own: that seat's copies, on the host with the plugins",
+            "required": false,
             "schema": {
               "type": "string"
             }
@@ -2271,7 +2337,17 @@
             }
           },
           "404": {
-            "description": "Not in the catalog",
+            "description": "Not in the catalog, or a profile with no seat",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`profile` on a seat host",
             "content": {
               "application/json": {
                 "schema": {
@@ -2367,7 +2443,7 @@
           "events"
         ],
         "summary": "Relay an event from the box's door",
-        "description": "The door pairs and places, so `pairing.*`, `access.*`, `host.*`, `action.*` and `update.*`\nhappen there; this host's hooks run on them from here. Admin lane only: the door holds this\nhost's token. The event joins this host's bus as new.",
+        "description": "The door pairs and places, so `pairing.*`, `access.*`, `host.*`, `action.*` and `update.*`\nhappen there; this host's hooks run on them from here. A seat's `game.*` keeps its `seat`:\nthis host's plugins hear it, its hooks don't, and a `game.launching` with a `hold` answers\nonce the plugins that hold the stage are done. Admin lane only: the door holds this host's\ntoken. The event joins this host's bus as new.",
         "operationId": "relayEvent",
         "requestBody": {
           "content": {
@@ -2381,7 +2457,7 @@
         },
         "responses": {
           "202": {
-            "description": "The event is on this host's bus"
+            "description": "The event is on this host's bus, and a seat's held launch is through this host's plugins"
           },
           "400": {
             "description": "Not a host event",
@@ -2457,6 +2533,52 @@
           },
           "409": {
             "description": "No game in reach to end",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/game/holds/{token}/release": {
+      "post": {
+        "tags": [
+          "session"
+        ],
+        "summary": "Release a seat's held launch",
+        "description": "A seat host runs no plugins, so its `game.launching` carries a `hold` token and the launch\nwaits, up to the longest plugin hold plus 10 s, for the host with the plugins to call this\nonce they are done. Admin lane only: the door, or the Windows box host, holds the token.",
+        "operationId": "releaseGameHold",
+        "parameters": [
+          {
+            "name": "token",
+            "in": "path",
+            "description": "The `hold` of the seat's `game.launching`",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "The launch goes ahead"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No launch waits on that token",
             "content": {
               "application/json": {
                 "schema": {
@@ -5895,6 +6017,7 @@
           "profiles"
         ],
         "summary": "List the profiles with what the console manages",
+        "description": "On the plugin lane each row is `id`, `display_name` and `avatar` alone.",
         "operationId": "listProfiles",
         "responses": {
           "200": {
@@ -11315,6 +11438,10 @@
             "properties": {
               "game": {
                 "$ref": "#/components/schemas/GameRefPayload"
+              },
+              "hold": {
+                "type": "string",
+                "description": "On a seat host, which runs no plugins: the launch also waits for the host with the\nplugins to `POST /game/holds/{hold}/release`. Absent everywhere else."
               },
               "kind": {
                 "type": "string",

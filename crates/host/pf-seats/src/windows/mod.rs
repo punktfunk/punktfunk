@@ -68,6 +68,12 @@ pub struct WindowsBackend {
     stopped: Arc<AtomicBool>,
 }
 
+/// The profile folder of the local account `account`, where its own emulator data lives. `None`
+/// for an account that doesn't exist or never signed in.
+pub fn account_profile(account: &str) -> Option<PathBuf> {
+    steam::profile_dir(&accounts::sid_string(account)?)
+}
+
 /// Whether seats are on: the Seats key exists and no turn-on is unfinished, read through the
 /// 64-bit registry view.
 pub fn seats_enabled() -> bool {

@@ -69,6 +69,28 @@ pub enum Command {
         id: SeatId,
         password: Secret,
     },
+    /// Linux: Flathub's app `id`, installed for every account on the box. The box owner may
+    /// send it too.
+    InstallFlatpak {
+        id: String,
+    },
+    /// Linux: a box-wide Flatpak app removed; `purge` deletes root's data of it too. The box
+    /// owner may send it too.
+    RemoveFlatpak {
+        id: String,
+        purge: bool,
+    },
+}
+
+/// A Flatpak app id the supervisor hands to `flatpak`: reverse-DNS, `[A-Za-z0-9._-]`, at least
+/// one dot, at most 255 bytes, and no leading `-`, which `flatpak` would read as an option.
+pub fn valid_flatpak_id(id: &str) -> bool {
+    id.len() <= 255
+        && id.contains('.')
+        && !id.starts_with('-')
+        && id
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'))
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -89,14 +111,36 @@ impl Request {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum CommandResult {
-    List { seats: Vec<Seat> },
-    Created { seat: Seat },
-    Started { seat: Seat },
-    Stopped { seat: Seat },
-    Deleted { id: SeatId },
-    Doctor { report: DoctorReport },
-    Seating { status: SeatingStatus },
-    Resealed { seat: Seat },
+    List {
+        seats: Vec<Seat>,
+    },
+    Created {
+        seat: Seat,
+    },
+    Started {
+        seat: Seat,
+    },
+    Stopped {
+        seat: Seat,
+    },
+    Deleted {
+        id: SeatId,
+    },
+    Doctor {
+        report: DoctorReport,
+    },
+    Seating {
+        status: SeatingStatus,
+    },
+    Resealed {
+        seat: Seat,
+    },
+    /// A box-wide Flatpak change done: the app's version now, `None` once removed.
+    Flatpak {
+        id: String,
+        #[serde(default)]
+        version: Option<String>,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -266,8 +310,23 @@ where
     B: PlatformBackend,
     S: Read + Write,
 {
+    answer_if(service, stream, |_| true)
+}
+
+/// [`answer`] for a peer that may send only the commands `admit` passes. Any other is closed
+/// unanswered, as a peer that may send nothing is.
+pub fn answer_if<B, S>(
+    service: &SeatService<B>,
+    stream: &mut S,
+    admit: impl FnOnce(&Command) -> bool,
+) -> Result<(), FrameError>
+where
+    B: PlatformBackend,
+    S: Read + Write,
+{
     let response = match read_json_frame::<_, Request>(stream) {
         Err(error) => Response::error(frame_api_error(&error)),
+        Ok(request) if !admit(&request.command) => return Ok(()),
         Ok(request) if request.schema_version != CONTROL_SCHEMA_VERSION => {
             Response::error(ApiError::new(
                 ErrorCode::SchemaVersion,
@@ -406,6 +465,78 @@ mod tests {
         );
     }
 
+    /// The Flatpak commands and their answer as the box host and the supervisor share them.
+    #[test]
+    fn the_flatpak_frames_round_trip() {
+        for (command, wire) in [
+            (
+                Command::InstallFlatpak {
+                    id: "net.pcsx2.PCSX2".into(),
+                },
+                r#"{"type":"install_flatpak","id":"net.pcsx2.PCSX2"}"#,
+            ),
+            (
+                Command::RemoveFlatpak {
+                    id: "org.DolphinEmu.dolphin-emu".into(),
+                    purge: true,
+                },
+                r#"{"type":"remove_flatpak","id":"org.DolphinEmu.dolphin-emu","purge":true}"#,
+            ),
+        ] {
+            assert_eq!(serde_json::to_string(&command).unwrap(), wire);
+            assert_eq!(serde_json::from_str::<Command>(wire).unwrap(), command);
+        }
+        let done = CommandResult::Flatpak {
+            id: "net.pcsx2.PCSX2".into(),
+            version: Some("v2.2.0".into()),
+        };
+        let wire = r#"{"kind":"flatpak","id":"net.pcsx2.PCSX2","version":"v2.2.0"}"#;
+        assert_eq!(serde_json::to_string(&done).unwrap(), wire);
+        let removed: CommandResult =
+            serde_json::from_str(r#"{"kind":"flatpak","id":"a.b"}"#).unwrap();
+        assert_eq!(
+            removed,
+            CommandResult::Flatpak {
+                id: "a.b".into(),
+                version: None
+            }
+        );
+    }
+
+    /// Only a reverse-DNS name reaches `flatpak`: nothing it reads as an option, a path, a
+    /// remote or a second argument.
+    #[test]
+    fn a_flatpak_id_is_a_reverse_dns_name() {
+        for good in [
+            "net.pcsx2.PCSX2",
+            "org.DolphinEmu.dolphin-emu",
+            "info.cemu.Cemu",
+            "io.github.ryubing_.Ryujinx",
+            "a.b",
+        ] {
+            assert!(valid_flatpak_id(good), "{good}");
+        }
+        let long = format!("a.{}", "b".repeat(253));
+        assert!(valid_flatpak_id(&long));
+        let too_long = format!("a.{}", "b".repeat(254));
+        for bad in [
+            "",
+            "PCSX2",
+            "-y.evil",
+            "--from=x.y",
+            "net.pcsx2.PCSX2 org.evil.App",
+            "flathub:net.pcsx2.PCSX2",
+            "../../etc.passwd",
+            "net/pcsx2.PCSX2",
+            "net.pcsx2.PCSX2\n",
+            "net.pcsx2.PCSX2;",
+            "nét.pcsx2.PCSX2",
+            too_long.as_str(),
+        ] {
+            assert!(!valid_flatpak_id(bad), "{bad:?}");
+        }
+    }
+
     /// One duplex stream for [`answer`]: reads from `input`, writes to `output`.
     struct Duplex {
         input: Cursor<Vec<u8>>,
@@ -504,5 +635,30 @@ mod tests {
             panic!("a bad frame is refused")
         };
         assert_eq!(error.code, ErrorCode::MalformedFrame);
+    }
+
+    /// A command the peer may not send gets no answer at all; one it may is served.
+    #[test]
+    fn a_command_the_peer_may_not_send_is_closed_unanswered() {
+        let temp = tempfile::tempdir().unwrap();
+        let service = SeatService::open(temp.path(), crate::UnsupportedBackend).unwrap();
+        let flatpaks_only = |c: &Command| matches!(c, Command::InstallFlatpak { .. });
+        let run = |command: Command| {
+            let mut frame = Vec::new();
+            write_json_frame(&mut frame, &Request::new(command)).unwrap();
+            let mut stream = Duplex {
+                input: Cursor::new(frame),
+                output: Vec::new(),
+            };
+            answer_if(&service, &mut stream, flatpaks_only).unwrap();
+            stream.output
+        };
+        assert!(run(Command::List).is_empty());
+        let answered = run(Command::InstallFlatpak { id: "a.b".into() });
+        let Response::Error { error, .. } = read_json_frame(&mut Cursor::new(answered)).unwrap()
+        else {
+            panic!("no platform installs Flatpaks here")
+        };
+        assert_eq!(error.code, ErrorCode::Backend);
     }
 }

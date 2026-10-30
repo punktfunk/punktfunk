@@ -43,6 +43,48 @@ async fn the_cert_lane_reads_profiles_but_never_edits_them() {
     assert_eq!(send_cert(&app, create, fp).await, StatusCode::UNAUTHORIZED);
 }
 
+/// A plugin reads each profile's id, name and picture, and nothing of seats, devices or
+/// defaults the console's list carries.
+#[tokio::test]
+async fn a_plugin_reads_who_is_on_the_box_and_nothing_more() {
+    let app = test_app(state_with_profiles("plugin"), None);
+    let req = with_bearer(get_req("/api/v1/profiles"), "plugin-secret");
+    let (status, list) = send(&app, req).await;
+    assert_eq!(status, StatusCode::OK, "{list}");
+    let rows = list.as_array().unwrap();
+    assert_eq!(rows.len(), 1);
+    let keys: Vec<&str> = rows[0]
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(|k| k.as_str())
+        .collect();
+    assert_eq!(keys, ["display_name", "id"], "{list}");
+}
+
+/// `?profile=` points the save routes at that profile's seat: one with none here, the owner's
+/// included, is 404 before any copy or file is touched.
+#[tokio::test]
+async fn a_save_route_for_a_profile_without_a_seat_is_404() {
+    let state = state_with_profiles("saves");
+    let owner = state.profiles.get().unwrap().owner_id().unwrap();
+    let app = test_app(state, None);
+    for profile in ["nobody", owner.as_str()] {
+        let q = format!("platform=ps2&profile={profile}");
+        for path in ["saves", "firmware"] {
+            let req = get_req(&format!("/api/v1/emulators/pcsx2/{path}?{q}"));
+            let (status, body) = send(&app, req).await;
+            assert_eq!(status, StatusCode::NOT_FOUND, "{path} {profile}: {body}");
+        }
+        let dir = crate::test_support::scratch().join("pf-mgmt-saves-never-made");
+        let body = serde_json::json!({"platform": "ps2", "units": [], "dir": dir});
+        let path = format!("/api/v1/emulators/pcsx2/saves/export?profile={profile}");
+        let (status, _) = send(&app, json_req(Method::POST, &path, body)).await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "export {profile}");
+        assert!(!dir.exists(), "no folder made for a seat that isn't there");
+    }
+}
+
 /// A paired device wakes the profile it lands in when it names none; another profile's seat
 /// needs the launch grant. The console wakes any.
 #[tokio::test]

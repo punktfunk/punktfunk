@@ -381,6 +381,8 @@ pub(crate) fn plugin_may_access(method: &Method, path: &str) -> bool {
         (&Method::GET, "/api/v1/local/summary"),
         (&Method::GET, "/api/v1/compositors"),
         (&Method::GET, "/api/v1/events"),
+        // Who is on the box: id, name and picture alone, by the handler.
+        (&Method::GET, "/api/v1/profiles"),
         // Rosters, read-only. DELETE is pairing admin — not listed.
         (&Method::GET, "/api/v1/clients"),
         (&Method::GET, "/api/v1/native/clients"),

@@ -148,7 +148,7 @@ them together. The host logs a warning at startup for each one that is set and i
 | `PUNKTFUNK_SEAT_DISPLAY_SLOT` | `12`–`15` | The seat's connector. Not a number, out of range, or the marker absent: the host refuses every virtual-display session. |
 | `PUNKTFUNK_TRUST_DIR` | the box's config directory | The seat reads the box's pairing store, `profiles.json`, per-device display overlays and `seat-defaults.json` from here, read only, and follows their changes. A relative path is ignored. |
 | `PUNKTFUNK_PAIRING` | `refused` | Devices pair with the box. A knock is refused and no PIN window opens. A seat host refuses pairing with or without it. |
-| `PUNKTFUNK_LIBRARY_DIR` | Windows: the box's config directory. Linux: the seat's trust copy, on every seat but the owner's | The seat reads the box's library from here, read only: `library*.json`, `library-metadata/` and, on Windows, the plugin manifests and grants its entries launch through. Play stats stay in the seat's own directory. A relative path is ignored. |
+| `PUNKTFUNK_LIBRARY_DIR` | Windows: the box's config directory. Linux: the seat's trust copy, on every seat but the owner's | The seat reads the box's library from here, read only: `library*.json`, `library-metadata/`, the plugin grants and the firmware plugins staged; on Windows also the plugin manifests its entries launch through and the managed emulators. Play stats stay in the seat's own directory. A relative path is ignored. |
 | `PUNKTFUNK_SEAT_STEAM` | the seat's own `steam.exe` (Windows only, when the box has Steam) | Steam runs once per IPC name per machine, so a seat starts Steam from here only, always with `-master_ipc_name_override pfseat<seat id>`. The supervisor copies the box's client into the seat account's profile at the seat's first start; until the file exists, the seat's Steam titles don't start. Unset or relative: no Steam on the seat. |
 
 It also sets these ordinary [host settings](/docs/configuration), so seats don't collide. A seat
@@ -198,11 +198,28 @@ session by design, and display activation fails while its session is inactive.
   host is the one that does them, and it ends the sessions on every seat first.
 - **The box's library, on Windows.** A Windows seat runs no plugins. It lists and launches the
   box's titles as its own user, and answers every library change with 409. Titles from sources
-  that belong to one account (Playnite, Game Bar, Amazon, itch, Hydra) are left out.
+  that belong to one account (Playnite, Game Bar, Amazon, itch, Hydra) are left out. It runs the
+  box's emulators from `%ProgramData%\punktfunk\emulators` with the firmware the box's plugins
+  staged. With seats on, an emulator installed from **Emulators** keeps each account's config and
+  saves in that account's profile; RPCS3, Snes9x and Supermodel keep theirs beside the program,
+  one set for every account. One installed while seats were off, or by an earlier version, keeps
+  one set for every account until it is reinstalled there. The box host tails each running
+  seat's `game.*` into its own bus, with `seat` naming the profile: its plugins hear them, its
+  hooks don't. A seat's held launch (below) runs the box host's plugins, which then release it.
+  The box host's save and firmware routes take `?profile=<id>` for a profile with a seat: they
+  read and write that seat account's copies, in its profile folder. A seat host answers 409.
 - **The box's library, on Linux.** The box's library is the owner's (see the owner's libraries
-  below). A seat other than the owner's lists and launches only its titles that start through
-  Steam, `steam_appid` with an id that fits 32 bits and `steam_ui`, with its own Steam, and
-  answers every library change with 409. Every other title starts from the owner's home.
+  below). A seat other than the owner's runs no plugins and lists and launches only what it can
+  start as its own user: `steam_appid` with an id that fits 32 bits and `steam_ui`, with its own
+  Steam, and `emulator`, with a copy it can run and a game file it can read. The owner's host
+  checked an `emulator` entry against its plugin at publish. The seat answers every library change
+  with 409. Every other title starts from the owner's home, or needs a manifest only that host has.
+  The owner's host installs a Flathub emulator box-wide through `install_flatpak`, so every seat
+  runs it with its own config and saves in `~/.var/app/<id>`. One the catalog ships another way
+  (RPCS3, shadPS4, Supermodel, Vita3K, Xenia Canary) stays the owner's, as does a Flatpak in the
+  owner's own installation until it is reinstalled from **Emulators**. At a launch the seat installs
+  the RetroArch core the entry names into its own RetroArch and places the firmware from its
+  library copy.
 - **One profile.** The seat serves the profile whose seat it is. A connect that names any other
   profile, the owner's included, is refused as an unknown profile; one that names none plays as
   this seat's profile. The owner's row alone also serves the owner and the profiles that share the
@@ -336,9 +353,17 @@ system-range user, `pf-seat-<n>`, with a logind session of its own, a headless c
 - **The socket.** `/run/punktfunk/seats.sock` (`0660 root:punktfunk-door`) carries the same frames
   and commands as the Windows pipe. The daemon makes the `punktfunk-door` group at start when no
   package has, so an update that restarts it first still opens the socket to the door. It answers
-  root and the `punktfunk` user, judged by the peer's credentials; any other peer is closed
-  unanswered. `enable` answers like `seating`, and `disable` is refused: seats are on while
-  the daemon runs. `punktfunk-seats list`, `create <name>`, `adopt-owner <user>`,
+  root and the `punktfunk` user, judged by the peer's credentials. Once the owner's row is
+  adopted, the owner's uid gets an ACL entry on the socket file and may send `install_flatpak`
+  and `remove_flatpak`, nothing else. Any other peer or command is closed unanswered. `enable`
+  answers like `seating`, and `disable` is refused: seats are on while the daemon runs.
+- **Box-wide Flatpaks.** `install_flatpak {id}` adds Flathub to the system installation when the
+  box lacks it and installs the app there, for every account; each user keeps its own data in
+  `~/.var/app/<id>`. `remove_flatpak {id, purge}` uninstalls it; `purge` deletes root's data of
+  it, never a seat's. Both answer `flatpak {id, version}`. An id is reverse-DNS: letters, digits,
+  `.`, `_` and `-`, at least one dot, at most 255 bytes, no leading `-`; any other is refused
+  before `flatpak` runs. A change holds no lock on the ledger, a client waits up to 30 minutes
+  for it, and one runs at a time: a second meanwhile answers `conflict`. `punktfunk-seats list`, `create <name>`, `adopt-owner <user>`,
   `start|stop|delete <id>`, `doctor` and `seating` send the same requests; `release-owner`
   deletes the owner's row and `stop-all` stops every live seat. `check-owner on|off <user>`
   sends none: it applies the switch rules below and prints `<uid> <home>` or `gone`.
@@ -366,9 +391,12 @@ system-range user, `pf-seat-<n>`, with a logind session of its own, a headless c
   From the owner's `~/.config/punktfunk` the daemon copies `library.json`,
   `library-hidden.json`, `library-metadata.json`, `library-picks.json`, `library-scanners.json`
   and `library-metadata/` to `library/`, `root:punktfunk` `0640`, within 2 seconds of a change,
-  and from there into each seat's trust copy. Play stats stay with each host. A config folder
-  it can't open, as in a home not mounted yet, leaves the copy as it was. Deleting the owner's
-  row deletes `library/`.
+  and from there into each seat's trust copy. `plugin-run/plugin-grants.json` goes with them, and
+  so does the firmware plugins staged, `plugin-state/<provider>/firmware/<platform>/<file>` at
+  exactly that depth, up to 1 GiB a file. Nothing else of `plugin-run` or `plugin-state` is read:
+  the plugins' tokens and sign-ins live there. A link, a file with a second link or one over its
+  cap is not copied. Play stats stay with each host. A config folder it can't open, as in a home
+  not mounted yet, leaves the copy as it was. Deleting the owner's row deletes `library/`.
 - **Games.** `games/steamapps/` is one library every seat writes (group `punktfunk-games`, setgid,
   default ACL). `games` is sticky and closed to other users, so only the group reads the tree and
   a seat can't replace `steamapps`. Each seat start checks the folders and replaces a link or
@@ -407,6 +435,30 @@ system-range user, `pf-seat-<n>`, with a logind session of its own, a headless c
   `common/SteamLinuxRuntime_*/*/files/.ref` and each `common/Proton*/dist.lock`. Without them a
   native game through the runtime or any Proton there fails with a read-only file system. A file
   that doesn't exist yet, such as the `dist.lock` of a Proton the owner never ran, stays read-only.
+- **Granted roots.** At each start every root the owner granted a plugin, read or write, as the
+  library copy's `plugin-grants.json` lists it, appears to the seat read-only at its own path, so
+  a ROM the library names opens on the seat. On btrfs, ext4, xfs and f2fs the unit mounts it
+  idmapped at its stage, as it does a library, and binds the stage there: the seat reads the
+  owner's files as the owner. Elsewhere (exFAT, NTFS, FUSE) it is a plain read-only bind, and
+  the seat reads what the files' modes let anyone read. A root in the owner's home is reached
+  through an empty folder over that home, which hides the rest of it from the seat. One under
+  `/run/media` shows inside the seat's empty `/run/media`: systemd mounts that first. A root is
+  skipped, with a line in the daemon's log, when it is gone or no folder, its path has a
+  character a unit file can't carry (`:`, `"`, `\`, `%`, `$` or a control character), it holds
+  the owner's home or `/var/lib/punktfunk-seats` or lies in the latter, it lies in a shown
+  library's `steamapps`, or the owner can't read it as themselves. A root inside another shows
+  with it. A root granted later reaches the seat at its next start.
+- **Save exchange.** Each seat has `seats/<id>/saves/out` and `saves/in`, the seat user's, mode
+  `0770`, with an ACL entry and a default one for the box owner's uid, so no other seat reaches
+  them. The daemon makes them at each start, sets the owner's entries for the owner row it knows
+  then, and keeps what is in them until the seat is deleted. At a launch of an `emulator` title,
+  before its hold, the seat host exports every unit of that emulator and platform into `out/` and
+  lists them, with the platform's firmware, in `out/units.json`. Once the hold is released it
+  puts back each `in/<name>` beside an `in/<name>.import.json` for that title, then empties
+  `in/`; when the game exits it exports what changed. The owner's host answers the save routes'
+  `?profile=` from there: it lists `units.json`, copies a unit's file from `out/` into the plugin's
+  folder, and leaves an import in `in/`. It reads only plain files the seat user owns and never
+  writes through a link. A seat's ROM roots are read-only, so nothing saves beside a game there.
 - **Stopping.** `pam_systemd` moves the runner into the session's scope, so stopping the unit
   can't reach it. The runner ends its children on `SIGTERM`, and `seat-reap` ends the session
   by the id the runner recorded. The daemon's stop then ends the seat's user
@@ -526,7 +578,8 @@ copy's reads (`library`, `library/page`, `library/art/*`), and what it merges wi
 seat's sessions, games and downloads, each row with `seat`, the profile whose host runs it, for
 the operator) and `diagnostics` with `diagnostics/refresh`. Every other admin call goes to the
 owner's host the way covers do, a dot segment never, and the table is checked against the API
-document (`every_route_has_a_side_on_the_door`). A device's `game/end` and `library/install/*`
+document (`every_route_has_a_side_on_the_door`). The door releases a seat's launch hold on that
+seat (`game/holds/{token}/release`, below). A device's `game/end` and `library/install/*`
 go to the seat it plays on, as that device: the door's call carries `X-Punktfunk-Device`,
 which a seat host honours only with its admin token and only for a device paired there. A
 call starts a stopped seat and answers 503, except `host`, `status` and `diagnostics`, which
@@ -543,6 +596,13 @@ owner's session; the door runs no hooks. The two sets are disjoint, so nothing c
 around. A knock (`pairing.pending`) wakes a stopped owner's session and reaches its host once
 that host answers, within two minutes, a supervisor that doesn't answer meanwhile included;
 any other door event a stopped owner's host misses.
+
+A seat's `game.*` goes to the same route with its `seat` kept: the owner's plugins hear it, and
+no host's hooks run on it. A seat host runs no plugins, so its `game.launching` carries a `hold`
+token, and the launch waits up to 130 seconds for `POST /game/holds/{token}/release`. The door
+sends it once the owner's host has run the plugins that hold the stage, whatever they answered,
+and at once when that host isn't running. An event a seat host lists with a `seat` already is
+one a host relayed there, and is never taken back.
 
 The door's console also accepts a console handoff signed with the owner's host's token, the one
 the owner's own `ctl console-url` holds: the door keeps it in `owner-handoff-key` in its own

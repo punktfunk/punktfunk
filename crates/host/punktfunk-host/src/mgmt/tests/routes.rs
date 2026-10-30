@@ -28,11 +28,12 @@ fn every_route_is_classified_for_the_plugin_and_cert_lanes() {
         ("GET", "/api/v1/local/summary", true, false), // loopback-only, handled before the gates
         ("GET", "/api/v1/compositors", true, true),
         // A client's picker reads the profiles, their pictures, and wakes a seat. Every edit is
-        // the console's, and no plugin has a reason to name the people on the box.
+        // the console's. A plugin reads each profile's id, name and picture, to key a seat's
+        // games by person: `a_plugin_reads_who_is_on_the_box_and_nothing_more`.
         ("GET", "/api/v1/profiles/enumerate", false, true),
         ("GET", "/api/v1/profiles/{id}/avatar", false, true),
         ("POST", "/api/v1/profiles/{id}/wake", false, true),
-        ("GET", "/api/v1/profiles", false, false),
+        ("GET", "/api/v1/profiles", true, false),
         // Turning seats on installs a driver and opens Remote Desktop: the operator's alone.
         ("GET", "/api/v1/profiles/seating", false, false),
         ("PUT", "/api/v1/profiles/seating", false, false),
@@ -149,6 +150,8 @@ fn every_route_is_classified_for_the_plugin_and_cert_lanes() {
         ("PUT", "/api/v1/session/settings", true, false),
         // A device ends only games it launched; the handler scopes it.
         ("POST", "/api/v1/game/end", true, true),
+        // A seat's held launch: only the host with the plugins lets it go.
+        ("POST", "/api/v1/game/holds/{token}/release", false, false),
         // Library writes are plugin-lane (scanner job); privileged fields inside the payload
         // are refused in the handler — see `plugin_lane_cannot_set_command_execution_fields`.
         ("GET", "/api/v1/library", true, true),
@@ -577,6 +580,7 @@ fn every_route_has_a_side_on_the_door() {
         ("GET", "/api/v1/session/settings", false),
         ("PUT", "/api/v1/session/settings", false),
         ("POST", "/api/v1/game/end", false),
+        ("POST", "/api/v1/game/holds/{token}/release", false),
         // Moonlight is the owner's row's: the door never serves it.
         ("GET", "/api/v1/pair", false),
         ("POST", "/api/v1/pair/pin", false),

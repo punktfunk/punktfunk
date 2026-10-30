@@ -391,7 +391,14 @@ pub enum EventKind {
     /// Fires before the host spawns a launched game, never on adopt. Plugins and hooks that
     /// hold this stage run first ([`crate::holds`]).
     #[serde(rename = "game.launching")]
-    GameLaunching { game: GameRefPayload },
+    GameLaunching {
+        game: GameRefPayload,
+        /// On a seat host, which runs no plugins: the launch also waits for the host with the
+        /// plugins to `POST /game/holds/{hold}/release`. Absent everywhere else.
+        #[schema(value_type = String, required = false)]
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        hold: Option<String>,
+    },
     /// Fires once the host has seen the game process, not merely spawned its launcher.
     #[serde(rename = "game.running")]
     GameRunning { game: GameRefPayload },
@@ -569,7 +576,7 @@ impl EventKind {
             EventKind::StreamStarted { stream } | EventKind::StreamStopped { stream } => {
                 Some(Subject::Stream(stream))
             }
-            EventKind::GameLaunching { game }
+            EventKind::GameLaunching { game, .. }
             | EventKind::GameRunning { game }
             | EventKind::GameWindow { game, .. }
             | EventKind::GameExited { game, .. } => Some(Subject::Game(game)),
@@ -656,7 +663,7 @@ impl EventKind {
                 stream.app.as_deref()
             }
             // No library id: operator-typed command; title is the only hook-filter handle.
-            EventKind::GameLaunching { game }
+            EventKind::GameLaunching { game, .. }
             | EventKind::GameRunning { game }
             | EventKind::GameWindow { game, .. }
             | EventKind::GameExited { game, .. } => game.app.as_deref().or(Some(&game.title)),
@@ -1005,11 +1012,40 @@ mod tests {
                     }),
                     profile: None,
                 },
+                hold: None,
             },
         };
         assert_eq!(
             serde_json::to_string(&ev).unwrap(),
             r#"{"seq":5,"ts_ms":1700000000000,"schema":1,"kind":"game.launching","game":{"app":"steam:570","title":"Dota 2","store":"steam","client":"a1b2c3d4e5f6","fingerprint":"9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08","plane":"native","preset":{"id":"3f9a0c11e2b4","name":"Docked"}}}"#
+        );
+
+        // A seat's held launch, as the plugins' host hears it: `seat` and the hold token.
+        let ev = HostEvent {
+            seq: 5,
+            ts_ms: 1_700_000_000_000,
+            schema: 1,
+            seat: Some("9a3f1c2b7e40".into()),
+            kind: EventKind::GameLaunching {
+                game: GameRefPayload {
+                    app: Some("steam:570".into()),
+                    title: "Dota 2".into(),
+                    store: None,
+                    client: "a1b2c3d4e5f6".into(),
+                    fingerprint: None,
+                    plane: Plane::Native,
+                    preset: None,
+                    profile: Some(ProfileRef {
+                        id: "9a3f1c2b7e40".into(),
+                        display_name: "Anna".into(),
+                    }),
+                },
+                hold: Some("c0ffee".into()),
+            },
+        };
+        assert_eq!(
+            serde_json::to_string(&ev).unwrap(),
+            r#"{"seq":5,"ts_ms":1700000000000,"schema":1,"seat":"9a3f1c2b7e40","kind":"game.launching","game":{"app":"steam:570","title":"Dota 2","client":"a1b2c3d4e5f6","plane":"native","profile":{"id":"9a3f1c2b7e40","display_name":"Anna"}},"hold":"c0ffee"}"#
         );
 
         // Optional ids omitted, not nulled — host-ended game with no library entry.
@@ -1448,7 +1484,10 @@ mod tests {
                 all("stream", "gamestream"),
             ),
             (
-                EventKind::GameLaunching { game: game.clone() },
+                EventKind::GameLaunching {
+                    game: game.clone(),
+                    hold: None,
+                },
                 all("game", "native"),
             ),
             (

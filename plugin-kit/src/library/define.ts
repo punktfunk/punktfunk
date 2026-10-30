@@ -9,7 +9,7 @@
 
 import * as fs from "node:fs";
 import type { PluginDef } from "@punktfunk/host";
-import type { GameRef } from "@punktfunk/host/core";
+import type { EventOf, GameRef } from "@punktfunk/host/core";
 import { Duration, Effect, type Schema, Stream } from "effect";
 import {
 	type AccessRequestOutcome,
@@ -108,12 +108,14 @@ export interface LibraryPluginDef<S extends Schema.Top> {
 	readonly commands?: Record<string, CliCommand<never>>;
 	/**
 	 * Work before the host starts one of this plugin's titles, like fetching its files. It fires for
-	 * every launch on the host, so check `game.app`. See `serveUi`'s `holds`.
+	 * every launch on the host, so check `game.app`; `event.seat` names a launch on another seat.
+	 * See `serveUi`'s `holds`.
 	 */
 	readonly holds?: {
 		readonly "game.launching"?: (
 			game: GameRef,
 			cfg: S["Type"],
+			event: EventOf<"game.launching">,
 		) => Effect.Effect<void, unknown>;
 	};
 	/** How long the host waits for a hold, 1–120 000 ms. Default 30 000. */
@@ -343,9 +345,12 @@ export const defineLibraryPlugin = <S extends Schema.Top>(
 			...(launching
 				? {
 						holds: {
-							"game.launching": (game: GameRef) =>
+							"game.launching": (
+								game: GameRef,
+								event: EventOf<"game.launching">,
+							) =>
 								cfgService.load.pipe(
-									Effect.flatMap((cfg) => launching(game, cfg)),
+									Effect.flatMap((cfg) => launching(game, cfg, event)),
 								),
 						},
 					}

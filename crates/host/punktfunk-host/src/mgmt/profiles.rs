@@ -824,6 +824,8 @@ fn may_wake(st: &MgmtState, profiles: &Profiles, id: &str, fp: Option<&str>) -> 
 }
 
 /// List the profiles with what the console manages
+///
+/// On the plugin lane each row is `id`, `display_name` and `avatar` alone.
 #[utoipa::path(
     get,
     path = "/profiles",
@@ -835,10 +837,27 @@ fn may_wake(st: &MgmtState, profiles: &Profiles, id: &str, fp: Option<&str>) -> 
         (status = NOT_FOUND, description = "This host has no profiles", body = ApiError),
     )
 )]
-pub(crate) async fn list_profiles(State(st): State<Arc<MgmtState>>) -> Response {
+pub(crate) async fn list_profiles(
+    State(st): State<Arc<MgmtState>>,
+    Extension(lane): Extension<AuthLane>,
+) -> Response {
     let Some(profiles) = st.app.profiles.get() else {
         return no_profiles();
     };
+    if lane == AuthLane::Plugin {
+        let rows: Vec<_> = profiles
+            .list()
+            .iter()
+            .map(|p| {
+                let mut row = serde_json::json!({ "id": p.id, "display_name": p.display_name });
+                if let Some(avatar) = &p.avatar {
+                    row["avatar"] = avatar.as_str().into();
+                }
+                row
+            })
+            .collect();
+        return Json(rows).into_response();
+    }
     let seats = seats_now().await;
     let rows: Vec<ProfileAdmin> = profiles
         .list()

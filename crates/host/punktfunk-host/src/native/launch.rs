@@ -53,8 +53,9 @@ pub(super) async fn prepare_launch(
 }
 
 /// One library lookup: command, title, process identity. The client picks an existing id,
-/// never a command. An id this host no longer has is refused onto `outcome`. Blocking: plugin
-/// entries ask over loopback from this async context.
+/// never a command. An id this host can't start is refused onto `outcome`. Clients list the
+/// box's whole library, so a seat is asked for titles it never could. Blocking: plugin entries
+/// ask over loopback from this async context.
 async fn resolve_launch(
     launch: Option<&str>,
     outcome: &crate::gamelease::OutcomeTx,
@@ -76,12 +77,17 @@ async fn resolve_launch(
         None => {
             tracing::warn!(
                 launch_id = id,
-                "client requested a launch id not in this host's library — ignoring"
+                "client requested a title this host can't start — ignoring"
             );
+            let sentence = if pf_paths::seat::box_library_dir().is_some() {
+                "Couldn't start that title — this desktop doesn't have its emulator, launcher \
+                 or game files."
+            } else {
+                "Couldn't start that title — this host doesn't have it in its library any more."
+            };
             let _ = outcome.send(punktfunk_core::quic::LaunchOutcome::new(
                 punktfunk_core::quic::LaunchOutcomeKind::Refused,
-                "Couldn't start that title — this host doesn't have it in its library \
-                 any more.",
+                sentence,
             ));
         }
     }

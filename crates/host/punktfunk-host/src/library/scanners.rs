@@ -66,28 +66,29 @@ fn left_out_here(provider: &str) -> bool {
 
 /// Whether `e` is out of every library surface: its source is switched off (`off` from
 /// [`disabled_scanners`]), its provider's titles are one account's and this host is a seat, or
-/// this is a Linux seat and `e` doesn't play through Steam.
+/// this is a Linux seat and `e` doesn't play there.
 pub(crate) fn source_off(e: &CustomEntry, off: &HashSet<String>) -> bool {
     source_id_for(e).is_some_and(|src| off.contains(src))
         || e.provider.as_deref().is_some_and(left_out_here)
-        || (!plays_through_steam(e) && steam_only_here())
+        || (!plays_on_a_seat(e) && linux_seat())
 }
 
-/// A Linux seat reading the box's library plays its Steam titles alone. The door reads the same
-/// library and plays nothing, so it lists all of it.
-fn steam_only_here() -> bool {
+/// A Linux seat reading the box's library: it plays as its own user, and has no plugins. The door
+/// reads the same library and plays nothing, so it lists all of it.
+pub(crate) fn linux_seat() -> bool {
     cfg!(target_os = "linux")
         && pf_paths::seat::role().is_seat_host()
         && pf_paths::seat::box_library_dir().is_some()
 }
 
-/// Whether a Linux seat can play `e`: its own Steam sees the owner's libraries. A Steam app id
-/// fits 32 bits; a non-Steam shortcut's id is wider and lives in the owner's Steam alone, as does
-/// every title another launcher starts from the owner's home.
-fn plays_through_steam(e: &CustomEntry) -> bool {
+/// Whether a Linux seat can play `e`: its own Steam sees the owner's libraries, and hermir finds
+/// the seat's own copy of an emulator. A Steam app id fits 32 bits; a non-Steam shortcut's id is
+/// wider and lives in the owner's Steam alone, as does every title another launcher starts from
+/// the owner's home. An `exec` title needs its plugin's manifest, which the owner's host holds.
+fn plays_on_a_seat(e: &CustomEntry) -> bool {
     e.launch.as_ref().is_some_and(|l| match l.kind.as_str() {
         "steam_appid" => l.value.parse::<u32>().is_ok(),
-        "steam_ui" => true,
+        "steam_ui" | "emulator" => true,
         _ => false,
     })
 }
@@ -118,14 +119,14 @@ pub(crate) fn disabled_scanners() -> HashSet<String> {
 /// providers that have entries but never claimed a store (rom-manager, playnite), then
 /// plugins with nothing published yet whose folder requests wait for the operator — the
 /// source line is where those requests are shown. Sorted by id for the console. A seat lists no
-/// per-account source, and a Linux seat only those with a title its Steam plays.
+/// per-account source, and a Linux seat only those with a title it plays.
 pub fn list_scanners() -> Vec<ScannerInfo> {
     let off = disabled_scanners();
     let claims = crate::library::claimed_stores();
     let mut entries = crate::library::load_custom();
-    let steam_only = steam_only_here();
-    if steam_only {
-        entries.retain(plays_through_steam);
+    let seat = linux_seat();
+    if seat {
+        entries.retain(plays_on_a_seat);
     }
 
     let mut plugin_ids: Vec<(String, String)> = claims
@@ -147,7 +148,7 @@ pub fn list_scanners() -> Vec<ScannerInfo> {
         }
     }
     plugin_ids.retain(|(_, provider)| !left_out_here(provider));
-    if steam_only {
+    if seat {
         plugin_ids.retain(|(id, _)| {
             entries
                 .iter()
@@ -230,23 +231,26 @@ mod tests {
         assert_eq!(store_label(""), "");
     }
 
-    /// A Linux seat plays a title through its own Steam or not at all: a Steam app and the Steam
-    /// client's tiles, never a shortcut's 64-bit id or another launcher's title.
+    /// A Linux seat plays what it can start as its own user: a Steam app, the Steam client's
+    /// tiles and a catalog emulator, never a shortcut's 64-bit id, another launcher's title or a
+    /// template only its plugin's manifest spells out.
     #[test]
-    fn a_linux_seat_plays_only_what_its_steam_starts() {
+    fn a_linux_seat_plays_only_what_it_can_start_itself() {
         let entry = |launch: serde_json::Value| -> CustomEntry {
             serde_json::from_value(serde_json::json!({"id": "r", "title": "T", "launch": launch}))
                 .unwrap()
         };
         let plays = |kind: &str, value: &str| {
-            plays_through_steam(&entry(serde_json::json!({"kind": kind, "value": value})))
+            plays_on_a_seat(&entry(serde_json::json!({"kind": kind, "value": value})))
         };
         assert!(plays("steam_appid", "570"));
         assert!(plays("steam_ui", "bigpicture"));
+        assert!(plays("emulator", "dolphin"));
         assert!(!plays("steam_appid", "11111111111111111111"));
         assert!(!plays("lutris_id", "42"));
         assert!(!plays("command", "dolphin-emu"));
-        assert!(!plays_through_steam(&entry(serde_json::Value::Null)));
+        assert!(!plays("exec", "custom"));
+        assert!(!plays_on_a_seat(&entry(serde_json::Value::Null)));
     }
 
     #[test]

@@ -17,9 +17,9 @@ struct EmulatorArgs<'a> {
     extra: Vec<&'a str>,
 }
 
-/// Each argument once and in its shape, and the file inside the plugin's roots.
+/// Each argument once and in its shape, and the file inside the roots of `manifest`, if given.
 fn args<'a>(
-    manifest: &PluginManifest,
+    manifest: Option<&PluginManifest>,
     spec: &'a LaunchSpec,
 ) -> Result<EmulatorArgs<'a>, &'static str> {
     if !crate::emulators::in_catalog(&spec.value) {
@@ -39,7 +39,7 @@ fn args<'a>(
     let (Some(platform), Some(file)) = (platform, file) else {
         return Err("`platform` and `file` are required");
     };
-    if !manifest.confines(file) {
+    if manifest.is_some_and(|m| !m.confines(file)) {
         return Err("the game file is outside the plugin's declared paths");
     }
     Ok(EmulatorArgs {
@@ -53,16 +53,21 @@ fn args<'a>(
 
 /// Whether `spec` would resolve, short of finding a copy: the publish routes' check.
 pub fn spec_is_valid(manifest: &PluginManifest, spec: &LaunchSpec) -> Result<(), &'static str> {
-    args(manifest, spec).map(|_| ())
+    args(Some(manifest), spec).map(|_| ())
 }
 
 /// The command for `entry` from the emulator's best copy. `None`, with one warning naming the
-/// reason, when an argument is wrong or this host has no copy.
+/// reason, when an argument is wrong or this host has no copy. A Linux seat has no manifest: the
+/// owner's host held the entry to its plugin's roots at publish, and the copy it reads is root's.
 pub fn recipe(entry: &GameEntry) -> Option<ExecRecipe> {
     let spec = entry.launch.as_ref().filter(|s| s.kind == "emulator")?;
     let provider = entry.provider.as_deref()?;
-    let manifest = crate::plugins::manifest::for_provider(provider)?;
-    build(&manifest, spec)
+    let manifest = if linux_seat() {
+        None
+    } else {
+        Some(crate::plugins::manifest::for_provider(provider)?)
+    };
+    build(manifest.as_ref(), spec)
         .map_err(|reason| {
             tracing::warn!(
                 provider,
@@ -75,8 +80,12 @@ pub fn recipe(entry: &GameEntry) -> Option<ExecRecipe> {
         .ok()
 }
 
-fn build(manifest: &PluginManifest, spec: &LaunchSpec) -> Result<ExecRecipe, String> {
+fn build(manifest: Option<&PluginManifest>, spec: &LaunchSpec) -> Result<ExecRecipe, String> {
     let a = args(manifest, spec)?;
+    // A seat plays as its own user, and the owner's home is closed to it. hermir doesn't look.
+    if manifest.is_none() && !a.file.exists() {
+        return Err("this seat can't reach the game file".into());
+    }
     let launch = crate::emulators::launch_spec(a.emulator, a.platform, a.file, a.core)
         .map_err(|e| e.to_string())?;
     // hermir's SDL hints for a copy that is no Flatpak; `env` sets them and execs the copy.
@@ -164,5 +173,24 @@ mod tests {
         let mut unknown = spec(&[("platform", "snes"), ("file", file)]);
         unknown.value = "bash".into();
         assert!(ok(&unknown).is_err());
+    }
+
+    /// Without a manifest the shapes still hold, and a file the seat can't reach ends the launch
+    /// before any copy is looked for.
+    #[test]
+    fn a_seat_keeps_the_shapes_and_refuses_a_file_it_cannot_reach() {
+        let roms = tempfile::tempdir().unwrap();
+        let gone = roms.path().join("snes/Chrono Trigger.sfc");
+        let gone = gone.to_str().unwrap();
+        let refused = build(None, &spec(&[("platform", "snes"), ("file", gone)])).unwrap_err();
+        assert_eq!(refused, "this seat can't reach the game file");
+        let mut unknown = spec(&[("platform", "snes"), ("file", gone)]);
+        unknown.value = "bash".into();
+        assert_eq!(
+            build(None, &unknown).unwrap_err(),
+            "not an emulator in the catalog"
+        );
+        let no_file = spec(&[("platform", "snes")]);
+        assert!(args(None, &no_file).is_err());
     }
 }
