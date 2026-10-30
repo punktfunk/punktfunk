@@ -80,6 +80,19 @@ The page uses what the browser offers: HEVC and AV1 where it decodes them, HDR o
 where it has WebGPU (unless **Video plane** is **WebGL2**), controller rumble where it drives the
 pad's motors, and the microphone from the quick menu where it can encode Opus.
 
+## Networks that block UDP
+
+Many office and guest networks block UDP, which the stream uses. When the page can't reach the host
+over UDP, it switches by itself within a few seconds to a WebSocket connection through the machine
+that runs the page, which passes the stream on to the host. There is nothing to set.
+
+This path adds latency, and on a network that loses packets the picture stutters more than over
+UDP. The machine that runs the page has to be reachable over HTTPS from the network you are on.
+Streaming over this path is a preview.
+
+On a host older than Punktfunk 0.47, a browser that pairs this way shows in the console as being on
+your local network.
+
 ## Console mode
 
 The controller button in the top bar switches the page to Punktfunk Console, the interface every
