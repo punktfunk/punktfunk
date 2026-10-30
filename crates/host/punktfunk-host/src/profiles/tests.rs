@@ -416,13 +416,15 @@ fn an_avatar_is_stored_by_its_magic_and_replaces_the_last() {
         (a.mime, a.etag.as_str(), a.bytes.as_slice()),
         ("image/png", tag.as_str(), PNG)
     );
+    let listed = p.get(id).unwrap().avatar.unwrap();
     assert_eq!(
-        p.get(id).unwrap().avatar.as_deref(),
-        Some("/api/v1/profiles/9a3f1c2b7e40/avatar")
+        listed,
+        format!("/api/v1/profiles/9a3f1c2b7e40/avatar?v={tag}")
     );
 
     p.put_avatar(id, JPEG).unwrap();
     assert_eq!(p.avatar(id).unwrap().mime, "image/jpeg");
+    assert_ne!(p.get(id).unwrap().avatar.unwrap(), listed);
     assert!(!path
         .with_file_name("profiles")
         .join(format!("{id}.png"))

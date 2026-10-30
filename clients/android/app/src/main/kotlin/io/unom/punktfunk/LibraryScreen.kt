@@ -244,6 +244,7 @@ fun LibraryScreen(
             answer = ProfilesAnswer.Listed(ask.listed),
             saved = ask.host.asProfile,
             gone = ask.gone,
+            art = rememberProfileArt(ask.host),
             onPick = { ask.answer.complete(it) },
             onDismiss = { ask.answer.complete(null) },
         )
@@ -577,7 +578,7 @@ private suspend fun loadLibrary(
  * The identity and the art loader, needed whether or not the host ever answers — cached posters
  * have to render behind a cached catalog with the box still down. Null = no identity.
  */
-private suspend fun prepareLoader(context: Context, host: KnownHost): Pair<ClientIdentity, ImageLoader>? =
+internal suspend fun prepareLoader(context: Context, host: KnownHost): Pair<ClientIdentity, ImageLoader>? =
     withContext(Dispatchers.IO) {
         val id = IdentityHolder.shared(context).await() ?: return@withContext null
         val loader = runCatching { posterLoader(context, id, host.address, host.fpHex, host.port) }.getOrNull()

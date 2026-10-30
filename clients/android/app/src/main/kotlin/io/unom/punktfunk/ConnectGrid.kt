@@ -249,6 +249,8 @@ internal fun ConnectGrid(
                         accent = accentColor(pin?.accent ?: bound?.accent),
                         menuItems = hostMenu(kh, pin),
                         profileName = if (pin == null) kh.asProfile?.displayName else null,
+                        profilePicture = kh.asProfile?.avatar,
+                        profileArt = if (kh.asProfile?.avatar != null) rememberProfileArt(kh) else null,
                         reservePresetSlot = anyPresetChip,
                     )
                 }

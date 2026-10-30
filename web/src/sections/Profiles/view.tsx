@@ -135,8 +135,6 @@ export type DoorControl = {
 /** The page: one card per profile, the owner first, and **Add profile**. */
 export const ProfilesView: FC<{
 	profiles: Loadable<ProfileAdmin[]>;
-	/** Bumped per profile after a picture upload, so the new one shows. */
-	avatarVersions?: Record<string, number>;
 	onAdd: () => void;
 	onRename: (p: ProfileAdmin) => void;
 	onPicture: (p: ProfileAdmin, file: File) => void;
@@ -149,7 +147,6 @@ export const ProfilesView: FC<{
 	door?: DoorControl;
 }> = ({
 	profiles,
-	avatarVersions,
 	onAdd,
 	onRename,
 	onPicture,
@@ -192,7 +189,6 @@ export const ProfilesView: FC<{
 									profile={p}
 									ownerName={ownerName}
 									seats={seats}
-									version={avatarVersions?.[p.id]}
 									busy={busyId === p.id}
 									onRename={() => onRename(p)}
 									onPicture={(f) => onPicture(p, f)}
@@ -277,7 +273,6 @@ const ProfileRow: FC<{
 	profile: ProfileAdmin;
 	ownerName: string;
 	seats?: SeatActions;
-	version?: number;
 	busy: boolean;
 	onRename: () => void;
 	onPicture: (file: File) => void;
@@ -287,7 +282,6 @@ const ProfileRow: FC<{
 	profile: p,
 	ownerName,
 	seats,
-	version,
 	busy,
 	onRename,
 	onPicture,
@@ -311,7 +305,7 @@ const ProfileRow: FC<{
 	return (
 		<div className="flex flex-col gap-3 border-b pb-4 last:border-0 last:pb-0 sm:flex-row sm:items-center">
 			<div className="flex min-w-0 flex-1 items-center gap-3">
-				<ProfileAvatar profile={p} version={version} className="size-11" />
+				<ProfileAvatar profile={p} className="size-11" />
 				<div className="min-w-0">
 					<div className="flex flex-wrap items-center gap-2">
 						<span className="truncate font-medium">{p.display_name}</span>

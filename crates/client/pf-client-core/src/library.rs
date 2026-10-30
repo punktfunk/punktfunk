@@ -1165,7 +1165,7 @@ pub fn spawn_art_fetch(
 /// launch's winner is often the second URL. A network hit is written back to disk. `gone` is
 /// asked between requests, so a closed page stops the walk.
 #[cfg(desktop)]
-fn resolve_art(
+pub(crate) fn resolve_art(
     api: &HostApi,
     agent: &ureq::Agent,
     id: &str,

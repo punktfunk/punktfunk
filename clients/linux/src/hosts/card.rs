@@ -14,13 +14,14 @@ use std::collections::HashSet;
 pub fn build(
     m: &CardModel,
     presets: &[Preset],
+    identity: &(String, String),
     sender: &relm4::Sender<HostsMsg>,
 ) -> gtk::FlowBoxChild {
     let row = gtk::Box::new(gtk::Orientation::Horizontal, 12);
     row.add_css_class("card");
     row.add_css_class("pf-host-card");
     row.set_size_request(280, -1);
-    row.append(&tile(m));
+    row.append(&tile(m, identity));
 
     let text = gtk::Box::new(gtk::Orientation::Vertical, 2);
     text.set_valign(gtk::Align::Center);
@@ -98,7 +99,7 @@ fn saved_ref(m: &CardModel) -> Option<HostRef> {
 
 /// The OS mark in a circle — which machine this is, not the letter it starts with — dimmed
 /// while it cannot answer, a spinner while connecting, a star on the default host's own card.
-fn tile(m: &CardModel) -> gtk::Widget {
+fn tile(m: &CardModel, identity: &(String, String)) -> gtk::Widget {
     if m.status == Status::Connecting {
         let spinner = adw::Spinner::new();
         spinner.set_size_request(48, 48);
@@ -141,6 +142,9 @@ fn tile(m: &CardModel) -> gtk::Widget {
         badge.set_halign(gtk::Align::End);
         badge.set_valign(gtk::Align::End);
         badge.set_tooltip_text(Some(&pick.display_name));
+        if let Some(url) = &pick.avatar {
+            super::picture::show(&badge, url, m.request.host.api(identity));
+        }
         overlay.add_overlay(&badge);
     }
     overlay.upcast()

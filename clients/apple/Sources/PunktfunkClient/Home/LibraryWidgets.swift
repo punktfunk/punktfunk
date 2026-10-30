@@ -441,3 +441,37 @@ struct LibraryNoHostView: View {
         }
     }
 }
+
+/// A profile's picture filling a circle of `size` points, read off `host`. Clear until it lands,
+/// and for good if it never does: what sits under it is the face.
+struct ProfilePicture: View {
+    let path: String
+    let host: StoredHost
+    let size: CGFloat
+    @State private var image: PlatformImage?
+    @Environment(\.displayScale) private var displayScale
+
+    var body: some View {
+        Color.clear
+            .overlay {
+                if let image {
+                    Image(platformImage: image).resizable().scaledToFill()
+                }
+            }
+            .frame(width: size, height: size)
+            .clipShape(Circle())
+            .task(id: path) { await load() }
+    }
+
+    private func load() async {
+        let (path, host, edge) = (path, host, Int(size * displayScale * 2))
+        let loaded = await Task.detached(priority: .userInitiated) { () -> PlatformImage? in
+            guard case .success(let target) = MgmtTarget.make(host: host),
+                  let url = LibraryClient.pictureURL(path, on: target),
+                  let data = try? await LibraryArtLoader(target).data(for: url)
+            else { return nil }
+            return decodePoster(data, maxPixels: edge)
+        }.value
+        if !Task.isCancelled { image = loaded }
+    }
+}

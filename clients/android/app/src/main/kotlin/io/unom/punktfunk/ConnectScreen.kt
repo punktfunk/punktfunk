@@ -409,6 +409,7 @@ fun ConnectScreen(
             answer = ProfilesAnswer.Listed(ask.listed),
             saved = ask.host.asProfile,
             gone = ask.gone,
+            art = rememberProfileArt(ask.host),
             onPick = { ask.answer.complete(it) },
             onDismiss = { ask.answer.complete(null) },
         )
@@ -422,6 +423,7 @@ fun ConnectScreen(
             answer = answer,
             saved = kh.asProfile,
             gone = null,
+            art = rememberProfileArt(kh),
             onPick = { pick ->
                 HostRecords.savePick(knownHostStore, kh, pick)
                 ctl.refreshHosts()

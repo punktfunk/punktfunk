@@ -27,8 +27,19 @@ pub struct Decoded {
     pixels: glib::Bytes,
 }
 
+impl Decoded {
+    pub fn texture(self) -> gdk::Texture {
+        let format = if self.alpha {
+            gdk::MemoryFormat::R8g8b8a8
+        } else {
+            gdk::MemoryFormat::R8g8b8
+        };
+        gdk::MemoryTexture::new(self.width, self.height, format, &self.pixels, self.stride).upcast()
+    }
+}
+
 /// Fit `bytes` into `box_` (device pixels), keeping the aspect ratio.
-fn decode(bytes: Vec<u8>, &(w, h): &(i32, i32)) -> Option<Decoded> {
+pub fn decode(bytes: Vec<u8>, &(w, h): &(i32, i32)) -> Option<Decoded> {
     let stream = gio::MemoryInputStream::from_bytes(&glib::Bytes::from_owned(bytes));
     let pixbuf =
         gtk::gdk_pixbuf::Pixbuf::from_stream_at_scale(&stream, w, h, true, gio::Cancellable::NONE)
@@ -129,13 +140,7 @@ impl Art {
             self.missing.borrow_mut().insert(id);
             return;
         };
-        let format = if d.alpha {
-            gdk::MemoryFormat::R8g8b8a8
-        } else {
-            gdk::MemoryFormat::R8g8b8
-        };
-        let tex: gdk::Texture =
-            gdk::MemoryTexture::new(d.width, d.height, format, &d.pixels, d.stride).upcast();
+        let tex = d.texture();
         for pic in pics.iter().filter_map(glib::WeakRef::upgrade) {
             if pic.widget_name() == id {
                 pic.set_paintable(Some(&tex));

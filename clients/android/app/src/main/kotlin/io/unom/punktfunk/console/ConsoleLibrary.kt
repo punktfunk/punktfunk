@@ -7,6 +7,8 @@ import io.unom.punktfunk.kit.library.InstallOutcome
 import io.unom.punktfunk.kit.library.LibraryCache
 import io.unom.punktfunk.kit.library.LibraryClient
 import io.unom.punktfunk.kit.library.LibraryResult
+import io.unom.punktfunk.kit.library.mgmtBase
+import io.unom.punktfunk.kit.pictureUrl
 import io.unom.punktfunk.kit.security.ClientIdentity
 import io.unom.punktfunk.posterHttp
 import java.util.concurrent.Executors
@@ -188,6 +190,19 @@ private fun SkiaConsole.pumpArt(
             val bytes = fetchArt(candidates, http, offline) ?: return@execute
             state.launch { if (gen == fetchGen.get() && handle != 0L) NativeBridge.nativeConsoleLibraryArt(handle, g.id, bytes) }
         }
+    }
+}
+
+/** `ConsoleCmd::FetchAvatar`: a profile's picture, over the poster client and its cache. */
+internal fun SkiaConsole.fetchAvatar(c: JSONObject) {
+    val addr = c.optString("addr"); val fp = c.optString("fp_hex"); val path = c.optString("url")
+    val id = identity ?: return
+    val app = appContext ?: return
+    val url = pictureUrl(mgmtBase(addr, c.optInt("mgmt")), path) ?: return
+    artPool.execute {
+        val http = runCatching { posterHttp(app, id, addr, fp, streamPort(fp)) }.getOrNull() ?: return@execute
+        val bytes = fetchArt(listOf(url), http, offline = false) ?: return@execute
+        state.launch { if (handle != 0L) NativeBridge.nativeConsoleAvatar(handle, path, bytes) }
     }
 }
 

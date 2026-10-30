@@ -871,6 +871,7 @@ object SkiaConsole {
         "Wake" to ::wake,
         "SetPin" to ::setPin,
         "FetchProfiles" to ::fetchProfiles,
+        "FetchAvatar" to { c -> fetchAvatar(c) },
         "WakeProfile" to ::wakeProfile,
         "SetProfile" to ::setProfile,
         "BindPreset" to ::bindPreset,

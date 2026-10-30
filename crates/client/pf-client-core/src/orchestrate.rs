@@ -43,6 +43,17 @@ impl HostTarget {
     pub fn pin(&self) -> Option<&str> {
         self.fp_hex.as_deref().filter(|f| !f.is_empty())
     }
+
+    /// This host's management API as `identity`.
+    pub fn api(&self, identity: &(String, String)) -> crate::library::HostApi {
+        crate::library::HostApi::new(
+            &self.addr,
+            self.mgmt_port.unwrap_or(crate::library::DEFAULT_MGMT_PORT),
+            self.port,
+            identity,
+            self.pin().and_then(crate::trust::parse_hex32),
+        )
+    }
 }
 
 /// A saved card is never a typed address: an unpinned record maps to `Some("")`, so

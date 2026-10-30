@@ -109,8 +109,6 @@ export const SectionProfiles: FC = () => {
 	const [adding, setAdding] = useState(false);
 	const [removing, setRemoving] = useState<ProfileAdmin | null>(null);
 	const [passwordFor, setPasswordFor] = useState<ProfileAdmin | null>(null);
-	const [versions, setVersions] = useState<Record<string, number>>({});
-
 	const refresh = () =>
 		qc.invalidateQueries({ queryKey: getListProfilesQueryKey() });
 	const failed = (fallback: string) => (e: unknown) =>
@@ -187,10 +185,7 @@ export const SectionProfiles: FC = () => {
 		picture.mutate(
 			{ id, file },
 			{
-				onSuccess: () => {
-					setVersions((v) => ({ ...v, [id]: (v[id] ?? 0) + 1 }));
-					refresh();
-				},
+				onSuccess: refresh,
 				onError: () => toast.error(m.profiles_picture_failed()),
 			},
 		);
@@ -238,7 +233,6 @@ export const SectionProfiles: FC = () => {
 		<>
 			<ProfilesView
 				profiles={profiles}
-				avatarVersions={versions}
 				seats={
 					seatHost
 						? {

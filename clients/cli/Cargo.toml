@@ -18,6 +18,7 @@ path = "src/main.rs"
 # UI-shaped, which is what lets it ship in every client package without dragging GTK, WinUI or
 # Skia along (design/client-architecture-split.md §4).
 [target.'cfg(any(target_os = "linux", windows))'.dependencies]
+base64 = { version = "0.23", default-features = false, features = ["std"] }
 pf-client-core = { path = "../../crates/client/pf-client-core", default-features = false, features = ["desktop"] }
 punktfunk-core = { path = "../../crates/core/punktfunk-core", features = ["quic"] }
 serde_json = "1"

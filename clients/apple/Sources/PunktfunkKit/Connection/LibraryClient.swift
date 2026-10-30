@@ -615,6 +615,17 @@ public enum LibraryClient {
         }
     }
 
+    /// A row's `avatar` as a URL on this host. nil for anything but a path: the art loader
+    /// presents this device's certificate to the origin it is handed.
+    public static func pictureURL(_ path: String?, on target: MgmtTarget) -> URL? {
+        pictureURL(path, base: baseURL(address: target.address, port: target.port))
+    }
+
+    static func pictureURL(_ path: String?, base: String) -> URL? {
+        guard let path, path.hasPrefix("/") else { return nil }
+        return URL(string: base + path)
+    }
+
     /// Start profile `id`'s stopped seat: `POST /api/v1/profiles/{id}/wake`. The host answers the
     /// row, `starting` until the seat is up; the caller reads progress from the list.
     public static func wakeProfile(id: String, on target: MgmtTarget) async throws {

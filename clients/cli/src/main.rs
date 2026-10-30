@@ -1136,6 +1136,32 @@ from the config directory for a true factory reset."
         })
     }
 
+    /// `bytes`, a picture the host stored as PNG, JPEG or WebP, as a URL an `<img>` can show.
+    fn picture_url(bytes: &[u8]) -> String {
+        use base64::Engine;
+        let kind = match bytes {
+            [0xff, 0xd8, ..] => "jpeg",
+            [b'R', b'I', b'F', b'F', ..] => "webp",
+            _ => "png",
+        };
+        let body = base64::engine::general_purpose::STANDARD.encode(bytes);
+        format!("data:image/{kind};base64,{body}")
+    }
+
+    /// The API of `host`, to read its pictures. `None` leaves every row without one.
+    fn picture_api(host: &KnownHost) -> Option<library::HostApi> {
+        let pin = trust::parse_hex32(&host.fp_hex)?;
+        let identity = trust::load_or_create_identity().ok()?;
+        let mgmt = host.effective_mgmt_port();
+        Some(library::HostApi::new(
+            &host.addr,
+            mgmt,
+            host.port,
+            &identity,
+            Some(pin),
+        ))
+    }
+
     /// Write `pick` as the saved profile of record `id`, in the store as it is under its
     /// lock: the host is asked for its list between the read and this write. `false`, with
     /// the reason on stderr, when the save fails.
@@ -1186,9 +1212,12 @@ from the config directory for a true factory reset."
         }
         let picked = known.hosts[i].profile.as_ref().map(|p| p.id.as_str());
         if has(args, "--json") {
+            let api = picture_api(&known.hosts[i]);
             let rows: Vec<serde_json::Value> = listed
                 .iter()
                 .map(|p| {
+                    let picture = api.as_ref().zip(p.avatar.as_deref());
+                    let picture = picture.and_then(|(api, path)| profiles::fetch_avatar(api, path));
                     serde_json::json!({
                         "id": p.id,
                         "display_name": p.display_name,
@@ -1196,6 +1225,7 @@ from the config directory for a true factory reset."
                         "owner": p.owner,
                         "note": p.note(),
                         "legacy_seat": p.legacy_seat,
+                        "picture": picture.as_deref().map(picture_url),
                     })
                 })
                 .collect();
@@ -1907,6 +1937,19 @@ from the config directory for a true factory reset."
             assert_eq!(positional(&a, 0).as_deref(), Some("couch"));
             assert_eq!(value(&a, "--as").as_deref(), Some("kid"));
             assert_eq!(positional(&argv(&["--pick", "Kid"]), 0), None);
+        }
+
+        #[test]
+        fn a_picture_url_names_what_the_bytes_are() {
+            assert_eq!(
+                picture_url(&[0x89, b'P', b'N', b'G']),
+                "data:image/png;base64,iVBORw=="
+            );
+            assert_eq!(
+                picture_url(&[0xff, 0xd8, 0xff]),
+                "data:image/jpeg;base64,/9j/"
+            );
+            assert_eq!(picture_url(b"RIFF"), "data:image/webp;base64,UklGRg==");
         }
 
         fn saved(paired: bool) -> KnownHost {

@@ -6,21 +6,26 @@
 
 import Foundation
 
-/// The pick a device saves for a box. Shown on the card, so it carries the name. `remember`: the
-/// player asked this device to keep it; the console applies only such a pick.
+/// The pick a device saves for a box. Shown on the card, so it carries the name and the picture's
+/// URL. `remember`: the player asked this device to keep it; the console applies only such a pick.
 public struct ProfilePick: Codable, Hashable, Sendable {
     public var id: String
     public var displayName: String
+    /// Host-relative URL of the picture.
+    public var avatar: String?
     public var remember: Bool
 
-    public init(id: String, displayName: String = "", remember: Bool = false) {
+    public init(
+        id: String, displayName: String = "", avatar: String? = nil, remember: Bool = false
+    ) {
         self.id = id
         self.displayName = displayName
+        self.avatar = avatar
         self.remember = remember
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id
+        case id, avatar
         case displayName = "display_name"
         case remember
     }
@@ -29,6 +34,7 @@ public struct ProfilePick: Codable, Hashable, Sendable {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         id = try c.decode(String.self, forKey: .id)
         displayName = try c.decodeIfPresent(String.self, forKey: .displayName) ?? ""
+        avatar = try c.decodeIfPresent(String.self, forKey: .avatar)
         remember = try c.decodeIfPresent(Bool.self, forKey: .remember) ?? false
     }
 
@@ -36,12 +42,14 @@ public struct ProfilePick: Codable, Hashable, Sendable {
         var c = encoder.container(keyedBy: CodingKeys.self)
         try c.encode(id, forKey: .id)
         try c.encode(displayName, forKey: .displayName)
+        try c.encodeIfPresent(avatar, forKey: .avatar)
         if remember { try c.encode(true, forKey: .remember) }
     }
 
-    /// The console bridge's `{id, display_name, remember}`; `remember` only when set.
+    /// The console bridge's `{id, display_name, avatar, remember}`; the last two only when set.
     public var bridgeJSON: [String: Any] {
         var json: [String: Any] = ["id": id, "display_name": displayName]
+        if let avatar { json["avatar"] = avatar }
         if remember { json["remember"] = true }
         return json
     }
@@ -91,7 +99,7 @@ public struct ListedProfile: Codable, Hashable, Sendable, Identifiable {
     public var displayName: String = ""
     /// `#RRGGBB` behind the initials.
     public var accent: String?
-    /// Host-relative URL of the picture. Not drawn: initials stand in.
+    /// Host-relative URL of the picture.
     public var avatar: String?
     public var owner: Bool = false
     public var seat: ProfileSeat?
@@ -115,17 +123,18 @@ public struct ListedProfile: Codable, Hashable, Sendable, Identifiable {
         legacySeat = try c.decodeIfPresent(Bool.self, forKey: .legacySeat) ?? false
     }
 
-    public init(id: String, displayName: String, accent: String? = nil, owner: Bool = false,
-                seat: ProfileSeat? = nil, legacySeat: Bool = false) {
+    public init(id: String, displayName: String, accent: String? = nil, avatar: String? = nil,
+                owner: Bool = false, seat: ProfileSeat? = nil, legacySeat: Bool = false) {
         self.id = id
         self.displayName = displayName
         self.accent = accent
+        self.avatar = avatar
         self.owner = owner
         self.seat = seat
         self.legacySeat = legacySeat
     }
 
-    public var pick: ProfilePick { ProfilePick(id: id, displayName: displayName) }
+    public var pick: ProfilePick { ProfilePick(id: id, displayName: displayName, avatar: avatar) }
 
     /// The one line under a picker card, if any.
     public var note: String? {

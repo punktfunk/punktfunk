@@ -337,7 +337,7 @@ fn status_row_with(
     online: Option<bool>,
     badge: Option<(&str, Pill)>,
     preset: Option<(&str, Option<String>)>,
-    profile: Option<&ProfilePick>,
+    profile: Option<(&ProfilePick, Option<EncodedImage>)>,
 ) -> View {
     let mut items: Vec<View> = Vec::new();
     if let Some(online) = online {
@@ -387,17 +387,13 @@ fn status_row_with(
                 .into(),
         );
     }
-    // The saved profile: its initials on the app accent, the pick storing no colour.
-    if let Some(p) = profile {
+    // The saved profile: its picture, else its initials on the app accent, the pick storing
+    // no colour.
+    if let Some((p, picture)) = profile {
         items.push(
-            monogram(
-                pal,
-                &pf_client_core::profiles::initials(&p.display_name),
-                20.0,
-                None,
-            )
-            .vertical_alignment(VerticalAlignment::Center)
-            .into(),
+            profile_face(pal, &p.display_name, picture, 20.0, None)
+                .vertical_alignment(VerticalAlignment::Center)
+                .into(),
         );
     }
     hstack(items)
@@ -950,7 +946,11 @@ fn saved_tile(
                 .as_ref()
                 .and_then(|id| presets.iter().find(|(pid, _, _)| pid == id))
                 .map(|(_, name, accent)| (name.as_str(), accent.clone())),
-            k.profile.as_ref(),
+            k.profile.as_ref().map(|p| {
+                let (rev, set_rev) = (props.hosts_rev, props.set_hosts_rev.clone());
+                let redraw = move |held: u64| set_rev.call(rev + held);
+                (p, super::profiles::card_picture(ctx, k, redraw))
+            }),
         ),
         Some(menu),
         Box::new(move || {

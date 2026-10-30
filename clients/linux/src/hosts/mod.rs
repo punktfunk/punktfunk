@@ -9,6 +9,7 @@ mod detail;
 mod dialogs;
 mod form;
 mod model;
+pub mod picture;
 pub mod speed;
 
 use crate::discovery::{self, DiscoveredHost, DiscoveryEvent};
@@ -118,6 +119,8 @@ pub enum Act {
 
 pub struct HostsInit {
     pub store: Rc<Store>,
+    /// This device, for the management API a card's profile picture comes from.
+    pub identity: (String, String),
     /// The window's navigation, which host pages push onto.
     pub nav: adw::NavigationView,
     pub views: adw::ViewStack,
@@ -126,6 +129,7 @@ pub struct HostsInit {
 
 pub struct HostsPage {
     store: Rc<Store>,
+    identity: (String, String),
     nav: adw::NavigationView,
     sender: relm4::Sender<HostsMsg>,
     adverts: HashMap<String, DiscoveredHost>,
@@ -219,6 +223,7 @@ impl SimpleComponent for HostsPage {
     ) -> ComponentParts<Self> {
         let HostsInit {
             store,
+            identity,
             nav,
             views,
             narrow,
@@ -391,6 +396,7 @@ impl SimpleComponent for HostsPage {
         }
 
         let mut model = HostsPage {
+            identity,
             store,
             nav,
             sender: sender.input_sender().clone(),
@@ -617,13 +623,14 @@ impl HostsPage {
             w.saved.append(&heading);
             let grid = card_grid();
             for m in &band.cards {
-                grid.append(&card::build(m, presets, &self.sender));
+                grid.append(&card::build(m, presets, &self.identity, &self.sender));
             }
             w.saved.append(&grid);
         }
         w.discovered.remove_all();
         for m in discovered {
-            w.discovered.append(&card::build(m, presets, &self.sender));
+            w.discovered
+                .append(&card::build(m, presets, &self.identity, &self.sender));
         }
         let (have_saved, have_disc) = (!bands.is_empty(), !discovered.is_empty());
         w.discovered.set_visible(have_disc);

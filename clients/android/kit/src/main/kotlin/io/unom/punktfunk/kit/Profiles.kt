@@ -10,18 +10,30 @@ import org.json.JSONObject
  */
 
 /**
- * The pick a device saves for a box. Shown on the card, so it carries the name. [remember]: the
- * player asked this device to keep it; the console applies only such a pick.
+ * The pick a device saves for a box. Shown on the card, so it carries the name and [avatar], the
+ * picture's host-relative URL. [remember]: the player asked this device to keep it; the console
+ * applies only such a pick.
  */
-data class ProfilePick(val id: String, val displayName: String = "", val remember: Boolean = false) {
-    /** `{id, display_name, remember}` as `pf-client-core` spells it; `remember` only when set. */
+data class ProfilePick(
+    val id: String,
+    val displayName: String = "",
+    val remember: Boolean = false,
+    val avatar: String? = null,
+) {
+    /** `{id, display_name, avatar, remember}` as `pf-client-core` spells it; the last two when set. */
     fun toJson(): JSONObject = JSONObject().put("id", id).put("display_name", displayName)
-        .also { if (remember) it.put("remember", true) }
+        .also {
+            if (avatar != null) it.put("avatar", avatar)
+            if (remember) it.put("remember", true)
+        }
 
     companion object {
         /** [toJson]'s shape back; `null` without an id. */
         fun fromJson(j: JSONObject?): ProfilePick? = j
-            ?.let { ProfilePick(it.optString("id"), it.optString("display_name"), it.optBoolean("remember")) }
+            ?.let {
+                val avatar = if (it.isNull("avatar")) null else it.optString("avatar")
+                ProfilePick(it.optString("id"), it.optString("display_name"), it.optBoolean("remember"), avatar)
+            }
             ?.takeIf { it.id.isNotEmpty() }
     }
 }
@@ -63,8 +75,10 @@ data class ListedProfile(
     val seat: Seat? = null,
     /** This device's old seat became this profile. */
     val legacySeat: Boolean = false,
+    /** Host-relative URL of the picture. */
+    val avatar: String? = null,
 ) {
-    fun pick() = ProfilePick(id, displayName)
+    fun pick() = ProfilePick(id, displayName, avatar = avatar)
 
     /** The one line under a picker card, if any. */
     fun note(): String? {
@@ -86,6 +100,7 @@ data class ListedProfile(
             id = j.optString("id", ""),
             displayName = j.optString("display_name", ""),
             accent = str(j, "accent"),
+            avatar = str(j, "avatar"),
             owner = j.optBoolean("owner", false),
             seat = j.optJSONObject("seat")?.let {
                 Seat(
@@ -104,6 +119,12 @@ data class ListedProfile(
         }.getOrNull()
     }
 }
+
+/**
+ * [path], a row's `avatar`, on the host at [base]. `null` for anything but a path: the poster
+ * client presents this device's certificate to the origin it is handed.
+ */
+fun pictureUrl(base: String, path: String?): String? = path?.takeIf { it.startsWith("/") }?.let { base + it }
 
 /** Initials for a profile without a picture: the first letters of its first two words. */
 fun initials(name: String): String = name.trim().split(Regex("\\s+")).filter { it.isNotEmpty() }

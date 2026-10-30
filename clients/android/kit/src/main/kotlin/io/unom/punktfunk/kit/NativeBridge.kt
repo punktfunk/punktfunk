@@ -1055,6 +1055,9 @@ object NativeBridge {
     /** One title's poster, encoded (JPEG/PNG bytes). */
     external fun nativeConsoleLibraryArt(handle: Long, id: String, bytes: ByteArray)
 
+    /** A profile's picture, encoded, under the URL `FetchAvatar` named. */
+    external fun nativeConsoleAvatar(handle: Long, url: String, bytes: ByteArray)
+
     /** The host's `/status` games: `[{"app_id": "steam:570", "state": "running"}, …]`. */
     external fun nativeConsoleLibraryRunning(handle: Long, json: String)
 

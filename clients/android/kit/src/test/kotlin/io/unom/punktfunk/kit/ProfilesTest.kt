@@ -47,6 +47,27 @@ class ProfilesTest {
     }
 
     @Test
+    fun aKeptPickFollowsItsProfilesNewPictureAndSurvivesTheStore() {
+        val old = ProfilePick("kid", "Kid", remember = true, avatar = "/kid?v=old")
+        val rows = listOf(
+            ListedProfile(id = "kid", displayName = "Kid", avatar = "/kid?v=new"),
+            ListedProfile(id = "own", displayName = "Ada"),
+        )
+        val kept = pickerDecision(rows, old, null).remember!!
+        assertEquals("/kid?v=new", kept.avatar)
+        assertEquals(kept, ProfilePick.fromJson(kept.toJson()))
+        assertEquals(ProfilePick("kid", "Kid"), ProfilePick.fromJson(ProfilePick("kid", "Kid").toJson()))
+    }
+
+    @Test
+    fun aPictureMustBeAPathOnTheHost() {
+        val base = "https://10.0.0.2:47990"
+        assertEquals("$base/kid?v=1", pictureUrl(base, "/kid?v=1"))
+        assertEquals(null, pictureUrl(base, "https://elsewhere.example/x.png"))
+        assertEquals(null, pictureUrl(base, null))
+    }
+
+    @Test
     fun aSeatIsDialedWokenWaitedForOrRefused() {
         fun row(state: String, detail: String? = null) = ListedProfile.parse(
             JSONObject().put("id", "kid").put("display_name", "Kid").put(

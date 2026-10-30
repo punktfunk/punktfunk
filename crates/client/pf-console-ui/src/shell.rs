@@ -671,6 +671,7 @@ impl Shell {
         self.tick_asking();
         self.tick_seat_wait();
         self.collect_profiles();
+        self.collect_pictures();
         self.home_shelf();
         self.tick_launch();
         self.tick_downloads();

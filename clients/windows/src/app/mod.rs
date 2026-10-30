@@ -159,6 +159,7 @@ pub(crate) struct Shared {
     pub(crate) set_picker: Mutex<Option<AsyncSetState<Option<profiles::PickerAsk>>>>,
     /// Opens the wait for a profile's seat the same way ([`profiles::seat_then`]).
     pub(crate) set_seat: Mutex<Option<AsyncSetState<Option<profiles::SeatWait>>>>,
+    pub(crate) pictures: Mutex<profiles::Pictures>,
 }
 
 pub struct AppCtx {

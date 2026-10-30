@@ -117,6 +117,8 @@ export interface HostProfile {
   owner: boolean;
   /** The one line under it: `Steam sign-in once`, `In use by Ben's Apple TV`. */
   note?: string | null;
+  /** Its picture as a data URL. A client older than this field sends none. */
+  picture?: string | null;
 }
 
 export interface ProfilesResult extends CliResult {
