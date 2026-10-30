@@ -184,12 +184,10 @@ pub fn force_extend_topology() {
     }
 }
 
-/// EXPLICITLY activate `target_id` into its own display path — the last-resort fallback when neither
-/// the OS auto-activate nor the EXTEND topology preset lights a freshly-ADDed IDD target. Observed on
-/// a lid-closed laptop (field report, Intel iGPU): the clamshell lid policy makes Windows skip the
-/// new-monitor auto-activation AND the `SDC_TOPOLOGY_EXTEND` preset returns success without ever
-/// committing a path for the IDD, so the target sits connected-but-inactive for the whole retry
-/// budget (RDP/Parsec don't need a new console display path, which is why they still work there).
+/// EXPLICITLY activate `target_id` into its own display path — the last resort when neither the OS
+/// auto-activate nor the EXTEND preset lights a freshly-ADDed IDD target. A closed laptop lid makes
+/// Windows skip the auto-activate, and `SDC_TOPOLOGY_EXTEND` then reports success with no path
+/// committed for the IDD.
 ///
 /// This is the supplied-config apply Windows' own display Settings uses to turn a monitor on: query
 /// ALL paths, keep every currently-active path verbatim, and append the target's inactive path with a
@@ -229,6 +227,8 @@ pub fn activate_target_path(key: CcdTargetKey) -> bool {
     }) else {
         tracing::warn!(
             target = %key,
+            paths = paths.len(),
+            active = supplied.len(),
             "explicit path activation: no inactive path with a free source for this target"
         );
         return false;
