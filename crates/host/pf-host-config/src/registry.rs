@@ -539,7 +539,6 @@ pub static SETTINGS: &[Setting] = &[
         .spellings(TRI_SPELLINGS),
     row("dualsense_usbip", "PUNKTFUNK_DUALSENSE_USBIP", Kind::Bool, D::Bool(false), Input, NextSession, "DualSense over USB/IP", "controller-audio").advanced().only(LINUX),
     // --- Game Mode
-    row("gamescope_attach", "PUNKTFUNK_GAMESCOPE_ATTACH", Kind::Bool, D::Bool(false), GameMode, NextSession, "Attach mode", "gamescope").only(LINUX),
     row("gamescope_hdr", "PUNKTFUNK_GAMESCOPE_HDR", Kind::Bool, D::Bool(true), GameMode, NextSession, "Game Mode HDR", "gamescope").only(LINUX),
     row("gamescope_managed", "PUNKTFUNK_GAMESCOPE_MANAGED", Kind::Bool, D::Bool(false), GameMode, NextSession, "Force managed mode", "gamescope").advanced().only(LINUX),
     row("gamescope_vrr", "PUNKTFUNK_GAMESCOPE_VRR", Kind::Bool, D::Bool(true), GameMode, NextSession, "Adaptive sync", "gamescope").advanced().only(LINUX),

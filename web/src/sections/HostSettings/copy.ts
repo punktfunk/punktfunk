@@ -221,10 +221,6 @@ export const SETTING_COPY: Record<string, Copy> = {
 		label: m.setting_dualsense_usbip,
 		hint: m.setting_dualsense_usbip_hint,
 	},
-	gamescope_attach: {
-		label: m.setting_gamescope_attach,
-		hint: m.setting_gamescope_attach_hint,
-	},
 	gamescope_hdr: {
 		label: m.setting_gamescope_hdr,
 		hint: m.setting_gamescope_hdr_hint,

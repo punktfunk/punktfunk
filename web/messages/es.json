@@ -1210,8 +1210,6 @@
 	"setting_steam_gadget_hint": "Presenta los controles de Steam Deck como dispositivo USB. Automático lo usa en SteamOS.",
 	"setting_dualsense_usbip": "DualSense por USB/IP",
 	"setting_dualsense_usbip_hint": "Proporciona a cada DualSense una tarjeta de sonido dedicada para su altavoz.",
-	"setting_gamescope_attach": "Modo de anclaje (Attach)",
-	"setting_gamescope_attach_hint": "Duplica la pantalla de este equipo a su propia resolución en lugar de darle al dispositivo una pantalla propia.",
 	"setting_gamescope_hdr": "HDR en Modo Juego",
 	"setting_gamescope_hdr_hint": "Desactivado mantiene las sesiones de Modo Juego en SDR.",
 	"setting_gamescope_managed": "Forzar modo administrado",
