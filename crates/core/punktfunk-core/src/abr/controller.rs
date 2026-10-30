@@ -3482,6 +3482,45 @@ mod tests {
         assert!(!c.decode.headroom.disarmed());
     }
 
+    /// A notch shrinks with the rate and a decoder's fixed cost does not. A
+    /// run is answered against the level where it began, so a last notch too
+    /// small to clear the line alone keeps its rate and the driver armed.
+    #[test]
+    fn a_retreat_run_is_answered_against_where_it_began() {
+        let (mut c, start, mut t) = seeded_120(100_000);
+        let first = loaded(&mut c, ticks(start, t), 8_200).expect("retreat");
+        t += 1;
+        c.on_ack(first, None);
+        // 500 µs under the run's start, and still in the retreat band.
+        let second = until_request(&mut c, start, &mut t, 7_700, 8).expect("a second notch");
+        assert!(second < first);
+        c.on_ack(second, None);
+        // 150 µs under the last notch, 650 under the run's start.
+        let third = until_request(&mut c, start, &mut t, 7_550, 8).expect("a third notch");
+        assert!(third < second, "the run stands: {third}");
+        assert!(!c.decode.headroom.disarmed());
+    }
+
+    /// A retreat from above where the last run began is a run of its own, and
+    /// a flat answer gives that rate back.
+    #[test]
+    fn a_retreat_above_the_last_run_starts_a_new_one() {
+        let (mut c, start, mut t) = seeded_120(100_000);
+        let first = loaded(&mut c, ticks(start, t), 8_200).expect("retreat");
+        t += 1;
+        c.on_ack(first, None);
+        assert_eq!(until_request(&mut c, start, &mut t, 6_500, 8), None);
+        c.on_ack(120_000, None);
+        let notch = until_request(&mut c, start, &mut t, 8_200, 8).expect("retreat");
+        assert_eq!(notch, 105_000);
+        c.on_ack(notch, None);
+        assert_eq!(
+            until_request(&mut c, start, &mut t, 8_200, 8),
+            Some(120_000)
+        );
+        assert!(c.decode.headroom.disarmed());
+    }
+
     /// A decode spike that ends on its own answers nothing: the retreat it
     /// tripped is read against the level at its rate before the spike, and
     /// latency back at that level gives the rate back.
@@ -3694,6 +3733,20 @@ mod tests {
             t += 1;
         }
         assert!(c.current_kbps >= 100_000);
+    }
+
+    /// A decoder far past its knee: one ×0.7 can't clear the verdict, and
+    /// latency under the window that tripped it says the rate is the lever.
+    #[test]
+    fn a_decode_cut_the_verdict_outlives_stands_when_latency_falls() {
+        let (mut c, start, mut t) = seeded_120(100_000);
+        let cut = loaded(&mut c, ticks(start, t), 21_000).expect("severe decode cuts");
+        t += 1;
+        c.on_ack(cut, None);
+        // Still bad, 2 000 µs under the trip: the cut stands and the verdict goes on.
+        let next = until_request(&mut c, start, &mut t, 19_000, 6).expect("the verdict goes on");
+        assert_eq!(next, 49_000);
+        assert!(!c.decode.headroom.disarmed());
     }
 
     /// A loaded 120 Hz window carrying `recovery_kf` keyframe asks and no decode sample.
