@@ -15,6 +15,7 @@
 //! Evidence: `design/gamemode-and-dedicated-sessions.md`,
 //! `design/gamescope-multiuser.md`.
 
+use crate::lifecycle::Lifecycle;
 use anyhow::Result;
 use punktfunk_core::config::CompositorPref;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -257,13 +258,21 @@ pub(crate) fn gamescope_sessions_live() -> bool {
 }
 
 /// One count in [`LIVE_GAMESCOPE`], taken before the session resolves its compositor. Resolving
-/// cancels a pending Game Mode hand-back; the last hold dropped, on any path, schedules it again.
-pub(crate) struct GamescopeHold;
+/// cancels a pending Game Mode hand-back; the last hold dropped, on any path, schedules it again,
+/// and that session's way of ending decides how soon.
+pub(crate) struct GamescopeHold {
+    life: Lifecycle,
+    /// [`crate::vdisplay::slept`] when the session began.
+    slept_at: std::time::Duration,
+}
 
 impl GamescopeHold {
-    pub(crate) fn new() -> Self {
+    pub(crate) fn new(life: Lifecycle) -> Self {
         LIVE_GAMESCOPE.fetch_add(1, Ordering::SeqCst);
-        GamescopeHold
+        GamescopeHold {
+            life,
+            slept_at: crate::vdisplay::slept(),
+        }
     }
 }
 
@@ -271,7 +280,10 @@ impl Drop for GamescopeHold {
     fn drop(&mut self) {
         // A `join` session still shows the owner's game after the owner leaves.
         if LIVE_GAMESCOPE.fetch_sub(1, Ordering::SeqCst) == 1 {
-            crate::vdisplay::restore_managed_session();
+            crate::vdisplay::restore_managed_session(
+                self.life.stopped_on_purpose(),
+                crate::vdisplay::slept_since(self.slept_at),
+            );
         }
     }
 }

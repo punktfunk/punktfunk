@@ -270,6 +270,9 @@ impl VirtualDisplay for GamescopeDisplay {
                     );
                 }
                 let out = create_managed_session(&client, mode, self.hdr)?;
+                if !self.join_live {
+                    takeover().owner = self.client_fp;
+                }
                 // Idling autologin leaves the CRTC configured. The hold cannot ride
                 // `pending_restore`: this route is `SessionManaged`, so the registry never picks
                 // it up. Release is [`do_restore_tv_session`].

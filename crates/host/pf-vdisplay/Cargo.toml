@@ -97,6 +97,8 @@ windows = { version = "0.62", features = [
     # a shell, so the process that hangs is a grandchild `Child::kill` cannot reach.
     "Win32_System_JobObjects",
     "Win32_System_Threading",
+    # `suspend`'s interrupt-time clocks, the pair that tells a sleep from time awake.
+    "Win32_System_WindowsProgramming",
     # `live_encode_probe`'s pointer wiggle, which keeps DWM presenting the probed display.
     "Win32_UI_WindowsAndMessaging",
 ] }

@@ -50,6 +50,8 @@ pub struct Lifecycle {
     /// Set with `stop` on a deliberate end: the display skips its keep-alive linger and the
     /// game lease opens no reconnect window.
     quit: Arc<AtomicBool>,
+    /// Reached [`Phase::Streaming`], which `phase` forgets once it moves on.
+    streamed: Arc<AtomicBool>,
     /// [`SessionEndReason`] as `u8`; 0 until `end`. The first writer wins.
     reason: Arc<AtomicU8>,
     phase: Arc<AtomicU8>,
@@ -72,6 +74,7 @@ impl Lifecycle {
         Lifecycle {
             stop: Arc::new(AtomicBool::new(false)),
             quit,
+            streamed: Arc::new(AtomicBool::new(false)),
             reason: Arc::new(AtomicU8::new(0)),
             phase: Arc::new(AtomicU8::new(Phase::Admitted as u8)),
         }
@@ -93,6 +96,9 @@ impl Lifecycle {
 
     /// Move forward to `phase`. A later phase already reached stays.
     pub fn enter(&self, phase: Phase) {
+        if phase == Phase::Streaming {
+            self.streamed.store(true, Ordering::SeqCst);
+        }
         self.phase.fetch_max(phase as u8, Ordering::SeqCst);
     }
 
@@ -115,6 +121,15 @@ impl Lifecycle {
 
     pub fn quit_flag(&self) -> &Arc<AtomicBool> {
         &self.quit
+    }
+
+    /// Someone stopped this stream on purpose. A title that exited is deliberate too, but nobody
+    /// left: its client may start the next one. A session that never streamed held nothing: a
+    /// cancelled handshake and a network check close with the quit code as well.
+    pub fn stopped_on_purpose(&self) -> bool {
+        self.streamed.load(Ordering::SeqCst)
+            && self.quit.load(Ordering::SeqCst)
+            && self.reason() != Some(SessionEndReason::GameExited)
     }
 }
 
@@ -192,6 +207,44 @@ mod tests {
                 ),
                 "{why:?}"
             );
+        }
+    }
+
+    /// Game Mode reads this for its hand-back: a client's or an operator's stop of a stream,
+    /// not a title that exited. A plane that only raises the shared flag (`/cancel`) still
+    /// counts.
+    #[test]
+    fn a_title_that_exited_is_not_a_stop_on_purpose() {
+        for why in REASONS {
+            let life = Lifecycle::new();
+            life.enter(Phase::Streaming);
+            life.end(why);
+            assert_eq!(
+                life.stopped_on_purpose(),
+                matches!(
+                    why,
+                    SessionEndReason::Local | SessionEndReason::StoppedByOperator
+                ),
+                "{why:?}"
+            );
+        }
+        let shared = Lifecycle::new();
+        shared.enter(Phase::Streaming);
+        assert!(!shared.stopped_on_purpose());
+        shared.quit_flag().store(true, Ordering::SeqCst);
+        assert!(shared.stopped_on_purpose());
+    }
+
+    /// A probe-only session and a cancelled handshake close with the quit code too. Neither
+    /// held the box, so neither ends a Game Mode session kept for someone else.
+    #[test]
+    fn a_session_that_never_streamed_stops_nothing() {
+        for phase in [Phase::Admitted, Phase::Negotiating, Phase::BringUp] {
+            let life = Lifecycle::new();
+            life.enter(phase);
+            life.end(SessionEndReason::Local);
+            life.enter(Phase::Done);
+            assert!(!life.stopped_on_purpose(), "{phase:?}");
         }
     }
 }

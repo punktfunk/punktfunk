@@ -242,6 +242,7 @@ pub fn start(
                 &on_lost,
                 &live,
                 &life,
+                &lifecycle,
             );
             // Clean return is a stop; error is `error`. Compat has no typed close code.
             let reason = match &result {
@@ -291,10 +292,11 @@ fn run(
     on_lost: &super::OnSessionLost,
     live: &LiveTelemetry,
     life: &GameLifetime,
+    lifecycle: &crate::lifecycle::Lifecycle,
 ) -> Result<()> {
     pf_frame::session_tuning::on_hot_thread();
     // Every source below resolves the compositor, which cancels a pending Game Mode hand-back.
-    let _gamescope_hold = crate::compositor_route::GamescopeHold::new();
+    let _gamescope_hold = crate::compositor_route::GamescopeHold::new(lifecycle.clone());
     // Reject an out-of-range mode before allocating capture/encode buffers.
     encode::validate_dimensions(cfg.codec, cfg.width, cfg.height)
         .context("client-requested video mode")?;
@@ -419,8 +421,10 @@ fn run(
         // the reconnect window (`design/session-game-lifetime.md`).
         let _game_life = target.as_ref().map(|t| {
             let on_game_exit = life.on_game_exit.clone();
+            let lifecycle = lifecycle.clone();
             let on_exit = crate::session_launch::end_on_game_exit(move || {
                 tracing::info!("the launched game exited — ending the session");
+                lifecycle.end(crate::events::SessionEndReason::GameExited);
                 // Skip keep-alive linger so the next `/launch` starts clean.
                 on_game_exit();
             });

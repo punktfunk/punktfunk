@@ -45,11 +45,11 @@ struct Held {
 }
 
 impl SessionScope {
-    /// `gamescope` is taken before the handshake resolves the compositor, so a session that
+    /// Takes the gamescope hold before the handshake resolves the compositor, so a session that
     /// fails there still hands the TV back.
-    pub(super) fn new(life: Lifecycle, conn: link::SessionLink, gamescope: GamescopeHold) -> Self {
+    pub(super) fn new(life: Lifecycle, conn: link::SessionLink) -> Self {
         let held = Held {
-            gamescope: Some(gamescope),
+            gamescope: Some(GamescopeHold::new(life.clone())),
             ..Held::default()
         };
         SessionScope { life, conn, held }
@@ -243,7 +243,7 @@ mod tests {
         conn: link::SessionLink,
         life: &Lifecycle,
     ) -> (SessionScope, Arc<Mutex<Vec<&'static str>>>) {
-        let mut scope = SessionScope::new(life.clone(), conn, GamescopeHold::new());
+        let mut scope = SessionScope::new(life.clone(), conn);
         let order = Arc::new(Mutex::new(Vec::new()));
         scope.hold(Mark("guard", order.clone()));
         let (stop, seen) = (life.stop_flag().clone(), order.clone());
@@ -290,7 +290,7 @@ mod tests {
             let (conn, peer, _endpoints) = loopback().await;
             let life = Lifecycle::new();
             life.enter(phase);
-            let scope = SessionScope::new(life.clone(), conn.clone(), GamescopeHold::new());
+            let scope = SessionScope::new(life.clone(), conn.clone());
             scope.finish(&Err(anyhow::anyhow!("no display"))).await;
             assert_eq!(
                 life.reason(),
@@ -333,7 +333,7 @@ mod tests {
         for taken_over in [false, true] {
             let (conn, _peer, _endpoints) = loopback().await;
             let life = Lifecycle::new();
-            let mut scope = SessionScope::new(life.clone(), conn, GamescopeHold::new());
+            let mut scope = SessionScope::new(life.clone(), conn);
             let order = Arc::new(Mutex::new(Vec::new()));
             scope.hold(Mark("guard", order.clone()));
             let (done, stop, seen) = (scope.prep_done(), life.stop_flag().clone(), order.clone());

@@ -19,6 +19,9 @@ pub(super) struct Takeover {
     /// Mode the managed session was launched at, for warm reuse. `None` while it launches, or for
     /// a session adopted from a dead host: stop that one, never reuse it.
     pub(super) managed: Option<SessionState>,
+    /// The device whose session took the box: its keep-alive times the hand-back. A joiner only
+    /// watches, so it never lands here.
+    pub(super) owner: Option<[u8; 32]>,
     hand_back: HandBack,
     /// A managed launch runs. Another waits on [`WAKE`]; nothing on the hand-back path does.
     launching: bool,
@@ -67,6 +70,7 @@ impl Takeover {
     const EMPTY: Self = Self {
         owed: Vec::new(),
         managed: None,
+        owner: None,
         hand_back: HandBack::Idle,
         launching: false,
         launch_failed: false,
@@ -225,6 +229,14 @@ impl HandBack {
                 Cancel::Cancelled
             }
             HandBack::Running { .. } => Cancel::Wait,
+        }
+    }
+
+    /// `missed` of real time passed that the deadline did not count. A keep-alive counts it.
+    fn age(&mut self, now: Instant, missed: Duration) {
+        if let HandBack::Due(at) = self {
+            let left = at.saturating_duration_since(now);
+            *at = now + crate::lifecycle::left_after_sleep(left, missed);
         }
     }
 
@@ -1330,12 +1342,14 @@ pub fn cancel_pending_restore() {
     }
 }
 
-/// Same linger policy as pooled backends. Unconfigured → [`RESTORE_DEBOUNCE`]. Forever → `None`.
-fn restore_delay() -> Option<Duration> {
+/// Same linger policy as pooled backends, `owner`'s overlay included. Unconfigured →
+/// [`RESTORE_DEBOUNCE`]. Forever → `None`.
+fn restore_delay(owner: Option<[u8; 32]>) -> Option<Duration> {
     use crate::policy::{self, Linger};
+    let fp = policy::fp_hex(owner);
     match policy::prefs()
-        .configured_effective()
-        .map(|e| e.keep_alive.linger())
+        .configured()
+        .map(|p| p.effective_for(fp.as_deref()).keep_alive.linger())
     {
         Some(Linger::Immediate) => Some(Duration::from_secs(0)),
         Some(Linger::For(d)) => Some(d),
@@ -1345,24 +1359,35 @@ fn restore_delay() -> Option<Duration> {
 }
 
 /// The hand-back's delay: the keep-alive's, `None` (forever) keeping the box. A keep-alive keeps
-/// a session; a failed launch left none, so its box goes back after the debounce at most.
-fn hand_back_delay(keep_alive: Option<Duration>, launch_failed: bool) -> Option<Duration> {
+/// a session; a failed launch left none, so its box goes back after the debounce at most. A
+/// stop on purpose ends a timed keep-alive the same way. Forever outranks it, as on a pooled
+/// display ([`crate::lifecycle::effective_linger`]); the debounce lets a restart stay warm.
+fn hand_back_delay(
+    keep_alive: Option<Duration>,
+    launch_failed: bool,
+    quit: bool,
+) -> Option<Duration> {
     if launch_failed {
         Some(keep_alive.map_or(RESTORE_DEBOUNCE, |d| d.min(RESTORE_DEBOUNCE)))
+    } else if quit {
+        keep_alive.map(|d| d.min(RESTORE_DEBOUNCE))
     } else {
         keep_alive
     }
 }
 
 /// Debounced restore so a reconnect reuses the warm session, on the keep-alive's delay
-/// (`forever` schedules none), or the debounce after a launch that produced no session.
-pub fn schedule_restore_tv_session() {
-    let keep_alive = restore_delay();
+/// (`forever` schedules none), or the debounce after a launch that produced no session or a
+/// session stopped on purpose (`quit`). `slept` is how long the box slept under that session:
+/// its client left when the box went down, so the keep-alive started then.
+pub fn schedule_restore_tv_session(quit: bool, slept: Duration) {
+    let owner = takeover().owner;
+    let keep_alive = restore_delay(owner).map(|d| crate::lifecycle::left_after_sleep(d, slept));
     let mut t = takeover();
     if !t.live() {
         return; // nothing was taken over → nothing to restore (also the non-managed path)
     }
-    let delay = hand_back_delay(keep_alive, t.launch_failed);
+    let delay = hand_back_delay(keep_alive, t.launch_failed, quit);
     t.hand_back.schedule(delay.map(|d| Instant::now() + d));
     match delay {
         None => tracing::info!(
@@ -1372,6 +1397,7 @@ pub fn schedule_restore_tv_session() {
         Some(delay) => tracing::info!(
             secs = delay.as_secs(),
             launch_failed = t.launch_failed,
+            quit,
             "gamescope: scheduled TV-session restore (keep-alive policy; cancelled on reconnect)"
         ),
     }
@@ -1380,7 +1406,7 @@ pub fn schedule_restore_tv_session() {
 /// A launch that took the box failed: hand it back after the debounce at most.
 pub(super) fn hand_back_after_failed_launch() {
     takeover().launch_failed = true;
-    schedule_restore_tv_session();
+    schedule_restore_tv_session(false, Duration::ZERO);
 }
 
 /// Run one create and record what it left. A session clears [`Takeover::launch_failed`]; a
@@ -1937,10 +1963,17 @@ pub fn start_restore_worker() -> std::sync::Arc<()> {
     if let Err(e) = std::thread::Builder::new()
         .name("punktfunk-restore-worker".into())
         .spawn(move || {
+            let mut watch = crate::suspend::Watch::new();
             while weak.upgrade().is_some() {
                 std::thread::sleep(Duration::from_millis(100));
+                let (missed, now) = (watch.missed(), Instant::now());
                 // Due and running in one step, so a connect never slips between them.
-                if takeover().hand_back.pop(Instant::now()) {
+                let due = {
+                    let mut t = takeover();
+                    t.hand_back.age(now, missed);
+                    t.hand_back.pop(now)
+                };
+                if due {
                     let _end = HandBackRun;
                     do_restore_tv_session(true);
                 }
@@ -2105,14 +2138,68 @@ mod tests {
     #[test]
     fn keep_alive_keeps_a_session_not_a_failed_launch() {
         let linger = Some(Duration::from_secs(600));
-        assert_eq!(hand_back_delay(None, false), None);
-        assert_eq!(hand_back_delay(None, true), Some(RESTORE_DEBOUNCE));
-        assert_eq!(hand_back_delay(linger, false), linger);
-        assert_eq!(hand_back_delay(linger, true), Some(RESTORE_DEBOUNCE));
+        assert_eq!(hand_back_delay(None, false, false), None);
+        assert_eq!(hand_back_delay(None, true, false), Some(RESTORE_DEBOUNCE));
+        assert_eq!(hand_back_delay(linger, false, false), linger);
+        assert_eq!(hand_back_delay(linger, true, false), Some(RESTORE_DEBOUNCE));
         assert_eq!(
-            hand_back_delay(Some(Duration::ZERO), true),
+            hand_back_delay(Some(Duration::ZERO), true, false),
             Some(Duration::ZERO)
         );
+    }
+
+    /// A suspend takes its length off a planned hand-back, down to the grace that lets a client
+    /// that woke the box return. Nothing else ages: a running one is the worker's own.
+    #[test]
+    fn a_suspend_counts_against_a_planned_hand_back() {
+        let now = Instant::now();
+        let secs = Duration::from_secs;
+        let mut due = HandBack::Due(now + secs(600));
+        due.age(now, secs(60));
+        assert_eq!(due.due_in(now), Some(secs(540)));
+        due.age(now, secs(3600));
+        assert_eq!(due.due_in(now), Some(secs(5)));
+        assert!(!due.pop(now), "the grace holds it past the wake");
+        assert!(due.pop(now + secs(5)));
+        for mut other in [HandBack::Idle, HandBack::Running { then: None }] {
+            other.age(now, secs(3600));
+            assert_eq!(other.due_in(now), None);
+        }
+    }
+
+    /// A stop on purpose ends a timed keep-alive after the debounce; a shorter one stays, and
+    /// forever keeps the box as it does on a pooled display.
+    #[test]
+    fn a_stop_on_purpose_ends_a_timed_keep_alive() {
+        let linger = Some(Duration::from_secs(600));
+        assert_eq!(hand_back_delay(linger, false, true), Some(RESTORE_DEBOUNCE));
+        assert_eq!(hand_back_delay(None, false, true), None);
+        assert_eq!(
+            hand_back_delay(Some(Duration::ZERO), false, true),
+            Some(Duration::ZERO)
+        );
+        assert_eq!(hand_back_delay(None, true, true), Some(RESTORE_DEBOUNCE));
+    }
+
+    /// The device that took the box decides its keep-alive, as a device decides for its pooled
+    /// display. Any other falls back to the host's. Runs in a child: the console's policy is a
+    /// process global.
+    #[test]
+    fn the_owning_device_times_the_hand_back() {
+        let name = "the_owning_device_times_the_hand_back";
+        crate::fake::in_child(module_path!(), name, &[], || {
+            let tablet = [0xaa; 32];
+            let doc = format!(
+                r#"{{ "keep_alive": {{ "mode": "forever" }}, "clients": {{ "{}":
+                    {{ "keep_alive": {{ "mode": "duration", "seconds": 30 }} }} }} }}"#,
+                hex::encode(tablet)
+            );
+            let policy = pf_paths::config_dir().join("display-settings.json");
+            std::fs::write(policy, doc).expect("write the policy");
+            assert_eq!(restore_delay(Some(tablet)), Some(Duration::from_secs(30)));
+            assert_eq!(restore_delay(Some([0xbb; 32])), None);
+            assert_eq!(restore_delay(None), None);
+        });
     }
 
     /// Under keep-alive forever a launch that took the box and produced no session hands it
@@ -2134,15 +2221,15 @@ mod tests {
             };
             // The launch frees the box and fails; the session's last hold then schedules.
             assert!(launch(false).is_err());
-            schedule_restore_tv_session();
+            schedule_restore_tv_session(false, Duration::ZERO);
             assert!(due().is_some_and(|d| d <= RESTORE_DEBOUNCE), "{:?}", due());
             // The client returns and its launch streams: forever keeps the box.
             cancel_pending_restore();
             assert!(launch(true).is_ok());
-            schedule_restore_tv_session();
+            schedule_restore_tv_session(false, Duration::ZERO);
             assert_eq!(due(), None);
             assert!(launch_tracked(|| Err::<(), _>(anyhow!("join refused"))).is_err());
-            schedule_restore_tv_session();
+            schedule_restore_tv_session(false, Duration::ZERO);
             assert_eq!(due(), None, "a refused join took nothing");
             // A managed relaunch on the taken box fails.
             hand_back_after_failed_launch();

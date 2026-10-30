@@ -9,7 +9,7 @@
 //!
 //! Pin with the property test below. Design: `design/display-management.md`.
 
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use super::policy::Linger;
 
@@ -50,6 +50,24 @@ pub fn effective_linger(force_immediate: bool, policy: Linger) -> Linger {
         (true, Linger::Forever) => Linger::Forever,
         (true, _) => Linger::Immediate,
         (false, l) => l,
+    }
+}
+
+/// What a wake leaves of any window, so the client that woke the box finds its session.
+const WAKE_GRACE: Duration = Duration::from_secs(5);
+
+/// What `slept` of real time leaves of a window with `left` to run. A window shorter than the
+/// grace is not stretched.
+pub fn left_after_sleep(left: Duration, slept: Duration) -> Duration {
+    left.saturating_sub(slept).max(WAKE_GRACE.min(left))
+}
+
+/// A linger for a session the box slept under: its client left when the box went down, so the
+/// window started then. `Immediate` and `Forever` have no window to shorten.
+pub fn after_sleep(linger: Linger, slept: Duration) -> Linger {
+    match linger {
+        Linger::For(window) => Linger::For(left_after_sleep(window, slept)),
+        other => other,
     }
 }
 
@@ -131,6 +149,13 @@ impl State {
         }
     }
 
+    /// `missed` of real time passed that `now` did not count. A linger window counts it.
+    pub fn age(&mut self, now: Instant, missed: Duration) {
+        if let State::Lingering { until } = self {
+            *until = now + left_after_sleep(until.saturating_duration_since(now), missed);
+        }
+    }
+
     /// Active is refused: live sessions are not display-managed.
     pub fn force_release(&mut self) -> bool {
         match *self {
@@ -146,7 +171,54 @@ impl State {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::time::Duration;
+
+    /// A sleep shorter than the window leaves the rest. A longer one leaves the grace, so a
+    /// client that woke the box still finds its display; a shorter window is not stretched.
+    #[test]
+    fn a_window_counts_a_sleep_down_to_the_grace() {
+        let secs = Duration::from_secs;
+        assert_eq!(left_after_sleep(secs(600), Duration::ZERO), secs(600));
+        assert_eq!(left_after_sleep(secs(600), secs(60)), secs(540));
+        assert_eq!(left_after_sleep(secs(600), secs(3600)), WAKE_GRACE);
+        assert_eq!(left_after_sleep(secs(3), secs(3600)), secs(3));
+        assert_eq!(left_after_sleep(Duration::ZERO, secs(3600)), Duration::ZERO);
+    }
+
+    /// `Keep until released` is not a window: sleep is not a release.
+    #[test]
+    fn a_sleep_shortens_only_a_timed_linger() {
+        let slept = Duration::from_secs(3600);
+        assert_eq!(after_sleep(Linger::Forever, slept), Linger::Forever);
+        assert_eq!(after_sleep(Linger::Immediate, slept), Linger::Immediate);
+        assert_eq!(
+            after_sleep(Linger::For(Duration::from_secs(600)), slept),
+            Linger::For(WAKE_GRACE)
+        );
+    }
+
+    /// Only a running window ages. The rest of the state machine has no deadline to move.
+    #[test]
+    fn a_suspend_ages_only_a_lingering_display() {
+        let now = Instant::now();
+        let mut s = State::Lingering {
+            until: now + Duration::from_secs(600),
+        };
+        s.age(now, Duration::from_secs(60));
+        assert_eq!(
+            s,
+            State::Lingering {
+                until: now + Duration::from_secs(540)
+            }
+        );
+        s.age(now, Duration::from_secs(3600));
+        assert!(!s.poll_expiry(now), "the grace holds it past the wake");
+        assert!(s.poll_expiry(now + WAKE_GRACE));
+        for mut other in [State::Idle, State::Active { refs: 1 }, State::Pinned] {
+            let before = other;
+            other.age(now, Duration::from_secs(3600));
+            assert_eq!(other, before);
+        }
+    }
 
     #[test]
     fn create_join_reuse_and_teardown() {

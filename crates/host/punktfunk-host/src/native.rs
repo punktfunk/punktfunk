@@ -36,7 +36,7 @@ use std::sync::Arc;
 
 // The session's control connection, whichever transport carries it (quinn or WebTransport).
 pub(crate) mod link;
-use crate::compositor_route::{resolve_compositor, GamescopeHold};
+use crate::compositor_route::resolve_compositor;
 
 /// GameStream presents the same virtual pad and must pick `windows_xbox_hid` from this definition.
 pub(crate) mod gamepad;
@@ -1153,7 +1153,7 @@ pub(crate) async fn run_admitted(
     };
     // Born before the handshake, so a Welcome-time display prep aborts if the client vanishes.
     let life = crate::lifecycle::Lifecycle::new();
-    let mut scope = SessionScope::new(life, conn, GamescopeHold::new());
+    let mut scope = SessionScope::new(life, conn);
     // Held first, so the slot comes back last.
     scope.hold(permit);
     scope.hold(who.count.take());
