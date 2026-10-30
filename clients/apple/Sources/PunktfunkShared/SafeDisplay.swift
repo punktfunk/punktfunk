@@ -101,6 +101,13 @@ public enum SafeDisplay {
         )
     }
 
+    /// The points native fullscreen keeps clear on a Mac with a housing: the menu bar's band,
+    /// which runs deeper than the housing (37 pt over 32 on a 14" MacBook Pro at 2×). `menuBar`
+    /// reads 0 while the bar is hidden, so the housing is the floor. Without a housing, none.
+    public static func fullscreenTopInset(housing: Double, menuBar: Double) -> Double {
+        housing > 0 ? max(housing, menuBar) : 0
+    }
+
     /// Host-valid rounding: the encoder rejects odd dimensions, and an inset subtraction lands odd
     /// about half the time.
     private static func evenFloor(_ value: Double, _ minimum: Int) -> Int {
