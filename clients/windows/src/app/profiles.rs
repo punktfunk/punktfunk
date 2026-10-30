@@ -9,9 +9,11 @@
 use super::style::*;
 use super::{AppCtx, AsyncSetState, Screen, Target};
 use crate::trust::KnownHosts;
+use pf_client_core::library::HostApi;
 use pf_client_core::orchestrate::HostTarget;
 use pf_client_core::profiles::{self, Decision, ListedProfile, ProfilePick, SeatGate};
 use pf_fluent::Palette;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -19,7 +21,76 @@ use windows_reactor::*;
 
 /// How long a connect waits for the host's list before it dials as it would have.
 const FETCH_CUTOFF: Duration = Duration::from_secs(3);
+/// How long a picker waits for its pictures. One that lands later is there next time.
+const PICTURES_CUTOFF: Duration = Duration::from_secs(1);
 static NEXT_ID: AtomicU64 = AtomicU64::new(1);
+
+/// Profile pictures read this run, by URL.
+#[derive(Default)]
+pub(crate) struct Pictures {
+    held: HashMap<String, EncodedImage>,
+    /// Asked for by a host card. One that failed waits for a picker or the next launch.
+    asked: HashSet<String>,
+}
+
+/// Reads the picture at `url` into [`Pictures`] and says how many are held then. Blocks.
+fn read_picture(ctx: &AppCtx, api: &HostApi, url: &str) -> Option<u64> {
+    let bytes = profiles::fetch_avatar(api, url)?;
+    let mut pictures = ctx.shared.pictures.lock().unwrap();
+    pictures
+        .held
+        .insert(url.to_string(), EncodedImage::new(bytes));
+    Some(pictures.held.len() as u64)
+}
+
+/// The picture of `k`'s saved pick, when this run holds it. The first ask reads it off the UI
+/// thread, then runs `redraw` with a count that grows with each picture held.
+pub(crate) fn card_picture(
+    ctx: &Arc<AppCtx>,
+    k: &pf_client_core::trust::KnownHost,
+    redraw: impl FnOnce(u64) + Send + 'static,
+) -> Option<EncodedImage> {
+    let url = k.profile.as_ref()?.avatar.clone()?;
+    let mut pictures = ctx.shared.pictures.lock().unwrap();
+    if let Some(held) = pictures.held.get(&url) {
+        return Some(held.clone());
+    }
+    if pictures.asked.insert(url.clone()) {
+        let (worker, api) = (ctx.clone(), HostTarget::from(k).api(&ctx.identity));
+        let _ = std::thread::Builder::new()
+            .name("pf-picture".into())
+            .spawn(move || {
+                if let Some(held) = read_picture(&worker, &api, &url) {
+                    redraw(held);
+                }
+            });
+    }
+    None
+}
+
+/// The pictures `listed` names, as far as [`PICTURES_CUTOFF`] allows. Blocks.
+fn picker_pictures(
+    ctx: &Arc<AppCtx>,
+    target: &Target,
+    listed: Option<&[ListedProfile]>,
+) -> HashMap<String, EncodedImage> {
+    let rows = listed.into_iter().flatten();
+    let urls: Vec<String> = rows.filter_map(|p| p.avatar.clone()).collect();
+    let (read, finished) = std::sync::mpsc::channel();
+    let (worker, api, wanted) = (ctx.clone(), target.host.api(&ctx.identity), urls.clone());
+    let _ = std::thread::Builder::new()
+        .name("pf-pictures".into())
+        .spawn(move || {
+            for url in &wanted {
+                read_picture(&worker, &api, url);
+            }
+            let _ = read.send(());
+        });
+    let _ = finished.recv_timeout(PICTURES_CUTOFF);
+    let pictures = ctx.shared.pictures.lock().unwrap();
+    let held = |url: String| Some((url.clone(), pictures.held.get(&url)?.clone()));
+    urls.into_iter().filter_map(held).collect()
+}
 
 /// What a pick does: saves it, then connects (or just closes, for "Switch profile…").
 type OnPick = Arc<Mutex<Option<Box<dyn FnOnce(ProfilePick) + Send>>>>;
@@ -31,6 +102,7 @@ pub(crate) struct PickerAsk {
     host: String,
     /// `None`: the list didn't load.
     listed: Option<Arc<Vec<ListedProfile>>>,
+    pictures: Arc<HashMap<String, EncodedImage>>,
     saved: Option<ProfilePick>,
     gone: Option<String>,
     on_pick: OnPick,
@@ -45,7 +117,9 @@ impl PartialEq for PickerAsk {
 }
 
 impl PickerAsk {
+    /// Reads the rows' pictures first, so a worker thread calls this. Blocks.
     fn new(
+        ctx: &Arc<AppCtx>,
         target: &Target,
         listed: Option<Vec<ListedProfile>>,
         saved: Option<ProfilePick>,
@@ -56,6 +130,7 @@ impl PickerAsk {
         Self {
             id: NEXT_ID.fetch_add(1, Ordering::Relaxed),
             host: target.host.name.clone(),
+            pictures: Arc::new(picker_pictures(ctx, target, listed.as_deref())),
             listed: listed.map(Arc::new),
             saved,
             gone,
@@ -295,7 +370,8 @@ pub(crate) fn then_connect(
                 let row = row_of(rows.as_deref(), Some(&p.id));
                 seat_then(&ctx2, t, pin, &ss, &st, row, move || go(Some(p.id)));
             };
-            let ask = PickerAsk::new(&target, listed, saved, d.gone, on_pick, Some(set_screen));
+            let cancel_to = Some(set_screen);
+            let ask = PickerAsk::new(&ctx, &target, listed, saved, d.gone, on_pick, cancel_to);
             open(&ctx, ask);
         });
 }
@@ -322,7 +398,7 @@ pub(crate) fn switch(
             };
             open(
                 &ctx,
-                PickerAsk::new(&target, listed, saved, None, on_pick, None),
+                PickerAsk::new(&ctx, &target, listed, saved, None, on_pick, None),
             );
         });
 }
@@ -347,17 +423,13 @@ fn chooser(
 fn profile_card(
     pal: &Palette,
     p: &ListedProfile,
+    picture: Option<EncodedImage>,
     saved: bool,
     go: impl Fn() + Clone + 'static,
 ) -> View {
     let fill = p.accent.as_deref().and_then(super::settings::hex_color);
     let mut ring = Border::new()
-        .content(monogram(
-            pal,
-            &profiles::initials(&p.display_name),
-            60.0,
-            fill,
-        ))
+        .content(profile_face(pal, &p.display_name, picture, 60.0, fill))
         .border_thickness(uniform(3.0))
         .corner_radius(33.0)
         .horizontal_alignment(HorizontalAlignment::Center);
@@ -470,7 +542,8 @@ pub(crate) fn picker_slot(
                 .iter()
                 .map(|p| {
                     let go = chooser(set_picker, &a.on_pick, p.pick());
-                    profile_card(pal, p, is_saved(p), go)
+                    let picture = p.avatar.as_ref().and_then(|u| a.pictures.get(u));
+                    profile_card(pal, p, picture.cloned(), is_saved(p), go)
                 })
                 .collect();
             body.push(tile_grid(cards, l.len().clamp(1, 4), 12.0));

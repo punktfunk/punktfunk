@@ -333,6 +333,29 @@ pub(crate) fn monogram(pal: &Palette, label: &str, size: f64, fill: Option<Color
     disc.corner_radius(size / 2.0).width(size).height(size)
 }
 
+/// A profile's face: its picture, else its initials on `fill`.
+pub(crate) fn profile_face(
+    pal: &Palette,
+    name: &str,
+    picture: Option<EncodedImage>,
+    size: f64,
+    fill: Option<Color>,
+) -> Border {
+    let Some(picture) = picture else {
+        return monogram(pal, &pf_client_core::profiles::initials(name), size, fill);
+    };
+    let image = Image::new()
+        .source_data(picture)
+        .stretch(Stretch::UniformToFill)
+        .width(size)
+        .height(size);
+    Border::new()
+        .content(image)
+        .corner_radius(size / 2.0)
+        .width(size)
+        .height(size)
+}
+
 /// Pill chip colour intent.
 #[derive(Clone, Copy)]
 pub(crate) enum Pill {
