@@ -1,41 +1,69 @@
 //! The desk around an Umbriel virtual output: the launch's workspace, the heads `exclusive`
 //! turns off, the gamescope darken, and the window list and verbs.
 //!
-//! Each action string is a pure builder, pinned by a test, and each pick is a pure function
+//! Each action is a pure builder, pinned by a test, and each pick is a pure function
 //! over the decoded replies. Umbriel answers `ok` for an action that matched nothing, so a
 //! step that matters is read back. Workspaces are addressed by their 1-based index on an
 //! output; window moves and full-screen act on the focused window, so they focus it first.
 
-use super::ipc::{self, Output, Window, Workspace};
+use super::ipc::{self, Action, Output, Window, Workspace};
 use super::{focus_output, list_monitors};
 use crate::monitors::DISABLE_BUDGET;
 use crate::toplevels::{Toplevel, WindowVerb};
 use crate::topology_journal::{self as journal, Undo};
 use anyhow::{bail, Context, Result};
+use serde_json::json;
 use std::thread;
 use std::time::{Duration, Instant};
 
-pub(crate) fn switch_action(index: u32, output: &str) -> String {
-    format!("workspace-switch:{index}/{output}")
+/// `verb` on one thing: the typed request's `field`, or `verb:target` for `msg`.
+fn on_one(verb: &str, field: &str, target: &str) -> Action {
+    Action {
+        typed: json!({"cmd": "action", "action": verb, field: target}),
+        word: format!("{verb}:{target}"),
+    }
 }
 
-fn focus_action(id: &str) -> String {
-    format!("window-focus:{id}")
+/// `verb` on workspace `index` of `output`, its 1-based position there.
+fn on_workspace(verb: &str, index: u32, output: &str) -> Action {
+    Action {
+        typed: json!({"cmd": "action", "action": verb, "workspace": index, "output": output}),
+        word: format!("{verb}:{index}/{output}"),
+    }
 }
 
-fn move_silent_action(index: u32, output: &str) -> String {
-    format!("window-move-to-workspace-silent:{index}/{output}")
+pub(crate) fn switch_action(index: u32, output: &str) -> Action {
+    on_workspace("workspace-switch", index, output)
+}
+
+fn focus_action(id: &str) -> Action {
+    on_one("window-focus", "window", id)
+}
+
+fn move_silent_action(index: u32, output: &str) -> Action {
+    on_workspace("window-move-to-workspace-silent", index, output)
 }
 
 /// Toggles the focused window; [`window_action`] skips one already full-screen.
-const TOGGLE_FULLSCREEN: &str = "window-toggle-fullscreen";
-
-fn head_action(on: bool, name: &str) -> String {
-    format!("output-{}:{name}", if on { "enable" } else { "disable" })
+fn toggle_fullscreen_action() -> Action {
+    const VERB: &str = "window-toggle-fullscreen";
+    Action {
+        typed: json!({"cmd": "action", "action": VERB}),
+        word: VERB.to_string(),
+    }
 }
 
-fn dpms_action(on: bool, name: &str) -> String {
-    format!("dpms-{}:{name}", if on { "on" } else { "off" })
+fn head_action(on: bool, name: &str) -> Action {
+    let verb = if on {
+        "output-enable"
+    } else {
+        "output-disable"
+    };
+    on_one(verb, "output", name)
+}
+
+fn dpms_action(on: bool, name: &str) -> Action {
+    on_one(if on { "dpms-on" } else { "dpms-off" }, "output", name)
 }
 
 /// The index of the workspace `output` shows.
@@ -227,7 +255,7 @@ pub(crate) fn undo(undo: &Undo) -> Result<()> {
                 return Ok(());
             }
             bail!(
-                "{} still off — `umbriel msg output-enable:<name>` or `umbriel msg config-reload` \
+                "{} still off — `umbriel msg output-enable <name>` or `umbriel msg config-reload` \
                  re-lights it",
                 dark.join(", ")
             )
@@ -330,7 +358,7 @@ pub(crate) fn window_action(verb: WindowVerb, id: &str) -> Result<()> {
                 return Ok(());
             }
             ipc::msg(&focus_action(id))?;
-            ipc::msg(TOGGLE_FULLSCREEN)
+            ipc::msg(&toggle_fullscreen_action())
         }
     }
 }
@@ -460,20 +488,56 @@ mod tests {
         assert_eq!(pick(Some(-1)), Some((3, 1)));
     }
 
-    /// Every action as it goes on the wire.
+    /// Every action in both shapes, with exactly the fields Umbriel's typed parser allows.
     #[test]
     fn actions_are_pinned_to_the_umbriel_shapes() {
-        assert_eq!(switch_action(3, "PF-1-0"), "workspace-switch:3/PF-1-0");
-        assert_eq!(focus_action("t1"), "window-focus:t1");
-        assert_eq!(
-            move_silent_action(2, "PF-1-0"),
-            "window-move-to-workspace-silent:2/PF-1-0"
-        );
-        assert_eq!(head_action(false, "DP-1"), "output-disable:DP-1");
-        assert_eq!(head_action(true, "DP-1"), "output-enable:DP-1");
-        assert_eq!(dpms_action(false, "DP-1"), "dpms-off:DP-1");
-        assert_eq!(dpms_action(true, "DP-1"), "dpms-on:DP-1");
-        assert_eq!(TOGGLE_FULLSCREEN, "window-toggle-fullscreen");
+        let pins = [
+            (
+                switch_action(3, "PF-1-0"),
+                json!({"cmd":"action","action":"workspace-switch","workspace":3,"output":"PF-1-0"}),
+                "workspace-switch:3/PF-1-0",
+            ),
+            (
+                focus_action("t1"),
+                json!({"cmd":"action","action":"window-focus","window":"t1"}),
+                "window-focus:t1",
+            ),
+            (
+                move_silent_action(2, "PF-1-0"),
+                json!({"cmd":"action","action":"window-move-to-workspace-silent",
+                       "workspace":2,"output":"PF-1-0"}),
+                "window-move-to-workspace-silent:2/PF-1-0",
+            ),
+            (
+                head_action(false, "DP-1"),
+                json!({"cmd":"action","action":"output-disable","output":"DP-1"}),
+                "output-disable:DP-1",
+            ),
+            (
+                head_action(true, "DP-1"),
+                json!({"cmd":"action","action":"output-enable","output":"DP-1"}),
+                "output-enable:DP-1",
+            ),
+            (
+                dpms_action(false, "DP-1"),
+                json!({"cmd":"action","action":"dpms-off","output":"DP-1"}),
+                "dpms-off:DP-1",
+            ),
+            (
+                dpms_action(true, "DP-1"),
+                json!({"cmd":"action","action":"dpms-on","output":"DP-1"}),
+                "dpms-on:DP-1",
+            ),
+            (
+                toggle_fullscreen_action(),
+                json!({"cmd":"action","action":"window-toggle-fullscreen"}),
+                "window-toggle-fullscreen",
+            ),
+        ];
+        for (action, typed, word) in pins {
+            assert_eq!(action.typed, typed);
+            assert_eq!(action.word, word);
+        }
     }
 
     /// No socket here, so the live instance is empty and every output entry is another's.
