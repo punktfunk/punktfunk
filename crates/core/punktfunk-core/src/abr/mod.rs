@@ -2,8 +2,8 @@
 //!
 //! [`Driver`] is the whole of it: events in — a completed AU, a stats
 //! snapshot, a latency sample, an ack — and actions out of [`Driver::tick`].
-//! An embedder owns no policy, so two clients cannot drift apart. The pump
-//! runs it on the 750 ms cadence of the client's feedback window;
+//! An embedder owns no policy, so two clients cannot drift apart: each runs it
+//! through [`feed`](crate::abr::feed), on the 750 ms cadence of the client's feedback window;
 //! FEC absorbs short random loss, and the controller asks the host for a
 //! different encoder rate via [`crate::quic::SetBitrate`] when congestion
 //! persists.
@@ -26,6 +26,7 @@ mod sim;
 pub mod budget;
 mod cap;
 mod controller;
+pub mod feed;
 pub mod governor;
 mod growth;
 #[cfg(test)]
@@ -880,14 +881,10 @@ impl Driver {
     }
 }
 
-/// Upper bound on bitrate this stream's shape could use, in kbps.
-///
-/// The probe-measured ceiling is pure link capacity (`delivered × 0.7`) with
-/// no term for pixels. A CBR encoder fills whatever target it is handed, so
-/// utilization never supplies one. Deliberately generous: a bound on the
-/// absurd, not a quality opinion. Explicit-bitrate and PyroWave sessions
-/// never reach here.
-pub(crate) fn stream_ceiling_kbps(
+/// Upper bound on the bitrate this stream's shape could use, kbps: a bound on the absurd, not a
+/// quality opinion, since the probe's ceiling has no term for pixels. An embedder feeds it at
+/// the negotiated geometry as [`feed::Facts::stream_cap_kbps`]; PyroWave feeds the host's pin.
+pub fn stream_ceiling_kbps(
     width: u32,
     height: u32,
     refresh_hz: u32,
