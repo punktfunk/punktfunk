@@ -107,16 +107,17 @@ extension NSScreen {
         Double(panelPixelSize.height) / max(Double(frame.height), 1)
     }
 
-    /// The panel shortened to clear the camera housing — the mode a full-screen stream shows whole.
-    /// Equal to [`panelPixelSize`] on a screen with no housing, which is what lets callers treat
-    /// "the two agree" as "there is no notch here".
+    /// The panel below the menu bar's band, where native fullscreen stops — the mode a full-screen
+    /// stream shows 1:1. Equal to [`panelPixelSize`] on a screen with no housing, which is what
+    /// lets callers treat "the two agree" as "there is no notch here".
     public var notchSafePixelSize: (width: Int, height: Int) {
         let panel = panelPixelSize
+        let top = SafeDisplay.fullscreenTopInset(
+            housing: Double(safeAreaInsets.top), menuBar: Double(frame.maxY - visibleFrame.maxY))
         // Points → panel pixels. NOT backingScaleFactor — see `SafeDisplay.mode(topInsetPoints:)`.
         return SafeDisplay.mode(
             nativeWidth: panel.width, nativeHeight: panel.height,
-            topInsetPoints: Double(safeAreaInsets.top),
-            scale: panelScale)
+            topInsetPoints: top, scale: panelScale)
     }
 }
 #endif

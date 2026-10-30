@@ -32,7 +32,7 @@ The last line, `punktfunk-omarchy setup`, does the rest. Each step is safe to re
 | --- | --- |
 | **Groups** | Adds you to `input` (virtual gamepads) and `punktfunk` (the virtual Steam Deck pad). Log out and back in before streaming. |
 | **Autostart** | Enables `punktfunk-host` and `punktfunk-web` as user services that start at login. |
-| **Firewall** | Opens the host's ufw profiles to your local networks and `tailscale0` (see [Firewall](#firewall)). |
+| **Firewall** | Opens the host's ufw profiles to your local networks, `tailscale0` and `wt0` (see [Firewall](#firewall)). |
 | **Browser trust** | Trusts the console's certificate in Chromium, so it opens without a warning. |
 | **App menu** | Adds **Punktfunk Web Console** to Apps (`Super`+`Space`), already signed in, plus a **Punktfunk Host** submenu. |
 | **Bar widget** | A Punktfunk widget in the bar. It replaces the tray icon. |
@@ -81,7 +81,8 @@ Keys: `1`–`5` or `h` / `l` switch tabs, `j` / `k` move, Enter activates, Esc c
 ## Firewall
 
 `setup` opens `punktfunk-native` and `punktfunk-web` to `192.168.0.0/16`, `10.0.0.0/8`,
-`172.16.0.0/12` and `tailscale0`. The Tailscale rule waits dormant until the interface exists.
+`172.16.0.0/12`, `tailscale0` and NetBird's `wt0`. The two interface rules wait dormant until the
+interface exists.
 `punktfunk-gamestream` opens only while GameStream is on, which
 [**GameStream** in the menu](#moonlight-gamestream) sets. A management port moved off 47990 opens
 too. Video needs no rule; see [Ports](/docs/ports).

@@ -66,9 +66,12 @@ Punktfunk**.
 ## Who can reach the console
 
 The web console (47992) and its plugin port (47993) answer this machine, private and link-local
-addresses, and a Tailscale tailnet. A peer from the internet is refused even with the port
-forwarded. `PUNKTFUNK_UI_BIND=127.0.0.1` in `host.env` keeps both to this machine; one address
+addresses, and a Tailscale or NetBird network. A peer from the internet is refused even with the
+port forwarded. `PUNKTFUNK_UI_BIND=127.0.0.1` in `host.env` keeps both to this machine; one address
 limits them to one interface.
+
+NetBird counts on its default interface, `wt0`. Any other VPN that hands out 100.64/10 addresses
+counts as the internet, here and for [pairing](/docs/pairing).
 
 ## Moving a port
 

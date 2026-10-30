@@ -100,6 +100,27 @@ final class SafeDisplayTests: XCTestCase {
         XCTAssertEqual(m.height, 1600)
     }
 
+    func testMacModeStopsAtTheMenuBarNotTheHousing() {
+        // A 14" MacBook Pro at 2×: a 32 pt housing in a 37 pt band. 1900 rows in the 1890 pt×2
+        // fullscreen window would miss the 1:1 snap and resample the whole picture.
+        let pro14 = SafeDisplay.mode(
+            nativeWidth: 3024, nativeHeight: 1964,
+            topInsetPoints: SafeDisplay.fullscreenTopInset(housing: 32, menuBar: 37), scale: 2)
+        XCTAssertEqual(pro14.height, 1890)
+
+        // A 16" at 2056×1329 pt, measured: 38 pt housing, 39 pt band, a 1290 pt window (2168.4 px).
+        let pro16 = SafeDisplay.mode(
+            nativeWidth: 3456, nativeHeight: 2234,
+            topInsetPoints: SafeDisplay.fullscreenTopInset(housing: 38, menuBar: 39),
+            scale: 2234.0 / 1329.0)
+        XCTAssertEqual(pro16.height, 2168)
+
+        XCTAssertEqual(
+            SafeDisplay.fullscreenTopInset(housing: 32, menuBar: 0), 32, "a hidden menu bar")
+        XCTAssertEqual(
+            SafeDisplay.fullscreenTopInset(housing: 0, menuBar: 24), 0, "no housing, whole panel")
+    }
+
     func testOnlyAPictureTallerThanTheSafeAreaCoversTheHousing() {
         // A 13" Air: 2560×1664 panel, 2560×1600 below the housing.
         let panel = (width: 2560, height: 1664), safe = (width: 2560, height: 1600)

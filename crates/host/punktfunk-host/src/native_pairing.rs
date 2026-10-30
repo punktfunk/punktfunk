@@ -1312,30 +1312,34 @@ mod tests {
         );
     }
 
-    /// 100.64/10 is Tailscale's range and a CGNAT ISP's alike, so the route back decides.
+    /// 100.64/10 is a mesh VPN's range and a CGNAT ISP's alike, so the route back decides.
     #[test]
-    fn a_cgnat_peer_is_lan_only_over_the_tailnet() {
-        use super::approval::{classify_with, is_tailscale_iface};
+    fn a_cgnat_peer_is_lan_only_over_a_mesh_vpn() {
+        use super::approval::{classify_with, is_mesh_iface};
         let peer: IpAddr = "100.96.0.7".parse().unwrap();
         assert_eq!(classify_with(Some(peer), |_| true), KnockSource::Lan);
         // The CGNAT neighbour: the same range, answered out of the ordinary uplink.
         assert_eq!(classify_with(Some(peer), |_| false), KnockSource::Wan);
         let mapped = "::ffff:100.96.0.7".parse().ok();
         assert_eq!(classify_with(mapped, |_| false), KnockSource::Wan);
-        // The tailnet is asked about 100.64/10 only.
+        // The mesh is asked about 100.64/10 only.
         for ip in ["203.0.113.5", "100.128.0.1"] {
             assert_eq!(classify_with(ip.parse().ok(), |_| true), KnockSource::Wan);
         }
 
-        for name in ["tailscale0", "Tailscale", "utun4"] {
-            assert!(is_tailscale_iface(name, peer), "{name}");
+        for name in ["tailscale0", "Tailscale", "utun4", "wt0"] {
+            assert!(is_mesh_iface(name, peer), "{name}");
         }
-        // An ISP puts its CGNAT address on the uplink.
-        for name in ["eth0", "en0", "ppp0", "Ethernet", "wlan0"] {
-            assert!(!is_tailscale_iface(name, peer), "{name}");
+        // An ISP puts its CGNAT address on the uplink, and only NetBird's default name counts.
+        for name in [
+            "eth0", "en0", "ppp0", "Ethernet", "wlan0", "wg0", "wt1", "wt0x",
+        ] {
+            assert!(!is_mesh_iface(name, peer), "{name}");
         }
-        // A utun without a 100.64/10 address is some other VPN.
-        assert!(!is_tailscale_iface("utun4", "10.8.0.2".parse().unwrap()));
+        // The name alone proves nothing: the address has to be 100.64/10 too.
+        for name in ["utun4", "wt0"] {
+            assert!(!is_mesh_iface(name, "10.8.0.2".parse().unwrap()), "{name}");
+        }
     }
 
     /// A knock from the internet carries a name it chose for itself, so the one-click approve
