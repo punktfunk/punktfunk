@@ -577,5 +577,18 @@ final class DeadlineSelectorTests: XCTestCase {
         XCTAssertTrue(hold(1, newer: [2], ahead: 0.02, pacer: waited).held)
         XCTAssertTrue(waited.windowLine().text.contains("held=1 superseded=1"))
     }
+
+    func testTheLatchGateOpensOnlyWhileTheVendsAreFed() {
+        var gate = LatchGate()
+        XCTAssertFalse(gate.open, "no history")
+        for _ in 0..<8 { gate.note(shown: true) }
+        XCTAssertTrue(gate.open, "every vend shown")
+        for _ in 0..<4 { gate.note(shown: false); gate.note(shown: true) }
+        XCTAssertFalse(gate.open, "60 fps content on a 120 Hz link")
+        for _ in 0..<6 { gate.note(shown: true) }
+        XCTAssertTrue(gate.open, "six of eight")
+        gate.note(shown: false); gate.note(shown: false); gate.note(shown: false)
+        XCTAssertFalse(gate.open, "three empty vends close it")
+    }
 }
 #endif

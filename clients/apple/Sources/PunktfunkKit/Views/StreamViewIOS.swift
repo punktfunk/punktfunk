@@ -176,6 +176,8 @@ public final class StreamViewController: StreamViewControllerBase {
     /// The window's display manager the session's mode request was set on — held weakly so
     /// stop() can clear the request even after the view has left the window.
     private weak var sessionDisplayManager: AVDisplayManager?
+    /// Watches the mode switch our criteria asked for; its end is the HDR output signal.
+    private var displayModeObservation: NSKeyValueObservation?
     /// The decoded frames are HDR — what the display-mode request follows.
     private var frameHDR = false
     #endif
@@ -863,6 +865,8 @@ public final class StreamViewController: StreamViewControllerBase {
         // session's HDR10/refresh mode.
         sessionDisplayManager?.preferredDisplayCriteria = nil
         sessionDisplayManager = nil
+        displayModeObservation = nil
+        presenter.setHDROutput(false)
         frameHDR = false
         #endif
         presenter.stop()
@@ -907,15 +911,22 @@ public final class StreamViewController: StreamViewControllerBase {
             if sessionDisplayManager != nil {
                 manager.preferredDisplayCriteria = nil
                 sessionDisplayManager = nil
+                displayModeObservation = nil
+                presenter.setHDROutput(false)
             }
             return
         }
         guard manager.preferredDisplayCriteria == nil else { return }
         let mode = connection.currentMode()
         guard mode.width > 0, mode.height > 0, mode.refreshHz > 0 else { return }
-        // A synthetic HDR10-HEVC format description carrying the negotiated mode — what the
-        // stream decodes to. AVDisplayCriteria(refreshRate:formatDescription:) matches the
-        // display to it (tvOS 17+, our deployment floor).
+        // A synthetic HEVC format description of what the stream decodes to: BT.2020 PQ at 10
+        // bits WITH an HDR10 grade. tvOS reads the range off the static metadata; tagged PQ
+        // alone counts as SDR, and the box never switched. A 1000-nit BT.2020 grade stands in
+        // until the host's own arrives — the mode is the same.
+        let grade = PunktfunkConnection.HdrMeta(
+            primariesX: [8500, 6550, 35400], primariesY: [39850, 2300, 14600],
+            whitePointX: 15635, whitePointY: 16450,
+            maxMasteringLuminance: 10_000_000, minMasteringLuminance: 1, maxCLL: 1000, maxFALL: 400)
         let ext: [CFString: Any] = [
             kCMFormatDescriptionExtension_ColorPrimaries:
                 kCMFormatDescriptionColorPrimaries_ITU_R_2020,
@@ -923,6 +934,11 @@ public final class StreamViewController: StreamViewControllerBase {
                 kCMFormatDescriptionTransferFunction_SMPTE_ST_2084_PQ,
             kCMFormatDescriptionExtension_YCbCrMatrix:
                 kCMFormatDescriptionYCbCrMatrix_ITU_R_2020,
+            kCMFormatDescriptionExtension_BitsPerComponent: 10,
+            kCMFormatDescriptionExtension_MasteringDisplayColorVolume:
+                grade.masteringDisplayColorVolume() as CFData,
+            kCMFormatDescriptionExtension_ContentLightLevelInfo:
+                grade.contentLightLevelInfo() as CFData,
         ]
         var desc: CMFormatDescription?
         CMVideoFormatDescriptionCreate(
@@ -933,6 +949,31 @@ public final class StreamViewController: StreamViewControllerBase {
         manager.preferredDisplayCriteria = AVDisplayCriteria(
             refreshRate: Float(mode.refreshHz), formatDescription: desc)
         sessionDisplayManager = manager
+        // The switch runs for a second or two; its end means the output is in our HDR mode.
+        // `UIScreen`'s EDR headroom stays 1 on tvOS whatever the mode, so this is the signal.
+        displayModeObservation = manager.observe(\.isDisplayModeSwitchInProgress, options: [.old, .new]) {
+            [weak self] _, change in
+            guard change.oldValue == true, change.newValue == false else { return }
+            DispatchQueue.main.async { self?.presenter.setHDROutput(true) }
+        }
+        // PUNKTFUNK_PRESENT_DEBUG: whether the box takes the request, now and as the switch lands.
+        if presentDebug {
+            for delay in [0.0, 1.0, 2.0, 3.0, 5.0] {
+                DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak manager, weak self] in
+                    let screen = self?.view.window?.screen ?? UIScreen.main
+                    print(String(
+                        format: "pf-tvdisplay t+%.2f matching=%d switching=%d criteria=%d headroom=%.2f "
+                            + "potential=%.2f gamut=%d mode=%dx%d maxFps=%d",
+                        delay, manager?.isDisplayCriteriaMatchingEnabled == true ? 1 : 0,
+                        manager?.isDisplayModeSwitchInProgress == true ? 1 : 0,
+                        manager?.preferredDisplayCriteria != nil ? 1 : 0,
+                        screen.currentEDRHeadroom, screen.potentialEDRHeadroom,
+                        screen.traitCollection.displayGamut.rawValue,
+                        Int(screen.currentMode?.size.width ?? 0), Int(screen.currentMode?.size.height ?? 0),
+                        screen.maximumFramesPerSecond))
+                }
+            }
+        }
     }
     #endif
 
