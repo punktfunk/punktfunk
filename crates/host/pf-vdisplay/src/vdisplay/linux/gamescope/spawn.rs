@@ -291,9 +291,12 @@ pub(super) fn spawn(
             cmd.env("PULSE_SOURCE", src);
         }
     }
+    // Only with the device: an NVIDIA image on an AMD GPU ships this GLX, and it fails every
+    // context on that box's Mesa Xwayland.
+    if pf_gpu::nvidia_present() {
+        cmd.env("__GLX_VENDOR_LIBRARY_NAME", "nvidia");
+    }
     cmd.arg(&app)
-        // Prefer the NVIDIA GL vendor for the nested session (harmless on a pure-NVIDIA box).
-        .env("__GLX_VENDOR_LIBRARY_NAME", "nvidia")
         // The box's keyboard layout — see [`xkb_env`]. Empty on an unconfigured box.
         .envs(xkb_env())
         // Distro WSI off on the compositor. Ours is in the nested wrapper, not here.

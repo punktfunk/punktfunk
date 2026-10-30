@@ -145,7 +145,10 @@ fn base_catalog() -> Vec<AppEntry> {
                 id: 3,
                 title: "vkcube (test)".into(),
                 compositor: Some(crate::vdisplay::Compositor::Gamescope),
-                cmd: Some("vkcube".into()),
+                // gamescope unsets `WAYLAND_DISPLAY`, so vkcube's Wayland-first pick opens the
+                // desktop's `wayland-0`. A name with no socket leaves it on Xwayland, which
+                // also suits a vkcube too old for `--wsi`.
+                cmd: Some("WAYLAND_DISPLAY=none vkcube".into()),
                 library_id: None,
                 icon: None,
                 prep: Vec::new(),
