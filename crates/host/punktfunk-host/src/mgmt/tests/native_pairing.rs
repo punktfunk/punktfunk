@@ -125,8 +125,8 @@ async fn pending_devices_approve_and_deny() {
     assert_eq!(s, StatusCode::OK);
     assert_eq!(b.as_array().unwrap().len(), 0);
 
-    np.note_pending("Enrico's MacBook", "aa11", Some(LAN_KNOCK), None);
-    np.note_pending("device bb22cc33", "bb22", Some(LAN_KNOCK), None);
+    np.note_pending("Enrico's MacBook", "aa11", Some(LAN_KNOCK), None, None);
+    np.note_pending("device bb22cc33", "bb22", Some(LAN_KNOCK), None, None);
     let (_, b) = send(&app, get_req("/api/v1/native/pending")).await;
     assert_eq!(b.as_array().unwrap().len(), 2);
     assert_eq!(b[0]["name"], "Enrico's MacBook");
@@ -377,7 +377,7 @@ async fn until_disconnect_alone_is_refused_rather_than_widening_access() {
         .unwrap(),
     );
     let app = test_app_native(test_state(), np.clone());
-    np.note_pending("Guest Phone", "cc33", Some(LAN_KNOCK), None);
+    np.note_pending("Guest Phone", "cc33", Some(LAN_KNOCK), None, None);
     let id = np.pending()[0].id;
 
     let (s, _) = send(
@@ -435,8 +435,8 @@ async fn a_wan_knock_is_listed_as_wan_and_refused_by_approve() {
     );
     let app = test_app_native(test_state(), np.clone());
     let wan = std::net::IpAddr::V4(std::net::Ipv4Addr::new(203, 0, 113, 5));
-    np.note_pending("Friend's Deck", "dd88", Some(wan), None);
-    np.note_pending("Living Room", "ee99", Some(LAN_KNOCK), None);
+    np.note_pending("Friend's Deck", "dd88", Some(wan), None, None);
+    np.note_pending("Living Room", "ee99", Some(LAN_KNOCK), None, None);
 
     let (_, b) = send(&app, get_req("/api/v1/native/pending")).await;
     let rows = b.as_array().unwrap();
@@ -497,7 +497,7 @@ async fn approve_with_access_pins_the_chosen_mask() {
     );
     let app = test_app_native(test_state(), np.clone());
 
-    np.note_pending("Guest Phone", "cc33", Some(LAN_KNOCK), None);
+    np.note_pending("Guest Phone", "cc33", Some(LAN_KNOCK), None, None);
     let (_, pend) = send(&app, get_req("/api/v1/native/pending")).await;
     assert!(pend[0]["grants"].is_null());
     assert!(pend[0]["access_level"].is_null());
@@ -539,7 +539,7 @@ async fn approve_with_access_pins_the_chosen_mask() {
     assert_eq!(np.effective("cc33", now), Some(GRANT_GAMEPAD));
 
     // Re-knock surfaces the stored access for the approve dialog.
-    np.note_pending("Guest Phone", "cc33", Some(LAN_KNOCK), None);
+    np.note_pending("Guest Phone", "cc33", Some(LAN_KNOCK), None, None);
     let (_, pend) = send(&app, get_req("/api/v1/native/pending")).await;
     assert_eq!(pend[0]["grants"], GRANT_GAMEPAD);
     assert_eq!(pend[0]["access_level"], "controller");
@@ -624,7 +624,7 @@ async fn approve_and_arm_without_access_fields_keep_todays_behavior() {
     assert_eq!(s, StatusCode::OK);
     assert_eq!(np.armed_access(), None, "no fields = no choice");
 
-    np.note_pending("Old Laptop", "ee55", Some(LAN_KNOCK), None);
+    np.note_pending("Old Laptop", "ee55", Some(LAN_KNOCK), None, None);
     let (_, pend) = send(&app, get_req("/api/v1/native/pending")).await;
     let id = pend[0]["id"].as_u64().unwrap();
     let (s, b) = send(

@@ -26,7 +26,7 @@ struct Pending {
     requested_at: Instant,
     /// QUIC-validated knock source, used for the per-source cap. `None` if unknown.
     src_ip: Option<IpAddr>,
-    /// [`classify_source`] of `src_ip`, taken when the knock arrived.
+    /// [`classify_relayed`] of `src_ip` and the bridge's client address, when the knock arrived.
     source: KnockSource,
     /// True while [`ApprovalQueue::wait_for_decision`] holds this knock open.
     /// Eviction skips a parked entry unless every candidate is parked.
@@ -52,8 +52,8 @@ struct PendingState {
 
 /// Where a knock came from. The host cannot tell a stranger on the internet from a friend on
 /// the couch by name — the name is whatever the device sent — so admission rules hang off the
-/// address instead.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// address instead. Ordered by suspicion, so the stricter of two is their `max`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum KnockSource {
     /// Loopback, RFC 1918, link-local, IPv6 unique-local, or a Tailscale or NetBird network.
     /// Reaching any of these means the peer is already on a network the operator let it onto.
@@ -67,6 +67,14 @@ pub enum KnockSource {
 /// unknown address must refuse, not admit.
 pub fn classify_source(ip: Option<IpAddr>) -> KnockSource {
     classify_with(ip, routes_over_mesh)
+}
+
+/// [`classify_source`] of `peer`, tightened by `client_addr`: the browser a bridge dials for, as
+/// the bridge names it. The stricter class wins, so the name can only make a knock more suspicious
+/// and needs no trust in the bridge. `None` changes nothing.
+pub fn classify_relayed(peer: Option<IpAddr>, client_addr: Option<IpAddr>) -> KnockSource {
+    let own = classify_source(peer);
+    client_addr.map_or(own, |ip| own.max(classify_source(Some(ip))))
 }
 
 /// [`classify_source`] with the mesh VPN test injected. `over_mesh` is asked only about a
@@ -249,16 +257,18 @@ impl ApprovalQueue {
 
     /// Record an unpaired knock. Same fingerprint refreshes in place and bumps
     /// generation so older parked waiters resolve `Superseded`. Bounded by
-    /// [`MAX_PENDING_PER_IP`] then [`PENDING_CAP`]; the name is untrusted.
+    /// [`MAX_PENDING_PER_IP`] of `src_ip` then [`PENDING_CAP`]; the name is untrusted.
+    /// `client_addr` only tightens the source ([`classify_relayed`]).
     pub(super) fn note_pending(
         &self,
         name: &str,
         fp_hex: &str,
         src_ip: Option<IpAddr>,
+        client_addr: Option<IpAddr>,
         profile: Option<&str>,
     ) -> u32 {
         let name = super::sanitize_device_name(name, fp_hex);
-        let source = classify_source(src_ip);
+        let source = classify_relayed(src_ip, client_addr);
         let mut pending = self.pending.lock().unwrap();
         Self::expire_pending(&mut pending);
         if let Some(p) = pending

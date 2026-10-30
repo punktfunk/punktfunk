@@ -60,10 +60,12 @@ fn rejected(reason: RejectReason) -> anyhow::Error {
 /// browser slot. The slot is taken once admission returns, so a peer that stalls before its
 /// device signature holds none. An unpaired device takes one only on approval. A full host
 /// waits here with the session accepted; the plane's keep-alive holds the path meanwhile.
+/// `client_addr` is the browser a bridge names, which only tightens a knock's source.
 pub(crate) async fn run(
     conn: Connection,
     serving: Arc<Serving>,
     sem: Arc<tokio::sync::Semaphore>,
+    client_addr: Option<std::net::IpAddr>,
 ) -> Result<Served> {
     let Some(Admitted {
         link,
@@ -71,7 +73,7 @@ pub(crate) async fn run(
         rx,
         first,
         knock,
-    }) = admit_session(&conn, &serving).await?
+    }) = admit_session(&conn, &serving, client_addr).await?
     else {
         return Ok(Served::Session);
     };
@@ -128,7 +130,11 @@ struct Admitted {
 /// see a native client. A device the host does not admit, never paired or expired, comes back as
 /// a knock. `None` once a `PairRequest` has run: pairing is its own connection, as on the native
 /// plane, so a browser reconnects to stream.
-async fn admit_session(conn: &Connection, serving: &Serving) -> Result<Option<Admitted>> {
+async fn admit_session(
+    conn: &Connection,
+    serving: &Serving,
+    client_addr: Option<std::net::IpAddr>,
+) -> Result<Option<Admitted>> {
     const HANDSHAKE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
     let (tx, mut rx) = tokio::time::timeout(HANDSHAKE_TIMEOUT, conn.accept_bi())
         .await
@@ -151,7 +157,7 @@ async fn admit_session(conn: &Connection, serving: &Serving) -> Result<Option<Ad
         .context("read the first message")?;
 
     if let Ok(req) = decode::<PairRequest>(ty, &body) {
-        pair(conn, tx, rx, req, serving).await?;
+        pair(conn, tx, rx, req, serving, client_addr).await?;
         return Ok(None);
     }
     let first = decode::<ClientHello>(ty, &body)
@@ -198,7 +204,7 @@ async fn admit_session(conn: &Connection, serving: &Serving) -> Result<Option<Ad
         (None, None)
     };
     Ok(Some(Admitted {
-        link: SessionLink::Web(conn.clone(), device_fp, session),
+        link: SessionLink::Web(conn.clone(), device_fp, session, client_addr),
         tx,
         rx,
         first,
@@ -233,13 +239,15 @@ fn verify(auth: &AuthResponse, nonce: &[u8; 32], serving: &Serving) -> Result<[u
 /// The identities are what makes this the native ceremony rather than a second one: the client's
 /// is the SHA-256 of the device key it just sent, the host's is the hash of the certificate this
 /// endpoint presented — which the browser had to pin to connect at all, so a man in the middle
-/// cannot hold it without the host's private key.
+/// cannot hold it without the host's private key. A bridge's `client_addr` only tightens the
+/// knock's source.
 async fn pair(
     conn: &Connection,
     tx: CtlSend,
     rx: CtlReader,
     req: PairRequest,
     serving: &Serving,
+    client_addr: Option<std::net::IpAddr>,
 ) -> Result<()> {
     anyhow::ensure!(
         spki_p256_point(&req.device_key).is_some(),
@@ -259,7 +267,8 @@ async fn pair(
         *last = Some(std::time::Instant::now());
     }
     let client_fp = sha256(&req.device_key);
-    let source = crate::native_pairing::classify_source(Some(conn.remote_address().ip()));
+    let source =
+        crate::native_pairing::classify_relayed(Some(conn.remote_address().ip()), client_addr);
     let pin = match serving
         .plane
         .pairing
@@ -288,7 +297,12 @@ async fn pair(
         }
     };
     crate::native::pair_ceremony(
-        &crate::native::link::SessionLink::Web(conn.clone(), None, Arc::new(V2Session::new())),
+        &crate::native::link::SessionLink::Web(
+            conn.clone(),
+            None,
+            Arc::new(V2Session::new()),
+            client_addr,
+        ),
         crate::native::PairWire::V2 { send: tx, recv: rx },
         req,
         &client_fp,
@@ -468,7 +482,7 @@ mod tests {
         };
         let host = async {
             let conn = server.accept().await.await.unwrap().accept().await.unwrap();
-            admit_session(&conn, s)
+            admit_session(&conn, s, None)
                 .await
                 .unwrap()
                 .expect("a session, not a pairing")

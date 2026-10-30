@@ -750,9 +750,16 @@ pub(crate) async fn wait_for_approval(
     }
     tracing::info!(name = %label, fingerprint = %fp_hex,
         "unpaired device knocked — parking connection for delegated approval in the console");
-    // QUIC-validated source IP for the pending per-source cap. Knock generation makes
-    // this connection the one an approval admits — siblings must not all start a session.
-    let knock_seq = np.note_pending(label, fp_hex, Some(conn.remote_address().ip()), profile);
+    // QUIC-validated source IP for the pending per-source cap; a bridge's client address only
+    // tightens its class. Knock generation makes this connection the one an approval admits —
+    // siblings must not all start a session.
+    let knock_seq = np.note_pending(
+        label,
+        fp_hex,
+        Some(conn.remote_address().ip()),
+        conn.client_addr(),
+        profile,
+    );
     let wait = np.wait_for_decision(fp_hex, knock_seq, PENDING_APPROVAL_WAIT);
     tokio::pin!(wait);
     let mut pending = tokio::time::interval(PENDING_EVERY);

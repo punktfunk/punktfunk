@@ -420,6 +420,11 @@ async fn session(
             .take(128)
             .collect::<String>()
     });
+    // A bridge names the browser it dials for. Unvetted: it can only tighten a knock's source.
+    let client_addr = request
+        .headers()
+        .get("pf-client-addr")
+        .and_then(|a| a.parse().ok());
     if !origin_allowed(origin.as_deref(), &serving.plane.origins) {
         request.forbidden().await;
         tracing::warn!(
@@ -458,7 +463,7 @@ async fn session(
         return Ok(());
     }
     let peer = connection.remote_address();
-    match session::run(connection.clone(), serving.clone(), sem).await {
+    match session::run(connection.clone(), serving.clone(), sem, client_addr).await {
         Ok(crate::native::Served::Session) => tracing::info!(%peer, "browser session complete"),
         Ok(
             crate::native::Served::ProbeClose

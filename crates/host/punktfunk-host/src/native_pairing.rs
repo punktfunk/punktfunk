@@ -29,7 +29,9 @@ mod arming;
 mod sanitize;
 mod store;
 
-pub use approval::{classify_source, KnockSource, PairingDecision, PendingRequest};
+pub use approval::{
+    classify_relayed, classify_source, KnockSource, PairingDecision, PendingRequest,
+};
 pub use arming::PinAttempt;
 pub use store::{Access, PairedClient};
 
@@ -588,17 +590,21 @@ impl NativePairing {
 
     /// Record an unpaired knock. A re-knock from the same fingerprint refreshes in place
     /// (same id, new generation). The generation is what [`Self::wait_for_decision`] admits.
+    /// `client_addr` is the browser a bridge names; it only tightens the knock's source.
     pub fn note_pending(
         &self,
         name: &str,
         fp_hex: &str,
         src_ip: Option<IpAddr>,
+        client_addr: Option<IpAddr>,
         profile: Option<&str>,
     ) -> u32 {
         // Only a new fingerprint emits `pairing.pending`. A parked client's retries
         // must not notify the operator once per attempt.
         let was_pending = self.approval.pending_contains(fp_hex);
-        let seq = self.approval.note_pending(name, fp_hex, src_ip, profile);
+        let seq = self
+            .approval
+            .note_pending(name, fp_hex, src_ip, client_addr, profile);
         if !was_pending {
             crate::events::emit(crate::events::EventKind::PairingPending {
                 device: crate::events::DeviceRef {
@@ -755,8 +761,8 @@ mod tests {
         let np = NativePairing::load_with(Some(p.clone()), None, false).unwrap();
         assert!(np.pending().is_empty());
 
-        np.note_pending("device aa11", "AA11", Some(LAN_KNOCK), None);
-        np.note_pending("Bedroom TV", "aa11", Some(LAN_KNOCK), None);
+        np.note_pending("device aa11", "AA11", Some(LAN_KNOCK), None, None);
+        np.note_pending("Bedroom TV", "aa11", Some(LAN_KNOCK), None, None);
         let pend = np.pending();
         assert_eq!(pend.len(), 1, "re-knock dedups by fingerprint");
         assert_eq!(pend[0].name, "Bedroom TV");
@@ -767,7 +773,7 @@ mod tests {
         assert!(np.pending().is_empty());
         assert!(!np.is_paired("aa11"));
 
-        np.note_pending("device bb22", "BB22", Some(LAN_KNOCK), None);
+        np.note_pending("device bb22", "BB22", Some(LAN_KNOCK), None, None);
         let id = np.pending()[0].id;
         assert!(
             np.approve_pending(9999, None, None)
@@ -790,7 +796,7 @@ mod tests {
         // at PENDING_CAP and evicts the oldest non-parked entries first.
         for i in 0..(PENDING_CAP + 3) {
             let ip = IpAddr::from([10, 0, (i / 256) as u8, (i % 256) as u8]);
-            np.note_pending("flood", &format!("f{i:03}"), Some(ip), None);
+            np.note_pending("flood", &format!("f{i:03}"), Some(ip), None, None);
         }
         let pend = np.pending();
         assert_eq!(pend.len(), PENDING_CAP);
@@ -801,7 +807,7 @@ mod tests {
     fn pairing_clears_a_pending_knock() {
         let (_temp, p) = temp();
         let np = NativePairing::load_with(Some(p.clone()), None, false).unwrap();
-        np.note_pending("Knocker", "cc44", Some(LAN_KNOCK), None);
+        np.note_pending("Knocker", "cc44", Some(LAN_KNOCK), None, None);
         assert_eq!(np.pending().len(), 1);
         np.add("Knocker", "CC44").unwrap();
         assert!(
@@ -839,7 +845,7 @@ mod tests {
         let (_temp, p) = temp();
         let np = Arc::new(NativePairing::load_with(Some(p.clone()), None, false).unwrap());
 
-        let seq = np.note_pending("Knocker", "ab01", Some(LAN_KNOCK), None);
+        let seq = np.note_pending("Knocker", "ab01", Some(LAN_KNOCK), None, None);
         let d = np
             .wait_for_decision("ab01", seq, Duration::from_millis(80))
             .await;
@@ -866,7 +872,7 @@ mod tests {
         assert_eq!(waiter.await.unwrap(), PairingDecision::Approved);
         assert!(np.is_paired("ab01"));
 
-        let seq = np.note_pending("Knock2", "cd02", Some(LAN_KNOCK), None);
+        let seq = np.note_pending("Knock2", "cd02", Some(LAN_KNOCK), None, None);
         let ready = np.approval.waiter_ready_generation();
         let np3 = np.clone();
         let waiter = tokio::spawn(async move {
@@ -913,13 +919,13 @@ mod tests {
         .unwrap();
         assert!(np.is_paired("aa77"), "expired but still listed");
 
-        let seq = np.note_pending("Old Guest", "aa77", Some(LAN_KNOCK), None);
+        let seq = np.note_pending("Old Guest", "aa77", Some(LAN_KNOCK), None, None);
         let d = np
             .wait_for_decision("aa77", seq, Duration::from_millis(120))
             .await;
         assert_eq!(d, PairingDecision::TimedOut);
 
-        let seq = np.note_pending("Old Guest", "aa77", Some(LAN_KNOCK), None);
+        let seq = np.note_pending("Old Guest", "aa77", Some(LAN_KNOCK), None, None);
         let ready = np.approval.waiter_ready_generation();
         let np2 = np.clone();
         let waiter = tokio::spawn(async move {
@@ -958,7 +964,7 @@ mod tests {
         let (_temp, p) = temp();
         let np = Arc::new(NativePairing::load_with(Some(p.clone()), None, false).unwrap());
 
-        let seq1 = np.note_pending("iPad Pro", "ee01", Some(LAN_KNOCK), None);
+        let seq1 = np.note_pending("iPad Pro", "ee01", Some(LAN_KNOCK), None, None);
         let ready = np.approval.waiter_ready_generation();
         let np1 = np.clone();
         let waiter1 = tokio::spawn(async move {
@@ -967,7 +973,7 @@ mod tests {
         });
         np.approval.wait_for_waiter_ready(ready).await;
 
-        let seq2 = np.note_pending("iPad Pro", "ee01", Some(LAN_KNOCK), None);
+        let seq2 = np.note_pending("iPad Pro", "ee01", Some(LAN_KNOCK), None, None);
         assert_ne!(seq1, seq2);
         assert_eq!(waiter1.await.unwrap(), PairingDecision::Superseded);
         assert_eq!(np.pending().len(), 1);
@@ -1157,9 +1163,9 @@ mod tests {
         let np = NativePairing::load_with(Some(p), None, false).unwrap();
         let wan = std::net::IpAddr::V4(std::net::Ipv4Addr::new(203, 0, 113, 5));
 
-        np.note_pending("Roaming Laptop", "ab99", Some(LAN_KNOCK), None);
+        np.note_pending("Roaming Laptop", "ab99", Some(LAN_KNOCK), None, None);
         assert_eq!(np.pending()[0].source, KnockSource::Lan);
-        np.note_pending("Roaming Laptop", "ab99", Some(wan), None);
+        np.note_pending("Roaming Laptop", "ab99", Some(wan), None, None);
         assert_eq!(
             np.pending()[0].source,
             KnockSource::Wan,
@@ -1172,7 +1178,7 @@ mod tests {
         ));
 
         // And back again, so the honest direction is not a one-way door.
-        np.note_pending("Roaming Laptop", "ab99", Some(LAN_KNOCK), None);
+        np.note_pending("Roaming Laptop", "ab99", Some(LAN_KNOCK), None, None);
         assert_eq!(np.pending()[0].source, KnockSource::Lan);
     }
 
@@ -1312,6 +1318,43 @@ mod tests {
         );
     }
 
+    /// A bridge names the browser it dials for. The name only tightens: a LAN bridge passes a WAN
+    /// browser's class on, and nothing it names makes a WAN peer LAN.
+    #[test]
+    fn a_bridged_knock_takes_the_stricter_source() {
+        let wan: IpAddr = "203.0.113.5".parse().unwrap();
+        let lan: IpAddr = "10.0.0.9".parse().unwrap();
+        let cases = [
+            (Some(LAN_KNOCK), Some(wan), KnockSource::Wan),
+            (Some(wan), Some(lan), KnockSource::Wan),
+            (Some(LAN_KNOCK), Some(lan), KnockSource::Lan),
+            (
+                Some(LAN_KNOCK),
+                "not an address".parse().ok(),
+                KnockSource::Lan,
+            ),
+            (Some(wan), None, KnockSource::Wan),
+        ];
+        for (peer, named, want) in cases {
+            assert_eq!(
+                classify_relayed(peer, named),
+                want,
+                "{peer:?} naming {named:?}"
+            );
+        }
+
+        // The pending entry carries it, so a bare approve meets the WAN rule.
+        let (_temp, p) = temp();
+        let np = NativePairing::load_with(Some(p), None, false).unwrap();
+        np.note_pending("Office browser", "ab12", Some(LAN_KNOCK), Some(wan), None);
+        assert_eq!(np.pending()[0].source, KnockSource::Wan);
+        let id = np.pending()[0].id;
+        assert!(matches!(
+            np.approve_pending(id, None, None).unwrap(),
+            ApproveOutcome::WanNeedsBoundPin
+        ));
+    }
+
     /// 100.64/10 is a mesh VPN's range and a CGNAT ISP's alike, so the route back decides.
     #[test]
     fn a_cgnat_peer_is_lan_only_over_a_mesh_vpn() {
@@ -1349,7 +1392,7 @@ mod tests {
         let (_temp, p) = temp();
         let np = NativePairing::load_with(Some(p), None, false).unwrap();
         let wan = std::net::IpAddr::V4(std::net::Ipv4Addr::new(203, 0, 113, 5));
-        np.note_pending("Friend's Deck", "dd88", Some(wan), None);
+        np.note_pending("Friend's Deck", "dd88", Some(wan), None, None);
         let id = np.pending()[0].id;
         assert_eq!(np.pending()[0].source, KnockSource::Wan);
         assert!(matches!(
@@ -1360,7 +1403,7 @@ mod tests {
         assert_eq!(np.pending().len(), 1, "the knock is still waiting");
 
         // The same knock from the couch is admitted.
-        np.note_pending("Living Room", "ee99", Some(LAN_KNOCK), None);
+        np.note_pending("Living Room", "ee99", Some(LAN_KNOCK), None, None);
         let lan_id = np
             .pending()
             .iter()
@@ -1442,7 +1485,7 @@ mod tests {
         let np = NativePairing::load_with(Some(p.clone()), None, false).unwrap();
         let attacker = IpAddr::from([192, 168, 1, 66]);
         for i in 0..20 {
-            np.note_pending("flood", &format!("atk{i:03}"), Some(attacker), None);
+            np.note_pending("flood", &format!("atk{i:03}"), Some(attacker), None, None);
         }
         assert_eq!(
             np.pending().len(),
@@ -1450,11 +1493,11 @@ mod tests {
             "one IP can't exceed the per-IP cap"
         );
         let legit = IpAddr::from([192, 168, 1, 50]);
-        let seq = np.note_pending("Living Room", "legit01", Some(legit), None);
+        let seq = np.note_pending("Living Room", "legit01", Some(legit), None, None);
         np.set_parked("legit01", seq, true);
         for i in 0..(PENDING_CAP * 2) {
             let ip = IpAddr::from([10, 0, (i / 256) as u8, (i % 256) as u8]);
-            np.note_pending("flood2", &format!("g{i:04}"), Some(ip), None);
+            np.note_pending("flood2", &format!("g{i:04}"), Some(ip), None, None);
         }
         assert!(
             np.pending_contains("legit01"),
@@ -1546,7 +1589,7 @@ mod tests {
         let (_temp, p) = temp();
         let np = NativePairing::load_with(Some(p.clone()), None, false).unwrap();
         let now = wall_now();
-        np.note_pending("device bb22", "BB22", Some(LAN_KNOCK), None);
+        np.note_pending("device bb22", "BB22", Some(LAN_KNOCK), None, None);
         let id = np.pending()[0].id;
         let client = np
             .approve_pending(
