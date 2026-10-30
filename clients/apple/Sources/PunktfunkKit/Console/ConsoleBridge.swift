@@ -80,6 +80,7 @@ public final class ConsoleBridge {
         case speedTest = "SpeedTest", saveHost = "SaveHost", updateHost = "UpdateHost"
         case forgetHost = "ForgetHost", wake = "Wake", cancelWake = "CancelWake"
         case probe = "Probe", setPin = "SetPin", fetchProfiles = "FetchProfiles"
+        case fetchAvatar = "FetchAvatar"
         case wakeProfile = "WakeProfile", setProfile = "SetProfile", bindPreset = "BindPreset"
         case setClipboard = "SetClipboard", unpairHost = "UnpairHost", savePreset = "SavePreset"
         case deletePreset = "DeletePreset", padTest = "PadTest", loadLicenses = "LoadLicenses"
@@ -151,6 +152,14 @@ public final class ConsoleBridge {
 
     public func push(_ kind: Push, _ json: String) {
         punktfunk_console_push(handle, kind.rawValue, json)
+    }
+
+    /// A profile's picture, encoded, under the URL `FetchAvatar` named.
+    public func avatar(url: String, bytes: Data) {
+        bytes.withUnsafeBytes { raw in
+            punktfunk_console_avatar(
+                handle, url, raw.bindMemory(to: UInt8.self).baseAddress, UInt(raw.count))
+        }
     }
 
     /// One title's poster, encoded; the shell decodes it at the size it draws.

@@ -95,6 +95,14 @@ final class LibraryClientTests: XCTestCase {
         }
     }
 
+    func testAPictureMustBeAPathOnTheHost() {
+        let base = "https://10.0.0.2:47990"
+        XCTAssertEqual(
+            LibraryClient.pictureURL("/kid?v=1", base: base)?.absoluteString, base + "/kid?v=1")
+        XCTAssertNil(LibraryClient.pictureURL("https://elsewhere.example/x.png", base: base))
+        XCTAssertNil(LibraryClient.pictureURL(nil, base: base))
+    }
+
     func testACursorIsEncodedIntoThePagePath() {
         XCTAssertEqual(LibraryClient.pagePath(cursor: nil), "/api/v1/library/page?limit=200")
         XCTAssertEqual(

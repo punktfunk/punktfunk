@@ -338,7 +338,9 @@ struct HostCardView: View {
                         .overlay(alignment: .topTrailing) {
                             // Who plays here; the pick stores no colour.
                             if let pick = host.pickedProfile {
-                                ProfileAvatar(name: pick.displayName, size: m.tile * 0.38)
+                                ProfileAvatar(
+                                    name: pick.displayName, size: m.tile * 0.38,
+                                    picture: pick.avatar, host: host)
                                     .overlay(Circle().strokeBorder(.background, lineWidth: 2))
                                     .offset(x: m.tile * 0.06, y: -m.tile * 0.06)
                                     .accessibilityLabel("Playing as \(pick.displayName)")

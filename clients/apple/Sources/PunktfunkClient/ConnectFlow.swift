@@ -118,7 +118,7 @@ struct ConnectFlow {
                 return
             }
             profileAsk = ProfileAsk(
-                hostName: host.displayName,
+                host: host,
                 content: .choose(rows, saved: rows.first { $0.id == saved?.id }?.id, gone: d.gone),
                 pick: { pick in
                     store.setProfile(host.id, pick)

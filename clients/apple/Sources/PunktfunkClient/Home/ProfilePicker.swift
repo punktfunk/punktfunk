@@ -105,7 +105,8 @@ struct ProfileAsk: Identifiable {
     }
 
     let id = UUID()
-    let hostName: String
+    let host: StoredHost
+    var hostName: String { host.displayName }
     let content: Content
     /// Runs once the player has picked, before the sheet closes.
     let pick: (ProfilePick) -> Void
@@ -126,12 +127,12 @@ final class ProfileSwitch: ObservableObject {
             switch answer {
             case .listed(let rows):
                 ask = ProfileAsk(
-                    hostName: host.displayName,
+                    host: host,
                     content: .choose(
                         rows ?? [], saved: rows?.first { $0.id == saved?.id }?.id, gone: nil),
                     pick: { store.setProfile(host.id, $0) })
             case .failed:
-                ask = ProfileAsk(hostName: host.displayName, content: .failed, pick: { _ in })
+                ask = ProfileAsk(host: host, content: .failed, pick: { _ in })
             }
         }
     }
@@ -197,7 +198,10 @@ struct ProfilePickerView: View {
             dismiss()
         } label: {
             VStack(spacing: 8) {
-                ProfileAvatar(name: row.displayName, accent: row.accent, size: tile)
+                ProfileAvatar(
+                    name: row.displayName, accent: row.accent, size: tile, picture: row.avatar,
+                    host: ask.host
+                )
                     .overlay {
                         if saved {
                             Circle().strokeBorder(Color.primary, lineWidth: 3).padding(-6)
@@ -217,12 +221,16 @@ struct ProfilePickerView: View {
     }
 }
 
-/// A profile's initials on its accent: the host card's mark and the picker's circle.
+/// A profile's face, the host card's mark and the picker's circle: its picture over its initials
+/// on its accent.
 struct ProfileAvatar: View {
     let name: String
     /// `#RRGGBB`; the app's brand colour when absent or unreadable.
     var accent: String?
     let size: CGFloat
+    /// Host-relative URL of the picture.
+    var picture: String?
+    var host: StoredHost?
 
     var body: some View {
         let letters = HostProfiles.initials(name)
@@ -240,5 +248,10 @@ struct ProfileAvatar: View {
         }
         .frame(width: size, height: size)
         .background(Circle().fill(Color(hex: accent ?? "") ?? .brand))
+        .overlay {
+            if let picture, let host {
+                ProfilePicture(path: picture, host: host, size: size)
+            }
+        }
     }
 }

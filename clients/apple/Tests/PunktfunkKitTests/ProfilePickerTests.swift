@@ -65,6 +65,17 @@ final class ProfilePickerTests: XCTestCase {
         XCTAssertNil(InitialsInk("\u{1F3AE}", fontSize: 6.7), "an emoji has no outline")
     }
 
+    func testAKeptPickFollowsItsProfilesNewPicture() {
+        let old = ProfilePick(id: "kid", displayName: "Kid", avatar: "/kid?v=old", remember: true)
+        let rows = [
+            ListedProfile(id: "kid", displayName: "Kid", avatar: "/kid?v=new"),
+            ListedProfile(id: "own", displayName: "Ada"),
+        ]
+        let kept = HostProfiles.pickerDecision(listed: rows, remembered: old, link: nil).remember
+        XCTAssertEqual(kept?.avatar, "/kid?v=new")
+        XCTAssertEqual(kept?.remember, true)
+    }
+
     func testASeatIsDialedWokenWaitedForOrRefused() {
         func row(_ state: SeatState?, _ detail: String? = nil) -> ListedProfile {
             ListedProfile(
@@ -96,7 +107,8 @@ final class ProfilePickerTests: XCTestCase {
         XCTAssertNil(host.pickedProfile)
         XCTAssertEqual(host.presetID, "preset")
         var picked = host
-        picked.pickedProfile = ProfilePick(id: "kid", displayName: "Kid")
+        picked.pickedProfile = ProfilePick(
+            id: "kid", displayName: "Kid", avatar: "/api/v1/profiles/kid/avatar?v=1")
         let back = try JSONDecoder().decode(
             StoredHost.self, from: try JSONEncoder().encode(picked))
         XCTAssertEqual(back.pickedProfile, picked.pickedProfile)

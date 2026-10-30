@@ -127,6 +127,27 @@ fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     m.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
+/// The console, a name and an encoded image, as the entry points taking one receive them.
+/// `None` when any is missing.
+///
+/// # Safety
+/// `c` is NULL or live; `name` is NULL or a NUL-terminated string; `bytes` is `len` readable bytes.
+unsafe fn image_args<'a>(
+    c: *const PunktfunkConsole,
+    name: *const c_char,
+    bytes: *const u8,
+    len: usize,
+) -> Option<(&'a PunktfunkConsole, &'a str, Vec<u8>)> {
+    // SAFETY: live and NUL-terminated per this function's contract.
+    let (c, name) = (unsafe { c.as_ref() }?, unsafe { str_arg(name) }?);
+    if bytes.is_null() || len == 0 {
+        return None;
+    }
+    // SAFETY: `len` readable bytes per this function's contract.
+    let bytes = unsafe { std::slice::from_raw_parts(bytes, len) }.to_vec();
+    Some((c, name, bytes))
+}
+
 /// Run `f`, turning a panic into `default`: unwinding across the C boundary is undefined.
 fn guard<T>(default: T, f: impl FnOnce() -> T) -> T {
     catch_unwind(AssertUnwindSafe(f)).unwrap_or(default)
@@ -651,16 +672,31 @@ pub unsafe extern "C" fn punktfunk_console_art(
     len: usize,
 ) {
     guard((), || {
-        // SAFETY: live and NUL-terminated per the contract.
-        let (Some(c), Some(id)) = (unsafe { c.as_ref() }, unsafe { str_arg(id) }) else {
+        // SAFETY: the contract above is `image_args`'.
+        let Some((c, id, bytes)) = (unsafe { image_args(c, id, bytes, len) }) else {
             return;
         };
-        if bytes.is_null() || len == 0 {
-            return;
-        }
-        // SAFETY: `len` readable bytes per the contract.
-        let bytes = unsafe { std::slice::from_raw_parts(bytes, len) }.to_vec();
         c.handles.library.push_art(id.to_string(), bytes);
+    })
+}
+
+/// A profile's picture, encoded, under the URL `ConsoleCmd::FetchAvatar` named.
+///
+/// # Safety
+/// `c` is live; `url` is a NUL-terminated string; `bytes` is `len` readable bytes.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn punktfunk_console_avatar(
+    c: *const PunktfunkConsole,
+    url: *const c_char,
+    bytes: *const u8,
+    len: usize,
+) {
+    guard((), || {
+        // SAFETY: the contract above is `image_args`'.
+        let Some((c, url, bytes)) = (unsafe { image_args(c, url, bytes, len) }) else {
+            return;
+        };
+        c.handles.console.set_avatar(url, bytes);
     })
 }
 

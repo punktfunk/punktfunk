@@ -194,6 +194,15 @@ void punktfunk_console_art(const PunktfunkConsole *c,
                            const uint8_t *bytes,
                            uintptr_t len);
 
+// A profile's picture, encoded, under the URL `ConsoleCmd::FetchAvatar` named.
+//
+// # Safety
+// `c` is live; `url` is a NUL-terminated string; `bytes` is `len` readable bytes.
+void punktfunk_console_avatar(const PunktfunkConsole *c,
+                              const char *url,
+                              const uint8_t *bytes,
+                              uintptr_t len);
+
 // The next event the shell raised, or NULL when there is none: `{"action": OverlayAction}`,
 // `{"pulse": "move"|"confirm"|"boundary"}`, `{"editing": bool}`, `{"announce": "…"}` or
 // `{"settings": Settings}` (persist it). Free with `punktfunk_console_string_free`.

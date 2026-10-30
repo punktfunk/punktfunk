@@ -87,6 +87,10 @@ extension ConsoleModel {
             fetchProfiles(
                 addr: a["addr"] as? String ?? "", mgmt: port(a["mgmt"]),
                 fp: a["fp_hex"] as? String ?? "")
+        case .fetchAvatar:
+            fetchAvatar(
+                addr: a["addr"] as? String ?? "", mgmt: port(a["mgmt"]),
+                fp: a["fp_hex"] as? String ?? "", url: a["url"] as? String ?? "")
         case .wakeProfile:
             wakeProfile(
                 addr: a["addr"] as? String ?? "", mgmt: port(a["mgmt"]),
@@ -99,6 +103,7 @@ extension ConsoleModel {
                     (pick?["id"] as? String).map {
                         ProfilePick(
                             id: $0, displayName: pick?["display_name"] as? String ?? "",
+                            avatar: pick?["avatar"] as? String,
                             remember: pick?["remember"] as? Bool ?? false)
                     })
             }
@@ -389,6 +394,19 @@ extension ConsoleModel {
             case .failed:
                 self?.pushProfiles(fp, ["Failed": "Couldn't load the profiles."])
             }
+        }
+    }
+
+    /// A profile's picture for the faces the shell draws. A read that fails leaves the initials.
+    private func fetchAvatar(addr: String, mgmt: UInt16, fp: String, url: String) {
+        guard let host = host(fp: fp, addr: addr, port: 0),
+              case .success(let target) = MgmtTarget.make(host: host, port: mgmt),
+              let resolved = LibraryClient.pictureURL(url, on: target)
+        else { return }
+        let loader = LibraryArtLoader(target)
+        Task { [weak self] in
+            guard let bytes = try? await loader.data(for: resolved) else { return }
+            self?.bridge.avatar(url: url, bytes: bytes)
         }
     }
 
