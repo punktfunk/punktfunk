@@ -599,6 +599,17 @@ struct VendedDrawable {
     let period: CFTimeInterval
 }
 
+/// Whether the deadline link is fed enough to park passes: a parked pass that goes unused
+/// still stores its drawable, the cost of a frame, so at 60 or 30 fps content every empty
+/// vend would burn one. Six of the last eight vends shown opens the gate. Render-thread
+/// confined. Internal for tests.
+struct LatchGate {
+    private var shown: UInt8 = 0
+    /// One vend's fate: shown, or expired, skipped or dropped.
+    mutating func note(shown fed: Bool) { shown = (shown << 1) | (fed ? 1 : 0) }
+    var open: Bool { shown.nonzeroBitCount >= 6 }
+}
+
 /// The largest of the last 32 samples of one cost. Lock-free; its owner guards it.
 struct RecentMax {
     private var samples = [CFTimeInterval](repeating: 0, count: 32)
@@ -2008,8 +2019,10 @@ public final class Stage2Pipeline {
             }
             // What became of the last drawable this thread handled, for the late line.
             var lastFate = "presented"
-            // The newest vend's pass, parked on the GPU until its pick (MetalVideoPresenter.park).
+            // The newest vend's pass, parked on the GPU until its pick (MetalVideoPresenter.park),
+            // while the gate says the vends are fed.
             var parked: ParkedPass?
+            var latchGate = LatchGate()
             // Per-iteration autorelease pool — same contract as the arrival/glass loop (the
             // vended drawable and its retinue are autoreleased objects on a runloop-less thread).
             while !token.isStopped { autoreleasepool {
@@ -2028,14 +2041,18 @@ public final class Stage2Pipeline {
                 // Late latch: the newest vend's pass goes to the GPU now, and an older one it
                 // replaced runs as a discard; the pick then only names the frame.
                 if let vend = stash.peek({ $0 }), parked?.drawable !== vend.drawable {
-                    if let old = parked { presenter.skip(old) }
-                    parked = presenter.park(vend.drawable)
+                    if let old = parked {
+                        presenter.skip(old)
+                        latchGate.note(shown: false)
+                    }
+                    parked = latchGate.open ? presenter.park(vend.drawable) : nil
                 }
                 if let vend = stash.take(where: { CACurrentMediaTime() > cutoff($0) }) {
                     if let p = parked, p.drawable === vend.drawable {
                         presenter.skip(p)
                         parked = nil
                     }
+                    latchGate.note(shown: false)
                     watchdog.noteVend(at: CACurrentMediaTime()) // the link is alive, just unclaimed
                     pacer.noteExpired()
                     lastFate = "expired"
@@ -2130,6 +2147,7 @@ public final class Stage2Pipeline {
                     watchdog.noteVend(at: now)
                     ring.putBack(frame)
                     pacer.noteSkip()
+                    latchGate.note(shown: false)
                     if let p = parked, p.drawable === drawable {
                         presenter.skip(p)
                         parked = nil
@@ -2198,6 +2216,7 @@ public final class Stage2Pipeline {
                     rendered = presenter.render(shown.image, into: drawable, onPresented: onGlass)
                 }
                 lastFate = rendered ? "presented" : "failed"
+                latchGate.note(shown: rendered)
                 let renderTook = CACurrentMediaTime() - renderStarted
                 pacer.noteRender(seconds: renderTook)
                 debugStats?.renderReturned(ok: rendered, tookMs: renderTook * 1000)
