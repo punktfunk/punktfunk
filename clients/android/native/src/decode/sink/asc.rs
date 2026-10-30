@@ -24,7 +24,9 @@ use std::time::{Duration, Instant};
 use super::super::async_loop::{Ctx, DecodeEvent, OutputReady};
 use super::super::display::stream_dataspace;
 use super::super::latency::{now_realtime_ns, p50_max_ms, take_by_pts};
-use super::super::surface_control::{fence_signal_ns, present, Layer, PresentComplete};
+use super::super::surface_control::{
+    fence_errored, fence_signal_ns, present, Layer, PresentComplete,
+};
 use super::super::vsync::VsyncShared;
 use super::{Downrate, Routed, Sink};
 use crate::present::budget::AscBudget;
@@ -100,6 +102,9 @@ struct Presented {
     release_mono: i64,
     /// The vsync slot the scheduler aimed at; `None` for an as-soon-as-possible target.
     slot: Option<i64>,
+    /// A duplicate of the acquire fence `setBuffer` took: it signals when the decoder's pixels
+    /// are written, which an early-output decoder reports after the output callback.
+    acquire: Option<OwnedFd>,
 }
 
 /// One completed present: what the clock and the display metrics need once its vsync is known.
@@ -110,6 +115,7 @@ struct PresentSample {
     decoded_real: i128,
     release_real: i128,
     release_mono: i64,
+    acquire: Option<OwnedFd>,
 }
 
 /// A completed present whose fence has not signalled yet.
@@ -181,6 +187,11 @@ pub(crate) struct AscSink {
     pace_us: Vec<u64>,
     e2e_us: Vec<u64>,
     phase_err_us: Vec<u64>,
+    /// Frames acquired with a pending fence (an early output), fences that resolved in error, and
+    /// the fence's signal minus the output callback: the codec time the HUD `decode` misses.
+    fenced: u64,
+    fence_err: u64,
+    fence_tail_us: Vec<u64>,
     last_flush: Instant,
 }
 
@@ -305,6 +316,9 @@ impl AscSink {
             pace_us: Vec::with_capacity(256),
             e2e_us: Vec::with_capacity(256),
             phase_err_us: Vec::with_capacity(256),
+            fenced: 0,
+            fence_err: 0,
+            fence_tail_us: Vec::with_capacity(256),
             last_flush: Instant::now(),
         })
     }
@@ -428,6 +442,9 @@ impl AscSink {
                 targets.push(s);
             }
         }
+        // `setBuffer` takes the acquire fence; this duplicate is read once the frame is on glass
+        // (`on_present`), for the decoder's own finish.
+        let acquire = frame.fence.as_ref().and_then(|f| f.try_clone().ok());
         let applied = present(
             &mut targets,
             &frame.buffer,
@@ -457,6 +474,7 @@ impl AscSink {
             release_real,
             release_mono: now_monotonic_ns(),
             slot,
+            acquire,
         });
         self.budget.applied(&mut self.counters);
         self.next_seq += 1;
@@ -498,7 +516,8 @@ impl AscSink {
     }
 
     /// Acquire the next image and pair its decode stamps: the image and its monotonic decode
-    /// instant. `None` when the reader is empty or a transient acquire error occurs.
+    /// instant. A fence still pending here is an early output (the pixels are not written yet),
+    /// counted as `fenced`. `None` when the reader is empty or a transient acquire error occurs.
     fn acquire(&mut self) -> Option<(Acquired, i64)> {
         // SAFETY: we never touch the image's pixels. Its acquire fence goes to SurfaceFlinger when
         // presented or back to AImageReader as the release fence when discarded.
@@ -511,6 +530,12 @@ impl AscSink {
                 return None;
             }
         };
+        if fence
+            .as_ref()
+            .is_some_and(|f| fence_signal_ns(f.as_fd()).is_none())
+        {
+            self.fenced += 1;
+        }
         let buffer = match image.hardware_buffer() {
             Ok(b) => b,
             Err(e) => {
@@ -562,8 +587,8 @@ impl AscSink {
     }
 
     /// One frame on glass at `present_ns`: the scheduler scores it ([`Slots::on_present`]; a
-    /// `real` vsync is a present fence), then record the display metrics and publish the
-    /// glass-to-glass figure.
+    /// `real` vsync is a present fence), then record the display metrics, the decoder's fence
+    /// tail, and publish the glass-to-glass figure.
     fn on_present(
         &mut self,
         a: PresentSample,
@@ -585,6 +610,19 @@ impl AscSink {
         let displayed_real = a.release_real + on_glass_ns as i128;
         let latch_use = (on_glass_ns / 1000) as u64;
         self.latch_us.push(latch_use);
+        // On glass means the acquire fence resolved: its signal minus the output callback is the
+        // codec time an early output hides from `decode`; an error means the display showed an
+        // unfinished buffer.
+        if let Some(acq) = a.acquire.as_ref() {
+            let decoded_mono = a.release_mono - (a.release_real - a.decoded_real) as i64;
+            match fence_signal_ns(acq.as_fd()) {
+                Some(done) => self
+                    .fence_tail_us
+                    .push(((done - decoded_mono).max(0) / 1000) as u64),
+                None if fence_errored(acq.as_fd()) => self.fence_err += 1,
+                None => {}
+            }
+        }
         let pts_ns = a.pts_us.saturating_mul(1000);
         // Published RAW for the audio plane to align against.
         if let Some(us) = crate::stats::publish_e2e(video_e2e, displayed_real, clock_offset, pts_ns)
@@ -737,6 +775,7 @@ impl Sink for AscSink {
         let (pace_p50, pace_max) = p50_max_ms(std::mem::take(&mut self.pace_us));
         let (e2e_p50, e2e_max) = p50_max_ms(std::mem::take(&mut self.e2e_us));
         let (err_p50, err_max) = p50_max_ms(std::mem::take(&mut self.phase_err_us));
+        let (tail_p50, tail_max) = p50_max_ms(std::mem::take(&mut self.fence_tail_us));
         let intervals = std::mem::take(&mut c.intervals);
         let cadence = cadence_suffix(self.store.cadence_health());
         stats.note_cadence(intervals.judder_permille(), c.coalesced);
@@ -745,7 +784,8 @@ impl Sink for AscSink {
             "asc released={} displays={} skipped={} inflight={} qDepth={} paceMs p50={:.2} \
              max={:.2} latchMs p50={:.2} max={:.2} e2eMs p50={:.2} max={:.2} panelMs={:.2} \
              leadMs={:.2} marginUs={} held={} slotMiss={} coalesced={} n0={} n1={} n2={} n3+={} \
-             judder={}‰ mode={} phaseErrMs p50={:.2} max={:.2} forced={} unlatched={} fence={}{}",
+             judder={}‰ mode={} phaseErrMs p50={:.2} max={:.2} forced={} unlatched={} fence={} \
+             fenced={} fenceErr={} fenceTailMs p50={:.2} max={:.2}{}",
             c.released,
             c.displays,
             skipped,
@@ -774,6 +814,10 @@ impl Sink for AscSink {
             c.forced,
             c.unlatched,
             u8::from(self.slots.fence_live()),
+            std::mem::take(&mut self.fenced),
+            std::mem::take(&mut self.fence_err),
+            tail_p50,
+            tail_max,
             cadence,
         );
         c.released = 0;
@@ -803,7 +847,7 @@ impl Sink for AscSink {
         self.budget.completed();
         self.slots.note_latch(pc.latch_ns, &mut self.counters);
         if pc.latch_ns > 0 {
-            if let Some(p) = self.presented.iter().find(|p| p.seq == pc.seq) {
+            if let Some(p) = self.presented.iter_mut().find(|p| p.seq == pc.seq) {
                 let sample = PresentSample {
                     slot: p.slot,
                     latch_ns: pc.latch_ns,
@@ -811,6 +855,7 @@ impl Sink for AscSink {
                     decoded_real: p.decoded_real,
                     release_real: p.release_real,
                     release_mono: p.release_mono,
+                    acquire: p.acquire.take(),
                 };
                 match pc.present_fence {
                     Some(fence) => {

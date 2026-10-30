@@ -271,8 +271,19 @@ pub(super) fn hdr_static(client: &NativeClient) -> Option<punktfunk_core::quic::
 /// `mtk-boost` (standard plus MediaTek's `vendor.mtk.vdec.cpu.boost.mode.value`: the codec asks
 /// PowerHAL for a CPU minimum-clock lock for its life, which the MediaTek library reads at init).
 /// `mtk-boost` stays opt-in because it spends power; a decoder without the key ignores it.
+/// `qti-fence` (standard plus Qualcomm's output-fence keys, [`qti_fence_eligible`]): the codec
+/// returns each output when the input is consumed, with a fence that signals when the pixels are
+/// written. Opt-in until the glass gain is measured; the `pf.present` line's `fenceTailMs` is
+/// the codec time the HUD `decode` then no longer sees.
 /// `adb shell setprop debug.punktfunk.low_latency_key mtk-boost`.
 pub(super) const LOW_LATENCY_KEY_PROP: &std::ffi::CStr = c"debug.punktfunk.low_latency_key";
+
+/// The Qualcomm output-fence keys fit a Codec2 Qualcomm decoder on Android 13+. Only
+/// `CCodecBufferChannel` since 13 forwards the codec's fence to the consumer; earlier releases
+/// queue the buffer unfenced, and SurfaceFlinger would show it unfinished.
+fn qti_fence_eligible(codec_name: &str, sdk: u32) -> bool {
+    codec_name.to_ascii_lowercase().starts_with("c2.qti") && sdk >= 33
+}
 
 /// TV platforms that show half the stream rate, as (`ro.product.manufacturer`, `ro.product.device`):
 /// Philips' Pentonic 1000 sets (OLED809/810/888, PUS8508) and TCL's Pentonic 700 `G08` (C6K, C755,
@@ -321,13 +332,13 @@ pub(super) fn low_latency_format(
     if let Some(aggressive) = keys {
         let forced = sysprop(LOW_LATENCY_KEY_PROP);
         let profile = match forced.as_deref() {
-            Some(p @ ("standard" | "off" | "mtk-tv" | "mtk-boost")) => p,
+            Some(p @ ("standard" | "off" | "mtk-tv" | "mtk-boost" | "qti-fence")) => p,
             _ if codec_name.to_ascii_lowercase().starts_with("c2.mtk") && half_rate_tv() => {
                 "mtk-tv"
             }
             _ => "standard",
         };
-        let standard_key = matches!(profile, "standard" | "mtk-boost");
+        let standard_key = matches!(profile, "standard" | "mtk-boost" | "qti-fence");
         configure_low_latency(&mut format, codec_name, aggressive, standard_key);
         if profile != "standard" {
             log::info!("decode: low-latency profile {profile}");
@@ -339,6 +350,16 @@ pub(super) fn low_latency_format(
                 format.set_i32("operating-rate", mode.refresh_hz as i32);
             }
             "mtk-boost" => format.set_i32("vendor.mtk.vdec.cpu.boost.mode.value", 1),
+            "qti-fence" if qti_fence_eligible(codec_name, crate::sys::sdk_int()) => {
+                // Decode-order output is the fence's prerequisite. The sw-fence key is the
+                // 8 Gen 2 spelling, the output-fence pair the 8 Gen 3 / 8 Elite one (type 1:
+                // the driver signals). A codec without a key ignores it.
+                format.set_i32("vendor.qti-ext-dec-picture-order.enable", 1);
+                format.set_i32("vendor.qti-ext-output-sw-fence-enable.value", 1);
+                format.set_i32("vendor.qti-ext-output-fence.enable", 1);
+                format.set_i32("vendor.qti-ext-output-fence.fence_type", 1);
+            }
+            "qti-fence" => log::warn!("decode: qti-fence needs a c2.qti decoder on Android 13+"),
             _ => {}
         }
     }
@@ -346,4 +367,18 @@ pub(super) fn low_latency_format(
         format.set_buffer("hdr-static-info", &android_hdr_static_info(meta));
     }
     format
+}
+
+#[cfg(test)]
+mod tests {
+    use super::qti_fence_eligible;
+
+    #[test]
+    fn qti_fence_needs_a_codec2_qualcomm_decoder_on_13() {
+        assert!(qti_fence_eligible("c2.qti.hevc.decoder.low_latency", 33));
+        assert!(qti_fence_eligible("C2.QTI.avc.decoder", 35));
+        assert!(!qti_fence_eligible("c2.qti.hevc.decoder", 32));
+        assert!(!qti_fence_eligible("omx.qcom.video.decoder.hevc", 34));
+        assert!(!qti_fence_eligible("c2.mtk.hevc.decoder", 34));
+    }
 }
