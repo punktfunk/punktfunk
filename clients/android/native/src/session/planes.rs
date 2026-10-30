@@ -417,7 +417,7 @@ pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeVideoStatsL
                 role: Role::Warn,
             });
         }
-        if let Some(text) = panel_warning(panel_hz, panel_mode_hz, s.refresh_hz) {
+        if let Some(text) = panel_warning(panel_hz, panel_mode_hz, s.refresh_hz, s.received) {
             s.extras.push(Extra {
                 text,
                 tier: StatsVerbosity::Compact,
@@ -500,8 +500,12 @@ pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeVideoStatsS
 
 /// A panel below the stream costs judder plus a refresh of latency, and reads as a host fault
 /// without this line. `rate` is what this app may render at and `mode` the panel's active mode:
-/// the first below the second is Android's per-uid cap (the game default frame rate).
-fn panel_warning(rate: f32, mode: f32, stream_hz: u32) -> Option<String> {
+/// the first below the second is Android's per-uid cap (the game default frame rate). A window
+/// with no frames `received` warns of nothing: a still picture lets the panel idle.
+fn panel_warning(rate: f32, mode: f32, stream_hz: u32, received: u32) -> Option<String> {
+    if received == 0 {
+        return None;
+    }
     let shown = rate.round() as i32;
     if rate > 0.0 && mode > 0.0 && rate + 1.0 < mode {
         return Some(format!("⚠ app capped {shown} Hz by the system"));
@@ -889,18 +893,20 @@ pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeAudioMute(
 mod panel_tests {
     use super::panel_warning;
 
-    /// A per-uid cap, a real mode below the stream, and a full-rate panel that warns of nothing.
+    /// A per-uid cap, a real mode below the stream, and a full-rate or idling panel that warns
+    /// of nothing.
     #[test]
     fn a_panel_below_the_stream_is_named() {
         assert_eq!(
-            panel_warning(60.0, 120.0, 120).as_deref(),
+            panel_warning(60.0, 120.0, 120, 60).as_deref(),
             Some("⚠ app capped 60 Hz by the system")
         );
         assert_eq!(
-            panel_warning(60.0, 60.0, 120).as_deref(),
+            panel_warning(60.0, 60.0, 120, 60).as_deref(),
             Some("⚠ panel 60 Hz, not 120 · check the game frame-rate limit")
         );
-        assert_eq!(panel_warning(120.0, 120.0, 120), None);
-        assert_eq!(panel_warning(0.0, 0.0, 120), None);
+        assert_eq!(panel_warning(120.0, 120.0, 120, 120), None);
+        assert_eq!(panel_warning(0.0, 0.0, 120, 120), None);
+        assert_eq!(panel_warning(60.0, 60.0, 90, 0), None);
     }
 }
