@@ -201,6 +201,7 @@ internal object ConsoleJson {
         .put("id", p.id)
         .put("display_name", p.displayName)
         .put("accent", p.accent ?: JSONObject.NULL)
+        .put("avatar", p.avatar ?: JSONObject.NULL)
         .put("owner", p.owner)
         .put("legacy_seat", p.legacySeat)
         .put(

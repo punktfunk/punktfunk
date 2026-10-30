@@ -103,6 +103,7 @@ class ConsoleBridgeVectorTest {
             ListedProfile(
                 id = "p1", displayName = "Ada", accent = "#3366ff", owner = true,
                 seat = Seat(SeatState.STARTING, detail = "Starting Steam", steamSignIn = true),
+                avatar = "/api/v1/profiles/p1/avatar?v=1",
             ),
             ListedProfile(id = "p2", displayName = "Ben", legacySeat = true),
         )

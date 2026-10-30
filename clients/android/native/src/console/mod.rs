@@ -588,6 +588,28 @@ pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeConsoleLibr
     .resolve::<LogErrorAndDefault>()
 }
 
+/// `NativeBridge.nativeConsoleAvatar(handle, url, bytes)` — a profile's picture, encoded,
+/// under the URL `ConsoleCmd::FetchAvatar` named.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeConsoleAvatar(
+    mut env: EnvUnowned,
+    _this: JObject,
+    handle: jlong,
+    url: JString,
+    bytes: JByteArray,
+) {
+    env.with_env(|env| -> jni::errors::Result<()> {
+        let Some(h) = CONSOLES.get(handle) else {
+            return Ok(());
+        };
+        let url = url.try_to_string(env)?;
+        let bytes = env.convert_byte_array(&bytes)?;
+        h.handles.console.set_avatar(&url, bytes);
+        Ok(())
+    })
+    .resolve::<LogErrorAndDefault>()
+}
+
 json_pusher!(
 /// `NativeBridge.nativeConsoleLibraryRunning(handle, json)` — the host's `/status` `games[]`
 /// (`[{"app_id": "steam:570", "state": "running"}, …]`).
