@@ -936,16 +936,18 @@ public final class StreamViewController: StreamViewControllerBase {
     }
     #endif
 
-    /// The display scale to render the metal drawable at. `traitCollection.displayScale` is the
-    /// canonical render scale and is reliable once the controller is in the hierarchy;
-    /// `view.contentScaleFactor` can read 1.0 before the view attaches to a window/screen, which
-    /// would size the drawable at point resolution → a pixelated, upscaled mess. Falls back to the
-    /// main screen scale if the trait is still unspecified.
+    /// The scale to render the metal drawable at: the panel's pixels per point, not the logical
+    /// `displayScale`. Under Display Zoom (an iPad's "More Space", a phone's "Larger Text") the
+    /// two differ, and a drawable at the logical scale is resampled twice — up by the shader,
+    /// down by the display. The stream is negotiated from `nativeBounds`, so the panel's scale
+    /// makes decoded, drawable and panel 1:1. Falls back to the trait, then the main screen.
     private var renderScale: CGFloat {
         let s = traitCollection.displayScale
         #if os(visionOS)
         return s > 0 ? s : 2 // visionOS windows render at 2x
         #else
+        let native = (view.window?.windowScene?.screen ?? NativeDisplay.screen).nativeScale
+        if native > 0 { return native }
         return s > 0 ? s : UIScreen.main.scale
         #endif
     }
