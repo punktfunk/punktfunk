@@ -2,8 +2,9 @@
 //!
 //! Nested and headless gamescopes have no connector of their own. A session that is the DRM
 //! master does: this module finds that connector from `/proc/<pid>/cmdline` (backend flag and
-//! `--prefer-output`) and `/sys/class/drm` (plug status + EDID). gamescope has no protocol that
-//! reports the output it lights; [`gamescope_control`] only sets things.
+//! `--prefer-output`) and `/sys/class/drm` (plug status + EDID), and its mode from the lit
+//! CRTC ([`crate::drm_dpms::lit_mode`]). gamescope has no protocol that reports the output it
+//! lights; [`gamescope_control`] only sets things.
 //!
 //! Only the driven head is listed. Mirror capture attaches to gamescope's composited PipeWire
 //! node (`vdisplay::mirror`), so an undriven connector cannot be streamed. The pin id is the
@@ -16,18 +17,36 @@ use super::argv::{flag_value, gamescope_argvs, gamescope_output_size};
 use crate::monitors::{describe, PhysicalMonitor};
 use std::path::Path;
 
+/// A card's lit mode as `(width, height, mHz)`: [`crate::drm_dpms::lit_mode`]'s shape.
+type LitMode = dyn Fn(&str) -> Option<(u32, u32, u32)>;
+
 /// The DRM-driven head, or empty. Empty is not an error: no gamescope, a nested/headless
 /// backend, or nothing plugged in. Same contract as [`crate::monitors::list`].
 pub(crate) fn list_monitors() -> anyhow::Result<Vec<PhysicalMonitor>> {
-    Ok(heads_under(Path::new("/sys/class/drm"), &gamescope_argvs()))
+    Ok(heads_under(
+        Path::new("/sys/class/drm"),
+        &gamescope_argvs(),
+        &crate::drm_dpms::lit_mode,
+    ))
 }
 
-/// [`list_monitors`] against a sysfs root and argv set.
+/// The head the box lights, as `(width, height, Hz)`, for an attach that mirrors it. `None`
+/// for a headless or nested gamescope, several candidate heads, or an unknown rate.
+pub(super) fn own_mode() -> Option<(u32, u32, u32)> {
+    let heads = list_monitors().ok()?;
+    let [head] = heads.as_slice() else {
+        return None;
+    };
+    let hz = (f64::from(head.refresh_mhz) / 1000.0).round() as u32;
+    (hz > 0 && head.width > 0 && head.height > 0).then_some((head.width, head.height, hz))
+}
+
+/// [`list_monitors`] against a sysfs root, argv set and `lit` (a card's lit mode).
 ///
 /// Size is `-W`/`-H` on the argv selected here — what the capture node produces — not the EDID
 /// preferred timing, and not another gamescope on the box (a nested child, or a headless one
 /// this crate spawned).
-fn heads_under(base: &Path, argvs: &[Vec<String>]) -> Vec<PhysicalMonitor> {
+fn heads_under(base: &Path, argvs: &[Vec<String>], lit: &LitMode) -> Vec<PhysicalMonitor> {
     // First DRM-backed argv, not first argv: a nested child must not mask its parent.
     let Some(argv) = argvs.iter().find(|a| drives_drm(a)) else {
         return Vec::new();
@@ -48,9 +67,13 @@ fn heads_under(base: &Path, argvs: &[Vec<String>]) -> Vec<PhysicalMonitor> {
                 .as_ref()
                 .map(|e| (e.make.clone(), e.model.clone()))
                 .unwrap_or_default();
-            // Size: `-W`/`-H` (capture node). Refresh: EDID only — `-r` is the nested
-            // composite rate, not the connector; using it caps a 120 Hz panel at launch rate.
+            // `card1-HDMI-A-1` → `card1`.
+            let live = c.dir.split_once('-').and_then(|(card, _)| lit(card));
+            // Size: `-W`/`-H` (capture node), then the lit mode. Refresh: the lit mode —
+            // the EDID's preferred timing cannot carry 4K120 (its pixel clock field ends at
+            // 655 MHz), and `-r` is the nested composite rate, not the connector's.
             let (w, h) = output_size
+                .or_else(|| live.map(|(w, h, _)| (w, h)))
                 .or_else(|| edid.as_ref().map(|e| (e.width, e.height)))
                 .or_else(|| preferred_sysfs_mode(base, &c.dir))
                 .unwrap_or((0, 0));
@@ -59,7 +82,11 @@ fn heads_under(base: &Path, argvs: &[Vec<String>]) -> Vec<PhysicalMonitor> {
                 connector: c.connector,
                 width: w,
                 height: h,
-                refresh_mhz: edid.as_ref().map(|e| e.refresh_mhz).unwrap_or(0),
+                refresh_mhz: live
+                    .map(|(_, _, mhz)| mhz)
+                    .filter(|&mhz| mhz > 0)
+                    .or_else(|| edid.as_ref().map(|e| e.refresh_mhz))
+                    .unwrap_or(0),
                 // No compositor global space — gamescope composites one node.
                 // `monitors`' origin identity-key degenerates; every row is (0, 0).
                 x: 0,
@@ -258,6 +285,11 @@ mod tests {
         s.split_whitespace().map(String::from).collect()
     }
 
+    /// [`heads_under`] on a box whose CRTC cannot be read: sizes and rates from the EDID.
+    fn heads(base: &Path, argvs: &[Vec<String>]) -> Vec<PhysicalMonitor> {
+        heads_under(base, argvs, &|_| None)
+    }
+
     /// Fake `/sys/class/drm` including `card1`/`renderD128`, so the filter sees real noise.
     fn sysfs(name: &str, connectors: &[(&str, &str, &str)]) -> std::path::PathBuf {
         let base = std::env::temp_dir().join(format!("pf-gs-heads-{}-{name}", std::process::id()));
@@ -283,7 +315,7 @@ mod tests {
                 ("card1-DP-1", "disconnected\n", "disabled\n"),
             ],
         );
-        let heads = heads_under(
+        let heads = heads(
             &base,
             &[argv("/usr/bin/gamescope --prefer-output HDMI-A-1 --steam")],
         );
@@ -306,18 +338,18 @@ mod tests {
             "gamescope --backend sdl",
         ] {
             assert!(
-                heads_under(&base, &[argv(a)]).is_empty(),
+                heads(&base, &[argv(a)]).is_empty(),
                 "expected no heads for {a:?}"
             );
         }
-        assert!(heads_under(&base, &[]).is_empty());
+        assert!(heads(&base, &[]).is_empty());
         std::fs::remove_dir_all(&base).unwrap();
     }
 
     #[test]
     fn a_nested_child_does_not_disqualify_its_drm_parent() {
         let base = sysfs("nested", &[("card1-eDP-1", "connected\n", "enabled\n")]);
-        let heads = heads_under(
+        let heads = heads(
             &base,
             &[
                 argv("gamescope --backend wayland -W 1280 -H 800"),
@@ -340,7 +372,7 @@ mod tests {
                 ("card1-HDMI-A-1", "connected\n", "enabled\n"),
             ],
         );
-        let heads = heads_under(&base, &[argv("gamescope --prefer-output *,eDP-1")]);
+        let heads = heads(&base, &[argv("gamescope --prefer-output *,eDP-1")]);
         assert_eq!(heads.len(), 1);
         assert_eq!(heads[0].connector, "eDP-1");
         std::fs::remove_dir_all(&base).unwrap();
@@ -355,7 +387,7 @@ mod tests {
                 ("card1-HDMI-A-1", "connected\n", "enabled\n"),
             ],
         );
-        let heads = heads_under(&base, &[argv("gamescope --steam")]);
+        let heads = heads(&base, &[argv("gamescope --steam")]);
         assert_eq!(
             heads
                 .iter()
@@ -373,14 +405,14 @@ mod tests {
             "unplugged",
             &[("card1-HDMI-A-1", "disconnected\n", "disabled\n")],
         );
-        assert!(heads_under(&base, &[argv("gamescope --steam")]).is_empty());
+        assert!(heads(&base, &[argv("gamescope --steam")]).is_empty());
         std::fs::remove_dir_all(&base).unwrap();
     }
 
     #[test]
     fn the_capture_size_outranks_the_panels_preferred_timing() {
         let base = sysfs("size", &[("card1-HDMI-A-1", "connected\n", "enabled\n")]);
-        let heads = heads_under(
+        let heads = heads(
             &base,
             &[argv("gamescope -W 2560 -H 1440 --prefer-output HDMI-A-1")],
         );
@@ -432,7 +464,7 @@ mod tests {
     fn refresh_comes_from_the_panel_not_from_the_nested_rate() {
         let base = sysfs("refresh", &[("card1-HDMI-A-1", "connected\n", "enabled\n")]);
         std::fs::write(base.join("card1-HDMI-A-1").join("edid"), edid_1080p60()).unwrap();
-        let heads = heads_under(
+        let heads = heads(
             &base,
             &[argv(
                 "gamescope --nested-refresh 30 --prefer-output HDMI-A-1",
@@ -440,6 +472,30 @@ mod tests {
         );
         assert_eq!(heads[0].refresh_mhz, 60_000);
         assert_eq!(heads[0].mode_label(), "1920x1080@60");
+        std::fs::remove_dir_all(&base).unwrap();
+    }
+
+    #[test]
+    fn the_lit_mode_outranks_the_edid_timing() {
+        let base = sysfs("lit", &[("card1-HDMI-A-1", "connected\n", "enabled\n")]);
+        std::fs::write(base.join("card1-HDMI-A-1").join("edid"), edid_1080p60()).unwrap();
+        let lit = |card: &str| (card == "card1").then_some((3840, 2160, 120_000));
+        let heads = heads_under(&base, &[argv("gamescope --prefer-output HDMI-A-1")], &lit);
+        assert_eq!(
+            (heads[0].width, heads[0].height, heads[0].refresh_mhz),
+            (3840, 2160, 120_000)
+        );
+        assert_eq!(heads[0].mode_label(), "3840x2160@120");
+        // `-W`/`-H` still name the capture size; the rate stays the panel's.
+        let heads = heads_under(
+            &base,
+            &[argv("gamescope -W 1920 -H 1080 --prefer-output HDMI-A-1")],
+            &lit,
+        );
+        assert_eq!(
+            (heads[0].width, heads[0].height, heads[0].refresh_mhz),
+            (1920, 1080, 120_000)
+        );
         std::fs::remove_dir_all(&base).unwrap();
     }
 
@@ -463,7 +519,7 @@ mod tests {
             "3840x2160\n1920x1080\n",
         )
         .unwrap();
-        let heads = heads_under(&base, &[argv("gamescope --steam")]);
+        let heads = heads(&base, &[argv("gamescope --steam")]);
         assert_eq!((heads[0].width, heads[0].height), (3840, 2160));
         std::fs::remove_dir_all(&base).unwrap();
     }

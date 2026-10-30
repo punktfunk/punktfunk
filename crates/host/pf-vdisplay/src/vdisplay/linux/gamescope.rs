@@ -385,21 +385,38 @@ impl GamescopeDisplay {
 /// Capture + inject an already-running gamescope; no lifecycle ownership. `auto` is the box's own
 /// session, set to `mode` first.
 fn create_attach(node: &str, mode: Mode, hdr: bool) -> Result<VirtualOutput> {
-    let node_id: u32 = if node.trim().eq_ignore_ascii_case("auto") {
+    let auto = node.trim().eq_ignore_ascii_case("auto");
+    let node_id: u32 = if auto {
         // Headless box: game-mode resolution is ours. Skip and the client gets the box default.
         ensure_box_gamescope_mode(mode, hdr)?
     } else {
         node.parse()
             .context("PUNKTFUNK_GAMESCOPE_NODE must be a node id or 'auto'")?
     };
+    Ok(attach_output(node_id, mode, auto))
+}
+
+/// The output of an attach to `node_id`. `own`: the node is the box's session, so a head it
+/// lights sets the stream's mode; the client's `mode` stands only for a headless re-mode or an
+/// operator-named node. Attach mirrors a gamescope that may be lighting the panel: darkening
+/// it would darken the picture streamed, so Exclusive cannot be served on this route.
+fn attach_output(node_id: u32, mode: Mode, own: bool) -> VirtualOutput {
     point_injector_at_eis(Scope::Box);
-    // Attach mirrors a gamescope that may be lighting the panel. Darkening it would
-    // darken the picture being streamed. Exclusive cannot be served on this route.
-    tracing::info!(node_id, "gamescope: attaching to existing PipeWire node");
-    Ok(VirtualOutput {
+    let (w, h, hz) =
+        own.then(heads::own_mode)
+            .flatten()
+            .unwrap_or((mode.width, mode.height, mode.refresh_hz));
+    tracing::info!(
+        node_id,
+        w,
+        h,
+        hz,
+        "gamescope: attaching to existing PipeWire node"
+    );
+    VirtualOutput {
         node_id,
         remote_fd: None,
-        preferred_mode: Some((mode.width, mode.height, mode.refresh_hz)),
+        preferred_mode: Some((w, h, hz)),
         keepalive: Box::new(()),
         ownership: DisplayOwnership::External,
         reused_gen: None,
@@ -409,7 +426,7 @@ fn create_attach(node: &str, mode: Mode, hdr: bool) -> Result<VirtualOutput> {
         input_output: None,
         seat: None,
         pid: None,
-    })
+    }
 }
 
 /// Host-managed session at the client's mode, state in [`Takeover::managed`]. Reuse if mode and
@@ -474,21 +491,7 @@ fn create_managed_session(client: &str, mode: Mode, hdr: bool) -> Result<Virtual
              own game-mode session)"
         );
         let node_id = ensure_box_gamescope_mode(mode, hdr)?;
-        point_injector_at_eis(Scope::Box);
-        return Ok(VirtualOutput {
-            node_id,
-            remote_fd: None,
-            preferred_mode: Some((mode.width, mode.height, mode.refresh_hz)),
-            keepalive: Box::new(()),
-            ownership: DisplayOwnership::External,
-            reused_gen: None,
-            pool_gen: None,
-            expect_exact_dims: false,
-            output_name: None, // EIS seat, not a wlr virtual pointer to aim by name
-            input_output: None,
-            seat: None,
-            pid: None,
-        });
+        return Ok(attach_output(node_id, mode, true));
     }
     // Desktop Steam also holds the instance; SESSION_UNIT's own Steam is exempt via cgroup.
     free_desktop_steam()?;

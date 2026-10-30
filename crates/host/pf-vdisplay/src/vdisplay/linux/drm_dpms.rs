@@ -10,6 +10,8 @@
 //! the heads back from sysfs to name the ones still dark. Best-effort: missing `/dev/dri`, a
 //! foreign master, or nothing lit contributes nothing and the stream proceeds.
 //!
+//! [`lit_mode`] reads a lit CRTC's mode over the same ioctls; that needs no master.
+//!
 //! Ioctl numbers encode payload size; layouts are pinned by the `const` asserts below.
 
 use std::fs::File;
@@ -222,22 +224,14 @@ pub fn darken() -> Option<DrmDarken> {
     })
 }
 
-/// Darken one card. Return the open fd (the hold) and how many CRTCs went off.
-/// Closing that fd is last-close and restores the console; count 0 may drop it.
-fn darken_card(path: &Path) -> std::io::Result<(File, usize)> {
-    let card = File::options().read(true).write(true).open(path)?;
-    let fd = card.as_raw_fd();
-    // Foreign master (live compositor, other gamescope) ⇒ not ours. Also the Attach
-    // guard: do not darken the picture being streamed.
-    ioctl(fd, DRM_IOCTL_SET_MASTER, &mut 0u64)?;
-
+/// Every CRTC id on `fd`: a count pass, then a data pass into a buffer of that size.
+fn crtc_ids(fd: libc::c_int) -> std::io::Result<Vec<u32>> {
     // Count pass: every pointer NULL, the kernel fills in the counts.
     let mut res = DrmModeCardRes::default();
     ioctl(fd, DRM_IOCTL_MODE_GETRESOURCES, &mut res)?;
     let n = res.count_crtcs as usize;
     if n == 0 {
-        let _ = ioctl(fd, DRM_IOCTL_DROP_MASTER, &mut 0u64);
-        return Ok((card, 0));
+        return Ok(Vec::new());
     }
     // Data pass: hand back a buffer sized by that count and ask again.
     let mut ids = vec![0u32; n];
@@ -250,6 +244,71 @@ fn darken_card(path: &Path) -> std::io::Result<(File, usize)> {
     // The kernel may report FEWER than the count pass promised (a hotplug between the two); it
     // never reports more than the buffer we sized, so trust the second count.
     ids.truncate(res.count_crtcs as usize);
+    Ok(ids)
+}
+
+/// The mode `card`'s one lit CRTC runs, as `(width, height, mHz)` — what the panel shows now,
+/// where its EDID only says what it prefers. `None` when the card does not open, nothing is
+/// lit, or more than one CRTC is: which of those is the caller's head cannot be told here.
+/// No master is taken; the compositor keeps it, and `GETCRTC` never needs it.
+pub(crate) fn lit_mode(card: &str) -> Option<(u32, u32, u32)> {
+    let file = File::open(Path::new("/dev/dri").join(card)).ok()?;
+    let fd = file.as_raw_fd();
+    let mut lit = crtc_ids(fd).ok()?.into_iter().filter_map(|id| {
+        let mut crtc = DrmModeCrtc {
+            crtc_id: id,
+            ..Default::default()
+        };
+        ioctl(fd, DRM_IOCTL_MODE_GETCRTC, &mut crtc).ok()?;
+        (crtc.mode_valid != 0).then_some(crtc.mode)
+    });
+    let mode = lit.next()?;
+    if lit.next().is_some() {
+        return None;
+    }
+    Some((
+        u32::from(mode.hdisplay),
+        u32::from(mode.vdisplay),
+        refresh_mhz(&mode),
+    ))
+}
+
+/// The kernel's `drm_mode_vrefresh` in mHz rather than rounded Hz: 59.94 stays apart from 60.
+fn refresh_mhz(m: &DrmModeModeinfo) -> u32 {
+    const INTERLACE: u32 = 1 << 4;
+    const DBLSCAN: u32 = 1 << 5;
+    let (htotal, vtotal) = (u64::from(m.htotal), u64::from(m.vtotal));
+    if htotal == 0 || vtotal == 0 {
+        return m.vrefresh.saturating_mul(1000);
+    }
+    // `clock` is kHz: ×1_000_000 over the pixel count per frame is mHz.
+    let mut num = u64::from(m.clock) * 1_000_000;
+    let mut den = htotal * vtotal;
+    if m.flags & INTERLACE != 0 {
+        num *= 2;
+    }
+    if m.flags & DBLSCAN != 0 {
+        den *= 2;
+    }
+    if m.vscan > 1 {
+        den *= u64::from(m.vscan);
+    }
+    (num / den) as u32
+}
+
+/// Darken one card. Return the open fd (the hold) and how many CRTCs went off.
+/// Closing that fd is last-close and restores the console; count 0 may drop it.
+fn darken_card(path: &Path) -> std::io::Result<(File, usize)> {
+    let card = File::options().read(true).write(true).open(path)?;
+    let fd = card.as_raw_fd();
+    // Foreign master (live compositor, other gamescope) ⇒ not ours. Also the Attach
+    // guard: do not darken the picture being streamed.
+    ioctl(fd, DRM_IOCTL_SET_MASTER, &mut 0u64)?;
+    let ids = crtc_ids(fd)?;
+    if ids.is_empty() {
+        let _ = ioctl(fd, DRM_IOCTL_DROP_MASTER, &mut 0u64);
+        return Ok((card, 0));
+    }
 
     let mut off = 0usize;
     for id in ids {
@@ -281,7 +340,9 @@ fn darken_card(path: &Path) -> std::io::Result<(File, usize)> {
 
 #[cfg(test)]
 mod tests {
-    use super::{lit_connectors, still_dark, DrmModeCardRes, DrmModeCrtc, DrmModeModeinfo};
+    use super::{
+        lit_connectors, refresh_mhz, still_dark, DrmModeCardRes, DrmModeCrtc, DrmModeModeinfo,
+    };
     use std::time::Duration;
 
     /// sysfs over a temp dir: a card's lit connectors are its own (`card1-` is not `card10-`);
@@ -309,6 +370,24 @@ mod tests {
         set("card1-DP-1", "enabled");
         assert!(still_dark(&sysfs, &lit, Duration::ZERO).is_empty());
         let _ = std::fs::remove_dir_all(&sysfs);
+    }
+
+    /// `drm_mode_vrefresh`'s cases: a plain mode, 59.94 kept apart from 60, interlace doubling
+    /// the rate, and a mode with no timing falling back to the kernel's rounded field.
+    #[test]
+    fn the_lit_mode_rate_follows_the_kernels_formula() {
+        let mut m = DrmModeCrtc::default().mode;
+        // 4K120: 1188 MHz over 4400×2250.
+        (m.clock, m.htotal, m.vtotal) = (1_188_000, 4400, 2250);
+        assert_eq!(refresh_mhz(&m), 120_000);
+        // 1080p59.94: 148.352 MHz over 2200×1125.
+        (m.clock, m.htotal, m.vtotal) = (148_352, 2200, 1125);
+        assert_eq!(refresh_mhz(&m), 59_940);
+        // 1080i60: the same timing at half the pixel clock, interlaced.
+        (m.clock, m.flags) = (74_250, 1 << 4);
+        assert_eq!(refresh_mhz(&m), 60_000);
+        (m.htotal, m.vrefresh) = (0, 75);
+        assert_eq!(refresh_mhz(&m), 75_000);
     }
 
     /// Payload sizes the ioctl numbers encode, plus the two offsets the count/data-pass uses.
