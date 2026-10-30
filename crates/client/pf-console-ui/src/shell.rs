@@ -198,7 +198,8 @@ pub struct ConsoleOptions {
     /// The device's own keyboard types into an open field: Steam's on a Steam Deck, tvOS's
     /// on an Apple TV. This shell never raises its keyboard tray.
     pub system_keyboard: bool,
-    /// A TV (Apple TV, Android TV): rows for a clipboard or a phone's sensors do nothing.
+    /// A TV (Apple TV, Android TV): rows for a phone's sensors do nothing, nor do a clipboard's,
+    /// bar Android TV's shared clipboard.
     pub tv: bool,
     /// A headset whose windows stand in a room (Apple Vision Pro): its audio can be placed
     /// there and its picture shown on more than a flat window.

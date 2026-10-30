@@ -205,7 +205,8 @@ impl CardMenu {
     }
 
     /// The rows this menu offers. A TV has no clipboard, so no Copy link; home-screen
-    /// shortcuts and launcher files are Android's, off TV.
+    /// shortcuts and launcher files are Android's, off TV. Only Android TV's sessions share a
+    /// clipboard, and this row is what turns that off there.
     fn actions(
         &self,
         store: &dyn SettingsStore,
@@ -216,6 +217,7 @@ impl CardMenu {
         let handheld = device.platform == Platform::Android && !device.tv;
         rows.retain(|a| match a {
             Action::CopyLink => !device.tv,
+            Action::Clipboard => !device.tv || device.platform == Platform::Android,
             Action::HomeScreen | Action::LauncherFile => handheld,
             _ => true,
         });
@@ -1762,6 +1764,33 @@ mod tests {
         assert!(desk.contains(&Action::CopyLink));
         assert!(!tv.contains(&Action::CopyLink));
         assert_eq!(desk.len(), tv.len() + 1);
+    }
+
+    /// Shared clipboard is offered where a session shares one: not on a TV, but Android TV's do.
+    #[test]
+    fn a_tv_offers_shared_clipboard_only_on_android() {
+        let offers = |tv, platform| {
+            let on = Device {
+                tv,
+                platform,
+                ..Device::test()
+            };
+            (0..details(&host()).sections(crate::store::file_store()).len())
+                .flat_map(|tab| {
+                    let menu = CardMenu {
+                        tab,
+                        ..details(&host())
+                    };
+                    rows_on(&menu, &on)
+                })
+                .any(|a| a == Action::Clipboard)
+        };
+        assert!(offers(false, Platform::Desktop));
+        assert!(offers(false, Platform::Android));
+        assert!(offers(true, Platform::Android));
+        assert!(!offers(true, Platform::WebOS));
+        assert!(!offers(true, Platform::Apple));
+        assert!(!offers(true, Platform::Ps5));
     }
 
     /// An Android handheld's title card offers a home-screen shortcut and a launcher file; a
