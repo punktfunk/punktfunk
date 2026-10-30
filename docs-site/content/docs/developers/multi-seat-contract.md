@@ -203,7 +203,9 @@ session by design, and display activation fails while its session is inactive.
   staged. With seats on, an emulator installed from **Emulators** keeps each account's config and
   saves in that account's profile; RPCS3, Snes9x and Supermodel keep theirs beside the program,
   one set for every account. One installed while seats were off, or by an earlier version, keeps
-  one set for every account until it is reinstalled there.
+  one set for every account until it is reinstalled there. The box host tails each running
+  seat's `game.*` into its own bus, with `seat` naming the profile: its plugins hear them, its
+  hooks don't. A seat's held launch (below) runs the box host's plugins, which then release it.
 - **The box's library, on Linux.** The box's library is the owner's (see the owner's libraries
   below). A seat other than the owner's runs no plugins and lists and launches only what it can
   start as its own user: `steam_appid` with an id that fits 32 bits and `steam_ui`, with its own
@@ -567,7 +569,8 @@ copy's reads (`library`, `library/page`, `library/art/*`), and what it merges wi
 seat's sessions, games and downloads, each row with `seat`, the profile whose host runs it, for
 the operator) and `diagnostics` with `diagnostics/refresh`. Every other admin call goes to the
 owner's host the way covers do, a dot segment never, and the table is checked against the API
-document (`every_route_has_a_side_on_the_door`). A device's `game/end` and `library/install/*`
+document (`every_route_has_a_side_on_the_door`). The door releases a seat's launch hold on that
+seat (`game/holds/{token}/release`, below). A device's `game/end` and `library/install/*`
 go to the seat it plays on, as that device: the door's call carries `X-Punktfunk-Device`,
 which a seat host honours only with its admin token and only for a device paired there. A
 call starts a stopped seat and answers 503, except `host`, `status` and `diagnostics`, which
@@ -584,6 +587,13 @@ owner's session; the door runs no hooks. The two sets are disjoint, so nothing c
 around. A knock (`pairing.pending`) wakes a stopped owner's session and reaches its host once
 that host answers, within two minutes, a supervisor that doesn't answer meanwhile included;
 any other door event a stopped owner's host misses.
+
+A seat's `game.*` goes to the same route with its `seat` kept: the owner's plugins hear it, and
+no host's hooks run on it. A seat host runs no plugins, so its `game.launching` carries a `hold`
+token, and the launch waits up to 130 seconds for `POST /game/holds/{token}/release`. The door
+sends it once the owner's host has run the plugins that hold the stage, whatever they answered,
+and at once when that host isn't running. An event a seat host lists with a `seat` already is
+one a host relayed there, and is never taken back.
 
 The door's console also accepts a console handoff signed with the owner's host's token, the one
 the owner's own `ctl console-url` holds: the door keeps it in `owner-handoff-key` in its own

@@ -2367,7 +2367,7 @@
           "events"
         ],
         "summary": "Relay an event from the box's door",
-        "description": "The door pairs and places, so `pairing.*`, `access.*`, `host.*`, `action.*` and `update.*`\nhappen there; this host's hooks run on them from here. Admin lane only: the door holds this\nhost's token. The event joins this host's bus as new.",
+        "description": "The door pairs and places, so `pairing.*`, `access.*`, `host.*`, `action.*` and `update.*`\nhappen there; this host's hooks run on them from here. A seat's `game.*` keeps its `seat`:\nthis host's plugins hear it, its hooks don't, and a `game.launching` with a `hold` answers\nonce the plugins that hold the stage are done. Admin lane only: the door holds this host's\ntoken. The event joins this host's bus as new.",
         "operationId": "relayEvent",
         "requestBody": {
           "content": {
@@ -2381,7 +2381,7 @@
         },
         "responses": {
           "202": {
-            "description": "The event is on this host's bus"
+            "description": "The event is on this host's bus, and a seat's held launch is through this host's plugins"
           },
           "400": {
             "description": "Not a host event",
@@ -2457,6 +2457,52 @@
           },
           "409": {
             "description": "No game in reach to end",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/game/holds/{token}/release": {
+      "post": {
+        "tags": [
+          "session"
+        ],
+        "summary": "Release a seat's held launch",
+        "description": "A seat host runs no plugins, so its `game.launching` carries a `hold` token and the launch\nwaits, up to the longest plugin hold plus 10 s, for the host with the plugins to call this\nonce they are done. Admin lane only: the door, or the Windows box host, holds the token.",
+        "operationId": "releaseGameHold",
+        "parameters": [
+          {
+            "name": "token",
+            "in": "path",
+            "description": "The `hold` of the seat's `game.launching`",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "The launch goes ahead"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No launch waits on that token",
             "content": {
               "application/json": {
                 "schema": {
@@ -5895,6 +5941,7 @@
           "profiles"
         ],
         "summary": "List the profiles with what the console manages",
+        "description": "On the plugin lane each row is `id`, `display_name` and `avatar` alone.",
         "operationId": "listProfiles",
         "responses": {
           "200": {
@@ -11315,6 +11362,10 @@
             "properties": {
               "game": {
                 "$ref": "#/components/schemas/GameRefPayload"
+              },
+              "hold": {
+                "type": "string",
+                "description": "On a seat host, which runs no plugins: the launch also waits for the host with the\nplugins to `POST /game/holds/{hold}/release`. Absent everywhere else."
               },
               "kind": {
                 "type": "string",

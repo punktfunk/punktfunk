@@ -54,7 +54,7 @@ const TRAY_ENV_VAR: &str = "PUNKTFUNK_TRAY_TOKEN";
 pub(crate) const TRAY_FILE: &str = "tray-token";
 
 /// 32 random bytes as hex: safe in `KEY=VALUE` and in a bearer header.
-fn random_token() -> String {
+pub(crate) fn random_token() -> String {
     let mut buf = [0u8; 32];
     rand::rng().fill_bytes(&mut buf);
     hex::encode(buf)

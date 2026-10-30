@@ -102,8 +102,10 @@ pub(crate) struct RelayedEvent {
 /// Relay an event from the box's door
 ///
 /// The door pairs and places, so `pairing.*`, `access.*`, `host.*`, `action.*` and `update.*`
-/// happen there; this host's hooks run on them from here. Admin lane only: the door holds this
-/// host's token. The event joins this host's bus as new.
+/// happen there; this host's hooks run on them from here. A seat's `game.*` keeps its `seat`:
+/// this host's plugins hear it, its hooks don't, and a `game.launching` with a `hold` answers
+/// once the plugins that hold the stage are done. Admin lane only: the door holds this host's
+/// token. The event joins this host's bus as new.
 #[utoipa::path(
     post,
     path = "/events/relay",
@@ -111,19 +113,25 @@ pub(crate) struct RelayedEvent {
     operation_id = "relayEvent",
     request_body = RelayedEvent,
     responses(
-        (status = ACCEPTED, description = "The event is on this host's bus"),
+        (status = ACCEPTED, description = "The event is on this host's bus, and a seat's held launch is through this host's plugins"),
         (status = BAD_REQUEST, description = "Not a host event", body = ApiError),
         (status = UNAUTHORIZED, description = "Missing or invalid bearer token", body = ApiError),
     )
 )]
 pub(crate) async fn relay_event(ApiJson(body): ApiJson<RelayedEvent>) -> Response {
-    match serde_json::from_value::<crate::events::HostEvent>(body.event) {
-        Ok(ev) => {
-            crate::events::emit(ev.kind);
-            StatusCode::ACCEPTED.into_response()
-        }
-        Err(e) => api_error(StatusCode::BAD_REQUEST, &format!("not a host event: {e}")),
+    let ev = match serde_json::from_value::<crate::events::HostEvent>(body.event) {
+        Ok(ev) => ev,
+        Err(e) => return api_error(StatusCode::BAD_REQUEST, &format!("not a host event: {e}")),
+    };
+    let ev = crate::events::bus().emit_from(ev.kind, ev.seat);
+    let held = matches!(
+        ev.kind,
+        crate::events::EventKind::GameLaunching { hold: Some(_), .. }
+    );
+    if held && ev.seat.is_some() {
+        let _ = tokio::task::spawn_blocking(move || crate::holds::plugins(&ev)).await;
     }
+    StatusCode::ACCEPTED.into_response()
 }
 
 /// Dropping the SSE body drops `_slot` and the broadcast receiver (cap + subscription).

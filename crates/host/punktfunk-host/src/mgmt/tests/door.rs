@@ -393,6 +393,23 @@ async fn a_relayed_event_joins_the_bus() {
         }
     }
     assert!(seen, "the relayed event is on the bus");
+
+    // A seat's game keeps its seat, so this host's plugins know whose it is.
+    let game = serde_json::json!({"event": {"seq": 1, "ts_ms": 1, "schema": 1,
+        "seat": "9a3f1c2b7e40", "kind": "game.exited", "reason": "exited",
+        "game": {"title": "relayed-game", "client": "deck", "plane": "native"}}});
+    let (status, _) = send(&app, json_req(Method::POST, "/api/v1/events/relay", game)).await;
+    assert_eq!(status, StatusCode::ACCEPTED);
+    let mut seat = None;
+    while let Ok(got) = rx.try_recv() {
+        if let crate::events::EventKind::GameExited { game, .. } = &got.kind
+            && game.title == "relayed-game"
+        {
+            seat = got.seat.clone();
+        }
+    }
+    assert_eq!(seat.as_deref(), Some("9a3f1c2b7e40"));
+
     let req = with_bearer(
         json_req(Method::POST, "/api/v1/events/relay", ev),
         "plugin-secret",

@@ -43,6 +43,25 @@ async fn the_cert_lane_reads_profiles_but_never_edits_them() {
     assert_eq!(send_cert(&app, create, fp).await, StatusCode::UNAUTHORIZED);
 }
 
+/// A plugin reads each profile's id, name and picture, and nothing of seats, devices or
+/// defaults the console's list carries.
+#[tokio::test]
+async fn a_plugin_reads_who_is_on_the_box_and_nothing_more() {
+    let app = test_app(state_with_profiles("plugin"), None);
+    let req = with_bearer(get_req("/api/v1/profiles"), "plugin-secret");
+    let (status, list) = send(&app, req).await;
+    assert_eq!(status, StatusCode::OK, "{list}");
+    let rows = list.as_array().unwrap();
+    assert_eq!(rows.len(), 1);
+    let keys: Vec<&str> = rows[0]
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(|k| k.as_str())
+        .collect();
+    assert_eq!(keys, ["display_name", "id"], "{list}");
+}
+
 /// A paired device wakes the profile it lands in when it names none; another profile's seat
 /// needs the launch grant. The console wakes any.
 #[tokio::test]

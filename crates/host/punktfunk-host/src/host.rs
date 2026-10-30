@@ -358,7 +358,7 @@ pub fn serve(
         // none: its events reach the owner's host, whose hooks run in the owner's session,
         // and the seats' events reach the door's bus for the console.
         if pf_paths::seat::role().is_door() {
-            crate::seats::events::fan_in();
+            crate::seats::events::fan_in("");
             tokio::spawn(crate::seats::events::relay_to_owner());
             #[cfg(target_os = "linux")]
             crate::door::publish_owner_key();
@@ -366,6 +366,11 @@ pub fn serve(
             #[cfg(target_os = "linux")]
             if pf_paths::seat::role().is_seat_host() {
                 crate::seats::restart_when_replaced();
+            }
+            // The Windows box host runs its seats' plugins, so their games join its bus.
+            #[cfg(windows)]
+            if !pf_paths::seat::role().is_seat_host() {
+                crate::seats::events::fan_in("&kinds=game.*");
             }
             tokio::spawn(crate::hooks::runner());
         }

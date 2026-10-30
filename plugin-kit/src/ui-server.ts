@@ -3,7 +3,11 @@
 // register/renew/deregister through Scope. Validated end-to-end by the phase-0 spike:
 // core-only env layers, no platform package, SPA fallthrough preserved.
 import { type PluginUiHandle, servePluginUi } from "@punktfunk/host";
-import { decodeHostEvent, type GameRef } from "@punktfunk/host/core";
+import {
+	decodeHostEvent,
+	type EventOf,
+	type GameRef,
+} from "@punktfunk/host/core";
 import { Effect, FileSystem, Layer, Path, Schema, type Scope } from "effect";
 import { Etag, HttpPlatform, HttpRouter } from "effect/http";
 import type { ConfigService } from "./config.js";
@@ -292,13 +296,19 @@ export const makeGameHandler = <S extends Schema.Top>(
 
 /** Stages a plugin holds. The host waits for the handler before it goes on. */
 export interface ServeUiHolds {
-	/** Before the host starts a launched game; not when it picks up one still running. */
-	readonly "game.launching"?: (game: GameRef) => Effect.Effect<void, unknown>;
+	/**
+	 * Before the host starts a launched game; not when it picks up one still running. `event` is
+	 * the whole event: its `seat` names the profile when the game launches on another seat.
+	 */
+	readonly "game.launching"?: (
+		game: GameRef,
+		event: EventOf<"game.launching">,
+	) => Effect.Effect<void, unknown>;
 }
 
 /**
- * The `/__hold` handler: decodes the event, runs its stage's handler, answers 204. The request's
- * signal interrupts the handler when the host stops waiting.
+ * The `/__hold` handler: decodes the event, runs its stage's handler with the game and the whole
+ * event, answers 204. The request's signal interrupts the handler when the host stops waiting.
  */
 export const makeHoldHandler =
 	(holds: ServeUiHolds) =>
@@ -324,7 +334,9 @@ export const makeHoldHandler =
 			return Response.json({ error: "stage not held" }, { status: 404 });
 		}
 		try {
-			await Effect.runPromise(run(ev.success.game), { signal: req.signal });
+			await Effect.runPromise(run(ev.success.game, ev.success), {
+				signal: req.signal,
+			});
 		} catch (cause) {
 			return Response.json(
 				{ error: "hold failed", issue: String(cause) },

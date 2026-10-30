@@ -4,20 +4,35 @@
 //! plugin registered with the stage (`POST /__hold` on its loopback UI port) and each hook with
 //! `hold` set. Each runs to its own deadline. The stage is fail-open: a late, failed or refused
 //! participant is logged and the launch goes ahead.
+//!
+//! A seat host runs no plugins. Its event carries a `hold` token, and the launch also waits, up
+//! to [`RELAYED_HOLD`], for the host with the plugins to run them ([`plugins`]) and call
+//! `POST /game/holds/{token}/release` ([`release`]).
 
-use crate::events::{EventKind, GameRefPayload};
-use std::time::Instant;
+use crate::events::{EventKind, GameRefPayload, HostEvent};
+use std::collections::BTreeMap;
+use std::sync::{Condvar, Mutex, MutexGuard};
+use std::time::{Duration, Instant};
 
 // `crate::hooks` checks a hook's stage against the same list.
 pub use crate::plugin_host::registry::STAGES;
 
+/// How long a seat's launch waits for its release: the longest plugin hold, plus 10 s for the
+/// relay there and back.
+pub const RELAYED_HOLD: Duration =
+    Duration::from_millis(crate::plugin_host::registry::HOLD_MAX_MS as u64 + 10_000);
+
 /// Emit `game.launching` and block until every participant answered or ran out of time.
 /// Call on a blocking thread, only when this session spawns the game.
 pub fn launching(game: GameRefPayload) {
-    let ev = crate::events::bus().emit(EventKind::GameLaunching { game });
+    let relayed = pf_paths::seat::box_library_dir()
+        .is_some()
+        .then(Relayed::new);
+    let hold = relayed.as_ref().map(|r| r.token.clone());
+    let ev = crate::events::bus().emit(EventKind::GameLaunching { game, hold });
     let plugins = crate::plugin_host::registry::holders("game.launching");
     let hooks = crate::hooks::holding(&ev);
-    if plugins.is_empty() && hooks.is_empty() {
+    if plugins.is_empty() && hooks.is_empty() && relayed.is_none() {
         return;
     }
     let started = Instant::now();
@@ -29,13 +44,92 @@ pub fn launching(game: GameRefPayload) {
         for h in &hooks {
             s.spawn(|| crate::hooks::hold(h, &ev));
         }
+        if let Some(r) = &relayed {
+            s.spawn(|| r.wait(RELAYED_HOLD));
+        }
     });
     tracing::info!(
         plugins = plugins.len(),
         hooks = hooks.len(),
+        relayed = relayed.is_some(),
         ms = started.elapsed().as_millis() as u64,
         "launch hold released"
     );
+}
+
+/// The plugins' half of a seat's held launch, on the host that has them: every plugin holding
+/// the stage gets `ev` at once. Returns when all answered or ran out of time. Blocking.
+pub(crate) fn plugins(ev: &HostEvent) {
+    let plugins = crate::plugin_host::registry::holders("game.launching");
+    if plugins.is_empty() {
+        return;
+    }
+    let started = Instant::now();
+    let json = serde_json::to_string(ev).unwrap_or_else(|_| "{}".to_string());
+    std::thread::scope(|s| {
+        for p in &plugins {
+            s.spawn(|| hold_plugin(p, &json));
+        }
+    });
+    tracing::info!(
+        plugins = plugins.len(),
+        seat = ?ev.seat,
+        ms = started.elapsed().as_millis() as u64,
+        "seat's launch hold released"
+    );
+}
+
+/// Seat launches waiting for their release, by token: `true` once released.
+static WAITING: Mutex<BTreeMap<String, bool>> = Mutex::new(BTreeMap::new());
+static RELEASED: Condvar = Condvar::new();
+
+fn waiting() -> MutexGuard<'static, BTreeMap<String, bool>> {
+    WAITING.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// A seat launch on [`WAITING`] for as long as this lives.
+struct Relayed {
+    token: String,
+}
+
+impl Relayed {
+    /// Registered before the event goes out, so no release can come first.
+    fn new() -> Relayed {
+        let token = crate::mgmt_token::random_token();
+        waiting().insert(token.clone(), false);
+        Relayed { token }
+    }
+
+    /// Until released, or `deadline` passed.
+    fn wait(&self, deadline: Duration) {
+        let (guard, waited) = RELEASED
+            .wait_timeout_while(waiting(), deadline, |w| w.get(&self.token) == Some(&false))
+            .unwrap_or_else(|e| e.into_inner());
+        drop(guard);
+        if waited.timed_out() {
+            tracing::warn!(
+                timeout_ms = deadline.as_millis() as u64,
+                "the plugins' host did not release the launch — launching anyway"
+            );
+        }
+    }
+}
+
+impl Drop for Relayed {
+    fn drop(&mut self) {
+        waiting().remove(&self.token);
+    }
+}
+
+/// Lets the seat launch waiting on `token` go ahead. `false` when none waits on it.
+pub(crate) fn release(token: &str) -> bool {
+    let mut waiting = waiting();
+    let Some(released) = waiting.get_mut(token) else {
+        return false;
+    };
+    *released = true;
+    RELEASED.notify_all();
+    true
 }
 
 /// One plugin's hold: `POST /__hold` with the event, 2xx means done. A plugin on the host's
@@ -116,8 +210,38 @@ mod tests {
                     preset: None,
                     profile: None,
                 },
+                hold: None,
             },
         }
+    }
+
+    /// A seat's launch goes ahead on its release, or at its deadline when none comes; a token
+    /// nobody waits on releases nothing.
+    #[test]
+    fn a_relayed_launch_waits_for_its_release_or_its_deadline() {
+        let held = Relayed::new();
+        let t = Instant::now();
+        std::thread::scope(|s| {
+            s.spawn(|| {
+                std::thread::sleep(Duration::from_millis(50));
+                assert!(release(&held.token));
+            });
+            held.wait(Duration::from_secs(10));
+        });
+        assert!(t.elapsed() < Duration::from_secs(5), "{:?}", t.elapsed());
+
+        let late = Relayed::new();
+        let t = Instant::now();
+        late.wait(Duration::from_millis(200));
+        assert!(t.elapsed() >= Duration::from_millis(200));
+
+        assert!(!release("not-a-hold"));
+        let token = held.token.clone();
+        drop(held);
+        assert!(
+            !release(&token),
+            "a launch that went ahead is no longer held"
+        );
     }
 
     #[test]
