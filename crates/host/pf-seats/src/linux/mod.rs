@@ -278,7 +278,7 @@ fn refresh_box_library(inner: &Inner) -> Result<bool, BackendError> {
 }
 
 /// Whether the owner has a session at the machine. A `loginctl` that doesn't answer reads as no.
-fn owner_at_desk(account: &str) -> bool {
+pub fn owner_at_desk(account: &str) -> bool {
     let own = logind::own_session(account);
     logind::sessions().is_ok_and(|all| logind::at_the_desk(&all, account, own.as_deref()))
 }

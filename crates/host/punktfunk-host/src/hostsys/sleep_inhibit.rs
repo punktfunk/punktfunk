@@ -11,6 +11,10 @@
 //! refuse an intentional Sleep. Silence re-arms it. A local Sleep during a
 //! passive stream is indistinguishable from idle there and stays blocked.
 //!
+//! A seat is the door's to hold: its input and portal stop at its own desktop, and its seatless
+//! session may not take a logind block. The seat host asks for nothing. The door takes a share
+//! while anyone plays on a seat, a block on `sleep` alone, so the desk's screen still goes dark.
+//!
 //! Acquisition is best-effort, shared by native and GameStream sessions, and
 //! a no-op off Linux. The hold count's 0↔1 edges also drive the Windows
 //! Instant Replay pause ([`crate::windows::instant_replay`]).
@@ -86,7 +90,8 @@ pub fn note_input() {
 }
 
 /// Take a share. Nothing is acquired here: [`watch`] takes the desktop's inhibit at
-/// once, or the logind block after [`QUIET_BEFORE_VETO`] of quiet.
+/// once, or the logind block after [`QUIET_BEFORE_VETO`] of quiet. A seat's session has
+/// neither to give, so its host only counts.
 pub fn hold() -> StreamHold {
     // Seed the quiet clock so a connect never vetoes and costs no D-Bus round trip.
     LAST_INPUT_MS.store(now_ms(), Ordering::Relaxed);
@@ -97,7 +102,7 @@ pub fn hold() -> StreamHold {
         crate::windows::instant_replay::on_stream_start();
     }
     #[cfg(target_os = "linux")]
-    if !st.watching {
+    if !st.watching && !pf_paths::seat::role().runs_seat_session() {
         st.watching = true;
         drop(st);
         if let Err(e) = std::thread::Builder::new()
@@ -157,16 +162,20 @@ fn release_locked(st: &mut State, why: &str) {
 }
 
 /// Hold the desktop's inhibit while any session lives. Without one, own the
-/// logind veto's arm/disarm edges.
+/// logind veto's arm/disarm edges. The door has no desktop and sees no input, so its
+/// `sleep` veto stands from the first tick.
 ///
 /// Acquire is the expensive edge (thread spawn + D-Bus). It happens here,
 /// outside the lock, so a hot `note_input` never queues behind a logind call.
 /// A refusal stands for this watcher; the next stream asks again.
 #[cfg(target_os = "linux")]
 fn watch() {
-    if hold_desktop_inhibit() {
+    let door = pf_paths::seat::role().is_door();
+    if !door && hold_desktop_inhibit() {
         return;
     }
+    let quiet = || door || quiet_for(LAST_INPUT_MS.load(Ordering::Relaxed), now_ms());
+    let what = if door { "sleep" } else { "sleep:idle" };
     let mut refused = false;
     loop {
         std::thread::sleep(WATCH_TICK);
@@ -179,24 +188,24 @@ fn watch() {
             if st.fd.is_some() {
                 // Input can land after the quiet re-check below and before `VETOING`
                 // is stored; that press would not call `release`, so catch it here.
-                if !quiet_for(LAST_INPUT_MS.load(Ordering::Relaxed), now_ms()) {
+                if !quiet() {
                     release_locked(&mut st, "the client is sending input again");
                 }
                 continue;
             }
-            if !quiet_for(LAST_INPUT_MS.load(Ordering::Relaxed), now_ms()) {
+            if !quiet() {
                 continue;
             }
         }
         if refused {
             continue; // the next stream's watcher asks logind again
         }
-        let Some(fd) = acquire() else {
+        let Some(fd) = acquire(what) else {
             refused = true; // no logind / refused, and `acquire` said so
             continue;
         };
         let mut st = state().lock().unwrap_or_else(|e| e.into_inner());
-        if st.count == 0 || !quiet_for(LAST_INPUT_MS.load(Ordering::Relaxed), now_ms()) {
+        if st.count == 0 || !quiet() {
             drop(fd); // raced: stream ended or viewer returned — do not store the fd
             continue;
         }
@@ -259,12 +268,12 @@ fn hold_desktop_inhibit() -> bool {
     })
 }
 
-/// One logind `Inhibit` on a dedicated plain thread. zbus's blocking API panics
-/// on a tokio worker (`block_on` nested), and [`hold`] callers may be either.
+/// One logind `Inhibit` of `what` on a dedicated plain thread. zbus's blocking API
+/// panics on a tokio worker (`block_on` nested), and [`hold`] callers may be either.
 /// The join waits the D-Bus round-trip (~ms); every call site tolerates that.
 #[cfg(target_os = "linux")]
-fn acquire() -> Option<ashpd::zbus::zvariant::OwnedFd> {
-    let fd = std::thread::spawn(|| -> Option<ashpd::zbus::zvariant::OwnedFd> {
+fn acquire(what: &'static str) -> Option<ashpd::zbus::zvariant::OwnedFd> {
+    let fd = std::thread::spawn(move || -> Option<ashpd::zbus::zvariant::OwnedFd> {
         use ashpd::zbus;
         // ashpd disables zbus's blocking API. Drive the async API on a private
         // current-thread runtime, still on this plain thread (see fn doc).
@@ -280,7 +289,7 @@ fn acquire() -> Option<ashpd::zbus::zvariant::OwnedFd> {
                     "/org/freedesktop/login1",
                     Some("org.freedesktop.login1.Manager"),
                     "Inhibit",
-                    &("sleep:idle", "Punktfunk", "a client is streaming", "block"),
+                    &(what, "Punktfunk", "a client is streaming", "block"),
                 )
                 .await?;
             reply.body().deserialize()
@@ -290,8 +299,8 @@ fn acquire() -> Option<ashpd::zbus::zvariant::OwnedFd> {
             Err(e) => {
                 tracing::warn!(
                     error = %e,
-                    "could not take a logind sleep/idle inhibitor — the box may auto-suspend \
-                     under a passive (video-only) viewer"
+                    what,
+                    "logind inhibitor refused — the box may auto-suspend under this stream"
                 );
                 None
             }
@@ -301,10 +310,7 @@ fn acquire() -> Option<ashpd::zbus::zvariant::OwnedFd> {
     .ok()
     .flatten();
     if fd.is_some() {
-        tracing::info!(
-            quiet_s = QUIET_BEFORE_VETO.as_secs(),
-            "holding a logind sleep/idle inhibitor — this stream has gone quiet"
-        );
+        tracing::info!(what, "holding a logind inhibitor while a client streams");
     }
     fd
 }

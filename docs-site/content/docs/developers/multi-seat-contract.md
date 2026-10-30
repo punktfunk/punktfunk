@@ -507,6 +507,11 @@ A connect is answered with a `Redirect` to a seat, or refused with
 started with `PUNKTFUNK_SEAT_SESSION=1` is a seat host and never the door, however the door is
 asked for.
 
+A seat's input and its portals stop at its own desktop, and its seatless session may not take a
+logind block, so the door keeps the box awake. While anyone plays on a running seat it holds a
+logind `sleep` block, which `49-punktfunk-door.rules` grants it. The screen at the desk can still
+go dark. The owner's row at the desk needs none: that host is the desktop whose idle timer runs.
+
 Every client reads its library from the door, which has `PUNKTFUNK_LIBRARY_DIR` set to the box's
 library, `/var/lib/punktfunk-seats/library`: all of it, for every profile, read only. A cover
 there names a file in the owner's home, which the door can't read, so it asks the owner's host

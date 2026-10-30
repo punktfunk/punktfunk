@@ -32,11 +32,12 @@ polkit.addRule(function (action, subject) {
 
 // The door powers the box and has no login session, so anyone logged in at the desk turns its
 // call into the -multiple-sessions action. The door itself refuses a device while another one
-// streams on any seat. -ignore-inhibit stays ungranted.
+// streams on any seat. -ignore-inhibit stays ungranted. It also blocks sleep while someone plays
+// on a seat, whose seatless session may not.
 polkit.addRule(function (action, subject) {
     if (
         subject.user == "punktfunk" &&
-        /^org\.freedesktop\.login1\.(power-off|reboot|suspend)(-multiple-sessions)?$/.test(action.id)
+        /^org\.freedesktop\.login1\.((power-off|reboot|suspend)(-multiple-sessions)?|inhibit-block-sleep)$/.test(action.id)
     ) {
         return polkit.Result.YES;
     }
