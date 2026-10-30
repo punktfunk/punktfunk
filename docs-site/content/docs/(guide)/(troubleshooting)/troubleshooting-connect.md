@@ -42,6 +42,11 @@ The host admits only paired devices. Approve the device in the web console, or p
 [Pairing](/docs/pairing). A host that lost its identity (config deleted, OS reinstalled) needs
 pairing again.
 
+Over a VPN other than Tailscale or NetBird, the host can count the device as coming from the
+internet: there is no **Approve**, and a PIN from **Pair a device** fails with "Pairing isn't armed".
+Click **Arm PIN** on the device's row under **Waiting for approval**, and set its access yourself:
+the default is for a friend.
+
 ## After connecting
 
 ### A plugin's interface doesn't load
