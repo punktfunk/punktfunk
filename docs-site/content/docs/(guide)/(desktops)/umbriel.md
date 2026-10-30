@@ -117,6 +117,12 @@ to fall back to. Set **Encoder** to `auto` and turn **Direct capture** back on
 ([Configuration](/docs/configuration)). If `auto` finds no GPU encoder, see
 [GPU and driver](/docs/requirements#gpu-and-driver).
 
+### "The host can't talk to this version of Umbriel" [#ipc-mismatch]
+
+This Umbriel changed how programs talk to it, and your host doesn't know the new way yet. Update
+Punktfunk on the host. If no update covers it yet, roll Umbriel back to the last build that
+streamed.
+
 ### My monitors came back on after I saved my Umbriel config [#config-save]
 
 A saved change to any `[output.*]` section makes Umbriel apply its config to every output again,

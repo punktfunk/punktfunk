@@ -441,6 +441,8 @@ pub(super) fn is_permanent_build_error(chain: &str) -> bool {
         "has no pipewire node",
         // An Umbriel without virtual outputs stays so until it is updated.
         "predates virtual outputs",
+        // Every request to this Umbriel fails the same way until the host is updated.
+        "parses neither request shape",
     ];
     let lower = chain.to_ascii_lowercase();
     PERMANENT.iter().any(|p| lower.contains(p))
@@ -1017,6 +1019,10 @@ mod tests {
         ));
         assert!(is_permanent_build_error(
             "create virtual output: no monitor named \"HDMI-A-3\" — this host has: HDMI-A-1"
+        ));
+        assert!(is_permanent_build_error(
+            "create virtual output: umbriel parses neither request shape this host sends: update \
+             the host"
         ));
         assert!(!is_permanent_build_error("open NVENC: device busy"));
     }

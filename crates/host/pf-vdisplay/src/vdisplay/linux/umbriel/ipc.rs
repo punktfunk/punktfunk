@@ -1,9 +1,14 @@
-//! Umbriel's JSON IPC on `$UMBRIEL_SOCKET`: one request line `{"cmd":…,"arg":…}`, one reply
-//! line `{"ok":…}` or `{"err":"…"}`, then the server closes the connection.
+//! Umbriel's JSON IPC on `$UMBRIEL_SOCKET`: one request line, one reply line `{"ok":…}` or
+//! `{"err":"…"}`, then the server closes the connection.
+//!
+//! Umbriel reads two request shapes. Builds from 2026-10-29 take `args`, an array of words, and
+//! typed `action` requests. Older builds take `arg`, one string, and `msg`. Distributions ship
+//! both, so every request here serves both.
 //!
 //! Reply types ignore fields they do not name, and every optional field defaults: the project
 //! is young and its shapes grow.
 
+use super::UmbrielIpcMismatch;
 use anyhow::{bail, Context, Result};
 use serde::Deserialize;
 use serde_json::Value;
@@ -18,7 +23,10 @@ const BUDGET: Duration = Duration::from_secs(2);
 /// Name the probe asks Umbriel to destroy. Nothing ever creates it.
 const PROBE_NAME: &str = "punktfunk-probe";
 
-/// Umbriel answered `err`. The text is Umbriel's own, for logs and for [`predates_outputs`].
+/// Umbriel's answer to a request it could not parse.
+const MALFORMED: &str = "malformed request";
+
+/// Umbriel answered `err`. The text is Umbriel's own, for logs and for [`unknown_command`].
 #[derive(Debug)]
 pub(crate) struct Refused(pub String);
 
@@ -42,29 +50,40 @@ pub(crate) fn instance() -> String {
     socket().unwrap_or_default()
 }
 
-/// The request as it goes on the wire. Built by hand: the key order is part of the pin.
-pub(crate) fn request_line(cmd: &str, arg: Option<&str>) -> String {
+/// The request as it goes on the wire, `args` under both keys: each build reads its own and
+/// ignores the other. Built by hand: the key order is part of the pin.
+pub(crate) fn request_line(cmd: &str, args: &[&str]) -> String {
     let quote = |s: &str| Value::String(s.to_string()).to_string();
-    match arg {
-        Some(arg) => format!("{{\"cmd\":{},\"arg\":{}}}\n", quote(cmd), quote(arg)),
-        None => format!("{{\"cmd\":{}}}\n", quote(cmd)),
+    if args.is_empty() {
+        return format!("{{\"cmd\":{}}}\n", quote(cmd));
     }
+    format!(
+        "{{\"cmd\":{},\"arg\":{},\"args\":{}}}\n",
+        quote(cmd),
+        quote(&args.join(" ")),
+        Value::from(args)
+    )
 }
 
-/// Send `cmd`; the `ok` payload, or [`Refused`] carrying Umbriel's error text.
-pub(crate) fn request(cmd: &str, arg: Option<&str>) -> Result<Value> {
+/// Send one request line; the `ok` payload, or [`Refused`] carrying Umbriel's error text.
+fn exchange(line: &str) -> Result<Value> {
     let path = socket()?;
     let mut stream = UnixStream::connect(&path).with_context(|| format!("connect {path}"))?;
     stream.set_read_timeout(Some(BUDGET))?;
     stream.set_write_timeout(Some(BUDGET))?;
+    let what = line.trim();
     stream
-        .write_all(request_line(cmd, arg).as_bytes())
-        .with_context(|| format!("write umbriel {cmd}"))?;
+        .write_all(line.as_bytes())
+        .with_context(|| format!("write umbriel request {what}"))?;
     let mut reply = String::new();
     BufReader::new(stream)
         .read_line(&mut reply)
-        .with_context(|| format!("read umbriel {cmd} reply"))?;
+        .with_context(|| format!("read umbriel reply to {what}"))?;
     parse_reply(&reply)
+}
+
+pub(crate) fn request(cmd: &str, args: &[&str]) -> Result<Value> {
+    exchange(&request_line(cmd, args))
 }
 
 pub(crate) fn parse_reply(line: &str) -> Result<Value> {
@@ -79,10 +98,31 @@ pub(crate) fn parse_reply(line: &str) -> Result<Value> {
     bail!("umbriel reply is neither ok nor err: {}", line.trim())
 }
 
+/// One action in both shapes.
+pub(crate) struct Action {
+    /// The whole `action` request.
+    pub typed: Value,
+    /// The `msg` argument.
+    pub word: String,
+}
+
 /// Run one action. Umbriel answers `ok` even when the action matched nothing, so a caller
 /// that cares reads the result back.
-pub(crate) fn msg(action: &str) -> Result<()> {
-    request("msg", Some(action)).map(drop)
+pub(crate) fn msg(action: &Action) -> Result<()> {
+    send_action(action, exchange)
+}
+
+/// The `action` request, then `msg` on a build that has no such command.
+fn send_action(action: &Action, mut send: impl FnMut(&str) -> Result<Value>) -> Result<()> {
+    match send(&format!("{}\n", action.typed)) {
+        Err(e)
+            if e.downcast_ref::<Refused>()
+                .is_some_and(|r| unknown_command(&r.0)) =>
+        {
+            send(&request_line("msg", &[&action.word])).map(drop)
+        }
+        reply => reply.map(drop),
+    }
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -165,45 +205,49 @@ pub(crate) struct Window {
 
 /// Every output Umbriel knows, disabled ones included.
 pub(crate) fn outputs() -> Result<Vec<Output>> {
-    serde_json::from_value(request("outputs", None)?).context("decode umbriel outputs")
+    serde_json::from_value(request("outputs", &[])?).context("decode umbriel outputs")
 }
 
 pub(crate) fn workspaces() -> Result<Vec<Workspace>> {
-    serde_json::from_value(request("workspaces", None)?).context("decode umbriel workspaces")
+    serde_json::from_value(request("workspaces", &[])?).context("decode umbriel workspaces")
 }
 
 pub(crate) fn windows() -> Result<Vec<Window>> {
-    serde_json::from_value(request("windows", None)?).context("decode umbriel windows")
+    serde_json::from_value(request("windows", &[])?).context("decode umbriel windows")
 }
 
-/// `<name> <W>x<H>@<Hz>`: the refresh is always given, or Umbriel paces at its default.
-pub(crate) fn create_arg(name: &str, width: u32, height: u32, hz: u32) -> String {
-    format!("{name} {width}x{height}@{hz}")
+/// `<W>x<H>@<Hz>`: the refresh is always given, or Umbriel paces at its default.
+pub(crate) fn create_mode(width: u32, height: u32, hz: u32) -> String {
+    format!("{width}x{height}@{hz}")
 }
 
 /// Create virtual output `name`. It exists and is enabled when this returns.
 pub(crate) fn create_output(name: &str, width: u32, height: u32, hz: u32) -> Result<()> {
-    request("output-create", Some(&create_arg(name, width, height, hz))).map(drop)
+    request("output-create", &[name, &create_mode(width, height, hz)]).map(drop)
 }
 
 /// Destroy virtual output `name`. Umbriel moves its windows to another output itself.
 pub(crate) fn destroy_output(name: &str) -> Result<()> {
-    request("output-destroy", Some(name)).map(drop)
+    request("output-destroy", &[name]).map(drop)
 }
 
-/// Whether this Umbriel can create outputs: asks it to destroy one that never exists. A build
-/// without the verb refuses the command itself; any other refusal means the verb exists.
+/// Whether this Umbriel can create outputs: asks it to destroy one that never exists.
 pub(crate) fn has_virtual_outputs() -> Result<bool> {
-    match destroy_output(PROBE_NAME) {
-        Ok(()) => Ok(true),
-        Err(e) => match e.downcast::<Refused>() {
-            Ok(Refused(text)) => Ok(!predates_outputs(&text)),
-            Err(e) => Err(e),
-        },
+    reads_as_virtual_outputs(destroy_output(PROBE_NAME))
+}
+
+/// The probe's reply. A build without the verb refuses the command itself, and one that parses
+/// neither shape fails as [`UmbrielIpcMismatch`]. Any other refusal means the verb exists.
+fn reads_as_virtual_outputs(reply: Result<()>) -> Result<bool> {
+    let Err(e) = reply else { return Ok(true) };
+    match e.downcast::<Refused>() {
+        Ok(Refused(text)) if text == MALFORMED => Err(UmbrielIpcMismatch.into()),
+        Ok(Refused(text)) => Ok(!unknown_command(&text)),
+        Err(e) => Err(e),
     }
 }
 
-pub(crate) fn predates_outputs(err: &str) -> bool {
+fn unknown_command(err: &str) -> bool {
     err.to_ascii_lowercase().contains("unknown command")
 }
 
@@ -216,17 +260,73 @@ mod tests {
     #[test]
     fn requests_are_pinned_to_the_wire_line() {
         assert_eq!(
-            request_line(
-                "output-create",
-                Some(&create_arg("PF-1-0", 2560, 1600, 120))
-            ),
-            "{\"cmd\":\"output-create\",\"arg\":\"PF-1-0 2560x1600@120\"}\n"
+            request_line("output-create", &["PF-1-0", &create_mode(2560, 1600, 120)]),
+            "{\"cmd\":\"output-create\",\"arg\":\"PF-1-0 2560x1600@120\",\
+             \"args\":[\"PF-1-0\",\"2560x1600@120\"]}\n"
         );
-        assert_eq!(request_line("outputs", None), "{\"cmd\":\"outputs\"}\n");
+        assert_eq!(request_line("outputs", &[]), "{\"cmd\":\"outputs\"}\n");
         assert_eq!(
-            request_line("msg", Some("window-focus:a\"b")),
-            "{\"cmd\":\"msg\",\"arg\":\"window-focus:a\\\"b\"}\n"
+            request_line("msg", &["window-focus:a\"b"]),
+            "{\"cmd\":\"msg\",\"arg\":\"window-focus:a\\\"b\",\
+             \"args\":[\"window-focus:a\\\"b\"]}\n"
         );
+    }
+
+    /// The lines one action sends, each of `replies` answering in turn, and how it ended.
+    fn run_action(replies: Vec<Result<Value>>) -> (Vec<String>, Result<()>) {
+        let action = Action {
+            typed: json!({"cmd":"action","action":"window-focus","window":"t1"}),
+            word: "window-focus:t1".into(),
+        };
+        let (mut sent, mut replies) = (Vec::new(), replies.into_iter());
+        let end = send_action(&action, |line| {
+            sent.push(line.to_string());
+            replies.next().expect("one reply per request")
+        });
+        (sent, end)
+    }
+
+    fn refused(text: &str) -> Result<Value> {
+        Err(Refused(text.to_string()).into())
+    }
+
+    #[test]
+    fn a_build_with_actions_gets_only_the_typed_request() {
+        let (sent, end) = run_action(vec![Ok(Value::Null)]);
+        assert!(end.is_ok());
+        assert_eq!(sent.len(), 1);
+        let typed: Value = serde_json::from_str(&sent[0]).unwrap();
+        assert_eq!(typed["action"], "window-focus");
+        assert!(sent[0].ends_with('\n'));
+    }
+
+    #[test]
+    fn a_build_without_actions_gets_msg() {
+        let (sent, end) = run_action(vec![refused("unknown command: action"), Ok(Value::Null)]);
+        assert!(end.is_ok());
+        assert_eq!(sent.len(), 2);
+        assert_eq!(sent[1], request_line("msg", &["window-focus:t1"]));
+    }
+
+    /// Only a missing command falls back: the action's own refusal is the one to report.
+    #[test]
+    fn a_refused_action_stays_refused() {
+        let (sent, end) = run_action(vec![refused("unknown action: window-focus")]);
+        assert_eq!(sent.len(), 1);
+        let e = end.unwrap_err().downcast::<Refused>().unwrap();
+        assert_eq!(e.0, "unknown action: window-focus");
+    }
+
+    #[test]
+    fn the_probe_reads_every_answer() {
+        let said = |text: &str| Err(Refused(text.to_string()).into());
+        assert!(reads_as_virtual_outputs(Ok(())).unwrap());
+        assert!(reads_as_virtual_outputs(said("unknown output: x")).unwrap());
+        assert!(!reads_as_virtual_outputs(said("unknown command: output-destroy")).unwrap());
+        let shape = reads_as_virtual_outputs(said("malformed request")).unwrap_err();
+        assert!(shape.is::<UmbrielIpcMismatch>());
+        let dead = reads_as_virtual_outputs(Err(anyhow::anyhow!("connect"))).unwrap_err();
+        assert!(!dead.is::<UmbrielIpcMismatch>());
     }
 
     #[test]
@@ -240,9 +340,9 @@ mod tests {
 
     #[test]
     fn only_an_unknown_command_means_an_umbriel_too_old() {
-        assert!(predates_outputs("unknown command: output-destroy"));
-        assert!(!predates_outputs("not a virtual output: punktfunk-probe"));
-        assert!(!predates_outputs("unknown output: punktfunk-probe"));
+        assert!(unknown_command("unknown command: output-destroy"));
+        assert!(!unknown_command("not a virtual output: punktfunk-probe"));
+        assert!(!unknown_command("unknown output: punktfunk-probe"));
     }
 
     #[test]

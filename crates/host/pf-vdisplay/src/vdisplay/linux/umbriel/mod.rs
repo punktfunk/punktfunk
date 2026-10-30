@@ -22,6 +22,26 @@ use std::time::{Duration, Instant};
 /// replies; this covers a busy compositor.
 const MODE_WAIT: Duration = Duration::from_millis(1500);
 
+/// This Umbriel parses neither request shape the host sends. Nothing works until the host is
+/// updated.
+#[derive(Debug)]
+pub struct UmbrielIpcMismatch;
+
+impl std::fmt::Display for UmbrielIpcMismatch {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("umbriel parses neither request shape this host sends: update the host")
+    }
+}
+
+impl std::error::Error for UmbrielIpcMismatch {}
+
+impl UmbrielIpcMismatch {
+    /// The sentence the client shows.
+    pub fn user_message(&self) -> &'static str {
+        "The host can't talk to this version of Umbriel. Update Punktfunk on the host."
+    }
+}
+
 /// An Umbriel session is running for this user.
 pub(crate) fn is_available() -> bool {
     crate::session::umbriel_socket().is_some()

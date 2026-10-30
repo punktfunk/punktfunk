@@ -143,6 +143,18 @@ fn stock_niri_reaches_the_client_in_words() {
     assert!(said.len() <= punktfunk_core::quic::REFUSED_REASON_MAX);
 }
 
+/// An Umbriel whose IPC this host can't parse tells the player what to update.
+#[cfg(target_os = "linux")]
+#[test]
+fn an_umbriel_ipc_mismatch_reaches_the_client_in_words() {
+    let buried = anyhow::Error::new(pf_vdisplay::UmbrielIpcMismatch)
+        .context("create virtual output")
+        .context("build the session pipeline");
+    let said = setup_failed_sentence(&buried).expect("a mismatch has words for the user");
+    assert!(said.contains("Update Punktfunk"), "{said}");
+    assert!(said.len() <= punktfunk_core::quic::REFUSED_REASON_MAX);
+}
+
 /// A node-less output that direct capture refused reaches the client in words.
 #[cfg(target_os = "linux")]
 #[test]

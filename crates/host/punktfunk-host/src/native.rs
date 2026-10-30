@@ -808,6 +808,10 @@ pub(crate) fn setup_failed_sentence(e: &anyhow::Error) -> Option<String> {
     if let Some(n) = e.downcast_ref::<pf_vdisplay::NoVirtualOutputs>() {
         return Some(n.user_message().into());
     }
+    #[cfg(target_os = "linux")]
+    if let Some(m) = e.downcast_ref::<pf_vdisplay::UmbrielIpcMismatch>() {
+        return Some(m.user_message().into());
+    }
     // Umbriel is the one Linux backend whose outputs have no PipeWire node.
     #[cfg(target_os = "linux")]
     if e.downcast_ref::<pf_capture::NoPipeWireNode>().is_some() {

@@ -380,7 +380,7 @@ enum Darkened {
     Hyprland(Journaled),
     /// niri: `PowerOffMonitors`, which has no per-output form. Re-light is `PowerOnMonitors`.
     Niri,
-    /// Umbriel: `dpms-off:<name>`. Same per-name discipline as [`Darkened::Sway`].
+    /// Umbriel: `dpms-off` per name. Same per-name discipline as [`Darkened::Sway`].
     Umbriel(Journaled),
     /// [`crate::drm_dpms`] hold: open `/dev/dri/cardN` fds. Re-light is
     /// [`crate::drm_dpms::release`]; the kernel restores the console on last close.

@@ -918,6 +918,8 @@ pub use niri::NoVirtualOutputs;
 #[cfg(target_os = "linux")]
 #[path = "vdisplay/linux/umbriel/mod.rs"]
 mod umbriel;
+#[cfg(target_os = "linux")]
+pub use umbriel::UmbrielIpcMismatch;
 
 /// Bounded dispatch loop shared by the in-process Wayland protocol clients.
 #[cfg(target_os = "linux")]
