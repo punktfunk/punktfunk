@@ -14,7 +14,7 @@
 #   * pnpm audit  → clients/decky (the Steam Deck plugin).
 #   * docs-site   → scanned NON-blocking. Its `overrides` lift the chains fumadocs and @unom/ui
 #                   pull in (@ai-sdk/provider-utils, dompurify, undici), as web's do; it carries
-#                   web's two ignores for the same reasons.
+#                   web's ignore for the same reason.
 #   * vendored-inventory → every `vendor/` tree has a CVE-watch row in
 #                   compliance/vendored-components.md.
 #   * cargo-about → license-allowlist gate over the host, driver and seat-keeper workspaces (about.toml `accepted`);
@@ -153,23 +153,19 @@ jobs:
       # bumping the dep (or, if genuinely unfixable + inapplicable, pinning a resolution and
       # noting why here).
       #
-      # web carries two ignores, the ONLY ones in a blocking tree: braces (GHSA-vfj7-8cjw-p6xm,
-      # nested-pattern DoS) and node-forge (GHSA-86w9-cpqp-85rv, PKCS#1 v1.5 signature check).
-      # Both are unfixable AND unreachable:
-      #   * unfixable — braces' vulnerable range is `<= 3.0.3` and node-forge's `<= 1.4.0`, each
-      #     the latest. Upstream has published no patched release, so no override can clear them.
-      #   * unreachable — braces comes through payload's `sass@1.77.4` (chokidar 3) and
-      #     nitropack's build-time `globby › … › micromatch`; both expand only globs written in
-      #     this repo, never a request. payload is a peer of @unom/ui that only its `./richtext`
-      #     export needs, which the console never imports. node-forge comes through
-      #     `nitropack › listhen`, called only by nitro's dev server to mint a self-signed
-      #     certificate; it verifies no signature and the built console lacks it.
-      # Drop these the moment upstream ships a fix — the bare `bun audit` is then green. Scoped
+      # web carries one ignore, the ONLY one in a blocking tree: deepmerge (GHSA-gcqx-w48m-w2h4,
+      # prototype poisoning in mergeObject). It is unfixable AND unreachable:
+      #   * unfixable — the vulnerable range ends at 4.3.1, the latest release. Upstream has
+      #     published no patched version, so no override can clear it.
+      #   * unreachable — `nitropack › @rollup/plugin-node-resolve` calls it once at load, on
+      #     that plugin's own constants. payload is a peer of @unom/ui that only its `./richtext`
+      #     export needs, which the console never imports. The built `.output` holds neither.
+      # Drop it the moment upstream ships a fix — the bare `bun audit` is then green. Scoped
       # per-tree so sdk/plugin-kit stay strictly fail-on-any.
       - name: bun audit
         run: |
           if [ "${{ matrix.tree }}" = "web" ]; then
-            bun audit --ignore=GHSA-vfj7-8cjw-p6xm --ignore=GHSA-86w9-cpqp-85rv
+            bun audit --ignore=GHSA-gcqx-w48m-w2h4
           else
             bun audit
           fi
@@ -193,7 +189,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: bun audit (non-blocking)
         run: |
-          bun audit --ignore=GHSA-vfj7-8cjw-p6xm --ignore=GHSA-86w9-cpqp-85rv \
+          bun audit --ignore=GHSA-gcqx-w48m-w2h4 \
             || echo "::warning::docs-site has a new advisory — lift it with an override, as web does"
 
   pnpm-audit:

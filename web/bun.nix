@@ -3875,9 +3875,9 @@
     url = "https://registry.npmjs.org/node-fetch/-/node-fetch-2.7.0.tgz";
     hash = "sha512-c4FRfUm/dbcWZ7U+1Wq0AwCyFL+3nt2bEw05wfxSz+DWpWsitgmSgYmy2dQdWyKC1694ELPqMs/YzUSNozLt8A==";
   };
-  "node-forge@1.4.0" = fetchurl {
-    url = "https://registry.npmjs.org/node-forge/-/node-forge-1.4.0.tgz";
-    hash = "sha512-LarFH0+6VfriEhqMMcLX2F7SwSXeWwnEAJEsYm5QKWchiVYVvJyV9v7UDvUv+w5HO23ZpQTXDv/GxdDdMyOuoQ==";
+  "node-forge@1.4.1" = fetchurl {
+    url = "https://registry.npmjs.org/node-forge/-/node-forge-1.4.1.tgz";
+    hash = "sha512-w5/MfWaeMrpR/5ba6fZyAUTLSuE6aYz7H/3cYrqwZEmf5eQS3IaaLgJt4MBv7HglGFWmV22K8h4U18RJQmw/ow==";
   };
   "node-gyp-build@4.8.4" = fetchurl {
     url = "https://registry.npmjs.org/node-gyp-build/-/node-gyp-build-4.8.4.tgz";
@@ -4399,9 +4399,9 @@
     url = "https://registry.npmjs.org/seroval-plugins/-/seroval-plugins-1.6.8.tgz";
     hash = "sha512-N7mWAMydj89EnYTHtRpS3LBrAz3J9O6oVrqpuXuvlAHfAUG8WEKqtbAd7SBiJNY5NfCAFhSdyAh7wI4Shjqy4g==";
   };
-  "seroval@1.6.8" = fetchurl {
-    url = "https://registry.npmjs.org/seroval/-/seroval-1.6.8.tgz";
-    hash = "sha512-HlSgSAkTk4EqHcje1ptJjfZi1YDv5KbhVJ/d3P7T/nAXua2VmDu+AKDX5VTdFfZf48nDkWB2TKYt0DrCSa+3wg==";
+  "seroval@1.6.11" = fetchurl {
+    url = "https://registry.npmjs.org/seroval/-/seroval-1.6.11.tgz";
+    hash = "sha512-hpb6XnMCGN/A+79Uf8V7/iTGkyyyazNn5X0CoCAp7Uy9vT3RT8jZ9GLcnxGoVjg3P8AArbe4ZVHq6C8oT2a0kA==";
   };
   "serve-placeholder@2.0.2" = fetchurl {
     url = "https://registry.npmjs.org/serve-placeholder/-/serve-placeholder-2.0.2.tgz";
