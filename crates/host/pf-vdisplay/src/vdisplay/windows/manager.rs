@@ -313,6 +313,21 @@ fn budget_spent(live: usize, max: u32) -> anyhow::Error {
     )
 }
 
+/// A seat session that lists no display path has lost the config its adapter published, and no
+/// monitor added to it can get one. Dropping the connection makes the keeper reattach, which
+/// brings up a new adapter with a lit placeholder for the caller's next attempt.
+fn rebuild_empty_seat_session() {
+    let seat = pf_paths::seat::role().runs_seat_session()
+        && pf_win_display::console_session_mismatch().is_some();
+    if !seat || !pf_win_display::win_display::session_has_no_paths() {
+        return;
+    }
+    match pf_win_display::disconnect_own_session() {
+        Ok(()) => tracing::warn!("seat session has no display paths — reconnecting it"),
+        Err(e) => tracing::warn!(error = %e, "seat session with no display paths stayed connected"),
+    }
+}
+
 /// Says so when this process is outside the active console session, where display
 /// activation, mode-set and capture fail. A seat host runs there on purpose.
 fn warn_outside_console_session() {
@@ -1760,11 +1775,12 @@ impl VirtualDisplayManager {
     /// A three-stage ladder, each stage a real failure mode. Plain poll FIRST — never a forced
     /// topology change: bare `SDC_TOPOLOGY_EXTEND` is ACCESS_DENIED from Session 0 on a headless
     /// box and breaks the auto-activate. force-EXTEND is the integrated-screen FALLBACK: a fresh
-    /// IDD there is CLONED onto the panel (shared source, no committed path of its own —
-    /// observed on an Optimus laptop, commit 8e87e61), and the EXTEND de-clones it. LAST RESORT
-    /// is explicit path activation: a lid-closed laptop defeats both (the clamshell policy
-    /// suppresses auto-activation and the EXTEND preset "succeeds" committing nothing) —
-    /// `activate_target_path` commits the path directly, which ignores the lid policy.
+    /// IDD there is CLONED onto the panel (shared source, no committed path of its own), and the
+    /// EXTEND de-clones it. LAST RESORT is explicit path activation: a closed lid defeats both
+    /// (the clamshell policy suppresses auto-activation and the EXTEND preset "succeeds"
+    /// committing nothing), and `activate_target_path` commits the path directly, which ignores
+    /// the lid policy. A seat session with no paths left is rebuilt for the caller's next attempt
+    /// ([`rebuild_empty_seat_session`]).
     ///
     /// CAVEAT (unobserved): textbook CCD also allows a clone with a *shared-source ACTIVE* path
     /// (resolve → `Some`), which the `is_none()` gate would miss; widening needs a
@@ -1773,10 +1789,8 @@ impl VirtualDisplayManager {
     /// Call inside a transition: this mutates the live CCD topology, and one transition at a
     /// time keeps two path commits from interleaving.
     fn resolve_target_gdi(&self, key: CcdTargetKey) -> Option<String> {
-        // 50 ms sampling (latency plan P0.5): the SAME 3 s per-stage ceilings — the 3-stage ladder
-        // structure encodes real failure modes (headless auto-activate, integrated-panel clone,
-        // lid-closed path activation) and is untouched — but a typical activation resolves on an
-        // early poll, so finer sampling shaves ~150 ms off every stage crossing.
+        // 50 ms sampling under each stage's 3 s ceiling: a typical activation resolves on an early
+        // poll.
         if let Some(n) = poll_gdi_name(key) {
             return Some(n);
         }
@@ -1789,6 +1803,7 @@ impl VirtualDisplayManager {
                 return Some(n);
             }
         }
+        rebuild_empty_seat_session();
         None
     }
 

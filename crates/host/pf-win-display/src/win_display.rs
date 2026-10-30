@@ -184,6 +184,11 @@ pub fn force_extend_topology() {
     }
 }
 
+/// Whether this session lists no display path at all, inactive ones included.
+pub fn session_has_no_paths() -> bool {
+    query_display_config(QDC_ALL_PATHS).is_ok_and(|(paths, _)| paths.is_empty())
+}
+
 /// EXPLICITLY activate `target_id` into its own display path — the last resort when neither the OS
 /// auto-activate nor the EXTEND preset lights a freshly-ADDed IDD target. A closed laptop lid makes
 /// Windows skip the auto-activate, and `SDC_TOPOLOGY_EXTEND` then reports success with no path

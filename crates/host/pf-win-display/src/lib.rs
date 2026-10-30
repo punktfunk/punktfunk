@@ -177,6 +177,16 @@ pub fn console_session_mismatch() -> Option<(u32, u32)> {
     (console != 0xFFFF_FFFF && own != console).then_some((own, console))
 }
 
+/// Drops this session's connection and leaves the session running.
+#[cfg(target_os = "windows")]
+pub fn disconnect_own_session() -> windows::core::Result<()> {
+    use windows::Win32::System::RemoteDesktop::{
+        WTSDisconnectSession, WTS_CURRENT_SERVER_HANDLE, WTS_CURRENT_SESSION,
+    };
+    // SAFETY: takes the local-server handle and the current-session constant by value.
+    unsafe { WTSDisconnectSession(Some(WTS_CURRENT_SERVER_HANDLE), WTS_CURRENT_SESSION, false) }
+}
+
 /// The session this process runs in; `None` when Windows can't say.
 #[cfg(target_os = "windows")]
 pub fn own_session_id() -> Option<u32> {
