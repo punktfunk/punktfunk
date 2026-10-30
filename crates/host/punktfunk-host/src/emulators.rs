@@ -32,7 +32,8 @@ pub(crate) mod exchange;
 
 /// hermir on [`prefix`]. With seats on the box a copy serves every account: a Linux Flatpak goes
 /// into the system installation, a Windows archive keeps each account's data in its profile. The
-/// SYSTEM host on Windows resolves that data in the session player's profile.
+/// SYSTEM host on Windows resolves that data in the session player's profile, and keeps what its
+/// own `apply` changed under [`state_dir`], so a seat's revert never touches another's bindings.
 pub fn open() -> hermir::Result<Hermir> {
     open_in(None)
 }
@@ -55,6 +56,7 @@ fn open_in(account: Option<&Path>) -> hermir::Result<Hermir> {
         } else {
             hermir::FlatpakInstallation::User
         },
+        state_dir: state_dir(),
         ..Options::default()
     })
 }
@@ -62,6 +64,13 @@ fn open_in(account: Option<&Path>) -> hermir::Result<Hermir> {
 /// A Linux host on a box with seats, the owner's row included: its Flatpaks are the box's.
 fn box_wide() -> bool {
     cfg!(target_os = "linux") && pf_paths::seat::role().is_seat_host()
+}
+
+/// Where this host keeps hermir's snapshots, save backups and their lock. On Windows every host
+/// opens one shared prefix, so each keeps its own under its config dir; a POSIX prefix is one
+/// user's already.
+fn state_dir() -> Option<PathBuf> {
+    cfg!(windows).then(|| pf_paths::config_dir().join("emulator-state"))
 }
 
 /// The profile folder of the player signed in to this host's session; `None` with nobody signed
@@ -737,7 +746,7 @@ pub fn adopt(id: &str, exe: &Path, keep: bool) -> hermir::Result<Option<hermir::
 /// The folder whose read grant lets a plugin move emulator saves: hermir's own backups of
 /// the saves it replaced. The grant is the operator's one yes for every emulator.
 pub fn saves_grant() -> PathBuf {
-    prefix().join(".save-backups")
+    state_dir().unwrap_or_else(prefix).join(".save-backups")
 }
 
 /// Whether `id` names an emulator in hermir's catalog. Read once: the catalog is compiled in.
