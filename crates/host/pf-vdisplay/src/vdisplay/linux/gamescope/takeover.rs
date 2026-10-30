@@ -19,6 +19,9 @@ pub(super) struct Takeover {
     /// Mode the managed session was launched at, for warm reuse. `None` while it launches, or for
     /// a session adopted from a dead host: stop that one, never reuse it.
     pub(super) managed: Option<SessionState>,
+    /// The device whose session took the box: its keep-alive times the hand-back. A joiner only
+    /// watches, so it never lands here.
+    pub(super) owner: Option<[u8; 32]>,
     hand_back: HandBack,
     /// A managed launch runs. Another waits on [`WAKE`]; nothing on the hand-back path does.
     launching: bool,
@@ -67,6 +70,7 @@ impl Takeover {
     const EMPTY: Self = Self {
         owed: Vec::new(),
         managed: None,
+        owner: None,
         hand_back: HandBack::Idle,
         launching: false,
         launch_failed: false,
@@ -1330,12 +1334,14 @@ pub fn cancel_pending_restore() {
     }
 }
 
-/// Same linger policy as pooled backends. Unconfigured → [`RESTORE_DEBOUNCE`]. Forever → `None`.
-fn restore_delay() -> Option<Duration> {
+/// Same linger policy as pooled backends, `owner`'s overlay included. Unconfigured →
+/// [`RESTORE_DEBOUNCE`]. Forever → `None`.
+fn restore_delay(owner: Option<[u8; 32]>) -> Option<Duration> {
     use crate::policy::{self, Linger};
+    let fp = policy::fp_hex(owner);
     match policy::prefs()
-        .configured_effective()
-        .map(|e| e.keep_alive.linger())
+        .configured()
+        .map(|p| p.effective_for(fp.as_deref()).keep_alive.linger())
     {
         Some(Linger::Immediate) => Some(Duration::from_secs(0)),
         Some(Linger::For(d)) => Some(d),
@@ -1357,7 +1363,8 @@ fn hand_back_delay(keep_alive: Option<Duration>, launch_failed: bool) -> Option<
 /// Debounced restore so a reconnect reuses the warm session, on the keep-alive's delay
 /// (`forever` schedules none), or the debounce after a launch that produced no session.
 pub fn schedule_restore_tv_session() {
-    let keep_alive = restore_delay();
+    let owner = takeover().owner;
+    let keep_alive = restore_delay(owner);
     let mut t = takeover();
     if !t.live() {
         return; // nothing was taken over → nothing to restore (also the non-managed path)
@@ -2113,6 +2120,27 @@ mod tests {
             hand_back_delay(Some(Duration::ZERO), true),
             Some(Duration::ZERO)
         );
+    }
+
+    /// The device that took the box decides its keep-alive, as a device decides for its pooled
+    /// display. Any other falls back to the host's. Runs in a child: the console's policy is a
+    /// process global.
+    #[test]
+    fn the_owning_device_times_the_hand_back() {
+        let name = "the_owning_device_times_the_hand_back";
+        crate::fake::in_child(module_path!(), name, &[], || {
+            let tablet = [0xaa; 32];
+            let doc = format!(
+                r#"{{ "keep_alive": {{ "mode": "forever" }}, "clients": {{ "{}":
+                    {{ "keep_alive": {{ "mode": "duration", "seconds": 30 }} }} }} }}"#,
+                hex::encode(tablet)
+            );
+            let policy = pf_paths::config_dir().join("display-settings.json");
+            std::fs::write(policy, doc).expect("write the policy");
+            assert_eq!(restore_delay(Some(tablet)), Some(Duration::from_secs(30)));
+            assert_eq!(restore_delay(Some([0xbb; 32])), None);
+            assert_eq!(restore_delay(None), None);
+        });
     }
 
     /// Under keep-alive forever a launch that took the box and produced no session hands it
