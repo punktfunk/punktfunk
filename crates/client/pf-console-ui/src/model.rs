@@ -301,6 +301,8 @@ struct ConsoleState {
     other_devices: Vec<OtherDevice>,
     /// Answers to [`ConsoleCmd::FetchProfiles`] by fingerprint, each taken once.
     profiles: BTreeMap<String, ProfilesAnswer>,
+    /// Answers to [`ConsoleCmd::FetchAvatar`] by URL, each taken once.
+    avatars: Vec<(String, Arc<[u8]>)>,
 }
 
 /// What a host answered [`ConsoleCmd::FetchProfiles`] with.
@@ -475,6 +477,16 @@ impl ConsoleShared {
         self.0.lock().unwrap().profiles.remove(fp_hex)
     }
 
+    /// The encoded picture at `url`, as [`ConsoleCmd::FetchAvatar`] named it.
+    pub fn set_avatar(&self, url: &str, bytes: Vec<u8>) {
+        let mut s = self.0.lock().unwrap();
+        s.avatars.push((url.to_string(), bytes.into()));
+    }
+
+    pub(crate) fn take_avatars(&self) -> Vec<(String, Arc<[u8]>)> {
+        std::mem::take(&mut self.0.lock().unwrap().avatars)
+    }
+
     /// One-shot toast. A newer notice replaces an unshown older one.
     pub fn set_notice(&self, text: String) {
         self.0.lock().unwrap().notice = Some(text);
@@ -590,6 +602,15 @@ pub enum ConsoleCmd {
         addr: String,
         mgmt: u16,
         fp_hex: String,
+    },
+    /// Read the picture a profile names (`ListedProfile::avatar`, host-relative). The bytes
+    /// arrive as [`ConsoleShared::set_avatar`]; a read that fails sends nothing and the
+    /// initials stay. Only a host that receives [`Self::FetchProfiles`] receives one.
+    FetchAvatar {
+        addr: String,
+        mgmt: u16,
+        fp_hex: String,
+        url: String,
     },
     /// Start profile `id`'s stopped seat (`POST /api/v1/profiles/{id}/wake`). No answer: the
     /// shell polls [`Self::FetchProfiles`] until the seat is `ready`.

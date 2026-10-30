@@ -23,6 +23,7 @@ fn pick(id: &str, name: &str) -> Option<ProfilePick> {
         id: id.into(),
         display_name: name.into(),
         remember: true,
+        ..ProfilePick::default()
     })
 }
 
@@ -494,4 +495,44 @@ fn a_resting_card_learns_its_profiles() {
     s.sync();
     assert!(s.profiles.choice(&row));
     assert!(s.profiles.asked().is_empty());
+}
+
+fn pictures_asked(bus: &ConsoleBus) -> Vec<String> {
+    let cmds = bus.drain().into_iter();
+    cmds.filter_map(|c| match c {
+        ConsoleCmd::FetchAvatar { url, .. } => Some(url),
+        _ => None,
+    })
+    .collect()
+}
+
+/// A saved pick's picture is asked for once. One that never came is asked again when the host
+/// next lists its profiles; one that came, even as bytes that won't decode, is not.
+#[test]
+fn a_picture_is_asked_for_once_until_the_host_lists_again() {
+    let saved = ProfilePick {
+        avatar: Some("/kid?v=1".into()),
+        ..pick("kid", "Kid").unwrap()
+    };
+    let (mut s, console, bus, _row) = asking(Some(saved));
+    assert_eq!(pictures_asked(&bus), ["/kid?v=1"]);
+    s.sync();
+    assert!(pictures_asked(&bus).is_empty());
+
+    let ProfilesAnswer::Listed(mut rows) = listed(&[("own", "Ben"), ("kid", "Kid")]) else {
+        unreachable!()
+    };
+    rows[0].avatar = Some("/own?v=1".into());
+    rows[1].avatar = Some("/kid?v=1".into());
+    s.profiles.learn("aa11", &ProfilesAnswer::Listed(rows));
+    s.sync();
+    let mut asked = pictures_asked(&bus);
+    asked.sort();
+    assert_eq!(asked, ["/kid?v=1", "/own?v=1"]);
+
+    console.set_avatar("/kid?v=1", vec![1, 2, 3]);
+    s.sync();
+    s.profiles.learn("aa11", &listed(&[("own", "Ben")]));
+    s.sync();
+    assert!(pictures_asked(&bus).is_empty());
 }

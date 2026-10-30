@@ -1292,6 +1292,7 @@ mod tests {
                     id: "9a3f1c2b7e40".into(),
                     display_name: "Kid".into(),
                     remember: true,
+                    ..Default::default()
                 }),
                 advert_name: String::new(),
             }],
@@ -1462,6 +1463,7 @@ mod tests {
                     id: "9a3f1c2b7e40".into(),
                     display_name: "Kid".into(),
                     remember: true,
+                    ..Default::default()
                 }),
                 advert_name: String::new(),
             }],

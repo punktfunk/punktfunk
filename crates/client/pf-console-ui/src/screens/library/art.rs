@@ -125,7 +125,7 @@ type ArtDone = (String, Option<crate::library::DecodedPoster>);
 /// stopped with the screen. A TV spends 15–90 ms on one cover, a dropped frame each on the
 /// render thread, and a screen that only has a cover's bytes must decode it itself.
 #[derive(Default)]
-pub(super) struct ArtDecoder {
+pub(crate) struct ArtDecoder {
     #[cfg_attr(test, allow(dead_code))]
     jobs: Option<std::sync::mpsc::Sender<ArtJob>>,
     #[cfg_attr(test, allow(dead_code))]
@@ -138,7 +138,7 @@ pub(super) struct ArtDecoder {
 
 impl ArtDecoder {
     /// Decode `bytes` at `k` for `id`, unless it is already on its way.
-    pub(super) fn want(&mut self, id: String, bytes: Arc<[u8]>, k: f64) {
+    pub(crate) fn want(&mut self, id: String, bytes: Arc<[u8]>, k: f64) {
         if !self.pending.insert(id.clone()) {
             return;
         }
@@ -172,7 +172,7 @@ impl ArtDecoder {
     }
 
     /// Decodes finished since the last call; `None` for a cover that would not decode.
-    pub(super) fn finished(&mut self) -> Vec<(String, Option<Image>)> {
+    pub(crate) fn finished(&mut self) -> Vec<(String, Option<Image>)> {
         #[cfg(test)]
         let out: Vec<_> = std::mem::take(&mut self.ready);
         #[cfg(not(test))]

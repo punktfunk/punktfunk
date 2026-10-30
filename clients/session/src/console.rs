@@ -649,6 +649,12 @@ impl ServiceState {
             ConsoleCmd::FetchProfiles { addr, mgmt, fp_hex } => {
                 self.fetch_profiles(addr, mgmt, fp_hex)
             }
+            ConsoleCmd::FetchAvatar {
+                addr,
+                mgmt,
+                fp_hex,
+                url,
+            } => self.fetch_avatar(addr, mgmt, fp_hex, url),
             ConsoleCmd::WakeProfile {
                 addr,
                 mgmt,
@@ -870,6 +876,23 @@ impl ServiceState {
                     }
                 };
                 console.set_profiles(&fp_hex, answer);
+            })
+            .ok();
+    }
+
+    /// A profile's picture for the faces the shell draws.
+    fn fetch_avatar(&self, addr: String, mgmt: u16, fp_hex: String, url: String) {
+        let console = self.console.clone();
+        let identity = self.identity.clone();
+        let pin = trust::parse_hex32(&fp_hex);
+        std::thread::Builder::new()
+            .name("punktfunk-avatar".into())
+            .spawn(move || {
+                let port = stream_port(&fp_hex);
+                let api = library::HostApi::new(&addr, mgmt, port, &identity, pin);
+                if let Some(bytes) = profiles::fetch_avatar(&api, &url) {
+                    console.set_avatar(&url, bytes);
+                }
             })
             .ok();
     }

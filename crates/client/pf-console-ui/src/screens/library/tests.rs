@@ -1448,6 +1448,7 @@ fn many_hosts_wait_behind_one_host_pill() {
         id: "kid".into(),
         display_name: "Kid".into(),
         remember: true,
+        ..Default::default()
     });
     let fonts = crate::theme::build_fonts().unwrap();
     let mut surface = skia_safe::surfaces::raster_n32_premul((1280, 800)).unwrap();

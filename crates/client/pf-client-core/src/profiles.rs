@@ -8,12 +8,16 @@
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
-/// The pick a device saves for a box. Shown on the card, so it carries the name.
+/// The pick a device saves for a box. Shown on the card, so it carries the name and the
+/// picture's URL.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProfilePick {
     pub id: String,
     #[serde(default)]
     pub display_name: String,
+    /// Host-relative URL of the picture.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub avatar: Option<String>,
     /// The player asked this device to remember the pick. The console applies only such a
     /// pick and asks otherwise; the other shells apply any saved pick.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
@@ -68,6 +72,7 @@ impl ListedProfile {
         ProfilePick {
             id: self.id.clone(),
             display_name: self.display_name.clone(),
+            avatar: self.avatar.clone(),
             remember: false,
         }
     }
@@ -271,6 +276,19 @@ pub fn fetch_enumerate(
         .map_err(|e| LibraryError::Unreachable(format!("bad JSON: {e}")))
 }
 
+/// The picture at `path`, a row's [`ListedProfile::avatar`]: [`crate::art_cache`], else the
+/// host, which fills the cache. `None` leaves the initials up. Blocks.
+#[cfg(desktop)]
+pub fn fetch_avatar(api: &crate::library::HostApi, path: &str) -> Option<Vec<u8>> {
+    // Anything but a path could name another origin, and this request carries the device's cert.
+    if !path.starts_with('/') {
+        return None;
+    }
+    let https = crate::library::agent(&api.identity, api.pin).ok()?;
+    let url = format!("{}{path}", api.base());
+    crate::library::resolve_art(api, &https, path, &[url], || false)
+}
+
 /// `POST /api/v1/profiles/{id}/wake`: starts a stopped seat and answers with its row, which
 /// says `starting` until the seat is up. A refusal is `Http(403)` ([`wake_answer`]).
 #[cfg(desktop)]
@@ -398,6 +416,53 @@ mod tests {
     use std::sync::atomic::AtomicBool;
 
     #[test]
+    fn a_pick_carries_the_picture_and_a_kept_pick_follows_a_new_one() {
+        let row = |avatar: &str| ListedProfile {
+            id: "kid".into(),
+            display_name: "Kid".into(),
+            avatar: Some(avatar.into()),
+            ..ListedProfile::default()
+        };
+        let old = ProfilePick {
+            remember: true,
+            ..row("/p/kid/avatar?v=old").pick()
+        };
+        let listed = [row("/p/kid/avatar?v=new"), ListedProfile::default()];
+        let kept = picker_decision(Some(&listed), Some(&old), None).remember;
+        assert_eq!(
+            kept,
+            Some(ProfilePick {
+                avatar: Some("/p/kid/avatar?v=new".into()),
+                ..old.clone()
+            })
+        );
+    }
+
+    #[test]
+    fn a_saved_pick_without_a_picture_keeps_its_old_shape() {
+        let saved = ProfilePick {
+            id: "kid".into(),
+            display_name: "Kid".into(),
+            ..ProfilePick::default()
+        };
+        let json = serde_json::to_value(&saved).unwrap();
+        assert_eq!(
+            json,
+            serde_json::json!({"id": "kid", "display_name": "Kid"})
+        );
+        assert_eq!(serde_json::from_value::<ProfilePick>(json).unwrap(), saved);
+    }
+
+    #[cfg(desktop)]
+    #[test]
+    fn a_picture_must_be_a_path_on_the_host() {
+        let identity = (String::new(), String::new());
+        let api = crate::library::HostApi::new("10.0.0.2", 47990, 0, &identity, None);
+        assert_eq!(fetch_avatar(&api, "https://elsewhere.example/x.png"), None);
+        assert_eq!(fetch_avatar(&api, "@elsewhere.example/x.png"), None);
+    }
+
+    #[test]
     fn a_seat_is_dialed_woken_waited_for_or_refused() {
         let with = |state: &str, detail: Option<&str>| -> ListedProfile {
             serde_json::from_value(serde_json::json!({
@@ -515,6 +580,7 @@ mod tests {
             id: "kid".into(),
             display_name: "Old name".into(),
             remember: true,
+            ..ProfilePick::default()
         };
         let d = picker_decision(Some(&listed), Some(&saved), None);
         let kept = d.remember.expect("still listed");

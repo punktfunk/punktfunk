@@ -16,6 +16,7 @@ fn pick(id: &str, name: &str, remember: bool) -> ProfilePick {
         id: id.into(),
         display_name: name.into(),
         remember,
+        ..ProfilePick::default()
     }
 }
 
@@ -291,4 +292,28 @@ fn the_book_learns_and_keeps_what_it_knew() {
     book.learn("aa", &ProfilesAnswer::NoProfiles);
     assert!(!book.choice(&host(None)));
     assert!(book.choice(&host(Some(pick("kid", "Kid", true)))));
+}
+
+/// A picture fills the face's circle and nothing past it; bytes that won't decode leave none.
+#[test]
+fn a_picture_draws_once_it_decodes_and_fills_its_circle() {
+    let mut art = skia_safe::surfaces::raster_n32_premul((40, 20)).unwrap();
+    art.canvas().clear(skia_safe::Color::RED);
+    let png = art
+        .image_snapshot()
+        .encode(None, skia_safe::EncodedImageFormat::PNG, 100)
+        .unwrap();
+    let mut surface = skia_safe::surfaces::raster_n32_premul((64, 64)).unwrap();
+    assert!(!draw_picture(surface.canvas(), "/kid", 32.0, 32.0, 32.0));
+
+    offer_picture("/kid".into(), png.as_bytes().into());
+    offer_picture("/bad".into(), vec![1u8, 2, 3].into());
+    adopt_pictures();
+    assert!(picture_known("/bad"));
+    assert!(!draw_picture(surface.canvas(), "/bad", 32.0, 32.0, 32.0));
+    assert!(draw_picture(surface.canvas(), "/kid", 32.0, 32.0, 32.0));
+
+    let pixmap = surface.peek_pixels().unwrap();
+    assert_eq!(pixmap.get_color((32, 32)), skia_safe::Color::RED);
+    assert_eq!(pixmap.get_color((1, 1)).a(), 0, "the corner is outside it");
 }

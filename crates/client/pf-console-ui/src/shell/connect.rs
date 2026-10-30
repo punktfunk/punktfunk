@@ -649,6 +649,27 @@ impl Shell {
         }
     }
 
+    /// Takes the pictures that landed, and asks for those a paired host shows and nobody has.
+    pub(super) fn collect_pictures(&mut self) {
+        if !self.profiles.asks() {
+            return;
+        }
+        for (url, bytes) in self.console.take_avatars() {
+            crate::screens::profiles::offer_picture(url, bytes);
+        }
+        crate::screens::profiles::adopt_pictures();
+        for h in self.hosts.iter().filter(|h| h.paired) {
+            for url in self.profiles.pictures_to_ask(h) {
+                self.bus.send(ConsoleCmd::FetchAvatar {
+                    addr: h.addr.clone(),
+                    mgmt: h.mgmt_port,
+                    fp_hex: h.fp_hex.clone(),
+                    url,
+                });
+            }
+        }
+    }
+
     /// A connect, a seat wait or the screen on top takes `fp`'s next answer.
     fn waits_on_profiles(&self, fp: &str) -> bool {
         self.connect.asking().is_some_and(|a| a.intent.fp_hex == fp)

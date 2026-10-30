@@ -422,6 +422,7 @@ fn dump_profiles() {
             id: "theo".into(),
             display_name: "Theo".into(),
             remember: true,
+            ..Default::default()
         });
         console8.set_hosts(rows.clone());
         let mut opts = test_options();

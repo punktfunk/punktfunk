@@ -15,6 +15,7 @@
     "Probe",
     {"SetPin": {"key": "ab12", "preset_id": "couch", "pin": true}},
     {"FetchProfiles": {"addr": "10.0.0.2", "mgmt": 47990, "fp_hex": "ab12"}},
+    {"FetchAvatar": {"addr": "10.0.0.2", "mgmt": 47990, "fp_hex": "ab12", "url": "/api/v1/profiles/kid/avatar?v=1"}},
     {"WakeProfile": {"addr": "10.0.0.2", "mgmt": 47990, "fp_hex": "ab12", "id": "p1"}},
     {"SetProfile": {"key": "ab12", "profile": {"id": "p1", "display_name": "Ada", "remember": true}}},
     {"BindPreset": {"key": "ab12", "game": null, "preset_id": "couch"}},
@@ -50,8 +51,8 @@
     ],
     "ProfilesAnswer": [
       {"Listed": [
-        {"id": "p1", "display_name": "Ada", "accent": "#3366ff", "owner": true, "legacy_seat": false, "seat": {"state": "starting", "detail": "Starting Steam", "occupant": null, "steam_sign_in": true}},
-        {"id": "p2", "display_name": "Ben", "accent": null, "owner": false, "legacy_seat": true, "seat": null}
+        {"id": "p1", "display_name": "Ada", "accent": "#3366ff", "avatar": "/api/v1/profiles/p1/avatar?v=1", "owner": true, "legacy_seat": false, "seat": {"state": "starting", "detail": "Starting Steam", "occupant": null, "steam_sign_in": true}},
+        {"id": "p2", "display_name": "Ben", "accent": null, "avatar": null, "owner": false, "legacy_seat": true, "seat": null}
       ]},
       "NoProfiles",
       {"Failed": "Couldn't load the profiles."}

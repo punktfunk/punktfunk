@@ -1209,6 +1209,7 @@ mod tests {
                 id: "kid".into(),
                 display_name: "Kid".into(),
                 remember,
+                ..Default::default()
             })
         };
         let picked = HostRow {
@@ -1273,6 +1274,7 @@ mod tests {
                 id: "kid".into(),
                 display_name: "Kid".into(),
                 remember: true,
+                ..Default::default()
             }),
             ..host()
         };
