@@ -195,6 +195,7 @@ mod tests {
                     id: "saved".into(),
                     display_name: "Kid".into(),
                     remember: false,
+                    ..Default::default()
                 }),
                 ..Default::default()
             }],

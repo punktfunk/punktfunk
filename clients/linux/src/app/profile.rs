@@ -401,7 +401,11 @@ impl AppModel {
         flow.set_halign(gtk::Align::Center);
         for p in rows {
             let card = gtk::Box::new(gtk::Orientation::Vertical, 4);
-            card.append(&adw::Avatar::new(64, Some(&p.display_name), true));
+            let avatar = adw::Avatar::new(64, Some(&p.display_name), true);
+            if let Some(url) = &p.avatar {
+                crate::hosts::picture::show(&avatar, url, req.host.api(&self.identity));
+            }
+            card.append(&avatar);
             card.append(
                 &gtk::Label::builder()
                     .label(&p.display_name)

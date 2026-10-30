@@ -287,6 +287,7 @@ impl SimpleComponent for AppModel {
         let hosts = HostsPage::builder()
             .launch(hosts::HostsInit {
                 store: store.clone(),
+                identity: identity.clone(),
                 nav: nav.clone(),
                 views: views.clone(),
                 narrow: narrow.clone(),
