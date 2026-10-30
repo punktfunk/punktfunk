@@ -523,6 +523,70 @@ impl StatsSnapshot {
     }
 }
 
+/// The connection dot, rated from what the wire did in a window. Ordered best to worst after
+/// `Starting`, so the worst of several windows is their `max`.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Default)]
+pub enum Quality {
+    /// No window has closed yet.
+    #[default]
+    Starting,
+    Good,
+    /// Loss that FEC repaired, or a long round trip.
+    Fair,
+    /// A frame given up on, a recovery ask, or a very long round trip.
+    Poor,
+}
+
+impl Quality {
+    /// Stable, `0` starting to `3` poor: the number a C ABI, JNI or wasm export passes.
+    pub fn index(self) -> u32 {
+        self as u32
+    }
+}
+
+/// Round trip above which the dot reads Poor: every input lags visibly. Initial value.
+const POOR_RTT_US: u32 = 150_000;
+/// Round trip above which the dot reads Fair: past a LAN or a nearby WAN. Initial value.
+const FAIR_RTT_US: u32 = 60_000;
+
+/// What [`quality`] carries from one window to the next.
+#[derive(Clone, Debug, Default)]
+pub struct QualityState {
+    /// The last three windows' ratings, newest first; `Starting` fills a slot not yet rated.
+    recent: [Quality; 3],
+    /// `rfis_last_min` at the previous window, to see the gauge rise.
+    rfis_last_min: u32,
+}
+
+impl QualityState {
+    /// The dot: the worst of the last three windows, so one bad second shows for three.
+    pub fn shown(&self) -> Quality {
+        self.recent.iter().copied().max().unwrap_or_default()
+    }
+}
+
+/// Rate the window `snap` closed, and return what the dot shows now ([`QualityState::shown`]).
+///
+/// Poor: a frame given up on, a recovery ask, or a round trip over [`POOR_RTT_US`]. Fair: FEC
+/// repaired shards, or a round trip over [`FAIR_RTT_US`]. Good otherwise. Presentation skips
+/// are the client's own pacing and never count.
+pub fn quality(snap: &StatsSnapshot, state: &mut QualityState) -> Quality {
+    // The 60 s gauge hides an ask made while an older one ages out.
+    let asked = snap.rfis_last_min > state.rfis_last_min;
+    state.rfis_last_min = snap.rfis_last_min;
+    let rtt = snap.rtt_us.unwrap_or(0);
+    let now = if snap.lost > 0 || asked || rtt > POOR_RTT_US {
+        Quality::Poor
+    } else if snap.fec > 0 || rtt > FAIR_RTT_US {
+        Quality::Fair
+    } else {
+        Quality::Good
+    };
+    state.recent.rotate_right(1);
+    state.recent[0] = now;
+    state.shown()
+}
+
 /// Below this many frames in a window, loss shows as a count. A still screen on a
 /// Windows host sends almost none, so one lost frame would read as tens of percent.
 const THIN_WINDOW_FRAMES: u32 = 30;
@@ -2340,5 +2404,71 @@ mod tests {
             link_line(f(0, 0), f(0, 0), (800_000, Floor), Auto, None),
             "Link 800 Mbit/s, not measured yet"
         );
+    }
+
+    /// One window: lost frames, FEC-repaired shards, the RFI gauge, round trip in ms.
+    fn window(lost: u32, fec: u32, rfis_last_min: u32, rtt_ms: u32) -> StatsSnapshot {
+        StatsSnapshot {
+            lost,
+            fec,
+            rfis_last_min,
+            rtt_us: (rtt_ms > 0).then_some(rtt_ms * 1000),
+            ..StatsSnapshot::default()
+        }
+    }
+
+    #[test]
+    fn quality_shows_the_worst_of_the_last_three_windows() {
+        use Quality::*;
+        let clean = window(0, 0, 0, 5);
+        let cases: &[(&str, &[StatsSnapshot], Quality)] = &[
+            ("no window yet", &[], Starting),
+            ("clean", &[window(0, 0, 0, 5)], Good),
+            ("a lost frame", &[window(1, 0, 0, 5)], Poor),
+            ("a recovery ask", &[window(0, 0, 1, 5)], Poor),
+            (
+                "the gauge falling is no ask",
+                &[
+                    window(0, 0, 3, 5),
+                    window(0, 0, 2, 5),
+                    window(0, 0, 2, 5),
+                    window(0, 0, 1, 5),
+                ],
+                Good,
+            ),
+            ("fec only", &[window(0, 4, 0, 5)], Fair),
+            ("rtt over the fair line", &[window(0, 0, 0, 61)], Fair),
+            ("rtt over the poor line", &[window(0, 0, 0, 151)], Poor),
+            ("unknown rtt", &[window(0, 0, 0, 0)], Good),
+            (
+                "poor holds for three windows",
+                &[window(1, 0, 0, 5), clean.clone(), clean.clone()],
+                Poor,
+            ),
+            (
+                "then clears",
+                &[
+                    window(1, 0, 0, 5),
+                    clean.clone(),
+                    clean.clone(),
+                    clean.clone(),
+                ],
+                Good,
+            ),
+            (
+                "fair under poor",
+                &[window(1, 0, 0, 5), window(0, 4, 0, 5), clean.clone()],
+                Poor,
+            ),
+        ];
+        for (name, windows, want) in cases {
+            let mut state = QualityState::default();
+            let mut shown = state.shown();
+            for w in *windows {
+                shown = quality(w, &mut state);
+            }
+            assert_eq!(shown, *want, "{name}");
+            assert_eq!(state.shown(), shown, "{name}");
+        }
     }
 }
