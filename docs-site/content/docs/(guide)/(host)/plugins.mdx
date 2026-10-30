@@ -170,6 +170,11 @@ on its first launch with its updates and DLC, and its saves go back to the serve
 **Libretro** for box art and details, and **SteamGridDB** with an API key for the games Libretro
 has no art for.
 
+On a box with seats, each seat plays these games with the box's emulators and keeps its own saves;
+[Profiles](/docs/profiles#on-linux) names the exceptions on Linux. On Windows, RPCS3, Snes9x and
+Supermodel keep one set for everyone. So does an emulator installed while seats were off or by an
+earlier version, until it is reinstalled under **Library** → **Sources** → **Emulators**.
+
 ```sh
 punktfunk-host plugins add rom-manager
 ```

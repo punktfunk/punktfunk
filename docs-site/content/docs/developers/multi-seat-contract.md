@@ -148,7 +148,7 @@ them together. The host logs a warning at startup for each one that is set and i
 | `PUNKTFUNK_SEAT_DISPLAY_SLOT` | `12`–`15` | The seat's connector. Not a number, out of range, or the marker absent: the host refuses every virtual-display session. |
 | `PUNKTFUNK_TRUST_DIR` | the box's config directory | The seat reads the box's pairing store, `profiles.json`, per-device display overlays and `seat-defaults.json` from here, read only, and follows their changes. A relative path is ignored. |
 | `PUNKTFUNK_PAIRING` | `refused` | Devices pair with the box. A knock is refused and no PIN window opens. A seat host refuses pairing with or without it. |
-| `PUNKTFUNK_LIBRARY_DIR` | Windows: the box's config directory. Linux: the seat's trust copy, on every seat but the owner's | The seat reads the box's library from here, read only: `library*.json`, `library-metadata/` and the plugin grants; on Linux also the firmware plugins staged, on Windows the plugin manifests its entries launch through. Play stats stay in the seat's own directory. A relative path is ignored. |
+| `PUNKTFUNK_LIBRARY_DIR` | Windows: the box's config directory. Linux: the seat's trust copy, on every seat but the owner's | The seat reads the box's library from here, read only: `library*.json`, `library-metadata/`, the plugin grants and the firmware plugins staged; on Windows also the plugin manifests its entries launch through and the managed emulators. Play stats stay in the seat's own directory. A relative path is ignored. |
 | `PUNKTFUNK_SEAT_STEAM` | the seat's own `steam.exe` (Windows only, when the box has Steam) | Steam runs once per IPC name per machine, so a seat starts Steam from here only, always with `-master_ipc_name_override pfseat<seat id>`. The supervisor copies the box's client into the seat account's profile at the seat's first start; until the file exists, the seat's Steam titles don't start. Unset or relative: no Steam on the seat. |
 
 It also sets these ordinary [host settings](/docs/configuration), so seats don't collide. A seat
@@ -198,13 +198,24 @@ session by design, and display activation fails while its session is inactive.
   host is the one that does them, and it ends the sessions on every seat first.
 - **The box's library, on Windows.** A Windows seat runs no plugins. It lists and launches the
   box's titles as its own user, and answers every library change with 409. Titles from sources
-  that belong to one account (Playnite, Game Bar, Amazon, itch, Hydra) are left out.
+  that belong to one account (Playnite, Game Bar, Amazon, itch, Hydra) are left out. It runs the
+  box's emulators from `%ProgramData%\punktfunk\emulators` with the firmware the box's plugins
+  staged. With seats on, an emulator installed from **Emulators** keeps each account's config and
+  saves in that account's profile; RPCS3, Snes9x and Supermodel keep theirs beside the program,
+  one set for every account. One installed while seats were off, or by an earlier version, keeps
+  one set for every account until it is reinstalled there.
 - **The box's library, on Linux.** The box's library is the owner's (see the owner's libraries
   below). A seat other than the owner's runs no plugins and lists and launches only what it can
   start as its own user: `steam_appid` with an id that fits 32 bits and `steam_ui`, with its own
-  Steam, and `emulator`, with its own copy and a game file it can read. The owner's host checked
-  an `emulator` entry against its plugin at publish. The seat answers every library change with
-  409. Every other title starts from the owner's home, or needs a manifest only that host has.
+  Steam, and `emulator`, with a copy it can run and a game file it can read. The owner's host
+  checked an `emulator` entry against its plugin at publish. The seat answers every library change
+  with 409. Every other title starts from the owner's home, or needs a manifest only that host has.
+  The owner's host installs a Flathub emulator box-wide through `install_flatpak`, so every seat
+  runs it with its own config and saves in `~/.var/app/<id>`. One the catalog ships another way
+  (RPCS3, shadPS4, Supermodel, Vita3K, Xenia Canary) stays the owner's, as does a Flatpak in the
+  owner's own installation until it is reinstalled from **Emulators**. At a launch the seat installs
+  the RetroArch core the entry names into its own RetroArch and places the firmware from its
+  library copy.
 - **One profile.** The seat serves the profile whose seat it is. A connect that names any other
   profile, the owner's included, is refused as an unknown profile; one that names none plays as
   this seat's profile. The owner's row alone also serves the owner and the profiles that share the

@@ -135,8 +135,10 @@ What turning it on does:
   seat keeps its own Proton prefixes and shader cache.
 - **Your library is the box's.** Every profile's apps list the games your own host found. A
   profile with a desktop of its own plays your Steam games with its own Steam, and ROM Manager
-  games with the emulators on that desktop, when it can read the game file: keep ROMs outside your
-  home. Your own custom emulators and games from other launchers play on your desktop only.
+  games with the box's emulators and its own saves. RPCS3, shadPS4, Supermodel, Vita3K and Xenia
+  Canary play on your desktop only. So does an emulator installed while seats were off or by an
+  earlier version, until you reinstall it under **Library** → **Sources** → **Emulators**. Your
+  own custom emulators and games from other launchers play on your desktop only.
   Change the library on your own **Library** page; another seat's is read only. Covers that Steam
   keeps in your home show while your host runs.
 - **A seat has Game Mode too.** **Return to Gaming Mode** on a seat's desktop opens Steam's Game

@@ -7,14 +7,16 @@ use std::time::{Duration, Instant};
 
 use hermir::progress::Quiet;
 use hermir::{Hermir, Installed, Options};
+use pf_seats::ipc::{Command, CommandResult};
 use punktfunk_core::config::GamepadPref;
 
 /// Where managed emulators live. `%ProgramData%\punktfunk\emulators` on Windows, so the SYSTEM
-/// service installs and the player's session runs. The data dir on POSIX: a plugin is granted
-/// the emulator's folder, and the runner shares nothing under the config dir.
+/// service installs and the player's session runs; a Windows seat reads the box's copies there.
+/// The data dir on POSIX: a plugin is granted the emulator's folder, and the runner shares
+/// nothing under the config dir.
 pub fn prefix() -> PathBuf {
     #[cfg(windows)]
-    let base = pf_paths::config_dir();
+    let base = pf_paths::seat::library_dir();
     #[cfg(not(windows))]
     let base = pf_paths::data_dir();
     base.join("emulators")
@@ -26,13 +28,39 @@ pub fn home_of(id: &str) -> PathBuf {
     prefix().join(id).join("app")
 }
 
+/// hermir on [`prefix`]. With seats on the box a copy serves every account: a Linux Flatpak goes
+/// into the system installation, a Windows archive keeps each account's data in its profile. The
+/// SYSTEM host on Windows resolves that data in the session player's profile.
 pub fn open() -> hermir::Result<Hermir> {
     Hermir::open(Options {
         prefix: Some(prefix()),
         #[cfg(windows)]
         runner: Box::new(AsPlayer),
+        #[cfg(windows)]
+        shared_install: pf_paths::seat::role().is_seat_host() || crate::seats::enabled(),
+        #[cfg(windows)]
+        home: session_home(),
+        flatpak_installation: if box_wide() {
+            hermir::FlatpakInstallation::System
+        } else {
+            hermir::FlatpakInstallation::User
+        },
         ..Options::default()
     })
+}
+
+/// A Linux host on a box with seats, the owner's row included: its Flatpaks are the box's.
+fn box_wide() -> bool {
+    cfg!(target_os = "linux") && pf_paths::seat::role().is_seat_host()
+}
+
+/// The profile folder of the player signed in to this host's session; `None` with nobody signed
+/// in, or on a host that isn't SYSTEM.
+#[cfg(windows)]
+fn session_home() -> Option<PathBuf> {
+    let sid = crate::windows::theme::session_sid()?;
+    let env = format!(r"{sid}\Volatile Environment");
+    crate::windows::theme::read_string(&env, "USERPROFILE").map(PathBuf::from)
 }
 
 /// Runs an emulator's own installer (RPCS3's firmware, a `.pkg`) as the player signed in to the
@@ -79,10 +107,15 @@ pub fn offered(id: &str) -> hermir::Result<bool> {
 }
 
 /// Installs (or reinstalls) `id` and makes its folder exist, so the grant that follows has a
-/// directory to land on even when the copy itself is a Flatpak.
+/// directory to land on even when the copy itself is a Flatpak. On a Linux box with seats a
+/// Flatpak goes in box-wide ([`install_box_wide`]); an AppImage or archive stays this account's.
 pub fn install(id: &str) -> hermir::Result<Installed> {
     let h = open()?;
-    let row = h.emulator(id)?.install(&Quiet)?;
+    let emulator = h.emulator(id)?;
+    let row = match box_flatpak(emulator.entry()).filter(|_| box_wide()) {
+        Some(app) => install_box_wide(&h, id, app)?,
+        None => emulator.install(&Quiet)?,
+    };
     let home = home_of(id);
     std::fs::create_dir_all(&home).map_err(|e| hermir::Error::Io {
         op: "create",
@@ -93,8 +126,76 @@ pub fn install(id: &str) -> hermir::Result<Installed> {
     Ok(row)
 }
 
+/// Removes the managed copy where its row says it went: a box-wide Flatpak through the seat
+/// supervisor, which purges root's data of it and never a person's.
 pub fn remove(id: &str, purge: bool) -> hermir::Result<()> {
-    open()?.emulator(id)?.remove(purge)
+    let h = open()?;
+    let emulator = h.emulator(id)?;
+    match emulator.managed()? {
+        Some(Installed {
+            exe: hermir::Exe::FlatpakRun(app),
+            installation: Some(hermir::FlatpakInstallation::System),
+            ..
+        }) => {
+            supervisor(id, Command::RemoveFlatpak { id: app, purge })?;
+            let _lock = h.store().lock()?;
+            h.store().forget(id)
+        }
+        _ => emulator.remove(purge),
+    }
+}
+
+/// The Flathub app id of `entry`'s Linux channel; `None` for an AppImage or archive.
+fn box_flatpak(entry: &hermir::Entry) -> Option<&str> {
+    match entry.channels.get(hermir::Os::Linux) {
+        Some(hermir::Channel::Flatpak { flatpak }) => Some(flatpak),
+        _ => None,
+    }
+}
+
+/// `app` installed into the box's Flatpak installation by the seat supervisor, which runs as
+/// root; every seat sees it and keeps its own data in `~/.var/app`. A Flatpak of this account's
+/// own goes, its data stays, so `flatpak run` never picks the stale copy.
+fn install_box_wide(h: &Hermir, id: &str, app: &str) -> hermir::Result<Installed> {
+    let version = match supervisor(id, Command::InstallFlatpak { id: app.into() })? {
+        CommandResult::Flatpak { version, .. } => version,
+        other => return Err(place(id, format!("the seat supervisor answered {other:?}"))),
+    };
+    let emulator = h.emulator(id)?;
+    let own = emulator.managed()?;
+    if own.is_some_and(|r| r.installation != Some(hermir::FlatpakInstallation::System))
+        && let Err(error) = emulator.remove(false)
+    {
+        tracing::warn!(emulator = %id, %error, "own Flatpak not removed beside the box-wide one");
+    }
+    let row = Installed {
+        emulator: id.into(),
+        channel: "flatpak".into(),
+        exe: hermir::Exe::FlatpakRun(app.into()),
+        version,
+        release: Some(emulator.resolve()?.release),
+        sha256: None,
+        verified: hermir::Verified::Flatpak,
+        kept: Vec::new(),
+        installation: Some(hermir::FlatpakInstallation::System),
+        shared: false,
+        installed_at: jiff::Timestamp::now().to_string(),
+    };
+    let _lock = h.store().lock()?;
+    h.store().record(row.clone())?;
+    Ok(row)
+}
+
+/// One Flatpak change by the seat supervisor; its refusal is `id`'s, in its words.
+fn supervisor(id: &str, command: Command) -> hermir::Result<CommandResult> {
+    crate::seats::call(command).map_err(|e| place(id, e.message))
+}
+
+fn place(id: &str, why: String) -> hermir::Error {
+    hermir::Error::Place {
+        what: id.into(),
+        why,
+    }
 }
 
 /// RetroArch's cores folder on this machine, from the best copy hermir knows; `None` without
@@ -621,10 +722,10 @@ pub fn in_catalog(id: &str) -> bool {
     .any(|known| known == id)
 }
 
-/// Before an `emulator` entry starts: every copy past its first-run questions, the platform's
-/// firmware from the plugin's `firmware/<platform>` when it staged some, the session's pads.
-/// What it did goes to the log. A launch waits for the client's pads, at most [`SETTLE_ALL`],
-/// and never on the rest to succeed.
+/// Before an `emulator` entry starts: the RetroArch core it names when this host's RetroArch
+/// lacks it, every copy past its first-run questions, the platform's firmware from the plugin's
+/// `firmware/<platform>` when it staged some, the session's pads. What it did goes to the log. A
+/// launch waits for the client's pads, at most [`SETTLE_ALL`], and never on the rest to succeed.
 pub fn prepare_launch(library_id: &str, pad: GamepadPref, slots: Option<&AtomicU16>) {
     let Some(entry) = crate::library::entry_for_library_id(library_id) else {
         return;
@@ -632,12 +733,27 @@ pub fn prepare_launch(library_id: &str, pad: GamepadPref, slots: Option<&AtomicU
     let Some(spec) = entry.launch.as_ref().filter(|s| s.kind == "emulator") else {
         return;
     };
-    let platform = spec
-        .args
-        .iter()
-        .flatten()
-        .find(|a| a.name == "platform")
-        .map(|a| a.value.as_str());
+    let arg = |name: &str| {
+        spec.args
+            .iter()
+            .flatten()
+            .find(|a| a.name == name)
+            .map(|a| a.value.as_str())
+    };
+    let platform = arg("platform");
+    if let Some(core) = arg("core").filter(|c| valid_core(c))
+        && cores_dir()
+            .ok()
+            .flatten()
+            .is_some_and(|d| !has_core(&d, core))
+    {
+        match install_core(core) {
+            Ok(path) => {
+                tracing::info!(core, path = %path.display(), "core installed for the launch")
+            }
+            Err(error) => tracing::warn!(core, %error, "core not installed for the launch"),
+        }
+    }
     let staged = entry
         .provider
         .as_deref()
@@ -657,10 +773,15 @@ pub fn prepare_launch(library_id: &str, pad: GamepadPref, slots: Option<&AtomicU
     }
 }
 
-/// `<plugin-state>/<provider>/firmware/<platform>` when it is a folder inside that plugin's own
-/// state: a link out of it would hand the emulator files the plugin could never write.
+/// `<plugin-state>/<provider>/firmware/<platform>` in the library this host reads (a seat's is
+/// the copy of the box's), when it is a folder inside that plugin's own state: a link out of it
+/// would hand the emulator files the plugin could never write.
 fn staged_firmware(provider: &str, platform: &str) -> Option<PathBuf> {
-    let own = pf_paths::config_dir()
+    staged_firmware_in(&pf_paths::seat::library_dir(), provider, platform)
+}
+
+fn staged_firmware_in(base: &Path, provider: &str, platform: &str) -> Option<PathBuf> {
+    let own = base
         .join("plugin-state")
         .join(provider)
         .canonicalize()
@@ -794,6 +915,34 @@ I: Bus=0011 Vendor=0001 Product=0001 Version=ab41\nN: Name=\"AT Translated Set 2
         );
         assert_eq!(seat(GamepadPref::Xbox360), "Xbox 360 Controller");
         assert_eq!(seat(GamepadPref::SteamDeck), "Xbox 360 Controller");
+    }
+
+    #[test]
+    fn only_a_flathub_channel_installs_box_wide() {
+        let catalog = hermir::Catalog::embedded().unwrap();
+        let channel = |id: &str| box_flatpak(catalog.get(id).unwrap());
+        assert_eq!(channel("pcsx2"), Some("net.pcsx2.PCSX2"));
+        assert_eq!(channel("retroarch"), Some("org.libretro.RetroArch"));
+        for own in ["rpcs3", "shadps4", "supermodel", "vita3k", "xenia-canary"] {
+            assert_eq!(channel(own), None, "{own}");
+        }
+    }
+
+    #[test]
+    fn staged_firmware_stays_inside_the_plugins_own_state() {
+        let base = tempfile::tempdir().unwrap();
+        let firmware = base.path().join("plugin-state/rom-manager/firmware");
+        std::fs::create_dir_all(firmware.join("ps2")).unwrap();
+        let found = staged_firmware_in(base.path(), "rom-manager", "ps2");
+        assert_eq!(found, firmware.join("ps2").canonicalize().ok());
+        assert_eq!(staged_firmware_in(base.path(), "rom-manager", "psx"), None);
+        assert_eq!(staged_firmware_in(base.path(), "other", "ps2"), None);
+        #[cfg(unix)]
+        {
+            let outside = tempfile::tempdir().unwrap();
+            std::os::unix::fs::symlink(outside.path(), firmware.join("psx")).unwrap();
+            assert_eq!(staged_firmware_in(base.path(), "rom-manager", "psx"), None);
+        }
     }
 
     #[test]
