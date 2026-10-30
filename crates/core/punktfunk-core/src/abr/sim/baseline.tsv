@@ -31,6 +31,7 @@ unknown_refresh	0	99999	35	0	1	0	0	1000	0a161839
 wifi_tv_probe_stalled	0	3	0	0	4	0	0	1000	69733130
 decoder_headroom	0	3	12	0	5	0	0	1000	ed88cc04
 decoder_overrun	0	3	2	0	8	0	0	1000	1e55db9c
+decoder_slope	0	1	45	0	1	0	0	1000	18707851
 encoder_stalled	0	3	0	0	5	0	0	1000	ea6b71af
 unknown_refresh_knee	0	99999	35	0	1	0	0	1000	2a478f15
 host_rebuild_stall	0	1	0	0	4	0	0	1000	9c97699d
@@ -78,6 +79,6 @@ wifi_fps_dip	0	3	6	26	7	0	28	1000	0a73e5b6
 wifi_menu_fill	0	3	6	6	7	0	28	1000	2d593f62
 wifi_clock_step_back	0	3	0	0	5	0	0	1000	ea6b71af
 wifi_clock_step_forward	0	3	0	0	5	0	0	1000	ea6b71af
-decoder_noise	0	15	28	48	6	0	0	1000	4e986d2b
+decoder_noise	0	15	28	24	6	0	0	1000	6065803a
 decoder_warmup	0	11	0	0	5	0	0	1000	c5bf4453
 encoder_stall_stamp	0	3	10	0	5	0	0	1000	87dc0c5b

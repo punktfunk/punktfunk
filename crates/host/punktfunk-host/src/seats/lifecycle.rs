@@ -173,8 +173,46 @@ pub(crate) fn stop_idle(sup: &dyn Supervisor, stop: &AtomicBool) {
     }
 }
 
-/// The door's share: waits for the supervisor, warms the seats, then watches for idle ones. It
-/// outlives nothing: it ends with the process.
+/// How long a new stream on a seat can stand before the box's hold does.
+#[cfg(target_os = "linux")]
+const PLAYED_CHECK: Duration = Duration::from_secs(10);
+
+/// Whether anyone plays on a running seat. A seat whose host doesn't answer counts, as in
+/// [`stop_idle`]. The owner's row at the desk doesn't: that host is the desktop whose idle timer
+/// runs, so it keeps the box awake as any host does, and a Sleep there still goes through.
+#[cfg(target_os = "linux")]
+fn played(snap: &super::Snapshot, at_desk: impl Fn(&Seat) -> bool) -> bool {
+    snap.seats
+        .iter()
+        .filter(|s| s.runtime.state == RuntimeState::Running)
+        .filter(|s| {
+            snap.occupants
+                .get(s.id.as_str())
+                .is_none_or(|o| !o.is_empty())
+        })
+        .any(|s| !(s.owner && at_desk(s)))
+}
+
+/// Holds the box awake while anyone plays on a seat ([`crate::sleep_inhibit`]). A supervisor
+/// that doesn't answer, as in an update, says nothing about who plays, so the hold stands.
+#[cfg(target_os = "linux")]
+fn hold_while_played() {
+    let mut hold = None;
+    loop {
+        std::thread::sleep(PLAYED_CHECK);
+        let snap = super::snapshot();
+        if !snap.on {
+            continue;
+        }
+        let played = played(&snap, |s| pf_seats::linux::owner_at_desk(&s.account));
+        if played != hold.is_some() {
+            hold = played.then(crate::sleep_inhibit::hold);
+        }
+    }
+}
+
+/// The door's share: waits for the supervisor, warms the seats, then watches for idle ones, and
+/// holds the box awake under anyone playing. It outlives nothing: it ends with the process.
 #[cfg(target_os = "linux")]
 pub(crate) fn run_door() {
     let spawned = std::thread::Builder::new()
@@ -192,6 +230,12 @@ pub(crate) fn run_door() {
         });
     if let Err(error) = spawned {
         tracing::warn!(%error, "door seat upkeep did not start");
+    }
+    let spawned = std::thread::Builder::new()
+        .name("seats-awake".into())
+        .spawn(hold_while_played);
+    if let Err(error) = spawned {
+        tracing::warn!(%error, "door sleep hold did not start");
     }
 }
 
@@ -216,6 +260,51 @@ mod tests {
         p.os_account = account;
         p.last_used_unix = last_used;
         p
+    }
+
+    /// Someone on a seat, or a seat that doesn't answer, holds the box. An empty seat, a
+    /// stopped one and the owner's row at the desk don't.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_played_seat_holds_the_box_but_the_desk_does_not() {
+        use crate::seats::{Occupant, Snapshot};
+        let running = |id: &str, owner| {
+            let mut s = seat(id, owner);
+            s.runtime = pf_seats::RuntimeStatus::running();
+            s
+        };
+        let on_it = || {
+            vec![Occupant {
+                client: "aa".into(),
+                name: None,
+            }]
+        };
+        let snap = |seats: Vec<Seat>, on: Vec<(&str, Vec<Occupant>)>| Snapshot {
+            seats,
+            occupants: on.into_iter().map(|(id, o)| (id.to_string(), o)).collect(),
+            ..Snapshot::default()
+        };
+        let (kid, owner) = ("a".repeat(32), "b".repeat(32));
+        let away = |_: &Seat| false;
+        let desk = |_: &Seat| true;
+
+        let guest = snap(vec![running(&kid, false)], vec![(&kid, on_it())]);
+        assert!(
+            played(&guest, desk),
+            "a guest holds even with the owner home"
+        );
+        let empty = snap(vec![running(&kid, false)], vec![(&kid, vec![])]);
+        assert!(!played(&empty, away), "nobody on it");
+        assert!(
+            played(&snap(vec![running(&kid, false)], vec![]), away),
+            "no answer"
+        );
+        let stopped = snap(vec![seat(&kid, false)], vec![(&kid, on_it())]);
+        assert!(!played(&stopped, away), "a stopped seat");
+
+        let row = snap(vec![running(&owner, true)], vec![(&owner, on_it())]);
+        assert!(played(&row, away), "the owner's headless row");
+        assert!(!played(&row, desk), "the owner's row at the desk");
     }
 
     /// A device redirected since the last check keeps the seat from stopping at once, even

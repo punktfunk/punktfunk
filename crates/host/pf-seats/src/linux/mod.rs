@@ -20,6 +20,7 @@
 
 mod accounts;
 pub mod fence;
+mod flatpak;
 mod libraries;
 mod logind;
 mod safe_open;
@@ -278,7 +279,7 @@ fn refresh_box_library(inner: &Inner) -> Result<bool, BackendError> {
 }
 
 /// Whether the owner has a session at the machine. A `loginctl` that doesn't answer reads as no.
-fn owner_at_desk(account: &str) -> bool {
+pub fn owner_at_desk(account: &str) -> bool {
     let own = logind::own_session(account);
     logind::sessions().is_ok_and(|all| logind::at_the_desk(&all, account, own.as_deref()))
 }
@@ -368,6 +369,20 @@ impl LinuxBackend {
         }
     }
 
+    /// The box owner's uid once their row is prepared, for the account `door-helper` recorded:
+    /// the one peer besides root and the door the socket serves, for Flatpak changes only.
+    pub fn owner_uid(&self) -> Option<u32> {
+        self.owner().map(|owner| owner.uid)
+    }
+
+    fn owner(&self) -> Option<accounts::Passwd> {
+        self.inner
+            .owner
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+    }
+
     /// The account of the running seat whose user is `uid`: whom the pad broker serves.
     pub fn running_account(&self, uid: u32) -> Option<String> {
         self.inner
@@ -401,13 +416,7 @@ impl LinuxBackend {
         if let Some(root) = &self.inner.steam_source {
             return shared::SteamSource::owned(root.clone());
         }
-        let owner = self
-            .inner
-            .owner
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .clone();
-        match owner {
+        match self.owner() {
             Some(owner) => shared::steam_source_of(&owner),
             None => shared::find_steam_source(&accounts::all().ok()?),
         }
@@ -676,7 +685,7 @@ impl PlatformBackend for LinuxBackend {
         shared::ensure_games(state, gid)?;
         let passwd = accounts::ensure(seat, state)?;
         accounts::close_home(&passwd.home)?;
-        shared::ensure_seat_dirs(state, &seat.id, &passwd)?;
+        shared::ensure_seat_dirs(state, &seat.id, &passwd, gid)?;
         shared::provision_steam(state, &seat.id, &passwd, self.steam_source().as_ref());
         Ok(())
     }
@@ -697,8 +706,9 @@ impl PlatformBackend for LinuxBackend {
         let (box_dir, state) = (&self.inner.box_dir, &self.inner.state);
         let passwd = accounts::require(seat)?;
         accounts::close_home(&passwd.home)?;
-        shared::ensure_games(state, accounts::ensure_group(accounts::GAMES_GROUP)?)?;
-        shared::ensure_seat_dirs(state, &seat.id, &passwd)?;
+        let games = accounts::ensure_group(accounts::GAMES_GROUP)?;
+        shared::ensure_games(state, games)?;
+        shared::ensure_seat_dirs(state, &seat.id, &passwd, games)?;
         let reader = shared::Reader::group(passwd.gid);
         shared::refresh_trust(box_dir, state, &seat.id, reader)?;
         shared::refresh_seat_library(state, &seat.id, reader)?;
@@ -722,7 +732,8 @@ impl PlatformBackend for LinuxBackend {
             )?;
             let source = self.steam_source();
             let root = source.as_ref().map(|s| s.root.as_path());
-            let shares = libraries::share(box_dir, state, &seat.id, &passwd, root);
+            let owner = self.owner();
+            let shares = libraries::share(box_dir, state, &seat.id, &passwd, root, owner.as_ref());
             let shown = shares.as_ref().map_or(&[][..], |s| s.libraries.as_slice());
             libraries::register(state, &seat.id, &passwd, shown);
             let browser = session::browser(box_dir);
@@ -909,6 +920,14 @@ impl PlatformBackend for LinuxBackend {
             "not_supported",
             "seats stay on while the supervisor runs; stop its service to turn them off",
         ))
+    }
+
+    fn install_flatpak(&self, id: &str) -> Result<Option<String>, BackendError> {
+        flatpak::install(id)
+    }
+
+    fn remove_flatpak(&self, id: &str, purge: bool) -> Result<(), BackendError> {
+        flatpak::remove(id, purge)
     }
 }
 

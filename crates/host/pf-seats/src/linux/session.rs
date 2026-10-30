@@ -165,8 +165,9 @@ pub(super) fn render_env(
     out
 }
 
-/// The drop-in that gives the unit its private prefix directories, the owner's libraries
-/// ([`libraries`]), an empty `/run/media` and the supervisor's uinput proxy as `/dev/uinput`.
+/// The drop-in that gives the unit its private prefix directories, the owner's libraries and
+/// granted roots ([`libraries`]), an empty `/run/media` and the supervisor's uinput proxy as
+/// `/dev/uinput`.
 /// A SteamOS-mode Steam adopts every mounted drive holding a `steamapps` as a library, and the
 /// drive as mounted is the owner's alone. Without the proxy the unit starts all the same.
 pub(super) fn render_binds(

@@ -75,6 +75,21 @@ pub trait PlatformBackend: Send + Sync + 'static {
     fn disable(&self, _keep_accounts: bool) -> Result<SeatingStatus, BackendError> {
         Err(UnsupportedBackend::unavailable())
     }
+
+    /// Install the Flatpak app `id`, already checked, from Flathub for every account on the box,
+    /// and answer its version.
+    fn install_flatpak(&self, _id: &str) -> Result<Option<String>, BackendError> {
+        Err(no_flatpaks())
+    }
+
+    /// Remove the box-wide Flatpak app `id`, already checked; `purge` deletes its data too.
+    fn remove_flatpak(&self, _id: &str, _purge: bool) -> Result<(), BackendError> {
+        Err(no_flatpaks())
+    }
+}
+
+fn no_flatpaks() -> BackendError {
+    BackendError::new("not_supported", "box-wide Flatpaks are Linux's")
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]

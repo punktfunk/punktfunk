@@ -718,6 +718,84 @@ impl PlatformBackend for SlowWork {
             allow_rdp_from_network: false,
         })
     }
+    fn install_flatpak(&self, id: &str) -> Result<Option<String>, BackendError> {
+        self.inner
+            .state
+            .calls
+            .lock()
+            .unwrap()
+            .push(format!("install:{id}"));
+        self.park();
+        Ok(Some("1.0".into()))
+    }
+    fn remove_flatpak(&self, id: &str, _purge: bool) -> Result<(), BackendError> {
+        self.inner
+            .state
+            .calls
+            .lock()
+            .unwrap()
+            .push(format!("remove:{id}"));
+        Ok(())
+    }
+}
+
+/// An id that isn't a Flatpak app id never reaches the backend. An install keeps the ledger
+/// readable while it runs, and a second change meanwhile answers Conflict.
+#[test]
+fn a_flatpak_change_is_checked_and_runs_one_at_a_time() {
+    let temp = tempfile::tempdir().unwrap();
+    let backend = SlowWork::new();
+    let service = Arc::new(SeatService::open(temp.path(), backend.clone()).unwrap());
+    let refused = service
+        .dispatch(Command::InstallFlatpak {
+            id: "--system".into(),
+        })
+        .unwrap_err();
+    assert_eq!(refused.code, ErrorCode::InvalidRequest);
+    assert!(backend.inner.calls().is_empty());
+
+    backend.set_gate(false);
+    let installing = {
+        let service = Arc::clone(&service);
+        std::thread::spawn(move || {
+            service.dispatch(Command::InstallFlatpak {
+                id: "net.pcsx2.PCSX2".into(),
+            })
+        })
+    };
+    backend.wait_parked();
+    assert!(list_answers(&service), "List stalled behind an install");
+    let busy = service
+        .dispatch(Command::RemoveFlatpak {
+            id: "org.DolphinEmu.dolphin-emu".into(),
+            purge: false,
+        })
+        .unwrap_err();
+    assert_eq!(busy.code, ErrorCode::Conflict);
+    backend.set_gate(true);
+    assert_eq!(
+        installing.join().unwrap().unwrap(),
+        CommandResult::Flatpak {
+            id: "net.pcsx2.PCSX2".into(),
+            version: Some("1.0".into()),
+        }
+    );
+    assert_eq!(
+        service
+            .dispatch(Command::RemoveFlatpak {
+                id: "net.pcsx2.PCSX2".into(),
+                purge: true,
+            })
+            .unwrap(),
+        CommandResult::Flatpak {
+            id: "net.pcsx2.PCSX2".into(),
+            version: None,
+        }
+    );
+    assert_eq!(
+        backend.inner.calls(),
+        ["install:net.pcsx2.PCSX2", "remove:net.pcsx2.PCSX2"]
+    );
 }
 
 /// Whether a `List` is answered while another command is parked in the backend.

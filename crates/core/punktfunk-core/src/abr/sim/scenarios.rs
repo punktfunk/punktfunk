@@ -1041,6 +1041,30 @@ pub(super) fn decoder_headroom() -> Scenario {
     sc
 }
 
+/// A decoder with a fixed cost and a rate-driven one. HEVC at 4K120 on a PS5 takes 5.8 ms a
+/// picture plus 0.04 ms per Mbit/s on the wire: the budget runs out near 63 Mbit/s, a third
+/// of where the ramp opens over its Wi-Fi. A notch's answer shrinks with the rate and the floor
+/// never moves, so the last notches read as nothing on their own.
+pub(super) fn decoder_slope() -> Scenario {
+    let mut sc = decoder_knee();
+    sc.name = "decoder_slope";
+    sc.seed = 0x7A_6800;
+    sc.link.capacity = vec![(0, 800_000)];
+    sc.achievable_kbps = 40_000;
+    let s = &mut sc.sessions[0];
+    s.host.fps = 120;
+    s.client.refresh_hz = 120;
+    s.client.stream_cap_kbps = 650_000;
+    s.client.probe_target_kbps = Some(320_000);
+    s.client.decode = DecodeCfg {
+        base_us: 5_050,
+        jitter_us: 1_500,
+        knee_kbps: 0,
+        us_per_mbps: 34,
+    };
+    sc
+}
+
 /// A decoder over its budget at every rate: H.264 at 4K120 on a PS5 takes 9-17 ms a
 /// picture against 8.3 ms, at 20 Mbit/s as at 2. Its queue is shed every two seconds
 /// whatever the rate, so the rate is not the lever, and a cut buys only a worse picture.
@@ -1860,6 +1884,7 @@ pub(super) fn all() -> Vec<Scenario> {
         wifi_tv_probe_stalled(),
         decoder_headroom(),
         decoder_overrun(),
+        decoder_slope(),
         encoder_stalled(),
         unknown_refresh_knee(),
         host_rebuild_stall(),
@@ -2139,6 +2164,24 @@ mod tests {
         assert!(
             judged[3..].iter().all(|w| w.quality_floor == Some(floor)),
             "the fourth tells the player, and it stays"
+        );
+    }
+
+    /// A decoder whose latency follows the rate is walked under its budget from three times
+    /// over it, and stays there: the small last notches stand no driver down.
+    #[test]
+    fn a_decoder_with_a_fixed_cost_is_walked_under_its_budget() {
+        let r = run(&with_ramp(decoder_slope()));
+        let after = |ms: u64| r.windows[0].iter().filter(move |w| w.t_ms >= ms);
+        assert!(
+            after(45_000).all(|w| w.rate_kbps <= 74_000),
+            "over the decoder's budget after 45 s: {:?}",
+            after(45_000).map(|w| w.rate_kbps).max()
+        );
+        assert!(
+            after(45_000).all(|w| w.rate_kbps >= 30_000),
+            "walked past the budget: {:?}",
+            after(45_000).map(|w| w.rate_kbps).min()
         );
     }
 
@@ -3035,6 +3078,7 @@ mod tests {
             "c6" => wifi_tv_probe_damage(),
             "knee" => decoder_knee(),
             "overrun" => decoder_overrun(),
+            "slope" => decoder_slope(),
             "starved" => starved_client(),
             "unknown" => unknown_refresh(),
             "idle" => idle_then_motion(),
