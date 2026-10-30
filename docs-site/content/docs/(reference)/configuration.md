@@ -155,7 +155,7 @@ Env-only additions to the **Game Mode** rows above. See [gamescope](/docs/gamesc
 |---|---|---|
 | `PUNKTFUNK_GAMESCOPE_SESSION` | `steam` | Own a `gamescope-session-plus` session at the client's mode — for a headless appliance. |
 | `PUNKTFUNK_GAMESCOPE_NODE` | `auto` · node id | Attach to a running gamescope's video node at its own mode. Outranks `PUNKTFUNK_GAMESCOPE_SESSION`. |
-| `PUNKTFUNK_GAMESCOPE_APP` | command | What a bare gamescope session runs, e.g. `vkcube`. |
+| `PUNKTFUNK_GAMESCOPE_APP` | command | What a bare gamescope session runs, e.g. `vkcube --wsi xcb`. |
 | `PUNKTFUNK_GAMESCOPE_BIN` | path | The gamescope binary for sessions the host starts. Unset: `punktfunk-gamescope` on `PATH`, then `gamescope`. |
 | `PUNKTFUNK_GAMESCOPE_WSI_LAYER_DIR` | path | Where the Vulkan layer that gives nested games an HDR10 swapchain lives (default `/usr/lib/punktfunk/vulkan/implicit_layer.d`; the NixOS module sets it). |
 
