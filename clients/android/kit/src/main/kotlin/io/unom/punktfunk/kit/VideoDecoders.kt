@@ -1,5 +1,6 @@
 package io.unom.punktfunk.kit
 
+import android.media.MediaCodec
 import android.media.MediaCodecInfo.CodecCapabilities
 import android.media.MediaCodecList
 import android.os.Build
@@ -143,8 +144,9 @@ object VideoDecoders {
 
     /**
      * One-line per-mime probe readout for the connect log (`adb logcat -s pf.caps`): which
-     * decoder each advertised mime resolves to and whether it declares `FEATURE_PartialFrame` —
-     * the P2 slice-pipeline gate that is otherwise invisible until a stream behaves differently.
+     * decoder each advertised mime resolves to, whether it declares `FEATURE_PartialFrame` (the
+     * P2 slice-pipeline gate) and which latency-named vendor parameters it declares — whether a
+     * `low_latency_key` profile's keys exist on this device, otherwise invisible from a report.
      */
     fun capsReport(): String {
         val mimes = advertisedMimes()
@@ -161,7 +163,34 @@ object VideoDecoders {
                 }
             }
             "${mime.removePrefix("video/")}=${pick ?: "platform-default"}" +
-                " partialFrame=${partial ?: "?"}"
+                " partialFrame=${partial ?: "?"} vendor=[${vendorKeys(pick)}]"
+        }
+    }
+
+    /** Substrings of the vendor parameter names worth a line in the connect log. */
+    private val VENDOR_KEY_HINTS = listOf(
+        "fence", "slice", "early", "picture-order", "low-latency", "lowlatency", "boost",
+        "display-delay", "dpb",
+    )
+    private val vendorKeyCache = HashMap<String, String>()
+
+    /**
+     * The vendor parameters of [name] that match [VENDOR_KEY_HINTS], comma-joined; `?` below
+     * API 31 or when the codec can't be opened. Opens the codec once per name and releases it.
+     */
+    private fun vendorKeys(name: String?): String {
+        if (name == null || Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return "?"
+        return vendorKeyCache.getOrPut(name) {
+            runCatching {
+                val codec = MediaCodec.createByCodecName(name)
+                try {
+                    codec.supportedVendorParameters
+                        .filter { key -> VENDOR_KEY_HINTS.any { it in key } }
+                        .joinToString(",")
+                } finally {
+                    codec.release()
+                }
+            }.getOrDefault("?")
         }
     }
 

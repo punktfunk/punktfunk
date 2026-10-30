@@ -658,9 +658,10 @@ fn merge_fences(a: OwnedFd, b: OwnedFd) -> OwnedFd {
     unsafe { OwnedFd::from_raw_fd(fd) }
 }
 
-/// The instant `fence` signalled (`CLOCK_MONOTONIC` ns), or `None` while it is still pending, on
-/// an invalid fence, or where libsync is missing. Never blocks.
-pub(super) fn fence_signal_ns(fence: BorrowedFd<'_>) -> Option<i64> {
+/// One read of `fence`'s sync_file record: its status (1 signalled, 0 pending, below 0 error)
+/// and the latest signal instant (`CLOCK_MONOTONIC` ns) among its sync points. `None` on an
+/// invalid fence or where libsync is missing. Never blocks.
+fn sync_file_read(fence: BorrowedFd<'_>) -> Option<(i32, u64)> {
     let api = sync_api()?;
     // SAFETY: `sync_file_info` returns a malloc'd record (or null) that `sync_file_info_free`
     // releases; `sync_fence_info` points at `num_fences` records inside that allocation.
@@ -669,9 +670,9 @@ pub(super) fn fence_signal_ns(fence: BorrowedFd<'_>) -> Option<i64> {
         if info.is_null() {
             return None;
         }
-        let signalled = (*info).status == 1;
+        let status = (*info).status;
         let mut latest = 0u64;
-        if signalled {
+        if status == 1 {
             let fences = (*info).sync_fence_info as usize as *const SyncFenceInfo;
             for i in 0..(*info).num_fences as usize {
                 let f = &*fences.add(i);
@@ -681,8 +682,23 @@ pub(super) fn fence_signal_ns(fence: BorrowedFd<'_>) -> Option<i64> {
             }
         }
         (api.free)(info);
-        (signalled && latest > 0).then_some(latest as i64)
+        Some((status, latest))
     }
+}
+
+/// The instant `fence` signalled, or `None` while it is still pending, in error, invalid, or
+/// unreadable.
+pub(super) fn fence_signal_ns(fence: BorrowedFd<'_>) -> Option<i64> {
+    match sync_file_read(fence)? {
+        (1, latest) if latest > 0 => Some(latest as i64),
+        _ => None,
+    }
+}
+
+/// Whether `fence` resolved in error: its producer gave the buffer up (a decoder's dropped or
+/// flushed frame), and a consumer that waited on it read unfinished pixels.
+pub(super) fn fence_errored(fence: BorrowedFd<'_>) -> bool {
+    sync_file_read(fence).is_some_and(|(status, _)| status < 0)
 }
 
 /// The buffer rect for a crop in frame fractions, at least one pixel on each axis.
