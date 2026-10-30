@@ -31,6 +31,8 @@ pub struct SeatService<B> {
     ops: Mutex<()>,
     /// The start, stop or delete in flight; `List` reports its seat's published state meanwhile.
     changing: Mutex<Option<Change>>,
+    /// Held by the one box-wide Flatpak change allowed at a time.
+    flatpak: Mutex<()>,
 }
 
 /// A change to one seat's unit or account, and whether a stop has reached it as a start.
@@ -55,6 +57,7 @@ impl<B: PlatformBackend> SeatService<B> {
             ledger: Mutex::new(ledger),
             ops: Mutex::new(()),
             changing: Mutex::new(None),
+            flatpak: Mutex::new(()),
         })
     }
 
@@ -96,7 +99,42 @@ impl<B: PlatformBackend> SeatService<B> {
                 password,
             } => self.adopt(seat, sid, &password),
             Command::Credential { id, password } => self.credential(&id, &password),
+            Command::InstallFlatpak { id } => self.flatpak(&id, |b| b.install_flatpak(&id)),
+            Command::RemoveFlatpak { id, purge } => {
+                self.flatpak(&id, |b| b.remove_flatpak(&id, purge).map(|()| None))
+            }
         }
+    }
+
+    /// A box-wide Flatpak change for `id`, checked before `run` sees it. It holds neither the
+    /// ledger nor `ops`: an install takes minutes. A second change meanwhile answers Conflict, so
+    /// installs never fill the socket's connections.
+    fn flatpak(
+        &self,
+        id: &str,
+        run: impl FnOnce(&B) -> Result<Option<String>, BackendError>,
+    ) -> Result<CommandResult, ApiError> {
+        if !crate::ipc::valid_flatpak_id(id) {
+            return Err(ApiError::new(
+                ErrorCode::InvalidRequest,
+                "not a Flatpak app id",
+            ));
+        }
+        let _one = match self.flatpak.try_lock() {
+            Ok(one) => one,
+            Err(std::sync::TryLockError::Poisoned(one)) => one.into_inner(),
+            Err(std::sync::TryLockError::WouldBlock) => {
+                return Err(ApiError::new(
+                    ErrorCode::Conflict,
+                    "another Flatpak change is running",
+                ));
+            }
+        };
+        let version = run(&self.backend)?;
+        Ok(CommandResult::Flatpak {
+            id: id.to_owned(),
+            version,
+        })
     }
 
     pub fn backend(&self) -> &B {

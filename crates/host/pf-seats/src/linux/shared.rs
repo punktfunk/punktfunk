@@ -249,9 +249,9 @@ fn dir_in(at: &OwnedFd, name: &str, replace: bool) -> std::io::Result<OwnedFd> {
 }
 
 /// The access ACL as the kernel stores it: a 4-byte version 2, then 8-byte entries, little-endian.
-const ACL_ACCESS: &str = "system.posix_acl_access";
+pub(super) const ACL_ACCESS: &str = "system.posix_acl_access";
 /// An ACL entry's tag for the mask.
-const ACL_MASK: u16 = 0x10;
+pub(super) const ACL_MASK: u16 = 0x10;
 /// Folders deeper than this below `games` keep their mask: the walk holds a handle per level.
 const ACL_DEPTH: usize = 64;
 /// The buffer an ACL is read into first, and the most it grows to: the kernel's xattr limit.

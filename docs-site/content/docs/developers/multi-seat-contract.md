@@ -336,9 +336,17 @@ system-range user, `pf-seat-<n>`, with a logind session of its own, a headless c
 - **The socket.** `/run/punktfunk/seats.sock` (`0660 root:punktfunk-door`) carries the same frames
   and commands as the Windows pipe. The daemon makes the `punktfunk-door` group at start when no
   package has, so an update that restarts it first still opens the socket to the door. It answers
-  root and the `punktfunk` user, judged by the peer's credentials; any other peer is closed
-  unanswered. `enable` answers like `seating`, and `disable` is refused: seats are on while
-  the daemon runs. `punktfunk-seats list`, `create <name>`, `adopt-owner <user>`,
+  root and the `punktfunk` user, judged by the peer's credentials. Once the owner's row is
+  adopted, the owner's uid gets an ACL entry on the socket file and may send `install_flatpak`
+  and `remove_flatpak`, nothing else. Any other peer or command is closed unanswered. `enable`
+  answers like `seating`, and `disable` is refused: seats are on while the daemon runs.
+- **Box-wide Flatpaks.** `install_flatpak {id}` adds Flathub to the system installation when the
+  box lacks it and installs the app there, for every account; each user keeps its own data in
+  `~/.var/app/<id>`. `remove_flatpak {id, purge}` uninstalls it; `purge` deletes root's data of
+  it, never a seat's. Both answer `flatpak {id, version}`. An id is reverse-DNS: letters, digits,
+  `.`, `_` and `-`, at least one dot, at most 255 bytes, no leading `-`; any other is refused
+  before `flatpak` runs. A change holds no lock on the ledger, a client waits up to 30 minutes
+  for it, and one runs at a time: a second meanwhile answers `conflict`. `punktfunk-seats list`, `create <name>`, `adopt-owner <user>`,
   `start|stop|delete <id>`, `doctor` and `seating` send the same requests; `release-owner`
   deletes the owner's row and `stop-all` stops every live seat. `check-owner on|off <user>`
   sends none: it applies the switch rules below and prints `<uid> <home>` or `gone`.

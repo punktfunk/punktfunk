@@ -20,6 +20,7 @@
 
 mod accounts;
 pub mod fence;
+mod flatpak;
 mod libraries;
 mod logind;
 mod safe_open;
@@ -368,6 +369,20 @@ impl LinuxBackend {
         }
     }
 
+    /// The box owner's uid once their row is prepared, for the account `door-helper` recorded:
+    /// the one peer besides root and the door the socket serves, for Flatpak changes only.
+    pub fn owner_uid(&self) -> Option<u32> {
+        self.owner().map(|owner| owner.uid)
+    }
+
+    fn owner(&self) -> Option<accounts::Passwd> {
+        self.inner
+            .owner
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+    }
+
     /// The account of the running seat whose user is `uid`: whom the pad broker serves.
     pub fn running_account(&self, uid: u32) -> Option<String> {
         self.inner
@@ -401,13 +416,7 @@ impl LinuxBackend {
         if let Some(root) = &self.inner.steam_source {
             return shared::SteamSource::owned(root.clone());
         }
-        let owner = self
-            .inner
-            .owner
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .clone();
-        match owner {
+        match self.owner() {
             Some(owner) => shared::steam_source_of(&owner),
             None => shared::find_steam_source(&accounts::all().ok()?),
         }
@@ -909,6 +918,14 @@ impl PlatformBackend for LinuxBackend {
             "not_supported",
             "seats stay on while the supervisor runs; stop its service to turn them off",
         ))
+    }
+
+    fn install_flatpak(&self, id: &str) -> Result<Option<String>, BackendError> {
+        flatpak::install(id)
+    }
+
+    fn remove_flatpak(&self, id: &str, purge: bool) -> Result<(), BackendError> {
+        flatpak::remove(id, purge)
     }
 }
 

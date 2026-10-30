@@ -220,6 +220,9 @@ mod linux {
             | CommandResult::Stopped { seat }
             | CommandResult::Resealed { seat } => line(seat),
             CommandResult::Deleted { id } => println!("{id} deleted"),
+            CommandResult::Flatpak { id, version } => {
+                println!("{id} {}", version.as_deref().unwrap_or("-"));
+            }
             CommandResult::Doctor { report } => {
                 for d in &report.diagnostics {
                     println!("{:?} {} {}", d.level, d.code, d.message);
