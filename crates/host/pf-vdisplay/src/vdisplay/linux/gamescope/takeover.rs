@@ -1351,25 +1351,34 @@ fn restore_delay(owner: Option<[u8; 32]>) -> Option<Duration> {
 }
 
 /// The hand-back's delay: the keep-alive's, `None` (forever) keeping the box. A keep-alive keeps
-/// a session; a failed launch left none, so its box goes back after the debounce at most.
-fn hand_back_delay(keep_alive: Option<Duration>, launch_failed: bool) -> Option<Duration> {
+/// a session; a failed launch left none, so its box goes back after the debounce at most. A
+/// stop on purpose ends a timed keep-alive the same way. Forever outranks it, as on a pooled
+/// display ([`crate::lifecycle::effective_linger`]); the debounce lets a restart stay warm.
+fn hand_back_delay(
+    keep_alive: Option<Duration>,
+    launch_failed: bool,
+    quit: bool,
+) -> Option<Duration> {
     if launch_failed {
         Some(keep_alive.map_or(RESTORE_DEBOUNCE, |d| d.min(RESTORE_DEBOUNCE)))
+    } else if quit {
+        keep_alive.map(|d| d.min(RESTORE_DEBOUNCE))
     } else {
         keep_alive
     }
 }
 
 /// Debounced restore so a reconnect reuses the warm session, on the keep-alive's delay
-/// (`forever` schedules none), or the debounce after a launch that produced no session.
-pub fn schedule_restore_tv_session() {
+/// (`forever` schedules none), or the debounce after a launch that produced no session or a
+/// session stopped on purpose (`quit`).
+pub fn schedule_restore_tv_session(quit: bool) {
     let owner = takeover().owner;
     let keep_alive = restore_delay(owner);
     let mut t = takeover();
     if !t.live() {
         return; // nothing was taken over → nothing to restore (also the non-managed path)
     }
-    let delay = hand_back_delay(keep_alive, t.launch_failed);
+    let delay = hand_back_delay(keep_alive, t.launch_failed, quit);
     t.hand_back.schedule(delay.map(|d| Instant::now() + d));
     match delay {
         None => tracing::info!(
@@ -1379,6 +1388,7 @@ pub fn schedule_restore_tv_session() {
         Some(delay) => tracing::info!(
             secs = delay.as_secs(),
             launch_failed = t.launch_failed,
+            quit,
             "gamescope: scheduled TV-session restore (keep-alive policy; cancelled on reconnect)"
         ),
     }
@@ -1387,7 +1397,7 @@ pub fn schedule_restore_tv_session() {
 /// A launch that took the box failed: hand it back after the debounce at most.
 pub(super) fn hand_back_after_failed_launch() {
     takeover().launch_failed = true;
-    schedule_restore_tv_session();
+    schedule_restore_tv_session(false);
 }
 
 /// Run one create and record what it left. A session clears [`Takeover::launch_failed`]; a
@@ -2112,14 +2122,28 @@ mod tests {
     #[test]
     fn keep_alive_keeps_a_session_not_a_failed_launch() {
         let linger = Some(Duration::from_secs(600));
-        assert_eq!(hand_back_delay(None, false), None);
-        assert_eq!(hand_back_delay(None, true), Some(RESTORE_DEBOUNCE));
-        assert_eq!(hand_back_delay(linger, false), linger);
-        assert_eq!(hand_back_delay(linger, true), Some(RESTORE_DEBOUNCE));
+        assert_eq!(hand_back_delay(None, false, false), None);
+        assert_eq!(hand_back_delay(None, true, false), Some(RESTORE_DEBOUNCE));
+        assert_eq!(hand_back_delay(linger, false, false), linger);
+        assert_eq!(hand_back_delay(linger, true, false), Some(RESTORE_DEBOUNCE));
         assert_eq!(
-            hand_back_delay(Some(Duration::ZERO), true),
+            hand_back_delay(Some(Duration::ZERO), true, false),
             Some(Duration::ZERO)
         );
+    }
+
+    /// A stop on purpose ends a timed keep-alive after the debounce; a shorter one stays, and
+    /// forever keeps the box as it does on a pooled display.
+    #[test]
+    fn a_stop_on_purpose_ends_a_timed_keep_alive() {
+        let linger = Some(Duration::from_secs(600));
+        assert_eq!(hand_back_delay(linger, false, true), Some(RESTORE_DEBOUNCE));
+        assert_eq!(hand_back_delay(None, false, true), None);
+        assert_eq!(
+            hand_back_delay(Some(Duration::ZERO), false, true),
+            Some(Duration::ZERO)
+        );
+        assert_eq!(hand_back_delay(None, true, true), Some(RESTORE_DEBOUNCE));
     }
 
     /// The device that took the box decides its keep-alive, as a device decides for its pooled
@@ -2162,15 +2186,15 @@ mod tests {
             };
             // The launch frees the box and fails; the session's last hold then schedules.
             assert!(launch(false).is_err());
-            schedule_restore_tv_session();
+            schedule_restore_tv_session(false);
             assert!(due().is_some_and(|d| d <= RESTORE_DEBOUNCE), "{:?}", due());
             // The client returns and its launch streams: forever keeps the box.
             cancel_pending_restore();
             assert!(launch(true).is_ok());
-            schedule_restore_tv_session();
+            schedule_restore_tv_session(false);
             assert_eq!(due(), None);
             assert!(launch_tracked(|| Err::<(), _>(anyhow!("join refused"))).is_err());
-            schedule_restore_tv_session();
+            schedule_restore_tv_session(false);
             assert_eq!(due(), None, "a refused join took nothing");
             // A managed relaunch on the taken box fails.
             hand_back_after_failed_launch();
