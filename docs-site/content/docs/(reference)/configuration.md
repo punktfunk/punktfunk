@@ -66,7 +66,6 @@ restart*.
 | Pen input (Linux, Windows) | `PUNKTFUNK_PEN` | `on` · `off` | `on` | next session |
 | Steam USB gadget (Linux) | `PUNKTFUNK_STEAM_GADGET` | `auto` · `on` · `off` | `auto` | next session |
 | DualSense over USB/IP (Linux) | `PUNKTFUNK_DUALSENSE_USBIP` | `on` · `off` | `off` | next session |
-| Attach mode (Linux) | `PUNKTFUNK_GAMESCOPE_ATTACH` | `on` · `off` | `off` | next session |
 | Game Mode HDR (Linux) | `PUNKTFUNK_GAMESCOPE_HDR` | `on` · `off` | `on` | next session |
 | Force managed mode (Linux) | `PUNKTFUNK_GAMESCOPE_MANAGED` | `on` · `off` | `off` | next session |
 | Adaptive sync (Linux) | `PUNKTFUNK_GAMESCOPE_VRR` | `on` · `off` | `on` | next session |
@@ -154,6 +153,7 @@ Env-only additions to the **Game Mode** rows above. See [gamescope](/docs/gamesc
 | Variable | Values | What it does |
 |---|---|---|
 | `PUNKTFUNK_GAMESCOPE_SESSION` | `steam` | Own a `gamescope-session-plus` session at the client's mode — for a headless appliance. |
+| `PUNKTFUNK_GAMESCOPE_ATTACH` | `1` · `0` | Stream the box's running gamescope at its own mode and never stop it, instead of taking Game Mode over. A change takes a host restart. Outranks `PUNKTFUNK_GAMESCOPE_SESSION`. To stream the screen the box drives, pick it under **Displays** → **Stream this monitor** instead. |
 | `PUNKTFUNK_GAMESCOPE_NODE` | `auto` · node id | Attach to a running gamescope's video node at its own mode. Outranks `PUNKTFUNK_GAMESCOPE_SESSION`. |
 | `PUNKTFUNK_GAMESCOPE_APP` | command | What a bare gamescope session runs, e.g. `vkcube`. |
 | `PUNKTFUNK_GAMESCOPE_BIN` | path | The gamescope binary for sessions the host starts. Unset: `punktfunk-gamescope` on `PATH`, then `gamescope`. |

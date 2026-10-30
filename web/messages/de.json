@@ -1120,8 +1120,6 @@
 	"setting_steam_gadget_hint": "Zeigt die Steam-Deck-Steuerung als USB-Gerät. Automatisch nutzt es unter SteamOS.",
 	"setting_dualsense_usbip": "DualSense über USB/IP",
 	"setting_dualsense_usbip_hint": "Gibt jedem DualSense eine echte Soundkarte für den Lautsprecher.",
-	"setting_gamescope_attach": "Anhängen",
-	"setting_gamescope_attach_hint": "Spiegelt den Bildschirm dieser Box in dessen Auflösung, statt dem Gerät ein eigenes Display zu geben.",
 	"setting_gamescope_hdr": "HDR im Spielmodus",
 	"setting_gamescope_hdr_hint": "Aus hält Spielmodus-Sitzungen in SDR.",
 	"setting_gamescope_managed": "Verwalteten Modus erzwingen",

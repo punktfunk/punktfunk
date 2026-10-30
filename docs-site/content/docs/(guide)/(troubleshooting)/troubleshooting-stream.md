@@ -36,8 +36,9 @@ physical monitor, or a launcher (Steam Big Picture, Heroic) that opens the game 
 
 ### Game Mode: black screen on connect, or the stream is stuck at the box's resolution
 
-**Attach mode** is on, so the host mirrors the box's own screen instead of taking the session
-over. The checks and the fix:
+A screen is pinned under **Displays** → **Stream this monitor**, or `host.env` sets
+`PUNKTFUNK_GAMESCOPE_ATTACH`, so the host mirrors the box's own screen instead of taking the
+session over. The checks and the fix:
 [gamescope → Troubleshooting](/docs/gamescope#the-stream-is-black-on-connect-or-stuck-at-the-boxs-resolution).
 
 ## Windows

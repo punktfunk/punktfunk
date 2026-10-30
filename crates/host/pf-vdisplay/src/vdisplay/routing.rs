@@ -83,17 +83,17 @@ fn managed_infra_usable(
     installed && !(target_restart && desktop_active && !steamos)
 }
 
-/// The two env knobs the host itself may publish, sampled once at first use.
+/// The env-only gamescope knobs (`_ATTACH`, `_NODE`, `_SESSION`), sampled once at first use.
 ///
 /// `node_env` sits above `dedicated_launch` in [`pick_gamescope_mode`]. A live
 /// re-read of a published `_NODE=auto` would latch Attach for the host's life
 /// and override `game_session=dedicated`. Sampling once means "the operator
-/// set this before we ran". The console's two switches are not latched: nothing
-/// in the host writes them, and their rows promise the next session.
+/// set this before we ran". The console's Force managed switch is not latched:
+/// nothing in the host writes it, and its row promises the next session.
 ///
 /// Pin: `operator_overrides_do_not_see_our_own_writes`.
 #[cfg(target_os = "linux")]
-static OPERATOR_ENV: std::sync::OnceLock<(Option<String>, Option<String>)> =
+static OPERATOR_ENV: std::sync::OnceLock<(bool, Option<String>, Option<String>)> =
     std::sync::OnceLock::new();
 
 #[cfg(target_os = "linux")]
@@ -107,8 +107,8 @@ struct OperatorGamescope {
     session: Option<String>,
 }
 
-/// The operator's gamescope knobs as they stand for this connect: the console's switches
-/// read live, the two env knobs from the one-time sample ([`OPERATOR_ENV`]).
+/// The operator's gamescope knobs as they stand for this connect: the console's Force managed
+/// switch read live, the env-only knobs from the one-time sample ([`OPERATOR_ENV`]).
 #[cfg(target_os = "linux")]
 fn operator_gamescope() -> OperatorGamescope {
     operator_gamescope_from(|k| std::env::var(k).ok())
@@ -118,29 +118,33 @@ fn operator_gamescope() -> OperatorGamescope {
 /// one-time sample only; once [`OPERATOR_ENV`] holds it, no call consults `get` again.
 #[cfg(target_os = "linux")]
 fn operator_gamescope_from(get: impl Fn(&str) -> Option<String>) -> OperatorGamescope {
-    let (node, session) = OPERATOR_ENV.get_or_init(|| {
+    let (attach, node, session) = OPERATOR_ENV.get_or_init(|| {
         let env = with_env_lock(|| {
             let v = |k: &str| get(k).filter(|v| !v.is_empty());
+            // Presence is not the grammar: `PUNKTFUNK_GAMESCOPE_ATTACH=0` is off. This rung
+            // outranks dedicated spawn, so a silent inversion costs the client its own display.
+            let off = |s: String| {
+                pf_host_config::registry::parse_bool(&s.trim().to_ascii_lowercase()) == Some(false)
+            };
             (
+                v("PUNKTFUNK_GAMESCOPE_ATTACH").is_some_and(|s| !off(s)),
                 v("PUNKTFUNK_GAMESCOPE_NODE"),
                 v("PUNKTFUNK_GAMESCOPE_SESSION"),
             )
         });
-        if env.0.is_some() || env.1.is_some() {
+        if env.0 || env.1.is_some() || env.2.is_some() {
             tracing::info!(
-                node = ?env.0,
-                session = ?env.1,
+                attach = env.0,
+                node = ?env.1,
+                session = ?env.2,
                 "gamescope: operator sub-mode overrides sampled from the environment"
             );
         }
         env
     });
-    // Presence is not the grammar: `PUNKTFUNK_GAMESCOPE_ATTACH=0` must be off, as the
-    // console shows it. This rung outranks dedicated spawn, so a silent inversion costs
-    // the client its own display.
     OperatorGamescope {
         managed: pf_host_config::row_bool("PUNKTFUNK_GAMESCOPE_MANAGED"),
-        attach: pf_host_config::row_bool("PUNKTFUNK_GAMESCOPE_ATTACH"),
+        attach: *attach,
         node: node.clone(),
         session: session.clone(),
     }
@@ -924,14 +928,14 @@ mod tests {
         assert!(claim_workspace(Compositor::Umbriel, "DP-1", None).is_none());
     }
 
-    /// The console's two gamescope switches are "applies to the next session" rows: a
-    /// toggle must reach the next connect, not the next host restart.
+    /// The console's Force managed switch is a next-session row: a toggle reaches the next
+    /// connect, not the next host restart.
     #[test]
     #[cfg(target_os = "linux")]
-    fn the_console_gamescope_switches_apply_to_the_next_session() {
+    fn the_console_managed_switch_applies_to_the_next_session() {
         crate::fake::in_child(
             module_path!(),
-            "the_console_gamescope_switches_apply_to_the_next_session",
+            "the_console_managed_switch_applies_to_the_next_session",
             &[],
             || {
                 use super::operator_gamescope;
@@ -947,6 +951,18 @@ mod tests {
                 pf_host_config::save(&patch).expect("clear it");
                 assert!(!operator_gamescope().managed);
             },
+        );
+    }
+
+    /// `PUNKTFUNK_GAMESCOPE_ATTACH=0` in host.env is off, not "set".
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn an_explicit_off_attach_reads_as_off() {
+        crate::fake::in_child(
+            module_path!(),
+            "an_explicit_off_attach_reads_as_off",
+            &[("PUNKTFUNK_GAMESCOPE_ATTACH", "0")],
+            || assert!(!super::operator_gamescope().attach),
         );
     }
 
