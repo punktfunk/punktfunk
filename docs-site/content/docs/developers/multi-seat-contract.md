@@ -200,9 +200,11 @@ session by design, and display activation fails while its session is inactive.
   box's titles as its own user, and answers every library change with 409. Titles from sources
   that belong to one account (Playnite, Game Bar, Amazon, itch, Hydra) are left out.
 - **The box's library, on Linux.** The box's library is the owner's (see the owner's libraries
-  below). A seat other than the owner's lists and launches only its titles that start through
-  Steam, `steam_appid` with an id that fits 32 bits and `steam_ui`, with its own Steam, and
-  answers every library change with 409. Every other title starts from the owner's home.
+  below). A seat other than the owner's runs no plugins and lists and launches only what it can
+  start as its own user: `steam_appid` with an id that fits 32 bits and `steam_ui`, with its own
+  Steam, and `emulator`, with its own copy and a game file it can read. The owner's host checked
+  an `emulator` entry against its plugin at publish. The seat answers every library change with
+  409. Every other title starts from the owner's home, or needs a manifest only that host has.
 - **One profile.** The seat serves the profile whose seat it is. A connect that names any other
   profile, the owner's included, is refused as an unknown profile; one that names none plays as
   this seat's profile. The owner's row alone also serves the owner and the profiles that share the
