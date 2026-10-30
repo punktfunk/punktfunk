@@ -51,6 +51,8 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 libc = "0.2"
 
 [target.'cfg(target_os = "linux")'.dependencies]
+# Whether a nested gamescope session can use NVIDIA's GLX (gamescope/spawn.rs).
+pf-gpu = { path = "../pf-gpu" }
 # The Mutter backend drives D-Bus RemoteDesktop + ScreenCast.RecordVirtual via ashpd on a tokio
 # runtime; the gamescope restore worker + portal handshakes use tokio too.
 ashpd = { version = "0.13", features = ["screencast", "remote_desktop"] }
@@ -73,10 +75,7 @@ socket2 = "0.6"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 pf-paths-win = { path = "../pf-paths-win" }
-# Windows-only and gated here rather than unconditionally so the LINUX build does not drag its
-# closure in for nothing: `pf-gpu` for the render-adapter LUID (manager.rs). Every use site is
-# Windows-gated. `pf-encode` was gated here too, for an admission gate that reads the NVENC
-# session budget — but `admission.rs` never called it, so this crate no longer names it.
+# The render-adapter LUID (manager.rs).
 pf-gpu = { path = "../pf-gpu" }
 # The host<->driver wire contract for the pf-vdisplay IddCx backend (control IOCTLs + Pod structs).
 pf-driver-proto = { path = "../pf-driver-proto" }
