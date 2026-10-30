@@ -500,6 +500,8 @@ public final class MetalVideoPresenter {
     /// composited with HDR headroom, so HDR frames present as PQ passthrough; otherwise the
     /// in-shader tone-map keeps the picture from blowing out. 1 (the default) is the safe start.
     private var stagedDisplayHeadroom: CGFloat = 1.0
+    /// tvOS: the box switched into the HDR output mode our display criteria asked for.
+    private var stagedHDROutput = false
     /// The most headroom the display could give (`potentialEDRHeadroom`): read out only.
     private var stagedPotentialHeadroom: CGFloat = 0
 
@@ -706,13 +708,14 @@ public final class MetalVideoPresenter {
     public func configure(hdr: Bool, tenBitSDR: Bool = false) {
         let wide = tenBitSDR && !hdr && !onCurve
         #if os(tvOS)
-        // Reconfigure on an HDR flip AND on a passthrough↔tone-map flip: the display's headroom
-        // changes when the AVDisplayManager mode switch (requested at session start) completes —
-        // typically a second or two into the session.
+        // Reconfigure on an HDR flip AND on a passthrough↔tone-map flip. Passthrough needs the
+        // box in an HDR output mode: the switch our criteria asked for landed (`setHDROutput`),
+        // or the screen reports headroom — which tvOS never does, even in HDR.
         stagingLock.lock()
         let headroom = stagedDisplayHeadroom
+        let hdrOutput = stagedHDROutput
         stagingLock.unlock()
-        let passthrough = headroom > 1.0
+        let passthrough = headroom > 1.0 || hdrOutput
         guard !didConfigureColor || hdr != hdrActive || wide != tenBitSDRActive
             || (hdr && passthrough != hdrPassthroughActive)
         else { return }
@@ -721,7 +724,7 @@ public final class MetalVideoPresenter {
         hdrPassthroughActive = passthrough
         if hdr {
             presenterLog.info(
-                "tvOS HDR \(passthrough ? "passthrough" : "tone-map") headroom=\(headroom, format: .fixed(precision: 2)) drawable=\(hdrDrawable == .rgba16Float ? "rgba16Float" : "bgr10a2Unorm")")
+                "tvOS HDR \(passthrough ? "passthrough" : "tone-map") headroom=\(headroom, format: .fixed(precision: 2)) hdrOutput=\(hdrOutput) drawable=\(hdrDrawable == .rgba16Float ? "rgba16Float" : "bgr10a2Unorm")")
         }
         #else
         guard !didConfigureColor || hdr != hdrActive || wide != tenBitSDRActive else { return }
@@ -743,11 +746,20 @@ public final class MetalVideoPresenter {
         stagingLock.unlock()
     }
 
-    /// The headroom last parked, current and potential, for the deadline window line.
-    var stagedHeadroom: (current: CGFloat, potential: CGFloat) {
+    /// tvOS: whether the HDMI output is in the HDR mode our display criteria asked for — the
+    /// AVDisplayManager switch landed, pushed from the main thread. Applied on the next frame.
+    public func setHDROutput(_ on: Bool) {
+        stagingLock.lock()
+        stagedHDROutput = on
+        stagingLock.unlock()
+    }
+
+    /// The headroom last parked, current and potential, and the tvOS HDR output flag, for the
+    /// deadline window line.
+    var stagedHeadroom: (current: CGFloat, potential: CGFloat, hdrOutput: Bool) {
         stagingLock.lock()
         defer { stagingLock.unlock() }
-        return (stagedDisplayHeadroom, stagedPotentialHeadroom)
+        return (stagedDisplayHeadroom, stagedPotentialHeadroom, stagedHDROutput)
     }
 
     /// Set the layer's pixel format + colour config for SDR or HDR through `writeLayer`, on

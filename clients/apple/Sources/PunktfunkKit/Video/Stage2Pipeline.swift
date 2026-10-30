@@ -2070,8 +2070,9 @@ public final class Stage2Pipeline {
                         Stage2Pipeline.emitDeadlineLine(
                             window.text + tail
                                 + String(
-                                    format: " headroom=%.2f potential=%.2f",
-                                    headroom.current, headroom.potential))
+                                    format: " headroom=%.2f potential=%.2f hdrOut=%d",
+                                    headroom.current, headroom.potential,
+                                    headroom.hdrOutput ? 1 : 0))
                     }
                 }
                 guard signaled else {
@@ -2333,6 +2334,13 @@ public final class Stage2Pipeline {
     /// `MetalVideoPresenter.setDisplayHeadroom`.
     public func setDisplayHeadroom(_ headroom: CGFloat, potential: CGFloat) {
         presenter.setDisplayHeadroom(headroom, potential: potential)
+    }
+
+    /// tvOS: the HDMI output switched into the HDR mode the session asked for (MAIN thread).
+    /// HDR frames present as PQ passthrough from the next frame. See
+    /// `MetalVideoPresenter.setHDROutput`.
+    public func setHDROutput(_ on: Bool) {
+        presenter.setHDROutput(on)
     }
 
     /// Stop the pump + render thread (≤ one poll timeout each) and drop the decode session. MAIN

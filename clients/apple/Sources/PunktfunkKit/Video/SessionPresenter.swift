@@ -564,6 +564,14 @@ final class SessionPresenter {
         #endif
     }
 
+    #if os(tvOS)
+    /// The HDMI output switched into (or out of) the session's HDR mode: HDR frames present as
+    /// PQ passthrough while it holds. Main thread; the stream view watches the switch.
+    func setHDROutput(_ on: Bool) {
+        stage2?.setHDROutput(on)
+    }
+    #endif
+
     /// Record the decoded frame's real dimensions (the view hops the pump's `onDecodedSize` to main
     /// and calls this) so `layout` aspect-fits to what's actually on screen instead of the possibly-
     /// stale `currentMode()`. Only stores — the caller re-runs `layout` right after, because a
