@@ -1749,9 +1749,12 @@ mod linux {
         }
         match std::thread::Builder::new()
             .name("vdisplay-linger".into())
-            .spawn(|| loop {
-                std::thread::sleep(Duration::from_millis(500));
-                reap(crate::session_epoch());
+            .spawn(|| {
+                let mut watch = crate::suspend::Watch::new();
+                loop {
+                    std::thread::sleep(Duration::from_millis(500));
+                    reap(crate::session_epoch(), watch.missed());
+                }
             }) {
             Ok(_) => *started = true,
             Err(e) => tracing::error!(
@@ -1823,7 +1826,11 @@ mod linux {
         let mut out = VirtualOutput::owned(
             node_id,
             preferred_mode,
-            Box::new(DisplayLease { generation, quit }),
+            Box::new(DisplayLease {
+                generation,
+                quit,
+                slept_at: crate::suspend::slept(),
+            }),
         );
         // Same head as at create, so it answers with the same name.
         out.output_name = output_name;
@@ -1837,11 +1844,14 @@ mod linux {
         out
     }
 
-    /// Tear down the kept displays whose linger ran out or whose session epoch ended.
-    fn reap(cur_epoch: u64) {
+    /// Tear down the kept displays whose linger ran out or whose session epoch ended. `missed`
+    /// is real time since the last call that their deadlines did not count.
+    fn reap(cur_epoch: u64, missed: Duration) {
         let expired = {
             let mut es = reg().entries.lock().unwrap();
-            take_expired(&mut es, Instant::now(), cur_epoch)
+            let now = Instant::now();
+            es.iter_mut().for_each(|e| e.life.age(now, missed));
+            take_expired(&mut es, now, cur_epoch)
         };
         expired.finish("linger expired — torn down");
     }
@@ -1863,7 +1873,7 @@ mod linux {
         let isolation = vd.isolation_key();
         let cur_epoch = crate::session_epoch();
         let r = reg();
-        reap(cur_epoch);
+        reap(cur_epoch, Duration::ZERO);
 
         // Before linger reuse: admission named a live session, so share its display.
         if vd.join_live() {
@@ -2333,9 +2343,10 @@ mod linux {
     }
 
     /// [`DisplayLease`] drop: lifecycle decides linger / pin / teardown. A seat's own Game Mode
-    /// display is kept like a parked one unless the client quit on purpose.
+    /// display is kept like a parked one unless the client quit on purpose. `slept` is how long
+    /// the box slept under this lease.
     /// Torn-down keepalive drops after the lock is released.
-    fn release(generation: u64, force_immediate: bool) {
+    fn release(generation: u64, force_immediate: bool, slept: Duration) {
         let Some(r) = REG.get() else { return };
         let mut undo = Vec::new();
         let (torn_down, restore) = {
@@ -2347,10 +2358,13 @@ mod linux {
                 && is_seat_game_mode(&es[idx], super::SEAT_GAME_MODE.load(Ordering::Relaxed));
             // Resolved here, not before the lookup: the answer belongs to the display's
             // OWNER, and the entry is what names it.
-            let linger = release_linger(
-                es[idx].parked || seat_keeps,
-                force_immediate,
-                linger_for(es[idx].identity_slot),
+            let linger = lifecycle::after_sleep(
+                release_linger(
+                    es[idx].parked || seat_keeps,
+                    force_immediate,
+                    linger_for(es[idx].identity_slot),
+                ),
+                slept,
             );
             match es[idx].life.release(Instant::now(), linger) {
                 Release::Teardown => {
@@ -2624,11 +2638,14 @@ mod linux {
         /// Deliberate stop, not a network drop. Drop tears down immediately
         /// when set; false on a bare disconnect → normal linger.
         quit: Arc<AtomicBool>,
+        /// [`crate::suspend::slept`] when the lease began.
+        slept_at: Duration,
     }
 
     impl Drop for DisplayLease {
         fn drop(&mut self) {
-            release(self.generation, self.quit.load(Ordering::SeqCst));
+            let slept = crate::suspend::slept_since(self.slept_at);
+            release(self.generation, self.quit.load(Ordering::SeqCst), slept);
         }
     }
 

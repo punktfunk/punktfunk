@@ -1513,6 +1513,7 @@ impl VirtualDisplayManager {
                 generation: mon.generation,
                 quit,
                 joined: ownership == DisplayOwnership::External,
+                slept_at: crate::suspend::slept(),
             }),
             ownership,
         }
@@ -2259,7 +2260,7 @@ impl VirtualDisplayManager {
     /// A stale lease, or a release on a kept slot, is a no-op; a `joined` lease also gives
     /// back its joined hold. The device handle is fetched before the transition, as
     /// `force_release` does, so `device` is never waited on inside one.
-    fn release(&self, slot: u32, generation: u64, quit_now: bool, joined: bool) {
+    fn release(&self, slot: u32, generation: u64, quit_now: bool, joined: bool, slept: Duration) {
         use crate::policy::Linger;
         let dev = self.device_handle();
         let mut inner = self.transition();
@@ -2273,7 +2274,10 @@ impl VirtualDisplayManager {
         if joined {
             s.joined = s.joined.saturating_sub(1);
         }
-        let linger = lifecycle::effective_linger(quit_now, linger_for(s.mon.client_fp));
+        let linger = lifecycle::after_sleep(
+            lifecycle::effective_linger(quit_now, linger_for(s.mon.client_fp)),
+            slept,
+        );
         match s.life.release(Instant::now(), linger) {
             Release::Decref | Release::Noop => {}
             Release::Pin => tracing::info!(
@@ -2445,9 +2449,13 @@ impl VirtualDisplayManager {
         }
         let spawned = thread::Builder::new()
             .name("vdisplay-linger".into())
-            .spawn(move || loop {
-                thread::sleep(Duration::from_millis(500));
-                self.expire(Instant::now());
+            .spawn(move || {
+                let mut watch = crate::suspend::Watch::new();
+                loop {
+                    thread::sleep(Duration::from_millis(500));
+                    self.age(watch.missed());
+                    self.expire(Instant::now());
+                }
             });
         match spawned {
             Ok(_) => *started = true,
@@ -2457,6 +2465,20 @@ impl VirtualDisplayManager {
                  expire until a later session retries"
             ),
         }
+    }
+
+    /// `missed` of real time passed that the deadlines did not count. Only a wake takes the
+    /// transition: a quiet tick stays as free as [`Self::expire`]'s.
+    fn age(&self, missed: Duration) {
+        if missed.is_zero() {
+            return;
+        }
+        let now = Instant::now();
+        let mut inner = self.transition();
+        inner
+            .slots
+            .values_mut()
+            .for_each(|s| s.life.age(now, missed));
     }
 
     /// One linger tick at `now`. Every slot past its deadline ([`lifecycle::State::poll_expiry`])
@@ -2503,13 +2525,16 @@ struct MonitorLease {
     quit: Option<Arc<AtomicBool>>,
     /// Taken by [`VirtualDisplayManager::join`]: the release gives back a joined hold.
     joined: bool,
+    /// [`crate::suspend::slept`] when the lease began.
+    slept_at: Duration,
 }
 
 impl Drop for MonitorLease {
     fn drop(&mut self) {
         let quit_now = self.quit.as_ref().is_some_and(|q| q.load(Ordering::SeqCst));
+        let slept = crate::suspend::slept_since(self.slept_at);
         self.mgr
-            .release(self.slot, self.generation, quit_now, self.joined);
+            .release(self.slot, self.generation, quit_now, self.joined, slept);
     }
 }
 
@@ -2958,7 +2983,7 @@ mod tests {
             .expect("slot 0 is joinable");
         assert_eq!(joiner.ownership, super::DisplayOwnership::External);
         // The owner's session ends; the joiner's hold is the only one left.
-        mgr.release(0, 1, false, false);
+        mgr.release(0, 1, false, false, Duration::ZERO);
         let stopped = Arc::new(std::sync::atomic::AtomicBool::new(false));
         mgr.idd_session_stops
             .lock()

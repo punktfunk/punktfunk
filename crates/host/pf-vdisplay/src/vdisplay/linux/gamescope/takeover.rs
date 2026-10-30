@@ -232,6 +232,14 @@ impl HandBack {
         }
     }
 
+    /// `missed` of real time passed that the deadline did not count. A keep-alive counts it.
+    fn age(&mut self, now: Instant, missed: Duration) {
+        if let HandBack::Due(at) = self {
+            let left = at.saturating_duration_since(now);
+            *at = now + crate::lifecycle::left_after_sleep(left, missed);
+        }
+    }
+
     /// The worker's tick: start the one that is due.
     fn pop(&mut self, now: Instant) -> bool {
         match *self {
@@ -1370,10 +1378,11 @@ fn hand_back_delay(
 
 /// Debounced restore so a reconnect reuses the warm session, on the keep-alive's delay
 /// (`forever` schedules none), or the debounce after a launch that produced no session or a
-/// session stopped on purpose (`quit`).
-pub fn schedule_restore_tv_session(quit: bool) {
+/// session stopped on purpose (`quit`). `slept` is how long the box slept under that session:
+/// its client left when the box went down, so the keep-alive started then.
+pub fn schedule_restore_tv_session(quit: bool, slept: Duration) {
     let owner = takeover().owner;
-    let keep_alive = restore_delay(owner);
+    let keep_alive = restore_delay(owner).map(|d| crate::lifecycle::left_after_sleep(d, slept));
     let mut t = takeover();
     if !t.live() {
         return; // nothing was taken over → nothing to restore (also the non-managed path)
@@ -1397,7 +1406,7 @@ pub fn schedule_restore_tv_session(quit: bool) {
 /// A launch that took the box failed: hand it back after the debounce at most.
 pub(super) fn hand_back_after_failed_launch() {
     takeover().launch_failed = true;
-    schedule_restore_tv_session(false);
+    schedule_restore_tv_session(false, Duration::ZERO);
 }
 
 /// Run one create and record what it left. A session clears [`Takeover::launch_failed`]; a
@@ -1954,10 +1963,17 @@ pub fn start_restore_worker() -> std::sync::Arc<()> {
     if let Err(e) = std::thread::Builder::new()
         .name("punktfunk-restore-worker".into())
         .spawn(move || {
+            let mut watch = crate::suspend::Watch::new();
             while weak.upgrade().is_some() {
                 std::thread::sleep(Duration::from_millis(100));
+                let (missed, now) = (watch.missed(), Instant::now());
                 // Due and running in one step, so a connect never slips between them.
-                if takeover().hand_back.pop(Instant::now()) {
+                let due = {
+                    let mut t = takeover();
+                    t.hand_back.age(now, missed);
+                    t.hand_back.pop(now)
+                };
+                if due {
                     let _end = HandBackRun;
                     do_restore_tv_session(true);
                 }
@@ -2132,6 +2148,25 @@ mod tests {
         );
     }
 
+    /// A suspend takes its length off a planned hand-back, down to the grace that lets a client
+    /// that woke the box return. Nothing else ages: a running one is the worker's own.
+    #[test]
+    fn a_suspend_counts_against_a_planned_hand_back() {
+        let now = Instant::now();
+        let secs = Duration::from_secs;
+        let mut due = HandBack::Due(now + secs(600));
+        due.age(now, secs(60));
+        assert_eq!(due.due_in(now), Some(secs(540)));
+        due.age(now, secs(3600));
+        assert_eq!(due.due_in(now), Some(secs(5)));
+        assert!(!due.pop(now), "the grace holds it past the wake");
+        assert!(due.pop(now + secs(5)));
+        for mut other in [HandBack::Idle, HandBack::Running { then: None }] {
+            other.age(now, secs(3600));
+            assert_eq!(other.due_in(now), None);
+        }
+    }
+
     /// A stop on purpose ends a timed keep-alive after the debounce; a shorter one stays, and
     /// forever keeps the box as it does on a pooled display.
     #[test]
@@ -2186,15 +2221,15 @@ mod tests {
             };
             // The launch frees the box and fails; the session's last hold then schedules.
             assert!(launch(false).is_err());
-            schedule_restore_tv_session(false);
+            schedule_restore_tv_session(false, Duration::ZERO);
             assert!(due().is_some_and(|d| d <= RESTORE_DEBOUNCE), "{:?}", due());
             // The client returns and its launch streams: forever keeps the box.
             cancel_pending_restore();
             assert!(launch(true).is_ok());
-            schedule_restore_tv_session(false);
+            schedule_restore_tv_session(false, Duration::ZERO);
             assert_eq!(due(), None);
             assert!(launch_tracked(|| Err::<(), _>(anyhow!("join refused"))).is_err());
-            schedule_restore_tv_session(false);
+            schedule_restore_tv_session(false, Duration::ZERO);
             assert_eq!(due(), None, "a refused join took nothing");
             // A managed relaunch on the taken box fails.
             hand_back_after_failed_launch();

@@ -394,6 +394,24 @@ fn a_linger_window_ends_in_a_teardown() {
     });
 }
 
+/// A suspend past a kept display's window leaves it the grace, not a teardown at the wake.
+#[test]
+fn a_suspend_runs_a_kept_display_down_to_the_grace() {
+    let name = "a_suspend_runs_a_kept_display_down_to_the_grace";
+    in_child(name, KEPT, || {
+        let fake = restoring("kwin");
+        drop(acquire(&fake, MODE, false));
+        fake.take_calls();
+        reap(crate::session_epoch(), Duration::from_secs(3600));
+        let until = match pool().as_slice() {
+            [(_, lifecycle::State::Lingering { until })] => *until,
+            other => panic!("the grace holds the display past the wake: {other:?}"),
+        };
+        assert!(until.saturating_duration_since(Instant::now()) <= Duration::from_secs(5));
+        assert_eq!(fake.take_calls(), []);
+    });
+}
+
 /// A pre-warmed display outlives a keep_alive that is off. A second pre-warm adopts
 /// it and leaves it parked. Once a session claims it the policy applies again.
 #[test]
@@ -772,7 +790,7 @@ fn a_new_session_epoch_ends_a_kept_desktop_display_but_not_gamescope() {
         game.take_calls();
 
         crate::session::bump_session_epoch();
-        reap(crate::session_epoch());
+        reap(crate::session_epoch(), Duration::ZERO);
         wait_for(&desk, &Call::KeepaliveDropped(1));
         assert!(matches!(
             pool().as_slice(),

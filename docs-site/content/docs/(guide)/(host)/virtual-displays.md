@@ -46,6 +46,10 @@ sessions as they are.
 
 Closing the client removes the screen at once. A dropped connection is noticed after the
 **Disconnect timeout** (8 s, an advanced setting in **Host**), then the window starts.
+
+**Keep for** counts while the host sleeps. A stream the host went to sleep under counts from that
+moment, so a host that sleeps past the window removes the screen a few seconds after it wakes,
+unless a device reconnects first. **Keep until released** ignores sleep.
 On gamescope the game keeps running as long as its screen does.
 
 > **Keeping a screen with Turn off keeps your monitors dark after you disconnect**, until the
@@ -187,6 +191,7 @@ exactly as long as its screen:
 | **Stop** on the client or in the console | ends with the screen at once, even on **Leave it running** |
 | a dropped connection | ends when the keep-alive window runs out |
 | a dropped connection, **Keep until released** | keeps running; **Always close it** still ends it after the reconnect window |
+| the host going to sleep | as a dropped connection, and the sleep counts against the window |
 
 To leave a game running on a gamescope box, keep its screen until released. On a desktop session
 (KWin, GNOME, Sway) the settings above apply as written.

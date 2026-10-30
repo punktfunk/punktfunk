@@ -663,6 +663,11 @@ mod mirror;
 #[path = "vdisplay/lifecycle.rs"]
 pub(crate) mod lifecycle;
 
+// What a suspend did to the keep-alive windows. Read by the lifecycle owners' linger ticks.
+#[path = "vdisplay/suspend.rs"]
+pub(crate) mod suspend;
+pub use suspend::{slept, slept_since};
+
 // Snapshot/release facade over per-OS lifecycle owners for /display/state and /display/release.
 #[path = "vdisplay/registry.rs"]
 pub mod registry;

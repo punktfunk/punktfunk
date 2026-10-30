@@ -612,15 +612,15 @@ pub fn managed_session_available() -> bool {
 /// gamescope stop/relaunch). No-op when nothing was taken. Needs
 /// [`start_restore_worker`] running to fire. A box already on its desktop gets
 /// back what our session held at once, whatever the keep-alive. `quit` says the
-/// last session was stopped on purpose.
+/// last session was stopped on purpose, `slept` how long the box slept under it.
 #[cfg(target_os = "linux")]
-pub fn restore_managed_session(quit: bool) {
+pub fn restore_managed_session(quit: bool, slept: std::time::Duration) {
     gamescope::release_autologin_mask(crate::detect_active_session().kind);
-    gamescope::schedule_restore_tv_session(quit);
+    gamescope::schedule_restore_tv_session(quit, slept);
 }
 
 #[cfg(not(target_os = "linux"))]
-pub fn restore_managed_session(_quit: bool) {}
+pub fn restore_managed_session(_quit: bool, _slept: std::time::Duration) {}
 
 /// The takeover the host still holds, for the console's display list. `None` = nothing held.
 #[cfg(target_os = "linux")]
