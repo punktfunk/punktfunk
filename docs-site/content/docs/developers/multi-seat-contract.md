@@ -206,6 +206,8 @@ session by design, and display activation fails while its session is inactive.
   one set for every account until it is reinstalled there. The box host tails each running
   seat's `game.*` into its own bus, with `seat` naming the profile: its plugins hear them, its
   hooks don't. A seat's held launch (below) runs the box host's plugins, which then release it.
+  The box host's save and firmware routes take `?profile=<id>` for a profile with a seat: they
+  read and write that seat account's copies, in its profile folder. A seat host answers 409.
 - **The box's library, on Linux.** The box's library is the owner's (see the owner's libraries
   below). A seat other than the owner's runs no plugins and lists and launches only what it can
   start as its own user: `steam_appid` with an id that fits 32 bits and `steam_ui`, with its own
@@ -446,10 +448,17 @@ system-range user, `pf-seat-<n>`, with a logind session of its own, a headless c
   the owner's home or `/var/lib/punktfunk-seats` or lies in the latter, it lies in a shown
   library's `steamapps`, or the owner can't read it as themselves. A root inside another shows
   with it. A root granted later reaches the seat at its next start.
-- **Save exchange.** Each seat has `seats/<id>/saves/out` and `saves/in`, the seat user's with
-  group `punktfunk-games`, mode `2770`. The daemon makes them at each start and keeps what is in
-  them until the seat is deleted. A seat's saves cross to and from the owner's plugins there;
-  nothing writes them yet.
+- **Save exchange.** Each seat has `seats/<id>/saves/out` and `saves/in`, the seat user's, mode
+  `0770`, with an ACL entry and a default one for the box owner's uid, so no other seat reaches
+  them. The daemon makes them at each start, sets the owner's entries for the owner row it knows
+  then, and keeps what is in them until the seat is deleted. At a launch of an `emulator` title,
+  before its hold, the seat host exports every unit of that emulator and platform into `out/` and
+  lists them, with the platform's firmware, in `out/units.json`. Once the hold is released it
+  puts back each `in/<name>` beside an `in/<name>.import.json` for that title, then empties
+  `in/`; when the game exits it exports what changed. The owner's host answers the save routes'
+  `?profile=` from there: it lists `units.json`, copies a unit's file from `out/` into the plugin's
+  folder, and leaves an import in `in/`. It reads only plain files the seat user owns and never
+  writes through a link. A seat's ROM roots are read-only, so nothing saves beside a game there.
 - **Stopping.** `pam_systemd` moves the runner into the session's scope, so stopping the unit
   can't reach it. The runner ends its children on `SIGTERM`, and `seat-reap` ends the session
   by the id the runner recorded. The daemon's stop then ends the seat's user

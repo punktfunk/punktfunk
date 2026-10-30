@@ -706,8 +706,8 @@ export type InstallEmulatorContent403 = ApiError
 export const InstallEmulatorContent403 = ApiError
 export type InstallEmulatorContent404 = ApiError
 export const InstallEmulatorContent404 = ApiError
-export type GetEmulatorFirmwareParams = { readonly "platform": string }
-export const GetEmulatorFirmwareParams = Schema.Struct({ "platform": Schema.String })
+export type GetEmulatorFirmwareParams = { readonly "platform": string, readonly "profile"?: string }
+export const GetEmulatorFirmwareParams = Schema.Struct({ "platform": Schema.String, "profile": Schema.optionalKey(Schema.String) })
 export type GetEmulatorFirmware200 = null | FirmwareStatusView
 export const GetEmulatorFirmware200 = Schema.Union([Schema.Null, FirmwareStatusView], { mode: "oneOf" })
 export type GetEmulatorFirmware400 = ApiError
@@ -716,6 +716,8 @@ export type GetEmulatorFirmware401 = ApiError
 export const GetEmulatorFirmware401 = ApiError
 export type GetEmulatorFirmware404 = ApiError
 export const GetEmulatorFirmware404 = ApiError
+export type GetEmulatorFirmware409 = ApiError
+export const GetEmulatorFirmware409 = ApiError
 export type InstallEmulator200 = ManagedEmulator
 export const InstallEmulator200 = ManagedEmulator
 export type InstallEmulator400 = ApiError
@@ -754,8 +756,8 @@ export type RemoveEmulator409 = ApiError
 export const RemoveEmulator409 = ApiError
 export type RemoveEmulator500 = ApiError
 export const RemoveEmulator500 = ApiError
-export type GetEmulatorSavesParams = { readonly "platform": string, readonly "game"?: string }
-export const GetEmulatorSavesParams = Schema.Struct({ "platform": Schema.String, "game": Schema.optionalKey(Schema.String) })
+export type GetEmulatorSavesParams = { readonly "platform": string, readonly "game"?: string, readonly "profile"?: string }
+export const GetEmulatorSavesParams = Schema.Struct({ "platform": Schema.String, "game": Schema.optionalKey(Schema.String), "profile": Schema.optionalKey(Schema.String) })
 export type GetEmulatorSaves200 = ReadonlyArray<SaveUnitView>
 export const GetEmulatorSaves200 = Schema.Array(SaveUnitView)
 export type GetEmulatorSaves400 = ApiError
@@ -766,6 +768,10 @@ export type GetEmulatorSaves403 = ApiError
 export const GetEmulatorSaves403 = ApiError
 export type GetEmulatorSaves404 = ApiError
 export const GetEmulatorSaves404 = ApiError
+export type GetEmulatorSaves409 = ApiError
+export const GetEmulatorSaves409 = ApiError
+export type ExportEmulatorSavesParams = { readonly "profile"?: string }
+export const ExportEmulatorSavesParams = Schema.Struct({ "profile": Schema.optionalKey(Schema.String) })
 export type ExportEmulatorSavesRequestJson = ExportUnitsRequest
 export const ExportEmulatorSavesRequestJson = ExportUnitsRequest
 export type ExportEmulatorSaves200 = ReadonlyArray<ExportedUnitView>
@@ -778,6 +784,10 @@ export type ExportEmulatorSaves403 = ApiError
 export const ExportEmulatorSaves403 = ApiError
 export type ExportEmulatorSaves404 = ApiError
 export const ExportEmulatorSaves404 = ApiError
+export type ExportEmulatorSaves409 = ApiError
+export const ExportEmulatorSaves409 = ApiError
+export type ImportEmulatorSavesParams = { readonly "profile"?: string }
+export const ImportEmulatorSavesParams = Schema.Struct({ "profile": Schema.optionalKey(Schema.String) })
 export type ImportEmulatorSavesRequestJson = ImportUnitsRequest
 export const ImportEmulatorSavesRequestJson = ImportUnitsRequest
 export type ImportEmulatorSaves200 = ReadonlyArray<EmulatorStep>
@@ -790,6 +800,8 @@ export type ImportEmulatorSaves403 = ApiError
 export const ImportEmulatorSaves403 = ApiError
 export type ImportEmulatorSaves404 = ApiError
 export const ImportEmulatorSaves404 = ApiError
+export type ImportEmulatorSaves409 = ApiError
+export const ImportEmulatorSaves409 = ApiError
 export type StreamEventsParams = { readonly "since"?: number, readonly "kinds"?: string, readonly "Last-Event-ID"?: string }
 export const StreamEventsParams = Schema.Struct({ "since": Schema.optionalKey(Schema.Number.annotate({ "format": "int64" }).check(Schema.isInt().annotate({ "expected": "an integer" })).check(Schema.isGreaterThanOrEqualTo(0).annotate({ "expected": "a value greater than or equal to 0" }))), "kinds": Schema.optionalKey(Schema.String), "Last-Event-ID": Schema.optionalKey(Schema.String) })
 export type StreamEvents200Sse = HostEvent
@@ -2079,12 +2091,13 @@ export const make = (
   ),
     "getEmulatorFirmware": (id, options: Parameters<Punktfunk["getEmulatorFirmware"]>[1]) => __makePathRequest(HttpClientRequest.get, [id], () => "/api/v1/emulators/" + __encodePathParam(id) + "/firmware").pipe(
     Effect.flatMap((request) => request.pipe(
-      HttpClientRequest.setUrlParams({ "platform": options.params["platform"] as any }),
+      HttpClientRequest.setUrlParams({ "platform": options.params["platform"] as any, "profile": options.params["profile"] as any }),
       withResponse(options.config)(HttpClientResponse.matchStatus({
       "2xx": decodeSuccess(GetEmulatorFirmware200),
       "400": decodeError("GetEmulatorFirmware400", GetEmulatorFirmware400),
       "401": decodeError("GetEmulatorFirmware401", GetEmulatorFirmware401),
       "404": decodeError("GetEmulatorFirmware404", GetEmulatorFirmware404),
+      "409": decodeError("GetEmulatorFirmware409", GetEmulatorFirmware409),
       orElse: unexpectedStatus
     }))
     ))
@@ -2132,19 +2145,21 @@ export const make = (
   ),
     "getEmulatorSaves": (id, options: Parameters<Punktfunk["getEmulatorSaves"]>[1]) => __makePathRequest(HttpClientRequest.get, [id], () => "/api/v1/emulators/" + __encodePathParam(id) + "/saves").pipe(
     Effect.flatMap((request) => request.pipe(
-      HttpClientRequest.setUrlParams({ "platform": options.params["platform"] as any, "game": options.params["game"] as any }),
+      HttpClientRequest.setUrlParams({ "platform": options.params["platform"] as any, "game": options.params["game"] as any, "profile": options.params["profile"] as any }),
       withResponse(options.config)(HttpClientResponse.matchStatus({
       "2xx": decodeSuccess(GetEmulatorSaves200),
       "400": decodeError("GetEmulatorSaves400", GetEmulatorSaves400),
       "401": decodeError("GetEmulatorSaves401", GetEmulatorSaves401),
       "403": decodeError("GetEmulatorSaves403", GetEmulatorSaves403),
       "404": decodeError("GetEmulatorSaves404", GetEmulatorSaves404),
+      "409": decodeError("GetEmulatorSaves409", GetEmulatorSaves409),
       orElse: unexpectedStatus
     }))
     ))
   ),
     "exportEmulatorSaves": (id, options: Parameters<Punktfunk["exportEmulatorSaves"]>[1]) => __makePathRequest(HttpClientRequest.post, [id], () => "/api/v1/emulators/" + __encodePathParam(id) + "/saves/export").pipe(
     Effect.flatMap((request) => request.pipe(
+      HttpClientRequest.setUrlParams({ "profile": options.params?.["profile"] as any }),
       HttpClientRequest.bodyJsonUnsafe(options.payload),
       withResponse(options.config)(HttpClientResponse.matchStatus({
       "2xx": decodeSuccess(ExportEmulatorSaves200),
@@ -2152,12 +2167,14 @@ export const make = (
       "401": decodeError("ExportEmulatorSaves401", ExportEmulatorSaves401),
       "403": decodeError("ExportEmulatorSaves403", ExportEmulatorSaves403),
       "404": decodeError("ExportEmulatorSaves404", ExportEmulatorSaves404),
+      "409": decodeError("ExportEmulatorSaves409", ExportEmulatorSaves409),
       orElse: unexpectedStatus
     }))
     ))
   ),
     "importEmulatorSaves": (id, options: Parameters<Punktfunk["importEmulatorSaves"]>[1]) => __makePathRequest(HttpClientRequest.post, [id], () => "/api/v1/emulators/" + __encodePathParam(id) + "/saves/import").pipe(
     Effect.flatMap((request) => request.pipe(
+      HttpClientRequest.setUrlParams({ "profile": options.params?.["profile"] as any }),
       HttpClientRequest.bodyJsonUnsafe(options.payload),
       withResponse(options.config)(HttpClientResponse.matchStatus({
       "2xx": decodeSuccess(ImportEmulatorSaves200),
@@ -2165,6 +2182,7 @@ export const make = (
       "401": decodeError("ImportEmulatorSaves401", ImportEmulatorSaves401),
       "403": decodeError("ImportEmulatorSaves403", ImportEmulatorSaves403),
       "404": decodeError("ImportEmulatorSaves404", ImportEmulatorSaves404),
+      "409": decodeError("ImportEmulatorSaves409", ImportEmulatorSaves409),
       orElse: unexpectedStatus
     }))
     ))
@@ -3596,11 +3614,12 @@ readonly "installEmulatorContent": {
   }
   /**
 * Whether the best copy of the emulator has the platform's firmware, each file hashed against
-* the good dumps the catalog knows. `null` when the platform needs none.
+* the good dumps the catalog knows. `null` when the platform needs none. With `profile`, that
+* seat's copy; a Linux seat answers once its host has checked it at a launch.
 */
 readonly "getEmulatorFirmware": {
-    <Config extends OperationConfig | undefined = undefined>(id: string, options: { readonly params: typeof GetEmulatorFirmwareParams.Encoded; readonly config: Config }): Effect.Effect<WithOptionalResponse<typeof GetEmulatorFirmware200.Type, Config>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"GetEmulatorFirmware400", typeof GetEmulatorFirmware400.Type> | PunktfunkError<"GetEmulatorFirmware401", typeof GetEmulatorFirmware401.Type> | PunktfunkError<"GetEmulatorFirmware404", typeof GetEmulatorFirmware404.Type>>;
-    <Config extends OperationConfig | undefined = undefined>(id: string, options: { readonly params: typeof GetEmulatorFirmwareParams.Encoded; readonly config?: Config | undefined }): Effect.Effect<WithOptionalResponse<typeof GetEmulatorFirmware200.Type, Config | undefined>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"GetEmulatorFirmware400", typeof GetEmulatorFirmware400.Type> | PunktfunkError<"GetEmulatorFirmware401", typeof GetEmulatorFirmware401.Type> | PunktfunkError<"GetEmulatorFirmware404", typeof GetEmulatorFirmware404.Type>>;
+    <Config extends OperationConfig | undefined = undefined>(id: string, options: { readonly params: typeof GetEmulatorFirmwareParams.Encoded; readonly config: Config }): Effect.Effect<WithOptionalResponse<typeof GetEmulatorFirmware200.Type, Config>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"GetEmulatorFirmware400", typeof GetEmulatorFirmware400.Type> | PunktfunkError<"GetEmulatorFirmware401", typeof GetEmulatorFirmware401.Type> | PunktfunkError<"GetEmulatorFirmware404", typeof GetEmulatorFirmware404.Type> | PunktfunkError<"GetEmulatorFirmware409", typeof GetEmulatorFirmware409.Type>>;
+    <Config extends OperationConfig | undefined = undefined>(id: string, options: { readonly params: typeof GetEmulatorFirmwareParams.Encoded; readonly config?: Config | undefined }): Effect.Effect<WithOptionalResponse<typeof GetEmulatorFirmware200.Type, Config | undefined>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"GetEmulatorFirmware400", typeof GetEmulatorFirmware400.Type> | PunktfunkError<"GetEmulatorFirmware401", typeof GetEmulatorFirmware401.Type> | PunktfunkError<"GetEmulatorFirmware404", typeof GetEmulatorFirmware404.Type> | PunktfunkError<"GetEmulatorFirmware409", typeof GetEmulatorFirmware409.Type>>;
   }
   /**
 * Fetches the emulator through its own release channel (Flatpak on Linux, the official
@@ -3632,28 +3651,33 @@ readonly "removeEmulator": {
   }
   /**
 * The save units of the platform on the best copy of the emulator: name, kind, size and a
-* stamp that changes with the save. A plugin needs the operator's save grant.
+* stamp that changes with the save. A plugin needs the operator's save grant. With `profile`,
+* that seat's units; a Linux seat's are what its host exported at its last launch or exit.
 */
 readonly "getEmulatorSaves": {
-    <Config extends OperationConfig | undefined = undefined>(id: string, options: { readonly params: typeof GetEmulatorSavesParams.Encoded; readonly config: Config }): Effect.Effect<WithOptionalResponse<typeof GetEmulatorSaves200.Type, Config>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"GetEmulatorSaves400", typeof GetEmulatorSaves400.Type> | PunktfunkError<"GetEmulatorSaves401", typeof GetEmulatorSaves401.Type> | PunktfunkError<"GetEmulatorSaves403", typeof GetEmulatorSaves403.Type> | PunktfunkError<"GetEmulatorSaves404", typeof GetEmulatorSaves404.Type>>;
-    <Config extends OperationConfig | undefined = undefined>(id: string, options: { readonly params: typeof GetEmulatorSavesParams.Encoded; readonly config?: Config | undefined }): Effect.Effect<WithOptionalResponse<typeof GetEmulatorSaves200.Type, Config | undefined>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"GetEmulatorSaves400", typeof GetEmulatorSaves400.Type> | PunktfunkError<"GetEmulatorSaves401", typeof GetEmulatorSaves401.Type> | PunktfunkError<"GetEmulatorSaves403", typeof GetEmulatorSaves403.Type> | PunktfunkError<"GetEmulatorSaves404", typeof GetEmulatorSaves404.Type>>;
+    <Config extends OperationConfig | undefined = undefined>(id: string, options: { readonly params: typeof GetEmulatorSavesParams.Encoded; readonly config: Config }): Effect.Effect<WithOptionalResponse<typeof GetEmulatorSaves200.Type, Config>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"GetEmulatorSaves400", typeof GetEmulatorSaves400.Type> | PunktfunkError<"GetEmulatorSaves401", typeof GetEmulatorSaves401.Type> | PunktfunkError<"GetEmulatorSaves403", typeof GetEmulatorSaves403.Type> | PunktfunkError<"GetEmulatorSaves404", typeof GetEmulatorSaves404.Type> | PunktfunkError<"GetEmulatorSaves409", typeof GetEmulatorSaves409.Type>>;
+    <Config extends OperationConfig | undefined = undefined>(id: string, options: { readonly params: typeof GetEmulatorSavesParams.Encoded; readonly config?: Config | undefined }): Effect.Effect<WithOptionalResponse<typeof GetEmulatorSaves200.Type, Config | undefined>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"GetEmulatorSaves400", typeof GetEmulatorSaves400.Type> | PunktfunkError<"GetEmulatorSaves401", typeof GetEmulatorSaves401.Type> | PunktfunkError<"GetEmulatorSaves403", typeof GetEmulatorSaves403.Type> | PunktfunkError<"GetEmulatorSaves404", typeof GetEmulatorSaves404.Type> | PunktfunkError<"GetEmulatorSaves409", typeof GetEmulatorSaves409.Type>>;
   }
   /**
 * Writes each named unit into `dir`: the save file, or a tar of a save folder with nothing in
 * its headers that differs between machines. A plugin's `dir` is inside its own state folder.
+* With `profile`, that seat's units; a Linux seat's files are its host's last export, and a
+* unit it didn't export is left out.
 */
 readonly "exportEmulatorSaves": {
-    <Config extends OperationConfig | undefined = undefined>(id: string, options: { readonly payload: typeof ExportEmulatorSavesRequestJson.Encoded; readonly config: Config }): Effect.Effect<WithOptionalResponse<typeof ExportEmulatorSaves200.Type, Config>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"ExportEmulatorSaves400", typeof ExportEmulatorSaves400.Type> | PunktfunkError<"ExportEmulatorSaves401", typeof ExportEmulatorSaves401.Type> | PunktfunkError<"ExportEmulatorSaves403", typeof ExportEmulatorSaves403.Type> | PunktfunkError<"ExportEmulatorSaves404", typeof ExportEmulatorSaves404.Type>>;
-    <Config extends OperationConfig | undefined = undefined>(id: string, options: { readonly payload: typeof ExportEmulatorSavesRequestJson.Encoded; readonly config?: Config | undefined }): Effect.Effect<WithOptionalResponse<typeof ExportEmulatorSaves200.Type, Config | undefined>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"ExportEmulatorSaves400", typeof ExportEmulatorSaves400.Type> | PunktfunkError<"ExportEmulatorSaves401", typeof ExportEmulatorSaves401.Type> | PunktfunkError<"ExportEmulatorSaves403", typeof ExportEmulatorSaves403.Type> | PunktfunkError<"ExportEmulatorSaves404", typeof ExportEmulatorSaves404.Type>>;
+    <Config extends OperationConfig | undefined = undefined>(id: string, options: { readonly params?: typeof ExportEmulatorSavesParams.Encoded | undefined; readonly payload: typeof ExportEmulatorSavesRequestJson.Encoded; readonly config: Config }): Effect.Effect<WithOptionalResponse<typeof ExportEmulatorSaves200.Type, Config>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"ExportEmulatorSaves400", typeof ExportEmulatorSaves400.Type> | PunktfunkError<"ExportEmulatorSaves401", typeof ExportEmulatorSaves401.Type> | PunktfunkError<"ExportEmulatorSaves403", typeof ExportEmulatorSaves403.Type> | PunktfunkError<"ExportEmulatorSaves404", typeof ExportEmulatorSaves404.Type> | PunktfunkError<"ExportEmulatorSaves409", typeof ExportEmulatorSaves409.Type>>;
+    <Config extends OperationConfig | undefined = undefined>(id: string, options: { readonly params?: typeof ExportEmulatorSavesParams.Encoded | undefined; readonly payload: typeof ExportEmulatorSavesRequestJson.Encoded; readonly config?: Config | undefined }): Effect.Effect<WithOptionalResponse<typeof ExportEmulatorSaves200.Type, Config | undefined>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"ExportEmulatorSaves400", typeof ExportEmulatorSaves400.Type> | PunktfunkError<"ExportEmulatorSaves401", typeof ExportEmulatorSaves401.Type> | PunktfunkError<"ExportEmulatorSaves403", typeof ExportEmulatorSaves403.Type> | PunktfunkError<"ExportEmulatorSaves404", typeof ExportEmulatorSaves404.Type> | PunktfunkError<"ExportEmulatorSaves409", typeof ExportEmulatorSaves409.Type>>;
   }
   /**
 * Each unit goes where the emulator keeps it, in the first of its kinds with a place for its
 * name; what was there is kept in hermir's save backups. A unit with no place yet is a step
-* that says so. A plugin's files are inside its own state folder.
+* that says so. A plugin's files are inside its own state folder. With `profile`, into that
+* seat's copies; a Linux seat's host puts each back before its next game starts, and the step
+* says so.
 */
 readonly "importEmulatorSaves": {
-    <Config extends OperationConfig | undefined = undefined>(id: string, options: { readonly payload: typeof ImportEmulatorSavesRequestJson.Encoded; readonly config: Config }): Effect.Effect<WithOptionalResponse<typeof ImportEmulatorSaves200.Type, Config>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"ImportEmulatorSaves400", typeof ImportEmulatorSaves400.Type> | PunktfunkError<"ImportEmulatorSaves401", typeof ImportEmulatorSaves401.Type> | PunktfunkError<"ImportEmulatorSaves403", typeof ImportEmulatorSaves403.Type> | PunktfunkError<"ImportEmulatorSaves404", typeof ImportEmulatorSaves404.Type>>;
-    <Config extends OperationConfig | undefined = undefined>(id: string, options: { readonly payload: typeof ImportEmulatorSavesRequestJson.Encoded; readonly config?: Config | undefined }): Effect.Effect<WithOptionalResponse<typeof ImportEmulatorSaves200.Type, Config | undefined>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"ImportEmulatorSaves400", typeof ImportEmulatorSaves400.Type> | PunktfunkError<"ImportEmulatorSaves401", typeof ImportEmulatorSaves401.Type> | PunktfunkError<"ImportEmulatorSaves403", typeof ImportEmulatorSaves403.Type> | PunktfunkError<"ImportEmulatorSaves404", typeof ImportEmulatorSaves404.Type>>;
+    <Config extends OperationConfig | undefined = undefined>(id: string, options: { readonly params?: typeof ImportEmulatorSavesParams.Encoded | undefined; readonly payload: typeof ImportEmulatorSavesRequestJson.Encoded; readonly config: Config }): Effect.Effect<WithOptionalResponse<typeof ImportEmulatorSaves200.Type, Config>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"ImportEmulatorSaves400", typeof ImportEmulatorSaves400.Type> | PunktfunkError<"ImportEmulatorSaves401", typeof ImportEmulatorSaves401.Type> | PunktfunkError<"ImportEmulatorSaves403", typeof ImportEmulatorSaves403.Type> | PunktfunkError<"ImportEmulatorSaves404", typeof ImportEmulatorSaves404.Type> | PunktfunkError<"ImportEmulatorSaves409", typeof ImportEmulatorSaves409.Type>>;
+    <Config extends OperationConfig | undefined = undefined>(id: string, options: { readonly params?: typeof ImportEmulatorSavesParams.Encoded | undefined; readonly payload: typeof ImportEmulatorSavesRequestJson.Encoded; readonly config?: Config | undefined }): Effect.Effect<WithOptionalResponse<typeof ImportEmulatorSaves200.Type, Config | undefined>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"ImportEmulatorSaves400", typeof ImportEmulatorSaves400.Type> | PunktfunkError<"ImportEmulatorSaves401", typeof ImportEmulatorSaves401.Type> | PunktfunkError<"ImportEmulatorSaves403", typeof ImportEmulatorSaves403.Type> | PunktfunkError<"ImportEmulatorSaves404", typeof ImportEmulatorSaves404.Type> | PunktfunkError<"ImportEmulatorSaves409", typeof ImportEmulatorSaves409.Type>>;
   }
   /**
 * `id:` is `seq`, `event:` is kind, `data:` is HostEvent JSON. Resume with `Last-Event-ID`

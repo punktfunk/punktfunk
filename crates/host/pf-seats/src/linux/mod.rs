@@ -46,6 +46,12 @@ use std::time::{Duration, Instant};
 /// folder. Root's alone; the box directory beside it is the door's, which reads its files only.
 pub const STATE_DIR: &str = "/var/lib/punktfunk-seats";
 
+/// A seat's save exchange: `out` holds what its host exported for the owner's plugins, `in`
+/// what the owner's host hands back. The same path inside the seat's unit.
+pub fn saves_dir(id: &SeatId) -> PathBuf {
+    shared::seat_dir(Path::new(STATE_DIR), id).join("saves")
+}
+
 /// The box owner `door-helper` recorded under [`STATE_DIR`]: the account the door is on for.
 /// Readable by the door, written only by root.
 pub fn recorded_owner() -> Option<String> {
@@ -685,7 +691,7 @@ impl PlatformBackend for LinuxBackend {
         shared::ensure_games(state, gid)?;
         let passwd = accounts::ensure(seat, state)?;
         accounts::close_home(&passwd.home)?;
-        shared::ensure_seat_dirs(state, &seat.id, &passwd, gid)?;
+        shared::ensure_seat_dirs(state, &seat.id, &passwd, self.owner_uid())?;
         shared::provision_steam(state, &seat.id, &passwd, self.steam_source().as_ref());
         Ok(())
     }
@@ -708,7 +714,7 @@ impl PlatformBackend for LinuxBackend {
         accounts::close_home(&passwd.home)?;
         let games = accounts::ensure_group(accounts::GAMES_GROUP)?;
         shared::ensure_games(state, games)?;
-        shared::ensure_seat_dirs(state, &seat.id, &passwd, games)?;
+        shared::ensure_seat_dirs(state, &seat.id, &passwd, self.owner_uid())?;
         let reader = shared::Reader::group(passwd.gid);
         shared::refresh_trust(box_dir, state, &seat.id, reader)?;
         shared::refresh_seat_library(state, &seat.id, reader)?;

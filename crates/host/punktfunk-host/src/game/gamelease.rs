@@ -1310,7 +1310,8 @@ fn finish(shared: &Arc<LeaseShared>, on_exit: &OnExit, why: &str, run: Option<Ru
 
 /// Mark the game exited and emit `game.exited`, once per lease: the watcher and the session's
 /// own exit signals (gamescope's atoms, a nested capture going away) can both see one exit.
-/// The emulator bindings `prepare` wrote for this session's pads go back too.
+/// The emulator bindings `prepare` wrote for this session's pads go back too. A seat's saves
+/// are exported first, so the owner's plugins read the new ones.
 pub fn report_exit(shared: &LeaseShared) {
     if shared
         .state
@@ -1320,6 +1321,7 @@ pub fn report_exit(shared: &LeaseShared) {
         return;
     }
     std::thread::spawn(crate::emulators::revert_players);
+    crate::emulators::exchange::after_exit(shared.game.id.as_deref());
     crate::events::emit(crate::events::EventKind::GameExited {
         game: game_event_ref(shared),
         reason: if shared.is_terminating() {
@@ -1524,7 +1526,8 @@ pub fn launched_by(launcher: Option<&str>, owner: Option<&str>) -> bool {
 }
 
 /// End a launch no session holds ([`crate::launchreg::take_detached`]) on a
-/// detached thread, then free its record and report the exit as `terminated`.
+/// detached thread, then free its record and report the exit as `terminated`, a seat's
+/// saves exported first.
 pub fn end_detached(d: crate::launchreg::Detached, why: &'static str) {
     let _ = std::thread::Builder::new()
         .name("pf1-gameterm".into())
@@ -1535,6 +1538,7 @@ pub fn end_detached(d: crate::launchreg::Detached, why: &'static str) {
             // No launch follows this one to revert the bindings.
             crate::emulators::revert_players();
             crate::launchreg::ended(&d.procs);
+            crate::emulators::exchange::after_exit(d.game.id.as_deref());
             crate::events::emit(crate::events::EventKind::GameExited {
                 game: crate::events::GameRefPayload {
                     app: d.game.id.clone(),

@@ -126,7 +126,7 @@ pub(super) fn seat_exe(account: &str) -> Option<PathBuf> {
 
 /// The profile folder of the account `sid` names, from its `ProfileList` entry. `None` while it
 /// has none, which Windows makes at its first logon.
-fn profile_dir(sid: &str) -> Option<PathBuf> {
+pub(super) fn profile_dir(sid: &str) -> Option<PathBuf> {
     let profile: String = RegKey::predef(HKEY_LOCAL_MACHINE)
         .open_subkey_with_flags(
             format!(r"SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList\{sid}"),

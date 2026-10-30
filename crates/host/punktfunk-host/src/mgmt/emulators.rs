@@ -2,8 +2,9 @@
 //! registry, firmware status, add-ons and preparing are open to plugins; a plugin's save routes
 //! answer only after the operator's one save grant. Installing, removing and adopting a copy
 //! are the operator's, like every install on this host. Files cross a plugin's sandbox through
-//! its own state folder. The work runs on the blocking pool: a download takes as long as it
-//! takes.
+//! its own state folder. On the host with the plugins, `?profile=` points the save and firmware
+//! routes at that profile's seat ([`crate::emulators::exchange`]). The work runs on the blocking
+//! pool: a download takes as long as it takes.
 use super::auth::{AuthLane, PluginIdentity};
 use super::shared::*;
 use crate::events::{emit, EventKind};
@@ -467,6 +468,56 @@ pub(crate) struct PlatformQuery {
     /// The game's folder, for an emulator that keeps saves beside its games.
     #[serde(default)]
     pub game: Option<String>,
+    /// [`SeatQuery::profile`].
+    #[serde(default)]
+    pub profile: Option<String>,
+}
+
+#[derive(Deserialize)]
+pub(crate) struct SeatQuery {
+    /// A profile with a seat of its own: the route answers for that seat's copies.
+    #[serde(default)]
+    pub profile: Option<String>,
+}
+
+/// The seat `profile` plays on, as this host reaches its saves; `None` without a `profile`. A
+/// seat host refuses one, since it runs no plugins, and a profile with no seat here is 404.
+async fn seat_saves(
+    st: &MgmtState,
+    profile: Option<String>,
+) -> Result<Option<crate::emulators::exchange::Seat>, Response> {
+    let Some(profile) = profile else {
+        return Ok(None);
+    };
+    if pf_paths::seat::box_library_dir().is_some() {
+        return Err(api_error(
+            StatusCode::CONFLICT,
+            "A seat host answers for its own saves; ask the host with the plugins",
+        ));
+    }
+    let seat = st.app.profiles.get().and_then(|profiles| {
+        profiles
+            .list()
+            .into_iter()
+            .find(|p| p.id == profile)
+            .and_then(|p| match p.os_account {
+                crate::profiles::OsAccount::Seat { seat } => seat,
+                _ => None,
+            })
+    });
+    let no_seat = || {
+        api_error(
+            StatusCode::NOT_FOUND,
+            "That profile has no seat on this box",
+        )
+    };
+    let Some(seat) = seat else {
+        return Err(no_seat());
+    };
+    match blocking("seats", move || crate::emulators::exchange::seat(&seat)).await? {
+        Some(seat) => Ok(Some(seat)),
+        None => Err(no_seat()),
+    }
 }
 
 /// One platform's firmware on the best copy.
@@ -497,7 +548,8 @@ pub(crate) struct FirmwareFileView {
 /// Check a platform's firmware
 ///
 /// Whether the best copy of the emulator has the platform's firmware, each file hashed against
-/// the good dumps the catalog knows. `null` when the platform needs none.
+/// the good dumps the catalog knows. `null` when the platform needs none. With `profile`, that
+/// seat's copy; a Linux seat answers once its host has checked it at a launch.
 #[utoipa::path(
     get,
     path = "/emulators/{id}/firmware",
@@ -506,51 +558,64 @@ pub(crate) struct FirmwareFileView {
     params(
         ("id" = String, Path, description = "The catalog id"),
         ("platform" = String, Query, description = "A catalog platform id or alias, like `ps2`"),
+        ("profile" = Option<String>, Query, description = "A profile with a seat of its own: that seat's copies, on the host with the plugins"),
     ),
     responses(
         (status = OK, description = "The platform's firmware, or null", body = Option<FirmwareStatusView>),
         (status = BAD_REQUEST, description = "A malformed platform, or no copy on this host", body = ApiError),
-        (status = NOT_FOUND, description = "Not in the catalog", body = ApiError),
+        (status = NOT_FOUND, description = "Not in the catalog, a profile with no seat, or a seat that hasn't checked it yet", body = ApiError),
+        (status = CONFLICT, description = "`profile` on a seat host", body = ApiError),
         (status = UNAUTHORIZED, description = "Missing or invalid bearer token", body = ApiError),
     )
 )]
 pub(crate) async fn get_emulator_firmware(
+    State(st): State<Arc<MgmtState>>,
     Path(id): Path<String>,
     Query(q): Query<PlatformQuery>,
 ) -> Response {
     if !valid_platform(&q.platform) {
         return api_error(StatusCode::BAD_REQUEST, "That isn't a platform id");
     }
-    match blocking("emulator manager", move || {
-        crate::emulators::firmware_status(&id, &q.platform)
+    let seat = match seat_saves(&st, q.profile).await {
+        Ok(seat) => seat,
+        Err(r) => return r,
+    };
+    let checked = blocking("emulator manager", move || match &seat {
+        None => Some(crate::emulators::firmware_status(None, &id, &q.platform)),
+        Some(seat) => crate::emulators::exchange::firmware_status(seat, &id, &q.platform),
     })
-    .await
-    {
-        Ok(Ok(status)) => Json(status.map(|s| {
-            FirmwareStatusView {
-                platform: s.platform,
-                ok: s.ok,
-                note: s.need.note,
-                optional: s.need.optional,
-                any_of: s.need.any_of,
-                found: s
-                    .found
-                    .into_iter()
-                    .map(|f| FirmwareFileView {
-                        name: f
-                            .path
-                            .file_name()
-                            .map(|n| n.to_string_lossy().into_owned())
-                            .unwrap_or_default(),
-                        md5: f.md5,
-                        known: f.known,
-                    })
-                    .collect(),
-            }
-        }))
-        .into_response(),
-        Ok(Err(e)) => hermir_err(&e, "The firmware couldn't be checked"),
+    .await;
+    match checked {
+        Ok(Some(Ok(status))) => Json(status.map(firmware_view)).into_response(),
+        Ok(Some(Err(e))) => hermir_err(&e, "The firmware couldn't be checked"),
+        Ok(None) => api_error(
+            StatusCode::NOT_FOUND,
+            "That seat hasn't checked this platform's firmware yet",
+        ),
         Err(r) => r,
+    }
+}
+
+fn firmware_view(s: hermir::FirmwareStatus) -> FirmwareStatusView {
+    FirmwareStatusView {
+        platform: s.platform,
+        ok: s.ok,
+        note: s.need.note,
+        optional: s.need.optional,
+        any_of: s.need.any_of,
+        found: s
+            .found
+            .into_iter()
+            .map(|f| FirmwareFileView {
+                name: f
+                    .path
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_default(),
+                md5: f.md5,
+                known: f.known,
+            })
+            .collect(),
     }
 }
 
@@ -719,7 +784,8 @@ fn plugin_states() -> std::path::PathBuf {
 /// List a platform's saves
 ///
 /// The save units of the platform on the best copy of the emulator: name, kind, size and a
-/// stamp that changes with the save. A plugin needs the operator's save grant.
+/// stamp that changes with the save. A plugin needs the operator's save grant. With `profile`,
+/// that seat's units; a Linux seat's are what its host exported at its last launch or exit.
 #[utoipa::path(
     get,
     path = "/emulators/{id}/saves",
@@ -729,12 +795,14 @@ fn plugin_states() -> std::path::PathBuf {
         ("id" = String, Path, description = "The catalog id"),
         ("platform" = String, Query, description = "A catalog platform id or alias, like `ps2`"),
         ("game" = Option<String>, Query, description = "The game's folder, for an emulator that keeps saves beside its games"),
+        ("profile" = Option<String>, Query, description = "A profile with a seat of its own: that seat's copies, on the host with the plugins"),
     ),
     responses(
         (status = OK, description = "The save units", body = [SaveUnitView]),
         (status = BAD_REQUEST, description = "A malformed platform, or no copy on this host", body = ApiError),
         (status = FORBIDDEN, description = "No save grant, or a game folder outside the plugin's reach", body = ApiError),
-        (status = NOT_FOUND, description = "Not in the catalog", body = ApiError),
+        (status = NOT_FOUND, description = "Not in the catalog, or a profile with no seat", body = ApiError),
+        (status = CONFLICT, description = "`profile` on a seat host", body = ApiError),
         (status = UNAUTHORIZED, description = "Missing or invalid bearer token", body = ApiError),
     )
 )]
@@ -756,8 +824,13 @@ pub(crate) async fn get_emulator_saves(
         Ok(g) => g,
         Err((status, why)) => return api_error(status, why),
     };
-    match blocking("emulator manager", move || {
-        crate::emulators::units(&id, &q.platform, game.as_deref())
+    let seat = match seat_saves(&st, q.profile).await {
+        Ok(seat) => seat,
+        Err(r) => return r,
+    };
+    match blocking("emulator manager", move || match &seat {
+        None => crate::emulators::units(None, &id, &q.platform, game.as_deref()),
+        Some(seat) => crate::emulators::exchange::units(seat, &id, &q.platform, game.as_deref()),
     })
     .await
     {
@@ -785,18 +858,23 @@ pub(crate) async fn get_emulator_saves(
 ///
 /// Writes each named unit into `dir`: the save file, or a tar of a save folder with nothing in
 /// its headers that differs between machines. A plugin's `dir` is inside its own state folder.
+/// With `profile`, that seat's units; a Linux seat's files are its host's last export, and a
+/// unit it didn't export is left out.
 #[utoipa::path(
     post,
     path = "/emulators/{id}/saves/export",
     tag = "emulators",
     operation_id = "exportEmulatorSaves",
-    params(("id" = String, Path, description = "The catalog id")),
+    params(("id" = String, Path, description = "The catalog id"),
+        ("profile" = Option<String>, Query, description = "A profile with a seat of its own: that seat's copies, on the host with the plugins"),
+    ),
     request_body = ExportUnitsRequest,
     responses(
         (status = OK, description = "The files written", body = [ExportedUnitView]),
         (status = BAD_REQUEST, description = "A malformed platform or unit, or no copy on this host", body = ApiError),
         (status = FORBIDDEN, description = "No save grant, or a folder outside the plugin's reach", body = ApiError),
-        (status = NOT_FOUND, description = "Not in the catalog", body = ApiError),
+        (status = NOT_FOUND, description = "Not in the catalog, or a profile with no seat", body = ApiError),
+        (status = CONFLICT, description = "`profile` on a seat host", body = ApiError),
         (status = UNAUTHORIZED, description = "Missing or invalid bearer token", body = ApiError),
     )
 )]
@@ -805,6 +883,7 @@ pub(crate) async fn export_emulator_saves(
     Path(id): Path<String>,
     Extension(lane): Extension<AuthLane>,
     who: Option<Extension<PluginIdentity>>,
+    Query(q): Query<SeatQuery>,
     ApiJson(req): ApiJson<ExportUnitsRequest>,
 ) -> Response {
     let plugin = who.map(|Extension(w)| w.0);
@@ -817,6 +896,10 @@ pub(crate) async fn export_emulator_saves(
     let game = match game_dir(lane, plugin.as_deref(), req.game.as_deref()) {
         Ok(g) => g,
         Err((status, why)) => return api_error(status, why),
+    };
+    let seat = match seat_saves(&st, q.profile).await {
+        Ok(seat) => seat,
+        Err(r) => return r,
     };
     let out = match state_path(
         lane,
@@ -832,7 +915,13 @@ pub(crate) async fn export_emulator_saves(
         req.units.into_iter().map(|u| (u.kind, u.name)).collect();
     let dir = req.dir;
     let exported = blocking("emulator manager", move || {
-        crate::emulators::export_units(&id, &req.platform, game.as_deref(), &units, &out)
+        let (platform, game) = (&req.platform, game.as_deref());
+        match &seat {
+            None => crate::emulators::export_units(None, &id, platform, game, &units, &out),
+            Some(seat) => {
+                crate::emulators::exchange::export_units(seat, &id, platform, game, &units, &out)
+            }
+        }
     })
     .await;
     match exported {
@@ -866,19 +955,24 @@ pub(crate) async fn export_emulator_saves(
 ///
 /// Each unit goes where the emulator keeps it, in the first of its kinds with a place for its
 /// name; what was there is kept in hermir's save backups. A unit with no place yet is a step
-/// that says so. A plugin's files are inside its own state folder.
+/// that says so. A plugin's files are inside its own state folder. With `profile`, into that
+/// seat's copies; a Linux seat's host puts each back before its next game starts, and the step
+/// says so.
 #[utoipa::path(
     post,
     path = "/emulators/{id}/saves/import",
     tag = "emulators",
     operation_id = "importEmulatorSaves",
-    params(("id" = String, Path, description = "The catalog id")),
+    params(("id" = String, Path, description = "The catalog id"),
+        ("profile" = Option<String>, Query, description = "A profile with a seat of its own: that seat's copies, on the host with the plugins"),
+    ),
     request_body = ImportUnitsRequest,
     responses(
         (status = OK, description = "One step per unit", body = [EmulatorStep]),
         (status = BAD_REQUEST, description = "A malformed platform or unit, a missing file, or no copy on this host", body = ApiError),
         (status = FORBIDDEN, description = "No save grant, or a file outside the plugin's reach", body = ApiError),
-        (status = NOT_FOUND, description = "Not in the catalog", body = ApiError),
+        (status = NOT_FOUND, description = "Not in the catalog, or a profile with no seat", body = ApiError),
+        (status = CONFLICT, description = "`profile` on a seat host", body = ApiError),
         (status = UNAUTHORIZED, description = "Missing or invalid bearer token", body = ApiError),
     )
 )]
@@ -887,6 +981,7 @@ pub(crate) async fn import_emulator_saves(
     Path(id): Path<String>,
     Extension(lane): Extension<AuthLane>,
     who: Option<Extension<PluginIdentity>>,
+    Query(q): Query<SeatQuery>,
     ApiJson(req): ApiJson<ImportUnitsRequest>,
 ) -> Response {
     let plugin = who.map(|Extension(w)| w.0);
@@ -899,6 +994,10 @@ pub(crate) async fn import_emulator_saves(
     let game = match game_dir(lane, plugin.as_deref(), req.game.as_deref()) {
         Ok(g) => g,
         Err((status, why)) => return api_error(status, why),
+    };
+    let seat = match seat_saves(&st, q.profile).await {
+        Ok(seat) => seat,
+        Err(r) => return r,
     };
     // One row per name, its kinds in the order given.
     let mut rows: Vec<(String, std::path::PathBuf, Vec<hermir::SaveKind>)> = Vec::new();
@@ -923,15 +1022,15 @@ pub(crate) async fn import_emulator_saves(
     let imported = blocking("emulator manager", move || {
         rows.into_iter()
             .map(|(name, file, kinds)| {
-                let step = crate::emulators::import_unit(
-                    &id,
-                    &platform,
-                    game.as_deref(),
-                    &kinds,
-                    &name,
-                    &file,
-                    &others,
-                )?;
+                let game = game.as_deref();
+                let step = match &seat {
+                    None => crate::emulators::import_unit(
+                        None, &id, &platform, game, &kinds, &name, &file, &others,
+                    ),
+                    Some(seat) => crate::emulators::exchange::import_unit(
+                        seat, &id, &platform, game, &kinds, &name, &file, &others,
+                    ),
+                }?;
                 Ok(EmulatorStep {
                     name: Some(name),
                     source: None,

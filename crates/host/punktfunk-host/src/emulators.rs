@@ -28,10 +28,20 @@ pub fn home_of(id: &str) -> PathBuf {
     prefix().join(id).join("app")
 }
 
+pub(crate) mod exchange;
+
 /// hermir on [`prefix`]. With seats on the box a copy serves every account: a Linux Flatpak goes
 /// into the system installation, a Windows archive keeps each account's data in its profile. The
 /// SYSTEM host on Windows resolves that data in the session player's profile.
 pub fn open() -> hermir::Result<Hermir> {
+    open_in(None)
+}
+
+/// [`open`], with `account`'s profile folder as hermir's home on Windows: a seat account's copies
+/// rather than the session player's. Elsewhere `account` is never given.
+fn open_in(account: Option<&Path>) -> hermir::Result<Hermir> {
+    #[cfg(not(windows))]
+    let _ = account;
     Hermir::open(Options {
         prefix: Some(prefix()),
         #[cfg(windows)]
@@ -39,7 +49,7 @@ pub fn open() -> hermir::Result<Hermir> {
         #[cfg(windows)]
         shared_install: pf_paths::seat::role().is_seat_host() || crate::seats::enabled(),
         #[cfg(windows)]
-        home: session_home(),
+        home: account.map(Path::to_path_buf).or_else(session_home),
         flatpak_installation: if box_wide() {
             hermir::FlatpakInstallation::System
         } else {
@@ -597,7 +607,16 @@ fn on_best<T>(
     id: &str,
     f: impl FnOnce(&Hermir, &hermir::EmulatorHandle<'_>, &hermir::Install) -> hermir::Result<T>,
 ) -> hermir::Result<T> {
-    let h = open()?;
+    on_best_in(None, id, f)
+}
+
+/// [`on_best`] on `account`'s copies, as [`open_in`] reads them.
+fn on_best_in<T>(
+    account: Option<&Path>,
+    id: &str,
+    f: impl FnOnce(&Hermir, &hermir::EmulatorHandle<'_>, &hermir::Install) -> hermir::Result<T>,
+) -> hermir::Result<T> {
+    let h = open_in(account)?;
     let emulator = h.emulator(id)?;
     let install = emulator
         .best()?
@@ -605,17 +624,22 @@ fn on_best<T>(
     f(&h, &emulator, &install)
 }
 
-/// The save units of `platform` on the best copy; `game` is the game's folder.
+/// The save units of `platform` on the best copy; `game` is the game's folder. `account` as
+/// [`open_in`] reads it, for this and the three below.
 pub fn units(
+    account: Option<&Path>,
     id: &str,
     platform: &str,
     game: Option<&Path>,
 ) -> hermir::Result<Vec<hermir::SaveUnit>> {
-    on_best(id, |h, e, i| e.units(i, &platform_id(h, platform), game))
+    on_best_in(account, id, |h, e, i| {
+        e.units(i, &platform_id(h, platform), game)
+    })
 }
 
 /// Each named unit written into `out`, a tar for a folder.
 pub fn export_units(
+    account: Option<&Path>,
     id: &str,
     platform: &str,
     game: Option<&Path>,
@@ -627,7 +651,7 @@ pub fn export_units(
         path: out.to_path_buf(),
         source: e,
     })?;
-    on_best(id, |h, e, i| {
+    on_best_in(account, id, |h, e, i| {
         let platform = platform_id(h, platform);
         units
             .iter()
@@ -637,7 +661,9 @@ pub fn export_units(
 }
 
 /// One unit put back from the file `from`, into the first of `kinds` with a place for it.
+#[allow(clippy::too_many_arguments)] // hermir's own `import_unit`, plus whose copies
 pub fn import_unit(
+    account: Option<&Path>,
     id: &str,
     platform: &str,
     game: Option<&Path>,
@@ -646,7 +672,7 @@ pub fn import_unit(
     from: &Path,
     others: &[String],
 ) -> hermir::Result<hermir::PrepareStep> {
-    on_best(id, |h, e, i| {
+    on_best_in(account, id, |h, e, i| {
         e.import_unit(
             i,
             &platform_id(h, platform),
@@ -672,8 +698,12 @@ pub fn install_content(
 }
 
 /// Whether the best copy has `platform`'s firmware; `None` when the platform needs none.
-pub fn firmware_status(id: &str, platform: &str) -> hermir::Result<Option<hermir::FirmwareStatus>> {
-    on_best(id, |h, e, i| {
+pub fn firmware_status(
+    account: Option<&Path>,
+    id: &str,
+    platform: &str,
+) -> hermir::Result<Option<hermir::FirmwareStatus>> {
+    on_best_in(account, id, |h, e, i| {
         e.firmware_status(i, &platform_id(h, platform))
     })
 }

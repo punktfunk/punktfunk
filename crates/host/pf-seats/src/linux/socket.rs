@@ -7,7 +7,9 @@
 //! peer [`command_allowed`] refuses is closed unanswered. A leftover socket from a crashed
 //! supervisor is replaced; a live one makes [`bind`] fail.
 
-use super::shared::{ACL_ACCESS, ACL_MASK};
+use super::shared::{
+    acl_bytes, ACL_ACCESS, ACL_GROUP_OBJ, ACL_MASK, ACL_NO_ID, ACL_OTHER, ACL_USER, ACL_USER_OBJ,
+};
 use super::{accounts, LinuxBackend};
 use crate::ipc::{ApiError, Command, CommandResult, ErrorCode, Request, Response};
 use crate::service::SeatService;
@@ -221,26 +223,14 @@ impl OwnerAcl {
 /// `group`, others nothing and, with `owner`, that uid `rw` under an `rw` mask. Without one it
 /// is the bare mode, which the kernel keeps as the mode alone.
 fn socket_acl(group: u16, owner: Option<u32>) -> Vec<u8> {
-    const NONE: u32 = u32::MAX;
-    let entry = |tag: u16, perm: u16, id: u32| {
-        [
-            &tag.to_le_bytes()[..],
-            &perm.to_le_bytes(),
-            &id.to_le_bytes(),
-        ]
-        .concat()
-    };
-    let mut acl = 2u32.to_le_bytes().to_vec();
-    acl.extend(entry(0x01, 6, NONE));
-    if let Some(uid) = owner {
-        acl.extend(entry(0x02, 6, uid));
-    }
-    acl.extend(entry(0x04, group, NONE));
+    let mut entries = vec![(ACL_USER_OBJ, 6, ACL_NO_ID)];
+    entries.extend(owner.map(|uid| (ACL_USER, 6, uid)));
+    entries.push((ACL_GROUP_OBJ, group, ACL_NO_ID));
     if owner.is_some() {
-        acl.extend(entry(ACL_MASK, 6, NONE));
+        entries.push((ACL_MASK, 6, ACL_NO_ID));
     }
-    acl.extend(entry(0x20, 0, NONE));
-    acl
+    entries.push((ACL_OTHER, 0, ACL_NO_ID));
+    acl_bytes(&entries)
 }
 
 /// How long the box host waits for `command`'s answer.

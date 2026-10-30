@@ -268,8 +268,16 @@ fn dir_in(at: &OwnedFd, name: &str, replace: bool) -> std::io::Result<OwnedFd> {
 
 /// The access ACL as the kernel stores it: a 4-byte version 2, then 8-byte entries, little-endian.
 pub(super) const ACL_ACCESS: &str = "system.posix_acl_access";
-/// An ACL entry's tag for the mask.
+/// The ACL a folder's new files and folders start with, stored the same way.
+const ACL_DEFAULT: &str = "system.posix_acl_default";
+/// An ACL entry's tags: the file's user, a named user, the file's group, the mask, others.
+pub(super) const ACL_USER_OBJ: u16 = 0x01;
+pub(super) const ACL_USER: u16 = 0x02;
+pub(super) const ACL_GROUP_OBJ: u16 = 0x04;
 pub(super) const ACL_MASK: u16 = 0x10;
+pub(super) const ACL_OTHER: u16 = 0x20;
+/// The id of an entry that names nobody.
+pub(super) const ACL_NO_ID: u32 = u32::MAX;
 /// Folders deeper than this below `games` keep their mask: the walk holds a handle per level.
 const ACL_DEPTH: usize = 64;
 /// The buffer an ACL is read into first, and the most it grows to: the kernel's xattr limit.
@@ -432,24 +440,23 @@ fn with_mask(acl: &[u8], perm: u16) -> Option<Vec<u8>> {
 
 /// The seat's private directories, owned by its user and in place before its unit starts: a
 /// missing bind source fails the unit with `226/NAMESPACE`. Then `saves/out` and `saves/in`,
-/// where its saves cross to and from the owner's plugins: the seat user's, group `games_gid`,
-/// `2770`. What is in any of them stays.
+/// where its saves cross to and from the owner's plugins: the seat user's, `0770`, with an ACL
+/// entry and a default one for the box owner's uid `owner`, so no other seat reaches them. What
+/// is in any of them stays.
 pub(super) fn ensure_seat_dirs(
     state: &Path,
     id: &SeatId,
     passwd: &Passwd,
-    games_gid: u32,
+    owner: Option<u32>,
 ) -> Result<(), BackendError> {
     let saves = seat_dir(state, id).join("saves");
-    let dirs = PRIVATE_DIRS
-        .map(|name| (seat_dir(state, id).join(name), passwd.gid, 0o700))
-        .into_iter()
-        .chain(["out", "in"].map(|name| (saves.join(name), games_gid, 0o2770)));
-    for (dir, gid, mode) in dirs {
+    let private = PRIVATE_DIRS.map(|name| (seat_dir(state, id).join(name), 0o700));
+    let exchange = ["out", "in"].map(|name| (saves.join(name), 0o770));
+    for (dir, mode) in private.into_iter().chain(exchange.clone()) {
         let io = |what: &str, e| io_err("seat_dirs", &format!("{what} {}", dir.display()), e);
         std::fs::create_dir_all(&dir).map_err(|e| io("create", e))?;
-        // Owned before the mode is set, so a change of group can't take the setgid bit.
-        std::os::unix::fs::chown(&dir, Some(passwd.uid), Some(gid)).map_err(|e| io("own", e))?;
+        std::os::unix::fs::chown(&dir, Some(passwd.uid), Some(passwd.gid))
+            .map_err(|e| io("own", e))?;
         std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(mode))
             .map_err(|e| io("set the mode of", e))?;
     }
@@ -459,7 +466,50 @@ pub(super) fn ensure_seat_dirs(
             &format!("set the mode of {}", saves.display()),
             e,
         )
-    })
+    })?;
+    for (dir, _) in &exchange {
+        let set = |name, default| {
+            let acl = exchange_acl(passwd.uid, owner, default);
+            rustix::fs::lsetxattr(dir, name, &acl, XattrFlags::empty())
+        };
+        // A filesystem without ACLs leaves the folder the seat's alone, which is no reason to
+        // keep the seat from starting.
+        if let Err(error) = set(ACL_ACCESS, false).and_then(|()| set(ACL_DEFAULT, true)) {
+            tracing::warn!(%error, dir = %dir.display(), "save exchange not opened to the box owner");
+        }
+    }
+    Ok(())
+}
+
+/// A save exchange's ACL: its user and own group `rwx`, others nothing, and the box owner
+/// `owner` `rwx`. The `default` one also names the seat, so a file either makes there stays
+/// readable by both. Without an owner, an earlier owner's entry goes.
+fn exchange_acl(seat: u32, owner: Option<u32>, default: bool) -> Vec<u8> {
+    let mut users: Vec<u32> = owner.filter(|&o| o != seat).into_iter().collect();
+    if default {
+        users.push(seat);
+        users.sort_unstable();
+    }
+    let mut entries = vec![(ACL_USER_OBJ, 7, ACL_NO_ID)];
+    entries.extend(users.iter().map(|&uid| (ACL_USER, 7, uid)));
+    entries.push((ACL_GROUP_OBJ, 7, ACL_NO_ID));
+    if !users.is_empty() {
+        entries.push((ACL_MASK, 7, ACL_NO_ID));
+    }
+    entries.push((ACL_OTHER, 0, ACL_NO_ID));
+    acl_bytes(&entries)
+}
+
+/// `entries` as the kernel stores an ACL: version 2, then `(tag, perm, id)` each, little-endian,
+/// sorted by tag and then id. The owner, group, mask and other entries take [`ACL_NO_ID`].
+pub(super) fn acl_bytes(entries: &[(u16, u16, u32)]) -> Vec<u8> {
+    let mut acl = 2u32.to_le_bytes().to_vec();
+    for (tag, perm, id) in entries {
+        acl.extend(tag.to_le_bytes());
+        acl.extend(perm.to_le_bytes());
+        acl.extend(id.to_le_bytes());
+    }
+    acl
 }
 
 /// Removes the seat's directories, its trust copy, its token and its library stage. Missing ones
@@ -1724,8 +1774,8 @@ mod tests {
         assert!(!dir.exists());
     }
 
-    /// The save exchange folders are the seat's and the games group's, setgid, and keep what
-    /// is in them across starts; removing the seat takes them.
+    /// The save exchange folders are the seat's own with the box owner's ACL entries, keep what
+    /// is in them across starts, and go with the seat.
     #[test]
     fn a_seat_s_save_exchange_is_kept_until_the_seat_goes() {
         let temp = tempfile::tempdir().unwrap();
@@ -1738,18 +1788,59 @@ mod tests {
             gecos: String::new(),
             home: state.join("home"),
         };
-        ensure_seat_dirs(state, &id(), &seat, me.gid()).unwrap();
+        ensure_seat_dirs(state, &id(), &seat, Some(4242)).unwrap();
         let saves = seat_dir(state, &id()).join("saves");
         assert_eq!(mode(&saves), 0o711);
         for name in ["out", "in"] {
-            assert_eq!(mode(&saves.join(name)), 0o2770, "{name}");
+            let dir = saves.join(name);
+            assert_eq!(mode(&dir), 0o770, "{name}");
+            let mut buf = vec![0u8; 256];
+            let Ok(len) = rustix::fs::getxattr(&dir, ACL_DEFAULT, &mut buf[..]) else {
+                eprintln!("no POSIX ACLs under {}: skipped", state.display());
+                continue;
+            };
+            assert_eq!(
+                &buf[..len],
+                exchange_acl(me.uid(), Some(4242), true),
+                "{name}"
+            );
+            let len = rustix::fs::getxattr(&dir, ACL_ACCESS, &mut buf[..]).unwrap();
+            assert_eq!(
+                &buf[..len],
+                exchange_acl(me.uid(), Some(4242), false),
+                "{name}"
+            );
         }
         assert_eq!(mode(&seat_dir(state, &id()).join("compatdata")), 0o700);
         std::fs::write(saves.join("out/slot.ps2"), "save").unwrap();
-        ensure_seat_dirs(state, &id(), &seat, me.gid()).unwrap();
+        ensure_seat_dirs(state, &id(), &seat, None).unwrap();
         assert!(saves.join("out/slot.ps2").exists());
         remove_seat_dirs(state, &id()).unwrap();
         assert!(!saves.exists());
+    }
+
+    /// The owner reaches the exchange and a new file in it; the seat is named in the default
+    /// ACL alone, uids in order; with no owner the access ACL is the bare mode.
+    #[test]
+    fn the_exchange_acl_names_the_seat_and_the_owner() {
+        let user = |uid: u32| (ACL_USER, 7, uid);
+        let base = |named: &[(u16, u16, u32)]| {
+            let mut e = vec![(ACL_USER_OBJ, 7, ACL_NO_ID)];
+            e.extend_from_slice(named);
+            e.push((ACL_GROUP_OBJ, 7, ACL_NO_ID));
+            if !named.is_empty() {
+                e.push((ACL_MASK, 7, ACL_NO_ID));
+            }
+            e.push((ACL_OTHER, 0, ACL_NO_ID));
+            acl_bytes(&e)
+        };
+        assert_eq!(exchange_acl(975, Some(1000), false), base(&[user(1000)]));
+        assert_eq!(
+            exchange_acl(1975, Some(1000), true),
+            base(&[user(1000), user(1975)])
+        );
+        assert_eq!(exchange_acl(975, None, false), base(&[]));
+        assert_eq!(exchange_acl(1000, Some(1000), false), base(&[]));
     }
 
     /// The door reads a seat host's token below `persistence::default_root()`.
