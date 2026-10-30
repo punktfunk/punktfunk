@@ -881,14 +881,10 @@ impl Driver {
     }
 }
 
-/// Upper bound on bitrate this stream's shape could use, in kbps.
-///
-/// The probe-measured ceiling is pure link capacity (`delivered × 0.7`) with
-/// no term for pixels. A CBR encoder fills whatever target it is handed, so
-/// utilization never supplies one. Deliberately generous: a bound on the
-/// absurd, not a quality opinion. Explicit-bitrate and PyroWave sessions
-/// never reach here.
-pub(crate) fn stream_ceiling_kbps(
+/// Upper bound on the bitrate this stream's shape could use, kbps: a bound on the absurd, not a
+/// quality opinion, since the probe's ceiling has no term for pixels. An embedder feeds it at
+/// the negotiated geometry as [`feed::Facts::stream_cap_kbps`]; PyroWave feeds the host's pin.
+pub fn stream_ceiling_kbps(
     width: u32,
     height: u32,
     refresh_hz: u32,
