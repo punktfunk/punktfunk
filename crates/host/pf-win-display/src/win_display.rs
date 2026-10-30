@@ -189,6 +189,16 @@ pub fn session_has_no_paths() -> bool {
     query_display_config(QDC_ALL_PATHS).is_ok_and(|(paths, _)| paths.is_empty())
 }
 
+/// Whether this session lists display paths, none of them on `key`'s adapter. A session that
+/// lists none is still waiting for its replacement adapter.
+pub fn adapter_left_session(key: CcdTargetKey) -> bool {
+    query_display_config(QDC_ALL_PATHS).is_ok_and(|(paths, _)| {
+        let on_adapter =
+            |p: &DISPLAYCONFIG_PATH_INFO| path_target_key(p).adapter_luid == key.adapter_luid;
+        !paths.is_empty() && !paths.iter().any(on_adapter)
+    })
+}
+
 /// EXPLICITLY activate `target_id` into its own display path — the last resort when neither the OS
 /// auto-activate nor the EXTEND preset lights a freshly-ADDed IDD target. A closed laptop lid makes
 /// Windows skip the auto-activate, and `SDC_TOPOLOGY_EXTEND` then reports success with no path
