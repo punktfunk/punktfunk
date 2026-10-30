@@ -228,11 +228,22 @@ pub(super) fn picture_size(codec: &MediaCodec) -> Option<(i32, i32)> {
     })
 }
 
+/// The dataspace a format change leaves: the stream's own colour, else the decoder's report.
+pub(super) fn stream_dataspace(
+    codec: &MediaCodec,
+    stream: Option<punktfunk_core::quic::ColorInfo>,
+) -> Option<DataSpace> {
+    stream
+        .map(|c| color_dataspace(&c))
+        .or_else(|| reported_dataspace(codec))
+}
+
 /// Map the decoder's reported output colour to a dataspace: BT.2020 PQ or HLG, BT.709 for SDR
-/// (sRGB when full range), `None` when the decoder reports no transfer (many omit it). The
-/// integer values are the Android MediaFormat colour constants the NDK shares: COLOR_TRANSFER
-/// SDR_VIDEO = 3, ST2084 = 6 (PQ/HDR10), HLG = 7; COLOR_RANGE FULL = 1, LIMITED = 2.
-pub(super) fn reported_dataspace(codec: &MediaCodec) -> Option<DataSpace> {
+/// (sRGB when full range), `None` without a transfer. Codec2 fills a decoder that reports nothing
+/// with its BT.709 default, so SDR here does not prove the stream is SDR. The integer values are
+/// the Android MediaFormat colour constants the NDK shares: COLOR_TRANSFER SDR_VIDEO = 3,
+/// ST2084 = 6 (PQ/HDR10), HLG = 7; COLOR_RANGE FULL = 1, LIMITED = 2.
+fn reported_dataspace(codec: &MediaCodec) -> Option<DataSpace> {
     let fmt = codec.output_format();
     let full_range = fmt.i32("color-range") == Some(1);
     match fmt.i32("color-transfer") {

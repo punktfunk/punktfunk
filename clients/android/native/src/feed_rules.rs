@@ -1,6 +1,6 @@
 //! What the MediaCodec loop's feed decides about each piece of an access unit: whether it may
-//! touch the codec, what one that cannot go in leaves behind, and the AV1 picture size a
-//! keyframe states. No codec and no clock: the loop describes the piece and applies the answer.
+//! touch the codec, what one that cannot go in leaves behind, and the AV1 picture size and colour
+//! a keyframe states. No codec and no clock: the loop describes the piece and applies the answer.
 //! The loop's feed is `State::feed` in `decode/async_loop.rs`.
 //!
 //! A sliced AU rides `BUFFER_FLAG_PARTIAL_FRAME` piece by piece, every piece but its last.
@@ -9,7 +9,11 @@
 //! no flush, and the next `first` piece re-syncs the feed.
 
 use punktfunk_core::packet::FLAG_SOF;
+use punktfunk_core::quic::ColorInfo;
 use punktfunk_core::session::Frame;
+
+/// H.273's unspecified transfer: the stream names no colour of its own.
+const TRC_UNSPECIFIED: u8 = 2;
 
 /// The AU open in the codec: pieces queued, the rest awaited. Loop-local: a codec rebuild ends
 /// the loop, so the ledger never outlives the codec it fed.
@@ -138,11 +142,40 @@ pub(crate) fn render_after(
     stated().map(|(w, h)| (w as i32, h as i32))
 }
 
+/// The stream's colour after a fed keyframe: what an AV1 sequence header states, which it parses
+/// only on an AV1 session. A keyframe that names none keeps the last word.
+pub(crate) fn colour_after(
+    prev: Option<ColorInfo>,
+    av1: bool,
+    stated: impl FnOnce() -> Option<ColorInfo>,
+) -> Option<ColorInfo> {
+    if !av1 {
+        return prev;
+    }
+    stated().filter(|c| c.transfer != TRC_UNSPECIFIED).or(prev)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{gate, render_after, spoiled, Cause, Gate, PartFeed, Piece, Spoiled};
+    use super::{colour_after, gate, render_after, spoiled, Cause, Gate, PartFeed, Piece, Spoiled};
     use punktfunk_core::packet::FLAG_SOF;
+    use punktfunk_core::quic::ColorInfo;
     use punktfunk_core::session::{Frame, FramePart};
+
+    /// A header states PQ or a flip back to SDR; one that names nothing keeps the last word, and
+    /// only AV1 parses for it.
+    #[test]
+    fn a_keyframe_states_the_stream_colour() {
+        let pq = ColorInfo::HDR10_BT2020_PQ;
+        let sdr = ColorInfo::SDR_BT709;
+        let unnamed = ColorInfo { transfer: 2, ..sdr };
+        assert_eq!(colour_after(None, true, || Some(pq)), Some(pq));
+        assert_eq!(colour_after(Some(pq), true, || Some(sdr)), Some(sdr));
+        assert_eq!(colour_after(Some(pq), true, || Some(unnamed)), Some(pq));
+        assert_eq!(colour_after(Some(pq), true, || None), Some(pq));
+        assert_eq!(colour_after(None, true, || Some(unnamed)), None);
+        assert_eq!(colour_after(None, false, || unreachable!()), None);
+    }
 
     /// A piece of AU 7 at `offset`.
     fn piece(first: bool, last: bool, offset: usize) -> Piece {

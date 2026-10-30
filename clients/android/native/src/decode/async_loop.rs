@@ -28,7 +28,9 @@ use super::surface_control::{Layer, PresentComplete};
 use super::vsync::{VsyncClock, VsyncShared};
 use super::{Backstops, DecodeOptions, FRAME_PARK_CAP, IN_FLIGHT_CAP};
 use crate::au_intake::{hand_on, Delivery, Intake};
-use crate::feed_rules::{gate, render_after, spoiled, Cause, Gate, PartFeed, Piece, Spoiled};
+use crate::feed_rules::{
+    colour_after, gate, render_after, spoiled, Cause, Gate, PartFeed, Piece, Spoiled,
+};
 use crate::input_stall::{
     rung_after_failure, InputStall, OutputSilence, RungFloor, INPUT_STALL_PATIENCE, SETTLED_FRAMES,
 };
@@ -36,6 +38,7 @@ use crate::present::verdict::Verdict;
 use crate::run_end::{after_failure, ending, Ending, Retry};
 use crate::rung_memory::{self, Entry, Key, Outcome, Start};
 use crate::sys::{now_monotonic_ns, sysprop};
+use punktfunk_core::quic::ColorInfo;
 
 /// One decoded output buffer ready to release: its codec buffer index + the pts the codec echoed
 /// (from the output callback's `BufferInfo`), used to pair the `decode` HUD stat, and the
@@ -1021,6 +1024,9 @@ struct State {
     /// The visible picture the newest AV1 keyframe's render_size states. A decoder that ignores
     /// it hands over the coded size, padding rows included.
     av1_render: Option<(i32, i32)>,
+    /// The colour the newest AV1 sequence header states. It outranks the codec's report, which
+    /// reads BT.709 until a decoder writes its own.
+    stream_colour: Option<ColorInfo>,
     /// The first frame of a new format: this run ends and the next codec takes it.
     reformat: Option<Frame>,
 }
@@ -1143,6 +1149,7 @@ impl State {
             loss_open: false,
             unclean: false,
             av1_render: None,
+            stream_colour: None,
             reformat: None,
         }
     }
@@ -1259,7 +1266,8 @@ impl State {
                 ctx.decoded_size
                     .store(crate::session::pack_surface_size(w, h), Ordering::Relaxed);
             }
-            self.sink.on_format_changed(ctx, picture);
+            self.sink
+                .on_format_changed(ctx, picture, self.stream_colour);
         }
         self.feed(ctx, pass);
         // The cadence loop's re-anchor seam. An arm is a loss: the frames past it come through
@@ -1401,6 +1409,19 @@ impl State {
             self.av1_render = render_after(self.av1_render, av1, || {
                 pf_bitstream::av1::render_size(&frame.data)
             });
+            let colour = colour_after(self.stream_colour, av1, || {
+                pf_bitstream::av1::sequence_info(&frame.data).map(|s| ColorInfo {
+                    primaries: s.color_primaries,
+                    transfer: s.transfer_characteristics,
+                    matrix: s.matrix_coefficients,
+                    full_range: u8::from(s.full_range),
+                })
+            });
+            if colour != self.stream_colour {
+                self.stream_colour = colour;
+                // A flip re-tags the frames still in the decoder a few refreshes early.
+                self.sink.on_format_changed(ctx, None, colour);
+            }
         }
         self.unclean |= self.loss_open;
         // `fed` counts ACCESS UNITS toward the HUD's fed/decoded balance, so the closing piece

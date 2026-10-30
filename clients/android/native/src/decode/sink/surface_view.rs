@@ -22,7 +22,7 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use super::super::async_loop::{Ctx, OutputReady};
-use super::super::display::{apply_dataspace, color_dataspace, reported_dataspace, DisplayTracker};
+use super::super::display::{apply_dataspace, color_dataspace, stream_dataspace, DisplayTracker};
 use super::super::latency::{now_realtime_ns, p50_max_ms};
 use super::super::surface_control::{Layer, PresentComplete};
 use super::super::vsync::VsyncShared;
@@ -606,11 +606,21 @@ impl Sink for SurfaceViewSink {
     /// Never arrives: this sink applies no transactions.
     fn on_present_complete(&mut self, _pc: PresentComplete, _clock_offset: i64, _ctx: &Ctx) {}
 
-    /// The codec's format-change hook re-tags the window with what it derived, so a decoder that
-    /// reports no transfer gets the negotiated colour put back.
-    fn on_format_changed(&mut self, ctx: &Ctx, _picture: Option<(i32, i32)>) {
-        match reported_dataspace(&ctx.codec) {
-            Some(ds) => apply_dataspace(&ctx.window, ds, &mut self.applied_ds, "decoder"),
+    /// A format change re-tags the window, and neither the stream nor the codec naming a colour
+    /// puts the negotiated one back.
+    fn on_format_changed(
+        &mut self,
+        ctx: &Ctx,
+        _picture: Option<(i32, i32)>,
+        stream: Option<ColorInfo>,
+    ) {
+        let source = if stream.is_some() {
+            "stream"
+        } else {
+            "decoder"
+        };
+        match stream_dataspace(&ctx.codec, stream) {
+            Some(ds) => apply_dataspace(&ctx.window, ds, &mut self.applied_ds, source),
             None => {
                 self.applied_ds = None;
                 let ds = color_dataspace(&ctx.client.video_format().color);
