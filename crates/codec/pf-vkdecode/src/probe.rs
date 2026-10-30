@@ -20,6 +20,8 @@
 use ash::vk;
 use ash::vk::native as hh;
 
+use crate::caps::derive_caps;
+use crate::caps::query_caps_on;
 use crate::caps::query_formats_on;
 use crate::caps::DecodeProfile;
 use crate::caps::VideoFormat;
@@ -162,6 +164,45 @@ pub unsafe fn probe_video_formats(
             }
         })
         .collect()
+}
+
+/// The ops in `advertised` whose 8-bit profile derives to a decoder here. A queue family lists
+/// what the hardware does; a session also needs an arrangement the presenter can read. A codec
+/// promised to a host without one costs a session the client tears down and re-dials.
+///
+/// # Safety
+///
+/// As [`probe_video_formats`].
+pub unsafe fn openable_decode_ops(
+    entry: &ash::Entry,
+    instance: &ash::Instance,
+    physical_device: vk::PhysicalDevice,
+    advertised: vk::VideoCodecOperationFlagsKHR,
+) -> vk::VideoCodecOperationFlagsKHR {
+    let video_queue_instance = ash::khr::video_queue::Instance::new(entry, instance);
+    let mut openable = vk::VideoCodecOperationFlagsKHR::NONE;
+    for (profile, decode_profile, wanted) in probed_profiles() {
+        let op = decode_profile.codec_op();
+        if wanted != NV12 || !advertised.contains(op) {
+            continue;
+        }
+        // SAFETY: caller contract — live instance the video_queue table was loaded from,
+        // and one of its physical devices.
+        let caps = unsafe {
+            query_caps_on(
+                instance,
+                &video_queue_instance,
+                physical_device,
+                decode_profile,
+            )
+        };
+        match caps.map(|raw| derive_caps(&raw, wanted)) {
+            Ok(Ok(_)) => openable |= op,
+            Ok(Err(refused)) => tracing::info!(profile, %refused, "decode profile unusable"),
+            Err(refused) => tracing::info!(profile, %refused, "decode profile unusable"),
+        }
+    }
+    openable
 }
 
 /// Image-format query for (`format`, `usage`) plus the profile list.

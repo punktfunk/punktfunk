@@ -1318,6 +1318,15 @@ fn decode_export(
         caps.dev_props.vendor_id,
         caps.decode_caps.as_raw(),
     );
+    let decode_ops = if caps.video_ok {
+        // SAFETY: `instance` is live and came from `entry`; `pdev` is one of its devices.
+        let openable = unsafe {
+            pf_vkdecode::probe::openable_decode_ops(entry, instance, pdev, caps.decode_caps)
+        };
+        decode_ops & openable.as_raw()
+    } else {
+        decode_ops
+    };
     pf_client_core::video::VulkanDecodeDevice {
         get_instance_proc_addr: entry.static_fn().get_instance_proc_addr as usize,
         instance: instance.handle().as_raw() as usize,

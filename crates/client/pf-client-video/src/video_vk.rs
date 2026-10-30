@@ -158,7 +158,8 @@ pub struct VulkanDecodeDevice {
     pub graphics_qf: u32,
     /// Video-decode family. May equal `graphics_qf`; the native rung must detect that (`submit_queues_collide`).
     pub decode_qf: u32,
-    /// Raw `VkVideoCodecOperationFlagsKHR` the decode family advertises.
+    /// Raw `VkVideoCodecOperationFlagsKHR` the decode family advertises and a decoder can
+    /// open here (`pf_vkdecode::probe::openable_decode_ops`).
     pub decode_video_caps: u32,
     /// Extensions enabled at instance/device creation. Pyrowave replays these
     /// verbatim into pinned create-info, so they must match reality.

@@ -160,6 +160,25 @@ fn smoke(decoder: &mut VkDecoder<impl VkCodec>, aus: &[&[u8]], geometry: &Geomet
 
 #[test]
 #[ignore = "needs a Vulkan Video H.264 decode device (fleet boxes; see module docs)"]
+fn the_startup_probe_opens_what_this_device_decodes() {
+    let _gpu = common::gpu_lock();
+    let setup = common::bring_up(&common::Request {
+        codec: common::H264,
+        graphics: common::Graphics::DecodeFamilyIsFine,
+        report_families: false,
+    });
+    let h264 = vk::VideoCodecOperationFlagsKHR::DECODE_H264;
+    // SAFETY: `setup` made the instance through its entry, and `pd` is one of its devices.
+    let openable = unsafe {
+        pf_vkdecode::probe::openable_decode_ops(&setup.entry, &setup.instance, setup.pd, h264)
+    };
+    assert_eq!(openable, h264, "only what was advertised, and all of it");
+    // SAFETY: nothing else references the setup's handles.
+    unsafe { setup.destroy() };
+}
+
+#[test]
+#[ignore = "needs a Vulkan Video H.264 decode device (fleet boxes; see module docs)"]
 fn h264_decodes_48_aus_holding_four_frames_like_the_real_client() {
     // One codec at a time on the device (see `common::gpu_lock`).
     let _gpu = common::gpu_lock();

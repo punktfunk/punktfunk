@@ -684,6 +684,15 @@ impl DecodeProfile {
             DecodeProfile::Av1(key) => ProfileChain::Av1(Av1ProfileChain::new(key)),
         }
     }
+
+    /// The decode family's operation this profile runs on.
+    pub(crate) fn codec_op(self) -> vk::VideoCodecOperationFlagsKHR {
+        match self {
+            DecodeProfile::H264(_) => vk::VideoCodecOperationFlagsKHR::DECODE_H264,
+            DecodeProfile::H265(_) => vk::VideoCodecOperationFlagsKHR::DECODE_H265,
+            DecodeProfile::Av1(_) => vk::VideoCodecOperationFlagsKHR::DECODE_AV1,
+        }
+    }
 }
 
 /// One codec's profile chain, type-erased for shared creation paths. Same
@@ -721,6 +730,30 @@ pub(crate) unsafe fn query_caps(
     dev: &DecodeDevice,
     profile: DecodeProfile,
 ) -> Result<RawCaps, vk::Result> {
+    // SAFETY: the DeviceHandles contract makes all three live, and the physical device
+    // the instance's.
+    unsafe {
+        query_caps_on(
+            dev.instance(),
+            dev.video_queue_instance(),
+            dev.physical_device(),
+            profile,
+        )
+    }
+}
+
+/// [`query_caps`] against a bare physical device — no `VkDevice`.
+///
+/// # Safety
+///
+/// `instance` and `video_queue_instance` are loaded against one live `VkInstance`, and
+/// `physical_device` is one of its physical devices.
+pub(crate) unsafe fn query_caps_on(
+    instance: &ash::Instance,
+    video_queue_instance: &ash::khr::video_queue::Instance,
+    physical_device: vk::PhysicalDevice,
+    profile: DecodeProfile,
+) -> Result<RawCaps, vk::Result> {
     let mut chain = profile.chain();
     let wired = chain.wire();
 
@@ -738,15 +771,12 @@ pub(crate) unsafe fn query_caps(
         DecodeProfile::Av1(_) => caps.push_next(&mut av1_caps),
     };
     let mut caps = caps.push_next(&mut decode_caps);
-    // SAFETY: physical device is live (DeviceHandles contract); `wired` roots a
-    // fully wired, immovable chain; `caps` chains driver-fillable structs that all
-    // outlive the call.
+    // SAFETY: physical device is live (fn contract); `wired` roots a fully wired,
+    // immovable chain; `caps` chains driver-fillable structs that all outlive the call.
     let r = unsafe {
-        (dev.video_queue_instance()
+        (video_queue_instance
             .fp()
-            .get_physical_device_video_capabilities_khr)(
-            dev.physical_device(), wired, &mut caps
-        )
+            .get_physical_device_video_capabilities_khr)(physical_device, wired, &mut caps)
     };
     if r != vk::Result::SUCCESS {
         return Err(r);
@@ -785,17 +815,25 @@ pub(crate) unsafe fn query_caps(
     // roles) so the answers validate the images the pools build.
     // SAFETY: same liveness as above; the helper wires its own chain (this and
     // the two calls below).
-    let dpb_formats = unsafe { query_formats(dev, profile, DPB_USAGE)? };
+    let dpb_formats =
+        unsafe { query_formats_on(video_queue_instance, physical_device, profile, DPB_USAGE)? };
     // SAFETY: as above.
-    let output_formats = unsafe { query_formats(dev, profile, OUTPUT_USAGE)? };
+    let output_formats =
+        unsafe { query_formats_on(video_queue_instance, physical_device, profile, OUTPUT_USAGE)? };
     // SAFETY: as above.
-    let coincide_formats = unsafe { query_formats(dev, profile, COINCIDE_USAGE)? };
+    let coincide_formats = unsafe {
+        query_formats_on(
+            video_queue_instance,
+            physical_device,
+            profile,
+            COINCIDE_USAGE,
+        )?
+    };
     let ycbcr_formats = OUTPUT_FORMATS
         .into_iter()
-        .filter(|format| {
+        .filter(|&format| {
             // SAFETY: same liveness as above; a physical-device query.
-            unsafe { device_ycbcr_conversion(dev.instance(), dev.physical_device(), *format) }
-                .is_some()
+            unsafe { device_ycbcr_conversion(instance, physical_device, format) }.is_some()
         })
         .collect();
 
