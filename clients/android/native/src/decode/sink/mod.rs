@@ -71,8 +71,14 @@ pub(super) trait Sink {
     /// One ASurfaceControl transaction completed; `clock_offset` is this pass's.
     fn on_present_complete(&mut self, pc: PresentComplete, clock_offset: i64, ctx: &Ctx);
 
-    /// The codec's output format changed; `picture` is its new picture size, if known.
-    fn on_format_changed(&mut self, ctx: &Ctx, picture: Option<(i32, i32)>);
+    /// The picture's size or colour changed: `picture` is the codec's new size, if known, and
+    /// `stream` the colour the stream's own header states, which outranks the codec's report.
+    fn on_format_changed(
+        &mut self,
+        ctx: &Ctx,
+        picture: Option<(i32, i32)>,
+        stream: Option<ColorInfo>,
+    );
 
     /// The re-anchor gate armed: the cadence loop re-anchors on the next frame.
     fn reset_cadence(&mut self);

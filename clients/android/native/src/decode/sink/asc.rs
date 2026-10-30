@@ -14,6 +14,7 @@ use ndk::hardware_buffer::HardwareBuffer;
 use ndk::media::image_reader::{AcquireResult, Image, ImageFormat, ImageReader};
 use ndk::media::media_codec::MediaCodec;
 use ndk::native_window::NativeWindow;
+use punktfunk_core::quic::ColorInfo;
 use std::collections::VecDeque;
 use std::os::fd::{AsFd, OwnedFd};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -21,7 +22,7 @@ use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 use super::super::async_loop::{Ctx, DecodeEvent, OutputReady};
-use super::super::display::reported_dataspace;
+use super::super::display::stream_dataspace;
 use super::super::latency::{now_realtime_ns, p50_max_ms, take_by_pts};
 use super::super::surface_control::{fence_signal_ns, present, Layer, PresentComplete};
 use super::super::vsync::VsyncShared;
@@ -846,14 +847,18 @@ impl Sink for AscSink {
         drop(retired);
     }
 
-    /// ASC carries the colour on the transaction, not the SurfaceView window. It refines only
-    /// when the codec reports a transfer: a `None` echo (decoders commonly omit
-    /// `color-transfer`) must not clobber the negotiated dataspace.
-    fn on_format_changed(&mut self, ctx: &Ctx, picture: Option<(i32, i32)>) {
+    /// ASC carries the colour on the transaction, not the SurfaceView window. Neither the stream
+    /// nor the codec naming a colour leaves the negotiated dataspace standing.
+    fn on_format_changed(
+        &mut self,
+        ctx: &Ctx,
+        picture: Option<(i32, i32)>,
+        stream: Option<ColorInfo>,
+    ) {
         if let Some((w, h)) = picture {
             self.set_src_size(w, h);
         }
-        if let Some(ds) = reported_dataspace(&ctx.codec) {
+        if let Some(ds) = stream_dataspace(&ctx.codec, stream) {
             self.set_dataspace(i32::from(ds));
         }
     }
