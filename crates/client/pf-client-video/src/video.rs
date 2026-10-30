@@ -185,7 +185,11 @@ pub struct NativeVkFrame {
     /// the stream's and can change mid-stream. Assuming 8-bit over P010 displays wrong.
     pub vk_format: RawVkFormat,
     /// Per-plane `VkImageView`s for [`Self::vk_format`] — the presenter's planar CSC contract.
+    /// Zero on a device with no plane views; read [`Self::ycbcr_view`] there.
     pub plane_views: [u64; 2],
+    /// The picture through a sampler Y'CbCr conversion built from
+    /// `pf_vkdecode::ycbcr_conversion_info`. Zero where [`Self::plane_views`] exist.
+    pub ycbcr_view: u64,
     pub layer: u32,
     /// Layout when the semaphore signals. The presenter must restore it after sampling.
     pub layout: NativeVkLayout,

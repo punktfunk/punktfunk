@@ -127,7 +127,12 @@ workspace. See `docs/agents/domain.md`.
 
 ## Vulkan verification
 
-- `sh scripts/vk-validation-tests.sh` runs the ignored GPU tests of pf-zerocopy, pf-encode and
-  pf-vkdecode under the Khronos validation layer, on a box with a device and the layer
-  installed. It exits 1 on any validation error and prints each under its test. A test that
-  fails for the driver's own reasons does not change the exit code: compare those with `main`.
+- `sh scripts/vk-validation-tests.sh` runs the ignored GPU tests of pf-zerocopy, pf-encode,
+  pf-vkdecode and the presenter's CSC under the Khronos validation layer, on a box with a device
+  and the layer installed. It exits 1 on any validation error and prints each under its test. A
+  test that fails for the driver's own reasons does not change the exit code: compare those with
+  `main`.
+- `PUNKTFUNK_VKDECODE_ARRANGEMENT=sampler` puts any card on the route a device with no plane
+  views takes (Pascal on Linux, which we do not own). The script runs pf-vkdecode's tests that way.
+- On NVIDIA an H.264 decode faults inside the driver under the layer (615.78), and that ends its
+  test binary. Run those tests bare, and the layer with `--skip h264`.

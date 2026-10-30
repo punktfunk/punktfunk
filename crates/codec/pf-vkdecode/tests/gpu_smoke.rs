@@ -106,14 +106,21 @@ fn smoke(decoder: &mut VkDecoder<impl VkCodec>, aus: &[&[u8]], geometry: &Geomet
                 assert_ne!(frame.image, vk::Image::null());
                 assert_ne!(frame.semaphore, vk::Semaphore::null());
                 assert!(frame.value > 0);
+                let conversion = frame.ycbcr_view != vk::ImageView::null();
+                assert_eq!(
+                    conversion,
+                    frame.plane_views[0] == vk::ImageView::null(),
+                    "a picture is read through its plane views or its conversion, one of them"
+                );
                 eprintln!(
-                    "geometry: allocated {}x{} display {}x{} format {:?} layout {:?}",
+                    "geometry: allocated {}x{} display {}x{} format {:?} layout {:?} read through {}",
                     frame.coded_width,
                     frame.coded_height,
                     frame.crop.width,
                     frame.crop.height,
                     frame.format,
                     frame.layout,
+                    if conversion { "a conversion" } else { "plane views" },
                 );
                 geometry_checked = true;
             }

@@ -17,6 +17,7 @@
 
 use ash::vk;
 
+use crate::caps::device_ycbcr_conversion;
 use crate::caps::DecodeCaps;
 use crate::caps::DecodeProfile;
 use crate::caps::COINCIDE_USAGE;
@@ -51,7 +52,11 @@ pub struct PoolPlan {
 /// target. Layered coincide puts all of them in one array image.
 pub fn plan_pools(caps: &DecodeCaps, required_slots: u32) -> PoolPlan {
     let picture_count = required_slots + HOLD_HEADROOM;
-    let picture_flags = vk::ImageCreateFlags::MUTABLE_FORMAT;
+    let picture_flags = if caps.plane_view_formats.is_some() {
+        vk::ImageCreateFlags::MUTABLE_FORMAT
+    } else {
+        vk::ImageCreateFlags::empty()
+    };
     if caps.coincide {
         PoolPlan {
             dpb_image_count: 0,
@@ -120,8 +125,11 @@ pub(crate) struct Picture {
     /// Full-picture view of [`Self::layer`]: decode dst and (coincide) DPB.
     pub view: vk::ImageView,
     /// Per-plane views of [`Self::layer`] for the presenter's sampler, formats
-    /// from [`crate::caps::plane_formats`].
+    /// from [`crate::caps::plane_formats`]. Null where the pool has a conversion.
     pub plane_views: [vk::ImageView; 2],
+    /// [`Self::layer`] through the pool's sampler Y'CbCr conversion, on a device with no
+    /// plane views. Null otherwise.
+    pub ycbcr_view: vk::ImageView,
     /// The picture's own timeline semaphore (AVVkFrame contract).
     pub semaphore: vk::Semaphore,
     /// Latest timeline value signalled or enqueued. Decoder write, then
@@ -158,6 +166,8 @@ pub(crate) struct PicturePool {
     pub(crate) format: vk::Format,
     /// The pictures carry TRANSFER_SRC ([`allow_copy_out`]).
     pub(crate) copyable: bool,
+    /// Reads every [`Picture::ycbcr_view`]. Null on a pool with plane views.
+    ycbcr: vk::SamplerYcbcrConversion,
     pub(crate) pictures: Vec<Picture>,
 }
 
@@ -184,8 +194,18 @@ impl PicturePool {
             copyable: plan
                 .picture_usage
                 .contains(vk::ImageUsageFlags::TRANSFER_SRC),
+            ycbcr: vk::SamplerYcbcrConversion::null(),
             pictures: Vec::new(),
         };
+        if caps.plane_view_formats.is_none() {
+            // SAFETY: fn contract: the physical device is `dev`'s own.
+            let info = unsafe {
+                device_ycbcr_conversion(dev.instance(), dev.physical_device(), caps.output_format)
+            }
+            .ok_or(vk::Result::ERROR_FORMAT_NOT_SUPPORTED)?;
+            // SAFETY: live device; Drop destroys it after every view made from it.
+            pool.ycbcr = unsafe { pool.device.create_sampler_ycbcr_conversion(&info, None)? };
+        }
         let families = dev.sharing_families();
         let layers = plan.picture_layers_per_image.max(1);
         let image_count = plan.picture_count.div_ceil(layers);
@@ -218,6 +238,7 @@ impl PicturePool {
                 layer,
                 view: vk::ImageView::null(),
                 plane_views: [vk::ImageView::null(); 2],
+                ycbcr_view: vk::ImageView::null(),
                 semaphore: vk::Semaphore::null(),
                 value: 0,
                 bound: false,
@@ -241,23 +262,38 @@ impl PicturePool {
                     vk::ImageAspectFlags::COLOR,
                     layer,
                     decode_usage,
+                    vk::SamplerYcbcrConversion::null(),
                 )?;
-                pool.pictures[picture].plane_views[0] = create_view(
-                    &pool.device,
-                    image,
-                    caps.plane_view_formats[0],
-                    vk::ImageAspectFlags::PLANE_0,
-                    layer,
-                    vk::ImageUsageFlags::SAMPLED,
-                )?;
-                pool.pictures[picture].plane_views[1] = create_view(
-                    &pool.device,
-                    image,
-                    caps.plane_view_formats[1],
-                    vk::ImageAspectFlags::PLANE_1,
-                    layer,
-                    vk::ImageUsageFlags::SAMPLED,
-                )?;
+                if let Some(formats) = caps.plane_view_formats {
+                    pool.pictures[picture].plane_views[0] = create_view(
+                        &pool.device,
+                        image,
+                        formats[0],
+                        vk::ImageAspectFlags::PLANE_0,
+                        layer,
+                        vk::ImageUsageFlags::SAMPLED,
+                        vk::SamplerYcbcrConversion::null(),
+                    )?;
+                    pool.pictures[picture].plane_views[1] = create_view(
+                        &pool.device,
+                        image,
+                        formats[1],
+                        vk::ImageAspectFlags::PLANE_1,
+                        layer,
+                        vk::ImageUsageFlags::SAMPLED,
+                        vk::SamplerYcbcrConversion::null(),
+                    )?;
+                } else {
+                    pool.pictures[picture].ycbcr_view = create_view(
+                        &pool.device,
+                        image,
+                        caps.output_format,
+                        vk::ImageAspectFlags::COLOR,
+                        layer,
+                        vk::ImageUsageFlags::SAMPLED,
+                        pool.ycbcr,
+                    )?;
+                }
             }
             let mut type_info = vk::SemaphoreTypeCreateInfo::default()
                 .semaphore_type(vk::SemaphoreType::TIMELINE)
@@ -310,8 +346,11 @@ impl Drop for PicturePool {
                 self.device.destroy_image_view(p.view, None);
                 self.device.destroy_image_view(p.plane_views[0], None);
                 self.device.destroy_image_view(p.plane_views[1], None);
+                self.device.destroy_image_view(p.ycbcr_view, None);
                 self.device.destroy_semaphore(p.semaphore, None);
             }
+            self.device
+                .destroy_sampler_ycbcr_conversion(self.ycbcr, None);
             for image in self.images.drain(..) {
                 self.device.destroy_image(image, None);
             }
@@ -384,6 +423,7 @@ impl DpbPool {
                     vk::ImageAspectFlags::COLOR,
                     layer,
                     plan.dpb_usage,
+                    vk::SamplerYcbcrConversion::null(),
                 )?
             };
             pool.dpb_views.push(view);
@@ -493,7 +533,8 @@ unsafe fn create_video_image(
 
 /// Single-layer 2D view (`base_array_layer = layer`, identity swizzle) usable for `usage`
 /// only. A view inherits the image's whole usage unless narrowed, and then must carry
-/// every format feature of it.
+/// every format feature of it. A non-null `conversion` is how a sampled multi-planar
+/// COLOR view is legal at all.
 ///
 /// # Safety
 ///
@@ -507,9 +548,11 @@ unsafe fn create_view(
     aspect: vk::ImageAspectFlags,
     layer: u32,
     usage: vk::ImageUsageFlags,
+    conversion: vk::SamplerYcbcrConversion,
 ) -> Result<vk::ImageView, vk::Result> {
     let mut view_usage = vk::ImageViewUsageCreateInfo::default().usage(usage);
-    let ci = vk::ImageViewCreateInfo::default()
+    let mut converted = vk::SamplerYcbcrConversionInfo::default().conversion(conversion);
+    let mut ci = vk::ImageViewCreateInfo::default()
         .image(image)
         .view_type(vk::ImageViewType::TYPE_2D)
         .format(format)
@@ -521,6 +564,9 @@ unsafe fn create_view(
             base_array_layer: layer,
             layer_count: 1,
         });
+    if conversion != vk::SamplerYcbcrConversion::null() {
+        ci = ci.push_next(&mut converted);
+    }
     // SAFETY: fn contract: live `image`, `layer` in range, `format`/`aspect`
     // compatible (COLOR same-format; plane aspects under MUTABLE_FORMAT).
     unsafe { device.create_image_view(&ci, None) }
@@ -567,6 +613,7 @@ pub(crate) mod tests {
             dpb_formats: vec![entry(DPB_USAGE)],
             output_formats: vec![entry(OUTPUT_USAGE)],
             coincide_formats: vec![entry(COINCIDE_USAGE)],
+            ycbcr_formats: Vec::new(),
         };
         derive_caps(&raw, NV12).unwrap()
     }
@@ -590,6 +637,13 @@ pub(crate) mod tests {
         );
         assert_eq!(plan.picture_layers_per_image, 1);
         assert_eq!(plan.picture_flags, vk::ImageCreateFlags::MUTABLE_FORMAT);
+    }
+
+    #[test]
+    fn a_pool_without_plane_views_stays_inside_the_reported_create_flags() {
+        let mut no_planes = caps(true, false);
+        no_planes.plane_view_formats = None;
+        assert!(plan_pools(&no_planes, 8).picture_flags.is_empty());
     }
 
     #[test]
@@ -633,6 +687,7 @@ pub(crate) mod tests {
             layer: 0,
             view: vk::ImageView::null(),
             plane_views: [vk::ImageView::null(); 2],
+            ycbcr_view: vk::ImageView::null(),
             semaphore: vk::Semaphore::null(),
             value: 0,
             bound: true,

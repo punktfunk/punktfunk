@@ -1581,6 +1581,7 @@ pub(crate) fn build_frame(
         format,
         view: picture.view,
         plane_views: picture.plane_views,
+        ycbcr_view: picture.ycbcr_view,
         layer: picture.layer,
         layout: if coincide {
             vk::ImageLayout::VIDEO_DECODE_DPB_KHR
@@ -2084,7 +2085,7 @@ mod tests {
             max_level_idc: crate::caps::MaxLevelIdc::H264(0),
             dpb_format: crate::caps::NV12,
             output_format: crate::caps::NV12,
-            plane_view_formats: [vk::Format::R8_UNORM, vk::Format::R8G8_UNORM],
+            plane_view_formats: Some([vk::Format::R8_UNORM, vk::Format::R8G8_UNORM]),
             std_header_version: vk::ExtensionProperties::default(),
         };
         let extent = |width, height| vk::Extent2D { width, height };

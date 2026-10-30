@@ -968,6 +968,8 @@ impl Presenter {
             hw_win,
             csc: m.csc,
             csc_planar: m.csc_planar,
+            csc_ycbcr: CscPass::default(),
+            csc_ycbcr_format: vk::Format::UNDEFINED,
             cpu_planes: None,
             video_export,
             overlay_pipe: m.overlay_pipe,

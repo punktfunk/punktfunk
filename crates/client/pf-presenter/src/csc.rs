@@ -2,8 +2,9 @@
 //! `yuv_to_rgb`, folded for the shader's push constants) and the pipeline that
 //! renders imported planes into the presenter's video image.
 //!
-//! Not `VK_KHR_sampler_ycbcr_conversion`: the ext cannot express the PQ path,
-//! and range handling varies by driver. Coefficients live in
+//! The colour maths is never `VK_KHR_sampler_ycbcr_conversion`: the ext cannot express
+//! the PQ path, and range handling varies by driver. A device with no plane views takes
+//! its chroma reconstruction alone ([`CscPass::new_ycbcr`]). Coefficients live in
 //! `pf_client_core::video::csc_rows` (shared with D3D11 and the Apple port).
 
 use crate::vk::gpu::Pass;
@@ -18,6 +19,19 @@ pub use pf_client_core::video::csc_rows;
 pub struct CscPass {
     pub pass: Pass,
     pub desc_set: vk::DescriptorSet,
+    /// The immutable sampler's conversion, on the [`Self::new_ycbcr`] pipe only.
+    ycbcr: vk::SamplerYcbcrConversion,
+}
+
+/// Which pass samples a frame.
+#[derive(Clone, Copy, PartialEq)]
+pub enum CscPipe {
+    /// Two plane views: dmabuf, Vulkan Video, D3D11 slots.
+    Nv12,
+    /// Three plane views: PyroWave, software I420.
+    Planar,
+    /// One view through a sampler Y'CbCr conversion: Vulkan Video with no plane views.
+    Ycbcr,
 }
 
 impl CscPass {
@@ -29,6 +43,7 @@ impl CscPass {
             attachment_format,
             2,
             pf_client_core::video_csc_spv::NV12_CSC_FRAG,
+            None,
         )
     }
 
@@ -41,6 +56,25 @@ impl CscPass {
             attachment_format,
             3,
             pf_client_core::video_csc_spv::PLANAR_CSC_FRAG,
+            None,
+        )
+    }
+
+    /// One binding, read through an immutable sampler holding `conversion`, which must be
+    /// defined identically to the conversion on the bound view. `descriptors` is the
+    /// driver's `combinedImageSamplerDescriptorCount` for the picture format.
+    pub fn new_ycbcr(
+        device: &ash::Device,
+        attachment_format: vk::Format,
+        conversion: &vk::SamplerYcbcrConversionCreateInfo<'_>,
+        descriptors: u32,
+    ) -> Result<CscPass> {
+        Self::build(
+            device,
+            attachment_format,
+            1,
+            pf_client_core::video_csc_spv::YCBCR_CSC_FRAG,
+            Some((conversion, descriptors)),
         )
     }
 
@@ -50,8 +84,10 @@ impl CscPass {
         attachment_format: vk::Format,
         plane_bindings: u32,
         frag_spv: &[u8],
+        ycbcr: Option<(&vk::SamplerYcbcrConversionCreateInfo<'_>, u32)>,
     ) -> Result<CscPass> {
-        let fill = |p: &mut CscPass| p.fill(device, attachment_format, plane_bindings, frag_spv);
+        let fill =
+            |p: &mut CscPass| p.fill(device, attachment_format, plane_bindings, frag_spv, ycbcr);
         fill_or_destroy(device, fill, Self::destroy)
     }
 
@@ -61,6 +97,7 @@ impl CscPass {
         attachment_format: vk::Format,
         plane_bindings: u32,
         frag_spv: &[u8],
+        ycbcr: Option<(&vk::SamplerYcbcrConversionCreateInfo<'_>, u32)>,
     ) -> Result<()> {
         // Fully overwritten (DONT_CARE load). Ends TRANSFER_SRC so the letterbox blit
         // needs no extra barrier.
@@ -106,18 +143,24 @@ impl CscPass {
         }
         .context("CSC render pass")?;
 
+        // A conversion's sampler filters as its chroma does.
+        let filter = ycbcr.map_or(vk::Filter::LINEAR, |(info, _)| info.chroma_filter);
+        let mut sampler = vk::SamplerCreateInfo::default()
+            .mag_filter(filter)
+            .min_filter(filter)
+            .address_mode_u(vk::SamplerAddressMode::CLAMP_TO_EDGE)
+            .address_mode_v(vk::SamplerAddressMode::CLAMP_TO_EDGE)
+            .address_mode_w(vk::SamplerAddressMode::CLAMP_TO_EDGE);
+        let mut converted = vk::SamplerYcbcrConversionInfo::default();
+        if let Some((info, _)) = ycbcr {
+            // SAFETY: handles owned by this type live for the call; `info` is the caller's.
+            self.ycbcr = unsafe { device.create_sampler_ycbcr_conversion(info, None) }
+                .context("Y'CbCr conversion")?;
+            converted = converted.conversion(self.ycbcr);
+            sampler = sampler.push_next(&mut converted);
+        }
         // SAFETY: handles owned by this type live for the call; builder structs are locals that outlive it.
-        self.pass.sampler = unsafe {
-            device.create_sampler(
-                &vk::SamplerCreateInfo::default()
-                    .mag_filter(vk::Filter::LINEAR)
-                    .min_filter(vk::Filter::LINEAR)
-                    .address_mode_u(vk::SamplerAddressMode::CLAMP_TO_EDGE)
-                    .address_mode_v(vk::SamplerAddressMode::CLAMP_TO_EDGE)
-                    .address_mode_w(vk::SamplerAddressMode::CLAMP_TO_EDGE),
-                None,
-            )
-        }?;
+        self.pass.sampler = unsafe { device.create_sampler(&sampler, None) }?;
 
         let samplers = [self.pass.sampler];
         let bindings: Vec<vk::DescriptorSetLayoutBinding> = (0..plane_bindings)
@@ -153,7 +196,7 @@ impl CscPass {
 
         let pool_sizes = [vk::DescriptorPoolSize::default()
             .ty(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-            .descriptor_count(plane_bindings)];
+            .descriptor_count(plane_bindings * ycbcr.map_or(1, |(_, descriptors)| descriptors))];
         // SAFETY: handles owned by this type live for the call; builder structs are locals that outlive it.
         self.pass.desc_pool = unsafe {
             device.create_descriptor_pool(
@@ -208,6 +251,22 @@ impl CscPass {
         unsafe { device.update_descriptor_sets(&writes, &[]) };
     }
 
+    /// One view made with the conversion this pass was built on. Same fence-wait contract
+    /// as [`bind_planes`](Self::bind_planes).
+    pub fn bind_ycbcr(&self, device: &ash::Device, view: vk::ImageView) {
+        let info = [vk::DescriptorImageInfo::default()
+            .image_view(view)
+            .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)];
+        let write = vk::WriteDescriptorSet::default()
+            .dst_set(self.desc_set)
+            .dst_binding(0)
+            .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+            .image_info(&info);
+        // SAFETY: no submitted command buffer references this set (in-flight fence
+        // waited before every record); the view and sampler outlive the write.
+        unsafe { device.update_descriptor_sets(&[write], &[]) };
+    }
+
     /// Three single-component plane views in the producer's layout: GENERAL for
     /// pyrowave decode, `SHADER_READ_ONLY_OPTIMAL` for the software upload. Same
     /// fence-wait contract as [`bind_planes`](Self::bind_planes).
@@ -234,9 +293,12 @@ impl CscPass {
         unsafe { device.update_descriptor_sets(&writes, &[]) };
     }
 
-    /// [`Pass::destroy`]: the set goes with the pool.
+    /// [`Pass::destroy`]: the set goes with the pool. The conversion outlives its sampler.
     pub fn destroy(&mut self, device: &ash::Device) {
         self.pass.destroy(device);
+        // SAFETY: DESTROY per the crate contract; a null handle is skipped by Vulkan.
+        unsafe { device.destroy_sampler_ycbcr_conversion(self.ycbcr, None) };
+        self.ycbcr = vk::SamplerYcbcrConversion::null();
     }
 }
 
@@ -299,6 +361,26 @@ impl DirectPass {
             device.destroy_render_pass(self.clear, None);
         }
     }
+}
+
+/// The driver's `combinedImageSamplerDescriptorCount` for `format`: a descriptor over a
+/// conversion can take more than one, and [`CscPass::new_ycbcr`] sizes its pool by this.
+pub(crate) fn ycbcr_descriptors(
+    instance: &ash::Instance,
+    pdev: vk::PhysicalDevice,
+    format: vk::Format,
+) -> Result<u32> {
+    let mut limits = vk::SamplerYcbcrConversionImageFormatProperties::default();
+    let mut props = vk::ImageFormatProperties2::default().push_next(&mut limits);
+    let query = vk::PhysicalDeviceImageFormatInfo2::default()
+        .format(format)
+        .ty(vk::ImageType::TYPE_2D)
+        .tiling(vk::ImageTiling::OPTIMAL)
+        .usage(vk::ImageUsageFlags::SAMPLED);
+    // SAFETY: `pdev` is `instance`'s; `query` and `props` are locals outliving the call.
+    unsafe { instance.get_physical_device_image_format_properties2(pdev, &query, &mut props) }
+        .context("query the Y'CbCr descriptor count")?;
+    Ok(limits.combined_image_sampler_descriptor_count.max(1))
 }
 
 /// A pass from null handles: `fill` makes its objects in order, and on a failed step
@@ -462,3 +544,6 @@ pub(crate) fn build_fullscreen_pipeline(
     }
     Ok(pipeline?[0])
 }
+
+#[cfg(test)]
+mod tests;

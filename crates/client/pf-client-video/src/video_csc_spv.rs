@@ -15,6 +15,8 @@ pub const FULLSCREEN_VERT: &[u8] = include_bytes!("../shaders/fullscreen.vert.sp
 pub const NV12_CSC_FRAG: &[u8] = include_bytes!("../shaders/nv12_csc.frag.spv");
 /// Three-plane YCbCr → RGBA — the PyroWave and software rungs' variant.
 pub const PLANAR_CSC_FRAG: &[u8] = include_bytes!("../shaders/planar_csc.frag.spv");
+/// One picture through a sampler Y'CbCr conversion → RGBA, for a device with no plane views.
+pub const YCBCR_CSC_FRAG: &[u8] = include_bytes!("../shaders/ycbcr_csc.frag.spv");
 /// The console overlay's premultiplied-alpha blit.
 pub const OVERLAY_FRAG: &[u8] = include_bytes!("../shaders/overlay.frag.spv");
 /// The same blit onto an HDR10 swapchain: sRGB UI re-encoded as PQ at 203-nit white.

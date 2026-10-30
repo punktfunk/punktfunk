@@ -53,6 +53,61 @@ pub fn plane_formats(format: vk::Format) -> Option<[vk::Format; 2]> {
     }
 }
 
+/// The sampler Y'CbCr conversion that reads a `format` picture without plane views, or
+/// `None` when `features` (its optimal-tiling features) offer no chroma siting.
+///
+/// `RGB_IDENTITY` only rebuilds chroma: the shader still receives raw Y, Cb and Cr, and
+/// the CSC rows keep the matrix, range and PQ. Left-cosited across and centred down is
+/// what the plane-view shader draws. The image view and the presenter's immutable sampler
+/// each build one from this, and the spec requires them identically defined.
+pub fn ycbcr_conversion_info(
+    format: vk::Format,
+    features: vk::FormatFeatureFlags,
+) -> Option<vk::SamplerYcbcrConversionCreateInfo<'static>> {
+    let cosited = features.contains(vk::FormatFeatureFlags::COSITED_CHROMA_SAMPLES);
+    let midpoint = features.contains(vk::FormatFeatureFlags::MIDPOINT_CHROMA_SAMPLES);
+    if !cosited && !midpoint {
+        return None;
+    }
+    let linear = vk::FormatFeatureFlags::SAMPLED_IMAGE_YCBCR_CONVERSION_LINEAR_FILTER;
+    Some(
+        vk::SamplerYcbcrConversionCreateInfo::default()
+            .format(format)
+            .ycbcr_model(vk::SamplerYcbcrModelConversion::RGB_IDENTITY)
+            .ycbcr_range(vk::SamplerYcbcrRange::ITU_FULL)
+            .x_chroma_offset(if cosited {
+                vk::ChromaLocation::COSITED_EVEN
+            } else {
+                vk::ChromaLocation::MIDPOINT
+            })
+            .y_chroma_offset(if midpoint {
+                vk::ChromaLocation::MIDPOINT
+            } else {
+                vk::ChromaLocation::COSITED_EVEN
+            })
+            .chroma_filter(if features.contains(linear) {
+                vk::Filter::LINEAR
+            } else {
+                vk::Filter::NEAREST
+            }),
+    )
+}
+
+/// [`ycbcr_conversion_info`] over what this device says about `format`.
+///
+/// # Safety
+///
+/// `physical_device` is one of `instance`'s physical devices.
+pub unsafe fn device_ycbcr_conversion(
+    instance: &ash::Instance,
+    physical_device: vk::PhysicalDevice,
+    format: vk::Format,
+) -> Option<vk::SamplerYcbcrConversionCreateInfo<'static>> {
+    // SAFETY: fn contract; a physical-device query.
+    let props = unsafe { instance.get_physical_device_format_properties(physical_device, format) };
+    ycbcr_conversion_info(format, props.optimal_tiling_features)
+}
+
 /// Distinct-mode DPB: reference-only. Format queries use this exact usage;
 /// a weaker query would validate an image the pool never creates.
 pub const DPB_USAGE: vk::ImageUsageFlags = vk::ImageUsageFlags::VIDEO_DECODE_DPB_KHR;
@@ -146,6 +201,8 @@ pub struct RawCaps {
     pub output_formats: Vec<VideoFormat>,
     /// Coincide-mode formats (queried with [`COINCIDE_USAGE`]).
     pub coincide_formats: Vec<VideoFormat>,
+    /// Picture formats a sampler Y'CbCr conversion can read ([`ycbcr_conversion_info`]).
+    pub ycbcr_formats: Vec<vk::Format>,
 }
 
 /// A device's decode level ceiling, tagged with the codec whose Std code space
@@ -216,8 +273,9 @@ pub struct DecodeCaps {
     pub dpb_format: vk::Format,
     pub output_format: vk::Format,
     /// Per-plane views of [`Self::output_format`], resolved here so the pool never
-    /// re-derives (or guesses) them.
-    pub plane_view_formats: [vk::Format; 2],
+    /// re-derives (or guesses) them. `None`: this device allows no plane views, and
+    /// pictures are read through [`ycbcr_conversion_info`] instead.
+    pub plane_view_formats: Option<[vk::Format; 2]>,
     pub std_header_version: vk::ExtensionProperties,
 }
 
@@ -263,7 +321,8 @@ pub enum CapsError {
         missing: vk::ImageUsageFlags,
     },
     /// Presenter-facing entry for `mode` does not allow `MUTABLE_FORMAT`, so the
-    /// per-plane views [`plane_formats`] cannot exist on this device.
+    /// per-plane views [`plane_formats`] cannot exist on this device, and no sampler
+    /// Y'CbCr conversion can read the picture either.
     NoMutableFormat {
         mode: &'static str,
         format: vk::Format,
@@ -366,6 +425,7 @@ pub fn derive_caps(raw: &RawCaps, wanted: vk::Format) -> Result<DecodeCaps, Caps
         &raw.dpb_formats,
         &raw.output_formats,
         &raw.coincide_formats,
+        &raw.ycbcr_formats,
     )?;
     Ok(DecodeCaps {
         coincide: arrangement.coincide,
@@ -392,12 +452,15 @@ pub(crate) struct Arrangement {
     layered_dpb: bool,
     dpb_format: vk::Format,
     output_format: vk::Format,
-    plane_view_formats: [vk::Format; 2],
+    plane_view_formats: Option<[vk::Format; 2]>,
 }
 
 /// Decide the DPB arrangement and validate `wanted` against the format lists of
 /// the roles that arrangement creates. H.265 and AV1 derive `wanted` from the
 /// stream's chroma and bit depth ([`crate::caps_h265::output_format_for`]).
+///
+/// Every arrangement with plane views goes first. A sampler Y'CbCr conversion answers
+/// only their `NoMutableFormat` refusal, so a device that decodes today stays as it is.
 pub(crate) fn derive_arrangement(
     capability_flags: vk::VideoCapabilityFlagsKHR,
     decode_flags: vk::VideoDecodeCapabilityFlagsKHR,
@@ -405,6 +468,7 @@ pub(crate) fn derive_arrangement(
     dpb_formats: &[VideoFormat],
     output_formats: &[VideoFormat],
     coincide_formats: &[VideoFormat],
+    ycbcr_formats: &[vk::Format],
 ) -> Result<Arrangement, CapsError> {
     let coincide =
         decode_flags.contains(vk::VideoDecodeCapabilityFlagsKHR::DPB_AND_OUTPUT_COINCIDE);
@@ -416,46 +480,71 @@ pub(crate) fn derive_arrangement(
 
     let layered_dpb =
         !capability_flags.contains(vk::VideoCapabilityFlagsKHR::SEPARATE_REFERENCE_IMAGES);
-    // Presenter-facing images need the pool's exact usage plus MUTABLE_FORMAT;
-    // distinct DPB needs neither sampling nor plane views.
-    let try_coincide = || -> Result<(vk::Format, vk::Format), CapsError> {
+    // Presenter-facing images need the pool's exact usage, and MUTABLE_FORMAT for plane
+    // views. Distinct DPB needs neither sampling nor plane views.
+    let try_coincide = |plane_views: bool| -> Result<(vk::Format, vk::Format), CapsError> {
         let mode = "coincide (DPB|DST|SAMPLED)";
         let entry = pick_format(coincide_formats, wanted, mode)?;
         require_usage(&entry, COINCIDE_USAGE, mode)?;
-        require_mutable(&entry, mode)?;
+        if plane_views {
+            require_mutable(&entry, mode)?;
+        }
         Ok((entry.format, entry.format))
     };
-    let try_distinct = || -> Result<(vk::Format, vk::Format), CapsError> {
+    let try_distinct = |plane_views: bool| -> Result<(vk::Format, vk::Format), CapsError> {
         let dpb = pick_format(dpb_formats, wanted, "DPB")?;
         require_usage(&dpb, DPB_USAGE, "DPB")?;
         let out_mode = "output (DST|SAMPLED)";
         let output = pick_format(output_formats, wanted, out_mode)?;
         require_usage(&output, OUTPUT_USAGE, out_mode)?;
-        require_mutable(&output, out_mode)?;
+        if plane_views {
+            require_mutable(&output, out_mode)?;
+        }
         Ok((dpb.format, output.format))
     };
+    // `PUNKTFUNK_VKDECODE_ARRANGEMENT=distinct` skips coincide on a device with both: the
+    // switch for a driver whose coincide path faults at the first decode. `=sampler` takes
+    // the conversion on a device with plane views: the way to test that route on any card.
+    let knob = std::env::var("PUNKTFUNK_VKDECODE_ARRANGEMENT").ok();
+    let prefer_distinct = distinct && knob.as_deref() == Some("distinct");
     // Coincide preferred (struct docs). A device offering both whose coincide
     // arrangement is unusable decodes distinct; the error names distinct then.
-    // `PUNKTFUNK_VKDECODE_ARRANGEMENT=distinct` skips coincide on such a device: the
-    // switch for a driver whose coincide path faults at the first decode.
-    let prefer_distinct = distinct
-        && std::env::var("PUNKTFUNK_VKDECODE_ARRANGEMENT")
-            .ok()
-            .as_deref()
-            == Some("distinct");
-    let (coincide, (dpb_format, output_format)) = match try_coincide() {
-        Ok(formats) if coincide && !prefer_distinct => (true, formats),
-        Err(unusable) if !distinct => return Err(unusable),
-        tried => {
-            if let (true, Err(unusable)) = (coincide, &tried) {
-                tracing::info!(%unusable, "coincide arrangement unusable, decoding distinct");
+    let arrange = |plane_views: bool| -> Result<(bool, vk::Format, vk::Format), CapsError> {
+        match try_coincide(plane_views) {
+            Ok((dpb, output)) if coincide && !prefer_distinct => Ok((true, dpb, output)),
+            Err(unusable) if !distinct => Err(unusable),
+            tried => {
+                if let (true, Err(unusable)) = (coincide, &tried) {
+                    tracing::info!(%unusable, "coincide arrangement unusable, decoding distinct");
+                }
+                let (dpb, output) = try_distinct(plane_views)?;
+                Ok((false, dpb, output))
             }
-            (false, try_distinct()?)
         }
     };
-    let plane_view_formats = plane_formats(output_format).ok_or(CapsError::NoPlaneMapping {
-        format: output_format,
-    })?;
+    let convertible = ycbcr_formats.contains(&wanted);
+    let with_planes = if convertible && knob.as_deref() == Some("sampler") {
+        None
+    } else {
+        match arrange(true) {
+            Err(CapsError::NoMutableFormat { .. }) if convertible => None,
+            arranged => Some(arranged?),
+        }
+    };
+    let (coincide, dpb_format, output_format) = match with_planes {
+        Some(arranged) => arranged,
+        None => {
+            tracing::info!(format = ?wanted, "no plane views, sampling through a Y'CbCr conversion");
+            arrange(false)?
+        }
+    };
+    let plane_view_formats = with_planes
+        .map(|_| {
+            plane_formats(output_format).ok_or(CapsError::NoPlaneMapping {
+                format: output_format,
+            })
+        })
+        .transpose()?;
 
     Ok(Arrangement {
         coincide,
@@ -701,6 +790,14 @@ pub(crate) unsafe fn query_caps(
     let output_formats = unsafe { query_formats(dev, profile, OUTPUT_USAGE)? };
     // SAFETY: as above.
     let coincide_formats = unsafe { query_formats(dev, profile, COINCIDE_USAGE)? };
+    let ycbcr_formats = OUTPUT_FORMATS
+        .into_iter()
+        .filter(|format| {
+            // SAFETY: same liveness as above; a physical-device query.
+            unsafe { device_ycbcr_conversion(dev.instance(), dev.physical_device(), *format) }
+                .is_some()
+        })
+        .collect();
 
     Ok(RawCaps {
         capability_flags,
@@ -717,6 +814,7 @@ pub(crate) unsafe fn query_caps(
         dpb_formats,
         output_formats,
         coincide_formats,
+        ycbcr_formats,
     })
 }
 
@@ -905,6 +1003,7 @@ mod tests {
             dpb_formats: vec![],
             output_formats: vec![],
             coincide_formats: vec![entry(NV12, COINCIDE_USAGE), entry(P010, COINCIDE_USAGE)],
+            ycbcr_formats: OUTPUT_FORMATS.to_vec(),
         }
     }
 
@@ -1134,14 +1233,8 @@ mod tests {
 
     #[test]
     fn a_presenter_facing_entry_without_mutable_format_is_refused() {
-        let mut raw = radv_like();
-        raw.coincide_formats = vec![VideoFormat {
-            format: NV12,
-            image_usage: COINCIDE_USAGE,
-            // A non-empty report that lacks MUTABLE_FORMAT: an explicit envelope, refused.
-            image_create_flags: vk::ImageCreateFlags::ALIAS,
-            ..Default::default()
-        }];
+        let mut raw = pascal_like();
+        raw.ycbcr_formats.clear();
         assert_eq!(
             derive_caps(&raw, NV12).unwrap_err(),
             CapsError::NoMutableFormat {
@@ -1152,6 +1245,90 @@ mod tests {
 
         // Distinct DPB needs no MUTABLE_FORMAT (nvidia_like has empty create flags).
         assert!(derive_caps(&nvidia_like(), NV12).is_ok());
+    }
+
+    /// Coincide only, and a SAMPLED entry whose create flags omit MUTABLE_FORMAT: the
+    /// GTX 1060 and 1070 reports on driver 580.
+    fn pascal_like() -> RawCaps {
+        let mut raw = radv_like();
+        raw.coincide_formats = vec![VideoFormat {
+            format: NV12,
+            image_usage: COINCIDE_USAGE,
+            image_create_flags: vk::ImageCreateFlags::ALIAS,
+            ..Default::default()
+        }];
+        raw
+    }
+
+    #[test]
+    fn a_picture_without_plane_views_is_read_through_a_conversion() {
+        let caps = derive_caps(&pascal_like(), NV12).unwrap();
+        assert!(caps.coincide);
+        assert_eq!(caps.output_format, NV12);
+        assert_eq!(caps.plane_view_formats, None);
+    }
+
+    #[test]
+    fn a_device_with_plane_views_keeps_them() {
+        let caps = derive_caps(&radv_like(), NV12).unwrap();
+        assert_eq!(caps.plane_view_formats, plane_formats(NV12));
+
+        // Coincide lacks the flag and distinct has it: distinct, as before the conversion.
+        let mut raw = pascal_like();
+        raw.decode_flags |= vk::VideoDecodeCapabilityFlagsKHR::DPB_AND_OUTPUT_DISTINCT;
+        raw.dpb_formats = vec![entry(NV12, DPB_USAGE)];
+        raw.output_formats = vec![entry(NV12, OUTPUT_USAGE)];
+        let caps = derive_caps(&raw, NV12).unwrap();
+        assert!(!caps.coincide);
+        assert_eq!(caps.plane_view_formats, plane_formats(NV12));
+    }
+
+    #[test]
+    fn a_conversion_answers_only_the_missing_flag() {
+        // An echoed report's pictures read as zeros; a conversion cannot help.
+        let mut raw = pascal_like();
+        raw.coincide_formats = vec![echoed_entry(NV12, COINCIDE_USAGE)];
+        assert!(matches!(
+            derive_caps(&raw, NV12).unwrap_err(),
+            CapsError::EchoedReport { .. }
+        ));
+
+        // No SAMPLED: no shader reads this device's pictures either way.
+        let mut raw = pascal_like();
+        raw.coincide_formats[0].image_usage = DPB_USAGE;
+        assert!(matches!(
+            derive_caps(&raw, NV12).unwrap_err(),
+            CapsError::UsageUnsupported { .. }
+        ));
+    }
+
+    #[test]
+    fn the_conversion_keeps_the_plane_shaders_siting() {
+        let both = vk::FormatFeatureFlags::COSITED_CHROMA_SAMPLES
+            | vk::FormatFeatureFlags::MIDPOINT_CHROMA_SAMPLES
+            | vk::FormatFeatureFlags::SAMPLED_IMAGE_YCBCR_CONVERSION_LINEAR_FILTER;
+        let info = ycbcr_conversion_info(NV12, both).unwrap();
+        assert_eq!(
+            (info.x_chroma_offset, info.y_chroma_offset),
+            (
+                vk::ChromaLocation::COSITED_EVEN,
+                vk::ChromaLocation::MIDPOINT
+            )
+        );
+        assert_eq!(info.chroma_filter, vk::Filter::LINEAR);
+        assert_eq!(
+            info.ycbcr_model,
+            vk::SamplerYcbcrModelConversion::RGB_IDENTITY
+        );
+
+        // One siting, and no linear reconstruction: what the driver has, on both axes.
+        let midpoint =
+            ycbcr_conversion_info(NV12, vk::FormatFeatureFlags::MIDPOINT_CHROMA_SAMPLES).unwrap();
+        assert_eq!(midpoint.x_chroma_offset, vk::ChromaLocation::MIDPOINT);
+        assert_eq!(midpoint.y_chroma_offset, vk::ChromaLocation::MIDPOINT);
+        assert_eq!(midpoint.chroma_filter, vk::Filter::NEAREST);
+
+        assert!(ycbcr_conversion_info(NV12, vk::FormatFeatureFlags::SAMPLED_IMAGE).is_none());
     }
 
     #[test]
@@ -1239,7 +1416,7 @@ mod tests {
                 };
                 let caps = derive_caps(&listed, wanted).unwrap();
                 assert_eq!(caps.output_format, wanted);
-                assert_eq!(Some(caps.plane_view_formats), plane_formats(wanted));
+                assert_eq!(caps.plane_view_formats, plane_formats(wanted));
             }
         }
     }
@@ -1278,7 +1455,7 @@ mod tests {
         let caps = derive_caps(&radv_like(), NV12).unwrap();
         assert_eq!(
             caps.plane_view_formats,
-            [vk::Format::R8_UNORM, vk::Format::R8G8_UNORM]
+            Some([vk::Format::R8_UNORM, vk::Format::R8G8_UNORM])
         );
     }
 
