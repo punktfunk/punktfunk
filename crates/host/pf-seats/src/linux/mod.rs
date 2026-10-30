@@ -685,7 +685,7 @@ impl PlatformBackend for LinuxBackend {
         shared::ensure_games(state, gid)?;
         let passwd = accounts::ensure(seat, state)?;
         accounts::close_home(&passwd.home)?;
-        shared::ensure_seat_dirs(state, &seat.id, &passwd)?;
+        shared::ensure_seat_dirs(state, &seat.id, &passwd, gid)?;
         shared::provision_steam(state, &seat.id, &passwd, self.steam_source().as_ref());
         Ok(())
     }
@@ -706,8 +706,9 @@ impl PlatformBackend for LinuxBackend {
         let (box_dir, state) = (&self.inner.box_dir, &self.inner.state);
         let passwd = accounts::require(seat)?;
         accounts::close_home(&passwd.home)?;
-        shared::ensure_games(state, accounts::ensure_group(accounts::GAMES_GROUP)?)?;
-        shared::ensure_seat_dirs(state, &seat.id, &passwd)?;
+        let games = accounts::ensure_group(accounts::GAMES_GROUP)?;
+        shared::ensure_games(state, games)?;
+        shared::ensure_seat_dirs(state, &seat.id, &passwd, games)?;
         let reader = shared::Reader::group(passwd.gid);
         shared::refresh_trust(box_dir, state, &seat.id, reader)?;
         shared::refresh_seat_library(state, &seat.id, reader)?;
@@ -731,7 +732,8 @@ impl PlatformBackend for LinuxBackend {
             )?;
             let source = self.steam_source();
             let root = source.as_ref().map(|s| s.root.as_path());
-            let shares = libraries::share(box_dir, state, &seat.id, &passwd, root);
+            let owner = self.owner();
+            let shares = libraries::share(box_dir, state, &seat.id, &passwd, root, owner.as_ref());
             let shown = shares.as_ref().map_or(&[][..], |s| s.libraries.as_slice());
             libraries::register(state, &seat.id, &passwd, shown);
             let browser = session::browser(box_dir);

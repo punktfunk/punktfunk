@@ -148,7 +148,7 @@ them together. The host logs a warning at startup for each one that is set and i
 | `PUNKTFUNK_SEAT_DISPLAY_SLOT` | `12`–`15` | The seat's connector. Not a number, out of range, or the marker absent: the host refuses every virtual-display session. |
 | `PUNKTFUNK_TRUST_DIR` | the box's config directory | The seat reads the box's pairing store, `profiles.json`, per-device display overlays and `seat-defaults.json` from here, read only, and follows their changes. A relative path is ignored. |
 | `PUNKTFUNK_PAIRING` | `refused` | Devices pair with the box. A knock is refused and no PIN window opens. A seat host refuses pairing with or without it. |
-| `PUNKTFUNK_LIBRARY_DIR` | Windows: the box's config directory. Linux: the seat's trust copy, on every seat but the owner's | The seat reads the box's library from here, read only: `library*.json`, `library-metadata/` and, on Windows, the plugin manifests and grants its entries launch through. Play stats stay in the seat's own directory. A relative path is ignored. |
+| `PUNKTFUNK_LIBRARY_DIR` | Windows: the box's config directory. Linux: the seat's trust copy, on every seat but the owner's | The seat reads the box's library from here, read only: `library*.json`, `library-metadata/` and the plugin grants; on Linux also the firmware plugins staged, on Windows the plugin manifests its entries launch through. Play stats stay in the seat's own directory. A relative path is ignored. |
 | `PUNKTFUNK_SEAT_STEAM` | the seat's own `steam.exe` (Windows only, when the box has Steam) | Steam runs once per IPC name per machine, so a seat starts Steam from here only, always with `-master_ipc_name_override pfseat<seat id>`. The supervisor copies the box's client into the seat account's profile at the seat's first start; until the file exists, the seat's Steam titles don't start. Unset or relative: no Steam on the seat. |
 
 It also sets these ordinary [host settings](/docs/configuration), so seats don't collide. A seat
@@ -374,9 +374,12 @@ system-range user, `pf-seat-<n>`, with a logind session of its own, a headless c
   From the owner's `~/.config/punktfunk` the daemon copies `library.json`,
   `library-hidden.json`, `library-metadata.json`, `library-picks.json`, `library-scanners.json`
   and `library-metadata/` to `library/`, `root:punktfunk` `0640`, within 2 seconds of a change,
-  and from there into each seat's trust copy. Play stats stay with each host. A config folder
-  it can't open, as in a home not mounted yet, leaves the copy as it was. Deleting the owner's
-  row deletes `library/`.
+  and from there into each seat's trust copy. `plugin-run/plugin-grants.json` goes with them, and
+  so does the firmware plugins staged, `plugin-state/<provider>/firmware/<platform>/<file>` at
+  exactly that depth, up to 1 GiB a file. Nothing else of `plugin-run` or `plugin-state` is read:
+  the plugins' tokens and sign-ins live there. A link, a file with a second link or one over its
+  cap is not copied. Play stats stay with each host. A config folder it can't open, as in a home
+  not mounted yet, leaves the copy as it was. Deleting the owner's row deletes `library/`.
 - **Games.** `games/steamapps/` is one library every seat writes (group `punktfunk-games`, setgid,
   default ACL). `games` is sticky and closed to other users, so only the group reads the tree and
   a seat can't replace `steamapps`. Each seat start checks the folders and replaces a link or
@@ -415,6 +418,23 @@ system-range user, `pf-seat-<n>`, with a logind session of its own, a headless c
   `common/SteamLinuxRuntime_*/*/files/.ref` and each `common/Proton*/dist.lock`. Without them a
   native game through the runtime or any Proton there fails with a read-only file system. A file
   that doesn't exist yet, such as the `dist.lock` of a Proton the owner never ran, stays read-only.
+- **Granted roots.** At each start every root the owner granted a plugin, read or write, as the
+  library copy's `plugin-grants.json` lists it, appears to the seat read-only at its own path, so
+  a ROM the library names opens on the seat. On btrfs, ext4, xfs and f2fs the unit mounts it
+  idmapped at its stage, as it does a library, and binds the stage there: the seat reads the
+  owner's files as the owner. Elsewhere (exFAT, NTFS, FUSE) it is a plain read-only bind, and
+  the seat reads what the files' modes let anyone read. A root in the owner's home is reached
+  through an empty folder over that home, which hides the rest of it from the seat. One under
+  `/run/media` shows inside the seat's empty `/run/media`: systemd mounts that first. A root is
+  skipped, with a line in the daemon's log, when it is gone or no folder, its path has a
+  character a unit file can't carry (`:`, `"`, `\`, `%`, `$` or a control character), it holds
+  the owner's home or `/var/lib/punktfunk-seats` or lies in the latter, it lies in a shown
+  library's `steamapps`, or the owner can't read it as themselves. A root inside another shows
+  with it. A root granted later reaches the seat at its next start.
+- **Save exchange.** Each seat has `seats/<id>/saves/out` and `saves/in`, the seat user's with
+  group `punktfunk-games`, mode `2770`. The daemon makes them at each start and keeps what is in
+  them until the seat is deleted. A seat's saves cross to and from the owner's plugins there;
+  nothing writes them yet.
 - **Stopping.** `pam_systemd` moves the runner into the session's scope, so stopping the unit
   can't reach it. The runner ends its children on `SIGTERM`, and `seat-reap` ends the session
   by the id the runner recorded. The daemon's stop then ends the seat's user

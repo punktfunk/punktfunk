@@ -10,8 +10,9 @@
 //! - `trust/<id>/` is a read-only copy of the box's pairing store and profiles from the door's
 //!   directory, so a seat user can read what it needs and nothing else there. A seat other than
 //!   the owner's also finds the box's library there.
-//! - `library/` is the box's library: a copy of the owner's, which the owner's host writes. The
-//!   door serves it to every client, and each seat's trust copy takes it from here.
+//! - `library/` is the box's library: a copy of the owner's, which the owner's host writes, with
+//!   the plugins' grants and the firmware they staged. The door serves it to every client, and
+//!   each seat's trust copy takes it from here.
 //! - `seats/hosts/<id>/mgmt-token` is the token the box presents to that seat host's loopback
 //!   API. It belongs to the `punktfunk` user, not the seat group: every seat user is a member.
 
@@ -24,7 +25,7 @@ use rustix::fs::{AtFlags, Mode, OFlags, XattrFlags};
 use rustix::io::Errno;
 use std::collections::HashSet;
 use std::ffi::CStr;
-use std::io::Write as _;
+use std::io::{Read as _, Write as _};
 use std::os::fd::{AsFd, AsRawFd as _, BorrowedFd, OwnedFd};
 use std::os::unix::fs::{
     DirBuilderExt as _, MetadataExt as _, OpenOptionsExt as _, PermissionsExt as _,
@@ -67,6 +68,18 @@ const OWNER_POLICY: &str = "display-settings.json";
 /// A big catalog with descriptions runs to tens of megabytes; past this it is not ours.
 const MAX_LIBRARY_BYTES: u64 = 64 * 1024 * 1024;
 
+/// The folder of the plugins' runner files. Only [`PLUGIN_GRANTS`] is read: its tokens stay.
+const PLUGIN_RUN: &str = "plugin-run";
+/// The roots the owner granted each plugin: paths, never a secret.
+const PLUGIN_GRANTS: &str = "plugin-grants.json";
+
+/// The plugins' own state. Only `<provider>/firmware/<platform>/<file>` is read: the rest holds
+/// sign-ins.
+const PLUGIN_STATE: &str = "plugin-state";
+const FIRMWARE: &str = "firmware";
+/// A PS3 update or a Switch firmware archive runs to hundreds of megabytes.
+const MAX_FIRMWARE_BYTES: u64 = 1024 * 1024 * 1024;
+
 /// Steam's launcher script. A clone carries it and a self-bootstrapped Steam does too, so its
 /// presence says the seat already has an install.
 const STEAM_MARKER: &str = ".local/share/Steam/steam.sh";
@@ -86,6 +99,11 @@ pub(super) fn games_dir(state: &Path) -> PathBuf {
 /// The box's library, the door's `PUNKTFUNK_LIBRARY_DIR` (`punktfunk-door.service`).
 pub(super) fn box_library_dir(state: &Path) -> PathBuf {
     state.join("library")
+}
+
+/// The copy of the owner's plugin grants in the box's library.
+pub(super) fn box_grants(state: &Path) -> PathBuf {
+    box_library_dir(state).join(PLUGIN_RUN).join(PLUGIN_GRANTS)
 }
 
 /// The ledger's directory, `seats` under the state directory: `persistence::default_root()` on
@@ -413,20 +431,35 @@ fn with_mask(acl: &[u8], perm: u16) -> Option<Vec<u8>> {
 }
 
 /// The seat's private directories, owned by its user and in place before its unit starts: a
-/// missing bind source fails the unit with `226/NAMESPACE`.
+/// missing bind source fails the unit with `226/NAMESPACE`. Then `saves/out` and `saves/in`,
+/// where its saves cross to and from the owner's plugins: the seat user's, group `games_gid`,
+/// `2770`. What is in any of them stays.
 pub(super) fn ensure_seat_dirs(
     state: &Path,
     id: &SeatId,
     passwd: &Passwd,
+    games_gid: u32,
 ) -> Result<(), BackendError> {
-    for name in PRIVATE_DIRS {
-        let dir = seat_dir(state, id).join(name);
+    let saves = seat_dir(state, id).join("saves");
+    let dirs = PRIVATE_DIRS
+        .map(|name| (seat_dir(state, id).join(name), passwd.gid, 0o700))
+        .into_iter()
+        .chain(["out", "in"].map(|name| (saves.join(name), games_gid, 0o2770)));
+    for (dir, gid, mode) in dirs {
         let io = |what: &str, e| io_err("seat_dirs", &format!("{what} {}", dir.display()), e);
-        make_dir(&dir, 0o700).map_err(|e| io("create", e))?;
-        std::os::unix::fs::chown(&dir, Some(passwd.uid), Some(passwd.gid))
-            .map_err(|e| io("own", e))?;
+        std::fs::create_dir_all(&dir).map_err(|e| io("create", e))?;
+        // Owned before the mode is set, so a change of group can't take the setgid bit.
+        std::os::unix::fs::chown(&dir, Some(passwd.uid), Some(gid)).map_err(|e| io("own", e))?;
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(mode))
+            .map_err(|e| io("set the mode of", e))?;
     }
-    Ok(())
+    std::fs::set_permissions(&saves, std::fs::Permissions::from_mode(0o711)).map_err(|e| {
+        io_err(
+            "seat_dirs",
+            &format!("set the mode of {}", saves.display()),
+            e,
+        )
+    })
 }
 
 /// Removes the seat's directories, its trust copy, its token and its library stage. Missing ones
@@ -541,7 +574,7 @@ fn unlink(dir: &OwnedFd, name: &str) -> std::io::Result<bool> {
 /// Copies `name`, at most `max` bytes, from `src` into `dst` for `reader` when it differs, and
 /// removes it from `dst` when `src` has none. Returns whether `dst` changed. Both are directory
 /// handles, so no link on either side is followed, whoever owns the directory. An unchanged file
-/// is not read.
+/// is not read; a changed one is streamed, never held whole.
 fn sync_file(
     src: Option<&OwnedFd>,
     dst: &OwnedFd,
@@ -563,14 +596,20 @@ fn sync_file(
     if !needs_copy(wanted, current) {
         return Ok(false);
     }
-    let bytes = safe_open::read_opened(file, &meta, name, max)?;
     let temp = format!("{name}.tmp");
     unlink(dst, &temp)?;
     let create =
         OFlags::WRONLY | OFlags::CREATE | OFlags::EXCL | OFlags::NOFOLLOW | OFlags::CLOEXEC;
     let mode = Mode::from_raw_mode(reader.file_mode() as _);
     let mut out = std::fs::File::from(rustix::fs::openat(dst, temp.as_str(), create, mode)?);
-    out.write_all(&bytes)?;
+    if std::io::copy(&mut (&file).take(max + 1), &mut out)? > max {
+        drop(out);
+        unlink(dst, &temp)?;
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("{name} grew beyond {max} bytes"),
+        ));
+    }
     out.set_permissions(std::fs::Permissions::from_mode(reader.file_mode()))?;
     std::os::unix::fs::fchown(&out, reader.uid, Some(reader.gid))?;
     out.set_modified(meta.modified()?)?;
@@ -666,13 +705,121 @@ pub(super) fn remove_box_library(state: &Path) -> std::io::Result<()> {
     }
 }
 
-/// The library files and the metadata folder from `src` into `dst`, for `reader`.
+/// The library files, the metadata folder, the plugins' grants and the firmware they staged,
+/// from `src` into `dst`, for `reader`.
 fn sync_library(src: Option<&OwnedFd>, dst: &OwnedFd, reader: Reader) -> std::io::Result<bool> {
     let mut changed = false;
     for name in LIBRARY_FILES {
         changed |= sync_file(src, dst, name, reader, MAX_LIBRARY_BYTES)?;
     }
     changed |= sync_flat_dir(src, dst, LIBRARY_METADATA, reader, MAX_LIBRARY_BYTES)?;
+    let run = sub(src, PLUGIN_RUN)?;
+    changed |= sync_dir(run.as_ref(), dst, PLUGIN_RUN, reader, &|run, copy| {
+        sync_file(run, copy, PLUGIN_GRANTS, reader, MAX_TRUST_BYTES)
+    })?;
+    changed |= sync_firmware(src, dst, reader)?;
+    Ok(changed)
+}
+
+/// `plugin-state/<provider>/firmware/<platform>/<file>` from `src` into `dst`: what a plugin
+/// staged for an emulator. Each folder is opened through the one above it and only those are;
+/// a provider's other entries, and anything deeper than a platform's files, are never read.
+fn sync_firmware(src: Option<&OwnedFd>, dst: &OwnedFd, reader: Reader) -> std::io::Result<bool> {
+    let platform =
+        |src: Option<&OwnedFd>, copy: &OwnedFd| sync_files(src, copy, reader, MAX_FIRMWARE_BYTES);
+    let firmware = |src: Option<&OwnedFd>, copy: &OwnedFd| {
+        sync_each(folders(src, |dir| Ok(Some(dir)))?, copy, reader, &platform)
+    };
+    let provider =
+        |src: Option<&OwnedFd>, copy: &OwnedFd| sync_dir(src, copy, FIRMWARE, reader, &firmware);
+    let state = |src: Option<&OwnedFd>, copy: &OwnedFd| {
+        let found = folders(src, |dir| safe_open::dir_at(&dir, FIRMWARE))?;
+        sync_each(found, copy, reader, &provider)
+    };
+    let src = sub(src, PLUGIN_STATE)?;
+    sync_dir(src.as_ref(), dst, PLUGIN_STATE, reader, &state)
+}
+
+/// What a copied folder is filled with: its source's handle, `None` once the source is gone,
+/// and the copy's.
+type Fill<'a> = &'a dyn Fn(Option<&OwnedFd>, &OwnedFd) -> std::io::Result<bool>;
+
+/// `name` in `src`, a folder and not a link. `None` when either is absent.
+fn sub(src: Option<&OwnedFd>, name: &str) -> std::io::Result<Option<OwnedFd>> {
+    match src {
+        Some(src) => safe_open::dir_at(src, name),
+        None => Ok(None),
+    }
+}
+
+/// The folders in `src` with a safe name, each as `open` takes it on from its handle. An entry
+/// that is no folder, or that `open` refuses or finds nothing in, is left out.
+fn folders(
+    src: Option<&OwnedFd>,
+    open: impl Fn(OwnedFd) -> std::io::Result<Option<OwnedFd>>,
+) -> std::io::Result<Vec<(String, OwnedFd)>> {
+    let Some(src) = src else {
+        return Ok(Vec::new());
+    };
+    let mut out = Vec::new();
+    for name in names(src)?.into_iter().filter(|n| safe_name(n)) {
+        if let Ok(Some(dir)) = safe_open::dir_at(src, &name)
+            && let Ok(Some(next)) = open(dir)
+        {
+            out.push((name, next));
+        }
+    }
+    Ok(out)
+}
+
+/// Each of `found` copied into `dst` through `fill`, and every other folder in `dst` emptied
+/// and removed.
+fn sync_each(
+    found: Vec<(String, OwnedFd)>,
+    dst: &OwnedFd,
+    reader: Reader,
+    fill: Fill<'_>,
+) -> std::io::Result<bool> {
+    let mut changed = false;
+    for (name, src) in &found {
+        changed |= sync_dir(Some(src), dst, name, reader, fill)?;
+    }
+    for name in names(dst)? {
+        if found.iter().all(|(kept, _)| *kept != name) {
+            changed |= sync_dir(None, dst, &name, reader, fill)?;
+        }
+    }
+    Ok(changed)
+}
+
+/// The folder `name` in `dst` level with `src`, its source already opened: made for `reader`
+/// and filled through `fill`, or, with no source, emptied through `fill` and removed.
+fn sync_dir(
+    src: Option<&OwnedFd>,
+    dst: &OwnedFd,
+    name: &str,
+    reader: Reader,
+    fill: Fill<'_>,
+) -> std::io::Result<bool> {
+    if src.is_some() {
+        let mode = Mode::from_raw_mode(reader.dir_mode() as _);
+        match rustix::fs::mkdirat(dst, name, mode) {
+            Ok(()) => {}
+            Err(e) if e == rustix::io::Errno::EXIST => {}
+            Err(e) => return Err(e.into()),
+        }
+    }
+    let Some(copies) = safe_open::dir_at(dst, name)? else {
+        return Ok(false);
+    };
+    if src.is_some() {
+        rustix::fs::fchmod(&copies, Mode::from_raw_mode(reader.dir_mode() as _))?;
+        std::os::unix::fs::fchown(&copies, reader.uid, Some(reader.gid))?;
+    }
+    let changed = fill(src, &copies)?;
+    if src.is_none() {
+        let _ = rustix::fs::unlinkat(dst, name, AtFlags::REMOVEDIR);
+    }
     Ok(changed)
 }
 
@@ -705,8 +852,8 @@ fn names(dir: &OwnedFd) -> std::io::Result<Vec<String>> {
     Ok(out)
 }
 
-/// Mirrors the flat directory `dir` of `src` into `dst`: copies each file of at most `max` bytes,
-/// drops copies whose source is gone. A link where the directory should be is refused.
+/// Mirrors the flat directory `dir` of `src` into `dst` ([`sync_files`]). A link where the
+/// directory should be is refused.
 fn sync_flat_dir(
     src: Option<&OwnedFd>,
     dst: &OwnedFd,
@@ -714,41 +861,35 @@ fn sync_flat_dir(
     reader: Reader,
     max: u64,
 ) -> std::io::Result<bool> {
-    let src = match src {
-        Some(src) => safe_open::dir_at(src, dir)?,
-        None => None,
-    };
-    if src.is_some() {
-        let mode = Mode::from_raw_mode(reader.dir_mode() as _);
-        match rustix::fs::mkdirat(dst, dir, mode) {
-            Ok(()) => {}
-            Err(e) if e == rustix::io::Errno::EXIST => {}
-            Err(e) => return Err(e.into()),
-        }
-    }
-    let Some(copies) = safe_open::dir_at(dst, dir)? else {
-        return Ok(false);
-    };
+    let src = sub(src, dir)?;
+    sync_dir(src.as_ref(), dst, dir, reader, &|src, copies| {
+        sync_files(src, copies, reader, max)
+    })
+}
+
+/// Copies each file of `src` with a safe name and at most `max` bytes into `copies`, and drops
+/// every copy whose source is gone or isn't such a file.
+fn sync_files(
+    src: Option<&OwnedFd>,
+    copies: &OwnedFd,
+    reader: Reader,
+    max: u64,
+) -> std::io::Result<bool> {
     let mut wanted = HashSet::new();
     let mut changed = false;
-    if let Some(src) = &src {
-        rustix::fs::fchmod(&copies, Mode::from_raw_mode(reader.dir_mode() as _))?;
-        std::os::unix::fs::fchown(&copies, reader.uid, Some(reader.gid))?;
+    if let Some(src) = src {
         for name in names(src)?.into_iter().filter(|n| safe_name(n)) {
-            // A link or oversized entry is skipped, not copied and not fatal.
-            if let Ok(did) = sync_file(Some(src), &copies, &name, reader, max) {
+            // A link, a second link or an oversized entry is skipped, not copied and not fatal.
+            if let Ok(did) = sync_file(Some(src), copies, &name, reader, max) {
                 changed |= did;
                 wanted.insert(name);
             }
         }
     }
-    for name in names(&copies)? {
+    for name in names(copies)? {
         if !wanted.contains(&name) {
-            changed |= unlink(&copies, &name)?;
+            changed |= unlink(copies, &name)?;
         }
-    }
-    if src.is_none() {
-        let _ = rustix::fs::unlinkat(dst, dir, AtFlags::REMOVEDIR);
     }
     Ok(changed)
 }
@@ -1316,6 +1457,22 @@ mod tests {
         std::fs::write(config.join("library-metadata/sgdb.json"), "{}").unwrap();
         std::fs::write(config.join("library-stats.json"), "{}").unwrap();
         std::fs::write(config.join("mgmt-token"), "secret").unwrap();
+        let (run, romm) = (config.join("plugin-run"), config.join("plugin-state/romm"));
+        std::fs::create_dir_all(&run).unwrap();
+        std::fs::write(run.join("plugin-grants.json"), r#"{"romm":{"grants":[]}}"#).unwrap();
+        std::fs::write(run.join("plugin-tokens.json"), "secret").unwrap();
+        for dir in ["firmware/ps2/deeper", "firmware/psx", "cache"] {
+            std::fs::create_dir_all(romm.join(dir)).unwrap();
+        }
+        std::fs::write(romm.join("firmware/ps2/scph39001.bin"), "bios").unwrap();
+        std::fs::write(romm.join("firmware/ps2/deeper/x.bin"), "too deep").unwrap();
+        std::fs::write(romm.join("firmware/psx/scph5501.bin"), "bios").unwrap();
+        std::fs::write(romm.join("firmware/token.json"), "secret").unwrap();
+        std::fs::write(romm.join("token.json"), "secret").unwrap();
+        std::fs::write(romm.join("cache/x"), "x").unwrap();
+        std::fs::create_dir_all(config.join("plugin-state/steam")).unwrap();
+        std::fs::write(config.join("plugin-state/steam/key"), "secret").unwrap();
+        std::fs::write(config.join("plugin-state/runner.refused"), "x").unwrap();
         let reader = Reader::group(own_gid(&home));
 
         assert!(refresh_box_library(&home, &state, reader).unwrap());
@@ -1323,7 +1480,11 @@ mod tests {
         assert_eq!(mode(&copy), 0o750);
         assert_eq!(mode(&copy.join("library.json")), 0o640);
         assert!(copy.join("library-metadata/sgdb.json").exists());
-        for kept in ["library-stats.json", "mgmt-token"] {
+        for kept in [
+            "library-stats.json",
+            "mgmt-token",
+            "plugin-run/plugin-tokens.json",
+        ] {
             assert!(!copy.join(kept).exists(), "{kept} stays the owner's");
         }
         assert!(
@@ -1335,17 +1496,69 @@ mod tests {
         let trust = trust_dir(&state, &id());
         assert!(trust.join("library.json").exists());
         assert!(trust.join("library-metadata/sgdb.json").exists());
+        let state_copy = trust.join("plugin-state");
+        for copied in [copy.clone(), trust.clone()] {
+            assert!(copied.join("plugin-run/plugin-grants.json").exists());
+            assert!(!copied.join("plugin-run/plugin-tokens.json").exists());
+            let fw = copied.join("plugin-state/romm/firmware");
+            assert_eq!(
+                std::fs::read_to_string(fw.join("ps2/scph39001.bin")).unwrap(),
+                "bios"
+            );
+            assert_eq!(mode(&fw.join("ps2/scph39001.bin")), 0o640);
+            assert!(fw.join("psx/scph5501.bin").exists());
+        }
+        // Only `<provider>/firmware/<platform>/<file>` crosses: no token beside the firmware or
+        // above it, no cache, no deeper folder, no provider without firmware.
+        let mut crossed: Vec<String> = Vec::new();
+        let mut walk = vec![state_copy.clone()];
+        while let Some(dir) = walk.pop() {
+            for entry in std::fs::read_dir(&dir).unwrap().flatten() {
+                let path = entry.path();
+                let rel = path.strip_prefix(&state_copy).unwrap();
+                crossed.push(rel.to_string_lossy().into_owned());
+                if path.is_dir() {
+                    walk.push(path);
+                }
+            }
+        }
+        crossed.sort();
+        assert_eq!(
+            crossed,
+            [
+                "romm",
+                "romm/firmware",
+                "romm/firmware/ps2",
+                "romm/firmware/ps2/scph39001.bin",
+                "romm/firmware/psx",
+                "romm/firmware/psx/scph5501.bin",
+            ]
+        );
 
-        // A file the owner drops leaves both copies.
+        // A file the owner drops leaves both copies, and so does a platform or the grants.
         std::fs::remove_file(config.join("library-metadata/sgdb.json")).unwrap();
+        std::fs::remove_dir_all(romm.join("firmware/psx")).unwrap();
+        std::fs::remove_file(run.join("plugin-grants.json")).unwrap();
         assert!(refresh_box_library(&home, &state, reader).unwrap());
         assert!(refresh_seat_library(&state, &id(), reader).unwrap());
         assert!(!trust.join("library-metadata/sgdb.json").exists());
+        assert!(!trust.join("plugin-state/romm/firmware/psx").exists());
+        assert!(!trust.join("plugin-run/plugin-grants.json").exists());
+
+        // A platform the plugin links elsewhere is not followed, and its copy goes.
+        let elsewhere = temp.path().join("elsewhere");
+        std::fs::create_dir(&elsewhere).unwrap();
+        std::fs::write(elsewhere.join("shadow"), "root only").unwrap();
+        std::fs::remove_dir_all(romm.join("firmware/ps2")).unwrap();
+        std::os::unix::fs::symlink(&elsewhere, romm.join("firmware/ps2")).unwrap();
+        assert!(refresh_box_library(&home, &state, reader).unwrap());
+        assert!(!copy.join("plugin-state/romm/firmware/ps2").exists());
 
         remove_box_library(&state).unwrap();
         assert!(!copy.exists());
         assert!(refresh_seat_library(&state, &id(), reader).unwrap());
         assert!(!trust.join("library.json").exists());
+        assert!(!state_copy.exists());
     }
 
     /// The owner's display policy travels with the library: into the copy the door reads, and
@@ -1509,6 +1722,34 @@ mod tests {
         assert!(!dir.join("mgmt-token.tmp").exists());
         remove_seat_dirs(box_dir, &id()).unwrap();
         assert!(!dir.exists());
+    }
+
+    /// The save exchange folders are the seat's and the games group's, setgid, and keep what
+    /// is in them across starts; removing the seat takes them.
+    #[test]
+    fn a_seat_s_save_exchange_is_kept_until_the_seat_goes() {
+        let temp = tempfile::tempdir().unwrap();
+        let state = temp.path();
+        let me = std::fs::metadata(state).unwrap();
+        let seat = Passwd {
+            name: "pf-seat-1".into(),
+            uid: me.uid(),
+            gid: me.gid(),
+            gecos: String::new(),
+            home: state.join("home"),
+        };
+        ensure_seat_dirs(state, &id(), &seat, me.gid()).unwrap();
+        let saves = seat_dir(state, &id()).join("saves");
+        assert_eq!(mode(&saves), 0o711);
+        for name in ["out", "in"] {
+            assert_eq!(mode(&saves.join(name)), 0o2770, "{name}");
+        }
+        assert_eq!(mode(&seat_dir(state, &id()).join("compatdata")), 0o700);
+        std::fs::write(saves.join("out/slot.ps2"), "save").unwrap();
+        ensure_seat_dirs(state, &id(), &seat, me.gid()).unwrap();
+        assert!(saves.join("out/slot.ps2").exists());
+        remove_seat_dirs(state, &id()).unwrap();
+        assert!(!saves.exists());
     }
 
     /// The door reads a seat host's token below `persistence::default_root()`.
