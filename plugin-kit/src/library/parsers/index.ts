@@ -38,10 +38,12 @@ export {
 	parseRegQuery,
 	parseRegSubKeys,
 	type RegValue,
+	regLoadedHives,
 	regQueryValue,
 	regQueryValues,
 	regSubKeys,
 	spawnAgainIfKilled,
+	underServiceProfile,
 	validRegKey,
 } from "./registry.js";
 export {

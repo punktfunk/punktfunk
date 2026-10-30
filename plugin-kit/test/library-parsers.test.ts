@@ -33,10 +33,12 @@ import {
 	steamCdnUrl,
 	steamLibraryDirs,
 	steamListedLibraries,
+	validRegKey,
 	vdfPaths,
 	vdfValue,
 	withReadOnlyDb,
 } from "../src/library/parsers/index.js";
+import { valueText } from "../src/library/parsers/registry.js";
 
 const tmp = (name: string): string => {
 	const dir = path.join(os.tmpdir(), `pf-kit-${name}-${process.pid}`);
@@ -499,8 +501,64 @@ describe("openReadOnly", () => {
 // scanner found IRON NEST, the plugin found nothing.
 //
 // The fixture is the verbatim output from .173 (a blank line, then one subkey row).
+describe("valueText", () => {
+	const wide = (text: string) => Buffer.from(text, "utf16le");
+
+	test("prints each type as reg.exe does, UTF-16 intact", () => {
+		expect(valueText("REG_SZ", wide("D:\\\u00dcber\0"))).toBe("D:\\\u00dcber");
+		expect(valueText("REG_DWORD", Buffer.from([1, 0, 0, 0]))).toBe("0x1");
+		expect(valueText("REG_QWORD", Buffer.from([0, 1, 0, 0, 0, 0, 0, 0]))).toBe(
+			"0x100",
+		);
+		expect(valueText("REG_BINARY", Buffer.from([0xab, 0x01]))).toBe("AB01");
+		expect(valueText("REG_MULTI_SZ", wide("a\0b\0\0"))).toBe("a\\0b");
+		expect(valueText("REG_NONE", Buffer.alloc(4))).toBe("");
+	});
+
+	test("a number too short for its type reads as zero", () => {
+		expect(valueText("REG_DWORD", Buffer.alloc(0))).toBe("0x0");
+		expect(valueText("REG_QWORD", Buffer.alloc(3))).toBe("0x0");
+	});
+});
+
+describe("validRegKey", () => {
+	const USER = "C:\\Users\\player";
+	const SERVICE = "C:\\WINDOWS\\ServiceProfiles\\LocalService";
+
+	test("takes HKLM and a named hive from any account", () => {
+		expect(validRegKey("HKLM\\SOFTWARE\\Valve", SERVICE)).toBe(true);
+		expect(validRegKey("HKU\\S-1-5-21-1-2-3\\SOFTWARE\\X", SERVICE)).toBe(true);
+	});
+
+	test("takes HKCU only under a user's profile", () => {
+		expect(validRegKey("HKCU\\SOFTWARE\\Ubisoft", USER)).toBe(true);
+		expect(validRegKey("HKCU\\SOFTWARE\\Ubisoft", SERVICE)).toBe(false);
+	});
+
+	test("refuses other hives and hostile shapes", () => {
+		expect(validRegKey("HKCR\\Foo", USER)).toBe(false);
+		expect(validRegKey("HKLM\\", USER)).toBe(false);
+		expect(validRegKey("HKLM\\SOFTWARE\\..\\SAM", USER)).toBe(false);
+		expect(validRegKey('HKLM\\SOFTWARE\\a"b', USER)).toBe(false);
+	});
+});
+
 describe("parseRegSubKeys", () => {
 	const KEY = "HKLM\\SOFTWARE\\WOW6432Node\\GOG.com\\Games";
+
+	test("spells out every hive it was given", () => {
+		const row =
+			"HKEY_USERS\\S-1-5-21-1\\SOFTWARE\\Ubisoft\\Launcher\\Installs\\4502";
+		const key = "HKU\\S-1-5-21-1\\SOFTWARE\\Ubisoft\\Launcher\\Installs";
+		expect(parseRegSubKeys(row, key)).toEqual(["4502"]);
+		expect(
+			parseRegSubKeys("HKEY_CURRENT_USER\\SOFTWARE\\X\\7", "HKCU\\SOFTWARE\\X"),
+		).toEqual(["7"]);
+		// `HKEY_USERS` itself, as `regLoadedHives` falls back on it.
+		expect(parseRegSubKeys("HKEY_USERS\\S-1-5-19", "HKEY_USERS")).toEqual([
+			"S-1-5-19",
+		]);
+	});
 
 	test("returns subkey NAMES from real reg.exe output", () => {
 		const stdout = [
