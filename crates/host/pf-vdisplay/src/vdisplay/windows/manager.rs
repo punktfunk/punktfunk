@@ -284,7 +284,8 @@ impl Rungs {
 /// How one climb ended.
 enum Climb {
     Done(Result<VirtualOutput>),
-    /// The control device died under the ADD; its error is the retire's cause.
+    /// The control device died under the ADD or its seat adapter left; the error is the
+    /// retire's cause.
     Retire(anyhow::Error),
 }
 
@@ -313,13 +314,17 @@ fn budget_spent(live: usize, max: u32) -> anyhow::Error {
     )
 }
 
+/// This process hosts a seat inside its own RDP session.
+fn in_seat_session() -> bool {
+    pf_paths::seat::role().runs_seat_session()
+        && pf_win_display::console_session_mismatch().is_some()
+}
+
 /// A seat session that lists no display path has lost the config its adapter published, and no
 /// monitor added to it can get one. Dropping the connection makes the keeper reattach, which
 /// brings up a new adapter with a lit placeholder for the caller's next attempt.
 fn rebuild_empty_seat_session() {
-    let seat = pf_paths::seat::role().runs_seat_session()
-        && pf_win_display::console_session_mismatch().is_some();
-    if !seat || !pf_win_display::win_display::session_has_no_paths() {
+    if !in_seat_session() || !pf_win_display::win_display::session_has_no_paths() {
         return;
     }
     match pf_win_display::disconnect_own_session() {
@@ -940,6 +945,14 @@ fn is_device_gone(e: &anyhow::Error) -> bool {
     GONE.contains(&w.code().0)
 }
 
+/// A seat ADD that ends in 0x80070490 usually means this handle's adapter left with the RDP
+/// connection. The reopen reaches the session's current adapter; exhausted slots fail it again.
+fn is_stale_seat_add(e: &anyhow::Error) -> bool {
+    in_seat_session()
+        && e.downcast_ref::<windows::core::Error>()
+            .is_some_and(|w| w.code().0 == 0x8007_0490u32 as i32)
+}
+
 impl VirtualDisplayManager {
     fn new(driver: Box<dyn VdisplayDriver>, ccd: Box<dyn CcdOps>) -> VirtualDisplayManager {
         VirtualDisplayManager {
@@ -1039,8 +1052,8 @@ impl VirtualDisplayManager {
     /// Acquires the process-resolved connector slot, then joins or creates its monitor by
     /// climbing the isolate ladder ([`Ladder`]) in one transition. A seat override is resolved
     /// before any driver access. The returned [`MonitorLease`] releases only its matching
-    /// generation. A device that dies under the ADD is retired once that transition commits,
-    /// then reopened outside any and climbed once more.
+    /// generation. A device that dies under the ADD or whose seat adapter left is retired once
+    /// that transition commits, then reopened outside any and climbed once more.
     pub(crate) fn acquire(
         &'static self,
         mode: Mode,
@@ -1082,8 +1095,22 @@ impl VirtualDisplayManager {
         }
     }
 
+    /// Drops `slot`'s monitor if its adapter left this seat session, and says why the control
+    /// device goes with it. A reattach replaces the adapter under a new LUID and WUDFHost, while
+    /// this process's handle keeps the old WUDFHost running, so only the session's paths show it.
+    fn forget_left_adapter(&self, t: &mut MgrInner, slot: u32) -> Option<anyhow::Error> {
+        let key = t.slots.get(&slot)?.mon.ccd_key();
+        if !in_seat_session() || !pf_win_display::win_display::adapter_left_session(key) {
+            return None;
+        }
+        let Slot { mon, .. } = t.slots.remove(&slot)?;
+        tracing::warn!(slot, old_target = %key, "seat adapter was replaced — recreating the monitor");
+        self.teardown_removed(None, t, vec![mon]);
+        Some(anyhow::anyhow!("seat adapter of {key} left the session"))
+    }
+
     /// One climb of the ladder for `ask` on the checked-out map: each [`Next`] is one act, and
-    /// what it saw picks the next.
+    /// what it saw picks the next. A slot on a departed seat adapter retires the device first.
     fn climb(
         &'static self,
         dev: &ControlDevice,
@@ -1091,6 +1118,9 @@ impl VirtualDisplayManager {
         ask: &Ask,
         reopened: bool,
     ) -> Climb {
+        if let Some(why) = self.forget_left_adapter(t, ask.slot) {
+            return Climb::Retire(why);
+        }
         let max = crate::policy::prefs().get().effective().max_displays;
         let live = t.slots.len() as u32;
         let (mut ladder, mut next) = Ladder::start(found(t, ask), live, max, reopened);
@@ -1233,7 +1263,7 @@ impl VirtualDisplayManager {
                 Seen::Added(Ok(()))
             }
             Err(e) => {
-                let class = if is_device_gone(&e) {
+                let class = if is_device_gone(&e) || is_stale_seat_add(&e) {
                     AddError::DeviceGone
                 } else {
                     AddError::Refused
