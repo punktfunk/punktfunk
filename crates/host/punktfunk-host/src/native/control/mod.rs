@@ -613,7 +613,9 @@ impl ControlTask {
     }
 
     /// A report window, newly closed: the offload guard, the loss and link notes, adaptive
-    /// FEC, the delivery count, then the share of the path this session is on.
+    /// FEC, the delivery count, then the share of the path this session is on. Link health
+    /// reads the dead frames' share too; the guard and FEC read `loss_ppm` alone
+    /// ([`Feedback::dead_ppm`]).
     async fn on_report_window(&mut self, fb: &Feedback) -> Step {
         // Before FEC: the send mode is not FEC's business, pinned or adaptive.
         if let Some(g) = self.offload_guard.as_mut() {
@@ -626,7 +628,8 @@ impl ControlTask {
         {
             shared.lossy_window.store(true, Ordering::Relaxed);
         }
-        self.link.note_loss(fb.loss_ppm, unrecovered_run);
+        let lost_ppm = fb.loss_ppm.saturating_add(fb.dead_ppm).min(1_000_000);
+        self.link.note_loss(lost_ppm, unrecovered_run);
         self.link
             .note_positions(fb.head, fb.mid, fb.tail, fb.sock_drops);
         self.link.sample_bands(
@@ -685,6 +688,7 @@ impl ControlTask {
         if prev != target {
             tracing::debug!(
                 loss_ppm = fb.loss_ppm,
+                dead_ppm = fb.dead_ppm,
                 unrecovered_run,
                 fec_pct = target,
                 prev_fec_pct = prev,
