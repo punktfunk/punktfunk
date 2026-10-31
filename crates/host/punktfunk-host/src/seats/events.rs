@@ -47,9 +47,14 @@ pub(crate) fn fan_in(kinds: &'static str) {
                 let ledger = super::ledger();
                 for seat in &ledger.seats {
                     let id = seat.id.as_str().to_string();
-                    if seat.runtime.state != pf_seats::RuntimeState::Running
-                        || tails.contains_key(&id)
-                    {
+                    if seat.runtime.state != pf_seats::RuntimeState::Running {
+                        // All it says from its next start is new. A launch held there waits on
+                        // this tail, which can connect ticks after the client does.
+                        let mut cursors = cursors.lock().unwrap_or_else(|e| e.into_inner());
+                        cursors.insert(id, 0);
+                        continue;
+                    }
+                    if tails.contains_key(&id) {
                         continue;
                     }
                     let Some(profile) = profile_of(seat) else {
@@ -88,7 +93,8 @@ fn tail(
     kinds: &str,
 ) {
     let id = seat.id.as_str().to_string();
-    // Past every seq the seat has: only what happens from now on, never a replay.
+    // A seat already running when this host came up: only what happens from now on, never a
+    // replay.
     let since = cursors
         .lock()
         .unwrap_or_else(|e| e.into_inner())
