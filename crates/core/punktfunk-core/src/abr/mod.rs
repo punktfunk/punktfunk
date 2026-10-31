@@ -119,11 +119,13 @@ pub struct DriverConfig {
 /// its own business.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Action {
-    /// One window's report: shard loss in ppm, the host's adaptive-FEC input; the
-    /// session's packets received, which tell "no loss" from "nothing arrives" and divide a
-    /// path two of the host's sessions share; and where the window's loss fell.
+    /// One window's report: shard loss in ppm, the host's adaptive-FEC input, and what the
+    /// frames that died add to it; the session's packets received, which tell "no loss" from
+    /// "nothing arrives" and divide a path two of the host's sessions share; and where the
+    /// window's loss fell.
     Report {
         loss_ppm: u32,
+        dead_ppm: u32,
         packets_received: u64,
         head: u32,
         mid: u32,
@@ -753,6 +755,7 @@ impl Driver {
         } else {
             actions.push(Action::Report {
                 loss_ppm: w.loss_ppm,
+                dead_ppm: closed.dead_ppm,
                 packets_received: closed.packets_received,
                 head: w.head,
                 mid: w.mid,

@@ -1532,7 +1532,14 @@ mod wire_equivalence_tests {
         send(1, 16, &|_| true);
         assert_eq!(poll(&mut client), vec![(0, false), (1, true)]);
         let st = client.stats();
-        assert_eq!((st.frames_dropped, st.partial_shards_lost), (0, 1));
+        assert_eq!(
+            (
+                st.frames_dropped,
+                st.partial_shards_lost,
+                st.dead_shards_lost
+            ),
+            (0, 1, 0)
+        );
 
         // Held for a NACK, the newer frame does not take it.
         send(2, 33, &|i| i != 30);

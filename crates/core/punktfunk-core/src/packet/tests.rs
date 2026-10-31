@@ -1928,8 +1928,9 @@ fn loss_is_counted_by_its_place_in_the_frame() {
     assert_eq!(s.fec_recovered_shards - s.fec_late_shards, 2);
 }
 
-/// A frame that dies with one block repaired and one past its parity: the repair is
-/// loss, and the dead block's three holes count nowhere.
+/// A frame that dies with one block repaired and one past its parity: each missing data
+/// shard is loss once, the repair in `fec_recovered_shards`, the dead block's three holes
+/// in `dead_shards_lost`.
 #[test]
 fn a_dead_frame_counts_its_holes_once() {
     let cfg = e2e_config(FecScheme::Gf16, 50);
@@ -1955,11 +1956,11 @@ fn a_dead_frame_counts_its_holes_once() {
     rig.push_all(&b).expect("the next frame is whole");
     let s = rig.stats.snapshot();
     assert_eq!((s.frames_dropped, s.fec_recovered_shards), (1, 1));
+    assert_eq!((s.partial_shards_lost, s.dead_shards_lost), (0, 3));
     let received = (kept.len() + b.len()) as u64;
     assert_eq!(
-        crate::quic::window_loss_ppm(1, 0, s.partial_shards_lost, received),
-        1_000_000 / 117,
-        "block 1's repair alone"
+        crate::quic::window_loss_ppm(1, 0, s.dead_shards_lost, received),
+        4 * 1_000_000 / 120
     );
 }
 

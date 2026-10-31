@@ -36,6 +36,10 @@ pub struct Stats {
     /// ([`window_loss_ppm`](crate::quic::window_loss_ppm)). Not mirrored into the C-ABI
     /// `PunktfunkStats`.
     pub partial_shards_lost: u64,
+    /// Data shards a frame that aged out dead never got, in blocks no parity rebuilt. Link
+    /// loss beside `partial_shards_lost`; a frame counts in one of the two, never both. Not
+    /// mirrored into the C-ABI `PunktfunkStats`.
+    pub dead_shards_lost: u64,
     pub bytes_sent: u64,
     pub bytes_received: u64,
     /// DATA-shard payload delivered to the video reassembler — no headers, FEC
@@ -108,6 +112,7 @@ pub struct StatsCounters {
     pub fec_recovered_shards: AtomicU64,
     pub fec_late_shards: AtomicU64,
     pub partial_shards_lost: AtomicU64,
+    pub dead_shards_lost: AtomicU64,
     pub bytes_sent: AtomicU64,
     pub bytes_received: AtomicU64,
     pub media_bytes_received: AtomicU64,
@@ -144,6 +149,7 @@ impl StatsCounters {
             fec_recovered_shards: self.fec_recovered_shards.load(l),
             fec_late_shards: self.fec_late_shards.load(l),
             partial_shards_lost: self.partial_shards_lost.load(l),
+            dead_shards_lost: self.dead_shards_lost.load(l),
             bytes_sent: self.bytes_sent.load(l),
             bytes_received: self.bytes_received.load(l),
             media_bytes_received: self.media_bytes_received.load(l),
