@@ -5,10 +5,13 @@
 const START_NS: i64 = 0;
 /// One slot miss widens the margin by this much.
 const STEP_NS: i64 = 500_000;
-/// The widest margin.
-const MAX_NS: i64 = 2_500_000;
-/// Clean presents in a row that narrow the margin one step: about a second at 120 Hz.
-const DECAY_PRESENTS: u32 = 120;
+/// The widest margin: the desktop presenter's cap. A Shield TV's apply can take over 2.5 ms to
+/// reach SurfaceFlinger's latch; the A024 never needed that.
+const MAX_NS: i64 = 8_000_000;
+/// Clean presents in a row that narrow the margin one step: a minute at 60 Hz. Narrowing is a
+/// probe, and a probe that fails costs a repeated frame and a dropped one, so it runs no more
+/// often than the clock beat's own drop.
+const DECAY_PRESENTS: u32 = 3600;
 
 /// Apply-ahead beyond the learned lead: the binder hop plus SurfaceFlinger's wakeup-to-latch gap.
 /// A miss widens it one step, up to [`MAX_NS`]; [`DECAY_PRESENTS`] clean presents narrow it one.
@@ -52,19 +55,21 @@ mod tests {
 
     /// A session's presents replayed in runs: (missed, how many, the margin after the run).
     #[test]
-    fn a_replayed_session_widens_on_misses_then_narrows_a_step_a_second() {
+    fn a_replayed_session_widens_on_misses_then_narrows_a_step_a_minute() {
+        let steps = (MAX_NS / STEP_NS) as u32;
         let replay: &[(bool, u32, i64)] = &[
             (false, 300, 0),
             (true, 1, STEP_NS),
             (true, 2, 3 * STEP_NS),
-            (true, 5, MAX_NS),
+            (true, steps - 3, MAX_NS),
+            (true, 4, MAX_NS),
             (false, DECAY_PRESENTS - 1, MAX_NS),
             (false, 1, MAX_NS - STEP_NS),
             // A miss one present short of the decay starts the count again.
             (false, DECAY_PRESENTS - 1, MAX_NS - STEP_NS),
             (true, 1, MAX_NS),
             (false, DECAY_PRESENTS - 1, MAX_NS),
-            (false, 4 * DECAY_PRESENTS + 1, 0),
+            (false, (steps - 1) * DECAY_PRESENTS + 1, 0),
             (false, 10 * DECAY_PRESENTS, 0),
         ];
         let mut m = ApplyMargin::new();
