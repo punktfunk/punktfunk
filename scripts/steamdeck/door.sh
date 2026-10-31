@@ -108,8 +108,12 @@ EOF
     else
         rm -rf "$PF_COPY/punktfunk-gamescope" "$PF_COPY/gamescope"
     fi
-    # The door runs as another user, so it reads the checkout's branch, its channel, from here.
-    if [ -f "$SRC/.git/HEAD" ]; then cp "$SRC/.git/HEAD" "$PF_COPY/source-head"; fi
+    # The door runs as another user, so it reads the checkout's branch, its channel, and the commit
+    # this copy is from here.
+    if [ -f "$SRC/.git/HEAD" ]; then
+        cp "$SRC/.git/HEAD" "$PF_COPY/source-head"
+        git -C "$SRC" rev-parse HEAD >"$PF_COPY/source-commit"
+    fi
 }
 
 # Everything the door needs, from this checkout. Needs sudo; re-run by every install.sh and
@@ -172,11 +176,15 @@ EOF
     ok "Reachable without logging in: ready to turn on under Profiles in the console"
 }
 
+# Whether the door is turned on, and the version its copy holds.
+door_on() { systemctl is-enabled --quiet punktfunk-door.service 2>/dev/null; }
+door_version() { cat "$PF_OPT/version" 2>/dev/null || true; }
+
 # The no-sudo half: a rebuild of the version the door already runs, which is what the post-OS-update
 # check makes. Another version waits for door_install, so the door and its supervisor never differ.
 door_refresh() {
     [ -w "$PF_COPY" ] || return 0
-    if [ "$(cat "$PF_OPT/version" 2>/dev/null || true)" != "$PF_BUILD_VERSION" ]; then
+    if [ "$(door_version)" != "$PF_BUILD_VERSION" ]; then
         warn "Reachable without logging in stays on its version until update.sh runs with your password"
         return 0
     fi
