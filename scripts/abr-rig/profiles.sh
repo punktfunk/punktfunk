@@ -207,11 +207,18 @@ profile() {
       MODE=1920x1080x60; ACHIEVABLE_KBPS=60000
       REBIND_AT=15; REBIND_MTU=1280
       ;;
+    # A fixed rate over a 100 Mbit/s hop with a switch's queue. Nothing measures the session,
+    # so it starts at the floor's pace and only its dead frames bring that down.
+    fixed_100m)
+      RATE_KBIT=93000; DELAY_MS=1; BUFFER_MS=10
+      MODE=1920x1080x60; ACHIEVABLE_KBPS=80000
+      PROBE_BITRATE="${PF_RIG_FIXED_KBPS:-80000}"
+      ;;
     *)
       echo "unknown profile '$1' (lan_1g lan_1g_switch lan_1g_smallbuf wifi_tv wifi_tv_probe_damage wan_wg_12 \
 lte_variable wan_still ramp_loss nowall_720p policer_20 shared_two_auto shared_both shared_newcomer \
 shared_fixed_plus_auto shared_fixed_survivor shared_leaver shared_lone shared_fixed_lone roam_wifi \
-roam_tunnel)" >&2
+roam_tunnel fixed_100m)" >&2
       return 1
       ;;
   esac

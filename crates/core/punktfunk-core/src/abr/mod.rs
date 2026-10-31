@@ -55,6 +55,10 @@ use std::time::Instant;
 /// 4 × 750 ms = 3 s, long enough that one cut's landing is not a weak network.
 const FLOOR_WINDOWS: u32 = 4;
 
+/// Windows running with a dead frame that refute `L` on a fixed rate: 1.5 s. A link that
+/// loses a lone frame stays at the rate it was paced at.
+const DEAD_RUN: u8 = 2;
+
 /// The least move of the delay frame between two iterations that is a step, ns. Under it is
 /// drift the skew model carries: at its 500 ppm clamp a one-second carry is half of this.
 const CLOCK_STEP_NS: i128 = 1_000_000;
@@ -250,6 +254,10 @@ pub struct Driver {
     shape: shape::ShapeState,
     /// Consecutive windows of tail loss with no frame lost.
     tail_run: u8,
+    /// An explicit H.26x rate, until `L` retreats to it. Nothing measures this session.
+    fixed_kbps: Option<u32>,
+    /// Consecutive windows of dead frames at that rate.
+    dead_run: u8,
     /// The delay frame as [`on_clock`](Self::on_clock) last heard it.
     clock_frame: Option<i128>,
 }
@@ -281,9 +289,10 @@ impl Driver {
         Driver {
             abr,
             window: window::WindowAccumulator::new(cfg.audio_reserved_kbps, cfg.marks_repeats, now),
-            // An explicit rate has nothing to measure for — except a PyroWave
-            // pin, which the ramp checks once before the first frame. A
-            // PyroWave ramp climbs past the pin and never bursts beside video.
+            // An explicit H.26x rate measures nothing: its dead frames speak for
+            // the link ([`set_fixed_rate`](Self::set_fixed_rate)). A PyroWave pin
+            // is checked once by the ramp before the first frame; that ramp
+            // climbs past the pin and never bursts beside video.
             probe: match pin_kbps.or(floor.map(|_| cfg.stream_cap_kbps)) {
                 Some(pin) => probe::CapacityProbe::for_pinned(
                     cfg.probe && cfg.ramp,
@@ -314,6 +323,8 @@ impl Driver {
             seen_wall: None,
             shape: shape::ShapeState::default(),
             tail_run: 0,
+            fixed_kbps: None,
+            dead_run: 0,
             clock_frame: None,
         }
     }
@@ -321,6 +332,12 @@ impl Driver {
     /// Both ends' ports: the host's from its `StreamConfig`, this device's from the dial.
     pub fn set_ports(&mut self, host: crate::quic::LinkFacts, client: crate::quic::LinkFacts) {
         self.link.set_ports(host, client);
+    }
+
+    /// The rate the player fixed on an H.26x session. `L` retreats to it when frames keep
+    /// dying ([`watch_fixed_rate`](Self::watch_fixed_rate)).
+    pub fn set_fixed_rate(&mut self, kbps: u32) {
+        self.fixed_kbps = Some(kbps).filter(|&k| k > 0);
     }
 
     /// The link rate `L`, kbps, and where it came from.
@@ -828,8 +845,10 @@ impl Driver {
     /// What a judged window says about the link and the receiver: tail loss two windows
     /// running with no frame lost is a mark that takes `L` down a notch, without a cut;
     /// tail loss that kills a frame is the controller's cut and mark, and restarts the
-    /// calm count; head loss switches the wake shape; the controller's wall moves `L`.
+    /// calm count; head loss switches the wake shape; the controller's wall moves `L`; dead
+    /// frames on a fixed rate move it too.
     fn after_window(&mut self, w: &WindowSample, actions: &mut Vec<Action>) {
+        self.watch_fixed_rate(w);
         if verdict::tail_mark(w) {
             self.tail_run = self.tail_run.saturating_add(1);
             if self.tail_run >= 2 {
@@ -868,6 +887,28 @@ impl Driver {
                 (_, None) => self.link.dropped_cap(),
             }
             self.seen_wall = wall;
+        }
+    }
+
+    /// A fixed rate has no controller to mark a wall and no ramp to retreat to, so frames
+    /// dying [`DEAD_RUN`] windows running bring `L` to the stream's own rate, once and for
+    /// the session. A queue that overflows early in a frame loses its middle more than its
+    /// tail, which the tail signature does not read; only head loss is excused, for the
+    /// wake shape. The host then paces at 1.5 × the rate, its cap included.
+    fn watch_fixed_rate(&mut self, w: &WindowSample) {
+        let Some(kbps) = self.fixed_kbps else {
+            return;
+        };
+        let dead = w.dropped > 0 && !verdict::head_signature(w);
+        self.dead_run = if dead { self.dead_run + 1 } else { 0 };
+        if self.dead_run >= DEAD_RUN {
+            self.fixed_kbps = None;
+            self.link.frames_refuted(kbps);
+            tracing::info!(
+                stream_kbps = kbps,
+                link_kbps = self.link.kbps(),
+                "frames dying at a fixed rate: the link rate comes down to the stream's"
+            );
         }
     }
 
@@ -1511,6 +1552,42 @@ mod tests {
             d.after_window(&calm, &mut acts);
         }
         assert_eq!(d.link().0, LINK_FLOOR_KBPS, "forty calm windows after it");
+    }
+
+    /// Frames dying two windows running at a fixed rate take `L` from the floor to the
+    /// stream, whichever part of them died. One dead window, head loss and an Automatic
+    /// session leave it alone.
+    #[test]
+    fn dead_frames_at_a_fixed_rate_refute_the_floor() {
+        let at = Instant::now();
+        let mut acts = Vec::new();
+        let middles = WindowSample {
+            dropped: 3,
+            mid: 57,
+            tail: 25,
+            ..WindowSample::at(at)
+        };
+        let heads = WindowSample {
+            dropped: 3,
+            head: 40,
+            ..WindowSample::at(at)
+        };
+        let calm = WindowSample::at(at);
+
+        let mut automatic = quiet_driver(at);
+        automatic.after_window(&middles, &mut acts);
+        automatic.after_window(&middles, &mut acts);
+        assert_eq!(automatic.link().0, LINK_FLOOR_KBPS, "the controller's");
+
+        let mut d = quiet_driver(at);
+        d.set_fixed_rate(80_000);
+        for w in [&middles, &calm, &middles, &heads, &heads, &calm] {
+            d.after_window(w, &mut acts);
+        }
+        assert_eq!(d.link().0, LINK_FLOOR_KBPS, "no run of dead frames");
+        d.after_window(&middles, &mut acts);
+        d.after_window(&middles, &mut acts);
+        assert_eq!(d.link(), (80_000, LinkSource::Measured));
     }
 
     /// When step `i`'s report reached the client, in the test above.
