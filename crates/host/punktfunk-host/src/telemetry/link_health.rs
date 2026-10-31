@@ -319,12 +319,14 @@ impl LinkWindow {
     }
 
     /// One closed client report window. `unrecovered_run` is
-    /// [`UnrecoveredRun::report`](crate::native::bitrate::UnrecoveredRun)'s verdict on it.
+    /// [`UnrecoveredRun::report`](crate::native::bitrate::UnrecoveredRun)'s verdict on it. A
+    /// window a frame died in is a loss window whatever its `loss_ppm`: an older client's
+    /// report leaves a dead frame out, and a frame no shard of which arrived has no holes.
     pub fn note_loss(&mut self, loss_ppm: u32, unrecovered_run: u32) {
         self.windows += 1;
         self.loss_ppm_sum += u64::from(loss_ppm);
         self.loss_ppm_max = self.loss_ppm_max.max(loss_ppm);
-        if loss_ppm > 0 {
+        if loss_ppm > 0 || unrecovered_run > 0 {
             self.loss_windows += 1;
         }
         if unrecovered_run > 0 {
@@ -519,6 +521,8 @@ mod tests {
         w.note_loss(0, 0);
         w.note_loss(5_300, 1);
         w.note_loss(1_700, 0);
+        // A frame died, though the report counted no shard: still a loss window.
+        w.note_loss(0, 2);
         w.sample_bands(8, 8_000);
         w.note_rfi();
         w.note_rfi();
@@ -531,11 +535,11 @@ mod tests {
         w.note_bitrate_ask(1, 0);
 
         let m = w.close(&c, 8, 8_000);
-        assert_eq!(m.windows, 3);
-        assert_eq!(m.loss_windows, 2);
+        assert_eq!(m.windows, 4);
+        assert_eq!(m.loss_windows, 3);
         assert_eq!(m.loss_max_ppm, 5_300);
-        assert_eq!(m.loss_mean_ppm, 2_333);
-        assert_eq!(m.unrecovered, 1);
+        assert_eq!(m.loss_mean_ppm, 1_750);
+        assert_eq!(m.unrecovered, 2);
         assert_eq!(m.rfi, 2);
         assert_eq!(m.keyframe_req, 1);
         assert_eq!(m.gaps, 1);

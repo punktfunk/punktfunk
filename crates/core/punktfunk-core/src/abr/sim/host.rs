@@ -786,8 +786,8 @@ mod tests {
         assert_eq!(adapt_fec(10_000), 5, "1 % loss is still inside the floor");
         assert_eq!(adapt_fec(50_000), 8, "5 % → ceil(7) + 1");
         assert_eq!(adapt_fec(400_000), 50);
-        // A run of unrecovered frames adds the step for four windows, then
-        // lets it go; decay is one point per window.
+        // A run of unrecovered frames adds the step for four windows and holds
+        // it while the run lasts; decay is one point per window after.
         let frame = FrameBudget {
             budget_kbps: 12_500,
             audio_kbps: 256,
@@ -796,7 +796,7 @@ mod tests {
         };
         let mut h = LossHorizon::default();
         assert_eq!(fec_target(0, 5, 1, frame, &mut h), 8);
-        assert_eq!(fec_target(0, 8, 5, frame, &mut h), 7, "past the run, decay");
+        assert_eq!(fec_target(0, 8, 5, frame, &mut h), 8, "past the step, held");
         assert_eq!(fec_target(0, 8, 0, frame, &mut h), 7);
     }
 

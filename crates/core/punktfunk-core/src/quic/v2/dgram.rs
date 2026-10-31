@@ -149,8 +149,13 @@ pub struct Feedback {
     /// The last closed report window's number, from 1; `0` before the first. It and its
     /// fields ride every datagram until the next window closes. A host reads each once.
     pub window: u32,
-    /// Shards parity repaired over the window, ppm.
+    /// Shards parity repaired over the window, and the holes partial frames went up with, ppm.
     pub loss_ppm: u32,
+    /// What the window's dead frames add to `loss_ppm`: `loss_ppm + dead_ppm` is every data
+    /// shard that never arrived. Dead-frame holes inform the report, link health and the
+    /// operator; the host's automatic responses read `loss_ppm` alone, parity-repairable
+    /// loss, until the FEC policy says otherwise. A client before it sends `0`.
+    pub dead_ppm: u32,
     /// Media packets received this session.
     pub packets_received: u64,
     /// The window's lost shards by their place in the frame: the first twelve data shards,
@@ -194,7 +199,11 @@ impl Feedback {
                     .u32(2, self.loss_ppm)
                     .u64(3, self.packets_received);
                 let f = nz(nz(f, 9, self.head), 10, self.mid);
-                nz(nz(f, 11, self.tail), 12, self.sock_drops)
+                nz(
+                    nz(nz(f, 11, self.tail), 12, self.sock_drops),
+                    19,
+                    self.dead_ppm,
+                )
             })
             .when(self.link_kbps != 0, |f| f.u32(8, self.link_kbps))
             .when(self.shape != 0, |f| f.u8(16, self.shape))
@@ -243,6 +252,7 @@ impl Feedback {
                 16 => fb.shape = u8_of(v)?,
                 17 => set_once(&mut nack_frame, u32_of(v)?)?,
                 18 => fb.stream = u8_of(v)?,
+                19 => fb.dead_ppm = u32_of(v)?,
                 _ => {}
             }
         }
@@ -486,6 +496,7 @@ mod tests {
             Feedback {
                 window: 6,
                 loss_ppm: 40,
+                dead_ppm: 52_000,
                 packets_received: 90_000,
                 tail: 2,
                 link_kbps: 940_000,

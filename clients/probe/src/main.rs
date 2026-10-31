@@ -27,8 +27,8 @@ use punktfunk_core::quic::v2::hello::{ClientHello, Ready, ServerHello};
 use punktfunk_core::quic::v2::io as v2io;
 use punktfunk_core::quic::v2::msg::{decode, V2Message};
 use punktfunk_core::quic::{
-    endpoint, window_loss_ppm, BitrateChanged, CursorRenderMode, CursorShape, Hello, ProbeRequest,
-    ProbeResult, Reconfigure, Reconfigured, SetBitrate, Welcome,
+    endpoint, window_report_ppm, BitrateChanged, CursorRenderMode, CursorShape, Hello,
+    ProbeRequest, ProbeResult, Reconfigure, Reconfigured, SetBitrate, Welcome,
 };
 use punktfunk_core::session::test_frame;
 use punktfunk_core::{CompositorPref, Mode, PunktfunkError, Session};
@@ -581,6 +581,8 @@ struct Counters {
     /// The windowed loss estimate the loss relay sends in its feedback window, so the host sizes
     /// FEC to the link. `u32::MAX` = no fresh sample this window.
     loss_ppm: AtomicU32,
+    /// What the window's dead frames add to `loss_ppm`, sent beside it.
+    dead_ppm: AtomicU32,
     /// The session's cumulative unrecoverable-frame count. The loss relay requests a keyframe
     /// when it grows, the loss trigger under infinite GOP (see `NativeClient::frames_dropped`).
     dropped_frames: AtomicU64,
@@ -1416,7 +1418,7 @@ fn spawn_loss_relay(conn: quinn::Connection, ls: CtlTx, counters: &Arc<Counters>
         let send = |fb: Feedback| conn.send_datagram(fb.encode().into()).is_ok();
         let mut last_report = std::time::Instant::now();
         let mut last_dropped = 0u64;
-        let mut loss_ppm = 0u32;
+        let (mut loss_ppm, mut dead_ppm) = (0u32, 0u32);
         let (mut window, mut ask) = (0u32, 0u16);
         loop {
             tokio::time::sleep(std::time::Duration::from_millis(100)).await;
@@ -1439,14 +1441,17 @@ fn spawn_loss_relay(conn: quinn::Connection, ls: CtlTx, counters: &Arc<Counters>
                 last_report = std::time::Instant::now();
                 // A window without a fresh loss sample repeats the last: what a dead data
                 // plane looks like is the delivery count standing still, not a silent window.
-                let v = c.loss_ppm.swap(u32::MAX, Relaxed);
+                let v = c
+                    .loss_ppm
+                    .swap(u32::MAX, std::sync::atomic::Ordering::Acquire);
                 if v != u32::MAX {
-                    loss_ppm = v;
+                    (loss_ppm, dead_ppm) = (v, c.dead_ppm.load(Relaxed));
                 }
                 window = window.wrapping_add(1).max(1);
                 let fb = Feedback {
                     window,
                     loss_ppm,
+                    dead_ppm,
                     packets_received: c.rx_wire_packets.load(Relaxed),
                     link_kbps,
                     ..Default::default()
@@ -2016,23 +2021,11 @@ impl LatencySplit {
 /// every 750 ms.
 struct StatsMirror {
     last_report: std::time::Instant,
-    recovered: u64,
-    late: u64,
-    holes: u64,
-    received: u64,
+    /// The counters the last loss window closed on.
+    at: punktfunk_core::stats::Stats,
 }
 
 impl StatsMirror {
-    fn new() -> StatsMirror {
-        StatsMirror {
-            last_report: std::time::Instant::now(),
-            recovered: 0,
-            late: 0,
-            holes: 0,
-            received: 0,
-        }
-    }
-
     fn publish(&mut self, session: &Session, counters: &Counters) {
         use std::sync::atomic::Ordering::Relaxed;
         let s = session.stats();
@@ -2042,20 +2035,20 @@ impl StatsMirror {
         if self.last_report.elapsed() < std::time::Duration::from_millis(750) {
             return;
         }
-        counters.loss_ppm.store(
-            window_loss_ppm(
-                s.fec_recovered_shards.wrapping_sub(self.recovered),
-                s.fec_late_shards.wrapping_sub(self.late),
-                s.partial_shards_lost.wrapping_sub(self.holes),
-                s.packets_received.wrapping_sub(self.received),
-            ),
-            Relaxed,
+        let at = std::mem::replace(&mut self.at, s);
+        let (loss_ppm, dead_ppm) = window_report_ppm(
+            s.fec_recovered_shards.wrapping_sub(at.fec_recovered_shards),
+            s.fec_late_shards.wrapping_sub(at.fec_late_shards),
+            s.partial_shards_lost.wrapping_sub(at.partial_shards_lost),
+            s.dead_shards_lost.wrapping_sub(at.dead_shards_lost),
+            s.packets_received.wrapping_sub(at.packets_received),
         );
+        // Released by the `loss_ppm` store, which the relay acquires before it reads this.
+        counters.dead_ppm.store(dead_ppm, Relaxed);
+        counters
+            .loss_ppm
+            .store(loss_ppm, std::sync::atomic::Ordering::Release);
         self.last_report = std::time::Instant::now();
-        self.recovered = s.fec_recovered_shards;
-        self.late = s.fec_late_shards;
-        self.holes = s.partial_shards_lost;
-        self.received = s.packets_received;
     }
 }
 
@@ -2350,7 +2343,10 @@ fn data_plane(
     // Stream-duration cap: `--seconds N`, else the 120s default. Ending the loop here reaches the
     // graceful `conn.close` below (with the deliberate-quit code if `--quit`).
     let cap_secs = seconds.unwrap_or(120);
-    let mut mirror = StatsMirror::new();
+    let mut mirror = StatsMirror {
+        last_report: started,
+        at: Default::default(),
+    };
     loop {
         mirror.publish(&session, &counters);
         if stream_over(

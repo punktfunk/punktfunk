@@ -183,6 +183,7 @@ impl DataPump {
             match action {
                 Action::Report {
                     loss_ppm,
+                    dead_ppm,
                     packets_received,
                     head,
                     mid,
@@ -191,6 +192,7 @@ impl DataPump {
                 } => {
                     let report = crate::quic::v2::dgram::Feedback {
                         loss_ppm,
+                        dead_ppm,
                         packets_received,
                         head,
                         mid,

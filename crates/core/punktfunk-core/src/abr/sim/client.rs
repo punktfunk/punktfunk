@@ -512,13 +512,16 @@ impl Client {
         let mut lost = 0u32;
         // Where each lost shard sat, as the reassembler counts it: parity is the tail.
         let mut places = [0u64; 3];
+        let mut data_lost = vec![0u32; f.shape.blocks as usize];
         let mut mark = |shape: &FrameShape, blocks: &mut [u32], idx: u32| {
-            blocks[shape.block_of(idx) as usize] += 1;
-            places[if idx < shape.data {
-                crate::packet::loss_position(idx, shape.data)
+            let b = shape.block_of(idx) as usize;
+            blocks[b] += 1;
+            if idx < shape.data {
+                data_lost[b] += 1;
+                places[crate::packet::loss_position(idx, shape.data)] += 1;
             } else {
-                2
-            }] += 1;
+                places[2] += 1;
+            }
         };
         for i in 0..refused_shards {
             mark(&f.shape, &mut self.lost_blocks, shards - 1 - i);
@@ -557,6 +560,7 @@ impl Client {
         });
         let mut repaired = 0u32;
         let mut beyond = 0u32;
+        let mut holes = 0u32;
         let mut unrecoverable = f.forced;
         for (b, &lost_b) in self.lost_blocks.iter().enumerate() {
             if lost_b == 0 {
@@ -568,6 +572,7 @@ impl Client {
             } else {
                 unrecoverable = true;
                 beyond += lost_b - parity;
+                holes += data_lost[b];
             }
         }
         let mut arrived = shards.saturating_sub(lost.min(shards));
@@ -601,6 +606,7 @@ impl Client {
         self.stats.fec_recovered_shards += u64::from(repaired);
         if unrecoverable {
             self.stats.frames_dropped += 1;
+            self.stats.dead_shards_lost += u64::from(holes);
             self.lost_frames += 1;
             self.awaiting_idr |= !skipped;
             return;
@@ -955,15 +961,21 @@ mod tests {
         Client::new(ClientCfg::default(), 11, base, base)
     }
 
+    /// The report's loss, as the window builds it from these counters.
     fn loss_ppm(c: &Client) -> u32 {
-        crate::quic::window_loss_ppm(c.stats.fec_recovered_shards, 0, 0, c.stats.packets_received)
+        let s = &c.stats;
+        crate::quic::window_loss_ppm(
+            s.fec_recovered_shards,
+            0,
+            s.dead_shards_lost,
+            s.packets_received,
+        )
     }
 
-    /// Parity covers its block's losses or the frame dies; either way
-    /// `loss_ppm` counts only what was repaired, which is why the field sees
-    /// `loss_ppm=0` beside a lost frame.
+    /// Parity covers its block's losses or the frame dies; either way the
+    /// report counts each data shard that never arrived once.
     #[test]
-    fn parity_repairs_its_block_and_an_unrecoverable_frame_reports_no_loss() {
+    fn parity_repairs_its_block_and_an_unrecoverable_frame_reports_its_holes() {
         let mut c = client(Instant::now());
         // 45 000 bytes = 32 data shards, 4 parity at 10 %.
         let f = frame(1, 45_000, 10);
@@ -983,7 +995,7 @@ mod tests {
         );
         assert_eq!(c.stats.frames_dropped, 0, "four shards, four parity");
         assert_eq!(c.stats.fec_recovered_shards, 4);
-        assert!(loss_ppm(&c) > 0);
+        assert_eq!(loss_ppm(&c), 4 * 1_000_000 / 36);
 
         let mut c = client(Instant::now());
         c.expect(&frame(2, 45_000, 10), 0);
@@ -1002,10 +1014,11 @@ mod tests {
             c.stats.frames_dropped, 1,
             "one shard past the parity loses the frame"
         );
+        assert_eq!(c.stats.fec_recovered_shards, 0);
         assert_eq!(
             loss_ppm(&c),
-            0,
-            "an unrecoverable frame teaches loss_ppm nothing"
+            5 * 1_000_000 / 36,
+            "the dead block's five holes"
         );
     }
 
