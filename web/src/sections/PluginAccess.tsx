@@ -11,6 +11,7 @@ import {
 } from "lucide-react";
 import { type FC, useState } from "react";
 import { useGetEmulators } from "@/api/gen/emulators/emulators";
+import type { AccessWalk } from "@/api/gen/model/accessWalk";
 import type { DecideRequest } from "@/api/gen/model/decideRequest";
 import type { PluginAccessSnapshot } from "@/api/gen/model/pluginAccessSnapshot";
 import {
@@ -29,6 +30,7 @@ import {
 	DialogHeader,
 	DialogTitle,
 } from "@/components/ui/dialog";
+import { Spinner } from "@/components/ui/spinner";
 import { isStringArray, useLocalPref } from "@/lib/prefs";
 import { cn } from "@/lib/utils";
 import { m } from "@/paraglide/messages";
@@ -42,7 +44,13 @@ export type DecideAccess = (paths: string[], decision: AccessDecision) => void;
  */
 export const usePluginAccess = () => {
 	const qc = useQueryClient();
-	const access = useGetPluginAccess();
+	// A large Windows folder outlasts the decision that started it; the count comes from here.
+	const access = useGetPluginAccess({
+		query: {
+			refetchInterval: (query) =>
+				query.state.data?.some((row) => row.walks?.length) ? 1000 : false,
+		},
+	});
 	const decide = useDecidePluginAccess();
 	const [allowing, setAllowing] = useState<{
 		plugin: string;
@@ -184,10 +192,30 @@ export const AccessPrompt: FC = () => {
 	);
 };
 
-const Mode: FC<{ write: boolean }> = ({ write }) => (
+const Mode: FC<{ write: boolean; files?: boolean }> = ({ write, files }) => (
 	<span className="text-xs text-muted-foreground">
-		{write ? m.plugin_access_read_write() : m.plugin_access_read_only()}
+		{write
+			? m.plugin_access_read_write()
+			: files
+				? m.plugin_access_read_files()
+				: m.plugin_access_read_only()}
 	</span>
+);
+
+/** A folder whose access is still changing, which takes minutes on a large Windows folder. */
+const WalkLine: FC<{ walk: AccessWalk; named?: boolean }> = ({
+	walk,
+	named,
+}) => (
+	<div className="flex items-center gap-2 text-xs text-muted-foreground">
+		<Spinner className="size-3.5 shrink-0" />
+		<span className="min-w-0 break-all">
+			{named && <span className="font-mono">{walk.path} </span>}
+			{walk.removing
+				? m.plugin_access_walk_back({ seconds: walk.seconds })
+				: m.plugin_access_walk({ seconds: walk.seconds })}
+		</span>
+	</div>
 );
 
 export const PendingAccess: FC<{
@@ -215,6 +243,8 @@ export const PendingAccess: FC<{
 		access.pending.flatMap((row) =>
 			row.path === path && row.core ? [row.core] : [],
 		);
+	const walkAt = (path: string) =>
+		access.walks?.find((walk) => walk.path === path);
 	const [asked, setAsked] = useState<string>();
 	return (
 		<div className="mt-3 space-y-2 border-t pt-3">
@@ -273,7 +303,7 @@ export const PendingAccess: FC<{
 										<div className="break-all font-mono text-xs">
 											{row.path}
 										</div>
-										<Mode write={row.write} />
+										<Mode write={row.write} files={row.files} />
 									</>
 								)}
 								{row.reason && (
@@ -283,32 +313,38 @@ export const PendingAccess: FC<{
 								)}
 							</div>
 						</div>
-						<div className="mt-2 flex flex-wrap justify-end gap-2">
-							<Button
-								size="sm"
-								variant="outline"
-								disabled={busy}
-								onClick={() => onDecide([row.path], "deny")}
-							>
-								{install
-									? m.plugin_access_not_now()
-									: m.plugin_access_dont_allow()}
-							</Button>
-							<Button
-								size="sm"
-								disabled={busy}
-								onClick={() => {
-									setAsked(row.path);
-									onDecide([row.path], "allow");
-								}}
-							>
-								{install
-									? busy && asked === row.path
-										? m.plugin_access_installing()
-										: m.plugin_access_install()
-									: m.plugin_access_allow()}
-							</Button>
-						</div>
+						{walkAt(row.path) ? (
+							<div className="mt-2">
+								<WalkLine walk={walkAt(row.path) as AccessWalk} />
+							</div>
+						) : (
+							<div className="mt-2 flex flex-wrap justify-end gap-2">
+								<Button
+									size="sm"
+									variant="outline"
+									disabled={busy}
+									onClick={() => onDecide([row.path], "deny")}
+								>
+									{install
+										? m.plugin_access_not_now()
+										: m.plugin_access_dont_allow()}
+								</Button>
+								<Button
+									size="sm"
+									disabled={busy}
+									onClick={() => {
+										setAsked(row.path);
+										onDecide([row.path], "allow");
+									}}
+								>
+									{install
+										? busy && asked === row.path
+											? m.plugin_access_installing()
+											: m.plugin_access_install()
+										: m.plugin_access_allow()}
+								</Button>
+							</div>
+						)}
 					</div>
 				);
 			})}
@@ -340,20 +376,29 @@ export const RecordedAccess: FC<{
 }> = ({ access, busy, onDecide }) => {
 	const [open, setOpen] = useState(false);
 	const count = access.grants.length + access.denied.length;
-	if (count === 0) return null;
+	// A walk on a pending row shows on that row.
+	const walks = (access.walks ?? []).filter(
+		(walk) => !access.pending.some((row) => row.path === walk.path),
+	);
+	if (count === 0 && walks.length === 0) return null;
 	return (
-		<div className="mt-1">
-			<button
-				type="button"
-				aria-expanded={open}
-				onClick={() => setOpen((v) => !v)}
-				className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
-			>
-				<ChevronRight
-					className={cn("size-3.5 transition-transform", open && "rotate-90")}
-				/>
-				{m.plugin_access_folders({ count })}
-			</button>
+		<div className="mt-1 space-y-1">
+			{walks.map((walk) => (
+				<WalkLine key={walk.path} walk={walk} named />
+			))}
+			{count > 0 && (
+				<button
+					type="button"
+					aria-expanded={open}
+					onClick={() => setOpen((v) => !v)}
+					className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
+				>
+					<ChevronRight
+						className={cn("size-3.5 transition-transform", open && "rotate-90")}
+					/>
+					{m.plugin_access_folders({ count })}
+				</button>
+			)}
 			{open && (
 				<div className="mt-1 space-y-0.5 pl-5">
 					{access.grants.map((grant) => (
@@ -361,7 +406,7 @@ export const RecordedAccess: FC<{
 							<FolderLock className="size-3.5 shrink-0 text-muted-foreground" />
 							<div className="min-w-0 flex-1">
 								<span className="break-all font-mono">{grant.path}</span>{" "}
-								<Mode write={grant.write} />
+								<Mode write={grant.write} files={grant.files} />
 							</div>
 							<Button
 								variant="ghost"

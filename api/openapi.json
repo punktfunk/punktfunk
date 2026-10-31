@@ -5562,7 +5562,7 @@
           "plugin-access"
         ],
         "summary": "Grant, deny, or forget an access request",
-        "description": "`allow` turns a pending request into a grant (the platform ACL lands first, so a failed\ngrant stores nothing), or with `write` set grants a path the operator handed over, on\nbehalf of `form` when named; `deny` remembers the no; `forget` removes a grant or denial.",
+        "description": "`allow` turns a pending request into a grant (the platform ACL lands first, so a failed\ngrant stores nothing), or with `write` set grants a path the operator handed over, on\nbehalf of `form` when named; `deny` remembers the no; `forget` removes a grant or denial.\nA folder that takes longer answers 202 and lists its walk until the record lands.",
         "operationId": "decidePluginAccess",
         "parameters": [
           {
@@ -5588,6 +5588,16 @@
         "responses": {
           "200": {
             "description": "The plugin's access state after the decision",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PluginAccessSnapshot"
+                }
+              }
+            }
+          },
+          "202": {
+            "description": "The folder's access is still changing; `walks` lists it",
             "content": {
               "application/json": {
                 "schema": {
@@ -5681,6 +5691,16 @@
         "responses": {
           "200": {
             "description": "The plugin's access state after the release",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PluginAccessSnapshot"
+                }
+              }
+            }
+          },
+          "202": {
+            "description": "The folder's access is still changing; `walks` lists it",
             "content": {
               "application/json": {
                 "schema": {
@@ -8822,6 +8842,10 @@
           "path"
         ],
         "properties": {
+          "files": {
+            "type": "boolean",
+            "description": "`true` asks for the folder and the files directly in it, nothing below. On Windows this\nlands at once where a whole folder rewrites every file in its tree. Ignored with `write`."
+          },
           "path": {
             "type": "string",
             "description": "The directory the plugin wants, absolute on the host."
@@ -8865,6 +8889,30 @@
           "saves": {
             "type": "boolean",
             "description": "Ask to read and restore emulator saves. One yes covers every emulator on this host; the\nanswer names the folder the grant lands on."
+          }
+        }
+      },
+      "AccessWalk": {
+        "type": "object",
+        "description": "One folder whose access is changing.",
+        "required": [
+          "path",
+          "removing",
+          "seconds"
+        ],
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "removing": {
+            "type": "boolean",
+            "description": "The folder is being taken back, not opened."
+          },
+          "seconds": {
+            "type": "integer",
+            "format": "int64",
+            "description": "How long it has been running.",
+            "minimum": 0
           }
         }
       },
@@ -12483,6 +12531,10 @@
           "by": {
             "type": "string"
           },
+          "files": {
+            "type": "boolean",
+            "description": "The folder and the files directly in it, nothing below. Its ACE lands at once however\nlarge the tree under it is, where a recursive one rewrites every file."
+          },
           "forms": {
             "type": "array",
             "items": {
@@ -13289,6 +13341,17 @@
           },
           "target": {
             "type": "string"
+          },
+          "walk": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/AccessWalk",
+                "description": "The folder a running job is opening for its plugin right now."
+              }
+            ]
           }
         }
       },
@@ -14477,6 +14540,10 @@
             ],
             "description": "An emulator to install into `path` first: the operator's yes installs, then grants."
           },
+          "files": {
+            "type": "boolean",
+            "description": "The folder and the files directly in it, nothing below. See [`Grant::files`]."
+          },
           "path": {
             "type": "string"
           },
@@ -14582,6 +14649,13 @@
           },
           "plugin": {
             "type": "string"
+          },
+          "walks": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AccessWalk"
+            },
+            "description": "Folders whose access is changing for this plugin right now."
           }
         }
       },

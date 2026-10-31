@@ -19,6 +19,8 @@ export interface PluginManifest {
 	schema?: number;
 	id?: string;
 	reads?: string[];
+	/** Folders it reads the files of. A bind walks nothing, so here this is a `reads`. */
+	files?: string[];
 	writes?: string[];
 	network?: boolean;
 	/** Windows registry keys it reads (`HKLM\…`, `HKCU\…`). Nothing to bind here on Linux. */
@@ -206,7 +208,7 @@ export const bwrapArgv = (
 	}
 	// What it said it needs. `-try` so an uninstalled launcher's dir is simply absent rather
 	// than a sandbox that refuses to start.
-	for (const p of manifest.reads ?? []) {
+	for (const p of [...(manifest.reads ?? []), ...(manifest.files ?? [])]) {
 		const abs = expandHome(p, paths.home);
 		if (bindable(abs, paths)) argv.push("--ro-bind-try", abs, at(abs));
 	}

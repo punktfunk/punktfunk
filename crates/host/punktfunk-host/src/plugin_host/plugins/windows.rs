@@ -9,6 +9,7 @@
 
 use super::ace_plan::{self, Aces};
 use super::*;
+use crate::windows::folder_ace;
 
 /// `NT AUTHORITY\LocalService` in icacls SID form.
 pub(super) const LOCAL_SERVICE_SID: &str = "*S-1-5-19";
@@ -487,19 +488,26 @@ pub(super) fn runner_command() -> Result<(std::path::PathBuf, Vec<String>)> {
 /// directory the operator owns: both ACEs in one walk of its tree, which the next converge
 /// adopts rather than walking again. LocalService holds no ACE inside a user profile, so
 /// without this a launcher installed there reads as not installed.
-pub(super) fn grant(plugin: Option<&str>, dir: &std::path::Path, write: bool) -> Result<()> {
-    let ace = if write { Ace::Modify } else { Ace::Read };
+pub(super) fn grant(
+    plugin: Option<&str>,
+    dir: &std::path::Path,
+    write: bool,
+    files: bool,
+) -> Result<()> {
+    let ace = Ace::of(write, files);
     let sids = decision_sids(plugin);
     let aces: Vec<(String, Ace)> = sids.iter().map(|sid| (sid.clone(), ace)).collect();
-    grant_aces(dir, &aces)?;
+    grant_aces(dir, &aces, plugin)?;
     note(dir, &sids, Some(ace));
     Ok(())
 }
 
 /// The inverse of [`grant`] for a folder no plugin holds any more, in one walk.
-pub(super) fn revoke(plugin: &str, dir: &std::path::Path) -> Result<()> {
+pub(super) fn revoke(plugin: &str, dir: &std::path::Path, files: bool) -> Result<()> {
     let sids = decision_sids(Some(plugin));
-    revoke_sids(dir, &sids)?;
+    let ace = Ace::of(false, files);
+    let aces: Vec<(String, Ace)> = sids.iter().map(|sid| (sid.clone(), ace)).collect();
+    revoke_sids(dir, &aces, Some(plugin))?;
     note(dir, &sids, None);
     Ok(())
 }
@@ -513,11 +521,17 @@ fn decision_sids(plugin: Option<&str>) -> Vec<String> {
     sids
 }
 
-/// Each `(SID, ACE)` on one directory in a single `icacls /grant:r`: an earlier ACE for a SID is
-/// replaced, never stacked, and the tree below is walked once however many SIDs share it. One
-/// directory only: a service account bypasses traverse checks, so the locked parents above it
-/// stay shut.
-fn grant_aces(dir: &std::path::Path, aces: &[(String, Ace)]) -> Result<()> {
+/// `Ace::Files` SIDs, split from the rest, which share one walk of the tree.
+fn by_reach(aces: &[(String, Ace)]) -> (Vec<&str>, Vec<&(String, Ace)>) {
+    let (own, tree): (Vec<_>, Vec<_>) = aces.iter().partition(|(_, ace)| *ace == Ace::Files);
+    (own.iter().map(|(sid, _)| sid.as_str()).collect(), tree)
+}
+
+/// Each `(SID, ACE)` on one directory, in a single `icacls /grant:r` for what walks the tree: an
+/// earlier ACE for a SID is replaced, never stacked, and the tree below is walked once however
+/// many SIDs share it. One directory only: a service account bypasses traverse checks, so the
+/// locked parents above it stay shut. `plugin` names who the walk is listed for.
+fn grant_aces(dir: &std::path::Path, aces: &[(String, Ace)], plugin: Option<&str>) -> Result<()> {
     // A typo must not report success — the ACE would land on a name nothing ever reads.
     if !dir.is_dir() {
         bail!(
@@ -525,41 +539,62 @@ fn grant_aces(dir: &std::path::Path, aces: &[(String, Ace)]) -> Result<()> {
             dir.display()
         );
     }
-    #[cfg(test)]
-    WALKS.with(|w| w.set(w.get() + 1));
-    let ok = Command::new(icacls_path())
-        .arg(dir)
-        .arg("/grant:r")
-        .args(
-            aces.iter()
-                .map(|(sid, ace)| format!("*{sid}:{}", ace.icacls())),
-        )
-        .status()
-        .context("run icacls")?
-        .success();
-    if !ok {
-        bail!(
-            "icacls left '{}' unchanged: a folder's permissions are changed by its OWNER or \
-             an administrator - run this as the user who owns the folder, or from an elevated \
-             prompt",
+    let owner = |detail: String| {
+        anyhow::anyhow!(
+            "'{}' is unchanged: a folder's permissions are changed by its OWNER or an \
+             administrator - run this as the user who owns the folder, or from an elevated \
+             prompt{detail}",
             dir.display()
-        );
+        )
+    };
+    let (own, tree) = by_reach(aces);
+    if !own.is_empty() {
+        folder_ace::place(dir, &own).map_err(|e| owner(format!(": {e:#}")))?;
     }
-    Ok(())
-}
-
-/// Every ACE of each SID off one directory, in one walk. A folder that is gone has nothing to
-/// remove.
-fn revoke_sids(dir: &std::path::Path, sids: &[String]) -> Result<()> {
-    if !dir.exists() {
+    if tree.is_empty() {
         return Ok(());
     }
     #[cfg(test)]
     WALKS.with(|w| w.set(w.get() + 1));
+    let _walk = walks::begin(plugin, &dir.to_string_lossy(), false);
+    let ok = Command::new(icacls_path())
+        .arg(dir)
+        .arg("/grant:r")
+        .args(
+            tree.iter()
+                .map(|(sid, ace)| format!("*{sid}:{}", ace.icacls())),
+        )
+        .stdout(std::process::Stdio::null())
+        .status()
+        .context("run icacls")?
+        .success();
+    if !ok {
+        return Err(owner(String::new()));
+    }
+    Ok(())
+}
+
+/// Every ACE of each `(SID, kind)` off one directory: what walks the tree in one walk. A folder
+/// that is gone has nothing to remove.
+fn revoke_sids(dir: &std::path::Path, aces: &[(String, Ace)], plugin: Option<&str>) -> Result<()> {
+    if !dir.exists() {
+        return Ok(());
+    }
+    let (own, tree) = by_reach(aces);
+    if !own.is_empty() {
+        folder_ace::take(dir, &own)
+            .with_context(|| format!("remove the runner's ACE from {}", dir.display()))?;
+    }
+    if tree.is_empty() {
+        return Ok(());
+    }
+    #[cfg(test)]
+    WALKS.with(|w| w.set(w.get() + 1));
+    let _walk = walks::begin(plugin, &dir.to_string_lossy(), true);
     let ok = Command::new(icacls_path())
         .arg(dir)
         .arg("/remove:g")
-        .args(sids.iter().map(|sid| format!("*{sid}")))
+        .args(tree.iter().map(|(sid, _)| format!("*{sid}")))
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .status()
@@ -573,7 +608,7 @@ fn revoke_sids(dir: &std::path::Path, sids: &[String]) -> Result<()> {
 
 #[cfg(test)]
 thread_local! {
-    /// `icacls` calls on this thread, each one walk of a folder's tree.
+    /// Folder ACL changes on this thread, each one walk of a folder's tree.
     static WALKS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
@@ -728,7 +763,9 @@ mod tests {
         assert!(adopted == want);
 
         // An installer stripped the capability's ACE: the recheck sees it and walks once.
-        super::revoke_sids(&dir, std::slice::from_ref(&pkg)).unwrap();
+        let strip =
+            |sid: &String| super::revoke_sids(&dir, &[(sid.clone(), Ace::Read)], None).unwrap();
+        strip(&pkg);
         let start = walks();
         let mut healed = want.clone();
         converge_folders(&want, &want, &mut healed, true);
@@ -736,7 +773,7 @@ mod tests {
         assert!(held(&path, &pkg, Ace::Read));
 
         // A folder on the refused list costs a verify no walk, stripped or not.
-        super::revoke_sids(&dir, std::slice::from_ref(&pkg)).unwrap();
+        strip(&pkg);
         let refused = || super::REFUSED.lock().unwrap();
         refused().insert((pkg.clone(), path.clone()));
         let start = walks();
@@ -760,6 +797,68 @@ mod tests {
         converge_folders(&none, &want, &mut dropped, false);
         assert_eq!(walks() - start, 0);
         assert!(dropped.grantees.values().all(|p| p.paths.is_empty()));
+    }
+
+    /// A folder's own ACE reaches its files and stops; a private folder inside keeps its DACL
+    /// through a tree grant. Writes ACLs on a scratch tree, so it runs with `--ignored`.
+    #[test]
+    #[ignore = "edits ACLs; run on a Windows box"]
+    fn a_files_ace_stops_at_the_folder_and_a_tree_ace_at_protection() {
+        use super::{converge_folders, held, Ace, Placed, PlacedAces};
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().canonicalize().unwrap();
+        let spell = |p: std::path::PathBuf| p.to_string_lossy().into_owned();
+        let (path, own) = (spell(dir.clone()), spell(dir.join("appmanifest_1.acf")));
+        let (sub, deep) = (dir.join("common"), dir.join("common").join("f"));
+        let locked = dir.join("locked");
+        std::fs::create_dir_all(&sub).unwrap();
+        std::fs::create_dir_all(&locked).unwrap();
+        std::fs::write(&own, b"x").unwrap();
+        std::fs::write(&deep, b"x").unwrap();
+        let cut = std::process::Command::new(super::icacls_path())
+            .arg(&locked)
+            .args(["/inheritance:d", "/Q"])
+            .output()
+            .unwrap();
+        assert!(cut.status.success());
+        let (sub, deep, locked) = (spell(sub), spell(deep), spell(locked));
+        let pkg = "S-1-15-3-1024-1-2-3-4-5-6-7-9".to_string();
+        let aces = |ace: Ace| PlacedAces {
+            grantees: [(
+                pkg.clone(),
+                Placed {
+                    paths: [(path.clone(), ace)].into(),
+                    keys: Default::default(),
+                },
+            )]
+            .into(),
+        };
+        let none = PlacedAces::default();
+        let files = aces(Ace::Files);
+        let mut placed = none.clone();
+        converge_folders(&files, &none, &mut placed, false);
+        assert!(held(&path, &pkg, Ace::Read) && held(&own, &pkg, Ace::Read));
+        let late = spell(dir.join("appmanifest_2.acf"));
+        std::fs::write(&late, b"x").unwrap();
+        assert!(held(&late, &pkg, Ace::Read), "a new file inherits it");
+        assert!(!held(&sub, &pkg, Ace::Read) && !held(&deep, &pkg, Ace::Read));
+
+        // Widened to the tree: everything below takes it, except what is protected.
+        let tree = aces(Ace::Read);
+        let mut widened = files.clone();
+        converge_folders(&tree, &files, &mut widened, false);
+        assert!(held(&deep, &pkg, Ace::Read));
+        assert!(!held(&locked, &pkg, Ace::Read));
+
+        // Narrowed back, the tree loses it again.
+        let mut narrowed = tree.clone();
+        converge_folders(&files, &tree, &mut narrowed, false);
+        assert!(held(&own, &pkg, Ace::Read) && !held(&deep, &pkg, Ace::Read));
+
+        let mut gone = files.clone();
+        converge_folders(&none, &files, &mut gone, false);
+        assert!(!held(&path, &pkg, Ace::Read) && !held(&own, &pkg, Ace::Read));
+        assert!(!held(&late, &pkg, Ace::Read), "what it inherited goes too");
     }
 }
 
@@ -839,15 +938,27 @@ enum Ace {
     /// `(RX)` on this folder alone: the names in it, none of what they hold. `(RD)` alone
     /// does not open the folder for a listing.
     List,
+    /// `(OI)(NP)(RX)`: this folder and the files directly in it, and no folder below. Placed
+    /// with no walk; a file made here later inherits it.
+    Files,
 }
 
 impl Ace {
+    fn of(write: bool, files: bool) -> Self {
+        match (write, files) {
+            (true, _) => Ace::Modify,
+            (false, true) => Ace::Files,
+            (false, false) => Ace::Read,
+        }
+    }
+
     fn icacls(self) -> &'static str {
         match self {
             Ace::Read => "(OI)(CI)(RX)",
             Ace::Code => "(OI)(CI)(RX,WA)",
             Ace::Modify => "(OI)(CI)(M)",
             Ace::List => "(RX)",
+            Ace::Files => "(OI)(NP)(RX)",
         }
     }
 
@@ -855,7 +966,7 @@ impl Ace {
     /// FILE_GENERIC_EXECUTE, `WA` adds FILE_WRITE_ATTRIBUTES, `M` is Modify.
     fn mask(self) -> u32 {
         match self {
-            Ace::Read | Ace::List => 0x0012_00A9,
+            Ace::Read | Ace::List | Ace::Files => folder_ace::READ_MASK,
             Ace::Code => 0x0012_01A9,
             Ace::Modify => 0x0013_01BF,
         }
@@ -1086,14 +1197,21 @@ fn converge_folders(want: &PlacedAces, had: &PlacedAces, placed: &mut PlacedAces
     for (sid, path) in &plan.dropped {
         record(placed, sid, path, None);
     }
+    let had_ace = |sid: &str, path: &str| had_paths.get(sid).and_then(|p| p.get(path)).copied();
     let mut refused = REFUSED.lock().unwrap_or_else(|poison| poison.into_inner());
     for step in plan.steps {
         let dir = std::path::Path::new(&step.path);
-        if !step.remove.is_empty() {
+        let was = |sid: &String| had_ace(sid, &step.path).map(|ace| (sid.clone(), ace));
+        // A folder's own files and its tree are different ACEs: a change of kind undoes the old.
+        let changed = step.place.iter().filter_map(|(sid, ace)| {
+            was(sid).filter(|(_, old)| (*old == Ace::Files) != (*ace == Ace::Files))
+        });
+        let gone: Vec<(String, Ace)> = step.remove.iter().filter_map(was).chain(changed).collect();
+        if !gone.is_empty() {
             CONVERGE_WALKED.with(|w| w.set(true));
-            match revoke_sids(dir, &step.remove) {
+            match revoke_sids(dir, &gone, None) {
                 Ok(()) => {
-                    for sid in &step.remove {
+                    for (sid, _) in &gone {
                         record(placed, sid, &step.path, None);
                     }
                 }
@@ -1111,7 +1229,7 @@ fn converge_folders(want: &PlacedAces, had: &PlacedAces, placed: &mut PlacedAces
             continue;
         }
         CONVERGE_WALKED.with(|w| w.set(true));
-        match grant_aces(dir, &place) {
+        match grant_aces(dir, &place, None) {
             Ok(()) => {
                 for (sid, ace) in &place {
                     let key = (sid.clone(), step.path.clone());
@@ -1161,8 +1279,10 @@ fn root_aces(
         .iter()
         .filter(|r| !r.path.starts_with(home) && r.path.is_dir())
         .map(|r| {
-            let ace = if r.write { Ace::Modify } else { Ace::Read };
-            (r.path.to_string_lossy().into_owned(), ace)
+            (
+                r.path.to_string_lossy().into_owned(),
+                Ace::of(r.write, r.files),
+            )
         })
         .collect()
 }

@@ -25,6 +25,7 @@ pub mod access;
 #[cfg(any(test, target_os = "windows"))]
 mod ace_plan;
 pub mod manifest;
+pub(crate) mod walks;
 #[cfg(target_os = "windows")]
 mod windows;
 #[cfg(target_os = "windows")]
@@ -212,24 +213,67 @@ fn grant(plugin: Option<&str>, dir: Option<&str>, flags: &[String]) -> Result<()
         bail!("'{dir}' is not a directory (grant the folder, not a file inside it)");
     }
     let store = access::AccessStore::open(pf_paths::config_dir());
-    let roots = store
-        .grant(plugin, path, write, "cli")
-        .with_context(|| format!("record the grant for '{plugin}'"))?;
+    let roots = show_walk(&format!("Opening {dir} for {plugin}."), || {
+        store.grant(plugin, path, write, "cli")
+    })
+    .with_context(|| format!("record the grant for '{plugin}'"))?;
     println!("{plugin} may now reach:");
     for root in roots {
-        println!(
-            "  {} ({})",
-            root.path,
-            if root.write {
-                "read and write"
-            } else {
-                "read only"
-            }
-        );
+        println!("  {} ({})", root.path, mode(root.write, root.files));
     }
     converge_after_decision();
     println!("The plugin restarts with the new folder within a few seconds.");
     Ok(())
+}
+
+fn mode(write: bool, files: bool) -> &'static str {
+    match (write, files) {
+        (true, _) => "read and write",
+        (false, true) => "read only, its own files",
+        (false, false) => "read only",
+    }
+}
+
+/// Run `work` and show that its folder walk is alive: Windows reports nothing until a walk ends,
+/// minutes on a large tree. On one line at a terminal, every ten seconds anywhere else. ASCII: a
+/// console codepage drops the rest.
+fn show_walk<T>(intro: &str, work: impl FnOnce() -> T) -> T {
+    use std::io::{IsTerminal, Write};
+    use std::sync::atomic::{AtomicBool, Ordering};
+    println!("{intro}");
+    let started = std::time::Instant::now();
+    let stop = AtomicBool::new(false);
+    std::thread::scope(|scope| {
+        let ticker = scope.spawn(|| {
+            let tty = std::io::stdout().is_terminal();
+            let mut shown = false;
+            while !stop.load(Ordering::Relaxed) {
+                std::thread::park_timeout(std::time::Duration::from_secs(1));
+                let secs = started.elapsed().as_secs();
+                if walks::current().is_none() {
+                    continue;
+                }
+                let line = format!("  Still working, {secs} s");
+                if tty {
+                    print!("\r{line}   ");
+                    let _ = std::io::stdout().flush();
+                    shown = true;
+                } else if secs % 10 == 0 {
+                    println!("{line}");
+                    shown = true;
+                }
+            }
+            if shown {
+                let line_end = if tty { "\n" } else { "" };
+                println!("{line_end}Done in {} s.", started.elapsed().as_secs());
+            }
+        });
+        let out = work();
+        stop.store(true, Ordering::Relaxed);
+        ticker.thread().unpark();
+        let _ = ticker.join();
+        out
+    })
 }
 
 /// `plugins access` — every plugin's grants, pending requests, and denials.
@@ -252,24 +296,12 @@ fn access_list(flags: &[String]) -> Result<()> {
             println!(
                 "  granted  {} ({}, by {})",
                 g.path,
-                if g.write {
-                    "read and write"
-                } else {
-                    "read only"
-                },
+                mode(g.write, g.files),
                 g.by
             );
         }
         for p in &s.pending {
-            println!(
-                "  pending  {} ({})",
-                p.path,
-                if p.write {
-                    "read and write"
-                } else {
-                    "read only"
-                }
-            );
+            println!("  pending  {} ({})", p.path, mode(p.write, p.files));
         }
         for d in &s.denied {
             println!("  denied   {d}");
@@ -320,21 +352,14 @@ fn revoke(plugin: Option<&str>, dir: Option<&str>, flags: &[String]) -> Result<(
         bail!("usage: punktfunk-host plugins revoke <plugin> <dir>");
     };
     let store = access::AccessStore::open(pf_paths::config_dir());
-    let roots = store
-        .revoke(plugin, std::path::Path::new(dir))
-        .with_context(|| format!("revoke the grant for '{plugin}'"))?;
+    let roots = show_walk(&format!("Taking {dir} back from {plugin}."), || {
+        store.revoke(plugin, std::path::Path::new(dir))
+    })
+    .with_context(|| format!("revoke the grant for '{plugin}'"))?;
     converge_after_decision();
     println!("{plugin} may now reach:");
     for root in roots {
-        println!(
-            "  {} ({})",
-            root.path,
-            if root.write {
-                "read and write"
-            } else {
-                "read only"
-            }
-        );
+        println!("  {} ({})", root.path, mode(root.write, root.files));
     }
     Ok(())
 }
@@ -491,8 +516,9 @@ pub(crate) fn grant_acl(
     plugin: Option<&str>,
     dir: &std::path::Path,
     write: bool,
+    files: bool,
 ) -> std::io::Result<()> {
-    plat::grant(plugin, dir, write).map_err(|e| std::io::Error::other(e.to_string()))
+    plat::grant(plugin, dir, write, files).map_err(|e| std::io::Error::other(e.to_string()))
 }
 
 /// A managed emulator runs in the player's session and, portable, writes beside its exe: on
@@ -514,8 +540,8 @@ pub(crate) fn open_for_players(_dir: &std::path::Path) {}
 
 /// Take the runner's ACE and `plugin`'s capability ACE off a folder no plugin holds any more, in
 /// one walk. POSIX has none to take.
-pub(crate) fn revoke_acl(plugin: &str, dir: &std::path::Path) -> std::io::Result<()> {
-    plat::revoke(plugin, dir).map_err(|e| std::io::Error::other(e.to_string()))
+pub(crate) fn revoke_acl(plugin: &str, dir: &std::path::Path, files: bool) -> std::io::Result<()> {
+    plat::revoke(plugin, dir, files).map_err(|e| std::io::Error::other(e.to_string()))
 }
 
 /// Windows: the runner grants `plugins enable` applies, which a fresh install never ran.

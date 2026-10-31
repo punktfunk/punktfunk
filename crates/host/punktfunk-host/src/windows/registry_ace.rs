@@ -7,12 +7,14 @@ use anyhow::{Context, Result};
 use windows::core::{Owned, PCWSTR, PWSTR};
 use windows::Win32::Foundation::{ERROR_FILE_NOT_FOUND, HLOCAL};
 use windows::Win32::Security::Authorization::{
-    ConvertStringSidToSidW, GetEffectiveRightsFromAclW, GetNamedSecurityInfoW, SetEntriesInAclW,
-    SetNamedSecurityInfoW, ACCESS_MODE, EXPLICIT_ACCESS_W, GRANT_ACCESS, NO_MULTIPLE_TRUSTEE,
-    REVOKE_ACCESS, SE_OBJECT_TYPE, SE_REGISTRY_KEY, TRUSTEE_IS_SID, TRUSTEE_IS_UNKNOWN, TRUSTEE_W,
+    ConvertStringSidToSidW, GetNamedSecurityInfoW, SetEntriesInAclW, SetNamedSecurityInfoW,
+    ACCESS_MODE, EXPLICIT_ACCESS_W, GRANT_ACCESS, NO_MULTIPLE_TRUSTEE, REVOKE_ACCESS,
+    SE_OBJECT_TYPE, SE_REGISTRY_KEY, TRUSTEE_IS_SID, TRUSTEE_IS_UNKNOWN, TRUSTEE_W,
 };
 use windows::Win32::Security::{
-    ACL, CONTAINER_INHERIT_ACE, DACL_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR, PSID,
+    AclSizeInformation, EqualSid, GetAce, GetAclInformation, ACCESS_ALLOWED_ACE, ACL,
+    ACL_SIZE_INFORMATION, CONTAINER_INHERIT_ACE, DACL_SECURITY_INFORMATION, INHERIT_ONLY_ACE,
+    PSECURITY_DESCRIPTOR, PSID,
 };
 use windows::Win32::System::Registry::KEY_READ;
 
@@ -34,23 +36,71 @@ pub(crate) fn revoke(key: &str, sid: &str) -> Result<()> {
     edit(key, sid, REVOKE_ACCESS)
 }
 
-/// The access mask `name`'s DACL gives `sid`, inherited ACEs included. Reads one descriptor;
-/// nothing below `name` is touched.
+/// The access mask `name`'s DACL gives `sid` by name, inherited ACEs included. Reads one descriptor;
+/// nothing below `name` is touched. A group the SID may sit in doesn't count: an AppContainer needs
+/// its capability's own ACE, and a `Users:(F)` beside it doesn't stand in for that.
 pub(crate) fn rights(name: &str, object: SE_OBJECT_TYPE, sid: &str) -> Result<u32> {
     let (psid, _psid) = parse_sid(sid)?;
     let (dacl, _sd) = read_dacl(name, object)?;
-    let trustee = sid_trustee(psid);
     let mut mask = 0u32;
-    // SAFETY: `dacl` is null or the DACL `_sd` owns; `trustee` names the SID `_psid` keeps
-    // allocated; `mask` is a live out-param.
-    unsafe { GetEffectiveRightsFromAclW(dacl.cast_const(), &trustee, &mut mask) }
-        .ok()
-        .with_context(|| format!("read the rights of {sid} on {name}"))?;
+    for ace in allowed_aces(dacl)? {
+        // SAFETY: `_psid` keeps `psid` allocated; `ace.sid` lies in the DACL `_sd` keeps.
+        if !ace.inherit_only && unsafe { EqualSid(psid, ace.sid) }.is_ok() {
+            mask |= ace.mask;
+        }
+    }
     Ok(mask)
 }
 
+/// One ACCESS_ALLOWED ACE of a DACL. `sid` points into that DACL.
+pub(super) struct AllowedAce {
+    pub index: u32,
+    pub inherit_only: bool,
+    pub mask: u32,
+    pub sid: PSID,
+}
+
+/// The ACCESS_ALLOWED ACEs of `dacl`, null for none.
+pub(super) fn allowed_aces(dacl: *const ACL) -> Result<Vec<AllowedAce>> {
+    const ACCESS_ALLOWED_ACE_TYPE: u8 = 0;
+    if dacl.is_null() {
+        return Ok(Vec::new());
+    }
+    let mut size = ACL_SIZE_INFORMATION::default();
+    // SAFETY: `dacl` is a live ACL; `size` is a live out-param of the length passed.
+    unsafe {
+        GetAclInformation(
+            dacl,
+            (&raw mut size).cast(),
+            std::mem::size_of::<ACL_SIZE_INFORMATION>() as u32,
+            AclSizeInformation,
+        )
+    }
+    .context("GetAclInformation")?;
+    let mut out = Vec::new();
+    for index in 0..size.AceCount {
+        let mut ace = std::ptr::null_mut();
+        // SAFETY: `index` is below the ACE count; `ace` is a live out-param.
+        unsafe { GetAce(dacl, index, &mut ace) }.context("GetAce")?;
+        let ace = ace.cast::<ACCESS_ALLOWED_ACE>();
+        // SAFETY: `GetAce` points into the live DACL, and any ACE spans this header and mask. The
+        // mask means what it says only on an allowed ACE, checked before it is read.
+        let head = unsafe { &*ace };
+        if head.Header.AceType == ACCESS_ALLOWED_ACE_TYPE {
+            let sid = ace.wrapping_byte_add(std::mem::offset_of!(ACCESS_ALLOWED_ACE, SidStart));
+            out.push(AllowedAce {
+                index,
+                inherit_only: u32::from(head.Header.AceFlags) & INHERIT_ONLY_ACE.0 != 0,
+                mask: head.Mask,
+                sid: PSID(sid.cast()),
+            });
+        }
+    }
+    Ok(out)
+}
+
 /// The SID `S-1-…` names, allocated until the returned guard drops.
-fn parse_sid(sid: &str) -> Result<(PSID, Owned<HLOCAL>)> {
+pub(super) fn parse_sid(sid: &str) -> Result<(PSID, Owned<HLOCAL>)> {
     let sid_w: Vec<u16> = sid.encode_utf16().chain(std::iter::once(0)).collect();
     let mut psid = PSID::default();
     // SAFETY: `sid_w` is NUL-terminated and outlives the call; `psid` is a live out-param that
@@ -63,7 +113,7 @@ fn parse_sid(sid: &str) -> Result<(PSID, Owned<HLOCAL>)> {
 }
 
 /// `name`'s DACL, which stays valid until the returned guard frees its descriptor.
-fn read_dacl(name: &str, object: SE_OBJECT_TYPE) -> Result<(*mut ACL, Owned<HLOCAL>)> {
+pub(super) fn read_dacl(name: &str, object: SE_OBJECT_TYPE) -> Result<(*mut ACL, Owned<HLOCAL>)> {
     let name_w: Vec<u16> = name.encode_utf16().chain(std::iter::once(0)).collect();
     let mut dacl: *mut ACL = std::ptr::null_mut();
     let mut sd = PSECURITY_DESCRIPTOR::default();
@@ -89,7 +139,7 @@ fn read_dacl(name: &str, object: SE_OBJECT_TYPE) -> Result<(*mut ACL, Owned<HLOC
     Ok((dacl, owned))
 }
 
-fn sid_trustee(psid: PSID) -> TRUSTEE_W {
+pub(super) fn sid_trustee(psid: PSID) -> TRUSTEE_W {
     TRUSTEE_W {
         pMultipleTrustee: std::ptr::null_mut(),
         MultipleTrusteeOperation: NO_MULTIPLE_TRUSTEE,

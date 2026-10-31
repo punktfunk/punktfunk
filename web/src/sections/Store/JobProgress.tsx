@@ -171,6 +171,14 @@ export const JobProgressCard: FC<{
 										? m.store_job_done_uninstall()
 										: m.store_job_done_install()}
 						</p>
+						{running && job.walk && (
+							<p className="break-all text-xs text-muted-foreground">
+								{m.store_job_walk({
+									path: job.walk.path,
+									seconds: job.walk.seconds,
+								})}
+							</p>
+						)}
 					</div>
 					{!running && (
 						<Button
