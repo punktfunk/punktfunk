@@ -64,8 +64,8 @@ Full setup: [Running as a Service](/docs/running-as-a-service).
 ## Known limits
 
 - Refresh rates above 60 Hz need KWin 6.6 or newer.
-- SDR only: HDR on Linux needs [gamescope](/docs/gamescope#hdr-on-gamescope) — see
-  [HDR](/docs/hdr#other-linux-desktops).
+- SDR only: HDR on Linux needs [gamescope](/docs/gamescope#hdr-on-gamescope) or
+  [Hyprland](/docs/hyprland) — see [HDR](/docs/hdr#other-linux-desktops).
 - X11 sessions can't stream.
 
 ## Troubleshooting

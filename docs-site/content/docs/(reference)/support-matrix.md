@@ -29,7 +29,7 @@ Each session gets its own display at the client's resolution and refresh rate �
 
 | Host | Own virtual display | Stream a real monitor | Headless box |
 |---|---|---|---|
-| Windows 11 22H2+ | ✅ ¹ | ❌ ² | ✅ |
+| Windows 11 22H2+ | ✅ ¹ | ✅ ² | ✅ |
 | KDE Plasma (KWin) | ✅ | ✅ | ✅ |
 | GNOME (Mutter) | ✅ | ✅ | ✅ |
 | gamescope (SteamOS · Bazzite) | ✅ ³ | ⚠️ ⁴ | ✅ |
@@ -43,7 +43,9 @@ Each session gets its own display at the client's resolution and refresh rate �
 1. Punktfunk's own display driver. Needs Windows 11 22H2 (build 22621); the installer refuses
    anything older. Each paired client gets its own monitor identity carrying its screen's HDR
    brightness, so Windows keeps per-client display settings and apps tone-map to your screen.
-2. Windows lists your monitors but can't stream one. Streaming a physical monitor is Linux-only.
+2. Through Windows Graphics Capture: the pointer is part of the picture, and permission prompts
+   and the lock screen aren't. See
+   [Stream a real monitor](/docs/virtual-displays#stream-a-real-monitor-instead).
 3. The host starts a gamescope at the client's mode, relaunches the box's Game Mode session at it
    (SteamOS, Bazzite), or attaches to one already running. An attached session on a box with a
    screen connected keeps its own mode, so the client gets a mirror. See [gamescope](/docs/gamescope).
@@ -72,7 +74,7 @@ Each session gets its own display at the client's resolution and refresh rate �
 | GNOME (Mutter) | libei, direct to Mutter | none | ✅ ⁶ | ⚠️ ⁷ |
 | gamescope | libei (gamescope's own) | none | ⚠️ ⁸ | ⚠️ ⁹ |
 | sway · scroll | wlroots virtual pointer + keyboard | none | ❌ ¹⁰ | ❌ ⁵ |
-| Hyprland | wlroots virtual pointer + keyboard | none | ❌ ¹⁰ | ❌ ⁵ |
+| Hyprland | wlroots virtual pointer + keyboard | none | ❌ ¹⁰ | ✅ ¹³ |
 | niri (biri) | wlroots virtual pointer + keyboard | none | ❌ ¹² | ❌ ⁵ |
 | Umbriel | wlroots virtual pointer + keyboard | none | ❌ ¹² | ❌ ⁵ |
 
@@ -99,6 +101,9 @@ Each session gets its own display at the client's resolution and refresh rate �
     off the primary monitor, use `SendInput` too.
 12. The host doesn't carry niri's or Umbriel's pointer separately, so it is always part of the
     video.
+13. A virtual display runs in 10-bit HDR when the client asks, and a monitor in HDR mode streams
+    HDR. Needs Hyprland's colour management, on by default — see
+    [HDR](/docs/hdr#linux--hyprland).
 
 ### Version floors worth knowing
 

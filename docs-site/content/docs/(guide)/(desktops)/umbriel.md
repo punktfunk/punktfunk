@@ -96,7 +96,8 @@ lingering so the host starts at boot: `sudo loginctl enable-linger "$USER"`.
 - Streams need a GPU encoder. The host captures Umbriel only straight from the compositor, never
   through a screen cast: see [below](#no-direct-capture).
 - SDR only: virtual outputs carry no HDR. HDR on Linux needs
-  [gamescope](/docs/gamescope#hdr-on-gamescope) — see [HDR](/docs/hdr#other-linux-desktops).
+  [gamescope](/docs/gamescope#hdr-on-gamescope) or [Hyprland](/docs/hyprland) — see
+  [HDR](/docs/hdr#other-linux-desktops).
 - No per-device scale: the streamed output is always at scale 1, and **Scale its screen at**
   doesn't apply.
 - Saving an output change in Umbriel's config turns your monitors back on mid-stream: see

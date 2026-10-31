@@ -62,8 +62,8 @@ manager, and enable lingering so the host starts at boot:
 
 - sway gets far less testing than [KDE](/docs/kde) and [GNOME](/docs/gnome); scroll is untested on
   real hardware.
-- SDR only: HDR on Linux needs [gamescope](/docs/gamescope#hdr-on-gamescope) — see
-  [HDR](/docs/hdr#other-linux-desktops).
+- SDR only: HDR on Linux needs [gamescope](/docs/gamescope#hdr-on-gamescope) or
+  [Hyprland](/docs/hyprland) — see [HDR](/docs/hdr#other-linux-desktops).
 
 ## Troubleshooting
 
