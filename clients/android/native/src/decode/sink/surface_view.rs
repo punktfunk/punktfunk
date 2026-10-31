@@ -367,10 +367,11 @@ impl Timeline {
         self.last_flush = Instant::now();
         let (latch, displays, feed, codec, e2e) = meter.drain();
         let c = &mut self.counters;
+        let skipped = std::mem::take(&mut c.skipped);
         let second = Second {
             released: c.released,
             displays,
-            skipped: c.skipped,
+            skipped,
             outputs: std::mem::take(&mut self.outputs),
             confirms_live: meter.outstanding().live,
             unbroken: !std::mem::take(&mut self.lost),
@@ -401,7 +402,7 @@ impl Timeline {
              vsyncMs={:.2} panelMs={:.2} confirmReopen={}{}",
             c.released,
             displays,
-            c.skipped,
+            skipped,
             c.no_budget,
             c.forced,
             c.dry,
@@ -442,7 +443,6 @@ impl Timeline {
                 outstanding
             );
         }
-        c.skipped = 0;
         c.no_budget = 0;
         c.forced = 0;
         c.dry = 0;
