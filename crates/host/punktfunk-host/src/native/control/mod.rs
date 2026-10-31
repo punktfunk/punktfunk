@@ -1283,6 +1283,7 @@ mod tests {
                     ramp: false,
                     probe_only: false,
                     pin_kbps: None,
+                    fixed_kbps: None,
                     floor_kbps: None,
                 },
                 base,

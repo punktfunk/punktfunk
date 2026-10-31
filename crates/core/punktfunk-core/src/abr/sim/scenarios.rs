@@ -2972,9 +2972,9 @@ mod tests {
         );
     }
 
-    /// The row the ramp and the link cap made worse together, repaired: the
-    /// fixed-rate session is never touched, and the Automatic one stops
-    /// filling the queue in front of it.
+    /// Both sessions ramp at once and each reads its share of the tunnel: the fixed-rate one
+    /// is never asked to move, and the Automatic one stops filling the queue in front of it.
+    /// The tunnel's own loss may take a lone frame; the queue takes none.
     #[test]
     fn a_fixed_rate_session_keeps_its_rate_and_its_sibling_keeps_the_queue_down() {
         let r = run(&with_ramp(shared_fixed_plus_auto()));
@@ -2984,12 +2984,17 @@ mod tests {
             "the fixed session was moved: {:?}",
             &fixed[..fixed.len().min(8)]
         );
+        assert!(r.asks[1].is_empty(), "{:?}", r.asks[1]);
         assert!(
             r.metrics.queue_p95_ms < 100,
             "queue p95 {} ms",
             r.metrics.queue_p95_ms
         );
-        assert_eq!(r.metrics.lost_per_10min, 0, "{:?}", r.metrics);
+        let queued: Vec<_> = r.windows[0]
+            .iter()
+            .filter(|w| w.dropped > 0 && w.delay.is_none_or(|d| d.mean_us >= 50_000))
+            .collect();
+        assert!(queued.is_empty(), "frames died behind a queue: {queued:?}");
     }
 
     /// A sibling that goes still lends the path, and a sibling that leaves
