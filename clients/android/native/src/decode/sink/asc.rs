@@ -31,7 +31,7 @@ use super::super::surface_control::{
 };
 use super::super::vsync::VsyncShared;
 use super::{Downrate, Routed, Sink};
-use crate::present::budget::AscBudget;
+use crate::present::budget::{AscBudget, PRESENTED_CAP};
 use crate::present::slots::Slots;
 use crate::present::store::{Held, Store};
 use crate::present::verdict::{Second, Verdict, Verdicts};
@@ -39,10 +39,10 @@ use crate::present::{cadence_suffix, frame_interval_ns, Counters, PresentPriorit
 use crate::session::PictureLayers;
 use crate::sys::{now_monotonic_ns, sysprop};
 
-/// Reader pool depth. Must cover the codec's own in-flight outputs + the presenter's held candidate
-/// / FIFO + the buffers still latched on SurfaceFlinger awaiting their release fence. Eight is
-/// generous for a one-in-flight-ish presenter and small enough that no device balks.
-const READER_MAX_IMAGES: i32 = 8;
+/// Reader pool depth: the presents SurfaceFlinger may hold ([`PRESENTED_CAP`]), the store's
+/// deepest buffer, and the acquire in hand. Images allocate lazily, so a display that holds two
+/// costs what it did at eight.
+const READER_MAX_IMAGES: i32 = PRESENTED_CAP as i32 + 4;
 
 /// Completed presents whose fence is still pending; older entries are occluded frames and drop.
 const AWAITING_CAP: usize = 8;
@@ -194,6 +194,8 @@ pub(crate) struct AscSink {
     fenced: u64,
     fence_err: u64,
     fence_tail_us: Vec<u64>,
+    /// Each latch against the grid, |latch + lead − vsync|: SurfaceFlinger's wake jitter.
+    sf_jitter_us: Vec<u64>,
     last_flush: Instant,
 }
 
@@ -296,7 +298,14 @@ impl AscSink {
                 super::cushion_tail(),
             ),
             budget: AscBudget::default(),
-            slots: Slots::new(panel_hz, priority, pacing, hold, hold_band_ns),
+            slots: Slots::new(
+                panel_hz,
+                frame_interval_ns(source_hz),
+                priority,
+                pacing,
+                hold,
+                hold_band_ns,
+            ),
             downrate: Downrate::new(panel_hz),
             downrated: false,
             verdicts: Verdicts::default(),
@@ -325,6 +334,7 @@ impl AscSink {
             fenced: 0,
             fence_err: 0,
             fence_tail_us: Vec::with_capacity(256),
+            sf_jitter_us: Vec::with_capacity(256),
             last_flush: Instant::now(),
         })
     }
@@ -606,6 +616,11 @@ impl AscSink {
         stats: &crate::stats::VideoStats,
         video_e2e: &AtomicU64,
     ) {
+        if real {
+            if let Some(dev) = self.slots.latch_deviation_ns(a.latch_ns) {
+                self.sf_jitter_us.push(dev.unsigned_abs() / 1000);
+            }
+        }
         if let Some(err_us) = self.slots.on_present(
             present_ns,
             a.latch_ns,
@@ -788,6 +803,7 @@ impl Sink for AscSink {
         let (e2e_p50, e2e_max) = p50_max_ms(std::mem::take(&mut self.e2e_us));
         let (err_p50, err_max) = p50_max_ms(std::mem::take(&mut self.phase_err_us));
         let (tail_p50, tail_max) = p50_max_ms(std::mem::take(&mut self.fence_tail_us));
+        let (jit_p50, jit_max) = p50_max_ms(std::mem::take(&mut self.sf_jitter_us));
         let intervals = std::mem::take(&mut c.intervals);
         let cadence = cadence_suffix(self.store.cadence_health());
         stats.note_cadence(intervals.judder_permille(), c.coalesced);
@@ -796,8 +812,9 @@ impl Sink for AscSink {
             "asc released={} displays={} skipped={} inflight={} qDepth={} paceMs p50={:.2} \
              max={:.2} latchMs p50={:.2} max={:.2} e2eMs p50={:.2} max={:.2} panelMs={:.2} \
              leadMs={:.2} marginUs={} held={} slotMiss={} coalesced={} n0={} n1={} n2={} n3+={} \
-             judder={}‰ mode={} phaseErrMs p50={:.2} max={:.2} forced={} unlatched={} fence={} \
-             fenced={} fenceErr={} fenceTailMs p50={:.2} max={:.2}{}",
+             judder={}‰ mode={} phaseErrMs p50={:.2} max={:.2} sfJitMs p50={:.2} max={:.2} \
+             forced={} unlatched={} fence={} fenced={} fenceErr={} fenceTailMs p50={:.2} \
+             max={:.2}{}",
             c.released,
             c.displays,
             skipped,
@@ -823,6 +840,8 @@ impl Sink for AscSink {
             intervals.mode(),
             err_p50,
             err_max,
+            jit_p50,
+            jit_max,
             c.forced,
             c.unlatched,
             u8::from(self.slots.fence_live()),
