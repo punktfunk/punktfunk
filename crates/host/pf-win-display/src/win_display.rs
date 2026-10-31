@@ -193,8 +193,12 @@ pub fn session_path_count() -> Option<usize> {
 }
 
 /// Whether this session lists display paths, none of them on `key`'s adapter. A session that
-/// lists none is still waiting for its replacement adapter.
+/// lists none is still waiting for its replacement adapter, and a key with a zero LUID names no
+/// adapter to have left.
 pub fn adapter_left_session(key: CcdTargetKey) -> bool {
+    if key.adapter_luid == 0 {
+        return false;
+    }
     query_display_config(QDC_ALL_PATHS).is_ok_and(|(paths, _)| {
         let on_adapter =
             |p: &DISPLAYCONFIG_PATH_INFO| path_target_key(p).adapter_luid == key.adapter_luid;

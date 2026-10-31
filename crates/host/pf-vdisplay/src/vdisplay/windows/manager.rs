@@ -38,8 +38,8 @@ use crate::lifecycle::{self, Acquire, Release};
 use pf_win_display::topology_churn::{self, Finished, Outcome};
 use pf_win_display::win_display::{
     count_other_active, force_extend_topology, resolve_gdi_name, restore_displays_ccd,
-    set_active_mode, set_virtual_primary_ccd, wait_mode_settled, wait_target_departed,
-    CcdTargetKey, IsolateOutcome, SavedConfig,
+    session_path_count, set_active_mode, set_virtual_primary_ccd, wait_mode_settled,
+    wait_target_departed, CcdTargetKey, IsolateOutcome, SavedConfig,
 };
 
 #[path = "manager/ccd.rs"]
@@ -284,8 +284,8 @@ impl Rungs {
 /// How one climb ended.
 enum Climb {
     Done(Result<VirtualOutput>),
-    /// The control device died under the ADD or its seat adapter left; the error is the
-    /// retire's cause.
+    /// The control device died under the ADD, its seat adapter left, or its seat session was
+    /// rebuilt onto a new adapter; the error is the retire's cause.
     Retire(anyhow::Error),
 }
 
@@ -325,24 +325,63 @@ fn in_seat_session() -> bool {
 const SEAT_REBUILD_WAIT: Duration = Duration::from_secs(12);
 
 /// A seat session that lists no display path has lost the config its adapter published, and no
-/// monitor added to it can get one. Dropping the connection makes the keeper reattach, which
-/// brings up a new adapter with a lit placeholder. Waits for that adapter and says whether the
-/// connection was dropped: the control device still points at the old one.
-fn rebuild_empty_seat_session() -> bool {
-    use pf_win_display::win_display::session_path_count;
-    if !in_seat_session() || session_path_count() != Some(0) {
+/// monitor added to it can get one. Dropping the connection makes the keeper reattach, and the
+/// new adapter publishes a lit placeholder. A disconnect the stream end recorded within
+/// [`SEAT_REBUILD_WAIT`] ([`rebuild_after_last_remove`]) is waited on for what is left of that
+/// window, never repeated; otherwise an empty session is disconnected here and waited on in full.
+///
+/// True when paths are back, or an older recorded disconnect already replaced the adapter: the
+/// control device still points at the old one. False when nothing was dropped or the wait ran
+/// out, and the climb goes on to its ADD.
+fn rebuild_empty_seat_session(t: &mut MgrInner) -> bool {
+    if !in_seat_session() {
         return false;
     }
-    if let Err(e) = pf_win_display::disconnect_own_session() {
-        tracing::warn!(error = %e, "seat session with no display paths stayed connected");
-        return false;
-    }
-    tracing::warn!("seat session has no display paths — reconnecting it");
+    let recorded = t.seat_disconnected.take();
+    let left = match recorded.map(|at| at.elapsed()) {
+        Some(age) if age < SEAT_REBUILD_WAIT => SEAT_REBUILD_WAIT - age,
+        _ if session_path_count() == Some(0) => {
+            tracing::warn!("seat session without display paths at connect — disconnecting it");
+            if let Err(e) = pf_win_display::disconnect_own_session() {
+                tracing::warn!(error = %e, "seat session disconnect did not run");
+                return false;
+            }
+            SEAT_REBUILD_WAIT
+        }
+        _ => return recorded.is_some(),
+    };
     let asked = Instant::now();
-    while session_path_count().unwrap_or(0) == 0 && asked.elapsed() < SEAT_REBUILD_WAIT {
+    while session_path_count().unwrap_or(0) == 0 {
+        if asked.elapsed() >= left {
+            tracing::warn!("seat session still without display paths after the rebuild wait");
+            return false;
+        }
         thread::sleep(Duration::from_millis(100));
     }
+    let waited_ms = asked.elapsed().as_millis() as u64;
+    tracing::info!(waited_ms, "seat session lists display paths again");
     true
+}
+
+/// After a seat's last monitors leave, a session left without display paths is disconnected
+/// at once and the time recorded, so the keeper's reattach lights a new placeholder before the
+/// next client connects. Each REMOVE's departure is waited out first: the paths leave with it.
+/// A zero-LUID key matches no path, so its wait ends after two samples.
+fn rebuild_after_last_remove(inner: &mut MgrInner, gone: &[Monitor]) {
+    if !inner.slots.is_empty() || !in_seat_session() {
+        return;
+    }
+    for mon in gone {
+        wait_target_departed(mon.ccd_key(), Duration::from_millis(400));
+    }
+    if session_path_count() != Some(0) {
+        return;
+    }
+    tracing::warn!("seat session without display paths after its last monitor — disconnecting it");
+    match pf_win_display::disconnect_own_session() {
+        Ok(()) => inner.seat_disconnected = Some(Instant::now()),
+        Err(e) => tracing::warn!(error = %e, "seat session disconnect did not run"),
+    }
 }
 
 /// Says so when this process is outside the active console session, where display
@@ -611,14 +650,16 @@ fn needs_resize(requested: Mode, committed: Mode, want: Mode) -> bool {
     want != requested && want != committed
 }
 
-/// Slot map plus the one group record, checked out together by a [`Transition`]: every
-/// group mutation happens on a slot transition.
+/// Slot map, the one group record and the seat session's last disconnect, checked out
+/// together by a [`Transition`]: every group mutation happens on a slot transition.
 #[derive(Default)]
 struct MgrInner {
     /// Live/kept slots, keyed by identity slot (`1..=15`) or `0` for
     /// anonymous/GameStream (at most one; no identity to find another slot by).
     slots: BTreeMap<u32, Slot>,
     group: GroupState,
+    /// When a stream end last disconnected this seat's session ([`rebuild_after_last_remove`]).
+    seat_disconnected: Option<Instant>,
 }
 
 impl MgrInner {
@@ -941,8 +982,9 @@ fn wudf_alive(pid: u32) -> bool {
 
 /// True when an IOCTL failure means the control device itself is gone.
 /// The cached handle can only keep failing and must be retired.
-/// 0x80070490 (ERROR_NOT_FOUND, ADD slot-exhaustion) is not here — it has
-/// its own reap-and-retry and the device is alive when it fires.
+/// 0x80070490 (ERROR_NOT_FOUND) is not here: off a seat it is ADD slot
+/// exhaustion on a live device, reaped and retried inside the ADD. A seat
+/// reads it as a departed adapter ([`is_stale_seat_add`]).
 fn is_device_gone(e: &anyhow::Error) -> bool {
     let Some(w) = e.downcast_ref::<windows::core::Error>() else {
         return false;
@@ -1128,8 +1170,12 @@ impl VirtualDisplayManager {
     }
 
     /// One climb of the ladder for `ask` on the checked-out map: each [`Next`] is one act, and
-    /// what it saw picks the next. An empty seat session is rebuilt first, and that or a slot on
-    /// a departed seat adapter retires the device.
+    /// what it saw picks the next. Before any reopen, an empty seat session is rebuilt
+    /// ([`rebuild_empty_seat_session`]); a rebuild that brought paths back, or a slot on a
+    /// departed seat adapter, retires the device. A reopened climb never rebuilds, so an
+    /// acquire retires for a rebuild at most once. A preempt that emptied the seat session and
+    /// disconnected it ends the climb: an ADD on the departing adapter is lost, and the next
+    /// attempt waits for the new one.
     fn climb(
         &'static self,
         dev: &ControlDevice,
@@ -1137,7 +1183,7 @@ impl VirtualDisplayManager {
         ask: &Ask,
         reopened: bool,
     ) -> Climb {
-        if rebuild_empty_seat_session() {
+        if !reopened && rebuild_empty_seat_session(t) {
             return Climb::Retire(anyhow::anyhow!("seat session was rebuilt"));
         }
         if let Some(why) = self.forget_left_adapter(t, ask.slot) {
@@ -1149,7 +1195,16 @@ impl VirtualDisplayManager {
         let mut r = Rungs::default();
         loop {
             let seen = match next {
-                Next::Preempt => self.preempt(dev, t, ask.slot),
+                Next::Preempt => {
+                    let before = t.seat_disconnected;
+                    let seen = self.preempt(dev, t, ask.slot);
+                    if t.seat_disconnected != before {
+                        return Climb::Done(Err(anyhow::anyhow!(
+                            "seat session rebuilt under the preempt — the next attempt waits for it"
+                        )));
+                    }
+                    seen
+                }
                 Next::ResizeInPlace => self.resize_slot(dev, t, ask),
                 Next::Remove => self.remove_for_rearrival(dev, t, ask, &mut r),
                 Next::Add { rollback } => self.add(dev, t, ask, &mut r, rollback),
@@ -1832,8 +1887,7 @@ impl VirtualDisplayManager {
     /// (the clamshell policy suppresses auto-activation and the EXTEND preset "succeeds"
     /// committing nothing), and `activate_target_path` commits the path directly, which ignores
     /// the lid policy. A seat has no panel to clone and no lid, so it polls briefly and commits
-    /// the path. A seat session with no paths left is rebuilt for the caller's next attempt
-    /// ([`rebuild_empty_seat_session`]).
+    /// the path.
     ///
     /// CAVEAT (unobserved): textbook CCD also allows a clone with a *shared-source ACTIVE* path
     /// (resolve → `Some`), which the `is_none()` gate would miss; widening needs a
@@ -1858,7 +1912,6 @@ impl VirtualDisplayManager {
                 return Some(n);
             }
         }
-        rebuild_empty_seat_session();
         None
     }
 
@@ -2222,7 +2275,8 @@ impl VirtualDisplayManager {
 
     /// Tear down `mons`, already out of `inner.slots`: the group regroups once on what
     /// survives them all ([`Self::regroup`]), then one REMOVE each, then the survivors'
-    /// layout. An empty batch is a no-op.
+    /// layout. A seat left with no monitor and no display path is disconnected
+    /// ([`rebuild_after_last_remove`]). An empty batch is a no-op.
     fn teardown_removed(
         &self,
         dev: Option<&ControlDevice>,
@@ -2260,6 +2314,7 @@ impl VirtualDisplayManager {
         // Re-arrange the survivors after the REMOVEs, so the departing paths are gone and no
         // gap stays where they sat. No-op below two members.
         self.apply_group_layout(inner);
+        rebuild_after_last_remove(inner, &mons);
         done.store(true, Ordering::SeqCst);
     }
 
