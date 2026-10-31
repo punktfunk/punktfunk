@@ -152,10 +152,11 @@ pub(super) fn session_pyrowave_bpp(client_x100: u16) -> f64 {
 }
 
 /// PyroWave pins the session's bits per pixel (`pyrowave_bpp`, [`session_pyrowave_bpp`]) for
-/// the negotiated mode, not the 20 Mbps H.26x default: an explicit session runs at the pin, an
-/// Automatic one adapts under it. A client rate is ignored: bits per pixel is the quality
-/// knob, and it holds across modes. Every pin goes through `ceiling`, the session's
-/// `PUNKTFUNK_PYROWAVE_MAX_MBPS` in kbps. H.26x/AV1 explicit rates stand.
+/// the negotiated mode, not the 20 Mbps H.26x default: a Fixed session runs at the pin, an
+/// Automatic one adapts under it. A non-zero client rate asks for Fixed and its number is
+/// ignored: bits per pixel is the quality knob, and it holds across modes. Every pin goes
+/// through `ceiling`, the session's `PUNKTFUNK_PYROWAVE_MAX_MBPS` in kbps. H.26x/AV1 explicit
+/// rates stand.
 pub(super) fn resolve_bitrate_kbps_for(
     codec: crate::encode::Codec,
     requested: u32,
@@ -167,9 +168,9 @@ pub(super) fn resolve_bitrate_kbps_for(
 ) -> u32 {
     if codec == crate::encode::Codec::PyroWave {
         if requested != 0 {
-            tracing::warn!(
+            tracing::info!(
                 requested_kbps = requested,
-                "a client bitrate does not apply to PyroWave — using the session's bits per pixel"
+                "fixed PyroWave session — pinned at the session's bits per pixel, not the client rate"
             );
         }
         let pin = punktfunk_core::pyrowave::kbps_for(mode, chroma.is_444(), bit_depth, bpp)
