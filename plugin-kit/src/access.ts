@@ -7,7 +7,16 @@ import { dirAccess } from "./library/parsers/fs.js";
 export interface AccessRequestPath {
 	readonly path: string;
 	readonly write?: boolean;
+	/**
+	 * The folder and the files directly in it, nothing below. A Windows library folder holding a
+	 * game tree needs no more, and this lands at once where a whole folder rewrites every file in
+	 * the tree. A host older than 0.46 ignores it and asks for the whole folder.
+	 */
+	readonly files?: boolean;
 }
+
+const pathOf = (entry: string | AccessRequestPath): string =>
+	typeof entry === "string" ? entry : entry.path;
 
 export interface AccessRequestOutcome {
 	readonly path: string;
@@ -76,10 +85,30 @@ export const requestAccess = (
 	});
 
 /** Folders unusable now. Inside a sandbox, missing may mean merely unbound, so ask the host. */
-export const unreachable = (dirs: ReadonlyArray<string>): string[] => {
+export const unreachable = <T extends string | AccessRequestPath>(
+	dirs: ReadonlyArray<T>,
+): T[] => {
 	const sandboxed = !!process.env.PUNKTFUNK_MGMT_UNIX;
-	return [...new Set(dirs.map(expand))].filter((dir) => {
-		const access = dirAccess(dir);
-		return access === "denied" || (sandboxed && access === "missing");
-	});
+	const seen = new Map<string, T>();
+	for (const entry of dirs) {
+		const dir = expand(pathOf(entry));
+		if (seen.has(dir)) continue;
+		seen.set(
+			dir,
+			(typeof entry === "string"
+				? dir
+				: { ...(entry as AccessRequestPath), path: dir }) as T,
+		);
+	}
+	return [...seen]
+		.filter(([dir]) => {
+			const access = dirAccess(dir);
+			return access === "denied" || (sandboxed && access === "missing");
+		})
+		.map(([, entry]) => entry);
 };
+
+/** `entries` in a stable order, whatever mix of spellings they arrive in. */
+export const byPath = <T extends string | AccessRequestPath>(
+	entries: ReadonlyArray<T>,
+): T[] => [...entries].sort((a, b) => pathOf(a).localeCompare(pathOf(b)));
