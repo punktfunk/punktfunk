@@ -251,9 +251,10 @@ pub fn fec_pct_for_loss(shards: u32, loss_ppm: u32, fps: u32) -> u8 {
 /// Three terms, the largest wins: the band [`adapt_fec`] reads off this
 /// window, the parity the link's measured loss asks of a frame the size this
 /// budget buys, and [`FEC_STEP`] for the first [`FEC_STEP_WINDOWS`] of a run.
-/// A run past that is loss no per-frame parity bridges, so the step comes
-/// off. Decays one point per window so a burst every few seconds does not
-/// fall to the floor between hits.
+/// A run past that is loss no per-frame parity bridges, so the step is not
+/// added again. Inside a run the target never falls: frames are still dying.
+/// Outside one it decays a point per window, so a burst every few seconds
+/// does not fall to the floor between hits.
 pub fn fec_target(
     loss_ppm: u32,
     prev: u8,
@@ -268,11 +269,16 @@ pub fn fec_target(
     };
     let level = horizon.note(loss_ppm, unrecovered_run > 0);
     let sized = horizon.hold(wire_shards_per_frame(frame), level, frame.fps);
+    let floor = if unrecovered_run > 0 {
+        prev
+    } else {
+        prev.saturating_sub(1)
+    };
     adapt_fec(loss_ppm)
         .max(sized)
         .saturating_add(step)
         .min(FEC_MAX)
-        .max(prev.saturating_sub(1))
+        .max(floor)
 }
 
 #[cfg(test)]
@@ -318,29 +324,28 @@ mod tests {
         }
     }
 
-    /// A frame dying every window under low measured loss is a bounded step over the
-    /// measured level, never a 5 % reading: on for a few windows, off once it has not
-    /// stopped the asks, and a clean window ends the run.
+    /// A frame dying every window under low measured loss is one bounded step over the
+    /// measured level, held while frames keep dying, and the first window without a dead
+    /// frame starts the decay.
     #[test]
-    fn fec_step_is_bounded_and_gives_up_when_frames_keep_dying() {
+    fn fec_steps_once_and_holds_while_frames_keep_dying() {
         // Clean: measured level, decaying one point per window.
         let mut h = LossHorizon::default();
         assert_eq!(fec_target(0, FEC_MIN, 0, tunnel(), &mut h), FEC_MIN);
         assert_eq!(fec_target(0, 12, 0, tunnel(), &mut h), 11);
-        // A dropped frame at 0.3 % loss: +3 over the floor, held while the run
-        // is young. A window a frame died in teaches the horizon nothing, so
-        // the step is the whole of the answer.
+        // A dropped frame at 0.3 % loss: +3 over the floor. A window a frame
+        // died in teaches the horizon nothing, so the step is the whole of the
+        // answer, and it is not given back inside the run.
         let mut fec = FEC_MIN;
         let mut seen = Vec::new();
         for run in 1..=FEC_STEP_WINDOWS + 2 {
             fec = fec_target(3_000, fec, run, tunnel(), &mut h);
             seen.push(fec);
         }
-        assert_eq!(
-            seen,
-            [8, 8, 8, 8, 7, 6],
-            "step, then the decay back to measured"
-        );
+        assert_eq!(seen, [8; 6], "the step, held past its windows");
+        assert_eq!(fec_target(3_000, fec, 0, tunnel(), &mut h), 7, "run over");
+        // A run never steps down, whatever the window reads.
+        assert_eq!(fec_target(0, 20, 9, tunnel(), &mut h), 20);
         // Measured loss still carries its own level once the step is off.
         let mut h = LossHorizon::default();
         assert_eq!(

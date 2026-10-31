@@ -1516,6 +1516,21 @@ pub(super) fn lan_1g_cut_short() -> Scenario {
     ramp_cut_short("lan_1g_cut_short", 0x7A_8000, sc, 120)
 }
 
+/// The rig's `fixed_100m`: a fixed 80 Mbit/s 1080p60 stream over a 93 Mbit/s hop with a
+/// switch's 10 ms queue. The rate is the player's; `L` is the only thing to learn.
+fn fixed_100m() -> Scenario {
+    let mut sc = lan("fixed_100m", 93_000, 60);
+    sc.duration_ms = 20_000;
+    sc.link.buffer_ms = 10;
+    sc.achievable_kbps = 80_000;
+    sc.blip_at_ms = None;
+    let c = &mut sc.sessions[0].client;
+    c.start_kbps = 80_000;
+    c.automatic = false;
+    c.stream_cap_kbps = stream_ceiling_kbps(1920, 1080, 60, CODEC_HEVC, 8, 0);
+    sc
+}
+
 /// The 4K165 PyroWave pin, 1.6 bpp 4:2:0 8-bit (`resolve_bitrate_kbps_for`).
 const PYROWAVE_PIN_KBPS: u32 = 2_189_721;
 
@@ -2972,9 +2987,9 @@ mod tests {
         );
     }
 
-    /// The row the ramp and the link cap made worse together, repaired: the
-    /// fixed-rate session is never touched, and the Automatic one stops
-    /// filling the queue in front of it.
+    /// Both sessions ramp at once and each reads its share of the tunnel: the fixed-rate one
+    /// is never asked to move, and the Automatic one stops filling the queue in front of it.
+    /// The tunnel's own loss may take a lone frame; the queue takes none.
     #[test]
     fn a_fixed_rate_session_keeps_its_rate_and_its_sibling_keeps_the_queue_down() {
         let r = run(&with_ramp(shared_fixed_plus_auto()));
@@ -2984,12 +2999,34 @@ mod tests {
             "the fixed session was moved: {:?}",
             &fixed[..fixed.len().min(8)]
         );
+        assert!(r.asks[1].is_empty(), "{:?}", r.asks[1]);
         assert!(
             r.metrics.queue_p95_ms < 100,
             "queue p95 {} ms",
             r.metrics.queue_p95_ms
         );
-        assert_eq!(r.metrics.lost_per_10min, 0, "{:?}", r.metrics);
+        let queued: Vec<_> = r.windows[0]
+            .iter()
+            .filter(|w| w.dropped > 0 && w.delay.is_none_or(|d| d.mean_us >= 50_000))
+            .collect();
+        assert!(queued.is_empty(), "frames died behind a queue: {queued:?}");
+    }
+
+    /// The ramp finds the 93 Mbit/s hop under a fixed 80 Mbit/s stream before its first
+    /// frame, and that wall is the first link rate the host hears after the floor. The rate
+    /// is never asked to move.
+    #[test]
+    fn a_fixed_rate_measures_its_link_before_the_first_frame() {
+        let r = run(&with_ramp(fixed_100m()));
+        let (at_ms, s) = r.ramps[0].done.expect("the ramp stopped");
+        assert!(s.wall && at_ms < BRINGUP_MS, "{s:?} at {at_ms} ms");
+        assert!((85_000..=100_000).contains(&s.proven_kbps), "{s:?}");
+        assert_eq!(
+            r.links[0][..2],
+            [(0, crate::abr::LINK_FLOOR_KBPS), (at_ms, s.proven_kbps)]
+        );
+        assert!(r.asks[0].is_empty(), "{:?}", r.asks[0]);
+        assert!(r.windows[0].iter().all(|w| w.rate_kbps == 80_000));
     }
 
     /// A sibling that goes still lends the path, and a sibling that leaves

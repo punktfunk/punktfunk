@@ -365,7 +365,7 @@ impl Reassembler {
         let mut f = video.frames.remove(&frame_index).expect("checked above");
         video.completed.insert(frame_index, Done::of(&f));
         *in_flight_bytes -= frame_cost(&f);
-        if !hand_up_partial(frame_index, &mut f, pending_partial, stats) {
+        if hand_up_partial(frame_index, &mut f, pending_partial, stats) != Some(true) {
             StatsCounters::add(&stats.frames_dropped, 1);
         }
         for block in f.blocks.values_mut() {
@@ -1163,33 +1163,22 @@ fn pin_totals(frame: &mut FrameBuf, g: &Geom) -> Pin {
     Pin::Keep
 }
 
-/// Zero every shard of `f` that neither arrived nor was rebuilt: frame memory is reused, so
 /// Hand `f` up through `sink` (newest-wins) when it is chunk-aligned and its size is known:
-/// received shards at their offsets, holes zeroed and counted lost. `true` when it went up with
-/// its head block, the one at base 0, whole: a picture with patches missing, not a lost frame.
+/// received shards at their offsets, holes zeroed and counted in `partial_shards_lost`.
+/// `Some(true)` when it went up with its head block, the one at base 0, whole: a picture with
+/// patches missing, not a lost frame. `None` when it did not go up: its holes are uncounted.
 fn hand_up_partial(
     idx: u32,
     f: &mut FrameBuf,
     sink: &mut Option<Frame>,
     stats: &StatsCounters,
-) -> bool {
+) -> Option<bool> {
     // `frame_bytes > 0` also excludes an unpinned streamed frame (total still the 0 sentinel):
     // truncate-to-0 would emit empty.
     if f.user_flags & USER_FLAG_CHUNK_ALIGNED == 0 || f.frame_bytes == 0 {
-        return false;
+        return None;
     }
-    let total = f.frame_bytes.div_ceil(f.shard_bytes);
-    let seen: usize = f.blocks.values().map(|b| b.data_shards).sum();
-    let missing: usize = f
-        .blocks
-        .values()
-        .filter(|b| !(b.done && b.reconstructed))
-        .map(|b| b.have_data.iter().filter(|&&h| !h).count())
-        .sum();
-    StatsCounters::add(
-        &stats.partial_shards_lost,
-        (missing + total.saturating_sub(seen)) as u64,
-    );
+    StatsCounters::add(&stats.partial_shards_lost, unrepaired(f));
     zero_holes(f);
     let mut buf = std::mem::replace(&mut f.buf, Vec::new().into());
     buf.truncate(f.frame_bytes);
@@ -1210,7 +1199,39 @@ fn hand_up_partial(
             new_format: None,
         });
     }
-    head_whole(f)
+    Some(head_whole(f))
+}
+
+/// Retire an aged-out `f`, handing it up through `sink` when it can go as a partial (whose
+/// holes [`hand_up_partial`] counts). `(dead, holes)`: `dead` is 1 unless it went up as a
+/// picture; `holes` is what it adds to `dead_shards_lost`, nonzero only if it did not go up.
+fn retire(
+    idx: u32,
+    f: &mut FrameBuf,
+    sink: Option<&mut Option<Frame>>,
+    stats: &StatsCounters,
+) -> (u64, u64) {
+    match sink.and_then(|sink| hand_up_partial(idx, f, sink, stats)) {
+        Some(pictured) => (u64::from(!pictured), 0),
+        None => (1, unrepaired(f)),
+    }
+}
+
+/// Data shards `f` never got in blocks no parity rebuilt, with its never-seen blocks once its
+/// size is known. A shard parity rebuilt counts in `fec_recovered_shards` instead.
+fn unrepaired(f: &FrameBuf) -> u64 {
+    let seen: usize = f.blocks.values().map(|b| b.data_shards).sum();
+    let total = match f.frame_bytes {
+        0 => seen,
+        n => n.div_ceil(f.shard_bytes),
+    };
+    let missing: usize = f
+        .blocks
+        .values()
+        .filter(|b| !(b.done && b.reconstructed))
+        .map(|b| b.have_data.iter().filter(|&&h| !h).count())
+        .sum();
+    (missing + total.saturating_sub(seen)) as u64
 }
 
 /// The block at base 0 arrived or was rebuilt.
@@ -1218,6 +1239,7 @@ fn head_whole(f: &FrameBuf) -> bool {
     f.blocks.values().any(|b| b.base_shard == 0 && b.done)
 }
 
+/// Zero every shard of `f` that neither arrived nor was rebuilt: frame memory is reused, so
 /// a hole holds a previous AU's bytes until a partial hands it up.
 fn zero_holes(f: &mut FrameBuf) {
     let sb = f.shard_bytes;
@@ -1335,7 +1357,8 @@ impl FrameBuf {
 impl ReassemblyWindow {
     /// Track the newest frame. Declare incomplete frames outside [`LOSS_WINDOW_NS`]
     /// or [`HARD_LOSS_WINDOW`] lost (video: `frames_dropped`, which requests a
-    /// recovery keyframe). Prune `completed` to [`REORDER_WINDOW`].
+    /// recovery keyframe, and the holes of those no partial took in `dead_shards_lost`).
+    /// Prune `completed` to [`REORDER_WINDOW`].
     #[allow(clippy::too_many_arguments)]
     fn advance_window(
         &mut self,
@@ -1368,7 +1391,7 @@ impl ReassemblyWindow {
 
         let completed = &mut self.completed;
         let partial_on = partial_sink.is_some();
-        let mut dead = 0u64;
+        let (mut dead, mut holes) = (0u64, 0u64);
         self.frames.retain(|&idx, f| {
             let chunked = partial_on && f.user_flags & USER_FLAG_CHUNK_ALIGNED != 0;
             // Chunk-aligned partials use [`PARTIAL_WINDOW_NS`]; everything else the full window.
@@ -1387,10 +1410,8 @@ impl ReassemblyWindow {
                 // shards join late-shard memory exactly like an emitted frame.
                 completed.insert(idx, Done::of(f));
                 *in_flight_bytes -= frame_cost(f);
-                let pictured = partial_sink
-                    .as_deref_mut()
-                    .is_some_and(|sink| hand_up_partial(idx, f, sink, stats));
-                dead += u64::from(!pictured);
+                let (d, h) = retire(idx, f, partial_sink.as_deref_mut(), stats);
+                (dead, holes) = (dead + d, holes + h);
                 for block in f.blocks.values_mut() {
                     reclaim_parity(block, recovery_pool, in_flight_bytes);
                 }
@@ -1399,6 +1420,7 @@ impl ReassemblyWindow {
         });
         if dead > 0 && count_drops {
             StatsCounters::add(&stats.frames_dropped, dead);
+            StatsCounters::add(&stats.dead_shards_lost, holes);
         }
         let positions = &mut self.positions;
         self.completed.retain(|&idx, done| {

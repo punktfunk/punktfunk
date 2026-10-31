@@ -138,7 +138,7 @@ pub(super) struct FecState {
 }
 
 /// What the loop only logs: the capture split and stage timings under `PUNKTFUNK_PERF`, the
-/// host-composite outcomes, and the cadence verdict's flips.
+/// host-composite outcomes, and the cadence verdict's flips with the chains behind them.
 pub(super) struct Diag {
     /// NEW source frames / REPEATS / cursor REGENS since `diag_at`. Logged every 2 s under `PUNKTFUNK_PERF`.
     pub(super) diag_new: u64,
@@ -152,9 +152,13 @@ pub(super) struct Diag {
     pub(super) st_submit: Vec<u32>,
     pub(super) st_wait: Vec<u32>,
     pub(super) st_queue: Vec<u32>,
+    /// The first degraded verdict logs the stage histograms once; until then they sample
+    /// without `PUNKTFUNK_PERF` too.
+    pub(super) stages_owed: bool,
     pub(super) was_degraded: bool,
     pub(super) last_cadence_log: Option<std::time::Instant>,
     pub(super) cadence_flips_suppressed: u32,
+    pub(super) chain: super::encode::ChainWindow,
 }
 
 impl Diag {
@@ -169,9 +173,11 @@ impl Diag {
             st_submit: Vec::new(),
             st_wait: Vec::new(),
             st_queue: Vec::new(),
+            stages_owed: true,
             was_degraded: false,
             last_cadence_log: None,
             cadence_flips_suppressed: 0,
+            chain: Default::default(),
         }
     }
 }
@@ -617,6 +623,7 @@ impl StreamState {
         let now = std::time::Instant::now();
         // The `seconds` cap counts from a stream that is up.
         facts.deadline = now + std::time::Duration::from_secs(u64::from(c.seconds));
+        let kf_gate = super::recovery::KeyframeGate::new(c.shared.refuted.clone());
         let mut st = Self {
             plan,
             facts,
@@ -661,7 +668,7 @@ impl StreamState {
             last_rfi: None,
             owed_idr: false,
             loss_mode: super::recovery::LossMode::new(ctx.host_knobs.acked_refs),
-            kf_gate: super::recovery::KeyframeGate::default(),
+            kf_gate,
             recovery_cadence: pf_frame::metronome::Metronome::new(),
             ir_wave_pos: 0,
             pipelining: Pipelining::new(ctx.host_knobs.idd_adaptive),
@@ -1247,6 +1254,7 @@ fn start_send(
         link_kbps: wiring.link_kbps.clone(),
         ports: wiring.ports,
         link_paced: facts.pyrowave && !facts.bitrate_auto,
+        refuted: wiring.refuted.clone(),
         shape: wiring.shape.clone(),
         bringup: facts.bringup.clone(),
         wire_sock,

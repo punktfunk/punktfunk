@@ -253,6 +253,9 @@ pub(super) struct SendStats {
     /// An explicit-rate PyroWave stream: its pinned rate says nothing about the link, so the
     /// link the client proved is a hard ceiling too ([`crate::send_pacing::pinned_wall`]).
     pub(super) link_paced: bool,
+    /// [`crate::native::wiring::SessionShared::refuted`]: once raised, the pacer caps an
+    /// unmeasured link.
+    pub(super) refuted: Arc<crate::send_pacing::Refutation>,
     /// The shape the client asked for (`Shape as u8`). `PUNKTFUNK_DELIVERY` overrides it.
     pub(super) shape: Arc<std::sync::atomic::AtomicU8>,
     pub(super) bringup: Arc<crate::bringup::Trace>,
@@ -552,10 +555,58 @@ impl SendLoop {
         );
     }
 
+    /// `R` for the next AU from the live bitrate, the client's link report, a pinned wall and
+    /// the session's refutation, logged when `L` moves and once, with its evidence, when the
+    /// refutation caps it.
+    fn pace_next(&mut self) {
+        use crate::send_pacing as sp;
+        let stats = &self.stats;
+        let bitrate_kbps = stats.bitrate_kbps.load(Ordering::Relaxed);
+        let reported = stats.link_kbps.load(Ordering::Relaxed);
+        let shape = sp::Shape::from_u8(stats.shape.load(Ordering::Relaxed));
+        let wall = sp::pinned_wall(stats.link_paced, reported, bitrate_kbps);
+        // Bound one frame's spread to ~2 intervals so a big IDR cannot back the channel
+        // into `cadence_degraded`. hz 0 = not yet known → the absolute ceiling alone.
+        let (_, _, hz) = unpack_mode(stats.mode.load(Ordering::Relaxed));
+        let max_spread = if hz > 0 {
+            std::time::Duration::from_secs_f64(2.0 / hz as f64)
+        } else {
+            sp::MAX_PACE_SPREAD
+        };
+        let evidence = stats.refuted.evidence();
+        if evidence.is_some() {
+            self.pacer.refute();
+        }
+        let rate = self
+            .pacer
+            .update(bitrate_kbps, reported, wall, shape, max_spread);
+        let link = self.pacer.link();
+        let was = self.link.replace(link);
+        if was == Some(link) {
+            return;
+        }
+        if link.refuted && !was.is_some_and(|l| l.refuted) {
+            tracing::info!(
+                evidence = evidence.map_or("", sp::Evidence::name),
+                bitrate_kbps,
+                cap_kbps = sp::cap_bps(bitrate_kbps, &link, wall) / 1_000,
+                "unmeasured link capped at 1.5× the bitrate — the client cannot drain the stream"
+            );
+        }
+        tracing::info!(
+            link_kbps = link.kbps,
+            source = ?link.source,
+            hard_kbps = link.hard_kbps,
+            wall_kbps = wall.unwrap_or(0),
+            refuted = link.refuted,
+            rate_kbps = rate / 1_000,
+            "pacing at the link rate"
+        );
+    }
+
     /// One message off the encode loop: pace it out and account for it. `false` when a send
     /// failed and the stream ends.
     fn step(&mut self, send_msg: SendMsg) -> bool {
-        use crate::send_pacing as sp;
         let send_msg = match send_msg {
             SendMsg::Resend { frame, shards } => {
                 self.resend(frame, &shards);
@@ -572,34 +623,7 @@ impl SendLoop {
             }
             other => other,
         };
-        let stats = &self.stats;
-        let bitrate_kbps = stats.bitrate_kbps.load(Ordering::Relaxed);
-        let reported = stats.link_kbps.load(Ordering::Relaxed);
-        let shape = sp::Shape::from_u8(stats.shape.load(Ordering::Relaxed));
-        let wall = sp::pinned_wall(stats.link_paced, reported, bitrate_kbps);
-        // Bound one frame's spread to ~2 intervals so a big IDR cannot back the channel
-        // into `cadence_degraded`. hz 0 = not yet known → the absolute ceiling alone.
-        let (_, _, hz) = unpack_mode(stats.mode.load(Ordering::Relaxed));
-        let max_spread = if hz > 0 {
-            std::time::Duration::from_secs_f64(2.0 / hz as f64)
-        } else {
-            crate::send_pacing::MAX_PACE_SPREAD
-        };
-        let rate = self
-            .pacer
-            .update(bitrate_kbps, reported, wall, shape, max_spread);
-        let link = self.pacer.link();
-        if self.link != Some(link) {
-            self.link = Some(link);
-            tracing::info!(
-                link_kbps = link.kbps,
-                source = ?link.source,
-                hard_kbps = link.hard_kbps,
-                wall_kbps = wall.unwrap_or(0),
-                rate_kbps = rate / 1_000,
-                "pacing at the link rate"
-            );
-        }
+        self.pace_next();
         // A new epoch and stream take effect at the AU that carries them, never mid-AU.
         let opens = match &send_msg {
             SendMsg::Frame(f) => Some(f.meta),
@@ -946,11 +970,12 @@ mod tests {
         }
     }
 
-    /// A send thread on `transport` at 20 Mbit/s in `shape`: its frame channel, its stop
-    /// flag, the counters it reports into and the thread.
+    /// A send thread on `transport` at 20 Mbit/s in `shape`, its link refuted or not: its
+    /// frame channel, its stop flag, the counters it reports into and the thread.
     fn spawn_loop(
         transport: Box<dyn Transport>,
         shape: crate::send_pacing::Shape,
+        refuted: bool,
     ) -> (
         std::sync::mpsc::SyncSender<SendMsg>,
         Arc<AtomicBool>,
@@ -994,6 +1019,13 @@ mod tests {
             link_kbps: Arc::new(AtomicU32::new(0)),
             ports: Default::default(),
             link_paced: false,
+            refuted: {
+                let r = crate::send_pacing::Refutation::default();
+                if refuted {
+                    r.raise(crate::send_pacing::Evidence::DeadWindows);
+                }
+                Arc::new(r)
+            },
             shape: Arc::new(AtomicU8::new(shape as u8)),
             bringup: crate::bringup::Trace::start("test", Arc::new(AtomicU32::new(0))),
             wire_sock: None,
@@ -1052,7 +1084,7 @@ mod tests {
     fn a_whole_au_in_one_chunk_sends_its_data_first() {
         let (host_tp, client_tp) = punktfunk_core::transport::loopback_pair(0, 0);
         let (frame_tx, stop, _, thread) =
-            spawn_loop(Box::new(host_tp), crate::send_pacing::Shape::Auto);
+            spawn_loop(Box::new(host_tp), crate::send_pacing::Shape::Auto, false);
         let SendMsg::Frame(f) = frame(5) else {
             unreachable!()
         };
@@ -1081,6 +1113,44 @@ mod tests {
         assert!(got[..40].iter().all(|p| is_data(p)));
     }
 
+    /// A refuted link is capped: a 400 KiB frame of a 20 Mbit/s stream leaves at 30 Mbit/s,
+    /// over 100 ms, where the floor's 720 Mbit/s takes a few.
+    #[test]
+    fn a_refuted_link_paces_at_the_cap() {
+        use std::time::{Duration, Instant};
+        let spread = |refuted: bool| {
+            let (host_tp, client_tp) = punktfunk_core::transport::loopback_pair(0, 0);
+            let (frame_tx, stop, _, thread) =
+                spawn_loop(Box::new(host_tp), crate::send_pacing::Shape::Auto, refuted);
+            let SendMsg::Frame(mut f) = frame(3) else {
+                unreachable!()
+            };
+            f.data = vec![3u8; 400 * 1024];
+            frame_tx.send(SendMsg::Frame(f)).unwrap();
+            let start = Instant::now();
+            let (mut first, mut last) = (None, start);
+            while first.is_none() && start.elapsed() < Duration::from_secs(2)
+                || last.elapsed() < Duration::from_millis(200)
+            {
+                match client_tp.recv().unwrap() {
+                    Some(_) => {
+                        last = Instant::now();
+                        first.get_or_insert(last);
+                    }
+                    None => std::thread::sleep(Duration::from_millis(1)),
+                }
+            }
+            stop.store(true, std::sync::atomic::Ordering::SeqCst);
+            drop(frame_tx);
+            thread.join().unwrap();
+            last - first.expect("the frame arrived")
+        };
+        let capped = spread(true);
+        assert!(capped >= Duration::from_millis(100), "{capped:?}");
+        let floor = spread(false);
+        assert!(floor < Duration::from_millis(100), "{floor:?}");
+    }
+
     /// A client's NACK on the send thread: the frame went out whole, then the shards the
     /// client names leave again under fresh packet numbers, outside the clock, and the
     /// host's link line counts them. A frame the ring never held sends nothing.
@@ -1088,7 +1158,7 @@ mod tests {
     fn a_resend_sends_the_named_shards_again() {
         let (host_tp, client_tp) = punktfunk_core::transport::loopback_pair(0, 0);
         let (frame_tx, stop, counters, thread) =
-            spawn_loop(Box::new(host_tp), crate::send_pacing::Shape::Auto);
+            spawn_loop(Box::new(host_tp), crate::send_pacing::Shape::Auto, false);
         frame_tx.send(frame(7)).unwrap();
         frame_tx
             .send(SendMsg::Resend {
@@ -1149,7 +1219,7 @@ mod tests {
 
         let (host_tp, client_tp) = punktfunk_core::transport::loopback_pair(0, 0);
         let (frame_tx, stop, _, thread) =
-            spawn_loop(Box::new(host_tp), crate::send_pacing::Shape::Auto);
+            spawn_loop(Box::new(host_tp), crate::send_pacing::Shape::Auto, false);
         let meta = |stream| match frame(1) {
             SendMsg::Frame(f) => AuMeta { stream, ..f.meta },
             _ => unreachable!(),

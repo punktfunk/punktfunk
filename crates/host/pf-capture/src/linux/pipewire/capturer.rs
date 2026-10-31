@@ -562,6 +562,14 @@ impl crate::Feed for PortalCapturer {
         }
         keepalive
     }
+
+    fn pool_use(&self) -> Option<crate::PoolUse> {
+        let gauge = &self.shared.pool;
+        Some(crate::PoolUse {
+            depth: gauge.depth.load(Ordering::Relaxed),
+            withheld_peak: gauge.withheld_peak.swap(0, Ordering::Relaxed),
+        })
+    }
 }
 
 impl crate::CursorSource for PortalCapturer {

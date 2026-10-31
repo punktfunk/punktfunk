@@ -47,13 +47,17 @@ pub(crate) use link::LINK_FLOOR_KBPS;
 pub use probe::{ProbeReport, RampStep, RampStepEnd, RampSummary};
 pub use sample::{DelayTrend, WindowActivity, WindowSample, WINDOW};
 pub use shape::Shape;
-pub use verdict::{shows_loss_shape, Reason};
+pub use verdict::{shows_head_loss, shows_loss_shape, Reason};
 
 use std::time::Instant;
 
 /// Judged windows that engage or clear Automatic PyroWave's floor verdict:
 /// 4 × 750 ms = 3 s, long enough that one cut's landing is not a weak network.
 const FLOOR_WINDOWS: u32 = 4;
+
+/// Windows running with a dead frame that refute `L` on a fixed rate: 1.5 s. A link that
+/// loses a lone frame stays at the rate it was paced at.
+const DEAD_RUN: u8 = 2;
 
 /// The least move of the delay frame between two iterations that is a step, ns. Under it is
 /// drift the skew model carries: at its 500 ppm clamp a one-second carry is half of this.
@@ -108,6 +112,9 @@ pub struct DriverConfig {
     /// wall lowers it once, every other outcome leaves it. The controller
     /// stays off either way, and the pin is never raised from a measurement.
     pub pin_kbps: Option<u32>,
+    /// H.264, HEVC or AV1 at an explicit rate: the rate the Welcome resolved, kbps. `Some`
+    /// runs the bring-up ramp to measure `L` alone; the rate is the player's and never moves.
+    pub fixed_kbps: Option<u32>,
     /// Automatic PyroWave: [`crate::pyrowave::BPP_FLOOR`] at the Welcome mode,
     /// kbps. No cut goes under it, and [`stream_cap_kbps`](Self::stream_cap_kbps)
     /// is the host's pin. `None` keeps the controller's own floor.
@@ -119,11 +126,13 @@ pub struct DriverConfig {
 /// its own business.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Action {
-    /// One window's report: shard loss in ppm, the host's adaptive-FEC input; the
-    /// session's packets received, which tell "no loss" from "nothing arrives" and divide a
-    /// path two of the host's sessions share; and where the window's loss fell.
+    /// One window's report: shard loss in ppm, the host's adaptive-FEC input, and what the
+    /// frames that died add to it; the session's packets received, which tell "no loss" from
+    /// "nothing arrives" and divide a path two of the host's sessions share; and where the
+    /// window's loss fell.
     Report {
         loss_ppm: u32,
+        dead_ppm: u32,
         packets_received: u64,
         head: u32,
         mid: u32,
@@ -230,6 +239,8 @@ pub struct Driver {
     /// The pin an explicit-rate PyroWave session negotiated, when it has one.
     /// The ramp's verdict is judged against it in [`on_ramped`](Self::on_ramped).
     pin_kbps: Option<u32>,
+    /// An explicit H.26x rate: the ramp's verdict sets `L` and nothing else.
+    fixed: bool,
     /// Automatic PyroWave's quality floor, and whether the session is held there.
     floor: Option<FloorWatch>,
     /// Raised between ticks (a probe ended, a burst was abandoned) and sent
@@ -250,6 +261,10 @@ pub struct Driver {
     shape: shape::ShapeState,
     /// Consecutive windows of tail loss with no frame lost.
     tail_run: u8,
+    /// An explicit H.26x rate, until `L` retreats to it ([`watch_fixed_rate`](Self::watch_fixed_rate)).
+    fixed_kbps: Option<u32>,
+    /// Consecutive windows of dead frames at that rate.
+    dead_run: u8,
     /// The delay frame as [`on_clock`](Self::on_clock) last heard it.
     clock_frame: Option<i128>,
 }
@@ -264,6 +279,7 @@ impl Driver {
         // durations they were calibrated at.
         abr.set_frame_budget(cfg.refresh_hz);
         let pin_kbps = cfg.pin_kbps.filter(|&pin| pin > 0);
+        let fixed_kbps = cfg.fixed_kbps.filter(|&k| k > 0);
         let floor = cfg.floor_kbps.map(|kbps| {
             abr.set_floor(kbps);
             FloorWatch {
@@ -281,10 +297,12 @@ impl Driver {
         Driver {
             abr,
             window: window::WindowAccumulator::new(cfg.audio_reserved_kbps, cfg.marks_repeats, now),
-            // An explicit rate has nothing to measure for — except a PyroWave
-            // pin, which the ramp checks once before the first frame. A
-            // PyroWave ramp climbs past the pin and never bursts beside video.
-            probe: match pin_kbps.or(floor.map(|_| cfg.stream_cap_kbps)) {
+            // PyroWave and an explicit H.26x rate ramp past their rate before the first
+            // frame, so `L` is measured, and never burst beside video.
+            probe: match pin_kbps
+                .or(fixed_kbps)
+                .or(floor.map(|_| cfg.stream_cap_kbps))
+            {
                 Some(pin) => probe::CapacityProbe::for_pinned(
                     cfg.probe && cfg.ramp,
                     cfg.probe_target_kbps,
@@ -305,6 +323,7 @@ impl Driver {
             bit_depth: cfg.bit_depth,
             chroma_format: cfg.chroma_format,
             pin_kbps,
+            fixed: fixed_kbps.is_some(),
             floor,
             pending: Vec::new(),
             acks: Vec::new(),
@@ -314,6 +333,8 @@ impl Driver {
             seen_wall: None,
             shape: shape::ShapeState::default(),
             tail_run: 0,
+            fixed_kbps,
+            dead_run: 0,
             clock_frame: None,
         }
     }
@@ -636,7 +657,13 @@ impl Driver {
     ///
     /// Automatic PyroWave opens at what a wall licensed, else at the pin: its
     /// frames are all one size, and an older host reads that ask as the fit.
+    ///
+    /// An explicit H.26x rate is the player's: the verdict has already set `L`, and it
+    /// asks for nothing and moves no controller state.
     fn on_ramped(&mut self, ramped: probe::Ramped, now: Instant) -> Option<u32> {
+        if self.fixed {
+            return None;
+        }
         if let Some(pin) = self.pin_kbps {
             let probe::Ramped::Wall { delivered_kbps } = ramped else {
                 return None;
@@ -753,6 +780,7 @@ impl Driver {
         } else {
             actions.push(Action::Report {
                 loss_ppm: w.loss_ppm,
+                dead_ppm: closed.dead_ppm,
                 packets_received: closed.packets_received,
                 head: w.head,
                 mid: w.mid,
@@ -828,8 +856,10 @@ impl Driver {
     /// What a judged window says about the link and the receiver: tail loss two windows
     /// running with no frame lost is a mark that takes `L` down a notch, without a cut;
     /// tail loss that kills a frame is the controller's cut and mark, and restarts the
-    /// calm count; head loss switches the wake shape; the controller's wall moves `L`.
+    /// calm count; head loss switches the wake shape; the controller's wall moves `L`; dead
+    /// frames on a fixed rate move it too.
     fn after_window(&mut self, w: &WindowSample, actions: &mut Vec<Action>) {
+        self.watch_fixed_rate(w);
         if verdict::tail_mark(w) {
             self.tail_run = self.tail_run.saturating_add(1);
             if self.tail_run >= 2 {
@@ -868,6 +898,28 @@ impl Driver {
                 (_, None) => self.link.dropped_cap(),
             }
             self.seen_wall = wall;
+        }
+    }
+
+    /// A fixed rate has no controller to mark a wall and no ramp to retreat to, so frames
+    /// dying [`DEAD_RUN`] windows running bring `L` to the stream's own rate, once and for
+    /// the session. A queue that overflows early in a frame loses its middle more than its
+    /// tail, which the tail signature does not read; only head loss is excused, for the
+    /// wake shape. The host then paces at 1.5 × the rate, its cap included.
+    fn watch_fixed_rate(&mut self, w: &WindowSample) {
+        let Some(kbps) = self.fixed_kbps else {
+            return;
+        };
+        let dead = w.dropped > 0 && !verdict::head_signature(w);
+        self.dead_run = if dead { self.dead_run + 1 } else { 0 };
+        if self.dead_run >= DEAD_RUN {
+            self.fixed_kbps = None;
+            self.link.frames_refuted(kbps);
+            tracing::info!(
+                stream_kbps = kbps,
+                link_kbps = self.link.kbps(),
+                "frames dying at a fixed rate: the link rate comes down to the stream's"
+            );
         }
     }
 
@@ -973,6 +1025,7 @@ mod tests {
                 ramp: true,
                 probe_only: false,
                 pin_kbps: None,
+                fixed_kbps: None,
                 floor_kbps: None,
             },
             base,
@@ -1096,28 +1149,31 @@ mod tests {
         );
     }
 
-    /// A session that runs no probe, for the link and shape tests below.
+    /// An Automatic 20 Mbit/s HEVC session that runs no probe.
+    fn quiet_config() -> DriverConfig {
+        DriverConfig {
+            start_kbps: 20_000,
+            ceiling_cap_kbps: None,
+            stream_cap_kbps: 200_000,
+            refresh_hz: 60,
+            codec: crate::quic::CODEC_HEVC,
+            bit_depth: 8,
+            chroma_format: crate::quic::CHROMA_IDC_420,
+            audio_reserved_kbps: 0,
+            marks_repeats: true,
+            probe: false,
+            probe_target_kbps: None,
+            ramp: false,
+            probe_only: false,
+            pin_kbps: None,
+            fixed_kbps: None,
+            floor_kbps: None,
+        }
+    }
+
+    /// [`quiet_config`]'s driver, for the link and shape tests below.
     fn quiet_driver(at: Instant) -> Driver {
-        Driver::new(
-            DriverConfig {
-                start_kbps: 20_000,
-                ceiling_cap_kbps: None,
-                stream_cap_kbps: 200_000,
-                refresh_hz: 60,
-                codec: crate::quic::CODEC_HEVC,
-                bit_depth: 8,
-                chroma_format: crate::quic::CHROMA_IDC_420,
-                audio_reserved_kbps: 0,
-                marks_repeats: true,
-                probe: false,
-                probe_target_kbps: None,
-                ramp: false,
-                probe_only: false,
-                pin_kbps: None,
-                floor_kbps: None,
-            },
-            at,
-        )
+        Driver::new(quiet_config(), at)
     }
 
     /// `windows` report windows a millisecond at a time: 20 Mbit/s of video, an AU every
@@ -1164,6 +1220,7 @@ mod tests {
                 ramp: false,
                 probe_only: false,
                 pin_kbps: floor_kbps.is_none().then_some(2_000_000),
+                fixed_kbps: None,
                 floor_kbps,
             },
             at,
@@ -1348,6 +1405,7 @@ mod tests {
                     ramp: true,
                     probe_only: false,
                     pin_kbps: None,
+                    fixed_kbps: None,
                     floor_kbps: None,
                 },
                 base,
@@ -1366,6 +1424,139 @@ mod tests {
             let burst = if wired { vec![] } else { vec![false] };
             assert_eq!(probes(d.tick(at(3_502)).actions), burst, "wired={wired}");
         }
+    }
+
+    /// An explicit 80 Mbit/s HEVC 1080p60 session, against a host that serves the ramp.
+    fn fixed_config() -> DriverConfig {
+        use crate::quic::{CHROMA_IDC_420, CODEC_HEVC};
+        DriverConfig {
+            start_kbps: 0,
+            stream_cap_kbps: stream_ceiling_kbps(1920, 1080, 60, CODEC_HEVC, 8, CHROMA_IDC_420),
+            probe: true,
+            ramp: true,
+            fixed_kbps: Some(80_000),
+            ..quiet_config()
+        }
+    }
+
+    /// The host's report on one ramp step over a link of `link_kbps`: every packet lands,
+    /// stretched over the time the link needs for them.
+    fn stretched_step(target_kbps: u32, duration_ms: u32, link_kbps: u32) -> ProbeReport {
+        let packets = u64::from(target_kbps) * u64::from(duration_ms) / 8 / 1_408;
+        let interval_ms = duration_ms * target_kbps / link_kbps.min(target_kbps);
+        ProbeReport {
+            delivered_bytes: packets * 1_448,
+            delivered_packets: packets,
+            window_ms: interval_ms,
+            host_duration_ms: duration_ms,
+            client_interval_ms: interval_ms,
+            client_interval_us: interval_ms * 1_000,
+            host_bytes_sent: u64::from(target_kbps) * u64::from(duration_ms) / 8,
+            wire_packets_sent: packets as u32,
+            send_dropped: 0,
+        }
+    }
+
+    /// [`fixed_config`]'s first five seconds over a link of `link_kbps`, its ramp's reports
+    /// re-presented every millisecond as the pump does; picture from `video_ms`. What the
+    /// ramp came to, and every action with its time. None of them is ever a `SetBitrate`.
+    fn fixed_session(link_kbps: u32, video_ms: u64) -> (Driver, RampSummary, Vec<(u64, Action)>) {
+        let base = Instant::now();
+        let mut d = Driver::new(fixed_config(), base);
+        let mut st = Stats::default();
+        let mut step: Option<(u64, ProbeReport)> = None;
+        let mut out = Vec::new();
+        for ms in 0..5_000u64 {
+            let now = base + std::time::Duration::from_millis(ms);
+            if let Some((at, r)) = step {
+                d.on_probe_active(ms < at, r.host_duration_ms, now);
+                if ms >= at {
+                    d.on_probe_result(r, now);
+                }
+            }
+            if ms >= video_ms {
+                st.packets_received += 7;
+                st.bytes_received += 10_000;
+                if ms % 16 == 0 {
+                    st.frames_completed += 1;
+                    d.on_au(false);
+                }
+            }
+            d.on_stats(&st);
+            for a in d.tick(now).actions {
+                if let Action::Probe {
+                    target_kbps,
+                    duration_ms,
+                    ramp: true,
+                } = a
+                {
+                    let r = stretched_step(target_kbps, duration_ms, link_kbps);
+                    step = Some((ms + u64::from(r.client_interval_ms) + 1, r));
+                }
+                out.push((ms, a));
+            }
+        }
+        assert!(
+            !out.iter().any(|(_, a)| matches!(a, Action::SetBitrate(_))),
+            "{out:?}"
+        );
+        let ramp = d.ramp_outcome().expect("the ramp stopped");
+        (d, ramp, out)
+    }
+
+    /// A fixed rate ramps like a PyroWave pin: a 93 Mbit/s wall becomes `L`, told to the host
+    /// before the first frame. The rate is the player's, so nothing asks to move it, and the
+    /// verdict moves no controller state even where a controller runs.
+    #[test]
+    fn a_fixed_rate_ramps_to_the_wall_and_sets_only_the_link_rate() {
+        let (d, ramp, acts) = fixed_session(93_000, 2_500);
+        assert!(ramp.wall, "{ramp:?}");
+        assert!((90_000..100_000).contains(&ramp.proven_kbps), "{ramp:?}");
+        assert_eq!(d.link(), (ramp.proven_kbps, LinkSource::Measured));
+        assert!(
+            acts.iter()
+                .any(|&(ms, a)| ms < 2_500 && a == Action::LinkRate(ramp.proven_kbps)),
+            "{acts:?}"
+        );
+        let at = Instant::now();
+        let mut running = Driver::new(
+            DriverConfig {
+                start_kbps: 20_000,
+                ..fixed_config()
+            },
+            at,
+        );
+        let wall = probe::Ramped::Wall {
+            delivered_kbps: ramp.proven_kbps,
+        };
+        assert_eq!(running.on_ramped(wall, at), None);
+        assert_eq!(
+            (running.abr.ceiling_kbps, running.abr.link_wall_kbps()),
+            (20_000, None)
+        );
+    }
+
+    /// A ramp that climbs to eight times the fixed rate unrefused proved a floor under the
+    /// link, not its rate: `L` stays at [`LINK_FLOOR_KBPS`], and nothing is asked.
+    #[test]
+    fn a_fixed_rate_ramp_with_no_wall_keeps_the_link_floor() {
+        let (d, ramp, _) = fixed_session(10_000_000, 2_500);
+        assert!(!ramp.wall && ramp.proven_kbps >= 640_000, "{ramp:?}");
+        assert_eq!(d.link(), (LINK_FLOOR_KBPS, LinkSource::Floor));
+    }
+
+    /// Video two steps into the ramp cuts it short: no burst follows beside the fixed
+    /// stream, and nothing is asked.
+    #[test]
+    fn a_cut_short_fixed_rate_ramp_arms_no_burst() {
+        let (d, ramp, acts) = fixed_session(93_000, 100);
+        assert!(!ramp.wall && ramp.steps < 5, "{ramp:?}");
+        assert!(!d.probe.burst_armed());
+        let late: Vec<_> = acts.iter().filter(|&&(ms, _)| ms >= 100).collect();
+        assert!(
+            !late.iter().any(|(_, a)| matches!(a, Action::Probe { .. })),
+            "{late:?}"
+        );
     }
 
     /// A step of the delay frame moves the readings the open window holds, so the window
@@ -1513,6 +1704,47 @@ mod tests {
         assert_eq!(d.link().0, LINK_FLOOR_KBPS, "forty calm windows after it");
     }
 
+    /// Frames dying two windows running at a fixed rate take `L` from the floor to the
+    /// stream, whichever part of them died. One dead window, head loss and an Automatic
+    /// session leave it alone.
+    #[test]
+    fn dead_frames_at_a_fixed_rate_refute_the_floor() {
+        let at = Instant::now();
+        let mut acts = Vec::new();
+        let middles = WindowSample {
+            dropped: 3,
+            mid: 57,
+            tail: 25,
+            ..WindowSample::at(at)
+        };
+        let heads = WindowSample {
+            dropped: 3,
+            head: 40,
+            ..WindowSample::at(at)
+        };
+        let calm = WindowSample::at(at);
+
+        let mut automatic = quiet_driver(at);
+        automatic.after_window(&middles, &mut acts);
+        automatic.after_window(&middles, &mut acts);
+        assert_eq!(automatic.link().0, LINK_FLOOR_KBPS, "the controller's");
+
+        let mut d = Driver::new(
+            DriverConfig {
+                fixed_kbps: Some(80_000),
+                ..quiet_config()
+            },
+            at,
+        );
+        for w in [&middles, &calm, &middles, &heads, &heads, &calm] {
+            d.after_window(w, &mut acts);
+        }
+        assert_eq!(d.link().0, LINK_FLOOR_KBPS, "no run of dead frames");
+        d.after_window(&middles, &mut acts);
+        d.after_window(&middles, &mut acts);
+        assert_eq!(d.link(), (80_000, LinkSource::Measured));
+    }
+
     /// When step `i`'s report reached the client, in the test above.
     fn step_report_time(asked: &[(u64, u32)], i: usize) -> u64 {
         asked[i].0 + 25 + 5
@@ -1549,6 +1781,7 @@ mod tests {
                 ramp: false,
                 probe_only: false,
                 pin_kbps: None,
+                fixed_kbps: None,
                 floor_kbps: None,
             },
             base,

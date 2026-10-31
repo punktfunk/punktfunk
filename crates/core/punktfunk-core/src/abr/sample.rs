@@ -67,7 +67,8 @@ pub struct DelayTrend {
 /// domain as the target. `dropped` counts unrecoverable frames, `flushed` is
 /// a jump-to-live, `backlog` one over a queue the decoder left with the link on
 /// time, `recovery_kf` the decode-recovery keyframe asks, `starved_kf` those
-/// no lost frame stood behind: logged, never judged.
+/// no lost frame stood behind: logged, never judged. `loss_ppm` leaves out the holes of
+/// the frames in `dropped`, which the host's report alone carries.
 ///
 /// `owd_mean_us` is the completed-AU delay the rolling baseline is built from;
 /// `delay` is the same quantity over arriving shards, which stays present when

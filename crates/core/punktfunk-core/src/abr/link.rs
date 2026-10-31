@@ -122,6 +122,14 @@ impl LinkRate {
         self.calm = 0;
     }
 
+    /// A fixed-rate session's frames keep dying: `L` on the ports or the floor was never the
+    /// link. Nothing measures such a session, so its own rate stands in for a ramp's wall.
+    pub(crate) fn frames_refuted(&mut self, stream_kbps: u32) {
+        if self.ports.unwrap_or(self.floor) > stream_kbps {
+            self.ramp = Some(stream_kbps);
+        }
+    }
+
     /// A port or the floor is a bound, not a capacity: with `L` on either alone, the rate a
     /// whole ramp proved takes the ramp wall's place for the session, so a dropped wall never
     /// returns to it. A cut-short ramp's proof is a floor under the link, not its rate. False
@@ -204,6 +212,25 @@ mod tests {
         assert_eq!(l.kbps(), 560_000, "the newest wall wins");
         l.dropped_cap();
         assert_eq!(l.kbps(), 1_000_000);
+    }
+
+    /// Dead frames bring `L` to the stream's own rate from the floor or the ports, never up.
+    #[test]
+    fn dead_frames_bring_the_link_down_to_the_stream() {
+        let mut l = LinkRate::default();
+        l.frames_refuted(80_000);
+        assert_eq!((l.kbps(), l.source()), (80_000, LinkSource::Measured));
+        let mut l = LinkRate::default();
+        l.set_ports(facts(ETH, 1_000), facts(ETH, 1_000));
+        l.frames_refuted(80_000);
+        assert_eq!(l.kbps(), 80_000);
+        let mut l = LinkRate::default();
+        l.frames_refuted(LINK_FLOOR_KBPS);
+        assert_eq!((l.kbps(), l.source()), (LINK_FLOOR_KBPS, LinkSource::Floor));
+        let mut l = LinkRate::default();
+        l.set_ports(facts(ETH, 100), facts(ETH, 100));
+        l.frames_refuted(120_000);
+        assert_eq!((l.kbps(), l.source()), (100_000, LinkSource::Ports));
     }
 
     /// Each tail mark takes an eighth off `L`; half a minute of calm gives one back.

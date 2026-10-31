@@ -96,13 +96,14 @@ impl Feed {
     /// The session's driver, with the three environment overrides read once. Automatic is a
     /// session with no player rate and a host that echoed one: PyroWave's adapts between its
     /// floor and the host's pin. An explicit-rate PyroWave session runs at the pin, which the
-    /// bring-up ramp may lower once; no controller runs for it.
+    /// bring-up ramp may lower once. An explicit H.26x rate is never moved; its ramp measures
+    /// `L` alone, and its dead frames may bring `L` down to it. No controller runs for either.
     pub fn new(facts: Facts, host: HostLink, client: LinkFacts, now: Instant) -> Self {
         let automatic = facts.bitrate_kbps == 0;
         let pyrowave = facts.codec == crate::quic::CODEC_PYROWAVE;
-        let pin_kbps = (pyrowave && !automatic)
+        let explicit = (!automatic)
             .then_some(facts.resolved_bitrate_kbps)
-            .filter(|&pin| pin > 0);
+            .filter(|&kbps| kbps > 0);
         let mut driver = Driver::new(
             DriverConfig {
                 start_kbps: if automatic {
@@ -123,7 +124,8 @@ impl Feed {
                 probe_target_kbps: env_u32("PUNKTFUNK_ABR_PROBE_KBPS"),
                 ramp: facts.serves_ramp,
                 probe_only: facts.probe_only,
-                pin_kbps,
+                pin_kbps: explicit.filter(|_| pyrowave),
+                fixed_kbps: explicit.filter(|_| !pyrowave),
                 floor_kbps: facts.pyrowave_floor_kbps.filter(|_| automatic),
             },
             now,
@@ -217,4 +219,39 @@ fn env_u32(key: &str) -> Option<u32> {
         .ok()
         .and_then(|v| v.trim().parse::<u32>().ok())
         .filter(|&v| v > 0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::quic::{CODEC_HEVC, CODEC_PYROWAVE};
+
+    /// Dead frames speak for the link only on an explicit H.26x rate: Automatic has its
+    /// controller and a PyroWave pin its ramp.
+    #[test]
+    fn only_an_explicit_h26x_rate_is_watched() {
+        let watched = |bitrate_kbps, codec| {
+            let facts = Facts {
+                bitrate_kbps,
+                resolved_bitrate_kbps: 80_000,
+                codec,
+                bit_depth: 8,
+                chroma_format: crate::quic::CHROMA_IDC_420,
+                refresh_hz: 60,
+                stream_cap_kbps: 90_000,
+                pyrowave_floor_kbps: None,
+                audio_reserved_kbps: 0,
+                marks_repeats: true,
+                serves_ramp: true,
+                probe_only: false,
+            };
+            let links = (HostLink::default(), LinkFacts::default());
+            Feed::new(facts, links.0, links.1, Instant::now())
+                .driver
+                .fixed_kbps
+        };
+        assert_eq!(watched(80_000, CODEC_HEVC), Some(80_000));
+        assert_eq!(watched(0, CODEC_HEVC), None);
+        assert_eq!(watched(80_000, CODEC_PYROWAVE), None);
+    }
 }

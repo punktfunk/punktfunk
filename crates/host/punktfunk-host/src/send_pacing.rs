@@ -183,15 +183,59 @@ pub(crate) enum Source {
     Floor,
 }
 
+/// An unmeasured `L` is refuted by the host's own evidence that the client cannot drain the
+/// stream: an IDR storm (three forced IDRs in a row the client asked past), or two report
+/// windows running with a frame lost. A window has lost a frame when an RFI ask landed in it,
+/// so parity could not repair a frame; a report a window late starts the run over, and a
+/// window whose loss sits at the frames' heads is the wake shape's, not the rate's. The first
+/// evidence is kept for the session, and the pacer then caps an unmeasured `L` at 1.5 × B
+/// ([`cap_bps`]). A measured `L` is never overridden.
+#[derive(Debug, Default)]
+pub(crate) struct Refutation(std::sync::OnceLock<Evidence>);
+
+/// What raised a [`Refutation`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Evidence {
+    IdrStorm,
+    DeadWindows,
+}
+
+impl Evidence {
+    pub(crate) fn name(self) -> &'static str {
+        match self {
+            Evidence::IdrStorm => "idr_storm",
+            Evidence::DeadWindows => "dead_windows",
+        }
+    }
+}
+
+impl Refutation {
+    /// Keep `why`, unless earlier evidence is kept.
+    pub(crate) fn raise(&self, why: Evidence) {
+        let _ = self.0.set(why);
+    }
+
+    pub(crate) fn evidence(&self) -> Option<Evidence> {
+        self.0.get().copied()
+    }
+}
+
 /// The session's link rate `L`, and the ports' `L_hard` beside it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct LinkRate {
     pub(crate) kbps: u32,
     pub(crate) source: Source,
     pub(crate) hard_kbps: u32,
+    /// The host refuted this unmeasured `L` ([`Refutation`]).
+    pub(crate) refuted: bool,
 }
 
 impl LinkRate {
+    /// The client measured `L`. It reports the shared [`FLOOR_KBPS`] until it knows anything.
+    pub(crate) fn measured(&self) -> bool {
+        self.source == Source::Client && self.kbps != FLOOR_KBPS
+    }
+
     /// `L`: the client's report wins and this host's port caps it; with no report the
     /// host's port; with neither [`FLOOR_KBPS`], under the port too. `capped` holds the
     /// floor whatever the evidence.
@@ -210,6 +254,7 @@ impl LinkRate {
             kbps,
             source,
             hard_kbps: ports.hard_kbps(),
+            refuted: false,
         }
     }
 }
@@ -227,15 +272,18 @@ pub(crate) fn rate_bps(bitrate_kbps: u32, link: &LinkRate, pinned_wall: Option<u
 const CAP_STREAM_FACTOR: u64 = 3;
 const CAP_STREAM_DIV: u64 = 2;
 
-/// The most `R` may be, bits/s: the `L` the client measured, never under 1.5 × B, then
-/// 0.9 `L_hard` (the ports' speed) and 0.9 a pinned stream's proven link ([`pinned_wall`]).
-/// The bottleneck drains at `L` however fast a frame leaves. Paced under its own bitrate,
-/// a stream delivers only what the pacer lets out, and the next wall reads that.
-/// The client reports the shared [`FLOOR_KBPS`] until it knows anything; that caps nothing.
+/// The most `R` may be, bits/s: the `L` the client measured, never under 1.5 × B, or 1.5 × B
+/// where the host refuted an unmeasured `L` ([`Refutation`]); then 0.9 `L_hard` (the ports'
+/// speed) and 0.9 a pinned stream's proven link ([`pinned_wall`]). The bottleneck drains at
+/// `L` however fast a frame leaves. Paced under its own bitrate, a stream delivers only what
+/// the pacer lets out, and the next wall reads that. An unmeasured `L` alone caps nothing.
 pub(crate) fn cap_bps(bitrate_kbps: u32, link: &LinkRate, pinned_wall: Option<u32>) -> u64 {
     let room = u64::from(bitrate_kbps) * 1_000 * CAP_STREAM_FACTOR / CAP_STREAM_DIV;
-    let measured = (link.source == Source::Client && link.kbps != FLOOR_KBPS)
-        .then(|| (u64::from(link.kbps) * 1_000).max(room));
+    let measured = if link.measured() {
+        Some((u64::from(link.kbps) * 1_000).max(room))
+    } else {
+        link.refuted.then_some(room)
+    };
     let hard = [Some(link.hard_kbps), pinned_wall]
         .into_iter()
         .flatten()
@@ -349,6 +397,8 @@ pub(crate) struct Pacer {
     max_spread: Duration,
     ports: Ports,
     forced: Option<Forced>,
+    /// [`Self::refute`] was called: an unmeasured `L` is capped from then on.
+    refuted: bool,
     /// `R` from [`Self::update`]; a frame may raise its own, never past `cap_bps`.
     base_bps: u64,
     cap_bps: u64,
@@ -372,6 +422,7 @@ impl Pacer {
             max_spread: MAX_PACE_SPREAD,
             ports,
             forced,
+            refuted: false,
             base_bps: 1,
             cap_bps: u64::MAX,
             rate_bps: 1,
@@ -382,6 +433,12 @@ impl Pacer {
             paced: false,
             sock_ns: 0,
         }
+    }
+
+    /// A [`Refutation`] was raised: from the next update, for the session, an unmeasured `L`
+    /// is capped.
+    pub(crate) fn refute(&mut self) {
+        self.refuted = true;
     }
 
     /// Per AU: the stream rate, the client's link report (`0` = none yet), a pinned
@@ -396,6 +453,7 @@ impl Pacer {
         max_spread: Duration,
     ) -> u64 {
         self.link = LinkRate::resolve(Some(link_kbps), self.ports, self.forced);
+        self.link.refuted = self.refuted && !self.link.measured();
         self.shape = match self.forced {
             Some(Forced::Shape(s)) => s,
             _ => shape,
@@ -808,6 +866,7 @@ mod tests {
                 kbps: 940_000,
                 source: Source::Client,
                 hard_kbps: 1_000_000,
+                refuted: false,
             }
         );
         assert_eq!(l(Some(9_000_000), asym, None).kbps, 2_500_000);
@@ -850,6 +909,11 @@ mod tests {
         assert_eq!(rate_bps(12_000, &notched, None), 18_000_000);
         let unknown = LinkRate::resolve(Some(FLOOR_KBPS), Ports::default(), None);
         assert_eq!(rate_bps(400_000, &unknown, None), 1_200_000_000);
+        // A fixed rate on the client's floor, then on the stream's own rate once frames die.
+        assert_eq!(rate_bps(80_000, &unknown, None), 720_000_000);
+        let fixed = LinkRate::resolve(Some(80_000), Ports::default(), None);
+        assert_eq!(rate_bps(80_000, &fixed, None), 120_000_000);
+        assert_eq!(cap_bps(80_000, &fixed, None), 120_000_000);
 
         // Smooth ignores the link, until there is no stream rate to pace at.
         let mut p = Pacer::new(gbe(), None);
@@ -878,6 +942,47 @@ mod tests {
         assert_eq!(pinned_wall(true, 1_000_000, 778_000), None);
         assert_eq!(pinned_wall(false, 2_450_000, 1_427_000), None);
         assert_eq!(rate_bps(1_427_000, &unknown, None), 2_450_000_000);
+    }
+
+    /// A refutation caps an unmeasured `L` (the floor, the host's port, the client's echo of
+    /// the floor) at 1.5 × B, an IDR's spread floor included, frame after frame. A measured
+    /// `L` takes over and is never lowered; back at the floor, the cap holds again. The first
+    /// evidence raised is the one kept.
+    #[test]
+    fn a_refutation_caps_only_an_unmeasured_link() {
+        let r = Refutation::default();
+        assert_eq!(r.evidence(), None);
+        r.raise(Evidence::DeadWindows);
+        r.raise(Evidence::IdrStorm);
+        assert_eq!(r.evidence(), Some(Evidence::DeadWindows));
+        let d = Duration::from_millis(33);
+        let host = Ports::of((ETH, 2_500), (0, 0));
+        for (ports, report) in [(Ports::default(), 0), (host, 0), (host, FLOOR_KBPS)] {
+            let mut p = Pacer::new(ports, None);
+            assert!(p.update(80_000, report, None, Shape::Auto, d) >= 720_000_000);
+            p.refute();
+            for _ in 0..3 {
+                assert_eq!(p.update(80_000, report, None, Shape::Auto, d), 120_000_000);
+                assert!(p.link().refuted, "{ports:?} {report}");
+                p.begin(1_000_000);
+                assert_eq!(p.rate_bps, 120_000_000, "an IDR leaves under the cap");
+            }
+        }
+        for measured in [940_000, 93_000, 12_000] {
+            let mut fresh = Pacer::new(host, None);
+            let mut p = Pacer::new(host, None);
+            p.refute();
+            assert_eq!(
+                p.update(80_000, measured, None, Shape::Auto, d),
+                fresh.update(80_000, measured, None, Shape::Auto, d),
+                "{measured}"
+            );
+            assert!(!p.link().refuted);
+            assert_eq!(
+                p.update(80_000, FLOOR_KBPS, None, Shape::Auto, d),
+                120_000_000
+            );
+        }
     }
 
     /// (a) A 167 KB frame at 900 Mbit/s on known 1 GbE ports leaves in 1 ms groups, each on

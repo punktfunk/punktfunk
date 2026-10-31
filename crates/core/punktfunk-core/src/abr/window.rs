@@ -34,6 +34,9 @@ pub(crate) struct Closed {
     pub discarded: bool,
     /// Session total of media packets received, for the window's report.
     pub packets_received: u64,
+    /// The report's `dead_ppm`: what the holes of the frames that died add to the sample's
+    /// `loss_ppm`. The controller judges a dead frame by `dropped` alone.
+    pub dead_ppm: u32,
 }
 
 /// What the pump measures between report ticks.
@@ -49,6 +52,7 @@ pub(crate) struct WindowAccumulator {
     recovered: u64,
     late: u64,
     holes: u64,
+    dead_holes: u64,
     received: u64,
     dropped: u64,
     bytes: u64,
@@ -117,6 +121,7 @@ impl WindowAccumulator {
             recovered: 0,
             late: 0,
             holes: 0,
+            dead_holes: 0,
             received: 0,
             dropped: 0,
             bytes: 0,
@@ -342,6 +347,7 @@ impl WindowAccumulator {
         self.recovered = st.fec_recovered_shards;
         self.late = st.fec_late_shards;
         self.holes = st.partial_shards_lost;
+        self.dead_holes = st.dead_shards_lost;
         self.received = st.packets_received;
         self.dropped = st.frames_dropped;
         self.bytes = wire_bytes(&st);
@@ -371,10 +377,11 @@ impl WindowAccumulator {
         let st = self.stats;
         let discarded = std::mem::take(&mut self.discard);
         let dropped = st.frames_dropped.wrapping_sub(self.dropped);
-        let loss_ppm = crate::quic::window_loss_ppm(
+        let (loss_ppm, dead_ppm) = crate::quic::window_report_ppm(
             st.fec_recovered_shards.wrapping_sub(self.recovered),
             st.fec_late_shards.wrapping_sub(self.late),
             st.partial_shards_lost.wrapping_sub(self.holes),
+            st.dead_shards_lost.wrapping_sub(self.dead_holes),
             st.packets_received.wrapping_sub(self.received),
         );
         // Wire throughput vs target: headers, seals and FEC parity included
@@ -431,6 +438,7 @@ impl WindowAccumulator {
             sample,
             discarded,
             packets_received: st.packets_received,
+            dead_ppm,
         }
     }
 
@@ -441,6 +449,7 @@ impl WindowAccumulator {
         self.recovered = st.fec_recovered_shards;
         self.late = st.fec_late_shards;
         self.holes = st.partial_shards_lost;
+        self.dead_holes = st.dead_shards_lost;
         self.received = st.packets_received;
         self.dropped = st.frames_dropped;
         self.bytes = wire_bytes(&st);
@@ -643,6 +652,29 @@ mod tests {
         let mut w = WindowAccumulator::new(0, true, now);
         feed(&mut w, 2, 20);
         assert_eq!(read(&mut w), (Some(25_000), Some(22_000)));
+    }
+
+    /// A dead frame's holes reach the host's report and not the controller, which judges the
+    /// frame by `dropped`. Parity's repair and a partial's holes reach both, each once.
+    #[test]
+    fn a_dead_frames_holes_reach_the_report_alone() {
+        let now = Instant::now();
+        let mut w = WindowAccumulator::new(0, true, now);
+        w.on_stats(&Stats {
+            packets_received: 950,
+            fec_recovered_shards: 20,
+            fec_late_shards: 5,
+            partial_shards_lost: 10,
+            dead_shards_lost: 25,
+            frames_dropped: 1,
+            ..Stats::default()
+        });
+        let c = w.close(now);
+        assert_eq!(c.sample.dropped, 1);
+        assert_eq!(c.sample.loss_ppm, 25 * 1_000_000 / 975);
+        assert_eq!(c.sample.loss_ppm + c.dead_ppm, 50 * 1_000_000 / 1_000);
+        let c = w.close(now);
+        assert_eq!((c.sample.loss_ppm, c.dead_ppm), (0, 0), "a delta");
     }
 
     #[test]

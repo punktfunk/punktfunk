@@ -249,15 +249,14 @@ pub struct ClockEcho {
     pub t3_ns: u64,
 }
 
-/// A window's `loss_ppm` ([`v2::dgram::Feedback`](super::v2::dgram::Feedback)) from its
-/// session-stat deltas: the shard loss parity repaired, and the `holes` partial frames went
-/// to the decoder with (a PyroWave tail carries no parity).
+/// A window's shard loss from its session-stat deltas, ppm: each data shard that never
+/// arrived, once.
 ///
-/// Loss ≈ (recovered − late + holes) / (received + recovered − late + holes): late shards
-/// reconstructed early then arrived, so they are reorder not loss (netted
-/// from both ends; saturating so a straddling window cannot go negative).
-/// Frames parity could not repair are not in here — the host reads those
-/// off the RFI asks they raise. Capped at 1e6.
+/// `recovered − late` is what parity rebuilt: a late shard was rebuilt early and then
+/// arrived, which is reorder, not loss (saturating, so a straddling window cannot go
+/// negative). `holes` is what no parity rebuilt. A block either rebuilt or kept its
+/// holes, so the two never meet. Lost parity is not counted. Loss = lost / (received +
+/// lost), capped at 1e6.
 pub fn window_loss_ppm(recovered: u64, late: u64, holes: u64, received: u64) -> u32 {
     let lost = recovered.saturating_sub(late).saturating_add(holes);
     let denom = received.saturating_add(lost);
@@ -266,6 +265,24 @@ pub fn window_loss_ppm(recovered: u64, late: u64, holes: u64, received: u64) -> 
         .checked_div(denom)
         .unwrap_or(0) as u32;
     ppm.min(1_000_000)
+}
+
+/// A window's `(loss_ppm, dead_ppm)` ([`v2::dgram::Feedback`](super::v2::dgram::Feedback)):
+/// [`window_loss_ppm`] over the holes partial frames went up with, and what the `dead`
+/// holes of frames that died add to it.
+pub fn window_report_ppm(
+    recovered: u64,
+    late: u64,
+    holes: u64,
+    dead: u64,
+    received: u64,
+) -> (u32, u32) {
+    let loss = |holes| window_loss_ppm(recovered, late, holes, received);
+    let loss_ppm = loss(holes);
+    (
+        loss_ppm,
+        loss(holes.saturating_add(dead)).saturating_sub(loss_ppm),
+    )
 }
 
 // Shared clipboard & file transfer (`design/clipboard-and-file-transfer.md`).
@@ -618,6 +635,10 @@ mod tests {
         assert_eq!(window_loss_ppm(10, 25, 0, 1000), 0);
         // A partial's holes are loss beside what parity repaired: 30 + 20 of 1000 = 5%.
         assert_eq!(window_loss_ppm(30, 0, 20, 950), 50_000);
+        // A dead frame's holes are too, and `late` nets the repair alone: 0 + 40 of 1000.
+        assert_eq!(window_loss_ppm(10, 25, 40, 960), 40_000);
+        // A window every frame of which died is all loss.
+        assert_eq!(window_loss_ppm(0, 0, 500, 0), 1_000_000);
     }
 
     /// The message is capped and stripped where it is built, not where it is shown:
