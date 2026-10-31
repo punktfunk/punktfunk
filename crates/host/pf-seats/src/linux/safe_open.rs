@@ -85,7 +85,8 @@ pub(super) fn read_opened(
     Ok(bytes)
 }
 
-/// [`read_at`] for the last component of `path`, its directory opened by path.
+/// [`read_at`] for the last component of `path`, its directory opened by path with search
+/// permission alone: the door reads the owner's record through a 0711 directory it can't list.
 pub(super) fn read(path: &Path, max: u64) -> std::io::Result<Option<(Vec<u8>, std::fs::Metadata)>> {
     let (Some(parent), Some(name)) = (path.parent(), path.file_name().and_then(|n| n.to_str()))
     else {
@@ -94,10 +95,11 @@ pub(super) fn read(path: &Path, max: u64) -> std::io::Result<Option<(Vec<u8>, st
             format!("{} names no file", path.display()),
         ));
     };
-    match dir(parent) {
+    let flags = OFlags::PATH | OFlags::DIRECTORY | OFlags::CLOEXEC;
+    match rustix::fs::open(parent, flags, Mode::empty()) {
         Ok(at) => read_at(at, name, max),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(e) => Err(e),
+        Err(e) if e == rustix::io::Errno::NOENT => Ok(None),
+        Err(e) => Err(e.into()),
     }
 }
 
@@ -155,5 +157,20 @@ pub(super) mod tests {
         assert!(at("twice", 2).is_err());
         assert!(at("fifo", 2).is_err());
         assert_eq!(at("absent", 2).unwrap(), None);
+    }
+
+    /// Search permission is enough, as the door has on the state directory. Root passes this
+    /// whatever the flags.
+    #[test]
+    fn a_directory_that_cannot_be_listed_is_read_through() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let temp = tempfile::tempdir().unwrap();
+        let dir = temp.path().join("state");
+        std::fs::create_dir(&dir).unwrap();
+        std::fs::write(dir.join("owner"), "deck\n").unwrap();
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o100)).unwrap();
+        let bytes = read(&dir.join("owner"), 8).map(|f| f.map(|(b, _)| b));
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+        assert_eq!(bytes.unwrap(), Some(b"deck\n".to_vec()));
     }
 }
