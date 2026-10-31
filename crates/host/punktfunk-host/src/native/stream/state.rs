@@ -623,6 +623,7 @@ impl StreamState {
         let now = std::time::Instant::now();
         // The `seconds` cap counts from a stream that is up.
         facts.deadline = now + std::time::Duration::from_secs(u64::from(c.seconds));
+        let kf_gate = super::recovery::KeyframeGate::new(c.shared.refuted.clone());
         let mut st = Self {
             plan,
             facts,
@@ -667,7 +668,7 @@ impl StreamState {
             last_rfi: None,
             owed_idr: false,
             loss_mode: super::recovery::LossMode::new(ctx.host_knobs.acked_refs),
-            kf_gate: super::recovery::KeyframeGate::default(),
+            kf_gate,
             recovery_cadence: pf_frame::metronome::Metronome::new(),
             ir_wave_pos: 0,
             pipelining: Pipelining::new(ctx.host_knobs.idd_adaptive),
@@ -1253,6 +1254,7 @@ fn start_send(
         link_kbps: wiring.link_kbps.clone(),
         ports: wiring.ports,
         link_paced: facts.pyrowave && !facts.bitrate_auto,
+        refuted: wiring.refuted.clone(),
         shape: wiring.shape.clone(),
         bringup: facts.bringup.clone(),
         wire_sock,

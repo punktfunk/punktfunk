@@ -85,6 +85,9 @@ pub(crate) struct SessionShared {
     /// The client's link rate (kbps) from its feedback, `0` until its ramp proved one. The
     /// send loop paces a pinned stream against it.
     pub(crate) link_kbps: Arc<AtomicU32>,
+    /// Raised by the stream loop's IDR storm or the control task's dead windows, read per
+    /// frame by the send loop's pacer.
+    pub(crate) refuted: Arc<crate::send_pacing::Refutation>,
     /// The shape the client asked for (`Shape as u8`), read per frame by the send loop.
     /// `PUNKTFUNK_DELIVERY` overrides it.
     pub(crate) shape: Arc<AtomicU8>,
@@ -281,6 +284,7 @@ impl SessionWiring {
                 fec_target,
                 fec_requested,
                 link_kbps: Arc::new(AtomicU32::new(0)),
+                refuted: Arc::default(),
                 arrival_poke: Arc::new(std::sync::Mutex::new(None)),
                 offload_switch: Arc::new(AtomicBool::new(true)),
                 shape: Arc::new(AtomicU8::new(0)),
