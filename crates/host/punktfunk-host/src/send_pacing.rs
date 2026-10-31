@@ -183,13 +183,50 @@ pub(crate) enum Source {
     Floor,
 }
 
+/// An unmeasured `L` is refuted by the host's own evidence that the client cannot drain the
+/// stream: an IDR storm (three forced IDRs in a row the client asked past), or two report
+/// windows running with a frame lost. A window has lost a frame when an RFI ask landed in it,
+/// so parity could not repair a frame; a report a window late starts the run over, and a
+/// window whose loss sits at the frames' heads is the wake shape's, not the rate's. The first
+/// evidence is kept for the session, and the pacer then caps an unmeasured `L` at 1.5 × B
+/// ([`cap_bps`]). A measured `L` is never overridden.
+#[derive(Debug, Default)]
+pub(crate) struct Refutation(std::sync::OnceLock<Evidence>);
+
+/// What raised a [`Refutation`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Evidence {
+    IdrStorm,
+    DeadWindows,
+}
+
+impl Evidence {
+    pub(crate) fn name(self) -> &'static str {
+        match self {
+            Evidence::IdrStorm => "idr_storm",
+            Evidence::DeadWindows => "dead_windows",
+        }
+    }
+}
+
+impl Refutation {
+    /// Keep `why`, unless earlier evidence is kept.
+    pub(crate) fn raise(&self, why: Evidence) {
+        let _ = self.0.set(why);
+    }
+
+    pub(crate) fn evidence(&self) -> Option<Evidence> {
+        self.0.get().copied()
+    }
+}
+
 /// The session's link rate `L`, and the ports' `L_hard` beside it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct LinkRate {
     pub(crate) kbps: u32,
     pub(crate) source: Source,
     pub(crate) hard_kbps: u32,
-    /// Unhealed forced IDRs refute this unmeasured `L` ([`Pacer::refute`]).
+    /// The host refuted this unmeasured `L` ([`Refutation`]).
     pub(crate) refuted: bool,
 }
 
@@ -236,10 +273,10 @@ const CAP_STREAM_FACTOR: u64 = 3;
 const CAP_STREAM_DIV: u64 = 2;
 
 /// The most `R` may be, bits/s: the `L` the client measured, never under 1.5 × B, or 1.5 × B
-/// where unhealed IDRs refuted an unmeasured `L`; then 0.9 `L_hard` (the ports' speed) and
-/// 0.9 a pinned stream's proven link ([`pinned_wall`]). The bottleneck drains at `L` however
-/// fast a frame leaves. Paced under its own bitrate, a stream delivers only what the pacer
-/// lets out, and the next wall reads that. An unmeasured `L` alone caps nothing.
+/// where the host refuted an unmeasured `L` ([`Refutation`]); then 0.9 `L_hard` (the ports'
+/// speed) and 0.9 a pinned stream's proven link ([`pinned_wall`]). The bottleneck drains at
+/// `L` however fast a frame leaves. Paced under its own bitrate, a stream delivers only what
+/// the pacer lets out, and the next wall reads that. An unmeasured `L` alone caps nothing.
 pub(crate) fn cap_bps(bitrate_kbps: u32, link: &LinkRate, pinned_wall: Option<u32>) -> u64 {
     let room = u64::from(bitrate_kbps) * 1_000 * CAP_STREAM_FACTOR / CAP_STREAM_DIV;
     let measured = if link.measured() {
@@ -398,9 +435,8 @@ impl Pacer {
         }
     }
 
-    /// The client cannot drain the stream: forced IDRs do not heal it. An unmeasured `L` is
-    /// a guess that evidence refutes, so [`cap_bps`] holds it at 1.5 × B for the session; a
-    /// measured `L` stands.
+    /// A [`Refutation`] was raised: from the next update, for the session, an unmeasured `L`
+    /// is capped.
     pub(crate) fn refute(&mut self) {
         self.refuted = true;
     }
@@ -903,11 +939,17 @@ mod tests {
         assert_eq!(rate_bps(1_427_000, &unknown, None), 2_450_000_000);
     }
 
-    /// Unhealed IDRs cap an unmeasured `L` (the floor, the host's port, the client's echo of
+    /// A refutation caps an unmeasured `L` (the floor, the host's port, the client's echo of
     /// the floor) at 1.5 × B, an IDR's spread floor included, frame after frame. A measured
-    /// `L` takes over and is never lowered; back at the floor, the cap holds again.
+    /// `L` takes over and is never lowered; back at the floor, the cap holds again. The first
+    /// evidence raised is the one kept.
     #[test]
-    fn unhealed_idrs_cap_only_an_unmeasured_link() {
+    fn a_refutation_caps_only_an_unmeasured_link() {
+        let r = Refutation::default();
+        assert_eq!(r.evidence(), None);
+        r.raise(Evidence::DeadWindows);
+        r.raise(Evidence::IdrStorm);
+        assert_eq!(r.evidence(), Some(Evidence::DeadWindows));
         let d = Duration::from_millis(33);
         let host = Ports::of((ETH, 2_500), (0, 0));
         for (ports, report) in [(Ports::default(), 0), (host, 0), (host, FLOOR_KBPS)] {

@@ -125,6 +125,24 @@ fn apply_shape(slot: &std::sync::atomic::AtomicU8, asked: u8) -> bool {
     shape == Shape::Wake
 }
 
+/// Report windows running with a frame lost that refute an unmeasured link.
+const DEAD_WINDOWS: u32 = 2;
+
+/// The report windows' evidence for [`crate::send_pacing::Refutation`]: an
+/// [`UnrecoveredRun`] of [`DEAD_WINDOWS`], unless this window's loss is the client's own head
+/// signature.
+fn refute_on_dead_windows(
+    refuted: &crate::send_pacing::Refutation,
+    unrecovered_run: u32,
+    fb: &Feedback,
+) {
+    if unrecovered_run >= DEAD_WINDOWS
+        && !punktfunk_core::abr::shows_head_loss(fb.head, fb.mid, fb.tail, fb.sock_drops)
+    {
+        refuted.raise(crate::send_pacing::Evidence::DeadWindows);
+    }
+}
+
 /// A probe's target, the bring-up ramp's steps included, under 0.9 `L_hard` when a port is
 /// known. The result reports what was offered, so a bounded round says so itself.
 fn probe_bound(target_kbps: u32, ports: crate::send_pacing::Ports) -> u32 {
@@ -612,8 +630,9 @@ impl ControlTask {
         Ok(())
     }
 
-    /// A report window, newly closed: the offload guard, the loss and link notes, adaptive
-    /// FEC, the delivery count, then the share of the path this session is on.
+    /// A report window, newly closed: the offload guard, the dead-window refutation, the loss
+    /// and link notes, adaptive FEC, the delivery count, then the share of the path this
+    /// session is on.
     async fn on_report_window(&mut self, fb: &Feedback) -> Step {
         // Before FEC: the send mode is not FEC's business, pinned or adaptive.
         if let Some(g) = self.offload_guard.as_mut() {
@@ -621,6 +640,7 @@ impl ControlTask {
         }
         let unrecovered_run = self.unrecovered.report(std::time::Instant::now());
         let shared = &self.task.shared;
+        refute_on_dead_windows(&shared.refuted, unrecovered_run, fb);
         if unrecovered_run > 0
             || punktfunk_core::abr::shows_loss_shape(fb.head, fb.mid, fb.tail, fb.sock_drops)
         {
@@ -1094,6 +1114,49 @@ mod tests {
         assert_eq!(probe_bound(1_200_000, gbe), 900_000);
         assert_eq!(probe_bound(50_000, gbe), 50_000);
         assert_eq!(probe_bound(1_200_000, Default::default()), 1_200_000);
+    }
+
+    /// Two report windows running with an RFI ask in each refute an unmeasured link; one
+    /// window, a clean window between, or a head-shaped window does not.
+    #[test]
+    fn two_dead_windows_refute_the_link_unless_the_heads_lost() {
+        use crate::send_pacing::{Evidence, Refutation};
+        let tail = Feedback {
+            mid: 3,
+            tail: 40,
+            ..Feedback::default()
+        };
+        let head = Feedback {
+            head: 9,
+            mid: 1,
+            tail: 1,
+            ..Feedback::default()
+        };
+        let t0 = std::time::Instant::now();
+        let windows = |fbs: &[(bool, Feedback)]| {
+            let (mut run, refuted) = (UnrecoveredRun::default(), Refutation::default());
+            for (n, (asked, fb)) in (1u32..).zip(fbs) {
+                if *asked {
+                    run.rfi();
+                }
+                let at = t0 + punktfunk_core::abr::WINDOW * n;
+                refute_on_dead_windows(&refuted, run.report(at), fb);
+            }
+            refuted.evidence()
+        };
+        let dead = (true, tail);
+        assert_eq!(windows(&[dead, dead]), Some(Evidence::DeadWindows));
+        assert_eq!(windows(&[dead]), None, "one window is a blip");
+        assert_eq!(
+            windows(&[dead, (false, tail), dead]),
+            None,
+            "healed between"
+        );
+        assert_eq!(
+            windows(&[dead, (true, head)]),
+            None,
+            "the wake shape's loss"
+        );
     }
 
     /// A client gets the wake shape or the default, never the operator's line rate.

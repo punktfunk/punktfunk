@@ -617,7 +617,7 @@ impl StreamState {
         let now = std::time::Instant::now();
         // The `seconds` cap counts from a stream that is up.
         facts.deadline = now + std::time::Duration::from_secs(u64::from(c.seconds));
-        let kf_gate = super::recovery::KeyframeGate::new(shared.idr_storm.clone());
+        let kf_gate = super::recovery::KeyframeGate::new(c.shared.refuted.clone());
         let mut st = Self {
             plan,
             facts,
@@ -1013,7 +1013,6 @@ fn shared_handles(ctx: &SessionContext) -> (Shared, FecState) {
         driver_dropped: Default::default(),
         screen_wire: s.screens.clone(),
         send_spread_us: Default::default(),
-        idr_storm: Default::default(),
         wire_rekeys: Default::default(),
         live_mode: Default::default(),
         force_idr: Default::default(),
@@ -1249,7 +1248,7 @@ fn start_send(
         link_kbps: wiring.link_kbps.clone(),
         ports: wiring.ports,
         link_paced: facts.pyrowave && !facts.bitrate_auto,
-        idr_storm: shared.idr_storm.clone(),
+        refuted: wiring.refuted.clone(),
         shape: wiring.shape.clone(),
         bringup: facts.bringup.clone(),
         wire_sock,

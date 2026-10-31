@@ -253,10 +253,9 @@ pub(super) struct SendStats {
     /// An explicit-rate PyroWave stream: its pinned rate says nothing about the link, so the
     /// link the client proved is a hard ceiling too ([`crate::send_pacing::pinned_wall`]).
     pub(super) link_paced: bool,
-    /// Raised by the recovery gate's storm ([`super::recovery::KeyframeGate::new`]), never
-    /// lowered: an unmeasured link is capped from then on
-    /// ([`crate::send_pacing::Pacer::refute`]).
-    pub(super) idr_storm: Arc<AtomicBool>,
+    /// [`crate::native::wiring::SessionShared::refuted`]: once raised, the pacer caps an
+    /// unmeasured link.
+    pub(super) refuted: Arc<crate::send_pacing::Refutation>,
     /// The shape the client asked for (`Shape as u8`). `PUNKTFUNK_DELIVERY` overrides it.
     pub(super) shape: Arc<std::sync::atomic::AtomicU8>,
     pub(super) bringup: Arc<crate::bringup::Trace>,
@@ -557,7 +556,8 @@ impl SendLoop {
     }
 
     /// `R` for the next AU from the live bitrate, the client's link report, a pinned wall and
-    /// the recovery gate's storm, logged when `L` moves and once when the storm caps it.
+    /// the session's refutation, logged when `L` moves and once, with its evidence, when the
+    /// refutation caps it.
     fn pace_next(&mut self) {
         use crate::send_pacing as sp;
         let stats = &self.stats;
@@ -573,7 +573,8 @@ impl SendLoop {
         } else {
             sp::MAX_PACE_SPREAD
         };
-        if stats.idr_storm.load(Ordering::Relaxed) {
+        let evidence = stats.refuted.evidence();
+        if evidence.is_some() {
             self.pacer.refute();
         }
         let rate = self
@@ -586,11 +587,10 @@ impl SendLoop {
         }
         if link.refuted && !was.is_some_and(|l| l.refuted) {
             tracing::info!(
-                unhealed_idrs = super::recovery::IDR_STORM,
+                evidence = evidence.map_or("", sp::Evidence::name),
                 bitrate_kbps,
                 cap_kbps = sp::cap_bps(bitrate_kbps, &link, wall) / 1_000,
-                "unmeasured link capped at 1.5× the bitrate — forced IDRs are not healing the \
-                 client"
+                "unmeasured link capped at 1.5× the bitrate — the client cannot drain the stream"
             );
         }
         tracing::info!(
@@ -970,13 +970,12 @@ mod tests {
         }
     }
 
-    /// A send thread on `transport` at 20 Mbit/s in `shape`, with the recovery gate's storm
-    /// raised or not: its frame channel, its stop flag, the counters it reports into and the
-    /// thread.
+    /// A send thread on `transport` at 20 Mbit/s in `shape`, its link refuted or not: its
+    /// frame channel, its stop flag, the counters it reports into and the thread.
     fn spawn_loop(
         transport: Box<dyn Transport>,
         shape: crate::send_pacing::Shape,
-        storm: bool,
+        refuted: bool,
     ) -> (
         std::sync::mpsc::SyncSender<SendMsg>,
         Arc<AtomicBool>,
@@ -1020,7 +1019,13 @@ mod tests {
             link_kbps: Arc::new(AtomicU32::new(0)),
             ports: Default::default(),
             link_paced: false,
-            idr_storm: Arc::new(AtomicBool::new(storm)),
+            refuted: {
+                let r = crate::send_pacing::Refutation::default();
+                if refuted {
+                    r.raise(crate::send_pacing::Evidence::DeadWindows);
+                }
+                Arc::new(r)
+            },
             shape: Arc::new(AtomicU8::new(shape as u8)),
             bringup: crate::bringup::Trace::start("test", Arc::new(AtomicU32::new(0))),
             wire_sock: None,
@@ -1108,15 +1113,15 @@ mod tests {
         assert!(got[..40].iter().all(|p| is_data(p)));
     }
 
-    /// The recovery gate's storm caps an unmeasured link: a 400 KiB frame of a 20 Mbit/s
-    /// stream leaves at 30 Mbit/s, over 100 ms, where the floor's 720 Mbit/s takes a few.
+    /// A refuted link is capped: a 400 KiB frame of a 20 Mbit/s stream leaves at 30 Mbit/s,
+    /// over 100 ms, where the floor's 720 Mbit/s takes a few.
     #[test]
-    fn a_raised_storm_paces_an_unmeasured_link_at_the_cap() {
+    fn a_refuted_link_paces_at_the_cap() {
         use std::time::{Duration, Instant};
-        let spread = |storm: bool| {
+        let spread = |refuted: bool| {
             let (host_tp, client_tp) = punktfunk_core::transport::loopback_pair(0, 0);
             let (frame_tx, stop, _, thread) =
-                spawn_loop(Box::new(host_tp), crate::send_pacing::Shape::Auto, storm);
+                spawn_loop(Box::new(host_tp), crate::send_pacing::Shape::Auto, refuted);
             let SendMsg::Frame(mut f) = frame(3) else {
                 unreachable!()
             };

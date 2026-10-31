@@ -671,9 +671,8 @@ pub(super) const IDR_COOLDOWN_INTRA: std::time::Duration = std::time::Duration::
 /// this one: an arithmetic encoder has no recovery marks.
 pub(super) const IDR_COOLDOWN_FULL: std::time::Duration = std::time::Duration::from_millis(750);
 
-/// Consecutive unhealed IDRs that name the state in the log and raise [`KeyframeGate::new`]'s
-/// flag.
-pub(super) const IDR_STORM: u32 = 3;
+/// Consecutive unhealed IDRs that name the state in the log and refute an unmeasured link.
+const IDR_STORM: u32 = 3;
 
 /// A request this long after the previous one opens a new episode: the run of unhealed IDRs,
 /// the swallowed RFI echoes and the previous request all belong to the old one.
@@ -910,21 +909,20 @@ pub(super) struct KeyframeGate {
     last_request: Option<std::time::Instant>,
     rfi_echo_swallowed: u32,
     unhealed: u32,
-    storm: Arc<AtomicBool>,
+    refuted: Arc<crate::send_pacing::Refutation>,
 }
 
 impl KeyframeGate {
-    /// A gate that raises `storm` at the first [`IDR_STORM`] and never lowers it: the send
-    /// thread caps an unmeasured link on it ([`crate::send_pacing::Pacer::refute`]).
-    pub(super) fn new(storm: Arc<AtomicBool>) -> Self {
+    /// A gate whose [`IDR_STORM`] raises `refuted` ([`crate::send_pacing::Refutation`]).
+    pub(super) fn new(refuted: Arc<crate::send_pacing::Refutation>) -> Self {
         KeyframeGate {
-            storm,
+            refuted,
             ..KeyframeGate::default()
         }
     }
 
     /// What one keyframe request at `now` gets. The [`IDR_STORM`]th unhealed IDR in a row is
-    /// logged and raises the storm flag.
+    /// logged and refutes an unmeasured link.
     pub(super) fn decide(
         &mut self,
         now: std::time::Instant,
@@ -965,7 +963,7 @@ impl KeyframeGate {
         let rfi_unhealed = std::mem::take(&mut self.rfi_echo_swallowed) > 0;
         let cooldown = idr_cooldown(base, self.unhealed);
         if self.unhealed == IDR_STORM {
-            self.storm.store(true, Ordering::Relaxed);
+            self.refuted.raise(crate::send_pacing::Evidence::IdrStorm);
             tracing::warn!(
                 unhealed = self.unhealed,
                 cooldown_ms = cooldown.as_millis() as u64,
@@ -1197,30 +1195,28 @@ mod tests {
         assert_eq!(idr_cooldown(Duration::from_secs(2), 3), IDR_COOLDOWN_MAX);
     }
 
-    /// The storm raises the flag the send thread's pacer reads at the [`IDR_STORM`]th unhealed
-    /// IDR, not before, and a healed episode after it leaves the flag up.
+    /// The storm refutes the link the send thread's pacer reads at the [`IDR_STORM`]th
+    /// unhealed IDR, not before, and a healed episode after it leaves it refuted.
     #[test]
     fn an_idr_storm_raises_the_pacers_flag() {
+        use crate::send_pacing::{Evidence, Refutation};
         let base = Duration::from_millis(750);
         let t0 = Instant::now();
-        let flag = Arc::new(AtomicBool::new(false));
-        let mut gate = KeyframeGate::new(flag.clone());
+        let refuted = Arc::new(Refutation::default());
+        let mut gate = KeyframeGate::new(refuted.clone());
         let mut last_idr = None;
         let early = storm(&mut gate, base, t0, &mut last_idr, 0, 5_060, 230);
         assert!(early.iter().all(|&(_, u, _)| u < IDR_STORM), "{early:?}");
-        assert!(!flag.load(Ordering::Relaxed), "raised before the storm");
+        assert_eq!(refuted.evidence(), None, "raised before the storm");
         let late = storm(&mut gate, base, t0, &mut last_idr, 5_060, 10_000, 230);
         assert_eq!(late[0].1, IDR_STORM);
-        assert!(
-            flag.load(Ordering::Relaxed),
-            "the storm left the pacer alone"
-        );
+        assert_eq!(refuted.evidence(), Some(Evidence::IdrStorm));
         let healed = t0 + Duration::from_secs(600);
         assert!(matches!(
             gate.decide(healed, base, last_idr, None, false),
             KeyframeVerdict::Force { unhealed: 0, .. }
         ));
-        assert!(flag.load(Ordering::Relaxed));
+        assert_eq!(refuted.evidence(), Some(Evidence::IdrStorm));
     }
 
     /// An echo inside an RFI's flight is swallowed twice and then forces with the anchor

@@ -52,8 +52,6 @@ pub(super) struct Shared {
     pub(super) driver_dropped: Arc<AtomicU64>,
     pub(super) screen_wire: Arc<crate::native::wiring::ScreenWire>,
     pub(super) send_spread_us: Arc<AtomicU32>,
-    /// [`super::recovery::KeyframeGate::new`]'s storm, read by the send thread's pacer.
-    pub(super) idr_storm: Arc<AtomicBool>,
     pub(super) wire_rekeys: Arc<AtomicU32>,
     pub(super) live_mode: Arc<AtomicU64>,
     pub(super) force_idr: Arc<AtomicBool>,

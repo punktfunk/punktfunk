@@ -266,6 +266,7 @@ pub(crate) fn synthetic_abr_stream(ctx: SynthAbrContext) -> Result<()> {
                         ramp_open,
                         resend,
                         link_kbps,
+                        refuted,
                         ..
                     },
                 bitrate_kbps,
@@ -331,7 +332,6 @@ pub(crate) fn synthetic_abr_stream(ctx: SynthAbrContext) -> Result<()> {
             .is_some_and(|tx| tx.try_send(SendMsg::Resend { frame, shards }).is_ok())
     }));
     let live_mode = Arc::new(AtomicU64::new(pack_mode(mode.width, mode.height, fps)));
-    let kf_storm = Arc::new(AtomicBool::new(false));
     let send_stats = SendStats {
         rec: stats,
         mode: live_mode.clone(),
@@ -342,7 +342,7 @@ pub(crate) fn synthetic_abr_stream(ctx: SynthAbrContext) -> Result<()> {
         link_kbps,
         ports,
         link_paced: false,
-        idr_storm: kf_storm.clone(),
+        refuted: refuted.clone(),
         shape,
         bringup: bringup.clone(),
         wire_sock,
@@ -427,7 +427,7 @@ pub(crate) fn synthetic_abr_stream(ctx: SynthAbrContext) -> Result<()> {
     // An IDR at start, then whenever one comes due. `None` = none owed.
     let mut idr_due: Option<std::time::Instant> = Some(started);
     // `recovery.rs`'s gate, so a burst of asks costs what it costs a real host.
-    let (mut kf_gate, mut last_idr) = (KeyframeGate::new(kf_storm), None);
+    let (mut kf_gate, mut last_idr) = (KeyframeGate::new(refuted), None);
     while !life.stopping() {
         if deadline.is_some_and(|d| std::time::Instant::now() >= d) {
             break;
