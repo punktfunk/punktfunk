@@ -254,6 +254,25 @@ pub fn codec_preference_miss(
     )
 }
 
+/// The rate a session runs at, `0` = Automatic. Under PyroWave the stored rate only says
+/// Fixed, so a client that offered PyroWave as its preference sends it whatever the codec;
+/// if the host negotiates another codec the number would become that codec's fixed rate.
+/// That session is Automatic instead. Host and client both apply this to the Hello's rate,
+/// so neither reads a Fixed the other does not.
+pub fn session_bitrate_kbps(
+    asked_kbps: u32,
+    preferred: u8,
+    client_codecs: u8,
+    negotiated: u8,
+) -> u32 {
+    let offered = preferred == CODEC_PYROWAVE && client_codecs & CODEC_PYROWAVE != 0;
+    if offered && negotiated != CODEC_PYROWAVE {
+        0
+    } else {
+        asked_kbps
+    }
+}
+
 /// HEVC `chroma_format_idc` 4:2:0. Default when a peer omits [`Welcome::chroma_format`].
 pub const CHROMA_IDC_420: u8 = 1;
 /// HEVC `chroma_format_idc` 4:4:4 (Range Extensions).
@@ -602,6 +621,27 @@ mod tests {
         .unwrap();
         assert_eq!(got.count_ones(), 1);
         assert_ne!(got & (CODEC_AV1 | CODEC_HEVC), 0);
+    }
+
+    /// A rate stored for PyroWave is Automatic once the host lands on another codec; every
+    /// other pairing keeps what the player asked.
+    #[test]
+    fn a_pyrowave_offer_that_lands_elsewhere_is_automatic() {
+        let both = CODEC_HEVC | CODEC_PYROWAVE;
+        let rate = |asked, preferred, codecs, negotiated| {
+            session_bitrate_kbps(asked, preferred, codecs, negotiated)
+        };
+        for landed in [CODEC_H264, CODEC_HEVC, CODEC_AV1] {
+            assert_eq!(rate(20_000, CODEC_PYROWAVE, both, landed), 0);
+        }
+        assert_eq!(rate(20_000, CODEC_PYROWAVE, both, CODEC_PYROWAVE), 20_000);
+        assert_eq!(rate(0, CODEC_PYROWAVE, both, CODEC_PYROWAVE), 0);
+        // PyroWave preferred but never advertised: the client kept the player's rate for the
+        // H.26x it falls back to.
+        assert_eq!(rate(80_000, CODEC_PYROWAVE, CODEC_HEVC, CODEC_HEVC), 80_000);
+        // Another preference, or none: nothing was stored for PyroWave.
+        assert_eq!(rate(80_000, CODEC_AV1, both, CODEC_HEVC), 80_000);
+        assert_eq!(rate(80_000, 0, both, CODEC_HEVC), 80_000);
     }
 
     /// The session's colour keeps the HDR verdict's code points and takes the encoder's range.

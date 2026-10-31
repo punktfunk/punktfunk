@@ -1177,6 +1177,47 @@ mod tests {
         out
     }
 
+    /// A player who prefers PyroWave and lands on HEVC runs Automatic, whatever rate they
+    /// stored: the rate was PyroWave's Fixed flag, and HEVC never reads it. The ramp's verdict
+    /// then opens the session with a rate ask. The same stored rate on a session that offered
+    /// no PyroWave is a Fixed HEVC rate and asks for nothing.
+    #[test]
+    fn a_pyrowave_player_who_lands_on_hevc_runs_the_controller() {
+        use crate::quic::{session_bitrate_kbps, CODEC_HEVC, CODEC_PYROWAVE};
+        let asks = |preferred: u8, stored: u32| {
+            let base = Instant::now();
+            let facts = feed::Facts {
+                bitrate_kbps: session_bitrate_kbps(
+                    stored,
+                    preferred,
+                    CODEC_HEVC | CODEC_PYROWAVE,
+                    CODEC_HEVC,
+                ),
+                resolved_bitrate_kbps: 20_000,
+                codec: CODEC_HEVC,
+                bit_depth: 8,
+                chroma_format: crate::quic::CHROMA_IDC_420,
+                refresh_hz: 60,
+                stream_cap_kbps: 200_000,
+                pyrowave_floor_kbps: None,
+                audio_reserved_kbps: 0,
+                marks_repeats: true,
+                serves_ramp: true,
+                probe_only: false,
+            };
+            let links = (
+                crate::quic::HostLink::default(),
+                crate::quic::LinkFacts::default(),
+            );
+            let feed = feed::Feed::new(facts, links.0, links.1, base);
+            asks_for_a_rate(&ramp_session(feed.driver, base, 93_000, 2_500).2)
+        };
+        for stored in [0, 20_000, 80_000] {
+            assert!(asks(CODEC_PYROWAVE, stored), "stored {stored}");
+        }
+        assert!(!asks(0, 80_000), "a plain Fixed HEVC rate asks for nothing");
+    }
+
     /// A PyroWave session at 2 Gbit/s with no ramp: Automatic with `floor_kbps`, else
     /// pinned there.
     fn pyrowave_driver(at: Instant, floor_kbps: Option<u32>) -> Driver {
@@ -1450,17 +1491,19 @@ mod tests {
     /// re-presented every millisecond as the pump does; picture from `video_ms`. What the
     /// ramp came to, and every action with its time. None of them is ever a `SetBitrate`.
     fn fixed_session(link_kbps: u32, video_ms: u64) -> (Driver, RampSummary, Vec<(u64, Action)>) {
-        ramp_session(fixed_config(), link_kbps, video_ms)
+        let base = Instant::now();
+        let session = ramp_session(Driver::new(fixed_config(), base), base, link_kbps, video_ms);
+        assert!(!asks_for_a_rate(&session.2), "{:?}", session.2);
+        session
     }
 
-    /// [`fixed_session`] for any explicit-rate `cfg`.
+    /// [`fixed_session`] for any driver built at `base`.
     fn ramp_session(
-        cfg: DriverConfig,
+        mut d: Driver,
+        base: Instant,
         link_kbps: u32,
         video_ms: u64,
     ) -> (Driver, RampSummary, Vec<(u64, Action)>) {
-        let base = Instant::now();
-        let mut d = Driver::new(cfg, base);
         let mut st = Stats::default();
         let mut step: Option<(u64, ProbeReport)> = None;
         let mut out = Vec::new();
@@ -1494,12 +1537,13 @@ mod tests {
                 out.push((ms, a));
             }
         }
-        assert!(
-            !out.iter().any(|(_, a)| matches!(a, Action::SetBitrate(_))),
-            "{out:?}"
-        );
         let ramp = d.ramp_outcome().expect("the ramp stopped");
         (d, ramp, out)
+    }
+
+    /// Whether any action in `acts` asks the host for a new rate.
+    fn asks_for_a_rate(acts: &[(u64, Action)]) -> bool {
+        acts.iter().any(|(_, a)| matches!(a, Action::SetBitrate(_)))
     }
 
     /// A fixed rate ramps like a PyroWave pin: a 93 Mbit/s wall becomes `L`, told to the host
@@ -1538,7 +1582,10 @@ mod tests {
     /// pin sets `L` and asks for nothing, so the host is never told a lower rate.
     #[test]
     fn a_fixed_pyrowave_rate_is_never_lowered_by_the_wall() {
-        let (d, ramp, acts) = ramp_session(pyrowave_fixed_config(), 700_000, 2_500);
+        let base = Instant::now();
+        let d = Driver::new(pyrowave_fixed_config(), base);
+        let (d, ramp, acts) = ramp_session(d, base, 700_000, 2_500);
+        assert!(!asks_for_a_rate(&acts), "{acts:?}");
         assert!(ramp.wall, "{ramp:?}");
         assert!(ramp.proven_kbps < 1_000_000, "{ramp:?}");
         assert_eq!(d.link(), (ramp.proven_kbps, LinkSource::Measured));

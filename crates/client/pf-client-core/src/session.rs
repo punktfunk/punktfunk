@@ -612,7 +612,7 @@ fn connect_plan(params: &SessionParams) -> ConnectPlan {
         pad_audio_on,
         advertised_codecs,
         // Zero is Automatic, anything else Fixed. Under PyroWave the host ignores the number
-        // and pins the player's quality under its own ceiling.
+        // and pins the player's quality; if it lands on another codec, core runs Automatic.
         bitrate_kbps: params.bitrate_kbps,
         video_caps,
     }
