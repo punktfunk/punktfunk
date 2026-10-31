@@ -290,7 +290,7 @@ punktfunk-host spike --source virtual --seconds 5
 It creates a virtual display, captures it and encodes in the display driver. It exits non-zero on
 any gap: no driver, no captured frame, no GPU encoder (a software encoder counts as a failure), or
 no encoded output. The supervisor runs it before it reports a seat healthy. Add `--hdr` to also
-require the 10-bit path; a seat's session doesn't pass that yet, so seats stream SDR.
+require the 10-bit path.
 
 ## The seat display driver is a second package
 

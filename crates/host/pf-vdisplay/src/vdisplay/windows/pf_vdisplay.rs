@@ -1010,6 +1010,8 @@ pub struct PfVdisplayDisplay {
     /// Client HDR volume (`None` = unknown/SDR → driver EDID defaults). Advertised in the
     /// created monitor's EDID so host apps tone-map to the client's panel.
     client_hdr: Option<pf_frame::HdrMeta>,
+    /// The session's HDR verdict. Not a reuse key: the capture sets a console display's depth.
+    hdr: bool,
     /// Declare an IddCx hardware cursor on the ADD.
     hw_cursor: bool,
     /// Deliberate-quit flag (`None` = linger policy). A user "stop" tears the monitor down
@@ -1025,6 +1027,7 @@ impl PfVdisplayDisplay {
         Ok(Self {
             client_fp: None,
             client_hdr: None,
+            hdr: false,
             hw_cursor: false,
             quit: None,
             join_live: false,
@@ -1043,6 +1046,10 @@ impl VirtualDisplay for PfVdisplayDisplay {
 
     fn set_client_hdr(&mut self, hdr: Option<pf_frame::HdrMeta>) {
         self.client_hdr = hdr;
+    }
+
+    fn set_hdr(&mut self, on: bool) {
+        self.hdr = on;
     }
 
     fn set_hw_cursor(&mut self, on: bool) {
@@ -1077,6 +1084,7 @@ impl VirtualDisplay for PfVdisplayDisplay {
             mode,
             self.client_fp,
             self.client_hdr,
+            self.hdr,
             self.hw_cursor,
             self.quit.clone(),
         )

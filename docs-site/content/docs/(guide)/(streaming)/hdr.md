@@ -31,6 +31,8 @@ and forces it off for an SDR session; Windows' own **Use HDR** switch doesn't ma
   was told HDR. This is the one case where the client's `HDR` label is wrong.
 - Switching HDR off on the virtual display during a session (**Win+Alt+B** on the host) turns
   the stream SDR until HDR is back on.
+- On a [Windows seat](/docs/windows-seats), resizing the stream mid-session turns it SDR until
+  the next connect.
 - Vulkan games need the installer's **HDR Vulkan layer** (on by default); see
   [the troubleshooting entry](#a-vulkan-game-on-windows-says-hdr-isnt-supported).
 
