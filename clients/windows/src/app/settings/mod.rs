@@ -536,7 +536,9 @@ pub(crate) fn settings_page(shell: &Shell) -> View {
         .translation(0.0, (1.0 - progress) * 22.0);
     let nav = NavigationView::new()
         .keyed_menu_items(items)
-        .content(ScrollView::new().content(column))
+        // ScrollView scrolls through its direct child's Translation, and a Translation write
+        // stops that scroll until the child resizes. The tweened column stays one Border in.
+        .content(ScrollView::new().content(Border::new().content(column)))
         .pane_title("Settings")
         .on_selected_tag_changed({
             let ss = shell.set(Msg::SettingsNav);
