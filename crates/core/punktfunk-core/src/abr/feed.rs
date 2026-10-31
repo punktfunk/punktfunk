@@ -96,13 +96,14 @@ impl Feed {
     /// The session's driver, with the three environment overrides read once. Automatic is a
     /// session with no player rate and a host that echoed one: PyroWave's adapts between its
     /// floor and the host's pin. An explicit-rate PyroWave session runs at the pin, which the
-    /// bring-up ramp may lower once; no controller runs for it.
+    /// bring-up ramp may lower once. An explicit H.26x rate is never moved; its ramp measures
+    /// `L` alone. No controller runs for either.
     pub fn new(facts: Facts, host: HostLink, client: LinkFacts, now: Instant) -> Self {
         let automatic = facts.bitrate_kbps == 0;
         let pyrowave = facts.codec == crate::quic::CODEC_PYROWAVE;
-        let pin_kbps = (pyrowave && !automatic)
+        let explicit = (!automatic)
             .then_some(facts.resolved_bitrate_kbps)
-            .filter(|&pin| pin > 0);
+            .filter(|&kbps| kbps > 0);
         let mut driver = Driver::new(
             DriverConfig {
                 start_kbps: if automatic {
@@ -123,7 +124,8 @@ impl Feed {
                 probe_target_kbps: env_u32("PUNKTFUNK_ABR_PROBE_KBPS"),
                 ramp: facts.serves_ramp,
                 probe_only: facts.probe_only,
-                pin_kbps,
+                pin_kbps: explicit.filter(|_| pyrowave),
+                fixed_kbps: explicit.filter(|_| !pyrowave),
                 floor_kbps: facts.pyrowave_floor_kbps.filter(|_| automatic),
             },
             now,

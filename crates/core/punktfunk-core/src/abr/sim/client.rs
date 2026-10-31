@@ -327,6 +327,7 @@ impl Client {
                 ramp: cfg.ramp,
                 probe_only: false,
                 pin_kbps: cfg.pin_kbps,
+                fixed_kbps: (!cfg.automatic && cfg.pin_kbps.is_none()).then_some(cfg.start_kbps),
                 floor_kbps: cfg.floor_kbps,
             },
             joined,
