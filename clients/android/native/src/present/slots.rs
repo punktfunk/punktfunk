@@ -28,6 +28,8 @@ const HOLD_BAND_NS: i64 = 1_500_000;
 /// the observed slots adapt.
 pub(crate) struct Slots {
     clock: SlotClock,
+    /// The source's frame interval: the latency cadence's step, in panel periods.
+    frame_interval_ns: i64,
     /// The last slot assigned or observed; a held frame never shares it.
     last_slot: Option<i64>,
     /// Slots a frame may be held beyond the first reachable one: 0 under latency (1 with
@@ -46,11 +48,13 @@ pub(crate) struct Slots {
 }
 
 impl Slots {
-    /// `panel_hz` (the mode-table rate) seeds the clock; the present fences phase it. `hold`:
-    /// the latency intent may hold a frame one slot past reachable, which on an exact-rate
-    /// source chains into a permanent period of delay. `hold_band_ns` pins the hold band.
+    /// `panel_hz` (the mode-table rate) seeds the clock; the present fences phase it.
+    /// `frame_interval_ns` is the source's, the store's cadence. `hold`: the latency intent may
+    /// hold a frame one slot past reachable, which on an exact-rate source chains into a
+    /// permanent period of delay. `hold_band_ns` pins the hold band.
     pub(crate) fn new(
         panel_hz: i32,
+        frame_interval_ns: i64,
         priority: PresentPriority,
         pacing: bool,
         hold: bool,
@@ -62,6 +66,7 @@ impl Slots {
         };
         Slots {
             clock: SlotClock::seeded(panel_hz),
+            frame_interval_ns,
             last_slot: None,
             max_ahead,
             hold_band_pin: hold_band_ns,
@@ -163,14 +168,19 @@ impl Slots {
         )
     }
 
-    /// Latency: the slot after the last one. The cadence estimate `ready_ns` (due + lead +
-    /// margin) wobbles, so near a vsync the slot it names flips: two frames on one, none on the
-    /// next. The next slot is kept while the frame can still make it from the apply now
-    /// (`apply_ns` = now + lead + margin) or is early for it by less than the hold band.
-    /// Earlier than the band it shares the last slot and SurfaceFlinger keeps the newer: one
-    /// drop per beat of the source and panel clocks, which is the beat's due.
+    /// Latency: the slot one source interval after the last one (60 on 120: two slots on). The
+    /// cadence estimate `ready_ns` (due + lead + margin) wobbles, so near a vsync the slot it
+    /// names flips: two frames on one, none on the next. The cadence slot is kept while the
+    /// frame can still make it from the apply now (`apply_ns` = now + lead + margin) or is early
+    /// for the slot before it by less than the hold band. Earlier than the band it takes the
+    /// reachable slot: the last one, on a source at the panel rate, which SurfaceFlinger keeps
+    /// the newer of, one drop per beat of the source and panel clocks. A source interval that is
+    /// no whole number of periods (24 on 60) has no cadence slot and takes the reachable one.
     fn own_slot(&self, last: i64, reachable: i64, ready_ns: i64, apply_ns: i64) -> i64 {
-        let next = last + 1;
+        let Some(step) = self.cadence_step() else {
+            return reachable;
+        };
+        let next = last + step;
         if reachable > next {
             // Late for `next` on the cadence estimate; the apply is now, so the latch decides.
             if self.clock.slot_after(apply_ns) <= next {
@@ -178,12 +188,24 @@ impl Slots {
             } else {
                 reachable
             }
-        } else if reachable == next || self.clock.present_ns(last) - ready_ns < self.hold_band_ns()
+        } else if reachable == next
+            || self.clock.present_ns(next - 1) - ready_ns < self.hold_band_ns()
         {
             next
         } else {
             reachable
         }
+    }
+
+    /// The source interval in panel periods when that is a whole number within a tenth: 1 for a
+    /// source at or above the panel rate, 2 for 60 on 120. `None` on a ratio like 24 on 60.
+    fn cadence_step(&self) -> Option<i64> {
+        let p = self.period_ns();
+        if self.frame_interval_ns <= p {
+            return Some(1);
+        }
+        let k = (self.frame_interval_ns + p / 2) / p;
+        ((self.frame_interval_ns - k * p).abs() * 10 <= p).then_some(k)
     }
 
     /// [`HOLD_BAND_NS`] or the pin, never past half a period.
@@ -277,15 +299,28 @@ impl Slots {
 
 #[cfg(test)]
 mod tests {
+    use super::super::frame_interval_ns;
     use super::*;
 
     const P: i64 = 8_333_333; // 120 Hz
     const LEAD: i64 = 4_000_000; // present − latch
     const T0: i64 = 1_000_000_000_000; // the first fenced present, monotonic
 
-    /// A scheduler phased by one fenced present at `T0` (slot 0).
+    /// A scheduler for a 120 Hz source, phased by one fenced present at `T0` (slot 0).
     fn phased(priority: PresentPriority, hold: bool) -> (Slots, Counters) {
-        let mut s = Slots::new(120, priority, true, hold, None);
+        phased_at(120, priority, hold)
+    }
+
+    /// [`phased`] for a source at `source_hz`.
+    fn phased_at(source_hz: u32, priority: PresentPriority, hold: bool) -> (Slots, Counters) {
+        let mut s = Slots::new(
+            120,
+            frame_interval_ns(source_hz),
+            priority,
+            true,
+            hold,
+            None,
+        );
         let mut c = Counters::default();
         assert!(s.bootstrapping());
         assert_eq!(s.next_target(T0 - P, T0 - P, false, &mut c), (0, None));
@@ -380,7 +415,7 @@ mod tests {
         let (s, _) = phased(PresentPriority::Latency, false);
         assert_eq!(s.latch_ns_for(Some(3), T0), s.clock.present_ns(3) - LEAD);
         assert_eq!(s.latch_ns_for(None, T0), T0 + P);
-        let unphased = Slots::new(120, PresentPriority::Latency, true, false, None);
+        let unphased = Slots::new(120, P, PresentPriority::Latency, true, false, None);
         assert_eq!(unphased.latch_ns_for(Some(3), T0), T0 + P);
     }
 
@@ -395,7 +430,7 @@ mod tests {
         assert_eq!(aim(&mut s, &mut c, T0 + 2 * P - LEAD - 2_000_000), 2);
         assert_eq!(c.held, 1);
         // A pinned band of zero is the plain shared slot.
-        let mut pinned = Slots::new(120, PresentPriority::Latency, true, false, Some(0));
+        let mut pinned = Slots::new(120, P, PresentPriority::Latency, true, false, Some(0));
         pinned.on_present(T0, T0 - LEAD, None, true, 0, &mut c);
         assert_eq!(aim(&mut pinned, &mut c, T0 + P / 10), 1);
         assert_eq!(aim(&mut pinned, &mut c, inside), 1);
@@ -416,13 +451,41 @@ mod tests {
 
     #[test]
     fn sixty_on_120_latency_presents_every_second_vsync() {
-        let (mut s, mut c) = phased(PresentPriority::Latency, false);
-        for k in 0..60 {
-            let slot = aim(&mut s, &mut c, T0 + (2 * k + 1) * P + P / 10);
-            assert_eq!(slot, 2 * k + 2);
+        // In hand at its due time or up to a panel period before it (the store's reach), the
+        // due time anywhere in the period: every frame two slots after the last, never the
+        // slot between (1,3,1,3).
+        for in_hand in [0, 1_000_000, 6_000_000, P] {
+            for phase in [P / 10, P / 2, 3 * P / 4] {
+                let (mut s, mut c) = phased_at(60, PresentPriority::Latency, false);
+                for k in 0..60 {
+                    let due = T0 + (2 * k + 1) * P + phase;
+                    let slot = aim_from(&mut s, &mut c, due, due - in_hand);
+                    land(&mut s, &mut c, slot, slot);
+                }
+                let i = c.intervals;
+                assert_eq!(
+                    (c.held, c.coalesced, i.n0, i.n1),
+                    (0, 0, 0, 0),
+                    "in hand {in_hand} ns early, phase {phase}: {i:?}"
+                );
+                assert!(i.n2 >= 59, "{i:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_source_at_no_whole_number_of_periods_takes_the_reachable_slot() {
+        // 48 on 120: two and a half periods a frame, so no cadence slot; the slot after the
+        // cadence estimate, 3,3,2,3,2, however early the frame is in hand.
+        let (mut s, mut c) = phased_at(48, PresentPriority::Latency, false);
+        for k in 1..=20 {
+            let due = T0 + k * 5 * P / 2 - LEAD + 100_000;
+            let slot = aim_from(&mut s, &mut c, due, due - 6_000_000);
+            assert_eq!(slot, s.clock.slot_after(due + LEAD), "frame {k}");
             land(&mut s, &mut c, slot, slot);
         }
-        assert_eq!((c.held, c.coalesced, c.intervals.n2), (0, 0, 60));
+        assert_eq!((c.held, c.coalesced, c.intervals.n1), (0, 0, 0));
+        assert_eq!((c.intervals.n2, c.intervals.n3p), (9, 11));
     }
 
     #[test]
@@ -447,7 +510,7 @@ mod tests {
     /// on glass on its slot. Returns (slots shared, slots skipped, misses).
     fn beat(drift_ns: i64) -> (u32, u32, u64) {
         const P60: i64 = 16_666_667;
-        let mut s = Slots::new(60, PresentPriority::Latency, true, false, None);
+        let mut s = Slots::new(60, P60, PresentPriority::Latency, true, false, None);
         let mut c = Counters::default();
         // The Shield latches 0.3 ms after the vsync before the one it presents on.
         s.on_present(T0, T0 - P60 + 300_000, None, true, 0, &mut c);
@@ -495,12 +558,12 @@ mod tests {
     #[test]
     fn an_unphased_clock_or_pacing_off_aims_as_soon_as_possible() {
         let mut c = Counters::default();
-        let mut s = Slots::new(120, PresentPriority::Latency, true, false, None);
+        let mut s = Slots::new(120, P, PresentPriority::Latency, true, false, None);
         // A latch stands in for a vsync but never phases the clock.
         s.on_present(T0, T0 - LEAD, None, false, 0, &mut c);
         assert!(s.bootstrapping() && !s.fence_live());
         assert_eq!(s.next_target(T0, T0, false, &mut c), (0, None));
-        let mut off = Slots::new(120, PresentPriority::Latency, false, false, None);
+        let mut off = Slots::new(120, P, PresentPriority::Latency, false, false, None);
         off.on_present(T0, T0 - LEAD, None, true, 0, &mut c);
         assert!(
             !off.bootstrapping(),
@@ -509,7 +572,7 @@ mod tests {
         assert_eq!(off.next_target(T0, T0, false, &mut c), (0, None));
         assert_eq!(c.held, 0);
         // No seed: the fallback period until the choreographer states one; 0 states nothing.
-        let mut unseeded = Slots::new(0, PresentPriority::Latency, true, false, None);
+        let mut unseeded = Slots::new(0, P, PresentPriority::Latency, true, false, None);
         unseeded.set_period(0);
         assert_eq!(
             (unseeded.period_ns(), unseeded.clock_period_ns()),
@@ -574,7 +637,7 @@ mod tests {
     #[test]
     fn latch_only_presents_score_the_spacing_off_the_period() {
         let mut c = Counters::default();
-        let mut s = Slots::new(120, PresentPriority::Latency, true, false, None);
+        let mut s = Slots::new(120, P, PresentPriority::Latency, true, false, None);
         s.note_latch(0, &mut c);
         assert_eq!(c.unlatched, 1);
         for k in [0, 1, 3, 3] {
