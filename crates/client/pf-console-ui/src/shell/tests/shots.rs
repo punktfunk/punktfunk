@@ -818,12 +818,13 @@ fn store_shots() {
 /// `PF_CONSOLE_STORE=<dir> cargo test -p pf-console-ui -- --ignored website_shots`.
 /// Apple scales are `ConsoleView.designScale`: iOS is screen scale × 0.75 on a phone and × 1
 /// on an iPad; macOS is max(short side px / 800, backing × 0.75). webOS passes none, so a
-/// panel takes the couch k = height / 800: 1.35 at 1080p, 2.7 at 4K. No safe-area insets:
-/// the backdrop runs edge to edge.
+/// panel takes the couch k = height / 800: 1.35 at 1080p, 2.7 at 4K. The Deck is twice its
+/// 1280×800 panel: k = 2 draws its 1× layout sharp enough for a close render. No safe-area
+/// insets: the backdrop runs edge to edge.
 #[test]
 #[ignore]
 fn website_shots() {
-    use crate::platform::Platform::{Apple, WebOS};
+    use crate::platform::Platform::{Apple, Desktop, WebOS};
     let mut rig = Rig::new(crate::console::Viewport::plain(1920, 1080), WebOS);
     for (device, width, height, scale, platform) in [
         ("iphone", 2868, 1320, Some(3.0 * 0.75), Apple),
@@ -831,6 +832,7 @@ fn website_shots() {
         ("mac", 3024, 1964, Some(1964.0 / 800.0), Apple),
         ("tv", 1920, 1080, None, WebOS),
         ("tv-4k", 3840, 2160, None, WebOS),
+        ("deck", 2560, 1600, None, Desktop),
     ] {
         rig.viewport = crate::console::Viewport {
             width,
@@ -839,6 +841,10 @@ fn website_shots() {
             scale,
         };
         rig.platform = platform;
+        if device == "deck" {
+            rig.pads[0].name = "Steam Deck".into();
+            rig.pads[0].pref = GamepadPref::SteamDeck;
+        }
         // The settled row fetches Battlestation's games, and nothing answers in a test.
         let mut s = rig.home();
         rig.frames(&mut s, 60);
