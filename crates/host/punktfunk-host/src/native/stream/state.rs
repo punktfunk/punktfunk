@@ -152,6 +152,9 @@ pub(super) struct Diag {
     pub(super) st_submit: Vec<u32>,
     pub(super) st_wait: Vec<u32>,
     pub(super) st_queue: Vec<u32>,
+    /// The first degraded verdict logs the stage histograms once; until then they sample
+    /// without `PUNKTFUNK_PERF` too.
+    pub(super) stages_owed: bool,
     pub(super) was_degraded: bool,
     pub(super) last_cadence_log: Option<std::time::Instant>,
     pub(super) cadence_flips_suppressed: u32,
@@ -170,6 +173,7 @@ impl Diag {
             st_submit: Vec::new(),
             st_wait: Vec::new(),
             st_queue: Vec::new(),
+            stages_owed: true,
             was_degraded: false,
             last_cadence_log: None,
             cadence_flips_suppressed: 0,

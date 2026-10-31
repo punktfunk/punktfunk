@@ -18,6 +18,9 @@ const DEESCALATE_CLEAN_FRAMES: u32 = 600;
 pub(super) const DEESCALATE_BACKOFF_START: std::time::Duration = std::time::Duration::from_secs(60);
 const DEESCALATE_BACKOFF_MAX: std::time::Duration = std::time::Duration::from_secs(25 * 60);
 const CADENCE_LOG_MIN_GAP: std::time::Duration = std::time::Duration::from_secs(5);
+// Without `PUNKTFUNK_PERF` a stage histogram keeps at most this many samples; a trim keeps
+// the newer half. 256 is ~4 s at 60 fps.
+const STAGE_WINDOW: usize = 256;
 // The cadence line's chain percentiles cover this many ticks: ~1 s at 60 fps.
 const CHAIN_WINDOW: usize = 64;
 
@@ -50,6 +53,15 @@ impl ChainWindow {
         let mut v = self.us;
         (self.len > 0).then(|| percentile(&mut v[..self.len], q))
     }
+}
+
+/// Append a stage sample. Under `PUNKTFUNK_PERF` the 2 s report clears the histogram;
+/// without it the trim at [`STAGE_WINDOW`] bounds it.
+fn push_stage(v: &mut Vec<u32>, us: u32, perf: bool) {
+    if !perf && v.len() >= STAGE_WINDOW {
+        v.drain(..STAGE_WINDOW / 2);
+    }
+    v.push(us);
 }
 
 /// The frames per second a source period implies, rounded.
@@ -223,13 +235,10 @@ impl StreamState {
                 .store(t.dropped_total, Ordering::Relaxed);
         }
         let cap_result = grab_frame(&mut *self.live.capturer, &mut self.live.asks, telemetry);
-        let cap_us = if measure {
-            t_cap.elapsed().as_micros() as u32
-        } else {
-            0
-        };
-        if self.facts.perf {
-            self.diag.st_cap.push(cap_us);
+        let cap_elapsed_us = t_cap.elapsed().as_micros() as u32;
+        let cap_us = if measure { cap_elapsed_us } else { 0 };
+        if self.stages_sampled() {
+            push_stage(&mut self.diag.st_cap, cap_elapsed_us, self.facts.perf);
         }
         let mut was_reset = false;
         run_parked_stage(
@@ -331,6 +340,21 @@ impl StreamState {
              at high send rate ⇒ the source isn't producing frames, not an encode stall; \
              regens alone are a cursor over a frozen image)"
         );
+        self.log_stage_perf();
+        self.diag.diag_new = 0;
+        self.diag.diag_repeat = 0;
+        self.diag.diag_regen = 0;
+        self.diag.diag_at = std::time::Instant::now();
+    }
+
+    /// The stage histograms take samples under `PUNKTFUNK_PERF`, and in an adaptive session
+    /// until the first degraded verdict has logged them.
+    fn stages_sampled(&self) -> bool {
+        self.facts.perf || (self.diag.stages_owed && self.pipelining.adaptive)
+    }
+
+    /// The stage percentiles over the histograms' window, which then starts over.
+    fn log_stage_perf(&mut self) {
         let wait_max = self.diag.st_wait.iter().copied().max().unwrap_or(0);
         tracing::info!(
             queue_us_p50 = percentile(&mut self.diag.st_queue, 0.50),
@@ -348,10 +372,6 @@ impl StreamState {
         self.diag.st_submit.clear();
         self.diag.st_wait.clear();
         self.diag.st_queue.clear();
-        self.diag.diag_new = 0;
-        self.diag.diag_repeat = 0;
-        self.diag.diag_regen = 0;
-        self.diag.diag_at = std::time::Instant::now();
     }
 
     /// Submit this tick's frame (or wait on the driver's owed AUs), then poll every ready AU
@@ -387,8 +407,9 @@ impl StreamState {
         } else {
             (submit_ns, 0)
         };
-        if self.facts.perf && !repeat {
-            self.diag.st_queue.push(queue_us);
+        let stages = self.stages_sampled();
+        if stages && !repeat {
+            push_stage(&mut self.diag.st_queue, queue_us, self.facts.perf);
         }
         let t_submit = std::time::Instant::now();
         let wire_index = self
@@ -435,8 +456,9 @@ impl StreamState {
         } else {
             0
         };
-        if self.facts.perf {
-            self.diag.st_submit.push(submit_us);
+        if stages {
+            let us = submit_elapsed.as_micros() as u32;
+            push_stage(&mut self.diag.st_submit, us, self.facts.perf);
         }
         self.next = if frame_driven_enabled() && self.live.capturer.feed().is_some() {
             std::time::Instant::now() + self.live.interval
@@ -616,16 +638,16 @@ impl StreamState {
                 self.clock.inflight.pop_front();
                 self.clock.au_seq = self.clock.au_seq.wrapping_add(1);
                 self.sent += 1;
-                if self.facts.perf {
-                    self.diag.st_wait.push(wait_total_us);
-                    if self.sent % 120 == 0 {
-                        tracing::info!(
-                            first_slice_us = first_chunk_us,
-                            encode_us,
-                            "streamed AU (sampled): first slice handed to send at \
-                             first_slice_us; encode finished at encode_us"
-                        );
-                    }
+                if self.stages_sampled() {
+                    push_stage(&mut self.diag.st_wait, wait_total_us, self.facts.perf);
+                }
+                if self.facts.perf && self.sent % 120 == 0 {
+                    tracing::info!(
+                        first_slice_us = first_chunk_us,
+                        encode_us,
+                        "streamed AU (sampled): first slice handed to send at \
+                         first_slice_us; encode finished at encode_us"
+                    );
                 }
                 return Polled::Au;
             }
@@ -643,8 +665,9 @@ impl StreamState {
         } else {
             0
         };
-        if self.facts.perf {
-            self.diag.st_wait.push(wait_us);
+        if self.stages_sampled() {
+            let us = wait_elapsed.as_micros() as u32;
+            push_stage(&mut self.diag.st_wait, us, self.facts.perf);
         }
         let au = match polled {
             Ok(Some(au)) => au,
@@ -820,6 +843,7 @@ impl StreamState {
     /// this tick's encode chain and the last [`CHAIN_WINDOW`] ticks', the source period, the
     /// path the encoder reads, and the producer pool's withheld peak since the last line. On
     /// the frame-driven path a chain near the source period means the loop sets that period.
+    /// The first degraded line also logs the stage percentiles once without `PUNKTFUNK_PERF`.
     fn log_cadence_flip(
         &mut self,
         degraded: bool,
@@ -875,6 +899,9 @@ impl StreamState {
         }
         self.diag.last_cadence_log = Some(now);
         self.diag.cadence_flips_suppressed = 0;
+        if degraded && std::mem::take(&mut self.diag.stages_owed) && !self.facts.perf {
+            self.log_stage_perf();
+        }
     }
 
     /// Wait for the next tick ([`crate::send_pacing::wait_next_tick`]) on this session's
@@ -1055,6 +1082,26 @@ mod tests {
     }
     use super::*;
 
+    /// The first degraded line spends the stage one-shot; a flip inside the gap only counts.
+    #[test]
+    fn the_first_degrade_logs_the_stages_once() {
+        let mut f = super::super::swap::tests::fake();
+        assert!(
+            f.st.stages_sampled(),
+            "an adaptive session samples before PUNKTFUNK_PERF"
+        );
+        f.st.diag.st_submit.push(9_000);
+        let budget = std::time::Duration::from_millis(20);
+        f.st.log_cadence_flip(true, true, budget);
+        assert!(
+            f.st.diag.st_submit.is_empty(),
+            "the one-shot reads and clears the window"
+        );
+        assert!(!f.st.stages_sampled());
+        f.st.log_cadence_flip(false, false, budget);
+        assert_eq!(f.st.diag.cadence_flips_suppressed, 1);
+    }
+
     /// The ring answers over its newest entries only, and nothing before the first tick.
     #[test]
     fn the_chain_window_reads_its_newest_ticks() {
@@ -1073,6 +1120,30 @@ mod tests {
             w.percentile(1.5 / CHAIN_WINDOW as f64),
             Some(1_001),
             "the oldest entry went: reading left the ring's order alone"
+        );
+    }
+
+    /// Without `PUNKTFUNK_PERF` a histogram keeps the newest samples within the window.
+    #[test]
+    fn an_unreported_stage_histogram_stays_bounded() {
+        let mut v = Vec::new();
+        for us in 0..1_000 {
+            push_stage(&mut v, us, false);
+        }
+        assert!(v.len() <= STAGE_WINDOW && v.len() >= STAGE_WINDOW / 2);
+        assert_eq!(v.last(), Some(&999));
+        assert!(
+            v.windows(2).all(|w| w[0] + 1 == w[1]),
+            "the newest run, in order"
+        );
+        let mut perf = Vec::new();
+        for us in 0..1_000 {
+            push_stage(&mut perf, us, true);
+        }
+        assert_eq!(
+            perf.len(),
+            1_000,
+            "the 2 s report clears it under PUNKTFUNK_PERF"
         );
     }
 
