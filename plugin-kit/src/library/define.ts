@@ -157,9 +157,7 @@ const logOutcomes = (outcomes: ReadonlyArray<AccessRequestOutcome>) =>
  * the host never answered is asked again on the next scan; it never fails the scan.
  */
 const accessAwareCompute = <Cfg, A, E, R>(
-	wants:
-		| ((cfg: Cfg) => ReadonlyArray<string | AccessRequestPath>)
-		| undefined,
+	wants: ((cfg: Cfg) => ReadonlyArray<string | AccessRequestPath>) | undefined,
 	title: string,
 	load: Effect.Effect<Cfg, E, R>,
 	compute: (cfg: Cfg) => Effect.Effect<A, E, R>,
