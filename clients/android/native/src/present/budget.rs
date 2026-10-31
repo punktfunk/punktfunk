@@ -19,6 +19,12 @@ use super::{Counters, FALLBACK_PERIOD_NS};
 /// this long after the present.
 pub(crate) const STALE_REOPEN_NS: i64 = 100_000_000;
 
+/// Presents SurfaceFlinger may hold at once, completed or not: the ASC reader pool less the
+/// store's deepest buffer and one image for the acquire. A display that shows frames refreshes
+/// late (a Shield TV: two to four) holds that many beyond the two ahead; past the pool the
+/// acquire fails and the decoder stalls, where the store's drop is the cheaper loss.
+pub(crate) const PRESENTED_CAP: usize = 8;
+
 /// The ceiling of the SurfaceView submit margin ahead of a timeline's EXPECTED PRESENT, which is
 /// SurfaceFlinger's own latch lead: a released buffer must be queued by SF's wakeup for that
 /// vsync, so a present closer than the margin is missed and the next one targeted. Not the
@@ -289,24 +295,28 @@ impl AscBudget {
     }
 
     /// The frame one ASC pump presents, if any. `bootstrapping`: pacing wants slots and no
-    /// present has phased the clock yet. `latches`: when SurfaceFlinger latches each present not
-    /// yet completed, oldest first. Only latches still ahead count against the cap: a completion
-    /// that trails its latch by refreshes (a display queue holding the frame, as a Shield TV's
-    /// does) must not park the next frame, which is how two of ours end up in one cycle. The
-    /// oldest past [`STALE_REOPEN_NS`] never completes and force-opens the budget, as does a
-    /// count with no present behind it. `reach_ns`: the instant a FIFO head must be due by.
-    /// `downrated`: no cap, SurfaceFlinger coalesces.
+    /// present has phased the clock yet. `latches`: when SurfaceFlinger latches each present it
+    /// still holds, oldest first; at [`PRESENTED_CAP`] of them nothing goes out. Only latches
+    /// still ahead count against the cap of two: a completion that trails its latch by refreshes
+    /// (a display queue holding the frame, as a Shield TV's does) must not park the next frame,
+    /// which is how two of ours end up in one cycle. The oldest past [`STALE_REOPEN_NS`] never
+    /// completes and force-opens the budget, as does a count with no present behind it.
+    /// `reach_ns`: the instant a FIFO head must be due by. `downrated`: no cap of two,
+    /// SurfaceFlinger coalesces.
     #[allow(clippy::too_many_arguments)] // one caller; a struct would only rename them
     pub(crate) fn pick<F>(
         &mut self,
         store: &mut Store<F>,
         now_ns: i64,
         bootstrapping: bool,
-        latches: impl DoubleEndedIterator<Item = i64>,
+        latches: impl ExactSizeIterator<Item = i64> + DoubleEndedIterator,
         reach_ns: i64,
         downrated: bool,
         c: &mut Counters,
     ) -> Option<Held<F>> {
+        if latches.len() >= PRESENTED_CAP {
+            return None;
+        }
         let cap = if bootstrapping { 1 } else { 2 };
         if !downrated && self.inflight >= cap {
             let pending: Vec<i64> = latches.rev().take(self.inflight as usize).collect();
@@ -728,6 +738,22 @@ mod tests {
         let f = b.pick(&mut s, T, true, std::iter::empty(), T + P, false, &mut c);
         assert_eq!(f.map(|h| h.frame), Some(2));
         assert_eq!(c.forced, 2);
+    }
+
+    #[test]
+    fn the_reader_pool_caps_what_surfaceflinger_may_hold() {
+        let mut b = AscBudget::default();
+        let mut s = latency();
+        let mut c = Counters::default();
+        // Every present long latched; a display holds them until a successor's completion.
+        let held = [T - P; PRESENTED_CAP];
+        s.push(1, 0, T, &mut c, drop);
+        let full = b.pick(&mut s, T, false, held.iter().copied(), T + P, true, &mut c);
+        assert!(full.is_none(), "downrated or not");
+        let one_free = held[1..].iter().copied();
+        let f = b.pick(&mut s, T, false, one_free, T + P, false, &mut c);
+        assert_eq!(f.map(|h| h.frame), Some(1));
+        assert_eq!(c.forced, 0);
     }
 
     #[test]

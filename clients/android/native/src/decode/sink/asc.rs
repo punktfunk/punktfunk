@@ -31,7 +31,7 @@ use super::super::surface_control::{
 };
 use super::super::vsync::VsyncShared;
 use super::{Downrate, Routed, Sink};
-use crate::present::budget::AscBudget;
+use crate::present::budget::{AscBudget, PRESENTED_CAP};
 use crate::present::slots::Slots;
 use crate::present::store::{Held, Store};
 use crate::present::verdict::{Second, Verdict, Verdicts};
@@ -39,10 +39,10 @@ use crate::present::{cadence_suffix, frame_interval_ns, Counters, PresentPriorit
 use crate::session::PictureLayers;
 use crate::sys::{now_monotonic_ns, sysprop};
 
-/// Reader pool depth. Must cover the codec's own in-flight outputs + the presenter's held candidate
-/// / FIFO + the buffers still latched on SurfaceFlinger awaiting their release fence. Eight is
-/// generous for a one-in-flight-ish presenter and small enough that no device balks.
-const READER_MAX_IMAGES: i32 = 8;
+/// Reader pool depth: the presents SurfaceFlinger may hold ([`PRESENTED_CAP`]), the store's
+/// deepest buffer, and the acquire in hand. Images allocate lazily, so a display that holds two
+/// costs what it did at eight.
+const READER_MAX_IMAGES: i32 = PRESENTED_CAP as i32 + 4;
 
 /// Completed presents whose fence is still pending; older entries are occluded frames and drop.
 const AWAITING_CAP: usize = 8;
