@@ -204,6 +204,8 @@ struct Ask {
     client_hdr: Option<pf_frame::HdrMeta>,
     hw_cursor: bool,
     quit: Option<Arc<AtomicBool>>,
+    /// An HDR session in a seat: [`VirtualDisplayManager::isolate_group_first`] writes it.
+    seat_hdr: bool,
 }
 
 /// What the ladder's acts carry from rung to rung.
@@ -1113,12 +1115,14 @@ impl VirtualDisplayManager {
     /// climbing the isolate ladder ([`Ladder`]) in one transition. A seat override is resolved
     /// before any driver access. The returned [`MonitorLease`] releases only its matching
     /// generation. A device that dies under the ADD or whose seat adapter left is retired once
-    /// that transition commits, then reopened outside any and climbed once more.
+    /// that transition commits, then reopened outside any and climbed once more. `hdr` is the
+    /// session's verdict, which only a seat needs this early.
     pub(crate) fn acquire(
         &'static self,
         mode: Mode,
         client_fp: Option<[u8; 32]>,
         client_hdr: Option<pf_frame::HdrMeta>,
+        hdr: bool,
         hw_cursor: bool,
         quit: Option<Arc<AtomicBool>>,
     ) -> Result<VirtualOutput> {
@@ -1133,6 +1137,7 @@ impl VirtualDisplayManager {
             client_hdr,
             hw_cursor,
             quit,
+            seat_hdr: hdr && in_seat_session(),
         };
         let mut reopened = false;
         loop {
@@ -1209,7 +1214,7 @@ impl VirtualDisplayManager {
                 Next::Remove => self.remove_for_rearrival(dev, t, ask, &mut r),
                 Next::Add { rollback } => self.add(dev, t, ask, &mut r, rollback),
                 Next::ResolveTarget => self.resolve(t, ask.slot, &mut r),
-                Next::Isolate => self.isolate(t, &r),
+                Next::Isolate => self.isolate(t, ask, &r),
                 Next::WaitSettle(ceiling) => r.settle(ceiling),
                 Next::Verify => self.verify(t, &mut r),
                 Next::Commit(change) => return Climb::Done(self.commit(t, ask, r, change)),
@@ -1481,7 +1486,7 @@ impl VirtualDisplayManager {
     /// Writes the mode the ADD advertised, then the group topology: a fresh member's
     /// ([`Self::apply_group_topology_on_add`]), or a re-arrival's re-isolate with the new
     /// target in place of the old ([`Self::reisolate_after_swap`]).
-    fn isolate(&'static self, t: &mut MgrInner, r: &Rungs) -> Seen {
+    fn isolate(&'static self, t: &mut MgrInner, ask: &Ask, r: &Rungs) -> Seen {
         let mon = r.mon.as_ref().expect("the isolate rung follows an ADD");
         let gdi = mon
             .gdi_name
@@ -1503,7 +1508,7 @@ impl VirtualDisplayManager {
         if r.old.is_some() {
             self.reisolate_after_swap(t, key);
         } else {
-            self.apply_group_topology_on_add(t, key, gdi, r.first);
+            self.apply_group_topology_on_add(t, key, gdi, r.first, ask.seat_hdr);
         }
         Seen::Isolated
     }
@@ -1968,6 +1973,7 @@ impl VirtualDisplayManager {
         added_key: CcdTargetKey,
         gdi: &str,
         first_member: bool,
+        seat_hdr: bool,
     ) {
         use crate::policy::Topology;
         // A live exclusive group's stored isolate is its own; its teardown stores the restore.
@@ -1975,7 +1981,9 @@ impl VirtualDisplayManager {
             pf_win_display::layout_db::repair();
         }
         match inner.group.topology {
-            Topology::Exclusive if first_member => self.isolate_group_first(inner, added_key, gdi),
+            Topology::Exclusive if first_member => {
+                self.isolate_group_first(inner, added_key, gdi, seat_hdr);
+            }
             Topology::Exclusive => {
                 // Re-isolate so the fresh member joins the composited set. Discard the
                 // snapshot unless the first member's isolate failed — then adopt this one,
@@ -2043,14 +2051,15 @@ impl VirtualDisplayManager {
         }
     }
 
-    /// Exclusive, first member: darken and pin what the isolate is about to deactivate, isolate
-    /// to the keep-set as one topology transaction, then PnP-disable the monitors it
-    /// deactivated and start the watchdog that keeps the isolate in place.
+    /// Exclusive, first member: darken and pin what the isolate is about to deactivate, give a
+    /// seat its HDR, isolate to the keep-set as one topology transaction, then PnP-disable the
+    /// monitors it deactivated and start the watchdog that keeps the isolate in place.
     fn isolate_group_first(
         &'static self,
         inner: &mut MgrInner,
         added_key: CcdTargetKey,
         gdi: &str,
+        seat_hdr: bool,
     ) {
         // DDC off BEFORE isolate: an HMONITOR (and the DDC channel) exists only while the
         // display is still active. Evidence: `windows/ddc.rs`.
@@ -2061,6 +2070,12 @@ impl VirtualDisplayManager {
         // read. Emulation outlives the process. Evidence: `pf_win_display::adl_emul`.
         if crate::policy::prefs().edid_lock() {
             inner.group.edid_locked = pf_win_display::adl_emul::lock_for_stream();
+        }
+        // A seat's target activates advanced colour only beside a second path, and this isolate
+        // removes the last one. The capture's write comes too late to take.
+        if seat_hdr {
+            let took = self.ccd.set_advanced_color(added_key, true);
+            tracing::info!(target = %added_key, took, "seat HDR written before the isolate");
         }
         // The PnP leases below are stamped with this transaction's generation.
         let (saved, finished) = isolate_txn(
@@ -3056,7 +3071,7 @@ mod tests {
         }
         let hold = ccd.hold_next_isolate();
         let acquire = std::thread::spawn(move || {
-            mgr.acquire(m(1920, 1080, 60), None, None, false, None)
+            mgr.acquire(m(1920, 1080, 60), None, None, false, false, None)
                 .map(|_| ())
         });
         hold.entered
@@ -3090,6 +3105,28 @@ mod tests {
             store: false,
         };
         assert_eq!(ccd.take_calls(), [reisolate]);
+        topology_churn::release();
+    }
+
+    /// A seat's HDR lands before the isolate that leaves its display alone. An SDR session
+    /// writes nothing, so the display stays as the capture will pin it.
+    #[test]
+    fn a_seat_writes_hdr_before_the_isolate_leaves_its_display_alone() {
+        let _turn = GENERATIONS.lock().unwrap_or_else(|e| e.into_inner());
+        let ccd = FakeCcd::new();
+        let mgr = fake_manager(&ccd);
+        let write = CcdCall::SetAdvancedColor {
+            key: key(7),
+            enable: true,
+        };
+        let isolate = CcdCall::Isolate {
+            keep: vec![key(7)],
+            store: false,
+        };
+        for (hdr, calls) in [(true, vec![write, isolate.clone()]), (false, vec![isolate])] {
+            mgr.isolate_group_first(&mut MgrInner::default(), key(7), r"\\.\DISPLAY7", hdr);
+            assert_eq!(ccd.take_calls(), calls, "hdr={hdr}");
+        }
         topology_churn::release();
     }
 
