@@ -177,14 +177,30 @@ pub fn console_session_mismatch() -> Option<(u32, u32)> {
     (console != 0xFFFF_FFFF && own != console).then_some((own, console))
 }
 
-/// Drops this session's connection and leaves the session running.
+/// Drops this session's connection and leaves the session running. It first writes the seat
+/// keeper's mark ([`pf_paths::seat::SEAT_DISCONNECT_MARK`]) into this host's config dir, so the
+/// keeper reattaches without spending an attempt. A failed disconnect deletes the mark.
 #[cfg(target_os = "windows")]
 pub fn disconnect_own_session() -> windows::core::Result<()> {
     use windows::Win32::System::RemoteDesktop::{
         WTSDisconnectSession, WTS_CURRENT_SERVER_HANDLE, WTS_CURRENT_SESSION,
     };
+    let mark = pf_paths::config_dir().join(pf_paths::seat::SEAT_DISCONNECT_MARK);
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis();
+    if let Err(error) = std::fs::write(&mark, now.to_string()) {
+        tracing::warn!(%error, "seat disconnect mark not written");
+    }
     // SAFETY: takes the local-server handle and the current-session constant by value.
-    unsafe { WTSDisconnectSession(Some(WTS_CURRENT_SERVER_HANDLE), WTS_CURRENT_SESSION, false) }
+    let dropped = unsafe {
+        WTSDisconnectSession(Some(WTS_CURRENT_SERVER_HANDLE), WTS_CURRENT_SESSION, false)
+    };
+    if dropped.is_err() {
+        let _ = std::fs::remove_file(&mark);
+    }
+    dropped
 }
 
 /// The session this process runs in; `None` when Windows can't say.

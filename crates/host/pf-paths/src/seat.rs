@@ -260,6 +260,32 @@ pub fn trust_dir() -> Option<std::path::PathBuf> {
         .filter(|dir| dir.is_absolute())
 }
 
+/// The file a Windows seat host writes into its config dir just before it drops its own session's
+/// connection: the time, in unix milliseconds as decimal text.
+pub const SEAT_DISCONNECT_MARK: &str = "disconnect-mark";
+
+/// How long after it was written a disconnect mark still excuses a drop.
+const DISCONNECT_MARK_LIFE: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// Whether a [`SEAT_DISCONNECT_MARK`]'s text excuses the drop of a connection that began at
+/// `since`: its time is at or after `since` and at most 30 s before `now`. A mark from before the
+/// connection began belongs to an earlier one.
+pub fn mark_excuses_drop(
+    mark: &str,
+    since: std::time::SystemTime,
+    now: std::time::SystemTime,
+) -> bool {
+    let Some(marked) = mark.trim().parse().ok().and_then(|millis| {
+        std::time::UNIX_EPOCH.checked_add(std::time::Duration::from_millis(millis))
+    }) else {
+        return false;
+    };
+    marked >= since
+        && now
+            .duration_since(marked)
+            .is_ok_and(|age| age <= DISCONNECT_MARK_LIFE)
+}
+
 /// Where a host reads the box's library from (`PUNKTFUNK_LIBRARY_DIR`): `library*.json`,
 /// `library-metadata/`, and on Windows the plugin manifests and grants an `exec` entry resolves
 /// against. A Windows seat names the box's config dir; on Linux the door and every seat but the
@@ -304,6 +330,33 @@ pub fn uinput_devname(account: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A mark excuses a drop only between the connection's start and 30 s after it was written.
+    #[test]
+    fn a_disconnect_mark_excuses_only_its_own_connection_for_30_s() {
+        use std::time::{Duration, UNIX_EPOCH};
+        let since = UNIX_EPOCH + Duration::from_secs(1_000);
+        let at = |secs: u64| UNIX_EPOCH + Duration::from_secs(secs);
+        let mark = |secs: u64| (secs * 1_000).to_string();
+        assert!(mark_excuses_drop(&mark(1_005), since, at(1_010)));
+        assert!(mark_excuses_drop(
+            &format!("{}\r\n", mark(1_000)),
+            since,
+            at(1_030)
+        ));
+        assert!(
+            !mark_excuses_drop(&mark(999), since, at(1_001)),
+            "before the connection"
+        );
+        assert!(!mark_excuses_drop(&mark(1_005), since, at(1_036)), "stale");
+        assert!(
+            !mark_excuses_drop(&mark(1_005), since, at(1_004)),
+            "from the future"
+        );
+        assert!(!mark_excuses_drop("", since, at(1_010)));
+        assert!(!mark_excuses_drop("soon", since, at(1_010)));
+        assert!(!mark_excuses_drop(&u64::MAX.to_string(), since, at(1_010)));
+    }
 
     /// What each predicate answers, by the markers set. Inputs: `S` `PUNKTFUNK_SEAT_SESSION=1`,
     /// `O` `PUNKTFUNK_SEAT_OWNER=1`, `H` `PUNKTFUNK_SEAT_HEADLESS=1`, `D` `serve --door`, `P`
