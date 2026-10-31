@@ -26,7 +26,8 @@ impl AppModel {
                     (mgmt, req.host.port),
                     &identity,
                     req.host.fp_hex.as_deref().unwrap_or_default(),
-                );
+                )
+                .unwrap_or_else(|e| e);
                 let _ = out.send(AppMsg::Toast(msg));
             })
             .ok();
@@ -90,7 +91,8 @@ impl AppModel {
                     req.host.fp_hex.as_deref().unwrap_or_default(),
                     &action_id,
                     &label,
-                );
+                )
+                .unwrap_or_else(|e| e);
                 let _ = out.send(AppMsg::Toast(msg));
             })
             .ok();

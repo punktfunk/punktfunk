@@ -37,10 +37,11 @@ fn pair_page(props: &Svc, live_pin: &Rc<RefCell<String>>) -> View {
     let target = ctx.shared.target.lock().unwrap().clone();
 
     let pair_btn = {
-        let (ctx2, ss, st, live, target2) = (
+        let (ctx2, ss, st, svc, live, target2) = (
             ctx.clone(),
             set_screen.clone(),
             set_status.clone(),
+            props.clone(),
             live_pin.clone(),
             target.clone(),
         );
@@ -48,8 +49,13 @@ fn pair_page(props: &Svc, live_pin: &Rc<RefCell<String>>) -> View {
             .style(ButtonStyle::Accent)
             .on_click(move || {
                 let pin = live.borrow().trim().to_string();
-                let (ctx3, ss, st, target3) =
-                    (ctx2.clone(), ss.clone(), st.clone(), target2.clone());
+                let (ctx3, ss, st, svc, target3) = (
+                    ctx2.clone(),
+                    ss.clone(),
+                    st.clone(),
+                    svc.clone(),
+                    target2.clone(),
+                );
                 let generation = ctx3.shared.pair_gen.fetch_add(1, Ordering::SeqCst) + 1;
                 std::thread::spawn(move || {
                     let current = || ctx3.shared.pair_gen.load(Ordering::SeqCst) == generation;
@@ -76,9 +82,9 @@ fn pair_page(props: &Svc, live_pin: &Rc<RefCell<String>>) -> View {
                                 }
                                 return;
                             }
-                            st.call(match paired.saved {
-                                Ok(()) => format!("Paired with {}", target3.host.name),
-                                Err(e) => format!("Paired, but couldn't save — {e:#}"),
+                            svc.report(match paired.saved {
+                                Ok(()) => Ok(format!("Paired with {}", target3.host.name)),
+                                Err(e) => Err(format!("Paired, but couldn't save — {e:#}")),
                             });
                             ss.call(Screen::Hosts);
                         }

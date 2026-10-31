@@ -921,14 +921,17 @@ impl ServiceState {
         std::thread::Builder::new()
             .name("punktfunk-sendlogs".into())
             .spawn(move || {
-                console.set_notice(pf_client_core::logring::send_bundle(
-                    "punktfunk-session",
-                    &host_name,
-                    &addr,
-                    (mgmt, stream_port(&fp_hex)),
-                    &identity,
-                    &fp_hex,
-                ));
+                console.set_notice(
+                    pf_client_core::logring::send_bundle(
+                        "punktfunk-session",
+                        &host_name,
+                        &addr,
+                        (mgmt, stream_port(&fp_hex)),
+                        &identity,
+                        &fp_hex,
+                    )
+                    .unwrap_or_else(|e| e),
+                );
             })
             .ok();
     }
@@ -1008,9 +1011,12 @@ impl ServiceState {
             .name("punktfunk-hostaction".into())
             .spawn(move || {
                 let port = stream_port(&fp_hex);
-                console.set_notice(pf_client_core::host_actions::run(
-                    &host_name, &addr, mgmt, port, &identity, &fp_hex, &action_id, &label,
-                ));
+                console.set_notice(
+                    pf_client_core::host_actions::run(
+                        &host_name, &addr, mgmt, port, &identity, &fp_hex, &action_id, &label,
+                    )
+                    .unwrap_or_else(|e| e),
+                );
             })
             .ok();
     }
