@@ -111,8 +111,8 @@ pub fn send_to_host(
 }
 
 /// [`send_to_host`] on (mgmt port, stream port) with the bundle header and outcome every
-/// shell uses. `app` names the binary in the header; the result is the sentence the shell
-/// shows the user.
+/// shell uses. `app` names the binary in the header; `Ok` or `Err` holds the sentence the
+/// shell shows the user.
 #[cfg(desktop)]
 pub fn send_bundle(
     app: &str,
@@ -121,7 +121,7 @@ pub fn send_bundle(
     (mgmt_port, stream_port): (u16, u16),
     identity: &(String, String),
     fp_hex: &str,
-) -> String {
+) -> Result<String, String> {
     // The package version where the build stamped one (every packager sets
     // PUNKTFUNK_BUILD_VERSION), else the crate's: a bundle names the build it came from.
     let version = option_env!("PUNKTFUNK_BUILD_VERSION")
@@ -136,11 +136,13 @@ pub fn send_bundle(
     match send_to_host(addr, mgmt_port, stream_port, identity, pin, &header) {
         Ok(id) => {
             tracing::info!(host = %host_name, id, "client logs uploaded");
-            format!("Logs sent to {host_name} — download them from its web console's Logs page")
+            Ok(format!(
+                "Logs sent to {host_name} — download them from its web console's Logs page"
+            ))
         }
         Err(e) => {
             tracing::warn!(host = %host_name, error = %e, "client log upload failed");
-            format!("Couldn't send logs — {e}")
+            Err(format!("Couldn't send logs — {e}"))
         }
     }
 }

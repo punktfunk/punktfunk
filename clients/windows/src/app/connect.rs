@@ -438,10 +438,11 @@ pub(crate) fn request_access(props: &Svc, target: &Target) {
     *ctx.shared.target.lock().unwrap() = target.clone();
     props.set_status.call(String::new());
     props.set_screen.call(Screen::RequestAccess);
-    let (ctx, ss, st, target) = (
+    let (ctx, ss, st, svc, target) = (
         ctx.clone(),
         props.set_screen.clone(),
         props.set_status.clone(),
+        props.clone(),
         target.clone(),
     );
     std::thread::spawn(move || {
@@ -480,9 +481,9 @@ pub(crate) fn request_access(props: &Svc, target: &Target) {
             }
             return;
         }
-        st.call(match paired.saved {
-            Ok(()) => format!("Paired with {}", target.host.name),
-            Err(e) => format!("Paired, but couldn't save — {e:#}"),
+        svc.report(match paired.saved {
+            Ok(()) => Ok(format!("Paired with {}", target.host.name)),
+            Err(e) => Err(format!("Paired, but couldn't save — {e:#}")),
         });
         ss.call(Screen::Hosts);
     });

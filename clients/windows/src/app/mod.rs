@@ -207,12 +207,30 @@ pub(crate) struct Svc {
     pub(crate) pal: Palette,
     pub(crate) set_screen: AsyncSetState<Screen>,
     pub(crate) set_status: AsyncSetState<String>,
+    /// The status line for what isn't a failure. Pages reach it through [`Svc::note`] and
+    /// [`Svc::report`].
+    set_note: AsyncSetState<(String, InfoBarSeverity)>,
     /// The hosts page resets the speed test to `Running` before navigating; the probe worker
     /// completes it.
     pub(crate) set_speed: AsyncSetState<SpeedState>,
     /// The hosts page starts a library fetch before navigating; the worker and the art
     /// stream complete it.
     pub(crate) set_library: AsyncSetState<library::LibraryState>,
+}
+
+impl Svc {
+    /// Progress or a plain remark on the status line.
+    pub(crate) fn note(&self, msg: String) {
+        self.set_note.call((msg, InfoBarSeverity::Informational));
+    }
+
+    /// A finished action's sentence on the status line, styled by how it ended.
+    pub(crate) fn report(&self, outcome: Result<String, String>) {
+        match outcome {
+            Ok(msg) => self.set_note.call((msg, InfoBarSeverity::Success)),
+            Err(msg) => self.set_status.call(msg),
+        }
+    }
 }
 
 impl PartialEq for Svc {
@@ -235,7 +253,10 @@ impl PartialEq for ShellInput {
 /// the window's own reports.
 pub(crate) enum Msg {
     Screen(Screen),
+    /// A failure, kept until the next status write. Empty clears the line.
     Status(String),
+    /// A status line that reports no failure, cleared after [`NOTE_LIFE`].
+    Note((String, InfoBarSeverity)),
     Hosts(Vec<DiscoveredHost>),
     Probed(HashMap<String, bool>),
     Hud(Box<stream::HudSample>),
@@ -284,6 +305,10 @@ pub(crate) enum Anim {
 const ENTER_FRAMES: u32 = 14;
 const ADD_FRAMES: u32 = 12;
 
+/// Outlasts the 5 s connect budget behind an in-flight note, so a dead host's failure replaces
+/// the note rather than following a blank line.
+const NOTE_LIFE: std::time::Duration = std::time::Duration::from_secs(6);
+
 /// The shell's state. `settings_*` and `custom_*` are the settings page's, held here because
 /// that page is a plain function of this state.
 pub(crate) struct Shell {
@@ -294,6 +319,9 @@ pub(crate) struct Shell {
     width: f64,
     screen: Screen,
     status: String,
+    status_severity: InfoBarSeverity,
+    /// Clears a note. Any later status write drops it, which cancels the clear.
+    note_timer: Option<ComponentTimer>,
     hosts: Vec<DiscoveredHost>,
     /// Saved-host reachability, keyed by `KnownHost::card_key`, from the probe sweep.
     probed: HashMap<String, bool>,
@@ -348,6 +376,7 @@ impl Shell {
             pal: self.pal,
             set_screen: self.set(Msg::Screen),
             set_status: self.set(Msg::Status),
+            set_note: self.set(Msg::Note),
             set_speed: self.set(Msg::Speed),
             set_library: self.set(Msg::Library),
         }
@@ -368,6 +397,8 @@ impl Component for Shell {
             width: WINDOW_W,
             screen: Screen::Hosts,
             status: String::new(),
+            status_severity: InfoBarSeverity::Error,
+            note_timer: None,
             hosts: Vec::new(),
             probed: HashMap::new(),
             hud: stream::HudSample::default(),
@@ -427,7 +458,16 @@ impl Component for Shell {
                     self.enter = Tween::start(0.0, 1.0, ENTER_FRAMES, Msg::Tick(Anim::Screen), cx);
                 }
             }
-            Msg::Status(s) => self.status = s,
+            Msg::Status(s) => {
+                self.status = s;
+                self.status_severity = InfoBarSeverity::Error;
+                self.note_timer = None;
+            }
+            Msg::Note((s, severity)) => {
+                self.status = s;
+                self.status_severity = severity;
+                self.note_timer = Some(cx.set_timeout(NOTE_LIFE, Msg::Status(String::new())));
+            }
             Msg::Hosts(h) => self.hosts = h,
             Msg::Probed(p) => self.probed = p,
             Msg::Hud(h) => self.hud = *h,
@@ -545,6 +585,7 @@ impl Component for Shell {
                     hosts: self.hosts.clone(),
                     probed: self.probed.clone(),
                     status: self.status.clone(),
+                    severity: self.status_severity,
                     forget: self.forget.clone(),
                     rename: self.rename.clone(),
                     show_add: self.show_add,

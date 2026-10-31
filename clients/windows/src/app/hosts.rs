@@ -118,6 +118,7 @@ pub(crate) struct HostsProps {
     /// Online here, and a sleeping one whose advert has not aged out yet reads Offline.
     pub(crate) probed: HashMap<String, bool>,
     pub(crate) status: String,
+    pub(crate) severity: InfoBarSeverity,
     pub(crate) forget: Option<HostRef>,
     pub(crate) rename: Option<HostRef>,
     pub(crate) show_add: bool,
@@ -144,6 +145,7 @@ impl PartialEq for HostsProps {
             && self.hosts == other.hosts
             && self.probed == other.probed
             && self.status == other.status
+            && self.severity == other.severity
             && self.forget == other.forget
             && self.rename == other.rename
             && self.show_add == other.show_add
@@ -570,13 +572,13 @@ fn hosts_page(page: &HostsPage, props: &HostsProps) -> View {
     let cols = (((content_w + TILE_GAP) / (TILE_MIN_WIDTH + TILE_GAP)).floor() as usize).max(1);
     let mut body: Vec<View> = vec![header(props, &settings, known.hosts.len())];
 
-    // Connect errors, editor refusals and host-action outcomes share this line. Each message
-    // is a whole sentence, so the bar carries no title of its own.
+    // Failures, progress and finished actions share this line, and `severity` tells them
+    // apart. Each message is a whole sentence, so the bar carries no title of its own.
     if !status.is_empty() {
         body.push(
             InfoBar::new()
                 .message(status)
-                .severity(InfoBarSeverity::Error)
+                .severity(props.severity)
                 .is_open(true)
                 .is_closable(false)
                 .into(),
@@ -648,12 +650,12 @@ fn header(props: &HostsProps, settings: &Settings, saved: usize) -> View {
     actions.push(
         mark_button("refresh-cw", rescan)
             .on_click({
-                let (c, st) = (ctx.clone(), set_status.clone());
+                let (c, svc) = (ctx.clone(), svc.clone());
                 move || {
                     if let Some(r) = c.shared.rescan.lock().unwrap().as_ref() {
                         r.request();
                     }
-                    st.call("Scanning the network\u{2026}".to_string());
+                    svc.note("Scanning the network\u{2026}".to_string());
                 }
             })
             .tooltip(rescan),
@@ -1162,11 +1164,10 @@ fn pin_tile(svc: &Svc, who: &HostRef, id: &str, on: bool, rev: (u64, &AsyncSetSt
 
 /// Runs one of the host's own actions on a worker thread, the outcome on the status line.
 fn run_host_action(svc: &Svc, target: &Target, a: &pf_client_core::host_actions::ActionInfo) {
-    let set_status = svc.set_status.clone();
     let (action_id, label) = (a.id.clone(), a.label().to_string());
     if !a.available {
         // The host already said it cannot do this right now.
-        set_status.call(
+        svc.note(
             a.unavailable_reason
                 .clone()
                 .unwrap_or_else(|| format!("{label} isn't available")),
@@ -1174,12 +1175,12 @@ fn run_host_action(svc: &Svc, target: &Target, a: &pf_client_core::host_actions:
         return;
     }
     let identity = svc.ctx.identity.clone();
-    let target = target.clone();
-    set_status.call(format!("{label} — asking {}…", target.host.name));
+    let (svc, target) = (svc.clone(), target.clone());
+    svc.note(format!("{label} — asking {}…", target.host.name));
     let _ = std::thread::Builder::new()
         .name("punktfunk-hostaction".into())
         .spawn(move || {
-            set_status.call(pf_client_core::host_actions::run(
+            svc.report(pf_client_core::host_actions::run(
                 &target.host.name,
                 &target.host.addr,
                 target
@@ -1199,13 +1200,12 @@ fn run_host_action(svc: &Svc, target: &Target, a: &pf_client_core::host_actions:
 /// connect / 10 s global budgets), so on a worker thread, the outcome on the status line.
 fn send_logs(svc: &Svc, target: &Target) {
     let identity = svc.ctx.identity.clone();
-    let target = target.clone();
-    let set_status = svc.set_status.clone();
-    set_status.call(format!("Sending logs to {}…", target.host.name));
+    let (svc, target) = (svc.clone(), target.clone());
+    svc.note(format!("Sending logs to {}…", target.host.name));
     let _ = std::thread::Builder::new()
         .name("punktfunk-sendlogs".into())
         .spawn(move || {
-            set_status.call(pf_client_core::logring::send_bundle(
+            svc.report(pf_client_core::logring::send_bundle(
                 "punktfunk-client",
                 &target.host.name,
                 &target.host.addr,

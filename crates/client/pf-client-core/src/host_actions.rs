@@ -97,9 +97,9 @@ pub fn invoke(
     }
 }
 
-/// [`invoke`] with the outcome every shell shows. The cached rows go first: whatever the
-/// host said about itself is about to be wrong. A 202 is the last word, so there is
-/// nothing to poll.
+/// [`invoke`] with the sentence every shell shows, in `Ok` or `Err` by outcome. The cached
+/// rows go first: whatever the host said about itself is about to be wrong. A 202 is the
+/// last word, so there is nothing to poll.
 #[cfg(desktop)]
 #[allow(clippy::too_many_arguments)]
 pub fn run(
@@ -111,17 +111,17 @@ pub fn run(
     fp_hex: &str,
     action_id: &str,
     label: &str,
-) -> String {
+) -> Result<String, String> {
     invalidate(fp_hex);
     let pin = crate::trust::parse_hex32(fp_hex);
     match invoke(addr, mgmt_port, stream_port, identity, pin, action_id) {
         Ok(()) => {
             tracing::info!(host = %host_name, action = %action_id, "host action accepted");
-            format!("{host_name}: {label} — on its way")
+            Ok(format!("{host_name}: {label} — on its way"))
         }
         Err(e) => {
             tracing::warn!(host = %host_name, action = %action_id, error = %e, "host action refused");
-            format!("{label} failed — {e}")
+            Err(format!("{label} failed — {e}"))
         }
     }
 }
