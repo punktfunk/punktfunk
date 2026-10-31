@@ -15,7 +15,7 @@
 use super::{CapturedFrame, PixelFormat, ZeroCopyPolicy};
 
 mod xfixes_cursor;
-use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU8, Ordering};
 use std::sync::mpsc::{Receiver, TryRecvError};
 use std::sync::{Arc, Mutex};
 
@@ -156,6 +156,15 @@ struct StreamShared {
     /// no `node.reliable`). Each is re-held under a new generation; the count rides the
     /// provenance line, and [`crate::SourceEvent::ReferenceRisk`] turns a step into one IDR.
     resent: Arc<std::sync::atomic::AtomicU64>,
+    /// The pool's depth and withheld peak, written by the PipeWire thread alone.
+    pool: Arc<PoolGauge>,
+}
+
+/// What [`crate::Feed::pool_use`] reads: the census and the most buffers withheld at once.
+#[derive(Default)]
+struct PoolGauge {
+    depth: AtomicU32,
+    withheld_peak: AtomicU32,
 }
 
 /// The pointer the host places: the PipeWire thread and the gamescope XFixes reader write it,
@@ -221,6 +230,7 @@ impl StreamShared {
             broken: Arc::new(AtomicBool::new(false)),
             negotiation: Arc::default(),
             resent: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            pool: Arc::default(),
         }
     }
 

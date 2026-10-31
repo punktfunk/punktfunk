@@ -210,6 +210,11 @@ impl Book {
         self.apply(buf, Event::Done) == Action::Requeue
     }
 
+    /// Buffers withheld from the producer now.
+    fn withheld_count(&self) -> u32 {
+        self.bufs.iter().filter(|(_, e)| withheld(e.state)).count() as u32
+    }
+
     fn entry(&mut self, buf: usize) -> Option<&mut Entry> {
         self.bufs
             .iter_mut()
@@ -236,7 +241,8 @@ impl UserData {
     /// No queued frame is given up for an arrival: the oldest render out is the next to
     /// finish, and a producer behind a full GPU queue would never see one through.
     /// A buffer the ledger still withholds was re-sent by the producer: it is re-held under
-    /// a new generation, and `resent` asks for the covering IDR.
+    /// a new generation, and `resent` asks for the covering IDR. Every arrival raises the
+    /// pool gauge's withheld peak to the count after its hold.
     pub(super) fn try_defer(
         &mut self,
         pw_buf: *mut pw::sys::pw_buffer,
@@ -264,7 +270,15 @@ impl UserData {
         // SAFETY: `stream` is the stream whose `.process` is running on this loop thread.
         unsafe { self.ledger.drain(stream) };
         let pool_live = self.pool.live;
-        let Some(generation) = self.ledger.book().hold(buf, pool_live) else {
+        let (held, withheld) = {
+            let mut book = self.ledger.book();
+            (book.hold(buf, pool_live), book.withheld_count())
+        };
+        self.shared
+            .pool
+            .withheld_peak
+            .fetch_max(withheld, Ordering::Relaxed);
+        let Some(generation) = held else {
             if !self.ledger.logged_shallow.swap(true, Ordering::Relaxed) {
                 tracing::warn!(
                     pool_depth = pool_live,
@@ -859,7 +873,8 @@ mod tests {
         }
     }
 
-    /// Two holds dropped before the loop runs its wake rejoin in the order they dropped.
+    /// Two holds dropped before the loop runs its wake rejoin in the order they dropped, and
+    /// stay withheld until then.
     #[test]
     fn released_buffers_rejoin_in_drop_order() {
         let mut book = Book::default();
@@ -868,7 +883,9 @@ mod tests {
         }
         book.drop_hold(C, 3);
         book.drop_hold(A, 1);
+        assert_eq!(book.withheld_count(), 3, "released, not yet requeued");
         assert_eq!(book.drain(), [C, A]);
+        assert_eq!(book.withheld_count(), 1);
     }
 
     /// A stable pool logs one line, not one per frame. `.process` runs at capture rate.
