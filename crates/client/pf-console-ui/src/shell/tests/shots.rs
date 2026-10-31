@@ -628,39 +628,54 @@ fn collections_shell_no_art() -> (Shell, ConsoleShared, crate::library::LibraryS
     collections_shell_inner(false)
 }
 
-/// Play Store TV captures. `PF_CONSOLE_STORE=<dir> cargo test -p pf-console-ui -- --ignored store_shots`.
-/// Android TV passes scale 0 (`SkiaConsoleShell.kt`), so a 1080p panel takes the couch
-/// formula: k = 1080 / 800 = 1.35, the same `render` derives for a plain 1920×1080 viewport.
-#[test]
-#[ignore]
-fn store_shots() {
-    let dir = std::env::var("PF_CONSOLE_STORE").expect("set PF_CONSOLE_STORE to an output dir");
-    let fonts = crate::theme::build_fonts().unwrap();
-    let pads = store_pads();
-    let frames = |s: &mut Shell, n: usize| {
-        let mut surface = skia_safe::surfaces::raster_n32_premul((1920, 1080)).unwrap();
+/// What a store or website capture fixes: one viewport and platform, the store pads,
+/// hosts and catalog, the violet palette and a 60 Hz fake clock.
+struct Rig {
+    dir: String,
+    fonts: crate::theme::Fonts,
+    pads: Vec<PadInfo>,
+    viewport: crate::console::Viewport,
+    platform: crate::platform::Platform,
+}
+
+impl Rig {
+    fn new(viewport: crate::console::Viewport, platform: crate::platform::Platform) -> Rig {
+        Rig {
+            dir: std::env::var("PF_CONSOLE_STORE").expect("set PF_CONSOLE_STORE to an output dir"),
+            fonts: crate::theme::build_fonts().unwrap(),
+            pads: store_pads(),
+            viewport,
+            platform,
+        }
+    }
+
+    /// `n` frames into a fresh surface; the last is the shot.
+    fn frames(&self, s: &mut Shell, n: usize) -> skia_safe::Surface {
+        let size = (self.viewport.width as i32, self.viewport.height as i32);
+        let mut surface = skia_safe::surfaces::raster_n32_premul(size).unwrap();
         for _ in 0..n {
-            s.render(
+            s.render_in(
                 surface.canvas(),
-                1920,
-                1080,
-                &fonts,
-                Some(&pads[0].name),
+                &self.viewport,
+                &self.fonts,
+                Some(&self.pads[0].name),
                 Some(GamepadPref::Xbox360),
-                &pads,
+                &self.pads,
             );
         }
         surface
-    };
-    let save = |mut surface: skia_safe::Surface, name: &str| {
+    }
+
+    fn save(&self, mut surface: skia_safe::Surface, name: &str) {
         let png = surface
             .image_snapshot()
             .encode(None, skia_safe::EncodedImageFormat::PNG, 100)
             .unwrap();
-        std::fs::write(format!("{dir}/{name}.png"), png.as_bytes()).unwrap();
-    };
-    // Fixed 60 Hz step: springs and the aurora land on the same frame every run.
-    let store_shell = |stack: Vec<Screen>, library: LibraryShared| {
+        std::fs::write(format!("{}/{name}.png", self.dir), png.as_bytes()).unwrap();
+    }
+
+    /// Fixed 60 Hz step: springs and the aurora land on the same frame every run.
+    fn shell(&self, stack: Vec<Screen>, library: LibraryShared) -> Shell {
         fake_home();
         let console = ConsoleShared::default();
         console.set_hosts(store_hosts());
@@ -672,93 +687,115 @@ fn store_shots() {
             stack,
         )
         .unwrap();
-        s.device.platform = crate::platform::Platform::Android;
+        s.device.platform = self.platform;
         s.settings.ui_palette = "violet".into();
         s.fake_clock = Some((0.0, 1.0 / 60.0));
         s
-    };
+    }
 
-    // Art before the list, so the shelf decodes it before the entrance arms.
-    let store_library = || {
-        let library = LibraryShared::default();
+    /// Answers the library's current fetch as a host would. Art before the list, so the
+    /// shelf decodes it before the entrance arms.
+    fn answer(&self, library: &LibraryShared) {
         for (i, (title, ..)) in STORE_TITLES.iter().enumerate() {
-            library.push_art(format!("steam:{i}"), store_poster(i, title, &fonts));
+            library.push_art(format!("steam:{i}"), store_poster(i, title, &self.fonts));
         }
         library.set_games(&library.req(), store_games());
+    }
+
+    fn library(&self) -> LibraryShared {
+        let library = LibraryShared::default();
+        self.answer(&library);
         library
-    };
+    }
 
-    // The home draws the focused host's games under its row, so it needs the catalog too.
-    let mut s = store_shell(vec![Screen::Home(HomeScreen::new())], store_library());
-    frames(&mut s, 30);
-    s.handle_menu(MenuEvent::Move(MenuDir::Right));
-    s.handle_menu(MenuEvent::Move(MenuDir::Right));
-    save(frames(&mut s, 90), "tv-console-home");
+    /// Battlestation focused. The home draws its games under the row, so it needs the catalog.
+    fn home(&self) -> Shell {
+        let mut s = self.shell(vec![Screen::Home(HomeScreen::new())], self.library());
+        self.frames(&mut s, 30);
+        s.handle_menu(MenuEvent::Move(MenuDir::Right));
+        s.handle_menu(MenuEvent::Move(MenuDir::Right));
+        s
+    }
 
-    let shelf = || {
+    /// Down past the Desktops, Launchers and Collections bands onto the first title.
+    fn shelf(&self) -> Shell {
         let host = store_hosts()[2].clone();
-        let mut s = store_shell(
+        let mut s = self.shell(
             vec![
                 Screen::Home(HomeScreen::new()),
                 Screen::Library(LibraryScreen::new(&host)),
             ],
-            store_library(),
+            self.library(),
         );
-        frames(&mut s, 60);
-        // Down past the Desktops, Launchers and Collections bands onto the first title.
+        self.frames(&mut s, 60);
         for _ in 0..3 {
             s.handle_menu(MenuEvent::Move(MenuDir::Down));
         }
         s
-    };
-    let mut s = shelf();
-    save(frames(&mut s, 90), "tv-library");
+    }
+}
 
-    let mut s = shelf();
-    frames(&mut s, 90);
+/// Play Store TV captures. `PF_CONSOLE_STORE=<dir> cargo test -p pf-console-ui -- --ignored store_shots`.
+/// Android TV passes scale 0 (`SkiaConsoleShell.kt`), so a 1080p panel takes the couch
+/// formula: k = 1080 / 800 = 1.35, the same `render` derives for a plain 1920×1080 viewport.
+#[test]
+#[ignore]
+fn store_shots() {
+    let rig = Rig::new(
+        crate::console::Viewport::plain(1920, 1080),
+        crate::platform::Platform::Android,
+    );
+    let mut s = rig.home();
+    rig.save(rig.frames(&mut s, 90), "tv-console-home");
+
+    let mut s = rig.shelf();
+    rig.save(rig.frames(&mut s, 90), "tv-library");
+
+    let mut s = rig.shelf();
+    rig.frames(&mut s, 90);
     s.handle_menu(MenuEvent::Confirm);
-    save(frames(&mut s, 120), "tv-console-launch");
+    rig.save(rig.frames(&mut s, 120), "tv-console-launch");
 
-    let mut s = store_shell(
+    let mut s = rig.shell(
         vec![
             Screen::Home(HomeScreen::new()),
             Screen::Players(crate::screens::players::PlayersScreen::new()),
         ],
         LibraryShared::default(),
     );
-    save(frames(&mut s, 60), "tv-console-controllers");
+    rig.save(rig.frames(&mut s, 60), "tv-console-controllers");
 
     // Settings opens on the Stream tab. Explicit values, the stream shot's mode, over Native.
-    let mut s = store_shell(
+    let mut s = rig.shell(
         vec![Screen::Home(HomeScreen::new())],
         LibraryShared::default(),
     );
     (s.settings.width, s.settings.height, s.settings.refresh_hz) = (1920, 1080, 60);
     s.settings.bitrate_kbps = 50_000;
-    frames(&mut s, 30);
+    rig.frames(&mut s, 30);
     s.handle_menu(MenuEvent::Tertiary);
-    save(frames(&mut s, 90), "tv-console-settings");
+    rig.save(rig.frames(&mut s, 90), "tv-console-settings");
 
     // Name filled, the address mid-entry on the keyboard tray.
-    let mut s = store_shell(
+    let mut s = rig.shell(
         vec![
             Screen::Home(HomeScreen::new()),
             Screen::AddHost(crate::screens::add_host::AddHostScreen::new()),
         ],
         LibraryShared::default(),
     );
-    frames(&mut s, 30);
+    rig.frames(&mut s, 30);
     s.handle_menu(MenuEvent::Confirm);
     s.text_input("Guest Room PC");
     s.handle_menu(MenuEvent::Back);
     s.handle_menu(MenuEvent::Move(MenuDir::Down));
     s.handle_menu(MenuEvent::Confirm);
     s.text_input("192.168.1.40");
-    save(frames(&mut s, 60), "tv-console-addhost");
+    rig.save(rig.frames(&mut s, 60), "tv-console-addhost");
 
     // PIN typed, focus on Pair.
     let studio = store_hosts()[6].clone();
-    let mut s = store_shell(
+    let mut s = rig.shell(
         vec![
             Screen::Home(HomeScreen::new()),
             Screen::Pair(crate::screens::pair::PairScreen::new(
@@ -768,13 +805,47 @@ fn store_shots() {
         ],
         LibraryShared::default(),
     );
-    frames(&mut s, 30);
+    rig.frames(&mut s, 30);
     s.handle_menu(MenuEvent::Confirm);
     s.text_input("4827");
     s.handle_menu(MenuEvent::Back);
     s.handle_menu(MenuEvent::Move(MenuDir::Down));
     s.handle_menu(MenuEvent::Move(MenuDir::Down));
-    save(frames(&mut s, 60), "tv-console-pair");
+    rig.save(rig.frames(&mut s, 60), "tv-console-pair");
+}
+
+/// Website captures, each device at its panel size and the scale its client passes.
+/// `PF_CONSOLE_STORE=<dir> cargo test -p pf-console-ui -- --ignored website_shots`.
+/// Apple scales are `ConsoleView.designScale`: iOS is screen scale × 0.75 on a phone and × 1
+/// on an iPad; macOS is max(short side px / 800, backing × 0.75). webOS passes none, so
+/// 1080p takes the couch k = 1.35. No safe-area insets: the backdrop runs edge to edge.
+#[test]
+#[ignore]
+fn website_shots() {
+    use crate::platform::Platform::{Apple, WebOS};
+    let mut rig = Rig::new(crate::console::Viewport::plain(1920, 1080), WebOS);
+    for (device, width, height, scale, platform) in [
+        ("iphone", 2868, 1320, Some(3.0 * 0.75), Apple),
+        ("ipad", 2752, 2064, Some(2.0 * 1.0), Apple),
+        ("mac", 3024, 1964, Some(1964.0 / 800.0), Apple),
+        ("tv", 1920, 1080, None, WebOS),
+    ] {
+        rig.viewport = crate::console::Viewport {
+            width,
+            height,
+            insets: Default::default(),
+            scale,
+        };
+        rig.platform = platform;
+        // The settled row fetches Battlestation's games, and nothing answers in a test.
+        let mut s = rig.home();
+        rig.frames(&mut s, 60);
+        assert_eq!(s.library.req().host, store_hosts()[2].fp_hex);
+        rig.answer(&s.library);
+        rig.save(rig.frames(&mut s, 90), &format!("{device}-console-home"));
+        let mut s = rig.shelf();
+        rig.save(rig.frames(&mut s, 90), &format!("{device}-console-library"));
+    }
 }
 
 /// Battlestation sits third so the focused tile has neighbours on both sides.
