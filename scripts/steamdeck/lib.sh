@@ -24,6 +24,20 @@ warn() { printf '\033[1;33m  !!\033[0m %s\n' "$*" >&2; }
 die()  { printf '\033[1;31merror:\033[0m %s\n' "$*" >&2; exit 1; }
 have() { command -v "$1" >/dev/null 2>&1; }
 
+# Sets SUDO_OK, prompting with $1 on a terminal. Before the long build, so you authorize once and
+# walk away. `kill -0 $$` ends the keep-warm loop with the script, across update.sh's exec.
+acquire_sudo() {
+    SUDO_OK=0
+    if sudo -n true 2>/dev/null; then
+        SUDO_OK=1
+    elif [ -t 0 ]; then
+        warn "$1"
+        if sudo -v; then SUDO_OK=1; fi
+    fi
+    [ "$SUDO_OK" = 1 ] || return 0
+    ( while kill -0 "$$" 2>/dev/null && sudo -n -v 2>/dev/null; do sleep 50; done ) >/dev/null 2>&1 </dev/null &
+}
+
 # Create a missing system group from packaging/linux/punktfunk.sysusers (needs sudo). A udev rule
 # that chgrp's to a group nobody created fails silently.
 ensure_group() {

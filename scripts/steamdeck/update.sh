@@ -24,6 +24,18 @@ esac
 [ -d "$SRC/crates/host/punktfunk-host" ] || die "no punktfunk source at $SRC (set PUNKTFUNK_SRC)"
 WEB=0; [ -f "$HOME/.config/systemd/user/punktfunk-web.service" ] && WEB=1
 
+# Once across the exec below, so a refused password isn't asked for again after the pull.
+SUDO_OK=${PF_SUDO_OK:-}
+[ -n "$SUDO_OK" ] || acquire_sudo "sudo needs your password to (re)apply the gamepad udev rule, vhci-hcd, input group, UDP buffers, and seats:"
+# The version the console shows, in the same scheme as this channel's feed (build-version.sh).
+PF_BUILD_VERSION="$(bash "$SRC/scripts/steamdeck/build-version.sh" "$SRC")"
+# The door's seats run a copy only sudo moves, so a new build without it updates nothing they run.
+if [ "$SUDO_OK" = 0 ] && door_on && { [ "${1:-}" = --pull ] || [ "$(door_version)" != "$PF_BUILD_VERSION" ]; }; then
+    die "With Reachable without logging in on, an update needs your password. Nothing was pulled or rebuilt.
+  Run this in Konsole and enter your password when asked:
+  bash $SRC/scripts/steamdeck/update.sh --pull"
+fi
+
 if [ "${1:-}" = "--pull" ]; then
     [ -d "$SRC/.git" ] || die "$SRC is not a git checkout — rsync new source then run without --pull"
     git -C "$SRC" symbolic-ref -q HEAD >/dev/null \
@@ -40,11 +52,8 @@ $SWITCH"
   one with 'git -C $SRC checkout -- <file>') and re-run. Nothing was rebuilt or restarted."
     ok "pulled"
     # Bash keeps running the text it read before the pull. Build with the pulled tree's recipe.
-    PUNKTFUNK_SRC="$SRC" PUNKTFUNK_BOX="$BOX" exec bash "$SRC/scripts/steamdeck/update.sh"
+    PF_SUDO_OK="$SUDO_OK" PUNKTFUNK_SRC="$SRC" PUNKTFUNK_BOX="$BOX" exec bash "$SRC/scripts/steamdeck/update.sh"
 fi
-
-# The version the console shows, in the same scheme as this channel's feed (build-version.sh).
-PF_BUILD_VERSION="$(bash "$SRC/scripts/steamdeck/build-version.sh" "$SRC")"
 
 bash "$SRC/scripts/steamdeck/heal-box.sh" "$BOX"
 log "Rebuilding host (release)"
@@ -156,15 +165,7 @@ sed "s|^Exec=.*|Exec=$TARGET_DIR/release/punktfunk-host|" "$SRC/packaging/linux/
     > "$HOME/.local/share/applications/io.unom.punktfunk.host.desktop"
 ok "KWin desktop-capture authorization refreshed"
 
-# The system tuning install.sh applies, from this checkout's files (lib.sh). A stock Deck needs a
-# sudo PASSWORD, so PROMPT for it rather than silently skipping (skipping = gamepads stay dead).
-SUDO_OK=0
-if sudo -n true 2>/dev/null; then
-    SUDO_OK=1
-elif [ -t 0 ]; then
-    warn "sudo needs your password to (re)apply the gamepad udev rule, vhci-hcd, input group, and UDP buffers:"
-    sudo -v && SUDO_OK=1 || true
-fi
+# The system tuning install.sh applies, from this checkout's files (lib.sh).
 if [ "$SUDO_OK" = 1 ]; then
     apply_system_tuning
     [ "$WEB" = 0 ] || door_install

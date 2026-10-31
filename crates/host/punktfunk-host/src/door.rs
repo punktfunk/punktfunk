@@ -96,6 +96,16 @@ fn missing(kind: InstallKind) -> String {
     }
 }
 
+/// Whether a Deck's system copy, by its version file, isn't the build this host runs. A console
+/// update moves only this host, and the door would come up on the older copy. A checkout-less
+/// build records an empty version, which proves nothing.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code, reason = "Linux only"))]
+fn copy_is_stale(recorded: Option<&str>, running: &str) -> bool {
+    recorded
+        .map(str::trim)
+        .is_some_and(|v| !v.is_empty() && v != running)
+}
+
 /// The unit that switches the door for `user`.
 #[cfg_attr(not(target_os = "linux"), allow(dead_code, reason = "Linux only"))]
 fn unit(on: bool, user: &str) -> String {
@@ -189,6 +199,18 @@ mod linux {
             return Some((
                 StatusCode::CONFLICT,
                 missing(crate::update::detect::detect().0),
+            ));
+        }
+        let copy =
+            Path::new(pf_update_check::detect::STEAMOS_SYSTEM_COPY).with_file_name("version");
+        let recorded = std::fs::read_to_string(copy).ok();
+        if on && copy_is_stale(recorded.as_deref(), crate::version::get()) {
+            return Some((
+                StatusCode::CONFLICT,
+                "This Deck's seats are on an older build than its host. Run bash \
+                 ~/punktfunk/scripts/steamdeck/update.sh in Konsole and enter your password, \
+                 then turn this on."
+                    .into(),
             ));
         }
         // The helper's own rule, so the console says so before it asks.
@@ -370,6 +392,17 @@ mod tests {
             assert!(sentence.contains(fix), "{kind:?}: {sentence}");
             assert!(!sentence.contains("  "), "{kind:?}: {sentence}");
         }
+    }
+
+    /// The copy turning the door on would run: behind or ahead of this host is stale, and no
+    /// file or an empty one, from a build outside a checkout, proves nothing.
+    #[test]
+    fn only_a_copy_of_another_build_is_stale() {
+        let host = "0.46.0+g8d15756b1";
+        assert!(copy_is_stale(Some("0.46.0+gc06e61a0b\n"), host));
+        assert!(!copy_is_stale(Some("0.46.0+g8d15756b1\n"), host));
+        assert!(!copy_is_stale(Some("\n"), "0.45.0"));
+        assert!(!copy_is_stale(None, host));
     }
 
     /// A run after the start that ended badly is a failure; the run before it, or one still

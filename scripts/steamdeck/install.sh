@@ -70,19 +70,7 @@ ok "distrobox: $DISTROBOX"
 # not after the build — so you authorize once and walk away, and a non-interactive run fails LOUDLY
 # here instead of silently skipping the tuning at the very end. A stock SteamOS 'deck' has no
 # password, so sudo can't work until you set one.
-SUDO_OK=0
-if sudo -n true 2>/dev/null; then
-    SUDO_OK=1
-elif [ -t 0 ]; then
-    warn "sudo is needed once (UDP buffers, gamepad udev rule, vhci-hcd, input group, linger):"
-    if sudo -v; then
-        SUDO_OK=1
-        # keep the sudo timestamp warm across the long build so steps 4-5 don't re-prompt / expire
-        ( while sudo -n -v 2>/dev/null; do sleep 50; done ) &
-        _pf_sudo_keepalive=$!
-        trap '[ -n "${_pf_sudo_keepalive:-}" ] && kill "$_pf_sudo_keepalive" 2>/dev/null || true' EXIT
-    fi
-fi
+acquire_sudo "sudo is needed once (UDP buffers, gamepad udev rule, vhci-hcd, input group, linger):"
 if [ "$SUDO_OK" != 1 ]; then
     if [ -t 0 ]; then
         warn "No sudo — a stock SteamOS 'deck' account has no password. Set one and re-run:  passwd"
