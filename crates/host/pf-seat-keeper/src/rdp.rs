@@ -22,7 +22,7 @@ use pf_seats::windows::keeper::{self, RdpBootstrap};
 use pf_seats::BackendError;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpStream};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 use x509_cert::der::Decode as _;
 use zeroize::Zeroize as _;
 
@@ -67,8 +67,8 @@ pub(crate) fn observe_pin() -> WinResult<[u8; 32]> {
 const REATTACH_ATTEMPTS: u32 = 10;
 /// Long enough for the server's graphics subsystem to finish resetting before the next connect.
 const REATTACH_DELAY: Duration = Duration::from_secs(3);
-/// A connection that lasted this long held, so its drop starts a new count. A seat host rebuilding
-/// its session drops the connection on purpose, as often as once per client.
+/// A connection that lasted this long held, so its drop starts a new count. It also covers a seat
+/// host's own drop whose mark the keeper missed.
 const HELD: Duration = Duration::from_secs(30);
 
 /// Hold the seat's session open, reattaching whenever the connection drops but the session does
@@ -77,7 +77,8 @@ const HELD: Duration = Duration::from_secs(30);
 /// there would strand a seat that only needed reconnecting.
 ///
 /// The session's existence is the test, not the disconnect reason: a logoff removes it, anything
-/// recoverable leaves it. That needs no match on the server's English description.
+/// recoverable leaves it. That needs no match on the server's English description. A drop the
+/// seat host marked as its own ([`keeper::host_disconnected`]) spends no attempt.
 pub(crate) fn keep_from_stdin() -> WinResult<()> {
     let mut input = std::io::stdin().lock();
     let mut bootstrap = RdpBootstrap::read_from(&mut input)
@@ -85,29 +86,37 @@ pub(crate) fn keep_from_stdin() -> WinResult<()> {
     let domain = Some(keeper::computer_name()?);
     let account = bootstrap.account.clone();
     let mut attempt = 0;
-    loop {
+    let error = loop {
         let connected = Instant::now();
+        let since = SystemTime::now();
         let Err(error) = keep_session(&bootstrap, domain.clone(), &account) else {
             return Ok(());
         };
-        attempt = if connected.elapsed() >= HELD {
-            1
-        } else {
-            attempt + 1
-        };
         // No session left means the seat is gone (logged off, or it never came up): hand the
         // error back so the supervisor restarts the seat rather than reconnecting to nothing.
-        match keeper::session_of(&account) {
-            Ok(Some(session)) if attempt <= REATTACH_ATTEMPTS => eprintln!(
-                "seat keeper: reattaching to session {session} after {error} (attempt {attempt}/{REATTACH_ATTEMPTS})"
-            ),
-            _ => {
-                bootstrap.password.zeroize();
-                return Err(error);
+        let Ok(Some(session)) = keeper::session_of(&account) else {
+            break error;
+        };
+        if connected.elapsed() >= HELD {
+            attempt = 0;
+        }
+        if keeper::host_disconnected(&bootstrap.host_root, since) {
+            eprintln!(
+                "seat keeper: reattaching to session {session}, which its host disconnected (attempt {attempt}/{REATTACH_ATTEMPTS} kept)"
+            );
+        } else {
+            attempt += 1;
+            if attempt > REATTACH_ATTEMPTS {
+                break error;
             }
+            eprintln!(
+                "seat keeper: reattaching to session {session} after {error} (attempt {attempt}/{REATTACH_ATTEMPTS})"
+            );
         }
         std::thread::sleep(REATTACH_DELAY);
-    }
+    };
+    bootstrap.password.zeroize();
+    Err(error)
 }
 
 /// One connect-and-hold. The password is rebuilt per attempt because the connector consumes it.

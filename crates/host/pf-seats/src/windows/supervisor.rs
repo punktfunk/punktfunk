@@ -494,18 +494,22 @@ impl Rig {
         let pin = rdp::load_pin(&self.root)?;
         rdp::require_live(&self.host_path, pin)?;
         let credential = self.accounts.credential_for_start(&self.seat)?;
-        let bootstrap =
-            RdpBootstrap::new(self.seat.account.clone(), credential.copy_zeroizing(), pin)
-                .map_err(|error| {
-                    io_error("keeper_bootstrap", "build RDP keeper bootstrap", error)
-                })?;
-        let job = Job::new()?;
-        let keeper_exe = super::keeper::keeper_path(&self.host_path);
-        let log = self
+        let host_root = self
             .root
             .open_child_dir("hosts")
             .and_then(|hosts| hosts.open_child_dir(self.seat.id.as_str()))
-            .and_then(|root| root.child_path("host.log"))
+            .map_err(|error| io_error("seat_root", "open per-seat host root", error))?;
+        let bootstrap = RdpBootstrap::new(
+            self.seat.account.clone(),
+            credential.copy_zeroizing(),
+            pin,
+            host_root.path().to_owned(),
+        )
+        .map_err(|error| io_error("keeper_bootstrap", "build RDP keeper bootstrap", error))?;
+        let job = Job::new()?;
+        let keeper_exe = super::keeper::keeper_path(&self.host_path);
+        let log = host_root
+            .child_path("host.log")
             .map_err(|error| io_error("seat_log", "resolve the seat log", error))?;
         let keeper = process::spawn_keeper(&job, &keeper_exe, &bootstrap, &log)?;
         self.keeper = Some((keeper, job));

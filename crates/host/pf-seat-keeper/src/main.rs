@@ -1,9 +1,9 @@
 //! `punktfunk-seat-keeper keep` holds one seat's RDP session open; `trust` records the pin.
 //!
-//! `keep` reads its bootstrap (account, password, pin) from stdin, which only the supervisor
-//! writes, and never takes a secret on argv or from the environment. `trust [--replace]` is the
-//! elevated operator step that pins TermService's TLS leaf before any seat starts. `observe`
-//! prints the leaf TermService presents now and stores nothing.
+//! `keep` reads its bootstrap (account, password, pin, host root) from stdin, which only the
+//! supervisor writes, and never takes a secret on argv or from the environment. `trust
+//! [--replace]` is the elevated operator step that pins TermService's TLS leaf before any seat
+//! starts. `observe` prints the leaf TermService presents now and stores nothing.
 
 #[cfg(windows)]
 mod rdp;

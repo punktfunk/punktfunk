@@ -2,13 +2,14 @@
 //!
 //! The keeper links IronRDP, whose pinned release-candidate crypto cannot share a lockfile
 //! with the host, so it builds in its own workspace and runs as its own process. It reads the
-//! bootstrap the supervisor wrote, asks WTS whether its session still exists, and stores the
-//! RDP leaf pin; this module is that surface and nothing else.
+//! bootstrap the supervisor wrote, asks WTS whether its session still exists, reads the seat
+//! host's disconnect mark in the host root the bootstrap names, and stores the RDP leaf pin;
+//! this module is that surface and nothing else.
 
 use super::util::{backend_error, require_elevated_admin, WinResult};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 pub use super::rdp::store_pin;
 pub use crate::bootstrap::RdpBootstrap;
@@ -48,6 +49,18 @@ pub fn live_pin(host_path: &Path) -> Option<[u8; 32]> {
 /// The id of a live or disconnected session signed in as `account`, if one exists.
 pub fn session_of(account: &str) -> WinResult<Option<u32>> {
     Ok(super::wts::any_for_account(account)?.map(|session| session.id))
+}
+
+/// Whether the seat host dropped the connection that began at `since` itself: the mark in
+/// `host_root` ([`pf_paths::seat::SEAT_DISCONNECT_MARK`]) passes
+/// [`pf_paths::seat::mark_excuses_drop`]. The read deletes the mark, so one mark excuses one drop.
+pub fn host_disconnected(host_root: &Path, since: SystemTime) -> bool {
+    let path = host_root.join(pf_paths::seat::SEAT_DISCONNECT_MARK);
+    let Ok(mark) = std::fs::read_to_string(&path) else {
+        return false;
+    };
+    let _ = std::fs::remove_file(&path);
+    pf_paths::seat::mark_excuses_drop(&mark, since, SystemTime::now())
 }
 
 /// The machine name the keeper's NLA login uses as its domain.
