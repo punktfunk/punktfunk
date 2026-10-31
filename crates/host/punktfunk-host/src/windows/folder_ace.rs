@@ -118,11 +118,11 @@ fn merge(name: &str, entries: &[EXPLICIT_ACCESS_W]) -> Result<()> {
 /// Every ACCESS_ALLOWED ACE of `sids` off `name` alone. Nothing to take writes nothing.
 fn strip(name: &str, sids: &[PSID]) -> Result<()> {
     let (dacl, sd) = read_dacl(name, SE_FILE_OBJECT)?;
-    // SAFETY: `sids` are live with the caller; `one` lies in the DACL `sd` keeps.
     let named = |one: PSID| {
-        sids.iter()
-            .copied()
-            .any(|s| unsafe { EqualSid(s, one) }.is_ok())
+        sids.iter().copied().any(|s| {
+            // SAFETY: `sids` are live with the caller; `one` lies in the DACL `sd` keeps.
+            unsafe { EqualSid(s, one) }.is_ok()
+        })
     };
     let held: Vec<u32> = allowed_aces(dacl)?
         .iter()
