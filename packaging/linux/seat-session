@@ -277,6 +277,10 @@ while alive; do
     PUNKTFUNK_SEAT_HEADLESS=1 PUNKTFUNK_MGMT_TOKEN="$TOKEN" "$HOST" serve &
     wait $!
     echo "seat-session: host exited with $?; restarting in ${delay}s" >&2
+    # This loop outlives the host, so systemd won't reap what a dead host started. Its gamescope
+    # would keep Steam's single instance from the next one. Exact names: gamescopereaper takes
+    # Steam down with it. The owner's gamescope may be the one at the desk.
+    [[ -z "$OWNER" ]] && pkill -KILL -u "$(id -u)" -x 'gamescope(-wl)?' 2>/dev/null
     ((SECONDS - started > 60)) && delay=1
     # A background sleep, so SIGTERM interrupts the wait instead of queueing behind it.
     sleep "$delay" &
