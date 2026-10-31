@@ -1,11 +1,13 @@
 //! The ASurfaceControl sink (default): MediaCodec → `AImageReader` → `ASurfaceControl`
-//! transactions, each aimed at the vsync slot [`Slots`] picks on a present-phased grid.
+//! transactions, each aimed at the vsync slot [`Slots`] picks on a grid phased on the
+//! compositor's own cycle.
 //!
 //! Every completion reports the latch time, the present fence and the previous buffer's release
-//! fence ([`PresentComplete`]). The present fence signals at the vsync that scanned the frame out
-//! and phases the slot clock; the latch is only the compositor's wakeup, one work duration
-//! earlier, and that duration differs per device. Until a present sample exists (or on a device
-//! without present fences) the budget is one pending as-soon-as-possible present.
+//! fence ([`PresentComplete`]). The latch plus the learned lead is where the compositor presents,
+//! the instant its readiness check for a desired present time reads, and phases the slot clock;
+//! the present fence signals when the frame reached glass, which a display queue can put whole
+//! refreshes later. Until a present sample exists (or on a device without present fences) the
+//! budget is one pending as-soon-as-possible present.
 //!
 //! Memory safety does not rest on the fences: SurfaceFlinger holds its own buffer reference from
 //! `setBuffer`, so an early delete at worst tears. The fences are the correctness of timing.
@@ -419,7 +421,9 @@ impl AscSink {
             &mut self.store,
             now_mono,
             self.slots.bootstrapping(),
-            self.presented.iter().map(|p| p.release_mono),
+            self.presented
+                .iter()
+                .map(|p| self.slots.latch_ns_for(p.slot, p.release_mono)),
             reach,
             self.downrated,
             &mut self.counters,

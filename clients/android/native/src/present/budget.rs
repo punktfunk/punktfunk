@@ -274,9 +274,10 @@ impl TimelineBudget {
     }
 }
 
-/// The ASurfaceControl glass budget: transactions applied and not yet completed. One until the
-/// slot clock is phased, then two: distinct slot targets cannot collide, and SurfaceFlinger holds
-/// the second.
+/// The ASurfaceControl glass budget: transactions applied whose latch is still ahead. One until
+/// the slot clock is phased, then two: distinct slot targets cannot collide, and SurfaceFlinger
+/// holds the second. A present SurfaceFlinger has latched holds no slot of ours, whenever its
+/// completion arrives.
 #[derive(Default)]
 pub(crate) struct AscBudget {
     inflight: u32,
@@ -288,32 +289,37 @@ impl AscBudget {
     }
 
     /// The frame one ASC pump presents, if any. `bootstrapping`: pacing wants slots and no
-    /// present has phased the clock yet. `releases`: apply instants of the presents still on
-    /// SurfaceFlinger, oldest first; the oldest in flight past [`STALE_REOPEN_NS`] force-opens
-    /// the budget, as does a count with no present behind it. `reach_ns`: the instant a FIFO
-    /// head must be due by. `downrated`: no cap, SurfaceFlinger coalesces.
+    /// present has phased the clock yet. `latches`: when SurfaceFlinger latches each present not
+    /// yet completed, oldest first. Only latches still ahead count against the cap: a completion
+    /// that trails its latch by refreshes (a display queue holding the frame, as a Shield TV's
+    /// does) must not park the next frame, which is how two of ours end up in one cycle. The
+    /// oldest past [`STALE_REOPEN_NS`] never completes and force-opens the budget, as does a
+    /// count with no present behind it. `reach_ns`: the instant a FIFO head must be due by.
+    /// `downrated`: no cap, SurfaceFlinger coalesces.
     #[allow(clippy::too_many_arguments)] // one caller; a struct would only rename them
     pub(crate) fn pick<F>(
         &mut self,
         store: &mut Store<F>,
         now_ns: i64,
         bootstrapping: bool,
-        releases: impl DoubleEndedIterator<Item = i64>,
+        latches: impl DoubleEndedIterator<Item = i64>,
         reach_ns: i64,
         downrated: bool,
         c: &mut Counters,
     ) -> Option<Held<F>> {
         let cap = if bootstrapping { 1 } else { 2 };
         if !downrated && self.inflight >= cap {
-            let stale = releases
-                .rev()
-                .nth(self.inflight as usize - 1)
-                .is_none_or(|t| now_ns - t > STALE_REOPEN_NS);
-            if !stale {
+            let pending: Vec<i64> = latches.rev().take(self.inflight as usize).collect();
+            let stale = pending.len() < self.inflight as usize
+                || pending
+                    .last()
+                    .is_some_and(|&oldest| now_ns - oldest > STALE_REOPEN_NS);
+            if stale {
+                c.forced += 1;
+                self.inflight = 0;
+            } else if pending.iter().filter(|&&l| l > now_ns).count() >= cap as usize {
                 return None;
             }
-            c.forced += 1;
-            self.inflight = 0;
         }
         if !store.head_is_releasable(reach_ns) {
             return None;
@@ -604,27 +610,28 @@ mod tests {
         let mut b = AscBudget::default();
         let mut s = latency();
         let mut c = Counters::default();
-        let mut releases: Vec<i64> = Vec::new();
+        // Each present's latch, a period after its apply.
+        let mut latches: Vec<i64> = Vec::new();
         s.push(1, 0, T, &mut c, drop);
         let f = b.pick(
             &mut s,
             T,
             true,
-            releases.iter().copied(),
+            latches.iter().copied(),
             T + P,
             false,
             &mut c,
         );
         assert_eq!(f.map(|h| h.frame), Some(1));
         b.applied(&mut c);
-        releases.push(T);
+        latches.push(T + P);
         s.push(2, 0, T, &mut c, drop);
         let now = T + 1_000_000;
         let f = b.pick(
             &mut s,
             now,
             true,
-            releases.iter().copied(),
+            latches.iter().copied(),
             now + P,
             false,
             &mut c,
@@ -634,20 +641,20 @@ mod tests {
             &mut s,
             now,
             false,
-            releases.iter().copied(),
+            latches.iter().copied(),
             now + P,
             false,
             &mut c,
         );
         assert_eq!(f.map(|h| h.frame), Some(2), "two once phased");
         b.applied(&mut c);
-        releases.push(now);
+        latches.push(now + P);
         s.push(3, 0, T, &mut c, drop);
         let f = b.pick(
             &mut s,
             now,
             false,
-            releases.iter().copied(),
+            latches.iter().copied(),
             now + P,
             false,
             &mut c,
@@ -658,7 +665,7 @@ mod tests {
             &mut s,
             now,
             false,
-            releases.iter().copied(),
+            latches.iter().copied(),
             now + P,
             false,
             &mut c,
@@ -668,35 +675,52 @@ mod tests {
     }
 
     #[test]
+    fn a_latched_present_holds_no_slot_however_late_its_completion() {
+        let mut b = AscBudget::default();
+        let mut s = latency();
+        let mut c = Counters::default();
+        b.applied(&mut c);
+        b.applied(&mut c);
+        let latches = [T + P, T + 2 * P];
+        s.push(1, 0, T, &mut c, drop);
+        let blocked = |b: &mut AscBudget, s: &mut Store<u32>, c: &mut Counters, now: i64| {
+            b.pick(s, now, false, latches.into_iter(), now + P, false, c)
+                .is_none()
+        };
+        assert!(
+            blocked(&mut b, &mut s, &mut c, T + P - 1),
+            "both still ahead"
+        );
+        // The first latch is SurfaceFlinger's now: one slot of ours is free, with no
+        // completion yet (a display queue can hold the frame two refreshes more).
+        assert!(!blocked(&mut b, &mut s, &mut c, T + P));
+        assert_eq!((b.inflight(), c.forced), (2, 0));
+    }
+
+    #[test]
     fn a_completion_that_never_comes_force_opens_after_100_ms() {
         let mut b = AscBudget::default();
         let mut s = latency();
         let mut c = Counters::default();
         b.applied(&mut c);
-        let releases = [T];
+        let latches = [T + P];
         s.push(1, 0, T, &mut c, drop);
-        let late = T + STALE_REOPEN_NS;
-        assert!(b
-            .pick(
-                &mut s,
-                late,
-                true,
-                releases.into_iter(),
-                late,
-                false,
-                &mut c
-            )
-            .is_none());
+        let late = T + P + STALE_REOPEN_NS;
+        let f = b.pick(&mut s, late, true, latches.into_iter(), late, false, &mut c);
+        assert_eq!(f.map(|h| h.frame), Some(1), "latched: no slot held");
+        assert_eq!((c.forced, b.inflight()), (0, 1));
+        b.applied(&mut c);
+        s.push(2, 0, T, &mut c, drop);
         let f = b.pick(
             &mut s,
             late + 1,
             true,
-            releases.into_iter(),
+            latches.into_iter(),
             late,
             false,
             &mut c,
         );
-        assert_eq!(f.map(|h| h.frame), Some(1));
+        assert_eq!(f.map(|h| h.frame), Some(2));
         assert_eq!((c.forced, b.inflight()), (1, 0));
         // A count with no present behind it is bookkeeping drift and reopens too.
         b.applied(&mut c);
@@ -711,15 +735,15 @@ mod tests {
         let mut b = AscBudget::default();
         let mut s = latency();
         let mut c = Counters::default();
-        let releases = [T, T, T];
-        for _ in releases {
+        let latches = [T + P, T + P, T + P];
+        for _ in latches {
             b.applied(&mut c);
         }
         s.push(1, 0, T, &mut c, drop);
         assert!(b
-            .pick(&mut s, T, false, releases.into_iter(), T + P, false, &mut c)
+            .pick(&mut s, T, false, latches.into_iter(), T + P, false, &mut c)
             .is_none());
-        let f = b.pick(&mut s, T, true, releases.into_iter(), T + P, true, &mut c);
+        let f = b.pick(&mut s, T, true, latches.into_iter(), T + P, true, &mut c);
         assert_eq!(f.map(|h| h.frame), Some(1));
         assert_eq!((b.inflight(), c.forced), (3, 0));
     }

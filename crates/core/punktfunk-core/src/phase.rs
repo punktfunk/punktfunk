@@ -354,20 +354,22 @@ const fn shr_toward_zero(v: i64, shift: u8) -> i64 {
 /// compositor, not a lead.
 const LEAD_MAX_NS: i64 = 50_000_000;
 
-/// Present-phased vsync grid plus the lead the compositor needs ahead of it.
+/// Vsync grid phased on the compositor's cycle, plus the lead it needs.
 ///
-/// Phase is the last real present (a present fence), never a latch: the latch
-/// is the compositor's wakeup, one work duration before the vsync, and that
-/// duration differs per device. The period is the panel's as the compositor
-/// states it ([`SlotClock::set_period`]); presents may narrow it, never widen
-/// it — a source below the panel rate presents on every Nth vsync and must
-/// not teach a slower panel. Slots are integer indices on the grid; a
-/// presenter that targets `present_ns(slot) − period/2` is ready for `slot`
-/// and not for `slot − 1` with half a period of tolerance either side.
-/// `lead_ns` is a decaying maximum of present − latch taken within one
-/// period, the apply-ahead a slot needs: the compositor latches for the next
-/// vsync, so whole periods beyond are the display's own delay (a Shield TV:
-/// one or two refreshes, for minutes), which no earlier apply shortens.
+/// Phase is where the compositor presents: its latch plus `lead_ns`. That is
+/// the instant its readiness check for a desired present time reads, and the
+/// latch alone is not it: the latch is its wakeup, one work duration before
+/// the vsync, and that duration differs per device. The present fence says
+/// when the frame reached glass, which a display queue can put whole
+/// refreshes later (a Shield TV: one or two, for minutes) or wobble; it never
+/// phases the grid. The period is the panel's as the compositor states it
+/// ([`SlotClock::set_period`]); presents may narrow it, never widen it — a
+/// source below the panel rate presents on every Nth vsync and must not
+/// teach a slower panel. Slots are integer indices on the grid; a presenter
+/// that targets `present_ns(slot) − period/2` is ready for `slot` and not for
+/// `slot − 1` with half a period of tolerance either side. `lead_ns` is a
+/// decaying maximum of present − latch folded into one period: the apply-ahead
+/// a slot needs, with the display's whole refreshes removed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SlotClock {
     period_ns: i64,
@@ -412,10 +414,11 @@ impl SlotClock {
         }
     }
 
-    /// One real present and the latch that produced it. Returns the slot the
-    /// present landed on; the grid re-phases onto it. A spacing under nine
-    /// tenths of the period is the panel running faster than stated and
-    /// narrows it; anything closer is fence jitter (250 µs on the A024).
+    /// One real present (a fence) and the latch that produced it. Returns the
+    /// slot the compositor presented on, its latch one lead on; the grid
+    /// re-phases onto that instant. A spacing under nine tenths of the period
+    /// is the panel running faster than stated and narrows it; anything closer
+    /// is jitter (250 µs on the A024). Without a lead yet, the fence stands in.
     pub fn observe(&mut self, present_ns: i64, latch_ns: i64) -> i64 {
         let span = present_ns - latch_ns;
         let sample = match self.period_ns {
@@ -430,7 +433,12 @@ impl SlotClock {
                 self.lead_ns -= (self.lead_ns - sample) >> 4;
             }
         }
-        let spacing = present_ns - self.phase_ns;
+        let anchor = if self.lead_ns > 0 {
+            latch_ns + self.lead_ns
+        } else {
+            present_ns
+        };
+        let spacing = anchor - self.phase_ns;
         if self.phase_ns > 0
             && PANEL_PERIOD_RANGE_NS.contains(&spacing)
             && (self.period_ns == 0 || spacing < self.period_ns / 10 * 9)
@@ -438,12 +446,12 @@ impl SlotClock {
             self.period_ns = spacing;
         }
         if !self.phased() {
-            self.phase_ns = present_ns;
+            self.phase_ns = anchor;
             self.phase_slot = 0;
             return 0;
         }
-        let slot = self.slot_nearest(present_ns);
-        self.phase_ns = present_ns;
+        let slot = self.slot_nearest(anchor);
+        self.phase_ns = anchor;
         self.phase_slot = slot;
         slot
     }
@@ -1076,6 +1084,29 @@ mod slot_clock_tests {
             P,
             "one present a 120 Hz period on narrows the grid"
         );
+    }
+
+    #[test]
+    fn the_grid_phases_on_the_compositor_not_the_fence() {
+        let mut c = phased();
+        let v = 1_000_000_000;
+        // A display queue shows each frame two refreshes after the compositor presented it:
+        // the grid stays on the compositor's cycle and the fence reads two slots on.
+        for i in 1..=20 {
+            let latch = v + i * P - LEAD;
+            assert_eq!(c.observe(v + i * P + 2 * P, latch), i);
+            assert_eq!(c.present_ns(i), v + i * P);
+            assert_eq!(c.slot_nearest(v + i * P + 2 * P), i + 2);
+        }
+        assert_eq!(c.lead_ns(), LEAD);
+        // A fence wobbling a third of a period either way moves the grid by at most the
+        // lead's growth, never onto the fence.
+        for i in 21..=40 {
+            let latch = v + i * P - LEAD;
+            let wobble = if i % 2 == 0 { P / 3 } else { -P / 3 };
+            assert_eq!(c.observe(v + i * P + wobble, latch), i);
+            assert!((c.present_ns(i) - (v + i * P)).abs() <= P / 3, "slot {i}");
+        }
     }
 
     #[test]

@@ -1,4 +1,5 @@
-//! The ASurfaceControl slot scheduler: each frame its own vsync slot on the present-phased grid.
+//! The ASurfaceControl slot scheduler: each frame its own vsync slot on a grid phased on the
+//! compositor's cycle.
 //!
 //! SurfaceFlinger defers a transaction only while `desiredPresentTime >= expectedPresentTime`, so
 //! two frames applied in one period with targets before the next vsync latch together and only
@@ -42,7 +43,6 @@ pub(crate) struct Slots {
     fence_live: bool,
     last_latch_ns: i64,
     last_present_ns: i64,
-    last_observed_slot: Option<i64>,
 }
 
 impl Slots {
@@ -70,7 +70,15 @@ impl Slots {
             fence_live: false,
             last_latch_ns: 0,
             last_present_ns: 0,
-            last_observed_slot: None,
+        }
+    }
+
+    /// When SurfaceFlinger latches a present aimed at `slot`: one lead before its vsync. An
+    /// as-soon-as-possible present (no slot) latches within a period of `release_ns`.
+    pub(crate) fn latch_ns_for(&self, slot: Option<i64>, release_ns: i64) -> i64 {
+        match slot {
+            Some(s) if self.clock.phased() => self.clock.present_ns(s) - self.clock.lead_ns(),
+            _ => release_ns + self.period_ns(),
         }
     }
 
@@ -202,7 +210,8 @@ impl Slots {
     /// One frame on glass at `present_ns`, aimed at `slot`. With a `real` vsync (a present
     /// fence) phase the clock and correct the pacer by what happened; a latch stands in where no
     /// fence exists and never phases the clock, so such a device keeps the one-pending ASAP
-    /// budget. Scores the interval either way. Returns the phase error, µs, when there is one.
+    /// budget. Scores the glass interval either way, fence to fence in whole periods. Returns the
+    /// phase error, µs, when there is one.
     pub(crate) fn on_present(
         &mut self,
         present_ns: i64,
@@ -217,20 +226,21 @@ impl Slots {
         if present_ns == self.last_present_ns {
             c.intervals.note(0); // the coalesced pair's second half
         } else if present_ns > self.last_present_ns {
-            if real {
-                phase_err_us = self.observe_present(present_ns, latch_ns, slot, c);
-            } else if self.last_present_ns > 0 {
+            if self.last_present_ns > 0 {
                 let p = self.period_ns();
                 c.intervals
                     .note((present_ns - self.last_present_ns + p / 2).div_euclid(p));
+            }
+            if real {
+                phase_err_us = self.observe_present(present_ns, latch_ns, slot, c);
             }
             self.last_present_ns = present_ns;
         }
         phase_err_us
     }
 
-    /// A real vsync for a frame aimed at `assigned`: phase the clock, score the slot interval,
-    /// and correct the pacer when SurfaceFlinger latched the frame for a later vsync than aimed.
+    /// A real vsync for a frame aimed at `assigned`: phase the clock on the compositor's cycle
+    /// and correct the pacer when it latched the frame for a later vsync than aimed.
     fn observe_present(
         &mut self,
         present_ns: i64,
@@ -241,21 +251,16 @@ impl Slots {
         let phase_err_us = assigned
             .filter(|_| self.clock.phased())
             .map(|a| (present_ns - self.clock.present_ns(a)).unsigned_abs() / 1000);
-        let observed = self.clock.observe(present_ns, latch_ns);
-        if let Some(prev) = self.last_observed_slot {
-            c.intervals.note(observed - prev);
-        }
-        self.last_observed_slot = Some(observed);
+        // The compositor presented this frame on `taken`, one lead after its latch. Past the
+        // aimed slot, the apply landed after its wakeup and the next frame must not aim at the
+        // vsync it took. The fence trailing by refreshes is the display's own queue (a Shield TV:
+        // one or two, for minutes): `phaseErr` shows it, and no aim of ours moves it.
+        let taken = self.clock.observe(present_ns, latch_ns);
         let Some(assigned) = assigned else {
             // An as-soon-as-possible frame's vsync is taken all the same.
-            self.last_slot = self.last_slot.max(Some(observed));
+            self.last_slot = self.last_slot.max(Some(taken));
             return None;
         };
-        // SurfaceFlinger composed the frame for the first vsync after its latch, one lead on.
-        // Past the aimed one, the apply landed after its wakeup and the next frame must not aim
-        // at the vsync it took. A fence later still is the display's own delay (a Shield TV: one
-        // or two refreshes, for minutes), which no earlier apply shortens.
-        let taken = self.clock.slot_nearest(latch_ns + self.clock.lead_ns());
         let missed = taken > assigned;
         if missed {
             c.slot_miss += 1;
@@ -357,6 +362,15 @@ mod tests {
         assert_eq!(aim(&mut s, &mut c, T0 + P / 4), 1);
         assert_eq!(aim(&mut s, &mut c, T0 + P + P / 4), 2);
         assert_eq!(c.held, 0);
+    }
+
+    #[test]
+    fn a_presents_latch_is_one_lead_before_its_slot_and_a_period_after_an_asap_apply() {
+        let (s, _) = phased(PresentPriority::Latency, false);
+        assert_eq!(s.latch_ns_for(Some(3), T0), s.clock.present_ns(3) - LEAD);
+        assert_eq!(s.latch_ns_for(None, T0), T0 + P);
+        let unphased = Slots::new(120, PresentPriority::Latency, true, false, None);
+        assert_eq!(unphased.latch_ns_for(Some(3), T0), T0 + P);
     }
 
     #[test]
