@@ -178,7 +178,7 @@ it really sends.
 | You ask for | The host |
 |---|---|
 | A resolution and refresh rate | Builds a display at exactly that mode. A host [streaming a real monitor](/docs/virtual-displays#stream-a-real-monitor-instead) keeps that monitor's mode and your device scales. A size the encoder can't take fails the connect. |
-| A bitrate | Clamps it to 500 kbps – 8 Gbps. PyroWave ignores it. |
+| A bitrate | Clamps it to 500 kbps – 8 Gbps. PyroWave reads only zero (**Automatic**) or not (**Fixed**, at your quality). |
 | A PyroWave quality | Holds it between 0.5 and 2 bits per pixel, under its **PyroWave bitrate cap**. A host that doesn't read it uses its own **PyroWave quality**. |
 | A codec | Uses it if it can encode it, otherwise HEVC, AV1, H.264 in that order. |
 | 10-bit HDR | Sends it only for HDR content on an encoder that can; otherwise 8-bit SDR. |
