@@ -735,6 +735,19 @@ mod tests {
         assert_eq!(walks() - start, 1);
         assert!(held(&path, &pkg, Ace::Read));
 
+        // A folder on the refused list costs a verify no walk, stripped or not.
+        super::revoke_sids(&dir, std::slice::from_ref(&pkg)).unwrap();
+        let refused = || super::REFUSED.lock().unwrap();
+        refused().insert((pkg.clone(), path.clone()));
+        let start = walks();
+        let mut skipped = want.clone();
+        converge_folders(&want, &want, &mut skipped, true);
+        assert_eq!(walks() - start, 0);
+        assert!(!held(&path, &pkg, Ace::Read));
+        refused().clear();
+        converge_folders(&want, &want, &mut skipped, true);
+        assert!(held(&path, &pkg, Ace::Read));
+
         // Both come off in one walk, and a noted removal costs none.
         let start = walks();
         let mut gone = want.clone();
@@ -870,16 +883,24 @@ struct Placed {
 const RUNNER_ACES_FILE: &str = "runner-aces.json";
 
 static RECHECK: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static VERIFY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
-/// The `(SID, path)` grants Windows refused this run.
+/// The `(SID, path)` grants Windows refused this run, or that a placing left unseen on the folder.
+/// Neither is walked again before a recheck.
 static REFUSED: std::sync::Mutex<std::collections::BTreeSet<(String, String)>> =
     std::sync::Mutex::new(std::collections::BTreeSet::new());
 
-/// The next converge checks every folder ACE on the folder itself and places any it lacks, and
-/// places every key ACE again. The service asks at start: it runs as SYSTEM, which may edit a
-/// folder like `WindowsApps` that an admin's CLI may not.
+/// The next converge checks every folder ACE on the folder itself and places any it lacks, tries
+/// a refused folder again, and places every key ACE again. The service asks at start: it runs as
+/// SYSTEM, which may edit a folder like `WindowsApps` that an admin's CLI may not.
 pub(super) fn recheck_next() {
     RECHECK.store(true, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// The next converge checks every folder ACE on the folder itself and places any it lacks: one
+/// descriptor read per ACE, cheap enough to run every minute.
+pub(super) fn verify_next() {
+    VERIFY.store(true, std::sync::atomic::Ordering::Relaxed);
 }
 
 /// Every directory a plugin declared or was granted carries an ACE for the runner's account,
@@ -888,9 +909,9 @@ pub(super) fn recheck_next() {
 /// state and inbox: a container passes only an ACE its account and its capability both hold, so
 /// a root in a user profile needs both. An ACE an older host placed for the package SID is in
 /// the record and comes off here. A root under the host's own profile is nobody's `~` and gets
-/// nothing; a directory that does not exist yet waits for the next start. After
-/// [`recheck_next`] it checks every ACE again: an installer that rewrites a folder or key drops
-/// the ACE while the file still lists it.
+/// nothing; a directory that does not exist yet waits for the next start. The record alone
+/// can't see an ACE that went from its folder, so [`verify_next`] and [`recheck_next`] read the
+/// folders: a plugin without the ACE on its own code can't start.
 pub(super) fn converge_runner_roots(
     roots: &[access::RunnerRoot],
     home: &std::path::Path,
@@ -933,12 +954,19 @@ pub(super) fn converge_runner_roots(
         .and_then(|text| serde_json::from_str(&text).ok())
         .unwrap_or_default();
     let recheck = RECHECK.swap(false, std::sync::atomic::Ordering::Relaxed);
-    if want == had && !recheck {
+    if recheck {
+        REFUSED
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .clear();
+    }
+    let verify = VERIFY.swap(false, std::sync::atomic::Ordering::Relaxed) || recheck;
+    if want == had && !verify {
         return Ok(false);
     }
     let mut placed = had.clone();
     let empty = Placed::default();
-    converge_folders(&want, &had, &mut placed, recheck);
+    converge_folders(&want, &had, &mut placed, verify);
     // Stale keys first: an ACE that outlives its plugin is the leak this file exists to close.
     for (sid, old) in &had.grantees {
         let new = want.grantees.get(sid).unwrap_or(&empty);
@@ -1003,9 +1031,9 @@ pub(super) fn converge_runner_roots(
 
 /// Move every folder ACE in `placed` from `had` to `want`, one walk per folder and verb: an
 /// inheritable ACE makes Windows rewrite every file below, so a folder's SIDs share the walk.
-/// What a grant or revoke already did is recorded without one, and after [`recheck_next`] an
-/// ACE the folder's own DACL still carries is kept rather than placed again.
-fn converge_folders(want: &PlacedAces, had: &PlacedAces, placed: &mut PlacedAces, recheck: bool) {
+/// What a grant or revoke already did is recorded without one. With `verify`, a recorded ACE
+/// counts only if the folder's own DACL still carries it.
+fn converge_folders(want: &PlacedAces, had: &PlacedAces, placed: &mut PlacedAces, verify: bool) {
     let paths = |p: &PlacedAces| -> Aces<Ace> {
         p.grantees
             .iter()
@@ -1028,7 +1056,7 @@ fn converge_folders(want: &PlacedAces, had: &PlacedAces, placed: &mut PlacedAces
                 return true;
             }
             let same = had_paths.get(sid).and_then(|p| p.get(path)) == Some(&ace);
-            same && (!recheck || held(path, sid, ace))
+            same && (!verify || held(path, sid, ace))
         },
         |sid, path| noted_ace(sid, path) == Some(None),
     );
@@ -1077,7 +1105,7 @@ fn converge_folders(want: &PlacedAces, had: &PlacedAces, placed: &mut PlacedAces
         let place: Vec<(String, Ace)> = step
             .place
             .into_iter()
-            .filter(|(sid, _)| recheck || !refused.contains(&(sid.clone(), step.path.clone())))
+            .filter(|(sid, _)| !refused.contains(&(sid.clone(), step.path.clone())))
             .collect();
         if place.is_empty() {
             continue;
@@ -1086,7 +1114,16 @@ fn converge_folders(want: &PlacedAces, had: &PlacedAces, placed: &mut PlacedAces
         match grant_aces(dir, &place) {
             Ok(()) => {
                 for (sid, ace) in &place {
-                    refused.remove(&(sid.clone(), step.path.clone()));
+                    let key = (sid.clone(), step.path.clone());
+                    // Unseen after placing, it would walk this tree on every minute's verify.
+                    if verify && !held(&step.path, sid, *ace) {
+                        refused.insert(key);
+                    } else {
+                        refused.remove(&key);
+                    }
+                    if had_paths.get(sid).and_then(|p| p.get(&step.path)) == Some(ace) {
+                        tracing::warn!(%sid, path = %step.path, "runner ACE had gone, placed again");
+                    }
                     record(placed, sid, &step.path, Some(*ace));
                 }
             }

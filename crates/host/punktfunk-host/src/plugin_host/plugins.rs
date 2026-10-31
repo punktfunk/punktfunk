@@ -611,6 +611,17 @@ pub(crate) fn recheck_runner_roots() {
     plat::recheck_next();
 }
 
+/// The minute's converge, which also reads every folder ACE off its folder. It sits out a store
+/// job: while `bun` rewrites the tree an installed plugin reads as gone, and its ACEs go with it.
+#[cfg(windows)]
+pub(crate) fn heal_runner_roots() {
+    if crate::store::jobs::busy() {
+        return;
+    }
+    plat::verify_next();
+    converge_runner_roots();
+}
+
 /// Tell the runner whether `host.env` turned the sandbox off. The serving host calls this
 /// before it converges roots, because the grantee depends on the answer.
 #[cfg(windows)]

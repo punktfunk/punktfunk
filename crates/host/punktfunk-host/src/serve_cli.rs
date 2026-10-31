@@ -237,14 +237,14 @@ pub(crate) fn prepare_serve(args: ServeArgs) -> Result<(mgmt::Options, native::N
             crate::plugins::recheck_runner_roots();
         }
         crate::plugins::converge_runner_roots();
-        // A launcher installed after the host started brings a declared folder with no ACE; the
-        // converge places it within a minute, while the plugin keeps running.
+        // A launcher installed after the host started brings a declared folder with no ACE, and
+        // a recorded ACE can go from its folder; this puts either right within a minute.
         #[cfg(windows)]
         let _ = std::thread::Builder::new()
             .name("plugin-roots".into())
             .spawn(|| loop {
                 std::thread::sleep(std::time::Duration::from_secs(60));
-                crate::plugins::converge_runner_roots();
+                crate::plugins::heal_runner_roots();
             });
         crate::plugins::converge_runner_acls(&runner);
         crate::plugins::converge_seat_denies();
