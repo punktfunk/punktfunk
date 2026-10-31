@@ -59,7 +59,7 @@ host_rebuild_stall_legacy	0	1	15	0	2	0	0	1000	325d140c
 decoder_knee_legacy	0	99999	12	0	3	0	0	1000	f43012d4
 unknown_refresh_knee_legacy	0	99999	25	0	1	0	0	1000	af8cb644
 idle_then_motion_legacy	0	11	0	6	4	0	0	1000	74053aa3
-pyrowave_pin_fit	0	1	0	0	5	0	0	1000	811c9dc5
+pyrowave_fixed_wall	0	1	0	0	6	0	0	1000	811c9dc5
 pyrowave_pin_holds	0	1	0	0	1	0	0	1000	811c9dc5
 calm_desktop_lossy	0	3	0	15	5	0	0	1000	ea6b71af
 wan_lone_loss_nack	0	3	3	2	38	0	0	1000	60ef5243

@@ -95,9 +95,9 @@ pub struct Feed {
 impl Feed {
     /// The session's driver, with the three environment overrides read once. Automatic is a
     /// session with no player rate and a host that echoed one: PyroWave's adapts between its
-    /// floor and the host's pin. An explicit-rate PyroWave session runs at the pin, which the
-    /// bring-up ramp may lower once. An explicit H.26x rate is never moved; its ramp measures
-    /// `L` alone, and its dead frames may bring `L` down to it. No controller runs for either.
+    /// floor and the host's pin. An explicit rate is never moved, and no controller runs: its
+    /// ramp measures `L` alone. PyroWave's runs at the host's pin whatever number the player
+    /// stored; an H.26x rate's dead frames may also bring `L` down to it.
     pub fn new(facts: Facts, host: HostLink, client: LinkFacts, now: Instant) -> Self {
         let automatic = facts.bitrate_kbps == 0;
         let pyrowave = facts.codec == crate::quic::CODEC_PYROWAVE;
@@ -253,5 +253,38 @@ mod tests {
         assert_eq!(watched(80_000, CODEC_HEVC), Some(80_000));
         assert_eq!(watched(0, CODEC_HEVC), None);
         assert_eq!(watched(80_000, CODEC_PYROWAVE), None);
+    }
+
+    /// Under PyroWave a stored rate only says "Fixed": the session runs at the pin the host
+    /// echoed, whatever number the player had stored.
+    #[test]
+    fn a_stored_rate_under_pyrowave_is_not_its_rate() {
+        let running = |bitrate_kbps| {
+            let facts = Facts {
+                bitrate_kbps,
+                resolved_bitrate_kbps: 1_200_000,
+                codec: CODEC_PYROWAVE,
+                bit_depth: 8,
+                chroma_format: crate::quic::CHROMA_IDC_420,
+                refresh_hz: 60,
+                stream_cap_kbps: 1_200_000,
+                pyrowave_floor_kbps: Some(400_000),
+                audio_reserved_kbps: 0,
+                marks_repeats: true,
+                serves_ramp: true,
+                probe_only: false,
+            };
+            let links = (HostLink::default(), LinkFacts::default());
+            let feed = Feed::new(facts, links.0, links.1, Instant::now());
+            (feed.driver.target_kbps(), feed.driver.quality_floor())
+        };
+        for stored in [20_000, 130_000, 3_000_000] {
+            assert_eq!(running(stored), (1_200_000, None), "stored {stored}");
+        }
+        assert_eq!(
+            running(0),
+            (1_200_000, None),
+            "Automatic opens at the pin too"
+        );
     }
 }
