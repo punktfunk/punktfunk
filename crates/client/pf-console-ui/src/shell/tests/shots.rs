@@ -817,9 +817,10 @@ fn store_shots() {
 /// Website captures, each device at its panel size and the scale its client passes.
 /// `PF_CONSOLE_STORE=<dir> cargo test -p pf-console-ui -- --ignored website_shots`.
 /// Apple scales are `ConsoleView.designScale`: iOS is screen scale × 0.75 on a phone and × 1
-/// on an iPad; macOS is max(short side px / 800, backing × 0.75). webOS passes none, so
-/// 1080p takes the couch k = 1.35. The Deck is twice its 1280×800 panel: k = 2 draws its 1×
-/// layout sharp enough for a close render. No safe-area insets: the backdrop runs edge to edge.
+/// on an iPad; macOS is max(short side px / 800, backing × 0.75). webOS passes none, so a
+/// panel takes the couch k = height / 800: 1.35 at 1080p, 2.7 at 4K. The Deck is twice its
+/// 1280×800 panel: k = 2 draws its 1× layout sharp enough for a close render. No safe-area
+/// insets: the backdrop runs edge to edge.
 #[test]
 #[ignore]
 fn website_shots() {
@@ -830,6 +831,7 @@ fn website_shots() {
         ("ipad", 2752, 2064, Some(2.0 * 1.0), Apple),
         ("mac", 3024, 1964, Some(1964.0 / 800.0), Apple),
         ("tv", 1920, 1080, None, WebOS),
+        ("tv-4k", 3840, 2160, None, WebOS),
         ("deck", 2560, 1600, None, Desktop),
     ] {
         rig.viewport = crate::console::Viewport {
