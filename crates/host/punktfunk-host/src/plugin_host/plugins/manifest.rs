@@ -64,6 +64,11 @@ pub struct PluginManifest {
     /// Paths the plugin reads. Absolute, or `~`-rooted.
     #[serde(default)]
     pub reads: Vec<String>,
+    /// Folders it reads the files of, nothing below: a Windows library folder holds a game tree
+    /// that a `reads` entry would rewrite file by file. Bound like `reads` on Linux. Outside
+    /// [`Self::roots`]: a path below one is not the plugin's to hand a launch.
+    #[serde(default)]
+    pub files: Vec<String>,
     /// Paths it also writes.
     #[serde(default)]
     pub writes: Vec<String>,
@@ -87,6 +92,7 @@ impl PluginManifest {
     pub fn per_account(&self) -> bool {
         self.reads
             .iter()
+            .chain(self.files.iter())
             .chain(self.writes.iter())
             .any(|p| p == "~" || p.starts_with("~/") || p.starts_with("~\\"))
             || self
@@ -273,6 +279,7 @@ pub(crate) fn granted_roots_in(id: &str, config_dir: PathBuf) -> Vec<PathBuf> {
     crate::plugins::access::AccessStore::open(config_dir)
         .grants_for(id)
         .into_iter()
+        .filter(|g| !g.files)
         .flat_map(|g| expand_home(&g.path))
         .collect()
 }
@@ -549,6 +556,16 @@ mod manifest_tests {
         assert_eq!(m.root_of(&linked.join("snes/y.sfc")), Some(linked.clone()));
         assert_eq!(m.root_of(&roms.join("x.sfc")), Some(roms.clone()));
         assert_eq!(m.root_of(&root.join("home/u/other/y.sfc")), None);
+    }
+
+    #[test]
+    fn a_files_root_hands_no_launch_a_path_below_it() {
+        let m = PluginManifest {
+            files: vec!["/games/steamapps".into()],
+            ..manifest(&[])
+        };
+        assert!(!m.confines(Path::new("/games/steamapps/common/x.exe")));
+        assert!(!m.confines(Path::new("/games/steamapps")));
     }
 
     #[test]

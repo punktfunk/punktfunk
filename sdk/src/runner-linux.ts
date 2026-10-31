@@ -128,6 +128,7 @@ export const runSandboxed = (
 		const grants = grantedRoots(config, id);
 		const refused = [
 			...(manifest.reads ?? []),
+			...(manifest.files ?? []),
 			...(manifest.writes ?? []),
 			...grants.map((g) => g.path),
 		]

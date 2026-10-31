@@ -49,6 +49,9 @@ pub(crate) struct Job {
     pub started_at: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub finished_at: Option<u64>,
+    /// The folder a running job is opening for its plugin right now.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub walk: Option<crate::plugins::walks::AccessWalk>,
 }
 
 struct Jobs {
@@ -91,6 +94,7 @@ fn begin(kind: &str, target: &str) -> Result<String> {
         error: None,
         started_at: crate::clock::unix_secs_u64(),
         finished_at: None,
+        walk: None,
     };
     g.jobs.push_back(job);
     while g.jobs.len() > JOB_HISTORY {
@@ -141,7 +145,11 @@ fn finish(id: &str, result: Result<()>) {
 }
 
 pub(crate) fn get(id: &str) -> Option<Job> {
-    lock().jobs.iter().find(|j| j.id == id).cloned()
+    let mut job = lock().jobs.iter().find(|j| j.id == id).cloned()?;
+    if job.state == State::Running {
+        job.walk = crate::plugins::walks::current();
+    }
+    Some(job)
 }
 
 /// Newest last.

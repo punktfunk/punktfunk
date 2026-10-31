@@ -17,6 +17,7 @@ pub(crate) mod background_input;
 pub(crate) mod capture_worker;
 // Take-turns profiles: which account holds the console, and the `tscon` switch to another.
 pub(crate) mod console;
+pub(crate) mod folder_ace;
 pub(crate) mod game_term;
 pub(crate) mod install;
 pub(crate) mod interactive;

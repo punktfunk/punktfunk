@@ -7,8 +7,12 @@
 
 use super::shared::*;
 use crate::events::{emit, EventKind};
-use crate::plugins::access::Decision;
+use crate::plugins::access::{AskedPath, Decision, Mutation, PluginAccessSnapshot};
 use axum::Extension;
+
+/// How long a decision waits for a folder's ACL before it answers. A large Windows tree takes
+/// minutes and the console's server gives a request two.
+const DECISION_WAIT: std::time::Duration = std::time::Duration::from_secs(5);
 
 /// Plugin-authored text: it lands on the console as a caption, so controls and bidi marks go,
 /// as in a device name, and it is capped like a catalog string.
@@ -30,6 +34,10 @@ pub(crate) struct AccessPathRequest {
     /// `true` asks for write access too; a grant is read-only unless the operator allows it.
     #[serde(default)]
     pub write: bool,
+    /// `true` asks for the folder and the files directly in it, nothing below. On Windows this
+    /// lands at once where a whole folder rewrites every file in its tree. Ignored with `write`.
+    #[serde(default)]
+    pub files: bool,
 }
 
 #[derive(Deserialize, ToSchema)]
@@ -151,13 +159,17 @@ pub(crate) async fn request_plugin_access(
         return no_identity();
     };
     let reason = req.reason.as_deref().and_then(sanitize_reason);
-    let paths: Vec<(String, bool)> = req
+    let paths: Vec<AskedPath> = req
         .paths
         .iter()
-        .map(|p| (p.path.clone(), p.write))
+        .map(|p| AskedPath {
+            path: p.path.clone(),
+            write: p.write,
+            files: p.files,
+        })
         .collect();
     let mut changed = false;
-    let mut outcomes = match st.access.request(&id, &paths, reason.clone()) {
+    let mut outcomes = match st.access.request_paths(&id, &paths, reason.clone()) {
         Ok(m) => {
             changed |= m.changed;
             m.value
@@ -307,6 +319,7 @@ pub(crate) async fn get_plugin_access(State(st): State<Arc<MgmtState>>) -> Respo
 /// `allow` turns a pending request into a grant (the platform ACL lands first, so a failed
 /// grant stores nothing), or with `write` set grants a path the operator handed over, on
 /// behalf of `form` when named; `deny` remembers the no; `forget` removes a grant or denial.
+/// A folder that takes longer answers 202 and lists its walk until the record lands.
 #[utoipa::path(
     post,
     path = "/plugin-access/{plugin}/decide",
@@ -316,6 +329,7 @@ pub(crate) async fn get_plugin_access(State(st): State<Arc<MgmtState>>) -> Respo
     request_body = DecideRequest,
     responses(
         (status = OK, description = "The plugin's access state after the decision", body = crate::plugins::access::PluginAccessSnapshot),
+        (status = ACCEPTED, description = "The folder's access is still changing; `walks` lists it", body = crate::plugins::access::PluginAccessSnapshot),
         (status = BAD_REQUEST, description = "Invalid path or a limit reached", body = ApiError),
         (status = NOT_FOUND, description = "No pending request for that path", body = ApiError),
         (status = UNAUTHORIZED, description = "Missing or invalid bearer token", body = ApiError),
@@ -341,7 +355,7 @@ pub(crate) async fn decide_plugin_access(
         let st = Arc::clone(&st);
         blocking("plugin access", move || f(&st))
     };
-    let outcome = match (decision, req.write) {
+    let work = match (decision, req.write) {
         (Decision::Allow, Some(write)) => {
             let (plugin, path, form) = (plugin.clone(), req.path.clone(), req.form.clone());
             store(Box::new(move |st| {
@@ -355,12 +369,11 @@ pub(crate) async fn decide_plugin_access(
                     None => st.access.grant(&plugin, dir, write, "console"),
                 }
                 .and_then(|_| st.access.snapshot_for(&plugin))
-                .map(|value| crate::plugins::access::Mutation {
+                .map(|value| Mutation {
                     value,
                     changed: true,
                 })
             }))
-            .await
         }
         (Decision::Allow, None) => {
             // An emulator request: the install lands first, so the grant has a folder and a
@@ -404,28 +417,53 @@ pub(crate) async fn decide_plugin_access(
             store(Box::new(move |st| {
                 st.access.decide(&plugin, &path, Decision::Allow, "console")
             }))
-            .await
         }
         (decision, _) => {
             let (plugin, path) = (plugin.clone(), req.path.clone());
             store(Box::new(move |st| {
                 st.access.decide(&plugin, &path, decision, "console")
             }))
-            .await
         }
     };
-    let outcome = match outcome {
-        Ok(outcome) => outcome,
-        Err(resp) => return resp,
-    };
-    match outcome {
-        Ok(m) => {
+    settle(&st, plugin, "record the decision", work).await
+}
+
+/// Answer with `work`'s outcome, or with a 202 listing the walk once [`DECISION_WAIT`] is up.
+/// `work` runs to its end either way, and what it changed reaches the runner and the console.
+async fn settle<F>(st: &Arc<MgmtState>, plugin: String, what: &'static str, work: F) -> Response
+where
+    F: std::future::Future<
+            Output = Result<std::io::Result<Mutation<PluginAccessSnapshot>>, Response>,
+        > + Send
+        + 'static,
+{
+    let (answer, answered) = tokio::sync::oneshot::channel();
+    let id = plugin.clone();
+    tokio::spawn(async move {
+        let outcome = work.await;
+        if matches!(&outcome, Ok(Ok(m)) if m.changed) {
             // Not awaited: a changed root restarts the runner, which this answer need not wait on.
             tokio::task::spawn_blocking(crate::plugins::converge_after_decision);
-            emit(EventKind::PluginsChanged { id: plugin });
-            Json(m.value).into_response()
+            emit(EventKind::PluginsChanged { id: id.clone() });
         }
-        Err(e) => store_err(e, "record the decision"),
+        if let Err(Ok(Err(e))) = answer.send(outcome) {
+            tracing::warn!(plugin = %id, error = %e, "folder decision not recorded");
+        }
+    });
+    let Ok(outcome) = tokio::time::timeout(DECISION_WAIT, answered).await else {
+        return match st.access.snapshot_for(&plugin) {
+            Ok(snap) => (StatusCode::ACCEPTED, Json(snap)).into_response(),
+            Err(e) => store_err(e, "read the access requests"),
+        };
+    };
+    match outcome {
+        Ok(Ok(Ok(m))) => Json(m.value).into_response(),
+        Ok(Ok(Err(e))) => store_err(e, what),
+        Ok(Err(resp)) => resp,
+        Err(_) => api_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "The plugin access worker stopped responding.",
+        ),
     }
 }
 
@@ -442,6 +480,7 @@ pub(crate) async fn decide_plugin_access(
     request_body = ReleaseRequest,
     responses(
         (status = OK, description = "The plugin's access state after the release", body = crate::plugins::access::PluginAccessSnapshot),
+        (status = ACCEPTED, description = "The folder's access is still changing; `walks` lists it", body = crate::plugins::access::PluginAccessSnapshot),
         (status = BAD_REQUEST, description = "Invalid form name", body = ApiError),
         (status = UNAUTHORIZED, description = "Missing or invalid bearer token", body = ApiError),
         (status = FORBIDDEN, description = "Not reachable on the plugin or device lane", body = ApiError),
@@ -457,27 +496,13 @@ pub(crate) async fn release_plugin_access(
         return api_error(StatusCode::BAD_REQUEST, FORM_INVALID);
     }
     // A grant only forms held goes with them, and its ACL with it: off the async workers.
-    let released = {
+    let work = {
         let (st, plugin) = (Arc::clone(&st), plugin.clone());
         blocking("plugin access", move || {
-            st.access
-                .release(&plugin, &req.form, &req.keep)
-                .and_then(|m| Ok((m.changed, st.access.snapshot_for(&plugin)?)))
+            let changed = st.access.release(&plugin, &req.form, &req.keep)?.changed;
+            let value = st.access.snapshot_for(&plugin)?;
+            Ok(Mutation { value, changed })
         })
-        .await
     };
-    let released = match released {
-        Ok(released) => released,
-        Err(resp) => return resp,
-    };
-    match released {
-        Ok((changed, snap)) => {
-            if changed {
-                tokio::task::spawn_blocking(crate::plugins::converge_after_decision);
-                emit(EventKind::PluginsChanged { id: plugin });
-            }
-            Json(snap).into_response()
-        }
-        Err(e) => store_err(e, "record the release"),
-    }
+    settle(&st, plugin, "record the release", work).await
 }

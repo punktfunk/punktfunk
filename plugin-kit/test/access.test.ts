@@ -96,6 +96,20 @@ describe("folder access", () => {
 		}
 	});
 
+	test("a folder asked for by its files keeps that through the check", () => {
+		const missing = `/definitely-missing-punktfunk-${process.pid}`;
+		const previous = process.env.PUNKTFUNK_MGMT_UNIX;
+		try {
+			process.env.PUNKTFUNK_MGMT_UNIX = "/run/punktfunk/host.sock";
+			expect(unreachable([{ path: missing, files: true }, missing])).toEqual([
+				{ path: missing, files: true },
+			]);
+		} finally {
+			if (previous === undefined) delete process.env.PUNKTFUNK_MGMT_UNIX;
+			else process.env.PUNKTFUNK_MGMT_UNIX = previous;
+		}
+	});
+
 	test("defineLibraryPlugin asks once for one unreachable set", async () => {
 		const previousConfig = process.env.PUNKTFUNK_CONFIG_DIR;
 		const previousSocket = process.env.PUNKTFUNK_MGMT_UNIX;

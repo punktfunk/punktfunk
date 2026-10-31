@@ -13,6 +13,8 @@ import type { EventOf, GameRef } from "@punktfunk/host/core";
 import { Duration, Effect, type Schema, Stream } from "effect";
 import {
 	type AccessRequestOutcome,
+	type AccessRequestPath,
+	byPath,
 	requestAccess,
 	unreachable,
 } from "../access.js";
@@ -90,7 +92,9 @@ export interface LibraryPluginDef<S extends Schema.Top> {
 	/** Launcher data dirs to watch, so a newly installed game appears without waiting for a poll. */
 	readonly watchDirs?: (cfg: S["Type"]) => ReadonlyArray<string>;
 	/** Folders the launcher lists dynamically; unusable ones are requested before each scan. */
-	readonly wants?: (cfg: S["Type"]) => ReadonlyArray<string>;
+	readonly wants?: (
+		cfg: S["Type"],
+	) => ReadonlyArray<string | AccessRequestPath>;
 	/** How often to re-scan regardless of watches. Default `Duration.minutes(15)`. */
 	readonly pollInterval?: Duration.Duration;
 	/** Debounce on filesystem events. Default `Duration.seconds(3)`. */
@@ -197,7 +201,7 @@ const logOutcomes = (outcomes: ReadonlyArray<AccessRequestOutcome>) =>
  * the host never answered is asked again on the next scan; it never fails the scan.
  */
 const accessAwareCompute = <Cfg, A, E, R>(
-	wants: ((cfg: Cfg) => ReadonlyArray<string>) | undefined,
+	wants: ((cfg: Cfg) => ReadonlyArray<string | AccessRequestPath>) | undefined,
 	title: string,
 	load: Effect.Effect<Cfg, E, R>,
 	compute: (cfg: Cfg) => Effect.Effect<A, E, R>,
@@ -206,7 +210,7 @@ const accessAwareCompute = <Cfg, A, E, R>(
 	return () =>
 		load.pipe(
 			Effect.flatMap((cfg) => {
-				const dirs = unreachable(wants?.(cfg) ?? []).sort();
+				const dirs = byPath(unreachable(wants?.(cfg) ?? []));
 				const key = JSON.stringify(dirs);
 				if (key === lastAsked) return compute(cfg);
 				if (dirs.length === 0) {
