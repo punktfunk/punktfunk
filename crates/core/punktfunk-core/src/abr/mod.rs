@@ -47,7 +47,7 @@ pub(crate) use link::LINK_FLOOR_KBPS;
 pub use probe::{ProbeReport, RampStep, RampStepEnd, RampSummary};
 pub use sample::{DelayTrend, WindowActivity, WindowSample, WINDOW};
 pub use shape::Shape;
-pub use verdict::{shows_loss_shape, Reason};
+pub use verdict::{shows_head_loss, shows_loss_shape, Reason};
 
 use std::time::Instant;
 

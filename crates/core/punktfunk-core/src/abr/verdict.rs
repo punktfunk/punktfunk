@@ -140,10 +140,11 @@ fn tails(head: u32, mid: u32, tail: u32) -> bool {
 /// Loss at the frames' heads, well past the rest, with the socket dropping nothing: a
 /// receiver whose adapter wakes late. The wake shape answers it, not the rate.
 pub(crate) fn head_signature(w: &WindowSample) -> bool {
-    heads(w.head, w.mid, w.tail, w.sock_drops)
+    shows_head_loss(w.head, w.mid, w.tail, w.sock_drops)
 }
 
-fn heads(head: u32, mid: u32, tail: u32, sock_drops: u32) -> bool {
+/// [`head_signature`] on a report's counts, for a host reading the same window.
+pub fn shows_head_loss(head: u32, mid: u32, tail: u32, sock_drops: u32) -> bool {
     head >= HEAD_MIN
         && head >= HEAD_RATIO.saturating_mul(mid.saturating_add(tail))
         && sock_drops == 0
@@ -153,7 +154,7 @@ fn heads(head: u32, mid: u32, tail: u32, sock_drops: u32) -> bool {
 /// a filling queue. A host that sees one keeps its encoder on the frames the client
 /// confirmed.
 pub fn shows_loss_shape(head: u32, mid: u32, tail: u32, sock_drops: u32) -> bool {
-    heads(head, mid, tail, sock_drops) || tails(head, mid, tail)
+    shows_head_loss(head, mid, tail, sock_drops) || tails(head, mid, tail)
 }
 
 /// Rolling-min baselines for the three relative signals.
