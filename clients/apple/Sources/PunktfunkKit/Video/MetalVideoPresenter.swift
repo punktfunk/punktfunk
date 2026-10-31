@@ -141,7 +141,8 @@ using namespace metal;
 
 // `uv` addresses the visible part of the frame (chroma, and luma drawn as decoded); `luv` is luma's
 // own, the unit square once `lumaForTarget` has already cropped and scaled it. `upscale` is 1 while
-// the bound luma is smaller than the target (or scaled by the shader), 0 when it is 1:1.
+// the bound luma is smaller than the target and the pass affords Catmull-Rom (`oneTapLuma` in
+// Swift), 0 at 1:1 or on one tap.
 struct VOut { float4 pos [[position]]; float2 uv; float2 luv; float upscale [[flat]]; };
 
 // Origin + size of each, in texture UV, and the mode (see `UvRects` in Swift).
@@ -406,7 +407,10 @@ public final class MetalVideoPresenter {
     /// thread. Read as each frame encodes, so deadline pacing sets it per present on the render
     /// thread.
     var onGPUTime: (@Sendable (_ start: CFTimeInterval, _ end: CFTimeInterval) -> Void)?
-
+    /// Luma upscales with one bilinear tap instead of Catmull-Rom's nine. Deadline pacing sets it
+    /// once the pass runs over half the refresh (`DeadlinePacer.overBudget`); a 1:1 or
+    /// Lanczos-scaled luma takes one tap regardless. RENDER THREAD.
+    var oneTapLuma = false
 
     private let device: MTLDevice
     private let queue: MTLCommandQueue
@@ -1459,8 +1463,9 @@ public final class MetalVideoPresenter {
                 x: src.minX * size.width, y: src.minY * size.height,
                 width: cropW, height: cropH))
         let fits = CGFloat(target.width) >= cropW - 0.5 && CGFloat(target.height) >= cropH - 0.5
+        let oneTap = onGrid || oneTapLuma
         return (
-            UvRects(frame: frame, luma: frame, mode: SIMD4<Float>(onGrid ? 0 : 1, 0, 0, 0)),
+            UvRects(frame: frame, luma: frame, mode: SIMD4<Float>(oneTap ? 0 : 1, 0, 0, 0)),
             src, CGSize(width: cropW, height: cropH), fits)
     }
 
@@ -1503,7 +1508,8 @@ public final class MetalVideoPresenter {
                 ? "1:1 (no resample)"
                 : String(
                     format: "RESAMPLE scale=%.4fx%.4f %@", sx, sy,
-                    (sx < 1 || sy < 1) && lanczos != nil ? "lanczos" : "catmull-rom")
+                    (sx < 1 || sy < 1) && lanczos != nil
+                        ? "lanczos" : oneTapLuma ? "bilinear" : "catmull-rom")
             let msg =
                 "stage2: decoded \(Int(decoded.width))x\(Int(decoded.height)) → drawable \(Int(drawable.width))x\(Int(drawable.height)) [\(verdict)] hdr=\(hdrActive) sdr10=\(tenBitSDRActive)"
             presenterLog.info("\(msg, privacy: .public)")

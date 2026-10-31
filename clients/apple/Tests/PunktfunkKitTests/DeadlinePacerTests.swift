@@ -233,6 +233,26 @@ final class DeadlinePacerTests: XCTestCase {
         XCTAssertEqual(pacer.inFlight, 1)
     }
 
+    /// A pass over half its refresh for `heavyRun` presents in a row puts the pacer over budget;
+    /// one lighter pass starts the run over, a pass with no period is not judged, and the
+    /// verdict never clears.
+    func testARunOfPassesOverHalfTheRefreshGoesOverBudget() {
+        let pacer = DeadlinePacer()
+        let note = { (end: CFTimeInterval, period: CFTimeInterval) in
+            pacer.noteGPU(issuedAt: 1.0, start: 1.0, end: end, deadline: 1.016, period: period)
+        }
+        for _ in 0..<DeadlinePacer.heavyRun { note(1.009, 0) }
+        XCTAssertFalse(pacer.overBudget, "no period, no judgement")
+        for _ in 1..<DeadlinePacer.heavyRun { note(1.009, 0.01667) }
+        note(1.004, 0.01667)
+        for _ in 1..<DeadlinePacer.heavyRun { note(1.009, 0.01667) }
+        XCTAssertFalse(pacer.overBudget, "a lighter pass starts the run over")
+        note(1.009, 0.01667)
+        XCTAssertTrue(pacer.overBudget)
+        note(1.004, 0.01667)
+        XCTAssertTrue(pacer.overBudget, "never clears")
+    }
+
     func testTheLateLineNamesEveryFieldAgainstTheDeadline() {
         let late = LatePresent(
             lateNs: 8_330_000, vendAt: 10.000, issuedAt: 10.0015, deadline: 10.0083,

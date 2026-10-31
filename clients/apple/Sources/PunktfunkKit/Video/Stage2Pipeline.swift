@@ -664,6 +664,10 @@ final class DeadlinePacer: @unchecked Sendable {
     /// Presents per learning window: 2 s at 120 Hz.
     static let learnWindow = 240
 
+    /// Passes in a row over half their refresh before `overBudget` sets: half a second at 60 Hz,
+    /// past a session start's GPU clock ramp. One lighter pass starts the count over.
+    static let heavyRun = 30
+
     /// The last safe pick for a drawable vended at `vendAt`: the deadline less `margin`, which
     /// never takes more than 3/4 of the window. A margin past the window would expire every
     /// drawable, and with nothing rendered its measured costs could never come down again.
@@ -703,6 +707,7 @@ final class DeadlinePacer: @unchecked Sendable {
     private var held = 0, superseded = 0, skips = 0, expired = 0, drains = 0, late = 0
     private var dropped = 0, bumps = 0, undone = 0, gpuPastDeadline = 0
     private var vendToDeadline: [Double] = [], deadlineToGlass: [Double] = []
+    private var heavyPasses = 0, passTooLong = false
 
     var margin: CFTimeInterval {
         lock.lock()
@@ -714,18 +719,32 @@ final class DeadlinePacer: @unchecked Sendable {
         max(wake.value + (span.value ?? (cpu.value + gpu.value)) + 0.0005, 0.001) + extra
     }
 
+    /// True once `heavyRun` passes in a row each ran over half their refresh. The margin caps at
+    /// 3/4 of the window, so such a pass lands a refresh late from any pick and the presenter
+    /// drops the Catmull-Rom upscale for one tap. Never clears: the cheap pass cannot re-measure
+    /// the dear one.
+    var overBudget: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return passTooLong
+    }
+
     func noteRender(seconds: CFTimeInterval) { lock.lock(); cpu.note(seconds); lock.unlock() }
 
-    /// One present's GPU work, issued at `issuedAt`, against its deadline; all
-    /// `CACurrentMediaTime` seconds.
+    /// One present's GPU work, issued at `issuedAt`, against its deadline and the refresh
+    /// `period` it had to fit (0: not judged); all `CACurrentMediaTime` seconds.
     func noteGPU(
         issuedAt: CFTimeInterval, start: CFTimeInterval, end: CFTimeInterval,
-        deadline: CFTimeInterval
+        deadline: CFTimeInterval, period: CFTimeInterval = 0
     ) {
         lock.lock()
         gpu.note(end - start)
         span.note(end - issuedAt)
         if end > deadline { gpuPastDeadline += 1 }
+        if period > 0 {
+            heavyPasses = end - start > period / 2 ? heavyPasses + 1 : 0
+            if heavyPasses >= Self.heavyRun { passTooLong = true }
+        }
         lock.unlock()
     }
 
@@ -2175,10 +2194,20 @@ public final class Stage2Pipeline {
                 // This present's GPU span: the presenter reads the hook as the frame encodes.
                 let gpuSpan = LatestBox<(start: CFTimeInterval, end: CFTimeInterval)>()
                 let deadline = vended.deadline, vendAt = vended.vendAt
+                let period = vended.period
                 presenter.onGPUTime = { start, end in
                     pacer.noteGPU(
-                        issuedAt: renderStarted, start: start, end: end, deadline: deadline)
+                        issuedAt: renderStarted, start: start, end: end, deadline: deadline,
+                        period: period)
                     gpuSpan.put((start: start, end: end))
+                }
+                // A pass the refresh cannot hold lands every present a refresh late, whatever the
+                // pick: luma upscales with one tap from here (`DeadlinePacer.overBudget`).
+                if pacer.overBudget, !presenter.oneTapLuma {
+                    presenter.oneTapLuma = true
+                    presentLog.info(
+                        "stage4: GPU pass over half the refresh for \(DeadlinePacer.heavyRun) presents — upscaling luma with one tap"
+                    )
                 }
                 let after = lastFate, inFlight = pacer.inFlight
                 let onGlass: (Int64?) -> Void = { [held, carried] presentedNs in
