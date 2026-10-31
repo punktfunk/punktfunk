@@ -696,17 +696,19 @@ fn on_state_changed(
     }
 }
 
-/// `add_buffer`: the pool census, and the buffer's ledger entry.
+/// `add_buffer`: the pool census, published to the consumer, and the buffer's ledger entry.
 fn on_add_buffer(ud: &mut UserData, buf: usize) {
     ud.pool.add();
+    ud.shared.pool.depth.store(ud.pool.live, Ordering::Relaxed);
     ud.ledger.add(buf);
 }
 
 /// `remove_buffer`: the buffer is freed under any hold, so the ledger forgets it and that
 /// hold's later release is a no-op. A hold's generation covers the address naming a buffer
-/// of the next pool.
+/// of the next pool. The census reaches the consumer as on `add_buffer`.
 fn on_remove_buffer(ud: &mut UserData, buf: usize) {
     ud.pool.remove();
+    ud.shared.pool.depth.store(ud.pool.live, Ordering::Relaxed);
     ud.ledger.remove(buf);
 }
 

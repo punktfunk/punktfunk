@@ -224,6 +224,22 @@ pub trait Feed {
     fn take_keepalive(&mut self) -> Option<Box<dyn Send>> {
         None
     }
+
+    /// The producer's buffer pool as this side spends it; each call starts a new peak. `None`:
+    /// the feed lends no producer buffers.
+    fn pool_use(&self) -> Option<PoolUse> {
+        None
+    }
+}
+
+/// A producer pool's spend since the last [`Feed::pool_use`]. A peak at the depth left the
+/// producer no buffer to paint into, so it skipped a frame.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PoolUse {
+    /// Buffers the producer allocated.
+    pub depth: u32,
+    /// The most withheld from it at once: queued, encoding, or released and not yet requeued.
+    pub withheld_peak: u32,
 }
 
 /// A source that sees the pointer apart from its frames: PipeWire (`SPA_META_Cursor`, or
