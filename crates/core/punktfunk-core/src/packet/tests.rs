@@ -1928,6 +1928,41 @@ fn loss_is_counted_by_its_place_in_the_frame() {
     assert_eq!(s.fec_recovered_shards - s.fec_late_shards, 2);
 }
 
+/// A frame that dies with one block repaired and one past its parity: the repair is
+/// loss, and the dead block's three holes count nowhere.
+#[test]
+fn a_dead_frame_counts_its_holes_once() {
+    let cfg = e2e_config(FecScheme::Gf16, 50);
+    let coder = coder_for(FecScheme::Gf16);
+    let mut pk = Packetizer::new(&cfg);
+    let mut rig = Rig::new(&cfg);
+    // 640 B / 16 B = 40 data shards in ten blocks of 4 + 2: data 0..40, then parity 40..60.
+    let src = vec![7u8; 640];
+    let a = packetize(&mut pk, &src, 1_000_000, coder.as_ref());
+    let kept: Vec<_> = a
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| ![1, 2, 3, 4].contains(i))
+        .map(|(_, p)| p.clone())
+        .collect();
+    assert!(rig.push_all(&kept).is_none(), "block 0 is past its parity");
+    let b = packetize(
+        &mut pk,
+        &src,
+        1_000_000 + LOSS_WINDOW_NS + 1_000,
+        coder.as_ref(),
+    );
+    rig.push_all(&b).expect("the next frame is whole");
+    let s = rig.stats.snapshot();
+    assert_eq!((s.frames_dropped, s.fec_recovered_shards), (1, 1));
+    let received = (kept.len() + b.len()) as u64;
+    assert_eq!(
+        crate::quic::window_loss_ppm(1, 0, s.partial_shards_lost, received),
+        1_000_000 / 117,
+        "block 1's repair alone"
+    );
+}
+
 /// What a frame still lacks: its data shards by AU index, then its parity numbered after
 /// all the data, capped; nothing for a frame that completed or was never seen.
 #[test]
