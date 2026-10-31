@@ -633,7 +633,7 @@ pub(crate) fn converge_runner_roots() -> bool {
     let Some(home) = manifest::home_dir() else {
         return false;
     };
-    let manifests = manifest::installed();
+    let manifests = manifest::runner_plugins();
     let roots = access::AccessStore::open(pf_paths::config_dir()).runner_roots(&manifests);
     match plat::converge_runner_roots(&roots, &home, &manifests) {
         Ok(true) => {

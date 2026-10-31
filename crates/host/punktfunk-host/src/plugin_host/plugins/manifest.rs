@@ -292,10 +292,15 @@ pub fn granted_roots(id: &str) -> Vec<PathBuf> {
 /// Installed means what the runner discovers: the dependencies of `<config>/plugins/package.json`,
 /// not every package under `node_modules`, where a plugin's own libraries live too. Without that
 /// file the tree is scanned. An id is one lowercase path component, and an id two packages claim
-/// is refused for both. Read fresh: installs and updates land between launches. A Windows seat
-/// host reads the box's plugins dir, which its `exec` entries came from.
+/// is refused for both. Read fresh: installs and updates land between launches. A seat host reads
+/// the box's plugins dir, which its `exec` entries came from.
 pub fn installed() -> BTreeMap<String, PluginManifest> {
     installed_in(&pf_paths::seat::library_dir().join("plugins"))
+}
+
+/// The plugins this account's runner starts. A seat's are its own, not the box's [`installed`].
+pub fn runner_plugins() -> BTreeMap<String, PluginManifest> {
+    installed_in(&pf_paths::config_dir().join("plugins"))
 }
 
 fn installed_in(plugins: &Path) -> BTreeMap<String, PluginManifest> {
