@@ -67,6 +67,10 @@ pub struct PendingRequest {
     /// The folder and the files directly in it, nothing below. See [`Grant::files`].
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub files: bool,
+    /// How the plugin spelled `path` when that goes through a link. An allow records it in
+    /// [`PluginAccess::links`]: on Windows the link itself needs the runner's ACE.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub spelled: Option<String>,
 }
 
 /// One plugin's entry in `plugin-grants.json`.
@@ -76,8 +80,9 @@ pub struct PluginAccess {
     pub grants: Vec<Grant>,
     #[serde(default)]
     pub denied: Vec<String>,
-    /// A path the plugin asked for through a link → the granted path it resolves to. The
-    /// sandbox binds only the latter, so the runner recreates each link inside.
+    /// A path the plugin asked for through a link → the granted path it resolves to. The Linux
+    /// sandbox binds only the latter, so the runner recreates each link inside; on Windows each
+    /// link on the way gets its own ACE, since a DACL set by name lands on the target.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub links: BTreeMap<String, String>,
 }
@@ -126,6 +131,10 @@ pub struct RunnerRoot {
     /// The folder and the files directly in it. See [`Grant::files`].
     #[cfg_attr(not(windows), allow(dead_code, reason = "a bind costs no walk"))]
     pub files: bool,
+    /// A junction or symbolic link on the way to a root, as spelled: the link object alone,
+    /// nothing it points at. Windows only; bwrap follows a link.
+    #[cfg_attr(not(windows), allow(dead_code, reason = "bwrap follows a link"))]
+    pub link: bool,
 }
 
 /// `changed` is what the caller emits `plugins.changed` on; `value` is the payload.
@@ -288,15 +297,31 @@ fn home_path(p: &str, policy: &PathPolicy) -> PathBuf {
 }
 
 /// `raw` → `canon` when the plugin reached `canon` through a link: a plain absolute spelling
-/// that differs from where it resolves. A Windows prefix is never plain; ACLs follow junctions.
+/// that differs from where it resolves. A drive is plain; a verbatim or UNC prefix is not.
 fn link_of(raw: &str, canon: &str) -> Option<(String, String)> {
     let p = Path::new(raw);
     let plain = p.is_absolute()
-        && p.components()
-            .all(|c| matches!(c, Component::RootDir | Component::Normal(_)));
+        && p.components().all(|c| match c {
+            Component::RootDir | Component::Normal(_) => true,
+            Component::Prefix(prefix) => matches!(prefix.kind(), std::path::Prefix::Disk(_)),
+            Component::CurDir | Component::ParentDir => false,
+        });
     let spelled: PathBuf = p.components().collect();
-    (plain && spelled != Path::new(canon))
+    (plain && !path_eq(&spelled, Path::new(canon)))
         .then(|| (spelled.to_string_lossy().into_owned(), canon.to_string()))
+}
+
+/// The reparse points on the way to `spelled`, nearest the leaf first: the runner opens through
+/// each, so each needs an ACE of its own. A drive root is never one. Spelled with one separator:
+/// a manifest path keeps the `/` that followed its `%Variable%`.
+#[cfg(windows)]
+fn link_components(spelled: &Path) -> Vec<PathBuf> {
+    spelled
+        .ancestors()
+        .filter(|a| a.parent().is_some())
+        .filter(|a| std::fs::symlink_metadata(a).is_ok_and(|m| m.file_type().is_symlink()))
+        .map(|a| a.components().collect())
+        .collect()
 }
 
 /// A root a request is checked against: `(path, writable, files)`.
@@ -747,8 +772,10 @@ impl AccessStore {
                     .iter()
                     .any(|g| within(Path::new(target), &home_path(&g.path, &self.policy)))
             });
+            // A new link is a new root for the runner, so the caller converges on it.
             if e.links != entry.links {
                 self.write_access(&access)?;
+                changed = true;
             }
         }
         Ok(Mutation {
@@ -842,6 +869,7 @@ impl AccessStore {
             return outcome(canon, "refused:pending_limit");
         }
         pending.push(PendingRequest {
+            spelled: link_of(raw, &canon).map(|(spelled, _)| spelled),
             path: canon.clone(),
             write,
             reason: reason.clone(),
@@ -931,6 +959,7 @@ impl AccessStore {
                 core: core.map(str::to_string),
                 saves,
                 files: false,
+                spelled: None,
             });
             pending_all.insert(id.to_string(), pending);
             self.write_pending(&pending_all)?;
@@ -1066,13 +1095,18 @@ impl AccessStore {
             g.by = by.to_string();
         } else {
             entry.grants.push(Grant {
-                path: row.path,
+                path: row.path.clone(),
                 write: row.write,
                 at: now_rfc3339(),
                 by: by.to_string(),
                 forms: Vec::new(),
                 files: row.files,
             });
+        }
+        if let Some(spelled) = row.spelled {
+            if entry.links.len() < MAX_GRANTS || entry.links.contains_key(&spelled) {
+                entry.links.insert(spelled, row.path);
+            }
         }
         self.write_access(&access)?;
         self.write_pending(&pending_all)?;
@@ -1187,7 +1221,8 @@ impl AccessStore {
         let granted = access
             .values()
             .flat_map(|a| a.grants.iter().map(grant_entry));
-        self.resolve_roots(declared.chain(granted))
+        let links = access.values().flat_map(|a| a.links.keys());
+        self.resolve_roots(declared.chain(granted), links.map(String::as_str))
     }
 
     /// [`Self::runner_roots`] for one plugin: what its manifest declares plus its own grants,
@@ -1202,39 +1237,69 @@ impl AccessStore {
             .get(id)
             .into_iter()
             .flat_map(|a| a.grants.iter().map(grant_entry));
-        self.resolve_roots(declared_entries(manifest).chain(granted))
+        let links = access.get(id).into_iter().flat_map(|a| a.links.keys());
+        self.resolve_roots(
+            declared_entries(manifest).chain(granted),
+            links.map(String::as_str),
+        )
     }
 
-    /// `(spelled, write, files, operator)` entries into the real roots a runner may see.
+    /// May the runner see `real`, asked for as `spelled`? A missing root is the drop-in's `-`
+    /// prefix's business, and a root may be a file.
+    fn may_bind(&self, spelled: &Path, real: &Path, write: bool, operator: bool) -> bool {
+        let facts = PathFacts {
+            is_dir: true,
+            ..path_facts(real)
+        };
+        refusal_rule(spelled, real, write, operator, &self.policy, facts).is_none()
+    }
+
+    /// The links on the way to `spelled` when it resolves elsewhere, each a root of its own,
+    /// judged as a folder would be.
+    #[cfg(windows)]
+    fn link_roots(&self, spelled: &Path, real: &Path, operator: bool) -> Vec<RunnerRoot> {
+        if path_eq(real, spelled) {
+            return Vec::new();
+        }
+        link_components(spelled)
+            .into_iter()
+            .filter(|link| self.may_bind(link, link, false, operator))
+            .map(|path| RunnerRoot {
+                path,
+                write: false,
+                files: false,
+                link: true,
+            })
+            .collect()
+    }
+
+    /// `(spelled, write, files, operator)` entries into the real roots a runner may see, plus
+    /// the links a plugin asked through, which Windows binds as roots of their own.
     fn resolve_roots<'a>(
         &self,
         entries: impl Iterator<Item = (&'a str, bool, bool, bool)>,
+        links: impl Iterator<Item = &'a str>,
     ) -> Vec<RunnerRoot> {
-        // A missing root is the drop-in's `-` prefix's business, and a root may be a file.
-        let allowed = |spelled: &Path, real: &Path, write: bool, operator: bool| {
-            let facts = PathFacts {
-                is_dir: true,
-                ..path_facts(real)
-            };
-            refusal_rule(spelled, real, write, operator, &self.policy, facts).is_none()
-        };
         let mut roots = Vec::new();
         for (p, write, files, operator) in entries {
             let spelled = home_path(p, &self.policy);
             let real = spelled.canonicalize().unwrap_or_else(|_| spelled.clone());
-            if !allowed(&spelled, &real, write, operator) {
+            if !self.may_bind(&spelled, &real, write, operator) {
                 continue;
             }
+            #[cfg(windows)]
+            roots.extend(self.link_roots(&spelled, &real, operator));
             if real != spelled {
                 let holder = spelled
                     .ancestors()
                     .skip(1)
                     .find(|a| a.canonicalize().is_ok_and(|c| c == *a));
-                if let Some(dir) = holder.filter(|d| allowed(d, d, false, operator)) {
+                if let Some(dir) = holder.filter(|d| self.may_bind(d, d, false, operator)) {
                     roots.push(RunnerRoot {
                         path: dir.to_path_buf(),
                         write: false,
                         files: false,
+                        link: false,
                     });
                 }
             }
@@ -1242,10 +1307,24 @@ impl AccessStore {
                 path: real,
                 write,
                 files,
+                link: false,
             });
         }
-        // Strongest first, so the dedup keeps it: a write, then a tree, then a folder's own files.
-        let strength = |r: &RunnerRoot| (r.write, !r.files);
+        #[cfg(windows)]
+        for spelled in links.map(PathBuf::from) {
+            let real = spelled.canonicalize().unwrap_or_else(|_| spelled.clone());
+            roots.extend(self.link_roots(&spelled, &real, true));
+        }
+        #[cfg(not(windows))]
+        let _ = links;
+        // Strongest first, so the dedup keeps it: a write, then a tree, then a folder's own
+        // files, then a link.
+        let strength = |r: &RunnerRoot| match (r.write, r.files, r.link) {
+            (true, _, _) => 3,
+            (false, _, true) => 0,
+            (false, true, false) => 1,
+            (false, false, false) => 2,
+        };
         roots.sort_by(|a, b| a.path.cmp(&b.path).then(strength(b).cmp(&strength(a))));
         roots.dedup_by(|later, kept| later.path == kept.path);
         let writable: Vec<PathBuf> = roots
@@ -2524,6 +2603,7 @@ mod tests {
                 core: None,
                 saves: false,
                 files: false,
+                spelled: None,
             })
             .collect();
         let s = write_state(&f, entry, pending);
@@ -2557,6 +2637,7 @@ mod tests {
                 core: None,
                 saves: false,
                 files: false,
+                spelled: None,
             }],
         );
         let acl_before = acl_calls();
@@ -2654,6 +2735,54 @@ mod tests {
         // Ordinary profile content is not protected — only the named roots are.
         assert!(!windows_protected(Path::new(r"C:\Users\ann\Games")));
         assert!(!windows_protected(Path::new(r"D:\data\games")));
+    }
+
+    /// A junction is a link the runner opens through, so the ACE must land on it as well as on
+    /// its target: a request keeps its spelling, an allow records the link, and the link is a
+    /// root of its own. `mklink /J` needs no privilege.
+    #[cfg(windows)]
+    #[test]
+    fn a_path_through_a_junction_keeps_its_spelling_and_binds_the_link() {
+        assert_eq!(
+            link_of(r"C:\Games\Lib", r"\\?\D:\Lib"),
+            Some((r"C:\Games\Lib".to_string(), r"\\?\D:\Lib".to_string()))
+        );
+        assert_eq!(link_of(r"C:\Games\Lib", r"\\?\c:\games\lib"), None);
+        assert_eq!(link_of(r"\\?\C:\Games\Lib", r"\\?\D:\Lib"), None);
+        assert_eq!(link_of(r"\\srv\share\Lib", r"\\?\UNC\srv\share\Lib"), None);
+
+        let f = fixture();
+        let plain = |p: &Path| PathBuf::from(p.to_string_lossy().trim_start_matches(r"\\?\"));
+        let target = plain(&f.dir("data/lib"));
+        let link = plain(&f.dir("home/Games")).join("Lib");
+        let made = std::process::Command::new("cmd")
+            .args(["/C", "mklink", "/J"])
+            .arg(&link)
+            .arg(&target)
+            .output()
+            .unwrap();
+        assert!(
+            made.status.success(),
+            "{}",
+            String::from_utf8_lossy(&made.stderr)
+        );
+        let spelled = link.to_string_lossy().into_owned();
+        let canon = link.canonicalize().unwrap().to_string_lossy().into_owned();
+        assert_eq!(link_of(&spelled, &canon), Some((spelled.clone(), canon)));
+        assert_eq!(link_components(&link.join("steamapps")), vec![link.clone()]);
+        assert!(link_components(&target).is_empty());
+
+        let s = f.store();
+        assert_eq!(f.request(&spelled), "pending");
+        let row = s.snapshot_for("demo").unwrap().pending.remove(0);
+        assert_eq!(row.spelled.as_deref(), Some(spelled.as_str()));
+        s.decide("demo", &row.path, Decision::Allow, "console")
+            .unwrap();
+        let entry = s.load_access().unwrap().remove("demo").unwrap();
+        assert_eq!(entry.links.get(&spelled), Some(&row.path));
+        let roots = s.runner_roots(&BTreeMap::new());
+        assert!(roots.iter().any(|r| r.link && r.path == link), "{roots:?}");
+        assert!(roots.iter().any(|r| !r.link && !r.files && !r.write));
     }
 
     #[test]

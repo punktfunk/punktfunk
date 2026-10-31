@@ -301,7 +301,12 @@ fn access_list(flags: &[String]) -> Result<()> {
             );
         }
         for p in &s.pending {
-            println!("  pending  {} ({})", p.path, mode(p.write, p.files));
+            let via = p
+                .spelled
+                .as_deref()
+                .map(|spelled| format!(" via {spelled}"))
+                .unwrap_or_default();
+            println!("  pending  {}{via} ({})", p.path, mode(p.write, p.files));
         }
         for d in &s.denied {
             println!("  denied   {d}");
