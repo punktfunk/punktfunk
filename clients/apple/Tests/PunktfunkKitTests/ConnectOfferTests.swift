@@ -97,8 +97,8 @@ final class ConnectOfferTests: XCTestCase {
     }
 
     /// PyroWave is an opt-in behind the Metal probe: past it the codec is offered and preferred,
-    /// sends Automatic bitrate and takes 4:4:4 without the VideoToolbox probes. A device that fails
-    /// it keeps the user's rate on H.26x.
+    /// carries the stored rate as Fixed (the host ignores its number) and takes 4:4:4 without the
+    /// VideoToolbox probes. A device that fails it keeps the user's rate on H.26x.
     func testPyroWaveIsAnOptInBehindItsProbe() {
         var s = EffectiveSettings()
         s.bitrateKbps = 500_000
@@ -110,7 +110,10 @@ final class ConnectOfferTests: XCTestCase {
 
         s.codec = "pyrowave"
         let passed = offer(s, pyroWave: true)
-        XCTAssertEqual(passed.bitrateKbps, 0)
+        XCTAssertEqual(passed.bitrateKbps, 500_000, "a stored rate is Fixed, never Automatic")
+        s.bitrateKbps = 0
+        XCTAssertEqual(offer(s, pyroWave: true).bitrateKbps, 0, "Automatic stays Automatic")
+        s.bitrateKbps = 500_000
         XCTAssertEqual(passed.preferredCodec, PunktfunkConnection.codecPyroWave)
         XCTAssertEqual(
             passed.videoCodecs & PunktfunkConnection.codecPyroWave, PunktfunkConnection.codecPyroWave)

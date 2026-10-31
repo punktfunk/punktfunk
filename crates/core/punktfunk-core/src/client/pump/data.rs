@@ -469,11 +469,16 @@ impl DataPump {
             ),
             Shed::Real { sheds } => {
                 if self.bitrate_kbps != 0 && sheds == PIN_SHEDS_TO_WARN {
+                    // The host's rate: under PyroWave the stored number only says Fixed.
+                    let pinned_kbps = match self.shared.live_bitrate_kbps.load(Ordering::Relaxed) {
+                        0 => self.bitrate_kbps,
+                        live => live,
+                    };
                     self.shared
                         .unsustainable_pin_kbps
-                        .store(self.bitrate_kbps, Ordering::Relaxed);
+                        .store(pinned_kbps, Ordering::Relaxed);
                     tracing::warn!(
-                        pinned_kbps = self.bitrate_kbps,
+                        pinned_kbps,
                         sheds,
                         "pinned bitrate above what this client sustains — the \
                          receive backlog keeps being shed"
