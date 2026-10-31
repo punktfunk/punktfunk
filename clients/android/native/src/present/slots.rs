@@ -208,6 +208,17 @@ impl Slots {
         ((self.frame_interval_ns - k * p).abs() * 10 <= p).then_some(k)
     }
 
+    /// How far a latch's vsync (one lead on) sits from the grid as the presents before it phased
+    /// it: the compositor's own wake jitter, read before the clock takes the sample. `None`
+    /// without a latch or a phased clock.
+    pub(crate) fn latch_deviation_ns(&self, latch_ns: i64) -> Option<i64> {
+        if latch_ns == 0 || !self.clock.phased() {
+            return None;
+        }
+        let anchor = latch_ns + self.clock.lead_ns();
+        Some(anchor - self.clock.present_ns(self.clock.slot_nearest(anchor)))
+    }
+
     /// [`HOLD_BAND_NS`] or the pin, never past half a period.
     fn hold_band_ns(&self) -> i64 {
         self.hold_band_pin
@@ -417,6 +428,12 @@ mod tests {
         assert_eq!(s.latch_ns_for(None, T0), T0 + P);
         let unphased = Slots::new(120, P, PresentPriority::Latency, true, false, None);
         assert_eq!(unphased.latch_ns_for(Some(3), T0), T0 + P);
+        // A latch's distance from the grid, signed; nothing without a latch or a phased clock.
+        let latch = s.clock.present_ns(3) - LEAD;
+        assert_eq!(s.latch_deviation_ns(latch + 300_000), Some(300_000));
+        assert_eq!(s.latch_deviation_ns(latch - 300_000), Some(-300_000));
+        assert_eq!(s.latch_deviation_ns(0), None);
+        assert_eq!(unphased.latch_deviation_ns(latch), None);
     }
 
     #[test]

@@ -194,6 +194,8 @@ pub(crate) struct AscSink {
     fenced: u64,
     fence_err: u64,
     fence_tail_us: Vec<u64>,
+    /// Each latch against the grid, |latch + lead − vsync|: SurfaceFlinger's wake jitter.
+    sf_jitter_us: Vec<u64>,
     last_flush: Instant,
 }
 
@@ -332,6 +334,7 @@ impl AscSink {
             fenced: 0,
             fence_err: 0,
             fence_tail_us: Vec::with_capacity(256),
+            sf_jitter_us: Vec::with_capacity(256),
             last_flush: Instant::now(),
         })
     }
@@ -613,6 +616,11 @@ impl AscSink {
         stats: &crate::stats::VideoStats,
         video_e2e: &AtomicU64,
     ) {
+        if real {
+            if let Some(dev) = self.slots.latch_deviation_ns(a.latch_ns) {
+                self.sf_jitter_us.push(dev.unsigned_abs() / 1000);
+            }
+        }
         if let Some(err_us) = self.slots.on_present(
             present_ns,
             a.latch_ns,
@@ -795,6 +803,7 @@ impl Sink for AscSink {
         let (e2e_p50, e2e_max) = p50_max_ms(std::mem::take(&mut self.e2e_us));
         let (err_p50, err_max) = p50_max_ms(std::mem::take(&mut self.phase_err_us));
         let (tail_p50, tail_max) = p50_max_ms(std::mem::take(&mut self.fence_tail_us));
+        let (jit_p50, jit_max) = p50_max_ms(std::mem::take(&mut self.sf_jitter_us));
         let intervals = std::mem::take(&mut c.intervals);
         let cadence = cadence_suffix(self.store.cadence_health());
         stats.note_cadence(intervals.judder_permille(), c.coalesced);
@@ -803,8 +812,9 @@ impl Sink for AscSink {
             "asc released={} displays={} skipped={} inflight={} qDepth={} paceMs p50={:.2} \
              max={:.2} latchMs p50={:.2} max={:.2} e2eMs p50={:.2} max={:.2} panelMs={:.2} \
              leadMs={:.2} marginUs={} held={} slotMiss={} coalesced={} n0={} n1={} n2={} n3+={} \
-             judder={}‰ mode={} phaseErrMs p50={:.2} max={:.2} forced={} unlatched={} fence={} \
-             fenced={} fenceErr={} fenceTailMs p50={:.2} max={:.2}{}",
+             judder={}‰ mode={} phaseErrMs p50={:.2} max={:.2} sfJitMs p50={:.2} max={:.2} \
+             forced={} unlatched={} fence={} fenced={} fenceErr={} fenceTailMs p50={:.2} \
+             max={:.2}{}",
             c.released,
             c.displays,
             skipped,
@@ -830,6 +840,8 @@ impl Sink for AscSink {
             intervals.mode(),
             err_p50,
             err_max,
+            jit_p50,
+            jit_max,
             c.forced,
             c.unlatched,
             u8::from(self.slots.fence_live()),
