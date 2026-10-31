@@ -18,6 +18,61 @@ const DEESCALATE_CLEAN_FRAMES: u32 = 600;
 pub(super) const DEESCALATE_BACKOFF_START: std::time::Duration = std::time::Duration::from_secs(60);
 const DEESCALATE_BACKOFF_MAX: std::time::Duration = std::time::Duration::from_secs(25 * 60);
 const CADENCE_LOG_MIN_GAP: std::time::Duration = std::time::Duration::from_secs(5);
+// The cadence line's chain percentiles cover this many ticks: ~1 s at 60 fps.
+const CHAIN_WINDOW: usize = 64;
+
+/// The newest [`CHAIN_WINDOW`] submit+poll chains, µs, in a fixed ring.
+pub(super) struct ChainWindow {
+    us: [u32; CHAIN_WINDOW],
+    len: usize,
+    at: usize,
+}
+
+impl Default for ChainWindow {
+    fn default() -> Self {
+        Self {
+            us: [0; CHAIN_WINDOW],
+            len: 0,
+            at: 0,
+        }
+    }
+}
+
+impl ChainWindow {
+    fn push(&mut self, us: u32) {
+        self.us[self.at] = us;
+        self.at = (self.at + 1) % CHAIN_WINDOW;
+        self.len = (self.len + 1).min(CHAIN_WINDOW);
+    }
+
+    /// Over a stack copy, so the ring keeps its order. `None` before the first tick.
+    fn percentile(&self, q: f64) -> Option<u32> {
+        let mut v = self.us;
+        (self.len > 0).then(|| percentile(&mut v[..self.len], q))
+    }
+}
+
+/// The frames per second a source period implies, rounded.
+fn source_fps(src_period_ns: Option<u64>) -> Option<u32> {
+    src_period_ns
+        .filter(|&p| p > 0)
+        .map(|p| (1e9 / p as f64).round() as u32)
+}
+
+/// What the encoder reads, as the frame carries it: the payload and a dmabuf's modifier
+/// (0 = LINEAR). Packed RGB in a dmabuf is converted on the encoder's GPU.
+fn capture_path(frame: &crate::capture::CapturedFrame) -> (&'static str, Option<u64>) {
+    match &frame.payload {
+        pf_frame::FramePayload::Cpu(_) => ("cpu", None),
+        pf_frame::FramePayload::Pixelless => ("pixelless", None),
+        #[cfg(target_os = "linux")]
+        pf_frame::FramePayload::Cuda(_) => ("cuda", None),
+        #[cfg(target_os = "linux")]
+        pf_frame::FramePayload::Dmabuf(d) => ("dmabuf", Some(d.modifier)),
+        #[cfg(target_os = "windows")]
+        pf_frame::FramePayload::D3d11(_) => ("d3d11", None),
+    }
+}
 
 /// Tag a wave-boundary AU with [`USER_FLAG_RECOVERY_POINT`](punktfunk_core::packet::USER_FLAG_RECOVERY_POINT).
 ///
@@ -680,7 +735,8 @@ impl StreamState {
     /// Pipelined-retrieve escalation on a sustained behind-cadence score, wound back after a
     /// clean run with a growing backoff; pipelined retrieve is judged on a full-budget chain
     /// (see [`encode_chain_pressure`]). Also publishes the cadence verdict the ABR climb gate
-    /// reads. With `PUNKTFUNK_IDD_ADAPTIVE` off it does neither.
+    /// reads, and logs its flips ([`Self::log_cadence_flip`]). With `PUNKTFUNK_IDD_ADAPTIVE`
+    /// off it does none of this.
     pub(super) fn adapt_to_cadence(&mut self) {
         let p = &mut self.pipelining;
         if !p.adaptive {
@@ -690,6 +746,9 @@ impl StreamState {
         if p.depth_frames <= CADENCE_WARMUP_FRAMES {
             return;
         }
+        self.diag
+            .chain
+            .push((self.encode_chain_ns / 1_000).min(u64::from(u32::MAX)) as u32);
         let budget = cadence_budget(self.live.interval, self.src_period_ns);
         let schedule_behind =
             std::time::Instant::now() >= self.next + (budget - self.live.interval);
@@ -710,40 +769,10 @@ impl StreamState {
             .cadence_behind_score
             .store(p.behind_score, Ordering::Relaxed);
         if degraded != self.diag.was_degraded {
-            let now = std::time::Instant::now();
-            if self
-                .diag
-                .last_cadence_log
-                .is_none_or(|t| now.duration_since(t) >= CADENCE_LOG_MIN_GAP)
-            {
-                if degraded {
-                    tracing::info!(
-                        behind_score = p.behind_score,
-                        escalated,
-                        encode_pressure,
-                        budget_us = budget.as_micros() as u64,
-                        interval_us = self.live.interval.as_micros() as u64,
-                        src_period_us = self.src_period_ns.map(|p| p / 1_000).unwrap_or_default(),
-                        flips_suppressed = self.diag.cadence_flips_suppressed,
-                        "encode behind cadence — ABR climbs will be refused until it recovers"
-                    );
-                    // Name any other encoder on the engine; Windows pauses Instant Replay there.
-                    crate::encoder_sessions::on_behind_cadence();
-                } else {
-                    tracing::info!(
-                        behind_score = p.behind_score,
-                        encode_pressure,
-                        flips_suppressed = self.diag.cadence_flips_suppressed,
-                        "encode cadence recovered — ABR climbs allowed again"
-                    );
-                }
-                self.diag.last_cadence_log = Some(now);
-                self.diag.cadence_flips_suppressed = 0;
-            } else {
-                self.diag.cadence_flips_suppressed += 1;
-            }
+            self.log_cadence_flip(degraded, encode_pressure, budget);
             self.diag.was_degraded = degraded;
         }
+        let p = &mut self.pipelining;
         if p.deescalating {
             if !self.live.enc.set_pipelined(false) {
                 p.deescalating = false;
@@ -785,6 +814,67 @@ impl StreamState {
                 p.deescalating = true;
             }
         }
+    }
+
+    /// A verdict flip, one line per [`CADENCE_LOG_MIN_GAP`] at most, with what it rests on:
+    /// this tick's encode chain and the last [`CHAIN_WINDOW`] ticks', the source period, the
+    /// path the encoder reads, and the producer pool's withheld peak since the last line. On
+    /// the frame-driven path a chain near the source period means the loop sets that period.
+    fn log_cadence_flip(
+        &mut self,
+        degraded: bool,
+        encode_pressure: bool,
+        budget: std::time::Duration,
+    ) {
+        let now = std::time::Instant::now();
+        if self
+            .diag
+            .last_cadence_log
+            .is_some_and(|t| now.duration_since(t) < CADENCE_LOG_MIN_GAP)
+        {
+            self.diag.cadence_flips_suppressed += 1;
+            return;
+        }
+        let p = &self.pipelining;
+        let (behind_score, pipelined) = (p.behind_score, p.pipelined_active);
+        let escalated = p.pipelined_active || p.deescalating;
+        let (capture, capture_modifier) = capture_path(&self.live.frame);
+        let capture_format = self.live.frame.format;
+        let pool = self.live.capturer.feed().and_then(|f| f.pool_use());
+        let chain = &self.diag.chain;
+        macro_rules! cadence_line {
+            ($msg:literal) => {
+                tracing::info!(
+                    behind_score,
+                    escalated,
+                    pipelined,
+                    encode_pressure,
+                    chain_us = self.encode_chain_ns / 1_000,
+                    chain_us_p50 = chain.percentile(0.50),
+                    chain_us_p90 = chain.percentile(0.90),
+                    budget_us = budget.as_micros() as u64,
+                    interval_us = self.live.interval.as_micros() as u64,
+                    src_period_us = self.src_period_ns.map(|p| p / 1_000),
+                    src_fps = source_fps(self.src_period_ns),
+                    capture,
+                    capture_format = ?capture_format,
+                    capture_modifier,
+                    pool_depth = pool.map(|u| u.depth),
+                    pool_withheld_peak = pool.map(|u| u.withheld_peak),
+                    flips_suppressed = self.diag.cadence_flips_suppressed,
+                    $msg
+                )
+            };
+        }
+        if degraded {
+            cadence_line!("encode behind cadence — ABR climbs will be refused until it recovers");
+            // Name any other encoder on the engine; Windows pauses Instant Replay there.
+            crate::encoder_sessions::on_behind_cadence();
+        } else {
+            cadence_line!("encode cadence recovered — ABR climbs allowed again");
+        }
+        self.diag.last_cadence_log = Some(now);
+        self.diag.cadence_flips_suppressed = 0;
     }
 
     /// Wait for the next tick ([`crate::send_pacing::wait_next_tick`]) on this session's
@@ -964,6 +1054,54 @@ mod tests {
         );
     }
     use super::*;
+
+    /// The ring answers over its newest entries only, and nothing before the first tick.
+    #[test]
+    fn the_chain_window_reads_its_newest_ticks() {
+        let mut w = ChainWindow::default();
+        assert_eq!(w.percentile(0.5), None);
+        w.push(7);
+        assert_eq!(w.percentile(0.9), Some(7));
+        for us in 0..CHAIN_WINDOW as u32 {
+            w.push(1_000 + us);
+        }
+        assert_eq!(w.percentile(0.0), Some(1_000), "the 7 rolled out");
+        assert_eq!(w.percentile(1.0), Some(1_000 + CHAIN_WINDOW as u32 - 1));
+        w.push(5);
+        assert_eq!(w.percentile(0.0), Some(5));
+        assert_eq!(
+            w.percentile(1.5 / CHAIN_WINDOW as f64),
+            Some(1_001),
+            "the oldest entry went: reading left the ring's order alone"
+        );
+    }
+
+    #[test]
+    fn a_source_period_reads_as_whole_frames_per_second() {
+        let rows = [
+            (Some(20_394_000), Some(49)),
+            (Some(16_666_667), Some(60)),
+            (Some(0), None),
+            (None, None),
+        ];
+        for (period_ns, fps) in rows {
+            assert_eq!(source_fps(period_ns), fps, "{period_ns:?}");
+        }
+    }
+
+    #[test]
+    fn a_cpu_frame_names_its_path_without_a_modifier() {
+        let frame = crate::capture::CapturedFrame {
+            width: 2,
+            height: 2,
+            pts_ns: 0,
+            format: pf_frame::PixelFormat::Bgrx,
+            payload: pf_frame::FramePayload::Cpu(vec![0; 16]),
+            cursor: None,
+            provenance: Default::default(),
+        };
+        assert_eq!(capture_path(&frame), ("cpu", None));
+    }
 
     #[test]
     fn an_escalated_but_caught_up_encoder_stops_refusing_climbs() {
