@@ -184,9 +184,12 @@ pub fn force_extend_topology() {
     }
 }
 
-/// Whether this session lists no display path at all, inactive ones included.
-pub fn session_has_no_paths() -> bool {
-    query_display_config(QDC_ALL_PATHS).is_ok_and(|(paths, _)| paths.is_empty())
+/// How many display paths this session lists, inactive ones included. `None` when the query
+/// fails, as it can while the session is detached.
+pub fn session_path_count() -> Option<usize> {
+    query_display_config(QDC_ALL_PATHS)
+        .ok()
+        .map(|(paths, _)| paths.len())
 }
 
 /// Whether this session lists display paths, none of them on `key`'s adapter. A session that

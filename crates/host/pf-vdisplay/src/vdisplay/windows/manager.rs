@@ -320,17 +320,29 @@ fn in_seat_session() -> bool {
         && pf_win_display::console_session_mismatch().is_some()
 }
 
+/// How long a rebuilt seat session gets to list paths again: the keeper's 3 s delay, its connect,
+/// and the new adapter's bring-up.
+const SEAT_REBUILD_WAIT: Duration = Duration::from_secs(12);
+
 /// A seat session that lists no display path has lost the config its adapter published, and no
 /// monitor added to it can get one. Dropping the connection makes the keeper reattach, which
-/// brings up a new adapter with a lit placeholder for the caller's next attempt.
-fn rebuild_empty_seat_session() {
-    if !in_seat_session() || !pf_win_display::win_display::session_has_no_paths() {
-        return;
+/// brings up a new adapter with a lit placeholder. Waits for that adapter and says whether the
+/// connection was dropped: the control device still points at the old one.
+fn rebuild_empty_seat_session() -> bool {
+    use pf_win_display::win_display::session_path_count;
+    if !in_seat_session() || session_path_count() != Some(0) {
+        return false;
     }
-    match pf_win_display::disconnect_own_session() {
-        Ok(()) => tracing::warn!("seat session has no display paths — reconnecting it"),
-        Err(e) => tracing::warn!(error = %e, "seat session with no display paths stayed connected"),
+    if let Err(e) = pf_win_display::disconnect_own_session() {
+        tracing::warn!(error = %e, "seat session with no display paths stayed connected");
+        return false;
     }
+    tracing::warn!("seat session has no display paths — reconnecting it");
+    let asked = Instant::now();
+    while session_path_count().unwrap_or(0) == 0 && asked.elapsed() < SEAT_REBUILD_WAIT {
+        thread::sleep(Duration::from_millis(100));
+    }
+    true
 }
 
 /// Says so when this process is outside the active console session, where display
@@ -385,11 +397,17 @@ struct GroupState {
     topology: crate::policy::Topology,
 }
 
-/// One stage of [`VirtualDisplayManager::resolve_target_gdi`]'s ladder: poll for the target's GDI name until
-/// the 3 s ceiling. 50 ms sampling (latency plan P0.5) — a typical activation resolves on an early
-/// poll, so finer sampling shaves ~150 ms off every stage crossing.
-fn poll_gdi_name(key: CcdTargetKey) -> Option<String> {
-    for _ in 0..60 {
+/// The 3 s ceiling of a stage of [`VirtualDisplayManager::resolve_target_gdi`]'s ladder.
+const GDI_POLLS: u32 = 60;
+/// A seat's first stage: a later monitor on its adapter auto-activates within 50 ms, and the
+/// adapter's first monitor never does.
+const SEAT_GDI_POLLS: u32 = 8;
+
+/// One stage of [`VirtualDisplayManager::resolve_target_gdi`]'s ladder: poll for the target's GDI
+/// name `polls` times. 50 ms sampling (latency plan P0.5) — a typical activation resolves on an
+/// early poll, so finer sampling shaves ~150 ms off every stage crossing.
+fn poll_gdi_name(key: CcdTargetKey, polls: u32) -> Option<String> {
+    for _ in 0..polls {
         thread::sleep(Duration::from_millis(50));
         if let Some(n) = resolve_gdi_name(key) {
             return Some(n);
@@ -1110,7 +1128,8 @@ impl VirtualDisplayManager {
     }
 
     /// One climb of the ladder for `ask` on the checked-out map: each [`Next`] is one act, and
-    /// what it saw picks the next. A slot on a departed seat adapter retires the device first.
+    /// what it saw picks the next. An empty seat session is rebuilt first, and that or a slot on
+    /// a departed seat adapter retires the device.
     fn climb(
         &'static self,
         dev: &ControlDevice,
@@ -1118,6 +1137,9 @@ impl VirtualDisplayManager {
         ask: &Ask,
         reopened: bool,
     ) -> Climb {
+        if rebuild_empty_seat_session() {
+            return Climb::Retire(anyhow::anyhow!("seat session was rebuilt"));
+        }
         if let Some(why) = self.forget_left_adapter(t, ask.slot) {
             return Climb::Retire(why);
         }
@@ -1809,7 +1831,8 @@ impl VirtualDisplayManager {
     /// EXTEND de-clones it. LAST RESORT is explicit path activation: a closed lid defeats both
     /// (the clamshell policy suppresses auto-activation and the EXTEND preset "succeeds"
     /// committing nothing), and `activate_target_path` commits the path directly, which ignores
-    /// the lid policy. A seat session with no paths left is rebuilt for the caller's next attempt
+    /// the lid policy. A seat has no panel to clone and no lid, so it polls briefly and commits
+    /// the path. A seat session with no paths left is rebuilt for the caller's next attempt
     /// ([`rebuild_empty_seat_session`]).
     ///
     /// CAVEAT (unobserved): textbook CCD also allows a clone with a *shared-source ACTIVE* path
@@ -1819,17 +1842,19 @@ impl VirtualDisplayManager {
     /// Call inside a transition: this mutates the live CCD topology, and one transition at a
     /// time keeps two path commits from interleaving.
     fn resolve_target_gdi(&self, key: CcdTargetKey) -> Option<String> {
-        // 50 ms sampling under each stage's 3 s ceiling: a typical activation resolves on an early
-        // poll.
-        if let Some(n) = poll_gdi_name(key) {
+        let seat = in_seat_session();
+        let first = if seat { SEAT_GDI_POLLS } else { GDI_POLLS };
+        if let Some(n) = poll_gdi_name(key, first) {
             return Some(n);
         }
-        force_extend_topology();
-        if let Some(n) = poll_gdi_name(key) {
-            return Some(n);
+        if !seat {
+            force_extend_topology();
+            if let Some(n) = poll_gdi_name(key, GDI_POLLS) {
+                return Some(n);
+            }
         }
         if pf_win_display::win_display::activate_target_path(key) {
-            if let Some(n) = poll_gdi_name(key) {
+            if let Some(n) = poll_gdi_name(key, GDI_POLLS) {
                 return Some(n);
             }
         }
