@@ -72,7 +72,7 @@ Each session gets its own display at the client's resolution and refresh rate �
 | GNOME (Mutter) | libei, direct to Mutter | none | ✅ ⁶ | ⚠️ ⁷ |
 | gamescope | libei (gamescope's own) | none | ⚠️ ⁸ | ⚠️ ⁹ |
 | sway · scroll | wlroots virtual pointer + keyboard | none | ❌ ¹⁰ | ❌ ⁵ |
-| Hyprland | wlroots virtual pointer + keyboard | none | ❌ ¹⁰ | ❌ ⁵ |
+| Hyprland | wlroots virtual pointer + keyboard | none | ❌ ¹⁰ | ✅ ¹³ |
 | niri (biri) | wlroots virtual pointer + keyboard | none | ❌ ¹² | ❌ ⁵ |
 | Umbriel | wlroots virtual pointer + keyboard | none | ❌ ¹² | ❌ ⁵ |
 
@@ -99,6 +99,9 @@ Each session gets its own display at the client's resolution and refresh rate �
     off the primary monitor, use `SendInput` too.
 12. The host doesn't carry niri's or Umbriel's pointer separately, so it is always part of the
     video.
+13. A virtual display runs in 10-bit HDR when the client asks, and a monitor in HDR mode streams
+    HDR. Needs Hyprland's colour management, on by default — see
+    [HDR](/docs/hdr#linux--hyprland).
 
 ### Version floors worth knowing
 

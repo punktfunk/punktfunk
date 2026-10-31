@@ -59,8 +59,8 @@ display manager, and enable lingering so the host starts at boot:
 ## Known limits
 
 - The streamed output runs at scale 1.
-- SDR only: HDR on Linux needs [gamescope](/docs/gamescope#hdr-on-gamescope) — see
-  [HDR](/docs/hdr#other-linux-desktops).
+- HDR needs Hyprland's colour management, on by default. With `render:cm_enabled = false` the
+  session streams SDR — see [HDR](/docs/hdr#linux--hyprland).
 - Under **exclusive** [topology](/docs/virtual-displays#topology) your monitors come back through
   `hyprctl reload` when the display is released. That reload also drops runtime `hyprctl keyword`
   changes and re-runs `exec =` lines. A reload during the stream lights them early.
