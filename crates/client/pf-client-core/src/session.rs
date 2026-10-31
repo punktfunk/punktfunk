@@ -589,23 +589,9 @@ fn connect_plan(params: &SessionParams) -> ConnectPlan {
         &params.decoder,
     ) & !params.exclude_codecs;
     // Gated on the codec actually being advertised, so a failed probe or a retry that
-    // dropped it falls back to H.26x with the user's rate and the HEVC-gated caps.
+    // dropped it falls back to the HEVC-gated caps.
     let pyrowave = preferred == punktfunk_core::quic::CODEC_PYROWAVE
         && advertised_codecs & punktfunk_core::quic::CODEC_PYROWAVE != 0;
-    // PyroWave is always Automatic bitrate: a fixed kbps is ill-defined for the
-    // all-intra codec (bpp is the operating point) and used to bypass the host
-    // ceiling. Send 0; the stored preset value is untouched.
-    let bitrate_kbps = if pyrowave {
-        if params.bitrate_kbps != 0 {
-            tracing::info!(
-                stored_kbps = params.bitrate_kbps,
-                "PyroWave forces Automatic bitrate — asking the host for its per-mode pin"
-            );
-        }
-        0
-    } else {
-        params.bitrate_kbps
-    };
     // PyroWave decodes 4:4:4 on any GPU, so it asks on the switch alone. The host pins
     // its rate from the chroma it grants.
     let video_caps = if pyrowave && params.want_444 {
@@ -625,7 +611,9 @@ fn connect_plan(params: &SessionParams) -> ConnectPlan {
         pad_speaker_on,
         pad_audio_on,
         advertised_codecs,
-        bitrate_kbps,
+        // Zero is Automatic, anything else Fixed. Under PyroWave the host ignores the number
+        // and pins the player's quality; if it lands on another codec, core runs Automatic.
+        bitrate_kbps: params.bitrate_kbps,
         video_caps,
     }
 }

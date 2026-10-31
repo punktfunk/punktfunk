@@ -729,6 +729,7 @@ impl NativeClient {
         let on_pending = params.on_pending.take();
         let (timeout, bitrate_kbps, requested_gamepad) =
             (params.timeout, params.bitrate_kbps, params.gamepad);
+        let (preferred_codec, offered_codecs) = (params.preferred_codec, params.video_codecs);
         let asked_444 = params.video_caps & crate::quic::VIDEO_CAP_444 != 0;
         // RED is core-decided; HIRES is not. See `advertised_client_caps`.
         params.client_caps =
@@ -837,7 +838,13 @@ impl NativeClient {
             hud,
             // Match the pump: Automatic AND host echoed a rate. Dropping the last term
             // over-advertises against an old host that reports no rate.
-            wants_decode: bitrate_kbps == 0 && welcome.bitrate_kbps > 0,
+            wants_decode: crate::quic::session_bitrate_kbps(
+                bitrate_kbps,
+                preferred_codec,
+                offered_codecs,
+                welcome.codec,
+            ) == 0
+                && welcome.bitrate_kbps > 0,
             asked_444,
             host_fingerprint: negotiated.host_fingerprint,
             resolved_compositor: welcome.compositor,

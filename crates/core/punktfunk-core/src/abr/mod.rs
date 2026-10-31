@@ -107,10 +107,9 @@ pub struct DriverConfig {
     /// A diagnostic session ([`EXT_DELIVERY_PROBE_ONLY`](crate::quic::EXT_DELIVERY_PROBE_ONLY)):
     /// no stream spends the rate, so the ramp climbs to the link's wall, not the stream cap.
     pub probe_only: bool,
-    /// PyroWave at an explicit rate: the pin the Welcome resolved, kbps.
-    /// `Some` runs the bring-up ramp as a fit check on that pin — a measured
-    /// wall lowers it once, every other outcome leaves it. The controller
-    /// stays off either way, and the pin is never raised from a measurement.
+    /// PyroWave at an explicit rate (Fixed): the pin the Welcome resolved, kbps.
+    /// `Some` runs the bring-up ramp to measure `L` alone; the pin is the player's
+    /// quality and never moves.
     pub pin_kbps: Option<u32>,
     /// H.264, HEVC or AV1 at an explicit rate: the rate the Welcome resolved, kbps. `Some`
     /// runs the bring-up ramp to measure `L` alone; the rate is the player's and never moves.
@@ -237,7 +236,6 @@ pub struct Driver {
     bit_depth: u8,
     chroma_format: u8,
     /// The pin an explicit-rate PyroWave session negotiated, when it has one.
-    /// The ramp's verdict is judged against it in [`on_ramped`](Self::on_ramped).
     pin_kbps: Option<u32>,
     /// An explicit H.26x rate: the ramp's verdict sets `L` and nothing else.
     fixed: bool,
@@ -649,35 +647,13 @@ impl Driver {
     /// with none to follow, the stream shape bounds the climb, as when nothing
     /// measures. Nothing measured at all licenses no opening.
     ///
-    /// An explicit-rate PyroWave session reads the verdict instead: the pin drops to
-    /// `min(pin, 0.7 × delivered)` on a wall, and only on a wall — a floor
-    /// under the link, an unreadable step, and a ramp cut short are not
-    /// walls, so none of them moves the pin. The one ask goes out before
-    /// the first frame; a ramp that never ran produces no ask at all.
-    ///
     /// Automatic PyroWave opens at what a wall licensed, else at the pin: its
     /// frames are all one size, and an older host reads that ask as the fit.
     ///
-    /// An explicit H.26x rate is the player's: the verdict has already set `L`, and it
-    /// asks for nothing and moves no controller state.
+    /// An explicit rate, PyroWave's pin included, is the player's: the verdict has already
+    /// set `L`, and it asks for nothing and moves no controller state.
     fn on_ramped(&mut self, ramped: probe::Ramped, now: Instant) -> Option<u32> {
-        if self.fixed {
-            return None;
-        }
-        if let Some(pin) = self.pin_kbps {
-            let probe::Ramped::Wall { delivered_kbps } = ramped else {
-                return None;
-            };
-            let fit = probe::wall_ceiling_kbps(delivered_kbps).min(pin);
-            if fit > 0 && fit < pin {
-                tracing::info!(
-                    pin_kbps = pin,
-                    fit_kbps = fit,
-                    delivered_kbps,
-                    "adaptive bitrate: PyroWave pin lowered to what the ramp measured"
-                );
-                return Some(fit);
-            }
+        if self.fixed || self.pin_kbps.is_some() {
             return None;
         }
         let proven_kbps = match ramped {
@@ -1201,6 +1177,47 @@ mod tests {
         out
     }
 
+    /// A player who prefers PyroWave and lands on HEVC runs Automatic, whatever rate they
+    /// stored: the rate was PyroWave's Fixed flag, and HEVC never reads it. The ramp's verdict
+    /// then opens the session with a rate ask. The same stored rate on a session that offered
+    /// no PyroWave is a Fixed HEVC rate and asks for nothing.
+    #[test]
+    fn a_pyrowave_player_who_lands_on_hevc_runs_the_controller() {
+        use crate::quic::{session_bitrate_kbps, CODEC_HEVC, CODEC_PYROWAVE};
+        let asks = |preferred: u8, stored: u32| {
+            let base = Instant::now();
+            let facts = feed::Facts {
+                bitrate_kbps: session_bitrate_kbps(
+                    stored,
+                    preferred,
+                    CODEC_HEVC | CODEC_PYROWAVE,
+                    CODEC_HEVC,
+                ),
+                resolved_bitrate_kbps: 20_000,
+                codec: CODEC_HEVC,
+                bit_depth: 8,
+                chroma_format: crate::quic::CHROMA_IDC_420,
+                refresh_hz: 60,
+                stream_cap_kbps: 200_000,
+                pyrowave_floor_kbps: None,
+                audio_reserved_kbps: 0,
+                marks_repeats: true,
+                serves_ramp: true,
+                probe_only: false,
+            };
+            let links = (
+                crate::quic::HostLink::default(),
+                crate::quic::LinkFacts::default(),
+            );
+            let feed = feed::Feed::new(facts, links.0, links.1, base);
+            asks_for_a_rate(&ramp_session(feed.driver, base, 93_000, 2_500).2)
+        };
+        for stored in [0, 20_000, 80_000] {
+            assert!(asks(CODEC_PYROWAVE, stored), "stored {stored}");
+        }
+        assert!(!asks(0, 80_000), "a plain Fixed HEVC rate asks for nothing");
+    }
+
     /// A PyroWave session at 2 Gbit/s with no ramp: Automatic with `floor_kbps`, else
     /// pinned there.
     fn pyrowave_driver(at: Instant, floor_kbps: Option<u32>) -> Driver {
@@ -1426,6 +1443,19 @@ mod tests {
         }
     }
 
+    /// An explicit PyroWave session pinned at 1 Gbit/s, against a host that serves the ramp.
+    fn pyrowave_fixed_config() -> DriverConfig {
+        DriverConfig {
+            start_kbps: 0,
+            stream_cap_kbps: 1_000_000,
+            codec: crate::quic::CODEC_PYROWAVE,
+            probe: true,
+            ramp: true,
+            pin_kbps: Some(1_000_000),
+            ..quiet_config()
+        }
+    }
+
     /// An explicit 80 Mbit/s HEVC 1080p60 session, against a host that serves the ramp.
     fn fixed_config() -> DriverConfig {
         use crate::quic::{CHROMA_IDC_420, CODEC_HEVC};
@@ -1462,7 +1492,18 @@ mod tests {
     /// ramp came to, and every action with its time. None of them is ever a `SetBitrate`.
     fn fixed_session(link_kbps: u32, video_ms: u64) -> (Driver, RampSummary, Vec<(u64, Action)>) {
         let base = Instant::now();
-        let mut d = Driver::new(fixed_config(), base);
+        let session = ramp_session(Driver::new(fixed_config(), base), base, link_kbps, video_ms);
+        assert!(!asks_for_a_rate(&session.2), "{:?}", session.2);
+        session
+    }
+
+    /// [`fixed_session`] for any driver built at `base`.
+    fn ramp_session(
+        mut d: Driver,
+        base: Instant,
+        link_kbps: u32,
+        video_ms: u64,
+    ) -> (Driver, RampSummary, Vec<(u64, Action)>) {
         let mut st = Stats::default();
         let mut step: Option<(u64, ProbeReport)> = None;
         let mut out = Vec::new();
@@ -1496,12 +1537,13 @@ mod tests {
                 out.push((ms, a));
             }
         }
-        assert!(
-            !out.iter().any(|(_, a)| matches!(a, Action::SetBitrate(_))),
-            "{out:?}"
-        );
         let ramp = d.ramp_outcome().expect("the ramp stopped");
         (d, ramp, out)
+    }
+
+    /// Whether any action in `acts` asks the host for a new rate.
+    fn asks_for_a_rate(acts: &[(u64, Action)]) -> bool {
+        acts.iter().any(|(_, a)| matches!(a, Action::SetBitrate(_)))
     }
 
     /// A fixed rate ramps like a PyroWave pin: a 93 Mbit/s wall becomes `L`, told to the host
@@ -1534,6 +1576,25 @@ mod tests {
             (running.abr.ceiling_kbps, running.abr.link_wall_kbps()),
             (20_000, None)
         );
+    }
+
+    /// Fixed under PyroWave is the player's quality for the whole session: a wall under the
+    /// pin sets `L` and asks for nothing, so the host is never told a lower rate.
+    #[test]
+    fn a_fixed_pyrowave_rate_is_never_lowered_by_the_wall() {
+        let base = Instant::now();
+        let d = Driver::new(pyrowave_fixed_config(), base);
+        let (d, ramp, acts) = ramp_session(d, base, 700_000, 2_500);
+        assert!(!asks_for_a_rate(&acts), "{acts:?}");
+        assert!(ramp.wall, "{ramp:?}");
+        assert!(ramp.proven_kbps < 1_000_000, "{ramp:?}");
+        assert_eq!(d.link(), (ramp.proven_kbps, LinkSource::Measured));
+        assert!(
+            acts.iter()
+                .any(|&(ms, a)| ms < 2_500 && a == Action::LinkRate(ramp.proven_kbps)),
+            "{acts:?}"
+        );
+        assert_eq!(d.target_kbps(), 1_000_000);
     }
 
     /// A ramp that climbs to eight times the fixed rate unrefused proved a floor under the

@@ -1572,12 +1572,11 @@ fn pyrowave_session() -> SessionCfg {
     }
 }
 
-/// The 2.5 GbE case the pin used to outrun: the ramp trips the wall, and the
-/// pin lowers to `0.7 ×` what the wall step delivered — before a frame ever
-/// went out.
-pub(super) fn pyrowave_pin_fit() -> Scenario {
+/// The 2.5 GbE case the pin outruns: the ramp trips the wall, and the pin stays.
+/// The wall sets `L`; a Fixed rate is the player's.
+pub(super) fn pyrowave_fixed_wall() -> Scenario {
     Scenario {
-        name: "pyrowave_pin_fit",
+        name: "pyrowave_fixed_wall",
         seed: 0x7A_7900,
         duration_ms: 30_000,
         link: LinkCfg {
@@ -1587,8 +1586,8 @@ pub(super) fn pyrowave_pin_fit() -> Scenario {
             ..LinkCfg::default()
         },
         sessions: vec![pyrowave_session()],
-        // A wall-respecting pin: the ceiling the ramp's verdict leaves.
-        achievable_kbps: wall_ceiling_kbps(2_500_000),
+        // The pin itself: the wall moved nothing.
+        achievable_kbps: PYROWAVE_PIN_KBPS,
         blip_at_ms: None,
     }
 }
@@ -1952,9 +1951,9 @@ pub(super) fn all() -> Vec<Scenario> {
         "unknown_refresh_knee_legacy",
     ));
     table.push(legacy(idle_then_motion(), "idle_then_motion_legacy"));
-    // The PyroWave pin-fit pair: new rows at the tail so the baseline stays
+    // The Fixed PyroWave pair: new rows at the tail so the baseline stays
     // append-only.
-    table.push(pyrowave_pin_fit());
+    table.push(pyrowave_fixed_wall());
     table.push(pyrowave_pin_holds());
     table.push(with_ramp(calm_desktop_lossy()));
     let wan = || wan_wg_12(0x7A_5500, 180_000);
@@ -2105,14 +2104,12 @@ mod tests {
         }
     }
 
-    /// The pin-fit pair: a measured wall lowers the PyroWave pin once, inside
-    /// the bring-up window, and a ramp that measured nothing moves nothing.
+    /// The Fixed pair: a PyroWave pin is the player's rate, so neither a measured
+    /// wall nor a ramp that measured nothing moves it.
     ///
-    /// `pyrowave_pin_fit` is the 2.5 GbE case: the 1.6 bpp pin overbooks the
-    /// link, the ramp trips the wall, and the one verdict ask lands before a
-    /// frame exists. The pin becomes `0.7 ×` what the wall step delivered —
-    /// a lowering the host answers `Pinned`, so the session simply runs at
-    /// it. `pyrowave_pin_holds` is the same session on a fast bring-up:
+    /// `pyrowave_fixed_wall` is the 2.5 GbE case: the 1.6 bpp pin overbooks the
+    /// link, the ramp trips the wall and sets `L`, and no ask goes out.
+    /// `pyrowave_pin_holds` is the same session on a fast bring-up:
     /// video ends the ramp a few steps in, nothing was measured, the pin
     /// stands for the whole session — and the cut-short tail arms no burst
     /// beside the picture, so no later window is ever discarded.
@@ -2201,35 +2198,29 @@ mod tests {
     }
 
     #[test]
-    fn the_pyrowave_pin_fits_to_a_wall_and_stands_without_one() {
-        let r = run(&pyrowave_pin_fit());
+    fn a_fixed_pyrowave_pin_is_never_lowered() {
+        let r = run(&pyrowave_fixed_wall());
         let (at_ms, s) = r.ramps[0].done.expect("the ramp measured the link");
         assert!(s.wall, "the 2.5 GbE wall is the verdict");
         assert!(
             at_ms < BRINGUP_MS,
             "the verdict landed {at_ms} ms into a {BRINGUP_MS} ms bring-up"
         );
-        let fit = wall_ceiling_kbps(s.proven_kbps).min(PYROWAVE_PIN_KBPS);
         assert!(
-            fit < PYROWAVE_PIN_KBPS,
+            wall_ceiling_kbps(s.proven_kbps) < PYROWAVE_PIN_KBPS,
             "the wall sits under the pin: {} vs {PYROWAVE_PIN_KBPS}",
             s.proven_kbps
         );
-        assert_eq!(
-            r.asks[0],
-            [(at_ms, fit)],
-            "the verdict ask comes once, at the fit, the tick the ramp ended"
+        assert!(
+            r.asks[0].is_empty(),
+            "a wall under a Fixed pin asks for nothing: {:?}",
+            r.asks[0]
         );
-        for w in &r.windows[0] {
-            assert!(
-                w.rate_kbps == PYROWAVE_PIN_KBPS || w.rate_kbps == fit,
-                "the pin or the fit, never anything else: {w:?}"
-            );
-        }
-        assert_eq!(
-            r.windows[0].last().expect("the session ran").rate_kbps,
-            fit,
-            "the session ends where the wall put it"
+        assert!(
+            r.windows[0]
+                .iter()
+                .all(|w| w.rate_kbps == PYROWAVE_PIN_KBPS),
+            "the pin stands for the whole session"
         );
 
         let r = run(&pyrowave_pin_holds());

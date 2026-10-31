@@ -48,8 +48,8 @@ public struct ConnectOffer: Equatable, Sendable {
     ) -> ConnectOffer {
         let preferredCodec = PunktfunkConnection.codecByte(effective.codec)
         // PyroWave is a pure opt-in, gated on the Metal probe: a device that fails it falls back
-        // to H.26x and keeps the user's rate. PyroWave itself always sends Automatic (0), so the
-        // host pins its per-mode rate under the operator's ceiling.
+        // to H.26x and keeps the user's rate. Under PyroWave the rate only says Fixed (non-zero)
+        // or Automatic (0); the host pins the player's quality under the operator's ceiling.
         let pyroWave = preferredCodec == PunktfunkConnection.codecPyroWave && pyroWaveDecodes()
         let hdr = effective.hdrEnabled && displayHDR
         // HDR carries the depth; `tenBitSdr` adds it where HDR is off or the display can't show it.
@@ -68,7 +68,7 @@ public struct ConnectOffer: Equatable, Sendable {
             width: mode.width, height: mode.height, hz: mode.hz,
             compositor: PunktfunkConnection.Compositor(
                 rawValue: UInt32(clamping: effective.compositor)) ?? .auto,
-            bitrateKbps: pyroWave ? 0 : UInt32(clamping: effective.bitrateKbps),
+            bitrateKbps: UInt32(clamping: effective.bitrateKbps),
             audioChannels: UInt8(clamping: effective.audioChannels),
             audioRateHz: audioRateHz, audioBits: audioBits,
             hdr: hdr, tenBit: tenBit, want444: effective.enable444,

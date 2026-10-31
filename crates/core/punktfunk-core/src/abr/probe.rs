@@ -695,7 +695,7 @@ impl CapacityProbe {
 
     /// The ramp of a PyroWave session or an explicit H.26x rate. It climbs to
     /// [`PINNED_RAMP_HEADROOM`] times `pin_kbps`: what it proves is the link
-    /// the host paces at, and a wall under a PyroWave pin sizes it. `armed` is
+    /// the host paces at, and no rate moves with it. `armed` is
     /// `PUNKTFUNK_ABR_PROBE` plus the host's `HOST_CAP2_RAMP`; an old host runs
     /// no measurement.
     ///

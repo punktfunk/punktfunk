@@ -131,10 +131,15 @@ pub(super) async fn run_pump(args: WorkerArgs) {
         clip_cmd_rx,
         ready_tx,
     } = args;
-    let bitrate_kbps = params.bitrate_kbps;
+    let negotiated_codec = welcome.codec;
+    let bitrate_kbps = crate::quic::session_bitrate_kbps(
+        params.bitrate_kbps,
+        params.preferred_codec,
+        params.video_codecs,
+        negotiated_codec,
+    );
     let clock_rtt_ns = negotiated.clock_rtt_ns;
     let resolved_bitrate_kbps = welcome.bitrate_kbps;
-    let negotiated_codec = welcome.codec;
     // Host marks idle-keepalive repeats (`USER_FLAG_REPEAT`). Only then is an
     // unflagged AU new content; older hosts keep the legacy window arithmetic.
     let marks_repeats = welcome.host_caps2 & crate::quic::HOST_CAP2_REPEAT_MARK != 0;

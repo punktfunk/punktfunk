@@ -552,6 +552,7 @@ pub(super) async fn negotiate(
     let encoder = crate::encode::resolve();
     // Pairing ran before this future: a client here is paired, or the host is `--open`.
     let (codec_bit, codec) = pick_codec(&hello, &encoder)?;
+    settle_bitrate(&mut hello, codec_bit);
     cap_mode(&n, &mut hello);
     let (joined, reservation) = admit_mode(&n, &mut hello, codec).await?;
 
@@ -939,6 +940,26 @@ fn pick_codec(
         );
     }
     Ok((codec_bit, codec))
+}
+
+/// The Hello's rate once the codec is known. The client reads the Welcome's codec through the
+/// same rule, so both ends agree whether the session is Automatic, and every later read of
+/// `hello.bitrate_kbps` sees the result.
+fn settle_bitrate(hello: &mut Hello, codec_bit: u8) {
+    let asked_kbps = hello.bitrate_kbps;
+    hello.bitrate_kbps = punktfunk_core::quic::session_bitrate_kbps(
+        asked_kbps,
+        hello.preferred_codec,
+        hello.video_codecs,
+        codec_bit,
+    );
+    if hello.bitrate_kbps != asked_kbps {
+        tracing::info!(
+            asked_kbps,
+            codec = punktfunk_core::hud::codec_label(codec_bit),
+            "stored rate was for PyroWave — this session runs Automatic"
+        );
+    }
 }
 
 /// The operator's cap for this device, applied before mode-conflict and before Welcome: the
@@ -1515,6 +1536,56 @@ async fn negotiate_audio_plane(
 mod tests {
     use super::*;
     use punktfunk_core::audio::pcm;
+
+    /// A rate stored for PyroWave reads as Automatic once the host lands on HEVC: the session
+    /// resolves the host's default, and every later `== 0` test (the governor, a rebuild's
+    /// re-resolve) sees Automatic, as the client does.
+    #[test]
+    fn a_pyrowave_rate_on_an_hevc_session_is_automatic() {
+        use punktfunk_core::quic::{CODEC_HEVC, CODEC_PYROWAVE};
+        let mut hello = Hello {
+            mode: punktfunk_core::Mode {
+                width: 1920,
+                height: 1080,
+                refresh_hz: 60,
+            },
+            compositor: punktfunk_core::config::CompositorPref::Auto,
+            gamepad: punktfunk_core::config::GamepadPref::Auto,
+            bitrate_kbps: 80_000,
+            name: None,
+            launch: None,
+            video_caps: 0,
+            audio_channels: 2,
+            video_codecs: CODEC_HEVC | CODEC_PYROWAVE,
+            preferred_codec: CODEC_PYROWAVE,
+            display_hdr: None,
+            client_caps: 0,
+            max_shard_payload: 0,
+            audio_rate_hz: punktfunk_core::audio::SAMPLE_RATE_HZ,
+            audio_bits: pcm::BITS_16,
+            audio_layout: 0,
+            video_fit: 0,
+            audio_bitstreams: 0,
+        };
+        let mut on_pyrowave = hello.clone();
+        settle_bitrate(&mut on_pyrowave, CODEC_PYROWAVE);
+        assert_eq!(on_pyrowave.bitrate_kbps, 80_000, "Fixed stays Fixed");
+        settle_bitrate(&mut hello, CODEC_HEVC);
+        assert_eq!(hello.bitrate_kbps, 0);
+        let mode = hello.mode;
+        assert_eq!(
+            resolve_bitrate_kbps_for(
+                crate::encode::Codec::H265,
+                hello.bitrate_kbps,
+                &mode,
+                crate::encode::ChromaFormat::Yuv420,
+                8,
+                session_pyrowave_bpp(0),
+                None,
+            ),
+            20_000
+        );
+    }
 
     /// A lossless plane falls back to 48 kHz Opus in its own coupling, and its config anchors at
     /// the sequence the first Opus datagram takes.

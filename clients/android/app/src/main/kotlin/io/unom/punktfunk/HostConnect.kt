@@ -199,10 +199,6 @@ suspend fun connectToHost(context: Context, spec: DialSpec): Long {
         // still resolves HEVC. An explicit user choice always wins unchanged.
         val preferredCodec = settings.preferredCodec().takeIf { it != 0 }
             ?: if (codecBits and 4 != 0 && !partialFrame) 4 else 0
-        // PyroWave takes its rate from the player's quality. Asking Automatic (0) is what lets
-        // the host fit that rate to the link before the first frame; a stored fixed rate is
-        // kept for the other codecs.
-        val pyrowave = preferredCodec == 8 && codecBits and 8 != 0
         // The connect-time capability readout (`adb logcat -s pf.caps`): the P2 slice pipeline
         // is client-inert unless BOTH probes pass — this line says which decoder failed one.
         Log.i(
@@ -215,7 +211,9 @@ suspend fun connectToHost(context: Context, spec: DialSpec): Long {
         val request = ConnectRequest(
             host = spec.host, port = spec.port, width = w, height = h, refreshHz = hz,
             certPem = spec.identity.certPem, keyPem = spec.identity.privateKeyPem, pinHex = spec.pinHex,
-            bitrateKbps = if (pyrowave) 0 else settings.bitrateKbps, compositorPref = settings.compositor,
+            // Zero is Automatic. Under PyroWave any other value is Fixed: the host ignores the
+            // number and pins the player's quality.
+            bitrateKbps = settings.bitrateKbps, compositorPref = settings.compositor,
             pyrowaveBppX100 = settings.pyrowaveBppX100(), gamepadPref = gamepadPref,
             hdrEnabled = hdrEnabled, tenBitSdr = tenBitSdr, multiSliceOk = multiSlice,
             framePartsOk = frameParts, studioRange = studioRange,

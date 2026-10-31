@@ -404,7 +404,8 @@ pub const PYROWAVE_BITRATE_HINT: &str =
     "Automatic lowers PyroWave quality while the network falls short; Fixed always streams at \
      your quality.";
 /// The rate Fixed stores under PyroWave, kbps. The host pins the session at the quality, so
-/// only "not zero" counts; another codec reads it as Bitrate's fixed rate.
+/// only "not zero" counts. If the host picks another codec the session is Automatic
+/// ([`punktfunk_core::quic::session_bitrate_kbps`]).
 pub const PYROWAVE_FIXED_KBPS: u32 = 20_000;
 
 /// When the controller-optimized UI (the console) takes over the desktop layout.

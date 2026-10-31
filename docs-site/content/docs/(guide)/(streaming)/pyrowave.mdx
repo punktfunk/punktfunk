@@ -99,15 +99,19 @@ Together, 4:4:4 HDR at the default is ~3.0 bits per pixel.
 
 ## Fitting the link
 
-Before the first frame the client tests the link. If it can't carry the rate with room to spare,
-the session starts at 70 % of what the link delivered, so 4K120 on Gigabit still streams at fewer
-bits per pixel.
+Before the first frame the client tests the link. With the client's bitrate on **Automatic**, the
+default, a link that can't carry the rate with room to spare starts the session at 70 % of what
+the link delivered, so 4K120 on Gigabit still streams at fewer bits per pixel.
 
-With the client's bitrate on **Automatic**, the default, PyroWave then adapts like the other
-codecs: bits per pixel follow the link between 0.5 and **PyroWave quality**, dropping under loss
-and climbing back when the link recovers. Held at 0.5 for three seconds, the
-[stats overlay](/docs/stats) says the network is weak and that HEVC would look better on this
-link. With **Bitrate** on **Fixed** the session stays at the rate the test left.
+PyroWave then adapts like the other codecs: bits per pixel follow the link between 0.5 and
+**PyroWave quality**, dropping under loss and climbing back when the link recovers. Held at 0.5
+for three seconds, the [stats overlay](/docs/stats) says the network is weak and that HEVC would
+look better on this link.
+
+With **Bitrate** on **Fixed** the session streams at **PyroWave quality** whatever the test finds.
+A link that can't carry it drops frames; lower the quality, or pick **Automatic**. A bitrate you
+set for another codec counts as **Fixed** here, so a player who kept one streams at full quality
+until **Bitrate** goes back to **Automatic**.
 
 To hold every session under a fixed rate, set **PyroWave bitrate cap** (under **Show advanced**,
 `PUNKTFUNK_PYROWAVE_MAX_MBPS`, 0 for no cap).
