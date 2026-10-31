@@ -850,6 +850,11 @@ mod tests {
         assert_eq!(rate_bps(12_000, &notched, None), 18_000_000);
         let unknown = LinkRate::resolve(Some(FLOOR_KBPS), Ports::default(), None);
         assert_eq!(rate_bps(400_000, &unknown, None), 1_200_000_000);
+        // A fixed rate on the client's floor, then on the stream's own rate once frames die.
+        assert_eq!(rate_bps(80_000, &unknown, None), 720_000_000);
+        let fixed = LinkRate::resolve(Some(80_000), Ports::default(), None);
+        assert_eq!(rate_bps(80_000, &fixed, None), 120_000_000);
+        assert_eq!(cap_bps(80_000, &fixed, None), 120_000_000);
 
         // Smooth ignores the link, until there is no stream rate to pace at.
         let mut p = Pacer::new(gbe(), None);
