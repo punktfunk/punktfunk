@@ -92,29 +92,32 @@ fn source_tree() -> Option<std::path::PathBuf> {
     dir.join(".git").is_dir().then_some(dir)
 }
 
-/// Commits the tracked upstream has and this checkout does not.
+/// git's own timeout: an unreachable forge must not wedge the refresh thread.
+const GIT_LOW_SPEED: [&str; 4] = [
+    "-c",
+    "http.lowSpeedLimit=1000",
+    "-c",
+    "http.lowSpeedTime=30",
+];
+
+/// Commits the build this host runs is behind its branch.
 ///
 /// A source build carries no published artifact, so the signed manifest cannot answer
 /// "is anything newer" for it — only the remote can. `None` is "git could not answer"
 /// (no checkout, a detached tag, an unreachable forge), which keeps the last count
 /// rather than reporting a Deck up to date on one bad network moment.
 pub(super) fn source_behind() -> Option<u64> {
+    let exe = std::env::current_exe().ok()?;
+    if exe.starts_with(pf_update_check::detect::STEAMOS_SYSTEM_COPY) {
+        return system_copy_behind();
+    }
     let dir = source_tree()?;
-    // lowSpeed is git's own timeout: an unreachable forge must not wedge the refresh
-    // thread. GIT_TERMINAL_PROMPT stops a credential prompt waiting on a tty the host
-    // does not have.
+    // GIT_TERMINAL_PROMPT stops a credential prompt waiting on a tty the host does not have.
     let fetched = Command::new("git")
         .arg("-C")
         .arg(&dir)
-        .args([
-            "-c",
-            "http.lowSpeedLimit=1000",
-            "-c",
-            "http.lowSpeedTime=30",
-            "fetch",
-            "--quiet",
-            "--no-tags",
-        ])
+        .args(GIT_LOW_SPEED)
+        .args(["fetch", "--quiet", "--no-tags"])
         .env("GIT_TERMINAL_PROMPT", "0")
         .status()
         .ok()?
@@ -130,6 +133,23 @@ pub(super) fn source_behind() -> Option<u64> {
     .trim()
     .parse()
     .ok()
+}
+
+/// [`source_behind`] for the copy a Deck's door and seats run. The door can't read the checkout,
+/// and the checkout can move without the copy, so the commit the copy recorded meets the remote.
+fn system_copy_behind() -> Option<u64> {
+    use pf_update_check::detect::{copy_behind, SOURCE_REMOTE, STEAMOS_SYSTEM_COPY};
+    let copy = Path::new(STEAMOS_SYSTEM_COPY);
+    let head = std::fs::read_to_string(copy.join("source-head")).ok()?;
+    let built = std::fs::read_to_string(copy.join("source-commit")).ok()?;
+    let branch = head.trim().strip_prefix("ref: ")?;
+    let tip = capture(
+        Command::new("git")
+            .args(GIT_LOW_SPEED)
+            .args(["ls-remote", SOURCE_REMOTE, branch])
+            .env("GIT_TERMINAL_PROMPT", "0"),
+    )?;
+    copy_behind(&built, &tip)
 }
 
 /// Deck source rebuild via `systemd-run` so the script's host restart cannot
