@@ -606,10 +606,14 @@ impl AscSink {
         stats: &crate::stats::VideoStats,
         video_e2e: &AtomicU64,
     ) {
-        if let Some(err_us) =
-            self.slots
-                .on_present(present_ns, a.latch_ns, a.slot, real, &mut self.counters)
-        {
+        if let Some(err_us) = self.slots.on_present(
+            present_ns,
+            a.latch_ns,
+            a.slot,
+            real,
+            a.release_mono,
+            &mut self.counters,
+        ) {
             self.phase_err_us.push(err_us);
         }
         // Apply → on glass: what the HUD and the log line call `latch`, which is SurfaceFlinger's

@@ -34,11 +34,17 @@ impl ApplyMargin {
         self.ns
     }
 
-    /// One present with a real vsync. `missed`: it landed after the slot it was aimed at.
-    pub(crate) fn observe(&mut self, missed: bool) {
+    /// One present with a real vsync. `missed`: SurfaceFlinger latched it a cycle after the one
+    /// it was aimed at. `slack_ns`: how far ahead of that aimed latch the apply was. Only a miss
+    /// with the apply within a step of the margin widens it; one with more slack is the
+    /// compositor's own slip (a display queue changing depth, on a Shield TV every half minute),
+    /// which no apply-ahead covers and must not ratchet the margin to its cap.
+    pub(crate) fn observe(&mut self, missed: bool, slack_ns: i64) {
         if missed {
-            self.clean = 0;
-            self.ns = (self.ns + STEP_NS).min(MAX_NS);
+            if slack_ns < self.ns + STEP_NS {
+                self.clean = 0;
+                self.ns = (self.ns + STEP_NS).min(MAX_NS);
+            }
             return;
         }
         self.clean += 1;
@@ -53,29 +59,36 @@ impl ApplyMargin {
 mod tests {
     use super::{ApplyMargin, DECAY_PRESENTS, MAX_NS, STEP_NS};
 
-    /// A session's presents replayed in runs: (missed, how many, the margin after the run).
+    /// A session's presents replayed in runs: (missed, the apply's slack, how many, the margin
+    /// after the run). A tight miss has the apply right at the margin; a slip has it 5 ms ahead.
     #[test]
-    fn a_replayed_session_widens_on_misses_then_narrows_a_step_a_minute() {
+    fn a_replayed_session_widens_on_its_own_misses_then_narrows_a_step_a_minute() {
         let steps = (MAX_NS / STEP_NS) as u32;
-        let replay: &[(bool, u32, i64)] = &[
-            (false, 300, 0),
-            (true, 1, STEP_NS),
-            (true, 2, 3 * STEP_NS),
-            (true, steps - 3, MAX_NS),
-            (true, 4, MAX_NS),
-            (false, DECAY_PRESENTS - 1, MAX_NS),
-            (false, 1, MAX_NS - STEP_NS),
+        const SLIP: i64 = 5_000_000;
+        let replay: &[(bool, i64, u32, i64)] = &[
+            (false, 0, 300, 0),
+            (true, 0, 1, STEP_NS),
+            (true, STEP_NS, 2, 3 * STEP_NS),
+            // The compositor's own slips, the apply well ahead: nothing moves, not even the
+            // clean count.
+            (true, 3 * STEP_NS + SLIP, 50, 3 * STEP_NS),
+            (true, 3 * STEP_NS, steps - 3, MAX_NS),
+            (true, 0, 4, MAX_NS),
+            (false, 0, DECAY_PRESENTS - 1, MAX_NS),
+            (false, 0, 1, MAX_NS - STEP_NS),
             // A miss one present short of the decay starts the count again.
-            (false, DECAY_PRESENTS - 1, MAX_NS - STEP_NS),
-            (true, 1, MAX_NS),
-            (false, DECAY_PRESENTS - 1, MAX_NS),
-            (false, (steps - 1) * DECAY_PRESENTS + 1, 0),
-            (false, 10 * DECAY_PRESENTS, 0),
+            (false, 0, DECAY_PRESENTS - 1, MAX_NS - STEP_NS),
+            (true, 0, 1, MAX_NS),
+            (false, 0, DECAY_PRESENTS - 1, MAX_NS),
+            (true, MAX_NS + SLIP, 1, MAX_NS),
+            (false, 0, 1, MAX_NS - STEP_NS),
+            (false, 0, (steps - 1) * DECAY_PRESENTS, 0),
+            (false, 0, 10 * DECAY_PRESENTS, 0),
         ];
         let mut m = ApplyMargin::new();
-        for (i, &(missed, n, want)) in replay.iter().enumerate() {
+        for (i, &(missed, slack, n, want)) in replay.iter().enumerate() {
             for _ in 0..n {
-                m.observe(missed);
+                m.observe(missed, slack);
             }
             assert_eq!(m.ns(), want, "run {i}: {n} presents, missed={missed}");
         }

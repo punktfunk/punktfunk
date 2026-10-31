@@ -210,14 +210,15 @@ impl Slots {
     /// One frame on glass at `present_ns`, aimed at `slot`. With a `real` vsync (a present
     /// fence) phase the clock and correct the pacer by what happened; a latch stands in where no
     /// fence exists and never phases the clock, so such a device keeps the one-pending ASAP
-    /// budget. Scores the glass interval either way, fence to fence in whole periods. Returns the
-    /// phase error, µs, when there is one.
+    /// budget. `release_ns`: when the transaction was applied. Scores the glass interval either
+    /// way, fence to fence in whole periods. Returns the phase error, µs, when there is one.
     pub(crate) fn on_present(
         &mut self,
         present_ns: i64,
         latch_ns: i64,
         slot: Option<i64>,
         real: bool,
+        release_ns: i64,
         c: &mut Counters,
     ) -> Option<u64> {
         c.displays += 1;
@@ -232,7 +233,7 @@ impl Slots {
                     .note((present_ns - self.last_present_ns + p / 2).div_euclid(p));
             }
             if real {
-                phase_err_us = self.observe_present(present_ns, latch_ns, slot, c);
+                phase_err_us = self.observe_present(present_ns, latch_ns, slot, release_ns, c);
             }
             self.last_present_ns = present_ns;
         }
@@ -246,6 +247,7 @@ impl Slots {
         present_ns: i64,
         latch_ns: i64,
         assigned: Option<i64>,
+        release_ns: i64,
         c: &mut Counters,
     ) -> Option<u64> {
         let phase_err_us = assigned
@@ -266,7 +268,9 @@ impl Slots {
             c.slot_miss += 1;
             self.last_slot = self.last_slot.max(Some(taken));
         }
-        self.apply_margin.observe(missed);
+        // How far ahead of the aimed slot's latch the apply was: the margin's evidence.
+        let aimed_latch = self.clock.present_ns(assigned) - self.clock.lead_ns();
+        self.apply_margin.observe(missed, aimed_latch - release_ns);
         phase_err_us
     }
 }
@@ -286,7 +290,7 @@ mod tests {
         assert!(s.bootstrapping());
         assert_eq!(s.next_target(T0 - P, T0 - P, false, &mut c), (0, None));
         s.note_latch(T0 - LEAD, &mut c);
-        assert_eq!(s.on_present(T0, T0 - LEAD, None, true, &mut c), None);
+        assert_eq!(s.on_present(T0, T0 - LEAD, None, true, 0, &mut c), None);
         assert!(!s.bootstrapping() && s.fence_live());
         (s, c)
     }
@@ -305,11 +309,18 @@ mod tests {
         slot
     }
 
-    /// Land a frame aimed at `slot` on vsync `on`, fenced, as a device does.
+    /// Land a frame aimed at `slot` on vsync `on`, fenced, as a device does, applied 0.1 ms
+    /// before the aimed slot's latch: a miss is the apply's.
     fn land(s: &mut Slots, c: &mut Counters, slot: i64, on: i64) -> Option<u64> {
+        let release = s.clock.present_ns(slot) - LEAD - 100_000;
+        land_from(s, c, slot, on, release)
+    }
+
+    /// [`land`] for a transaction applied at `release`.
+    fn land_from(s: &mut Slots, c: &mut Counters, slot: i64, on: i64, release: i64) -> Option<u64> {
         let present = s.clock.present_ns(on);
         s.note_latch(present - LEAD, c);
-        s.on_present(present, present - LEAD, Some(slot), true, c)
+        s.on_present(present, present - LEAD, Some(slot), true, release, c)
     }
 
     #[test]
@@ -385,7 +396,7 @@ mod tests {
         assert_eq!(c.held, 1);
         // A pinned band of zero is the plain shared slot.
         let mut pinned = Slots::new(120, PresentPriority::Latency, true, false, Some(0));
-        pinned.on_present(T0, T0 - LEAD, None, true, &mut c);
+        pinned.on_present(T0, T0 - LEAD, None, true, 0, &mut c);
         assert_eq!(aim(&mut pinned, &mut c, T0 + P / 10), 1);
         assert_eq!(aim(&mut pinned, &mut c, inside), 1);
     }
@@ -424,7 +435,7 @@ mod tests {
             let latch = s.clock.present_ns(slot) - LEAD;
             let present = s.clock.present_ns(slot + 2);
             s.note_latch(latch, &mut c);
-            let err = s.on_present(present, latch, Some(slot), true, &mut c);
+            let err = s.on_present(present, latch, Some(slot), true, 0, &mut c);
             assert_eq!(err, Some((2 * P / 1000) as u64));
         }
         assert_eq!((c.slot_miss, s.margin_ns(), s.lead_ns()), (0, 0, LEAD));
@@ -439,7 +450,7 @@ mod tests {
         let mut s = Slots::new(60, PresentPriority::Latency, true, false, None);
         let mut c = Counters::default();
         // The Shield latches 0.3 ms after the vsync before the one it presents on.
-        s.on_present(T0, T0 - P60 + 300_000, None, true, &mut c);
+        s.on_present(T0, T0 - P60 + 300_000, None, true, 0, &mut c);
         let lead = s.lead_ns();
         let mut rng: u64 = 0x9E37_79B9_7F4A_7C15;
         let (mut last, mut shared, mut skipped) = (None, 0, 0);
@@ -460,7 +471,7 @@ mod tests {
             last = Some(slot);
             let present = s.clock.present_ns(slot);
             s.note_latch(present - lead, &mut c);
-            s.on_present(present, present - lead, Some(slot), true, &mut c);
+            s.on_present(present, present - lead, Some(slot), true, 0, &mut c);
         }
         (shared, skipped, c.slot_miss)
     }
@@ -486,11 +497,11 @@ mod tests {
         let mut c = Counters::default();
         let mut s = Slots::new(120, PresentPriority::Latency, true, false, None);
         // A latch stands in for a vsync but never phases the clock.
-        s.on_present(T0, T0 - LEAD, None, false, &mut c);
+        s.on_present(T0, T0 - LEAD, None, false, 0, &mut c);
         assert!(s.bootstrapping() && !s.fence_live());
         assert_eq!(s.next_target(T0, T0, false, &mut c), (0, None));
         let mut off = Slots::new(120, PresentPriority::Latency, false, false, None);
-        off.on_present(T0, T0 - LEAD, None, true, &mut c);
+        off.on_present(T0, T0 - LEAD, None, true, 0, &mut c);
         assert!(
             !off.bootstrapping(),
             "pacing off: two pending from the start"
@@ -545,13 +556,29 @@ mod tests {
     }
 
     #[test]
+    fn a_compositor_slip_frees_its_slot_but_leaves_the_margin_alone() {
+        let (mut s, mut c) = phased(PresentPriority::Latency, false);
+        let a = aim(&mut s, &mut c, T0 + P / 10);
+        // Applied 5 ms before the aimed latch and still latched a cycle late: the compositor's.
+        let release = s.clock.present_ns(a) - LEAD - 5_000_000;
+        assert_eq!(
+            land_from(&mut s, &mut c, a, a + 1, release),
+            Some((P / 1000) as u64)
+        );
+        assert_eq!((c.slot_miss, s.margin_ns()), (1, 0));
+        // The next frame is early beyond the band for the slot after the one the slip took:
+        // under latency it shares that slot and the newer shows.
+        assert_eq!(aim(&mut s, &mut c, T0 + P + P / 10), a + 1);
+    }
+
+    #[test]
     fn latch_only_presents_score_the_spacing_off_the_period() {
         let mut c = Counters::default();
         let mut s = Slots::new(120, PresentPriority::Latency, true, false, None);
         s.note_latch(0, &mut c);
         assert_eq!(c.unlatched, 1);
         for k in [0, 1, 3, 3] {
-            s.on_present(T0 + k * P, T0 + k * P - LEAD, None, false, &mut c);
+            s.on_present(T0 + k * P, T0 + k * P - LEAD, None, false, 0, &mut c);
         }
         let i = c.intervals;
         assert_eq!((i.n0, i.n1, i.n2, i.n3p), (1, 1, 1, 0));
