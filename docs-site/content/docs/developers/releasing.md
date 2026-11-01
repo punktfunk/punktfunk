@@ -66,6 +66,12 @@ reports; the Windows packer stamps it into the finished binary.
    use the Play Console or `android-promote.yml` (a dry run unless you turn `dry_run` off). Apple:
    submit the TestFlight build for review in App Store Connect.
 
+   **While Google still reviews the last release**, a new production release replaces it and the
+   review starts over. Set the repo variable `PLAY_HOLD_PRODUCTION` to `true` before the tag: the
+   build lands on Play's `internal` track instead. Once the review is done, run
+   `android-promote.yml` with the tag run's versionCode, `to_track` `production`, `from_track`
+   blank and `notes_tag` the tag, then clear the variable.
+
 **An `-rc` tag publishes too.** It builds like a stable tag, Android to Play production included,
 and needs its own `docs/releases/whatsnew/<tag>.txt`. `announce` refuses it unless
 `allow_prerelease` is set, and never puts it in the update feed.

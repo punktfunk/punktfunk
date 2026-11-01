@@ -392,7 +392,7 @@ know is not offered, and the session goes ahead without it — see
 | Contract | Current | Rule |
 |---|---|---|
 | Native protocol | **`punktfunk/2`** | Hosts and apps from 0.44 on mix in either order; from a 0.45 host, a PyroWave app older than 0.45 drops more frames under loss. An app from 0.44 on needs a 0.44 host or newer: an older one shows as offline, and connecting says "update both". |
-| C ABI version | **60** | Between an app and the core library it ships with. |
+| C ABI version | **63** | Between an app and the core library it ships with. |
 | Windows display-driver protocol | **9** | Host and driver must match; the installer updates both. |
 | Windows virtual-gamepad channel | **3** | Host and pad driver must match; same installer. |
 
