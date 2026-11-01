@@ -169,6 +169,9 @@ struct Pads {
     identity_since: [Option<std::time::Instant>; MAX_WIRE_PADS],
     /// When each pad's first frame came with no kind declared ([`Pads::waits_for_arrival`]).
     undeclared_since: [Option<std::time::Instant>; MAX_WIRE_PADS],
+    /// Pads whose raw reports may build them ([`Pads::raw_builds`]): set by a declaration,
+    /// cleared by a removal, so a report that lands after the remove builds nothing.
+    raw_armed: [bool; MAX_WIRE_PADS],
     /// Manager that holds a built device at this index (`None` = none). Stays put
     /// if `kinds[idx]` later changes (arrival-after-first-frame), so a pad is
     /// never duplicated and removal always hits the manager that owns it.
@@ -206,6 +209,7 @@ impl Pads {
             identities: Default::default(),
             identity_since: [None; MAX_WIRE_PADS],
             undeclared_since: [None; MAX_WIRE_PADS],
+            raw_armed: [false; MAX_WIRE_PADS],
             owner: [None; MAX_WIRE_PADS],
             xbox360: None,
             backends: PadBackends::default(),
@@ -238,6 +242,7 @@ impl Pads {
         );
         self.kinds[idx] = resolved;
         self.declared[idx] = Some(kind);
+        self.raw_armed[idx] = true;
     }
 
     /// Who the Steam Controller on wire pad `id.pad` is, for the virtual pad built next.
@@ -268,6 +273,16 @@ impl Pads {
             && takes_identity(self.kinds[idx])
             && self.identities[idx].is_none()
             && self.identity_since[idx].is_some_and(|t| t.elapsed() < IDENTITY_WAIT)
+    }
+
+    /// Whether a raw report from wire pad `idx` stands for its first frame: a Steam Controller
+    /// declared since its last removal, with no device. Its raw reports are its state, and a
+    /// pad at rest, or driven only by trackpads and gyro, sends no typed frame to build it.
+    fn raw_builds(&self, idx: usize) -> bool {
+        idx < MAX_WIRE_PADS
+            && self.owner[idx].is_none()
+            && self.raw_armed[idx]
+            && takes_identity(self.kinds[idx])
     }
 
     /// A built pad never changes kind, so a frame that beats a lost arrival would pin the
@@ -955,6 +970,15 @@ impl WirePads {
         (0..MAX_WIRE_PADS).filter(|i| self.mask & (1 << i) != 0)
     }
 
+    /// Attach pad `idx` at rest, leaving the seq gate alone: a pad whose first state is a raw
+    /// report. Its removal then clears it like any attached pad.
+    fn attach_at_rest(&mut self, idx: usize) {
+        if idx < MAX_WIRE_PADS && self.mask & (1 << idx) == 0 {
+            self.mask |= 1 << idx;
+            self.state[idx] = Default::default();
+        }
+    }
+
     /// One button or axis event. `None` = bad index or unknown axis.
     fn fold(&mut self, ev: &InputEvent) -> Option<usize> {
         let idx = ev.flags as usize;
@@ -1322,11 +1346,22 @@ impl InputLoop {
         }
     }
 
+    /// A raw report builds its Steam Controller ([`Pads::raw_builds`]) before it lands; any
+    /// other rich input only reaches a device that exists.
     fn on_rich(&mut self, rich: punktfunk_core::quic::RichInput) {
-        if let punktfunk_core::quic::RichInput::Motion { pad, .. } = rich {
-            let now = std::time::Instant::now();
-            self.counters
-                .note_motion(self.motion_cadence.record(pad, now));
+        use punktfunk_core::quic::RichInput;
+        match rich {
+            RichInput::Motion { pad, .. } => {
+                let now = std::time::Instant::now();
+                self.counters
+                    .note_motion(self.motion_cadence.record(pad, now));
+            }
+            RichInput::HidReport { pad, .. } if self.pads.raw_builds(usize::from(pad)) => {
+                let idx = usize::from(pad);
+                self.wire.attach_at_rest(idx);
+                self.pads.apply_wire(&self.wire, idx, &self.pad_feed);
+            }
+            _ => {}
         }
         self.pads.apply_rich(rich);
     }
@@ -1392,6 +1427,7 @@ impl InputLoop {
         let Some(attached) = self.wire.remove(pad, seq) else {
             return;
         };
+        self.pads.raw_armed[idx] = false;
         self.pad_uplink.forget(idx);
         if attached {
             self.pads.apply_wire(&self.wire, idx, &self.pad_feed);
@@ -1733,6 +1769,34 @@ mod tests {
         pads.kinds[3] = GamepadPref::SteamController2;
         pads.identity_since[3] = Some(std::time::Instant::now() - IDENTITY_WAIT);
         assert!(!pads.waits_for_identity(3), "the wait ends");
+    }
+
+    /// A declared Steam Controller with no device is built by its raw reports, and a pad
+    /// attached that way unplugs like any other. Nothing else is built from rich input.
+    #[test]
+    fn a_raw_report_builds_a_resting_steam_controller() {
+        let mut pads = Pads::new(GamepadPref::Xbox360, PadIdentity::anonymous(), false);
+        // Set the resolved kinds directly: a box without the backend folds them to Xbox 360.
+        pads.kinds = [GamepadPref::SteamController2; MAX_WIRE_PADS];
+        pads.raw_armed[0] = true;
+        pads.kinds[2] = GamepadPref::DualSense;
+        pads.raw_armed[2] = true;
+        pads.kinds[3] = GamepadPref::SteamController;
+        pads.raw_armed[3] = true;
+        pads.owner[3] = Some(GamepadPref::SteamController);
+        pads.set_kind(4, GamepadPref::Xbox360);
+        assert!(pads.raw_armed[4], "a declaration arms the pad");
+        assert!(pads.raw_builds(0));
+        assert!(!pads.raw_builds(1), "undeclared, or removed since");
+        assert!(!pads.raw_builds(2), "not a raw pad");
+        assert!(!pads.raw_builds(3), "already built");
+        assert!(!pads.raw_builds(MAX_WIRE_PADS));
+
+        let mut wire = WirePads::default();
+        wire.attach_at_rest(0);
+        assert!(wire.frame(0).active_mask & 1 != 0);
+        assert_eq!(wire.remove(0, 1), Some(true), "its removal unplugs it");
+        assert!(wire.frame(0).active_mask & 1 == 0);
     }
 
     /// Pad audio and the Controllers page follow the device: a pad already built as Xbox 360
