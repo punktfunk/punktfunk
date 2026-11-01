@@ -10,7 +10,9 @@ export interface AccessRequestPath {
 	/**
 	 * The folder and the files directly in it, nothing below. A Windows library folder holding a
 	 * game tree needs no more, and this lands at once where a whole folder rewrites every file in
-	 * the tree. A host older than 0.46 ignores it and asks for the whole folder.
+	 * the tree. One `*` component in the path names each folder under it (`D:\Games\*`): one yes
+	 * covers them all. A host older than 0.46 ignores the flag and asks for the whole folder, and
+	 * refuses a pattern, so ask for the folders themselves beside it.
 	 */
 	readonly files?: boolean;
 }

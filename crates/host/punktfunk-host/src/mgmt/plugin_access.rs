@@ -252,6 +252,9 @@ pub(crate) async fn request_plugin_access(
         }
     }
     if changed {
+        // A link the plugin asked through is a new root: the runner's ACE for it lands now, not
+        // at the next minute's converge.
+        tokio::task::spawn_blocking(crate::plugins::converge_after_decision);
         emit(EventKind::PluginsChanged { id });
     }
     Json(

@@ -43,7 +43,7 @@ nothing the plugin does at runtime widens it. Without it, a plugin does not star
 | `schema` | `1`. Any other value is refused. |
 | `id` | The plugin id: `[a-z][a-z0-9-]*`, at most 64 characters. Use the same string as the plugin's `name`; it keys the plugin's token, state dir and library provider. |
 | `reads` | Paths the plugin reads. Absolute or `~/`-rooted. A missing path is skipped. |
-| `files` | Folders the plugin reads the files of, nothing below them. Use it for a folder that holds a game tree: on Windows a `reads` entry rewrites every file below it, and a `files` entry lands at once. Needs host 0.46. |
+| `files` | Folders the plugin reads the files of, nothing below them. Use it for a folder that holds a game tree: on Windows a `reads` entry rewrites every file below it, and a `files` entry lands at once. One `*` component names each folder under it: `%ProgramFiles%/EA Games/*/__Installer` is every game's `__Installer`, new ones within a minute. Needs host 0.46; an older host drops the entry, so also ask for it from `wants`. |
 | `writes` | Paths it also writes. |
 | `network` | `true` to reach the network. |
 | `registry` | Windows registry keys it reads, as `HKLM\…` or `HKCU\…`. A key under `HKCU`, like a path under `~/`, marks a source that belongs to one account; the host grants it in every signed-in account's hive. |
@@ -315,7 +315,10 @@ yield* serveUi({
 A package can't know where someone keeps their ROMs or a second Steam library. Return those
 folders from `wants: (cfg) => [...]`. Before each scan the kit asks the host for every one the
 plugin can't reach, then scans what it can reach now. Return `{ path, files: true }` for a folder
-that holds a game tree when its own files are all you read.
+that holds a game tree when its own files are all you read. For a library folder whose game
+folders each hold the one file you read, return the pattern `{ path: "D:\\Games\\*", files: true }`
+beside the game folders themselves: one yes covers them all, and a host before 0.46 refuses the
+pattern and prompts per folder.
 
 A plugin that doesn't use `defineLibraryPlugin` yields `requestAccess(paths, reason)` from
 `@punktfunk/plugin-kit`. A request only creates a pending row: the operator allows it on the

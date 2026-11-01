@@ -483,6 +483,7 @@ mod tests {
             path: path.into(),
             write,
             files: false,
+            link: false,
         }
     }
 

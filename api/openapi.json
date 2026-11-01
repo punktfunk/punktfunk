@@ -14557,6 +14557,13 @@
             "type": "boolean",
             "description": "The plugin asks to read and restore emulator saves; `path` is the folder that grant lands on."
           },
+          "spelled": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "How the plugin spelled `path` when that goes through a link. An allow records it in\n[`PluginAccess::links`]: on Windows the link itself needs the runner's ACE."
+          },
           "write": {
             "type": "boolean"
           }

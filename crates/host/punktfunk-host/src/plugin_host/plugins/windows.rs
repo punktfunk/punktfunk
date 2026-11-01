@@ -494,7 +494,7 @@ pub(super) fn grant(
     write: bool,
     files: bool,
 ) -> Result<()> {
-    let ace = Ace::of(write, files);
+    let ace = Ace::of(write, files, false);
     let sids = decision_sids(plugin);
     let aces: Vec<(String, Ace)> = sids.iter().map(|sid| (sid.clone(), ace)).collect();
     grant_aces(dir, &aces, plugin)?;
@@ -505,7 +505,7 @@ pub(super) fn grant(
 /// The inverse of [`grant`] for a folder no plugin holds any more, in one walk.
 pub(super) fn revoke(plugin: &str, dir: &std::path::Path, files: bool) -> Result<()> {
     let sids = decision_sids(Some(plugin));
-    let ace = Ace::of(false, files);
+    let ace = Ace::of(false, files, false);
     let aces: Vec<(String, Ace)> = sids.iter().map(|sid| (sid.clone(), ace)).collect();
     revoke_sids(dir, &aces, Some(plugin))?;
     note(dir, &sids, None);
@@ -521,10 +521,18 @@ fn decision_sids(plugin: Option<&str>) -> Vec<String> {
     sids
 }
 
-/// `Ace::Files` SIDs, split from the rest, which share one walk of the tree.
-fn by_reach(aces: &[(String, Ace)]) -> (Vec<&str>, Vec<&(String, Ace)>) {
-    let (own, tree): (Vec<_>, Vec<_>) = aces.iter().partition(|(_, ace)| *ace == Ace::Files);
-    (own.iter().map(|(sid, _)| sid.as_str()).collect(), tree)
+/// SIDs by how their ACE is placed: a folder's own files, a link, and the rest, which share one
+/// walk of the tree.
+fn by_reach(aces: &[(String, Ace)]) -> (Vec<&str>, Vec<&str>, Vec<&(String, Ace)>) {
+    let (mut own, mut links, mut tree) = (Vec::new(), Vec::new(), Vec::new());
+    for pair in aces {
+        match pair.1.reach() {
+            Reach::Files => own.push(pair.0.as_str()),
+            Reach::Link => links.push(pair.0.as_str()),
+            Reach::Tree => tree.push(pair),
+        }
+    }
+    (own, links, tree)
 }
 
 /// Each `(SID, ACE)` on one directory, in a single `icacls /grant:r` for what walks the tree: an
@@ -547,9 +555,12 @@ fn grant_aces(dir: &std::path::Path, aces: &[(String, Ace)], plugin: Option<&str
             dir.display()
         )
     };
-    let (own, tree) = by_reach(aces);
+    let (own, links, tree) = by_reach(aces);
     if !own.is_empty() {
         folder_ace::place(dir, &own).map_err(|e| owner(format!(": {e:#}")))?;
+    }
+    if !links.is_empty() {
+        folder_ace::place_link(dir, &links).map_err(|e| owner(format!(": {e:#}")))?;
     }
     if tree.is_empty() {
         return Ok(());
@@ -575,14 +586,18 @@ fn grant_aces(dir: &std::path::Path, aces: &[(String, Ace)], plugin: Option<&str
 }
 
 /// Every ACE of each `(SID, kind)` off one directory: what walks the tree in one walk. A folder
-/// that is gone has nothing to remove.
+/// that is gone has nothing to remove; a link whose target is gone is still a link.
 fn revoke_sids(dir: &std::path::Path, aces: &[(String, Ace)], plugin: Option<&str>) -> Result<()> {
-    if !dir.exists() {
+    if std::fs::symlink_metadata(dir).is_err() {
         return Ok(());
     }
-    let (own, tree) = by_reach(aces);
+    let (own, links, tree) = by_reach(aces);
     if !own.is_empty() {
         folder_ace::take(dir, &own)
+            .with_context(|| format!("remove the runner's ACE from {}", dir.display()))?;
+    }
+    if !links.is_empty() {
+        folder_ace::take_link(dir, &links)
             .with_context(|| format!("remove the runner's ACE from {}", dir.display()))?;
     }
     if tree.is_empty() {
@@ -653,11 +668,15 @@ fn note(dir: &std::path::Path, sids: &[String], ace: Option<Ace>) {
 }
 
 /// Whether `path`'s own DACL already gives `sid` what `ace` grants: one descriptor read, where
-/// placing it again would walk the whole tree.
+/// placing it again would walk the whole tree. A link is read as itself, not followed.
 fn held(path: &str, sid: &str, ace: Ace) -> bool {
     use ::windows::Win32::Security::Authorization::SE_FILE_OBJECT;
-    crate::windows::registry_ace::rights(path, SE_FILE_OBJECT, sid)
-        .is_ok_and(|mask| mask & ace.mask() == ace.mask())
+    let rights = if ace == Ace::Link {
+        folder_ace::link_rights(std::path::Path::new(path), sid)
+    } else {
+        crate::windows::registry_ace::rights(path, SE_FILE_OBJECT, sid)
+    };
+    rights.is_ok_and(|mask| mask & ace.mask() == ace.mask())
 }
 
 #[cfg(test)]
@@ -860,6 +879,40 @@ mod tests {
         assert!(!held(&path, &pkg, Ace::Read) && !held(&own, &pkg, Ace::Read));
         assert!(!held(&late, &pkg, Ace::Read), "what it inherited goes too");
     }
+
+    /// A link's ACE lands on the link object, not on what it points at, and comes off alone.
+    /// Makes a junction in a scratch tree, so `--ignored`.
+    #[test]
+    #[ignore = "edits ACLs; run on a Windows box"]
+    fn a_link_ace_lands_on_the_link_not_its_target() {
+        use super::{held, Ace};
+        use crate::windows::folder_ace;
+        let tmp = tempfile::tempdir().unwrap();
+        let target = tmp.path().join("target");
+        std::fs::create_dir_all(&target).unwrap();
+        let link = tmp.path().join("link");
+        let made = std::process::Command::new("cmd")
+            .args(["/C", "mklink", "/J"])
+            .arg(&link)
+            .arg(&target)
+            .output()
+            .unwrap();
+        assert!(
+            made.status.success(),
+            "{}",
+            String::from_utf8_lossy(&made.stderr)
+        );
+        let pkg = "S-1-15-3-1024-1-2-3-4-5-6-7-10";
+        let spell = |p: &std::path::Path| p.to_string_lossy().into_owned();
+        folder_ace::place_link(&link, &[pkg]).unwrap();
+        assert!(held(&spell(&link), pkg, Ace::Link));
+        assert!(
+            !held(&spell(&target), pkg, Ace::Read),
+            "the target is untouched"
+        );
+        folder_ace::take_link(&link, &[pkg]).unwrap();
+        assert!(!held(&spell(&link), pkg, Ace::Link));
+    }
 }
 
 pub(super) fn runtime_status() -> RuntimeStatus {
@@ -941,23 +994,47 @@ enum Ace {
     /// `(OI)(NP)(RX)`: this folder and the files directly in it, and no folder below. Placed
     /// with no walk; a file made here later inherits it.
     Files,
+    /// `(RX)` on a junction or symbolic link itself, never followed: what the runner opens
+    /// through on its way to a root. Placed by handle; a link has nothing below it.
+    Link,
+}
+
+/// How an ACE is placed, which is also how far it reaches.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Reach {
+    /// icacls, one walk of the tree.
+    Tree,
+    /// `SetFileSecurityW` on the folder and each file in it.
+    Files,
+    /// A handle on the link object.
+    Link,
 }
 
 impl Ace {
-    fn of(write: bool, files: bool) -> Self {
-        match (write, files) {
-            (true, _) => Ace::Modify,
-            (false, true) => Ace::Files,
-            (false, false) => Ace::Read,
+    fn of(write: bool, files: bool, link: bool) -> Self {
+        match (write, files, link) {
+            (_, _, true) => Ace::Link,
+            (true, _, false) => Ace::Modify,
+            (false, true, false) => Ace::Files,
+            (false, false, false) => Ace::Read,
         }
     }
 
+    fn reach(self) -> Reach {
+        match self {
+            Ace::Read | Ace::Code | Ace::Modify | Ace::List => Reach::Tree,
+            Ace::Files => Reach::Files,
+            Ace::Link => Reach::Link,
+        }
+    }
+
+    /// The ACE as icacls spells it. A link never reaches icacls, see [`by_reach`].
     fn icacls(self) -> &'static str {
         match self {
             Ace::Read => "(OI)(CI)(RX)",
             Ace::Code => "(OI)(CI)(RX,WA)",
             Ace::Modify => "(OI)(CI)(M)",
-            Ace::List => "(RX)",
+            Ace::List | Ace::Link => "(RX)",
             Ace::Files => "(OI)(NP)(RX)",
         }
     }
@@ -966,7 +1043,7 @@ impl Ace {
     /// FILE_GENERIC_EXECUTE, `WA` adds FILE_WRITE_ATTRIBUTES, `M` is Modify.
     fn mask(self) -> u32 {
         match self {
-            Ace::Read | Ace::List | Ace::Files => folder_ace::READ_MASK,
+            Ace::Read | Ace::List | Ace::Files | Ace::Link => folder_ace::READ_MASK,
             Ace::Code => 0x0012_01A9,
             Ace::Modify => 0x0013_01BF,
         }
@@ -1202,10 +1279,12 @@ fn converge_folders(want: &PlacedAces, had: &PlacedAces, placed: &mut PlacedAces
     for step in plan.steps {
         let dir = std::path::Path::new(&step.path);
         let was = |sid: &String| had_ace(sid, &step.path).map(|ace| (sid.clone(), ace));
-        // A folder's own files and its tree are different ACEs: a change of kind undoes the old.
-        let changed = step.place.iter().filter_map(|(sid, ace)| {
-            was(sid).filter(|(_, old)| (*old == Ace::Files) != (*ace == Ace::Files))
-        });
+        // A folder's own files, a link and a tree are different ACEs: a change of kind undoes
+        // the old.
+        let changed = step
+            .place
+            .iter()
+            .filter_map(|(sid, ace)| was(sid).filter(|(_, old)| old.reach() != ace.reach()));
         let gone: Vec<(String, Ace)> = step.remove.iter().filter_map(was).chain(changed).collect();
         if !gone.is_empty() {
             CONVERGE_WALKED.with(|w| w.set(true));
@@ -1281,7 +1360,7 @@ fn root_aces(
         .map(|r| {
             (
                 r.path.to_string_lossy().into_owned(),
-                Ace::of(r.write, r.files),
+                Ace::of(r.write, r.files, r.link),
             )
         })
         .collect()

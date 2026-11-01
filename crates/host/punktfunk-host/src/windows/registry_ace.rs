@@ -40,11 +40,16 @@ pub(crate) fn revoke(key: &str, sid: &str) -> Result<()> {
 /// nothing below `name` is touched. A group the SID may sit in doesn't count: an AppContainer needs
 /// its capability's own ACE, and a `Users:(F)` beside it doesn't stand in for that.
 pub(crate) fn rights(name: &str, object: SE_OBJECT_TYPE, sid: &str) -> Result<u32> {
-    let (psid, _psid) = parse_sid(sid)?;
     let (dacl, _sd) = read_dacl(name, object)?;
+    rights_in(dacl, sid)
+}
+
+/// [`rights`] over a DACL already read, which stays allocated for the call.
+pub(super) fn rights_in(dacl: *const ACL, sid: &str) -> Result<u32> {
+    let (psid, _psid) = parse_sid(sid)?;
     let mut mask = 0u32;
     for ace in allowed_aces(dacl)? {
-        // SAFETY: `_psid` keeps `psid` allocated; `ace.sid` lies in the DACL `_sd` keeps.
+        // SAFETY: `_psid` keeps `psid` allocated; `ace.sid` lies in the DACL the caller keeps.
         if !ace.inherit_only && unsafe { EqualSid(psid, ace.sid) }.is_ok() {
             mask |= ace.mask;
         }

@@ -301,7 +301,7 @@ export const PendingAccess: FC<{
 								) : (
 									<>
 										<div className="break-all font-mono text-xs">
-											{row.path}
+											{row.spelled ?? row.path}
 										</div>
 										<Mode write={row.write} files={row.files} />
 									</>
