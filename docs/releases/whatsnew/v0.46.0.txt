@@ -1,0 +1,5 @@
+• Snapdragon phones, tablets and handhelds show true blacks and whites: the stream arrives in the range their display expects.
+• Android TVs and the Shield show a steadier picture: frames land on the compositor's beat, with no drop-and-repeat.
+• Profile pictures show on the picker and the host card.
+• A host woken over the network is dialled again until it can stream.
+• Switch 2 Pro, GameCube and Joy-Con pads reach the host as themselves, C button included.

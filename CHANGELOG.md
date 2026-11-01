@@ -14,6 +14,86 @@ short; the version-bump commit retitles it. Older sections stay as they are.
 
 ---
 
+## v0.46.0
+
+489 commits since v0.45.0. ALPN `pkf2` and driver protocol floor 9 stay; **C ABI 63**. Umbriel joins
+the Linux host compositors, a session can run at studio range, seats play the box's emulators,
+and a Windows seat can sign in to an account the PC already has. `PUNKTFUNK_DOOR` is gone.
+Deep dive: `git log v0.45.0..v0.46.0`
+
+### Versions
+
+| | v0.45.0 | v0.46.0 | Notes |
+|---|---|---|---|
+| Wire protocol | punktfunk/2 | **punktfunk/2** | ALPN unchanged. Feature bits 40 studio-range SDR and 41 studio-range HDR: a client that sets one gets that colour planned and encoded at studio range, said in the Welcome; a host whose AMD GPU writes studio says so unasked. Under PyroWave a non-zero Hello rate is Fixed at the quality; another codec negotiated reads it as zero. Feedback gains `dead_ppm` beside `loss_ppm`, whose meaning stays. Compositor preference byte 8 Umbriel (an older peer reads Auto); pad bit `BTN_MISC2`, the Switch 2 C button. Old peers skip all of it |
+| C ABI | 60 | **63** | 61 `PUNKTFUNK_BTN_MISC2`; 62 `punktfunk_wake_redial_delay_ms` and `punktfunk_connection_wake_redial_delay_ms`; 63 `PUNKTFUNK_COMPOSITOR_UMBRIEL` (8). Nothing removed |
+| C headers | — | — | `punktfunk_core.h` gains the three above. `punktfunk_console.h` gains `punktfunk_console_avatar`, the answer to the console's `FetchAvatar` command |
+| Rust edition / MSRV | 2024 / 1.85 | **2024 / 1.85** | unchanged |
+| Workspace crate dirs | 46 | **47** | `pf-fluent`, the WinUI theme colours the Windows client and installer share |
+| Virtual-display driver protocol | 9 | **9** | unchanged. A 0.46 driver answers an ADD before its adapter is up with `STATUS_DEVICE_NOT_READY` and keeps `STATUS_NOT_FOUND` for a refused create; the host retries the first without the ghost reap and reads an older driver's `NOT_FOUND` as before. The host refuses a short ADD reply, which only a driver below the floor writes |
+| Windows virtual-gamepad channel | 3 | **3** | unchanged |
+| Plugin index schema | 1 | **1** | unchanged; a manifest's `wants` and `unreachable` take `{ path, files: true }`, which a 0.45 host reads as the whole folder, and a path with one `*` component names each folder under it as a files pattern, which a 0.45 host refuses |
+| Host event schema | 1 | **1** | unchanged; `game.*` events carry `seat` on a box with seats, and a seat's `game.launching` carries a hold the box host's plugins release |
+| `api/openapi.json` | 0.45.0 | **0.46.0** | `POST /game/holds/{token}/release`; `AccessWalk`, `files` on `Grant`, `AccessPathRequest` and `PendingRequest`, `PendingRequest.spelled`, `Job.walk`, `PluginAccessSnapshot.walks`; `seat` on `ActiveGame` and `SessionRow`; `HookEntry.elevated`, `PrepCmd.elevated`, `HostInfo.elevated_commands` and `.door_switch_failed`; `ProfileCreate.seat_account` + `seat_password`, `ProfileUpdate.seat_password`, `SeatPublic.account`; the save and firmware routes take `?profile=`. `POST /profiles` answers 503 while the seat supervisor is silent; `PUT /hooks` 400 for an elevated hook while the switch is off; `PUT /display` lays the body over the stored policy. Nothing removed |
+| gamescope patch level (`+pfhdrN`) | 31 | **31** | unchanged |
+| `@punktfunk/host` (SDK) | 0.4.0 | **0.5.0** | 0.4.1 decodes a 0.45 host's port map; 0.5.0 adds the seat tag and hold on game events, the hold release route and the save routes' profile query |
+| `@punktfunk/plugin-kit` | 0.13.1 | **0.14.0** | `wants`/`unreachable` take `files: true`; a hold handler gets the whole event; the registry is read in process. Peers `@punktfunk/host` 0.4 or 0.5 |
+
+### Breaking
+
+- **`PUNKTFUNK_DOOR` is gone.** `PUNKTFUNK_DOOR=1` no longer makes a host the door; a hand-written
+  unit passes `serve --door`. Every shipped unit already does.
+- **Attach mode row retired.** The console's Host → Game Mode row and the stored `gamescope_attach`
+  key are ignored. `PUNKTFUNK_GAMESCOPE_ATTACH=1` in host.env stays as the operator override,
+  sampled once; the pin under Displays → Stream this monitor is the setting.
+- **Windows client needs Windows App Runtime 2.6.4.** The client is framework-dependent; the
+  installer and the Store package bring the runtime, a portable copy asks for it at start.
+- **SteamOS door-on update.** `update.sh` with the door on needs the password and stops before
+  pulling or building without it; same-version rebuilds still run. One password update brings a
+  box there.
+- **C ABI 63.** Three additions, nothing removed. An app pins the integer, so re-pin and rebuild.
+- **Encoder = PyroWave names a codec, not a backend.** A client on an automatic codec that decodes
+  PyroWave negotiates it; every other session, Moonlight included, gets the GPU's normal encoder.
+- **Seat keeper (Windows).** New commands `adopt` and `credential`; an adopted row carries
+  `adopted_sid` and `rdp_granted`, a made row's JSON is unchanged. Passwords are 1–256 bytes of
+  UTF-8, no longer 32 visible-ASCII bytes at least. Host and keeper ship in one installer.
+- **Seat supervisor (Linux).** `install_flatpak` and `remove_flatpak` from the owner's uid, which
+  gets an ACL entry on the socket; `punktfunk-seats check-owner|release-owner|stop-all`. A Linux
+  owner's name takes `@` and up to 64 characters; a person's uid is 1000 up, outside 60001–65535.
+  A seat's library copy carries `plugin-grants.json` and the staged firmware; granted ROM roots
+  mount read-only on the seat; `saves/out` and `saves/in` per seat.
+
+### Knobs
+
+- New: `PUNKTFUNK_AMF_FULL_RANGE=on|off` (Windows AMD; unset, the host tests the GPU once).
+  `PUNKTFUNK_COMPOSITOR=umbriel`; its input backend id is `wlr-layout`. Android system
+  properties `debug.punktfunk.asc_hold_band_us` and `debug.punktfunk.low_latency_key=qti-fence`
+  are A/B levers.
+- Changed: `PUNKTFUNK_GAMESCOPE_MANAGED=1` and `PUNKTFUNK_GAMESCOPE_SESSION` are dropped with a
+  warning on a box without gamescope-session-plus. The console's Force managed mode row is read
+  per session. Windows hook and prep commands get the `PF_*` environment. NetBird's `wt0` with a
+  100.64/10 address counts as LAN for pairing and the console. A WebSocket bridge names the
+  browser in a `pf-client-addr` header, which can only tighten a knock's class.
+- Documented: the driver's machine variables `PFVD_NO_RT_GPU`, `PFVD_DEBUG_LOG` and
+  `PFVD_POOL_BYPASS`; docs-drift now ratchets the `PFVD_` prefix.
+- CLI: `punktfunk-host hooks elevated on|off` (Windows). `plugins add|remove` exit 1 when the
+  plugins' API credentials are not issued; `plugins remove <id> --plugins <dir>` reads the id
+  from that dir. `pair --fp` and `hosts add --fp` with no value exit 5; `hosts add` with no
+  config dir fails instead of answering "already saved".
+- Seats: a seat host opens its browser plane on UDP 9783–9786 and follows the box's Browser
+  streaming switch within seconds; the Windows firewall rule covers those ports. The door holds a
+  logind `sleep` block while anyone plays on a seat, and the console's web session key lives in
+  `web-session-key`, so a door switch keeps the operator signed in.
+- Packagers: sysext images carry `punktfunk-start-enabled.service`, upheld from `sysinit.target`,
+  which starts the image's enabled `multi-user.target` units after the merge. The door units are
+  conditioned on the owner record on every channel; `restart-user-units` is the one place a
+  package restarts the supervisor and the door, after the host. NixOS runs door-helper with the
+  store's bash. The flatpak drops `pf-fluent` with the other windows-rs members. The Linux console
+  window's app id is `io.unom.punktfunk.console` in browse mode. The seated client's udev rule
+  grants the whole USB device of Switch 2 pads.
+
+---
+
 ## v0.45.0
 
 723 commits since v0.44.1. ALPN `pkf2` and driver protocol floor 9 stay; **C ABI 60**. Linux and

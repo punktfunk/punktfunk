@@ -84,6 +84,12 @@
   </branding>
 
   <releases>
+    <release version="0.46.0" date="2026-11-01">
+      <url type="details">https://git.unom.io/unom/punktfunk/releases/tag/v0.46.0</url>
+      <description>
+        <p>Right colours on Snapdragon devices and AMD RX 9000 hosts, Umbriel as a host desktop, a steadier automatic bitrate, Bazzite hosts that survive a reboot, and Switch 2 pads.</p>
+      </description>
+    </release>
     <release version="0.45.0" date="2026-10-25">
       <url type="details">https://git.unom.io/unom/punktfunk/releases/tag/v0.45.0</url>
       <description>
