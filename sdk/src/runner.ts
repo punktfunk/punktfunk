@@ -30,7 +30,7 @@ import { PunktfunkHost } from "./client.js";
 import { discoverUnits } from "./discover.js";
 import { layer as hostLayer } from "./effect.js";
 import { type ConnectOptions, configDir } from "./config.js";
-import { connect, type PluginDef } from "./index.js";
+import { connect, type PluginDef, type Punktfunk } from "./index.js";
 import { grantedRoots, type PluginManifest, sandboxProbe } from "./sandbox.js";
 import { pluginToken, runSandboxed } from "./runner-linux.js";
 import { defaultLog, type LogSink, type RunnerLogLevel } from "./runner-log.js";
@@ -62,6 +62,8 @@ export interface RunnerOptions {
 	configDir?: string;
 	/** Grants poll period. Default 2 seconds; tests shorten it. */
 	grantPollInterval?: Duration.Input;
+	/** How long a plugin runs before it holds a lease ([`holdLease`]). Default 5 s; tests shorten it. */
+	leaseSettle?: Duration.Input;
 	/** Whether this box can build a sandbox (test seam). Default `sandboxProbe`. */
 	sandboxProbe?: () => { ok: true } | { ok: false; reason: string };
 	/** Run one sandbox attempt without spawning bwrap (test seam). */
@@ -124,6 +126,26 @@ const isPluginDef = (v: unknown): v is PluginDef =>
 	typeof (v as PluginDef).name === "string" &&
 	(v as PluginDef).main !== undefined;
 
+/**
+ * The lease behind the store's "running", held while a plugin's `main` runs: a plugin with no page
+ * has no other, and over a page the host only extends it. The settle keeps a plugin that dies at
+ * start from reading as running. The host's TTL is 90 s, so a killed plugin drops out by itself.
+ */
+const holdLease = (pf: Punktfunk, id: string, options: RunnerOptions) => {
+	const call = (method: string, body?: unknown) =>
+		Effect.tryPromise(() => pf.request(method, `/plugins/${id}`, body)).pipe(Effect.ignore);
+	const renew = call("PUT", { title: id });
+	return Effect.sleep(options.leaseSettle ?? "5 seconds").pipe(
+		Effect.andThen(
+			Effect.acquireRelease(renew, () =>
+				call("DELETE").pipe(Effect.timeoutOption("2 seconds")),
+			),
+		),
+		Effect.andThen(Effect.forever(Effect.sleep("30 seconds").pipe(Effect.andThen(renew)))),
+		Effect.scoped,
+	);
+};
+
 /** One attempt at a unit: import (cache-busted per attempt) and run whatever it exports. */
 const attemptUnit = (
 	unit: Unit,
@@ -151,26 +173,30 @@ const attemptUnit = (
 		}
 		const def = mod.default;
 		const own = inProcessConnect(unit, options);
-		if (Effect.isEffect(def.main)) {
-			// The well-behaved shape: interruption reaches it structurally, its scoped
-			// finalizers run on shutdown.
-			yield* (def.main as Effect.Effect<unknown, unknown, PunktfunkHost>).pipe(
-				Effect.provide(hostLayer(own)),
-			);
-		} else {
-			// The simple shape: a facade client whose close is guaranteed by the scope —
-			// on completion, failure, OR interruption (shutdown).
-			const main = def.main as (pf: unknown) => Promise<unknown> | unknown;
-			yield* Effect.scoped(
-				Effect.gen(function* () {
-					const pf = yield* Effect.acquireRelease(
-						Effect.tryPromise(() => connect(own)),
-						(client) => Effect.sync(() => client.close()),
+		// The scope guarantees the client's close on completion, failure, OR interruption
+		// (shutdown), after the lease is given back.
+		yield* Effect.scoped(
+			Effect.gen(function* () {
+				const pf = yield* Effect.acquireRelease(
+					Effect.tryPromise(() => connect(own)),
+					(client) => Effect.sync(() => client.close()),
+				);
+				// A loose script is in no store listing, so only a package holds a lease.
+				if (unit.packageDir) {
+					yield* Effect.forkScoped(holdLease(pf, unit.manifest?.id ?? def.name, options));
+				}
+				if (Effect.isEffect(def.main)) {
+					// The well-behaved shape: interruption reaches it structurally, its scoped
+					// finalizers run on shutdown.
+					yield* (def.main as Effect.Effect<unknown, unknown, PunktfunkHost>).pipe(
+						Effect.provide(hostLayer(own)),
 					);
+				} else {
+					const main = def.main as (pf: unknown) => Promise<unknown> | unknown;
 					yield* Effect.tryPromise(async () => await main(pf));
-				}),
-			);
-		}
+				}
+			}),
+		);
 		return "plugin" as const;
 	});
 

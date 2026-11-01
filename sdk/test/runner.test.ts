@@ -740,6 +740,71 @@ describe("supervision", () => {
 		}
 	});
 
+	const leaseHost = (id: string, calls: string[]) =>
+		Bun.serve({
+			port: 0,
+			fetch(req) {
+				if (new URL(req.url).pathname !== `/api/v1/plugins/${id}`)
+					return Response.json({ hostname: "mock" });
+				calls.push(req.method);
+				return new Response(null, { status: 204 });
+			},
+		});
+
+	test("a package holds a lease while it runs and gives it back", async () => {
+		const calls: string[] = [];
+		const server = leaseHost("quiet", calls);
+		const d = mkdirs("lease");
+		const file = path.join(d.pluginsDir, "index.ts");
+		write(file, `export default { name: "quiet", main: () => new Promise(() => {}) };`);
+		const fiber = Effect.runFork(
+			superviseUnit(
+				{ name: "quiet", file, packageDir: d.pluginsDir },
+				{
+					connect: { url: `http://127.0.0.1:${server.port}`, token: TOKEN },
+					log: () => {},
+					leaseSettle: "1 millis",
+					ownProcess: false,
+				},
+			),
+		);
+		try {
+			await waitFor(() => calls.includes("PUT"));
+			await Effect.runPromise(Fiber.interrupt(fiber));
+			expect(calls).toEqual(["PUT", "DELETE"]);
+		} finally {
+			server.stop(true);
+		}
+	});
+
+	test("a plugin that dies at start never takes a lease", async () => {
+		const calls: string[] = [];
+		const logs: string[] = [];
+		const server = leaseHost("doomed", calls);
+		const d = mkdirs("lease-doomed");
+		const file = path.join(d.pluginsDir, "index.ts");
+		write(file, `export default { name: "doomed", main: async () => { throw new Error("no"); } };`);
+		const fiber = Effect.runFork(
+			superviseUnit(
+				{ name: "doomed", file, packageDir: d.pluginsDir },
+				{
+					connect: { url: `http://127.0.0.1:${server.port}`, token: TOKEN },
+					log: (l) => logs.push(l),
+					leaseSettle: "1 hour",
+					ownProcess: false,
+					restartBase: "1 millis",
+				},
+			),
+		);
+		try {
+			await waitFor(() => logs.some((l) => l.includes("restarting")));
+			await Effect.runPromise(Fiber.interrupt(fiber));
+			expect(calls).toEqual([]);
+		} finally {
+			server.stop(true);
+		}
+	});
+
 	test("supervised unit ends cleanly when its plugin completes (no spin)", async () => {
 		const server = mockHost();
 		const d = mkdirs("done");
