@@ -164,10 +164,18 @@ impl PluginRegistry {
     }
 
     /// `true` iff an operator-visible field changed (the caller emits `plugins.changed`). A pure
-    /// renewal is `false`.
+    /// renewal is `false`. A registration with no `ui` over a live page only extends its lease:
+    /// the runner renews every plugin it runs, page or not.
     pub(crate) fn upsert(&self, id: &str, v: Valid) -> bool {
         let expires_at = Instant::now() + LEASE_TTL;
         let mut map = self.inner.write().unwrap_or_else(|e| e.into_inner());
+        if v.ui.is_none() {
+            let page = map.get_mut(id).filter(|s| s.is_live() && s.ui.is_some());
+            if let Some(page) = page {
+                page.expires_at = expires_at;
+                return false;
+            }
+        }
         let changed = match map.get(id) {
             // An expired prior entry counts as a change — it had stopped listing.
             Some(prev) => !prev.is_live() || !prev.public_eq(&v),
@@ -580,6 +588,31 @@ mod tests {
             "p",
             validate(reg("New Title", 49321, "ZZZZZZZZZZZZZZZZ")).unwrap()
         ));
+    }
+
+    #[test]
+    fn a_bare_renewal_keeps_a_live_page() {
+        let r = PluginRegistry::new();
+        let bare = || {
+            validate(PluginRegistration {
+                title: "p".into(),
+                version: None,
+                ui: None,
+                category: None,
+                holds: Vec::new(),
+                hold_timeout_ms: None,
+            })
+            .unwrap()
+        };
+        assert!(r.upsert("p", bare()), "a plugin with no page is listed");
+        assert!(!r.upsert("p", bare()));
+        assert!(r.upsert("p", validate(reg("Page", 49321, SECRET)).unwrap()));
+
+        let stale = Instant::now() + Duration::from_secs(1);
+        r.inner.write().unwrap().get_mut("p").unwrap().expires_at = stale;
+        assert!(!r.upsert("p", bare()), "the page did not change");
+        assert_eq!(r.credential("p").unwrap().port, 49321);
+        assert!(r.inner.read().unwrap()["p"].expires_at > stale);
     }
 
     #[test]
