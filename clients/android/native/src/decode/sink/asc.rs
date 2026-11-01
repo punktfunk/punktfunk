@@ -811,7 +811,8 @@ impl Sink for AscSink {
             target: "pf.present",
             "asc released={} displays={} skipped={} inflight={} qDepth={} paceMs p50={:.2} \
              max={:.2} latchMs p50={:.2} max={:.2} e2eMs p50={:.2} max={:.2} panelMs={:.2} \
-             leadMs={:.2} marginUs={} held={} slotMiss={} coalesced={} n0={} n1={} n2={} n3+={} \
+             glassMs={:.3} leadMs={:.2} marginUs={} held={} slotMiss={} coalesced={} n0={} n1={} \
+             n2={} n3+={} \
              judder={}‰ mode={} phaseErrMs p50={:.2} max={:.2} sfJitMs p50={:.2} max={:.2} \
              forced={} unlatched={} fence={} fenced={} fenceErr={} fenceTailMs p50={:.2} \
              max={:.2}{}",
@@ -827,6 +828,7 @@ impl Sink for AscSink {
             e2e_p50,
             e2e_max,
             self.slots.clock_period_ns() as f64 / 1e6,
+            self.slots.glass_period_ns().unwrap_or(0) as f64 / 1e6,
             self.slots.lead_ns() as f64 / 1e6,
             self.slots.margin_ns() / 1000,
             c.held,

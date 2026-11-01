@@ -6,10 +6,10 @@
 //! the newer shows. Every frame therefore gets its own slot ([`pace_slot`]) and targets
 //! `present − period/2`: ready for that slot, not the one before, half a period of tolerance each
 //! way. Under `latency` a frame takes the slot after the last one while it can still make it, or
-//! is early for it by less than the hold band; earlier than that it shares the last slot and
-//! SurfaceFlinger keeps the newer. Under `smooth` the buffer bounds the hold. Until a present
-//! fence phases the [`SlotClock`], with pacing off, or on a down-rated panel, every target is as
-//! soon as possible.
+//! is early for it by less than the hold band, which widens while the fences show the source
+//! outrunning the panel; earlier than that it shares the last slot and SurfaceFlinger keeps the
+//! newer. Under `smooth` the buffer bounds the hold. Until a present fence phases the
+//! [`SlotClock`], with pacing off, or on a down-rated panel, every target is as soon as possible.
 
 use punktfunk_core::phase::{pace_slot, SlotClock};
 
@@ -21,8 +21,26 @@ use crate::apply_margin::ApplyMargin;
 /// and the next: the grid's fence jitter, a margin step, a lead spike's decay. Not the link's
 /// arrival jitter: that is the store's cushion, and a frame past it costs one repeat wherever
 /// the band sits. Every millisecond here is a millisecond on each frame of a source running
-/// faster than the panel, so the band is the noise and no more.
+/// faster than the panel, so this band is the noise and no more.
 const HOLD_BAND_NS: i64 = 1_500_000;
+
+/// The hold band while the source outruns the panel. Frames then gain on the vsync a millisecond
+/// a second at 59.94 Hz, and a share leaves the next ones with the band's slack against their
+/// deadline: at 1.5 ms every late arrival is a repeat and a drop, for the seconds it takes the
+/// slack to grow back. 6 ms leaves that slack and costs each frame 2.4 ms on average.
+const OUTRUN_HOLD_BAND_NS: i64 = 6_000_000;
+
+/// The source outruns the panel past one part in this: 200 ppm, beyond any two clocks' drift.
+const OUTRUN_MIN_RATIO: i64 = 5000;
+/// A source further ahead than one part in this is another rate, not the same one running fast.
+const OUTRUN_MAX_RATIO: i64 = 50;
+
+/// Periods the fences measure before their rate counts, and the window they average over: 5 s
+/// and 2 min at 60 Hz. One present's fence jitters by 0.1 ms; 300 of them read to under 1 µs.
+const GLASS_MIN_PERIODS: i64 = 300;
+const GLASS_WINDOW_PERIODS: i64 = 7200;
+/// A wider gap between fences is a stream pause: its whole periods are a guess.
+const GLASS_MAX_GAP_PERIODS: i64 = 8;
 
 /// The slot clock, the pacer's memory of the slots it assigned and observed, and the apply margin
 /// the observed slots adapt.
@@ -35,7 +53,7 @@ pub(crate) struct Slots {
     /// Slots a frame may be held beyond the first reachable one: 0 under latency (1 with
     /// `debug.punktfunk.asc_hold_chain`, the one-period elastic queue), the buffer under smooth.
     max_ahead: i64,
-    /// `debug.punktfunk.asc_hold_band_us` pins the hold band; `None` is [`HOLD_BAND_NS`].
+    /// `debug.punktfunk.asc_hold_band_us` pins the hold band; `None` follows the fences.
     hold_band_pin: Option<i64>,
     apply_margin: ApplyMargin,
     /// Off (`debug.punktfunk.asc_pacing` = 0, or a `Skipping` verdict): as-soon-as-possible
@@ -45,6 +63,10 @@ pub(crate) struct Slots {
     fence_live: bool,
     last_latch_ns: i64,
     last_present_ns: i64,
+    /// Fence time and the whole periods it spanned: the panel's rate as presented. The stated
+    /// rate can be off by a thousandth, a Shield TV stating 60 with its fences at 59.94 a second.
+    glass_span_ns: i64,
+    glass_periods: i64,
 }
 
 impl Slots {
@@ -75,6 +97,8 @@ impl Slots {
             fence_live: false,
             last_latch_ns: 0,
             last_present_ns: 0,
+            glass_span_ns: 0,
+            glass_periods: 0,
         }
     }
 
@@ -121,6 +145,11 @@ impl Slots {
     /// The clock's own period, 0 while unknown, for the 1 Hz line.
     pub(crate) fn clock_period_ns(&self) -> i64 {
         self.clock.period_ns()
+    }
+
+    /// The panel's period as the present fences measure it, once they have enough to say.
+    pub(crate) fn glass_period_ns(&self) -> Option<i64> {
+        (self.glass_periods >= GLASS_MIN_PERIODS).then(|| self.glass_span_ns / self.glass_periods)
     }
 
     pub(crate) fn lead_ns(&self) -> i64 {
@@ -219,11 +248,43 @@ impl Slots {
         Some(anchor - self.clock.present_ns(self.clock.slot_nearest(anchor)))
     }
 
-    /// [`HOLD_BAND_NS`] or the pin, never past half a period.
+    /// The pin, or [`OUTRUN_HOLD_BAND_NS`] while the source outruns the panel, or
+    /// [`HOLD_BAND_NS`]; never past half a period.
     fn hold_band_ns(&self) -> i64 {
+        let auto = if self.source_outruns_panel() {
+            OUTRUN_HOLD_BAND_NS
+        } else {
+            HOLD_BAND_NS
+        };
         self.hold_band_pin
-            .unwrap_or(HOLD_BAND_NS)
+            .unwrap_or(auto)
             .min(self.clock.period_ns() / 2)
+    }
+
+    /// The fences put the panel's whole-step cadence a hair behind the source's interval, so
+    /// the frames gain on the vsync for the whole session and one is surplus every beat.
+    fn source_outruns_panel(&self) -> bool {
+        let (Some(glass), Some(step)) = (self.glass_period_ns(), self.cadence_step()) else {
+            return false;
+        };
+        let (interval, ahead) = (
+            self.frame_interval_ns,
+            glass * step - self.frame_interval_ns,
+        );
+        (interval / OUTRUN_MIN_RATIO..interval / OUTRUN_MAX_RATIO).contains(&ahead)
+    }
+
+    /// One span between fences, in whole periods of the stated grid.
+    fn note_glass(&mut self, span_ns: i64, periods: i64) {
+        if !(1..=GLASS_MAX_GAP_PERIODS).contains(&periods) {
+            return;
+        }
+        self.glass_span_ns += span_ns;
+        self.glass_periods += periods;
+        if self.glass_periods >= GLASS_WINDOW_PERIODS {
+            self.glass_span_ns /= 2;
+            self.glass_periods /= 2;
+        }
     }
 
     /// One completion's latch (0 = none: `unlatched`). Two transactions latched in one commit
@@ -261,9 +322,12 @@ impl Slots {
             c.intervals.note(0); // the coalesced pair's second half
         } else if present_ns > self.last_present_ns {
             if self.last_present_ns > 0 {
-                let p = self.period_ns();
-                c.intervals
-                    .note((present_ns - self.last_present_ns + p / 2).div_euclid(p));
+                let (p, span) = (self.period_ns(), present_ns - self.last_present_ns);
+                let periods = (span + p / 2).div_euclid(p);
+                c.intervals.note(periods);
+                if real {
+                    self.note_glass(span, periods);
+                }
             }
             if real {
                 phase_err_us = self.observe_present(present_ns, latch_ns, slot, release_ns, c);
@@ -570,6 +634,120 @@ mod tests {
             "slower: {shared} shared, {skipped} skipped"
         );
         assert_eq!(misses, 0);
+    }
+
+    /// A scheduler fed `presents` fenced presents `spacing` apart, for a `source_hz` source on
+    /// a panel stated at 60 Hz.
+    fn glassed(source_hz: u32, spacing: i64, presents: i64) -> Slots {
+        let mut s = Slots::new(
+            60,
+            frame_interval_ns(source_hz),
+            PresentPriority::Latency,
+            true,
+            false,
+            None,
+        );
+        let mut c = Counters::default();
+        for k in 0..presents {
+            let present = T0 + k * spacing;
+            s.on_present(present, present - LEAD, None, true, 0, &mut c);
+        }
+        s
+    }
+
+    #[test]
+    fn the_fences_measure_the_panel_whatever_rate_it_states() {
+        const P5994: i64 = 16_683_333;
+        assert_eq!(
+            glassed(60, P5994, GLASS_MIN_PERIODS).glass_period_ns(),
+            None
+        );
+        let s = glassed(60, P5994, 10_000);
+        assert_eq!(s.glass_period_ns(), Some(P5994));
+        assert_eq!(s.hold_band_ns(), OUTRUN_HOLD_BAND_NS);
+        assert_eq!(
+            s.clock_period_ns(),
+            1_000_000_000 / 60,
+            "the stated grid stays"
+        );
+        // A panel at the source's rate, one slower by a crystal's drift, a source the panel
+        // never keeps up with, and one slower than the panel keep the plain band.
+        let exact = frame_interval_ns(60);
+        for (hz, spacing) in [(60, exact), (60, exact + 500), (120, P5994), (50, P5994)] {
+            assert_eq!(glassed(hz, spacing, 2000).hold_band_ns(), HOLD_BAND_NS);
+        }
+        // A pause's guessed periods and a display queue's extra one leave the reading alone.
+        let mut s = glassed(60, P5994, 1000);
+        let mut c = Counters::default();
+        let mut present = T0 + 999 * P5994;
+        for gap in [120, 2, 1, 2] {
+            present += gap * P5994;
+            s.on_present(present, present - LEAD, None, true, 0, &mut c);
+        }
+        assert_eq!(s.glass_period_ns(), Some(P5994));
+        // A latch standing in for a fence measures nothing.
+        let mut s = Slots::new(60, exact, PresentPriority::Latency, true, false, None);
+        for k in 0..2000 {
+            let present = T0 + k * P5994;
+            s.on_present(present, present - LEAD, None, false, 0, &mut c);
+        }
+        assert_eq!(s.glass_period_ns(), None);
+    }
+
+    /// Three beats of a 60.00 source on a 59.94 panel, each frame in hand a 5 ms cushion before
+    /// it is due, one in 25 up to 10 ms later than that. Returns (slots shared, slots skipped).
+    fn outrun(band: Option<i64>) -> (u32, u32) {
+        const P5994: i64 = 16_683_333;
+        let interval = frame_interval_ns(60);
+        let mut s = Slots::new(60, interval, PresentPriority::Latency, true, false, band);
+        let mut c = Counters::default();
+        // Settle the fence reading, then let the presents run on from slot `n`.
+        let mut n = 0;
+        while s.glass_period_ns().is_none() {
+            let present = T0 + n * P5994;
+            s.on_present(present, present - LEAD, None, true, 0, &mut c);
+            n += 1;
+        }
+        let start = T0 + n * P5994;
+        let first = s.clock.slot_nearest(start);
+        let mut rng: u64 = 0x9E37_79B9_7F4A_7C15;
+        let (mut last, mut shared, mut skipped) = (None, 0, 0);
+        for k in 1..=3 * 1000 {
+            rng ^= rng << 13;
+            rng ^= rng >> 7;
+            rng ^= rng << 17;
+            let late = (rng % 25 == 0) as i64 * (rng >> 8) as i64 % 10_000_000;
+            let due = start + k * interval;
+            let arrival = due - 5_000_000 + late;
+            let (_, slot) = s.next_target(due.max(arrival), arrival, false, &mut c);
+            let slot = slot.expect("phased");
+            match last {
+                Some(l) if slot == l => shared += 1,
+                Some(l) if slot > l + 1 => skipped += 1,
+                _ => {}
+            }
+            last = Some(slot);
+            // The panel keeps its own time; the grid follows it through the fences.
+            let present = start + (slot - first) * P5994;
+            s.note_latch(present - LEAD, &mut c);
+            s.on_present(present, present - LEAD, Some(slot), true, arrival, &mut c);
+        }
+        (shared, skipped)
+    }
+
+    #[test]
+    fn a_source_outrunning_the_panel_drops_its_surplus_and_little_else() {
+        let (plain_shared, plain_skipped) = outrun(Some(HOLD_BAND_NS));
+        let (shared, skipped) = outrun(None);
+        assert_eq!(
+            (shared, skipped),
+            (3, 0),
+            "one surplus frame a beat, no repeat"
+        );
+        assert!(
+            plain_skipped >= 3,
+            "the plain band: {plain_shared} shared, {plain_skipped} skipped"
+        );
     }
 
     #[test]
