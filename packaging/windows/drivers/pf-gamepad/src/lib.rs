@@ -17,7 +17,7 @@ use pf_driver_proto::gamepad::{
     DEVTYPE_STEAMCONTROLLER, DEVTYPE_STEAMDECK, DEVTYPE_TRITON, PadShm, pad_serial,
 };
 use pf_driver_proto::pad_kind::{Family, PadKind, pad_kind, served_kind};
-use pf_driver_proto::{deck, dualsense, dualshock4, eightbitdo, triton};
+use pf_driver_proto::{deck, dualsense, dualshock4, eightbitdo};
 use pf_umdf_util::channel::{ChannelClient, ChannelConfig};
 use pf_umdf_util::hid::{
     IOCTL_HID_GET_DEVICE_ATTRIBUTES, IOCTL_HID_GET_DEVICE_DESCRIPTOR,

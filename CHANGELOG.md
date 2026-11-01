@@ -16,7 +16,7 @@ short; the version-bump commit retitles it. Older sections stay as they are.
 
 ## v0.46.0
 
-489 commits since v0.45.0. ALPN `pkf2` and driver protocol floor 9 stay; **C ABI 63**. Umbriel joins
+490 commits since v0.45.0. ALPN `pkf2` and driver protocol floor 9 stay; **C ABI 63**. Umbriel joins
 the Linux host compositors, a session can run at studio range, seats play the box's emulators,
 and a Windows seat can sign in to an account the PC already has. `PUNKTFUNK_DOOR` is gone.
 Deep dive: `git log v0.45.0..v0.46.0`
