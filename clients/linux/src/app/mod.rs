@@ -760,6 +760,12 @@ pub fn run() -> glib::ExitCode {
         None => Vec::new(),
     };
     let app = relm4::RelmApp::from_app(adw_app).with_args(args);
+    // relm4 ends `run` on a blocking main-context iteration, after GApplication has drained every
+    // ready source. An instance that only forwards to the running one would never wake from it,
+    // so the idle, which that drain dispatches, leaves a timer for the iteration.
+    glib::idle_add_once(|| {
+        glib::timeout_add_once(std::time::Duration::from_millis(50), || {});
+    });
     app.run::<AppModel>(AppInit { gamepad });
     glib::ExitCode::SUCCESS
 }
