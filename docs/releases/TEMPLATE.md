@@ -18,7 +18,7 @@ Wire-compatible with X.Y.x except where Before you update says otherwise.
 
 ## Thanks
 
-<Every contributor outside the team, by name, with what they built. Delete only if there were none.>
+<Every outside author of merged code, by name, with what they built. No bug reporters. Delete if there were none.>
 
 ## For developers
 

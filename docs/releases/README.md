@@ -106,8 +106,8 @@ build it.** A non-engineer should finish knowing what's new and whether it affec
 7. **Group as New / Improved / Fixed / Security**, one bullet per fact a user could notice,
    grouped by platform or theme. If something needs the reader to *act*, it belongs in the
    lead-in and in `## Before you update`.
-8. **`## Thanks` names every contributor outside the team** and what they built. The work is
-   theirs; the notes say so.
+8. **`## Thanks` names every outside author of merged code** and what they built. The work is
+   theirs; the notes say so. No bug reporters. No such author, no section.
 
 ## The technical half: root `CHANGELOG.md`
 

@@ -84,7 +84,7 @@ Shape:
 3. `## New` / `## Improved` / `## Fixed` / `## Security` — one bullet per fact a user could
    notice, grouped by platform or theme. A group heading collects bullets; it never replaces
    them.
-4. `## Thanks` — every contributor outside the team, by name, with what they built.
+4. `## Thanks` — every outside author of merged code, by name, with what they built. No bug reporters. No such author, no section.
 5. `## For developers` — CHANGELOG at the tag + `git log vPrev..vThis`.
 
 Voice: Name the thing, then what the reader gets. No metaphor, origin story, lab, SKU,
