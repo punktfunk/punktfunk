@@ -51,7 +51,10 @@ SDL3 controllers. It adds:
   paired host and pinned preset, and sections you arrange with **Customize**.
 - A host page behind each card's ⓘ: name, address, port, Wake-on-LAN MAC, presets, pairing, power
   and a network speed test.
-- A banner while you stream, with **Disconnect**.
+- Streams from several hosts at once, each in its own window: connect to the next host from the
+  same app. A controller follows the window you're in.
+- A banner while you stream, with **Disconnect**. With several streams it offers **Disconnect
+  All**, and a card's menu ends that host's stream.
 - Keys for the window: **Keyboard Shortcuts** in the menu lists them.
 
 For the couch, open **Punktfunk Console**, the gamepad button in the header bar, or run

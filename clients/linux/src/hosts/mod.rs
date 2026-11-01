@@ -90,6 +90,8 @@ pub enum Act {
     SpeedTest(ConnectRequest),
     SwitchProfile(ConnectRequest),
     SendLogs(ConnectRequest),
+    /// End the stream from the host of this [`ConnectRequest::card_key`].
+    Disconnect(String),
     /// One of the host's own actions (`design/host-actions.md` §7); `danger` asks first.
     HostAction {
         req: ConnectRequest,
@@ -136,8 +138,8 @@ pub struct HostsPage {
     /// Saved hosts proven reachable by the periodic QUIC probe (mDNS-independent), keyed by
     /// [`KnownHost::card_key`].
     probed: HashMap<String, bool>,
-    /// This device's session, by card key.
-    session: Option<(String, Phase)>,
+    /// This device's sessions, by card key.
+    sessions: HashMap<String, Phase>,
     /// What is on screen; a build equal to it redraws nothing.
     drawn: Option<(Vec<Band>, Vec<CardModel>, Vec<Preset>)>,
     detail: Option<detail::DetailPage>,
@@ -172,9 +174,9 @@ pub enum HostsMsg {
     Rescan,
     /// A completed reachability sweep: saved-host key → reachable.
     Probed(HashMap<String, bool>),
-    /// This device's session with the card of `ConnectRequest::card_key`; `None` when none
-    /// runs.
-    SetSession(Option<(String, Phase)>),
+    /// This device's session with the card of `ConnectRequest::card_key`; `None` when it
+    /// ended.
+    SetSession(String, Option<Phase>),
     ShowError(String),
     ClearError,
     ShowAddHost,
@@ -186,6 +188,8 @@ pub enum HostsMsg {
 #[derive(Debug)]
 pub enum HostsOutput {
     Connect(ConnectRequest),
+    /// End the stream from this card key's host.
+    Disconnect(String),
     /// A one-line confirmation for the window's toast overlay.
     Toast(String),
     WakeConnect(ConnectRequest),
@@ -402,7 +406,7 @@ impl SimpleComponent for HostsPage {
             sender: sender.input_sender().clone(),
             adverts: HashMap::new(),
             probed: HashMap::new(),
-            session: None,
+            sessions: HashMap::new(),
             drawn: None,
             detail: None,
             widgets: PageWidgets {
@@ -449,8 +453,11 @@ impl SimpleComponent for HostsPage {
                 self.refresh_reachable();
                 self.rebuild();
             }
-            HostsMsg::SetSession(session) => {
-                self.session = session;
+            HostsMsg::SetSession(key, phase) => {
+                match phase {
+                    Some(phase) => self.sessions.insert(key, phase),
+                    None => self.sessions.remove(&key),
+                };
                 self.rebuild();
             }
             HostsMsg::ShowError(msg) => {
@@ -590,18 +597,11 @@ impl HostsPage {
         let playing = |fp: &str| pf_client_core::library::now_playing(fp);
         let live = Live {
             probed: &self.probed,
-            session: self
-                .session
-                .as_ref()
-                .map(|(key, phase)| (key.as_str(), *phase)),
+            sessions: &self.sessions,
             playing: &playing,
         };
         let bands = model::saved_bands(&hosts, &presets, &settings, &live);
-        let dialing = match &self.session {
-            Some((key, Phase::Connecting)) => Some(key.as_str()),
-            _ => None,
-        };
-        let discovered = model::discovered_cards(self.adverts.values(), &hosts, dialing);
+        let discovered = model::discovered_cards(self.adverts.values(), &hosts, &self.sessions);
         let next = (bands, discovered, presets);
         if self.drawn.as_ref() != Some(&next) {
             self.draw(&next);
@@ -675,10 +675,7 @@ impl HostsPage {
         } else {
             pf_client_core::library::now_playing(&k.fp_hex)
         };
-        let phase = match &self.session {
-            Some((key, phase)) if *key == k.card_key() => Some(*phase),
-            _ => None,
-        };
+        let phase = self.sessions.get(&k.card_key()).copied();
         detail::Live {
             status: Status::of(k, online, phase, &playing, settings.auto_wake),
             online,
@@ -704,6 +701,7 @@ impl HostsPage {
             Act::SpeedTest(req) => out(HostsOutput::SpeedTest(req)),
             Act::Library(req) => out(HostsOutput::Library(req)),
             Act::SwitchProfile(req) => out(HostsOutput::SwitchProfile(req)),
+            Act::Disconnect(key) => out(HostsOutput::Disconnect(key)),
             Act::SendLogs(req) => {
                 let mgmt = self.mgmt_port_for(&req);
                 out(HostsOutput::SendLogs(req, mgmt));

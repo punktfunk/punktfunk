@@ -32,11 +32,10 @@ impl AppModel {
         sender: &ComponentSender<Self>,
     ) {
         if !switch {
-            self.flight.hold();
-            self.hosts.emit(HostsMsg::SetSession(Some((
-                req.card_key(),
-                Phase::Connecting,
-            ))));
+            let key = req.card_key();
+            self.flights.hold(&key);
+            self.hosts
+                .emit(HostsMsg::SetSession(key, Some(Phase::Connecting)));
         }
         self.fetch_profiles(req, fp_hex, sender, move |req, fp_hex, listed| {
             AppMsg::ProfileAsked {
@@ -95,8 +94,9 @@ impl AppModel {
             let rows = listed.map(Option::unwrap_or_default);
             return self.profile_dialog(req, fp_hex, rows, saved, None, false, sender);
         }
-        self.flight.release();
-        self.hosts.emit(HostsMsg::SetSession(None));
+        let key = req.card_key();
+        self.flights.release(&key);
+        self.hosts.emit(HostsMsg::SetSession(key, None));
         // A failed or late ask dials with the link's `as=`, else the saved pick.
         let Some(listed) = listed else {
             let profile = req.profile.clone().map(Some);
@@ -183,11 +183,10 @@ impl AppModel {
         msg: String,
         sender: &ComponentSender<Self>,
     ) {
-        self.flight.hold();
-        self.hosts.emit(HostsMsg::SetSession(Some((
-            req.card_key(),
-            Phase::Connecting,
-        ))));
+        let key = req.card_key();
+        self.flights.hold(&key);
+        self.hosts
+            .emit(HostsMsg::SetSession(key, Some(Phase::Connecting)));
         self.fetch_profiles(req, fp_hex, sender, move |req, fp_hex, listed| {
             AppMsg::ProfileReasked {
                 req,
@@ -210,8 +209,9 @@ impl AppModel {
         listed: Option<Option<Vec<ProfileRow>>>,
         sender: &ComponentSender<Self>,
     ) {
-        self.flight.release();
-        self.hosts.emit(HostsMsg::SetSession(None));
+        let key = req.card_key();
+        self.flights.release(&key);
+        self.hosts.emit(HostsMsg::SetSession(key, None));
         let rows = listed.flatten().unwrap_or_default();
         match profiles::find(&rows, &id) {
             Some(row) => {
@@ -237,7 +237,8 @@ impl AppModel {
         redial: bool,
         sender: &ComponentSender<Self>,
     ) {
-        if self.flight.busy() {
+        let key = req.card_key();
+        if self.flights.busy(&key) {
             return;
         }
         let detail = row.seat.as_ref().and_then(|s| s.detail.as_deref());
@@ -254,10 +255,8 @@ impl AppModel {
             let _ = out.send(AppMsg::SeatCancelled(flag.clone()));
         });
         dialog.present(Some(&self.window));
-        self.hosts.emit(HostsMsg::SetSession(Some((
-            req.card_key(),
-            Phase::Connecting,
-        ))));
+        self.hosts
+            .emit(HostsMsg::SetSession(key.clone(), Some(Phase::Connecting)));
 
         let mgmt = self.mgmt_port(&fp_hex);
         let (identity, pin) = (self.identity.clone(), trust::parse_hex32(&fp_hex));
@@ -269,7 +268,7 @@ impl AppModel {
                 out.send(AppMsg::SeatPolled { stop, row }).is_ok()
             });
         });
-        self.flight.slot = Slot::Seat(Box::new(SeatWait {
+        self.flights.of(&key).slot = Slot::Seat(Box::new(SeatWait {
             dialog,
             stop,
             req,
@@ -279,12 +278,12 @@ impl AppModel {
         }));
     }
 
-    /// The wait `stop` belongs to, while it holds the slot.
+    /// The wait `stop` belongs to, while it holds its host's slot.
     fn seat_wait(&self, stop: &Arc<AtomicBool>) -> Option<&SeatWait> {
-        match &self.flight.slot {
+        self.flights.hosts.values().find_map(|f| match &f.slot {
             Slot::Seat(wait) if Arc::ptr_eq(&wait.stop, stop) => Some(wait.as_ref()),
             _ => None,
-        }
+        })
     }
 
     /// A poll's row: the dialog follows the seat, `ready` dials, `unavailable` stops. `Err`
@@ -306,7 +305,7 @@ impl AppModel {
             SeatGate::Wait { detail } => wait.dialog.set_body(detail.as_deref().unwrap_or("")),
             SeatGate::Wake => {}
             SeatGate::Dial => {
-                if let Some(w) = self.end_seat_wait() {
+                if let Some(w) = self.end_seat_wait(&stop) {
                     sender.input(AppMsg::StartSession {
                         req: w.req,
                         fp_hex: w.fp_hex,
@@ -319,7 +318,7 @@ impl AppModel {
                 }
             }
             SeatGate::Refuse(line) => {
-                self.end_seat_wait();
+                self.end_seat_wait(&stop);
                 self.hosts.emit(HostsMsg::ShowError(line));
             }
         }
@@ -327,20 +326,19 @@ impl AppModel {
 
     /// The dialog closed by Cancel or Escape.
     pub(super) fn seat_cancelled(&mut self, stop: &Arc<AtomicBool>) {
-        if self.seat_wait(stop).is_some() {
-            self.end_seat_wait();
-        }
+        self.end_seat_wait(stop);
     }
 
-    /// Stops the poll, closes the dialog and frees the slot and the card. Its callers have
-    /// matched the wait, so the slot is the seat's.
-    fn end_seat_wait(&mut self) -> Option<SeatWait> {
-        let Slot::Seat(wait) = std::mem::take(&mut self.flight.slot) else {
+    /// Stops `stop`'s poll, closes its dialog and frees its host's slot and card. `None`: the
+    /// wait is over already.
+    fn end_seat_wait(&mut self, stop: &Arc<AtomicBool>) -> Option<SeatWait> {
+        let key = self.seat_wait(stop)?.req.card_key();
+        let Slot::Seat(wait) = std::mem::take(&mut self.flights.of(&key).slot) else {
             return None;
         };
         wait.stop.store(true, Ordering::Relaxed);
         wait.dialog.close();
-        self.hosts.emit(HostsMsg::SetSession(None));
+        self.hosts.emit(HostsMsg::SetSession(key, None));
         Some(*wait)
     }
 
