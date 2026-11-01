@@ -12,7 +12,7 @@ Ordinary PRs do not run this and do not edit `CHANGELOG.md`.
 
 1. Previous stable tag (example: `v0.34.0`).
 2. Two passes over git, never one. First `git log --no-merges --format='%s' vPrev..HEAD | grep -E '^(feat|fix|perf|security)' | sort` and group the subjects by scope; then read the bodies of each group (`--grep`). Skip `chore` / `ci` / `test` / `docs` unless the body names a user-facing fact. Cluster by **user theme**, not crate. `BREAKING CHANGE:` footers feed Before you update.
-   `git log --no-merges --format='%an' vPrev..HEAD | sort | uniq -c` names the contributors for `## Thanks`; list each outside author's commits and say what they built.
+   `git log --no-merges --format='%an' vPrev..HEAD | sort | uniq -c` names the contributors for `## Thanks`; list each outside author's commits and say what they built. Reporters, and patch senders whose code did not land, are not contributors.
 3. A `## Unreleased` dump in `CHANGELOG.md`, if one exists, is required reading **after** git log: it carries the "what the reader must do" that pre-footer commits lack. It is not the source. Then replace it with a **short card** (lead + versions + Breaking + knobs). Retitle `## Unreleased` → `## vX.Y.Z` only in the **version-bump** commit. Do not start a new dump. The 0.35 cut may still read the dump: those commits lack `BREAKING CHANGE:` footers.
 4. Versioned surfaces from **code**, vs the previous tag (do not invent numbers):
    - Wire: `WIRE_VERSION` in `crates/core/punktfunk-core/src/lib.rs`
@@ -40,6 +40,6 @@ The first 0.35 draft dropped Android PyroWave, 10-bit SDR, the Security batch an
 
 - Every `feat` / `fix` / `perf` / `security` subject is in the notes, on the card, or a conscious skip. A theme bullet collects facts; it never replaces them.
 - Every platform with commits — Android, iPhone/iPad, Apple TV, Mac, Windows client, Linux client, webOS, Steam Deck, browser; Windows host, Linux host per compositor, SteamOS host — has a bullet or a deliberate skip.
-- `## Security` and `## Thanks` are filled, or deleted on purpose.
+- `## Security` is filled or deleted on purpose. `## Thanks` names only outside authors of merged code, or is gone.
 
 Canary / `-rc`: no file here (existing `docs/releases/README.md` rule).
