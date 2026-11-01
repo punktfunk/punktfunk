@@ -98,9 +98,10 @@ impl AppModel {
             .ok();
     }
 
-    /// The speed-test page. The test is a connect, so it holds the slot until it ends.
+    /// The speed-test page. The test needs the link to itself, so it holds the whole shell
+    /// until it ends.
     pub(super) fn speed_test(&mut self, req: ConnectRequest, sender: &ComponentSender<AppModel>) {
-        if !self.flight.hold() {
+        if !self.flights.hold_alone() {
             return;
         }
         let sender = sender.clone();

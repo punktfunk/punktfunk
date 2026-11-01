@@ -1,5 +1,5 @@
 //! The application shell as a relm4 component tree: [`AppModel`] owns the window, the
-//! [`Store`], navigation, and the spawned session child's lifecycle. Hosts and Library are
+//! [`Store`], navigation, and the spawned session children's lives. Hosts and Library are
 //! child components, the two destinations of one view stack (design §2.1); dialogs are plain
 //! GTK invoked from `update`. The connect flow is in `connect.rs`, host requests beside a
 //! stream in `host_ops.rs`. Every stream runs in the `punktfunk-session` Vulkan binary —
@@ -55,8 +55,8 @@ pub struct AppModel {
     library: Controller<LibraryPage>,
     /// Hosts · Library.
     views: adw::ViewStack,
-    /// One connect at a time: whatever asks while one is in flight is ignored.
-    flight: connect::Flight,
+    /// One connect per host: whatever asks for a host while its own is in flight is ignored.
+    flights: connect::Flights,
     /// Controllers attached at the last poll — the edge Controller-optimized UI opens on.
     pads: usize,
     /// Fullscreen Always put the window there, so turning it off may take it back out.
@@ -169,8 +169,8 @@ pub enum AppMsg {
     ShowShortcuts,
     ShowAbout,
     ShowAddHost,
-    /// End the running stream the way its window does.
-    Disconnect,
+    /// End this card key's stream the way its window does, or every stream with `None`.
+    Disconnect(Option<String>),
     Toast(String),
     /// A plain connect the host parked for its operator: show the waiting dialog.
     AwaitingApproval(ConnectRequest),
@@ -299,6 +299,7 @@ impl SimpleComponent for AppModel {
                 HostsOutput::SpeedTest(req) => AppMsg::SpeedTest(req),
                 HostsOutput::Library(req) => AppMsg::OpenLibrary(req),
                 HostsOutput::SwitchProfile(req) => AppMsg::SwitchProfile(req),
+                HostsOutput::Disconnect(key) => AppMsg::Disconnect(Some(key)),
                 HostsOutput::SendLogs(req, mgmt) => AppMsg::SendLogs(req, mgmt),
                 HostsOutput::HostAction {
                     req,
@@ -341,7 +342,7 @@ impl SimpleComponent for AppModel {
         store_health_banner(&pages, &store);
         let streaming = Banners::new(&pages, {
             let sender = sender.clone();
-            move || sender.input(AppMsg::Disconnect)
+            move || sender.input(AppMsg::Disconnect(None))
         });
         nav.add(
             &adw::NavigationPage::builder()
@@ -365,7 +366,7 @@ impl SimpleComponent for AppModel {
             hosts,
             library,
             views,
-            flight: connect::Flight::default(),
+            flights: connect::Flights::default(),
             pads: 0,
             streaming,
             fullscreen_by_setting: false,
@@ -466,7 +467,8 @@ impl SimpleComponent for AppModel {
             AppMsg::DeepLink(url) => self.open_deep_link(&url, &sender),
             AppMsg::Connect(req) => self.connect(req, &sender),
             AppMsg::WakeConnect(req) => {
-                if !self.flight.busy() {
+                let key = req.card_key();
+                if !self.flights.busy(&key) {
                     // Never gate the dial on mDNS presence: a routed host (Tailscale/VPN) never
                     // advertises. The magic packet goes first, fire-and-forget, so an asleep box
                     // boots while the dial times out, and the fallback is armed for THIS request.
@@ -474,13 +476,13 @@ impl SimpleComponent for AppModel {
                     // error; the host-card menu's explicit "Wake host" stays ungated.
                     if self.store.settings().auto_wake {
                         crate::wol::wake(&req.host.mac, req.host.addr.parse().ok());
-                        self.flight.attempt.arm_wake(&req.host);
+                        self.flights.of(&key).attempt.arm_wake(&req.host);
                     }
                     sender.input(AppMsg::Connect(req));
                 }
             }
             AppMsg::Pair(req) => {
-                if !self.flight.busy() {
+                if !self.flights.busy(&req.card_key()) {
                     crate::app::gate::pin_dialog(
                         &self.window,
                         &sender,
@@ -525,7 +527,7 @@ impl SimpleComponent for AppModel {
                 label,
                 danger,
             } => self.host_action(req, mgmt, action_id, label, danger, &sender),
-            AppMsg::SpeedTestDone => self.flight.release(),
+            AppMsg::SpeedTestDone => self.flights.release_alone(),
             AppMsg::OpenLibrary(req) => {
                 self.show_view("library");
                 self.library.emit(LibraryMsg::Open(req));
@@ -555,7 +557,7 @@ impl SimpleComponent for AppModel {
             AppMsg::OpenConsole => self.open_console(&sender, false),
             AppMsg::Pads(n) => {
                 let prev = std::mem::replace(&mut self.pads, n);
-                if !self.flight.busy()
+                if !self.flights.any()
                     && orchestrate::console_opens(self.store.settings().gamepad_ui(), prev, n)
                 {
                     self.open_console(&sender, true);
@@ -570,7 +572,7 @@ impl SimpleComponent for AppModel {
                 }
             }
             AppMsg::ConsoleExited(err) => {
-                self.flight.release();
+                self.flights.release_alone();
                 // Quitting the console (B at its root) exits 0 and returns here silently.
                 if let Some(e) = err {
                     self.hosts.emit(HostsMsg::ShowError(e));
@@ -584,23 +586,20 @@ impl SimpleComponent for AppModel {
             AppMsg::ShowShortcuts => shortcuts_dialog().present(Some(&self.window)),
             AppMsg::ShowAbout => crate::settings::show_about(&self.window),
             AppMsg::ShowAddHost => self.hosts.emit(HostsMsg::ShowAddHost),
-            AppMsg::Disconnect => {
-                if let connect::Slot::Session(child) = &self.flight.slot {
-                    // `terminate` records our own end, so an escalated kill does not read as
-                    // a crash.
-                    child.terminate(DISCONNECT_GRACE);
-                    self.streaming.show("Disconnecting\u{2026}", None);
-                }
+            AppMsg::Disconnect(key) => {
+                self.flights.terminate(key.as_deref(), DISCONNECT_GRACE);
+                self.show_streams();
             }
             AppMsg::Toast(msg) => self.toast(&msg),
             AppMsg::AwaitingApproval(req) => {
+                let flight = self.flights.of(&req.card_key());
                 // A request for access already shows it.
-                if self.flight.waiting.borrow().is_none() {
-                    if let connect::Slot::Session(child) = &self.flight.slot {
+                if flight.waiting.borrow().is_none() {
+                    if let connect::Slot::Session(child, _) = &flight.slot {
                         let child = child.clone();
                         gate::present_waiting(
                             &self.window,
-                            &self.flight.waiting,
+                            &flight.waiting,
                             &req.host.name,
                             move || child.terminate(DISCONNECT_GRACE),
                         );

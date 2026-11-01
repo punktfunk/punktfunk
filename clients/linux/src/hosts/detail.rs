@@ -410,7 +410,7 @@ impl DetailPage {
             } else {
                 "Connect"
             });
-        // One session at a time: the window's banner ends the running one.
+        // One session per host: the window's banner or the card's menu ends it.
         self.connect.set_sensitive(!matches!(
             live.status,
             Status::Connecting | Status::Streaming

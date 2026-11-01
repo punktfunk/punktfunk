@@ -242,6 +242,10 @@ fn menu(
         add("details", Box::new(move || Act::Details(host.clone())));
     }
     {
+        let key = m.request.card_key();
+        add("disconnect", Box::new(move || Act::Disconnect(key.clone())));
+    }
+    {
         let (mac, addr) = (m.request.host.mac.clone(), m.request.host.addr.clone());
         add(
             "wake",
@@ -286,6 +290,9 @@ fn menu(
         menu.append(Some("Copy Link"), Some("card.copy-link"));
         menu.append(Some("Unpin Card"), Some("card.unpin"));
         return (menu, actions);
+    }
+    if m.status == Status::Streaming {
+        menu.append(Some("Disconnect"), Some("card.disconnect"));
     }
     if !presets.is_empty() {
         let with = gio::Menu::new();
