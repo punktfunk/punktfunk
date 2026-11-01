@@ -45,6 +45,7 @@ The patches here add the missing half, and nothing else. See
 | `0032-steamcompmgr-keep-framerate-limit-as-the-floor-under.patch` | A refresh-cycle request for 0 (Steam's "Framerate limit: Off", or the legacy `GAMESCOPE_FPS_LIMIT` atom at 0) falls back to the CLI `--framerate-limit` as a plain cap instead of clearing it. Steam's explicit values still win, and a request that only changes refresh (Steam's "Disable Frame Limiter") stays uncapped | **Yes** — on a headless output the limiter is the focused app's only pace; `0012` let Steam's default state remove it |
 | `0033-protocol-read-wayland-scanner-s-path-from-any-depend.patch` | `protocol/meson.build` reads `wayland_scanner` with the generic `get_variable`, as wlroots does, so a wayland built as a subproject configures (the pkg-config-only lookup fails on its internal dependency). Also stamps `+pfhdr30` | **Yes** — any build that takes wlroots' `wayland` fallback hits it |
 | `0034-rendervulkan-align-uploaded-constants-to-any-device-.patch` | Align each block `uploadBufferData` hands out to 256 bytes, the largest `minUniformBufferOffsetAlignment` Vulkan allows. A dispatch binds its constants as a uniform buffer at that offset. Since upstream's eight-layer bound, the 584-byte blit block leaves the NV12/P010 pass's constants off NVIDIA's and Intel's 64-byte boundary; the pass stores nothing and every planar frame is zeros (green). Also stamps `+pfhdr31` | **Yes** — upstream's own planar capture has the same fault |
+| `0035-pipewire-give-a-planar-capture-DRM-LINEAR-s-layout-o.patch` | On NVIDIA, allocate a planar capture dmabuf with `DRM_FORMAT_MOD_LINEAR`, external memory, and its plane views listed. The plain LINEAR image gave no layout promise, and a pre-Turing card's page kind moved bytes under the consumer's LINEAR import: a striped picture. A driver that refuses the shape does not get NV12/P010 offered, so the consumer takes packed RGB. Also stamps `+pfhdr32` | **Yes** — upstream's planar export has the same fault |
 
 ### Why the headless patch matters
 
@@ -152,10 +153,11 @@ The number is a **monotonic patch-set revision**, so one probe answers every cap
 | `+pfhdr29` | …and a focus re-apply keeps Steam's CEF browser subwindow focused, so Big Picture shows its focus highlight without pointer motion (no new capability) |
 | `+pfhdr30` | …on upstream 3.16.31, which carries 28 and 29 itself (no new capability) |
 | `+pfhdr31` | …and a planar (NV12/P010) capture carries a picture; `+pfhdr30` sends zeros on NVIDIA and Intel (no new capability) |
+| `+pfhdr32` | …and a planar capture dmabuf on NVIDIA carries `DRM_FORMAT_MOD_LINEAR`'s layout; `+pfhdr31` stripes the picture on pre-Turing cards (no new capability) |
 
 Require `+pfhdr10` for headless `--adaptive-sync` with a CLI cap: `+pfhdr9` clears that cap
 on the first paint unless Steam or a control command supplies an override. The Arch package is
-`3.16.31.pfhdr31-1`; its build checks the complete upstream version and capability level.
+`3.16.31.pfhdr32-1`; its build checks the complete upstream version and capability level.
 
 Bump it whenever a patch adds or changes something the host must know about before it spawns.
 

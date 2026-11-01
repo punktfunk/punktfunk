@@ -1,0 +1,243 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: punktfunk <packages@unom.io>
+Date: Sun, 1 Nov 2026 16:00:00 +0100
+Subject: [PATCH 35/35] pipewire: give a planar capture DRM LINEAR's layout on NVIDIA
+
+A planar capture dmabuf came from a plain VK_IMAGE_TILING_LINEAR image: no
+modifier, no VkExternalMemoryImageCreateInfo, and STORAGE usage NV12 and P010
+do not have. The driver promises nothing about that image, while a consumer
+imports it as DRM_FORMAT_MOD_LINEAR, which means pitch page kind. Page kind
+sets the layout of bits in memory. On a pre-Turing NVIDIA GPU the kinds differ
+and the consumer reads a picture with its address bits 5 to 9 permuted.
+
+On NVIDIA, ask for what the consumer imports: the LINEAR modifier, external
+memory, and the planes' R8/RG8 views listed with MUTABLE_FORMAT and
+EXTENDED_USAGE, which is where the storage usage comes from. A driver that
+cannot make that promise does not get the format offered, so the consumer
+negotiates packed RGB. Other vendors keep the plain image.
+
+punktfunk: also stamps the version banner +pfhdr32.
+---
+ src/meson.build      |   3 ++-
+ src/pipewire.cpp     |  13 ++++++++++---
+ src/rendervulkan.cpp |  81 ++++++++++++++++++++++++++++++++++++++++--------
+ src/rendervulkan.hpp |  12 ++++++++++++
+ 4 files changed, 97 insertions(+), 12 deletions(-)
+
+diff --git a/src/meson.build b/src/meson.build
+index 8757ec0..25b67ac 100644
+--- a/src/meson.build
++++ b/src/meson.build
+@@ -214,7 +214,8 @@
+ #   +pfhdr29 — …and a focus re-apply keeps CEF's browser subwindow focused
+ #   +pfhdr30 — …on upstream 3.16.31 (28 and 29 are upstream there); builds against a vendored wayland
+ #   +pfhdr31 — …and each uploaded constant block meets the device's uniform offset alignment
+-version_tag = vcs_tag + '+pfhdr31' + ' (' + compiler_name + ' ' + compiler_version + ')'
++#   +pfhdr32 — …and a planar capture dmabuf on NVIDIA carries DRM_FORMAT_MOD_LINEAR's layout
++version_tag = vcs_tag + '+pfhdr32' + ' (' + compiler_name + ' ' + compiler_version + ')'
+ 
+ gamescope_version_conf = configuration_data()
+ gamescope_version_conf.set('VCS_TAG', version_tag)
+diff --git a/src/pipewire.cpp b/src/pipewire.cpp
+index 37ab0f1..84b7256 100644
+--- a/src/pipewire.cpp
++++ b/src/pipewire.cpp
+@@ -250,6 +250,9 @@
+ // `pFixated` builds the one pod that answers a DONT_FIXATE negotiation: the dmabuf offer with the
+ // modifier this stream settled on, and no SHM twin. `bHDR` picks a 10-bit format's colorimetry.
+ static void build_format_params(struct spa_pod_builder *builder, spa_video_format format, std::vector<const struct spa_pod *> &params, const uint64_t *pFixated = nullptr, bool bHDR = true) {
++	if (is_planar_video_format(format) && vulkan_get_planar_capture_alloc(spa_format_to_drm(format)) == EPlanarCaptureAlloc::Unavailable)
++		return;
++
+ 	struct spa_rectangle size = SPA_RECTANGLE(s_nCaptureWidth, s_nCaptureHeight);
+ 	struct spa_rectangle min_requested_size = { 0, 0 };
+ 	struct spa_rectangle max_requested_size = { UINT32_MAX, UINT32_MAX };
+@@ -444,7 +447,7 @@
+ 		break;
+ 	case SPA_DATA_DmaBuf:
+ 		dmabuf = tex->dmabuf();
+-		assert(dmabuf.n_planes == 1);
++		assert(dmabuf.n_planes == 1 || is_planar_video_format(state->video_info.format));
+ 		if (is_planar_video_format(state->video_info.format)) {
+ 			// Each plane where the driver put it. Chroma is not always right after the luma rows,
+ 			// and a consumer that assumed so read luma bytes as chroma.
+@@ -806,8 +809,11 @@
+ 	if (is_dmabuf || drmFormat == DRM_FORMAT_NV12 || drmFormat == DRM_FORMAT_P010)
+ 	{
+ 		screenshotImageFlags.bExportable = true;
+-		if (is_dmabuf && !is_planar_video_format(state->video_info.format) && state->modifier != DRM_FORMAT_MOD_LINEAR)
++		const bool bPlanar = is_planar_video_format(state->video_info.format);
++		if (is_dmabuf && !bPlanar && state->modifier != DRM_FORMAT_MOD_LINEAR)
+ 			screenshotImageFlags.ulDrmModifier = state->modifier;
++		else if (is_dmabuf && bPlanar && vulkan_get_planar_capture_alloc(drmFormat) == EPlanarCaptureAlloc::LinearModifier)
++			screenshotImageFlags.ulDrmModifier = DRM_FORMAT_MOD_LINEAR;
+ 		else
+ 			screenshotImageFlags.bLinear = true;
+ 	}
+@@ -821,7 +827,8 @@
+ 
+ 	if (is_dmabuf) {
+ 		const struct wlr_dmabuf_attributes dmabuf = buffer->texture->dmabuf();
+-		if (dmabuf.n_planes != 1)
++		// A planar export names both planes; the second data block repeats the first's fd.
++		if (dmabuf.n_planes != 1 && !is_planar_video_format(state->video_info.format))
+ 		{
+ 			pwr_log.errorf("dmabuf.n_planes != 1");
+ 			goto error;
+diff --git a/src/rendervulkan.cpp b/src/rendervulkan.cpp
+index 5a38e5f..8f2a79c 100644
+--- a/src/rendervulkan.cpp
++++ b/src/rendervulkan.cpp
+@@ -2142,8 +2142,58 @@
+ 		case VK_IMAGE_TYPE_3D: return VK_IMAGE_VIEW_TYPE_3D;
+ 		default: abort();
+ 	}
++}
++
++// A planar capture image and the views its planes are written through. The format itself has no
++// storage feature: the image takes that usage from these views.
++static std::array<VkFormat, 3> planar_capture_formats( uint32_t drmFormat )
++{
++	const bool bTenBit = drmFormat == DRM_FORMAT_P010;
++	return {
++		DRMFormatToVulkan( drmFormat, false ),
++		bTenBit ? VK_FORMAT_R16_UNORM : VK_FORMAT_R8_UNORM,
++		bTenBit ? VK_FORMAT_R16G16_UNORM : VK_FORMAT_R8G8_UNORM,
++	};
+ }
++
++EPlanarCaptureAlloc vulkan_get_planar_capture_alloc( uint32_t drmFormat )
++{
++	static constexpr uint32_t k_uNvidiaVendorID = 0x10DE;
++	if ( g_device.vendorID() != k_uNvidiaVendorID )
++		return EPlanarCaptureAlloc::PlainLinear;
++
++	if ( !g_device.supportsModifiers() )
++		return EPlanarCaptureAlloc::Unavailable;
+ 
++	const std::array<VkFormat, 3> formats = planar_capture_formats( drmFormat );
++	const VkImageFormatListCreateInfo formatList = {
++		.sType = VK_STRUCTURE_TYPE_IMAGE_FORMAT_LIST_CREATE_INFO,
++		.viewFormatCount = uint32_t( formats.size() ),
++		.pViewFormats = formats.data(),
++	};
++	// The usage a PipeWire capture texture is created with.
++	const VkImageCreateInfo imageInfo = {
++		.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
++		.pNext = &formatList,
++		.flags = VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT | VK_IMAGE_CREATE_EXTENDED_USAGE_BIT,
++		.imageType = VK_IMAGE_TYPE_2D,
++		.format = formats[0],
++		.tiling = VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT,
++		.usage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
++		.sharingMode = VK_SHARING_MODE_EXCLUSIVE,
++	};
++
++	VkExternalImageFormatProperties externalFormatProps = {
++		.sType = VK_STRUCTURE_TYPE_EXTERNAL_IMAGE_FORMAT_PROPERTIES,
++	};
++	if ( getModifierProps( &imageInfo, DRM_FORMAT_MOD_LINEAR, &externalFormatProps ) != VK_SUCCESS )
++		return EPlanarCaptureAlloc::Unavailable;
++	if ( !( externalFormatProps.externalMemoryProperties.externalMemoryFeatures & VK_EXTERNAL_MEMORY_FEATURE_EXPORTABLE_BIT ) )
++		return EPlanarCaptureAlloc::Unavailable;
++
++	return EPlanarCaptureAlloc::LinearModifier;
++}
++
+ std::vector<uint64_t> vulkan_get_capture_modifiers( uint32_t drmFormat )
+ {
+ 	std::vector<uint64_t> modifiers;
+@@ -2282,7 +2332,16 @@
+ 		.pViewFormats = formats.data(),
+ 	};
+ 
+-	if ( formats[0] != formats[1] )
++	const std::array<VkFormat, 3> planarFormats = planar_capture_formats( drmFormat );
++
++	if ( flags.ulDrmModifier != DRM_FORMAT_MOD_INVALID && ( drmFormat == DRM_FORMAT_NV12 || drmFormat == DRM_FORMAT_P010 ) )
++	{
++		formatList.viewFormatCount = uint32_t( planarFormats.size() );
++		formatList.pViewFormats = planarFormats.data();
++		formatList.pNext = std::exchange(imageInfo.pNext, &formatList);
++		imageInfo.flags |= VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT | VK_IMAGE_CREATE_EXTENDED_USAGE_BIT;
++	}
++	else if ( formats[0] != formats[1] )
+ 	{
+ 		formatList.pNext = std::exchange(imageInfo.pNext, &formatList);
+ 		imageInfo.flags |= VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT;
+@@ -2562,10 +2621,11 @@
+ 
+ 	// A LINEAR two-plane image has one layout per plane, and the driver may pad the first. The
+ 	// CPU copy reads through these, and a dmabuf export hands them on to the consumer.
+-	if ( tiling == VK_IMAGE_TILING_LINEAR && isYcbcr() )
++	const bool bLinearModifier = tiling == VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT && flags.ulDrmModifier == DRM_FORMAT_MOD_LINEAR;
++	if ( ( tiling == VK_IMAGE_TILING_LINEAR || bLinearModifier ) && isYcbcr() )
+ 	{
+ 		const VkImageSubresource lumaSubresource = {
+-			.aspectMask = VK_IMAGE_ASPECT_PLANE_0_BIT,
++			.aspectMask = bLinearModifier ? VK_IMAGE_ASPECT_MEMORY_PLANE_0_BIT_EXT : VK_IMAGE_ASPECT_PLANE_0_BIT,
+ 		};
+ 		VkSubresourceLayout lumaLayout;
+ 		g_device.vk.GetImageSubresourceLayout(g_device.device(), m_vkImage, &lumaSubresource, &lumaLayout);
+@@ -2574,7 +2634,7 @@
+ 		m_lumaPitch = lumaLayout.rowPitch;
+ 
+ 		const VkImageSubresource chromaSubresource = {
+-			.aspectMask = VK_IMAGE_ASPECT_PLANE_1_BIT,
++			.aspectMask = bLinearModifier ? VK_IMAGE_ASPECT_MEMORY_PLANE_1_BIT_EXT : VK_IMAGE_ASPECT_PLANE_1_BIT,
+ 		};
+ 		VkSubresourceLayout chromaLayout;
+ 		g_device.vk.GetImageSubresourceLayout(g_device.device(), m_vkImage, &chromaSubresource, &chromaLayout);
+@@ -2708,10 +2768,15 @@
+ 			},
+ 		};
+ 
+-		res = g_device.vk.CreateImageView(g_device.device(), &createInfo, nullptr, &m_srgbView);
+-		if ( res != VK_SUCCESS ) {
+-			vk_errorf( res, "vkCreateImageView failed" );
+-			return false;
++		// A planar export is only written, through its plane views below. The whole image has no
++		// storage feature for a view to inherit.
++		if ( !( bLinearModifier && isYcbcr() ) )
++		{
++			res = g_device.vk.CreateImageView(g_device.device(), &createInfo, nullptr, &m_srgbView);
++			if ( res != VK_SUCCESS ) {
++				vk_errorf( res, "vkCreateImageView failed" );
++				return false;
++			}
+ 		}
+ 
+ 		if ( flags.bSampled )
+diff --git a/src/rendervulkan.hpp b/src/rendervulkan.hpp
+index e6478da..f179b97 100644
+--- a/src/rendervulkan.hpp
++++ b/src/rendervulkan.hpp
+@@ -131,6 +131,17 @@
+ // Modifiers other than LINEAR that a single-plane, exportable storage image of this format can
+ // take. Empty without VK_EXT_image_drm_format_modifier.
+ std::vector<uint64_t> vulkan_get_capture_modifiers( uint32_t drmFormat );
++
++// How a planar capture dmabuf is allocated. A consumer imports DRM_FORMAT_MOD_LINEAR, which means
++// pitch page kind. On NVIDIA a plain LINEAR image promises neither, and a kind that differs moves
++// bytes below 1 KiB. Unavailable: that driver cannot make the promise, so the format is not offered.
++enum class EPlanarCaptureAlloc
++{
++	PlainLinear,
++	LinearModifier,
++	Unavailable,
++};
++EPlanarCaptureAlloc vulkan_get_planar_capture_alloc( uint32_t drmFormat );
+ 
+ class CVulkanTexture : public gamescope::RcObject
+ {
+@@ -864,6 +875,7 @@
+ 
+ 	inline VkDevice device() { return m_device; }
+ 	inline VkPhysicalDevice physDev() {return m_physDev; }
++	inline uint32_t vendorID() {return m_uVendorID;}
+ 	inline VkInstance instance() { return m_instance; }
+ 	inline VkQueue queue() {return m_queue;}
+ 	inline VkQueue generalQueue() {return m_generalQueue;}
+-- 
+2.49.0
+
