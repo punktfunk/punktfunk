@@ -67,7 +67,7 @@ cd '$SRC' && cargo build -r -p punktfunk-host -p punktfunk-encode-worker -p punk
 MISSING="$({ ldd "$BIN" 2>/dev/null || true; } | awk '/not found/ {print $1}' | sort -u | tr '\n' ' ')"
 [ -z "$MISSING" ] || die "the host rebuilt, but SteamOS still cannot load it. Missing: $MISSING
      Another rebuild will not help, and the services were left as they are. Report it:
-     https://git.unom.io/unom/punktfunk/issues"
+     https://punktfunk.unom.io/community#bugs"
 ok "host rebuilt"
 if [ "$WEB" = 1 ]; then
     log "Rebuilding web console"

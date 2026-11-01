@@ -5,7 +5,7 @@ PackageLocale: en-US
 
 Publisher: unom
 PublisherUrl: https://git.unom.io/unom/punktfunk
-PublisherSupportUrl: https://git.unom.io/unom/punktfunk/issues
+PublisherSupportUrl: https://punktfunk.unom.io/community
 PackageName: Punktfunk Host
 PackageUrl: https://docs.punktfunk.unom.io/docs/windows-host
 License: MIT OR Apache-2.0

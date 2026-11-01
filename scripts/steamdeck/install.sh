@@ -140,7 +140,7 @@ cd '$SRC' && cargo build -r -p punktfunk-host -p punktfunk-encode-worker -p punk
 MISSING="$({ ldd "$BIN" 2>/dev/null || true; } | awk '/not found/ {print $1}' | sort -u | tr '\n' ' ')"
 [ -z "$MISSING" ] || die "the host built, but SteamOS cannot load it. Missing: $MISSING
      That is a library the build box has and SteamOS does not. Nothing was installed — please
-     report it with 'cat /etc/os-release': https://git.unom.io/unom/punktfunk/issues"
+     report it with 'cat /etc/os-release': https://punktfunk.unom.io/community#bugs"
 ok "host binary: $BIN"
 # Not fatal if it is missing — an absent worker just means the in-process encoder at default GPU
 # priority, which is what every 0.26.x Deck already runs.

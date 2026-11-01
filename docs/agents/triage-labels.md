@@ -16,14 +16,15 @@ string from this table.
 
 Edit the right-hand column to match whatever vocabulary you actually use.
 
-## These labels do not exist yet
+## Most of these labels do not exist yet
 
-As of setup, `unom/punktfunk` has **no labels defined** — not on the repo, not on the `unom` org.
-The first triage run has to create them with `mcp__gitea__label_write`
+`needs-triage` exists: the website's report bridge puts it on every mirrored report. The other four
+are still missing, on the repo and on the `unom` org. The first triage run has to create them with
+`mcp__gitea__label_write`
 (`method: "create_repo_label"`, `name`, `color` as `#RRGGBB`, optional `description`).
 
 Creating labels is a write to a shared instance, so it falls under the ask-first rule in
-`issue-tracker.md` — propose the five, then create them once the user agrees.
+`issue-tracker.md` — propose the four, then create them once the user agrees.
 
 Remember the ID trap from `issue-tracker.md`: applying a label needs its **numeric ID** from
 `label_read`, not the name in the table above.

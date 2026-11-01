@@ -69,7 +69,7 @@
 
   <url type="homepage">https://punktfunk.unom.io/</url>
   <url type="help">https://docs.punktfunk.unom.io/</url>
-  <url type="bugtracker">https://git.unom.io/unom/punktfunk/issues</url>
+  <url type="bugtracker">https://punktfunk.unom.io/community#bugs</url>
   <url type="vcs-browser">https://git.unom.io/unom/punktfunk</url>
 
   <developer id="io.unom">
