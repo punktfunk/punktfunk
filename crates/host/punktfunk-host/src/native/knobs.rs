@@ -67,7 +67,7 @@ pub(crate) struct SessionKnobs {
     pub(crate) fec_pct: Option<u8>,
     /// `PUNKTFUNK_10BIT_SDR_WIDEN`: an 8-bit desktop may widen to 10-bit SDR.
     pub(crate) sdr10_widen: bool,
-    /// `PUNKTFUNK_STEAM_FORCE=1` keeps a virtual Steam pad beside a physical one of its identity.
+    /// `PUNKTFUNK_STEAM_FORCE=1` keeps a virtual Deck beside the host's own Deck controller.
     pub(crate) steam_force: bool,
     /// `PUNKTFUNK_WIRE_MTU`; a value that is not a number is logged and ignored.
     pub(crate) wire_mtu: Option<usize>,
