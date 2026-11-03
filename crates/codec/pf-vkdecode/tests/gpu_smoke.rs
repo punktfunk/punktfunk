@@ -106,14 +106,21 @@ fn smoke(decoder: &mut VkDecoder<impl VkCodec>, aus: &[&[u8]], geometry: &Geomet
                 assert_ne!(frame.image, vk::Image::null());
                 assert_ne!(frame.semaphore, vk::Semaphore::null());
                 assert!(frame.value > 0);
+                let conversion = frame.ycbcr_view != vk::ImageView::null();
+                assert_eq!(
+                    conversion,
+                    frame.plane_views[0] == vk::ImageView::null(),
+                    "a picture is read through its plane views or its conversion, one of them"
+                );
                 eprintln!(
-                    "geometry: allocated {}x{} display {}x{} format {:?} layout {:?}",
+                    "geometry: allocated {}x{} display {}x{} format {:?} layout {:?} read through {}",
                     frame.coded_width,
                     frame.coded_height,
                     frame.crop.width,
                     frame.crop.height,
                     frame.format,
                     frame.layout,
+                    if conversion { "a conversion" } else { "plane views" },
                 );
                 geometry_checked = true;
             }
@@ -149,6 +156,25 @@ fn smoke(decoder: &mut VkDecoder<impl VkCodec>, aus: &[&[u8]], geometry: &Geomet
         decoder.debug_snapshot(),
         decoder.status_queries()
     );
+}
+
+#[test]
+#[ignore = "needs a Vulkan Video H.264 decode device (fleet boxes; see module docs)"]
+fn the_startup_probe_opens_what_this_device_decodes() {
+    let _gpu = common::gpu_lock();
+    let setup = common::bring_up(&common::Request {
+        codec: common::H264,
+        graphics: common::Graphics::DecodeFamilyIsFine,
+        report_families: false,
+    });
+    let h264 = vk::VideoCodecOperationFlagsKHR::DECODE_H264;
+    // SAFETY: `setup` made the instance through its entry, and `pd` is one of its devices.
+    let openable = unsafe {
+        pf_vkdecode::probe::openable_decode_ops(&setup.entry, &setup.instance, setup.pd, h264)
+    };
+    assert_eq!(openable, h264, "only what was advertised, and all of it");
+    // SAFETY: nothing else references the setup's handles.
+    unsafe { setup.destroy() };
 }
 
 #[test]

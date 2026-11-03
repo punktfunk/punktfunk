@@ -479,6 +479,7 @@ fn project_frame(frame: &DecodedVkFrame, guard: NativeReleaseGuard) -> NativeVkF
         image: frame.image.as_raw(),
         vk_format: crate::video::RawVkFormat(frame.format.as_raw()),
         plane_views: [frame.plane_views[0].as_raw(), frame.plane_views[1].as_raw()],
+        ycbcr_view: frame.ycbcr_view.as_raw(),
         layer: frame.layer,
         layout: if frame.layout == vk::ImageLayout::VIDEO_DECODE_DPB_KHR {
             NativeVkLayout::DecodeDpb
@@ -1230,6 +1231,7 @@ mod tests {
                 vk::ImageView::from_raw(0x2002),
                 vk::ImageView::from_raw(0x2003),
             ],
+            ycbcr_view: vk::ImageView::from_raw(0x2004),
             layer: 3,
             layout,
             coded_width: 1920,
@@ -1335,6 +1337,7 @@ mod tests {
             image,
             vk_format,
             plane_views,
+            ycbcr_view,
             layer,
             layout,
             semaphore,
@@ -1369,6 +1372,7 @@ mod tests {
             [0x2002, 0x2003],
             "the plane views, in order — NOT the whole-image view (0x2001)"
         );
+        assert_eq!(ycbcr_view, 0x2004);
         assert_eq!(layer, 3, "the picture's array layer, not slot 0");
         assert_eq!(layout, NativeVkLayout::DecodeDst);
         assert_eq!(semaphore, 0x3001);
@@ -1644,6 +1648,7 @@ mod tests {
             image: 0,
             vk_format: crate::video::RawVkFormat(pf_vkdecode::NV12.as_raw()),
             plane_views: [0; 2],
+            ycbcr_view: 0,
             layer: 0,
             layout: NativeVkLayout::DecodeDst,
             semaphore: 0,

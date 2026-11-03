@@ -18,7 +18,8 @@ use ash::vk::Handle;
 /// - All four handles stay live for every object this crate builds from them.
 /// - The instance/device were created with `VK_KHR_video_queue`,
 ///   `VK_KHR_video_decode_queue`, the per-codec decode extension of every decoder
-///   built on the bundle, plus `synchronization2` and `timelineSemaphore`.
+///   built on the bundle, plus `synchronization2`, `timelineSemaphore` and
+///   `samplerYcbcrConversion`.
 /// - `decode_qf`/`decode_queue_index` name a `VIDEO_DECODE_KHR` queue. Codec
 ///   operations are READ ([`DecodeDevice::decode_codec_ops`]), not trusted:
 ///   a physical-device caps query answers for hardware even when the device was
@@ -384,6 +385,10 @@ impl DecodeDevice {
                 wanted: what,
             })
         }
+    }
+
+    pub(crate) fn instance(&self) -> &ash::Instance {
+        &self.instance
     }
 
     pub(crate) fn physical_device(&self) -> vk::PhysicalDevice {

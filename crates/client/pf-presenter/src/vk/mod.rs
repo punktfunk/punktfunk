@@ -188,6 +188,8 @@ struct DirectLast {
 #[derive(Clone, Copy, PartialEq)]
 enum DirectSrc {
     Native,
+    /// A Vulkan Video picture through the conversion pipe, which never draws direct.
+    NativeYcbcr,
     #[cfg(target_os = "linux")]
     Dmabuf,
     /// The software rung's plane images, which persist.
@@ -253,6 +255,11 @@ pub struct Presenter {
     csc: CscPass,
     /// Planar (3-plane) CSC. Always built: the CPU rung is the last decode fallback.
     csc_planar: CscPass,
+    /// CSC through a sampler Y'CbCr conversion. Built by the first picture that needs it:
+    /// only a device with no plane views has any.
+    csc_ycbcr: CscPass,
+    /// The picture format [`Self::csc_ycbcr`] converts; `UNDEFINED` until it exists.
+    csc_ycbcr_format: vk::Format,
     /// CPU-rung Y/Cb/Cr R8 images. `None` until the first CPU frame.
     cpu_planes: Option<CpuPlanes>,
     /// Selected presenter-device facts plus shared handles for the decode lanes.
@@ -1487,6 +1494,7 @@ impl Drop for Presenter {
             self.hw.take();
             self.csc.destroy(&self.device);
             self.csc_planar.destroy(&self.device);
+            self.csc_ycbcr.destroy(&self.device);
             if let Some(p) = self.cpu_planes.take() {
                 p.destroy(&self.device);
             }

@@ -62,6 +62,7 @@ pub use pf_bitstream::h265::RefRpsIdxError;
 
 pub use caps::derive_caps;
 pub use caps::plane_formats;
+pub use caps::ycbcr_conversion_info;
 pub use caps::CapsError;
 pub use caps::DecodeCaps;
 pub use caps::MaxLevelIdc;

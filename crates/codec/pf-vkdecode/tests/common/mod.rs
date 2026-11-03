@@ -349,11 +349,14 @@ pub fn bring_up(request: &Request) -> Setup {
         ash::khr::video_decode_queue::NAME.as_ptr(),
         request.codec.extension.as_ptr(),
     ];
+    let mut features11 =
+        vk::PhysicalDeviceVulkan11Features::default().sampler_ycbcr_conversion(true);
     let mut features12 = vk::PhysicalDeviceVulkan12Features::default().timeline_semaphore(true);
     let mut features13 = vk::PhysicalDeviceVulkan13Features::default().synchronization2(true);
     let device_ci = vk::DeviceCreateInfo::default()
         .queue_create_infos(&queue_infos)
         .enabled_extension_names(&extensions)
+        .push_next(&mut features11)
         .push_next(&mut features12)
         .push_next(&mut features13);
     // SAFETY: live physical device, valid create info rooted in locals; destroyed

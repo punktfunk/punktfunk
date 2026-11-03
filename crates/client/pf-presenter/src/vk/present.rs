@@ -23,7 +23,7 @@ use super::reconfig::{Applied, Input};
 use super::{
     BusyOn, DirectLast, DirectSrc, FrameInput, Held, Presented, Presenter, Retired, VideoImage,
 };
-use crate::csc::csc_rows;
+use crate::csc::{csc_rows, ycbcr_descriptors, CscPass, CscPipe};
 #[cfg(target_os = "linux")]
 use crate::dmabuf::{self, HwFrame};
 use crate::overlay::OverlayFrame;
@@ -152,15 +152,16 @@ fn video_target(v: &VideoImage) -> CscTarget {
 }
 
 impl DirectSrc {
-    /// The 3-plane CSC pipe (PyroWave, software I420) over the NV12 one.
-    fn planar(self) -> bool {
+    /// The CSC pipe these planes need.
+    fn pipe(self) -> CscPipe {
         match self {
-            DirectSrc::Native => false,
+            DirectSrc::Native => CscPipe::Nv12,
+            DirectSrc::NativeYcbcr => CscPipe::Ycbcr,
             #[cfg(target_os = "linux")]
-            DirectSrc::Dmabuf => false,
-            DirectSrc::Cpu => true,
+            DirectSrc::Dmabuf => CscPipe::Nv12,
+            DirectSrc::Cpu => CscPipe::Planar,
             #[cfg(all(any(target_os = "linux", windows), feature = "pyrowave"))]
-            DirectSrc::Pyro => true,
+            DirectSrc::Pyro => CscPipe::Planar,
         }
     }
 }
@@ -538,8 +539,11 @@ impl Presenter {
         };
         let last = self.sampled_planes(lane);
         let direct = match (last, source, placement) {
-            (Some(_), Some((_, w, h)), Some(p))
+            // The conversion pipe takes the video image and a blit: `DirectPass` has no
+            // pipeline for its layout.
+            (Some(l), Some((_, w, h)), Some(p))
                 if self.knobs.direct_present
+                    && l.src != DirectSrc::NativeYcbcr
                     && targets_ready
                     && !from_slot
                     && filtered.is_none()
@@ -614,15 +618,21 @@ impl Presenter {
             // so a taller decode pool does not show.
             Lane::Native(f) => {
                 let (depth, msb_packed) = csc_depth_packing_or_8bit(f.vk_format);
+                let ycbcr = f.ycbcr_view != 0;
                 Some(DirectLast {
-                    src: DirectSrc::Native,
+                    src: if ycbcr {
+                        DirectSrc::NativeYcbcr
+                    } else {
+                        DirectSrc::Native
+                    },
                     uv_scale: [
                         f.width as f32 / f.coded_width as f32,
                         f.height as f32 / f.coded_height as f32,
                     ],
                     color: f.color,
                     depth,
-                    msb_packed,
+                    // A conversion reads a 10-bit code as code/1023, a plane view as UNORM16.
+                    msb_packed: msb_packed && !ycbcr,
                 })
             }
             // Always 8-bit, no MSB packing — R8 planes, whatever the stream signals. PQ
@@ -743,7 +753,7 @@ impl Presenter {
         // SAFETY: `cmd_buf` is recording and the set points at `f` (`# Safety` above).
         unsafe {
             self.record_csc(
-                false,
+                CscPipe::Nv12,
                 video_target(v),
                 [1.0, 1.0],
                 d.color,
@@ -793,7 +803,7 @@ impl Presenter {
     /// submit waits; a `Redraw` of `f` drops it, since the last real submit spent it.
     ///
     /// # Safety
-    /// `self.cmd_buf` is recording, and the NV12 CSC set points at `f`'s plane views.
+    /// `self.cmd_buf` is recording, and the set of `plan.last`'s pipe points at `f`'s views.
     unsafe fn record_native(
         &self,
         f: &NativeVkFrame,
@@ -923,7 +933,7 @@ impl Presenter {
         // above); `retired_hw` keeps the frame behind them alive.
         unsafe {
             match l.src {
-                DirectSrc::Native => {
+                DirectSrc::Native | DirectSrc::NativeYcbcr => {
                     if let Some(Held {
                         frame: Retired::NativeVk(f),
                         ..
@@ -951,7 +961,7 @@ impl Presenter {
         // SAFETY: the caller's contract is `record_csc`'s.
         unsafe {
             self.record_csc(
-                l.src.planar(),
+                l.src.pipe(),
                 target,
                 l.uv_scale,
                 l.color,
@@ -1512,9 +1522,14 @@ impl Presenter {
             }
             #[cfg(all(any(target_os = "linux", windows), feature = "pyrowave"))]
             FrameInput::PyroWave(f) => Lane::Pyro(f),
-            // Same device; decoder already made the per-plane views — no import,
-            // no view create, nothing that can fail here.
-            FrameInput::NativeVk(f) => Lane::Native(f),
+            // Same device; the decoder already made the views, so no import and no view
+            // create. Only the conversion pipe can fail here, and here is before acquire.
+            FrameInput::NativeVk(f) => {
+                if f.ycbcr_view != 0 {
+                    self.ensure_csc_ycbcr(vk::Format::from_raw(f.vk_format.0))?;
+                }
+                Lane::Native(f)
+            }
         })
     }
 
@@ -1567,12 +1582,17 @@ impl Presenter {
                         );
                     }
                 }
-                // Decoder-owned plane views.
-                self.csc.bind_planes(
-                    &self.device,
-                    vk::ImageView::from_raw(f.plane_views[0]),
-                    vk::ImageView::from_raw(f.plane_views[1]),
-                );
+                // Decoder-owned views.
+                if f.ycbcr_view != 0 {
+                    self.csc_ycbcr
+                        .bind_ycbcr(&self.device, vk::ImageView::from_raw(f.ycbcr_view));
+                } else {
+                    self.csc.bind_planes(
+                        &self.device,
+                        vk::ImageView::from_raw(f.plane_views[0]),
+                        vk::ImageView::from_raw(f.plane_views[1]),
+                    );
+                }
             }
             // Decode leaves planes in GENERAL; CPU uploads arrive in SHADER_READ_ONLY_OPTIMAL.
             #[cfg(all(any(target_os = "linux", windows), feature = "pyrowave"))]
@@ -1585,25 +1605,48 @@ impl Presenter {
         Ok(None)
     }
 
+    /// The conversion pipe for `format`, built on the first picture that needs it and again
+    /// when the stream changes format. `import` calls this: a failure there spends no acquire,
+    /// and the wait here leaves nothing submitted that references the pipe it replaces.
+    fn ensure_csc_ycbcr(&mut self, format: vk::Format) -> Result<()> {
+        if self.csc_ycbcr_format == format {
+            return Ok(());
+        }
+        self.quiesce_own()?;
+        // SAFETY: `pdev` is one of `instance`'s physical devices.
+        let conversion = unsafe {
+            pf_vkdecode::caps::device_ycbcr_conversion(&self.instance, self.pdev, format)
+        }
+        .with_context(|| format!("find a Y'CbCr conversion for {format:?}"))?;
+        let descriptors = ycbcr_descriptors(&self.instance, self.pdev, format)?;
+        let pass = CscPass::new_ycbcr(&self.device, super::VIDEO_FORMAT, &conversion, descriptors)?;
+        std::mem::replace(&mut self.csc_ycbcr, pass).destroy(&self.device);
+        self.csc_ycbcr_format = format;
+        Ok(())
+    }
+
     /// YCbCr→RGBA CSC: a fullscreen triangle with the CICP push-constant rows, drawn where
-    /// `target` says. `planar` picks the 3-plane pipe (PyroWave, software I420) over the
-    /// NV12 one (dmabuf, Vulkan Video, D3D11 slots). `uv_scale` is picture/surface per
-    /// axis: `[1.0, 1.0]` unless the bound planes are a decode pool larger than the
-    /// picture (see the shader's `params.zw`).
+    /// `target` says. `pipe` is the pass that matches the bound views. `uv_scale` is
+    /// picture/surface per axis: `[1.0, 1.0]` unless the bound planes are a decode pool
+    /// larger than the picture (see the shader's `params.zw`).
     ///
     /// # Safety
     /// `self.cmd_buf` must be recording; the pass's descriptor set must point at live
     /// plane views.
     unsafe fn record_csc(
         &self,
-        planar: bool,
+        pipe: CscPipe,
         target: CscTarget,
         uv_scale: [f32; 2],
         color: pf_client_core::video::ColorDesc,
         depth: u8,
         msb_packed: bool,
     ) {
-        let csc = if planar { &self.csc_planar } else { &self.csc };
+        let csc = match pipe {
+            CscPipe::Nv12 => &self.csc,
+            CscPipe::Planar => &self.csc_planar,
+            CscPipe::Ycbcr => &self.csc_ycbcr,
+        };
         let full = |extent: vk::Extent2D| vk::Rect2D {
             offset: vk::Offset2D { x: 0, y: 0 },
             extent,
@@ -1630,7 +1673,7 @@ impl Presenter {
                 } else {
                     self.direct.keep
                 },
-                if planar {
+                if pipe == CscPipe::Planar {
                     self.direct.planar
                 } else {
                     self.direct.nv12
