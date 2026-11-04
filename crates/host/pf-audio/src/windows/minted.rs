@@ -11,7 +11,9 @@
 //! plan. Missing Steam drivers, a denied install, or `PUNKTFUNK_NO_AUDIO_MINT` leaves the ids
 //! empty and keeps the name-based ladder.
 //!
-//! Endpoints persist across host restarts and re-resolve by marker. Evidence:
+//! Endpoints persist across host restarts and re-resolve by marker. The console Speakers hide
+//! (`DEVICE_STATE_DISABLED`) while no capture binds them, so Windows never picks the silent
+//! sink as the box's default by itself; a seat's stay visible. Evidence:
 //! `design/windows-audio-endpoints-and-vbcable.md`. Probe: `punktfunk-host audio-probe mint`.
 
 use super::devnode_api as da;
@@ -246,8 +248,66 @@ pub fn provisioned() -> Option<Arc<MintedAudio>> {
     PROVISIONED.get().cloned()
 }
 
-/// Starts one process-identity provisioning worker. Idempotent and non-blocking.
-pub fn provision_at_startup() {
+/// Set by the host service: the console Speakers hide while no capture binds them. Off in
+/// the devtests, whose process cannot see the service's live captures.
+static HIDE_IDLE: AtomicBool = AtomicBool::new(false);
+
+/// The Speakers endpoint whose visibility this process manages. A seat never flips its
+/// own: a remote session cannot enumerate the machine-wide devnode.
+fn managed_speakers() -> Option<String> {
+    if !HIDE_IDLE.load(Ordering::Relaxed) || pf_paths::seat::role().is_seat_host() {
+        return None;
+    }
+    PROVISIONED.get()?.speakers_render.clone()
+}
+
+/// Show the Speakers for a capture about to bind them. `true` once they are ACTIVE, already
+/// or after the flip; `false` when the flip failed, so the plan leaves them out.
+pub fn show_speakers() -> bool {
+    set_speakers_visible(true)
+}
+
+/// Hide the Speakers between captures. Callers hold the no-capture guarantee.
+pub fn hide_speakers() {
+    set_speakers_visible(false);
+}
+
+/// One `IPolicyConfig` flip at most: an endpoint already in the asked state is left alone.
+fn set_speakers_visible(visible: bool) -> bool {
+    let Some(id) = managed_speakers() else {
+        return true;
+    };
+    if audio_control::endpoint_active(&id) == Some(visible) {
+        return true;
+    }
+    match audio_control::set_endpoint_visibility(&id, visible) {
+        Ok(()) => {
+            tracing::info!(endpoint = %id,
+                state = if visible { "shown (a capture binds it)" } else { "hidden (no capture)" },
+                "Punktfunk Speakers visibility");
+            true
+        }
+        Err(e) => {
+            tracing::warn!(endpoint = %id, visible, error = %format!("{e:#}"),
+                "Punktfunk Speakers visibility change failed — the sink stays as it is");
+            false
+        }
+    }
+}
+
+/// Freshly latched in the host service: hide the Speakers unless a capture already binds them.
+fn settle_idle_visibility() {
+    if HIDE_IDLE.load(Ordering::Relaxed) && !super::wasapi_cap::capture_live() {
+        audio_control::release_idle_sink();
+    }
+}
+
+/// Starts one process-identity provisioning worker. Idempotent and non-blocking. `hide_idle`
+/// is the host service's: its Speakers hide between captures.
+pub fn provision_at_startup(hide_idle: bool) {
+    if hide_idle {
+        HIDE_IDLE.store(true, Ordering::Relaxed);
+    }
     if mint_opted_out() || gave_up() {
         return;
     }
@@ -279,6 +339,7 @@ pub fn provision_at_startup() {
                         "minted audio endpoints ready (the wiring plan's tier-0)"
                     );
                     let _ = PROVISIONED.set(Arc::new(m));
+                    settle_idle_visibility();
                 }
                 Ok(_) => {
                     tracing::info!(
@@ -315,7 +376,7 @@ pub fn ensure_provisioned() {
             return;
         }
     }
-    provision_at_startup();
+    provision_at_startup(false);
 }
 
 /// Provisions both roles for one validated identity; one failed role leaves the other usable.
@@ -764,6 +825,7 @@ pub fn ensure_blocking() {
         match process_identity().and_then(ensure_all) {
             Ok(m) if m.any() => {
                 let _ = PROVISIONED.set(Arc::new(m));
+                settle_idle_visibility();
             }
             Ok(_) => record_unlatched_attempt(),
             Err(e) => {

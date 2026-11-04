@@ -309,9 +309,10 @@ pub(crate) async fn serve(
         crate::audio::pad_endpoint::provision_at_startup(true);
     }
     // Windows: mint "Punktfunk Speakers/Microphone" (Valve streaming drivers). Best-effort;
-    // without Steam's drivers the wiring plan keeps its name-based ladder.
+    // without Steam's drivers the wiring plan keeps its name-based ladder. The Speakers hide
+    // between captures, so Windows never defaults to the silent sink on its own.
     #[cfg(target_os = "windows")]
-    crate::audio::minted::provision_at_startup();
+    crate::audio::minted::provision_at_startup(true);
     // Debounced TV-session restore on idle, not per-disconnect. Dropping this stops it.
     let _restore_worker = (!door).then(crate::vdisplay::start_restore_worker);
     if !door {
