@@ -11,7 +11,10 @@
 //! The operator's devices are remembered in memory plus on-disk crash markers
 //! ([`park_default_playback`] / [`park_default_recording`]) and restored when
 //! capture closes or on the next process's first wiring pass. A default the
-//! operator changed mid-stream is left alone.
+//! operator changed mid-stream is left alone. A previous device that is absent
+//! at restore (a TV endpoint the stream's display isolate took down) is put
+//! back when it returns. Between captures the minted Speakers hide
+//! ([`release_idle_sink`]), so Windows never picks the silent sink by itself.
 //!
 //! Default writes go through undocumented `IPolicyConfig` (the call `mmsys.cpl`
 //! makes; neither crate exposes it). `audio.output_mode = follow_default` still
@@ -20,7 +23,9 @@
 use super::wiring_plan::{self, plan, plan_with_formats, Endpoint, MixFormat, Wiring};
 use anyhow::{anyhow, Result};
 use std::ffi::c_void;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
+use std::time::{Duration, Instant};
 use wasapi::Direction;
 
 /// Engine mix format of a render endpoint, or `None` if it cannot be asked.
@@ -29,18 +34,66 @@ use wasapi::Direction;
 /// silently downmix a voice-carrier (mono / 24 kHz). One `IAudioClient`
 /// activation per endpoint, only during a wiring pass. Every failure maps to
 /// `None`: the plan treats unknown as non-narrowing, matching pre-format boxes.
+/// The hidden Speakers cannot activate; their stored device format answers
+/// instead, since the shared engine runs at that format's rate and width.
 pub fn mix_format_of(ep: &Endpoint) -> Option<MixFormat> {
-    let fmt = open_endpoint(ep)
-        .ok()?
-        .get_iaudioclient()
-        .ok()?
-        .get_mixformat()
-        .ok()?;
-    Some(MixFormat {
-        rate_hz: fmt.get_samplespersec(),
-        channels: fmt.get_nchannels(),
-        bits: fmt.get_bitspersample(),
+    let live = || {
+        let fmt = open_endpoint(ep)
+            .ok()?
+            .get_iaudioclient()
+            .ok()?
+            .get_mixformat()
+            .ok()?;
+        Some(MixFormat {
+            rate_hz: fmt.get_samplespersec(),
+            channels: fmt.get_nchannels(),
+            bits: fmt.get_bitspersample(),
+        })
+    };
+    live().or_else(|| {
+        let hidden = super::minted::minted_ids().speakers_render.as_deref() == Some(ep.1.as_str())
+            && endpoint_active(&ep.1) == Some(false);
+        hidden
+            .then(|| {
+                super::pad_endpoint::served_blob(&ep.1, &super::pad_endpoint::PKEY_DEVICE_FORMAT)
+            })
+            .flatten()
+            .and_then(|blob| device_format(&blob))
     })
+}
+
+/// `WAVEFORMATEX` fields of a stored device format: channels at byte 2, rate at 4, bits at 14.
+fn device_format(blob: &[u8]) -> Option<MixFormat> {
+    let u16_at = |i: usize| blob.get(i..i + 2).map(|b| u16::from_le_bytes([b[0], b[1]]));
+    let rate_hz = blob
+        .get(4..8)
+        .map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]))?;
+    Some(MixFormat {
+        rate_hz,
+        channels: u16_at(2)?,
+        bits: u16_at(14)?,
+    })
+}
+
+/// `Some(true)` when Windows lists `id` as ACTIVE, `Some(false)` when it is disabled,
+/// unplugged or absent, `None` when it cannot be asked.
+pub fn endpoint_active(id: &str) -> Option<bool> {
+    let dev = wasapi::DeviceEnumerator::new().ok()?.get_device(id).ok()?;
+    Some(matches!(dev.get_state().ok()?, wasapi::DeviceState::Active))
+}
+
+/// The minted Speakers while hidden between captures, as `(friendly name, id)`. `None` when
+/// visible, gone or unminted.
+fn hidden_speakers() -> Option<Endpoint> {
+    let id = super::minted::minted_ids().speakers_render?;
+    let dev = wasapi::DeviceEnumerator::new().ok()?.get_device(&id).ok()?;
+    if !matches!(dev.get_state().ok()?, wasapi::DeviceState::Disabled) {
+        return None;
+    }
+    let name = dev
+        .get_friendlyname()
+        .unwrap_or_else(|_| "Punktfunk Speakers".to_string());
+    Some((name, id))
 }
 
 /// Engine rate the desktop-audio loopback would capture at, answered before
@@ -69,7 +122,7 @@ pub fn probe_capture_rate() -> super::CaptureRate {
         return super::CaptureRate::Unknown;
     }
     // Enumeration only — minting stays out of this path, as the doc says.
-    let wiring = PlanInputs::read().plan(&mix_format_of);
+    let wiring = PlanInputs::read(true).plan(&mix_format_of);
     let Some(ep) = wiring.loopback_render else {
         tracing::debug!("hi-res capture-rate probe: no desktop-audio loopback endpoint is planned");
         return super::CaptureRate::Unknown;
@@ -208,8 +261,24 @@ static MINTED_NEVER_LISTED: std::sync::atomic::AtomicBool =
 /// enumeration can miss the endpoints this process just created and plan as if the box had none.
 /// Waits only for ids [`minted_ids`](super::minted::minted_ids) reports, so a box that mints
 /// nothing — or one where they never show, see [`MINTED_NEVER_LISTED`] — pays one enumeration.
-fn enumerate_including_minted() -> (Vec<Endpoint>, Vec<Endpoint>) {
-    use std::sync::atomic::Ordering;
+/// Speakers hidden between captures are not waited for; `with_hidden_sink` appends them to the
+/// renders instead, so an idle plan reads as the plan a capture gets.
+fn enumerate_including_minted(with_hidden_sink: bool) -> (Vec<Endpoint>, Vec<Endpoint>) {
+    let minted = super::minted::minted_ids();
+    let hidden = hidden_speakers();
+    let speakers_want = if hidden.is_some() {
+        None
+    } else {
+        minted.speakers_render.clone()
+    };
+    let finish = |mut renders: Vec<Endpoint>, captures: Vec<Endpoint>| {
+        if let Some(ep) = hidden.clone().filter(|_| with_hidden_sink)
+            && !renders.iter().any(|(_, id)| *id == ep.1)
+        {
+            renders.push(ep);
+        }
+        (renders, captures)
+    };
     // 500 ms ceiling: measured appearance is ~12 ms, and the caller is on the session-open path.
     let attempts = if MINTED_NEVER_LISTED.load(Ordering::Relaxed) {
         1
@@ -219,22 +288,21 @@ fn enumerate_including_minted() -> (Vec<Endpoint>, Vec<Endpoint>) {
     for attempt in 0..attempts {
         let renders = list_endpoints(Direction::Render);
         let captures = list_endpoints(Direction::Capture);
-        let minted = super::minted::minted_ids();
         let listed = |want: &Option<String>, eps: &[Endpoint]| {
             want.as_ref()
                 .is_none_or(|id| eps.iter().any(|(_, have)| have == id))
         };
-        if listed(&minted.speakers_render, &renders)
+        if listed(&speakers_want, &renders)
             && listed(&minted.mic_render, &renders)
             && listed(&minted.mic_capture, &captures)
         {
             if attempt > 0 {
                 tracing::debug!(attempt, "minted audio endpoints became enumerable");
             }
-            return (renders, captures);
+            return finish(renders, captures);
         }
         if attempt + 1 < attempts {
-            std::thread::sleep(std::time::Duration::from_millis(50));
+            std::thread::sleep(Duration::from_millis(50));
         }
     }
     if !MINTED_NEVER_LISTED.swap(true, Ordering::Relaxed) {
@@ -244,7 +312,7 @@ fn enumerate_including_minted() -> (Vec<Endpoint>, Vec<Endpoint>) {
              enumerate the machine-wide devnode minting creates)"
         );
     }
-    (
+    finish(
         list_endpoints(Direction::Render),
         list_endpoints(Direction::Capture),
     )
@@ -266,8 +334,9 @@ struct PlanInputs {
 impl PlanInputs {
     /// Waits for already-minted endpoints: a bare [`list_endpoints`] can miss one that is
     /// still appearing, and the plan would pick a device the capture will not use.
-    fn read() -> PlanInputs {
-        let (renders, captures) = enumerate_including_minted();
+    /// `with_hidden_sink` plans the hidden Speakers too; false after a failed show.
+    fn read(with_hidden_sink: bool) -> PlanInputs {
+        let (renders, captures) = enumerate_including_minted(with_hidden_sink);
         // Lowercased name substring. Empty would match every device, so it is unset.
         let name_pin = |var: &str| {
             std::env::var(var)
@@ -310,7 +379,10 @@ pub fn wire_now_full(park_defaults: bool) -> WiredPlan {
     // from the earlier snapshot reports "no render endpoints exist at all" about endpoints this
     // same pass just created.
     super::minted::ensure_provisioned();
-    let inputs = PlanInputs::read();
+    // A capture about to bind the Speakers needs them visible. A show that fails keeps them
+    // off the plan, so the ladder still finds a loopback; idle passes plan the hidden sink.
+    let sink_planned = !park_defaults || super::minted::show_speakers();
+    let inputs = PlanInputs::read(sink_planned);
     let (renders, captures) = (&inputs.renders, &inputs.captures);
     let fingerprint = wiring_plan::fingerprint(renders, captures);
     // Mix formats only when parking defaults. The idle mic pump does not care which
@@ -390,7 +462,8 @@ pub fn wire_now_full(park_defaults: bool) -> WiredPlan {
     // Move it first: a parked `prev` that is the cable would restore that after a stream.
     if let Some((mic_name, mic_id)) = &wiring.mic_render {
         if default_render_id().as_deref() == Some(mic_id.as_str()) {
-            // host_audio plan: real hardware first, so the new default is audible.
+            // host_audio plan: real hardware first, so the new default is audible. The hidden
+            // Speakers cannot take a default.
             match plan(
                 renders,
                 captures,
@@ -400,6 +473,7 @@ pub fn wire_now_full(park_defaults: bool) -> WiredPlan {
                 &inputs.minted,
             )
             .loopback_render
+            .filter(|(_, id)| endpoint_active(id) != Some(false))
             {
                 Some((name, id)) => match set_default_endpoint(&id) {
                     Ok(()) => tracing::info!(mic = %mic_name, device = %name,
@@ -450,39 +524,82 @@ pub fn wire_now_full(park_defaults: bool) -> WiredPlan {
     done(wiring)
 }
 
+/// Retry cadence and ceiling for a restore whose device was absent. A TV endpoint returns
+/// seconds after its display re-lights; past the ceiling the marker waits for the next
+/// capture end or host start.
+const RESTORE_RETRY_EVERY: Duration = Duration::from_secs(2);
+const RESTORE_RETRY_FOR: Duration = Duration::from_secs(10 * 60);
+
 /// A default device parked for the capture's life: `(previous_id, id_we_set)` in memory,
-/// mirrored to a crash marker (two lines, previous id then set id) so a crash cannot leave
-/// the box parked. Each caller keeps its own write policy for the park itself.
+/// mirrored to a crash marker (previous id, set id, then the default Windows picked once the
+/// sink hid) so a crash cannot leave the box parked. Stays parked while the previous device
+/// is absent: [`DefaultSlot::retry_when_back`] puts it back when it returns.
 struct DefaultSlot {
     parked: Mutex<Option<(String, String)>>,
+    /// Windows' own pick after the sink hid with a restore still owed: ours, like `set`.
+    fallback: Mutex<Option<String>>,
     /// File name under `pf_paths::config_dir()`.
     marker: &'static str,
     current: fn() -> Option<String>,
+    dir: Direction,
     what: &'static str,
+    /// One retry worker per slot at a time.
+    retrying: AtomicBool,
 }
 
 static PLAYBACK: DefaultSlot = DefaultSlot {
     parked: Mutex::new(None),
+    fallback: Mutex::new(None),
     marker: "audio-default.prev",
     current: default_render_id,
+    dir: Direction::Render,
     what: "playback",
+    retrying: AtomicBool::new(false),
 };
 
 static RECORDING: DefaultSlot = DefaultSlot {
     parked: Mutex::new(None),
+    fallback: Mutex::new(None),
     marker: "audio-default-rec.prev",
     current: default_capture_id,
+    dir: Direction::Capture,
     what: "recording",
+    retrying: AtomicBool::new(false),
 };
+
+/// `(previous, set, fallback)` from a marker's lines; the fallback line is optional.
+fn parse_marker(s: &str) -> Option<(String, String, Option<String>)> {
+    let mut lines = s.lines().map(str::trim).filter(|l| !l.is_empty());
+    let prev = lines.next()?.to_string();
+    let set = lines.next()?.to_string();
+    Some((prev, set, lines.next().map(str::to_string)))
+}
 
 impl DefaultSlot {
     fn marker_path(&self) -> std::path::PathBuf {
         pf_paths::config_dir().join(self.marker)
     }
 
+    /// Mirror the park to disk: `prev`, `set`, and the fallback when one is recorded.
+    fn write_marker(&self, prev: &str, set: &str) {
+        let mut s = format!("{prev}\n{set}");
+        if let Some(fb) = self.fallback.lock().unwrap().as_deref() {
+            s.push('\n');
+            s.push_str(fb);
+        }
+        let _ = std::fs::write(self.marker_path(), s);
+    }
+
+    /// Nothing owed any more: memory, fallback and marker go.
+    fn clear(&self, parked: &mut Option<(String, String)>) {
+        *parked = None;
+        *self.fallback.lock().unwrap() = None;
+        let _ = std::fs::remove_file(self.marker_path());
+    }
+
     /// Remember the operator default `cur` before parking on `id`. The first park stores it
     /// unless it is `never_prev`; a plan change mid-stream keeps it and updates only what we
-    /// set. Nothing changes while `cur` already is `id`.
+    /// set. Nothing changes while `cur` already is `id`, or while a restore is still owed.
     fn remember(&self, cur: Option<&str>, id: &str, never_prev: Option<&str>) {
         if cur == Some(id) {
             return;
@@ -491,44 +608,123 @@ impl DefaultSlot {
         match parked.as_mut() {
             None => {
                 if let Some(prev) = cur.filter(|c| Some(*c) != never_prev) {
-                    let _ = std::fs::write(self.marker_path(), format!("{prev}\n{id}"));
+                    *self.fallback.lock().unwrap() = None;
+                    self.write_marker(prev, id);
                     *parked = Some((prev.to_string(), id.to_string()));
                 }
             }
             Some((prev, set)) if set != id => {
-                let _ = std::fs::write(self.marker_path(), format!("{prev}\n{id}"));
+                self.write_marker(prev, id);
                 *set = id.to_string();
             }
             Some(_) => {}
         }
     }
 
-    /// Put the remembered default back. No-op if never parked; an operator change
-    /// mid-stream wins. COM-initialized thread (capture exit path).
-    fn restore(&self) {
-        let Some((prev, set)) = self.parked.lock().unwrap().take() else {
-            return;
-        };
-        let _ = std::fs::remove_file(self.marker_path());
-        if (self.current)().as_deref() != Some(set.as_str()) {
+    /// Adopt a marker a previous run left, when nothing is parked in memory. The file stays
+    /// until its restore resolves.
+    fn adopt_marker(&self) {
+        let mut parked = self.parked.lock().unwrap();
+        if parked.is_some() {
             return;
         }
-        match set_default_endpoint(&prev) {
-            Ok(()) => tracing::info!("default {} device restored after streaming", self.what),
-            Err(e) => tracing::warn!(error = %format!("{e:#}"),
-                "restore the default {} device after streaming", self.what),
+        let Ok(s) = std::fs::read_to_string(self.marker_path()) else {
+            return;
+        };
+        match parse_marker(&s) {
+            Some((prev, set, fallback)) => {
+                *self.fallback.lock().unwrap() = fallback;
+                *parked = Some((prev, set));
+            }
+            None => {
+                let _ = std::fs::remove_file(self.marker_path());
+            }
         }
     }
 
-    /// Consume the crash marker. Returns the previous id only if the current default is still
-    /// the endpoint we set (an operator change since wins). The file is removed either way.
-    fn take_marker(&self) -> Option<String> {
-        let path = self.marker_path();
-        let s = std::fs::read_to_string(&path).ok()?;
-        let _ = std::fs::remove_file(&path);
-        let mut lines = s.lines();
-        let (prev, set) = (lines.next()?, lines.next()?);
-        ((self.current)().as_deref() == Some(set)).then(|| prev.to_string())
+    /// The current default is one this host set, Windows' pick after the sink hid, or none.
+    /// An operator's choice is none of those and wins.
+    fn still_ours(&self, set: &str) -> bool {
+        match (self.current)() {
+            None => true,
+            Some(cur) => {
+                cur == set || self.fallback.lock().unwrap().as_deref() == Some(cur.as_str())
+            }
+        }
+    }
+
+    fn present(&self, id: &str) -> bool {
+        list_endpoints(self.dir).iter().any(|(_, have)| have == id)
+    }
+
+    /// One restore attempt. `true` when nothing is owed any more: put back, back by itself, or
+    /// the operator chose otherwise. `false` keeps the park: the device is absent right now.
+    fn try_restore(&self) -> bool {
+        let mut parked = self.parked.lock().unwrap();
+        let Some((prev, set)) = parked.clone() else {
+            return true;
+        };
+        let what = self.what;
+        if (self.current)().as_deref() == Some(prev.as_str()) {
+            tracing::info!("default {what} device is back on the operator's choice");
+            self.clear(&mut parked);
+            return true;
+        }
+        if !self.still_ours(&set) {
+            self.clear(&mut parked);
+            return true;
+        }
+        if !self.present(&prev) {
+            return false;
+        }
+        match set_default_endpoint(&prev) {
+            Ok(()) => tracing::info!("default {what} device restored after streaming"),
+            Err(e) => tracing::warn!(error = %format!("{e:#}"),
+                "restore the default {what} device after streaming"),
+        }
+        self.clear(&mut parked);
+        true
+    }
+
+    /// Put the remembered default back, now or when its device reappears. No-op if never
+    /// parked. COM-initialized thread (capture exit path, first wiring pass).
+    fn restore(&'static self) {
+        if !self.try_restore() {
+            tracing::info!(
+                "the default {} device from before the stream is not present right now — it is \
+                 put back when it reappears",
+                self.what
+            );
+            self.retry_when_back();
+        }
+    }
+
+    /// Poll for the absent device, at most [`RESTORE_RETRY_FOR`]. Ticks skip while a capture
+    /// is live: its end runs the restore itself.
+    fn retry_when_back(&'static self) {
+        if self.retrying.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        let spawned = std::thread::Builder::new()
+            .name("punktfunk-audio-default-retry".into())
+            .spawn(move || {
+                let deadline = Instant::now() + RESTORE_RETRY_FOR;
+                if wasapi::initialize_mta().ok().is_ok() {
+                    while Instant::now() < deadline {
+                        std::thread::sleep(RESTORE_RETRY_EVERY);
+                        if super::wasapi_cap::capture_live() {
+                            continue;
+                        }
+                        if self.try_restore() {
+                            break;
+                        }
+                    }
+                }
+                self.retrying.store(false, Ordering::SeqCst);
+            });
+        if spawned.is_err() {
+            self.retrying.store(false, Ordering::SeqCst);
+        }
     }
 }
 
@@ -556,21 +752,14 @@ pub fn default_capture_id() -> Option<String> {
 
 /// Once per process: restore a default a previous run left parked, only if it is still
 /// the endpoint we set. Runs on the first wiring pass (mic pump at host start), not the
-/// first stream.
+/// first stream. An absent device is awaited as after a stream.
 fn recover_orphaned_default() {
     static ONCE: std::sync::Once = std::sync::Once::new();
     ONCE.call_once(|| {
         for slot in [&PLAYBACK, &RECORDING] {
-            let Some(prev) = slot.take_marker() else {
-                continue;
-            };
-            let what = slot.what;
-            match set_default_endpoint(&prev) {
-                Ok(()) => tracing::info!(
-                    "restored the default {what} device a previous host run left parked"
-                ),
-                Err(e) => tracing::warn!(error = %format!("{e:#}"),
-                    "restore the default {what} device left by a previous run"),
+            slot.adopt_marker();
+            if slot.parked.lock().unwrap().is_some() {
+                slot.restore();
             }
         }
         // Same idea for the per-app voice-chat pins a crash left behind.
@@ -587,9 +776,12 @@ fn recover_orphaned_default() {
 pub fn unpark_default_for_uninstall() -> bool {
     let mut restored = false;
     for slot in [&PLAYBACK, &RECORDING] {
-        if let Some(prev) = slot.take_marker() {
-            restored |= set_default_endpoint(&prev).is_ok();
+        slot.adopt_marker();
+        let parked = slot.parked.lock().unwrap().clone();
+        if let Some((prev, set)) = parked {
+            restored |= slot.still_ours(&set) && set_default_endpoint(&prev).is_ok();
         }
+        let _ = std::fs::remove_file(slot.marker_path());
     }
     restored
 }
@@ -654,6 +846,29 @@ pub fn restore_default_playback() {
 /// Inverse of [`park_default_recording`]: see [`DefaultSlot::restore`].
 pub fn restore_default_recording() {
     RECORDING.restore();
+}
+
+/// No capture binds the sink: hide the minted Speakers, so Windows neither keeps nor later
+/// picks the silent sink as the box's default, then note the default it chose instead. A
+/// restore still owed treats that pick as its own. Last capture out, and the host's start.
+pub fn release_idle_sink() {
+    PLAYBACK.adopt_marker();
+    super::minted::hide_speakers();
+    let parked = PLAYBACK.parked.lock().unwrap();
+    let Some((prev, set)) = parked.clone() else {
+        return;
+    };
+    // Audiosrv re-picks the default right after the sink hides; give it a moment.
+    let until = Instant::now() + Duration::from_secs(1);
+    let fallback = loop {
+        let cur = default_render_id();
+        if cur.as_deref() != Some(set.as_str()) || Instant::now() >= until {
+            break cur.filter(|d| *d != set && *d != prev);
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    };
+    *PLAYBACK.fallback.lock().unwrap() = fallback;
+    PLAYBACK.write_marker(&prev, &set);
 }
 
 /// Endpoints reshaped for the capture's life: `(id, channels before, rate_hz)`. Each
@@ -883,4 +1098,41 @@ pub fn set_endpoint_format(
             last.unwrap()
         ))
     })?
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The stored device format stands in for the hidden sink: WAVEFORMATEX fields, not the blob.
+    #[test]
+    fn a_stored_device_format_reads_as_a_mix_format() {
+        let mut blob = [0u8; 40];
+        blob[2..4].copy_from_slice(&2u16.to_le_bytes());
+        blob[4..8].copy_from_slice(&48_000u32.to_le_bytes());
+        blob[14..16].copy_from_slice(&16u16.to_le_bytes());
+        assert_eq!(
+            device_format(&blob),
+            Some(MixFormat {
+                rate_hz: 48_000,
+                channels: 2,
+                bits: 16
+            })
+        );
+        assert_eq!(device_format(&blob[..12]), None);
+    }
+
+    /// Two-line markers from older hosts still parse; the fallback line is optional.
+    #[test]
+    fn a_marker_carries_an_optional_fallback() {
+        assert_eq!(
+            parse_marker("prev\nset"),
+            Some(("prev".into(), "set".into(), None))
+        );
+        assert_eq!(
+            parse_marker("prev\nset\nfb\n"),
+            Some(("prev".into(), "set".into(), Some("fb".into())))
+        );
+        assert_eq!(parse_marker("prev"), None);
+    }
 }

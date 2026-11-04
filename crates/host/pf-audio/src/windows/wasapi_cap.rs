@@ -212,8 +212,8 @@ impl LiveCapture {
 
 impl Drop for LiveCapture {
     /// Last capture out: voice apps back first, then both parked defaults (no-op if never
-    /// parked, or if the operator moved them), then the sink's speaker layout. Held across the
-    /// restore so a capture starting now parks after it, not before.
+    /// parked, or if the operator moved them), the sink's speaker layout, and the sink hides.
+    /// Held across the restore so a capture starting now parks after it, not before.
     fn drop(&mut self) {
         let mut live = live_captures();
         *live -= 1;
@@ -222,6 +222,7 @@ impl Drop for LiveCapture {
             audio_control::restore_default_playback();
             audio_control::restore_default_recording();
             audio_control::restore_endpoint_channels();
+            audio_control::release_idle_sink();
         }
     }
 }
