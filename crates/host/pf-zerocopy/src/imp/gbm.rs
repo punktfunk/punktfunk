@@ -3,7 +3,7 @@
 
 use anyhow::{bail, Result};
 use std::ffi::c_void;
-use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+use std::os::fd::{AsFd, AsRawFd, BorrowedFd, FromRawFd, OwnedFd};
 use std::rc::Rc;
 
 #[link(name = "gbm")]
@@ -43,7 +43,7 @@ pub const DRM_FORMAT_MOD_INVALID: u64 = 0x00ff_ffff_ffff_ffff;
 /// the node. Not `Send`: an owner that moves it across threads states why that is sound.
 pub struct GbmDevice {
     raw: *mut c_void,
-    _node: OwnedFd,
+    node: OwnedFd,
 }
 
 impl GbmDevice {
@@ -51,25 +51,30 @@ impl GbmDevice {
     pub fn open(node: impl Into<OwnedFd>) -> Result<GbmDevice> {
         let node = node.into();
         // SAFETY: `gbm_create_device` takes the fd by value and returns a device or null
-        // (checked). The device borrows the fd, which `_node` keeps open until after
+        // (checked). The device borrows the fd, which `node` keeps open until after
         // `gbm_device_destroy` in `Drop`.
         let raw = unsafe { gbm_create_device(node.as_raw_fd()) };
         if raw.is_null() {
             bail!("gbm_create_device");
         }
-        Ok(GbmDevice { raw, _node: node })
+        Ok(GbmDevice { raw, node })
     }
 
     /// The `gbm_device*`, for EGL's GBM platform display. Valid while `self` lives.
     pub fn as_ptr(&self) -> *mut c_void {
         self.raw
     }
+
+    /// The render node the device sits on, for requests that name this GPU's buffers.
+    pub fn node(&self) -> BorrowedFd<'_> {
+        self.node.as_fd()
+    }
 }
 
 impl Drop for GbmDevice {
     fn drop(&mut self) {
         // SAFETY: `raw` is the non-null device from `gbm_create_device`, owned here and
-        // destroyed once, before `_node` closes. Every bo on it holds an `Rc` to this device,
+        // destroyed once, before `node` closes. Every bo on it holds an `Rc` to this device,
         // so none outlives it.
         unsafe { gbm_device_destroy(self.raw) };
     }

@@ -183,6 +183,7 @@ Env-only additions to the **Game Mode** rows above. See [gamescope](/docs/gamesc
 | `PUNKTFUNK_OH264_GOP` | frames (default fps × 600) | Software encoder keyframe interval; `0` lets the encoder decide. |
 | `PUNKTFUNK_NVENC_RAW` | `1` · `0` | NVIDIA on Linux: convert the captured buffer straight into NVENC's input, on by default. `0` uses the copy-and-blend path. |
 | `PUNKTFUNK_NVENC_DIRECT` | `1` · `0` | NVIDIA on Linux: NVENC encodes a LINEAR captured buffer where it lies, with no copy, on by default. `0` copies it into NVENC's input first. |
+| `PUNKTFUNK_NVENC_RM_IMPORT` | `1` · `0` | NVIDIA on Linux: the in-place encode maps a captured buffer through the memory object the NVIDIA driver holds behind it, on by default. `0` maps it through EGL instead. |
 | `PUNKTFUNK_VULKAN_DIRECT_PLANES` | `1` · `0` | Vulkan Video on Linux: write the converted picture straight into the encoder where the driver allows, on by default. `0` keeps the extra copy. |
 
 ## Gamepads
