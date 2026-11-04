@@ -52,7 +52,9 @@ that's the walkthrough to hand a user. Packager-side facts:
   `TOKEN=… bash packaging/bazzite/publish-sysext-feed.sh --seal f<ver>[-canary]`.
 - The image embeds `ID=fedora` + `VERSION_ID` (matched through Bazzite's `ID_LIKE`), so after a
   major rebase the old image is refused instead of merging soname-broken binaries; feeds exist
-  per Fedora major, from the same CI matrix as the RPM groups.
+  per Fedora major, from the same CI matrix as the RPM groups. `post-install` keeps the script at
+  `/etc/punktfunk/punktfunk-sysext` with an enabled `punktfunk-sysext-rebase.service`, which runs
+  `update` at boot while the image file exists and no marker is merged.
 - SELinux labels are baked into the image at build time (squashfs pseudo-xattrs computed from the
   targeted policy) — without them udev couldn't read the gamepad rule under enforcing. Validated
   live on Bazzite 43.

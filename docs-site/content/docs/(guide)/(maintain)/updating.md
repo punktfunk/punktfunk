@@ -84,8 +84,10 @@ A host left running on a replaced binary fails every new KDE desktop session wit
   sudo punktfunk-sysext install --from-file ~/punktfunk-known-good.raw   # to go back
   ```
 
-- After a Bazzite major rebase the old image refuses to load, and `punktfunk-sysext` goes with it.
-  Download the script again and update once to fetch the image for the new base:
+- After a Bazzite major rebase the old image refuses to load. A unit the install left in `/etc`
+  fetches the image for the new base once the network is up, so the host is back a minute or two
+  after the first boot. A host last updated before 0.47.0 has no such unit yet: download the
+  script again and update once:
 
   ```sh
   curl -fsSLO https://git.unom.io/unom/punktfunk/raw/branch/main/packaging/bazzite/punktfunk-sysext.sh

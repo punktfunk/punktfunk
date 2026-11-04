@@ -64,6 +64,33 @@ if command -v firewall-cmd >/dev/null 2>&1 &&
     echo "  streaming). A browser cannot connect to this host until:  sudo firewall-cmd --reload"
 fi
 
+# A Bazzite sysext pins the Fedora major, so a rebase refuses it, /usr/bin/punktfunk-sysext
+# included. Keep that script in /etc with a unit that fetches the new base's image at boot.
+MARKER=/usr/lib/extension-release.d/extension-release.punktfunk
+if [ -x /usr/bin/punktfunk-sysext ] && grep -qs '^VERSION_ID=' "$MARKER"; then
+    install -Dm0755 /usr/bin/punktfunk-sysext /etc/punktfunk/punktfunk-sysext || true
+    cat > /etc/systemd/system/punktfunk-sysext-rebase.service <<'EOF'
+[Unit]
+Description=Punktfunk host: fetch the sysext for a rebased OS
+ConditionPathExists=/var/lib/extensions/punktfunk.raw
+ConditionPathExists=!/usr/lib/extension-release.d/extension-release.punktfunk
+Wants=network-online.target
+After=network-online.target systemd-sysext.service firewalld.service
+
+[Service]
+Type=oneshot
+ExecStart=/bin/bash /etc/punktfunk/punktfunk-sysext update
+TimeoutStartSec=20min
+Restart=on-failure
+RestartSec=2min
+
+[Install]
+WantedBy=multi-user.target
+EOF
+    systemctl enable punktfunk-sysext-rebase.service >/dev/null 2>&1 ||
+        echo "!! punktfunk-sysext-rebase.service not enabled: after a Bazzite major rebase, run punktfunk-sysext update by hand" >&2
+fi
+
 # A Moonlight-compatible host (Sunshine, Apollo, …) next to this one: the host's own detector
 # prints the warning and exits 1.
 if command -v punktfunk-host >/dev/null 2>&1 &&

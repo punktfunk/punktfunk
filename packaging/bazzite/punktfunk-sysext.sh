@@ -19,7 +19,8 @@
 # (…/punktfunk-sysext/f43/, f43-canary, f44, …), each a SHA256SUMS + SHA256SUMS.asc + versioned
 # .raw files — published by .gitea/workflows/rpm.yml from the same RPMs the (legacy) layering path
 # uses. The image pins ID=fedora + VERSION_ID, so after a major OS rebase the old image is refused
-# (not merged broken) and `punktfunk-sysext update` re-resolves against the new release.
+# (not merged broken); punktfunk-sysext-rebase.service, which the image's post-install leaves in
+# /etc with a copy of this script, then runs `update` against the new release at boot.
 #
 # Trust: SHA256SUMS carries a detached OpenPGP signature (SHA256SUMS.asc) from packages@unom.io —
 # the same key that signs our RPMs — and this script verifies it before believing a word of the
@@ -43,6 +44,9 @@ IMG="$EXT_DIR/punktfunk.raw"
 SIDECAR="$EXT_DIR/.punktfunk.version"
 FLOOR_FILE="$EXT_DIR/.punktfunk.serial-floor"
 MARKER=/usr/lib/extension-release.d/extension-release.punktfunk
+# Outside /usr, so they outlive a refused image: the script copy the rebase unit runs, and the unit.
+KEEP=/etc/punktfunk/punktfunk-sysext
+REBASE_UNIT=/etc/systemd/system/punktfunk-sysext-rebase.service
 ETC_SRC=/usr/share/punktfunk/etc
 PF_TMP="$(mktemp -d)"; trap 'rm -rf "$PF_TMP"' EXIT
 
@@ -102,6 +106,10 @@ raise_serial_floor() {
     && mv -f "$FLOOR_FILE.new" "$FLOOR_FILE" 2>/dev/null || :
 }
 
+# curl that gives up on a stall: a connection that raced the firewall at boot otherwise sits
+# established forever, and the rebase unit with it.
+fetch() { curl --connect-timeout 30 --speed-limit 1024 --speed-time 60 "$@"; }
+
 # verify_manifest SUMS SIG -> 0 iff SIG is a good detached signature over SUMS by FEED_KEY.
 #   A throwaway keyring holding exactly our one key, so "good signature" and "signed by us" are the
 #   same statement — any other signer comes back NO_PUBKEY, and gpg exits non-zero.
@@ -125,14 +133,14 @@ fetch_manifest() {
   local feed sums sig want got serial floor
   feed="$(feed_url)"
   sums="$PF_TMP/SHA256SUMS"; sig="$PF_TMP/SHA256SUMS.asc"
-  curl -fsSL -o "$sums" "$feed/SHA256SUMS" || { echo "cannot reach the feed $feed" >&2; return 1; }
+  fetch -fsSL -o "$sums" "$feed/SHA256SUMS" || { echo "cannot reach the feed $feed" >&2; return 1; }
   if [ "${PUNKTFUNK_SYSEXT_ALLOW_UNSIGNED:-0}" = 1 ]; then
     echo "!! PUNKTFUNK_SYSEXT_ALLOW_UNSIGNED=1 — the feed manifest is NOT being verified." >&2
     return 0
   fi
   # curl's own "404"/"could not open file" is noise here — a missing signature is an expected
   # state with a much better explanation below, so swallow it and say the useful thing instead.
-  if ! curl -fsSL -o "$sig" "$feed/SHA256SUMS.asc" 2>/dev/null; then
+  if ! fetch -fsSL -o "$sig" "$feed/SHA256SUMS.asc" 2>/dev/null; then
     echo "!! the feed $feed has no SHA256SUMS.asc — refusing to install from an unsigned feed." >&2
     echo "!! (a feed published before signing existed; it is sealed on the next publish. To install" >&2
     echo "!!  from it anyway, knowing the images are unauthenticated: PUNKTFUNK_SYSEXT_ALLOW_UNSIGNED=1)" >&2
@@ -223,6 +231,16 @@ post_merge() {
   # polkitd keeps the rules it read at boot and misses a merge swapping /usr under it, so a rule
   # an update adds (the door switch's) refuses until reboot. Restarting it rereads them.
   systemctl try-restart polkit.service 2>/dev/null || :
+  # A firewalld that started while the image was refused found no punktfunk service and dropped
+  # the user's whole zone config for stock; it then reports its state as failed. Reloading once
+  # the services are back restores what the user opened.
+  local fw_zone fw_svc
+  fw_zone="$(grep -ls 'service name="punktfunk-' /etc/firewalld/zones/*.xml 2>/dev/null | head -n1 || :)"
+  fw_svc="$(grep -ho 'service name="punktfunk-[a-z]*"' "$fw_zone" 2>/dev/null | head -n1 | cut -d'"' -f2 || :)"
+  if [ -n "$fw_svc" ] && systemctl is-active -q firewalld.service 2>/dev/null \
+     && ! firewall-cmd --zone="$(basename "$fw_zone" .xml)" --query-service="$fw_svc" >/dev/null 2>&1; then
+    firewall-cmd --reload >/dev/null 2>&1 || :
+  fi
   # vhci-hcd: the usbip transport that makes the virtual Steam Deck pad a real USB device Steam
   # Input adopts. Without it the pad falls back to plain UHID hid-steam, which Steam Input won't
   # promote (Interface: -1) — so on a host in Game Mode the controller never appears and you can't
@@ -288,7 +306,7 @@ do_install() {
   else
     ver="$1"
     echo "downloading punktfunk $ver ($(channel), fedora $(os_version_id))…"
-    curl -fL --progress-bar -o "$tmp" "$(feed_url)/$2"
+    fetch -fL --progress-bar -o "$tmp" "$(feed_url)/$2"
     echo "$3  $tmp" | sha256sum -c --quiet
   fi
   mv -f "$tmp" "$IMG"          # marker inside is extension-release.punktfunk — name must match
@@ -342,9 +360,9 @@ EOF
 }
 
 # A console left running after the merge serves the old build's asset names, which /usr no longer has.
-# The door's units restart as the RPM's do. SUDO_USER is the person who ran this. The in-console
-# updater runs it from a root unit without one and restarts all three itself once the helper returns.
-# try-restart leaves an opted-out runner off.
+# SUDO_USER is the person who ran this. Without one a root unit did: the console updater, which
+# restarts all three itself once the helper returns, or the rebase unit at boot, whose user managers
+# came up before the merge and never loaded the units. try-restart leaves an opted-out runner off.
 restart_user_units() {
   systemctl --no-block try-restart punktfunk-seats.service punktfunk-door.service \
     punktfunk-web-door.service 2>/dev/null || :
@@ -353,6 +371,14 @@ restart_user_units() {
     systemctl --user -M "$SUDO_USER@" try-restart punktfunk-scripting.service 2>/dev/null || true
     echo "restarted punktfunk-web, punktfunk-host and the plugin runner for $SUDO_USER."
   else
+    local u s
+    for u in $(loginctl list-users --no-legend 2>/dev/null | awk '{print $2}'); do
+      systemctl --user -M "$u@" daemon-reload 2>/dev/null || continue
+      for s in punktfunk-web.service punktfunk-host.service punktfunk-scripting.service; do
+        systemctl --user -M "$u@" is-enabled -q "$s" 2>/dev/null \
+          && systemctl --user -M "$u@" --no-block start "$s" 2>/dev/null || :
+      done
+    done
     echo "restart the console, host and plugin runner to pick up the new build:"
     echo "    systemctl --user restart punktfunk-web punktfunk-host"
     echo "    systemctl --user try-restart punktfunk-scripting"
@@ -439,6 +465,8 @@ cmd_remove() {
   rm -f /etc/xdg/autostart/io.unom.Punktfunk.Tray.desktop
   # $FLOOR_FILE deliberately survives: it is anti-rollback state, not installation state, and a
   # remove/re-install cycle is the obvious way to hand a box a replayed manifest it already refused.
+  systemctl disable --now "$(basename "$REBASE_UNIT")" >/dev/null 2>&1 || :
+  rm -f "$REBASE_UNIT" "$KEEP"; rmdir /etc/punktfunk 2>/dev/null || :
   rm -f "$IMG" "$SIDECAR" "$CONF"
   systemd-sysext refresh 2>/dev/null || :
   echo "punktfunk sysext removed (user config in ~/.config/punktfunk is untouched)."
