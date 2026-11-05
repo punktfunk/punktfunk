@@ -103,7 +103,7 @@ A host left running on a replaced binary fails every new KDE desktop session wit
 
 Turn off **Check for updates** under **Host → System** (`PUNKTFUNK_UPDATE_CHECK=0` in
 `host.env`). To keep the check but drop the button, turn off **Console updates** under
-**Show advanced** (`PUNKTFUNK_UPDATE_APPLY=0`). The check contacts `git.unom.io` and nothing else.
+**Show advanced** (`PUNKTFUNK_UPDATE_APPLY=0`). The check contacts `git.unom.io`, which hands the file over to Cloudflare R2.
 
 ## Troubleshooting
 
