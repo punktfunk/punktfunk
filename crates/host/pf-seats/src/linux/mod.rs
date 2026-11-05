@@ -548,11 +548,15 @@ impl LinuxBackend {
         Err(failure)
     }
 
-    /// Removes what a seat's row made. The owner's account and home are theirs and stay. The
-    /// seat user's manager drop-in goes before the account, while its uid can still be read.
+    /// Removes what a seat's row made, its folders on the owner's library drives included. The
+    /// owner's account and home are theirs and stay. The seat user's manager drop-in goes before
+    /// the account, while its uid can still be read.
     fn remove_files(&self, account: &str, id: &SeatId, owner: bool) -> Result<(), BackendError> {
         let mut reload = false;
         if !owner {
+            if let Some(source) = self.steam_source() {
+                libraries::forget(id, &source.root);
+            }
             if let Ok(Some(user)) = accounts::lookup(account) {
                 let manager = session::manager_dropin(user.uid);
                 reload |= std::fs::remove_file(&manager).is_ok();
