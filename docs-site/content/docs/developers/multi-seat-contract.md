@@ -402,8 +402,9 @@ system-range user, `pf-seat-<n>`, with a logind session of its own, a headless c
   a seat can't replace `steamapps`. Each seat start checks the folders and replaces a link or
   file a seat left where a bind target belongs. Each seat's own `compatdata`, `shadercache` and
   `downloading` under `seats/<id>/` are bind-mounted over the shared ones, so prefixes never
-  cross. Everything that needs the binds must descend from the unit; a process started through
-  `systemd-run --user` or a user service doesn't see them. The daemon repairs the ACL mask under
+  cross. The seat user's own `user@<uid>.service` gets the unit's binds in a drop-in of its own,
+  without the mount commands, so what Plasma launches, autostarts or D-Bus activates there sees
+  the same view as the unit. The daemon repairs the ACL mask under
   `games/` after a seat stops and every 10 minutes, because a file created with mode `0644` is
   otherwise read-only to the other seats. A mask a seat closed on purpose, as with `chmod 600`,
   stays closed. A seat other than the owner's sees an empty `/run/media`: Steam in Game Mode

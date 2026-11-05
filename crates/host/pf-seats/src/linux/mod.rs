@@ -548,9 +548,18 @@ impl LinuxBackend {
         Err(failure)
     }
 
-    /// Removes what a seat's row made. The owner's account and home are theirs and stay.
+    /// Removes what a seat's row made. The owner's account and home are theirs and stay. The
+    /// seat user's manager drop-in goes before the account, while its uid can still be read.
     fn remove_files(&self, account: &str, id: &SeatId, owner: bool) -> Result<(), BackendError> {
+        let mut reload = false;
         if !owner {
+            if let Ok(Some(user)) = accounts::lookup(account) {
+                let manager = session::manager_dropin(user.uid);
+                reload |= std::fs::remove_file(&manager).is_ok();
+                if let Some(dir) = manager.parent() {
+                    let _ = std::fs::remove_dir(dir);
+                }
+            }
             accounts::delete(account, id)?;
         }
         shared::remove_seat_dirs(&self.inner.state, id)?;
@@ -558,6 +567,9 @@ impl LinuxBackend {
         let dropin = session::dropin_dir(account);
         if dropin.exists() {
             let _ = std::fs::remove_dir_all(dropin);
+            reload = true;
+        }
+        if reload {
             session::daemon_reload()?;
         }
         Ok(())
@@ -748,7 +760,7 @@ impl PlatformBackend for LinuxBackend {
                 &passwd.home,
                 state,
                 &token,
-                None,
+                Some((passwd.uid, passwd.gid)),
                 shares.as_ref(),
                 &browser,
             )?;
