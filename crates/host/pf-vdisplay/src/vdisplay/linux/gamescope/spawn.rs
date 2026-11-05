@@ -14,6 +14,12 @@ pub(super) fn spawn_log_path(inst: u64) -> std::path::PathBuf {
     std::path::Path::new(&base).join(format!("punktfunk-gamescope-{inst}.log"))
 }
 
+/// This spawn's runtime dir for a nested Steam ([`steam_runtime_dir_script`]), beside its log.
+pub(super) fn steam_runtime_dir(inst: u64) -> std::path::PathBuf {
+    let base = crate::session::runtime_dir();
+    std::path::Path::new(&base).join(format!("punktfunk-steam-{inst}"))
+}
+
 /// Nested refresh: client's rate, capped by `PUNKTFUNK_MAX_FPS` (off by default). This is the
 /// game's clamp, not the session — encode still repeats the held frame at the client's rate.
 pub(super) fn game_hz(session_hz: u32) -> u32 {
@@ -211,18 +217,20 @@ pub(super) fn resolved_spawn_app(cmd: Option<&str>) -> Option<String> {
 
 /// `None` app is `sleep infinity`. The wrapper relays `LIBEI_SOCKET`, applies the
 /// nested environment, and runs the launch value as the shell command its source promises.
-/// The WSI layer stays out of gamescope's own Vulkan process. Only a flatpak sees gamescope's
-/// Wayland socket ([`shape_flatpak_command`], or the shim around a nested Steam); everything
-/// else gets [`GDK_X11`]. Gamescope and the game write to `log`, kept under [`LOG_CAP`].
+/// The WSI layer stays out of gamescope's own Vulkan process. Only a direct flatpak launch sees
+/// gamescope's Wayland socket ([`shape_flatpak_command`]); a nested Steam sees no Wayland at all
+/// ([`steam_runtime_dir_script`]), and everything else gets [`GDK_X11`]. Gamescope and the game
+/// write to [`spawn_log_path`] of `inst`, kept under [`LOG_CAP`].
 pub(super) fn spawn(
     w: u32,
     h: u32,
     hz: u32,
     app: Option<String>,
-    log: &std::path::Path,
+    inst: u64,
     hdr: bool,
     iso: Option<&crate::SessionIsolation>,
 ) -> Result<Child> {
+    let log = spawn_log_path(inst);
     // Real app vs `sleep infinity` keep-alive: scopes the game-only cursor-grab flag below.
     let game_launch = app.is_some();
     let app = app.unwrap_or_else(|| "sleep infinity".to_string());
@@ -272,12 +280,13 @@ pub(super) fn spawn(
         nested_env.push((GDK_X11.0, GDK_X11.1.to_string()));
     }
     let app = flatpak.unwrap_or(app);
-    let shim = if is_steam_launch(&app) {
-        sandbox::flatpak_shim()
-    } else {
-        Vec::new()
-    };
-    let script = nested_wrapper_script(&relay, splash_exe.is_some(), &nested_env, &shim);
+    let steam_dir = is_steam_launch(&app).then(|| steam_runtime_dir(inst));
+    let script = nested_wrapper_script(
+        &relay,
+        splash_exe.is_some(),
+        &nested_env,
+        steam_dir.as_deref(),
+    );
     cmd.args(["sh", "-c", &script, "sh"]);
     if let Some(exe) = &splash_exe {
         cmd.arg(exe);
@@ -311,7 +320,7 @@ pub(super) fn spawn(
     let logf = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
-        .open(log)
+        .open(&log)
         .and_then(|f| f.set_len(0).map(|()| f));
     if let Ok(logf) = logf {
         if let Ok(log2) = logf.try_clone() {
@@ -333,7 +342,7 @@ pub(super) fn spawn(
     let child = cmd
         .spawn()
         .context("spawn gamescope (is it installed? `apt install gamescope`)")?;
-    cap_log_while_it_exists(log.to_path_buf());
+    cap_log_while_it_exists(log);
     if let Some(uri) = deferred {
         hand_launch_to_steam_when_up(uri, child.id());
     }
@@ -372,13 +381,14 @@ fn cap_log_while_it_exists(log: std::path::PathBuf) {
 }
 
 /// Builds the nested wrapper. Its first remaining argument is one shell command,
-/// kept intact until the inner shell parses quoting and operators. `shim` is the flatpak shim's
-/// `bwrap` prefix ([`sandbox::flatpak_shim`]); empty runs the command as the session's own child.
+/// kept intact until the inner shell parses quoting and operators. `steam_dir` gives the launch
+/// alone a runtime dir without Wayland ([`steam_runtime_dir_script`]); the splash and the relay
+/// write keep the session's.
 fn nested_wrapper_script(
     relay: &std::path::Path,
     with_splash: bool,
     nested_env: &[(&'static str, String)],
-    shim: &[String],
+    steam_dir: Option<&std::path::Path>,
 ) -> String {
     let env_kv = nested_env
         .iter()
@@ -386,16 +396,8 @@ fn nested_wrapper_script(
         .collect::<Vec<_>>()
         .join(" ");
     let relay = shell_word(&relay.to_string_lossy());
-    // Only the launch runs behind the shim. The splash and the relay write are the session's.
-    let prefix = shim
-        .iter()
-        .map(|a| shell_word(a))
-        .collect::<Vec<_>>()
-        .join(" ");
-    let mut run = String::from("exec");
-    if !prefix.is_empty() {
-        run.push_str(&format!(" {prefix}"));
-    }
+    let mut run = steam_dir.map(steam_runtime_dir_script).unwrap_or_default();
+    run.push_str("exec");
     if !env_kv.is_empty() {
         run.push_str(&format!(" env {env_kv}"));
     }
@@ -412,6 +414,29 @@ fn nested_wrapper_script(
     }
 }
 
+/// Shell that points a nested Steam's `XDG_RUNTIME_DIR` at `dir`: links to every entry of the
+/// real one except `wayland-*`. Steam, and the flatpaks and pressure-vessel games it starts, see
+/// no Wayland, as in SteamOS Game Mode, and nothing leaves the box's namespaces, so setuid
+/// helpers such as an AppImage's `fusermount` still work.
+///
+/// flatpak mounts onto `.dbus-proxy`, so that one stays real. `.flatpak` and `app` exist first so
+/// flatpak's instance records land where its portals read them. A `discord-ipc-N` link waits for
+/// a Discord that starts later. If `dir` cannot be made, Steam keeps the real one.
+fn steam_runtime_dir_script(dir: &std::path::Path) -> String {
+    let dir = shell_word(&dir.to_string_lossy());
+    format!(
+        "real=$XDG_RUNTIME_DIR; rt={dir}; rm -rf \"$rt\"; \
+         if [ -d \"$real\" ] && mkdir -m 0700 \"$rt\"; then \
+         mkdir -p \"$real/.flatpak\" \"$real/app\"; \
+         for e in \"$real\"/* \"$real\"/.[!.]*; do n=${{e##*/}}; \
+         case $n in wayland-*|.dbus-proxy|punktfunk-steam-*) continue;; esac; \
+         if [ -e \"$e\" ] || [ -L \"$e\" ]; then ln -s \"$e\" \"$rt/$n\"; fi; done; \
+         for i in 0 1 2 3 4 5 6 7 8 9; do l=\"$rt/discord-ipc-$i\"; \
+         [ -e \"$l\" ] || [ -L \"$l\" ] || ln -s \"$real/discord-ipc-$i\" \"$l\"; done; \
+         export XDG_RUNTIME_DIR=\"$rt\"; fi; "
+    )
+}
+
 /// Quotes one POSIX shell word, including embedded apostrophes.
 pub(super) fn shell_word(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\"'\"'"))
@@ -425,6 +450,8 @@ pub(super) struct GamescopeProc {
     pub(super) relay: std::path::PathBuf,
     /// The box's home when this spawn nests its Steam, so teardown asks that Steam to quit.
     pub(super) steam_home: Option<std::path::PathBuf>,
+    /// That Steam's [`steam_runtime_dir`], removed at teardown.
+    pub(super) steam_dir: Option<std::path::PathBuf>,
     pub(super) started: Instant,
 }
 
@@ -478,6 +505,9 @@ impl Drop for GamescopeProc {
         let _ = std::fs::remove_file(&self.relay);
         // Drop this spawn's per-instance log so `$XDG_RUNTIME_DIR` doesn't accumulate them.
         let _ = std::fs::remove_file(&self.log);
+        if let Some(dir) = &self.steam_dir {
+            let _ = std::fs::remove_dir_all(dir);
+        }
     }
 }
 
@@ -611,51 +641,50 @@ mod tests {
     fn nested_wrapper_script_shapes() {
         let relay = std::path::Path::new("/run/user/1000/pf-ei");
         // Plain: relay + shell command, no splash machinery.
-        let plain = nested_wrapper_script(relay, false, &[], &[]);
+        let plain = nested_wrapper_script(relay, false, &[], None);
         assert!(plain.contains("/run/user/1000/pf-ei"));
         assert!(plain.ends_with("exec sh -c \"$1\""));
         assert!(!plain.contains("gamescope-splash"));
         // Splash shifts its executable, leaving the command in `$1`.
-        let splash = nested_wrapper_script(relay, true, &[], &[]);
+        let splash = nested_wrapper_script(relay, true, &[], None);
         assert!(splash.contains("\"$1\" gamescope-splash &"));
         assert!(splash.contains("shift; exec sh -c \"$1\""));
         let wsi = nested_wrapper_script(
             relay,
             false,
             &[("PUNKTFUNK_GAMESCOPE_WSI", "1".to_string())],
-            &[],
+            None,
         );
         assert!(wsi.contains("exec env 'PUNKTFUNK_GAMESCOPE_WSI=1' sh -c \"$1\""));
         assert_eq!(shell_word("a b'c;$HOME"), "'a b'\"'\"'c;$HOME'");
 
-        // The shim wraps the launch alone: the relay write and the splash are the session's, and
-        // the nested env is applied inside it.
         let env = [("GDK_BACKEND", "x11".to_string())];
-        let shimmed = nested_wrapper_script(
-            relay,
-            true,
-            &env,
-            &[
-                "/usr/bin/bwrap".to_string(),
-                "--die-with-parent".to_string(),
-            ],
-        );
-        assert!(shimmed.contains("env 'GDK_BACKEND=x11' \"$1\" gamescope-splash &"));
-        assert!(shimmed.contains(
-            "shift; exec '/usr/bin/bwrap' '--die-with-parent' env 'GDK_BACKEND=x11' \
-             sh -c \"$1\""
-        ));
         assert_eq!(
-            nested_wrapper_script(relay, true, &env, &[]),
+            nested_wrapper_script(relay, true, &env, None),
             "printf %s \"$LIBEI_SOCKET\" > '/run/user/1000/pf-ei'; \
              env 'GDK_BACKEND=x11' \"$1\" gamescope-splash & \
              shift; exec env 'GDK_BACKEND=x11' sh -c \"$1\""
         );
+        // Steam's runtime dir is the launch's alone: the splash starts before it is exported.
+        let steam = nested_wrapper_script(
+            relay,
+            true,
+            &env,
+            Some(std::path::Path::new("/run/user/1000/punktfunk-steam-7")),
+        );
+        let (session, launch) = steam.split_once("shift; ").unwrap();
+        assert!(session.ends_with("env 'GDK_BACKEND=x11' \"$1\" gamescope-splash & "));
+        assert!(
+            launch.starts_with("real=$XDG_RUNTIME_DIR; rt='/run/user/1000/punktfunk-steam-7'; ")
+        );
+        assert!(launch.ends_with(
+            "export XDG_RUNTIME_DIR=\"$rt\"; fi; exec env 'GDK_BACKEND=x11' sh -c \"$1\""
+        ));
 
         let out = std::process::Command::new("sh")
             .args([
                 "-c",
-                &nested_wrapper_script(std::path::Path::new("/dev/null"), false, &[], &[]),
+                &nested_wrapper_script(std::path::Path::new("/dev/null"), false, &[], None),
                 "sh",
             ])
             .arg("printf '%s' 'quoted command stays whole'")
@@ -664,25 +693,82 @@ mod tests {
             .unwrap();
         assert!(out.status.success());
         assert_eq!(out.stdout, b"quoted command stays whole");
+    }
 
-        // The same through a shim — `env` stands in for bwrap, which a test box need not have.
-        let out = std::process::Command::new("sh")
-            .args([
-                "-c",
-                &nested_wrapper_script(
-                    std::path::Path::new("/dev/null"),
-                    false,
-                    &[],
-                    &["env".into(), "-u".into(), "PF_UNSET".into()],
-                ),
-                "sh",
-            ])
-            .arg("printf '%s' 'quoted command stays whole'")
-            .env("LIBEI_SOCKET", "test")
-            .output()
-            .unwrap();
+    /// The nested Steam's runtime dir, built by the real wrapper over a stand-in runtime dir.
+    #[test]
+    fn steam_runtime_dir_hides_wayland_and_links_the_rest() {
+        let real = std::env::temp_dir().join(format!("pf-steam-rt-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&real);
+        for d in ["pulse", ".dbus-proxy", "punktfunk-steam-1"] {
+            std::fs::create_dir_all(real.join(d)).unwrap();
+        }
+        for f in [
+            "wayland-0",
+            "wayland-0.lock",
+            "pipewire-0",
+            "bus",
+            ".hidden",
+            "gamescope-0",
+        ] {
+            std::fs::write(real.join(f), "").unwrap();
+        }
+        let dir = real.join("punktfunk-steam-2");
+        let run = |runtime: &std::path::Path| {
+            let script =
+                nested_wrapper_script(std::path::Path::new("/dev/null"), false, &[], Some(&dir));
+            std::process::Command::new("sh")
+                .args(["-c", &script, "sh"])
+                .arg("printf '%s\\n' \"$XDG_RUNTIME_DIR\"; ls -A \"$XDG_RUNTIME_DIR\" || true")
+                .env("LIBEI_SOCKET", "test")
+                .env("XDG_RUNTIME_DIR", runtime)
+                .output()
+                .unwrap()
+        };
+        let out = run(&real);
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let text = String::from_utf8_lossy(&out.stdout).into_owned();
+        let mut lines = text.lines();
+        assert_eq!(lines.next(), Some(dir.to_str().unwrap()));
+        let names: std::collections::BTreeSet<&str> = lines.collect();
+        for kept in [
+            "pulse",
+            "pipewire-0",
+            "bus",
+            ".hidden",
+            "gamescope-0",
+            ".flatpak",
+            "app",
+        ] {
+            assert!(names.contains(kept), "{kept} missing from {names:?}");
+            let target = std::fs::read_link(dir.join(kept)).unwrap();
+            assert_eq!(target, real.join(kept));
+        }
+        for hidden in [
+            "wayland-0",
+            "wayland-0.lock",
+            ".dbus-proxy",
+            "punktfunk-steam-1",
+        ] {
+            assert!(!names.contains(hidden), "{hidden} leaked into {names:?}");
+        }
+        // Waits for Discord: dangling until it creates its socket in the real dir.
+        assert_eq!(
+            std::fs::read_link(dir.join("discord-ipc-0")).unwrap(),
+            real.join("discord-ipc-0")
+        );
+        assert!(real.join(".flatpak").is_dir() && real.join("app").is_dir());
+
+        // A runtime dir that is not there leaves Steam's alone and still runs the launch.
+        let gone = real.join("missing");
+        let out = run(&gone);
         assert!(out.status.success());
-        assert_eq!(out.stdout, b"quoted command stays whole");
+        assert!(String::from_utf8_lossy(&out.stdout).starts_with(gone.to_str().unwrap()));
+        std::fs::remove_dir_all(&real).unwrap();
     }
 
     #[test]
