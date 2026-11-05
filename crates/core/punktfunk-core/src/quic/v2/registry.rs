@@ -264,6 +264,9 @@ pub const FEATURE_STUDIO_RANGE_HDR: u32 = 41;
 /// Client: it can send `ProfileUnlock`, because its embedder asks the player for a profile's
 /// password. A host refuses a locked profile to a client without it with a sentence to update.
 pub const FEATURE_PROFILE_UNLOCK: u32 = 42;
+/// Client, on one dial: a `ProfileUnlock` follows this `ClientHello` on the control stream
+/// ([`super::hello::ClientHello::unlock_follows`]). A host never sets it.
+pub const FEATURE_UNLOCK_FOLLOWS: u32 = 43;
 
 #[cfg(test)]
 mod tests {
@@ -306,6 +309,7 @@ mod tests {
         ("FEATURE_STUDIO_RANGE", FEATURE_STUDIO_RANGE),
         ("FEATURE_STUDIO_RANGE_HDR", FEATURE_STUDIO_RANGE_HDR),
         ("FEATURE_PROFILE_UNLOCK", FEATURE_PROFILE_UNLOCK),
+        ("FEATURE_UNLOCK_FOLLOWS", FEATURE_UNLOCK_FOLLOWS),
     ];
 
     /// Every close and stop code either wire uses: v1's live on, and v2 adds its own.

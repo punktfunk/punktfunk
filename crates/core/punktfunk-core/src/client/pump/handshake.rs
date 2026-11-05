@@ -118,7 +118,8 @@ fn follow(
     Ok(())
 }
 
-/// One connection's handshake. `unlock` follows the `ClientHello` and is wiped once written.
+/// One connection's handshake. `unlock` follows the `ClientHello`, which announces it, and is
+/// wiped once written.
 async fn dial(
     args: &WorkerArgs,
     host: &str,
@@ -272,7 +273,10 @@ async fn dial(
             } else {
                 vec![MediaSuite::Aes128Gcm]
             },
-            features: client_features(p),
+            features: match unlock {
+                Some(_) => client_features(p).with(registry::FEATURE_UNLOCK_FOLLOWS),
+                None => client_features(p),
+            },
             profile: p.profile.clone(),
             access_only: false,
             screens: p.screens.clone(),
@@ -541,90 +545,115 @@ mod tests {
         assert!(client_features(&p).has(FEATURE_PROFILE_UNLOCK));
     }
 
-    /// The first dial sends the unlock right after its hello and offers the feature; the dial
-    /// a `Redirect` sends carries none. The seat's `ProfileLocked` close reaches the caller with
-    /// its sentence.
+    fn mode() -> Mode {
+        Mode {
+            width: 1280,
+            height: 720,
+            refresh_hz: 60,
+        }
+    }
+
+    fn password() -> ProfileUnlock {
+        use crate::quic::v2::msg::{ENROLL_NONE, UNLOCK_PASSWORD};
+        let secret = zeroize::Zeroizing::new(b" open sesame ".to_vec());
+        ProfileUnlock::new(UNLOCK_PASSWORD, secret, false, ENROLL_NONE, vec![]).unwrap()
+    }
+
+    /// Two loopback hosts of one box and its pin: one identity, so the door's pin holds at the
+    /// seat.
+    fn one_box() -> ([quinn::Endpoint; 2], [u8; 32]) {
+        let (cert, key) = endpoint::generate_identity().unwrap();
+        let host = || {
+            let addr = "127.0.0.1:0".parse().unwrap();
+            let alpns = [crate::quic::v2::registry::ALPN];
+            endpoint::server_shared(addr, &cert, &key, Duration::from_secs(10), &alpns)
+                .unwrap()
+                .0
+        };
+        (
+            [host(), host()],
+            endpoint::fingerprint_of_pem(&cert).unwrap(),
+        )
+    }
+
+    /// One dial's control stream and its `ClientHello`, host side.
+    async fn hello(
+        ep: &quinn::Endpoint,
+    ) -> (
+        quinn::Connection,
+        quinn::SendStream,
+        crate::quic::v2::io::FrameReader<quinn::RecvStream>,
+        crate::quic::v2::hello::ClientHello,
+    ) {
+        use crate::quic::v2::io::{read_stream_type, FrameReader};
+        let conn = ep.accept().await.unwrap().await.unwrap();
+        let (tx, mut rx) = conn.accept_bi().await.unwrap();
+        let control = crate::quic::v2::registry::STREAM_CONTROL;
+        assert_eq!(read_stream_type(&mut rx).await.unwrap(), control);
+        let mut r = FrameReader::new(rx);
+        let (ty, body) = r.read_frame().await.unwrap();
+        let h = crate::quic::v2::msg::decode(ty, &body).unwrap();
+        (conn, tx, r, h)
+    }
+
+    /// The first dial announces the unlock in its hello and sends it right after; the dial a
+    /// `Redirect` sends announces and carries none. Both offer the feature. The seat's
+    /// `ProfileLocked` close reaches the caller with its sentence.
     #[test]
     fn the_unlock_rides_the_first_dial_only() {
-        use crate::quic::v2::hello::ClientHello;
-        use crate::quic::v2::io::{read_stream_type, send, FrameReader};
-        use crate::quic::v2::msg::{decode, ENROLL_NONE, UNLOCK_PASSWORD};
-        use crate::quic::v2::registry::{FEATURE_PROFILE_UNLOCK, STREAM_CONTROL};
-
-        async fn hello(
-            ep: &quinn::Endpoint,
-        ) -> (
-            quinn::Connection,
-            quinn::SendStream,
-            FrameReader<quinn::RecvStream>,
-            bool,
-        ) {
-            let conn = ep.accept().await.unwrap().await.unwrap();
-            let (tx, mut rx) = conn.accept_bi().await.unwrap();
-            assert_eq!(read_stream_type(&mut rx).await.unwrap(), STREAM_CONTROL);
-            let mut r = FrameReader::new(rx);
-            let (ty, body) = r.read_frame().await.unwrap();
-            let h = decode::<ClientHello>(ty, &body).unwrap();
-            (conn, tx, r, h.features.has(FEATURE_PROFILE_UNLOCK))
-        }
-
+        use crate::quic::v2::registry::FEATURE_PROFILE_UNLOCK;
+        let soon = |ms| tokio::time::Instant::now() + Duration::from_millis(ms);
         let rt = tokio::runtime::Runtime::new().unwrap();
         let _in_rt = rt.enter();
-        let door = endpoint::server("127.0.0.1:0".parse().unwrap()).unwrap();
-        let seat = endpoint::server("127.0.0.1:0".parse().unwrap()).unwrap();
+        let ([door, seat], pin) = one_box();
         let door_port = door.local_addr().unwrap().port();
         let seat_port = seat.local_addr().unwrap().port();
         let door_side = rt.spawn(async move {
-            let (conn, mut tx, mut r, offered) = hello(&door).await;
-            let (ty, body) = r.read_frame().await.unwrap();
-            let unlock = decode::<ProfileUnlock>(ty, &body).unwrap();
+            let (conn, mut tx, mut r, h) = hello(&door).await;
+            let unlock = r.read_profile_unlock(soon(1000)).await.unwrap();
             let to = Redirect {
                 port: seat_port,
                 ..Redirect::default()
             };
-            send(&mut tx, &to).await.unwrap();
+            crate::quic::v2::io::send(&mut tx, &to).await.unwrap();
             conn.closed().await;
-            (offered, unlock.kind, unlock.secret.to_vec())
+            let offered = h.features.has(FEATURE_PROFILE_UNLOCK);
+            (offered, h.unlock_follows(), unlock.secret.to_vec())
         });
         let seat_side = rt.spawn(async move {
-            let (conn, _tx, mut r, offered) = hello(&seat).await;
-            let more = tokio::time::timeout(Duration::from_millis(300), r.read_frame()).await;
+            let (conn, _tx, mut r, h) = hello(&seat).await;
+            let more = r.read_profile_unlock(soon(300)).await.map(|_| ());
             let locked = crate::reject::PROFILE_LOCKED_CLOSE_CODE;
             conn.close(locked.into(), b"Wrong password. Try again.");
             let _ = tokio::time::timeout(Duration::from_secs(1), seat.wait_idle()).await;
-            (offered, more.is_err())
+            let offered = h.features.has(FEATURE_PROFILE_UNLOCK);
+            (offered, h.unlock_follows(), more)
         });
 
-        let mode = Mode {
-            width: 1280,
-            height: 720,
-            refresh_hz: 60,
-        };
-        let secret = zeroize::Zeroizing::new(b" open sesame ".to_vec());
-        let unlock = ProfileUnlock::new(UNLOCK_PASSWORD, secret, false, ENROLL_NONE, vec![]);
         let params = ConnectParams {
-            unlock: Some(unlock.unwrap()),
-            ..ConnectParams::new("127.0.0.1", door_port, mode, Duration::from_secs(5))
+            unlock: Some(password()),
+            pin: Some(pin),
+            ..ConnectParams::new("127.0.0.1", door_port, mode(), Duration::from_secs(5))
         };
         let got = crate::client::NativeClient::connect(params).map(|_| ());
         let five = Duration::from_secs(5);
-        let (door_offered, kind, secret) = rt
-            .block_on(tokio::time::timeout(five, door_side))
-            .unwrap()
-            .unwrap();
-        let (seat_offered, seat_heard_nothing) = rt
-            .block_on(tokio::time::timeout(five, seat_side))
-            .unwrap()
-            .unwrap();
+        let door_got = rt.block_on(tokio::time::timeout(five, door_side));
+        let (door_offered, door_promised, secret) = door_got.unwrap().unwrap();
+        let seat_got = rt.block_on(tokio::time::timeout(five, seat_side));
+        let (seat_offered, seat_promised, seat_heard) = seat_got.unwrap().unwrap();
         assert!(
             door_offered && seat_offered,
             "an unlock in hand offers the feature"
         );
+        assert!(door_promised, "the first dial's hello announces its unlock");
+        assert_eq!(secret.as_slice(), &b" open sesame "[..]);
+        assert!(!seat_promised, "the redirected dial announced an unlock");
+        let heard = seat_heard.map_err(|e| e.kind());
         assert_eq!(
-            (kind, secret.as_slice()),
-            (UNLOCK_PASSWORD, &b" open sesame "[..])
+            heard,
+            Err(std::io::ErrorKind::TimedOut),
+            "the redirected dial sent one"
         );
-        assert!(seat_heard_nothing, "the redirected dial sent an unlock");
         match got {
             Err(PunktfunkError::Rejected(r, said)) => {
                 assert_eq!(r, crate::reject::RejectReason::ProfileLocked);

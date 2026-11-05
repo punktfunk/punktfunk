@@ -72,6 +72,15 @@ pub struct ClientHello {
     pub screens: Vec<super::msg::Screen>,
 }
 
+impl ClientHello {
+    /// A `ProfileUnlock` follows this hello on the same stream ([`reg::FEATURE_UNLOCK_FOLLOWS`]):
+    /// read it with `FrameReader::read_profile_unlock` before anything else. An older client's
+    /// hello reads `false`.
+    pub fn unlock_follows(&self) -> bool {
+        self.features.has(reg::FEATURE_UNLOCK_FOLLOWS)
+    }
+}
+
 impl V2Message for ClientHello {
     const TYPE: u64 = reg::MSG_CLIENT_HELLO;
 
@@ -661,6 +670,16 @@ mod tests {
         sh.profile = Some("9a3f1c2b7e40".into());
         let back = ServerHello::from_body(&sh.fields().into_body()).unwrap();
         assert_eq!(back.profile.as_deref(), Some("9a3f1c2b7e40"));
+    }
+
+    /// The unlock promise rides the feature bits; a hello without it reads `false`.
+    #[test]
+    fn an_unlock_promise_rides_the_hello() {
+        let mut ch = ClientHello::from_body(&Fields::new().into_body()).unwrap();
+        assert!(!ch.unlock_follows());
+        ch.features = ch.features.with(reg::FEATURE_UNLOCK_FOLLOWS);
+        let back = ClientHello::from_body(&ch.fields().into_body()).unwrap();
+        assert!(back.unlock_follows());
     }
 
     /// What a client adds is left out at its default, and a value this build cannot use reads
