@@ -14,7 +14,7 @@ use aws_lc_rs::rand::SystemRandom;
 use aws_lc_rs::signature::{EcdsaKeyPair, KeyPair as _, ECDSA_P256_SHA256_ASN1_SIGNING};
 use std::collections::BTreeSet;
 use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
-use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::{AtomicU32, AtomicUsize};
 
 /// The machine the fake answers for.
 #[derive(Default)]
@@ -24,6 +24,10 @@ struct Machine {
     starts: AtomicUsize,
     /// What `pam-check` prints.
     verdict: Mutex<&'static str>,
+    /// The uid the account resolves to; `0` when no user has its name.
+    uid: AtomicU32,
+    /// The account's name goes to uid 2000 while `pam-check` runs.
+    moves_during_check: AtomicBool,
 }
 
 impl Machine {
@@ -88,6 +92,10 @@ impl PlatformBackend for Warm {
 
     fn box_fingerprint(&self) -> Result<[u8; 32], BackendError> {
         self.linux.box_fingerprint()
+    }
+
+    fn account_owned(&self, seat: &Seat) -> Result<(), BackendError> {
+        self.linux.account_owned(seat)
     }
 }
 
@@ -159,15 +167,16 @@ fn rig_for(account: &str, uid: u32, getent: Option<Getent>) -> Rig {
 
     let machine = Arc::new(Machine::default());
     machine.verdict("ok");
+    machine.uid.store(uid, Ordering::SeqCst);
     let answers = Arc::clone(&machine);
-    let row = format!(
-        "{account}:x:{uid}:{uid}:Jane:{}:/bin/bash\n",
-        home.display()
-    );
+    let home = home.display().to_string();
     let name = account.to_owned();
     let installed = fake::install(move |program, args| match (program, args) {
         ("getent", _) if getent.is_some() => getent.unwrap()(args),
-        ("getent", ["passwd", who]) if *who == name => (0, row.clone()),
+        ("getent", ["passwd", who]) if *who == name => match answers.uid.load(Ordering::SeqCst) {
+            0 => (2, String::new()),
+            now => (0, format!("{name}:x:{now}:{now}:Jane:{home}:/bin/bash\n")),
+        },
         ("getent", _) => (2, String::new()),
         ("systemctl", ["show", ..]) => {
             let active = answers.active.load(Ordering::SeqCst);
@@ -185,6 +194,9 @@ fn rig_for(account: &str, uid: u32, getent: Option<Getent>) -> Rig {
             format!("Id=7\nName={name}\nSeat=seat0\nClass=user\nRemote=no\nState=active\n"),
         ),
         ("punktfunk-seats", ["pam-check", _]) => {
+            if answers.moves_during_check.load(Ordering::SeqCst) {
+                answers.uid.store(2000, Ordering::SeqCst);
+            }
             (0, format!("{}\n", answers.verdict.lock().unwrap()))
         }
         _ => (0, String::new()),
@@ -331,6 +343,16 @@ impl Rig {
     fn stop(&self) {
         let id = self.seat.id.clone();
         self.ask(Command::Stop { id }).unwrap();
+    }
+
+    /// The account's name resolves to `uid` from now on; `0`: to no user.
+    fn resolves_to(&self, uid: u32) {
+        self.machine.uid.store(uid, Ordering::SeqCst);
+    }
+
+    /// The device list as saved.
+    fn saved(&self) -> Vec<u8> {
+        std::fs::read(devices::path(&self.state(), &self.seat.id)).unwrap()
     }
 }
 
@@ -485,6 +507,74 @@ fn a_person_at_the_machine_is_not_unlocked() {
     assert_eq!(code(&refused), "account_at_desk");
     assert!(rig.devices().is_empty());
     assert!(!rig.machine.active.load(Ordering::SeqCst));
+}
+
+/// A name that resolves to another user, before PAM or while it runs, is not the row's: the
+/// password lets nothing on and starts nothing, and the refusal costs no attempt.
+#[test]
+fn a_password_is_refused_once_the_name_is_another_user() {
+    let rig = rig();
+    rig.resolves_to(2000);
+    for _ in 0..3 {
+        let refused = rig.refused(&device(1), password(false, None));
+        assert_eq!(refused, "account_not_owned");
+    }
+    assert_eq!(rig.pam_calls(), 0, "refused before PAM");
+    rig.resolves_to(1500);
+    rig.machine.moves_during_check.store(true, Ordering::SeqCst);
+    let moved = rig.refused(&device(2), password(true, None));
+    assert_eq!(moved, "account_not_owned", "read again before the grant");
+    assert_eq!((rig.starts(), rig.devices().len()), (0, 0));
+    rig.machine
+        .moves_during_check
+        .store(false, Ordering::SeqCst);
+    rig.resolves_to(1500);
+    rig.unlock(&device(1), password(false, None)).unwrap();
+}
+
+/// A key proof for a row whose name now resolves to another user lets nothing on and starts
+/// nothing; it reaches no PAM check and costs no attempt.
+#[test]
+fn a_key_proof_is_refused_once_the_name_is_another_user() {
+    let rig = rig();
+    let phone = device(1);
+    let (pair, key) = p256();
+    rig.unlock(&phone, password(false, Some(key))).unwrap();
+    rig.stop();
+    let (starts, pam, before) = (rig.starts(), rig.pam_calls(), rig.saved());
+    rig.resolves_to(2000);
+    let challenge = rig.challenge(&phone);
+    let proof = signed(&pair, &challenge, &rig.seat.id, &phone, &box_fp());
+    assert_eq!(rig.refused(&phone, proof), "account_not_owned");
+    assert_eq!((rig.starts(), rig.pam_calls()), (starts, pam));
+    assert_eq!(rig.saved(), before, "nothing granted");
+    assert!(rig.on_seat().is_empty());
+
+    rig.resolves_to(1500);
+    let challenge = rig.challenge(&phone);
+    let proof = signed(&pair, &challenge, &rig.seat.id, &phone, &box_fp());
+    assert!(
+        rig.unlock(&phone, proof).unwrap().1,
+        "no attempt was charged"
+    );
+}
+
+/// A device that stays signed in doesn't rejoin a row whose name now resolves to another user, or
+/// to none.
+#[test]
+fn a_rejoin_is_refused_once_the_name_is_another_user() {
+    let rig = rig();
+    let tv = device(1);
+    rig.unlock(&tv, password(true, None)).unwrap();
+    let (starts, pam, before) = (rig.starts(), rig.pam_calls(), rig.saved());
+    for (uid, refused) in [(2000, "account_not_owned"), (0, "account_missing")] {
+        rig.resolves_to(uid);
+        assert_eq!(rig.refused(&tv, Proof::None), refused);
+    }
+    assert_eq!((rig.starts(), rig.pam_calls()), (starts, pam));
+    assert_eq!(rig.saved(), before, "nothing rejoined");
+    rig.resolves_to(1500);
+    assert!(!rig.unlock(&tv, Proof::None).unwrap().1);
 }
 
 /// Every way the session ends ends every presence: a stop, the person's own login at the machine

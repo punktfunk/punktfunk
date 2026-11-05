@@ -905,6 +905,10 @@ impl PlatformBackend for LinuxBackend {
         made.map(|()| false)
     }
 
+    fn account_owned(&self, seat: &Seat) -> Result<(), BackendError> {
+        accounts::require_person(seat).map(drop)
+    }
+
     fn devices(
         &self,
         seat: &Seat,

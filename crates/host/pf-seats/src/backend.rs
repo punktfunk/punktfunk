@@ -65,6 +65,12 @@ pub trait PlatformBackend: Send + Sync + 'static {
         Err(UnsupportedBackend::unavailable())
     }
 
+    /// Linux, a person's row: its account still resolves to the uid the row recorded, so a device
+    /// let on reaches the person it adopted. Elsewhere there is no such row.
+    fn account_owned(&self, _seat: &Seat) -> Result<(), BackendError> {
+        Ok(())
+    }
+
     /// Linux, a person's row: its device list after `edit`, which gets the list with expired
     /// presence dropped and the time in unix seconds. A changed list is saved, and the seat's
     /// trust copy follows who it admits, before this returns.

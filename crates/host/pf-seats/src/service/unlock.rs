@@ -103,7 +103,8 @@ impl<B: PlatformBackend> SeatService<B> {
         Ok(seat)
     }
 
-    /// `checked`'s row as the ledger holds it now, refused if it moved to another account.
+    /// `checked`'s row as the ledger holds it now, refused if it moved to another account or its
+    /// account no longer resolves to the recorded uid. Called before anything starts or is granted.
     fn still(&self, checked: &Seat) -> Result<Seat, ApiError> {
         let seat = self.person(&checked.id)?;
         if seat.adopted_uid != checked.adopted_uid || seat.account != checked.account {
@@ -112,6 +113,7 @@ impl<B: PlatformBackend> SeatService<B> {
                 format!("account {} changed while it was unlocked", checked.account),
             ));
         }
+        self.backend.account_owned(&seat)?;
         Ok(seat)
     }
 
@@ -124,8 +126,10 @@ impl<B: PlatformBackend> SeatService<B> {
         Ok(self.backend.devices(seat, &mut |_, _| {})?)
     }
 
-    /// No proof: only an admitted device, and only onto a running session.
+    /// No proof: only an admitted device, only onto a running session, and only while the row's
+    /// account is still the person it adopted.
     fn rejoin(&self, seat: &Seat, device: &Device) -> Result<CommandResult, ApiError> {
+        self.backend.account_owned(seat)?;
         let running = self.runs(seat);
         let mut admitted = false;
         self.backend.devices(seat, &mut |list, now| {
