@@ -9,6 +9,8 @@
 //! persists the pairing; this queue records the admitted knock generation and
 //! clears the entry ([`ApprovalQueue::admit_and_clear`]).
 
+pub use punktfunk_core::provenance::KnockSource;
+use punktfunk_core::provenance::{classify_with, is_mesh_iface};
 use std::net::{IpAddr, Ipv4Addr, UdpSocket};
 #[cfg(test)]
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -26,8 +28,10 @@ struct Pending {
     requested_at: Instant,
     /// QUIC-validated knock source, used for the per-source cap. `None` if unknown.
     src_ip: Option<IpAddr>,
-    /// [`classify_relayed`] of `src_ip` and the bridge's client address, when the knock arrived.
+    /// [`Via::classify`] of `src_ip`, when the knock arrived.
     source: KnockSource,
+    /// The page server and page the knock came through.
+    via: Via,
     /// True while [`ApprovalQueue::wait_for_decision`] holds this knock open.
     /// Eviction skips a parked entry unless every candidate is parked.
     parked: bool,
@@ -50,70 +54,76 @@ struct PendingState {
     admitted: Vec<(String, u32, Instant)>,
 }
 
-/// Where a knock came from. The host cannot tell a stranger on the internet from a friend on
-/// the couch by name — the name is whatever the device sent — so admission rules hang off the
-/// address instead. Ordered by suspicion, so the stricter of two is their `max`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub enum KnockSource {
-    /// Loopback, RFC 1918, link-local, IPv6 unique-local, or a Tailscale or NetBird network.
-    /// Reaching any of these means the peer is already on a network the operator let it onto.
-    Lan,
-    /// Routable from the internet, or an address we could not read. Fails closed: every rule
-    /// that treats a source as untrusted must land here rather than on a guess.
-    Wan,
-}
-
-/// Classify a knock's source. `None` is [`KnockSource::Wan`] — an admission rule reading an
-/// unknown address must refuse, not admit.
+/// Classify a knock's source, asking this host's routing table about a 100.64/10 peer. `None` is
+/// [`KnockSource::Wan`]: an admission rule reading an unknown address must refuse, not admit.
 pub fn classify_source(ip: Option<IpAddr>) -> KnockSource {
     classify_with(ip, routes_over_mesh)
 }
 
-/// [`classify_source`] of `peer`, tightened by `client_addr`: the browser a bridge dials for, as
-/// the bridge names it. The stricter class wins, so the name can only make a knock more suspicious
-/// and needs no trust in the bridge. `None` changes nothing.
-pub fn classify_relayed(peer: Option<IpAddr>, client_addr: Option<IpAddr>) -> KnockSource {
-    let own = classify_source(peer);
-    client_addr.map_or(own, |ip| own.max(classify_source(Some(ip))))
+/// What a page server said about the browser behind a session, in
+/// [`punktfunk_core::provenance::CLIENT_ADDR_HEADER`]. The header's presence is the fact; the
+/// address it names is the page server's word.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Relay {
+    /// No header: the peer is the client itself.
+    #[default]
+    Direct,
+    /// Relayed for the browser at this address.
+    For(IpAddr),
+    /// Relayed, and the address is `unknown` or does not parse.
+    Unnamed,
 }
 
-/// [`classify_source`] with the mesh VPN test injected. `over_mesh` is asked only about a
-/// 100.64/10 peer: that range is carrier-grade NAT space too, so the address alone proves nothing.
-pub(super) fn classify_with(
-    ip: Option<IpAddr>,
-    over_mesh: impl Fn(Ipv4Addr) -> bool,
-) -> KnockSource {
-    let Some(ip) = ip else {
-        return KnockSource::Wan;
-    };
-    let v4 = match ip {
-        IpAddr::V4(v4) => Some(v4),
-        // A v4-mapped v6 source is the v4 address wearing a hat; classify what it really is.
-        IpAddr::V6(v6) => {
-            let s = v6.segments();
-            // Loopback (::1), link-local fe80::/10, unique local fc00::/7.
-            if v6.is_loopback() || (s[0] & 0xffc0) == 0xfe80 || (s[0] & 0xfe00) == 0xfc00 {
-                return KnockSource::Lan;
-            }
-            v6.to_ipv4_mapped()
+impl Relay {
+    /// The header's value, `None` when the request carries none.
+    pub fn from_header(value: Option<&str>) -> Relay {
+        match value {
+            None => Relay::Direct,
+            Some(v) => v.trim().parse().map_or(Relay::Unnamed, Relay::For),
         }
-    };
-    match v4 {
-        Some(v4)
-            if v4.is_loopback()
-                || v4.is_private()
-                || v4.is_link_local()
-                || (is_cgnat(v4) && over_mesh(v4)) =>
-        {
-            KnockSource::Lan
-        }
-        _ => KnockSource::Wan,
+    }
+
+    pub fn is_relayed(self) -> bool {
+        self != Relay::Direct
     }
 }
 
-/// RFC 6598 shared space, 100.64/10: a mesh VPN's addresses and a CGNAT ISP's subscribers alike.
-fn is_cgnat(v4: Ipv4Addr) -> bool {
-    v4.octets()[0] == 100 && (64..128).contains(&v4.octets()[1])
+/// [`classify_source`] of `peer`, unless a page server relayed it. Relayed is
+/// [`KnockSource::Wan`] whatever either address says: a proxy in front of the page server shows it
+/// a private peer for a visitor from the internet.
+pub fn classify_relayed(peer: Option<IpAddr>, relay: Relay) -> KnockSource {
+    match relay {
+        Relay::Direct => classify_source(peer),
+        Relay::For(_) | Relay::Unnamed => KnockSource::Wan,
+    }
+}
+
+/// How a browser session reached the host besides its peer address: the page server that relayed
+/// it, and the page that opened it. The native plane has neither ([`Via::DIRECT`]).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Via {
+    pub relay: Relay,
+    /// The page's `Origin`, sanitised. `None` from a client that is not a page.
+    pub origin: Option<String>,
+    /// `origin` is public and this host does not know it. Its knocks are strict.
+    pub unfamiliar_origin: bool,
+}
+
+impl Via {
+    pub const DIRECT: Via = Via {
+        relay: Relay::Direct,
+        origin: None,
+        unfamiliar_origin: false,
+    };
+
+    /// The class a knock or pairing attempt over this path takes: strict when a page server
+    /// relayed it or an unfamiliar public page opened it, else `peer`'s own.
+    pub fn classify(&self, peer: Option<IpAddr>) -> KnockSource {
+        if self.unfamiliar_origin {
+            return KnockSource::Wan;
+        }
+        classify_relayed(peer, self.relay)
+    }
 }
 
 /// The host routes its replies to `peer` out of a mesh VPN's interface. A handshake needs those
@@ -132,14 +142,6 @@ fn routes_over_mesh(peer: Ipv4Addr) -> bool {
         .any(|i| i.ip() == src.ip() && is_mesh_iface(&i.name, i.ip()))
 }
 
-/// A mesh VPN's interface: Tailscale's `tailscale0` on Linux and `Tailscale` on Windows, NetBird's
-/// `wt0` on both, a `utun` on macOS. No ISP puts a 100.64/10 address on any of those names.
-pub(super) fn is_mesh_iface(name: &str, addr: IpAddr) -> bool {
-    let name = name.to_ascii_lowercase();
-    (name.starts_with("tailscale") || name.starts_with("utun") || name == "wt0")
-        && matches!(addr, IpAddr::V4(v4) if is_cgnat(v4))
-}
-
 /// Pending-approval snapshot for the management API.
 pub struct PendingRequest {
     /// Per-process id for approve/deny; stable for this entry's lifetime.
@@ -151,6 +153,12 @@ pub struct PendingRequest {
     pub age_secs: u64,
     /// Where the knock arrived from. A bare approve is refused for [`KnockSource::Wan`].
     pub source: KnockSource,
+    /// A page server relayed it, so `source` is [`KnockSource::Wan`] whatever its address.
+    pub relayed: bool,
+    /// The page that opened the session, when a page did.
+    pub origin: Option<String>,
+    /// That page is public and this host does not know it, so `source` is [`KnockSource::Wan`].
+    pub unfamiliar_origin: bool,
     /// The profile id the knock named, unchecked.
     pub profile: Option<String>,
 }
@@ -258,17 +266,17 @@ impl ApprovalQueue {
     /// Record an unpaired knock. Same fingerprint refreshes in place and bumps
     /// generation so older parked waiters resolve `Superseded`. Bounded by
     /// [`MAX_PENDING_PER_IP`] of `src_ip` then [`PENDING_CAP`]; the name is untrusted.
-    /// `client_addr` only tightens the source ([`classify_relayed`]).
+    /// A relayed knock and one from an unfamiliar public page are strict ([`Via::classify`]).
     pub(super) fn note_pending(
         &self,
         name: &str,
         fp_hex: &str,
         src_ip: Option<IpAddr>,
-        client_addr: Option<IpAddr>,
+        via: &Via,
         profile: Option<&str>,
     ) -> u32 {
         let name = super::sanitize_device_name(name, fp_hex);
-        let source = classify_relayed(src_ip, client_addr);
+        let source = via.classify(src_ip);
         let mut pending = self.pending.lock().unwrap();
         Self::expire_pending(&mut pending);
         if let Some(p) = pending
@@ -283,6 +291,7 @@ impl ApprovalQueue {
             // bare approve would admit it.
             p.src_ip = src_ip;
             p.source = source;
+            p.via = via.clone();
             p.profile = profile.map(str::to_string);
             p.knock_seq = p.knock_seq.wrapping_add(1);
             let seq = p.knock_seq;
@@ -323,6 +332,7 @@ impl ApprovalQueue {
             requested_at: Instant::now(),
             src_ip,
             source,
+            via: via.clone(),
             parked: false,
             knock_seq: 0,
             profile: profile.map(str::to_string),
@@ -372,6 +382,9 @@ impl ApprovalQueue {
                 fingerprint: p.fp_hex.clone(),
                 age_secs: p.requested_at.elapsed().as_secs(),
                 source: p.source,
+                relayed: p.via.relay.is_relayed(),
+                origin: p.via.origin.clone(),
+                unfamiliar_origin: p.via.unfamiliar_origin,
                 profile: p.profile.clone(),
             })
             .collect()
@@ -387,12 +400,16 @@ impl ApprovalQueue {
             .any(|p| p.fp_hex.eq_ignore_ascii_case(fp_hex))
     }
 
-    /// Where pending `id` knocked from, or `None` if the entry is gone. Read before
-    /// admitting: a bare approve must refuse a knock from the internet.
-    pub(super) fn source_of(&self, id: u32) -> Option<KnockSource> {
+    /// Where pending `id` knocked from and the path it took, or `None` if the entry is gone. Read
+    /// before admitting: a bare approve must refuse a strict knock.
+    pub(super) fn source_of(&self, id: u32) -> Option<(KnockSource, Via)> {
         let mut pending = self.pending.lock().unwrap();
         Self::expire_pending(&mut pending);
-        pending.items.iter().find(|p| p.id == id).map(|p| p.source)
+        pending
+            .items
+            .iter()
+            .find(|p| p.id == id)
+            .map(|p| (p.source, p.via.clone()))
     }
 
     /// `(name, fingerprint)` of pending `id` without removing it. `None` if missing

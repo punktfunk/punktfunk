@@ -14,8 +14,9 @@ may do; this page only gets them to the host.
 | A PC, Mac or Steam Deck with Steam | [Porthole](#porthole): nothing to set up on your router |
 | A phone, tablet, Apple TV, or no Steam | [Tailscale machine sharing](#tailscale) |
 | Anything, and you run your own router | [Port forwarding](#port-forwarding): not recommended, the only path that exposes the host to the internet |
+| A browser, with nothing to install | [The browser client from outside your network](/docs/browser-client#from-outside-your-network) |
 
-Every path opens one port: UDP `9777` carries the stream, video and audio included. With
+The paths on this page open one port: UDP `9777` carries the stream, video and audio included. With
 [seats](/docs/profiles#what-a-seat-can-do) on, open UDP `9777`–`9782`: a host that places your
 friend on a seat sends them to that seat's port.
 

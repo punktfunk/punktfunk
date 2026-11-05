@@ -175,12 +175,12 @@ pub(crate) enum SessionLink {
     QuicV2(quinn::Connection, Arc<V2Link>),
     /// The browser plane: the same protocol over one WebTransport session, the device
     /// fingerprint its key signature proved (`None` before admission and under `serve --open`),
-    /// and the browser a bridge dials for ([`Self::client_addr`]).
+    /// and the page server and page it came through ([`Self::via`]).
     Web(
         wtransport::Connection,
         Option<[u8; 32]>,
         Arc<V2Session>,
-        Option<IpAddr>,
+        Arc<crate::native_pairing::Via>,
     ),
 }
 
@@ -264,12 +264,13 @@ impl SessionLink {
         self.quic().remote_address()
     }
 
-    /// The browser a bridge dials for, as the bridge names it (`pf-client-addr`). It only ever
-    /// tightens a knock's source. `None` on the native plane and for a direct browser.
-    pub(crate) fn client_addr(&self) -> Option<IpAddr> {
+    /// The page server and page this session came through, which can make its knock strict.
+    /// [`Via::DIRECT`](crate::native_pairing::Via::DIRECT) on the native plane, which has neither.
+    pub(crate) fn via(&self) -> &crate::native_pairing::Via {
+        static DIRECT: crate::native_pairing::Via = crate::native_pairing::Via::DIRECT;
         match self {
-            SessionLink::QuicV2(..) => None,
-            SessionLink::Web(.., addr) => *addr,
+            SessionLink::QuicV2(..) => &DIRECT,
+            SessionLink::Web(.., via) => via,
         }
     }
 

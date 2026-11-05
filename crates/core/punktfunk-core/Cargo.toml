@@ -14,9 +14,10 @@ name = "punktfunk_core"
 [features]
 default = []
 # Cert-fingerprint pinning shared across the clients (the one `PinVerify` in `tls.rs`). Light:
-# rustls + sha2 only, no QUIC runtime — so a lean consumer (the tray's loopback status poll) can
-# pin the host cert without pulling tokio/quinn. The heavier `quic` feature builds on top of it.
-tls = ["dep:rustls"]
+# rustls, its webpki and sha2 only, no QUIC runtime — so a lean consumer (the tray's loopback
+# status poll) can pin the host cert without pulling tokio/quinn. The heavier `quic` feature builds
+# on top of it. webpki checks the host signature that vouches for a browser plane.
+tls = ["dep:rustls", "dep:webpki"]
 # Control-plane QUIC (pairing, config, reverse audio). tokio is permitted ONLY here,
 # never on the per-frame hot path. Off by default so the core stays runtime-free.
 # The SPAKE2 pairing ceremony on its own, so a client that pairs over a transport quinn does
@@ -74,6 +75,7 @@ zeroize = "1"
 # The aws-lc-rs crypto policy lives on the workspace entries (root Cargo.toml).
 quinn = { workspace = true, optional = true }
 rustls = { workspace = true, optional = true }
+webpki = { package = "rustls-webpki", version = "0.103", optional = true, features = ["aws-lc-rs"] }
 rcgen = { workspace = true, optional = true }
 # `rustls-webpki-roots` (workspace entry) is the CA set for the non-pinned origins (cover-art CDNs).
 ureq = { workspace = true, optional = true, features = ["gzip"] }

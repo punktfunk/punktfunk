@@ -30,6 +30,14 @@ and no DDoS protection. To stream from outside, use a VPN (WireGuard, Tailscale,
 router's VPN) that puts the client on the host's network — the tunnel then handles internet-facing
 authentication. To let a friend in, see [Friends over the internet](/docs/friends-over-the-internet).
 
+The [browser client](/docs/browser-client)'s page is the one piece built to face the internet,
+over Tailscale or at a domain with a real certificate. It holds no key of its own: each host still
+decides what a browser may do. A visitor whose browser isn't paired sees your hosts' names and can
+ask for access, a few requests at a time and rate-limited. They can't wake a host or reach
+anything else on your network, and a request that comes through the page is admitted only with a
+PIN you arm for that device. With its default self-made certificate, the page refuses browsers
+from the internet.
+
 **Windows network profiles.** The installer opens its firewall ports on **Private** and **Domain**
 networks only. On a **Public** network — Windows' default for an unknown one — clients can't
 connect, and the host logs a warning at startup. If the installer finds your network set to Public,

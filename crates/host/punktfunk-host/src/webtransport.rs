@@ -66,18 +66,16 @@ pub struct Published {
 /// nothing here authorises anything, and PAKE is still what proves the peer.
 #[derive(Clone, Debug)]
 pub struct CertAttestation {
-    /// Hex ECDSA-P256-SHA256 signature, ASN.1 DER, over `CERT_SIG_CONTEXT` + [`Published::cert_hash`].
+    /// Hex ECDSA-P256-SHA256 signature, ASN.1 DER, over
+    /// [`punktfunk_core::tls::PLANE_ATTESTATION_CONTEXT`] + [`Published::cert_hash`].
     pub cert_hash_sig: String,
     /// Base64 of the native identity's leaf certificate DER. A browser hashes this to check it
     /// against its pin, then verifies with the key inside it.
     pub host_cert_der: String,
 }
 
-/// Domain separation. The native key also signs X.509, so a signature it makes over a certificate
-/// hash must not be replayable as one over anything else.
-const CERT_SIG_CONTEXT: &str = "punktfunk-wt-cert-v1:";
-
 /// Sign `cert_hash` with the native identity, and hand back the certificate that verifies it.
+/// [`punktfunk_core::tls::verify_plane_attestation`] is the check.
 ///
 /// `None` rather than an error when the identity is not P-256: failing start-up over it would be
 /// worse than not attesting.
@@ -88,7 +86,10 @@ fn attest(ident: &crate::identity::NativeIdentity, cert_hash: &str) -> Option<Ce
         tracing::warn!("native identity is not P-256, so the browser plane is not attested");
         return None;
     }
-    let msg = format!("{CERT_SIG_CONTEXT}{cert_hash}");
+    let msg = format!(
+        "{}{cert_hash}",
+        punktfunk_core::tls::PLANE_ATTESTATION_CONTEXT
+    );
     let sig = rcgen::SigningKey::sign(&key, msg.as_bytes()).ok()?;
     let (_, pem) = x509_parser::pem::parse_x509_pem(ident.cert_pem.as_bytes()).ok()?;
     Some(CertAttestation {
@@ -123,9 +124,9 @@ struct Serving {
     plane: Plane,
     /// Raw SHA-256 of the leaf DER. The SPAKE2 host identity and the channel binding both.
     cert_hash: [u8; 32],
-    /// Last pairing attempt on this plane, for the same rate limit the native one applies.
-    /// SPAKE2 caps a ceremony at one online guess; this caps the ceremonies.
-    last_pairing: std::sync::Mutex<Option<std::time::Instant>>,
+    /// This plane's pairing clocks, the native plane's rule. SPAKE2 caps a ceremony at one online
+    /// guess; these cap the ceremonies.
+    pairing_clocks: crate::native::PairingClocks,
     /// The native plane's capturer, injector, mic and pairing store: an admitted browser runs
     /// the same session on the same state, which is why this plane is spawned from there.
     host: crate::native::SessionHost,
@@ -252,7 +253,7 @@ pub(crate) async fn serve(
         let serving = Arc::new(Serving {
             plane: plane.clone(),
             cert_hash,
-            last_pairing: std::sync::Mutex::new(None),
+            pairing_clocks: Default::default(),
             host: host.clone(),
         });
         // Accept until the certificate is due for replacement, then fall out and re-mint.
@@ -351,20 +352,119 @@ fn wanted_origins(
     }
 }
 
+/// Sessions one peer address may hold before admission.
+const UNADMITTED_PER_ADDR: usize = 8;
+/// Sessions the plane holds before admission, from every address together.
+const UNADMITTED_TOTAL: usize = 64;
+
+/// Sessions accepted and not admitted yet, by peer address. A slot is held from accept until the
+/// session is admitted, parks a knock (the pending caps bound those) or ends.
+#[derive(Default)]
+struct Unadmitted(std::sync::Mutex<std::collections::HashMap<std::net::IpAddr, usize>>);
+
+/// One session's place in [`Unadmitted`], given back when dropped.
+pub(crate) struct UnadmittedSlot {
+    pool: Arc<Unadmitted>,
+    ip: std::net::IpAddr,
+}
+
+impl Unadmitted {
+    /// A slot for a session from `ip`, or `None` when that address or the plane is full.
+    fn take(self: &Arc<Self>, ip: std::net::IpAddr) -> Option<UnadmittedSlot> {
+        let ip = ip.to_canonical();
+        let mut held = self.0.lock().unwrap_or_else(|p| p.into_inner());
+        let mine = held.get(&ip).copied().unwrap_or(0);
+        if mine >= UNADMITTED_PER_ADDR || held.values().sum::<usize>() >= UNADMITTED_TOTAL {
+            return None;
+        }
+        held.insert(ip, mine + 1);
+        Some(UnadmittedSlot {
+            pool: self.clone(),
+            ip,
+        })
+    }
+}
+
+impl Drop for UnadmittedSlot {
+    fn drop(&mut self) {
+        let mut held = self.pool.0.lock().unwrap_or_else(|p| p.into_inner());
+        if let Some(n) = held.get_mut(&self.ip) {
+            *n -= 1;
+            if *n == 0 {
+                held.remove(&self.ip);
+            }
+        }
+    }
+}
+
 async fn accept_loop(
     endpoint: &Endpoint<wtransport::endpoint::endpoint_side::Server>,
     serving: Arc<Serving>,
     sem: Arc<tokio::sync::Semaphore>,
 ) {
+    let unadmitted = Arc::new(Unadmitted::default());
     loop {
         let incoming = endpoint.accept().await;
+        // As on the native plane: a source that has not shown it receives at its address gets a
+        // Retry, not a task, so a spoofed-source flood cannot make this host amplify.
+        if !incoming.remote_address_validated() {
+            incoming.retry();
+            continue;
+        }
+        let Some(slot) = unadmitted.take(incoming.remote_address().ip()) else {
+            tracing::debug!(peer = %incoming.remote_address(), "WebTransport session refused: too many not admitted yet");
+            incoming.refuse();
+            continue;
+        };
         let serving = serving.clone();
         let sem = sem.clone();
         tokio::spawn(async move {
-            if let Err(e) = session(incoming, &serving, sem).await {
+            if let Err(e) = session(incoming, &serving, sem, slot).await {
                 tracing::debug!(error = %e, "WebTransport session ended");
             }
         });
+    }
+}
+
+/// The page server and page a session came through. A page that is public and that nothing on
+/// this host knows makes the session's knocks strict.
+fn via(
+    relay: crate::native_pairing::Relay,
+    origin: Option<String>,
+    serving: &Serving,
+) -> crate::native_pairing::Via {
+    let unfamiliar_origin = origin.as_deref().is_some_and(|o| {
+        !local_origin(o)
+            && !serving.plane.origins.iter().any(|listed| listed == o)
+            && !serving.plane.pairing.knows_origin(o)
+    });
+    crate::native_pairing::Via {
+        relay,
+        origin,
+        unfamiliar_origin,
+    }
+}
+
+/// An origin no public website has: a local file (a packaged TV app sends `file://`), or a host
+/// that is a private address or a name no public zone holds. `null`, which any page can send from
+/// a sandboxed frame, is not one.
+fn local_origin(origin: &str) -> bool {
+    let Some((scheme, rest)) = origin.split_once("://") else {
+        return false;
+    };
+    if scheme.eq_ignore_ascii_case("file") {
+        return true;
+    }
+    let host = match rest.strip_prefix('[') {
+        Some(v6) => v6.split(']').next().unwrap_or_default(),
+        None => rest.split(':').next().unwrap_or_default(),
+    };
+    match host.parse() {
+        Ok(ip) => {
+            crate::native_pairing::classify_source(Some(ip))
+                == crate::native_pairing::KnockSource::Lan
+        }
+        Err(_) => punktfunk_core::provenance::is_local_name(host),
     }
 }
 
@@ -398,11 +498,13 @@ pub fn is_confined(require_pairing: bool, origins: &[String]) -> bool {
 }
 
 /// One browser session: check the origin, then hand the connection to [`session::run`], which
-/// takes the session slot. `/echo` keeps Phase 1's loopback for the measurement pages.
+/// takes the session slot. `unadmitted` is held until then. A debug build keeps Phase 1's `/echo`
+/// for the measurement pages.
 async fn session(
     incoming: wtransport::endpoint::IncomingSession,
     serving: &Arc<Serving>,
     sem: Arc<tokio::sync::Semaphore>,
+    unadmitted: UnadmittedSlot,
 ) -> Result<()> {
     let request = incoming.await.context("await session request")?;
     // The peer picks `:path` and nothing upstream value-checks it, so control characters would
@@ -420,11 +522,13 @@ async fn session(
             .take(128)
             .collect::<String>()
     });
-    // A bridge names the browser it dials for. Unvetted: it can only tighten a knock's source.
-    let client_addr = request
-        .headers()
-        .get("pf-client-addr")
-        .and_then(|a| a.parse().ok());
+    // A page server marks what it relays. Present at all, the session is strict.
+    let relay = crate::native_pairing::Relay::from_header(
+        request
+            .headers()
+            .get(punktfunk_core::provenance::CLIENT_ADDR_HEADER)
+            .map(String::as_str),
+    );
     if !origin_allowed(origin.as_deref(), &serving.plane.origins) {
         request.forbidden().await;
         tracing::warn!(
@@ -440,14 +544,15 @@ async fn session(
         "WebTransport session accepted"
     );
 
-    // `/echo` keeps Phase 1's behaviour so the measurement pages still work against a host that
-    // streams on every other path.
+    // Phase 1's echo answers anyone with no slot and no timeout, so a release host has no such path.
+    #[cfg(debug_assertions)]
     if path == "/echo" {
         return echo(connection).await;
     }
     // The management API for a page that cannot `fetch` the host: no streaming slot, no
     // handshake clock, its own caps (`mgmt`).
     if path == "/mgmt" {
+        drop(unadmitted);
         return mgmt::serve(connection, serving).await;
     }
 
@@ -463,7 +568,8 @@ async fn session(
         return Ok(());
     }
     let peer = connection.remote_address();
-    match session::run(connection.clone(), serving.clone(), sem, client_addr).await {
+    let via = Arc::new(via(relay, origin, serving));
+    match session::run(connection.clone(), serving.clone(), sem, via, unadmitted).await {
         Ok(crate::native::Served::Session) => tracing::info!(%peer, "browser session complete"),
         Ok(
             crate::native::Served::ProbeClose
@@ -537,8 +643,9 @@ async fn say_then_wait(connection: &wtransport::Connection, bytes: &[u8]) {
     }
 }
 
-/// Phase 1's echo, still reachable at `/echo`: the page connects, sends datagrams and control
+/// Phase 1's echo, at `/echo` in a debug build: the page connects, sends datagrams and control
 /// bytes, and gets them back. It is what the seam's measurements run against.
+#[cfg(debug_assertions)]
 async fn echo(connection: wtransport::Connection) -> Result<()> {
     loop {
         tokio::select! {
@@ -649,6 +756,31 @@ mod tests {
         assert!(origin_allowed(None, &[]));
     }
 
+    /// Eight sessions from one address wait for admission; the ninth is refused while another
+    /// address still gets in, and a slot given back is free again. Sixty-four in all.
+    #[test]
+    fn unadmitted_sessions_are_capped_per_address_and_in_all() {
+        let pool = Arc::new(Unadmitted::default());
+        let one: std::net::IpAddr = "192.168.1.20".parse().unwrap();
+        let other: std::net::IpAddr = "192.168.1.21".parse().unwrap();
+        let mut held: Vec<_> = (0..UNADMITTED_PER_ADDR)
+            .map(|_| pool.take(one).expect("under the per-address cap"))
+            .collect();
+        assert!(pool.take(one).is_none(), "the ninth from one address");
+        let mapped: std::net::IpAddr = "::ffff:192.168.1.20".parse().unwrap();
+        assert!(pool.take(mapped).is_none(), "the same address, v4-mapped");
+        assert!(pool.take(other).is_some(), "another address still connects");
+        held.pop();
+        assert!(pool.take(one).is_some(), "a slot given back is free again");
+
+        let pool = Arc::new(Unadmitted::default());
+        let _all: Vec<_> = (0..UNADMITTED_TOTAL)
+            .map(|i| pool.take(std::net::Ipv4Addr::new(10, 0, 0, i as u8).into()))
+            .collect::<Option<_>>()
+            .expect("under the total cap");
+        assert!(pool.take(other).is_none(), "the plane is full");
+    }
+
     /// `--open` and an empty origin list are each an operator's choice; together they are a
     /// desktop any page can drive, because nothing else stands in front of the session.
     #[test]
@@ -668,44 +800,36 @@ mod tests {
     #[test]
     fn attestation_verifies_against_the_pinned_host_certificate() {
         use base64::Engine as _;
+        use punktfunk_core::tls::{cert_fingerprint, verify_plane_attestation};
+        let leaf = |ident: &crate::identity::NativeIdentity| {
+            let (_, pem) = x509_parser::pem::parse_x509_pem(ident.cert_pem.as_bytes()).unwrap();
+            pem.contents
+        };
         let ident = crate::identity::ephemeral().expect("mint a native identity");
         let cert_hash = "a".repeat(64);
         let a = attest(&ident, &cert_hash).expect("P-256 identity attests");
-
-        // Step one of the browser's check: the certificate really is the one it pinned.
         let der = base64::engine::general_purpose::STANDARD
             .decode(&a.host_cert_der)
             .expect("host_cert_der is base64");
-        let (_, expected) = x509_parser::pem::parse_x509_pem(ident.cert_pem.as_bytes()).unwrap();
-        assert_eq!(
-            der, expected.contents,
-            "attested DER is the identity's leaf"
-        );
+        let sig = hex::decode(&a.cert_hash_sig).expect("cert_hash_sig is hex");
 
-        // Step two: the signature is that certificate's key over this hash, and nothing else.
-        let cert = expected.parse_x509().unwrap();
-        let key = cert.public_key().subject_public_key.data.to_vec();
-        let sig: Vec<u8> = (0..a.cert_hash_sig.len())
-            .step_by(2)
-            .map(|i| u8::from_str_radix(&a.cert_hash_sig[i..i + 2], 16).unwrap())
-            .collect();
-        let verify = |msg: &str| {
-            aws_lc_rs::signature::UnparsedPublicKey::new(
-                &aws_lc_rs::signature::ECDSA_P256_SHA256_ASN1,
-                &key,
-            )
-            .verify(msg.as_bytes(), &sig)
-        };
-        assert!(verify(&format!("{CERT_SIG_CONTEXT}{cert_hash}")).is_ok());
-        // Domain separation and the hash itself both have to matter, or the signature proves
-        // nothing about which certificate it names.
-        assert!(
-            verify(&cert_hash).is_err(),
-            "context is part of the message"
+        // The fingerprint that comes back is the one the browser pinned at pairing.
+        assert_eq!(
+            verify_plane_attestation(&cert_hash, &sig, &der).expect("attestation verifies"),
+            cert_fingerprint(&leaf(&ident)),
         );
         assert!(
-            verify(&format!("{CERT_SIG_CONTEXT}{}", "b".repeat(64))).is_err(),
+            verify_plane_attestation(&"b".repeat(64), &sig, &der).is_err(),
             "a different hash must not verify"
         );
+        let other = crate::identity::ephemeral().expect("mint a second identity");
+        assert!(
+            verify_plane_attestation(&cert_hash, &sig, &leaf(&other)).is_err(),
+            "another host's key must not verify"
+        );
+        // The same key over the bare hash: the context is part of the message.
+        let key = rcgen::KeyPair::from_pem(&ident.key_pem).unwrap();
+        let bare = rcgen::SigningKey::sign(&key, cert_hash.as_bytes()).unwrap();
+        assert!(verify_plane_attestation(&cert_hash, &bare, &der).is_err());
     }
 }

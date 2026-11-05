@@ -48,8 +48,12 @@ pub mod fp;
 /// cbindgen:ignore
 pub mod hud;
 pub mod input;
+/// cbindgen:ignore
+pub mod mgmt_routes;
 pub mod packet;
 pub mod phase;
+/// cbindgen:ignore
+pub mod provenance;
 // The bits-per-pixel rule host and client share; Rust-only, so the C header stays out of it.
 /// cbindgen:ignore
 pub mod pyrowave;

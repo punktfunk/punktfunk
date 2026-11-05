@@ -5229,7 +5229,7 @@
             }
           },
           "409": {
-            "description": "Knock came from the internet; arm a fingerprint-bound PIN instead",
+            "description": "Knock came from the internet, through the web client or from a page this host does not know; arm a fingerprint-bound PIN instead",
             "content": {
               "application/json": {
                 "schema": {
@@ -14794,6 +14794,8 @@
           "fingerprint",
           "age_secs",
           "source",
+          "relayed",
+          "unfamiliar_origin",
           "until_disconnect"
         ],
         "properties": {
@@ -14850,6 +14852,14 @@
             "description": "Client's own name, else fingerprint-derived.",
             "example": "Enrico's MacBook"
           },
+          "origin": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The page that opened the browser's session. Absent from a client that is not a page.",
+            "example": "https://play.example.com"
+          },
           "profile": {
             "oneOf": [
               {
@@ -14861,10 +14871,18 @@
               }
             ]
           },
+          "relayed": {
+            "type": "boolean",
+            "description": "The knock came through a page server (the web client). Its `source` is then `\"wan\"`,\nwhatever its address."
+          },
           "source": {
             "type": "string",
             "description": "Where the knock came from: `\"lan\"` or `\"wan\"`. A `\"wan\"` device cannot be admitted by\napprove — arm a PIN bound to its fingerprint instead.",
             "example": "lan"
+          },
+          "unfamiliar_origin": {
+            "type": "boolean",
+            "description": "`origin` is public and no paired device came from it. Its `source` is then `\"wan\"`."
           },
           "until_disconnect": {
             "type": "boolean",

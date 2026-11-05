@@ -148,6 +148,30 @@ use crate::stats_recorder::StatsRecorder;
 /// Bounds online PIN guessing: SPAKE2 already gives one guess per ceremony; this caps the rate.
 pub(crate) const PAIRING_COOLDOWN: std::time::Duration = std::time::Duration::from_secs(2);
 
+/// One plane's pairing clocks, [`PAIRING_COOLDOWN`] each. Strict attempts (relayed, or from the
+/// internet) run on their own, so a stranger who holds that one leaves the home network's free.
+#[derive(Default)]
+pub(crate) struct PairingClocks {
+    strict: std::sync::Mutex<Option<std::time::Instant>>,
+    local: std::sync::Mutex<Option<std::time::Instant>>,
+}
+
+impl PairingClocks {
+    /// Charge one attempt from `source` to its clock. `false` while that clock still runs.
+    pub(crate) fn charge(&self, source: crate::native_pairing::KnockSource) -> bool {
+        let clock = match source {
+            crate::native_pairing::KnockSource::Wan => &self.strict,
+            crate::native_pairing::KnockSource::Lan => &self.local,
+        };
+        let mut last = clock.lock().unwrap_or_else(|p| p.into_inner());
+        if last.is_some_and(|t| t.elapsed() < PAIRING_COOLDOWN) {
+            return false;
+        }
+        *last = Some(std::time::Instant::now());
+        true
+    }
+}
+
 use punktfunk_core::quic::wall_clock_ns as now_ns;
 
 pub fn run(opts: Punktfunk1Options) -> Result<()> {
@@ -372,7 +396,7 @@ pub(crate) async fn serve(
     let at = Arc::new(Accepting {
         fingerprint,
         media_socket,
-        last_pairing: std::sync::Mutex::new(None),
+        pairing_clocks: PairingClocks::default(),
         sem,
         accepted: std::sync::atomic::AtomicU32::new(0),
         done: tokio::sync::Notify::new(),
@@ -449,7 +473,7 @@ fn advertise(
 struct Accepting {
     fingerprint: [u8; 32],
     media_socket: Arc<std::net::UdpSocket>,
-    last_pairing: std::sync::Mutex<Option<std::time::Instant>>,
+    pairing_clocks: PairingClocks,
     /// The session slots, shared with the browser plane.
     sem: Arc<tokio::sync::Semaphore>,
     /// Handshakes that completed. `--max-sessions` counts those, not attempts, so the task that
@@ -485,7 +509,7 @@ async fn serve_connection(incoming: quinn::Incoming, host: SessionHost, at: Arc<
             at.media_socket.clone(),
             &at.fingerprint,
             &host.np,
-            &at.last_pairing,
+            &at.pairing_clocks,
         )
         .await;
         return;
@@ -517,7 +541,7 @@ async fn serve_connection(incoming: quinn::Incoming, host: SessionHost, at: Arc<
         &at.fingerprint,
         &np,
         &profiles,
-        &at.last_pairing,
+        &at.pairing_clocks,
         stats,
         at.sem.clone(),
     )
@@ -753,14 +777,14 @@ pub(crate) async fn wait_for_approval(
     }
     tracing::info!(name = %label, fingerprint = %fp_hex,
         "unpaired device knocked — parking connection for delegated approval in the console");
-    // QUIC-validated source IP for the pending per-source cap; a bridge's client address only
-    // tightens its class. Knock generation makes this connection the one an approval admits —
+    // QUIC-validated source IP for the pending per-source cap; a page server's relay or an
+    // unfamiliar page makes the knock strict. Knock generation makes this connection the one an approval admits —
     // siblings must not all start a session.
     let knock_seq = np.note_pending(
         label,
         fp_hex,
         Some(conn.remote_address().ip()),
-        conn.client_addr(),
+        conn.via(),
         profile,
     );
     let wait = np.wait_for_decision(fp_hex, knock_seq, PENDING_APPROVAL_WAIT);
@@ -848,7 +872,7 @@ async fn serve_session(
     host_fp: &[u8; 32],
     np_arc: &Arc<NativePairing>,
     profiles: &Arc<crate::profiles::Profiles>,
-    last_pairing: &std::sync::Mutex<Option<std::time::Instant>>,
+    pairing_clocks: &PairingClocks,
     stats: Arc<StatsRecorder>,
     // The session slots. An unpaired knock releases its slot while parked, re-acquires on approval.
     sem: Arc<tokio::sync::Semaphore>,
@@ -876,7 +900,7 @@ async fn serve_session(
         .map_err(|_| anyhow!("first message timeout"))??;
     if let Ok(req) = v2msg::decode::<PairRequest>(ty, &body) {
         let wire = pairing::PairWire::V2 { send, recv };
-        return serve_pairing(&conn, wire, req, host_fp, np, last_pairing).await;
+        return serve_pairing(&conn, wire, req, host_fp, np, pairing_clocks).await;
     }
     let first = v2msg::decode::<ClientHello>(ty, &body)
         .map_err(|e| anyhow!("ClientHello decode: {e:?}"))?;
@@ -978,7 +1002,7 @@ async fn serve_pairing<W, R>(
     req: PairRequest,
     host_fp: &[u8; 32],
     np: &NativePairing,
-    last_pairing: &std::sync::Mutex<Option<std::time::Instant>>,
+    pairing_clocks: &PairingClocks,
 ) -> Result<Served>
 where
     W: tokio::io::AsyncWrite + Unpin,
@@ -991,18 +1015,11 @@ where
         anyhow::bail!("pairing requires the client to present a certificate");
     };
     let client_fp_hex = hex::encode(client_fp);
-    // Charge the cooldown before consulting arming, on every outcome including rejections.
-    // Otherwise "is pairing armed?" is a free oracle. A spam of knocks can hold the
-    // cooldown against the real device.
-    let limited = {
-        let mut last = last_pairing.lock().unwrap();
-        let limited = last.is_some_and(|t| t.elapsed() < PAIRING_COOLDOWN);
-        if !limited {
-            *last = Some(std::time::Instant::now());
-        }
-        limited
-    };
-    if limited {
+    // The class is free to compute and tells the peer nothing, so it picks the clock. The charge
+    // comes before arming is consulted, on every outcome: otherwise "is pairing armed?" is a free
+    // oracle. A spam of strict attempts holds only the strict clock.
+    let source = crate::native_pairing::classify_source(Some(peer.ip()));
+    if !pairing_clocks.charge(source) {
         close_rejected(
             conn,
             punktfunk_core::reject::RejectReason::PairingRateLimited,
@@ -1012,7 +1029,6 @@ where
     }
     // Live PIN per attempt so a lapsed window no longer pairs; honor fingerprint binding
     // and the address the knock came from.
-    let source = crate::native_pairing::classify_source(Some(peer.ip()));
     let pin = match np.pin_for_attempt(&client_fp_hex, source) {
         crate::native_pairing::PinAttempt::Pin(pin) => pin,
         crate::native_pairing::PinAttempt::Disarmed => {
@@ -1055,7 +1071,7 @@ async fn serve_pkf1(
     media_socket: Arc<std::net::UdpSocket>,
     host_fp: &[u8; 32],
     np: &NativePairing,
-    last_pairing: &std::sync::Mutex<Option<std::time::Instant>>,
+    pairing_clocks: &PairingClocks,
 ) {
     let peer = conn.remote_address();
     let first = async {
@@ -1070,7 +1086,7 @@ async fn serve_pkf1(
                 Arc::new(link::V2Link::new(conn.clone(), media_socket)),
             );
             let wire = pairing::PairWire::Pkf1 { send, recv };
-            match serve_pairing(&link, wire, req, host_fp, np, last_pairing).await {
+            match serve_pairing(&link, wire, req, host_fp, np, pairing_clocks).await {
                 Ok(_) => tracing::info!(%peer, "pairing over punktfunk/1 complete"),
                 Err(e) => {
                     tracing::warn!(%peer, error = %format!("{e:#}"), "pairing over punktfunk/1 failed")
