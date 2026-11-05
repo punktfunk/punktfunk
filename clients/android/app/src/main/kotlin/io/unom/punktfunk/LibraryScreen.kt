@@ -253,6 +253,9 @@ fun LibraryScreen(
     seatWait?.let { w ->
         SeatWaitDialog(w, onCancel = { w.cancelled.complete(Unit); seatWait = null })
     }
+    // The password prompt a launch waits on.
+    var unlockAsk by remember { mutableStateOf<PasswordAsk?>(null) }
+    unlockAsk?.let { UnlockPromptDialog(it) }
 
     // Keyed on the mgmt port too: a discovery tick can learn it after this screen is composed, and
     // the fetch must redo itself against the real port rather than stay on a stale 47990 failure.
@@ -268,9 +271,10 @@ fun LibraryScreen(
         "${host.name} — Library"
     }
 
-    // Dial through [HostServices.dial] on the pinned trust, booting straight into this title (the
-    // host resolves `launch` = its library id). A grid tap and A on a centred cover share this one
-    // launch. [link] names the profile to play as; [redial] marks the one dial [ProfileRetry] grants.
+    // Dial through [HostServices.dial] on the pinned trust and the profile's unlock, booting
+    // straight into this title (the host resolves `launch` = its library id). A grid tap and A on a
+    // centred cover share this one launch. [link] names the profile to play as; [redial] marks the
+    // one dial [ProfileRetry] grants.
     fun launch(identity: ClientIdentity, game: GameEntry, link: String? = null, redial: Boolean = false) {
         if (launching) return
         launching = true
@@ -302,8 +306,19 @@ fun LibraryScreen(
                 dialer = "touch/library",
                 preset = preset,
                 profile = choice.id,
+                promptsUnlock = promptsUnlock(context),
             )
-            val dialed = services.dial(spec, host, host.name)
+            val hooks = touchUnlockHooks(context, identity, host, ask = { ask ->
+                unlockAsk = ask
+                try {
+                    ask.answer.await()
+                } finally {
+                    unlockAsk = null
+                }
+            })
+            val dialed = dialUnlocked(hooks, spec.pinHex, choice.row) { unlock ->
+                services.dial(spec, host, host.name, unlock = unlock)
+            }
             launching = false
             if (dialed is HostServices.Connected) {
                 onLaunched(

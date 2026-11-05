@@ -18,8 +18,11 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -27,6 +30,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -42,6 +46,7 @@ import coil3.compose.AsyncImage
 import io.unom.punktfunk.kit.ListedProfile
 import io.unom.punktfunk.kit.ProfilePick
 import io.unom.punktfunk.kit.SeatGate
+import io.unom.punktfunk.kit.UnlockNeed
 import io.unom.punktfunk.kit.initials
 import io.unom.punktfunk.kit.library.MgmtReply
 import io.unom.punktfunk.kit.library.mgmtBase
@@ -57,6 +62,7 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
+import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 
@@ -98,6 +104,27 @@ object HostProfiles {
         }
         if (reply is MgmtReply.Answer && !reply.ok) Log.i(TAG, "profile seat did not wake: status ${reply.code}")
     }
+
+    /** The host's one-use challenge for this device's unlock key on profile [id], or `null`. */
+    fun unlockChallenge(
+        identity: ClientIdentity,
+        addr: String,
+        mgmtPort: Int,
+        fpHex: String,
+        id: String,
+        streamPort: Int = 0,
+    ): UnlockChallenge? {
+        val reply = mgmtCall(identity, addr, mgmtPort, fpHex, PROFILES_WAIT_MS, streamPort) { base ->
+            val url = base.toHttpUrl().newBuilder()
+                .addPathSegments("api/v1/profiles").addPathSegment(id).addPathSegment("unlock-challenge").build()
+            Request.Builder().url(url).post(ByteArray(0).toRequestBody(null, 0, 0)).build()
+        }
+        if (reply !is MgmtReply.Answer || !reply.ok) {
+            Log.i(TAG, "no unlock challenge: ${reply.why}")
+            return null
+        }
+        return UnlockChallenge.parse(reply.body)
+    }
 }
 
 /** A picker a connect is waiting on: [answer] completes with the pick, or `null` for Cancel. */
@@ -111,8 +138,8 @@ class ProfileAsk(
 
 /** What a connect does about the profile. */
 sealed interface ProfileChoice {
-    /** Dial with this id (`null` sends none). */
-    data class Dial(val id: String?) : ProfileChoice
+    /** Dial with this id (`null` sends none). [row] is its latest listing: its name and unlock. */
+    data class Dial(val id: String?, val row: ListedProfile? = null) : ProfileChoice
 
     /** The player cancelled the picker or the seat wait. */
     data object Cancelled : ProfileChoice
@@ -126,6 +153,13 @@ class ProfileWait(val title: String) {
     var detail by mutableStateOf<String?>(null)
     val cancelled = CompletableDeferred<Unit>()
 }
+
+/**
+ * Profile [id] as this device knows it without a listing: by [saved]'s name when that is the
+ * pick, else by its id. Nothing about its unlock is known, so a dial as it goes bare first.
+ */
+internal fun savedRow(id: String, saved: ProfilePick?): ListedProfile =
+    ListedProfile(id = id, displayName = saved?.displayName?.takeIf { saved.id == id && it.isNotEmpty() } ?: id)
 
 /** Whether [host] still lists profile [id], by a fresh answer. */
 suspend fun stillListed(identity: ClientIdentity, host: KnownHost, id: String): Boolean =
@@ -160,7 +194,8 @@ object ProfileRetry {
 /**
  * The profile a connect to [host] dials as: asks the host who plays on it, applies
  * [pickerDecision], then [seatGate] to the profile that plays. A failed or late answer dials
- * with the saved pick. [link] is a link's `as=`. [ask] shows the picker and returns once the
+ * with the saved pick, named by what this device saved, so a `profile-locked` close can still
+ * ask for its password. [link] is a link's `as=`. [ask] shows the picker and returns once the
  * player has answered; [wait] shows the seat wait, and hides it with `null`.
  */
 suspend fun chooseProfile(
@@ -179,7 +214,10 @@ suspend fun chooseProfile(
     val listed = when (answer) {
         is ProfilesAnswer.Listed -> answer.rows.takeIf { it.isNotEmpty() }
         ProfilesAnswer.NoProfiles -> null
-        is ProfilesAnswer.Failed -> return ProfileChoice.Dial(link ?: saved?.id)
+        is ProfilesAnswer.Failed -> {
+            val id = link ?: saved?.id ?: return ProfileChoice.Dial(null)
+            return ProfileChoice.Dial(id, savedRow(id, saved))
+        }
     }
     val d = pickerDecision(listed, saved, link)
     if (!d.picker) {
@@ -195,7 +233,7 @@ suspend fun chooseProfile(
 
 /**
  * Dials as [id] once its seat in [listed] allows: wakes a stopped seat and polls `enumerate` while
- * it starts. There is no timeout; Cancel is the way out.
+ * it starts. There is no timeout; Cancel is the way out. The dial carries the row last listed.
  */
 private suspend fun gateSeat(
     id: String?,
@@ -204,14 +242,14 @@ private suspend fun gateSeat(
     host: KnownHost,
     wait: (ProfileWait?) -> Unit,
 ): ProfileChoice {
-    val row = listed?.firstOrNull { it.id == id } ?: return ProfileChoice.Dial(id)
+    var row = listed?.firstOrNull { it.id == id } ?: return ProfileChoice.Dial(id)
     val w = ProfileWait(wakingLine(row.displayName))
     wait(w)
     try {
         var gate = seatGate(row)
         while (true) {
             when (val g = gate) {
-                SeatGate.Dial -> return ProfileChoice.Dial(id)
+                SeatGate.Dial -> return ProfileChoice.Dial(id, row)
                 is SeatGate.Refuse -> return ProfileChoice.Refused(g.line)
                 SeatGate.Wake -> withContext(Dispatchers.IO) {
                     HostProfiles.wake(identity, host.address, host.effectiveMgmtPort, host.fpHex, row.id, host.port)
@@ -225,7 +263,8 @@ private suspend fun gateSeat(
             if (w.cancelled.isCompleted) return ProfileChoice.Cancelled
             val rows = (answer as? ProfilesAnswer.Listed)?.rows ?: continue
             // A profile deleted mid-wait dials anyway: the host's own refusal says so.
-            gate = rows.firstOrNull { it.id == row.id }?.let(::seatGate) ?: return ProfileChoice.Dial(id)
+            row = rows.firstOrNull { it.id == row.id } ?: return ProfileChoice.Dial(id)
+            gate = seatGate(row)
         }
     } finally {
         wait(null)
@@ -317,8 +356,9 @@ internal fun ProfileFace(
 }
 
 /**
- * Who plays on [hostName]: one circle per profile, the saved pick first and ringed. [answer] is
- * `null` while the host is asked. A pick calls [onPick]; the dialog never saves anything itself.
+ * Who plays on [hostName]: one circle per profile, the saved pick first and ringed, a lock by the
+ * name of one that asks for a password where this shell can prompt. [answer] is `null` while the
+ * host is asked. A pick calls [onPick]; the dialog never saves anything itself.
  */
 @Composable
 internal fun ProfilePickerDialog(
@@ -330,6 +370,8 @@ internal fun ProfilePickerDialog(
     onPick: (ProfilePick) -> Unit,
     onDismiss: () -> Unit,
 ) {
+    val context = LocalContext.current
+    val marksLocks = remember { promptsUnlock(context) }
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("Who’s playing on $hostName?") },
@@ -370,12 +412,21 @@ internal fun ProfilePickerDialog(
                                             picture = p.avatar, art = art,
                                         )
                                         Spacer(Modifier.height(6.dp))
-                                        Text(
-                                            p.displayName,
-                                            style = MaterialTheme.typography.bodyMedium,
-                                            maxLines = 1,
-                                            overflow = TextOverflow.Ellipsis,
-                                        )
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            if (marksLocks && p.unlock != UnlockNeed.NONE) {
+                                                Icon(
+                                                    Icons.Filled.Lock,
+                                                    contentDescription = "Locked",
+                                                    modifier = Modifier.size(14.dp).padding(end = 2.dp),
+                                                )
+                                            }
+                                            Text(
+                                                p.displayName,
+                                                style = MaterialTheme.typography.bodyMedium,
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis,
+                                            )
+                                        }
                                         p.note()?.let {
                                             Text(
                                                 it,
