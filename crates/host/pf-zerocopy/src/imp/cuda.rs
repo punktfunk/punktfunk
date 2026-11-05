@@ -1023,8 +1023,9 @@ pub struct ExternalDmabuf {
 unsafe impl Send for ExternalDmabuf {}
 
 impl ExternalDmabuf {
-    /// Import an `OPAQUE_FD` (Vulkan-exported) as `size` bytes of mapped device memory. The
-    /// driver owns `fd` on success; a failed import drops (closes) it. Context must be current.
+    /// Import an `OPAQUE_FD` (an exported memory object) as `size` bytes of mapped device
+    /// memory. The driver owns `fd` from the call on, and closes it on failure too. Context
+    /// must be current.
     pub fn import_owned_fd(fd: OwnedFd, size: u64) -> Result<ExternalDmabuf> {
         let mut desc = CUDA_EXTERNAL_MEMORY_HANDLE_DESC {
             type_: CU_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD,
@@ -1032,14 +1033,14 @@ impl ExternalDmabuf {
             ..Default::default()
         };
         desc.handle[0] = fd.as_raw_fd() as u32 as u64; // union member `int fd` (LE low bytes)
+        let _ = fd.into_raw_fd(); // libcuda closes it, on success and on failure alike
         let mut ext: CUexternalMemory = std::ptr::null_mut();
         // SAFETY: `&desc` outlives the call (`OPAQUE_FD`, fd in union `int fd` low bytes, `size`
-        // set). `&mut ext` is a live out-param. Driver takes the fd only on success. Context current.
+        // set). `&mut ext` is a live out-param. Context current.
         let r = unsafe { cuImportExternalMemory(&mut ext, &desc) };
         if r != 0 {
             bail!("cuImportExternalMemory failed ({r}) — LINEAR dmabuf import unsupported?");
         }
-        let _ = fd.into_raw_fd(); // the driver owns it now
         let buf = CUDA_EXTERNAL_MEMORY_BUFFER_DESC {
             offset: 0,
             size,

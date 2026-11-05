@@ -1,9 +1,11 @@
 //! A LINEAR dmabuf as a CUDA device pointer, with no copy, for NVENC to encode in place.
 //!
-//! The buffer imports as one `EGLImage` over every plane: an `AR24` view `row_bytes / 4` wide
-//! and `rows` tall at the buffer's stride. `cuGraphicsEGLRegisterImage` maps it as one pitched
-//! allocation, which NVENC registers as NV12, P010 or packed RGB at that pitch. A planar
-//! import maps each plane as its own allocation, and NVENC refuses chroma outside the luma's.
+//! The buffer maps through the memory object NVIDIA's driver holds behind it ([`rm`]), which
+//! keeps the allocation's own page kind. Where that export is refused, it imports as one
+//! `EGLImage` over every plane instead: an `AR24` view `row_bytes / 4` wide and `rows` tall at
+//! the buffer's stride, which `cuGraphicsEGLRegisterImage` maps as one pitched allocation.
+//! Either way NVENC registers one allocation as NV12, P010 or packed RGB at that pitch; a
+//! planar import maps each plane on its own, and NVENC refuses chroma outside the luma's.
 //!
 //! In-process: CUDA cannot share an EGL mapping with another process (`cuIpcGetMemHandle`
 //! refuses it). The driver sees each pool buffer once; a frame only touches NVENC.
@@ -12,8 +14,10 @@ use super::cuda::{self, CUdeviceptr, CUeglFrame, CUgraphicsResource, CU_EGL_FRAM
 use super::drm;
 use super::egl::{self as pegl, Egl};
 use super::gbm::GbmDevice;
+use super::rm;
 use anyhow::{bail, ensure, Context as _, Result};
 use khronos_egl as egl;
+use std::cell::Cell;
 use std::os::fd::{AsRawFd as _, BorrowedFd};
 use std::rc::Rc;
 
@@ -41,11 +45,11 @@ impl Span {
     }
 }
 
-/// `egl` before `_gbm`: fields drop in order, and the display lives on the GBM device.
+/// `egl` before `gbm`: fields drop in order, and the display lives on the GBM device.
 struct Display {
     egl: Egl,
     display: egl::Display,
-    _gbm: GbmDevice,
+    gbm: GbmDevice,
 }
 
 impl Drop for Display {
@@ -56,28 +60,37 @@ impl Drop for Display {
     }
 }
 
-/// The GBM `EGLDisplay` the mappings import through. Thread-affine with them.
+/// The render node and GBM `EGLDisplay` the mappings import through. Thread-affine with them.
+/// `rm`: whether the driver exports a dmabuf's memory object; one refusal settles it.
 pub struct DirectImporter {
     display: Rc<Display>,
+    rm: Cell<Option<bool>>,
 }
 
 /// One buffer mapped into CUDA. `ptr` stays valid until this drops.
 pub struct Mapping {
     pub ptr: CUdeviceptr,
-    resource: CUgraphicsResource,
-    image: egl::Image,
+    backing: Backing,
     display: Rc<Display>,
+}
+
+/// What holds the mapping: the buffer's own memory object, or an EGL image registered with CUDA.
+enum Backing {
+    Rm {
+        _memory: cuda::ExternalDmabuf,
+    },
+    Egl {
+        resource: CUgraphicsResource,
+        image: egl::Image,
+    },
 }
 
 impl DirectImporter {
     pub fn new() -> Result<DirectImporter> {
         let (egl, display, gbm, _) = pegl::gbm_display()?;
         Ok(DirectImporter {
-            display: Rc::new(Display {
-                egl,
-                display,
-                _gbm: gbm,
-            }),
+            display: Rc::new(Display { egl, display, gbm }),
+            rm: Cell::new(None),
         })
     }
 
@@ -85,6 +98,38 @@ impl DirectImporter {
     pub fn map(&self, fd: BorrowedFd<'_>, span: Span) -> Result<Mapping> {
         let width = span.view_width()?;
         let d = &*self.display;
+        if self.rm.get() != Some(false) && super::nvenc_rm_import_enabled() {
+            cuda::make_current()?;
+            match rm::import(d.gbm.node(), fd) {
+                Ok((ext, object)) => {
+                    let end =
+                        u64::from(span.offset) + u64::from(span.rows) * u64::from(span.stride);
+                    ensure!(
+                        end <= ext.size,
+                        "a span ending at byte {end} does not fit the {}-byte buffer",
+                        ext.size
+                    );
+                    if self.rm.replace(Some(true)).is_none() {
+                        tracing::info!(
+                            ?object,
+                            "in-place NVENC reads the dmabuf through its own memory object"
+                        );
+                    }
+                    return Ok(Mapping {
+                        ptr: ext.ptr + CUdeviceptr::from(span.offset),
+                        backing: Backing::Rm { _memory: ext },
+                        display: self.display.clone(),
+                    });
+                }
+                Err(e) => {
+                    self.rm.set(Some(false));
+                    tracing::warn!(
+                        error = %format!("{e:#}"),
+                        "dmabuf memory object export refused — in-place NVENC reads through EGL"
+                    );
+                }
+            }
+        }
         let attrs = [
             egl::WIDTH as egl::Attrib,
             width as egl::Attrib,
@@ -135,8 +180,7 @@ impl DirectImporter {
         // From here `Drop` releases the registration and the image.
         let mut mapping = Mapping {
             ptr: 0,
-            resource,
-            image,
+            backing: Backing::Egl { resource, image },
             display: self.display.clone(),
         };
         // SAFETY: all-zero is a valid `CUeglFrame` (null pointers, zero counts).
@@ -164,14 +208,18 @@ impl DirectImporter {
 }
 
 impl Drop for Mapping {
+    /// An `Rm` backing frees itself. An EGL one unregisters before the image goes: CUDA still
+    /// references it.
     fn drop(&mut self) {
-        // Unregister before the image goes: CUDA still references it.
+        let Backing::Egl { resource, image } = self.backing else {
+            return;
+        };
         if cuda::make_current().is_ok() {
             // SAFETY: the registration from `map`, released once.
-            unsafe { cuda::cuGraphicsUnregisterResource(self.resource) };
+            unsafe { cuda::cuGraphicsUnregisterResource(resource) };
         }
         let d = &*self.display;
-        let _ = d.egl.destroy_image(d.display, self.image);
+        let _ = d.egl.destroy_image(d.display, image);
     }
 }
 

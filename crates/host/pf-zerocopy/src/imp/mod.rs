@@ -1,6 +1,6 @@
-//! Zero-copy capture→encode: the PipeWire dmabuf is imported into CUDA via EGL
-//! and handed to NVENC, so the CPU never copies pixels. VAAPI LINEAR-dmabuf
-//! passthrough is the same idea without the EGL hop.
+//! Zero-copy capture→encode: the PipeWire dmabuf is imported into CUDA, through its
+//! own driver memory object or EGL, and handed to NVENC, so the CPU never copies
+//! pixels. VAAPI LINEAR-dmabuf passthrough is the same idea without the hop.
 //!
 //! `PUNKTFUNK_ZEROCOPY` unset defaults ON. `=0` opts out; `PUNKTFUNK_FORCE_SHM`
 //! forces SHM. Explicit `=1` ([`zerocopy_forced`]) keeps a failed negotiation
@@ -22,6 +22,7 @@ pub mod gbm;
 pub mod ipc;
 mod ladder;
 pub mod proto;
+pub mod rm;
 #[cfg(test)]
 mod tiled_pattern;
 pub mod vkdev;
@@ -94,6 +95,12 @@ pub fn nvenc_raw_enabled() -> bool {
 /// encodes the producer's buffer in place ([`direct`]).
 pub fn nvenc_direct_enabled() -> bool {
     flag_opt("PUNKTFUNK_NVENC_DIRECT").unwrap_or(true)
+}
+
+/// `PUNKTFUNK_NVENC_RM_IMPORT=0` keeps the in-place lane on its EGL import. Default on: the
+/// lane maps a buffer through the memory object NVIDIA's driver holds behind it ([`rm`]).
+pub fn nvenc_rm_import_enabled() -> bool {
+    flag_opt("PUNKTFUNK_NVENC_RM_IMPORT").unwrap_or(true)
 }
 
 /// Can this box run the fused convert at all? Asks a worker to export the convert timeline,
