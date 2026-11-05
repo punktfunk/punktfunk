@@ -295,6 +295,7 @@ impl ScreenView for PresetName {
             label: "Name".into(),
             text: self.name.clone(),
             digits: false,
+            secure: false,
         };
         self.editing.then_some(field)
     }

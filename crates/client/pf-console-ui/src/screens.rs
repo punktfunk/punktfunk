@@ -27,6 +27,7 @@ pub(crate) mod ring_editor;
 pub(crate) mod search;
 pub(crate) mod settings;
 pub(crate) mod shortcut_editor;
+pub(crate) mod unlock;
 
 use crate::glyphs::Hint;
 use crate::library::LibraryShared;
@@ -162,6 +163,8 @@ pub struct EditField {
     pub text: String,
     /// Digits only: a PIN, a port, a bitrate.
     pub digits: bool,
+    /// A password: the keyboard masks it, and `text` is always empty.
+    pub secure: bool,
 }
 
 impl EditField {
@@ -170,6 +173,15 @@ impl EditField {
             label: label.into(),
             text: text.into(),
             digits,
+            secure: false,
+        })
+    }
+
+    /// A password field. What it holds stays with the screen.
+    fn secret(label: &str) -> Option<EditField> {
+        Some(EditField {
+            secure: true,
+            ..EditField::new(label, "", false)?
         })
     }
 }
@@ -371,6 +383,8 @@ pub(crate) enum Nav {
 pub(crate) struct Outbox {
     pub nav: Option<Nav>,
     pub connect: Option<ConnectIntent>,
+    /// The password prompt's unlock: `connect` dials with it, past the profile and seat checks.
+    pub unlock: Option<punktfunk_core::quic::v2::msg::ProfileUnlock>,
     pub cmds: Vec<ConsoleCmd>,
     pub toast: Option<String>,
     /// Clipboard text. Rides the run loop, not the command bus: SDL owns the clipboard.
@@ -482,6 +496,8 @@ pub(crate) enum Screen {
     InputTest(input_test::InputTestScreen),
     /// Who plays on a host. Raised by Switch profile, and by a connect that needs a pick.
     Profiles(profiles::ProfilesScreen),
+    /// A locked profile's password. Raised by a connect to one, and by the host's refusal.
+    Unlock(unlock::UnlockScreen),
 }
 
 /// What every screen answers. The shell reaches the top screen's through [`Screen::view`]
@@ -576,6 +592,7 @@ impl Screen {
             Screen::PresetEdit(s) => s,
             Screen::InputTest(s) => s,
             Screen::Profiles(s) => s,
+            Screen::Unlock(s) => s,
         }
     }
 
@@ -605,6 +622,7 @@ impl Screen {
             Screen::PresetEdit(s) => s,
             Screen::InputTest(s) => s,
             Screen::Profiles(s) => s,
+            Screen::Unlock(s) => s,
         }
     }
 

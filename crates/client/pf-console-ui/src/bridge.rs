@@ -102,6 +102,8 @@ impl CreateOptions {
                 safe: self.safe_area.unwrap_or(full),
             }),
             profiles: self.profiles,
+            // These hosts read a `Launch` as JSON, which never carries a secret.
+            prompts_unlock: false,
         };
         (opts, self.entry.into_entry(), store)
     }
@@ -470,10 +472,11 @@ mod tests {
             label: "PIN".into(),
             text: "12".into(),
             digits: true,
+            secure: false,
         };
         assert_eq!(
             Event::EditField(field).to_json(),
-            r#"{"edit_text":{"label":"PIN","text":"12","digits":true}}"#
+            r#"{"edit_text":{"label":"PIN","text":"12","digits":true,"secure":false}}"#
         );
     }
 

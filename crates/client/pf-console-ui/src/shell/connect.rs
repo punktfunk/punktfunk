@@ -6,7 +6,9 @@ use crate::anim::Spring;
 use crate::model::{ConsoleCmd, HostRow, ProfilesAnswer};
 use crate::screens::{ConnectIntent, Nav, ProfileAsk, Screen, Seated};
 use pf_client_core::console::OverlayAction;
-use pf_client_core::profiles::{seat_gate, ProfilePick, SeatGate};
+use pf_client_core::profiles::{seat_gate, ListedProfile, ProfilePick, SeatGate, UnlockNeed};
+use pf_client_core::unlock::{self, Gate, Pending};
+use punktfunk_core::quic::v2::msg::ProfileUnlock;
 use skia_safe::Rect;
 
 /// One connect from the press to the stream, one phase at a time.
@@ -159,6 +161,18 @@ pub(super) struct Connecting {
     /// Host is parked pending operator approval. Takeover title is
     /// "Waiting for approval", not "Connecting".
     pub(super) request_access: bool,
+    /// The host holds a dial that carries an unlock while the profile's desktop starts: this
+    /// progress line instead of the approval wait.
+    pub(super) starting: Option<String>,
+}
+
+/// The last dial that named a profile: what a `ProfileLocked` close prompts for.
+pub(super) struct LockedDial {
+    /// The dial again: its profile named, its checks behind it.
+    intent: ConnectIntent,
+    need: UnlockNeed,
+    /// It carried an unlock and has not streamed: a `Pending` is the desktop starting.
+    sent: bool,
 }
 
 /// Where the launch hold asks after its title: the shelf's host, on the
@@ -258,13 +272,15 @@ impl Shell {
                     title,
                     appear: 0.0,
                     request_access: false,
+                    starting: None,
                 })
             }
             None => self.connect.drop_card(),
         }
     }
 
-    /// A due re-ask connects again; a second ask in flight stays the second.
+    /// A due re-ask connects again; a second ask in flight stays the second. A `ProfileLocked`
+    /// close reopens the password prompt with the host's sentence, and never dials by itself.
     pub(crate) fn session_failed(&mut self, msg: &str) {
         self.connect.end_dial();
         self.in_stream = false;
@@ -275,6 +291,13 @@ impl Shell {
             }
             Reask::Asking => self.reask = Reask::Asking,
             Reask::None | Reask::Armed(_) => {}
+        }
+        let locked = self.console.take_locked();
+        if let Some(d) = self.locked.take().filter(|_| locked) {
+            let error = unlock::refusal_line(msg);
+            if let Gate::Prompt { error } = unlock::after_refusal(d.need, None, d.sent, error) {
+                return self.prompt_unlock(d.intent, error);
+            }
         }
         self.show_toast_kind(format!("Couldn't connect — {msg}"), ToastKind::Error);
     }
@@ -299,6 +322,9 @@ impl Shell {
 
     pub(crate) fn session_streaming(&mut self) {
         self.connect.drop_card();
+        if let Some(d) = &mut self.locked {
+            d.sent = false;
+        }
         if matches!(self.reask, Reask::Armed(_)) {
             self.reask = Reask::None;
         }
@@ -476,10 +502,17 @@ impl Shell {
         }
     }
 
-    /// The host parked the connect for its operator: the card says "Waiting for approval".
+    /// The host holds the dial with `Pending`: the card says "Waiting for approval", or, for a
+    /// dial that carries an unlock, that the profile's desktop is starting.
     pub(crate) fn session_awaiting_approval(&mut self) {
-        if let Some(c) = self.connect.card_mut() {
-            c.request_access = true;
+        let unlocking =
+            (self.locked.as_ref().filter(|d| d.sent)).map(|d| self.host_name(&d.intent));
+        let Some(c) = self.connect.card_mut() else {
+            return;
+        };
+        match unlock::pending(unlocking.is_some()) {
+            Pending::Starting => c.starting = unlocking.map(|host| unlock::starting_line(&host)),
+            Pending::Approval => c.request_access = true,
         }
     }
 
@@ -501,6 +534,7 @@ impl Shell {
                 .unwrap_or_else(|| "the host".to_string()),
             appear: 1.0,
             request_access: false,
+            starting: None,
         });
         self.show_toast(msg.to_string());
     }
@@ -571,7 +605,7 @@ impl Shell {
         let listed = match answer {
             Some(ProfilesAnswer::Listed(l)) if !l.is_empty() => Some(l),
             Some(ProfilesAnswer::Listed(_) | ProfilesAnswer::NoProfiles) => None,
-            Some(ProfilesAnswer::Failed(_)) | None => return self.dial(intent),
+            Some(ProfilesAnswer::Failed(_)) | None => return self.dial(intent, None),
         };
         // The row as it stands now: a shelf's copy predates a pick made since it opened.
         let saved = self
@@ -681,13 +715,14 @@ impl Shell {
     }
 
     /// The picked profile's seat decides the dial (§9.2): dial now, wake a stopped seat, or
-    /// wait for a starting one. An unavailable seat says why and does not dial.
+    /// wait for a starting one. An unavailable seat says why and does not dial. A locked
+    /// profile's password comes before its dial.
     fn dial_when_seated(&mut self, mut intent: ConnectIntent) {
         let Some(Seated { row, mgmt }) = intent.seat.take() else {
-            return self.dial(intent);
+            return self.dial(intent, None);
         };
         let detail = match seat_gate(&row) {
-            SeatGate::Dial => return self.dial(intent),
+            SeatGate::Dial => return self.dial_or_prompt(intent, Some(&row)),
             SeatGate::Refuse(line) => return self.show_toast_kind(line, ToastKind::Error),
             SeatGate::Wake => {
                 self.send_cmd(ConsoleCmd::WakeProfile {
@@ -728,9 +763,9 @@ impl Shell {
         }
         if let Some(ProfilesAnswer::Listed(listed)) = answer {
             // A profile the box no longer lists dials as it stands: the host answers for it.
-            let gate = listed.iter().find(|p| p.id == w.id).map(seat_gate);
-            match gate {
-                None | Some(SeatGate::Dial) => return self.dial(w.intent),
+            let row = listed.iter().find(|p| p.id == w.id);
+            match row.map(seat_gate) {
+                None | Some(SeatGate::Dial) => return self.dial_or_prompt(w.intent, row),
                 Some(SeatGate::Refuse(line)) => {
                     return self.show_toast_kind(line, ToastKind::Error);
                 }
@@ -750,17 +785,67 @@ impl Shell {
         self.connect = Connect::SeatWait(w);
     }
 
-    fn dial(&mut self, intent: ConnectIntent) {
+    /// Dial `intent`, whose profile is `row` as the box listed it: first the password prompt,
+    /// where the profile needs one and this host carries it. The console holds no device key.
+    fn dial_or_prompt(&mut self, intent: ConnectIntent, row: Option<&ListedProfile>) {
+        match row {
+            Some(row) if self.prompts_unlock => match unlock::before_dial(row.unlock, false) {
+                Gate::Prompt { error } => self.prompt_unlock(intent, error),
+                Gate::Dial | Gate::Key => self.dial(intent, None),
+            },
+            _ => self.dial(intent, None),
+        }
+    }
+
+    /// The password prompt for `intent`'s profile, `error` under its field.
+    pub(super) fn prompt_unlock(&mut self, intent: ConnectIntent, error: Option<String>) {
+        let id = intent.profile.clone().unwrap_or_default();
+        let name = self
+            .listed_row(&intent)
+            .map(|p| p.display_name.clone())
+            .filter(|n| !n.is_empty())
+            .unwrap_or(id);
+        let host = self.host_name(&intent);
+        let screen = crate::screens::unlock::UnlockScreen::new(intent, name, host, error);
+        self.apply_nav(Nav::Push(Box::new(Screen::Unlock(screen))));
+    }
+
+    /// The profile `intent` names, as its box last listed it.
+    fn listed_row(&self, intent: &ConnectIntent) -> Option<&ListedProfile> {
+        let id = intent.profile.as_deref()?;
+        let listed = self.profiles.listed(&intent.fp_hex)?;
+        listed.iter().find(|p| p.id == id)
+    }
+
+    /// The card's name for the host `intent` dials, else its title.
+    fn host_name(&self, intent: &ConnectIntent) -> String {
+        (self.hosts.iter())
+            .find(|h| !h.fp_hex.is_empty() && h.fp_hex == intent.fp_hex)
+            .map_or_else(|| intent.title.clone(), |h| h.name.clone())
+    }
+
+    /// The `Launch`, with `unlock` held for the host to take. Only the first dial carries one.
+    /// A dial that names a profile is kept for the prompt a `ProfileLocked` close reopens.
+    pub(super) fn dial(&mut self, intent: ConnectIntent, unlock: Option<ProfileUnlock>) {
         if let Some(id) = &intent.profile {
             self.profiles.note_pick(&intent.fp_hex, id);
         }
+        self.locked = (self.prompts_unlock && intent.profile.is_some()).then(|| LockedDial {
+            need: (self.listed_row(&intent)).map_or(UnlockNeed::Password, |p| p.unlock),
+            intent: intent.clone(),
+            sent: unlock.is_some(),
+        });
+        if self.prompts_unlock {
+            self.console.put_unlock(unlock);
+        }
         // A game launch comes off a shelf, which knows both the host's management
-        // port and where it just drew the tile. A picker on top is leaving: its shelf is under it.
+        // port and where it just drew the tile. A picker or a prompt on top is leaving: its
+        // shelf is under it.
         let shelf = self
             .stack
             .iter()
             .rev()
-            .find(|s| !matches!(s, Screen::Profiles(_)))
+            .find(|s| !matches!(s, Screen::Profiles(_) | Screen::Unlock(_)))
             .and_then(Screen::shelf);
         let launch = match (&intent.launch, shelf) {
             (Some(id), Some(lib)) => Some((
@@ -823,6 +908,7 @@ mod tests {
             title: title.into(),
             appear: 0.0,
             request_access: false,
+            starting: None,
         };
         let mut c = asking(None);
         assert_eq!(c.takeover(), Some(Takeover::Asking));

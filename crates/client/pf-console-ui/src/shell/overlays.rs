@@ -75,7 +75,15 @@ impl Shell {
         let takeover: Option<(f64, bool, String, String, Vec<Hint>)> =
             if let Some(c) = self.connect.card_mut() {
                 c.appear = approach(c.appear, 1.0, dt, 0.07);
-                if c.request_access {
+                if let Some(line) = &c.starting {
+                    Some((
+                        c.appear,
+                        true,
+                        line.clone(),
+                        String::new(),
+                        vec![Hint::new(HintKey::Back, "Cancel")],
+                    ))
+                } else if c.request_access {
                     Some((
                         c.appear,
                         true,

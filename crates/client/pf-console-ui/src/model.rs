@@ -4,9 +4,10 @@
 //! network or disk rides a [`ConsoleCmd`] — the overlay never blocks. A result that answers
 //! a command carries that command's [`RequestKey`].
 
+use punktfunk_core::quic::v2::msg::ProfileUnlock;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, VecDeque};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 /// The request a shared result answers: the host it went to and an epoch no other request
@@ -303,6 +304,10 @@ struct ConsoleState {
     profiles: BTreeMap<String, ProfilesAnswer>,
     /// Answers to [`ConsoleCmd::FetchAvatar`] by URL, each taken once.
     avatars: Vec<(String, Arc<[u8]>)>,
+    /// The profile unlock the last `Launch` carries, until its dial takes it.
+    unlock: Option<ProfileUnlock>,
+    /// Raised by a dial the host closed with `ProfileLocked`.
+    locked: Arc<AtomicBool>,
 }
 
 /// What a host answered [`ConsoleCmd::FetchProfiles`] with.
@@ -494,6 +499,30 @@ impl ConsoleShared {
 
     pub(crate) fn take_notice(&self) -> Option<String> {
         self.0.lock().unwrap().notice.take()
+    }
+
+    /// The unlock the `Launch` just taken carries, for its dial. Only an embedder whose console
+    /// prompts ([`crate::shell::ConsoleOptions::prompts_unlock`]) gets one.
+    pub fn take_unlock(&self) -> Option<ProfileUnlock> {
+        self.0.lock().unwrap().unlock.take()
+    }
+
+    /// The flag a dial raises when the host closes it with `ProfileLocked`
+    /// (`SessionParams::locked`): the console's prompt opens again on the failure that follows.
+    pub fn locked_flag(&self) -> Arc<AtomicBool> {
+        self.0.lock().unwrap().locked.clone()
+    }
+
+    /// The next `Launch`'s unlock, replacing (and wiping) any left untaken, and a lowered flag.
+    pub(crate) fn put_unlock(&self, unlock: Option<ProfileUnlock>) {
+        let mut s = self.0.lock().unwrap();
+        s.unlock = unlock;
+        s.locked.store(false, Ordering::Relaxed);
+    }
+
+    /// Whether the dial that just failed was closed with `ProfileLocked`. Lowers the flag.
+    pub(crate) fn take_locked(&self) -> bool {
+        self.0.lock().unwrap().locked.swap(false, Ordering::Relaxed)
     }
 }
 
