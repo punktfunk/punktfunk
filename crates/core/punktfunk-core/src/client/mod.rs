@@ -643,6 +643,13 @@ pub struct ConnectParams {
     /// [`Self::studio_range`] for HDR10: this display shows full-range HDR as studio range
     /// ([`crate::quic::v2::registry::FEATURE_STUDIO_RANGE_HDR`]).
     pub studio_range_hdr: bool,
+    /// This embedder asks the player for a profile's password and dials again with it after a
+    /// [`RejectReason::ProfileLocked`](crate::reject::RejectReason::ProfileLocked), so the host
+    /// is offered [`crate::quic::v2::registry::FEATURE_PROFILE_UNLOCK`]. An `unlock` implies it.
+    pub prompts_unlock: bool,
+    /// The unlock this connect sends, once, right after `ClientHello` on its first dial; the
+    /// dial a `Redirect` sends carries none. Wiped once sent or dropped.
+    pub unlock: Option<crate::quic::v2::msg::ProfileUnlock>,
     /// Handshake budget. The dial re-dials inside it, so a waking host is not a failure.
     pub timeout: Duration,
     /// Abort while blocked: a request-access knock parks ~185 s. Never alias the session's
@@ -695,6 +702,8 @@ impl ConnectParams {
             shows_screens: false,
             studio_range: false,
             studio_range_hdr: false,
+            prompts_unlock: false,
+            unlock: None,
             timeout,
             cancel: None,
             on_pending: None,
@@ -704,13 +713,19 @@ impl ConnectParams {
 
 impl NativeClient {
     /// Dial a `punktfunk/2` host and block until the handshake lands, `timeout` passes or
-    /// `cancel` is set. A host that turns the dial away is [`PunktfunkError::Rejected`].
+    /// `cancel` is set. A host that turns the dial away is [`PunktfunkError::Rejected`]; an
+    /// unlock outside the wire's bounds is `InvalidArg` before any dial.
     ///
     /// The host may answer below the ask: open the audio device from
     /// [`audio_codec`](Self::audio_codec) / [`audio_sample_rate_hz`](Self::audio_sample_rate_hz) /
     /// [`audio_bits`](Self::audio_bits) and build the decoder from [`codec`](Self::codec), never
     /// from `params`.
     pub fn connect(mut params: ConnectParams) -> Result<NativeClient> {
+        if params.unlock.as_ref().is_some_and(|u| !u.is_valid()) {
+            return Err(PunktfunkError::InvalidArg("bad ProfileUnlock"));
+        }
+        // An embedder with an unlock in hand has prompted.
+        params.prompts_unlock |= params.unlock.is_some();
         let (planes_tx, planes) = planes::channels();
         let (input_tx, input_rx) = tokio::sync::mpsc::unbounded_channel::<InputEvent>();
         let (mic_tx, mic_rx) = tokio::sync::mpsc::channel::<(u32, u64, Vec<u8>)>(MIC_QUEUE);

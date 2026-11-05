@@ -3,10 +3,11 @@
 //! close from the host is [`PunktfunkError::Rejected`], not a transport error; a host that
 //! answers no `pkf2` is the wire-version rejection. A host may answer with a `Redirect`
 //! instead: the session runs on another host of the same box, and the dial repeats there, once.
+//! A profile unlock rides the first dial only, right after its `ClientHello`.
 
 use super::*;
 use crate::crypto::MediaSuite;
-use crate::quic::v2::msg::Redirect;
+use crate::quic::v2::msg::{ProfileUnlock, Redirect};
 
 pub(super) struct HandshakeOut {
     pub(super) conn: ClientConn,
@@ -34,14 +35,18 @@ enum Step {
     Redirected(Redirect),
 }
 
-pub(super) async fn connect_and_handshake(args: &WorkerArgs) -> Result<HandshakeOut> {
+/// `unlock` goes to the first dial; the one a `Redirect` sends gets `None`.
+pub(super) async fn connect_and_handshake(
+    args: &WorkerArgs,
+    mut unlock: Option<ProfileUnlock>,
+) -> Result<HandshakeOut> {
     let p = &args.params;
     // One connect budget covers a redirect's second dial.
     let deadline = tokio::time::Instant::now() + p.timeout;
     let (mut host, mut port, mut pin) = (p.host.clone(), p.port, p.pin);
     let mut redirected = false;
     loop {
-        match dial(args, &host, port, pin, deadline).await? {
+        match dial(args, &host, port, pin, deadline, unlock.take()).await? {
             Dialed::Session(out) => return Ok(*out),
             Dialed::Redirected(to) => {
                 follow(&mut redirected, (&mut host, &mut port, &mut pin), &to)?
@@ -51,9 +56,9 @@ pub(super) async fn connect_and_handshake(args: &WorkerArgs) -> Result<Handshake
 }
 
 /// What this client offers. A format epoch is the embedder's promise to rebuild its decoder,
-/// screens its promise to show more than one picture, asked for at Hello or later, and studio
-/// range its report that the display mishandles full range, so core offers each only when the
-/// embedder made it.
+/// screens its promise to show more than one picture, asked for at Hello or later, studio
+/// range its report that the display mishandles full range, and a profile unlock its promise
+/// to prompt, so core offers each only when the embedder made it.
 fn client_features(p: &ConnectParams) -> crate::quic::v2::features::FeatureSet {
     use crate::quic::v2::registry;
     let mut set = crate::quic::v2::features::FeatureSet::default()
@@ -76,6 +81,9 @@ fn client_features(p: &ConnectParams) -> crate::quic::v2::features::FeatureSet {
     }
     if p.studio_range_hdr {
         set = set.with(registry::FEATURE_STUDIO_RANGE_HDR);
+    }
+    if p.prompts_unlock {
+        set = set.with(registry::FEATURE_PROFILE_UNLOCK);
     }
     set
 }
@@ -110,12 +118,14 @@ fn follow(
     Ok(())
 }
 
+/// One connection's handshake. `unlock` follows the `ClientHello` and is wiped once written.
 async fn dial(
     args: &WorkerArgs,
     host: &str,
     port: u16,
     pin: Option<[u8; 32]>,
     deadline: tokio::time::Instant,
+    unlock: Option<ProfileUnlock>,
 ) -> Result<Dialed> {
     let p = &args.params;
     let shutdown = &args.shared.shutdown;
@@ -268,6 +278,11 @@ async fn dial(
             screens: p.screens.clone(),
         };
         v2io::send(&mut send, &hello).await?;
+        if let Some(unlock) = unlock {
+            // quinn's send buffer holds an unwiped copy until the host acks it; wiping that
+            // one needs a hook in quinn.
+            v2io::write_frame(&mut send, &unlock.encode()).await?;
+        }
         // The hello carried the resume id, so the entry is spent now, not by a dial that died.
         crate::client::resume::take(host, port);
         // `Pending` repeats while the host asks its console about this device.
@@ -509,6 +524,114 @@ mod tests {
             ..Default::default()
         }];
         assert!(client_features(&p).has(FEATURE_SCREENS), "an ask");
+    }
+
+    /// The unlock feature is offered on the embedder's promise to prompt, never by default.
+    #[test]
+    fn an_unlock_is_offered_on_the_promise() {
+        use crate::quic::v2::registry::FEATURE_PROFILE_UNLOCK;
+        let mode = Mode {
+            width: 1920,
+            height: 1080,
+            refresh_hz: 60,
+        };
+        let mut p = ConnectParams::new("couch-pc", 9777, mode, Duration::from_secs(1));
+        assert!(!client_features(&p).has(FEATURE_PROFILE_UNLOCK));
+        p.prompts_unlock = true;
+        assert!(client_features(&p).has(FEATURE_PROFILE_UNLOCK));
+    }
+
+    /// The first dial sends the unlock right after its hello and offers the feature; the dial
+    /// a `Redirect` sends carries none. The seat's `ProfileLocked` close reaches the caller with
+    /// its sentence.
+    #[test]
+    fn the_unlock_rides_the_first_dial_only() {
+        use crate::quic::v2::hello::ClientHello;
+        use crate::quic::v2::io::{read_stream_type, send, FrameReader};
+        use crate::quic::v2::msg::{decode, ENROLL_NONE, UNLOCK_PASSWORD};
+        use crate::quic::v2::registry::{FEATURE_PROFILE_UNLOCK, STREAM_CONTROL};
+
+        async fn hello(
+            ep: &quinn::Endpoint,
+        ) -> (
+            quinn::Connection,
+            quinn::SendStream,
+            FrameReader<quinn::RecvStream>,
+            bool,
+        ) {
+            let conn = ep.accept().await.unwrap().await.unwrap();
+            let (tx, mut rx) = conn.accept_bi().await.unwrap();
+            assert_eq!(read_stream_type(&mut rx).await.unwrap(), STREAM_CONTROL);
+            let mut r = FrameReader::new(rx);
+            let (ty, body) = r.read_frame().await.unwrap();
+            let h = decode::<ClientHello>(ty, &body).unwrap();
+            (conn, tx, r, h.features.has(FEATURE_PROFILE_UNLOCK))
+        }
+
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let _in_rt = rt.enter();
+        let door = endpoint::server("127.0.0.1:0".parse().unwrap()).unwrap();
+        let seat = endpoint::server("127.0.0.1:0".parse().unwrap()).unwrap();
+        let door_port = door.local_addr().unwrap().port();
+        let seat_port = seat.local_addr().unwrap().port();
+        let door_side = rt.spawn(async move {
+            let (conn, mut tx, mut r, offered) = hello(&door).await;
+            let (ty, body) = r.read_frame().await.unwrap();
+            let unlock = decode::<ProfileUnlock>(ty, &body).unwrap();
+            let to = Redirect {
+                port: seat_port,
+                ..Redirect::default()
+            };
+            send(&mut tx, &to).await.unwrap();
+            conn.closed().await;
+            (offered, unlock.kind, unlock.secret.to_vec())
+        });
+        let seat_side = rt.spawn(async move {
+            let (conn, _tx, mut r, offered) = hello(&seat).await;
+            let more = tokio::time::timeout(Duration::from_millis(300), r.read_frame()).await;
+            let locked = crate::reject::PROFILE_LOCKED_CLOSE_CODE;
+            conn.close(locked.into(), b"Wrong password. Try again.");
+            let _ = tokio::time::timeout(Duration::from_secs(1), seat.wait_idle()).await;
+            (offered, more.is_err())
+        });
+
+        let mode = Mode {
+            width: 1280,
+            height: 720,
+            refresh_hz: 60,
+        };
+        let secret = zeroize::Zeroizing::new(b" open sesame ".to_vec());
+        let unlock = ProfileUnlock::new(UNLOCK_PASSWORD, secret, false, ENROLL_NONE, vec![]);
+        let params = ConnectParams {
+            unlock: Some(unlock.unwrap()),
+            ..ConnectParams::new("127.0.0.1", door_port, mode, Duration::from_secs(5))
+        };
+        let got = crate::client::NativeClient::connect(params).map(|_| ());
+        let five = Duration::from_secs(5);
+        let (door_offered, kind, secret) = rt
+            .block_on(tokio::time::timeout(five, door_side))
+            .unwrap()
+            .unwrap();
+        let (seat_offered, seat_heard_nothing) = rt
+            .block_on(tokio::time::timeout(five, seat_side))
+            .unwrap()
+            .unwrap();
+        assert!(
+            door_offered && seat_offered,
+            "an unlock in hand offers the feature"
+        );
+        assert_eq!(
+            (kind, secret.as_slice()),
+            (UNLOCK_PASSWORD, &b" open sesame "[..])
+        );
+        assert!(seat_heard_nothing, "the redirected dial sent an unlock");
+        match got {
+            Err(PunktfunkError::Rejected(r, said)) => {
+                assert_eq!(r, crate::reject::RejectReason::ProfileLocked);
+                assert_eq!(said, "Wrong password. Try again.");
+            }
+            other => panic!("{other:?}"),
+        }
     }
 
     /// Studio range is asked for only on the embedder's report, SDR and HDR each on its own.
