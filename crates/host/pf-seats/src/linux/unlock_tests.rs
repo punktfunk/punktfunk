@@ -763,7 +763,7 @@ fn a_key_proof_for_anything_else_is_refused() {
 fn a_malformed_key_or_signature_is_refused_before_use() {
     let rig = rig();
     let phone = device(1);
-    let (_, key) = p256();
+    let (pair, key) = p256();
     let short = UnlockKey {
         public: key.public[..128].to_owned(),
         ..key.clone()
@@ -788,14 +788,29 @@ fn a_malformed_key_or_signature_is_refused_before_use() {
         signature: "00".repeat(1025),
     };
     assert_eq!(rig.refused(&phone, huge), "invalid_request");
-    let odd = Proof::Key {
-        signature: "abc".into(),
-    };
-    assert_eq!(rig.refused(&phone, odd), "invalid_request");
+    assert_eq!(rig.refused(&phone, odd_proof()), "invalid_request");
     let upper = Proof::Key {
         signature: "AB".repeat(40),
     };
     assert_eq!(rig.refused(&phone, upper), "invalid_request");
+
+    let challenge = rig.challenge(&phone);
+    assert_eq!(rig.refused(&phone, odd_proof()), "invalid_request");
+    let late = signed(&pair, &challenge, &rig.seat.id, &phone, &box_fp());
+    assert_eq!(
+        rig.refused(&phone, late),
+        "proof_invalid",
+        "used up by the refusal"
+    );
+    let keyless = signed(&pair, &challenge, &rig.seat.id, &device(2), &box_fp());
+    assert_eq!(rig.refused(&device(2), keyless), "unlock_required");
+    assert_eq!(rig.pam_calls(), 1, "a key proof never reaches PAM");
+}
+
+fn odd_proof() -> Proof {
+    Proof::Key {
+        signature: "abc".into(),
+    }
 }
 
 /// An RSA 2048 key enrols and proves the device; one of another size is refused.

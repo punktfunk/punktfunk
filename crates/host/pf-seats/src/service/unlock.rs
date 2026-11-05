@@ -189,10 +189,10 @@ impl<B: PlatformBackend> SeatService<B> {
         fingerprint: [u8; 32],
         signature: &str,
     ) -> Result<CommandResult, ApiError> {
-        let signature = unlock::signature_bytes(signature)
-            .ok_or_else(|| invalid("signature is not 1 to 1024 bytes of lowercase hex"))?;
         let fp = device.fingerprint.as_str();
         let challenge = self.challenges().take(&checked.id, fp, Instant::now());
+        let signature = unlock::signature_bytes(signature)
+            .ok_or_else(|| invalid("signature is not 1 to 1024 bytes of lowercase hex"))?;
         let key = self
             .device_list(checked)?
             .key_of(fp)
