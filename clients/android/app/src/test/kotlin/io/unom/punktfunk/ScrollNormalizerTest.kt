@@ -4,6 +4,7 @@ import android.view.InputDevice
 import android.view.MotionEvent
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -112,6 +113,35 @@ class ScrollNormalizerTest {
             ScrollWire.SOURCE_UNKNOWN,
             wireScrollSource(eventWithSource(InputDevice.SOURCE_JOYSTICK).source),
         )
+    }
+
+    @Test
+    fun touchpadTravelScrollsWithTheContent() {
+        // Density 2: 4 px is 2 DIP. Fingers down scrolls up (+), fingers right scrolls left (−).
+        assertEquals(
+            listOf(
+                NormalizedScroll(0, 2 * 256, ScrollWire.SOURCE_FINGER, ScrollWire.PHASE_NONE),
+                NormalizedScroll(1, -2 * 256, ScrollWire.SOURCE_FINGER, ScrollWire.PHASE_NONE),
+            ),
+            norm.travel(4f, 4f, 2f),
+        )
+        assertEquals(emptyList<NormalizedScroll>(), norm.travel(0f, 0f, 2f))
+    }
+
+    @Test
+    fun onlyAButtonlessMouseDownOpensATouchpadScroll() {
+        fun ev(action: Int, tool: Int, buttons: Int): MotionEvent {
+            val p = MotionEvent.PointerProperties().apply { toolType = tool }
+            return MotionEvent.obtain(
+                0L, 0L, action, 1, arrayOf(p), arrayOf(MotionEvent.PointerCoords()),
+                0, buttons, 1f, 1f, 0, 0, InputDevice.SOURCE_MOUSE, 0,
+            )
+        }
+        val mouse = MotionEvent.TOOL_TYPE_MOUSE
+        assertTrue(isTouchpadScrollDown(ev(MotionEvent.ACTION_DOWN, mouse, 0)))
+        assertFalse(isTouchpadScrollDown(ev(MotionEvent.ACTION_DOWN, mouse, MotionEvent.BUTTON_PRIMARY)))
+        assertFalse(isTouchpadScrollDown(ev(MotionEvent.ACTION_DOWN, MotionEvent.TOOL_TYPE_FINGER, 0)))
+        assertFalse(isTouchpadScrollDown(ev(MotionEvent.ACTION_MOVE, mouse, 0)))
     }
 
     /** Every sequence Rust's `ScrollAccumulator` wrote; `../../../` from the module is the root. */

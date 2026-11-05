@@ -117,4 +117,13 @@ internal class ScrollNormalizer {
             event(source, ScrollWire.PHASE_NONE, ScrollWire.AXIS_HORIZONTAL, h),
         )
     }
+
+    /**
+     * A touchpad's finger travel in window pixels → Finger deltas in DIP. The content follows
+     * the fingers, as on a touchscreen: fingers down scrolls up, fingers right scrolls left.
+     */
+    fun travel(dx: Float, dy: Float, density: Float): List<NormalizedScroll> = listOfNotNull(
+        event(ScrollWire.SOURCE_FINGER, ScrollWire.PHASE_NONE, ScrollWire.AXIS_VERTICAL, dy / density.toDouble()),
+        event(ScrollWire.SOURCE_FINGER, ScrollWire.PHASE_NONE, ScrollWire.AXIS_HORIZONTAL, -dx / density.toDouble()),
+    )
 }

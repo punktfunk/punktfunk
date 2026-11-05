@@ -73,6 +73,15 @@ internal fun wireScrollSource(motionSource: Int): Int = when {
 }
 
 /**
+ * Whether a touch-stream DOWN opens a touchpad scroll, not a click. ChromeOS reports a touchpad's
+ * two-finger scroll as a one-pointer mouse drag that holds no button; a click-drag always holds one.
+ */
+internal fun isTouchpadScrollDown(ev: MotionEvent): Boolean =
+    ev.actionMasked == MotionEvent.ACTION_DOWN &&
+        ev.getToolType(0) == MotionEvent.TOOL_TYPE_MOUSE &&
+        ev.buttonState == 0
+
+/**
  * Physical mouse → wire, in two modes (the iPadOS/desktop model):
  *  * **uncaptured** (default): hover/drag positions forward as absolute cursor moves
  *    (`MouseMoveAbs`, host-normalized against the window size) — desktop-style pointing. The
@@ -144,7 +153,15 @@ class MouseForwarder(
     private var moveAccX = 0f
     private var moveAccY = 0f
 
-    /** Uncaptured mouse events on the TOUCH stream (position while a button is down). */
+    /** A ChromeOS touchpad scroll is open ([isTouchpadScrollDown]); its drag was last here. */
+    private var dragScroll = false
+    private var dragX = 0f
+    private var dragY = 0f
+
+    /**
+     * Uncaptured mouse events on the TOUCH stream: position while a button is down, and a
+     * touchpad's two-finger scroll where the platform reports it as a drag.
+     */
     fun onTouchEvent(ev: MotionEvent): Boolean {
         if (suspended) return false // the ring's clickable slots take it
         if (!pointerGranted) return true // inert: consumed over the stream, nothing forwards
@@ -159,6 +176,17 @@ class MouseForwarder(
                 }
                 MotionEvent.CLASSIFICATION_PINCH -> return true
             }
+        }
+        // Each DOWN decides whether its whole stream is a scroll; the scroll never engages capture.
+        if (ev.actionMasked == MotionEvent.ACTION_DOWN) dragScroll = isTouchpadScrollDown(ev)
+        if (dragScroll) {
+            when (ev.actionMasked) {
+                MotionEvent.ACTION_MOVE -> scrollNorm.travel(ev.x - dragX, ev.y - dragY, density).forEach(::sendScroll)
+                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> dragScroll = false
+            }
+            dragX = ev.x
+            dragY = ev.y
+            return true
         }
         when (ev.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
@@ -302,8 +330,7 @@ class MouseForwarder(
 
     /**
      * One two-finger swipe sample, batched history included. The gesture axes hold the negated
-     * finger travel in pixels (AOSP `GestureConverter`): fingers up is a positive Y distance,
-     * the content scrolling down, so the wheel's vertical sign flips and its horizontal does not.
+     * finger travel in pixels (AOSP `GestureConverter`), so both flip back into travel.
      */
     @RequiresApi(34)
     private fun gestureScroll(ev: MotionEvent) {
@@ -315,13 +342,11 @@ class MouseForwarder(
             dx += ev.getHistoricalAxisValue(axes.first, i)
             dy += ev.getHistoricalAxisValue(axes.second, i)
         }
-        listOfNotNull(
-            scrollNorm.event(ScrollWire.SOURCE_FINGER, ScrollWire.PHASE_NONE, ScrollWire.AXIS_VERTICAL, -dy / density.toDouble()),
-            scrollNorm.event(ScrollWire.SOURCE_FINGER, ScrollWire.PHASE_NONE, ScrollWire.AXIS_HORIZONTAL, dx / density.toDouble()),
-        ).forEach {
-            NativeBridge.nativeSendNormalizedScroll(handle, it.axis, it.delta, it.source, it.phase)
-        }
+        scrollNorm.travel(-dx, -dy, density).forEach(::sendScroll)
     }
+
+    private fun sendScroll(s: NormalizedScroll) =
+        NativeBridge.nativeSendNormalizedScroll(handle, s.axis, s.delta, s.source, s.phase)
 
     private fun wheel(ev: MotionEvent) {
         // ACTION_SCROLL carries no gesture boundary, so these always send PHASE_NONE —
@@ -333,9 +358,7 @@ class MouseForwarder(
             scrollFactorV.toDouble(),
             scrollFactorH.toDouble(),
             density.toDouble(),
-        ).forEach {
-            NativeBridge.nativeSendNormalizedScroll(handle, it.axis, it.delta, it.source, it.phase)
-        }
+        ).forEach(::sendScroll)
     }
 
     /**
