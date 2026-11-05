@@ -253,8 +253,13 @@ export const NativePairingBody: FC<{
 							? m.pairing_native_bound_for({ name: boundTo.name })
 							: m.pairing_native_enter()}
 					</p>
-					<div className="rounded-lg border bg-muted/40 py-5 text-center font-mono text-4xl font-semibold tracking-[0.3em]">
-						{pin}
+					{/* Padding, not tracking, holds the digits apart. */}
+					<div className="rounded-lg border bg-muted/40 py-5 text-center font-mono text-4xl font-semibold">
+						{[...pin].map((digit, i) => (
+							<span key={i} className="px-1.5">
+								{digit}
+							</span>
+						))}
 					</div>
 					{d.expires_in_secs != null && (
 						<p className="flex items-center justify-center gap-1.5 text-sm text-muted-foreground">
