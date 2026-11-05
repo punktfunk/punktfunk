@@ -14,11 +14,12 @@
 # signals only this script. It records the session id for seat-reap and kills its own children on
 # SIGTERM; seat-reap kills whatever is left.
 #
-# A row on a person's own account runs as that person in a `background` session beside whatever
-# they have on the monitor. It leaves their user manager, their config and their PipeWire alone:
-# the desktop and the host sit on a bus of their own, and the person's own punktfunk-host and
-# punktfunk-kde-session stand down while this runs (their units have ConditionPathExists= on the
-# runtime directory). Two variables say so. PUNKTFUNK_SEAT_OWNER=1 is the box owner's row, which
+# A row on a person's own account runs as that person beside whatever they have on the monitor:
+# the owner's in a `background` session, another person's in the unit's `user` class, which a
+# shutdown at the machine counts as another user's session. It leaves their user manager, their
+# config and their PipeWire alone: the desktop and the host sit on a bus of their own, and the
+# person's own punktfunk-host and punktfunk-kde-session stand down while this runs (their units
+# have ConditionPathExists= on the runtime directory). Two variables say so. PUNKTFUNK_SEAT_OWNER=1 is the box owner's row, which
 # also takes the owner's host.env and stops the owner's own user units. PUNKTFUNK_SEAT_OWN_ACCOUNT=1
 # is another person's row: a contract seat's host on their account, with no owner's settings and
 # none of their processes stopped. The seat contract wins over any file.

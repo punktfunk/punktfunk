@@ -212,9 +212,9 @@ pub(super) fn render_updates(present: impl Fn(&Path) -> bool) -> Option<String> 
     (!binds.is_empty()).then(|| format!("[Service]\n{binds}"))
 }
 
-/// The drop-in of a row on a person's own account, the owner's or another's: a `background`
-/// session, so the monitor's own login stays the one logind and polkit treat as the user's
-/// display.
+/// The drop-in of the owner's row: a `background` session, so the owner's login at the monitor
+/// stays the one logind and polkit treat as the owner's display. Another person's row keeps the
+/// unit's `user` class: a shutdown at the machine counts it as another user's session.
 pub(super) fn render_class() -> &'static str {
     "[Service]\nEnvironment=XDG_SESSION_CLASS=background\n"
 }
@@ -296,8 +296,9 @@ pub(super) fn write_env(
 }
 
 /// Writes the environment file and the drop-ins for `seat`, then reloads systemd when a drop-in
-/// changed. Every seat gets the update helpers' binds. A row on a person's own account gets the
-/// `background` class; a made seat gets its private directories and `shares`.
+/// changed. Every seat gets the update helpers' binds. The owner's row gets the `background`
+/// class, a made seat its private directories and `shares`, and another person's row neither. A
+/// drop-in the row doesn't get is removed: its account may have been another kind of row before.
 pub(super) fn write_unit_files(
     seat: &Seat,
     home: &Path,
@@ -309,17 +310,15 @@ pub(super) fn write_unit_files(
 ) -> Result<(), BackendError> {
     let io = |what: &str, error: std::io::Error| err("session_files", format!("{what}: {error}"));
     write_env(seat, home, state, token, owner, browser)?;
-    let (name, contents) = if seat.owner || seat.adopted_uid.is_some() {
-        ("class.conf", render_class().to_owned())
-    } else {
-        (
-            "binds.conf",
-            render_binds(state, &seat.id, &seat.account, shares),
-        )
-    };
-    let dropin = dropin_dir(&seat.account).join(name);
-    let mut changed = write_if_changed(&dropin, &contents, 0o644)
-        .map_err(|e| io("write the seat unit drop-in", e))?;
+    let mut changed = false;
+    for (name, contents) in kind_dropins(seat, state, shares) {
+        let dropin = dropin_dir(&seat.account).join(name);
+        changed |= match contents {
+            Some(contents) => write_if_changed(&dropin, &contents, 0o644)
+                .map_err(|e| io("write the seat unit drop-in", e))?,
+            None => remove_if_present(&dropin).map_err(|e| io("remove a seat unit drop-in", e))?,
+        };
+    }
     let updates = dropin_dir(&seat.account).join("updates.conf");
     match render_updates(|helper| helper.is_file()) {
         Some(binds) => {
@@ -334,6 +333,28 @@ pub(super) fn write_unit_files(
         daemon_reload()?;
     }
     Ok(())
+}
+
+/// The class and binds drop-ins by file name, each with what `seat` gets in it or `None` for one
+/// it must not have.
+fn kind_dropins(
+    seat: &Seat,
+    state: &Path,
+    shares: Option<&libraries::Shares>,
+) -> [(&'static str, Option<String>); 2] {
+    let made = !seat.owner && seat.adopted_uid.is_none();
+    let class = seat.owner.then(|| render_class().to_owned());
+    let binds = made.then(|| render_binds(state, &seat.id, &seat.account, shares));
+    [("class.conf", class), ("binds.conf", binds)]
+}
+
+/// Removes `path`. `true` when there was one.
+fn remove_if_present(path: &Path) -> std::io::Result<bool> {
+    match std::fs::remove_file(path) {
+        Ok(()) => Ok(true),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(error),
+    }
 }
 
 pub(super) fn daemon_reload() -> Result<(), BackendError> {
@@ -527,6 +548,36 @@ mod tests {
         assert!(!text.contains("CONFIG_DIR"));
         assert!(!text.contains("LIBRARY_DIR"));
         assert!(render_class().contains("XDG_SESSION_CLASS=background"));
+    }
+
+    /// Only the owner's row is a `background` session and only a made seat gets the binds; a
+    /// person's row gets neither, so it runs as the unit's `user` class and a drop-in either
+    /// left from an earlier start is removed.
+    #[test]
+    fn each_row_kind_gets_its_own_drop_ins_and_no_other() {
+        let state = Path::new("/var/lib/punktfunk-seats");
+        let person = Seat {
+            account: "jdoe".into(),
+            adopted_uid: Some(1500),
+            ..seat("Jane")
+        };
+        let kinds = |seat: &Seat| {
+            kind_dropins(seat, state, None).map(|(name, contents)| (name, contents.is_some()))
+        };
+        let gets = |class, binds| [("class.conf", class), ("binds.conf", binds)];
+        assert_eq!(kinds(&owner()), gets(true, false));
+        assert_eq!(kinds(&seat("Desk")), gets(false, true));
+        assert_eq!(kinds(&person), gets(false, false));
+        let [(_, class), _] = kind_dropins(&owner(), state, None);
+        assert_eq!(class.as_deref(), Some(render_class()));
+        let dir = tempfile::tempdir().unwrap();
+        let stale = dir.path().join("class.conf");
+        std::fs::write(&stale, render_class()).unwrap();
+        assert!(remove_if_present(&stale).unwrap());
+        assert!(
+            !remove_if_present(&stale).unwrap(),
+            "a second start finds none"
+        );
     }
 
     /// A person's row is a contract seat on their own account: the box's library and the row's
