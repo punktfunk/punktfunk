@@ -74,11 +74,11 @@ fn sanitize_name(name: &str) -> String {
     }
 }
 
-/// `{ISO-date}T{h-m-s}Z_{fp16}_{name}` — timestamp first so a directory sort is
+/// `{ISO-date}T{h-m-s.mmm}Z_{fp16}_{name}` — timestamp first so a directory sort is
 /// newest-last; dashes (not colons) so the stem is a valid Windows filename.
 /// Underscores separate the three fields; name/fp stay `[A-Za-z0-9.-]`.
 fn bundle_id(unix_ms: u64, fp_hex: &str, name: &str) -> String {
-    let stamp = punktfunk_core::time::utc_rfc3339(unix_ms, false).replace(':', "-");
+    let stamp = punktfunk_core::time::utc_rfc3339(unix_ms, true).replace(':', "-");
     let fp16: String = fp_hex
         .chars()
         .filter(char::is_ascii_alphanumeric)
@@ -98,7 +98,23 @@ impl ClientLogStore {
 
     /// Prunes that device past [`KEEP_PER_DEVICE`].
     pub fn save(&self, fp_hex: &str, device_name: &str, body: &[u8]) -> std::io::Result<String> {
-        let id = bundle_id(crate::clock::unix_ms(), fp_hex, device_name);
+        self.save_at(crate::clock::unix_ms(), fp_hex, device_name, body)
+    }
+
+    /// A client sends its previous run and its current log back to back. Each keeps its own
+    /// id: one that is taken moves a millisecond on.
+    fn save_at(
+        &self,
+        mut unix_ms: u64,
+        fp_hex: &str,
+        device_name: &str,
+        body: &[u8],
+    ) -> std::io::Result<String> {
+        let mut id = bundle_id(unix_ms, fp_hex, device_name);
+        while self.dir.join(format!("{id}.log")).exists() {
+            unix_ms += 1;
+            id = bundle_id(unix_ms, fp_hex, device_name);
+        }
         // Body may contain addresses and host names; owner-only, like host secrets.
         // The dir ACL is not the only gate.
         pf_paths::write_secret_file(&self.dir.join(format!("{id}.log")), body)?;
@@ -237,16 +253,10 @@ mod tests {
     #[test]
     fn per_device_quota_prunes_oldest() {
         let (s, dir) = store();
-        // Same device, KEEP_PER_DEVICE + 2. Ids share a 1 s timestamp in a fast
-        // test, so check survival by count; the other device must stay untouched.
+        // Same device, KEEP_PER_DEVICE + 2; the other device must stay untouched.
         let other = s.save("ffff00000000000000", "other", b"keep me").unwrap();
-        let mut ids = Vec::new();
-        for i in 0..(KEEP_PER_DEVICE + 2) {
-            // Timestamp field is 1 s; uniqueness goes through the name (embedded in the id).
-            ids.push(
-                s.save("abcdef0123456789", &format!("dev{i}"), b"x")
-                    .unwrap(),
-            );
+        for _ in 0..(KEEP_PER_DEVICE + 2) {
+            s.save("abcdef0123456789", "dev", b"x").unwrap();
         }
         let listed = s.list();
         let mine = listed
@@ -255,6 +265,30 @@ mod tests {
             .count();
         assert_eq!(mine, KEEP_PER_DEVICE);
         assert!(listed.iter().any(|m| m.id == other), "other device pruned");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn two_bundles_in_one_instant_both_survive() {
+        let (s, dir) = store();
+        let previous = s
+            .save_at(
+                1_000,
+                "abcdef0123456789",
+                "Apple TV",
+                b"the run that crashed",
+            )
+            .unwrap();
+        let current = s
+            .save_at(1_000, "abcdef0123456789", "Apple TV", b"the relaunch")
+            .unwrap();
+        assert_ne!(previous, current);
+        assert_eq!(s.load(&previous).unwrap(), b"the run that crashed");
+        assert_eq!(s.load(&current).unwrap(), b"the relaunch");
+        let listed = s.list();
+        assert_eq!(listed.len(), 2);
+        assert_eq!(listed[0].id, current, "newest first");
+        assert_eq!(listed[1].device_name, "AppleTV");
         let _ = std::fs::remove_dir_all(dir);
     }
 
