@@ -5,8 +5,9 @@
 //! errors have stable codes and a message. The pipe's DACL admits SYSTEM and Administrators
 //! only, and the socket checks its peer's credentials, so the request carries no credential of
 //! its own; an adopt or credential frame carries the account's password, which the supervisor
-//! seals (Windows) or checks once (Linux) and forgets. [`answer`] serves one request on any
-//! reader and writer, which keeps dispatch testable without a pipe.
+//! seals (Windows) or checks once (Linux) and forgets. Both ends hold each frame in a buffer
+//! wiped when it drops. [`answer`] serves one request on any reader and writer, which keeps
+//! dispatch testable without a pipe.
 
 use crate::backend::PlatformBackend;
 use crate::model::{CreateSeat, Seat, SeatId};
@@ -15,6 +16,7 @@ use crate::service::SeatService;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use std::io::{Read, Write};
+use zeroize::Zeroizing;
 
 pub const CONTROL_SCHEMA_VERSION: u32 = 1;
 pub const MAX_FRAME_BYTES: usize = 64 * 1024;
@@ -279,23 +281,48 @@ where
     serde_json::from_slice(&bytes).map_err(FrameError::Decode)
 }
 
+/// Encodes `value` into one wiped buffer of its exact size, measured first, so a frame that
+/// carries a password leaves no copy behind a growing buffer.
 pub fn write_json_frame<W, T>(writer: &mut W, value: &T) -> Result<(), FrameError>
 where
     W: Write,
     T: Serialize,
 {
-    let bytes = serde_json::to_vec(value).map_err(FrameError::Encode)?;
-    write_frame_bytes(writer, &bytes)
+    let mut length = Measure(0);
+    serde_json::to_writer(&mut length, value).map_err(FrameError::Encode)?;
+    if length.0 > MAX_FRAME_BYTES {
+        return Err(FrameError::TooLarge(length.0));
+    }
+    let mut bytes = Zeroizing::new(vec![0_u8; length.0]);
+    let mut rest = bytes.as_mut_slice();
+    serde_json::to_writer(&mut rest, value).map_err(FrameError::Encode)?;
+    let written = length.0 - rest.len();
+    write_frame_bytes(writer, &bytes[..written])
 }
 
-pub fn read_frame_bytes<R: Read>(reader: &mut R) -> Result<Vec<u8>, FrameError> {
+/// Counts the bytes written to it and keeps none.
+struct Measure(usize);
+
+impl Write for Measure {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.0 = self.0.saturating_add(bytes.len());
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+/// One frame's payload, in a buffer wiped when it drops: it may carry a password.
+pub fn read_frame_bytes<R: Read>(reader: &mut R) -> Result<Zeroizing<Vec<u8>>, FrameError> {
     let mut prefix = [0_u8; 4];
     reader.read_exact(&mut prefix)?;
     let length = u32::from_be_bytes(prefix) as usize;
     if length > MAX_FRAME_BYTES {
         return Err(FrameError::TooLarge(length));
     }
-    let mut payload = vec![0_u8; length];
+    let mut payload = Zeroizing::new(vec![0_u8; length]);
     reader.read_exact(&mut payload)?;
     Ok(payload)
 }
@@ -380,7 +407,7 @@ mod tests {
         let exact = vec![7_u8; MAX_FRAME_BYTES];
         let mut framed = Vec::new();
         write_frame_bytes(&mut framed, &exact).unwrap();
-        assert_eq!(read_frame_bytes(&mut Cursor::new(framed)).unwrap(), exact);
+        assert_eq!(*read_frame_bytes(&mut Cursor::new(framed)).unwrap(), exact);
 
         let oversized = vec![0_u8; MAX_FRAME_BYTES + 1];
         assert!(matches!(
@@ -465,6 +492,13 @@ mod tests {
             assert!(!format!("{command:?}").contains("hunter2"), "{wire}");
             let mut frame = Vec::new();
             write_json_frame(&mut frame, &Request::new(command.clone())).unwrap();
+            let plain = serde_json::to_vec(&Request::new(command.clone())).unwrap();
+            assert_eq!(frame[..4], (plain.len() as u32).to_be_bytes(), "{wire}");
+            assert_eq!(
+                frame[4..],
+                plain,
+                "the wiped encoding is byte for byte the plain one"
+            );
             let decoded: Request = read_json_frame(&mut Cursor::new(frame)).unwrap();
             assert_eq!(decoded.command, command);
         }
