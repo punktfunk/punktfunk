@@ -16,7 +16,7 @@ import {
 	Users,
 } from "lucide-react";
 import { motion } from "motion/react";
-import { type FC, useEffect, useRef, useState } from "react";
+import { type FC, type ReactNode, useEffect, useRef, useState } from "react";
 import type { ProfileAdmin } from "@/api/gen/model/profileAdmin";
 import type { ProfileCreate } from "@/api/gen/model/profileCreate";
 import type { SeatCheck } from "@/api/gen/model/seatCheck";
@@ -132,7 +132,8 @@ export type DoorControl = {
 	onChange: () => void;
 };
 
-/** The page: one card per profile, the owner first, and **Add profile**. */
+/** The page: one card per profile, the owner first, and **Add profile**. A profile on a person's
+ * own account shows its signed-in devices under its row. */
 export const ProfilesView: FC<{
 	profiles: Loadable<ProfileAdmin[]>;
 	onAdd: () => void;
@@ -145,6 +146,8 @@ export const ProfilesView: FC<{
 	seats?: SeatActions;
 	/** Linux: the door's switch. */
 	door?: DoorControl;
+	/** A Linux door: the signed-in devices of a profile on a person's own account. */
+	devices?: (p: ProfileAdmin) => ReactNode;
 }> = ({
 	profiles,
 	onAdd,
@@ -155,6 +158,7 @@ export const ProfilesView: FC<{
 	busyId,
 	seats,
 	door,
+	devices,
 }) => {
 	const list = profiles.data ?? [];
 	const ownerName = list.find((p) => p.owner)?.display_name ?? "";
@@ -190,6 +194,7 @@ export const ProfilesView: FC<{
 									ownerName={ownerName}
 									seats={seats}
 									linux={door !== undefined}
+									devices={p.seat?.account ? devices?.(p) : undefined}
 									busy={busyId === p.id}
 									onRename={() => onRename(p)}
 									onPicture={(f) => onPicture(p, f)}
@@ -276,6 +281,8 @@ const ProfileRow: FC<{
 	seats?: SeatActions;
 	/** A Linux host: its seat on an existing account is a login, not a Windows account. */
 	linux: boolean;
+	/** Below the row: the profile's signed-in devices. */
+	devices?: ReactNode;
 	busy: boolean;
 	onRename: () => void;
 	onPicture: (file: File) => void;
@@ -286,6 +293,7 @@ const ProfileRow: FC<{
 	ownerName,
 	seats,
 	linux,
+	devices,
 	busy,
 	onRename,
 	onPicture,
@@ -295,8 +303,10 @@ const ProfileRow: FC<{
 	const file = useRef<HTMLInputElement>(null);
 	const state = p.seat?.state;
 	// A take-turns profile has no managed seat to start/stop by hand — the client drives the
-	// switch. Its card shows no seat buttons.
+	// switch. Its card shows no seat buttons. Only its person's unlock starts a desktop on their
+	// own Linux account.
 	const managed = p.seat?.take_turns ? undefined : seats;
+	const startable = !(linux && p.seat?.account);
 	const facts = [
 		playsLine(p, ownerName),
 		p.home === "bigpicture"
@@ -307,7 +317,7 @@ const ProfileRow: FC<{
 			: m.profiles_never_used(),
 	];
 	return (
-		<div className="flex flex-col gap-3 border-b pb-4 last:border-0 last:pb-0 sm:flex-row sm:items-center">
+		<div className="flex flex-col gap-3 border-b pb-4 last:border-0 last:pb-0 sm:flex-row sm:flex-wrap sm:items-center">
 			<div className="flex min-w-0 flex-1 items-center gap-3">
 				<ProfileAvatar profile={p} className="size-11" />
 				<div className="min-w-0">
@@ -335,7 +345,7 @@ const ProfileRow: FC<{
 				</div>
 			</div>
 			<div className="flex shrink-0 items-center justify-end gap-1">
-				{managed && state === "stopped" && (
+				{managed && startable && state === "stopped" && (
 					<Button
 						variant="outline"
 						size="sm"
@@ -436,6 +446,7 @@ const ProfileRow: FC<{
 					</Button>
 				)}
 			</div>
+			{devices && <div className="sm:basis-full">{devices}</div>}
 		</div>
 	);
 };
@@ -451,8 +462,8 @@ type SeatAccount = "new" | "existing";
  * **Add profile**: the picture beside a name and a colour, then one question answered as
  * outcomes. The home follows the answer on the host. A desktop of its own on Windows or a
  * Linux door asks a second: a new account, or an existing one with its password. Windows picks
- * from a list; Linux types the user name, since a directory's accounts don't enumerate and the
- * console doesn't list the box's users.
+ * from a list and keeps the password, sealed; Linux types the user name, since a directory's
+ * accounts don't enumerate and the console doesn't list the box's users, and keeps no password.
  */
 export const AddProfileDialog: FC<{
 	open: boolean;
@@ -494,7 +505,9 @@ export const AddProfileDialog: FC<{
 	const [account, setAccount] = useState<string>("");
 	const [seatAccount, setSeatAccount] = useState<SeatAccount>("new");
 	const [password, setPassword] = useState("");
+	// A close clears the typed password as well as an opening.
 	useEffect(() => {
+		setPassword("");
 		if (!open) return;
 		setName("");
 		setAccent(freeAccent);
@@ -502,7 +515,6 @@ export const AddProfileDialog: FC<{
 		setOutcome("shared");
 		setAccount("");
 		setSeatAccount("new");
-		setPassword("");
 	}, [open, freeAccent]);
 	const asksAccount =
 		((windows && seatsOn) || (linux && door)) && outcome === "seats";
@@ -712,6 +724,11 @@ export const AddProfileDialog: FC<{
 										? m.profiles_seat_account_lock()
 										: m.profiles_seat_account_lock_linux()}
 								</p>
+								{windows && (
+									<p className="text-sm text-muted-foreground">
+										{m.profiles_seat_password_kept()}
+									</p>
+								)}
 							</motion.div>
 						)}
 						<DialogFooter>
