@@ -863,8 +863,9 @@ pub struct PunktfunkProfileUnlock {
     pub enroll_key_len: usize,
 }
 
-/// The unlock `u` points at, copied. Null is none; a null buffer with a length, or any bound of
-/// the wire broken, is `InvalidArg`. Neither buffer is read past the wire's longest value.
+/// The unlock `u` points at, copied. Null is none; a null buffer with a length is `NullPointer`,
+/// any bound of the wire broken `InvalidArg`. Neither buffer is read past the wire's longest
+/// value.
 ///
 /// # Safety
 /// `u` is null or a readable [`PunktfunkProfileUnlock`] whose buffers are readable for their
@@ -880,11 +881,12 @@ unsafe fn unlock_of(
     let Some(u) = (unsafe { u.as_ref() }) else {
         return Ok(None);
     };
-    let bytes = |p: *const u8, len: usize, cap: usize| match (p.is_null(), len) {
-        (_, 0) => Ok(Vec::new()),
-        // SAFETY: readable for `len` bytes (caller contract), and `len` is within the cap.
-        (false, len) if len <= cap => Ok(unsafe { std::slice::from_raw_parts(p, len) }.to_vec()),
-        _ => Err(PunktfunkStatus::InvalidArg),
+    let bytes = |p: *const u8, len: usize, cap: usize| {
+        if len > cap {
+            return Err(PunktfunkStatus::InvalidArg);
+        }
+        // SAFETY: null or readable for `len` bytes (caller contract).
+        Ok(unsafe { in_bytes(p, len) }?.to_vec())
     };
     let secret = Zeroizing::new(bytes(u.secret, u.secret_len, UNLOCK_SIGNATURE_MAX)?);
     let key = bytes(u.enroll_key, u.enroll_key_len, ENROLL_RSA_KEY_MAX)?;
@@ -912,30 +914,26 @@ pub unsafe extern "C" fn punktfunk_profile_unlock_message(
     out: *mut u8,
 ) -> PunktfunkStatus {
     guard(|| {
-        if [challenge, device_sha256, box_sha256]
-            .iter()
-            .any(|p| p.is_null())
-            || out.is_null()
-        {
+        if out.is_null() {
             return PunktfunkStatus::NullPointer;
         }
-        // SAFETY: non-null and readable for 32 bytes each (caller contract); align 1.
-        let fp = |p: *const u8| unsafe { *p.cast::<[u8; 32]>() };
+        // SAFETY: null or readable for 32 bytes (caller contract).
+        let fp = |p: *const u8| unsafe { in_bytes(p, 32) }.map(<[u8; 32]>::try_from);
+        let (Ok(Ok(c)), Ok(Ok(d)), Ok(Ok(b))) = (fp(challenge), fp(device_sha256), fp(box_sha256))
+        else {
+            return PunktfunkStatus::NullPointer;
+        };
         // SAFETY: null or NUL-terminated, per this function's contract.
         let seat = match unsafe { opt_cstr(seat_id) } {
             Ok(Some(s)) => s,
             Ok(None) => return PunktfunkStatus::NullPointer,
             Err(()) => return PunktfunkStatus::InvalidArg,
         };
-        match punktfunk_core::quic::v2::msg::unlock_signed_message(
-            &fp(challenge),
-            seat,
-            &fp(device_sha256),
-            &fp(box_sha256),
-        ) {
+        match punktfunk_core::quic::v2::msg::unlock_signed_message(&c, seat, &d, &b) {
             Ok(m) => {
-                // SAFETY: `out` is writable for the message's length (caller contract).
-                unsafe { std::ptr::copy_nonoverlapping(m.as_ptr(), out, m.len()) };
+                // SAFETY: `out` is non-null and writable for the message's length (caller
+                // contract); a byte array has alignment 1.
+                unsafe { put(out.cast(), m) };
                 PunktfunkStatus::Ok
             }
             Err(_) => PunktfunkStatus::InvalidArg,
@@ -1838,7 +1836,7 @@ mod tests {
         o.unlock = &u;
         // SAFETY: as above; the null buffer is refused before any read.
         let refused = unsafe { connect_params(&o) }.err();
-        assert_eq!(refused, Some(PunktfunkStatus::InvalidArg));
+        assert_eq!(refused, Some(PunktfunkStatus::NullPointer));
     }
 
     /// The C builder writes core's message and refuses a seat id that is not lowercase hex.
@@ -1876,6 +1874,17 @@ mod tests {
             )
         };
         assert_eq!(st, PunktfunkStatus::InvalidArg);
+        // SAFETY: a null fingerprint is refused before any read.
+        let st = unsafe {
+            punktfunk_profile_unlock_message(
+                challenge.as_ptr(),
+                seat.as_ptr(),
+                std::ptr::null(),
+                boxed.as_ptr(),
+                out.as_mut_ptr(),
+            )
+        };
+        assert_eq!(st, PunktfunkStatus::NullPointer);
     }
 
     /// Size-prefix guard: null/undersized is a status, not a read.
