@@ -2094,10 +2094,10 @@
     hash = "sha512-M45nihK+LGyxwy2mmHYRKggaocTt+EKNVFNaMpTvTaIUpozi7bmKIkbM2/enMYS0/UYTaZrBSZs/a0nPXqkAKw==";
     name = "style-0.4.4.tgz";
   };
-  "@unom/ui@0.10.0" = fetchurl {
-    url = "https://git.unom.io/api/packages/unom/npm/%40unom%2Fui/-/0.10.0/ui-0.10.0.tgz";
-    hash = "sha512-3FxP1+4fW7rXFTMUvCwS9YNauADSH6MbrGAtlfnzQfvzi8OPXAnSnsOk6Yo2YJcnZLz+SynaQfEZ5jUg9MqG+Q==";
-    name = "ui-0.10.0.tgz";
+  "@unom/ui@0.11.0" = fetchurl {
+    url = "https://git.unom.io/api/packages/unom/npm/@unom/ui/-/ui-0.11.0.tgz";
+    hash = "sha512-4qsEBLVkC6kzOHR8X3vHL7/mvxO5ZQ+HPLkvPgAg7acuHp9piK4mc/7IHSEEAyqBFyJEtIaifRooEdr1pNug7g==";
+    name = "ui-0.11.0.tgz";
   };
   "@vercel/nft@1.11.0" = fetchurl {
     url = "https://registry.npmjs.org/@vercel/nft/-/nft-1.11.0.tgz";

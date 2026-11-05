@@ -10,7 +10,7 @@
         "@tanstack/react-router": "^1.170.41",
         "@tanstack/react-start": "^1.168.60",
         "@unom/style": "^0.4.4",
-        "@unom/ui": "^0.10.0",
+        "@unom/ui": "^0.11.0",
         "class-variance-authority": "^0.7.1",
         "clsx": "^2.1.1",
         "lucide-react": "^1.52.0",
@@ -1069,7 +1069,7 @@
 
     "@unom/style": ["@unom/style@0.4.4", "https://git.unom.io/api/packages/unom/npm/%40unom%2Fstyle/-/0.4.4/style-0.4.4.tgz", { "peerDependencies": { "motion": "^12" } }, "sha512-M45nihK+LGyxwy2mmHYRKggaocTt+EKNVFNaMpTvTaIUpozi7bmKIkbM2/enMYS0/UYTaZrBSZs/a0nPXqkAKw=="],
 
-    "@unom/ui": ["@unom/ui@0.10.0", "https://git.unom.io/api/packages/unom/npm/%40unom%2Fui/-/0.10.0/ui-0.10.0.tgz", { "dependencies": { "@tanstack/react-router": "^1.170.32", "@tsdown/css": "^0.22.14", "clsx": "^2.1.1", "howler": "^2.2.4", "sonner": "^2.0.8", "tailwind-merge": "^3.6.0" }, "peerDependencies": { "@payloadcms/richtext-lexical": "^3.88.0", "@tanstack/react-virtual": "^3.14.10", "@unom/style": "^0.4.4", "class-variance-authority": "^0.7.1", "embla-carousel-react": "^8.6.0", "lucide-react": "^1.34.0", "motion": "^13.1.1", "radix-ui": "^1.6.7", "react": "^19.2.8", "react-dom": "^19.2.8", "typescript": "^7.0.2", "zod": "^4.4.3" } }, "sha512-3FxP1+4fW7rXFTMUvCwS9YNauADSH6MbrGAtlfnzQfvzi8OPXAnSnsOk6Yo2YJcnZLz+SynaQfEZ5jUg9MqG+Q=="],
+    "@unom/ui": ["@unom/ui@0.11.0", "https://git.unom.io/api/packages/unom/npm/@unom/ui/-/ui-0.11.0.tgz", { "dependencies": { "@tanstack/react-router": "^1.170.32", "@tsdown/css": "^0.22.14", "clsx": "^2.1.1", "howler": "^2.2.4", "sonner": "^2.0.8", "tailwind-merge": "^3.6.0" }, "peerDependencies": { "@payloadcms/richtext-lexical": "^3.88.0", "@tanstack/react-virtual": "^3.14.10", "@unom/style": "^0.4.4 || ^0.5.0", "class-variance-authority": "^0.7.1", "embla-carousel-react": "^8.6.0", "lucide-react": "^1.34.0", "motion": "^13.1.1", "radix-ui": "^1.6.7", "react": "^19.2.8", "react-dom": "^19.2.8", "typescript": "^7.0.2", "zod": "^4.4.3" } }, "sha512-4qsEBLVkC6kzOHR8X3vHL7/mvxO5ZQ+HPLkvPgAg7acuHp9piK4mc/7IHSEEAyqBFyJEtIaifRooEdr1pNug7g=="],
 
     "@vercel/nft": ["@vercel/nft@1.11.0", "", { "dependencies": { "@mapbox/node-pre-gyp": "^2.0.0", "@rollup/pluginutils": "^5.1.3", "acorn": "^8.6.0", "acorn-import-attributes": "^1.9.5", "async-sema": "^3.1.1", "bindings": "^1.4.0", "estree-walker": "2.0.2", "glob": "^13.0.0", "graceful-fs": "^4.2.9", "node-gyp-build": "^4.2.2", "picomatch": "^4.0.4", "resolve-from": "^5.0.0" }, "bin": { "nft": "out/cli.js" } }, "sha512-m1QFg+U+3yPOnP1xSYJ73UIRxLOXdts1JOhiOiyPYqEsALgrXFFINvgUaD6R6iNvaBFAjHllBCbkfx4FuOdpaA=="],
 
