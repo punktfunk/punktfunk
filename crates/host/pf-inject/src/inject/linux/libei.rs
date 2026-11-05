@@ -1,7 +1,7 @@
 //! libei input injection — the portable EI-sender path.
 //!
-//! Reach an EIS server through [`EiSource`]: the xdg RemoteDesktop portal, Mutter's
-//! direct RemoteDesktop API, or a gamescope `LIBEI_SOCKET` path relayed in a file.
+//! Reach an EIS server through [`EiSource`]: the xdg RemoteDesktop portal, Mutter's or
+//! KWin's direct RemoteDesktop API, or a gamescope `LIBEI_SOCKET` path relayed in a file.
 //! `reis` drives the connection as an EI sender: bind seat capabilities, then per
 //! device `start_emulating` → emit → `frame`.
 //!
@@ -36,13 +36,16 @@ use std::os::unix::net::UnixStream;
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum EiSource {
     /// xdg `RemoteDesktop` via `ashpd`. A pre-seeded grant skips the approval dialog.
     Portal,
     /// Mutter's direct `org.gnome.Mutter.RemoteDesktop` EIS. The xdg portal's `Start()`
     /// waits for an "Allow remote control?" click a headless host cannot answer.
     MutterEis,
+    /// KWin's own `org.kde.KWin.EIS.RemoteDesktop` (KWin 6.1+): no portal and no grant. A
+    /// KWin without it gets [`EiSource::Portal`] instead ([`kwin_lacks_eis`]).
+    KwinEis,
     /// File holding the EIS socket path (gamescope's relayed `LIBEI_SOCKET`). Polled
     /// until the compositor is listening.
     SocketPathFile(std::path::PathBuf),
@@ -169,22 +172,36 @@ async fn session_main(mut rx: UnboundedReceiver<InputEvent>, source: EiSource) {
     keepalive.close().await;
 }
 
-/// What holds the EIS server's session open, and how it ends. The portal session and
-/// Mutter's each ride a private connection that ends with the value; the portal one is
-/// closed with `Session.Close` first. The relayed socket has nothing to close.
+/// What holds the EIS server's session open, and how it ends. The portal session, Mutter's
+/// and KWin's each ride a private connection that ends with the value; the portal one is
+/// closed with `Session.Close` first, KWin's context with `disconnect(cookie)`. The relayed
+/// socket has nothing to close.
 enum Keepalive {
     Portal(ashpd::desktop::Session<RemoteDesktop>),
     Mutter(Box<dyn Send>),
+    Kwin(zbus::Connection, i32),
     Socket,
 }
 
 impl Keepalive {
-    /// Ends the session. The portal's `Session.Close` is bounded by `pf_portal::close_session`
-    /// so a wedged portal cannot hang the worker's exit.
+    /// Ends the session. The portal's `Session.Close` and KWin's `disconnect` are bounded so a
+    /// wedged compositor cannot hang the worker's exit.
     async fn close(self) {
         match self {
             Keepalive::Portal(session) => pf_portal::close_session(session.close()).await,
             Keepalive::Mutter(conn) => drop(conn),
+            Keepalive::Kwin(conn, cookie) => {
+                let body = (cookie,);
+                let call = conn.call_method(
+                    Some(KWIN),
+                    KWIN_EIS_PATH,
+                    Some(KWIN_EIS),
+                    "disconnect",
+                    &body,
+                );
+                // KWin also drops the context when this connection's bus name leaves.
+                let _ = tokio::time::timeout(pf_portal::CAST_CLOSE_BUDGET, call).await;
+            }
             Keepalive::Socket => {}
         }
     }
@@ -197,7 +214,7 @@ type Connected = (
     ei::Context,
     reis::tokio::EiConvertEventStream,
     // Relay-file "WxH" scale target when EIS advertises a degenerate region
-    // (gamescope). `None` on portal/Mutter, whose regions are real.
+    // (gamescope). `None` on the portal, Mutter and KWin, whose regions are real.
     Option<(u32, u32)>,
     // Mutter's RemoteDesktop session, which scroll goes through ([`mutter_axis_sender`]).
     Option<zbus::Proxy<'static>>,
@@ -214,6 +231,20 @@ async fn connect(source: EiSource) -> Result<Connected> {
             let stream = UnixStream::from(fd);
             (Keepalive::Mutter(keepalive), stream, None, Some(session))
         }
+        EiSource::KwinEis => match connect_kwin().await {
+            Ok((conn, cookie, fd)) => (
+                Keepalive::Kwin(conn, cookie),
+                UnixStream::from(fd),
+                None,
+                None,
+            ),
+            Err(e) if kwin_lacks_eis(&e) => {
+                tracing::info!(error = %e, "libei: KWin has no direct EIS, asking the RemoteDesktop portal");
+                let (_rd, session, fd) = connect_portal().await?;
+                (Keepalive::Portal(session), UnixStream::from(fd), None, None)
+            }
+            Err(e) => return Err(anyhow!("KWin EIS.RemoteDesktop.connectToEIS: {e}")),
+        },
         EiSource::SocketPathFile(file) => {
             let (stream, hint) = connect_socket_file(&file).await?;
             (Keepalive::Socket, stream, hint, None)
@@ -275,7 +306,7 @@ async fn connect_portal() -> Result<(
     rd.select_devices(
         &session,
         SelectDevicesOptions::default()
-            .set_devices(DeviceType::Keyboard | DeviceType::Pointer | DeviceType::Touchscreen)
+            .set_devices(eis_devices())
             .set_persist_mode(PersistMode::DoNot),
     )
     .await
@@ -296,6 +327,57 @@ async fn connect_portal() -> Result<(
         .await
         .map_err(|e| anyhow!("connect_to_eis (RemoteDesktop portal version < 2?): {e}"))?;
     Ok((rd, session, fd))
+}
+
+/// The devices every route asks for: keyboard, pointer and touch. KWin's direct API takes the
+/// same bits as the portal.
+fn eis_devices() -> ashpd::enumflags2::BitFlags<DeviceType> {
+    DeviceType::Keyboard | DeviceType::Pointer | DeviceType::Touchscreen
+}
+
+const KWIN: &str = "org.kde.KWin";
+const KWIN_EIS_PATH: &str = "/org/kde/KWin/EIS/RemoteDesktop";
+const KWIN_EIS: &str = "org.kde.KWin.EIS.RemoteDesktop";
+
+/// EIS fd from KWin's own `connectToEIS`, with the cookie its `disconnect` takes. No portal and
+/// no grant: KWin answers any unsandboxed caller. KWin keeps the context while the returned
+/// connection's bus name lives.
+async fn connect_kwin() -> zbus::Result<(zbus::Connection, i32, std::os::fd::OwnedFd)> {
+    let conn = pf_portal::session_bus().await?;
+    let devices = eis_devices().bits() as i32;
+    let reply = conn
+        .call_method(
+            Some(KWIN),
+            KWIN_EIS_PATH,
+            Some(KWIN_EIS),
+            "connectToEIS",
+            &(devices,),
+        )
+        .await?;
+    let (fd, cookie): (zbus::zvariant::OwnedFd, i32) = reply.body().deserialize()?;
+    tracing::info!("libei: connected to KWin's direct EIS (no portal grant)");
+    Ok((conn, cookie, std::os::fd::OwnedFd::from(fd)))
+}
+
+/// Whether `error` says this KWin has no direct EIS: no KWin on the bus, or one older than 6.1
+/// without the object, interface or method. Any other failure is KWin's answer and stands.
+fn kwin_lacks_eis(error: &zbus::Error) -> bool {
+    use zbus::DBusError as _;
+    let absent = |name: &str| {
+        matches!(
+            name,
+            "org.freedesktop.DBus.Error.ServiceUnknown"
+                | "org.freedesktop.DBus.Error.NameHasNoOwner"
+                | "org.freedesktop.DBus.Error.UnknownObject"
+                | "org.freedesktop.DBus.Error.UnknownInterface"
+                | "org.freedesktop.DBus.Error.UnknownMethod"
+        )
+    };
+    match error {
+        zbus::Error::MethodError(name, ..) => absent(name.as_str()),
+        zbus::Error::FDO(e) => absent(e.name().as_str()),
+        _ => false,
+    }
 }
 
 /// EIS fd from Mutter's direct `org.gnome.Mutter.RemoteDesktop` (`CreateSession` →
@@ -1044,6 +1126,44 @@ mod tests {
             (640.0, 400.0)
         );
         assert_eq!(abs_point(&raw, &none, None, &abs), (960.0, 540.0));
+    }
+
+    /// Only a KWin that lacks the direct API sends input through the portal: any other refusal
+    /// is KWin's answer and fails the connect.
+    #[test]
+    fn only_a_kwin_without_direct_eis_falls_back_to_the_portal() {
+        let reply = |name: &'static str| {
+            let call = zbus::Message::method_call("/", "connectToEIS")
+                .and_then(|call| call.build(&()))
+                .expect("a method call");
+            let name = zbus::names::ErrorName::from_static_str(name).expect("an error name");
+            zbus::Error::MethodError(name.into(), None, call)
+        };
+        for absent in [
+            "org.freedesktop.DBus.Error.ServiceUnknown",
+            "org.freedesktop.DBus.Error.NameHasNoOwner",
+            "org.freedesktop.DBus.Error.UnknownObject",
+            "org.freedesktop.DBus.Error.UnknownInterface",
+            "org.freedesktop.DBus.Error.UnknownMethod",
+        ] {
+            assert!(kwin_lacks_eis(&reply(absent)), "{absent}");
+        }
+        for refused in [
+            "org.freedesktop.DBus.Error.AccessDenied",
+            "org.freedesktop.DBus.Error.Failed",
+            "org.kde.KWin.EIS.Error",
+        ] {
+            assert!(!kwin_lacks_eis(&reply(refused)), "{refused}");
+        }
+        let fdo = |e| zbus::Error::FDO(Box::new(e));
+        assert!(kwin_lacks_eis(&fdo(zbus::fdo::Error::UnknownObject(
+            "/org/kde/KWin/EIS/RemoteDesktop".into()
+        ))));
+        assert!(!kwin_lacks_eis(&fdo(zbus::fdo::Error::AccessDenied(
+            "no".into()
+        ))));
+        let closed = std::io::Error::other("closed");
+        assert!(!kwin_lacks_eis(&zbus::Error::InputOutput(closed.into())));
     }
 
     /// An empty anchor is the same as none — callers may build one unconditionally.
