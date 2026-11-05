@@ -402,8 +402,9 @@ system-range user, `pf-seat-<n>`, with a logind session of its own, a headless c
   a seat can't replace `steamapps`. Each seat start checks the folders and replaces a link or
   file a seat left where a bind target belongs. Each seat's own `compatdata`, `shadercache` and
   `downloading` under `seats/<id>/` are bind-mounted over the shared ones, so prefixes never
-  cross. Everything that needs the binds must descend from the unit; a process started through
-  `systemd-run --user` or a user service doesn't see them. The daemon repairs the ACL mask under
+  cross. The seat user's own `user@<uid>.service` gets the unit's binds in a drop-in of its own,
+  without the mount commands, so what Plasma launches, autostarts or D-Bus activates there sees
+  the same view as the unit. The daemon repairs the ACL mask under
   `games/` after a seat stops and every 10 minutes, because a file created with mode `0644` is
   otherwise read-only to the other seats. A mask a seat closed on purpose, as with `chmod 600`,
   stays closed. A seat other than the owner's sees an empty `/run/media`: Steam in Game Mode
@@ -413,15 +414,20 @@ system-range user, `pf-seat-<n>`, with a logind session of its own, a headless c
   lists (`steamapps/libraryfolders.vdf` of the Steam a seat is cloned from) and shows each at
   `seats/<id>/libraries/<key>`, `<key>` a hash of its path. Its `steamapps` is the owner's own,
   through an idmapped mount: the seat's Steam reads and writes it as the seat user, plays, updates
-  and runs Proton from it, and every file stays the owner's on disk. The seat's own `compatdata`,
-  `shadercache`, `downloading` and `temp` under `seats/<id>/private/<key>` cover the owner's, and
-  the library's own path is inaccessible to the unit, so the owner's prefixes never reach a seat.
+  and runs Proton from it, and every file stays the owner's on disk. `<key>` itself is the seat's
+  folder on the library's drive, `.punktfunk-seats/<id>` beside the owner's `steamapps`, mounted
+  the same way, so Steam reads that drive's free space for an install. Where the owner can't write
+  there it stays under `seats/<id>`. Deleting the seat deletes these folders on the drives the
+  owner's Steam still lists. The seat's own `compatdata` and `shadercache` under
+  `seats/<id>/private/<key>` cover the owner's, and the library's own path is inaccessible to the
+  unit, so the owner's prefixes never reach a seat. `downloading` and `temp` stay the owner's:
+  Steam stages a download there and renames it into `common`, which needs one mount of one drive.
   The owner's `steamapps/libraryfolders.vdf` there is read-only to the seat.
-  The unit mounts each library at `/run/punktfunk/libraries/<id>/<key>` (root only) in PID 1's
-  namespace before it starts and unmounts it after, so a drive a seat shows stays in use until
-  the seat stops. A library is skipped, with a line in the daemon's log, when it is gone, its
-  `steamapps` isn't the owner's, or its filesystem takes no idmapped mount (anything but btrfs,
-  ext4, xfs and f2fs). The daemon lists each shown library in both of the seat's
+  The unit mounts each library at `/run/punktfunk/libraries/<id>/<key>`, and the seat's folder at
+  `<key>.root` (root only), in PID 1's namespace before it starts and unmounts them after, so a
+  drive a seat shows stays in use until the seat stops. A library is skipped, with a line in the
+  daemon's log, when it is gone, its `steamapps` isn't the owner's, or its filesystem takes no
+  idmapped mount (anything but btrfs, ext4, xfs and f2fs). The daemon lists each shown library in both of the seat's
   `libraryfolders.vdf` copies, and drops one no longer shown and any under `/run/media`; Steam's
   own entries and fields stay. A new seat's list names its own Steam first, then the shared games
   folder, and each start adds the shared games folder if the list lacks it. The owner's Steam
@@ -430,7 +436,8 @@ system-range user, `pf-seat-<n>`, with a logind session of its own, a headless c
   With **Seats update your games** off (`PUNKTFUNK_SEAT_LIBRARY_WRITABLE`, `library_writable` in
   the box's `seat-defaults.json`) the mount is read-only: a seat plays what is installed but can't
   update or install there, and its Steam can't rewrite the owner's appmanifests (it logs a failed
-  app state write every few seconds while a game runs). What a launch writes gets a private copy
+  app state write every few seconds while a game runs). Its `downloading` and `temp` are the
+  seat's own under `seats/<id>/private/<key>`. What a launch writes gets a private copy
   under `seats/<id>/private/<key>`, found at each start: each `common/SteamLinuxRuntime_*/var`, each
   `common/SteamLinuxRuntime_*/*/files/.ref` and each `common/Proton*/dist.lock`. Without them a
   native game through the runtime or any Proton there fails with a read-only file system. A file

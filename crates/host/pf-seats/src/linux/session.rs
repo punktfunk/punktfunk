@@ -6,7 +6,8 @@
 //! `compatdata`, `shadercache` and `downloading` over the shared games folder's, shows it the
 //! owner's libraries, hides the box's mounted drives and binds the supervisor's uinput proxy
 //! over `/dev/uinput`; and one that
-//! binds [`NO_UPDATE`] over Steam's OS and firmware update helpers. All are rewritten from the
+//! binds [`NO_UPDATE`] over Steam's OS and firmware update helpers. The seat user's own
+//! `user@<uid>.service` gets the same binds ([`render_manager`]). All are rewritten from the
 //! ledger on a start, so a reboot that empties `/run` loses nothing.
 
 use super::{err, libraries, run, shared};
@@ -205,6 +206,31 @@ pub(super) fn render_updates(present: impl Fn(&Path) -> bool) -> Option<String> 
     (!binds.is_empty()).then(|| format!("[Service]\n{binds}"))
 }
 
+/// The seat user's manager's drop-in: `user@<uid>.service`, which runs what Plasma launches,
+/// autostarts and D-Bus activates, outside the seat unit's namespace.
+pub(super) fn manager_dropin(uid: u32) -> PathBuf {
+    Path::new(DROPIN_ROOT)
+        .join(format!("user@{uid}.service.d"))
+        .join("punktfunk-seat.conf")
+}
+
+/// The seat unit's `dropins` as its user's manager takes them: every bind, so an app it starts
+/// sees what the seat sees, and no mount command, which only the seat unit runs.
+pub(super) fn render_manager(dropins: &[&str]) -> String {
+    let mut out = String::from("[Service]\n");
+    for line in dropins.iter().flat_map(|dropin| dropin.lines()) {
+        if line == "[Service]"
+            || line.starts_with("ExecStartPre=")
+            || line.starts_with("ExecStopPost=")
+        {
+            continue;
+        }
+        out.push_str(line);
+        out.push('\n');
+    }
+    out
+}
+
 /// The owner's drop-in: a `background` session, so the monitor's own login stays the one logind
 /// and polkit treat as the user's display.
 pub(super) fn render_class() -> &'static str {
@@ -288,18 +314,20 @@ pub(super) fn write_env(
 }
 
 /// Writes the environment file and the drop-ins for `seat`, then reloads systemd when a drop-in
-/// changed. Every seat, the owner's included, gets the update helpers' binds; a seat other than
-/// the owner's gets `shares`.
+/// changed. Every seat, the owner's included, gets the update helpers' binds. `user` is the seat
+/// user's uid and gid: the owner's row hands its environment file to them, and any other seat's
+/// user gets `shares` and the rest of the seat's view in its own systemd manager too.
 pub(super) fn write_unit_files(
     seat: &Seat,
     home: &Path,
     state: &Path,
     token: &str,
-    owner: Option<(u32, u32)>,
+    user: Option<(u32, u32)>,
     shares: Option<&libraries::Shares>,
     browser: &Browser,
 ) -> Result<(), BackendError> {
     let io = |what: &str, error: std::io::Error| err("session_files", format!("{what}: {error}"));
+    let owner = user.filter(|_| seat.owner);
     write_env(seat, home, state, token, owner, browser)?;
     let (name, contents) = if seat.owner {
         ("class.conf", render_class().to_owned())
@@ -313,14 +341,21 @@ pub(super) fn write_unit_files(
     let mut changed = write_if_changed(&dropin, &contents, 0o644)
         .map_err(|e| io("write the seat unit drop-in", e))?;
     let updates = dropin_dir(&seat.account).join("updates.conf");
-    match render_updates(|helper| helper.is_file()) {
+    let update_binds = render_updates(|helper| helper.is_file());
+    match &update_binds {
         Some(binds) => {
             write_if_changed(Path::new(NO_UPDATE), NO_UPDATE_SCRIPT, 0o755)
                 .map_err(|e| io("write the seat's update helper", e))?;
-            changed |= write_if_changed(&updates, &binds, 0o644)
+            changed |= write_if_changed(&updates, binds, 0o644)
                 .map_err(|e| io("write the seat unit drop-in", e))?;
         }
         None => changed |= std::fs::remove_file(&updates).is_ok(),
+    }
+    if let Some((uid, _)) = user.filter(|_| !seat.owner) {
+        let mut dropins = vec![contents.as_str()];
+        dropins.extend(update_binds.as_deref());
+        changed |= write_if_changed(&manager_dropin(uid), &render_manager(&dropins), 0o644)
+            .map_err(|e| io("write the seat user's manager drop-in", e))?;
     }
     if changed {
         daemon_reload()?;
@@ -665,6 +700,31 @@ mod tests {
              BindPaths=/var/lib/punktfunk-seats/seats/0123456789abcdef0123456789abcdef/shadercache:/var/lib/punktfunk-seats/games/steamapps/shadercache\n\
              BindPaths=/var/lib/punktfunk-seats/seats/0123456789abcdef0123456789abcdef/downloading:/var/lib/punktfunk-seats/games/steamapps/downloading\n\
              BindPaths=-/dev/punktfunk/uinput-pf-seat-1:/dev/uinput\n"
+        );
+    }
+
+    /// The seat user's manager gets every bind of both drop-ins under one section, and none of
+    /// the mount commands, which run once, in the seat unit.
+    #[test]
+    fn the_manager_drop_in_keeps_the_binds_without_the_mounts() {
+        let binds = "[Service]\n\
+            TemporaryFileSystem=/run/media:ro\n\
+            ExecStartPre=-+/usr/bin/nsenter -t 1 -m -- /usr/bin/mount --bind \"/a\" /stage\n\
+            ExecStopPost=-+/usr/bin/nsenter -t 1 -m -- /usr/bin/umount -l /stage\n\
+            InaccessiblePaths=\"-/a\"\n\
+            BindPaths=/stage:/seat/libraries/k/steamapps\n";
+        let updates = "[Service]\nBindReadOnlyPaths=/run/punktfunk/seat-no-update:/usr/bin/x\n";
+        assert_eq!(
+            render_manager(&[binds, updates]),
+            "[Service]\n\
+             TemporaryFileSystem=/run/media:ro\n\
+             InaccessiblePaths=\"-/a\"\n\
+             BindPaths=/stage:/seat/libraries/k/steamapps\n\
+             BindReadOnlyPaths=/run/punktfunk/seat-no-update:/usr/bin/x\n"
+        );
+        assert_eq!(
+            manager_dropin(951),
+            Path::new("/run/systemd/system/user@951.service.d/punktfunk-seat.conf")
         );
     }
 
