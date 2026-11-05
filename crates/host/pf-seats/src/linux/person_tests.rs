@@ -228,3 +228,36 @@ fn only_a_made_seat_is_ours_to_end() {
         );
     }
 }
+
+/// The password check runs as `punktfunk-seats pam-check <account>` once the account still names
+/// the row's uid: the account alone is its argument, and the code it prints reads as the
+/// console's sentence. An account that moved never reaches the check.
+#[test]
+fn the_password_check_names_the_account_and_never_the_password() {
+    let rig = rig();
+    let password = Secret::new("hunter2 Bärbel".into());
+    for (code, refused) in [
+        ("ok\n", None),
+        ("credential_wrong\n", Some("That isn't jdoe's password.")),
+    ] {
+        let machine = machine(&rig.home, 1500, "inactive", false);
+        let _fake = fake::install(move |program, args| match program {
+            "punktfunk-seats" => (0, code.into()),
+            _ => machine(program, args),
+        });
+        let checked = rig.backend.check_password(&rig.seat, &password);
+        assert_eq!(checked.err().map(|e| e.message).as_deref(), refused);
+        assert_eq!(
+            fake::calls(),
+            ["getent passwd jdoe", "punktfunk-seats pam-check jdoe"]
+        );
+    }
+    let moved = machine(&rig.home, 2000, "inactive", false);
+    let _fake = fake::install(moved);
+    let refused = rig
+        .backend
+        .check_password(&rig.seat, &password)
+        .unwrap_err();
+    assert_eq!(refused.code, "account_not_owned");
+    assert_eq!(fake::calls(), ["getent passwd jdoe"]);
+}

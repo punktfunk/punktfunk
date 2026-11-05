@@ -13,9 +13,9 @@
 //! on a seat ends the unit, and the owner's own user host serves the row from then on. That
 //! host writes the box's library: the daemon copies it for the door and every other seat.
 //!
-//! Another person's row adopts their account the same way, once [`pam`] accepts their password:
-//! the same headless session, never while they sit at the machine, but a contract seat's host.
-//! The daemon changes nothing on the account and ends nothing but the row's unit.
+//! Another person's row adopts their account the same way, once [`pam`] accepts their password
+//! in a child process: a headless `user` session, never while they sit at the machine, and a
+//! contract seat's host. The daemon changes nothing on the account and ends nothing but its unit.
 //!
 //! A seat's pads are the daemon's too: its host asks the pad broker in the `punktfunk-seats`
 //! binary for them ([`LinuxBackend::running_account`] is its gate), and [`fence`] gives udev the
@@ -37,6 +37,7 @@ mod session;
 mod shared;
 pub mod socket;
 
+pub use pam::{run_check as pam_check, CHECK_VERB as PAM_CHECK_VERB};
 pub use shared::ledger_root;
 pub use socket::SOCKET_PATH;
 
@@ -793,12 +794,18 @@ impl PlatformBackend for LinuxBackend {
         accounts::adoptable(account, ledger, &self.inner.state).map(|found| found.uid)
     }
 
-    /// A person's row: the account still resolves to the recorded uid and its password passes
-    /// PAM, then the row's directory is made. The password is checked first and kept nowhere;
-    /// nothing is made in the account, and a refusal leaves nothing behind.
-    fn adopt_account(&self, seat: &Seat, password: &Secret) -> Result<bool, BackendError> {
+    /// The account still resolves to the row's uid, then [`pam::check`] runs the login stack in a
+    /// process of its own. The password is kept nowhere.
+    fn check_password(&self, seat: &Seat, password: &Secret) -> Result<(), BackendError> {
+        accounts::require_person(seat)?;
+        pam::check(&seat.account, password)
+    }
+
+    /// A person's row, whose password [`Self::check_password`] passed: the account still resolves
+    /// to the recorded uid, then the row's directory is made. Nothing is made in the account, and
+    /// a refusal leaves nothing behind.
+    fn adopt_account(&self, seat: &Seat, _password: &Secret) -> Result<bool, BackendError> {
         let passwd = accounts::require_person(seat)?;
-        pam::verify(&seat.account, password)?;
         let made = shared::ensure_person_dirs(&self.inner.state, &seat.id, &passwd);
         if made.is_err() {
             let _ = shared::remove_seat_dirs(&self.inner.state, &seat.id);

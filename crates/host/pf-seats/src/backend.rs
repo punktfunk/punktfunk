@@ -45,9 +45,16 @@ pub trait PlatformBackend: Send + Sync + 'static {
         Err(UnsupportedBackend::unavailable())
     }
 
+    /// Linux: whether `password` opens `seat`'s account, a person's, before the row exists. The
+    /// service calls it outside its lock and under the attempt limits; nothing keeps the password.
+    fn check_password(&self, _seat: &Seat, _password: &Secret) -> Result<(), BackendError> {
+        Err(UnsupportedBackend::unavailable())
+    }
+
     /// Make `seat`, a new adopted row, ready to run on its person's account with `password`. A
     /// refusal undoes its own steps. `Ok(true)`: adopt put the account in Remote Desktop Users.
-    /// Linux checks the password once and keeps it nowhere.
+    /// Windows verifies the password here and seals it; Linux has had [`Self::check_password`]
+    /// pass and ignores it.
     fn adopt_account(&self, _seat: &Seat, _password: &Secret) -> Result<bool, BackendError> {
         Err(UnsupportedBackend::unavailable())
     }

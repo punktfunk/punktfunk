@@ -10,6 +10,7 @@
 // `linux::pam` alone allows it: the libpam calls.
 #![cfg_attr(not(windows), deny(unsafe_code))]
 
+mod attempts;
 pub mod backend;
 pub mod backoff;
 #[cfg(any(windows, test))]
