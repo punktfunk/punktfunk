@@ -38,5 +38,5 @@
 	// types without pulling in @types/bun, and that package redeclares globals this DOM-targeted
 	// config already owns. Not worth a lockfile change (and the bun.nix regeneration it drags along)
 	// to typecheck assertions that bun executes directly.
-	"exclude": ["**/*.test.ts"]
+	"exclude": ["**/*.test.ts", "**/*.test.tsx"]
 }

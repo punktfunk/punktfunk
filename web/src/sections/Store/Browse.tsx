@@ -3,6 +3,8 @@ import { type FC, useMemo, useState } from "react";
 import type { CatalogEntry } from "@/api/gen/model";
 import { useGetPluginCatalog } from "@/api/gen/store/store";
 import { pluginIcon } from "@/api/plugins";
+import { useSeat } from "@/api/seat";
+import { installable } from "@/api/store";
 import { QueryState } from "@/components/query-state";
 import { Stagger } from "@/components/stagger";
 import { Badge } from "@/components/ui/badge";
@@ -42,13 +44,16 @@ function matches(entry: CatalogEntry, needle: string): boolean {
 /**
  * Container: the catalog, one heading per group. Owns the catalog query plus the local search,
  * group and source filters; installing is escalated to the parent, which owns the tier-appropriate
- * dialog and the resulting job — so this subsection never installs anything itself.
+ * dialog and the resulting job — so this subsection never installs anything itself. A seat on a
+ * person's own Windows account lists only the entries its host installs, and no raw spec.
  */
 export const BrowseTab: FC<{
 	onInstall: (entry: CatalogEntry) => void;
 	onInstallSpec: () => void;
 }> = ({ onInstall, onInstallSpec }) => {
 	const catalog = useGetPluginCatalog();
+	const seat = useSeat();
+	const own = seat?.own ?? null;
 	// Sources that could not be fetched — the difference between "this host has no plugins" and
 	// "the console could not find out".
 	const failedSources = (catalog.data?.sources ?? []).filter(
@@ -66,7 +71,10 @@ export const BrowseTab: FC<{
 		isBoolean,
 	);
 
-	const entries = catalog.data?.plugins ?? [];
+	const entries = useMemo(
+		() => installable(catalog.data?.plugins, own),
+		[catalog.data, own],
+	);
 	const sources = catalog.data?.sources ?? [];
 	const forHost = useMemo(
 		() => entries.filter((e) => allPlatforms || e.compatible),
@@ -90,6 +98,11 @@ export const BrowseTab: FC<{
 	return (
 		<div className="flex flex-col gap-card">
 			<RunnerBanner />
+			{seat?.own === "windows" && (
+				<p className="text-sm text-muted-foreground">
+					{m.seat_own_verified({ name: seat.name })}
+				</p>
+			)}
 
 			<div className="flex flex-col gap-3 sm:flex-row sm:items-center">
 				<div className="relative sm:max-w-xs sm:flex-1">
@@ -220,15 +233,17 @@ export const BrowseTab: FC<{
 
 			{/* The ONLY way to the raw-spec install. Deliberately a quiet footer link, not a button on
 			    a card: an unverified install should take a decision, never a stray click. */}
-			<div className="text-center">
-				<button
-					type="button"
-					onClick={onInstallSpec}
-					className="text-xs text-muted-foreground underline underline-offset-4 transition-colors hover:text-foreground"
-				>
-					{m.store_spec_open()}
-				</button>
-			</div>
+			{!own && (
+				<div className="text-center">
+					<button
+						type="button"
+						onClick={onInstallSpec}
+						className="text-xs text-muted-foreground underline underline-offset-4 transition-colors hover:text-foreground"
+					>
+						{m.store_spec_open()}
+					</button>
+				</div>
+			)}
 		</div>
 	);
 };

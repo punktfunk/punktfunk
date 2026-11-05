@@ -13,8 +13,8 @@ import type { PluginAccessSnapshot } from "@/api/gen/model/pluginAccessSnapshot"
 import type { ScannerInfo } from "@/api/gen/model/scannerInfo";
 import { useGetPluginCatalog } from "@/api/gen/store/store";
 import { usePlugins } from "@/api/plugins";
-import { usePluginsReachable } from "@/api/seat";
-import { useInstallPlugin } from "@/api/store";
+import { useOwnAccount, usePluginsReachable, useSeat } from "@/api/seat";
+import { installable, useInstallPlugin } from "@/api/store";
 import { useDialogs } from "@/components/dialogs";
 import { ROW_GAP, Stagger } from "@/components/stagger";
 import { Button } from "@/components/ui/button";
@@ -33,7 +33,9 @@ import { SourceSettingsDialog } from "./SourceSettings";
  * The Sources tab: one card of sections — Game sources, Emulators, Art & metadata — with the
  * migration banner above it. Game sources: enablement, liveness, counts, actions, and pending
  * folder access in one list, because this is where missing games are visible. N-1 hosts may
- * still report built-in scanners, so migration stays until those hosts age out.
+ * still report built-in scanners, so migration stays until those hosts age out. A seat on a
+ * person's own account offers only what its host installs, and on Linux a sentence stands in for
+ * the emulators and the folder requests.
  */
 export const SourcesSection: FC<{
 	/** The provider currently filtered to in the grid, or null for "everything". */
@@ -53,6 +55,8 @@ export const SourcesSection: FC<{
 	const access = usePluginAccess();
 	const [settingsFor, setSettingsFor] = useState<ScannerInfo | null>(null);
 	const nameOf = useSourceNames();
+	const own = useOwnAccount();
+	const seatName = useSeat()?.name ?? "";
 
 	const onToggle = async (source: ScannerInfo) => {
 		try {
@@ -123,7 +127,7 @@ export const SourcesSection: FC<{
 	// run on this OS is a control that does nothing (design/web-console-overhaul.md §2.1). The
 	// full catalog, incompatible entries included, is a checkbox away on the Store page. A launcher
 	// found on this host leads.
-	const available = (catalog.data?.plugins ?? [])
+	const available = installable(catalog.data?.plugins, own)
 		.filter(
 			(p) =>
 				p.categories?.includes("library") &&
@@ -185,11 +189,17 @@ export const SourcesSection: FC<{
 						onSettings={setSettingsFor}
 						onPurge={onPurge}
 						onInstall={onInstall}
-						access={access.access.data}
+						access={own === "linux" ? undefined : access.access.data}
 						accessBusy={access.busy}
 						onAccessDecision={access.onDecide}
 					/>
-					<EmulatorsCard />
+					{own === "linux" ? (
+						<p className="text-sm text-muted-foreground">
+							{m.seat_own_unmanaged({ name: seatName })}
+						</p>
+					) : (
+						<EmulatorsCard />
+					)}
 					{metadata}
 				</CardContent>
 			</Card>

@@ -1383,5 +1383,7 @@
 	"profiles_seat_password_linux": "Contraseña de la persona",
 	"profiles_seat_account_lock_linux": "La contraseña se comprueba una vez y no se guarda. Mientras la persona tenga la sesión abierta en el equipo, este perfil no arranca. Su cuenta no cambia.",
 	"profiles_seat_account_line_linux": "Cuenta {account}",
-	"profiles_remove_adopted_linux": "{account} y los archivos de {account} se quedan en este equipo; solo se va el perfil."
+	"profiles_remove_adopted_linux": "{account} y los archivos de {account} se quedan en este equipo; solo se va el perfil.",
+	"seat_own_unmanaged": "El escritorio de {name} usa su propia cuenta, así que la consola no gestiona allí plugins ni emuladores.",
+	"seat_own_verified": "El escritorio de {name} usa su propia cuenta, así que allí solo se instalan plugins verificados."
 }

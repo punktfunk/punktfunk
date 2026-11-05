@@ -1394,5 +1394,7 @@
 	"profiles_seat_password_linux": "Their password",
 	"profiles_seat_account_lock_linux": "The password is checked once and not kept. While they're signed in at the machine, this profile doesn't start. Nothing in their account changes.",
 	"profiles_seat_account_line_linux": "Account {account}",
-	"profiles_remove_adopted_linux": "{account} and {account}'s files stay on this machine; only the profile goes."
+	"profiles_remove_adopted_linux": "{account} and {account}'s files stay on this machine; only the profile goes.",
+	"seat_own_unmanaged": "{name}'s desktop runs on their own account, so the console manages no plugins or emulators there.",
+	"seat_own_verified": "{name}'s desktop runs on their own account, so only Verified plugins install there."
 }

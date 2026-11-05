@@ -1303,5 +1303,7 @@
 	"profiles_seat_password_linux": "Passwort der Person",
 	"profiles_seat_account_lock_linux": "Das Passwort wird einmal geprüft und nicht gespeichert. Solange die Person am Rechner angemeldet ist, startet dieses Profil nicht. An ihrem Konto ändert sich nichts.",
 	"profiles_seat_account_line_linux": "Konto {account}",
-	"profiles_remove_adopted_linux": "{account} und die Dateien von {account} bleiben auf diesem Rechner; nur das Profil verschwindet."
+	"profiles_remove_adopted_linux": "{account} und die Dateien von {account} bleiben auf diesem Rechner; nur das Profil verschwindet.",
+	"seat_own_unmanaged": "Der Desktop von {name} läuft auf dem eigenen Konto. Plugins und Emulatoren verwaltet die Konsole dort deshalb nicht.",
+	"seat_own_verified": "Der Desktop von {name} läuft auf dem eigenen Konto. Deshalb lassen sich dort nur geprüfte Plugins installieren."
 }
