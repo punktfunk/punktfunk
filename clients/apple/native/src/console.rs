@@ -540,7 +540,8 @@ pub unsafe extern "C" fn punktfunk_console_text(c: *const PunktfunkConsole, utf8
 }
 
 /// Where the session the console asked for stands: 0 connecting, 1 streaming, 2 failed,
-/// 3 ended (`message` NULL or empty = clean), 4 reconnecting.
+/// 3 ended (`message` NULL or empty = clean), 4 reconnecting, 6 awaiting approval, 7 failed
+/// as `profile-locked` (`message` the host's sentence, empty when it said none).
 ///
 /// # Safety
 /// `c` is live; `message` is NULL or a NUL-terminated string.
@@ -555,12 +556,15 @@ pub unsafe extern "C" fn punktfunk_console_phase(
         let (Some(c), msg) = (unsafe { c.as_ref() }, unsafe { str_arg(message) }) else {
             return;
         };
-        let Some(phase) = bridge::phase_code(phase, msg.unwrap_or("")) else {
+        let (code, Some(phase)) = (phase, bridge::phase_code(phase, msg.unwrap_or(""))) else {
             return;
         };
         let Some(mut shell) = c.shell() else {
             return;
         };
+        if code == bridge::PHASE_PROFILE_LOCKED {
+            shell.console.profile_locked();
+        }
         shell.console.session_phase(phase);
         c.publish(&mut shell);
     })

@@ -230,9 +230,9 @@ pub struct ConsoleOptions {
     /// The host answers [`ConsoleCmd::FetchProfiles`], so a connect checks the box's profiles
     /// first. False connects with the card's remembered pick, unchecked, and offers no pick.
     pub profiles: bool,
-    /// The host dials each `Launch` with [`ConsoleShared::take_unlock`] and raises
-    /// [`ConsoleShared::locked_flag`] on a `ProfileLocked` close, so the console asks for a
-    /// locked profile's password. False dials a locked profile as it stands.
+    /// The host dials each `Launch` with [`ConsoleShared::take_unlock`] and reports a
+    /// `ProfileLocked` close before its failure, so the console asks for a locked profile's
+    /// password. False dials a locked profile as it stands.
     pub prompts_unlock: bool,
 }
 

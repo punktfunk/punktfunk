@@ -7,7 +7,7 @@
 use punktfunk_core::quic::v2::msg::ProfileUnlock;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, VecDeque};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 /// The request a shared result answers: the host it went to and an epoch no other request
@@ -306,8 +306,6 @@ struct ConsoleState {
     avatars: Vec<(String, Arc<[u8]>)>,
     /// The profile unlock the last `Launch` carries, until its dial takes it.
     unlock: Option<ProfileUnlock>,
-    /// Raised by a dial the host closed with `ProfileLocked`.
-    locked: Arc<AtomicBool>,
 }
 
 /// What a host answered [`ConsoleCmd::FetchProfiles`] with.
@@ -507,22 +505,9 @@ impl ConsoleShared {
         self.0.lock().unwrap().unlock.take()
     }
 
-    /// The flag a dial raises when the host closes it with `ProfileLocked`
-    /// (`SessionParams::locked`): the console's prompt opens again on the failure that follows.
-    pub fn locked_flag(&self) -> Arc<AtomicBool> {
-        self.0.lock().unwrap().locked.clone()
-    }
-
-    /// The next `Launch`'s unlock, replacing (and wiping) any left untaken, and a lowered flag.
+    /// The next `Launch`'s unlock, replacing (and wiping) any left untaken.
     pub(crate) fn put_unlock(&self, unlock: Option<ProfileUnlock>) {
-        let mut s = self.0.lock().unwrap();
-        s.unlock = unlock;
-        s.locked.store(false, Ordering::Relaxed);
-    }
-
-    /// Whether the dial that just failed was closed with `ProfileLocked`. Lowers the flag.
-    pub(crate) fn take_locked(&self) -> bool {
-        self.0.lock().unwrap().locked.swap(false, Ordering::Relaxed)
+        self.0.lock().unwrap().unlock = unlock;
     }
 }
 

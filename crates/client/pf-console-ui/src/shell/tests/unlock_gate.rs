@@ -6,7 +6,6 @@ use super::*;
 use crate::model::ProfilesAnswer;
 use pf_client_core::console::SessionPhase;
 use pf_client_core::profiles::{ListedProfile, ProfilePick, Seat, SeatState, UnlockNeed};
-use std::sync::atomic::Ordering;
 
 /// Ben, and Kid on a person's own account with its seat stopped.
 fn locked_list() -> ProfilesAnswer {
@@ -138,7 +137,7 @@ fn a_refusal_reopens_the_prompt_with_the_hosts_sentence() {
         sign_in(&mut s, "wrong");
         assert!(launched(&mut s).is_some());
         finish_motion(&mut s);
-        console.locked_flag().store(true, Ordering::Relaxed);
+        s.profile_locked();
         s.session_phase(SessionPhase::Failed(said));
         let p = prompt(&s).expect("the prompt is back");
         assert_eq!(p.error(), line);
@@ -150,7 +149,7 @@ fn a_refusal_reopens_the_prompt_with_the_hosts_sentence() {
     }
 }
 
-/// Any other failure is the toast it always was, and no flag is left raised for the next one.
+/// Any other failure is the toast it always was.
 #[test]
 fn another_failure_is_a_toast() {
     let (mut s, console, _bus, row) = shell_for(Some("kid"), true);
@@ -196,7 +195,7 @@ fn a_host_without_the_prompt_dials_as_it_stands() {
     connect_locked(&mut s, &console, &row);
     assert!(prompt(&s).is_none());
     assert_eq!(launched(&mut s), Some(Some("kid".into())));
-    console.locked_flag().store(true, Ordering::Relaxed);
+    s.profile_locked();
     finish_motion(&mut s);
     s.session_phase(SessionPhase::Failed("Wrong password."));
     assert!(prompt(&s).is_none() && s.toast.is_some());

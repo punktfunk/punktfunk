@@ -173,6 +173,8 @@ pub(super) struct LockedDial {
     need: UnlockNeed,
     /// It carried an unlock and has not streamed: a `Pending` is the desktop starting.
     sent: bool,
+    /// [`Shell::profile_locked`] came: the failure that follows prompts.
+    refused: bool,
 }
 
 /// Where the launch hold asks after its title: the shelf's host, on the
@@ -292,8 +294,7 @@ impl Shell {
             Reask::Asking => self.reask = Reask::Asking,
             Reask::None | Reask::Armed(_) => {}
         }
-        let locked = self.console.take_locked();
-        if let Some(d) = self.locked.take().filter(|_| locked) {
+        if let Some(d) = self.locked.take().filter(|d| d.refused) {
             let error = unlock::refusal_line(msg);
             if let Gate::Prompt { error } = unlock::after_refusal(d.need, None, d.sent, error) {
                 return self.prompt_unlock(d.intent, error);
@@ -318,6 +319,14 @@ impl Shell {
             });
         }
         self.reask = Reask::Due(intent);
+    }
+
+    /// The host closed the last dial with `profile-locked`. A console that prompts reopens the
+    /// password prompt on the failure that follows; one that doesn't toasts it.
+    pub(crate) fn profile_locked(&mut self) {
+        if let Some(d) = &mut self.locked {
+            d.refused = true;
+        }
     }
 
     pub(crate) fn session_streaming(&mut self) {
@@ -834,6 +843,7 @@ impl Shell {
             need: (self.listed_row(&intent)).map_or(UnlockNeed::Password, |p| p.unlock),
             intent: intent.clone(),
             sent: unlock.is_some(),
+            refused: false,
         });
         if self.prompts_unlock {
             self.console.put_unlock(unlock);

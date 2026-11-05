@@ -172,7 +172,8 @@ bool punktfunk_console_key(const PunktfunkConsole *c, uint8_t key, bool shift, b
 void punktfunk_console_text(const PunktfunkConsole *c, const char *utf8);
 
 // Where the session the console asked for stands: 0 connecting, 1 streaming, 2 failed,
-// 3 ended (`message` NULL or empty = clean), 4 reconnecting.
+// 3 ended (`message` NULL or empty = clean), 4 reconnecting, 6 awaiting approval, 7 failed
+// as `profile-locked` (`message` the host's sentence, empty when it said none).
 //
 // # Safety
 // `c` is live; `message` is NULL or a NUL-terminated string.

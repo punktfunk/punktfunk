@@ -539,7 +539,8 @@ impl Shell {
     }
 
     /// A dial that is not dialled again. Single mode ends on it; browse shows it on the
-    /// console, or nothing when the player cancelled the dial.
+    /// console, or nothing when the player cancelled the dial. The console hears a profile
+    /// refusal first, so the failure asks again or prompts instead of toasting.
     fn on_failed(
         &mut self,
         stream: &mut Option<StreamState>,
@@ -555,10 +556,13 @@ impl Shell {
             });
         }
         tracing::warn!(%msg, "connect failed — back to the console");
-        if refused == Some(punktfunk_core::reject::RejectReason::ProfileUnknown)
-            && let Some(o) = self.overlay.as_mut()
-        {
-            o.profile_gone();
+        if let Some(o) = self.overlay.as_mut() {
+            use punktfunk_core::reject::RejectReason;
+            match refused {
+                Some(RejectReason::ProfileUnknown) => o.profile_gone(),
+                Some(RejectReason::ProfileLocked) => o.profile_locked(),
+                _ => {}
+            }
         }
         let phase = if stream.as_ref().is_some_and(|st| st.canceled) {
             SessionPhase::Ended(None)

@@ -88,7 +88,7 @@
   "settings_extra_keys": ["gamepad_ui_enabled", "android.low_latency"],
   "$settings_extra_keys": "Keys of the Settings sample that ride Settings::extra, which is serde-flattened: top-level keys, never nested under \"extra\".",
   "codes": {
-    "phase": ["connecting", "streaming", "failed", "ended", "reconnecting", "profile_gone", "awaiting_approval"],
+    "phase": ["connecting", "streaming", "failed", "ended", "reconnecting", "profile_gone", "awaiting_approval", "profile_locked"],
     "stale": ["fresh", "waking", "offline"],
     "menu": ["up", "down", "left", "right", "confirm", "back", "secondary", "tertiary", "jump_back", "jump_forward", "ok_down", "ok_up"]
   },

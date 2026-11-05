@@ -412,6 +412,12 @@ impl Overlay for SkiaOverlay {
         }
     }
 
+    fn profile_locked(&mut self) {
+        if let Some(shell) = &mut self.shell {
+            shell.profile_locked();
+        }
+    }
+
     fn frame(&mut self, ctx: &FrameCtx) -> Result<Option<OverlayFrame>> {
         // The window may have moved to another display since the last frame.
         if let Some(shell) = &mut self.shell {

@@ -209,10 +209,9 @@ impl Launcher {
                 params.profile = profile;
                 params.shows_screens |= self.all_screens;
                 // This console asks for a locked profile's password, and prompts again when the
-                // host refuses it.
+                // host refuses it: the presenter reports that refusal to it.
                 params.prompts_unlock = true;
                 params.unlock = Arc::new(Mutex::new(unlock));
-                params.locked = self.console.locked_flag();
                 if request_access {
                     // The host PARKS the connect until the operator approves — outlast its
                     // approval window (host `PENDING_APPROVAL_WAIT`), matching the desktop

@@ -15,7 +15,9 @@ use anyhow::{bail, Result};
 use ndk::native_window::NativeWindow;
 use pf_client_core::console::{PointerInput, SessionPhase};
 use pf_client_core::menu_nav::{MenuEvent, MenuNav, MenuSample, PadInfo};
-use pf_console_ui::bridge::{phase_code, Event, Published, PHASE_PROFILE_GONE};
+use pf_console_ui::bridge::{
+    phase_code, Event, Published, PHASE_PROFILE_GONE, PHASE_PROFILE_LOCKED,
+};
 use pf_console_ui::console::FrameCost;
 use pf_console_ui::{
     Console, ConsoleEntry, ConsoleHandles, ConsoleOptions, InputSource, Insets, Key, SnapshotStore,
@@ -533,8 +535,10 @@ impl Ui {
                     // Coming back from a stream: whatever is held on the pad now (the chord
                     // that ended it) must be released before it can act here.
                     let back = matches!(phase, SessionPhase::Ended(_) | SessionPhase::Failed(_));
-                    if code == PHASE_PROFILE_GONE {
-                        console.profile_gone();
+                    match code {
+                        PHASE_PROFILE_GONE => console.profile_gone(),
+                        PHASE_PROFILE_LOCKED => console.profile_locked(),
+                        _ => {}
                     }
                     console.session_phase(phase);
                     if back {

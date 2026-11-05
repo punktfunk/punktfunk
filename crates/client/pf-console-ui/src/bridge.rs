@@ -414,14 +414,19 @@ pub fn key_code(code: u8) -> Option<Key> {
 /// [`crate::console::Console::profile_gone`] before the phase.
 pub const PHASE_PROFILE_GONE: u8 = 5;
 
+/// A failed connect the host closed with `profile-locked`, `message` its sentence verbatim
+/// (empty when it said none): the host calls [`crate::console::Console::profile_locked`]
+/// before the phase.
+pub const PHASE_PROFILE_LOCKED: u8 = 7;
+
 /// 0 connecting, 1 streaming, 2 failed, 3 ended (an empty `message` is a clean end),
 /// 4 reconnecting, [`PHASE_PROFILE_GONE`] failed as `profile-unknown`, 6 awaiting the host
-/// operator's approval.
+/// operator's approval, [`PHASE_PROFILE_LOCKED`] failed as `profile-locked`.
 pub fn phase_code(code: u8, message: &str) -> Option<SessionPhase<'_>> {
     Some(match code {
         0 => SessionPhase::Connecting,
         1 => SessionPhase::Streaming,
-        2 | PHASE_PROFILE_GONE => SessionPhase::Failed(message),
+        2 | PHASE_PROFILE_GONE | PHASE_PROFILE_LOCKED => SessionPhase::Failed(message),
         3 => SessionPhase::Ended((!message.is_empty()).then_some(message)),
         4 => SessionPhase::Reconnecting(message),
         6 => SessionPhase::AwaitingApproval,
@@ -540,6 +545,10 @@ mod tests {
                 "awaiting_approval" => matches!(p, Some(SessionPhase::AwaitingApproval)),
                 "profile_gone" => {
                     code == usize::from(PHASE_PROFILE_GONE)
+                        && matches!(p, Some(SessionPhase::Failed("m")))
+                }
+                "profile_locked" => {
+                    code == usize::from(PHASE_PROFILE_LOCKED)
                         && matches!(p, Some(SessionPhase::Failed("m")))
                 }
                 _ => panic!("phase code {code} names {name}"),

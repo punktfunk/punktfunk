@@ -160,9 +160,6 @@ pub struct SessionParams {
     /// The unlock the next dial sends, taken by it. Clones share the slot, so a re-dial sends
     /// none.
     pub unlock: Arc<std::sync::Mutex<Option<punktfunk_core::quic::v2::msg::ProfileUnlock>>>,
-    /// Raised by a dial the host closes with `ProfileLocked`, before its `Failed`. Clones share
-    /// it. An embedder that keeps no `refused` reason reads it to prompt again.
-    pub locked: Arc<AtomicBool>,
 }
 
 /// Host, pin, launch, and budget for one dial.
@@ -291,7 +288,6 @@ impl SessionParams {
             shows_screens: settings.all_screens(),
             prompts_unlock: false,
             unlock: Arc::default(),
-            locked: Arc::default(),
         }
     }
 
@@ -644,8 +640,7 @@ fn client_caps(params: &SessionParams, pad_audio_on: bool) -> u8 {
 
 /// Dial the host. `Err` is the terminal event the pump sends instead of `Connected`; a host
 /// that parks the dial for its operator raises [`SessionEvent::AwaitingApproval`] on `ev_tx`.
-/// The params' unlock goes with this dial and no later one; a `ProfileLocked` close raises
-/// `params.locked`.
+/// The params' unlock goes with this dial and no later one.
 fn dial(
     params: &SessionParams,
     stop: &Arc<AtomicBool>,
@@ -744,9 +739,6 @@ fn dial(
             PunktfunkError::Rejected(reason, _) => Some(reason),
             _ => None,
         };
-        if refused == Some(punktfunk_core::reject::RejectReason::ProfileLocked) {
-            params.locked.store(true, Ordering::Relaxed);
-        }
         let not_ready = params.not_ready(refused, 0);
         let msg = match e {
             PunktfunkError::Crypto => {

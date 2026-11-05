@@ -88,10 +88,11 @@ public final class ConsoleBridge {
         case endGame = "EndGame", install = "Install"
     }
 
-    /// Where the session the console asked for stands.
+    /// Where the session the console asked for stands. `profileLocked` is a failure the host
+    /// closed with `profile-locked`, its message the host's sentence: the console's prompt opens.
     public enum Phase: UInt8 {
         case connecting = 0, streaming = 1, failed = 2, ended = 3, reconnecting = 4
-        case awaitingApproval = 6
+        case awaitingApproval = 6, profileLocked = 7
     }
 
     /// `nil` when the options JSON or Skia's Metal context fails; the log says which.

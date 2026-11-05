@@ -130,6 +130,10 @@ pub trait Overlay {
     /// connect's [`SessionPhase::Failed`].
     fn profile_gone(&mut self) {}
 
+    /// The host wants the profile unlocked, or refused the unlock the connect sent. Comes just
+    /// before that connect's [`SessionPhase::Failed`], whose message is the host's sentence.
+    fn profile_locked(&mut self) {}
+
     /// A text field is being edited. The run loop starts and stops SDL text
     /// input (IME / `Event::TextInput`) from this.
     fn text_input_active(&self) -> bool {
