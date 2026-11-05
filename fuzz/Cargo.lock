@@ -846,7 +846,7 @@ dependencies = [
 
 [[package]]
 name = "pf-bitstream"
-version = "0.46.0"
+version = "0.47.0"
 dependencies = [
  "cros-codecs",
  "tracing",
@@ -908,7 +908,7 @@ dependencies = [
 
 [[package]]
 name = "punktfunk-core"
-version = "0.46.0"
+version = "0.47.0"
 dependencies = [
  "aes-gcm",
  "chacha20poly1305",
@@ -923,6 +923,7 @@ dependencies = [
  "rcgen",
  "reed-solomon-simd",
  "rustls",
+ "rustls-webpki",
  "sha2 0.11.0",
  "socket2",
  "spake2",

@@ -1,0 +1,2 @@
+• On a Chromebook, a two-finger touchpad swipe scrolls on the host instead of moving the pointer.
+• A Shield on a TV that runs a hair slower than the stream drops and repeats far fewer frames.

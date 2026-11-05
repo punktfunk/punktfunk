@@ -14,6 +14,51 @@ short; the version-bump commit retitles it. Older sections stay as they are.
 
 ---
 
+## v0.47.0
+
+35 commits since v0.46.0. ALPN `pkf2`, C ABI 63 and driver protocol floor 9 stay. A browser that
+comes through the web client's page server, or from a public page no paired device used, pairs
+only by a fingerprint-bound PIN; gamescope moves to `+pfhdr32`.
+Deep dive: `git log v0.46.0..v0.47.0`
+
+### Versions
+
+| | v0.46.0 | v0.47.0 | Notes |
+|---|---|---|---|
+| Wire protocol | punktfunk/2 | **punktfunk/2** | ALPN unchanged. The browser plane answers an unvalidated source with QUIC Retry and holds at most 8 unadmitted sessions per address, 64 in all. A session keeps the page origin its WebTransport request carried. Native peers see no change |
+| C ABI | 63 | **63** | unchanged |
+| C headers | — | — | unchanged |
+| Rust edition / MSRV | 2024 / 1.85 | **2024 / 1.85** | unchanged |
+| Workspace crate dirs | 47 | **47** | unchanged. `punktfunk-core` gains `mgmt_routes`, `provenance` and `tls::verify_plane_attestation`, which the web client's page server pins |
+| Virtual-display driver protocol | 9 | **9** | unchanged |
+| Windows virtual-gamepad channel | 3 | **3** | unchanged |
+| Plugin index schema | 1 | **1** | unchanged |
+| Host event schema | 1 | **1** | unchanged |
+| `api/openapi.json` | 0.46.0 | **0.47.0** | `PendingRequest` gains `relayed` and `unfamiliar_origin` (required) and `origin`; approve answers 409 for both, as for a `wan` knock. Nothing removed |
+| gamescope patch level (`+pfhdrN`) | 31 | **32** | patch 0035: on NVIDIA a planar capture is allocated `DRM_FORMAT_MOD_LINEAR` with external memory and its plane views; a driver that refuses the shape is not offered NV12/P010 |
+| `@punktfunk/host` (SDK) | 0.5.0 | **0.5.0** | unchanged; the generated types carry the new `PendingRequest` fields for the next cut. The host's plugin runner holds a registry lease per running package |
+| `@punktfunk/plugin-kit` | 0.14.0 | **0.14.0** | unchanged |
+
+### Breaking
+
+- **A relayed knock is strict.** A `pf-client-addr` header on a plane session, pairing attempt or
+  management request makes it `wan` whatever address it names, and never loopback. Its approve
+  answers 409; pair it with a PIN armed for its fingerprint. Strict and local pairing attempts
+  run on separate clocks on both planes.
+- **An unfamiliar public page is strict.** A browser session whose `Origin` is public and in no
+  paired device's record, and not in Browser origins, knocks `wan` from any address. Each paired
+  browser's record keeps the page it paired or signed in from.
+- **`/echo` is gone from release hosts.** The browser plane's unauthenticated echo is a debug
+  build's only.
+
+### Knobs
+
+- New: `PUNKTFUNK_NVENC_RM_IMPORT=0` maps a Linux NVIDIA capture through EGL, not the driver's own
+  memory object. `PUNKTFUNK_VKDECODE_ARRANGEMENT=sampler` reads each picture through a sampler
+  Y'CbCr conversion.
+
+---
+
 ## v0.46.0
 
 490 commits since v0.45.0. ALPN `pkf2` and driver protocol floor 9 stay; **C ABI 63**. Umbriel joins

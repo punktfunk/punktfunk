@@ -699,7 +699,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -1589,14 +1589,14 @@ dependencies = [
 
 [[package]]
 name = "pf-paths"
-version = "0.46.0"
+version = "0.47.0"
 dependencies = [
  "tracing",
 ]
 
 [[package]]
 name = "pf-paths-win"
-version = "0.46.0"
+version = "0.47.0"
 dependencies = [
  "tracing",
  "windows",
@@ -1604,7 +1604,7 @@ dependencies = [
 
 [[package]]
 name = "pf-seats"
-version = "0.46.0"
+version = "0.47.0"
 dependencies = [
  "aws-lc-rs",
  "hex",
@@ -2064,7 +2064,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
