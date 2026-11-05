@@ -190,7 +190,7 @@ impl Shell {
         Ok(Shell {
             overlay_damage: OverlayDamage::default(),
             ring_keyboard: false,
-            text_input_on: false,
+            text_input_on: None,
             overlay_frame: None,
             stats_verbosity: opts.stats_verbosity,
             fullscreen: opts.fullscreen,

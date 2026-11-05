@@ -284,9 +284,9 @@ struct Shell {
     overlay_damage: OverlayDamage,
     /// Ring Keyboard slot: hold text input on, which summons Steam's OSK under gamescope.
     ring_keyboard: bool,
-    /// SDL text input tracks overlay editing (IME / Steam OSK). Toggled edge-wise —
-    /// start/stop are not free on Wayland.
-    text_input_on: bool,
+    /// SDL text input tracks overlay editing (IME / Steam OSK): `Some(secure)` while on.
+    /// Toggled edge-wise — start/stop are not free on Wayland.
+    text_input_on: Option<bool>,
     overlay_frame: Option<OverlayFrame>,
     stats_verbosity: StatsVerbosity,
     fullscreen: bool,

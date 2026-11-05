@@ -388,6 +388,13 @@ impl Overlay for SkiaOverlay {
         self.console_visible() && self.shell.as_ref().is_some_and(Shell::editing)
     }
 
+    fn text_input_secure(&self) -> bool {
+        self.text_input_active()
+            && (self.shell.as_ref())
+                .and_then(Shell::edit_field)
+                .is_some_and(|f| f.secure)
+    }
+
     fn session_phase(&mut self, phase: SessionPhase) {
         // The exit hint's clock is the overlay's, in a plain `--connect` session too; the
         // phase itself is the console shell's.

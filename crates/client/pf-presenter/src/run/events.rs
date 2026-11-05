@@ -3,7 +3,7 @@
 use super::pace::bump_stats_tier;
 use super::*;
 use crate::route::{route, Kind, RouteFacts, Target};
-use sdl3::keyboard::{Keycode, Scancode};
+use sdl3::keyboard::{Keycode, Scancode, TextInputOptions, TextInputType};
 
 impl Shell {
     /// One SDL event: the console's verdict, then [`route`] picks who takes it, and this
@@ -639,18 +639,39 @@ impl Shell {
     }
 
     /// SDL text input tracks overlay editing and the ring's Keyboard slot (IME / Steam
-    /// OSK), edge-wise.
+    /// OSK), edge-wise. A password field starts it as a hidden password, so an IME neither
+    /// shows nor learns it ([`text_input_want`]).
     pub(super) fn text_input_tick(&mut self) {
-        let want_text =
-            self.ring_keyboard || self.overlay.as_ref().is_some_and(|o| o.text_input_active());
-        if want_text != self.text_input_on {
-            self.text_input_on = want_text;
-            let ti = self.sdl_video.text_input();
-            if want_text {
-                ti.start(&self.window);
-            } else {
-                ti.stop(&self.window);
+        let overlay = self.overlay.as_ref();
+        let want = text_input_want(
+            self.ring_keyboard,
+            overlay.is_some_and(|o| o.text_input_active()),
+            overlay.is_some_and(|o| o.text_input_secure()),
+            steam_keyboard,
+        );
+        if want == self.text_input_on {
+            return;
+        }
+        let ti = self.sdl_video.text_input();
+        if self.text_input_on.is_some() {
+            ti.stop(&self.window);
+        }
+        self.text_input_on = want;
+        match want {
+            Some(false) => ti.start(&self.window),
+            Some(true) => {
+                let hidden = TextInputOptions {
+                    input_type: Some(TextInputType::PasswordHidden),
+                    autocorrect: Some(false),
+                    multiline: Some(false),
+                    ..TextInputOptions::default()
+                };
+                if let Err(e) = ti.start_with_options(&self.window, hidden) {
+                    // Nothing types into the field but the console's tray.
+                    tracing::warn!(error = %e, "password text input did not start");
+                }
             }
+            None => {}
         }
     }
 
@@ -767,6 +788,29 @@ pub(super) enum Chord {
     Ring,
     Mic,
     Fullscreen,
+}
+
+/// SDL text input as it should stand: `Some(secure)` on, `None` off. The ring's Keyboard slot
+/// types to the host and is never a password. SDL hands a field to Steam's keyboard with no
+/// password mode, so a password starts none there and the console's tray types it.
+fn text_input_want(
+    ring: bool,
+    editing: bool,
+    secure: bool,
+    steam: impl FnOnce() -> bool,
+) -> Option<bool> {
+    let secure = secure && !ring;
+    ((ring || editing) && !(secure && steam())).then_some(secure)
+}
+
+/// SDL opens Steam's keyboard for text input: Steam sets this for a game it starts in Big
+/// Picture or Game Mode.
+fn steam_keyboard() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| {
+        sdl3::hint::get("SDL_ENABLE_STEAM_SCREEN_KEYBOARD")
+            .is_some_and(|v| !v.is_empty() && v != "0" && !v.eq_ignore_ascii_case("false"))
+    })
 }
 
 /// Ctrl+Alt+Shift with Q, M, D, S, O or V, and F11 or Alt+Enter for fullscreen (some Fn
@@ -1319,5 +1363,18 @@ mod tests {
             frame_at(VideoFit::Fit, s, 1.0, 1.0),
             (1920, 1080, 1920, 1080)
         );
+    }
+
+    /// A password field starts hidden text input, and none where Steam's keyboard would show
+    /// it. The ring's slot stays plain text.
+    #[test]
+    fn a_password_starts_hidden_text_input_or_none_under_steam() {
+        let steam = || true;
+        let elsewhere = || false;
+        assert_eq!(text_input_want(false, false, false, steam), None);
+        assert_eq!(text_input_want(false, true, false, steam), Some(false));
+        assert_eq!(text_input_want(false, true, true, elsewhere), Some(true));
+        assert_eq!(text_input_want(false, true, true, steam), None);
+        assert_eq!(text_input_want(true, false, true, steam), Some(false));
     }
 }

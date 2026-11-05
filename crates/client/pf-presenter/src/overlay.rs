@@ -140,6 +140,12 @@ pub trait Overlay {
         false
     }
 
+    /// The field being edited is a password: the run loop starts SDL text input as a hidden
+    /// password, or none where SDL would hand it to a keyboard that can't hide it.
+    fn text_input_secure(&self) -> bool {
+        false
+    }
+
     /// Once per presenter iteration. Re-render (flush + `SHADER_READ_ONLY`) only
     /// on content or size change. The returned image stays untouched until the
     /// next `frame()` — one frame in flight; a ring of two is enough.
