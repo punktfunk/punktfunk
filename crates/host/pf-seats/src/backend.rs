@@ -10,6 +10,7 @@
 use crate::ipc::{Diagnostic, SeatingStatus};
 use crate::model::{Ledger, RuntimeStatus, Seat};
 use crate::secret::Secret;
+use crate::unlock::DeviceList;
 
 pub trait PlatformBackend: Send + Sync + 'static {
     fn provision(&self, seat: &Seat) -> Result<(), BackendError>;
@@ -61,6 +62,23 @@ pub trait PlatformBackend: Send + Sync + 'static {
 
     /// Verify `password`, an adopted row's new one, and store it in place of the old.
     fn reseal(&self, _seat: &Seat, _password: &Secret) -> Result<(), BackendError> {
+        Err(UnsupportedBackend::unavailable())
+    }
+
+    /// Linux, a person's row: its device list after `edit`, which gets the list with expired
+    /// presence dropped and the time in unix seconds. A changed list is saved, and the seat's
+    /// trust copy follows who it admits, before this returns.
+    fn devices(
+        &self,
+        _seat: &Seat,
+        _edit: &mut dyn FnMut(&mut DeviceList, i64),
+    ) -> Result<DeviceList, BackendError> {
+        Err(UnsupportedBackend::unavailable())
+    }
+
+    /// Linux: the box certificate's SHA-256, pinned the first time it is asked for. A
+    /// certificate that no longer matches the pin is refused.
+    fn box_fingerprint(&self) -> Result<[u8; 32], BackendError> {
         Err(UnsupportedBackend::unavailable())
     }
 

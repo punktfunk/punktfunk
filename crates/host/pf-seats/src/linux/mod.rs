@@ -5,8 +5,7 @@
 //! and a fresh management token, then starts `punktfunk-seat@<user>.service`: that unit logs the
 //! user in through PAM and runs `seat-session`, which brings up a headless compositor and a stock
 //! `punktfunk-host serve`. Everything a seat runs descends from the unit, so the private
-//! `compatdata` bind mounts reach it. The daemon holds no seat state of its own: a restart reads
-//! each unit's state back from systemd.
+//! `compatdata` bind mounts reach it. A restart reads each unit's state back from systemd.
 //!
 //! The owner's row is the box owner's own account, adopted. Its unit runs the owner's host in a
 //! headless `background` session, and never while the owner sits at the machine: a login of theirs
@@ -14,8 +13,9 @@
 //! host writes the box's library: the daemon copies it for the door and every other seat.
 //!
 //! Another person's row adopts their account the same way, once [`pam`] accepts their password
-//! in a child process: a headless `user` session, never while they sit at the machine, and a
-//! contract seat's host. The daemon changes nothing on the account and ends nothing but its unit.
+//! in a child process: a headless `user` session, never while they sit at the machine, whose
+//! host admits only the devices the row's list does ([`devices`]). The daemon changes nothing on
+//! the account and ends nothing but its unit.
 //!
 //! A seat's pads are the daemon's too: its host asks the pad broker in the `punktfunk-seats`
 //! binary for them ([`LinuxBackend::running_account`] is its gate), and [`fence`] gives udev the
@@ -23,6 +23,7 @@
 //! with the unit ([`LinuxBackend::on_unit`]).
 
 mod accounts;
+mod devices;
 #[cfg(test)]
 mod fake;
 pub mod fence;
@@ -36,6 +37,8 @@ mod safe_open;
 mod session;
 mod shared;
 pub mod socket;
+#[cfg(test)]
+mod unlock_tests;
 
 pub use pam::{run_check as pam_check, CHECK_VERB as PAM_CHECK_VERB};
 pub use shared::ledger_root;
@@ -47,6 +50,7 @@ use crate::model::{Ledger, RuntimeState, RuntimeStatus, Seat, SeatId};
 use crate::persistence::{LedgerStore, StoreError};
 use crate::secret::Secret;
 use crate::service::SeatService;
+use crate::unlock::DeviceList;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -153,6 +157,9 @@ struct Inner {
     /// Held by a removal throughout and by [`keep_level`] for each seat it refreshes, so a
     /// refresh never writes a removed seat's trust copy or environment file back.
     level: Mutex<()>,
+    /// Each person's row's device list, loaded on first use. Held across each change, its save
+    /// and the trust copy it rewrites, so two writers never cross. Taken after `level`.
+    devices: Mutex<HashMap<SeatId, devices::Held>>,
 }
 
 /// `slot`'s checks when they ran less than [`CHECKS_FRESH`] before `now`, else what `run`
@@ -248,11 +255,70 @@ impl Tracked {
     }
 }
 
+/// The wall clock in unix seconds, as presence is kept.
+fn unix_now() -> i64 {
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH);
+    now.map_or(0, |d| i64::try_from(d.as_secs()).unwrap_or(i64::MAX))
+}
+
+/// `f` over `id`'s held device list, loaded on first use, with the devices lock held throughout.
+fn with_devices<T>(
+    inner: &Inner,
+    id: &SeatId,
+    f: impl FnOnce(&mut devices::Held, i64) -> Result<T, BackendError>,
+) -> Result<T, BackendError> {
+    let now = unix_now();
+    let mut all = inner.devices.lock().unwrap_or_else(|e| e.into_inner());
+    let held = all
+        .entry(id.clone())
+        .or_insert_with(|| devices::load(&inner.state, id, now));
+    f(held, now)
+}
+
+/// `id`'s list after `edit`, from the list with its expired presence dropped. A change is saved,
+/// then the trust copy's pairing list follows who is admitted.
+fn edit_devices(
+    inner: &Inner,
+    id: &SeatId,
+    edit: &mut dyn FnMut(&mut DeviceList, i64),
+) -> Result<DeviceList, BackendError> {
+    with_devices(inner, id, |held, now| {
+        let mut next = held.list.clone();
+        next.expire(now);
+        edit(&mut next, now);
+        if next != held.list {
+            held.commit(&inner.state, id, next.clone())?;
+            shared::rewrite_admitted(&inner.box_dir, &inner.state, id, &next.admitted())?;
+        }
+        Ok(next)
+    })
+}
+
+/// A person's session ended: so has every presence on its row.
+fn end_presence(inner: &Inner, id: &SeatId) {
+    if let Err(error) = edit_devices(inner, id, &mut |list, _| list.end_presence()) {
+        tracing::warn!(seat = %id, %error, "presence not ended");
+    }
+}
+
+/// A person's trust copy for `reader`, its pairing list holding only the devices admitted now.
+fn person_trust(inner: &Inner, id: &SeatId, reader: shared::Reader) -> Result<bool, BackendError> {
+    with_devices(inner, id, |held, now| {
+        let mut next = held.list.clone();
+        if next.expire(now) {
+            held.commit(&inner.state, id, next.clone())?;
+        }
+        let admitted = next.admitted();
+        shared::refresh_person_trust(&inner.box_dir, &inner.state, id, reader, &admitted)
+    })
+}
+
 /// Stops `seat`'s unit if it is up. A made seat's user ends with it, so nothing it started under
 /// its own manager survives, and then the hook takes back what runs beside it. A row on a
 /// person's own account ends nothing else, signals none of their processes and leaves the hook
-/// alone: their own login may hold pads. The owner's row stays tracked, since their own host
-/// reads its trust copy; a person's stops being served. A unit that was never started is fine.
+/// alone: their own login may hold pads; every presence on it ends. The owner's row stays
+/// tracked, since their own host reads its trust copy; a person's stops being served. A unit
+/// that was never started is fine.
 fn stop_unit(inner: &Inner, seat: &Seat) -> Result<(), BackendError> {
     let (id, account) = (&seat.id, &seat.account);
     let unit = session::unit(account);
@@ -272,6 +338,9 @@ fn stop_unit(inner: &Inner, seat: &Seat) -> Result<(), BackendError> {
         .lock()
         .unwrap_or_else(|e| e.into_inner())
         .remove(id);
+    if kind == Own::Person {
+        end_presence(inner, id);
+    }
     if !kind.ours() {
         return Ok(());
     }
@@ -375,6 +444,7 @@ impl LinuxBackend {
             hook: OnceLock::new(),
             checks: Mutex::new(None),
             level: Mutex::new(()),
+            devices: Mutex::new(HashMap::new()),
         });
         let weak = Arc::downgrade(&inner);
         std::thread::Builder::new()
@@ -400,6 +470,7 @@ impl LinuxBackend {
                 hook: OnceLock::new(),
                 checks: Mutex::new(None),
                 level: Mutex::new(()),
+                devices: Mutex::new(HashMap::new()),
             }),
         }
     }
@@ -413,13 +484,34 @@ impl LinuxBackend {
     /// Opens the ledger in `seats` under [`STATE_DIR`] and gives the service this backend.
     /// The ledger store closes its directory to root; seat users walk through it, so it reopens
     /// before the ledger loads, and a ledger that won't load leaves running seats their homes.
+    /// Each person's device list loads now, its expired presence dropped.
     pub fn open_service(self) -> Result<SeatService<Self>, StoreError> {
         let root = ledger_root(&self.inner.state);
         let store = LedgerStore::open(&root)?;
         shared::make_dir(&root, 0o711)?;
         let service = SeatService::with_store(store, self)?;
         service.backend().reap_orphans(&service.ledger());
+        service.backend().load_devices(&service.ledger());
         Ok(service)
+    }
+
+    /// Loads each person's row's device list and writes its trust copy's pairing list from it,
+    /// so a presence that ran out while the supervisor was down admits nobody.
+    fn load_devices(&self, ledger: &Ledger) {
+        for seat in ledger.seats.iter().filter(|s| Own::of(s) == Own::Person) {
+            let written = with_devices(&self.inner, &seat.id, |held, _| {
+                let admitted = held.list.admitted();
+                shared::rewrite_admitted(
+                    &self.inner.box_dir,
+                    &self.inner.state,
+                    &seat.id,
+                    &admitted,
+                )
+            });
+            if let Err(error) = written {
+                tracing::warn!(seat = %seat.id, %error, "pairing list not written");
+            }
+        }
     }
 
     /// Removes the seat accounts no ledger row names, with their directories: what a create that
@@ -813,6 +905,21 @@ impl PlatformBackend for LinuxBackend {
         made.map(|()| false)
     }
 
+    fn devices(
+        &self,
+        seat: &Seat,
+        edit: &mut dyn FnMut(&mut DeviceList, i64),
+    ) -> Result<DeviceList, BackendError> {
+        if Own::of(seat) != Own::Person {
+            return Err(err("not_a_person", "only a person's row lists devices"));
+        }
+        edit_devices(&self.inner, &seat.id, edit)
+    }
+
+    fn box_fingerprint(&self) -> Result<[u8; 32], BackendError> {
+        devices::box_fingerprint(&self.inner.box_dir, &self.inner.state)
+    }
+
     fn start(&self, seat: &Seat) -> Result<RuntimeStatus, BackendError> {
         let asked = self.inner.stops.load(Ordering::SeqCst);
         match Own::of(seat) {
@@ -881,8 +988,8 @@ impl PlatformBackend for LinuxBackend {
 
     /// The owner's row takes the box's library with it: it was the door's, and the door goes too.
     /// A row the owner's new row has replaced leaves the library, which is the new one's. A
-    /// person's row releases the account: its unit stops and what the row made goes, and nothing
-    /// of the account does.
+    /// person's row releases the account: its unit stops and what the row made goes, its device
+    /// list included, and nothing of the account does.
     fn remove(&self, seat: &Seat) -> Result<(), BackendError> {
         let _level = self.inner.level.lock().unwrap_or_else(|e| e.into_inner());
         let kind = Own::of(seat);
@@ -904,7 +1011,10 @@ impl PlatformBackend for LinuxBackend {
                     .map_err(|e| err("box_library", format!("remove the box library: {e}")))?;
             }
         }
-        self.remove_files(&seat.account, &seat.id, kind.ours())
+        let removed = self.remove_files(&seat.account, &seat.id, kind.ours());
+        let mut devices = self.inner.devices.lock().unwrap_or_else(|e| e.into_inner());
+        devices.remove(&seat.id);
+        removed
     }
 
     fn status(&self, seat: &Seat) -> Result<RuntimeStatus, BackendError> {
@@ -918,7 +1028,8 @@ impl PlatformBackend for LinuxBackend {
     /// A unit found up is tracked and gets its proxy; one that is down loses both. A unit between
     /// the two, stopping, keeps them: a restart rebuilds its namespace on the same proxy.
     /// The owner's row stays tracked from its adoption. A person's row is tracked while its unit
-    /// is, and has no proxy: its pads come from the broker, and the hook is a made seat's.
+    /// is, and has no proxy: its pads come from the broker, and the hook is a made seat's. A
+    /// person's unit found down ends every presence on its row.
     fn reconcile(&self, seat: &Seat, status: &RuntimeStatus) {
         let kind = Own::of(seat);
         if kind == Own::Owner {
@@ -949,6 +1060,9 @@ impl PlatformBackend for LinuxBackend {
                 self.untrack(&seat.id);
                 if kind.ours() {
                     unit_hook(&self.inner, &seat.account, None);
+                }
+                if kind == Own::Person {
+                    end_presence(&self.inner, &seat.id);
                 }
             }
         }
@@ -1026,7 +1140,18 @@ impl PlatformBackend for LinuxBackend {
                 ),
                 seat_id: Some(seat.id.clone()),
             });
+            if kind == Own::Person {
+                let unreadable =
+                    with_devices(&self.inner, &seat.id, |held, _| Ok(held.unreadable.clone()))?;
+                if let Some(cause) = unreadable {
+                    out.push(devices::unreadable_diagnostic(&seat.id, &cause));
+                }
+            }
         }
+        out.extend(devices::pin_diagnostic(
+            &self.inner.box_dir,
+            &self.inner.state,
+        ));
         Ok(out)
     }
 
@@ -1099,8 +1224,9 @@ impl LinuxBackend {
 
     /// A person's row up, on their own account. With them at the machine nothing starts: their
     /// login is theirs, and the headless session would sit beside it uninvited. Otherwise the
-    /// unit brings up the headless session and a contract seat's host in it. The account is
-    /// checked first, and what is made is the row's own, never in the account.
+    /// unit brings up the headless session and a contract seat's host in it, which admits only
+    /// the devices the row's list does. The account is checked first, and what is made is the
+    /// row's own, never in the account.
     fn start_person(&self, seat: &Seat, asked: u64) -> Result<RuntimeStatus, BackendError> {
         let passwd = accounts::require_person(seat)?;
         if owner_at_desk(&seat.account) {
@@ -1115,7 +1241,7 @@ impl LinuxBackend {
         let (box_dir, state) = (&self.inner.box_dir, &self.inner.state);
         shared::ensure_person_dirs(state, &seat.id, &passwd)?;
         let reader = shared::Reader::person(passwd.uid, passwd.gid);
-        shared::refresh_trust(box_dir, state, &seat.id, reader)?;
+        person_trust(&self.inner, &seat.id, reader)?;
         shared::refresh_seat_library(state, &seat.id, reader)?;
         // A unit already up keeps its token: the host read it when it started.
         if !session::state(&seat.account)?.live() {
@@ -1182,10 +1308,11 @@ impl LinuxBackend {
 
 /// While a seat runs: refreshes its trust copy when the box's files change, the environment file
 /// of a row on a person's own account, and, for a seat other than the owner's, the box's library,
-/// which follows the owner's own first. Ends a person's headless session when they sit down at
-/// the machine, and repairs the games folder's ACL mask after a made seat stops and every
-/// [`ACL_EVERY`]. The owner's row stays listed while its host is the owner's own, which reads the
-/// same copy. Ends when the backend is dropped.
+/// which follows the owner's own first. A person's pairing list follows who its row admits, as
+/// presence runs out. Ends a person's headless session when they sit down at the machine, and
+/// repairs the games folder's ACL mask after a made seat stops and every [`ACL_EVERY`]. The
+/// owner's row stays listed while its host is the owner's own, which reads the same copy. Ends
+/// when the backend is dropped.
 fn keep_level(inner: Weak<Inner>) {
     let mut acl_at = Instant::now();
     let mut failing: HashSet<SeatId> = HashSet::new();
@@ -1217,7 +1344,11 @@ fn keep_level(inner: Weak<Inner>) {
                 continue;
             }
             drop(tracked_now);
-            let refreshed = shared::refresh_trust(&inner.box_dir, &inner.state, id, tracked.reader)
+            let trust = match &tracked.guest {
+                Some((seat, _)) if !seat.owner => person_trust(&inner, id, tracked.reader),
+                _ => shared::refresh_trust(&inner.box_dir, &inner.state, id, tracked.reader),
+            };
+            let refreshed = trust
                 .and_then(|_| match &tracked.guest {
                     Some((seat, passwd)) => rewrite_env(&inner, seat, passwd).map(|_| ()),
                     None => Ok(()),

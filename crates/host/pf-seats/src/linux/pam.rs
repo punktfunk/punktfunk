@@ -25,7 +25,7 @@ const SERVICE: &CStr = c"login";
 /// The verb of `punktfunk-seats` that runs one check.
 pub const CHECK_VERB: &str = "pam-check";
 /// A check still running then is killed and answers `pam_unavailable`.
-const CHECK_TIMEOUT: Duration = Duration::from_secs(30);
+pub(super) const CHECK_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// The codes the child prints. A refusal's code is [`BackendError::code`]'s.
 const PASSED: &str = "ok";
@@ -208,9 +208,12 @@ pub(super) fn check(account: &str, password: &Secret) -> Result<(), BackendError
     )
 }
 
-/// A test answers from [`super::fake`], and no process starts.
+/// A test answers from [`super::fake`], and no process starts, unless it named a real program.
 #[cfg(test)]
-pub(super) fn check(account: &str, _password: &Secret) -> Result<(), BackendError> {
+pub(super) fn check(account: &str, password: &Secret) -> Result<(), BackendError> {
+    if let Some(program) = tests::REAL.with(|real| real.borrow().clone()) {
+        return check_in(&program, account, password, CHECK_TIMEOUT);
+    }
     let output = super::fake::answer("punktfunk-seats", &[CHECK_VERB, account])
         .expect("a test that checks a password installs the fake");
     refusal(account, String::from_utf8_lossy(&output.stdout).trim())
@@ -396,8 +399,14 @@ fn unanswered(account: &str, cause: &str) -> BackendError {
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use super::*;
+
+    thread_local! {
+        /// The `pam-check` program a root test runs for real on this thread, in place of the fake.
+        pub(in crate::linux) static REAL: std::cell::RefCell<Option<std::path::PathBuf>> =
+            const { std::cell::RefCell::new(None) };
+    }
 
     /// Every answer PAM gives lands on one code and sentence, and only a clean pass opens the
     /// account. A code the child can't have meant is a check that didn't run.
@@ -501,7 +510,7 @@ mod tests {
     }
 
     /// The `punktfunk-seats` binary beside this test's: `target/<profile>/punktfunk-seats`.
-    fn seats_binary() -> std::path::PathBuf {
+    pub(in crate::linux) fn seats_binary() -> std::path::PathBuf {
         let exe = std::env::current_exe().unwrap();
         let binary = exe
             .parent()
@@ -516,7 +525,7 @@ mod tests {
         binary
     }
 
-    fn run(program: &str, args: &[&str]) {
+    pub(in crate::linux) fn run(program: &str, args: &[&str]) {
         let status = std::process::Command::new(program).args(args).status();
         assert!(status.unwrap().success(), "{program} {args:?}");
     }

@@ -32,6 +32,7 @@ mod seat_step;
 mod secret;
 pub mod service;
 pub mod steam;
+pub mod unlock;
 #[cfg(windows)]
 pub mod windows;
 

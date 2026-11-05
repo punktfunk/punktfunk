@@ -227,7 +227,19 @@ mod linux {
             CommandResult::Created { seat }
             | CommandResult::Started { seat }
             | CommandResult::Stopped { seat }
-            | CommandResult::Resealed { seat } => line(seat),
+            | CommandResult::Resealed { seat }
+            | CommandResult::Unlocked { seat, .. } => line(seat),
+            CommandResult::UnlockState { needs } => println!("{needs:?}"),
+            CommandResult::Challenge { challenge, seat } => println!("{seat} {challenge}"),
+            CommandResult::Left | CommandResult::SignedOut => {}
+            CommandResult::Devices { devices } => {
+                for d in devices {
+                    println!(
+                        "{} {:?} {:?} {}",
+                        d.fingerprint, d.kind, d.name, d.last_unix
+                    );
+                }
+            }
             CommandResult::Deleted { id } => println!("{id} deleted"),
             CommandResult::Flatpak { id, version } => {
                 println!("{id} {}", version.as_deref().unwrap_or("-"));

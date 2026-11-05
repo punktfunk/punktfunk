@@ -123,6 +123,21 @@ impl Attempts {
         }
     }
 
+    /// The failures counted at `now`: the device's since its last pass, the account's in the
+    /// window.
+    pub(crate) fn failures(&mut self, target: Target<'_>, now: Instant) -> (u32, usize) {
+        self.expire(now);
+        let device = target
+            .device
+            .and_then(|(of, device)| self.devices.get(&key(of, device)))
+            .map_or(0, |d| d.failures);
+        let account = target
+            .account
+            .and_then(|account| self.accounts.get(account))
+            .map_or(0, |a| a.failed.len());
+        (device, account)
+    }
+
     /// Drops what is a window old. A check that never settled ages out as a failure would.
     fn expire(&mut self, now: Instant) {
         let live = |at: &Instant| now.saturating_duration_since(*at) < WINDOW;

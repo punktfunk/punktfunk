@@ -10,7 +10,10 @@
 //! ledger's own lock is never held across a backend call that takes time (a
 //! create, start, stop, delete or Enable), only for the edit and its write, so
 //! `List` answers while a seat takes its tens of seconds to come up. A password check runs under
-//! the attempt limits of [`crate::attempts`]; a Linux one runs outside the mutex too.
+//! the attempt limits of [`crate::attempts`]; a Linux one runs outside the mutex too. A person's
+//! Linux row starts only through [`unlock`].
+
+mod unlock;
 
 use crate::attempts::{Attempts, Outcome, Target};
 use crate::backend::{BackendError, PlatformBackend};
@@ -21,6 +24,7 @@ use crate::ipc::{
 use crate::model::{CreateSeat, Ledger, RuntimeState, RuntimeStatus, Seat, SeatId};
 use crate::persistence::{LedgerStore, StoreError};
 use crate::secret::Secret;
+use crate::unlock::Challenges;
 use std::path::Path;
 use std::sync::{Mutex, MutexGuard};
 use std::time::Instant;
@@ -32,11 +36,13 @@ pub struct SeatService<B> {
     backend: B,
     store: LedgerStore,
     ledger: Mutex<Ledger>,
-    /// Held across every create, start, stop, delete, adopt, credential, Enable and Disable, but
-    /// not a Linux password check. Only a call under it adds or drops a row.
+    /// Held across every create, start, stop, delete, adopt, credential, unlock grant, Enable and
+    /// Disable, but not a Linux password check. Only a call under it adds or drops a row.
     ops: Mutex<()>,
-    /// Failed password checks, per device and per account.
+    /// Failed password checks and key proofs, per device and per account.
     attempts: Mutex<Attempts>,
+    /// The live challenge of each person's device with a key.
+    challenges: Mutex<Challenges>,
     /// The start, stop or delete in flight; `List` reports its seat's published state meanwhile.
     changing: Mutex<Option<Change>>,
     /// Held by the one box-wide Flatpak change allowed at a time.
@@ -65,6 +71,7 @@ impl<B: PlatformBackend> SeatService<B> {
             ledger: Mutex::new(ledger),
             ops: Mutex::new(()),
             attempts: Mutex::new(Attempts::default()),
+            challenges: Mutex::new(Challenges::default()),
             changing: Mutex::new(None),
             flatpak: Mutex::new(()),
         })
@@ -113,6 +120,12 @@ impl<B: PlatformBackend> SeatService<B> {
             Command::RemoveFlatpak { id, purge } => {
                 self.flatpak(&id, |b| b.remove_flatpak(&id, purge).map(|()| None))
             }
+            Command::Unlock { id, device, proof } => self.unlock(&id, &device, proof),
+            Command::UnlockState { id, fingerprint } => self.unlock_state(&id, &fingerprint),
+            Command::Challenge { id, fingerprint } => self.challenge(&id, &fingerprint),
+            Command::Left { id, fingerprint } => self.left(&id, &fingerprint),
+            Command::SignOut { id, fingerprint } => self.sign_out(&id, fingerprint.as_deref()),
+            Command::Devices { id } => self.devices(&id),
         }
     }
 
@@ -165,19 +178,21 @@ impl<B: PlatformBackend> SeatService<B> {
 
     /// Refresh every seat's state, then start the autostart seats one at a time. A start runs
     /// outside the ledger lock, as a `start` command does, so `list` answers meanwhile; a failed
-    /// start is recorded on its row, and the first one is returned once all have run.
+    /// start is recorded on its row, and the first one is returned once all have run. A person's
+    /// Linux row never autostarts: only its person's proof starts it.
     pub fn reconcile_startup(&self) -> Result<(), ApiError> {
+        let autostarts = |seat: &Seat| seat.autostart && seat.adopted_uid.is_none();
         let autostart: Vec<SeatId> = {
             let mut current = self.lock();
             let mut next = current.clone();
-            for seat in next.seats.iter_mut().filter(|seat| !seat.autostart) {
+            for seat in next.seats.iter_mut().filter(|seat| !autostarts(seat)) {
                 seat.runtime = self.observe(seat);
                 self.learn_pin(seat);
             }
             let ids = next
                 .seats
                 .iter()
-                .filter(|seat| seat.autostart)
+                .filter(|seat| autostarts(seat))
                 .map(|seat| seat.id.clone())
                 .collect();
             if next != *current {
@@ -442,11 +457,29 @@ impl<B: PlatformBackend> SeatService<B> {
         self.change_runtime(id, false)
     }
 
+    /// A start or stop asked of `id`. A person's Linux row answers `unlock_required` to a start:
+    /// it starts only once its person proves they are there ([`Self::unlock`]).
     fn change_runtime(&self, id: &SeatId, start: bool) -> Result<CommandResult, ApiError> {
         if !start {
             self.interrupt_start(id);
+        } else if self
+            .lock()
+            .seat(id)
+            .is_some_and(|s| s.adopted_uid.is_some())
+        {
+            return Err(unlock::unlock_required());
         }
         let _op = self.op();
+        let seat = self.change_locked(id, start)?;
+        Ok(if start {
+            CommandResult::Started { seat }
+        } else {
+            CommandResult::Stopped { seat }
+        })
+    }
+
+    /// The start or stop of `id`, under `ops`, which the caller holds: the row as it is after.
+    fn change_locked(&self, id: &SeatId, start: bool) -> Result<Seat, ApiError> {
         let original = self.begin(id, start)?;
         if start {
             let published = self.publish_runtime(
@@ -513,11 +546,7 @@ impl<B: PlatformBackend> SeatService<B> {
         }
         let changed = seat.clone();
         self.commit(&mut current, next)?;
-        if start {
-            Ok(CommandResult::Started { seat: changed })
-        } else {
-            Ok(CommandResult::Stopped { seat: changed })
-        }
+        Ok(changed)
     }
 
     fn delete(&self, id: &SeatId) -> Result<CommandResult, ApiError> {
@@ -690,12 +719,12 @@ impl<B: PlatformBackend> SeatService<B> {
     }
 }
 
-/// Whether a check that answered `code` may have met a wrong password: a refusal of it, or a
-/// check that gave no verdict. Either counts as a failure.
+/// Whether a check that answered `code` may have met a wrong password or key proof: a refusal of
+/// it, or a check that gave no verdict. Either counts as a failure.
 fn unproven(code: &str) -> bool {
     matches!(
         code,
-        "credential_wrong" | "credential_verify" | "pam_unavailable"
+        "credential_wrong" | "credential_verify" | "pam_unavailable" | "proof_invalid"
     )
 }
 

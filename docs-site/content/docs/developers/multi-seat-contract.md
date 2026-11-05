@@ -730,6 +730,70 @@ and it is a contract seat's host, not the owner's.
   (it plays the box's, from its trust copy), the door, and the owner's user host. The trust copy
   is readable by the person alone.
 
+#### Who opens a person's seat
+
+The supervisor, not the door, decides which device gets onto a person's row. The door relays and
+names the device by the fingerprint its QUIC handshake authenticated. Every command below answers
+`invalid_request` for any other row, `not_found` for a missing one, and `invalid_request` for a
+fingerprint that isn't 64 lowercase hex or a device name that isn't 1 to 64 printable characters.
+A refusal is `backend` with `<code>: <sentence>`, the sentence the person reads.
+
+- **`unlock {id, device: {fingerprint, name}, proof}`** answers `unlocked {seat, started}` only
+  while the session runs and the device is admitted; `started` when this unlock started it.
+  `proof` is tagged by `kind`:
+  - `none`: an admitted device rejoins a running session. Otherwise `unlock_required`.
+  - `password {password, stay_signed_in, enroll}`: the attempt limits, then PAM (`login` stack,
+    auth then account) in the `pam-check` child, outside the supervisor's lock. On success a
+    stopped session is started through the same path as `start`, so `account_at_desk` and the other
+    start refusals apply, then the device is present; `stay_signed_in` sets `stay`, and `enroll`
+    (`{alg: "p256" | "rsa2048", public}`) stores its key. A key that isn't a P-256 point on the
+    curve or a DER `RSAPublicKey` of exactly 2048 bits is `invalid_request`, before PAM. Refusals:
+    `credential_wrong`, `account_locked`, `credential_must_change`, `pam_unavailable`,
+    `unlock_locked_out`, or `capacity` when the row lists 64 devices.
+  - `key {signature}`: the device's enrolled key signed the live challenge (below), which this uses
+    up whatever the outcome; then as after a password, with no PAM call. A wrong signature, a
+    challenge used up, expired or never asked for, and a box certificate that no longer matches
+    its pin answer `proof_invalid`. A failure counts against the device's limit alone, never the
+    account's.
+- **`unlock_state {id, fingerprint}`** answers `unlock_state {needs}`: `none` while the session
+  runs and the device is admitted, else `key` when it has a key, else `password`.
+- **`challenge {id, fingerprint}`** answers `challenge {challenge, seat}`: 32 bytes from the OS as
+  64 hex, valid 120 seconds and once, the device's only live one. A device with no key gets
+  `unlock_required`. The key signs `"punktfunk-seat-unlock-v1"` ‖ challenge ‖ the seat id's 32 hex
+  characters ‖ the device fingerprint ‖ the box fingerprint, 152 bytes, with SHA-256: ECDSA P-256
+  as an ASN.1 DER signature, or RSA PKCS#1 v1.5.
+- **`left {id, fingerprint}`** answers `left`: the device disconnected, so its presence ends 600
+  seconds later unless it rejoins.
+- **`sign_out {id, fingerprint}`** answers `signed_out`: forgets that device, its stay and its key,
+  or every device without a fingerprint.
+- **`devices {id}`** answers `devices {devices}`, each `{fingerprint, name, kind, added_unix,
+  last_unix}`, `kind` `key` with a key, else `stay`, else `for_now`.
+- **`start`** of a person's row answers `unlock_required`, and autostart never starts one. The box
+  host waits up to 210 seconds for an `unlock`.
+- **The device list.** `seats/<id>/devices.json`, root `0600`, replaced whole on each change:
+  `{devices: [{fingerprint, name, stay, key, present: {unlocked_unix, expires_unix}, added_unix,
+  last_unix}]}`. A password or key unlock makes the device present: no end while connected, 600
+  seconds after `left`, never more than 24 hours from the unlock, and none once the session stops,
+  from a stop, the person's login at the machine or a unit found failed or down. An entry with
+  neither `stay` nor a key goes with its presence. The supervisor loads each list at start and
+  drops the presence that ran out; it keeps presence for a session still running. A file it can't
+  read, or one that holds anything it wouldn't write, is no device, and `doctor` shows
+  `device_list`.
+- **Who is admitted.** A device that is present, or that stays signed in and has no key: a key
+  never lets a device on without a fresh proof, so a copied pairing key alone can't reach the seat.
+  The seat's `trust/<id>/punktfunk1-paired.json` holds only the box's records of admitted devices,
+  each as the box wrote it; the other trust files copy as on any seat. The box's file is the door's:
+  one that is missing, unreadable, over 8 MiB or not `{"clients": [...]}` gives an empty list. The
+  list is rewritten on each change of who is admitted and checked every 2 seconds while the seat
+  runs.
+- **The box pin.** The first challenge or key proof pins the SHA-256 of the door's
+  `/var/lib/punktfunk/native-cert.pem` in `box-pin`. While the certificate differs from it, every
+  challenge and key proof is refused and `doctor` shows `box_pin` as an error; removing the file
+  takes a new pin.
+- **The audit line.** Every `unlock` writes one journal line under the target `punktfunk::audit`:
+  `seat`, `account`, `uid`, `device`, `proof`, `result`, `device_failures` and
+  `account_failures`. Never the password.
+
 | Variable | A person's row |
 |---|---|
 | `PUNKTFUNK_SEAT_OWN_ACCOUNT` | `1`: the account is a person's own. The runner keeps the session on a private bus, leaves the user's other desktop processes alone and writes no seat-only setup into their home; the owner's row has the same mode from `PUNKTFUNK_SEAT_OWNER`. The host reads it too, as on Windows. |
