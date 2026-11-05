@@ -90,8 +90,9 @@ This path adds latency, and on a network that loses packets the picture stutters
 UDP. The machine that runs the page has to be reachable over HTTPS from the network you are on.
 Streaming over this path is a preview.
 
-On a host older than Punktfunk 0.47, a browser that pairs this way shows in the console as being on
-your local network.
+A browser that asks for access this way shows in the console as **Through the web client**, with no
+**Approve**: click **Arm PIN** on its row and type that PIN into the page. On a host older than
+Punktfunk 0.47 it shows as being on your local network.
 
 ## Console mode
 

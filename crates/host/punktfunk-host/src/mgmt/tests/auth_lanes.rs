@@ -436,6 +436,34 @@ async fn a_request_with_no_peer_address_is_refused() {
     );
 }
 
+/// A page server on this machine reaches the host from loopback for every visitor, so a request
+/// that carries its header is never local: no admin, plugin or tray lane opens for it.
+#[tokio::test]
+async fn a_relayed_request_is_never_loopback() {
+    let app = test_app(test_state(), None);
+    for (path, bearer, named) in [
+        ("/api/v1/clients", "test-secret", "192.168.1.20"),
+        ("/api/v1/clients", "plugin-secret", "unknown"),
+        ("/api/v1/local/summary", TRAY_TOKEN, "127.0.0.1"),
+    ] {
+        let mut relayed = with_bearer(get_req(path), bearer);
+        relayed.headers_mut().insert(
+            punktfunk_core::provenance::CLIENT_ADDR_HEADER,
+            axum::http::HeaderValue::from_static(named),
+        );
+        assert_eq!(
+            send(&app, relayed).await.0,
+            StatusCode::UNAUTHORIZED,
+            "{path} with {bearer}, relayed"
+        );
+        assert_eq!(
+            send(&app, with_bearer(get_req(path), bearer)).await.0,
+            StatusCode::OK,
+            "{path} with {bearer}, from loopback"
+        );
+    }
+}
+
 #[tokio::test]
 async fn health_is_open_and_versioned() {
     let app = test_app(test_state(), None);

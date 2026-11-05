@@ -17,6 +17,7 @@ use super::{Serving, WebTransportPlane};
 use crate::https::{sha256, spki_p256_point};
 use crate::native::link::{CtlReader, CtlRecv, CtlSend, SessionLink, V2Session};
 use crate::native::{DataPlane, Served};
+use crate::native_pairing::Relay;
 use anyhow::{Context, Result};
 use punktfunk_core::quic::v2::hello::ClientHello;
 use punktfunk_core::quic::v2::io as v2io;
@@ -60,12 +61,12 @@ fn rejected(reason: RejectReason) -> anyhow::Error {
 /// browser slot. The slot is taken once admission returns, so a peer that stalls before its
 /// device signature holds none. An unpaired device takes one only on approval. A full host
 /// waits here with the session accepted; the plane's keep-alive holds the path meanwhile.
-/// `client_addr` is the browser a bridge names, which only tightens a knock's source.
+/// A session a page server relayed knocks and pairs strict.
 pub(crate) async fn run(
     conn: Connection,
     serving: Arc<Serving>,
     sem: Arc<tokio::sync::Semaphore>,
-    client_addr: Option<std::net::IpAddr>,
+    relay: Relay,
 ) -> Result<Served> {
     let Some(Admitted {
         link,
@@ -73,7 +74,7 @@ pub(crate) async fn run(
         rx,
         first,
         knock,
-    }) = admit_session(&conn, &serving, client_addr).await?
+    }) = admit_session(&conn, &serving, relay).await?
     else {
         return Ok(Served::Session);
     };
@@ -133,7 +134,7 @@ struct Admitted {
 async fn admit_session(
     conn: &Connection,
     serving: &Serving,
-    client_addr: Option<std::net::IpAddr>,
+    relay: Relay,
 ) -> Result<Option<Admitted>> {
     const HANDSHAKE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
     let (tx, mut rx) = tokio::time::timeout(HANDSHAKE_TIMEOUT, conn.accept_bi())
@@ -157,7 +158,7 @@ async fn admit_session(
         .context("read the first message")?;
 
     if let Ok(req) = decode::<PairRequest>(ty, &body) {
-        pair(conn, tx, rx, req, serving, client_addr).await?;
+        pair(conn, tx, rx, req, serving, relay).await?;
         return Ok(None);
     }
     let first = decode::<ClientHello>(ty, &body)
@@ -204,7 +205,7 @@ async fn admit_session(
         (None, None)
     };
     Ok(Some(Admitted {
-        link: SessionLink::Web(conn.clone(), device_fp, session, client_addr),
+        link: SessionLink::Web(conn.clone(), device_fp, session, relay),
         tx,
         rx,
         first,
@@ -239,36 +240,30 @@ fn verify(auth: &AuthResponse, nonce: &[u8; 32], serving: &Serving) -> Result<[u
 /// The identities are what makes this the native ceremony rather than a second one: the client's
 /// is the SHA-256 of the device key it just sent, the host's is the hash of the certificate this
 /// endpoint presented — which the browser had to pin to connect at all, so a man in the middle
-/// cannot hold it without the host's private key. A bridge's `client_addr` only tightens the
-/// knock's source.
+/// cannot hold it without the host's private key. A relayed attempt is strict.
 async fn pair(
     conn: &Connection,
     tx: CtlSend,
     rx: CtlReader,
     req: PairRequest,
     serving: &Serving,
-    client_addr: Option<std::net::IpAddr>,
+    relay: Relay,
 ) -> Result<()> {
     anyhow::ensure!(
         spki_p256_point(&req.device_key).is_some(),
         "a browser must pair with a P-256 device key"
     );
-    // Charged before arming is consulted, on every outcome: otherwise this plane answers "is
-    // pairing armed?" for free, to anyone. Knocks can hold it against the real device, which is
-    // the trade the native plane already makes.
-    {
-        let mut last = serving.last_pairing.lock().unwrap();
-        if last.is_some_and(|t| t.elapsed() < crate::native::PAIRING_COOLDOWN) {
-            return Err(refused(
-                punktfunk_core::reject::PAIR_RATE_LIMITED_CLOSE_CODE,
-                "pairing rate-limited — retry shortly",
-            ));
-        }
-        *last = Some(std::time::Instant::now());
+    // The class picks the clock and tells the peer nothing. The charge comes before arming is
+    // consulted, on every outcome: otherwise this plane answers "is pairing armed?" for free, to
+    // anyone. A stranger's attempts hold only the strict clock.
+    let source = crate::native_pairing::classify_relayed(Some(conn.remote_address().ip()), relay);
+    if !serving.pairing_clocks.charge(source) {
+        return Err(refused(
+            punktfunk_core::reject::PAIR_RATE_LIMITED_CLOSE_CODE,
+            "pairing rate-limited — retry shortly",
+        ));
     }
     let client_fp = sha256(&req.device_key);
-    let source =
-        crate::native_pairing::classify_relayed(Some(conn.remote_address().ip()), client_addr);
     let pin = match serving
         .plane
         .pairing
@@ -301,7 +296,7 @@ async fn pair(
             conn.clone(),
             None,
             Arc::new(V2Session::new()),
-            client_addr,
+            relay,
         ),
         crate::native::PairWire::V2 { send: tx, recv: rx },
         req,
@@ -338,7 +333,7 @@ mod tests {
                 require_pairing: true,
             },
             cert_hash: [0x11; 32],
-            last_pairing: std::sync::Mutex::new(None),
+            pairing_clocks: Default::default(),
             host: crate::native::SessionHost::for_tests(pairing, crate::native::test_profiles()),
         }
     }
@@ -432,17 +427,17 @@ mod tests {
         .encode_v2()
     }
 
-    /// One browser dial over loopback WebTransport, up to admission; `first` is the browser's
-    /// first control frame. The browser's end is returned too: dropping it would close the
-    /// session under the test.
-    async fn admit_over_loopback(
-        s: &Serving,
-        key: &KeyPair,
-        first: &[u8],
-    ) -> (
-        wtransport::Connection,
-        punktfunk_core::quic::v2::io::FrameReader<wtransport::RecvStream>,
-        Admitted,
+    /// A host endpoint on loopback, and a browser that dials it and opens the control stream
+    /// with `first`, its first frame.
+    fn loopback() -> (
+        wtransport::Endpoint<wtransport::endpoint::endpoint_side::Server>,
+        impl std::future::Future<
+            Output = (
+                wtransport::Connection,
+                wtransport::SendStream,
+                punktfunk_core::quic::v2::io::FrameReader<wtransport::RecvStream>,
+            ),
+        >,
     ) {
         let identity = wtransport::Identity::self_signed(["localhost"]).unwrap();
         let cert = identity.certificate_chain().as_slice()[0].hash();
@@ -455,7 +450,7 @@ mod tests {
         )
         .unwrap();
         let url = format!("https://127.0.0.1:{}/", server.local_addr().unwrap().port());
-        let browser = async {
+        let browser = async move {
             let conn = wtransport::Endpoint::client(
                 wtransport::ClientConfig::builder()
                     .with_bind_address(loopback)
@@ -467,11 +462,31 @@ mod tests {
             .await
             .unwrap();
             let (mut tx, rx) = conn.open_bi().await.unwrap().await.unwrap();
-            use punktfunk_core::quic::v2::{io, msg, registry};
+            use punktfunk_core::quic::v2::{io, registry};
             io::write_stream_type(&mut tx, registry::STREAM_CONTROL)
                 .await
                 .unwrap();
-            let mut rx = io::FrameReader::new(rx);
+            (conn, tx, io::FrameReader::new(rx))
+        };
+        (server, browser)
+    }
+
+    /// One browser dial over loopback WebTransport, up to admission; `first` is the browser's
+    /// first control frame. The browser's end is returned too: dropping it would close the
+    /// session under the test.
+    async fn admit_over_loopback(
+        s: &Serving,
+        key: &KeyPair,
+        first: &[u8],
+    ) -> (
+        wtransport::Connection,
+        punktfunk_core::quic::v2::io::FrameReader<wtransport::RecvStream>,
+        Admitted,
+    ) {
+        let (server, dial) = loopback();
+        let browser = async {
+            let (conn, mut tx, mut rx) = dial.await;
+            use punktfunk_core::quic::v2::{io, msg};
             tx.write_all(first).await.unwrap();
             let (ty, body) = rx.read_frame().await.unwrap();
             let nonce = msg::decode::<AuthChallenge>(ty, &body).unwrap().nonce;
@@ -482,13 +497,56 @@ mod tests {
         };
         let host = async {
             let conn = server.accept().await.await.unwrap().accept().await.unwrap();
-            admit_session(&conn, s, None)
+            admit_session(&conn, s, Relay::Direct)
                 .await
                 .unwrap()
                 .expect("a session, not a pairing")
         };
         let ((conn, rx), admitted) = tokio::join!(browser, host);
         (conn, rx, admitted)
+    }
+
+    /// One `PairRequest` over loopback WebTransport, marked as `relay`; returns the refusal's
+    /// close code. Pairing is never armed here, so an answered attempt reads "not armed".
+    async fn pair_over_loopback(s: &Serving, relay: Relay) -> u32 {
+        let key = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).unwrap();
+        let req = PairRequest {
+            name: "Safari on Mac".into(),
+            spake_a: vec![0; 33],
+            device_key: key.subject_public_key_info(),
+        };
+        let (server, dial) = loopback();
+        let browser = async {
+            let (conn, mut tx, _rx) = dial.await;
+            tx.write_all(&req.encode_v2()).await.unwrap();
+            conn
+        };
+        let host = async {
+            let conn = server.accept().await.await.unwrap().accept().await.unwrap();
+            let e = admit_session(&conn, s, relay).await.err().expect("refused");
+            e.downcast_ref::<Refusal>().expect("a typed refusal").code
+        };
+        tokio::join!(browser, host).1
+    }
+
+    /// A stranger relayed through a page server every second holds only the strict clock: a
+    /// direct attempt from the home network is still answered.
+    #[tokio::test]
+    async fn relayed_pairing_attempts_leave_the_local_clock_free() {
+        use punktfunk_core::reject::{PAIR_NOT_ARMED_CLOSE_CODE, PAIR_RATE_LIMITED_CLOSE_CODE};
+        let s = serving(store("clocks"));
+        let lan = Relay::For("192.168.1.20".parse().unwrap());
+        assert_eq!(pair_over_loopback(&s, lan).await, PAIR_NOT_ARMED_CLOSE_CODE);
+        assert_eq!(
+            pair_over_loopback(&s, Relay::Unnamed).await,
+            PAIR_RATE_LIMITED_CLOSE_CODE,
+            "relayed attempts share the strict clock"
+        );
+        assert_eq!(
+            pair_over_loopback(&s, Relay::Direct).await,
+            PAIR_NOT_ARMED_CLOSE_CODE,
+            "a direct loopback attempt runs on the local clock"
+        );
     }
 
     /// An admitted browser is its device for the rest of the session, as a native client is its

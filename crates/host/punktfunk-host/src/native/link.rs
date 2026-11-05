@@ -175,12 +175,12 @@ pub(crate) enum SessionLink {
     QuicV2(quinn::Connection, Arc<V2Link>),
     /// The browser plane: the same protocol over one WebTransport session, the device
     /// fingerprint its key signature proved (`None` before admission and under `serve --open`),
-    /// and the browser a bridge dials for ([`Self::client_addr`]).
+    /// and whether a page server relayed it ([`Self::relay`]).
     Web(
         wtransport::Connection,
         Option<[u8; 32]>,
         Arc<V2Session>,
-        Option<IpAddr>,
+        crate::native_pairing::Relay,
     ),
 }
 
@@ -264,12 +264,13 @@ impl SessionLink {
         self.quic().remote_address()
     }
 
-    /// The browser a bridge dials for, as the bridge names it (`pf-client-addr`). It only ever
-    /// tightens a knock's source. `None` on the native plane and for a direct browser.
-    pub(crate) fn client_addr(&self) -> Option<IpAddr> {
+    /// What a page server said about the browser behind this session. A relayed knock is strict.
+    /// [`Relay::Direct`](crate::native_pairing::Relay::Direct) on the native plane, which has no
+    /// relay, and for a browser that dialled itself.
+    pub(crate) fn relay(&self) -> crate::native_pairing::Relay {
         match self {
-            SessionLink::QuicV2(..) => None,
-            SessionLink::Web(.., addr) => *addr,
+            SessionLink::QuicV2(..) => crate::native_pairing::Relay::Direct,
+            SessionLink::Web(.., relay) => *relay,
         }
     }
 

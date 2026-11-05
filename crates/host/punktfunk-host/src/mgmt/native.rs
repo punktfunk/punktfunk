@@ -197,6 +197,9 @@ pub(crate) struct PendingDevice {
     /// approve — arm a PIN bound to its fingerprint instead.
     #[schema(example = "lan")]
     source: String,
+    /// The knock came through a page server (the web client). Its `source` is then `"wan"`,
+    /// whatever its address.
+    relayed: bool,
     /// Stored "this session" setting if this fingerprint was paired before. `false` if unknown.
     until_disconnect: bool,
     /// The profile the device asked to play as. Absent when it named none this host knows.
@@ -647,6 +650,7 @@ pub(crate) async fn list_pending_devices(
                         crate::native_pairing::KnockSource::Lan => "lan".into(),
                         crate::native_pairing::KnockSource::Wan => "wan".into(),
                     },
+                    relayed: p.relayed,
                     profile: p
                         .profile
                         .as_deref()
@@ -677,7 +681,7 @@ pub(crate) async fn list_pending_devices(
         (status = OK, description = "Device paired; the stored record as now in force", body = NativeClient),
         (status = BAD_REQUEST, description = "Reserved grant bits set", body = ApiError),
         (status = NOT_FOUND, description = "No pending request with that id (expired?)", body = ApiError),
-        (status = CONFLICT, description = "Knock came from the internet; arm a fingerprint-bound PIN instead", body = ApiError),
+        (status = CONFLICT, description = "Knock came from the internet or through the web client; arm a fingerprint-bound PIN instead", body = ApiError),
         (status = SERVICE_UNAVAILABLE, description = "Native host not enabled", body = ApiError),
         (status = INTERNAL_SERVER_ERROR, description = "Couldn't save the paired-device list", body = ApiError),
         (status = UNAUTHORIZED, description = "Missing or invalid bearer token", body = ApiError),
@@ -712,11 +716,17 @@ pub(crate) async fn approve_pending_device(
             StatusCode::NOT_FOUND,
             "no pending request with that id (it may have expired — have the device retry)",
         ),
-        Ok(crate::native_pairing::ApproveOutcome::WanNeedsBoundPin) => api_error(
+        Ok(crate::native_pairing::ApproveOutcome::WanNeedsBoundPin { relayed }) => api_error(
             StatusCode::CONFLICT,
-            "Couldn't admit this device: it knocked from the internet, where the name it sent \
-             proves nothing. Arm a PIN bound to its fingerprint instead, then read the PIN out \
-             to whoever is holding it.",
+            if relayed {
+                "Couldn't admit this device: it came through the web client, where the name it \
+                 sent proves nothing. Arm a PIN bound to its fingerprint instead, then read the \
+                 PIN out to whoever is holding it."
+            } else {
+                "Couldn't admit this device: it knocked from the internet, where the name it sent \
+                 proves nothing. Arm a PIN bound to its fingerprint instead, then read the PIN \
+                 out to whoever is holding it."
+            },
         ),
         Err(e) => api_error(
             StatusCode::INTERNAL_SERVER_ERROR,

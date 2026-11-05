@@ -28,8 +28,10 @@ struct Pending {
     requested_at: Instant,
     /// QUIC-validated knock source, used for the per-source cap. `None` if unknown.
     src_ip: Option<IpAddr>,
-    /// [`classify_relayed`] of `src_ip` and the bridge's client address, when the knock arrived.
+    /// [`classify_relayed`] of `src_ip` and the knock's [`Relay`], when the knock arrived.
     source: KnockSource,
+    /// A page server relayed the knock. Its source is then [`KnockSource::Wan`].
+    relayed: bool,
     /// True while [`ApprovalQueue::wait_for_decision`] holds this knock open.
     /// Eviction skips a parked entry unless every candidate is parked.
     parked: bool,
@@ -58,12 +60,42 @@ pub fn classify_source(ip: Option<IpAddr>) -> KnockSource {
     classify_with(ip, routes_over_mesh)
 }
 
-/// [`classify_source`] of `peer`, tightened by `client_addr`: the browser a bridge dials for, as
-/// the bridge names it. The stricter class wins, so the name can only make a knock more suspicious
-/// and needs no trust in the bridge. `None` changes nothing.
-pub fn classify_relayed(peer: Option<IpAddr>, client_addr: Option<IpAddr>) -> KnockSource {
-    let own = classify_source(peer);
-    client_addr.map_or(own, |ip| own.max(classify_source(Some(ip))))
+/// What a page server said about the browser behind a session, in
+/// [`punktfunk_core::provenance::CLIENT_ADDR_HEADER`]. The header's presence is the fact; the
+/// address it names is the page server's word.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Relay {
+    /// No header: the peer is the client itself.
+    #[default]
+    Direct,
+    /// Relayed for the browser at this address.
+    For(IpAddr),
+    /// Relayed, and the address is `unknown` or does not parse.
+    Unnamed,
+}
+
+impl Relay {
+    /// The header's value, `None` when the request carries none.
+    pub fn from_header(value: Option<&str>) -> Relay {
+        match value {
+            None => Relay::Direct,
+            Some(v) => v.trim().parse().map_or(Relay::Unnamed, Relay::For),
+        }
+    }
+
+    pub fn is_relayed(self) -> bool {
+        self != Relay::Direct
+    }
+}
+
+/// [`classify_source`] of `peer`, unless a page server relayed it. Relayed is
+/// [`KnockSource::Wan`] whatever either address says: a proxy in front of the page server shows it
+/// a private peer for a visitor from the internet.
+pub fn classify_relayed(peer: Option<IpAddr>, relay: Relay) -> KnockSource {
+    match relay {
+        Relay::Direct => classify_source(peer),
+        Relay::For(_) | Relay::Unnamed => KnockSource::Wan,
+    }
 }
 
 /// The host routes its replies to `peer` out of a mesh VPN's interface. A handshake needs those
@@ -93,6 +125,8 @@ pub struct PendingRequest {
     pub age_secs: u64,
     /// Where the knock arrived from. A bare approve is refused for [`KnockSource::Wan`].
     pub source: KnockSource,
+    /// A page server relayed it, so `source` is [`KnockSource::Wan`] whatever its address.
+    pub relayed: bool,
     /// The profile id the knock named, unchecked.
     pub profile: Option<String>,
 }
@@ -200,17 +234,18 @@ impl ApprovalQueue {
     /// Record an unpaired knock. Same fingerprint refreshes in place and bumps
     /// generation so older parked waiters resolve `Superseded`. Bounded by
     /// [`MAX_PENDING_PER_IP`] of `src_ip` then [`PENDING_CAP`]; the name is untrusted.
-    /// `client_addr` only tightens the source ([`classify_relayed`]).
+    /// A relayed knock is strict ([`classify_relayed`]).
     pub(super) fn note_pending(
         &self,
         name: &str,
         fp_hex: &str,
         src_ip: Option<IpAddr>,
-        client_addr: Option<IpAddr>,
+        relay: Relay,
         profile: Option<&str>,
     ) -> u32 {
         let name = super::sanitize_device_name(name, fp_hex);
-        let source = classify_relayed(src_ip, client_addr);
+        let source = classify_relayed(src_ip, relay);
+        let relayed = relay.is_relayed();
         let mut pending = self.pending.lock().unwrap();
         Self::expire_pending(&mut pending);
         if let Some(p) = pending
@@ -225,6 +260,7 @@ impl ApprovalQueue {
             // bare approve would admit it.
             p.src_ip = src_ip;
             p.source = source;
+            p.relayed = relayed;
             p.profile = profile.map(str::to_string);
             p.knock_seq = p.knock_seq.wrapping_add(1);
             let seq = p.knock_seq;
@@ -265,6 +301,7 @@ impl ApprovalQueue {
             requested_at: Instant::now(),
             src_ip,
             source,
+            relayed,
             parked: false,
             knock_seq: 0,
             profile: profile.map(str::to_string),
@@ -314,6 +351,7 @@ impl ApprovalQueue {
                 fingerprint: p.fp_hex.clone(),
                 age_secs: p.requested_at.elapsed().as_secs(),
                 source: p.source,
+                relayed: p.relayed,
                 profile: p.profile.clone(),
             })
             .collect()
@@ -329,12 +367,16 @@ impl ApprovalQueue {
             .any(|p| p.fp_hex.eq_ignore_ascii_case(fp_hex))
     }
 
-    /// Where pending `id` knocked from, or `None` if the entry is gone. Read before
-    /// admitting: a bare approve must refuse a knock from the internet.
-    pub(super) fn source_of(&self, id: u32) -> Option<KnockSource> {
+    /// Where pending `id` knocked from and whether a page server relayed it, or `None` if the
+    /// entry is gone. Read before admitting: a bare approve must refuse a strict knock.
+    pub(super) fn source_of(&self, id: u32) -> Option<(KnockSource, bool)> {
         let mut pending = self.pending.lock().unwrap();
         Self::expire_pending(&mut pending);
-        pending.items.iter().find(|p| p.id == id).map(|p| p.source)
+        pending
+            .items
+            .iter()
+            .find(|p| p.id == id)
+            .map(|p| (p.source, p.relayed))
     }
 
     /// `(name, fingerprint)` of pending `id` without removing it. `None` if missing

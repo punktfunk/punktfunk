@@ -382,12 +382,18 @@ async fn a_knock_shows_the_profile_it_named() {
         .unwrap(),
     );
     let app = test_app_native(state, np.clone());
-    np.note_pending("Kid's iPad", "aa11", Some(LAN_KNOCK), None, Some(&owner));
+    np.note_pending(
+        "Kid's iPad",
+        "aa11",
+        Some(LAN_KNOCK),
+        Relay::Direct,
+        Some(&owner),
+    );
     np.note_pending(
         "Stranger",
         "bb22",
         Some(LAN_KNOCK),
-        None,
+        Relay::Direct,
         Some("ffffffffffff"),
     );
     let (_, b) = send(&app, get_req("/api/v1/native/pending")).await;

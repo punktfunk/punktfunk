@@ -278,6 +278,8 @@
 	"pairing_pending_from_internet": "From the internet",
 	"pairing_pending_arm": "Arm PIN",
 	"pairing_pending_wan_hint": "Knocked from the internet, where its name proves nothing. Arm a PIN bound to it, then pass the PIN on.",
+	"pairing_pending_through_web_client": "Through the web client",
+	"pairing_pending_relayed_hint": "Knocked through the web client, where its name proves nothing. Arm a PIN bound to it, then pass the PIN on.",
 	"pairing_pending_name_prompt": "Name this device",
 	"pairing_pending_name_title": "Approve this device",
 	"pairing_pending_name_desc": "{name} — fingerprint {fp}. It is stored under the name you leave here.",

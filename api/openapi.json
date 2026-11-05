@@ -5209,7 +5209,7 @@
             }
           },
           "409": {
-            "description": "Knock came from the internet; arm a fingerprint-bound PIN instead",
+            "description": "Knock came from the internet or through the web client; arm a fingerprint-bound PIN instead",
             "content": {
               "application/json": {
                 "schema": {
@@ -14436,6 +14436,7 @@
           "fingerprint",
           "age_secs",
           "source",
+          "relayed",
           "until_disconnect"
         ],
         "properties": {
@@ -14502,6 +14503,10 @@
                 "description": "The profile the device asked to play as. Absent when it named none this host knows."
               }
             ]
+          },
+          "relayed": {
+            "type": "boolean",
+            "description": "The knock came through a page server (the web client). Its `source` is then `\"wan\"`,\nwhatever its address."
           },
           "source": {
             "type": "string",

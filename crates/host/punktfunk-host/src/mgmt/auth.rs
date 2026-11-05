@@ -148,7 +148,8 @@ impl AuthLane {
 /// `/health` is always open; `/local/summary` takes the tray token from loopback, else the
 /// lanes below. Cert: [`cert_may_access`]. Bearer: full admin, confined to loopback because
 /// the listener binds all interfaces by default. Loopback is the [`PeerAddr`] the transport
-/// stamped; a request that carries none is a 500 on every route.
+/// stamped; a request that carries none is a 500 on every route. A request a page server
+/// relayed is never loopback, whatever its peer.
 pub(crate) async fn require_auth(
     State(st): State<Arc<MgmtState>>,
     req: Request,
@@ -197,7 +198,11 @@ pub(crate) async fn require_auth(
             "request carries no peer address",
         );
     };
-    let from_loopback = peer.ip().to_canonical().is_loopback();
+    // A page server on this machine reaches the host from loopback for every visitor it relays.
+    let relayed = req
+        .headers()
+        .contains_key(punktfunk_core::provenance::CLIENT_ADDR_HEADER);
+    let from_loopback = peer.ip().to_canonical().is_loopback() && !relayed;
 
     if req.uri().path() == "/api/v1/health" {
         return forward(req, next, AuthLane::Public).await;

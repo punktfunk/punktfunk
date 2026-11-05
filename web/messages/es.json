@@ -278,6 +278,8 @@
 	"pairing_pending_from_internet": "Desde internet",
 	"pairing_pending_arm": "Generar PIN",
 	"pairing_pending_wan_hint": "Solicitud procedente de internet, donde el nombre no garantiza la identidad. Genera un PIN vinculado al dispositivo y transmíteselo.",
+	"pairing_pending_through_web_client": "A través del cliente web",
+	"pairing_pending_relayed_hint": "Llegó a través del cliente web, donde el nombre no garantiza la identidad. Genera un PIN vinculado al dispositivo y transmíteselo.",
 	"pairing_pending_name_prompt": "Nombre de este dispositivo",
 	"pairing_pending_name_title": "Aprobar este dispositivo",
 	"pairing_pending_name_desc": "{name} — huella digital {fp}. Se guardará bajo el nombre que indiques aquí.",

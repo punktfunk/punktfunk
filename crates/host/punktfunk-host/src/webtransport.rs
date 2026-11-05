@@ -124,9 +124,9 @@ struct Serving {
     plane: Plane,
     /// Raw SHA-256 of the leaf DER. The SPAKE2 host identity and the channel binding both.
     cert_hash: [u8; 32],
-    /// Last pairing attempt on this plane, for the same rate limit the native one applies.
-    /// SPAKE2 caps a ceremony at one online guess; this caps the ceremonies.
-    last_pairing: std::sync::Mutex<Option<std::time::Instant>>,
+    /// This plane's pairing clocks, the native plane's rule. SPAKE2 caps a ceremony at one online
+    /// guess; these cap the ceremonies.
+    pairing_clocks: crate::native::PairingClocks,
     /// The native plane's capturer, injector, mic and pairing store: an admitted browser runs
     /// the same session on the same state, which is why this plane is spawned from there.
     host: crate::native::SessionHost,
@@ -253,7 +253,7 @@ pub(crate) async fn serve(
         let serving = Arc::new(Serving {
             plane: plane.clone(),
             cert_hash,
-            last_pairing: std::sync::Mutex::new(None),
+            pairing_clocks: Default::default(),
             host: host.clone(),
         });
         // Accept until the certificate is due for replacement, then fall out and re-mint.
@@ -421,11 +421,13 @@ async fn session(
             .take(128)
             .collect::<String>()
     });
-    // A bridge names the browser it dials for. Unvetted: it can only tighten a knock's source.
-    let client_addr = request
-        .headers()
-        .get("pf-client-addr")
-        .and_then(|a| a.parse().ok());
+    // A page server marks what it relays. Present at all, the session is strict.
+    let relay = crate::native_pairing::Relay::from_header(
+        request
+            .headers()
+            .get(punktfunk_core::provenance::CLIENT_ADDR_HEADER)
+            .map(String::as_str),
+    );
     if !origin_allowed(origin.as_deref(), &serving.plane.origins) {
         request.forbidden().await;
         tracing::warn!(
@@ -464,7 +466,7 @@ async fn session(
         return Ok(());
     }
     let peer = connection.remote_address();
-    match session::run(connection.clone(), serving.clone(), sem, client_addr).await {
+    match session::run(connection.clone(), serving.clone(), sem, relay).await {
         Ok(crate::native::Served::Session) => tracing::info!(%peer, "browser session complete"),
         Ok(
             crate::native::Served::ProbeClose

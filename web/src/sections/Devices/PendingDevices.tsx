@@ -98,8 +98,9 @@ export const WaitingRow: FC<{
 );
 
 /**
- * A device that knocked. A knock from the internet has no Approve: the host refuses one (409),
- * because its name proves nothing. Arming a PIN bound to its fingerprint is the way in.
+ * A device that knocked. A knock from the internet or through the web client has no Approve: the
+ * host refuses one (409), because its name proves nothing. Arming a PIN bound to its fingerprint
+ * is the way in.
  */
 export const PendingRow: FC<{
 	device: PendingDevice;
@@ -116,7 +117,9 @@ export const PendingRow: FC<{
 				{p.source === "wan" && (
 					<Badge variant="outline" className="shrink-0 gap-1">
 						<Globe className="size-3" />
-						{m.pairing_pending_from_internet()}
+						{p.relayed
+							? m.pairing_pending_through_web_client()
+							: m.pairing_pending_from_internet()}
 					</Badge>
 				)}
 			</>
@@ -135,7 +138,11 @@ export const PendingRow: FC<{
 				{p.source === "wan" ? (
 					<Button
 						size="sm"
-						title={m.pairing_pending_wan_hint()}
+						title={
+							p.relayed
+								? m.pairing_pending_relayed_hint()
+								: m.pairing_pending_wan_hint()
+						}
 						disabled={busy}
 						onClick={() => onArmFor(p)}
 					>

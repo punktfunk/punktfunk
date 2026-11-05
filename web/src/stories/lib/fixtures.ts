@@ -411,6 +411,7 @@ export const pendingDevices: PendingDevice[] = [
 			"9f8e7d6c5b4a39281706f5e4d3c2b1a0998877665544332211ffeeddccbbaa00",
 		age_secs: 8,
 		source: "lan",
+		relayed: false,
 		until_disconnect: false,
 	},
 	{
@@ -420,6 +421,7 @@ export const pendingDevices: PendingDevice[] = [
 			"ff00eeddccbbaa998877665544332211009f8e7d6c5b4a39281706f5e4d3c2b1",
 		age_secs: 30,
 		source: "lan",
+		relayed: false,
 		until_disconnect: false,
 	},
 	// A knock from the internet: badged, and offered an "Arm PIN" instead of Approve.
@@ -430,6 +432,18 @@ export const pendingDevices: PendingDevice[] = [
 			"5c5b5a595857565554535251504f4e4d4c4b4a494847464544434241403f3e3d",
 		age_secs: 3,
 		source: "wan",
+		relayed: false,
+		until_disconnect: false,
+	},
+	// Through the web client: the same strict row, worded for the page server.
+	{
+		id: 6,
+		name: "Safari on Mac",
+		fingerprint:
+			"6d6c6b6a696867666564636261605f5e5d5c5b5a595857565554535251504f4e",
+		age_secs: 6,
+		source: "wan",
+		relayed: true,
 		until_disconnect: false,
 	},
 ];
@@ -442,6 +456,7 @@ export const pendingGuestReknock: PendingDevice = {
 		"0011223344556677889900aabbccddeeff102030405060708090a0b0c0d0e0f0",
 	age_secs: 12,
 	source: "lan",
+	relayed: false,
 	until_disconnect: false,
 	access_level: "controller",
 	grants: 0x01,
@@ -879,6 +894,7 @@ export const pendingWithProfile: PendingDevice = {
 		"a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90",
 	age_secs: 5,
 	source: "lan",
+	relayed: false,
 	until_disconnect: false,
 	profile: { id: "9a3f1c2b7e40", display_name: "Kid" },
 };
