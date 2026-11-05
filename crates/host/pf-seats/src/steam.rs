@@ -9,9 +9,12 @@ use std::ffi::OsString;
 use std::io;
 use std::path::{Path, PathBuf};
 
+/// The folder beside a library's `steamapps` that holds each Linux seat's own folder for it.
+pub const SEAT_ROOTS: &str = ".punktfunk-seats";
+
 /// Top-level entries of a Steam install that a seat's copy leaves behind, on Windows and Linux:
-/// the box's sign-ins, library, caches and logs, and Steam Guard's sentry files. Names compare
-/// without case.
+/// the box's sign-ins, library, caches and logs, Steam Guard's sentry files, and the seats'
+/// folders for the library there ([`SEAT_ROOTS`]). Names compare without case.
 pub fn skipped(name: &str) -> bool {
     const DIRS: [&str; 7] = [
         "config",
@@ -24,6 +27,7 @@ pub fn skipped(name: &str) -> bool {
     ];
     let name = name.to_ascii_lowercase();
     DIRS.contains(&name.as_str())
+        || name == SEAT_ROOTS
         || name.ends_with(".vdf")
         || name.starts_with("ssfn")
         || name == "clientregistry.blob"

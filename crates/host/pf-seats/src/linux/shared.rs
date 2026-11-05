@@ -1470,7 +1470,7 @@ mod tests {
     }
 
     /// The clone leaves the owner's sign-in with the owner: the account, the library, Steam
-    /// Guard's machine token and the caches.
+    /// Guard's machine token, the caches and the seats' library folders.
     #[test]
     fn the_account_and_the_library_stay_with_the_owner() {
         for skipped in [
@@ -1485,6 +1485,7 @@ mod tests {
             "clientregistry.blob",
             "local.vdf",
             "loginusers.vdf",
+            ".punktfunk-seats",
         ] {
             assert!(crate::steam::skipped(skipped), "{skipped}");
         }

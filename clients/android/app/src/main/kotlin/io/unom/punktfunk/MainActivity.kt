@@ -990,12 +990,15 @@ class MainActivity : FragmentActivity() {
     }
 
     /**
-     * Mouse clicks/drags ride the TOUCH stream (the pointer is "down"). While streaming they
-     * belong to the mouse forwarder, never to the Compose touch-gesture layer — a physical
-     * mouse click must be a real click at the cursor, not a synthesized trackpad tap.
+     * Mouse clicks/drags ride the TOUCH stream (the pointer is "down"), and so does a ChromeOS
+     * touchpad's two-finger scroll. While streaming they belong to the mouse forwarder, never to
+     * the Compose touch-gesture layer — a physical mouse click must be a real click at the cursor,
+     * not a synthesized trackpad tap. A mouse tool counts whatever source the platform stamps.
      */
     override fun dispatchTouchEvent(ev: MotionEvent): Boolean {
-        if (streamHandle != 0L && ev.isFromSource(InputDevice.SOURCE_MOUSE)) {
+        if (streamHandle != 0L &&
+            (ev.isFromSource(InputDevice.SOURCE_MOUSE) || ev.getToolType(0) == MotionEvent.TOOL_TYPE_MOUSE)
+        ) {
             mouseForwarder?.let { if (it.onTouchEvent(ev)) return true }
         }
         return super.dispatchTouchEvent(ev)
