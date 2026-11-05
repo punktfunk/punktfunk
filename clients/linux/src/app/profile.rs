@@ -49,7 +49,7 @@ impl AppModel {
 
     /// Reads the host's list within [`ASK_BUDGET`] and posts `done` with it. `None`: the
     /// read failed or ran late.
-    fn fetch_profiles(
+    pub(super) fn fetch_profiles(
         &self,
         req: ConnectRequest,
         fp_hex: String,
@@ -142,8 +142,8 @@ impl AppModel {
     }
 
     /// Dials as profile `id` (`None` names none). `row` is its row in the list it came from:
-    /// its seat decides between dialing now, waiting for the seat and stopping. `redial` marks
-    /// the one retry after a refusal.
+    /// its seat decides between dialing, waiting for the seat and stopping, and its unlock
+    /// whether the password prompt comes first. `redial` marks the one retry after a refusal.
     fn dial_profile(
         &mut self,
         req: ConnectRequest,
@@ -161,15 +161,9 @@ impl AppModel {
                 self.wait_for_seat(req, fp_hex, row, false, redial, sender)
             }
             Some((_, SeatGate::Refuse(line))) => self.hosts.emit(HostsMsg::ShowError(line)),
-            Some((_, SeatGate::Dial)) | None => sender.input(AppMsg::StartSession {
-                req,
-                fp_hex,
-                tofu: false,
-                opts: SpawnOpts {
-                    profile: Some(id),
-                    redial,
-                },
-            }),
+            Some((_, SeatGate::Dial)) | None => {
+                self.dial_unlocked(req, fp_hex, id, row, redial, sender)
+            }
         }
     }
 
@@ -286,8 +280,8 @@ impl AppModel {
         })
     }
 
-    /// A poll's row: the dialog follows the seat, `ready` dials, `unavailable` stops. `Err`
-    /// is a line that ends the wait.
+    /// A poll's row: the dialog follows the seat, `ready` dials through the unlock gate,
+    /// `unavailable` stops. `Err` is a line that ends the wait.
     pub(super) fn seat_polled(
         &mut self,
         stop: Arc<AtomicBool>,
@@ -306,15 +300,8 @@ impl AppModel {
             SeatGate::Wake => {}
             SeatGate::Dial => {
                 if let Some(w) = self.end_seat_wait(&stop) {
-                    sender.input(AppMsg::StartSession {
-                        req: w.req,
-                        fp_hex: w.fp_hex,
-                        tofu: false,
-                        opts: SpawnOpts {
-                            profile: Some(Some(w.id)),
-                            redial: w.redial,
-                        },
-                    });
+                    let polled = row.as_ref().ok();
+                    self.dial_unlocked(w.req, w.fp_hex, Some(w.id), polled, w.redial, sender);
                 }
             }
             SeatGate::Refuse(line) => {

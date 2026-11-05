@@ -10,6 +10,7 @@ pub mod gate;
 mod host_ops;
 mod profile;
 pub mod spawn;
+mod unlock;
 
 use crate::hosts::{self, ConnectRequest, HostsMsg, HostsOutput, HostsPage, Phase};
 use crate::library::{LibraryInit, LibraryMsg, LibraryOutput, LibraryPage};
@@ -24,6 +25,7 @@ use pf_client_core::orchestrate::{
 use pf_client_core::profiles::{ListedProfile as ProfileRow, ProfilePick};
 use pf_client_core::settings::GamepadUi;
 use pf_client_core::start;
+use pf_client_core::unlock::{starting_line, Pending};
 use relm4::prelude::*;
 use spawn::{CancelHandle, SpawnOpts};
 use std::cell::RefCell;
@@ -113,6 +115,25 @@ pub enum AppMsg {
     },
     /// The seat dialog closed by Cancel or Escape.
     SeatCancelled(Arc<AtomicBool>),
+    /// The password prompt for `row`, with `error` above its field.
+    UnlockPrompt {
+        req: ConnectRequest,
+        fp_hex: String,
+        row: ProfileRow,
+        redial: bool,
+        error: Option<String>,
+    },
+    /// The host refused profile `id`'s unlock; its list came back for the prompt (`None`: the
+    /// read failed or ran late).
+    UnlockReasked {
+        req: ConnectRequest,
+        fp_hex: String,
+        id: String,
+        error: Option<String>,
+        /// The refused dial carried an unlock.
+        sent: bool,
+        listed: Option<Option<Vec<ProfileRow>>>,
+    },
     /// Show a destination by its view name.
     ShowView(&'static str),
     Find,
@@ -519,6 +540,21 @@ impl SimpleComponent for AppModel {
             } => self.profile_reasked(req, fp_hex, id, msg, listed, &sender),
             AppMsg::SeatPolled { stop, row } => self.seat_polled(stop, row, &sender),
             AppMsg::SeatCancelled(stop) => self.seat_cancelled(&stop),
+            AppMsg::UnlockPrompt {
+                req,
+                fp_hex,
+                row,
+                redial,
+                error,
+            } => self.unlock_prompt(req, fp_hex, row, redial, error, &sender),
+            AppMsg::UnlockReasked {
+                req,
+                fp_hex,
+                id,
+                error,
+                sent,
+                listed,
+            } => self.unlock_reasked(req, fp_hex, id, error, sent, listed, &sender),
             AppMsg::SendLogs(req, mgmt_port) => self.send_logs(req, mgmt_port, &sender),
             AppMsg::HostAction {
                 req,
@@ -593,16 +629,28 @@ impl SimpleComponent for AppModel {
             AppMsg::Toast(msg) => self.toast(&msg),
             AppMsg::AwaitingApproval(req) => {
                 let flight = self.flights.of(&req.card_key());
-                // A request for access already shows it.
+                // A request for access already shows it. A dial with an unlock waits for its
+                // desktop to start, which is a progress line, not an approval.
                 if flight.waiting.borrow().is_none() {
                     if let connect::Slot::Session(child, _) = &flight.slot {
                         let child = child.clone();
-                        gate::present_waiting(
-                            &self.window,
-                            &flight.waiting,
-                            &req.host.name,
-                            move || child.terminate(DISCONNECT_GRACE),
-                        );
+                        let cancel = move || child.terminate(DISCONNECT_GRACE);
+                        let name = &req.host.name;
+                        match flight.attempt.on_pending() {
+                            Pending::Starting => {
+                                let line = starting_line(name);
+                                gate::present_wait(
+                                    &self.window,
+                                    &flight.waiting,
+                                    &line,
+                                    None,
+                                    cancel,
+                                );
+                            }
+                            Pending::Approval => {
+                                gate::present_waiting(&self.window, &flight.waiting, name, cancel);
+                            }
+                        }
                     }
                 }
             }

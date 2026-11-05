@@ -7,12 +7,13 @@
 //! [`SeatWait`].
 
 use super::style::*;
-use super::{AppCtx, AsyncSetState, Screen, Target};
+use super::{unlock, AppCtx, AsyncSetState, Screen, Target};
 use crate::trust::KnownHosts;
 use pf_client_core::library::HostApi;
 use pf_client_core::orchestrate::HostTarget;
 use pf_client_core::profiles::{self, Decision, ListedProfile, ProfilePick, SeatGate};
 use pf_fluent::Palette;
+use punktfunk_core::quic::v2::msg::ProfileUnlock;
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -225,10 +226,11 @@ pub(crate) fn relisted(
     profiles::find(&listed, id).cloned()
 }
 
-/// A settled profile's seat decides what the connect does (§9.2): `go` dials now, a stopped or
-/// starting seat gets the waiting sheet first, and one that can't play says why and stops.
-/// `row` is the profile's row in the list it came from; without one the connect dials. Only a
-/// dial runs on the calling thread, so the picker's click may call this.
+/// A settled profile's seat decides what the connect does (§9.2): a seat that plays goes
+/// through the unlock gate to `go`, a stopped or starting seat gets the waiting sheet first,
+/// and one that can't play says why and stops. `row` is the profile's row in the list it came
+/// from; without one the connect dials. Only a dial runs on the calling thread, so the
+/// picker's click may call this.
 pub(crate) fn seat_then(
     ctx: &Arc<AppCtx>,
     target: Target,
@@ -236,11 +238,11 @@ pub(crate) fn seat_then(
     set_screen: &AsyncSetState<Screen>,
     set_status: &AsyncSetState<String>,
     row: Option<ListedProfile>,
-    go: impl FnOnce() + Send + 'static,
+    go: impl FnOnce(Option<ProfileUnlock>) + Send + 'static,
 ) {
-    let Some(row) = row else { return go() };
+    let Some(row) = row else { return go(None) };
     match profiles::seat_gate(&row) {
-        SeatGate::Dial => return go(),
+        SeatGate::Dial => return unlock::before_dial(ctx, target, pin, row, set_screen, go),
         SeatGate::Refuse(line) => {
             set_status.call(line);
             set_screen.call(Screen::Hosts);
@@ -249,7 +251,7 @@ pub(crate) fn seat_then(
         SeatGate::Wake | SeatGate::Wait { .. } => {}
     }
     let Some(set_seat) = ctx.shared.set_seat.lock().unwrap().clone() else {
-        return go();
+        return unlock::before_dial(ctx, target, pin, row, set_screen, go);
     };
     let (ctx, set_screen, set_status) = (ctx.clone(), set_screen.clone(), set_status.clone());
     let _ = std::thread::Builder::new()
@@ -282,21 +284,21 @@ pub(crate) fn seat_then(
                 .unwrap_or(pf_client_core::library::DEFAULT_MGMT_PORT);
             show(None);
             let mut go = Some(go);
-            let mut dial = || {
+            let mut dial = |row: ListedProfile| {
                 if let Some(go) = go.take().filter(|_| !cancel.load(Ordering::SeqCst)) {
                     set_seat.call(None);
-                    go();
+                    unlock::before_dial(&ctx, target.clone(), pin, row, &set_screen, go);
                 }
             };
             // `true` keeps the watch going: the seat is still coming up.
             let each = |polled: std::result::Result<ListedProfile, String>| {
-                let gate = polled.map(|r| profiles::seat_gate(&r));
-                let waiting = matches!(gate, Ok(SeatGate::Wait { .. } | SeatGate::Wake));
+                let gate = polled.map(|r| (profiles::seat_gate(&r), r));
+                let waiting = matches!(gate, Ok((SeatGate::Wait { .. } | SeatGate::Wake, _)));
                 match gate {
-                    Ok(SeatGate::Wait { detail }) => show(detail),
-                    Ok(SeatGate::Wake) => show(None),
-                    Ok(SeatGate::Dial) => dial(),
-                    Ok(SeatGate::Refuse(line)) | Err(line) => stop(line),
+                    Ok((SeatGate::Wait { detail }, _)) => show(detail),
+                    Ok((SeatGate::Wake, _)) => show(None),
+                    Ok((SeatGate::Dial, row)) => dial(row),
+                    Ok((SeatGate::Refuse(line), _)) | Err(line) => stop(line),
                 }
                 waiting
             };
@@ -313,9 +315,9 @@ pub(crate) fn seat_then(
         });
 }
 
-/// Before a connect to a paired host: ask who plays, then `go(profile id)` once that profile's
-/// seat allows it. Runs off the UI thread. A failed or late answer goes on with the link's
-/// `as=`, else the saved pick.
+/// Before a connect to a paired host: ask who plays, then `go(profile id, unlock)` once that
+/// profile's seat and unlock allow it. Runs off the UI thread. A failed or late answer goes on
+/// with the link's `as=`, else the saved pick.
 pub(crate) fn then_connect(
     ctx: &Arc<AppCtx>,
     target: Target,
@@ -323,7 +325,7 @@ pub(crate) fn then_connect(
     pin: Option<[u8; 32]>,
     set_screen: &AsyncSetState<Screen>,
     set_status: &AsyncSetState<String>,
-    go: impl FnOnce(Option<String>) + Send + 'static,
+    go: impl FnOnce(Option<String>, Option<ProfileUnlock>) + Send + 'static,
 ) {
     set_screen.call(Screen::Connecting);
     let (ctx, set_screen, set_status) = (ctx.clone(), set_screen.clone(), set_status.clone());
@@ -355,7 +357,7 @@ pub(crate) fn then_connect(
                     &set_screen,
                     &set_status,
                     row,
-                    move || go(d.send),
+                    move |unlock| go(d.send, unlock),
                 );
             }
             let rows = listed.clone();
@@ -368,7 +370,9 @@ pub(crate) fn then_connect(
             let on_pick = move |p: ProfilePick| {
                 save_pick(&t.host, Some(p.clone()));
                 let row = row_of(rows.as_deref(), Some(&p.id));
-                seat_then(&ctx2, t, pin, &ss, &st, row, move || go(Some(p.id)));
+                seat_then(&ctx2, t, pin, &ss, &st, row, move |unlock| {
+                    go(Some(p.id), unlock)
+                });
             };
             let cancel_to = Some(set_screen);
             let ask = PickerAsk::new(&ctx, &target, listed, saved, d.gone, on_pick, cancel_to);

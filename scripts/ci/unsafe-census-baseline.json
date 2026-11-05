@@ -3,7 +3,7 @@
   "crates": {
     "clients/android/native": 69,
     "clients/apple/native": 16,
-    "clients/linux": 1,
+    "clients/linux": 2,
     "clients/windows": 2,
     "crates/client/pf-client-core": 15,
     "crates/client/pf-client-video": 19,
