@@ -171,5 +171,39 @@ final class MetalPresenterTests: XCTestCase {
         // source headless, so a false return is acceptable.
         _ = presenter.render(pixelBuffer, isHDR: false)
     }
+
+    /// The decoder's pool cycles a few surfaces and now and then replaces one. The cycling ones
+    /// stay cached; the replaced one leaves once nothing has touched it for `idle` calls.
+    func testTheSurfaceCacheLetsGoOfASurfaceThePoolStoppedCycling() {
+        var cache = RecentCache<Int, String>(capacity: 48, idle: 10)
+        func frame(_ key: Int) -> [String] {
+            let hit = cache.touch(key)
+            var gone = cache.sweep()
+            if hit == nil { gone += cache.insert("s\(key)", for: key) }
+            return gone
+        }
+        var gone: [String] = []
+        for i in 0..<12 { gone += frame(i % 4) }
+        XCTAssertEqual(gone, [], "four cycling surfaces")
+        // The pool swaps surface 3 for surface 9.
+        for i in 0..<40 { gone += frame([0, 1, 2, 9][i % 4]) }
+        XCTAssertEqual(gone, ["s3"])
+        XCTAssertEqual(cache.count, 4)
+    }
+
+    func testTheSurfaceCacheEvictsTheLeastRecentPastItsCapacity() {
+        var cache = RecentCache<Int, String>(capacity: 2, idle: 1_000)
+        _ = cache.touch(1)
+        XCTAssertEqual(cache.insert("a", for: 1), [])
+        _ = cache.touch(2)
+        XCTAssertEqual(cache.insert("b", for: 2), [])
+        XCTAssertEqual(cache.touch(1), "a")
+        _ = cache.touch(3)
+        XCTAssertEqual(cache.insert("c", for: 3), ["b"], "2 is the least recently touched")
+        _ = cache.touch(3)
+        XCTAssertEqual(cache.insert("c2", for: 3), ["c"], "the same key replaces its entry")
+        XCTAssertEqual(cache.removeAll().sorted(), ["a", "c2"])
+        XCTAssertEqual(cache.count, 0)
+    }
 }
 #endif

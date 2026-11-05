@@ -970,11 +970,12 @@ public final class MetalVideoPresenter {
         queue.addResidencySet(set)
         return set
     }()
-    /// Decoded surfaces as textures, made on the surface (not through the cache, so nothing
-    /// pins a pool buffer), keyed by surface ID and checked against the surface itself: the
-    /// pool allocates freely, so an ID can come back on a new surface. Oldest out past 48.
-    private var latchCache: [IOSurfaceID: (surface: IOSurfaceRef, luma: MTLTexture, chroma: MTLTexture)] = [:]
-    private var latchOrder: [IOSurfaceID] = []
+    /// Decoded surfaces as textures, made on the surface (not through the texture cache, so
+    /// the pool can reuse a buffer), keyed by surface ID and checked against the surface
+    /// itself: the pool allocates freely, so an ID can come back on a new surface. An entry
+    /// keeps its surface's memory alive, 50 MB at 4K 4:4:4, so one the pool stopped cycling
+    /// must leave: 120 calls is two seconds at 60 Hz, and a live one comes round in a dozen.
+    private var latchCache = RecentCache<IOSurfaceID, LatchedSurface>(capacity: 48, idle: 120)
     private var latchTenBit = false
     /// The last luma's size, for the park's fit check.
     private var latchLumaSize: CGSize?
@@ -989,16 +990,23 @@ public final class MetalVideoPresenter {
               let surface = CVPixelBufferGetIOSurface(pixelBuffer)?.takeUnretainedValue()
         else { return nil }
         let id = IOSurfaceGetID(surface)
-        if latchTenBit != tenBit {
-            for entry in latchCache.values {
+        func release(_ gone: [LatchedSurface]) {
+            for entry in gone {
                 residency.removeAllocation(entry.luma)
                 residency.removeAllocation(entry.chroma)
             }
-            latchCache.removeAll()
-            latchOrder.removeAll()
+        }
+        if latchTenBit != tenBit {
+            release(latchCache.removeAll())
             latchTenBit = tenBit
         }
-        if let hit = latchCache[id], hit.surface === surface { return (hit.luma, hit.chroma) }
+        let hit = latchCache.touch(id)
+        let idle = latchCache.sweep()
+        release(idle)
+        if let hit, hit.surface === surface {
+            if !idle.isEmpty { residency.commit() }
+            return (hit.luma, hit.chroma)
+        }
         func plane(_ i: Int, _ format: MTLPixelFormat) -> MTLTexture? {
             let desc = MTLTextureDescriptor.texture2DDescriptor(
                 pixelFormat: format, width: CVPixelBufferGetWidthOfPlane(pixelBuffer, i),
@@ -1008,21 +1016,12 @@ public final class MetalVideoPresenter {
         }
         guard let luma = plane(0, tenBit ? .r16Unorm : .r8Unorm),
               let chroma = plane(1, tenBit ? .rg16Unorm : .rg8Unorm)
-        else { return nil }
-        if let stale = latchCache.removeValue(forKey: id) {
-            residency.removeAllocation(stale.luma)
-            residency.removeAllocation(stale.chroma)
-            latchOrder.removeAll { $0 == id }
+        else {
+            if !idle.isEmpty { residency.commit() }
+            return nil
         }
-        while latchOrder.count >= 48, let oldest = latchOrder.first {
-            latchOrder.removeFirst()
-            if let entry = latchCache.removeValue(forKey: oldest) {
-                residency.removeAllocation(entry.luma)
-                residency.removeAllocation(entry.chroma)
-            }
-        }
-        latchCache[id] = (surface, luma, chroma)
-        latchOrder.append(id)
+        release(latchCache.insert(
+            LatchedSurface(surface: surface, luma: luma, chroma: chroma), for: id))
         residency.addAllocation(luma)
         residency.addAllocation(chroma)
         residency.commit()
@@ -1559,6 +1558,66 @@ private struct LatchUniform {
     var luma: MTLResourceID
     var chroma: MTLResourceID
     static let slotOffset = MemoryLayout<LatchUniform>.offset(of: \.slot)!
+}
+
+/// A decoded surface with its two planes as textures. Holding it keeps the surface's memory.
+struct LatchedSurface {
+    let surface: IOSurfaceRef
+    let luma: MTLTexture, chroma: MTLTexture
+}
+
+/// A small cache that lets go by recency. Each `touch` is one call on its clock: an entry no
+/// call has touched for `idle` calls leaves at the next `sweep`, and an insert past
+/// `capacity` evicts the least recently touched. Not thread-safe. Internal for tests.
+struct RecentCache<Key: Hashable, Value> {
+    let capacity: Int
+    let idle: UInt64
+    private var clock: UInt64 = 0
+    private var entries: [Key: (value: Value, touched: UInt64)] = [:]
+
+    init(capacity: Int, idle: UInt64) {
+        self.capacity = max(1, capacity)
+        self.idle = idle
+    }
+
+    var count: Int { entries.count }
+
+    /// Advances the clock and returns `key`'s entry, now the most recent.
+    mutating func touch(_ key: Key) -> Value? {
+        clock += 1
+        guard let entry = entries[key] else { return nil }
+        entries[key] = (entry.value, clock)
+        return entry.value
+    }
+
+    /// Removes and returns every entry idle for longer than `idle` calls.
+    mutating func sweep() -> [Value] {
+        var gone: [Value] = []
+        for (key, entry) in entries where clock - entry.touched > idle {
+            gone.append(entry.value)
+            entries[key] = nil
+        }
+        return gone
+    }
+
+    /// Stores `value` as the most recent and returns what it displaced: the entry `key` held,
+    /// and the least recent one when the cache was full.
+    mutating func insert(_ value: Value, for key: Key) -> [Value] {
+        var gone: [Value] = []
+        if let old = entries.removeValue(forKey: key) { gone.append(old.value) }
+        if entries.count >= capacity,
+           let oldest = entries.min(by: { $0.value.touched < $1.value.touched })?.key,
+           let evicted = entries.removeValue(forKey: oldest) {
+            gone.append(evicted.value)
+        }
+        entries[key] = (value, clock)
+        return gone
+    }
+
+    mutating func removeAll() -> [Value] {
+        defer { entries.removeAll() }
+        return entries.values.map(\.value)
+    }
 }
 
 /// The deadline path's pass, encoded at the vend and parked on the GPU behind the presenter's
