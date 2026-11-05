@@ -27,8 +27,6 @@ mod discovery;
 mod dropins;
 #[path = "gamescope/heads.rs"]
 mod heads;
-#[path = "gamescope/sandbox.rs"]
-mod sandbox;
 #[path = "gamescope/spawn.rs"]
 mod spawn;
 #[path = "gamescope/splash.rs"]
@@ -321,7 +319,7 @@ impl GamescopeDisplay {
             mode.height,
             mode.refresh_hz.max(1),
             app,
-            &log,
+            inst,
             self.hdr,
             self.isolation.as_ref(),
         )?;
@@ -336,6 +334,7 @@ impl GamescopeDisplay {
             steam_home: steam
                 .then(|| std::env::var_os("HOME").map(std::path::PathBuf::from))
                 .flatten(),
+            steam_dir: steam.then(|| steam_runtime_dir(inst)),
             started: Instant::now(),
         };
         // Give up early if the process is already gone: a `vkCreateDevice` failure exits in under
