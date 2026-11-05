@@ -318,15 +318,27 @@ impl<B: PlatformBackend> SeatService<B> {
         Ok(CommandResult::Devices { devices })
     }
 
-    /// The journal line of one unlock: seat, account, device, proof, result and the failures
-    /// counted so far. A fingerprint that isn't one is logged as `malformed`.
+    /// Writes `line`, [`Self::audit_line`]'s, to the journal under `punktfunk::audit`.
     fn audit(
         &self,
         id: &SeatId,
         device: &Device,
-        proof: &str,
+        proof: &'static str,
         answer: &Result<CommandResult, ApiError>,
     ) {
+        let line = self.audit_line(id, device, proof, answer);
+        tracing::info!(target: "punktfunk::audit", "seat unlock {line}");
+    }
+
+    /// What the audit line of an unlock of `id` by `device` with a `proof` kind says once it
+    /// answered `answer`: the failures are the ones counted then.
+    pub(crate) fn audit_line(
+        &self,
+        id: &SeatId,
+        device: &Device,
+        proof: &'static str,
+        answer: &Result<CommandResult, ApiError>,
+    ) -> unlock::AuditLine {
         let seat = self.lock().seat(id).cloned();
         let fp = device.fingerprint.as_str();
         let fp = if unlock::valid_fingerprint(fp) {
@@ -334,7 +346,6 @@ impl<B: PlatformBackend> SeatService<B> {
         } else {
             "malformed"
         };
-        let account = seat.as_ref().map_or("", |s| s.account.as_str());
         let uid = seat.as_ref().and_then(|s| s.adopted_uid);
         let key = format!("uid:{}", uid.unwrap_or_default());
         let target = Target {
@@ -342,12 +353,19 @@ impl<B: PlatformBackend> SeatService<B> {
             account: Some(&key),
         };
         let (device_failures, account_failures) = self.attempts().failures(target, Instant::now());
-        let result = match answer {
-            Ok(_) => "unlocked".to_owned(),
-            Err(error) => code_of(error),
-        };
-        tracing::info!(target: "punktfunk::audit", seat = %id, account, ?uid, device = fp,
-            proof, result = %result, device_failures, account_failures, "seat unlock");
+        unlock::AuditLine {
+            seat: id.clone(),
+            account: seat.map(|s| s.account).unwrap_or_default(),
+            uid,
+            device: fp.to_owned(),
+            proof,
+            result: match answer {
+                Ok(_) => "unlocked".to_owned(),
+                Err(error) => code_of(error),
+            },
+            device_failures,
+            account_failures,
+        }
     }
 
     fn challenges(&self) -> std::sync::MutexGuard<'_, unlock::Challenges> {

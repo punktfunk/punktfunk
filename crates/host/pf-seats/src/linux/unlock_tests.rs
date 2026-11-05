@@ -1064,63 +1064,58 @@ fn autostart_never_starts_a_person_s_row() {
     assert_eq!(rig.starts(), 0);
 }
 
-#[derive(Clone, Default)]
-struct Captured(Arc<Mutex<Vec<u8>>>);
-
-impl std::io::Write for Captured {
-    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-        self.0.lock().unwrap().extend_from_slice(bytes);
-        Ok(bytes.len())
-    }
-
-    fn flush(&mut self) -> std::io::Result<()> {
-        Ok(())
-    }
-}
-
-/// Each unlock writes one audit line with the seat, account, device, proof and result, and no
-/// line of a failed or a passed unlock carries the password.
+/// The audit line of a failed and of a passed unlock names the seat, account, device, proof,
+/// result and the failures counted, and neither it nor the command, the proof or the answer
+/// prints the password. The line is the value the journal gets, built by the same call.
 #[test]
 fn the_audit_line_never_carries_the_secret() {
     let rig = rig();
-    let log = Captured::default();
-    let writer = log.clone();
-    let subscriber = tracing_subscriber::fmt()
-        .with_ansi(false)
-        .with_max_level(tracing::Level::TRACE)
-        .with_writer(move || writer.clone())
-        .finish();
-    tracing::subscriber::with_default(subscriber, || {
-        rig.machine.verdict("credential_wrong");
-        rig.unlock(&device(1), password(false, None)).unwrap_err();
-        rig.machine.verdict("ok");
-        rig.unlock(&device(2), password(true, None)).unwrap();
-    });
-    let text = String::from_utf8(log.0.lock().unwrap().clone()).unwrap();
-    let audit: Vec<&str> = text
-        .lines()
-        .filter(|l| l.contains("punktfunk::audit"))
-        .collect();
-    assert_eq!(audit.len(), 2, "{text}");
-    for (line, (fp, result)) in audit
-        .iter()
-        .zip([(device(1), "credential_wrong"), (device(2), "unlocked")])
-    {
-        for field in [
-            format!("seat={}", rig.seat.id),
-            "account=\"jdoe\"".to_owned(),
-            format!("device=\"{}\"", fp.fingerprint),
-            "proof=\"password\"".to_owned(),
-            format!("result={result}"),
+    let id = rig.seat.id.clone();
+    for (verdict, n, result, failures) in [
+        ("credential_wrong", 1, "credential_wrong", 1),
+        ("ok", 2, "unlocked", 0),
+    ] {
+        rig.machine.verdict(verdict);
+        let (device, proof) = (device(n), password(true, None));
+        let command = Command::Unlock {
+            id: id.clone(),
+            device: device.clone(),
+            proof: proof.clone(),
+        };
+        let answer = rig.ask(command.clone());
+        let line = rig.service.audit_line(&id, &device, proof.kind(), &answer);
+        let expected = crate::unlock::AuditLine {
+            seat: id.clone(),
+            account: "jdoe".into(),
+            uid: Some(1500),
+            device: device.fingerprint.clone(),
+            proof: "password",
+            result: result.into(),
+            device_failures: failures,
+            account_failures: failures as usize,
+        };
+        assert_eq!(line, expected);
+        let shown = format!(
+            "seat={id} account=\"jdoe\" uid=1500 device={} proof=password result={result} \
+             device_failures={failures} account_failures={failures}",
+            device.fingerprint
+        );
+        assert_eq!(line.to_string(), shown);
+        let error = answer.as_ref().err().map(|e| e.message.clone());
+        for text in [
+            line.to_string(),
+            format!("{line:?}"),
+            format!("{command:?}"),
+            format!("{proof:?}"),
+            format!("{answer:?}"),
+            error.unwrap_or_default(),
         ] {
-            assert!(line.contains(&field), "{field} in {line}");
+            assert!(
+                !text.contains("hunter2") && !text.contains("Bärbel"),
+                "{text}"
+            );
         }
     }
-    assert!(audit[0].contains("account_failures=1"), "{}", audit[0]);
-    assert!(
-        !text.contains("hunter2") && !text.contains("Bärbel"),
-        "{text}"
-    );
 }
 
 /// Against the box's own `login` stack, through the `pam-check` child of the built

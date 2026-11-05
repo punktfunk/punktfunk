@@ -233,6 +233,40 @@ impl DeviceList {
     }
 }
 
+/// What one unlock's audit line says. No field holds, or is ever built from, the secret.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AuditLine {
+    pub seat: SeatId,
+    pub account: String,
+    pub uid: Option<u32>,
+    /// The device's fingerprint, or `malformed` for one that isn't one.
+    pub device: String,
+    /// The proof's wire name: `none`, `password` or `key`.
+    pub proof: &'static str,
+    /// `unlocked`, or the refusal's code.
+    pub result: String,
+    pub device_failures: u32,
+    pub account_failures: usize,
+}
+
+impl std::fmt::Display for AuditLine {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let uid = self.uid.map_or("-".to_owned(), |uid| uid.to_string());
+        write!(
+            f,
+            "seat={} account={:?} uid={uid} device={} proof={} result={} \
+             device_failures={} account_failures={}",
+            self.seat,
+            self.account,
+            self.device,
+            self.proof,
+            self.result,
+            self.device_failures,
+            self.account_failures
+        )
+    }
+}
+
 /// One live challenge per seat and device, each answerable once within [`CHALLENGE_LIFE`].
 #[derive(Debug, Default)]
 pub(crate) struct Challenges(HashMap<(SeatId, String), ([u8; 32], Instant)>);
