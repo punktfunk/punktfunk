@@ -425,8 +425,9 @@ impl<B: PlatformBackend> SeatService<B> {
         Ok(CommandResult::Resealed { seat })
     }
 
-    /// Runs `check`, a password check for `target`, under the attempt limits: a refusal answers
-    /// `unlock_locked_out` before the check runs, and the check's answer counts once it returns.
+    /// Runs `check`, a password or key-proof check for `target`, under the attempt limits: a
+    /// refusal answers `unlock_locked_out` before the check runs, and the check's answer counts
+    /// once it returns. Only a password check has an account side.
     fn limited<T>(
         &self,
         target: Target<'_>,
@@ -434,8 +435,8 @@ impl<B: PlatformBackend> SeatService<B> {
     ) -> Result<T, ApiError> {
         let admitted = self.attempts().admit(target, Instant::now());
         let ticket = admitted.map_err(|wait| {
-            tracing::warn!(?target, wait_s = wait.as_secs(), "password check refused");
-            let sentence = crate::attempts::sentence(wait);
+            tracing::warn!(?target, wait_s = wait.as_secs(), "unlock check refused");
+            let sentence = crate::attempts::sentence(wait, target.account.is_some());
             ApiError::from(BackendError::new("unlock_locked_out", sentence))
         })?;
         let answer = check();

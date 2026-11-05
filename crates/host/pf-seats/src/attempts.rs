@@ -193,7 +193,8 @@ fn delay(failures: u32) -> Duration {
 }
 
 /// The sentence for a refusal that lasts `wait`: seconds under a minute, else minutes, rounded up.
-pub(crate) fn sentence(wait: Duration) -> String {
+/// `password` says whether a password was being checked; a key proof names no password.
+pub(crate) fn sentence(wait: Duration, password: bool) -> String {
     let seconds = wait.as_secs() + u64::from(wait.subsec_nanos() > 0);
     let (count, unit) = if seconds < 60 {
         (seconds.max(1), "second")
@@ -201,7 +202,12 @@ pub(crate) fn sentence(wait: Duration) -> String {
         (seconds.div_ceil(60), "minute")
     };
     let plural = if count == 1 { "" } else { "s" };
-    format!("Too many wrong passwords. Try again in {count} {unit}{plural}.")
+    let what = if password {
+        "Too many wrong passwords."
+    } else {
+        "Too many failed attempts on this device."
+    };
+    format!("{what} Try again in {count} {unit}{plural}.")
 }
 
 #[cfg(test)]
@@ -394,7 +400,12 @@ mod tests {
 
     #[test]
     fn the_wait_reads_in_whole_seconds_or_minutes() {
-        let read = sentence;
+        let read = |wait| sentence(wait, true);
+        assert_eq!(
+            sentence(4 * SECOND, false),
+            "Too many failed attempts on this device. Try again in 4 seconds.",
+            "a key proof names no password"
+        );
         assert_eq!(
             read(12 * MINUTE - SECOND),
             "Too many wrong passwords. Try again in 12 minutes."
