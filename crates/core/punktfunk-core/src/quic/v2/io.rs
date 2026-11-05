@@ -13,11 +13,12 @@ fn invalid(what: &'static str) -> std::io::Error {
     std::io::Error::new(std::io::ErrorKind::InvalidData, what)
 }
 
-/// Cancel-safe reader of v2 frames on one stream.
+/// Cancel-safe reader of v2 frames on one stream. A `ProfileUnlock` crosses it, so every byte
+/// it buffered is wiped once handed out, when its buffer moves, and on drop.
 pub struct FrameReader<R> {
     recv: R,
     /// Bytes read and not yet returned; may hold the start of the next frame.
-    buf: Vec<u8>,
+    buf: zeroize::Zeroizing<Vec<u8>>,
     /// Frames a reader set aside for whoever reads next ([`Self::hold`]).
     held: std::collections::VecDeque<(u64, Vec<u8>)>,
 }
@@ -26,7 +27,7 @@ impl<R: AsyncRead + Unpin> FrameReader<R> {
     pub fn new(recv: R) -> Self {
         FrameReader {
             recv,
-            buf: Vec::new(),
+            buf: zeroize::Zeroizing::default(),
             held: std::collections::VecDeque::new(),
         }
     }
@@ -39,7 +40,9 @@ impl<R: AsyncRead + Unpin> FrameReader<R> {
 
     /// The next frame as `(type, body)`. A clean end of stream between frames is
     /// `UnexpectedEof` like one inside a frame; the caller tells them apart by what it expected.
+    /// The body is the only copy left; a caller holding a secret wraps it in `Zeroizing`.
     pub async fn read_frame(&mut self) -> std::io::Result<(u64, Vec<u8>)> {
+        use zeroize::Zeroize;
         if let Some(frame) = self.held.pop_front() {
             return Ok(frame);
         }
@@ -48,20 +51,23 @@ impl<R: AsyncRead + Unpin> FrameReader<R> {
                 .map_err(|_| invalid("v2 frame over its type's bound"))?;
             if let Some((ty, body, n)) = next {
                 let body = body.to_vec();
+                self.buf[..n].zeroize();
                 self.buf.drain(..n);
+                // `drain` moved the rest down; the `n` bytes past the new end are a stale copy.
+                self.buf.spare_capacity_mut()[..n].zeroize();
                 return Ok((ty, body));
             }
-            let mut chunk = [0u8; 4096];
+            let mut chunk = zeroize::Zeroizing::new([0u8; 4096]);
             // `read` reports only the bytes it returns, and they land in `buf` before the next
             // await: a dropped future loses nothing.
-            match self.recv.read(&mut chunk).await? {
+            match self.recv.read(&mut chunk[..]).await? {
                 0 => {
                     return Err(std::io::Error::new(
                         std::io::ErrorKind::UnexpectedEof,
                         "v2 stream ended",
                     ))
                 }
-                n => self.buf.extend_from_slice(&chunk[..n]),
+                n => grow_wiped(&mut self.buf, &chunk[..n]),
             }
         }
     }
@@ -69,6 +75,18 @@ impl<R: AsyncRead + Unpin> FrameReader<R> {
     pub fn into_inner(self) -> R {
         self.recv
     }
+}
+
+/// Append `more` to `buf`, wiping the old allocation when it has to move.
+fn grow_wiped(buf: &mut Vec<u8>, more: &[u8]) {
+    use zeroize::Zeroize;
+    if buf.capacity() - buf.len() < more.len() {
+        let mut moved = Vec::with_capacity((buf.len() + more.len()).max(2 * buf.capacity()));
+        moved.extend_from_slice(buf);
+        buf.zeroize();
+        *buf = moved;
+    }
+    buf.extend_from_slice(more);
 }
 
 /// Write `msg` as one whole frame.

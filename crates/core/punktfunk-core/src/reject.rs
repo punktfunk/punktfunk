@@ -50,6 +50,10 @@ pub const SEAT_UNAVAILABLE_CLOSE_CODE: u32 = 0x6F;
 /// Not a rejection: the answer to an access-only hello. This device may connect now.
 /// 0x70 and 0x71 are stream codes.
 pub const ACCESS_GRANTED_CLOSE_CODE: u32 = 0x72;
+/// The profile needs an unlock this connect did not carry, or the host refused the one it
+/// did. Reason bytes carry the sentence to prompt with; empty asks for the password. 0x73 is
+/// `PATH_SHRANK_CLOSE_CODE`.
+pub const PROFILE_LOCKED_CLOSE_CODE: u32 = 0x74;
 
 /// One row per [`RejectReason`]: variant, close code, FFI token, sentence. Every
 /// table below comes from these rows, so a new reason cannot miss one.
@@ -144,6 +148,8 @@ reject_reasons! {
         "someone is already playing as that profile";
     SeatUnavailable = SEAT_UNAVAILABLE_CLOSE_CODE, "seat-unavailable",
         "that profile's seat isn't available on this host";
+    ProfileLocked = PROFILE_LOCKED_CLOSE_CODE, "profile-locked",
+        "that profile is locked until its password is given";
 }
 
 /// How long a host that answers but can't stream yet is dialed again, from its first refusal.

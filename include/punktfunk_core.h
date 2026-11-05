@@ -407,7 +407,7 @@
 //
 // The wire is versioned by ALPN, not by this. Pin the integer in `punktfunk-ffi`
 // (`abi_version_is_pinned`). Per-bump notes live in `CHANGELOG.md`.
-#define PUNKTFUNK_ABI_VERSION 63
+#define PUNKTFUNK_ABI_VERSION 64
 
 // This client silenced its own speakers (`client::NativeClient::set_audio_muted`). The host
 // keeps sending, so a session joined to the same sink still hears the game.
@@ -1290,6 +1290,11 @@
 // 0x70 and 0x71 are stream codes.
 #define ACCESS_GRANTED_CLOSE_CODE 114
 
+// The profile needs an unlock this connect did not carry, or the host refused the one it
+// did. Reason bytes carry the sentence to prompt with; empty asks for the password. 0x73 is
+// `PATH_SHRANK_CLOSE_CODE`.
+#define PROFILE_LOCKED_CLOSE_CODE 116
+
 // Under-render floor; presenter upscales.
 #define PUNKTFUNK_MIN_SCALE 0.5
 
@@ -1348,6 +1353,7 @@ enum PunktfunkStatus
     PUNKTFUNK_STATUS_REJECTED_NO_SEAT = -34,
     PUNKTFUNK_STATUS_REJECTED_SEAT_OCCUPIED = -35,
     PUNKTFUNK_STATUS_REJECTED_SEAT_UNAVAILABLE = -36,
+    PUNKTFUNK_STATUS_REJECTED_PROFILE_LOCKED = -37,
     PUNKTFUNK_STATUS_PANIC = -99,
 };
 #ifndef __cplusplus

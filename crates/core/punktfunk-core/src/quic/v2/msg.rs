@@ -11,6 +11,8 @@ use super::registry as reg;
 use crate::config::Mode;
 use crate::error::{PunktfunkError, Result};
 use crate::quic::*;
+/// The buffer [`ProfileUnlock::secret`] lives in, for callers that build one.
+pub use zeroize::Zeroizing;
 
 /// One v2 control or pairing message.
 pub trait V2Message: Sized {
@@ -272,6 +274,168 @@ v2_message!(Redirect = reg::MSG_REDIRECT,
         && m.profile.len() <= PROFILE_ID_MAX && m.seat_name.len() <= HELLO_NAME_MAX
         && m.occupant.len() <= HELLO_NAME_MAX
         && hex_or_empty(&m.pin) && hex_or_empty(&m.cert_hash));
+
+/// [`ProfileUnlock::kind`]: the account password as typed.
+pub const UNLOCK_PASSWORD: u8 = 1;
+/// [`ProfileUnlock::kind`]: a signature over [`unlock_signed_message`] from the device's unlock key.
+pub const UNLOCK_KEY_PROOF: u8 = 2;
+/// [`ProfileUnlock::enroll_alg`]: no key to enrol.
+pub const ENROLL_NONE: u8 = 0;
+/// [`ProfileUnlock::enroll_alg`]: ECDSA P-256 with SHA-256; the key is the 65-byte SEC1 point.
+pub const ENROLL_P256: u8 = 1;
+/// [`ProfileUnlock::enroll_alg`]: RSA 2048 PKCS#1 v1.5 with SHA-256; the key is a DER
+/// `RSAPublicKey`.
+pub const ENROLL_RSA2048: u8 = 2;
+/// Longest password, in bytes.
+pub const UNLOCK_PASSWORD_MAX: usize = 512;
+/// Longest key-proof signature, in bytes.
+pub const UNLOCK_SIGNATURE_MAX: usize = 1024;
+/// Length of an [`ENROLL_P256`] key: `04 ‖ X ‖ Y`.
+pub const ENROLL_P256_KEY_LEN: usize = 65;
+/// Longest [`ENROLL_RSA2048`] key.
+pub const ENROLL_RSA_KEY_MAX: usize = 600;
+
+/// `client → host`, right after `ClientHello` on the first dial: what opens a profile on a
+/// person's own account. A password, with the choice to stay signed in and optionally a key to
+/// enrol, or a signature from an enrolled key. `secret` wipes on drop and `Debug` prints
+/// lengths. [`Self::new`] and the decoder refuse one that fails [`Self::is_valid`].
+pub struct ProfileUnlock {
+    /// [`UNLOCK_PASSWORD`] or [`UNLOCK_KEY_PROOF`].
+    pub kind: u8,
+    /// The password as typed (UTF-8, never trimmed), or the signature.
+    pub secret: Zeroizing<Vec<u8>>,
+    /// Password only: remember this device for the profile.
+    pub stay_signed_in: bool,
+    /// Password only: `ENROLL_*` of `enroll_key`.
+    pub enroll_alg: u8,
+    /// Password only: the public key to enrol, empty with [`ENROLL_NONE`].
+    pub enroll_key: Vec<u8>,
+}
+
+impl ProfileUnlock {
+    /// An unlock, or `InvalidArg` when it breaks a bound of the wire. `secret` wipes either way.
+    pub fn new(
+        kind: u8,
+        secret: Zeroizing<Vec<u8>>,
+        stay_signed_in: bool,
+        enroll_alg: u8,
+        enroll_key: Vec<u8>,
+    ) -> Result<Self> {
+        let u = ProfileUnlock {
+            kind,
+            secret,
+            stay_signed_in,
+            enroll_alg,
+            enroll_key,
+        };
+        if u.is_valid() {
+            Ok(u)
+        } else {
+            Err(PunktfunkError::InvalidArg("bad ProfileUnlock"))
+        }
+    }
+
+    /// Every bound the wire sets: the kind, the secret's length, a password's UTF-8 without
+    /// NUL, and a key that matches its algorithm. A key proof carries nothing else.
+    pub fn is_valid(&self) -> bool {
+        let s = &self.secret;
+        match self.kind {
+            UNLOCK_PASSWORD => {
+                (1..=UNLOCK_PASSWORD_MAX).contains(&s.len())
+                    && !s.contains(&0)
+                    && std::str::from_utf8(s).is_ok()
+                    && match self.enroll_alg {
+                        ENROLL_NONE => self.enroll_key.is_empty(),
+                        ENROLL_P256 => {
+                            self.enroll_key.len() == ENROLL_P256_KEY_LEN
+                                && self.enroll_key[0] == 0x04
+                        }
+                        // A DER `RSAPublicKey` is a SEQUENCE.
+                        ENROLL_RSA2048 => {
+                            self.enroll_key.len() <= ENROLL_RSA_KEY_MAX
+                                && self.enroll_key.first() == Some(&0x30)
+                        }
+                        _ => false,
+                    }
+            }
+            UNLOCK_KEY_PROOF => {
+                (1..=UNLOCK_SIGNATURE_MAX).contains(&s.len())
+                    && !self.stay_signed_in
+                    && self.enroll_alg == ENROLL_NONE
+                    && self.enroll_key.is_empty()
+            }
+            _ => false,
+        }
+    }
+
+    /// The whole frame, in a buffer that wipes on drop. Send this, never
+    /// [`V2Message::encode_v2`], whose body copy is freed unwiped.
+    pub fn encode(&self) -> Zeroizing<Vec<u8>> {
+        let body = Zeroizing::new(self.fields().into_body());
+        Zeroizing::new(super::field::frame(Self::TYPE, &body))
+    }
+}
+
+impl std::fmt::Debug for ProfileUnlock {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ProfileUnlock")
+            .field("kind", &self.kind)
+            .field("secret_len", &self.secret.len())
+            .field("stay_signed_in", &self.stay_signed_in)
+            .field("enroll_alg", &self.enroll_alg)
+            .field("enroll_key_len", &self.enroll_key.len())
+            .finish()
+    }
+}
+
+impl FieldValue for Zeroizing<Vec<u8>> {
+    fn put(&self, f: Fields, tag: u64) -> Fields {
+        f.bytes(tag, self)
+    }
+    fn get(v: &[u8]) -> Result<Self> {
+        Ok(Zeroizing::new(v.to_vec()))
+    }
+}
+
+// `secret` is written last: a growing body then never reallocates away a copy of it.
+v2_message!(ProfileUnlock = reg::MSG_PROFILE_UNLOCK,
+    { 1 => kind, 3 => stay_signed_in, 4 => enroll_alg, 5 => enroll_key, 2 => secret },
+    check ProfileUnlock::is_valid);
+
+/// Length of [`unlock_signed_message`].
+pub const UNLOCK_SIGNED_LEN: usize = 152;
+/// First bytes of [`unlock_signed_message`].
+pub const UNLOCK_SIGNED_LABEL: &[u8; 24] = b"punktfunk-seat-unlock-v1";
+
+/// What a profile's unlock key signs, with SHA-256 as the digest:
+/// `"punktfunk-seat-unlock-v1" ‖ challenge ‖ seat id ‖ device fingerprint ‖ box fingerprint`.
+/// `seat_id` is the `SeatId`'s 32 lowercase hex characters; the fingerprints are SHA-256 of the
+/// device's certificate and of the box's as this client pinned it. `InvalidArg` for any other
+/// seat id.
+pub fn unlock_signed_message(
+    challenge: &[u8; 32],
+    seat_id: &str,
+    device_fp: &[u8; 32],
+    box_fp: &[u8; 32],
+) -> Result<[u8; UNLOCK_SIGNED_LEN]> {
+    let hex = |b: u8| b.is_ascii_digit() || (b'a'..=b'f').contains(&b);
+    if seat_id.len() != 32 || !seat_id.bytes().all(hex) {
+        return Err(PunktfunkError::InvalidArg(
+            "seat id is not 32 lowercase hex",
+        ));
+    }
+    let mut m = [0u8; UNLOCK_SIGNED_LEN];
+    for (at, part) in [
+        (0, &UNLOCK_SIGNED_LABEL[..]),
+        (24, &challenge[..]),
+        (56, seat_id.as_bytes()),
+        (88, &device_fp[..]),
+        (120, &box_fp[..]),
+    ] {
+        m[at..at + part.len()].copy_from_slice(part);
+    }
+    Ok(m)
+}
 
 v2_message!(ClipControl = reg::MSG_CLIP_CONTROL, { 1 => enabled, 2 => flags });
 v2_message!(ClipState = reg::MSG_CLIP_STATE, { 1 => enabled, 2 => policy, 3 => reason });
@@ -905,6 +1069,156 @@ mod tests {
         let many = (0..=CLIP_MAX_KINDS).fold(many, |f, _| f.bytes(2, &[0; 8]));
         assert!(ClipOffer::from_body(&many.into_body()).is_err());
         assert!(decode::<SetBitrate>(reg::MSG_PIPELINE_GAP, &[]).is_err());
+    }
+
+    fn unlock(kind: u8, secret: &[u8], stay: bool, alg: u8, key: Vec<u8>) -> ProfileUnlock {
+        ProfileUnlock {
+            kind,
+            secret: Zeroizing::new(secret.to_vec()),
+            stay_signed_in: stay,
+            enroll_alg: alg,
+            enroll_key: key,
+        }
+    }
+
+    fn decoded(u: &ProfileUnlock) -> Result<ProfileUnlock> {
+        let wire = u.encode();
+        let (ty, body, n) = split_frame(&wire, reg::max_body)?.expect("one whole frame");
+        assert_eq!(n, wire.len());
+        decode::<ProfileUnlock>(ty, body)
+    }
+
+    /// Both kinds cross the wire whole, a password untrimmed, and `Debug` names no secret byte.
+    #[test]
+    fn a_profile_unlock_round_trips_and_prints_lengths() {
+        let mut p256 = vec![0x04];
+        p256.extend_from_slice(&[7; 64]);
+        for u in [
+            unlock(UNLOCK_PASSWORD, b" pass word\t", true, ENROLL_P256, p256),
+            unlock(
+                UNLOCK_PASSWORD,
+                "Grüße".as_bytes(),
+                false,
+                ENROLL_NONE,
+                vec![],
+            ),
+            unlock(
+                UNLOCK_PASSWORD,
+                b"x",
+                false,
+                ENROLL_RSA2048,
+                vec![0x30, 0x82],
+            ),
+            unlock(UNLOCK_KEY_PROOF, &[0x30; 72], false, ENROLL_NONE, vec![]),
+        ] {
+            let back = decoded(&u).unwrap();
+            assert_eq!(back.kind, u.kind);
+            assert_eq!(*back.secret, *u.secret);
+            assert_eq!(back.stay_signed_in, u.stay_signed_in);
+            assert_eq!(back.enroll_alg, u.enroll_alg);
+            assert_eq!(back.enroll_key, u.enroll_key);
+        }
+        let shown = format!(
+            "{:?}",
+            unlock(UNLOCK_PASSWORD, b"sesame", false, ENROLL_NONE, vec![])
+        );
+        assert!(
+            !shown.contains("sesame") && !shown.contains("115"),
+            "{shown}"
+        );
+        assert!(shown.contains("secret_len: 6"), "{shown}");
+    }
+
+    /// Every kind, algorithm and length the contract does not name is refused, at each bound.
+    #[test]
+    fn a_profile_unlock_out_of_bounds_does_not_decode() {
+        let p256 = |first: u8, len: usize| {
+            let mut k = vec![first];
+            k.resize(len, 7);
+            k
+        };
+        let rsa = |len: usize| {
+            let mut k = vec![0x30];
+            k.resize(len, 1);
+            k
+        };
+        let pw = |s: &[u8]| unlock(UNLOCK_PASSWORD, s, false, ENROLL_NONE, vec![]);
+        let proof =
+            |len: usize| unlock(UNLOCK_KEY_PROOF, &vec![1; len], false, ENROLL_NONE, vec![]);
+        let enrol = |alg: u8, key: Vec<u8>| unlock(UNLOCK_PASSWORD, b"pw", false, alg, key);
+        let fits = [
+            pw(&[b'a'; UNLOCK_PASSWORD_MAX]),
+            proof(1),
+            proof(UNLOCK_SIGNATURE_MAX),
+            enrol(ENROLL_P256, p256(0x04, ENROLL_P256_KEY_LEN)),
+            enrol(ENROLL_RSA2048, rsa(ENROLL_RSA_KEY_MAX)),
+        ];
+        for u in &fits {
+            assert!(decoded(u).is_ok(), "{u:?}");
+        }
+        let refused = [
+            unlock(0, b"pw", false, ENROLL_NONE, vec![]),
+            unlock(3, b"pw", false, ENROLL_NONE, vec![]),
+            pw(b""),
+            pw(&[b'a'; UNLOCK_PASSWORD_MAX + 1]),
+            pw(&[0xff, 0xfe]),
+            pw(b"p\0w"),
+            proof(0),
+            proof(UNLOCK_SIGNATURE_MAX + 1),
+            unlock(UNLOCK_KEY_PROOF, b"sig", true, ENROLL_NONE, vec![]),
+            unlock(UNLOCK_KEY_PROOF, b"sig", false, ENROLL_P256, p256(4, 65)),
+            unlock(UNLOCK_KEY_PROOF, b"sig", false, ENROLL_NONE, vec![1]),
+            enrol(ENROLL_NONE, vec![1]),
+            enrol(3, rsa(10)),
+            enrol(ENROLL_P256, p256(0x04, ENROLL_P256_KEY_LEN - 1)),
+            enrol(ENROLL_P256, p256(0x04, ENROLL_P256_KEY_LEN + 1)),
+            enrol(ENROLL_P256, p256(0x02, ENROLL_P256_KEY_LEN)),
+            enrol(ENROLL_RSA2048, vec![]),
+            enrol(ENROLL_RSA2048, rsa(ENROLL_RSA_KEY_MAX + 1)),
+            enrol(ENROLL_RSA2048, vec![0x31; 270]),
+        ];
+        for u in &refused {
+            assert!(decoded(u).is_err(), "{u:?}");
+            let secret = Zeroizing::new(u.secret.to_vec());
+            let key = u.enroll_key.clone();
+            let made = ProfileUnlock::new(u.kind, secret, u.stay_signed_in, u.enroll_alg, key);
+            assert!(made.is_err(), "{u:?}");
+        }
+        // A second secret, a field running past the body, and a body past the frame bound.
+        let twice = pw(b"one").fields().bytes(2, b"two").into_body();
+        assert!(ProfileUnlock::from_body(&twice).is_err());
+        let mut torn = pw(b"pw").fields().into_body();
+        torn.pop();
+        assert!(ProfileUnlock::from_body(&torn).is_err());
+        let huge = Fields::new()
+            .bytes(9, &[0; 2048])
+            .frame(reg::MSG_PROFILE_UNLOCK);
+        assert!(split_frame(&huge, reg::max_body).is_err());
+    }
+
+    /// The contract's vector: SHA-256 of the 152 bytes.
+    #[test]
+    fn the_unlock_message_matches_the_contract_vector() {
+        use sha2::Digest;
+        let challenge: [u8; 32] = std::array::from_fn(|i| i as u8 + 1);
+        let m = unlock_signed_message(
+            &challenge,
+            "0123456789abcdef0123456789abcdef",
+            &[0xaa; 32],
+            &[0xbb; 32],
+        )
+        .unwrap();
+        assert_eq!(
+            crate::fp::hex(&sha2::Sha256::digest(m).into()),
+            "31de46821f3058729b14c3585ad13159085ecb0d18c87194a34b1bddc8ddc31a"
+        );
+        for bad in [
+            "0123456789ABCDEF0123456789abcdef",
+            "0123456789abcdef0123456789abcde",
+            "0123456789abcdef0123456789abcdeg",
+        ] {
+            assert!(unlock_signed_message(&challenge, bad, &[0; 32], &[0; 32]).is_err());
+        }
     }
 
     #[test]

@@ -35,6 +35,9 @@ pub const MSG_PENDING: u64 = 0x04;
 pub const MSG_REDIRECT: u64 = 0x05;
 /// `host → client`: why the close that follows happens, as a code and a sentence.
 pub const MSG_REFUSED: u64 = 0x06;
+/// `client → host`, right after `ClientHello` on the first dial only: a profile's password or
+/// key proof (`ProfileUnlock`). Never on the dial a `Redirect` sends.
+pub const MSG_PROFILE_UNLOCK: u64 = 0x07;
 
 /// `client → host`: begin pairing (`PairRequest`).
 pub const MSG_PAIR_REQUEST: u64 = 0x10;
@@ -123,6 +126,7 @@ pub const FRAMES: &[(&str, u64, usize)] = &[
     ("MSG_PENDING", MSG_PENDING, 1024),
     ("MSG_REDIRECT", MSG_REDIRECT, 1024),
     ("MSG_REFUSED", MSG_REFUSED, 1024),
+    ("MSG_PROFILE_UNLOCK", MSG_PROFILE_UNLOCK, 2048),
     ("MSG_PAIR_REQUEST", MSG_PAIR_REQUEST, 4096),
     ("MSG_PAIR_CHALLENGE", MSG_PAIR_CHALLENGE, 1024),
     ("MSG_PAIR_PROOF", MSG_PAIR_PROOF, 256),
@@ -257,6 +261,9 @@ pub const FEATURE_STUDIO_RANGE: u32 = 40;
 /// HDR at studio range. The Welcome's colour says which range the session got; PyroWave stays
 /// full.
 pub const FEATURE_STUDIO_RANGE_HDR: u32 = 41;
+/// Client: it can send `ProfileUnlock`, because its embedder asks the player for a profile's
+/// password. A host refuses a locked profile to a client without it with a sentence to update.
+pub const FEATURE_PROFILE_UNLOCK: u32 = 42;
 
 #[cfg(test)]
 mod tests {
@@ -298,6 +305,7 @@ mod tests {
         ("FEATURE_SCROLL_AXIS_UNITS", FEATURE_SCROLL_AXIS_UNITS),
         ("FEATURE_STUDIO_RANGE", FEATURE_STUDIO_RANGE),
         ("FEATURE_STUDIO_RANGE_HDR", FEATURE_STUDIO_RANGE_HDR),
+        ("FEATURE_PROFILE_UNLOCK", FEATURE_PROFILE_UNLOCK),
     ];
 
     /// Every close and stop code either wire uses: v1's live on, and v2 adds its own.
@@ -376,6 +384,10 @@ mod tests {
         (
             "ACCESS_GRANTED_CLOSE_CODE",
             crate::reject::ACCESS_GRANTED_CLOSE_CODE,
+        ),
+        (
+            "PROFILE_LOCKED_CLOSE_CODE",
+            crate::reject::PROFILE_LOCKED_CLOSE_CODE,
         ),
         ("CLIP_CANCELLED_CODE", 0x70),
         ("STOP_UNKNOWN_STREAM", STOP_UNKNOWN_STREAM),
