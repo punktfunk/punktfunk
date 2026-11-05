@@ -155,7 +155,7 @@ impl ScreenView for SearchScreen {
 
     fn hints(&self, ctx: &Ctx) -> Vec<Hint> {
         if self.editing {
-            return TextEntry::hints(ctx.device, "Search");
+            return self.keyboard.hints(ctx.device, "Search");
         }
         vec![
             Hint::new(HintKey::Confirm, "Select"),

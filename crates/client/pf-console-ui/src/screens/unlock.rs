@@ -3,8 +3,9 @@
 //! console holds no device key, so its one switch is "Stay signed in on this device".
 //!
 //! What was typed lives in one wiping buffer with room for the longest password the wire
-//! takes, so typing never moves it. Rows, announcements and the host's [`EditField`] show
-//! dots or nothing. Back dials nothing.
+//! takes, so typing never moves it. The tray types it on every device, even where the
+//! device's own keyboard types other fields. Rows, announcements and the host's
+//! [`EditField`] show dots or nothing. Back dials nothing.
 
 use crate::glyphs::{Hint, HintKey};
 use crate::pointer::Pointer;
@@ -60,7 +61,7 @@ impl UnlockScreen {
             name,
             host,
             list: MenuList::new(),
-            keyboard: TextEntry::default(),
+            keyboard: TextEntry::secret(),
             password: buffer(),
             editing: false,
             stay: false,
@@ -214,7 +215,7 @@ impl ScreenView for UnlockScreen {
 
     fn hints(&self, ctx: &Ctx) -> Vec<Hint> {
         if self.editing {
-            return TextEntry::hints(ctx.device, "Sign In");
+            return self.keyboard.hints(ctx.device, "Sign In");
         }
         vec![
             Hint::new(HintKey::Confirm, "Select"),

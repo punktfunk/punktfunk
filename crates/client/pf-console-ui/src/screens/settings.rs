@@ -623,7 +623,7 @@ impl ScreenView for SettingsScreen {
             } else {
                 "Done"
             };
-            return TextEntry::hints(ctx.device, done);
+            return self.keyboard.hints(ctx.device, done);
         }
         // Strip-focused: hints describe the D-pad, not the rows.
         if self.strip_focus {

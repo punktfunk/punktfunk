@@ -182,3 +182,27 @@ fn focus_walks_the_rows() {
         Some("Sign In")
     );
 }
+
+/// Where the device's own keyboard types other fields (Steam's on a Deck, tvOS's), the
+/// password still types on the tray: the pad presses its keys, and the legend is the tray's.
+#[test]
+fn a_password_types_on_the_tray_beside_a_system_keyboard() {
+    let mut settings = Settings::default();
+    let library = crate::library::LibraryShared::default();
+    let device = crate::screens::Device {
+        system_keyboard: true,
+        ..crate::screens::Device::test()
+    };
+    let mut ctx = Ctx {
+        device: &device,
+        ..Ctx::test(&mut settings, &library)
+    };
+    let mut s = prompt();
+    let mut fx = Outbox::default();
+    s.menu(MenuEvent::Confirm, &mut ctx, &mut fx);
+    s.menu(MenuEvent::Confirm, &mut ctx, &mut fx);
+    assert!(s.editing && s.password.len() == 1, "the tray typed a key");
+    assert!(fx.connect.is_none());
+    let legend: Vec<String> = s.hints(&ctx).into_iter().map(|h| h.label).collect();
+    assert_eq!(legend, ["Type", "Delete", "Done"]);
+}
