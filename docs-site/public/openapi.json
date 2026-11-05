@@ -6163,6 +6163,16 @@
               }
             }
           },
+          "429": {
+            "description": "Too many wrong passwords for that account; the sentence says when to try again",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
           "503": {
             "description": "The seat supervisor didn't answer",
             "content": {

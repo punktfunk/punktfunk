@@ -374,9 +374,11 @@ fn seat_error(e: SeatError) -> Refusal {
 }
 
 /// A backend refusal's status, by the code its message leads with: the person can fix a password
-/// (400) or pick another account (409); anything else is the box's (503).
+/// (400), wait out too many wrong ones (429) or pick another account (409); anything else is the
+/// box's (503).
 fn backend_status(message: &str) -> StatusCode {
     match message.split_once(": ").map(|(code, _)| code) {
+        Some("unlock_locked_out") => StatusCode::TOO_MANY_REQUESTS,
         Some(
             "credential_wrong"
             | "credential_must_change"
@@ -919,6 +921,7 @@ pub(crate) async fn list_profiles(
         (status = UNAUTHORIZED, description = "Missing or invalid bearer token", body = ApiError),
         (status = CONFLICT, description = "Another profile has that name or account, seats are off (Windows), the door is off (Linux), or an account a seat can't use (an administrator, a system account, the box owner)", body = ApiError),
         (status = UNPROCESSABLE_ENTITY, description = "The box already has eight profiles, or four seats", body = ApiError),
+        (status = TOO_MANY_REQUESTS, description = "Too many wrong passwords for that account; the sentence says when to try again", body = ApiError),
         (status = SERVICE_UNAVAILABLE, description = "The seat supervisor didn't answer", body = ApiError),
     )
 )]
@@ -2116,8 +2119,23 @@ mod tests {
                 "That isn't Ben's Windows password.".to_string()
             )
         );
+        let locked_out = seat_error(SeatError::new(
+            ErrorCode::Backend,
+            "unlock_locked_out: Too many wrong passwords. Try again in 12 minutes.",
+        ));
+        assert_eq!(
+            locked_out,
+            (
+                StatusCode::TOO_MANY_REQUESTS,
+                "Too many wrong passwords. Try again in 12 minutes.".to_string()
+            )
+        );
         for (message, status) in [
             ("account_locked: Wait ten minutes.", StatusCode::BAD_REQUEST),
+            (
+                "unlock_locked_out: Try again in 12 minutes.",
+                StatusCode::TOO_MANY_REQUESTS,
+            ),
             ("account_missing: No such account.", StatusCode::BAD_REQUEST),
             ("account_is_owner: Use the owner.", StatusCode::CONFLICT),
             ("account_taken: Another profile.", StatusCode::CONFLICT),

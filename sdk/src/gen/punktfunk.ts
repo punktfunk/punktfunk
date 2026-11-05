@@ -1308,6 +1308,8 @@ export type CreateProfile409 = ApiError
 export const CreateProfile409 = ApiError
 export type CreateProfile422 = ApiError
 export const CreateProfile422 = ApiError
+export type CreateProfile429 = ApiError
+export const CreateProfile429 = ApiError
 export type CreateProfile503 = ApiError
 export const CreateProfile503 = ApiError
 export type SetDefaultProfileRequestJson = DefaultProfile
@@ -2849,6 +2851,7 @@ export const make = (
       "401": decodeError("CreateProfile401", CreateProfile401),
       "409": decodeError("CreateProfile409", CreateProfile409),
       "422": decodeError("CreateProfile422", CreateProfile422),
+      "429": decodeError("CreateProfile429", CreateProfile429),
       "503": decodeError("CreateProfile503", CreateProfile503),
       orElse: unexpectedStatus
     }))
@@ -4251,8 +4254,8 @@ readonly "listProfiles": {
 * box's own session under its own name. A seat needs seats on (Windows) or the door (Linux).
 */
 readonly "createProfile": {
-    <Config extends OperationConfig | undefined = undefined>(options: { readonly payload: typeof CreateProfileRequestJson.Encoded; readonly config: Config }): Effect.Effect<WithOptionalResponse<typeof CreateProfile201.Type, Config>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"CreateProfile400", typeof CreateProfile400.Type> | PunktfunkError<"CreateProfile401", typeof CreateProfile401.Type> | PunktfunkError<"CreateProfile409", typeof CreateProfile409.Type> | PunktfunkError<"CreateProfile422", typeof CreateProfile422.Type> | PunktfunkError<"CreateProfile503", typeof CreateProfile503.Type>>;
-    <Config extends OperationConfig | undefined = undefined>(options: { readonly payload: typeof CreateProfileRequestJson.Encoded; readonly config?: Config | undefined }): Effect.Effect<WithOptionalResponse<typeof CreateProfile201.Type, Config | undefined>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"CreateProfile400", typeof CreateProfile400.Type> | PunktfunkError<"CreateProfile401", typeof CreateProfile401.Type> | PunktfunkError<"CreateProfile409", typeof CreateProfile409.Type> | PunktfunkError<"CreateProfile422", typeof CreateProfile422.Type> | PunktfunkError<"CreateProfile503", typeof CreateProfile503.Type>>;
+    <Config extends OperationConfig | undefined = undefined>(options: { readonly payload: typeof CreateProfileRequestJson.Encoded; readonly config: Config }): Effect.Effect<WithOptionalResponse<typeof CreateProfile201.Type, Config>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"CreateProfile400", typeof CreateProfile400.Type> | PunktfunkError<"CreateProfile401", typeof CreateProfile401.Type> | PunktfunkError<"CreateProfile409", typeof CreateProfile409.Type> | PunktfunkError<"CreateProfile422", typeof CreateProfile422.Type> | PunktfunkError<"CreateProfile429", typeof CreateProfile429.Type> | PunktfunkError<"CreateProfile503", typeof CreateProfile503.Type>>;
+    <Config extends OperationConfig | undefined = undefined>(options: { readonly payload: typeof CreateProfileRequestJson.Encoded; readonly config?: Config | undefined }): Effect.Effect<WithOptionalResponse<typeof CreateProfile201.Type, Config | undefined>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"CreateProfile400", typeof CreateProfile400.Type> | PunktfunkError<"CreateProfile401", typeof CreateProfile401.Type> | PunktfunkError<"CreateProfile409", typeof CreateProfile409.Type> | PunktfunkError<"CreateProfile422", typeof CreateProfile422.Type> | PunktfunkError<"CreateProfile429", typeof CreateProfile429.Type> | PunktfunkError<"CreateProfile503", typeof CreateProfile503.Type>>;
   }
   /**
 * Where a device that names no profile lands
