@@ -408,11 +408,11 @@ export const PluginLogBatch = Schema.StructWithRest(Schema.Struct({ "entries": S
 export type PluginRegistration = { readonly "category"?: string | null, readonly "hold_timeout_ms"?: number | null, readonly "holds"?: ReadonlyArray<string>, readonly "title": string, readonly "ui"?: null | PluginUi, readonly "version"?: string | null } & { readonly [x: string]: Schema.Json }
 export const PluginRegistration = Schema.StructWithRest(Schema.Struct({ "category": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "description": "Plugin kind, not a UI field. Console hides `library` from the nav (those plugins already have\nGame sources); omit the field to keep a nav page." })), "hold_timeout_ms": Schema.optionalKey(Schema.Union([Schema.Number.annotate({ "format": "int32" }).check(Schema.isInt().annotate({ "expected": "an integer" })).check(Schema.isGreaterThanOrEqualTo(0).annotate({ "expected": "a value greater than or equal to 0" })), Schema.Null]).annotate({ "description": "How long a hold may take, 1–120 000 ms. Absent means 30 000." })), "holds": Schema.optionalKey(Schema.Array(Schema.String).annotate({ "description": "Stages this plugin holds (`game.launching`). The host POSTs the event to `/__hold` on\n`ui.port` and waits for a 2xx. Needs `ui`." })), "title": Schema.String, "ui": Schema.optionalKey(Schema.Union([Schema.Null, Schema.suspend((): Schema.Codec<PluginUi> => PluginUi).annotate({ "description": "Absent `ui` is a live listing with no nav entry — not an error." })], { mode: "oneOf" })), "version": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null])) }), [Schema.Record(Schema.String, Schema.Json.annotate({ "expected": "JSON value" }))]).annotate({ "identifier": "PluginRegistration" })
 export type ProfileCreate = { readonly "accent"?: string | null, readonly "display_name": string, readonly "home"?: null | Home, readonly "seat"?: boolean, readonly "seat_account"?: string | null, readonly "seat_password"?: string, readonly "windows_account"?: string | null } & { readonly [x: string]: Schema.Json }
-export const ProfileCreate = Schema.StructWithRest(Schema.Struct({ "accent": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "description": "`#RRGGBB`." })), "display_name": Schema.String, "home": Schema.optionalKey(Schema.Union([Schema.Null, Schema.suspend((): Schema.Codec<Home> => Home).annotate({ "description": "Defaults to `desktop`." })], { mode: "oneOf" })), "seat": Schema.optionalKey(Schema.Boolean.annotate({ "description": "A desktop of its own (the default), or the box's own session under another name. A\ndesktop of its own needs seats on Windows and the door on Linux. Ignored when\n[`windows_account`](Self::windows_account) is set." })), "seat_account": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "description": "With `seat`, a local Windows standard account that already exists, which the seat signs\nin to instead of one punktfunk makes. Windows Server only." })), "seat_password": Schema.optionalKey(Schema.String.annotate({ "description": "That account's password, entered once and sealed by the host." })), "windows_account": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "description": "Bind this profile to a local Windows account that takes the console in turn\n(`design/windows-take-turns.md`). When set, the profile is a take-turns profile and\n`seat` does not apply." })) }), [Schema.Record(Schema.String, Schema.Json.annotate({ "expected": "JSON value" }))]).annotate({ "description": "What a new profile starts as.", "identifier": "ProfileCreate" })
+export const ProfileCreate = Schema.StructWithRest(Schema.Struct({ "accent": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "description": "`#RRGGBB`." })), "display_name": Schema.String, "home": Schema.optionalKey(Schema.Union([Schema.Null, Schema.suspend((): Schema.Codec<Home> => Home).annotate({ "description": "Defaults to `desktop`." })], { mode: "oneOf" })), "seat": Schema.optionalKey(Schema.Boolean.annotate({ "description": "A desktop of its own (the default), or the box's own session under another name. A\ndesktop of its own needs seats on Windows and the door on Linux. Ignored when\n[`windows_account`](Self::windows_account) is set." })), "seat_account": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "description": "With `seat`, an account that already exists, which the seat runs on instead of one\npunktfunk makes: a local Windows standard account on Windows Server, a person's own login\non a Linux door." })), "seat_password": Schema.optionalKey(Schema.String.annotate({ "description": "That account's password, entered once. Windows seals it; Linux checks it and keeps\nnothing." })), "windows_account": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "description": "Bind this profile to a local Windows account that takes the console in turn\n(`design/windows-take-turns.md`). When set, the profile is a take-turns profile and\n`seat` does not apply." })) }), [Schema.Record(Schema.String, Schema.Json.annotate({ "expected": "JSON value" }))]).annotate({ "description": "What a new profile starts as.", "identifier": "ProfileCreate" })
 export type ProfileUpdate = { readonly "accent"?: string | null, readonly "display_name"?: string | null, readonly "home"?: null | Home, readonly "seat_password"?: string } & { readonly [x: string]: Schema.Json }
 export const ProfileUpdate = Schema.StructWithRest(Schema.Struct({ "accent": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "description": "`#RRGGBB`." })), "display_name": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null])), "home": Schema.optionalKey(Schema.Union([Schema.Null, Home], { mode: "oneOf" })), "seat_password": Schema.optionalKey(Schema.String.annotate({ "description": "The new password of an adopted account, after it changed in Windows." })) }), [Schema.Record(Schema.String, Schema.Json.annotate({ "expected": "JSON value" }))]).annotate({ "description": "A change to a profile; absent fields stay.", "identifier": "ProfileUpdate" })
 export type SeatPublic = { readonly "account"?: string | null, readonly "detail"?: string | null, readonly "kind": SeatKind, readonly "occupant"?: string | null, readonly "pin"?: string | null, readonly "port": number, readonly "state": SeatState, readonly "take_turns"?: boolean } & { readonly [x: string]: Schema.Json }
-export const SeatPublic = Schema.StructWithRest(Schema.Struct({ "account": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "description": "The Windows account of a seat on an existing one, for the console's card and its Remove\nsentence. Absent for an account punktfunk made, and to a paired device." })), "detail": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "description": "The progress line while `starting`, or why while `unavailable`." })), "kind": Schema.suspend((): Schema.Codec<SeatKind> => SeatKind).annotate({ "description": "Which kind of seat it is." }), "occupant": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "description": "The device playing on it while `occupied`." })), "pin": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "description": "The certificate fingerprint of the host at `port`, hex, when it is a seat's own: a\nclient dialing `port` directly pins it. Absent: the pin of this host." })), "port": Schema.Number.annotate({ "description": "The port to dial for this profile.", "format": "int32" }).check(Schema.isInt().annotate({ "expected": "an integer" })).check(Schema.isGreaterThanOrEqualTo(0).annotate({ "expected": "a value greater than or equal to 0" })), "state": SeatState, "take_turns": Schema.optionalKey(Schema.Boolean.annotate({ "description": "A take-turns profile: its own Windows account on the one console, not a host of its own.\nIt dials this host like the owner does, so it has no per-seat library of its own and\nremoving it leaves the Windows account alone." })) }), [Schema.Record(Schema.String, Schema.Json.annotate({ "expected": "JSON value" }))]).annotate({ "description": "A profile's seat right now.", "identifier": "SeatPublic" })
+export const SeatPublic = Schema.StructWithRest(Schema.Struct({ "account": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "description": "The account of a seat on an existing one, for the console's card and its Remove\nsentence. Absent for an account punktfunk made, and to a paired device." })), "detail": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "description": "The progress line while `starting`, or why while `unavailable`." })), "kind": Schema.suspend((): Schema.Codec<SeatKind> => SeatKind).annotate({ "description": "Which kind of seat it is." }), "occupant": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "description": "The device playing on it while `occupied`." })), "pin": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "description": "The certificate fingerprint of the host at `port`, hex, when it is a seat's own: a\nclient dialing `port` directly pins it. Absent: the pin of this host." })), "port": Schema.Number.annotate({ "description": "The port to dial for this profile.", "format": "int32" }).check(Schema.isInt().annotate({ "expected": "an integer" })).check(Schema.isGreaterThanOrEqualTo(0).annotate({ "expected": "a value greater than or equal to 0" })), "state": SeatState, "take_turns": Schema.optionalKey(Schema.Boolean.annotate({ "description": "A take-turns profile: its own Windows account on the one console, not a host of its own.\nIt dials this host like the owner does, so it has no per-seat library of its own and\nremoving it leaves the Windows account alone." })) }), [Schema.Record(Schema.String, Schema.Json.annotate({ "expected": "JSON value" }))]).annotate({ "description": "A profile's seat right now.", "identifier": "SeatPublic" })
 export type SeatCheck = { readonly "code": string, readonly "level": CheckLevel, readonly "message": string, readonly "seat_id"?: string | null, readonly "seat_name"?: string | null } & { readonly [x: string]: Schema.Json }
 export const SeatCheck = Schema.StructWithRest(Schema.Struct({ "code": Schema.String.annotate({ "description": "A stable id such as `rds_role`.", "examples": ["rds_role"] }), "level": CheckLevel, "message": Schema.String.annotate({ "description": "One plain sentence for the operator." }), "seat_id": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "description": "The seat it is about; absent when it is about the box." })), "seat_name": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "description": "The name of the profile that plays on that seat, when one does." })) }), [Schema.Record(Schema.String, Schema.Json.annotate({ "expected": "JSON value" }))]).annotate({ "description": "One thing the seat checks found.", "identifier": "SeatCheck" })
 export type SessionSettings = { readonly "disconnect_grace_seconds"?: number, readonly "game_on_new_launch"?: GameOnNewLaunch, readonly "game_on_session_end"?: GameOnSessionEnd, readonly "session_on_game_exit"?: boolean, readonly "version"?: number } & { readonly [x: string]: Schema.Json }
@@ -692,6 +692,8 @@ export type AdoptEmulator400 = ApiError
 export const AdoptEmulator400 = ApiError
 export type AdoptEmulator401 = ApiError
 export const AdoptEmulator401 = ApiError
+export type AdoptEmulator403 = ApiError
+export const AdoptEmulator403 = ApiError
 export type AdoptEmulator404 = ApiError
 export const AdoptEmulator404 = ApiError
 export type AdoptEmulator409 = ApiError
@@ -860,6 +862,8 @@ export type SetHooks400 = ApiError
 export const SetHooks400 = ApiError
 export type SetHooks401 = ApiError
 export const SetHooks401 = ApiError
+export type SetHooks403 = ApiError
+export const SetHooks403 = ApiError
 export type SetHooks500 = ApiError
 export const SetHooks500 = ApiError
 export type GetHostInfo200 = HostInfo
@@ -2076,6 +2080,7 @@ export const make = (
       "2xx": decodeSuccess(AdoptEmulator200),
       "400": decodeError("AdoptEmulator400", AdoptEmulator400),
       "401": decodeError("AdoptEmulator401", AdoptEmulator401),
+      "403": decodeError("AdoptEmulator403", AdoptEmulator403),
       "404": decodeError("AdoptEmulator404", AdoptEmulator404),
       "409": decodeError("AdoptEmulator409", AdoptEmulator409),
       orElse: unexpectedStatus
@@ -2272,6 +2277,7 @@ export const make = (
       "2xx": decodeSuccess(SetHooks200),
       "400": decodeError("SetHooks400", SetHooks400),
       "401": decodeError("SetHooks401", SetHooks401),
+      "403": decodeError("SetHooks403", SetHooks403),
       "500": decodeError("SetHooks500", SetHooks500),
       orElse: unexpectedStatus
     }))
@@ -3605,11 +3611,12 @@ readonly "getEmulatorRegistry": {
   /**
 * Points the host at the operator's own copy, one no rule finds (a portable build unpacked
 * anywhere), so it is listed and launched like any other; `forget` drops it again. Admin lane
-* only.
+* only. A seat host on a person's own account adopts none: a prepare runs the copy as that
+* person, unasked.
 */
 readonly "adoptEmulator": {
-    <Config extends OperationConfig | undefined = undefined>(id: string, options: { readonly payload: typeof AdoptEmulatorRequestJson.Encoded; readonly config: Config }): Effect.Effect<WithOptionalResponse<typeof AdoptEmulator200.Type, Config>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"AdoptEmulator400", typeof AdoptEmulator400.Type> | PunktfunkError<"AdoptEmulator401", typeof AdoptEmulator401.Type> | PunktfunkError<"AdoptEmulator404", typeof AdoptEmulator404.Type> | PunktfunkError<"AdoptEmulator409", typeof AdoptEmulator409.Type>>;
-    <Config extends OperationConfig | undefined = undefined>(id: string, options: { readonly payload: typeof AdoptEmulatorRequestJson.Encoded; readonly config?: Config | undefined }): Effect.Effect<WithOptionalResponse<typeof AdoptEmulator200.Type, Config | undefined>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"AdoptEmulator400", typeof AdoptEmulator400.Type> | PunktfunkError<"AdoptEmulator401", typeof AdoptEmulator401.Type> | PunktfunkError<"AdoptEmulator404", typeof AdoptEmulator404.Type> | PunktfunkError<"AdoptEmulator409", typeof AdoptEmulator409.Type>>;
+    <Config extends OperationConfig | undefined = undefined>(id: string, options: { readonly payload: typeof AdoptEmulatorRequestJson.Encoded; readonly config: Config }): Effect.Effect<WithOptionalResponse<typeof AdoptEmulator200.Type, Config>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"AdoptEmulator400", typeof AdoptEmulator400.Type> | PunktfunkError<"AdoptEmulator401", typeof AdoptEmulator401.Type> | PunktfunkError<"AdoptEmulator403", typeof AdoptEmulator403.Type> | PunktfunkError<"AdoptEmulator404", typeof AdoptEmulator404.Type> | PunktfunkError<"AdoptEmulator409", typeof AdoptEmulator409.Type>>;
+    <Config extends OperationConfig | undefined = undefined>(id: string, options: { readonly payload: typeof AdoptEmulatorRequestJson.Encoded; readonly config?: Config | undefined }): Effect.Effect<WithOptionalResponse<typeof AdoptEmulator200.Type, Config | undefined>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"AdoptEmulator400", typeof AdoptEmulator400.Type> | PunktfunkError<"AdoptEmulator401", typeof AdoptEmulator401.Type> | PunktfunkError<"AdoptEmulator403", typeof AdoptEmulator403.Type> | PunktfunkError<"AdoptEmulator404", typeof AdoptEmulator404.Type> | PunktfunkError<"AdoptEmulator409", typeof AdoptEmulator409.Type>>;
   }
   /**
 * Hands the files to the best copy of the emulator the way it takes them: a folder it scans,
@@ -3765,11 +3772,12 @@ readonly "getHooks": {
   /**
 * Whole-document PUT, not a patch. Applies from the next event. Commands run as the host
 * user (the interactive session on Windows). An `elevated` hook is refused until an
-* administrator turns elevated commands on at the host (`HostInfo.elevated_commands`).
+* administrator turns elevated commands on at the host (`HostInfo.elevated_commands`). A
+* seat host on a person's own account refuses every hook and runs none.
 */
 readonly "setHooks": {
-    <Config extends OperationConfig | undefined = undefined>(options: { readonly payload: typeof SetHooksRequestJson.Encoded; readonly config: Config }): Effect.Effect<WithOptionalResponse<typeof SetHooks200.Type, Config>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"SetHooks400", typeof SetHooks400.Type> | PunktfunkError<"SetHooks401", typeof SetHooks401.Type> | PunktfunkError<"SetHooks500", typeof SetHooks500.Type>>;
-    <Config extends OperationConfig | undefined = undefined>(options: { readonly payload: typeof SetHooksRequestJson.Encoded; readonly config?: Config | undefined }): Effect.Effect<WithOptionalResponse<typeof SetHooks200.Type, Config | undefined>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"SetHooks400", typeof SetHooks400.Type> | PunktfunkError<"SetHooks401", typeof SetHooks401.Type> | PunktfunkError<"SetHooks500", typeof SetHooks500.Type>>;
+    <Config extends OperationConfig | undefined = undefined>(options: { readonly payload: typeof SetHooksRequestJson.Encoded; readonly config: Config }): Effect.Effect<WithOptionalResponse<typeof SetHooks200.Type, Config>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"SetHooks400", typeof SetHooks400.Type> | PunktfunkError<"SetHooks401", typeof SetHooks401.Type> | PunktfunkError<"SetHooks403", typeof SetHooks403.Type> | PunktfunkError<"SetHooks500", typeof SetHooks500.Type>>;
+    <Config extends OperationConfig | undefined = undefined>(options: { readonly payload: typeof SetHooksRequestJson.Encoded; readonly config?: Config | undefined }): Effect.Effect<WithOptionalResponse<typeof SetHooks200.Type, Config | undefined>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"SetHooks400", typeof SetHooks400.Type> | PunktfunkError<"SetHooks401", typeof SetHooks401.Type> | PunktfunkError<"SetHooks403", typeof SetHooks403.Type> | PunktfunkError<"SetHooks500", typeof SetHooks500.Type>>;
   }
   /**
 * Host identity and capabilities
@@ -4236,10 +4244,11 @@ readonly "listProfiles": {
     <Config extends OperationConfig | undefined = undefined>(options: { readonly config?: Config | undefined } | undefined): Effect.Effect<WithOptionalResponse<typeof ListProfiles200.Type, Config | undefined>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"ListProfiles401", typeof ListProfiles401.Type> | PunktfunkError<"ListProfiles404", typeof ListProfiles404.Type>>;
   }
   /**
-* A seat profile (the default) gets a desktop of its own, whose account is made here, or on
-* Windows Server signs in to `seat_account`, an existing local account, with `seat_password`.
-* One with `seat: false` plays the box's own session under its own name. A seat needs seats on
-* (Windows) or the door (Linux).
+* A seat profile (the default) gets a desktop of its own, whose account is made here, or runs
+* on `seat_account`, an existing account, once `seat_password` is its password: a local account
+* on Windows Server, a person's own login on a Linux door. A Linux row never starts while that
+* person sits at the machine, and the host keeps no password. One with `seat: false` plays the
+* box's own session under its own name. A seat needs seats on (Windows) or the door (Linux).
 */
 readonly "createProfile": {
     <Config extends OperationConfig | undefined = undefined>(options: { readonly payload: typeof CreateProfileRequestJson.Encoded; readonly config: Config }): Effect.Effect<WithOptionalResponse<typeof CreateProfile201.Type, Config>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"CreateProfile400", typeof CreateProfile400.Type> | PunktfunkError<"CreateProfile401", typeof CreateProfile401.Type> | PunktfunkError<"CreateProfile409", typeof CreateProfile409.Type> | PunktfunkError<"CreateProfile422", typeof CreateProfile422.Type> | PunktfunkError<"CreateProfile503", typeof CreateProfile503.Type>>;
@@ -4559,7 +4568,8 @@ readonly "getPluginCatalog": {
   /**
 * `{source, id}` installs the catalog pin after re-checking integrity, or `{spec,
 * accept_unverified: true}` installs unreviewed code the operator owns. `202` + job id; watch at
-* `GET /store/jobs/{id}`.
+* `GET /store/jobs/{id}`. A seat host on a person's own account installs from the built-in
+* source alone: anything else would run code the box chose as that person.
 * 
 * One package operation at a time (`409` otherwise): `bun` shares a lockfile and `node_modules`.
 */

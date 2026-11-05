@@ -132,6 +132,13 @@ only root can change.
 - **Your library.** Every seat gets a read-only copy of your game library, so a game on a seat
   can read it, commands and prep steps of your custom titles included. It can't change it.
 
+### A profile on an existing account runs as that person
+
+A profile on an existing account plays on that person's own account, on Linux and Windows. So the
+console password can't run a command as them, its seat runs no hooks, installs **Verified**
+plugins only, and takes no emulator copy named by hand. Games still start what the library says
+when the person picks them, custom titles' commands and prep steps included.
+
 ## Plugins run code on your host
 
 Installing a [plugin](/docs/plugins) is a trust decision, like installing any program. What limits

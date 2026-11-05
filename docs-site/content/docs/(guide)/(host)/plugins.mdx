@@ -68,6 +68,9 @@ before it installs.
 A catalog can also withdraw a version: the console then refuses to install it and warns on
 **Installed** if you already have it.
 
+A profile on an existing account installs **Verified** plugins only. Any other would run code
+nobody at unom reviewed as that person.
+
 To add a catalog: **Sources** → **Add a catalog source**, with a name, the index URL and
 optionally its `ed25519:…` public key. With a key set, the host accepts only a signed index from
 that source. Plugins from it are never **Verified**.

@@ -1503,7 +1503,7 @@
           "emulators"
         ],
         "summary": "Adopt a copy of an emulator",
-        "description": "Points the host at the operator's own copy, one no rule finds (a portable build unpacked\nanywhere), so it is listed and launched like any other; `forget` drops it again. Admin lane\nonly.",
+        "description": "Points the host at the operator's own copy, one no rule finds (a portable build unpacked\nanywhere), so it is listed and launched like any other; `forget` drops it again. Admin lane\nonly. A seat host on a person's own account adopts none: a prepare runs the copy as that\nperson, unasked.",
         "operationId": "adoptEmulator",
         "parameters": [
           {
@@ -1556,6 +1556,16 @@
           },
           "401": {
             "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "A seat host on a person's own account, which adopts no copy",
             "content": {
               "application/json": {
                 "schema": {
@@ -2745,7 +2755,7 @@
           "hooks"
         ],
         "summary": "Replace the hook configuration",
-        "description": "Whole-document PUT, not a patch. Applies from the next event. Commands run as the host\nuser (the interactive session on Windows). An `elevated` hook is refused until an\nadministrator turns elevated commands on at the host (`HostInfo.elevated_commands`).",
+        "description": "Whole-document PUT, not a patch. Applies from the next event. Commands run as the host\nuser (the interactive session on Windows). An `elevated` hook is refused until an\nadministrator turns elevated commands on at the host (`HostInfo.elevated_commands`). A\nseat host on a person's own account refuses every hook and runs none.",
         "operationId": "setHooks",
         "requestBody": {
           "content": {
@@ -2780,6 +2790,16 @@
           },
           "401": {
             "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "A seat host on a person's own account, which takes no hooks",
             "content": {
               "application/json": {
                 "schema": {
@@ -8061,7 +8081,7 @@
           "store"
         ],
         "summary": "Install a plugin",
-        "description": "`{source, id}` installs the catalog pin after re-checking integrity, or `{spec,\naccept_unverified: true}` installs unreviewed code the operator owns. `202` + job id; watch at\n`GET /store/jobs/{id}`.\n\nOne package operation at a time (`409` otherwise): `bun` shares a lockfile and `node_modules`.",
+        "description": "`{source, id}` installs the catalog pin after re-checking integrity, or `{spec,\naccept_unverified: true}` installs unreviewed code the operator owns. `202` + job id; watch at\n`GET /store/jobs/{id}`. A seat host on a person's own account installs from the built-in\nsource alone: anything else would run code the box chose as that person.\n\nOne package operation at a time (`409` otherwise): `bun` shares a lockfile and `node_modules`.",
         "operationId": "installPlugin",
         "requestBody": {
           "content": {
@@ -8105,7 +8125,7 @@
             }
           },
           "403": {
-            "description": "Not authorized for the plugin token",
+            "description": "Not authorized for the plugin token, or a plugin from outside the built-in source on a seat host on a person's own account",
             "content": {
               "application/json": {
                 "schema": {
