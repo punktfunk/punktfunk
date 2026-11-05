@@ -190,16 +190,22 @@ pub fn store() -> &'static SessionSettingsStore {
 /// box's choice of what a game's exit does to the stream (`seat_end_on_game_exit`).
 pub fn get() -> SessionSettings {
     if pf_paths::seat::role().follows_contract() {
-        return contract_settings(pf_host_config::seat_defaults::current());
+        let own_desktop = cfg!(target_os = "linux") && pf_paths::seat::own_account();
+        return contract_settings(pf_host_config::seat_defaults::current(), own_desktop);
     }
     store().get()
 }
 
+/// A contract seat's settings. On a person's own desktop (`own_desktop`) a game's exit goes
+/// back to that desktop whatever the box chose: the stream is the person's session.
 fn contract_settings(
     defaults: Option<pf_host_config::seat_defaults::SeatDefaults>,
+    own_desktop: bool,
 ) -> SessionSettings {
     let mut settings = SessionSettings::default();
-    if let Some(d) = defaults {
+    if own_desktop {
+        settings.session_on_game_exit = false;
+    } else if let Some(d) = defaults {
         settings.session_on_game_exit = d.end_on_game_exit;
     }
     settings
@@ -259,6 +265,29 @@ mod tests {
         let back: GameOnSessionEnd = serde_json::from_str("\"always\"").unwrap();
         assert_eq!(back, GameOnSessionEnd::Always);
         assert_eq!(GameOnSessionEnd::Keep.as_str(), "keep");
+    }
+
+    /// A made seat takes the box's choice of what a game's exit does; a person's own desktop
+    /// always goes back to that desktop.
+    #[test]
+    fn a_game_s_exit_on_a_person_s_own_desktop_keeps_the_stream() {
+        let ends = |end_on_game_exit| {
+            Some(pf_host_config::seat_defaults::SeatDefaults {
+                end_on_game_exit,
+                max_mode: None,
+                library_writable: false,
+                dualsense_usbip: false,
+                browser: false,
+                browser_origins: Vec::new(),
+                background_input: false,
+            })
+        };
+        assert!(contract_settings(None, false).session_on_game_exit);
+        assert!(contract_settings(ends(true), false).session_on_game_exit);
+        assert!(!contract_settings(ends(false), false).session_on_game_exit);
+        for defaults in [None, ends(true), ends(false)] {
+            assert!(!contract_settings(defaults, true).session_on_game_exit);
+        }
     }
 
     #[test]
