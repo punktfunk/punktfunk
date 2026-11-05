@@ -47,8 +47,8 @@ A device that asked **From the internet**, **Through the web client** or **From 
 approved: its name proves nothing. Click **Arm PIN** on its row to make a PIN only that device can
 use, and pass the PIN on. See [Friends over the internet](/docs/friends-over-the-internet).
 
-A new page is a public website no paired device has come from yet. Once one device pairs from it,
-the next can be approved.
+A new page is a public website that isn't in the host's **Browser origins** and that no paired
+device has come from yet. Once one device pairs from it, the next can be approved.
 
 ## Managing paired devices
 
