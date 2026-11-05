@@ -68,8 +68,9 @@ before it installs.
 A catalog can also withdraw a version: the console then refuses to install it and warns on
 **Installed** if you already have it.
 
-A profile on an existing account installs **Verified** plugins only. Any other would run code
-nobody at unom reviewed as that person.
+Plugins don't run on a profile that uses an existing Linux account yet. A profile on an existing
+Windows account installs **Verified** plugins only: any other would run code nobody at unom
+reviewed as that person.
 
 To add a catalog: **Sources** → **Add a catalog source**, with a name, the index URL and
 optionally its `ed25519:…` public key. With a key set, the host accepts only a signed index from
@@ -181,6 +182,9 @@ On a box with seats, each seat plays these games with the box's emulators and ke
 [Profiles](/docs/profiles#on-linux) names the exceptions on Linux. On Windows, RPCS3, Snes9x and
 Supermodel keep one set for everyone. So does an emulator installed while seats were off or by an
 earlier version, until it is reinstalled under **Library** → **Sources** → **Emulators**.
+
+The console doesn't install, prepare or remove emulators, or move saves, inside a profile that
+uses an existing Linux account. On an existing Windows account it adds no emulator copy by hand.
 
 ```sh
 punktfunk-host plugins add rom-manager

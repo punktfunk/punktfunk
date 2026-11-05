@@ -97,4 +97,71 @@ async fn a_person_s_own_account_refuses_what_would_run_code_as_them() {
     let adopt = "/api/v1/emulators/rpcs3/adopt";
     let (s, body) = send(&app, json_req(Method::POST, adopt, copy)).await;
     assert_eq!(s, StatusCode::FORBIDDEN, "{body}");
+
+    // On Linux the console manages no plugin at all there, and the runner reads as absent.
+    if cfg!(target_os = "linux") {
+        let on = serde_json::json!({"enabled": true});
+        let (s, body) = send(&app, json_req(Method::POST, "/api/v1/store/runtime", on)).await;
+        assert_eq!(s, StatusCode::FORBIDDEN, "{body}");
+        let (s, body) = send(&app, get_req("/api/v1/store/runtime")).await;
+        assert_eq!(s, StatusCode::OK, "{body}");
+        assert_eq!(body["installed"], false, "{body}");
+    }
+}
+
+/// On a person's own Linux account every write to plugins or emulators is refused, each group
+/// with its sentence; every read, and a catalog refresh, passes.
+#[test]
+fn a_person_s_own_linux_account_refuses_every_plugin_and_emulator_write() {
+    use crate::mgmt::own_account::refusal;
+    let plugins = Some("Plugins don't run on a profile that uses an existing Linux account yet.");
+    let emulators = Some(
+        "The console doesn't manage emulators inside a profile that uses an existing Linux account.",
+    );
+    let writes = [
+        (Method::POST, "/api/v1/store/install", plugins),
+        (Method::POST, "/api/v1/store/uninstall", plugins),
+        (Method::POST, "/api/v1/store/runtime", plugins),
+        (Method::PUT, "/api/v1/store/sources/retro", plugins),
+        (Method::DELETE, "/api/v1/store/sources/retro", plugins),
+        (Method::POST, "/api/v1/plugin-access/rom/decide", plugins),
+        (Method::POST, "/api/v1/plugin-access/rom/release", plugins),
+        (Method::POST, "/api/v1/plugin-access/requests", plugins),
+        (Method::POST, "/api/v1/emulators/rpcs3/install", emulators),
+        (Method::POST, "/api/v1/emulators/rpcs3/adopt", emulators),
+        (Method::POST, "/api/v1/emulators/rpcs3/prepare", emulators),
+        (Method::POST, "/api/v1/emulators/rpcs3/content", emulators),
+        (Method::POST, "/api/v1/emulators/rpcs3/remove", emulators),
+        (
+            Method::POST,
+            "/api/v1/emulators/rpcs3/saves/import",
+            emulators,
+        ),
+        (
+            Method::POST,
+            "/api/v1/emulators/rpcs3/saves/export",
+            emulators,
+        ),
+    ];
+    for (method, path, why) in writes {
+        assert_eq!(refusal(&method, path), why, "{method} {path}");
+    }
+    for (method, path) in [
+        (Method::GET, "/api/v1/store/catalog"),
+        (Method::GET, "/api/v1/store/installed"),
+        (Method::GET, "/api/v1/store/runtime"),
+        (Method::GET, "/api/v1/store/sources"),
+        (Method::GET, "/api/v1/store/jobs/1"),
+        (Method::POST, "/api/v1/store/refresh"),
+        (Method::GET, "/api/v1/plugin-access"),
+        (Method::GET, "/api/v1/emulators"),
+        (Method::GET, "/api/v1/emulators/catalog"),
+        (Method::GET, "/api/v1/emulators/rpcs3/saves"),
+        (Method::HEAD, "/api/v1/emulators/rpcs3/firmware"),
+        (Method::PUT, "/api/v1/hooks"),
+        (Method::POST, "/api/v1/storefront"),
+        (Method::PATCH, "/api/v1/host/settings"),
+    ] {
+        assert_eq!(refusal(&method, path), None, "{method} {path}");
+    }
 }

@@ -135,8 +135,10 @@ only root can change.
 ### A profile on an existing account runs as that person
 
 A profile on an existing account plays on that person's own account, on Linux and Windows. So the
-console password can't run a command as them, its seat runs no hooks, installs **Verified**
-plugins only, and takes no emulator copy named by hand. Games still start what the library says
+console password can't run a command as them, its seat runs no hooks. On an existing Linux
+account the console manages nothing inside the account: no plugins run there, and it installs,
+prepares and removes no emulator. On an existing Windows account the seat installs **Verified**
+plugins only and takes no emulator copy named by hand. Games still start what the library says
 when the person picks them, custom titles' commands and prep steps included.
 
 ## Plugins run code on your host
