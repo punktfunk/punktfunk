@@ -5,6 +5,7 @@
 #if canImport(Metal) && canImport(QuartzCore)
 import AVFoundation
 import Foundation
+import IOSurface
 import Metal
 import PunktfunkShared
 import QuartzCore
@@ -201,6 +202,110 @@ final class FrameRateHint: @unchecked Sendable {
         let cap = max(hz, 120)
         return CAFrameRateRange(minimum: cap, maximum: cap, preferred: cap)
         #endif
+    }
+}
+
+extension CAMetalDrawable {
+    /// The key `PresentFlight` files this drawable under: its drawable ID, or on the simulator
+    /// SDKs, which have none, the object's identity.
+    var flightID: Int {
+        #if targetEnvironment(simulator)
+        return ObjectIdentifier(self).hashValue
+        #else
+        return drawableID
+        #endif
+    }
+}
+
+/// The deadline path's last vends and what became of each, logged when the link stalls: which
+/// drawables were still out, and how each present before the stall sat against its deadline.
+/// Lock-guarded: the link, render and Metal callback threads all write.
+final class PresentFlight: @unchecked Sendable {
+    /// 1.6 s of vends at 60 Hz.
+    static let capacity = 96
+
+    private struct Vend {
+        let id: Int
+        /// The pool slot: three surfaces recur while the drawable IDs count up.
+        let surface: UInt32
+        let vendAt: CFTimeInterval, deadline: CFTimeInterval, target: CFTimeInterval
+        /// `-` untouched, `X` expired, `S` skipped, `I` issued, `F` render failed.
+        var fate: Character = "-"
+        var fateAt: CFTimeInterval = 0
+        /// The decoded frame's surface an issued present samples; 0 without one.
+        var source: UInt32 = 0
+        var gpu: (start: CFTimeInterval, end: CFTimeInterval)?
+        /// Set by the presented handler: glass past the target, or dropped.
+        var seenAt: CFTimeInterval?
+        var lateMs: Double?
+    }
+
+    private let lock = NSLock()
+    private var vends: [Vend] = []
+
+    func vend(_ v: VendedDrawable) {
+        vend(
+            id: v.drawable.flightID,
+            surface: v.drawable.texture.iosurface.map { IOSurfaceGetID($0) } ?? 0,
+            at: v.vendAt, deadline: v.deadline, target: v.target)
+    }
+
+    func vend(
+        id: Int, surface: UInt32, at vendAt: CFTimeInterval, deadline: CFTimeInterval,
+        target: CFTimeInterval
+    ) {
+        lock.lock()
+        if vends.count >= Self.capacity { vends.removeFirst() }
+        vends.append(Vend(
+            id: id, surface: surface, vendAt: vendAt, deadline: deadline, target: target))
+        lock.unlock()
+    }
+
+    func fate(_ id: Int, _ fate: Character, source: UInt32 = 0) {
+        let now = CACurrentMediaTime()
+        update(id) { $0.fate = fate; $0.fateAt = now; $0.source = source }
+    }
+
+    func gpu(_ id: Int, start: CFTimeInterval, end: CFTimeInterval) {
+        update(id) { $0.gpu = (start, end) }
+    }
+
+    /// `lateMs` nil: the system dropped the present.
+    func glass(_ id: Int, lateMs: Double?) {
+        let now = CACurrentMediaTime()
+        update(id) { $0.seenAt = now; $0.lateMs = lateMs }
+    }
+
+    private func update(_ id: Int, _ change: (inout Vend) -> Void) {
+        lock.lock()
+        if let i = vends.lastIndex(where: { $0.id == id }) { change(&vends[i]) }
+        lock.unlock()
+    }
+
+    /// One line per vend, oldest first, and the record starts over. `vendMs` and `seenMs` count
+    /// back from now, `fate` from the vend, `gpuMs` from the deadline (positive after it).
+    func drain(_ why: String) -> [String] {
+        lock.lock()
+        let all = vends
+        vends.removeAll(keepingCapacity: true)
+        lock.unlock()
+        let now = CACurrentMediaTime()
+        func ms(_ s: CFTimeInterval) -> String { String(format: "%.2f", s * 1000) }
+        return all.enumerated().map { i, v in
+            let glass: String
+            if let seenAt = v.seenAt {
+                glass = (v.lateMs.map { String(format: "%.2f", $0) } ?? "drop")
+                    + " seenMs=" + ms(seenAt - now)
+            } else {
+                glass = v.fate == "I" ? "out" : "-"
+            }
+            let gpu = v.gpu.map { ms($0.start - v.deadline) + ".." + ms($0.end - v.deadline) }
+            return "pf-flight \(why) \(i + 1)/\(all.count) id=\(v.id) surf=\(v.surface)"
+                + " vendMs=\(ms(v.vendAt - now)) dlMs=\(ms(v.deadline - v.vendAt))"
+                + " tgtMs=\(ms(v.target - v.vendAt)) src=\(v.source)"
+                + " fate=\(v.fate)@\(v.fate == "-" ? "na" : ms(v.fateAt - v.vendAt))"
+                + " gpuMs=\(gpu ?? "na") glass=\(glass)"
+        }
     }
 }
 

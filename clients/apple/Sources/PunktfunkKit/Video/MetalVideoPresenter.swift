@@ -1082,6 +1082,7 @@ public final class MetalVideoPresenter {
             if presents { parked.drawable.present() }
         }
         commandBuffer.addCompletedHandler { cb in
+            Self.noteUnfinished(cb, "parked")
             parked.lock.lock()
             let onGPU = parked.onGPU, signalAt = parked.signalAt
             parked.keep.removeAll()
@@ -1365,6 +1366,7 @@ public final class MetalVideoPresenter {
         let onGPUTime = onGPUTime
         commandBuffer.addCompletedHandler { cb in
             _ = keepAlive
+            Self.noteUnfinished(cb, "present")
             if let onGPUTime, cb.gpuEndTime > cb.gpuStartTime {
                 onGPUTime(cb.gpuStartTime, cb.gpuEndTime)
             }
@@ -1372,6 +1374,25 @@ public final class MetalVideoPresenter {
         target.present(commandBuffer, presentAtMediaTime)
         commandBuffer.commit()
         return true
+    }
+
+    private static let unfinished = OSAllocatedUnfairLock(initialState: 0)
+
+    /// Logs a command buffer the GPU did not finish: one it timed out on, lost to a restart, or
+    /// refused after those. A restart fails every buffer in flight, so the first eight are
+    /// named and then every 64th.
+    static func noteUnfinished(_ cb: MTLCommandBuffer, _ what: String) {
+        guard cb.status == .error else { return }
+        let n = unfinished.withLock { count -> Int in
+            count += 1
+            return count
+        }
+        guard n <= 8 || n % 64 == 0 else { return }
+        let error = cb.error as NSError?
+        let line = "stage2: GPU did not finish a \(what) pass (\(n)): "
+            + "\(error?.domain ?? "no error") code=\(error?.code ?? 0) \(error?.localizedDescription ?? "")"
+        presenterLog.error("\(line, privacy: .public)")
+        if presentDebug { print(line) }
     }
 
     /// Where one frame draws: a layer drawable, or the curved screen's.

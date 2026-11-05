@@ -1366,6 +1366,7 @@ private final class DeadlineLinkDelegate: NSObject, CAMetalDisplayLinkDelegate {
     /// The pool depth this session vends from (`startDeadlinePresenter` sets it on the layer).
     private let drawableCount: Int
     private let pacer: DeadlinePacer
+    private let flight: PresentFlight
     /// The latency intent picks at the deadline; Smoothness presents on pairing.
     private let latePick: Bool
     private var loggedLinkUp = false
@@ -1382,7 +1383,7 @@ private final class DeadlineLinkDelegate: NSObject, CAMetalDisplayLinkDelegate {
         presenter: MetalVideoPresenter,
         stash: LatestBox<VendedDrawable>, renderSignal: DispatchSemaphore,
         hint: FrameRateHint, stats: PresentDebugStats?, hud: HudSink?,
-        drawableCount: Int, pacer: DeadlinePacer, latePick: Bool
+        drawableCount: Int, pacer: DeadlinePacer, flight: PresentFlight, latePick: Bool
     ) {
         self.presenter = presenter
         self.stash = stash
@@ -1392,6 +1393,7 @@ private final class DeadlineLinkDelegate: NSObject, CAMetalDisplayLinkDelegate {
         self.hud = hud
         self.drawableCount = drawableCount
         self.pacer = pacer
+        self.flight = flight
         self.latePick = latePick
     }
 
@@ -1434,9 +1436,11 @@ private final class DeadlineLinkDelegate: NSObject, CAMetalDisplayLinkDelegate {
         }
         lastTarget = target
         let period = steps.min().flatMap { $0.isFinite ? $0 : nil } ?? 0
-        stash.put(VendedDrawable(
+        let vended = VendedDrawable(
             drawable: update.drawable, vendAt: vendAt, deadline: deadline, target: target,
-            period: period))
+            period: period)
+        flight.vend(vended)
+        stash.put(vended)
         renderSignal.signal()
     }
 }
@@ -1979,6 +1983,7 @@ public final class Stage2Pipeline {
         // The latency intent picks inside the window before the deadline; Smoothness keeps its
         // cadence clock's timing and presents on pairing.
         let pacer = DeadlinePacer()
+        let flight = PresentFlight()
         let latePick = cadence == nil
 
         // The link starts LAZILY — the render thread triggers this after the FIRST decoded
@@ -1996,7 +2001,8 @@ public final class Stage2Pipeline {
                     presenter: presenter,
                     stash: stash, renderSignal: renderSignal, hint: hint, stats: debugStats,
                     hud: hud,
-                    drawableCount: drawableCount, pacer: pacer, latePick: latePick)
+                    drawableCount: drawableCount, pacer: pacer, flight: flight,
+                    latePick: latePick)
                 let link = CAMetalDisplayLink(metalLayer: layer)
                 link.preferredFrameLatency = DeadlineLinkDelegate.frameLatency
                 if let range = hint.drain() ?? hint.current() { link.preferredFrameRateRange = range }
@@ -2027,6 +2033,9 @@ public final class Stage2Pipeline {
             var lastDeadlineLine = started
             var watchdog = LinkWatchdog(now: started)
             var selector = DeadlineSelector(latePick: latePick, now: started)
+            let logFlight = { (why: String) in
+                for line in flight.drain(why) { Stage2Pipeline.emitDeadlineLine(line) }
+            }
             // The live link generation's stop flag — nil until the first frame starts one.
             // Render-thread confined (only this thread starts, retires or reads it).
             var linkStop: StopFlag?
@@ -2074,6 +2083,7 @@ public final class Stage2Pipeline {
                     latchGate.note(shown: false)
                     watchdog.noteVend(at: CACurrentMediaTime()) // the link is alive, just unclaimed
                     pacer.noteExpired()
+                    flight.fate(vend.drawable.flightID, "X")
                     lastFate = "expired"
                 }
                 // Every second to stdout under PUNKTFUNK_PRESENT_DEBUG; otherwise only a window
@@ -2136,11 +2146,13 @@ public final class Stage2Pipeline {
                         restartLink()
                         presentLog.error(
                             "stage4: link stalled \(ms) ms with no vend — retiring it, relinking")
+                        logFlight("stall")
                     case .wedged(let ms):
                         restartLink()
                         _ = glassSeen.take() // only glass AFTER the wedge re-arms
                         presentLog.error(
                             "stage4: link stalled \(ms) ms again right after a relink — layer wedged")
+                        logFlight("wedge")
                         onWedged?()
                     }
                     debugStats?.flushIfDue(ring: ring, gate: nil)
@@ -2150,6 +2162,7 @@ public final class Stage2Pipeline {
                 // the system showed re-arms the watchdog.
                 if watchdog.rearm(glass: { glassSeen.take() == true }) {
                     presentLog.info("stage4: the display takes frames again — watchdog re-armed")
+                    logFlight("resume")
                 }
                 let drawable = vended.drawable
                 let now = CACurrentMediaTime()
@@ -2167,6 +2180,7 @@ public final class Stage2Pipeline {
                     watchdog.noteVend(at: now)
                     ring.putBack(frame)
                     pacer.noteSkip()
+                    flight.fate(drawable.flightID, "S")
                     latchGate.note(shown: false)
                     if let p = parked, p.drawable === drawable {
                         presenter.skip(p)
@@ -2191,6 +2205,13 @@ public final class Stage2Pipeline {
                 let renderStarted = CACurrentMediaTime()
                 watchdog.noteVend(at: renderStarted)
                 let issuedNs = Stage2Pipeline.realtimeNs(forDisplayLinkTimestamp: renderStarted)
+                let flightID = drawable.flightID
+                var source: UInt32 = 0
+                if case .video(let buffer, _) = shown.image,
+                   let surface = CVPixelBufferGetIOSurface(buffer)?.takeUnretainedValue() {
+                    source = IOSurfaceGetID(surface)
+                }
+                flight.fate(flightID, "I", source: source)
                 // This present's GPU span: the presenter reads the hook as the frame encodes.
                 let gpuSpan = LatestBox<(start: CFTimeInterval, end: CFTimeInterval)>()
                 let deadline = vended.deadline, vendAt = vended.vendAt
@@ -2200,6 +2221,7 @@ public final class Stage2Pipeline {
                         issuedAt: renderStarted, start: start, end: end, deadline: deadline,
                         period: period)
                     gpuSpan.put((start: start, end: end))
+                    flight.gpu(flightID, start: start, end: end)
                 }
                 // A pass the refresh cannot hold lands every present a refresh late, whatever the
                 // pick: luma upscales with one tap from here (`DeadlinePacer.overBudget`).
@@ -2212,6 +2234,7 @@ public final class Stage2Pipeline {
                 let after = lastFate, inFlight = pacer.inFlight
                 let onGlass: (Int64?) -> Void = { [held, carried] presentedNs in
                     if presentedNs != nil { glassSeen.put(true) }
+                    flight.glass(flightID, lateMs: presentedNs.map { Double($0 - targetNs) / 1e6 })
                     let lateCount = pacer.observe(
                         issuedNs: issuedNs, presentedNs: presentedNs, targetNs: targetNs,
                         cutoffLeadNs: cutoffLeadNs)
@@ -2256,6 +2279,7 @@ public final class Stage2Pipeline {
                     // mismatch (mid-session HDR flip caught between the layer reconfigure and
                     // the next vend) self-heals the same way — see encodePresent's guard.
                     ring.putBack(shown)
+                    flight.fate(flightID, "F")
                 } else {
                     pacer.noteIssued(ns: issuedNs)
                 }

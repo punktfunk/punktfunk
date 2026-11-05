@@ -610,5 +610,38 @@ final class DeadlineSelectorTests: XCTestCase {
         gate.note(shown: false); gate.note(shown: false); gate.note(shown: false)
         XCTAssertFalse(gate.open, "three empty vends close it")
     }
+
+    /// A stall's record names each vend's fate: shown, dropped, still out, or never issued.
+    func testTheFlightRecordNamesEachVendsFate() {
+        let flight = PresentFlight()
+        for id in 1...4 {
+            flight.vend(id: id, surface: UInt32(id % 3), at: 1, deadline: 1.016, target: 1.033)
+        }
+        flight.fate(1, "I")
+        flight.gpu(1, start: 1.008, end: 1.015)
+        flight.glass(1, lateMs: 0.5)
+        flight.fate(2, "I")
+        flight.glass(2, lateMs: nil)
+        flight.fate(3, "I")
+        flight.fate(4, "X")
+        let lines = flight.drain("stall")
+        XCTAssertEqual(lines.count, 4)
+        XCTAssertTrue(lines[0].contains("id=1 surf=1"))
+        XCTAssertTrue(lines[0].contains("gpuMs=-8.00..-1.00 glass=0.50"), lines[0])
+        XCTAssertTrue(lines[1].contains("glass=drop"), lines[1])
+        XCTAssertTrue(lines[2].hasSuffix("gpuMs=na glass=out"), lines[2])
+        XCTAssertTrue(lines[3].contains("fate=X") && lines[3].hasSuffix("glass=-"), lines[3])
+        XCTAssertTrue(flight.drain("stall").isEmpty, "a drain starts the record over")
+    }
+
+    func testTheFlightRecordKeepsTheNewestVends() {
+        let flight = PresentFlight()
+        for id in 0..<(PresentFlight.capacity + 5) {
+            flight.vend(id: id, surface: 0, at: 1, deadline: 1.016, target: 1.033)
+        }
+        let lines = flight.drain("stall")
+        XCTAssertEqual(lines.count, PresentFlight.capacity)
+        XCTAssertTrue(lines[0].contains(" id=5 "), lines[0])
+    }
 }
 #endif
