@@ -89,4 +89,22 @@ class ProfilesTest {
         )
         assertEquals("Getting Kid's desk ready…", wakingLine("Kid"))
     }
+
+    @Test
+    fun aLockedRowSaysWhatItNeedsAndDialsWhenStopped() {
+        fun row(unlock: Any, state: String = "stopped") = ListedProfile.parse(
+            JSONObject().put("id", "ada").put("unlock", unlock).put("seat", JSONObject().put("state", state)),
+        )
+        assertEquals(UnlockNeed.PASSWORD, row("password").unlock)
+        assertEquals(UnlockNeed.KEY, row("key").unlock)
+        assertEquals(UnlockNeed.NONE, row("none").unlock)
+        assertEquals(UnlockNeed.NONE, row("retina").unlock)
+        assertEquals(UnlockNeed.NONE, row(JSONObject.NULL).unlock)
+        assertEquals(UnlockNeed.NONE, ListedProfile.parse(JSONObject().put("id", "old")).unlock)
+        // Never a wake for a locked seat: the host refuses it, and the unlock on the dial starts it.
+        assertEquals(SeatGate.Dial, seatGate(row("password")))
+        assertEquals(SeatGate.Dial, seatGate(row("key")))
+        assertEquals(SeatGate.Wake, seatGate(row("none")))
+        assertEquals(SeatGate.Wait(null), seatGate(row("password", "starting")))
+    }
 }

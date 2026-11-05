@@ -25,6 +25,35 @@ object NativeBridge {
     external fun nativeConnect(requestJson: String): Long
 
     /**
+     * [nativeConnect] for a profile on a person's own account. [promptsUnlock]: this app asks for
+     * the password after a `profile-locked` refusal. [secret] null sends no unlock; else [kind] 1
+     * is the password as typed (UTF-8), 2 a key proof, and [enrollKey] null or the key to enrol
+     * under [enrollAlg]. The bridge copies [secret]; the caller wipes its array after this returns.
+     * An unlock needs a non-empty `pin_hex`, or this fails with the token "error" before dialing.
+     */
+    external fun nativeConnectWithUnlock(
+        requestJson: String,
+        promptsUnlock: Boolean,
+        kind: Int,
+        secret: ByteArray?,
+        staySignedIn: Boolean,
+        enrollAlg: Int,
+        enrollKey: ByteArray?,
+    ): Long
+
+    /**
+     * The 152 bytes a profile's unlock key signs (SHA-256 digest): [challenge], [seatId] as 32
+     * lowercase hex characters, then this device's and the pinned box's certificate SHA-256.
+     * The three arrays are 32 bytes each. Null for anything else.
+     */
+    external fun nativeProfileUnlockMessage(
+        challenge: ByteArray,
+        seatId: String,
+        deviceFp: ByteArray,
+        boxFp: ByteArray,
+    ): ByteArray?
+
+    /**
      * True while the dial [nativeConnect] is blocked on has been parked by the host for its
      * operator's approval. The dial then waits for the verdict; show the approval wait.
      */
