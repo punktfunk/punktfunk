@@ -409,6 +409,7 @@
 	"emulators_adopt_confirm_body": "Der Host startet dieses Programm für jedes Spiel dieses Emulators. Bestätige mit dem Konsolen-Passwort.",
 	"plugin_access_ask_again": "Erneut fragen",
 	"plugin_access_decision_failed": "Der Ordnerzugriff konnte nicht geändert werden",
+	"plugin_access_install": "Installieren",
 	"library_source_settings": "Einstellungen",
 	"library_source_settings_title": "Einstellungen für {source}",
 	"library_source_settings_save": "Einstellungen speichern",
