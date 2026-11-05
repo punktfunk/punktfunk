@@ -66,18 +66,16 @@ pub struct Published {
 /// nothing here authorises anything, and PAKE is still what proves the peer.
 #[derive(Clone, Debug)]
 pub struct CertAttestation {
-    /// Hex ECDSA-P256-SHA256 signature, ASN.1 DER, over `CERT_SIG_CONTEXT` + [`Published::cert_hash`].
+    /// Hex ECDSA-P256-SHA256 signature, ASN.1 DER, over
+    /// [`punktfunk_core::tls::PLANE_ATTESTATION_CONTEXT`] + [`Published::cert_hash`].
     pub cert_hash_sig: String,
     /// Base64 of the native identity's leaf certificate DER. A browser hashes this to check it
     /// against its pin, then verifies with the key inside it.
     pub host_cert_der: String,
 }
 
-/// Domain separation. The native key also signs X.509, so a signature it makes over a certificate
-/// hash must not be replayable as one over anything else.
-const CERT_SIG_CONTEXT: &str = "punktfunk-wt-cert-v1:";
-
 /// Sign `cert_hash` with the native identity, and hand back the certificate that verifies it.
+/// [`punktfunk_core::tls::verify_plane_attestation`] is the check.
 ///
 /// `None` rather than an error when the identity is not P-256: failing start-up over it would be
 /// worse than not attesting.
@@ -88,7 +86,10 @@ fn attest(ident: &crate::identity::NativeIdentity, cert_hash: &str) -> Option<Ce
         tracing::warn!("native identity is not P-256, so the browser plane is not attested");
         return None;
     }
-    let msg = format!("{CERT_SIG_CONTEXT}{cert_hash}");
+    let msg = format!(
+        "{}{cert_hash}",
+        punktfunk_core::tls::PLANE_ATTESTATION_CONTEXT
+    );
     let sig = rcgen::SigningKey::sign(&key, msg.as_bytes()).ok()?;
     let (_, pem) = x509_parser::pem::parse_x509_pem(ident.cert_pem.as_bytes()).ok()?;
     Some(CertAttestation {
@@ -668,44 +669,36 @@ mod tests {
     #[test]
     fn attestation_verifies_against_the_pinned_host_certificate() {
         use base64::Engine as _;
+        use punktfunk_core::tls::{cert_fingerprint, verify_plane_attestation};
+        let leaf = |ident: &crate::identity::NativeIdentity| {
+            let (_, pem) = x509_parser::pem::parse_x509_pem(ident.cert_pem.as_bytes()).unwrap();
+            pem.contents
+        };
         let ident = crate::identity::ephemeral().expect("mint a native identity");
         let cert_hash = "a".repeat(64);
         let a = attest(&ident, &cert_hash).expect("P-256 identity attests");
-
-        // Step one of the browser's check: the certificate really is the one it pinned.
         let der = base64::engine::general_purpose::STANDARD
             .decode(&a.host_cert_der)
             .expect("host_cert_der is base64");
-        let (_, expected) = x509_parser::pem::parse_x509_pem(ident.cert_pem.as_bytes()).unwrap();
-        assert_eq!(
-            der, expected.contents,
-            "attested DER is the identity's leaf"
-        );
+        let sig = hex::decode(&a.cert_hash_sig).expect("cert_hash_sig is hex");
 
-        // Step two: the signature is that certificate's key over this hash, and nothing else.
-        let cert = expected.parse_x509().unwrap();
-        let key = cert.public_key().subject_public_key.data.to_vec();
-        let sig: Vec<u8> = (0..a.cert_hash_sig.len())
-            .step_by(2)
-            .map(|i| u8::from_str_radix(&a.cert_hash_sig[i..i + 2], 16).unwrap())
-            .collect();
-        let verify = |msg: &str| {
-            aws_lc_rs::signature::UnparsedPublicKey::new(
-                &aws_lc_rs::signature::ECDSA_P256_SHA256_ASN1,
-                &key,
-            )
-            .verify(msg.as_bytes(), &sig)
-        };
-        assert!(verify(&format!("{CERT_SIG_CONTEXT}{cert_hash}")).is_ok());
-        // Domain separation and the hash itself both have to matter, or the signature proves
-        // nothing about which certificate it names.
-        assert!(
-            verify(&cert_hash).is_err(),
-            "context is part of the message"
+        // The fingerprint that comes back is the one the browser pinned at pairing.
+        assert_eq!(
+            verify_plane_attestation(&cert_hash, &sig, &der).expect("attestation verifies"),
+            cert_fingerprint(&leaf(&ident)),
         );
         assert!(
-            verify(&format!("{CERT_SIG_CONTEXT}{}", "b".repeat(64))).is_err(),
+            verify_plane_attestation(&"b".repeat(64), &sig, &der).is_err(),
             "a different hash must not verify"
         );
+        let other = crate::identity::ephemeral().expect("mint a second identity");
+        assert!(
+            verify_plane_attestation(&cert_hash, &sig, &leaf(&other)).is_err(),
+            "another host's key must not verify"
+        );
+        // The same key over the bare hash: the context is part of the message.
+        let key = rcgen::KeyPair::from_pem(&ident.key_pem).unwrap();
+        let bare = rcgen::SigningKey::sign(&key, cert_hash.as_bytes()).unwrap();
+        assert!(verify_plane_attestation(&cert_hash, &bare, &der).is_err());
     }
 }

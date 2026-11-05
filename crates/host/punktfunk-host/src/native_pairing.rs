@@ -1267,57 +1267,6 @@ mod tests {
 
     /// The address table the admission rules read. Anything not on a network the operator
     /// already let the peer onto is WAN, and an address we could not read is WAN too.
-    #[test]
-    fn knock_sources_classify_by_address() {
-        use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
-        let lan: [IpAddr; 6] = [
-            Ipv4Addr::LOCALHOST.into(),
-            Ipv4Addr::new(10, 1, 2, 3).into(),
-            Ipv4Addr::new(172, 16, 0, 1).into(),
-            Ipv4Addr::new(192, 168, 1, 44).into(),
-            Ipv4Addr::new(169, 254, 3, 4).into(),
-            Ipv6Addr::LOCALHOST.into(),
-        ];
-        for ip in lan {
-            assert_eq!(classify_source(Some(ip)), KnockSource::Lan, "{ip}");
-        }
-        let wan: [IpAddr; 6] = [
-            Ipv4Addr::new(203, 0, 113, 5).into(),
-            Ipv4Addr::new(8, 8, 8, 8).into(),
-            // 172.32/12 is outside RFC 1918; 100.128/9 is outside the CGNAT block.
-            Ipv4Addr::new(172, 32, 0, 1).into(),
-            Ipv4Addr::new(100, 128, 0, 1).into(),
-            Ipv4Addr::UNSPECIFIED.into(),
-            "2606:4700::1111".parse::<IpAddr>().unwrap(),
-        ];
-        for ip in wan {
-            assert_eq!(classify_source(Some(ip)), KnockSource::Wan, "{ip}");
-        }
-        assert_eq!(
-            classify_source(None),
-            KnockSource::Wan,
-            "an unknown source fails closed"
-        );
-        // A v4 address wearing a v6 hat is classified as what it really is.
-        assert_eq!(
-            classify_source(Some("::ffff:192.168.1.44".parse().unwrap())),
-            KnockSource::Lan
-        );
-        assert_eq!(
-            classify_source(Some("::ffff:203.0.113.5".parse().unwrap())),
-            KnockSource::Wan
-        );
-        // fc00::/7 unique-local and fe80::/10 link-local are both on-link.
-        assert_eq!(
-            classify_source(Some("fd00::1".parse().unwrap())),
-            KnockSource::Lan
-        );
-        assert_eq!(
-            classify_source(Some("fe80::1".parse().unwrap())),
-            KnockSource::Lan
-        );
-    }
-
     /// A bridge names the browser it dials for. The name only tightens: a LAN bridge passes a WAN
     /// browser's class on, and nothing it names makes a WAN peer LAN.
     #[test]
@@ -1353,36 +1302,6 @@ mod tests {
             np.approve_pending(id, None, None).unwrap(),
             ApproveOutcome::WanNeedsBoundPin
         ));
-    }
-
-    /// 100.64/10 is a mesh VPN's range and a CGNAT ISP's alike, so the route back decides.
-    #[test]
-    fn a_cgnat_peer_is_lan_only_over_a_mesh_vpn() {
-        use super::approval::{classify_with, is_mesh_iface};
-        let peer: IpAddr = "100.96.0.7".parse().unwrap();
-        assert_eq!(classify_with(Some(peer), |_| true), KnockSource::Lan);
-        // The CGNAT neighbour: the same range, answered out of the ordinary uplink.
-        assert_eq!(classify_with(Some(peer), |_| false), KnockSource::Wan);
-        let mapped = "::ffff:100.96.0.7".parse().ok();
-        assert_eq!(classify_with(mapped, |_| false), KnockSource::Wan);
-        // The mesh is asked about 100.64/10 only.
-        for ip in ["203.0.113.5", "100.128.0.1"] {
-            assert_eq!(classify_with(ip.parse().ok(), |_| true), KnockSource::Wan);
-        }
-
-        for name in ["tailscale0", "Tailscale", "utun4", "wt0"] {
-            assert!(is_mesh_iface(name, peer), "{name}");
-        }
-        // An ISP puts its CGNAT address on the uplink, and only NetBird's default name counts.
-        for name in [
-            "eth0", "en0", "ppp0", "Ethernet", "wlan0", "wg0", "wt1", "wt0x",
-        ] {
-            assert!(!is_mesh_iface(name, peer), "{name}");
-        }
-        // The name alone proves nothing: the address has to be 100.64/10 too.
-        for name in ["utun4", "wt0"] {
-            assert!(!is_mesh_iface(name, "10.8.0.2".parse().unwrap()), "{name}");
-        }
     }
 
     /// A knock from the internet carries a name it chose for itself, so the one-click approve

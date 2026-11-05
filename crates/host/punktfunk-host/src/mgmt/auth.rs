@@ -20,6 +20,7 @@ use axum::http::header;
 use axum::http::request::Parts;
 use axum::http::Method;
 use axum::middleware::Next;
+use punktfunk_core::mgmt_routes::path_matches;
 use sha2::{Digest, Sha256};
 use std::marker::PhantomData;
 
@@ -467,69 +468,10 @@ pub(crate) fn plugin_may_access(method: &Method, path: &str) -> bool {
         .any(|(m, pat)| *m == method && path_matches(pat, path))
 }
 
-/// `{}` is exactly one segment. Never a prefix test: `/api/v1/plugins/{}` must not swallow
-/// `/api/v1/plugins/x/ui-credential` the way `starts_with` would.
-fn path_matches(pattern: &str, path: &str) -> bool {
-    let (mut p, mut a) = (pattern.split('/'), path.split('/'));
-    loop {
-        match (p.next(), a.next()) {
-            (None, None) => return true,
-            (Some(pe), Some(ae)) if pe == "{}" || pe == ae => continue,
-            _ => return false,
-        }
-    }
-}
-
-/// Allowlist a paired streaming cert may reach. Deny-by-default: pairing PIN, pending queue,
-/// and every other mutation need the operator bearer. `/health` is always open, separately.
+/// Allowlist a paired device may reach: [`punktfunk_core::mgmt_routes::paired_may_access`], the
+/// table the browser client's page server relays by. `/health` is always open, separately.
 pub(crate) fn cert_may_access(method: &Method, path: &str) -> bool {
-    // Write-only: the device gets an id back and can read nothing, not even its own upload.
-    // Size- and quota-capped in the handler/store.
-    if method == Method::POST && path == "/api/v1/client-logs" {
-        return true;
-    }
-    // Id-only invoke. The handler re-reads `effective(fp, now)` and demands `GRANT_POWER`;
-    // the route being reachable grants nothing by itself. `GET /actions` is on the read list.
-    if method == Method::POST && path_matches("/api/v1/actions/{}", path) {
-        return true;
-    }
-    // The handler scopes it to games this device launched, and refuses an expired device.
-    if method == Method::POST && path == "/api/v1/game/end" {
-        return true;
-    }
-    // Installing is what launching a missing title does anyway; the handler demands
-    // `GRANT_LAUNCH`. Pause and remove demand `GRANT_MANAGE_GAMES`; cancel stays the operator's.
-    if (method == Method::POST || method == Method::DELETE)
-        && path_matches("/api/v1/library/install/{}", path)
-    {
-        return true;
-    }
-    if method == Method::POST && path_matches("/api/v1/library/install/{}/pause", path) {
-        return true;
-    }
-    // A client's picker: the list, a picture, and getting a seat ready. Editing stays the
-    // console's.
-    if method == Method::GET
-        && (path == "/api/v1/profiles/enumerate"
-            || path_matches("/api/v1/profiles/{}/avatar", path))
-    {
-        return true;
-    }
-    if method == Method::POST && path_matches("/api/v1/profiles/{}/wake", path) {
-        return true;
-    }
-    method == Method::GET
-        && (matches!(
-            path,
-            "/api/v1/host"
-                | "/api/v1/compositors"
-                | "/api/v1/status"
-                | "/api/v1/actions"
-                // Rosters are not on this lane: they name every other paired device. Library
-                // GET is; POST/PUT/DELETE stay token-only via this exact-path match.
-                | "/api/v1/library"
-                | "/api/v1/library/page"
-        ) || path.starts_with("/api/v1/library/art/"))
+    punktfunk_core::mgmt_routes::paired_may_access(method.as_str(), path)
 }
 
 /// Compare SHA-256 digests, not the strings — constant-time in the secret without a ct-eq

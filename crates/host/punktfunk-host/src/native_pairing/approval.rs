@@ -9,6 +9,8 @@
 //! persists the pairing; this queue records the admitted knock generation and
 //! clears the entry ([`ApprovalQueue::admit_and_clear`]).
 
+pub use punktfunk_core::provenance::KnockSource;
+use punktfunk_core::provenance::{classify_with, is_mesh_iface};
 use std::net::{IpAddr, Ipv4Addr, UdpSocket};
 #[cfg(test)]
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -50,21 +52,8 @@ struct PendingState {
     admitted: Vec<(String, u32, Instant)>,
 }
 
-/// Where a knock came from. The host cannot tell a stranger on the internet from a friend on
-/// the couch by name — the name is whatever the device sent — so admission rules hang off the
-/// address instead. Ordered by suspicion, so the stricter of two is their `max`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub enum KnockSource {
-    /// Loopback, RFC 1918, link-local, IPv6 unique-local, or a Tailscale or NetBird network.
-    /// Reaching any of these means the peer is already on a network the operator let it onto.
-    Lan,
-    /// Routable from the internet, or an address we could not read. Fails closed: every rule
-    /// that treats a source as untrusted must land here rather than on a guess.
-    Wan,
-}
-
-/// Classify a knock's source. `None` is [`KnockSource::Wan`] — an admission rule reading an
-/// unknown address must refuse, not admit.
+/// Classify a knock's source, asking this host's routing table about a 100.64/10 peer. `None` is
+/// [`KnockSource::Wan`]: an admission rule reading an unknown address must refuse, not admit.
 pub fn classify_source(ip: Option<IpAddr>) -> KnockSource {
     classify_with(ip, routes_over_mesh)
 }
@@ -75,45 +64,6 @@ pub fn classify_source(ip: Option<IpAddr>) -> KnockSource {
 pub fn classify_relayed(peer: Option<IpAddr>, client_addr: Option<IpAddr>) -> KnockSource {
     let own = classify_source(peer);
     client_addr.map_or(own, |ip| own.max(classify_source(Some(ip))))
-}
-
-/// [`classify_source`] with the mesh VPN test injected. `over_mesh` is asked only about a
-/// 100.64/10 peer: that range is carrier-grade NAT space too, so the address alone proves nothing.
-pub(super) fn classify_with(
-    ip: Option<IpAddr>,
-    over_mesh: impl Fn(Ipv4Addr) -> bool,
-) -> KnockSource {
-    let Some(ip) = ip else {
-        return KnockSource::Wan;
-    };
-    let v4 = match ip {
-        IpAddr::V4(v4) => Some(v4),
-        // A v4-mapped v6 source is the v4 address wearing a hat; classify what it really is.
-        IpAddr::V6(v6) => {
-            let s = v6.segments();
-            // Loopback (::1), link-local fe80::/10, unique local fc00::/7.
-            if v6.is_loopback() || (s[0] & 0xffc0) == 0xfe80 || (s[0] & 0xfe00) == 0xfc00 {
-                return KnockSource::Lan;
-            }
-            v6.to_ipv4_mapped()
-        }
-    };
-    match v4 {
-        Some(v4)
-            if v4.is_loopback()
-                || v4.is_private()
-                || v4.is_link_local()
-                || (is_cgnat(v4) && over_mesh(v4)) =>
-        {
-            KnockSource::Lan
-        }
-        _ => KnockSource::Wan,
-    }
-}
-
-/// RFC 6598 shared space, 100.64/10: a mesh VPN's addresses and a CGNAT ISP's subscribers alike.
-fn is_cgnat(v4: Ipv4Addr) -> bool {
-    v4.octets()[0] == 100 && (64..128).contains(&v4.octets()[1])
 }
 
 /// The host routes its replies to `peer` out of a mesh VPN's interface. A handshake needs those
@@ -130,14 +80,6 @@ fn routes_over_mesh(peer: Ipv4Addr) -> bool {
         .unwrap_or_default()
         .iter()
         .any(|i| i.ip() == src.ip() && is_mesh_iface(&i.name, i.ip()))
-}
-
-/// A mesh VPN's interface: Tailscale's `tailscale0` on Linux and `Tailscale` on Windows, NetBird's
-/// `wt0` on both, a `utun` on macOS. No ISP puts a 100.64/10 address on any of those names.
-pub(super) fn is_mesh_iface(name: &str, addr: IpAddr) -> bool {
-    let name = name.to_ascii_lowercase();
-    (name.starts_with("tailscale") || name.starts_with("utun") || name == "wt0")
-        && matches!(addr, IpAddr::V4(v4) if is_cgnat(v4))
 }
 
 /// Pending-approval snapshot for the management API.
