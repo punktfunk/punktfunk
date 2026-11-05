@@ -1,6 +1,6 @@
 ---
 title: Multi-seat contract
-description: How the host runs seats — on Windows the supervisor in the service, its pipe, the seat keeper and the connector reservation; on Linux the seat daemon, its socket and unit, and the owner's row behind the door; and the variables a seat host starts with.
+description: How the host runs seats — on Windows the supervisor in the service, its pipe, the seat keeper and the connector reservation; on Linux the seat daemon, its socket and unit, the owner's row behind the door and a seat on a person's own account; and the variables a seat host starts with.
 ---
 
 The rules between the host and its seat supervisor, which runs one host per seat so several people
@@ -678,3 +678,46 @@ it, so it moves to the row's ports at boot, logged in or not. The owner's own co
   lines to `/var/lib/punktfunk/host.env` before each door start, so an update or a later edit
   reaches the door. On NixOS the door also takes the two port keys from
   `services.punktfunk.host.settings`, and its console follows `services.punktfunk.web.bind`.
+
+### A seat on a person's own account
+
+A seat on the Linux door can run on an account the box already has: a family member's own login.
+The console asks with `seat: true`, `seat_account`, a Linux user name, and `seat_password` on
+`POST /api/v1/profiles`. It runs as the owner's row does, in a `background` session on a bus of
+its own, but it is a contract seat's host, not the owner's.
+
+- **Command.** `adopt_user` carries `seat`, as `create` does, plus the account's `password`, and
+  answers `created`. The supervisor reads the account's uid itself. The password goes once through
+  PAM's `login` stack, the one `punktfunk-seat@.service` runs its unit under: `pam_authenticate`,
+  then `pam_acct_mgmt`, so a locked or expired account is refused. Nothing keeps it, and
+  `credential` is refused for the row. A refusal's code is `credential_wrong`,
+  `credential_must_change`, `account_locked`, `account_missing`, `account_not_ordinary`,
+  `account_is_owner`, `account_taken` or `pam_unavailable`.
+- **Which accounts.** An ordinary user, as the owner's row takes: uid 1000 up, outside
+  60001–65535 and below 2³¹, never a seat's, named by the owner's name rule, so `user@domain` of
+  a directory service passes. Not the box owner, by name or by uid, and not an account another row
+  holds, by name or by uid.
+- **Ledger.** The row has `adopted_uid`, the uid read at adopt, and no `owner`. A made row has
+  neither and its JSON is unchanged. A start, the certificate read and the doctor refuse a row
+  whose name now resolves to another uid. A stop or a delete still runs and reaches only the
+  row's unit.
+- **A guest on the account.** Nothing on the account changes: no `useradd`, `usermod` or
+  `userdel`, no group, no mode or owner of the home, and the daemon writes nothing inside it.
+  The row's files are under `/var/lib/punktfunk-seats` and `/run`: its environment file stays
+  root's, and the host keeps its identity in `seats/<id>/config`, the person's `0700`, not in
+  `~/.config/punktfunk`. A stop ends the row's unit and no other process of the user, their
+  login and SSH included. A delete removes what the row made and gives the account back.
+- **The monitor wins.** While the person has a session on a seat, a start answers
+  `account_at_desk`, and a running unit ends within 2 seconds of their login. Nothing takes the
+  row over: their own `punktfunk-host` units are not started or stopped.
+- **What it does not take.** The owner's `host.env` and settings, the box's library as its own
+  (it plays the box's, from its trust copy), the door, and the owner's user host. The trust copy
+  is readable by the person alone.
+
+| Variable | A person's row |
+|---|---|
+| `PUNKTFUNK_SEAT_OWN_ACCOUNT` | `1`, read by the runner alone: the account is a person's own, so the session is `background` on a private bus, the user's other desktop processes are left alone, and no seat-only setup is written into their home. The owner's row has the same mode from `PUNKTFUNK_SEAT_OWNER`. |
+| `PUNKTFUNK_SEAT_OWNER` | Not set: the host is a contract seat's. |
+| `PUNKTFUNK_CONFIG_DIR` | `seats/<id>/config`, not the home. |
+| `PUNKTFUNK_LIBRARY_DIR`, `PUNKTFUNK_HOST_NAME`, `PUNKTFUNK_GAMESTREAM` | As on any contract seat. |
+

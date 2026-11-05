@@ -881,6 +881,7 @@ mod tests {
             owner: false,
             fingerprint: None,
             adopted_sid: None,
+            adopted_uid: None,
             rdp_granted: false,
         }
     }
@@ -1084,6 +1085,7 @@ mod tests {
         let seat = Seat {
             account: "Bärbel Ott".into(),
             adopted_sid: Some("S-1-5-21-1-2-3-1001".into()),
+            adopted_uid: None,
             rdp_granted: true,
             ..seat(12)
         };

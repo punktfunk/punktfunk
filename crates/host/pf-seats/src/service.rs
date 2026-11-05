@@ -98,6 +98,7 @@ impl<B: PlatformBackend> SeatService<B> {
                 sid,
                 password,
             } => self.adopt(seat, sid, &password),
+            Command::AdoptUser { seat, password } => self.adopt_user(seat, &password),
             Command::Credential { id, password } => self.credential(&id, &password),
             Command::InstallFlatpak { id } => self.flatpak(&id, |b| b.install_flatpak(&id)),
             Command::RemoveFlatpak { id, purge } => {
@@ -329,15 +330,39 @@ impl<B: PlatformBackend> SeatService<B> {
         self.land(seat)
     }
 
-    /// Stores `password` for `id`, an adopted row, once the backend has verified it. A made
-    /// row's password is the backend's own and is refused before the backend sees it.
+    /// A seat on a Linux person's own account. The backend names the uid before the row exists,
+    /// so the row records the daemon's reading and never the caller's, then checks `password`
+    /// and forgets it. A backend that refuses has undone its own steps.
+    fn adopt_user(
+        &self,
+        request: CreateSeat,
+        password: &Secret,
+    ) -> Result<CommandResult, ApiError> {
+        let _op = self.op();
+        let mut current = self.lock().clone();
+        let uid = self
+            .backend
+            .account_uid(request.account.trim(), &current)
+            .map_err(ApiError::from)?;
+        let seat = current
+            .allocate_adopted_user(request, uid)
+            .map_err(ApiError::from)?;
+        self.backend
+            .adopt_account(&seat, password)
+            .map_err(ApiError::from)?;
+        self.land(seat)
+    }
+
+    /// Stores `password` for `id`, a Windows adopted row, once the backend has verified it. A
+    /// made row's password is the backend's own, and a Linux person's is nobody's: both are
+    /// refused before the backend sees them.
     fn credential(&self, id: &SeatId, password: &Secret) -> Result<CommandResult, ApiError> {
         let _op = self.op();
         let seat = self.lock().seat(id).cloned().ok_or_else(|| not_found(id))?;
         if seat.adopted_sid.is_none() {
             return Err(ApiError::new(
                 ErrorCode::InvalidRequest,
-                "only an adopted account's password can be updated",
+                "only an adopted Windows account's password can be updated",
             ));
         }
         self.backend

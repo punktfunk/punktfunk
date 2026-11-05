@@ -38,8 +38,16 @@ pub trait PlatformBackend: Send + Sync + 'static {
         Err(UnsupportedBackend::unavailable())
     }
 
+    /// Linux: the uid of `account`, an existing user a new row may adopt, or why it may not. The
+    /// uid is the backend's own reading, never the caller's. `ledger` holds the rows that exist:
+    /// the box owner's account and any account another row holds are refused.
+    fn account_uid(&self, _account: &str, _ledger: &Ledger) -> Result<u32, BackendError> {
+        Err(UnsupportedBackend::unavailable())
+    }
+
     /// Make `seat`, a new adopted row, ready to run on its person's account with `password`. A
     /// refusal undoes its own steps. `Ok(true)`: adopt put the account in Remote Desktop Users.
+    /// Linux checks the password once and keeps it nowhere.
     fn adopt_account(&self, _seat: &Seat, _password: &Secret) -> Result<bool, BackendError> {
         Err(UnsupportedBackend::unavailable())
     }

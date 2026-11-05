@@ -438,6 +438,31 @@ fn with_mask(acl: &[u8], perm: u16) -> Option<Vec<u8>> {
     Some(out)
 }
 
+/// Where a person's host keeps its identity, beside the row's other files and not in their home:
+/// the person's `0700`, so nothing of the host's settings lands next to theirs.
+pub(super) fn person_config_dir(state: &Path, id: &SeatId) -> PathBuf {
+    seat_dir(state, id).join("config")
+}
+
+/// A person's row directory, `0711` as a seat's is, and inside it their host's [`person_config_dir`],
+/// owned by them. Nothing is made in their home. What is in either stays.
+pub(super) fn ensure_person_dirs(
+    state: &Path,
+    id: &SeatId,
+    passwd: &Passwd,
+) -> Result<(), BackendError> {
+    let io =
+        |what: &str, path: &Path, e| io_err("seat_dirs", &format!("{what} {}", path.display()), e);
+    let dir = seat_dir(state, id);
+    make_dir(&dir, 0o711).map_err(|e| io("create", &dir, e))?;
+    let config = person_config_dir(state, id);
+    std::fs::create_dir_all(&config).map_err(|e| io("create", &config, e))?;
+    std::os::unix::fs::chown(&config, Some(passwd.uid), Some(passwd.gid))
+        .map_err(|e| io("own", &config, e))?;
+    std::fs::set_permissions(&config, std::fs::Permissions::from_mode(0o700))
+        .map_err(|e| io("set the mode of", &config, e))
+}
+
 /// The seat's private directories, owned by its user and in place before its unit starts: a
 /// missing bind source fails the unit with `226/NAMESPACE`. Then `saves/out` and `saves/in`,
 /// where its saves cross to and from the owner's plugins: the seat user's, `0770`, with an ACL
@@ -558,8 +583,20 @@ pub(super) fn pin_dir(state: &Path, id: &SeatId) -> PathBuf {
 /// while the host has none. `home` is a seat user's or the owner's, so it goes through
 /// [`safe_open`].
 pub(super) fn copy_pin(home: &Path, dst: &Path) -> std::io::Result<()> {
+    copy_cert(home, &[".config", "punktfunk"], dst)
+}
+
+/// [`copy_pin`] for a person's row, whose host keeps its identity in the row's own
+/// [`person_config_dir`], not in their home.
+pub(super) fn copy_person_pin(state: &Path, id: &SeatId, dst: &Path) -> std::io::Result<()> {
+    copy_cert(&seat_dir(state, id), &["config"], dst)
+}
+
+/// The certificate in `base`/`below`, as [`copy_pin`] copies it. The directories on the way are
+/// the user's, so each opens without following a link.
+fn copy_cert(base: &Path, below: &[&str], dst: &Path) -> std::io::Result<()> {
     const CERT: &str = "native-cert.pem";
-    let config = safe_open::walk(safe_open::dir(home)?, &[".config", "punktfunk"])?;
+    let config = safe_open::walk(safe_open::dir(base)?, below)?;
     let found = match config {
         Some(at) => safe_open::read_at(at, CERT, 64 * 1024)?,
         None => None,

@@ -104,7 +104,9 @@ pub(super) fn mint_token() -> String {
 ///
 /// The owner's row keeps the owner's own config directory, library, host name and GameStream
 /// setting: it is the owner's host, behind the door. `PUNKTFUNK_SEAT_OWNER` tells the runner and
-/// the host so. Every other seat plays the box's library, from its trust copy.
+/// the host so. Every other seat plays the box's library, from its trust copy. A person's row
+/// is such a seat on an account that is theirs: `PUNKTFUNK_SEAT_OWN_ACCOUNT` tells the runner
+/// alone, and its host keeps its identity in the row's directory, not in their home.
 pub(super) fn render_env(
     seat: &Seat,
     home: &Path,
@@ -122,7 +124,12 @@ pub(super) fn render_env(
     if seat.owner {
         rows.push(("PUNKTFUNK_SEAT_OWNER", "1".to_owned()));
     } else {
-        let config = home.join(".config/punktfunk");
+        let config = if seat.adopted_uid.is_some() {
+            rows.push(("PUNKTFUNK_SEAT_OWN_ACCOUNT", "1".to_owned()));
+            shared::person_config_dir(state, &seat.id)
+        } else {
+            home.join(".config/punktfunk")
+        };
         rows.push((
             "PUNKTFUNK_CONFIG_DIR",
             config.to_string_lossy().into_owned(),
@@ -205,8 +212,9 @@ pub(super) fn render_updates(present: impl Fn(&Path) -> bool) -> Option<String> 
     (!binds.is_empty()).then(|| format!("[Service]\n{binds}"))
 }
 
-/// The owner's drop-in: a `background` session, so the monitor's own login stays the one logind
-/// and polkit treat as the user's display.
+/// The drop-in of a row on a person's own account, the owner's or another's: a `background`
+/// session, so the monitor's own login stays the one logind and polkit treat as the user's
+/// display.
 pub(super) fn render_class() -> &'static str {
     "[Service]\nEnvironment=XDG_SESSION_CLASS=background\n"
 }
@@ -288,8 +296,8 @@ pub(super) fn write_env(
 }
 
 /// Writes the environment file and the drop-ins for `seat`, then reloads systemd when a drop-in
-/// changed. Every seat, the owner's included, gets the update helpers' binds; a seat other than
-/// the owner's gets `shares`.
+/// changed. Every seat gets the update helpers' binds. A row on a person's own account gets the
+/// `background` class; a made seat gets its private directories and `shares`.
 pub(super) fn write_unit_files(
     seat: &Seat,
     home: &Path,
@@ -301,7 +309,7 @@ pub(super) fn write_unit_files(
 ) -> Result<(), BackendError> {
     let io = |what: &str, error: std::io::Error| err("session_files", format!("{what}: {error}"));
     write_env(seat, home, state, token, owner, browser)?;
-    let (name, contents) = if seat.owner {
+    let (name, contents) = if seat.owner || seat.adopted_uid.is_some() {
         ("class.conf", render_class().to_owned())
     } else {
         (
@@ -477,6 +485,7 @@ mod tests {
             owner: false,
             fingerprint: None,
             adopted_sid: None,
+            adopted_uid: None,
             rdp_granted: false,
         }
     }
@@ -518,6 +527,46 @@ mod tests {
         assert!(!text.contains("CONFIG_DIR"));
         assert!(!text.contains("LIBRARY_DIR"));
         assert!(render_class().contains("XDG_SESSION_CLASS=background"));
+    }
+
+    /// A person's row is a contract seat on their own account: the box's library and the row's
+    /// name, a host identity under the row's directory and nothing under their home, and the
+    /// runner's marker without the owner's.
+    #[test]
+    fn a_person_s_env_file_keeps_their_home_clear() {
+        let person = Seat {
+            account: "jdoe".into(),
+            adopted_uid: Some(1500),
+            ..seat("Jane")
+        };
+        let id = "0123456789abcdef0123456789abcdef";
+        let text = render_env(
+            &person,
+            Path::new("/home/jdoe"),
+            Path::new("/var/lib/punktfunk-seats"),
+            "ab12",
+            &Browser::default(),
+        );
+        assert_eq!(
+            text,
+            format!(
+                "PUNKTFUNK_SEAT_SESSION=\"1\"\n\
+                 PUNKTFUNK_SEAT_ID=\"{id}\"\n\
+                 PUNKTFUNK_SEAT_OWN_ACCOUNT=\"1\"\n\
+                 PUNKTFUNK_CONFIG_DIR=\"/var/lib/punktfunk-seats/seats/{id}/config\"\n\
+                 PUNKTFUNK_TRUST_DIR=\"/var/lib/punktfunk-seats/trust/{id}\"\n\
+                 PUNKTFUNK_PAIRING=\"refused\"\n\
+                 PUNKTFUNK_LIBRARY_DIR=\"/var/lib/punktfunk-seats/trust/{id}\"\n\
+                 PUNKTFUNK_NATIVE_PORT=\"9779\"\n\
+                 PUNKTFUNK_MGMT_BIND=\"127.0.0.1:47995\"\n\
+                 PUNKTFUNK_HOST_NAME=\"Jane\"\n\
+                 PUNKTFUNK_GAMESTREAM=\"0\"\n\
+                 PUNKTFUNK_MDNS=\"0\"\n\
+                 PUNKTFUNK_WEBTRANSPORT=\"0\"\n\
+                 PUNKTFUNK_MGMT_TOKEN=ab12\n"
+            )
+        );
+        assert!(!text.contains("/home/jdoe") && !text.contains("SEAT_OWNER"));
     }
 
     /// The whole seat contract, in the order the doc lists it, with each path under its seat.

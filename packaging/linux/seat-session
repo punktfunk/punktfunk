@@ -14,12 +14,14 @@
 # signals only this script. It records the session id for seat-reap and kills its own children on
 # SIGTERM; seat-reap kills whatever is left.
 #
-# The box owner's row (PUNKTFUNK_SEAT_OWNER=1) runs as the owner in a `background` session beside
-# whatever they have on the monitor. It leaves their user manager, their config and their
-# PipeWire alone: the desktop and the host sit on a bus of their own, and the owner's own
-# punktfunk-host and punktfunk-kde-session stand down while this runs (their units have
-# ConditionPathExists= on the runtime directory). The owner's host.env applies; the seat contract
-# wins over it.
+# A row on a person's own account runs as that person in a `background` session beside whatever
+# they have on the monitor. It leaves their user manager, their config and their PipeWire alone:
+# the desktop and the host sit on a bus of their own, and the person's own punktfunk-host and
+# punktfunk-kde-session stand down while this runs (their units have ConditionPathExists= on the
+# runtime directory). Two variables say so. PUNKTFUNK_SEAT_OWNER=1 is the box owner's row, which
+# also takes the owner's host.env and stops the owner's own user units. PUNKTFUNK_SEAT_OWN_ACCOUNT=1
+# is another person's row: a contract seat's host on their account, with no owner's settings and
+# none of their processes stopped. The seat contract wins over any file.
 set -u
 
 HOST="${PUNKTFUNK_HOST_BIN:-/usr/bin/punktfunk-host}"
@@ -38,6 +40,8 @@ fi
 printf '%s\n' "$XDG_SESSION_ID" >"$RUNTIME_DIRECTORY/session"
 
 OWNER="${PUNKTFUNK_SEAT_OWNER:-}"
+# The person's own account: the owner's row, or another person's.
+OWN="${PUNKTFUNK_SEAT_OWN_ACCOUNT:-$OWNER}"
 export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
 export DBUS_SESSION_BUS_ADDRESS="${DBUS_SESSION_BUS_ADDRESS:-unix:path=$XDG_RUNTIME_DIR/bus}"
 
@@ -48,8 +52,8 @@ cleanup() {
     trap - TERM INT
     # shellcheck disable=SC2046
     kill $(jobs -p) 2>/dev/null
-    if [[ -n "$OWNER" ]]; then
-        # The owner's physical plasmashell is the same user's: end only this session's.
+    if [[ -n "$OWN" ]]; then
+        # The user's physical plasmashell is the same user's: end only this session's.
         [[ -n "$SHELL_PID" ]] && pkill -TERM -P "$SHELL_PID" 2>/dev/null
         [[ -n "$BUS_PID" ]] && kill "$BUS_PID" 2>/dev/null
     else
@@ -85,8 +89,8 @@ EOF
     chmod 755 "$bin/steamos-session-select"
     ln -sf steamos-session-select "$bin/steamos-desktop-return"
     export PATH="$bin:$PATH"
-    # The owner's row has a bus of its own, where nothing activates it.
-    [[ -z "$OWNER" ]] && systemctl --user mask --runtime --now steamos-manager.service >/dev/null 2>&1
+    # A person's own account has a bus of its own, where nothing activates it.
+    [[ -z "$OWN" ]] && systemctl --user mask --runtime --now steamos-manager.service >/dev/null 2>&1
     return 0
 }
 
@@ -113,7 +117,7 @@ load_owner_settings() {
     done
 }
 
-# A bus of its own: the owner's shared one holds whatever KWin and portals their login started,
+# A bus of its own: the user's shared one holds whatever KWin and portals their login started,
 # and a second KWin there would take names the first needs. dbus-daemon prints its address
 # and its pid, one per line.
 start_private_bus() {
@@ -154,15 +158,15 @@ alive() { [[ -z "$KWIN_PID" ]] || kill -0 "$KWIN_PID" 2>/dev/null; }
 start_kwin() {
     export XDG_CURRENT_DESKTOP=KDE XDG_MENU_PREFIX=plasma- KDE_FULL_SESSION=true
     export KDE_SESSION_VERSION=6 DESKTOP_SESSION=plasma
-    # The owner's row shares the owner's runtime dir, where a headless KDE session holds
-    # wayland-kde. A taken name makes kwin exit.
+    # The row shares the user's runtime dir, where a headless KDE session holds wayland-kde.
+    # A taken name makes kwin exit.
     export WAYLAND_DISPLAY=wayland-pf-seat KWIN_WAYLAND_NO_PERMISSION_CHECKS=1
     export PUNKTFUNK_COMPOSITOR="${PUNKTFUNK_COMPOSITOR:-kwin}"
     export PUNKTFUNK_VIDEO_SOURCE="${PUNKTFUNK_VIDEO_SOURCE:-virtual}"
     export PUNKTFUNK_INPUT_BACKEND="${PUNKTFUNK_INPUT_BACKEND:-libei}"
     export PUNKTFUNK_KWIN_VIRTUAL_PRIMARY="${PUNKTFUNK_KWIN_VIRTUAL_PRIMARY:-1}"
 
-    [[ -n "$OWNER" ]] && start_private_bus
+    [[ -n "$OWN" ]] && start_private_bus
     # Under the 0700 runtime dir: the DISPLAY detection below reads this file.
     local log="$XDG_RUNTIME_DIR/punktfunk-kwin.log"
     : >"$log"
@@ -201,7 +205,7 @@ start_kwin() {
         echo "seat-session: kwin reported no X display; X11 apps such as Steam won't open" >&2
     fi
 
-    if [[ -n "$OWNER" ]]; then
+    if [[ -n "$OWN" ]]; then
         start_private_portal
         kbuildsycoca6 >/dev/null 2>&1 || true
         start_plasmashell
@@ -264,7 +268,7 @@ install_switch_commands
 if command -v kwin_wayland >/dev/null 2>&1; then
     start_kwin
 else
-    [[ -n "$OWNER" ]] && start_private_bus
+    [[ -n "$OWN" ]] && start_private_bus
     export PUNKTFUNK_COMPOSITOR=gamescope
 fi
 
@@ -279,8 +283,8 @@ while alive; do
     echo "seat-session: host exited with $?; restarting in ${delay}s" >&2
     # This loop outlives the host, so systemd won't reap what a dead host started. Its gamescope
     # would keep Steam's single instance from the next one. Exact names: gamescopereaper takes
-    # Steam down with it. The owner's gamescope may be the one at the desk.
-    [[ -z "$OWNER" ]] && pkill -KILL -u "$(id -u)" -x 'gamescope(-wl)?' 2>/dev/null
+    # Steam down with it. A person's own gamescope may be the one at the desk.
+    [[ -z "$OWN" ]] && pkill -KILL -u "$(id -u)" -x 'gamescope(-wl)?' 2>/dev/null
     ((SECONDS - started > 60)) && delay=1
     # A background sleep, so SIGTERM interrupts the wait instead of queueing behind it.
     sleep "$delay" &

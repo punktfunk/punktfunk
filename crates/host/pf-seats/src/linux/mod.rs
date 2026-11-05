@@ -13,16 +13,25 @@
 //! on a seat ends the unit, and the owner's own user host serves the row from then on. That
 //! host writes the box's library: the daemon copies it for the door and every other seat.
 //!
+//! Another person's row adopts their account the same way, once [`pam`] accepts their password:
+//! the same headless session, never while they sit at the machine, but a contract seat's host.
+//! The daemon changes nothing on the account and ends nothing but the row's unit.
+//!
 //! A seat's pads are the daemon's too: its host asks the pad broker in the `punktfunk-seats`
 //! binary for them ([`LinuxBackend::running_account`] is its gate), and [`fence`] gives udev the
 //! user each one belongs to. The binary's uinput proxy, the seat's `/dev/uinput`, comes and goes
 //! with the unit ([`LinuxBackend::on_unit`]).
 
 mod accounts;
+#[cfg(test)]
+mod fake;
 pub mod fence;
 mod flatpak;
 mod libraries;
 mod logind;
+mod pam;
+#[cfg(test)]
+mod person_tests;
 mod safe_open;
 mod session;
 mod shared;
@@ -35,6 +44,7 @@ use crate::backend::{BackendError, PlatformBackend};
 use crate::ipc::{Diagnostic, DiagnosticLevel, SeatingStatus};
 use crate::model::{Ledger, RuntimeState, RuntimeStatus, Seat, SeatId};
 use crate::persistence::{LedgerStore, StoreError};
+use crate::secret::Secret;
 use crate::service::SeatService;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -81,14 +91,24 @@ fn err(code: &str, message: impl Into<String>) -> BackendError {
     BackendError::new(code, message)
 }
 
-/// Runs `program`, returning its stdout. A failure names the program, its first argument and its
-/// stderr under `code`.
-fn run(code: &str, program: &str, args: &[&str]) -> Result<String, BackendError> {
-    let output = std::process::Command::new(program)
+/// Runs `program` to its end with no stdin. A test installs [`fake`], which records the call and
+/// answers without running anything.
+fn output(program: &str, args: &[&str]) -> std::io::Result<std::process::Output> {
+    #[cfg(test)]
+    if let Some(answer) = fake::answer(program, args) {
+        return Ok(answer);
+    }
+    std::process::Command::new(program)
         .args(args)
         .stdin(std::process::Stdio::null())
         .output()
-        .map_err(|error| err(code, format!("run {program}: {error}")))?;
+}
+
+/// Runs `program`, returning its stdout. A failure names the program, its first argument and its
+/// stderr under `code`.
+fn run(code: &str, program: &str, args: &[&str]) -> Result<String, BackendError> {
+    let output =
+        output(program, args).map_err(|error| err(code, format!("run {program}: {error}")))?;
     if output.status.success() {
         return Ok(String::from_utf8_lossy(&output.stdout).into_owned());
     }
@@ -161,14 +181,48 @@ fn unit_hook(inner: &Inner, account: &str, uid: Option<u32>) {
     }
 }
 
+/// Whose account a row runs on, which decides what the supervisor may do to it. A made seat's
+/// account is the supervisor's and ends with the row. The box owner's and another person's
+/// belong to someone who may be logged in at the machine: the row is a guest there, and its
+/// unit is all that is ever stopped.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Own {
+    Seat,
+    Owner,
+    Person,
+}
+
+impl Own {
+    fn of(seat: &Seat) -> Self {
+        if seat.owner {
+            Self::Owner
+        } else if seat.adopted_uid.is_some() {
+            Self::Person
+        } else {
+            Self::Seat
+        }
+    }
+
+    /// Whether the account is the supervisor's to make, close, delete and clear of every
+    /// process it runs. Only a made seat's is.
+    fn ours(self) -> bool {
+        self == Self::Seat
+    }
+
+    /// Whether the row's unit ends when its user sits down at the machine.
+    fn yields_to_the_desk(self) -> bool {
+        self != Self::Seat
+    }
+}
+
 /// What the keep-level thread and the pad broker need of a running seat.
 #[derive(Clone, Debug)]
 struct Tracked {
     /// Who reads its trust copy.
     reader: shared::Reader,
-    /// The owner's row and account, for the owner's row: its physical login ends the unit, and
-    /// its environment file follows the box's Seat defaults.
-    owner: Option<(Seat, accounts::Passwd)>,
+    /// The row and account, for a row on a person's own account: its physical login ends the
+    /// unit, and its environment file follows the box's Seat defaults.
+    guest: Option<(Seat, accounts::Passwd)>,
     /// The seat's user: what the pad broker admits, and what its pads are stamped with.
     uid: u32,
     account: String,
@@ -176,28 +230,30 @@ struct Tracked {
 
 impl Tracked {
     fn of(seat: &Seat, passwd: &accounts::Passwd) -> Self {
-        let (reader, owner) = if seat.owner {
+        let (reader, guest) = if Own::of(seat).ours() {
+            (shared::Reader::group(passwd.gid), None)
+        } else {
             (
                 shared::Reader::person(passwd.uid, passwd.gid),
                 Some((seat.clone(), passwd.clone())),
             )
-        } else {
-            (shared::Reader::group(passwd.gid), None)
         };
         Self {
             reader,
-            owner,
+            guest,
             uid: passwd.uid,
             account: seat.account.clone(),
         }
     }
 }
 
-/// Stops `account`'s unit if it is up. A seat's user ends with it, so nothing it started under
-/// its own manager survives, and then the hook takes back what runs beside it. The owner's row
-/// keeps both: its account is a person's, whose own login may hold pads. A unit that was never
-/// started is fine.
-fn stop_unit(inner: &Inner, id: &SeatId, account: &str, owner: bool) -> Result<(), BackendError> {
+/// Stops `seat`'s unit if it is up. A made seat's user ends with it, so nothing it started under
+/// its own manager survives, and then the hook takes back what runs beside it. A row on a
+/// person's own account ends nothing else, signals none of their processes and leaves the hook
+/// alone: their own login may hold pads. The owner's row stays tracked, since their own host
+/// reads its trust copy; a person's stops being served. A unit that was never started is fine.
+fn stop_unit(inner: &Inner, seat: &Seat) -> Result<(), BackendError> {
+    let (id, account) = (&seat.id, &seat.account);
     let unit = session::unit(account);
     if session::state(account)?.active != "inactive" {
         run("systemctl_failed", "systemctl", &["stop", &unit])?;
@@ -205,8 +261,8 @@ fn stop_unit(inner: &Inner, id: &SeatId, account: &str, owner: bool) -> Result<(
     // A failed unit keeps its state until reset, and would read as failed after a stop.
     let _ = run("systemctl_failed", "systemctl", &["reset-failed", &unit]);
     inner.acl_dirty.store(true, Ordering::SeqCst);
-    // The owner's row stays tracked: its own host reads the trust copy while the unit is down.
-    if owner {
+    let kind = Own::of(seat);
+    if kind == Own::Owner {
         return Ok(());
     }
     // Untracked first, so the pad broker refuses the user while it ends.
@@ -215,6 +271,9 @@ fn stop_unit(inner: &Inner, id: &SeatId, account: &str, owner: bool) -> Result<(
         .lock()
         .unwrap_or_else(|e| e.into_inner())
         .remove(id);
+    if !kind.ours() {
+        return Ok(());
+    }
     // Only the seat's own user is ended; a stranger of the same name keeps its sessions.
     let ended = accounts::refuse_foreign(account, id).and_then(|()| accounts::quiesce(account));
     unit_hook(inner, account, None);
@@ -324,6 +383,26 @@ impl LinuxBackend {
         Ok(Self { inner })
     }
 
+    /// A backend over `box_dir` and `state`, with no thread keeping it level.
+    #[cfg(test)]
+    fn detached(box_dir: &Path, state: &Path) -> Self {
+        Self {
+            inner: Arc::new(Inner {
+                box_dir: box_dir.into(),
+                state: state.into(),
+                steam_source: None,
+                running: Mutex::new(HashMap::new()),
+                owner: Mutex::new(None),
+                door_gid: OnceLock::new(),
+                acl_dirty: AtomicBool::new(false),
+                stops: AtomicU64::new(0),
+                hook: OnceLock::new(),
+                checks: Mutex::new(None),
+                level: Mutex::new(()),
+            }),
+        }
+    }
+
     /// Sets what runs beside each seat's unit: the binary's uinput proxy. The first call wins.
     pub fn on_unit(self, hook: UnitHook) -> Self {
         let _ = self.inner.hook.set(hook);
@@ -364,7 +443,7 @@ impl LinuxBackend {
                 tracing::warn!(%account, seat = %id, "seat account without a ledger row kept");
                 continue;
             }
-            match self.remove_files(account, &id, false) {
+            match self.remove_files(account, &id, true) {
                 Ok(()) => {
                     tracing::warn!(%account, seat = %id, "seat account without a ledger row removed")
                 }
@@ -429,7 +508,7 @@ impl LinuxBackend {
     }
 
     fn stop_unit(&self, seat: &Seat) -> Result<(), BackendError> {
-        stop_unit(&self.inner, &seat.id, &seat.account, seat.owner)
+        stop_unit(&self.inner, seat)
     }
 
     /// The owner's account and what its host reads, in place: the trust copy and the environment
@@ -445,7 +524,7 @@ impl LinuxBackend {
         if let Err(error) = refresh_box_library(&self.inner) {
             tracing::warn!(account = %seat.account, %error, "box library not copied");
         }
-        if let Some(changed) = rewrite_owner_env(&self.inner, seat, passwd)? {
+        if let Some(changed) = rewrite_env(&self.inner, seat, passwd)? {
             return Ok(changed);
         }
         self.write_owner_files(seat, passwd, &session::mint_token())?;
@@ -548,9 +627,15 @@ impl LinuxBackend {
         Err(failure)
     }
 
-    /// Removes what a seat's row made. The owner's account and home are theirs and stay.
-    fn remove_files(&self, account: &str, id: &SeatId, owner: bool) -> Result<(), BackendError> {
-        if !owner {
+    /// Removes what a row made under the state directory and `/run`. `delete_account`: the
+    /// account is a made seat's and goes with its home; a person's, the owner's included, stays.
+    fn remove_files(
+        &self,
+        account: &str,
+        id: &SeatId,
+        delete_account: bool,
+    ) -> Result<(), BackendError> {
+        if delete_account {
             accounts::delete(account, id)?;
         }
         shared::remove_seat_dirs(&self.inner.state, id)?;
@@ -704,10 +789,29 @@ impl PlatformBackend for LinuxBackend {
         Ok(())
     }
 
+    fn account_uid(&self, account: &str, ledger: &Ledger) -> Result<u32, BackendError> {
+        accounts::adoptable(account, ledger, &self.inner.state).map(|found| found.uid)
+    }
+
+    /// A person's row: the account still resolves to the recorded uid and its password passes
+    /// PAM, then the row's directory is made. The password is checked first and kept nowhere;
+    /// nothing is made in the account, and a refusal leaves nothing behind.
+    fn adopt_account(&self, seat: &Seat, password: &Secret) -> Result<bool, BackendError> {
+        let passwd = accounts::require_person(seat)?;
+        pam::verify(&seat.account, password)?;
+        let made = shared::ensure_person_dirs(&self.inner.state, &seat.id, &passwd);
+        if made.is_err() {
+            let _ = shared::remove_seat_dirs(&self.inner.state, &seat.id);
+        }
+        made.map(|()| false)
+    }
+
     fn start(&self, seat: &Seat) -> Result<RuntimeStatus, BackendError> {
         let asked = self.inner.stops.load(Ordering::SeqCst);
-        if seat.owner {
-            return self.start_owner(seat, asked);
+        match Own::of(seat) {
+            Own::Owner => return self.start_owner(seat, asked),
+            Own::Person => return self.start_person(seat, asked),
+            Own::Seat => {}
         }
         let (box_dir, state) = (&self.inner.box_dir, &self.inner.state);
         let passwd = accounts::require(seat)?;
@@ -769,11 +873,14 @@ impl PlatformBackend for LinuxBackend {
     }
 
     /// The owner's row takes the box's library with it: it was the door's, and the door goes too.
-    /// A row the owner's new row has replaced leaves the library, which is the new one's.
+    /// A row the owner's new row has replaced leaves the library, which is the new one's. A
+    /// person's row releases the account: its unit stops and what the row made goes, and nothing
+    /// of the account does.
     fn remove(&self, seat: &Seat) -> Result<(), BackendError> {
         let _level = self.inner.level.lock().unwrap_or_else(|e| e.into_inner());
+        let kind = Own::of(seat);
         // Before the unit is stopped: ending a stranger's sessions is not removing a seat.
-        if !seat.owner {
+        if kind.ours() {
             accounts::refuse_foreign(&seat.account, &seat.id)?;
         }
         self.stop_unit(seat)?;
@@ -790,7 +897,7 @@ impl PlatformBackend for LinuxBackend {
                     .map_err(|e| err("box_library", format!("remove the box library: {e}")))?;
             }
         }
-        self.remove_files(&seat.account, &seat.id, seat.owner)
+        self.remove_files(&seat.account, &seat.id, kind.ours())
     }
 
     fn status(&self, seat: &Seat) -> Result<RuntimeStatus, BackendError> {
@@ -803,9 +910,11 @@ impl PlatformBackend for LinuxBackend {
 
     /// A unit found up is tracked and gets its proxy; one that is down loses both. A unit between
     /// the two, stopping, keeps them: a restart rebuilds its namespace on the same proxy.
-    /// The owner's row stays tracked from its adoption.
+    /// The owner's row stays tracked from its adoption. A person's row is tracked while its unit
+    /// is, and has no proxy: its pads come from the broker, and the hook is a made seat's.
     fn reconcile(&self, seat: &Seat, status: &RuntimeStatus) {
-        if seat.owner {
+        let kind = Own::of(seat);
+        if kind == Own::Owner {
             return;
         }
         match status.state {
@@ -816,30 +925,46 @@ impl PlatformBackend for LinuxBackend {
                     .lock()
                     .unwrap_or_else(|e| e.into_inner())
                     .contains_key(&seat.id);
-                if !known && let Ok(passwd) = accounts::require(seat) {
+                let found = if kind.ours() {
+                    accounts::require(seat)
+                } else {
+                    accounts::require_person(seat)
+                };
+                if !known && let Ok(passwd) = found {
                     self.track(&seat.id, Tracked::of(seat, &passwd));
-                    unit_hook(&self.inner, &seat.account, Some(passwd.uid));
+                    if kind.ours() {
+                        unit_hook(&self.inner, &seat.account, Some(passwd.uid));
+                    }
                 }
             }
             RuntimeState::Stopping => {}
             _ => {
                 self.untrack(&seat.id);
-                unit_hook(&self.inner, &seat.account, None);
+                if kind.ours() {
+                    unit_hook(&self.inner, &seat.account, None);
+                }
             }
         }
     }
 
-    /// A root-owned copy of the certificate the seat's host serves from `~/.config/punktfunk`,
-    /// for the service to pin. That home is an account's root doesn't own, so the copy is taken
-    /// through directory handles and never waits on what is there ([`shared::copy_pin`]).
+    /// A root-owned copy of the certificate the seat's host serves, for the service to pin: from
+    /// `~/.config/punktfunk`, or for a person's row from the row's own config directory. Either
+    /// is a user's, which root doesn't own, so the copy is taken through directory handles and
+    /// never waits on what is there ([`shared::copy_pin`]).
     fn host_config_dir(&self, seat: &Seat) -> Option<PathBuf> {
-        let passwd = if seat.owner {
-            accounts::require_owner(&seat.account)
-        } else {
-            accounts::require(seat)
+        let state = &self.inner.state;
+        let dir = shared::pin_dir(state, &seat.id);
+        let copied = match Own::of(seat) {
+            Own::Owner => {
+                shared::copy_pin(&accounts::require_owner(&seat.account).ok()?.home, &dir)
+            }
+            Own::Person => {
+                accounts::require_person(seat).ok()?;
+                shared::copy_person_pin(state, &seat.id, &dir)
+            }
+            Own::Seat => shared::copy_pin(&accounts::require(seat).ok()?.home, &dir),
         };
-        let dir = shared::pin_dir(&self.inner.state, &seat.id);
-        if let Err(error) = shared::copy_pin(&passwd.ok()?.home, &dir) {
+        if let Err(error) = copied {
             tracing::debug!(seat = %seat.id, %error, "seat host's certificate not read");
         }
         Some(dir)
@@ -850,23 +975,25 @@ impl PlatformBackend for LinuxBackend {
         out.extend(fence::diagnostics());
         for seat in &ledger.seats {
             let found = accounts::lookup(&seat.account)?;
-            let owned = found.as_ref().is_some_and(|found| {
-                if seat.owner {
-                    accounts::is_ordinary(found)
-                } else {
-                    accounts::owned_by(found, &seat.id)
-                }
+            let kind = Own::of(seat);
+            let owned = found.as_ref().is_some_and(|found| match kind {
+                Own::Owner => accounts::is_ordinary(found),
+                Own::Person => seat.adopted_uid == Some(found.uid),
+                Own::Seat => accounts::owned_by(found, &seat.id),
             });
-            let (good, bad) = if seat.owner {
-                (
+            let (good, bad) = match kind {
+                Own::Owner => (
                     "the owner's account exists and is an ordinary user",
                     "the owner's account is gone or isn't an ordinary user",
-                )
-            } else {
-                (
+                ),
+                Own::Person => (
+                    "the account is the user this profile adopted",
+                    "the account is gone or its name now belongs to another user",
+                ),
+                Own::Seat => (
                     "account marker matches the exact seat ID",
                     "account is absent or its marker does not match",
-                )
+                ),
             };
             out.push(Diagnostic {
                 level: if owned {
@@ -963,6 +1090,54 @@ impl LinuxBackend {
         Ok(RuntimeStatus::running())
     }
 
+    /// A person's row up, on their own account. With them at the machine nothing starts: their
+    /// login is theirs, and the headless session would sit beside it uninvited. Otherwise the
+    /// unit brings up the headless session and a contract seat's host in it. The account is
+    /// checked first, and what is made is the row's own, never in the account.
+    fn start_person(&self, seat: &Seat, asked: u64) -> Result<RuntimeStatus, BackendError> {
+        let passwd = accounts::require_person(seat)?;
+        if owner_at_desk(&seat.account) {
+            return Err(err(
+                "account_at_desk",
+                format!(
+                    "{} is signed in at the machine. Try again once they have signed out.",
+                    seat.account
+                ),
+            ));
+        }
+        let (box_dir, state) = (&self.inner.box_dir, &self.inner.state);
+        shared::ensure_person_dirs(state, &seat.id, &passwd)?;
+        let reader = shared::Reader::person(passwd.uid, passwd.gid);
+        shared::refresh_trust(box_dir, state, &seat.id, reader)?;
+        shared::refresh_seat_library(state, &seat.id, reader)?;
+        // A unit already up keeps its token: the host read it when it started.
+        if !session::state(&seat.account)?.live() {
+            if session::port_taken(seat.mgmt_port) {
+                return Err(err(
+                    "port_in_use",
+                    format!("management port {} is already in use", seat.mgmt_port),
+                ));
+            }
+            let token = session::mint_token();
+            let door = accounts::lookup("punktfunk")?;
+            shared::write_host_token(
+                state,
+                &seat.id,
+                &session::token_line(&token),
+                shared::token_owner(door.as_ref()),
+            )?;
+            let browser = session::browser(box_dir);
+            session::write_unit_files(seat, &passwd.home, state, &token, None, None, &browser)?;
+            self.stopped_since(asked)?;
+            let unit = session::unit(&seat.account);
+            let _ = run("systemctl_failed", "systemctl", &["reset-failed", &unit]);
+            run("systemctl_failed", "systemctl", &["start", &unit])?;
+        }
+        self.track(&seat.id, Tracked::of(seat, &passwd));
+        self.wait_ready(seat, asked)?;
+        Ok(RuntimeStatus::running())
+    }
+
     fn wait_port(&self, seat: &Seat, asked: u64) -> Result<(), BackendError> {
         let deadline = Instant::now() + START_TIMEOUT;
         while !self.serving(seat) {
@@ -998,12 +1173,12 @@ impl LinuxBackend {
     }
 }
 
-/// While a seat runs: refreshes its trust copy when the box's files change, the owner's
-/// environment file, and, for a seat other than the owner's, the box's library, which follows
-/// the owner's own first. Ends the owner's headless session when the owner sits down at the
-/// machine, and repairs the games folder's ACL mask after a seat stops and every [`ACL_EVERY`].
-/// The owner's row stays listed while its host is the owner's own, which reads the same copy.
-/// Ends when the backend is dropped.
+/// While a seat runs: refreshes its trust copy when the box's files change, the environment file
+/// of a row on a person's own account, and, for a seat other than the owner's, the box's library,
+/// which follows the owner's own first. Ends a person's headless session when they sit down at
+/// the machine, and repairs the games folder's ACL mask after a made seat stops and every
+/// [`ACL_EVERY`]. The owner's row stays listed while its host is the owner's own, which reads the
+/// same copy. Ends when the backend is dropped.
 fn keep_level(inner: Weak<Inner>) {
     let mut acl_at = Instant::now();
     let mut failing: HashSet<SeatId> = HashSet::new();
@@ -1036,9 +1211,13 @@ fn keep_level(inner: Weak<Inner>) {
             }
             drop(tracked_now);
             let refreshed = shared::refresh_trust(&inner.box_dir, &inner.state, id, tracked.reader)
-                .and_then(|_| match &tracked.owner {
-                    Some((seat, passwd)) => rewrite_owner_env(&inner, seat, passwd).map(|_| false),
-                    None => shared::refresh_seat_library(&inner.state, id, tracked.reader),
+                .and_then(|_| match &tracked.guest {
+                    Some((seat, passwd)) => rewrite_env(&inner, seat, passwd).map(|_| ()),
+                    None => Ok(()),
+                })
+                .and_then(|()| match &tracked.guest {
+                    Some((seat, _)) if seat.owner => Ok(false),
+                    _ => shared::refresh_seat_library(&inner.state, id, tracked.reader),
                 });
             drop(level);
             match refreshed {
@@ -1051,11 +1230,11 @@ fn keep_level(inner: Weak<Inner>) {
                 }
                 Err(_) => {}
             }
-            if tracked.owner.is_some() {
-                yield_to_the_desk(&inner, id, &tracked.account);
+            if let Some((seat, _)) = &tracked.guest {
+                yield_to_the_desk(&inner, seat);
             }
         }
-        let seat_up = seats.iter().any(|(_, tracked)| tracked.owner.is_none());
+        let seat_up = seats.iter().any(|(_, tracked)| tracked.guest.is_none());
         let due = seat_up && acl_at.elapsed() >= ACL_EVERY;
         if inner.acl_dirty.swap(false, Ordering::SeqCst) || due {
             acl_at = Instant::now();
@@ -1066,10 +1245,11 @@ fn keep_level(inner: Weak<Inner>) {
     }
 }
 
-/// Writes the owner's environment file again with the token it holds, as the box's Seat defaults
-/// stand now: Browser streaming reaches the owner's host at its next start. `None` when the file
-/// holds no token, `Some(true)` when it changed.
-fn rewrite_owner_env(
+/// Writes the environment file of a row on a person's own account again with the token it holds,
+/// as the box's Seat defaults stand now: Browser streaming reaches its host at the next start.
+/// The owner's is handed to the owner, whose own host reads it; another person's stays root's.
+/// `None` when the file holds no token, `Some(true)` when it changed.
+fn rewrite_env(
     inner: &Inner,
     seat: &Seat,
     passwd: &accounts::Passwd,
@@ -1078,26 +1258,29 @@ fn rewrite_owner_env(
         return Ok(None);
     };
     let browser = session::browser(&inner.box_dir);
-    let owner = Some((passwd.uid, passwd.gid));
-    let changed = session::write_env(seat, &passwd.home, &inner.state, &token, owner, &browser)?;
+    let handed = seat.owner.then_some((passwd.uid, passwd.gid));
+    let changed = session::write_env(seat, &passwd.home, &inner.state, &token, handed, &browser)?;
     if changed {
         tracing::info!(account = %seat.account, browser = browser.on,
-            "owner's environment file rewritten for its host's next start");
+            "environment file rewritten for its host's next start");
     }
     Ok(Some(changed))
 }
 
-/// The physical login wins: when the owner has a session at the machine and the row's headless
-/// unit is up, the unit ends and the owner's own host takes the row. The owner's session is never
-/// touched, so what they have on the monitor stays as it is.
-fn yield_to_the_desk(inner: &Inner, id: &SeatId, account: &str) {
+/// The physical login wins: when the row's user has a session at the machine and the row's
+/// headless unit is up, the unit ends. The owner's own host then takes the row; another person's
+/// row stays down. Their session is never touched, so what they have on the monitor stays as it
+/// is.
+fn yield_to_the_desk(inner: &Inner, seat: &Seat) {
+    let account = &seat.account;
     let live = session::state(account).is_ok_and(|s| s.live());
-    if !live || !owner_at_desk(account) {
+    if !Own::of(seat).yields_to_the_desk() || !live || !owner_at_desk(account) {
         return;
     }
-    tracing::info!(%account, "owner at the machine: ending the headless session");
-    match stop_unit(inner, id, account, true) {
-        Ok(()) => user_host(account, "start"),
+    tracing::info!(%account, "user at the machine: ending the headless session");
+    match stop_unit(inner, seat) {
+        Ok(()) if seat.owner => user_host(account, "start"),
+        Ok(()) => {}
         Err(error) => tracing::warn!(%account, %error, "headless session not ended"),
     }
 }
@@ -1156,23 +1339,8 @@ mod tests {
         assert_eq!(ask(&mut slot, start + CHECKS_FRESH * 3 / 2)[0].message, "2");
     }
 
-    /// A backend over `box_dir` and `state`, with no thread keeping it level.
     fn backend(box_dir: &Path, state: &Path) -> LinuxBackend {
-        LinuxBackend {
-            inner: Arc::new(Inner {
-                box_dir: box_dir.into(),
-                state: state.into(),
-                steam_source: None,
-                running: Mutex::new(HashMap::new()),
-                owner: Mutex::new(None),
-                door_gid: OnceLock::new(),
-                acl_dirty: AtomicBool::new(false),
-                stops: AtomicU64::new(0),
-                hook: OnceLock::new(),
-                checks: Mutex::new(None),
-                level: Mutex::new(()),
-            }),
-        }
+        LinuxBackend::detached(box_dir, state)
     }
 
     /// An owner row `door-helper` no longer records, as a switch-off that missed the row leaves
@@ -1193,6 +1361,7 @@ mod tests {
             owner: true,
             fingerprint: None,
             adopted_sid: None,
+            adopted_uid: None,
             rdp_granted: false,
         };
         let passwd = accounts::Passwd {

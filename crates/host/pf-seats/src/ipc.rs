@@ -5,8 +5,8 @@
 //! errors have stable codes and a message. The pipe's DACL admits SYSTEM and Administrators
 //! only, and the socket checks its peer's credentials, so the request carries no credential of
 //! its own; an adopt or credential frame carries the account's password, which the supervisor
-//! seals and forgets. [`answer`] serves one request on any reader and writer, which keeps
-//! dispatch testable without a pipe.
+//! seals (Windows) or checks once (Linux) and forgets. [`answer`] serves one request on any
+//! reader and writer, which keeps dispatch testable without a pipe.
 
 use crate::backend::PlatformBackend;
 use crate::model::{CreateSeat, Seat, SeatId};
@@ -62,6 +62,13 @@ pub enum Command {
     Adopt {
         seat: CreateSeat,
         sid: String,
+        password: Secret,
+    },
+    /// Linux: a seat on `seat.account`, a person's own account that already exists, once PAM
+    /// accepts `password`. The supervisor resolves the uid itself and keeps no password.
+    /// `Delete` releases the row and never touches the account.
+    AdoptUser {
+        seat: CreateSeat,
         password: Secret,
     },
     /// Windows: an adopted seat's new password, verified and sealed in place of the old one.
@@ -434,6 +441,17 @@ mod tests {
                     password: password(),
                 },
                 r#"{"type":"adopt","seat":{"name":"Ben","account":"Ben Ott","autostart":false},"sid":"S-1-5-21-1-2-3-1001","password":"hunter2 Bärbel"}"#,
+            ),
+            (
+                Command::AdoptUser {
+                    seat: CreateSeat {
+                        name: "Ben".into(),
+                        account: "jdoe@corp.example.com".into(),
+                        autostart: false,
+                    },
+                    password: password(),
+                },
+                r#"{"type":"adopt_user","seat":{"name":"Ben","account":"jdoe@corp.example.com","autostart":false},"password":"hunter2 Bärbel"}"#,
             ),
             (
                 Command::Credential {

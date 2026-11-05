@@ -3680,6 +3680,8 @@ version = "0.46.0"
 dependencies = [
  "aws-lc-rs",
  "hex",
+ "libc",
+ "libloading 0.9.0",
  "pf-driver-proto",
  "pf-host-config",
  "pf-paths",

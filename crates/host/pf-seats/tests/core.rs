@@ -117,7 +117,25 @@ impl PlatformBackend for FakeBackend {
         Ok(())
     }
 
-    fn adopt_account(&self, seat: &Seat, _password: &Secret) -> Result<bool, BackendError> {
+    fn account_uid(&self, account: &str, ledger: &Ledger) -> Result<u32, BackendError> {
+        self.state
+            .calls
+            .lock()
+            .unwrap()
+            .push(format!("account_uid:{account}"));
+        let refuse = |code, why| Err(BackendError::new(code, why));
+        match account {
+            "ghost" => refuse("account_missing", "no such account"),
+            "enrico" => refuse("account_is_owner", "the owner has a profile"),
+            _ if ledger.seats.iter().any(|seat| seat.account == account) => {
+                refuse("account_taken", "another profile uses it")
+            }
+            "jdoe" => Ok(1500),
+            _ => Ok(1600),
+        }
+    }
+
+    fn adopt_account(&self, seat: &Seat, password: &Secret) -> Result<bool, BackendError> {
         self.record("adopt_account", seat);
         if seat.account == "Administrator" {
             return Err(BackendError::new(
@@ -125,7 +143,13 @@ impl PlatformBackend for FakeBackend {
                 "account is an administrator",
             ));
         }
-        Ok(true)
+        if password.expose() == "wrong" {
+            return Err(BackendError::new(
+                "credential_wrong",
+                "That isn't jdoe's password.",
+            ));
+        }
+        Ok(seat.adopted_uid.is_none())
     }
 
     fn reseal(&self, seat: &Seat, _password: &Secret) -> Result<(), BackendError> {
@@ -518,6 +542,73 @@ fn an_adopted_account_is_resealed_and_released_through_the_backend() {
     assert_eq!(service.ledger().seats, [made]);
     let gone = service.dispatch(credential(&adopted.id)).unwrap_err();
     assert_eq!(gone.code, ErrorCode::NotFound);
+}
+
+fn adopt_user(account: &str, password: &str) -> Command {
+    Command::AdoptUser {
+        seat: CreateSeat {
+            name: account.into(),
+            account: account.into(),
+            autostart: false,
+        },
+        password: Secret::new(password.into()),
+    }
+}
+
+/// A Linux person's row records the uid the backend named and no SID, and the backend checks the
+/// password after naming the uid. A refusal leaves no row. Nobody's password is updated, and
+/// delete releases the row through `remove` once.
+#[test]
+fn a_person_s_account_is_adopted_by_the_uid_the_backend_names() {
+    let temp = tempfile::tempdir().unwrap();
+    let backend = FakeBackend::default();
+    let service = SeatService::open(temp.path(), backend.clone()).unwrap();
+
+    for (account, password, code) in [
+        ("ghost", "pw", ErrorCode::Backend),
+        ("enrico", "pw", ErrorCode::Backend),
+        ("jdoe", "wrong", ErrorCode::Backend),
+        ("Jdoe", "pw", ErrorCode::InvalidRequest),
+    ] {
+        let refused = service.dispatch(adopt_user(account, password)).unwrap_err();
+        assert_eq!(refused.code, code, "{account}");
+        assert!(service.ledger().seats.is_empty(), "{account} left a row");
+    }
+    let wrong = service.dispatch(adopt_user("jdoe", "wrong")).unwrap_err();
+    assert_eq!(
+        wrong.message,
+        "credential_wrong: That isn't jdoe's password."
+    );
+
+    let CommandResult::Created { seat } = service.dispatch(adopt_user("jdoe", "pw")).unwrap()
+    else {
+        panic!("a person's row is created")
+    };
+    assert_eq!(seat.adopted_uid, Some(1500));
+    assert!(seat.adopted_sid.is_none() && !seat.rdp_granted && !seat.owner);
+    assert_eq!(service.ledger().seats, std::slice::from_ref(&seat));
+
+    let twice = service.dispatch(adopt_user("jdoe", "pw")).unwrap_err();
+    assert_eq!(twice.code, ErrorCode::Backend, "the account is taken");
+    backend.clear_calls();
+    let credential = Command::Credential {
+        id: seat.id.clone(),
+        password: Secret::new("new".into()),
+    };
+    let error = service.dispatch(credential).unwrap_err();
+    assert_eq!(error.code, ErrorCode::InvalidRequest);
+    assert!(
+        backend.calls().is_empty(),
+        "a Linux row has no password to seal"
+    );
+
+    service
+        .dispatch(Command::Delete {
+            id: seat.id.clone(),
+        })
+        .unwrap();
+    assert_eq!(backend.calls(), [format!("remove:{}", seat.id)]);
+    assert!(service.ledger().seats.is_empty());
 }
 
 #[test]
