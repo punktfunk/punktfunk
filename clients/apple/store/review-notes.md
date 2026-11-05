@@ -76,7 +76,7 @@ No account, no sign-in, no in-app purchase. The app collects no personal data: n
 tracking, advertising or crash-reporting SDKs, and no connection to any server of ours. Device
 identity is a keychain keypair used only to authenticate to the user's own host.
 
-Privacy policy: https://punktfunk.unom.io/legal/privacy
+Privacy policy: https://unom.io/en/legal/privacy#punktfunk-apps
 ```
 
 ---
