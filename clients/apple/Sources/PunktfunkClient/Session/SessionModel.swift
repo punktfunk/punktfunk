@@ -372,28 +372,20 @@ final class SessionModel: ObservableObject {
     /// controller-only session. Acquired in `beginStreaming`, released in `disconnect`.
     private let displaySleepGuard = DisplaySleepGuard()
 
-    /// `allowTofu` gates the trust-on-first-use prompt for an unpinned host: it is only true
-    /// when the host EXPLICITLY advertised `pair=optional` (rule 3a). For any other unpinned host
-    /// — `pair=required`, a manually-typed host, or a discovered host with no/unknown `pair`
-    /// field — TOFU is forbidden (rule 3b): the connect refuses rather than offering trust, and
-    /// the user is routed to PIN pairing by the caller. (A pinned host connects regardless: its
-    /// stored fingerprint is the trust decision.)
+    /// Dial `host` with `effective`, the session's settings already resolved from the globals and
+    /// its preset (§4.4). The connection carries them, so kit-side readers never re-read globals.
     ///
-    /// `requestAccess` is the no-PIN delegated-approval path: open an identified connect the host
-    /// PARKS until the operator clicks Approve in its console, then admits the SAME connection (no
-    /// reconnect). The handshake budget is widened to exceed the host's park window, and a
-    /// successful connect streams directly (the approval IS the trust decision) — the caller pins
-    /// the observed fingerprint as paired. `host.pinnedSHA256`, when set, pins the advertised cert
-    /// for the wait; nil = trust-on-first-use.
-    /// `onUnreachable`, when set, replaces the "could not connect" alert for a plain connect
-    /// failure: the caller takes over recovery (the Wake-on-LAN wait for a host that stopped
-    /// advertising). It never fires for the delegated-approval path, whose failure text carries
-    /// its own instructions.
-    /// `effective` is the whole stream mode + input/audio configuration for this session, already
-    /// resolved from the globals and the session's preset by the caller — the ONE place that
-    /// resolution happens (§4.4). The connection carries it, so the kit-side readers (the
-    /// presenter, the input paths, the match-window follower) see the values this connect asked
-    /// the host for, instead of re-reading the globals mid-session.
+    /// `allowTofu` is true only for an unpinned host that advertised `pair=optional` (rule 3a);
+    /// any other unpinned host is refused and routed to pairing (rule 3b). A pinned host's stored
+    /// fingerprint is the trust decision.
+    ///
+    /// `requestAccess` opens an identified connect the host parks until its operator approves,
+    /// then admits on the same connection. The budget outlasts the park window, and success is
+    /// the trust decision the caller pins. `host.pinnedSHA256`, when set, pins the advertised
+    /// certificate for the wait.
+    ///
+    /// `onUnreachable` replaces the "couldn't reach" alert for a plain failure: the caller takes
+    /// over (the Wake-on-LAN wait). It never fires for `requestAccess`.
     func connect(to host: StoredHost, effective: EffectiveSettings,
                  gamepad: PunktfunkConnection.GamepadType = .auto,
                  launchID: String? = nil,
@@ -413,6 +405,11 @@ final class SessionModel: ObservableObject {
                  /// The host refused `profileID` as unknown. Return true to re-dial: the error
                  /// is then not shown.
                  onProfileUnknown: (@MainActor () -> Bool)? = nil,
+                 /// Opens `profileID`'s locked account; this dial alone sends it, never a redial.
+                 unlock: ProfileUnlock? = nil,
+                 /// The host closed with `ProfileLocked` and this sentence. Return true when the
+                 /// caller prompts: the error is then not shown.
+                 onProfileLocked: (@MainActor (String?) -> Bool)? = nil,
                  onUnreachable: (@MainActor () -> Void)? = nil) {
         guard phase == .idle else { return }
         guard !Self.activeHosts.contains(where: { $0.key != ObjectIdentifier(self) && $0.value == host.id })
@@ -483,6 +480,7 @@ final class SessionModel: ObservableObject {
                 return NativeDisplay.screen.potentialEDRHeadroom > 1.0
             #endif
         }()
+        let unlocking = unlock != nil
         Task.detached(priority: .userInitiated) {
             // PunktfunkConnection.init blocks on the QUIC handshake — keep it off the main
             // actor. The persistent identity is presented on every connect so a paired
@@ -500,7 +498,8 @@ final class SessionModel: ObservableObject {
                 + "bitrate=\(offer.bitrateKbps)kbps "
                 + "hdr=\(offer.hdr) 10bit=\(offer.tenBit) 444=\(offer.want444) "
                 + "audio=\(offer.audioChannels)ch/\(offer.audioRateHz)Hz/\(offer.audioBits)bit "
-                + "pinned=\(pin != nil) tofu=\(allowTofu) launch=\(launchID ?? "-")"
+                + "pinned=\(pin != nil) tofu=\(allowTofu) launch=\(launchID ?? "-") "
+                + "unlock=\(unlock.map { "\($0.kind)" } ?? "-")"
             sessionLog.info("\(connectLine, privacy: .public)")
             let result = Result { try PunktfunkConnection(
                 host: host.address, port: host.port,
@@ -518,9 +517,12 @@ final class SessionModel: ObservableObject {
                 timeoutMs: requestAccess ? 185_000 : 10_000,
                 settings: effective,
                 screens: screenAsk, showsScreens: showsScreens,
+                unlock: unlock,
                 onPending: { [weak self] in
                     Task { @MainActor in
-                        guard let self, self.connectSeq == attempt, self.phase == .connecting
+                        // An unlock's wait is the host checking it and starting the desktop.
+                        guard let self, self.connectSeq == attempt, self.phase == .connecting,
+                              !unlocking
                         else { return }
                         self.onAwaitingApproval?(host)
                     }
@@ -558,6 +560,10 @@ final class SessionModel: ObservableObject {
                     // true: the caller re-dials and says what it ends in.
                     if case PunktfunkClientError.rejected(.profileUnknown, _) = error,
                        onProfileUnknown?() == true {
+                        return
+                    }
+                    if case PunktfunkClientError.rejected(.profileLocked, let said) = error,
+                       onProfileLocked?(said) == true {
                         return
                     }
                     let wake = PunktfunkConnection.wakeRedialDelay(
