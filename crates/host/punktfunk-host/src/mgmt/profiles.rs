@@ -70,7 +70,7 @@ pub(crate) struct SeatPublic {
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     #[schema(required = false)]
     take_turns: bool,
-    /// The Windows account of a seat on an existing one, for the console's card and its Remove
+    /// The account of a seat on an existing one, for the console's card and its Remove
     /// sentence. Absent for an account punktfunk made, and to a paired device.
     #[serde(skip_serializing_if = "Option::is_none")]
     #[schema(required = false)]
@@ -262,7 +262,7 @@ fn seat_line(st: &MgmtState, p: &Profile, seats: &Snapshot, operator: bool) -> S
     if let Some(id) = seats.row_of(&p.os_account) {
         let account = seats
             .seat(id)
-            .filter(|(row, _)| operator && row.adopted_sid.is_some())
+            .filter(|(row, _)| operator && row.adopted())
             .map(|(row, _)| row.account.clone());
         return SeatPublic {
             account,
@@ -378,7 +378,12 @@ fn seat_error(e: SeatError) -> Refusal {
 fn backend_status(message: &str) -> StatusCode {
     match message.split_once(": ").map(|(code, _)| code) {
         Some(
-            "credential_wrong" | "credential_must_change" | "credential_invalid" | "account_locked",
+            "credential_wrong"
+            | "credential_must_change"
+            | "credential_invalid"
+            | "account_locked"
+            | "account_missing"
+            | "account_invalid",
         ) => StatusCode::BAD_REQUEST,
         // `account_at_console` is the older name of `account_signed_in`.
         Some(
@@ -386,7 +391,10 @@ fn backend_status(message: &str) -> StatusCode {
             | "account_signed_in"
             | "account_at_console"
             | "account_policy"
-            | "account_not_owned",
+            | "account_not_owned"
+            | "account_not_ordinary"
+            | "account_is_owner"
+            | "account_taken",
         ) => StatusCode::CONFLICT,
         _ => StatusCode::SERVICE_UNAVAILABLE,
     }
@@ -442,8 +450,9 @@ fn new_seat(name: &str) -> Result<String, Refusal> {
     })))
 }
 
-/// A seat for a new profile on `account`, an existing local Windows account no other profile
-/// holds (`bound`: the take-turns ones), which it signs in to with `password`.
+/// A seat for a new profile on `account`, an existing account no other profile holds. On
+/// Windows a local account (`bound`: the take-turns ones) which it signs in to with `password`;
+/// on Linux a person's login, whose `password` the supervisor checks once and forgets.
 fn adopt_seat(
     name: &str,
     account: &str,
@@ -452,6 +461,9 @@ fn adopt_seat(
 ) -> Result<String, Refusal> {
     if !crate::seats::enabled() {
         return Err((StatusCode::CONFLICT, SEATS_OFF.into()));
+    }
+    if !cfg!(windows) {
+        return adopt_user(name, account, password);
     }
     let ledger = crate::seats::list().map_err(seat_error)?;
     let account = bindable_account(account, &ledger, bound)?;
@@ -462,6 +474,27 @@ fn adopt_seat(
             autostart: false,
         },
         sid: account.sid,
+        password,
+    }))
+}
+
+/// A seat for a new profile on the Linux login `account`. The supervisor reads its uid and
+/// refuses the owner, a system account and one a row holds; the host only keeps a name the
+/// supervisor can pass to the system.
+fn adopt_user(name: &str, account: &str, password: Secret) -> Result<String, Refusal> {
+    let account = account.trim();
+    if !pf_seats::model::valid_owner_account(account) {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "Enter the account's Linux user name, in lowercase.".into(),
+        ));
+    }
+    created(crate::seats::call(Command::AdoptUser {
+        seat: pf_seats::CreateSeat {
+            name: name.trim().to_string(),
+            account: account.to_string(),
+            autostart: false,
+        },
         password,
     }))
 }
@@ -869,10 +902,11 @@ pub(crate) async fn list_profiles(
 
 /// Add a profile
 ///
-/// A seat profile (the default) gets a desktop of its own, whose account is made here, or on
-/// Windows Server signs in to `seat_account`, an existing local account, with `seat_password`.
-/// One with `seat: false` plays the box's own session under its own name. A seat needs seats on
-/// (Windows) or the door (Linux).
+/// A seat profile (the default) gets a desktop of its own, whose account is made here, or runs
+/// on `seat_account`, an existing account, once `seat_password` is its password: a local account
+/// on Windows Server, a person's own login on a Linux door. A Linux row never starts while that
+/// person sits at the machine, and the host keeps no password. One with `seat: false` plays the
+/// box's own session under its own name. A seat needs seats on (Windows) or the door (Linux).
 #[utoipa::path(
     post,
     path = "/profiles",
@@ -881,9 +915,9 @@ pub(crate) async fn list_profiles(
     request_body = ProfileCreate,
     responses(
         (status = CREATED, description = "The new profile", body = ProfileAdmin),
-        (status = BAD_REQUEST, description = "No name, an accent that is not #RRGGBB, an unknown Windows account, or a password missing or refused", body = ApiError),
+        (status = BAD_REQUEST, description = "No name, an accent that is not #RRGGBB, an unknown account, or a password missing or refused", body = ApiError),
         (status = UNAUTHORIZED, description = "Missing or invalid bearer token", body = ApiError),
-        (status = CONFLICT, description = "Another profile has that name or Windows account, seats are off (Windows), the door is off (Linux), or a Windows account a seat can't use", body = ApiError),
+        (status = CONFLICT, description = "Another profile has that name or account, seats are off (Windows), the door is off (Linux), or an account a seat can't use (an administrator, a system account, the box owner)", body = ApiError),
         (status = UNPROCESSABLE_ENTITY, description = "The box already has eight profiles, or four seats", body = ApiError),
         (status = SERVICE_UNAVAILABLE, description = "The seat supervisor didn't answer", body = ApiError),
     )
@@ -958,10 +992,10 @@ fn adopt_refusal(input: &ProfileCreate) -> Option<Refusal> {
             StatusCode::BAD_REQUEST,
             "An existing account needs a desktop of its own.",
         )
-    } else if !cfg!(windows) {
+    } else if !cfg!(any(windows, target_os = "linux")) {
         (
             StatusCode::CONFLICT,
-            "A seat on an existing account is only on Windows Server.",
+            "A seat on an existing account is only on Windows Server and Linux.",
         )
     } else if input.seat_password.is_none() {
         (StatusCode::BAD_REQUEST, "Enter the account's password.")
@@ -1127,11 +1161,11 @@ pub(crate) async fn delete_profile(
             let adopted = seats_now()
                 .await
                 .seat(&seat)
-                .is_some_and(|(row, _)| row.adopted_sid.is_some());
+                .is_some_and(|(row, _)| row.adopted());
             return api_error(
                 StatusCode::CONFLICT,
                 if adopted {
-                    "Removing this profile releases its Windows account; the account and its files stay. Confirm with erase."
+                    "Removing this profile releases its account; the account and its files stay. Confirm with erase."
                 } else if cfg!(windows) {
                     "Removing this profile also removes its Windows account. Confirm with erase."
                 } else {
@@ -1889,6 +1923,41 @@ mod tests {
         }
     }
 
+    /// A seat on an existing account needs a desktop of its own and a password, and Linux takes
+    /// only a name it can hand to the system: the supervisor is not asked about any other.
+    #[test]
+    fn an_existing_account_needs_a_seat_a_password_and_a_name_linux_can_have() {
+        let input = |body: serde_json::Value| {
+            let mut base = serde_json::json!({ "display_name": "Kid" });
+            base.as_object_mut()
+                .unwrap()
+                .extend(body.as_object().unwrap().clone());
+            serde_json::from_value::<ProfileCreate>(base).unwrap()
+        };
+        assert!(adopt_refusal(&input(serde_json::json!({}))).is_none());
+        let no_seat = input(serde_json::json!({ "seat": false, "seat_account": "jdoe" }));
+        assert_eq!(adopt_refusal(&no_seat).unwrap().0, StatusCode::BAD_REQUEST);
+        let no_password = input(serde_json::json!({ "seat_account": "jdoe" }));
+        let refusal = adopt_refusal(&no_password).unwrap();
+        if cfg!(any(windows, target_os = "linux")) {
+            assert_eq!(
+                refusal,
+                (
+                    StatusCode::BAD_REQUEST,
+                    "Enter the account's password.".to_string()
+                )
+            );
+            let ready = input(serde_json::json!({ "seat_account": "jdoe", "seat_password": "pw" }));
+            assert!(adopt_refusal(&ready).is_none());
+        } else {
+            assert_eq!(refusal.0, StatusCode::CONFLICT);
+        }
+        for bad in ["", "Jdoe", "a b", "../root", "-r", "j\ndoe", "corp\\jdoe"] {
+            let refusal = adopt_user("Kid", bad, Secret::new("pw".into())).unwrap_err();
+            assert_eq!(refusal.0, StatusCode::BAD_REQUEST, "{bad:?}");
+        }
+    }
+
     #[test]
     fn the_seat_proxy_keeps_the_box_s_own_routes_to_itself() {
         assert!(!proxy_refuses("library"));
@@ -2049,6 +2118,14 @@ mod tests {
         );
         for (message, status) in [
             ("account_locked: Wait ten minutes.", StatusCode::BAD_REQUEST),
+            ("account_missing: No such account.", StatusCode::BAD_REQUEST),
+            ("account_is_owner: Use the owner.", StatusCode::CONFLICT),
+            ("account_taken: Another profile.", StatusCode::CONFLICT),
+            ("account_not_ordinary: A system user.", StatusCode::CONFLICT),
+            (
+                "pam_unavailable: No login service.",
+                StatusCode::SERVICE_UNAVAILABLE,
+            ),
             ("account_signed_in: Sign Ben out.", StatusCode::CONFLICT),
             ("account_at_console: Sign Ben out.", StatusCode::CONFLICT),
             (

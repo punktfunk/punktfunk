@@ -6080,7 +6080,7 @@
           "profiles"
         ],
         "summary": "Add a profile",
-        "description": "A seat profile (the default) gets a desktop of its own, whose account is made here, or on\nWindows Server signs in to `seat_account`, an existing local account, with `seat_password`.\nOne with `seat: false` plays the box's own session under its own name. A seat needs seats on\n(Windows) or the door (Linux).",
+        "description": "A seat profile (the default) gets a desktop of its own, whose account is made here, or runs\non `seat_account`, an existing account, once `seat_password` is its password: a local account\non Windows Server, a person's own login on a Linux door. A Linux row never starts while that\nperson sits at the machine, and the host keeps no password. One with `seat: false` plays the\nbox's own session under its own name. A seat needs seats on (Windows) or the door (Linux).",
         "operationId": "createProfile",
         "requestBody": {
           "content": {
@@ -6104,7 +6104,7 @@
             }
           },
           "400": {
-            "description": "No name, an accent that is not #RRGGBB, an unknown Windows account, or a password missing or refused",
+            "description": "No name, an accent that is not #RRGGBB, an unknown account, or a password missing or refused",
             "content": {
               "application/json": {
                 "schema": {
@@ -6124,7 +6124,7 @@
             }
           },
           "409": {
-            "description": "Another profile has that name or Windows account, seats are off (Windows), the door is off (Linux), or a Windows account a seat can't use",
+            "description": "Another profile has that name or account, seats are off (Windows), the door is off (Linux), or an account a seat can't use (an administrator, a system account, the box owner)",
             "content": {
               "application/json": {
                 "schema": {
@@ -15172,11 +15172,11 @@
               "string",
               "null"
             ],
-            "description": "With `seat`, a local Windows standard account that already exists, which the seat signs\nin to instead of one punktfunk makes. Windows Server only."
+            "description": "With `seat`, an account that already exists, which the seat runs on instead of one\npunktfunk makes: a local Windows standard account on Windows Server, a person's own login\non a Linux door."
           },
           "seat_password": {
             "type": "string",
-            "description": "That account's password, entered once and sealed by the host."
+            "description": "That account's password, entered once. Windows seals it; Linux checks it and keeps\nnothing."
           },
           "windows_account": {
             "type": [
@@ -15913,7 +15913,7 @@
               "string",
               "null"
             ],
-            "description": "The Windows account of a seat on an existing one, for the console's card and its Remove\nsentence. Absent for an account punktfunk made, and to a paired device."
+            "description": "The account of a seat on an existing one, for the console's card and its Remove\nsentence. Absent for an account punktfunk made, and to a paired device."
           },
           "detail": {
             "type": [

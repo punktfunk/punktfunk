@@ -17,8 +17,9 @@ profile, the owner, named after you; while it is the only one, nothing changes f
    - **Own account (take turns)** (Windows): its own Windows account, Steam and saves, one person
      at a time — see [On Windows](#on-windows). Any edition of Windows.
    - **Own desktop**: a desktop of its own that plays at the same time as the others, with its own
-     Steam and controllers, on [Windows Server](#on-windows-server) or [Linux](#on-linux). On
-     Windows Server it gets a new account, or one of this PC's accounts under **Existing account**.
+     Steam and controllers, on [Windows Server](#on-windows-server) or [Linux](#on-linux). It
+     gets a new account, or someone's own account under **Existing account**: one of this PC's
+     on Windows Server, a login of this machine on Linux.
 
 On Linux, **Own desktop** needs [**Reachable without logging in**](#on-linux) and stays greyed until
 it is on. A host holds up to 8 profiles, and two can't share a name.
@@ -145,6 +146,24 @@ What turning it on does:
   Mode on that seat, and Steam's **Switch to Desktop** goes back. The stream carries on, and
   neither touches the box's own session. The desktop's apps keep running underneath, and Steam
   keeps running when you disconnect in Game Mode. A seat starts in the mode it was last in.
+
+### A seat on someone's own account
+
+Under **Add profile** → **Own desktop**, pick **Existing account**, then type the account's user
+name and its password. punktfunk checks the password once against the machine's login and keeps
+none. The profile then plays on that person's own account and home, in a background session beside
+whatever they have on the monitor, with the box's games.
+
+- **They come first.** While that person is signed in at the machine, the profile doesn't start,
+  and one that is running ends within seconds of their login. Their session is never touched.
+- **Nothing is set up in the account.** punktfunk makes no user or group and doesn't prepare
+  their home; the apps the profile runs write there what they always write. **Remove** ends only
+  the profile's own session. The account and its files stay.
+- **Who can be one.** An ordinary user of this machine, a directory account such as
+  `jdoe@corp.example.com` included. Not you, the owner, who has a profile already, and not an
+  account another profile uses.
+- **No password to update.** Unlike Windows, nothing stores it: the card has no **Update
+  password…**. If the account's password expires, sign in as that person once.
 
 Turning it off copies the files back to your home and your own host serves the box again. Seats of
 their own stay on the box, stopped, and come back with the switch.

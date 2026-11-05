@@ -255,11 +255,13 @@ pub struct ProfileCreate {
     /// `seat` does not apply.
     #[serde(default)]
     pub windows_account: Option<String>,
-    /// With `seat`, a local Windows standard account that already exists, which the seat signs
-    /// in to instead of one punktfunk makes. Windows Server only.
+    /// With `seat`, an account that already exists, which the seat runs on instead of one
+    /// punktfunk makes: a local Windows standard account on Windows Server, a person's own login
+    /// on a Linux door.
     #[serde(default)]
     pub seat_account: Option<String>,
-    /// That account's password, entered once and sealed by the host.
+    /// That account's password, entered once. Windows seals it; Linux checks it and keeps
+    /// nothing.
     #[serde(default)]
     #[schema(value_type = String)]
     pub seat_password: Option<pf_seats::Secret>,
