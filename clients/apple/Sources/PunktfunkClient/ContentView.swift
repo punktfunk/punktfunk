@@ -916,11 +916,11 @@ struct ContentView: View {
             entry: $libraryTarget, notice: $deepLinkNotice, pairing: pairingBinding,
             linkConfirm: $deepLinkConfirm, runLink: runDeepLinkConfirm,
             onFailed: { consoleFailed = true }, onPaired: handlePaired,
-            connect: { flow.connect($0, preset: $1, profile: .send($2)) },
+            connect: { flow.connect($0, preset: $1, profile: $2) },
             connectDiscovered: flow.connectDiscovered,
             requestAccess: flow.consoleRequestAccess,
             requestAccessDiscovered: flow.requestAccessDiscovered,
-            launchTitle: { launch($0, $1, profile: .send($2)) }, connectShelf: connectFromShelf,
+            launchTitle: { launch($0, $1, profile: $2) }, connectShelf: connectFromShelf,
             wakeOnly: { flow.wakeOnly($0) }, awaitingApproval: awaitingApproval != nil)
     }
 

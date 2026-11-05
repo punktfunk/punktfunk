@@ -151,6 +151,17 @@ public final class ConsoleBridge {
         punktfunk_console_phase(handle, phase.rawValue, message)
     }
 
+    /// The password the console's prompt typed for the `Launch` it just raised, moved out of the
+    /// console into a secret that wipes; nil when it holds none. Take it before anything else
+    /// the `Launch` does: one left in the console is wiped by the next.
+    public func takeUnlock() -> ProfileUnlock? {
+        var stay = false
+        let secret = UnlockSecret(capacity: Int(PUNKTFUNK_CONSOLE_UNLOCK_MAX)) { out in
+            Int(punktfunk_console_take_unlock(handle, out.baseAddress, UInt(out.count), &stay))
+        }
+        return secret.count > 0 ? ProfileUnlock.password(secret, staySignedIn: stay) : nil
+    }
+
     public func push(_ kind: Push, _ json: String) {
         punktfunk_console_push(handle, kind.rawValue, json)
     }

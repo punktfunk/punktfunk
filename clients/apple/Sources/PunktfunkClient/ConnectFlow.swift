@@ -40,17 +40,27 @@ struct ConnectFlow {
     enum ProfileChoice {
         /// Ask the paired host first; `link` is a link's `as=`, which wins for this connect.
         case ask(link: String? = nil)
-        /// Already decided (the console's own picker): dial with this id, nil sends none.
-        case send(String?)
+        /// Already decided (the console's own picker): dial with this id, nil sends none, with
+        /// the password the console's prompt typed. `console` takes back what the console asks.
+        case send(String?, unlock: ProfileUnlock? = nil, console: ConsoleDial? = nil)
+    }
+
+    /// What a dial the console issued reports to the console instead of the app's own prompts.
+    struct ConsoleDial {
+        /// The host closed with `ProfileLocked` and this sentence: the console's prompt reopens.
+        let locked: @MainActor (String?) -> Void
+        /// The host holds the unlock dial while the profile's desktop starts.
+        let starting: @MainActor () -> Void
     }
 
     /// The profile a dial plays as, and what opens it. `prompts`: a `ProfileLocked` close opens
-    /// the password prompt rather than an error.
+    /// the password prompt rather than an error; `console` sends it to the console's instead.
     struct ProfileDial {
         var id: String?
         var name: String?
         var unlock: ProfileUnlock?
         var prompts = false
+        var console: ConsoleDial?
     }
 
     /// `preset` is this connect's one-off pick ("Connect with ▸", a pinned card, a link's
@@ -89,11 +99,12 @@ struct ConnectFlow {
         }
         let allowTofu = host.pinnedSHA256 == nil
         switch profile {
-        case .send(let id):
-            // The console asks for no password: a locked profile's refusal is its error.
+        case .send(let id, let unlock, let console):
+            // The console asks for the password itself. Only a pinned host is sent one.
             startSession(
                 host, launchID: launchID, preset: preset, allowTofu: allowTofu,
-                fromLibrary: fromLibrary, profile: ProfileDial(id: id))
+                fromLibrary: fromLibrary,
+                profile: ProfileDial(id: id, unlock: allowTofu ? nil : unlock, console: console))
         case .ask(let link):
             // An unpinned host can't be asked (no paired identity), and the demo host has no
             // management API.
@@ -345,7 +356,8 @@ struct ConnectFlow {
     /// The actual dial — reached directly when the host is awake, or from the waker once a woken
     /// host is back online. `prepareWake` still runs here to LEARN/refresh the MAC now that the host
     /// is advertising (and is a harmless no-op otherwise). `onUnreachable` hands a plain connect
-    /// failure back to the caller (the wake-wait fallback) instead of the error alert.
+    /// failure back to the caller (the wake-wait fallback) instead of the error alert. A dial the
+    /// console issued hands a `ProfileLocked` close and an unlock's wait back to the console.
     private func startSessionDirect(
         _ host: StoredHost, launchID: String? = nil,
         preset: PresetSelection = .inherit,
@@ -411,8 +423,13 @@ struct ConnectFlow {
                 return true
             },
             unlock: profile.unlock,
+            onUnlockPending: profile.console?.starting,
             onProfileLocked: { said in
-                reprompt(host, profile, said: said) { next in
+                if let console = profile.console {
+                    console.locked(said)
+                    return true
+                }
+                return reprompt(host, profile, said: said) { next in
                     startSessionDirect(
                         store.hosts.first { $0.id == host.id } ?? host,
                         launchID: launchID, preset: preset, allowTofu: allowTofu,

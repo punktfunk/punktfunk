@@ -251,6 +251,24 @@ final class ProfileUnlockTests: XCTestCase {
         XCTAssertNil(ProfileUnlock.keyProof(Data(count: 1025)))
     }
 
+    /// A secret filled in place, as the console hands one over, reads what the fill answered;
+    /// an answer past its room wipes it.
+    func testASecretFilledInPlaceKeepsOnlyWhatFits() {
+        let three = UnlockSecret(capacity: 8) { out in
+            out[0] = 1
+            out[1] = 2
+            out[2] = 3
+            return 3
+        }
+        XCTAssertEqual(three.withBytes { Array($0) }, [1, 2, 3])
+        let over = UnlockSecret(capacity: 2) { out in
+            out[0] = 9
+            return 3
+        }
+        XCTAssertEqual(over.count, 0)
+        XCTAssertEqual(UnlockSecret(capacity: 4) { _ in -1 }.count, 0)
+    }
+
     func testAnUnlockDialsOncePinnedAndPrintsNoSecret() throws {
         let unlock = try XCTUnwrap(ProfileUnlock.password(UnlockSecret("hunter2")))
         XCTAssertFalse("\(unlock)".contains("hunter2"))

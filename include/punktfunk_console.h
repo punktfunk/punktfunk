@@ -81,6 +81,9 @@
 // `{"Listed": [rows]}`, `"NoProfiles"` or `{"Failed": "why"}`.
 #define PUNKTFUNK_CONSOLE_PUSH_PROFILES 20
 
+// The room `punktfunk_console_take_unlock` needs: the longest password the wire takes.
+#define PUNKTFUNK_CONSOLE_UNLOCK_MAX 512
+
 // One console. Opaque to C.
 typedef struct PunktfunkConsole PunktfunkConsole;
 
@@ -178,6 +181,17 @@ void punktfunk_console_text(const PunktfunkConsole *c, const char *utf8);
 // # Safety
 // `c` is live; `message` is NULL or a NUL-terminated string.
 void punktfunk_console_phase(const PunktfunkConsole *c, uint8_t phase, const char *message);
+
+// Moves the password the console's prompt typed for the `Launch` it just raised into `out`,
+// its "Stay signed in" switch into `*stay`, and returns its length: 0 when the console holds
+// none. The console's copy is wiped either way, so call it once per `Launch`, first.
+//
+// # Safety
+// `c` is live; `out` is NULL or `cap` writable bytes; `stay` is NULL or a writable `bool`.
+uintptr_t punktfunk_console_take_unlock(const PunktfunkConsole *c,
+                                        uint8_t *out,
+                                        uintptr_t cap,
+                                        bool *stay);
 
 // Hand the console a model update; `kind` is a `PUNKTFUNK_CONSOLE_PUSH_*`. A bad kind or bad
 // JSON is a logged no-op.

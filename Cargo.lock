@@ -4113,6 +4113,7 @@ version = "0.46.0"
 dependencies = [
  "pf-client-core",
  "pf-console-ui",
+ "punktfunk-core",
  "punktfunk-ffi",
  "serde",
  "serde_json",

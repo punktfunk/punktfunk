@@ -407,6 +407,8 @@ final class SessionModel: ObservableObject {
                  onProfileUnknown: (@MainActor () -> Bool)? = nil,
                  /// Opens `profileID`'s locked account; this dial alone sends it, never a redial.
                  unlock: ProfileUnlock? = nil,
+                 /// The host holds this unlock dial while the profile's desktop starts.
+                 onUnlockPending: (@MainActor () -> Void)? = nil,
                  /// The host closed with `ProfileLocked` and this sentence. Return true when the
                  /// caller prompts: the error is then not shown.
                  onProfileLocked: (@MainActor (String?) -> Bool)? = nil,
@@ -520,11 +522,10 @@ final class SessionModel: ObservableObject {
                 unlock: unlock,
                 onPending: { [weak self] in
                     Task { @MainActor in
-                        // An unlock's wait is the host checking it and starting the desktop.
-                        guard let self, self.connectSeq == attempt, self.phase == .connecting,
-                              !unlocking
+                        guard let self, self.connectSeq == attempt, self.phase == .connecting
                         else { return }
-                        self.onAwaitingApproval?(host)
+                        // An unlock's wait is the host checking it and starting the desktop.
+                        if unlocking { onUnlockPending?() } else { self.onAwaitingApproval?(host) }
                     }
                 }) }
             await MainActor.run { [weak self] in

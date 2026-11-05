@@ -17,14 +17,14 @@ import SwiftUI
 final class ConsoleModel: ObservableObject, ConsoleViewDelegate {
     /// What the console asks the app to do: connect, launch, wake, pair.
     struct Actions {
-        /// The trailing `String?` is the profile id the console's picker chose.
-        var connect: (StoredHost, PresetSelection, String?) -> Void
+        /// The trailing choice is the profile the console's picker chose, and what opens it.
+        var connect: (StoredHost, PresetSelection, ConnectFlow.ProfileChoice) -> Void
         var connectDiscovered: (DiscoveredHost) -> Void
         /// The Pair screen's "Request access": the long approval dial. A discovered host is
         /// saved first.
         var requestAccess: (StoredHost) -> Void
         var requestAccessDiscovered: (DiscoveredHost) -> Void
-        var launchTitle: (LibraryTarget, String, String?) -> Void
+        var launchTitle: (LibraryTarget, String, ConnectFlow.ProfileChoice) -> Void
         var connectShelf: (LibraryTarget) -> Void
         var wakeOnly: (StoredHost) -> Void
         var cancelConnect: () -> Void
@@ -258,6 +258,9 @@ final class ConsoleModel: ObservableObject, ConsoleViewDelegate {
             "av1_ok": AV1.hardwareDecodeSupported,
             // This app answers `FetchProfiles` and `SetProfile`.
             "profiles": true,
+            // Each `Launch` takes the password the console's prompt typed, and a `ProfileLocked`
+            // close goes back to that prompt.
+            "prompts_unlock": true,
             "pyrowave_ok": MetalWaveletDecoder.supported,
             "settings": settings(hosts),
             "presets": presets.map { ["id": $0.id, "name": $0.name, "overrides": [:] as [String: Any]] },
@@ -454,6 +457,11 @@ final class ConsoleModel: ObservableObject, ConsoleViewDelegate {
         } else if let kind = event["pulse"] as? String {
             pulse(kind)
         } else if let field = event["edit_text"] as? [String: Any] {
+            // A password types on the console's own tray, never the system keyboard.
+            guard field["secure"] as? Bool != true else {
+                openedField = nil
+                return
+            }
             openedField = SystemEntry(
                 label: field["label"] as? String ?? "", text: field["text"] as? String ?? "",
                 digits: field["digits"] as? Bool ?? false)
@@ -502,13 +510,23 @@ final class ConsoleModel: ObservableObject, ConsoleViewDelegate {
         }
     }
 
+    /// The console's `Launch`, with the password its prompt typed: only a dial to a saved host
+    /// carries it, and a launch that dials without it drops it, wiped. A `ProfileLocked` close
+    /// and the unlock's wait go back to the console.
     private func launch(_ a: [String: Any]) {
+        let unlock = bridge.takeUnlock()
         let fp = a["fp_hex"] as? String ?? ""
         let addr = a["addr"] as? String ?? ""
         let port = UInt16(a["port"] as? Int ?? 0)
         let preset: PresetSelection = (a["preset"] as? String).map { .preset($0) } ?? .inherit
         let requestAccess = a["request_access"] as? Bool ?? false
-        let profile = a["profile"] as? String
+        let profile = ConnectFlow.ProfileChoice.send(
+            a["profile"] as? String, unlock: unlock,
+            console: ConnectFlow.ConsoleDial(
+                locked: { [weak bridge = self.bridge] said in
+                    bridge?.phase(.profileLocked, message: said ?? "")
+                },
+                starting: { [weak bridge = self.bridge] in bridge?.phase(.awaitingApproval) }))
         guard let host = host(fp: fp, addr: addr, port: port) else {
             // Not saved yet: the row came from an advert, so dial it as a discovery does.
             if let found = discovery.hosts.first(where: { $0.host == addr && $0.port == port }) {

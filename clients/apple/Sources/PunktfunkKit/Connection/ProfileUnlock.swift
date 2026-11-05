@@ -19,20 +19,27 @@ public final class UnlockSecret: @unchecked Sendable, CustomStringConvertible,
     public convenience init(_ text: String) {
         var text = text
         let count = text.utf8.count
-        self.init(count: count) { out in
+        self.init(capacity: count) { out in
             text.withUTF8 { _ = out.initialize(from: $0) }
+            return count
         }
     }
 
     public convenience init(_ bytes: Data) {
-        self.init(count: bytes.count) { out in _ = out.initialize(from: bytes) }
+        self.init(capacity: bytes.count) { out in
+            _ = out.initialize(from: bytes)
+            return bytes.count
+        }
     }
 
-    private init(count: Int, fill: (UnsafeMutableBufferPointer<UInt8>) -> Void) {
-        storage = .allocate(capacity: max(count, 1))
+    /// `capacity` zeroed bytes that `fill` writes into, answering how many it wrote. An answer
+    /// outside `0...capacity` wipes them, and the secret reads as empty.
+    init(capacity: Int, fill: (UnsafeMutableBufferPointer<UInt8>) -> Int) {
+        storage = .allocate(capacity: max(capacity, 1))
         storage.initialize(repeating: 0)
-        live = count
-        fill(UnsafeMutableBufferPointer(rebasing: storage[0..<count]))
+        live = 0
+        let wrote = fill(UnsafeMutableBufferPointer(rebasing: storage[0..<capacity]))
+        if (0...capacity).contains(wrote) { live = wrote } else { wipe() }
     }
 
     deinit {
