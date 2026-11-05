@@ -37,9 +37,8 @@ const ACTIVE_READ_TIMEOUT: Duration = Duration::from_secs(2);
 
 type TlsStream = rustls::StreamOwned<rustls::ClientConnection, TcpStream>;
 type RdpFramed = ironrdp_blocking::Framed<TlsStream>;
-/// Connector after negotiation, the TLS-wrapped framed stream, the leaf public
-/// key CredSSP binds to, and the observed leaf pin.
-type Negotiated = (ClientConnector, RdpFramed, Vec<u8>, Option<[u8; 32]>);
+/// The TLS-wrapped framed stream, the leaf public key CredSSP binds to, and the observed leaf pin.
+type Negotiated = (RdpFramed, Vec<u8>, Option<[u8; 32]>);
 
 fn backend_error(code: &str, message: impl Into<String>) -> BackendError {
     BackendError::new(code, message)
@@ -52,7 +51,8 @@ pub(crate) fn io_error(code: &str, context: &str, error: impl std::fmt::Display)
 /// The SHA-256 of TermService's TLS leaf, read before any credential could be sent.
 pub(crate) fn observe_pin() -> WinResult<[u8; 32]> {
     let config = connector_config(String::new(), String::new(), None);
-    let (_connector, _framed, _public_key, observed) = negotiate_tls(config, None)?;
+    let mut connector = ClientConnector::new(config, UNBOUND);
+    let (_framed, _public_key, observed) = negotiate_tls(&mut connector, None)?;
     observed.ok_or_else(|| {
         backend_error(
             "rdp_certificate",
@@ -119,17 +119,20 @@ pub(crate) fn keep_from_stdin() -> WinResult<()> {
     Err(error)
 }
 
-/// One connect-and-hold. The password is rebuilt per attempt because the connector consumes it.
+/// One connect-and-hold. The password is copied per attempt because the connector consumes it;
+/// the copy is wiped on every path but the one that hands it to IronRDP.
 fn keep_session(bootstrap: &RdpBootstrap, domain: Option<String>, account: &str) -> WinResult<()> {
     let config = connector_config(account.to_owned(), bootstrap.password.to_string(), domain);
-    let (mut connector, mut framed, public_key, observed) =
-        negotiate_tls(config, Some(bootstrap.pin))?;
+    let mut attempt = Wiped(Some(ClientConnector::new(config, UNBOUND)));
+    let (mut framed, public_key, observed) =
+        negotiate_tls(attempt.connector(), Some(bootstrap.pin))?;
     if observed != Some(bootstrap.pin) {
         return Err(backend_error(
             "rdp_pin_changed",
             "RDP leaf certificate does not match the trusted pin",
         ));
     }
+    let mut connector = attempt.hand_over();
     let upgraded = ironrdp_blocking::mark_as_upgraded(
         ironrdp_blocking::skip_connect_begin(&mut connector),
         &mut connector,
@@ -152,6 +155,38 @@ fn keep_session(bootstrap: &RdpBootstrap, domain: Option<String>, account: &str)
         )
     })?;
     active_loop(result, framed)
+}
+
+/// The client address before a connect learns the real one, which [`negotiate_tls`] sets.
+const UNBOUND: SocketAddr = SocketAddr::new(LOOPBACK, 0);
+
+/// One attempt's connector, whose password is wiped when it drops here. [`Self::hand_over`] gives
+/// it to `connect_finalize`, and IronRDP's copies from then on are IronRDP's.
+struct Wiped(Option<ClientConnector>);
+
+impl Wiped {
+    fn connector(&mut self) -> &mut ClientConnector {
+        self.0
+            .as_mut()
+            .expect("the connector is handed over once, last")
+    }
+
+    fn hand_over(mut self) -> ClientConnector {
+        self.0
+            .take()
+            .expect("the connector is handed over once, last")
+    }
+}
+
+impl Drop for Wiped {
+    fn drop(&mut self) {
+        if let Some(connector) = &mut self.0
+            && let Credentials::UsernamePassword { password, .. } =
+                &mut connector.config.credentials
+        {
+            password.zeroize();
+        }
+    }
 }
 
 fn connector_config(
@@ -213,8 +248,10 @@ fn connect() -> WinResult<TcpStream> {
     }
 }
 
+/// Connects `connector` and runs it to the TLS upgrade, then the TLS handshake against
+/// `expected_pin`. The caller keeps `connector` on every path, so it can wipe its password.
 fn negotiate_tls(
-    config: connector::Config,
+    connector: &mut ClientConnector,
     expected_pin: Option<[u8; 32]>,
 ) -> WinResult<Negotiated> {
     let stream = connect()?;
@@ -228,8 +265,8 @@ fn negotiate_tls(
         .local_addr()
         .map_err(|error| io_error("rdp_connect", "read RDP client address", error))?;
     let mut framed = ironrdp_blocking::Framed::new(stream);
-    let mut connector = ClientConnector::new(config, client_addr);
-    ironrdp_blocking::connect_begin(&mut framed, &mut connector)
+    connector.client_addr = client_addr;
+    ironrdp_blocking::connect_begin(&mut framed, connector)
         .map_err(|error| io_error("rdp_negotiation", "RDP negotiation failed", error))?;
     let selected = match connector.state {
         ClientConnectorState::EnhancedSecurityUpgrade { selected_protocol } => selected_protocol,
@@ -280,12 +317,7 @@ fn negotiate_tls(
         .set_read_timeout(Some(ACTIVE_READ_TIMEOUT))
         .map_err(|error| io_error("rdp_connect", "set active RDP timeout", error))?;
     let tls = rustls::StreamOwned::new(connection, stream);
-    Ok((
-        connector,
-        ironrdp_blocking::Framed::new(tls),
-        public_key,
-        observed,
-    ))
+    Ok((ironrdp_blocking::Framed::new(tls), public_key, observed))
 }
 
 fn extract_public_key(certificate: &[u8]) -> WinResult<Vec<u8>> {

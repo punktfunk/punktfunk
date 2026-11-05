@@ -124,13 +124,14 @@ impl CredentialStore {
         }
         .map_err(|error| io_error("credential_unprotect", "CryptUnprotectData failed", error))?;
         let plaintext = copy_dpapi_output(&output, true)?;
-        let text = String::from_utf8(plaintext.to_vec()).map_err(|_| {
+        // Checked in place: a failed conversion would drop its own copy unwiped.
+        let text = std::str::from_utf8(&plaintext).map_err(|_| {
             backend_error(
                 "credential_invalid",
                 "unprotected seat credential is not UTF-8",
             )
         })?;
-        Credential::new(text)
+        Credential::new(text.to_owned())
     }
 
     pub(super) fn delete(&self, id: &SeatId) -> WinResult<()> {
