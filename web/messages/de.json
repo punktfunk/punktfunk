@@ -1294,5 +1294,14 @@
 	"profiles_seat_password_title": "Windows-Passwort von {name} aktualisieren",
 	"profiles_seat_password_body": "Gib das Passwort ein, mit dem sich {account} jetzt anmeldet.",
 	"profiles_seat_password_save": "Aktualisieren",
-	"profiles_seat_password_failed": "Das Passwort konnte nicht aktualisiert werden."
+	"profiles_seat_password_failed": "Das Passwort konnte nicht aktualisiert werden.",
+	"profiles_seat_account_linux": "Konto",
+	"profiles_seat_account_new_hint_linux": "punktfunk legt eines an, pf-seat-1 bis pf-seat-4.",
+	"profiles_seat_account_existing_hint_linux": "Die eigene Anmeldung einer Person auf diesem Rechner, mit eigenem Steam und eigenen Spielständen.",
+	"profiles_account_which_linux": "Benutzername",
+	"profiles_account_name_linux": "Der Name, mit dem sich die Person anmeldet, in Kleinbuchstaben. Auch ein Verzeichniskonto wie jdoe@corp.example.com geht.",
+	"profiles_seat_password_linux": "Passwort der Person",
+	"profiles_seat_account_lock_linux": "Das Passwort wird einmal geprüft und nicht gespeichert. Solange die Person am Rechner angemeldet ist, startet dieses Profil nicht. An ihrem Konto ändert sich nichts.",
+	"profiles_seat_account_line_linux": "Konto {account}",
+	"profiles_remove_adopted_linux": "{account} und die Dateien von {account} bleiben auf diesem Rechner; nur das Profil verschwindet."
 }

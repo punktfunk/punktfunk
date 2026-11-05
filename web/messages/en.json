@@ -1385,5 +1385,14 @@
 	"profiles_seat_password_title": "Update {name}'s Windows password",
 	"profiles_seat_password_body": "Enter the password {account} signs in with now.",
 	"profiles_seat_password_save": "Update",
-	"profiles_seat_password_failed": "Couldn't update the password."
+	"profiles_seat_password_failed": "Couldn't update the password.",
+	"profiles_seat_account_linux": "Account",
+	"profiles_seat_account_new_hint_linux": "punktfunk makes one, pf-seat-1 to pf-seat-4.",
+	"profiles_seat_account_existing_hint_linux": "Someone's own login on this machine, with their own Steam and saves.",
+	"profiles_account_which_linux": "User name",
+	"profiles_account_name_linux": "The name they sign in with, in lowercase. A directory account such as jdoe@corp.example.com works too.",
+	"profiles_seat_password_linux": "Their password",
+	"profiles_seat_account_lock_linux": "The password is checked once and not kept. While they're signed in at the machine, this profile doesn't start. Nothing in their account changes.",
+	"profiles_seat_account_line_linux": "Account {account}",
+	"profiles_remove_adopted_linux": "{account} and {account}'s files stay on this machine; only the profile goes."
 }

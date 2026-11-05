@@ -1374,5 +1374,14 @@
 	"profiles_seat_password_title": "Actualizar la contraseña de Windows de {name}",
 	"profiles_seat_password_body": "Introduce la contraseña con la que {account} inicia sesión ahora.",
 	"profiles_seat_password_save": "Actualizar",
-	"profiles_seat_password_failed": "No se pudo actualizar la contraseña."
+	"profiles_seat_password_failed": "No se pudo actualizar la contraseña.",
+	"profiles_seat_account_linux": "Cuenta",
+	"profiles_seat_account_new_hint_linux": "punktfunk crea una, de pf-seat-1 a pf-seat-4.",
+	"profiles_seat_account_existing_hint_linux": "El acceso propio de una persona en este equipo, con su propio Steam y sus partidas.",
+	"profiles_account_which_linux": "Nombre de usuario",
+	"profiles_account_name_linux": "El nombre con el que inicia sesión, en minúsculas. También sirve una cuenta de directorio como jdoe@corp.example.com.",
+	"profiles_seat_password_linux": "Contraseña de la persona",
+	"profiles_seat_account_lock_linux": "La contraseña se comprueba una vez y no se guarda. Mientras la persona tenga la sesión abierta en el equipo, este perfil no arranca. Su cuenta no cambia.",
+	"profiles_seat_account_line_linux": "Cuenta {account}",
+	"profiles_remove_adopted_linux": "{account} y los archivos de {account} se quedan en este equipo; solo se va el perfil."
 }

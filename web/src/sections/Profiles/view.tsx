@@ -189,6 +189,7 @@ export const ProfilesView: FC<{
 									profile={p}
 									ownerName={ownerName}
 									seats={seats}
+									linux={door !== undefined}
 									busy={busyId === p.id}
 									onRename={() => onRename(p)}
 									onPicture={(f) => onPicture(p, f)}
@@ -273,6 +274,8 @@ const ProfileRow: FC<{
 	profile: ProfileAdmin;
 	ownerName: string;
 	seats?: SeatActions;
+	/** A Linux host: its seat on an existing account is a login, not a Windows account. */
+	linux: boolean;
 	busy: boolean;
 	onRename: () => void;
 	onPicture: (file: File) => void;
@@ -282,6 +285,7 @@ const ProfileRow: FC<{
 	profile: p,
 	ownerName,
 	seats,
+	linux,
 	busy,
 	onRename,
 	onPicture,
@@ -323,7 +327,9 @@ const ProfileRow: FC<{
 					<p className="text-sm text-muted-foreground">{facts.join(" · ")}</p>
 					{p.seat?.account && (
 						<p className="text-sm text-muted-foreground">
-							{m.profiles_seat_account_line({ account: p.seat.account })}
+							{(linux
+								? m.profiles_seat_account_line_linux
+								: m.profiles_seat_account_line)({ account: p.seat.account })}
 						</p>
 					)}
 				</div>
@@ -438,13 +444,15 @@ const ProfileRow: FC<{
  * Windows account taking the console in turn. */
 type Outcome = "shared" | "seats" | "account";
 
-/** The Windows account a desktop of its own signs in to: one punktfunk makes, or one of this PC's. */
+/** The account a desktop of its own runs on: one punktfunk makes, or one the machine has. */
 type SeatAccount = "new" | "existing";
 
 /**
  * **Add profile**: the picture beside a name and a colour, then one question answered as
- * outcomes. The home follows the answer on the host. A Windows desktop of its own asks a
- * second: a new account, or an existing one with its password.
+ * outcomes. The home follows the answer on the host. A desktop of its own on Windows or a
+ * Linux door asks a second: a new account, or an existing one with its password. Windows picks
+ * from a list; Linux types the user name, since a directory's accounts don't enumerate and the
+ * console doesn't list the box's users.
  */
 export const AddProfileDialog: FC<{
 	open: boolean;
@@ -496,7 +504,8 @@ export const AddProfileDialog: FC<{
 		setSeatAccount("new");
 		setPassword("");
 	}, [open, freeAccent]);
-	const asksAccount = windows && seatsOn && outcome === "seats";
+	const asksAccount =
+		((windows && seatsOn) || (linux && door)) && outcome === "seats";
 	const adopting = asksAccount && seatAccount === "existing";
 	const accountReady =
 		outcome === "account"
@@ -520,17 +529,20 @@ export const AddProfileDialog: FC<{
 			id: "new",
 			icon: <UserPlus />,
 			label: m.profiles_seat_account_new(),
-			hint: m.profiles_seat_account_new_hint(),
+			hint: windows
+				? m.profiles_seat_account_new_hint()
+				: m.profiles_seat_account_new_hint_linux(),
 		},
 		{
 			id: "existing",
 			icon: <UserRound />,
 			label: m.profiles_seat_account_existing(),
-			hint:
-				windowsAccounts.length > 0
+			hint: !windows
+				? m.profiles_seat_account_existing_hint_linux()
+				: windowsAccounts.length > 0
 					? m.profiles_seat_account_existing_hint()
 					: m.profiles_seat_account_none(),
-			disabled: windowsAccounts.length === 0,
+			disabled: windows && windowsAccounts.length === 0,
 		},
 	];
 	const outcomes: Choice<Outcome>[] = [
@@ -623,14 +635,37 @@ export const AddProfileDialog: FC<{
 						{asksAccount && (
 							<motion.div variants={ROW}>
 								<ChoiceCards
-									label={m.profiles_seat_account()}
+									label={
+										windows
+											? m.profiles_seat_account()
+											: m.profiles_seat_account_linux()
+									}
 									value={seatAccount}
 									choices={seatAccounts}
 									onChange={setSeatAccount}
 								/>
 							</motion.div>
 						)}
-						{(outcome === "account" || adopting) && (
+						{adopting && !windows && (
+							<motion.div variants={ROW} className="space-y-2">
+								<Label htmlFor="profile-account">
+									{m.profiles_account_which_linux()}
+								</Label>
+								<Input
+									id="profile-account"
+									autoComplete="off"
+									autoCapitalize="none"
+									spellCheck={false}
+									data-1p-ignore
+									value={account}
+									onChange={(e) => setAccount(e.target.value.trim())}
+								/>
+								<p className="text-sm text-muted-foreground">
+									{m.profiles_account_name_linux()}
+								</p>
+							</motion.div>
+						)}
+						{(outcome === "account" || (adopting && windows)) && (
 							<motion.div variants={ROW} className="space-y-2">
 								<Label htmlFor="profile-account">
 									{m.profiles_account_which()}
@@ -660,7 +695,9 @@ export const AddProfileDialog: FC<{
 						{adopting && (
 							<motion.div variants={ROW} className="space-y-2">
 								<Label htmlFor="profile-seat-password">
-									{m.profiles_seat_password()}
+									{windows
+										? m.profiles_seat_password()
+										: m.profiles_seat_password_linux()}
 								</Label>
 								<Input
 									id="profile-seat-password"
@@ -671,7 +708,9 @@ export const AddProfileDialog: FC<{
 									onChange={(e) => setPassword(e.target.value)}
 								/>
 								<p className="text-sm text-muted-foreground">
-									{m.profiles_seat_account_lock()}
+									{windows
+										? m.profiles_seat_account_lock()
+										: m.profiles_seat_account_lock_linux()}
 								</p>
 							</motion.div>
 						)}
@@ -722,7 +761,9 @@ export const RemoveProfileDialog: FC<{
 		(windows || profile.seat.kind === "desktop");
 	const adopted = profile.seat?.account;
 	const goes = adopted
-		? m.profiles_remove_adopted({ account: adopted })
+		? (windows ? m.profiles_remove_adopted : m.profiles_remove_adopted_linux)({
+				account: adopted,
+			})
 		: (windows ? m.profiles_remove_windows : m.profiles_remove_linux)({
 				name: profile.display_name,
 			});

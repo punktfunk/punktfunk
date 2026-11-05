@@ -240,7 +240,8 @@ export const SectionProfiles: FC = () => {
 								onStart: (p) => act(p, "start"),
 								onStop: (p) => act(p, "stop"),
 								onEnd: (p) => act(p, "end"),
-								onPassword: setPasswordFor,
+								// Windows seals a password; Linux checks it once and keeps none.
+								onPassword: windows ? setPasswordFor : undefined,
 								doctor: doctorLine,
 							}
 						: undefined
