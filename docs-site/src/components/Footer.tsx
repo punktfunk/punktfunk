@@ -5,9 +5,9 @@ const rootApi = getRouteApi('__root__')
 
 // Footer markup is shared with the marketing site via @unom/app-ui so the two
 // stay in sync. It themes itself through @unom/style tokens, which the docs map
-// onto their Fumadocs surfaces. Root-relative links target the website (the
-// docs don't host /legal/* etc.), so rebase them onto its origin.
-const SITE_URL = 'https://punktfunk.unom.io'
+// onto their Fumadocs surfaces. Root-relative links target the website's
+// English pages, the docs' own language (the docs don't host /legal/* etc.).
+const SITE_URL = 'https://punktfunk.unom.io/en'
 const resolveHref = (to: string) =>
   to.startsWith('/') ? `${SITE_URL}${to}` : to
 
