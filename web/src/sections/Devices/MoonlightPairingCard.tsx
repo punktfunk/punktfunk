@@ -228,7 +228,7 @@ export const MoonlightPairing: FC<{
 							value={pin}
 							onChange={(e) => onPinChange(e.target.value.replace(/\D/g, ""))}
 							placeholder="0000"
-							className="font-mono text-lg tracking-widest"
+							className="font-mono text-lg"
 						/>
 					</div>
 					{/* Moonlight identifies every client as the same device, so a name typed

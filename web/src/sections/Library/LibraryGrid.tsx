@@ -450,7 +450,7 @@ export const LibraryGrid: FC<LibraryGridProps> = ({
 				{/* A launcher is a door, not a game: one chip each, not a poster. */}
 				{launchers.length > 0 && (
 					<Stagger gap={ROW_GAP} className="flex flex-wrap items-center gap-2">
-						<span className="mr-1 text-xs font-medium uppercase tracking-wide text-muted-foreground/70">
+						<span className="mr-1 text-xs font-medium uppercase text-muted-foreground/70">
 							{m.library_launchers_title()}
 						</span>
 						{launchers.map((g) => (

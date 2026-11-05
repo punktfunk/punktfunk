@@ -17,7 +17,7 @@ function ShellHarness({ initialPath }: { initialPath: string }) {
 		component: () => (
 			<AppShell>
 				<div className="space-y-3">
-					<h1 className="text-2xl font-semibold tracking-tight">Dashboard</h1>
+					<h1 className="text-2xl font-semibold">Dashboard</h1>
 					<p className="text-muted-foreground">
 						Placeholder content — swap routes from the sidebar to preview the
 						active state.
