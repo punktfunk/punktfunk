@@ -4,7 +4,8 @@ use super::*;
 
 /// Every live route has an explicit plugin/cert classification. A new route fails until a
 /// row is added here; a removed route must not leave a stale row. The gates are allowlists:
-/// unclassified means denied.
+/// unclassified means denied. The cert lane and the open routes are core's `mgmt_routes`, which
+/// a page server relays by.
 #[test]
 fn every_route_is_classified_for_the_plugin_and_cert_lanes() {
     use axum::http::Method;
@@ -333,6 +334,13 @@ fn every_route_is_classified_for_the_plugin_and_cert_lanes() {
             *cert_ok,
             "cert lane: {method} {path} should be {}",
             if *cert_ok { "reachable" } else { "denied" }
+        );
+    }
+    // 4. The open routes a page server relays for a stranger are live.
+    for (method, path) in punktfunk_core::mgmt_routes::OPEN_ROUTES {
+        assert!(
+            live.iter().any(|(m, p)| m == method && p == path),
+            "OPEN_ROUTES lists {method} {path}, which is not in the live route table"
         );
     }
 }

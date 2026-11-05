@@ -1,5 +1,6 @@
-//! Certificate-fingerprint hash and the fingerprint-pinning
-//! [`ServerCertVerifier`](rustls::client::danger::ServerCertVerifier) (`PinVerify`).
+//! Certificate-fingerprint hash, the fingerprint-pinning
+//! [`ServerCertVerifier`](rustls::client::danger::ServerCertVerifier) (`PinVerify`), and the
+//! check of a host's signature over its browser plane's certificate hash.
 //! Trust is the SHA-256 of the host's self-signed leaf (TOFU-pinned), not a CA
 //! chain. QUIC connect, game-library HTTP, and the tray status poll share this
 //! verifier. Behind the light `tls` feature (rustls + sha2, no QUIC runtime);
@@ -44,6 +45,35 @@ pub fn pinned_builder(
 pub fn cert_fingerprint(cert_der: &[u8]) -> [u8; 32] {
     use sha2::Digest;
     sha2::Sha256::digest(cert_der).into()
+}
+
+/// Domain separation for the host's signature over its browser plane's certificate hash. The host
+/// key also signs X.509, so this signature must not pass for one over anything else.
+pub const PLANE_ATTESTATION_CONTEXT: &str = "punktfunk-wt-cert-v1:";
+
+/// Check that the host holding `host_cert_der` vouches for the browser plane whose certificate
+/// hashes to `cert_hash_hex`, and return that host's fingerprint ([`cert_fingerprint`]).
+///
+/// `sig_der` is ECDSA P-256 SHA-256, ASN.1 DER, over [`PLANE_ATTESTATION_CONTEXT`] followed by
+/// `cert_hash_hex` as the host published it (lowercase hex). The caller still compares the
+/// fingerprint with the host it trusts, and `cert_hash_hex` with the certificate the plane shows.
+pub fn verify_plane_attestation(
+    cert_hash_hex: &str,
+    sig_der: &[u8],
+    host_cert_der: &[u8],
+) -> Result<[u8; 32], rustls::Error> {
+    use rustls::{CertificateError, Error};
+    let der = rustls::pki_types::CertificateDer::from(host_cert_der);
+    let cert = webpki::EndEntityCert::try_from(&der)
+        .map_err(|_| Error::InvalidCertificate(CertificateError::BadEncoding))?;
+    let msg = format!("{PLANE_ATTESTATION_CONTEXT}{cert_hash_hex}");
+    cert.verify_signature(
+        webpki::aws_lc_rs::ECDSA_P256_SHA256,
+        msg.as_bytes(),
+        sig_der,
+    )
+    .map_err(|_| Error::InvalidCertificate(CertificateError::BadSignature))?;
+    Ok(cert_fingerprint(host_cert_der))
 }
 
 /// Fingerprint-pinning verifier. `pin = Some(sha256)` rejects a leaf that does

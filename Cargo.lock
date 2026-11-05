@@ -4182,6 +4182,7 @@ dependencies = [
  "rcgen",
  "reed-solomon-simd",
  "rustls",
+ "rustls-webpki",
  "serde",
  "serde_json",
  "sha2 0.11.0",

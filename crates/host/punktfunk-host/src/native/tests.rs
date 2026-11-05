@@ -1359,6 +1359,24 @@ fn pairing_ceremony_and_gate() {
     host.join().unwrap().unwrap();
 }
 
+/// A stranger trying a PIN every second holds only the strict clock: an attempt from the home
+/// network is still answered. Both planes charge through [`PairingClocks`].
+#[test]
+fn strict_attempts_leave_the_local_pairing_clock_free() {
+    use crate::native_pairing::KnockSource;
+    let clocks = PairingClocks::default();
+    assert!(clocks.charge(KnockSource::Wan));
+    assert!(
+        !clocks.charge(KnockSource::Wan),
+        "strict attempts share a clock"
+    );
+    assert!(
+        clocks.charge(KnockSource::Lan),
+        "a local attempt runs on its own"
+    );
+    assert!(!clocks.charge(KnockSource::Lan));
+}
+
 /// Controller-only passes pads only; View-only passes nothing. Classify is pinned in core.
 #[test]
 fn input_admission_matrix() {

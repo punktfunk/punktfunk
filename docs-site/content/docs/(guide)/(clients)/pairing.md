@@ -43,9 +43,12 @@ See [Connect with Moonlight → Pair](/docs/moonlight#3-pair).
 **Until they disconnect** removes the device a minute after its last session ends. To come back, it
 pairs again.
 
-A device that asked **From the internet** can't be approved: its name proves nothing. Click **Arm
-PIN** on its row to make a PIN only that device can use, and pass the PIN on. See
-[Friends over the internet](/docs/friends-over-the-internet).
+A device that asked **From the internet**, **Through the web client** or **From a new page** can't be
+approved: its name proves nothing. Click **Arm PIN** on its row to make a PIN only that device can
+use, and pass the PIN on. See [Friends over the internet](/docs/friends-over-the-internet).
+
+A new page is a public website that isn't in the host's **Browser origins** and that no paired
+device has come from yet. Once one device pairs from it, the next can be approved.
 
 ## Managing paired devices
 
