@@ -82,7 +82,8 @@ Every seat shares one set of **Seats** settings on **Host**, shown while seats a
 
 - **Seats kept warm**: the seats of the most recent players start with the host.
 - **Stop an idle seat after**: 240 minutes by default; 0 never stops one. Your own seat never
-  stops for this: it runs your plugins.
+  stops for this: it runs your plugins. A seat on [someone's own account](/docs/own-account)
+  neither stops for this nor starts warm.
 - **End a seat's stream when its game exits**: off keeps streaming the seat's desktop.
 - **Highest mode per seat**, such as `2560x1440@120`: a device's own cap outranks it.
 - **Seats update your games** (Linux): off, seats play the games you installed but can't update
@@ -149,28 +150,9 @@ What turning it on does:
 
 ### A seat on someone's own account
 
-Under **Add profile** → **Own desktop**, pick **Existing account**, then type the account's user
-name and its password. punktfunk checks the password once against the machine's login and keeps
-none. The profile then plays on that person's own account and home, in a background session beside
-whatever they have on the monitor, with the box's games.
-
-- **They come first.** While that person is signed in at the machine, the profile doesn't start,
-  and one that is running ends within seconds of their login. Their session is never touched.
-- **Nothing is set up in the account.** punktfunk makes no user or group and doesn't prepare
-  their home; the apps the profile runs write there what they always write. **Remove** ends only
-  the profile's own session. The account and its files stay.
-- **Who can be one.** An ordinary user of this machine, a directory account such as
-  `jdoe@corp.example.com` included. Not you, the owner, who has a profile already, and not an
-  account another profile uses.
-- **No password to update.** Unlike Windows, nothing stores it: the card has no **Update
-  password…**. If the account's password expires, sign in as that person once.
-- **It opens with its password.** A device that picks the profile asks for the account's
-  password. The device then stays signed in while it plays and for 10 minutes after, at most a
-  day. **Stay signed in on this device** keeps it signed in until it is signed out, but only
-  the password, or Face ID, Touch ID, a fingerprint or Windows Hello where the device offers
-  it, starts a stopped desktop. A browser, **Wake** and the card's **Start** can't open it.
-- **Wrong passwords wait.** After 5 wrong tries a device waits 15 minutes, and only 2 wrong
-  passwords in 15 minutes reach the account, so a device can't lock its person out at the desk.
+**Existing account** under **Own desktop** plays on a person's own login of this machine, and only
+their password or a device they signed in opens it. [Someone's own account](/docs/own-account)
+covers adding one, what the person sees when they connect, and signing devices out.
 
 Turning it off copies the files back to your home and your own host serves the box again. Seats of
 their own stay on the box, stopped, and come back with the switch.
@@ -204,7 +186,7 @@ The controller interface asks on every connect instead:
 - [Moonlight](/docs/moonlight) and the other clients play as the owner.
 
 A profile is a name, not a lock: anyone on a paired device may pick any profile, except one on
-[someone's own account](#a-seat-on-someones-own-account), which asks for its password. What a
+[someone's own account](/docs/own-account), which asks for its password. What a
 device may do stays its [access level](/docs/access-levels).
 
 ## Where a profile shows
