@@ -23,8 +23,8 @@ On Windows Server, an existing account works differently: see
 
 ## Connect
 
-When someone picks the profile, the Apple, Android phone, Linux and Windows apps ask for the
-account's password. The prompt has one switch, off by default:
+When someone picks the profile, the Apple, Android, Linux and Windows apps ask for the
+account's password, on a TV or with a controller too. The prompt has one switch, off by default:
 
 | The device has | The switch | What it does |
 |---|---|---|
