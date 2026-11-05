@@ -93,6 +93,13 @@ public struct ProfileSeat: Codable, Hashable, Sendable {
     }
 }
 
+/// What a profile on a person's own account needs from this device before it opens. An old host
+/// sends none, and a word this build doesn't know reads as `.none`: the host refuses a dial that
+/// needs more.
+public enum UnlockNeed: String, Codable, Sendable {
+    case none, password, key
+}
+
 /// One row of `enumerate`. Every field defaults, so a host that adds one never fails the list.
 public struct ListedProfile: Codable, Hashable, Sendable, Identifiable {
     public var id: String = ""
@@ -105,9 +112,10 @@ public struct ListedProfile: Codable, Hashable, Sendable, Identifiable {
     public var seat: ProfileSeat?
     /// This device's old seat became this profile.
     public var legacySeat: Bool = false
+    public var unlock: UnlockNeed = .none
 
     private enum CodingKeys: String, CodingKey {
-        case id, accent, avatar, owner, seat
+        case id, accent, avatar, owner, seat, unlock
         case displayName = "display_name"
         case legacySeat = "legacy_seat"
     }
@@ -121,10 +129,13 @@ public struct ListedProfile: Codable, Hashable, Sendable, Identifiable {
         owner = try c.decodeIfPresent(Bool.self, forKey: .owner) ?? false
         seat = try c.decodeIfPresent(ProfileSeat.self, forKey: .seat)
         legacySeat = try c.decodeIfPresent(Bool.self, forKey: .legacySeat) ?? false
+        let word = try c.decodeIfPresent(String.self, forKey: .unlock) ?? ""
+        unlock = UnlockNeed(rawValue: word) ?? .none
     }
 
     public init(id: String, displayName: String, accent: String? = nil, avatar: String? = nil,
-                owner: Bool = false, seat: ProfileSeat? = nil, legacySeat: Bool = false) {
+                owner: Bool = false, seat: ProfileSeat? = nil, legacySeat: Bool = false,
+                unlock: UnlockNeed = .none) {
         self.id = id
         self.displayName = displayName
         self.accent = accent
@@ -132,6 +143,7 @@ public struct ListedProfile: Codable, Hashable, Sendable, Identifiable {
         self.owner = owner
         self.seat = seat
         self.legacySeat = legacySeat
+        self.unlock = unlock
     }
 
     public var pick: ProfilePick { ProfilePick(id: id, displayName: displayName, avatar: avatar) }
@@ -232,12 +244,13 @@ public enum HostProfiles {
         case refuse(String)
     }
 
-    /// The gate for `p`'s seat, as `enumerate` lists it.
+    /// The gate for `p`'s seat, as `enumerate` lists it. A locked profile's unlock starts its
+    /// stopped seat; the host refuses it a wake.
     public static func seatGate(_ p: ListedProfile) -> SeatGate {
         guard let seat = p.seat else { return .dial }
         switch seat.state {
         case .ready, .occupied, .other: return .dial
-        case .stopped: return .wake
+        case .stopped: return p.unlock == .none ? .wake : .dial
         case .starting: return .wait(detail: seat.detail)
         case .unavailable:
             return .refuse(seat.detail ?? "That profile can't play on this host right now.")

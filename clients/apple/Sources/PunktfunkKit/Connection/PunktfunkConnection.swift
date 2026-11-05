@@ -190,6 +190,9 @@ public enum HostRejection: Sendable {
     case noSeat
     case seatOccupied
     case seatUnavailable
+    /// The profile is on a person's own account and needs its password, or refused the unlock
+    /// this connect sent. The host's sentence says which; none asks for the password.
+    case profileLocked
 
     init?(status: Int32) {
         switch status {
@@ -210,6 +213,7 @@ public enum HostRejection: Sendable {
         case PUNKTFUNK_STATUS_REJECTED_NO_SEAT.rawValue: self = .noSeat
         case PUNKTFUNK_STATUS_REJECTED_SEAT_OCCUPIED.rawValue: self = .seatOccupied
         case PUNKTFUNK_STATUS_REJECTED_SEAT_UNAVAILABLE.rawValue: self = .seatUnavailable
+        case PUNKTFUNK_STATUS_REJECTED_PROFILE_LOCKED.rawValue: self = .profileLocked
         default: return nil
         }
     }
@@ -234,6 +238,7 @@ public enum HostRejection: Sendable {
         case .noSeat: return PUNKTFUNK_STATUS_REJECTED_NO_SEAT.rawValue
         case .seatOccupied: return PUNKTFUNK_STATUS_REJECTED_SEAT_OCCUPIED.rawValue
         case .seatUnavailable: return PUNKTFUNK_STATUS_REJECTED_SEAT_UNAVAILABLE.rawValue
+        case .profileLocked: return PUNKTFUNK_STATUS_REJECTED_PROFILE_LOCKED.rawValue
         }
     }
 
@@ -282,6 +287,8 @@ public enum HostRejection: Sendable {
             return "Someone is already playing as that profile."
         case .seatUnavailable:
             return "That profile can't play on this host right now."
+        case .profileLocked:
+            return "This profile needs its account password."
         }
     }
 }
@@ -1140,37 +1147,22 @@ public final class PunktfunkConnection: @unchecked Sendable {
     /// (Annex-B NAL parsing vs the AV1 OBU repack).
     public var videoCodec: VideoCodec { VideoCodec(wire: resolvedCodec) }
 
-    /// Connect and start a session at the requested mode (the host creates a native virtual
-    /// output at exactly this size/refresh). Blocks up to `timeoutMs`.
+    /// Connect and start a session at the requested mode: the host makes a virtual output at
+    /// exactly that size and refresh. Blocks up to `timeoutMs`.
     ///
-    /// `pinSHA256`: the host's expected certificate fingerprint (exactly 32 bytes, else
-    /// `invalidPin` is thrown — never silently downgraded); nil = trust on first use
-    /// (check `hostFingerprint` afterwards). A pinned mismatch throws.
+    /// `pinSHA256` is the host's certificate fingerprint, exactly 32 bytes or `invalidPin`; nil
+    /// trusts on first use (read `hostFingerprint` after). A pinned mismatch throws. `identity`
+    /// is this client's stored identity, so a paired host knows it; nil is anonymous.
     ///
-    /// `identity`: this client's persistent identity (from `generateIdentity()`, stored in
-    /// the Keychain) — presented so a host recognizes a paired client. nil = anonymous;
-    /// hosts running `--require-pairing` reject anonymous sessions.
+    /// `compositor`, `gamepad` and `bitrateKbps` default to the host's choice; read the
+    /// `resolved…` values after. `audioRateHz`/`audioBits` ask for a format: 48 000/16 is the
+    /// Opus plane, anything else the bit-exact `0xD3` plane, which takes 2.1–8.5 Mbps for stereo
+    /// outside ABR and so is an explicit opt-in. The request is not the answer: open the output
+    /// from `resolvedAudioRateHz`/`resolvedAudioBits`/`resolvedAudioChannels`. A format no
+    /// datagram carries falls back to Opus 48 kHz.
     ///
-    /// `compositor`: which backend should drive the virtual output host-side (see
-    /// `Compositor`; `.auto` = host decides).
-    ///
-    /// `gamepad`: which virtual pad the host creates for this session's controllers (see
-    /// `GamepadType`; `.auto` = host decides). Check `resolvedGamepad` afterwards.
-    ///
-    /// `bitrateKbps`: requested video encoder bitrate (0 = host default; the host clamps
-    /// to its supported range). Check `resolvedBitrateKbps` afterwards — a speed test
-    /// (`startSpeedTest`) is how a client picks an informed value.
-    ///
-    /// `audioRateHz`/`audioBits`: the audio format to ASK for (48 000/16 = today's Opus plane, the
-    /// default and the only pair that is byte-for-byte identical on the wire to every session
-    /// before the lossless plane existed). Anything else asks for the bit-exact `0xD3` plane, whose
-    /// rate ladder is 44 100 / 48 000 / 88 200 / 96 000 / 176 400 (`pcm::rate_is_supported`), and
-    /// takes 2.1–8.5 Mbps off the top of the link for stereo — three times that for 5.1, four for
-    /// 7.1 — outside ABR, so it is a deliberate user opt-in on both ends, never a default.
-    /// **The request is not the answer**: read `resolvedAudioRateHz`/`resolvedAudioBits`/
-    /// `resolvedAudioChannels` afterwards and open the output device from those. Asking for
-    /// something the connection cannot carry is not an error — a format whose frame does not fit
-    /// one datagram, 176 400/24-bit among them, resolves the session back to Opus 48 kHz.
+    /// `unlock` opens a profile on a person's own account and goes to a pinned host only
+    /// (`invalidPin` without a pin). It is wiped when this returns, so it dials once.
     public init(
         host: String, port: UInt16 = 9777,
         width: UInt32, height: UInt32, refreshHz: UInt32,
@@ -1198,14 +1190,21 @@ public final class PunktfunkConnection: @unchecked Sendable {
         // `showsScreens` a later `requestScreens` may ask for them though none is asked here.
         screens: ScreenAsk = .none,
         showsScreens: Bool = false,
+        unlock: ProfileUnlock? = nil,
         // Called once, on this thread, when the host answers that its operator is deciding about
         // this device; the connect then waits for that verdict instead of `timeoutMs`.
         onPending: (@Sendable () -> Void)? = nil
     ) throws {
+        defer { unlock?.secret.wipe() }
         self.settings = settings
         self.showsScreens = showsScreens
         _ = Self.abiVersionGate // version-equality guard — fail loudly before the first C call
         if let pin = pinSHA256, pin.count != 32 { throw PunktfunkClientError.invalidPin }
+        if unlock != nil, pinSHA256 == nil { throw PunktfunkClientError.invalidPin }
+        // A wiped unlock already dialed once.
+        if let unlock, unlock.secret.count == 0 {
+            throw PunktfunkClientError.status(PUNKTFUNK_STATUS_INVALID_ARG.rawValue)
+        }
         var observed = [UInt8](repeating: 0, count: 32)
         // Why a failed connect failed (PunktfunkStatus): lets a typed host rejection
         // ("denied in the console", "approval timed out", "host busy") surface as
@@ -1251,6 +1250,8 @@ public final class PunktfunkConnection: @unchecked Sendable {
         opts.client_caps = clientCaps
         opts.video_fit = videoFit
         opts.shows_screens = showsScreens ? 1 : 0
+        // This build asks for a locked profile's password and dials again.
+        opts.prompts_unlock = 1
         opts.timeout_ms = timeoutMs
         // The callback runs inside the connect call below, so the box only has to outlive it.
         let pending = onPending.map(PendingCallback.init)
@@ -1284,8 +1285,16 @@ public final class PunktfunkConnection: @unchecked Sendable {
                                             return screens.records.withUnsafeBufferPointer { list in
                                                 opts.screens = list.baseAddress
                                                 opts.screen_count = UInt8(clamping: list.count)
-                                                return punktfunk_connect_opts(
-                                                    &opts, &observed, &connectStatus)
+                                                func call() -> OpaquePointer? {
+                                                    punktfunk_connect_opts(
+                                                        &opts, &observed, &connectStatus)
+                                                }
+                                                guard let unlock else { return call() }
+                                                return unlock.withC { c in
+                                                    opts.unlock = c
+                                                    defer { opts.unlock = nil }
+                                                    return call()
+                                                }
                                             }
                                         }
                                         if let pin = pinSHA256 {
