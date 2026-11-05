@@ -47,6 +47,11 @@ standard account the box already has. The console asks for the second with `seat
 - **Commands.** `adopt` carries `seat`, as `create` does, plus the account's `sid` and
   `password`, and answers `created`. `credential` carries `id` and `password`, checks the password
   with a sign-in, seals it in place of the old one and answers `resealed` with the row.
+- **Attempts.** Two wrong passwords for one account, by `adopt` and `credential` together, reach
+  the sign-in in any 15 minutes. A third answers `unlock_locked_out` with the wait in its
+  sentence before any sign-in, so the supervisor never drives the account into Windows' lockout.
+- **Its host** starts with `PUNKTFUNK_SEAT_OWN_ACCOUNT=1`, as a Linux one on a person's own
+  account does.
 - **Ledger.** An adopted row has `adopted_sid`, the account's SID, and `rdp_granted`, `true` when
   adopt put the account in Remote Desktop Users. A made row has neither, and its JSON is unchanged.
 - **Identity.** A made account is the row's when its comment holds the seat's marker. An adopted
@@ -149,6 +154,7 @@ them together. The host logs a warning at startup for each one that is set and i
 | `PUNKTFUNK_TRUST_DIR` | the box's config directory | The seat reads the box's pairing store, `profiles.json`, per-device display overlays and `seat-defaults.json` from here, read only, and follows their changes. A relative path is ignored. |
 | `PUNKTFUNK_PAIRING` | `refused` | Devices pair with the box. A knock is refused and no PIN window opens. A seat host refuses pairing with or without it. |
 | `PUNKTFUNK_LIBRARY_DIR` | Windows: the box's config directory. Linux: the seat's trust copy, on every seat but the owner's | The seat reads the box's library from here, read only: `library*.json`, `library-metadata/`, the plugin grants and the firmware plugins staged; on Windows also the plugin manifests its entries launch through and the managed emulators. Play stats stay in the seat's own directory. A relative path is ignored. |
+| `PUNKTFUNK_SEAT_OWN_ACCOUNT` | `1` on a seat on a person's own account, Windows and Linux | The host's one sign that it runs as a real person: read through `pf_paths::seat`. Unset on a made seat and on the Linux owner's row. |
 | `PUNKTFUNK_SEAT_STEAM` | the seat's own `steam.exe` (Windows only, when the box has Steam) | Steam runs once per IPC name per machine, so a seat starts Steam from here only, always with `-master_ipc_name_override pfseat<seat id>`. The supervisor copies the box's client into the seat account's profile at the seat's first start; until the file exists, the seat's Steam titles don't start. Unset or relative: no Steam on the seat. |
 
 It also sets these ordinary [host settings](/docs/configuration), so seats don't collide. A seat
@@ -683,8 +689,9 @@ it, so it moves to the row's ports at boot, logged in or not. The owner's own co
 
 A seat on the Linux door can run on an account the box already has: a family member's own login.
 The console asks with `seat: true`, `seat_account`, a Linux user name, and `seat_password` on
-`POST /api/v1/profiles`. It runs as the owner's row does, in a `background` session on a bus of
-its own, but it is a contract seat's host, not the owner's.
+`POST /api/v1/profiles`. It runs as the owner's row does, on a bus of its own, but in a session
+of the unit's `user` class, which a shutdown at the machine counts as another user's session,
+and it is a contract seat's host, not the owner's.
 
 - **Command.** `adopt_user` carries `seat`, as `create` does, plus the account's `password`, and
   answers `created`. The supervisor reads the account's uid itself. The password goes once through
@@ -692,7 +699,16 @@ its own, but it is a contract seat's host, not the owner's.
   then `pam_acct_mgmt`, so a locked or expired account is refused. Nothing keeps it, and
   `credential` is refused for the row. A refusal's code is `credential_wrong`,
   `credential_must_change`, `account_locked`, `account_missing`, `account_not_ordinary`,
-  `account_is_owner`, `account_taken` or `pam_unavailable`.
+  `account_is_owner`, `account_taken`, `unlock_locked_out` or `pam_unavailable`.
+- **The check.** PAM runs in a child, `punktfunk-seats pam-check <account>`, with an empty
+  environment and the password on stdin; libpam never loads into the daemon. A child that hasn't
+  answered in 30 seconds is killed and the answer is `pam_unavailable`. Other commands don't
+  wait on it, and the account's uid is read again before the row lands.
+- **Attempts.** After a failed check the console waits 2 s × 2^failures for that account, and
+  15 minutes after the fifth. Two failed checks for one account reach PAM in any 15 minutes,
+  from every source together, so a stack that locks after three, such as `pam_faillock`, is
+  never driven there. A refusal answers `unlock_locked_out` with the wait in its sentence. A
+  check that gave no verdict counts as failed.
 - **Which accounts.** An ordinary user, as the owner's row takes: uid 1000 up, outside
   60001–65535 and below 2³¹, never a seat's, named by the owner's name rule, so `user@domain` of
   a directory service passes. Not the box owner, by name or by uid, and not an account another row
@@ -716,7 +732,7 @@ its own, but it is a contract seat's host, not the owner's.
 
 | Variable | A person's row |
 |---|---|
-| `PUNKTFUNK_SEAT_OWN_ACCOUNT` | `1`, read by the runner alone: the account is a person's own, so the session is `background` on a private bus, the user's other desktop processes are left alone, and no seat-only setup is written into their home. The owner's row has the same mode from `PUNKTFUNK_SEAT_OWNER`. |
+| `PUNKTFUNK_SEAT_OWN_ACCOUNT` | `1`: the account is a person's own. The runner keeps the session on a private bus, leaves the user's other desktop processes alone and writes no seat-only setup into their home; the owner's row has the same mode from `PUNKTFUNK_SEAT_OWNER`. The host reads it too, as on Windows. |
 | `PUNKTFUNK_SEAT_OWNER` | Not set: the host is a contract seat's. |
 | `PUNKTFUNK_CONFIG_DIR` | `seats/<id>/config`, not the home. |
 | `PUNKTFUNK_LIBRARY_DIR`, `PUNKTFUNK_HOST_NAME`, `PUNKTFUNK_GAMESTREAM` | As on any contract seat. |
