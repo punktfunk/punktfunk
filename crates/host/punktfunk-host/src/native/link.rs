@@ -175,12 +175,12 @@ pub(crate) enum SessionLink {
     QuicV2(quinn::Connection, Arc<V2Link>),
     /// The browser plane: the same protocol over one WebTransport session, the device
     /// fingerprint its key signature proved (`None` before admission and under `serve --open`),
-    /// and whether a page server relayed it ([`Self::relay`]).
+    /// and the page server and page it came through ([`Self::via`]).
     Web(
         wtransport::Connection,
         Option<[u8; 32]>,
         Arc<V2Session>,
-        crate::native_pairing::Relay,
+        Arc<crate::native_pairing::Via>,
     ),
 }
 
@@ -264,13 +264,13 @@ impl SessionLink {
         self.quic().remote_address()
     }
 
-    /// What a page server said about the browser behind this session. A relayed knock is strict.
-    /// [`Relay::Direct`](crate::native_pairing::Relay::Direct) on the native plane, which has no
-    /// relay, and for a browser that dialled itself.
-    pub(crate) fn relay(&self) -> crate::native_pairing::Relay {
+    /// The page server and page this session came through, which can make its knock strict.
+    /// [`Via::DIRECT`](crate::native_pairing::Via::DIRECT) on the native plane, which has neither.
+    pub(crate) fn via(&self) -> &crate::native_pairing::Via {
+        static DIRECT: crate::native_pairing::Via = crate::native_pairing::Via::DIRECT;
         match self {
-            SessionLink::QuicV2(..) => crate::native_pairing::Relay::Direct,
-            SessionLink::Web(.., relay) => *relay,
+            SessionLink::QuicV2(..) => &DIRECT,
+            SessionLink::Web(.., via) => via,
         }
     }
 

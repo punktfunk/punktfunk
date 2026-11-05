@@ -28,10 +28,10 @@ struct Pending {
     requested_at: Instant,
     /// QUIC-validated knock source, used for the per-source cap. `None` if unknown.
     src_ip: Option<IpAddr>,
-    /// [`classify_relayed`] of `src_ip` and the knock's [`Relay`], when the knock arrived.
+    /// [`Via::classify`] of `src_ip`, when the knock arrived.
     source: KnockSource,
-    /// A page server relayed the knock. Its source is then [`KnockSource::Wan`].
-    relayed: bool,
+    /// The page server and page the knock came through.
+    via: Via,
     /// True while [`ApprovalQueue::wait_for_decision`] holds this knock open.
     /// Eviction skips a parked entry unless every candidate is parked.
     parked: bool,
@@ -98,6 +98,34 @@ pub fn classify_relayed(peer: Option<IpAddr>, relay: Relay) -> KnockSource {
     }
 }
 
+/// How a browser session reached the host besides its peer address: the page server that relayed
+/// it, and the page that opened it. The native plane has neither ([`Via::DIRECT`]).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Via {
+    pub relay: Relay,
+    /// The page's `Origin`, sanitised. `None` from a client that is not a page.
+    pub origin: Option<String>,
+    /// `origin` is public and this host does not know it. Its knocks are strict.
+    pub unfamiliar_origin: bool,
+}
+
+impl Via {
+    pub const DIRECT: Via = Via {
+        relay: Relay::Direct,
+        origin: None,
+        unfamiliar_origin: false,
+    };
+
+    /// The class a knock or pairing attempt over this path takes: strict when a page server
+    /// relayed it or an unfamiliar public page opened it, else `peer`'s own.
+    pub fn classify(&self, peer: Option<IpAddr>) -> KnockSource {
+        if self.unfamiliar_origin {
+            return KnockSource::Wan;
+        }
+        classify_relayed(peer, self.relay)
+    }
+}
+
 /// The host routes its replies to `peer` out of a mesh VPN's interface. A handshake needs those
 /// replies, so a CGNAT neighbour that borrows a mesh address never completes one. A UDP
 /// `connect` looks the route up without sending; any failure reads as not the mesh.
@@ -127,6 +155,10 @@ pub struct PendingRequest {
     pub source: KnockSource,
     /// A page server relayed it, so `source` is [`KnockSource::Wan`] whatever its address.
     pub relayed: bool,
+    /// The page that opened the session, when a page did.
+    pub origin: Option<String>,
+    /// That page is public and this host does not know it, so `source` is [`KnockSource::Wan`].
+    pub unfamiliar_origin: bool,
     /// The profile id the knock named, unchecked.
     pub profile: Option<String>,
 }
@@ -234,18 +266,17 @@ impl ApprovalQueue {
     /// Record an unpaired knock. Same fingerprint refreshes in place and bumps
     /// generation so older parked waiters resolve `Superseded`. Bounded by
     /// [`MAX_PENDING_PER_IP`] of `src_ip` then [`PENDING_CAP`]; the name is untrusted.
-    /// A relayed knock is strict ([`classify_relayed`]).
+    /// A relayed knock and one from an unfamiliar public page are strict ([`Via::classify`]).
     pub(super) fn note_pending(
         &self,
         name: &str,
         fp_hex: &str,
         src_ip: Option<IpAddr>,
-        relay: Relay,
+        via: &Via,
         profile: Option<&str>,
     ) -> u32 {
         let name = super::sanitize_device_name(name, fp_hex);
-        let source = classify_relayed(src_ip, relay);
-        let relayed = relay.is_relayed();
+        let source = via.classify(src_ip);
         let mut pending = self.pending.lock().unwrap();
         Self::expire_pending(&mut pending);
         if let Some(p) = pending
@@ -260,7 +291,7 @@ impl ApprovalQueue {
             // bare approve would admit it.
             p.src_ip = src_ip;
             p.source = source;
-            p.relayed = relayed;
+            p.via = via.clone();
             p.profile = profile.map(str::to_string);
             p.knock_seq = p.knock_seq.wrapping_add(1);
             let seq = p.knock_seq;
@@ -301,7 +332,7 @@ impl ApprovalQueue {
             requested_at: Instant::now(),
             src_ip,
             source,
-            relayed,
+            via: via.clone(),
             parked: false,
             knock_seq: 0,
             profile: profile.map(str::to_string),
@@ -351,7 +382,9 @@ impl ApprovalQueue {
                 fingerprint: p.fp_hex.clone(),
                 age_secs: p.requested_at.elapsed().as_secs(),
                 source: p.source,
-                relayed: p.relayed,
+                relayed: p.via.relay.is_relayed(),
+                origin: p.via.origin.clone(),
+                unfamiliar_origin: p.via.unfamiliar_origin,
                 profile: p.profile.clone(),
             })
             .collect()
@@ -367,16 +400,16 @@ impl ApprovalQueue {
             .any(|p| p.fp_hex.eq_ignore_ascii_case(fp_hex))
     }
 
-    /// Where pending `id` knocked from and whether a page server relayed it, or `None` if the
-    /// entry is gone. Read before admitting: a bare approve must refuse a strict knock.
-    pub(super) fn source_of(&self, id: u32) -> Option<(KnockSource, bool)> {
+    /// Where pending `id` knocked from and the path it took, or `None` if the entry is gone. Read
+    /// before admitting: a bare approve must refuse a strict knock.
+    pub(super) fn source_of(&self, id: u32) -> Option<(KnockSource, Via)> {
         let mut pending = self.pending.lock().unwrap();
         Self::expire_pending(&mut pending);
         pending
             .items
             .iter()
             .find(|p| p.id == id)
-            .map(|p| (p.source, p.relayed))
+            .map(|p| (p.source, p.via.clone()))
     }
 
     /// `(name, fingerprint)` of pending `id` without removing it. `None` if missing

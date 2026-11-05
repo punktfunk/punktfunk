@@ -44,6 +44,10 @@ pub struct PairedClient {
     /// Not an authorization input: it places controllers, it never widens access.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub preferred_pad_slot: Option<u8>,
+    /// The page a browser paired or last authenticated from, when it had none. Makes that page
+    /// familiar, so its next device's knock may be approved. Never an authorization input.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin: Option<String>,
 }
 
 /// Operator access choice. `Option<Access>::None` means no choice: new records get
@@ -248,6 +252,7 @@ impl TrustStore {
                 granted_unix: access.map(|_| crate::clock::unix_secs()),
                 until_disconnect: access.is_some_and(|a| a.until_disconnect),
                 preferred_pad_slot: None,
+                origin: None,
             }),
         }
         if let Err(e) = save(&p) {
@@ -301,6 +306,28 @@ impl TrustStore {
             return Err(e);
         }
         Ok(true)
+    }
+
+    /// Set `origin` on `fp_hex`'s record when it has none. No record, or one that names a page
+    /// already, writes nothing. Persist failure rolls back RAM.
+    pub(super) fn remember_origin(&self, fp_hex: &str, origin: &str) -> Result<()> {
+        let mut p = self.lock();
+        let snapshot = p.clients.clients.clone();
+        let Some(existing) = p
+            .clients
+            .clients
+            .iter_mut()
+            .find(|c| c.fingerprint.eq_ignore_ascii_case(fp_hex))
+            .filter(|c| c.origin.is_none())
+        else {
+            return Ok(());
+        };
+        existing.origin = Some(origin.to_string());
+        if let Err(e) = save(&p) {
+            p.clients.clients = snapshot;
+            return Err(e);
+        }
+        Ok(())
     }
 
     pub(super) fn list(&self) -> Vec<PairedClient> {

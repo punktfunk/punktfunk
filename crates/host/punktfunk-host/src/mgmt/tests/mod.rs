@@ -65,7 +65,7 @@ use crate::gamestream::cert::ServerIdentity;
 use crate::gamestream::{LaunchSession, HTTPS_PORT, HTTP_PORT};
 use crate::host::Host;
 use crate::https::{PeerAddr, PeerCertFingerprint};
-use crate::native_pairing::Relay;
+use crate::native_pairing::{Relay, Via};
 use axum::body::Body;
 use axum::http::{Method, StatusCode};
 use http_body_util::BodyExt;

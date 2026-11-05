@@ -63,6 +63,10 @@ lets you play away from home.
    for approval** ([Pairing](/docs/pairing#approve-it-from-the-console-no-pin)). Or click **Pair a
    device** in the console and type its PIN into the page.
 
+A page served from a public name that no paired device has used yet shows as **From a new page**,
+with no **Approve**: click **Arm PIN** on its row and type that PIN into the page. Later devices
+from the same page are approved as usual.
+
 The browser stays paired. Clearing the site's data unpairs it, and a private window is a new device
 every time.
 

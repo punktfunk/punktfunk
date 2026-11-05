@@ -17,7 +17,7 @@ use super::{Serving, WebTransportPlane};
 use crate::https::{sha256, spki_p256_point};
 use crate::native::link::{CtlReader, CtlRecv, CtlSend, SessionLink, V2Session};
 use crate::native::{DataPlane, Served};
-use crate::native_pairing::Relay;
+use crate::native_pairing::Via;
 use anyhow::{Context, Result};
 use punktfunk_core::quic::v2::hello::ClientHello;
 use punktfunk_core::quic::v2::io as v2io;
@@ -61,20 +61,23 @@ fn rejected(reason: RejectReason) -> anyhow::Error {
 /// browser slot. The slot is taken once admission returns, so a peer that stalls before its
 /// device signature holds none. An unpaired device takes one only on approval. A full host
 /// waits here with the session accepted; the plane's keep-alive holds the path meanwhile.
-/// A session a page server relayed knocks and pairs strict.
+/// `via` can make its knock and pairing strict. `unadmitted` is given back once admission returns.
 pub(crate) async fn run(
     conn: Connection,
     serving: Arc<Serving>,
     sem: Arc<tokio::sync::Semaphore>,
-    relay: Relay,
+    via: Arc<Via>,
+    unadmitted: super::UnadmittedSlot,
 ) -> Result<Served> {
+    let admitted = admit_session(&conn, &serving, &via).await?;
+    drop(unadmitted);
     let Some(Admitted {
         link,
         mut tx,
         rx,
         first,
         knock,
-    }) = admit_session(&conn, &serving, relay).await?
+    }) = admitted
     else {
         return Ok(Served::Session);
     };
@@ -134,7 +137,7 @@ struct Admitted {
 async fn admit_session(
     conn: &Connection,
     serving: &Serving,
-    relay: Relay,
+    via: &Arc<Via>,
 ) -> Result<Option<Admitted>> {
     const HANDSHAKE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
     let (tx, mut rx) = tokio::time::timeout(HANDSHAKE_TIMEOUT, conn.accept_bi())
@@ -158,7 +161,7 @@ async fn admit_session(
         .context("read the first message")?;
 
     if let Ok(req) = decode::<PairRequest>(ty, &body) {
-        pair(conn, tx, rx, req, serving, relay).await?;
+        pair(conn, tx, rx, req, serving, via).await?;
         return Ok(None);
     }
     let first = decode::<ClientHello>(ty, &body)
@@ -196,6 +199,10 @@ async fn admit_session(
         let knock = match serving.plane.pairing.effective(&fp_hex, now) {
             Some(_) => {
                 tracing::info!(fingerprint = %fp_hex, "browser authenticated");
+                // A record with no page gets this one, so a page that works today stays familiar.
+                if let Some(origin) = &via.origin {
+                    serving.plane.pairing.remember_origin(&fp_hex, origin);
+                }
                 None
             }
             None => Some(knock_label(&first, &fp_hex)),
@@ -205,7 +212,7 @@ async fn admit_session(
         (None, None)
     };
     Ok(Some(Admitted {
-        link: SessionLink::Web(conn.clone(), device_fp, session, relay),
+        link: SessionLink::Web(conn.clone(), device_fp, session, via.clone()),
         tx,
         rx,
         first,
@@ -240,14 +247,15 @@ fn verify(auth: &AuthResponse, nonce: &[u8; 32], serving: &Serving) -> Result<[u
 /// The identities are what makes this the native ceremony rather than a second one: the client's
 /// is the SHA-256 of the device key it just sent, the host's is the hash of the certificate this
 /// endpoint presented — which the browser had to pin to connect at all, so a man in the middle
-/// cannot hold it without the host's private key. A relayed attempt is strict.
+/// cannot hold it without the host's private key. A relayed attempt, or one from an unfamiliar
+/// public page, is strict. A paired device keeps its page on its record.
 async fn pair(
     conn: &Connection,
     tx: CtlSend,
     rx: CtlReader,
     req: PairRequest,
     serving: &Serving,
-    relay: Relay,
+    via: &Arc<Via>,
 ) -> Result<()> {
     anyhow::ensure!(
         spki_p256_point(&req.device_key).is_some(),
@@ -256,7 +264,7 @@ async fn pair(
     // The class picks the clock and tells the peer nothing. The charge comes before arming is
     // consulted, on every outcome: otherwise this plane answers "is pairing armed?" for free, to
     // anyone. A stranger's attempts hold only the strict clock.
-    let source = crate::native_pairing::classify_relayed(Some(conn.remote_address().ip()), relay);
+    let source = via.classify(Some(conn.remote_address().ip()));
     if !serving.pairing_clocks.charge(source) {
         return Err(refused(
             punktfunk_core::reject::PAIR_RATE_LIMITED_CLOSE_CODE,
@@ -296,7 +304,7 @@ async fn pair(
             conn.clone(),
             None,
             Arc::new(V2Session::new()),
-            relay,
+            via.clone(),
         ),
         crate::native::PairWire::V2 { send: tx, recv: rx },
         req,
@@ -305,12 +313,20 @@ async fn pair(
         &serving.plane.pairing,
         &pin,
     )
-    .await
+    .await?;
+    if let Some(origin) = &via.origin {
+        serving
+            .plane
+            .pairing
+            .remember_origin(&hex::encode(client_fp), origin);
+    }
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::native_pairing::Relay;
     use punktfunk_core::quic::auth_signed_message;
     use punktfunk_core::quic::v2::hello::ClientHello;
     use punktfunk_core::quic::v2::msg::V2Message;
@@ -478,6 +494,7 @@ mod tests {
         s: &Serving,
         key: &KeyPair,
         first: &[u8],
+        via: Via,
     ) -> (
         wtransport::Connection,
         punktfunk_core::quic::v2::io::FrameReader<wtransport::RecvStream>,
@@ -497,7 +514,7 @@ mod tests {
         };
         let host = async {
             let conn = server.accept().await.await.unwrap().accept().await.unwrap();
-            admit_session(&conn, s, Relay::Direct)
+            admit_session(&conn, s, &Arc::new(via))
                 .await
                 .unwrap()
                 .expect("a session, not a pairing")
@@ -506,8 +523,8 @@ mod tests {
         (conn, rx, admitted)
     }
 
-    /// One `PairRequest` over loopback WebTransport, marked as `relay`; returns the refusal's
-    /// close code. Pairing is never armed here, so an answered attempt reads "not armed".
+    /// One `PairRequest` over loopback WebTransport, by `relay`; returns the refusal's close
+    /// code. Pairing is never armed here, so an answered attempt reads "not armed".
     async fn pair_over_loopback(s: &Serving, relay: Relay) -> u32 {
         let key = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).unwrap();
         let req = PairRequest {
@@ -523,7 +540,13 @@ mod tests {
         };
         let host = async {
             let conn = server.accept().await.await.unwrap().accept().await.unwrap();
-            let e = admit_session(&conn, s, relay).await.err().expect("refused");
+            let via = Arc::new(Via {
+                relay,
+                ..Via::DIRECT
+            });
+            let Err(e) = admit_session(&conn, s, &via).await else {
+                panic!("refused");
+            };
             e.downcast_ref::<Refusal>().expect("a typed refusal").code
         };
         tokio::join!(browser, host).1
@@ -560,10 +583,161 @@ mod tests {
         np.add("Enrico's browser", &hex::encode(fp)).unwrap();
 
         let first = hello("Safari on Mac", None);
-        let (_browser, _rx, admitted) = admit_over_loopback(&s, &key, &first).await;
+        let (_browser, _rx, admitted) = admit_over_loopback(&s, &key, &first, Via::DIRECT).await;
         assert!(admitted.link.is_web());
         assert_eq!(admitted.link.peer_fingerprint(), Some(fp));
         assert!(admitted.knock.is_none(), "a paired device streams at once");
+    }
+
+    /// A page is familiar on a private address, under a local name, as a local file, in the
+    /// plane's origin list or on a pairing record. Anything else, `null` included, is strict.
+    #[test]
+    fn only_an_unfamiliar_public_page_is_strict() {
+        let np = store("familiar");
+        let mut s = serving(np.clone());
+        s.plane.origins = vec!["https://play.example.com".into()];
+        np.add("Enrico's browser", "aa11").unwrap();
+        np.remember_origin("aa11", "https://web.punktfunk.io");
+        let strict = |origin: Option<&str>| {
+            crate::webtransport::via(Relay::Direct, origin.map(Into::into), &s).unfamiliar_origin
+        };
+        for familiar in [
+            "https://192.168.1.10:8443",
+            "https://[fd00::1]:8443",
+            "https://desk.local",
+            "http://localhost:5173",
+            "file://",
+            "https://play.example.com",
+            "https://web.punktfunk.io",
+        ] {
+            assert!(!strict(Some(familiar)), "{familiar}");
+        }
+        for unfamiliar in [
+            "https://evil.example",
+            "https://8.8.8.8",
+            "https://desk.local.evil.example",
+            "null",
+        ] {
+            assert!(strict(Some(unfamiliar)), "{unfamiliar}");
+        }
+        assert!(
+            !strict(None),
+            "a client that is not a page is classified by its address"
+        );
+    }
+
+    /// A page this host does not know cannot knock its way in with one click, even from the LAN.
+    /// The row carries the page, and approve is refused for it.
+    #[tokio::test]
+    async fn a_knock_from_an_unfamiliar_page_is_strict_and_names_it() {
+        use crate::native_pairing::{ApproveOutcome, KnockSource};
+        let np = store("evil-page");
+        let s = serving(np.clone());
+        let key = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).unwrap();
+        let fp_hex = hex::encode(sha256(&key.subject_public_key_info()));
+        let via = crate::webtransport::via(Relay::Direct, Some("https://evil.example".into()), &s);
+        let first = hello("Chrome on Mac", None);
+        let (_browser, _rx, admitted) = admit_over_loopback(&s, &key, &first, via).await;
+        let label = admitted.knock.expect("an unpaired device knocks");
+
+        let sem = Arc::new(tokio::sync::Semaphore::new(1));
+        let park =
+            crate::native::park_knock(&admitted.link, None, &np, &label, &fp_hex, None, &sem);
+        let console = async {
+            let pending = loop {
+                if let Some(p) = np.pending().into_iter().find(|p| p.fingerprint == fp_hex) {
+                    break p;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            };
+            assert_eq!(
+                pending.source,
+                KnockSource::Wan,
+                "a loopback peer, still strict"
+            );
+            assert_eq!(pending.origin.as_deref(), Some("https://evil.example"));
+            assert!(pending.unfamiliar_origin && !pending.relayed);
+            assert!(matches!(
+                np.approve_pending(pending.id, None, None).unwrap(),
+                ApproveOutcome::WanNeedsBoundPin {
+                    unfamiliar_origin: true,
+                    ..
+                }
+            ));
+            assert!(np.deny_pending(pending.id));
+        };
+        let (parked, ()) = tokio::join!(park, console);
+        assert!(parked.unwrap().is_err(), "denied");
+    }
+
+    /// A device paired before pages were kept gets its page on its next session, so the page it
+    /// uses today stays familiar. A record that names a page keeps it.
+    #[tokio::test]
+    async fn a_paired_session_fills_in_a_missing_origin() {
+        let np = store("fill-origin");
+        let s = serving(np.clone());
+        let key = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).unwrap();
+        let fp_hex = hex::encode(sha256(&key.subject_public_key_info()));
+        np.add("Enrico's browser", &fp_hex).unwrap();
+        let page = |origin: &str| Via {
+            origin: Some(origin.into()),
+            ..Via::DIRECT
+        };
+        let first = hello("Safari on Mac", None);
+        let (_b, _rx, admitted) =
+            admit_over_loopback(&s, &key, &first, page("https://play.example.com")).await;
+        assert!(admitted.knock.is_none());
+        assert!(np.knows_origin("https://play.example.com"));
+
+        let (_b, _rx, _) =
+            admit_over_loopback(&s, &key, &first, page("https://other.example.com")).await;
+        assert!(np.knows_origin("https://play.example.com"));
+        assert!(!np.knows_origin("https://other.example.com"));
+    }
+
+    /// Through the real accept loop: each first contact is answered with Retry, eight sessions
+    /// from one address wait for admission, and the ninth is refused.
+    #[tokio::test]
+    async fn the_ninth_unadmitted_session_from_one_address_is_refused() {
+        let s = Arc::new(serving(store("unadmitted")));
+        let identity = wtransport::Identity::self_signed(["localhost"]).unwrap();
+        let cert = identity.certificate_chain().as_slice()[0].hash();
+        let loopback: std::net::SocketAddr = "127.0.0.1:0".parse().unwrap();
+        let server = wtransport::Endpoint::server(
+            wtransport::ServerConfig::builder()
+                .with_bind_address(loopback)
+                .with_identity(identity)
+                .build(),
+        )
+        .unwrap();
+        let url = format!(
+            "https://127.0.0.1:{}/pf2",
+            server.local_addr().unwrap().port()
+        );
+        let sem = Arc::new(tokio::sync::Semaphore::new(1));
+        let browsers = async {
+            let client = wtransport::Endpoint::client(
+                wtransport::ClientConfig::builder()
+                    .with_bind_address(loopback)
+                    .with_server_certificate_hashes([cert])
+                    .build(),
+            )
+            .unwrap();
+            let mut waiting = Vec::new();
+            for i in 0..super::super::UNADMITTED_PER_ADDR {
+                let conn = client.connect(&url).await;
+                waiting.push(conn.unwrap_or_else(|e| panic!("session {i}: {e}")));
+            }
+            let Err(ninth) = client.connect(&url).await else {
+                panic!("the ninth is refused");
+            };
+            assert!(ninth.to_string().contains("refused"), "{ninth}");
+            waiting
+        };
+        tokio::select! {
+            () = crate::webtransport::accept_loop(&server, s.clone(), sem) => unreachable!(),
+            waiting = browsers => drop(waiting),
+        }
     }
 
     /// An unpaired browser asks for access under its `Hello` name, waits without a session slot,
@@ -575,7 +749,7 @@ mod tests {
         let key = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).unwrap();
         let fp_hex = hex::encode(sha256(&key.subject_public_key_info()));
         let first = hello("Safari on Mac", None);
-        let (_browser, _rx, admitted) = admit_over_loopback(&s, &key, &first).await;
+        let (_browser, _rx, admitted) = admit_over_loopback(&s, &key, &first, Via::DIRECT).await;
         let label = admitted.knock.expect("an unpaired device knocks");
         assert_eq!(label, "Safari on Mac");
 
@@ -613,7 +787,7 @@ mod tests {
         let fp_hex = hex::encode(sha256(&key.subject_public_key_info()));
         s.plane.pairing.add("Enrico's browser", &fp_hex).unwrap();
         let first = hello("Safari on Mac", None);
-        let (browser, _rx, admitted) = admit_over_loopback(&s, &key, &first).await;
+        let (browser, _rx, admitted) = admit_over_loopback(&s, &key, &first, Via::DIRECT).await;
         let quit = punktfunk_core::quic::QUIT_CLOSE_CODE;
         browser.close(wtransport::VarInt::from_u32(quit), b"");
         let closed =
@@ -642,7 +816,7 @@ mod tests {
         np.add_with_access("Enrico's browser", &fp_hex, Some(no_launch))
             .unwrap();
         let first = hello("Safari on Mac", Some("steam:570"));
-        let (browser, _rx, admitted) = admit_over_loopback(&s, &key, &first).await;
+        let (browser, _rx, admitted) = admit_over_loopback(&s, &key, &first, Via::DIRECT).await;
         let Admitted {
             link,
             tx,
@@ -685,7 +859,7 @@ mod tests {
         let fp_hex = hex::encode(sha256(&key.subject_public_key_info()));
         s.plane.pairing.add("Enrico's browser", &fp_hex).unwrap();
         let first = hello("Safari on Mac", None);
-        let (browser, mut rx, admitted) = admit_over_loopback(&s, &key, &first).await;
+        let (browser, mut rx, admitted) = admit_over_loopback(&s, &key, &first, Via::DIRECT).await;
         let Admitted { link, mut tx, .. } = admitted;
         let to = Redirect {
             addr: "192.168.1.20".into(),

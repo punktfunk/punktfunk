@@ -412,6 +412,7 @@ export const pendingDevices: PendingDevice[] = [
 		age_secs: 8,
 		source: "lan",
 		relayed: false,
+		unfamiliar_origin: false,
 		until_disconnect: false,
 	},
 	{
@@ -422,6 +423,7 @@ export const pendingDevices: PendingDevice[] = [
 		age_secs: 30,
 		source: "lan",
 		relayed: false,
+		unfamiliar_origin: false,
 		until_disconnect: false,
 	},
 	// A knock from the internet: badged, and offered an "Arm PIN" instead of Approve.
@@ -433,6 +435,7 @@ export const pendingDevices: PendingDevice[] = [
 		age_secs: 3,
 		source: "wan",
 		relayed: false,
+		unfamiliar_origin: false,
 		until_disconnect: false,
 	},
 	// Through the web client: the same strict row, worded for the page server.
@@ -444,6 +447,20 @@ export const pendingDevices: PendingDevice[] = [
 		age_secs: 6,
 		source: "wan",
 		relayed: true,
+		unfamiliar_origin: false,
+		until_disconnect: false,
+	},
+	// From a public page the host has not paired from: strict on the LAN too, and the page shown.
+	{
+		id: 7,
+		name: "Chrome on Mac",
+		fingerprint:
+			"7e7d7c7b7a797877767574737271706f6e6d6c6b6a696867666564636261605f",
+		age_secs: 9,
+		source: "wan",
+		relayed: false,
+		origin: "https://play.example.com",
+		unfamiliar_origin: true,
 		until_disconnect: false,
 	},
 ];
@@ -457,6 +474,7 @@ export const pendingGuestReknock: PendingDevice = {
 	age_secs: 12,
 	source: "lan",
 	relayed: false,
+	unfamiliar_origin: false,
 	until_disconnect: false,
 	access_level: "controller",
 	grants: 0x01,
@@ -895,6 +913,7 @@ export const pendingWithProfile: PendingDevice = {
 	age_secs: 5,
 	source: "lan",
 	relayed: false,
+	unfamiliar_origin: false,
 	until_disconnect: false,
 	profile: { id: "9a3f1c2b7e40", display_name: "Kid" },
 };

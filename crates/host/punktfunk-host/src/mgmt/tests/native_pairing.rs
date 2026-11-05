@@ -129,14 +129,14 @@ async fn pending_devices_approve_and_deny() {
         "Enrico's MacBook",
         "aa11",
         Some(LAN_KNOCK),
-        Relay::Direct,
+        &Via::DIRECT,
         None,
     );
     np.note_pending(
         "device bb22cc33",
         "bb22",
         Some(LAN_KNOCK),
-        Relay::Direct,
+        &Via::DIRECT,
         None,
     );
     let (_, b) = send(&app, get_req("/api/v1/native/pending")).await;
@@ -389,7 +389,7 @@ async fn until_disconnect_alone_is_refused_rather_than_widening_access() {
         .unwrap(),
     );
     let app = test_app_native(test_state(), np.clone());
-    np.note_pending("Guest Phone", "cc33", Some(LAN_KNOCK), Relay::Direct, None);
+    np.note_pending("Guest Phone", "cc33", Some(LAN_KNOCK), &Via::DIRECT, None);
     let id = np.pending()[0].id;
 
     let (s, _) = send(
@@ -447,8 +447,8 @@ async fn a_wan_knock_is_listed_as_wan_and_refused_by_approve() {
     );
     let app = test_app_native(test_state(), np.clone());
     let wan = std::net::IpAddr::V4(std::net::Ipv4Addr::new(203, 0, 113, 5));
-    np.note_pending("Friend's Deck", "dd88", Some(wan), Relay::Direct, None);
-    np.note_pending("Living Room", "ee99", Some(LAN_KNOCK), Relay::Direct, None);
+    np.note_pending("Friend's Deck", "dd88", Some(wan), &Via::DIRECT, None);
+    np.note_pending("Living Room", "ee99", Some(LAN_KNOCK), &Via::DIRECT, None);
 
     let (_, b) = send(&app, get_req("/api/v1/native/pending")).await;
     let rows = b.as_array().unwrap();
@@ -507,9 +507,12 @@ async fn a_relayed_knock_is_listed_as_relayed_and_refused_by_approve() {
         .unwrap(),
     );
     let app = test_app_native(test_state(), np.clone());
-    let lan = Relay::For("10.0.0.9".parse().unwrap());
-    np.note_pending("Office browser", "ab12", Some(LAN_KNOCK), lan, None);
-    np.note_pending("Living Room", "ee99", Some(LAN_KNOCK), Relay::Direct, None);
+    let lan = Via {
+        relay: Relay::For("10.0.0.9".parse().unwrap()),
+        ..Via::DIRECT
+    };
+    np.note_pending("Office browser", "ab12", Some(LAN_KNOCK), &lan, None);
+    np.note_pending("Living Room", "ee99", Some(LAN_KNOCK), &Via::DIRECT, None);
 
     let (_, b) = send(&app, get_req("/api/v1/native/pending")).await;
     let rows = b.as_array().unwrap();
@@ -527,6 +530,49 @@ async fn a_relayed_knock_is_listed_as_relayed_and_refused_by_approve() {
     assert!(!np.is_paired("ab12"));
 }
 
+/// A knock from a page the host does not know names the page, keeps `source: "wan"`, and a bare
+/// approve is refused in those words. An access PATCH keeps the page a paired record carries.
+#[tokio::test]
+async fn an_unfamiliar_page_is_listed_and_refused_and_a_patch_keeps_a_page() {
+    let np = Arc::new(
+        crate::native_pairing::NativePairing::load_with(
+            Some(crate::test_support::scratch().join("pf-mgmt-page-knock.json")),
+            None,
+            false,
+        )
+        .unwrap(),
+    );
+    let app = test_app_native(test_state(), np.clone());
+    let evil = Via {
+        origin: Some("https://evil.example".into()),
+        unfamiliar_origin: true,
+        ..Via::DIRECT
+    };
+    np.note_pending("Chrome on Mac", "ab12", Some(LAN_KNOCK), &evil, None);
+
+    let (_, b) = send(&app, get_req("/api/v1/native/pending")).await;
+    let row = &b.as_array().unwrap()[0];
+    assert_eq!(row["source"], "wan");
+    assert_eq!(row["origin"], "https://evil.example");
+    assert_eq!(row["unfamiliar_origin"], true);
+    assert_eq!(row["relayed"], false);
+    let path = format!("/api/v1/native/pending/{}/approve", row["id"]);
+    let (s, b) = send(&app, json_req(Method::POST, &path, serde_json::json!({}))).await;
+    assert_eq!(s, StatusCode::CONFLICT);
+    assert!(b["error"].as_str().unwrap().contains("page"), "{b}");
+
+    np.add("Enrico's browser", "cd34").unwrap();
+    np.remember_origin("cd34", "https://play.example.com");
+    let body = serde_json::json!({"grants": punktfunk_core::quic::GRANT_GAMEPAD});
+    let (s, _) = send(
+        &app,
+        json_req(Method::PATCH, "/api/v1/native/clients/cd34", body),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK);
+    assert!(np.knows_origin("https://play.example.com"));
+}
+
 /// Approve pins the chosen mask. Reserved bits 400 without consuming the pending entry.
 /// A later re-knock surfaces the stored access.
 #[tokio::test]
@@ -542,7 +588,7 @@ async fn approve_with_access_pins_the_chosen_mask() {
     );
     let app = test_app_native(test_state(), np.clone());
 
-    np.note_pending("Guest Phone", "cc33", Some(LAN_KNOCK), Relay::Direct, None);
+    np.note_pending("Guest Phone", "cc33", Some(LAN_KNOCK), &Via::DIRECT, None);
     let (_, pend) = send(&app, get_req("/api/v1/native/pending")).await;
     assert!(pend[0]["grants"].is_null());
     assert!(pend[0]["access_level"].is_null());
@@ -584,7 +630,7 @@ async fn approve_with_access_pins_the_chosen_mask() {
     assert_eq!(np.effective("cc33", now), Some(GRANT_GAMEPAD));
 
     // Re-knock surfaces the stored access for the approve dialog.
-    np.note_pending("Guest Phone", "cc33", Some(LAN_KNOCK), Relay::Direct, None);
+    np.note_pending("Guest Phone", "cc33", Some(LAN_KNOCK), &Via::DIRECT, None);
     let (_, pend) = send(&app, get_req("/api/v1/native/pending")).await;
     assert_eq!(pend[0]["grants"], GRANT_GAMEPAD);
     assert_eq!(pend[0]["access_level"], "controller");
@@ -669,7 +715,7 @@ async fn approve_and_arm_without_access_fields_keep_todays_behavior() {
     assert_eq!(s, StatusCode::OK);
     assert_eq!(np.armed_access(), None, "no fields = no choice");
 
-    np.note_pending("Old Laptop", "ee55", Some(LAN_KNOCK), Relay::Direct, None);
+    np.note_pending("Old Laptop", "ee55", Some(LAN_KNOCK), &Via::DIRECT, None);
     let (_, pend) = send(&app, get_req("/api/v1/native/pending")).await;
     let id = pend[0]["id"].as_u64().unwrap();
     let (s, b) = send(

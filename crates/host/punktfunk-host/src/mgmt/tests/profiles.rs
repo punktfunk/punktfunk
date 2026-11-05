@@ -386,14 +386,14 @@ async fn a_knock_shows_the_profile_it_named() {
         "Kid's iPad",
         "aa11",
         Some(LAN_KNOCK),
-        Relay::Direct,
+        &Via::DIRECT,
         Some(&owner),
     );
     np.note_pending(
         "Stranger",
         "bb22",
         Some(LAN_KNOCK),
-        Relay::Direct,
+        &Via::DIRECT,
         Some("ffffffffffff"),
     );
     let (_, b) = send(&app, get_req("/api/v1/native/pending")).await;

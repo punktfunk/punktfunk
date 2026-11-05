@@ -352,20 +352,119 @@ fn wanted_origins(
     }
 }
 
+/// Sessions one peer address may hold before admission.
+const UNADMITTED_PER_ADDR: usize = 8;
+/// Sessions the plane holds before admission, from every address together.
+const UNADMITTED_TOTAL: usize = 64;
+
+/// Sessions accepted and not admitted yet, by peer address. A slot is held from accept until the
+/// session is admitted, parks a knock (the pending caps bound those) or ends.
+#[derive(Default)]
+struct Unadmitted(std::sync::Mutex<std::collections::HashMap<std::net::IpAddr, usize>>);
+
+/// One session's place in [`Unadmitted`], given back when dropped.
+pub(crate) struct UnadmittedSlot {
+    pool: Arc<Unadmitted>,
+    ip: std::net::IpAddr,
+}
+
+impl Unadmitted {
+    /// A slot for a session from `ip`, or `None` when that address or the plane is full.
+    fn take(self: &Arc<Self>, ip: std::net::IpAddr) -> Option<UnadmittedSlot> {
+        let ip = ip.to_canonical();
+        let mut held = self.0.lock().unwrap_or_else(|p| p.into_inner());
+        let mine = held.get(&ip).copied().unwrap_or(0);
+        if mine >= UNADMITTED_PER_ADDR || held.values().sum::<usize>() >= UNADMITTED_TOTAL {
+            return None;
+        }
+        held.insert(ip, mine + 1);
+        Some(UnadmittedSlot {
+            pool: self.clone(),
+            ip,
+        })
+    }
+}
+
+impl Drop for UnadmittedSlot {
+    fn drop(&mut self) {
+        let mut held = self.pool.0.lock().unwrap_or_else(|p| p.into_inner());
+        if let Some(n) = held.get_mut(&self.ip) {
+            *n -= 1;
+            if *n == 0 {
+                held.remove(&self.ip);
+            }
+        }
+    }
+}
+
 async fn accept_loop(
     endpoint: &Endpoint<wtransport::endpoint::endpoint_side::Server>,
     serving: Arc<Serving>,
     sem: Arc<tokio::sync::Semaphore>,
 ) {
+    let unadmitted = Arc::new(Unadmitted::default());
     loop {
         let incoming = endpoint.accept().await;
+        // As on the native plane: a source that has not shown it receives at its address gets a
+        // Retry, not a task, so a spoofed-source flood cannot make this host amplify.
+        if !incoming.remote_address_validated() {
+            incoming.retry();
+            continue;
+        }
+        let Some(slot) = unadmitted.take(incoming.remote_address().ip()) else {
+            tracing::debug!(peer = %incoming.remote_address(), "WebTransport session refused: too many not admitted yet");
+            incoming.refuse();
+            continue;
+        };
         let serving = serving.clone();
         let sem = sem.clone();
         tokio::spawn(async move {
-            if let Err(e) = session(incoming, &serving, sem).await {
+            if let Err(e) = session(incoming, &serving, sem, slot).await {
                 tracing::debug!(error = %e, "WebTransport session ended");
             }
         });
+    }
+}
+
+/// The page server and page a session came through. A page that is public and that nothing on
+/// this host knows makes the session's knocks strict.
+fn via(
+    relay: crate::native_pairing::Relay,
+    origin: Option<String>,
+    serving: &Serving,
+) -> crate::native_pairing::Via {
+    let unfamiliar_origin = origin.as_deref().is_some_and(|o| {
+        !local_origin(o)
+            && !serving.plane.origins.iter().any(|listed| listed == o)
+            && !serving.plane.pairing.knows_origin(o)
+    });
+    crate::native_pairing::Via {
+        relay,
+        origin,
+        unfamiliar_origin,
+    }
+}
+
+/// An origin no public website has: a local file (a packaged TV app sends `file://`), or a host
+/// that is a private address or a name no public zone holds. `null`, which any page can send from
+/// a sandboxed frame, is not one.
+fn local_origin(origin: &str) -> bool {
+    let Some((scheme, rest)) = origin.split_once("://") else {
+        return false;
+    };
+    if scheme.eq_ignore_ascii_case("file") {
+        return true;
+    }
+    let host = match rest.strip_prefix('[') {
+        Some(v6) => v6.split(']').next().unwrap_or_default(),
+        None => rest.split(':').next().unwrap_or_default(),
+    };
+    match host.parse() {
+        Ok(ip) => {
+            crate::native_pairing::classify_source(Some(ip))
+                == crate::native_pairing::KnockSource::Lan
+        }
+        Err(_) => punktfunk_core::provenance::is_local_name(host),
     }
 }
 
@@ -399,11 +498,13 @@ pub fn is_confined(require_pairing: bool, origins: &[String]) -> bool {
 }
 
 /// One browser session: check the origin, then hand the connection to [`session::run`], which
-/// takes the session slot. `/echo` keeps Phase 1's loopback for the measurement pages.
+/// takes the session slot. `unadmitted` is held until then. A debug build keeps Phase 1's `/echo`
+/// for the measurement pages.
 async fn session(
     incoming: wtransport::endpoint::IncomingSession,
     serving: &Arc<Serving>,
     sem: Arc<tokio::sync::Semaphore>,
+    unadmitted: UnadmittedSlot,
 ) -> Result<()> {
     let request = incoming.await.context("await session request")?;
     // The peer picks `:path` and nothing upstream value-checks it, so control characters would
@@ -443,14 +544,15 @@ async fn session(
         "WebTransport session accepted"
     );
 
-    // `/echo` keeps Phase 1's behaviour so the measurement pages still work against a host that
-    // streams on every other path.
+    // Phase 1's echo answers anyone with no slot and no timeout, so a release host has no such path.
+    #[cfg(debug_assertions)]
     if path == "/echo" {
         return echo(connection).await;
     }
     // The management API for a page that cannot `fetch` the host: no streaming slot, no
     // handshake clock, its own caps (`mgmt`).
     if path == "/mgmt" {
+        drop(unadmitted);
         return mgmt::serve(connection, serving).await;
     }
 
@@ -466,7 +568,8 @@ async fn session(
         return Ok(());
     }
     let peer = connection.remote_address();
-    match session::run(connection.clone(), serving.clone(), sem, relay).await {
+    let via = Arc::new(via(relay, origin, serving));
+    match session::run(connection.clone(), serving.clone(), sem, via, unadmitted).await {
         Ok(crate::native::Served::Session) => tracing::info!(%peer, "browser session complete"),
         Ok(
             crate::native::Served::ProbeClose
@@ -540,8 +643,9 @@ async fn say_then_wait(connection: &wtransport::Connection, bytes: &[u8]) {
     }
 }
 
-/// Phase 1's echo, still reachable at `/echo`: the page connects, sends datagrams and control
+/// Phase 1's echo, at `/echo` in a debug build: the page connects, sends datagrams and control
 /// bytes, and gets them back. It is what the seam's measurements run against.
+#[cfg(debug_assertions)]
 async fn echo(connection: wtransport::Connection) -> Result<()> {
     loop {
         tokio::select! {
@@ -650,6 +754,31 @@ mod tests {
         // Unconfigured means "any", which is what a host with no console setting has to mean.
         assert!(origin_allowed(Some("https://anything"), &[]));
         assert!(origin_allowed(None, &[]));
+    }
+
+    /// Eight sessions from one address wait for admission; the ninth is refused while another
+    /// address still gets in, and a slot given back is free again. Sixty-four in all.
+    #[test]
+    fn unadmitted_sessions_are_capped_per_address_and_in_all() {
+        let pool = Arc::new(Unadmitted::default());
+        let one: std::net::IpAddr = "192.168.1.20".parse().unwrap();
+        let other: std::net::IpAddr = "192.168.1.21".parse().unwrap();
+        let mut held: Vec<_> = (0..UNADMITTED_PER_ADDR)
+            .map(|_| pool.take(one).expect("under the per-address cap"))
+            .collect();
+        assert!(pool.take(one).is_none(), "the ninth from one address");
+        let mapped: std::net::IpAddr = "::ffff:192.168.1.20".parse().unwrap();
+        assert!(pool.take(mapped).is_none(), "the same address, v4-mapped");
+        assert!(pool.take(other).is_some(), "another address still connects");
+        held.pop();
+        assert!(pool.take(one).is_some(), "a slot given back is free again");
+
+        let pool = Arc::new(Unadmitted::default());
+        let _all: Vec<_> = (0..UNADMITTED_TOTAL)
+            .map(|i| pool.take(std::net::Ipv4Addr::new(10, 0, 0, i as u8).into()))
+            .collect::<Option<_>>()
+            .expect("under the total cap");
+        assert!(pool.take(other).is_none(), "the plane is full");
     }
 
     /// `--open` and an empty origin list are each an operator's choice; together they are a
