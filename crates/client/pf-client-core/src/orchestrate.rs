@@ -267,6 +267,9 @@ pub struct ConnectPlan {
     /// Per-host trust decision, not a preset setting. Resolved here so the renderer
     /// does not look it up again.
     pub clipboard: bool,
+    /// This shell asks for a profile's password and spawns again with it after a
+    /// `profile-locked` refusal ([`PROMPTS_UNLOCK_ARG`]).
+    pub prompts_unlock: bool,
 }
 
 /// Handshake budget when the plan and `--connect-timeout` both omit one.
@@ -354,6 +357,7 @@ impl ConnectPlan {
             connect_timeout_secs: None,
             tofu: false,
             clipboard: host.clipboard_sync,
+            prompts_unlock: false,
         }
     }
 
@@ -397,6 +401,9 @@ impl ConnectPlan {
         }
         if self.settings.fullscreen_on_stream || self.settings.fullscreen_always() {
             args.push("--fullscreen".into());
+        }
+        if self.prompts_unlock {
+            args.push(PROMPTS_UNLOCK_ARG.into());
         }
         // No `--window-pos`: Wayland compositors own placement, so the flag is a silent
         // no-op from GTK/CLI. Windows appends its own. An X11-only special case is drift.
@@ -956,6 +963,62 @@ pub mod exit {
     pub const RENDERER_FAILED: u8 = 4;
 }
 
+/// Session flag: read one profile unlock from stdin before dialing ([`read_unlock`]).
+pub const UNLOCK_STDIN_ARG: &str = "--unlock-stdin";
+/// Session flag: the spawning shell asks for a profile's password, so the dial offers it.
+pub const PROMPTS_UNLOCK_ARG: &str = "--prompts-unlock";
+/// Longest unlock frame on the session's stdin.
+pub const UNLOCK_STDIN_MAX: usize = 4096;
+
+/// Write `unlock` to a session's stdin as `len u32 LE ‖ ProfileUnlock frame`, then close it by
+/// dropping `to`. Every copy made here wipes.
+pub fn write_unlock(
+    mut to: impl std::io::Write,
+    unlock: punktfunk_core::quic::v2::msg::ProfileUnlock,
+) -> std::io::Result<()> {
+    let frame = unlock.encode();
+    drop(unlock);
+    to.write_all(&(frame.len() as u32).to_le_bytes())?;
+    to.write_all(&frame)?;
+    to.flush()
+}
+
+/// The one unlock [`write_unlock`] sent: a length of at most [`UNLOCK_STDIN_MAX`], one whole
+/// `ProfileUnlock` frame inside the wire's bounds, then EOF. Anything else is `InvalidData`,
+/// and no error carries a byte of the frame.
+pub fn read_unlock(
+    mut from: impl std::io::Read,
+) -> std::io::Result<punktfunk_core::quic::v2::msg::ProfileUnlock> {
+    use punktfunk_core::quic::v2::{field, msg, registry};
+    let bad = |what| std::io::Error::new(std::io::ErrorKind::InvalidData, what);
+    let mut len = [0u8; 4];
+    from.read_exact(&mut len)?;
+    let len = u32::from_le_bytes(len) as usize;
+    if len > UNLOCK_STDIN_MAX {
+        return Err(bad("unlock frame over its bound"));
+    }
+    let mut frame = msg::Zeroizing::new(vec![0u8; len]);
+    from.read_exact(&mut frame)?;
+    if from.read(&mut [0u8; 1])? != 0 {
+        return Err(bad("more than one unlock frame"));
+    }
+    match field::split_frame(&frame, registry::max_body) {
+        Ok(Some((ty, body, n))) if n == frame.len() => {
+            msg::decode::<msg::ProfileUnlock>(ty, body).map_err(|_| bad("bad unlock frame"))
+        }
+        _ => Err(bad("bad unlock frame")),
+    }
+}
+
+/// [`read_unlock`] on this process's stdin, past std's buffer, which is never wiped.
+pub fn read_unlock_from_stdin() -> std::io::Result<punktfunk_core::quic::v2::msg::ProfileUnlock> {
+    #[cfg(unix)]
+    let raw = std::os::fd::AsFd::as_fd(&std::io::stdin()).try_clone_to_owned()?;
+    #[cfg(windows)]
+    let raw = std::os::windows::io::AsHandle::as_handle(&std::io::stdin()).try_clone_to_owned()?;
+    read_unlock(std::fs::File::from(raw))
+}
+
 /// One line the session writes on stdout; [`parse_session_line`] reads each back.
 pub enum SessionLine<'a> {
     Ready,
@@ -1218,14 +1281,32 @@ pub fn spawn_session(
 /// exits, or at once if it never starts. `cancel` accepts cancellation before or after the
 /// child is armed; `None` creates a fresh handle. [`SessionEvent::Exited`] always arrives.
 pub fn spawn_child(
-    mut cmd: Command,
+    cmd: Command,
     spec_path: Option<std::path::PathBuf>,
     cancel: Option<CancelHandle>,
     stderr_sink: impl std::io::Write + Send + 'static,
     on_event: impl FnMut(SessionEvent) + Send + 'static,
 ) -> Result<CancelHandle, String> {
-    cmd.stdin(Stdio::null())
-        .stdout(Stdio::piped())
+    spawn_child_with_unlock(cmd, spec_path, cancel, stderr_sink, None, on_event)
+}
+
+/// [`spawn_child`] for a dial that carries `unlock`: the child gets [`UNLOCK_STDIN_ARG`] and
+/// reads the frame from its stdin, never argv or the environment. The frame is written, stdin
+/// closed and this copy wiped before this returns.
+pub fn spawn_child_with_unlock(
+    mut cmd: Command,
+    spec_path: Option<std::path::PathBuf>,
+    cancel: Option<CancelHandle>,
+    stderr_sink: impl std::io::Write + Send + 'static,
+    unlock: Option<punktfunk_core::quic::v2::msg::ProfileUnlock>,
+    on_event: impl FnMut(SessionEvent) + Send + 'static,
+) -> Result<CancelHandle, String> {
+    if unlock.is_some() {
+        cmd.arg(UNLOCK_STDIN_ARG).stdin(Stdio::piped());
+    } else {
+        cmd.stdin(Stdio::null());
+    }
+    cmd.stdout(Stdio::piped())
         // Piped through the ring forwarder, not inherited: a GUI-only log export
         // otherwise holds everything except the stream it was exported about.
         .stderr(Stdio::piped());
@@ -1238,6 +1319,12 @@ pub fn spawn_child(
             return Err(format!("couldn't start {}: {e}", SESSION_BIN));
         }
     };
+    if let (Some(unlock), Some(stdin)) = (unlock, child.stdin.take()) {
+        // A child that gets a torn frame refuses to dial, so a failed write fails closed.
+        if let Err(e) = write_unlock(stdin, unlock) {
+            tracing::warn!(error = %e, "the profile unlock did not reach the session");
+        }
+    }
     if let Some(stderr) = child.stderr.take() {
         crate::logring::forward_child_stderr(stderr, stderr_sink);
     }
@@ -1546,6 +1633,39 @@ mod tests {
         assert!(w.tick(false).send_packet);
     }
 
+    /// One unlock crosses the session's stdin whole. Past its bound, torn, followed by more
+    /// bytes, empty or of another type, the frame is refused.
+    #[test]
+    fn one_unlock_crosses_the_session_stdin() {
+        use punktfunk_core::quic::v2::msg::{
+            ProfileUnlock, V2Message, Zeroizing, ENROLL_NONE, UNLOCK_PASSWORD,
+        };
+        let secret = Zeroizing::new(b" tr0ub4dor &3 ".to_vec());
+        let unlock = ProfileUnlock::new(UNLOCK_PASSWORD, secret, true, ENROLL_NONE, vec![]);
+        let mut wire = Vec::new();
+        write_unlock(&mut wire, unlock.unwrap()).unwrap();
+        let back = read_unlock(&wire[..]).unwrap();
+        assert_eq!(back.secret.as_slice(), b" tr0ub4dor &3 ");
+        assert!(back.stay_signed_in);
+
+        let mut more = wire.clone();
+        more.push(0);
+        let mut long = wire.clone();
+        long[..4].copy_from_slice(&(UNLOCK_STDIN_MAX as u32 + 1).to_le_bytes());
+        let other = punktfunk_core::quic::PairResult { ok: true }.encode_v2();
+        let mut wrong = (other.len() as u32).to_le_bytes().to_vec();
+        wrong.extend_from_slice(&other);
+        for bad in [
+            &more[..],
+            &wire[..wire.len() - 1],
+            &long[..],
+            &wrong[..],
+            &[][..],
+        ] {
+            assert!(read_unlock(bad).is_err());
+        }
+    }
+
     /// One-off preset rides the flag; a host binding does not — the session
     /// resolves it with the same helper, so passing it would be a second source of truth.
     #[test]
@@ -1570,6 +1690,7 @@ mod tests {
             connect_timeout_secs: None,
             tofu: false,
             clipboard: false,
+            prompts_unlock: false,
         };
         assert_eq!(
             plan.session_args(),
@@ -1588,10 +1709,12 @@ mod tests {
         plan.preset_override = Some("aaaaaaaaaaaa".into());
         plan.connect_timeout_secs = Some(185);
         plan.settings.fullscreen_on_stream = true;
+        plan.prompts_unlock = true;
         let args = plan.session_args();
         assert!(args.windows(2).any(|w| w == ["--preset", "aaaaaaaaaaaa"]));
         assert!(args.windows(2).any(|w| w == ["--connect-timeout", "185"]));
         assert!(args.contains(&"--fullscreen".to_string()));
+        assert!(args.contains(&PROMPTS_UNLOCK_ARG.to_string()));
         // Fullscreen Always outranks a preset that turned streams fullscreen off.
         plan.settings.fullscreen_on_stream = false;
         plan.settings.set_fullscreen_always(true);
@@ -1957,6 +2080,19 @@ mod tests {
             parse_session_line(r#"{"error":"x","refused":"from-a-newer-session"}"#),
             Some(SessionEvent::Error(SessionError { refused: None, .. }))
         ));
+        // A locked profile reaches the shell as a refusal with the host's sentence.
+        let Some(SessionEvent::Error(locked)) =
+            parse_session_line(r#"{"error":"Wrong password.","refused":"profile-locked"}"#)
+        else {
+            panic!("a refusal line");
+        };
+        assert_eq!(
+            ConnectOutcome::from_exit(2, Some(locked), None, false),
+            ConnectOutcome::Refused {
+                msg: "Wrong password.".into(),
+                reason: punktfunk_core::reject::RejectReason::ProfileLocked,
+            }
+        );
         assert_eq!(
             parse_session_line(r#"{"ended":"Host ended the session"}"#),
             Some(SessionEvent::Ended("Host ended the session".into()))
@@ -2086,6 +2222,7 @@ mod tests {
             connect_timeout_secs: Some(45),
             tofu: false,
             clipboard: true,
+            prompts_unlock: false,
         };
         let force_software = Arc::new(AtomicBool::new(false));
         let probes = |hdr_enabled: bool, hevc_444_hardware: bool| Probes {
