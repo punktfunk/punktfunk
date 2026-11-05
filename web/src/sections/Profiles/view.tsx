@@ -505,9 +505,7 @@ export const AddProfileDialog: FC<{
 	const [account, setAccount] = useState<string>("");
 	const [seatAccount, setSeatAccount] = useState<SeatAccount>("new");
 	const [password, setPassword] = useState("");
-	// A close clears the typed password as well as an opening.
 	useEffect(() => {
-		setPassword("");
 		if (!open) return;
 		setName("");
 		setAccent(freeAccent);
@@ -515,6 +513,7 @@ export const AddProfileDialog: FC<{
 		setOutcome("shared");
 		setAccount("");
 		setSeatAccount("new");
+		setPassword("");
 	}, [open, freeAccent]);
 	const asksAccount =
 		((windows && seatsOn) || (linux && door)) && outcome === "seats";
@@ -598,7 +597,11 @@ export const AddProfileDialog: FC<{
 	});
 	return (
 		<Dialog open={open} onOpenChange={(o) => !o && onCancel()}>
-			<DialogContent className="max-w-md sm:max-w-lg">
+			{/* Fires once the closed dialog has faded out: the typed password goes with it. */}
+			<DialogContent
+				className="max-w-md sm:max-w-lg"
+				onCloseAutoFocus={() => setPassword("")}
+			>
 				<DialogHeader>
 					<DialogTitle>{m.profiles_add()}</DialogTitle>
 				</DialogHeader>
