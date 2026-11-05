@@ -94,6 +94,8 @@ mod planes;
 use planes::PlaneEnds;
 mod launch;
 use launch::Launch;
+/// A person's own Linux account: the supervisor's unlock before placement, `Left` after.
+pub(crate) mod unlock;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Punktfunk1Source {
@@ -1155,7 +1157,8 @@ pub(crate) async fn run_admitted(
     permit: tokio::sync::OwnedSemaphorePermit,
 ) -> Result<Served> {
     let (mut send, mut recv) = (send, recv);
-    let Some((mut who, resolved)) = admit_here(host, &conn, &mut send, &first).await? else {
+    let admitted = admit_here(host, &conn, &mut send, &mut recv, &first).await?;
+    let Some((mut who, resolved)) = admitted else {
         // Placed on its seat's host: the redirect was this connect's session.
         return Ok(Served::Session);
     };
@@ -1219,12 +1222,13 @@ struct Admitted {
     counters: Arc<crate::session_status::SessionCounters>,
 }
 
-/// The trust record, the profile and its placement. `None` once the profile was sent to play
-/// on its seat's host.
+/// The trust record, the profile and its placement, a person's own account unlocked first.
+/// `None` once the profile was sent to play on its seat's host.
 async fn admit_here(
     host: &SessionHost,
     conn: &link::SessionLink,
     send: &mut link::CtlSend,
+    recv: &mut link::CtlReader,
     first: &ClientHello,
 ) -> Result<Option<(Admitted, crate::profiles::Resolved)>> {
     let fp_hex = conn.peer_fingerprint().map(hex::encode);
@@ -1254,7 +1258,15 @@ async fn admit_here(
     };
     tracing::info!(profile = %resolved.id, name = %resolved.display_name, via = ?resolved.via, "profile");
     // A refusal ends the connect here and leaves the profile's last-used time alone.
-    let placed = place_profile(conn, send, fp_hex.clone(), first, &resolved).await?;
+    let placed = place_profile(
+        conn,
+        (send, recv),
+        fp_hex.clone(),
+        first,
+        &resolved,
+        &host.np,
+    )
+    .await?;
     host.profiles.touch(&resolved.id);
     if placed.is_some() {
         if let (Some(guard), Some(fp)) = (session, fp_hex) {
@@ -2002,16 +2014,46 @@ fn display_half(
     }
 }
 
-/// A seat profile plays on its seat's host: send the client there, or say why not. `Some` when
-/// the session ended in a redirect; `None` when it plays here.
+/// A seat profile plays on its seat's host: send the client there, or say why not. A person's
+/// own Linux account goes there only once the supervisor unlocked it for this device, and the
+/// device's claim on it goes to [`unlock::watch_left`]. `Some` when the session ended in a
+/// redirect; `None` when it plays here.
 async fn place_profile(
     conn: &link::SessionLink,
-    send: &mut link::CtlSend,
+    (send, recv): (&mut link::CtlSend, &mut link::CtlReader),
     fp: Option<String>,
     first: &ClientHello,
     resolved: &crate::profiles::Resolved,
+    np: &NativePairing,
 ) -> Result<Option<Served>> {
-    use crate::seats::placement::{place, Asker, Placement};
+    use crate::seats::placement::{here, place, Asker, Placement};
+    if here(&resolved.os_account) {
+        return Ok(None);
+    }
+    let seats = unlock::seats_for(fp.as_deref());
+    let asked = Arc::clone(&seats);
+    let mut snap = tokio::task::spawn_blocking(move || asked.ledger())
+        .await
+        .context("seat ledger task")?;
+    let claim = match snap.person_row(&resolved.os_account).cloned() {
+        Some(row) => {
+            let device = fp.as_deref().map(|fp| {
+                let label = np
+                    .list()
+                    .into_iter()
+                    .find(|c| c.fingerprint.eq_ignore_ascii_case(fp))
+                    .map(|c| c.name);
+                unlock::device(fp, label.as_deref())
+            });
+            let (seat, claim) =
+                unlock::unlock(conn, send, recv, first, &row, device, &seats).await?;
+            if let Some(at) = snap.seats.iter().position(|s| s.id == seat.id) {
+                snap.seats[at] = seat;
+            }
+            Some(claim)
+        }
+        None => None,
+    };
     let follows = first
         .features
         .has(punktfunk_core::quic::v2::registry::FEATURE_PROFILES);
@@ -2029,19 +2071,25 @@ async fn place_profile(
             joins,
             browser,
         };
-        place(&who, &asker)
+        place(&who, &asker, &snap)
     })
     .await
     .context("placement task")?;
     match placed {
-        Placement::Here => Ok(None),
         Placement::Redirect(to) => {
             tracing::info!(profile = %resolved.id, seat = %to.seat_name, port = to.port,
                 "redirected to the profile's seat");
-            redirect(conn, send, &to).await?;
+            let sent = redirect(conn, send, &to).await;
+            if let Some(claim) = claim {
+                unlock::watch_left(seats, claim, sent.is_ok());
+            }
+            sent?;
             Ok(Some(Served::Session))
         }
         Placement::Refuse(reason) => {
+            if let Some(claim) = claim {
+                unlock::watch_left(seats, claim, false);
+            }
             close_rejected(conn, reason).await;
             anyhow::bail!("seat refused: {reason}");
         }

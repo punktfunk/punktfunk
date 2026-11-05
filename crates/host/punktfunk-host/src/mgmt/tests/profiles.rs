@@ -445,3 +445,249 @@ async fn enumerate_marks_the_devices_old_seat() {
     let phone = list("0123456789ab").await;
     assert!(phone[1].get("legacy_seat").is_none(), "{phone}");
 }
+
+mod person {
+    //! A profile on a person's own Linux account, on a door whose supervisor is a fake.
+
+    use super::*;
+    use crate::native::unlock::fake::{self, refused, Fake};
+    use pf_seats::ipc::{Command, CommandResult, DeviceEntry, DeviceKind, Needs};
+
+    const PERSON_SEAT: &str = "7a11ce007a11ce007a11ce007a11ce00";
+    const WINDOWS_SEAT: &str = "5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a";
+    const OWNER: &str = "4f1c3a9b0e27";
+    const PERSON: &str = "7a11ce00e001";
+    const WINDOWS: &str = "7a11ce00e002";
+
+    /// A person's own Linux account and a Windows seat on an existing one, both stopped.
+    fn ledger() -> Vec<pf_seats::Seat> {
+        let mut person = fake::person(PERSON_SEAT, 9780);
+        person.runtime = pf_seats::RuntimeStatus::stopped();
+        let mut windows = fake::person(WINDOWS_SEAT, 9781);
+        (windows.adopted_uid, windows.adopted_sid) = (None, Some("S-1-5-21-1-2-3-1001".into()));
+        windows.runtime = pf_seats::RuntimeStatus::stopped();
+        vec![person, windows]
+    }
+
+    /// A door asking `sup`, with the owner, a profile on each row of [`ledger`], `default` the
+    /// profile a device lands in, and `fps` paired with full control.
+    fn door(tag: &str, sup: Arc<Fake>, fps: &[&str], default: &str) -> Router {
+        let path = crate::test_support::scratch().join(format!("pf-mgmt-person-{tag}.json"));
+        let seat = |id: &str, name: &str, row: &str| {
+            serde_json::json!({"id": id, "display_name": name,
+                "os_account": {"kind": "seat", "seat": row}})
+        };
+        let file = serde_json::json!({"version": 1, "default_profile_id": default, "profiles": [
+            {"id": OWNER, "display_name": "Enrico", "os_account": {"kind": "operator"}},
+            seat(PERSON, "Jane", PERSON_SEAT),
+            seat(WINDOWS, "Sam", WINDOWS_SEAT),
+        ]});
+        std::fs::write(&path, file.to_string()).unwrap();
+        let state = test_state();
+        let profiles = crate::profiles::Profiles::load_with(Some(path), None);
+        let _ = state.profiles.set(Arc::new(profiles));
+        let np = crate::native_pairing::NativePairing::load_with(
+            Some(crate::test_support::scratch().join(format!("pf-mgmt-person-np-{tag}.json"))),
+            None,
+            false,
+        )
+        .unwrap();
+        for fp in fps {
+            np.add("Jane's phone", fp).unwrap();
+        }
+        test_app_door(state, Some(Arc::new(np)), sup)
+    }
+
+    /// [`send_cert`] with the answer's body.
+    async fn as_device(
+        app: &Router,
+        mut req: axum::http::Request<Body>,
+        fp: &str,
+    ) -> (StatusCode, serde_json::Value) {
+        req.extensions_mut()
+            .insert(PeerCertFingerprint(Some(fp.to_string())));
+        let resp = app.clone().oneshot(req).await.unwrap();
+        let status = resp.status();
+        let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+        (status, serde_json::from_slice(&bytes).unwrap_or_default())
+    }
+
+    fn post(path: &str) -> axum::http::Request<Body> {
+        axum::http::Request::post(path).body(Body::empty()).unwrap()
+    }
+
+    fn delete(path: &str) -> axum::http::Request<Body> {
+        axum::http::Request::delete(path)
+            .body(Body::empty())
+            .unwrap()
+    }
+
+    /// Each row says what the asking device sends to open it: the supervisor's answer for a
+    /// person's own account, `password` when it gives none or no device asks, and `none` for
+    /// every other row, a Windows seat on an existing account included.
+    #[tokio::test]
+    async fn enumerate_says_what_the_asking_device_sends() {
+        let (keyed, silent) = ("ab".repeat(32), "cd".repeat(32));
+        let key_fp = keyed.clone();
+        let sup = Arc::new(Fake::new(ledger(), move |c| match c {
+            Command::UnlockState { fingerprint, .. } if *fingerprint == key_fp => {
+                Ok(CommandResult::UnlockState { needs: Needs::Key })
+            }
+            _ => Err(refused("device_list", "read devices.json: denied")),
+        }));
+        let app = door("enumerate", sup.clone(), &[&keyed, &silent], OWNER);
+        let unlock = |rows: &serde_json::Value| {
+            let rows = rows.as_array().unwrap().iter();
+            rows.map(|r| (r["id"].as_str().unwrap().to_string(), r["unlock"].clone()))
+                .collect::<std::collections::BTreeMap<_, _>>()
+        };
+        let (status, rows) = as_device(&app, get_req("/api/v1/profiles/enumerate"), &keyed).await;
+        assert_eq!(status, StatusCode::OK, "{rows}");
+        let want = |person: &str| {
+            std::collections::BTreeMap::from([
+                (OWNER.to_string(), serde_json::json!("none")),
+                (PERSON.to_string(), serde_json::json!(person)),
+                (WINDOWS.to_string(), serde_json::json!("none")),
+            ])
+        };
+        assert_eq!(unlock(&rows), want("key"));
+        let (_, rows) = as_device(&app, get_req("/api/v1/profiles/enumerate"), &silent).await;
+        assert_eq!(unlock(&rows), want("password"), "a supervisor error");
+        let (_, rows) = send(&app, get_req("/api/v1/profiles/enumerate")).await;
+        assert_eq!(unlock(&rows), want("password"), "no device asks");
+        let asked = sup.asked();
+        assert_eq!(
+            asked.len(),
+            2,
+            "the person's row alone, once per device: {asked:?}"
+        );
+        assert!(asked
+            .iter()
+            .all(|c| matches!(c, Command::UnlockState { id, .. } if id.as_str() == PERSON_SEAT)));
+    }
+
+    /// A paired device's key unlock gets its challenge; a device with no key, another row, an
+    /// unknown profile and the console are refused.
+    #[tokio::test]
+    async fn a_device_asks_for_its_own_unlock_challenge() {
+        let (keyed, bare) = ("ab".repeat(32), "cd".repeat(32));
+        let key_fp = keyed.clone();
+        let sup = Arc::new(Fake::new(ledger(), move |c| match c {
+            Command::Challenge { id, fingerprint } if *fingerprint == key_fp => {
+                Ok(CommandResult::Challenge {
+                    challenge: "07".repeat(32),
+                    seat: id.clone(),
+                })
+            }
+            _ => Err(refused(
+                "unlock_required",
+                "This profile needs its account password.",
+            )),
+        }));
+        let app = door("challenge", sup.clone(), &[&keyed, &bare], OWNER);
+        let ask = |profile: &str| post(&format!("/api/v1/profiles/{profile}/unlock-challenge"));
+        let (status, body) = as_device(&app, ask(PERSON), &keyed).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(
+            body,
+            serde_json::json!({"challenge": "07".repeat(32), "seat": PERSON_SEAT})
+        );
+        let (status, body) = as_device(&app, ask(PERSON), &bare).await;
+        assert_eq!(status, StatusCode::CONFLICT);
+        assert_eq!(body["error"], "This profile needs its account password.");
+        let (status, _) = as_device(&app, ask(WINDOWS), &keyed).await;
+        assert_eq!(status, StatusCode::CONFLICT, "not a person's own account");
+        let (status, _) = as_device(&app, ask("ffffffffffff"), &keyed).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        assert_eq!(send(&app, ask(PERSON)).await.0, StatusCode::FORBIDDEN);
+        let challenged: Vec<_> = sup.asked();
+        assert_eq!(challenged.len(), 2, "{challenged:?}");
+        assert!(challenged.iter().all(|c| matches!(c,
+            Command::Challenge { id, .. } if id.as_str() == PERSON_SEAT)));
+    }
+
+    /// The console lists who is signed in and signs one device or all of them out; a device
+    /// can do neither.
+    #[tokio::test]
+    async fn the_console_lists_and_signs_out_signed_in_devices() {
+        let fp = "ab".repeat(32);
+        let entry = DeviceEntry {
+            fingerprint: fp.clone(),
+            name: "Jane's phone".into(),
+            kind: DeviceKind::Stay,
+            added_unix: 10,
+            last_unix: 20,
+        };
+        let sup = Arc::new(Fake::new(ledger(), move |c| match c {
+            Command::Devices { .. } => Ok(CommandResult::Devices {
+                devices: vec![entry.clone()],
+            }),
+            Command::SignOut { .. } => Ok(CommandResult::SignedOut),
+            _ => Err(refused("x", "y")),
+        }));
+        let app = door("devices", sup.clone(), &[&fp], OWNER);
+        let devices = format!("/api/v1/profiles/{PERSON}/devices");
+        let (status, body) = send(&app, get_req(&devices)).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(
+            body,
+            serde_json::json!([{"fingerprint": fp, "name": "Jane's phone", "kind": "stay",
+                "added_unix": 10, "last_unix": 20}])
+        );
+        let one = format!("{devices}/{fp}");
+        assert_eq!(send(&app, delete(&one)).await.0, StatusCode::NO_CONTENT);
+        assert_eq!(send(&app, delete(&devices)).await.0, StatusCode::NO_CONTENT);
+        let upper = format!("{devices}/{}", fp.to_uppercase());
+        assert_eq!(send(&app, delete(&upper)).await.0, StatusCode::BAD_REQUEST);
+        let windows = format!("/api/v1/profiles/{WINDOWS}/devices");
+        assert_eq!(send(&app, get_req(&windows)).await.0, StatusCode::CONFLICT);
+        for req in [get_req(&devices), delete(&devices), delete(&one)] {
+            assert_eq!(send_cert(&app, req, &fp).await, StatusCode::UNAUTHORIZED);
+        }
+        let id = pf_seats::SeatId::parse(PERSON_SEAT).unwrap();
+        assert_eq!(
+            sup.asked(),
+            [
+                Command::Devices { id: id.clone() },
+                Command::SignOut {
+                    id: id.clone(),
+                    fingerprint: Some(fp.clone())
+                },
+                Command::SignOut {
+                    id,
+                    fingerprint: None
+                },
+            ]
+        );
+    }
+
+    /// No route of the door starts a person's own account or sends a device there: a wake from
+    /// a device or the console and the console's start are refused, and a device's own play,
+    /// with that profile its default, stays on the door. The supervisor and every seat host go
+    /// unasked, while a Windows seat on an existing account still wakes as before.
+    #[tokio::test]
+    async fn no_route_starts_or_reaches_a_person_s_own_account() {
+        let fp = "ab".repeat(32);
+        let sup = Arc::new(Fake::new(ledger(), |_| Err(refused("x", "y"))));
+        let app = door("no-way-round", sup.clone(), &[&fp], PERSON);
+        let wake = format!("/api/v1/profiles/{PERSON}/wake");
+        let start = format!("/api/v1/profiles/{PERSON}/start");
+        let password = "This profile opens with its account password.";
+        for (what, (status, body)) in [
+            ("a device's wake", as_device(&app, post(&wake), &fp).await),
+            ("the console's wake", send(&app, post(&wake)).await),
+            ("the console's start", send(&app, post(&start)).await),
+        ] {
+            assert_eq!(status, StatusCode::CONFLICT, "{what}");
+            assert_eq!(body["error"], password, "{what}");
+        }
+        let end_game = json_req(Method::POST, "/api/v1/game/end", serde_json::json!({}));
+        let (status, _) = as_device(&app, end_game, &fp).await;
+        assert_ne!(status, StatusCode::BAD_GATEWAY, "answered on the door");
+        let windows = format!("/api/v1/profiles/{WINDOWS}/wake");
+        let (status, body) = send(&app, post(&windows)).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert!(sup.asked().is_empty(), "{:?}", sup.asked());
+        assert!(sup.called().is_empty(), "{:?}", sup.called());
+    }
+}

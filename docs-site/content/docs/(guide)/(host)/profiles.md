@@ -164,6 +164,13 @@ whatever they have on the monitor, with the box's games.
   account another profile uses.
 - **No password to update.** Unlike Windows, nothing stores it: the card has no **Update
   password…**. If the account's password expires, sign in as that person once.
+- **It opens with its password.** A device that picks the profile asks for the account's
+  password. The device then stays signed in while it plays and for 10 minutes after, at most a
+  day. **Stay signed in on this device** keeps it signed in until it is signed out, but only
+  the password, or Face ID, Touch ID, a fingerprint or Windows Hello where the device offers
+  it, starts a stopped desktop. A browser, **Wake** and the card's **Start** can't open it.
+- **Wrong passwords wait.** After 5 wrong tries a device waits 15 minutes, and only 2 wrong
+  passwords in 15 minutes reach the account, so a device can't lock its person out at the desk.
 
 Turning it off copies the files back to your home and your own host serves the box again. Seats of
 their own stay on the box, stopped, and come back with the switch.
@@ -196,8 +203,9 @@ The controller interface asks on every connect instead:
 - The [Decky plugin](/docs/steam-deck) shows one chip per profile under the host.
 - [Moonlight](/docs/moonlight) and the other clients play as the owner.
 
-A profile is a name, not a lock: anyone on a paired device may pick any profile. What a device may
-do stays its [access level](/docs/access-levels).
+A profile is a name, not a lock: anyone on a paired device may pick any profile, except one on
+[someone's own account](#a-seat-on-someones-own-account), which asks for its password. What a
+device may do stays its [access level](/docs/access-levels).
 
 ## Where a profile shows
 

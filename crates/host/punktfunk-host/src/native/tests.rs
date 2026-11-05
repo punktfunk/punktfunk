@@ -1407,10 +1407,29 @@ fn spawn_profile_host(
     np: Arc<NativePairing>,
     profiles: Arc<crate::profiles::Profiles>,
 ) -> std::thread::JoinHandle<Result<()>> {
+    spawn_logged_host(port, max_sessions, np, profiles, None)
+}
+
+/// [`spawn_profile_host`] whose every thread logs to `logs`, when given.
+fn spawn_logged_host(
+    port: u16,
+    max_sessions: u32,
+    np: Arc<NativePairing>,
+    profiles: Arc<crate::profiles::Profiles>,
+    logs: Option<tracing::Dispatch>,
+) -> std::thread::JoinHandle<Result<()>> {
     std::thread::spawn(move || {
+        let on_each = logs.clone();
+        let _logs = logs.map(|d| tracing::dispatcher::set_default(&d));
         let rt = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(2)
             .enable_all()
+            .on_thread_start(move || {
+                if let Some(d) = &on_each {
+                    // The guard lives as long as the runtime's thread.
+                    std::mem::forget(tracing::dispatcher::set_default(d));
+                }
+            })
             .build()
             .unwrap();
         rt.block_on(serve(
@@ -1457,7 +1476,7 @@ async fn raw_session(
     Welcome,
     punktfunk_core::transport::shared::ClientMedia,
 ) {
-    use punktfunk_core::quic::v2::hello::{ClientHello, Ready, ServerHello};
+    use punktfunk_core::quic::v2::hello::{Ready, ServerHello};
     use punktfunk_core::quic::v2::{io as v2io, msg, registry};
     let (ep, _observed) = endpoint::client_shared(None, Some(identity), &[registry::ALPN], None);
     let (ep, media) = ep.expect("client endpoint");
@@ -1471,6 +1490,26 @@ async fn raw_session(
         .await
         .expect("stream type");
     let mut recv = v2io::FrameReader::new(recv);
+    v2io::send(&mut send, &plain_hello(None, Default::default()))
+        .await
+        .expect("ClientHello");
+    let welcome = loop {
+        let (ty, body) = recv.read_frame().await.expect("ServerHello read");
+        if ty != msg::Pending::TYPE {
+            break msg::decode::<ServerHello>(ty, &body)
+                .expect("ServerHello")
+                .welcome;
+        }
+    };
+    v2io::send(&mut send, &Ready {}).await.expect("Ready");
+    (conn, send, recv, welcome, media)
+}
+
+/// A 720p60 `ClientHello` asking for `profile`, with `features`.
+fn plain_hello(
+    profile: Option<&str>,
+    features: punktfunk_core::quic::v2::features::FeatureSet,
+) -> ClientHello {
     let hello = Hello {
         mode: punktfunk_core::Mode {
             width: 1280,
@@ -1495,7 +1534,7 @@ async fn raw_session(
         video_fit: 0,
         audio_bitstreams: 0,
     };
-    let hello = ClientHello {
+    ClientHello {
         hello,
         client_label: None,
         abr_features: 0,
@@ -1506,22 +1545,11 @@ async fn raw_session(
         slices: 0,
         resume: None,
         suites: Vec::new(),
-        features: Default::default(),
-        profile: None,
+        features,
+        profile: profile.map(Into::into),
         access_only: false,
         screens: Vec::new(),
-    };
-    v2io::send(&mut send, &hello).await.expect("ClientHello");
-    let welcome = loop {
-        let (ty, body) = recv.read_frame().await.expect("ServerHello read");
-        if ty != msg::Pending::TYPE {
-            break msg::decode::<ServerHello>(ty, &body)
-                .expect("ServerHello")
-                .welcome;
-        }
-    };
-    v2io::send(&mut send, &Ready {}).await.expect("Ready");
-    (conn, send, recv, welcome, media)
+    }
 }
 
 /// Application close code. Panics on a transport-level end — these tests expect a host close.
@@ -2126,4 +2154,457 @@ fn a_session_that_fails_after_its_planes_start() {
     assert_eq!(code, punktfunk_core::reject::SETUP_FAILED_CLOSE_CODE);
     assert_eq!(life.reason(), Some(SessionEndReason::HostError));
     assert_eq!(life.phase(), Phase::Done, "the teardown joined its threads");
+}
+
+/// What a raw client dialling a person's own account sends after its hello.
+enum Sends {
+    Unlock(v2msg::ProfileUnlock),
+    /// Announces an unlock, then sends another frame in its place.
+    Garbled,
+    Nothing,
+}
+
+/// What it hears back: a redirect, or the host's typed close and its sentence.
+#[derive(Debug, PartialEq)]
+enum Heard {
+    Redirect { port: u16, pin: String },
+    Closed(punktfunk_core::reject::RejectReason, String),
+}
+
+/// One dial for `profile`, offering `features`, then `sends`; the `Pending`s it heard and how
+/// the host ended it.
+async fn dial_person(
+    port: u16,
+    identity: (&str, &str),
+    profile: &str,
+    features: punktfunk_core::quic::v2::features::FeatureSet,
+    sends: Sends,
+) -> (usize, Heard) {
+    use punktfunk_core::quic::v2::{io as v2io, msg, registry};
+    let (ep, _observed) = endpoint::client_shared(None, Some(identity), &[registry::ALPN], None);
+    let (ep, _media) = ep.expect("client endpoint");
+    let conn = ep
+        .connect(format!("127.0.0.1:{port}").parse().unwrap(), "punktfunk")
+        .expect("connect")
+        .await
+        .expect("QUIC handshake");
+    let (mut send, recv) = conn.open_bi().await.expect("control stream");
+    v2io::write_stream_type(&mut send, registry::STREAM_CONTROL)
+        .await
+        .unwrap();
+    let mut recv = v2io::FrameReader::new(recv);
+    let features = match sends {
+        Sends::Nothing => features,
+        _ => features.with(registry::FEATURE_UNLOCK_FOLLOWS),
+    };
+    v2io::send(&mut send, &plain_hello(Some(profile), features))
+        .await
+        .unwrap();
+    match sends {
+        Sends::Unlock(unlock) => v2io::write_frame(&mut send, &unlock.encode())
+            .await
+            .unwrap(),
+        Sends::Garbled => v2io::send(&mut send, &Ready {}).await.unwrap(),
+        Sends::Nothing => {}
+    }
+    let mut pendings = 0;
+    while let Ok((ty, body)) = recv.read_frame().await {
+        if ty == msg::Pending::TYPE {
+            pendings += 1;
+            continue;
+        }
+        assert_eq!(
+            ty,
+            msg::Redirect::TYPE,
+            "a person's account answers no other frame"
+        );
+        let to = msg::decode::<msg::Redirect>(ty, &body).unwrap();
+        conn.close(0u32.into(), b"");
+        let (port, pin) = (to.port, to.pin);
+        return (pendings, Heard::Redirect { port, pin });
+    }
+    let quinn::ConnectionError::ApplicationClosed(ac) = conn.closed().await else {
+        panic!("the host closes the connect itself");
+    };
+    let code = u32::try_from(u64::from(ac.error_code)).unwrap();
+    let reason = punktfunk_core::reject::RejectReason::from_close_code(code)
+        .unwrap_or_else(|| panic!("close code {code:#x} is no typed refusal"));
+    let sentence = String::from_utf8(ac.reason.to_vec()).unwrap();
+    (pendings, Heard::Closed(reason, sentence))
+}
+
+const PERSON_SEAT: &str = "7a11ce007a11ce007a11ce007a11ce00";
+const WINDOWS_SEAT: &str = "5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a";
+const MADE_SEAT: &str = "3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d";
+const PERSON: &str = "7a11ce00e001";
+
+/// The fake supervisor's ledger: a person's own Linux account, a Windows seat on an existing
+/// account and a made seat, each running on its own port.
+fn person_ledger() -> Vec<pf_seats::Seat> {
+    let row = |id: &str, port: u16| {
+        let mut seat = crate::native::unlock::fake::person(id, port);
+        seat.adopted_uid = None;
+        seat
+    };
+    let mut windows = row(WINDOWS_SEAT, 9781);
+    windows.adopted_sid = Some("S-1-5-21-1-2-3-1001".into());
+    vec![
+        crate::native::unlock::fake::person(PERSON_SEAT, 9780),
+        windows,
+        row(MADE_SEAT, 9782),
+    ]
+}
+
+/// A profile store with a profile on each of [`person_ledger`]'s rows.
+fn person_profiles(tag: &str) -> Arc<crate::profiles::Profiles> {
+    let file = crate::test_support::scratch().join(format!("pf-person-{tag}.json"));
+    let profile = |id: &str, name: &str, seat: &str| {
+        serde_json::json!({"id": id, "display_name": name,
+            "os_account": {"kind": "seat", "seat": seat}})
+    };
+    let body = serde_json::json!({"version": 1, "profiles": [
+        {"id": "4f1c3a9b0e27", "display_name": "Enrico", "os_account": {"kind": "operator"}},
+        profile(PERSON, "Jane", PERSON_SEAT),
+        profile("7a11ce00e002", "Sam", WINDOWS_SEAT),
+        profile("7a11ce00e003", "Kid", MADE_SEAT),
+    ]});
+    std::fs::write(&file, body.to_string()).unwrap();
+    Arc::new(crate::profiles::Profiles::load_with(Some(file), None))
+}
+
+fn password(secret: &str, stay: bool, enroll: Option<Vec<u8>>) -> v2msg::ProfileUnlock {
+    let (alg, key) = match enroll {
+        Some(key) => (v2msg::ENROLL_P256, key),
+        None => (v2msg::ENROLL_NONE, Vec::new()),
+    };
+    let secret = v2msg::Zeroizing::new(secret.as_bytes().to_vec());
+    v2msg::ProfileUnlock::new(v2msg::UNLOCK_PASSWORD, secret, stay, alg, key).unwrap()
+}
+
+/// A person's own Linux account opens only on the supervisor's word: each proof kind reaches it
+/// from the device the QUIC handshake authenticated, under its pairing name, and only `unlocked`
+/// is redirected, with `Pending` while a cold start runs. Each refusal reaches each client
+/// generation as CONTRACT §5 says, and a supervisor that is down or hangs is a plain refusal.
+/// The other rows are placed as before, with nothing asked.
+#[test]
+fn a_person_s_own_account_opens_only_on_the_supervisor_s_word() {
+    let _registry = crate::session_status::tests::registry_lock();
+    let _serial = SESSION_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    use crate::native::unlock::fake::{self, refused, Fake};
+    use pf_seats::ipc::{ApiError, Command, CommandResult, ErrorCode, Proof};
+    use punktfunk_core::quic::v2::features::FeatureSet;
+    use punktfunk_core::quic::v2::registry::{FEATURE_PROFILES, FEATURE_PROFILE_UNLOCK};
+    use punktfunk_core::reject::RejectReason::{ProfileLocked, SeatUnavailable};
+    use std::time::Duration;
+    type Answer = Result<CommandResult, ApiError>;
+
+    let new = FeatureSet::default()
+        .with(FEATURE_PROFILES)
+        .with(FEATURE_PROFILE_UNLOCK);
+    let old = FeatureSet::default().with(FEATURE_PROFILES);
+    let unlocked = |started| -> Answer {
+        Ok(CommandResult::Unlocked {
+            seat: fake::person(PERSON_SEAT, 9780),
+            started,
+        })
+    };
+    let to = |port| Heard::Redirect {
+        port,
+        pin: "5eed".repeat(16),
+    };
+    let closed = |reason, sentence: &str| Heard::Closed(reason, sentence.to_string());
+    let pw = |secret: &str| Sends::Unlock(password(secret, false, None));
+    let p256 = [vec![4u8], vec![0x42; 64]].concat();
+    let key_proof = {
+        let secret = v2msg::Zeroizing::new(vec![0x30, 0x45, 0x01]);
+        v2msg::ProfileUnlock::new(v2msg::UNLOCK_KEY_PROOF, secret, false, 0, Vec::new()).unwrap()
+    };
+    let needs = "This profile needs its account password.";
+    let silent = "This computer's seat service didn't answer. Try again in a moment.";
+    // (what, profile, features, sends, the supervisor's answer, its ms, what the client hears)
+    let cases: Vec<(&str, &str, FeatureSet, Sends, Answer, u64, Heard)> = vec![
+        (
+            "a password on a cold start",
+            PERSON,
+            new,
+            Sends::Unlock(password("hunter2 Bärbel", true, Some(p256.clone()))),
+            unlocked(true),
+            600,
+            to(9780),
+        ),
+        (
+            "a key proof",
+            PERSON,
+            new,
+            Sends::Unlock(key_proof),
+            unlocked(false),
+            0,
+            to(9780),
+        ),
+        (
+            "a signed-in device",
+            PERSON,
+            new,
+            Sends::Nothing,
+            unlocked(false),
+            0,
+            to(9780),
+        ),
+        (
+            "no proof",
+            PERSON,
+            new,
+            Sends::Nothing,
+            Err(refused("unlock_required", needs)),
+            0,
+            closed(ProfileLocked, ""),
+        ),
+        (
+            "a wrong password",
+            PERSON,
+            new,
+            pw("wrong"),
+            Err(refused("credential_wrong", "That isn't jdoe's password.")),
+            0,
+            closed(ProfileLocked, "That isn't jdoe's password."),
+        ),
+        (
+            "too many",
+            PERSON,
+            new,
+            pw("wrong"),
+            Err(refused("unlock_locked_out", "Try again in 15 minutes.")),
+            0,
+            closed(ProfileLocked, "Try again in 15 minutes."),
+        ),
+        (
+            "a full device list",
+            PERSON,
+            new,
+            pw("pw"),
+            Err(ApiError::new(
+                ErrorCode::Capacity,
+                "Sign one out in the console.",
+            )),
+            0,
+            closed(ProfileLocked, "Sign one out in the console."),
+        ),
+        (
+            "an older client",
+            PERSON,
+            old,
+            Sends::Nothing,
+            Err(refused("unlock_required", needs)),
+            0,
+            closed(
+                SeatUnavailable,
+                "This profile needs its account password. Update Punktfunk on this device.",
+            ),
+        ),
+        (
+            "an unlock announced and not sent",
+            PERSON,
+            new,
+            Sends::Garbled,
+            unlocked(false),
+            0,
+            closed(
+                ProfileLocked,
+                "Couldn't read the password this device sent. Try again.",
+            ),
+        ),
+        (
+            "a seat that didn't start",
+            PERSON,
+            new,
+            pw("pw"),
+            Err(refused(
+                "seat_dirs",
+                "create /var/lib/punktfunk-seats/x: denied",
+            )),
+            0,
+            closed(
+                SeatUnavailable,
+                "This profile's desktop didn't start. Try again in a moment.",
+            ),
+        ),
+        (
+            "a supervisor that is down",
+            PERSON,
+            new,
+            pw("pw"),
+            Err(ApiError::new(ErrorCode::Transport, "connect: No such file")),
+            0,
+            closed(SeatUnavailable, silent),
+        ),
+        (
+            "a supervisor that hangs until the socket gives up",
+            PERSON,
+            new,
+            pw("pw"),
+            Err(ApiError::new(ErrorCode::Transport, "read: timed out")),
+            1200,
+            closed(SeatUnavailable, silent),
+        ),
+        (
+            "a Windows seat",
+            "7a11ce00e002",
+            old,
+            Sends::Nothing,
+            unlocked(false),
+            0,
+            to(9781),
+        ),
+        (
+            "a made seat, unlock and all",
+            "7a11ce00e003",
+            new,
+            pw("pw"),
+            unlocked(false),
+            0,
+            to(9782),
+        ),
+    ];
+
+    // One device throughout: a redirect holds its seat for that device alone.
+    let store = access_store_path("person");
+    let _ = std::fs::remove_file(&store);
+    let np = Arc::new(NativePairing::load_with(Some(store.clone()), None, false).unwrap());
+    let (cert, key) = endpoint::generate_identity().unwrap();
+    let fp = hex::encode(endpoint::fingerprint_of_pem(&cert).unwrap());
+    np.add_with_access("Jane's phone", &fp, None).unwrap();
+    let host = spawn_profile_host(19797, cases.len() as u32, np, person_profiles("cases"));
+    std::thread::sleep(Duration::from_millis(500));
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    for (what, profile, features, sends, answer, takes, heard) in cases {
+        let kind = match &sends {
+            Sends::Unlock(u) if u.kind == v2msg::UNLOCK_PASSWORD => "password",
+            Sends::Unlock(_) => "key",
+            _ => "none",
+        };
+        let garbled = matches!(sends, Sends::Garbled);
+        let mut sup = Fake::new(person_ledger(), move |c| match c {
+            Command::Unlock { .. } => answer.clone(),
+            _ => Ok(CommandResult::Left),
+        });
+        sup.unlock_takes = Duration::from_millis(takes);
+        let sup = Arc::new(sup);
+        let _armed = fake::arm(&fp, sup.clone());
+        let dialled = dial_person(19797, (&cert, &key), profile, features, sends);
+        let (pendings, got) = rt.block_on(dialled);
+        assert_eq!(got, heard, "{what}");
+        if takes > 0 {
+            assert!(pendings >= 1, "{what}: Pending while the supervisor works");
+        }
+        let asked = sup.asked();
+        let unlocks: Vec<_> = asked
+            .iter()
+            .filter(|c| matches!(c, Command::Unlock { .. }))
+            .collect();
+        if profile != PERSON || garbled {
+            assert!(unlocks.is_empty(), "{what}: nothing asked");
+            continue;
+        }
+        let [Command::Unlock { id, device, proof }] = unlocks[..] else {
+            panic!("{what}: one unlock asked, got {asked:?}");
+        };
+        assert_eq!(id.as_str(), PERSON_SEAT, "{what}");
+        assert_eq!(device.fingerprint, fp, "{what}: the certificate's own");
+        assert_eq!(device.name, "Jane's phone", "{what}: its pairing name");
+        assert_eq!(proof.kind(), kind, "{what}");
+        match proof {
+            Proof::Password {
+                password,
+                stay_signed_in: true,
+                enroll: Some(key),
+            } => {
+                assert_eq!(password.expose(), "hunter2 Bärbel");
+                assert_eq!(key.public, hex::encode(&p256));
+            }
+            Proof::Key { signature } => assert_eq!(signature, "304501"),
+            _ => {}
+        }
+    }
+    host.join().unwrap().unwrap();
+    let _ = std::fs::remove_file(&store);
+}
+
+/// A wrong password leaves no trace of itself in the host's log at any level, in its errors or
+/// in what the client reads: only that an unlock was asked and how it ended.
+#[test]
+fn a_wrong_password_never_reaches_a_log_or_an_error() {
+    let _registry = crate::session_status::tests::registry_lock();
+    let _serial = SESSION_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    use crate::native::unlock::fake::{self, refused, Fake};
+    use punktfunk_core::quic::v2::features::FeatureSet;
+    use punktfunk_core::quic::v2::registry::{FEATURE_PROFILES, FEATURE_PROFILE_UNLOCK};
+
+    #[derive(Clone, Default)]
+    struct Lines(Arc<std::sync::Mutex<Vec<u8>>>);
+    impl std::io::Write for Lines {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let lines = Lines::default();
+    let writer = lines.clone();
+    let logs = tracing::Dispatch::new(
+        tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::TRACE)
+            .with_ansi(false)
+            .with_writer(move || writer.clone())
+            .finish(),
+    );
+    let secret = "Pf-n0t-H1s-pa55word";
+    let store = access_store_path("person-logs");
+    let _ = std::fs::remove_file(&store);
+    let np = Arc::new(NativePairing::load_with(Some(store.clone()), None, false).unwrap());
+    let (cert, key) = endpoint::generate_identity().unwrap();
+    let fp = hex::encode(endpoint::fingerprint_of_pem(&cert).unwrap());
+    np.add_with_access("Jane's phone", &fp, None).unwrap();
+    let sup = Arc::new(Fake::new(person_ledger(), |_| {
+        Err(refused("credential_wrong", "That isn't jdoe's password."))
+    }));
+    let _armed = fake::arm(&fp, sup.clone());
+    let host = spawn_logged_host(19798, 1, np, person_profiles("logs"), Some(logs));
+    std::thread::sleep(std::time::Duration::from_millis(500));
+    let features = FeatureSet::default()
+        .with(FEATURE_PROFILES)
+        .with(FEATURE_PROFILE_UNLOCK);
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let unlock = Sends::Unlock(password(secret, false, None));
+    let (_, heard) = rt.block_on(dial_person(19798, (&cert, &key), PERSON, features, unlock));
+    host.join().unwrap().unwrap();
+    let _ = std::fs::remove_file(&store);
+
+    let said = String::from_utf8(lines.0.lock().unwrap().clone()).unwrap();
+    assert!(
+        said.contains("profile unlock answered"),
+        "the log was captured: {said}"
+    );
+    assert!(
+        said.contains("credential_wrong"),
+        "the outcome code is logged"
+    );
+    for trace in [said, format!("{heard:?}"), format!("{:?}", sup.asked())] {
+        assert!(!trace.contains(secret), "{trace}");
+        assert!(!trace.contains(&hex::encode(secret)), "{trace}");
+    }
+    assert_eq!(
+        heard,
+        Heard::Closed(
+            punktfunk_core::reject::RejectReason::ProfileLocked,
+            "That isn't jdoe's password.".into()
+        )
+    );
 }

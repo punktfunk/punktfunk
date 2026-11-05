@@ -626,6 +626,12 @@ fn api_router_parts() -> (Router<Arc<MgmtState>>, utoipa::openapi::OpenApi) {
         .routes(routes!(profiles::start_profile_seat))
         .routes(routes!(profiles::stop_profile_seat))
         .routes(routes!(profiles::end_profile_session))
+        .routes(routes!(profiles::unlock_challenge))
+        .routes(routes!(
+            profiles::list_profile_devices,
+            profiles::sign_out_profile_devices
+        ))
+        .routes(routes!(profiles::sign_out_profile_device))
         .routes(routes!(update::get_update_status))
         .routes(routes!(update::force_update_check))
         .routes(routes!(update::apply_update))

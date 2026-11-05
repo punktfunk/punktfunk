@@ -33,6 +33,22 @@ fn every_route_is_classified_for_the_plugin_and_cert_lanes() {
         ("GET", "/api/v1/profiles/enumerate", false, true),
         ("GET", "/api/v1/profiles/{id}/avatar", false, true),
         ("POST", "/api/v1/profiles/{id}/wake", false, true),
+        // A device's own key unlock asks for its challenge; who is signed in, and signing a
+        // device out, are the console's.
+        (
+            "POST",
+            "/api/v1/profiles/{id}/unlock-challenge",
+            false,
+            true,
+        ),
+        ("GET", "/api/v1/profiles/{id}/devices", false, false),
+        ("DELETE", "/api/v1/profiles/{id}/devices", false, false),
+        (
+            "DELETE",
+            "/api/v1/profiles/{id}/devices/{fingerprint}",
+            false,
+            false,
+        ),
         ("GET", "/api/v1/profiles", true, false),
         // Turning seats on installs a driver and opens Remote Desktop: the operator's alone.
         ("GET", "/api/v1/profiles/seating", false, false),
@@ -617,6 +633,14 @@ fn every_route_has_a_side_on_the_door() {
         ("POST", "/api/v1/profiles/{id}/stop", true),
         ("POST", "/api/v1/profiles/{id}/end", true),
         ("POST", "/api/v1/profiles/{id}/wake", true),
+        ("POST", "/api/v1/profiles/{id}/unlock-challenge", true),
+        ("GET", "/api/v1/profiles/{id}/devices", true),
+        ("DELETE", "/api/v1/profiles/{id}/devices", true),
+        (
+            "DELETE",
+            "/api/v1/profiles/{id}/devices/{fingerprint}",
+            true,
+        ),
         ("GET", "/api/v1/actions", true),
         ("POST", "/api/v1/actions/{id}", true),
         ("GET", "/api/v1/update/status", true),

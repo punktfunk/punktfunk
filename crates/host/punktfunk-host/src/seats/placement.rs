@@ -1,12 +1,13 @@
 //! Placement: on a box with seats, a seat profile plays on its seat's host, so the box answers
 //! that profile's connect with a `Redirect` to the seat's port, or a refusal saying why.
 //!
-//! The box resolves the profile first (`profiles.rs`); placement only routes. The owner and a
+//! The box resolves the profile first (`profiles.rs`); placement only routes, and a person's own
+//! Linux account only once the supervisor unlocked it (`native/unlock.rs`). The owner and a
 //! profile that shares the box's desktop play on the box, or on the owner's row when the box is
-//! a door, which streams nothing itself. A device the
-//! box redirects holds its seat for [`RESERVE`], so a second device racing in finds the seat
-//! taken before the first lands. A device whose overlay says **A second device connects →
-//! Shares the screen** is redirected to an occupied seat too; the seat host's admission joins it.
+//! a door, which streams nothing itself. A device the box redirects holds its seat for
+//! [`RESERVE`], so a second device racing in finds the seat taken before the first lands. A
+//! device whose overlay says **A second device connects → Shares the screen** is redirected to
+//! an occupied seat too; the seat host's admission joins it.
 
 use super::Occupant;
 use pf_paths::seat::HostRole;
@@ -22,8 +23,6 @@ const RESERVE: Duration = Duration::from_secs(10);
 
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum Placement {
-    /// The box's own session.
-    Here,
     Redirect(Redirect),
     Refuse(RejectReason),
 }
@@ -40,20 +39,24 @@ pub(crate) struct Asker<'a> {
     pub browser: bool,
 }
 
-/// Where `profile` plays for `asker`. Blocking (the supervisor's pipe and the seat's loopback
-/// API): call it off the async workers.
+/// Whether a connect for `account` plays on the host that was asked, the box's own session,
+/// rather than being placed on a seat.
+pub(crate) fn here(account: &crate::profiles::OsAccount) -> bool {
+    plays_here(pf_paths::seat::role(), ledger_seat(account).is_some())
+}
+
+/// Where `profile` plays for `asker`, one that isn't [`here`], by the ledger `snap`. Blocking
+/// (the seat's loopback API): call it off the async workers.
 ///
 /// A door streams nothing itself, so it places every profile: the owner and a profile that
 /// shares the owner's desktop on the owner's row, a full seat on its own. A profile no row
-/// serves, because the box has no owner row yet, is refused rather than played here.
-pub(crate) fn place(profile: &crate::profiles::Resolved, asker: &Asker) -> Placement {
-    let own_row = ledger_seat(&profile.os_account).is_some();
-    if plays_here(pf_paths::seat::role(), own_row) {
-        return Placement::Here;
-    }
-    // The ledger and the profile's own seat host: a hung host of another seat costs this
-    // connect nothing.
-    let snap = super::ledger();
+/// serves, because the box has no owner row yet, is refused rather than played here. Only the
+/// profile's own seat host is asked: a hung host of another seat costs this connect nothing.
+pub(crate) fn place(
+    profile: &crate::profiles::Resolved,
+    asker: &Asker,
+    snap: &super::Snapshot,
+) -> Placement {
     let Some(seat_id) = snap.row_of(&profile.os_account) else {
         return Placement::Refuse(RejectReason::SeatUnavailable);
     };
