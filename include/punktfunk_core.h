@@ -1797,7 +1797,8 @@ typedef struct {
     uint8_t reserved5[6];
     // The profile unlock this connect sends, or null. Read during the call: the secret is
     // copied into a buffer the library wipes, and the caller wipes its own. An unlock outside
-    // the wire's bounds fails the connect with `INVALID_ARG`.
+    // the wire's bounds, or one without `pin_sha256`, fails the connect with `INVALID_ARG`
+    // before anything is dialed.
     const PunktfunkProfileUnlock *unlock;
     // `1`: this caller asks the player for a profile's password and dials again with it after
     // `PUNKTFUNK_STATUS_REJECTED_PROFILE_LOCKED`. A non-null `unlock` implies it.

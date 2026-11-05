@@ -648,7 +648,8 @@ pub struct ConnectParams {
     /// is offered [`crate::quic::v2::registry::FEATURE_PROFILE_UNLOCK`]. An `unlock` implies it.
     pub prompts_unlock: bool,
     /// The unlock this connect sends, once, right after `ClientHello` on its first dial; the
-    /// dial a `Redirect` sends carries none. Wiped once sent or dropped.
+    /// dial a `Redirect` sends carries none. Needs `pin`: without one the connect is
+    /// `InvalidArg` and nothing is dialed. Wiped once sent or dropped.
     pub unlock: Option<crate::quic::v2::msg::ProfileUnlock>,
     /// Handshake budget. The dial re-dials inside it, so a waking host is not a failure.
     pub timeout: Duration,
@@ -714,7 +715,7 @@ impl ConnectParams {
 impl NativeClient {
     /// Dial a `punktfunk/2` host and block until the handshake lands, `timeout` passes or
     /// `cancel` is set. A host that turns the dial away is [`PunktfunkError::Rejected`]; an
-    /// unlock outside the wire's bounds is `InvalidArg` before any dial.
+    /// unlock outside the wire's bounds or without a `pin` is `InvalidArg` before any dial.
     ///
     /// The host may answer below the ask: open the audio device from
     /// [`audio_codec`](Self::audio_codec) / [`audio_sample_rate_hz`](Self::audio_sample_rate_hz) /

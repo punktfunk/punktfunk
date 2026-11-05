@@ -814,7 +814,8 @@ pub struct PunktfunkConnectOpts {
     pub reserved5: [u8; 6],
     /// The profile unlock this connect sends, or null. Read during the call: the secret is
     /// copied into a buffer the library wipes, and the caller wipes its own. An unlock outside
-    /// the wire's bounds fails the connect with `INVALID_ARG`.
+    /// the wire's bounds, or one without `pin_sha256`, fails the connect with `INVALID_ARG`
+    /// before anything is dialed.
     pub unlock: *const PunktfunkProfileUnlock,
     /// `1`: this caller asks the player for a profile's password and dials again with it after
     /// `PUNKTFUNK_STATUS_REJECTED_PROFILE_LOCKED`. A non-null `unlock` implies it.
@@ -1313,6 +1314,10 @@ unsafe fn connect_params(
     let n = usize::from(o.screen_count).min(PUNKTFUNK_SCREENS_MAX);
     // SAFETY: `screens` is null or readable for `screen_count >= n` records (caller contract).
     let screens = unsafe { super::screens::screens_at(o.screens, n) };
+    // An unlock goes only to a pinned host; refused before its secret is read.
+    if !o.unlock.is_null() && pin.is_none() {
+        return Err(PunktfunkStatus::InvalidArg);
+    }
     // SAFETY: `unlock` is null or a readable struct whose buffers match their lengths.
     let unlock = unsafe { unlock_of(o.unlock) }?;
     Ok(punktfunk_core::client::ConnectParams {
@@ -1816,6 +1821,11 @@ mod tests {
             ..Default::default()
         };
         // SAFETY: every pointer field is null, a C-string literal, or a live local.
+        let unpinned = unsafe { connect_params(&o) }.err();
+        assert_eq!(unpinned, Some(PunktfunkStatus::InvalidArg), "no pin");
+        let pin = [7u8; 32];
+        o.pin_sha256 = pin.as_ptr();
+        // SAFETY: as above.
         let p = unsafe { connect_params(&o) }.unwrap();
         let got = p.unlock.expect("the unlock is carried");
         assert!(p.prompts_unlock && got.stay_signed_in);

@@ -466,7 +466,8 @@ pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeConnect<'lo
 /// `profile-locked` refusal. `secret` null sends no unlock; else `kind` 1 is the password as
 /// typed (UTF-8) and 2 a key proof, and `enrollKey` is null or the key to enrol. The secret is
 /// copied into a buffer that wipes; Kotlin wipes its own array once this returns. An unlock
-/// outside the wire's bounds fails with the token "error".
+/// outside the wire's bounds, or one whose request has no `pin_hex`, fails with the token
+/// "error" before anything is dialed.
 #[unsafe(no_mangle)]
 #[allow(clippy::too_many_arguments)]
 pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeConnectWithUnlock<'local>(
@@ -492,6 +493,13 @@ pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeConnectWith
             if secret.is_null() {
                 return Ok(Some((req, None)));
             }
+            // An unlock goes only to a pinned host; refused before its secret is read.
+            if parse_hex32(&req.pin_hex).is_none() {
+                let unpinned = punktfunk_core::error::PunktfunkError::InvalidArg(
+                    "a profile unlock needs a pinned host",
+                );
+                return Ok(Some((req, Some(Err(unpinned)))));
+            }
             let secret = Zeroizing::new(env.convert_byte_array(&secret)?);
             let key = match enroll_key.is_null() {
                 true => Vec::new(),
@@ -509,7 +517,7 @@ pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeConnectWith
     let unlock = match unlock.transpose() {
         Ok(u) => u,
         Err(e) => {
-            log::error!("nativeConnectWithUnlock: the unlock breaks the wire's bounds");
+            log::error!("nativeConnectWithUnlock: {e}");
             note_error(&e);
             return 0;
         }

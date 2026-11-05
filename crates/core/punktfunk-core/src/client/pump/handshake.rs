@@ -119,7 +119,7 @@ fn follow(
 }
 
 /// One connection's handshake. `unlock` follows the `ClientHello`, which announces it, and is
-/// wiped once written.
+/// wiped once written. An unlock without a `pin` is `InvalidArg` before anything is dialed.
 async fn dial(
     args: &WorkerArgs,
     host: &str,
@@ -128,6 +128,12 @@ async fn dial(
     deadline: tokio::time::Instant,
     unlock: Option<ProfileUnlock>,
 ) -> Result<Dialed> {
+    // A password or key proof goes only to a host whose identity this client already pinned.
+    if unlock.is_some() && pin.is_none() {
+        return Err(PunktfunkError::InvalidArg(
+            "a profile unlock needs a pinned host",
+        ));
+    }
     let p = &args.params;
     let shutdown = &args.shared.shutdown;
     let remote = dial_addr(host, port).await?;
@@ -661,6 +667,46 @@ mod tests {
             }
             other => panic!("{other:?}"),
         }
+    }
+
+    /// An unlock goes only to a pinned host: without a pin the connect fails and nothing is
+    /// dialed. A pinned dial with no unlock announces none.
+    #[test]
+    fn an_unlock_needs_a_pinned_host() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let _in_rt = rt.enter();
+        let ([door, _], pin) = one_box();
+        let port = door.local_addr().unwrap().port();
+        let new = || ConnectParams::new("127.0.0.1", port, mode(), Duration::from_secs(5));
+        let unpinned = ConnectParams {
+            unlock: Some(password()),
+            ..new()
+        };
+        match crate::client::NativeClient::connect(unpinned).map(|_| ()) {
+            Err(PunktfunkError::InvalidArg(_)) => {}
+            other => panic!("{other:?}"),
+        }
+        let dialed = rt.block_on(tokio::time::timeout(
+            Duration::from_millis(300),
+            door.accept(),
+        ));
+        assert!(dialed.is_err(), "an unpinned unlock dialed");
+
+        let door_side = rt.spawn(async move {
+            let (conn, _tx, _r, h) = hello(&door).await;
+            conn.close(0u32.into(), b"");
+            h.unlock_follows()
+        });
+        let plain = ConnectParams {
+            pin: Some(pin),
+            ..new()
+        };
+        let _ = crate::client::NativeClient::connect(plain);
+        let promised = rt.block_on(tokio::time::timeout(Duration::from_secs(5), door_side));
+        assert!(
+            !promised.unwrap().unwrap(),
+            "a dial with no unlock announced one"
+        );
     }
 
     /// Studio range is asked for only on the embedder's report, SDR and HDR each on its own.
