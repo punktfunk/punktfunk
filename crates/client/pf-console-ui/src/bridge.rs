@@ -50,6 +50,11 @@ pub struct CreateOptions {
     /// card's remembered pick unchecked.
     #[serde(default)]
     pub profiles: bool,
+    /// The host takes each `Launch`'s password out of the console natively, never through
+    /// this JSON, and reports a `profile-locked` close as [`PHASE_PROFILE_LOCKED`]. Absent
+    /// means a locked profile dials as it stands.
+    #[serde(default)]
+    pub prompts_unlock: bool,
     /// The settings snapshot the shell starts from.
     pub settings: Settings,
     /// The preset catalog as `[{id, name, overrides}, …]`.
@@ -102,8 +107,7 @@ impl CreateOptions {
                 safe: self.safe_area.unwrap_or(full),
             }),
             profiles: self.profiles,
-            // These hosts read a `Launch` as JSON, which never carries a secret.
-            prompts_unlock: false,
+            prompts_unlock: self.prompts_unlock,
         };
         (opts, self.entry.into_entry(), store)
     }
@@ -456,6 +460,15 @@ mod tests {
         let (opts, entry, _) = o.into_console(Platform::Android);
         assert!(matches!(entry, ConsoleEntry::Home));
         assert_eq!(opts.gpu_cache_bytes, 16 << 20);
+        assert!(
+            !opts.prompts_unlock,
+            "a host that never said so gets no prompt"
+        );
+        let o: CreateOptions = serde_json::from_str(
+            r#"{"device_name": "TV", "gpu_cache_bytes": 0, "settings": {}, "prompts_unlock": true}"#,
+        )
+        .unwrap();
+        assert!(o.into_console(Platform::Android).0.prompts_unlock);
     }
 
     #[test]

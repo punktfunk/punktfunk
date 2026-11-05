@@ -13,7 +13,7 @@ mod host;
 
 use host::{Cmd, ConsoleHost};
 use jni::errors::LogErrorAndDefault;
-use jni::objects::{JByteArray, JObject, JString};
+use jni::objects::{JBooleanArray, JByteArray, JObject, JString};
 use jni::sys::{jboolean, jfloat, jint, jlong};
 use jni::EnvUnowned;
 
@@ -25,6 +25,7 @@ use pf_console_ui::bridge::{
 use pf_console_ui::{
     HostRow, Insets, PairStatus, Platform, ProfilesAnswer, SpeedPhase, Stale, WakeStatus,
 };
+use punktfunk_core::quic::v2::msg::UNLOCK_PASSWORD;
 use std::time::Duration;
 
 /// How long `nativeConsoleNextEvent` blocks at most — short enough that Kotlin's poll thread
@@ -342,6 +343,31 @@ pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeConsoleSess
             h.shared.send(Cmd::Phase(phase, msg));
         }
         Ok(())
+    })
+    .resolve::<LogErrorAndDefault>()
+}
+
+/// `NativeBridge.nativeConsoleTakeUnlock(handle, stays): ByteArray?` — the password the
+/// console's prompt holds for the `Launch` it just raised, moved out of the console's model:
+/// null when it holds none. `stays[0]` gets its "Stay signed in" switch. The model's copy wipes
+/// as this returns; Kotlin wipes the array once its dial returns.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeConsoleTakeUnlock<'local>(
+    mut env: EnvUnowned<'local>,
+    _this: JObject<'local>,
+    handle: jlong,
+    stays: JBooleanArray<'local>,
+) -> JByteArray<'local> {
+    env.with_env(|env| -> jni::errors::Result<JByteArray<'local>> {
+        let taken = CONSOLES
+            .get(handle)
+            .and_then(|h| h.handles.console.take_unlock());
+        // The console's prompt makes only passwords.
+        let Some(u) = taken.filter(|u| u.kind == UNLOCK_PASSWORD) else {
+            return Ok(JByteArray::default());
+        };
+        stays.set_region(env, 0, &[u.stay_signed_in])?;
+        env.byte_array_from_slice(&u.secret)
     })
     .resolve::<LogErrorAndDefault>()
 }

@@ -1016,9 +1016,18 @@ object NativeBridge {
     /**
      * Where the session the console asked for stands: 0 connecting, 1 streaming, 2 failed([message]),
      * 3 ended ([message] = the abnormal reason, or "" for a clean end), 4 reconnecting([message]),
-     * 5 failed as profile-unknown([message]), 6 awaiting the host operator's approval.
+     * 5 failed as profile-unknown([message]), 6 awaiting the host operator's approval, 7 failed as
+     * profile-locked ([message] = the host's sentence, "" when it said none): the console's
+     * password prompt opens again.
      */
     external fun nativeConsoleSessionPhase(handle: Long, phase: Int, message: String)
+
+    /**
+     * The password the console's prompt holds for the `Launch` it just raised, moved out of the
+     * console: null when it holds none. [stays] gets its "Stay signed in" switch at index 0. The
+     * console's copy is wiped as this returns; the caller wipes the array once its dial returns.
+     */
+    external fun nativeConsoleTakeUnlock(handle: Long, stays: BooleanArray): ByteArray?
 
     /** Re-root the console: `{}` = Home, `{"library": <HostRow>}` = that host's shelf over Home. */
     external fun nativeConsoleNavigate(handle: Long, entryJson: String)
