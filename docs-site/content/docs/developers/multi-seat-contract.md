@@ -761,7 +761,8 @@ A refusal is `backend` with `<code>: <sentence>`, the sentence the person reads.
   64 hex, valid 120 seconds and once, the device's only live one. A device with no key gets
   `unlock_required`. The key signs `"punktfunk-seat-unlock-v1"` ‖ challenge ‖ the seat id's 32 hex
   characters ‖ the device fingerprint ‖ the box fingerprint, 152 bytes, with SHA-256: ECDSA P-256
-  as an ASN.1 DER signature, or RSA PKCS#1 v1.5.
+  as an ASN.1 DER signature, or RSA 2048 as a 256-byte signature, PKCS#1 v1.5 or PSS with a
+  32-byte salt. Windows Hello's documentation names both paddings, so either passes.
 - **`left {id, fingerprint}`** answers `left`: the device disconnected, so its presence ends 600
   seconds later unless it rejoins.
 - **`sign_out {id, fingerprint}`** answers `signed_out`: forgets that device, its stay and its key,

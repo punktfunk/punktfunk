@@ -136,7 +136,7 @@ pub struct Device {
 pub enum KeyAlg {
     /// ECDSA P-256 with SHA-256, the signature ASN.1 DER.
     P256,
-    /// RSA 2048 PKCS#1 v1.5 with SHA-256.
+    /// RSA 2048 with SHA-256, the signature PKCS#1 v1.5 or PSS.
     Rsa2048,
 }
 

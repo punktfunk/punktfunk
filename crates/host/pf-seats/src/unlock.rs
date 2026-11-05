@@ -12,7 +12,7 @@ use crate::ipc::{Device, DeviceEntry, DeviceKind, KeyAlg, Needs, UnlockKey};
 use crate::model::SeatId;
 use aws_lc_rs::signature::{
     ParsedPublicKey, RsaParameters, VerificationAlgorithm, ECDSA_P256_SHA256_ASN1,
-    RSA_PKCS1_2048_8192_SHA256,
+    RSA_PKCS1_2048_8192_SHA256, RSA_PSS_2048_8192_SHA256,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeSet, HashMap};
@@ -342,8 +342,9 @@ fn signature_fits(alg: KeyAlg, len: usize) -> bool {
     }
 }
 
-/// Whether `signature` is `key`'s over `message`. A key or a signature of the wrong size is
-/// refused before any verification runs.
+/// Whether `signature` is `key`'s over `message`: ECDSA P-256, or RSA with SHA-256 as PKCS#1
+/// v1.5 or PSS (salt as long as the digest). A key or a signature of the wrong size is refused
+/// before any verification runs.
 pub fn verify(key: &UnlockKey, message: &[u8], signature: &[u8]) -> bool {
     if !signature_fits(key.alg, signature.len()) {
         return false;
@@ -351,11 +352,16 @@ pub fn verify(key: &UnlockKey, message: &[u8], signature: &[u8]) -> bool {
     let Some(public) = key_bytes(key) else {
         return false;
     };
-    let alg: &'static dyn VerificationAlgorithm = match key.alg {
-        KeyAlg::P256 => &ECDSA_P256_SHA256_ASN1,
-        KeyAlg::Rsa2048 => &RSA_PKCS1_2048_8192_SHA256,
+    let verifies = |alg: &'static dyn VerificationAlgorithm| {
+        ParsedPublicKey::new(alg, &public).is_ok_and(|k| k.verify_sig(message, signature).is_ok())
     };
-    ParsedPublicKey::new(alg, &public).is_ok_and(|k| k.verify_sig(message, signature).is_ok())
+    match key.alg {
+        KeyAlg::P256 => verifies(&ECDSA_P256_SHA256_ASN1),
+        // Windows Hello's documentation names both paddings; either is the same key's proof.
+        KeyAlg::Rsa2048 => {
+            verifies(&RSA_PKCS1_2048_8192_SHA256) || verifies(&RSA_PSS_2048_8192_SHA256)
+        }
+    }
 }
 
 #[cfg(test)]
@@ -620,6 +626,42 @@ mod tests {
             ..key
         };
         assert!(key_bytes(&oversized).is_none(), "over 600 bytes");
+    }
+
+    /// An RSA 2048 proof passes as PKCS#1 v1.5 or as PSS with SHA-256, over its own message
+    /// only, and a P-256 key never takes either.
+    #[test]
+    fn an_rsa_proof_passes_with_either_padding() {
+        use aws_lc_rs::rsa::{KeyPair, KeySize};
+        use aws_lc_rs::signature::{RsaEncoding, RSA_PKCS1_SHA256, RSA_PSS_SHA256};
+        let pair = KeyPair::generate(KeySize::Rsa2048).unwrap();
+        let key = UnlockKey {
+            alg: KeyAlg::Rsa2048,
+            public: hex::encode(pair.public_key().as_ref()),
+        };
+        let signed = message(&[1; 32], &SeatId::random(), &[2; 32], &[3; 32]);
+        let other = message(&[4; 32], &SeatId::random(), &[2; 32], &[3; 32]);
+        let sign = |padding: &'static dyn RsaEncoding| {
+            let mut signature = vec![0; pair.public_modulus_len()];
+            pair.sign(padding, &SystemRandom::new(), &signed, &mut signature)
+                .unwrap();
+            signature
+        };
+        let p256 = EcdsaKeyPair::generate(&ECDSA_P256_SHA256_ASN1_SIGNING).unwrap();
+        let point = hex::encode(p256.public_key().as_ref());
+        for padding in [&RSA_PKCS1_SHA256 as &dyn RsaEncoding, &RSA_PSS_SHA256] {
+            let signature = sign(padding);
+            assert_eq!(signature.len(), 256);
+            assert!(verify(&key, &signed, &signature));
+            assert!(!verify(&key, &other, &signature), "another message");
+            for public in [key.public.clone(), point.clone()] {
+                let as_p256 = UnlockKey {
+                    alg: KeyAlg::P256,
+                    public,
+                };
+                assert!(!verify(&as_p256, &signed, &signature), "never the RSA path");
+            }
+        }
     }
 
     /// A file is read only as the list it was written as: a bad entry spoils the whole of it.
