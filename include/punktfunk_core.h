@@ -308,6 +308,25 @@
 // hosts that do not know the bit ignore it.
 #define PUNKTFUNK_CLIENT_CAP_KEEP_HOST_AUDIO 32
 
+// [`PunktfunkProfileUnlock::kind`]: the account password as typed.
+#define PUNKTFUNK_UNLOCK_PASSWORD 1
+
+// [`PunktfunkProfileUnlock::kind`]: a signature over [`punktfunk_profile_unlock_message`].
+#define PUNKTFUNK_UNLOCK_KEY_PROOF 2
+
+// [`PunktfunkProfileUnlock::enroll_alg`]: enrol no key.
+#define PUNKTFUNK_ENROLL_NONE 0
+
+// [`PunktfunkProfileUnlock::enroll_alg`]: ECDSA P-256 with SHA-256, the 65-byte SEC1 point.
+#define PUNKTFUNK_ENROLL_P256 1
+
+// [`PunktfunkProfileUnlock::enroll_alg`]: RSA 2048 PKCS#1 v1.5 with SHA-256, a DER
+// `RSAPublicKey` of at most 600 bytes.
+#define PUNKTFUNK_ENROLL_RSA2048 2
+
+// Bytes [`punktfunk_profile_unlock_message`] writes.
+#define PUNKTFUNK_UNLOCK_MESSAGE_LEN 152
+
 #if defined(PUNKTFUNK_FEATURE_QUIC)
 // [`PunktfunkConnectOpts::reformat`]: this caller rebuilds its decoder on a frame flagged
 // [`FRAME_NEW_FORMAT`](punktfunk_core::packet::FRAME_NEW_FORMAT), from the codec, colour and
@@ -1644,6 +1663,32 @@ typedef struct {
 #endif
 
 #if defined(PUNKTFUNK_FEATURE_QUIC)
+// What opens a profile on a person's own account ([`PunktfunkConnectOpts::unlock`]). Password:
+// `secret` is the password as typed, UTF-8, 1 to 512 bytes, never trimmed, no NUL; optionally
+// with a key to enrol. Key proof: `secret` is the signature, 1 to 1024 bytes, and nothing else
+// is set.
+typedef struct {
+    // `PUNKTFUNK_UNLOCK_*`.
+    uint8_t kind;
+    // Password only: `1` keeps this device signed in to the profile.
+    uint8_t stay_signed_in;
+    // Password only: `PUNKTFUNK_ENROLL_*` of `enroll_key`.
+    uint8_t enroll_alg;
+    // Always `0`.
+    uint8_t reserved[5];
+    // Readable for `secret_len` bytes during the call.
+    const uint8_t *secret;
+    // See `secret`.
+    uintptr_t secret_len;
+    // The public key to enrol, readable for `enroll_key_len` bytes; null with
+    // `PUNKTFUNK_ENROLL_NONE`.
+    const uint8_t *enroll_key;
+    // See `enroll_key`.
+    uintptr_t enroll_key_len;
+} PunktfunkProfileUnlock;
+#endif
+
+#if defined(PUNKTFUNK_FEATURE_QUIC)
 // Growable connect options for [`punktfunk_connect_opts`]. Zero-init, set
 // `struct_size = sizeof(PunktfunkConnectOpts)`, then the fields you mean.
 // Zero = auto/unspecified (`audio_rate_hz = 0` is Opus; a non-zero pair is
@@ -1750,6 +1795,15 @@ typedef struct {
     uint8_t shows_screens;
     // Always `0`. Fills what would otherwise be padding.
     uint8_t reserved5[6];
+    // The profile unlock this connect sends, or null. Read during the call: the secret is
+    // copied into a buffer the library wipes, and the caller wipes its own. An unlock outside
+    // the wire's bounds fails the connect with `INVALID_ARG`.
+    const PunktfunkProfileUnlock *unlock;
+    // `1`: this caller asks the player for a profile's password and dials again with it after
+    // `PUNKTFUNK_STATUS_REJECTED_PROFILE_LOCKED`. A non-null `unlock` implies it.
+    uint8_t prompts_unlock;
+    // Always `0`. Fills what would otherwise be padding.
+    uint8_t reserved6[7];
 } PunktfunkConnectOpts;
 #endif
 
@@ -2615,6 +2669,23 @@ PunktfunkConnection *punktfunk_connect_ex12(const char *host,
                                             const char *device_name,
                                             uint32_t timeout_ms,
                                             int32_t *status_out);
+#endif
+
+#if defined(PUNKTFUNK_FEATURE_QUIC)
+// The bytes a profile's unlock key signs, with SHA-256 as the digest, into `out`:
+// `"punktfunk-seat-unlock-v1" ‖ challenge ‖ seat id ‖ device fingerprint ‖ box fingerprint`.
+// `seat_id` is the seat's 32 lowercase hex characters; `device_sha256` is this device's
+// certificate fingerprint, `box_sha256` the box's as this caller pinned it. `INVALID_ARG` for
+// any other seat id, `NULL_POINTER` for a null argument.
+//
+// # Safety
+// `challenge`, `device_sha256` and `box_sha256` are readable for 32 bytes; `seat_id` is a
+// NUL-terminated string; `out` is writable for [`PUNKTFUNK_UNLOCK_MESSAGE_LEN`] bytes.
+PunktfunkStatus punktfunk_profile_unlock_message(const uint8_t *challenge,
+                                                 const char *seat_id,
+                                                 const uint8_t *device_sha256,
+                                                 const uint8_t *box_sha256,
+                                                 uint8_t *out);
 #endif
 
 #if defined(PUNKTFUNK_FEATURE_QUIC)
