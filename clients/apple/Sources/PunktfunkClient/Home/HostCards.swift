@@ -103,9 +103,9 @@ private struct DefaultHostBadge: View {
             .background(Circle().fill(Color.brand))
             .overlay(Circle().strokeBorder(.background, lineWidth: max(1, size * 0.035)))
             .offset(x: size * 0.06, y: size * 0.06)
-            .accessibilityLabel("Default host")
+            .accessibilityLabel(L10n.hostcardDefaultHost)
             #if os(macOS)
-            .help("Default host: Start in opens here")
+            .help(L10n.appleHostcardDefaultHostHint)
             #endif
     }
 }
@@ -242,12 +242,12 @@ enum HostStatus: Equatable {
 
     var text: String {
         switch self {
-        case .connecting: return "Connecting…"
-        case .playing(let title): return "Playing \(title)"
-        case .online: return "Online"
-        case .notPaired: return "Not paired"
-        case .offlineWakes: return "Offline · wakes on tap"
-        case .offline: return "Offline"
+        case .connecting: return String(localized: L10n.hostcardStatusConnecting)
+        case .playing(let title): return L10n.hostcardStatusPlaying(game: title)
+        case .online: return String(localized: L10n.hostcardStatusOnline)
+        case .notPaired: return String(localized: L10n.hostcardStatusNotPaired)
+        case .offlineWakes: return String(localized: L10n.hostcardStatusOfflineWakes)
+        case .offline: return String(localized: L10n.hostcardStatusOffline)
         }
     }
 
@@ -343,7 +343,7 @@ struct HostCardView: View {
                                     picture: pick.avatar, host: host)
                                     .overlay(Circle().strokeBorder(.background, lineWidth: 2))
                                     .offset(x: m.tile * 0.06, y: -m.tile * 0.06)
-                                    .accessibilityLabel("Playing as \(pick.displayName)")
+                                    .accessibilityLabel(L10n.hostcardPlayingAs(profile: pick.displayName))
                             }
                         }
                     VStack(alignment: .leading, spacing: 4) {
@@ -414,9 +414,9 @@ struct HostCardView: View {
                 .hoverEffect(.highlight)
                 #endif
                 .padding(.trailing, 4)
-                .accessibilityLabel("Details for \(host.displayName)")
+                .accessibilityLabel(L10n.hostcardDetailsA11y(host: host.displayName))
                 #if os(macOS)
-                .help("Host details")
+                .help(L10n.hostcardDetailsHint)
                 #endif
             }
             #endif
@@ -440,13 +440,13 @@ struct HostCardView: View {
     @ViewBuilder private var menuItems: some View {
         if let pinned = pinnedPreset {
             if let browse = actions.browseLibrary {
-                Button("Browse Library", systemImage: "square.grid.2x2", action: browse)
+                Button(L10n.hostcardBrowseLibrary, systemImage: "square.grid.2x2", action: browse)
             }
             if let copyLink = actions.copyLink {
-                Button("Copy Link", systemImage: "link", action: copyLink)
+                Button(L10n.hostcardCopyLink, systemImage: "link", action: copyLink)
             }
             if let presets = actions.presets {
-                Button("Unpin Card", systemImage: "pin.slash", role: .destructive) {
+                Button(L10n.hostcardUnpinCard, systemImage: "pin.slash", role: .destructive) {
                     presets.togglePin(pinned.id)
                 }
             }
@@ -455,19 +455,21 @@ struct HostCardView: View {
                 connectWithMenu(presets)
             }
             if let browse = actions.browseLibrary {
-                Button("Browse Library", systemImage: "square.grid.2x2", action: browse)
+                Button(L10n.hostcardBrowseLibrary, systemImage: "square.grid.2x2", action: browse)
             }
             if let wake = actions.wake {
-                Button("Wake Host", systemImage: "power", action: wake)
+                Button(L10n.hostcardWake, systemImage: "power", action: wake)
             }
             if let switchProfile = actions.switchProfile {
-                Button("Switch profile…", systemImage: "person.crop.circle", action: switchProfile)
+                Button(
+                    L10n.hostcardSwitchProfile, systemImage: "person.crop.circle",
+                    action: switchProfile)
             }
             if let copyLink = actions.copyLink {
-                Button("Copy Link", systemImage: "link", action: copyLink)
+                Button(L10n.hostcardCopyLink, systemImage: "link", action: copyLink)
             }
             if let showDetails = actions.showDetails {
-                Button("Host Details…", systemImage: "info.circle", action: showDetails)
+                Button(L10n.hostcardDetails, systemImage: "info.circle", action: showDetails)
             }
         }
     }
@@ -480,7 +482,7 @@ struct HostCardView: View {
                 Button {
                     menu.connectWith(.defaults)
                 } label: {
-                    checkable("Default settings", on: menu.boundID == nil)
+                    checkable(String(localized: L10n.hostcardDefaultSettings), on: menu.boundID == nil)
                 }
                 ForEach(menu.presets) { preset in
                     Button {
@@ -490,7 +492,7 @@ struct HostCardView: View {
                     }
                 }
             } label: {
-                Label("Connect with", systemImage: "slider.horizontal.3")
+                Label(L10n.hostcardConnectWith, systemImage: "slider.horizontal.3")
             }
         }
     }
@@ -533,7 +535,7 @@ struct PresetChip: View {
         .padding(.horizontal, 7)
         .padding(.vertical, 2)
         .background(Capsule().fill(tint.opacity(prominent ? 0.24 : 0.12)))
-        .accessibilityLabel("Preset \(preset.name)")
+        .accessibilityLabel(L10n.appleHostcardPresetA11y(preset: preset.name))
     }
 }
 
@@ -565,7 +567,10 @@ struct DiscoveredCardView: View {
                             ? "lock.fill" : "antenna.radiowaves.left.and.right")
                             .font(.system(size: m.status))
                             .accessibilityHidden(true) // decorative; the adjacent text says the state
-                        Text(discovered.requiresPairing ? "PAIRING REQUIRED" : "DISCOVERED")
+                        Text(
+                            discovered.requiresPairing
+                                ? L10n.hostcardStatusPairingRequired
+                                : L10n.appleHostcardStatusDiscovered)
                     }
                     .font(.geist(m.status, .medium, relativeTo: .caption2))
                     .tracking(0.8)
