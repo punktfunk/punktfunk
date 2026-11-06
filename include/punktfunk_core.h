@@ -2757,7 +2757,8 @@ bool punktfunk_local_link_facts(const char *host_ip, uint8_t *out_kind, uint32_t
 #if defined(PUNKTFUNK_FEATURE_QUIC)
 // The line the PyroWave quality row shows when `required_kbps` is more than this device's
 // link carries ([`punktfunk_local_link_facts`]'s `kind` and `mbps`), NUL-terminated into
-// `out`; empty when it fits. One wording for every client. 160 bytes is ample.
+// `out`; empty when it fits. One wording for every client, in the language the console was
+// given (`languages`), English before. 160 bytes is ample.
 //
 // # Safety
 // `out` is writable for `cap` bytes.

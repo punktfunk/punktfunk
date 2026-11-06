@@ -797,6 +797,23 @@ pub extern "C" fn punktfunk_console_palettes() -> *mut c_char {
     })
 }
 
+/// Word the Rust side's text in the first of `languages_json` that Punktfunk ships, a JSON
+/// array of BCP-47 tags, most preferred first. `punktfunk_console_new` does this from its
+/// `languages`; call it first when the palettes or the PyroWave warning are read with no
+/// console. NULL or bad JSON leaves the language as it was.
+///
+/// # Safety
+/// `languages_json` is NULL or a NUL-terminated string.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn punktfunk_console_set_languages(languages_json: *const c_char) {
+    guard((), || {
+        // SAFETY: NULL or NUL-terminated per this function's contract.
+        if let Some(tags) = unsafe { str_arg(languages_json) }.and_then(json::<Vec<String>>) {
+            pf_l10n::set_languages(&tags);
+        }
+    })
+}
+
 /// Free a string from `punktfunk_console_next_event`, `punktfunk_console_drain_cmds` or
 /// `punktfunk_console_palettes`.
 ///
@@ -817,6 +834,42 @@ mod tests {
 
     fn unlock(kind: u8, secret: &[u8], stay: bool) -> ProfileUnlock {
         ProfileUnlock::new(kind, Zeroizing::new(secret.to_vec()), stay, 0, Vec::new()).unwrap()
+    }
+
+    /// The palette names the picker offers are messages, read in the thread's language.
+    #[test]
+    fn palette_names_are_worded_from_messages() {
+        let names = |tag: &str| {
+            pf_l10n::with_language(tag, || {
+                let raw = punktfunk_console_palettes();
+                // SAFETY: a NUL-terminated string from `punktfunk_console_palettes`, freed once.
+                let text = unsafe { CStr::from_ptr(raw) }.to_str().unwrap().to_owned();
+                // SAFETY: as above, and not used again.
+                unsafe { punktfunk_console_string_free(raw) };
+                serde_json::from_str::<Vec<serde_json::Value>>(&text).unwrap()
+            })
+        };
+        let (plain, pseudo) = (names("en"), names("en-XA"));
+        assert!(!plain.is_empty());
+        for (p, x) in plain.iter().zip(&pseudo) {
+            assert_eq!(p["id"], x["id"]);
+            assert!(!p["name"].as_str().unwrap().starts_with('['));
+            assert!(x["name"].as_str().unwrap().starts_with('['));
+        }
+    }
+
+    /// Bad input leaves the language alone; a list it ships is taken.
+    #[test]
+    fn set_languages_takes_a_list_and_ignores_the_rest() {
+        let before = pf_l10n::language();
+        // SAFETY: NULL, or a NUL-terminated literal.
+        unsafe {
+            punktfunk_console_set_languages(std::ptr::null());
+            punktfunk_console_set_languages(c"not json".as_ptr());
+            assert_eq!(pf_l10n::language(), before);
+            punktfunk_console_set_languages(c"[\"en-GB\"]".as_ptr());
+        }
+        assert_eq!(pf_l10n::language(), "en");
     }
 
     /// A password that fits goes over with its switch. One that does not fit, a key proof and

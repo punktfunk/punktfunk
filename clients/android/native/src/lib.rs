@@ -184,6 +184,29 @@ pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeConsoleAvai
     cfg!(target_os = "android")
 }
 
+/// `NativeBridge.nativeSetLanguages(tags: String)` — word the Rust side's text in the first of
+/// `tags` that Punktfunk ships: a JSON array of BCP-47 tags, most preferred first. The console
+/// does this from its `languages`; call it first when the PyroWave row or the stats overlay's
+/// warnings are read with no console. Bad JSON leaves the language as it was.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeSetLanguages<'local>(
+    mut env: EnvUnowned<'local>,
+    _this: JObject<'local>,
+    tags: jni::objects::JString<'local>,
+) {
+    env.with_env(|env| -> jni::errors::Result<()> {
+        let tags = tags.try_to_string(env)?;
+        match serde_json::from_str::<Vec<String>>(&tags) {
+            Ok(tags) => {
+                pf_l10n::set_languages(&tags);
+            }
+            Err(e) => log::warn!("nativeSetLanguages: not a JSON array of tags: {e}"),
+        }
+        Ok(())
+    })
+    .resolve::<jni::errors::LogErrorAndDefault>()
+}
+
 /// The symbol `name` in the `dlopen` handle `lib`, as the fn-pointer type `F`; `None` when absent.
 ///
 /// # Safety
