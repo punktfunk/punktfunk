@@ -520,14 +520,17 @@ pub(super) fn delete(account: &str, id: &SeatId) -> Result<(), BackendError> {
 
 /// Ends everything the user still runs: at its seat's stop, and before its account is deleted or
 /// rehomed. Its user manager outlives the seat's unit by seconds, and `userdel` or `usermod`
-/// refuse a busy user.
+/// refuse a busy user. Done when no process runs as the user: logind keeps an empty user's
+/// record for `UserStopDelaySec` (10 s by default), as long as this whole wait.
 pub(super) fn quiesce(account: &str) -> Result<(), BackendError> {
-    let present = || run("loginctl_failed", "loginctl", &["show-user", account]).is_ok();
-    if present() {
+    let Some(user) = lookup(account)? else {
+        return Ok(());
+    };
+    if run("loginctl_failed", "loginctl", &["show-user", account]).is_ok() {
         let _ = run("loginctl_failed", "loginctl", &["terminate-user", account]);
     }
     for attempt in 0..40 {
-        if !present() {
+        if !runs_as(Path::new("/proc"), user.uid) {
             return Ok(());
         }
         if attempt == 12 {
@@ -542,6 +545,26 @@ pub(super) fn quiesce(account: &str) -> Result<(), BackendError> {
     ))
 }
 
+/// Whether a process in `proc` has `uid` as its real, effective or saved user, the test `userdel`
+/// makes. An unreadable `proc` counts as busy.
+fn runs_as(proc: &Path, uid: u32) -> bool {
+    let Ok(entries) = std::fs::read_dir(proc) else {
+        return true;
+    };
+    entries.flatten().any(|entry| {
+        std::fs::read_to_string(entry.path().join("status")).is_ok_and(|status| {
+            status
+                .lines()
+                .find_map(|line| line.strip_prefix("Uid:"))
+                .is_some_and(|ids| {
+                    ids.split_whitespace()
+                        .take(3)
+                        .any(|id| id.parse::<u32>().ok() == Some(uid))
+                })
+        })
+    })
+}
+
 fn not_owned(account: &str, id: &SeatId) -> BackendError {
     err(
         "account_not_owned",
@@ -552,6 +575,30 @@ fn not_owned(account: &str, id: &SeatId) -> BackendError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_user_is_busy_while_a_process_has_it_as_real_effective_or_saved_user() {
+        let proc = tempfile::tempdir().unwrap();
+        let status = |pid: &str, uids: &str| {
+            std::fs::create_dir(proc.path().join(pid)).unwrap();
+            let text = format!("Name:\tx\nUid:\t{uids}\nGid:\t0\t0\t0\t0\n");
+            std::fs::write(proc.path().join(pid).join("status"), text).unwrap();
+        };
+        status("1", "0\t0\t0\t0");
+        status("70", "0\t0\t0\t1001");
+        std::fs::create_dir(proc.path().join("sys")).unwrap();
+        assert!(
+            !runs_as(proc.path(), 1001),
+            "the filesystem uid alone is not the user's"
+        );
+        assert!(!runs_as(proc.path(), 1002));
+        status("71", "0\t0\t1001\t1001");
+        assert!(runs_as(proc.path(), 1001), "a saved uid is the user's");
+        assert!(
+            runs_as(&proc.path().join("missing"), 1002),
+            "an unreadable proc is busy"
+        );
+    }
 
     fn id() -> SeatId {
         SeatId::parse("0123456789abcdef0123456789abcdef").unwrap()
