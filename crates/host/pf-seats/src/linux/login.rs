@@ -55,7 +55,7 @@ pub(super) fn outcome(ended: Option<Ended>) -> Option<Outcome> {
             MUST_CHANGE => Some(Outcome::Refused(pam::MUST_CHANGE)),
             NO_SERVICE => fallback(format!("the {SERVICE} PAM service isn't installed")),
             NO_PASSWORD => fallback("the login helper got no password".into()),
-            NO_SESSION => fallback("PAM opened no session; the unit's journal says why".into()),
+            NO_SESSION => fallback("the login helper opened no session; see its journal".into()),
             code @ 200..=254 => fallback(format!("systemd didn't start the login helper ({code})")),
             _ => None,
         },
@@ -110,6 +110,15 @@ fn run_in(account: &str, service: &str, socket: &Path, program: &Path) -> u8 {
             .and_then(|()| setrlimit(Resource::Core, none));
     if let Err(error) = hardened {
         tracing::error!(%error, "core dumps not turned off");
+        return NO_SESSION;
+    }
+    // Before any PAM step: a session with nothing to run in it would fail the start.
+    use std::os::unix::fs::PermissionsExt as _;
+    let runnable = std::fs::metadata(program)
+        .is_ok_and(|meta| meta.is_file() && meta.permissions().mode() & 0o111 != 0);
+    if !runnable {
+        let program = program.display();
+        tracing::error!(%program, "seat-session not found beside the login helper");
         return NO_SESSION;
     }
     let person = match Person::of(account) {
@@ -466,9 +475,9 @@ mod tests {
     /// directory and the unit's environment plus the person's names, and no copy of the password
     /// in its or the helper's argv and environment, or in the helper's log; the helper keeps no
     /// core limit and forwards a stop. A wrong password, a locked, an expired and a must-change
-    /// account, a missing PAM file and no password at all each end it before a session, with
-    /// their own code. Makes and removes the account `pfwallet`, the group `pfwalletg`,
-    /// `/etc/pam.d/punktfunk-seat`, the login socket and the row's runtime directory.
+    /// account, a missing PAM file, a missing `seat-session` and no password at all each end it
+    /// before a session, with their own code. Makes and removes the account `pfwallet`, the group
+    /// `pfwalletg`, `/etc/pam.d/punktfunk-seat`, the login socket and the row's runtime directory.
     #[cfg(target_os = "linux")]
     #[test]
     #[ignore = "needs root, libpam, the login service and a built punktfunk-seats; makes the account pfwallet"]
@@ -757,6 +766,15 @@ mod tests {
         run("usermod", &["-L", ACCOUNT]);
         assert_eq!(refused(Some(PASSWORD)), i32::from(WRONG));
         run("usermod", &["-U", ACCOUNT]);
+        let away = dir.path().join("seat-session.away");
+        std::fs::rename(&program, &away).unwrap();
+        let (code, log) = start(Some(PASSWORD), never);
+        assert_eq!(code, i32::from(NO_SESSION), "{log}");
+        assert!(
+            log.contains("seat-session not found beside the login helper"),
+            "{log}"
+        );
+        std::fs::rename(&away, &program).unwrap();
         std::fs::remove_file(&pam_file).unwrap();
         assert_eq!(refused(Some(PASSWORD)), i32::from(NO_SERVICE));
     }
