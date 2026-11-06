@@ -40,6 +40,7 @@ on:
       - 'scripts/ci/gitea-release.sh'
       - 'scripts/ci/pf-version.sh'
       - '.gitea/workflows/decky.yml'
+      - 'l10n/**'
     tags: ['v*']
   workflow_dispatch:
 
