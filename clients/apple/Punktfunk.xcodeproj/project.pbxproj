@@ -25,6 +25,10 @@
 		1A1000000000000000000003 /* Localizable.xcstrings in Resources */ = {isa = PBXBuildFile; fileRef = 1A1000000000000000000001 /* Localizable.xcstrings */; };
 		1A1000000000000000000004 /* Localizable.xcstrings in Resources */ = {isa = PBXBuildFile; fileRef = 1A1000000000000000000001 /* Localizable.xcstrings */; };
 		1A1000000000000000000005 /* Localizable.xcstrings in Resources */ = {isa = PBXBuildFile; fileRef = 1A1000000000000000000001 /* Localizable.xcstrings */; };
+		1A1000000000000000000013 /* InfoPlist.xcstrings in Resources */ = {isa = PBXBuildFile; fileRef = 1A1000000000000000000011 /* InfoPlist.xcstrings */; };
+		1A1000000000000000000014 /* InfoPlist.xcstrings in Resources */ = {isa = PBXBuildFile; fileRef = 1A1000000000000000000011 /* InfoPlist.xcstrings */; };
+		1A1000000000000000000015 /* InfoPlist.xcstrings in Resources */ = {isa = PBXBuildFile; fileRef = 1A1000000000000000000011 /* InfoPlist.xcstrings */; };
+		1A1000000000000000000016 /* AppShortcuts.xcstrings in Resources */ = {isa = PBXBuildFile; fileRef = 1A1000000000000000000012 /* AppShortcuts.xcstrings */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -60,6 +64,8 @@
 		E295569B300948B9009F939C /* SwiftUI.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = SwiftUI.framework; path = System/Library/Frameworks/SwiftUI.framework; sourceTree = SDKROOT; };
 		E295577B30094CE5009F939C /* PunktfunkWidgetsExtension.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = PunktfunkWidgetsExtension.entitlements; sourceTree = "<group>"; };
 		1A1000000000000000000001 /* Localizable.xcstrings */ = {isa = PBXFileReference; lastKnownFileType = text.json.xcstrings; name = Localizable.xcstrings; path = Sources/PunktfunkShared/Generated/Localizable.xcstrings; sourceTree = "<group>"; };
+		1A1000000000000000000011 /* InfoPlist.xcstrings */ = {isa = PBXFileReference; lastKnownFileType = text.json.xcstrings; name = InfoPlist.xcstrings; path = Sources/PunktfunkShared/Generated/InfoPlist.xcstrings; sourceTree = "<group>"; };
+		1A1000000000000000000012 /* AppShortcuts.xcstrings */ = {isa = PBXFileReference; lastKnownFileType = text.json.xcstrings; name = AppShortcuts.xcstrings; path = Sources/PunktfunkShared/Generated/AppShortcuts.xcstrings; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -143,6 +149,8 @@
 			children = (
 				E295577B30094CE5009F939C /* PunktfunkWidgetsExtension.entitlements */,
 				1A1000000000000000000001 /* Localizable.xcstrings */,
+				1A1000000000000000000011 /* InfoPlist.xcstrings */,
+				1A1000000000000000000012 /* AppShortcuts.xcstrings */,
 				AA0000000000000000000002 /* App */,
 				AA0000000000000000000003 /* Sources/PunktfunkClient */,
 				E295569D300948B9009F939C /* PunktfunkWidgets */,
@@ -328,6 +336,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				1A1000000000000000000002 /* Localizable.xcstrings in Resources */,
+				1A1000000000000000000013 /* InfoPlist.xcstrings in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -336,6 +345,8 @@
 			buildActionMask = 2147483647;
 			files = (
 				1A1000000000000000000003 /* Localizable.xcstrings in Resources */,
+				1A1000000000000000000014 /* InfoPlist.xcstrings in Resources */,
+				1A1000000000000000000016 /* AppShortcuts.xcstrings in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -344,6 +355,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				1A1000000000000000000004 /* Localizable.xcstrings in Resources */,
+				1A1000000000000000000015 /* InfoPlist.xcstrings in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -526,8 +538,8 @@
 				INFOPLIST_KEY_GCSupportsGameMode = YES;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.games";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
-				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "Punktfunk connects directly to your punktfunk host on the local network to stream video, audio, and input.";
-				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Your microphone is streamed to the connected punktfunk host, where it appears as a virtual microphone.";
+				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "Punktfunk connects directly to your Punktfunk host on the local network to stream video, audio, and input.";
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Your microphone is streamed to the connected Punktfunk host, where it appears as a virtual microphone.";
 				INFOPLIST_KEY_NSPrincipalClass = NSApplication;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -563,8 +575,8 @@
 				INFOPLIST_KEY_GCSupportsGameMode = YES;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.games";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
-				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "Punktfunk connects directly to your punktfunk host on the local network to stream video, audio, and input.";
-				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Your microphone is streamed to the connected punktfunk host, where it appears as a virtual microphone.";
+				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "Punktfunk connects directly to your Punktfunk host on the local network to stream video, audio, and input.";
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Your microphone is streamed to the connected Punktfunk host, where it appears as a virtual microphone.";
 				INFOPLIST_KEY_NSPrincipalClass = NSApplication;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -601,8 +613,8 @@
 				INFOPLIST_KEY_GCSupportsGameMode = YES;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.games";
 				INFOPLIST_KEY_NSFaceIDUsageDescription = "Face ID opens your own account on a host without its password.";
-				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "Punktfunk connects directly to your punktfunk host on the local network to stream video, audio, and input.";
-				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Your microphone is streamed to the connected punktfunk host, where it appears as a virtual microphone.";
+				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "Punktfunk connects directly to your Punktfunk host on the local network to stream video, audio, and input.";
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Your microphone is streamed to the connected Punktfunk host, where it appears as a virtual microphone.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -648,8 +660,8 @@
 				INFOPLIST_KEY_GCSupportsGameMode = YES;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.games";
 				INFOPLIST_KEY_NSFaceIDUsageDescription = "Face ID opens your own account on a host without its password.";
-				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "Punktfunk connects directly to your punktfunk host on the local network to stream video, audio, and input.";
-				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Your microphone is streamed to the connected punktfunk host, where it appears as a virtual microphone.";
+				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "Punktfunk connects directly to your Punktfunk host on the local network to stream video, audio, and input.";
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Your microphone is streamed to the connected Punktfunk host, where it appears as a virtual microphone.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -687,7 +699,7 @@
 				INFOPLIST_FILE = Config/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = Punktfunk;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.games";
-				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "Punktfunk connects directly to your punktfunk host on the local network to stream video, audio, and input.";
+				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "Punktfunk connects directly to your Punktfunk host on the local network to stream video, audio, and input.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -717,7 +729,7 @@
 				INFOPLIST_FILE = Config/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = Punktfunk;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.games";
-				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "Punktfunk connects directly to your punktfunk host on the local network to stream video, audio, and input.";
+				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "Punktfunk connects directly to your Punktfunk host on the local network to stream video, audio, and input.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
