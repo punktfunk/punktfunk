@@ -247,6 +247,8 @@ final class ConsoleModel: ObservableObject, ConsoleViewDelegate {
     ) -> String {
         var options: [String: Any] = [
             "device_name": DeviceName.current,
+            // The console speaks the first of these it ships.
+            "languages": Locale.preferredLanguages,
             "gpu_cache_bytes": gpuCacheBytes,
             // Every Apple platform keeps an interface to fall back to, so the console's own
             // off switch always has somewhere to land.
