@@ -30,9 +30,9 @@ pub(super) const CHECK_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// The codes the child prints. A refusal's code is [`BackendError::code`]'s.
 const PASSED: &str = "ok";
-pub(super) const WRONG: &str = "credential_wrong";
-pub(super) const MUST_CHANGE: &str = "credential_must_change";
-pub(super) const LOCKED: &str = "account_locked";
+const WRONG: &str = "credential_wrong";
+const MUST_CHANGE: &str = "credential_must_change";
+const LOCKED: &str = "account_locked";
 const UNAVAILABLE: &str = "pam_unavailable";
 
 /// `PAM_MAX_RESP_SIZE`: the longest answer PAM takes to a prompt.
@@ -567,7 +567,7 @@ impl Drop for Login {
 
 /// What `code`, a check's answer, means for `account`, with the console's sentence. A code this
 /// doesn't know is a check that didn't run.
-pub(super) fn refusal(account: &str, code: &str) -> Result<(), BackendError> {
+fn refusal(account: &str, code: &str) -> Result<(), BackendError> {
     let sentence = match code {
         PASSED => return Ok(()),
         WRONG => format!("That isn't {account}'s password."),

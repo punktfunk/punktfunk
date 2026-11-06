@@ -7,11 +7,13 @@
 //! the `punktfunk-seat` PAM service ([`pam::Login`]: authenticate, account, credentials,
 //! session), then forks a child that drops to the person and execs `seat-session`. The root
 //! parent forwards the stop signals, closes the session when the child ends and exits with its
-//! status. Before a session exists it exits with a code of [`outcome`]'s, which tells the
-//! supervisor to start the row without the helper or to refuse the credential.
+//! status. Before a session exists it exits with a code of [`fallback`]'s, which tells the
+//! supervisor to start the row without the helper. It never refuses a start: the gate decided
+//! who gets in moments earlier.
 
 #![allow(unsafe_code)]
 
+#[cfg(target_os = "linux")]
 use super::pam;
 use super::session::Ended;
 #[cfg(target_os = "linux")]
@@ -25,47 +27,50 @@ pub(super) const SERVICE: &str = "punktfunk-seat";
 /// Exit codes before a session exists. After one, the helper exits with the session's code and
 /// never with one of these.
 const NO_SESSION: u8 = 90;
-const WRONG: u8 = 91;
-const LOCKED: u8 = 92;
-const MUST_CHANGE: u8 = 93;
+/// PAM refused what the gate admitted.
+const REFUSED: u8 = 91;
 const NO_SERVICE: u8 = 94;
 const NO_PASSWORD: u8 = 95;
 /// The auth phase's limit. Past it the default action of `SIGALRM` ends the helper.
 const AUTH_SECONDS: u32 = 30;
 const SIGALRM: i32 = 14;
 
-/// What a start through the helper that ended with `ended` leaves the supervisor to do.
+/// A start through the helper that ended before a session: the row starts the plain way.
 #[derive(Debug, PartialEq, Eq)]
-pub(super) enum Outcome {
-    /// No session was opened, for a reason that isn't the credential: start the row the plain
-    /// way. The cause is the operator's.
-    Fallback(String),
-    /// The stack refused the credential: refuse the start with this code.
-    Refused(&'static str),
+pub(super) struct Fallback {
+    /// The operator's.
+    pub(super) cause: String,
+    /// The helper's own environment is off, and another try could cost the person a failed
+    /// login on the box: no helper until the supervisor restarts.
+    pub(super) trips: bool,
 }
 
-/// [`Outcome`] of a helper that ended with `ended`; `None` for an end after the session opened,
+/// [`Fallback`] of a helper that ended with `ended`; `None` for an end after the session opened,
 /// which is a plain failure of the seat.
-pub(super) fn outcome(ended: Option<Ended>) -> Option<Outcome> {
-    let fallback = |cause: String| Some(Outcome::Fallback(cause));
+pub(super) fn fallback(ended: Option<Ended>) -> Option<Fallback> {
+    let fall = |cause: String, trips| Some(Fallback { cause, trips });
     match ended? {
         Ended::Exited(code) => match u8::try_from(code).ok()? {
-            WRONG => Some(Outcome::Refused(pam::WRONG)),
-            LOCKED => Some(Outcome::Refused(pam::LOCKED)),
-            MUST_CHANGE => Some(Outcome::Refused(pam::MUST_CHANGE)),
-            NO_SERVICE => fallback(format!("the {SERVICE} PAM service isn't installed")),
-            NO_PASSWORD => fallback("the login helper got no password".into()),
-            NO_SESSION => fallback("the login helper opened no session; see its journal".into()),
-            code @ 200..=254 => fallback(format!("systemd didn't start the login helper ({code})")),
+            REFUSED => fall("PAM refused the password the gate admitted".into(), true),
+            NO_SERVICE => fall(format!("the {SERVICE} PAM service isn't installed"), false),
+            NO_PASSWORD => fall("the login helper got no password".into(), false),
+            NO_SESSION => fall(
+                "the login helper opened no session; see its journal".into(),
+                false,
+            ),
+            code @ 200..=254 => fall(
+                format!("systemd didn't start the login helper ({code})"),
+                false,
+            ),
             _ => None,
         },
-        Ended::Killed(SIGALRM) => fallback(format!("PAM took longer than {AUTH_SECONDS} s")),
+        Ended::Killed(SIGALRM) => fall(format!("PAM took longer than {AUTH_SECONDS} s"), false),
         Ended::Killed(_) => None,
     }
 }
 
 /// The helper's exit code for its session's end: the session's own code, or 128 plus the
-/// signal that ended it, never one [`outcome`] reads as "no session".
+/// signal that ended it, never one [`fallback`] reads as "no session".
 fn session_code(code: Option<i32>, signal: Option<i32>) -> u8 {
     let reserved = |code: u8| (NO_SESSION..=99).contains(&code) || (200..=254).contains(&code);
     let code = match (code, signal) {
@@ -158,12 +163,8 @@ fn run_in(account: &str, service: &str, socket: &Path, program: &Path) -> u8 {
     let mut login = match authenticated {
         Ok(login) => login,
         Err(pam::Refusal::Credential(code)) => {
-            tracing::warn!(account, code, "login refused the credential");
-            return match code {
-                pam::LOCKED => LOCKED,
-                pam::MUST_CHANGE => MUST_CHANGE,
-                _ => WRONG,
-            };
+            tracing::warn!(account, code, "login helper refused what the gate admitted");
+            return REFUSED;
         }
         Err(pam::Refusal::Unavailable(cause)) => {
             tracing::error!(account, %cause, "PAM gave no verdict on the password");
@@ -176,7 +177,7 @@ fn run_in(account: &str, service: &str, socket: &Path, program: &Path) -> u8 {
         tracing::error!(account, %cause, "PAM opened no session");
         return NO_SESSION;
     }
-    // The session is open: no code below is one `outcome` reads as "no session".
+    // The session is open: no code below is one `fallback` reads as "no session".
     let core = (getrlimit(Resource::Core) == none).then_some(core);
     let mut child = match person.spawn(program, login.env(), core) {
         Ok(child) => child,
@@ -411,30 +412,20 @@ fn wait_forwarding(
 mod tests {
     use super::*;
 
-    /// A credential refusal refuses; a helper that ended before a session for any other reason
-    /// falls back, systemd's own failures to start it included; anything else is the seat's.
+    /// Every end before a session falls back, systemd's own failures to start the helper
+    /// included; only PAM's refusal trips the breaker. Anything else is the seat's.
     #[test]
     fn only_an_end_before_a_session_falls_back() {
-        let refused = |code| outcome(Some(Ended::Exited(code)));
-        assert_eq!(refused(91), Some(Outcome::Refused("credential_wrong")));
-        assert_eq!(refused(92), Some(Outcome::Refused("account_locked")));
-        assert_eq!(
-            refused(93),
-            Some(Outcome::Refused("credential_must_change"))
-        );
+        let trips = |ended| fallback(Some(ended)).map(|f| f.trips);
+        assert_eq!(trips(Ended::Exited(91)), Some(true));
         for code in [90, 94, 95, 200, 203, 229, 254] {
-            assert!(
-                matches!(refused(code), Some(Outcome::Fallback(_))),
-                "{code}"
-            );
+            assert_eq!(trips(Ended::Exited(code)), Some(false), "{code}");
         }
-        assert!(matches!(
-            outcome(Some(Ended::Killed(SIGALRM))),
-            Some(Outcome::Fallback(_))
-        ));
+        assert_eq!(trips(Ended::Killed(SIGALRM)), Some(false));
         for ended in [
             Ended::Exited(0),
             Ended::Exited(1),
+            Ended::Exited(93),
             Ended::Exited(96),
             Ended::Exited(137),
             Ended::Exited(255),
@@ -442,9 +433,9 @@ mod tests {
             Ended::Killed(9),
             Ended::Killed(15),
         ] {
-            assert_eq!(outcome(Some(ended)), None, "{ended:?}");
+            assert_eq!(fallback(Some(ended)), None, "{ended:?}");
         }
-        assert_eq!(outcome(None), None);
+        assert_eq!(fallback(None), None);
     }
 
     /// Once a session was opened the helper's code never reads as one before it.
@@ -457,12 +448,12 @@ mod tests {
         assert_eq!(session_code(None, None), 1);
         for code in (0..=255).chain([-1, 256]) {
             let mapped = session_code(Some(code), None);
-            assert_eq!(outcome(Some(Ended::Exited(mapped.into()))), None, "{code}");
+            assert_eq!(fallback(Some(Ended::Exited(mapped.into()))), None, "{code}");
         }
         for signal in 1..=64 {
             let mapped = session_code(None, Some(signal));
             assert_eq!(
-                outcome(Some(Ended::Exited(mapped.into()))),
+                fallback(Some(Ended::Exited(mapped.into()))),
                 None,
                 "{signal}"
             );
@@ -755,16 +746,16 @@ mod tests {
             assert!(!child_file.exists(), "nothing ran: {log}");
             code
         };
-        assert_eq!(refused(Some("wrong-password")), i32::from(WRONG));
+        assert_eq!(refused(Some("wrong-password")), i32::from(REFUSED));
         assert_eq!(refused(None), i32::from(NO_PASSWORD));
         run("chage", &["-E", "1", ACCOUNT]);
-        assert_eq!(refused(Some(PASSWORD)), i32::from(LOCKED));
+        assert_eq!(refused(Some(PASSWORD)), i32::from(REFUSED));
         run("chage", &["-E", "-1", ACCOUNT]);
         run("chage", &["-d", "0", ACCOUNT]);
-        assert_eq!(refused(Some(PASSWORD)), i32::from(MUST_CHANGE));
+        assert_eq!(refused(Some(PASSWORD)), i32::from(REFUSED));
         run("chage", &["-d", "-1", ACCOUNT]);
         run("usermod", &["-L", ACCOUNT]);
-        assert_eq!(refused(Some(PASSWORD)), i32::from(WRONG));
+        assert_eq!(refused(Some(PASSWORD)), i32::from(REFUSED));
         run("usermod", &["-U", ACCOUNT]);
         let away = dir.path().join("seat-session.away");
         std::fs::rename(&program, &away).unwrap();

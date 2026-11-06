@@ -164,6 +164,9 @@ struct Inner {
     devices: Mutex<HashMap<SeatId, devices::Held>>,
     /// The password of a start through the login helper, while it waits for the helper.
     handover: handover::Handover,
+    /// Set once a login helper tripped ([`LOGIN_TRIPPED`]): no helper until the supervisor
+    /// restarts.
+    helper_off: AtomicBool,
 }
 
 /// `slot`'s checks when they ran less than [`CHECKS_FRESH`] before `now`, else what `run`
@@ -450,6 +453,7 @@ impl LinuxBackend {
             level: Mutex::new(()),
             devices: Mutex::new(HashMap::new()),
             handover: handover::Handover::default(),
+            helper_off: AtomicBool::new(false),
         });
         let weak = Arc::downgrade(&inner);
         std::thread::Builder::new()
@@ -477,6 +481,7 @@ impl LinuxBackend {
                 level: Mutex::new(()),
                 devices: Mutex::new(HashMap::new()),
                 handover: handover::Handover::default(),
+                helper_off: AtomicBool::new(false),
             }),
         }
     }
@@ -1306,7 +1311,8 @@ impl LinuxBackend {
                 tracing::info!(account = %seat.account, cause = "SELinux is on",
                     "seat started without the wallet login");
             }
-            let password = login_with(password, selinux);
+            let off = self.inner.helper_off.load(Ordering::SeqCst);
+            let password = login_with(password, selinux, off);
             let dropin = password.and_then(|_| login_dropin());
             if password.is_some() && dropin.is_none() {
                 tracing::warn!(account = %seat.account, cause = "this binary's path can't go in a unit file",
@@ -1330,7 +1336,11 @@ impl LinuxBackend {
         let ready = self.wait_ready(seat, asked, written.is_some());
         drop(written);
         match ready {
-            Err(error) if error.code == LOGIN_FALLBACK => {
+            Err(error) if [LOGIN_FALLBACK, LOGIN_TRIPPED].contains(&error.code.as_str()) => {
+                let tripped = error.code == LOGIN_TRIPPED;
+                if tripped && !self.inner.helper_off.swap(true, Ordering::SeqCst) {
+                    tracing::warn!("login helper off until the seat supervisor restarts");
+                }
                 tracing::warn!(account = %seat.account, cause = %error.message,
                     "seat started without the wallet login");
                 self.start_plain(seat, &passwd, asked)
@@ -1473,12 +1483,12 @@ const SELINUX_ON: &str = "/sys/fs/selinux/enforce";
 
 /// The one choice of how a person's cold start opens their session: through the login helper,
 /// with the password the person proved the start with, so what their own login unlocks with it
-/// unlocks here too; without one, as systemd's `PAMName=` opens it. Never with SELinux on:
-/// pam_selinux picks the session's context from the caller's, and only systemd's own `init_t`
-/// gets every user's right one, a confined `staff_u` included. A switch for the wallet login
-/// goes here.
-fn login_with(password: Option<&Secret>, selinux: bool) -> Option<&Secret> {
-    password.filter(|_| !selinux)
+/// unlocks here too; without one, or once the helper is `off`, as systemd's `PAMName=` opens
+/// it. Never with SELinux on: pam_selinux picks the session's context from the caller's, and
+/// only systemd's own `init_t` gets every user's right one, a confined `staff_u` included. A
+/// switch for the wallet login goes here.
+fn login_with(password: Option<&Secret>, selinux: bool, off: bool) -> Option<&Secret> {
+    password.filter(|_| !selinux && !off)
 }
 
 /// Removes `.0`'s login drop-in when it drops: every way out of a start that wrote one, so a
@@ -1502,20 +1512,20 @@ fn login_dropin() -> Option<String> {
     session::render_login(path)
 }
 
-/// The error of a start through the login helper that ended before a session for a reason that
-/// isn't the credential: the start goes on without it.
+/// The error of a start through the login helper that ended before a session: the start goes
+/// on without it. The gate already admitted the person, so the helper never refuses.
 const LOGIN_FALLBACK: &str = "login_fallback";
+/// [`LOGIN_FALLBACK`] that also turns the helper off ([`login::Fallback::trips`]).
+const LOGIN_TRIPPED: &str = "login_tripped";
 
-/// Why `seat`'s start failed once its unit ended in `state`. With `login`, the end of the login
-/// helper says: before a session, [`LOGIN_FALLBACK`] with the operator's cause, or the
-/// credential's refusal with the console's sentence.
+/// Why `seat`'s start failed once its unit ended in `state`. With `login`, a login helper that
+/// ended before a session says [`LOGIN_FALLBACK`] or [`LOGIN_TRIPPED`], with the operator's
+/// cause.
 fn unit_ended(seat: &Seat, state: &session::UnitState, login: bool) -> BackendError {
     let account = &seat.account;
-    match login.then(|| login::outcome(state.ended)).flatten() {
-        Some(login::Outcome::Fallback(cause)) => err(LOGIN_FALLBACK, cause),
-        Some(login::Outcome::Refused(code)) => pam::refusal(account, code)
-            .err()
-            .unwrap_or_else(|| err(code, code)),
+    match login.then(|| login::fallback(state.ended)).flatten() {
+        Some(fallback) if fallback.trips => err(LOGIN_TRIPPED, fallback.cause),
+        Some(fallback) => err(LOGIN_FALLBACK, fallback.cause),
         None => err(
             "seat_exited",
             format!(

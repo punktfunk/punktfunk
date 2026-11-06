@@ -243,22 +243,24 @@ fn the_login_shell_is_the_passwd_row_s_last_field() {
 }
 
 /// The start choice: a person's password starts their session through the login helper, and a
-/// start without one, a key proof's, through systemd's own login.
+/// start without one, a key proof's, through systemd's own login, as does every start once the
+/// helper is off.
 #[test]
 fn only_a_password_start_goes_through_the_login_helper() {
     let password = Secret::new("hunter2 Bärbel".into());
-    assert_eq!(login_with(Some(&password), false), Some(&password));
-    assert_eq!(login_with(None, false), None);
+    assert_eq!(login_with(Some(&password), false, false), Some(&password));
+    assert_eq!(login_with(None, false, false), None);
+    assert_eq!(login_with(Some(&password), false, true), None, "helper off");
     assert_eq!(
-        login_with(Some(&password), true),
+        login_with(Some(&password), true, false),
         None,
         "SELinux on: today's start"
     );
 }
 
-/// The helper's end decides what a failed start through it does: a credential refusal is the
-/// check's own refusal, an end before a session falls back, anything else is the seat's failure.
-/// A plain start never reads the helper's codes.
+/// The helper's end decides what a failed start through it does: every end before a session
+/// falls back, PAM's refusal of what the gate admitted also trips the helper off, anything else
+/// is the seat's failure. A plain start never reads the helper's codes.
 #[test]
 fn a_start_through_the_login_helper_reads_its_end() {
     let seat = person();
@@ -268,16 +270,7 @@ fn a_start_through_the_login_helper_reads_its_end() {
         ended: Some(session::Ended::Exited(code)),
         ..Default::default()
     };
-    let wrong = unit_ended(&seat, &ended(91), true);
-    assert_eq!(
-        (wrong.code.as_str(), wrong.message.as_str()),
-        ("credential_wrong", "That isn't jdoe's password.")
-    );
-    assert_eq!(unit_ended(&seat, &ended(92), true).code, "account_locked");
-    assert_eq!(
-        unit_ended(&seat, &ended(93), true).code,
-        "credential_must_change"
-    );
+    assert_eq!(unit_ended(&seat, &ended(91), true).code, LOGIN_TRIPPED);
     let fallback = unit_ended(&seat, &ended(95), true);
     assert_eq!(fallback.code, LOGIN_FALLBACK);
     assert_eq!(fallback.message, "the login helper got no password");
@@ -348,6 +341,47 @@ fn a_failed_start_leaves_no_login_drop_in() {
     );
     assert!(!left, "the drop-in went with the failed start");
     assert!(!rig.backend.inner.handover.waits("jdoe"));
+}
+
+/// PAM refusing in the helper what the gate admitted falls back to today's start, and the
+/// supervisor runs no helper again until it restarts.
+#[test]
+#[ignore = "needs root: writes the row's drop-ins under /run/systemd/system and /run/punktfunk"]
+fn a_helper_refusal_falls_back_and_turns_the_helper_off() {
+    let rig = rig();
+    let dropin = session::dropin_dir("jdoe").join("login.conf");
+    let starts = Arc::new(Mutex::new(Vec::new()));
+    let (base, at_start, at_show, path) = (
+        machine(&rig.home, 1500, "inactive", false),
+        Arc::clone(&starts),
+        Arc::clone(&starts),
+        dropin.clone(),
+    );
+    let refused = "ActiveState=failed\nSubState=failed\nResult=exit-code\nExecMainCode=1\n\
+                   ExecMainStatus=91\n";
+    let _machine = fake::install(move |program, args| match (program, args) {
+        ("systemctl", ["start", _]) => {
+            let mut starts = at_start.lock().unwrap();
+            starts.push(path.exists());
+            (i32::from(starts.len() > 1), String::new())
+        }
+        ("systemctl", ["show", ..]) if !at_show.lock().unwrap().is_empty() => (0, refused.into()),
+        _ => base(program, args),
+    });
+    let password = Secret::new("hunter2 Bärbel".into());
+    let first = rig.backend.start_with_password(&rig.seat, &password);
+    let second = rig.backend.start_with_password(&rig.seat, &password);
+    let left = dropin.exists();
+    let _ = std::fs::remove_dir_all(session::dropin_dir("jdoe"));
+    let _ = std::fs::remove_file(session::env_path("jdoe"));
+    assert_eq!(
+        first.unwrap_err().code,
+        "systemctl_failed",
+        "the plain start ran"
+    );
+    assert_eq!(second.unwrap_err().code, "systemctl_failed");
+    assert_eq!(*starts.lock().unwrap(), [true, false, false]);
+    assert!(!left);
 }
 
 /// The password check runs as `punktfunk-seats pam-check <account>` once the account still names
