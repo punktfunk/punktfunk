@@ -10,6 +10,7 @@
 //! service → web → plugin runner → restore → shortcut → tray. `<staging>` and `<temp>`
 //! are placeholders the executor substitutes; dry-run renders them verbatim.
 
+use pf_l10n::tools as t;
 use serde::{Deserialize, Serialize};
 
 use super::choices::{NetworkAnswer, WinChoices};
@@ -215,6 +216,8 @@ fn note(level: Level, text: impl Into<String>) -> WinAction {
     WinAction::Note(level, text.into())
 }
 
+/// Titles and notes are worded in the process language when built: the wizard's on its pages,
+/// English in the silent log.
 pub fn build(
     facts: &WinFacts,
     choices: &WinChoices,
@@ -251,12 +254,10 @@ fn host_install(facts: &WinFacts, choices: &WinChoices) -> WinPlan {
     // and then fails every session on a driver that will not start.
     if facts.os_build < MIN_HOST_BUILD {
         plan.push(
-            "Checking Windows",
-            vec![WinAction::Refuse(format!(
-                "The Punktfunk host needs {} — this PC reports build {}, where the virtual \
-                 display can't start. Nothing was installed.",
+            t::setup_win_phase_check_os(),
+            vec![WinAction::Refuse(t::setup_win_refuse_build(
                 crate::platform::floor("windows"),
-                facts.os_build
+                facts.os_build,
             ))],
         );
         return plan;
@@ -267,7 +268,7 @@ fn host_install(facts: &WinFacts, choices: &WinChoices) -> WinPlan {
 
     if upgrade {
         plan.push(
-            "Stopping the running host for the upgrade",
+            t::setup_win_phase_stop(),
             vec![WinAction::StopHostRuntime {
                 app_dir: app.clone(),
             }],
@@ -275,7 +276,7 @@ fn host_install(facts: &WinFacts, choices: &WinChoices) -> WinPlan {
     }
 
     plan.push(
-        format!("Files → {app}"),
+        t::setup_win_phase_files(&app),
         vec![WinAction::DeployFiles { dest: app.clone() }],
     );
 
@@ -284,7 +285,7 @@ fn host_install(facts: &WinFacts, choices: &WinChoices) -> WinPlan {
     // place under the same key — never Inno's uninstaller (D6).
     if upgrade && facts.inno_uninstaller {
         plan.push(
-            "Retiring the Inno Setup uninstaller",
+            t::setup_win_phase_retire_inno(),
             vec![
                 WinAction::DeleteFiles {
                     paths: vec![
@@ -292,10 +293,7 @@ fn host_install(facts: &WinFacts, choices: &WinChoices) -> WinPlan {
                         format!("{app}\\unins000.msg"),
                     ],
                 },
-                note(
-                    Level::Ok,
-                    "the Add/Remove Programs entry keeps its key — winget and the updater keep tracking this install",
-                ),
+                note(Level::Ok, t::setup_win_arp_kept()),
             ],
         );
     }
@@ -303,7 +301,7 @@ fn host_install(facts: &WinFacts, choices: &WinChoices) -> WinPlan {
     // Right after the files: whatever fails later, the box has an uninstaller registered and
     // the version the tree now holds — the updater would otherwise re-run this forever.
     plan.push(
-        "Register the uninstaller",
+        t::setup_win_phase_register_uninstaller(),
         vec![WinAction::ArpRegister {
             key: super::HOST_ARP_KEY.into(),
             display_name: "Punktfunk Host".into(),
@@ -312,12 +310,12 @@ fn host_install(facts: &WinFacts, choices: &WinChoices) -> WinPlan {
         }],
     );
 
-    plan.push("Registry", registry_steps(facts, choices, &app));
-    plan.push("Network", network_steps(facts, choices));
     plan.push(
-        "Checking for Sunshine / Apollo / Vibeshine",
-        coexist_steps(facts, choices),
+        t::setup_win_phase_registry(),
+        registry_steps(facts, choices, &app),
     );
+    plan.push(t::setup_win_phase_network(), network_steps(facts, choices));
+    plan.push(t::setup_phase_conflicts(), coexist_steps(facts, choices));
 
     // Lenient, as the title promises: a driver leg that fails must not strand the box between
     // the stopped old host and the service/uninstaller legs below.
@@ -344,12 +342,9 @@ fn host_install(facts: &WinFacts, choices: &WinChoices) -> WinPlan {
     if upgrade && !choices.install_driver {
         // The host and its driver ship as a pair; a host that outruns the driver fails every
         // session with "driver outdated", and nothing else says why.
-        drivers.push(note(
-            Level::Warn,
-            "the virtual-display driver is NOT being updated with this host — the two must match, or every session ends with 'driver outdated'",
-        ));
+        drivers.push(note(Level::Warn, t::setup_win_driver_not_updated()));
     }
-    plan.push("Drivers (a hiccup warns and never aborts)", drivers);
+    plan.push(t::setup_win_phase_drivers(), drivers);
 
     // `None` omits the flag and the box keeps its state. Only a `Some` rewrites.
     let mut service = vec![host_exe.clone(), "service".into(), "install".into()];
@@ -383,12 +378,12 @@ fn host_install(facts: &WinFacts, choices: &WinChoices) -> WinPlan {
         }]
     };
     if new_runner {
-        plan.push("Plugin runner", runner());
+        plan.push(t::setup_win_phase_plugin_runner(), runner());
     }
-    plan.push("Service", service_steps);
+    plan.push(t::setup_win_phase_service(), service_steps);
 
     plan.push(
-        "Web console",
+        t::setup_win_phase_web_console(),
         vec![WinAction::WebSetup {
             app_dir: app.clone(),
             fresh_password: !facts.web_password_present,
@@ -396,12 +391,12 @@ fn host_install(facts: &WinFacts, choices: &WinChoices) -> WinPlan {
     );
 
     if !new_runner {
-        plan.push("Plugin runner", runner());
+        plan.push(t::setup_win_phase_plugin_runner(), runner());
     }
 
     if upgrade {
         plan.push(
-            "Restoring what the stop disabled",
+            t::setup_win_phase_restore(),
             vec![WinAction::RestoreTasks {
                 web_enabled: enabled(facts.web_task),
                 scripting_enabled: enabled(facts.scripting_task),
@@ -410,7 +405,7 @@ fn host_install(facts: &WinFacts, choices: &WinChoices) -> WinPlan {
     }
 
     plan.push(
-        "Shortcut",
+        t::setup_win_phase_shortcut(),
         vec![WinAction::Shortcut {
             link: HOST_LINK.into(),
             target: format!("{app}\\punktfunk-tray.exe"),
@@ -420,7 +415,7 @@ fn host_install(facts: &WinFacts, choices: &WinChoices) -> WinPlan {
 
     if choices.tray_autostart {
         plan.push(
-            "Tray",
+            t::setup_win_phase_tray(),
             vec![WinAction::LaunchTray {
                 exe: format!("{app}\\punktfunk-tray.exe"),
             }],
@@ -431,7 +426,7 @@ fn host_install(facts: &WinFacts, choices: &WinChoices) -> WinPlan {
     // every session. Failing here leaves every other leg done.
     if choices.install_driver {
         plan.push(
-            "Checking the virtual display driver",
+            t::setup_win_phase_check_driver(),
             vec![run(&[&host_exe, "driver", "check"])],
         );
     }
@@ -525,15 +520,11 @@ fn network_steps(facts: &WinFacts, choices: &WinChoices) -> Vec<WinAction> {
             WinAction::MakeNetworkPrivate {
                 network: name.clone(),
             },
-            note(
-                Level::Ok,
-                format!("network '{name}' becomes Private — the standard firewall rules apply there"),
-            ),
+            note(Level::Ok, t::setup_win_network_made_private(name)),
         ],
-        NetworkAnswer::OpenPublicRules => vec![note(
-            Level::Ok,
-            "keeping the network Public and opening the firewall for it (--allow-public-network=on)",
-        )],
+        NetworkAnswer::OpenPublicRules => {
+            vec![note(Level::Ok, t::setup_win_network_open_public())]
+        }
         NetworkAnswer::Skip => {
             let public: Vec<String> = facts
                 .public_networks()
@@ -545,9 +536,10 @@ fn network_steps(facts: &WinFacts, choices: &WinChoices) -> Vec<WinAction> {
             }
             vec![note(
                 Level::Warn,
-                format!(
-                    "network '{}' is set to Public, and the firewall rules below don't apply there — the host will be unreachable until the network is Private or the public rules are added ({DOCS}/troubleshooting#windows-firewall)",
-                    public.join("', '")
+                t::setup_win_network_public_warn(
+                    public.len() as u64,
+                    public.join("', '"),
+                    format!("{DOCS}/troubleshooting#windows-firewall"),
                 ),
             )]
         }
@@ -558,44 +550,25 @@ fn network_steps(facts: &WinFacts, choices: &WinChoices) -> Vec<WinAction> {
 fn coexist_steps(facts: &WinFacts, choices: &WinChoices) -> Vec<WinAction> {
     if !facts.needs_coexistence() {
         if facts.mgmt_bind_set {
-            return vec![note(
-                Level::Ok,
-                "management port already moved in host.env — leaving the operator's value alone",
-            )];
+            return vec![note(Level::Ok, t::setup_win_mgmt_already_moved())];
         }
-        return vec![note(
-            Level::Ok,
-            "No conflicting game-streaming host detected.",
-        )];
+        return vec![note(Level::Ok, t::setup_conflict_none())];
     }
-    let who = facts
-        .competing_hosts
-        .first()
-        .map(String::as_str)
-        .unwrap_or("another streaming host");
+    let active = match facts.competing_hosts.first() {
+        Some(who) => t::setup_conflict_active_named(who),
+        None => t::setup_conflict_active().to_string(),
+    };
     vec![
-        note(
-            Level::Warn,
-            format!("{who} is active on this box — both want TCP 47990 (its web UI, punktfunk's management API)"),
-        ),
+        note(Level::Warn, active),
+        note(Level::Ok, t::setup_win_mgmt_bind_note(DEFAULT_MGMT_PORT)),
         note(
             Level::Ok,
-            format!("PUNKTFUNK_MGMT_BIND=0.0.0.0:{DEFAULT_MGMT_PORT} — the service step writes it to host.env and opens the firewall for it"),
-        ),
-        note(
-            Level::Ok,
-            format!("Clients learn the port from discovery; the console and plugins read it from mgmt-endpoint. Details: {DOCS}/switching-from-sunshine"),
+            t::setup_conflict_port_moved(format!("{DOCS}/switching-from-sunshine")),
         ),
         if choices.gamestream == Some(true) {
-            note(
-                Level::Warn,
-                "with another GameStream host running, only one can bind the Moonlight ports — stop the other first or skip this",
-            )
+            note(Level::Warn, t::setup_gamestream_conflict())
         } else {
-            note(
-                Level::Ok,
-                "Moonlight compatibility stays off — the other host owns those ports while it runs",
-            )
+            note(Level::Ok, t::setup_win_moonlight_stays_off())
         },
     ]
 }
@@ -612,7 +585,7 @@ fn host_uninstall(facts: &WinFacts, choices: &WinChoices) -> WinPlan {
     let host_exe = format!("{app}\\punktfunk-host.exe");
     let mut plan = WinPlan::default();
     plan.push(
-        format!("Uninstalling the host ({DOCS}/uninstall)"),
+        t::setup_phase_uninstall(format!("{DOCS}/uninstall")),
         vec![
             // Service first: the host supervises the tray and would respawn it. Lenient: a
             // service already gone (or a deleted {app}) must not stop the sweep below.
@@ -636,11 +609,19 @@ fn host_uninstall(facts: &WinFacts, choices: &WinChoices) -> WinPlan {
                 "/f",
             ]),
             run_lenient(&[
-                "netsh", "advfirewall", "firewall", "delete", "rule",
+                "netsh",
+                "advfirewall",
+                "firewall",
+                "delete",
+                "rule",
                 "name=punktfunk seat listener (TCP)",
             ]),
             run_lenient(&[
-                "netsh", "advfirewall", "firewall", "delete", "rule",
+                "netsh",
+                "advfirewall",
+                "firewall",
+                "delete",
+                "rule",
                 "name=punktfunk seat listener (UDP)",
             ]),
             WinAction::RemoveFiles {
@@ -657,11 +638,19 @@ fn host_uninstall(facts: &WinFacts, choices: &WinChoices) -> WinPlan {
                 ports: vec![47992, 3000],
             },
             run_lenient(&[
-                "netsh", "advfirewall", "firewall", "delete", "rule",
+                "netsh",
+                "advfirewall",
+                "firewall",
+                "delete",
+                "rule",
                 "name=Punktfunk web console (TCP 47992)",
             ]),
             run_lenient(&[
-                "netsh", "advfirewall", "firewall", "delete", "rule",
+                "netsh",
+                "advfirewall",
+                "firewall",
+                "delete",
+                "rule",
                 "name=Punktfunk plugin UIs (TCP 47993)",
             ]),
             WinAction::PathRemove {
@@ -700,10 +689,7 @@ fn host_uninstall(facts: &WinFacts, choices: &WinChoices) -> WinPlan {
                 paths: vec![HOST_LINK.into()],
             },
             WinAction::RemoveFiles { dir: app.clone() },
-            note(
-                Level::Ok,
-                r"kept on purpose: %ProgramData%\punktfunk (identity, passwords, update cache) and any VB-CABLE install",
-            ),
+            note(Level::Ok, t::setup_win_kept_on_purpose()),
         ],
     );
     plan
@@ -715,14 +701,14 @@ fn client_install(facts: &WinFacts, choices: &WinChoices) -> WinPlan {
     let client_exe = format!("{app}\\punktfunk-client.exe");
 
     plan.push(
-        "Stopping running punktfunk apps",
+        t::setup_win_phase_stop_apps(),
         CLIENT_EXES
             .iter()
             .map(|exe| run_lenient(&["taskkill", "/F", "/IM", exe]))
             .collect(),
     );
     plan.push(
-        format!("Files → {app}"),
+        t::setup_win_phase_files(&app),
         vec![
             WinAction::DeployFiles { dest: app.clone() },
             // The firewall service (LOCAL SERVICE) reads the exe to name it in its prompt; a
@@ -783,7 +769,7 @@ fn client_install(facts: &WinFacts, choices: &WinChoices) -> WinPlan {
             dir: app.clone(),
         },
     ];
-    plan.push("Registry", std::mem::take(&mut registry));
+    plan.push(t::setup_win_phase_registry(), std::mem::take(&mut registry));
 
     let [start, console, desktop] = CLIENT_LINKS;
     let mut shortcuts = vec![WinAction::Shortcut {
@@ -807,7 +793,7 @@ fn client_install(facts: &WinFacts, choices: &WinChoices) -> WinPlan {
             args: String::new(),
         });
     }
-    plan.push("Shortcuts", shortcuts);
+    plan.push(t::setup_win_phase_shortcuts(), shortcuts);
 
     plan.push(
         "Windows App Runtime",
@@ -816,7 +802,7 @@ fn client_install(facts: &WinFacts, choices: &WinChoices) -> WinPlan {
         }],
     );
     plan.push(
-        "Register the uninstaller",
+        t::setup_win_phase_register_uninstaller(),
         vec![WinAction::ArpRegister {
             key: CLIENT_ARP_KEY.into(),
             display_name: "Punktfunk".into(),
@@ -831,7 +817,7 @@ fn client_uninstall(choices: &WinChoices) -> WinPlan {
     let app = app_dir(choices, Artifact::Client);
     let mut plan = WinPlan::default();
     plan.push(
-        format!("Uninstalling the client ({DOCS}/uninstall)"),
+        t::setup_win_phase_uninstall_client(format!("{DOCS}/uninstall")),
         CLIENT_EXES
             .iter()
             .map(|exe| run_lenient(&["taskkill", "/F", "/IM", exe]))

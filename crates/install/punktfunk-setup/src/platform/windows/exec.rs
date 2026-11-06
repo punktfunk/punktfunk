@@ -13,6 +13,8 @@
 
 use std::path::{Path, PathBuf};
 
+use pf_l10n::tools as t;
+
 use super::plan::{join_argv, WinAction, WinPlan};
 use super::sys;
 use super::NetProbe;
@@ -242,11 +244,9 @@ impl WinExecutor<'_> {
             }
             WinAction::MakeNetworkPrivate { network } => {
                 if self.net.make_private(network) {
-                    self.ui.ok(&format!("network '{network}' is now Private"));
+                    self.ui.ok(&t::setup_win_network_now_private(network));
                 } else {
-                    self.ui.warn(&format!(
-                        "couldn't change '{network}' — set it to Private in Windows Settings, or re-run and open the public firewall"
-                    ));
+                    self.ui.warn(&t::setup_win_network_change_failed(network));
                 }
                 Ok(())
             }
@@ -281,11 +281,10 @@ impl WinExecutor<'_> {
         if deferred.is_empty() {
             self.ui.ok(&format!("payload unpacked into {dest}"));
         } else {
-            self.ui.warn(&format!(
-                "payload unpacked into {dest}; {} in-use file(s) ({}) are replaced at the \
-                 next restart",
-                deferred.len(),
-                file_names(&deferred)
+            self.ui.warn(&t::setup_win_payload_deferred(
+                dest,
+                deferred.len() as u64,
+                file_names(&deferred),
             ));
         }
         Ok(())
@@ -324,16 +323,12 @@ impl WinExecutor<'_> {
         // The dir itself goes last, after its files — Windows replays the list
         // in order at boot.
         let dir_deferred = deferred == locked.len() && super::sys::delete_on_reboot(Path::new(dir));
-        self.ui.warn(&format!(
-            "{} in-use file(s) under {dir} ({}) go with the next restart{}",
-            locked.len(),
-            file_names(&locked),
-            if dir_deferred {
-                ""
-            } else {
-                " - or remove the folder by hand"
-            }
-        ));
+        let (count, names) = (locked.len() as u64, file_names(&locked));
+        self.ui.warn(&if dir_deferred {
+            t::setup_win_files_locked(count, dir, names)
+        } else {
+            t::setup_win_files_locked_by_hand(count, dir, names)
+        });
     }
 
     /// Re-enable only the tasks the stop found enabled, then start the scripting runner again
@@ -621,9 +616,7 @@ impl WinExecutor<'_> {
         ];
         for argv in steps {
             if self.spawn_quiet(&argv, false).is_err() {
-                self.ui.warn(&format!(
-                    "couldn't install the Windows App Runtime — install it manually: {url}"
-                ));
+                self.ui.warn(&t::setup_win_app_runtime_failed(&url));
                 return Ok(());
             }
         }

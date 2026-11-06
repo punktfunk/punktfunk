@@ -4,7 +4,12 @@
 //! is the two facts a user must leave knowing — the moved management port when a
 //! competitor is live, and the unreachable-host warning when the network is Public.
 //!
+//! Only the silent `/LOG` transcript prints `detected`, `choices_summary` and `outro`, so they
+//! stay English literals. `footnotes` also fills the wizard's Done page and reads `pf_l10n`.
+//!
 //! Goldens pin the strings. Design: `design/installer-v2-windows.md`.
+
+use pf_l10n::tools as t;
 
 use super::choices::{NetworkAnswer, WinChoices};
 use super::plan::Artifact;
@@ -127,8 +132,9 @@ pub fn outro(ui: &dyn Reporter, facts: &WinFacts, choices: &WinChoices, artifact
 pub fn footnotes(facts: &WinFacts, choices: &WinChoices) -> Vec<String> {
     let mut notes = Vec::new();
     if facts.needs_coexistence() {
-        notes.push(format!(
-            "Running next to Sunshine/Apollo: punktfunk's management API is on :{DEFAULT_MGMT_PORT} — {DOCS}/switching-from-sunshine"
+        notes.push(t::setup_win_note_coexist(
+            DEFAULT_MGMT_PORT,
+            format!("{DOCS}/switching-from-sunshine"),
         ));
     }
     if matches!(choices.network, NetworkAnswer::Skip)
@@ -136,7 +142,8 @@ pub fn footnotes(facts: &WinFacts, choices: &WinChoices) -> Vec<String> {
         && !facts.public_networks().is_empty()
     {
         notes.push(format!(
-            "⚠ This network is Public and the firewall rules don't apply there — the host is unreachable until that changes ({DOCS}/troubleshooting#windows-firewall)"
+            "⚠ {}",
+            t::setup_win_note_public(format!("{DOCS}/troubleshooting#windows-firewall"))
         ));
     }
     notes
