@@ -109,6 +109,7 @@ on:
       - 'scripts/ci/pf-version.sh'
       - 'Cargo.toml'
       - 'Cargo.lock'
+      - 'l10n/**'
       - 'rust-toolchain.toml'
       - '.gitea/workflows/apple.yml'
     # Stable: a `vX.Y.Z` tag is THE release — notarized DMG attached to the unified Gitea Release
@@ -132,6 +133,7 @@ on:
       - 'scripts/ci/pf-version.sh'
       - 'Cargo.toml'
       - 'Cargo.lock'
+      - 'l10n/**'
       - 'rust-toolchain.toml'
       - '.gitea/workflows/apple.yml'
   workflow_dispatch:
