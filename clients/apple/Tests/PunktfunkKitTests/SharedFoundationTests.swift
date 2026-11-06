@@ -391,7 +391,8 @@ final class SharedFoundationTests: XCTestCase {
     /// pinned card under "No Preset" — including the ones visibly wearing a preset chip.
     func testHostGroupingFilesPinnedCardsUnderTheirOwnPreset() {
         let groups = arranged(.name, .preset)
-        XCTAssertEqual(groups.map(\.title), ["Game", "Work", "No Preset"])
+        XCTAssertEqual(
+            groups.map(\.title), ["Game", "Work", String(localized: L10n.hostsGroupNoPreset)])
         // Desk is BOUND to Game; Couch merely pinned it. Both belong in the Game band.
         XCTAssertEqual(labels(groups[0]), ["Couch·Game", "Desk"])
         XCTAssertEqual(labels(groups[1]), ["attic", "Couch·Work"])
@@ -406,7 +407,7 @@ final class SharedFoundationTests: XCTestCase {
         let unused = PresetCatalog(presets: [StreamPreset(name: "Travel", id: "333333333333")])
         let groups = HostArrangement.groups(
             hosts: hosts, catalog: unused, online: [], sort: .name, grouping: .preset)
-        XCTAssertEqual(groups.map(\.title), ["No Preset"])
+        XCTAssertEqual(groups.map(\.title), [String(localized: L10n.hostsGroupNoPreset)])
         // The pins point at presets this catalog doesn't have, so they produce no cards either.
         XCTAssertEqual(labels(groups[0]), ["attic", "Basement", "Couch", "Desk"])
     }
@@ -418,7 +419,7 @@ final class SharedFoundationTests: XCTestCase {
         host.presetID = "deadbeefdead"
         let groups = HostArrangement.groups(
             hosts: [host], catalog: PresetCatalog(), online: [], sort: .name, grouping: .preset)
-        XCTAssertEqual(groups.map(\.title), ["No Preset"])
+        XCTAssertEqual(groups.map(\.title), [String(localized: L10n.hostsGroupNoPreset)])
     }
 
     func testHostGroupingByStatus() {
@@ -433,14 +434,19 @@ final class SharedFoundationTests: XCTestCase {
         // By name, not by index: the fixture's order is a fact about `.added`, not about this.
         let up = hosts.filter { ["Desk", "Couch"].contains($0.name) }.map(\.id)
         let some = groups(online: Set(up))
-        XCTAssertEqual(some.map(\.title), ["Online", "Offline"])
+        XCTAssertEqual(
+            some.map(\.title),
+            [String(localized: L10n.hostsGroupOnline), String(localized: L10n.hostsGroupOffline)])
         // A pinned card follows its host's status — same record, same reachability.
         XCTAssertEqual(labels(some[0]), ["Couch", "Couch·Game", "Couch·Work", "Desk"])
         XCTAssertEqual(labels(some[1]), ["attic", "Basement"])
 
         // All offline: no empty "Online" band.
-        XCTAssertEqual(groups(online: []).map(\.title), ["Offline"])
-        XCTAssertEqual(groups(online: Set(hosts.map(\.id))).map(\.title), ["Online"])
+        XCTAssertEqual(
+            groups(online: []).map(\.title), [String(localized: L10n.hostsGroupOffline)])
+        XCTAssertEqual(
+            groups(online: Set(hosts.map(\.id))).map(\.title),
+            [String(localized: L10n.hostsGroupOnline)])
     }
 
     // MARK: - Settings presets

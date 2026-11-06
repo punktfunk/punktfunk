@@ -27,8 +27,8 @@ public enum ModifierLayout: String, CaseIterable, Sendable {
     /// User-facing label (Settings picker).
     public var label: String {
         switch self {
-        case .mac: return "Mac (⌥ Alt · ⌘ Super)"
-        case .windows: return "Windows (⌘ Alt · ⌥ Super)"
+        case .mac: return String(localized: L10n.applePlayerModifierLayoutMac)
+        case .windows: return String(localized: L10n.applePlayerModifierLayoutWindows)
         }
     }
 
@@ -36,9 +36,9 @@ public enum ModifierLayout: String, CaseIterable, Sendable {
     public var detail: String {
         switch self {
         case .mac:
-            return "⌥ sends Alt, ⌘ sends the Windows key."
+            return String(localized: L10n.applePlayerModifierLayoutMacHint)
         case .windows:
-            return "The key beside the space bar sends Alt, the next sends Windows — like a PC keyboard."
+            return String(localized: L10n.applePlayerModifierLayoutWindowsHint)
         }
     }
 }

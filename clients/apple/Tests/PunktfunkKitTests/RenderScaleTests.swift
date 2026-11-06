@@ -55,8 +55,9 @@ final class RenderScaleTests: XCTestCase {
     }
 
     func testLabels() {
-        XCTAssertEqual(RenderScale.label(1.0), "Native (1×)")
-        XCTAssertEqual(RenderScale.label(2.0), "2× · supersample")
+        XCTAssertEqual(RenderScale.label(1.0), String(localized: L10n.playerRenderScaleNative))
+        XCTAssertEqual(
+            RenderScale.label(2.0), L10n.playerRenderScaleSupersample(scale: "2"))
         XCTAssertEqual(RenderScale.label(0.5), "0.5×")
     }
 }

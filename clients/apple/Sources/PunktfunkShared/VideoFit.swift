@@ -31,9 +31,9 @@ public enum VideoFit: String, CaseIterable, Sendable {
     /// The picker label every client shares.
     public var label: String {
         switch self {
-        case .fit: return "Fit"
-        case .crop: return "Crop to fill"
-        case .stretch: return "Stretch to fill"
+        case .fit: return String(localized: L10n.playerVideoFitFit)
+        case .crop: return String(localized: L10n.playerVideoFitCrop)
+        case .stretch: return String(localized: L10n.playerVideoFitStretch)
         }
     }
 

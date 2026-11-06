@@ -24,9 +24,9 @@ public enum HostSort: String, CaseIterable, Identifiable, Sendable {
 
     public var label: String {
         switch self {
-        case .added: return "Date Added"
-        case .name: return "Name"
-        case .lastConnected: return "Last Connected"
+        case .added: return String(localized: L10n.playerHostSortAdded)
+        case .name: return String(localized: L10n.playerHostSortName)
+        case .lastConnected: return String(localized: L10n.playerHostSortLastConnected)
         }
     }
 
@@ -44,7 +44,7 @@ public enum HostGrouping: String, CaseIterable, Identifiable, Sendable {
     case none
     /// The preset each CARD connects with: a host's own card follows its binding, a pinned card
     /// follows its pin. Grouping by the binding alone would file every pinned card under "No
-    /// Preset" — pins are not bindings, and a pinned card is precisely the one that knows which
+    /// preset" — pins are not bindings, and a pinned card is precisely the one that knows which
     /// preset it means. Stored as its raw value, which `init(rawValue:)` also reads under its
     /// pre-rename spelling.
     case preset
@@ -63,9 +63,9 @@ public enum HostGrouping: String, CaseIterable, Identifiable, Sendable {
 
     public var label: String {
         switch self {
-        case .none: return "None"
-        case .preset: return "Preset"
-        case .status: return "Status"
+        case .none: return String(localized: L10n.playerHostGroupingNone)
+        case .preset: return String(localized: L10n.playerHostGroupingPreset)
+        case .status: return String(localized: L10n.playerHostGroupingStatus)
         }
     }
 
@@ -190,7 +190,9 @@ public enum HostArrangement {
             let unbound = sorted.filter { catalog.binding(for: $0) == nil }.map { HostCard(host: $0) }
             if !unbound.isEmpty {
                 groups.append(
-                    HostGroup(id: "preset-none", title: "No Preset", cards: unbound))
+                    HostGroup(
+                        id: "preset-none", title: String(localized: L10n.hostsGroupNoPreset),
+                        cards: unbound))
             }
             return groups
 
@@ -200,12 +202,12 @@ public enum HostArrangement {
             let down = ranked.filter { !online.contains($0.host.id) }
             if !up.isEmpty {
                 groups.append(
-                    HostGroup(id: "status-online", title: "Online",
+                    HostGroup(id: "status-online", title: String(localized: L10n.hostsGroupOnline),
                               cards: ordered(up).flatMap(cards)))
             }
             if !down.isEmpty {
                 groups.append(
-                    HostGroup(id: "status-offline", title: "Offline",
+                    HostGroup(id: "status-offline", title: String(localized: L10n.hostsGroupOffline),
                               cards: ordered(down).flatMap(cards)))
             }
             return groups
