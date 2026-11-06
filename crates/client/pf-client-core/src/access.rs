@@ -77,10 +77,11 @@ impl SessionAccess {
             return None;
         }
         let label = preset_label(self.grants);
-        match self.remaining(now) {
-            Some(left) => Some(format!("{label} · ends in {}", format_remaining(left))),
-            None => Some(label.to_string()),
-        }
+        Some(match self.remaining(now).map(format_remaining) {
+            Some(Some(left)) => format!("{label} · {}", pf_l10n::client::grant_chip_ends(left)),
+            Some(None) => format!("{label} · {}", pf_l10n::client::grant_chip_ends_soon()),
+            None => label.to_string(),
+        })
     }
 }
 
@@ -88,23 +89,30 @@ impl SessionAccess {
 /// so a legacy or future Full mask still labels "Full control"; anything off
 /// the three presets is "Custom".
 pub fn preset_label(grants: u32) -> &'static str {
+    level(grants).0
+}
+
+/// The level's name and the notice that names it, from [`effective_mask`].
+fn level(grants: u32) -> (&'static str, &'static str) {
+    use pf_l10n::client as m;
     match effective_mask(grants) {
-        GRANT_ALL => "Full control",
-        GRANT_PRESET_CONTROLLER_ONLY => "Controller only",
-        GRANT_PRESET_VIEW_ONLY => "View only",
-        _ => "Custom",
+        GRANT_ALL => (m::grant_level_full(), m::grant_now_full()),
+        GRANT_PRESET_CONTROLLER_ONLY => (m::grant_level_controller(), m::grant_now_controller()),
+        GRANT_PRESET_VIEW_ONLY => (m::grant_level_view(), m::grant_now_view()),
+        _ => (m::grant_level_custom(), m::grant_now_custom()),
     }
 }
 
-/// Chip/toast remaining-time text. Sub-minute is `"under 1 m"`: the wire
-/// carries whole seconds, so a second-level countdown would overclaim.
-pub fn format_remaining(left: Duration) -> String {
+/// Chip/toast remaining-time text, `None` under a minute: the wire carries whole
+/// seconds, so a second-level countdown would overclaim.
+pub fn format_remaining(left: Duration) -> Option<String> {
+    use pf_l10n::client as m;
     let mins = left.as_secs() / 60;
     match (mins / 60, mins % 60) {
-        (0, 0) => "under 1 m".to_string(),
-        (0, m) => format!("{m} m"),
-        (h, 0) => format!("{h} h"),
-        (h, m) => format!("{h} h {m} m"),
+        (0, 0) => None,
+        (0, min) => Some(m::grant_remaining_minutes(min)),
+        (h, 0) => Some(m::grant_remaining_hours(h)),
+        (h, min) => Some(m::grant_remaining_hours_minutes(h, min)),
     }
 }
 
@@ -113,12 +121,13 @@ pub fn format_remaining(left: Duration) -> String {
 /// `None` if the mask was reaffirmed and is still permanent.
 pub fn update_notice(prev_grants: u32, next: &SessionAccess, now: Instant) -> Option<String> {
     if next.grants != prev_grants {
-        return Some(format!("Access is now {}", preset_label(next.grants)));
+        return Some(level(next.grants).1.into());
     }
     match next.remaining(now) {
-        Some(left) if left > Duration::ZERO => {
-            Some(format!("Access ends in {}", format_remaining(left)))
-        }
+        Some(left) if left > Duration::ZERO => Some(match format_remaining(left) {
+            Some(left) => pf_l10n::client::grant_ends_in(left),
+            None => pf_l10n::client::grant_ends_soon().into(),
+        }),
         _ => None,
     }
 }
@@ -181,15 +190,13 @@ mod tests {
 
     #[test]
     fn remaining_time_formats_at_honest_granularity() {
-        assert_eq!(format_remaining(Duration::from_secs(0)), "under 1 m");
-        assert_eq!(format_remaining(Duration::from_secs(59)), "under 1 m");
-        assert_eq!(format_remaining(Duration::from_secs(60)), "1 m");
-        assert_eq!(format_remaining(Duration::from_secs(58 * 60)), "58 m");
-        assert_eq!(format_remaining(Duration::from_secs(2 * 3600)), "2 h");
-        assert_eq!(
-            format_remaining(Duration::from_secs(3600 + 58 * 60 + 30)),
-            "1 h 58 m"
-        );
+        let text = |secs| format_remaining(Duration::from_secs(secs));
+        assert_eq!(text(0), None);
+        assert_eq!(text(59), None);
+        assert_eq!(text(60).as_deref(), Some("1 m"));
+        assert_eq!(text(58 * 60).as_deref(), Some("58 m"));
+        assert_eq!(text(2 * 3600).as_deref(), Some("2 h"));
+        assert_eq!(text(3600 + 58 * 60 + 30).as_deref(), Some("1 h 58 m"));
     }
 
     #[test]
