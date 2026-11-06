@@ -522,7 +522,6 @@ clients/apple/Sources/PunktfunkClient/Settings/SettingsView+Scope.swift	Stop ove
 clients/apple/Sources/PunktfunkClient/Settings/SettingsView+Scope.swift	The settings every preset inherits from.
 clients/apple/Sources/PunktfunkClient/Settings/SettingsView+Scope.swift	{} host{} will fall back to Default settings
 clients/apple/Sources/PunktfunkClient/Settings/SettingsView+Scope.swift	{} pinned card{} will disappear
-clients/apple/Sources/PunktfunkClient/Settings/SettingsView+Sections.swift	1 advanced setting changed
 clients/apple/Sources/PunktfunkClient/Settings/SettingsView+Sections.swift	A ProMotion or adaptive-sync display follows the stream's rate —
 clients/apple/Sources/PunktfunkClient/Settings/SettingsView+Sections.swift	A controller-friendly layout for the host list and library.
 clients/apple/Sources/PunktfunkClient/Settings/SettingsView+Sections.swift	A preference — the host falls back if it can't encode it.
@@ -647,7 +646,6 @@ clients/apple/Sources/PunktfunkClient/Settings/SettingsView+Sections.swift	Spati
 clients/apple/Sources/PunktfunkClient/Settings/SettingsView+Sections.swift	Start in
 clients/apple/Sources/PunktfunkClient/Settings/SettingsView+Sections.swift	Statistics overlay
 clients/apple/Sources/PunktfunkClient/Settings/SettingsView+Sections.swift	Statistics position
-clients/apple/Sources/PunktfunkClient/Settings/SettingsView+Sections.swift	Statistics size
 clients/apple/Sources/PunktfunkClient/Settings/SettingsView+Sections.swift	Steam Controller 2 passthrough
 clients/apple/Sources/PunktfunkClient/Settings/SettingsView+Sections.swift	Stream a Steam Controller 2 or a 2015 Steam Controller as-is;
 clients/apple/Sources/PunktfunkClient/Settings/SettingsView+Sections.swift	Stream a Steam Controller 2, its Puck or a 2015 Steam Controller as-is;
@@ -669,7 +667,6 @@ clients/apple/Sources/PunktfunkClient/Settings/SettingsView+Sections.swift	The h
 clients/apple/Sources/PunktfunkClient/Settings/SettingsView+Sections.swift	The host drives a real output at exactly this size — no scaling.
 clients/apple/Sources/PunktfunkClient/Settings/SettingsView+Sections.swift	The host follows this window's size — pixel-exact through every resize.
 clients/apple/Sources/PunktfunkClient/Settings/SettingsView+Sections.swift	The host's speakers or headphones keep playing while you stream —
-clients/apple/Sources/PunktfunkClient/Settings/SettingsView+Sections.swift	The overlay's size, on top of the system text size.
 clients/apple/Sources/PunktfunkClient/Settings/SettingsView+Sections.swift	The pointer moves freely and sends absolute positions — best for desktop
 clients/apple/Sources/PunktfunkClient/Settings/SettingsView+Sections.swift	The speaker layout requested from the host.
 clients/apple/Sources/PunktfunkClient/Settings/SettingsView+Sections.swift	The system keeps the Home button, so the host never sees it. Add
@@ -700,7 +697,6 @@ clients/apple/Sources/PunktfunkClient/Settings/SettingsView+Sections.swift	needs
 clients/apple/Sources/PunktfunkClient/Settings/SettingsView+Sections.swift	needs Input Monitoring (or Bluetooth) access.
 clients/apple/Sources/PunktfunkClient/Settings/SettingsView+Sections.swift	picture with black bars, Crop to fill cuts the edges off, Stretch to fill
 clients/apple/Sources/PunktfunkClient/Settings/SettingsView+Sections.swift	row of covers, Grid shows more at once.
-clients/apple/Sources/PunktfunkClient/Settings/SettingsView+Sections.swift	{} advanced settings changed
 clients/apple/Sources/PunktfunkClient/Settings/SettingsView+Sections.swift	⌃⌥⇧O, the Stream menu or Select + A on a controller opens it mid-stream.
 clients/apple/Sources/PunktfunkClient/Settings/SettingsView+Support.swift	Above 1 Gbps — more than the link sustains causes loss and stutter. Speed-test first.
 clients/apple/Sources/PunktfunkClient/Settings/SettingsView+Support.swift	Compact is a one-line pill; Detailed adds the latency breakdown.

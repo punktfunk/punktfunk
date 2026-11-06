@@ -59,7 +59,6 @@ on:
       - 'packaging/linux/icons/hicolor/scalable/apps/io.unom.punktfunk.svg'
       - 'Cargo.toml'
       - 'Cargo.lock'
-      - 'l10n/**'
       - 'scripts/ci/pf-version.sh'
       # Both halves of this job's correctness, not of the bundle's content: a change to either
       # can only be proven by a real run, and there is no other trigger that would give it one.

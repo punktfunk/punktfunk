@@ -364,7 +364,6 @@ clients/android/app/src/main/kotlin/io/unom/punktfunk/Settings.kt	Top left
 clients/android/app/src/main/kotlin/io/unom/punktfunk/Settings.kt	Top right
 clients/android/app/src/main/kotlin/io/unom/punktfunk/Settings.kt	Touch passthrough
 clients/android/app/src/main/kotlin/io/unom/punktfunk/Settings.kt	With a controller
-clients/android/app/src/main/kotlin/io/unom/punktfunk/SettingsScreen.kt	1 advanced setting changed
 clients/android/app/src/main/kotlin/io/unom/punktfunk/SettingsScreen.kt	48 kHz, 4.6 at 96, 8.5 at 176.4 — and the top rates are often declined,
 clients/android/app/src/main/kotlin/io/unom/punktfunk/SettingsScreen.kt	A 3-finger tap, or Select + X on a pad, cycles the tiers in-stream.
 clients/android/app/src/main/kotlin/io/unom/punktfunk/SettingsScreen.kt	A host cannot tell someone who walked away from someone who
@@ -465,7 +464,6 @@ clients/android/app/src/main/kotlin/io/unom/punktfunk/SettingsScreen.kt	Smoothne
 clients/android/app/src/main/kotlin/io/unom/punktfunk/SettingsScreen.kt	Start in
 clients/android/app/src/main/kotlin/io/unom/punktfunk/SettingsScreen.kt	Statistics overlay
 clients/android/app/src/main/kotlin/io/unom/punktfunk/SettingsScreen.kt	Statistics position
-clients/android/app/src/main/kotlin/io/unom/punktfunk/SettingsScreen.kt	Statistics size
 clients/android/app/src/main/kotlin/io/unom/punktfunk/SettingsScreen.kt	Stream controls
 clients/android/app/src/main/kotlin/io/unom/punktfunk/SettingsScreen.kt	Stream microphone
 clients/android/app/src/main/kotlin/io/unom/punktfunk/SettingsScreen.kt	Swap the touch home for the console home — the host carousel and
@@ -473,7 +471,6 @@ clients/android/app/src/main/kotlin/io/unom/punktfunk/SettingsScreen.kt	The corn
 clients/android/app/src/main/kotlin/io/unom/punktfunk/SettingsScreen.kt	The fast decode pipeline. Turn it off if the stream stutters or
 clients/android/app/src/main/kotlin/io/unom/punktfunk/SettingsScreen.kt	The host makes a display exactly this size — no scaling. Native follows
 clients/android/app/src/main/kotlin/io/unom/punktfunk/SettingsScreen.kt	The host's speakers or headphones keep playing while you stream
-clients/android/app/src/main/kotlin/io/unom/punktfunk/SettingsScreen.kt	The overlay's size, on top of the system display size.
 clients/android/app/src/main/kotlin/io/unom/punktfunk/SettingsScreen.kt	The virtual pad the host creates. Automatic matches your controller;
 clients/android/app/src/main/kotlin/io/unom/punktfunk/SettingsScreen.kt	Third-party notices and credits
 clients/android/app/src/main/kotlin/io/unom/punktfunk/SettingsScreen.kt	This display can't present HDR10 — streams stay SDR
@@ -498,7 +495,6 @@ clients/android/app/src/main/kotlin/io/unom/punktfunk/SettingsScreen.kt	slightly
 clients/android/app/src/main/kotlin/io/unom/punktfunk/SettingsScreen.kt	surround especially. The host has its own switch and both must be on;
 clients/android/app/src/main/kotlin/io/unom/punktfunk/SettingsScreen.kt	to your finger; Passthrough sends real multi-touch; Off ignores touches on the picture.
 clients/android/app/src/main/kotlin/io/unom/punktfunk/SettingsScreen.kt	transparent. The overlay shows what a session actually got.
-clients/android/app/src/main/kotlin/io/unom/punktfunk/SettingsScreen.kt	{} advanced settings changed
 clients/android/app/src/main/kotlin/io/unom/punktfunk/ShortcutsScreen.kt	Controller (Select is Back or View)
 clients/android/app/src/main/kotlin/io/unom/punktfunk/ShortcutsScreen.kt	Cycle the statistics overlay
 clients/android/app/src/main/kotlin/io/unom/punktfunk/ShortcutsScreen.kt	Cycle the statistics overlay

@@ -218,7 +218,6 @@ crates/client/pf-console-ui/src/screens/ring_editor.rs	Quick actions reset
 crates/client/pf-console-ui/src/screens/ring_editor.rs	Reset to default
 crates/client/pf-console-ui/src/screens/search.rs	Finds the titles on this host whose name contains what you type.
 crates/client/pf-console-ui/src/screens/search.rs	Part of a title
-crates/client/pf-console-ui/src/screens/settings.rs	1 advanced setting changed
 crates/client/pf-console-ui/src/screens/settings.rs	Bitrate in Mbps
 crates/client/pf-console-ui/src/screens/settings.rs	Custom rate
 crates/client/pf-console-ui/src/screens/settings.rs	Height in pixels
@@ -226,7 +225,6 @@ crates/client/pf-console-ui/src/screens/settings.rs	Render scale in percent
 crates/client/pf-console-ui/src/screens/settings.rs	Type a percent
 crates/client/pf-console-ui/src/screens/settings.rs	Type a size
 crates/client/pf-console-ui/src/screens/settings.rs	Width in pixels
-crates/client/pf-console-ui/src/screens/settings.rs	{n} advanced settings changed
 crates/client/pf-console-ui/src/screens/settings/rows.rs	A preference — the host falls back if it can't encode this one.
 crates/client/pf-console-ui/src/screens/settings/rows.rs	A preset bundles stream settings for one use, a low-latency one or a quality one, over the settings here. Pin it to a host as a one-press card.
 crates/client/pf-console-ui/src/screens/settings/rows.rs	A smaller second screen — a dual-screen handheld's lower panel, a foldable half open — shows the companion panel, or the picture with Screens. Off leaves it to the system: for a phone on a TV.
@@ -352,7 +350,6 @@ crates/client/pf-console-ui/src/screens/settings/rows.rs	Start in
 crates/client/pf-console-ui/src/screens/settings/rows.rs	Start streams fullscreen
 crates/client/pf-console-ui/src/screens/settings/rows.rs	Statistics overlay
 crates/client/pf-console-ui/src/screens/settings/rows.rs	Statistics position
-crates/client/pf-console-ui/src/screens/settings/rows.rs	Statistics size
 crates/client/pf-console-ui/src/screens/settings/rows.rs	Steam Controller 2
 crates/client/pf-console-ui/src/screens/settings/rows.rs	Steam Controller 2 passthrough
 crates/client/pf-console-ui/src/screens/settings/rows.rs	Stops the host's audio, playing from this device's speakers, being picked up and sent back. Turn it off if your microphone already runs its own processing.
@@ -373,7 +370,6 @@ crates/client/pf-console-ui/src/screens/settings/rows.rs	The keys, controller ch
 crates/client/pf-console-ui/src/screens/settings/rows.rs	The open-source licences this app ships under.
 crates/client/pf-console-ui/src/screens/settings/rows.rs	The order of the host row: as you added them, by name, or most recently connected first.
 crates/client/pf-console-ui/src/screens/settings/rows.rs	The ring a two-finger twist or Select+A opens in a stream: what its six buttons hold, and the shortcut chords they can send. Edited on the ring itself.
-crates/client/pf-console-ui/src/screens/settings/rows.rs	The size of the statistics overlay, on top of your display's scaling.
 crates/client/pf-console-ui/src/screens/settings/rows.rs	The speaker layout requested from the host.
 crates/client/pf-console-ui/src/screens/settings/rows.rs	The virtual pad the host creates — Automatic matches this controller. A host's preset can pin another; the row says so.
 crates/client/pf-console-ui/src/screens/settings/rows.rs	This console's build.

@@ -80,7 +80,6 @@ on:
       - 'README.md'
       - 'Cargo.toml'
       - 'Cargo.lock'
-      - 'l10n/**'
       - 'rust-toolchain.toml'
       - 'scripts/60-punktfunk.rules'
       - 'scripts/60-punktfunk-dualsense.conf'

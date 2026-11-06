@@ -183,7 +183,6 @@ clients/windows/src/app/settings/general.rs	Opens on the host list: there is no 
 clients/windows/src/app/settings/general.rs	Opens the console, the interface built for a controller.
 clients/windows/src/app/settings/general.rs	Shows how to leave for a few seconds when a stream starts.
 clients/windows/src/app/settings/general.rs	The corner the statistics overlay sits in.
-clients/windows/src/app/settings/general.rs	The overlay's size, on top of your display's scaling.
 clients/windows/src/app/settings/general.rs	What each number means
 clients/windows/src/app/settings/general.rs	With a controller
 clients/windows/src/app/settings/input.rs	Alt+Tab, the Windows key and friends reach the host while the stream has input captured. Off, they act on this machine instead.
@@ -195,12 +194,10 @@ clients/windows/src/app/settings/input.rs	How a touchscreen drives the host: Tra
 clients/windows/src/app/settings/input.rs	Reverses the wheel and trackpad scroll direction sent to the host.
 clients/windows/src/app/settings/input.rs	The dial Ctrl+Alt+Shift+O, a two-finger twist or Select+A opens in a stream: what its six buttons hold, and the shortcut chords they can send. A preset that changes it owns the whole dial.
 clients/windows/src/app/settings/input.rs	Touch passthrough
-clients/windows/src/app/settings/mod.rs	1 advanced setting changed
 clients/windows/src/app/settings/mod.rs	Overridden by this preset — Reset returns it to Default settings
 clients/windows/src/app/settings/mod.rs	Punktfunk can’t write to its settings folder, so nothing on this page will survive a restart. {err}
 clients/windows/src/app/settings/mod.rs	Quick actions
 clients/windows/src/app/settings/mod.rs	Your changes aren’t being saved
-clients/windows/src/app/settings/mod.rs	{n} advanced settings changed
 clients/windows/src/app/settings/preset_sheet.rs	A preset overrides only what you change while it is selected; everything else follows Default settings. Renaming applies as you type. Deleting leaves hosts that used it on Default settings.
 clients/windows/src/app/settings/preset_sheet.rs	Default settings
 clients/windows/src/app/settings/preset_sheet.rs	Default settings
@@ -244,7 +241,6 @@ clients/windows/src/app/settings/rows.rs	Start in
 clients/windows/src/app/settings/rows.rs	Start streams fullscreen
 clients/windows/src/app/settings/rows.rs	Statistics overlay
 clients/windows/src/app/settings/rows.rs	Statistics position
-clients/windows/src/app/settings/rows.rs	Statistics size
 clients/windows/src/app/settings/rows.rs	Stream microphone
 clients/windows/src/app/settings/rows.rs	Touch input
 clients/windows/src/app/settings/rows.rs	Use controller

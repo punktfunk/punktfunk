@@ -244,8 +244,6 @@ clients/linux/src/settings/pages/general.rs	While streaming
 clients/linux/src/settings/pages/general.rs	With a controller
 clients/linux/src/settings/pages/input.rs	Quick actions
 clients/linux/src/settings/pages/input.rs	The dial Ctrl+Alt+Shift+O, a two-finger twist or Select+A opens in a stream: what its six buttons hold, and the shortcut chords they can send.
-clients/linux/src/settings/pages/mod.rs	1 advanced setting changed
-clients/linux/src/settings/pages/mod.rs	{n} advanced settings changed
 clients/linux/src/settings/presets.rs	A preset overrides only what you change here; everything else follows Default settings.
 clients/linux/src/settings/presets.rs	Colour — tints this preset's chips on host cards
 clients/linux/src/settings/presets.rs	Couldn't save — {e:#}
@@ -347,7 +345,6 @@ clients/linux/src/settings/spec.rs	Start in
 clients/linux/src/settings/spec.rs	Start streams fullscreen
 clients/linux/src/settings/spec.rs	Statistics overlay
 clients/linux/src/settings/spec.rs	Statistics position
-clients/linux/src/settings/spec.rs	Statistics size
 clients/linux/src/settings/spec.rs	Stereo or surround — the host downmixes if its output has fewer
 clients/linux/src/settings/spec.rs	Stream microphone
 clients/linux/src/settings/spec.rs	Super+Space: connect, wake, the console — this writes rows to omarchy-menu.jsonc
@@ -355,7 +352,6 @@ clients/linux/src/settings/spec.rs	Tear-free. Turning it off removes the wait fo
 clients/linux/src/settings/spec.rs	The corner the statistics overlay sits in
 clients/linux/src/settings/spec.rs	The host's speakers or headphones keep playing while you stream — needs a host on 0.32+
 clients/linux/src/settings/spec.rs	The input that feeds the host's virtual mic
-clients/linux/src/settings/spec.rs	The overlay's size, on top of your display's scaling
 clients/linux/src/settings/spec.rs	The virtual pad on the host — Automatic matches your controller. An X-Box type has no gyroscope, so pick a DualSense-class one if you want motion.
 clients/linux/src/settings/spec.rs	Touch input
 clients/linux/src/settings/spec.rs	Use controller
