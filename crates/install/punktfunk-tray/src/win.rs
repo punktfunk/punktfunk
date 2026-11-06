@@ -16,6 +16,7 @@ use std::os::windows::ffi::OsStrExt;
 use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU8, Ordering};
 use std::sync::{Mutex, OnceLock};
 
+use pf_l10n::tools;
 use windows::core::{w, PCWSTR};
 use windows::Win32::Foundation::{
     CloseHandle, GetLastError, ERROR_ALREADY_EXISTS, HWND, LPARAM, LRESULT, WPARAM,
@@ -367,15 +368,12 @@ fn notify_on_connect(hwnd: HWND) {
         TrayStatus::Running(s) => (
             // Trust-store name, else the client's Hello name; missing → generic title.
             match &s.client_name {
-                Some(name) => format!("{name} connected"),
-                None => "Client connected".to_string(),
+                Some(name) => tools::tray_toast_connected(name),
+                None => tools::tray_toast_client_connected().to_string(),
             },
             match &s.session {
-                Some(sess) => format!(
-                    "Streaming {}×{} @ {} fps",
-                    sess.width, sess.height, sess.fps
-                ),
-                None => "A client is streaming from this host".to_string(),
+                Some(sess) => tools::tray_toast_streaming_mode(sess.width, sess.height, sess.fps),
+                None => tools::tray_toast_streaming().to_string(),
             },
         ),
         _ => return, // is_streaming() implies Running
@@ -457,7 +455,7 @@ fn show_menu(hwnd: HWND) {
         if status.pairing_attention() {
             add(
                 IDM_PAIRING,
-                "Approve pairing request…",
+                tools::tray_approve_pairing(),
                 false,
                 Some(win_theme::GLYPH_APPROVE),
             );
@@ -471,18 +469,23 @@ fn show_menu(hwnd: HWND) {
             if status.can_start() {
                 add(
                     IDM_START,
-                    "Start host",
+                    tools::tray_start_host(),
                     false,
                     Some(win_theme::GLYPH_SHIELD),
                 );
             }
             if running {
-                add(IDM_STOP, "Stop host", false, Some(win_theme::GLYPH_SHIELD));
+                add(
+                    IDM_STOP,
+                    tools::tray_stop_host(),
+                    false,
+                    Some(win_theme::GLYPH_SHIELD),
+                );
             }
             if status.can_restart() {
                 add(
                     IDM_RESTART,
-                    crate::status::RESTART_LABEL,
+                    crate::status::restart_label(),
                     false,
                     Some(win_theme::GLYPH_SHIELD),
                 );
@@ -490,7 +493,7 @@ fn show_menu(hwnd: HWND) {
         }
         add(
             IDM_LOGS,
-            "Open logs folder",
+            tools::tray_open_logs(),
             false,
             Some(win_theme::GLYPH_FOLDER),
         );
@@ -499,12 +502,17 @@ fn show_menu(hwnd: HWND) {
         if can_control && running {
             add(
                 IDM_EXIT,
-                "Stop host and exit tray",
+                tools::tray_stop_and_exit(),
                 false,
                 Some(win_theme::GLYPH_SHIELD),
             );
         } else {
-            add(IDM_EXIT, "Exit tray", false, Some(win_theme::GLYPH_POWER));
+            add(
+                IDM_EXIT,
+                tools::tray_exit(),
+                false,
+                Some(win_theme::GLYPH_POWER),
+            );
         }
 
         let mut pt = Default::default();

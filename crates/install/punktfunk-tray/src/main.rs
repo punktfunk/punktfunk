@@ -97,7 +97,10 @@ fn main() -> anyhow::Result<()> {
     }
     // Same cfg as `run`; other targets stub and never poll TLS.
     #[cfg(any(windows, target_os = "linux"))]
-    punktfunk_core::tls::install_default_provider();
+    {
+        punktfunk_core::tls::install_default_provider();
+        pf_l10n::set_languages(&pf_l10n::os_languages());
+    }
     let args = parse_args()?;
     run(args)
 }
