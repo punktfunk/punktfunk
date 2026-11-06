@@ -27,14 +27,15 @@ const INPUT_GROUP: &str = "input";
 /// the box's own checks, since any other would say nothing about it and its remedy would undo
 /// the separation.
 pub(crate) fn register_all(reg: &Diagnostics, door: bool) {
-    let local = |id: &'static str, probe: fn() -> HostCheck, why: &'static str| {
+    let local = |id: &'static str, probe: fn() -> HostCheck, why: (&'static str, &'static str)| {
         if door {
-            reg.register(move || HostCheck::inapplicable(id, why));
+            reg.register(move || HostCheck::inapplicable(id, why.1).worded(why.0, None, None));
         } else {
             reg.register(probe);
         }
     };
-    let device = |id, probe| local(id, probe, "The door opens no device.");
+    let no_device = ("diag_door_no_device_summary", "The door opens no device.");
+    let device = |id, probe| local(id, probe, no_device);
     device(ids::TAKEOVER_PRIVILEGE, takeover_privilege);
     device(ids::VIRTUAL_DECK_VHCI, virtual_deck_vhci);
     device(ids::UINPUT_ACCESS, uinput_access);
@@ -46,7 +47,10 @@ pub(crate) fn register_all(reg: &Diagnostics, door: bool) {
     device(ids::PAD_AUDIO, pad_audio);
     device(ids::PAD_DRIVER, pad_driver);
     device(ids::ENCODER_SHARING, encoder_sharing);
-    let no_plugins = "The door runs no plugins. The owner's host runs them.";
+    let no_plugins = (
+        "diag_plugin_sandbox_door_summary",
+        "The door runs no plugins. The owner's host runs them.",
+    );
     local(ids::PLUGIN_SANDBOX, plugin_sandbox, no_plugins);
     reg.register(restart_pending);
 }
@@ -54,12 +58,17 @@ pub(crate) fn register_all(reg: &Diagnostics, door: bool) {
 /// Host settings changed that only a restart applies. Pushed again after every settings write.
 pub(crate) fn restart_pending() -> HostCheck {
     let id = ids::RESTART_PENDING;
-    let names: Vec<&str> = pf_host_config::restart_pending()
-        .into_iter()
-        .map(|id| pf_host_config::registry::find(id).map_or(id, |s| s.title))
+    let pending = pf_host_config::restart_pending();
+    let names: Vec<&str> = pending
+        .iter()
+        .map(|&id| pf_host_config::registry::find(id).map_or(id, |s| s.title))
         .collect();
     if names.is_empty() {
-        return HostCheck::ok(id, "Every host setting is in effect.");
+        return HostCheck::ok(id, "Every host setting is in effect.").worded(
+            "diag_restart_pending_ok_summary",
+            None,
+            None,
+        );
     }
     HostCheck::problem(
         id,
@@ -74,6 +83,13 @@ pub(crate) fn restart_pending() -> HostCheck {
         relogin_required: false,
     })
     .with_param("settings", names.join(", "))
+    // `settings` holds English titles; an app words `setting_<id>` for each of these.
+    .with_param("setting_ids", pending.join(","))
+    .worded(
+        "diag_restart_pending_summary",
+        Some("diag_restart_pending_impact"),
+        Some("diag_restart_pending_remedy"),
+    )
 }
 
 /// The runner's own refusal, unless it runs again since. Its probe runs inside its unit, which
@@ -90,10 +106,13 @@ fn runner_refusal(status: &crate::plugins::RuntimeStatus) -> Option<String> {
 /// command that starts it again on this platform.
 #[cfg(any(target_os = "linux", windows))]
 fn runner_stopped(id: &str, why: &str, start: &str) -> HostCheck {
-    let cause = if why.is_empty() {
-        String::new()
+    let (cause, impact_id) = if why.is_empty() {
+        (String::new(), "diag_plugin_sandbox_stopped_impact")
     } else {
-        format!(": {why}")
+        (
+            format!(": {why}"),
+            "diag_plugin_sandbox_stopped_error_impact",
+        )
     };
     HostCheck::problem(
         id,
@@ -110,6 +129,12 @@ fn runner_stopped(id: &str, why: &str, start: &str) -> HostCheck {
         command: Some(start.into()),
         relogin_required: false,
     })
+    .with_param("error", why)
+    .worded(
+        "diag_plugin_sandbox_stopped_summary",
+        Some(impact_id),
+        Some("diag_plugin_sandbox_stopped_remedy"),
+    )
 }
 
 /// Plugins run in their own sandbox, or the runner stops: a box that cannot build one says so
@@ -119,7 +144,8 @@ fn plugin_sandbox() -> HostCheck {
     let id = ids::PLUGIN_SANDBOX;
     let status = crate::plugins::runtime_status();
     if !status.installed {
-        return HostCheck::inapplicable(id, "The plugin runner is not installed on this host.");
+        return HostCheck::inapplicable(id, "The plugin runner is not installed on this host.")
+            .worded("diag_plugin_sandbox_na_not_installed", None, None);
     }
     if crate::plugins::runner_sandbox_off() {
         return HostCheck::problem(
@@ -136,28 +162,47 @@ fn plugin_sandbox() -> HostCheck {
                 .into(),
             command: Some("systemctl --user edit punktfunk-scripting".into()),
             relogin_required: false,
-        });
+        })
+        .worded(
+            "diag_plugin_sandbox_off_summary",
+            Some("diag_plugin_sandbox_off_impact"),
+            Some("diag_plugin_sandbox_off_remedy"),
+        );
     }
     let start = "systemctl --user restart punktfunk-scripting";
-    let (reason, fix) = match bwrap_probe() {
+    let (reason, fix, keys, error) = match bwrap_probe() {
         Ok(()) => {
             return match runner_refusal(&status) {
                 Some(why) => runner_stopped(id, &why, start),
-                None => HostCheck::ok(id, "Each plugin runs in its own sandbox."),
+                None => HostCheck::ok(id, "Each plugin runs in its own sandbox.").worded(
+                    "diag_plugin_sandbox_ok_summary",
+                    None,
+                    None,
+                ),
             }
         }
         Err(None) => (
             "bubblewrap (bwrap) is not installed".to_string(),
             "Install bubblewrap (bwrap) with your package manager, then start the plugin runner \
              again.",
+            (
+                "diag_plugin_sandbox_no_bwrap_impact",
+                "diag_plugin_sandbox_no_bwrap_remedy",
+            ),
+            None,
         ),
         Err(Some(why)) => (
             format!("bubblewrap refused the sandbox — {why}"),
             "Allow unprivileged user namespaces and use bubblewrap 0.8 or newer, then start the \
              plugin runner again.",
+            (
+                "diag_plugin_sandbox_bwrap_refused_impact",
+                "diag_plugin_sandbox_bwrap_refused_remedy",
+            ),
+            Some(why),
         ),
     };
-    HostCheck::problem(
+    let check = HostCheck::problem(
         id,
         CheckStatus::Fail,
         Severity::Critical,
@@ -171,7 +216,16 @@ fn plugin_sandbox() -> HostCheck {
         text: fix.into(),
         command: Some(start.into()),
         relogin_required: false,
-    })
+    });
+    let check = match error {
+        Some(why) => check.with_param("error", why),
+        None => check,
+    };
+    check.worded(
+        "diag_plugin_sandbox_unavailable_summary",
+        Some(keys.0),
+        Some(keys.1),
+    )
 }
 
 /// The namespaces and minimal root of every plugin sandbox: `BASE_ARGV` in `sdk/src/sandbox.ts`,
@@ -286,7 +340,8 @@ fn plugin_sandbox() -> HostCheck {
     let id = ids::PLUGIN_SANDBOX;
     let status = crate::plugins::runtime_status();
     if !status.installed {
-        return HostCheck::inapplicable(id, "The plugin runner is not installed on this host.");
+        return HostCheck::inapplicable(id, "The plugin runner is not installed on this host.")
+            .worded("diag_plugin_sandbox_na_not_installed", None, None);
     }
     if crate::plugins::runner_sandbox_off() {
         return HostCheck::problem(
@@ -302,11 +357,20 @@ fn plugin_sandbox() -> HostCheck {
             text: "Remove PUNKTFUNK_PLUGIN_SANDBOX from host.env, then restart the host.".into(),
             command: None,
             relogin_required: false,
-        });
+        })
+        .worded(
+            "diag_plugin_sandbox_off_summary",
+            Some("diag_plugin_sandbox_off_windows_impact"),
+            Some("diag_plugin_sandbox_off_windows_remedy"),
+        );
     }
     match runner_refusal(&status) {
         Some(why) => runner_stopped(id, &why, "Start-ScheduledTask -TaskName PunktfunkScripting"),
-        None => HostCheck::ok(id, "Each plugin runs in its own AppContainer."),
+        None => HostCheck::ok(id, "Each plugin runs in its own AppContainer.").worded(
+            "diag_plugin_sandbox_ok_windows_summary",
+            None,
+            None,
+        ),
     }
 }
 
@@ -317,6 +381,7 @@ fn plugin_sandbox() -> HostCheck {
         ids::PLUGIN_SANDBOX,
         "There is no plugin runner on this host.",
     )
+    .worded("diag_plugin_sandbox_na_no_runner", None, None)
 }
 
 /// The controller speaker endpoint takes the host's 4-channel open, or DualSense titles fall
@@ -326,9 +391,11 @@ fn pad_audio() -> HostCheck {
     use crate::audio::pad_endpoint::PadAudioHealth;
     let id = ids::PAD_AUDIO;
     match crate::audio::pad_endpoint::health() {
-        PadAudioHealth::Off => {
-            HostCheck::inapplicable(id, "Controller audio is turned off on this host.")
-        }
+        PadAudioHealth::Off => HostCheck::inapplicable(
+            id,
+            "Controller audio is turned off on this host.",
+        )
+        .worded("diag_pad_audio_na_off", None, None),
         PadAudioHealth::NotProvisioned => HostCheck::problem(
             id,
             CheckStatus::Warn,
@@ -336,11 +403,24 @@ fn pad_audio() -> HostCheck {
             "The controller speaker endpoint is not set up",
             "Games see no DualSense speaker, so haptics fall back to rumble. The host retries \
              at the next connect.",
+        )
+        .worded(
+            "diag_pad_audio_missing_summary",
+            Some("diag_pad_audio_missing_impact"),
+            None,
         ),
         PadAudioHealth::Ok { slots } => HostCheck::ok(
             id,
-            format!("The controller speaker endpoint takes the host's open ({slots} pad slot(s))."),
-        ),
+            if slots == 1 {
+                "The controller speaker endpoint takes the host's open (1 pad slot).".to_string()
+            } else {
+                format!(
+                    "The controller speaker endpoint takes the host's open ({slots} pad slots)."
+                )
+            },
+        )
+        .with_param("count", slots.to_string())
+        .worded("diag_pad_audio_ok_summary", None, None),
         PadAudioHealth::Refused { pad } => HostCheck::problem(
             id,
             CheckStatus::Fail,
@@ -351,13 +431,18 @@ fn pad_audio() -> HostCheck {
         )
         .with_remedy(Remedy {
             text: "Update Steam — its streaming audio driver backs the endpoint — and restart \
-                   the punktfunk host. If it stays, run `punktfunk-host pad-endpoint repair` \
+                   the Punktfunk host. If it stays, run `punktfunk-host pad-endpoint repair` \
                    as administrator."
                 .to_string(),
             command: None,
             relogin_required: false,
         })
-        .with_param("pad", pad.to_string()),
+        .with_param("pad", pad.to_string())
+        .worded(
+            "diag_pad_audio_refused_summary",
+            Some("diag_pad_audio_refused_impact"),
+            Some("diag_pad_audio_refused_remedy"),
+        ),
     }
 }
 
@@ -367,17 +452,23 @@ fn pad_audio() -> HostCheck {
         ids::PAD_AUDIO,
         "The controller speaker endpoint is a Windows component.",
     )
+    .worded("diag_pad_audio_na_windows_only", None, None)
 }
 
 /// Another app on the NVENC engine right now. Only NVIDIA reports its sessions.
 fn encoder_sharing() -> HostCheck {
     let id = ids::ENCODER_SHARING;
     if !crate::encoder_sessions::available() {
-        return HostCheck::inapplicable(id, "Only NVIDIA GPUs report who uses the video encoder.");
+        return HostCheck::inapplicable(id, "Only NVIDIA GPUs report who uses the video encoder.")
+            .worded("diag_encoder_sharing_na_not_nvidia", None, None);
     }
     let others = crate::encoder_sessions::foreign();
     if others.is_empty() {
-        return HostCheck::ok(id, "No other app is using the video encoder right now.");
+        return HostCheck::ok(id, "No other app is using the video encoder right now.").worded(
+            "diag_encoder_sharing_ok_summary",
+            None,
+            None,
+        );
     }
     let who = crate::encoder_sessions::describe(&others);
     HostCheck::problem(
@@ -399,6 +490,11 @@ fn encoder_sharing() -> HostCheck {
         relogin_required: false,
     })
     .with_param("sessions", who)
+    .worded(
+        "diag_encoder_sharing_summary",
+        Some("diag_encoder_sharing_impact"),
+        Some("diag_encoder_sharing_remedy"),
+    )
 }
 
 /// What the last virtual pad saw of the Windows gamepad driver. A stale package still attaches,
@@ -415,8 +511,10 @@ fn pad_driver() -> HostCheck {
         relogin_required: false,
     };
     match crate::inject::pad_driver_probe() {
-        V::Unseen => HostCheck::ok(id, "No controller has connected since the host started."),
-        V::Current => HostCheck::ok(id, "The virtual controller driver matches this host."),
+        V::Unseen => HostCheck::ok(id, "No controller has connected since the host started.")
+            .worded("diag_pad_driver_ok_unseen_summary", None, None),
+        V::Current => HostCheck::ok(id, "The virtual controller driver matches this host.")
+            .worded("diag_pad_driver_ok_summary", None, None),
         V::Stale {
             driver_rev,
             host_rev,
@@ -429,7 +527,12 @@ fn pad_driver() -> HostCheck {
         )
         .with_remedy(reinstall())
         .with_param("driver_rev", driver_rev.to_string())
-        .with_param("host_rev", host_rev.to_string()),
+        .with_param("host_rev", host_rev.to_string())
+        .worded(
+            "diag_pad_driver_stale_summary",
+            Some("diag_pad_driver_stale_impact"),
+            Some("diag_pad_driver_remedy"),
+        ),
         V::ProtocolMismatch {
             driver_proto,
             host_proto,
@@ -445,7 +548,12 @@ fn pad_driver() -> HostCheck {
         )
         .with_remedy(reinstall())
         .with_param("driver_protocol", driver_proto.to_string())
-        .with_param("host_protocol", host_proto.to_string()),
+        .with_param("host_protocol", host_proto.to_string())
+        .worded(
+            "diag_pad_driver_protocol_summary",
+            Some("diag_pad_driver_protocol_impact"),
+            Some("diag_pad_driver_remedy"),
+        ),
         V::WrongIdentity { want, got } => {
             let hex = |(v, p): (u16, u16)| format!("{v:04X}:{p:04X}");
             HostCheck::problem(
@@ -459,6 +567,11 @@ fn pad_driver() -> HostCheck {
             .with_remedy(reinstall())
             .with_param("want", hex(want))
             .with_param("got", hex(got))
+            .worded(
+                "diag_pad_driver_identity_summary",
+                Some("diag_pad_driver_identity_impact"),
+                Some("diag_pad_driver_remedy"),
+            )
         }
         V::NotAttached => HostCheck::problem(
             id,
@@ -467,7 +580,12 @@ fn pad_driver() -> HostCheck {
             "No driver picked up the last virtual controller",
             "Games get no input from that controller.",
         )
-        .with_remedy(reinstall()),
+        .with_remedy(reinstall())
+        .worded(
+            "diag_pad_driver_unattached_summary",
+            Some("diag_pad_driver_unattached_impact"),
+            Some("diag_pad_driver_remedy"),
+        ),
     }
 }
 
@@ -477,6 +595,7 @@ fn pad_driver() -> HostCheck {
         ids::PAD_DRIVER,
         "The virtual controller driver is a Windows component.",
     )
+    .worded("diag_pad_driver_na_windows_only", None, None)
 }
 
 /// The Windows virtual-display driver answers, or the host has no video at all. A driver whose
@@ -495,16 +614,20 @@ fn vdisplay_driver_check(health: DriverHealth) -> HostCheck {
     match health {
         DriverHealth::Inapplicable => {
             HostCheck::inapplicable(id, "The virtual display driver is a Windows component.")
+                .worded("diag_vdisplay_driver_na_windows_only", None, None)
         }
         DriverHealth::Ok { protocol } => HostCheck::ok(
             id,
             format!("The virtual display driver answers (protocol {protocol})."),
         )
-        .with_param("protocol", protocol.to_string()),
+        .with_param("protocol", protocol.to_string())
+        .with_param("driver_protocol", protocol.to_string())
+        .worded("diag_vdisplay_driver_ok_summary", None, None),
         DriverHealth::Installed => HostCheck::ok(
             id,
             "The virtual display driver is installed. It starts with the next stream.",
-        ),
+        )
+        .worded("diag_vdisplay_driver_installed_summary", None, None),
         DriverHealth::Wedged => HostCheck::problem(
             id,
             CheckStatus::Fail,
@@ -515,14 +638,19 @@ fn vdisplay_driver_check(health: DriverHealth) -> HostCheck {
              reporting busy.",
         )
         .with_remedy(Remedy {
-            text: "Restart the punktfunk host. If it happens again, disable and re-enable the \
+            text: "Restart the Punktfunk host. If it happens again, disable and re-enable the \
                    punktfunk Virtual Display adapter in Device Manager, or reboot. RivaTuner \
                    Statistics Server (MSI Afterburner) is a known cause — close it before the \
                    next connect."
                 .to_string(),
             command: None,
             relogin_required: false,
-        }),
+        })
+        .worded(
+            "diag_vdisplay_driver_wedged_summary",
+            Some("diag_vdisplay_driver_wedged_impact"),
+            Some("diag_vdisplay_driver_wedged_remedy"),
+        ),
         DriverHealth::Absent => HostCheck::problem(
             id,
             CheckStatus::Fail,
@@ -530,7 +658,12 @@ fn vdisplay_driver_check(health: DriverHealth) -> HostCheck {
             "The virtual display driver is not installed",
             "No virtual monitor can be created, so every stream is a black screen.",
         )
-        .with_remedy(reinstall()),
+        .with_remedy(reinstall())
+        .worded(
+            "diag_vdisplay_driver_absent_summary",
+            Some("diag_vdisplay_driver_absent_impact"),
+            Some("diag_vdisplay_driver_remedy"),
+        ),
         DriverHealth::Outdated { driver, host } => HostCheck::problem(
             id,
             CheckStatus::Fail,
@@ -541,7 +674,12 @@ fn vdisplay_driver_check(health: DriverHealth) -> HostCheck {
         )
         .with_remedy(reinstall())
         .with_param("driver_protocol", driver.to_string())
-        .with_param("host_protocol", host.to_string()),
+        .with_param("host_protocol", host.to_string())
+        .worded(
+            "diag_vdisplay_driver_outdated_summary",
+            Some("diag_vdisplay_driver_outdated_impact"),
+            Some("diag_vdisplay_driver_remedy"),
+        ),
         DriverHealth::NotReady { detail } => HostCheck::problem(
             id,
             CheckStatus::Warn,
@@ -559,7 +697,12 @@ fn vdisplay_driver_check(health: DriverHealth) -> HostCheck {
             command: None,
             relogin_required: false,
         })
-        .with_param("error", detail),
+        .with_param("error", detail)
+        .worded(
+            "diag_vdisplay_driver_not_ready_summary",
+            Some("diag_vdisplay_driver_not_ready_impact"),
+            Some("diag_vdisplay_driver_not_ready_remedy"),
+        ),
     }
 }
 
@@ -568,7 +711,8 @@ fn vdisplay_driver_check(health: DriverHealth) -> HostCheck {
 fn hyprland_permissions() -> HostCheck {
     let id = ids::HYPRLAND_PERMISSIONS;
     if !cfg!(target_os = "linux") {
-        return HostCheck::inapplicable(id, "Hyprland's permission system is a Linux feature.");
+        return HostCheck::inapplicable(id, "Hyprland's permission system is a Linux feature.")
+            .worded("diag_hyprland_permissions_na_not_linux", None, None);
     }
     // Same Hyprland-session probe as the backend. Missing binary or a different compositor is
     // inapplicable, not a failure.
@@ -580,7 +724,8 @@ fn hyprland_permissions() -> HostCheck {
             id,
             "This machine is not running a Hyprland session, so Hyprland's permission system \
              does not apply.",
-        );
+        )
+        .worded("diag_hyprland_permissions_na_no_session", None, None);
     };
     let enforced = serde_json::from_str::<serde_json::Value>(&out)
         .ok()
@@ -590,7 +735,8 @@ fn hyprland_permissions() -> HostCheck {
         return HostCheck::ok(
             id,
             "Hyprland is not enforcing per-application permissions, so nothing needs granting.",
-        );
+        )
+        .worded("diag_hyprland_permissions_ok_summary", None, None);
     }
     HostCheck::problem(
         id,
@@ -616,6 +762,11 @@ fn hyprland_permissions() -> HostCheck {
         ),
         relogin_required: false,
     })
+    .worded(
+        "diag_hyprland_permissions_summary",
+        Some("diag_hyprland_permissions_impact"),
+        Some("diag_hyprland_permissions_remedy"),
+    )
 }
 
 /// Where to get biri, the niri fork that creates virtual outputs.
@@ -628,7 +779,8 @@ fn niri_virtual_outputs() -> HostCheck {
         return HostCheck::inapplicable(
             ids::NIRI_VIRTUAL_OUTPUTS,
             "This machine is not running a niri session, so niri's virtual outputs do not apply.",
-        );
+        )
+        .worded("diag_niri_virtual_outputs_na_no_session", None, None);
     }
     niri_verdict(
         crate::vdisplay::probe(Compositor::Niri),
@@ -641,7 +793,11 @@ fn niri_virtual_outputs() -> HostCheck {
 fn niri_verdict(probe: anyhow::Result<()>, monitor_pinned: bool) -> HostCheck {
     let id = ids::NIRI_VIRTUAL_OUTPUTS;
     let Err(e) = probe else {
-        return HostCheck::ok(id, "niri can create a virtual display for each stream.");
+        return HostCheck::ok(id, "niri can create a virtual display for each stream.").worded(
+            "diag_niri_virtual_outputs_ok_summary",
+            None,
+            None,
+        );
     };
     #[cfg(target_os = "linux")]
     let stock = e
@@ -657,14 +813,20 @@ fn niri_verdict(probe: anyhow::Result<()>, monitor_pinned: bool) -> HostCheck {
             "niri didn't answer the virtual display check",
             format!("Until niri answers, a stream may get no display of its own. ({e:#})"),
         )
-        .with_param("error", format!("{e:#}"));
+        .with_param("error", format!("{e:#}"))
+        .worded(
+            "diag_niri_virtual_outputs_silent_summary",
+            Some("diag_niri_virtual_outputs_silent_impact"),
+            None,
+        );
     }
-    let (status, severity, impact) = if monitor_pinned {
+    let (status, severity, impact, impact_id) = if monitor_pinned {
         (
             CheckStatus::Warn,
             Severity::Warning,
             "The monitor pinned in the console still streams. Without the pin, every connect \
              fails: this niri can't create a display for the stream.",
+            "diag_niri_virtual_outputs_pinned_impact",
         )
     } else {
         (
@@ -672,6 +834,7 @@ fn niri_verdict(probe: anyhow::Result<()>, monitor_pinned: bool) -> HostCheck {
             Severity::Critical,
             "Every connect fails: this niri can't create a display for the stream. Pinning a \
              physical monitor in the console streams that monitor instead.",
+            "diag_niri_virtual_outputs_impact",
         )
     };
     HostCheck::problem(
@@ -689,6 +852,12 @@ fn niri_verdict(probe: anyhow::Result<()>, monitor_pinned: bool) -> HostCheck {
         command: None,
         relogin_required: true,
     })
+    .with_param("url", BIRI_DOCS)
+    .worded(
+        "diag_niri_virtual_outputs_summary",
+        Some(impact_id),
+        Some("diag_niri_virtual_outputs_remedy"),
+    )
 }
 
 /// Omarchy has no console apply button; updates are `omarchy update`. This row exists so the
@@ -696,18 +865,23 @@ fn niri_verdict(probe: anyhow::Result<()>, monitor_pinned: bool) -> HostCheck {
 fn omarchy_updates() -> HostCheck {
     let id = ids::OMARCHY_UPDATES;
     if !crate::osinfo::is_omarchy() {
-        return HostCheck::inapplicable(id, "This machine is not running Omarchy.");
+        return HostCheck::inapplicable(id, "This machine is not running Omarchy.").worded(
+            "diag_omarchy_updates_na",
+            None,
+            None,
+        );
     }
     let version = command_output("omarchy-version", &[]).unwrap_or_default();
     let pretty = &crate::osinfo::detect().pretty;
-    let summary = if version.is_empty() {
-        format!("{pretty}: update with `omarchy update`")
+    let version = if version.is_empty() {
+        pretty.clone()
     } else {
-        format!("{version}: update with `omarchy update`")
+        version
     };
-    HostCheck::ok(id, summary)
+    HostCheck::ok(id, format!("{version}: update with `omarchy update`"))
         .with_param("update_command", "omarchy update")
         .with_param("version", version)
+        .worded("diag_omarchy_updates_ok_summary", None, None)
 }
 
 /// Hyprland and Omarchy have no owning-crate probe, so these two rows shell out. Other catalog
@@ -727,12 +901,14 @@ fn takeover_privilege() -> HostCheck {
     let id = ids::TAKEOVER_PRIVILEGE;
     match crate::vdisplay::takeover_privilege_verdict() {
         TakeoverVerdict::Inapplicable { why } => {
-            HostCheck::inapplicable(id, takeover_inapplicable_reason(why))
+            let (key, why) = takeover_inapplicable_reason(why);
+            HostCheck::inapplicable(id, why).worded(key, None, None)
         }
         TakeoverVerdict::Ok { user, group } => {
             HostCheck::ok(id, format!("User “{user}” is in the “{group}” group."))
                 .with_param("user", user)
                 .with_param("group", group)
+                .worded("diag_takeover_privilege_ok_summary", None, None)
         }
         TakeoverVerdict::MissingMembership {
             user,
@@ -745,7 +921,7 @@ fn takeover_privilege() -> HostCheck {
             Severity::Critical,
             format!("User “{user}” is not in the “{group}” group"),
             format!(
-                "Streams that need the managed takeover cannot stop {dm}, so every one of them \
+                "Streams that need the managed takeover can't stop {dm}, so every one of them \
                  degrades to mirroring this machine's own session instead. With the panel off that \
                  looks like a black screen on every connect, and nothing else reports it."
             ),
@@ -764,31 +940,45 @@ fn takeover_privilege() -> HostCheck {
         .with_param("user", user)
         .with_param("group", group)
         .with_param("dm", dm)
-        .with_param("helper", helper),
+        .with_param("helper", helper)
+        .worded(
+            "diag_takeover_privilege_summary",
+            Some("diag_takeover_privilege_impact"),
+            Some("diag_takeover_privilege_remedy"),
+        ),
     }
 }
 
-fn takeover_inapplicable_reason(why: TakeoverInapplicable) -> &'static str {
+/// The message id and English of why the takeover does not apply.
+fn takeover_inapplicable_reason(why: TakeoverInapplicable) -> (&'static str, &'static str) {
     match why {
-        TakeoverInapplicable::Root => {
+        TakeoverInapplicable::Root => (
+            "diag_takeover_privilege_na_root",
             "The host runs as root, so it stops the display manager directly and never needs the \
-             privilege helper."
-        }
-        TakeoverInapplicable::NoDisplayManager => {
-            "No display manager drives this machine's logins, so a takeover has nothing to stop."
-        }
-        TakeoverInapplicable::NoManagedSession => {
+             privilege helper.",
+        ),
+        TakeoverInapplicable::NoDisplayManager => (
+            "diag_takeover_privilege_na_no_dm",
+            "No display manager drives this machine's logins, so a takeover has nothing to stop.",
+        ),
+        TakeoverInapplicable::NoManagedSession => (
+            "diag_takeover_privilege_na_no_session",
             "This machine has no gamescope session infrastructure, so the managed takeover never \
-             runs here."
-        }
-        TakeoverInapplicable::NoPackagedHelper => {
+             runs here.",
+        ),
+        TakeoverInapplicable::NoPackagedHelper => (
+            "diag_takeover_privilege_na_unpackaged",
             "This is an unpackaged install: it has no privilege helper and no group, and uses the \
-             polkit rule from the documentation instead."
-        }
-        TakeoverInapplicable::UnknownUser => {
-            "The host's user name could not be resolved, so no group membership could be checked."
-        }
-        TakeoverInapplicable::NotLinux => "The managed gamescope takeover is a Linux feature.",
+             polkit rule from the documentation instead.",
+        ),
+        TakeoverInapplicable::UnknownUser => (
+            "diag_takeover_privilege_na_unknown_user",
+            "The host's user name couldn't be resolved, so no group membership could be checked.",
+        ),
+        TakeoverInapplicable::NotLinux => (
+            "diag_takeover_privilege_na_not_linux",
+            "The managed gamescope takeover is a Linux feature.",
+        ),
     }
 }
 
@@ -817,14 +1007,31 @@ fn virtual_deck_vhci() -> HostCheck {
     let id = ids::VIRTUAL_DECK_VHCI;
     let group = PUNKTFUNK_GROUP;
     match crate::inject::vhci_probe() {
-        VhciVerdict::Inapplicable { why } => HostCheck::inapplicable(id, why),
-        VhciVerdict::Ok => HostCheck::ok(id, "USB/IP pads can attach."),
+        // pf-inject's only inapplicable verdict is a host that isn't Linux.
+        VhciVerdict::Inapplicable { why } => HostCheck::inapplicable(id, why).worded(
+            "diag_virtual_deck_vhci_na_not_linux",
+            None,
+            None,
+        ),
+        VhciVerdict::Ok => HostCheck::ok(id, "USB/IP pads can attach.").worded(
+            "diag_virtual_deck_vhci_ok_summary",
+            None,
+            None,
+        ),
         VhciVerdict::ModuleMissing => {
             // Both gates off leaves only the Switch 2 fallback: a note, not a warning.
-            let (severity, impact) = if usbip_gate_open() {
-                (Severity::Warning, USBIP_PAD_IMPACT)
+            let (severity, impact, impact_id) = if usbip_gate_open() {
+                (
+                    Severity::Warning,
+                    USBIP_PAD_IMPACT,
+                    "diag_virtual_deck_vhci_pads_impact",
+                )
             } else {
-                (Severity::Info, SWITCH2_ONLY_IMPACT)
+                (
+                    Severity::Info,
+                    SWITCH2_ONLY_IMPACT,
+                    "diag_virtual_deck_vhci_switch2_impact",
+                )
             };
             HostCheck::problem(
                 id,
@@ -840,6 +1047,11 @@ fn virtual_deck_vhci() -> HostCheck {
                 command: Some("sudo modprobe vhci-hcd".to_string()),
                 relogin_required: false,
             })
+            .worded(
+                "diag_virtual_deck_vhci_no_module_summary",
+                Some(impact_id),
+                Some("diag_virtual_deck_vhci_no_module_remedy"),
+            )
         }
         // Node exists, not writable. The three causes need different remedies; only userdb vs
         // process groups can tell them apart.
@@ -860,9 +1072,13 @@ fn not_writable_check(id: &str, group: &str, path: String) -> HostCheck {
     let pad_impact = USBIP_PAD_IMPACT;
 
     match (in_userdb, in_process) {
-        (Some(true), Some(false)) => {
-            session_predates(id, group, &path, Severity::Warning, pad_impact)
-        }
+        (Some(true), Some(false)) => session_predates(
+            id,
+            group,
+            &path,
+            Severity::Warning,
+            ("diag_virtual_deck_vhci_pads_impact", pad_impact),
+        ),
 
         (Some(false), _) => {
             let user = user.unwrap_or_default();
@@ -880,6 +1096,11 @@ fn not_writable_check(id: &str, group: &str, path: String) -> HostCheck {
                 relogin_required: true,
             })
             .with_param("user", user)
+            .worded(
+                "diag_virtual_deck_vhci_not_member_summary",
+                Some("diag_virtual_deck_vhci_pads_impact"),
+                Some("diag_virtual_deck_vhci_not_member_remedy"),
+            )
         }
 
         // Member in userdb and in this process: the udev rule never chgrp'd the node. Do not
@@ -896,18 +1117,29 @@ fn not_writable_check(id: &str, group: &str, path: String) -> HostCheck {
             ),
             command: Some("sudo udevadm control --reload && sudo udevadm trigger".to_string()),
             relogin_required: false,
-        }),
+        })
+        .worded(
+            "diag_virtual_deck_vhci_node_group_summary",
+            Some("diag_virtual_deck_vhci_pads_impact"),
+            Some("diag_virtual_deck_vhci_node_group_remedy"),
+        ),
 
         // User database unreachable. Do not guess a cause; a wrong remedy costs more than a
         // vague one.
-        _ => base("The USB/IP pads' attach node is not writable", pad_impact).with_remedy(Remedy {
-            text: format!(
+        _ => base("The USB/IP pads' attach node is not writable", pad_impact)
+            .with_remedy(Remedy {
+                text: format!(
                 "Check that this machine's user is in the “{group}” group and that the udev rule \
                  granting it access to the vhci nodes is installed, then restart the computer."
             ),
-            command: None,
-            relogin_required: true,
-        }),
+                command: None,
+                relogin_required: true,
+            })
+            .worded(
+                "diag_virtual_deck_vhci_unwritable_summary",
+                Some("diag_virtual_deck_vhci_pads_impact"),
+                Some("diag_virtual_deck_vhci_unwritable_remedy"),
+            ),
     }
 }
 
@@ -918,7 +1150,7 @@ fn session_predates(
     group: &str,
     path: &str,
     severity: Severity,
-    impact: &str,
+    (impact_id, impact): (&str, &str),
 ) -> HostCheck {
     HostCheck::problem(
         id,
@@ -938,6 +1170,11 @@ fn session_predates(
     .with_param("group", group)
     .with_param("path", path)
     .with_param("user", current_user().unwrap_or_default())
+    .worded(
+        "diag_group_predates_summary",
+        Some(impact_id),
+        Some("diag_group_predates_remedy"),
+    )
 }
 
 fn uinput_access() -> HostCheck {
@@ -947,8 +1184,13 @@ fn uinput_access() -> HostCheck {
             id,
             "Virtual controllers are created through this platform's own driver stack rather than \
              uinput.",
+        )
+        .worded("diag_uinput_access_na_platform", None, None),
+        UinputVerdict::Ok => HostCheck::ok(id, "The input device nodes are reachable.").worded(
+            "diag_uinput_access_ok_summary",
+            None,
+            None,
         ),
-        UinputVerdict::Ok => HostCheck::ok(id, "The input device nodes are reachable."),
 
         // Node exists, open denied. Already granted → restart; else the remedy depends on
         // whether this OS persists `usermod`.
@@ -959,8 +1201,10 @@ fn uinput_access() -> HostCheck {
                 .as_deref()
                 .and_then(|u| user_in_group_userdb(u, INPUT_GROUP));
             if in_userdb == Some(true) && process_in_group(INPUT_GROUP) == Some(false) {
+                let impact = ("diag_uinput_access_denied_impact", impact);
                 return session_predates(id, INPUT_GROUP, path, Severity::Critical, impact);
             }
+            let (remedy_id, remedy) = input_group_remedy();
             HostCheck::problem(
                 id,
                 CheckStatus::Fail,
@@ -968,9 +1212,14 @@ fn uinput_access() -> HostCheck {
                 format!("No permission to open {path}"),
                 impact,
             )
-            .with_remedy(input_group_remedy())
+            .with_remedy(remedy)
             .with_param("path", path)
             .with_param("group", INPUT_GROUP)
+            .worded(
+                "diag_uinput_access_denied_summary",
+                Some("diag_uinput_access_denied_impact"),
+                Some(remedy_id),
+            )
         }
 
         // Node missing: a group-membership remedy is the wrong turn.
@@ -991,13 +1240,18 @@ fn uinput_access() -> HostCheck {
             command: None,
             relogin_required: false,
         })
-        .with_param("path", path),
+        .with_param("path", path)
+        .worded(
+            "diag_uinput_access_missing_summary",
+            Some("diag_uinput_access_missing_impact"),
+            Some("diag_uinput_access_missing_remedy"),
+        ),
 
         UinputVerdict::Error { path, message } => HostCheck::problem(
             id,
             CheckStatus::Fail,
             Severity::Critical,
-            format!("{path} could not be opened: {message}"),
+            format!("{path} couldn't be opened: {message}"),
             "Virtual controllers may fail to be created, so games can see no gamepad.".to_string(),
         )
         .with_remedy(Remedy {
@@ -1006,32 +1260,39 @@ fn uinput_access() -> HostCheck {
             relogin_required: false,
         })
         .with_param("path", path)
-        .with_param("error", message),
+        .with_param("error", message)
+        .worded(
+            "diag_uinput_access_error_summary",
+            Some("diag_uinput_access_error_impact"),
+            Some("diag_uinput_access_error_remedy"),
+        ),
     }
 }
 
 /// On Universal Blue, `usermod -aG input` looks successful and is reverted: `/etc/group` is not
-/// writable state. `packaging/README.md`.
-fn input_group_remedy() -> Remedy {
+/// writable state. `packaging/README.md`. Returns the remedy's message id beside it.
+fn input_group_remedy() -> (&'static str, Remedy) {
     let user = current_user().unwrap_or_else(|| "$USER".to_string());
     if is_universal_blue() {
-        Remedy {
+        let remedy = Remedy {
             text:
                 "Add the user to the “input” group with ujust, then restart the computer. On this \
                    OS a plain `usermod` does not persist."
                     .to_string(),
             command: Some("ujust add-user-to-input-group".to_string()),
             relogin_required: true,
-        }
+        };
+        ("diag_uinput_access_ublue_remedy", remedy)
     } else {
-        Remedy {
+        let remedy = Remedy {
             text: "Add the user to the “input” group, then restart the computer. If the group \
                    already lists the user, the udev rule granting it access may be missing \
                    (scripts/60-punktfunk.rules)."
                 .to_string(),
             command: Some(format!("sudo usermod -aG {INPUT_GROUP} {user}")),
             relogin_required: true,
-        }
+        };
+        ("diag_uinput_access_remedy", remedy)
     }
 }
 
@@ -1053,7 +1314,8 @@ fn server_conflict() -> HostCheck {
         return HostCheck::ok(
             id,
             "No other game-streaming server is active on this machine.",
-        );
+        )
+        .worded("diag_server_conflict_ok_summary", None, None);
     }
     let servers = labels.join(", ");
     HostCheck::problem(
@@ -1073,6 +1335,11 @@ fn server_conflict() -> HostCheck {
         relogin_required: false,
     })
     .with_param("servers", servers)
+    .worded(
+        "diag_server_conflict_summary",
+        Some("diag_server_conflict_impact"),
+        Some("diag_server_conflict_remedy"),
+    )
 }
 
 /// This process's login name, resolved the way `pkexec` will (`id -un`).
@@ -1198,7 +1465,7 @@ mod tests {
             INPUT_GROUP,
             "/dev/uhid",
             Severity::Critical,
-            "impact",
+            ("diag_uinput_access_denied_impact", "impact"),
         );
         let remedy = check.remedy.expect("a predates row carries a remedy");
         assert!(remedy.command.is_none());
@@ -1217,7 +1484,7 @@ mod tests {
             TakeoverInapplicable::NotLinux,
         ] {
             assert!(
-                !takeover_inapplicable_reason(why).trim().is_empty(),
+                !takeover_inapplicable_reason(why).1.trim().is_empty(),
                 "{why:?} needs a reason — an inapplicable row exists to answer \"why not here?\""
             );
         }
@@ -1226,7 +1493,7 @@ mod tests {
     /// Atomic-OS branch: `usermod` looks successful on Bazzite and is gone after reboot.
     #[test]
     fn input_remedy_matches_this_box_flavour() {
-        let remedy = input_group_remedy();
+        let (_, remedy) = input_group_remedy();
         let command = remedy
             .command
             .expect("the input remedy is always pasteable");
