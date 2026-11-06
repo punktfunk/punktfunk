@@ -41,7 +41,7 @@ class ProfilesTest {
             "seat":{"state":"occupied","port":9777,"occupant":"Ben's Apple TV"}},
             {"id":"x","display_name":"Odd","seat":{"state":"sleeping","port":1}}]""",
         )!!
-        assertEquals("In use by Ben's Apple TV", rows[0].note())
+        assertEquals(say(R.string.profile_in_use_by, "Ben's Apple TV"), rows[0].note())
         assertEquals(SeatState.OTHER, rows[1].seat!!.state)
         assertEquals("AL", initials("anna lena x"))
     }
@@ -82,12 +82,9 @@ class ProfilesTest {
         assertEquals(SeatGate.Wake, seatGate(row("stopped")))
         assertEquals(SeatGate.Wait("Signing in"), seatGate(row("starting", "Signing in")))
         assertEquals(SeatGate.Wait(null), seatGate(row("starting")))
-        assertEquals(SeatGate.Refuse("Seats are off."), seatGate(row("unavailable", "Seats are off.")))
-        assertEquals(
-            SeatGate.Refuse("That profile can't play on this host right now."),
-            seatGate(row("unavailable")),
-        )
-        assertEquals("Getting Kid's desk ready…", wakingLine("Kid"))
+        assertEquals(SeatGate.Refuse(Say.Text("Seats are off.")), seatGate(row("unavailable", "Seats are off.")))
+        assertEquals(SeatGate.Refuse(say(R.string.reject_seat_unavailable)), seatGate(row("unavailable")))
+        assertEquals(say(R.string.profile_waking, "Kid"), wakingLine("Kid"))
     }
 
     @Test

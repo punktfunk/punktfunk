@@ -1,5 +1,6 @@
 package io.unom.punktfunk.kit.link
 
+import io.unom.punktfunk.kit.Say
 import io.unom.punktfunk.kit.security.KnownHost
 import java.io.File
 import org.json.JSONObject
@@ -40,7 +41,7 @@ class DeepLinkVectorTest {
                 val refusal = result as? DeepLinkResult.Refused
                     ?: throw AssertionError("$name: expected ${case.getString("error")}, parsed ok")
                 assertEquals(name, case.getString("error"), refusal.error.code)
-                assertTrue("$name: a refusal must be explainable", refusal.message().isNotEmpty())
+                assertTrue("$name: a refusal must be explainable", refusal.message() is Say.Msg)
                 continue
             }
             val link = (result as? DeepLinkResult.Parsed)?.link

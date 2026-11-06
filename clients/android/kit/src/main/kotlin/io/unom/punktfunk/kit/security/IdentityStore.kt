@@ -5,6 +5,7 @@ import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import android.util.Log
 import io.unom.punktfunk.kit.NativeBridge
+import io.unom.punktfunk.kit.R
 import java.io.File
 import java.security.KeyStore
 import java.util.concurrent.CompletableFuture
@@ -92,6 +93,8 @@ class IdentityHolder internal constructor(
     private val obtain: () -> ClientIdentity,
     private val timeoutMs: Long = IDENTITY_OBTAIN_TIMEOUT_MS,
     private val onFailure: (Throwable) -> Unit = { Log.w(TAG, "identity unavailable", it) },
+    /** Words message [id]. The process's holder reads the app's resources. */
+    private val words: (id: Int) -> String = { it.toString() },
 ) {
     @Volatile
     var current: ClientIdentity? = null
@@ -134,9 +137,9 @@ class IdentityHolder internal constructor(
 
     /** The line a guarded action shows while [current] is null. Re-kicks a failed load. */
     fun blockedMessage(): String {
-        if (!failed) return NOT_READY
+        if (!failed) return words(R.string.android_identity_not_ready)
         ensure()
-        return UNAVAILABLE
+        return words(R.string.android_identity_broken)
     }
 
     @Synchronized
@@ -147,10 +150,6 @@ class IdentityHolder internal constructor(
     }
 
     companion object {
-        const val NOT_READY = "Identity not ready yet — try again in a moment"
-        const val UNAVAILABLE =
-            "Couldn't create an identity — this device's secure key storage isn't working"
-
         @Volatile
         private var instance: IdentityHolder? = null
 
@@ -158,7 +157,7 @@ class IdentityHolder internal constructor(
         fun shared(context: Context): IdentityHolder =
             instance ?: synchronized(this) {
                 instance ?: context.applicationContext.let { app ->
-                    IdentityHolder({ obtainIdentity(IdentityStore(app)) })
+                    IdentityHolder({ obtainIdentity(IdentityStore(app)) }, words = { app.getString(it) })
                 }.also { instance = it }
             }
     }

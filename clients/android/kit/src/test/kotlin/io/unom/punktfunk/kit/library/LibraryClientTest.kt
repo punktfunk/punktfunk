@@ -1,5 +1,7 @@
 package io.unom.punktfunk.kit.library
 
+import io.unom.punktfunk.kit.R
+import io.unom.punktfunk.kit.say
 import io.unom.punktfunk.kit.security.KnownHost
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
@@ -29,7 +31,7 @@ class LibraryClientTest {
     fun a_403_reads_as_not_paired_like_a_401() {
         assertTrue(LibraryClient.refused(401) is LibraryResult.Unauthorized)
         assertTrue(LibraryClient.refused(403) is LibraryResult.Unauthorized)
-        assertEquals(LibraryResult.Error("the host refused it (500)"), LibraryClient.refused(500))
+        assertEquals(LibraryResult.Error(say(R.string.error_mgmt_refused, 500)), LibraryClient.refused(500))
     }
 
     @Test
@@ -86,7 +88,7 @@ class LibraryClientTest {
         assertEquals("/api/v1/library/page?limit=200&cursor=a%2Bb%3D", LibraryClient.pagePath("a+b="))
     }
 
-    private val unreachable = LibraryResult.Error("couldn't reach the host")
+    private val unreachable = LibraryResult.Error(say(R.string.android_lib_error_unreachable))
 
     private class Run {
         var packets = 0

@@ -1,5 +1,8 @@
 package io.unom.punktfunk.kit.link
 
+import io.unom.punktfunk.kit.R
+import io.unom.punktfunk.kit.Say
+import io.unom.punktfunk.kit.say
 import io.unom.punktfunk.kit.security.KnownHost
 import java.nio.ByteBuffer
 import java.nio.charset.CodingErrorAction
@@ -448,18 +451,17 @@ sealed interface DeepLinkResult {
          * A sentence for the notice a refusing front-end shows. Deliberately names what failed: a
          * shortcut that can't honour its reference says so instead of streaming with the wrong one.
          */
-        fun message(): String = when (error) {
-            LinkError.NOT_OUR_SCHEME -> "That isn't a Punktfunk link."
-            LinkError.TOO_LONG -> "That link is too long to be genuine."
-            LinkError.UNKNOWN_ROUTE -> "Punktfunk links can't do “$detail”."
-            LinkError.PAIR_REFUSED ->
-                "Pairing can't be done from a link — pair the host in Punktfunk first."
-            LinkError.MISSING_HOST_REF -> "That link doesn't say which host to use."
-            LinkError.BAD_ESCAPE, LinkError.CONTROL_CHAR -> "That link is malformed and was ignored."
-            LinkError.PARAM_TOO_LONG -> "That link's “$detail” value is too long."
-            LinkError.BAD_FINGERPRINT -> "That link's host fingerprint isn't a valid one."
-            LinkError.BAD_HOST_PARAM -> "That link's host address isn't valid."
-            LinkError.BAD_LAUNCH_ID -> "That link's game id isn't a valid one."
+        fun message(): Say = when (error) {
+            LinkError.NOT_OUR_SCHEME -> say(R.string.link_error_not_our_scheme)
+            LinkError.TOO_LONG -> say(R.string.link_error_too_long)
+            LinkError.UNKNOWN_ROUTE -> say(R.string.link_error_unknown_route, detail.orEmpty())
+            LinkError.PAIR_REFUSED -> say(R.string.link_error_pair_refused)
+            LinkError.MISSING_HOST_REF -> say(R.string.link_error_missing_host_ref)
+            LinkError.BAD_ESCAPE, LinkError.CONTROL_CHAR -> say(R.string.link_error_malformed)
+            LinkError.PARAM_TOO_LONG -> say(R.string.link_error_param_too_long, detail.orEmpty())
+            LinkError.BAD_FINGERPRINT -> say(R.string.link_error_bad_fingerprint)
+            LinkError.BAD_HOST_PARAM -> say(R.string.link_error_bad_host_param)
+            LinkError.BAD_LAUNCH_ID -> say(R.string.link_error_bad_launch_id)
         }
     }
 }
