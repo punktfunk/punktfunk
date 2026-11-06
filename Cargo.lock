@@ -4169,6 +4169,7 @@ version = "0.46.0"
 dependencies = [
  "pf-client-core",
  "pf-fluent",
+ "pf-l10n",
  "punktfunk-core",
  "serde_json",
  "tracing",

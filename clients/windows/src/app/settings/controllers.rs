@@ -207,7 +207,7 @@ pub(super) fn controllers_section(cx: &Cx) -> Vec<View> {
             // This device's motors, so defaults scope only, like Controller haptics.
             (!preset_mode).then(|| {
                 described_labeled(cx.pal,
-                    rows::PAD_RUMBLE.label,
+                    rows::PAD_RUMBLE.label(),
                     pad_rumble_toggle,
                     "Off, controllers don't vibrate from the stream or in the menus, whatever the game sends.",
                 )
@@ -239,7 +239,7 @@ pub(super) fn controllers_section(cx: &Cx) -> Vec<View> {
     if !preset_mode {
         advanced.push(described_labeled(
             cx.pal,
-            rows::FORWARD_PAD.label,
+            rows::FORWARD_PAD.label(),
             forward_combo,
             "Every connected controller is forwarded, each as its own player. Pick one to \
              force single-player \u{2014} only it reaches the host.",
@@ -268,14 +268,14 @@ pub(super) fn controllers_section(cx: &Cx) -> Vec<View> {
     if !preset_mode {
         advanced.push(described_labeled(
             cx.pal,
-            rows::PAD_HAPTICS.label,
+            rows::PAD_HAPTICS.label(),
             pad_haptics_toggle,
             "Play a DualSense's voice-coil haptics on the pad itself, while controllers are \
              forwarded.",
         ));
         advanced.push(described_labeled(
             cx.pal,
-            rows::PAD_SPEAKER.label,
+            rows::PAD_SPEAKER.label(),
             pad_speaker_toggle,
             "Play the audio a game sends to the pad's own speaker on the pad, not through \
              this PC.",

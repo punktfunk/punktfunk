@@ -103,7 +103,7 @@ pub(super) fn general_section(cx: &Cx) -> Vec<View> {
         .chain((!preset_mode).then(|| {
             described_labeled(
                 cx.pal,
-                rows::AUTO_WAKE.label,
+                rows::AUTO_WAKE.label(),
                 auto_wake_toggle,
                 "Connecting to a saved host that\u{2019}s offline sends Wake-on-LAN and \
                  waits for it to boot. Turn off if hosts behind a VPN look offline when \
@@ -113,7 +113,7 @@ pub(super) fn general_section(cx: &Cx) -> Vec<View> {
         .chain((!preset_mode).then(|| {
             described_labeled(
                 cx.pal,
-                rows::START_IN.label,
+                rows::START_IN.label(),
                 start_in_combo,
                 &start_in_help(),
             )
@@ -147,13 +147,13 @@ pub(super) fn general_section(cx: &Cx) -> Vec<View> {
             vec![
                 described_labeled(
                     cx.pal,
-                    rows::GAMEPAD_UI.label,
+                    rows::GAMEPAD_UI.label(),
                     on_toggle,
                     "Opens the console, the interface built for a controller.",
                 ),
                 described_labeled(
                     cx.pal,
-                    rows::GAMEPAD_UI_MODE.label,
+                    rows::GAMEPAD_UI_MODE.label(),
                     mode_combo,
                     "Always opens it at launch. Otherwise it opens when a controller connects, \
                      and this window returns when the last one disconnects.",
@@ -182,7 +182,7 @@ pub(super) fn general_section(cx: &Cx) -> Vec<View> {
         None,
         vec![described_labeled(
             cx.pal,
-            rows::SHOW_ADVANCED.label,
+            rows::SHOW_ADVANCED.label(),
             show_toggle,
             "Adds the settings most players never need to change.",
         )],
@@ -226,26 +226,26 @@ pub(super) fn general_section(cx: &Cx) -> Vec<View> {
             vec![
                 described_labeled(
                     cx.pal,
-                    rows::ADVANCED_STATS.label,
+                    rows::ADVANCED_STATS.label(),
                     advanced_toggle,
                     "Off shows the figures Moonlight's overlay also shows. On shows capture \
                      to glass as p50/p95 and every stage between.",
                 ),
                 described_labeled(
                     cx.pal,
-                    rows::STATS_POSITION.label,
+                    rows::STATS_POSITION.label(),
                     corner_combo,
                     "The corner the statistics overlay sits in.",
                 ),
                 described_labeled(
                     cx.pal,
-                    rows::STATS_SIZE.label,
+                    rows::STATS_SIZE.label(),
                     size_combo,
-                    "The overlay's size, on top of your display's scaling.",
+                    pf_l10n::client::player_stats_scale_pct_hint(),
                 ),
                 described_labeled(
                     cx.pal,
-                    rows::EXIT_HINT.label,
+                    rows::EXIT_HINT.label(),
                     hint_toggle,
                     "Shows how to leave for a few seconds when a stream starts.",
                 ),

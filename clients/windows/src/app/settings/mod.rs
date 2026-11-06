@@ -234,7 +234,7 @@ fn described_overridable(
     control: impl Into<View>,
     caption: &str,
 ) -> View {
-    let (field, label, pal) = (row.key, row.label, cx.pal);
+    let (field, label, pal) = (row.key, row.label(), cx.pal);
     if !cx.overrides(field) {
         return described_labeled(pal, label, control, caption);
     }
@@ -372,10 +372,7 @@ fn advanced_group(cx: &Cx, fields: Vec<View>, changed: usize, overridden: bool) 
     if changed == 0 || cx.preset_mode {
         return Vec::new();
     }
-    let label = match changed {
-        1 => "1 advanced setting changed".to_string(),
-        n => format!("{n} advanced settings changed"),
-    };
+    let label = pf_l10n::client::prefs_advanced_changed(changed as u64);
     let (ctx, rev, set_rev, set_status) = (
         cx.ctx.clone(),
         cx.rev,

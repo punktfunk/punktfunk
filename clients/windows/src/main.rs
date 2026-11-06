@@ -117,6 +117,8 @@ fn main() {
 
     // Windowed (default): the WinUI 3 app owns host selection, settings, and pairing. The app
     // resolves the installed Windows App Runtime itself and offers its download when missing.
+    // Its words follow the user's preferred UI languages, read once before any window exists.
+    pf_l10n::set_languages(&pf_l10n::os_languages());
 
     // The shared SDL gamepad service (pf-client-core). The shell only enumerates pads (Settings
     // list) and persists the pin; the spawned punktfunk-session runs the SAME service and does the

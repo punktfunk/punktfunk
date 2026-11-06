@@ -7,7 +7,7 @@
 pub(super) struct Row {
     /// The stored key, and the name a preset pins it under.
     pub(super) key: &'static str,
-    pub(super) label: &'static str,
+    label: fn() -> &'static str,
     /// The sidebar page it sits on, by its tag.
     #[cfg(test)]
     page: &'static str,
@@ -16,11 +16,19 @@ pub(super) struct Row {
     advanced: bool,
 }
 
+impl Row {
+    pub(super) fn label(&self) -> &'static str {
+        (self.label)()
+    }
+}
+
+/// A row's label is read each time the page renders, so a message such as
+/// `pf_l10n::client::player_stats_scale_pct()` reads in the language `pf_l10n` settled on.
 macro_rules! rows {
-    ($($name:ident: $key:literal, $label:literal, $page:literal, $advanced:literal;)*) => {
+    ($($name:ident: $key:literal, $label:expr, $page:literal, $advanced:literal;)*) => {
         $(pub(super) const $name: Row = Row {
             key: $key,
-            label: $label,
+            label: || $label,
             #[cfg(test)]
             page: $page,
             #[cfg(test)]
@@ -42,7 +50,7 @@ rows! {
     SHOW_ADVANCED: "show_advanced", "Show advanced", "general", false;
     ADVANCED_STATS: "advanced_stats", "Advanced statistics", "general", true;
     STATS_POSITION: "hud_placement", "Statistics position", "general", true;
-    STATS_SIZE: "stats_scale_pct", "Statistics size", "general", true;
+    STATS_SIZE: "stats_scale_pct", pf_l10n::client::player_stats_scale_pct(), "general", true;
     EXIT_HINT: "exit_hint", "Exit hint", "general", true;
 
     RESOLUTION: "resolution", "Resolution", "display", false;
@@ -147,7 +155,7 @@ mod tests {
                 );
                 continue;
             };
-            assert_eq!(row.label, e["label"].as_str().unwrap(), "{}", row.key);
+            assert_eq!(row.label(), e["label"].as_str().unwrap(), "{}", row.key);
             let category = e["category"].as_str().unwrap();
             assert_eq!(
                 row.page != category,

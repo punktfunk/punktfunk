@@ -102,7 +102,7 @@ pub(super) fn audio_section(cx: &Cx) -> Vec<View> {
                     speaker_combo.map(|c| {
                         described_labeled(
                             cx.pal,
-                            rows::SPEAKER.label,
+                            rows::SPEAKER.label(),
                             c,
                             "Host audio plays here \u{2014} System default follows \
                              the Windows output device.",
@@ -122,7 +122,7 @@ pub(super) fn audio_section(cx: &Cx) -> Vec<View> {
                     mic_dev_combo.map(|c| {
                         described_labeled(
                             cx.pal,
-                            rows::MIC_DEVICE.label,
+                            rows::MIC_DEVICE.label(),
                             c,
                             "The input that feeds the host\u{2019}s virtual mic.",
                         )

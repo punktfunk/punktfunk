@@ -605,7 +605,7 @@ pub(super) fn display_section(cx: &Cx) -> Vec<View> {
     if !preset_mode {
         advanced.push(described_labeled(
             cx.pal,
-            rows::KEEP_AWAKE.label,
+            rows::KEEP_AWAKE.label(),
             setting_toggle(cx, scope, "keep_awake", s.keep_awake, |s, on| {
                 s.keep_awake = on
             }),
@@ -614,7 +614,7 @@ pub(super) fn display_section(cx: &Cx) -> Vec<View> {
         ));
         advanced.push(described_labeled(
             cx.pal,
-            rows::DECODER.label,
+            rows::DECODER.label(),
             decoder_combo,
             "Automatic picks the hardware path this GPU does best \u{2014} Direct3D 11 on \
              Intel, Vulkan Video on NVIDIA and AMD \u{2014} and falls back to the CPU. \
@@ -623,7 +623,7 @@ pub(super) fn display_section(cx: &Cx) -> Vec<View> {
         if let Some(c) = gpu_combo {
             advanced.push(described_labeled(
                 cx.pal,
-                rows::ADAPTER.label,
+                rows::ADAPTER.label(),
                 c,
                 "Which adapter decodes and presents the stream. Automatic uses the GPU \
                  driving this window\u{2019}s display.",
