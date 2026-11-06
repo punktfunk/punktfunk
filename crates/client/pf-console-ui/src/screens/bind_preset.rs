@@ -121,8 +121,8 @@ impl ScreenView for BindPresetScreen {
     /// Stack title: the subject the user picked is the one named.
     fn title(&self) -> String {
         match &self.game {
-            Some(g) => format!("Preset for {}", g.title),
-            None => format!("Default for {}", self.host_name()),
+            Some(g) => pf_l10n::console::console_preset_bind_title_game(&g.title),
+            None => pf_l10n::console::console_preset_bind_title_host(self.host_name()),
         }
     }
 
@@ -145,18 +145,16 @@ impl ScreenView for BindPresetScreen {
     }
 
     fn hints(&self, _ctx: &Ctx) -> Vec<Hint> {
+        let done = Hint::new(HintKey::Back, pf_l10n::common::common_done());
         if self.presets.is_empty() {
-            return vec![Hint::new(HintKey::Back, "Done")];
+            return vec![done];
         }
         let verb = if self.game.is_some() {
-            "Use for this title"
+            pf_l10n::console::console_hint_use_for_title()
         } else {
-            "Set default"
+            pf_l10n::console::console_hint_set_default()
         };
-        vec![
-            Hint::new(HintKey::Confirm, verb),
-            Hint::new(HintKey::Back, "Done"),
-        ]
+        vec![Hint::new(HintKey::Confirm, verb), done]
     }
 
     fn render(
@@ -173,7 +171,7 @@ impl ScreenView for BindPresetScreen {
         if self.presets.is_empty() {
             fonts.centered(
                 canvas,
-                "No presets yet \u{2014} create them in the desktop app, then choose one here.",
+                pf_l10n::console::console_preset_bind_empty(),
                 W::Regular,
                 14.0 * k,
                 ui.fg(0.55),
@@ -196,9 +194,9 @@ impl ScreenView for BindPresetScreen {
                     // Row 0 is what "no binding" MEANS here: globals for a host, the
                     // host's own default for a title. Naming the fallback beats "None".
                     let none = if self.game.is_some() {
-                        "Use the host's default"
+                        pf_l10n::console::console_preset_bind_host_default()
                     } else {
-                        "No default"
+                        pf_l10n::console::console_preset_bind_none()
                     };
                     (none.to_string(), None)
                 } else {
@@ -207,9 +205,9 @@ impl ScreenView for BindPresetScreen {
                 };
                 let current = bound.as_deref() == id;
                 let marker = if self.game.is_some() {
-                    "In use"
+                    pf_l10n::console::console_preset_bind_in_use()
                 } else {
-                    "Default"
+                    pf_l10n::console::console_preset_bind_default()
                 };
                 RowSpec {
                     header: None,
@@ -236,9 +234,9 @@ impl ScreenView for BindPresetScreen {
         if self.presets.is_empty() {
             None
         } else if self.game.is_some() {
-            Some("What this title streams with, overriding the host's default. A pinned card still keeps its own.".into())
+            Some(pf_l10n::console::console_preset_bind_game_hint().into())
         } else {
-            Some("What a plain press on this host's tile connects with. Pinned cards keep their own.".into())
+            Some(pf_l10n::client::preset_bind_host_hint().into())
         }
     }
 
