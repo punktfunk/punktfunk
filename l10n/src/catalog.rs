@@ -28,8 +28,11 @@ pub enum Message {
         count: String,
         cases: Vec<(Category, Pattern)>,
     },
-    /// A message of a TypeScript-only part: only its placeholders are read.
-    Loose(BTreeSet<String>),
+    /// A message of a TypeScript-only part: its placeholders, and each variant as written.
+    Loose {
+        names: BTreeSet<String>,
+        texts: Vec<String>,
+    },
 }
 
 impl Message {
@@ -42,7 +45,7 @@ impl Message {
                 .flat_map(|(_, p)| names(p))
                 .chain([count.as_str()])
                 .collect(),
-            Message::Loose(set) => set.iter().map(String::as_str).collect(),
+            Message::Loose { names, .. } => names.iter().map(String::as_str).collect(),
         }
     }
 
@@ -62,7 +65,7 @@ impl Message {
                     out.insert(0, count.clone());
                 }
             }
-            Message::Loose(set) => out.extend(set.iter().cloned()),
+            Message::Loose { names, .. } => out.extend(names.iter().cloned()),
         }
         out
     }
@@ -75,12 +78,13 @@ impl Message {
         }
     }
 
-    /// Each variant as written, `{name}` for a placeholder: one for a plain message.
+    /// Each variant as written, `{name}` for a placeholder: one for a plain message. A loose
+    /// message's are the raw strings, escapes and markup kept.
     pub fn texts(&self) -> Vec<String> {
         match self {
             Message::Plain(p) => vec![display(p)],
             Message::Plural { cases, .. } => cases.iter().map(|(_, p)| display(p)).collect(),
-            Message::Loose(_) => Vec::new(),
+            Message::Loose { texts, .. } => texts.clone(),
         }
     }
 }
@@ -287,10 +291,10 @@ pub fn parse_pattern(s: &str) -> Result<Pattern, String> {
 const SHAPE: &str =
     "a message is a string, or a one-element array of declarations, selectors and match";
 
-/// One message value. `loose` reads a TypeScript-only part, for its placeholders only.
+/// One message value. `loose` reads a TypeScript-only part: its placeholders and raw texts.
 pub fn parse_message(v: &Json, loose: bool) -> Result<Message, String> {
     if loose {
-        return loose_placeholders(v).map(Message::Loose);
+        return loose_message(v);
     }
     if let Json::Str(s) = v {
         return parse_pattern(s).map(Message::Plain);
@@ -372,21 +376,26 @@ fn parse_local(d: &str) -> Option<(String, String)> {
         .then(|| (name.to_owned(), input.to_owned()))
 }
 
-/// Placeholder names as Paraglide reads them, markup and functions allowed.
-fn loose_placeholders(v: &Json) -> Result<BTreeSet<String>, String> {
-    let mut out = BTreeSet::new();
+/// Each variant's raw text, and its placeholder names as Paraglide reads them, markup and
+/// functions allowed.
+fn loose_message(v: &Json) -> Result<Message, String> {
+    let mut texts = Vec::new();
     match v {
-        Json::Str(s) => scan(s, &mut out),
+        Json::Str(s) => texts.push(s.clone()),
         Json::Arr(items) if !items.is_empty() => {
             for item in items {
                 for (_, text) in item.get("match").and_then(Json::as_obj).ok_or(SHAPE)? {
-                    scan(text.as_str().ok_or("a variant is not a string")?, &mut out);
+                    texts.push(text.as_str().ok_or("a variant is not a string")?.to_owned());
                 }
             }
         }
         _ => return Err(SHAPE.into()),
     }
-    Ok(out)
+    let mut names = BTreeSet::new();
+    for t in &texts {
+        scan(t, &mut names);
+    }
+    Ok(Message::Loose { names, texts })
 }
 
 fn scan(s: &str, out: &mut BTreeSet<String>) {
@@ -873,13 +882,17 @@ mod tests {
     }
 
     #[test]
-    fn loose_reads_placeholders_only() {
+    fn loose_reads_placeholders_and_texts() {
         let v = json::parse(r#""{#b}{name}{/b} has {count :number} \\{x}""#).unwrap();
         let m = parse_message(&v, true).unwrap();
         assert_eq!(
             m.placeholders().into_iter().collect::<Vec<_>>(),
             ["count", "name"]
         );
+        assert_eq!(m.texts(), [r"{#b}{name}{/b} has {count :number} \{x}"]);
+        let v = json::parse(r#"[{"match": {"n=one": "{count} pad", "n=*": "{count} pads"}}]"#);
+        let m = parse_message(&v.unwrap(), true).unwrap();
+        assert_eq!(m.texts(), ["{count} pad", "{count} pads"]);
     }
 
     #[test]

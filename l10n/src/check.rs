@@ -1,6 +1,7 @@
 //! `pf-l10n check`: the rules on top of the format. Each rule is a small function over one
 //! message, file or list, tested on its own; [`run`] applies them all to an l10n directory.
-//! TypeScript-only parts get the key and placeholder rules only; Paraglide owns the rest.
+//! TypeScript-only parts get the key and placeholder rules, and the length budget when
+//! `budgets.parts` gives them one; Paraglide owns the rest.
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -9,42 +10,60 @@ use crate::catalog::{self, Catalog, File, Message, Part};
 use crate::json::{self, Json};
 use crate::plural;
 
+/// Lengths by key suffix, and the length of a key without one.
+type Budget = (Vec<(String, usize)>, usize);
+
+#[derive(Clone)]
 pub struct Rules {
     roles: Vec<(String, usize)>,
     label: usize,
     slack: f64,
+    /// A part's own budget, from `budgets.parts`.
+    parts: Vec<(String, Budget)>,
     banned: Vec<Banned>,
     retired: Vec<(String, String)>,
     debt: Vec<String>,
 }
 
+#[derive(Clone)]
 struct Banned {
     text: String,
     at_end: bool,
     why: String,
 }
 
+/// A budget object's `roles` (key suffix to length) and `label`.
+fn budget_of(b: &Json) -> Option<Budget> {
+    let roles = b
+        .get("roles")?
+        .as_obj()?
+        .iter()
+        .map(|(k, n)| Some((k.clone(), n.as_f64()? as usize)))
+        .collect::<Option<_>>()?;
+    Some((roles, b.get("label")?.as_f64()? as usize))
+}
+
 impl Rules {
     pub fn from_json(v: &Json) -> Result<Rules, String> {
         let field = |v: &Json, k: &str| v.get(k).and_then(Json::as_str).map(str::to_owned);
         let b = v.get("budgets").ok_or("budgets is missing")?;
-        let roles = b
-            .get("roles")
-            .and_then(Json::as_obj)
-            .and_then(|o| {
-                o.iter()
-                    .map(|(k, n)| Some((k.clone(), n.as_f64()? as usize)))
-                    .collect()
-            })
-            .ok_or("budgets.roles maps a key suffix to a length")?;
-        let label = b
-            .get("label")
-            .and_then(Json::as_f64)
-            .ok_or("budgets.label is a length")?;
+        let (roles, label) =
+            budget_of(b).ok_or("budgets needs roles, a key suffix to a length, and label")?;
         let slack = b
             .get("translation_slack")
             .and_then(Json::as_f64)
             .ok_or("budgets.translation_slack is a factor")?;
+        let parts = match b.get("parts") {
+            None => Vec::new(),
+            Some(p) => p
+                .as_obj()
+                .and_then(|o| {
+                    o.iter()
+                        .map(|(name, b)| Some((name.clone(), budget_of(b)?)))
+                        .collect()
+                })
+                .ok_or("budgets.parts maps a part to its own roles and label")?,
+        };
         let list = |k: &str| v.get(k).and_then(Json::as_arr).unwrap_or_default();
         let banned = list("banned")
             .iter()
@@ -76,11 +95,22 @@ impl Rules {
             .collect();
         Ok(Rules {
             roles,
-            label: label as usize,
+            label,
             slack,
+            parts,
             banned,
             retired,
             debt,
+        })
+    }
+
+    /// The rules for `part` when `budgets.parts` gives it its own budget.
+    fn own(&self, part: &str) -> Option<Rules> {
+        let (_, (roles, label)) = self.parts.iter().find(|(name, _)| name == part)?;
+        Some(Rules {
+            roles: roles.clone(),
+            label: *label,
+            ..self.clone()
         })
     }
 }
@@ -283,6 +313,20 @@ fn policy(rules: &Rules, file: &File, source: bool) -> Vec<String> {
     out
 }
 
+/// Budgets alone, for a TypeScript-only part with a budget of its own.
+fn lengths(rules: &Rules, file: &File, source: bool) -> Vec<String> {
+    let mut out = Vec::new();
+    for e in file.entries.iter().filter(|e| !rules.debt.contains(&e.key)) {
+        for text in e.msg.texts() {
+            out.extend(
+                over_budget(rules, &e.key, &text, source)
+                    .map(|why| format!("{}: {}: {why}", file.path, e.key)),
+            );
+        }
+    }
+    out
+}
+
 /// Keys each translation lacks, for every language any part has or ships.
 fn missing(cat: &Catalog) -> Vec<String> {
     let mut langs: Vec<&str> = cat
@@ -352,18 +396,25 @@ pub fn run(root: &Path) -> Report {
                 );
             }
         }
+        let own = rules.as_ref().and_then(|r| r.own(&part.name));
+        let files = || std::iter::once(&part.source).chain(&part.translations);
         if part.ts_only {
+            if let Some(own) = &own {
+                for file in files() {
+                    problems.extend(lengths(own, file, file.lang == cat.source));
+                }
+            }
             continue;
         }
         problems.extend(notes(part));
-        for file in std::iter::once(&part.source).chain(&part.translations) {
+        for file in files() {
             for e in &file.entries {
                 problems.extend(
                     categories(&file.lang, &e.msg)
                         .map(|why| format!("{}: {}: {why}", file.path, e.key)),
                 );
             }
-            if let Some(rules) = &rules {
+            if let Some(rules) = own.as_ref().or(rules.as_ref()) {
                 problems.extend(policy(rules, file, file.lang == cat.source));
             }
         }
@@ -431,6 +482,29 @@ mod tests {
         assert_eq!(
             over_budget(&r, "player_bitrate", &"é".repeat(201), true).unwrap(),
             "201 characters, over the budget of 200"
+        );
+    }
+
+    #[test]
+    fn a_part_keeps_its_own_budget() {
+        let r = rules();
+        let web = r.own("web").expect("rules.json gives web its own budget");
+        assert_eq!(budget(&web, "store_install_note", true), 110);
+        assert_eq!(budget(&web, "store_install_title", true), 200);
+        assert_eq!(budget(&web, "store_install_title", false), 240);
+        assert!(r.own("client").is_none());
+        let v = json::parse(&format!("\"{}\"", "x".repeat(111))).unwrap();
+        let f = File {
+            lang: "en".into(),
+            path: "messages/web/en.json".into(),
+            entries: vec![Entry {
+                key: "web_x_hint".into(),
+                msg: parse_message(&v, true).unwrap(),
+            }],
+        };
+        assert_eq!(
+            lengths(&web, &f, true),
+            ["messages/web/en.json: web_x_hint: 111 characters, over the budget of 110"]
         );
     }
 

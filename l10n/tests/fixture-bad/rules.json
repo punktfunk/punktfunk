@@ -1,6 +1,11 @@
 {
   "parts": { "always": ["one"], "typescript_only": ["web"] },
-  "budgets": { "roles": { "_hint": 110, "_title": 60 }, "label": 40, "translation_slack": 1.2 },
+  "budgets": {
+    "roles": { "_hint": 110, "_title": 60 },
+    "label": 40,
+    "translation_slack": 1.2,
+    "parts": { "web": { "roles": { "_note": 110 }, "label": 30 } }
+  },
   "banned": [
     { "text": "please", "at": "anywhere", "why": "say what to do, without Please" },
     { "text": "!", "at": "end", "why": "end with a period, not an exclamation mark" }

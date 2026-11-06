@@ -143,7 +143,7 @@ fn message(out: &mut String, key: &str, msg: &Message, bodies: &[Option<Compiled
                 format!("{} (plural)", catalog::display(p))
             }),
         Message::Plain(p) => catalog::display(p),
-        Message::Loose(_) => String::new(),
+        Message::Loose { .. } => String::new(),
     };
     let _ = writeln!(out, "    #[doc = {doc:?}]");
     if args.is_empty() && matches!(msg, Message::Plain(_)) {

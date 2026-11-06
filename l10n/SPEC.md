@@ -66,8 +66,10 @@ A language without a rule in `src/plural.rs` cannot ship.
 ## TypeScript-only parts
 
 The parts `rules.json` lists under `typescript_only` (`web`, `browser`, `decky`) are read by
-Paraglide alone. `check` holds them to valid JSON, the key rules and matching placeholders;
-markup, several selectors and functions are Paraglide's to read.
+Paraglide alone. `check` holds them to valid JSON, the key rules, matching placeholders and,
+when `rules.json` `budgets.parts` names the part, its own length budget; markup, several
+selectors and functions are Paraglide's to read. Paraglide reads a plural category the message
+lacks as the message's key, so their plurals end in `<n>=*`, not `<n>=other`.
 
 ## Reading a message
 

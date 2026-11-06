@@ -19,7 +19,18 @@
       "_a11y": 200
     },
     "label": 200,
-    "translation_slack": 1.2
+    "translation_slack": 1.2,
+    "parts": {
+      "web": {
+        "roles": {
+          "_help": 110,
+          "_hint": 110,
+          "_note": 110,
+          "_intro": 110
+        },
+        "label": 200
+      }
+    }
   },
   "banned": [
     {
