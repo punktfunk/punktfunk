@@ -373,6 +373,8 @@ thread_local! {
     /// Set while this thread holds a store lock. A second lock on the sidecar would wait on
     /// the first for ever, so a nested edit runs under the outer one. One flag for every
     /// store: a thread holding one lock takes no other, so two processes never wait in a ring.
+    // Already `const`; clippy flags it anyway on an Android target.
+    #[allow(clippy::missing_const_for_thread_local)]
     static LOCK_HELD: Cell<bool> = const { Cell::new(false) };
 }
 
