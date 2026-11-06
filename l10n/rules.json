@@ -105,7 +105,6 @@
     }
   ],
   "debt": {
-    "android_console_failed": "Disclosure or legal text; the exact wording is the point.",
     "android_console_unavailable_failed": "Disclosure or legal text; the exact wording is the point.",
     "android_keyboard_shortcuts_hint": "Existing wording over the hint budget; waits for the wording pass.",
     "android_keycapture_body_what": "Disclosure or legal text; the exact wording is the point.",

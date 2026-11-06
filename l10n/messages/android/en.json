@@ -174,8 +174,6 @@
 	"android_pad_ds4_no_haptics": "The DualShock 4 has no haptics audio device.",
 	"android_pad_grant_usb_first": "Grant USB access first.",
 	"android_pad_detail_captured": "captured",
-	"android_console_unavailable": "This device has no console UI in this build, so the touch layout stays up.",
-	"android_console_failed": "The console UI couldn't start on this device, so the touch layout is standing in. Restart the app to try again — and if it keeps happening, send this host your logs from a saved host's ⋮ menu.",
 	"android_already_streaming": "Already streaming — end this session first.",
 	"android_launcher_saved": "Launcher file saved.",
 	"android_launcher_save_failed": "Couldn't save the launcher file.",

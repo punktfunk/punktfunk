@@ -294,7 +294,7 @@ fn format_string(ix: &[Ix], count: Option<usize>, formatted: bool) -> String {
 }
 
 /// `player_stats_scale_pct` → `playerStatsScalePct`.
-fn camel(key: &str) -> String {
+pub fn camel(key: &str) -> String {
     let mut out = String::new();
     for (i, word) in key.split('_').enumerate() {
         let mut chars = word.chars();

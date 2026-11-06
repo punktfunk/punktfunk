@@ -139,8 +139,6 @@
 	"android_pad_ds4_no_haptics": "Console notice after the haptics test row.",
 	"android_pad_grant_usb_first": "Console notice after the haptics test row.",
 	"android_pad_detail_captured": "Detail on a captured Steam Controller's card in the console Controllers tab, read out with the pad.",
-	"android_console_unavailable": "Notice when Controller-optimized UI is on but this build ships no console.",
-	"android_console_failed": "Notice when the console failed to start. ⋮ is the menu glyph.",
 	"android_already_streaming": "Toast when a link or shortcut asks for another host while a stream runs.",
 	"android_launcher_saved": "Toast after saving a launcher file for a host or game.",
 	"android_launcher_save_failed": "Toast when writing a launcher file failed.",

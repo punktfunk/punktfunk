@@ -1,14 +1,15 @@
 //! `pf-l10n`: checks the message files and writes them out for Android and Apple.
 //!
 //! ```text
-//! pf-l10n check   [--root <l10n dir>] [--missing]
+//! pf-l10n check   [--root <l10n dir>] [--missing] [--unused]
 //! pf-l10n android [--root <l10n dir>] --out <res dir> --parts common,client,android
 //! pf-l10n apple   [--root <l10n dir>] --out <dir> --parts common,client,apple
 //! ```
 //!
 //! `--root` defaults to the directory this binary was built from. `check` prints one line per
-//! problem and exits 1 on any; `--missing` adds the untranslated keys, which never fail. The
-//! generators refuse a tree that does not compile, as the build does.
+//! problem and exits 1 on any; `--missing` adds the untranslated keys and `--unused` the keys
+//! no tracked source names (`git ls-files`), which never fail. The generators refuse a tree
+//! that does not compile, as the build does.
 
 #[path = "../android.rs"]
 mod android;
@@ -36,6 +37,7 @@ struct Args {
     out: Option<PathBuf>,
     parts: Vec<String>,
     missing: bool,
+    unused: bool,
 }
 
 fn parse_args(mut argv: impl Iterator<Item = String>) -> Result<Args, String> {
@@ -48,6 +50,7 @@ fn parse_args(mut argv: impl Iterator<Item = String>) -> Result<Args, String> {
         out: None,
         parts: Vec::new(),
         missing: false,
+        unused: false,
     };
     while let Some(flag) = argv.next() {
         let mut value = || argv.next().ok_or_else(|| format!("{flag} needs a value"));
@@ -56,6 +59,7 @@ fn parse_args(mut argv: impl Iterator<Item = String>) -> Result<Args, String> {
             "--out" => args.out = Some(value()?.into()),
             "--parts" => args.parts = value()?.split(',').map(str::to_owned).collect(),
             "--missing" => args.missing = true,
+            "--unused" => args.unused = true,
             other => return Err(format!("unknown flag {other}")),
         }
     }
@@ -82,6 +86,12 @@ fn run(args: Result<Args, String>) -> Result<ExitCode, String> {
         if args.missing {
             for line in &report.missing {
                 println!("missing: {line}");
+            }
+        }
+        if args.unused {
+            match check::unused(&args.root) {
+                Ok(lines) => lines.iter().for_each(|line| println!("unused: {line}")),
+                Err(e) => eprintln!("pf-l10n: --unused: {e}"),
             }
         }
         return Ok(if report.problems.is_empty() {

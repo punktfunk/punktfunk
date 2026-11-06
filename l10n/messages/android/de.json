@@ -169,8 +169,6 @@
 	"android_pad_ds4_no_haptics": "Der DualShock 4 hat kein Haptik-Audiogerät.",
 	"android_pad_grant_usb_first": "Erlaube zuerst den USB-Zugriff.",
 	"android_pad_detail_captured": "erfasst",
-	"android_console_unavailable": "Dieses Gerät hat in diesem Build keine Konsolenoberfläche, daher bleibt die Touch-Oberfläche.",
-	"android_console_failed": "Die Konsolenoberfläche konnte auf diesem Gerät nicht starten, deshalb springt die Touch-Oberfläche ein. Starte die App neu, um es noch einmal zu versuchen — und falls es wieder passiert, schick diesem Host deine Logs über das ⋮-Menü eines gespeicherten Hosts.",
 	"android_already_streaming": "Es läuft schon ein Stream — beende zuerst diese Sitzung.",
 	"android_launcher_saved": "Starterdatei gespeichert.",
 	"android_launcher_save_failed": "Die Starterdatei konnte nicht gespeichert werden.",

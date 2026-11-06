@@ -20,24 +20,6 @@
 	"desktop_main_menu_hint": "Main menu",
 	"desktop_store_unsaved_body": "Your changes aren’t being saved — Punktfunk can’t write to its settings folder.",
 	"desktop_banner_dismiss": "Dismiss",
-	"desktop_banner_streaming_one": "Streaming from {host}",
-	"desktop_banner_streaming_two": "Streaming from {host} and {other}",
-	"desktop_banner_streaming_many": [
-		{
-			"declarations": [
-				"input count",
-				"local n = count: plural"
-			],
-			"selectors": [
-				"n"
-			],
-			"match": {
-				"n=one": "Streaming from {count} host",
-				"n=other": "Streaming from {count} hosts"
-			}
-		}
-	],
-	"desktop_banner_disconnecting": "Disconnecting…",
 	"desktop_disconnect": "Disconnect",
 	"desktop_disconnect_all": "Disconnect all",
 	"desktop_save_failed": "Couldn't save — {reason}",

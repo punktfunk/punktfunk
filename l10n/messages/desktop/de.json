@@ -18,24 +18,6 @@
 	"desktop_main_menu_hint": "Hauptmenü",
 	"desktop_store_unsaved_body": "Deine Änderungen werden nicht gespeichert — Punktfunk kann nicht in seinen Einstellungsordner schreiben.",
 	"desktop_banner_dismiss": "Ausblenden",
-	"desktop_banner_streaming_one": "Stream von {host}",
-	"desktop_banner_streaming_two": "Streams von {host} und {other}",
-	"desktop_banner_streaming_many": [
-		{
-			"declarations": [
-				"input count",
-				"local n = count: plural"
-			],
-			"selectors": [
-				"n"
-			],
-			"match": {
-				"n=one": "Streams von {count} Host",
-				"n=other": "Streams von {count} Hosts"
-			}
-		}
-	],
-	"desktop_banner_disconnecting": "Wird getrennt…",
 	"desktop_disconnect": "Trennen",
 	"desktop_disconnect_all": "Alle trennen",
 	"desktop_save_failed": "Speichern nicht möglich — {reason}",

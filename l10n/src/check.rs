@@ -6,6 +6,7 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
+use crate::apple::camel;
 use crate::catalog::{self, Catalog, File, Message, Part};
 use crate::json::{self, Json};
 use crate::plural;
@@ -408,6 +409,66 @@ fn missing(cat: &Catalog) -> Vec<String> {
     out
 }
 
+/// File extensions whose text can name a message: Rust `key()`, Kotlin and XML `R.string.key`
+/// or `@string/key`, Swift `L10n.camelKey`, TypeScript `m.key(`.
+const SOURCES: [&str; 9] = ["rs", "kt", "java", "swift", "ts", "tsx", "js", "jsx", "xml"];
+
+/// Keys of `source` that no text in `texts` names as a whole word, snake_case or camelCase,
+/// one line each. A key built at run time is listed too; the list is a lead, not a verdict.
+fn unused_in<'a>(parts: &[Part], texts: impl Iterator<Item = &'a str>) -> Vec<String> {
+    let mut seen = std::collections::BTreeSet::new();
+    let mut want: BTreeMap<String, &str> = BTreeMap::new();
+    for e in parts.iter().flat_map(|p| &p.source.entries) {
+        want.insert(e.key.clone(), &e.key);
+        want.insert(camel(&e.key), &e.key);
+    }
+    let word = |c: char| c.is_ascii_alphanumeric() || c == '_';
+    for text in texts {
+        for token in text.split(|c| !word(c)) {
+            if let Some(key) = want.get(token) {
+                seen.insert(*key);
+            }
+        }
+    }
+    let mut out = Vec::new();
+    for part in parts {
+        for e in &part.source.entries {
+            if !seen.contains(e.key.as_str()) {
+                out.push(format!("{}: {}", part.source.path, e.key));
+            }
+        }
+    }
+    out
+}
+
+/// The messages no tracked source file names (`check --unused`). It reads the repository the
+/// l10n directory sits in, outside `l10n/` itself, as `git ls-files` lists it.
+pub fn unused(root: &Path) -> Result<Vec<String>, String> {
+    let (cat, _) = catalog::load(root, false);
+    let repo = root.parent().ok_or("the l10n directory has no parent")?;
+    let listed = std::process::Command::new("git")
+        .arg("-C")
+        .arg(repo)
+        .args(["ls-files", "-z"])
+        .output()
+        .map_err(|e| format!("run git ls-files: {e}"))?;
+    if !listed.status.success() {
+        return Err("git ls-files failed".into());
+    }
+    let own = root.strip_prefix(repo).unwrap_or(root);
+    let texts: Vec<String> = String::from_utf8_lossy(&listed.stdout)
+        .split('\0')
+        .map(Path::new)
+        .filter(|p| !p.starts_with(own))
+        .filter(|p| {
+            let ext = p.extension().and_then(|e| e.to_str());
+            ext.is_some_and(|e| SOURCES.contains(&e))
+        })
+        .filter_map(|p| std::fs::read_to_string(repo.join(p)).ok())
+        .collect();
+    Ok(unused_in(&cat.parts, texts.iter().map(String::as_str)))
+}
+
 pub struct Report {
     pub problems: Vec<String>,
     pub missing: Vec<String>,
@@ -567,6 +628,29 @@ mod tests {
         assert!(banned(&r, "Couldn't wake the host — it may be asleep.").is_none());
         assert!(banned(&r, "Is it on? Yes!?").is_none());
         assert!(banned(&r, "Displeased hosts").is_none());
+    }
+
+    #[test]
+    fn unused_keys_are_listed() {
+        let parts = [part(
+            "a",
+            &[
+                ("a_rust", "1"),
+                ("a_swift", "2"),
+                ("a_none", "3"),
+                ("a_part", "4"),
+            ],
+            &[],
+        )];
+        let sources = [
+            "let t = client::a_rust();",
+            "Text(L10n.aSwift)",
+            "m.a_part_extra()",
+        ];
+        assert_eq!(
+            unused_in(&parts, sources.into_iter()),
+            ["messages/a/en.json: a_none", "messages/a/en.json: a_part"]
+        );
     }
 
     #[test]

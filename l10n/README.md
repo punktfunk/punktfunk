@@ -60,6 +60,7 @@ checks them, the build ignores them.
 ```sh
 cargo run -p pf-l10n -- check              # one line per problem, exit 1 on any
 cargo run -p pf-l10n -- check --missing    # also untranslated keys, which never fail
+cargo run -p pf-l10n -- check --unused     # also keys no tracked source names, never failing
 cargo run -p pf-l10n -- android --out <res dir> --parts common,client,android
 cargo run -p pf-l10n -- apple --out <dir> --parts common,client,apple
 cargo test -p pf-l10n --all-features
