@@ -145,6 +145,26 @@ start_private_portal() {
     echo "seat-session: no xdg-desktop-portal found; input and capture need it" >&2
 }
 
+# A login with the password (`punktfunk-seats login`) leaves the KDE wallet waiting for this
+# session's bus and compositor, which exist by now. Plasma's autostart doesn't run here; its
+# entry names the distro's script.
+unlock_wallet() {
+    [[ -n "${PAM_KWALLET5_LOGIN:-}" ]] || return 0
+    local init="" entry
+    for entry in /etc/xdg/autostart/pam_kwallet_init.desktop \
+        /run/current-system/sw/etc/xdg/autostart/pam_kwallet_init.desktop; do
+        [[ -r "$entry" ]] && init=$(sed -n 's/^Exec=//p' "$entry" | head -n 1) && break
+    done
+    for init in "$init" /usr/libexec/pam_kwallet_init /usr/lib/pam_kwallet_init \
+        /usr/share/libpam-kwallet-common/pam_kwallet_init; do
+        if [[ -n "$init" && -x "$init" ]]; then
+            "$init" >/dev/null 2>&1 || echo "seat-session: pam_kwallet_init failed" >&2
+            return 0
+        fi
+    done
+    echo "seat-session: pam_kwallet_init not found; the wallet stays locked" >&2
+}
+
 # Marks the headless host as serving once its management port answers, for the supervisor.
 mark_ready_when_serving() {
     local port="${PUNKTFUNK_MGMT_BIND##*:}"
@@ -208,6 +228,7 @@ start_kwin() {
 
     if [[ -n "$OWN" ]]; then
         start_private_portal
+        unlock_wallet
         kbuildsycoca6 >/dev/null 2>&1 || true
         start_plasmashell
         return

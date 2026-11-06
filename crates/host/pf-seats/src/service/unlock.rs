@@ -173,7 +173,7 @@ impl<B: PlatformBackend> SeatService<B> {
         if !self.device_list(&seat)?.fits(&device.fingerprint) {
             return Err(full());
         }
-        let (seat, started) = self.running(seat)?;
+        let (seat, started) = self.running(seat, Some(password))?;
         let mut granted = false;
         self.backend.devices(&seat, &mut |list, now| {
             granted = list.grant(device, now, stay, enroll.clone());
@@ -219,7 +219,7 @@ impl<B: PlatformBackend> SeatService<B> {
         if self.device_list(&seat)?.key_of(fp) != Some(&key) {
             return Err(proof_invalid().into());
         }
-        let (seat, started) = self.running(seat)?;
+        let (seat, started) = self.running(seat, None)?;
         let mut granted = false;
         self.backend.devices(&seat, &mut |list, now| {
             granted = list.key_of(fp) == Some(&key) && list.grant(device, now, false, None);
@@ -230,13 +230,14 @@ impl<B: PlatformBackend> SeatService<B> {
         Ok(CommandResult::Unlocked { seat, started })
     }
 
-    /// `seat` as it runs, started through the same path as a `start` when it is down. The caller
-    /// holds `ops`. `true` when this started it.
-    fn running(&self, seat: Seat) -> Result<(Seat, bool), ApiError> {
+    /// `seat` as it runs, started through the same path as a `start` when it is down, with the
+    /// `password` the start was proved with; a session that runs gets nothing. The caller holds
+    /// `ops`. `true` when this started it.
+    fn running(&self, seat: Seat, password: Option<&Secret>) -> Result<(Seat, bool), ApiError> {
         if self.runs(&seat) {
             return Ok((seat, false));
         }
-        Ok((self.change_locked(&seat.id, true)?, true))
+        Ok((self.change_locked(&seat.id, true, password)?, true))
     }
 
     /// The pinned box fingerprint, or the refusal of every key proof while it doesn't match.

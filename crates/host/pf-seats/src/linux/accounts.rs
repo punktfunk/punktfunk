@@ -69,6 +69,12 @@ pub(super) fn lookup(name: &str) -> Result<Option<Passwd>, BackendError> {
     Ok(getent("passwd", name)?.and_then(|line| parse_passwd(&line)))
 }
 
+/// `name`'s login shell, the passwd row's last field; `None` when no such user exists.
+pub(super) fn shell(name: &str) -> Result<Option<String>, BackendError> {
+    let row = getent("passwd", name)?;
+    Ok(row.and_then(|line| Some(line.trim_end().rsplit_once(':')?.1.to_owned())))
+}
+
 /// Every passwd row on the machine.
 pub(super) fn all() -> Result<Vec<Passwd>, BackendError> {
     Ok(run("getent", "getent", &["passwd"])?

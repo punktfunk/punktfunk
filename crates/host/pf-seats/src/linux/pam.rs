@@ -1,13 +1,14 @@
-//! The password check of an adopted account: PAM, once, when the row is made.
+//! PAM for a person's account: the password check, and the login helper's transaction.
 //!
-//! The stack is the `login` service's, which `punktfunk-seat@.service` runs its unit under
-//! (`PAMName=login`), so an account that stack would refuse to log in is refused here:
+//! The check's stack is the `login` service's, which `punktfunk-seat@.service` runs its unit
+//! under (`PAMName=login`), so an account that stack would refuse to log in is refused here:
 //! `pam_authenticate` takes the password, `pam_acct_mgmt` a locked, expired or must-change
 //! account. The daemon never loads libpam: [`check`] runs its own binary as
 //! `punktfunk-seats pam-check <account>` ([`run_check`]), hands it the password on stdin and
 //! reads one code back, and kills it after [`CHECK_TIMEOUT`]. The child's environment is empty
 //! and its argv holds the account alone. Nothing is kept: each side holds the password in one
-//! wiped buffer for the length of the check.
+//! wiped buffer for the length of the check. [`Login`] is the login helper's whole transaction
+//! (`super::login`), in that process only.
 #![allow(unsafe_code)]
 
 use crate::backend::BackendError;
@@ -53,6 +54,12 @@ const PAM_CONV_ERR: c_int = 19;
 const PAM_PROMPT_ECHO_OFF: c_int = 1;
 const PAM_ERROR_MSG: c_int = 3;
 const PAM_TEXT_INFO: c_int = 4;
+#[cfg(target_os = "linux")]
+const PAM_CONV: c_int = 5;
+#[cfg(target_os = "linux")]
+const PAM_ESTABLISH_CRED: c_int = 0x2;
+#[cfg(target_os = "linux")]
+const PAM_DELETE_CRED: c_int = 0x4;
 /// Keeps the modules from printing to the daemon's journal.
 const PAM_SILENT: c_int = 0x8000;
 
@@ -84,18 +91,28 @@ type Start = unsafe extern "C" fn(
     *mut *mut c_void,
 ) -> c_int;
 type Step = unsafe extern "C" fn(*mut c_void, c_int) -> c_int;
+type SetItem = unsafe extern "C" fn(*mut c_void, c_int, *const c_void) -> c_int;
+type PutEnv = unsafe extern "C" fn(*mut c_void, *const c_char) -> c_int;
+type EnvList = unsafe extern "C" fn(*mut c_void) -> *mut *mut c_char;
 
 /// The libpam entry points. The functions are valid for as long as `_library` is loaded, which
 /// is the life of the process.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 struct Pam {
     _library: Library,
     start: Start,
     authenticate: Step,
     account: Step,
+    setcred: Step,
+    open_session: Step,
+    close_session: Step,
     end: Step,
+    set_item: SetItem,
+    putenv: PutEnv,
+    envlist: EnvList,
 }
 
-/// libpam, loaded on first use: in the `pam-check` child only.
+/// libpam, loaded on first use: in the `pam-check` child and the login helper only.
 fn pam() -> Result<&'static Pam, &'static str> {
     static PAM: OnceLock<Result<Pam, String>> = OnceLock::new();
     PAM.get_or_init(load).as_ref().map_err(String::as_str)
@@ -105,22 +122,31 @@ fn load() -> Result<Pam, String> {
     // SAFETY: libpam's initializers only set up its own tables, and the library is never
     // unloaded, so no function pointer taken below outlives it.
     let library = unsafe { Library::new("libpam.so.0") }.map_err(|e| e.to_string())?;
-    // SAFETY: each symbol is a libpam function whose C signature the type above spells; the
-    // pointers are copied out of their `Symbol`s and valid while `library` is, which `Pam` holds.
+    // SAFETY: each symbol is a libpam function whose C signature the type it is read as spells;
+    // the pointers are copied out of their `Symbol`s and valid while `library` is, which `Pam`
+    // holds.
     unsafe {
-        let get = |name: &[u8]| library.get::<Step>(name).map(|s| *s);
-        let start = *library
-            .get::<Start>(b"pam_start\0")
-            .map_err(|e| e.to_string())?;
-        let authenticate = get(b"pam_authenticate\0").map_err(|e| e.to_string())?;
-        let account = get(b"pam_acct_mgmt\0").map_err(|e| e.to_string())?;
-        let end = get(b"pam_end\0").map_err(|e| e.to_string())?;
+        let step = |name: &[u8]| library.get::<Step>(name).map(|s| *s);
         Ok(Pam {
+            start: *library
+                .get::<Start>(b"pam_start\0")
+                .map_err(|e| e.to_string())?,
+            authenticate: step(b"pam_authenticate\0").map_err(|e| e.to_string())?,
+            account: step(b"pam_acct_mgmt\0").map_err(|e| e.to_string())?,
+            setcred: step(b"pam_setcred\0").map_err(|e| e.to_string())?,
+            open_session: step(b"pam_open_session\0").map_err(|e| e.to_string())?,
+            close_session: step(b"pam_close_session\0").map_err(|e| e.to_string())?,
+            end: step(b"pam_end\0").map_err(|e| e.to_string())?,
+            set_item: *library
+                .get::<SetItem>(b"pam_set_item\0")
+                .map_err(|e| e.to_string())?,
+            putenv: *library
+                .get::<PutEnv>(b"pam_putenv\0")
+                .map_err(|e| e.to_string())?,
+            envlist: *library
+                .get::<EnvList>(b"pam_getenvlist\0")
+                .map_err(|e| e.to_string())?,
             _library: library,
-            start,
-            authenticate,
-            account,
-            end,
         })
     }
 }
@@ -147,11 +173,13 @@ unsafe fn drop_replies(replies: *mut Reply, filled: usize) {
 }
 
 /// Answers each password prompt with the password `data` points at and each notice with
-/// nothing. Any other prompt, such as one for a user name, fails the conversation.
+/// nothing. Any other prompt, such as one for a user name, fails the conversation, and so does
+/// every prompt once `data` is null.
 ///
 /// # Safety
 /// PAM calls it with `count` message pointers at `messages`, a slot at `answers` and the `data`
-/// the conversation was started with: the NUL-ended password of [`verify`], alive for the call.
+/// the conversation was set with: null, or a NUL-ended password ([`judge`], [`Login`]) alive for
+/// the call.
 unsafe extern "C" fn converse(
     count: c_int,
     messages: *mut *const Message,
@@ -365,6 +393,175 @@ fn verdict(checking_account: bool, status: c_int) -> &'static str {
         (true, PAM_NEW_AUTHTOK_REQD) => MUST_CHANGE,
         (true, PAM_ACCT_EXPIRED | PAM_PERM_DENIED | PAM_AUTH_ERR) => LOCKED,
         (_, other) => unavailable(&format!("PAM answered {other}")),
+    }
+}
+
+/// One PAM transaction on the login helper's own service: authenticated with the person's
+/// password, then opened as their session, then closed when it drops, as a display manager does.
+/// The handle is this process's alone; a child forked from it must exec before it could run
+/// `Drop`.
+#[cfg(target_os = "linux")]
+pub(super) struct Login {
+    pam: &'static Pam,
+    handle: *mut c_void,
+    /// What `pam_end` is told the transaction ended with.
+    status: c_int,
+    established: bool,
+    open: bool,
+    /// The NUL-ended password the conversation answers with. Zeroed once the session is open; the
+    /// allocation lives until `pam_end`, since PAM keeps the pointer.
+    secret: Zeroizing<Vec<u8>>,
+}
+
+/// Why [`Login::authenticate`] refused.
+#[cfg(target_os = "linux")]
+#[derive(Debug, PartialEq, Eq)]
+pub(super) enum Refusal {
+    /// The stack judged the credential: [`WRONG`], [`LOCKED`] or [`MUST_CHANGE`].
+    Credential(&'static str),
+    /// PAM gave no verdict on it; the cause is for the journal.
+    Unavailable(String),
+}
+
+#[cfg(target_os = "linux")]
+impl Login {
+    /// `pam_start` on `service` for `account`, `env` in PAM's environment, then
+    /// `pam_authenticate` with `password` and `pam_acct_mgmt`. Any prompt for something other
+    /// than the password fails the conversation.
+    pub(super) fn authenticate(
+        service: &CStr,
+        account: &str,
+        password: &[u8],
+        env: &[CString],
+    ) -> Result<Self, Refusal> {
+        if !takes(password) {
+            return Err(Refusal::Credential(WRONG));
+        }
+        let user = CString::new(account).map_err(|_| Refusal::Credential(WRONG))?;
+        let pam = pam().map_err(|cause| Refusal::Unavailable(cause.into()))?;
+        // One allocation, so no copy of the password is left behind by a growing buffer.
+        let mut secret = Zeroizing::new(Vec::with_capacity(password.len() + 1));
+        secret.extend_from_slice(password);
+        secret.push(0);
+        let conversation = Conversation {
+            converse,
+            data: secret.as_mut_ptr().cast(),
+        };
+        let mut handle = std::ptr::null_mut();
+        // SAFETY: `service` and `user` are NUL-ended and outlive the call; PAM copies
+        // `conversation`, whose `data` is the heap buffer `secret` owns, which `Login` keeps until
+        // `pam_end`; `handle` is the slot for the new handle.
+        let started =
+            unsafe { (pam.start)(service.as_ptr(), user.as_ptr(), &conversation, &mut handle) };
+        if started != PAM_SUCCESS || handle.is_null() {
+            return Err(Refusal::Unavailable(format!(
+                "pam_start answered {started}"
+            )));
+        }
+        let mut login = Self {
+            pam,
+            handle,
+            status: PAM_SUCCESS,
+            established: false,
+            open: false,
+            secret,
+        };
+        for pair in env {
+            // SAFETY: a live handle and a NUL-ended `NAME=value`, which PAM copies.
+            let put = unsafe { (pam.putenv)(login.handle, pair.as_ptr()) };
+            if put != PAM_SUCCESS {
+                login.status = put;
+                return Err(Refusal::Unavailable(format!("pam_putenv answered {put}")));
+            }
+        }
+        // SAFETY: the live handle `pam_start` returned.
+        let mut status = unsafe { (pam.authenticate)(login.handle, PAM_SILENT) };
+        let checking_account = status == PAM_SUCCESS;
+        if checking_account {
+            // SAFETY: as above.
+            status = unsafe { (pam.account)(login.handle, PAM_SILENT) };
+        }
+        login.status = status;
+        match verdict(checking_account, status) {
+            PASSED => Ok(login),
+            UNAVAILABLE => Err(Refusal::Unavailable(format!("PAM answered {status}"))),
+            code => Err(Refusal::Credential(code)),
+        }
+    }
+
+    /// `pam_setcred` and `pam_open_session`, as systemd's `PAMName=` runs them: a failed
+    /// `setcred` is only logged. The password is wiped here, and a later prompt gets no answer.
+    pub(super) fn open(&mut self) -> Result<(), String> {
+        let (pam, handle) = (self.pam, self.handle);
+        // SAFETY: the live handle of an authenticated transaction.
+        let established = unsafe { (pam.setcred)(handle, PAM_ESTABLISH_CRED | PAM_SILENT) };
+        self.established = established == PAM_SUCCESS;
+        if !self.established {
+            tracing::warn!(
+                status = established,
+                "pam_setcred did not establish credentials"
+            );
+        }
+        // SAFETY: as above.
+        let opened = unsafe { (pam.open_session)(handle, PAM_SILENT) };
+        let silent = Conversation {
+            converse,
+            data: std::ptr::null_mut(),
+        };
+        // SAFETY: PAM copies the conversation; a null `data` fails every later prompt.
+        unsafe { (pam.set_item)(handle, PAM_CONV, (&raw const silent).cast()) };
+        zeroize::Zeroize::zeroize(&mut self.secret[..]);
+        if opened != PAM_SUCCESS {
+            self.status = opened;
+            return Err(format!("pam_open_session answered {opened}"));
+        }
+        self.open = true;
+        Ok(())
+    }
+
+    /// PAM's environment for the session: what was put in, with what the modules added.
+    pub(super) fn env(&self) -> Vec<Vec<u8>> {
+        let pam = self.pam;
+        // SAFETY: a live handle; the list and each entry are `malloc`ed for the caller, which
+        // frees them below after copying.
+        let list = unsafe { (pam.envlist)(self.handle) };
+        let mut out = Vec::new();
+        if list.is_null() {
+            return out;
+        }
+        for i in 0.. {
+            // SAFETY: the list is NULL-ended, and `i` stops at that NULL.
+            let entry = unsafe { *list.add(i) };
+            if entry.is_null() {
+                break;
+            }
+            // SAFETY: each entry is a NUL-ended `NAME=value` this function owns now.
+            unsafe {
+                out.push(CStr::from_ptr(entry).to_bytes().to_vec());
+                libc::free(entry.cast());
+            }
+        }
+        // SAFETY: the array itself, its entries freed above.
+        unsafe { libc::free(list.cast()) };
+        out
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl Drop for Login {
+    /// Closes the session and deletes the credentials it opened, then ends the transaction.
+    fn drop(&mut self) {
+        let (pam, handle) = (self.pam, self.handle);
+        // SAFETY: the live handle, ended exactly once here and never used again.
+        unsafe {
+            if self.open {
+                (pam.close_session)(handle, PAM_SILENT);
+            }
+            if self.established {
+                (pam.setcred)(handle, PAM_DELETE_CRED | PAM_SILENT);
+            }
+            (pam.end)(handle, self.status);
+        }
     }
 }
 

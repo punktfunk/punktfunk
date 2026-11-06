@@ -144,6 +144,7 @@ door_install() {
     done
     sudo install -Dm 0644 "$SRC/packaging/linux/punktfunk-seats-user.conf" \
         /etc/systemd/system/user@.service.d/50-punktfunk-seats.conf
+    sudo install -Dm 0644 "$SRC/packaging/linux/punktfunk-seat.pam" /etc/pam.d/punktfunk-seat
     # Each seat's plugin runner, off until its Plugins page turns it on. The owner's own unit in
     # ~/.config/systemd/user outranks this one.
     door_paths "$SRC/scripts/punktfunk-scripting.service" \

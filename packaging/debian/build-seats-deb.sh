@@ -36,6 +36,7 @@ for f in punktfunk-seats.service punktfunk-seat@.service; do
   install -Dm0644 "packaging/linux/$f" "$STAGE/usr/lib/systemd/system/$f"
 done
 install -Dm0644 packaging/linux/punktfunk-seats-user.conf "$STAGE/usr/lib/systemd/system/user@.service.d/50-punktfunk-seats.conf"
+install -Dm0644 packaging/linux/punktfunk-seat.pam "$STAGE/usr/lib/pam.d/punktfunk-seat"
 install -Dm0644 packaging/linux/punktfunk-seats.tmpfiles "$STAGE/usr/lib/tmpfiles.d/punktfunk-seats.conf"
 install -Dm0644 packaging/linux/65-punktfunk-seats.rules "$STAGE/usr/lib/udev/rules.d/65-punktfunk-seats.rules"
 install -Dm0755 packaging/linux/door-helper "$LIBEXEC/door-helper"
