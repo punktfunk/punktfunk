@@ -133,6 +133,10 @@ impl Backdrop {
     /// The field over `w`×`h` at clock `t`. The reduced interface takes a smaller buffer and
     /// one pass over the sphere.
     pub(super) fn draw(&self, canvas: &Canvas, w: f64, h: f64, t: f64, calm: f64, reduced: bool) {
+        #[cfg(test)]
+        if crate::textprobe::bare() {
+            return;
+        }
         let mut cache = self.field.borrow_mut();
         let (edge, passes) = if reduced {
             (FIELD_EDGE_REDUCED, 1.0)

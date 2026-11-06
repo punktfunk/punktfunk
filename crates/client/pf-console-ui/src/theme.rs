@@ -747,14 +747,44 @@ impl Fonts {
         size: f64,
         color: Color4f,
     ) -> f32 {
+        self.put(canvas, text, x, baseline, w, size, color, None)
+    }
+
+    /// [`draw`](Self::draw) for a run its caller gave `boxed` width. The text probe checks
+    /// the run against that box, else against the canvas clip.
+    #[allow(clippy::too_many_arguments)]
+    #[cfg_attr(not(test), allow(unused_variables))]
+    fn put(
+        &self,
+        canvas: &Canvas,
+        text: &str,
+        x: f64,
+        baseline: f64,
+        w: W,
+        size: f64,
+        color: Color4f,
+        boxed: Option<f64>,
+    ) -> f32 {
         let font = self.font(w, size);
+        let advance = font.measure_str(text, None).0;
+        #[cfg(test)]
+        crate::textprobe::run(
+            canvas,
+            text,
+            (x as f32, advance),
+            (
+                (baseline - size * 0.8) as f32,
+                (baseline + size * 0.25) as f32,
+            ),
+            boxed.map(|b| b as f32),
+        );
         canvas.draw_str(
             text,
             Point::new(x as f32, baseline as f32),
             &font,
             &fill(color),
         );
-        font.measure_str(text, None).0
+        advance
     }
 
     /// Bump the paragraph-cache clock. Entries not drawn this frame or the last
@@ -801,6 +831,17 @@ impl Fonts {
         entry.used = frame;
         if let Some(canvas) = canvas {
             entry.para.paint(canvas, at);
+            #[cfg(test)]
+            {
+                let line = entry.para.longest_line();
+                let lead = if kind == Para::Centered {
+                    (max_w as f32 - line) / 2.0
+                } else {
+                    0.0
+                };
+                let rows = (at.y, at.y + entry.para.height());
+                crate::textprobe::run(canvas, text, (at.x + lead, line), rows, Some(max_w as f32));
+            }
         }
         let height = f64::from(entry.para.height());
         // Reap entries not drawn this frame or the last (`used + 1 >= frame`).
@@ -913,7 +954,7 @@ impl Fonts {
     ) {
         let font = self.font(w, size);
         if font.measure_str(text, None).0 <= max_w as f32 {
-            self.draw(canvas, text, x, baseline, w, size, color);
+            self.put(canvas, text, x, baseline, w, size, color, Some(max_w));
             return;
         }
         let ell = "…";
@@ -932,7 +973,7 @@ impl Fonts {
             used += cw;
         }
         fitted.push_str(ell);
-        self.draw(canvas, &fitted, x, baseline, w, size, color);
+        self.put(canvas, &fitted, x, baseline, w, size, color, Some(max_w));
     }
 }
 
