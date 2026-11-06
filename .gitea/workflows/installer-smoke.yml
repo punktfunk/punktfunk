@@ -21,6 +21,7 @@ on:
   push:
     branches: [main]
     paths:
+      - 'l10n/**'
       - scripts/install.sh
       - data/platforms.json
       - crates/install/punktfunk-setup/**
@@ -32,6 +33,7 @@ on:
       - .gitea/workflows/installer-smoke.yml
   pull_request:
     paths:
+      - 'l10n/**'
       - scripts/install.sh
       - data/platforms.json
       - crates/install/punktfunk-setup/**
