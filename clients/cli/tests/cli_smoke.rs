@@ -198,6 +198,21 @@ fn unknown_verbs_refuse_with_the_not_found_code() {
     assert_eq!(out.status.code(), Some(5), "unknown help topic exits 5");
 }
 
+/// `--json` adds the stable shape a panel reads in place of the usage prose, which stays on
+/// stderr, and the exit code stays 5.
+#[test]
+fn an_unknown_verb_under_json_names_itself_on_stdout() {
+    let out = punktfunk(&["frobnicate", "--json"]);
+    assert_eq!(out.status.code(), Some(5));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("unknown command"));
+    let got: serde_json::Value = serde_json::from_slice(&out.stdout).expect("one JSON object");
+    assert_eq!(
+        got,
+        serde_json::json!({"ok": false, "error": "unknown-command"})
+    );
+    assert!(punktfunk(&["frobnicate"]).stdout.is_empty());
+}
+
 /// `discover` and `launch --request-access` document themselves. Help only — the verbs
 /// themselves browse the LAN and dial a host, which no runner may be asked to do.
 ///
