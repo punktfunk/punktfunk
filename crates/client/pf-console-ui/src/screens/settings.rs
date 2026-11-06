@@ -186,10 +186,8 @@ impl SettingsScreen {
     fn spec(&self, id: RowId, ids: &[RowId], ctx: &Ctx) -> RowSpec {
         let mut spec = row_spec(id, ctx, &self.presets, &self.overrides);
         if id == RowId::AdvancedChanged {
-            spec.label = match changed_advanced(self.tab, ctx).len() {
-                1 => "1 advanced setting changed".into(),
-                n => format!("{n} advanced settings changed"),
-            };
+            let n = changed_advanced(self.tab, ctx).len();
+            spec.label = pf_l10n::client::prefs_advanced_changed(n as u64);
         } else if advanced(id) && ids.iter().find(|r| advanced(**r)) == Some(&id) {
             spec.header = Some("Advanced");
         }

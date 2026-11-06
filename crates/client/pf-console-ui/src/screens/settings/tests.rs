@@ -1249,6 +1249,36 @@ fn advanced_rows_hide_until_shown_and_a_changed_one_is_counted() {
     assert_eq!(s.spec(first, &ids, &ctx).header, Some("Advanced"));
 }
 
+/// Text from pf-l10n reads `[…]` under the pseudo-language `en-XA`; a row still worded in
+/// code stays plain English.
+#[test]
+fn moved_rows_read_the_pseudo_language() {
+    let mut settings = Settings {
+        enable_444: true,
+        ..Settings::default()
+    };
+    let library = crate::library::LibraryShared::default();
+    let store = crate::store::SnapshotStore::new(settings.clone(), Vec::new());
+    let ctx = Ctx {
+        store: &store,
+        ..Ctx::test(&mut settings, &library)
+    };
+    let mut s = SettingsScreen::with_presets(Vec::new());
+    s.tab = tab_of(RowId::Chroma444);
+    let pseudo = |t: &str| t.starts_with('[') && t.ends_with(']');
+    pf_l10n::with_language("en-XA", || {
+        let size = row_spec(RowId::StatsSize, &ctx, &[], &Default::default()).label;
+        assert!(pseudo(&size), "{size}");
+        let hint = detail(RowId::StatsSize, &ctx);
+        assert!(pseudo(hint), "{hint}");
+        let ids = s.row_ids(&ctx);
+        let changed = s.spec(RowId::AdvancedChanged, &ids, &ctx).label;
+        assert!(pseudo(&changed) && changed.contains('1'), "{changed}");
+        let stats = row_spec(RowId::Stats, &ctx, &[], &Default::default()).label;
+        assert_eq!(stats, "Statistics overlay");
+    });
+}
+
 /// A platform's own fresh value is not a change: Android starts the pad speaker off.
 #[test]
 fn a_platform_default_is_not_counted_as_changed() {

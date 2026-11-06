@@ -1518,7 +1518,7 @@ fn row_spec_base(id: RowId, ctx: &Ctx, presets: &[(String, String)]) -> RowSpec 
         RowId::ShowAdvanced => (None, "Show advanced", extra()),
         RowId::StatsSize => (
             None,
-            "Statistics size",
+            pf_l10n::client::player_stats_scale_pct(),
             format!(
                 "{} %",
                 (punktfunk_core::hud::stats_scale(s.stats_scale_pct) * 100.0).round()
@@ -1842,7 +1842,7 @@ pub fn detail(id: RowId, ctx: &Ctx) -> &'static str {
             _ => "Punktfunk opens fullscreen and stays fullscreen between streams.",
         },
         RowId::StatsPosition => "Which corner the statistics overlay sits in.",
-        RowId::StatsSize => "The size of the statistics overlay, on top of your display's scaling.",
+        RowId::StatsSize => pf_l10n::client::player_stats_scale_pct_hint(),
         RowId::ExitHint => "Shows how to leave for a few seconds when a stream starts.",
         RowId::ShowAdvanced => "Adds the settings most players never need to change.",
         RowId::AdvancedChanged => "Some hidden settings differ from a fresh install. A shows them.",
