@@ -247,8 +247,13 @@ fn the_login_shell_is_the_passwd_row_s_last_field() {
 #[test]
 fn only_a_password_start_goes_through_the_login_helper() {
     let password = Secret::new("hunter2 Bärbel".into());
-    assert_eq!(login_with(Some(&password)), Some(&password));
-    assert_eq!(login_with(None), None);
+    assert_eq!(login_with(Some(&password), false), Some(&password));
+    assert_eq!(login_with(None, false), None);
+    assert_eq!(
+        login_with(Some(&password), true),
+        None,
+        "SELinux on: today's start"
+    );
 }
 
 /// The helper's end decides what a failed start through it does: a credential refusal is the
@@ -291,7 +296,7 @@ fn the_login_drop_in_runs_the_helper_and_nothing_else() {
         dropin,
         "[Service]\nUser=\nPAMName=\nExecStart=\n\
          ExecStart=/usr/libexec/punktfunk/punktfunk-seats login %i\nRestart=no\n\
-         SyslogIdentifier=seat-session\nSELinuxContext=unconfined_u:unconfined_r:unconfined_t:s0\n"
+         SyslogIdentifier=seat-session\n"
     );
     let nix = "/nix/store/0abc-punktfunk-seats-0.47.0/libexec/punktfunk/punktfunk-seats";
     assert!(session::render_login(Path::new(nix)).is_some());

@@ -1301,7 +1301,12 @@ impl LinuxBackend {
             )?;
             let browser = session::browser(box_dir);
             session::write_unit_files(seat, &passwd.home, state, &token, None, None, &browser)?;
-            let password = login_with(password);
+            let selinux = Path::new(SELINUX_ON).exists();
+            if selinux && password.is_some() {
+                tracing::info!(account = %seat.account, cause = "SELinux is on",
+                    "seat started without the wallet login");
+            }
+            let password = login_with(password, selinux);
             let dropin = password.and_then(|_| login_dropin());
             if password.is_some() && dropin.is_none() {
                 tracing::warn!(account = %seat.account, cause = "this binary's path can't go in a unit file",
@@ -1463,12 +1468,17 @@ fn keep_level(inner: Weak<Inner>) {
     }
 }
 
+/// Present while an SELinux policy is loaded.
+const SELINUX_ON: &str = "/sys/fs/selinux/enforce";
+
 /// The one choice of how a person's cold start opens their session: through the login helper,
 /// with the password the person proved the start with, so what their own login unlocks with it
-/// unlocks here too; without one, as systemd's `PAMName=` opens it. A switch for the wallet
-/// login goes here.
-fn login_with(password: Option<&Secret>) -> Option<&Secret> {
-    password
+/// unlocks here too; without one, as systemd's `PAMName=` opens it. Never with SELinux on:
+/// pam_selinux picks the session's context from the caller's, and only systemd's own `init_t`
+/// gets every user's right one, a confined `staff_u` included. A switch for the wallet login
+/// goes here.
+fn login_with(password: Option<&Secret>, selinux: bool) -> Option<&Secret> {
+    password.filter(|_| !selinux)
 }
 
 /// Removes `.0`'s login drop-in when it drops: every way out of a start that wrote one, so a

@@ -68,7 +68,8 @@ The profile's card under **Profiles** lists each device signed in to it, as **Si
   lost.
 - **The password opens the wallet.** When the typed password starts the desktop, KWallet opens
   with it on a machine whose own login opens KWallet. A desktop that a face or finger match
-  started keeps the wallet locked until they type its password in the stream.
+  started keeps the wallet locked until they type its password in the stream. So does every
+  desktop on a machine running SELinux, such as Fedora or Bazzite.
 - **Nothing is set up in the account.** Punktfunk makes no user or group and doesn't prepare their
   home; the apps the profile runs write there what they always write. **Remove** ends only the
   profile's own session. The account and its files stay.

@@ -246,10 +246,6 @@ pub(super) fn render_class() -> &'static str {
     "[Service]\nEnvironment=XDG_SESSION_CLASS=background\n"
 }
 
-/// The login helper's SELinux context, as the spike measured it on Bazzite: a plain system service
-/// may not enter a user's domain. systemd ignores the line where SELinux is off.
-const LOGIN_CONTEXT: &str = "unconfined_u:unconfined_r:unconfined_t:s0";
-
 /// The drop-in of a start through the login helper (`super::login`): the unit's main process is
 /// `helper login <account>` as root, systemd opens no PAM session itself, a helper that ends
 /// ends the start, and the journal keeps the seat's own tag. `None` for a path a unit file can't
@@ -263,7 +259,7 @@ pub(super) fn render_login(helper: &Path) -> Option<String> {
     plain.then(|| {
         format!(
             "[Service]\nUser=\nPAMName=\nExecStart=\nExecStart={path} {} %i\nRestart=no\n\
-             SyslogIdentifier=seat-session\nSELinuxContext={LOGIN_CONTEXT}\n",
+             SyslogIdentifier=seat-session\n",
             super::login::VERB
         )
     })
