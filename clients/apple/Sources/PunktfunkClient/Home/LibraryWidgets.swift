@@ -50,7 +50,7 @@ struct RunningBadge: View {
             .padding(.vertical, 3)
             .background(Color.green.opacity(0.85), in: Capsule())
             .padding(6)
-            .accessibilityLabel("Running on the host — resume")
+            .accessibilityLabel(L10n.libBadgeRunningA11y)
     }
 }
 
@@ -345,7 +345,7 @@ struct LibraryDesktopTile: View {
                     .font(.geist(m.name, .bold, relativeTo: .headline))
                     .foregroundStyle(.primary)
                     .lineLimit(1)
-                Text(nowPlaying.map { "Resume \($0)" } ?? "Desktop")
+                Text(nowPlaying.map { L10n.libResumeTitle(title: $0) } ?? String(localized: L10n.libDesktop))
                     .font(.geist(m.status, relativeTo: .caption))
                     .foregroundStyle(nowPlaying == nil ? AnyShapeStyle(.secondary) : AnyShapeStyle(Color.green))
                     .lineLimit(1)
@@ -412,10 +412,10 @@ enum PlayStatsText {
     /// `Last played 2 hr. ago · 14 hr total · 12 launches`, or nil with nothing recorded.
     static func summary(_ stats: GameStats?) -> String? {
         var parts: [String] = []
-        if let last = lastPlayed(stats) { parts.append("Last played \(last)") }
-        if let total = playTime(stats) { parts.append("\(total) total") }
+        if let last = lastPlayed(stats) { parts.append(L10n.appleLibLastPlayed(when: last)) }
+        if let total = playTime(stats) { parts.append(L10n.appleLibPlayTimeTotal(duration: total)) }
         if let count = stats?.launchCount, count > 0 {
-            parts.append(count == 1 ? "1 launch" : "\(count) launches")
+            parts.append(L10n.libLaunches(count: Int(count)))
         }
         return parts.isEmpty ? nil : parts.joined(separator: " \u{b7} ")
     }
@@ -433,11 +433,11 @@ struct LibraryNoHostView: View {
 
     var body: some View {
         ContentUnavailableView {
-            Label("No Library Yet", systemImage: "square.grid.2x2")
+            Label(L10n.libNoHostTitle, systemImage: "square.grid.2x2")
         } description: {
-            Text("Pair a host to browse its games here.")
+            Text(L10n.libNoHostBody)
         } actions: {
-            Button("Show Hosts", action: showHosts)
+            Button(L10n.libNoHostShowHosts, action: showHosts)
         }
     }
 }

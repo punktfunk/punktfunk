@@ -24,7 +24,7 @@ extension TouchTab {
     /// tab's white pill left it white.
     static var hostsLabel: some View {
         Label {
-            Text("Hosts")
+            Text(L10n.hostsTab)
         } icon: {
             Image(systemName: "desktopcomputer").symbolRenderingMode(.monochrome)
         }
