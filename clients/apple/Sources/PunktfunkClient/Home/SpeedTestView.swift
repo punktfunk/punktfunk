@@ -68,9 +68,7 @@ struct SpeedTestView: View {
                     if let report { findings(report) }
                 }
                 controls
-                Text("Measures the stream's own path to \(host.displayName): what it carries, loss "
-                    + "and jitter at a rate it holds, and what the link does. The recommendation "
-                    + "leaves about 30% headroom for encoder bursts.")
+                Text(L10n.appleSpeedtestAboutBody(host: host.displayName))
                     .font(.geist(12, relativeTo: .caption))
                     .foregroundStyle(.secondary)
             }
@@ -122,9 +120,9 @@ struct SpeedTestView: View {
 
     private var caption: String {
         switch phase {
-        case .idle: "Ready to measure the link to \(host.displayName)."
-        case .connecting: "Connecting to \(host.displayName)…"
-        case .probing: "Measuring the link. This takes a few seconds."
+        case .idle: L10n.appleSpeedtestReadyBody(host: host.displayName)
+        case .connecting: L10n.appleSpeedtestConnectingHost(host: host.displayName)
+        case .probing: String(localized: L10n.speedtestMeasuringBody)
         case .done: Self.doneCaption(report, host: host.displayName)
         case .failed(let message): message
         }
@@ -140,25 +138,39 @@ struct SpeedTestView: View {
     private var chart: some View {
         Chart {
             ForEach(trace.points, id: \.seconds) { point in
-                AreaMark(x: .value("Time", point.seconds), y: .value("Goodput", point.mbps))
+                AreaMark(
+                    x: .value(String(localized: L10n.appleSpeedtestChartTimeA11y), point.seconds),
+                    y: .value(String(localized: L10n.appleSpeedtestChartGoodputA11y), point.mbps))
                     .foregroundStyle(
                         .linearGradient(
                             colors: [Color.brand.opacity(0.35), Color.brand.opacity(0.02)],
                             startPoint: .top, endPoint: .bottom))
                     .interpolationMethod(.monotone)
-                LineMark(x: .value("Time", point.seconds), y: .value("Goodput", point.mbps))
+                LineMark(
+                    x: .value(String(localized: L10n.appleSpeedtestChartTimeA11y), point.seconds),
+                    y: .value(String(localized: L10n.appleSpeedtestChartGoodputA11y), point.mbps))
                     .foregroundStyle(Color.brand)
                     .lineStyle(StrokeStyle(lineWidth: 2))
                     .interpolationMethod(.monotone)
             }
             if case .done(let result) = phase {
-                rule("Average", kbps: Int(result.throughputKbps), color: .secondary, dash: [])
+                rule(
+                    String(localized: L10n.appleSpeedtestAverageA11y),
+                    kbps: Int(result.throughputKbps),
+                    annotation: { L10n.appleSpeedtestChartAverage(rate: $0) },
+                    color: .secondary, dash: [])
                 if let recommended = Self.recommendedKbps(result) {
-                    rule("Recommended", kbps: recommended, color: .green, dash: [6, 4])
+                    rule(
+                        String(localized: L10n.speedtestRecommended), kbps: recommended,
+                        annotation: { L10n.speedtestChartRecommended(rate: $0) },
+                        color: .green, dash: [6, 4])
                 }
             }
             if currentKbps > 0 {
-                rule("Now", kbps: currentKbps, color: .orange, dash: [2, 3])
+                rule(
+                    String(localized: L10n.appleSpeedtestNowA11y), kbps: currentKbps,
+                    annotation: { L10n.appleSpeedtestChartNow(rate: $0) },
+                    color: .orange, dash: [2, 3])
             }
         }
         .chartXScale(domain: 0...Double(probeDurationMs) / 1000)
@@ -170,16 +182,21 @@ struct SpeedTestView: View {
                 }
             }
         }
-        .chartYAxisLabel("Mbps")
+        .chartYAxisLabel("Mbit/s")
         .overlay { placeholder }
     }
 
-    private func rule(_ name: String, kbps: Int, color: Color, dash: [CGFloat]) -> some ChartContent {
+    /// `name` is the series VoiceOver reads; `annotation` words the label over the line from the
+    /// rate's text.
+    private func rule(
+        _ name: String, kbps: Int, annotation: @escaping (String) -> String, color: Color,
+        dash: [CGFloat]
+    ) -> some ChartContent {
         RuleMark(y: .value(name, Double(kbps) / 1000))
             .foregroundStyle(color)
             .lineStyle(StrokeStyle(lineWidth: 1.5, dash: dash))
             .annotation(position: .top, alignment: .leading) {
-                Text("\(name) \(Self.mbpsLabel(kbps: kbps))")
+                Text(annotation(Self.mbpsLabel(kbps: kbps)))
                     .font(.geist(11, .medium, relativeTo: .caption2))
                     .foregroundStyle(color)
             }
@@ -190,7 +207,7 @@ struct SpeedTestView: View {
             switch phase {
             case .connecting, .probing: ProgressView()
             case .idle:
-                Text("The chart fills in as the probe runs.")
+                Text(L10n.appleSpeedtestChartEmptyBody)
                     .font(.geist(13, relativeTo: .footnote))
                     .foregroundStyle(.secondary)
             case .done, .failed: EmptyView()
@@ -202,11 +219,15 @@ struct SpeedTestView: View {
         HStack(spacing: 12) {
             // The loss and jitter are the clean round's, at a rate the link holds; a host without
             // a ramp only measured a blast, and a blast's loss is not the link's.
-            tile("Loss", report?.clean.map { String(format: "%.1f %%", $0.lossPct) } ?? "—")
             tile(
-                "Jitter",
+                String(localized: L10n.speedtestLoss),
+                report?.clean.map { String(format: "%.1f %%", $0.lossPct) } ?? "—")
+            tile(
+                String(localized: L10n.appleSpeedtestJitter),
                 report?.clean.map { String(format: "%.1f ms", Double($0.jitterUs) / 1000) } ?? "—")
-            tile("Recommended", Self.recommendedKbps(result).map { Self.mbpsLabel(kbps: $0) } ?? "—")
+            tile(
+                String(localized: L10n.speedtestRecommended),
+                Self.recommendedKbps(result).map { Self.mbpsLabel(kbps: $0) } ?? "—")
         }
     }
 
@@ -224,12 +245,14 @@ struct SpeedTestView: View {
     /// The caption once there is an answer: what the link carries and, with a clean round, the
     /// rate that loss and jitter were measured at.
     static func doneCaption(_ r: PunktfunkConnection.HealthReport?, host: String) -> String {
-        guard let r else { return "Measured goodput from \(host)." }
-        let carries = r.wall
-            ? "The link to \(host) carries \(mbpsLabel(kbps: Int(r.ceilingKbps)))."
-            : "The link to \(host) carries at least \(mbpsLabel(kbps: Int(r.ceilingKbps)))."
+        guard let r else { return L10n.appleSpeedtestMeasuredFromBody(host: host) }
+        let ceiling = mbpsLabel(kbps: Int(r.ceilingKbps))
+        let carries =
+            r.wall
+            ? L10n.speedtestLinkCarriesBody(rate: ceiling)
+            : L10n.speedtestLinkCarriesAtLeastBody(rate: ceiling)
         guard let c = r.clean else { return carries }
-        return carries + " Measured at \(mbpsLabel(kbps: Int(c.rateKbps)))."
+        return carries + " " + L10n.appleSpeedtestMeasuredAtBody(rate: mbpsLabel(kbps: Int(c.rateKbps)))
     }
 
     /// A finding in words — what did not happen, then the next move — the same sentences every
@@ -240,36 +263,30 @@ struct SpeedTestView: View {
         switch f.id {
         case 1:
             return a > 0 && b > 0
-                ? "The host's port is faster than this device's (\(a) vs \(b) Mbit/s), so bursts "
-                    + "overflow the switch between them."
-                : "The host's port is faster than this device's, so bursts overflow the switch "
-                    + "between them."
+                ? L10n.findingSpeedMismatchBody(hostMbit: String(a), deviceMbit: String(b))
+                : String(localized: L10n.findingSpeedMismatchUnknownBody)
         case 2:
-            return String(
-                format: "This device drops the start of every burst (%.1f %% lost) — the adapter's "
-                    + "power saving is the usual cause.", Double(a) / 100)
+            return L10n.findingBurstIntolerantBody(loss: String(format: "%.1f", Double(a) / 100))
         case 3:
             return a > 0
-                ? "This device's own receive buffer dropped \(a) packets; the system caps it at \(b) KB."
-                : "The system caps this device's receive buffer at \(b) KB."
+                ? L10n.findingReceiveBufferBody(packets: a, capKb: String(b))
+                : L10n.findingReceiveBufferCapBody(capKb: String(b))
         case 4:
-            return String(
-                format: "Loss at a rate no link refuses (%.1f %%): check the cable, the port or the "
-                    + "adapter driver.", Double(a) / 100)
+            return L10n.findingLinkFaultBody(loss: String(format: "%.1f", Double(a) / 100))
         case 5:
-            return String(
-                format: "Something on the path buffers instead of dropping (%.0f ms spread); keep "
-                    + "the bitrate under %.0f Mbit/s.", Double(a) / 1000, Double(b) / 1000)
+            return L10n.findingQueueBuildUpBody(
+                spreadMs: String(format: "%.0f", Double(a) / 1000),
+                maxMbit: String(format: "%.0f", Double(b) / 1000))
         case 6:
             return a > 0
-                ? "The host's send buffer refused \(a) packets; raise its limit."
-                : "The host's send buffer is capped at \(b) KB; raise its limit."
+                ? L10n.findingHostSendBufferBody(packets: a)
+                : L10n.findingHostSendBufferCapBody(capKb: String(b))
         case 7:
             return a > 0
-                ? String(format: "This device is on Wi-Fi; bursts lose %.1f %%.", Double(a) / 100)
-                : "This device is on Wi-Fi."
+                ? L10n.findingWifiLossBody(loss: String(format: "%.1f", Double(a) / 100))
+                : String(localized: L10n.findingWifiBody)
         default:
-            return "Finding \(f.id)."
+            return L10n.findingUnknownBody(id: String(f.id))
         }
     }
 
@@ -301,17 +318,17 @@ struct SpeedTestView: View {
         HStack(spacing: 12) {
             switch phase {
             case .idle:
-                Button("Start Test", systemImage: "gauge.with.needle") { run() }
+                Button(L10n.appleSpeedtestStart, systemImage: "gauge.with.needle") { run() }
                     .glassProminentButtonStyle()
             case .connecting, .probing:
-                Button("Stop", role: .cancel) { stop() }
+                Button(L10n.appleSpeedtestStop, role: .cancel) { stop() }
             case .done(let result):
                 if let recommended = Self.recommendedKbps(result) {
                     applyButtons(recommended)
                 }
-                Button("Run Again") { run() }
+                Button(L10n.appleSpeedtestRunAgain) { run() }
             case .failed:
-                Button("Try Again") { run() }
+                Button(L10n.appleSpeedtestTryAgain) { run() }
                     .glassProminentButtonStyle()
             }
         }
@@ -329,21 +346,21 @@ struct SpeedTestView: View {
         let bound = presets.binding(for: host)
         let label = Self.mbpsLabel(kbps: recommended)
         if let bound {
-            Button("Apply to “\(bound.name)”") {
+            Button(L10n.speedtestApplyToPreset(preset: bound.name)) {
                 presets.setOverride(bound.id, \.bitrateKbps, recommended)
-                applied = "“\(bound.name)” streams at \(label) from the next session."
+                applied = L10n.speedtestAppliedPreset(rate: label, preset: bound.name)
             }
             .glassProminentButtonStyle()
             if bound.overrides.bitrateKbps == nil {
-                Button("Set as default (\(label))") {
+                Button(L10n.speedtestSetDefault) {
                     bitrateKbps = recommended
-                    applied = "The default bitrate is \(label) from the next session."
+                    applied = L10n.speedtestAppliedDefault(rate: label)
                 }
             }
         } else {
-            Button("Use \(label)") {
+            Button(L10n.speedtestUseRate(rate: label)) {
                 bitrateKbps = recommended
-                applied = "Streams use \(label) from the next session."
+                applied = L10n.speedtestAppliedDefault(rate: label)
             }
             .glassProminentButtonStyle()
         }
@@ -367,13 +384,12 @@ struct SpeedTestView: View {
     static func mbpsLabel(kbps: Int) -> String {
         if kbps >= 1_000_000 {
             let gbps = Double(kbps) / 1_000_000
-            return gbps == gbps.rounded()
-                ? "\(Int(gbps)) Gbps"
-                : String(format: "%.1f Gbps", gbps)
+            return L10n.commonGbits(
+                value: gbps == gbps.rounded() ? String(Int(gbps)) : String(format: "%.1f", gbps))
         }
-        return kbps % 1_000 == 0
-            ? "\(kbps / 1_000) Mbps"
-            : String(format: "%.1f Mbps", Double(kbps) / 1_000)
+        return L10n.commonMbits(
+            value: kbps % 1_000 == 0
+                ? String(kbps / 1_000) : String(format: "%.1f", Double(kbps) / 1_000))
     }
 
     // MARK: - The probe
@@ -412,9 +428,7 @@ struct SpeedTestView: View {
             } catch {
                 await MainActor.run {
                     guard !token.cancelled else { return }
-                    phase = .failed(
-                        "Couldn't reach \(address). It may be asleep, or streaming to something "
-                            + "else.")
+                    phase = .failed(L10n.appleSpeedtestUnreachableBody(address: address))
                 }
                 return
             }
@@ -431,7 +445,7 @@ struct SpeedTestView: View {
                     report = r
                     phase = .done(Self.probeResult(from: r))
                 } else {
-                    phase = .failed("The measurement never finished. The connection may have dropped.")
+                    phase = .failed(String(localized: L10n.speedtestNoResultBody))
                 }
             }
         }
