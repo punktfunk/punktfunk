@@ -426,7 +426,7 @@
 //
 // The wire is versioned by ALPN, not by this. Pin the integer in `punktfunk-ffi`
 // (`abi_version_is_pinned`). Per-bump notes live in `CHANGELOG.md`.
-#define PUNKTFUNK_ABI_VERSION 64
+#define PUNKTFUNK_ABI_VERSION 65
 
 // This client silenced its own speakers (`client::NativeClient::set_audio_muted`). The host
 // keeps sending, so a session joined to the same sink still hears the game.
@@ -3631,6 +3631,20 @@ PunktfunkStatus punktfunk_connection_profile(const PunktfunkConnection *c,
 PunktfunkStatus punktfunk_connection_launch_notice(const PunktfunkConnection *c,
                                                    char *out,
                                                    uintptr_t cap);
+#endif
+
+#if defined(PUNKTFUNK_FEATURE_QUIC)
+// [`punktfunk_connection_launch_notice`] by message: the host message the sentence is the
+// English of, then the sentence, then each placeholder as `name<TAB>value`, one per line,
+// NUL-terminated, into the caller's buffer; empty when the launch needs no words. The id is
+// empty from a host that names none. A 1200-byte buffer is ample: the wire caps the id at 64
+// bytes, the sentence at 200 and each of at most 3 placeholders at 64 + 200.
+//
+// # Safety
+// `c` is a valid connection handle; `out` is writable for `cap` bytes.
+PunktfunkStatus punktfunk_connection_launch_message(const PunktfunkConnection *c,
+                                                    char *out,
+                                                    uintptr_t cap);
 #endif
 
 #if defined(PUNKTFUNK_FEATURE_QUIC)
