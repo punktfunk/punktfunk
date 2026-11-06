@@ -3379,6 +3379,7 @@ dependencies = [
  "pf-bitstream",
  "pf-dmabuf",
  "pf-dxvadec",
+ "pf-l10n",
  "pf-libva",
  "pf-v4l2",
  "pf-v4l2dec",

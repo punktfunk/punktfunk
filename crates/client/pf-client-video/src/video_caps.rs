@@ -410,11 +410,10 @@ pub fn amd_vulkan_hdr_driver_notice(
     if !native_vulkan || !pq || v >= AMD_VULKAN_HDR_DRIVER_FLOOR {
         return None;
     }
-    Some(format!(
-        "This AMD graphics driver ({}.{}.{}.{}) can show HDR as a green picture. Update it to \
-         AMD Software 25.9.1 or newer, or switch the decoder to Direct3D 11 in Settings.",
+    Some(pf_l10n::desktop::desktop_notice_amd_hdr_driver(format!(
+        "{}.{}.{}.{}",
         v[0], v[1], v[2], v[3]
-    ))
+    )))
 }
 
 /// `PUNKTFUNK_NATIVE_SCANOUT=1`: the Wayland presenter hands pictures to the compositor as
