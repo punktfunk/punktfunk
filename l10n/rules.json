@@ -166,6 +166,11 @@
     "wizard_row_web_bind_hint": "Setup or wizard sentence over the budget; waits for the wording pass.",
     "wizard_row_password_hint": "Setup or wizard sentence over the budget; waits for the wording pass.",
     "wizard_network_body": "Setup or wizard sentence over the budget; waits for the wording pass.",
-    "setup_row_linger_hint": "Setup or wizard sentence over the budget; waits for the wording pass."
+    "setup_row_linger_hint": "Setup or wizard sentence over the budget; waits for the wording pass.",
+    "diag_niri_virtual_outputs_remedy": "Command names in backticks; Apple shows them as code. Waits for the wording pass.",
+    "diag_omarchy_updates_ok_summary": "Command names in backticks; Apple shows them as code. Waits for the wording pass.",
+    "diag_pad_audio_refused_remedy": "Command names in backticks; Apple shows them as code. Waits for the wording pass.",
+    "diag_uinput_access_ublue_remedy": "Command names in backticks; Apple shows them as code. Waits for the wording pass.",
+    "hostupdate_pacman_not_opted_in": "Command names in backticks; Apple shows them as code. Waits for the wording pass."
   }
 }
