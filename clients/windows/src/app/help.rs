@@ -7,6 +7,7 @@ use super::style::*;
 use super::{AsyncSetState, Screen};
 use pf_client_core::shortcuts;
 use pf_fluent::{Palette, Token};
+use pf_l10n::{client, common, desktop};
 use windows_reactor::*;
 
 /// A subtle key-cap chip for the shortcuts reference — the chord on a filled, bordered pill.
@@ -69,7 +70,7 @@ fn shortcuts_reference(pal: &Palette) -> Vec<View> {
 /// The Shortcuts screen: a `page`-column with a Back button to the host list, an intro card on
 /// the capture model, and the shortcuts reference.
 pub(crate) fn help_page(pal: &Palette, set_screen: &AsyncSetState<Screen>) -> View {
-    let back_btn = icon_button("arrow-left", "Back")
+    let back_btn = icon_button("arrow-left", common::common_back())
         .style(ButtonStyle::Accent)
         .on_click({
             let ss = set_screen.clone();
@@ -78,22 +79,21 @@ pub(crate) fn help_page(pal: &Palette, set_screen: &AsyncSetState<Screen>) -> Vi
 
     let intro = card(
         vstack((
-            text("During a stream")
+            text(desktop::desktop_controls_intro_title())
                 .font_size(15.0)
                 .font_weight(FontWeight::SEMI_BOLD),
-            text(
-                "Click the stream to capture your mouse and keyboard \u{2014} the shortcuts below \
-                 then work while you play. Release capture to hand the cursor back to this \
-                 computer, and click the stream again to retake it.",
-            )
-            .font_size(12.0)
-            .text_wrapping(TextWrapping::Wrap)
-            .foreground(pal.get(Token::SecondaryText)),
+            text(desktop::desktop_controls_intro_body())
+                .font_size(12.0)
+                .text_wrapping(TextWrapping::Wrap)
+                .foreground(pal.get(Token::SecondaryText)),
         ))
         .spacing(8.0),
     );
 
-    let mut children = vec![page_header("Shortcuts", back_btn), intro.into()];
+    let mut children = vec![
+        page_header(client::controls_title(), back_btn),
+        intro.into(),
+    ];
     children.extend(shortcuts_reference(pal));
     page(children)
 }
