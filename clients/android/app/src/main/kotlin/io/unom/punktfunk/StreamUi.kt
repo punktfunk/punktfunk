@@ -1,10 +1,12 @@
 package io.unom.punktfunk
 
+import android.content.Context
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import io.unom.punktfunk.kit.NativeBridge
+import io.unom.punktfunk.kit.R
 import io.unom.punktfunk.kit.SessionAccess
 
 /**
@@ -44,8 +46,8 @@ internal class StreamUi(
     /** Whether a capture is actually RUNNING, not merely wanted — from what nativeMicActive reports. */
     var micRunning by mutableStateOf(false)
 
-    /** Transient confirmation of a mic toggle, whichever control made it (null = nothing showing). */
-    var micHint by mutableStateOf<String?>(null)
+    /** Transient confirmation of a mic toggle, whichever control made it: a string resource, or null for nothing. */
+    var micHint by mutableStateOf<Int?>(null)
 
     /** A captured pad has a gyro this session's virtual controller cannot carry. Shown briefly. */
     var motionHint by mutableStateOf(false)
@@ -87,7 +89,7 @@ internal class StreamUi(
     fun mute(muted: Boolean) {
         micMuted = muted
         NativeBridge.nativeSetMicMuted(handle, muted)
-        micHint = if (muted) "Microphone muted" else "Microphone live"
+        micHint = if (muted) R.string.notice_mic_muted else R.string.notice_mic_live
     }
 
     /** Same, for this device's speakers. Never reaches the host — see [NativeBridge.nativeSetStreamMuted]. */
@@ -100,15 +102,16 @@ internal class StreamUi(
     val streamMuted: Boolean get() = audioMute and AUDIO_MUTE_LOCAL != 0
 
     /**
-     * The overlay's sentence for the mute mask, `null` while the stream is audible. Twin of the
-     * Rust `audio_mute_label`: unmuting locally must not read as sound being back.
+     * The string resource for the overlay's sentence about the mute mask, `null` while the stream
+     * is audible. Twin of the Rust `audio_mute_label`: unmuting locally must not read as sound
+     * being back.
      */
-    val audioMuteLabel: String?
+    val audioMuteLabel: Int?
         get() = when {
             audioMute and AUDIO_MUTE_HOST != 0 && audioMute and AUDIO_MUTE_LOCAL != 0 ->
-                "Muted by the host and on this device"
-            audioMute and AUDIO_MUTE_HOST != 0 -> "Muted by the host"
-            audioMute and AUDIO_MUTE_LOCAL != 0 -> "Muted on this device"
+                R.string.notice_audio_muted_host_and_device
+            audioMute and AUDIO_MUTE_HOST != 0 -> R.string.notice_audio_muted_host
+            audioMute and AUDIO_MUTE_LOCAL != 0 -> R.string.notice_audio_muted_device
             else -> null
         }
 
@@ -118,3 +121,7 @@ internal class StreamUi(
         const val AUDIO_MUTE_HOST = 2
     }
 }
+
+/** The Access chip's time left in the app's language: "1 h 58 m", "12 m", "45 s". */
+internal fun Context.accessRemaining(secs: Int): String =
+    SessionAccess.remaining(secs).let { getString(it.message, *it.args.toTypedArray()) }

@@ -14,6 +14,8 @@ import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.app.ServiceCompat
+import io.unom.punktfunk.kit.R
+import io.unom.punktfunk.R as AppR
 
 private const val TAG = "pf-keepalive"
 
@@ -163,19 +165,23 @@ class StreamKeepAliveService : Service() {
             )
             val away = state.deadlineWallMs != null
             return NotificationCompat.Builder(context, CHANNEL_ID)
-                .setSmallIcon(R.drawable.ic_stat_stream)
+                .setSmallIcon(AppR.drawable.ic_stat_stream)
                 .setContentTitle(state.title ?: state.hostName)
                 .setContentText(
                     when {
-                        away -> "Streaming in the background"
+                        away -> context.getString(R.string.android_keepalive_background)
                         state.modeLine.isNotEmpty() -> state.modeLine
-                        else -> "Streaming"
+                        else -> context.getString(R.string.android_keepalive_streaming)
                     },
                 )
                 // The host name becomes a line of its own only once the title has taken the first.
                 .setSubText(if (state.title != null) state.hostName else null)
                 .setContentIntent(open)
-                .addAction(0, if (away) "End now" else "End stream", end)
+                .addAction(
+                    0,
+                    context.getString(if (away) R.string.android_keepalive_end_now else R.string.android_keepalive_end_stream),
+                    end,
+                )
                 .setWhen(state.deadlineWallMs ?: state.startedAtWallMs)
                 .setUsesChronometer(true)
                 .setChronometerCountDown(away)
@@ -187,18 +193,30 @@ class StreamKeepAliveService : Service() {
                 .build()
         }
 
-        /** The one channel, created on demand. Low importance: ongoing, never an interruption. */
+        /**
+         * The one channel, created on demand. Low importance: ongoing, never an interruption.
+         * Declaring an existing channel again renames it and takes the new description, and
+         * nothing else, so every call words it in the app's current language.
+         */
         private fun channel(context: Context) {
             val mgr = context.getSystemService(NotificationManager::class.java) ?: return
-            if (mgr.getNotificationChannel(CHANNEL_ID) != null) return
             mgr.createNotificationChannel(
-                NotificationChannel(CHANNEL_ID, "Streaming", NotificationManager.IMPORTANCE_LOW)
-                    .apply {
-                        description =
-                            "Shows the running session and keeps it alive in the background."
-                        setShowBadge(false)
-                    },
+                NotificationChannel(
+                    CHANNEL_ID, context.getString(R.string.android_keepalive_channel), NotificationManager.IMPORTANCE_LOW,
+                ).apply {
+                    description = context.getString(R.string.android_keepalive_channel_desc)
+                    setShowBadge(false)
+                },
             )
+        }
+
+        /**
+         * The app's language changed: a channel that exists takes the new name and description.
+         * An app that never held a session has none, and none is made.
+         */
+        fun renameChannel(context: Context) {
+            val mgr = context.getSystemService(NotificationManager::class.java) ?: return
+            if (mgr.getNotificationChannel(CHANNEL_ID) != null) channel(context)
         }
     }
 }

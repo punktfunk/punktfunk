@@ -21,6 +21,7 @@ import androidx.lifecycle.LifecycleOwner
 import io.unom.punktfunk.kit.Gamepad
 import io.unom.punktfunk.kit.GamepadRouter
 import io.unom.punktfunk.kit.NativeBridge
+import io.unom.punktfunk.kit.R
 import io.unom.punktfunk.kit.SessionAccess
 import io.unom.punktfunk.kit.SessionEndReason
 import io.unom.punktfunk.kit.library.LibraryClient
@@ -28,6 +29,7 @@ import io.unom.punktfunk.kit.library.RunningGame
 import io.unom.punktfunk.kit.security.IdentityLoad
 import io.unom.punktfunk.kit.security.IdentityStore
 import io.unom.punktfunk.kit.security.KnownHost
+import io.unom.punktfunk.R as AppR
 import io.unom.punktfunk.models.ActiveSession
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -201,9 +203,9 @@ internal fun SessionWatchEffect(
                         Toast.makeText(
                             context,
                             if (mins <= 1) {
-                                "Access expires in about a minute."
+                                context.getString(R.string.grant_ends_soon)
                             } else {
-                                "Access expires in about $mins minutes."
+                                context.getString(R.string.grant_ends_in, context.accessRemaining(ui.accessRemaining))
                             },
                             Toast.LENGTH_LONG,
                         ).show()
@@ -226,16 +228,16 @@ internal fun SessionWatchEffect(
                     ui.accessRemaining in 1..75 ->
                         Toast.makeText(
                             context,
-                            "Your access to this host has expired.",
+                            context.getString(R.string.android_grant_expired),
                             Toast.LENGTH_LONG,
                         ).show()
                     // The redial says what happens next; this only says why the picture went.
                     reason == SessionEndReason.LOST ->
-                        Toast.makeText(context, "Lost the connection — reconnecting.", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(context, context.getString(R.string.ended_lost_reconnecting), Toast.LENGTH_SHORT).show()
                     reason == SessionEndReason.HOST_ERROR ->
                         Toast.makeText(
                             context,
-                            "The host ended the session with an error.",
+                            context.getString(R.string.ended_host_error),
                             Toast.LENGTH_LONG,
                         ).show()
                     // Deliberate endings — the player quit the game, the host was stopped, or we
@@ -317,7 +319,7 @@ internal fun KeepAliveEffects(
     val startedAt = remember(handle) { System.currentTimeMillis() }
     // What the notification says. All of it is fixed at the handshake, so it is read once.
     val noteHost = host?.name?.takeIf { it.isNotEmpty() }
-        ?: context.getString(R.string.app_name)
+        ?: context.getString(AppR.string.app_name)
     val noteTitle = session.launchHold?.game?.title
     val modeLine = remember(handle) {
         val mode = NativeBridge.nativeVideoSize(handle)

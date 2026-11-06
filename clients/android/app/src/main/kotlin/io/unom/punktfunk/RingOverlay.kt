@@ -233,10 +233,10 @@ class RingActions(
     val padMouseTarget: () -> Int,
     val padMouseMode: () -> Int,
     val cyclePadMouse: () -> Unit,
-    /** This device's speakers: the live mute mask (`StreamUi.AUDIO_MUTE_*`), the sentence for it,
-     *  and the local-only toggle. */
+    /** This device's speakers: the live mute mask (`StreamUi.AUDIO_MUTE_*`), the string resource
+     *  of the sentence for it, and the local-only toggle. */
     val audioMute: () -> Int,
-    val audioMuteLabel: () -> String?,
+    val audioMuteLabel: () -> Int?,
     val toggleStreamMute: () -> Unit,
     /** `[w, h, hz]` as last requested (Android has no live read-back of the negotiated mode). */
     val currentMode: () -> IntArray,
@@ -392,7 +392,7 @@ internal fun spec(slot: SlotId, cfg: OverlayConfig, a: RingActions, ctx: Context
         "stream_mute", ctx.getString(R.string.ring_stream_mute),
         if (a.audioMute() != 0) Icons.AutoMirrored.Filled.VolumeOff else Icons.AutoMirrored.Filled.VolumeUp,
         // The state describes the mute: "Off" while audible, else whose mute it is.
-        toggle = true, state = a.audioMuteLabel() ?: ctx.getString(R.string.ring_stream_mute_off),
+        toggle = true, state = ctx.getString(a.audioMuteLabel() ?: R.string.ring_stream_mute_off),
     )
     // The wire id predates the three layouts; every client's ring stores it.
     SlotId.SwapScreens -> SlotSpec(

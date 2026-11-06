@@ -1,5 +1,6 @@
 package io.unom.punktfunk.kit
 
+import android.content.Context
 import android.view.InputDevice
 import android.view.KeyEvent
 import android.view.MotionEvent
@@ -110,12 +111,12 @@ object Gamepad {
     const val PREF_SWITCH2PRO = 17
     const val PREF_SWITCH2GAMECUBE = 18
 
-    /** One pad type: its wire byte, the console's stored spelling, and the label people see. */
-    class Pref(val wire: Int, val name: String, val label: String)
+    /** One pad type: its wire byte, the console's stored spelling, and its brand name; Automatic has none. */
+    class Pref(val wire: Int, val name: String, val brand: String?)
 
     /** Every pad type, in wire order — the one table the pickers and labels draw from. */
     val PREFS: List<Pref> = listOf(
-        Pref(PREF_AUTO, "auto", "Automatic"),
+        Pref(PREF_AUTO, "auto", null),
         Pref(PREF_XBOX360, "xbox360", "Xbox 360"),
         Pref(PREF_DUALSENSE, "dualsense", "DualSense"),
         Pref(PREF_XBOXONE, "xboxone", "Xbox One"),
@@ -137,7 +138,8 @@ object Gamepad {
     )
 
     /** The label for a wire byte; an unknown one reads as Automatic. */
-    fun prefLabel(pref: Int): String = PREFS.getOrNull(pref)?.label ?: "Automatic"
+    fun prefLabel(context: Context, pref: Int): String =
+        PREFS.getOrNull(pref)?.brand ?: context.getString(R.string.player_gamepad_auto)
 
     // USB vendor ids of the controllers we can identify by VID/PID.
     private const val VID_SONY = 0x054C
