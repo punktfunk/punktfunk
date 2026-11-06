@@ -517,13 +517,26 @@ pub(super) fn overlay_scale(display_scale: f32, pref: f32) -> f32 {
 /// How long an access toast holds the pill slot. The chip keeps the standing truth.
 pub(super) const ACCESS_NOTICE_S: u64 = 6;
 
-/// Capture hints (`ui_stream` parity — the words the user reads while released).
-pub(super) const HINT_KEYBOARD: &str =
-    "Click the stream to capture input · Ctrl+Alt+Shift+Q releases · \
-     Ctrl+Alt+Shift+M mouse mode · Ctrl+Alt+Shift+D disconnects · Ctrl+Alt+Shift+S stats";
-pub(super) const HINT_WITH_PAD: &str =
-    "Click the stream to capture input · Ctrl+Alt+Shift+Q releases · \
-     Ctrl+Alt+Shift+D disconnects · hold L1 + R1 + Start + Select to leave";
+/// Capture hint (`ui_stream` parity — the words the user reads while released): one field
+/// per chord `chord_of` binds, the pad's leave chord in place of mouse mode and stats.
+pub(super) fn capture_hint(pad: bool) -> String {
+    use pf_l10n::desktop as d;
+    let mut fields = vec![
+        pf_l10n::client::notice_capture_click().to_string(),
+        d::desktop_capture_release("Ctrl+Alt+Shift+Q"),
+    ];
+    if pad {
+        fields.push(d::desktop_capture_disconnect("Ctrl+Alt+Shift+D"));
+        fields.push(pf_l10n::client::notice_exit_hold(
+            "L1 + R1 + Start + Select",
+        ));
+    } else {
+        fields.push(d::desktop_capture_mouse_mode("Ctrl+Alt+Shift+M"));
+        fields.push(d::desktop_capture_disconnect("Ctrl+Alt+Shift+D"));
+        fields.push(d::desktop_capture_stats("Ctrl+Alt+Shift+S"));
+    }
+    fields.join(" · ")
+}
 
 #[cfg(test)]
 mod tests {

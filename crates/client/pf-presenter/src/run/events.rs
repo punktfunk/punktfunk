@@ -419,9 +419,7 @@ impl Shell {
                      dropping the leaked positions"
                 );
                 st.session_notice = Some((
-                    "Steam Input is sending the touchscreen as a mouse — \
-                     pick the Punktfunk controller layout for touch"
-                        .into(),
+                    pf_l10n::desktop::desktop_notice_steam_touch_mouse().into(),
                     Instant::now(),
                 ));
             }

@@ -635,7 +635,7 @@ impl Shell {
             && c.host_caps2() & punktfunk_core::quic::HOST_CAP2_TOUCH == 0
         {
             st.session_notice = Some((
-                "This host does not accept touch — using the trackpad model".into(),
+                pf_l10n::client::notice_touch_unsupported().into(),
                 Instant::now(),
             ));
             TouchMode::Trackpad
