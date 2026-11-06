@@ -3,12 +3,14 @@ import { afterEach, expect, test } from "bun:test";
 import type { HostInfo } from "@/api/gen/model/hostInfo";
 import type { SeatCheck } from "@/api/gen/model/seatCheck";
 import type { SeatPublic } from "@/api/gen/model/seatPublic";
+import type { UpdateResultInfo } from "@/api/gen/model/updateResultInfo";
 import { baseLocale, overwriteGetLocale } from "@/paraglide/runtime";
 import {
 	doorUnavailable,
 	hostMessage,
 	seatCheckText,
 	seatDetail,
+	updateError,
 } from "./host-messages";
 
 overwriteGetLocale(() => baseLocale);
@@ -81,4 +83,24 @@ test("the door's reason is an API error message", () => {
 		"Only words.",
 	);
 	expect(doorUnavailable(door({}))).toBeUndefined();
+});
+
+test("a failed update fills its message from the result's own versions", () => {
+	const result = (over: Partial<UpdateResultInfo>): UpdateResultInfo =>
+		({ ok: false, from: "0.46.0", to: "0.47.0", ...over }) as UpdateResultInfo;
+	const rolledBack = result({
+		error: "The host restarted still running 0.46.0 (expected 0.47.0).",
+		error_code: "rolled_back",
+	});
+	expect(updateError(rolledBack)).toBe(
+		"The host restarted still running 0.46.0 (expected 0.47.0) — the installer aborted or rolled back; see its log",
+	);
+	overwriteGetLocale(() => "de");
+	expect(updateError(rolledBack)).toContain(
+		"läuft noch mit 0.46.0 (erwartet: 0.47.0)",
+	);
+	expect(updateError(result({ error: "Disk full." }))).toBe("Disk full.");
+	expect(updateError(result({ error: "Odd.", error_code: "from_newer" }))).toBe(
+		"Odd.",
+	);
 });

@@ -1,6 +1,7 @@
 import type { HostInfo } from "@/api/gen/model/hostInfo";
 import type { SeatCheck } from "@/api/gen/model/seatCheck";
 import type { SeatPublic } from "@/api/gen/model/seatPublic";
+import type { UpdateResultInfo } from "@/api/gen/model/updateResultInfo";
 import { m } from "@/paraglide/messages";
 
 /** The values of a host message's placeholders, by name. */
@@ -67,3 +68,13 @@ export const doorUnavailable = (h: HostInfo): string | null | undefined =>
 		h.door_unavailable_params,
 		h.door_unavailable,
 	);
+
+/** Why the last update failed: the host message `hostupdate_<error_code>`. */
+export function updateError(r: UpdateResultInfo): string | null | undefined {
+	const params = { ...r.error_params, from: r.from, to: r.to };
+	return hostText(
+		r.error_code && `hostupdate_${r.error_code}`,
+		params,
+		r.error,
+	);
+}
