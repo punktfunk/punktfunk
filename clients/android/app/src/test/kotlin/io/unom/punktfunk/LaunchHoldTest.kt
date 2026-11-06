@@ -1,5 +1,7 @@
 package io.unom.punktfunk
 
+import io.unom.punktfunk.kit.R
+import io.unom.punktfunk.kit.say
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -37,18 +39,9 @@ class LaunchHoldTest {
 
     @Test
     fun eachGivingUpExitSaysWhatDidNotHappen() {
-        assertEquals(
-            "The host didn't start Quail — nothing is running for it.",
-            launchGaveUp("Quail", null, 15.0),
-        )
-        assertEquals(
-            "Quail is still starting after 2 minutes.",
-            launchGaveUp("Quail", "launching", 120.0),
-        )
+        assertEquals(say(R.string.lib_hold_gave_up_not_started, "Quail"), launchGaveUp("Quail", null, 15.0))
+        assertEquals(say(R.string.lib_hold_gave_up_slow, "Quail"), launchGaveUp("Quail", "launching", 120.0))
         // Straight away: the host un-launches the record the moment it sees this.
-        assertEquals(
-            "Quail closed right after starting.",
-            launchGaveUp("Quail", "exited", 0.4),
-        )
+        assertEquals(say(R.string.lib_hold_gave_up_exited, "Quail"), launchGaveUp("Quail", "exited", 0.4))
     }
 }

@@ -64,6 +64,7 @@ import androidx.compose.ui.layout.onGloballyPositioned
 import android.content.res.Configuration
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.LiveRegionMode
@@ -79,7 +80,11 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil3.ImageLoader
+import androidx.annotation.StringRes
 import io.unom.punktfunk.components.launcherIcon
+import io.unom.punktfunk.kit.R
+import io.unom.punktfunk.kit.Say
+import io.unom.punktfunk.kit.say
 import io.unom.punktfunk.kit.link.DeepLinks
 import io.unom.punktfunk.kit.library.Download
 import io.unom.punktfunk.kit.library.GameEntry
@@ -120,11 +125,11 @@ import kotlinx.coroutines.withContext
  * "checking" while the host is merely asked, and "last known library" once it isn't going to
  * become current. The same copy as `pf_console_ui::Stale`.
  */
-private enum class Stale(val note: String?) {
+private enum class Stale(@StringRes val note: Int?) {
     No(null),
-    Checking("Last known library — checking the host…"),
-    Waking("Last known library — waking the host…"),
-    Offline("Last known library — the host didn't answer"),
+    Checking(R.string.lib_stale_checking),
+    Waking(R.string.lib_stale_waking),
+    Offline(R.string.lib_stale_offline),
 }
 
 private sealed class LibState {
@@ -158,27 +163,20 @@ private sealed class LibState {
          * D4's two sections from interleaving. `sortedBy` is stable, so the host's own title order
          * survives inside each of the four resulting bands.
          */
-        val ordered: List<GameEntry>
-            get() {
-                // …and the desktop tile leads all of it, so streaming the host itself is one tap
-                // rather than a menu — and a host with no plugins still has something to tap.
-                // Model state only: it is never fetched and never cached.
-                val all = listOf(desktopTile) + games
-                if (running.isEmpty()) return all
-                return all.sortedBy {
-                    if (it.isDesktop) -1
-                    else (if (it.isLauncher) 0 else 2) + (if (running[it.id] != null) 0 else 1)
-                }
+        fun ordered(desktop: GameEntry): List<GameEntry> {
+            // …and the desktop tile leads all of it, so streaming the host itself is one tap
+            // rather than a menu — and a host with no plugins still has something to tap.
+            // Model state only: it is never fetched and never cached.
+            val all = listOf(desktop) + games
+            if (running.isEmpty()) return all
+            return all.sortedBy {
+                if (it.isDesktop) -1
+                else (if (it.isLauncher) 0 else 2) + (if (running[it.id] != null) 0 else 1)
             }
-
-        /** Names what the tap does, so it does not read "Desktop" while tapping it resumes. */
-        private val desktopTile: GameEntry
-            get() = GameEntry.desktop(
-                running.values.firstOrNull()?.let { "Resume ${it.title}" } ?: "Desktop",
-            )
+        }
     }
 
-    data class Message(val text: String) : LibState() // unauthorized / empty / error
+    data class Message(val text: Say) : LibState() // unauthorized / empty / error
 }
 
 /** A `/status` read on the shelf: what is up, what downloads, and what this device may do. */
@@ -265,11 +263,10 @@ fun LibraryScreen(
 
     // A pinned card's shelf says so, in the card's own `host · preset` shape: what a launch here
     // will use is a property of the shelf, not something to remember from the tile two screens back.
-    val title = if (pinnedPresetId != null && preset != null) {
-        "${host.name} · ${preset.name} — Library"
-    } else {
-        "${host.name} — Library"
-    }
+    val title = stringResource(
+        R.string.lib_title_host,
+        if (pinnedPresetId != null && preset != null) "${host.name} · ${preset.name}" else host.name,
+    )
 
     // Dial through [HostServices.dial] on the pinned trust and the profile's unlock, booting
     // straight into this title (the host resolves `launch` = its library id). A grid tap and A on a
@@ -296,7 +293,7 @@ fun LibraryScreen(
             if (choice !is ProfileChoice.Dial) {
                 launching = false
                 if (choice is ProfileChoice.Refused) {
-                    Toast.makeText(context, choice.line, Toast.LENGTH_LONG).show()
+                    Toast.makeText(context, choice.line.words(context.resources), Toast.LENGTH_LONG).show()
                 }
                 return@launch
             }
@@ -348,7 +345,9 @@ fun LibraryScreen(
                 }
                 Toast.makeText(
                     context,
-                    dialed.said.ifEmpty { ConnectErrors.connectMessage(token, requestAccess = false) },
+                    dialed.said.ifEmpty {
+                        context.getString(ConnectErrors.connectMessage(token, requestAccess = false))
+                    },
                     Toast.LENGTH_LONG,
                 ).show()
             }
@@ -360,7 +359,7 @@ fun LibraryScreen(
     // `launching` guards the second pass a state change would otherwise cause.
     val ready = (state as? LibState.Ready)?.identity
     LaunchedEffect(autoStream, ready) {
-        if (autoStream && ready != null) launch(ready, GameEntry.desktop())
+        if (autoStream && ready != null) launch(ready, GameEntry.desktop(context.getString(R.string.lib_desktop)))
     }
 
     // One TITLE's link handed out (design/client-deep-links.md §4/§5): the host card's form plus
@@ -370,17 +369,17 @@ fun LibraryScreen(
     fun linkAction(game: GameEntry, action: LinkAction) {
         val url = DeepLinks.forHost(host, launch = game.id, preset = pinnedPresetId).toUrl()
         val name = if (game.isDesktop) host.name else game.title
-        val say = { text: String -> Toast.makeText(context, text, Toast.LENGTH_SHORT).show() }
+        val toast = { text: String -> Toast.makeText(context, text, Toast.LENGTH_SHORT).show() }
         when (action) {
-            LinkAction.Copy -> linkCopyMessage(putLinkOnClipboard(context, url))?.let(say)
-            LinkAction.LauncherFile -> (context as? MainActivity)?.saveLauncherFile(name, url, say)
+            LinkAction.Copy -> linkCopyMessage(putLinkOnClipboard(context, url))?.let { toast(context.getString(it)) }
+            LinkAction.LauncherFile -> (context as? MainActivity)?.saveLauncherFile(name, url, toast)
             LinkAction.HomeScreen -> {
                 val identity = (state as? LibState.Ready)?.identity
                 val key = shortcutId(host.id, game.id.takeUnless { game.isDesktop }, pinnedPresetId)
                 scope.launch {
                     withContext(Dispatchers.IO) {
                         pinTitleShortcut(context, identity, host, game.art.posterCandidates, url, name, key)
-                    }?.let(say)
+                    }?.let(toast)
                 }
             }
         }
@@ -409,7 +408,7 @@ fun LibraryScreen(
             if (outcome.gameGone) {
                 (state as? LibState.Ready)?.let { state = it.copy(running = it.running - game.id) }
             }
-            Toast.makeText(context, outcome.notice(game.title), Toast.LENGTH_SHORT).show()
+            Toast.makeText(context, outcome.notice(game.title).words(context.resources), Toast.LENGTH_SHORT).show()
         }
     }
     // A title's files: the action, the host's answer as a toast, then `/status` again. A removal
@@ -445,7 +444,11 @@ fun LibraryScreen(
                     )
                 }
             }
-            Toast.makeText(context, outcome.notice(action, game.title), Toast.LENGTH_SHORT).show()
+            Toast.makeText(
+                context,
+                outcome.notice(action, game.title).words(context.resources),
+                Toast.LENGTH_SHORT,
+            ).show()
             refreshStatus()
         }
     }
@@ -459,29 +462,29 @@ fun LibraryScreen(
     }
     removeAsk?.let { game ->
         PunktfunkDialog(
-            title = "Remove ${game.title}?",
+            title = stringResource(R.string.lib_remove_confirm_title, game.title),
             onDismiss = { removeAsk = null },
             actions = listOf(
-                DialogAction("Remove download", primary = true) {
+                DialogAction(stringResource(R.string.lib_download_remove), primary = true) {
                     removeAsk = null
                     changeInstall(game, InstallAction.Remove)
                 },
-                DialogAction("Cancel") { removeAsk = null },
+                DialogAction(stringResource(R.string.common_cancel)) { removeAsk = null },
             ),
-        ) { PromptText("Saves stay on the host.") }
+        ) { PromptText(stringResource(R.string.lib_remove_confirm_body)) }
     }
     endAsk?.let { game ->
         PunktfunkDialog(
-            title = "End ${game.title}?",
+            title = stringResource(R.string.lib_end_game_confirm_title, game.title),
             onDismiss = { endAsk = null },
             actions = listOf(
-                DialogAction("End game", primary = true) {
+                DialogAction(stringResource(R.string.lib_end_game), primary = true) {
                     endAsk = null
                     endGame(game)
                 },
-                DialogAction("Cancel") { endAsk = null },
+                DialogAction(stringResource(R.string.common_cancel)) { endAsk = null },
             ),
-        ) { PromptText("Unsaved progress in the game is lost.") }
+        ) { PromptText(stringResource(R.string.lib_end_game_confirm_body)) }
     }
 
     TouchLibrary(
@@ -523,7 +526,7 @@ private suspend fun loadLibrary(
     val cache = LibraryCache.standard(context.cacheDir)
     val key = LibraryCache.keyFor(host, host.fpHex)
     val (identity, loader) = prepareLoader(context, host) ?: run {
-        set(LibState.Message("Identity unavailable — re-pair may be required"))
+        set(LibState.Message(say(R.string.android_lib_identity_unavailable)))
         return
     }
     val cached = withContext(Dispatchers.IO) { cache.load(key)?.games }?.takeIf { it.isNotEmpty() }
@@ -552,7 +555,7 @@ private suspend fun loadLibrary(
     }
     when (res) {
         is LibraryResult.Ok -> if (res.games.isEmpty()) {
-            set(LibState.Message("No games found on this host."))
+            set(LibState.Message(say(R.string.lib_empty)))
         } else {
             set(LibState.Ready(res.games, loader, identity))
             // Remembered AFTER it is on screen: the disk write is not on the path to a shelf.
@@ -579,9 +582,9 @@ private suspend fun loadLibrary(
                 // title to carry the frame, so it supplies one (SkiaConsole passes its own).
                 LibState.Message(
                     when (res) {
-                        is LibraryResult.Unauthorized -> "Couldn't load the library — ${res.message}"
-                        is LibraryResult.Error -> "Couldn't load the library — ${res.message}"
-                        else -> "Couldn't load the library"
+                        is LibraryResult.Unauthorized -> say(R.string.lib_load_failed_why, res.message)
+                        is LibraryResult.Error -> say(R.string.lib_load_failed_why, res.message)
+                        else -> say(R.string.lib_load_failed)
                     },
                 )
             },
@@ -632,7 +635,7 @@ private fun TouchLibrary(
                 modifier = Modifier.fillMaxWidth().padding(start = 4.dp, end = 4.dp, top = 8.dp),
             ) {
                 IconButton(onClick = onBack) {
-                    Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                    Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.common_back))
                 }
                 Text(
                     title,
@@ -644,7 +647,7 @@ private fun TouchLibrary(
                 // A shelf that failed to load is otherwise a dead end you have to back out of and
                 // re-enter; every other client's library page has had this from the start.
                 IconButton(onClick = onReload, enabled = state !is LibState.Loading) {
-                    Icon(Icons.Filled.Refresh, contentDescription = "Reload")
+                    Icon(Icons.Filled.Refresh, contentDescription = stringResource(R.string.lib_reload))
                 }
             }
             // Says the titles below are remembered rather than observed — shown only while that is
@@ -652,7 +655,7 @@ private fun TouchLibrary(
             // is still waking is the case this whole path exists to serve.
             (state as? LibState.Ready)?.stale?.note?.let {
                 Text(
-                    it,
+                    stringResource(it),
                     style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier
@@ -670,7 +673,7 @@ private fun TouchLibrary(
                         verticalArrangement = Arrangement.spacedBy(14.dp),
                     ) {
                         CircularProgressIndicator()
-                        Text("Loading library…", style = MaterialTheme.typography.bodyLarge)
+                        Text(stringResource(R.string.lib_loading), style = MaterialTheme.typography.bodyLarge)
                     }
                 }
                 is LibState.Message -> Box(
@@ -678,7 +681,7 @@ private fun TouchLibrary(
                     contentAlignment = Alignment.Center,
                 ) {
                     Text(
-                        state.text,
+                        state.text.asString(),
                         style = MaterialTheme.typography.bodyLarge,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         textAlign = TextAlign.Center,
@@ -686,7 +689,13 @@ private fun TouchLibrary(
                     )
                 }
                 is LibState.Ready -> TouchGrid(
-                    games = state.ordered,
+                    games = state.ordered(
+                        GameEntry.desktop(
+                            state.running.values.firstOrNull()
+                                ?.let { stringResource(R.string.lib_resume_title, it.title) }
+                                ?: stringResource(R.string.lib_desktop),
+                        ),
+                    ),
                     loader = state.loader,
                     onLaunch = { game -> onLaunch(state.identity, game) },
                     onLink = onLink,
@@ -710,7 +719,11 @@ private fun TouchLibrary(
                     verticalArrangement = Arrangement.spacedBy(14.dp),
                 ) {
                     CircularProgressIndicator(color = Color.White)
-                    Text("Launching…", color = Color.White, style = MaterialTheme.typography.bodyLarge)
+                    Text(
+                        stringResource(R.string.lib_launching),
+                        color = Color.White,
+                        style = MaterialTheme.typography.bodyLarge,
+                    )
                 }
             }
         }
@@ -778,7 +791,7 @@ internal fun TouchGrid(
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
         if (launchers.isNotEmpty()) {
-            if (both) item(span = { GridItemSpan(maxLineSpan) }) { TouchGroupHeading("Launchers") }
+            if (both) item(span = { GridItemSpan(maxLineSpan) }) { TouchGroupHeading(stringResource(R.string.lib_section_launchers)) }
             items(launchers, key = { "launcher-${it.id}" }) {
                 TouchPoster(
                     it, loader, onLaunch, onLink, running[it.id] != null,
@@ -788,7 +801,7 @@ internal fun TouchGrid(
             }
         }
         if (titles.isNotEmpty()) {
-            if (both) item(span = { GridItemSpan(maxLineSpan) }) { TouchGroupHeading("Games") }
+            if (both) item(span = { GridItemSpan(maxLineSpan) }) { TouchGroupHeading(stringResource(R.string.lib_section_games)) }
             items(titles, key = { "game-${it.id}" }) {
                 TouchPoster(
                     it, loader, onLaunch, onLink, running[it.id] != null,
@@ -859,12 +872,17 @@ private fun TouchPoster(
     val canPin = remember { canPinShortcuts(context) }
     val files = InstallAction.forTitle(game.install, download, grants)
     val badge = TileBadge.forTitle(game.install, download)
+    val store = game.storeLabel.asString()
+    val storeDescription = stringResource(
+        if (game.isLauncher) R.string.lib_store_opens_a11y else R.string.lib_store_from_a11y,
+        store,
+    )
     val shape = MaterialTheme.shapes.medium
     Box {
         Column(
             Modifier.combinedClickable(
-                onClickLabel = "Launch ${game.title}",
-                onLongClickLabel = "More options for ${game.title}",
+                onClickLabel = stringResource(R.string.lib_title_launch_a11y, game.title),
+                onLongClickLabel = stringResource(R.string.lib_title_more_a11y, game.title),
                 onClick = { onLaunch(game) },
                 onLongClick = { menu = true },
             ),
@@ -892,7 +910,7 @@ private fun TouchPoster(
                 }
                 Box(Modifier.fillMaxSize().padding(6.dp), contentAlignment = Alignment.TopStart) {
                     Text(
-                        game.storeLabel,
+                        store,
                         style = MaterialTheme.typography.labelSmall,
                         // A launcher's badge is brand-filled (design D4); a game's sits on a dark
                         // wash over its own art, where the theme's own ink would be a coin toss.
@@ -902,13 +920,7 @@ private fun TouchPoster(
                             Color.White
                         },
                         modifier = Modifier
-                            .semantics {
-                                contentDescription = if (game.isLauncher) {
-                                    "Opens ${game.storeLabel}"
-                                } else {
-                                    "From ${game.storeLabel}"
-                                }
-                            }
+                            .semantics { contentDescription = storeDescription }
                             .clip(PillShape)
                             .background(
                                 if (game.isLauncher) {
@@ -932,7 +944,7 @@ private fun TouchPoster(
         }
         DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
             DropdownMenuItem(
-                text = { Text("Copy link") },
+                text = { Text(stringResource(R.string.hostcard_copy_link)) },
                 onClick = {
                     menu = false
                     onLink(game, LinkAction.Copy)
@@ -940,7 +952,7 @@ private fun TouchPoster(
             )
             if (canPin) {
                 DropdownMenuItem(
-                    text = { Text("Add to home screen") },
+                    text = { Text(stringResource(R.string.link_home_screen)) },
                     onClick = {
                         menu = false
                         onLink(game, LinkAction.HomeScreen)
@@ -948,7 +960,7 @@ private fun TouchPoster(
                 )
             }
             DropdownMenuItem(
-                text = { Text("Save launcher file\u2026") },
+                text = { Text(stringResource(R.string.link_launcher_file)) },
                 onClick = {
                     menu = false
                     onLink(game, LinkAction.LauncherFile)
@@ -956,7 +968,7 @@ private fun TouchPoster(
             )
             if (files != null) {
                 DropdownMenuItem(
-                    text = { Text(files.label(game.install)) },
+                    text = { Text(files.label(game.install).asString()) },
                     onClick = {
                         menu = false
                         onFiles(game, files)
@@ -965,7 +977,7 @@ private fun TouchPoster(
             }
             if (endable) {
                 DropdownMenuItem(
-                    text = { Text("End game") },
+                    text = { Text(stringResource(R.string.lib_end_game)) },
                     onClick = {
                         menu = false
                         onEndGame(game)
@@ -997,7 +1009,7 @@ private fun FilesBadge(badge: TileBadge) {
             modifier = Modifier.size(12.dp),
         )
         Text(
-            badge.text,
+            badge.text.asString(),
             style = MaterialTheme.typography.labelSmall,
             fontWeight = FontWeight.SemiBold,
             color = Color.White,
@@ -1036,7 +1048,7 @@ private fun TouchPosterArt(game: GameEntry, loader: ImageLoader) {
             )
         } else {
             Text(
-                if (game.isLauncher) game.storeLabel else game.title,
+                if (game.isLauncher) game.storeLabel.asString() else game.title,
                 style = MaterialTheme.typography.titleSmall,
                 fontWeight = FontWeight.SemiBold,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -1049,10 +1061,11 @@ private fun TouchPosterArt(game: GameEntry, loader: ImageLoader) {
 
 @Composable
 private fun RunningBadge(compact: Boolean = false) {
+    val description = stringResource(R.string.lib_badge_running_a11y)
     Row(
         verticalAlignment = Alignment.CenterVertically,
         modifier = Modifier
-            .semantics { contentDescription = "Running on the host \u2014 resume" }
+            .semantics { contentDescription = description }
             .clip(PillShape)
             .background(RESUME_GREEN)
             .padding(horizontal = if (compact) 6.dp else 8.dp, vertical = 3.dp),
@@ -1069,7 +1082,7 @@ private fun RunningBadge(compact: Boolean = false) {
         // the word.
         if (!compact) {
             Text(
-                "Resume",
+                stringResource(R.string.lib_badge_resume),
                 style = MaterialTheme.typography.labelSmall,
                 fontWeight = FontWeight.SemiBold,
                 color = RESUME_INK,
