@@ -1,6 +1,6 @@
 //! Reads an l10n directory: `locales.json`, `rules.json` and `messages/<part>/<lang>.json`,
 //! parsed to the subset `SPEC.md` describes. build.rs and the `pf-l10n` binary both include
-//! this file, so it uses nothing but `crate::json` and `crate::plural`.
+//! this file, so it uses nothing but `crate::json`, `crate::pack` and `crate::plural`.
 //!
 //! A problem is one line, `<path>: <key>: <reason>`, the path relative to the l10n directory.
 //! A message that does not parse is left out and reported; the rest still load.
@@ -10,6 +10,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::json::{self, Json};
+use crate::pack;
 use crate::plural::Category;
 
 #[derive(Clone, Debug, PartialEq)]
@@ -740,6 +741,42 @@ pub enum Ix {
 pub enum Compiled {
     Plain(Vec<Ix>),
     Plural(Vec<(Category, Vec<Ix>)>),
+}
+
+impl Compiled {
+    /// The stored body `pack.rs` describes. Text with a byte the format reserves is refused.
+    /// Only build.rs and the tests pack.
+    #[allow(dead_code)]
+    pub fn pack(&self) -> Result<String, String> {
+        let text = |out: &mut String, ix: &[Ix]| -> Result<(), String> {
+            for i in ix {
+                match i {
+                    Ix::Text(t) if t.contains([pack::ARG, pack::CASE]) => {
+                        return Err("holds a control character U+0001 or U+0002".into());
+                    }
+                    Ix::Text(t) => out.push_str(t),
+                    Ix::Arg(n) if *n < 64 => {
+                        out.push(pack::ARG);
+                        out.push(char::from(b'0' + *n as u8));
+                    }
+                    Ix::Arg(_) => return Err("has more than 64 placeholders".into()),
+                }
+            }
+            Ok(())
+        };
+        let mut out = String::new();
+        match self {
+            Compiled::Plain(ix) => text(&mut out, ix)?,
+            Compiled::Plural(cases) => {
+                for (cat, ix) in cases {
+                    out.push(pack::CASE);
+                    out.push(char::from(b'0' + *cat as u8));
+                    text(&mut out, ix)?;
+                }
+            }
+        }
+        Ok(out)
+    }
 }
 
 /// `msg` with each placeholder replaced by its index in `en.args()`. A translation keeps the

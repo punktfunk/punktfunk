@@ -1,6 +1,6 @@
 //! Compiles `messages/` into `$OUT_DIR/messages.rs`: a module per part this build enables, a
-//! function per message, and every shipped language as static data. The format is `SPEC.md`.
-//! A file that breaks it fails the build with one line per problem.
+//! function per message, and every shipped language as one packed string (`src/pack.rs`). The
+//! format is `SPEC.md`. A file that breaks it fails the build with one line per problem.
 
 #[allow(dead_code)]
 #[path = "src/catalog.rs"]
@@ -8,6 +8,9 @@ mod catalog;
 #[allow(dead_code)]
 #[path = "src/json.rs"]
 mod json;
+#[allow(dead_code)]
+#[path = "src/pack.rs"]
+mod pack;
 #[allow(dead_code)]
 #[path = "src/plural.rs"]
 mod plural;
@@ -29,6 +32,7 @@ fn main() {
         "rules.json",
         "src/catalog.rs",
         "src/json.rs",
+        "src/pack.rs",
     ] {
         println!("cargo::rerun-if-changed={path}");
     }
@@ -67,6 +71,8 @@ fn generate(
         .map(|(a, b)| (a.as_str(), b.as_str()))
         .collect();
     let _ = writeln!(out, "static FALLBACK: &[(&str, &str)] = &{fallback:?};\n");
+    // Per language: every body so far, and where each message's body ends.
+    let mut packs: Vec<(String, Vec<u32>)> = vec![Default::default(); langs.len()];
     let mut tables = Vec::new();
     for part in &cat.parts {
         if !cat.always.contains(&part.name) && !enabled(&part.name) {
@@ -85,6 +91,7 @@ fn generate(
             part.name, part.name
         );
         for row in &rows {
+            let ix = packs[0].1.len();
             let mut bodies: Vec<Option<Compiled>> = cat
                 .shipped
                 .iter()
@@ -98,7 +105,16 @@ fn generate(
             if pseudo {
                 bodies.push(bodies[0].as_ref().map(|c| accent(c, &row.en.args())));
             }
-            message(&mut out, row.key, row.en, &bodies);
+            for (pack, body) in packs.iter_mut().zip(&bodies) {
+                match body.as_ref().map(Compiled::pack) {
+                    Some(Ok(text)) => pack.0.push_str(&text),
+                    Some(Err(e)) => problems.push(format!("{}: {}: {e}", part.name, row.key)),
+                    None => {}
+                }
+                pack.1
+                    .push(pack.0.len().try_into().expect("a pack under 4 GB"));
+            }
+            message(&mut out, row.key, row.en, ix);
         }
         let all: Vec<String> = rows
             .iter()
@@ -116,24 +132,25 @@ fn generate(
         "static PARTS: &[&[&Message]] = &[{}];",
         tables.join(", ")
     );
+    let packs: Vec<String> = langs
+        .iter()
+        .zip(&packs)
+        .map(|(lang, (text, ends))| {
+            format!("Pack {{ lang: {lang:?}, text: {text:?}, ends: &{ends:?} }}")
+        })
+        .collect();
+    let _ = writeln!(out, "static PACKS: &[Pack] = &[{}];", packs.join(", "));
     out
 }
 
-fn message(out: &mut String, key: &str, msg: &Message, bodies: &[Option<Compiled>]) {
+/// The message `key`, whose body is entry `ix` of every language's pack.
+fn message(out: &mut String, key: &str, msg: &Message, ix: usize) {
     let args = msg.args();
     let count = msg.count().and_then(|c| args.iter().position(|a| a == c));
-    let langs: Vec<String> = bodies
-        .iter()
-        .map(|b| {
-            b.as_ref()
-                .map_or("None".into(), |b| format!("Some({})", body(b)))
-        })
-        .collect();
     let name = key.to_uppercase();
     let _ = writeln!(
         out,
-        "    static {name}: crate::Message = crate::Message {{ key: {key:?}, args: &{args:?}, count: {count:?}, langs: &[{}] }};",
-        langs.join(", ")
+        "    static {name}: crate::Message = crate::Message {{ key: {key:?}, args: &{args:?}, count: {count:?}, ix: {ix} }};"
     );
     let doc = match msg {
         Message::Plural { cases, .. } => cases
@@ -172,29 +189,6 @@ fn message(out: &mut String, key: &str, msg: &Message, bodies: &[Option<Compiled
         params.join(", "),
         refs.join(", ")
     );
-}
-
-fn body(c: &Compiled) -> String {
-    let segs = |ix: &[Ix]| {
-        let items: Vec<String> = ix
-            .iter()
-            .map(|i| match i {
-                Ix::Text(t) => format!("crate::Seg::Text({t:?})"),
-                Ix::Arg(n) => format!("crate::Seg::Arg({n})"),
-            })
-            .collect();
-        format!("&[{}]", items.join(", "))
-    };
-    match c {
-        Compiled::Plain(ix) => format!("crate::Body::Plain({})", segs(ix)),
-        Compiled::Plural(cases) => {
-            let cases: Vec<String> = cases
-                .iter()
-                .map(|(cat, ix)| format!("(crate::Category::{cat:?}, {})", segs(ix)))
-                .collect();
-            format!("crate::Body::Plural(&[{}])", cases.join(", "))
-        }
-    }
 }
 
 /// `en-XA`: letters accented, a third longer, in brackets; placeholders untouched. Only

@@ -2,7 +2,8 @@ use std::fmt::Display;
 
 use crate::catalog::{self, Compiled, Ix};
 use crate::json::{self, Json};
-use crate::{pick, posix_languages, render, variant, Body, Message, Seg};
+use crate::plural::Category;
+use crate::{pick, posix_languages, render, variant, Message, Pack};
 
 fn leak<T>(v: Vec<T>) -> &'static [T] {
     Box::leak(v.into_boxed_slice())
@@ -12,23 +13,13 @@ fn leak_str(s: &str) -> &'static str {
     Box::leak(s.to_owned().into_boxed_str())
 }
 
-fn segs(ix: &[Ix]) -> &'static [Seg] {
-    leak(
-        ix.iter()
-            .map(|i| match i {
-                Ix::Text(t) => Seg::Text(leak_str(t)),
-                Ix::Arg(n) => Seg::Arg(*n),
-            })
-            .collect(),
-    )
-}
-
-fn body(c: Compiled) -> Body {
-    match c {
-        Compiled::Plain(ix) => Body::Plain(segs(&ix)),
-        Compiled::Plural(cases) => {
-            Body::Plural(leak(cases.iter().map(|(k, ix)| (*k, segs(ix))).collect()))
-        }
+/// A language holding one message, at index 0, or none.
+fn pack(lang: &str, body: Option<Compiled>) -> Pack {
+    let text = body.map_or(String::new(), |c| c.pack().expect("packs"));
+    Pack {
+        lang: leak_str(lang),
+        ends: leak(vec![text.len() as u32]),
+        text: leak_str(&text),
     }
 }
 
@@ -58,14 +49,17 @@ fn vectors() {
             .expect("a language of messages");
         let en = parse(0, key).expect("an English message");
         let args = en.args();
-        let bodies: Vec<Option<Body>> = (0..langs.len())
-            .map(|l| parse(l, key).map(|m| body(catalog::compile(&en, &m).expect("compiles"))))
+        let packs: Vec<Pack> = (0..langs.len())
+            .map(|l| {
+                let body = parse(l, key).map(|m| catalog::compile(&en, &m).expect("compiles"));
+                pack(langs[l], body)
+            })
             .collect();
         let m = Message {
             key: leak_str(key),
             args: leak(args.iter().map(|a| leak_str(a)).collect()),
             count: en.count().and_then(|c| args.iter().position(|a| a == c)),
-            langs: leak(bodies),
+            ix: 0,
         };
         let given = case.get("args").expect("args");
         let count = en
@@ -80,7 +74,7 @@ fn vectors() {
                 other => panic!("argument {a}: {other:?}"),
             })
             .collect();
-        let got = render(variant(&m, &langs, lang, count), m.args, |i| {
+        let got = render(variant(&m, &packs, lang, count), m.args, |i| {
             values[i].as_ref().map(|v| v as &dyn Display)
         });
         assert_eq!(got, want, "{key} in {}", langs[lang]);
@@ -101,6 +95,27 @@ fn vectors() {
             s(case, "want"),
             "{os:?}"
         );
+    }
+}
+
+#[test]
+fn bodies_sit_side_by_side_in_a_pack() {
+    let t = |s: &str| Ix::Text(s.into());
+    let plain = Compiled::Plain(vec![t("a "), Ix::Arg(1), t(" b")]);
+    let plural = Compiled::Plural(vec![
+        (Category::One, vec![Ix::Arg(0), t(" one")]),
+        (Category::Other, vec![t("many")]),
+    ]);
+    let (a, p) = (plain.pack().unwrap(), plural.pack().unwrap());
+    let ends = vec![a.len() as u32, a.len() as u32, (a.len() + p.len()) as u32];
+    let pk = Pack {
+        lang: "en",
+        text: leak_str(&format!("{a}{p}")),
+        ends: leak(ends),
+    };
+    assert_eq!((pk.body(0), pk.body(1), pk.body(2)), (&*a, "", &*p));
+    for bad in ["x\u{1}", "\u{2}x"] {
+        assert!(Compiled::Plain(vec![t(bad)]).pack().is_err(), "{bad:?}");
     }
 }
 

@@ -20,6 +20,9 @@ mod catalog;
 mod check;
 #[path = "../json.rs"]
 mod json;
+#[allow(dead_code)]
+#[path = "../pack.rs"]
+mod pack;
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;

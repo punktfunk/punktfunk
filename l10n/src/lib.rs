@@ -20,7 +20,9 @@ use std::cell::Cell;
 use std::fmt::{Display, Write as _};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+mod pack;
 pub mod plural;
+use pack::{ARG, CASE};
 use plural::Category;
 
 include!(concat!(env!("OUT_DIR"), "/messages.rs"));
@@ -34,24 +36,24 @@ mod json;
 #[cfg(test)]
 mod tests;
 
-// Only the generated tables build these, and only generated functions call `text` and
-// `format`. A build whose parts hold no plural or placeholder leaves some unused.
-#[allow(dead_code)]
+/// One language's messages, packed as `pack.rs` describes: message `i`'s body is
+/// `text[ends[i - 1]..ends[i]]`, empty when the language lacks it.
 #[derive(Debug)]
-enum Seg {
-    Text(&'static str),
-    Arg(usize),
+struct Pack {
+    lang: &'static str,
+    text: &'static str,
+    ends: &'static [u32],
 }
 
-#[allow(dead_code)]
-#[derive(Debug)]
-enum Body {
-    Plain(&'static [Seg]),
-    Plural(&'static [(Category, &'static [Seg])]),
+impl Pack {
+    fn body(&self, ix: usize) -> &'static str {
+        let start = ix.checked_sub(1).map_or(0, |i| self.ends[i] as usize);
+        let text: &'static str = self.text;
+        &text[start..self.ends[ix] as usize]
+    }
 }
 
-/// One message in every compiled language: `langs[i]` is `LANGS[i]`'s text, `None` when that
-/// language lacks it.
+/// One message in every compiled language: `PACKS[i]` holds `LANGS[i]`'s text of it at `ix`.
 #[derive(Debug)]
 struct Message {
     key: &'static str,
@@ -59,7 +61,7 @@ struct Message {
     args: &'static [&'static str],
     /// The index in `args` of a plural's count.
     count: Option<usize>,
-    langs: &'static [Option<Body>],
+    ix: u32,
 }
 
 static LANGUAGE: AtomicUsize = AtomicUsize::new(0);
@@ -126,56 +128,62 @@ fn pick<S: AsRef<str>>(tags: &[S], langs: &[&str], fallback: &[(&str, &str)]) ->
     0
 }
 
-/// The segments `m` reads in `lang` for `count`: that language's text, else English. A plural
-/// without the count's category reads `other`.
-fn variant(m: &Message, langs: &[&str], lang: usize, count: Option<u64>) -> &'static [Seg] {
-    let bodies = m.langs;
-    let read = |l: usize| -> Option<&'static [Seg]> {
-        match bodies.get(l)?.as_ref()? {
-            Body::Plain(segs) => Some(*segs),
-            Body::Plural(cases) => {
-                let want = count.map_or(Category::Other, |n| plural::category(langs[l], n));
-                let find = |c: Category| cases.iter().find(|(k, _)| *k == c).map(|(_, s)| *s);
-                find(want).or_else(|| find(Category::Other))
-            }
-        }
+/// The text `m` reads in `lang` for `count`: that language's, else English. A plural without
+/// the count's category reads `other`. A placeholder is still its `ARG` and index byte.
+fn variant(m: &Message, packs: &[Pack], lang: usize, count: Option<u64>) -> &'static str {
+    let read = |l: usize| -> Option<&'static str> {
+        let pack = packs.get(l)?;
+        let body = pack.body(m.ix as usize);
+        let Some(cases) = body.strip_prefix(CASE) else {
+            return (!body.is_empty()).then_some(body);
+        };
+        let want = count.map_or(Category::Other, |n| plural::category(pack.lang, n));
+        let find = |c: Category| {
+            let tag = char::from(b'0' + c as u8);
+            cases.split(CASE).find_map(|case| case.strip_prefix(tag))
+        };
+        find(want).or_else(|| find(Category::Other))
     };
-    read(lang).or_else(|| read(0)).unwrap_or(&[])
+    read(lang).or_else(|| read(0)).unwrap_or("")
 }
 
-/// Writes `segs`, a placeholder `arg` has no value for as `{name}`.
+/// Writes `body`, a placeholder `arg` has no value for as `{name}`.
 fn render<'a>(
-    segs: &[Seg],
+    body: &str,
     names: &[&str],
     arg: impl Fn(usize) -> Option<&'a dyn Display>,
 ) -> String {
-    let mut out = String::new();
-    for seg in segs {
-        match *seg {
-            Seg::Text(t) => out.push_str(t),
-            Seg::Arg(i) => {
-                let _ = match arg(i) {
-                    Some(v) => write!(out, "{v}"),
-                    None => write!(out, "{{{}}}", names[i]),
-                };
-            }
-        }
+    let mut out = String::with_capacity(body.len());
+    let mut rest = body;
+    while let Some(at) = rest.find(ARG) {
+        out.push_str(&rest[..at]);
+        let i = usize::from(rest.as_bytes()[at + 1] - b'0');
+        let _ = match arg(i) {
+            Some(v) => write!(out, "{v}"),
+            None => write!(out, "{{{}}}", names[i]),
+        };
+        rest = &rest[at + 2..];
     }
+    out.push_str(rest);
     out
 }
 
+// Only generated functions call `text` and `format`. A build whose parts hold no
+// placeholder leaves `format` unused.
 #[allow(dead_code)]
 fn text(m: &Message) -> &'static str {
-    match variant(m, LANGS, current(), None) {
-        [Seg::Text(t)] => t,
-        _ => "",
+    let body = variant(m, PACKS, current(), None);
+    if body.contains(ARG) {
+        ""
+    } else {
+        body
     }
 }
 
 #[allow(dead_code)]
 fn format(m: &Message, count: Option<u64>, args: &[&dyn Display]) -> String {
-    let segs = variant(m, LANGS, current(), count);
-    render(segs, m.args, |i| args.get(i).copied())
+    let body = variant(m, PACKS, current(), count);
+    render(body, m.args, |i| args.get(i).copied())
 }
 
 /// A message found by key. It is a reference into static data: copy it freely.
@@ -199,9 +207,11 @@ impl Msg {
     /// The text without arguments: borrowed for a message that has none. A placeholder shows
     /// as `{name}`; a plural reads `other`.
     pub fn text(self) -> Cow<'static, str> {
-        match variant(self.0, LANGS, current(), None) {
-            [Seg::Text(t)] => Cow::Borrowed(*t),
-            segs => Cow::Owned(render(segs, self.0.args, |_| None)),
+        let body = variant(self.0, PACKS, current(), None);
+        if body.contains(ARG) {
+            Cow::Owned(render(body, self.0.args, |_| None))
+        } else {
+            Cow::Borrowed(body)
         }
     }
 
@@ -218,8 +228,8 @@ impl Msg {
     fn fill(self, count: Option<u64>, args: &[(&str, &dyn Display)]) -> String {
         let m = self.0;
         let n = count.unwrap_or_default();
-        let segs = variant(m, LANGS, current(), count);
-        render(segs, m.args, |i| {
+        let body = variant(m, PACKS, current(), count);
+        render(body, m.args, |i| {
             let named = args.iter().find(|(name, _)| *name == m.args[i]);
             match named {
                 Some((_, v)) => Some(*v),
