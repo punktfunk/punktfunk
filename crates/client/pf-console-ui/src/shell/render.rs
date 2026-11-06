@@ -280,6 +280,8 @@ impl Shell {
         // Only a settled top screen publishes hint hit-boxes: mid-transition two legends
         // share the band, so a reported rect is not necessarily the one under the pointer.
         let settled = chrome.len() == 1 && chrome[0].alpha >= 0.999;
+        #[cfg(test)]
+        crate::textprobe::layer();
         let rects = env.chrome(&chrome);
         if settled {
             self.hint_rects = rects;
@@ -336,6 +338,8 @@ impl Shell {
             }
         }
 
+        #[cfg(test)]
+        crate::textprobe::layer();
         self.draw_overlays(canvas, w, h, k, dt, t, fonts);
         if inset {
             canvas.restore();

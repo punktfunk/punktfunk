@@ -32,6 +32,7 @@ mod shots;
 
 mod launch_hold;
 mod profile_gate;
+mod pseudo;
 mod unlock_gate;
 
 /// Pins `motion_spring` (vectors v2). v1 `motion` still exists for other clients; this
