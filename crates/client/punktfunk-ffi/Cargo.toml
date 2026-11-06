@@ -17,8 +17,12 @@ crate-type = ["lib", "cdylib", "staticlib"]
 
 [features]
 default = []
-# The connection API, pairing and the demo host: everything behind core's control plane.
-quic = ["punktfunk-core/quic", "dep:opus", "dep:quinn", "dep:rand", "dep:rcgen", "dep:tokio"]
+# The connection API, pairing and the demo host: everything behind core's control plane. The
+# stats overlay it formats takes its words from core's `l10n`.
+quic = [
+    "punktfunk-core/quic", "punktfunk-core/l10n", "dep:opus", "dep:quinn", "dep:rand",
+    "dep:rcgen", "dep:tokio",
+]
 
 [dependencies]
 punktfunk-core = { path = "../../core/punktfunk-core" }

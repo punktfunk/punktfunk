@@ -283,7 +283,7 @@ fn drive_edge_loss(
 /// report windows of the loss being counted, and the HUD says so; no frame is lost.
 #[test]
 fn head_drops_wake_the_shape_within_two_windows() {
-    use punktfunk_core::abr::{Action, LinkSource, Shape};
+    use punktfunk_core::abr::{Action, Shape};
     let (actions, st) = drive_edge_loss(punktfunk_core::transport::loopback_drop_head(4), 4);
     assert_eq!(st.frames_dropped, 0);
     let reports: Vec<usize> = actions
@@ -300,15 +300,26 @@ fn head_drops_wake_the_shape_within_two_windows() {
         reports.len() >= 2 && wake > reports[1] && wake < reports[1] + 4,
         "{reports:?} {wake}"
     );
-    let eth = punktfunk_core::quic::LinkFacts {
-        kind: punktfunk_core::transport::IFACE_KIND_ETHERNET,
-        mbps: 1_000,
-    };
-    assert_eq!(
-        punktfunk_core::hud::link_line(eth, eth, (1_000_000, LinkSource::Ports), Shape::Wake, None),
-        "Link 1 Gbit/s \u{2014} host 1 GbE, this device 1 GbE \u{00b7} paced for a receiver \
-         that loses frame heads"
-    );
+    // The overlay's words come with the `l10n` feature.
+    #[cfg(feature = "l10n")]
+    {
+        use punktfunk_core::abr::LinkSource;
+        let eth = punktfunk_core::quic::LinkFacts {
+            kind: punktfunk_core::transport::IFACE_KIND_ETHERNET,
+            mbps: 1_000,
+        };
+        assert_eq!(
+            punktfunk_core::hud::link_line(
+                eth,
+                eth,
+                (1_000_000, LinkSource::Ports),
+                Shape::Wake,
+                None
+            ),
+            "Link 1 Gbit/s \u{2014} host 1 GbE, this device 1 GbE \u{00b7} paced for a receiver \
+             that loses frame heads"
+        );
+    }
 }
 
 /// A queue that drops the last packets of every frame costs parity, not a frame: the link

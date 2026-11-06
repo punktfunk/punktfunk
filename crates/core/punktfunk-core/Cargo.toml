@@ -32,6 +32,9 @@ quic = ["tls", "pake", "dep:quinn", "dep:quinn-udp", "dep:tokio", "dep:rcgen", "
 ureq-tls = ["tls", "dep:ureq"]
 # Serde derives on the stats-overlay snapshot (`hud`), for the desktop's `stats-json:` line.
 serde = ["dep:serde"]
+# The stats overlay's words (`hud::format`, its labels) from pf-l10n. Clients turn it on; the
+# host never draws an overlay and stays without it.
+l10n = ["dep:pf-l10n"]
 # Optional native backend for armv7 SIMD; preserves the RFC 8439 wire format.
 chacha-aws-lc-rs = ["dep:aws-lc-rs"]
 # Optional native AES-128-GCM (VAES on x86 hosts); same wire format. Off for wasm and armv7.
@@ -138,6 +141,8 @@ if-addrs = { version = "0.15", features = ["link-local"] }
 
 [dev-dependencies]
 proptest = "1"
+# `hud`'s own tests read the overlay's words without the `l10n` feature.
+pf-l10n = { path = "../../../l10n", features = ["client"] }
 serde_json = "1"
 # Tier-1 microbenchmarks (benches/pipeline.rs). default-features off → no plotters/HTML (headless
 # CI just needs the measurement + target/criterion/**/estimates.json for the regression compare).

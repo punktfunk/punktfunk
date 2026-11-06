@@ -11,7 +11,12 @@
 //!
 //! Platforms draw the returned lines and nothing else. `docs-site/content/docs/(guide)/(streaming)/stats.md`
 //! explains every number.
+//!
+//! The words come from pf-l10n with the `l10n` feature, which every client turns on. Without
+//! it this module collects and ranks but has no text: [`format`] and the labels are absent.
 
+#[cfg(any(test, feature = "l10n"))]
+use pf_l10n::client as m;
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
@@ -51,12 +56,13 @@ impl StatsVerbosity {
         }
     }
 
+    #[cfg(any(test, feature = "l10n"))]
     pub fn label(self) -> &'static str {
         match self {
-            StatsVerbosity::Off => "Off",
-            StatsVerbosity::Compact => "Compact",
-            StatsVerbosity::Normal => "Normal",
-            StatsVerbosity::Detailed => "Detailed",
+            StatsVerbosity::Off => m::player_stats_verbosity_off(),
+            StatsVerbosity::Compact => m::player_stats_verbosity_compact(),
+            StatsVerbosity::Normal => m::player_stats_verbosity_normal(),
+            StatsVerbosity::Detailed => m::player_stats_verbosity_detailed(),
         }
     }
 
@@ -107,12 +113,13 @@ impl HudCorner {
         }
     }
 
+    #[cfg(any(test, feature = "l10n"))]
     pub fn label(self) -> &'static str {
         match self {
-            HudCorner::TopLeft => "Top left",
-            HudCorner::TopRight => "Top right",
-            HudCorner::BottomLeft => "Bottom left",
-            HudCorner::BottomRight => "Bottom right",
+            HudCorner::TopLeft => m::player_hud_placement_top_leading(),
+            HudCorner::TopRight => m::player_hud_placement_top_trailing(),
+            HudCorner::BottomLeft => m::player_hud_placement_bottom_leading(),
+            HudCorner::BottomRight => m::player_hud_placement_bottom_trailing(),
         }
     }
 
@@ -203,12 +210,13 @@ pub enum Hdr {
 }
 
 impl Hdr {
+    #[cfg(any(test, feature = "l10n"))]
     fn tag(self) -> Option<&'static str> {
         match self {
             Hdr::Sdr => None,
             Hdr::Hdr => Some("HDR"),
             Hdr::ToneMapped => Some("HDR→SDR"),
-            Hdr::Untonemapped => Some("HDR→SDR (raw)"),
+            Hdr::Untonemapped => Some(m::overlay_hdr_raw()),
         }
     }
 }
@@ -262,13 +270,15 @@ impl RateCut {
         })
     }
 
+    /// The overlay's field for the cut: `bitrate lowered: packet loss`.
+    #[cfg(any(test, feature = "l10n"))]
     pub fn label(self) -> &'static str {
         match self {
-            RateCut::Loss => "packet loss",
-            RateCut::Repairs => "decode repairs",
-            RateCut::Decoder => "slow decoding",
-            RateCut::Encoder => "slow host encoding",
-            RateCut::Delay => "network delay",
+            RateCut::Loss => m::overlay_rate_cut_loss(),
+            RateCut::Repairs => m::overlay_rate_cut_repairs(),
+            RateCut::Decoder => m::overlay_rate_cut_decoder(),
+            RateCut::Encoder => m::overlay_rate_cut_encoder(),
+            RateCut::Delay => m::overlay_rate_cut_delay(),
         }
     }
 }
@@ -283,12 +293,14 @@ pub enum Endpoint {
 }
 
 impl Endpoint {
+    /// The headline's span field: `capture→displayed`.
+    #[cfg(any(test, feature = "l10n"))]
     pub fn label(self) -> &'static str {
         match self {
-            Endpoint::Received => "received",
-            Endpoint::Decoded => "decoded",
-            Endpoint::Displayed => "displayed",
-            Endpoint::OnGlass => "on-glass",
+            Endpoint::Received => m::overlay_capture_to_received(),
+            Endpoint::Decoded => m::overlay_capture_to_decoded(),
+            Endpoint::Displayed => m::overlay_capture_to_displayed(),
+            Endpoint::OnGlass => m::overlay_capture_to_on_glass(),
         }
     }
 }
@@ -485,15 +497,17 @@ impl StatsSnapshot {
 
     /// [`lost_pct`](Self::lost_pct), or `None` when the window held under
     /// [`THIN_WINDOW_FRAMES`] frames and a share would mislead.
+    #[cfg(any(test, feature = "l10n"))]
     fn lost_share(&self) -> Option<f64> {
         (self.received.saturating_add(self.lost) >= THIN_WINDOW_FRAMES).then(|| self.lost_pct())
     }
 
     /// `lost x.x%`, or `lost N` in a thin window.
+    #[cfg(any(test, feature = "l10n"))]
     fn lost_label(&self) -> String {
         match self.lost_share() {
-            Some(p) => format!("lost {p:.1}%"),
-            None => format!("lost {}", self.lost),
+            Some(p) => m::overlay_lost(format!("{p:.1}%")),
+            None => m::overlay_lost(self.lost),
         }
     }
 
@@ -514,6 +528,7 @@ impl StatsSnapshot {
         }
     }
 
+    #[cfg(any(test, feature = "l10n"))]
     fn floor_us(&self, pick: fn(&Summary) -> u32) -> u32 {
         if self.shave_os_floor && self.os_floor.is_measured() {
             pick(&self.os_floor)
@@ -589,6 +604,7 @@ pub fn quality(snap: &StatsSnapshot, state: &mut QualityState) -> Quality {
 
 /// Below this many frames in a window, loss shows as a count. A still screen on a
 /// Windows host sends almost none, so one lost frame would read as tens of percent.
+#[cfg(any(test, feature = "l10n"))]
 const THIN_WINDOW_FRAMES: u32 = 30;
 
 fn pct(part: u32, whole: u32) -> f64 {
@@ -604,6 +620,7 @@ fn pct(part: u32, whole: u32) -> f64 {
 ///
 /// Slot `n` is player `n + 1`: a local co-op game reads the OS slot order, and slot 0
 /// is its P1.
+#[cfg(any(test, feature = "l10n"))]
 pub fn player_label(slots: u16) -> Option<String> {
     let players: Vec<String> = (0..crate::input::MAX_PADS)
         .filter(|n| slots & (1 << n) != 0)
@@ -611,8 +628,7 @@ pub fn player_label(slots: u16) -> Option<String> {
         .collect();
     match players.len() {
         0 => None,
-        1 => Some(format!("player {}", players[0])),
-        _ => Some(format!("players {}", players.join(" · "))),
+        n => Some(m::overlay_players(n as u64, players.join(" · "))),
     }
 }
 
@@ -1044,6 +1060,7 @@ impl Stats {
 /// The player line leads, in both vocabularies and at every tier: which controller
 /// this session is is a session fact, not a diagnostic, and a co-op guest reads it
 /// before anything else. Silent unless the session holds a pad.
+#[cfg(any(test, feature = "l10n"))]
 pub fn format(s: &StatsSnapshot, tier: StatsVerbosity, advanced: bool) -> Vec<HudLine> {
     if tier == StatsVerbosity::Off {
         return Vec::new();
@@ -1071,6 +1088,7 @@ pub fn format(s: &StatsSnapshot, tier: StatsVerbosity, advanced: bool) -> Vec<Hu
 /// The link every frame is paced at, in one line a player can read, with why: both ends'
 /// ports, a measurement, or nothing yet. `shape` names the wake shape when it is on;
 /// `small_buffer_kb` the receive buffer while the socket drops packets.
+#[cfg(any(test, feature = "l10n"))]
 pub fn link_line(
     host: crate::quic::LinkFacts,
     client: crate::quic::LinkFacts,
@@ -1093,41 +1111,32 @@ pub fn link_line(
             format!("{mbps} Mbit/s Ethernet")
         }
     };
-    let mut out = format!("Link {}", rate(link_kbps));
-    match source {
-        LinkSource::Ports => {
-            out += &format!(
-                " \u{2014} host {}, this device {}",
-                port(host.mbps),
-                port(client.mbps)
-            );
-        }
+    let rate = rate(link_kbps);
+    let mut out = match source {
+        LinkSource::Ports => m::overlay_link_ports(&rate, port(host.mbps), port(client.mbps)),
         LinkSource::Measured if client.kind == crate::transport::IFACE_KIND_WIFI => {
-            out += ", Wi-Fi, measured";
+            m::overlay_link_measured_wifi(&rate)
         }
-        LinkSource::Measured => out += ", measured",
-        LinkSource::Floor => out += ", not measured yet",
-    }
+        LinkSource::Measured => m::overlay_link_measured(&rate),
+        LinkSource::Floor => m::overlay_link_unmeasured(&rate),
+    };
     if shape == crate::abr::Shape::Wake {
-        out += " \u{00b7} paced for a receiver that loses frame heads";
+        out += &format!(" \u{00b7} {}", m::overlay_link_wake_shape());
     }
     if let Some(kb) = small_buffer_kb {
-        out += &format!(" \u{00b7} receive buffer {kb} KB \u{2014} raise net.core.rmem_max");
+        out += &format!(" \u{00b7} {}", m::overlay_link_small_buffer(kb));
     }
     out
 }
 
 /// What a player reads while Automatic holds PyroWave at its quality floor of `floor_kbps`.
+#[cfg(any(test, feature = "l10n"))]
 pub fn quality_floor_line(floor_kbps: u32) -> String {
-    format!(
-        "Weak network: PyroWave is at its lowest quality ({} bits per pixel, {} Mbit/s). \
-         HEVC would look better on this link.",
-        crate::pyrowave::BPP_FLOOR,
-        floor_kbps / 1_000
-    )
+    m::overlay_pyrowave_floor(crate::pyrowave::BPP_FLOOR, floor_kbps / 1_000)
 }
 
 /// One decimal, none when it is zero: `2.5`, `1`, `10`.
+#[cfg(any(test, feature = "l10n"))]
 fn trim(v: f64) -> String {
     let s = format!("{v:.1}");
     s.strip_suffix(".0").map_or(s.clone(), str::to_string)
@@ -1154,18 +1163,22 @@ pub fn encode_lines(lines: &[HudLine]) -> String {
     out
 }
 
+#[cfg(any(test, feature = "l10n"))]
 fn ms(us: u32) -> String {
     format!("{:.1}", f64::from(us) / 1000.0)
 }
 
+#[cfg(any(test, feature = "l10n"))]
 fn fps(v: f64) -> String {
     format!("{v:.0} fps")
 }
 
+#[cfg(any(test, feature = "l10n"))]
 fn mbps(v: f64) -> String {
     format!("{v:.1} Mb/s")
 }
 
+#[cfg(any(test, feature = "l10n"))]
 fn line(role: Role, fields: Vec<String>) -> HudLine {
     HudLine {
         role,
@@ -1173,38 +1186,43 @@ fn line(role: Role, fields: Vec<String>) -> HudLine {
     }
 }
 
+#[cfg(any(test, feature = "l10n"))]
 fn text(role: Role, text: String) -> HudLine {
     HudLine { role, text }
 }
 
+#[cfg(any(test, feature = "l10n"))]
 fn mode(s: &StatsSnapshot) -> String {
     format!("{}×{}@{}", s.width, s.height, s.refresh_hz)
 }
 
 /// Why Automatic is running below where it was, while that still holds, and how often
 /// loss needed a repair in the last minute: a climbing count is a link not recovering.
+#[cfg(any(test, feature = "l10n"))]
 fn rate_cut(s: &StatsSnapshot) -> Option<String> {
-    s.rate_cut.filter(|_| s.auto_rate).map(|c| {
+    (s.rate_cut.filter(|_| s.auto_rate)).map(|c| {
         format!(
-            "bitrate lowered: {} · {} loss repairs/min",
+            "{} · {}",
             c.label(),
-            s.rfis_last_min
+            m::overlay_loss_repairs(s.rfis_last_min)
         )
     })
 }
 
+#[cfg(any(test, feature = "l10n"))]
 fn target(s: &StatsSnapshot) -> Option<String> {
     (s.target_kbps > 0).then(|| {
-        let mb = f64::from(s.target_kbps) / 1000.0;
+        let mb = format!("{:.0} Mb/s", f64::from(s.target_kbps) / 1000.0);
         if s.auto_rate {
-            format!("target {mb:.0} Mb/s (auto)")
+            m::overlay_target_auto(mb)
         } else {
-            format!("target {mb:.0} Mb/s")
+            m::overlay_target(mb)
         }
     })
 }
 
 /// Codec and depth, decoder, HDR, chroma: what decodes what.
+#[cfg(any(test, feature = "l10n"))]
 fn media_fields(s: &StatsSnapshot, out: &mut Vec<String>) {
     let mut codec = s.codec.clone();
     if s.bit_depth > 0 {
@@ -1230,6 +1248,7 @@ fn media_fields(s: &StatsSnapshot, out: &mut Vec<String>) {
 }
 
 /// 44.1 kHz family in tenths, from integer parts so no locale can print a comma.
+#[cfg(any(test, feature = "l10n"))]
 fn khz(rate_hz: u32) -> String {
     let tenths = rate_hz % 1000 / 100;
     if tenths == 0 {
@@ -1240,15 +1259,12 @@ fn khz(rate_hz: u32) -> String {
 }
 
 /// The resolved lossless format. Silent on Opus, and when the host reported no format.
+#[cfg(any(test, feature = "l10n"))]
 fn audio_format(s: &StatsSnapshot) -> Option<HudLine> {
     if !s.audio_lossless || s.audio_rate_hz == 0 || s.audio_bits == 0 {
         return None;
     }
-    let mut t = format!(
-        "audio lossless {} / {}-bit",
-        khz(s.audio_rate_hz),
-        s.audio_bits
-    );
+    let mut t = m::overlay_audio_lossless(khz(s.audio_rate_hz), s.audio_bits);
     match s.audio_channels {
         6 => t.push_str(" · 5.1"),
         8 => t.push_str(" · 7.1"),
@@ -1257,29 +1273,33 @@ fn audio_format(s: &StatsSnapshot) -> Option<HudLine> {
     Some(text(Role::Muted, t))
 }
 
+#[cfg(any(test, feature = "l10n"))]
 fn audio_buffer(s: &StatsSnapshot) -> Option<HudLine> {
     if s.audio_buffer_ms == 0 {
         return None;
     }
-    let mut t = format!("audio buffer {} ms", s.audio_buffer_ms);
+    let mut t = m::overlay_audio_buffer(format!("{} ms", s.audio_buffer_ms));
     if s.av_offset_ms != 0 {
-        t.push_str(&format!(" · a/v {:+} ms", s.av_offset_ms));
+        let offset = m::overlay_av_offset(format!("{:+} ms", s.av_offset_ms));
+        t.push_str(&format!(" · {offset}"));
     }
     Some(text(Role::Muted, t))
 }
 
+#[cfg(any(test, feature = "l10n"))]
 fn mic(s: &StatsSnapshot) -> Option<HudLine> {
     if s.mic_sent == 0 && s.mic_dropped == 0 {
         return None;
     }
-    let mut t = format!("mic {:.0} f/s", f64::from(s.mic_sent) / s.secs());
+    let mut t = m::overlay_mic(format!("{:.0} f/s", f64::from(s.mic_sent) / s.secs()));
     if s.mic_dropped > 0 {
-        t.push_str(&format!(" · dropped {}", s.mic_dropped));
+        t.push_str(&format!(" · {}", m::overlay_mic_dropped(s.mic_dropped)));
     }
     Some(text(Role::Muted, t))
 }
 
 /// `(p50, p95, endpoint)` with the OS floor shaved where the platform asks for it.
+#[cfg(any(test, feature = "l10n"))]
 fn headline(s: &StatsSnapshot) -> Option<(u32, u32, Endpoint)> {
     let ep = s.endpoint()?;
     let floor = s.floor_us(|f| f.p50_us);
@@ -1296,30 +1316,32 @@ fn headline(s: &StatsSnapshot) -> Option<(u32, u32, Endpoint)> {
 
 /// The stages that tile the headline interval, as p50s. They sum only roughly: percentiles
 /// are not additive, and the headline is measured directly.
+#[cfg(any(test, feature = "l10n"))]
 fn equation(s: &StatsSnapshot, ep: Endpoint) -> Option<HudLine> {
     let mut terms = Vec::new();
     if s.host.is_measured() {
-        terms.push(format!("host {}", ms(s.host.p50_us)));
-        terms.push(format!("network {}", ms(s.net.p50_us)));
+        terms.push(m::overlay_host(ms(s.host.p50_us)));
+        terms.push(m::overlay_network(ms(s.net.p50_us)));
     } else if s.host_net.is_measured() && ep != Endpoint::Received {
-        terms.push(format!("host+network {}", ms(s.host_net.p50_us)));
+        terms.push(m::overlay_host_network(ms(s.host_net.p50_us)));
     }
     if ep != Endpoint::Received && s.decode.is_measured() && !s.decode_overlaps_display {
-        terms.push(format!("decode {}", ms(s.decode.p50_us)));
+        terms.push(m::overlay_decode(ms(s.decode.p50_us)));
     }
     if matches!(ep, Endpoint::Displayed | Endpoint::OnGlass) && s.display.is_measured() {
         let floor = s.floor_us(|f| f.p50_us);
-        let mut t = format!("display {}", ms(s.display.p50_us.saturating_sub(floor)));
+        let mut t = m::overlay_display(ms(s.display.p50_us.saturating_sub(floor)));
         // With the floor shaved, display is already pace alone; the split would count latch twice.
         if floor == 0 && s.pace.is_measured() && s.latch.is_measured() {
             t.push_str(&format!(
-                " (pace {} + latch {}",
-                ms(s.pace.p50_us),
-                ms(s.latch.p50_us)
+                " ({} + {}",
+                m::overlay_pace(ms(s.pace.p50_us)),
+                m::overlay_latch(ms(s.latch.p50_us))
             ));
             // A measured, unshaved floor is the compositor's share, named beside ours.
             if s.os_floor.is_measured() {
-                t.push_str(&format!(" + os floor {}", ms(s.os_floor.p50_us)));
+                let os = m::overlay_os_floor(ms(s.os_floor.p50_us));
+                t.push_str(&format!(" + {os}"));
             }
             t.push(')');
         }
@@ -1330,11 +1352,12 @@ fn equation(s: &StatsSnapshot, ep: Endpoint) -> Option<HudLine> {
     }
     let mut t = format!("= {}", terms.join(" + "));
     if let Some(p) = s.presented_fps() {
-        t.push_str(&format!(" · presented {p:.0}"));
+        t.push_str(&format!(" · {}", m::overlay_presented(format!("{p:.0}"))));
     }
     Some(text(Role::Detail, t))
 }
 
+#[cfg(any(test, feature = "l10n"))]
 fn advanced_lines(s: &StatsSnapshot, tier: StatsVerbosity) -> Vec<HudLine> {
     let head = headline(s);
     let mut out = Vec::new();
@@ -1360,70 +1383,50 @@ fn advanced_lines(s: &StatsSnapshot, tier: StatsVerbosity) -> Vec<HudLine> {
     l1.extend(s.preset.clone());
     out.push(line(Role::Primary, l1));
     if let Some((p50, p95, ep)) = head {
-        out.push(text(
-            Role::Primary,
-            format!(
-                "end-to-end {} ms p50 · {} p95 · capture→{}{}",
-                ms(p50),
-                ms(p95),
-                ep.label(),
-                if s.same_host_clock {
-                    " (same-host clock)"
-                } else {
-                    ""
-                }
-            ),
-        ));
+        let mut t = format!(
+            "{} · {} p95 · {}",
+            m::overlay_end_to_end(format!("{} ms", ms(p50))),
+            ms(p95),
+            ep.label()
+        );
+        if s.same_host_clock {
+            t.push(' ');
+            t.push_str(m::overlay_same_host_clock());
+        }
+        out.push(text(Role::Primary, t));
     }
     if detailed {
         out.extend(head.and_then(|(_, _, ep)| equation(s, ep)));
         if s.decode_overlaps_display && s.decode.is_measured() && s.decode.p50_us > 0 {
-            let samples = match s.decode.n {
-                1 => "1 sample".to_string(),
-                n => format!("{n} samples"),
-            };
             out.push(text(
                 Role::Detail,
-                format!(
-                    "decode {} ms ({samples}, inside display — not additive)",
-                    ms(s.decode.p50_us)
+                m::overlay_decode_inside_display(
+                    format!("{} ms", ms(s.decode.p50_us)),
+                    u64::from(s.decode.n),
                 ),
             ));
         }
         if s.host_queue.is_measured() {
             out.push(text(
                 Role::Detail,
-                format!(
-                    "host: queue {} · encode {} · xfer {} · pace {} ms",
+                m::overlay_host_stages(
                     ms(s.host_queue.p50_us),
                     ms(s.host_encode.p50_us),
                     ms(s.host_xfer.p50_us),
-                    ms(s.host_pace.p50_us)
+                    ms(s.host_pace.p50_us),
                 ),
             ));
         }
         let floor = s.floor_us(|f| f.p50_us);
         if floor > 0 {
-            out.push(text(
-                Role::Muted,
-                format!(
-                    "os present +{} excluded (display pipeline minimum)",
-                    ms(floor)
-                ),
-            ));
+            out.push(text(Role::Muted, m::overlay_os_present_excluded(ms(floor))));
         }
         if let Some(r) = s.rtt_us {
-            out.push(text(Role::Muted, format!("rtt {} ms", ms(r))));
+            out.push(text(Role::Muted, m::overlay_rtt(format!("{} ms", ms(r)))));
         }
         if s.skew_trimmed > 0 {
-            out.push(text(
-                Role::Warn,
-                format!(
-                    "clock offset suspect — {:.0}/s impossible samples trimmed; e2e & \
-                     host+network unreliable",
-                    f64::from(s.skew_trimmed) / s.secs()
-                ),
-            ));
+            let rate = format!("{:.0}", f64::from(s.skew_trimmed) / s.secs());
+            out.push(text(Role::Warn, m::overlay_clock_suspect(rate)));
         }
         out.extend(mic(s));
         out.extend(audio_buffer(s));
@@ -1432,16 +1435,16 @@ fn advanced_lines(s: &StatsSnapshot, tier: StatsVerbosity) -> Vec<HudLine> {
     let mut counters = Vec::new();
     if s.lost > 0 {
         counters.push(match s.lost_share() {
-            Some(p) => format!("lost {} ({p:.1}%)", s.lost),
-            None => format!("lost {}", s.lost),
+            Some(p) => m::overlay_lost(format!("{} ({p:.1}%)", s.lost)),
+            None => m::overlay_lost(s.lost),
         });
     }
     if detailed {
         match s.skipped {
             Some(k) if k > 0 && s.skipped_overflow > 0 => {
-                counters.push(format!("skipped {k} (⚠ {} overflow)", s.skipped_overflow))
+                counters.push(m::overlay_skipped_overflow(k, s.skipped_overflow))
             }
-            Some(k) if k > 0 => counters.push(format!("skipped {k}")),
+            Some(k) if k > 0 => counters.push(m::overlay_skipped(k)),
             _ => {}
         }
         if s.fec > 0 {
@@ -1460,6 +1463,7 @@ fn advanced_lines(s: &StatsSnapshot, tier: StatsVerbosity) -> Vec<HudLine> {
     out
 }
 
+#[cfg(any(test, feature = "l10n"))]
 fn standard_lines(s: &StatsSnapshot, tier: StatsVerbosity) -> Vec<HudLine> {
     let floor = s.floor_us(|f| f.mean_us);
     let display = s
@@ -1470,7 +1474,7 @@ fn standard_lines(s: &StatsSnapshot, tier: StatsVerbosity) -> Vec<HudLine> {
     if tier == StatsVerbosity::Compact {
         let mut f = vec![fps(s.received_fps()), mbps(s.mbps())];
         if s.decode.is_measured() {
-            f.push(format!("decode {} ms", ms(s.decode.mean_us)));
+            f.push(m::overlay_decode(format!("{} ms", ms(s.decode.mean_us))));
         }
         if s.lost > 0 {
             f.push(s.lost_label());
@@ -1484,37 +1488,38 @@ fn standard_lines(s: &StatsSnapshot, tier: StatsVerbosity) -> Vec<HudLine> {
     l1.extend(s.preset.clone());
     out.push(line(Role::Primary, l1));
 
-    let mut rates = vec![format!("received {}", fps(s.received_fps()))];
+    let mut rates = vec![m::overlay_received(fps(s.received_fps()))];
     if let Some(d) = s.decoded_fps() {
-        rates.push(format!("decoded {d:.0}"));
+        rates.push(m::overlay_decoded(format!("{d:.0}")));
     }
     if let Some(p) = s.presented_fps() {
-        rates.push(format!("presented {p:.0}"));
+        rates.push(m::overlay_presented(format!("{p:.0}")));
     }
     rates.push(mbps(s.mbps()));
     out.push(line(Role::Detail, rates));
 
     let mut times = Vec::new();
     if s.host.is_measured() {
-        times.push(format!("host {} ms", ms(s.host.mean_us)));
+        times.push(m::overlay_host(format!("{} ms", ms(s.host.mean_us))));
     }
     if s.decode.is_measured() {
-        times.push(format!("decode {} ms", ms(s.decode.mean_us)));
+        times.push(m::overlay_decode(format!("{} ms", ms(s.decode.mean_us))));
     }
     if let Some(d) = display {
-        times.push(format!("display {} ms", ms(d)));
+        times.push(m::overlay_display(format!("{} ms", ms(d))));
     }
     if !times.is_empty() {
-        out.push(text(Role::Detail, format!("{} (avg)", times.join(" · "))));
+        let t = format!("{} {}", times.join(" · "), m::overlay_avg_tag());
+        out.push(text(Role::Detail, t));
     }
 
     let mut link = vec![s.lost_label()];
     if let Some(k) = s.skipped {
         let shown = s.decoded.unwrap_or(s.received);
-        link.push(format!("skipped {:.1}%", pct(k, shown.max(k))));
+        link.push(m::overlay_skipped(format!("{:.1}%", pct(k, shown.max(k)))));
     }
     if let Some(r) = s.rtt_us {
-        link.push(format!("rtt {} ms", ms(r)));
+        link.push(m::overlay_rtt(format!("{} ms", ms(r))));
     }
     out.push(line(
         if s.lost > 0 { Role::Warn } else { Role::Detail },
@@ -1524,26 +1529,20 @@ fn standard_lines(s: &StatsSnapshot, tier: StatsVerbosity) -> Vec<HudLine> {
     if tier == StatsVerbosity::Detailed {
         let mut spread = Vec::new();
         if s.host.is_measured() {
-            spread.push(format!(
-                "host min/max {}/{} ms",
+            spread.push(m::overlay_host_min_max(
                 ms(s.host.min_us),
-                ms(s.host.max_us)
+                ms(s.host.max_us),
             ));
         }
         if floor == 0 && s.pace.is_measured() && s.latch.is_measured() {
             spread.push(if s.os_floor.is_measured() {
-                format!(
-                    "display queue {} + render {} + compositor {} ms",
+                m::overlay_display_split_compositor(
                     ms(s.pace.mean_us),
                     ms(s.latch.mean_us),
-                    ms(s.os_floor.mean_us)
+                    ms(s.os_floor.mean_us),
                 )
             } else {
-                format!(
-                    "display queue {} + render {} ms (incl. vsync)",
-                    ms(s.pace.mean_us),
-                    ms(s.latch.mean_us)
-                )
+                m::overlay_display_split(ms(s.pace.mean_us), ms(s.latch.mean_us))
             });
         }
         if !spread.is_empty() {
