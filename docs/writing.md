@@ -230,7 +230,7 @@ every `api_error` string a client puts on screen.
 Sentence case. One sentence saying what did not happen, in the words of
 someone who streams games — no crate, symbol, protocol, hex code or errno
 (`docs/releases/README.md` voice). Then, only when the reader can act, one
-more sentence naming the move. Each sentence ends with a period (§4d).
+more sentence naming the move. No trailing period on a lone first sentence.
 
 ```
 Couldn't reach the host — it may be asleep.
@@ -375,12 +375,13 @@ Good: `Select the card to pair it.`
 
 **House style.**
 
-- Sentence case everywhere. Mac menu-bar items alone keep macOS title case.
+- Sentence case everywhere. Mac menu-bar items and App Intents titles keep Apple's title case.
   Bad: `Copy Link` Good: `Copy link`
 - US spelling. Bad: `No colour` Good: `No color`
 - Units: `Mbit/s`, `Gbit/s`, `ms`, `Hz`, `GB`. Bad: `Bitrate in Mbps`
   Good: `Bitrate in Mbit/s`
-- A full sentence ends with a period; a label or an option does not.
+- A hint or a body ends each sentence with a period; a label or an option does not. An error
+  message follows §4: no trailing period on a lone sentence.
   Bad: `Add its MAC address under Connection to wake it`
   Good: `Add its MAC address under Connection to wake it.`
 - No `Please`, no `!`, no `failed to` / `could not` / `cannot` /
