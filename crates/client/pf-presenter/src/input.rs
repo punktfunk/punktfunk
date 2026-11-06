@@ -338,8 +338,10 @@ impl Capture {
         }
     }
 
-    pub fn on_motion(&mut self, xrel: f32, yrel: f32) {
-        if self.captured && !self.desktop {
+    /// Relative motion: capture's, or desktop's while the cursor model
+    /// [takes deltas](crate::cursor_model::CursorModel::takes_deltas).
+    pub fn on_motion(&mut self, xrel: f32, yrel: f32, deltas: bool) {
+        if self.captured && (!self.desktop || deltas) {
             self.pending_rel.0 += xrel;
             self.pending_rel.1 += yrel;
         }

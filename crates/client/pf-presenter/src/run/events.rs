@@ -386,8 +386,9 @@ impl Shell {
         let Some(cap) = st.capture.as_mut() else {
             return;
         };
+        let deltas = st.cursor.takes_deltas(cap.desktop(), cap.buttons_held());
         let warped = !cap.desktop() && cap.abs_ok() && warps_pointer(which);
-        if cap.desktop() || warped {
+        if (cap.desktop() && !deltas) || warped {
             // Window position through the placement. Relative mode freezes SDL's own
             // position, so a warp reads where the pointer really is. Before the first
             // decoded frame there is nothing to map onto — dropped, like touch.
@@ -426,7 +427,7 @@ impl Shell {
                 ));
             }
         } else {
-            cap.on_motion(xrel, yrel);
+            cap.on_motion(xrel, yrel, deltas);
         }
     }
 
