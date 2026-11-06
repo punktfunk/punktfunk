@@ -407,7 +407,8 @@ mod tests {
 
     /// The Apple About screen's keyboard chords for one platform, symbols spelled out as the
     /// lists here write them. Its file opens each platform's rows with `from` and ends the
-    /// keyboard group at the first `groups.append`.
+    /// keyboard group at the first `groups.append`. A row's `keys:` is a chord literal, two
+    /// chords through `L10n.controlsEither`, or a gesture message.
     fn about_keys(from: &str) -> Vec<String> {
         const ABOUT: &str = include_str!(
             "../../../../clients/apple/Sources/PunktfunkClient/Settings/ShortcutsReference.swift"
@@ -423,12 +424,45 @@ mod tests {
             .iter()
             .fold(s.to_string(), |s, (symbol, word)| s.replace(symbol, word))
         };
+        fn quoted(s: &str) -> &str {
+            s.split_once('"').expect("a closing quote").0
+        }
+        // `controlsGestureClick` is the accessor of `controls_gesture_click`.
+        let gesture = |accessor: &str| {
+            let key: String = accessor
+                .chars()
+                .flat_map(|c| {
+                    if c.is_ascii_uppercase() {
+                        vec!['_', c.to_ascii_lowercase()]
+                    } else {
+                        vec![c]
+                    }
+                })
+                .collect();
+            pf_l10n::get(&key)
+                .expect("a gesture message")
+                .text()
+                .into_owned()
+        };
         let block = ABOUT.split_once(from).expect("the platform's rows").1;
         let block = block.split_once("groups.append").expect("the group").0;
         block
-            .split(".init(keys: \"")
+            .split(".init(\"")
             .skip(1)
-            .map(|row| spell(row.split_once('"').expect("a row's keys").0))
+            .map(|row| {
+                let expr = row.split_once("keys: ").expect("a row's keys").1;
+                if let Some(chord) = expr.strip_prefix('"') {
+                    spell(quoted(chord))
+                } else if let Some(rest) = expr.strip_prefix("L10n.controlsEither(first: \"") {
+                    let (first, rest) = rest.split_once('"').expect("the first chord");
+                    let second = rest.split_once("second: \"").expect("the second chord").1;
+                    format!("{} or {}", spell(first), spell(quoted(second)))
+                } else if let Some(rest) = expr.strip_prefix("String(localized: L10n.") {
+                    gesture(rest.split_once(')').expect("a gesture accessor").0)
+                } else {
+                    panic!("a keys expression this test does not read: {expr}")
+                }
+            })
             .collect()
     }
 
