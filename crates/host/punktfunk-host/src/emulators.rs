@@ -717,14 +717,15 @@ pub fn firmware_status(
     })
 }
 
-/// The command that starts `file` in the best copy of `id`, fullscreen.
+/// The command that starts `file` in the best copy of `id`, fullscreen. On Windows without
+/// hermir's per-user variables ([`drop_home_vars`]).
 pub fn launch_spec(
     id: &str,
     platform: &str,
     file: &Path,
     core: Option<&str>,
 ) -> hermir::Result<hermir::LaunchSpec> {
-    on_best(id, |h, e, i| {
+    let mut spec = on_best(id, |h, e, i| {
         e.launch(
             i,
             &hermir::LaunchRequest {
@@ -735,7 +736,22 @@ pub fn launch_spec(
                 ..Default::default()
             },
         )
-    })
+    })?;
+    if cfg!(windows) {
+        drop_home_vars(&mut spec);
+    }
+    Ok(spec)
+}
+
+/// `%USERPROFILE%`, `%APPDATA%` and `%LOCALAPPDATA%` out of `spec`. hermir adds them for the
+/// home [`open`] gave it, the session player's, and a Windows launch starts as that player
+/// with their own environment block.
+fn drop_home_vars(spec: &mut hermir::LaunchSpec) {
+    // Only the names: the home is the player's either way.
+    let names = hermir::RealEnv::with_home(hermir::Os::Windows, PathBuf::new()).home_vars();
+    for (name, _) in names {
+        spec.env.remove(name);
+    }
 }
 
 /// Points hermir at the operator's own copy of `id`; `keep: false` forgets it.
@@ -844,6 +860,40 @@ pub fn grant_target(id: &str) -> (PathBuf, bool) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A Windows launch can't set variables, and in the player's home it needs none.
+    #[test]
+    fn a_windows_launch_in_the_players_home_carries_no_variables() {
+        let dir = tempfile::tempdir().unwrap();
+        let h = Hermir::open(Options {
+            prefix: Some(dir.path().join("emulators")),
+            os: Some(hermir::Os::Windows),
+            home: Some(dir.path().join("Users").join("player")),
+            ..Options::default()
+        })
+        .unwrap();
+        let copy = hermir::Install {
+            emulator: "ryujinx".into(),
+            kind: hermir::InstallKind::Native,
+            exe: hermir::Exe::Path(r"E:\Ryubing\Ryujinx.exe".into()),
+            version: None,
+            config_root: None,
+        };
+        let request = hermir::LaunchRequest {
+            file: Some(r"D:\Switch\Animal Crossing New Horizons.nsp".into()),
+            platform: Some("switch".into()),
+            fullscreen: Some(true),
+            ..Default::default()
+        };
+        let mut spec = h
+            .emulator("ryujinx")
+            .unwrap()
+            .launch(&copy, &request)
+            .unwrap();
+        assert!(spec.env.contains_key("APPDATA"));
+        drop_home_vars(&mut spec);
+        assert!(spec.env.is_empty(), "{:?}", spec.env);
+    }
 
     #[test]
     fn the_hosts_pads_come_in_event_order_and_nothing_else_does() {
