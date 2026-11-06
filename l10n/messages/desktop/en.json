@@ -217,6 +217,7 @@
 	],
 	"desktop_disconnecting": "Disconnecting…",
 	"desktop_notice_amd_hdr_driver": "This AMD graphics driver ({version}) can show HDR as a green picture. Update it to AMD Software 25.9.1 or newer, or switch the decoder to Direct3D 11 in Settings.",
+	"desktop_hosts_field_mac_hint": "Wakes this host from sleep. Found on the network automatically when it's on; separate several with commas.",
 	"desktop_hosts_preset": "Preset",
 	"desktop_shortcut_description": "Stream from {label}"
 }

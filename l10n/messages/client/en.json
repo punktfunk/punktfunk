@@ -1258,5 +1258,6 @@
 	"notice_pin_unsustainable": "This device can't keep up with the pinned {rate} Mbit/s. Set the bitrate to Automatic or lower it.",
 	"notice_falling_behind": "This device can't keep up with this stream at {width}×{height}. Lower the resolution or the refresh rate.",
 	"lib_badge_resume": "Resume",
+	"hosts_error_name_empty": "Enter a name for the host.",
 	"dial_session_not_started": "The session didn't start. Check the client log."
 }

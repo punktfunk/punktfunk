@@ -125,6 +125,7 @@
 	"desktop_streaming_from_many": "Linux banner while three or more streams run. count = how many hosts.",
 	"desktop_disconnecting": "Linux banner while the last streams close.",
 	"desktop_notice_amd_hdr_driver": "Windows toast once per HDR stream on an old AMD driver. version = the driver's four-part version, e.g. '32.0.12033.0'.",
+	"desktop_hosts_field_mac_hint": "Tooltip on the Wake-on-LAN MAC row of the add and edit host forms.",
 	"desktop_hosts_preset": "Header of the preset picker in the Windows host editor, above the list of presets.",
 	"desktop_shortcut_description": "Description stored in a Windows shortcut (.lnk) to a host, shown in its tooltip. label = the host's name."
 }

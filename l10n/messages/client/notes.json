@@ -824,5 +824,6 @@
 	"notice_exit_arming": "Cue over the stream while the controller's leave chord is held, before it fires.",
 	"notice_pin_unsustainable": "Toast once per stream when a fixed bitrate overruns this device. rate = megabits per second, a whole number. 'Automatic' is the Bitrate setting's option (player_bitrate_kbps_automatic).",
 	"notice_falling_behind": "Toast once per stream after five seconds of skipped frames. width, height = the stream's size in pixels.",
-	"lib_badge_resume": "Badge on a game tile whose game is still running on the host. Pressing the tile returns to it."
+	"lib_badge_resume": "Badge on a game tile whose game is still running on the host. Pressing the tile returns to it.",
+	"hosts_error_name_empty": "Toast when the host page's Name row is applied empty."
 }
