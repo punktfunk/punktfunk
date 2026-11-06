@@ -376,8 +376,9 @@ system-range user, `pf-seat-<n>`, with a logind session of its own, a headless c
 - **The user.** Its comment is `punktfunk-seat=<id>`, and the daemon touches or deletes only an
   account whose comment matches exactly. The name is `pf-seat-1` to `pf-seat-4`; a create for
   any other is refused. The home is `seats/<id>/home`, mode `0700`. At start the daemon removes a
-  seat account that no ledger row names, whose home is its own seat home and whose seat never
-  started: what a create that stopped half-way left. It joins `render` and
+  seat account that no ledger row names, whose home is its own seat home, whose `seats/<id>`
+  directory exists and whose seat never started: what a create that stopped half-way left. On a
+  state directory that is missing or empty no account is removed. It joins `render` and
   `punktfunk-games`, the shared games folder's group, which the owner joins too. Never `punktfunk`,
   which may power the box off, nor `input`, which reads every input device on the box.
 - **The environment.** The variables in the tables above, minus the display slot,
