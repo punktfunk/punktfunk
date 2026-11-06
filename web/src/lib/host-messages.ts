@@ -1,0 +1,50 @@
+import { m } from "@/paraglide/messages";
+
+/** The values of a host message's placeholders, by name. */
+type Params = Record<string, string> | null | undefined;
+
+// Every message by key. Looking one up by a key the host sent cannot be tree-shaken, so the
+// whole catalogue ships.
+const CATALOGUE = m as unknown as Record<
+	string,
+	(params: Record<string, string>) => string
+>;
+
+/**
+ * The host message `id` in the console's language, or `undefined` when this build has no such
+ * message or `params` lacks a value it needs. A console and a host a version apart disagree on
+ * ids, so a miss is normal and the caller shows the host's English.
+ */
+export function hostMessage(id: string, params?: Params): string | undefined {
+	const message = Object.hasOwn(CATALOGUE, id) ? CATALOGUE[id] : undefined;
+	if (!message) return undefined;
+	let complete = true;
+	const given = params ?? {};
+	const read = new Proxy(given, {
+		get(target, key) {
+			if (typeof key !== "string") return undefined;
+			if (!Object.hasOwn(target, key)) complete = false;
+			return target[key];
+		},
+	});
+	const text = message(read);
+	return complete ? text : undefined;
+}
+
+/** The host's sentence by message id, else the English it arrived with. */
+export function hostText<E extends string | null | undefined>(
+	id: string | null | undefined,
+	params: Params,
+	english: E,
+): string | E {
+	return (id ? hostMessage(id, params) : undefined) ?? english;
+}
+
+/** The sentence for an API error `code`: the host message `apierr_<code>`. */
+export function apiText<E extends string | null | undefined>(
+	code: string | null | undefined,
+	params: Params,
+	english: E,
+): string | E {
+	return hostText(code && `apierr_${code}`, params, english);
+}
