@@ -315,7 +315,8 @@ val checkJniImportsRelease = registerCheckJniImports("checkJniImportsRelease", c
 // Strings: `pf-l10n android` writes values*/strings.xml and xml/locales_config.xml from
 // l10n/messages into a generated res directory, so R.string.<key> and R.plurals.<key> live in
 // this module's R (l10n/README.md). Nothing generated is committed. It runs host cargo, so every
-// build needs the Rust toolchain, -PskipRustBuild included.
+// build needs the Rust toolchain, -PskipRustBuild included. `--root` names this checkout's
+// messages: a cargo target dir shared with another worktree otherwise hands back its binary.
 @CacheableTask
 abstract class GenerateMessages @Inject constructor(private val exec: ExecOperations) : DefaultTask() {
     @get:InputDirectory
@@ -338,7 +339,8 @@ abstract class GenerateMessages @Inject constructor(private val exec: ExecOperat
             environment("PATH", File(cargo.get()).parent + File.pathSeparator + System.getenv("PATH"))
             commandLine(
                 cargo.get(), "run", "-q", "-p", "pf-l10n", "--",
-                "android", "--out", out.absolutePath, "--parts", "common,client,android,host",
+                "android", "--root", l10n.get().asFile.absolutePath, "--out", out.absolutePath,
+                "--parts", "common,client,android,host",
             )
         }
     }
