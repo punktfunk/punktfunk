@@ -330,7 +330,7 @@ internal fun spec(slot: SlotId, cfg: OverlayConfig, a: RingActions): SlotSpec = 
         enabled = a.keyboardGranted(), reason = "Keyboard input is not granted for this session",
     )
     SlotId.Stats -> SlotSpec(
-        "stats", "Statistics", Icons.Filled.Insights, toggle = true, state = a.stats().label,
+        "stats", "Statistics", Icons.Filled.Insights, toggle = true, state = a.stats().name.lowercase().replaceFirstChar { it.uppercase() },
     )
     SlotId.Mic -> SlotSpec(
         "mic", "Microphone", if (a.micMuted()) Icons.Filled.MicOff else Icons.Filled.Mic,
@@ -940,7 +940,7 @@ private fun sheetRows(
     rows += SheetRowSpec(null, pm.label, if (pm.enabled) pm.state else pm.reason, pm.enabled) { if (pm.enabled) actions.cyclePadMouse() }
     val pt = spec(SlotId.PadType, cfg, actions)
     rows += SheetRowSpec(null, pt.label, if (pt.enabled) pt.state else pt.reason, pt.enabled) { if (pt.enabled) actions.cyclePadType() }
-    rows += SheetRowSpec("View", "Statistics", actions.stats().label) { actions.cycleStats() }
+    rows += SheetRowSpec("View", "Statistics", actions.stats().name.lowercase().replaceFirstChar { it.uppercase() }) { actions.cycleStats() }
     if (actions.screenLayouts().size > 1) {
         rows += SheetRowSpec(null, "Screens", actions.screenLayout().label) { state.close(); actions.cycleScreens() }
     }

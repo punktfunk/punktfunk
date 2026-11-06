@@ -296,7 +296,7 @@ private fun StatsPage(
                             selected = t == tier,
                             onClick = { onTier(t) },
                             shape = SegmentedButtonDefaults.itemShape(index = i, count = all.size),
-                        ) { Text(t.label, maxLines = 1) }
+                        ) { Text(t.name.lowercase().replaceFirstChar { it.uppercase() }, maxLines = 1) }
                     }
                 }
             }
