@@ -50,7 +50,7 @@ public enum PyroWaveQuality {
         return (caption, warning.isEmpty ? nil : warning)
     }
 
-    /// `kbps` as core's `rate_label` writes it: `940 Mbit/s`, `1.3 Gbit/s`.
+    /// `kbps` as a player reads it, as core's `pyrowave::rate` counts: `940 Mbit/s`, `1.3 Gbit/s`.
     public static func rateLabel(kbps: UInt32) -> String {
         let mbps = (UInt64(kbps) + 500) / 1000
         if mbps < 1000 { return L10n.commonMbits(value: String(mbps)) }

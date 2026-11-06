@@ -42,14 +42,6 @@ pub fn rate(kbps: u32) -> Rate {
     Rate::Gbit(gbps.trim_end_matches(".0").to_string())
 }
 
-/// [`rate`] in English, for the C ABI and the Android bridge.
-pub fn rate_label(kbps: u32) -> String {
-    match rate(kbps) {
-        Rate::Mbit(n) => format!("{n} Mbit/s"),
-        Rate::Gbit(n) => format!("{n} Gbit/s"),
-    }
-}
-
 /// Why this device's link falls short of a PyroWave rate ([`link_shortfall`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LinkShortfall {
@@ -73,19 +65,6 @@ pub fn link_shortfall(required_kbps: u32, facts: LinkFacts) -> Option<LinkShortf
         }
         _ => over(1000).then_some(LinkShortfall::Gbe),
     }
-}
-
-/// [`link_shortfall`] in English, for the C ABI and the Android bridge.
-pub fn link_warning(required_kbps: u32, facts: LinkFacts) -> Option<String> {
-    let need = rate_label(required_kbps);
-    Some(match link_shortfall(required_kbps, facts)? {
-        LinkShortfall::Wifi => "PyroWave needs a wired link; this device is on Wi-Fi.".into(),
-        LinkShortfall::Port(mbps) => {
-            let port = rate_label(mbps.saturating_mul(1000));
-            format!("Needs {need} \u{2014} this device's port carries {port}.")
-        }
-        LinkShortfall::Gbe => format!("Needs {need} \u{2014} more than a 1 GbE link carries."),
-    })
 }
 
 /// `bpp` bits per pixel for a 4:2:0 SDR frame at `mode`, kbps. 4:4:4 carries twice the
@@ -276,12 +255,11 @@ mod tests {
 
     #[test]
     fn rates_read_in_mbit_then_gbit() {
+        assert_eq!(rate(940_000), Rate::Mbit(940));
+        assert_eq!(rate(999_600), Rate::Gbit("1".into()));
         assert_eq!(rate(1_327_000), Rate::Gbit("1.3".into()));
-        assert_eq!(rate_label(940_000), "940 Mbit/s");
-        assert_eq!(rate_label(999_600), "1 Gbit/s");
-        assert_eq!(rate_label(1_327_000), "1.3 Gbit/s");
-        assert_eq!(rate_label(2_000_000), "2 Gbit/s");
-        assert_eq!(rate_label(10_000_000), "10 Gbit/s");
+        assert_eq!(rate(2_000_000), Rate::Gbit("2".into()));
+        assert_eq!(rate(10_000_000), Rate::Gbit("10".into()));
     }
 
     #[test]
@@ -291,31 +269,21 @@ mod tests {
             mbps,
         };
         // 90 % of the port is the line: at it the rate fits, past it the player is told.
-        assert_eq!(link_warning(900_000, eth(1000)), None);
+        assert_eq!(link_shortfall(900_000, eth(1000)), None);
         assert_eq!(
             link_shortfall(900_001, eth(1000)),
             Some(LinkShortfall::Port(1000))
         );
-        assert_eq!(
-            link_warning(900_001, eth(1000)).as_deref(),
-            Some("Needs 900 Mbit/s \u{2014} this device's port carries 1 Gbit/s.")
-        );
-        assert_eq!(link_warning(2_000_000, eth(2500)), None);
+        assert_eq!(link_shortfall(2_000_000, eth(2500)), None);
         let wifi = LinkFacts {
             kind: IFACE_KIND_WIFI,
             mbps: 2400,
         };
-        assert_eq!(
-            link_warning(100_000, wifi).as_deref(),
-            Some("PyroWave needs a wired link; this device is on Wi-Fi.")
-        );
+        assert_eq!(link_shortfall(100_000, wifi), Some(LinkShortfall::Wifi));
         // Nothing known, or a wire with no speed: a 1 GbE link is assumed.
         for unknown in [LinkFacts::default(), eth(0)] {
-            assert_eq!(link_warning(900_000, unknown), None);
-            assert_eq!(
-                link_warning(1_327_000, unknown).as_deref(),
-                Some("Needs 1.3 Gbit/s \u{2014} more than a 1 GbE link carries.")
-            );
+            assert_eq!(link_shortfall(900_000, unknown), None);
+            assert_eq!(link_shortfall(1_327_000, unknown), Some(LinkShortfall::Gbe));
         }
     }
 
