@@ -515,6 +515,8 @@
 	"link_launcher_file": "Save launcher file…",
 	"lib_host_not_saved": "This host isn't saved any more",
 	"ended_unexpected": "The stream stopped unexpectedly",
+	"ended_no_codec": "{codec} can't be decoded on this device, and no other codec is available",
+	"ended_decode_failed": "Couldn't start decoding the {codec} video on this device",
 	"ring_group_session": "Session",
 	"ring_group_input": "Input",
 	"ring_group_view": "View",

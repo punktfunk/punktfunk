@@ -116,9 +116,6 @@ pub fn trust_route(
     }
 }
 
-/// What a pinned dial shows when its stored pin is rejected, before or after the dial.
-pub const FINGERPRINT_CHANGED: &str = "Host fingerprint changed — re-pair with a PIN to continue";
-
 /// Where a finished connect goes. Each front-end draws its own surface per arm.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ExitRoute {
@@ -188,13 +185,15 @@ pub fn exit_route(
         ConnectOutcome::Refused { msg, .. } => ExitRoute::Banner(msg.clone()),
         o if wake_armed && o.warrants_wake() => ExitRoute::Wake,
         ConnectOutcome::TrustRejected(msg) if tofu => ExitRoute::Repair(msg.clone()),
-        ConnectOutcome::TrustRejected(_) => ExitRoute::Repair(FINGERPRINT_CHANGED.into()),
-        ConnectOutcome::ConnectFailed(msg) => {
-            ExitRoute::Banner(format!("Couldn't connect — {msg}"))
+        ConnectOutcome::TrustRejected(_) => {
+            ExitRoute::Repair(pf_l10n::client::dial_fingerprint_changed().into())
         }
-        ConnectOutcome::RendererFailed { code: -1 } => ExitRoute::Banner(
-            "Stream session was killed — out of memory, or stopped by the system".into(),
-        ),
+        ConnectOutcome::ConnectFailed(msg) => {
+            ExitRoute::Banner(pf_l10n::client::dial_connect_failed(msg))
+        }
+        ConnectOutcome::RendererFailed { code: -1 } => {
+            ExitRoute::Banner(pf_l10n::client::dial_session_killed().into())
+        }
         ConnectOutcome::RendererFailed { code } => {
             ExitRoute::Banner(ConnectOutcome::died_banner(*code, log))
         }
@@ -524,22 +523,11 @@ impl PlanError {
     /// shortcut is unactionable.
     pub fn message(&self) -> String {
         match self {
-            PlanError::AmbiguousHost(r) => {
-                format!("More than one saved host is called \"{r}\" — open Punktfunk and pick one.")
-            }
-            PlanError::UnresolvableHost(r) => {
-                format!("No saved host matches \"{r}\".")
-            }
-            PlanError::PinConflict { host } => format!(
-                "That link's fingerprint doesn't match the one saved for {host} — it's out of \
-                 date, or it isn't that host. Nothing was connected."
-            ),
-            PlanError::UnknownPreset(p) => {
-                format!("That link asks for a settings preset called \"{p}\", which doesn't exist here.")
-            }
-            PlanError::AmbiguousPreset(p) => {
-                format!("More than one settings preset is called \"{p}\" — rename one, or use its id in the link.")
-            }
+            PlanError::AmbiguousHost(r) => pf_l10n::client::link_ambiguous_host(r),
+            PlanError::UnresolvableHost(r) => pf_l10n::client::link_unknown_host(r),
+            PlanError::PinConflict { host } => pf_l10n::client::link_pin_conflict(host),
+            PlanError::UnknownPreset(p) => pf_l10n::client::link_unknown_preset(p),
+            PlanError::AmbiguousPreset(p) => pf_l10n::client::link_ambiguous_preset(p),
         }
     }
 }
@@ -667,14 +655,12 @@ pub enum WakeOutcome {
     TimedOut,
 }
 
-/// The parked headline on [`WakeOutcome::TimedOut`]: `Desk didn't wake`. The console's
-/// wake card (`pf-console-ui`, no `desktop` cfg) spells the same two lines itself.
+/// The parked headline on [`WakeOutcome::TimedOut`]: `Desk didn't wake`, above
+/// `dial_wake_parked_hint` and Try Again / Cancel. The console's wake card (`pf-console-ui`,
+/// no `desktop` cfg) reads the same two messages itself.
 pub fn wake_parked_line(name: &str) -> String {
-    format!("{name} didn't wake")
+    pf_l10n::client::dial_wake_parked(name)
 }
-
-/// The sentence under [`wake_parked_line`], above Try Again / Cancel.
-pub const WAKE_PARKED_HINT: &str = "Check its power settings, or wake it manually and try again.";
 
 impl Default for WakeWait {
     fn default() -> WakeWait {
@@ -823,31 +809,42 @@ impl ConnectOutcome {
             | ConnectOutcome::Refused { msg, .. }
             | ConnectOutcome::Ended(Some(msg)) => Some(msg.clone()),
             ConnectOutcome::RendererFailed { code: -1 } => {
-                Some("The console was killed — out of memory, or stopped by the system".into())
+                Some(pf_l10n::client::dial_console_killed().into())
             }
-            ConnectOutcome::RendererFailed { code } => {
-                let how = Self::exit_phrase(*code);
-                Some(format!(
-                    "The console didn't start (punktfunk-session {how}). Check {log}."
-                ))
-            }
+            ConnectOutcome::RendererFailed { code } => Some(match ExitHow::of(*code) {
+                ExitHow::AccessViolation => pf_l10n::client::dial_console_access_violation(log),
+                ExitHow::Exception(hex) => pf_l10n::client::dial_console_exception(hex, log),
+                ExitHow::Code => pf_l10n::client::dial_console_exit_code(code, log),
+            }),
         }
     }
 
     /// The banner for a session that died without a contract line: a missing runtime, a
     /// crash, or the wrong binary. `log` names where the cause is.
     pub fn died_banner(code: i32, log: &str) -> String {
-        let how = Self::exit_phrase(code);
-        format!("The session didn't start (punktfunk-session {how}). Check {log}.")
+        match ExitHow::of(code) {
+            ExitHow::AccessViolation => pf_l10n::client::dial_session_access_violation(log),
+            ExitHow::Exception(hex) => pf_l10n::client::dial_session_exception(hex, log),
+            ExitHow::Code => pf_l10n::client::dial_session_exit_code(code, log),
+        }
     }
+}
 
-    /// How a session that died silently went, for a banner. An NTSTATUS crash reads in
-    /// hex, the form the Event Log and the crash filter use.
-    pub fn exit_phrase(code: i32) -> String {
+/// How a session that died silently went, for a banner. An NTSTATUS crash reads in hex, the
+/// form the Event Log and the crash filter use.
+#[derive(Debug, PartialEq, Eq)]
+enum ExitHow {
+    AccessViolation,
+    Exception(String),
+    Code,
+}
+
+impl ExitHow {
+    fn of(code: i32) -> ExitHow {
         match code as u32 {
-            0xC000_0005 => "crashed with an access violation (0xC0000005)".to_string(),
-            c if code < 0 => format!("died with exception 0x{c:08X}"),
-            _ => format!("exited with code {code}"),
+            0xC000_0005 => ExitHow::AccessViolation,
+            c if code < 0 => ExitHow::Exception(format!("0x{c:08X}")),
+            _ => ExitHow::Code,
         }
     }
 }
@@ -1278,10 +1275,6 @@ pub fn session_command(plan: &ConnectPlan) -> (Command, Option<std::path::PathBu
     (cmd, spec_path)
 }
 
-/// What a console that never spawned shows. [`ConnectOutcome::console_banner`] has the
-/// sentences for one that did.
-pub const CONSOLE_NOT_STARTED: &str = "The console didn't start. Check the client log.";
-
 /// The console command: `--browse` with the stdout contract on, so a shell reads its ready
 /// and its exit as it reads a stream's. `until_no_pads` hands the desk back once the last
 /// controller is gone.
@@ -1510,7 +1503,7 @@ mod tests {
         };
         let banner = |s: &str| Banner(s.into());
         let died = Banner(O::died_banner(1, "the client log"));
-        let changed = Repair(FINGERPRINT_CHANGED.into());
+        let changed = Repair(pf_l10n::client::dial_fingerprint_changed().into());
         let redial = RedialProfile {
             id: "kid".into(),
             msg: "no".into(),
@@ -1635,7 +1628,7 @@ mod tests {
             msg: "no".into(),
         };
         let (changed, forget) = (
-            Repair(FINGERPRINT_CHANGED.into()),
+            Repair(pf_l10n::client::dial_fingerprint_changed().into()),
             ForgetProfileThen("no".into()),
         );
         // A locked profile prompts again on the retry too, and the stand-in line says nothing.
@@ -2140,12 +2133,13 @@ mod tests {
     }
 
     #[test]
-    fn exit_phrase_names_an_ntstatus_in_hex() {
-        assert_eq!(ConnectOutcome::exit_phrase(2), "exited with code 2");
-        let av = ConnectOutcome::exit_phrase(-1073741819);
+    fn a_silent_death_names_an_ntstatus_in_hex() {
+        assert_eq!(ExitHow::of(2), ExitHow::Code);
+        assert_eq!(ExitHow::of(-1073741819), ExitHow::AccessViolation);
+        let av = ConnectOutcome::died_banner(-1073741819, "the log");
         assert!(av.contains("access violation (0xC0000005)"), "{av}");
-        let other = ConnectOutcome::exit_phrase(0xC000_0409u32 as i32);
-        assert!(other.contains("0xC0000409"), "{other}");
+        let other = ConnectOutcome::died_banner(0xC000_0409u32 as i32, "the log");
+        assert!(other.contains("exception 0xC0000409"), "{other}");
     }
 
     #[test]

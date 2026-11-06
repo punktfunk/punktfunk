@@ -44,8 +44,7 @@ pub fn after_key_failure() -> Gate {
 /// The prompt's error line for a `ProfileLocked` close that said `said`. Empty, or the
 /// session's stand-in for an empty one, means "enter the password": no line.
 pub fn refusal_line(said: &str) -> Option<String> {
-    let stand_in =
-        crate::trust::connect_reject_message(punktfunk_core::reject::RejectReason::ProfileLocked);
+    let stand_in = pf_l10n::host::reject_profile_locked();
     (!said.trim().is_empty() && said != stand_in).then(|| said.to_string())
 }
 
@@ -83,7 +82,7 @@ pub fn pending(carries_unlock: bool) -> Pending {
 
 /// The progress line of [`Pending::Starting`].
 pub fn starting_line(host: &str) -> String {
-    format!("Starting your desktop on {host}\u{2026}")
+    pf_l10n::client::unlock_starting(host)
 }
 
 /// This device's unlock keys in the platform's secure hardware, one per name. Every call
@@ -146,11 +145,11 @@ pub fn gate(need: UnlockNeed, key: Option<&DeviceKey>) -> Gate {
 /// Why the wire refuses `password`, as the prompt's error line. Never trimmed.
 pub fn password_problem(password: &[u8]) -> Option<&'static str> {
     if password.is_empty() {
-        Some("Enter the password.")
+        Some(pf_l10n::client::unlock_error_empty())
     } else if password.len() > msg::UNLOCK_PASSWORD_MAX {
-        Some("That password is too long.")
+        Some(pf_l10n::client::unlock_error_too_long())
     } else if password.contains(&0) || std::str::from_utf8(password).is_err() {
-        Some("That password has a character Punktfunk can't send.")
+        Some(pf_l10n::client::unlock_error_bad_char())
     } else {
         None
     }
@@ -184,7 +183,7 @@ pub fn prompt_unlock(
         None => (msg::ENROLL_NONE, Vec::new()),
     };
     ProfileUnlock::new(msg::UNLOCK_PASSWORD, password, stay, alg, public)
-        .map_err(|_| "That password has a character Punktfunk can't send.")
+        .map_err(|_| pf_l10n::client::unlock_error_bad_char())
 }
 
 /// The kind-2 unlock for `challenge`: the signed message of the profile-unlock contract,

@@ -109,21 +109,18 @@ impl ParseError {
 
     /// Names the failing reference so a shortcut never streams with the wrong settings.
     pub fn message(&self) -> String {
+        use pf_l10n::client as m;
         match self {
-            ParseError::NotOurScheme => "That isn't a Punktfunk link.".into(),
-            ParseError::TooLong => "That link is too long to be genuine.".into(),
-            ParseError::UnknownRoute(r) => format!("Punktfunk links can't do \"{r}\"."),
-            ParseError::PairRefused => {
-                "Pairing can't be done from a link — pair the host in Punktfunk first.".into()
-            }
-            ParseError::MissingHostRef => "That link doesn't say which host to use.".into(),
-            ParseError::BadEscape | ParseError::ControlChar => {
-                "That link is malformed and was ignored.".into()
-            }
-            ParseError::ParamTooLong(p) => format!("That link's \"{p}\" value is too long."),
-            ParseError::BadFingerprint => "That link's host fingerprint isn't a valid one.".into(),
-            ParseError::BadHostParam => "That link's host address isn't valid.".into(),
-            ParseError::BadLaunchId => "That link's game id isn't a valid one.".into(),
+            ParseError::NotOurScheme => m::link_error_not_our_scheme().into(),
+            ParseError::TooLong => m::link_error_too_long().into(),
+            ParseError::UnknownRoute(r) => m::link_error_unknown_route(r),
+            ParseError::PairRefused => m::link_error_pair_refused().into(),
+            ParseError::MissingHostRef => m::link_error_missing_host_ref().into(),
+            ParseError::BadEscape | ParseError::ControlChar => m::link_error_malformed().into(),
+            ParseError::ParamTooLong(p) => m::link_error_param_too_long(p),
+            ParseError::BadFingerprint => m::link_error_bad_fingerprint().into(),
+            ParseError::BadHostParam => m::link_error_bad_host_param().into(),
+            ParseError::BadLaunchId => m::link_error_bad_launch_id().into(),
         }
     }
 }

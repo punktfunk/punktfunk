@@ -336,13 +336,10 @@ impl HostEdit {
     pub fn parse_address(text: &str) -> Result<(String, Option<u16>), String> {
         let addr = text.trim();
         if addr.is_empty() {
-            return Err("Enter the host's address.".into());
+            return Err(pf_l10n::client::hosts_error_address_empty().into());
         }
-        crate::deeplink::split_host_port(addr).ok_or_else(|| {
-            format!(
-                "\u{201c}{addr}\u{201d} isn't an address. Use a name or an IP, like 192.168.1.20."
-            )
-        })
+        crate::deeplink::split_host_port(addr)
+            .ok_or_else(|| pf_l10n::client::hosts_error_address_invalid(addr))
     }
 
     /// The port field; blank is the default 9777.
@@ -351,18 +348,15 @@ impl HostEdit {
         if text.is_empty() {
             return Ok(crate::deeplink::DEFAULT_PORT);
         }
-        text.parse::<u16>().ok().filter(|&p| p != 0).ok_or_else(|| {
-            format!("\u{201c}{text}\u{201d} isn't a port. Use a number from 1 to 65535.")
-        })
+        text.parse::<u16>()
+            .ok()
+            .filter(|&p| p != 0)
+            .ok_or_else(|| pf_l10n::client::hosts_error_port_invalid(text))
     }
 
     /// The Wake-on-LAN field: a list, or empty to clear it.
     pub fn parse_macs(text: &str) -> Result<Vec<String>, String> {
-        crate::wol::parse_mac_list(text).map_err(|bad| {
-            format!(
-                "\u{201c}{bad}\u{201d} isn't a MAC address. Use six pairs, like aa:bb:cc:dd:ee:ff."
-            )
-        })
+        crate::wol::parse_mac_list(text).map_err(pf_l10n::client::hosts_error_mac_invalid)
     }
 }
 

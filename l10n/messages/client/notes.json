@@ -364,6 +364,8 @@
 	"link_launcher_file": "Menu row: save a file that launches this host or title.",
 	"lib_host_not_saved": "Toast when a link can't be made because the host was removed.",
 	"ended_unexpected": "Why a stream ended: the client's own receive loop failed.",
+	"ended_no_codec": "Why a stream ended: no codec this device decodes is left. {codec}: a codec name such as HEVC or AV1.",
+	"ended_decode_failed": "Why a stream ended: the video decoder did not start. {codec}: a codec name such as HEVC or AV1.",
 	"ring_group_session": "Quick actions catalogue group: actions that end or leave the stream.",
 	"ring_group_input": "Quick actions catalogue group: keyboard, touch and controller actions.",
 	"ring_group_view": "Quick actions catalogue group: what is shown on screen (statistics, screens).",

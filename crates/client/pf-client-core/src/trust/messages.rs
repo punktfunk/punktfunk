@@ -16,61 +16,29 @@ pub fn reject_message(reason: punktfunk_core::reject::RejectReason, said: Option
 /// User-facing sentence for a typed host rejection, shared by every desktop/console
 /// surface so "declined" never renders as "timed out". The caller words other errors.
 pub fn connect_reject_message(reason: punktfunk_core::reject::RejectReason) -> String {
+    use pf_l10n::host as m;
     use punktfunk_core::reject::RejectReason as R;
     match reason {
-        R::Denied => "The host declined this device's request.".into(),
-        R::ApprovalTimeout => {
-            "Nobody approved the request on the host in time — approve this device in the \
-             host's console or web UI, then request access again."
-                .into()
-        }
-        R::Superseded => {
-            "A newer request from this device replaced this one — approve the latest request \
-             on the host."
-                .into()
-        }
-        R::IdentityRequired => {
-            "The host requires pairing — pair this device (PIN or request access) first.".into()
-        }
-        R::PairingNotArmed => {
-            "Pairing isn't armed on the host — arm it on the host's Pairing page, then try \
-             again."
-                .into()
-        }
-        R::PairingBoundToOtherDevice => {
-            "The host's pairing window is armed for a different device — arm it for this one."
-                .into()
-        }
-        R::PairingRateLimited => {
-            "Too many pairing attempts — wait a couple of seconds and try again.".into()
-        }
-        R::WireVersionMismatch => {
-            "Client and host versions don't match — update both to the same release.".into()
-        }
-        R::Busy => "The host is busy with another session.".into(),
-        R::SetupFailed => {
-            "The host accepted the connection but couldn't start the stream — the host's log \
-             (web console → Log) has the cause."
-                .into()
-        }
-        R::AccessExpired => {
-            "Your access to this host has expired — ask the host's owner to grant it again.".into()
-        }
-        R::LaunchNotPermitted => {
-            "This device isn't permitted to launch games on the host — connect without picking \
-             a game, or ask the host's owner to allow launching."
-                .into()
-        }
-        R::HostPower => {
-            "The host is going to sleep or shutting down — wake it when you want to play again."
-                .into()
-        }
-        R::ProfileUnknown => "That profile is gone from this host. Pick another one.".into(),
-        R::NoSeat => "All seats are taken.".into(),
-        R::SeatOccupied => "Someone is already playing as that profile.".into(),
-        R::SeatUnavailable => "That profile can't play on this host right now.".into(),
-        R::ProfileLocked => "This profile is locked. Enter its password.".into(),
+        R::Denied => m::reject_denied(),
+        R::ApprovalTimeout => m::reject_approval_timeout(),
+        R::Superseded => m::reject_superseded(),
+        R::IdentityRequired => m::reject_identity_required(),
+        R::PairingNotArmed => m::reject_not_armed(),
+        R::PairingBoundToOtherDevice => m::reject_bound_other(),
+        R::PairingRateLimited => m::reject_rate_limited(),
+        R::WireVersionMismatch => m::reject_wire_version(),
+        R::Busy => m::reject_busy(),
+        R::SetupFailed => m::reject_setup_failed(),
+        R::AccessExpired => m::reject_access_expired(),
+        R::LaunchNotPermitted => m::reject_launch_not_permitted(),
+        R::HostPower => m::reject_host_power(),
+        R::ProfileUnknown => m::reject_profile_unknown(),
+        R::NoSeat => m::reject_no_seat(),
+        R::SeatOccupied => m::reject_seat_occupied(),
+        R::SeatUnavailable => m::reject_seat_unavailable(),
+        R::ProfileLocked => m::reject_profile_locked(),
     }
+    .into()
 }
 
 /// User-facing sentence for a failed [`pair_with_host`](super::pair_with_host). Crypto is a
@@ -78,17 +46,13 @@ pub fn connect_reject_message(reason: punktfunk_core::reject::RejectReason) -> S
 pub fn pair_error_message(err: &punktfunk_core::PunktfunkError) -> String {
     use punktfunk_core::PunktfunkError as E;
     match err {
-        E::Crypto => "Wrong PIN — check the PIN on the host's Pairing page and try again.".into(),
+        E::Crypto => pf_l10n::client::pair_wrong_pin().into(),
         E::Rejected(reason, said) => reject_message(*reason, Some(said)),
-        E::Timeout => "The host didn't answer. Is it running and reachable?".into(),
-        E::Io(_) => {
-            "Couldn't reach the host — check that this device and the host are on the same \
-             network (no VPN on this device, no guest-Wi-Fi / AP isolation)."
-                .into()
-        }
+        E::Timeout => pf_l10n::client::error_host_timeout().into(),
+        E::Io(_) => pf_l10n::client::error_host_unreachable().into(),
         other => {
             tracing::warn!(error = %other, "pairing failed");
-            "Pairing didn't finish — try again from the host's Pairing page.".to_string()
+            pf_l10n::client::pair_failed().into()
         }
     }
 }
@@ -97,9 +61,7 @@ pub fn pair_error_message(err: &punktfunk_core::PunktfunkError) -> String {
 /// the host not matching its advert.
 pub fn access_error_message(err: &punktfunk_core::PunktfunkError) -> String {
     match err {
-        punktfunk_core::PunktfunkError::Crypto => {
-            "The host didn't present the identity it advertised. Pair with its PIN instead.".into()
-        }
+        punktfunk_core::PunktfunkError::Crypto => pf_l10n::client::pair_identity_mismatch().into(),
         other => pair_error_message(other),
     }
 }
