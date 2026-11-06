@@ -29,6 +29,8 @@ pub(super) const SERVICE: &str = "punktfunk-seat";
 const NO_SESSION: u8 = 90;
 /// PAM refused what the gate admitted.
 const REFUSED: u8 = 91;
+/// The session opened, but `seat-session` didn't start in it, so nothing of it ran; it is closed.
+const NOT_STARTED: u8 = 92;
 const NO_SERVICE: u8 = 94;
 const NO_PASSWORD: u8 = 95;
 /// The auth phase's limit. Past it the default action of `SIGALRM` ends the helper.
@@ -52,6 +54,7 @@ pub(super) fn fallback(ended: Option<Ended>) -> Option<Fallback> {
     match ended? {
         Ended::Exited(code) => match u8::try_from(code).ok()? {
             REFUSED => fall("PAM refused the password the gate admitted".into(), true),
+            NOT_STARTED => fall("seat-session didn't start in the session".into(), true),
             NO_SERVICE => fall(format!("the {SERVICE} PAM service isn't installed"), false),
             NO_PASSWORD => fall("the login helper got no password".into(), false),
             NO_SESSION => fall(
@@ -177,15 +180,16 @@ fn run_in(account: &str, service: &str, socket: &Path, program: &Path) -> u8 {
         tracing::error!(account, %cause, "PAM opened no session");
         return NO_SESSION;
     }
-    // The session is open: no code below is one `fallback` reads as "no session".
     let core = (getrlimit(Resource::Core) == none).then_some(core);
     let mut child = match person.spawn(program, login.env(), core) {
         Ok(child) => child,
         Err(error) => {
             tracing::error!(account, %error, "seat-session did not start in the session");
-            return 1;
+            drop(login);
+            return NOT_STARTED;
         }
     };
+    // seat-session runs: no code below is one `fallback` reads as "no session".
     let status = wait_forwarding(&mut child, &signals);
     drop(login);
     use std::os::unix::process::ExitStatusExt as _;
@@ -413,11 +417,13 @@ mod tests {
     use super::*;
 
     /// Every end before a session falls back, systemd's own failures to start the helper
-    /// included; only PAM's refusal trips the breaker. Anything else is the seat's.
+    /// included, and so does a session `seat-session` didn't start in. Only those two trip the
+    /// breaker. Anything else is the seat's.
     #[test]
     fn only_an_end_before_a_session_falls_back() {
         let trips = |ended| fallback(Some(ended)).map(|f| f.trips);
         assert_eq!(trips(Ended::Exited(91)), Some(true));
+        assert_eq!(trips(Ended::Exited(92)), Some(true));
         for code in [90, 94, 95, 200, 203, 229, 254] {
             assert_eq!(trips(Ended::Exited(code)), Some(false), "{code}");
         }
@@ -467,8 +473,9 @@ mod tests {
     /// in its or the helper's argv and environment, or in the helper's log; the helper keeps no
     /// core limit and forwards a stop. A wrong password, a locked, an expired and a must-change
     /// account, a missing PAM file, a missing `seat-session` and no password at all each end it
-    /// before a session, with their own code. Makes and removes the account `pfwallet`, the group
-    /// `pfwalletg`, `/etc/pam.d/punktfunk-seat`, the login socket and the row's runtime directory.
+    /// before a session; a `seat-session` the person can't run ends it with the session closed.
+    /// Makes and removes the account `pfwallet`, the group `pfwalletg`,
+    /// `/etc/pam.d/punktfunk-seat`, the login socket and the row's runtime directory.
     #[cfg(target_os = "linux")]
     #[test]
     #[ignore = "needs root, libpam, the login service and a built punktfunk-seats; makes the account pfwallet"]
@@ -766,6 +773,12 @@ mod tests {
             "{log}"
         );
         std::fs::rename(&away, &program).unwrap();
+        // Root still finds seat-session; the person can't reach it, so the exec fails.
+        std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        let (code, log) = start(Some(PASSWORD), never);
+        assert_eq!(code, i32::from(NOT_STARTED), "{log}");
+        assert!(log.contains("seat-session did not start"), "{log}");
+        std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o755)).unwrap();
         std::fs::remove_file(&pam_file).unwrap();
         assert_eq!(refused(Some(PASSWORD)), i32::from(NO_SERVICE));
     }
