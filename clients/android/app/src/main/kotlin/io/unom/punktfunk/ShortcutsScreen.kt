@@ -19,13 +19,25 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import io.unom.punktfunk.kit.R
 
-/** What to press, then what it does. */
-data class ShortcutItem(val keys: String, val text: String)
+/**
+ * What to press. Key and button names are data and read the same in every language; a gesture, or
+ * a hold of a key, is worded by a message that takes the key in its `{keys}`.
+ */
+sealed interface Press {
+    data class Keys(val names: String) : Press
+    data class Worded(val message: Int, val keys: String = "") : Press
+}
 
-data class ShortcutGroup(val title: String, val items: List<ShortcutItem>)
+/** What to press, then what it does ([text] is a message id). */
+data class ShortcutItem(val press: Press, val text: Int)
+
+/** A heading ([title] is a message id; [titleArgs] fill its placeholders in order) and its rows. */
+data class ShortcutGroup(val title: Int, val items: List<ShortcutItem>, val titleArgs: List<String> = emptyList())
 
 /**
  * The in-stream keys, gestures and controller chords, as this client binds them: the key chords
@@ -34,31 +46,32 @@ data class ShortcutGroup(val title: String, val items: List<ShortcutItem>)
  */
 val shortcutGroups: List<ShortcutGroup> = listOf(
     ShortcutGroup(
-        "Keyboard",
+        R.string.controls_group_keyboard,
         listOf(
-            ShortcutItem("Ctrl+Alt+Shift+Q", "Release the pointer, or capture it again"),
-            ShortcutItem("Ctrl+Alt+Shift+O", "Open the quick actions dial"),
+            ShortcutItem(Press.Keys("Ctrl+Alt+Shift+Q"), R.string.controls_release_pointer),
+            ShortcutItem(Press.Keys("Ctrl+Alt+Shift+O"), R.string.controls_open_dial),
         ),
     ),
     ShortcutGroup(
-        "Touchscreen (Trackpad and Direct pointer modes)",
+        R.string.controls_group_touch_full,
         listOf(
-            ShortcutItem("Back", "Open the quick actions dial"),
-            ShortcutItem("Three-finger tap", "Cycle the statistics overlay"),
-            ShortcutItem("Three-finger swipe up", "Show the keyboard"),
-            ShortcutItem("Three-finger swipe down", "Hide the keyboard"),
-            ShortcutItem("Two-finger twist", "Open the quick actions dial"),
+            ShortcutItem(Press.Keys("Back"), R.string.controls_open_dial),
+            ShortcutItem(Press.Worded(R.string.controls_gesture_three_finger_tap), R.string.controls_cycle_stats),
+            ShortcutItem(Press.Worded(R.string.controls_gesture_three_finger_swipe_up), R.string.controls_show_keyboard),
+            ShortcutItem(Press.Worded(R.string.controls_gesture_three_finger_swipe_down), R.string.controls_hide_keyboard),
+            ShortcutItem(Press.Worded(R.string.controls_gesture_two_finger_twist), R.string.controls_open_dial),
         ),
     ),
     ShortcutGroup(
-        "Controller (Select is Back or View)",
+        R.string.controls_group_pad_full,
         listOf(
-            ShortcutItem("Select + A", "Open the quick actions dial"),
-            ShortcutItem("Select + X", "Cycle the statistics overlay"),
-            ShortcutItem("Select + Y", "Mute or unmute the microphone"),
-            ShortcutItem("Hold Select", "Press the host's guide button, where Hold Select for guide is on"),
-            ShortcutItem("L1 + R1 + Start + Select", "Hold to disconnect"),
+            ShortcutItem(Press.Keys("Select + A"), R.string.controls_open_dial),
+            ShortcutItem(Press.Keys("Select + X"), R.string.controls_cycle_stats),
+            ShortcutItem(Press.Keys("Select + Y"), R.string.controls_toggle_mic),
+            ShortcutItem(Press.Worded(R.string.controls_hold, "Select"), R.string.controls_guide_hold),
+            ShortcutItem(Press.Keys("L1 + R1 + Start + Select"), R.string.controls_hold_disconnect),
         ),
+        titleArgs = listOf("Select", "Back", "View"),
     ),
 )
 
@@ -72,9 +85,9 @@ fun ShortcutsScreen(onBack: () -> Unit) {
             verticalAlignment = Alignment.CenterVertically,
         ) {
             IconButton(onClick = onBack) {
-                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.common_back))
             }
-            Text("Stream controls", style = MaterialTheme.typography.headlineSmall)
+            Text(stringResource(R.string.controls_title), style = MaterialTheme.typography.headlineSmall)
         }
         Column(
             modifier = Modifier
@@ -84,21 +97,24 @@ fun ShortcutsScreen(onBack: () -> Unit) {
             verticalArrangement = Arrangement.spacedBy(20.dp),
         ) {
             Text(
-                "Press these while a stream is running.",
+                stringResource(R.string.controls_lead),
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             for (group in shortcutGroups) {
-                SettingsGroup(header = group.title) {
+                SettingsGroup(header = stringResource(group.title, *group.titleArgs.toTypedArray())) {
                     for (item in group.items) {
                         Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                             Text(
-                                item.keys,
+                                when (val p = item.press) {
+                                    is Press.Keys -> p.names
+                                    is Press.Worded -> stringResource(p.message, p.keys)
+                                },
                                 style = MaterialTheme.typography.bodyMedium,
                                 fontWeight = FontWeight.SemiBold,
                                 modifier = Modifier.width(132.dp),
                             )
-                            Text(item.text, style = MaterialTheme.typography.bodyMedium)
+                            Text(stringResource(item.text), style = MaterialTheme.typography.bodyMedium)
                         }
                     }
                 }
