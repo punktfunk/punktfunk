@@ -493,7 +493,7 @@ fn draw_key(
         Key::Backspace => draw_backspace_icon(canvas, cx, cy, k, ink),
         Key::Done => {
             let size = 15.0 * k;
-            let label = "Done";
+            let label = pf_l10n::common::common_done();
             let tw = fonts.measure(label, W::SemiBold, size) as f64;
             let check_w = 14.0 * k;
             let total = check_w + 6.0 * k + tw;
