@@ -15,6 +15,7 @@
 
 #if !os(tvOS)
 import PunktfunkKit
+import PunktfunkShared
 import SwiftUI
 
 /// The live session's menu-reachable actions, published by ContentView via
@@ -52,17 +53,17 @@ struct StreamCommands: Commands {
     @FocusedValue(\.sessionFocus) private var session
 
     var body: some Commands {
-        CommandMenu("Stream") {
+        CommandMenu(L10n.appleMenuStream) {
             // From the focused session's own tier: a preset that starts a session on Detailed
             // cycles to Off from here, whatever the global default is.
-            Button("Cycle Statistics") { session?.cycleStats() }
+            Button(L10n.appleMenuCycleStatistics) { session?.cycleStats() }
             .keyboardShortcut("s", modifiers: [.control, .option, .shift])
             .disabled(session?.isStreaming != true)
             // Reaches the key window's stream view via NotificationCenter — capture is view
             // state the Scene can't touch directly. (Captured, the combo is handled by
             // InputCapture's monitor before menus see it; this item is the released-state
             // path and the shortcut's menu-bar documentation.)
-            Button("Release Mouse") {
+            Button(L10n.appleMenuReleaseMouse) {
                 NotificationCenter.default.post(name: .punktfunkReleaseCapture, object: nil)
             }
             .keyboardShortcut("q", modifiers: [.control, .option, .shift])
@@ -71,7 +72,7 @@ struct StreamCommands: Commands {
             // Per session, so it starts off every time. Greyed when the session sends no microphone
             // (mic off in Settings, or a preset that turns it off). Captured, InputCapture's chord
             // path handles the combo first; this item is the released-state path and documents it.
-            Button(session?.micMuted == true ? "Unmute Microphone" : "Mute Microphone") {
+            Button(session?.micMuted == true ? L10n.appleMenuUnmuteMicrophone : L10n.appleMenuMuteMicrophone) {
                 session?.toggleMicMute()
             }
             .keyboardShortcut("a", modifiers: [.control, .option, .shift])
@@ -79,7 +80,8 @@ struct StreamCommands: Commands {
             // Mid-session clipboard flip (design/clipboard-and-file-transfer.md §5.3). Greyed
             // when the host doesn't advertise the cap (older host / operator policy off). Captured,
             // InputCapture's chord path handles the combo first; this item is the released path.
-            Button(session?.clipboardOn == true ? "Stop Sharing Clipboard" : "Share Clipboard") {
+            Button(session?.clipboardOn == true ? L10n.appleMenuStopSharingClipboard
+                : L10n.appleMenuShareClipboard) {
                 session?.toggleClipboard()
             }
             .keyboardShortcut("c", modifiers: [.control, .option, .shift])
@@ -89,20 +91,20 @@ struct StreamCommands: Commands {
             // twist, so this menu item and its ⌃⌥⇧O — the desktop clients' own chord for the ring
             // — are how it opens; a pad opens it with Select+A. Captured, InputCapture's monitor
             // catches the combo and toggles the same ring.
-            Button("Quick Actions") { session?.toggleQuickActions() }
+            Button(L10n.appleMenuQuickActions) { session?.toggleQuickActions() }
             .keyboardShortcut("o", modifiers: [.control, .option, .shift])
             .disabled(session?.isStreaming != true)
             // Toggle the window's fullscreen. ⌃⌘F is the macOS-standard fullscreen combo; here it's
             // explicit so it's discoverable. A captured stream view swallows keys, so with Capture
             // system shortcuts off InputCapture's monitor posts the same notification; with it on,
             // ⌃⌘F goes to the host.
-            Button("Toggle Fullscreen") {
+            Button(L10n.appleMenuToggleFullscreen) {
                 NotificationCenter.default.post(name: .punktfunkToggleFullscreen, object: nil)
             }
             .keyboardShortcut("f", modifiers: [.control, .command])
             #endif
             Divider()
-            Button("Disconnect") { session?.disconnect() }
+            Button(L10n.appleMenuDisconnect) { session?.disconnect() }
                 .keyboardShortcut("d", modifiers: [.control, .option, .shift])
                 .disabled(session?.isStreaming != true)
         }
