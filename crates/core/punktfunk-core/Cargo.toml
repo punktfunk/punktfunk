@@ -32,16 +32,14 @@ quic = ["tls", "pake", "dep:quinn", "dep:quinn-udp", "dep:tokio", "dep:rcgen", "
 ureq-tls = ["tls", "dep:ureq"]
 # Serde derives on the stats-overlay snapshot (`hud`), for the desktop's `stats-json:` line.
 serde = ["dep:serde"]
-# The stats overlay's words (`hud::format`, its labels) from pf-l10n. Clients turn it on; the
-# host never draws an overlay and stays without it.
+# The words a client shows from this crate: the stats overlay (`hud::format`, its labels)
+# and the mute notices (`audio::audio_mute_label`). Clients turn it on; the host never
+# shows them and stays without pf-l10n.
 l10n = ["dep:pf-l10n"]
 # Optional native backend for armv7 SIMD; preserves the RFC 8439 wire format.
 chacha-aws-lc-rs = ["dep:aws-lc-rs"]
 # Optional native AES-128-GCM (VAES on x86 hosts); same wire format. Off for wasm and armv7.
 aes-aws-lc-rs = ["dep:aws-lc-rs"]
-# The mute notices a client shows (`audio::audio_mute_label`), worded from the client messages.
-# Clients only: the host never shows them and stays without pf-l10n.
-l10n = ["dep:pf-l10n"]
 
 [dependencies]
 reed-solomon-simd = "3.1"      # GF(2^16) Leopard-RS, SIMD, O(n log n) — the wall-breaker (P2)
