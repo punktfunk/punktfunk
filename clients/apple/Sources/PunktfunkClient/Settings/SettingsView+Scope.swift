@@ -315,20 +315,20 @@ extension SettingsView {
                     .frame(width: 6, height: 6)
                     // The adjacent text says the state; the dot is the at-a-glance version.
                     .accessibilityHidden(true)
-                Text("Overrides Default settings")
+                Text(L10n.prefsOverridden)
                     .font(.geist(12, .medium, relativeTo: .caption2))
                     .foregroundStyle(Color.brand)
                 Spacer(minLength: 12)
                 Button {
                     resetOverride(name)
                 } label: {
-                    Label("Reset", systemImage: "arrow.uturn.backward")
+                    Label(L10n.commonReset, systemImage: "arrow.uturn.backward")
                         .font(.geist(11, .medium, relativeTo: .caption2))
                 }
                 .buttonStyle(.bordered)
                 .controlSize(.small)
-                .accessibilityLabel("Reset to Default settings")
-                .help("Stop overriding this — follow Default settings again")
+                .accessibilityLabel(L10n.prefsOverrideResetFull)
+                .help(L10n.prefsOverrideHelp)
             }
             // The marker carries a bordered button, which needs more air under the control or
             // caption above it than a line of text would. Here rather than at each call site, so
@@ -352,8 +352,8 @@ extension SettingsView {
         // A Picker rather than hand-rolled buttons: the platform owns the selection checkmark
         // and draws it in its OWN column, which leaves each row's icon free to be the preset's
         // colour chip. Rolling the selection by hand would have cost one or the other.
-        Picker("Editing", selection: scopeSelection) {
-            Label("Default settings", systemImage: "gearshape")
+        Picker(L10n.prefsScopeEditing, selection: scopeSelection) {
+            Label(L10n.prefsScopeDefaults, systemImage: "gearshape")
                 .tag(SettingsScope.defaults)
             ForEach(presets.presets) { preset in
                 Label {
@@ -378,25 +378,27 @@ extension SettingsView {
         Button {
             presetDraft = .create()
         } label: {
-            Label("New Preset…", systemImage: "plus")
+            Label(L10n.presetNew, systemImage: "plus")
         }
         if let active = activePreset {
             Button {
                 presetDraft = .edit(active)
             } label: {
-                Label("Edit “\(active.name)”…", systemImage: "pencil")
+                Label(L10n.presetMenuEditNamed(name: active.name), systemImage: "pencil")
             }
             Button {
                 presetDraft = .duplicate(active, name: Self.copyName(of: active.name, in: presets))
             } label: {
-                Label("Duplicate “\(active.name)”…", systemImage: "plus.square.on.square")
+                Label(
+                    L10n.applePresetMenuDuplicateNamed(name: active.name),
+                    systemImage: "plus.square.on.square")
             }
             Divider()
             Button(role: .destructive) {
                 presetPendingDelete = active
             } label: {
                 Label {
-                    Text("Delete “\(active.name)”…")
+                    Text(L10n.applePresetMenuDeleteNamed(name: active.name))
                 } icon: {
                     // The destructive ROLE colours the row on iOS and nothing at all on macOS,
                     // and either way it leaves the icon as a stencil — so the red is rendered in.
@@ -412,7 +414,7 @@ extension SettingsView {
 
     /// The name of the layer being edited, and one line on what editing it means. Shared by both
     /// chromes — the caption is a stacked line on macOS and the list section's footer on iOS.
-    var scopeName: String { activePreset?.name ?? "Default settings" }
+    var scopeName: String { activePreset?.name ?? String(localized: L10n.prefsScopeDefaults) }
 
     /// The edited layer as a glyph: a preset's own colour, or the settings gear for the
     /// defaults. Colour is only worth choosing if it shows up where you chose it.
@@ -436,10 +438,10 @@ extension SettingsView {
     #endif
 
     var scopeCaption: String {
-        activePreset == nil
-            ? "The settings every preset inherits from."
-            : "Overrides Default settings for hosts that use this preset. Untouched rows keep "
-                + "following the defaults."
+        guard let preset = activePreset else {
+            return String(localized: L10n.applePrefsScopeDefaultsHint)
+        }
+        return L10n.prefsScopePresetHint(name: preset.name)
     }
 
     #if os(macOS)
@@ -478,7 +480,7 @@ extension SettingsView {
         presetPrompts(
             Menu { scopeMenuContent } label: {
                 HStack(spacing: 8) {
-                    Text("Editing")
+                    Text(L10n.prefsScopeEditing)
                         .foregroundStyle(.primary)
                     Spacer(minLength: 8)
                     scopeDot
@@ -507,12 +509,12 @@ extension SettingsView {
             // and pinned cards disappear. Neither is an error, but neither should be a surprise —
             // so the counts are in the question, not discovered afterwards.
             .alert(
-                "Delete “\(presetPendingDelete?.name ?? "")”?",
+                L10n.presetDeleteNamedTitle(name: presetPendingDelete?.name ?? ""),
                 isPresented: presetDeletePresented,
                 presenting: presetPendingDelete
             ) { preset in
-                Button("Cancel", role: .cancel) { presetPendingDelete = nil }
-                Button("Delete", role: .destructive) {
+                Button(L10n.commonCancel, role: .cancel) { presetPendingDelete = nil }
+                Button(L10n.commonDelete, role: .destructive) {
                     presets.delete(preset.id)
                     scope = .defaults
                     presetPendingDelete = nil
@@ -531,14 +533,10 @@ extension SettingsView {
     private func deleteWarning(for preset: StreamPreset) -> String {
         let (bound, pinned) = presets.usage(of: preset.id)
         var parts: [String] = []
-        if bound > 0 {
-            parts.append("\(bound) host\(bound == 1 ? "" : "s") will fall back to Default settings")
-        }
-        if pinned > 0 {
-            parts.append("\(pinned) pinned card\(pinned == 1 ? "" : "s") will disappear")
-        }
-        guard !parts.isEmpty else { return "Nothing uses this preset yet." }
-        return parts.joined(separator: ", ") + "."
+        if bound > 0 { parts.append(L10n.presetDeleteHosts(count: bound)) }
+        if pinned > 0 { parts.append(L10n.presetDeleteCards(count: pinned)) }
+        guard !parts.isEmpty else { return String(localized: L10n.presetDeleteUnused) }
+        return parts.joined(separator: " ")
     }
 
     /// Switching scope is a plain state change — the rows are built by one code path and simply
@@ -550,9 +548,12 @@ extension SettingsView {
     /// "Game copy", "Game copy 2", … — the first name that isn't taken, so Duplicate never opens
     /// with a name the accept button refuses.
     static func copyName(of name: String, in store: PresetStore) -> String {
-        let base = "\(name) copy"
+        let base = L10n.presetCopyName(name: name)
         if !store.nameTaken(base) { return base }
-        for n in 2...99 where !store.nameTaken("\(base) \(n)") { return "\(base) \(n)" }
+        for n in 2...99 {
+            let numbered = L10n.presetCopyNameNumbered(name: name, n: String(n))
+            if !store.nameTaken(numbered) { return numbered }
+        }
         return base
     }
 

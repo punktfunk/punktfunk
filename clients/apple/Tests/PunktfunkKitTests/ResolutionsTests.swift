@@ -26,7 +26,13 @@ final class ResolutionsTests: XCTestCase {
     /// A OnePlus-shaped phone: 3216×1440, 127 px of cutout on one side. Twin of the core test.
     func testAPhoneLeadsWithItsScreenAndSafeArea() {
         let f = Resolutions.families(screen: (3216, 1440), safe: (3088, 1440))
-        XCTAssertEqual(f.prefix(3).map(\.label), ["Screen", "Safe area", "16:9"])
+        XCTAssertEqual(f.prefix(3).map(\.id), [Resolutions.screenID, Resolutions.safeAreaID, "16:9"])
+        XCTAssertEqual(
+            f.prefix(3).map(\.label),
+            [
+                String(localized: L10n.playerResolutionAspectScreen),
+                String(localized: L10n.playerResolutionAspectSafeArea), "16:9",
+            ])
         XCTAssertEqual(f[0].sizes.map { "\($0.w)x\($0.h)" }, ["1608x720", "2412x1080", "3216x1440"])
         XCTAssertEqual(f[1].sizes.map { "\($0.w)x\($0.h)" }, ["1544x720", "2316x1080", "3088x1440"])
         XCTAssertEqual(Resolutions.familyOf(f, 2412, 1080), 0)

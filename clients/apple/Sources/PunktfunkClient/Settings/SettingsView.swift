@@ -252,7 +252,7 @@ struct SettingsView: View {
                 generalAdvancedSection
             }
             .formStyle(.grouped)
-            .tabItem { Label("General", systemImage: "gearshape") }
+            .tabItem { Label(L10n.prefsCategoryGeneral, systemImage: "gearshape") }
             .tag(MacTab.general)
 
             Form {
@@ -261,14 +261,14 @@ struct SettingsView: View {
                 displayAdvancedSection
             }
             .formStyle(.grouped)
-            .tabItem { Label("Display", systemImage: "display") }
+            .tabItem { Label(L10n.prefsCategoryDisplay, systemImage: "display") }
             .tag(MacTab.display)
 
             Form {
                 inputSection
             }
             .formStyle(.grouped)
-            .tabItem { Label("Input", systemImage: "keyboard") }
+            .tabItem { Label(L10n.prefsCategoryInput, systemImage: "keyboard") }
             .tag(MacTab.input)
 
             Form {
@@ -285,7 +285,7 @@ struct SettingsView: View {
                 micChannelCount = AudioDevices.inputChannelCount(forUID: newUID)
                 if micChannel > micChannelCount { micChannel = 0 }
             }
-            .tabItem { Label("Audio", systemImage: "speaker.wave.2") }
+            .tabItem { Label(L10n.prefsCategoryAudio, systemImage: "speaker.wave.2") }
             .tag(MacTab.audio)
 
             Form {
@@ -297,11 +297,11 @@ struct SettingsView: View {
                 gamepads.startDiscovery()
             }
             .onDisappear { gamepads.stopDiscovery() }
-            .tabItem { Label("Controllers", systemImage: "gamecontroller") }
+            .tabItem { Label(L10n.prefsCategoryControllers, systemImage: "gamecontroller") }
             .tag(MacTab.controllers)
 
             AboutView()
-                .tabItem { Label("About", systemImage: "info.circle") }
+                .tabItem { Label(L10n.prefsCategoryAbout, systemImage: "info.circle") }
                 .tag(MacTab.about)
         }
     }
@@ -347,10 +347,10 @@ struct SettingsView: View {
                     .tag(category)
                 }
             }
-            .navigationTitle("Settings")
+            .navigationTitle(L10n.prefsTitle)
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Done") { dismiss() }
+                    Button(L10n.commonDone) { dismiss() }
                 }
             }
         } detail: {
@@ -365,7 +365,7 @@ struct SettingsView: View {
                 .toolbar {
                     if horizontalSizeClass == .compact || columnVisibility == .detailOnly {
                         ToolbarItem(placement: .confirmationAction) {
-                            Button("Done") { dismiss() }
+                            Button(L10n.commonDone) { dismiss() }
                         }
                     }
                 }
@@ -399,7 +399,7 @@ struct SettingsView: View {
                 generalAdvancedSection
             }
             .formStyle(.grouped)
-            .navigationTitle("General")
+            .navigationTitle(category.title)
             .navigationBarTitleDisplayMode(.inline)
         case .display:
             Form {
@@ -408,7 +408,7 @@ struct SettingsView: View {
                 displayAdvancedSection
             }
             .formStyle(.grouped)
-            .navigationTitle("Display")
+            .navigationTitle(category.title)
             .navigationBarTitleDisplayMode(.inline)
         case .input:
             Form {
@@ -416,24 +416,24 @@ struct SettingsView: View {
                 inputSection
             }
             .formStyle(.grouped)
-            .navigationTitle("Input")
+            .navigationTitle(category.title)
             .navigationBarTitleDisplayMode(.inline)
         case .audio:
             Form { audioSection }
                 .formStyle(.grouped)
-                .navigationTitle("Audio")
+                .navigationTitle(category.title)
                 .navigationBarTitleDisplayMode(.inline)
         case .controllers:
             Form { controllersSection }
                 .formStyle(.grouped)
-                .navigationTitle("Controllers")
+                .navigationTitle(category.title)
                 .navigationBarTitleDisplayMode(.inline)
         case .about:
             // The identity card; the license wall is one push further in. Inline title to match
             // the five sibling detail pages (it would otherwise inherit the large title from the
             // "Settings" sidebar root).
             AboutView()
-                .navigationTitle("About")
+                .navigationTitle(category.title)
                 .navigationBarTitleDisplayMode(.inline)
         }
     }
@@ -485,7 +485,7 @@ struct SettingsView: View {
                     HStack(spacing: 14) {
                         scopeDot
                         VStack(alignment: .leading, spacing: 2) {
-                            Text("Editing")
+                            Text(L10n.prefsScopeEditing)
                                 .font(.geist(20, relativeTo: .caption))
                                 .foregroundStyle(.secondary)
                             Text(scopeName)
@@ -574,7 +574,9 @@ struct SettingsView: View {
     private var tvPresetManager: some View {
         Form {
             Section {
-                tvLayerRow(.defaults, name: "Default settings", color: nil, detail: nil)
+                tvLayerRow(
+                    .defaults, name: String(localized: L10n.prefsScopeDefaults), color: nil,
+                    detail: nil)
                 ForEach(presets.presets) { preset in
                     tvLayerRow(
                         .preset(preset.id), name: preset.name, color: preset.accentColor,
@@ -583,10 +585,10 @@ struct SettingsView: View {
                 Button {
                     presetDraft = .create()
                 } label: {
-                    Label("New Preset…", systemImage: "plus")
+                    Label(L10n.presetNew, systemImage: "plus")
                 }
             } header: {
-                Text("Editing")
+                Text(L10n.prefsScopeEditing)
             } footer: {
                 Text(scopeCaption)
             }
@@ -595,19 +597,19 @@ struct SettingsView: View {
                     Button {
                         presetDraft = .edit(active)
                     } label: {
-                        Label("Name and Color…", systemImage: "pencil")
+                        Label(L10n.applePresetMenuNameColor, systemImage: "pencil")
                     }
                     Button {
                         presetDraft = .duplicate(
                             active, name: Self.copyName(of: active.name, in: presets))
                     } label: {
-                        Label("Duplicate…", systemImage: "plus.square.on.square")
+                        Label(L10n.applePresetMenuDuplicate, systemImage: "plus.square.on.square")
                     }
                     Button(role: .destructive) {
                         presetPendingDelete = active
                     } label: {
                         // Text and symbol in one colour: the role reddens only the text.
-                        Label("Delete…", systemImage: "trash")
+                        Label(L10n.presetMenuDelete, systemImage: "trash")
                             .foregroundStyle(.red)
                     }
                 }
@@ -643,9 +645,10 @@ struct SettingsView: View {
     private func tvUsage(of preset: StreamPreset) -> String {
         let (bound, pinned) = presets.usage(of: preset.id)
         var parts: [String] = []
-        if bound > 0 { parts.append(bound == 1 ? "1 host" : "\(bound) hosts") }
-        if pinned > 0 { parts.append(pinned == 1 ? "1 card" : "\(pinned) cards") }
-        return parts.isEmpty ? "Not used" : parts.joined(separator: " · ")
+        if bound > 0 { parts.append(L10n.applePresetUsageHosts(count: bound)) }
+        if pinned > 0 { parts.append(L10n.applePresetUsageCards(count: pinned)) }
+        return parts.isEmpty
+            ? String(localized: L10n.applePresetUsageNone) : parts.joined(separator: " · ")
     }
     #endif
 }
