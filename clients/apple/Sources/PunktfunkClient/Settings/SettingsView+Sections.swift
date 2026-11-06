@@ -810,8 +810,7 @@ extension SettingsView {
             Section("Advanced") { content() }
         } else if changed > 0, !inPresetScope {
             Section {
-                Button(changed == 1
-                    ? "1 advanced setting changed" : "\(changed) advanced settings changed") {
+                Button(L10n.prefsAdvancedChanged(count: changed)) {
                     showAdvanced = true
                 }
             }
@@ -957,9 +956,9 @@ extension SettingsView {
                         selection: $hudPlacement)
                 }
                 .disabled(effective.statsVerbosity == StatsVerbosity.off.rawValue)
-                described("The overlay's size, on top of the system text size.") {
+                described(L10n.playerStatsScalePctHint) {
                     settingPicker(
-                        "Statistics size", options: SettingsOptions.statsScales,
+                        L10n.playerStatsScalePct, options: SettingsOptions.statsScales,
                         selection: $statsScalePct)
                 }
                 described("Shows how to leave for a few seconds when a stream starts.") {

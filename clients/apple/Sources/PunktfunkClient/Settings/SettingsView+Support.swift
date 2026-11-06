@@ -96,6 +96,14 @@ extension SettingsView {
         #endif
     }
 
+    /// `described` with a caption from `L10n`.
+    func described<Content: View>(
+        _ caption: LocalizedStringResource, field: String? = nil,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        described(String(localized: caption), field: field, content: content)
+    }
+
     /// One picker row for every platform: the system `Picker`, or on tvOS the pushed selection
     /// list (`Picker`'s own push draws its rows in the focused style while it animates).
     @ViewBuilder
@@ -111,6 +119,14 @@ extension SettingsView {
             }
         }
         #endif
+    }
+
+    /// `settingPicker` with a title from `L10n`.
+    func settingPicker<Tag: Hashable>(
+        _ title: LocalizedStringResource, options: [(label: String, tag: Tag)],
+        selection: Binding<Tag>
+    ) -> some View {
+        settingPicker(String(localized: title), options: options, selection: selection)
     }
 
     // MARK: - Bitrate
