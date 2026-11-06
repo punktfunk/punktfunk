@@ -231,7 +231,8 @@ pub unsafe extern "C" fn punktfunk_console_new(
         let cache_bytes = opts.gpu_cache_bytes;
         // SAFETY: a live device and a queue on it, per this function's contract; Skia retains
         // both for the context's lifetime.
-        let backend = unsafe { mtl::BackendContext::new(mtl_device as _, mtl_queue as _) };
+        let backend =
+            unsafe { mtl::BackendContext::new(mtl_device.cast_const(), mtl_queue.cast_const()) };
         let Some(mut context) = gpu::direct_contexts::make_metal(&backend, None) else {
             tracing::error!("console: Skia's Metal context did not come up");
             return std::ptr::null_mut();
@@ -327,7 +328,7 @@ pub unsafe extern "C" fn punktfunk_console_frame(
         }
         // SAFETY: a live texture from this device, per the contract; Skia retains it while
         // the render target lives.
-        let info = unsafe { mtl::TextureInfo::new(mtl_texture as _) };
+        let info = unsafe { mtl::TextureInfo::new(mtl_texture.cast_const()) };
         let target = gpu::backend_render_targets::make_mtl((width as i32, height as i32), &info);
         let mut wrapped = None;
         for ct in std::iter::once(shell.color_type).chain(COLOR_TYPES) {
@@ -790,7 +791,7 @@ pub unsafe extern "C" fn punktfunk_console_drain_cmds(c: *const PunktfunkConsole
 pub extern "C" fn punktfunk_console_palettes() -> *mut c_char {
     guard(std::ptr::null_mut(), || {
         let list: Vec<_> = (pf_console_ui::palette::PALETTES.iter())
-            .map(|p| serde_json::json!({ "id": p.id, "name": p.name }))
+            .map(|p| serde_json::json!({ "id": p.id, "name": (p.name)() }))
             .collect();
         out_string(serde_json::Value::from(list).to_string())
     })
