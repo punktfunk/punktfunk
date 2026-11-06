@@ -12,13 +12,36 @@
 //! drops it. A plural is a substitution over its count with an explicit argument number, so a
 //! variant need not show the number. The accessor passes every argument in index order; the
 //! catalog's `%N$` picks them out.
+//!
+//! Two more catalogs hold text the system reads outside the app's code. `AppShortcuts.xcstrings`
+//! is keyed by the English phrase a `PunktfunkShortcuts` literal spells, `{host}` written
+//! `${host}`; it comes from the `apple_shortcut_*_phrase` messages. `InfoPlist.xcstrings` is
+//! keyed by Info.plist key; `USAGE` says which message fills which.
 
 use std::fmt::Write as _;
 
 use crate::catalog::{self, Catalog, Compiled, Ix, Row};
 use crate::json::Json;
 
-/// `(file name, contents)` for both files.
+/// The usage description messages and the Info.plist keys each one fills.
+const USAGE: [(&str, &[&str]); 4] = [
+    (
+        "apple_usage_local_network",
+        &["NSLocalNetworkUsageDescription"],
+    ),
+    ("apple_usage_microphone", &["NSMicrophoneUsageDescription"]),
+    ("apple_usage_face_id", &["NSFaceIDUsageDescription"]),
+    (
+        "apple_usage_bluetooth",
+        &[
+            "NSBluetoothAlwaysUsageDescription",
+            "NSBluetoothPeripheralUsageDescription",
+        ],
+    ),
+];
+
+/// `(file name, contents)` for each file. The two system catalogs are there when the parts
+/// hold their messages.
 pub fn generate(cat: &Catalog, parts: &[String]) -> Result<Vec<(String, String)>, String> {
     let rows = cat.rows(parts)?;
     let mut strings = Vec::new();
@@ -46,13 +69,135 @@ pub fn generate(cat: &Catalog, parts: &[String]) -> Result<Vec<(String, String)>
         ("strings".into(), Json::Obj(strings)),
         ("version".into(), Json::Str("1.0".into())),
     ]);
-    Ok(vec![
+    let mut files = vec![
         (
             "Localizable.xcstrings".into(),
             crate::json::pretty(&catalog),
         ),
         ("L10n.swift".into(), swift),
-    ])
+    ];
+    if let Some(table) = app_shortcuts(&rows, cat)? {
+        files.push(("AppShortcuts.xcstrings".into(), table));
+    }
+    if let Some(table) = info_plist(&rows, cat)? {
+        files.push(("InfoPlist.xcstrings".into(), table));
+    }
+    Ok(files)
+}
+
+/// `AppShortcuts.xcstrings`, or nothing when no part holds a phrase.
+fn app_shortcuts(rows: &[Row], cat: &Catalog) -> Result<Option<String>, String> {
+    let mut strings: Vec<(String, Json)> = Vec::new();
+    for row in rows.iter().filter(|r| is_phrase(r.key)) {
+        let args = row.en.args();
+        let text = |ix: &[Ix]| {
+            ix.iter()
+                .map(|i| match i {
+                    Ix::Text(t) => t.clone(),
+                    Ix::Arg(n) => format!("${{{}}}", camel(&args[*n])),
+                })
+                .collect::<String>()
+        };
+        let english = text(plain(row, &row.langs[0].1)?);
+        if strings.iter().any(|(k, _)| *k == english) {
+            return Err(format!("{} repeats the phrase \"{english}\"", row.key));
+        }
+        strings.push((english, system_entry(row, &cat.shipped, &text)?));
+    }
+    Ok((!strings.is_empty()).then(|| table(&cat.source, strings)))
+}
+
+/// `InfoPlist.xcstrings`, or nothing when no part holds a usage description. A part that
+/// holds some and lacks another is an error: the build would ship a prompt with no words.
+fn info_plist(rows: &[Row], cat: &Catalog) -> Result<Option<String>, String> {
+    let found: Vec<_> = USAGE
+        .iter()
+        .filter_map(|(key, plist)| Some((rows.iter().find(|r| r.key == *key)?, *plist)))
+        .collect();
+    if found.is_empty() {
+        return Ok(None);
+    }
+    if let Some((key, _)) = USAGE
+        .iter()
+        .find(|(k, _)| !found.iter().any(|(r, _)| r.key == *k))
+    {
+        return Err(format!("InfoPlist.xcstrings needs the message {key}"));
+    }
+    let mut strings = Vec::new();
+    for (row, plist) in found {
+        let text = |ix: &[Ix]| {
+            ix.iter()
+                .map(|i| match i {
+                    Ix::Text(t) => t.as_str(),
+                    Ix::Arg(_) => "",
+                })
+                .collect::<String>()
+        };
+        if !row.en.args().is_empty() {
+            return Err(format!(
+                "{} takes a placeholder; a usage description cannot",
+                row.key
+            ));
+        }
+        for name in plist {
+            strings.push(((*name).to_owned(), system_entry(row, &cat.shipped, &text)?));
+        }
+    }
+    Ok(Some(table(&cat.source, strings)))
+}
+
+fn is_phrase(key: &str) -> bool {
+    key.starts_with("apple_shortcut_") && key.ends_with("_phrase")
+}
+
+/// The plain text of a message a system table takes; a plural has no place there.
+fn plain<'a>(row: &Row, c: &'a Compiled) -> Result<&'a [Ix], String> {
+    match c {
+        Compiled::Plain(ix) => Ok(ix),
+        Compiled::Plural(_) => Err(format!(
+            "{} is a plural; a system table cannot hold one",
+            row.key
+        )),
+    }
+}
+
+/// One entry of a system table: each language the message has, and the English for a
+/// shipped language that lacks it (state `new`).
+fn system_entry(
+    row: &Row,
+    shipped: &[String],
+    text: &dyn Fn(&[Ix]) -> String,
+) -> Result<Json, String> {
+    let mut langs: Vec<(String, Json)> = Vec::new();
+    for (lang, c) in &row.langs {
+        let unit = string_unit(text(plain(row, c)?), "translated");
+        langs.push(((*lang).to_owned(), Json::Obj(vec![unit])));
+    }
+    for lang in shipped
+        .iter()
+        .filter(|l| !row.langs.iter().any(|(k, _)| k == *l))
+    {
+        let unit = string_unit(text(plain(row, &row.langs[0].1)?), "new");
+        langs.push((lang.clone(), Json::Obj(vec![unit])));
+    }
+    langs.sort_by(|a, b| a.0.cmp(&b.0));
+    let mut entry = Vec::new();
+    if let Some(note) = row.note {
+        entry.push(("comment".to_owned(), Json::Str(note.to_owned())));
+    }
+    entry.push(("extractionState".into(), Json::Str("manual".into())));
+    entry.push(("localizations".into(), Json::Obj(langs)));
+    Ok(Json::Obj(entry))
+}
+
+/// A catalog file over `strings`, sorted by key as Xcode writes it.
+fn table(source: &str, mut strings: Vec<(String, Json)>) -> String {
+    strings.sort_by(|a, b| a.0.cmp(&b.0));
+    crate::json::pretty(&Json::Obj(vec![
+        ("sourceLanguage".into(), Json::Str(source.to_owned())),
+        ("strings".into(), Json::Obj(strings)),
+        ("version".into(), Json::Str("1.0".into())),
+    ]))
 }
 
 /// One catalog entry, its fields in the order Xcode writes them. A shipped language without
@@ -307,8 +452,74 @@ mod tests {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixture");
         let (cat, problems) = crate::catalog::load(&root, false);
         assert!(problems.is_empty(), "{problems:?}");
-        for (path, body) in generate(&cat, &["fix".into()]).unwrap() {
+        let files = generate(&cat, &["fix".into()]).unwrap();
+        // No phrase and no usage message in `fix`, so no system table.
+        assert_eq!(
+            files.len(),
+            2,
+            "{:?}",
+            files.iter().map(|f| &f.0).collect::<Vec<_>>()
+        );
+        for (path, body) in files {
             crate::golden(&format!("apple/{path}"), &body);
         }
+    }
+
+    /// The system tables: phrases keyed by English with `${name}` arguments, usage
+    /// descriptions keyed by Info.plist key, English filling a language that lacks a message.
+    #[test]
+    fn system_tables() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixture-apple");
+        let (cat, problems) = crate::catalog::load(&root, false);
+        assert!(problems.is_empty(), "{problems:?}");
+        let files = generate(&cat, &["apple".into()]).unwrap();
+        let names: Vec<_> = files.iter().map(|f| f.0.as_str()).collect();
+        assert_eq!(
+            names,
+            [
+                "Localizable.xcstrings",
+                "L10n.swift",
+                "AppShortcuts.xcstrings",
+                "InfoPlist.xcstrings"
+            ]
+        );
+        for (path, body) in files.iter().skip(2) {
+            crate::golden(&format!("apple-system/{path}"), body);
+        }
+        let shortcuts = &files[2].1;
+        assert!(
+            shortcuts.contains(r#""Connect to ${host} in ${applicationName}""#),
+            "{shortcuts}"
+        );
+        assert!(
+            shortcuts.contains("Verbinde dich in ${applicationName} mit ${host}"),
+            "{shortcuts}"
+        );
+        // The Bluetooth text fills both keys.
+        let plist = &files[3].1;
+        assert_eq!(
+            plist.matches("Bluetooth lets Punktfunk").count(),
+            2,
+            "{plist}"
+        );
+        assert_eq!(
+            plist.matches("Bluetooth lässt Punktfunk").count(),
+            2,
+            "{plist}"
+        );
+    }
+
+    /// A part with a usage description and no sibling would ship a prompt with no words.
+    #[test]
+    fn usage_set_is_whole() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixture-apple");
+        let (mut cat, problems) = crate::catalog::load(&root, false);
+        assert!(problems.is_empty(), "{problems:?}");
+        let part = cat.parts.iter_mut().find(|p| p.name == "apple").unwrap();
+        part.source
+            .entries
+            .retain(|e| e.key != "apple_usage_face_id");
+        let err = generate(&cat, &["apple".into()]).unwrap_err();
+        assert!(err.contains("apple_usage_face_id"), "{err}");
     }
 }
