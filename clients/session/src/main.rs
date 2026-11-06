@@ -801,6 +801,9 @@ mod session_main {
         #[cfg(target_os = "linux")]
         enable_mesa_video_decode();
 
+        // Before any text is built: the console's words follow the OS's languages.
+        pf_l10n::set_languages(&pf_l10n::os_languages());
+
         // `--list-adapters`: print the Vulkan physical devices' marketing names (one per
         // line, discrete first) for the desktop shells' GPU picker, then exit.
         if arg_flag("--list-adapters") {

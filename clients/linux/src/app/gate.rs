@@ -8,7 +8,8 @@ use crate::hosts::ConnectRequest;
 use crate::trust;
 use adw::prelude::*;
 use gtk::glib;
-use pf_client_core::orchestrate::{wake_parked_line, WakeOutcome, WakeWait, WAKE_PARKED_HINT};
+use pf_client_core::orchestrate::{wake_parked_line, WakeOutcome, WakeWait};
+use pf_l10n::{client, common, desktop};
 use relm4::prelude::*;
 
 /// The waiting dialog plus its Cancel handler. Both halves are needed to dismiss it: a bare
@@ -32,13 +33,10 @@ pub fn wake_and_connect(
 ) {
     let cancel = std::rc::Rc::new(std::cell::Cell::new(false));
     let waiting = adw::AlertDialog::new(
-        Some("Waking Host"),
-        Some(&format!(
-            "Sent a wake signal to “{}”. Waiting for it to come online…",
-            req.host.name
-        )),
+        Some(&client::dial_waking(&req.host.name)),
+        Some(&desktop::desktop_dial_wake_sent(&req.host.name)),
     );
-    waiting.add_responses(&[("cancel", "Cancel")]);
+    waiting.add_responses(&[("cancel", common::common_cancel())]);
     waiting.set_close_response("cancel");
     {
         let cancel = cancel.clone();
@@ -80,8 +78,8 @@ pub fn wake_and_connect(
                 Some(WakeOutcome::TimedOut) => {
                     // Park in the same dialog. Cancel stays its close response.
                     waiting.set_heading(Some(&wake_parked_line(&req.host.name)));
-                    waiting.set_body(WAKE_PARKED_HINT);
-                    waiting.add_response("retry", "Try Again");
+                    waiting.set_body(client::dial_wake_parked_hint());
+                    waiting.add_response("retry", common::common_try_again());
                     waiting.set_response_appearance("retry", adw::ResponseAppearance::Suggested);
                     waiting.set_default_response(Some("retry"));
                     waiting.connect_response(Some("retry"), move |_, _| {
@@ -122,11 +120,11 @@ pub fn tofu_dialog(
 ) {
     let fp = req.host.fp_hex.clone().unwrap_or_default();
     let dialog = adw::AlertDialog::new(
-        Some("New Host"),
+        Some(client::trust_title()),
         Some(&format!(
-            "{} at {}:{}\n\nPairing with a PIN verifies the certificate fingerprint below; \
-             trusting accepts it as-is.",
-            req.host.name, req.host.addr, req.host.port
+            "{}\n\n{}",
+            client::trust_first_connection(format!("{}:{}", req.host.addr, req.host.port)),
+            client::trust_explain()
         )),
     );
     let fp_label = gtk::Label::new(Some(&grouped_fingerprint(&fp)));
@@ -136,9 +134,9 @@ pub fn tofu_dialog(
     fp_label.set_halign(gtk::Align::Center);
     dialog.set_extra_child(Some(&fp_label));
     dialog.add_responses(&[
-        ("cancel", "Cancel"),
-        ("pair", "Pair with PIN…"),
-        ("trust", "Trust & Connect"),
+        ("cancel", common::common_cancel()),
+        ("pair", client::pair_use_pin()),
+        ("trust", client::trust_accept()),
     ]);
     dialog.set_response_appearance("trust", adw::ResponseAppearance::Suggested);
     dialog.set_default_response(Some("trust"));
@@ -170,7 +168,7 @@ pub fn pin_dialog(
 ) {
     let entry = gtk::Entry::builder()
         .input_purpose(gtk::InputPurpose::Digits)
-        .placeholder_text("4-digit PIN shown by the host")
+        .placeholder_text(client::pair_pin_placeholder())
         .activates_default(true)
         .build();
     // The label the HOST stores this client under — prefilled with the hostname.
@@ -178,28 +176,28 @@ pub fn pin_dialog(
         .text(glib::host_name().as_str())
         .activates_default(true)
         .build();
-    let name_caption = gtk::Label::new(Some("This device"));
+    let name_caption = gtk::Label::new(Some(client::pair_device_name()));
     name_caption.add_css_class("caption");
     name_caption.add_css_class("dim-label");
     name_caption.set_halign(gtk::Align::Start);
     let fields = gtk::Box::new(gtk::Orientation::Vertical, 6);
     fields.append(&name_caption);
     fields.append(&name_entry);
-    let pin_caption = gtk::Label::new(Some("PIN"));
+    let pin_caption = gtk::Label::new(Some(client::pair_pin()));
     pin_caption.add_css_class("caption");
     pin_caption.add_css_class("dim-label");
     pin_caption.set_halign(gtk::Align::Start);
     fields.append(&pin_caption);
     fields.append(&entry);
     let dialog = adw::AlertDialog::new(
-        Some("Pair with PIN"),
-        Some(&format!(
-            "Arm pairing on {} (console or web UI), then enter the PIN it displays.",
-            req.host.name
-        )),
+        Some(&client::pair_title(&req.host.name)),
+        Some(client::pair_intro_pin_only()),
     );
     dialog.set_extra_child(Some(&fields));
-    dialog.add_responses(&[("cancel", "Cancel"), ("pair", "Pair")]);
+    dialog.add_responses(&[
+        ("cancel", common::common_cancel()),
+        ("pair", client::pair_action()),
+    ]);
     dialog.set_response_appearance("pair", adw::ResponseAppearance::Suggested);
     dialog.set_default_response(Some("pair"));
     dialog.set_close_response("cancel");
@@ -230,9 +228,9 @@ pub fn pin_dialog(
                     let paired =
                         trust::save_paired(&req.host.name, &req.host.addr, req.host.port, fp, &[]);
                     sender.input(AppMsg::Toast(match &paired.saved {
-                        Ok(()) if then_connect => "Paired — connecting…".into(),
-                        Ok(()) => format!("Paired with {}", req.host.name),
-                        Err(e) => format!("Paired, but couldn't save — {e:#}"),
+                        Ok(()) if then_connect => desktop::desktop_pair_paired_connecting().into(),
+                        Ok(()) => client::pair_paired(&req.host.name),
+                        Err(e) => client::pair_saved_failed(format!("{e:#}")),
                     }));
                     if then_connect {
                         // The link's `as=`, as a direct connect dials it.
@@ -266,17 +264,17 @@ pub fn approval_dialog(
     req: ConnectRequest,
 ) {
     let dialog = adw::AlertDialog::new(
-        Some("Pairing Required"),
+        Some(client::pair_required_title()),
         Some(&format!(
-            "{} requires pairing.\n\nRequest access and approve this device in the host's console \
-             (or web UI) — no PIN needed. Or pair with the 4-digit PIN it can display.",
-            req.host.name
+            "{}\n\n{}",
+            client::pair_required_body(&req.host.name),
+            client::pair_intro()
         )),
     );
     dialog.add_responses(&[
-        ("cancel", "Cancel"),
-        ("pin", "Use a PIN instead…"),
-        ("request", "Request Access"),
+        ("cancel", common::common_cancel()),
+        ("pin", client::pair_use_pin()),
+        ("request", client::pair_request_access()),
     ]);
     dialog.set_response_appearance("request", adw::ResponseAppearance::Suggested);
     dialog.set_default_response(Some("request"));
@@ -311,15 +309,11 @@ pub(super) fn present_waiting(
     host_name: &str,
     on_cancel: impl Fn() + 'static,
 ) -> adw::AlertDialog {
-    let body = format!(
-        "Approve “{}” in {host_name}’s console or web UI.\n\nThis device is paired once you \
-         approve it.",
-        glib::host_name(),
-    );
+    let body = client::dial_approve_no_pin(host_name);
     present_wait(
         window,
         waiting_slot,
-        "Waiting for Approval",
+        client::pair_waiting_for_approval(),
         Some(&body),
         on_cancel,
     )
@@ -335,7 +329,7 @@ pub(super) fn present_wait(
     on_cancel: impl Fn() + 'static,
 ) -> adw::AlertDialog {
     let waiting = adw::AlertDialog::new(Some(heading), body);
-    waiting.add_responses(&[("cancel", "Cancel")]);
+    waiting.add_responses(&[("cancel", common::common_cancel())]);
     waiting.set_close_response("cancel");
     let handler = waiting.connect_response(Some("cancel"), move |_, _| on_cancel());
     waiting.present(Some(window));
@@ -353,9 +347,7 @@ fn request_access(
     req: ConnectRequest,
 ) {
     let Some(pin) = req.host.pin().and_then(trust::parse_hex32) else {
-        sender.input(AppMsg::Toast(
-            "No advertised identity for this host — pair with a PIN instead.".into(),
-        ));
+        sender.input(AppMsg::Toast(desktop::desktop_pair_no_advert().into()));
         sender.input(AppMsg::Pair(req));
         return;
     };
@@ -402,8 +394,8 @@ fn request_access(
                 &trust::hex(&fp),
                 true,
             ) {
-                Ok(()) => format!("Paired with {}", req.host.name),
-                Err(e) => format!("Paired, but couldn't save — {e:#}"),
+                Ok(()) => client::pair_paired(&req.host.name),
+                Err(e) => client::pair_saved_failed(format!("{e:#}")),
             },
             Err(e) => trust::access_error_message(&e),
         };

@@ -19,6 +19,7 @@ import { diag } from "./diag";
 import { Game, PunktfunkMark, streamFrom } from "./game";
 import { getHostStore, subscribeHosts } from "./hooks";
 import type { HostView } from "./hosts";
+import { t } from "./i18n";
 import { collectElements, createRenderPatcher, describe } from "./patch";
 import { isGameStreaming, stopGameStream, subscribeRunning } from "./steam";
 
@@ -193,7 +194,7 @@ export function openPlayFromMenu(overview: Overview, anchor?: EventTarget): void
         <span className={cls.CheckContainer}>{selected && <FaCheck style={{ color: "#1a9fff" }} />}</span>
         <span className={cls.StreamingTargetLabel}>
           {localize("#StreamingClient_StreamFrom", "Stream from: %s", host.name)}
-          {!host.online && <span style={{ opacity: 0.6 }}> · asleep</span>}
+          {!host.online && <span style={{ opacity: 0.6 }}> · {t("decky_host_asleep")}</span>}
         </span>
         <span style={{ marginLeft: "auto", paddingLeft: "1em", display: "inline-flex", opacity: 0.85 }}>
           <PunktfunkMark size={18} />
@@ -300,7 +301,7 @@ const playButtonPatcher = createRenderPatcher((out, self) => {
     kids[iconIdx] = <PunktfunkMark key="pf-mark" size={26} />;
   }
   if (labelIdx >= 0) {
-    kids[labelIdx] = cloneElement(kids[labelIdx], {}, streaming ? "Stop" : "Stream");
+    kids[labelIdx] = cloneElement(kids[labelIdx], {}, streaming ? t("decky_play_stop") : t("decky_play_stream"));
   }
   return out;
 }, "play-from");

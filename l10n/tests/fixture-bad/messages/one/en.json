@@ -1,0 +1,16 @@
+{
+  "$schema": "https://inlang.com/schema/inlang-message-format",
+  "one_label": "This label runs on well past forty characters",
+  "one_wait_hint": "Wait here, please.",
+  "one_done_title": "It worked!",
+  "one_speed_hint": "Streams at up to 80 Mbps.",
+  "one_args": "{name} joined",
+  "one_pads": [{
+    "declarations": ["local n = count: plural"],
+    "selectors": ["n"],
+    "match": { "n=*": "{count} pads" }
+  }],
+  "one_debt_hint": "Wait here, please, while this long legal text keeps on going and going past every budget there is for a hint at all.",
+  "Bad_Key": "x",
+  "one_brace": "a { b"
+}

@@ -68,7 +68,7 @@ impl SearchScreen {
 
 impl ScreenView for SearchScreen {
     fn title(&self) -> String {
-        format!("Search {}", self.host.name)
+        pf_l10n::client::lib_search_host(&self.host.name)
     }
 
     fn editing(&self) -> bool {
@@ -78,7 +78,9 @@ impl ScreenView for SearchScreen {
     fn edit_field(&self) -> Option<crate::screens::EditField> {
         let query = self.query.as_str();
         self.editing
-            .then(|| crate::screens::EditField::new("Title", query, false))
+            .then(|| {
+                crate::screens::EditField::new(pf_l10n::client::lib_search_field(), query, false)
+            })
             .flatten()
     }
 
@@ -155,11 +157,13 @@ impl ScreenView for SearchScreen {
 
     fn hints(&self, ctx: &Ctx) -> Vec<Hint> {
         if self.editing {
-            return self.keyboard.hints(ctx.device, "Search");
+            return self
+                .keyboard
+                .hints(ctx.device, pf_l10n::client::lib_search());
         }
         vec![
-            Hint::new(HintKey::Confirm, "Select"),
-            Hint::new(HintKey::Back, "Cancel"),
+            Hint::new(HintKey::Confirm, pf_l10n::common::common_select()),
+            Hint::new(HintKey::Back, pf_l10n::common::common_cancel()),
         ]
     }
 
@@ -177,7 +181,7 @@ impl ScreenView for SearchScreen {
             canvas,
             ui,
             fonts,
-            "Finds the titles on this host whose name contains what you type.",
+            pf_l10n::client::lib_search_blurb(),
             rect,
             k,
         );
@@ -189,11 +193,16 @@ impl ScreenView for SearchScreen {
             rect.right,
             rect.bottom - tray_h as f32,
         );
-        let mut field = RowSpec::field("Title", self.query.clone(), "Part of a title");
+        use pf_l10n::client as m;
+        let mut field = RowSpec::field(
+            m::lib_search_field(),
+            self.query.clone(),
+            m::lib_search_field_hint(),
+        );
         field.caret = self.editing;
         let rows = [
             field,
-            RowSpec::action("Search", !self.query.trim().is_empty()),
+            RowSpec::action(m::lib_search(), !self.query.trim().is_empty()),
         ];
         self.list.lift = self.keyboard.lift(rect, k);
         self.list
@@ -274,5 +283,22 @@ mod tests {
         with_ctx(true, |ctx| s.menu(MenuEvent::Confirm, ctx, &mut fx));
         assert!(fx.nav.is_none());
         assert!(s.editing());
+    }
+
+    /// The search and its shelf word themselves from pf-l10n: `[…]` under `en-XA`.
+    #[test]
+    fn search_reads_the_pseudo_language() {
+        let s = SearchScreen::new(&host(), &HashMap::new());
+        let mut shelf = super::super::library::LibraryScreen::new(&host());
+        shelf.set_query("star");
+        pf_l10n::with_language("en-XA", || {
+            let title = s.title();
+            assert!(title.starts_with('[') && title.contains("Desk"), "{title}");
+            let caption = shelf.desktop_caption();
+            assert!(
+                caption.starts_with('[') && caption.ends_with(']'),
+                "{caption}"
+            );
+        });
     }
 }

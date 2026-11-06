@@ -237,6 +237,15 @@ char *punktfunk_console_drain_cmds(const PunktfunkConsole *c);
 // picker offers for `ui_palette`. Free with `punktfunk_console_string_free`.
 char *punktfunk_console_palettes(void);
 
+// Word the Rust side's text in the first of `languages_json` that Punktfunk ships, a JSON
+// array of BCP-47 tags, most preferred first. `punktfunk_console_new` does this from its
+// `languages`; call it first when the palettes or the PyroWave warning are read with no
+// console. NULL or bad JSON leaves the language as it was.
+//
+// # Safety
+// `languages_json` is NULL or a NUL-terminated string.
+void punktfunk_console_set_languages(const char *languages_json);
+
 // Free a string from `punktfunk_console_next_event`, `punktfunk_console_drain_cmds` or
 // `punktfunk_console_palettes`.
 //

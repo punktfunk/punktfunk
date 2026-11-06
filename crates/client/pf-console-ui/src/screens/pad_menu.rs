@@ -22,28 +22,28 @@ enum Row {
 impl Row {
     fn label(self) -> &'static str {
         match self {
-            Row::Test => "Test controller",
-            Row::Rumble => "Rumble",
+            Row::Test => pf_l10n::console::console_pad_test_controller(),
+            Row::Rumble => pf_l10n::console::console_pad_rumble(),
         }
     }
 
     fn verb(self) -> &'static str {
         match self {
-            Row::Test => "Open",
-            Row::Rumble => "Test",
+            Row::Test => pf_l10n::common::common_open(),
+            Row::Rumble => pf_l10n::console::console_pad_test(),
         }
     }
 
-    fn detail(self) -> &'static str {
+    /// What the row does. The test ends on a held B, the back button.
+    fn detail(self) -> String {
+        use pf_l10n::console as c;
         match self {
-            Row::Test => {
-                "Shows every button, trigger and stick as the controller sends it, to tell a \
-                 worn button from a setting. Hold B to finish."
-            }
-            Row::Rumble => {
-                "A short pulse on the controller's motors: is the motor wired, and \
-                            does the host reach it."
-            }
+            Row::Test => format!(
+                "{} {}",
+                c::console_pad_test_controller_detail(),
+                c::console_pad_test_finish_hold("B")
+            ),
+            Row::Rumble => c::console_pad_rumble_detail().into(),
         }
     }
 }
@@ -132,7 +132,7 @@ impl ScreenView for PadMenuScreen {
     fn hints(&self, _ctx: &Ctx) -> Vec<Hint> {
         vec![
             Hint::new(HintKey::Confirm, self.row().verb()),
-            Hint::new(HintKey::Back, "Done"),
+            Hint::new(HintKey::Back, pf_l10n::common::common_done()),
         ]
     }
 

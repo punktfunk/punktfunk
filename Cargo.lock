@@ -3344,6 +3344,7 @@ dependencies = [
  "opus",
  "pf-client-video",
  "pf-dmabuf",
+ "pf-l10n",
  "pf-update-check",
  "pipewire",
  "punktfunk-core",
@@ -3378,6 +3379,7 @@ dependencies = [
  "pf-bitstream",
  "pf-dmabuf",
  "pf-dxvadec",
+ "pf-l10n",
  "pf-libva",
  "pf-v4l2",
  "pf-v4l2dec",
@@ -3420,6 +3422,7 @@ dependencies = [
  "ash",
  "metal",
  "pf-client-core",
+ "pf-l10n",
  "pf-presenter",
  "punktfunk-core",
  "sdl3",
@@ -3605,6 +3608,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "pf-l10n"
+version = "0.46.0"
+dependencies = [
+ "sys-locale",
+]
+
+[[package]]
 name = "pf-libva"
 version = "0.46.0"
 dependencies = [
@@ -3652,6 +3662,7 @@ dependencies = [
  "async-channel",
  "pf-client-core",
  "pf-dmabuf",
+ "pf-l10n",
  "pf-vkdecode",
  "punktfunk-core",
  "rustix",
@@ -4098,6 +4109,7 @@ dependencies = [
  "pf-client-core",
  "pf-client-video",
  "pf-console-ui",
+ "pf-l10n",
  "punktfunk-core",
  "serde",
  "serde_json",
@@ -4113,6 +4125,7 @@ version = "0.46.0"
 dependencies = [
  "pf-client-core",
  "pf-console-ui",
+ "pf-l10n",
  "punktfunk-core",
  "punktfunk-ffi",
  "serde",
@@ -4130,7 +4143,9 @@ dependencies = [
  "glib-build-tools",
  "gtk4",
  "libadwaita",
+ "libc",
  "pf-client-core",
+ "pf-l10n",
  "punktfunk-core",
  "relm4",
  "serde",
@@ -4144,6 +4159,7 @@ version = "0.46.0"
 dependencies = [
  "pf-client-core",
  "pf-console-ui",
+ "pf-l10n",
  "pf-presenter",
  "punktfunk-core",
  "serde_json",
@@ -4157,6 +4173,7 @@ version = "0.46.0"
 dependencies = [
  "pf-client-core",
  "pf-fluent",
+ "pf-l10n",
  "punktfunk-core",
  "serde_json",
  "tracing",
@@ -4179,6 +4196,7 @@ dependencies = [
  "if-addrs",
  "libc",
  "opus",
+ "pf-l10n",
  "proptest",
  "quinn",
  "quinn-udp",
@@ -4216,6 +4234,7 @@ dependencies = [
  "log",
  "opus",
  "pf-bitstream",
+ "pf-l10n",
  "punktfunk-core",
  "quinn",
  "rand 0.10.3",
@@ -4338,6 +4357,7 @@ dependencies = [
  "console",
  "getrandom 0.4.3",
  "pf-host-config",
+ "pf-l10n",
  "pf-paths",
  "portable-pty",
  "serde",
@@ -4351,6 +4371,7 @@ name = "punktfunk-setup-win"
 version = "0.46.0"
 dependencies = [
  "pf-fluent",
+ "pf-l10n",
  "pf-paths",
  "pf-paths-win",
  "punktfunk-setup",
@@ -4372,6 +4393,7 @@ version = "0.46.0"
 dependencies = [
  "anyhow",
  "ksni",
+ "pf-l10n",
  "pf-paths",
  "punktfunk-core",
  "rustls",
@@ -5604,6 +5626,15 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 3.0.6",
+]
+
+[[package]]
+name = "sys-locale"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8eab9a99a024a169fe8a903cf9d4a3b3601109bcc13bd9e3c6fff259138626c4"
+dependencies = [
+ "libc",
 ]
 
 [[package]]

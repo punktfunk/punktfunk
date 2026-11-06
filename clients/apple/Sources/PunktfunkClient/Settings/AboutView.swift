@@ -23,9 +23,6 @@ struct AboutView: View {
         static let source = URL(string: "https://git.unom.io/unom/punktfunk")!
     }
 
-    private static let tagline =
-        "Low-latency desktop and game streaming with first-class Linux and Windows hosts."
-
     #if !os(tvOS)
     @State private var showAcknowledgements = false
     /// The in-session controls. They used to announce themselves in a 6-second banner at the start
@@ -52,16 +49,16 @@ struct AboutView: View {
                 shortcutsRow
             }
             Section {
-                linkRow("Documentation", systemImage: "book", url: Destination.docs)
-                linkRow("Community", systemImage: "bubble.left.and.bubble.right",
+                linkRow(L10n.aboutDocs, systemImage: "book", url: Destination.docs)
+                linkRow(L10n.appleAboutCommunity, systemImage: "bubble.left.and.bubble.right",
                         url: Destination.community)
-                linkRow("Source Code", systemImage: "chevron.left.forwardslash.chevron.right",
+                linkRow(L10n.aboutSource, systemImage: "chevron.left.forwardslash.chevron.right",
                         url: Destination.source)
             }
             Section {
                 acknowledgementsRow
             } footer: {
-                Text("Punktfunk's source is open under MIT or Apache-2.0.")
+                Text(L10n.appleAboutSourceLicense)
                     .font(.geist(12, relativeTo: .caption))
                     .foregroundStyle(.secondary)
             }
@@ -77,7 +74,7 @@ struct AboutView: View {
                 ShortcutsView(micAvailable: ShortcutsCatalog.micPlausible)
                     .toolbar {
                         ToolbarItem(placement: .confirmationAction) {
-                            Button("Done") { showShortcuts = false }
+                            Button(L10n.commonDone) { showShortcuts = false }
                         }
                     }
             }
@@ -90,7 +87,7 @@ struct AboutView: View {
                 AcknowledgementsView()
                     .toolbar {
                         ToolbarItem(placement: .confirmationAction) {
-                            Button("Done") { showAcknowledgements = false }
+                            Button(L10n.commonDone) { showAcknowledgements = false }
                         }
                     }
             }
@@ -114,7 +111,7 @@ struct AboutView: View {
                 .monospacedDigit()
                 .foregroundStyle(.secondary)
                 .modifier(SelectableIfPossible())
-            Text(Self.tagline)
+            Text(L10n.appleAboutTagline)
                 .font(.geist(Self.taglineFont, relativeTo: .footnote))
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
@@ -130,14 +127,18 @@ struct AboutView: View {
         let info = Bundle.main.infoDictionary
         let short = info?["CFBundleShortVersionString"] as? String ?? "—"
         let build = info?["CFBundleVersion"] as? String
-        guard let build, !build.isEmpty, build != short else { return "Version \(short)" }
-        return "Version \(short) (\(build))"
+        guard let build, !build.isEmpty, build != short else {
+            return L10n.aboutVersionLine(version: short)
+        }
+        return L10n.appleAboutVersionBuild(version: short, build: build)
     }
 
     // MARK: - Rows
 
     #if !os(tvOS)
-    private func linkRow(_ title: String, systemImage: String, url: URL) -> some View {
+    private func linkRow(
+        _ title: LocalizedStringResource, systemImage: String, url: URL
+    ) -> some View {
         Link(destination: url) {
             HStack {
                 Label(title, systemImage: systemImage)
@@ -162,7 +163,7 @@ struct AboutView: View {
             showShortcuts = true
         } label: {
             HStack {
-                Label("Shortcuts", systemImage: "command")
+                Label(L10n.aboutStreamControls, systemImage: "command")
                 Spacer(minLength: 8)
                 Image(systemName: "chevron.right")
                     .font(.footnote.weight(.semibold))
@@ -180,7 +181,7 @@ struct AboutView: View {
             showAcknowledgements = true
         } label: {
             HStack {
-                Label("Acknowledgements", systemImage: "text.document")
+                Label(L10n.aboutLicenses, systemImage: "text.document")
                 Spacer(minLength: 8)
                 Image(systemName: "chevron.right")
                     .font(.footnote.weight(.semibold))
@@ -204,17 +205,17 @@ struct AboutView: View {
             VStack(spacing: 28) {
                 identity
                 VStack(spacing: 10) {
-                    tvAddress("Documentation", Destination.docs)
-                    tvAddress("Community", Destination.community)
-                    tvAddress("Source code", Destination.source)
+                    tvAddress(L10n.aboutDocs, Destination.docs)
+                    tvAddress(L10n.appleAboutCommunity, Destination.community)
+                    tvAddress(L10n.aboutSource, Destination.source)
                 }
                 // Both push here: this page really is inside a navigation stack on tvOS, which is
                 // the case the sheets above exist to work around elsewhere.
-                NavigationLink("Shortcuts") {
+                NavigationLink(L10n.aboutStreamControls) {
                     ShortcutsView(micAvailable: false) // tvOS has no app-accessible mic
                 }
-                NavigationLink("Acknowledgements") { AcknowledgementsView() }
-                Text("Punktfunk's source is open under MIT or Apache-2.0.")
+                NavigationLink(L10n.aboutLicenses) { AcknowledgementsView() }
+                Text(L10n.appleAboutSourceLicense)
                     .font(.geist(20, relativeTo: .caption))
                     .foregroundStyle(.secondary)
             }
@@ -224,7 +225,7 @@ struct AboutView: View {
         }
     }
 
-    private func tvAddress(_ title: String, _ url: URL) -> some View {
+    private func tvAddress(_ title: LocalizedStringResource, _ url: URL) -> some View {
         VStack(spacing: 2) {
             Text(title)
                 .font(.geist(22, .semibold, relativeTo: .headline))

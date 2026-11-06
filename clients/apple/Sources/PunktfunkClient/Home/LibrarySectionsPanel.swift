@@ -22,10 +22,9 @@ struct LibrarySectionsPanel: View {
 
     private var note: String {
         #if os(tvOS)
-        "Hold a section to move it. A section with nothing to show stays hidden until it has "
-            + "something."
+        String(localized: L10n.appleLibSectionsNoteTv)
         #else
-        "Drag to reorder. A section with nothing to show stays hidden until it has something."
+        String(localized: L10n.appleLibSectionsNote)
         #endif
     }
 
@@ -39,7 +38,7 @@ struct LibrarySectionsPanel: View {
     var body: some View {
         #if os(macOS)
         VStack(alignment: .leading, spacing: 10) {
-            Text("Customize Library")
+            Text(L10n.playerLibrarySections)
                 .font(.headline)
             // A Mac list paints its own fill and insets its rows. Without both gone the rows sat in
             // a dark slab, indented past the popover's own padding.
@@ -59,7 +58,7 @@ struct LibrarySectionsPanel: View {
         NavigationStack {
             List {
                 #if os(tvOS)
-                TVScreenTitle("Customize Library")
+                TVScreenTitle(String(localized: L10n.playerLibrarySections))
                     .listRowBackground(Color.clear)
                 #endif
                 Section {
@@ -72,10 +71,10 @@ struct LibrarySectionsPanel: View {
             #if os(iOS) || os(visionOS)
             .environment(\.editMode, .constant(.active))
             .navigationBarTitleDisplayMode(.inline)
-            .navigationTitle("Customize Library")
+            .navigationTitle(L10n.playerLibrarySections)
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Done") { dismiss() }
+                    Button(L10n.commonDone) { dismiss() }
                 }
             }
             #else
@@ -119,7 +118,7 @@ struct LibrarySectionsPanel: View {
                 // A Mac list draws no handle of its own; the whole row drags.
                 Image(systemName: "line.3.horizontal")
                     .foregroundStyle(.tertiary)
-                    .help("Drag to reorder")
+                    .help(L10n.appleLibSectionsDrag)
                 #endif
             }
             #if os(macOS)
@@ -127,8 +126,8 @@ struct LibrarySectionsPanel: View {
             #endif
             #if os(tvOS)
             .contextMenu {
-                Button("Move Up", systemImage: "arrow.up") { step(entry.section, by: -1) }
-                Button("Move Down", systemImage: "arrow.down") { step(entry.section, by: 1) }
+                Button(L10n.libSectionsMoveUp, systemImage: "arrow.up") { step(entry.section, by: -1) }
+                Button(L10n.libSectionsMoveDown, systemImage: "arrow.down") { step(entry.section, by: 1) }
             }
             #endif
         }
@@ -136,7 +135,7 @@ struct LibrarySectionsPanel: View {
     }
 
     private var restoreButton: some View {
-        Button("Restore Default Order") { storedLayout = "" }
+        Button(L10n.libSectionsRestore) { storedLayout = "" }
             .disabled(storedLayout.isEmpty)
     }
 

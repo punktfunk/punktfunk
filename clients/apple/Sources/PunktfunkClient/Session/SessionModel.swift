@@ -416,7 +416,7 @@ final class SessionModel: ObservableObject {
         guard phase == .idle else { return }
         guard !Self.activeHosts.contains(where: { $0.key != ObjectIdentifier(self) && $0.value == host.id })
         else {
-            errorMessage = "\(host.displayName) is already streaming in another window."
+            errorMessage = L10n.appleDialAlreadyStreamingHere(host: host.displayName)
             return
         }
         connectSeq += 1
@@ -617,8 +617,7 @@ final class SessionModel: ObservableObject {
             phase = .idle
             activeHost = nil
             revealStream() // no stream is coming; the hold must not outlive the dial
-            errorMessage = "\(host.displayName) is not paired yet. "
-                + "Pair with its PIN before streaming."
+            errorMessage = L10n.appleDialNotPaired(host: host.displayName)
         }
     }
 
@@ -770,17 +769,15 @@ final class SessionModel: ObservableObject {
     /// names the edge pull (`EdgeDial`) instead.
     var exitHintText: String {
         if connection?.settings.gamepadForwarding ?? true, !GCController.controllers().isEmpty {
-            return "Hold L1 + R1 + Start + Select to leave"
+            return L10n.noticeExitHold(keys: "L1 + R1 + Start + Select")
         }
         #if os(tvOS)
-        return "Hold Back to leave"
+        return L10n.noticeExitHold(keys: "Back")
         #elseif os(macOS)
-        return "⌃⌥⇧D to leave"
+        return L10n.noticeExitKeys(keys: "⌃⌥⇧D")
         #else
-        if GCKeyboard.coalesced != nil { return "⌃⌥⇧D to leave" }
-        return touchPassthrough
-            ? "Pull two fingers in from a side edge for quick actions"
-            : "Two-finger twist opens quick actions"
+        if GCKeyboard.coalesced != nil { return L10n.noticeExitKeys(keys: "⌃⌥⇧D") }
+        return String(localized: touchPassthrough ? L10n.noticeRingEdgePull : L10n.noticeRingTwist)
         #endif
     }
 
@@ -850,12 +847,12 @@ final class SessionModel: ObservableObject {
             if notices.accessWarned1m { notices.accessWarned1m = false }
             if !notices.accessWarned5m {
                 notices.accessWarned5m = true
-                flash(\.accessWarning, "Access ends in \(Self.accessCountdown(remaining))")
+                flash(\.accessWarning, L10n.grantEndsIn(time: Self.accessCountdown(remaining)))
             }
         } else if !notices.accessWarned1m {
             notices.accessWarned1m = true
             notices.accessWarned5m = true
-            flash(\.accessWarning, "Access ends in under a minute")
+            flash(\.accessWarning, String(localized: L10n.grantEndsSoon))
         }
     }
 
@@ -869,9 +866,12 @@ final class SessionModel: ObservableObject {
     /// "1 h 58 m" / "12 m" / "45 s" — the countdown wording the chip and the warnings share.
     static func accessCountdown(_ secs: UInt32) -> String {
         let s = Int(secs)
-        if s >= 3600 { return "\(s / 3600) h \((s % 3600) / 60) m" }
-        if s >= 60 { return "\(s / 60) m" }
-        return "\(s) s"
+        if s >= 3600 {
+            return L10n.grantRemainingHoursMinutes(
+                hours: String(s / 3600), minutes: String((s % 3600) / 60))
+        }
+        if s >= 60 { return L10n.grantRemainingMinutes(minutes: String(s / 60)) }
+        return L10n.grantRemainingSeconds(seconds: String(s))
     }
 
     /// Move this session's overlay tier: a Settings change to the stored tier, or `cycleStats`.
@@ -997,7 +997,7 @@ final class SessionModel: ObservableObject {
         if let rejection {
             // The host's sentence, else the shared typed-rejection wording
             // ("Your access to this host has expired…").
-            errorMessage = "\(name): \(said ?? rejection.userMessage)"
+            errorMessage = L10n.dialHostReason(host: name, reason: said ?? rejection.userMessage)
             return
         }
         switch reason {
@@ -1010,15 +1010,15 @@ final class SessionModel: ObservableObject {
         case .hostEnded, .local:
             // Someone asked for this: an operator "End" on the host, or our own close racing in.
             // Say it plainly, without the error framing.
-            errorMessage = "\(name) ended the session"
+            errorMessage = L10n.appleEndedByHost(host: name)
         case .hostError:
-            errorMessage = "\(name) ended the session with an error"
+            errorMessage = L10n.appleEndedHostError(host: name)
         case .lost:
-            errorMessage = "Lost the connection to \(name)"
+            errorMessage = L10n.appleEndedLost(host: name)
         case .none:
             // No verdict (an older core, or the close raced the read): keep the wording this path
             // has always used rather than inventing one.
-            errorMessage = "Session ended by \(name)"
+            errorMessage = L10n.appleEndedUnknown(host: name)
         }
     }
 
@@ -1029,7 +1029,7 @@ final class SessionModel: ObservableObject {
         guard let wait = PunktfunkConnection.SessionEndReason.lost.redialDelay(attempt: plan.attempt)
         else {
             redial = nil
-            errorMessage = "Lost the connection to \(plan.host.displayName)"
+            errorMessage = L10n.appleEndedLost(host: plan.host.displayName)
             return
         }
         var next = plan

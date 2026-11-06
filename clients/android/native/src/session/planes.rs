@@ -508,10 +508,10 @@ fn panel_warning(rate: f32, mode: f32, stream_hz: u32, received: u32) -> Option<
     }
     let shown = rate.round() as i32;
     if rate > 0.0 && mode > 0.0 && rate + 1.0 < mode {
-        return Some(format!("⚠ app capped {shown} Hz by the system"));
+        return Some(pf_l10n::android::android_overlay_app_capped(shown));
     }
     (rate > 0.0 && stream_hz > 0 && rate + 1.0 < stream_hz as f32)
-        .then(|| format!("⚠ panel {shown} Hz, not {stream_hz} · check the game frame-rate limit"))
+        .then(|| pf_l10n::android::android_overlay_panel_rate(shown, stream_hz))
 }
 
 /// `NativeBridge.nativeVideoSize(handle): IntArray?` — the negotiated video mode as

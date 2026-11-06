@@ -2,6 +2,7 @@ package io.unom.punktfunk
 
 import android.content.Context
 import io.unom.punktfunk.kit.NativeBridge
+import io.unom.punktfunk.kit.R
 import io.unom.punktfunk.kit.library.MgmtReply
 import io.unom.punktfunk.kit.library.mgmtCall
 import io.unom.punktfunk.kit.security.ClientIdentity
@@ -20,7 +21,7 @@ import okhttp3.RequestBody.Companion.toRequestBody
  * (`console.SkiaConsole`) and the touch home's card menu ([ConnectGrid]). It lived only in the
  * console, which made it unreachable on exactly the devices that most need it: a phone whose
  * console never comes up has no route to its own logs at all, and the touch UI is the shell a
- * reporter is looking at when something is wrong. The wording is the desktop console's verbatim
+ * reporter is looking at when something is wrong. The wording is the desktop console's
  * (`clients/session/src/console.rs`) so a quoted message means the same thing on every client.
  *
  * Blocking — call it off the main thread.
@@ -65,9 +66,9 @@ object SendLogs {
         }
         // The host answers 201 Created: the route STORES a bundle, so any 2xx is a success.
         return if (reply is MgmtReply.Answer && reply.ok) {
-            "Logs sent to $hostName — download them from its web console's Logs page"
+            context.getString(R.string.hostcard_logs_sent_body, hostName)
         } else {
-            "Couldn't send logs — ${reply.why}"
+            context.getString(R.string.hostcard_logs_failed, reply.why.words(context.resources))
         }
     }
 }

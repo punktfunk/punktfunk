@@ -59,7 +59,7 @@ final class DeepLinkRouterTests: XCTestCase {
             hosts: [saved, other], catalog: PresetCatalog(presets: []),
             session: busy, browse: false)
         guard case .notice(let text) = out else { return XCTFail("got \(out)") }
-        XCTAssertTrue(text.contains("Couch"), text)
+        XCTAssertEqual(text, String(localized: L10n.linkSessionRunning))
     }
 
     func testLinkingToTheHostAlreadyStreamingIsANoOp() throws {

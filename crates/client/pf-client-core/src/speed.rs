@@ -92,15 +92,15 @@ fn connect_for_probe(
     })
     .map_err(|e| {
         tracing::warn!(error = ?e, "speed test connect");
-        "Couldn't start the speed test".to_string()
+        pf_l10n::client::speedtest_start_failed().to_string()
     })
 }
 
 fn speed_error(e: SpeedError) -> String {
     tracing::warn!(error = ?e, "speed test");
     match e {
-        SpeedError::Request(_) => "The host didn't start the speed test".to_string(),
-        SpeedError::Declined => "The host declined the speed test".to_string(),
-        SpeedError::Timeout => "The speed test didn't finish in time".to_string(),
+        SpeedError::Request(_) => pf_l10n::client::speedtest_not_started_body().to_string(),
+        SpeedError::Declined => pf_l10n::client::speedtest_declined_body().to_string(),
+        SpeedError::Timeout => pf_l10n::client::speedtest_timeout_body().to_string(),
     }
 }

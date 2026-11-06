@@ -1,0 +1,9 @@
+{
+  "apple_shortcut_connect_phrase": "Connect to {host} in {application_name}",
+  "apple_shortcut_end_phrase": "End the {application_name} stream",
+  "apple_shortcut_connect_short": "Connect",
+  "apple_usage_local_network": "Punktfunk connects to your host on the local network.",
+  "apple_usage_microphone": "Your microphone is streamed to the host.",
+  "apple_usage_face_id": "Face ID opens your own account on a host.",
+  "apple_usage_bluetooth": "Bluetooth lets Punktfunk read your Steam Controller."
+}

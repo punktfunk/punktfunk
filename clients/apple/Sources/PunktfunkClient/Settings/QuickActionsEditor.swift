@@ -17,10 +17,10 @@ import PunktfunkShared
 import SwiftUI
 
 #if os(macOS)
-/// The pointer verb, so the instructions name what the reader is actually holding.
-private let pickVerb = "Click"
+/// The instruction names the pointer the reader holds: a click on a Mac, a tap elsewhere.
+private var pickHint: String { String(localized: L10n.appleRingEditorHintClick) }
 #else
-private let pickVerb = "Tap"
+private var pickHint: String { String(localized: L10n.ringEditorHintTap) }
 #endif
 
 private struct PickSlot: Identifiable {
@@ -93,10 +93,7 @@ struct QuickActionsEditor: View {
             } footer: {
                 // Footers wear the described-row caption font (SettingsView+Support): the
                 // system footer style renders larger than every other settings caption.
-                Text(overridden
-                     ? "\(pickVerb) a button to change it, drag one onto another to swap. "
-                       + "This preset has its own quick actions; the default dial no longer reaches it."
-                     : "\(pickVerb) a button to change it, drag one onto another to swap.")
+                Text(overridden ? pickHint + " " + String(localized: L10n.ringEditorPresetOwns) : pickHint)
                     .font(.geist(13, relativeTo: .footnote))
             }
             #if os(iOS) || os(visionOS)
@@ -104,23 +101,22 @@ struct QuickActionsEditor: View {
             // through the same binding the ring uses. Absent on the Mac: there is no touch screen
             // to draw it on, and a `pad` block written from here would configure nothing.
             Section {
-                Picker("Layout", selection: Binding(get: { cfg.pad.layout }, set: { l in setPad { $0.layout = l } })) {
-                    Text("Full").tag("full")
-                    Text("Sticks and shoulders").tag("sticks")
-                    Text("D-pad and face buttons").tag("dpad")
+                Picker(L10n.padVirtualLayout, selection: Binding(get: { cfg.pad.layout }, set: { l in setPad { $0.layout = l } })) {
+                    Text(L10n.padVirtualLayoutFull).tag("full")
+                    Text(L10n.padVirtualLayoutSticks).tag("sticks")
+                    Text(L10n.padVirtualLayoutDpad).tag("dpad")
                 }
-                PadSlider(label: "Opacity", value: cfg.pad.opacity, range: VirtualPad.opacityRange) { v in
+                PadSlider(label: L10n.padVirtualOpacity, value: cfg.pad.opacity, range: VirtualPad.opacityRange) { v in
                     setPad { $0.opacity = v }
                 }
-                PadSlider(label: "Scale", value: cfg.pad.scale, range: VirtualPad.scaleRange) { v in
+                PadSlider(label: L10n.padVirtualScale, value: cfg.pad.scale, range: VirtualPad.scaleRange) { v in
                     setPad { $0.scale = v }
                 }
-                Button("Edit layout") { editingLayout = true }
+                Button(L10n.padVirtualEditLayout) { editingLayout = true }
             } header: {
-                Text("Virtual controller")
+                Text(L10n.padVirtualTitle)
             } footer: {
-                Text("Shown from the dial's Virtual controller button. "
-                     + "Wide and upright screens keep separate layouts.")
+                Text(L10n.padVirtualHint)
                     .font(.geist(13, relativeTo: .footnote))
             }
             #endif
@@ -155,16 +151,16 @@ struct QuickActionsEditor: View {
                 Button {
                     editingShortcut = ShortcutDraft(id: cfg.nextShortcutID, label: "", keys: [], isNew: true)
                 } label: {
-                    Label("Add shortcut", systemImage: "plus")
+                    Label(L10n.ringShortcutAdd, systemImage: "plus")
                 }
             } header: {
-                Text("Shortcuts")
+                Text(L10n.ringEditorShortcuts)
             } footer: {
-                Text("A new shortcut takes the first empty dial slot.")
+                Text(L10n.ringEditorShortcutsHint)
                     .font(.geist(13, relativeTo: .footnote))
             }
             Section {
-                Button("Reset to default", role: .destructive, action: reset)
+                Button(L10n.ringReset, role: .destructive, action: reset)
             }
         }
         #if os(macOS)
@@ -172,7 +168,7 @@ struct QuickActionsEditor: View {
         // than the plain two-column form a bare macOS Form draws.
         .formStyle(.grouped)
         #endif
-        .navigationTitle("Quick actions")
+        .navigationTitle(L10n.ringEditorTitle)
         .sheet(item: $picking) { p in
             SlotPicker(groups: groups, current: cfg.ring[p.k]?.id ?? "") { id in
                 set(p.k, id)
@@ -234,7 +230,7 @@ struct QuickActionsEditor: View {
 
 /// A slider that names its value as a percentage and writes it when the finger lifts, not per frame.
 private struct PadSlider: View {
-    let label: String
+    let label: LocalizedStringResource
     let value: Float
     let range: ClosedRange<Float>
     let commit: (Float) -> Void
@@ -242,7 +238,8 @@ private struct PadSlider: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text("\(label) · \(Int((live * 100).rounded()))%")
+            Text(String(localized: label) + " · "
+                 + L10n.commonPercent(value: String(Int((live * 100).rounded()))))
             Slider(value: $live, in: range) { editing in
                 if !editing { commit(live) }
             }
@@ -283,7 +280,7 @@ private struct SlotPicker: View {
         NavigationStack {
             List {
                 ForEach(groups) { g in
-                    Section(g.id) {
+                    Section(g.title) {
                         ForEach(g.options) { o in
                             Button {
                                 choose(o.id)
@@ -304,9 +301,9 @@ private struct SlotPicker: View {
                     }
                 }
             }
-            .navigationTitle("Slot action")
+            .navigationTitle(L10n.ringPickerTitle)
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
+                ToolbarItem(placement: .cancellationAction) { Button(L10n.commonCancel) { dismiss() } }
             }
         }
     }
@@ -330,17 +327,19 @@ private struct ShortcutEditor: View {
                     HStack(spacing: 14) {
                         KeycapDisc(keys: draft.keys)
                         VStack(alignment: .leading, spacing: 3) {
-                            Text(draft.label.isEmpty ? (key == nil ? "Pick a key" : chordChip(draft.keys)) : draft.label)
+                            Text(draft.label.isEmpty
+                                 ? (key == nil ? String(localized: L10n.ringShortcutNoKey) : chordChip(draft.keys))
+                                 : draft.label)
                                 .font(.geist(15, .medium))
-                            Text(key == nil ? "The disc as the dial will draw it" : chordChip(draft.keys))
+                            Text(key == nil ? String(localized: L10n.ringShortcutPreview) : chordChip(draft.keys))
                                 .font(.footnote)
                                 .foregroundStyle(.secondary)
                         }
                     }
                     .padding(.vertical, 4)
-                    TextField("Name (optional)", text: $draft.label)
+                    TextField(String(localized: L10n.ringShortcutNameOptional), text: $draft.label)
                 }
-                Section("Hold") {
+                Section(String(localized: L10n.ringShortcutModifiers)) {
                     HStack(spacing: 8) {
                         ForEach(modifierKeys, id: \.self) { m in
                             let on = mods.contains(m)
@@ -352,7 +351,7 @@ private struct ShortcutEditor: View {
                         }
                     }
                 }
-                ForEach(keyGroups, id: \.title) { group in
+                ForEach(keyGroups, id: \.id) { group in
                     Section(group.title) {
                         // Word keys (Backspace, PgDn, PrtSc) get wider cells; every cap keeps
                         // one line at one height and shrinks its text rather than growing.
@@ -380,7 +379,7 @@ private struct ShortcutEditor: View {
                 }
                 if !draft.isNew {
                     Section {
-                        Button("Remove shortcut", role: .destructive) {
+                        Button(L10n.ringShortcutRemove, role: .destructive) {
                             delete()
                             dismiss()
                         }
@@ -390,11 +389,11 @@ private struct ShortcutEditor: View {
             #if os(macOS)
             .formStyle(.grouped)
             #endif
-            .navigationTitle(draft.isNew ? "New shortcut" : "Shortcut")
+            .navigationTitle(draft.isNew ? L10n.ringShortcutNewTitle : L10n.ringShortcutTitle)
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
+                ToolbarItem(placement: .cancellationAction) { Button(L10n.commonCancel) { dismiss() } }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button(draft.isNew ? "Add" : "Save") {
+                    Button(draft.isNew ? L10n.commonAdd : L10n.commonSave) {
                         save(draft)
                         dismiss()
                     }

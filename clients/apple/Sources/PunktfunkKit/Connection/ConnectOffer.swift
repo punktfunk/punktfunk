@@ -3,6 +3,7 @@
 // session reads that answer from the connection, never the offer.
 
 import Foundation
+import PunktfunkShared
 
 public struct ConnectOffer: Equatable, Sendable {
     public var width: UInt32
@@ -88,19 +89,12 @@ public struct ConnectOffer: Equatable, Sendable {
         callerRecovers: Bool
     ) -> String? {
         if case PunktfunkClientError.rejected(let rejection, let said) = error {
-            return "\(hostName): \(said ?? rejection.userMessage)"
+            return L10n.dialHostReason(host: hostName, reason: said ?? rejection.userMessage)
         }
         if callerRecovers, !requestAccess { return nil }
-        if requestAccess {
-            return "\(hostName) didn't let this device in. "
-                + "Approve it in the host's web console (port 47992 → Pairing), then "
-                + "request access again — the request expires after a few minutes."
-        }
+        if requestAccess { return String(localized: L10n.errorRequestFailed) }
         return pinned
-            ? "Couldn't reach \(hostName) — it may be asleep, or its "
-                + "identity changed since you paired. Pair with it again from "
-                + "its host card."
-            : "Couldn't reach \(hostName) — it may be asleep, or not "
-                + "paired yet. Wake it, or pair with it from its host card."
+            ? L10n.appleDialUnreachablePinned(host: hostName)
+            : L10n.appleDialUnreachableUnpaired(host: hostName)
     }
 }

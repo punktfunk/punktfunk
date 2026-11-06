@@ -180,30 +180,30 @@ struct LibraryView: View {
     private var prompted: some View {
         content
             .confirmationDialog(
-                endingGame.map { "End \($0.title)?" } ?? "",
+                endingGame.map { L10n.libEndGameConfirmTitle(title: $0.title) } ?? "",
                 isPresented: Binding(get: { endingGame != nil }, set: { if !$0 { endingGame = nil } }),
                 titleVisibility: .visible,
                 presenting: endingGame
             ) { game in
-                Button("End Game", role: .destructive) { endGame(game) }
+                Button(L10n.libEndGame, role: .destructive) { endGame(game) }
             } message: { _ in
-                Text("Unsaved progress in the game is lost.")
+                Text(L10n.libEndGameConfirmBody)
             }
             .confirmationDialog(
-                removingGame.map { "Remove \($0.title)?" } ?? "",
+                removingGame.map { L10n.libRemoveConfirmTitle(title: $0.title) } ?? "",
                 isPresented: Binding(get: { removingGame != nil }, set: { if !$0 { removingGame = nil } }),
                 titleVisibility: .visible,
                 presenting: removingGame
             ) { game in
-                Button("Remove Download", role: .destructive) { changeInstall(game, .remove) }
+                Button(L10n.libDownloadRemove, role: .destructive) { changeInstall(game, .remove) }
             } message: { _ in
-                Text("Saves stay on the host.")
+                Text(L10n.libRemoveConfirmBody)
             }
             .alert(
                 endGameNotice ?? "",
                 isPresented: Binding(get: { endGameNotice != nil }, set: { if !$0 { endGameNotice = nil } })
             ) {
-                Button("OK", role: .cancel) {}
+                Button(L10n.commonOk, role: .cancel) {}
             }
             // Percentages move while a download runs and the shelf is up.
             .task(id: downloads.values.contains(where: \.live)) {
@@ -218,7 +218,9 @@ struct LibraryView: View {
         prompted
             // In the tab the host filter names the shelf, so the title names the place; a TV's
             // tab bar already does.
-            .modifier(LibraryTitle(title: tvTab ? nil : inTab ? "Library" : "\(shelfTitle) — Library"))
+            .modifier(LibraryTitle(
+                title: tvTab ? nil
+                    : inTab ? String(localized: L10n.libTitle) : L10n.libTitleHost(host: shelfTitle)))
             #if os(iOS) || os(visionOS)
             .modifier(LibraryTitleMode(inTab: inTab))
             #endif
@@ -246,7 +248,7 @@ struct LibraryView: View {
                 #if !os(tvOS)
                 if !inTab {
                     ToolbarItem(placement: .cancellationAction) {
-                        Button("Close") { dismiss() }
+                        Button(L10n.commonClose) { dismiss() }
                     }
                 }
                 #endif
@@ -319,7 +321,7 @@ struct LibraryView: View {
         if inTab {
             tabBody
         } else if loading && games.isEmpty {
-            ProgressView("Loading library…")
+            ProgressView(String(localized: L10n.libLoading))
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else if let errorText, games.isEmpty {
             errorState(errorText)
@@ -345,7 +347,8 @@ struct LibraryView: View {
         return LibraryCollation.collate(items, sort: LibrarySortKey(stored: sortRaw), groupBy: groupBy)
             .map { group in
                 // The ungrouped bucket names itself "All"; on this grid it has always been "Games".
-                let label = (groupBy == nil && group.key != .launchers) ? "Games" : group.label
+                let label = (groupBy == nil && group.key != .launchers)
+                    ? String(localized: L10n.libSectionGames) : group.label
                 return (label, group.indices.map { items[$0] })
             }
     }
@@ -534,7 +537,7 @@ struct LibraryView: View {
         if games.isEmpty {
             Group {
                 if loading {
-                    if spinnerDue { ProgressView("Loading library…") }
+                    if spinnerDue { ProgressView(String(localized: L10n.libLoading)) }
                 } else if let errorText {
                     errorState(errorText)
                 } else {
@@ -617,7 +620,7 @@ struct LibraryView: View {
 
     private var customizeButton: some View {
         Button { showCustomize = true } label: {
-            Label("Customize", systemImage: "slider.horizontal.3")
+            Label(L10n.libCustomize, systemImage: "slider.horizontal.3")
         }
         #if os(iOS) || os(visionOS)
         // A popover on the iPad, as on the Mac; an iPhone shows it as a sheet. visionOS rows carry
@@ -729,17 +732,17 @@ struct LibraryView: View {
         if inTab, game.id != LibraryCollation.desktopID {
             let marked = favoriteIDs.contains(game.id)
             Button(
-                marked ? "Remove from Favorites" : "Add to Favorites",
+                marked ? L10n.libFavoriteRemove : L10n.libFavoriteAdd,
                 systemImage: marked ? "heart.slash" : "heart"
             ) {
                 favorites.toggle(game.id, host: host.id.uuidString)
             }
         }
         if game.id != LibraryCollation.desktopID {
-            Button("Details…", systemImage: "info.circle") { detailGame = game }
+            Button(L10n.libTitleDetails, systemImage: "info.circle") { detailGame = game }
         }
         if LinkClipboard.isAvailable {
-            Button("Copy Link", systemImage: "link") { copyLink(game) }
+            Button(L10n.hostcardCopyLink, systemImage: "link") { copyLink(game) }
         }
         if let files = InstallAction.forTitle(
             game.install, download: downloads[game.id], grants: grants)
@@ -749,7 +752,7 @@ struct LibraryView: View {
             }
         }
         if canEnd(game) {
-            Button("End Game", systemImage: "xmark.circle", role: .destructive) { endingGame = game }
+            Button(L10n.libEndGame, systemImage: "xmark.circle", role: .destructive) { endingGame = game }
         }
     }
 
@@ -824,8 +827,8 @@ struct LibraryView: View {
     }
 
     private func playLabel(_ game: GameEntry) -> String {
-        if game.id == LibraryCollation.desktopID { return "Connect" }
-        return running[game.id] != nil ? "Resume" : "Play"
+        if game.id == LibraryCollation.desktopID { return String(localized: L10n.libDesktopAction) }
+        return String(localized: running[game.id] != nil ? L10n.libResume : L10n.commonPlay)
     }
 
     private func detailSheet(_ game: GameEntry) -> some View {
@@ -923,7 +926,7 @@ struct LibraryView: View {
                 .frame(maxWidth: 420)
             HStack(spacing: 12) {
                 wakeButton
-                Button("Retry") { reloadToken += 1 }
+                Button(L10n.commonRetry) { reloadToken += 1 }
                     .glassProminentButtonStyle()
             }
         }
@@ -934,7 +937,7 @@ struct LibraryView: View {
     /// The wake offer: the explicit wake, then a reload once the host answers.
     @ViewBuilder private var wakeButton: some View {
         if wakeOffered, let wake {
-            Button("Wake Host") {
+            Button(L10n.hostcardWake) {
                 wake(store.hosts.first { $0.id == host.id } ?? host) { reloadToken += 1 }
             }
             .buttonStyle(.bordered)
@@ -946,7 +949,7 @@ struct LibraryView: View {
             Image(systemName: "square.grid.2x2")
                 .font(.largeTitle)
                 .foregroundStyle(.secondary)
-            Text("No games found on this host")
+            Text(L10n.libEmpty)
                 .foregroundStyle(.secondary)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -954,7 +957,7 @@ struct LibraryView: View {
 
     private var reloadButton: some View {
         Button { reloadToken += 1 } label: {
-            Label("Reload", systemImage: "arrow.clockwise")
+            Label(L10n.libReload, systemImage: "arrow.clockwise")
         }
         .disabled(loading)
     }
@@ -966,19 +969,19 @@ struct LibraryView: View {
     private var sortMenu: some View {
         Menu {
             MenuChoices(
-                title: "Sort by",
+                title: String(localized: L10n.libSort),
                 choices: LibrarySortKey.all.map { MenuChoice(label: $0.label, tag: $0.stored) },
                 selection: $sortRaw)
             MenuChoices(
-                title: "Group by",
+                title: String(localized: L10n.libGroup),
                 choices: [
-                    MenuChoice(label: "None", tag: ""),
-                    MenuChoice(label: "Platform", tag: "platform"),
-                    MenuChoice(label: "Store", tag: "store"),
+                    MenuChoice(label: String(localized: L10n.libGroupNone), tag: ""),
+                    MenuChoice(label: String(localized: L10n.libGroupPlatform), tag: "platform"),
+                    MenuChoice(label: String(localized: L10n.libGroupStore), tag: "store"),
                 ],
                 selection: $groupByRaw)
         } label: {
-            Label("Sort & group", systemImage: "line.3.horizontal.decrease.circle")
+            Label(L10n.libSortGroup, systemImage: "line.3.horizontal.decrease.circle")
         }
         #if os(visionOS)
         // A circle like the toolbar's other buttons; the indicator widened it to a capsule.
@@ -1151,7 +1154,7 @@ struct LibraryView: View {
     private var desktopTile: GameEntry {
         let playing = nowPlayingStore.title(for: host)
         return LibraryCollation.desktopEntry(
-            title: playing.map { "Resume \($0)" } ?? "Desktop")
+            title: playing.map { L10n.libResumeTitle(title: $0) } ?? String(localized: L10n.libDesktop))
     }
 
     /// Whether the titles on screen are remembered rather than observed, and what the host is
@@ -1187,8 +1190,8 @@ enum LibraryStaleness: Equatable {
     var text: String? {
         switch self {
         case .none: return nil
-        case .waking: return "Last known library — waking the host…"
-        case .offline: return "Last known library — the host didn't answer"
+        case .waking: return String(localized: L10n.libStaleWaking)
+        case .offline: return String(localized: L10n.libStaleOffline)
         }
     }
 
@@ -1367,7 +1370,7 @@ private struct TitleSearch: ViewModifier {
 
     func body(content: Content) -> some View {
         if active {
-            content.searchable(text: $text, prompt: "Search titles")
+            content.searchable(text: $text, prompt: String(localized: L10n.libSearchTitles))
         } else {
             content
         }
@@ -1396,7 +1399,7 @@ private struct LibraryTitleMode: ViewModifier {
                     .toolbar {
                         ToolbarItem(placement: .topBarLeading) {
                             // The large title's face, at its own width: the bar clips it otherwise.
-                            Text("Library")
+                            Text(L10n.libTitle)
                                 .font(.geist(34, .bold, relativeTo: .largeTitle))
                                 .fixedSize()
                                 .accessibilityAddTraits(.isHeader)

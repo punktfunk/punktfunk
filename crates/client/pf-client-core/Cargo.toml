@@ -24,8 +24,15 @@ repository.workspace = true
 # `NativeClient`/`endpoint` for identity + pairing; nothing here fetches over HTTPS.
 # Apple targets take the same subset: the console crate builds for the Mac, iOS and tvOS, and so
 # does the PS5 homebrew title (`all(target_os = "freebsd", target_vendor = "sie"), target_os = "horizon"`).
+[dependencies]
+# The words this crate hands a person: the shared client messages, and the host part for the
+# refusals and power actions a host names by id. No dependencies of its own.
+pf-l10n = { path = "../../../l10n", features = ["client", "host"] }
+# Every client words core's mute notices; the target tables below pick the other features.
+punktfunk-core = { path = "../../core/punktfunk-core", features = ["l10n"] }
+
 [target.'cfg(any(target_os = "android", target_vendor = "apple", all(target_os = "freebsd", target_vendor = "sie"), target_os = "horizon"))'.dependencies]
-punktfunk-core = { path = "../../core/punktfunk-core", features = ["quic", "serde"] }
+punktfunk-core = { path = "../../core/punktfunk-core", features = ["quic", "serde", "l10n"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 anyhow = "1"
@@ -38,7 +45,7 @@ rand = "0.10"
 # quinn/tokio/aws-lc-rs never build for this target and `trust`'s three identity/pair/probe
 # entry points are `cfg`'d out with them.
 [target.'cfg(target_family = "wasm")'.dependencies]
-punktfunk-core = { path = "../../core/punktfunk-core", features = ["serde"] }
+punktfunk-core = { path = "../../core/punktfunk-core", features = ["serde", "l10n"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 anyhow = "1"
@@ -46,7 +53,7 @@ tracing = "0.1"
 rand = "0.10"
 
 [target.'cfg(any(target_os = "linux", windows))'.dependencies]
-punktfunk-core = { path = "../../core/punktfunk-core", features = ["quic", "serde"] }
+punktfunk-core = { path = "../../core/punktfunk-core", features = ["quic", "serde", "l10n"] }
 # The decode ladder (`video`, `video_*`). Optional, so webOS — `target_os = "linux"` without
 # `desktop` — never builds it.
 pf-client-video = { path = "../pf-client-video", default-features = false, optional = true }

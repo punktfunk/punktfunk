@@ -18,6 +18,7 @@ use pf_client_core::overlay_actions::{
     SlotId, CHORD_MODIFIERS, KEY_GRID, RING_SLOTS,
 };
 use pf_client_core::ring::{slot_offset, CENTRE_DIAMETER, RING_RADIUS, SLOT_DIAMETER};
+use pf_l10n::{client, common, desktop};
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -28,14 +29,8 @@ const STAGE_H: i32 = 340;
 /// that, so a disc reads the same weight in the editor as it does in the stream.
 const ICON_PX: i32 = (SLOT_DIAMETER * 1.05 / 2.0) as i32;
 
-const CLOCK: [&str; RING_SLOTS] = [
-    "12 o'clock",
-    "2 o'clock",
-    "4 o'clock",
-    "6 o'clock",
-    "8 o'clock",
-    "10 o'clock",
-];
+/// The hour each slot sits at on the ring, top first.
+const CLOCK_HOURS: [u32; RING_SLOTS] = [12, 2, 4, 6, 8, 10];
 
 type ChangedFns = Rc<RefCell<Vec<Box<dyn Fn()>>>>;
 /// The editor page's "draw it all again from the blob", handed to every control that edits.
@@ -97,22 +92,22 @@ fn summary(cfg: &OverlayConfig) -> String {
 /// alike. A shortcut carries its chord.
 fn short_label(cfg: &OverlayConfig, slot: &SlotId) -> String {
     match slot {
-        SlotId::EndStream => "End".into(),
-        SlotId::EndGame => "Quit".into(),
-        SlotId::DisconnectLinger => "Leave".into(),
-        SlotId::TouchMode => "Touch".into(),
-        SlotId::Keyboard => "Keys".into(),
-        SlotId::Stats => "Stats".into(),
-        SlotId::Mic => "Mic".into(),
-        SlotId::Pad => "Pad".into(),
-        SlotId::SendText => "Text".into(),
-        SlotId::Guide => "Guide".into(),
-        SlotId::Qam => "QAM".into(),
-        SlotId::PadMouse => "Mouse".into(),
-        SlotId::PadType => "Pad type".into(),
-        SlotId::StreamMute => "Mute".into(),
-        SlotId::SwapScreens => "Swap".into(),
-        SlotId::Host(_) => "Power".into(),
+        SlotId::EndStream => client::ring_end_stream_short().into(),
+        SlotId::EndGame => client::ring_end_game_short().into(),
+        SlotId::DisconnectLinger => client::ring_disconnect_linger_short().into(),
+        SlotId::TouchMode => client::ring_touch_mode_short().into(),
+        SlotId::Keyboard => client::ring_keyboard_short().into(),
+        SlotId::Stats => client::ring_stats_short().into(),
+        SlotId::Mic => client::ring_mic_short().into(),
+        SlotId::Pad => client::ring_pad_short().into(),
+        SlotId::SendText => client::ring_send_text_short().into(),
+        SlotId::Guide => client::ring_guide_short().into(),
+        SlotId::Qam => client::ring_qam_short().into(),
+        SlotId::PadMouse => client::ring_pad_mouse_short().into(),
+        SlotId::PadType => client::ring_pad_type_short().into(),
+        SlotId::StreamMute => client::ring_stream_mute_short().into(),
+        SlotId::SwapScreens => client::ring_swap_screens_short().into(),
+        SlotId::Host(_) => client::ring_host_short().into(),
         SlotId::Shortcut(id) => cfg
             .shortcut(id)
             .map(|s| chord_chip(&s.keys))
@@ -215,7 +210,7 @@ impl QuickActions {
     /// The row for the Input page, seeded with the scope's effective blob.
     pub fn new(dialog: &adw::PreferencesDialog, blob: &str) -> QuickActions {
         let row = adw::ActionRow::builder()
-            .title(super::spec::QUICK_ACTIONS.title)
+            .title(super::spec::QUICK_ACTIONS.title())
             .use_markup(false)
             .activatable(true)
             .build();
@@ -267,10 +262,11 @@ fn editor_page(shared: &Shared) -> adw::NavigationPage {
         .spacing(18)
         .build();
     let caption = gtk::Label::builder()
-        .label(
-            "Click a button to change it, or drag one onto another to swap the two. \
-             Ctrl+Alt+Shift+O, a two-finger twist or Select+A opens this dial in a stream.",
-        )
+        .label(format!(
+            "{} {}",
+            desktop::desktop_ring_editor_hint(),
+            desktop::desktop_ring_editor_open_hint("Ctrl+Alt+Shift+O", "Select+A")
+        ))
         .wrap(true)
         .xalign(0.0)
         .css_classes(["dim-label"])
@@ -289,7 +285,9 @@ fn editor_page(shared: &Shared) -> adw::NavigationPage {
         .css_classes(["dim-label"])
         .build();
     content.append(&hint);
-    let shortcuts = adw::PreferencesGroup::builder().title("Shortcuts").build();
+    let shortcuts = adw::PreferencesGroup::builder()
+        .title(glib::markup_escape_text(client::ring_editor_shortcuts()))
+        .build();
     content.append(&shortcuts);
     let reset_group = adw::PreferencesGroup::builder().build();
     content.append(&reset_group);
@@ -317,7 +315,7 @@ fn editor_page(shared: &Shared) -> adw::NavigationPage {
     }
 
     let reset = gtk::Button::builder()
-        .label("Reset to default")
+        .label(client::ring_reset())
         .halign(gtk::Align::Start)
         .css_classes(["destructive-action"])
         .build();
@@ -325,10 +323,13 @@ fn editor_page(shared: &Shared) -> adw::NavigationPage {
         let (shared, content, rebuild) = (shared.clone(), content.clone(), rebuild.clone());
         reset.connect_clicked(move |_| {
             let alert = adw::AlertDialog::new(
-                Some("Reset quick actions?"),
-                Some("The dial goes back to the platform default and the shortcuts are removed."),
+                Some(desktop::desktop_ring_reset_title()),
+                Some(desktop::desktop_ring_reset_body()),
             );
-            alert.add_responses(&[("cancel", "Cancel"), ("reset", "Reset")]);
+            alert.add_responses(&[
+                ("cancel", common::common_cancel()),
+                ("reset", common::common_reset()),
+            ]);
             alert.set_response_appearance("reset", adw::ResponseAppearance::Destructive);
             alert.set_default_response(Some("cancel"));
             let (shared, rebuild) = (shared.clone(), rebuild.clone());
@@ -361,7 +362,7 @@ fn editor_page(shared: &Shared) -> adw::NavigationPage {
     let view = adw::ToolbarView::new();
     view.add_top_bar(&adw::HeaderBar::new());
     view.set_content(Some(&scroll));
-    adw::NavigationPage::new(&view, "Quick actions")
+    adw::NavigationPage::new(&view, client::ring_editor_title())
 }
 
 /// A disc's face: the slot's Lucide mark, or a stacked keycap for a shortcut (the modifiers
@@ -377,7 +378,7 @@ fn disc_face(cfg: &OverlayConfig, slot: Option<&SlotId>) -> gtk::Widget {
         let keys = cfg.shortcut(id).map(|s| s.keys.clone()).unwrap_or_default();
         return keycap(&keys).upcast();
     }
-    if let Some(name) = slot_icon(&slot.id(), "") {
+    if let Some(name) = slot_icon(&slot.id(), false) {
         return crate::widgets::lucide::icon(name, ICON_PX).upcast();
     }
     gtk::Label::builder()
@@ -447,7 +448,7 @@ fn build_ring(
         .css_classes(["pf-ring-centre"])
         .width_request(CENTRE_DIAMETER as i32)
         .height_request(CENTRE_DIAMETER as i32)
-        .tooltip_text("More — the rest of the actions, in the stream")
+        .tooltip_text(desktop::desktop_ring_centre_tooltip())
         .build();
     // The mark has to EXPAND to be centred. A `gtk::Box` is horizontal by default and packs a
     // single child at the start, so a child narrower than the box's requested width sits on its
@@ -462,13 +463,14 @@ fn build_ring(
         cy - CENTRE_DIAMETER as f64 / 2.0,
     );
 
-    for (k, clock) in CLOCK.iter().enumerate() {
+    for (k, hour) in CLOCK_HOURS.iter().enumerate() {
+        let clock = client::ring_slot_clock(hour);
         let (dx, dy) = slot_offset(k, RING_RADIUS);
         let slot = cfg.ring[k].clone();
         let (label, note) = slot
             .as_ref()
             .map(|s| describe(cfg, s))
-            .unwrap_or(("Empty".into(), String::new()));
+            .unwrap_or((client::ring_slot_empty().into(), String::new()));
         let button = gtk::Button::builder()
             .css_classes(["circular", "pf-ring-disc"])
             .width_request(disc as i32)
@@ -481,9 +483,10 @@ fn build_ring(
             button.set_tooltip_text(Some(&label));
         }
         button.set_child(Some(&disc_face(cfg, slot.as_ref())));
-        button.update_property(&[gtk::accessible::Property::Label(&format!(
-            "{clock}, {label}"
-        ))]);
+        button.update_property(&[
+            gtk::accessible::Property::Label(&label),
+            gtk::accessible::Property::Description(&clock),
+        ]);
         stage.put(
             &button,
             cx + dx as f64 - disc / 2.0,
@@ -643,7 +646,7 @@ fn build_shortcuts(
     }
     if group.header_suffix().is_none() {
         let add = gtk::Button::builder()
-            .label("Add shortcut")
+            .label(client::ring_shortcut_add())
             .css_classes(["flat"])
             .build();
         let (shared, rebuild) = (shared.clone(), rebuild.clone());
@@ -655,7 +658,7 @@ fn build_shortcuts(
         group.set_header_suffix(Some(&add));
     }
     if cfg.shortcuts.is_empty() {
-        group.set_description(Some("A new shortcut takes the first empty dial slot."));
+        group.set_description(Some(client::ring_editor_shortcuts_hint()));
     } else {
         group.set_description(None);
     }
@@ -742,7 +745,7 @@ fn shortcut_page(
         .xalign(0.0)
         .build();
     let legend_note = gtk::Label::builder()
-        .label("How the dial will draw it")
+        .label(client::ring_shortcut_preview())
         .css_classes(["dim-label"])
         .xalign(0.0)
         .build();
@@ -765,7 +768,11 @@ fn shortcut_page(
             let keys = draft.borrow().chord.keys();
             face_holder.append(&keycap(&keys));
             let chip = chord_chip(&keys);
-            legend.set_text(if chip.is_empty() { "Pick a key" } else { &chip });
+            legend.set_text(if chip.is_empty() {
+                client::ring_shortcut_no_key()
+            } else {
+                &chip
+            });
         })
     };
     refresh_preview();
@@ -773,7 +780,7 @@ fn shortcut_page(
     // The name.
     let name_group = adw::PreferencesGroup::new();
     let name = adw::EntryRow::builder()
-        .title("Name")
+        .title(client::ring_shortcut_name())
         .text(&draft.borrow().label)
         .build();
     {
@@ -785,8 +792,10 @@ fn shortcut_page(
 
     // The modifiers as toggles, and "press the chord" for a real keyboard.
     let mods_group = adw::PreferencesGroup::builder()
-        .title("Chord")
-        .description("Hold the modifiers marked on, then the key.")
+        .title(glib::markup_escape_text(desktop::desktop_shortcut_chord()))
+        .description(glib::markup_escape_text(
+            client::ring_shortcut_modifiers_hint(),
+        ))
         .build();
     let mods_row = gtk::Box::builder()
         .orientation(gtk::Orientation::Horizontal)
@@ -807,8 +816,8 @@ fn shortcut_page(
         mod_buttons.push(b);
     }
     let capture = gtk::ToggleButton::builder()
-        .label("Press the chord…")
-        .tooltip_text("Then press the keys on your keyboard")
+        .label(desktop::desktop_shortcut_capture())
+        .tooltip_text(desktop::desktop_shortcut_capture_tooltip())
         .css_classes(["suggested-action"])
         .margin_start(12)
         .build();
@@ -817,7 +826,9 @@ fn shortcut_page(
     content.append(&mods_group);
 
     // The key grid: one group of toggles, so exactly one key is on.
-    let grid_group = adw::PreferencesGroup::builder().title("Key").build();
+    let grid_group = adw::PreferencesGroup::builder()
+        .title(glib::markup_escape_text(client::ring_shortcut_key()))
+        .build();
     let grid = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)
         .spacing(6)
@@ -909,9 +920,9 @@ fn shortcut_page(
         .build();
     let save = gtk::Button::builder()
         .label(if existing.is_some() {
-            "Save"
+            common::common_save()
         } else {
-            "Add shortcut"
+            common::common_add()
         })
         .css_classes(["suggested-action"])
         .build();
@@ -925,8 +936,9 @@ fn shortcut_page(
         save.connect_clicked(move |_| {
             let d = draft.borrow().clone();
             if d.chord.key.is_none() {
-                let toast = adw::AlertDialog::new(Some("Pick a key first"), None);
-                toast.add_responses(&[("ok", "OK")]);
+                let toast =
+                    adw::AlertDialog::new(Some(client::ring_shortcut_pick_key_first()), None);
+                toast.add_responses(&[("ok", common::common_ok())]);
                 toast.present(Some(&content));
                 return;
             }
@@ -944,7 +956,7 @@ fn shortcut_page(
     actions.append(&save);
     if let Some(sc) = &existing {
         let remove = gtk::Button::builder()
-            .label("Remove shortcut")
+            .label(client::ring_shortcut_remove())
             .css_classes(["destructive-action"])
             .build();
         let (shared, rebuild, id) = (shared.clone(), rebuild.clone(), sc.id.clone());
@@ -981,9 +993,9 @@ fn shortcut_page(
     adw::NavigationPage::new(
         &view,
         if existing.is_some() {
-            "Shortcut"
+            client::ring_shortcut_title()
         } else {
-            "New shortcut"
+            client::ring_shortcut_new_title()
         },
     )
 }

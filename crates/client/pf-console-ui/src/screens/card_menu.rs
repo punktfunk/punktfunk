@@ -84,6 +84,30 @@ enum Mode {
     ConnectWith,
 }
 
+/// A tab of a host's details.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Section {
+    Presets,
+    Connection,
+    Pairing,
+    Power,
+    Logs,
+    Remove,
+}
+
+impl Section {
+    fn name(self) -> &'static str {
+        match self {
+            Section::Presets => pf_l10n::client::hostcard_section_presets(),
+            Section::Connection => pf_l10n::client::hostcard_section_connection(),
+            Section::Pairing => pf_l10n::client::hostcard_section_pairing(),
+            Section::Power => pf_l10n::client::hostcard_section_power(),
+            Section::Logs => pf_l10n::client::hostcard_section_logs(),
+            Section::Remove => pf_l10n::console::console_section_remove(),
+        }
+    }
+}
+
 /// What the menu was raised on.
 #[derive(Clone)]
 pub(crate) enum Subject {
@@ -164,8 +188,8 @@ impl CardMenu {
     }
 
     /// The details' sections in order, the empty ones dropped.
-    fn sections(&self, store: &dyn SettingsStore) -> Vec<&'static str> {
-        let mut out: Vec<&'static str> = Vec::new();
+    fn sections(&self, store: &dyn SettingsStore) -> Vec<Section> {
+        let mut out: Vec<Section> = Vec::new();
         for a in self.details(self.host(), store) {
             if !out.contains(&Self::section(a)) {
                 out.push(Self::section(a));
@@ -334,16 +358,16 @@ impl CardMenu {
     }
 
     /// The section, and so the tab, a details row sits in.
-    fn section(a: Action) -> &'static str {
+    fn section(a: Action) -> Section {
         match a {
-            Action::BindPreset | Action::Pin(_) => "Presets",
+            Action::BindPreset | Action::Pin(_) => Section::Presets,
             Action::SpeedTest | Action::Clipboard | Action::Edit | Action::MakeDefault => {
-                "Connection"
+                Section::Connection
             }
-            Action::Pair | Action::Unpair => "Pairing",
-            Action::Wake | Action::Host(_) => "Power",
-            Action::SendLogs => "Logs",
-            _ => "Remove",
+            Action::Pair | Action::Unpair => Section::Pairing,
+            Action::Wake | Action::Host(_) => Section::Power,
+            Action::SendLogs => Section::Logs,
+            _ => Section::Remove,
         }
     }
 
@@ -401,87 +425,88 @@ impl CardMenu {
     fn label(&self, a: Action, ctx: &Ctx) -> String {
         let presets = || ctx.store.presets();
         match a {
-            Action::ConnectWith => "Connect with\u{2026}".into(),
-            Action::Browse => "Browse games".into(),
-            Action::SwitchProfile => "Switch profile\u{2026}".into(),
-            Action::Wake => "Wake host".into(),
-            Action::CopyLink => "Copy link".into(),
-            Action::HomeScreen => "Add to home screen".into(),
-            Action::LauncherFile => "Save launcher file\u{2026}".into(),
-            Action::Details => "Host details\u{2026}".into(),
-            Action::Unpin => "Unpin card".into(),
-            Action::Pair if self.host().paired => "Pair again\u{2026}".into(),
-            Action::Pair => "Pair\u{2026}".into(),
-            Action::Unpair if self.armed == Some(Action::Unpair) => {
-                "Unpair \u{2014} press again".into()
+            Action::ConnectWith => pf_l10n::console::console_card_connect_with().into(),
+            Action::Browse => pf_l10n::console::console_card_browse_games().into(),
+            Action::SwitchProfile => pf_l10n::client::hostcard_switch_profile().into(),
+            Action::Wake => pf_l10n::client::hostcard_wake().into(),
+            Action::CopyLink => pf_l10n::client::hostcard_copy_link().into(),
+            Action::HomeScreen => pf_l10n::client::link_home_screen().into(),
+            Action::LauncherFile => pf_l10n::client::link_launcher_file().into(),
+            Action::Details => pf_l10n::client::hostcard_details().into(),
+            Action::Unpin => pf_l10n::client::hostcard_unpin_card().into(),
+            Action::Pair if self.host().paired => {
+                pf_l10n::console::console_card_pair_again().into()
             }
-            Action::Unpair => "Unpair".into(),
-            Action::AddHost => "Add host".into(),
-            Action::PlayWith => "Play with preset\u{2026}".into(),
+            Action::Pair => pf_l10n::console::console_card_pair().into(),
+            Action::Unpair if self.armed == Some(Action::Unpair) => {
+                pf_l10n::console::console_card_unpair_armed().into()
+            }
+            Action::Unpair => pf_l10n::console::console_card_unpair().into(),
+            Action::AddHost => pf_l10n::console::console_card_add_host().into(),
+            Action::PlayWith => pf_l10n::client::lib_play_with_preset().into(),
             Action::Play => match &self.subject {
-                Subject::Game { game, .. } if game.running => "Resume".into(),
-                _ => "Play".into(),
+                Subject::Game { game, .. } if game.running => pf_l10n::client::lib_resume().into(),
+                _ => pf_l10n::common::common_play().into(),
             },
             Action::EndGame if self.armed == Some(Action::EndGame) => {
-                "End game \u{2014} press again".into()
+                pf_l10n::client::lib_end_game_armed().into()
             }
-            Action::EndGame => "End game".into(),
+            Action::EndGame => pf_l10n::client::lib_end_game().into(),
             Action::Files(InstallAction::Remove) if self.armed == Some(a) => {
-                "Remove download \u{2014} press again".into()
+                pf_l10n::client::lib_download_remove_armed().into()
             }
             Action::Files(f) => match &self.subject {
                 Subject::Game { game, .. } => f.label(game.install.as_ref().map(|i| &i.install)),
                 Subject::Host(_) => String::new(),
             },
-            Action::Favorite if self.is_favorite(ctx.settings) => "Remove from Favorites".into(),
-            Action::Favorite => "Add to Favorites".into(),
-            Action::TitleDetails => "Details\u{2026}".into(),
+            Action::Favorite if self.is_favorite(ctx.settings) => {
+                pf_l10n::client::lib_favorite_remove().into()
+            }
+            Action::Favorite => pf_l10n::client::lib_favorite_add().into(),
+            Action::TitleDetails => pf_l10n::client::lib_title_details().into(),
             Action::BindPreset => match self.subject {
-                Subject::Game { .. } => "Settings preset\u{2026}".into(),
-                Subject::Host(_) => "Default preset\u{2026}".into(),
+                Subject::Game { .. } => pf_l10n::client::lib_title_preset().into(),
+                Subject::Host(_) => pf_l10n::console::console_card_default_preset().into(),
             },
             Action::Pin(i) => {
                 let Some((id, name)) = presets().get(i).cloned() else {
                     return String::new();
                 };
-                let on = self.pinned(ctx.store).contains(&id);
-                format!(
-                    "\u{201c}{name}\u{201d} card: {}",
-                    if on { "On" } else { "Off" }
-                )
+                match self.pinned(ctx.store).contains(&id) {
+                    true => pf_l10n::console::console_card_pin_on(name),
+                    false => pf_l10n::console::console_card_pin_off(name),
+                }
             }
             // The session binary runs the whole check; the other shells measure speed.
             Action::SpeedTest => match ctx.device.platform {
-                crate::platform::Platform::Desktop => "Check network\u{2026}".into(),
-                _ => "Test network speed\u{2026}".into(),
-            },
-            Action::Clipboard => format!(
-                "Shared clipboard: {}",
-                if self.host().clipboard_sync {
-                    "On"
-                } else {
-                    "Off"
+                crate::platform::Platform::Desktop => {
+                    pf_l10n::console::console_card_check_network().into()
                 }
-            ),
-            Action::Edit => "Edit name and address\u{2026}".into(),
+                _ => pf_l10n::client::hostcard_speed_test().into(),
+            },
+            Action::Clipboard if self.host().clipboard_sync => {
+                pf_l10n::console::console_card_clipboard_on().into()
+            }
+            Action::Clipboard => pf_l10n::console::console_card_clipboard_off().into(),
+            Action::Edit => pf_l10n::client::hostcard_edit().into(),
             // Geist carries no U+2713, so a check mark here draws as a missing glyph.
             Action::MakeDefault if self.is_default(ctx.settings.default_host.as_deref()) => {
-                "Default host: On".into()
+                pf_l10n::console::console_card_default_host_on().into()
             }
-            Action::MakeDefault => "Default host: Off".into(),
+            Action::MakeDefault => pf_l10n::console::console_card_default_host_off().into(),
             Action::Host(i) => match self.host().actions.get(i) {
                 Some(act) if self.armed == Some(a) => {
-                    format!("{} \u{2014} press again", act.label)
+                    pf_l10n::console::console_card_action_armed(&act.label)
                 }
                 Some(act) => act.label.clone(),
                 None => String::new(),
             },
-            Action::SendLogs => "Send logs to host".into(),
+            Action::SendLogs => pf_l10n::client::hostcard_send_logs().into(),
             Action::Forget if self.armed == Some(Action::Forget) => {
-                "Remove host \u{2014} press again".into()
+                pf_l10n::console::console_card_remove_armed().into()
             }
-            Action::Forget => "Remove host".into(),
-            Action::Preset(None) => "Default settings".into(),
+            Action::Forget => pf_l10n::client::hostcard_remove().into(),
+            Action::Preset(None) => pf_l10n::client::hostcard_default_settings().into(),
             Action::Preset(Some(i)) => presets().get(i).map(|p| p.1.clone()).unwrap_or_default(),
         }
     }
@@ -574,9 +599,9 @@ impl CardMenu {
                     true
                 });
                 fx.toast = Some(if on {
-                    format!("{} is a favorite", game.title)
+                    pf_l10n::client::lib_favorite_added(&game.title)
                 } else {
-                    format!("{} is no longer a favorite", game.title)
+                    pf_l10n::client::lib_favorite_removed(&game.title)
                 });
                 if self.mode == Mode::Menu {
                     fx.pop();
@@ -609,7 +634,7 @@ impl CardMenu {
                     addr: host.addr.clone(),
                     port: host.port,
                 });
-                fx.toast = Some(format!("Added {}", host.name));
+                fx.toast = Some(pf_l10n::console::console_card_added(&host.name));
                 fx.pop();
             }
             // Toggles what the row showed, not what the rebase reads.
@@ -623,9 +648,9 @@ impl CardMenu {
                 });
                 let opens = start::StartIn::parse(&ctx.settings.start_in) != start::StartIn::Hosts;
                 fx.toast = Some(match (on, opens) {
-                    (true, true) => format!("{name} opens on launch"),
-                    (true, false) => format!("{name} is the default host"),
-                    (false, _) => format!("{name} is no longer the default host"),
+                    (true, true) => pf_l10n::console::console_card_opens_on_launch(&name),
+                    (true, false) => pf_l10n::console::console_card_is_default_body(&name),
+                    (false, _) => pf_l10n::console::console_card_not_default_body(&name),
                 });
             }
             Action::SendLogs => {
@@ -636,7 +661,7 @@ impl CardMenu {
                     fp_hex: host.fp_hex.clone(),
                     host_name: host.name.clone(),
                 });
-                fx.toast = Some(format!("Sending logs to {}\u{2026}", host.name));
+                fx.toast = Some(pf_l10n::client::hostcard_sending_logs(&host.name));
                 fx.pop();
             }
             Action::SpeedTest => {
@@ -655,9 +680,9 @@ impl CardMenu {
                 match self.link(store) {
                     Some(url) => {
                         fx.copy = Some(url);
-                        fx.toast = Some("Link copied".into());
+                        fx.toast = Some(pf_l10n::client::hostcard_link_copied().into());
                     }
-                    None => fx.toast = Some("This host isn't saved any more".into()),
+                    None => fx.toast = Some(pf_l10n::console::console_card_not_saved_body().into()),
                 }
                 fx.pop();
             }
@@ -671,7 +696,7 @@ impl CardMenu {
                             _ => OverlayAction::SaveLauncherFile { url, title },
                         });
                     }
-                    None => fx.toast = Some("This host isn't saved any more".into()),
+                    None => fx.toast = Some(pf_l10n::console::console_card_not_saved_body().into()),
                 }
                 fx.pop();
             }
@@ -706,9 +731,9 @@ impl CardMenu {
                 if let Some((id, name)) = store.presets().get(i).cloned() {
                     let pin = !self.pinned(store).contains(&id);
                     fx.toast = Some(if pin {
-                        format!("Pinned \u{201c}{name}\u{201d} as a card")
+                        pf_l10n::console::console_card_pinned_body(&name)
                     } else {
-                        format!("Unpinned \u{201c}{name}\u{201d}")
+                        pf_l10n::console::console_card_unpinned(&name)
                     });
                     fx.cmds.push(ConsoleCmd::SetPin {
                         key,
@@ -721,9 +746,9 @@ impl CardMenu {
                 let host = self.host();
                 let on = !host.clipboard_sync;
                 fx.toast = Some(if on {
-                    format!("Clipboard shared with {}", host.name)
+                    pf_l10n::console::console_card_clipboard_shared_body(&host.name)
                 } else {
-                    format!("Clipboard no longer shared with {}", host.name)
+                    pf_l10n::console::console_card_clipboard_unshared_body(&host.name)
                 });
                 fx.cmds.push(ConsoleCmd::SetClipboard { key, on });
                 fx.pop();
@@ -733,9 +758,8 @@ impl CardMenu {
             }
             Action::Unpair => {
                 fx.cmds.push(ConsoleCmd::UnpairHost { key });
-                fx.toast = Some(format!(
-                    "Unpaired {}. The next connect asks for a PIN.",
-                    self.host().name
+                fx.toast = Some(pf_l10n::console::console_card_unpaired_body(
+                    &self.host().name,
                 ));
                 fx.pop();
             }
@@ -754,7 +778,7 @@ impl CardMenu {
                     app_id: game.id.clone(),
                     title: game.title.clone(),
                 });
-                fx.toast = Some(format!("Ending {}\u{2026}", game.title));
+                fx.toast = Some(pf_l10n::client::lib_end_game_ending(&game.title));
                 fx.pop();
             }
             // Removing loses the download: arm, then fire.
@@ -775,10 +799,10 @@ impl CardMenu {
                 });
                 fx.toast = Some(match f {
                     InstallAction::Install | InstallAction::Resume => {
-                        format!("Starting {}'s download\u{2026}", game.title)
+                        pf_l10n::client::lib_install_starting(&game.title)
                     }
-                    InstallAction::Pause => format!("Pausing {}'s download\u{2026}", game.title),
-                    InstallAction::Remove => format!("Removing {}\u{2026}", game.title),
+                    InstallAction::Pause => pf_l10n::client::lib_download_pausing(&game.title),
+                    InstallAction::Remove => pf_l10n::client::lib_removing(&game.title),
                 });
                 fx.pop();
             }
@@ -787,7 +811,7 @@ impl CardMenu {
             }
             Action::Forget => {
                 fx.cmds.push(ConsoleCmd::ForgetHost { key });
-                fx.toast = Some(format!("Removed {}", self.host().name));
+                fx.toast = Some(pf_l10n::console::console_card_removed(&self.host().name));
                 fx.pop();
             }
             Action::Host(i) => {
@@ -799,7 +823,7 @@ impl CardMenu {
                 if !act.available {
                     let why = act.unavailable_reason.clone();
                     fx.toast = Some(if why.is_empty() {
-                        format!("{} isn't available right now", act.label)
+                        pf_l10n::client::hostcard_action_unavailable_body(&act.label)
                     } else {
                         why
                     });
@@ -819,9 +843,8 @@ impl CardMenu {
                     action_id: act.id.clone(),
                     label: act.label.clone(),
                 });
-                fx.toast = Some(format!(
-                    "{} \u{2014} asking {}\u{2026}",
-                    act.label, host.name
+                fx.toast = Some(pf_l10n::client::hostcard_action_asking(
+                    &act.label, &host.name,
                 ));
                 fx.pop();
             }
@@ -832,7 +855,7 @@ impl CardMenu {
                         preset_id: p.id.clone(),
                         pin: false,
                     });
-                    fx.toast = Some(format!("Unpinned {}", p.name));
+                    fx.toast = Some(pf_l10n::console::console_card_unpinned(&p.name));
                 }
                 fx.pop();
             }
@@ -841,16 +864,14 @@ impl CardMenu {
 
     fn blurb(&self) -> String {
         match (&self.subject, self.mode) {
-            (_, Mode::ConnectWith) => "This connect only; the card keeps its own preset.".into(),
+            (_, Mode::ConnectWith) => pf_l10n::console::console_card_connect_with_body().into(),
             (Subject::Host(h), _) if h.pin.is_some() => {
-                "A shortcut to one preset on this host. Unpinning it changes nothing about the \
-                 host or the preset."
-                    .into()
+                pf_l10n::console::console_card_pinned_card_body().into()
             }
-            (Subject::Host(h), _) if !h.saved => "Found on this network.".into(),
+            (Subject::Host(h), _) if !h.saved => pf_l10n::console::console_card_found_body().into(),
             (Subject::Host(_), _) => String::new(),
             (Subject::Game { .. }, Mode::Details) => String::new(),
-            (Subject::Game { host, .. }, _) => format!("On {}.", host.name),
+            (Subject::Game { host, .. }, _) => pf_l10n::client::lib_title_on_host(&host.name),
         }
     }
 }
@@ -875,9 +896,9 @@ impl ScreenView for CardMenu {
         };
         match (self.mode, &self.subject) {
             (Mode::Details, Subject::Game { .. }) | (Mode::Menu, _) => name,
-            (Mode::Details, _) => format!("{name} \u{b7} Details"),
-            (Mode::ConnectWith, Subject::Game { .. }) => format!("Play {name} with"),
-            (Mode::ConnectWith, _) => format!("Connect to {name} with"),
+            (Mode::Details, _) => pf_l10n::console::console_card_details_title(name),
+            (Mode::ConnectWith, Subject::Game { .. }) => pf_l10n::client::lib_play_with_title(name),
+            (Mode::ConnectWith, _) => pf_l10n::console::console_card_connect_with_title(name),
         }
     }
 
@@ -937,8 +958,8 @@ impl ScreenView for CardMenu {
 
     fn hints(&self, _ctx: &Ctx) -> Vec<Hint> {
         vec![
-            Hint::new(HintKey::Confirm, "Choose"),
-            Hint::new(HintKey::Back, "Close"),
+            Hint::new(HintKey::Confirm, pf_l10n::console::console_hint_choose()),
+            Hint::new(HintKey::Back, pf_l10n::common::common_close()),
         ]
     }
 
@@ -997,8 +1018,9 @@ impl ScreenView for CardMenu {
             let bottom = strip_top + strip_h as f32;
             let r = Rect::from_ltrb(rect.left, strip_top, rect.right, bottom);
             let (tab, focused) = (self.tab, self.strip_focus);
+            let names: Vec<&str> = sections.iter().map(|s| s.name()).collect();
             self.strip
-                .render(canvas, ui, r, &sections, tab, focused, fonts, k, dt);
+                .render(canvas, ui, r, &names, tab, focused, fonts, k, dt);
         }
     }
 
@@ -1361,7 +1383,7 @@ mod tests {
             ..host()
         };
         for tab in tabs(&h) {
-            let sections: Vec<&str> = tab.iter().map(|a| CardMenu::section(*a)).collect();
+            let sections: Vec<Section> = tab.iter().map(|a| CardMenu::section(*a)).collect();
             assert!(
                 sections.windows(2).all(|w| w[0] == w[1]),
                 "one per tab: {sections:?}"
@@ -1421,14 +1443,14 @@ mod tests {
     #[test]
     fn power_leads_the_details_when_the_host_offers_it() {
         let first = |h: &HostRow| details(h).sections(crate::store::file_store())[0];
-        assert_eq!(first(&powered()), "Power");
-        assert_eq!(first(&host()), "Presets");
+        assert_eq!(first(&powered()), Section::Power);
+        assert_eq!(first(&host()), Section::Presets);
         let asleep = HostRow {
             online: false,
             can_wake: true,
             ..host()
         };
-        assert_eq!(first(&asleep), "Power");
+        assert_eq!(first(&asleep), Section::Power);
     }
 
     #[test]
@@ -1872,7 +1894,7 @@ mod tests {
         let pairing = |h: &HostRow| -> Vec<Action> {
             let d = details(h);
             let sections = d.sections(crate::store::file_store());
-            let tab = sections.iter().position(|s| *s == "Pairing");
+            let tab = sections.iter().position(|s| *s == Section::Pairing);
             rows(&CardMenu {
                 tab: tab.expect("a Pairing tab"),
                 ..d

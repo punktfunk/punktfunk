@@ -4,6 +4,7 @@
 use super::connect::Slot;
 use super::*;
 use pf_client_core::profiles::{self, SeatGate};
+use pf_l10n::{client, common, desktop};
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 
@@ -240,7 +241,7 @@ impl AppModel {
             Some(&profiles::waking_line(&row.display_name)),
             detail.filter(|_| !wake),
         );
-        dialog.add_response("cancel", "Cancel");
+        dialog.add_response("cancel", common::common_cancel());
         dialog.set_close_response("cancel");
         let stop = Arc::new(AtomicBool::new(false));
         let (out, flag) = (sender.input_sender().clone(), stop.clone());
@@ -344,7 +345,7 @@ impl AppModel {
             }
         });
         if let Err(e) = saved {
-            self.toast(&format!("Couldn't save the profile \u{2014} {e:#}"));
+            self.toast(&desktop::desktop_profile_save_failed(format!("{e:#}")));
         }
     }
 
@@ -362,16 +363,23 @@ impl AppModel {
         sender: &ComponentSender<Self>,
     ) {
         let body = match (&rows, gone) {
-            (None, _) => Some("Couldn't load the profiles.".to_string()),
-            (Some(r), _) if r.is_empty() => Some("No profiles on this host.".to_string()),
-            (_, Some(g)) => Some(format!("{g} is gone from this host.")),
+            (None, _) => Some(client::profile_load_failed().to_string()),
+            (Some(r), _) if r.is_empty() => Some(client::profile_none().to_string()),
+            (_, Some(g)) => Some(client::profile_gone(g)),
             _ => None,
         };
         let dialog = adw::AlertDialog::new(
-            Some(&format!("Who\u{2019}s playing on {}?", req.host.name)),
+            Some(&client::profile_title(&req.host.name)),
             body.as_deref(),
         );
-        dialog.add_response("cancel", if rows.is_some() { "Cancel" } else { "Close" });
+        dialog.add_response(
+            "cancel",
+            if rows.is_some() {
+                common::common_cancel()
+            } else {
+                common::common_close()
+            },
+        );
         dialog.set_close_response("cancel");
         let mut rows = rows.unwrap_or_default();
         if let Some(i) = saved

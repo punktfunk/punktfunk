@@ -21,7 +21,7 @@
   ok would add C:\Program Files\punktfunk to the machine PATH
 ==> Network
   ok would set network 'Netzwerk 2' to Private
-  ok network 'Netzwerk 2' becomes Private — the standard firewall rules apply there
+  ok Network 'Netzwerk 2' becomes Private — the standard firewall rules apply there
 ==> Checking for Sunshine / Apollo / Vibeshine
   ok No conflicting game-streaming host detected.
 ==> Drivers (a hiccup warns and never aborts)

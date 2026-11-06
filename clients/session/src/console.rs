@@ -802,7 +802,7 @@ impl ServiceState {
                 const NOTICES: &str = include_str!("../../linux/THIRD-PARTY-NOTICES.txt");
                 self.console
                     .set_licenses(vec![pf_console_ui::LicenseSection {
-                        heading: "Third-party software".into(),
+                        heading: pf_l10n::client::about_third_party_heading().into(),
                         text: NOTICES.into(),
                     }]);
             }
@@ -1151,8 +1151,8 @@ impl ServiceState {
                         match paired.saved {
                             Ok(()) => say(PairPhase::Paired { key: paired.fp_hex }),
                             // Not "Paired": the pin is gone by the next launch.
-                            Err(e) => say(PairPhase::Failed(format!(
-                                "Paired, but couldn't save — {e:#}"
+                            Err(e) => say(PairPhase::Failed(pf_l10n::client::pair_saved_failed(
+                                format!("{e:#}"),
                             ))),
                         }
                     }
@@ -1392,7 +1392,8 @@ impl ServiceState {
     /// change they just made is not on disk.
     fn save_failed(&self, e: &impl std::fmt::Display) {
         tracing::warn!(error = %format!("{e:#}"), "saving known hosts");
-        self.console.set_notice(format!("Couldn't save — {e:#}"));
+        self.console
+            .set_notice(pf_l10n::client::error_save_failed(format!("{e:#}")));
     }
 
     /// Keep every paired, reachable host's advertised actions and running title fresh (the
@@ -1767,7 +1768,7 @@ fn spawn_fetch(
                         }
                         None => {
                             shared.set_phase(&req, LibraryPhase::Error {
-                                title: "Couldn't load the library".into(),
+                                title: pf_l10n::client::lib_load_failed().into(),
                                 body: e.to_string(),
                                 can_retry: true,
                             });

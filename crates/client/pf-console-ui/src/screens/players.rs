@@ -63,17 +63,35 @@ impl PadAction {
     }
 }
 
+/// A row's label or verb.
+pub(crate) type Text = fn() -> &'static str;
+
 /// Grant/test rows, Android's alone: the desktop has no USB capture and no grants.
-pub(crate) const PASSTHROUGH: [(PadAction, &str, &str); 4] = [
-    (
-        PadAction::Sc2Bluetooth,
-        "Steam Controller 2 over Bluetooth",
-        "Grant",
-    ),
-    (PadAction::Sc2Usb, "Steam Controller 2 over USB", "Grant"),
-    (PadAction::DsUsb, "DualSense / DualShock over USB", "Grant"),
-    (PadAction::DsHaptics, "DualSense haptics self-test", "Test"),
-];
+pub(crate) const PASSTHROUGH: [(PadAction, Text, Text); 4] = {
+    use pf_l10n::{client as m, console as c};
+    [
+        (
+            PadAction::Sc2Bluetooth,
+            m::pad_sc2_bluetooth,
+            c::console_pad_grant,
+        ),
+        (
+            PadAction::Sc2Usb,
+            c::console_pad_sc2_usb,
+            c::console_pad_grant,
+        ),
+        (
+            PadAction::DsUsb,
+            c::console_pad_ds_usb,
+            c::console_pad_grant,
+        ),
+        (
+            PadAction::DsHaptics,
+            c::console_pad_ds_haptics,
+            c::console_pad_test,
+        ),
+    ]
+};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Target {
@@ -203,9 +221,9 @@ impl ScreenView for PlayersScreen {
     fn announcement(&self, ctx: &Ctx) -> Option<String> {
         Some(match self.focused(ctx) {
             Target::Pad(i) => format!("{}, {}", ctx.pads[i].name, pad_detail(&ctx.pads[i])),
-            Target::NoPads => "No controller connected".into(),
+            Target::NoPads => pf_l10n::console::console_pad_none_connected_a11y().into(),
             Target::Others => others_lines(&self.others).0,
-            Target::Grants => "Controller not showing? Opens the access list".into(),
+            Target::Grants => pf_l10n::console::console_pad_grants_card_a11y().into(),
         })
     }
 
@@ -299,11 +317,11 @@ impl ScreenView for PlayersScreen {
 
     /// Why the no-pads and grants cards exist; a pad's card says all it has.
     fn foot(&self, ctx: &Ctx) -> Option<std::borrow::Cow<'static, str>> {
-        detail(self.focused(ctx)).map(Into::into)
+        detail(self.focused(ctx))
     }
 
     fn title(&self) -> String {
-        "Controllers".into()
+        pf_l10n::client::pad_title().into()
     }
 }
 
@@ -403,8 +421,8 @@ fn card(
         Target::Grants => {
             return plain(
                 "circle-help",
-                "Not showing?",
-                "Some controllers need access first",
+                pf_l10n::console::console_pad_grants_card_title(),
+                pf_l10n::console::console_pad_grants_card_line(),
                 ui.accent(1.0),
             );
         }
@@ -416,7 +434,7 @@ fn card(
         crate::glyphs::pad_mark(canvas, mark, l, mark_cy, MARK * k, k, ui.fg(0.5));
         fonts.draw_clipped(
             canvas,
-            "No controller",
+            pf_l10n::console::console_pad_none_title(),
             l,
             base - 22.0 * k,
             W::Bold,
@@ -426,7 +444,7 @@ fn card(
         );
         fonts.draw_clipped(
             canvas,
-            "Connect one to see it here",
+            pf_l10n::console::console_pad_none_line(),
             l,
             base,
             W::Regular,
@@ -468,11 +486,9 @@ fn card(
             b,
         );
     }
-    let kind = p.kind_label();
-    let status = match (p.forwarded, kind.is_empty()) {
-        (false, _) => "Not forwarded".to_string(),
-        (true, true) => "Streams as Xbox 360".to_string(),
-        (true, false) => format!("Streams as {kind}"),
+    let status = match p.forwarded {
+        false => pf_l10n::console::console_pad_not_forwarded().to_string(),
+        true => pf_l10n::console::console_pad_streams_as(streams_as(p)),
     };
     fonts.draw_clipped(
         canvas,
@@ -498,64 +514,75 @@ fn card(
 
 /// A device's kind as a word, where the host could tell.
 fn kind_word(kind: &str) -> Option<&'static str> {
+    use pf_l10n::console as c;
     match kind {
-        "keyboard" => Some("Keyboard"),
-        "mouse" => Some("Mouse"),
-        "remote" => Some("Remote"),
+        "keyboard" => Some(c::console_pad_kind_keyboard()),
+        "mouse" => Some(c::console_pad_kind_mouse()),
+        "remote" => Some(c::console_pad_kind_remote()),
         _ => None,
     }
 }
 
 /// The folded card's title and line: one device by its name, more by their count; the line
-/// names the kinds the host could tell, and stays empty when it could not.
+/// names the kinds the host could tell, once each, and stays empty when it could not.
 fn others_lines(others: &[OtherDevice]) -> (String, String) {
     let mut kinds: Vec<&str> = Vec::new();
-    for word in others.iter().filter_map(|d| kind_word(&d.kind)) {
-        if !kinds.contains(&word) {
-            kinds.push(word);
+    for d in others.iter().filter(|d| kind_word(&d.kind).is_some()) {
+        if !kinds.contains(&d.kind.as_str()) {
+            kinds.push(&d.kind);
         }
     }
-    let line = kinds.join(" \u{b7} ");
+    let words: Vec<&str> = kinds.into_iter().filter_map(kind_word).collect();
+    let line = words.join(" \u{b7} ");
     match others {
         [one] => (one.name.clone(), line),
-        _ => (format!("{} other devices", others.len()), line),
+        _ => (
+            pf_l10n::console::console_pad_other_devices(others.len() as u64),
+            line,
+        ),
     }
 }
 
-fn detail(t: Target) -> Option<&'static str> {
+/// What a pad streams as: its kind, or the Xbox 360 pad a plain one becomes.
+fn streams_as(pad: &PadInfo) -> &'static str {
+    match pad.kind_label() {
+        "" => "Xbox 360",
+        kind => kind,
+    }
+}
+
+fn detail(t: Target) -> Option<std::borrow::Cow<'static, str>> {
+    use pf_l10n::console as c;
     match t {
         Target::Pad(_) | Target::Others => None,
-        Target::NoPads => Some(
-            "Punktfunk only forwards devices the system classifies as a gamepad or joystick — \
-             a pad behind an adapter or hub may enumerate with the adapter's identity, or not \
-             at all.",
-        ),
+        Target::NoPads => Some(c::console_pad_none_detail().into()),
+        // The card is Android's, where OK confirms.
         Target::Grants => Some(
-            "A wired DualSense or Steam Controller 2 needs USB access before it can be \
-             captured, and a Steam Controller 2 over Bluetooth needs Bluetooth access to be \
-             seen at all. OK lists the grants and a haptics test.",
+            format!(
+                "{} {}",
+                c::console_pad_grants_detail(),
+                c::console_pad_grants_detail_open("OK")
+            )
+            .into(),
         ),
     }
 }
 
 fn pad_detail(pad: &PadInfo) -> String {
+    use pf_l10n::console as c;
     let mut parts: Vec<String> = Vec::new();
     if !pad.detail.is_empty() {
         parts.push(pad.detail.clone());
     }
     if !pad.forwarded {
-        parts.push("not forwarded — not classified as a gamepad".into());
+        parts.push(c::console_pad_not_forwarded_reason_a11y().into());
     }
-    let kind = pad.kind_label();
-    parts.push(format!(
-        "streams as {}",
-        if kind.is_empty() { "Xbox 360" } else { kind }
-    ));
+    parts.push(c::console_pad_streams_as(streams_as(pad)));
     if let Some(b) = pad.battery {
         parts.push(if b.charging {
-            format!("battery {} %, charging", b.percent)
+            c::console_pad_battery_charging_a11y(b.percent)
         } else {
-            format!("battery {} %", b.percent)
+            c::console_pad_battery_a11y(b.percent)
         });
     }
     parts.join(" · ")

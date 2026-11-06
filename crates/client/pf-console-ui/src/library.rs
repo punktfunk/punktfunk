@@ -35,8 +35,8 @@ impl LibraryView {
 
     pub fn label(self) -> &'static str {
         match self {
-            LibraryView::Shelf => "Shelf",
-            LibraryView::Grid => "Grid",
+            LibraryView::Shelf => pf_l10n::client::player_library_view_shelf(),
+            LibraryView::Grid => pf_l10n::client::player_library_view_grid(),
         }
     }
 
@@ -178,9 +178,9 @@ impl Stale {
     pub(crate) fn note(self) -> Option<&'static str> {
         match self {
             Stale::No => None,
-            Stale::Checking => Some("Last known library \u{2014} checking the host\u{2026}"),
-            Stale::Waking => Some("Last known library \u{2014} waking the host\u{2026}"),
-            Stale::Offline => Some("Last known library \u{2014} the host didn't answer"),
+            Stale::Checking => Some(pf_l10n::client::lib_stale_checking()),
+            Stale::Waking => Some(pf_l10n::client::lib_stale_waking()),
+            Stale::Offline => Some(pf_l10n::client::lib_stale_offline()),
         }
     }
 }
@@ -583,7 +583,7 @@ fn apply_downloads(s: &mut Shared) -> bool {
 fn desktop_tile() -> LibraryGame {
     LibraryGame {
         id: DESKTOP_ID.into(),
-        title: "Desktop".into(),
+        title: pf_l10n::client::lib_desktop().into(),
         store: String::new(),
         launcher: false,
         icon: DESKTOP_ICON.into(),

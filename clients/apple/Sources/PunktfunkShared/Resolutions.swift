@@ -9,12 +9,16 @@ import Foundation
 public enum Resolutions {
     /// One family of sizes with the same shape.
     public struct Aspect {
-        public init(label: String, shape: Double, sizes: [(w: Int, h: Int)]) {
+        public init(id: String? = nil, label: String, shape: Double, sizes: [(w: Int, h: Int)]) {
+            self.id = id ?? label
             self.label = label
             self.shape = shape
             self.sizes = sizes
         }
 
+        /// Identity: the ratio for a standard family, `screenID` or `safeAreaID` for a device
+        /// entry. The switch compares this, never the label.
+        public let id: String
         /// The switch label: "16:9".
         public let label: String
         /// Width over height of the shape.
@@ -76,8 +80,8 @@ public enum Resolutions {
         return family.sizes.min { abs($0.h - h) < abs($1.h - h) }!
     }
 
-    public static let screenLabel = "Screen"
-    public static let safeAreaLabel = "Safe area"
+    public static let screenID = "screen"
+    public static let safeAreaID = "safe-area"
 
     /// Heights a device entry offers below the screen's own.
     static let deviceHeights = [720, 1080, 1440, 2160]
@@ -91,14 +95,18 @@ public enum Resolutions {
     /// differs from the screen. Twin of `punktfunk_core::resolutions::families`.
     public static func families(screen: (w: Int, h: Int)?, safe: (w: Int, h: Int)?) -> [Aspect] {
         var own: [Aspect] = []
-        for (label, dims) in [(screenLabel, screen), (safeAreaLabel, safe)] {
+        let entries = [
+            (screenID, String(localized: L10n.playerResolutionAspectScreen), screen),
+            (safeAreaID, String(localized: L10n.playerResolutionAspectSafeArea), safe),
+        ]
+        for (id, label, dims) in entries {
             guard let dims, dims.w > 0, dims.h > 0 else { continue }
             let (w, h) = (dims.w, dims.h)
-            if label == safeAreaLabel, let screen, screen.w == w, screen.h == h { continue }
+            if id == safeAreaID, let screen, screen.w == w, screen.h == h { continue }
             if aspectOf(w, h) != nil { continue }
             let sizes = deviceHeights.filter { $0 < h }.map { (w: w * $0 / h / 2 * 2, h: $0) }
                 + [(w: w / 2 * 2, h: h / 2 * 2)]
-            own.append(Aspect(label: label, shape: Double(w) / Double(h), sizes: sizes))
+            own.append(Aspect(id: id, label: label, shape: Double(w) / Double(h), sizes: sizes))
         }
         return own + aspects
     }
@@ -109,7 +117,7 @@ public enum Resolutions {
         guard w > 0, h > 0 else { return nil }
         let shape = Double(w) / Double(h)
         func within(_ a: Aspect, _ tol: Double) -> Bool { abs(shape / a.shape - 1) < tol }
-        func device(_ a: Aspect) -> Bool { a.label == screenLabel || a.label == safeAreaLabel }
+        func device(_ a: Aspect) -> Bool { a.id == screenID || a.id == safeAreaID }
         return families.firstIndex { device($0) && within($0, deviceTolerance) }
             ?? families.firstIndex { !device($0) && within($0, tolerance) }
     }

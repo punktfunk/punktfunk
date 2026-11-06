@@ -1,6 +1,7 @@
 // The HUD-corner model persisted by Settings and read wherever the overlay is placed
 // (StreamScene, StreamHUDView).
 
+import PunktfunkKit
 import SwiftUI
 
 /// Which corner the HUD overlay occupies (persisted as `DefaultsKey.hudPlacement`). The raw
@@ -37,10 +38,10 @@ enum HUDPlacement: String, CaseIterable, Identifiable {
     /// User-facing corner label.
     var label: String {
         switch self {
-        case .topLeading: return "Top Left"
-        case .topTrailing: return "Top Right"
-        case .bottomLeading: return "Bottom Left"
-        case .bottomTrailing: return "Bottom Right"
+        case .topLeading: return String(localized: L10n.playerHudPlacementTopLeading)
+        case .topTrailing: return String(localized: L10n.playerHudPlacementTopTrailing)
+        case .bottomLeading: return String(localized: L10n.playerHudPlacementBottomLeading)
+        case .bottomTrailing: return String(localized: L10n.playerHudPlacementBottomTrailing)
         }
     }
 }

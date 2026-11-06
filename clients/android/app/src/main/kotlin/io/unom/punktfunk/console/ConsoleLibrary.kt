@@ -1,6 +1,7 @@
 package io.unom.punktfunk.console
 
 import io.unom.punktfunk.kit.NativeBridge
+import io.unom.punktfunk.kit.R
 import io.unom.punktfunk.kit.library.GameEntry
 import io.unom.punktfunk.kit.library.InstallAction
 import io.unom.punktfunk.kit.library.InstallOutcome
@@ -28,6 +29,7 @@ private val fetchGen = AtomicLong(0)
 
 /** End a title this device launched, say how it went, then re-read what the host runs. */
 internal fun SkiaConsole.endGame(c: JSONObject) {
+    val res = appContext?.resources ?: return
     val addr = c.optString("addr"); val mgmt = c.optInt("mgmt"); val fp = c.optString("fp_hex")
     val appId = c.optString("app_id"); val title = c.optString("title")
     val id = identity
@@ -38,7 +40,7 @@ internal fun SkiaConsole.endGame(c: JSONObject) {
     ioPool.execute {
         val outcome = LibraryClient.endGame(id, addr, mgmt, fp, appId, streamPort(fp))
         state.launch {
-            notice(outcome.notice(title))
+            notice(outcome.notice(title).words(res))
             fetchLibrary(c, refreshOnly = true)
         }
     }
@@ -49,6 +51,7 @@ internal fun SkiaConsole.endGame(c: JSONObject) {
  * the whole catalog after a removal (the title's tile turns to "not installed"), else `/status`.
  */
 internal fun SkiaConsole.changeInstall(c: JSONObject) {
+    val res = appContext?.resources ?: return
     val addr = c.optString("addr"); val mgmt = c.optInt("mgmt"); val fp = c.optString("fp_hex")
     val appId = c.optString("app_id"); val title = c.optString("title")
     val action = runCatching { InstallAction.valueOf(c.optString("action")) }.getOrNull() ?: return
@@ -60,7 +63,7 @@ internal fun SkiaConsole.changeInstall(c: JSONObject) {
     ioPool.execute {
         val outcome = LibraryClient.changeInstall(id, addr, mgmt, fp, appId, action, streamPort(fp))
         state.launch {
-            notice(outcome.notice(action, title))
+            notice(outcome.notice(action, title).words(res))
             val removed = outcome == InstallOutcome.Done && action == InstallAction.Remove
             fetchLibrary(c, refreshOnly = !removed)
         }
@@ -112,7 +115,9 @@ internal fun SkiaConsole.fetchLibrary(c: JSONObject, refreshOnly: Boolean) {
     val gen = fetchGen.incrementAndGet()
     NativeBridge.nativeConsoleLibraryBegin(handle)
     if (id == null) {
-        NativeBridge.nativeConsoleLibraryPhase(handle, ConsoleJson.libraryError(req, "Couldn't load the library", identities.blockedMessage(), true))
+        NativeBridge.nativeConsoleLibraryPhase(
+            handle, ConsoleJson.libraryError(req, app.getString(R.string.lib_load_failed), identities.blockedMessage(), true),
+        )
         return
     }
     val cache = LibraryCache.standard(app.cacheDir)
@@ -148,7 +153,9 @@ internal fun SkiaConsole.fetchLibrary(c: JSONObject, refreshOnly: Boolean) {
                 state.launch {
                     if (gen != fetchGen.get()) return@launch
                     if (cached != null) NativeBridge.nativeConsoleLibraryStale(handle, 2)
-                    else NativeBridge.nativeConsoleLibraryPhase(handle, ConsoleJson.libraryError(req, "Not paired", r.message, false))
+                    else NativeBridge.nativeConsoleLibraryPhase(
+                        handle, ConsoleJson.libraryError(req, app.getString(R.string.lib_load_not_paired), r.message.words(app.resources), false),
+                    )
                 }
             }
             is LibraryResult.Error -> {
@@ -156,7 +163,9 @@ internal fun SkiaConsole.fetchLibrary(c: JSONObject, refreshOnly: Boolean) {
                 state.launch {
                     if (gen != fetchGen.get()) return@launch
                     if (cached != null) NativeBridge.nativeConsoleLibraryStale(handle, 2)
-                    else NativeBridge.nativeConsoleLibraryPhase(handle, ConsoleJson.libraryError(req, "Couldn't load the library", r.message, true))
+                    else NativeBridge.nativeConsoleLibraryPhase(
+                        handle, ConsoleJson.libraryError(req, app.getString(R.string.lib_load_failed), r.message.words(app.resources), true),
+                    )
                 }
             }
             null -> {}

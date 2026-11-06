@@ -1,6 +1,7 @@
 // SettingsView's navigation and presentation helpers: the settings categories (the iPhone, iPad
 // and Apple TV sidebars) and the iPad sheet sizing.
 
+import PunktfunkKit
 import SwiftUI
 
 #if os(iOS) || os(visionOS) || os(tvOS)
@@ -23,19 +24,19 @@ enum SettingsCategory: String, CaseIterable, Identifiable {
 
     var id: Self { self }
 
-    var title: String {
+    var title: LocalizedStringResource {
         switch self {
-        case .general: return "General"
-        case .display: return "Display"
+        case .general: return L10n.prefsCategoryGeneral
+        case .display: return L10n.prefsCategoryDisplay
         #if os(iOS) || os(visionOS)
-        case .input: return "Input"
+        case .input: return L10n.prefsCategoryInput
         #endif
-        case .audio: return "Audio"
-        case .controllers: return "Controllers"
+        case .audio: return L10n.prefsCategoryAudio
+        case .controllers: return L10n.prefsCategoryControllers
         #if os(tvOS)
-        case .quickActions: return "Quick Actions"
+        case .quickActions: return L10n.prefsCategoryQuickActions
         #endif
-        case .about: return "About"
+        case .about: return L10n.prefsCategoryAbout
         }
     }
 

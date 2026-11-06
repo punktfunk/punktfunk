@@ -72,6 +72,11 @@ pub struct CreateOptions {
     pub screen: Option<(u32, u32)>,
     #[serde(default)]
     pub safe_area: Option<(u32, u32)>,
+    /// The OS's preferred languages as BCP-47 tags, most preferred first: `["de-AT", "en"]`.
+    /// The console's text follows the first one Punktfunk ships. Absent or empty leaves the
+    /// language as it is, English unless something set it.
+    #[serde(default)]
+    pub languages: Vec<String>,
 }
 
 /// `#[serde(default)]` for a bool an older caller may omit and that must read `true`.
@@ -108,6 +113,7 @@ impl CreateOptions {
             }),
             profiles: self.profiles,
             prompts_unlock: self.prompts_unlock,
+            languages: self.languages,
         };
         (opts, self.entry.into_entry(), store)
     }
@@ -464,11 +470,15 @@ mod tests {
             !opts.prompts_unlock,
             "a host that never said so gets no prompt"
         );
+        assert!(opts.languages.is_empty(), "a host that never said so");
         let o: CreateOptions = serde_json::from_str(
-            r#"{"device_name": "TV", "gpu_cache_bytes": 0, "settings": {}, "prompts_unlock": true}"#,
+            r#"{"device_name": "TV", "gpu_cache_bytes": 0, "settings": {}, "prompts_unlock": true,
+                "languages": ["de-AT", "en"]}"#,
         )
         .unwrap();
-        assert!(o.into_console(Platform::Android).0.prompts_unlock);
+        let opts = o.into_console(Platform::Android).0;
+        assert!(opts.prompts_unlock);
+        assert_eq!(opts.languages, ["de-AT", "en"]);
     }
 
     #[test]

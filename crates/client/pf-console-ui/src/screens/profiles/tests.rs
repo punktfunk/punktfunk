@@ -182,7 +182,7 @@ fn notes_and_empty_states_read_as_one_line() {
     s.set_answer(ProfilesAnswer::Listed(vec![profile("own", "Ben")]));
     assert_eq!(s.line().as_deref(), Some("Everyone on Desk plays as Ben."));
     s.set_answer(ProfilesAnswer::NoProfiles);
-    assert_eq!(s.line().as_deref(), Some("Desk has no profiles."));
+    assert_eq!(s.line().as_deref(), Some(pf_l10n::client::profile_none()));
     s.set_answer(ProfilesAnswer::Failed("the host refused it (500)".into()));
     assert_eq!(
         s.line().as_deref(),

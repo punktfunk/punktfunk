@@ -28,12 +28,15 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import io.unom.punktfunk.components.EmptyHostsState
 import io.unom.punktfunk.components.HostCard
 import io.unom.punktfunk.components.HostMenuItem
 import io.unom.punktfunk.components.SectionLabel
+import io.unom.punktfunk.kit.R
 import io.unom.punktfunk.kit.discovery.DiscoveredHost
 import io.unom.punktfunk.kit.security.KnownHost
 import io.unom.punktfunk.models.HostStatus
@@ -107,16 +110,18 @@ internal fun ConnectGrid(
     // user who never wants this feature sees no new clutter anywhere but the settings scope chips.
     // "Connect with" is a ONE-OFF on every card: it never rebinds the host, which is why rebinding
     // lives in the Edit sheet instead.
+    @Composable
     fun hostMenu(kh: KnownHost, pin: StreamPreset?): List<HostMenuItem> = buildList {
+        val res = LocalContext.current.resources
         // Browsing IS a connect-shaped action — this card's connect with a title picked first — so
         // a PINNED card offers it too, and its shelf launches with that card's preset. Pairing is
         // the whole gate: the fetch authenticates with the pinned identity, so an unpaired card
         // could only ever be refused.
         if (kh.paired) {
-            add(HostMenuItem("Browse library…") { onBrowseLibrary(kh, pin) })
+            add(HostMenuItem(stringResource(R.string.hostcard_browse_library)) { onBrowseLibrary(kh, pin) })
         }
         if (pin == null) {
-            add(HostMenuItem("Network speed test") { onSpeedTest(kh) })
+            add(HostMenuItem(stringResource(R.string.hostcard_speed_test)) { onSpeedTest(kh) })
         }
         // "Send logs to host" — the same row the console's host menu carries
         // (`pf-console-ui`'s `options.rs`), on the same gate: the upload authenticates with the
@@ -124,7 +129,7 @@ internal fun ConnectGrid(
         // HERE too and not only in the console: a device whose console never comes up is exactly
         // the one whose logs somebody needs, and the touch home was its only shell.
         if (pin == null && kh.paired && kh.isOnline(reachable)) {
-            add(HostMenuItem("Send logs to host") { onSendLogs(kh) })
+            add(HostMenuItem(stringResource(R.string.hostcard_send_logs)) { onSendLogs(kh) })
         }
         // The host's own actions — sleep, restart, shut it down (`design/host-actions.md` §7),
         // the other half of the Wake-on-LAN round trip. Nothing is decided here: the list is
@@ -133,45 +138,60 @@ internal fun ConnectGrid(
         // second host, so it offers none — same rule as "Send logs" above.
         if (pin == null) {
             hostActions[kh.fpHex].orEmpty().forEach { a ->
-                val label = if (a.available) a.label else "${a.label} (unavailable)"
+                val name = a.text(res)
+                val label = if (a.available) name else stringResource(R.string.hostcard_action_unavailable, name)
                 add(HostMenuItem(label) { onHostAction(kh, a) })
             }
         }
         if (pin == null && kh.paired && kh.asProfile != null) {
-            add(HostMenuItem("Switch profile\u2026") { onSwitchProfile(kh) })
+            add(HostMenuItem(stringResource(R.string.hostcard_switch_profile)) { onSwitchProfile(kh) })
         }
-        add(HostMenuItem("Copy link") { onCopyLink(kh, pin) })
+        add(HostMenuItem(stringResource(R.string.hostcard_copy_link)) { onCopyLink(kh, pin) })
         // Which host the app opens on. Needs a pairing to point at — the start screen skips an
         // unpaired host, so writing one would set a pointer that never resolves. An unchecked row
         // is not "not the default": a lone paired host is the default with nothing written.
         if (pin == null && kh.paired) {
             val isDefault = defaultHost?.lowercase() == kh.id.lowercase()
             add(
-                HostMenuItem(if (isDefault) "Default host ✓" else "Make default host") {
+                HostMenuItem(
+                    if (isDefault) {
+                        // The check mark is a glyph, not part of the message.
+                        stringResource(R.string.hostcard_default_host) + " ✓"
+                    } else {
+                        stringResource(R.string.hostcard_make_default)
+                    },
+                ) {
                     onMakeDefault(kh, !isDefault)
                 },
             )
         }
         if (presets.isEmpty()) return@buildList
         if (pin != null) {
-            add(HostMenuItem("Unpin card", startsSection = true) { onTogglePin(kh, pin) })
+            add(HostMenuItem(stringResource(R.string.hostcard_unpin_card), startsSection = true) { onTogglePin(kh, pin) })
         }
         add(
-            HostMenuItem("Connect with: Default settings", startsSection = true) {
+            HostMenuItem(stringResource(R.string.android_hostcard_connect_with_defaults), startsSection = true) {
                 // The empty reference is "force the defaults", not "unset" — on a bound host that
                 // is a real, different action from a plain tap.
                 onConnect(kh, "")
             },
         )
         presets.forEach { p ->
-            add(HostMenuItem("Connect with: ${p.name}") { onConnect(kh, p.id) })
+            add(
+                HostMenuItem(stringResource(R.string.android_hostcard_connect_with_preset, p.name)) {
+                    onConnect(kh, p.id)
+                },
+            )
         }
         if (pin == null) {
             presets.forEachIndexed { i, p ->
                 val pinned = p.id in kh.pinnedPresetIds
                 add(
                     HostMenuItem(
-                        if (pinned) "Unpin card: ${p.name}" else "Pin as card: ${p.name}",
+                        stringResource(
+                            if (pinned) R.string.android_hostcard_unpin_card else R.string.android_hostcard_pin_as_card,
+                            p.name,
+                        ),
                         startsSection = i == 0,
                     ) { onTogglePin(kh, p) },
                 )
@@ -211,7 +231,7 @@ internal fun ConnectGrid(
 
             if (savedHosts.isNotEmpty()) {
                 item(span = { GridItemSpan(maxLineSpan) }) {
-                    SectionLabel("Saved hosts")
+                    SectionLabel(stringResource(R.string.hosts_section_saved))
                 }
                 items(savedCards, key = { it.key }) { entry ->
                     val kh = entry.host
@@ -259,7 +279,7 @@ internal fun ConnectGrid(
             if (discoveredUnsaved.isNotEmpty()) {
                 item(span = { GridItemSpan(maxLineSpan) }) {
                     Spacer(Modifier.height(12.dp))
-                    SectionLabel("Discovered on the network")
+                    SectionLabel(stringResource(R.string.hosts_section_discovered))
                 }
                 // The advert's instance key: two same-named hosts can merge onto one address.
                 items(discoveredUnsaved, key = { "disc-${it.key}" }) { dh ->
@@ -297,7 +317,7 @@ internal fun ConnectGrid(
         ExtendedFloatingActionButton(
             onClick = onAddHost,
             icon = { Icon(Icons.Filled.Add, contentDescription = null) },
-            text = { Text("Add host") },
+            text = { Text(stringResource(R.string.hosts_add)) },
             expanded = !connecting,
             modifier = Modifier
                 .align(Alignment.BottomEnd)
@@ -313,7 +333,7 @@ private fun GridHeader(notice: String?, status: String?) {
         Spacer(Modifier.height(8.dp))
         Text("Punktfunk", style = MaterialTheme.typography.headlineLarge)
         Text(
-            "stream a remote desktop",
+            stringResource(R.string.hosts_tagline),
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
@@ -366,17 +386,17 @@ private fun LocalNetworkBanner(onAsk: () -> Unit) {
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
             Text(
-                "Local network access is off",
+                stringResource(R.string.android_lnp_off_title),
                 style = MaterialTheme.typography.titleSmall,
                 color = MaterialTheme.colorScheme.onErrorContainer,
             )
             Text(
-                "Android blocks Punktfunk from finding or reaching hosts until you allow it.",
+                stringResource(R.string.android_lnp_off_body),
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onErrorContainer,
                 textAlign = TextAlign.Center,
             )
-            TextButton(onClick = onAsk) { Text("Allow…") }
+            TextButton(onClick = onAsk) { Text(stringResource(R.string.android_lnp_allow)) }
         }
     }
     Spacer(Modifier.height(12.dp))
@@ -398,12 +418,12 @@ private fun SearchRow(searching: Boolean, onRescan: () -> Unit) {
             CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
             Spacer(Modifier.width(8.dp))
             Text(
-                "Searching the local network…",
+                stringResource(R.string.hosts_searching),
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             Spacer(Modifier.width(8.dp))
         }
-        TextButton(onClick = onRescan) { Text("Scan again") }
+        TextButton(onClick = onRescan) { Text(stringResource(R.string.hosts_rescan)) }
     }
 }

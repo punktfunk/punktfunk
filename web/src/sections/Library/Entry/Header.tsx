@@ -91,9 +91,7 @@ const statsLine = (entry: OperatorGameEntry | null): string | null => {
 	const s = entry?.stats;
 	if (!s || s.launch_count === 0) return null;
 	return [
-		s.launch_count === 1
-			? m.library_entry_launched_once()
-			: m.library_entry_launches({ count: s.launch_count }),
+		m.library_entry_launches({ count: s.launch_count }),
 		s.play_time_ms >= 60_000 &&
 			m.library_entry_play_time({ time: fmtSpan(s.play_time_ms / 1000) }),
 		m.library_entry_last_played({ ago: fmtAgo(s.last_played_unix_ms / 1000) }),

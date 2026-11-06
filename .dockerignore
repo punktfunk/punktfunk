@@ -1,9 +1,10 @@
-# The root build context is used by web/Dockerfile (which needs web/ and
+# The root build context is used by web/Dockerfile (which needs web/, l10n/messages and
 # api/openapi.json) and by ci/rust-ci-arm64cross.Dockerfile (which needs the toolchain
 # pin and the Skia fetch script). Allowlist those; keep everything else (target/, .git,
 # crates) out of the context upload.
 *
 !web
+!l10n/messages
 !api/openapi.json
 !rust-toolchain.toml
 !ci/skia-binaries.sh

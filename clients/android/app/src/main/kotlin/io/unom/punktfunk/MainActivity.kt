@@ -8,6 +8,7 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.ActivityInfo
 import android.content.pm.PackageManager
+import android.content.res.Configuration
 import android.hardware.usb.UsbManager
 import android.os.Build
 import android.os.Bundle
@@ -41,6 +42,7 @@ import io.unom.punktfunk.kit.Gamepad
 import io.unom.punktfunk.kit.GamepadRouter
 import io.unom.punktfunk.kit.Keymap
 import io.unom.punktfunk.kit.NativeBridge
+import io.unom.punktfunk.kit.R
 import io.unom.punktfunk.kit.RingNav
 import io.unom.punktfunk.kit.Sc2BleLink
 import io.unom.punktfunk.kit.Sc2Device
@@ -331,13 +333,14 @@ class MainActivity : FragmentActivity() {
             if (!targetsHost(link, live)) {
                 Toast.makeText(
                     this,
-                    "Already streaming — end this session first.",
+                    getString(R.string.android_already_streaming),
                     Toast.LENGTH_LONG,
                 ).show()
             }
             finish()
             return
         }
+        StreamKeepAliveService.renameChannel(this)
         pendingDeepLink = link
         resolveHighRefreshMode()
         setConsoleHighRefreshRate(true) // the console UI wants max refresh; streaming manages its own
@@ -422,7 +425,7 @@ class MainActivity : FragmentActivity() {
         val data = intent?.takeIf { it.action == Intent.ACTION_VIEW }?.data ?: return null
         if (data.scheme != ContentResolver.SCHEME_CONTENT) return data.toString()
         return linkFromLauncherFile(this, data) ?: run {
-            Toast.makeText(this, "Couldn't read a Punktfunk link from that file.", Toast.LENGTH_LONG)
+            Toast.makeText(this, getString(R.string.android_link_file_unreadable), Toast.LENGTH_LONG)
                 .show()
             null
         }
@@ -436,7 +439,9 @@ class MainActivity : FragmentActivity() {
             launcherFileSave = null
             if (uri == null) return@registerForActivityResult // the user backed out
             report(
-                if (writeLauncherFile(this, uri, url)) "Launcher file saved." else "Couldn't save the launcher file.",
+                getString(
+                    if (writeLauncherFile(this, uri, url)) R.string.android_launcher_saved else R.string.android_launcher_save_failed,
+                ),
             )
         }
 
@@ -448,8 +453,14 @@ class MainActivity : FragmentActivity() {
         launcherFileSave = url to report
         runCatching { launcherFilePicker.launch(launcherFileName(title)) }.onFailure {
             launcherFileSave = null
-            report("Couldn't open a save dialog on this device.")
+            report(getString(R.string.android_save_dialog_failed))
         }
+    }
+
+    // The activity handles a language change itself, so the notification channel's name follows here.
+    override fun onConfigurationChanged(newConfig: Configuration) {
+        super.onConfigurationChanged(newConfig)
+        StreamKeepAliveService.renameChannel(this)
     }
 
     // Discovery and its Wi-Fi locks follow the app on screen, whichever shell subscribed.

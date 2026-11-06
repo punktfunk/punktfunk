@@ -4,6 +4,7 @@
 
 import Foundation
 import PunktfunkCore
+import PunktfunkShared
 
 public enum PyroWaveQuality {
     /// Core's `BPP_FLOOR` to `BPP_MAX`, by tenths.
@@ -43,16 +44,18 @@ public enum PyroWaveQuality {
         var buf = [CChar](repeating: 0, count: 160)
         _ = punktfunk_pyrowave_link_warning(need, link.kind, link.mbps, &buf, UInt(buf.count))
         let warning = String(cString: buf)
-        return ("\(mode.width)×\(mode.height) at \(mode.hz) Hz: \(rateLabel(kbps: need))",
-                warning.isEmpty ? nil : warning)
+        let caption = L10n.playerPyrowaveBppRate(
+            width: String(mode.width), height: String(mode.height), hz: String(mode.hz),
+            rate: rateLabel(kbps: need))
+        return (caption, warning.isEmpty ? nil : warning)
     }
 
-    /// `kbps` as core's `rate_label` writes it: `940 Mbit/s`, `1.3 Gbit/s`.
+    /// `kbps` as a player reads it, as core's `pyrowave::rate` counts: `940 Mbit/s`, `1.3 Gbit/s`.
     public static func rateLabel(kbps: UInt32) -> String {
         let mbps = (UInt64(kbps) + 500) / 1000
-        if mbps < 1000 { return "\(mbps) Mbit/s" }
+        if mbps < 1000 { return L10n.commonMbits(value: String(mbps)) }
         var gbps = String(format: "%.1f", Double(kbps) / 1e6)
         if gbps.hasSuffix(".0") { gbps.removeLast(2) }
-        return "\(gbps) Gbit/s"
+        return L10n.commonGbits(value: gbps)
     }
 }

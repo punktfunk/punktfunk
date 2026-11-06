@@ -16,6 +16,7 @@ public enum ScreenCurve: String, CaseIterable, Sendable {
     }
 
     public var label: String {
-        self == .flat ? "Flat" : rawValue.dropLast().uppercased() + "R"
+        if self == .flat { return String(localized: L10n.playerScreenFlat) }
+        return rawValue.dropLast().uppercased() + "R"
     }
 }

@@ -1,0 +1,28 @@
+{
+  "fix_plain": "Copy link",
+  "fix_quote": "Don't use \"quotes\" & <tags>",
+  "fix_at": "@home",
+  "fix_question": "?mark",
+  "fix_percent": "100% sure",
+  "fix_percent_args": "{pct}% of {total}",
+  "fix_lines": "First line\nSecond  line ",
+  "fix_backslash": "C:\\\\Games \\{x\\}",
+  "fix_order": "{host} is running {app}",
+  "fix_pads": [{
+    "declarations": ["input count", "input host", "local n = count: plural"],
+    "selectors": ["n"],
+    "match": {
+      "n=one": "{count} pad on {host}",
+      "n=other": "{count} pads on {host}"
+    }
+  }],
+  "fix_files": [{
+    "declarations": ["input count", "local n = count: plural"],
+    "selectors": ["n"],
+    "match": {
+      "n=one": "{count} file",
+      "n=other": "{count} files"
+    }
+  }],
+  "fix_only_en": "Only in English"
+}

@@ -395,3 +395,41 @@ fn escaping_the_prompt_falls_back_to_the_generated_password() {
     assert_eq!(ask_password(&[Key::Cancel]).0, None);
     assert_eq!(ask_password(&[Key::Down, Key::Enter, Key::Cancel]).0, None);
 }
+
+/// Every word on the screens comes from the messages: in `en-XA`, which accents and brackets
+/// each one, no English phrase survives on the list, a row editor or either prompt.
+#[test]
+fn the_screens_read_their_words_from_the_messages() {
+    let english = [
+        "Install now with these settings",
+        "Full controller support",
+        "Shared clipboard",
+        "Third-party clients",
+        "nothing runs until you confirm",
+        "Joins the punktfunk group",
+        "Use the generated password",
+        "asks for a password",
+        "Where should the web console be reachable?",
+        "A specific address",
+        "Type the address",
+        "Esc leaves it unchanged",
+    ];
+    let all = pf_l10n::with_language("en-XA", || {
+        let (_, _, _, list) =
+            drive_all("arch-fresh", &[Key::Down, Key::Down, Key::Down, Key::Enter]);
+        let (_, password) = ask_password(&[Key::Enter]);
+        let mut term = ScriptedTerm::new(&[Key::Down, Key::Down, Key::Enter]);
+        {
+            let tui = Tui::new(&mut term as &mut dyn Terminal, caps(), 0);
+            tui.web_bind("192.168.1.10", "0.0.0.0");
+        }
+        [list.join(""), password.join(""), term.frames.join("")].join("\n")
+    });
+    assert!(all.contains("~]"), "not read in en-XA:\n{all}");
+    for phrase in english {
+        assert!(
+            !all.contains(phrase),
+            "{phrase:?} is still a literal:\n{all}"
+        );
+    }
+}

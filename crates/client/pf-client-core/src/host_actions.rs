@@ -42,9 +42,9 @@ impl ActionInfo {
     /// Local wording for known ids; [`Self::title`] for anything else so a new host action still shows.
     pub fn label(&self) -> &str {
         match self.id.as_str() {
-            "power.sleep" => "Sleep host",
-            "power.reboot" => "Restart host",
-            "power.shutdown" => "Shut down host",
+            "power.sleep" => pf_l10n::host::host_power_sleep(),
+            "power.reboot" => pf_l10n::host::host_power_reboot(),
+            "power.shutdown" => pf_l10n::host::host_power_shutdown(),
             _ => &self.title,
         }
     }
@@ -117,11 +117,11 @@ pub fn run(
     match invoke(addr, mgmt_port, stream_port, identity, pin, action_id) {
         Ok(()) => {
             tracing::info!(host = %host_name, action = %action_id, "host action accepted");
-            Ok(format!("{host_name}: {label} — on its way"))
+            Ok(pf_l10n::client::hostcard_action_sent_body(host_name, label))
         }
         Err(e) => {
             tracing::warn!(host = %host_name, action = %action_id, error = %e, "host action refused");
-            Err(format!("{label} failed — {e}"))
+            Err(pf_l10n::client::hostcard_action_failed(label, e))
         }
     }
 }

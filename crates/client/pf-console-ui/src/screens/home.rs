@@ -112,15 +112,15 @@ enum Verb {
 impl Verb {
     fn label(self, h: &HostRow) -> String {
         match self {
-            Verb::Pair => "Pair\u{2026}".into(),
-            Verb::Games => "Games".into(),
-            Verb::ConnectWith => "Connect with\u{2026}".into(),
+            Verb::Pair => pf_l10n::console::console_card_pair().into(),
+            Verb::Games => pf_l10n::console::console_verb_games().into(),
+            Verb::ConnectWith => pf_l10n::console::console_card_connect_with().into(),
             Verb::Profile => match h.remembered() {
-                Some(p) => format!("Playing as {}", p.display_name),
-                None => "Who\u{2019}s playing?".into(),
+                Some(p) => pf_l10n::client::hostcard_playing_as(&p.display_name),
+                None => pf_l10n::console::console_verb_whos_playing().into(),
             },
-            Verb::Wake => "Wake".into(),
-            Verb::Details => "Details\u{2026}".into(),
+            Verb::Wake => pf_l10n::console::console_verb_wake().into(),
+            Verb::Details => pf_l10n::console::console_verb_details().into(),
         }
     }
 }
@@ -167,7 +167,7 @@ fn run_verb(verb: Verb, h: &HostRow, ctx: &mut Ctx, fx: &mut Outbox) {
         }
         Verb::Wake => {
             fx.cmds.push(ConsoleCmd::wake(&h.key, false));
-            fx.toast = Some(format!("Waking {}\u{2026}", h.name));
+            fx.toast = Some(pf_l10n::client::dial_waking(&h.name));
         }
         Verb::Details => fx.push(Screen::CardMenu(CardMenu::host_details(h))),
     }
@@ -460,7 +460,7 @@ impl ScreenView for HomeScreen {
                     }
                     Slot::Rescan => {
                         fx.cmds.push(ConsoleCmd::Probe);
-                        fx.toast = Some("Scanning for hosts…".into());
+                        fx.toast = Some(pf_l10n::client::hosts_scanning().into());
                     }
                     Slot::Host(h) if !h.paired => fx.push(Screen::Pair(
                         super::pair::PairScreen::new(h, &ctx.device.name),
@@ -614,7 +614,12 @@ impl ScreenView for HomeScreen {
         let say = |(title, sub): (&str, &str)| format!("{title}, {sub}");
         Some(match self.slot(hosts) {
             Slot::Host(h) => match h.remembered() {
-                Some(p) => format!("{}, {}, as {}", h.name, status(ctx.ui, h).0, p.display_name),
+                Some(p) => format!(
+                    "{}, {}, {}",
+                    h.name,
+                    status(ctx.ui, h).0,
+                    pf_l10n::client::hostcard_playing_as(&p.display_name)
+                ),
                 None => format!("{}, {}", h.name, status(ctx.ui, h).0),
             },
             Slot::AddHost => say(action_text(ActionTile::AddHost)),
@@ -628,25 +633,44 @@ impl ScreenView for HomeScreen {
         }
         let mut hints = Vec::new();
         match self.slot(ctx.hosts) {
-            Slot::AddHost => hints.push(Hint::new(HintKey::Confirm, "Add Host")),
-            Slot::Rescan => hints.push(Hint::new(HintKey::Confirm, "Scan Again")),
-            Slot::Host(h) if !h.paired => hints.push(Hint::new(HintKey::Confirm, "Pair…")),
-            Slot::Host(h) if !h.online && h.can_wake => {
-                hints.push(Hint::new(HintKey::Confirm, "Wake & Connect"))
+            Slot::AddHost => hints.push(Hint::new(HintKey::Confirm, pf_l10n::client::hosts_add())),
+            Slot::Rescan => {
+                hints.push(Hint::new(HintKey::Confirm, pf_l10n::client::hosts_rescan()))
             }
+            Slot::Host(h) if !h.paired => hints.push(Hint::new(
+                HintKey::Confirm,
+                pf_l10n::console::console_card_pair(),
+            )),
+            Slot::Host(h) if !h.online && h.can_wake => hints.push(Hint::new(
+                HintKey::Confirm,
+                pf_l10n::console::console_hint_wake_connect(),
+            )),
             // Same press, honest word: a host with a game up is one you get back INTO,
             // and the tile is already naming the title above it.
-            Slot::Host(h) if !h.running.is_empty() => {
-                hints.push(Hint::new(HintKey::Confirm, "Resume"))
-            }
-            Slot::Host(_) => hints.push(Hint::new(HintKey::Confirm, "Connect")),
+            Slot::Host(h) if !h.running.is_empty() => hints.push(Hint::new(
+                HintKey::Confirm,
+                pf_l10n::client::hostcard_resume(),
+            )),
+            Slot::Host(_) => hints.push(Hint::new(
+                HintKey::Confirm,
+                pf_l10n::common::common_connect(),
+            )),
         }
         if self.focused(ctx.hosts).is_some() {
-            hints.push(Hint::new(HintKey::Secondary, "Options"));
+            hints.push(Hint::new(
+                HintKey::Secondary,
+                pf_l10n::console::console_hint_options(),
+            ));
         }
-        hints.push(Hint::new(HintKey::Tertiary, "Settings"));
+        hints.push(Hint::new(
+            HintKey::Tertiary,
+            pf_l10n::client::hosts_open_settings(),
+        ));
         if ctx.device.platform.can_quit() {
-            hints.push(Hint::new(HintKey::Back, "Quit"));
+            hints.push(Hint::new(
+                HintKey::Back,
+                pf_l10n::console::console_hint_quit(),
+            ));
         }
         hints
     }
@@ -883,7 +907,7 @@ impl ScreenView for HomeScreen {
             }
         } else {
             let line = if ctx.hosts.is_empty() {
-                Some("Hosts on this network appear automatically. Add one by address for everything else.".to_string())
+                Some(pf_l10n::client::hosts_empty_body().to_string())
             } else {
                 no_games(&slot)
             };
@@ -903,7 +927,7 @@ impl ScreenView for HomeScreen {
     }
 
     fn title(&self) -> String {
-        "Select a Host".into()
+        pf_l10n::console::console_home_title().into()
     }
 }
 
@@ -1019,14 +1043,11 @@ fn draw_host_tile(canvas: &Canvas, ui: &Frame, fonts: &Fonts, h: &HostRow, rect:
 /// What stands where the games would when the focused card has none to show.
 fn no_games(slot: &Slot<'_>) -> Option<String> {
     Some(match slot {
-        Slot::Host(h) if !h.paired => format!("Pair with {} to see its games here.", h.name),
+        Slot::Host(h) if !h.paired => pf_l10n::console::console_home_pair_for_games_body(&h.name),
         Slot::Host(h) if !h.online && h.can_wake => {
-            format!("{} is asleep. Wake it to see its games.", h.name)
+            pf_l10n::console::console_home_asleep_body(&h.name)
         }
-        Slot::Host(h) if !h.online => format!(
-            "{} is offline. Its games show here once it is back.",
-            h.name
-        ),
+        Slot::Host(h) if !h.online => pf_l10n::console::console_home_offline_body(&h.name),
         _ => return None,
     })
 }
@@ -1038,21 +1059,22 @@ fn status(ui: &Frame, h: &HostRow) -> (String, Color4f) {
         return (p.name.clone(), accent_color(ui, p.accent.as_deref()));
     }
     let (base, ink) = if !h.running.is_empty() {
-        return (format!("Playing {}", h.running), ui.live());
+        return (
+            pf_l10n::client::hostcard_status_playing(&h.running),
+            ui.live(),
+        );
     } else if !h.saved {
-        ("Found on this network".to_string(), ui.fg(0.7))
+        (pf_l10n::client::hostcard_status_found(), ui.fg(0.7))
     } else if !h.paired {
-        ("Not paired yet".to_string(), ui.fg(0.7))
+        (pf_l10n::client::hostcard_status_not_paired(), ui.fg(0.7))
     } else if h.online {
-        ("Online".to_string(), ui.live())
+        (pf_l10n::client::hostcard_status_online(), ui.live())
     } else if h.can_wake {
-        (
-            "Offline \u{b7} wakes when you connect".to_string(),
-            ui.fg(0.7),
-        )
+        (pf_l10n::client::hostcard_status_offline_wakes(), ui.fg(0.7))
     } else {
-        ("Offline".to_string(), ui.fg(0.7))
+        (pf_l10n::client::hostcard_status_offline(), ui.fg(0.7))
     };
+    let base = base.to_string();
     match &h.bound_preset {
         Some(b) => (format!("{base} \u{b7} {}", b.name), ink),
         None => (base, ink),
@@ -1087,8 +1109,14 @@ enum ActionTile {
 /// The tile's title and the line over it. Drawn and spoken from the same pair.
 fn action_text(kind: ActionTile) -> (&'static str, &'static str) {
     match kind {
-        ActionTile::AddHost => ("Add Host", "Register a host by address"),
-        ActionTile::Rescan => ("Rescan", "Look for hosts on this network again"),
+        ActionTile::AddHost => (
+            pf_l10n::client::hosts_add(),
+            pf_l10n::client::hosts_add_tile_hint(),
+        ),
+        ActionTile::Rescan => (
+            pf_l10n::client::hosts_rescan(),
+            pf_l10n::client::hosts_rescan_hint(),
+        ),
     }
 }
 

@@ -1,5 +1,6 @@
 package io.unom.punktfunk
 
+import android.content.Context
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloatAsState
@@ -77,7 +78,10 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.vector.PathParser
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
@@ -88,6 +92,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import io.unom.punktfunk.kit.Gamepad
 import io.unom.punktfunk.kit.NativeBridge
+import io.unom.punktfunk.kit.R
 import io.unom.punktfunk.kit.RingNav
 import io.unom.punktfunk.kit.library.RunningGame
 import kotlinx.coroutines.CoroutineScope
@@ -228,10 +233,10 @@ class RingActions(
     val padMouseTarget: () -> Int,
     val padMouseMode: () -> Int,
     val cyclePadMouse: () -> Unit,
-    /** This device's speakers: the live mute mask (`StreamUi.AUDIO_MUTE_*`), the sentence for it,
-     *  and the local-only toggle. */
+    /** This device's speakers: the live mute mask (`StreamUi.AUDIO_MUTE_*`), the string resource
+     *  of the sentence for it, and the local-only toggle. */
     val audioMute: () -> Int,
-    val audioMuteLabel: () -> String?,
+    val audioMuteLabel: () -> Int?,
     val toggleStreamMute: () -> Unit,
     /** `[w, h, hz]` as last requested (Android has no live read-back of the negotiated mode). */
     val currentMode: () -> IntArray,
@@ -276,12 +281,27 @@ internal data class SlotSpec(
     val state: String = "",
 )
 
-/** The controller-mouse slot's state for a `nativePadMouseMode` value; the Rust and Apple rings
- *  say the same. */
-internal fun padMouseState(mode: Int): String = when (mode) {
-    1 -> "Touchpad"
-    2 -> "Full"
-    else -> "Off"
+/** The controller-mouse slot's state message for a `nativePadMouseMode` value; the Rust and Apple
+ *  rings say the same. */
+internal fun padMouseState(mode: Int): Int = when (mode) {
+    1 -> R.string.ring_pad_mouse_touchpad
+    2 -> R.string.ring_pad_mouse_full
+    else -> R.string.ring_pad_mouse_off
+}
+
+private fun touchModeLabel(m: TouchMode): Int = when (m) {
+    TouchMode.TRACKPAD -> R.string.player_touch_mode_trackpad
+    TouchMode.POINTER -> R.string.player_touch_mode_pointer
+    TouchMode.TOUCH -> R.string.player_touch_mode_touch
+    TouchMode.OFF -> R.string.player_touch_mode_off
+}
+
+/** The context that words text. Reading the configuration makes the caller recompose when the
+ *  app's language changes. */
+@Composable
+internal fun textContext(): Context {
+    LocalConfiguration.current
+    return LocalContext.current
 }
 
 private val padMarks = HashMap<Int, ImageVector?>()
@@ -302,82 +322,83 @@ internal fun padMark(pref: Int): ImageVector? = padMarks.getOrPut(pref) {
     ).build()
 }
 
-internal fun spec(slot: SlotId, cfg: OverlayConfig, a: RingActions): SlotSpec = when (slot) {
-    SlotId.EndStream -> SlotSpec("end_stream", "End stream", Icons.Filled.Close, armed = true)
+internal fun spec(slot: SlotId, cfg: OverlayConfig, a: RingActions, ctx: Context): SlotSpec = when (slot) {
+    SlotId.EndStream -> SlotSpec("end_stream", ctx.getString(R.string.ring_end_stream), Icons.Filled.Close, armed = true)
     SlotId.EndGame -> SlotSpec(
-        "end_game", "End game", Icons.Filled.Cancel,
+        "end_game", ctx.getString(R.string.ring_end_game), Icons.Filled.Cancel,
         enabled = a.streamedGame() != null,
-        reason = "No game this device launched is running here",
+        reason = ctx.getString(R.string.ring_end_game_unavailable),
         armed = true,
     )
     SlotId.DisconnectLinger ->
-        SlotSpec("disconnect_linger", "Disconnect, keep the game running", Icons.Filled.Logout)
+        SlotSpec("disconnect_linger", ctx.getString(R.string.ring_disconnect_linger), Icons.Filled.Logout)
     SlotId.TouchMode -> {
         val m = a.touchMode()
         SlotSpec(
-            "touch_mode", "Touch mode",
+            "touch_mode", ctx.getString(R.string.ring_touch_mode),
             when (m) {
                 TouchMode.TRACKPAD -> Icons.Filled.TouchApp
                 TouchMode.POINTER -> Icons.Filled.Mouse
                 TouchMode.TOUCH -> Icons.Filled.PanTool
                 TouchMode.OFF -> Icons.Filled.DoNotTouch
             },
-            toggle = true, state = m.name.lowercase().replaceFirstChar { it.uppercase() },
+            toggle = true, state = ctx.getString(touchModeLabel(m)),
         )
     }
     SlotId.Keyboard -> SlotSpec(
-        "keyboard", "Keyboard", Icons.Filled.Keyboard,
-        enabled = a.keyboardGranted(), reason = "Keyboard input is not granted for this session",
+        "keyboard", ctx.getString(R.string.ring_keyboard), Icons.Filled.Keyboard,
+        enabled = a.keyboardGranted(), reason = ctx.getString(R.string.android_ring_keyboard_not_granted),
     )
     SlotId.Stats -> SlotSpec(
-        "stats", "Statistics", Icons.Filled.Insights, toggle = true, state = a.stats().label,
+        "stats", ctx.getString(R.string.ring_stats), Icons.Filled.Insights,
+        toggle = true, state = ctx.getString(statsVerbosityLabel(a.stats())),
     )
     SlotId.Mic -> SlotSpec(
-        "mic", "Microphone", if (a.micMuted()) Icons.Filled.MicOff else Icons.Filled.Mic,
-        enabled = a.micAvailable(), reason = "No microphone is running this session",
-        toggle = true, state = if (a.micMuted()) "Muted" else "On",
+        "mic", ctx.getString(R.string.ring_mic), if (a.micMuted()) Icons.Filled.MicOff else Icons.Filled.Mic,
+        enabled = a.micAvailable(), reason = ctx.getString(R.string.ring_mic_unavailable),
+        toggle = true, state = ctx.getString(if (a.micMuted()) R.string.ring_mic_muted else R.string.ring_mic_on),
     )
     SlotId.Pad -> SlotSpec(
-        "pad", "Virtual controller", Icons.Filled.SportsEsports,
-        enabled = a.padAvailable(), reason = "Controller input is not forwarded this session",
-        toggle = true, state = if (a.padShown()) "On" else "Off",
+        "pad", ctx.getString(R.string.ring_pad), Icons.Filled.SportsEsports,
+        enabled = a.padAvailable(), reason = ctx.getString(R.string.ring_pad_not_forwarded),
+        toggle = true, state = ctx.getString(if (a.padShown()) R.string.ring_pad_on else R.string.ring_pad_off),
     )
     SlotId.SendText -> SlotSpec(
-        "send_text", "Send text", Icons.Filled.TextFields,
+        "send_text", ctx.getString(R.string.ring_send_text), Icons.Filled.TextFields,
         enabled = a.textSupported && a.keyboardGranted(),
-        reason = "This host does not take typed text",
+        reason = ctx.getString(R.string.android_ring_send_text_unsupported),
     )
     SlotId.Guide -> SlotSpec(
-        "guide", "Guide button", Icons.Filled.Home,
-        enabled = a.padAvailable(), reason = "Controller input is not forwarded this session",
+        "guide", ctx.getString(R.string.ring_guide), Icons.Filled.Home,
+        enabled = a.padAvailable(), reason = ctx.getString(R.string.ring_pad_not_forwarded),
     )
     SlotId.Qam -> SlotSpec(
-        "qam", "Quick access menu", Icons.Filled.SpaceDashboard,
-        enabled = a.padAvailable(), reason = "Controller input is not forwarded this session",
+        "qam", ctx.getString(R.string.ring_qam), Icons.Filled.SpaceDashboard,
+        enabled = a.padAvailable(), reason = ctx.getString(R.string.ring_pad_not_forwarded),
     )
     SlotId.PadMouse -> SlotSpec(
-        "pad_mouse", "Controller mouse", Icons.Filled.Mouse,
+        "pad_mouse", ctx.getString(R.string.ring_pad_mouse), Icons.Filled.Mouse,
         enabled = a.pointerGranted() && a.padMouseTarget() != 0,
-        reason = if (a.pointerGranted()) "No controller is connected" else "This host only allows controller input",
-        toggle = true, state = padMouseState(a.padMouseMode()),
+        reason = ctx.getString(if (a.pointerGranted()) R.string.ring_no_controller else R.string.ring_controller_only),
+        toggle = true, state = ctx.getString(padMouseState(a.padMouseMode())),
     )
     // Automatic keeps a plain gamepad; a picked type shows its outline.
     SlotId.PadType -> SlotSpec(
-        "pad_type", "Controller type", padMark(a.padType()) ?: Icons.Filled.VideogameAsset,
-        enabled = a.padTypeAvailable(), reason = "No controller is connected",
-        toggle = true, state = padTypeLabel(a.padType()),
+        "pad_type", ctx.getString(R.string.ring_pad_type), padMark(a.padType()) ?: Icons.Filled.VideogameAsset,
+        enabled = a.padTypeAvailable(), reason = ctx.getString(R.string.ring_no_controller),
+        toggle = true, state = padTypeLabel(ctx, a.padType()),
     )
     SlotId.StreamMute -> SlotSpec(
-        "stream_mute", "Mute this stream",
+        "stream_mute", ctx.getString(R.string.ring_stream_mute),
         if (a.audioMute() != 0) Icons.AutoMirrored.Filled.VolumeOff else Icons.AutoMirrored.Filled.VolumeUp,
         // The state describes the mute: "Off" while audible, else whose mute it is.
-        toggle = true, state = a.audioMuteLabel() ?: "Off",
+        toggle = true, state = ctx.getString(a.audioMuteLabel() ?: R.string.ring_stream_mute_off),
     )
     // The wire id predates the three layouts; every client's ring stores it.
     SlotId.SwapScreens -> SlotSpec(
-        "swap_screens", "Screens", Icons.Filled.SwapVert,
-        enabled = a.screenLayouts().size > 1, reason = "This device has one screen",
-        toggle = true, state = a.screenLayout().label,
+        "swap_screens", ctx.getString(R.string.android_ring_screens), Icons.Filled.SwapVert,
+        enabled = a.screenLayouts().size > 1, reason = ctx.getString(R.string.ring_swap_screens_unavailable),
+        toggle = true, state = ctx.getString(a.screenLayout().label),
     )
     is SlotId.Host -> {
         val act = a.hostActions().firstOrNull { it.id == slot.actionId }
@@ -390,7 +411,7 @@ internal fun spec(slot: SlotId, cfg: OverlayConfig, a: RingActions): SlotSpec = 
         SlotSpec(
             "host:${slot.actionId}", act?.label ?: slot.actionId, icon,
             enabled = act?.available == true,
-            reason = act?.unavailableReason?.ifEmpty { null } ?: "This host doesn't offer it",
+            reason = act?.unavailableReason?.ifEmpty { null } ?: ctx.getString(R.string.ring_host_not_offered),
             armed = act?.danger ?: true,
         )
     }
@@ -400,7 +421,9 @@ internal fun spec(slot: SlotId, cfg: OverlayConfig, a: RingActions): SlotSpec = 
             "shortcut:${slot.shortcutId}", s?.label?.ifEmpty { null } ?: chordChip(s?.keys.orEmpty()),
             chip = chordChip(s?.keys.orEmpty()),
             enabled = a.keyboardGranted() && s?.keys?.all { keyVk(it) != null } == true,
-            reason = if (a.keyboardGranted()) "A key in this chord is unknown" else "Keyboard input is not granted for this session",
+            reason = ctx.getString(
+                if (a.keyboardGranted()) R.string.ring_chord_unknown else R.string.android_ring_keyboard_not_granted,
+            ),
         )
     }
 }
@@ -431,6 +454,7 @@ fun RingOverlay(
     editing: RingEditing? = null,
 ) {
     if (!state.visible) return
+    val ctx = textContext()
     val density = LocalDensity.current
     val radiusPx = with(density) { RING_RADIUS.toPx() }
     val slotPx = with(density) { SLOT_D.toPx() }
@@ -462,9 +486,9 @@ fun RingOverlay(
     ExpireRingHint(state)
     var textDialog by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) { if (state.nativeMode == null) state.nativeMode = actions.currentMode() }
-    val rows = if (state.sheet) sheetRows(state, cfg, actions, haptics) { textDialog = true } else emptyList()
+    val rows = if (state.sheet) sheetRows(state, cfg, actions, haptics, ctx) { textDialog = true } else emptyList()
 
-    val fire = { s: SlotSpec, slot: SlotId -> fireSlot(s, slot, state, cfg, actions, haptics) { textDialog = true } }
+    val fire = { s: SlotSpec, slot: SlotId -> fireSlot(s, slot, state, cfg, actions, haptics, ctx) { textDialog = true } }
 
     // The pad (design §2.6): the left stick AIMS — its sector is the highlight, so the ring
     // follows the thumb — while the D-pad steps, Right clockwise, Left anticlockwise, Up to 12
@@ -474,7 +498,7 @@ fun RingOverlay(
         val n = state.pendingNav ?: return@LaunchedEffect
         state.pendingNav = null
         state.touch()
-        navigate(n, state, rows, cfg, actions, haptics, fire)
+        navigate(n, state, rows, cfg, actions, haptics, ctx, fire)
     }
 
     Box(
@@ -514,7 +538,7 @@ fun RingOverlay(
             val swapSpring = if (edit.swapping) spring<Float>(dampingRatio = 0.82f, stiffness = Spring.StiffnessMedium) else snap()
             val x by animateFloatAsState(targetX, swapSpring, label = "slotX")
             val y by animateFloatAsState(targetY, swapSpring, label = "slotY")
-            val s = slot?.let { spec(it, cfg, actions) }
+            val s = slot?.let { spec(it, cfg, actions, ctx) }
             val dragModifier = if (editing != null) {
                 Modifier.slotDrag(k, editing, edit, radiusPx, scope)
             } else {
@@ -540,7 +564,7 @@ fun RingOverlay(
             val centreHalf = with(density) { CENTRE_D.toPx() } / 2
             // In the editor the centre is not editable, so it sits dimmed and inert.
             RingButton(
-                spec = SlotSpec("more", "More", Icons.Filled.MoreHoriz),
+                spec = SlotSpec("more", ctx.getString(R.string.ring_more), Icons.Filled.MoreHoriz),
                 size = CENTRE_D,
                 scale = 0.6f + 0.4f * cq,
                 alpha = cq * (if (editing == null) 1f else 0.45f),
@@ -553,7 +577,7 @@ fun RingOverlay(
         }
         // The label under the ring: a hint, else the highlighted slot's name.
         val label = state.hint ?: state.highlight?.let { h ->
-            if (h == 6) "More" else cfg.ring[h]?.let { spec(it, cfg, actions).label }
+            if (h == 6) ctx.getString(R.string.ring_more) else cfg.ring[h]?.let { spec(it, cfg, actions, ctx).label }
         }
         label?.let { hint ->
             val labelY = cy + radiusPx + slotPx
@@ -605,6 +629,7 @@ internal fun fireSlot(
     cfg: OverlayConfig,
     actions: RingActions,
     haptics: ConsoleHaptics,
+    ctx: Context,
     onSendText: () -> Unit,
 ) {
     state.touch()
@@ -617,7 +642,7 @@ internal fun fireSlot(
     if (s.armed && state.armed != s.id) {
         haptics.boundary()
         state.armed = s.id
-        state.hint = "${s.label}? Tap again"
+        state.hint = confirmText(ctx, slot, s.label)
         return
     }
     haptics.tick()
@@ -648,7 +673,20 @@ internal fun fireSlot(
             cfg.shortcut(slot.shortcutId)?.let { state.close(); actions.sendShortcut(it.keys) }
         }
     }
-    if (s.toggle) state.hint = spec(slot, cfg, actions).let { "${it.label}: ${it.state}" }
+    if (s.toggle) state.hint = spec(slot, cfg, actions, ctx).let { "${it.label}: ${it.state}" }
+}
+
+/** The line a destructive slot shows on its first press; a host action with no wording of its own takes its title. */
+private fun confirmText(ctx: Context, slot: SlotId, label: String): String {
+    val message = when {
+        slot == SlotId.EndStream -> R.string.ring_end_stream_confirm
+        slot == SlotId.EndGame -> R.string.ring_end_game_confirm
+        slot is SlotId.Host && slot.actionId == "power.sleep" -> R.string.ring_host_sleep_confirm
+        slot is SlotId.Host && slot.actionId == "power.reboot" -> R.string.ring_host_reboot_confirm
+        slot is SlotId.Host && slot.actionId == "power.shutdown" -> R.string.ring_host_shutdown_confirm
+        else -> return ctx.getString(R.string.ring_host_action_confirm, label)
+    }
+    return ctx.getString(message)
 }
 
 /**
@@ -664,6 +702,7 @@ private fun navigate(
     cfg: OverlayConfig,
     actions: RingActions,
     haptics: ConsoleHaptics,
+    ctx: Context,
     fire: (SlotSpec, SlotId) -> Unit,
 ) {
     if (state.sheet) {
@@ -692,7 +731,7 @@ private fun navigate(
         RingNav.Down -> { state.highlight = 3; haptics.tick() }
         RingNav.Centre -> { state.highlight = 6; haptics.tick() }
         RingNav.Confirm -> if (h >= 6) { haptics.tick(); state.sheetCursor = 0; state.sheet = true } else {
-            cfg.ring[h]?.let { fire(spec(it, cfg, actions), it) } ?: haptics.boundary()
+            cfg.ring[h]?.let { fire(spec(it, cfg, actions, ctx), it) } ?: haptics.boundary()
         }
         RingNav.Back -> state.close()
     }
@@ -764,10 +803,10 @@ private fun SendTextDialog(onDismiss: () -> Unit, onSend: (String) -> Unit) {
     var text by remember { mutableStateOf("") }
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Send text") },
+        title = { Text(stringResource(R.string.android_send_text_title)) },
         text = { OutlinedTextField(text, { text = it }, singleLine = true, modifier = Modifier.fillMaxWidth()) },
-        confirmButton = { TextButton(onClick = { onSend(text) }) { Text("Send") } },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+        confirmButton = { TextButton(onClick = { onSend(text) }) { Text(stringResource(R.string.common_send)) } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.common_cancel)) } },
     )
 }
 
@@ -792,6 +831,8 @@ private fun RingButton(
         spec == null || !spec.enabled -> Color.White.copy(alpha = 0.35f)
         else -> Color.White
     }
+    val name = spec?.label ?: stringResource(R.string.ring_slot_empty)
+    val armedState = stringResource(R.string.ring_armed_a11y)
     Box(
         modifier
             .size(size)
@@ -805,9 +846,9 @@ private fun RingButton(
             )
             .clickable(enabled = !inert && (spec != null || editable), onClick = onTap)
             .semantics {
-                contentDescription = spec?.label ?: "Empty slot"
+                contentDescription = name
                 stateDescription = when {
-                    armed -> "armed — press again"
+                    armed -> armedState
                     spec?.enabled == false -> spec.reason
                     spec?.state?.isNotEmpty() == true -> spec.state
                     else -> ""
@@ -885,6 +926,7 @@ private fun sheetRows(
     cfg: OverlayConfig,
     actions: RingActions,
     haptics: ConsoleHaptics,
+    ctx: Context,
     requestText: () -> Unit,
 ): List<SheetRowSpec> {
     val rows = mutableListOf<SheetRowSpec>()
@@ -892,7 +934,12 @@ private fun sheetRows(
     val native = state.nativeMode ?: mode
     val (w, h, hz) = Triple(mode.getOrElse(0) { 0 }, mode.getOrElse(1) { 0 }, mode.getOrElse(2) { 60 })
     val (nw, nh, nhz) = Triple(native.getOrElse(0) { 0 }, native.getOrElse(1) { 0 }, native.getOrElse(2) { 60 })
-    val resLabel = if (w == nw && h == nh) "Native ($w×$h)" else RES_PRESETS.firstOrNull { it.second == (w to h) }?.first ?: "$w×$h"
+    val resLabel = if (w == nw && h == nh) {
+        ctx.getString(R.string.ring_sheet_native, w, h)
+    } else {
+        RES_PRESETS.firstOrNull { it.second == (w to h) }?.first ?: "$w×$h"
+    }
+    val pressAgain = ctx.getString(R.string.ring_press_again)
     fun adjustRes(dir: Int) {
         val options = listOf(nw to nh) + RES_PRESETS.map { it.second }
         val i = options.indexOf(w to h).coerceAtLeast(0)
@@ -906,53 +953,76 @@ private fun sheetRows(
         val n = options.size
         actions.requestMode(w, h, options[((i + dir) % n + n) % n])
     }
-    rows += SheetRowSpec("Session", "End stream", if (state.armed == "end_stream") "tap again" else "") {
+    rows += SheetRowSpec(
+        ctx.getString(R.string.ring_group_session), ctx.getString(R.string.ring_end_stream),
+        if (state.armed == "end_stream") pressAgain else "",
+    ) {
         if (state.armed == "end_stream") { state.close(); actions.endStream() } else { haptics.boundary(); state.armed = "end_stream" }
     }
     if (actions.streamedGame() != null) {
-        rows += SheetRowSpec(null, "End game", if (state.armed == "end_game") "tap again" else "") {
+        rows += SheetRowSpec(
+            null, ctx.getString(R.string.ring_end_game), if (state.armed == "end_game") pressAgain else "",
+        ) {
             if (state.armed == "end_game") { state.close(); actions.endGame() } else { haptics.boundary(); state.armed = "end_game" }
         }
     }
-    rows += SheetRowSpec(null, "Disconnect, keep the game running") { state.close(); actions.disconnectLinger() }
-    rows += SheetRowSpec("Resolution", "Resolution", resLabel, onAdjust = ::adjustRes) { adjustRes(1) }
-    rows += SheetRowSpec(null, "Refresh", "$hz Hz", onAdjust = ::adjustHz) { adjustHz(1) }
-    val tm = spec(SlotId.TouchMode, cfg, actions)
-    rows += SheetRowSpec("Input", tm.label, tm.state) { actions.cycleTouchMode() }
+    rows += SheetRowSpec(null, ctx.getString(R.string.ring_disconnect_linger)) { state.close(); actions.disconnectLinger() }
+    rows += SheetRowSpec(
+        ctx.getString(R.string.ring_group_resolution), ctx.getString(R.string.ring_sheet_resolution), resLabel,
+        onAdjust = ::adjustRes,
+    ) { adjustRes(1) }
+    rows += SheetRowSpec(
+        null, ctx.getString(R.string.ring_sheet_refresh), ctx.getString(R.string.common_hz, hz), onAdjust = ::adjustHz,
+    ) { adjustHz(1) }
+    val tm = spec(SlotId.TouchMode, cfg, actions, ctx)
+    rows += SheetRowSpec(ctx.getString(R.string.ring_group_input), tm.label, tm.state) { actions.cycleTouchMode() }
     val pointerGranted = actions.pointerGranted()
-    rows += SheetRowSpec(null, "Invert scroll direction",
-        if (pointerGranted) { if (actions.scrollInverted()) "On" else "Off" } else "Pointer input is not allowed",
+    rows += SheetRowSpec(null, ctx.getString(R.string.ring_sheet_invert_scroll),
+        ctx.getString(
+            when {
+                !pointerGranted -> R.string.ring_pointer_not_allowed
+                actions.scrollInverted() -> R.string.ring_scroll_invert_on
+                else -> R.string.ring_scroll_invert_off
+            },
+        ),
         pointerGranted,
     ) { if (actions.pointerGranted()) actions.toggleScrollInversion() }
-    val kb = spec(SlotId.Keyboard, cfg, actions)
+    val kb = spec(SlotId.Keyboard, cfg, actions, ctx)
     rows += SheetRowSpec(null, kb.label, if (kb.enabled) "" else kb.reason, kb.enabled) { if (kb.enabled) { state.close(); actions.keyboard() } }
-    val st = spec(SlotId.SendText, cfg, actions)
+    val st = spec(SlotId.SendText, cfg, actions, ctx)
     rows += SheetRowSpec(null, st.label, if (st.enabled) "" else st.reason, st.enabled) { if (st.enabled) requestText() }
-    val pad = spec(SlotId.Pad, cfg, actions)
+    val pad = spec(SlotId.Pad, cfg, actions, ctx)
     rows += SheetRowSpec(null, pad.label, if (pad.enabled) pad.state else pad.reason, pad.enabled) { if (pad.enabled) actions.togglePad() }
     for ((slot, bit) in listOf(SlotId.Guide to Gamepad.BTN_GUIDE, SlotId.Qam to Gamepad.BTN_MISC1)) {
-        val sys = spec(slot, cfg, actions)
+        val sys = spec(slot, cfg, actions, ctx)
         rows += SheetRowSpec(null, sys.label, if (sys.enabled) "" else sys.reason, sys.enabled) {
             if (sys.enabled) { state.close(); actions.tapPadButton(bit) }
         }
     }
-    val pm = spec(SlotId.PadMouse, cfg, actions)
+    val pm = spec(SlotId.PadMouse, cfg, actions, ctx)
     rows += SheetRowSpec(null, pm.label, if (pm.enabled) pm.state else pm.reason, pm.enabled) { if (pm.enabled) actions.cyclePadMouse() }
-    val pt = spec(SlotId.PadType, cfg, actions)
+    val pt = spec(SlotId.PadType, cfg, actions, ctx)
     rows += SheetRowSpec(null, pt.label, if (pt.enabled) pt.state else pt.reason, pt.enabled) { if (pt.enabled) actions.cyclePadType() }
-    rows += SheetRowSpec("View", "Statistics", actions.stats().label) { actions.cycleStats() }
+    rows += SheetRowSpec(
+        ctx.getString(R.string.ring_group_view), ctx.getString(R.string.ring_stats),
+        ctx.getString(statsVerbosityLabel(actions.stats())),
+    ) { actions.cycleStats() }
     if (actions.screenLayouts().size > 1) {
-        rows += SheetRowSpec(null, "Screens", actions.screenLayout().label) { state.close(); actions.cycleScreens() }
+        rows += SheetRowSpec(
+            null, ctx.getString(R.string.android_ring_screens), ctx.getString(actions.screenLayout().label),
+        ) { state.close(); actions.cycleScreens() }
     }
-    val mic = spec(SlotId.Mic, cfg, actions)
-    rows += SheetRowSpec("Audio", mic.label, if (mic.enabled) mic.state else mic.reason, mic.enabled) { if (mic.enabled) actions.toggleMic() }
+    val mic = spec(SlotId.Mic, cfg, actions, ctx)
+    rows += SheetRowSpec(
+        ctx.getString(R.string.ring_group_audio), mic.label, if (mic.enabled) mic.state else mic.reason, mic.enabled,
+    ) { if (mic.enabled) actions.toggleMic() }
     actions.hostActions().forEachIndexed { i, act ->
         val id = "host:${act.id}"
         rows += SheetRowSpec(
-            if (i == 0) "Host" else null, act.label,
+            if (i == 0) ctx.getString(R.string.ring_group_host) else null, act.label,
             when {
                 !act.available -> act.unavailableReason
-                state.armed == id -> "tap again"
+                state.armed == id -> pressAgain
                 else -> ""
             },
             act.available,
@@ -963,7 +1033,10 @@ private fun sheetRows(
     }
     cfg.shortcuts.forEachIndexed { i, s ->
         val ok = actions.keyboardGranted() && s.keys.all { keyVk(it) != null }
-        rows += SheetRowSpec(if (i == 0) "Shortcuts" else null, s.label.ifEmpty { chordChip(s.keys) }, chordChip(s.keys), ok) {
+        rows += SheetRowSpec(
+            if (i == 0) ctx.getString(R.string.ring_group_shortcuts) else null,
+            s.label.ifEmpty { chordChip(s.keys) }, chordChip(s.keys), ok,
+        ) {
             if (ok) { state.close(); actions.sendShortcut(s.keys) }
         }
     }

@@ -105,10 +105,7 @@ impl LicensesScreen {
             }
         };
         push(Style::Title, &format!("Punktfunk {}", crate::VERSION));
-        push(
-            Style::Body,
-            "Punktfunk is licensed under MIT OR Apache-2.0, at your option.",
-        );
+        push(Style::Body, pf_l10n::client::about_license_statement());
         push(Style::Body, "");
         push(Style::Heading, "MIT License");
         push(Style::Text, MIT);
@@ -116,12 +113,8 @@ impl LicensesScreen {
         push(Style::Heading, "Apache License 2.0");
         push(Style::Text, APACHE);
         push(Style::Body, "");
-        push(Style::Heading, "Bundled font");
-        push(
-            Style::Body,
-            "The Geist typeface, © The Geist Project Authors / Vercel, is licensed under the \
-             SIL Open Font License 1.1.",
-        );
+        push(Style::Heading, pf_l10n::client::about_bundled_font());
+        push(Style::Body, pf_l10n::client::about_geist_license());
         push(Style::Text, GEIST_OFL);
         match &self.host {
             Some(sections) => {
@@ -133,7 +126,10 @@ impl LicensesScreen {
             }
             None => {
                 push(Style::Body, "");
-                push(Style::Body, "Loading this device's third-party notices…");
+                push(
+                    Style::Body,
+                    pf_l10n::console::console_about_loading_notices(),
+                );
             }
         }
 
@@ -162,7 +158,7 @@ impl LicensesScreen {
 
 impl ScreenView for LicensesScreen {
     fn title(&self) -> String {
-        "Open-source licences".into()
+        pf_l10n::client::about_licenses_title().into()
     }
 
     fn menu(&mut self, ev: MenuEvent, _ctx: &mut Ctx, fx: &mut Outbox) -> Option<MenuPulse> {
@@ -184,8 +180,8 @@ impl ScreenView for LicensesScreen {
 
     fn hints(&self, _ctx: &Ctx) -> Vec<Hint> {
         vec![
-            Hint::new(HintKey::Adjust, "Page"),
-            Hint::new(HintKey::Back, "Done"),
+            Hint::new(HintKey::Adjust, pf_l10n::console::console_hint_page()),
+            Hint::new(HintKey::Back, pf_l10n::common::common_done()),
         ]
     }
 

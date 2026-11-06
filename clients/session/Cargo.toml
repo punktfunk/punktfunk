@@ -35,6 +35,8 @@ pf-presenter = { path = "../../crates/client/pf-presenter", default-features = f
 pf-console-ui = { path = "../../crates/client/pf-console-ui", optional = true }
 pf-client-core = { path = "../../crates/client/pf-client-core", default-features = false, features = ["desktop"] }
 punktfunk-core = { path = "../../crates/core/punktfunk-core", features = ["quic"] }
+# `os_languages()`: the language the console's text follows; `client` for its own lines.
+pf-l10n = { path = "../../l10n", features = ["client", "os"] }
 # The fake-library dev hook (`PUNKTFUNK_FAKE_LIBRARY`, browse mode) parses GameEntry JSON.
 serde_json = { version = "1", optional = true }
 tracing = "0.1"

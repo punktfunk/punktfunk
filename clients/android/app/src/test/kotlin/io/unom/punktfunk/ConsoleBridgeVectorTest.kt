@@ -17,6 +17,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
 
 /**
@@ -107,9 +108,13 @@ class ConsoleBridgeVectorTest {
             ),
             ListedProfile(id = "p2", displayName = "Ben", legacySeat = true),
         )
-        assertWrites("ProfilesAnswer", 0, ConsoleJson.profilesAnswer(ProfilesAnswer.Listed(rows)))
-        assertWrites("ProfilesAnswer", 1, ConsoleJson.profilesAnswer(ProfilesAnswer.NoProfiles))
-        assertWrites("ProfilesAnswer", 2, ConsoleJson.profilesAnswer(ProfilesAnswer.Failed("Couldn't load the profiles.")))
+        val res = RuntimeEnvironment.getApplication().resources
+        assertWrites("ProfilesAnswer", 0, ConsoleJson.profilesAnswer(ProfilesAnswer.Listed(rows), res))
+        assertWrites("ProfilesAnswer", 1, ConsoleJson.profilesAnswer(ProfilesAnswer.NoProfiles, res))
+        assertWrites(
+            "ProfilesAnswer", 2,
+            ConsoleJson.profilesAnswer(ProfilesAnswer.Failed("Couldn't load the profiles."), res),
+        )
     }
 
     /** The catalog and the error phase: `nativeConsoleLibraryBegin` stands in for a bare `Loading`. */

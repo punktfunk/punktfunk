@@ -50,6 +50,7 @@ import {
   useUpdate,
 } from "./hooks";
 import { type HostView, needsPair, trustState } from "./hosts";
+import { t } from "./i18n";
 import {
   gamePageStreamEnabled,
   installGamePageStream,
@@ -78,12 +79,10 @@ async function recreatePunktfunkShortcut(): Promise<void> {
     title: "Punktfunk",
     body:
       appId == null
-        ? "Couldn't create the shortcut"
+        ? t("decky_shortcut_create_failed")
         : removedDuplicates > 0
-          ? `Shortcut restored — removed ${removedDuplicates} duplicate ${
-              removedDuplicates === 1 ? "entry" : "entries"
-            }`
-          : "Shortcut restored to your library",
+          ? t("decky_shortcut_restored_dupes", { count: removedDuplicates })
+          : t("decky_shortcut_restored"),
   });
 }
 
@@ -95,8 +94,8 @@ function removeGamePageShortcuts(): void {
     title: "Punktfunk",
     body:
       removed === 0
-        ? "No game shortcuts to remove"
-        : `Removed ${removed} game ${removed === 1 ? "shortcut" : "shortcuts"}`,
+        ? t("decky_game_shortcuts_none")
+        : t("decky_game_shortcuts_removed", { count: removed }),
   });
 }
 
@@ -108,7 +107,7 @@ async function forceStop(): Promise<void> {
   } catch {
     /* best-effort — the TerminateApp above is usually enough */
   }
-  toaster.toast({ title: "Punktfunk", body: "Stopped the stream" });
+  toaster.toast({ title: "Punktfunk", body: t("decky_force_stopped") });
 }
 
 // Press a host system button (guide/QAM) on the running stream, then hand the screen back
@@ -122,7 +121,7 @@ async function pressHost(action: "guide" | "qam"): Promise<void> {
   } else {
     toaster.toast({
       title: "Punktfunk",
-      body: r.error === "no-stream" ? "No stream is running" : "Couldn't reach the stream",
+      body: r.error === "no-stream" ? t("decky_no_stream") : t("decky_stream_unreachable"),
     });
   }
 }
@@ -134,24 +133,32 @@ async function endStreamedGame(): Promise<void> {
   if (!last) {
     return;
   }
-  const r = await endGame(last.ref, last.gameId).catch(() => ({
-    ok: false as const,
-    notice: "Couldn't reach the Punktfunk client.",
-  }));
-  if (r.ok) {
+  const r = await endGame(last.ref, last.gameId).catch(() => null);
+  if (r?.ok) {
     stopStream();
   }
-  toaster.toast({ title: "Punktfunk", body: r.notice || (r.ok ? `Ended ${last.title}.` : "Couldn't end the game.") });
+  // The CLI's own sentence leads when it sent one; its words are English.
+  const body =
+    r === null
+      ? t("decky_client_unreachable_end")
+      : r.notice ||
+        (r.ok
+          ? t("decky_game_ended", { title: last.title })
+          : r.error === "unresolved"
+            ? t("decky_end_game_unresolved")
+            : t("decky_end_game_failed"));
+  toaster.toast({ title: "Punktfunk", body });
 }
 
 /** The line under a host's name: where it is, whether it's up, and how far trust has got. */
 function hostDescription(v: HostView): string {
   const trust = {
-    paired: "paired",
-    trusted: "trusted",
-    "needs-access": "needs access",
+    paired: t("hostcard_paired"),
+    trusted: t("decky_host_trusted"),
+    "needs-access": t("decky_host_needs_access"),
   }[trustState(v)];
-  return `${v.addr}:${v.port} · ${v.online ? "online" : "offline"} · ${trust}`;
+  const online = v.online ? t("hostcard_status_online") : t("hostcard_status_offline");
+  return `${v.addr}:${v.port} · ${online} · ${trust}`;
 }
 
 /** The profiles of a paired, online host. Empty for a host with one profile or none: no chips. */
@@ -197,7 +204,7 @@ const HostRow: FC<{ host: HostView; refresh: () => void }> = ({ host, refresh })
           }
           description={hostDescription(host)}
         >
-          {gated ? "Connect…" : "Stream"}
+          {gated ? t("decky_host_connect") : t("decky_stream")}
         </ButtonItem>
       </PanelSectionRow>
       {/* Pinned cards, nested under their host rather than in a section of their own: a card
@@ -210,11 +217,11 @@ const HostRow: FC<{ host: HostView; refresh: () => void }> = ({ host, refresh })
           <PanelSectionRow key={`${host.ref}:${p.id}`}>
             <ButtonItem
               layout="below"
-              onClick={() => void startStream(host, { presetId: p.id }, `“${p.name}”`)}
+              onClick={() => void startStream(host, { presetId: p.id }, { preset: p.name })}
               label={`▸ ${p.name}`}
             >
               <FaPlay style={{ marginRight: "0.5em" }} />
-              Stream
+              {t("decky_stream")}
             </ButtonItem>
           </PanelSectionRow>
         ))}
@@ -223,7 +230,7 @@ const HostRow: FC<{ host: HostView; refresh: () => void }> = ({ host, refresh })
         <PanelSectionRow key={`${host.ref}:as:${p.id}`}>
           <ButtonItem
             layout="below"
-            onClick={() => void startStream(host, { profileId: p.id }, p.display_name)}
+            onClick={() => void startStream(host, { profileId: p.id }, { profile: p.display_name })}
             label={
               <span style={{ display: "inline-flex", alignItems: "center", gap: "0.4em" }}>
                 {p.picture ? (
@@ -241,7 +248,7 @@ const HostRow: FC<{ host: HostView; refresh: () => void }> = ({ host, refresh })
             description={p.note ?? undefined}
           >
             <FaPlay style={{ marginRight: "0.5em" }} />
-            Stream
+            {t("decky_stream")}
           </ButtonItem>
         </PanelSectionRow>
       ))}
@@ -274,17 +281,17 @@ const QamPanel: FC = () => {
         // something that can only fail is worse than reading one line. A pending PLUGIN update
         // still wins the button, since that half always works.
         (clientUpdateIsManualOnly(update) && !update!.update_available ? (
-          <PanelSection title="Client update available">
+          <PanelSection title={t("decky_section_client_update")}>
             <PanelSectionRow>
               <Field
                 focusable
-                label={update!.client_latest || "Newer version"}
+                label={update!.client_latest || t("decky_newer_version")}
                 description={update!.client_opt_in || update!.client_command}
               />
             </PanelSectionRow>
           </PanelSection>
         ) : (
-          <PanelSection title="Update available">
+          <PanelSection title={t("decky_section_update")}>
             <PanelSectionRow>
               <ButtonItem
                 layout="below"
@@ -294,21 +301,27 @@ const QamPanel: FC = () => {
                     ? // "+ client" only when this tap will really install it. A manual-only
                       // client rides along as a toast with the command, and promising it in the
                       // label would make that read as a failure.
-                      `Plugin v${update!.current} → v${update!.latest}${
-                        clientUpdateIsOneTap(update) ? " + client" : ""
-                      }`
-                    : "New client version"
+                      clientUpdateIsOneTap(update)
+                        ? t("decky_update_plugin_client", {
+                            current: update!.current,
+                            latest: update!.latest,
+                          })
+                        : t("decky_update_plugin", {
+                            current: update!.current,
+                            latest: update!.latest,
+                          })
+                    : t("decky_update_client_only")
                 }
-                description="Installing can take a couple of minutes"
+                description={t("decky_update_hint")}
               >
                 <FaDownload style={{ marginRight: "0.5em" }} />
-                Update Punktfunk
+                {t("decky_update_button")}
               </ButtonItem>
             </PanelSectionRow>
           </PanelSection>
         ))}
 
-      <PanelSection title="Hosts">
+      <PanelSection title={t("decky_section_hosts")}>
         <PanelSectionRow>
           <ButtonItem layout="below" onClick={() => void refresh()} disabled={scanning}>
             {scanning ? (
@@ -316,7 +329,7 @@ const QamPanel: FC = () => {
             ) : (
               <FaSyncAlt style={{ marginRight: "0.5em" }} />
             )}
-            {scanning ? "Scanning…" : "Refresh"}
+            {scanning ? t("decky_scanning") : t("decky_refresh")}
           </ButtonItem>
         </PanelSectionRow>
         {/* A client that is missing or too old explains itself rather than rendering an empty
@@ -328,32 +341,32 @@ const QamPanel: FC = () => {
               focusable={false}
               label={
                 problem === "client-unavailable"
-                  ? "Punktfunk isn’t installed"
+                  ? t("decky_problem_not_installed")
                   : problem === "list-failed"
-                    ? "Couldn’t scan for hosts"
-                    : "Update the Punktfunk client"
+                    ? t("decky_problem_scan_failed")
+                    : t("decky_problem_outdated")
               }
               description={
                 problem === "client-unavailable"
-                  ? "This panel launches the Punktfunk app, which isn’t on this Deck yet. Install it in Desktop Mode."
+                  ? t("decky_problem_not_installed_body")
                   : problem === "list-failed"
-                    ? "Something went wrong while scanning — Refresh tries again."
-                    : "This client is too old to find hosts on your network. Saved hosts still work."
+                    ? t("decky_problem_scan_failed_body")
+                    : t("decky_problem_outdated_body")
               }
             />
           </PanelSectionRow>
         )}
         {views.length === 0 && scanning && (
           <PanelSectionRow>
-            <Field focusable={false} description="Scanning your network…" />
+            <Field focusable={false} description={t("decky_scanning_network")} />
           </PanelSectionRow>
         )}
         {views.length === 0 && !scanning && !problem && (
           <PanelSectionRow>
             <Field
               focusable={false}
-              label="No hosts yet"
-              description="Open Punktfunk to find and pair one."
+              label={t("hosts_empty_title")}
+              description={t("decky_empty_body")}
             />
           </PanelSectionRow>
         )}
@@ -366,17 +379,17 @@ const QamPanel: FC = () => {
         <PanelSectionRow>
           <ButtonItem
             layout="below"
-            description="Settings, adding a host by address, and browsing a host's games all live here."
+            description={t("decky_open_app_hint")}
             onClick={() => void launchGamepadUi()}
           >
             <FaTv style={{ marginRight: "0.5em" }} />
-            Open Punktfunk
+            {t("decky_open_app")}
           </ButtonItem>
         </PanelSectionRow>
         <PanelSectionRow>
           <ToggleField
-            label="Punktfunk in Steam's Play menu"
-            description="The ▾ beside a game's Play button lists your hosts that have it, next to Steam Link's; pick one and Play becomes Stream."
+            label={t("decky_play_menu")}
+            description={t("decky_play_menu_hint")}
             checked={gamePageStream}
             onChange={(on) => {
               setGamePageStreamEnabled(on);
@@ -387,59 +400,63 @@ const QamPanel: FC = () => {
       </PanelSection>
 
       {streaming && (
-        <PanelSection title="Host menus">
+        <PanelSection title={t("decky_section_host_menus")}>
           <PanelSectionRow>
             <ButtonItem
               layout="below"
-              description="Press the Steam/guide button on the host"
+              description={t("decky_host_steam_menu_hint")}
               onClick={() => void pressHost("guide")}
             >
               <FaGamepad style={{ marginRight: "0.5em" }} />
-              Steam menu on host
+              {t("decky_host_steam_menu")}
             </ButtonItem>
           </PanelSectionRow>
           <PanelSectionRow>
             <ButtonItem
               layout="below"
-              description="Open the host's Quick Access Menu"
+              description={t("decky_host_qam_hint")}
               onClick={() => void pressHost("qam")}
             >
               <FaGamepad style={{ marginRight: "0.5em" }} />
-              Quick access on host
+              {t("decky_host_qam")}
             </ButtonItem>
           </PanelSectionRow>
           {lastGameStream() && (
             <PanelSectionRow>
               <ButtonItem
                 layout="below"
-                description={`Close ${lastGameStream()?.title} on the host, then end the stream. Unsaved progress is lost.`}
+                description={t("decky_end_game_hint", { title: lastGameStream()?.title ?? "" })}
                 onClick={() =>
                   showModal(
                     <ConfirmModal
-                      strTitle={`End ${lastGameStream()?.title}?`}
-                      strDescription="Unsaved progress in the game is lost."
-                      strOKButtonText="End game"
+                      strTitle={t("decky_end_game_confirm_title", {
+                        title: lastGameStream()?.title ?? "",
+                      })}
+                      strDescription={t("lib_end_game_confirm_body")}
+                      strOKButtonText={t("lib_end_game")}
                       onOK={() => void endStreamedGame()}
                     />,
                   )
                 }
               >
                 <FaStopCircle style={{ marginRight: "0.5em" }} />
-                End game
+                {t("lib_end_game")}
               </ButtonItem>
             </PanelSectionRow>
           )}
         </PanelSection>
       )}
 
-      <PanelSection title="About">
+      <PanelSection title={t("decky_section_about")}>
         <PanelSectionRow>
           <Field
             focusable={false}
-            label="Version"
+            label={t("about_version")}
             description={
               update
-                ? `v${update.current}${update.channel ? ` · ${update.channel}` : " · dev build"}`
+                ? update.channel
+                  ? `v${update.current} · ${update.channel}`
+                  : t("decky_version_dev", { version: update.current })
                 : "…"
             }
           />
@@ -450,36 +467,36 @@ const QamPanel: FC = () => {
             disabled={checking}
             onClick={() => void checkForUpdatesNow(check)}
           >
-            {checking ? "Checking…" : "Check for updates"}
+            {checking ? t("decky_checking") : t("decky_check_updates")}
           </ButtonItem>
         </PanelSectionRow>
         <PanelSectionRow>
           <ButtonItem
             layout="below"
-            description="Missing the Punktfunk entry in your library, or seeing several? This puts one back and removes the rest."
+            description={t("decky_recreate_hint")}
             onClick={() => void recreatePunktfunkShortcut()}
           >
             <FaPlus style={{ marginRight: "0.5em" }} />
-            Recreate library shortcut
+            {t("decky_recreate")}
           </ButtonItem>
         </PanelSectionRow>
         <PanelSectionRow>
           <ButtonItem
             layout="below"
-            description="Streams started from a game's page run under a hidden entry named after that game. This removes them; each returns on its next Stream."
+            description={t("decky_remove_game_shortcuts_hint")}
             onClick={() => removeGamePageShortcuts()}
           >
-            Remove game shortcuts
+            {t("decky_remove_game_shortcuts")}
           </ButtonItem>
         </PanelSectionRow>
         <PanelSectionRow>
           <ButtonItem
             layout="below"
-            description="Ends a stream that stopped responding."
+            description={t("decky_force_stop_hint")}
             onClick={() => void forceStop()}
           >
             <FaStopCircle style={{ marginRight: "0.5em" }} />
-            Force-stop
+            {t("decky_force_stop")}
           </ButtonItem>
         </PanelSectionRow>
       </PanelSection>

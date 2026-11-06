@@ -9,10 +9,11 @@ use super::{AppCtx, AsyncSetState, Screen, Svc, Target};
 use crate::trust::{self, KnownHosts};
 use pf_client_core::orchestrate::{
     self, trust_route, wake_parked_line, CancelHandle, ConnectAttempt, ExitRoute, HostTarget,
-    TrustRoute, WakeOutcome, WakeWait, FINGERPRINT_CHANGED, WAKE_PARKED_HINT,
+    TrustRoute, WakeOutcome, WakeWait,
 };
 use pf_client_core::unlock::{self, Pending};
 use pf_fluent::Palette;
+use pf_l10n::{client, common, desktop};
 use punktfunk_core::quic::v2::msg::ProfileUnlock;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -78,7 +79,7 @@ fn initiate_opts(
         TrustRoute::Pinned(fp_hex) => trust::parse_hex32(&fp_hex),
         TrustRoute::OfferTofu(_) => None,
         TrustRoute::FingerprintChanged => {
-            set_status.call(FINGERPRINT_CHANGED.to_string());
+            set_status.call(client::dial_fingerprint_changed().to_string());
             set_screen.call(Screen::Pair);
             return;
         }
@@ -351,7 +352,7 @@ fn connect_spawn(
                     if attempt.on_ready()
                         && let Err(e) = orchestrate::persist_on_ready(&target.host, &fp_hex, false)
                     {
-                        st.call(format!("Connected, but couldn't save — {e:#}"));
+                        st.call(desktop::desktop_trust_saved_failed(format!("{e:#}")));
                     }
                     // The child presented its first frame — its window is up, so the
                     // shell yields: one visible Punktfunk window at a time. Every exit
@@ -373,7 +374,7 @@ fn connect_spawn(
                         }
                     };
                     let log = crate::spawn::log_hint();
-                    match attempt.on_exit(&host, &outcome, &log) {
+                    match attempt.on_exit(&host, &outcome, Some(&log)) {
                         // The user closed the stream window, or Disconnect killed it.
                         ExitRoute::Silent => ss.call(Screen::Hosts),
                         ExitRoute::Banner(msg) => {
@@ -466,7 +467,7 @@ pub(crate) fn open_console(
             SpawnEvent::Exited(outcome) => {
                 crate::shell_window::restore();
                 // A quit from the library or Disconnect returns silently.
-                if let Some(msg) = outcome.console_banner(&crate::spawn::log_hint()) {
+                if let Some(msg) = outcome.console_banner(Some(&crate::spawn::log_hint())) {
                     st.call(msg);
                 }
                 ss.call(Screen::Hosts);
@@ -532,13 +533,13 @@ pub(crate) fn request_access(props: &Svc, target: &Target) {
         if target.from_link {
             connect(&ctx, &target, Some(fp), &ss, &st);
             if let Err(e) = paired.saved {
-                st.call(format!("Paired, but couldn't save — {e:#}"));
+                st.call(client::pair_saved_failed(format!("{e:#}")));
             }
             return;
         }
         svc.report(match paired.saved {
-            Ok(()) => Ok(format!("Paired with {}", target.host.name)),
-            Err(e) => Err(format!("Paired, but couldn't save — {e:#}")),
+            Ok(()) => Ok(client::pair_paired(&target.host.name)),
+            Err(e) => Err(client::pair_saved_failed(format!("{e:#}"))),
         });
         ss.call(Screen::Hosts);
     });
@@ -618,12 +619,12 @@ fn wake_and_connect(
 pub(crate) fn connecting_page(pal: &Palette, ctx: &Arc<AppCtx>, status: &str) -> View {
     let target_name = ctx.shared.target.lock().unwrap().host.name.clone();
     let headline = if target_name.is_empty() {
-        "Connecting\u{2026}".to_string()
+        client::dial_connecting().to_string()
     } else {
-        format!("Connecting to {target_name}\u{2026}")
+        client::dial_connecting_to(&target_name)
     };
     let detail = if status.is_empty() {
-        "Negotiating the session and creating the virtual display\u{2026}"
+        client::dial_connecting_detail()
     } else {
         status
     };
@@ -640,13 +641,13 @@ pub(crate) fn request_access_page(
 ) -> View {
     let target_name = ctx.shared.target.lock().unwrap().host.name.clone();
     let headline = if target_name.is_empty() {
-        "Waiting for approval\u{2026}".to_string()
+        client::pair_waiting_for_approval().to_string()
     } else {
-        format!("Waiting for {target_name} to approve\u{2026}")
+        desktop::desktop_pair_waiting_for_host(&target_name)
     };
     let cancel_btn = {
         let (ctx, ss) = (ctx.clone(), set_screen.clone());
-        icon_button("x", "Cancel")
+        icon_button("x", common::common_cancel())
             .on_click(move || {
                 if let Some(c) = ctx.shared.cancel.lock().unwrap().as_ref() {
                     c.store(true, Ordering::SeqCst);
@@ -663,8 +664,7 @@ pub(crate) fn request_access_page(
     busy_page(
         pal,
         &headline,
-        "Approve this device in the host's console or web UI \u{2014} it is paired once you \
-         approve it. No PIN needed.",
+        &client::dial_approve_no_pin(&target_name),
         vec![cancel_btn.into()],
     )
 }
@@ -679,13 +679,13 @@ pub(crate) fn waking_page(
 ) -> View {
     let target_name = ctx.shared.target.lock().unwrap().host.name.clone();
     let headline = if target_name.is_empty() {
-        "Waking the host\u{2026}".to_string()
+        desktop::desktop_dial_waking_unnamed().to_string()
     } else {
-        format!("Waking {target_name}\u{2026}")
+        client::dial_waking(&target_name)
     };
     let cancel_btn = {
         let (ctx, ss) = (ctx.clone(), set_screen.clone());
-        icon_button("x", "Cancel")
+        icon_button("x", common::common_cancel())
             .on_click(move || {
                 // Return the UI immediately and trip the flag the poll loop is watching so it stops
                 // re-sending and exits without touching a screen a later action may already own.
@@ -699,8 +699,7 @@ pub(crate) fn waking_page(
     busy_page(
         pal,
         &headline,
-        "Sent a wake signal and waiting for the host to come online \u{2014} this can take up to a \
-         minute for a sleeping or powered-off machine.",
+        &desktop::desktop_dial_wake_sent(&target_name),
         vec![cancel_btn.into()],
     )
 }
@@ -721,13 +720,13 @@ pub(crate) fn wake_parked_page(
             set_status.clone(),
             target.clone(),
         );
-        icon_button("rotate-cw", "Try again")
+        icon_button("rotate-cw", common::common_try_again())
             .style(ButtonStyle::Accent)
             .on_click(move || wake_and_connect(&ctx, target.clone(), &ss, &st))
     };
     let cancel_btn = {
         let ss = set_screen.clone();
-        icon_button("x", "Cancel").on_click(move || ss.call(Screen::Hosts))
+        icon_button("x", common::common_cancel()).on_click(move || ss.call(Screen::Hosts))
     };
     let actions = hstack((retry_btn, cancel_btn))
         .spacing(8.0)
@@ -736,7 +735,7 @@ pub(crate) fn wake_parked_page(
         pal,
         None,
         &wake_parked_line(&target.host.name),
-        WAKE_PARKED_HINT,
+        client::dial_wake_parked_hint(),
         vec![actions.into()],
     )
 }

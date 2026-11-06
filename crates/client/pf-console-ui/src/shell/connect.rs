@@ -156,7 +156,8 @@ pub(super) struct SeatWait {
 pub(super) const SEAT_POLL: f64 = pf_client_core::profiles::SEAT_POLL.as_secs_f64();
 
 pub(super) struct Connecting {
-    pub(super) title: String,
+    /// The host's name; `None` for a redial no connect raised, which the card words without it.
+    pub(super) title: Option<String>,
     pub(super) appear: f64,
     /// Host is parked pending operator approval. Takeover title is
     /// "Waiting for approval", not "Connecting".
@@ -241,13 +242,13 @@ pub(super) struct Launching {
 /// it came from. `running`, `untracked` and `grace` keep waiting or reveal: those launches worked.
 pub(super) fn launch_gave_up(title: &str, state: Option<&str>, elapsed: f64) -> Option<String> {
     match state {
-        None if elapsed >= LAUNCH_NO_LEASE => Some(format!(
-            "The host didn't start {title} — nothing is running for it."
-        )),
-        Some("launching") if elapsed >= LAUNCH_HOLD_MAX => {
-            Some(format!("{title} is still starting after 2 minutes."))
+        None if elapsed >= LAUNCH_NO_LEASE => {
+            Some(pf_l10n::client::lib_hold_gave_up_not_started(title))
         }
-        Some("exited") => Some(format!("{title} closed right after starting.")),
+        Some("launching") if elapsed >= LAUNCH_HOLD_MAX => {
+            Some(pf_l10n::client::lib_hold_gave_up_slow(title))
+        }
+        Some("exited") => Some(pf_l10n::client::lib_hold_gave_up_exited(title)),
         _ => None,
     }
 }
@@ -271,7 +272,7 @@ impl Shell {
             Some(title) => {
                 self.last_connect_title = Some(title.clone());
                 self.connect.show_card(Connecting {
-                    title,
+                    title: Some(title),
                     appear: 0.0,
                     request_access: false,
                     starting: None,
@@ -300,7 +301,7 @@ impl Shell {
                 return self.prompt_unlock(d.intent, error);
             }
         }
-        self.show_toast_kind(format!("Couldn't connect — {msg}"), ToastKind::Error);
+        self.show_toast_kind(pf_l10n::client::dial_connect_failed(msg), ToastKind::Error);
     }
 
     /// The box no longer has the profile the last connect named: forget the card's pick and
@@ -507,7 +508,7 @@ impl Shell {
             });
         }
         if let Some(reason) = reason {
-            self.show_toast(format!("Session ended — {reason}"));
+            self.show_toast(pf_l10n::client::ended_with_reason(reason));
         }
     }
 
@@ -535,12 +536,8 @@ impl Shell {
         self.in_stream = false;
         self.connect.end_dial();
         self.connect.show_card(Connecting {
-            // `None` only if the shell never raised the connect (`--connect`
-            // has no console). Prefer a codec-change name over empty string.
-            title: self
-                .last_connect_title
-                .clone()
-                .unwrap_or_else(|| "the host".to_string()),
+            // `None` only if the shell never raised the connect (`--connect` has no console).
+            title: self.last_connect_title.clone(),
             appear: 1.0,
             request_access: false,
             starting: None,
@@ -915,7 +912,7 @@ mod tests {
     #[test]
     fn a_connect_phase_owns_its_takeover_and_its_card() {
         let card = |title: &str| Connecting {
-            title: title.into(),
+            title: Some(title.into()),
             appear: 0.0,
             request_access: false,
             starting: None,
@@ -923,7 +920,7 @@ mod tests {
         let mut c = asking(None);
         assert_eq!(c.takeover(), Some(Takeover::Asking));
         c.show_card(card("Den"));
-        assert_eq!(c.card().map(|c| c.title.as_str()), Some("Den"));
+        assert_eq!(c.card().and_then(|c| c.title.as_deref()), Some("Den"));
         assert_eq!(
             c.takeover(),
             Some(Takeover::Asking),

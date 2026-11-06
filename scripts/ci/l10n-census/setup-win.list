@@ -1,0 +1,3 @@
+crates/install/punktfunk-setup-win/src/bootstrap.rs	{} isn't admin-only after hardening: {e}
+crates/install/punktfunk-setup-win/src/pack.rs	{}: no runtime files — build the wizard into this dir first
+crates/install/punktfunk-setup-win/src/pack.rs	{}: {e} (and no reboot-time replace)

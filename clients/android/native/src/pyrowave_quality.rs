@@ -1,11 +1,37 @@
-//! JNI seam for the PyroWave quality row. Core prices the rate a quality needs and words the
-//! warning when this device's link is short of it, so the row reads as it does on every client.
+//! JNI seam for the PyroWave quality row. Core prices the rate a quality needs and names the
+//! shortfall of this device's link; the messages word both, so the row reads as it does on every
+//! client.
 
 use jni::errors::LogErrorAndDefault;
 use jni::objects::{JIntArray, JObject, JString};
 use jni::sys::{jboolean, jint};
 use jni::EnvUnowned;
+use punktfunk_core::pyrowave::{
+    bpp_of_x100, kbps_for, link_shortfall, rate, LinkShortfall, Rate, BPP_DEFAULT,
+};
 use punktfunk_core::transport::LinkFacts;
+
+/// `kbps` as a player reads it: `940 Mbit/s`, `1.3 Gbit/s`.
+fn rate_text(kbps: u32) -> String {
+    match rate(kbps) {
+        Rate::Mbit(n) => pf_l10n::common::common_mbits(n),
+        Rate::Gbit(n) => pf_l10n::common::common_gbits(n),
+    }
+}
+
+/// What to tell a player whose quality needs `kbps` over `link`; empty when it fits.
+fn warning_text(kbps: u32, link: LinkFacts) -> String {
+    use pf_l10n::client as m;
+    match link_shortfall(kbps, link) {
+        None => String::new(),
+        Some(LinkShortfall::Wifi) => m::player_pyrowave_bpp_wifi_warning().into(),
+        Some(LinkShortfall::Port(mbps)) => m::player_pyrowave_bpp_port_warning(
+            rate_text(kbps),
+            rate_text(mbps.saturating_mul(1000)),
+        ),
+        Some(LinkShortfall::Gbe) => m::player_pyrowave_bpp_gbe_warning(rate_text(kbps)),
+    }
+}
 
 /// `"<rate>\n<warning>"`: what `bpp_x100` needs at the mode as a player reads it, then the
 /// warning for `link`, empty when the rate fits.
@@ -16,11 +42,9 @@ fn quality_lines(
     bpp_x100: u16,
     link: LinkFacts,
 ) -> String {
-    use punktfunk_core::pyrowave::{bpp_of_x100, kbps_for, link_warning, rate_label, BPP_DEFAULT};
     let bpp = bpp_of_x100(bpp_x100).unwrap_or(BPP_DEFAULT);
     let kbps = kbps_for(&mode, chroma_444, bit_depth, bpp);
-    let warning = link_warning(kbps, link).unwrap_or_default();
-    format!("{}\n{warning}", rate_label(kbps))
+    format!("{}\n{}", rate_text(kbps), warning_text(kbps, link))
 }
 
 /// `NativeBridge.nativeLocalLink(): IntArray`: `[kind, mbps]` of this device's link toward its
@@ -101,5 +125,22 @@ mod tests {
             quality_lines(mode, false, 8, 160, wifi),
             "1.6 Gbit/s\nPyroWave needs a wired link; this device is on Wi-Fi."
         );
+    }
+
+    /// Both lines come from messages: the pseudo-language brackets each of them.
+    #[test]
+    fn the_row_is_worded_from_messages() {
+        let mode = punktfunk_core::Mode {
+            width: 1920,
+            height: 1080,
+            refresh_hz: 60,
+        };
+        let wifi = LinkFacts {
+            kind: IFACE_KIND_WIFI,
+            mbps: 0,
+        };
+        let lines = pf_l10n::with_language("en-XA", || quality_lines(mode, false, 8, 160, wifi));
+        let (rate, warning) = lines.split_once('\n').unwrap();
+        assert!(rate.starts_with('[') && warning.starts_with('['), "{lines}");
     }
 }

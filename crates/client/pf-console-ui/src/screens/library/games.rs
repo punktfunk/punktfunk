@@ -599,14 +599,18 @@ impl LibraryScreen {
         match self.zone {
             Zone::Grid | Zone::Bar(_) | Zone::State => None,
             Zone::Chip(0) => Some(self.pill(ctx.hosts, ctx.profiles).0),
-            Zone::Chip(_) => Some("Customize".into()),
+            Zone::Chip(_) => Some(pf_l10n::client::lib_customize().into()),
             Zone::Band { band, item } => {
                 let (bands, _) = self.bands(ctx);
                 Some(match bands.get(band)?.items.get(item)? {
                     Item::Desktop(h) if h.running.is_empty() => {
-                        format!("{} \u{b7} Desktop", h.name)
+                        format!("{} \u{b7} {}", h.name, pf_l10n::client::lib_desktop())
                     }
-                    Item::Desktop(h) => format!("{} \u{b7} Resume {}", h.name, h.running),
+                    Item::Desktop(h) => format!(
+                        "{} \u{b7} {}",
+                        h.name,
+                        pf_l10n::client::lib_resume_title(&h.running)
+                    ),
                     Item::Game(i) => self.games[*i].title.clone(),
                     Item::Collection(c) => self.collections[*c].label.clone(),
                 })
@@ -627,20 +631,21 @@ impl LibraryScreen {
 
     /// The legend off the field; `None` on it.
     pub(super) fn zone_hints(&self, ctx: &Ctx) -> Option<Vec<Hint>> {
+        use pf_l10n::{client as m, common as c};
         let (bands, _) = self.bands(ctx);
         let ok = match self.zone {
             Zone::Grid => return None,
-            Zone::Bar(_) => "Select",
-            Zone::State => self.state_action()?,
-            Zone::Chip(0) => "Change",
-            Zone::Chip(_) => "Customize",
+            Zone::Bar(_) => c::common_select(),
+            Zone::State => self.state_action()?.label(),
+            Zone::Chip(0) => c::common_change(),
+            Zone::Chip(_) => m::lib_customize(),
             Zone::Band { band, item } => match bands.get(band)?.items.get(item)? {
-                Item::Desktop(h) if h.running.is_empty() => "Stream",
-                Item::Desktop(_) => "Resume",
-                Item::Game(i) if self.games[*i].running => "Resume",
-                Item::Game(i) if self.games[*i].launcher => "Open",
-                Item::Game(_) => "Play",
-                Item::Collection(_) => "Open",
+                Item::Desktop(h) if h.running.is_empty() => m::lib_desktop_action(),
+                Item::Desktop(_) => m::lib_resume(),
+                Item::Game(i) if self.games[*i].running => m::lib_resume(),
+                Item::Game(i) if self.games[*i].launcher => c::common_open(),
+                Item::Game(_) => c::common_play(),
+                Item::Collection(_) => c::common_open(),
             },
         };
         let mut hints = vec![Hint::new(HintKey::Confirm, ok)];
@@ -651,9 +656,12 @@ impl LibraryScreen {
             z => z == Zone::Chip(0),
         };
         if options {
-            hints.push(Hint::new(HintKey::Secondary, "Options"));
+            hints.push(Hint::new(
+                HintKey::Secondary,
+                pf_l10n::console::console_lib_options(),
+            ));
         }
-        hints.push(Hint::new(HintKey::Back, "Back"));
+        hints.push(Hint::new(HintKey::Back, c::common_back()));
         Some(hints)
     }
 
@@ -696,11 +704,12 @@ impl LibraryScreen {
         .id(chip_id(0))
         .focusable((h / 2.0) as f32)
         .place(place(0.0, pill_w));
-        let custom_w = button_w(fonts, "Customize", k);
+        let custom = pf_l10n::client::lib_customize();
+        let custom_w = button_w(fonts, custom, k);
         let mut x = pill_w + 10.0 * k;
         let customize = El::paint(move |canvas, r| {
             hits.borrow_mut().push((Zone::Chip(1), r));
-            button(canvas, ui, fonts, "Customize", r, k);
+            button(canvas, ui, fonts, custom, r, k);
         })
         .id(chip_id(1))
         .focusable((h / 2.0) as f32)
@@ -990,25 +999,35 @@ impl ScreenView for CustomizeScreen {
     }
 
     fn hints(&self, _ctx: &Ctx) -> Vec<Hint> {
+        use pf_l10n::console as m;
         if self.held {
             return vec![
-                Hint::new(HintKey::Confirm, "Set down"),
-                Hint::new(HintKey::Back, "Set down"),
+                Hint::new(HintKey::Confirm, m::console_lib_sections_set_down()),
+                Hint::new(HintKey::Back, m::console_lib_sections_set_down()),
             ];
         }
         vec![
-            Hint::new(HintKey::Confirm, "Move"),
-            Hint::new(HintKey::Adjust, "Hide / Show"),
-            Hint::new(HintKey::Back, "Done"),
+            Hint::new(HintKey::Confirm, m::console_lib_sections_move()),
+            Hint::new(HintKey::Adjust, m::console_lib_sections_toggle()),
+            Hint::new(HintKey::Back, pf_l10n::common::common_done()),
         ]
     }
 
+    /// A spoken list: the section, whether it shows, and whether it is held.
     fn announcement(&self, ctx: &Ctx) -> Option<String> {
+        use pf_l10n::console as m;
         let rows = crate::library::sections(&ctx.settings.library_sections);
         let (s, on) = rows.get(self.list.cursor)?;
-        let state = if *on { "shown" } else { "hidden" };
+        let state = match on {
+            true => m::console_lib_section_shown_a11y(),
+            false => m::console_lib_section_hidden_a11y(),
+        };
         Some(match self.held {
-            true => format!("{}, {state}, moving", s.label()),
+            true => format!(
+                "{}, {state}, {}",
+                s.label(),
+                m::console_lib_section_moving_a11y()
+            ),
             false => format!("{}, {state}", s.label()),
         })
     }
@@ -1037,11 +1056,11 @@ impl ScreenView for CustomizeScreen {
     }
 
     fn foot(&self, _ctx: &Ctx) -> Option<std::borrow::Cow<'static, str>> {
-        Some("The Games tab shows these in this order. An empty section stays hidden.".into())
+        Some(pf_l10n::console::console_lib_sections_foot().into())
     }
 
     fn title(&self) -> String {
-        "Customize".into()
+        pf_l10n::client::player_library_sections().into()
     }
 
     fn press(&mut self) {

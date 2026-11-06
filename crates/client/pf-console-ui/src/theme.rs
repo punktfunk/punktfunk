@@ -974,7 +974,7 @@ mod tests {
         let palettes: Vec<_> = (PALETTES.iter())
             .map(|p| {
                 json!({
-                    "id": p.id, "name": p.name, "light": p.light,
+                    "id": p.id, "name": (p.name)(), "light": p.light,
                     "stops": p.stops.map(|s| s.iter().map(|c| rgb(*c)).collect::<Vec<_>>()),
                     "ground": rgb(p.ground), "accent": rgb(p.accent),
                 })

@@ -27,12 +27,12 @@ public enum RenderScale {
         codec == "h264" ? 4096 : 8192
     }
 
-    /// A compact user-facing label for a multiplier: "Native (1×)", "1.5×", "2× · supersample".
+    /// A compact user-facing label for a multiplier: "Native", "1.5×", "2× (supersample)".
     /// Shared by every platform's picker so the wording stays identical.
     public static func label(_ scale: Double) -> String {
-        if scale == 1.0 { return "Native (1×)" }
-        let magnitude = String(format: "%g×", scale)
-        return scale > 1 ? "\(magnitude) · supersample" : magnitude
+        if scale == 1.0 { return String(localized: L10n.playerRenderScaleNative) }
+        if scale > 1 { return L10n.playerRenderScaleSupersample(scale: String(format: "%g", scale)) }
+        return String(format: "%g×", scale)
     }
 
     /// Clamp a raw stored multiplier into `range`, treating a missing/zero value as 1.0 (Native).

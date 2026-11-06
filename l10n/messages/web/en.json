@@ -72,7 +72,6 @@
 	"nav_more": "More",
 	"common_details": "Details",
 	"common_more_actions": "More actions",
-	"common_back": "Back",
 	"nav_plugins": "Plugins",
 	"plugin_offline_title": "This plugin isn't running",
 	"plugin_origin_untrusted_title": "Trust this plugin's port once",
@@ -94,10 +93,66 @@
 	"status_last_copied": "Copied",
 	"status_last_bitrate": "{mbit} Mbit/s",
 	"status_last_bitrate_avg": "{mbit} Mbit/s avg",
-	"status_last_steps": "{count} bitrate changes",
-	"status_last_audio_late": "{count} audio frames late",
-	"status_last_gyro": "{count} gyro stalls",
-	"status_last_dropped": "{count} frames lost",
+	"status_last_steps": [
+		{
+			"declarations": [
+				"input count",
+				"local n = count: plural"
+			],
+			"selectors": [
+				"n"
+			],
+			"match": {
+				"n=one": "{count} bitrate change",
+				"n=*": "{count} bitrate changes"
+			}
+		}
+	],
+	"status_last_audio_late": [
+		{
+			"declarations": [
+				"input count",
+				"local n = count: plural"
+			],
+			"selectors": [
+				"n"
+			],
+			"match": {
+				"n=one": "{count} audio frame late",
+				"n=*": "{count} audio frames late"
+			}
+		}
+	],
+	"status_last_gyro": [
+		{
+			"declarations": [
+				"input count",
+				"local n = count: plural"
+			],
+			"selectors": [
+				"n"
+			],
+			"match": {
+				"n=one": "{count} gyro stall",
+				"n=*": "{count} gyro stalls"
+			}
+		}
+	],
+	"status_last_dropped": [
+		{
+			"declarations": [
+				"input count",
+				"local n = count: plural"
+			],
+			"selectors": [
+				"n"
+			],
+			"match": {
+				"n=one": "{count} frame lost",
+				"n=*": "{count} frames lost"
+			}
+		}
+	],
 	"status_last_join": "shared another session's display",
 	"status_last_ended": "ended: {reason}",
 	"status_last_end_local": "the client stopped it",
@@ -182,10 +237,6 @@
 	"host_codecs": "Codecs",
 	"host_ports": "Ports",
 	"host_uniqueid": "Unique ID",
-	"host_power_sleep": "Sleep host",
-	"host_power_reboot": "Restart host",
-	"host_power_shutdown": "Shut down host",
-	"host_power_confirm_title": "{action}?",
 	"host_power_confirm_body": "Every active stream ends first. Confirm with your console password.",
 	"host_power_sent": "{action} — sent. The host is on its way down.",
 	"host_power_working": "Sending…",
@@ -263,7 +314,21 @@
 	"pairing_native_empty": "No devices paired yet.",
 	"pairing_native_unpair_confirm": "Unpair this device?",
 	"pairing_native_unpair_body": "It will need to pair again to connect.",
-	"pairing_native_unpair_all_confirm": "Unpair all {count} devices?",
+	"pairing_native_unpair_all_confirm": [
+		{
+			"declarations": [
+				"input count",
+				"local n = count: plural"
+			],
+			"selectors": [
+				"n"
+			],
+			"match": {
+				"n=one": "Unpair all {count} device?",
+				"n=*": "Unpair all {count} devices?"
+			}
+		}
+	],
 	"pairing_native_unpair_all_body": "Every paired device — punktfunk/2 and Moonlight alike — will need to pair again to connect, and anything streaming right now is disconnected.",
 	"pairing_knock_title": "A device wants to pair",
 	"pairing_knock_desc": "{name} is waiting for approval.",
@@ -367,7 +432,21 @@
 	"library_field_players": "Players",
 	"library_details_legend": "Details (optional)",
 	"library_owned_by": "via {provider}",
-	"library_provider_count": "{count} entries",
+	"library_provider_count": [
+		{
+			"declarations": [
+				"input count",
+				"local n = count: plural"
+			],
+			"selectors": [
+				"n"
+			],
+			"match": {
+				"n=one": "{count} entry",
+				"n=*": "{count} entries"
+			}
+		}
+	],
 	"library_launchers_title": "Launchers",
 	"library_empty_add_source": "Add a game source under Sources to see your installed games here.",
 	"library_add_source": "Add a source",
@@ -463,7 +542,22 @@
 	"library_provider_filter": "Show only these",
 	"library_provider_show_all": "Show all",
 	"library_provider_purge": "Remove this provider's entries",
-	"library_provider_purge_confirm": "Remove all {count} entries synced by “{provider}”?",
+	"library_provider_purge_confirm": [
+		{
+			"declarations": [
+				"input count",
+				"input provider",
+				"local n = count: plural"
+			],
+			"selectors": [
+				"n"
+			],
+			"match": {
+				"n=one": "Remove all {count} entry synced by “{provider}”?",
+				"n=*": "Remove all {count} entries synced by “{provider}”?"
+			}
+		}
+	],
 	"library_provider_purge_body": "This only removes them from the library.",
 	"library_provider_purged": "Removed the entries synced by “{provider}”.",
 	"library_provider_purge_failed": "Couldn't remove this provider's entries",
@@ -507,8 +601,21 @@
 	"library_entry_role_launcher": "Opens a launcher",
 	"library_entry_role_game": "A game",
 	"library_entry_role": "Role",
-	"library_entry_launched_once": "Launched once",
-	"library_entry_launches": "Launched {count} times",
+	"library_entry_launches": [
+		{
+			"declarations": [
+				"input count",
+				"local n = count: plural"
+			],
+			"selectors": [
+				"n"
+			],
+			"match": {
+				"n=one": "Launched once",
+				"n=*": "Launched {count} times"
+			}
+		}
+	],
 	"library_entry_play_time": "{time} played",
 	"library_entry_last_played": "last {ago}",
 	"library_entry_prep_title": "Prep commands",
@@ -567,12 +674,8 @@
 	"settings_language": "Language",
 	"common_loading": "Loading…",
 	"common_error": "Something went wrong.",
-	"common_retry": "Retry",
-	"common_cancel": "Cancel",
 	"common_confirm": "Confirm",
-	"common_save": "Save",
 	"common_discard": "Discard",
-	"common_remove": "Remove",
 	"common_unauthorized": "Session expired — redirecting to sign in…",
 	"login_title": "Sign in",
 	"login_subtitle": "Enter the management password to continue. Don't know what to do?",
@@ -595,7 +698,21 @@
 	"diag_loading": "Checking…",
 	"diag_all_ok": "Everything this host can check looks healthy.",
 	"diag_unavailable": "This host is older than the console and can't report health checks. Update the host to see them.",
-	"diag_show_inapplicable": "Show {count} that don't apply here",
+	"diag_show_inapplicable": [
+		{
+			"declarations": [
+				"input count",
+				"local n = count: plural"
+			],
+			"selectors": [
+				"n"
+			],
+			"match": {
+				"n=one": "Show {count} that doesn't apply here",
+				"n=*": "Show {count} that don't apply here"
+			}
+		}
+	],
 	"diag_hide_inapplicable": "Hide the ones that don't apply here",
 	"diag_impact_label": "What this breaks",
 	"diag_remedy_label": "How to fix it",
@@ -644,7 +761,21 @@
 	"logs_copy": "Copy logs to clipboard",
 	"logs_copied": "Logs copied to clipboard",
 	"logs_share_failed": "Couldn't share the logs",
-	"client_logs_manage": "Manage {count} uploaded bundles",
+	"client_logs_manage": [
+		{
+			"declarations": [
+				"input count",
+				"local n = count: plural"
+			],
+			"selectors": [
+				"n"
+			],
+			"match": {
+				"n=one": "Manage {count} uploaded bundle",
+				"n=*": "Manage {count} uploaded bundles"
+			}
+		}
+	],
 	"client_logs_col_received": "Received",
 	"client_logs_col_device": "Device",
 	"client_logs_col_size": "Size",
@@ -668,7 +799,21 @@
 	"stats_kind_gamestream": "GameStream",
 	"stats_kind_web": "Browser",
 	"stats_live_title": "Live",
-	"stats_live_window": "Showing the last {count} samples. The saved recording keeps everything.",
+	"stats_live_window": [
+		{
+			"declarations": [
+				"input count",
+				"local n = count: plural"
+			],
+			"selectors": [
+				"n"
+			],
+			"match": {
+				"n=one": "Showing the last {count} sample. The saved recording keeps everything.",
+				"n=*": "Showing the last {count} samples. The saved recording keeps everything."
+			}
+		}
+	],
 	"stats_live_waiting": "Armed — waiting for the first samples. Start a session to begin recording.",
 	"stats_latency_title": "Latency by stage",
 	"stats_latency_axis": "ms",
@@ -777,7 +922,21 @@
 	"store_uninstall_failed": "Couldn't start the removal",
 	"store_update_no_entry": "That plugin isn't in any catalog right now — refresh the sources and try again.",
 	"store_update_all_count": "Update all ({count})",
-	"store_updates_pending": "{count} plugins can be updated",
+	"store_updates_pending": [
+		{
+			"declarations": [
+				"input count",
+				"local n = count: plural"
+			],
+			"selectors": [
+				"n"
+			],
+			"match": {
+				"n=one": "{count} plugin can be updated",
+				"n=*": "{count} plugins can be updated"
+			}
+		}
+	],
 	"store_update_all_title": "Update these plugins?",
 	"store_update_all_body": "Each one is installed at its catalog version, one after another — the host takes a single package operation at a time. The plugin runner restarts after each.",
 	"store_update_all_external_note": "Some of these come from catalogs you added yourself ({sources}). unom has not reviewed that code; it is pinned and integrity-checked, but it will run on this host with the plugin runner's privileges.",
@@ -786,7 +945,21 @@
 	"store_update_all_skipped": "Not included: {names}. Either no catalog carries them, or this host can't run the version on offer.",
 	"store_update_all_step": "Update {index} of {total}",
 	"store_update_all_running": "Starting the next update",
-	"store_update_all_finished": "Updated {count} plugins.",
+	"store_update_all_finished": [
+		{
+			"declarations": [
+				"input count",
+				"local n = count: plural"
+			],
+			"selectors": [
+				"n"
+			],
+			"match": {
+				"n=one": "Updated {count} plugin.",
+				"n=*": "Updated {count} plugins."
+			}
+		}
+	],
 	"store_update_all_stopped": "Stopped after a failure — {done} updated, {left} not attempted. Retry them from the rows below.",
 	"store_sources_title": "Catalog sources",
 	"store_sources_help": "The built-in unom catalog is always present. Every other source is one you added.",
@@ -796,7 +969,21 @@
 	"store_source_signed": "Signed",
 	"store_source_unsigned": "Unsigned",
 	"store_source_stale": "Out of date",
-	"store_source_entries": "{count} plugins",
+	"store_source_entries": [
+		{
+			"declarations": [
+				"input count",
+				"local n = count: plural"
+			],
+			"selectors": [
+				"n"
+			],
+			"match": {
+				"n=one": "{count} plugin",
+				"n=*": "{count} plugins"
+			}
+		}
+	],
 	"store_source_fetched": "last fetched {when}",
 	"store_source_never": "never",
 	"store_source_remove": "Remove source",
@@ -863,8 +1050,36 @@
 	"games_detached_note": "Its stream ended, and the game is still running",
 	"games_untracked_note": "This title exposes nothing the host can recognize its process by, so quitting it won't end the session",
 	"games_closing_in": "Its client is gone — closing in {time} unless it comes back",
-	"games_end_all_waiting_confirm": "This game has no id the host can single out, so ending it now ends all {count} games nobody is streaming.",
-	"games_end_all_waiting_title": "End all {count} games nobody is streaming?",
+	"games_end_all_waiting_confirm": [
+		{
+			"declarations": [
+				"input count",
+				"local n = count: plural"
+			],
+			"selectors": [
+				"n"
+			],
+			"match": {
+				"n=one": "This game has no id the host can single out, so ending it now ends all {count} game nobody is streaming.",
+				"n=*": "This game has no id the host can single out, so ending it now ends all {count} games nobody is streaming."
+			}
+		}
+	],
+	"games_end_all_waiting_title": [
+		{
+			"declarations": [
+				"input count",
+				"local n = count: plural"
+			],
+			"selectors": [
+				"n"
+			],
+			"match": {
+				"n=one": "End all {count} game nobody is streaming?",
+				"n=*": "End all {count} games nobody is streaming?"
+			}
+		}
+	],
 	"action_stop_session_all_confirm": "The host has one stop, and it ends every live session — all {count} of them, not just this one.",
 	"action_stop_session_all_title": "Stop every live session?",
 	"action_stop_session_all": "Stop every session",
@@ -1029,9 +1244,6 @@
 	"display_stream_this": "Stream this monitor",
 	"display_stream_virtual": "Give each device its own screen",
 	"display_stream_this_hint": "A streamed monitor is what every device sees, instead of a screen of its own. Press again to undo.",
-	"common_done": "Done",
-	"common_on": "On",
-	"common_off": "Off",
 	"display_state_kept_for": "Kept {seconds} s",
 	"display_save": "Save",
 	"display_revert": "Discard changes",
@@ -1144,7 +1356,6 @@
 	"setting_audio_voice_chat_host": "On the host",
 	"setting_audio_voice_apps": "Voice chat apps",
 	"setting_audio_voice_apps_hint": "Apps added to the built-in voice chat list.",
-	"host_power_restart_service": "Restart Punktfunk",
 	"host_settings_restart_banner": "Restart Punktfunk to apply: {names}.",
 	"host_settings_restarting": "Restarting…",
 	"host_settings_restarted": "Punktfunk restarted. Every setting is in effect.",
@@ -1275,8 +1486,37 @@
 	"library_platform_option": "{platform} ({count})",
 	"library_view_grid": "Covers",
 	"library_view_rows": "List",
-	"library_count": "{count} games",
-	"library_count_shown": "{shown} of {count} games",
+	"library_count": [
+		{
+			"declarations": [
+				"input count",
+				"local n = count: plural"
+			],
+			"selectors": [
+				"n"
+			],
+			"match": {
+				"n=one": "{count} game",
+				"n=*": "{count} games"
+			}
+		}
+	],
+	"library_count_shown": [
+		{
+			"declarations": [
+				"input count",
+				"input shown",
+				"local n = count: plural"
+			],
+			"selectors": [
+				"n"
+			],
+			"match": {
+				"n=one": "{shown} of {count} game",
+				"n=*": "{shown} of {count} games"
+			}
+		}
+	],
 	"library_load_more": "Show more",
 	"library_no_matches": "No games match. Change the search or the filters.",
 	"library_tab_games": "Games",
@@ -1353,8 +1593,21 @@
 	"profiles_doctor_box": "This PC",
 	"profiles_doctor_seat": "Seat",
 	"profiles_doctor_again": "Check again",
-	"profiles_doctor_note": "Seats work. Doctor has 1 note.",
-	"profiles_doctor_notes": "Seats work. Doctor has {count} notes.",
+	"profiles_doctor_notes": [
+		{
+			"declarations": [
+				"input count",
+				"local n = count: plural"
+			],
+			"selectors": [
+				"n"
+			],
+			"match": {
+				"n=one": "Seats work. Doctor has {count} note.",
+				"n=*": "Seats work. Doctor has {count} notes."
+			}
+		}
+	],
 	"pairing_approve_profile": "Asks to play as {name}.",
 	"seat_whose_library": "Whose library",
 	"seat_whose_plugins": "Whose plugins",
@@ -1415,5 +1668,10 @@
 	"profiles_devices_sign_out_all_body": "Each one needs {account}'s password again to open this desktop.",
 	"profiles_devices_failed": "Couldn't sign out. Try again in a moment.",
 	"seat_own_unmanaged": "{name}'s desktop runs on their own account, so the console manages no plugins or emulators there.",
-	"seat_own_verified": "{name}'s desktop runs on their own account, so only Verified plugins install there."
+	"seat_own_verified": "{name}'s desktop runs on their own account, so only Verified plugins install there.",
+	"display_preset_default_hint": "Good for most setups. Reconnects resume quickly, the stream is the whole desktop, and extra viewers each get their own screen.",
+	"display_preset_gaming_rig_hint": "For a machine with no monitor that you only stream from. The game keeps running when you disconnect, and whoever connects next takes it over.",
+	"display_preset_hotdesk_hint": "One person at a time — roam between your own devices with an instant reconnect. Anyone else is told the box is busy.",
+	"display_preset_shared_desktop_hint": "For a PC you also use in person. Your real monitors are never blanked or left with a leftover display, and extra viewers each get their own screen.",
+	"display_preset_workstation_hint": "Your multi-monitor daily driver. Displays come back exactly where you arranged them, each client keeps its own settings, and the desktop is yours alone."
 }

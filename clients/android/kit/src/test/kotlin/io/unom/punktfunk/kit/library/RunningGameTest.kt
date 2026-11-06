@@ -1,5 +1,7 @@
 package io.unom.punktfunk.kit.library
 
+import io.unom.punktfunk.kit.R
+import io.unom.punktfunk.kit.say
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -30,6 +32,6 @@ class RunningGameTest {
         assertEquals(GameEnd.Unsupported, GameEnd.fromStatus(401))
         assertEquals(GameEnd.Unsupported, GameEnd.fromStatus(404))
         assertEquals(GameEnd.Expired, GameEnd.fromStatus(403))
-        assertEquals("Hades isn't running any more.", GameEnd.NotRunning.notice("Hades"))
+        assertEquals(say(R.string.lib_end_game_not_running, "Hades"), GameEnd.NotRunning.notice("Hades"))
     }
 }

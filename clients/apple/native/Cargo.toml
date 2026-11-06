@@ -27,12 +27,18 @@ pf-console-ui = { path = "../../../crates/client/pf-console-ui", default-feature
 pf-client-core = { path = "../../../crates/client/pf-client-core", default-features = false }
 # The unlock the console's password prompt hands to the app's dial.
 punktfunk-core = { path = "../../../crates/core/punktfunk-core" }
+# `punktfunk_console_set_languages`: the language for text read with no console.
+pf-l10n = { path = "../../../l10n" }
 skia-safe = { version = "0.153", features = ["metal", "ganesh", "textlayout"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # The shell logs through `tracing`; with no subscriber, its `log` feature forwards each event
 # to the `log` backend `punktfunk_set_log_callback` installs, which hands it to Swift.
 tracing = { version = "0.1", default-features = false, features = ["std", "log"] }
+
+# `en-XA`, the pseudo-language the tests read the palette names in.
+[target.'cfg(target_vendor = "apple")'.dev-dependencies]
+pf-l10n = { path = "../../../l10n", features = ["pseudo"] }
 
 [lints]
 workspace = true

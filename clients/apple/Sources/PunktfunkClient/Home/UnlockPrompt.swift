@@ -47,10 +47,8 @@ struct UnlockPromptView: View {
     @FocusState private var focused: Bool
     #endif
 
-    private var title: String { "Unlock \(ask.profileName)" }
-    private var note: String {
-        "The account password on \(ask.hostName). Punktfunk doesn't keep it."
-    }
+    private var title: String { L10n.unlockTitle(name: ask.profileName) }
+    private var note: String { L10n.unlockIntro(host: ask.hostName) }
 
     var body: some View {
         #if os(tvOS)
@@ -61,16 +59,17 @@ struct UnlockPromptView: View {
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
             TVFieldRow(
-                label: "Password", value: password.isEmpty ? "" : "••••••••",
-                placeholder: "Account password"
+                label: String(localized: L10n.unlockPassword),
+                value: password.isEmpty ? "" : "••••••••",
+                placeholder: String(localized: L10n.unlockPasswordPlaceholder)
             ) { entering = true }
             Toggle(ask.switchTitle, isOn: $switchOn)
             if let error = ask.error {
                 Text(error).font(.geist(22, relativeTo: .callout)).foregroundStyle(.red)
             }
             HStack(spacing: 32) {
-                Button("Cancel", role: .cancel) { dismiss() }
-                Button("Unlock", action: submit).disabled(password.isEmpty)
+                Button(L10n.commonCancel, role: .cancel) { dismiss() }
+                Button(L10n.unlockSignIn, action: submit).disabled(password.isEmpty)
             }
             .padding(.top, 12)
         }
@@ -78,7 +77,9 @@ struct UnlockPromptView: View {
         .padding(60)
         .onDisappear(perform: close)
         .fullScreenCover(isPresented: $entering) {
-            TVTextEntry(title: "Password for \(ask.profileName)", text: "", secure: true) {
+            TVTextEntry(
+                title: L10n.appleUnlockPasswordFor(name: ask.profileName), text: "", secure: true
+            ) {
                 if !$0.isEmpty { password = $0 }
                 entering = false
             }
@@ -87,7 +88,9 @@ struct UnlockPromptView: View {
         VStack(spacing: 0) {
             Form {
                 Section {
-                    SecureField("Password", text: $password, prompt: Text("Account password"))
+                    SecureField(
+                        String(localized: L10n.unlockPassword), text: $password,
+                        prompt: Text(L10n.unlockPasswordPlaceholder))
                         .textContentType(.password)
                         .focused($focused)
                         .onSubmit(submit)
@@ -111,10 +114,10 @@ struct UnlockPromptView: View {
             .font(.geist(12, relativeTo: .callout))
             .controlSize(.small)
             HStack {
-                Button("Cancel", role: .cancel) { dismiss() }
+                Button(L10n.commonCancel, role: .cancel) { dismiss() }
                     .keyboardShortcut(.cancelAction)
                 Spacer()
-                Button("Unlock", action: submit)
+                Button(L10n.unlockSignIn, action: submit)
                     .glassProminentButtonStyle()
                     .keyboardShortcut(.defaultAction)
                     .disabled(password.isEmpty)

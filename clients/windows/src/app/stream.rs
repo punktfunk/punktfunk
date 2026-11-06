@@ -4,6 +4,7 @@
 
 use super::style::{edges, hstack, icon_button, text, uniform, vstack};
 use pf_fluent::{Palette, Token};
+use pf_l10n::{common, desktop};
 use std::sync::Arc;
 use windows_reactor::*;
 
@@ -25,33 +26,34 @@ pub(crate) fn session_page(pal: &Palette, ctx: &Arc<super::AppCtx>, hud: &HudSam
     let host = ctx.shared.target.lock().unwrap().host.name.clone();
     let browse = ctx.shared.browse.load(std::sync::atomic::Ordering::SeqCst);
     let title = match (browse, host.is_empty()) {
-        (true, true) => "Console library".to_string(),
-        (true, false) => format!("Console library \u{00B7} {host}"),
-        (false, true) => "Streaming".to_string(),
-        (false, false) => format!("Streaming to {host}"),
+        (true, true) => desktop::desktop_stream_console_library().to_string(),
+        (true, false) => desktop::desktop_stream_console_library_host(&host),
+        (false, true) => desktop::desktop_stream_streaming().to_string(),
+        (false, false) => desktop::desktop_stream_streaming_to(&host),
     };
 
     // Header: monogram + title + the one thing worth knowing (where the video went).
-    let header: View = Grid::new().children((
-        // Monogram, as the comment above says: `Target` carries no OS chain to mark with.
-        avatar(pal, &host, "")
-            .grid_column(0)
-            .vertical_alignment(VerticalAlignment::Center),
-        vstack((
-            text(&title).font_size(18.0).font_weight(FontWeight::SEMI_BOLD),
-            text(
-                "The stream has its own window \u{2014} this one returns when the session ends.",
-            )
-            .font_size(12.0)
-            .foreground(pal.get(Token::SecondaryText)),
+    let header: View = Grid::new()
+        .children((
+            // Monogram, as the comment above says: `Target` carries no OS chain to mark with.
+            avatar(pal, &host, "")
+                .grid_column(0)
+                .vertical_alignment(VerticalAlignment::Center),
+            vstack((
+                text(&title)
+                    .font_size(18.0)
+                    .font_weight(FontWeight::SEMI_BOLD),
+                text(desktop::desktop_stream_own_window())
+                    .font_size(12.0)
+                    .foreground(pal.get(Token::SecondaryText)),
+            ))
+            .spacing(2.0)
+            .grid_column(1)
+            .vertical_alignment(VerticalAlignment::Center)
+            .margin(edges(12.0, 0.0, 0.0, 0.0)),
         ))
-        .spacing(2.0)
-        .grid_column(1)
-        .vertical_alignment(VerticalAlignment::Center)
-        .margin(edges(12.0, 0.0, 0.0, 0.0)),
-    ))
-    .columns([GridLength::Auto, GridLength::STAR])
-    .into();
+        .columns([GridLength::Auto, GridLength::STAR])
+        .into();
 
     // The child's latest window in the vocabulary the user picked: line one becomes a chip
     // row (the decode path gets the status colour), the rest dim lines.
@@ -63,9 +65,9 @@ pub(crate) fn session_page(pal: &Palette, ctx: &Arc<super::AppCtx>, hud: &HudSam
             // library between launches, so no stats there is simply normal: no line.
             if !browse {
                 let msg = if ctx.settings.lock().unwrap().show_stats {
-                    "Waiting for the first stats window\u{2026}"
+                    desktop::desktop_stream_stats_waiting().to_string()
                 } else {
-                    "Stats are off \u{2014} Ctrl+Alt+Shift+S in the stream window turns them on."
+                    desktop::desktop_stream_stats_off("Ctrl+Alt+Shift+S")
                 };
                 body.push(
                     text(msg)
@@ -81,9 +83,9 @@ pub(crate) fn session_page(pal: &Palette, ctx: &Arc<super::AppCtx>, hud: &HudSam
             let mut lines = format(snap, StatsVerbosity::Detailed, advanced).into_iter();
             if let Some(first) = lines.next() {
                 let chips: Vec<View> = first
-                    .text
-                    .split(" \u{00B7} ")
-                    .map(str::trim)
+                    .fields
+                    .iter()
+                    .map(|c| c.trim())
                     .filter(|c| !c.is_empty())
                     .map(|c| {
                         let kind = match c {
@@ -109,8 +111,14 @@ pub(crate) fn session_page(pal: &Palette, ctx: &Arc<super::AppCtx>, hud: &HudSam
 
     body.push(
         text(
-            "Ctrl+Alt+Shift+O quick actions \u{00B7} Ctrl+Alt+Shift+Q releases input \u{00B7} \
-             Ctrl+Alt+Shift+D disconnects \u{00B7} Ctrl+Alt+Shift+S stats \u{00B7} F11 fullscreen",
+            [
+                desktop::desktop_shortcut_quick_actions("Ctrl+Alt+Shift+O"),
+                desktop::desktop_shortcut_release_input("Ctrl+Alt+Shift+Q"),
+                desktop::desktop_capture_disconnect("Ctrl+Alt+Shift+D"),
+                desktop::desktop_capture_stats("Ctrl+Alt+Shift+S"),
+                desktop::desktop_shortcut_fullscreen("F11"),
+            ]
+            .join(" \u{00B7} "),
         )
         .font_size(11.0)
         .text_wrapping(TextWrapping::Wrap)
@@ -120,7 +128,7 @@ pub(crate) fn session_page(pal: &Palette, ctx: &Arc<super::AppCtx>, hud: &HudSam
     );
     body.push({
         let ctx = ctx.clone();
-        icon_button("x", "Disconnect")
+        icon_button("x", common::common_disconnect())
             .on_click(move || {
                 // Kill the child; its exit event (the reader thread) navigates to the
                 // host list, exactly like the session window closing.

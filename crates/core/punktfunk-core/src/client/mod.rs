@@ -53,10 +53,9 @@ pub use self::planes::AudioPacket;
 pub use self::probe::ProbeOutcome;
 pub use crate::reanchor::{FLUSH_COOLDOWN, NO_VIDEO_RETRY};
 
-pub use crate::audio::{
-    audio_mute_label, audio_mute_notice, mic_mute_label, mic_mute_notice, AUDIO_MUTE_HOST,
-    AUDIO_MUTE_LOCAL, LOCAL_MUTE_NOTICE,
-};
+#[cfg(feature = "l10n")]
+pub use crate::audio::{audio_mute_label, audio_mute_notice, mic_mute_label};
+pub use crate::audio::{mic_mute_notice, AUDIO_MUTE_HOST, AUDIO_MUTE_LOCAL, LOCAL_MUTE_NOTICE};
 
 /// Set or clear one bit of a mute mask. Read-modify-write on the atomic: the embedder and
 /// the control task own different bits and never wait on each other.
@@ -1300,8 +1299,8 @@ impl NativeClient {
     }
 
     /// Close the overlay window with everything the connector knows filled in: mode, codec,
-    /// colour, chroma asked and granted, audio format, counters, the link line and the
-    /// weak-network warning. The caller adds the decoder, display HDR and its own extras.
+    /// colour, chroma asked and granted, audio format, counters and, with `l10n`, the link line
+    /// and the weak-network warning. The caller adds the decoder, display HDR and its own extras.
     pub fn hud_snapshot(&self) -> crate::hud::StatsSnapshot {
         // Whole AUs the all-intra drain dropped before the decoder: it fell behind.
         let behind = self.shared.frames.take_skipped();
@@ -1326,6 +1325,15 @@ impl NativeClient {
         s.audio_rate_hz = a.rate_hz;
         s.audio_bits = a.bits;
         s.audio_channels = a.channels;
+        // The link's own lines, worded only where the overlay can be drawn.
+        #[cfg(any(test, feature = "l10n"))]
+        self.push_link_extras(&mut s);
+        s
+    }
+
+    /// The link line, and the quality floor while Automatic holds PyroWave at it.
+    #[cfg(any(test, feature = "l10n"))]
+    fn push_link_extras(&self, s: &mut crate::hud::StatsSnapshot) {
         s.extras.push(crate::hud::Extra {
             role: crate::hud::Role::Muted,
             ..crate::hud::Extra::detail(self.link_line())
@@ -1339,10 +1347,10 @@ impl NativeClient {
                 role: crate::hud::Role::Warn,
             });
         }
-        s
     }
 
     /// The link every frame is paced at and why, as the overlay shows it.
+    #[cfg(any(test, feature = "l10n"))]
     pub fn link_line(&self) -> String {
         let host = self.shared.host_link.lock().unwrap().facts();
         // The buffer is named while the socket drops packets and it is under what a 4K
@@ -2371,7 +2379,7 @@ mod client_caps_tests {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "l10n"))]
 mod mute_tests {
     use super::*;
 

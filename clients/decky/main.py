@@ -540,23 +540,43 @@ _CLI_ERRORS = {
 }
 
 
-def _cli_error(rc: int, stderr: str) -> str:
-    """One stable error code for a nonzero CLI exit.
-
-    The interesting case is a client too old for the verb we just used. That announces itself
-    DETERMINISTICALLY — exit 5 plus ``unknown command "<verb>"`` on stderr — rather than by the
-    guesswork the GTK headless modes needed, so the panel can say "update the client" with
-    confidence and offer the button that fixes it."""
+def _cli_error(rc: int) -> str:
+    """One stable error code for a nonzero CLI exit. Never reads the CLI's prose."""
     if rc == -1:
         return "client-unavailable"
-    if rc == 5 and "unknown command" in stderr:
-        return "client-outdated"
     return _CLI_ERRORS.get(rc, "client-error")
 
 
-async def _cli_json(args: list[str], timeout: float = 20.0) -> dict:
+def _stdout_json(out: str) -> dict:
+    """The JSON object a CLI verb printed under ``--json``; ``{}`` when stdout holds none, as
+    from a client too old for the flag."""
+    try:
+        data = json.loads(out)
+    except json.JSONDecodeError:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+_REJECT_TOKEN = re.compile(r"[a-z]+(-[a-z]+)*")
+
+
+def _reject_token(out: str) -> str | None:
+    """The host's refusal token (``not-armed``, ``denied``, …) in a failed ``pair --json``, for
+    the panel to word. None when the host sent none or the client predates the flag."""
+    token = _stdout_json(out).get("reject")
+    valid = isinstance(token, str) and len(token) <= 32 and _REJECT_TOKEN.fullmatch(token)
+    return token if valid else None
+
+
+async def _cli_json(
+    args: list[str], timeout: float = 20.0, outdated_rc: tuple[int, ...] = ()
+) -> dict:
     """Run the CLI and parse its stdout as JSON. ``{"ok": True, **payload}`` on success, else
-    ``{"ok": False, "error": <code>, "detail": <the CLI's last stderr line>}``.
+    ``{"ok": False, "error": <code>, "detail": <the CLI's last stderr line, for the log>}``.
+
+    ``client-outdated`` is a client too old for the verb. Its ``--json`` answer says
+    ``unknown-command``; ``outdated_rc`` lists the exits that mean the same from a client that
+    predates that answer, for a verb a current client never exits with.
 
     A zero exit with unparseable stdout is a failure, not an empty result: silently returning
     "no hosts" for a broken client is exactly the answer a user cannot debug."""
@@ -571,10 +591,39 @@ async def _cli_json(args: list[str], timeout: float = 20.0) -> dict:
         except json.JSONDecodeError:
             decky.logger.warning("cli %s: unparseable output: %s", args[0], out[:200])
         return {"ok": False, "error": "client-error", "detail": "unreadable output"}
-    code = _cli_error(rc, err)
+    code = _cli_error(rc)
+    if _stdout_json(out).get("error") == "unknown-command" or rc in outdated_rc:
+        code = "client-outdated"
     detail = (err.strip().splitlines() or [f"{args[0]} failed"])[-1]
     decky.logger.warning("cli %s failed (rc=%s, %s): %s", args[0], rc, code, detail)
     return {"ok": False, "error": code, "detail": detail}
+
+
+def _paired_fp(out: str) -> str:
+    """The fingerprint a successful ``pair`` printed: the ``--json`` object's, else the
+    ``fp=`` token of the plain line a client older than the flag prints."""
+    fp = _stdout_json(out).get("fp")
+    if isinstance(fp, str):
+        return fp
+    for token in out.split():
+        if token.startswith("fp="):
+            return token[3:]
+    return ""
+
+
+def _pair_failure(rc: int, out: str, err: str, fallback: str) -> dict:
+    """A failed ``pair`` as the panel gets it: the exit-code error (``unreachable`` when the
+    ``--json`` answer says the host never replied, which exit 3 alone cannot), the host's
+    ``reject`` token when it sent one, and the CLI's last stderr line (``fallback`` when none)
+    for the log."""
+    detail = (err.strip().splitlines() or [fallback])[-1]
+    decky.logger.warning("pair failed (rc=%s): %s", rc, detail)
+    silent = _stdout_json(out).get("kind") in ("timeout", "unreachable")
+    failure = {"ok": False, "error": "unreachable" if silent else _cli_error(rc), "detail": detail}
+    token = _reject_token(out)
+    if token:
+        failure["reject"] = token
+    return failure
 
 
 def _client_is_flatpak() -> bool:
@@ -626,11 +675,12 @@ async def _exec(
     *,
     stdin_text: str | None = None,
     merge_stderr: bool = False,
+    env_extra: dict[str, str] | None = None,
 ) -> tuple[int, str, str]:
     """Run ``argv`` with the user-session env, returning ``(returncode, stdout, stderr)`` decoded.
     ``(-1, "", "")`` when ``argv`` is empty (nothing installed) or the call errors or times out.
-    ``merge_stderr`` folds stderr into stdout. A timed-out child is killed and reaped, so its
-    pipes close with it rather than at garbage collection."""
+    ``merge_stderr`` folds stderr into stdout, ``env_extra`` adds to the environment. A timed-out
+    child is killed and reaped, so its pipes close with it rather than at garbage collection."""
     if not argv:
         return -1, "", ""
     proc = None
@@ -640,7 +690,7 @@ async def _exec(
             stdin=asyncio.subprocess.PIPE if stdin_text is not None else None,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT if merge_stderr else asyncio.subprocess.PIPE,
-            env=_flatpak_env(),
+            env={**_flatpak_env(), **(env_extra or {})},
         )
         payload = stdin_text.encode() if stdin_text is not None else None
         out, err = await asyncio.wait_for(proc.communicate(payload), timeout=timeout)
@@ -664,18 +714,30 @@ async def _exec(
         return -1, "", ""
 
 
+# Output this file reads by its English words (``flatpak info`` labels, a GTK client's startup
+# error) is requested in the C locale, so the user's language cannot change what it finds.
+_C_LOCALE = {"LC_ALL": "C"}
+
+
 async def _flatpak_capture(args: list[str], timeout: float = 20.0) -> tuple[int, str]:
-    """Run ``flatpak <args>`` with the user-session env, merging stderr into stdout. Returns
-    ``(returncode, output)``; ``(-1, "")`` if the binary is missing or the call errors/times out.
-    Best-effort by design — every caller here treats a failure as "no update / can't tell"."""
+    """Run ``flatpak <args>`` with the user-session env and the C locale, merging stderr into
+    stdout. Returns ``(returncode, output)``; ``(-1, "")`` if the binary is missing or the call
+    errors/times out. Best-effort by design — every caller here treats a failure as "no update /
+    can't tell"."""
     flatpak = _flatpak()
     rc, out, _ = await _exec(
-        flatpak and [flatpak, *args], f"flatpak {' '.join(args)}", timeout, merge_stderr=True
+        flatpak and [flatpak, *args],
+        f"flatpak {' '.join(args)}",
+        timeout,
+        merge_stderr=True,
+        env_extra=_C_LOCALE,
     )
     return rc, out
 
 
-async def _run_client(client_args: list[str], timeout: float = 20.0) -> tuple[int, str, str]:
+async def _run_client(
+    client_args: list[str], timeout: float = 20.0, env_extra: dict[str, str] | None = None
+) -> tuple[int, str, str]:
     """Run the CLIENT headlessly with the user-session env, returning ``(returncode, stdout,
     stderr)`` with SEPARATE pipes so a JSON payload on stdout stays clean of the client's log
     lines on stderr. ``(-1, "", "")`` when no client is installed or the call errors/times out.
@@ -687,7 +749,10 @@ async def _run_client(client_args: list[str], timeout: float = 20.0) -> tuple[in
     duplicated."""
     prefix = _client_argv()
     return await _exec(
-        prefix and [*prefix, *client_args], f"client {' '.join(client_args)}", timeout
+        prefix and [*prefix, *client_args],
+        f"client {' '.join(client_args)}",
+        timeout,
+        env_extra=env_extra,
     )
 
 
@@ -707,9 +772,9 @@ def _looks_outdated(stderr: str) -> bool:
     handed? Such a client ignores the unknown flag and falls through to GTK init, which fails
     with no display — so the give-away is display/GTK noise rather than anything about the flag.
 
-    Narrow on purpose: the CLI announces the same condition deterministically (exit 5 plus
-    ``unknown command``, see :func:`_cli_error`), and this heuristic is only still here because
-    the update check drives the GTK client's ``--check-update``, not the CLI."""
+    Narrow on purpose, and read from a child run in the C locale (:data:`_C_LOCALE`): the CLI
+    says the same thing with ``unknown-command`` in its ``--json`` answer, and this guess is
+    only still here because the update check drives the GTK client's ``--check-update``."""
     s = stderr.lower()
     return "display" in s or "gtk" in s
 
@@ -782,7 +847,9 @@ async def _native_update_state() -> dict:
     own status dict, or ``{}`` when it couldn't be asked (no native client, a client too old to
     have the mode, offline). Best-effort by design: an unanswerable check must read as "can't
     tell", never as "up to date"."""
-    rc, out, err = await _run_client(["--check-update", "--json"], timeout=30.0)
+    rc, out, err = await _run_client(
+        ["--check-update", "--json"], timeout=30.0, env_extra=_C_LOCALE
+    )
     # The JSON is authoritative whenever there IS JSON, whatever the exit code: the client
     # exits 0 up-to-date, 10 update-available, and 1 when the check failed — but in that last
     # case it STILL prints a status carrying `error` plus the install kind and the command for
@@ -832,8 +899,9 @@ class Plugin:
         ``{ok: False, error}`` — ``client-outdated`` when the installed client predates the
         verb, which the panel renders as one explanatory row plus the update button.
 
-        The 12 s budget covers a cold flatpak start on top of the CLI's own 3 s browse."""
-        return await _cli_json(["discover", "--json"], timeout=12.0)
+        The 12 s budget covers a cold flatpak start on top of the CLI's own 3 s browse. A client
+        that has the verb never exits 5 from it, so 5 means ``client-outdated``."""
+        return await _cli_json(["discover", "--json"], timeout=12.0, outdated_rc=(5,))
 
     async def hosts(self) -> dict:
         """The saved hosts with a live reachability probe
@@ -851,8 +919,9 @@ class Plugin:
 
         The operator arms pairing on the host, which shows a 4-digit PIN; entering it here
         verifies the host end to end and pins its fingerprint, so every later connect is silent.
-        ``{ok: True}``, or ``{ok: False, error}`` where ``refused`` is a wrong PIN or a host
-        that isn't armed, and ``unreachable`` is a host that never answered.
+        ``{ok: True, fp}``, or ``{ok: False, error, reject?}`` where ``refused`` is a wrong PIN
+        or a host that turned the device away (``reject`` is the host's token for why), and
+        ``unreachable`` is a host that never answered.
 
         The PIN goes down the child's STDIN (``--pin -``), never on argv: it is the only secret
         binding the ceremony to the operator's intent, and a value on the command line is readable
@@ -865,20 +934,15 @@ class Plugin:
                 "pair", f"{addr}:{int(port)}",
                 "--pin", "-",
                 "--name", name,
+                "--json",
             ],
             timeout=100.0,
             stdin_text=f"{str(pin).strip()}\n",
         )
         if rc == 0:
-            fp = ""
-            for token in out.split():
-                if token.startswith("fp="):
-                    fp = token[3:]
             decky.logger.info("paired %s:%s", addr, port)
-            return {"ok": True, "fp": fp}
-        detail = (err.strip().splitlines() or ["pairing failed"])[-1]
-        decky.logger.warning("pairing failed (rc=%s): %s", rc, detail)
-        return {"ok": False, "error": _cli_error(rc, err), "detail": detail}
+            return {"ok": True, "fp": _paired_fp(out)}
+        return _pair_failure(rc, out, err, "pairing failed")
 
     async def request_access(
         self, addr: str, port: int, name: str = "Steam Deck", fp: str = ""
@@ -888,27 +952,23 @@ class Plugin:
         Waits up to ~185 s for the host's operator to approve this Deck, pinned to ``fp``, the
         fingerprint the host advertised and ``trust_host`` saved. Without it the CLI takes the
         newest record at the address, which at a dual-boot box can be the other OS. Never
-        streams. Same result shape as ``pair``; on failure ``detail`` is the CLI's sentence for
-        the user. A client too old for the flag asks for a PIN instead, which comes back
-        ``client-outdated``."""
+        streams. Same result shape as ``pair``, plus ``bad-fingerprint`` for an ``fp`` that is not
+        64 hex digits. A client too old for the flag asks for a PIN instead, and exits 6, which a
+        current one never does on this path: ``client-outdated``."""
         fp = str(fp).strip()
         if fp and not re.fullmatch(r"[0-9a-fA-F]{64}", fp):
-            return {"ok": False, "error": "unresolved", "detail": "bad host fingerprint"}
-        args = ["pair", f"{addr}:{int(port)}", "--request-access", "--name", name]
+            return {"ok": False, "error": "bad-fingerprint", "detail": "bad host fingerprint"}
+        args = ["pair", f"{addr}:{int(port)}", "--request-access", "--name", name, "--json"]
         if fp:
             args += ["--fp", fp]
         rc, out, err = await _run_cli(args, timeout=200.0)
         if rc == 0:
-            fp = ""
-            for token in out.split():
-                if token.startswith("fp="):
-                    fp = token[3:]
             decky.logger.info("access granted by %s:%s", addr, port)
-            return {"ok": True, "fp": fp}
-        detail = (err.strip().splitlines() or ["the request failed"])[-1]
-        decky.logger.warning("request access failed (rc=%s): %s", rc, detail)
-        error = "client-outdated" if rc == 6 and "--pin" in err else _cli_error(rc, err)
-        return {"ok": False, "error": error, "detail": detail}
+            return {"ok": True, "fp": _paired_fp(out)}
+        failure = _pair_failure(rc, out, err, "the request failed")
+        if rc == 6:
+            failure["error"] = "client-outdated"
+        return failure
 
     async def trust_host(self, addr: str, port: int, fp: str, name: str = "") -> dict:
         """Step 1 of request access: save the host with the fingerprint it ADVERTISED
@@ -931,7 +991,7 @@ class Plugin:
             return {"ok": True}
         detail = (err.strip().splitlines() or ["saving the host failed"])[-1]
         decky.logger.warning("trust_host failed (rc=%s): %s", rc, detail)
-        return {"ok": False, "error": _cli_error(rc, err), "detail": detail}
+        return {"ok": False, "error": _cli_error(rc), "detail": detail}
 
     async def library(self, ref: str) -> dict:
         """The host's game library (``punktfunk library <host-ref> --json``).
@@ -1154,10 +1214,11 @@ class Plugin:
         ``{ok: True, notice}`` once the game is gone — ended now, or not running any more (exit
         5). Anything else is ``{ok: False, error: <exit code>, notice}``: the CLI's own sentence,
         which says what to do. Both references are positional or flag values, so one that starts
-        with ``-`` is refused here rather than handed to the CLI as a flag."""
+        with ``-`` is refused here as ``{ok: False, error: "unresolved"}``, with no notice, rather
+        than handed to the CLI as a flag."""
         ref, game_id = str(ref).strip(), str(game_id).strip()
         if not ref or ref.startswith("-") or not game_id or game_id.startswith("-"):
-            return {"ok": False, "error": "unresolved", "notice": "Couldn't tell which game to end."}
+            return {"ok": False, "error": "unresolved"}
         rc, out, err = await _run_cli(["end-game", ref, "--game", game_id], timeout=20.0)
         lines = (out.strip() or err.strip()).splitlines()
         notice = lines[-1] if lines else ""

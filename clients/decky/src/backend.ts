@@ -69,12 +69,16 @@ export interface SavedHost {
  * Every backend call answers in this shape. `error` is a stable code, never prose:
  *
  * - `client-unavailable` — no client is installed, or the call never ran
- * - `client-outdated`    — the installed client predates the verb (exit 5 + `unknown command`)
+ * - `client-outdated`    — the installed client predates the verb (its `--json` answer says
+ *                          `unknown-command`, or `discover` exits 5)
  * - `unreachable`        — the host did not answer
  * - `refused`            — trust rejected: a wrong PIN, or a fingerprint that already differs
  * - `needs-pairing`      — the CLI refused because it needs a person
  * - `unresolved`         — nothing matched what was named
- * - `client-error`       — anything else; `detail` carries the CLI's own last line
+ * - `bad-fingerprint`    — request access was handed a fingerprint that is not 64 hex digits
+ * - `client-error`       — anything else
+ *
+ * `detail` is the CLI's own last line, English: for the log, never for the screen.
  */
 export interface CliResult {
   ok: boolean;
@@ -92,6 +96,8 @@ export interface HostsResult extends CliResult {
 
 export interface PairResult extends CliResult {
   fp?: string;
+  /** The host's token for why it turned this device away (`not-armed`, `denied`, …). */
+  reject?: string;
 }
 
 /**

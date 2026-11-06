@@ -3,6 +3,7 @@
 // and names what is missing in one sentence the caller can show.
 
 import Foundation
+import PunktfunkShared
 import Security
 
 private let log = ClientLog(category: "mgmt")
@@ -69,11 +70,11 @@ public enum MgmtTargetMissing: Error, Equatable, Sendable {
     public var sentence: String {
         switch self {
         case .identity:
-            return "This device has no identity yet. Connect to a host once to create it."
+            return String(localized: L10n.appleTrustNoIdentity)
         case .pairing(let name):
-            return "This device isn't paired with \(name). Pair with it first."
+            return L10n.appleTrustNotPairedWith(host: name)
         case .keychain:
-            return "Couldn't read this device's identity from the Keychain. Try again."
+            return String(localized: L10n.appleTrustKeychainReadFailed)
         }
     }
 }

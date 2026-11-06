@@ -198,7 +198,7 @@ struct StreamScene: View {
                             x: placement == .topLeading ? CGFloat.greatestFiniteMagnitude : 30, y: 30))
                     } label: { touchDisc("ellipsis.circle") }
                         .buttonStyle(.plain)
-                        .accessibilityLabel("Quick actions")
+                        .accessibilityLabel(L10n.appleQuickActionsA11y)
                     // Off and compact carry no HUD mute button, so this disc is a touch-only
                     // user's only way to mute. Absent, not greyed, with no mic.
                     if model.micAvailable {
@@ -207,7 +207,7 @@ struct StreamScene: View {
                         }
                         .buttonStyle(.plain)
                         .accessibilityLabel(
-                            model.micMuted ? "Unmute microphone" : "Mute microphone")
+                            model.micMuted ? L10n.appleUnmuteMicrophone : L10n.appleMuteMicrophone)
                     }
                 }
                 .padding(12)

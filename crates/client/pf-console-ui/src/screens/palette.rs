@@ -123,20 +123,24 @@ impl ScreenView for PaletteScreen {
     }
 
     fn announcement(&self, ctx: &Ctx) -> Option<String> {
+        use pf_l10n::console as m;
         let p = &PALETTES[self.cursor];
-        let tone = if p.light { "light" } else { "dark" };
-        let state = if ctx.settings.ui_palette == p.id {
-            ", selected"
+        let tone = if p.light {
+            m::console_palette_tone_light()
         } else {
-            ""
+            m::console_palette_tone_dark()
         };
-        Some(format!("{}, {tone}{state}", p.name))
+        let mut said = vec![(p.name)(), tone];
+        if ctx.settings.ui_palette == p.id {
+            said.push(m::console_palette_selected());
+        }
+        Some(said.join(", "))
     }
 
     fn hints(&self, _ctx: &Ctx) -> Vec<Hint> {
         vec![
-            Hint::new(HintKey::Confirm, "Select"),
-            Hint::new(HintKey::Back, "Done"),
+            Hint::new(HintKey::Confirm, pf_l10n::common::common_select()),
+            Hint::new(HintKey::Back, pf_l10n::common::common_done()),
         ]
     }
 
@@ -230,7 +234,7 @@ impl ScreenView for PaletteScreen {
     }
 
     fn title(&self) -> String {
-        "Background".into()
+        pf_l10n::console::console_palette_title().into()
     }
 }
 
@@ -277,7 +281,7 @@ fn draw_card(canvas: &Canvas, fonts: &Fonts, p: &Palette, rect: Rect, chosen: bo
     let pad = 16.0 * k;
     fonts.draw_clipped(
         canvas,
-        p.name,
+        (p.name)(),
         f64::from(rect.left) + pad,
         f64::from(rect.bottom) - pad,
         W::Bold,

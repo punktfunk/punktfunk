@@ -47,12 +47,11 @@ struct TVQuickActionsEditor: View {
                 }
                 shortcutsSection
                 Section {
-                    Button("Reset to Default", role: .destructive, action: reset)
+                    Button(L10n.ringReset, role: .destructive, action: reset)
                 } footer: {
                     Text(overridden
-                        ? "This preset has its own quick actions; the default dial no longer reaches it."
-                        : "A short press of Back opens the dial mid-stream, and so does Select + A on a "
-                            + "controller.")
+                        ? String(localized: L10n.ringEditorPresetOwns)
+                        : L10n.appleTvRingFooter(remote: "Back", pad: "Select + A"))
                 }
             }
         }
@@ -82,7 +81,7 @@ struct TVQuickActionsEditor: View {
                 disc(k)
                     .position(position(k))
             }
-            Text(focused.map(label) ?? "Quick Actions")
+            Text(focused.map(label) ?? String(localized: L10n.ringEditorTitle))
                 .font(.geist(22, .medium, relativeTo: .caption))
                 .multilineTextAlignment(.center)
                 .frame(width: 220)
@@ -112,12 +111,12 @@ struct TVQuickActionsEditor: View {
         .buttonStyle(DiscButtonStyle())
         .focused($focused, equals: k)
         .contextMenu {
-            Button("Move", systemImage: "arrow.left.arrow.right") { moving = k }
+            Button(L10n.appleTvRingMove, systemImage: "arrow.left.arrow.right") { moving = k }
             if s != nil {
-                Button("Clear", systemImage: "xmark.circle", role: .destructive) { set(k, "") }
+                Button(L10n.appleTvRingClear, systemImage: "xmark.circle", role: .destructive) { set(k, "") }
             }
         }
-        .accessibilityLabel(s?.label ?? "Empty slot")
+        .accessibilityLabel(s?.label ?? String(localized: L10n.ringSlotEmpty))
     }
 
     private var shortcutsSection: some View {
@@ -136,31 +135,31 @@ struct TVQuickActionsEditor: View {
             Button {
                 shortcut = ShortcutDraft(id: cfg.nextShortcutID, label: "", keys: [], isNew: true)
             } label: {
-                Label("Add Shortcut", systemImage: "plus")
+                Label(L10n.ringShortcutAdd, systemImage: "plus")
             }
         } header: {
-            Text("Shortcuts")
+            Text(L10n.ringEditorShortcuts)
         } footer: {
-            Text("A new shortcut takes the first empty slot.")
+            Text(L10n.ringEditorShortcutsHint)
         }
     }
 
     private func label(_ k: Int) -> String {
-        cfg.ring[k].map { spec($0, cfg, previewRingActions).label } ?? "Empty slot"
+        cfg.ring[k].map { spec($0, cfg, previewRingActions).label } ?? String(localized: L10n.ringSlotEmpty)
     }
 
     private var detailTitle: String {
-        if let moving { return "Moving \(label(moving))" }
-        return focused.map(label) ?? "Quick Actions"
+        if let moving { return label(moving) }
+        return focused.map(label) ?? String(localized: L10n.ringEditorTitle)
     }
 
     private var detailNote: String {
-        if moving != nil { return "Select another button to swap the two. Back puts it down." }
+        if moving != nil { return L10n.appleTvRingMovingHint(back: "Back") }
         guard let k = focused, let slot = cfg.ring[k] else {
-            return "Select a button to choose its action; hold it to move or clear it."
+            return String(localized: L10n.appleTvRingPickHint)
         }
         let s = spec(slot, cfg, previewRingActions)
-        return s.enabled ? "Select to change it; hold to move or clear it." : s.reason
+        return s.enabled ? String(localized: L10n.appleTvRingSlotHint) : s.reason
     }
 
     private func set(_ k: Int, _ id: String) {
@@ -235,10 +234,10 @@ private struct TVSlotPicker: View {
 
     var body: some View {
         List {
-            TVScreenTitle("Slot Action")
+            TVScreenTitle(String(localized: L10n.ringPickerTitle))
                 .listRowBackground(Color.clear)
             ForEach(groups) { group in
-                Section(group.id) {
+                Section(group.title) {
                     ForEach(group.options) { option in
                         Button {
                             choose(option.id)
@@ -278,19 +277,20 @@ private struct TVShortcutEditor: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 28) {
-                TVScreenTitle(draft.isNew ? "New Shortcut" : "Shortcut")
+                TVScreenTitle(String(localized: draft.isNew ? L10n.ringShortcutNewTitle : L10n.ringShortcutTitle))
                 TVFieldRow(
-                    label: "Name", value: draft.label,
-                    placeholder: key == nil ? "Optional" : chordChip(draft.keys)
+                    label: String(localized: L10n.ringShortcutName), value: draft.label,
+                    placeholder: key == nil ? String(localized: L10n.ringShortcutNamePlaceholder)
+                        : chordChip(draft.keys)
                 ) { editingName = true }
-                heading("Hold")
+                heading(String(localized: L10n.ringShortcutModifiers))
                 HStack(spacing: 24) {
                     ForEach(modifierKeys, id: \.self) { m in
                         chip(keyLegend(m), on: mods.contains(m)) { toggle(m) }
                     }
                 }
                 .focusSection()
-                ForEach(keyGroups, id: \.title) { group in
+                ForEach(keyGroups, id: \.id) { group in
                     heading(group.title)
                     let wide = group.keys.contains { keyLegend($0).count > 2 }
                     LazyVGrid(
@@ -304,25 +304,25 @@ private struct TVShortcutEditor: View {
                     .focusSection()
                 }
                 HStack(spacing: 32) {
-                    Button(draft.isNew ? "Add" : "Save") {
+                    Button(draft.isNew ? L10n.commonAdd : L10n.commonSave) {
                         save(draft)
                         dismiss()
                     }
                     .disabled(key == nil)
                     if !draft.isNew {
-                        Button("Remove Shortcut", role: .destructive) {
+                        Button(L10n.ringShortcutRemove, role: .destructive) {
                             delete()
                             dismiss()
                         }
                     }
-                    Button("Cancel", role: .cancel) { dismiss() }
+                    Button(L10n.commonCancel, role: .cancel) { dismiss() }
                 }
                 .padding(.top, 12)
             }
             .padding(60)
         }
         .fullScreenCover(isPresented: $editingName) {
-            TVTextEntry(title: "Name", text: draft.label) { typed in
+            TVTextEntry(title: String(localized: L10n.ringShortcutName), text: draft.label) { typed in
                 draft.label = typed
                 editingName = false
             }

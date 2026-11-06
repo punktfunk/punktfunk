@@ -59,7 +59,9 @@ on:
       - 'clients/session/**'
       - 'clients/shared/**'
       - 'clients/cli/**'
+      - 'l10n/**'
       - 'web/**'
+      - 'l10n/messages/**'
       - 'sdk/**'
       - 'api/openapi.json'
       - 'packaging/rpm/**'
@@ -245,7 +247,7 @@ jobs:
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: web/.output
-          key: web-console-linux-bun${{ env.bunver }}-${{ hashFiles('web/**', 'sdk/**') }}
+          key: web-console-linux-bun${{ env.bunver }}-${{ hashFiles('web/**', 'sdk/**', 'l10n/messages/**') }}
 
       - name: Build the web console (cache miss only)
         if: steps.webconsole.outputs.cache-hit != 'true'

@@ -1,0 +1,6 @@
+crates/client/pf-console-ui/src/screens/licenses.rs	Apache License 2.0
+crates/client/pf-console-ui/src/screens/settings/rows.rs	Alt+Tab, Super, …
+crates/client/pf-console-ui/src/screens/settings/rows.rs	Steam Controller 2
+crates/client/pf-console-ui/src/screens/settings/rows.rs	Vulkan Video
+crates/client/pf-console-ui/src/screens/settings/rows.rs	Vulkan Video
+crates/client/pf-console-ui/src/shell.rs	ABCDEFGHIJKLM NOPQRSTUVWXYZ abcdefghijklm nopqrstuvwxyz 0123456789 :'-.,!?&()/+ ®™©éèêëáàâäóòôöúùûüíìîïçñß ÉÀÖÜ–—’“”…

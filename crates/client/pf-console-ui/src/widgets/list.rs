@@ -42,6 +42,9 @@ pub struct RowSpec {
     /// Header above this row; only the first row of a group carries it.
     pub header: Option<&'static str>,
     pub label: String,
+    /// What finds the row's state again next frame as rows come and go: a setting's id, never
+    /// its words. `None` falls back to the label.
+    pub id: Option<String>,
     /// `None` = action row: the label alone, where every row's label starts.
     pub value: Option<String>,
     /// Dim the value as a placeholder when the field is empty.
@@ -77,6 +80,7 @@ impl Default for RowSpec {
         RowSpec {
             header: None,
             label: String::new(),
+            id: None,
             value: None,
             value_dim: false,
             caret: false,
@@ -122,7 +126,14 @@ impl RowSpec {
     pub fn toggle(label: impl Into<String>, on: bool) -> RowSpec {
         RowSpec {
             label: label.into(),
-            value: Some(if on { "On" } else { "Off" }.into()),
+            value: Some(
+                if on {
+                    pf_l10n::common::common_on()
+                } else {
+                    pf_l10n::common::common_off()
+                }
+                .into(),
+            ),
             control: Control::Toggle(on),
             ..RowSpec::default()
         }
@@ -569,10 +580,10 @@ fn soft_edges(
 }
 
 struct SlipPrev {
-    /// Index and label both: the screen rebuilds rows every frame, so an index
+    /// Index and [`row_name`] both: the screen rebuilds rows every frame, so an index
     /// alone would slide this text onto whichever row inherited it.
     row: usize,
-    label: String,
+    name: String,
     text: String,
     /// Offset from the incoming value (∓[`SLIP_DP`]). Relative so a reverse
     /// through zero on a held repeat still travels the right way.
@@ -596,8 +607,13 @@ struct RowState {
     knob: f64,
 }
 
-/// A row across frames: its label, and how many rows above it carry the same label.
+/// A row across frames: its [`row_name`], and how many rows above it carry the same name.
 type RowKey = (String, usize);
+
+/// The row's [`RowSpec::id`], or its label when it has none.
+fn row_name(row: &RowSpec) -> &str {
+    row.id.as_deref().unwrap_or(&row.label)
+}
 
 /// Where a row's switch rests: on or off, and nowhere for a row without one.
 fn knob_rest(row: &RowSpec) -> f64 {
@@ -942,7 +958,7 @@ impl MenuList {
                 } else {
                     Some(SlipPrev {
                         row: self.cursor,
-                        label: row.label.clone(),
+                        name: row_name(row).to_string(),
                         text: prev,
                         offset: -SLIP_DP * f64::from(dir),
                         arm: self.slip.pos,
@@ -969,7 +985,7 @@ impl MenuList {
     /// [`RowKey`], and a new row starts unfocused with its switch at rest.
     fn carry(&mut self, rows: &[RowSpec]) {
         let same = self.state.len() == rows.len()
-            && (self.state.iter().zip(rows)).all(|((key, _), row)| key.0 == row.label);
+            && (self.state.iter().zip(rows)).all(|((key, _), row)| key.0 == row_name(row));
         if same {
             return;
         }
@@ -977,8 +993,9 @@ impl MenuList {
             std::mem::take(&mut self.state).into_iter().collect();
         self.state = (rows.iter().enumerate())
             .map(|(i, row)| {
-                let twins = rows[..i].iter().filter(|r| r.label == row.label).count();
-                let key = (row.label.clone(), twins);
+                let name = row_name(row);
+                let twins = rows[..i].iter().filter(|r| row_name(r) == name).count();
+                let key = (name.to_string(), twins);
                 let st = last.remove(&key).unwrap_or(RowState {
                     focus: 0.0,
                     shown: None,
@@ -1359,11 +1376,11 @@ impl MenuList {
             - track_w
             - if track_w > 0.0 { 12.0 * k } else { 0.0 };
         let place = |s: &str| val_right - f64::from(fonts.measure(s, W::Medium, 15.0 * k));
-        // Gate on index AND label: an index is not identity across a rebuild.
+        // Gate on index AND name: an index is not identity across a rebuild.
         let slipping = self
             .slip_prev
             .as_ref()
-            .filter(|p| p.row == i && p.label == row.label);
+            .filter(|p| p.row == i && p.name == row_name(row));
         let dx = if slipping.is_some() {
             self.slip.pos * k
         } else {

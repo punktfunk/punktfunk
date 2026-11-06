@@ -12,7 +12,7 @@ import SwiftUI
 enum SettingsOptions {
     /// Compositor choices — the `tag` is the wire value (`PunktfunkConnection.Compositor` raw).
     static let compositors: [(label: String, tag: Int)] = [
-        ("Automatic", 0),
+        (String(localized: L10n.playerCompositorAuto), 0),
         ("KWin (KDE Plasma)", 1),
         ("Mutter (GNOME)", 3),
         ("Hyprland", 5),
@@ -23,9 +23,9 @@ enum SettingsOptions {
     ]
 
     static let audioChannels: [(label: String, tag: Int)] = [
-        ("Stereo", 2),
-        ("5.1 Surround", 6),
-        ("7.1 Surround", 8),
+        (String(localized: L10n.playerAudioChannels2), 2),
+        (String(localized: L10n.playerAudioChannels6), 6),
+        (String(localized: L10n.playerAudioChannels8), 8),
     ]
 
     /// Audio format (`DefaultsKey.audioFormat`) — the `tag` is an `AudioFormatChoice` raw value.
@@ -46,12 +46,17 @@ enum SettingsOptions {
     /// the host's own decline — not a hidden row, which silently discards a choice the user made
     /// and explains nothing.
     static let audioFormats: [(label: String, tag: String)] = [
-        ("Standard (Opus)", AudioFormatChoice.opus.rawValue),
-        ("Lossless 44.1 kHz / 24-bit", AudioFormatChoice.lossless441.rawValue),
-        ("Lossless 48 kHz / 24-bit", AudioFormatChoice.lossless48.rawValue),
-        ("Lossless 88.2 kHz / 24-bit", AudioFormatChoice.lossless882.rawValue),
-        ("Lossless 96 kHz / 24-bit", AudioFormatChoice.lossless96.rawValue),
-        ("Lossless 176.4 kHz / 24-bit", AudioFormatChoice.lossless1764.rawValue),
+        (String(localized: L10n.playerAudioFormatOpus), AudioFormatChoice.opus.rawValue),
+        (String(localized: L10n.playerAudioFormatLossless441),
+         AudioFormatChoice.lossless441.rawValue),
+        (String(localized: L10n.playerAudioFormatLossless48),
+         AudioFormatChoice.lossless48.rawValue),
+        (String(localized: L10n.playerAudioFormatLossless882),
+         AudioFormatChoice.lossless882.rawValue),
+        (String(localized: L10n.playerAudioFormatLossless96),
+         AudioFormatChoice.lossless96.rawValue),
+        (String(localized: L10n.playerAudioFormatLossless1764),
+         AudioFormatChoice.lossless1764.rawValue),
     ]
 
     /// Virtual-pad types — the `tag` is the wire value (`PunktfunkConnection.GamepadType` raw).
@@ -60,7 +65,7 @@ enum SettingsOptions {
     /// `GAMEPADS`: a preset written on one client opens on another, and a tag missing here has
     /// no index in the picker.
     static let padTypes: [(label: String, tag: Int)] = [
-        ("Automatic", 0),
+        (String(localized: L10n.playerGamepadAuto), 0),
         ("Xbox 360", 1),
         ("Xbox One", 3),
         ("DualSense", 2),
@@ -71,17 +76,17 @@ enum SettingsOptions {
     /// System-button routing (the cross-client `system_buttons` key): where the guide
     /// (Xbox/PS) and share presses land while streaming. Auto = forward on Apple.
     static let systemButtons: [(label: String, tag: String)] = [
-        ("Automatic", "auto"),
-        ("Send to host", "forward"),
-        ("This device", "local"),
+        (String(localized: L10n.playerSystemButtonsAuto), "auto"),
+        (String(localized: L10n.playerSystemButtonsForward), "forward"),
+        (String(localized: L10n.playerSystemButtonsLocal), "local"),
     ]
 
     /// The hold-Select guide gesture (the cross-client `guide_gesture` key). Auto = on
     /// everywhere but macOS.
     static let guideGestures: [(label: String, tag: String)] = [
-        ("Automatic", "auto"),
-        ("On", "on"),
-        ("Off", "off"),
+        (String(localized: L10n.playerGuideGestureAuto), "auto"),
+        (String(localized: L10n.playerGuideGestureOn), "on"),
+        (String(localized: L10n.playerGuideGestureOff), "off"),
     ]
 
     static let hudPlacements: [(label: String, tag: String)] =
@@ -89,22 +94,22 @@ enum SettingsOptions {
 
     /// The overlay's size on top of the system's text size — core's `STATS_SCALE_PCTS`.
     static let statsScales: [(label: String, tag: Int)] =
-        [75, 100, 125, 150, 175, 200].map { ("\($0) %", $0) }
+        [75, 100, 125, 150, 175, 200].map { (L10n.commonPercent(value: String($0)), $0) }
 
     /// The macOS Fullscreen picker. "always" is `fullscreenAlways`; the other two are the
     /// presetable `fullscreenWhileStreaming`.
     static let fullscreenModes: [(label: String, tag: String)] = [
-        ("Off", "off"),
-        ("While streaming", "stream"),
-        ("Always", "always"),
+        (String(localized: L10n.playerFullscreenOff), "off"),
+        (String(localized: L10n.playerFullscreenStream), "stream"),
+        (String(localized: L10n.playerFullscreenAlways), "always"),
     ]
 
     /// When the gamepad UI takes over (`DefaultsKey.gamepadUIMode`) — only meaningful while
     /// `gamepadUIEnabled` is on, so every surface that offers it hides the row when the switch
     /// is off rather than showing a picker that decides nothing.
     static let gamepadUIModes: [(label: String, tag: String)] = [
-        ("With a controller", GamepadUIEnvironment.modeWhenConnected),
-        ("Always", GamepadUIEnvironment.modeAlways),
+        (String(localized: L10n.playerGamepadUiModeConnected), GamepadUIEnvironment.modeWhenConnected),
+        (String(localized: L10n.playerGamepadUiModeAlways), GamepadUIEnvironment.modeAlways),
     ]
 
     /// Presentation intent (`DefaultsKey.presentPriority` — the 2026-07 rebuild that replaced
@@ -112,8 +117,8 @@ enum SettingsOptions {
     /// design/apple-presentation-rebuild.md). The stage ladder survives only as the hidden
     /// PUNKTFUNK_PRESENTER debug env lever.
     static let presentPriorities: [(label: String, tag: String)] = [
-        ("Lowest latency", "latency"),
-        ("Smoothness", "smooth"),
+        (String(localized: L10n.playerPresentPriorityLatency), "latency"),
+        (String(localized: L10n.playerPresentPrioritySmooth), "smooth"),
     ]
 
     /// Smoothness's jitter-buffer sizes (`DefaultsKey.smoothBuffer`; 0 = Automatic, currently 2
@@ -122,14 +127,15 @@ enum SettingsOptions {
     /// jitter.
     static func smoothBuffers(refreshHz: Int) -> [(label: String, tag: Int)] {
         let periodMs = 1000.0 / Double(max(24, refreshHz))
-        func hint(_ frames: Int) -> String {
-            String(format: "+%.0f ms", Double(frames) * periodMs)
+        func cost(_ frames: Int) -> String {
+            L10n.playerSmoothBufferFramesCost(
+                count: frames, ms: String(format: "%.0f", Double(frames) * periodMs))
         }
         return [
-            ("Automatic", 0),
-            ("1 frame (\(hint(1)))", 1),
-            ("2 frames (\(hint(2)))", 2),
-            ("3 frames (\(hint(3)))", 3),
+            (String(localized: L10n.playerSmoothBufferAutomatic), 0),
+            (cost(1), 1),
+            (cost(2), 2),
+            (cost(3), 3),
         ]
     }
 
@@ -148,23 +154,23 @@ enum SettingsOptions {
     /// Dropping it silently leaves a blank picker over a session that streams HEVC.
     static func codecs(current: String) -> [(label: String, tag: String)] {
         var options: [(label: String, tag: String)] = [
-            ("Automatic", "auto"),
+            (String(localized: L10n.playerCodecAuto), "auto"),
             ("HEVC (H.265)", "hevc"),
             ("H.264 (AVC)", "h264"),
         ]
         if AV1.hardwareDecodeSupported {
             options.insert(("AV1", "av1"), at: 2)
         } else if current == "av1" {
-            options.insert(("AV1 — no hardware decoder here; HEVC is used", "av1"), at: 2)
+            options.insert((String(localized: L10n.playerCodecAv1Unsupported), "av1"), at: 2)
         }
         // PyroWave is the opt-in wired-LAN low-latency codec (100–400 Mbps all-intra wavelet,
         // 8-bit SDR): selecting it advertises + prefers it for the session. Offered only when
         // the Metal decode probe passes (same gate SessionModel advertises by) — elsewhere the
         // host could never emit it.
         if MetalWaveletDecoder.supported {
-            options.append(("PyroWave (wired LAN)", "pyrowave"))
+            options.append((String(localized: L10n.playerCodecPyrowave), "pyrowave"))
         } else if current == "pyrowave" {
-            options.append(("PyroWave — this GPU can't decode it; HEVC is used", "pyrowave"))
+            options.append((String(localized: L10n.playerCodecPyrowaveUnsupported), "pyrowave"))
         }
         return options
     }
@@ -172,30 +178,16 @@ enum SettingsOptions {
     // MARK: - Bitrate
 
     /// Discrete bitrate steps for the surfaces with no Slider (tvOS pushed pickers, the gamepad
-    /// settings' left/right cycling), up to the same 3 Gbps ceiling the slider has. 5 Mbps
+    /// settings' left/right cycling), up to the same 3 Gbit/s ceiling the slider has. 5 Mbit/s
     /// apart to 50, where most links settle.
-    static let bitratePresets: [(label: String, tag: Int)] = [
-        ("Automatic", 0),
-        ("5 Mbps", 5_000),
-        ("10 Mbps", 10_000),
-        ("15 Mbps", 15_000),
-        ("20 Mbps", 20_000),
-        ("25 Mbps", 25_000),
-        ("30 Mbps", 30_000),
-        ("35 Mbps", 35_000),
-        ("40 Mbps", 40_000),
-        ("45 Mbps", 45_000),
-        ("50 Mbps", 50_000),
-        ("60 Mbps", 60_000),
-        ("80 Mbps", 80_000),
-        ("100 Mbps", 100_000),
-        ("150 Mbps", 150_000),
-        ("300 Mbps", 300_000),
-        ("500 Mbps", 500_000),
-        ("1 Gbps", 1_000_000),
-        ("1.5 Gbps", 1_500_000),
-        ("2 Gbps", 2_000_000),
-        ("3 Gbps", 3_000_000),
+    static let bitratePresets: [(label: String, tag: Int)] =
+        [(label: String(localized: L10n.playerBitrateKbpsAutomatic), tag: 0)]
+        + bitrateSteps.map { (label: PyroWaveQuality.rateLabel(kbps: UInt32($0)), tag: $0) }
+
+    private static let bitrateSteps = [
+        5_000, 10_000, 15_000, 20_000, 25_000, 30_000, 35_000, 40_000, 45_000, 50_000,
+        60_000, 80_000, 100_000, 150_000, 300_000, 500_000,
+        1_000_000, 1_500_000, 2_000_000, 3_000_000,
     ]
 
     /// A stored rate none of the presets hold: typed, slid, or written by the speed test.
@@ -203,7 +195,7 @@ enum SettingsOptions {
         !bitratePresets.contains { $0.tag == kbps }
     }
 
-    /// A typed rate in whole Mbps as kbps, capped at the slider's 3 Gbps top. nil for empty or
+    /// A typed rate in whole Mbit/s as kbps, capped at the slider's 3 Gbit/s top. nil for empty or
     /// `0`, which leave the stored rate alone — Automatic is a list entry, not a number.
     static func customBitrateKbps(_ text: String) -> Int? {
         guard let mbps = Int(text.prefix(4)), mbps > 0 else { return nil }
@@ -216,7 +208,9 @@ enum SettingsOptions {
         var options = bitratePresets
         if !options.contains(where: { $0.tag == current }) {
             options.insert(
-                (SpeedTestView.mbpsLabel(kbps: current) + " (custom)", current), at: 1)
+                (L10n.playerBitrateKbpsCustomValue(value: SpeedTestView.mbpsLabel(kbps: current)),
+                 current),
+                at: 1)
         }
         return options
     }
@@ -229,11 +223,13 @@ enum SettingsOptions {
     @MainActor
     static func controllerOptions(_ gamepads: GamepadManager) -> [(label: String, tag: String)] {
         let selectable = gamepads.controllers.filter(\.isExtended)
-        var options: [(label: String, tag: String)] = [("Automatic", "")]
+        var options: [(label: String, tag: String)] = [
+            (String(localized: L10n.playerForwardPadAuto), "")
+        ]
         options += selectable.map { ($0.name, $0.id) }
         if !gamepads.preferredID.isEmpty,
            !selectable.contains(where: { $0.id == gamepads.preferredID }) {
-            options.append(("Unavailable controller", gamepads.preferredID))
+            options.append((String(localized: L10n.playerForwardPadSaved), gamepads.preferredID))
         }
         return options
     }
@@ -257,29 +253,58 @@ enum SettingsOptions {
     static func family(width: Int, height: Int) -> Int {
         let families = families()
         if width == 0 {
-            return families.firstIndex { $0.label == Resolutions.screenLabel } ?? 0
+            return families.firstIndex { $0.id == Resolutions.screenID } ?? 0
         }
         return Resolutions.familyOf(families, width, height) ?? 0
     }
 
+    /// What a row of the resolution list is. The label is built from the kind, so no code reads
+    /// a row's identity out of its text.
+    enum ModeKind: Hashable {
+        case native, size
+        case thisDevice, thisDeviceSafeArea
+        case thisDisplay, thisDisplayOverNotch, thisDisplayBelowNotch
+    }
+
+    /// A row's label: the kind's name with its size, or the bare size for a standard one.
+    static func modeLabel(_ kind: ModeKind, w: Int, h: Int) -> String {
+        let (width, height) = (String(w), String(h))
+        switch kind {
+        case .native: return String(localized: L10n.playerResolutionNative)
+        case .size: return "\(w) × \(h)"
+        case .thisDevice:
+            return L10n.appleResolutionThisDeviceSize(width: width, height: height)
+        case .thisDeviceSafeArea:
+            return L10n.appleResolutionThisDeviceSafeAreaSize(width: width, height: height)
+        case .thisDisplay:
+            return L10n.appleResolutionThisDisplaySize(width: width, height: height)
+        case .thisDisplayOverNotch:
+            return L10n.appleResolutionThisDisplayOverNotchSize(width: width, height: height)
+        case .thisDisplayBelowNotch:
+            return L10n.appleResolutionThisDisplayBelowNotchSize(width: width, height: height)
+        }
+    }
+
     /// Native (`0 × 0`, the display resolved at connect), this device's other native mode (a
     /// phone's safe area, a notched Mac's whole panel — never the one Native already is), then
-    /// one entry's sizes from `families()` (unnamed — a picker shows them as plain `w × h`),
-    /// deduped by dimensions (native wins a tie).
+    /// one entry's sizes from `families()`, deduped by dimensions (native wins a tie).
     @MainActor
-    static func resolutionModes(family: Int) -> [(name: String, w: Int, h: Int)] {
+    static func resolutionModes(family: Int) -> [(kind: ModeKind, w: Int, h: Int)] {
         let entries = families()
-        let sizes = entries[min(family, entries.count - 1)].sizes.map { (name: "", w: $0.w, h: $0.h) }
+        let sizes = entries[min(family, entries.count - 1)].sizes.map {
+            (kind: ModeKind.size, w: $0.w, h: $0.h)
+        }
         let native = NativeDisplay.mode
         let others = nativeModes().filter { $0.w != native.width || $0.h != native.height }
         var seen = Set<String>()
-        return ([(name: "Native", w: 0, h: 0)] + others + sizes)
+        return ([(kind: ModeKind.native, w: 0, h: 0)] + others + sizes)
             .filter { seen.insert("\($0.w)x\($0.h)").inserted }
     }
 
     /// A refresh rate's label: `0` is Native.
     static func refreshLabel(_ hz: Int) -> String {
-        hz == 0 ? "Native" : "\(hz) Hz"
+        hz == 0
+            ? String(localized: L10n.playerRefreshHzNative) : L10n.commonHz(value: String(hz))
     }
 
     /// A typed "2560 × 1440" (any separator) through the shared rule; nil without two numbers.
@@ -297,18 +322,18 @@ enum SettingsOptions {
     /// narrowed. A device with no housing has no second mode: an odd panel would otherwise
     /// differ from its even-floored self.
     @MainActor
-    static func nativeModes() -> [(name: String, w: Int, h: Int)] {
-        var native: [(name: String, w: Int, h: Int)] = []
+    static func nativeModes() -> [(kind: ModeKind, w: Int, h: Int)] {
+        var native: [(kind: ModeKind, w: Int, h: Int)] = []
         #if !os(macOS)
         let mode = NativeDisplay.mode
-        native = [("This device", mode.width, mode.height)]
+        native = [(.thisDevice, mode.width, mode.height)]
         #if os(iOS)
         let inset = mainWindowSideInset()
         if inset > 0 {
             let safe = SafeDisplay.mode(
                 nativeWidth: mode.width, nativeHeight: mode.height,
                 sideInsetPoints: inset, scale: NativeDisplay.screen.nativeScale)
-            native.append(("This device (safe area)", safe.width, safe.height))
+            native.append((.thisDeviceSafeArea, safe.width, safe.height))
         }
         #endif
         #else
@@ -327,14 +352,16 @@ enum SettingsOptions {
     /// The two are deduped here, so a second entry means "this display has a housing" and a caller
     /// can offer the choice on exactly the Macs that have one.
     @MainActor
-    static func macDisplayModes() -> [(name: String, w: Int, h: Int)] {
+    static func macDisplayModes() -> [(kind: ModeKind, w: Int, h: Int)] {
         guard let screen = NSScreen.main else { return [] }
         let panel = screen.panelPixelSize
         let safe = screen.notchSafePixelSize
-        guard panel.height > safe.height else { return [(name: "This display", w: panel.width, h: panel.height)] }
+        guard panel.height > safe.height else {
+            return [(kind: .thisDisplay, w: panel.width, h: panel.height)]
+        }
         return [
-            (name: "This display (over the notch)", w: panel.width, h: panel.height),
-            (name: "This display (below the notch)", w: safe.width, h: safe.height),
+            (kind: .thisDisplayOverNotch, w: panel.width, h: panel.height),
+            (kind: .thisDisplayBelowNotch, w: safe.width, h: safe.height),
         ]
     }
     #endif

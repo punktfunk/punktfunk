@@ -63,6 +63,7 @@ import androidx.compose.ui.layout.layout
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntRect
@@ -74,6 +75,7 @@ import androidx.core.content.ContextCompat
 import io.unom.punktfunk.kit.Gamepad
 import io.unom.punktfunk.kit.GamepadRouter
 import io.unom.punktfunk.kit.NativeBridge
+import io.unom.punktfunk.kit.R
 import io.unom.punktfunk.kit.security.IdentityLoad
 import io.unom.punktfunk.kit.security.IdentityStore
 import io.unom.punktfunk.kit.security.KnownHostStore
@@ -81,6 +83,7 @@ import io.unom.punktfunk.kit.SessionAccess
 import io.unom.punktfunk.kit.SessionEndReason
 import io.unom.punktfunk.kit.VideoFit
 import io.unom.punktfunk.models.ActiveSession
+import io.unom.punktfunk.kit.say
 import io.unom.punktfunk.kit.library.GameEnd
 import io.unom.punktfunk.kit.library.LibraryClient
 import kotlinx.coroutines.Dispatchers
@@ -477,7 +480,7 @@ fun StreamScreen(
             hostRecord?.let { kh ->
                 scope.launch(Dispatchers.IO) {
                     (IdentityStore(context).load() as? IdentityLoad.Ok)?.identity?.let { id ->
-                        HostActions.invoke(id, kh.address, kh.effectiveMgmtPort, kh.fpHex, kh.name, act.id, act.label, kh.port)
+                        HostActions.invoke(id, kh.address, kh.effectiveMgmtPort, kh.fpHex, kh.name, act.id, act.text(context.resources), kh.port)
                     }
                 }
             }
@@ -510,14 +513,14 @@ fun StreamScreen(
                     val outcome = withContext(Dispatchers.IO) {
                         (IdentityStore(context).load() as? IdentityLoad.Ok)?.identity?.let { id ->
                             LibraryClient.endGame(id, kh.address, kh.effectiveMgmtPort, kh.fpHex, appId, kh.port)
-                        } ?: GameEnd.Failed("this device has no identity yet")
+                        } ?: GameEnd.Failed(say(R.string.android_lib_error_no_identity))
                     }
                     // Gone either way: leave as End stream does. A refusal keeps the stream.
                     if (outcome.gameGone) {
                         NativeBridge.nativeDisconnectQuit(handle)
                         onSessionEnded(SessionEndReason.LOCAL)
                     } else {
-                        Toast.makeText(context, outcome.notice(game.title), Toast.LENGTH_LONG).show()
+                        Toast.makeText(context, outcome.notice(game.title).words(context.resources), Toast.LENGTH_LONG).show()
                     }
                 }
             }
@@ -684,13 +687,14 @@ fun StreamScreen(
                     // explanation, not as new chrome on everyone's stream. TopEnd, in the shared pill
                     // family (TopStart is the HUD's, TopCentre the transient cues', BottomCentre the
                     // banner's).
+                    val accessLevel = stringResource(SessionAccess.label(ui.accessGrants))
                     val accessChip = when {
                         ui.statsVerbosity == StatsVerbosity.OFF -> null
                         ui.accessGrants and SessionAccess.ALL == SessionAccess.ALL && ui.accessRemaining == 0 -> null
                         ui.accessRemaining > 0 ->
-                            "${SessionAccess.label(ui.accessGrants)} · " +
-                                "${SessionAccess.remainingLabel(ui.accessRemaining)} left"
-                        else -> SessionAccess.label(ui.accessGrants)
+                            "$accessLevel · " +
+                                stringResource(R.string.grant_chip_ends, context.accessRemaining(ui.accessRemaining))
+                        else -> accessLevel
                     }
                     // Same corner, stacked: the mute sentence stands whatever the stats tier, because
                     // a player who cannot hear is owed the reason even with chrome off. Top left while
@@ -703,7 +707,7 @@ fun StreamScreen(
                                 verticalArrangement = Arrangement.spacedBy(8.dp),
                                 horizontalAlignment = if (left) Alignment.Start else Alignment.End,
                             ) {
-                                ui.audioMuteLabel?.let { AccessChip(it) }
+                                ui.audioMuteLabel?.let { AccessChip(stringResource(it)) }
                                 accessChip?.let { AccessChip(it) }
                             }
                         }
@@ -730,10 +734,10 @@ fun StreamScreen(
                     if (initialSettings.exitHint && banner.up && !ui.motionHint && !touchHint) OsdScaled {
                         StreamStartBanner(
                             text = when {
-                                ui.padPresent -> "Hold L1 + R1 + Start + Select to leave"
-                                backOpensRing -> "Back opens quick actions"
-                                gestures -> "A two-finger twist opens quick actions"
-                                else -> "Ctrl+Alt+Shift+O opens quick actions"
+                                ui.padPresent -> stringResource(R.string.notice_exit_hold, "L1 + R1 + Start + Select")
+                                backOpensRing -> stringResource(R.string.notice_ring_opens_keys, "Back")
+                                gestures -> stringResource(R.string.notice_ring_twist)
+                                else -> stringResource(R.string.notice_ring_opens_keys, "Ctrl+Alt+Shift+O")
                             },
                             alpha = banner.alpha,
                             modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 24.dp),
@@ -811,7 +815,7 @@ fun StreamScreen(
                         )
                     }
                     ui.micHint?.let {
-                        OsdScaled { MicChordHint(it, Modifier.align(Alignment.TopCenter).padding(top = 16.dp)) }
+                        OsdScaled { MicChordHint(stringResource(it), Modifier.align(Alignment.TopCenter).padding(top = 16.dp)) }
                     }
                     // Bottom, not top: this can coincide with a mic-chord confirmation or the exit cue,
                     // and a notice landing on top of one of those would cost the user both.
@@ -924,7 +928,7 @@ private fun PadHalf(pad: GamepadRouter.ExternalPad?, cfg: PadConfig, size: IntSi
 @Composable
 private fun TouchFallbackHint(modifier: Modifier = Modifier) {
     Text(
-        "This host doesn't accept touch — using the trackpad model",
+        stringResource(R.string.notice_touch_unsupported),
         modifier = modifier
             .background(Color.Black.copy(alpha = 0.55f), RoundedCornerShape(8.dp))
             .padding(horizontal = 14.dp, vertical = 8.dp),
@@ -1032,7 +1036,7 @@ private fun AccessChip(text: String, modifier: Modifier = Modifier) {
 @Composable
 private fun MotionUnreachableHint(modifier: Modifier = Modifier) {
     Text(
-        "Motion won't reach this session — set Controller type to DualSense",
+        stringResource(R.string.notice_motion_unreachable),
         modifier = modifier
             .background(Color.Black.copy(alpha = 0.55f), RoundedCornerShape(8.dp))
             .padding(horizontal = 14.dp, vertical = 8.dp),
@@ -1050,7 +1054,7 @@ private fun MotionUnreachableHint(modifier: Modifier = Modifier) {
 @Composable
 private fun ExitChordHint(modifier: Modifier = Modifier) {
     Text(
-        "Hold to quit…",
+        stringResource(R.string.notice_exit_arming),
         modifier = modifier
             .background(Color.Black.copy(alpha = 0.55f), RoundedCornerShape(8.dp))
             .padding(horizontal = 14.dp, vertical = 8.dp),
@@ -1066,7 +1070,7 @@ private fun ExitChordHint(modifier: Modifier = Modifier) {
 @Composable
 private fun RemotePointerHint(modifier: Modifier = Modifier) {
     Text(
-        "Remote pointer — SELECT click · play/pause right-click · hold SELECT to exit",
+        stringResource(R.string.android_remote_pointer_hint, "SELECT", "play/pause"),
         modifier = modifier
             .background(Color.Black.copy(alpha = 0.55f), RoundedCornerShape(8.dp))
             .padding(horizontal = 14.dp, vertical = 8.dp),

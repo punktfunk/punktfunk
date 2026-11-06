@@ -196,6 +196,15 @@ public final class ConsoleBridge {
         return String(cString: raw)
     }
 
+    /// Words the text Rust writes with no console built (the palette names, the PyroWave
+    /// warning) in the OS languages. The app calls it once at start, before any of it is read.
+    public nonisolated static func setLanguages() {
+        guard let json = try? JSONEncoder().encode(Locale.preferredLanguages),
+            let tags = String(data: json, encoding: .utf8)
+        else { return }
+        punktfunk_console_set_languages(tags)
+    }
+
     /// The console's background palettes in cycle order: the `ui_palette` choices.
     public static let palettes: [(id: String, name: String)] = {
         guard let raw = punktfunk_console_palettes() else { return [] }

@@ -90,11 +90,21 @@ impl Tab {
 
     pub(crate) fn name(self) -> &'static str {
         match self {
-            Tab::Hosts => "Hosts",
-            Tab::Games => "Games",
+            Tab::Hosts => pf_l10n::client::hosts_tab(),
+            Tab::Games => pf_l10n::console::console_tab_games(),
             // Named for what it lists today; a players feature would rename it back.
-            Tab::Players => "Controllers",
-            Tab::Settings => "Settings",
+            Tab::Players => pf_l10n::console::console_tab_controllers(),
+            Tab::Settings => pf_l10n::client::hosts_tab_settings(),
+        }
+    }
+
+    /// What a screen reader speaks for the focused tab.
+    fn announcement(self) -> &'static str {
+        match self {
+            Tab::Hosts => pf_l10n::console::console_tab_hosts_a11y(),
+            Tab::Games => pf_l10n::console::console_tab_games_a11y(),
+            Tab::Players => pf_l10n::console::console_tab_controllers_a11y(),
+            Tab::Settings => pf_l10n::console::console_tab_settings_a11y(),
         }
     }
 
@@ -234,6 +244,9 @@ pub struct ConsoleOptions {
     /// `ProfileLocked` close before its failure, so the console asks for a locked profile's
     /// password. False dials a locked profile as it stands.
     pub prompts_unlock: bool,
+    /// The OS's preferred languages, BCP-47, most preferred first. A non-empty list sets the
+    /// process's language ([`pf_l10n::set_languages`]) when the console is built; empty leaves it.
+    pub languages: Vec<String>,
 }
 
 /// A built-in screen in landscape pixels, whole and clear of its cutout.
@@ -264,6 +277,7 @@ impl ConsoleOptions {
             screen: None,
             profiles: true,
             prompts_unlock: true,
+            languages: Vec::new(),
         }
     }
 }
@@ -610,7 +624,7 @@ impl Shell {
             return None;
         }
         if self.strip_focus && self.stack.len() == 1 {
-            return Some(format!("{} tab", self.tab.name()));
+            return Some(self.tab.announcement().into());
         }
         let (ctx, screen) = self.ctx_and_top();
         screen.view().announcement(&ctx)
@@ -780,12 +794,11 @@ impl Shell {
         match &phase {
             PairPhase::Idle => {}
             PairPhase::Paired { key } => {
-                let name = self
-                    .hosts
-                    .iter()
-                    .find(|h| &h.key == key)
-                    .map_or_else(|| "the host".to_string(), |h| h.name.clone());
-                self.show_toast_kind(format!("Paired with {name}"), ToastKind::Success);
+                let toast = self.hosts.iter().find(|h| &h.key == key).map_or_else(
+                    || pf_l10n::console::console_pair_paired_unnamed().into(),
+                    |h| pf_l10n::client::pair_paired(&h.name),
+                );
+                self.show_toast_kind(toast, ToastKind::Success);
                 self.console.settle_pair(&req);
                 if top_is_ours {
                     self.apply_nav(Nav::Pop);
@@ -1521,10 +1534,8 @@ impl Shell {
         let ceiling = crate::screens::settings::rows::bitrate_ceiling_kbps(self.device.platform);
         self.settings.bitrate_kbps = kbps.min(ceiling);
         self.store.save(&self.settings);
-        format!(
-            "{} Mb/s set as the default",
-            self.settings.bitrate_kbps / 1_000
-        )
+        let rate = pf_l10n::common::common_mbits(self.settings.bitrate_kbps / 1_000);
+        pf_l10n::client::speedtest_applied_default(rate)
     }
 
     fn apply(&mut self, fx: Outbox) {

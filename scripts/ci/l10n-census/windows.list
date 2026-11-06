@@ -1,0 +1,6 @@
+clients/windows/src/app/settings/controllers.rs	Steam Controller 2
+clients/windows/src/app/settings/display.rs	Vulkan Video
+clients/windows/src/app/settings/input.rs	Alt+Tab, Win, …
+clients/windows/src/app/unlock.rs	Windows Hello
+clients/windows/src/deeplink.rs	Desktop folder: {e}
+clients/windows/src/deeplink.rs	Desktop folder: {e}

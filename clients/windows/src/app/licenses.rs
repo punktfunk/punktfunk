@@ -4,6 +4,7 @@
 use super::style::*;
 use super::{AppCtx, AsyncSetState, Screen};
 use pf_fluent::{Palette, Token};
+use pf_l10n::{client, common, desktop};
 use std::sync::Arc;
 use windows_reactor::*;
 
@@ -27,7 +28,7 @@ pub(crate) fn licenses_page(
     ctx: &Arc<AppCtx>,
     set_screen: &AsyncSetState<Screen>,
 ) -> View {
-    let back_btn = icon_button("arrow-left", "Back")
+    let back_btn = icon_button("arrow-left", common::common_back())
         .style(ButtonStyle::Accent)
         .on_click({
             let (c, ss) = (ctx.clone(), set_screen.clone());
@@ -44,7 +45,7 @@ pub(crate) fn licenses_page(
             text("Punktfunk")
                 .font_size(15.0)
                 .font_weight(FontWeight::SEMI_BOLD),
-            text("Licensed under MIT OR Apache-2.0, at your option.")
+            text(client::about_license_statement())
                 .font_size(12.0)
                 .text_wrapping(TextWrapping::Wrap)
                 .foreground(pal.get(Token::SecondaryText)),
@@ -58,25 +59,20 @@ pub(crate) fn licenses_page(
 
     let natives_card = card(
         vstack((
-            text("Bundled components")
+            text(desktop::desktop_licenses_bundled_components())
                 .font_size(15.0)
                 .font_weight(FontWeight::SEMI_BOLD),
-            text(
-                "SDL 3 (Zlib) and the Windows App SDK (Microsoft) are linked; their notices ship \
-                 in the installed licenses\\ folder. Video decoding uses Windows' own DXVA and \
-                 Vulkan Video, with OpenH264 and rav1d (both BSD-2-Clause) as the CPU fallback — \
-                 no FFmpeg is bundled.",
-            )
-            .font_size(12.0)
-            .text_wrapping(TextWrapping::Wrap)
-            .foreground(pal.get(Token::SecondaryText)),
+            text(desktop::desktop_licenses_bundled_body())
+                .font_size(12.0)
+                .text_wrapping(TextWrapping::Wrap)
+                .foreground(pal.get(Token::SecondaryText)),
         ))
         .spacing(8.0),
     );
 
     let notices_card = card(
         vstack((
-            text("Rust crates")
+            text(desktop::desktop_licenses_rust_crates())
                 .font_size(15.0)
                 .font_weight(FontWeight::SEMI_BOLD),
             text(THIRD_PARTY_NOTICES)
@@ -88,12 +84,18 @@ pub(crate) fn licenses_page(
     );
 
     page(vec![
-        page_header("Third-party licenses", back_btn),
+        page_header(client::about_licenses_title(), back_btn),
         section(pal, "PUNKTFUNK"),
         app_card.into(),
-        section(pal, "BUNDLED"),
+        section(
+            pal,
+            &desktop::desktop_licenses_section_bundled().to_uppercase(),
+        ),
         natives_card.into(),
-        section(pal, "OPEN SOURCE"),
+        section(
+            pal,
+            &desktop::desktop_licenses_section_open_source().to_uppercase(),
+        ),
         notices_card.into(),
     ])
 }

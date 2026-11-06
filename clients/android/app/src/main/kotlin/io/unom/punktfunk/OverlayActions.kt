@@ -1,6 +1,8 @@
 package io.unom.punktfunk
 
+import android.content.Context
 import io.unom.punktfunk.kit.Gamepad
+import io.unom.punktfunk.kit.R
 import org.json.JSONArray
 import org.json.JSONException
 import org.json.JSONObject
@@ -113,15 +115,23 @@ fun nextPadType(current: Int): Int {
     return if (at < 0) Gamepad.PREF_AUTO else PAD_TYPE_CYCLE[(at + 1) % PAD_TYPE_CYCLE.size]
 }
 
-/** The Controller type slot's state word. */
-fun padTypeLabel(pref: Int): String = when (pref) {
-    Gamepad.PREF_AUTO -> "Automatic"
+/** The Controller type slot's state word: a brand name, or a message for Automatic and the rest. */
+fun padTypeLabel(context: Context, pref: Int): String = when (pref) {
+    Gamepad.PREF_AUTO -> context.getString(R.string.ring_pad_type_automatic)
     Gamepad.PREF_XBOX360 -> "Xbox 360"
     Gamepad.PREF_XBOXONE -> "Xbox One"
     Gamepad.PREF_DUALSENSE -> "DualSense"
     Gamepad.PREF_DUALSHOCK4 -> "DualShock 4"
     Gamepad.PREF_STEAMDECK -> "Steam Deck"
-    else -> "Other"
+    else -> context.getString(R.string.ring_pad_type_other)
+}
+
+/** The message naming a statistics tier, for the ring and the companion panel. */
+internal fun statsVerbosityLabel(tier: StatsVerbosity): Int = when (tier) {
+    StatsVerbosity.OFF -> R.string.player_stats_verbosity_off
+    StatsVerbosity.COMPACT -> R.string.player_stats_verbosity_compact
+    StatsVerbosity.NORMAL -> R.string.player_stats_verbosity_normal
+    StatsVerbosity.DETAILED -> R.string.player_stats_verbosity_detailed
 }
 
 /** A custom key chord. [keys] are names from the shared keymap tables, never raw key codes. */

@@ -151,11 +151,7 @@ pub(crate) fn paint_tile(
     // Bottom rail, full inner width — same place the host tile puts name and address.
     let max_w = f64::from(rect.width()) - 2.0 * pad;
     let sub_base = f64::from(rect.bottom) - pad;
-    let count = if c.count == 1 {
-        "1 title".to_string()
-    } else {
-        format!("{} titles", c.count)
-    };
+    let count = pf_l10n::client::lib_collection_titles(c.count as u64);
     fonts.draw_clipped(
         canvas,
         &count,
@@ -179,17 +175,20 @@ pub(crate) fn paint_tile(
     // Platform vs store, so two "Steam" buckets stay distinct. Top-right, the
     // corner the deck leaves clear.
     let kind = match &c.key {
-        GroupKey::Store(_) => "STORE",
-        GroupKey::Platform(_) | GroupKey::Launchers => "PLATFORM",
-    };
-    let kind_w = f64::from(fonts.measure(kind, W::SemiBold, 11.0 * k));
+        GroupKey::Store(_) => pf_l10n::client::lib_collection_kind_store(),
+        GroupKey::Platform(_) | GroupKey::Other | GroupKey::Launchers => {
+            pf_l10n::client::lib_collection_kind_platform()
+        }
+    }
+    .to_uppercase();
+    let kind_w = f64::from(fonts.measure(&kind, W::SemiBold, 11.0 * k));
     // Never left of the deck's reserved corner: a narrow tile would otherwise
     // walk the caption back into the covers.
     let kind_x = (f64::from(rect.right) - pad - kind_w).max(l + (FAN_W + 10.0) * fk);
     let kind_y = t + 12.0 * k;
     fonts.draw(
         canvas,
-        kind,
+        &kind,
         kind_x,
         kind_y,
         W::SemiBold,

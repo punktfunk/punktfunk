@@ -323,6 +323,7 @@ mod scene {
             entry: Default::default(),
             screen: None,
             safe_area: None,
+            languages: Vec::new(),
         };
         let (opts, entry, _store) = create.into_console(platform);
         let mut console = Console::new(opts, entry, &handles)?;

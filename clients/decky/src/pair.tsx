@@ -4,7 +4,9 @@ import { DialogButton, Focusable, ModalRoot, Spinner } from "@decky/ui";
 import { toaster } from "@decky/api";
 import { FC, useState } from "react";
 import { pair } from "./backend";
+import { diag } from "./diag";
 import type { HostView } from "./hosts";
+import { rejectText, t } from "./i18n";
 
 /**
  * User-facing copy for a failed ceremony. The CLI's stable exit codes say WHICH failure it was,
@@ -12,18 +14,19 @@ import type { HostView } from "./hosts";
  * mistyped PIN or a host nobody armed, and telling someone to check their network for that
  * would send them the wrong way entirely.
  */
-function pairErrorBody(error: string | undefined, name: string): string {
+function pairErrorBody(error: string | undefined, reject: string | undefined, name: string): string {
   switch (error) {
     case "refused":
-      return "Wrong PIN, or the host isn’t showing one. Arm pairing again and retry.";
+      // The host's own reason, when it gave one; else the likeliest cause.
+      return rejectText(reject) ?? t("decky_pair_wrong_pin");
     case "unreachable":
-      return `Couldn’t reach ${name}`;
+      return t("decky_pair_unreachable", { host: name });
     case "client-outdated":
-      return "Update the Punktfunk client to pair from here";
+      return t("decky_pair_outdated");
     case "client-unavailable":
-      return "Couldn’t reach the Punktfunk client — is it still installed?";
+      return t("decky_client_unreachable");
     default:
-      return "Pairing failed";
+      return t("decky_pair_failed");
   }
 }
 
@@ -45,15 +48,17 @@ export const PairModal: FC<{
     try {
       const res = await pair(host.addr, host.port, pin, "Steam Deck");
       if (res.ok) {
-        toaster.toast({ title: "Punktfunk", body: `Paired with ${host.name}` });
+        toaster.toast({ title: "Punktfunk", body: t("pair_paired", { host: host.name }) });
         onPaired();
         closeModal?.();
       } else {
-        setError(pairErrorBody(res.error, host.name));
+        diag(`pair: ${res.error} ${res.reject ?? ""} ${res.detail ?? ""}`);
+        setError(pairErrorBody(res.error, res.reject, host.name));
         setPin("");
       }
     } catch (e) {
-      setError(String(e));
+      diag(`pair threw: ${e}`);
+      setError(t("decky_client_unreachable"));
     } finally {
       setBusy(false);
     }
@@ -62,10 +67,10 @@ export const PairModal: FC<{
   return (
     <ModalRoot closeModal={closeModal}>
       <div style={{ fontWeight: "bold", fontSize: "1.3em", marginBottom: "0.3em" }}>
-        Pair with {host.name}
+        {t("pair_title", { host: host.name })}
       </div>
       <div style={{ opacity: 0.8, marginBottom: "1em" }}>
-        Arm pairing on the host (its console or web UI), then enter the 4-digit PIN it shows.
+        {t("decky_pair_intro")}
       </div>
 
       <div
@@ -105,7 +110,7 @@ export const PairModal: FC<{
           0
         </DialogButton>
         <DialogButton disabled={busy || pin.length !== 4} onClick={submit}>
-          {busy ? <Spinner style={{ height: "1em" }} /> : "Pair"}
+          {busy ? <Spinner style={{ height: "1em" }} /> : t("pair_action")}
         </DialogButton>
       </Focusable>
     </ModalRoot>

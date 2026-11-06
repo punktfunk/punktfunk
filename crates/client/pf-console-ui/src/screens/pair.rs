@@ -216,36 +216,40 @@ impl PairScreen {
             .map(|role| match role {
                 Role::RequestAccess => {
                     let label = match self.busy && self.requesting {
-                        true => "Waiting for approval…",
-                        false => "Request access — approve on the host",
+                        true => pf_l10n::client::pair_waiting_for_approval(),
+                        false => pf_l10n::client::pair_request_access(),
                     };
                     let mut r = RowSpec::action(label, !self.busy);
-                    r.header = Some("No PIN needed");
+                    r.header = Some(pf_l10n::console::console_pair_no_pin_needed());
                     r
                 }
                 Role::Pin => {
-                    let mut pin = RowSpec::field("PIN", pin_display.clone(), "From the host");
+                    let mut pin = RowSpec::field(
+                        pf_l10n::client::pair_pin(),
+                        pin_display.clone(),
+                        pf_l10n::client::pair_pin_placeholder(),
+                    );
                     pin.caret = self.editing == Some(Field::Pin);
                     // Only when Request access sits above, so the two paths read as alternatives.
                     if has_request {
-                        pin.header = Some("Or pair with a PIN");
+                        pin.header = Some(pf_l10n::console::console_pair_or_pin());
                     }
                     pin
                 }
                 Role::Device => {
                     let mut device = RowSpec::field(
-                        "Device name",
+                        pf_l10n::client::pair_device_name(),
                         self.device.clone(),
-                        "How the host lists this device",
+                        pf_l10n::client::pair_device_name_placeholder(),
                     );
                     device.caret = self.editing == Some(Field::Device);
                     device
                 }
                 Role::Pair => RowSpec::action(
                     if self.busy && !self.requesting {
-                        "Pairing…"
+                        pf_l10n::client::pair_pairing()
                     } else {
-                        "Pair"
+                        pf_l10n::client::pair_action()
                     },
                     self.can_pair(),
                 ),
@@ -261,8 +265,14 @@ impl ScreenView for PairScreen {
 
     fn edit_field(&self) -> Option<crate::screens::EditField> {
         match self.editing? {
-            Field::Pin => crate::screens::EditField::new("PIN", &self.pin, true),
-            Field::Device => crate::screens::EditField::new("Device name", &self.device, false),
+            Field::Pin => {
+                crate::screens::EditField::new(pf_l10n::client::pair_pin(), &self.pin, true)
+            }
+            Field::Device => crate::screens::EditField::new(
+                pf_l10n::client::pair_device_name(),
+                &self.device,
+                false,
+            ),
         }
     }
 
@@ -327,11 +337,13 @@ impl ScreenView for PairScreen {
 
     fn hints(&self, ctx: &Ctx) -> Vec<Hint> {
         if self.editing.is_some() {
-            return self.keyboard.hints(ctx.device, "Done");
+            return self
+                .keyboard
+                .hints(ctx.device, pf_l10n::common::common_done());
         }
         vec![
-            Hint::new(HintKey::Confirm, "Select"),
-            Hint::new(HintKey::Back, "Cancel"),
+            Hint::new(HintKey::Confirm, pf_l10n::common::common_select()),
+            Hint::new(HintKey::Back, pf_l10n::common::common_cancel()),
         ]
     }
 
@@ -347,9 +359,9 @@ impl ScreenView for PairScreen {
         let ui = ctx.ui;
         let cx = f64::from(rect.left) + f64::from(rect.width()) / 2.0;
         let intro = if self.can_request() {
-            "Request access and approve this device on the host, or enter the PIN it shows."
+            pf_l10n::client::pair_intro()
         } else {
-            "Enter the PIN from the host's web console (Pairing page) or its log."
+            pf_l10n::client::pair_intro_pin_only()
         };
         let below = blurb(canvas, ui, fonts, intro, rect, k);
 
@@ -379,8 +391,8 @@ impl ScreenView for PairScreen {
         let status_y = f64::from(rect.bottom) - tray_h - status_h + 6.0 * k;
         if self.busy {
             let waiting = match self.requesting {
-                true => "Approve this device in the host's console",
-                false => "Pairing… confirm the PIN on the host",
+                true => pf_l10n::console::console_pair_status_requesting(),
+                false => pf_l10n::console::console_pair_status_pairing(),
             };
             // Spinner, gap and label centred as one line.
             let (r, gap, size) = (7.0 * k, 10.0 * k, 13.0 * k);
@@ -414,7 +426,7 @@ impl ScreenView for PairScreen {
     }
 
     fn title(&self) -> String {
-        format!("Pair with {}", self.host_name())
+        pf_l10n::client::pair_title(self.host_name())
     }
 
     fn press(&mut self) {
@@ -522,5 +534,22 @@ mod tests {
         s.apply_phase(&PairPhase::Failed("Wrong PIN".into()));
         assert!(!s.busy);
         assert_eq!(s.error.as_deref(), Some("Wrong PIN"));
+    }
+
+    /// Every row and the title come from pf-l10n: each reads the pseudo-language.
+    #[test]
+    fn the_pair_screen_reads_the_pseudo_language() {
+        let mut host = host();
+        host.fp_hex = "abcd".into();
+        let s = PairScreen::new(&host, "deck");
+        let pseudo = |t: &str| t.starts_with('[') && t.ends_with(']');
+        pf_l10n::with_language("en-XA", || {
+            for row in s.rows() {
+                assert!(pseudo(&row.label), "{}", row.label);
+                assert!(row.header.is_none_or(pseudo), "{:?}", row.header);
+            }
+            let title = s.title();
+            assert!(pseudo(&title) && title.contains("Tower"), "{title}");
+        });
     }
 }

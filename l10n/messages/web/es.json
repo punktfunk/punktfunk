@@ -72,7 +72,6 @@
 	"nav_more": "Más",
 	"common_details": "Detalles",
 	"common_more_actions": "Más acciones",
-	"common_back": "Atrás",
 	"nav_plugins": "Plugins",
 	"plugin_offline_title": "Este plugin no se está ejecutando",
 	"plugin_origin_untrusted_title": "Confía en el puerto de este plugin una vez",
@@ -182,10 +181,6 @@
 	"host_codecs": "Códecs",
 	"host_ports": "Puertos",
 	"host_uniqueid": "ID único",
-	"host_power_sleep": "Suspender host",
-	"host_power_reboot": "Reiniciar host",
-	"host_power_shutdown": "Apagar host",
-	"host_power_confirm_title": "¿{action}?",
 	"host_power_confirm_body": "Todas las transmisiones activas se cerrarán primero. Confirma con la contraseña de tu consola.",
 	"host_power_sent": "{action}: orden enviada al host.",
 	"host_power_working": "Enviando…",
@@ -502,8 +497,21 @@
 	"library_entry_role_launcher": "Abre un lanzador",
 	"library_entry_role_game": "Un juego",
 	"library_entry_role": "Función",
-	"library_entry_launched_once": "Iniciado una vez",
-	"library_entry_launches": "Iniciado {count} veces",
+	"library_entry_launches": [
+		{
+			"declarations": [
+				"input count",
+				"local n = count: plural"
+			],
+			"selectors": [
+				"n"
+			],
+			"match": {
+				"n=one": "Iniciado una vez",
+				"n=*": "Iniciado {count} veces"
+			}
+		}
+	],
 	"library_entry_play_time": "{time} jugado",
 	"library_entry_last_played": "última vez hace {ago}",
 	"library_entry_prep_title": "Comandos previos",
@@ -560,12 +568,8 @@
 	"settings_language": "Idioma",
 	"common_loading": "Cargando…",
 	"common_error": "Algo salió mal.",
-	"common_retry": "Reintentar",
-	"common_cancel": "Cancelar",
 	"common_confirm": "Confirmar",
-	"common_save": "Guardar",
 	"common_discard": "Descartar",
-	"common_remove": "Eliminar",
 	"common_unauthorized": "Sesión caducada: redirigiendo para iniciar sesión…",
 	"login_title": "Iniciar sesión",
 	"login_subtitle": "Introduce la contraseña de administración para continuar. ¿No sabes qué hacer?",
@@ -1022,9 +1026,6 @@
 	"display_stream_this": "Transmitir este monitor",
 	"display_stream_virtual": "Dar a cada dispositivo su propia pantalla",
 	"display_stream_this_hint": "Un monitor transmitido es lo que ven todos los dispositivos, en lugar de una pantalla propia. Púlsalo de nuevo para deshacerlo.",
-	"common_done": "Listo",
-	"common_on": "Activado",
-	"common_off": "Desactivado",
 	"display_state_kept_for": "Conservada {seconds} s",
 	"display_save": "Guardar",
 	"display_revert": "Descartar cambios",
@@ -1135,7 +1136,6 @@
 	"setting_audio_voice_chat_host": "En el host",
 	"setting_audio_voice_apps": "Aplicaciones de chat de voz",
 	"setting_audio_voice_apps_hint": "Aplicaciones añadidas a la lista integrada de chat de voz.",
-	"host_power_restart_service": "Reiniciar Punktfunk",
 	"host_settings_restart_banner": "Reinicia Punktfunk para aplicar: {names}.",
 	"host_settings_restarting": "Reiniciando…",
 	"host_settings_restarted": "Punktfunk reiniciado. Todos los ajustes están en vigor.",
@@ -1342,8 +1342,21 @@
 	"profiles_doctor_box": "Este PC",
 	"profiles_doctor_seat": "Puesto",
 	"profiles_doctor_again": "Comprobar de nuevo",
-	"profiles_doctor_note": "Los puestos funcionan. El diagnóstico tiene 1 nota.",
-	"profiles_doctor_notes": "Los puestos funcionan. El diagnóstico tiene {count} notas.",
+	"profiles_doctor_notes": [
+		{
+			"declarations": [
+				"input count",
+				"local n = count: plural"
+			],
+			"selectors": [
+				"n"
+			],
+			"match": {
+				"n=one": "Los puestos funcionan. El diagnóstico tiene {count} nota.",
+				"n=*": "Los puestos funcionan. El diagnóstico tiene {count} notas."
+			}
+		}
+	],
 	"pairing_approve_profile": "Solicita jugar como {name}.",
 	"seat_whose_library": "Biblioteca por usuario",
 	"seat_whose_plugins": "Plugins por usuario",

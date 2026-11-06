@@ -6,6 +6,7 @@ import PackageDescription
 
 let package = Package(
     name: "PunktfunkKit",
+    defaultLocalization: "en",
     platforms: [.macOS(.v14), .iOS(.v17), .tvOS(.v17), .visionOS("26.0")],
     products: [
         .library(name: "PunktfunkKit", targets: ["PunktfunkKit"]),
@@ -23,8 +24,13 @@ let package = Package(
     ],
     targets: [
         .binaryTarget(name: "PunktfunkCore", path: "PunktfunkCore.xcframework"),
-        // No dependencies by design — an extension process links this alone.
-        .target(name: "PunktfunkShared"),
+        // No dependencies by design — an extension process links this alone. `Generated/` is
+        // the String Catalog and `L10n` from l10n/messages: scripts/gen-l10n-apple.sh writes it.
+        // The two other catalogs there belong to the apps, which compile them.
+        .target(
+            name: "PunktfunkShared",
+            exclude: ["Generated/AppShortcuts.xcstrings", "Generated/InfoPlist.xcstrings"],
+            resources: [.process("Generated/Localizable.xcstrings")]),
         .target(
             name: "PunktfunkKit",
             dependencies: ["PunktfunkCore", "PunktfunkShared"],

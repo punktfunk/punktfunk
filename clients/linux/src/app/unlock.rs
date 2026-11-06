@@ -5,6 +5,7 @@
 use super::*;
 use pf_client_core::profiles;
 use pf_client_core::unlock::{self, Gate};
+use pf_l10n::{client, common};
 use punktfunk_core::quic::v2::msg::Zeroizing;
 
 impl AppModel {
@@ -167,7 +168,7 @@ fn prompt(name: &str, host: &str, error: Option<&str>) -> Prompt {
         );
     }
     let caption = gtk::Label::builder()
-        .label("Password")
+        .label(client::unlock_password())
         .halign(gtk::Align::Start)
         .css_classes(["caption", "dim-label"])
         .build();
@@ -181,7 +182,7 @@ fn prompt(name: &str, host: &str, error: Option<&str>) -> Prompt {
     fields.append(&caption);
     fields.append(&entry);
     let stay_label = gtk::Label::builder()
-        .label("Stay signed in on this device")
+        .label(client::unlock_stay_signed_in())
         .hexpand(true)
         .xalign(0.0)
         .wrap(true)
@@ -197,11 +198,14 @@ fn prompt(name: &str, host: &str, error: Option<&str>) -> Prompt {
     fields.append(&stay_line);
 
     let dialog = adw::AlertDialog::new(
-        Some(&format!("Sign in as {name}")),
-        Some(&format!("Enter the password for this account on {host}.")),
+        Some(&client::unlock_title(name)),
+        Some(&client::unlock_intro(host)),
     );
     dialog.set_extra_child(Some(&fields));
-    dialog.add_responses(&[("cancel", "Cancel"), ("unlock", "Sign In")]);
+    dialog.add_responses(&[
+        ("cancel", common::common_cancel()),
+        ("unlock", client::unlock_sign_in()),
+    ]);
     dialog.set_response_appearance("unlock", adw::ResponseAppearance::Suggested);
     dialog.set_default_response(Some("unlock"));
     dialog.set_close_response("cancel");

@@ -9,9 +9,11 @@ use super::{Act, HostRef, HostsMsg};
 use crate::store::{Changed, Store};
 use crate::trust::{HostEdit, KnownHost};
 use adw::prelude::*;
+use gtk::glib;
 use pf_client_core::host_actions::ActionInfo;
 use pf_client_core::orchestrate::HostTarget;
 use pf_client_core::start::StartIn;
+use pf_l10n::{client, common, desktop};
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
@@ -66,13 +68,13 @@ impl Ctx {
             }
         });
         if let Err(e) = saved {
-            self.toast(format!("Couldn't save the host \u{2014} {e:#}"));
+            self.toast(desktop::desktop_hostcard_save_failed(format!("{e:#}")));
         }
     }
 
     /// After a forget or an unpair, which write the hosts file and may clear a default in
     /// the settings: re-read both, or toast `failed` with the cause. `true` when it saved.
-    fn stored<T>(&self, saved: anyhow::Result<T>, failed: &str) -> bool {
+    fn stored<T>(&self, saved: anyhow::Result<T>, failed: impl Fn(String) -> String) -> bool {
         match saved {
             Ok(_) => {
                 self.store.reload(Changed::Hosts);
@@ -80,7 +82,7 @@ impl Ctx {
                 true
             }
             Err(e) => {
-                self.toast(format!("{failed} \u{2014} {e:#}"));
+                self.toast(failed(format!("{e:#}")));
                 false
             }
         }
@@ -144,11 +146,11 @@ impl DetailPage {
             .build();
         let status = gtk::Label::builder().css_classes(["dim-label"]).build();
         let connect = gtk::Button::builder()
-            .label("Connect")
+            .label(common::common_connect())
             .css_classes(["pill", "suggested-action"])
             .build();
         let library = gtk::Button::builder()
-            .label("Browse Library")
+            .label(client::hostcard_browse_library())
             .css_classes(["pill"])
             .build();
         {
@@ -181,35 +183,40 @@ impl DetailPage {
         prefs.add(&header_group);
 
         // ---- Presets: rows built by `refresh`, which knows the catalog ----
-        let presets_group = adw::PreferencesGroup::builder().title("Presets").build();
+        let presets_group = adw::PreferencesGroup::builder()
+            .title(glib::markup_escape_text(client::hostcard_section_presets()))
+            .build();
         prefs.add(&presets_group);
 
         // ---- Connection ----
-        let connection = adw::PreferencesGroup::builder().title("Connection").build();
+        let connection = adw::PreferencesGroup::builder()
+            .title(glib::markup_escape_text(
+                client::hostcard_section_connection(),
+            ))
+            .build();
         let entry = |title: &str| {
             adw::EntryRow::builder()
                 .title(title)
                 .show_apply_button(true)
                 .build()
         };
-        let name_row = entry("Name");
-        let addr_row = entry("Address");
-        let port_row = entry("Port");
+        let name_row = entry(client::hosts_field_name());
+        let addr_row = entry(client::hosts_field_address());
+        let port_row = entry(client::hosts_field_port());
         port_row.set_input_purpose(gtk::InputPurpose::Digits);
-        let mac_row = entry("Wake-on-LAN MAC addresses");
-        mac_row.set_tooltip_text(Some(
-            "Wakes this host from sleep. Learned from the network while it is on; separate \
-             several with commas.",
-        ));
+        let mac_row = entry(client::hosts_field_mac());
+        mac_row.set_tooltip_text(Some(desktop::desktop_hosts_field_mac_hint()));
         wire_name(&ctx, &name_row);
         wire_address(&ctx, &addr_row);
         wire_port(&ctx, &port_row);
         wire_macs(&ctx, &mac_row);
-        let mgmt_row = adw::ActionRow::builder().title("Management port").build();
+        let mgmt_row = adw::ActionRow::builder()
+            .title(client::hostcard_management_port())
+            .build();
         mgmt_row.add_css_class("property");
         let clipboard_row = adw::SwitchRow::builder()
-            .title("Share clipboard")
-            .subtitle("Copy and paste between this machine and that host")
+            .title(client::hostcard_share_clipboard())
+            .subtitle(desktop::desktop_hostcard_share_clipboard_hint())
             .build();
         {
             let ctx = ctx.clone();
@@ -221,8 +228,8 @@ impl DetailPage {
             });
         }
         let link_row = action_row(
-            "Copy Link",
-            "A punktfunk:// link that connects to this host",
+            client::hostcard_copy_link(),
+            desktop::desktop_hostcard_copy_link_hint(),
         );
         {
             let ctx = ctx.clone();
@@ -234,8 +241,8 @@ impl DetailPage {
             });
         }
         let shortcut_row = action_row(
-            "Create Shortcut\u{2026}",
-            "An app launcher entry that connects to this host",
+            desktop::desktop_hostcard_create_shortcut(),
+            desktop::desktop_hostcard_create_shortcut_hint(),
         );
         {
             let ctx = ctx.clone();
@@ -246,7 +253,7 @@ impl DetailPage {
                 })
             });
         }
-        let speed_row = action_row("Test Network Speed\u{2026}", "");
+        let speed_row = action_row(client::hostcard_speed_test(), "");
         {
             let ctx = ctx.clone();
             speed_row.connect_activated(move |_| ctx.act(Act::SpeedTest(ctx.request())));
@@ -262,18 +269,22 @@ impl DetailPage {
         prefs.add(&connection);
 
         // ---- Pairing ----
-        let pairing = adw::PreferencesGroup::builder().title("Pairing").build();
+        let pairing = adw::PreferencesGroup::builder()
+            .title(glib::markup_escape_text(client::hostcard_section_pairing()))
+            .build();
         let pair_row = adw::ActionRow::new();
         pair_row.add_css_class("property");
         let pin_row = action_row(
-            "Pair With PIN\u{2026}",
-            "Enter the PIN the host shows to pair this device",
+            client::hostcard_pair_with_pin(),
+            desktop::desktop_hostcard_pair_with_pin_hint(),
         );
         {
             let ctx = ctx.clone();
             pin_row.connect_activated(move |_| ctx.act(Act::Pair(ctx.request())));
         }
-        let default_row = adw::SwitchRow::builder().title("Default host").build();
+        let default_row = adw::SwitchRow::builder()
+            .title(client::hostcard_default_host())
+            .build();
         {
             let ctx = ctx.clone();
             default_row.connect_active_notify(move |row| {
@@ -291,8 +302,8 @@ impl DetailPage {
             });
         }
         let forget_row = action_row(
-            "Forget Identity\u{2026}",
-            "Keeps the host saved; it has to be paired again to connect",
+            client::hostcard_forget_identity(),
+            desktop::desktop_hostcard_forget_identity_hint(),
         );
         forget_row.add_css_class("error");
         {
@@ -306,8 +317,10 @@ impl DetailPage {
         prefs.add(&pairing);
 
         // ---- Power: wake, then the host's own rows (built by `refresh`) ----
-        let power_group = adw::PreferencesGroup::builder().title("Power").build();
-        let wake_row = action_row("Wake Host", "");
+        let power_group = adw::PreferencesGroup::builder()
+            .title(glib::markup_escape_text(client::hostcard_section_power()))
+            .build();
+        let wake_row = action_row(client::hostcard_wake(), "");
         {
             let ctx = ctx.clone();
             wake_row.connect_activated(move |_| {
@@ -322,8 +335,10 @@ impl DetailPage {
         prefs.add(&power_group);
 
         // ---- Support ----
-        let support = adw::PreferencesGroup::builder().title("Support").build();
-        let logs_row = action_row("Send Logs to Host", "");
+        let support = adw::PreferencesGroup::builder()
+            .title(glib::markup_escape_text(client::hostcard_section_logs()))
+            .build();
+        let logs_row = action_row(client::hostcard_send_logs(), "");
         {
             let ctx = ctx.clone();
             logs_row.connect_activated(move |_| ctx.act(Act::SendLogs(ctx.request())));
@@ -333,7 +348,9 @@ impl DetailPage {
 
         // ---- Remove, last ----
         let remove_group = adw::PreferencesGroup::new();
-        let remove = adw::ButtonRow::builder().title("Remove Host").build();
+        let remove = adw::ButtonRow::builder()
+            .title(client::hostcard_remove())
+            .build();
         remove.add_css_class("destructive-action");
         {
             let (ctx, nav) = (ctx.clone(), nav.clone());
@@ -406,9 +423,9 @@ impl DetailPage {
         self.status.set_label(&live.status.sentence());
         self.connect
             .set_label(if matches!(live.status, Status::Playing(_)) {
-                "Resume"
+                client::hostcard_resume()
             } else {
-                "Connect"
+                common::common_connect()
             });
         // One session per host: the window's banner or the card's menu ends it.
         self.connect.set_sensitive(!matches!(
@@ -425,38 +442,43 @@ impl DetailPage {
         set_if_idle(&self.mac_row, &k.mac.join(", "));
         self.mgmt_row.set_subtitle(&match k.mgmt_port {
             Some(p) => p.to_string(),
-            None => format!("{} (default)", pf_client_core::library::DEFAULT_MGMT_PORT),
+            None => desktop::desktop_hostcard_mgmt_port_default(
+                pf_client_core::library::DEFAULT_MGMT_PORT,
+            ),
         });
         self.clipboard_row.set_active(k.clipboard_sync);
         gate(
             &self.speed_row,
             pinned,
-            "Measures the link and recommends a bitrate",
-            "Pair first",
+            desktop::desktop_hostcard_speed_test_hint(),
+            client::hostcard_pair_first(),
         );
 
         let (state, detail) = match (pinned, k.paired) {
-            (true, true) => ("Paired", short_fp(&k.fp_hex)),
-            (true, false) => ("Trusted on first use", short_fp(&k.fp_hex)),
-            (false, _) => ("Not paired", "Click the card to pair it".to_string()),
+            (true, true) => (client::hostcard_paired(), short_fp(&k.fp_hex)),
+            (true, false) => (client::hostcard_tofu(), short_fp(&k.fp_hex)),
+            (false, _) => (
+                client::hostcard_status_not_paired(),
+                desktop::desktop_hostcard_pair_by_click_hint().to_string(),
+            ),
         };
         self.pair_row.set_title(state);
         self.pair_row.set_subtitle(&detail);
         self.default_row.set_visible(k.paired);
         self.default_row.set_active(live.is_default);
         self.default_row.set_subtitle(match live.start_in {
-            StartIn::Hosts => "Used when Start in opens the Library or a stream",
-            StartIn::Library => "Punktfunk opens on its library",
-            StartIn::Stream => "Punktfunk connects to it on launch",
+            StartIn::Hosts => desktop::desktop_hostcard_default_start_hosts_hint(),
+            StartIn::Library => desktop::desktop_hostcard_default_start_library_hint(),
+            StartIn::Stream => desktop::desktop_hostcard_default_start_stream_hint(),
         });
         self.forget_row.set_visible(pinned);
 
         let wake_reason = if live.online {
-            "The host is on"
+            desktop::desktop_hostcard_wake_on_hint()
         } else if k.mac.is_empty() {
-            "Add its MAC address under Connection to wake it"
+            desktop::desktop_hostcard_wake_no_mac_hint()
         } else {
-            "Sends a Wake-on-LAN packet"
+            desktop::desktop_hostcard_wake_hint()
         };
         self.wake_row.set_subtitle(wake_reason);
         self.wake_row
@@ -464,11 +486,11 @@ impl DetailPage {
         self.refresh_actions(&live.actions, live.online);
 
         let logs_reason = if !k.paired {
-            "Pair first"
+            client::hostcard_pair_first()
         } else if !live.online {
-            "The host is offline"
+            desktop::desktop_hostcard_offline_hint()
         } else {
-            "Uploads this device's recent log to the host's web console"
+            client::hostcard_send_logs_hint()
         };
         self.logs_row.set_subtitle(logs_reason);
         self.logs_row.set_sensitive(k.paired && live.online);
@@ -485,21 +507,21 @@ impl DetailPage {
             self.pins.borrow_mut().clear();
             if presets.is_empty() {
                 let row = action_row(
-                    "No presets yet",
-                    "Make one in Preferences to connect with other settings",
+                    desktop::desktop_hostcard_no_presets(),
+                    desktop::desktop_hostcard_no_presets_hint(),
                 );
                 row.set_action_name(Some("win.preferences"));
                 self.presets_group.add(&row);
                 self.preset_rows.borrow_mut().push(row.upcast());
             } else {
-                let mut labels = vec!["Default settings"];
+                let mut labels = vec![client::hostcard_default_settings()];
                 labels.extend(presets.iter().map(|p| p.name.as_str()));
                 let ids: Vec<String> = std::iter::once(String::new())
                     .chain(presets.iter().map(|p| p.id.clone()))
                     .collect();
                 let combo = adw::ComboRow::builder()
-                    .title("Connect with")
-                    .subtitle("What a click on its card uses")
+                    .title(client::hostcard_connect_with())
+                    .subtitle(desktop::desktop_hostcard_connect_with_hint())
                     .model(&gtk::StringList::new(&labels))
                     .build();
                 {
@@ -517,7 +539,7 @@ impl DetailPage {
                 self.preset_rows.borrow_mut().push(combo.clone().upcast());
                 for p in presets {
                     let row = adw::SwitchRow::builder()
-                        .title(format!("Pin \u{201c}{}\u{201d} as a card", p.name))
+                        .title(client::hostcard_pin_preset(&p.name))
                         .build();
                     {
                         let (ctx, id) = (self.ctx.clone(), p.id.clone());
@@ -577,7 +599,7 @@ impl DetailPage {
         }
         for a in actions {
             let reason = match (&a.unavailable_reason, online) {
-                (_, false) => "The host is offline".to_string(),
+                (_, false) => desktop::desktop_hostcard_offline_hint().to_string(),
                 (Some(r), true) if !a.available => r.clone(),
                 _ => String::new(),
             };
@@ -652,7 +674,7 @@ fn wire_name(ctx: &Ctx, row: &adw::EntryRow) {
         let name = row.text().trim().to_string();
         if name.is_empty() {
             let stored = ctx.current.borrow().name.clone();
-            return refuse(&ctx, row, &stored, "Enter a name for the host.".into());
+            return refuse(&ctx, row, &stored, client::hosts_error_name_empty().into());
         }
         ctx.edit(|h| {
             h.apply_edit(&HostEdit {
@@ -720,7 +742,7 @@ fn confirm(
     on_yes: impl Fn() + 'static,
 ) {
     let dialog = adw::AlertDialog::new(Some(heading), Some(body));
-    dialog.add_responses(&[("cancel", "Cancel"), ("go", verb)]);
+    dialog.add_responses(&[("cancel", common::common_cancel()), ("go", verb)]);
     dialog.set_response_appearance("go", adw::ResponseAppearance::Destructive);
     dialog.set_default_response(Some("cancel"));
     dialog.set_close_response("cancel");
@@ -735,14 +757,13 @@ fn forget_identity(ctx: &Ctx, anchor: &adw::ActionRow) {
     let ctx = ctx.clone();
     confirm(
         anchor,
-        &format!("Forget {name}'s identity?"),
-        "It stays saved with its name, address and presets, but has to be paired again \
-         before it connects.",
-        "Forget",
+        &client::hostcard_forget_identity_title(&name),
+        client::hostcard_forget_identity_body(),
+        client::hostcard_forget_identity_confirm(),
         move || {
             let host = ctx.host.borrow().clone();
             let unpaired = pf_client_core::orchestrate::unpair_host(|known| host.index(known));
-            ctx.stored(unpaired, "Couldn't save the host");
+            ctx.stored(unpaired, desktop::desktop_hostcard_save_failed);
         },
     );
 }
@@ -753,13 +774,13 @@ fn remove_host(ctx: &Ctx, nav: &adw::NavigationView, anchor: &adw::ButtonRow) {
     let (ctx, nav) = (ctx.clone(), nav.clone());
     confirm(
         anchor,
-        &format!("Remove {name}?"),
-        "It has to be added and paired again to connect.",
-        "Remove",
+        &client::hostcard_remove_title(&name),
+        client::hostcard_remove_body(),
+        common::common_remove(),
         move || {
             let host = ctx.host.borrow().clone();
             let gone = pf_client_core::orchestrate::forget_host(|known| host.index(known));
-            if ctx.stored(gone, "Couldn't remove the host") {
+            if ctx.stored(gone, desktop::desktop_hostcard_remove_failed) {
                 nav.pop_to_tag("main");
             }
         },

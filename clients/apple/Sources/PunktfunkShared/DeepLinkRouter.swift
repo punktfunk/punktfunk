@@ -57,11 +57,9 @@ public enum DeepLinkRouter {
             case .found:
                 selection = .preset(preset?.id ?? "")
             case .notFound:
-                return .notice("No settings preset called “\(reference)” on this device.")
+                return .notice(L10n.linkUnknownPreset(preset: reference))
             case .ambiguous:
-                return .notice(
-                    "More than one settings preset is called “\(reference)”. "
-                        + "Rename one, or link to it by its id.")
+                return .notice(L10n.linkAmbiguousPreset(preset: reference))
             }
         }
 
@@ -69,14 +67,11 @@ public enum DeepLinkRouter {
         switch resolution {
         case .known(let host), .confirm(let host):
             guard !link.pinConflict(with: host) else {
-                return .notice(
-                    "That link's fingerprint doesn't match the identity saved for "
-                        + "\(host.displayName). It's out of date, or it isn't pointing where it says.")
+                return .notice(L10n.linkPinConflict(host: host.displayName))
             }
             guard session.isIdle else {
                 guard session.activeHostID == host.id else {
-                    let current = session.activeHostName ?? "a host"
-                    return .notice("Already streaming \(current). End that session first.")
+                    return .notice(String(localized: L10n.linkSessionRunning))
                 }
                 return .alreadyHere
             }
@@ -89,25 +84,22 @@ public enum DeepLinkRouter {
             // Never a silent connect: an unsaved host is a trust decision, and a link is not
             // where it gets made. This only NAMES what the link pointed at.
             guard session.isIdle || browse else {
-                return .notice("Already streaming. End that session first.")
+                return .notice(String(localized: L10n.linkSessionRunning))
             }
             if browse {
-                return .notice(
-                    "\(name ?? address) isn't saved on this device yet. Add it with the + button "
-                        + "first — a library can only be browsed on a saved host.")
+                return .notice(L10n.appleLinkUnsavedBrowse(host: name ?? address))
             }
+            let target = "\(address):\(String(port))"
             return .notice(
-                "\(name ?? address) isn't saved on this device yet. "
-                    + "Add it with the + button — the link points at \(address):\(String(port))"
-                    + (fingerprint == nil ? "." : ", and carries a fingerprint to verify it against."))
+                fingerprint == nil
+                    ? L10n.appleLinkUnsavedConnect(host: name ?? address, address: target)
+                    : L10n.appleLinkUnsavedConnectFp(host: name ?? address, address: target))
 
         case .ambiguous:
-            return .notice(
-                "More than one saved host is called “\(link.hostRef)”. "
-                    + "Rename one, or link to it by its address.")
+            return .notice(L10n.linkAmbiguousHost(name: link.hostRef))
 
         case .unresolvable:
-            return .notice("That host isn't saved on this device.")
+            return .notice(String(localized: L10n.linkHostNotSaved))
         }
     }
 }

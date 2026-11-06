@@ -47,8 +47,8 @@ struct HostsWidget: Widget {
             HostsWidgetView(entry: entry)
                 .containerBackground(.fill.tertiary, for: .widget)
         }
-        .configurationDisplayName("Punktfunk Hosts")
-        .description("Quick-launch your recent streaming hosts.")
+        .configurationDisplayName(L10n.appleWidgetHostsName)
+        .description(L10n.appleWidgetHostsDesc)
         .supportedFamilies([
             .systemSmall, .systemMedium, .accessoryCircular, .accessoryRectangular,
         ])
@@ -169,7 +169,7 @@ private struct EmptyHostView: View {
             Image(systemName: "play.tv")
                 .font(.title2)
                 .foregroundStyle(.secondary)
-            Text("Open Punktfunk to add a host.")
+            Text(L10n.appleWidgetHostsEmpty)
                 .font(.caption)
                 .multilineTextAlignment(.center)
                 .foregroundStyle(.secondary)

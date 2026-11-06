@@ -10,7 +10,9 @@ import {
   UpdateInfo,
 } from "./backend";
 import { refreshLibraries } from "./catalog";
+import { diag } from "./diag";
 import { type HostView, mergeHosts } from "./hosts";
+import { t } from "./i18n";
 import { LaunchOpts, launchGameStream, launchStream } from "./steam";
 
 export const DOCS_URL = "https://docs.punktfunk.unom.io/docs/steam-deck";
@@ -202,28 +204,41 @@ export async function checkForUpdatesNow(
   const res = await check(true);
   let body: string;
   if (!res || res.error === "fetch-failed") {
-    body = "Couldn’t reach the update server — are you online?";
+    body = t("decky_update_server_unreachable");
   } else if (hasUpdate(res)) {
-    const parts: string[] = [];
-    if (res.update_available) parts.push(`plugin v${res.current} → v${res.latest}`);
-    if (res.client_update_available) {
-      parts.push(res.client_latest ? `client ${res.client_latest}` : "client");
+    const version = res.client_latest;
+    if (res.update_available && res.client_update_available) {
+      body = version
+        ? t("decky_update_available_both", {
+            current: res.current,
+            latest: res.latest,
+            version,
+          })
+        : t("decky_update_available_both_unknown", {
+            current: res.current,
+            latest: res.latest,
+          });
+    } else if (res.update_available) {
+      body = t("decky_update_available_plugin", { current: res.current, latest: res.latest });
+    } else {
+      body = version
+        ? t("decky_update_available_client", { version })
+        : t("decky_update_available_client_unknown");
     }
-    body = `Update available: ${parts.join(" + ")}.`;
     if (clientUpdateIsManualOnly(res)) {
       // Say the honest thing up front rather than letting the user find out at the button.
-      body += " The client updates outside Punktfunk on this install.";
+      body += ` ${t("decky_update_client_manual_note")}`;
     }
   } else if (res.client_error) {
     // A failed CLIENT check must never read as "up to date" — that is the one wrong answer.
     body =
       res.client_error === "client-outdated"
-        ? "Couldn’t check the client — it predates update checks. Update it once by hand."
-        : "Couldn’t check the client for updates";
+        ? t("decky_update_client_outdated")
+        : t("decky_update_client_check_failed");
   } else if (res.error === "update-channel-unknown") {
-    body = "Development build — plugin updates are disabled; the client is up to date.";
+    body = t("decky_update_dev_build");
   } else {
-    body = `You’re up to date (plugin v${res.current}).`;
+    body = t("decky_up_to_date", { version: res.current });
   }
   toaster.toast({ title: "Punktfunk", body });
 }
@@ -231,20 +246,20 @@ export async function checkForUpdatesNow(
 /** One line of user-facing copy for whatever `updateClient()` came back with. */
 function clientUpdateResultBody(r: Awaited<ReturnType<typeof updateClient>>): string {
   if (r.ok) {
-    if (r.staged) return "Client updated — reboot to finish.";
-    return r.updated ? "Client updated to the latest version." : "Client is already up to date.";
+    if (r.staged) return t("decky_client_updated_reboot");
+    return r.updated ? t("decky_client_updated") : t("decky_client_current");
   }
   // "manual" is not a failure: the box simply can't install it, and `command` says how.
   if (r.error === "manual") {
     return r.command
-      ? `This client updates outside Punktfunk. Run: ${r.command}`
-      : "This client updates outside Punktfunk — use the way you installed it.";
+      ? t("decky_client_manual_command", { command: r.command })
+      : t("decky_client_manual");
   }
-  if (r.error === "timeout") return "Client update timed out — check the box and try again";
-  if (r.error === "client-unavailable")
-    return "Couldn’t reach the client to update it — is it still installed?";
-  const why = r.detail || r.error;
-  return `Client update failed${why ? ` — ${why}` : ""}`;
+  if (r.error === "timeout") return t("decky_client_update_timeout");
+  if (r.error === "client-unavailable") return t("decky_client_update_unreachable");
+  // The client's own line is English; it goes to the diagnostics, not to the toast.
+  diag(`client update failed: ${r.detail || r.error}`);
+  return t("decky_client_update_failed");
 }
 
 /**
@@ -269,14 +284,14 @@ export async function applyUpdate(
       // A package-manager run is not instant; say so before the wait, not after.
       body:
         info.client_applier === "helper"
-          ? "Updating the client — this can take a few minutes…"
-          : "Updating the client…",
+          ? t("decky_client_updating_slow")
+          : t("decky_client_updating"),
     });
     try {
       const r = await updateClient();
       toaster.toast({ title: "Punktfunk", body: clientUpdateResultBody(r) });
     } catch {
-      toaster.toast({ title: "Punktfunk", body: "Client update failed" });
+      toaster.toast({ title: "Punktfunk", body: t("decky_client_update_failed") });
     }
   } else if (info.client_update_available) {
     // Nothing here can install it — hand over the one line that does, rather than a button
@@ -286,8 +301,8 @@ export async function applyUpdate(
     toaster.toast({
       title: "Punktfunk",
       body: line
-        ? `Client update available (${info.client_latest}). Run: ${line}`
-        : `A newer client (${info.client_latest}) is available — update it the way you installed it.`,
+        ? t("decky_client_update_run", { version: info.client_latest, command: line })
+        : t("decky_client_update_manual", { version: info.client_latest }),
       duration: 12_000,
     });
   }
@@ -316,7 +331,7 @@ export async function applyUpdate(
           title: "Punktfunk",
           // Decky's installer also phones the plugin store first, which can hang on some
           // networks before the actual install proceeds — set expectations.
-          body: `Updating the plugin to v${plugin.latest} — confirm Decky’s prompt. This can take a couple of minutes.`,
+          body: t("decky_plugin_updating", { version: plugin.latest }),
         });
         return;
       }
@@ -325,7 +340,7 @@ export async function applyUpdate(
     }
     toaster.toast({
       title: "Punktfunk",
-      body: "Update the plugin from Decky → Developer → Install Plugin from URL.",
+      body: t("decky_plugin_update_manual"),
     });
     return;
   }
@@ -348,7 +363,7 @@ export async function applyUpdate(
 export async function startStream(
   v: HostView,
   opts: LaunchOpts = {},
-  label?: string,
+  failedAs?: { preset: string } | { profile: string },
 ): Promise<void> {
   try {
     await launchStream(v.ref, opts);
@@ -358,7 +373,13 @@ export async function startStream(
     // closed, so inline error state would go unseen).
     Navigation.CloseSideMenus();
   } catch (e) {
-    toaster.toast({ title: "Punktfunk", body: `Launch failed${label ? ` (${label})` : ""}: ${e}` });
+    diag(`launch failed: ${e}`);
+    const body = !failedAs
+      ? t("decky_launch_failed")
+      : "preset" in failedAs
+        ? t("decky_launch_failed_preset", { preset: failedAs.preset })
+        : t("decky_launch_failed_named", { name: failedAs.profile });
+    toaster.toast({ title: "Punktfunk", body });
   }
 }
 
@@ -377,6 +398,7 @@ export async function startGameStream(
     await launchGameStream(v.ref, steamAppId, title, iconHash);
     Navigation.CloseSideMenus();
   } catch (e) {
-    toaster.toast({ title: "Punktfunk", body: `Launch failed (${title}): ${e}` });
+    diag(`launch failed: ${e}`);
+    toaster.toast({ title: "Punktfunk", body: t("decky_launch_failed_named", { name: title }) });
   }
 }

@@ -914,9 +914,7 @@ const DoctorFooter: FC<{ line: DoctorLine }> = ({ line }) => (
 		>
 			{line.message ??
 				(line.notes > 0
-					? line.notes === 1
-						? m.profiles_doctor_note()
-						: m.profiles_doctor_notes({ count: line.notes })
+					? m.profiles_doctor_notes({ count: line.notes })
 					: m.profiles_seats_healthy())}
 		</span>
 		<Button variant="outline" size="sm" onClick={line.onOpen}>

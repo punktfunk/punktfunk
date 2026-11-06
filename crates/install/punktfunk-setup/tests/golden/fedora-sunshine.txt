@@ -19,7 +19,7 @@ gpgkey=https://git.unom.io/api/packages/unom/rpm/repository.key
 REPO
   + sudo dnf install -y punktfunk punktfunk-web punktfunk-scripting
 ==> Checking for Sunshine / Apollo / Vibeshine
-  !! another streaming host is active on this box — both want TCP 47990 (its web UI, punktfunk's management API)
+  !! Another streaming host is active on this device — both want TCP 47990 (its web UI, Punktfunk's management API)
   ok would set PUNKTFUNK_MGMT_BIND=0.0.0.0:47991 in /box/config/punktfunk/host.env
   ok Clients learn the port from discovery; the console and plugins read it from mgmt-endpoint. Details: https://docs.punktfunk.unom.io/docs/switching-from-sunshine
 ==> Options (each one can be changed later)
@@ -38,10 +38,10 @@ REPO
 ==> Checking
 
   Done. Next: let a device in.
-  On the device you play on, open punktfunk and pick this host. Approve it in the notification here, or in the console.
+  On the device you play on, open Punktfunk and pick this host. Approve it in the notification here, or in the console.
   Console: https://192.168.1.10:47992  (its certificate is this host's own)
   Password — this prints it, until you first sign in: sed -n 's/^PUNKTFUNK_UI_PASSWORD=//p' ~/.config/punktfunk/web-password
-  Group changes apply after a restart of this computer (controllers won't work until then).
+  Group changes apply after a restart of this device (controllers won't work until then).
   Running next to Sunshine/Apollo: https://docs.punktfunk.unom.io/docs/switching-from-sunshine
   https://docs.punktfunk.unom.io/docs/troubleshooting · https://docs.punktfunk.unom.io/docs/fedora
 

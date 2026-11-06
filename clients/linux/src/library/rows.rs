@@ -5,6 +5,7 @@
 use pf_client_core::collate::{self, GroupBy, GroupKey, SortKey};
 use pf_client_core::library::{GameEntry, DESKTOP_ID};
 use pf_client_core::library_layout::Section;
+use pf_l10n::client;
 
 /// Recently played shows at most this many titles (design D6).
 pub const RECENT_MAX: usize = 12;
@@ -96,7 +97,7 @@ pub fn rows(l: &Layout) -> Vec<Row> {
         };
         match section {
             Section::Desktops if !l.desktops.is_empty() => {
-                out.push(Row::Heading("Desktops".into()));
+                out.push(Row::Heading(client::lib_section_desktops().into()));
                 out.push(Row::Desktops(l.desktops.clone()));
             }
             Section::Recent => {
@@ -106,7 +107,12 @@ pub fn rows(l: &Layout) -> Vec<Row> {
                 played.sort_by_key(|&i| std::cmp::Reverse(last_played(&l.games[i])));
                 played.truncate(RECENT_MAX);
                 let tiles = played.into_iter().map(Tile::Game).collect();
-                band(tiles, Caption::LastPlayed, "Recently played", &mut out);
+                band(
+                    tiles,
+                    Caption::LastPlayed,
+                    client::lib_section_recent(),
+                    &mut out,
+                );
             }
             Section::Favorites => {
                 let tiles = in_order
@@ -115,7 +121,12 @@ pub fn rows(l: &Layout) -> Vec<Row> {
                     .filter(|&i| l.matches(i) && l.favorites.contains(&l.games[i].id))
                     .map(Tile::Game)
                     .collect();
-                band(tiles, l.sort_caption(), "Favorites", &mut out);
+                band(
+                    tiles,
+                    l.sort_caption(),
+                    client::lib_section_favorites(),
+                    &mut out,
+                );
             }
             Section::Launchers => {
                 let tiles = groups
@@ -125,7 +136,12 @@ pub fn rows(l: &Layout) -> Vec<Row> {
                     .filter(|&i| l.matches(i))
                     .map(Tile::Game)
                     .collect();
-                band(tiles, Caption::None, "Launchers", &mut out);
+                band(
+                    tiles,
+                    Caption::None,
+                    client::lib_section_launchers(),
+                    &mut out,
+                );
             }
             Section::Games => games(l, !desktops_on, &mut out),
             // The console's; the desktop shell groups the grid instead (design D5).
@@ -158,7 +174,7 @@ fn games(l: &Layout, lead_desktop: bool, out: &mut Vec<Row>) {
         }
         let heading = match l.group {
             Some(_) => group.label,
-            None => "Games".into(),
+            None => client::lib_section_games().into(),
         };
         out.push(Row::Heading(heading));
         for chunk in tiles.chunks(columns) {
@@ -171,7 +187,7 @@ fn games(l: &Layout, lead_desktop: bool, out: &mut Vec<Row>) {
     }
     if first && lead_desktop && l.search.is_empty() {
         // No titles at all: the desktop still has a place to be pressed.
-        out.push(Row::Heading("Games".into()));
+        out.push(Row::Heading(client::lib_section_games().into()));
         out.push(Row::Posters {
             tiles: vec![Tile::Desktop],
             caption,

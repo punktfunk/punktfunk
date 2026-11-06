@@ -178,10 +178,7 @@ pub fn preset(name: &str) -> Option<Facts> {
         // A distro with no punktfunk repo. The host punt stands; the client still installs.
         "unsupported-client" => {
             let mut f = box_of("void", "Void Linux", "", Family::Flatpak, "install");
-            f.host_punt = Some(
-                "no package repo for 'Void Linux' yet — https://docs.punktfunk.unom.io/docs/developers/build-from-source"
-                    .into(),
-            );
+            f.host_punt = Some(crate::facts::Punt::Unsupported(f.os.pretty.clone()));
             f
         }
         _ => return None,

@@ -1,0 +1,7 @@
+{
+	"host_power_sleep": "Suspender host",
+	"host_power_reboot": "Reiniciar host",
+	"host_power_shutdown": "Apagar host",
+	"host_power_restart_service": "Reiniciar Punktfunk",
+	"host_power_confirm_title": "¿{action}?"
+}

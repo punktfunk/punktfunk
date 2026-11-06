@@ -19,6 +19,7 @@ use pf_client_core::collate::{GroupBy, SortKey};
 use pf_client_core::library::{self, GameEntry, LibraryError, RunningGame};
 use pf_client_core::library_layout as layout;
 use pf_client_core::orchestrate::HostTarget;
+use pf_l10n::{client, common, desktop};
 use relm4::prelude::*;
 use rows::Row;
 use std::cell::{Cell, RefCell};
@@ -204,7 +205,7 @@ impl SimpleComponent for LibraryPage {
         stack.add_named(&loading_page(), Some("loading"));
         let error = adw::StatusPage::builder()
             .icon_name("dialog-error-symbolic")
-            .title("Couldn't load the library")
+            .title(client::lib_load_failed())
             .build();
         let pill = |label: &str, msg: fn() -> LibraryMsg| {
             let b = gtk::Button::builder()
@@ -217,8 +218,8 @@ impl SimpleComponent for LibraryPage {
             b
         };
         let (retry, pair) = (
-            pill("Retry", || LibraryMsg::Reload),
-            pill("Pair Again", || LibraryMsg::Pair),
+            pill(common::common_retry(), || LibraryMsg::Reload),
+            pill(client::lib_pair_again(), || LibraryMsg::Pair),
         );
         let actions = gtk::Box::new(gtk::Orientation::Horizontal, 12);
         actions.set_halign(gtk::Align::Center);
@@ -229,9 +230,9 @@ impl SimpleComponent for LibraryPage {
         stack.add_named(
             &status_page(
                 "applications-games-symbolic",
-                "No library yet",
-                Some("Pair a host to browse its games here."),
-                ("Show Hosts", {
+                client::lib_no_host_title(),
+                Some(client::lib_no_host_body()),
+                (client::lib_no_host_show_hosts(), {
                     let sender = sender.clone();
                     move || {
                         let _ = sender.output(LibraryOutput::ShowHosts);
@@ -243,7 +244,7 @@ impl SimpleComponent for LibraryPage {
 
         let (header, bar) = crate::widgets::chrome::destination_header(&views, &narrow);
         let reload = crate::widgets::lucide::button("refresh-cw");
-        reload.set_tooltip_text(Some("Reload"));
+        reload.set_tooltip_text(Some(client::lib_reload()));
         {
             let sender = sender.clone();
             reload.connect_clicked(move |_| sender.input(LibraryMsg::Reload));
@@ -263,10 +264,10 @@ impl SimpleComponent for LibraryPage {
         let customize = gtk::MenuButton::builder()
             .child(&crate::widgets::lucide::row_icon("sliders-horizontal"))
             .popover(&customize::popover(&store))
-            .tooltip_text("Customize sections")
+            .tooltip_text(client::lib_customize())
             .build();
         let search_entry = gtk::SearchEntry::builder()
-            .placeholder_text("Search titles")
+            .placeholder_text(client::lib_search_titles())
             .build();
         {
             let sender = sender.clone();
@@ -287,7 +288,7 @@ impl SimpleComponent for LibraryPage {
         search_bar.set_key_capture_widget(Some(&root));
         let search_toggle = gtk::ToggleButton::builder()
             .child(&crate::widgets::lucide::row_icon("search"))
-            .tooltip_text("Search titles")
+            .tooltip_text(client::lib_search_titles())
             .build();
         search_bar
             .bind_property("search-mode-enabled", &search_toggle, "active")
@@ -384,9 +385,8 @@ impl SimpleComponent for LibraryPage {
                     .map(|s| s.key.clone());
                 match key {
                     Some(key) => self.select(&key),
-                    None => out(LibraryOutput::Toast(format!(
-                        "Pair {} to browse its library.",
-                        req.host.name
+                    None => out(LibraryOutput::Toast(desktop::desktop_lib_pair_to_browse(
+                        &req.host.name,
                     ))),
                 }
             }
@@ -449,11 +449,9 @@ impl SimpleComponent for LibraryPage {
                     if let Some(display) = gdk::Display::default() {
                         display.clipboard().set_text(&url);
                     }
-                    out(LibraryOutput::Toast("Link copied".into()));
+                    out(LibraryOutput::Toast(client::hostcard_link_copied().into()));
                 }
-                None => out(LibraryOutput::Toast(
-                    "This host isn't saved any more".into(),
-                )),
+                None => out(LibraryOutput::Toast(client::lib_host_not_saved().into())),
             },
             LibraryMsg::Shortcut(id) => {
                 if let Some((url, label)) = self.link(&id) {
@@ -551,7 +549,7 @@ fn loading_page() -> gtk::Box {
     page.append(&spinner);
     page.append(
         &gtk::Label::builder()
-            .label("Loading library\u{2026}")
+            .label(client::lib_loading())
             .css_classes(["dim-label"])
             .build(),
     );
@@ -561,18 +559,10 @@ fn loading_page() -> gtk::Box {
 /// Why a shelf did not load, and the next move, in the player's words.
 fn failure(e: &LibraryError, host: &str) -> String {
     match e {
-        LibraryError::PinMismatch => {
-            format!("{host}'s certificate changed since you paired. Pair again to see its games.")
-        }
-        LibraryError::NotPaired => {
-            format!("{host} doesn't recognize this device any more. Pair again to see its games.")
-        }
-        LibraryError::Http(code) => {
-            format!("{host} turned the request down (HTTP {code}). Try again later.")
-        }
-        LibraryError::Unreachable(_) => {
-            format!("{host} didn't answer. Check that it's on, then try again.")
-        }
+        LibraryError::PinMismatch => desktop::desktop_lib_failed_pin(host),
+        LibraryError::NotPaired => desktop::desktop_lib_failed_not_paired(host),
+        LibraryError::Http(code) => desktop::desktop_lib_failed_http(host, code),
+        LibraryError::Unreachable(_) => desktop::desktop_lib_failed_unreachable(host),
     }
 }
 
@@ -670,22 +660,22 @@ fn arrange_menu(
     };
     let sorts: Vec<(&str, &str)> = SortKey::ALL.iter().map(|k| (k.id(), k.label())).collect();
     let menu = gio::Menu::new();
-    menu.append_section(Some("Sort"), &section("library.sort", &sorts));
+    menu.append_section(Some(client::lib_sort()), &section("library.sort", &sorts));
     menu.append_section(
-        Some("Group"),
+        Some(client::lib_group()),
         &section(
             "library.group",
             &[
-                ("none", "None"),
-                ("platform", "Platform"),
-                ("store", "Store"),
+                ("none", client::lib_group_none()),
+                ("platform", client::lib_group_platform()),
+                ("store", client::lib_group_store()),
             ],
         ),
     );
     let button = gtk::MenuButton::builder()
         .child(&crate::widgets::lucide::row_icon("arrow-up-down"))
         .menu_model(&menu)
-        .tooltip_text("Sort and group")
+        .tooltip_text(client::lib_sort_group())
         .build();
     (button, sort, group)
 }
@@ -882,8 +872,7 @@ impl LibraryPage {
         match loaded {
             Loaded::Cached(games) => {
                 w.banner.set_button_label(None);
-                w.banner
-                    .set_title("Last known library \u{2014} asking the host\u{2026}");
+                w.banner.set_title(client::lib_stale_checking());
                 w.banner.set_revealed(true);
                 *self.view.games.borrow_mut() = games;
                 self.drawn.clear();
@@ -905,12 +894,13 @@ impl LibraryPage {
                     w.pair.set_visible(pair);
                     w.stack.set_visible_child_name("error");
                 } else {
-                    w.banner.set_title(&if pair {
-                        "Last known library \u{2014} pair again to refresh it".to_string()
+                    w.banner.set_title(if pair {
+                        desktop::desktop_lib_stale_unpaired()
                     } else {
-                        format!("Last known library \u{2014} {name} didn\u{2019}t answer")
+                        client::lib_stale_offline()
                     });
-                    w.banner.set_button_label(pair.then_some("Pair Again"));
+                    w.banner
+                        .set_button_label(pair.then_some(client::lib_pair_again()));
                     w.banner.set_revealed(true);
                 }
             }
@@ -1007,7 +997,7 @@ impl LibraryPage {
             shelf.req.preset.as_deref(),
             Some(id),
         )?;
-        Some((url, format!("{} on {}", self.title(id), shelf.label)))
+        Some((url, client::lib_shortcut_label(self.title(id), shelf.label)))
     }
 
     /// Ending a game can lose unsaved progress, so it asks first.
@@ -1017,10 +1007,13 @@ impl LibraryPage {
         };
         let title = self.title(id);
         let dialog = adw::AlertDialog::new(
-            Some(&format!("End {title}?")),
-            Some("Unsaved progress in the game is lost."),
+            Some(&client::lib_end_game_confirm_title(&title)),
+            Some(client::lib_end_game_confirm_body()),
         );
-        dialog.add_responses(&[("cancel", "Cancel"), ("end", "End Game")]);
+        dialog.add_responses(&[
+            ("cancel", common::common_cancel()),
+            ("end", client::lib_end_game()),
+        ]);
         dialog.set_response_appearance("end", adw::ResponseAppearance::Destructive);
         dialog.set_default_response(Some("cancel"));
         dialog.set_close_response("cancel");

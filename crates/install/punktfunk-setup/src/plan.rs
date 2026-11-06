@@ -7,6 +7,7 @@
 //! linger, and unit enable each need something the previous step created. They stay
 //! `StepAction` variants so `exec` owns the trap. `design/installer-v2.md`.
 
+use pf_l10n::tools as t;
 use serde::{Deserialize, Serialize};
 
 use crate::choices::{Action, Choices, Components};
@@ -157,6 +158,8 @@ impl Plan {
     }
 }
 
+/// Titles and notes are worded in the process language when built: the person's on the
+/// screens, English on every transcript.
 pub fn build(facts: &Facts, choices: &Choices) -> Plan {
     let mut plan = Plan::default();
     let backend = platform::backend(facts.family);
@@ -171,7 +174,7 @@ pub fn build(facts: &Facts, choices: &Choices) -> Plan {
         }
         plan.push(
             Phase::Uninstall,
-            format!("Uninstalling the host ({DOCS}/uninstall)"),
+            t::setup_phase_uninstall(format!("{DOCS}/uninstall")),
             steps,
         );
         return plan;
@@ -182,7 +185,7 @@ pub fn build(facts: &Facts, choices: &Choices) -> Plan {
     if choices.components.host && choices.web_password.is_some() {
         plan.push(
             Phase::Password,
-            "Web console password",
+            t::setup_phase_password(),
             vec![Step {
                 action: StepAction::WebPassword,
                 ends_run: false,
@@ -195,10 +198,10 @@ pub fn build(facts: &Facts, choices: &Choices) -> Plan {
         Some(from) => {
             plan.push(
                 Phase::Switch,
-                format!(
-                    "Channel switch: {} → {} ({DOCS}/channels)",
+                t::setup_phase_switch(
                     from.as_str(),
-                    choices.channel.as_str()
+                    choices.channel.as_str(),
+                    format!("{DOCS}/channels"),
                 ),
                 backend.switch(facts, choices),
             );
@@ -212,12 +215,12 @@ pub fn build(facts: &Facts, choices: &Choices) -> Plan {
     if choices.components.host {
         plan.push(
             Phase::Conflicts,
-            "Checking for Sunshine / Apollo / Vibeshine",
+            t::setup_phase_conflicts(),
             conflict_steps(facts, choices),
         );
         plan.push(
             Phase::Options,
-            "Options (each one can be changed later)",
+            t::setup_phase_options(),
             option_steps(facts, choices),
         );
         // Linger is configuration, not start, so --no-start still honours it. It also creates
@@ -225,7 +228,7 @@ pub fn build(facts: &Facts, choices: &Choices) -> Plan {
         if choices.linger {
             plan.push(
                 Phase::Linger,
-                "Starting at boot with nobody logged in",
+                t::setup_phase_linger(),
                 vec![Step {
                     action: StepAction::Linger,
                     ends_run: false,
@@ -245,14 +248,18 @@ pub fn build(facts: &Facts, choices: &Choices) -> Plan {
 
     plan.push(
         Phase::Groups,
-        "Controller access",
+        t::setup_phase_groups(),
         group_steps(facts, choices),
     );
-    plan.push(Phase::Firewall, "Firewall", firewall_steps(facts, choices));
+    plan.push(
+        Phase::Firewall,
+        t::setup_phase_firewall(),
+        firewall_steps(facts, choices),
+    );
     if choices.start {
         plan.push(
             Phase::Start,
-            "Starting the host and the web console",
+            t::setup_phase_start(),
             start_steps(facts, choices, console_installed),
         );
     }
@@ -275,15 +282,10 @@ fn install_phase(
         let Some(channel) = facts.current_channel else {
             plan.push(
                 Phase::Install,
-                format!(
-                    "host, web console and plugin runner are already installed ({version}) — skipping the install, continuing with setup"
-                ),
+                t::setup_phase_installed_no_repo(&version),
                 vec![Step::note(
                     Level::Warn,
-                    format!(
-                        "--channel {} had nothing to act on: no punktfunk package repo is configured here, so this install did not come from one (built from source?). Channels: {DOCS}/channels",
-                        choices.channel.as_str()
-                    ),
+                    t::setup_channel_no_repo(choices.channel.as_str(), format!("{DOCS}/channels")),
                 )],
             );
             return false;
@@ -307,10 +309,7 @@ fn install_phase(
         );
         plan.push(
             Phase::Install,
-            format!(
-                "host, web console and plugin runner are already installed ({version}, {} channel) — updating to the current build",
-                channel.as_str()
-            ),
+            t::setup_phase_installed_update(&version, channel.as_str()),
             steps,
         );
         return facts.family.installs_console();
@@ -334,12 +333,12 @@ fn install_phase(
         what.push_str("client");
     }
     // SteamOS compiles `main` on the device, so naming a package channel here would be a lie.
-    let how = if facts.family == Family::Steamos {
-        "built on this device".to_string()
+    let title = if facts.family == Family::Steamos {
+        t::setup_phase_installing_on_device(&what)
     } else {
-        format!("{} channel", choices.channel.as_str())
+        t::setup_phase_installing(&what, choices.channel.as_str())
     };
-    plan.push(Phase::Install, format!("Installing: {what} ({how})"), steps);
+    plan.push(Phase::Install, title, steps);
     choices.components.host && facts.family.installs_console()
 }
 
@@ -369,7 +368,7 @@ fn omarchy_steps(_facts: &Facts, choices: &Choices) -> Vec<Step> {
     if !choices.omarchy_setup {
         return vec![Step::note(
             Level::Ok,
-            format!("Run it later with: punktfunk-omarchy setup   ({DOCS}/omarchy)"),
+            t::setup_omarchy_later(format!("{DOCS}/omarchy")),
         )];
     }
     let cmd = format!(
@@ -384,9 +383,7 @@ fn omarchy_steps(_facts: &Facts, choices: &Choices) -> Vec<Step> {
         action: StepAction::RunIfPresent {
             program: "punktfunk-omarchy".into(),
             cmd,
-            warn_if_missing: Some(format!(
-                "punktfunk-omarchy is not on PATH — the host package should ship it; see {DOCS}/omarchy"
-            )),
+            warn_if_missing: Some(t::setup_omarchy_missing(format!("{DOCS}/omarchy"))),
         },
         ends_run: true,
     }]
@@ -404,15 +401,9 @@ fn bit(on: bool) -> &'static str {
 
 fn conflict_steps(facts: &Facts, choices: &Choices) -> Vec<Step> {
     if !facts.sunshine_active {
-        return vec![Step::note(
-            Level::Ok,
-            "No conflicting game-streaming host detected.",
-        )];
+        return vec![Step::note(Level::Ok, t::setup_conflict_none())];
     }
-    let mut steps = vec![Step::note(
-        Level::Warn,
-        "another streaming host is active on this box — both want TCP 47990 (its web UI, punktfunk's management API)",
-    )];
+    let mut steps = vec![Step::note(Level::Warn, t::setup_conflict_active())];
     if choices.move_mgmt_port {
         steps.push(Step::set_env(
             "PUNKTFUNK_MGMT_BIND",
@@ -420,12 +411,12 @@ fn conflict_steps(facts: &Facts, choices: &Choices) -> Vec<Step> {
         ));
         steps.push(Step::note(
             Level::Ok,
-            format!("Clients learn the port from discovery; the console and plugins read it from mgmt-endpoint. Details: {DOCS}/switching-from-sunshine"),
+            t::setup_conflict_port_moved(format!("{DOCS}/switching-from-sunshine")),
         ));
     } else {
         steps.push(Step::note(
             Level::Warn,
-            format!("Stop it before you start punktfunk (e.g. sudo systemctl disable --now sunshine) — {DOCS}/switching-from-sunshine"),
+            t::setup_conflict_stop_first(format!("{DOCS}/switching-from-sunshine")),
         ));
     }
     steps
@@ -434,7 +425,7 @@ fn conflict_steps(facts: &Facts, choices: &Choices) -> Vec<Step> {
 fn group_steps(facts: &Facts, choices: &Choices) -> Vec<Step> {
     let mut steps = vec![];
     if facts.in_input_group {
-        steps.push(Step::note(Level::Ok, "already in the input group"));
+        steps.push(Step::note(Level::Ok, t::setup_groups_input_already()));
     } else if facts.has_ujust {
         // Bazzite's input group is recipe-managed; usermod is the wrong tool. With no action
         // the recipe opens a gum menu, which the captured progress line hides while the step
@@ -445,17 +436,14 @@ fn group_steps(facts: &Facts, choices: &Choices) -> Vec<Step> {
     } else if !facts.has_input_group {
         steps.push(Step::note(
             Level::Warn,
-            format!(
-                "no 'input' group on this system — virtual gamepads need /dev/uinput access; see {}",
-                facts.docs_page
-            ),
+            t::setup_groups_no_input(&facts.docs_page),
         ));
     } else {
         steps.push(Step::run(r#"sudo usermod -aG input "$USER""#));
     }
     if choices.punktfunk_group {
         if facts.in_punktfunk_group {
-            steps.push(Step::note(Level::Ok, "already in the punktfunk group"));
+            steps.push(Step::note(Level::Ok, t::setup_groups_punktfunk_already()));
         } else {
             steps.push(Step::run(r#"sudo usermod -aG punktfunk "$USER""#));
         }
@@ -470,10 +458,7 @@ fn option_steps(facts: &Facts, choices: &Choices) -> Vec<Step> {
     steps.push(Step::set_env("PUNKTFUNK_UI_BIND", choices.web_bind.clone()));
     if choices.gamestream {
         if facts.sunshine_active {
-            steps.push(Step::note(
-                Level::Warn,
-                "with another GameStream host running, only one can bind the Moonlight ports — stop the other first or skip this",
-            ));
+            steps.push(Step::note(Level::Warn, t::setup_gamestream_conflict()));
         }
         steps.push(Step::set_setting("gamestream", true));
     }
@@ -483,10 +468,7 @@ fn option_steps(facts: &Facts, choices: &Choices) -> Vec<Step> {
     // A box with no desktop installed cannot stand a session up for the host; gamescope
     // brings its own. A seat that is merely not logged in (ssh) keeps the host's detection.
     if !facts.graphical_seat && !facts.desktop_sessions && !facts.couch_box {
-        steps.push(Step::note(
-            Level::Ok,
-            "no desktop session is installed here, so the host will spawn a headless gamescope per connect",
-        ));
+        steps.push(Step::note(Level::Ok, t::setup_headless_gamescope()));
         steps.push(Step::set_env("PUNKTFUNK_COMPOSITOR", "gamescope"));
     }
     steps
@@ -526,9 +508,7 @@ fn firewall_steps(facts: &Facts, choices: &Choices) -> Vec<Step> {
         }
         Firewall::None => vec![Step::note(
             Level::Ok,
-            format!(
-                "no active firewall found — nothing to open ({DOCS}/ports if you add one later)"
-            ),
+            t::setup_firewall_none(format!("{DOCS}/ports")),
         )],
     }
 }
@@ -543,10 +523,7 @@ fn start_steps(facts: &Facts, choices: &Choices, console_installed: bool) -> Vec
     } else {
         steps.push(Step::note(
             Level::Warn,
-            format!(
-                "no punktfunk-web.service on this box — the console is not installed, so nothing will answer on 47992 ({})",
-                facts.docs_page
-            ),
+            t::setup_start_no_console(&facts.docs_page),
         ));
     }
     // apt/dnf/sysext already start the plugin runner; Arch does not. Only on the run that

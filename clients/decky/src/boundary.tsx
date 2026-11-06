@@ -6,6 +6,7 @@
 // is built from ONLY plain DOM elements + inline styles, so it cannot itself depend on a
 // (possibly broken) Steam-internal component — it is guaranteed to render.
 import { Component, ErrorInfo, ReactNode } from "react";
+import { t } from "./i18n";
 
 export class PluginErrorBoundary extends Component<
   { children: ReactNode },
@@ -29,11 +30,10 @@ export class PluginErrorBoundary extends Component<
     return (
       <div style={{ padding: "1em", lineHeight: 1.45 }}>
         <div style={{ fontWeight: "bold", marginBottom: "0.4em" }}>
-          Punktfunk couldn’t draw this view
+          {t("decky_boundary_title")}
         </div>
         <div style={{ opacity: 0.8, marginBottom: "0.6em" }}>
-          The plugin hit a display error — your Steam Deck is fine. Reload Punktfunk from
-          Decky&apos;s plugin list, or update the plugin.
+          {t("decky_boundary_body")}
         </div>
         <div
           style={{

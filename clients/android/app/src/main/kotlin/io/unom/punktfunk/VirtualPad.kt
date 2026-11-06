@@ -57,6 +57,7 @@ import androidx.compose.ui.input.pointer.positionChangedIgnoreConsumed
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
@@ -71,6 +72,7 @@ import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import io.unom.punktfunk.kit.Gamepad
+import io.unom.punktfunk.kit.R
 import kotlin.math.atan2
 import kotlin.math.hypot
 import kotlin.math.roundToInt
@@ -109,32 +111,49 @@ internal data class PadRect(val x: Float, val y: Float, val w: Float, val h: Flo
     fun overlaps(o: PadRect): Boolean = x < o.x + o.w && o.x < x + w && y < o.y + o.h && o.y < y + h
 }
 
+/** A control's name for the editor and for accessibility. */
+internal sealed interface PadName {
+    /** One of the pad's named parts: a message. */
+    class Message(val id: Int) : PadName
+
+    /** The name printed on a button (Select, Guide, Start): data, the same in every language. */
+    class Printed(val text: String) : PadName
+}
+
+@Composable
+internal fun PadName.text(): String = when (this) {
+    is PadName.Message -> stringResource(id)
+    is PadName.Printed -> text
+}
+
 /** One disc in a [PadControl.Buttons] group: its centre and radius relative to the group's rect. */
-internal data class PadDisc(val label: String, val glyph: String, val bit: Int, val cx: Float, val cy: Float, val r: Float)
+internal data class PadDisc(val glyph: String, val bit: Int, val cx: Float, val cy: Float, val r: Float)
 
 /**
  * [id] is the tweak key in the blob ([PadTweak]); [sc] and [hidden] are the applied tweak — the
  * geometry in [rect] and any discs is already sized by [sc], and the touch and draw code
  * multiplies only its named constants (stick radius, dead zones, label sizes) by it.
  */
-internal sealed class PadControl(val id: String, val label: String, val rect: PadRect, val sc: Float = 1f, val hidden: Boolean = false) {
+internal sealed class PadControl(val id: String, val label: PadName, val rect: PadRect, val sc: Float = 1f, val hidden: Boolean = false) {
     /** Discs that press while a finger is on them; a finger rolling from one to the next presses the next. */
-    class Buttons(id: String, label: String, rect: PadRect, val discs: List<PadDisc>, sc: Float = 1f, hidden: Boolean = false) :
+    class Buttons(id: String, label: PadName, rect: PadRect, val discs: List<PadDisc>, sc: Float = 1f, hidden: Boolean = false) :
         PadControl(id, label, rect, sc, hidden)
 
     /** Eight directions by angle from the centre, as `BTN_DPAD_*` bits. */
-    class Dpad(rect: PadRect, sc: Float = 1f, hidden: Boolean = false) : PadControl("dpad", "D-pad", rect, sc, hidden)
+    class Dpad(rect: PadRect, sc: Float = 1f, hidden: Boolean = false) :
+        PadControl("dpad", PadName.Message(R.string.pad_control_dpad), rect, sc, hidden)
 
     /** The first finger owns it; its travel from where it landed is the deflection. */
-    class Stick(id: String, label: String, rect: PadRect, val axisX: Int, val axisY: Int, sc: Float = 1f, hidden: Boolean = false) :
+    class Stick(id: String, label: PadName, rect: PadRect, val axisX: Int, val axisY: Int, sc: Float = 1f, hidden: Boolean = false) :
         PadControl(id, label, rect, sc, hidden)
 
     /** The finger's position down the pill is the pull: the top is 0, the bottom is full. */
-    class Trigger(id: String, label: String, rect: PadRect, val axis: Int, sc: Float = 1f, hidden: Boolean = false) :
+    class Trigger(id: String, label: PadName, rect: PadRect, val axis: Int, sc: Float = 1f, hidden: Boolean = false) :
         PadControl(id, label, rect, sc, hidden)
 
     /** A tap opens the quick-action ring; nothing goes on the wire. */
-    class Ring(rect: PadRect, sc: Float = 1f, hidden: Boolean = false) : PadControl("ring", "Quick actions", rect, sc, hidden)
+    class Ring(rect: PadRect, sc: Float = 1f, hidden: Boolean = false) :
+        PadControl("ring", PadName.Message(R.string.pad_control_ring), rect, sc, hidden)
 
     /** The same control at [rect], sized by [sc], possibly [hidden] — how a tweak is applied. */
     fun tweaked(rect: PadRect, sc: Float, hidden: Boolean): PadControl = when (this) {
@@ -167,8 +186,10 @@ private const val DPAD_DEAD = 14f
 /** A layer narrower than this (a phone upright) stacks the clusters instead of spreading them. */
 private const val NARROW = 720f
 
-private fun disc(id: String, label: String, glyph: String, bit: Int, cx: Float, cy: Float, r: Float) =
-    PadControl.Buttons(id, label, PadRect(cx - r, cy - r, 2 * r, 2 * r), listOf(PadDisc(label, glyph, bit, r, r, r)))
+private fun disc(id: String, label: PadName, glyph: String, bit: Int, cx: Float, cy: Float, r: Float) =
+    PadControl.Buttons(id, label, PadRect(cx - r, cy - r, 2 * r, 2 * r), listOf(PadDisc(glyph, bit, r, r, r)))
+
+private fun named(id: Int): PadName = PadName.Message(id)
 
 /**
  * The preset's controls for a layer [w] × [h] dp (the container divided by the scale). Positions
@@ -186,17 +207,26 @@ internal fun padControls(layout: String, w: Float, h: Float): List<PadControl> {
     val bottom = h - MARGIN
     val out = mutableListOf<PadControl>()
     if (sticks) {
-        out += disc("lb", "Left bumper", "LB", Gamepad.BTN_LB, MARGIN + BUMPER_R, MARGIN + BUMPER_R, BUMPER_R)
-        out += PadControl.Trigger("lt", "Left trigger", PadRect(MARGIN, MARGIN + 2 * BUMPER_R + 8, TRIGGER_W, TRIGGER_H), Gamepad.AXIS_LT)
-        out += disc("rb", "Right bumper", "RB", Gamepad.BTN_RB, w - MARGIN - BUMPER_R, MARGIN + BUMPER_R, BUMPER_R)
-        out += PadControl.Trigger("rt", "Right trigger", PadRect(w - MARGIN - TRIGGER_W, MARGIN + 2 * BUMPER_R + 8, TRIGGER_W, TRIGGER_H), Gamepad.AXIS_RT)
+        out += disc("lb", named(R.string.pad_control_left_bumper), "LB", Gamepad.BTN_LB, MARGIN + BUMPER_R, MARGIN + BUMPER_R, BUMPER_R)
+        out += PadControl.Trigger(
+            "lt", named(R.string.pad_control_left_trigger),
+            PadRect(MARGIN, MARGIN + 2 * BUMPER_R + 8, TRIGGER_W, TRIGGER_H), Gamepad.AXIS_LT,
+        )
+        out += disc("rb", named(R.string.pad_control_right_bumper), "RB", Gamepad.BTN_RB, w - MARGIN - BUMPER_R, MARGIN + BUMPER_R, BUMPER_R)
+        out += PadControl.Trigger(
+            "rt", named(R.string.pad_control_right_trigger),
+            PadRect(w - MARGIN - TRIGGER_W, MARGIN + 2 * BUMPER_R + 8, TRIGGER_W, TRIGGER_H), Gamepad.AXIS_RT,
+        )
         // The stick clicks sit inboard of the triggers, level with them: the index finger already
         // rests there, and the thumb keeps the stick — which is what L3-to-sprint asks for.
         val clickY = MARGIN + 2 * BUMPER_R + 8 + TRIGGER_H / 2
         val clickX = MARGIN + TRIGGER_W + 8 + SMALL_R
-        out += disc("l3", "Left stick click", "L3", Gamepad.BTN_LS_CLICK, clickX, clickY, SMALL_R)
-        out += disc("r3", "Right stick click", "R3", Gamepad.BTN_RS_CLICK, w - clickX, clickY, SMALL_R)
-        out += PadControl.Stick("ls", "Left stick", PadRect(MARGIN, bottom - STICK_HIT, STICK_HIT, STICK_HIT), Gamepad.AXIS_LS_X, Gamepad.AXIS_LS_Y)
+        out += disc("l3", named(R.string.pad_control_left_stick_click), "L3", Gamepad.BTN_LS_CLICK, clickX, clickY, SMALL_R)
+        out += disc("r3", named(R.string.pad_control_right_stick_click), "R3", Gamepad.BTN_RS_CLICK, w - clickX, clickY, SMALL_R)
+        out += PadControl.Stick(
+            "ls", named(R.string.pad_control_left_stick),
+            PadRect(MARGIN, bottom - STICK_HIT, STICK_HIT, STICK_HIT), Gamepad.AXIS_LS_X, Gamepad.AXIS_LS_Y,
+        )
     }
     if (face) {
         val dpad = when {
@@ -209,13 +239,13 @@ internal fun padControls(layout: String, w: Float, h: Float): List<PadControl> {
         val gap = 40f
         out += PadControl.Buttons(
             "face",
-            "Face buttons",
+            named(R.string.pad_control_face),
             PadRect(w - MARGIN - FACE_HIT, bottom - FACE_HIT, FACE_HIT, FACE_HIT),
             listOf(
-                PadDisc("Y", "Y", Gamepad.BTN_Y, c, c - gap, FACE_R),
-                PadDisc("X", "X", Gamepad.BTN_X, c - gap, c, FACE_R),
-                PadDisc("B", "B", Gamepad.BTN_B, c + gap, c, FACE_R),
-                PadDisc("A", "A", Gamepad.BTN_A, c, c + gap, FACE_R),
+                PadDisc("Y", Gamepad.BTN_Y, c, c - gap, FACE_R),
+                PadDisc("X", Gamepad.BTN_X, c - gap, c, FACE_R),
+                PadDisc("B", Gamepad.BTN_B, c + gap, c, FACE_R),
+                PadDisc("A", Gamepad.BTN_A, c, c + gap, FACE_R),
             ),
         )
     }
@@ -225,15 +255,15 @@ internal fun padControls(layout: String, w: Float, h: Float): List<PadControl> {
             narrow -> PadRect(w - MARGIN - STICK_HIT, bottom - FACE_HIT - 8 - STICK_HIT, STICK_HIT, STICK_HIT)
             else -> PadRect(w - MARGIN - FACE_HIT - 16 - STICK_HIT, bottom - STICK_HIT, STICK_HIT, STICK_HIT)
         }
-        out += PadControl.Stick("rs", "Right stick", right, Gamepad.AXIS_RS_X, Gamepad.AXIS_RS_Y)
+        out += PadControl.Stick("rs", named(R.string.pad_control_right_stick), right, Gamepad.AXIS_RS_X, Gamepad.AXIS_RS_Y)
     }
     // Measured against the clusters, not guessed from the width: between [NARROW] and about
     // 900 dp the right stick still spreads into the bottom corner, near enough to sit on Start.
     val middle = { y: Float ->
         listOf(
-            disc("select", "Select", "⧉", Gamepad.BTN_BACK, w / 2 - 64, y, SMALL_R),
-            disc("guide", "Guide", "◎", Gamepad.BTN_GUIDE, w / 2, y, SMALL_R),
-            disc("start", "Start", "☰", Gamepad.BTN_START, w / 2 + 64, y, SMALL_R),
+            disc("select", PadName.Printed("Select"), "⧉", Gamepad.BTN_BACK, w / 2 - 64, y, SMALL_R),
+            disc("guide", PadName.Printed("Guide"), "◎", Gamepad.BTN_GUIDE, w / 2, y, SMALL_R),
+            disc("start", PadName.Printed("Start"), "☰", Gamepad.BTN_START, w / 2 + 64, y, SMALL_R),
         )
     }
     val low = middle(bottom - SMALL_R)
@@ -356,6 +386,7 @@ private fun PadControlView(
         }
     }
     val r = ctl.rect
+    val name = ctl.label.text()
     // The drag's live offset, px; zero outside the editor. Keyed on the control: the commit
     // rebuilds the control at its new rect, and the offset must not apply twice.
     var drag by remember(ctl) { mutableStateOf(Offset.Zero) }
@@ -373,7 +404,7 @@ private fun PadControlView(
                 },
             )
             .then(if (edit?.selected?.invoke() == true) Modifier.border(2.dp, Color.White, RoundedCornerShape(12.dp)) else Modifier)
-            .semantics { contentDescription = ctl.label }
+            .semantics { contentDescription = name }
             .pointerInput(st, edit) {
                 if (edit == null) {
                     awaitPointerEventScope {
@@ -757,27 +788,23 @@ private fun PadLayoutStage(pad: PadConfig, onChange: (PadConfig) -> Unit, onBack
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = Color.White)
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.common_back), tint = Color.White)
                     }
                     Column(Modifier.padding(end = 12.dp)) {
-                        Text("Controller layout", style = MaterialTheme.typography.titleMedium)
+                        Text(stringResource(R.string.pad_layout_title), style = MaterialTheme.typography.titleMedium)
                         Text(
-                            if (narrow) {
-                                "Editing the upright layout — wide screens keep their own."
-                            } else {
-                                "Editing the wide layout — upright screens keep their own."
-                            },
+                            stringResource(if (narrow) R.string.pad_layout_editing_upright else R.string.pad_layout_editing_wide),
                             style = MaterialTheme.typography.bodySmall,
                             color = Color.White.copy(alpha = 0.7f),
                         )
                     }
-                    TextButton(onClick = { write(emptyMap()); selected = null }) { Text("Reset layout") }
+                    TextButton(onClick = { write(emptyMap()); selected = null }) { Text(stringResource(R.string.pad_layout_reset)) }
                 }
             }
             val ctl = selected?.let { id -> controls.firstOrNull { it.id == id } }
             if (ctl == null) {
                 Text(
-                    "Drag a control to move it; tap one for size and visibility.",
+                    stringResource(R.string.pad_layout_hint),
                     style = MaterialTheme.typography.bodySmall,
                     color = Color.White.copy(alpha = 0.7f),
                 )
@@ -785,14 +812,18 @@ private fun PadLayoutStage(pad: PadConfig, onChange: (PadConfig) -> Unit, onBack
                 Surface(shape = RoundedCornerShape(16.dp), color = Color(0xE617202A), contentColor = Color.White) {
                     Column(Modifier.padding(horizontal = 16.dp, vertical = 8.dp).width(300.dp)) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text(ctl.label, Modifier.weight(1f), style = MaterialTheme.typography.titleSmall)
+                            Text(ctl.label.text(), Modifier.weight(1f), style = MaterialTheme.typography.titleSmall)
                             TextButton(onClick = { update(ctl.id) { it.copy(hidden = !ctl.hidden) } }) {
-                                Text(if (ctl.hidden) "Show" else "Hide")
+                                Text(stringResource(if (ctl.hidden) R.string.pad_layout_show else R.string.pad_layout_hide))
                             }
-                            TextButton(onClick = { write(tweaks() - ctl.id) }) { Text("Reset") }
+                            TextButton(onClick = { write(tweaks() - ctl.id) }) { Text(stringResource(R.string.common_reset)) }
                         }
                         var sz by remember(ctl) { mutableFloatStateOf(ctl.sc) }
-                        Text("Size · ${(sz * 100).roundToInt()}%", style = MaterialTheme.typography.bodySmall)
+                        Text(
+                            stringResource(R.string.pad_layout_size) + " · " +
+                                stringResource(R.string.common_percent, (sz * 100).roundToInt()),
+                            style = MaterialTheme.typography.bodySmall,
+                        )
                         Slider(
                             value = sz,
                             onValueChange = { sz = it },

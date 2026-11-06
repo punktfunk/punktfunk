@@ -100,14 +100,16 @@ data class ListedProfile(
     fun pick() = ProfilePick(id, displayName, avatar = avatar)
 
     /** The one line under a picker card, if any. */
-    fun note(): String? {
+    fun note(): Say? {
         val seat = seat ?: return null
         return when {
             seat.state == SeatState.OCCUPIED ->
-                seat.occupant?.let { "In use by $it" } ?: "In use"
-            seat.state == SeatState.STARTING -> seat.detail ?: "Getting ready…"
-            seat.state == SeatState.UNAVAILABLE -> seat.detail ?: "Unavailable"
-            seat.steamSignIn == true -> "Steam sign-in once"
+                seat.occupant?.let { say(R.string.profile_in_use_by, it) } ?: say(R.string.profile_in_use)
+            seat.state == SeatState.STARTING ->
+                seat.detail?.let { Say.Text(it) } ?: say(R.string.profile_getting_ready)
+            seat.state == SeatState.UNAVAILABLE ->
+                seat.detail?.let { Say.Text(it) } ?: say(R.string.profile_unavailable)
+            seat.steamSignIn == true -> say(R.string.profile_steam_sign_in)
             else -> null
         }
     }
@@ -212,7 +214,7 @@ sealed interface SeatGate {
     data class Wait(val detail: String?) : SeatGate
 
     /** The seat can't play now; [line] says why. Don't dial. */
-    data class Refuse(val line: String) : SeatGate
+    data class Refuse(val line: Say) : SeatGate
 }
 
 /**
@@ -226,9 +228,9 @@ fun seatGate(p: ListedProfile): SeatGate {
         SeatState.STOPPED -> if (p.unlock == UnlockNeed.NONE) SeatGate.Wake else SeatGate.Dial
         SeatState.STARTING -> SeatGate.Wait(seat.detail)
         SeatState.UNAVAILABLE ->
-            SeatGate.Refuse(seat.detail ?: "That profile can't play on this host right now.")
+            SeatGate.Refuse(seat.detail?.let { Say.Text(it) } ?: say(R.string.reject_seat_unavailable))
     }
 }
 
 /** The line while a seat comes up: `Getting Kid's desk ready…`. */
-fun wakingLine(displayName: String): String = "Getting $displayName's desk ready…"
+fun wakingLine(displayName: String): Say = say(R.string.profile_waking, displayName)

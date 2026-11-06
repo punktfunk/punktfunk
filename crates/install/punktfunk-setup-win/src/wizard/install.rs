@@ -47,9 +47,9 @@ pub(super) fn install_page(w: &Wizard, cx: &ViewContext<'_, Wizard>) -> View {
         })
         .collect();
     let status = match (w.install, w.uninstall) {
-        (InstallPhase::Failed, _) => "Something went wrong — the log below has the step.",
-        (_, true) => "Removing punktfunk…",
-        (_, false) => "Installing punktfunk…",
+        (InstallPhase::Failed, _) => tools::wizard_install_failed(),
+        (_, true) => tools::wizard_removing(),
+        (_, false) => tools::wizard_installing(),
     };
     let mut head: Vec<View> = Vec::new();
     if w.install == InstallPhase::Running {
@@ -82,7 +82,7 @@ pub(super) fn install_page(w: &Wizard, cx: &ViewContext<'_, Wizard>) -> View {
     ));
     let buttons = if w.install == InstallPhase::Failed {
         vec![Button::new()
-            .content("Close")
+            .content(common::common_close())
             .on_click(cx.message(Msg::Exit(1)))
             .into()]
     } else {

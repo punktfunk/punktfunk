@@ -16,10 +16,10 @@ public enum StatsVerbosity: String, CaseIterable, Sendable {
     /// User-facing tier label (Settings pickers, the gamepad settings row).
     public var label: String {
         switch self {
-        case .off: return "Off"
-        case .compact: return "Compact"
-        case .normal: return "Normal"
-        case .detailed: return "Detailed"
+        case .off: return String(localized: L10n.playerStatsVerbosityOff)
+        case .compact: return String(localized: L10n.playerStatsVerbosityCompact)
+        case .normal: return String(localized: L10n.playerStatsVerbosityNormal)
+        case .detailed: return String(localized: L10n.playerStatsVerbosityDetailed)
         }
     }
 

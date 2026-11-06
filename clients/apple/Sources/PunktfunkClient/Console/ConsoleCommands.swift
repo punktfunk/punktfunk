@@ -154,9 +154,9 @@ extension ConsoleModel {
     /// What this app bundles beside the console's own texts, for its Licences screen.
     private func pushLicenses() {
         let sections: [[String: String]] = [
-            ["heading": "Swift packages", "text": Licenses.swiftPackages],
+            ["heading": String(localized: L10n.appleAboutSwiftPackages), "text": Licenses.swiftPackages],
             [
-                "heading": "Third-party software",
+                "heading": String(localized: L10n.aboutThirdPartyHeading),
                 "text": Licenses.thirdPartyIntro + "\n\n" + Licenses.thirdPartyNotices,
             ],
         ]
@@ -172,7 +172,7 @@ extension ConsoleModel {
     /// would be slower for nothing. The recommendation is that module's integer rule.
     private func speedTest(key: String, addr: String, port: UInt16, fp: String) {
         guard let identity = (try? ClientIdentityStore.shared.load())?.identity else {
-            pushSpeed(key, ["Failed": "This device has no client certificate yet."])
+            pushSpeed(key, ["Failed": String(localized: L10n.appleTrustNoIdentity)])
             return
         }
         let pin = host(fp: fp, addr: addr, port: port)?.pinnedSHA256
@@ -185,7 +185,7 @@ extension ConsoleModel {
                     pinSHA256: pin, identity: identity,
                     deliveryFlags: PunktfunkConnection.deliveryProbeOnly)
             } catch {
-                await self?.pushSpeed(key, ["Failed": "Couldn't reach \(addr) — it may be asleep."])
+                await self?.pushSpeed(key, ["Failed": L10n.appleSpeedtestUnreachableBody(address: addr)])
                 return
             }
             defer { conn.close() }
@@ -193,7 +193,7 @@ extension ConsoleModel {
             // The whole check, reported once: the ceiling, the clean round and the findings.
             guard let r = conn.networkCheck() else {
                 await self?.pushSpeed(
-                    key, ["Failed": "The measurement never finished — the connection may have dropped."])
+                    key, ["Failed": String(localized: L10n.speedtestNoResultBody)])
                 return
             }
             var done: [String: Any] = [
@@ -237,7 +237,7 @@ extension ConsoleModel {
             // The closure holds the engine until the pulse has played.
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { engine.stop() }
         } catch {
-            notice("Couldn't run the rumble test — \(error.localizedDescription)")
+            notice(L10n.applePadRumbleFailed(error: error.localizedDescription))
         }
     }
 
@@ -283,7 +283,7 @@ extension ConsoleModel {
             bridge.push(
                 .libraryPhase,
                 ConsoleJSON.libraryError(
-                    req, title: "Couldn't load the library", body: why, canRetry: false))
+                    req, title: String(localized: L10n.libLoadFailed), body: why, canRetry: false))
         }) else { return }
         // A running-titles refresh must not cut a list fetch short; only a new fetch does.
         if refreshOnly {
@@ -325,7 +325,7 @@ extension ConsoleModel {
                     bridge.push(
                         .libraryPhase,
                         ConsoleJSON.libraryError(
-                            req, title: "Couldn't load the library",
+                            req, title: String(localized: L10n.libLoadFailed),
                             body: error.errorDescription ?? "", canRetry: true))
                 case .status(let games, let downloads, let grants):
                     pushStatus((games, downloads, grants), serial: serial)
@@ -379,7 +379,7 @@ extension ConsoleModel {
     /// The host's profile list, handed back to the shell's connect or Switch-profile screen.
     private func fetchProfiles(addr: String, mgmt: UInt16, fp: String) {
         guard let host = host(fp: fp, addr: addr, port: 0) else {
-            pushProfiles(fp, ["Failed": "That host is no longer saved."])
+            pushProfiles(fp, ["Failed": String(localized: L10n.appleHostNotSaved)])
             return
         }
         Task { [weak self] in
@@ -392,7 +392,7 @@ extension ConsoleModel {
             case .listed(nil):
                 self?.pushProfiles(fp, "NoProfiles")
             case .failed:
-                self?.pushProfiles(fp, ["Failed": "Couldn't load the profiles."])
+                self?.pushProfiles(fp, ["Failed": String(localized: L10n.profileLoadFailed)])
             }
         }
     }

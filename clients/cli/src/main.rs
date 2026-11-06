@@ -53,7 +53,7 @@ mod cli {
 punktfunk — the Punktfunk client, headless
 
   punktfunk discover [--json] [--timeout SECS]
-  punktfunk pair <host[:port]> [--pin -] [--name LABEL]
+  punktfunk pair <host[:port]> [--pin -] [--name LABEL] [--json]
   punktfunk hosts list [--probe] [--json]
   punktfunk hosts add <host[:port]> [--name LABEL] [--fp HEX]
   punktfunk hosts forget <host-ref>
@@ -102,7 +102,7 @@ address with `punktfunk hosts add` and it shows in `hosts list --probe`."
             }
             "pair" => {
                 "\
-punktfunk pair <host[:port]> — enrol this device with a host (PIN ceremony)
+punktfunk pair <host[:port]> [--json] — enrol this device with a host (PIN ceremony)
 
   --pin -       read the PIN from stdin (one line). Without it the command asks,
                 and refuses (exit 6) when there is no terminal to ask on
@@ -115,6 +115,11 @@ punktfunk pair <host[:port]> — enrol this device with a host (PIN ceremony)
                 when the address names two hosts, as a dual-boot box does
   --name LABEL  the label the host files this device under
                 (default: this machine's name)
+  --json        stdout is one object: {\"ok\":true,\"addr\",\"port\",\"fp\"}, or
+                {\"ok\":false,\"kind\",\"reject\"}. kind is rejected, crypto (a
+                wrong PIN), timeout, unreachable or failed; reject is the host's
+                refusal token (`not-armed`, `denied`, …) or null. The stderr
+                lines and the exit code do not change
 
 Pairing verifies the host end-to-end and pins its fingerprint in the saved-hosts
 store, so every later connect — here, in the desktop client or the console — is
@@ -526,6 +531,9 @@ from the config directory for a true factory reset."
             }
             other => {
                 eprintln!("unknown command \"{other}\"\n\n{USAGE}");
+                if has(&rest, "--json") {
+                    println!("{}", unknown_command_json());
+                }
                 UNRESOLVED
             }
         }
@@ -680,7 +688,8 @@ from the config directory for a true factory reset."
         report_paired(
             &addr,
             port,
-            paired.map_err(|e| trust::pair_error_message(&e)),
+            paired.map_err(|e| PairFailure::new(&e, trust::pair_error_message(&e))),
+            has(args, "--json"),
         )
     }
 
@@ -723,21 +732,69 @@ from the config directory for a true factory reset."
         report_paired(
             addr,
             port,
-            paired.map_err(|e| trust::access_error_message(&e)),
+            paired.map_err(|e| PairFailure::new(&e, trust::access_error_message(&e))),
+            has(args, "--json"),
         )
     }
 
-    fn report_paired(addr: &str, port: u16, paired: Result<trust::Paired, String>) -> u8 {
+    /// Why a pairing did not happen: the sentence for a person, what kind of failure it was, and
+    /// the host's refusal token when the host turned the device away.
+    struct PairFailure {
+        msg: String,
+        kind: &'static str,
+        reject: Option<&'static str>,
+    }
+
+    impl PairFailure {
+        fn new(err: &punktfunk_core::PunktfunkError, msg: String) -> Self {
+            use punktfunk_core::PunktfunkError as E;
+            let (kind, reject) = match err {
+                E::Rejected(reason, _) => ("rejected", Some(reason.as_str())),
+                E::Crypto => ("crypto", None),
+                E::Timeout => ("timeout", None),
+                E::Io(_) => ("unreachable", None),
+                _ => ("failed", None),
+            };
+            Self { msg, kind, reject }
+        }
+    }
+
+    /// The `--json` answer of `pair`, printed in place of the `paired` line. The stderr lines
+    /// and the exit code are the same with or without it.
+    fn pair_json(addr: &str, port: u16, paired: &Result<trust::Paired, PairFailure>) -> String {
+        match paired {
+            Ok(p) => serde_json::json!({"ok": true, "addr": addr, "port": port, "fp": p.fp_hex}),
+            Err(f) => serde_json::json!({"ok": false, "kind": f.kind, "reject": f.reject}),
+        }
+        .to_string()
+    }
+
+    /// What an unknown verb prints on stdout under `--json`, beside the usage text on stderr.
+    fn unknown_command_json() -> String {
+        serde_json::json!({"ok": false, "error": "unknown-command"}).to_string()
+    }
+
+    fn report_paired(
+        addr: &str,
+        port: u16,
+        paired: Result<trust::Paired, PairFailure>,
+        json: bool,
+    ) -> u8 {
+        if json {
+            println!("{}", pair_json(addr, port, &paired));
+        }
         match paired {
             Ok(paired) => {
                 if let Err(e) = paired.saved {
                     eprintln!("couldn't save the host: {e:#}");
                 }
-                println!("paired {addr}:{port} fp={}", paired.fp_hex);
+                if !json {
+                    println!("paired {addr}:{port} fp={}", paired.fp_hex);
+                }
                 OK
             }
-            Err(msg) => {
-                eprintln!("{msg}");
+            Err(failure) => {
+                eprintln!("{}", failure.msg);
                 TRUST_REJECTED
             }
         }
@@ -2198,6 +2255,38 @@ from the config directory for a true factory reset."
                     ],
                 })
             );
+        }
+
+        /// `pair --json` names the kind of failure and the host's refusal by its token, never by
+        /// prose; a failure the host did not send carries `null`.
+        #[test]
+        fn pair_json_carries_the_kind_and_the_reject_token() {
+            use punktfunk_core::reject::RejectReason;
+            use punktfunk_core::PunktfunkError;
+            let json = |err: PunktfunkError| {
+                let failure = PairFailure::new(&err, String::new());
+                serde_json::from_str::<serde_json::Value>(&pair_json(
+                    "10.0.0.5",
+                    9777,
+                    &Err(failure),
+                ))
+                .expect("one JSON object")
+            };
+            let refused = json(PunktfunkError::Rejected(
+                RejectReason::PairingNotArmed,
+                String::new(),
+            ));
+            assert_eq!(
+                refused,
+                serde_json::json!({"ok": false, "kind": "rejected", "reject": "not-armed"})
+            );
+            let wrong_pin = json(PunktfunkError::Crypto);
+            assert_eq!(
+                wrong_pin,
+                serde_json::json!({"ok": false, "kind": "crypto", "reject": null})
+            );
+            let silent = json(PunktfunkError::Timeout);
+            assert_eq!(silent["kind"], "timeout");
         }
 
         /// A host without a ramp reports no clean round and no slow round: both `null`.

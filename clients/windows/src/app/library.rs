@@ -21,6 +21,7 @@ use pf_client_core::collate::{self, Collatable, SortKey};
 use pf_client_core::library::{self, initials, store_label, DESKTOP_ID};
 use pf_client_core::trust::Settings;
 use pf_fluent::{Palette, Token};
+use pf_l10n::{client, common};
 use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
@@ -58,7 +59,7 @@ pub(crate) struct Game {
 fn desktop_entry() -> Game {
     Game {
         id: DESKTOP_ID.into(),
-        title: "Desktop".into(),
+        title: client::lib_desktop().into(),
         store: String::new(),
         launcher: false,
         platform: None,
@@ -263,10 +264,7 @@ fn store_art(dir: &Path, id: &str, bytes: &[u8]) -> Option<String> {
 
 /// The per-GAME half of the link the host tiles offer (design/client-deep-links.md §5 names
 /// the library game menu as an attach point for exactly this).
-const MENU_COPY_LINK: &str = "Copy link";
-/// Only on a title this device launched and the host still runs.
-const MENU_END_GAME: &str = "End game";
-
+///
 /// One title's self-emitted `punktfunk://` link: this page's host with the game's own
 /// `launch=` id attached, so the URL boots straight into that title rather than the desktop.
 /// Built from the STORE — the stable id and the fingerprint live there, not on the target —
@@ -293,7 +291,7 @@ fn sort_row(pal: &Palette, current: SortKey, set_sort: AsyncSetState<SortKey>) -
     let names: Vec<String> = SortKey::ALL.iter().map(|k| k.label().to_string()).collect();
     let index = SortKey::ALL.iter().position(|k| *k == current).unwrap_or(0);
     hstack((
-        muted(pal, "Sort")
+        muted(pal, client::lib_sort())
             .font_size(12.0)
             .vertical_alignment(VerticalAlignment::Center),
         ComboBox::new()
@@ -410,7 +408,7 @@ fn poster_tile(
     ];
     if up.is_some() {
         layers.push(
-            pill(pal, "Running", Pill::Neutral)
+            pill(pal, client::lib_badge_running(), Pill::Neutral)
                 .horizontal_alignment(HorizontalAlignment::Left)
                 .vertical_alignment(VerticalAlignment::Bottom)
                 .margin(uniform(6.0))
@@ -443,16 +441,17 @@ fn poster_tile(
     // This entry's own actions, opposite the store badge: a button, because a menu a mouse user
     // cannot see is one they never find. A SIBLING of the tappable area, as on the host tiles,
     // so a click on the overflow never also launches the title underneath it.
-    let mut items = vec![MenuItem::item("copy", MENU_COPY_LINK)];
+    let mut items = vec![MenuItem::item("copy", client::hostcard_copy_link())];
+    // Only on a title this device launched and the host still runs.
     if up == Some(true) {
-        items.push(MenuItem::item("end", MENU_END_GAME));
+        items.push(MenuItem::item("end", client::lib_end_game()));
     }
     let menu = Menu::new(items, move |key: Key| match key.as_str() {
         Some("copy") => on_copy_link(),
         Some("end") => on_end_game(),
         _ => {}
     });
-    let more = format!("More options for {}", game.title);
+    let more = client::lib_title_more_a11y(&game.title);
     Grid::new()
         .children((
             tappable,
@@ -462,7 +461,7 @@ fn poster_tile(
                 .vertical_alignment(VerticalAlignment::Top)
                 .margin(edges(0.0, 4.0, 4.0, 0.0))
                 .menu(menu)
-                .tooltip("More options"),
+                .tooltip(client::lib_title_more()),
         ))
         .into()
 }
@@ -482,7 +481,7 @@ pub(crate) fn library_page(shell: &Shell) -> View {
     let tile_w = (content_w - POSTER_GAP * (cols as f64 - 1.0)) / cols as f64;
     let poster_h = tile_w * POSTER_RATIO;
 
-    let back_btn = icon_button("arrow-left", "Back").on_click({
+    let back_btn = icon_button("arrow-left", common::common_back()).on_click({
         let (ss, se) = (ss.clone(), set_end_game.clone());
         move || {
             se.call(EndGameUi::default());
@@ -490,15 +489,15 @@ pub(crate) fn library_page(shell: &Shell) -> View {
         }
     });
     let title = if target.host.name.is_empty() {
-        "Game library".to_string()
+        client::lib_title().to_string()
     } else {
-        format!("Game library \u{00B7} {}", target.host.name)
+        client::lib_title_host(&target.host.name)
     };
     let mut body: Vec<View> = vec![page_header(&title, back_btn)];
     if let Some(said) = &shell.end_game.said {
         body.push(
             InfoBar::new()
-                .title("End game")
+                .title(client::lib_end_game())
                 .message(said)
                 .is_open(true)
                 .is_closable(false)
@@ -514,7 +513,7 @@ pub(crate) fn library_page(shell: &Shell) -> View {
                         .is_indeterminate(true)
                         .width(18.0)
                         .height(18.0),
-                    muted(pal, "Loading the library\u{2026}"),
+                    muted(pal, client::lib_loading()),
                 ))
                 .spacing(12.0),
             )
@@ -523,7 +522,7 @@ pub(crate) fn library_page(shell: &Shell) -> View {
         LibraryPhase::Failed(msg) => {
             body.push(
                 InfoBar::new()
-                    .title("Couldn't load the library")
+                    .title(client::lib_load_failed())
                     .message(msg)
                     .severity(InfoBarSeverity::Error)
                     .is_open(true)
@@ -532,24 +531,15 @@ pub(crate) fn library_page(shell: &Shell) -> View {
             );
             let (ctx2, set_library) = (ctx.clone(), svc.set_library.clone());
             body.push(
-                icon_button("refresh-cw", "Retry")
+                icon_button("refresh-cw", common::common_retry())
                     .style(ButtonStyle::Accent)
                     .on_click(move || start_fetch(&ctx2, &set_library))
                     .horizontal_alignment(HorizontalAlignment::Left)
                     .into(),
             );
         }
-        LibraryPhase::Empty => body.push(
-            card(
-                muted(
-                    pal,
-                    "No games yet \u{2014} add titles to the host's library (its console or web \
-                     UI) and they appear here.",
-                )
-                .text_wrapping(TextWrapping::Wrap),
-            )
-            .into(),
-        ),
+        LibraryPhase::Empty => body
+            .push(card(muted(pal, client::lib_empty()).text_wrapping(TextWrapping::Wrap)).into()),
         LibraryPhase::Ready(games) => {
             let tile = |g: &Game| -> View {
                 let (ctx2, ss, st) = (ctx.clone(), ss.clone(), st.clone());
@@ -613,9 +603,9 @@ pub(crate) fn library_page(shell: &Shell) -> View {
             body.push(group_heading(
                 pal,
                 if leading.len() == 1 {
-                    "Host"
+                    client::lib_heading_host()
                 } else {
-                    "Launchers"
+                    client::lib_section_launchers()
                 },
             ));
             body.push(tile_grid(
@@ -624,7 +614,7 @@ pub(crate) fn library_page(shell: &Shell) -> View {
                 POSTER_GAP,
             ));
             if !titles.is_empty() {
-                body.push(group_heading(pal, "Games"));
+                body.push(group_heading(pal, client::lib_section_games()));
                 body.push(tile_grid(
                     titles.iter().map(|g| tile(g)).collect(),
                     cols,
@@ -646,15 +636,15 @@ fn end_game_dialog(
 ) -> ContentDialog {
     let pending = end_game.ask.clone();
     let (se, ctx2, set_library) = (set_end_game, svc.ctx.clone(), svc.set_library.clone());
-    let content = pending
+    let heading = pending
         .as_ref()
-        .map(|(_, title)| format!("End {title} on the host? Unsaved progress in the game is lost."))
+        .map(|(_, title)| client::lib_end_game_confirm_title(title))
         .unwrap_or_default();
     ContentDialog::new()
-        .title("End game?")
-        .content(content)
-        .primary_button_text("End game")
-        .close_button_text("Cancel")
+        .title(heading)
+        .content(client::lib_end_game_confirm_body())
+        .primary_button_text(client::lib_end_game())
+        .close_button_text(common::common_cancel())
         .is_open(pending.is_some())
         .on_closed(move |r: ContentDialogResult| {
             se.call(EndGameUi::default());

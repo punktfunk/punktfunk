@@ -98,18 +98,22 @@ impl ListedProfile {
         let seat = self.seat.as_ref()?;
         match seat.state {
             SeatState::Occupied => Some(match &seat.occupant {
-                Some(device) => format!("In use by {device}"),
-                None => "In use".into(),
+                Some(device) => pf_l10n::client::profile_in_use_by(device),
+                None => pf_l10n::client::profile_in_use().into(),
             }),
             SeatState::Starting => Some(
                 seat.detail
                     .clone()
-                    .unwrap_or_else(|| "Getting ready…".into()),
+                    .unwrap_or_else(|| pf_l10n::client::profile_getting_ready().into()),
             ),
-            SeatState::Unavailable => {
-                Some(seat.detail.clone().unwrap_or_else(|| "Unavailable".into()))
+            SeatState::Unavailable => Some(
+                seat.detail
+                    .clone()
+                    .unwrap_or_else(|| pf_l10n::client::profile_unavailable().into()),
+            ),
+            _ if seat.steam_sign_in == Some(true) => {
+                Some(pf_l10n::client::profile_steam_sign_in().into())
             }
-            _ if seat.steam_sign_in == Some(true) => Some("Steam sign-in once".into()),
             _ => None,
         }
     }
@@ -251,25 +255,22 @@ pub fn seat_gate(p: &ListedProfile) -> SeatGate {
         SeatState::Unavailable => SeatGate::Refuse(
             seat.detail
                 .clone()
-                .unwrap_or_else(|| "That profile can't play on this host right now.".into()),
+                .unwrap_or_else(|| pf_l10n::host::reject_seat_unavailable().into()),
         ),
     }
 }
 
 /// The line while a seat comes up: `Getting Kid's desk ready…`.
 pub fn waking_line(display_name: &str) -> String {
-    format!("Getting {display_name}'s desk ready…")
+    pf_l10n::client::profile_waking(display_name)
 }
 
-/// The host's refusal of another profile's seat (403), in its own words.
-pub const WAKE_REFUSED: &str = "This device isn't allowed to start another profile's seat.";
-
-/// The line a failed [`wake`] ends a seat wait with: the refusal as its own sentence, any
-/// other failure under the desk it was for.
+/// The line a failed [`wake`] ends a seat wait with: the host's refusal of another profile's
+/// seat (403) as its own sentence, any other failure under the desk it was for.
 pub fn wake_failed(display_name: &str, e: &crate::library::LibraryError) -> String {
     match e {
-        crate::library::LibraryError::Http(403) => WAKE_REFUSED.to_string(),
-        e => format!("Couldn't wake {display_name}'s desk \u{2014} {e}"),
+        crate::library::LibraryError::Http(403) => pf_l10n::client::profile_wake_refused().into(),
+        e => pf_l10n::client::profile_wake_failed(display_name, e),
     }
 }
 
@@ -465,7 +466,7 @@ pub fn watch_seat(
             }
         };
         let Some(polled) = listed.into_iter().flatten().find(|p| p.id == row.id) else {
-            each(Err(format!("{name} is gone from this host.")));
+            each(Err(pf_l10n::client::profile_gone(name)));
             return;
         };
         if !each(Ok(polled)) {

@@ -144,12 +144,16 @@ pub struct Console {
 }
 
 impl Console {
-    /// Not `Send` (Skia). Build on the thread that will draw.
+    /// Not `Send` (Skia). Build on the thread that will draw. Sets the process's language from
+    /// [`ConsoleOptions::languages`] before any text is built.
     pub fn new(
         opts: ConsoleOptions,
         entry: ConsoleEntry,
         handles: &ConsoleHandles,
     ) -> Result<Console> {
+        if !opts.languages.is_empty() {
+            pf_l10n::set_languages(&opts.languages);
+        }
         let stream = stream_intent(&entry);
         let fetch = entry_fetch(&entry);
         let stack = entry_stack(entry, &opts.device_name);

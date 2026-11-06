@@ -110,12 +110,13 @@ object Gamepad {
     const val PREF_SWITCH2PRO = 17
     const val PREF_SWITCH2GAMECUBE = 18
 
-    /** One pad type: its wire byte, the console's stored spelling, and the label people see. */
+    /** One pad type: its wire byte, the console's stored spelling, and its brand name. Automatic
+     *  has an empty one: the app words it from a message. */
     class Pref(val wire: Int, val name: String, val label: String)
 
     /** Every pad type, in wire order — the one table the pickers and labels draw from. */
     val PREFS: List<Pref> = listOf(
-        Pref(PREF_AUTO, "auto", "Automatic"),
+        Pref(PREF_AUTO, "auto", ""),
         Pref(PREF_XBOX360, "xbox360", "Xbox 360"),
         Pref(PREF_DUALSENSE, "dualsense", "DualSense"),
         Pref(PREF_XBOXONE, "xboxone", "Xbox One"),
@@ -136,8 +137,8 @@ object Gamepad {
         Pref(PREF_SWITCH2GAMECUBE, "switch2gamecube", "GameCube (Switch 2)"),
     )
 
-    /** The label for a wire byte; an unknown one reads as Automatic. */
-    fun prefLabel(pref: Int): String = PREFS.getOrNull(pref)?.label ?: "Automatic"
+    /** The brand name for a wire byte; empty for Automatic and for a byte this build does not know. */
+    fun prefLabel(pref: Int): String = PREFS.getOrNull(pref)?.label.orEmpty()
 
     // USB vendor ids of the controllers we can identify by VID/PID.
     private const val VID_SONY = 0x054C

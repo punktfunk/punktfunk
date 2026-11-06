@@ -8,6 +8,7 @@ use adw::prelude::*;
 use gtk::glib;
 use pf_client_core::presets::StreamPreset;
 use pf_client_core::speed::{recommended_kbps, CleanRound, HealthReport, SpeedReport};
+use pf_l10n::{client, desktop};
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -35,11 +36,11 @@ pub fn push(
         area.set_draw_func(move |area, cr, w, h| draw(area, cr, w, h, &chart.borrow()));
     }
     let headline = gtk::Label::builder()
-        .label("Measuring\u{2026}")
+        .label(desktop::desktop_speedtest_measuring_short())
         .css_classes(["title-1"])
         .build();
     let caption = gtk::Label::builder()
-        .label(format!("The host sends a short burst to {}", req.host.name))
+        .label(desktop::desktop_speedtest_burst_body(&req.host.name))
         .css_classes(["dim-label"])
         .wrap(true)
         .build();
@@ -53,15 +54,17 @@ pub fn push(
         value
     };
     let (loss, received, recommended, current) = (
-        row("Loss"),
-        row("Received"),
-        row("Recommended bitrate"),
-        row("Current bitrate"),
+        row(client::speedtest_loss()),
+        row(desktop::desktop_speedtest_received()),
+        row(client::speedtest_recommended_bitrate()),
+        row(desktop::desktop_speedtest_current_bitrate()),
     );
     current.set_label(&bitrate_label(chart.borrow().current));
     // What the check found, one row each; hidden until there is something to say.
     let findings = adw::PreferencesGroup::builder()
-        .title("What the check found")
+        .title(glib::markup_escape_text(
+            desktop::desktop_speedtest_findings_title(),
+        ))
         .build();
     findings.set_visible(false);
     let buttons = gtk::Box::builder()
@@ -89,7 +92,11 @@ pub fn push(
             .child(&adw::Clamp::builder().maximum_size(640).child(&body).build())
             .build(),
     ));
-    nav.push(&adw::NavigationPage::new(&toolbar, "Network Speed"));
+    nav.push(&adw::NavigationPage::new(
+        &toolbar,
+        client::speedtest_title(),
+    ));
+    let failed_title = client::speedtest_failed_title(&req.host.name);
 
     enum Probe {
         Sample(u32),
@@ -132,7 +139,7 @@ pub fn push(
                     if let Some(done) = done.take() {
                         done();
                     }
-                    headline.set_label("Couldn't measure");
+                    headline.set_label(&failed_title);
                     caption.set_label(&msg);
                 }
                 Probe::Done(Ok(report)) => {
@@ -160,25 +167,24 @@ pub fn push(
                     // without a ramp only ever measured the blast, which says nothing.
                     match r.clean {
                         Some(c) => {
-                            caption.set_label(&format!(
-                                "At {}: {:.1} % loss, {:.1} ms jitter",
+                            caption.set_label(&client::speedtest_clean_round_body(
                                 mbit(c.rate_kbps),
-                                c.loss_pct,
-                                f64::from(c.jitter_us) / 1000.0
+                                format!("{:.1}", c.loss_pct),
+                                format!("{:.1}", f64::from(c.jitter_us) / 1000.0),
                             ));
                             loss.set_label(&format!("{:.1} %", c.loss_pct));
-                            received.set_label(&format!(
-                                "{} of {} packets",
-                                c.outcome.recv_packets, c.outcome.wire_packets_sent
+                            received.set_label(&desktop::desktop_speedtest_packets(
+                                c.outcome.recv_packets,
+                                u64::from(c.outcome.wire_packets_sent),
                             ));
                         }
                         None => {
-                            caption.set_label("Measured over the real data plane");
+                            caption.set_label(desktop::desktop_speedtest_measured_plane());
                             loss.set_label("\u{2014}");
                             let b = r.blast.unwrap_or_default();
-                            received.set_label(&format!(
-                                "{} of {} packets",
-                                b.recv_packets, b.wire_packets_sent
+                            received.set_label(&desktop::desktop_speedtest_packets(
+                                b.recv_packets,
+                                u64::from(b.wire_packets_sent),
                             ));
                         }
                     }
@@ -192,7 +198,7 @@ pub fn push(
                             area.queue_draw();
                         }
                     };
-                    for (label, layer) in target.choices() {
+                    for (label, layer) in target.choices(rec) {
                         let b = gtk::Button::builder()
                             .label(label)
                             .css_classes(["pill"])
@@ -258,7 +264,7 @@ fn mbit(kbps: u32) -> String {
 
 fn bitrate_label(kbps: u32) -> String {
     match kbps {
-        0 => "Host default".into(),
+        0 => desktop::desktop_speedtest_host_default().into(),
         k => mbit(k),
     }
 }
@@ -345,15 +351,28 @@ fn legend() -> gtk::Box {
         .spacing(18)
         .halign(gtk::Align::Center)
         .build();
-    for (text, class) in [
-        ("\u{2501} Live goodput", "accent"),
-        ("\u{2501} Measured", "dim-label"),
-        ("\u{2504} Recommended", "accent"),
-        ("\u{2504} Current bitrate", "dim-label"),
+    // The line glyph is drawn here: solid for what was measured, dashed for a rate.
+    for (glyph, text, class) in [
+        (
+            '\u{2501}',
+            desktop::desktop_speedtest_live_goodput(),
+            "accent",
+        ),
+        (
+            '\u{2501}',
+            desktop::desktop_speedtest_legend_measured(),
+            "dim-label",
+        ),
+        ('\u{2504}', client::speedtest_recommended(), "accent"),
+        (
+            '\u{2504}',
+            desktop::desktop_speedtest_current_bitrate(),
+            "dim-label",
+        ),
     ] {
         legend.append(
             &gtk::Label::builder()
-                .label(text)
+                .label(format!("{glyph} {text}"))
                 .css_classes(["caption", class])
                 .build(),
         );
@@ -384,7 +403,7 @@ impl Layer {
         match self {
             Layer::Global => {
                 store.update_settings(|s| s.bitrate_kbps = kbps);
-                format!("{} set as the default bitrate", mbit(kbps))
+                client::speedtest_applied_default(mbit(kbps))
             }
             Layer::Preset { id, name } => {
                 let saved = store.update_presets(|catalog| {
@@ -393,10 +412,10 @@ impl Layer {
                     }
                 });
                 match saved {
-                    Ok(()) => format!("{} set in \u{201c}{name}\u{201d}", mbit(kbps)),
+                    Ok(()) => client::speedtest_applied_preset(mbit(kbps), name),
                     Err(e) => {
                         tracing::warn!(error = %format!("{e:#}"), "measured bitrate not saved");
-                        format!("Couldn't save the bitrate \u{2014} {e:#}")
+                        desktop::desktop_speedtest_save_failed(format!("{e:#}"))
                     }
                 }
             }
@@ -437,18 +456,18 @@ impl Target {
         }
     }
 
-    /// The buttons, the suggested one last.
-    fn choices(&self) -> Vec<(String, Layer)> {
+    /// The buttons for a measured `kbps`, the suggested one last.
+    fn choices(&self, kbps: u32) -> Vec<(String, Layer)> {
         let preset = |p: &StreamPreset| Layer::Preset {
             id: p.id.clone(),
             name: p.name.clone(),
         };
         match self {
-            Target::Global => vec![("Apply".into(), Layer::Global)],
-            Target::Preset(p) => vec![(format!("Apply to \u{201c}{}\u{201d}", p.name), preset(p))],
+            Target::Global => vec![(client::speedtest_use_rate(mbit(kbps)), Layer::Global)],
+            Target::Preset(p) => vec![(client::speedtest_apply_to_preset(&p.name), preset(p))],
             Target::Ask(p) => vec![
-                ("Set as default".into(), Layer::Global),
-                (format!("Set in \u{201c}{}\u{201d}", p.name), preset(p)),
+                (client::speedtest_set_default().into(), Layer::Global),
+                (client::speedtest_set_in_preset(&p.name), preset(p)),
             ],
         }
     }

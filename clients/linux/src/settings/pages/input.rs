@@ -7,11 +7,12 @@ use crate::settings::quick_actions::QuickActions;
 use crate::settings::spec::{self, Page};
 use crate::settings::tables::*;
 use adw::prelude::*;
+use pf_l10n::{client, desktop};
 
 pub fn input(b: &mut Build) {
     let mut p = b.page(Page::Input, "input-keyboard-symbolic");
-    let touch = p.group("Touch", "");
-    let row = b.choice(&spec::TOUCH, TOUCH_MODE_LABELS);
+    let touch = p.group(client::prefs_group_touch_pointer(), "");
+    let row = b.choice(&spec::TOUCH, &touch_mode_labels());
     caption_follows(&row, TOUCH_MODE_CAPTIONS);
     b.put(
         &mut p,
@@ -20,9 +21,8 @@ pub fn input(b: &mut Build) {
             s.touch_mode = at(TOUCH_MODES, i).to_string()
         }),
     );
-    // Group titles are Pango markup.
-    let kbm = p.group("Keyboard &amp; mouse", "");
-    let row = b.choice(&spec::MOUSE, MOUSE_MODE_LABELS);
+    let kbm = p.group(client::prefs_group_keyboard_mouse(), "");
+    let row = b.choice(&spec::MOUSE, &mouse_mode_labels());
     caption_follows(&row, MOUSE_MODE_CAPTIONS);
     b.put(
         &mut p,
@@ -45,9 +45,8 @@ pub fn input(b: &mut Build) {
     b.put(&mut p, Some(&kbm), field);
 
     let ring = p.group(
-        "Quick actions",
-        "The dial Ctrl+Alt+Shift+O, a two-finger twist or Select+A opens in a stream: what its \
-         six buttons hold, and the shortcut chords they can send.",
+        client::player_overlay_actions(),
+        &desktop::desktop_player_overlay_actions_hint("Ctrl+Alt+Shift+O", "Select+A"),
     );
     b.put(&mut p, Some(&ring), quick_actions(b));
     b.finish(p);

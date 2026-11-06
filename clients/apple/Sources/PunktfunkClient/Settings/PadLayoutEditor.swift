@@ -85,24 +85,22 @@ struct PadLayoutEditor: View {
                     }
                 })
             .accessibilityLabel(c.label)
-            .accessibilityHint("Drag to move; tap to select")
+            .accessibilityHint(L10n.applePadLayoutControlA11yHint)
     }
 
     private func chrome(controls: [PadControl], narrow: Bool) -> some View {
         VStack(spacing: 10) {
             HStack(spacing: 12) {
-                Button("Done") { dismiss() }
+                Button(L10n.commonDone) { dismiss() }
                     .fontWeight(.semibold)
                     .keyboardShortcut(.cancelAction)
                 VStack(spacing: 1) {
-                    Text("Controller layout").font(.headline)
-                    Text(narrow
-                         ? "Editing the upright layout — wide screens keep their own."
-                         : "Editing the wide layout — upright screens keep their own.")
+                    Text(L10n.padLayoutTitle).font(.headline)
+                    Text(narrow ? L10n.padLayoutEditingUpright : L10n.padLayoutEditingWide)
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
-                Button("Reset layout") { write(narrow, [:]); selected = nil }
+                Button(L10n.padLayoutReset) { write(narrow, [:]); selected = nil }
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 10)
@@ -112,15 +110,17 @@ struct PadLayoutEditor: View {
                     HStack {
                         Text(c.label).font(.subheadline.weight(.semibold))
                         Spacer(minLength: 16)
-                        Button(c.hidden ? "Show" : "Hide") {
+                        Button(c.hidden ? L10n.padLayoutShow : L10n.padLayoutHide) {
                             update(narrow, c.id) { $0.hidden = !c.hidden }
                         }
-                        Button("Reset") {
+                        Button(L10n.commonReset) {
                             write(narrow, tweaks(narrow).filter { $0.key != c.id })
                             size = 1
                         }
                     }
-                    Text("Size · \(Int((size * 100).rounded()))%").font(.caption)
+                    Text(String(localized: L10n.padLayoutSize) + " · "
+                         + L10n.commonPercent(value: String(Int((size * 100).rounded()))))
+                        .font(.caption)
                     Slider(value: $size, in: VirtualPad.tweakScaleRange) { editing in
                         if !editing { update(narrow, c.id) { $0.scale = size } }
                     }
@@ -130,7 +130,7 @@ struct PadLayoutEditor: View {
                 .frame(width: 320)
                 .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16))
             } else {
-                Text("Drag a control to move it; tap one for size and visibility.")
+                Text(L10n.padLayoutHint)
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

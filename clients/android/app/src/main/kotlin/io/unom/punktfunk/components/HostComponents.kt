@@ -39,11 +39,13 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import io.unom.punktfunk.kit.R
 import io.unom.punktfunk.models.HostStatus
 
 /** Left-aligned section header above each block of the connect screen. */
@@ -185,7 +187,7 @@ fun HostCard(
                     IconButton(enabled = enabled, onClick = { menu = true }) {
                         Icon(
                             Icons.Filled.MoreVert,
-                            contentDescription = "More",
+                            contentDescription = stringResource(R.string.hostcard_more_a11y),
                             modifier = Modifier.size(20.dp),
                             tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
                         )
@@ -193,7 +195,7 @@ fun HostCard(
                     DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
                         if (onWake != null) {
                             DropdownMenuItem(
-                                text = { Text("Wake host") },
+                                text = { Text(stringResource(R.string.hostcard_wake)) },
                                 onClick = {
                                     menu = false
                                     onWake()
@@ -202,7 +204,7 @@ fun HostCard(
                         }
                         if (onEdit != null) {
                             DropdownMenuItem(
-                                text = { Text("Edit…") },
+                                text = { Text(stringResource(R.string.hostcard_edit)) },
                                 onClick = {
                                     menu = false
                                     onEdit()
@@ -211,7 +213,7 @@ fun HostCard(
                         }
                         if (onForget != null) {
                             DropdownMenuItem(
-                                text = { Text("Forget") },
+                                text = { Text(stringResource(R.string.hostcard_remove)) },
                                 onClick = {
                                     menu = false
                                     onForget()
@@ -296,6 +298,7 @@ fun HostAvatar(name: String, online: Boolean = false, os: String = "") {
     val letter = name.trim().firstOrNull()?.uppercaseChar()?.toString() ?: "?"
     val cardColor = CardDefaults.elevatedCardColors().containerColor
     val osIcon = resolveOsIcon(os)
+    val presence = stringResource(if (online) R.string.hostcard_status_online else R.string.hostcard_status_offline)
     Box {
         Box(
             modifier = Modifier
@@ -341,7 +344,7 @@ fun HostAvatar(name: String, online: Boolean = false, os: String = "") {
                             .border(1.5.dp, MaterialTheme.colorScheme.onSurfaceVariant, CircleShape)
                     },
                 )
-                .semantics { contentDescription = if (online) "Online" else "Offline" },
+                .semantics { contentDescription = presence },
         )
     }
 }
@@ -361,7 +364,7 @@ private fun TrustBadge(status: HostStatus, modifier: Modifier = Modifier) {
     }
     Icon(
         icon,
-        contentDescription = status.label,
+        contentDescription = stringResource(status.label),
         tint = tint.copy(alpha = 0.85f),
         modifier = modifier.padding(14.dp).size(18.dp),
     )
@@ -374,10 +377,10 @@ fun EmptyHostsState() {
         modifier = Modifier.fillMaxWidth().padding(vertical = 56.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        Text("No hosts yet", style = MaterialTheme.typography.titleMedium)
+        Text(stringResource(R.string.hosts_empty_title), style = MaterialTheme.typography.titleMedium)
         Spacer(Modifier.height(8.dp))
         Text(
-            "Hosts on your network show up here automatically.\nTap “Add host” to enter one by address.",
+            stringResource(R.string.hosts_empty_body),
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             textAlign = TextAlign.Center,

@@ -140,8 +140,8 @@ struct ConsoleHomeView: View {
     private func takeLinkConfirm() {
         guard let confirm = linkConfirm, let console else { return }
         console.prompt(
-            id: "link", title: "Open this link?", message: confirm.message,
-            choices: [confirm.actionTitle, "Cancel"]
+            id: "link", title: String(localized: L10n.linkConfirmTitle), message: confirm.message,
+            choices: [confirm.actionTitle, String(localized: L10n.commonCancel)]
         ) { choice in
             // The link may have been replaced while the question was up.
             guard linkConfirm?.id == confirm.id else { return }

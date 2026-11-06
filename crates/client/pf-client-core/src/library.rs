@@ -156,15 +156,34 @@ pub fn initials(title: &str) -> String {
 /// Store id → display label. One table: the console, the GTK dialog and the WinUI dialog all
 /// drew this from a copy of their own, and a store added to one never reached the others.
 pub fn store_label(store: &str) -> &'static str {
+    store_key_label(store_key(store))
+}
+
+/// [`store_key`] of a store this build does not know.
+pub(crate) const UNKNOWN_STORE: &str = "Game";
+const CUSTOM_STORE: &str = "Custom";
+
+/// Store id → the name group keys and the Store sort use: the same in every language, never
+/// drawn.
+pub(crate) fn store_key(store: &str) -> &'static str {
     match store {
         "steam" => "Steam",
-        "custom" => "Custom",
+        "custom" => CUSTOM_STORE,
         "heroic" => "Heroic",
         "lutris" => "Lutris",
         "epic" => "Epic",
         "gog" => "GOG",
         "xbox" => "Xbox",
-        _ => "Game",
+        _ => UNKNOWN_STORE,
+    }
+}
+
+/// The text for a [`store_key`]. A brand is its own.
+pub(crate) fn store_key_label(key: &str) -> &str {
+    match key {
+        CUSTOM_STORE => pf_l10n::client::lib_store_custom(),
+        UNKNOWN_STORE => pf_l10n::client::lib_store_other(),
+        brand => brand,
     }
 }
 
@@ -203,15 +222,12 @@ impl std::fmt::Display for LibraryError {
     /// "{label} failed — " lead on a host action, "Couldn't send logs — " on
     /// an upload. A sentence here reads as a second headline under the first.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        use pf_l10n::client as m;
         match self {
-            LibraryError::NotPaired => {
-                f.write_str("the host doesn't recognize this device — pair with it first")
-            }
-            LibraryError::PinMismatch => {
-                f.write_str("the host's certificate isn't the one you paired with — pair again")
-            }
-            LibraryError::Http(code) => write!(f, "the host refused it ({code})"),
-            LibraryError::Unreachable(why) => write!(f, "couldn't reach the host — {why}"),
+            LibraryError::NotPaired => f.write_str(m::error_mgmt_not_paired()),
+            LibraryError::PinMismatch => f.write_str(m::error_mgmt_pin_mismatch()),
+            LibraryError::Http(code) => f.write_str(&m::error_mgmt_refused(code)),
+            LibraryError::Unreachable(why) => f.write_str(&m::error_mgmt_unreachable(why)),
         }
     }
 }
@@ -551,28 +567,30 @@ impl DownloadProgress {
     /// What a launch screen says under the title: `12.3 GB of 26 GB · 48 MB/s · about 4 min
     /// left`, `Installing…`, `Waiting for its turn to download…`.
     pub fn line(&self) -> String {
+        use pf_l10n::client as m;
         match self.state.as_str() {
-            "queued" => return "Waiting for its turn to download\u{2026}".into(),
+            "queued" => return m::lib_download_queued().into(),
             "installing" => {
                 return self
                     .phase
                     .clone()
-                    .unwrap_or_else(|| "Installing\u{2026}".into())
+                    .unwrap_or_else(|| m::lib_download_installing().into())
             }
             _ => {}
         }
+        let done = human_bytes(self.done_bytes);
         let mut parts = vec![match self.total_bytes.filter(|t| *t > 0) {
-            Some(total) => format!("{} of {}", human_bytes(self.done_bytes), human_bytes(total)),
-            None => format!("{} so far", human_bytes(self.done_bytes)),
+            Some(total) => m::lib_download_progress(done, human_bytes(total)),
+            None => m::lib_download_so_far(done),
         }];
         if let Some(rate) = self.rate_bps.filter(|_| self.state == "downloading") {
-            parts.push(format!("{}/s", human_bytes(rate)));
+            parts.push(m::lib_download_rate(human_bytes(rate)));
         }
         if let Some(eta) = self.eta_s.filter(|_| self.state == "downloading") {
             parts.push(match eta {
-                0..60 => "less than a minute left".into(),
-                60..3600 => format!("about {} min left", (eta + 30) / 60),
-                _ => format!("about {} h {} min left", eta / 3600, (eta % 3600) / 60),
+                0..60 => m::lib_download_eta_soon().into(),
+                60..3600 => m::lib_download_eta_minutes((eta + 30) / 60),
+                _ => m::lib_download_eta_hours(eta / 3600, (eta % 3600) / 60),
             });
         }
         parts.join(" \u{b7} ")
@@ -580,13 +598,14 @@ impl DownloadProgress {
 
     /// Why a launch that waited on it didn't start the title; `None` while it may still.
     pub fn stopped(&self, title: &str) -> Option<String> {
+        use pf_l10n::client as m;
         Some(match self.state.as_str() {
             "failed" => match self.error.as_deref() {
-                Some(why) => format!("{title} didn't download \u{2014} {why}"),
-                None => format!("{title} didn't download."),
+                Some(why) => m::lib_download_failed_why(title, why),
+                None => m::lib_download_failed(title),
             },
-            "cancelled" => format!("{title}'s download was cancelled."),
-            "paused" => format!("{title}'s download was paused. Start it again to resume."),
+            "cancelled" => m::lib_download_cancelled(title),
+            "paused" => m::lib_download_paused(title),
             _ => return None,
         })
     }
@@ -630,31 +649,23 @@ impl InstallAction {
 
     /// The menu row: `Install · 26 GB (212 GB free)`, `Remove download · 26 GB`.
     pub fn label(self, install: Option<&TitleInstall>) -> String {
+        use pf_l10n::client as m;
         let size = install.and_then(|i| i.size_bytes).map(human_bytes);
         match self {
             InstallAction::Install => {
                 let free = install.and_then(|i| i.free_bytes).map(human_bytes);
                 match (size, free) {
-                    (Some(s), Some(f)) => format!("Install \u{b7} {s} ({f} free)"),
-                    (Some(s), None) => format!("Install \u{b7} {s}"),
-                    _ => "Install".into(),
+                    (Some(s), Some(f)) => m::lib_install_size_free(s, f),
+                    (Some(s), None) => m::lib_install_size(s),
+                    _ => m::lib_install().into(),
                 }
             }
-            InstallAction::Pause => "Pause download".into(),
-            InstallAction::Resume => "Resume download".into(),
+            InstallAction::Pause => m::lib_download_pause().into(),
+            InstallAction::Resume => m::lib_download_resume().into(),
             InstallAction::Remove => match size {
-                Some(s) => format!("Remove download \u{b7} {s}"),
-                None => "Remove download".into(),
+                Some(s) => m::lib_download_remove_size(s),
+                None => m::lib_download_remove().into(),
             },
-        }
-    }
-
-    fn verb(self) -> &'static str {
-        match self {
-            InstallAction::Install => "install",
-            InstallAction::Pause => "pause",
-            InstallAction::Resume => "resume",
-            InstallAction::Remove => "remove",
         }
     }
 }
@@ -673,9 +684,10 @@ impl TileBadge {
         install: Option<&TitleInstall>,
         download: Option<&DownloadProgress>,
     ) -> Option<TileBadge> {
+        use pf_l10n::client as m;
         let pct = |d: &DownloadProgress| match d.fraction() {
-            Some(f) => format!("{} %", (f * 100.0).floor()),
-            None => "Queued".into(),
+            Some(f) => m::lib_badge_percent((f * 100.0).floor()),
+            None => m::lib_badge_queued().into(),
         };
         match download {
             Some(d) if d.live() => Some(TileBadge {
@@ -688,7 +700,7 @@ impl TileBadge {
             }),
             Some(d) if d.state == "failed" => Some(TileBadge {
                 icon: "alert",
-                text: "Not installed".into(),
+                text: m::lib_badge_not_installed().into(),
             }),
             _ => {
                 let install = install.filter(|i| i.missing())?;
@@ -697,7 +709,7 @@ impl TileBadge {
                     text: install
                         .size_bytes
                         .map(human_bytes)
-                        .unwrap_or_else(|| "Not installed".into()),
+                        .unwrap_or_else(|| m::lib_badge_not_installed().into()),
                 })
             }
         }
@@ -726,25 +738,27 @@ impl InstallOutcome {
             (200..=299, _) => InstallOutcome::Done,
             (_, Some(m)) if !m.is_empty() => InstallOutcome::Refused(m),
             (401 | 404 | 405, _) => InstallOutcome::Unsupported,
-            (code, _) => InstallOutcome::Failed(format!("the host refused it ({code})")),
+            (code, _) => InstallOutcome::Failed(pf_l10n::client::error_mgmt_refused(code)),
         }
     }
 
     /// The player-facing line. The Swift and Kotlin clients use the same words.
     pub fn notice(&self, action: InstallAction, title: &str) -> String {
+        use pf_l10n::client as m;
         match self {
             InstallOutcome::Done => match action {
-                InstallAction::Install | InstallAction::Resume => format!("Downloading {title}."),
-                InstallAction::Pause => format!("Paused {title}'s download."),
-                InstallAction::Remove => format!("Removed {title}. Saves stay on the host."),
+                InstallAction::Install | InstallAction::Resume => m::lib_install_started(title),
+                InstallAction::Pause => m::lib_download_paused_done(title),
+                InstallAction::Remove => m::lib_removed(title),
             },
             InstallOutcome::Refused(why) => why.clone(),
-            InstallOutcome::Unsupported => {
-                "This host needs an update to manage games from here.".into()
-            }
-            InstallOutcome::Failed(why) => {
-                format!("Couldn't {} {title} \u{2014} {why}", action.verb())
-            }
+            InstallOutcome::Unsupported => m::lib_install_unsupported().into(),
+            InstallOutcome::Failed(why) => match action {
+                InstallAction::Install => m::lib_install_failed(title, why),
+                InstallAction::Pause => m::lib_pause_failed(title, why),
+                InstallAction::Resume => m::lib_resume_failed(title, why),
+                InstallAction::Remove => m::lib_remove_failed(title, why),
+            },
         }
     }
 }
@@ -792,19 +806,22 @@ fn path_segment(id: &str) -> String {
 
 /// Decimal units, as stores count: `12.3 GB`, `48 MB`, `512 kB`.
 pub fn human_bytes(n: u64) -> String {
-    let n = n as f64;
-    let (value, unit) = if n >= 1e9 {
-        (n / 1e9, "GB")
-    } else if n >= 1e6 {
-        (n / 1e6, "MB")
-    } else {
-        (n / 1e3, "kB")
+    use pf_l10n::common as m;
+    let num = |value: f64| {
+        let rounded = (value * 10.0).round() / 10.0;
+        if value >= 100.0 || rounded.fract() == 0.0 {
+            format!("{value:.0}")
+        } else {
+            format!("{rounded:.1}")
+        }
     };
-    let rounded = (value * 10.0).round() / 10.0;
-    if value >= 100.0 || rounded.fract() == 0.0 {
-        format!("{value:.0} {unit}")
+    let n = n as f64;
+    if n >= 1e9 {
+        m::common_size_gb(num(n / 1e9))
+    } else if n >= 1e6 {
+        m::common_size_mb(num(n / 1e6))
     } else {
-        format!("{rounded:.1} {unit}")
+        m::common_size_kb(num(n / 1e3))
     }
 }
 
@@ -842,18 +859,19 @@ impl GameEnd {
             409 => GameEnd::NotRunning,
             401 | 404 => GameEnd::Unsupported,
             403 => GameEnd::Expired,
-            code => GameEnd::Failed(format!("the host refused it ({code})")),
+            code => GameEnd::Failed(pf_l10n::client::error_mgmt_refused(code)),
         }
     }
 
     /// The player-facing line. The Swift, Kotlin and web clients use the same words.
     pub fn notice(&self, title: &str) -> String {
+        use pf_l10n::client as m;
         match self {
-            GameEnd::Ended => format!("Ended {title}."),
-            GameEnd::NotRunning => format!("{title} isn't running any more."),
-            GameEnd::Unsupported => "This host needs an update to end games from here.".into(),
-            GameEnd::Expired => "This device's access to the host has expired.".into(),
-            GameEnd::Failed(why) => format!("Couldn't end {title} \u{2014} {why}"),
+            GameEnd::Ended => m::lib_end_game_done(title),
+            GameEnd::NotRunning => m::lib_end_game_not_running(title),
+            GameEnd::Unsupported => m::lib_end_game_unsupported().into(),
+            GameEnd::Expired => m::lib_end_game_expired().into(),
+            GameEnd::Failed(why) => m::lib_end_game_failed(title, why),
         }
     }
 }

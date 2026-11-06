@@ -22,6 +22,7 @@ pub use model::Phase;
 use model::{Band, CardModel, Live, Preset, Status};
 use pf_client_core::host_order;
 use pf_client_core::orchestrate::HostTarget;
+use pf_l10n::{client, desktop};
 use relm4::prelude::*;
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -238,7 +239,7 @@ impl SimpleComponent for HostsPage {
             l.set_halign(gtk::Align::Start);
             l
         };
-        let disc_heading = heading("On this network");
+        let disc_heading = heading(client::hosts_section_discovered());
         // Bands of saved cards, redrawn as a whole when the models change.
         let saved = gtk::Box::new(gtk::Orientation::Vertical, 12);
         let discovered = card_grid();
@@ -246,7 +247,7 @@ impl SimpleComponent for HostsPage {
         // Shown under the discovered heading while no (unsaved) advert is live yet.
         let searching = gtk::Box::new(gtk::Orientation::Horizontal, 8);
         searching.append(&adw::Spinner::new());
-        let searching_label = gtk::Label::new(Some("Searching the network\u{2026}"));
+        let searching_label = gtk::Label::new(Some(client::hosts_searching()));
         searching_label.add_css_class("dim-label");
         searching.append(&searching_label);
         searching.set_margin_top(6);
@@ -274,12 +275,10 @@ impl SimpleComponent for HostsPage {
         // No saved hosts AND nothing on the network → the whole page is the empty state.
         let empty = adw::StatusPage::builder()
             .icon_name("network-workgroup-symbolic")
-            .title("No hosts yet")
-            .description(
-                "Hosts on your network appear here automatically.\nAdd one by address with +.",
-            )
+            .title(client::hosts_empty_title())
+            .description(client::hosts_empty_body())
             .build();
-        let add_btn = gtk::Button::with_label("Add Host");
+        let add_btn = gtk::Button::with_label(client::hosts_add());
         add_btn.add_css_class("pill");
         add_btn.add_css_class("suggested-action");
         add_btn.set_halign(gtk::Align::Center);
@@ -292,7 +291,7 @@ impl SimpleComponent for HostsPage {
 
         // Connect failures land here, not in toasts.
         let banner = adw::Banner::new("");
-        banner.set_button_label(Some("Dismiss"));
+        banner.set_button_label(Some(desktop::desktop_banner_dismiss()));
         banner.connect_button_clicked(|b| b.set_revealed(false));
 
         let (arrange, sort, group) = arrange_menu(&store);
@@ -308,11 +307,11 @@ impl SimpleComponent for HostsPage {
 
         let (header, bar) = crate::widgets::chrome::destination_header(&views, &narrow);
         let add_host_btn = crate::widgets::lucide::button("plus");
-        add_host_btn.set_tooltip_text(Some("Add host"));
+        add_host_btn.set_tooltip_text(Some(client::hosts_add()));
         add_host_btn.set_action_name(Some("win.add-host"));
         header.pack_start(&add_host_btn);
         let rescan_btn = crate::widgets::lucide::button("refresh-cw");
-        rescan_btn.set_tooltip_text(Some("Scan the network for hosts again"));
+        rescan_btn.set_tooltip_text(Some(client::hosts_rescan_hint()));
         {
             let sender = sender.clone();
             rescan_btn.connect_clicked(move |_| sender.input(HostsMsg::Rescan));
@@ -324,8 +323,7 @@ impl SimpleComponent for HostsPage {
         if cfg!(feature = "console") {
             // The couch UI's front door, beside the page's other actions.
             let console_btn = crate::widgets::lucide::button("gamepad-2");
-            console_btn
-                .set_tooltip_text(Some("Console UI — the controller-driven couch interface"));
+            console_btn.set_tooltip_text(Some(desktop::desktop_console_ui_hint()));
             console_btn.set_action_name(Some("win.console"));
             header.pack_end(&console_btn);
         }
@@ -525,12 +523,16 @@ fn arrange_menu(store: &Rc<Store>) -> (gtk::MenuButton, gio::SimpleAction, gio::
     );
     let menu = gio::Menu::new();
     for (title, action, values) in [
-        ("Sort", "hosts.sort", &host_order::HOST_SORTS),
-        ("Group", "hosts.group", &host_order::HOST_GROUPINGS),
+        (client::hosts_sort(), "hosts.sort", &host_order::HOST_SORTS),
+        (
+            client::hosts_group(),
+            "hosts.group",
+            &host_order::HOST_GROUPINGS,
+        ),
     ] {
         let section = gio::Menu::new();
         for (id, label) in values {
-            let item = gio::MenuItem::new(Some(label), None);
+            let item = gio::MenuItem::new(Some(label()), None);
             item.set_action_and_target_value(Some(action), Some(&id.to_variant()));
             section.append_item(&item);
         }
@@ -539,7 +541,7 @@ fn arrange_menu(store: &Rc<Store>) -> (gtk::MenuButton, gio::SimpleAction, gio::
     let button = gtk::MenuButton::builder()
         .child(&crate::widgets::lucide::row_icon("arrow-up-down"))
         .menu_model(&menu)
-        .tooltip_text("Sort and group")
+        .tooltip_text(client::hosts_arrange())
         .build();
     (button, sort, group)
 }
@@ -617,7 +619,11 @@ impl HostsPage {
             w.saved.remove(&child);
         }
         for band in bands {
-            let heading = gtk::Label::new(Some(band.title.as_deref().unwrap_or("Saved hosts")));
+            let heading = gtk::Label::new(Some(
+                band.title
+                    .as_deref()
+                    .unwrap_or(client::hosts_section_saved()),
+            ));
             heading.add_css_class("heading");
             heading.set_halign(gtk::Align::Start);
             w.saved.append(&heading);
@@ -727,7 +733,7 @@ impl HostsPage {
                     if let Some(display) = gtk::gdk::Display::default() {
                         display.clipboard().set_text(&url);
                     }
-                    out(HostsOutput::Toast("Link copied".into()));
+                    out(HostsOutput::Toast(client::hostcard_link_copied().into()));
                 }
             }
             Act::CreateShortcut { host, preset } => {
@@ -743,7 +749,9 @@ impl HostsPage {
                     }
                 });
                 if let Err(e) = saved {
-                    out(HostsOutput::Toast(format!("Couldn't save \u{2014} {e:#}")));
+                    out(HostsOutput::Toast(desktop::desktop_save_failed(format!(
+                        "{e:#}"
+                    ))));
                 }
             }
             Act::Toast(msg) => out(HostsOutput::Toast(msg)),

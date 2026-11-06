@@ -1,0 +1,12 @@
+{
+  "fix_files": [{
+    "declarations": ["input count", "local n = count: plural"],
+    "selectors": ["n"],
+    "match": {
+      "n=one": "{count} plik",
+      "n=few": "{count} pliki",
+      "n=many": "{count} plików",
+      "n=other": "{count} pliku"
+    }
+  }]
+}

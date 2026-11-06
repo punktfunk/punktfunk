@@ -11,8 +11,9 @@ use crate::screens::{Ctx, Outbox, ScreenView};
 use crate::theme::{panel, stroke, Fonts, Frame, PanelStroke, HAIRLINE, W};
 use crate::widgets::{bleed_view, soft_scroll, Flick};
 use pf_client_core::menu_nav::{MenuEvent, MenuPulse};
-use pf_client_core::shortcuts::{self, Client, Kind};
+use pf_client_core::shortcuts::{self, Client, Kind, Press};
 use skia_safe::{Canvas, Rect};
+use std::borrow::Cow;
 
 /// The column's widest, design units: badges and a line of text read best under it.
 const MAX_W: f64 = 960.0;
@@ -27,14 +28,13 @@ const COL_GAP: f64 = 24.0;
 const TEXT_MIN_W: f64 = 240.0;
 const TEXT_SIZE: f64 = 15.0;
 const LINE_H: f64 = TEXT_SIZE * 1.4;
-const LEAD: &str = "Press these while a stream is running.";
 
 struct Card {
     kind: Kind,
     icon: Icon,
     title: &'static str,
-    /// The title's parenthetical, quieter beside it.
-    note: Option<&'static str>,
+    /// Quieter beside the title.
+    note: Option<Cow<'static, str>>,
     style: GlyphStyle,
     rows: Vec<Row>,
     /// Laid out: top from the content's top, height and the badge column's width, px. A
@@ -47,8 +47,8 @@ struct Card {
 }
 
 struct Row {
-    keys: &'static str,
-    text: &'static str,
+    keys: Press,
+    text: Cow<'static, str>,
     lines: Vec<String>,
     /// Top from the card's top and height, px.
     top: f64,
@@ -92,10 +92,6 @@ impl ControlsScreen {
         let cards = shortcuts::groups(client, !ctx.device.tv)
             .into_iter()
             .map(|g| {
-                let (title, note) = match g.title.split_once(" (") {
-                    Some((t, n)) => (t, n.strip_suffix(')')),
-                    None => (g.title, None),
-                };
                 let (icon, style) = match g.kind {
                     Kind::Remote => (icons::REMOTE, GlyphStyle::Remote),
                     Kind::Keyboard => (icons::KEYBOARD, GlyphStyle::Keyboard),
@@ -106,15 +102,15 @@ impl ControlsScreen {
                 Card {
                     kind: g.kind,
                     icon,
-                    title,
-                    note,
+                    title: g.title(),
+                    note: g.note(),
                     style,
                     rows: g
                         .items
                         .iter()
                         .map(|i| Row {
                             keys: i.keys,
-                            text: i.text,
+                            text: i.text(),
                             lines: Vec::new(),
                             top: 0.0,
                             h: 0.0,
@@ -171,7 +167,7 @@ impl ControlsScreen {
             card.top = y;
             let mut ry = HEAD_H * k;
             for row in &mut card.rows {
-                row.lines = wrap(row.text, text_w as f32, |s| {
+                row.lines = wrap(&row.text, text_w as f32, |s| {
                     fonts.measure(s, W::Regular, TEXT_SIZE * k)
                 });
                 let text_h = row.lines.len() as f64 * LINE_H * k;
@@ -226,7 +222,7 @@ impl ControlsScreen {
             18.0 * k,
             ui.fg(0.95),
         );
-        if let Some(note) = card.note {
+        if let Some(note) = &card.note {
             let nx = tx + f64::from(tw) + 14.0 * k;
             fonts.draw_clipped(
                 canvas,
@@ -278,7 +274,7 @@ fn rule(canvas: &Canvas, ui: &Frame, x1: f64, x2: f64, y: f64, alpha: f32, k: f6
 
 impl ScreenView for ControlsScreen {
     fn title(&self) -> String {
-        "Stream controls".into()
+        pf_l10n::client::controls_title().into()
     }
 
     fn menu(&mut self, ev: MenuEvent, _ctx: &mut Ctx, fx: &mut Outbox) -> Option<MenuPulse> {
@@ -300,8 +296,8 @@ impl ScreenView for ControlsScreen {
 
     fn hints(&self, _ctx: &Ctx) -> Vec<Hint> {
         vec![
-            Hint::new(HintKey::Adjust, "Page"),
-            Hint::new(HintKey::Back, "Done"),
+            Hint::new(HintKey::Adjust, pf_l10n::console::console_hint_page()),
+            Hint::new(HintKey::Back, pf_l10n::common::common_done()),
         ]
     }
 
@@ -333,7 +329,7 @@ impl ScreenView for ControlsScreen {
             let top = f64::from(rect.top) + 6.0 * k - self.flick.scroll;
             fonts.draw(
                 canvas,
-                LEAD,
+                pf_l10n::client::controls_lead(),
                 x0,
                 top + TEXT_SIZE * k,
                 W::Regular,
@@ -382,6 +378,20 @@ mod tests {
             .flat_map(|c| &c.rows)
             .all(|r| r.lines.len() == 1));
         assert!(s.flick.content_h > 600.0, "{}", s.flick.content_h);
+    }
+
+    /// Every title, note and row is a message; the chords stay key names.
+    #[test]
+    fn the_page_reads_the_pseudo_language() {
+        let s = pf_l10n::with_language("en-XA", screen);
+        let pseudo = |t: &str| t.starts_with('[');
+        assert!(s.cards.iter().all(|c| pseudo(c.title)));
+        assert!(s.cards.iter().filter_map(|c| c.note.as_deref()).all(pseudo));
+        assert!(s
+            .cards
+            .iter()
+            .flat_map(|c| &c.rows)
+            .all(|r| pseudo(&r.text)));
     }
 
     /// An iPad's keys need a keyboard, which can arrive while the page is up. A Mac has one.

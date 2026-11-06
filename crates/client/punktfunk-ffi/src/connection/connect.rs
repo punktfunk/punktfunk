@@ -1418,9 +1418,38 @@ pub unsafe extern "C" fn punktfunk_local_link_facts(
     .unwrap_or(false)
 }
 
+/// `kbps` as a player reads it: `940 Mbit/s`, `1.3 Gbit/s`.
+#[cfg(feature = "quic")]
+fn pyrowave_rate_text(kbps: u32) -> String {
+    use punktfunk_core::pyrowave::{rate, Rate};
+    match rate(kbps) {
+        Rate::Mbit(n) => pf_l10n::common::common_mbits(n),
+        Rate::Gbit(n) => pf_l10n::common::common_gbits(n),
+    }
+}
+
+/// [`punktfunk_pyrowave_link_warning`]'s line, in the language the process is set to.
+#[cfg(feature = "quic")]
+fn pyrowave_link_warning(
+    required_kbps: u32,
+    facts: punktfunk_core::transport::LinkFacts,
+) -> Option<String> {
+    use pf_l10n::client as m;
+    use punktfunk_core::pyrowave::{link_shortfall, LinkShortfall};
+    Some(match link_shortfall(required_kbps, facts)? {
+        LinkShortfall::Wifi => m::player_pyrowave_bpp_wifi_warning().into(),
+        LinkShortfall::Port(mbps) => m::player_pyrowave_bpp_port_warning(
+            pyrowave_rate_text(required_kbps),
+            pyrowave_rate_text(mbps.saturating_mul(1000)),
+        ),
+        LinkShortfall::Gbe => m::player_pyrowave_bpp_gbe_warning(pyrowave_rate_text(required_kbps)),
+    })
+}
+
 /// The line the PyroWave quality row shows when `required_kbps` is more than this device's
 /// link carries ([`punktfunk_local_link_facts`]'s `kind` and `mbps`), NUL-terminated into
-/// `out`; empty when it fits. One wording for every client. 160 bytes is ample.
+/// `out`; empty when it fits. One wording for every client, in the language the console was
+/// given (`languages`), English before. 160 bytes is ample.
 ///
 /// # Safety
 /// `out` is writable for `cap` bytes.
@@ -1437,7 +1466,7 @@ pub unsafe extern "C" fn punktfunk_pyrowave_link_warning(
         return PunktfunkStatus::NullPointer;
     }
     let facts = punktfunk_core::transport::LinkFacts { kind, mbps };
-    let line = punktfunk_core::pyrowave::link_warning(required_kbps, facts).unwrap_or_default();
+    let line = pyrowave_link_warning(required_kbps, facts).unwrap_or_default();
     // SAFETY: `out` is writable for `cap` bytes, per this function's contract.
     if !unsafe { crate::write_cstr(out, cap, &line) } {
         return PunktfunkStatus::InvalidArg;

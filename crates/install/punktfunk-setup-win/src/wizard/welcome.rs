@@ -132,36 +132,31 @@ fn lockup(t: f64, shades: brand::Shades) -> View {
 }
 
 pub(super) fn welcome_page(w: &Wizard, cx: &ViewContext<'_, Wizard>) -> View {
-    let what = match w.preset.artifact {
-        Artifact::Host => "host",
-        Artifact::Client => "client",
-    };
     let uninstall = || -> View {
         Button::new()
-            .content("Uninstall")
+            .content(tools::wizard_uninstall())
             .on_click(cx.message(Msg::Uninstall))
             .into()
     };
     // Manage mode (D9): an installed box re-titles Welcome. The uninstaller exe (D6) offers
     // the teardown only; the installer offers Reconfigure — the upgrade path — or Uninstall.
     let installed = w.screen.facts.installed_for(w.preset.artifact);
-    let subtitle = installed.map(|inst| match &inst.version {
-        Some(v) => format!("{v} · {what} installed"),
-        None => format!("{what} installed"),
+    let subtitle = installed.map(|inst| match (&inst.version, w.preset.artifact) {
+        (Some(v), Artifact::Host) => tools::wizard_installed_host_version(v),
+        (Some(v), Artifact::Client) => tools::wizard_installed_client_version(v),
+        (None, Artifact::Host) => tools::wizard_installed_host().to_string(),
+        (None, Artifact::Client) => tools::wizard_installed_client().to_string(),
     });
     let fresh_install = !w.preset.uninstall && installed.is_none();
     let (sentence, buttons): (&str, Vec<View>) = if w.preset.uninstall {
-        (
-            "This removes punktfunk from this PC. Identity, pairings and passwords stay — a reinstall picks them up.",
-            vec![uninstall()],
-        )
+        (tools::wizard_welcome_uninstall(), vec![uninstall()])
     } else if !fresh_install {
         (
-            "Reconfigure keeps what is on this PC and applies your changes. Uninstall removes it — identity, pairings and passwords stay.",
+            tools::wizard_welcome_manage(),
             vec![
                 uninstall(),
                 Button::new()
-                    .content("Reconfigure")
+                    .content(tools::wizard_reconfigure())
                     .style(ButtonStyle::Accent)
                     .min_width(124.0)
                     .on_click(cx.message(Msg::Reconfigure))
@@ -171,12 +166,8 @@ pub(super) fn welcome_page(w: &Wizard, cx: &ViewContext<'_, Wizard>) -> View {
     } else {
         (
             match w.preset.artifact {
-                Artifact::Host => {
-                    "This PC becomes the one you stream from: the punktfunk host sends its screen, audio and games to the devices you play on."
-                }
-                Artifact::Client => {
-                    "This PC becomes a device you play on: the punktfunk client shows the stream from the PC you stream from."
-                }
+                Artifact::Host => tools::wizard_welcome_host(),
+                Artifact::Client => tools::wizard_welcome_client(),
             },
             vec![continue_button(
                 cx,
@@ -205,12 +196,12 @@ pub(super) fn welcome_page(w: &Wizard, cx: &ViewContext<'_, Wizard>) -> View {
     if fresh_install {
         let (recommended, custom) = match w.preset.artifact {
             Artifact::Host => (
-                "The defaults: virtual display and gamepad drivers, the HDR layer, a tray icon, and the service starts right away. A web console password is generated for you.",
-                "Pick the drivers, Moonlight compatibility, firewall scope, autostart and the console password yourself.",
+                tools::wizard_recommended_host(),
+                tools::wizard_custom_host(),
             ),
             Artifact::Client => (
-                "Install into your profile with Start-menu shortcuts.",
-                "Choose whether a desktop shortcut is added.",
+                tools::wizard_recommended_client(),
+                tools::wizard_custom_client(),
             ),
         };
         children.push(
@@ -220,8 +211,9 @@ pub(super) fn welcome_page(w: &Wizard, cx: &ViewContext<'_, Wizard>) -> View {
                 .max_width(720.0)
                 .margin(Thickness::new(0.0, 10.0, 0.0, 0.0))
                 .children((
-                    option_card(w, cx, false, "Recommended", recommended).grid_column(0),
-                    option_card(w, cx, true, "Custom", custom).grid_column(1),
+                    option_card(w, cx, false, tools::wizard_recommended(), recommended)
+                        .grid_column(0),
+                    option_card(w, cx, true, tools::wizard_custom(), custom).grid_column(1),
                 ))
                 .into(),
         );

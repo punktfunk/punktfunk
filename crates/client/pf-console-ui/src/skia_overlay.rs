@@ -675,7 +675,7 @@ impl SkiaOverlay {
             self.banner_text = None;
             return 0.0;
         }
-        self.banner_text = Some(exit_hint(ctx.pad.is_some()).to_string());
+        self.banner_text = Some(exit_hint(ctx.pad.is_some()));
         ((BANNER_S - age) / BANNER_FADE_S).min(1.0)
     }
 
@@ -814,11 +814,11 @@ fn fit_scale(scale: f32, width_at_scale: f32, budget: f32) -> f32 {
 }
 
 /// How to leave a stream, in one line: the pad chord when a pad is forwarded, else the key.
-pub(crate) fn exit_hint(pad: bool) -> &'static str {
+pub(crate) fn exit_hint(pad: bool) -> String {
     if pad {
-        "Hold L1 + R1 + Start + Select to leave"
+        pf_l10n::client::notice_exit_hold("L1 + R1 + Start + Select")
     } else {
-        "Ctrl+Alt+Shift+D to leave"
+        pf_l10n::client::notice_exit_keys("Ctrl+Alt+Shift+D")
     }
 }
 
@@ -960,7 +960,7 @@ fn draw_resize_scrim(
     let r = (f64::from(width.min(height)) * 0.045).clamp(16.0, 44.0);
     crate::theme::spinner(canvas, ui, cx, cy - r, r, phase);
     let (_, metrics) = font.metrics();
-    let label = "Resizing\u{2026}";
+    let label = pf_l10n::client::notice_resizing();
     let tw = font.measure_str(label, None).0;
     canvas.draw_str(
         label,

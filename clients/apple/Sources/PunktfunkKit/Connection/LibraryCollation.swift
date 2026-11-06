@@ -15,6 +15,7 @@
 // values in, pure values out, and PunktfunkKit is the target the tests can reach.
 
 import Foundation
+import PunktfunkShared
 
 /// How titles are ordered within a group. The raw value is the persisted `punktfunk.librarySort`
 /// string — a FILE FORMAT shared with the desktop's `library_sort` (`host|title|platform|store`);
@@ -47,12 +48,12 @@ public enum LibrarySortKey: String, CaseIterable, Hashable, Sendable {
     /// The pill's label.
     public var label: String {
         switch self {
-        case .hostOrder: return "Default"
-        case .title: return "A–Z"
-        case .platform: return "Platform"
-        case .store: return "Store"
-        case .recent: return "Recent"
-        case .playTime: return "Most played"
+        case .hostOrder: return String(localized: L10n.libSortHost)
+        case .title: return String(localized: L10n.libSortTitle)
+        case .platform: return String(localized: L10n.libSortPlatform)
+        case .store: return String(localized: L10n.libSortStore)
+        case .recent: return String(localized: L10n.libSortRecent)
+        case .playTime: return String(localized: L10n.libSortPlaytime)
         }
     }
 
@@ -76,8 +77,8 @@ public enum LibraryArrangement: String, CaseIterable, Hashable, Sendable {
 
     public var label: String {
         switch self {
-        case .shelf: return "Shelf"
-        case .grid: return "Grid"
+        case .shelf: return String(localized: L10n.playerLibraryViewShelf)
+        case .grid: return String(localized: L10n.playerLibraryViewGrid)
         }
     }
 
@@ -98,20 +99,25 @@ public enum LibraryGroupKey: Hashable, Sendable {
     case platform(String)
     case store(String)
 
+    /// The platform name of the bucket for a game with neither platform nor known store. An id,
+    /// never drawn: ``label`` words it.
+    static let otherPlatform = "Other"
+
     /// The heading this group wears.
     public var label: String {
         switch self {
-        case .launchers: return "Launchers"
+        case .launchers: return String(localized: L10n.libSectionLaunchers)
+        case .platform(Self.otherPlatform): return String(localized: L10n.libGroupOther)
         case .platform(let name), .store(let name): return name
         }
     }
 
-    /// The kind caption a collection tile wears (`LAUNCHERS` / `PLATFORM` / `STORE`).
+    /// The kind caption a collection tile wears (Launchers / Platform / Store).
     public var kindCaption: String {
         switch self {
-        case .launchers: return "LAUNCHERS"
-        case .platform: return "PLATFORM"
-        case .store: return "STORE"
+        case .launchers: return String(localized: L10n.libCollectionKindLaunchers)
+        case .platform: return String(localized: L10n.libCollectionKindPlatform)
+        case .store: return String(localized: L10n.libCollectionKindStore)
         }
     }
 }
@@ -145,7 +151,7 @@ public enum LibraryCollation {
 
     /// The synthetic tile itself. No art and an empty store: nothing tries to fetch a poster for
     /// it, and the shelf draws the mark above instead of a monogram.
-    public static func desktopEntry(title: String = "Desktop") -> GameEntry {
+    public static func desktopEntry(title: String = String(localized: L10n.libDesktop)) -> GameEntry {
         GameEntry(id: desktopID, store: "", title: title, art: Artwork(), icon: desktopIcon)
     }
 
@@ -219,8 +225,7 @@ public enum LibraryCollation {
         case .platform:
             let platform = game.platform?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             if !platform.isEmpty { return .platform(platform) }
-            let store = game.storeLabel
-            return store == "Game" ? .platform("Other") : .store(store)
+            return game.hasStoreName ? .store(game.storeLabel) : .platform(LibraryGroupKey.otherPlatform)
         case .store:
             return .store(game.storeLabel)
         }

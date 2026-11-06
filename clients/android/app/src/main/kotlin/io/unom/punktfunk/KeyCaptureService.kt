@@ -11,6 +11,8 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
+import io.unom.punktfunk.kit.R
 
 /**
  * Hardware keys ahead of Android's own shortcuts. The window policy takes Alt+Tab, every Meta
@@ -88,39 +90,27 @@ class KeyCaptureService : AccessibilityService() {
  * The prominent disclosure Play requires before the service is turned on, because Punktfunk is not
  * an accessibility tool: what the service receives, where it goes, and an explicit Agree. It stands
  * alone; Play rejects one that shares a prompt with other disclosures. Agree opens Android's
- * Accessibility page; either answer closes the prompt. The text matches the Play listing
- * paragraph in `clients/android/store/play-listing.md`.
+ * Accessibility page; either answer closes the prompt. The `android_keycapture_*` messages match
+ * the Play listing paragraph in `clients/android/store/play-listing.md`.
  */
 @Composable
 fun KeyCaptureDisclosure(onDismiss: () -> Unit) {
     val context = LocalContext.current
     PunktfunkDialog(
-        title = "Send every keyboard shortcut?",
+        title = stringResource(R.string.android_keycapture_title),
         onDismiss = onDismiss,
         dismissOnOutsideTap = false,
         actions = listOf(
-            DialogAction("Agree", primary = true) {
+            DialogAction(stringResource(R.string.android_keycapture_agree), primary = true) {
                 onDismiss()
                 openAccessibilitySettings(context)
             },
-            DialogAction("No thanks", onClick = onDismiss),
+            DialogAction(stringResource(R.string.android_keycapture_decline), onClick = onDismiss),
         ),
     ) {
-        PromptText(
-            "Android keeps Alt+Tab, the Windows key and your keyboard's language key for itself. " +
-                "To send them to the computer you stream from, Punktfunk uses Android's " +
-                "AccessibilityService API.",
-        )
-        PromptText(
-            "With it on, Punktfunk receives the keys you press on a hardware keyboard. While a " +
-                "stream is on screen, it sends them to that computer over the encrypted " +
-                "connection. Outside a stream, every key passes through untouched. It can't see " +
-                "the screen, stores nothing and sends nothing anywhere else.",
-        )
-        PromptText(
-            "Agree opens Android's Accessibility settings, where you turn on Punktfunk keyboard " +
-                "shortcuts. You can turn it off there at any time.",
-        )
+        PromptText(stringResource(R.string.android_keycapture_body_why))
+        PromptText(stringResource(R.string.android_keycapture_body_what))
+        PromptText(stringResource(R.string.android_keycapture_body_how))
     }
 }
 

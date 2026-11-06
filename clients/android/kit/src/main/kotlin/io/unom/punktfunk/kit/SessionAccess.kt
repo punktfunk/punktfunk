@@ -53,28 +53,31 @@ object SessionAccess {
         if (grants == ALL_PRE_POWER || grants == ALL_PRE_MANAGE) ALL else grants
 
     /**
-     * The preset name a mask displays as — §3.2's rule: three levels people actually reason
+     * The string resource a mask displays as — §3.2's rule: three levels people actually reason
      * about, "Custom" for any other combination, never a raw bit list.
      */
-    fun label(grants: Int): String = when (normalizeLegacyFull(grants) and ALL) {
-        ALL -> "Full control"
-        GAMEPAD -> "Controller only"
-        0 -> "View only"
-        else -> "Custom"
+    fun label(grants: Int): Int = when (normalizeLegacyFull(grants) and ALL) {
+        ALL -> R.string.grant_level_full
+        GAMEPAD -> R.string.grant_level_controller
+        0 -> R.string.grant_level_view
+        else -> R.string.grant_level_custom
     }
+
+    /** A time left as the string resource that words it and the numbers it takes, in order. */
+    class Remaining(val message: Int, val args: List<Int>)
 
     /**
      * Compact time-left wording for the Access chip ("1 h 58 m", "12 m", "45 s") — hours and
      * minutes once the span has them, bare seconds only under a minute (the final countdown).
      */
-    fun remainingLabel(secs: Int): String {
+    fun remaining(secs: Int): Remaining {
         val h = secs / 3600
         val m = (secs % 3600) / 60
         return when {
-            h > 0 && m > 0 -> "$h h $m m"
-            h > 0 -> "$h h"
-            m > 0 -> "$m m"
-            else -> "${secs.coerceAtLeast(0)} s"
+            h > 0 && m > 0 -> Remaining(R.string.grant_remaining_hours_minutes, listOf(h, m))
+            h > 0 -> Remaining(R.string.grant_remaining_hours, listOf(h))
+            m > 0 -> Remaining(R.string.grant_remaining_minutes, listOf(m))
+            else -> Remaining(R.string.grant_remaining_seconds, listOf(secs.coerceAtLeast(0)))
         }
     }
 }

@@ -7,18 +7,23 @@ use crate::settings::tables::*;
 use crate::trust::Settings;
 use adw::prelude::*;
 use pf_client_core::audio::AudioDevice;
+use pf_l10n::client;
 use std::rc::Rc;
 
 pub fn audio(b: &mut Build) {
     let mut p = b.page(Page::Audio, "audio-volume-high-symbolic");
-    let g = p.group("", "Applies from the next session.");
+    let g = p.group("", client::prefs_applies_next_session());
     let channels = b.choice(
         &spec::AUDIO_CHANNELS,
-        &["Stereo", "5.1 Surround", "7.1 Surround"],
+        &[
+            client::player_audio_channels_2(),
+            client::player_audio_channels_6(),
+            client::player_audio_channels_8(),
+        ],
     );
     // Lossless is stereo-only: a lossless surround frame does not fit one QUIC datagram at the
     // default MTU (design/hi-res-audio.md §4.2). Greyed, so the reason stays beside its cause.
-    let labels: Vec<&str> = AUDIO_FORMATS.iter().map(|(_, l)| *l).collect();
+    let labels: Vec<&str> = AUDIO_FORMATS.iter().map(|(_, l)| l()).collect();
     let format = b.choice(&spec::AUDIO_FORMAT, &labels);
     {
         let w = format.widget().clone();
@@ -39,6 +44,10 @@ pub fn audio(b: &mut Build) {
         b,
         &spec::SPEAKER,
         &b.probes.speakers,
+        (
+            client::player_speaker_device_system(),
+            client::player_speaker_device_missing,
+        ),
         |s| &s.speaker_device,
         |s, v| s.speaker_device = v,
     );
@@ -59,6 +68,10 @@ pub fn audio(b: &mut Build) {
         b,
         &spec::MIC_DEVICE,
         &b.probes.mics,
+        (
+            client::player_mic_device_system(),
+            client::player_mic_device_missing,
+        ),
         |s| &s.mic_device,
         |s, v| s.mic_device = v,
     );
@@ -93,23 +106,25 @@ pub fn audio(b: &mut Build) {
 }
 
 /// An endpoint picker: labels are descriptions, the stored value the node name. `None` when
-/// the probe found nothing; a saved device that is gone keeps an entry to move off.
+/// the probe found nothing; a saved device that is gone keeps an entry to move off, worded by
+/// the picker's own `(system default, missing)` messages.
 fn device(
     b: &Build,
     spec: &'static Spec,
     devs: &[AudioDevice],
+    (system, missing): (&'static str, fn(String) -> String),
     get: fn(&Settings) -> &String,
     set: fn(&mut Settings, String),
 ) -> Option<Field> {
     let saved = get(b.seed);
-    let mut names = vec!["System default".to_string()];
+    let mut names = vec![system.to_string()];
     let mut keys = vec![String::new()];
     for d in devs {
         names.push(d.description.clone());
         keys.push(d.name.clone());
     }
     if !saved.is_empty() && !keys.contains(saved) {
-        names.push(format!("{saved} (not detected)"));
+        names.push(missing(saved.clone()));
         keys.push(saved.clone());
     }
     if keys.len() < 2 {

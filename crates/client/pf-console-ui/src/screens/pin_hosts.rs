@@ -105,12 +105,13 @@ impl ScreenView for PinHostsScreen {
     }
 
     fn hints(&self, ctx: &Ctx) -> Vec<Hint> {
+        let done = Hint::new(HintKey::Back, pf_l10n::common::common_done());
         if host_indices(ctx).is_empty() {
-            return vec![Hint::new(HintKey::Back, "Done")];
+            return vec![done];
         }
         vec![
-            Hint::new(HintKey::Confirm, "Pin / Unpin"),
-            Hint::new(HintKey::Back, "Done"),
+            Hint::new(HintKey::Confirm, pf_l10n::console::console_hint_pin_unpin()),
+            done,
         ]
     }
 
@@ -129,7 +130,7 @@ impl ScreenView for PinHostsScreen {
         if indices.is_empty() {
             fonts.centered(
                 canvas,
-                "No saved hosts yet — pair with a host first, then pin this preset to it.",
+                pf_l10n::console::console_preset_pin_empty(),
                 W::Regular,
                 14.0 * k,
                 ui.fg(0.55),
@@ -154,9 +155,9 @@ impl ScreenView for PinHostsScreen {
                     header: None,
                     label: h.name.clone(),
                     value: Some(if pinned {
-                        "Pinned".into()
+                        pf_l10n::console::console_preset_pin_on().into()
                     } else {
-                        "Off".into()
+                        pf_l10n::console::console_preset_pin_off().into()
                     }),
                     value_dim: !pinned,
                     caret: false,
@@ -172,14 +173,11 @@ impl ScreenView for PinHostsScreen {
 
     /// The explainer under the list, once there is a list.
     fn foot(&self, ctx: &Ctx) -> Option<std::borrow::Cow<'static, str>> {
-        (!host_indices(ctx).is_empty()).then_some(
-            "A pinned preset appears as its own card on the host — one press connects with it."
-                .into(),
-        )
+        (!host_indices(ctx).is_empty()).then_some(pf_l10n::client::preset_pin_hint().into())
     }
 
     fn title(&self) -> String {
-        format!("Pin \u{201c}{}\u{201d}", self.preset_name())
+        pf_l10n::console::console_preset_pin_title(self.preset_name())
     }
 
     fn press(&mut self) {

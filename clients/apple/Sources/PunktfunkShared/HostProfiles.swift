@@ -153,13 +153,14 @@ public struct ListedProfile: Codable, Hashable, Sendable, Identifiable {
         guard let seat else { return nil }
         switch seat.state {
         case .occupied:
-            return seat.occupant.map { "In use by \($0)" } ?? "In use"
+            return seat.occupant.map { L10n.profileInUseBy(device: $0) }
+                ?? String(localized: L10n.profileInUse)
         case .starting:
-            return seat.detail ?? "Getting ready…"
+            return seat.detail ?? String(localized: L10n.profileGettingReady)
         case .unavailable:
-            return seat.detail ?? "Unavailable"
+            return seat.detail ?? String(localized: L10n.profileUnavailable)
         default:
-            return seat.steamSignIn == true ? "Steam sign-in once" : nil
+            return seat.steamSignIn == true ? String(localized: L10n.profileSteamSignIn) : nil
         }
     }
 }
@@ -253,12 +254,12 @@ public enum HostProfiles {
         case .stopped: return p.unlock == .none ? .wake : .dial
         case .starting: return .wait(detail: seat.detail)
         case .unavailable:
-            return .refuse(seat.detail ?? "That profile can't play on this host right now.")
+            return .refuse(seat.detail ?? String(localized: L10n.rejectSeatUnavailable))
         }
     }
 
     /// The line while a seat comes up: `Getting Kid's desk ready…`.
     public static func wakingLine(_ displayName: String) -> String {
-        "Getting \(displayName)'s desk ready…"
+        L10n.profileWaking(name: displayName)
     }
 }

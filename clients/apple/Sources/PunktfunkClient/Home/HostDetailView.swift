@@ -15,12 +15,12 @@ enum HostSection: String, CaseIterable, Identifiable {
 
     var title: String {
         switch self {
-        case .overview: "Overview"
-        case .presets: "Presets"
-        case .connection: "Connection"
-        case .speedTest: "Speed Test"
-        case .pairing: "Pairing"
-        case .power: "Power"
+        case .overview: String(localized: L10n.appleHostcardSectionOverview)
+        case .presets: String(localized: L10n.hostcardSectionPresets)
+        case .connection: String(localized: L10n.hostcardSectionConnection)
+        case .speedTest: String(localized: L10n.speedtestTitle)
+        case .pairing: String(localized: L10n.hostcardSectionPairing)
+        case .power: String(localized: L10n.hostcardSectionPower)
         }
     }
 
@@ -70,11 +70,14 @@ struct HostDetailView: View {
                 Section {
                     header(host, status)
                     Button(action: a.connect) {
-                        Label(playing.map { "Resume \($0)" } ?? "Connect", systemImage: "play.fill")
+                        Label(
+                            playing.map { L10n.appleHostcardResumeGame(game: $0) }
+                                ?? String(localized: L10n.commonConnect),
+                            systemImage: "play.fill")
                     }
                     if let browse = a.browseLibrary {
                         Button(action: browse) {
-                            Label("Browse Library", systemImage: "square.grid.2x2")
+                            Label(L10n.hostcardBrowseLibrary, systemImage: "square.grid.2x2")
                         }
                     }
                 }
@@ -86,26 +89,26 @@ struct HostDetailView: View {
             if shows(.overview) {
                 if let sendLogs = a.sendLogs {
                     Section {
-                        Button("Send Logs to Host", systemImage: "doc.text", action: sendLogs)
+                        Button(L10n.hostcardSendLogs, systemImage: "doc.text", action: sendLogs)
                     } footer: {
-                        Text("Uploads this device's recent log to the host, for a bug report.")
+                        Text(L10n.hostcardSendLogsHint)
                     }
                 }
                 Section {
                     // A Mac form draws even a destructive button in the window's tint.
-                Button("Remove Host", role: .destructive) { confirmRemove = true }
+                Button(L10n.hostcardRemove, role: .destructive) { confirmRemove = true }
                     .tint(.red)
                     // On the button, so iOS 26 opens the dialog from the row that asked.
                     .confirmationDialog(
-                        "Remove \(host.displayName)?", isPresented: $confirmRemove,
+                        L10n.hostcardRemoveTitle(host: host.displayName), isPresented: $confirmRemove,
                         titleVisibility: .visible
                     ) {
-                        Button("Remove Host", role: .destructive, action: a.remove)
+                        Button(L10n.commonRemove, role: .destructive, action: a.remove)
                     } message: {
-                        Text("You can add it again later.")
+                        Text(L10n.hostcardRemoveBody)
                     }
                 } footer: {
-                    Text("Deletes the host from this device. The host itself is untouched.")
+                    Text(L10n.appleHostcardRemoveHint)
                 }
             }
         }
@@ -162,32 +165,31 @@ struct HostDetailView: View {
                     set: { menu.setDefault($0.isEmpty ? nil : $0) })
                 #if os(tvOS)
                 TVSelectionRow(
-                    title: "Connect with",
-                    options: [(label: "Default settings", tag: "")]
+                    title: String(localized: L10n.hostcardConnectWith),
+                    options: [(label: String(localized: L10n.hostcardDefaultSettings), tag: "")]
                         + menu.presets.map { (label: $0.name, tag: $0.id) },
                     selection: boundID)
                 #else
-                Picker("Connect with", selection: boundID) {
-                    Text("Default settings").tag("")
+                Picker(L10n.hostcardConnectWith, selection: boundID) {
+                    Text(L10n.hostcardDefaultSettings).tag("")
                     ForEach(menu.presets) { preset in
                         Text(preset.name).tag(preset.id)
                     }
                 }
                 #endif
                 ForEach(menu.presets) { preset in
-                    Toggle("Pin \u{201C}\(preset.name)\u{201D} as a card", isOn: Binding(
+                    Toggle(L10n.hostcardPinPreset(preset: preset.name), isOn: Binding(
                         get: { menu.pinnedIDs.contains(preset.id) },
                         set: { _ in menu.togglePin(preset.id) }))
                 }
             } header: {
-                Text("Presets")
+                Text(L10n.hostcardSectionPresets)
             } footer: {
-                Text("A tap on the card connects with the chosen preset. A pinned preset gets its "
-                    + "own card next to this host.")
+                Text(L10n.appleHostcardPresetsHint)
             }
         } else if only == .presets {
             Section {
-                Text("No presets yet. Make one in Settings, then choose it here.")
+                Text(L10n.appleHostcardNoPresetsBody)
                     .foregroundStyle(.secondary)
             }
         }
@@ -198,9 +200,11 @@ struct HostDetailView: View {
     private func connectionSection(_ host: StoredHost, _ a: HostActions) -> some View {
         Section {
             HostConnectionFields(host: host) { store.update($0) }
-            LabeledContent("Management port", value: String(host.effectiveMgmtPort))
+            LabeledContent(
+                String(localized: L10n.hostcardManagementPort),
+                value: String(host.effectiveMgmtPort))
             #if !os(tvOS)
-            Toggle("Share clipboard with this host", isOn: Binding(
+            Toggle(L10n.hostcardShareClipboard, isOn: Binding(
                 get: { host.clipboardSync == true },
                 set: { on in
                     var shared = host
@@ -209,16 +213,16 @@ struct HostDetailView: View {
                 }))
             #endif
             if only == nil, let speedTest = a.speedTest {
-                Button("Test Network Speed…", systemImage: "speedometer", action: speedTest)
+                Button(L10n.hostcardSpeedTest, systemImage: "speedometer", action: speedTest)
             }
             if let copyLink = a.copyLink {
-                Button("Copy Link", systemImage: "link", action: copyLink)
+                Button(L10n.hostcardCopyLink, systemImage: "link", action: copyLink)
             }
         } header: {
-            Text("Connection")
+            Text(L10n.hostcardSectionConnection)
         } footer: {
             if only == nil, host.pinnedSHA256 == nil {
-                Text("Pair first to test the network speed.")
+                Text(L10n.appleHostcardSpeedTestPairFirstHint)
             }
         }
     }
@@ -226,35 +230,39 @@ struct HostDetailView: View {
     private func pairingSection(_ host: StoredHost, _ a: HostActions) -> some View {
         let paired = host.pinnedSHA256 != nil
         return Section {
-            LabeledContent("Status", value: paired ? "Paired" : "Not paired")
+            LabeledContent(
+                String(localized: L10n.appleHostcardPairStatus),
+                value: String(
+                    localized: paired ? L10n.hostcardPaired : L10n.hostcardStatusNotPaired))
             if let pin = host.pinnedSHA256 {
                 let hex = pin.hexLower
-                LabeledContent("Fingerprint", value: "\(hex.prefix(8))…\(hex.suffix(4))")
+                LabeledContent(
+                    String(localized: L10n.appleHostcardFingerprint),
+                    value: "\(hex.prefix(8))…\(hex.suffix(4))")
             }
-            Button(paired ? "Pair Again with PIN…" : "Pair with PIN…", systemImage: "number",
-                   action: a.pair)
+            Button(
+                paired ? L10n.appleHostcardPairAgainWithPin : L10n.hostcardPairWithPin,
+                systemImage: "number", action: a.pair)
             if paired {
-                Toggle("Default host", isOn: Binding(
+                Toggle(L10n.hostcardDefaultHost, isOn: Binding(
                     get: { defaultHostID.lowercased() == host.id.uuidString.lowercased() },
                     set: { defaultHostID = $0 ? host.id.uuidString : "" }))
-                Button("Forget Identity…", role: .destructive) { confirmForget = true }
+                Button(L10n.hostcardForgetIdentity, role: .destructive) { confirmForget = true }
                     .tint(.red)
                     .confirmationDialog(
-                        "Forget the identity of \(host.displayName)?", isPresented: $confirmForget,
+                        L10n.hostcardForgetIdentityTitle(host: host.displayName),
+                        isPresented: $confirmForget,
                         titleVisibility: .visible
                     ) {
-                        Button("Forget Identity", role: .destructive, action: a.forget)
+                        Button(L10n.hostcardForgetIdentityConfirm, role: .destructive, action: a.forget)
                     } message: {
-                        Text("The next connect asks for a PIN again.")
+                        Text(L10n.hostcardForgetIdentityBody)
                     }
             }
         } header: {
-            Text("Pairing")
+            Text(L10n.hostcardSectionPairing)
         } footer: {
-            Text(paired
-                ? "Start in opens the default host's library. With one paired host, that host is "
-                    + "the default without this switch."
-                : "Pairing lets this device browse the library, test the network and send logs.")
+            Text(paired ? L10n.appleHostcardDefaultHint : L10n.appleHostcardPairingHint)
         }
     }
 
@@ -262,7 +270,7 @@ struct HostDetailView: View {
         if a.wake != nil || !a.power.isEmpty {
             Section {
                 if let wake = a.wake {
-                    Button("Wake Host", systemImage: "power", action: wake)
+                    Button(L10n.hostcardWake, systemImage: "power", action: wake)
                 }
                 ForEach(a.power) { action in
                     // iOS reddens a destructive title and leaves the symbol on the accent, so
@@ -272,7 +280,10 @@ struct HostDetailView: View {
                         a.runPower(action)
                     } label: {
                         Label {
-                            Text(action.available ? action.label : "\(action.label) (Unavailable)")
+                            Text(
+                                action.available
+                                    ? action.label
+                                    : L10n.hostcardActionUnavailable(action: action.label))
                         } icon: {
                             if action.danger {
                                 Image(systemName: "power").foregroundStyle(.red)
@@ -284,13 +295,13 @@ struct HostDetailView: View {
                     .tint(action.danger ? Color.red : nil)
                 }
             } header: {
-                Text("Power")
+                Text(L10n.hostcardSectionPower)
             } footer: {
-                Text("Restart and shut down end every stream from this host, and ask first.")
+                Text(L10n.appleHostcardPowerHint)
             }
         } else if only == .power {
             Section {
-                Text("This host offers this device no power actions.")
+                Text(L10n.appleHostcardNoPowerBody)
                     .foregroundStyle(.secondary)
             }
         }
@@ -321,10 +332,10 @@ private struct HostConnectionFields: View {
         /// The TV keyboard's prompt.
         var prompt: String {
             switch self {
-            case .name: "Name (optional, e.g. Living Room)"
-            case .address: "IP or hostname"
-            case .port: "Port"
-            case .macs: "MAC address(es), comma-separated — aa:bb:cc:dd:ee:ff"
+            case .name: String(localized: L10n.hostsFieldNamePlaceholder)
+            case .address: String(localized: L10n.hostsFieldAddressPlaceholder)
+            case .port: String(localized: L10n.hostsFieldPort)
+            case .macs: String(localized: L10n.appleHostsFieldMacEntry)
             }
         }
         #endif
@@ -341,7 +352,10 @@ private struct HostConnectionFields: View {
 
     var body: some View {
         #if os(tvOS)
-        TVFieldRow(label: "Name", value: name, placeholder: "Optional") { editing = .name }
+        TVFieldRow(
+            label: String(localized: L10n.hostsFieldName), value: name,
+            placeholder: String(localized: L10n.hostsFieldNamePlaceholder)
+        ) { editing = .name }
             .fullScreenCover(item: $editing) { field in
                 TVTextEntry(
                     title: field.prompt, text: text(field),
@@ -353,18 +367,31 @@ private struct HostConnectionFields: View {
                 }
             }
             .onChange(of: host) { _, saved in if editing == nil { load(saved) } }
-        TVFieldRow(label: "Address", value: address, placeholder: "") { editing = .address }
-        TVFieldRow(label: "Port", value: port, placeholder: "") { editing = .port }
-        TVFieldRow(label: "Wake-on-LAN", value: macs, placeholder: "Not learned yet") {
-            editing = .macs
-        }
+        TVFieldRow(
+            label: String(localized: L10n.hostsFieldAddress), value: address, placeholder: ""
+        ) { editing = .address }
+        TVFieldRow(
+            label: String(localized: L10n.hostsFieldPort), value: port, placeholder: ""
+        ) { editing = .port }
+        TVFieldRow(
+            label: String(localized: L10n.hostsFieldMac), value: macs,
+            placeholder: String(localized: L10n.hostsFieldMacPlaceholder)
+        ) { editing = .macs }
         #else
-        row("Name", .name, $name, prompt: "Optional")
+        row(
+            String(localized: L10n.hostsFieldName), .name, $name,
+            prompt: String(localized: L10n.hostsFieldNamePlaceholder))
             .onChange(of: host) { _, saved in if focused == nil { load(saved) } }
             .onChange(of: focused) { save() }
-        row("Address", .address, $address, prompt: "IP or hostname")
-        row("Port", .port, $port, prompt: String(HostFormDraft.defaultPort))
-        row("Wake-on-LAN", .macs, $macs, prompt: "Not learned yet")
+        row(
+            String(localized: L10n.hostsFieldAddress), .address, $address,
+            prompt: String(localized: L10n.hostsFieldAddressPlaceholder))
+        row(
+            String(localized: L10n.hostsFieldPort), .port, $port,
+            prompt: String(HostFormDraft.defaultPort))
+        row(
+            String(localized: L10n.hostsFieldMac), .macs, $macs,
+            prompt: String(localized: L10n.hostsFieldMacPlaceholder))
         #endif
     }
 

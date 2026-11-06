@@ -18,6 +18,7 @@ Xcode 26.5 / Swift 6.3. Build the Rust core into an xcframework first:
 rustup target add aarch64-apple-darwin x86_64-apple-darwin
 bash scripts/build-xcframework.sh     # → clients/apple/PunktfunkCore.xcframework
 #   BUILD_IOS=1 / BUILD_TVOS=1 / BUILD_VISIONOS=1 add those slices
+bash scripts/gen-l10n-apple.sh        # after a change in l10n/messages; the line above runs it too
 
 cd clients/apple
 open Punktfunk.xcodeproj              # the real app: ⌘R

@@ -1,5 +1,7 @@
 package io.unom.punktfunk
 
+import android.content.Context
+import androidx.test.core.app.ApplicationProvider
 import io.unom.punktfunk.kit.Gamepad
 import java.io.File
 import org.json.JSONArray
@@ -7,12 +9,17 @@ import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
+import org.robolectric.annotation.Config
 
 /**
  * Replays `clients/shared/overlay-actions-vectors.json`, which the Rust and Swift parsers replay
  * too, so the three cannot drift. A new case belongs in that file. Run:
  * `./gradlew :app:testDebugUnitTest`.
  */
+@RunWith(RobolectricTestRunner::class)
+@Config(sdk = [36])
 class OverlayActionsTest {
     private val vectors: JSONObject by lazy {
         // The module directory is the working directory, so clients/ is two levels up.
@@ -60,11 +67,12 @@ class OverlayActionsTest {
 
     @Test
     fun sharedPadTypeCycle() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
         fun pref(name: String) = Gamepad.PREFS.first { it.name == name }.wire
         val rows = vectors.getJSONArray("pad_type_cycle")
         val cycle = (0 until rows.length()).map { i ->
             val row = rows.getJSONObject(i)
-            pref(row.getString("name")).also { assertEquals(row.getString("label"), padTypeLabel(it)) }
+            pref(row.getString("name")).also { assertEquals(row.getString("label"), padTypeLabel(context, it)) }
         }
         assertEquals(cycle, PAD_TYPE_CYCLE.toList())
         cycle.forEachIndexed { i, p -> assertEquals(cycle[(i + 1) % cycle.size], nextPadType(p)) }

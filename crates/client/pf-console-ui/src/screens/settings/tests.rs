@@ -108,7 +108,7 @@ fn sections_match_the_shared_vectors() {
         .iter()
         .map(|t| t["name"].as_str().unwrap())
         .collect();
-    let got: Vec<&str> = TABS.iter().map(|(name, _)| *name).collect();
+    let got: Vec<&str> = TABS.iter().map(|(section, _)| section.name()).collect();
     assert_eq!(got, want, "the sections' names and order");
 }
 
@@ -188,17 +188,88 @@ fn catalog_key(id: RowId) -> Option<&'static str> {
     })
 }
 
-/// Each row that edits a shared setting carries the catalogue's label, category and tier, and
-/// every catalogue entry has a row here: the console is the surface every platform shares.
+/// The catalogue's name for a platform, as `on` spells it.
+fn platform_id(p: crate::platform::Platform) -> &'static str {
+    use crate::platform::Platform;
+    match p {
+        Platform::Desktop => "desktop",
+        Platform::Android => "android",
+        Platform::Apple => "apple",
+        Platform::WebOS => "webos",
+        Platform::Web => "web",
+        Platform::Tizen => "tizen",
+        Platform::Ps5 => "ps5",
+    }
+}
+
+/// A catalogue value as the accessors spell it: a switch `true` or `false`, a string as is.
+fn scalar(v: &serde_json::Value) -> String {
+    v.as_str().map_or_else(|| v.to_string(), str::to_string)
+}
+
+/// Pickers that list fewer entries than the catalogue, with the ones they list in the
+/// catalogue's order: a codec the platform cannot decode, a pad it cannot present, a decoder
+/// the OS lacks, the lossless rates the console offers.
+fn listed_subset(key: &str, platform: &str) -> Option<&'static [&'static str]> {
+    Some(match (key, platform) {
+        ("codec", "webos") => &["auto", "hevc", "h264", "av1"],
+        ("codec", "tizen") => &["auto", "hevc", "h264"],
+        ("codec", "ps5") => &["auto", "hevc", "h264", "pyrowave"],
+        ("gamepad", "webos" | "ps5") => &["auto", "xboxone", "dualsense", "dualshock4"],
+        ("audio_format", _) => &["opus", "lossless48", "lossless96"],
+        ("decoder", "desktop") if cfg!(windows) => {
+            &["auto", "native-vulkan", "native-d3d11va", "software"]
+        }
+        ("decoder", "desktop") => &["auto", "native-vulkan", "native-vaapi", "software"],
+        _ => return None,
+    })
+}
+
+/// Rows `row_on` offers on platforms the catalogue leaves out. `row_applies` never shows
+/// them there.
+const OFFERED_NEVER_SHOWN: &[&str] = &["follow_os_theme"];
+
+/// Catalogue entries naming a platform whose console has no row: the platform's own screen has
+/// one. The desktop shells (GTK, WinUI) draw the console toggle, and the console is the desktop
+/// session itself; the Apple app picks its own controller, in its own id grammar.
+const NATIVE_ONLY: &[(&str, &str)] = &[
+    ("gamepad_ui_enabled", "desktop"),
+    ("gamepad_ui_mode", "desktop"),
+    ("forward_pad", "apple"),
+];
+
+/// Rows with no one stored default to name: none exists, it depends on the device, or an unset
+/// value reads differently on the console and on a native screen.
+const NO_ONE_VALUE: &[&str] = &[
+    "resolution",
+    "library_sections",
+    "overlay_actions",
+    "forward_pad",
+    "reduce_ui_resolution",
+    "library_view",
+];
+
+/// Entries a preset carries in its `extra`, not in a typed overlay field. Android alone.
+const PRESET_IN_EXTRA: &[&str] = &["second_screen", "low_latency"];
+
+/// Entries a preset may hold that the console's preset editor has no row for.
+const PRESET_NOT_IN_CONSOLE: &[&str] = &["overlay_actions", "second_screen", "low_latency"];
+
+/// Each row that edits a shared setting is the catalogue's: the `player_<key>` message for
+/// its label (V-Sync, a brand, has none), its category and tier, whether a preset may hold
+/// it, and on each platform that lists it, its options in the catalogue's order and its
+/// default. Every platform an entry names has a row, and every row has an entry.
 #[test]
 fn rows_match_the_settings_catalog() {
+    use crate::platform::Platform;
     let raw = include_str!("../../../../../../clients/shared/settings-catalog.json");
     let file: serde_json::Value = serde_json::from_str(raw).expect("settings-catalog.json parses");
     let entries = file["settings"].as_array().expect("settings");
     let library = crate::library::LibraryShared::default();
     let mut settings = Settings::default();
     let ctx = Ctx::test(&mut settings, &library);
-    let mut seen = Vec::new();
+    let mut seen: Vec<(&str, &str)> = Vec::new();
+    let mut defaults: std::collections::BTreeMap<&str, Vec<Option<String>>> = Default::default();
     for (tab, rows) in &TABS {
         for id in rows.iter().copied() {
             let Some(key) = catalog_key(id) else { continue };
@@ -207,19 +278,117 @@ fn rows_match_the_settings_catalog() {
                 .find(|e| e["key"] == key)
                 .unwrap_or_else(|| panic!("{key} ({id:?}) is not in the catalogue"));
             let spec = row_spec(id, &ctx, &[], &Default::default());
-            assert_eq!(spec.label, entry["label"].as_str().unwrap(), "{key}");
+            let label = match pf_l10n::get(&format!("player_{key}")) {
+                Some(m) => m.text(),
+                None => {
+                    assert_eq!(key, "vsync", "{key} has no player_{key} message");
+                    "V-Sync".into()
+                }
+            };
+            assert_eq!(spec.label, label, "{key}");
             assert_eq!(
-                tab.to_lowercase(),
+                format!("{tab:?}").to_lowercase(),
                 entry["category"].as_str().unwrap(),
                 "{key}"
             );
             assert_eq!(advanced(id), entry["advanced"].as_bool().unwrap(), "{key}");
-            seen.push(key);
+
+            let preset = entry["preset"].as_bool().unwrap();
+            let mut overlay = SettingsOverlay::default();
+            let pins = overlay.pin(key, &Settings::default());
+            assert_eq!(
+                pins || PRESET_IN_EXTRA.contains(&key),
+                preset,
+                "{key}: preset"
+            );
+            assert_eq!(
+                preset_field(id).is_some(),
+                preset && !PRESET_NOT_IN_CONSOLE.contains(&key),
+                "{key}: the console's preset editor"
+            );
+
+            let on: Vec<&str> = entry["on"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|p| p.as_str().unwrap())
+                .collect();
+            for p in Platform::ALL {
+                let name = platform_id(p);
+                let listed = on.contains(&name);
+                let offered = row_on(id, p);
+                if offered && !listed {
+                    assert!(
+                        OFFERED_NEVER_SHOWN.contains(&key),
+                        "{key}: the console offers {name}, the catalogue does not"
+                    );
+                }
+                if listed && !offered {
+                    assert!(
+                        NATIVE_ONLY.contains(&(key, name)),
+                        "{key}: the catalogue names {name}, the console has no row"
+                    );
+                }
+                if !(listed && offered) {
+                    continue;
+                }
+                seen.push((key, name));
+                let device = crate::screens::Device {
+                    platform: p,
+                    ..crate::screens::Device::test()
+                };
+                let got = stored_options(id, p);
+                let want: Option<Vec<String>> = entry.get("options").map(|o| {
+                    o.as_array()
+                        .unwrap()
+                        .iter()
+                        .map(|v| v.as_str().unwrap().to_string())
+                        .collect()
+                });
+                match (&got, &want) {
+                    (None, None) => {}
+                    (Some(got), Some(want)) => match listed_subset(key, name) {
+                        Some(sub) => {
+                            assert_eq!(got, sub, "{key} on {name}");
+                            let mut rest = want.iter();
+                            assert!(
+                                sub.len() < want.len() && sub.iter().all(|s| rest.any(|w| w == s)),
+                                "{key} on {name}: not the catalogue's options, in order"
+                            );
+                        }
+                        None => assert_eq!(got, want, "{key} on {name}"),
+                    },
+                    _ => panic!("{key} on {name}: options {got:?}, the catalogue's {want:?}"),
+                }
+                let stored = stored_default(id, &device);
+                match entry.get("default") {
+                    Some(v) => assert_eq!(stored, Some(scalar(v)), "{key} on {name}: default"),
+                    None => defaults.entry(key).or_default().push(stored),
+                }
+            }
         }
     }
     for e in entries {
         let key = e["key"].as_str().unwrap();
-        assert!(seen.contains(&key), "{key} has no console row");
+        for p in e["on"].as_array().unwrap() {
+            let name = p.as_str().unwrap();
+            assert!(
+                seen.contains(&(key, name)) || NATIVE_ONLY.contains(&(key, name)),
+                "{key} has no console row on {name}"
+            );
+        }
+    }
+    for (key, stored) in &defaults {
+        if NO_ONE_VALUE.contains(key) {
+            continue;
+        }
+        let mut distinct: Vec<_> = stored.iter().flatten().collect();
+        distinct.sort();
+        distinct.dedup();
+        assert!(
+            distinct.len() > 1,
+            "{key}: every platform stores {distinct:?}, so the catalogue carries it"
+        );
     }
 }
 
@@ -547,7 +716,10 @@ fn android_resolution_row_carries_the_safe_area_mode() {
     };
     let value = |ctx: &Ctx| row_spec(RowId::Resolution, ctx, &[], &Default::default()).value;
     let safe = |ctx: &Ctx| extra_bool(ctx.settings, device_keys::SAFE_AREA_MODE, false);
-    assert_eq!(value(&ctx).as_deref(), Some("Native (safe area)"));
+    assert_eq!(
+        value(&ctx).as_deref(),
+        Some(pf_l10n::client::player_resolution_native_safe_area())
+    );
     assert!(adjust(RowId::Resolution, 1, false, &mut ctx));
     assert!(!ctx.settings.match_window, "no window to match");
     assert_eq!((ctx.settings.width, ctx.settings.height), (1280, 720));
@@ -559,7 +731,10 @@ fn android_resolution_row_carries_the_safe_area_mode() {
     );
     assert!(adjust(RowId::Resolution, -1, false, &mut ctx));
     assert_eq!((ctx.settings.width, safe(&ctx)), (0, false), "Native");
-    assert_eq!(value(&ctx).as_deref(), Some("Native"));
+    assert_eq!(
+        value(&ctx).as_deref(),
+        Some(pf_l10n::client::player_resolution_native())
+    );
     set_extra_bool(ctx.settings, device_keys::SAFE_AREA_MODE, true);
     (ctx.settings.width, ctx.settings.height) = (1280, 720);
     assert_eq!(value(&ctx).as_deref(), Some("1280 × 720"), "a size wins");
@@ -735,7 +910,7 @@ fn pyrowave_reads_unsupported_where_the_gpu_cannot_decode_it() {
     let value = row_spec(RowId::Codec, &ctx, &[], &Default::default())
         .value
         .unwrap();
-    assert!(value.contains("unsupported"), "value said {value}");
+    assert_eq!(value, pf_l10n::client::player_codec_pyrowave_unsupported());
     assert!(detail(RowId::Codec, &ctx).contains("can't decode PyroWave"));
 
     ctx.settings.codec = "hevc".into();
@@ -784,7 +959,7 @@ fn av1_reads_unsupported_without_a_hardware_decoder() {
     let value = row_spec(RowId::Codec, &ctx, &[], &Default::default())
         .value
         .unwrap();
-    assert_eq!(value, "AV1 (unsupported)");
+    assert_eq!(value, pf_l10n::client::player_codec_av1_unsupported());
     assert!(detail(RowId::Codec, &ctx).contains("no hardware AV1 decoder"));
 
     // The other codecs keep the plain row and the plain line.
@@ -876,7 +1051,7 @@ fn pyrowave_quality_takes_the_bitrate_rows_place() {
     );
     assert_eq!(
         detail(RowId::Bitrate, &ctx),
-        pf_client_core::settings::PYROWAVE_BITRATE_HINT
+        pf_l10n::client::player_bitrate_kbps_pyrowave_hint()
     );
 }
 
@@ -892,7 +1067,7 @@ fn smoothness_buffer_is_offered_only_under_smoothness() {
     let mut s = SettingsScreen::with_presets(Vec::new());
     s.tab = TABS
         .iter()
-        .position(|(name, _)| *name == "Display")
+        .position(|(s, _)| *s == Section::Display)
         .expect("the Picture section");
 
     let video = s.row_ids(&ctx);
@@ -953,7 +1128,7 @@ fn a_shrinking_list_pulls_the_cursor_back() {
     let mut s = SettingsScreen::with_presets(Vec::new());
     s.tab = TABS
         .iter()
-        .position(|(name, _)| *name == "Display")
+        .position(|(s, _)| *s == Section::Display)
         .expect("the Picture section");
     s.list.cursor = s.row_ids(&ctx).len() - 1;
     let parked = s.list.cursor;
@@ -1249,6 +1424,45 @@ fn advanced_rows_hide_until_shown_and_a_changed_one_is_counted() {
     assert_eq!(s.spec(first, &ids, &ctx).header, Some("Advanced"));
 }
 
+/// Text from pf-l10n reads `[…]` under the pseudo-language `en-XA`; a row still worded in
+/// code stays plain English.
+#[test]
+fn moved_rows_read_the_pseudo_language() {
+    let mut settings = Settings {
+        enable_444: true,
+        ..Settings::default()
+    };
+    let library = crate::library::LibraryShared::default();
+    let store = crate::store::SnapshotStore::new(settings.clone(), Vec::new());
+    let ctx = Ctx {
+        store: &store,
+        ..Ctx::test(&mut settings, &library)
+    };
+    let mut s = SettingsScreen::with_presets(Vec::new());
+    s.tab = tab_of(RowId::Chroma444);
+    let pseudo = |t: &str| t.starts_with('[') && t.ends_with(']');
+    pf_l10n::with_language("en-XA", || {
+        let size = row_spec(RowId::StatsSize, &ctx, &[], &Default::default()).label;
+        assert!(pseudo(&size), "{size}");
+        let hint = detail(RowId::StatsSize, &ctx);
+        assert!(pseudo(&hint), "{hint}");
+        let ids = s.row_ids(&ctx);
+        let changed = s.spec(RowId::AdvancedChanged, &ids, &ctx).label;
+        assert!(pseudo(&changed) && changed.contains('1'), "{changed}");
+        let stats = row_spec(RowId::Stats, &ctx, &[], &Default::default()).label;
+        assert!(pseudo(&stats), "{stats}");
+        assert!(pseudo(Section::General.name()));
+        let explained = detail(RowId::AdvancedChanged, &ctx);
+        assert!(
+            pseudo(&explained) && explained.contains(" A "),
+            "{explained}"
+        );
+        // A product name stays a literal.
+        let vsync = row_spec(RowId::Vsync, &ctx, &[], &Default::default()).label;
+        assert_eq!(vsync, "V-Sync");
+    });
+}
+
 /// A platform's own fresh value is not a change: Android starts the pad speaker off.
 #[test]
 fn a_platform_default_is_not_counted_as_changed() {
@@ -1270,11 +1484,11 @@ fn a_platform_default_is_not_counted_as_changed() {
 
 #[test]
 fn rates_read_in_the_biggest_round_unit() {
-    assert_eq!(bitrate_label(20_000), "20 Mbps");
-    assert_eq!(bitrate_label(12_500), "12.5 Mbps");
-    assert_eq!(bitrate_label(1_000_000), "1 Gbps");
-    assert_eq!(bitrate_label(1_500_000), "1.5 Gbps");
-    assert_eq!(bitrate_label(2_000_000), "2 Gbps");
+    assert_eq!(bitrate_label(20_000), "20 Mbit/s");
+    assert_eq!(bitrate_label(12_500), "12.5 Mbit/s");
+    assert_eq!(bitrate_label(1_000_000), "1 Gbit/s");
+    assert_eq!(bitrate_label(1_500_000), "1.5 Gbit/s");
+    assert_eq!(bitrate_label(2_000_000), "2 Gbit/s");
 }
 
 #[test]
@@ -1372,7 +1586,7 @@ fn the_quick_actions_row_opens_the_editor_and_steps_nothing() {
     );
     assert!(TABS
         .iter()
-        .any(|(tab, rows)| *tab == "Input" && rows.contains(&RowId::QuickActions)));
+        .any(|(tab, rows)| *tab == Section::Input && rows.contains(&RowId::QuickActions)));
 }
 
 #[test]
@@ -1628,7 +1842,10 @@ fn mac_fullscreen_picker_steps_through_both_keys() {
         device: &mac,
         ..Ctx::test(&mut settings, &library)
     };
-    let interface = TABS.iter().position(|(t, _)| *t == "General").unwrap();
+    let interface = TABS
+        .iter()
+        .position(|(t, _)| *t == Section::General)
+        .unwrap();
     let mut s = SettingsScreen::with_presets(Vec::new());
     s.tab = interface;
     let tab = s.row_ids(ctx);
@@ -1759,7 +1976,7 @@ fn every_row_has_exactly_one_tab() {
     assert!(seen.contains(&RowId::ReduceUiResolution));
     assert!(seen.contains(&RowId::AudioFormat));
     assert!(TABS[PRESETS_TAB].1.is_empty());
-    assert_eq!(TABS[PRESETS_TAB].0, "Presets");
+    assert_eq!(TABS[PRESETS_TAB].0, Section::Presets);
 }
 
 /// Only test that touches the process-wide `os_theme` slot. A sibling races
@@ -1948,7 +2165,7 @@ fn palette_row_names_the_pick_and_opens_the_cards() {
     let mut s = SettingsScreen::with_presets(Vec::new());
     s.tab = TABS
         .iter()
-        .position(|(name, _)| *name == "General")
+        .position(|(s, _)| *s == Section::General)
         .expect("the Interface section");
     let ids = s.row_ids(&ctx);
     s.list.cursor = ids
@@ -2210,7 +2427,7 @@ fn the_licences_row_opens_the_console_screen_on_webos() {
     let mut s = SettingsScreen::with_presets(Vec::new());
     s.tab = TABS
         .iter()
-        .position(|(name, _)| *name == "About")
+        .position(|(s, _)| *s == Section::About)
         .expect("the About section");
     let ids = s.row_ids(&ctx);
     s.list.cursor = ids

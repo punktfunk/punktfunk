@@ -1,6 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- Hand-written: Spanish does not ship (l10n/locales.json), so pf-l10n emits no values-es. These
+     are the two strings a Spanish device shows in Accessibility settings; the text is the one in
+     l10n/messages/android/es.json. Delete this file when Spanish ships, because an app resource
+     wins over the generated one. -->
 <resources>
-    <string name="app_name">Punktfunk</string>
-    <string name="key_capture_service_label">Atajos de teclado de Punktfunk</string>
-    <string name="key_capture_service_description">Permite que una transmisión capture todos los atajos de teclado, incluidos Alt+Tab y la tecla Windows. Las teclas solo se envían al ordenador desde el que transmites, y únicamente mientras la transmisión esté en pantalla; fuera de ella, cada tecla pasa intacta. No se almacena nada.</string>
+    <string name="android_keycapture_service_label">Atajos de teclado de Punktfunk</string>
+    <string name="android_keycapture_service_description">Permite que una transmisión capture todos los atajos de teclado, incluidos Alt+Tab y la tecla Windows. Las teclas solo se envían al ordenador desde el que transmites, y únicamente mientras la transmisión esté en pantalla; fuera de ella, cada tecla pasa intacta. No se almacena nada.</string>
 </resources>

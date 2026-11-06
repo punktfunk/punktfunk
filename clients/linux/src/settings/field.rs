@@ -56,8 +56,8 @@ impl Field {
         set: fn(&mut Settings, bool),
     ) -> (Field, adw::SwitchRow) {
         let row = adw::SwitchRow::builder()
-            .title(spec.title)
-            .subtitle(spec.caption)
+            .title(spec.title())
+            .subtitle(spec.caption())
             .build();
         let fresh = get(&Settings::default());
         let r = row.clone();
@@ -218,8 +218,7 @@ impl Binder {
         if failed && !self.warned.replace(true) {
             if let Some(d) = self.dialog.upgrade() {
                 d.add_toast(adw::Toast::new(
-                    "Your changes aren\u{2019}t being saved \u{2014} Punktfunk can\u{2019}t \
-                     write to its settings folder.",
+                    pf_l10n::desktop::desktop_prefs_not_saved_toast(),
                 ));
             }
         }
@@ -242,7 +241,7 @@ impl Binder {
                 .build();
             let reset = gtk::Button::builder()
                 .child(&crate::widgets::lucide::row_icon("undo-2"))
-                .tooltip_text("Reset to Default settings")
+                .tooltip_text(pf_l10n::client::prefs_override_reset_full())
                 .valign(gtk::Align::Center)
                 .css_classes(["flat"])
                 .build();

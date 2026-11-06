@@ -6,6 +6,7 @@ use super::rows::{Caption, Row, Tile};
 use super::{LibraryMsg, View};
 use crate::hosts::os_icon_name;
 use adw::prelude::*;
+use pf_l10n::client;
 use std::rc::Rc;
 
 /// The space between posters, across and down.
@@ -156,9 +157,9 @@ fn desktops(view: &Rc<View>) -> gtk::Widget {
                 .build(),
         );
         let what = if d.playing.is_empty() {
-            "Desktop".to_string()
+            client::lib_desktop().to_string()
         } else {
-            format!("Resume {}", d.playing)
+            client::lib_resume_title(&d.playing)
         };
         text.append(
             &gtk::Label::builder()
@@ -174,7 +175,7 @@ fn desktops(view: &Rc<View>) -> gtk::Widget {
         let button = gtk::Button::builder()
             .child(&inner)
             .css_classes(["card", "pf-desktop-tile"])
-            .tooltip_text(format!("Stream {}'s desktop", d.name))
+            .tooltip_text(client::lib_desktop_stream_host(&d.name))
             .build();
         button.set_size_request(240, -1);
         let sender = view.sender.clone();

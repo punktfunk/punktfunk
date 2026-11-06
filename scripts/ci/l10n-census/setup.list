@@ -1,0 +1,48 @@
+crates/install/punktfunk-setup/src/demo.rs	Arch Linux
+crates/install/punktfunk-setup/src/demo.rs	Arch Linux
+crates/install/punktfunk-setup/src/demo.rs	Debian GNU/Linux 13 (trixie)
+crates/install/punktfunk-setup/src/demo.rs	Debian GNU/Linux 13 (trixie)
+crates/install/punktfunk-setup/src/demo.rs	Fedora Linux 44 (Workstation Edition)
+crates/install/punktfunk-setup/src/demo.rs	Void Linux
+crates/install/punktfunk-setup/src/main.rs	{} is not a Facts document: {e}
+crates/install/punktfunk-setup/src/platform/windows/exec.rs	'{}' did not start
+crates/install/punktfunk-setup/src/platform/windows/exec.rs	'{}' did not start
+crates/install/punktfunk-setup/src/platform/windows/exec.rs	Windows App Runtime already installed
+crates/install/punktfunk-setup/src/platform/windows/exec.rs	Windows App Runtime installed
+crates/install/punktfunk-setup/src/platform/windows/exec.rs	registered '{display_name}' in Add/Remove Programs
+crates/install/punktfunk-setup/src/platform/windows/exec.rs	would ensure the Windows App Runtime ({arch}; downloaded when missing — a failure warns and never aborts)
+crates/install/punktfunk-setup/src/platform/windows/exec.rs	would register '{display_name}' in Add/Remove Programs ({key})
+crates/install/punktfunk-setup/src/platform/windows/exec.rs	would remove the Add/Remove Programs entry ({key})
+crates/install/punktfunk-setup/src/platform/windows/exec.rs	{kept} file(s) an earlier uninstall left for the next restart stay
+crates/install/punktfunk-setup/src/platform/windows/exec.rs	{path} — already gone
+crates/install/punktfunk-setup/src/platform/windows/exec.rs	{scope} PATH already right
+crates/install/punktfunk-setup/src/platform/windows/exec.rs	{scope} PATH updated
+crates/install/punktfunk-setup/src/platform/windows/exec.rs	{} — not there, nothing to do
+crates/install/punktfunk-setup/src/platform/windows/plan.rs	Punktfunk Host
+crates/install/punktfunk-setup/src/platform/windows/plan.rs	URL:Punktfunk stream link
+crates/install/punktfunk-setup/src/platform/windows/plan.rs	Windows App Runtime
+crates/install/punktfunk-setup/src/platform/windows/report.rs	1. Open Punktfunk from the Start menu and pick your host.
+crates/install/punktfunk-setup/src/platform/windows/report.rs	2. Install a client on the device you stream to ({DOCS}/install-client), connect, and click Approve in the console.
+crates/install/punktfunk-setup/src/platform/windows/report.rs	2. Pairing help: {DOCS}/pairing
+crates/install/punktfunk-setup/src/platform/windows/report.rs	Choices (nothing below has run yet)
+crates/install/punktfunk-setup/src/platform/windows/report.rs	Desktop shortcut: {}
+crates/install/punktfunk-setup/src/platform/windows/report.rs	Detected Windows (build {}), {} — {what} installer
+crates/install/punktfunk-setup/src/platform/windows/report.rs	Gamepad drivers: {}
+crates/install/punktfunk-setup/src/platform/windows/report.rs	HDR Vulkan layer: {}
+crates/install/punktfunk-setup/src/platform/windows/report.rs	Moonlight compat: {}
+crates/install/punktfunk-setup/src/platform/windows/report.rs	Public-network firewall rules: {}
+crates/install/punktfunk-setup/src/platform/windows/report.rs	Start the service: {}
+crates/install/punktfunk-setup/src/platform/windows/report.rs	Tray autostart: {}
+crates/install/punktfunk-setup/src/platform/windows/report.rs	Virtual display driver: {}
+crates/install/punktfunk-setup/src/platform/windows/report.rs	Web console reachable from: {}
+crates/install/punktfunk-setup/src/platform/windows/sys.rs	'{name}' did not stop within 30s
+crates/install/punktfunk-setup/src/platform/windows/sys.rs	SCM is Windows-only
+crates/install/punktfunk-setup/src/report.rs	Choices (nothing below has run yet)
+crates/install/punktfunk-setup/src/report.rs	Detected {} → {} (guide: {})
+crates/install/punktfunk-setup/src/report.rs	Full controller (joins the punktfunk group — grants usbip attach)
+crates/install/punktfunk-setup/src/report.rs	Re-running is safe. Ctrl-C stops between steps.
+crates/install/punktfunk-setup/src/report.rs	Shared clipboard
+crates/install/punktfunk-setup/src/report.rs	Start at boot with nobody logged in
+crates/install/punktfunk-setup/src/report.rs	The per-distro pages stay the documented path; this automates them. Docs: {DOCS}/install
+crates/install/punktfunk-setup/src/report.rs	Third-party clients (Moonlight, Artemis)
+crates/install/punktfunk-setup/src/report.rs	Web console reachable from: {}

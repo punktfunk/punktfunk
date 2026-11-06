@@ -741,11 +741,8 @@ fn dial(
         };
         let not_ready = params.not_ready(refused, 0);
         let msg = match e {
-            PunktfunkError::Crypto => {
-                "Host identity rejected — wrong fingerprint, or the host requires pairing"
-                    .to_string()
-            }
-            PunktfunkError::Timeout => "Connection timed out".to_string(),
+            PunktfunkError::Crypto => pf_l10n::client::dial_identity_rejected().to_string(),
+            PunktfunkError::Timeout => pf_l10n::client::dial_timed_out().to_string(),
             // Host said why it turned us away — show that verbatim: "denied on the
             // host" and "timed out" call for different next steps.
             PunktfunkError::Rejected(reason, said) => {
@@ -753,7 +750,7 @@ fn dial(
             }
             other => {
                 tracing::warn!(error = %other, "connect failed");
-                "The host didn't answer".to_string()
+                pf_l10n::client::dial_no_answer().to_string()
             }
         };
         if not_ready {
@@ -1400,7 +1397,7 @@ impl Pump {
                 Err(PunktfunkError::Closed) => return self.on_closed(),
                 Err(e) => {
                     tracing::warn!(error = %e, "session pump failed");
-                    return Some("The stream stopped unexpectedly".to_string());
+                    return Some(pf_l10n::client::ended_unexpected().to_string());
                 }
             }
 
@@ -1690,11 +1687,11 @@ impl Pump {
         match self.connector.end_reason() {
             End::GameExited => None,
             End::Local | End::HostEnded => None,
-            End::HostError => Some("The host ended the session with an error".to_string()),
-            End::Lost => Some("Connection lost".to_string()),
+            End::HostError => Some(pf_l10n::client::ended_host_error().to_string()),
+            End::Lost => Some(pf_l10n::client::ended_lost().to_string()),
             // No verdict (older core, or the close raced the read): keep this
             // arm's historic wording rather than inventing a new one.
-            End::None => Some("Host ended the session".to_string()),
+            End::None => Some(pf_l10n::client::ended_closed().to_string()),
         }
     }
 
@@ -1815,11 +1812,7 @@ impl WindowNotices {
         let mut notices = Vec::new();
         if pin_kbps != 0 && !self.pin_noticed {
             self.pin_noticed = true;
-            notices.push(format!(
-                "This device can't keep up with the pinned {} Mbps. Set the bitrate to \
-                 Automatic or lower it.",
-                pin_kbps / 1000
-            ));
+            notices.push(pf_l10n::client::notice_pin_unsustainable(pin_kbps / 1000));
         }
         let (behind, decoded) = (behind - self.behind_seen, decoded - self.decoded_seen);
         self.behind_seen += behind;
@@ -1832,10 +1825,9 @@ impl WindowNotices {
         // Five seconds running is the device, not a hitch. Said once.
         if self.overrun_secs == 5 && !self.overrun_noticed {
             self.overrun_noticed = true;
-            notices.push(format!(
-                "This device can't keep up with this stream at {}×{}. Lower the \
-                 resolution or the refresh rate.",
-                mode.width, mode.height
+            notices.push(pf_l10n::client::notice_falling_behind(
+                mode.width,
+                mode.height,
             ));
         }
         if let Some(outcome) = launch {
@@ -1869,9 +1861,7 @@ fn decode_end(e: &anyhow::Error, negotiated: u8, advertised: u8) -> SessionEvent
     exhausted(e, negotiated, advertised).unwrap_or_else(|| {
         let codec = crate::video::wire_codec_name(negotiated);
         tracing::error!(codec, error = %format!("{e:#}"), "video decoder did not start");
-        SessionEvent::Ended(Some(format!(
-            "Couldn't start decoding the {codec} video on this device"
-        )))
+        SessionEvent::Ended(Some(pf_l10n::client::ended_decode_failed(codec)))
     })
 }
 
@@ -1899,15 +1889,13 @@ fn codec_fallback_event(
                 // cannot disagree.
                 exclude_codecs: advertised & !caps,
                 retry_caps: caps,
-                msg: format!("{codec} decoding failed on this device — reconnecting"),
+                msg: pf_l10n::client::notice_codec_fallback(codec),
             }
         }
         // Nothing left to advertise: reconnecting would negotiate the same dead end.
         LastRungVerdict::Dead => {
             tracing::error!(codec, detail, "video decode ran out of rungs and of codecs");
-            SessionEvent::Ended(Some(format!(
-                "{codec} can't be decoded on this device, and no other codec is available"
-            )))
+            SessionEvent::Ended(Some(pf_l10n::client::ended_no_codec(codec)))
         }
     }
 }
@@ -2386,14 +2374,14 @@ mod tests {
         }
     }
 
-    /// The pin notice names the pin in Mbps and goes out once per session.
+    /// The pin notice names the pin in Mbit/s and goes out once per session.
     #[test]
     fn the_pin_notice_is_said_once() {
         let mut w = WindowNotices::default();
         assert!(w.tick(0, 60, 0, mode_1080p(), None).is_empty());
         let said = w.tick(0, 120, 50_000, mode_1080p(), None);
         assert_eq!(said.len(), 1);
-        assert!(said[0].contains("50 Mbps"), "{}", said[0]);
+        assert!(said[0].contains("50 Mbit/s"), "{}", said[0]);
         assert!(w.tick(0, 180, 50_000, mode_1080p(), None).is_empty());
     }
 

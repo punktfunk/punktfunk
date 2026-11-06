@@ -1,0 +1,21 @@
+clients/android/app/src/main/kotlin/io/unom/punktfunk/ControllersScreen.kt	Steam Controller
+clients/android/app/src/main/kotlin/io/unom/punktfunk/ControllersScreen.kt	Steam Controller 2
+clients/android/app/src/main/kotlin/io/unom/punktfunk/ControllersScreen.kt	Steam Controller 2
+clients/android/app/src/main/kotlin/io/unom/punktfunk/Links.kt	Punktfunk link
+clients/android/app/src/main/kotlin/io/unom/punktfunk/SendLogs.kt	{}) — client log bundle
+clients/android/app/src/main/kotlin/io/unom/punktfunk/StreamPeripherals.kt	Sony pad
+clients/android/app/src/main/kotlin/io/unom/punktfunk/console/SkiaConsoleShell.kt	Steam Controller
+clients/android/app/src/main/kotlin/io/unom/punktfunk/console/SkiaConsoleShell.kt	Steam Controller 2
+clients/android/app/src/main/kotlin/io/unom/punktfunk/console/SkiaConsoleShell.kt	Steam Controller 2 Puck
+clients/android/kit/src/main/kotlin/io/unom/punktfunk/kit/Gamepad.kt	HORIPAD for Steam
+clients/android/kit/src/main/kotlin/io/unom/punktfunk/kit/Gamepad.kt	Joy-Con pair
+clients/android/kit/src/main/kotlin/io/unom/punktfunk/kit/Gamepad.kt	Steam Controller
+clients/android/kit/src/main/kotlin/io/unom/punktfunk/kit/Gamepad.kt	Steam Controller 2
+clients/android/kit/src/main/kotlin/io/unom/punktfunk/kit/Gamepad.kt	Steam Controller 2 Puck
+clients/android/kit/src/main/kotlin/io/unom/punktfunk/kit/Gamepad.kt	Xbox Elite Series 2
+clients/android/kit/src/main/kotlin/io/unom/punktfunk/kit/Sc2BleLink.kt	Replaced at API 33 by the overload that carries the value
+clients/android/kit/src/main/kotlin/io/unom/punktfunk/kit/Sc2BleLink.kt	Replaced at API 33 by the overload that carries the value
+clients/android/kit/src/main/kotlin/io/unom/punktfunk/kit/Sc2BleLink.kt	Steam Controller
+clients/android/kit/src/main/kotlin/io/unom/punktfunk/kit/Sc2BleLink.kt	Steam Ctrl
+clients/android/kit/src/main/kotlin/io/unom/punktfunk/kit/Sc2Capture.kt	Puck slot {}
+clients/android/kit/src/main/kotlin/io/unom/punktfunk/kit/security/IdentityStore.kt	blob present but Keystore key missing

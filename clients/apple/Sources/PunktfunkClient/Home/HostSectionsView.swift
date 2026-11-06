@@ -60,7 +60,7 @@ struct HostSectionsView: View {
                 .navigationTitle(store.hosts.first { $0.id == hostID }?.displayName ?? "")
                 .toolbar {
                     ToolbarItem(placement: .confirmationAction) {
-                        Button("Done") { dismiss() }
+                        Button(L10n.commonDone) { dismiss() }
                     }
                 }
                 #endif
@@ -73,11 +73,11 @@ struct HostSectionsView: View {
             #endif
         }
         .alert(
-            confirmPower.map { "\($0.action.label)?" } ?? "",
+            confirmPower.map { L10n.hostPowerConfirmTitle(action: $0.action.label) } ?? "",
             isPresented: Binding(
                 get: { confirmPower != nil }, set: { if !$0 { confirmPower = nil } })
         ) {
-            Button("Cancel", role: .cancel) { confirmPower = nil }
+            Button(L10n.commonCancel, role: .cancel) { confirmPower = nil }
             if let pending = confirmPower {
                 Button(pending.action.label, role: .destructive) {
                     confirmPower = nil
@@ -87,15 +87,14 @@ struct HostSectionsView: View {
         } message: {
             Text(
                 confirmPower.map {
-                    "This ends every stream from \($0.host.displayName) and anything running "
-                        + "on it. You'll need to wake or start it again."
+                    L10n.hostcardActionConfirmBody(host: $0.host.displayName)
                 } ?? "")
         }
         .alert(
             outcome?.title ?? "",
             isPresented: Binding(get: { outcome != nil }, set: { if !$0 { outcome = nil } })
         ) {
-            Button("OK", role: .cancel) {}
+            Button(L10n.commonOk, role: .cancel) {}
         } message: {
             Text(outcome?.message ?? "")
         }
@@ -130,8 +129,9 @@ struct HostSectionsView: View {
                     #endif
             } else {
                 ContentUnavailableView(
-                    "Pair First", systemImage: "lock",
-                    description: Text("Pair with \(host.displayName) to test the network speed."))
+                    String(localized: L10n.hostcardPairFirst), systemImage: "lock",
+                    description: Text(
+                        L10n.appleHostcardSpeedTestPairFirstBody(host: host.displayName)))
             }
         }
     }
@@ -159,7 +159,12 @@ struct HostSectionsView: View {
                 sendLogs: {
                     Task {
                         let sent = await SendLogs.toHost(host)
-                        outcome = (sent.ok ? "Logs sent" : "Couldn't send logs", sent.message)
+                        outcome = (
+                            String(
+                                localized: sent.ok
+                                    ? L10n.appleHostcardLogsSentTitle
+                                    : L10n.appleHostcardLogsFailedTitle),
+                            sent.message)
                     }
                 },
                 wake: { handOff(.wake(host.id)) },
@@ -171,8 +176,8 @@ struct HostSectionsView: View {
     private func power(_ action: HostAction, on host: StoredHost) {
         guard action.available else {
             outcome = (
-                "Couldn't do that",
-                action.unavailableReason ?? "\(action.label) isn't available right now")
+                String(localized: L10n.appleHostcardActionFailedTitle),
+                action.unavailableReason ?? L10n.hostcardActionUnavailableBody(action: action.label))
             return
         }
         if action.danger {
@@ -185,7 +190,11 @@ struct HostSectionsView: View {
     private func run(_ action: HostAction, on host: StoredHost) {
         Task {
             let done = await hostPower.invoke(action, on: host)
-            outcome = (done.ok ? "On its way" : "Couldn't do that", done.message)
+            outcome = (
+                String(
+                    localized: done.ok
+                        ? L10n.appleHostcardActionDoneTitle : L10n.appleHostcardActionFailedTitle),
+                done.message)
         }
     }
 }

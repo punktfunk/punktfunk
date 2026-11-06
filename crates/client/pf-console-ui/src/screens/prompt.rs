@@ -45,9 +45,12 @@ impl PromptScreen {
             exit: true,
             ..PromptScreen::new(Prompt {
                 id: String::new(),
-                title: "Exit".into(),
-                message: "Exit punktfunk?".into(),
-                choices: vec!["Exit".into(), "Cancel".into()],
+                title: pf_l10n::console::console_exit_title().into(),
+                message: pf_l10n::console::console_exit_message().into(),
+                choices: vec![
+                    pf_l10n::console::console_exit_confirm().into(),
+                    pf_l10n::common::common_cancel().into(),
+                ],
             })
         }
     }
@@ -115,7 +118,7 @@ impl ScreenView for PromptScreen {
         if let Some(choice) = choice {
             hints.push(Hint::new(HintKey::Confirm, choice.clone()));
         }
-        hints.push(Hint::new(HintKey::Back, "Cancel"));
+        hints.push(Hint::new(HintKey::Back, pf_l10n::common::common_cancel()));
         hints
     }
 

@@ -16,7 +16,9 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock};
 
-use crate::status::{self, Poller, TrayStatus};
+use pf_l10n::tools;
+
+use crate::status::{self, Poller, TrayStatus, Unit};
 
 /// The poller writes the state fields through `Handle::update`, which re-emits SNI props.
 struct HostTray {
@@ -122,7 +124,7 @@ impl ksni::Tray for HostTray {
             }
             .into(),
             StandardItem {
-                label: "Approve pairing request…".into(),
+                label: tools::tray_approve_pairing().into(),
                 visible: self.status.pairing_attention(),
                 activate: Box::new(|t: &mut Self| t.open_console("pairing")),
                 ..Default::default()
@@ -137,7 +139,7 @@ impl ksni::Tray for HostTray {
             .into(),
             MenuItem::Separator,
             StandardItem {
-                label: "Start host".into(),
+                label: tools::tray_start_host().into(),
                 visible: self.status.can_start(),
                 activate: Box::new(|t: &mut Self| {
                     t.systemctl("start", &status::UNITS.map(|(unit, _)| unit))
@@ -147,20 +149,20 @@ impl ksni::Tray for HostTray {
             .into(),
         ];
         let states = std::iter::once(&self.status).chain(&self.companions);
-        for ((unit, name), st) in status::UNITS.into_iter().zip(states) {
-            items.push(service_menu(name, unit, st));
+        for ((unit, id), st) in status::UNITS.into_iter().zip(states) {
+            items.push(service_menu(id, unit, st));
         }
         items.extend([
             MenuItem::Separator,
             CheckmarkItem {
-                label: "Start at log-in".into(),
+                label: tools::tray_start_at_login().into(),
                 checked: pf_paths::tray_autostart::read() == Some(true),
                 activate: Box::new(|_: &mut Self| toggle_autostart()),
                 ..Default::default()
             }
             .into(),
             StandardItem {
-                label: "Exit tray".into(),
+                label: tools::tray_exit().into(),
                 activate: Box::new(|_: &mut Self| std::process::exit(0)),
                 ..Default::default()
             }
@@ -176,8 +178,8 @@ impl ksni::Tray for HostTray {
     }
 }
 
-/// "<name> — <state>" with start / stop / restart for one unit; hidden when not installed.
-fn service_menu(name: &str, unit: &'static str, st: &TrayStatus) -> ksni::MenuItem<HostTray> {
+/// "<service> — <state>" with start / stop / restart for one unit; hidden when not installed.
+fn service_menu(id: Unit, unit: &'static str, st: &TrayStatus) -> ksni::MenuItem<HostTray> {
     use ksni::menu::*;
     let action = move |label: &str, enabled: bool, verb: &'static str| -> MenuItem<HostTray> {
         StandardItem {
@@ -188,20 +190,13 @@ fn service_menu(name: &str, unit: &'static str, st: &TrayStatus) -> ksni::MenuIt
         }
         .into()
     };
-    let state = match st {
-        TrayStatus::NotInstalled => "not installed",
-        TrayStatus::Stopped => "stopped",
-        TrayStatus::Starting => "starting…",
-        TrayStatus::Running(_) | TrayStatus::Degraded => "running",
-        TrayStatus::Error(_) => "failed",
-    };
     SubMenu {
-        label: format!("{name} — {state}"),
+        label: id.label(st).into(),
         visible: *st != TrayStatus::NotInstalled,
         submenu: vec![
-            action("Start", st.can_start(), "start"),
-            action("Stop", st.is_running(), "stop"),
-            action("Restart", st.can_restart(), "restart"),
+            action(tools::tray_unit_start(), st.can_start(), "start"),
+            action(tools::tray_unit_stop(), st.is_running(), "stop"),
+            action(tools::tray_unit_restart(), st.can_restart(), "restart"),
         ],
         ..Default::default()
     }

@@ -1,7 +1,10 @@
 package io.unom.punktfunk
 
 import io.unom.punktfunk.kit.ListedProfile
+import io.unom.punktfunk.kit.R
+import io.unom.punktfunk.kit.Say
 import io.unom.punktfunk.kit.UnlockNeed
+import io.unom.punktfunk.kit.say
 import java.nio.CharBuffer
 import java.nio.charset.CharacterCodingException
 import java.security.Signature
@@ -47,7 +50,7 @@ class Unlock(
  * ([biometric]) or stays signed in, and the host's sentence after a refusal. [answer] completes
  * with what was typed, or `null` for Cancel.
  */
-class PasswordAsk(val profileName: String, val biometric: Boolean, val error: String?) {
+class PasswordAsk(val profileName: String, val biometric: Boolean, val error: Say?) {
     val answer = CompletableDeferred<PasswordAnswer?>()
 }
 
@@ -152,7 +155,7 @@ suspend fun dialUnlocked(
 /** Asks until the password fits the wire or the player cancels (`null`). */
 private suspend fun password(hooks: UnlockHooks, fp: String, profile: ListedProfile, refused: String?): Unlock? {
     val biometric = io { hooks.keys.canEnroll() }
-    var error = refused
+    var error: Say? = refused?.let { Say.Text(it) }
     while (true) {
         val answer = hooks.askPassword(PasswordAsk(profile.displayName, biometric, error)) ?: return null
         val secret = try {
@@ -163,8 +166,8 @@ private suspend fun password(hooks: UnlockHooks, fp: String, profile: ListedProf
             answer.password.fill('\u0000')
         }
         error = when {
-            secret == null -> "That password has a character Punktfunk can't send."
-            secret.size > MAX_PASSWORD_BYTES -> "That password is too long."
+            secret == null -> say(R.string.unlock_error_bad_char)
+            secret.size > MAX_PASSWORD_BYTES -> say(R.string.unlock_error_too_long)
             secret.isEmpty() -> null
             else -> {
                 // A key that can't be made enrols nothing; the password still goes.

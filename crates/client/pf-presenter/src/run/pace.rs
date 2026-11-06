@@ -1108,22 +1108,31 @@ pub(super) fn desktop_extras(
 ) -> Vec<hud::Extra> {
     let mut out = Vec::new();
     if !p.mode.is_empty() {
-        let mut t = format!("present: {}", p.mode);
+        use pf_l10n::desktop as d;
+        let mut t = d::desktop_overlay_present(p.mode);
         // Only once measured: an unproven "vrr no" would be a claim, not a reading.
-        if p.vrr != Cadence::Unknown {
-            t.push_str(&format!(" · vrr {}", p.vrr.label()));
+        match p.vrr {
+            Cadence::Unknown => {}
+            Cadence::Fixed => t.push_str(&format!(" · {}", d::desktop_overlay_vrr_no())),
+            Cadence::Variable => t.push_str(&format!(" · {}", d::desktop_overlay_vrr_yes())),
         }
         if p.smoothing {
-            t.push_str(" · smoothing");
+            t.push_str(&format!(" · {}", d::desktop_overlay_smoothing()));
         }
         // The compositor's word, only where it gives one.
-        match p.scanout {
-            Some((zc, shown)) if shown > 0 && zc == shown => t.push_str(" · scanout"),
-            Some((0, shown)) if shown > 0 => t.push_str(" · composited"),
-            Some((zc, shown)) if shown > 0 => {
-                t.push_str(&format!(" · scanout {}%", zc * 100 / shown));
+        let path: Option<String> = match p.scanout {
+            Some((zc, shown)) if shown > 0 && zc == shown => {
+                Some(d::desktop_overlay_scanout().into())
             }
-            _ => {}
+            Some((0, shown)) if shown > 0 => Some(d::desktop_overlay_composited().into()),
+            Some((zc, shown)) if shown > 0 => Some(d::desktop_overlay_scanout_share(format!(
+                "{}%",
+                zc * 100 / shown
+            ))),
+            _ => None,
+        };
+        if let Some(path) = path {
+            t.push_str(&format!(" · {path}"));
         }
         for (name, n) in [
             ("qdrop", p.q_drop),

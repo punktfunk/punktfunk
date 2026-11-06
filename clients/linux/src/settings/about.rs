@@ -1,10 +1,11 @@
 //! The About dialog: the app's licence and the third-party notices.
 
 use adw::prelude::*;
+use pf_l10n::{client, desktop};
 
-/// punktfunk's own license (MIT OR Apache-2.0), shown on the About dialog's Legal page.
-const APP_LICENSE: &str = concat!(
-    "Punktfunk is licensed under MIT OR Apache-2.0, at your option.\n\n",
+/// punktfunk's own license texts (MIT OR Apache-2.0), shown on the About dialog's Legal page
+/// after the message that states the choice.
+const LICENSE_TEXTS: &str = concat!(
     "================================ MIT ================================\n\n",
     include_str!("../../../../LICENSE-MIT"),
     "\n\n=============================== Apache-2.0 ===============================\n\n",
@@ -20,16 +21,6 @@ const APP_LICENSE: &str = concat!(
 /// the section below it claims exactly what is here.
 const THIRD_PARTY_NOTICES: &str = include_str!("../../THIRD-PARTY-NOTICES.txt");
 
-/// The dynamically linked system libraries — not in the crate notices, since they aren't
-/// crates. Their full texts ship with each project rather than being vendored here.
-const SYSTEM_LIBRARY_NOTICES: &str =
-    "This application dynamically links system libraries under their own licenses, including \
-     GTK 4 and libadwaita (LGPL v2.1+), PipeWire (MIT), and SDL 3 (Zlib). \
-     Their full license texts are available from each project. Video decoding uses the \
-     system's own Vulkan Video and VAAPI drivers (loaded at runtime, never linked), with \
-     OpenH264 and rav1d — both BSD-2-Clause, and both in the Rust crate notices — as the \
-     CPU fallback; no FFmpeg is linked or bundled.";
-
 /// Show the About dialog (app license + the third-party-software Legal section) — reached
 /// from the primary menu (app.rs `win.about`).
 pub fn show_about(parent: &impl IsA<gtk::Widget>) {
@@ -37,9 +28,15 @@ pub fn show_about(parent: &impl IsA<gtk::Widget>) {
     // `<name@example.com>` reads as an unclosed tag and Pango drops the whole section with
     // "is not a valid name: @". The notices are generated from crate metadata and are full of
     // those, so they are escaped rather than trusted. Nothing in them wants markup anyway.
-    let license = gtk::glib::markup_escape_text(APP_LICENSE);
+    let license = gtk::glib::markup_escape_text(&format!(
+        "{}\n\n{LICENSE_TEXTS}",
+        client::about_license_statement()
+    ));
     let crate_notices = gtk::glib::markup_escape_text(THIRD_PARTY_NOTICES);
-    let system_notices = gtk::glib::markup_escape_text(SYSTEM_LIBRARY_NOTICES);
+    // The dynamically linked system libraries are not in the crate notices, since they aren't
+    // crates. Their full texts ship with each project rather than being vendored here.
+    let system_notices =
+        gtk::glib::markup_escape_text(desktop::desktop_about_system_libraries_body());
     let about = adw::AboutDialog::builder()
         .application_name("Punktfunk")
         // The app's own icon, by the id the desktop entry and the icon theme both use. It
@@ -56,13 +53,13 @@ pub fn show_about(parent: &impl IsA<gtk::Widget>) {
     // The native (GTK/PipeWire/SDL3) components are dynamically linked under their own
     // (LGPL/Zlib/MIT) licenses; the Rust crate notices are the substantive attribution set.
     about.add_legal_section(
-        "Third-party software (Rust crates)",
+        desktop::desktop_about_rust_crates(),
         None,
         gtk::License::Custom,
         Some(crate_notices.as_str()),
     );
     about.add_legal_section(
-        "Third-party software (system libraries)",
+        desktop::desktop_about_system_libraries(),
         None,
         gtk::License::Custom,
         Some(system_notices.as_str()),

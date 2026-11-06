@@ -332,9 +332,11 @@ pub(crate) fn write_shortcut(label: &str, url: &str) -> Result<std::path::PathBu
         link.SetArguments(&HSTRING::from(url))
             .ok()
             .map_err(|e| format!("shortcut argument: {e}"))?;
-        link.SetDescription(&HSTRING::from(format!("Stream from {label}")))
-            .ok()
-            .map_err(|e| format!("shortcut description: {e}"))?;
+        link.SetDescription(&HSTRING::from(
+            pf_l10n::desktop::desktop_shortcut_description(label),
+        ))
+        .ok()
+        .map_err(|e| format!("shortcut description: {e}"))?;
         let persist: IPersistFile = link.cast().map_err(|e| format!("shortcut save: {e}"))?;
         // `to_string_lossy` rather than the OsStr: HSTRING is UTF-16 and the path came from an
         // env var plus our own sanitised name, so there is nothing lossy left to lose.

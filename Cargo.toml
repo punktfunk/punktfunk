@@ -72,6 +72,8 @@ members = [
     "tools/scroll-probe",
     "tools/wgc-probe",
     "tools/wl-scanout-probe",
+    # Every message a person reads, and the crate that compiles them (l10n/README.md).
+    "l10n",
 ]
 # Standalone PoC (built on its own; pulls usbip/tokio/libusb we don't want in the workspace).
 # The vendored `ndk` is a [patch.crates-io] source, not a member: it only compiles for the

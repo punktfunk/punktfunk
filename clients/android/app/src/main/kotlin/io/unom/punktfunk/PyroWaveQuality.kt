@@ -25,10 +25,6 @@ object PyroWaveQuality {
      *  session at the quality, so only "not zero" counts. Core's `PYROWAVE_FIXED_KBPS`. */
     const val FIXED_KBPS = 20_000
 
-    /** Core's `PYROWAVE_BITRATE_HINT`, Bitrate's caption under PyroWave. */
-    const val BITRATE_HINT = "Automatic lowers PyroWave quality while the network falls short; " +
-        "Fixed always streams at your quality."
-
     /** [bpp] on the nearest tenth inside [RANGE]. */
     fun snapped(bpp: Double): Double = (bpp.coerceIn(0.5, 2.0) * 10).roundToInt() / 10.0
 
@@ -54,22 +50,27 @@ object PyroWaveQuality {
     }
 
     /**
-     * The caption, `3840×2160 at 120 Hz: 1.6 Gbit/s`, and the warning when [link] is short of
-     * that rate. [base] is [effectiveMode]'s answer; render scale applies as the connect applies
-     * it. [price] is [NativeBridge.nativePyrowaveQuality].
+     * What the quality costs at a mode: the mode, core's [rate] text (`1.6 Gbit/s`), and the
+     * [warning] when the link is short of it. The row words them with `player_pyrowave_bpp_rate`.
+     */
+    data class Cost(val width: Int, val height: Int, val hz: Int, val rate: String, val warning: String?)
+
+    /**
+     * The [Cost] of the mode a connect would ask. [base] is [effectiveMode]'s answer; render scale
+     * applies as the connect applies it. [price] is [NativeBridge.nativePyrowaveQuality].
      */
     fun lines(
         s: Settings,
         base: Triple<Int, Int, Int>,
         link: Pair<Int, Int>,
         price: (Int, Int, Int, Boolean, Int, Int, Int, Int) -> String = NativeBridge::nativePyrowaveQuality,
-    ): Pair<String, String?> {
+    ): Cost {
         val (w, h) = RenderScale.apply(base.first, base.second, s.renderScale, RenderScale.maxDimension(s.codec))
         val hz = base.third
         // No 4:4:4 on Android; 10 bits follow the switches that ask for them.
         val depth = if (s.hdrEnabled || s.tenBitSdr) 10 else 8
         val out = price(w, h, hz, false, depth, s.pyrowaveBppX100(), link.first, link.second)
         val warning = out.substringAfter('\n', "")
-        return "$w×$h at $hz Hz: ${out.substringBefore('\n')}" to warning.ifEmpty { null }
+        return Cost(w, h, hz, out.substringBefore('\n'), warning.ifEmpty { null })
     }
 }

@@ -6,8 +6,11 @@ use crate::screens::{home, Ctx};
 use crate::widgets::RowSpec;
 use pf_client_core::audio_format::{AUDIO_FORMATS, AUDIO_FORMAT_OPUS};
 use pf_client_core::presets::SettingsOverlay;
+use pf_client_core::settings::Label;
 use pf_client_core::start;
 use pf_client_core::trust::{HudCorner, MouseMode, Settings, StatsVerbosity, TouchMode};
+use pf_l10n::{client as m, common, console};
+use std::borrow::Cow;
 
 /// Dispatch key for adjust/activate. The pad list under "Use controller" can
 /// churn between frames, so an index would act on the wrong row.
@@ -213,8 +216,10 @@ mod webos_keys {
 }
 
 /// Stored `webos.audio_route` values, spelled as that client's enum serializes.
-const WEBOS_AUDIO_ROUTES: [(&str, &str); 2] =
-    [("software", "Software (SDL)"), ("ndlopus", "Offload (NDL)")];
+const WEBOS_AUDIO_ROUTES: [(&str, Label); 2] = [
+    ("software", m::player_audio_route_software),
+    ("ndlopus", m::player_audio_route_ndlopus),
+];
 
 /// The console-vs-fallback pair, unprefixed: webOS carries the same two keys (its
 /// fallback is the cursor UI, not a touch home), so they name a concept rather than
@@ -223,24 +228,30 @@ pub(super) const GAMEPAD_UI_KEY: &str = "gamepad_ui_enabled";
 pub(super) const GAMEPAD_UI_MODE_KEY: &str = "gamepad_ui_mode";
 
 /// The Vision Pro's `visionos.screen` values, as its own Settings names them.
-const SCREENS: [(&str, &str); 8] = [
-    ("flat", "Flat"),
-    ("4000r", "4000R"),
-    ("3000r", "3000R"),
-    ("2300r", "2300R"),
-    ("1800r", "1800R"),
-    ("1500r", "1500R"),
-    ("1000r", "1000R"),
-    ("800r", "800R"),
+const SCREENS: [(&str, Label); 8] = [
+    ("flat", m::player_screen_flat),
+    ("4000r", || "4000R"),
+    ("3000r", || "3000R"),
+    ("2300r", || "2300R"),
+    ("1800r", || "1800R"),
+    ("1500r", || "1500R"),
+    ("1000r", || "1000R"),
+    ("800r", || "800R"),
 ];
 /// Stored [`GAMEPAD_UI_MODE_KEY`] values (`GamepadUi.kt`).
-const GAMEPAD_UI_MODES: [(&str, &str); 2] =
-    [("connected", "With a controller"), ("always", "Always")];
+const GAMEPAD_UI_MODES: [(&str, Label); 2] = [
+    ("connected", m::player_gamepad_ui_mode_connected),
+    ("always", m::player_gamepad_ui_mode_always),
+];
 
 /// Apple's `fullscreenAlways`: the Mac window opens fullscreen and stays so between streams.
 /// Device-only, so no preset carries it.
 pub(super) const FULLSCREEN_ALWAYS_KEY: &str = "fullscreen_always";
-const FULLSCREEN_MODES: [&str; 3] = ["Off", "While streaming", "Always"];
+const FULLSCREEN_MODES: [Label; 3] = [
+    m::player_fullscreen_off,
+    m::player_fullscreen_stream,
+    m::player_fullscreen_always,
+];
 
 /// Index into [`FULLSCREEN_MODES`].
 pub(super) fn fullscreen_mode(s: &pf_client_core::trust::Settings) -> usize {
@@ -255,12 +266,7 @@ pub(super) fn fullscreen_mode(s: &pf_client_core::trust::Settings) -> usize {
 const BACKGROUND_KEEP_ALIVE_KEY: &str = "background_keep_alive";
 const BACKGROUND_TIMEOUT_KEY: &str = "background_timeout_minutes";
 /// Minutes, as the two touch UIs offer them. Stored as a number.
-const BACKGROUND_TIMEOUTS: [(&str, &str); 4] = [
-    ("1", "1 minute"),
-    ("5", "5 minutes"),
-    ("10", "10 minutes"),
-    ("30", "30 minutes"),
-];
+const BACKGROUND_TIMEOUTS: [u64; 4] = [1, 5, 10, 30];
 const BACKGROUND_TIMEOUT_DEFAULT: u64 = 10;
 
 /// The corner each platform's stats overlay sits in until the player picks one.
@@ -331,11 +337,7 @@ fn toggle_extra(
 #[derive(Clone, Copy)]
 pub(super) enum Extra {
     Bool(&'static str, bool),
-    Choice(
-        &'static str,
-        &'static str,
-        &'static [(&'static str, &'static str)],
-    ),
+    Choice(&'static str, &'static str, &'static [(&'static str, Label)]),
     /// A typed bool: read through the first fn, stepped through the second, one field.
     Flag(fn(&Settings) -> bool, fn(&mut Settings) -> &mut bool),
 }
@@ -457,12 +459,52 @@ pub(crate) fn reduce_ui_res(
     )
 }
 
+/// A section of the Settings tab. The first five are the catalogue's categories.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Section {
+    General,
+    Display,
+    Audio,
+    Input,
+    Controllers,
+    Presets,
+    About,
+}
+
+impl Section {
+    /// The section's name on its tab and over its rows.
+    pub(crate) fn name(self) -> &'static str {
+        match self {
+            Section::General => m::prefs_category_general(),
+            Section::Display => m::prefs_category_display(),
+            Section::Audio => m::prefs_category_audio(),
+            Section::Input => m::prefs_category_input(),
+            Section::Controllers => m::prefs_category_controllers(),
+            Section::Presets => console::console_prefs_category_presets(),
+            Section::About => m::prefs_category_about(),
+        }
+    }
+
+    /// What a screen reader says when the section takes focus.
+    pub(super) fn spoken(self) -> &'static str {
+        match self {
+            Section::General => console::console_prefs_category_general_a11y(),
+            Section::Display => console::console_prefs_category_display_a11y(),
+            Section::Audio => console::console_prefs_category_audio_a11y(),
+            Section::Input => console::console_prefs_category_input_a11y(),
+            Section::Controllers => console::console_prefs_category_controllers_a11y(),
+            Section::Presets => console::console_prefs_category_presets_a11y(),
+            Section::About => console::console_prefs_category_about_a11y(),
+        }
+    }
+}
+
 // The sections, the rows a player touches most first and the [`advanced`] ones last. A child
 // row sits right under the switch it dims or drops with. Presets is empty here: its rows come
 // from the catalog.
-pub(super) const TABS: [(&str, &[RowId]); 7] = [
+pub(super) const TABS: [(Section, &[RowId]); 7] = [
     (
-        "General",
+        Section::General,
         &[
             RowId::StartIn,
             RowId::AutoWake,
@@ -489,7 +531,7 @@ pub(super) const TABS: [(&str, &[RowId]); 7] = [
         ],
     ),
     (
-        "Display",
+        Section::Display,
         &[
             RowId::Aspect,
             RowId::Resolution,
@@ -516,7 +558,7 @@ pub(super) const TABS: [(&str, &[RowId]); 7] = [
         ],
     ),
     (
-        "Audio",
+        Section::Audio,
         &[
             RowId::Audio,
             RowId::Mic,
@@ -528,7 +570,7 @@ pub(super) const TABS: [(&str, &[RowId]); 7] = [
         ],
     ),
     (
-        "Input",
+        Section::Input,
         &[
             RowId::Touch,
             RowId::Mouse,
@@ -539,7 +581,7 @@ pub(super) const TABS: [(&str, &[RowId]); 7] = [
         ],
     ),
     (
-        "Controllers",
+        Section::Controllers,
         &[
             RowId::Controllers,
             RowId::PadType,
@@ -556,9 +598,9 @@ pub(super) const TABS: [(&str, &[RowId]); 7] = [
             RowId::DsCapture,
         ],
     ),
-    ("Presets", &[]),
+    (Section::Presets, &[]),
     (
-        "About",
+        Section::About,
         &[RowId::Version, RowId::StreamControls, RowId::Licenses],
     ),
 ];
@@ -572,12 +614,21 @@ pub(super) const PRESETS_TAB: usize = 5;
 pub(crate) const TAB_COUNT: usize = TABS.len();
 
 /// Sizes by family; the Resolution row lists one family at a time.
-use punktfunk_core::resolutions::{family_of, nearest_in, Family, SAFE_AREA_LABEL, SCREEN_LABEL};
+use punktfunk_core::resolutions::{family_of, nearest_in, Family, FamilyId, ASPECTS};
 
 /// The Aspect row's entries: this device's screen and safe area first when no
 /// standard shape has them, then the standard families.
 pub(super) fn families(screen: Option<crate::shell::DeviceScreen>) -> Vec<Family> {
     punktfunk_core::resolutions::families(screen.map(|s| s.full), screen.map(|s| s.safe))
+}
+
+/// What the Aspect row shows for a family: the device's own two by name, a ratio as itself.
+fn family_label(f: &Family) -> &'static str {
+    match f.id {
+        FamilyId::Screen => m::player_resolution_aspect_screen(),
+        FamilyId::SafeArea => m::player_resolution_aspect_safe_area(),
+        FamilyId::Aspect(i) => ASPECTS[i].label,
+    }
 }
 
 /// The entry the Resolution row lists: the stored size's shape. Native (safe
@@ -588,12 +639,12 @@ pub(super) fn family(
     fams: &[Family],
     platform: crate::platform::Platform,
 ) -> usize {
-    let own = |label| fams.iter().position(|f| f.label == label);
+    let own = |id| fams.iter().position(|f| f.id == id);
     if s.width == 0 && !s.match_window {
         let native = if safe_area(s, platform) {
-            own(SAFE_AREA_LABEL).or_else(|| own(SCREEN_LABEL))
+            own(FamilyId::SafeArea).or_else(|| own(FamilyId::Screen))
         } else {
-            own(SCREEN_LABEL)
+            own(FamilyId::Screen)
         };
         return native.unwrap_or(0);
     }
@@ -714,34 +765,32 @@ fn bitrate_rungs(platform: crate::platform::Platform) -> usize {
         .position(|b| *b > ceiling)
         .unwrap_or(BITRATES.len())
 }
-const COMPOSITORS: [(&str, &str); 8] = [
-    ("auto", "Automatic"),
-    ("kwin", "KWin"),
-    ("mutter", "Mutter"),
-    ("hyprland", "Hyprland"),
-    ("niri", "niri"),
-    ("umbriel", "Umbriel"),
-    ("wlroots", "wlroots"),
-    ("gamescope", "gamescope"),
+const COMPOSITORS: [(&str, Label); 8] = [
+    ("auto", m::player_compositor_auto),
+    ("kwin", || "KWin"),
+    ("mutter", || "Mutter"),
+    ("hyprland", || "Hyprland"),
+    ("niri", || "niri"),
+    ("umbriel", || "Umbriel"),
+    ("wlroots", || "wlroots"),
+    ("gamescope", || "gamescope"),
 ];
-const CODECS: [(&str, &str); 5] = [
-    ("auto", "Automatic"),
-    ("hevc", "HEVC"),
-    ("h264", "H.264"),
-    ("av1", "AV1"),
+const CODECS: [(&str, Label); 5] = [
+    ("auto", m::player_codec_auto),
+    ("hevc", || "HEVC"),
+    ("h264", || "H.264"),
+    ("av1", || "AV1"),
     // 100–400 Mbps class, 8-bit SDR. Host must support it; else HEVC.
-    ("pyrowave", "PyroWave (wired LAN)"),
+    ("pyrowave", m::player_codec_pyrowave),
 ];
 
 /// The PS5's: Videodec2 decodes H.264 and HEVC, the GPU PyroWave, and nothing decodes AV1.
-const CODECS_PS5: [(&str, &str); 4] = [CODECS[0], CODECS[1], CODECS[2], CODECS[4]];
+const CODECS_PS5: [(&str, Label); 4] = [CODECS[0], CODECS[1], CODECS[2], CODECS[4]];
 
 /// The codecs this platform decodes. The TV's NDL pipeline takes H.264, HEVC and AV1, but no
 /// PyroWave (no Vulkan presentation). A Samsung set takes H.264 and HEVC: its WebCodecs says
 /// yes to AV1 without ever having been measured on one.
-pub(super) fn codecs(
-    platform: crate::platform::Platform,
-) -> &'static [(&'static str, &'static str)] {
+pub(super) fn codecs(platform: crate::platform::Platform) -> &'static [(&'static str, Label)] {
     match platform {
         crate::platform::Platform::WebOS => &CODECS[..4],
         crate::platform::Platform::Tizen => &CODECS[..3],
@@ -753,49 +802,53 @@ pub(super) fn codecs(
 // Stored values are `native-*`; `migrate_decoder_pref` rewrites a legacy store
 // on read, but until the user re-picks it will not match a preset here.
 #[cfg(not(windows))]
-const DECODERS: [(&str, &str); 4] = [
-    ("auto", "Automatic"),
-    ("native-vulkan", "Vulkan Video"),
-    ("native-vaapi", "VAAPI"),
-    ("software", "Software"),
+const DECODERS: [(&str, Label); 4] = [
+    ("auto", m::player_decoder_auto),
+    ("native-vulkan", || "Vulkan Video"),
+    ("native-vaapi", || "VAAPI"),
+    ("software", m::player_decoder_software),
 ];
 #[cfg(windows)]
-const DECODERS: [(&str, &str); 4] = [
-    ("auto", "Automatic"),
-    ("native-vulkan", "Vulkan Video"),
-    ("native-d3d11va", "Direct3D 11"),
-    ("software", "Software"),
+const DECODERS: [(&str, Label); 4] = [
+    ("auto", m::player_decoder_auto),
+    ("native-vulkan", || "Vulkan Video"),
+    ("native-d3d11va", || "Direct3D 11"),
+    ("software", m::player_decoder_software),
 ];
-const AUDIO: [(u8, &str); 3] = [(2, "Stereo"), (6, "5.1"), (8, "7.1")];
+const AUDIO: [(u8, Label); 3] = [
+    (2, m::player_audio_channels_2),
+    (6, m::player_audio_channels_6),
+    (8, m::player_audio_channels_8),
+];
 /// Shared `present_priority` key — one preset reads the same on every client.
-const VIDEO_FITS: [(&str, &str); 3] = [
-    ("fit", "Fit"),
-    ("crop", "Crop to fill"),
-    ("stretch", "Stretch to fill"),
+const VIDEO_FITS: [(&str, Label); 3] = [
+    ("fit", m::player_video_fit_fit),
+    ("crop", m::player_video_fit_crop),
+    ("stretch", m::player_video_fit_stretch),
 ];
 /// Shared `screens` key; anything but `all` reads as this monitor.
-const MONITORS: [(&str, &str); 2] = [("this", "This monitor"), ("all", "All monitors")];
-const PRESENT_PRIORITIES: [(&str, &str); 2] =
-    [("latency", "Lowest latency"), ("smooth", "Smoothness")];
-/// Depth in frames. `0` = Automatic, which resolves to 2.
-const SMOOTH_BUFFERS: [(u8, &str); 4] = [
-    (0, "Automatic"),
-    (1, "1 frame"),
-    (2, "2 frames"),
-    (3, "3 frames"),
+const MONITORS: [(&str, Label); 2] = [
+    ("this", m::player_screens_this),
+    ("all", m::player_screens_all),
 ];
-pub(super) const PAD_TYPES: [(&str, &str); 7] = [
-    ("auto", "Automatic"),
-    ("xbox360", "Xbox 360"),
-    ("xboxone", "Xbox One"),
-    ("dualsense", "DualSense"),
-    ("dualshock4", "DualShock 4"),
-    ("steamdeck", "Steam Deck"),
-    ("steamcontroller2", "Steam Controller 2"),
+const PRESENT_PRIORITIES: [(&str, Label); 2] = [
+    ("latency", m::player_present_priority_latency),
+    ("smooth", m::player_present_priority_smooth),
+];
+/// Depth in frames. `0` = Automatic, which resolves to 2.
+const SMOOTH_BUFFERS: [u8; 4] = [0, 1, 2, 3];
+pub(super) const PAD_TYPES: [(&str, Label); 7] = [
+    ("auto", m::player_gamepad_auto),
+    ("xbox360", || "Xbox 360"),
+    ("xboxone", || "Xbox One"),
+    ("dualsense", || "DualSense"),
+    ("dualshock4", || "DualShock 4"),
+    ("steamdeck", || "Steam Deck"),
+    ("steamcontroller2", || "Steam Controller 2"),
 ];
 /// The pad types `platform` can ask a host for. The TV and PS5 clients map Xbox 360, Steam Deck
 /// and Steam Controller 2 to Automatic, so their rows do not offer them.
-fn pad_types(platform: crate::platform::Platform) -> Vec<(&'static str, &'static str)> {
+fn pad_types(platform: crate::platform::Platform) -> Vec<(&'static str, Label)> {
     use crate::platform::Platform;
     PAD_TYPES
         .iter()
@@ -808,12 +861,16 @@ fn pad_types(platform: crate::platform::Platform) -> Vec<(&'static str, &'static
 }
 /// Shared `system_buttons` key. Auto sends to the host except in Gaming Mode,
 /// where Steam on this device would open a second overlay on the same press.
-const SYSTEM_BUTTONS: [(&str, &str); 3] = [
-    ("auto", "Automatic"),
-    ("forward", "Send to host"),
-    ("local", "This device"),
+const SYSTEM_BUTTONS: [(&str, Label); 3] = [
+    ("auto", m::player_system_buttons_auto),
+    ("forward", m::player_system_buttons_forward),
+    ("local", m::player_system_buttons_local),
 ];
-const GUIDE_GESTURE: [(&str, &str); 3] = [("auto", "Automatic"), ("on", "On"), ("off", "Off")];
+const GUIDE_GESTURE: [(&str, Label); 3] = [
+    ("auto", m::player_guide_gesture_auto),
+    ("on", m::player_guide_gesture_on),
+    ("off", m::player_guide_gesture_off),
+];
 
 /// Whether this platform has the row at all.
 ///
@@ -1058,15 +1115,18 @@ fn start_in_value(ctx: &Ctx) -> String {
     let known = ctx.store.known_hosts();
     let want = start::StartIn::parse(&ctx.settings.start_in);
     match start::default_host(ctx.settings, &known) {
-        _ if want == start::StartIn::Hosts => "Host list".into(),
-        Some(i) => format!("{} · {}", want.label(), known.hosts[i].name),
-        None => "Host list (no default host)".into(),
+        _ if want == start::StartIn::Hosts => m::player_start_in_hosts().into(),
+        Some(i) if want == start::StartIn::Library => {
+            m::player_start_in_library_on(&known.hosts[i].name)
+        }
+        Some(i) => m::player_start_in_stream_on(&known.hosts[i].name),
+        None => m::player_start_in_hosts_no_default().into(),
     }
 }
 
-/// The row as drawn. A row a known host's bound preset overrides carries the dot and a
-/// note naming preset, host and the value that host streams at: the row keeps showing
-/// the global, which is what the console edits.
+/// The row as drawn, keyed by its [`RowId`]. A row a known host's bound preset overrides
+/// carries the dot and a note naming preset, host and the value that host streams at: the
+/// row keeps showing the global, which is what the console edits.
 pub fn row_spec(
     id: RowId,
     ctx: &Ctx,
@@ -1074,6 +1134,7 @@ pub fn row_spec(
     overrides: &std::collections::HashMap<String, SettingsOverlay>,
 ) -> RowSpec {
     let mut spec = row_spec_base(id, ctx, presets);
+    spec.id = Some(format!("{id:?}"));
     spec.icon = Some(row_icon(id));
     if let Some((host, preset, overlay)) = preset_override(id, ctx, presets, overrides) {
         let mut resolved = overlay.apply(ctx.settings);
@@ -1090,9 +1151,7 @@ pub fn row_spec(
         };
         let value = row_spec_base(id, &under, presets).value.unwrap_or_default();
         spec.dot = true;
-        spec.note = Some(format!(
-            "Preset \u{201c}{preset}\u{201d} on {host}: {value}"
-        ));
+        spec.note = Some(console::console_prefs_override_note(preset, host, value));
     }
     spec
 }
@@ -1222,8 +1281,8 @@ pub(crate) fn preset_field(id: RowId) -> Option<&'static str> {
     })
 }
 
-/// The rows a preset can hold on this platform this frame, each with its section's name.
-pub(crate) fn preset_rows(ctx: &Ctx) -> Vec<(&'static str, RowId)> {
+/// The rows a preset can hold on this platform this frame, each with its section.
+pub(crate) fn preset_rows(ctx: &Ctx) -> Vec<(Section, RowId)> {
     (TABS.iter())
         .flat_map(|(tab, rows)| rows.iter().map(move |id| (*tab, *id)))
         .filter(|(_, id)| preset_field(*id).is_some())
@@ -1250,9 +1309,8 @@ fn row_spec_base(id: RowId, ctx: &Ctx, presets: &[(String, String)]) -> RowSpec 
                 header: None,
                 label: name.clone(),
                 value: Some(match pins {
-                    0 => "Not pinned".into(),
-                    1 => "Pinned to 1 host".into(),
-                    n => format!("Pinned to {n} hosts"),
+                    0 => console::console_preset_not_pinned().into(),
+                    n => console::console_preset_pinned(n as u64),
                 }),
                 value_dim: pins == 0,
                 caret: false,
@@ -1262,23 +1320,19 @@ fn row_spec_base(id: RowId, ctx: &Ctx, presets: &[(String, String)]) -> RowSpec 
             };
         }
         RowId::NewPreset => {
-            return RowSpec::action("New preset\u{2026}", true);
+            return RowSpec::action(m::preset_new(), true);
         }
-        RowId::Controllers => return RowSpec::action("Controllers", true),
-        // The count is the tab's; `SettingsScreen::spec` writes it in.
-        RowId::AdvancedChanged => return RowSpec::action("Advanced settings changed", true),
-        RowId::StreamControls => return RowSpec::action("Stream controls", true),
-        RowId::Licenses => return RowSpec::action("Open-source licences", true),
-        RowId::QuickActions => return RowSpec::action("Quick actions", true),
+        RowId::Controllers => return RowSpec::action(console::console_prefs_controllers(), true),
+        // The label is the tab's count; `SettingsScreen::spec` writes it in.
+        RowId::AdvancedChanged => return RowSpec::action(String::new(), true),
+        RowId::StreamControls => return RowSpec::action(m::about_stream_controls(), true),
+        RowId::Licenses => return RowSpec::action(m::about_licenses(), true),
+        RowId::QuickActions => return RowSpec::action(m::player_overlay_actions(), true),
         // Opens the cards: the value names the pick, no ‹ › to step it.
         RowId::Palette => {
             return RowSpec {
-                label: "Background".into(),
-                value: Some(
-                    crate::palette::palette(&ctx.settings.ui_palette)
-                        .name
-                        .into(),
-                ),
+                label: m::player_ui_palette().into(),
+                value: Some((crate::palette::palette(&ctx.settings.ui_palette).name)().into()),
                 ..RowSpec::default()
             };
         }
@@ -1289,17 +1343,17 @@ fn row_spec_base(id: RowId, ctx: &Ctx, presets: &[(String, String)]) -> RowSpec 
                 .count();
             let all = crate::library::Section::ALL.len();
             return RowSpec {
-                label: "Library sections".into(),
+                label: m::player_library_sections().into(),
                 value: Some(match on {
-                    n if n == all => "All shown".into(),
-                    n => format!("{n} of {all} shown"),
+                    n if n == all => m::player_library_sections_all().into(),
+                    n => m::player_library_sections_some(n as u64, all),
                 }),
                 ..RowSpec::default()
             };
         }
         RowId::Version => {
             return RowSpec {
-                label: "Version".into(),
+                label: m::about_version().into(),
                 value: Some(ctx.device.version.clone()),
                 ..RowSpec::default()
             };
@@ -1309,7 +1363,7 @@ fn row_spec_base(id: RowId, ctx: &Ctx, presets: &[(String, String)]) -> RowSpec 
             let (rate, warning) = ctx
                 .settings
                 .pyrowave_quality_lines(native_mode(ctx.device), local_link());
-            let spec = RowSpec::choice("PyroWave quality", rate);
+            let spec = RowSpec::choice(m::player_pyrowave_bpp(), rate);
             return match warning {
                 Some(w) => spec.with_note(w),
                 None => spec,
@@ -1323,15 +1377,15 @@ fn row_spec_base(id: RowId, ctx: &Ctx, presets: &[(String, String)]) -> RowSpec 
     let (header, label, value): (Option<&'static str>, &str, String) = match id {
         RowId::Resolution => (
             None,
-            "Resolution",
+            m::player_resolution(),
             if s.match_window && has_window(ctx.device) {
-                "Match window".into()
+                m::player_resolution_match_window().into()
             } else if safe_area(s, ctx.device.platform) {
-                "Native (safe area)".into()
+                m::player_resolution_native_safe_area().into()
             } else if s.width == 0 {
-                "Native".into()
+                m::player_resolution_native().into()
             } else if custom_size(s, &families(ctx.device.screen), ctx.device.platform) {
-                format!("Custom ({} × {})", s.width, s.height)
+                m::player_resolution_custom_size(s.width, s.height)
             } else {
                 format!("{} × {}", s.width, s.height)
             },
@@ -1340,64 +1394,64 @@ fn row_spec_base(id: RowId, ctx: &Ctx, presets: &[(String, String)]) -> RowSpec 
             let fams = families(ctx.device.screen);
             (
                 None,
-                "Aspect ratio",
-                fams[family(s, &fams, ctx.device.platform)].label.into(),
+                m::player_resolution_aspect(),
+                family_label(&fams[family(s, &fams, ctx.device.platform)]).into(),
             )
         }
         RowId::Refresh => (
             None,
-            "Refresh rate",
+            m::player_refresh_hz(),
             if s.refresh_hz == 0 {
-                "Native".into()
+                m::player_refresh_hz_native().into()
             } else {
-                format!("{} Hz", s.refresh_hz)
+                common::common_hz(s.refresh_hz)
             },
         ),
         RowId::RenderScale => {
             // In hundredths, so a float-stored 0.67 does not read as 0.6700000167.
             let x = f64::from(punktfunk_core::render_scale::percent(s.render_scale)) / 100.0;
             let value = if x == 1.0 {
-                "Native".into()
+                m::player_render_scale_native().into()
             } else if x > 1.0 {
-                format!("{x}× (supersample)")
+                m::player_render_scale_supersample(x)
             } else {
                 format!("{x}×")
             };
-            (None, "Render scale", value)
+            (None, m::player_render_scale(), value)
         }
         RowId::VideoFit => (
             None,
-            "Picture fit",
+            m::player_video_fit(),
             label_for(&VIDEO_FITS, VideoFit::from_name(&s.video_fit).name()).into(),
         ),
         RowId::Screens => (
             None,
-            "Screens",
-            MONITORS[usize::from(s.all_screens())].1.into(),
+            m::player_screens(),
+            MONITORS[usize::from(s.all_screens())].1().into(),
         ),
         RowId::Bitrate => (
             None,
-            "Bitrate",
+            m::player_bitrate_kbps(),
             if s.bitrate_kbps == 0 {
-                "Automatic".into()
+                m::player_bitrate_kbps_automatic().into()
             } else if pyrowave_rate(ctx) {
-                "Fixed".into()
+                m::player_bitrate_kbps_fixed().into()
             } else {
                 bitrate_label(s.bitrate_kbps)
             },
         ),
         RowId::Compositor => (
             None,
-            "Host compositor",
+            m::player_compositor(),
             label_for(&COMPOSITORS, &s.compositor).into(),
         ),
         RowId::Codec => (
             None,
-            "Video codec",
+            m::player_codec(),
             if s.codec == "pyrowave" && !ctx.device.pyrowave_ok {
-                "PyroWave (unsupported)".into()
+                m::player_codec_pyrowave_unsupported().into()
             } else if s.codec == "av1" && !ctx.device.av1_ok {
-                "AV1 (unsupported)".into()
+                m::player_codec_av1_unsupported().into()
             } else {
                 label_for(codecs(ctx.device.platform), &s.codec).into()
             },
@@ -1405,95 +1459,96 @@ fn row_spec_base(id: RowId, ctx: &Ctx, presets: &[(String, String)]) -> RowSpec 
         // Migrate before lookup or a legacy store (`vulkan`/`vaapi`) shows "—".
         RowId::Decoder => (
             None,
-            "Video decoder",
+            m::player_decoder(),
             label_for(
                 &DECODERS,
                 &pf_client_core::decoder_pref::migrate_decoder_pref(&s.decoder),
             )
             .into(),
         ),
-        RowId::Hdr => (None, "10-bit HDR", extra()),
-        RowId::Chroma444 => (None, "Full chroma (4:4:4)", extra()),
-        RowId::TenBitSdr => (None, "10-bit SDR", extra()),
+        RowId::Hdr => (None, m::player_hdr_enabled(), extra()),
+        RowId::Chroma444 => (None, m::player_enable_444(), extra()),
+        RowId::TenBitSdr => (None, m::player_ten_bit_sdr(), extra()),
         RowId::PresentPriority => (
             None,
-            "Prioritize",
+            m::player_present_priority(),
             label_for(&PRESENT_PRIORITIES, &s.present_priority).into(),
         ),
         RowId::SmoothBuffer => (
             None,
-            "Smoothness buffer",
-            SMOOTH_BUFFERS
-                .iter()
-                .find(|(v, _)| *v == s.smooth_buffer)
-                .map_or("Automatic", |(_, l)| l)
-                .into(),
+            m::player_smooth_buffer(),
+            match s.smooth_buffer {
+                n if n != 0 && SMOOTH_BUFFERS.contains(&n) => {
+                    m::player_smooth_buffer_frames(u64::from(n))
+                }
+                _ => m::player_smooth_buffer_automatic().into(),
+            },
         ),
         RowId::Vsync => (None, "V-Sync", extra()),
-        RowId::AllowVrr => (None, "Follow variable refresh", extra()),
+        RowId::AllowVrr => (None, m::player_allow_vrr(), extra()),
         RowId::Audio => (
             None,
-            "Audio channels",
+            m::player_audio_channels(),
             AUDIO
                 .iter()
                 .find(|(v, _)| *v == s.audio_channels)
-                .map_or("Stereo", |(_, l)| l)
+                .map_or(m::player_audio_channels_2(), |(_, l)| l())
                 .into(),
         ),
         RowId::AudioFormat => (
             None,
-            "Audio quality",
+            m::player_audio_format(),
             audio_format_label(&s.audio_format).into(),
         ),
-        RowId::KeepHostAudio => (None, "Keep host audio playing", extra()),
-        RowId::Mic => (None, "Stream microphone", extra()),
-        RowId::EchoCancel => (None, "Echo cancellation", extra()),
-        RowId::SpatialAudio => (None, "Spatial audio", extra()),
-        RowId::PadForward => (None, "Forward controllers", extra()),
+        RowId::KeepHostAudio => (None, m::player_keep_host_audio(), extra()),
+        RowId::Mic => (None, m::player_mic_enabled(), extra()),
+        RowId::EchoCancel => (None, m::player_echo_cancel(), extra()),
+        RowId::SpatialAudio => (None, m::player_spatial_audio(), extra()),
+        RowId::PadForward => (None, m::player_gamepad_forwarding(), extra()),
         RowId::Pad => (
             None,
-            "Use controller",
+            m::player_forward_pad(),
             if s.forward_pad.is_empty() {
-                "Automatic".into()
+                m::player_forward_pad_auto().into()
             } else {
                 ctx.pads
                     .iter()
                     .find(|p| p.key == s.forward_pad)
-                    .map_or_else(|| "Saved (disconnected)".to_string(), |p| p.name.clone())
+                    .map_or_else(|| m::player_forward_pad_saved().into(), |p| p.name.clone())
             },
         ),
         RowId::PadType => (
             None,
-            "Controller type",
+            m::player_gamepad(),
             label_for(&PAD_TYPES, &s.gamepad).into(),
         ),
         RowId::SystemButtons => (
             None,
-            "Guide button",
+            m::player_system_buttons(),
             label_for(&SYSTEM_BUTTONS, &s.system_buttons).into(),
         ),
         RowId::GuideGesture => (
             None,
-            "Hold Select for guide",
+            m::player_guide_gesture(),
             label_for(&GUIDE_GESTURE, &s.guide_gesture).into(),
         ),
-        RowId::PadRumble => (None, "Controller rumble", extra()),
-        RowId::PadHaptics => (None, "Controller haptics", extra()),
+        RowId::PadRumble => (None, m::player_pad_rumble(), extra()),
+        RowId::PadHaptics => (None, m::player_pad_haptics(), extra()),
         RowId::PadSpeaker => (
             None,
-            "Controller speaker",
+            m::player_pad_speaker(),
             on_off(pad_speaker_on(&s.pad_speaker)).into(),
         ),
-        RowId::Touch => (None, "Touch input", s.touch_mode().label().into()),
-        RowId::Mouse => (None, "Mouse input", s.mouse_mode().label().into()),
-        RowId::InvertScroll => (None, "Invert scroll direction", extra()),
-        RowId::Shortcuts => (None, "Capture system shortcuts", extra()),
-        RowId::FollowOsTheme => (None, "Follow system theme", extra()),
+        RowId::Touch => (None, m::player_touch_mode(), s.touch_mode().label().into()),
+        RowId::Mouse => (None, m::player_mouse_mode(), s.mouse_mode().label().into()),
+        RowId::InvertScroll => (None, m::player_invert_scroll(), extra()),
+        RowId::Shortcuts => (None, m::player_inhibit_shortcuts(), extra()),
+        RowId::FollowOsTheme => (None, m::player_follow_os_theme(), extra()),
         // Label is the reduction, so On means it is in effect.
-        RowId::ReduceMotion => (None, "Reduce motion", extra()),
+        RowId::ReduceMotion => (None, m::player_reduce_motion(), extra()),
         RowId::ReduceUiResolution => (
             None,
-            "Reduce interface resolution",
+            m::player_reduce_ui_resolution(),
             on_off(reduce_ui_res(
                 s,
                 ctx.device.platform,
@@ -1503,69 +1558,77 @@ fn row_spec_base(id: RowId, ctx: &Ctx, presets: &[(String, String)]) -> RowSpec 
         ),
         RowId::LibraryView => (
             None,
-            "Library view",
+            m::player_library_view(),
             crate::library::LibraryView::parse(&s.library_view)
                 .label()
                 .into(),
         ),
-        RowId::StartIn => (None, "Start in", start_in_value(ctx)),
+        RowId::StartIn => (None, m::player_start_in(), start_in_value(ctx)),
         RowId::Stats => (
             None,
-            "Statistics overlay",
+            m::player_stats_verbosity(),
             s.stats_verbosity().label().into(),
         ),
-        RowId::AdvancedStats => (None, "Advanced statistics", extra()),
-        RowId::ShowAdvanced => (None, "Show advanced", extra()),
+        RowId::AdvancedStats => (None, m::player_advanced_stats(), extra()),
+        RowId::ShowAdvanced => (None, m::player_show_advanced(), extra()),
         RowId::StatsSize => (
             None,
-            "Statistics size",
-            format!(
-                "{} %",
-                (punktfunk_core::hud::stats_scale(s.stats_scale_pct) * 100.0).round()
+            m::player_stats_scale_pct(),
+            common::common_percent(
+                (punktfunk_core::hud::stats_scale(s.stats_scale_pct) * 100.0).round(),
             ),
         ),
-        RowId::ExitHint => (None, "Exit hint", extra()),
-        RowId::HostSort => (None, "Host order", extra()),
-        RowId::Screen => (None, "Screen", extra()),
+        RowId::ExitHint => (None, m::player_exit_hint(), extra()),
+        RowId::HostSort => (None, m::player_host_sort(), extra()),
+        RowId::Screen => (None, m::player_screen(), extra()),
         RowId::HostGrouping => (
             None,
-            "Group hosts by",
+            m::player_host_grouping(),
             label_for(&home::HOST_GROUPINGS, host_grouping(s)).into(),
         ),
         RowId::StatsPosition => (
             None,
-            "Statistics position",
+            m::player_hud_placement(),
             s.hud_corner(own_stats_corner(ctx.device.platform))
                 .label()
                 .into(),
         ),
-        RowId::BackgroundKeepAlive => (None, "Keep streaming in background", extra()),
+        RowId::BackgroundKeepAlive => (None, m::player_background_keep_alive(), extra()),
         RowId::BackgroundTimeout => (
             None,
-            "Disconnect after",
-            label_for(&BACKGROUND_TIMEOUTS, &background_timeout(s).to_string()).into(),
+            m::player_background_timeout_minutes(),
+            match background_timeout(s) {
+                n if BACKGROUND_TIMEOUTS.contains(&n) => {
+                    m::player_background_timeout_minutes_count(n)
+                }
+                _ => "\u{2014}".into(),
+            },
         ),
-        RowId::Fullscreen => (None, "Start streams fullscreen", extra()),
+        RowId::Fullscreen => (None, m::player_fullscreen_on_stream(), extra()),
         RowId::FullscreenMode => (
             None,
-            "Fullscreen",
-            FULLSCREEN_MODES[fullscreen_mode(s)].into(),
+            m::player_fullscreen(),
+            FULLSCREEN_MODES[fullscreen_mode(s)]().into(),
         ),
-        RowId::AutoWake => (None, "Auto-wake on connect", extra()),
-        RowId::LowLatency => (None, "Low-latency mode", extra()),
-        RowId::KeepAwake => (None, "Keep screen awake", extra()),
-        RowId::SecondScreen => (None, "Second screen", extra()),
-        RowId::PhoneRumble => (Some("This device"), "Rumble on this phone", extra()),
-        RowId::PhoneGyro => (None, "Gyro from this phone", extra()),
-        RowId::Sc2Passthrough => (None, "Steam Controller 2 passthrough", extra()),
-        RowId::DsCapture => (None, "DualSense over USB", extra()),
-        RowId::AudioRoute => (None, "Audio processing", extra()),
-        RowId::CursorGestures => (None, "Long press to right-click", extra()),
-        RowId::GamepadUi => (None, "Controller-optimized UI", extra()),
+        RowId::AutoWake => (None, m::player_auto_wake(), extra()),
+        RowId::LowLatency => (None, m::player_low_latency(), extra()),
+        RowId::KeepAwake => (None, m::player_keep_awake(), extra()),
+        RowId::SecondScreen => (None, m::player_second_screen(), extra()),
+        RowId::PhoneRumble => (
+            Some(console::console_prefs_header_this_device()),
+            m::player_rumble_on_phone(),
+            extra(),
+        ),
+        RowId::PhoneGyro => (None, m::player_gyro_on_phone(), extra()),
+        RowId::Sc2Passthrough => (None, m::player_sc2_capture(), extra()),
+        RowId::DsCapture => (None, m::player_ds_capture(), extra()),
+        RowId::AudioRoute => (None, m::player_audio_route(), extra()),
+        RowId::CursorGestures => (None, m::player_cursor_gestures(), extra()),
+        RowId::GamepadUi => (None, m::player_gamepad_ui_enabled(), extra()),
         RowId::GamepadUiMode => (
             None,
             // Not "Controller UI": that collides with the row above.
-            "Show it",
+            m::player_gamepad_ui_mode(),
             extra(),
         ),
         RowId::Preset(_)
@@ -1614,296 +1677,131 @@ fn row_enabled(id: RowId, s: &pf_client_core::trust::Settings) -> bool {
     }
 }
 
-/// One-line explainer. Platform so Android is not taught desktop-only chords.
-pub fn detail(id: RowId, ctx: &Ctx) -> &'static str {
+/// One-line explainer. Platform so Android is not taught desktop-only chords. A button or
+/// chord is data filled into its own sentence, after the hint.
+pub fn detail(id: RowId, ctx: &Ctx) -> Cow<'static, str> {
     use crate::platform::Platform;
     let platform = ctx.device.platform;
+    let two = |hint: &str, more: String| -> Cow<'static, str> { format!("{hint} {more}").into() };
     match id {
-        RowId::Resolution => {
-            "The host creates a virtual display at exactly this size — no scaling. \
-             Y types any size."
-        }
-        RowId::Aspect => {
-            "Which shapes the Resolution row offers. Picking one moves to its size \
-             nearest the current height."
-        }
-        RowId::Refresh => "Native follows the display this window is on.",
-        RowId::RenderScale => {
-            "The host renders larger or smaller than the stream mode and this window \
-             resamples — above 1× supersamples, below saves bandwidth. Any percent from 50 \
-             to 400 can be typed."
-        }
-        RowId::VideoFit => {
-            "When the stream's shape differs from this window. Fit shows the whole picture \
-             with black bars, Crop to fill cuts the edges off, Stretch to fill distorts it."
-        }
-        RowId::Screens if platform == Platform::Apple => {
-            "All monitors shows one host screen on each of this Mac's monitors, laid out as \
-             they sit. The extra monitors stay covered until the session ends."
-        }
-        RowId::Screens => {
-            "All monitors opens a window on each of this computer's monitors, one host screen \
-             each, laid out as they sit. Close a window to give its monitor back."
-        }
-        RowId::PyroWaveQuality => "Higher is sharper and needs a faster wired link.",
-        RowId::Bitrate if pyrowave_rate(ctx) => pf_client_core::settings::PYROWAVE_BITRATE_HINT,
-        RowId::Bitrate => {
-            "Automatic adapts to the network as you play. Press to type a fixed rate, up to \
-             2 Gbps."
-        }
-        RowId::Compositor => {
-            "Which compositor drives the virtual output — honored only if available on the host."
-        }
+        RowId::Resolution => two(
+            m::player_resolution_hint(),
+            console::console_resolution_type_hint("Y"),
+        ),
+        RowId::Aspect => m::player_resolution_aspect_hint().into(),
+        RowId::Refresh => m::player_refresh_hz_hint().into(),
+        RowId::RenderScale => m::player_render_scale_hint().into(),
+        RowId::VideoFit => m::player_video_fit_hint().into(),
+        RowId::Screens => m::player_screens_hint().into(),
+        RowId::PyroWaveQuality => m::player_pyrowave_bpp_hint().into(),
+        RowId::Bitrate if pyrowave_rate(ctx) => m::player_bitrate_kbps_pyrowave_hint().into(),
+        RowId::Bitrate => m::player_bitrate_kbps_hint().into(),
+        RowId::Compositor => m::player_compositor_hint().into(),
         RowId::Codec if ctx.settings.codec == "pyrowave" && !ctx.device.pyrowave_ok => {
-            "This device can't decode PyroWave — it needs a Vulkan 1.3 GPU, which most TV \
-             boxes don't have. The session streams HEVC instead."
+            m::player_codec_pyrowave_unsupported_hint().into()
         }
         RowId::Codec if ctx.settings.codec == "av1" && !ctx.device.av1_ok => {
-            "This device has no hardware AV1 decoder, so the client never asks for AV1 — \
-             the session streams HEVC instead."
+            m::player_codec_av1_unsupported_hint().into()
         }
-        RowId::Codec => "A preference — the host falls back if it can't encode this one.",
-        RowId::Decoder => "Automatic picks the best hardware decoder for this GPU, then software.",
-        RowId::Hdr => {
-            "HDR10 — engages when the host sends HDR content and this display supports it."
-        }
-        RowId::Chroma444 => {
-            "Full-colour video: crisp small text and thin lines, at more bandwidth. \
-             Needs an NVIDIA host (NVENC) or the PyroWave codec — other encoders \
-             stream 4:2:0 and the session falls back silently."
-        }
-        RowId::TenBitSdr => {
-            "Smoother gradients without HDR — the picture is encoded at 10-bit \
-             precision. Needs an NVIDIA or AMD host, or Intel on Linux; HDR takes over \
-             when it engages."
-        }
-        RowId::PresentPriority => {
-            "Lowest latency shows each frame the moment the display can take it — a \
-             network hiccup becomes an occasional repeated or skipped frame. Smoothness \
-             buffers a little to even those out."
-        }
-        RowId::SmoothBuffer => {
-            "Frames held back before showing. Each one absorbs about a refresh of network \
-             hiccup and adds a refresh of delay. Automatic holds two."
-        }
-        RowId::Vsync => {
-            "Tear-free. Off removes the wait for the screen's refresh — the lowest \
-             possible delay, at the cost of visible tearing. Not every driver offers it; \
-             the stats overlay names the mode actually in use."
-        }
-        RowId::AllowVrr => {
-            "On a VRR screen, let the panel refresh in step with the stream instead of on \
-             a fixed cadence. Applies to fullscreen sessions; harmless on a fixed screen."
-        }
-        RowId::Audio => "The speaker layout requested from the host.",
-        RowId::AudioFormat => {
-            "Bit-exact PCM instead of Opus — 2.3 Mb/s at 48 kHz, 4.6 at 96, off the top of the \
-             link. The host has its own switch and stays on Opus if it can't deliver the rate; \
-             the stats overlay names what the session got. Stereo only."
-        }
-        RowId::KeepHostAudio => {
-            "The host's own speakers or headphones keep playing while you stream. \
-             Both ends hear the same audio; needs a host on 0.32 or newer."
-        }
-        RowId::Mic => {
-            "Send this device's microphone to the host's virtual mic. \
-             Ctrl+Alt+Shift+V mutes and unmutes it while streaming."
-        }
-        RowId::EchoCancel => {
-            "Stops the host's audio, playing from this device's speakers, being picked up \
-             and sent back. Turn it off if your microphone already runs its own processing."
-        }
-        RowId::Screen => "Where the picture shows: this window, or a curved screen.",
-        RowId::SpatialAudio => {
-            "On, the sound comes from the window. Off plays the game's own mix straight to \
-             your ears."
-        }
-        RowId::PadForward => {
-            "Send controllers connected to this device to the host. Turn it off when your \
-             controller already reaches the host another way — USB passthrough such as \
-             VirtualHere, or a pad plugged into the host — so games don't see two of them."
-        }
-        RowId::Pad => "Which pad is forwarded to the host, as player 1.",
-        RowId::PadType => {
-            "The virtual pad the host creates — Automatic matches this controller. A host's \
-             preset can pin another; the row says so."
-        }
-        RowId::SystemButtons => {
-            "Where the guide (Xbox/PS/Steam) and quick-access presses go. Automatic \
-             sends them to the host except in Gaming Mode, where Steam on this device \
-             reacts to the same press and both overlays would open at once."
-        }
-        RowId::GuideGesture => {
-            "Hold Select on its own to press the host's guide button — keep holding for \
-             the host's quick-access menu. Automatic arms it only where the real button \
-             can't reach the host. A Select tap still goes through, slightly delayed."
-        }
-        RowId::PadRumble => {
-            "Off, controllers don't vibrate from the stream or in the menus, whatever the game sends."
-        }
-        RowId::PadHaptics => {
-            "Play a DualSense's fine-grained haptics on the pad itself instead of plain \
-             rumble. Negotiated — it changes nothing without a capable host and a wired pad."
-        }
-        RowId::PadSpeaker => {
-            "Play the audio a game sends to the controller's own speaker on the pad, \
-             not through this device's output."
-        }
-        RowId::Touch => {
-            "How the touchscreen drives the host: Trackpad (relative cursor), \
-             Direct pointer (cursor jumps to your finger), or Touch passthrough (raw contacts)."
-        }
+        RowId::Codec => m::player_codec_hint().into(),
+        RowId::Decoder => m::player_decoder_hint().into(),
+        RowId::Hdr => m::player_hdr_enabled_hint().into(),
+        RowId::Chroma444 => m::player_enable_444_hint().into(),
+        RowId::TenBitSdr => m::player_ten_bit_sdr_hint().into(),
+        RowId::PresentPriority => m::player_present_priority_hint().into(),
+        RowId::SmoothBuffer => m::player_smooth_buffer_hint().into(),
+        RowId::Vsync => m::player_vsync_hint().into(),
+        RowId::AllowVrr => m::player_allow_vrr_hint().into(),
+        RowId::Audio => m::player_audio_channels_hint().into(),
+        RowId::AudioFormat => m::player_audio_format_hint().into(),
+        RowId::KeepHostAudio => m::player_keep_host_audio_hint().into(),
+        RowId::Mic => two(
+            m::player_mic_enabled_hint(),
+            m::player_mic_enabled_keys_hint("Ctrl+Alt+Shift+V"),
+        ),
+        RowId::EchoCancel => m::player_echo_cancel_hint().into(),
+        RowId::Screen => m::player_screen_hint().into(),
+        RowId::SpatialAudio => m::player_spatial_audio_hint().into(),
+        RowId::PadForward => m::player_gamepad_forwarding_hint().into(),
+        RowId::Pad => m::player_forward_pad_hint().into(),
+        RowId::PadType => m::player_gamepad_hint().into(),
+        RowId::SystemButtons => m::player_system_buttons_hint().into(),
+        RowId::GuideGesture => m::player_guide_gesture_hint("Select").into(),
+        RowId::PadRumble => m::player_pad_rumble_hint().into(),
+        RowId::PadHaptics => m::player_pad_haptics_hint().into(),
+        RowId::PadSpeaker => m::player_pad_speaker_hint().into(),
+        RowId::Touch => m::player_touch_mode_hint().into(),
         RowId::Mouse => match platform {
-            Platform::Desktop => {
-                "How a physical mouse drives the host: Capture locks the pointer (relative, \
-                 for games), Desktop leaves it free and sends absolute positions. \
-                 Ctrl+Alt+Shift+M switches live while streaming."
-            }
+            Platform::Desktop => two(
+                m::player_mouse_mode_hint(),
+                m::player_mouse_mode_keys_hint("Ctrl+Alt+Shift+M"),
+            ),
             // No live chord to name: none of these hosts binds one.
             Platform::Android
             | Platform::WebOS
             | Platform::Web
             | Platform::Apple
             | Platform::Tizen
-            | Platform::Ps5 => {
-                "How a physical mouse drives the host: Capture locks the pointer (relative, \
-                 for games), Desktop leaves it free and sends absolute positions."
-            }
+            | Platform::Ps5 => m::player_mouse_mode_hint().into(),
         },
-        RowId::InvertScroll => "Reverses the wheel and trackpad scroll direction sent to the host.",
-        RowId::QuickActions => {
-            "The ring a two-finger twist or Select+A opens in a stream: what its six buttons \
-             hold, and the shortcut chords they can send. Edited on the ring itself."
-        }
-        RowId::Shortcuts => {
-            "Alt+Tab, Super and friends reach the host while input is captured. \
-             Off, they act on this device instead."
-        }
-        RowId::FollowOsTheme => {
-            "The console wears your desktop's theme — background, text and accent — and \
-             follows a theme switch live. Off, the Background row below picks the look."
-        }
-        RowId::Palette => {
-            "The colour family this backdrop drifts through. Appearance only; nothing \
-             about a stream depends on it."
-        }
-        RowId::ReduceMotion => {
-            "Freezes the backdrop and replaces the console's slides and pops with plain \
-             fades. Also the gentler choice on an OLED, where a still field can sit for \
-             hours."
-        }
+        RowId::InvertScroll => m::player_invert_scroll_hint().into(),
+        RowId::QuickActions => console::console_player_overlay_actions_hint("Select+A").into(),
+        RowId::Shortcuts => m::player_inhibit_shortcuts_hint("Alt+Tab, Super, \u{2026}").into(),
+        RowId::FollowOsTheme => m::player_follow_os_theme_hint().into(),
+        RowId::Palette => m::player_ui_palette_hint().into(),
+        RowId::ReduceMotion => m::player_reduce_motion_hint().into(),
         RowId::ReduceUiResolution => match platform {
-            Platform::WebOS => {
-                "Draws the animated backdrop small and steps it slower, so the console \
-                 stays smooth on this TV's graphics chip. Nothing about a stream changes \
-                 — this is the interface only."
-            }
-            _ => {
-                "Draws the menus at 1080p — the backdrop cheaper, too — and lets the \
-                 display scale them up. Text goes a little softer; the console gets much \
-                 smoother on a 4K TV or projector, whose graphics chip is far slower than \
-                 the panel in front of it. Nothing about a stream changes — this is the \
-                 interface only."
-            }
+            Platform::WebOS => console::console_reduce_ui_resolution_webos_hint().into(),
+            _ => m::player_reduce_ui_resolution_hint().into(),
         },
-        RowId::LibraryView => {
-            "Shelf shows one cover at a time, big. Grid shows about eighteen at once — \
-             for when you already know what you are looking for. The library's own bar \
-             switches it while you browse, along with the sort."
-        }
-        RowId::StartIn => {
-            "Where this app opens. Library lands on your host's shelf, Stream goes \
-             straight to its desktop, and Back leaves either one on the host list. \
-             With one paired host that host is the default; with several, pick one \
-             from its Options menu."
-        }
+        RowId::LibraryView => m::player_library_view_hint().into(),
+        RowId::StartIn => m::player_start_in_hint().into(),
         RowId::Stats => match platform {
-            Platform::Desktop => {
-                "How much the overlay shows: Compact (one line) → Normal → Detailed. \
-                 Ctrl+Alt+Shift+S cycles it live while streaming."
-            }
+            Platform::Desktop => two(
+                m::player_stats_verbosity_hint(),
+                m::player_stats_verbosity_cycle_hint("Ctrl+Alt+Shift+S"),
+            ),
             Platform::Android
             | Platform::WebOS
             | Platform::Web
             | Platform::Apple
             | Platform::Tizen
-            | Platform::Ps5 => {
-                "How much the overlay shows: Compact (one line) → Normal → Detailed."
-            }
+            | Platform::Ps5 => m::player_stats_verbosity_hint().into(),
         },
-        RowId::AdvancedStats => {
-            "Off shows the figures Moonlight's overlay also shows. On shows capture to glass as \
-             p50/p95 and every stage between. Every number: docs.punktfunk.unom.io/docs/stats"
-        }
-        RowId::Fullscreen => "Streams open fullscreen instead of windowed.",
+        RowId::AdvancedStats => two(
+            m::player_advanced_stats_hint(),
+            m::player_advanced_stats_docs_hint("docs.punktfunk.unom.io/docs/stats"),
+        ),
+        RowId::Fullscreen => m::player_fullscreen_on_stream_hint().into(),
         RowId::FullscreenMode => match fullscreen_mode(ctx.settings) {
-            0 => "Streams stay in a window.",
-            1 => "Streams go fullscreen. The host list returns to a window.",
-            _ => "Punktfunk opens fullscreen and stays fullscreen between streams.",
+            0 => m::player_fullscreen_off_hint().into(),
+            1 => m::player_fullscreen_stream_hint().into(),
+            _ => m::player_fullscreen_always_hint().into(),
         },
-        RowId::StatsPosition => "Which corner the statistics overlay sits in.",
-        RowId::StatsSize => "The size of the statistics overlay, on top of your display's scaling.",
-        RowId::ExitHint => "Shows how to leave for a few seconds when a stream starts.",
-        RowId::ShowAdvanced => "Adds the settings most players never need to change.",
-        RowId::AdvancedChanged => "Some hidden settings differ from a fresh install. A shows them.",
-        RowId::HostSort => {
-            "The order of the host row: as you added them, by name, or most \
-             recently connected first."
-        }
-        RowId::HostGrouping => {
-            "Split the host row into bands, each named over its first \
-             card: by the preset a card connects with, or online before offline."
-        }
-        RowId::BackgroundKeepAlive => {
-            "Audio and the connection stay live when you switch away; video pauses."
-        }
+        RowId::StatsPosition => m::player_hud_placement_hint().into(),
+        RowId::StatsSize => m::player_stats_scale_pct_hint().into(),
+        RowId::ExitHint => m::player_exit_hint_hint().into(),
+        RowId::ShowAdvanced => m::player_show_advanced_hint().into(),
+        RowId::AdvancedChanged => console::console_prefs_advanced_changed_hint("A").into(),
+        RowId::HostSort => m::player_host_sort_hint().into(),
+        RowId::HostGrouping => m::player_host_grouping_hint().into(),
+        RowId::BackgroundKeepAlive => m::player_background_keep_alive_hint().into(),
         RowId::BackgroundTimeout if ctx.device.tv => {
-            "Ends a session left in the background after this long."
+            m::player_background_timeout_minutes_tv_hint().into()
         }
-        RowId::BackgroundTimeout => "Ends a backgrounded session so it can't run down the battery.",
-        RowId::AutoWake => {
-            "Send Wake-on-LAN to a sleeping host before connecting. Turn off for hosts \
-             reached over a VPN, where the wake wait only adds delay."
-        }
-        RowId::LowLatency => {
-            "Feeds the decoder slice by slice as frames arrive and marks the media sockets \
-             for priority. Off if a decoder shows artefacts under it."
-        }
-        RowId::KeepAwake => {
-            "Off, a stream keeps the screen awake only while you play. Left alone for five \
-             minutes, it lets this device's own screen saver or sleep take over."
-        }
-        RowId::SecondScreen => {
-            "A smaller second screen — a dual-screen handheld's lower panel, a foldable half \
-             open — shows the companion panel, or the picture with Screens. Off leaves it to \
-             the system: for a phone on a TV."
-        }
-        RowId::PhoneRumble => {
-            "Also play controller 1's rumble on this phone's own motor — for a clip-on pad \
-             with no motor. Costs battery."
-        }
-        RowId::PhoneGyro => {
-            "Send this phone's motion as controller 1's gyro when that pad has none of its \
-             own — the on-screen pad included. Only games that read gyro notice."
-        }
-        RowId::Sc2Passthrough => {
-            "Capture the Steam Controller 2 directly (touchpads, gyro, paddles) instead of \
-             the generic pad Android shows. Needs the Bluetooth or USB grant."
-        }
-        RowId::DsCapture => {
-            "Capture a wired DualSense directly (touchpad, motion, adaptive triggers). \
-             Needs the USB grant when the pad is plugged in."
-        }
+        RowId::BackgroundTimeout => m::player_background_timeout_minutes_hint().into(),
+        RowId::AutoWake => m::player_auto_wake_hint().into(),
+        RowId::LowLatency => m::player_low_latency_hint().into(),
+        RowId::KeepAwake => m::player_keep_awake_hint().into(),
+        RowId::SecondScreen => m::player_second_screen_hint().into(),
+        RowId::PhoneRumble => m::player_rumble_on_phone_hint().into(),
+        RowId::PhoneGyro => m::player_gyro_on_phone_hint().into(),
+        RowId::Sc2Passthrough => m::player_sc2_capture_hint().into(),
+        RowId::DsCapture => m::player_ds_capture_hint().into(),
+        RowId::AudioRoute => m::player_audio_route_hint().into(),
+        RowId::CursorGestures => m::player_cursor_gestures_hint("OK").into(),
         // The other UI is named, not called "the other UI": the sentence has to tell
         // the reader where "off" lands, and that is a different place per client.
-        RowId::AudioRoute => {
-            "Where the stream's audio is decoded. Offload hands the TV's own plane the Opus \
-             stream and spends no CPU on it — stereo only, and not every set plays it."
-        }
-        RowId::CursorGestures => {
-            "Hold OK to send a right click, for a remote with no second button. Off, OK stays \
-             the plain immediate left click."
-        }
         RowId::GamepadUi => match platform {
             // `row_on` offers this to Android, webOS and Apple; Desktop, Web, Tizen and PS5 are
             // here for exhaustiveness, never to be read.
@@ -1912,14 +1810,8 @@ pub fn detail(id: RowId, ctx: &Ctx) -> &'static str {
             | Platform::Web
             | Platform::Apple
             | Platform::Tizen
-            | Platform::Ps5 => {
-                "Front the app with this console instead of the touch interface. Off returns \
-                 to the touch home immediately — switch it back on there."
-            }
-            Platform::WebOS => {
-                "Front the app with this console instead of the cursor UI. Off returns to \
-                 the cursor UI immediately — switch it back on there."
-            }
+            | Platform::Ps5 => console::console_gamepad_ui_enabled_hint().into(),
+            Platform::WebOS => console::console_gamepad_ui_enabled_webos_hint().into(),
         },
         RowId::GamepadUiMode => match platform {
             Platform::Desktop
@@ -1927,66 +1819,50 @@ pub fn detail(id: RowId, ctx: &Ctx) -> &'static str {
             | Platform::Web
             | Platform::Apple
             | Platform::Tizen
-            | Platform::Ps5 => {
-                "When this console fronts the app: whenever a controller is attached, or \
-                 always — for a device that lives docked to a TV. The switch above turns it \
-                 off altogether."
-            }
-            Platform::WebOS => {
-                "When this console fronts the app: whenever a controller is connected, or \
-                 always. Without one the remote gets the cursor UI, which it points at. \
-                 The switch above turns it off altogether."
-            }
+            | Platform::Ps5 => console::console_gamepad_ui_mode_hint().into(),
+            Platform::WebOS => console::console_gamepad_ui_mode_webos_hint().into(),
         },
-        RowId::Controllers => "The controllers connected here, their grants and a rumble test.",
-        RowId::StreamControls => {
-            "The keys, controller chords and gestures that work while you stream."
-        }
-        RowId::Licenses => "The open-source licences this app ships under.",
-        RowId::LibrarySections => "Which sections the Games tab shows, and in what order.",
-        RowId::Version => "This console's build.",
-        RowId::Preset(_) => {
-            "Its settings, its name, and the hosts it is pinned to: pinned, it appears as \
-             its own card, and one press connects with these settings."
-        }
-        RowId::NewPreset => {
-            "A preset bundles stream settings for one use, a low-latency one or a quality \
-             one, over the settings here. Pin it to a host as a one-press card."
-        }
+        RowId::Controllers => console::console_prefs_controllers_hint().into(),
+        RowId::StreamControls => m::about_stream_controls_hint().into(),
+        RowId::Licenses => m::about_licenses_hint().into(),
+        RowId::LibrarySections => m::player_library_sections_hint().into(),
+        RowId::Version => console::console_about_version_hint().into(),
+        RowId::Preset(_) => console::console_preset_row_hint().into(),
+        RowId::NewPreset => console::console_preset_new_hint().into(),
     }
 }
 
-/// Mbps below 1 Gbps, Gbps above. Decimal only when rounding would collide
-/// (12.5 Mbps, 1.5 Gbps). Off-ladder rates are real (typed field, desktop spinner).
+/// Mbit/s below 1 Gbit/s, Gbit/s above. Decimal only when rounding would collide
+/// (12.5 Mbit/s, 1.5 Gbit/s). Off-ladder rates are real (typed field, desktop spinner).
 pub(super) fn bitrate_label(kbps: u32) -> String {
-    let unit = |v: f64, suffix: &str| {
+    let number = |v: f64| {
         if (v - v.round()).abs() < 0.05 {
-            format!("{} {suffix}", v.round())
+            format!("{}", v.round())
         } else {
-            format!("{v:.1} {suffix}")
+            format!("{v:.1}")
         }
     };
     let mbps = f64::from(kbps) / 1000.0;
     if kbps >= 1_000_000 {
-        unit(mbps / 1000.0, "Gbps")
+        common::common_gbits(number(mbps / 1000.0))
     } else {
-        unit(mbps, "Mbps")
+        common::common_mbits(number(mbps))
     }
 }
 
 fn on_off(v: bool) -> &'static str {
     if v {
-        "On"
+        common::common_on()
     } else {
-        "Off"
+        common::common_off()
     }
 }
 
-fn label_for<'a>(options: &'a [(&str, &'a str)], value: &str) -> &'a str {
+fn label_for(options: &[(&str, Label)], value: &str) -> &'static str {
     options
         .iter()
         .find(|(v, _)| *v == value)
-        .map_or("—", |(_, l)| l)
+        .map_or("—", |(_, l)| l())
 }
 
 /// Label for a stored `audio_format`. Unknown → Opus (what the session runs), not
@@ -1996,7 +1872,7 @@ fn audio_format_label(value: &str) -> &'static str {
         .iter()
         .find(|(v, _)| *v == value)
         .or_else(|| AUDIO_FORMATS.iter().find(|(v, _)| *v == AUDIO_FORMAT_OPUS))
-        .map_or("", |(_, l)| *l)
+        .map_or("", |(_, l)| l())
 }
 
 /// Step (`wrap=false`, clamp; `None` = boundary) or cycle (`wrap=true`).
@@ -2130,11 +2006,9 @@ pub fn adjust(id: RowId, delta: i32, wrap: bool, ctx: &mut Ctx) -> bool {
         // writer flipped intent between list-build and this keypress: thud, don't store.
         RowId::SmoothBuffer => {
             if s.present_priority == "smooth" {
-                let cur = SMOOTH_BUFFERS
-                    .iter()
-                    .position(|(v, _)| *v == s.smooth_buffer);
+                let cur = SMOOTH_BUFFERS.iter().position(|v| *v == s.smooth_buffer);
                 step_option(cur, SMOOTH_BUFFERS.len(), delta, wrap)
-                    .map(|i| s.smooth_buffer = SMOOTH_BUFFERS[i].0)
+                    .map(|i| s.smooth_buffer = SMOOTH_BUFFERS[i])
             } else {
                 None
             }
@@ -2255,11 +2129,12 @@ pub fn adjust(id: RowId, delta: i32, wrap: bool, ctx: &mut Ctx) -> bool {
                 .map(|i| s.stats_scale_pct = STATS_SCALE_PCTS[i])
         }
         RowId::BackgroundTimeout => {
-            let mut v = background_timeout(s).to_string();
-            step_str(&BACKGROUND_TIMEOUTS, &mut v, delta, wrap).map(|()| {
-                let minutes: u64 = v.parse().unwrap_or(BACKGROUND_TIMEOUT_DEFAULT);
-                s.extra
-                    .insert(BACKGROUND_TIMEOUT_KEY.to_string(), minutes.into());
+            let cur = (BACKGROUND_TIMEOUTS.iter()).position(|m| *m == background_timeout(s));
+            step_option(cur, BACKGROUND_TIMEOUTS.len(), delta, wrap).map(|i| {
+                s.extra.insert(
+                    BACKGROUND_TIMEOUT_KEY.to_string(),
+                    BACKGROUND_TIMEOUTS[i].into(),
+                );
             })
         }
         RowId::HostGrouping => {
@@ -2307,7 +2182,7 @@ pub(super) fn step_option(
     }
 }
 
-fn step_str(options: &[(&str, &str)], value: &mut String, delta: i32, wrap: bool) -> Option<()> {
+fn step_str<L>(options: &[(&str, L)], value: &mut String, delta: i32, wrap: bool) -> Option<()> {
     let cur = options.iter().position(|(v, _)| v == value);
     step_option(cur, options.len(), delta, wrap).map(|i| *value = options[i].0.to_string())
 }
@@ -2319,5 +2194,122 @@ pub(super) fn toggle(value: &mut bool, delta: i32, wrap: bool) -> Option<()> {
     } else {
         *value = target;
         Some(())
+    }
+}
+
+/// The stored value of each entry of a list row, in the order the row steps through them; the
+/// catalogue test pins these. `None` for a row that is not a list.
+#[cfg(test)]
+pub(super) fn stored_options(
+    id: RowId,
+    platform: crate::platform::Platform,
+) -> Option<Vec<String>> {
+    fn ids<L>(table: &[(&str, L)]) -> Vec<String> {
+        table.iter().map(|(v, _)| v.to_string()).collect()
+    }
+    Some(match id {
+        RowId::StartIn => (start::StartIn::ALL.iter())
+            .map(|v| v.as_str().into())
+            .collect(),
+        RowId::Stats => (StatsVerbosity::ALL.iter())
+            .map(|v| format!("{v:?}").to_lowercase())
+            .collect(),
+        RowId::GamepadUiMode => ids(&GAMEPAD_UI_MODES),
+        RowId::LibraryView => (crate::library::LibraryView::ALL.iter())
+            .map(|v| v.id().into())
+            .collect(),
+        RowId::HostSort => ids(&home::HOST_SORTS),
+        RowId::HostGrouping => ids(&home::HOST_GROUPINGS),
+        RowId::StatsPosition => HudCorner::ALL.iter().map(|c| c.as_name().into()).collect(),
+        RowId::StatsSize => (punktfunk_core::hud::STATS_SCALE_PCTS.iter())
+            .map(|p| p.to_string())
+            .collect(),
+        RowId::BackgroundTimeout => BACKGROUND_TIMEOUTS.iter().map(|m| m.to_string()).collect(),
+        RowId::Refresh => REFRESH.iter().map(|hz| hz.to_string()).collect(),
+        RowId::RenderScale => RENDER_SCALES.iter().map(|x| x.to_string()).collect(),
+        RowId::VideoFit => ids(&VIDEO_FITS),
+        RowId::Screens => ids(&MONITORS),
+        RowId::PresentPriority => ids(&PRESENT_PRIORITIES),
+        RowId::SmoothBuffer => SMOOTH_BUFFERS.iter().map(|n| n.to_string()).collect(),
+        RowId::Codec => ids(codecs(platform)),
+        RowId::Decoder => ids(&DECODERS),
+        RowId::Compositor => ids(&COMPOSITORS),
+        RowId::Screen => ids(&SCREENS),
+        RowId::Audio => AUDIO.iter().map(|(n, _)| n.to_string()).collect(),
+        RowId::AudioFormat => ids(AUDIO_FORMATS),
+        RowId::AudioRoute => ids(&WEBOS_AUDIO_ROUTES),
+        RowId::Touch => TouchMode::ALL.iter().map(|m| m.as_name().into()).collect(),
+        RowId::Mouse => MouseMode::ALL.iter().map(|m| m.as_name().into()).collect(),
+        RowId::PadType => ids(&pad_types(platform)),
+        RowId::SystemButtons => ids(&SYSTEM_BUTTONS),
+        RowId::GuideGesture => ids(&GUIDE_GESTURE),
+        _ => return None,
+    })
+}
+
+/// What a fresh install on `device` stores for a row, spelled as the catalogue spells a
+/// default: `true` or `false` for a switch, the digits of a number. `None` for a row with no
+/// one value.
+#[cfg(test)]
+pub(super) fn stored_default(id: RowId, device: &crate::screens::Device) -> Option<String> {
+    use serde_json::Value;
+    let s = fresh_settings(device);
+    if let Some(extra) = id.extra() {
+        return Some(match extra {
+            Extra::Bool(key, default) => extra_bool(&s, key, default).to_string(),
+            Extra::Flag(get, _) => get(&s).to_string(),
+            Extra::Choice(key, default, _) => extra_str(&s, key, default).to_string(),
+        });
+    }
+    let json = serde_json::to_value(&s).ok()?;
+    let field = |key: &str| match &json[key] {
+        Value::Bool(b) => Some(b.to_string()),
+        Value::Number(n) => n.as_f64().map(|n| n.to_string()),
+        Value::String(t) => Some(t.clone()),
+        _ => None,
+    };
+    match id {
+        RowId::Refresh => field("refresh_hz"),
+        RowId::Bitrate => field("bitrate_kbps"),
+        RowId::PyroWaveQuality => field("pyrowave_bpp"),
+        RowId::RenderScale => field("render_scale"),
+        RowId::VideoFit => field("video_fit"),
+        RowId::Screens => field("screens"),
+        RowId::Compositor => field("compositor"),
+        RowId::Codec => field("codec"),
+        RowId::Decoder => field("decoder"),
+        RowId::PresentPriority => field("present_priority"),
+        RowId::SmoothBuffer => field("smooth_buffer"),
+        RowId::Audio => field("audio_channels"),
+        RowId::AudioFormat => field("audio_format"),
+        RowId::PadType => field("gamepad"),
+        RowId::SystemButtons => field("system_buttons"),
+        RowId::GuideGesture => field("guide_gesture"),
+        RowId::Touch => field("touch_mode"),
+        RowId::Mouse => field("mouse_mode"),
+        RowId::Palette => field("ui_palette"),
+        RowId::PadSpeaker => Some(pad_speaker_on(&s.pad_speaker).to_string()),
+        RowId::Stats => Some(format!("{:?}", s.stats_verbosity()).to_lowercase()),
+        RowId::StartIn => Some(start::StartIn::parse(&s.start_in).as_str().into()),
+        RowId::LibraryView => Some(
+            crate::library::LibraryView::parse(&s.library_view)
+                .id()
+                .into(),
+        ),
+        RowId::HostGrouping => Some(host_grouping(&s).into()),
+        RowId::BackgroundTimeout => Some(background_timeout(&s).to_string()),
+        RowId::StatsSize => {
+            let pct = punktfunk_core::hud::stats_scale(s.stats_scale_pct) * 100.0;
+            Some(pct.round().to_string())
+        }
+        RowId::StatsPosition => Some(
+            (s.hud_corner(own_stats_corner(device.platform)))
+                .as_name()
+                .into(),
+        ),
+        RowId::ReduceUiResolution => {
+            Some(reduce_ui_res(&s, device.platform, device.fallback_ui).to_string())
+        }
+        _ => None,
     }
 }

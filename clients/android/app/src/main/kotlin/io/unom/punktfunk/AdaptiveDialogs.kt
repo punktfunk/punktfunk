@@ -13,10 +13,11 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.DialogProperties
+import io.unom.punktfunk.kit.R
 import io.unom.punktfunk.models.PendingLinkConnect
 import io.unom.punktfunk.models.PendingTrust
 
@@ -90,20 +91,19 @@ fun TrustNewHostPrompt(
     onDismiss: () -> Unit,
 ) {
     PunktfunkDialog(
-        title = "Trust this host?",
+        title = stringResource(R.string.trust_title),
         onDismiss = onDismiss,
         actions = listOf(
-            DialogAction("Trust (TOFU)", primary = true, onClick = onTrust),
-            DialogAction("Pair with PIN…", onClick = onPairInstead),
-            DialogAction("Cancel", onClick = onDismiss),
+            DialogAction(stringResource(R.string.trust_accept), primary = true, onClick = onTrust),
+            DialogAction(stringResource(R.string.pair_use_pin), onClick = onPairInstead),
+            DialogAction(stringResource(R.string.common_cancel), onClick = onDismiss),
         ),
     ) {
-        PromptText("First connection to ${pt.host}:${pt.port}.")
-        pt.advertisedFp?.let { PromptText("Fingerprint ${it.take(16)}…") }
-        PromptText(
-            "This host allows trust-on-first-use, but that can't tell an impostor from the real " +
-                "host. Pairing with a PIN is stronger — it proves both sides.",
-        )
+        PromptText(stringResource(R.string.trust_first_connection, "${pt.host}:${pt.port}"))
+        pt.advertisedFp?.let {
+            PromptText(stringResource(R.string.android_trust_fingerprint, it.take(16)))
+        }
+        PromptText(stringResource(R.string.trust_explain))
     }
 }
 
@@ -115,18 +115,14 @@ fun FingerprintChangedPrompt(
     onDismiss: () -> Unit,
 ) {
     PunktfunkDialog(
-        title = "A different host answered",
+        title = stringResource(R.string.trust_mismatch_title),
         onDismiss = onDismiss,
         actions = listOf(
-            DialogAction("Pair", primary = true, onClick = onRepair),
-            DialogAction("Cancel", onClick = onDismiss),
+            DialogAction(stringResource(R.string.pair_action), primary = true, onClick = onRepair),
+            DialogAction(stringResource(R.string.common_cancel), onClick = onDismiss),
         ),
     ) {
-        PromptText(
-            "${pt.host} didn't present the identity saved for it. It may be another operating " +
-                "system on the same PC, a reinstall, or an impostor. Pair with the host's PIN to " +
-                "add it.",
-        )
+        PromptText(stringResource(R.string.android_trust_mismatch_body, pt.host))
     }
 }
 
@@ -143,19 +139,16 @@ fun RequestAccessPrompt(
     onDismiss: () -> Unit,
 ) {
     PunktfunkDialog(
-        title = "Pairing required",
+        title = stringResource(R.string.pair_required_title),
         onDismiss = onDismiss,
         actions = listOf(
-            DialogAction("Request access", primary = true, onClick = onRequestAccess),
-            DialogAction("Use a PIN…", onClick = onUsePin),
-            DialogAction("Cancel", onClick = onDismiss),
+            DialogAction(stringResource(R.string.pair_request_access), primary = true, onClick = onRequestAccess),
+            DialogAction(stringResource(R.string.pair_use_pin), onClick = onUsePin),
+            DialogAction(stringResource(R.string.common_cancel), onClick = onDismiss),
         ),
     ) {
-        PromptText("${pt.host}:${pt.port} requires pairing before it will stream.")
-        PromptText(
-            "Request access and approve this device in the host's console (or web UI) — no PIN " +
-                "needed. Or pair with the 4-digit PIN the host displays.",
-        )
+        PromptText(stringResource(R.string.pair_required_body, pt.host))
+        PromptText(stringResource(R.string.pair_intro))
     }
 }
 
@@ -172,20 +165,16 @@ fun LinkConnectPrompt(
     onDismiss: () -> Unit,
 ) {
     PunktfunkDialog(
-        title = "Open this link?",
+        title = stringResource(R.string.link_confirm_title),
         onDismiss = onDismiss,
         actions = listOf(
-            DialogAction("Connect", primary = true, onClick = onConnect),
-            DialogAction("Cancel", onClick = onDismiss),
+            DialogAction(stringResource(R.string.common_connect), primary = true, onClick = onConnect),
+            DialogAction(stringResource(R.string.common_cancel), onClick = onDismiss),
         ),
     ) {
-        PromptText("A link asks to connect to ${target.host.name} (${target.host.address}).")
-        target.launch?.let { PromptText("It also asks the host to launch “$it”.") }
-        PromptText(
-            "It names the host by its label or address, which anything that can open a link " +
-                "could guess. Shortcuts made in Punktfunk name the host's id and connect " +
-                "without asking.",
-        )
+        PromptText(stringResource(R.string.link_confirm_asks, target.host.name, target.host.address))
+        target.launch?.let { PromptText(stringResource(R.string.link_confirm_launch, it)) }
+        PromptText(stringResource(R.string.link_confirm_guessable))
     }
 }
 
@@ -200,14 +189,11 @@ fun LinkConnectPrompt(
 @Composable
 fun AwaitingApprovalPrompt(hostLabel: String, onCancel: () -> Unit) {
     PunktfunkDialog(
-        title = "Waiting for approval",
+        title = stringResource(R.string.pair_waiting_for_approval),
         onDismiss = onCancel,
-        actions = listOf(DialogAction("Cancel", primary = true, onClick = onCancel)),
+        actions = listOf(DialogAction(stringResource(R.string.common_cancel), primary = true, onClick = onCancel)),
         dismissOnOutsideTap = false,
     ) {
-        // MUST be the name the connect actually knocked with (`HostConnect`), or this sends the
-        // user looking for a row the console does not show.
-        val label = deviceName(LocalContext.current)
         Row(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(12.dp),
@@ -218,14 +204,10 @@ fun AwaitingApprovalPrompt(hostLabel: String, onCancel: () -> Unit) {
                 color = MaterialTheme.colorScheme.primary,
             )
             Text(
-                "Approve this device on $hostLabel.",
+                stringResource(R.string.dial_approve_no_pin, hostLabel),
                 color = MaterialTheme.colorScheme.onSurface,
             )
         }
-        PromptText(
-            "Open the host's console (or web UI) and approve “$label”. It connects " +
-                "automatically once you approve — no PIN needed.",
-        )
     }
 }
 
@@ -241,22 +223,16 @@ fun LocalNetworkPrompt(
     onDismiss: () -> Unit,
 ) {
     PunktfunkDialog(
-        title = "Allow local network access",
+        title = stringResource(R.string.android_local_network_title),
         onDismiss = onDismiss,
         actions = listOf(
-            DialogAction("Allow", primary = true, onClick = onAllow),
-            DialogAction("Open settings", onClick = onSettings),
-            DialogAction("Not now", onClick = onDismiss),
+            DialogAction(stringResource(R.string.android_local_network_allow), primary = true, onClick = onAllow),
+            DialogAction(stringResource(R.string.android_local_network_settings), onClick = onSettings),
+            DialogAction(stringResource(R.string.android_local_network_later), onClick = onDismiss),
         ),
     ) {
-        PromptText(
-            "Android blocks Punktfunk from talking to devices on your network, so it can't find " +
-                "or reach any host until you allow it.",
-        )
-        PromptText(
-            "If no prompt appears after you allow it, enable “Nearby devices” for Punktfunk in " +
-                "system settings.",
-        )
+        PromptText(stringResource(R.string.android_local_network_body))
+        PromptText(stringResource(R.string.android_local_network_hint))
     }
 }
 
@@ -276,7 +252,7 @@ fun SpeedTestPrompt(
 ) {
     val done = phase as? SpeedTestPhase.Done
     PunktfunkDialog(
-        title = "Network check",
+        title = stringResource(R.string.speedtest_title),
         onDismiss = onDismiss,
         // Measuring runs probes for ten seconds and more; a tap outside must not abandon it midway.
         dismissOnOutsideTap = phase !is SpeedTestPhase.Measuring,
@@ -285,27 +261,27 @@ fun SpeedTestPrompt(
                 add(
                     DialogAction(
                         when (target) {
-                            SpeedTestTarget.Global -> "Apply"
-                            is SpeedTestTarget.Preset -> "Apply to “${target.preset.name}”"
-                            is SpeedTestTarget.Ask -> "Set in “${target.preset.name}”"
+                            SpeedTestTarget.Global ->
+                                stringResource(R.string.speedtest_use_rate, mbitRate(done.recommendedMbps))
+                            is SpeedTestTarget.Preset ->
+                                stringResource(R.string.speedtest_apply_to_preset, target.preset.name)
+                            is SpeedTestTarget.Ask ->
+                                stringResource(R.string.speedtest_set_in_preset, target.preset.name)
                         },
                         primary = true,
                     ) { onApply(true) },
                 )
                 if (target is SpeedTestTarget.Ask) {
-                    add(DialogAction("Set as default") { onApply(false) })
+                    add(DialogAction(stringResource(R.string.speedtest_set_default)) { onApply(false) })
                 }
             }
-            add(DialogAction("Close", primary = done == null, onClick = onDismiss))
+            add(DialogAction(stringResource(R.string.common_close), primary = done == null, onClick = onDismiss))
         },
     ) {
         PromptText(hostName)
         when (phase) {
-            SpeedTestPhase.Connecting -> PromptText("Connecting…")
-            SpeedTestPhase.Measuring ->
-                PromptText(
-                    "Measuring — the host is sending test traffic. This takes a few seconds.",
-                )
+            SpeedTestPhase.Connecting -> PromptText(stringResource(R.string.speedtest_connecting))
+            SpeedTestPhase.Measuring -> PromptText(stringResource(R.string.speedtest_measuring_body))
             is SpeedTestPhase.Failed -> Text(
                 phase.message,
                 style = MaterialTheme.typography.bodyMedium,
@@ -318,10 +294,8 @@ fun SpeedTestPrompt(
                     fontWeight = FontWeight.SemiBold,
                     color = MaterialTheme.colorScheme.onSurface,
                 )
-                phase.findings.forEach { f -> PromptText(findingText(f.id, f.numbers)) }
-                PromptText(
-                    "Recommended bitrate: %.0f Mbit/s".format(phase.recommendedMbps),
-                )
+                phase.findings.forEach { f -> PromptText(findingMessage(f.id, f.numbers).asString()) }
+                PromptText(stringResource(R.string.speedtest_recommended_body, mbitRate(phase.recommendedMbps)))
                 PromptText(speedTestTargetNote(target))
             }
         }
@@ -332,22 +306,29 @@ fun SpeedTestPrompt(
  * What the link carries, then the clean round's loss and jitter at its rate; without a round
  * (a host without a ramp) the figure stands alone — a blast's loss is not the link's.
  */
+@Composable
 internal fun speedTestHeadline(done: SpeedTestPhase.Done): String {
-    val carries = if (done.wall) "Link carries %.0f Mbit/s." else "Link carries at least %.0f Mbit/s."
-    val clean = done.clean ?: return "%.0f Mbit/s measured".format(done.measuredMbps)
-    return carries.format(done.measuredMbps) + " At %.0f Mbit/s: %.1f %% loss, %.1f ms jitter"
-        .format(clean.rateKbps / 1000.0, clean.lossPct, clean.jitterUs / 1000.0)
+    val rate = mbitRate(done.measuredMbps)
+    val clean = done.clean ?: return stringResource(R.string.speedtest_measured, rate)
+    val carries = stringResource(
+        if (done.wall) R.string.speedtest_link_carries_body else R.string.speedtest_link_carries_at_least_body,
+        rate,
+    )
+    val round = stringResource(
+        R.string.speedtest_clean_round_body,
+        mbitRate(clean.rateKbps / 1000.0),
+        fixed(clean.lossPct, 1),
+        fixed(clean.jitterUs / 1000.0, 1),
+    )
+    return "$carries $round"
 }
 
 /** One line saying which layer an Apply will write to, and why that one. */
+@Composable
 private fun speedTestTargetNote(target: SpeedTestTarget): String = when (target) {
-    SpeedTestTarget.Global ->
-        "This host uses the default settings, so the bitrate goes there."
+    SpeedTestTarget.Global -> stringResource(R.string.android_speedtest_target_default_body)
     is SpeedTestTarget.Preset ->
-        "This host streams with “${target.preset.name}”, which sets its own bitrate — " +
-            "that override is what it actually reads."
+        stringResource(R.string.android_speedtest_target_preset_body, target.preset.name)
     is SpeedTestTarget.Ask ->
-        "This host streams with “${target.preset.name}”, which currently inherits the default " +
-            "bitrate. Setting it in the preset affects only this host's preset; setting it as " +
-            "the default affects everything that inherits it."
+        stringResource(R.string.android_speedtest_target_ask_body, target.preset.name)
 }

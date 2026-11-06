@@ -24,9 +24,9 @@ public enum StartIn: String, CaseIterable, Sendable {
     /// Settings-row label. The value line names the resolved host beside it.
     public var label: String {
         switch self {
-        case .hosts: return "Host list"
-        case .library: return "Library"
-        case .stream: return "Stream"
+        case .hosts: return String(localized: L10n.playerStartInHosts)
+        case .library: return String(localized: L10n.playerStartInLibrary)
+        case .stream: return String(localized: L10n.playerStartInStream)
         }
     }
 }
