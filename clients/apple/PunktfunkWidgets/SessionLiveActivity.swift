@@ -170,20 +170,20 @@ private struct StatusLine: View {
     @ViewBuilder private var label: some View {
         switch state.stage {
         case .streaming:
-            Text("Streaming")
+            Text(L10n.appleLiveStreaming)
         case .background:
             if let deadline = state.backgroundDeadline {
                 HStack(spacing: 3) {
-                    Text("Background · ends in")
+                    Text(L10n.appleLiveBackgroundEndsIn)
                     CountdownClock(deadline: deadline)
                 }
             } else {
-                Text("Running in background")
+                Text(L10n.appleLiveBackground)
             }
         case .reconnecting:
-            Text("Reconnecting…")
+            Text(L10n.appleLiveReconnecting)
         case .ending:
-            Text("Session ended")
+            Text(L10n.appleLiveEnded)
         }
     }
 }
@@ -270,7 +270,7 @@ private struct EndButton: View {
     var body: some View {
         if fullWidth {
             Button(intent: EndStreamIntent()) {
-                Label("End Session", systemImage: "stop.fill")
+                Label(L10n.appleLiveEndSession, systemImage: "stop.fill")
                     .font(.subheadline.weight(.semibold))
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 2)
@@ -279,7 +279,7 @@ private struct EndButton: View {
             .buttonStyle(.bordered)
         } else {
             Button(intent: EndStreamIntent()) {
-                Label("End", systemImage: "stop.fill")
+                Label(L10n.appleLiveEnd, systemImage: "stop.fill")
                     .font(.caption).bold()
             }
             .tint(.red)

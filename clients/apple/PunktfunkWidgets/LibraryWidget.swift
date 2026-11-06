@@ -23,10 +23,18 @@ import PunktfunkShared
 /// The widget's per-instance configuration. Executes in the EXTENSION process — which is why
 /// `HostEntity` and its query live in PunktfunkShared, not the app.
 struct LibraryWidgetConfigIntent: WidgetConfigurationIntent {
-    static let title: LocalizedStringResource = "Choose Host"
-    static let description = IntentDescription("Pick whose game library this widget opens.")
+    static let title: LocalizedStringResource = LocalizedStringResource(
+        "apple_widget_library_intent_title", defaultValue: "Choose Host")
+    static let description = IntentDescription(
+        LocalizedStringResource(
+            "apple_widget_library_intent_desc",
+            defaultValue: "Pick whose game library this widget opens."))
 
-    @Parameter(title: "Host", description: "Leave empty to follow your most recent host.")
+    @Parameter(
+        title: LocalizedStringResource("apple_intent_param_host", defaultValue: "Host"),
+        description: LocalizedStringResource(
+            "apple_widget_library_param_host_desc",
+            defaultValue: "Leave empty to follow your most recent host."))
     var host: HostEntity?
 }
 
@@ -76,8 +84,8 @@ struct LibraryWidget: Widget {
             LibraryWidgetView(entry: entry)
                 .containerBackground(.fill.tertiary, for: .widget)
         }
-        .configurationDisplayName("Game Library")
-        .description("Jump straight into a host's game library.")
+        .configurationDisplayName(L10n.appleWidgetLibraryName)
+        .description(L10n.appleWidgetLibraryDesc)
         .supportedFamilies([.systemSmall, .accessoryCircular, .accessoryRectangular])
     }
 }
@@ -117,7 +125,7 @@ private struct SmallLibraryView: View {
                 Text(host.displayName)
                     .font(.headline)
                     .lineLimit(2)
-                Text("Game Library")
+                Text(L10n.appleWidgetLibraryName)
                     .font(.caption2)
                     .foregroundStyle(.secondary)
             }
@@ -148,7 +156,7 @@ private struct RectangularLibraryView: View {
             VStack(alignment: .leading) {
                 Text(host?.displayName ?? "Punktfunk")
                     .lineLimit(1)
-                Text("Library")
+                Text(L10n.appleWidgetLibraryLabel)
                     .font(.caption2)
                     .foregroundStyle(.secondary)
             }
@@ -163,7 +171,7 @@ private struct EmptyLibraryView: View {
             Image(systemName: "square.grid.2x2")
                 .font(.title2)
                 .foregroundStyle(.secondary)
-            Text("Open Punktfunk to pick a host.")
+            Text(L10n.appleWidgetLibraryEmpty)
                 .font(.caption)
                 .multilineTextAlignment(.center)
                 .foregroundStyle(.secondary)
