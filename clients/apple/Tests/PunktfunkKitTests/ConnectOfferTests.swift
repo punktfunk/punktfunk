@@ -144,7 +144,8 @@ final class ConnectOfferTests: XCTestCase {
         let message = ConnectOffer.failureMessage(
             PunktfunkClientError.rejected(.busy), hostName: "Desk", pinned: true,
             requestAccess: false, callerRecovers: true)
-        XCTAssertEqual(message, "Desk: \(HostRejection.busy.userMessage)")
+        XCTAssertEqual(
+            message, L10n.dialHostReason(host: "Desk", reason: HostRejection.busy.userMessage))
     }
 
     /// A plain unreachable dial goes to the caller's wake wait; an approval dial never does.
@@ -156,7 +157,7 @@ final class ConnectOfferTests: XCTestCase {
         let approval = ConnectOffer.failureMessage(
             PunktfunkClientError.connectFailed, hostName: "Desk", pinned: false,
             requestAccess: true, callerRecovers: true)
-        XCTAssertTrue(approval?.hasPrefix("Desk didn't let this device in.") == true)
+        XCTAssertEqual(approval, String(localized: L10n.errorRequestFailed))
     }
 
     /// Without a wake wait, a pinned host may have a new identity; an unpinned one may need
@@ -168,7 +169,7 @@ final class ConnectOfferTests: XCTestCase {
         let unpinned = ConnectOffer.failureMessage(
             PunktfunkClientError.connectFailed, hostName: "Desk", pinned: false,
             requestAccess: false, callerRecovers: false)
-        XCTAssertTrue(pinned?.contains("identity changed since you paired") == true)
-        XCTAssertTrue(unpinned?.contains("or not paired yet") == true)
+        XCTAssertEqual(pinned, L10n.appleDialUnreachablePinned(host: "Desk"))
+        XCTAssertEqual(unpinned, L10n.appleDialUnreachableUnpaired(host: "Desk"))
     }
 }

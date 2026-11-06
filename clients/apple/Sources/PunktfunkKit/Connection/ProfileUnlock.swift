@@ -255,7 +255,8 @@ public struct ProfileUnlocker: Sendable {
 
     /// The prompt's switch, worded for this device.
     public var switchTitle: String {
-        biometry.map { "Unlock with \($0.name) on this device" } ?? "Stay signed in on this device"
+        biometry.map { L10n.unlockWithBiometry(method: $0.name) }
+            ?? String(localized: L10n.unlockStaySignedIn)
     }
 
     /// Before the dial, from the row's `unlock`. The host saying `password` for a profile this
@@ -289,7 +290,7 @@ public struct ProfileUnlocker: Sendable {
                   challenge: fresh.challenge, seat: fresh.seat, device: device, box: host),
               let signature = try? keys.sign(
                   message, host: host, profile: row.id,
-                  reason: "unlock \(row.displayName) on \(hostName)")
+                  reason: L10n.appleUnlockBiometryReason(name: row.displayName, host: hostName))
         else { return nil }
         return ProfileUnlock.keyProof(signature)
     }
@@ -300,7 +301,7 @@ public struct ProfileUnlocker: Sendable {
             guard let entry = await prompt(error) else { return .cancelled }
             guard ProfileUnlock.fits(entry.password) else {
                 entry.password.wipe()
-                error = "That password is too long."
+                error = String(localized: L10n.unlockErrorTooLong)
                 continue
             }
             // Key creation failing sends the password without a key, and says nothing.

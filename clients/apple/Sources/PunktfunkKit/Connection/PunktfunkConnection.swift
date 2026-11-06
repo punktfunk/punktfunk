@@ -242,53 +242,27 @@ public enum HostRejection: Sendable {
         }
     }
 
-    /// User-facing sentence — wording shared with the desktop clients.
+    /// The sentence to show for this refusal, from the shared `host` messages.
     public var userMessage: String {
         switch self {
-        case .pairingNotArmed:
-            return "Pairing isn't armed on the host — arm it on the host's Pairing page, "
-                + "then try again."
-        case .pairingBoundToOtherDevice:
-            return "The host's pairing window is armed for a different device — arm it "
-                + "for this one."
-        case .pairingRateLimited:
-            return "Too many pairing attempts — wait a couple of seconds and try again."
-        case .identityRequired:
-            return "The host requires pairing — pair this device (PIN or request access) first."
-        case .denied:
-            return "The host declined this device's request."
-        case .approvalTimeout:
-            return "Nobody approved the request on the host in time — approve this device "
-                + "in the host's console or web UI, then request access again."
-        case .superseded:
-            return "A newer request from this device replaced this one — approve the "
-                + "latest request on the host."
-        case .wireVersionMismatch:
-            return "Client and host versions don't match — update both to the same release."
-        case .busy:
-            return "The host is busy with another session."
-        case .accessExpired:
-            return "Your access to this host has expired — ask its owner to grant "
-                + "access again."
-        case .launchNotPermitted:
-            return "This device isn't permitted to launch games on the host — connect "
-                + "to the desktop instead, or ask the owner to allow launching."
-        case .hostPower:
-            return "The host is going to sleep or shutting down — wake it when you want "
-                + "to play again."
-        case .setupFailed:
-            return "The host accepted the connection but couldn't start the stream — the "
-                + "host's log (web console → Log) has the cause."
-        case .profileUnknown:
-            return "That profile is gone from this host. Pick another one."
-        case .noSeat:
-            return "All seats are taken."
-        case .seatOccupied:
-            return "Someone is already playing as that profile."
-        case .seatUnavailable:
-            return "That profile can't play on this host right now."
-        case .profileLocked:
-            return "This profile needs its account password."
+        case .pairingNotArmed: return String(localized: L10n.rejectNotArmed)
+        case .pairingBoundToOtherDevice: return String(localized: L10n.rejectBoundOther)
+        case .pairingRateLimited: return String(localized: L10n.rejectRateLimited)
+        case .identityRequired: return String(localized: L10n.rejectIdentityRequired)
+        case .denied: return String(localized: L10n.rejectDenied)
+        case .approvalTimeout: return String(localized: L10n.rejectApprovalTimeout)
+        case .superseded: return String(localized: L10n.rejectSuperseded)
+        case .wireVersionMismatch: return String(localized: L10n.rejectWireVersion)
+        case .busy: return String(localized: L10n.rejectBusy)
+        case .accessExpired: return String(localized: L10n.rejectAccessExpired)
+        case .launchNotPermitted: return String(localized: L10n.rejectLaunchNotPermitted)
+        case .hostPower: return String(localized: L10n.rejectHostPower)
+        case .setupFailed: return String(localized: L10n.rejectSetupFailed)
+        case .profileUnknown: return String(localized: L10n.rejectProfileUnknown)
+        case .noSeat: return String(localized: L10n.rejectNoSeat)
+        case .seatOccupied: return String(localized: L10n.rejectSeatOccupied)
+        case .seatUnavailable: return String(localized: L10n.rejectSeatUnavailable)
+        case .profileLocked: return String(localized: L10n.rejectProfileLocked)
         }
     }
 }
@@ -962,10 +936,10 @@ public final class PunktfunkConnection: @unchecked Sendable {
 
         public var label: String {
             switch self {
-            case .fullControl: return "Full control"
-            case .controllerOnly: return "Controller only"
-            case .viewOnly: return "View only"
-            case .custom: return "Custom"
+            case .fullControl: return String(localized: L10n.grantLevelFull)
+            case .controllerOnly: return String(localized: L10n.grantLevelController)
+            case .viewOnly: return String(localized: L10n.grantLevelView)
+            case .custom: return String(localized: L10n.grantLevelCustom)
             }
         }
     }
