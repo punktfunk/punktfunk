@@ -4,6 +4,7 @@
 // this build knows but the stored value lacks appended switched on.
 
 import Foundation
+import PunktfunkShared
 
 /// One band of the Library tab. The raw value is the id stored in `punktfunk.librarySections`.
 public enum LibrarySection: String, CaseIterable, Hashable, Sendable, Identifiable {
@@ -17,11 +18,11 @@ public enum LibrarySection: String, CaseIterable, Hashable, Sendable, Identifiab
 
     public var label: String {
         switch self {
-        case .desktops: return "Desktops"
-        case .recent: return "Recently Played"
-        case .favorites: return "Favorites"
-        case .launchers: return "Launchers"
-        case .games: return "Games"
+        case .desktops: return String(localized: L10n.libSectionDesktops)
+        case .recent: return String(localized: L10n.libSectionRecent)
+        case .favorites: return String(localized: L10n.libSectionFavorites)
+        case .launchers: return String(localized: L10n.libSectionLaunchers)
+        case .games: return String(localized: L10n.libSectionGames)
         }
     }
 

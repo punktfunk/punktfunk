@@ -3,6 +3,7 @@
 // Each shell draws the events its own way.
 
 import Foundation
+import PunktfunkShared
 
 /// One step of a library load, in the order `LibraryLoad` yields them.
 public enum LibraryLoadEvent: Sendable {
@@ -33,7 +34,7 @@ public struct LibraryLoad {
 
     /// The line a screen with no headline of its own shows for a failed load.
     public static func failure(_ error: LibraryError) -> String {
-        "Couldn't load the library — \(error.errorDescription ?? "")"
+        L10n.libLoadFailedWhy(why: error.errorDescription ?? "")
     }
 
     /// Load `target`'s library, cached under `hostID`. When `WakePolicy.autoWakes` the host

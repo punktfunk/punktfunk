@@ -59,6 +59,8 @@
 	"apple_speedtest_run_again": "Run again",
 	"apple_speedtest_try_again": "Try again",
 	"apple_speedtest_unreachable_body": "Couldn't reach {address}. It may be asleep, or streaming to something else.",
+	"apple_host_not_saved": "That host is no longer saved.",
+	"apple_profile_wake_failed": "Couldn't wake {name}'s desk. Try again in a moment.",
 	"apple_lib_bad_art": "that title's artwork isn't a web address or an inline image",
 	"apple_lib_last_played": "Last played {when}",
 	"apple_lib_play_time_total": "{duration} total",

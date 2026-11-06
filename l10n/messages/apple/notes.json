@@ -32,6 +32,8 @@
 	"apple_speedtest_average_a11y": "VoiceOver name of the chart's average line.",
 	"apple_speedtest_now_a11y": "VoiceOver name of the chart's line for the bitrate this host streams at now.",
 	"apple_speedtest_unreachable_body": "Speed test failure. {address} is the host's address.",
+	"apple_host_not_saved": "Console notice when a host the shell asked about has been removed from this device's list.",
+	"apple_profile_wake_failed": "A profile's desktop didn't start, for any reason but the host refusing this device. name: the profile's name.",
 	"apple_lib_bad_art": "Cause phrase after a frame's dash. Lowercase, no period.",
 	"apple_lib_last_played": "Part of a title's play line. {when}: a relative time the system formats, e.g. '2 hr. ago'.",
 	"apple_lib_play_time_total": "Part of a title's play line. {duration}: a duration the system formats, e.g. '14 hr'.",
