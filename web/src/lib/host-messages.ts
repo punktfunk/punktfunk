@@ -1,3 +1,6 @@
+import type { HostInfo } from "@/api/gen/model/hostInfo";
+import type { SeatCheck } from "@/api/gen/model/seatCheck";
+import type { SeatPublic } from "@/api/gen/model/seatPublic";
 import { m } from "@/paraglide/messages";
 
 /** The values of a host message's placeholders, by name. */
@@ -48,3 +51,19 @@ export function apiText<E extends string | null | undefined>(
 ): string | E {
 	return hostText(code && `apierr_${code}`, params, english);
 }
+
+/** One line of what a seat's doctor found. */
+export const seatCheckText = (c: SeatCheck): string =>
+	hostText(c.id, c.params, c.message);
+
+/** A seat's state line while it starts or is unavailable. */
+export const seatDetail = (s: SeatPublic): string | null | undefined =>
+	hostText(s.detail_id, s.detail_params, s.detail);
+
+/** Why the door can't be switched on. */
+export const doorUnavailable = (h: HostInfo): string | null | undefined =>
+	apiText(
+		h.door_unavailable_code,
+		h.door_unavailable_params,
+		h.door_unavailable,
+	);

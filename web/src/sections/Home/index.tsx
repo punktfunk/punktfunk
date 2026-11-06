@@ -47,6 +47,7 @@ import type { AvatarProfile } from "@/components/profile-avatar";
 import { ROW_GAP, staggerProps } from "@/components/stagger";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { apiErrorMessage } from "@/lib/errors";
+import { seatDetail } from "@/lib/host-messages";
 import { useLocale } from "@/lib/i18n";
 import { m } from "@/paraglide/messages";
 import { ActivityCard } from "@/sections/Activity";
@@ -402,7 +403,7 @@ export const SectionHome: FC = () => {
 									key={p.id}
 									profile={p}
 									starting
-									facts={p.seat.detail || m.profiles_seat_starting()}
+									facts={seatDetail(p.seat) || m.profiles_seat_starting()}
 									action={{
 										label: m.profiles_seat_stop(),
 										onClick: () => seatAct.mutate({ id: p.id, act: "stop" }),
