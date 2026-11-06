@@ -16,14 +16,13 @@ enum SendLogs {
         do {
             let id = try await LibraryClient.sendLogs(to: MgmtTarget.make(host: host).get())
             log.info("client logs uploaded to \(host.displayName, privacy: .public) id=\(id, privacy: .public)")
-            return (true, "Logs sent to \(host.displayName) — download them from its web console's "
-                + "Logs page.")
+            return (true, L10n.hostcardLogsSentBody(host: host.displayName))
         } catch let missing as MgmtTargetMissing {
             return (false, missing.sentence)
         } catch {
             let why = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
             log.warning("client log upload to \(host.displayName, privacy: .public) failed: \(why, privacy: .public)")
-            return (false, "Couldn't send logs — \(why)")
+            return (false, L10n.hostcardLogsFailed(reason: why))
         }
     }
 }

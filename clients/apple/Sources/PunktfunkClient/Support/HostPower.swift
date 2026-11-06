@@ -77,13 +77,14 @@ final class HostPowerStore: ObservableObject {
             invalidate(host)
             try await LibraryClient.invokeAction(id: action.id, on: target)
             log.info("host action \(action.id, privacy: .public) accepted by \(host.displayName, privacy: .public)")
-            return (true, "\(host.displayName): \(action.label) — on its way")
+            return (
+                true, L10n.hostcardActionSentBody(host: host.displayName, action: action.label))
         } catch let missing as MgmtTargetMissing {
             return (false, missing.sentence)
         } catch {
             let why = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
             log.warning("host action \(action.id, privacy: .public) refused by \(host.displayName, privacy: .public): \(why, privacy: .public)")
-            return (false, "\(action.label) failed — \(why)")
+            return (false, L10n.hostcardActionFailed(action: action.label, reason: why))
         }
     }
 }
