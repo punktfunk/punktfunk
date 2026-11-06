@@ -20,6 +20,7 @@ use pf_client_core::overlay_actions::{
 };
 use pf_client_core::ring::{slot_offset, CENTRE_DIAMETER, RING_RADIUS, SLOT_DIAMETER};
 use pf_fluent::Palette;
+use pf_l10n::{client, common, desktop};
 use punktfunk_core::input::key_vk;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -36,14 +37,8 @@ const HIT_SLOP: f64 = 1.2;
 /// that, so a disc reads the same weight in the editor as it does in the stream.
 const ICON_DIP: f64 = SLOT_DIAMETER as f64 * 1.05 / 2.0;
 
-const CLOCK: [&str; RING_SLOTS] = [
-    "12 o'clock",
-    "2 o'clock",
-    "4 o'clock",
-    "6 o'clock",
-    "8 o'clock",
-    "10 o'clock",
-];
+/// The hour each disc sits at on the ring, which a screen reader reads out.
+const CLOCK_HOURS: [u8; RING_SLOTS] = [12, 2, 4, 6, 8, 10];
 
 /// What the settings page hands the editor: the app, its palette, the scope being edited, the
 /// revision counter every commit bumps (the page repaints on it) and the status line a failed
@@ -142,26 +137,35 @@ fn write(props: &Props, cfg: &OverlayConfig) {
 /// The word a disc carries — the console ring's short labels, so the desktop rings read alike.
 fn short_label(cfg: &OverlayConfig, slot: &SlotId) -> String {
     match slot {
-        SlotId::EndStream => "End".into(),
-        SlotId::EndGame => "Quit".into(),
-        SlotId::DisconnectLinger => "Leave".into(),
-        SlotId::TouchMode => "Touch".into(),
-        SlotId::Keyboard => "Keys".into(),
-        SlotId::Stats => "Stats".into(),
-        SlotId::Mic => "Mic".into(),
-        SlotId::Pad => "Pad".into(),
-        SlotId::SendText => "Text".into(),
-        SlotId::Guide => "Guide".into(),
-        SlotId::Qam => "QAM".into(),
-        SlotId::PadMouse => "Mouse".into(),
-        SlotId::PadType => "Pad type".into(),
-        SlotId::StreamMute => "Mute".into(),
-        SlotId::SwapScreens => "Swap".into(),
-        SlotId::Host(_) => "Power".into(),
+        SlotId::EndStream => client::ring_end_stream_short().into(),
+        SlotId::EndGame => client::ring_end_game_short().into(),
+        SlotId::DisconnectLinger => client::ring_disconnect_linger_short().into(),
+        SlotId::TouchMode => client::ring_touch_mode_short().into(),
+        SlotId::Keyboard => client::ring_keyboard_short().into(),
+        SlotId::Stats => client::ring_stats_short().into(),
+        SlotId::Mic => client::ring_mic_short().into(),
+        SlotId::Pad => client::ring_pad_short().into(),
+        SlotId::SendText => client::ring_send_text_short().into(),
+        SlotId::Guide => client::ring_guide_short().into(),
+        SlotId::Qam => client::ring_qam_short().into(),
+        SlotId::PadMouse => client::ring_pad_mouse_short().into(),
+        SlotId::PadType => client::ring_pad_type_short().into(),
+        SlotId::StreamMute => client::ring_stream_mute_short().into(),
+        SlotId::SwapScreens => client::ring_swap_screens_short().into(),
+        SlotId::Host(_) => client::ring_host_short().into(),
         SlotId::Shortcut(id) => cfg
             .shortcut(id)
             .map(|s| chord_chip(&s.keys))
             .unwrap_or_default(),
+    }
+}
+
+/// A slot's name with its availability note after it, where there is one.
+fn with_note(label: &str, note: &str) -> String {
+    if note.is_empty() {
+        label.to_string()
+    } else {
+        format!("{label} \u{2014} {note}")
     }
 }
 
@@ -241,8 +245,11 @@ impl Component for QuickActions {
         let mut parts: Vec<View> = vec![
             muted(
                 &props.pal,
-                "Click a button to change it, or drag one onto another to swap the two. \
-                 Ctrl+Alt+Shift+O, a two-finger twist or Select+A opens this dial in a stream.",
+                format!(
+                    "{} {}",
+                    desktop::desktop_ring_editor_hint(),
+                    desktop::desktop_ring_editor_open_hint("Ctrl+Alt+Shift+O", "Select+A"),
+                ),
             )
             .font_size(12.0)
             .text_wrapping(TextWrapping::Wrap)
@@ -371,7 +378,7 @@ fn ring(props: &Props, cfg: &OverlayConfig, ui: &Ui, set_ui: &SetUi) -> View {
         disc(mark("ellipsis", ICON_DIP, true), cd, false, false)
             .canvas_left(STAGE_W / 2.0 - cd / 2.0)
             .canvas_top(STAGE_H / 2.0 - cd / 2.0)
-            .tooltip("More \u{2014} the rest of the actions, in the stream"),
+            .tooltip(desktop::desktop_ring_centre_tooltip()),
     );
     let d = SLOT_DIAMETER as f64;
     let mut carried_disc = None;
@@ -385,16 +392,12 @@ fn ring(props: &Props, cfg: &OverlayConfig, ui: &Ui, set_ui: &SetUi) -> View {
         let slot = cfg.ring[k].as_ref();
         let (label, note) = slot
             .map(|s| describe(cfg, s))
-            .unwrap_or(("Empty".into(), String::new()));
+            .unwrap_or((client::ring_slot_empty().into(), String::new()));
         let face = disc_face(cfg, slot, !note.is_empty());
         let el = disc(face, d, carried.is_some(), ui.selected == Some(k))
             .canvas_left(x - d / 2.0)
             .canvas_top(y - d / 2.0)
-            .tooltip(if note.is_empty() {
-                label.clone()
-            } else {
-                format!("{label} — {note}")
-            });
+            .tooltip(with_note(&label, &note));
         if carried.is_some() {
             carried_disc = Some(el);
         } else {
@@ -504,11 +507,7 @@ fn ring_label(cfg: &OverlayConfig, ui: &Ui) -> View {
         .and_then(|k| cfg.ring[k].as_ref())
         .map(|slot| {
             let (label, note) = describe(cfg, slot);
-            if note.is_empty() {
-                label
-            } else {
-                format!("{label} \u{2014} {note}")
-            }
+            with_note(&label, &note)
         })
         .unwrap_or_default();
     text(line)
@@ -527,10 +526,13 @@ fn legend_row(cfg: &OverlayConfig, ui: &Ui, set_ui: &SetUi) -> View {
             let slot = cfg.ring[k].as_ref();
             let (label, _) = slot
                 .map(|s| describe(cfg, s))
-                .unwrap_or(("Empty".into(), String::new()));
-            let short = slot.map_or("Empty".to_string(), |s| short_label(cfg, s));
+                .unwrap_or((client::ring_slot_empty().into(), String::new()));
+            let short = slot.map_or(client::ring_slot_empty().to_string(), |s| {
+                short_label(cfg, s)
+            });
             let b = button(short)
-                .automation_name(format!("{}: {label}", CLOCK[k]))
+                .automation_name(&label)
+                .automation_help_text(client::ring_slot_clock(CLOCK_HOURS[k]))
                 .on_click({
                     let (ui, set_ui) = (ui.clone(), set_ui.clone());
                     move || {
@@ -572,11 +574,7 @@ fn picker(props: &Props, cfg: &OverlayConfig, k: usize, ui: &Ui, set_ui: &SetUi)
             let is_current = entry.id == current;
             let unavailable =
                 !entry.note.is_empty() && !entry.id.starts_with("host:") && !is_current;
-            let line = if entry.note.is_empty() {
-                entry.label.clone()
-            } else {
-                format!("{} — {}", entry.label, entry.note)
-            };
+            let line = with_note(&entry.label, &entry.note);
             let mut b = button(line).on_click({
                 let (props, cfg, id) = (props.clone(), cfg.clone(), entry.id.clone());
                 let (ui, set_ui) = (ui.clone(), set_ui.clone());
@@ -634,15 +632,17 @@ fn shortcuts(props: &Props, cfg: &OverlayConfig, ui: &Ui, set_ui: &SetUi) -> Vie
                 vstack(lines)
                     .spacing(2.0)
                     .vertical_alignment(VerticalAlignment::Center),
-                button("Edit").style(ButtonStyle::Subtle).on_click({
-                    let (ui, set_ui, sc) = (ui.clone(), set_ui.clone(), sc.clone());
-                    move || {
-                        let mut u = ui.clone();
-                        u.draft = Some(Draft::of(&sc));
-                        u.capture = false;
-                        set_ui.call(u);
-                    }
-                }),
+                button(common::common_edit())
+                    .style(ButtonStyle::Subtle)
+                    .on_click({
+                        let (ui, set_ui, sc) = (ui.clone(), set_ui.clone(), sc.clone());
+                        move || {
+                            let mut u = ui.clone();
+                            u.draft = Some(Draft::of(&sc));
+                            u.capture = false;
+                            set_ui.call(u);
+                        }
+                    }),
             ))
             .spacing(12.0)
             .into(),
@@ -654,9 +654,9 @@ fn shortcuts(props: &Props, cfg: &OverlayConfig, ui: &Ui, set_ui: &SetUi) -> Vie
     let reset = icon_button(
         "rotate-cw",
         if ui.reset_armed {
-            "Press again to reset"
+            client::ring_reset_confirm()
         } else {
-            "Reset to default"
+            client::ring_reset()
         },
     )
     .style(if ui.reset_armed {
@@ -682,9 +682,9 @@ fn shortcuts(props: &Props, cfg: &OverlayConfig, ui: &Ui, set_ui: &SetUi) -> Vie
             set_ui.call(u);
         }
     })
-    .tooltip("Restores the platform dial and removes the shortcuts");
+    .tooltip(desktop::desktop_ring_reset_tooltip());
     let actions = hstack((
-        icon_button("plus", "Add shortcut").on_click({
+        icon_button("plus", client::ring_shortcut_add()).on_click({
             let (ui, set_ui) = (ui.clone(), set_ui.clone());
             move || {
                 let mut u = ui.clone();
@@ -698,16 +698,13 @@ fn shortcuts(props: &Props, cfg: &OverlayConfig, ui: &Ui, set_ui: &SetUi) -> Vie
     ))
     .spacing(8.0)
     .into();
-    let mut parts: Vec<View> = vec![section(&props.pal, "Shortcuts")];
+    let mut parts: Vec<View> = vec![section(&props.pal, client::ring_editor_shortcuts())];
     if rows.is_empty() {
         parts.push(
-            muted(
-                &props.pal,
-                "A new shortcut takes the first empty dial slot.",
-            )
-            .font_size(12.0)
-            .text_wrapping(TextWrapping::Wrap)
-            .into(),
+            muted(&props.pal, client::ring_editor_shortcuts_hint())
+                .font_size(12.0)
+                .text_wrapping(TextWrapping::Wrap)
+                .into(),
         );
     }
     parts.extend(rows);
@@ -738,13 +735,13 @@ fn shortcut_editor(
         ),
         vstack((
             text(if chip.is_empty() {
-                "Pick a key".to_string()
+                client::ring_shortcut_no_key().to_string()
             } else {
                 chip.clone()
             })
             .font_size(20.0)
             .font_weight(FontWeight::SEMI_BOLD),
-            muted(pal, "How the dial will draw it").font_size(12.0),
+            muted(pal, client::ring_shortcut_preview()).font_size(12.0),
         ))
         .spacing(2.0)
         .vertical_alignment(VerticalAlignment::Center),
@@ -761,8 +758,8 @@ fn shortcut_editor(
 
     let name = TextBox::new()
         .text(&draft.label)
-        .header("Name")
-        .placeholder_text("Optional — e.g. Task Manager")
+        .header(client::ring_shortcut_name())
+        .placeholder_text(client::ring_shortcut_name_placeholder())
         .on_text_changed({
             let (ui, set_ui) = (ui.clone(), set_ui.clone());
             move |line: Rc<str>| set_draft(&ui, &set_ui, &|d| d.label = line.to_string())
@@ -784,14 +781,14 @@ fn shortcut_editor(
     mods.push(
         {
             let (ui, set_ui) = (ui.clone(), set_ui.clone());
-            toggle("Press the chord…", ui.capture, move |on| {
+            toggle(desktop::desktop_shortcut_capture(), ui.capture, move |on| {
                 let mut u = ui.clone();
                 u.capture = on;
                 set_ui.call(u);
             })
         }
         .margin(edges(12.0, 0.0, 0.0, 0.0))
-        .tooltip("Then press the keys on your keyboard (Ctrl, Alt and Shift; Win stays a toggle)"),
+        .tooltip(desktop::desktop_shortcut_capture_tooltip()),
     );
 
     let grid: Vec<View> = KEY_GRID
@@ -818,9 +815,9 @@ fn shortcut_editor(
         .collect();
 
     let mut actions: Vec<View> = vec![button(if draft.id.is_some() {
-        "Save"
+        common::common_save()
     } else {
-        "Add shortcut"
+        common::common_add()
     })
     .style(ButtonStyle::Accent)
     .is_enabled(draft.chord.key.is_some())
@@ -845,7 +842,7 @@ fn shortcut_editor(
     .into()];
     if let Some(id) = &draft.id {
         actions.push(
-            button("Remove shortcut")
+            button(client::ring_shortcut_remove())
                 .on_click({
                     let (props, cfg, ui, set_ui, id) = (
                         props.clone(),
@@ -868,7 +865,7 @@ fn shortcut_editor(
         );
     }
     actions.push(
-        button("Cancel")
+        button(common::common_cancel())
             .style(ButtonStyle::Subtle)
             .on_click({
                 let (ui, set_ui) = (ui.clone(), set_ui.clone());
@@ -887,14 +884,14 @@ fn shortcut_editor(
             section(
                 pal,
                 if draft.id.is_some() {
-                    "Shortcut"
+                    client::ring_shortcut_title()
                 } else {
-                    "New shortcut"
+                    client::ring_shortcut_new_title()
                 },
             ),
             preview,
             name,
-            muted(pal, "Hold the modifiers marked on, then the key.").font_size(12.0),
+            muted(pal, client::ring_shortcut_modifiers_hint()).font_size(12.0),
             hstack(mods).spacing(6.0),
             vstack(grid).spacing(4.0),
             hstack(actions).spacing(8.0),
