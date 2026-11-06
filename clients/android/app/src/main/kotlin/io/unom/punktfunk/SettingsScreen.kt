@@ -78,12 +78,15 @@ import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.pluralStringResource
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import io.unom.punktfunk.kit.DeviceGyro
+import io.unom.punktfunk.kit.R
 import io.unom.punktfunk.kit.VideoDecoders
 import io.unom.punktfunk.kit.deviceBodyVibrator
 import io.unom.punktfunk.kit.link.StartIn
@@ -501,7 +504,7 @@ private fun AdvancedGroup(
     } else if (changed > 0 && !scope.presetScope) {
         SettingsGroup {
             ClickableRow(
-                title = if (changed == 1) "1 advanced setting changed" else "$changed advanced settings changed",
+                title = pluralStringResource(R.plurals.prefs_advanced_changed, changed, changed),
                 subtitle = "Show advanced settings",
                 onClick = { scope.onShowAdvanced(true) },
             )
@@ -806,10 +809,10 @@ private fun GeneralSettings(s: Settings, update: (String, Settings) -> Unit) {
                 caption = "The corner the statistics overlay sits in.",
             ) { v -> update("hud_placement", s.copy(hudPlacement = v)) }
             SettingDropdown(
-                label = "Statistics size",
+                label = stringResource(R.string.player_stats_scale_pct),
                 options = STATS_SCALE_OPTIONS,
                 selected = s.statsScalePct.coerceIn(75, 200),
-                caption = "The overlay's size, on top of the system display size.",
+                caption = stringResource(R.string.player_stats_scale_pct_hint),
             ) { v -> update("stats_scale_pct", s.copy(statsScalePct = v)) }
             ToggleRow(
                 title = "Exit hint",
