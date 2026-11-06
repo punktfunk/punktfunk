@@ -5,4 +5,4 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 cargo run -q -p pf-l10n -- apple --out clients/apple/Sources/PunktfunkShared/Generated \
-    --parts common,client,apple
+    --parts common,client,apple,host
