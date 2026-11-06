@@ -147,8 +147,8 @@ pub enum ExitRoute {
 /// pinned an advertised fingerprint. `profile` = the profile the dial named; `retried` = the
 /// dial was already the retry after an unknown-profile refusal; `unlock_sent` = the refused
 /// dial carried an unlock. `wake_armed` = a dial-first wake armed for this dial, with
-/// auto-wake read once when it armed, and no ready since. `log` names this shell's log for a
-/// session that died silently.
+/// auto-wake read once when it armed, and no ready since. `log` is the path of this shell's log
+/// for a session that died silently; `None` for a shell that writes none.
 pub fn exit_route(
     outcome: &ConnectOutcome,
     tofu: bool,
@@ -156,7 +156,7 @@ pub fn exit_route(
     retried: bool,
     unlock_sent: bool,
     wake_armed: bool,
-    log: &str,
+    log: Option<&str>,
 ) -> ExitRoute {
     use punktfunk_core::reject::RejectReason;
     match outcome {
@@ -252,7 +252,12 @@ impl ConnectAttempt {
     /// The session that dialed `host` is gone: where its exit leads. Every exit ends the
     /// attempt. An armed wake counts only for the host it went out to, matched by pin, or by
     /// address when either side has none.
-    pub fn on_exit(&mut self, host: &HostTarget, outcome: &ConnectOutcome, log: &str) -> ExitRoute {
+    pub fn on_exit(
+        &mut self,
+        host: &HostTarget,
+        outcome: &ConnectOutcome,
+        log: Option<&str>,
+    ) -> ExitRoute {
         let was = std::mem::take(self);
         let wake_armed = was.wake.is_some_and(|w| match (w.pin(), host.pin()) {
             (Some(a), Some(b)) => a == b,
@@ -800,8 +805,9 @@ impl ConnectOutcome {
 
     /// What a console exit shows on the host list. `None` after a quit or our own kill, else
     /// the line the console ended on. One that said nothing shows how it went, in the shape of
-    /// [`Self::died_banner`]: no exit code means a signal killed it.
-    pub fn console_banner(&self, log: &str) -> Option<String> {
+    /// [`Self::died_banner`], which `log` is as there: no exit code means a signal killed it.
+    pub fn console_banner(&self, log: Option<&str>) -> Option<String> {
+        use pf_l10n::client as m;
         match self {
             ConnectOutcome::Ended(None) | ConnectOutcome::Cancelled => None,
             ConnectOutcome::TrustRejected(msg)
@@ -811,21 +817,31 @@ impl ConnectOutcome {
             ConnectOutcome::RendererFailed { code: -1 } => {
                 Some(pf_l10n::client::dial_console_killed().into())
             }
-            ConnectOutcome::RendererFailed { code } => Some(match ExitHow::of(*code) {
-                ExitHow::AccessViolation => pf_l10n::client::dial_console_access_violation(log),
-                ExitHow::Exception(hex) => pf_l10n::client::dial_console_exception(hex, log),
-                ExitHow::Code => pf_l10n::client::dial_console_exit_code(code, log),
+            ConnectOutcome::RendererFailed { code } => Some(match (ExitHow::of(*code), log) {
+                (ExitHow::AccessViolation, Some(log)) => m::dial_console_access_violation(log),
+                (ExitHow::AccessViolation, None) => {
+                    m::dial_console_access_violation_no_path().into()
+                }
+                (ExitHow::Exception(hex), Some(log)) => m::dial_console_exception(hex, log),
+                (ExitHow::Exception(hex), None) => m::dial_console_exception_no_path(hex),
+                (ExitHow::Code, Some(log)) => m::dial_console_exit_code(code, log),
+                (ExitHow::Code, None) => m::dial_console_exit_code_no_path(code),
             }),
         }
     }
 
     /// The banner for a session that died without a contract line: a missing runtime, a
-    /// crash, or the wrong binary. `log` names where the cause is.
-    pub fn died_banner(code: i32, log: &str) -> String {
-        match ExitHow::of(code) {
-            ExitHow::AccessViolation => pf_l10n::client::dial_session_access_violation(log),
-            ExitHow::Exception(hex) => pf_l10n::client::dial_session_exception(hex, log),
-            ExitHow::Code => pf_l10n::client::dial_session_exit_code(code, log),
+    /// crash, or the wrong binary. `log` is the path of the log that holds the cause, `None`
+    /// for a shell that writes none.
+    pub fn died_banner(code: i32, log: Option<&str>) -> String {
+        use pf_l10n::client as m;
+        match (ExitHow::of(code), log) {
+            (ExitHow::AccessViolation, Some(log)) => m::dial_session_access_violation(log),
+            (ExitHow::AccessViolation, None) => m::dial_session_access_violation_no_path().into(),
+            (ExitHow::Exception(hex), Some(log)) => m::dial_session_exception(hex, log),
+            (ExitHow::Exception(hex), None) => m::dial_session_exception_no_path(hex),
+            (ExitHow::Code, Some(log)) => m::dial_session_exit_code(code, log),
+            (ExitHow::Code, None) => m::dial_session_exit_code_no_path(code),
         }
     }
 }
@@ -1502,7 +1518,7 @@ mod tests {
             reason,
         };
         let banner = |s: &str| Banner(s.into());
-        let died = Banner(O::died_banner(1, "the client log"));
+        let died = Banner(O::died_banner(1, Some("the client log")));
         let changed = Repair(pf_l10n::client::dial_fingerprint_changed().into());
         let redial = RedialProfile {
             id: "kid".into(),
@@ -1566,14 +1582,22 @@ mod tests {
                 banner("Stream session was killed — out of memory, or stopped by the system"),
             ),
         ] {
-            let got = exit_route(&outcome, tofu, retry, false, false, armed, "the client log");
+            let got = exit_route(
+                &outcome,
+                tofu,
+                retry,
+                false,
+                false,
+                armed,
+                Some("the client log"),
+            );
             assert_eq!(
                 got, want,
                 "{outcome:?}, tofu {tofu}, retry {retry:?}, armed {armed}"
             );
         }
         assert_eq!(
-            O::died_banner(1, "C:\\logs\\client.log"),
+            O::died_banner(1, Some("C:\\logs\\client.log")),
             "The session didn't start (punktfunk-session exited with code 1). Check C:\\logs\\client.log."
         );
     }
@@ -1612,7 +1636,7 @@ mod tests {
             if ready {
                 assert!(!attempt.on_ready());
             }
-            let got = attempt.on_exit(&exiting, &failed, "the client log");
+            let got = attempt.on_exit(&exiting, &failed, Some("the client log"));
             assert_eq!(got, want, "armed {armed:?}, ready {ready}, {exiting:?}");
             // The wake is spent on any exit, another host's included.
             assert_eq!(attempt, ConnectAttempt::default());
@@ -1651,7 +1675,7 @@ mod tests {
             let mut attempt = ConnectAttempt::default();
             attempt.dial(tofu, profile, redial, false);
             assert_eq!(attempt.on_ready(), tofu);
-            let got = attempt.on_exit(&desk, outcome, "the client log");
+            let got = attempt.on_exit(&desk, outcome, Some("the client log"));
             assert_eq!(got, want, "tofu {tofu}, {profile:?}, redial {redial}");
             assert_eq!(attempt, ConnectAttempt::default());
         }
@@ -1688,7 +1712,7 @@ mod tests {
                 error: Some("Wrong password.".into()),
                 sent,
             };
-            assert_eq!(attempt.on_exit(&host, &locked, "log"), want);
+            assert_eq!(attempt.on_exit(&host, &locked, Some("log")), want);
         }
     }
 
@@ -2107,7 +2131,7 @@ mod tests {
                 Some("The console was killed — out of memory, or stopped by the system".into()),
             ),
         ] {
-            assert_eq!(outcome.console_banner(log), want, "{outcome:?}");
+            assert_eq!(outcome.console_banner(Some(log)), want, "{outcome:?}");
         }
         let args = |cmd: Command| -> Vec<String> {
             cmd.get_args().map(|a| a.to_string_lossy().into()).collect()
@@ -2136,10 +2160,23 @@ mod tests {
     fn a_silent_death_names_an_ntstatus_in_hex() {
         assert_eq!(ExitHow::of(2), ExitHow::Code);
         assert_eq!(ExitHow::of(-1073741819), ExitHow::AccessViolation);
-        let av = ConnectOutcome::died_banner(-1073741819, "the log");
+        let av = ConnectOutcome::died_banner(-1073741819, Some("the log"));
         assert!(av.contains("access violation (0xC0000005)"), "{av}");
-        let other = ConnectOutcome::died_banner(0xC000_0409u32 as i32, "the log");
+        let other = ConnectOutcome::died_banner(0xC000_0409u32 as i32, Some("the log"));
         assert!(other.contains("exception 0xC0000409"), "{other}");
+    }
+
+    /// A shell that writes no log has no path to name: the banner says "the client log".
+    #[test]
+    fn a_shell_without_a_log_file_names_none() {
+        let with = ConnectOutcome::died_banner(2, Some("/tmp/client.log"));
+        assert!(with.ends_with("Check /tmp/client.log."), "{with}");
+        for code in [2, -1073741819, 0xC000_0409u32 as i32] {
+            let bare = ConnectOutcome::died_banner(code, None);
+            assert!(bare.ends_with("Check the client log."), "{bare}");
+            let console = ConnectOutcome::RendererFailed { code }.console_banner(None);
+            assert!(console.unwrap().ends_with("Check the client log."));
+        }
     }
 
     #[test]

@@ -131,7 +131,7 @@ pub fn spawn_console(
         SessionEvent::Ended(msg) => ended = Some(msg),
         SessionEvent::Exited(code) => {
             let outcome = ConnectOutcome::from_exit(code, error.take(), ended.take(), false);
-            let banner = outcome.console_banner("the client log");
+            let banner = outcome.console_banner(None);
             let _ = sender.send(AppMsg::ConsoleExited(banner));
         }
         // This shell draws nothing for a ready, an approval wait or a stats line (the console

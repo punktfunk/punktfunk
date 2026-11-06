@@ -277,9 +277,7 @@ impl AppModel {
         let held = std::mem::take(&mut flight.slot);
         let cancelled = matches!(held, Slot::Session(child, _) if child.is_cancelled());
         let outcome = ConnectOutcome::from_exit(code, error, ended, cancelled);
-        let route = flight
-            .attempt
-            .on_exit(&req.host, &outcome, "the client log");
+        let route = flight.attempt.on_exit(&req.host, &outcome, None);
         self.show_streams();
         self.hosts.emit(HostsMsg::SetSession(key, None));
         match route {

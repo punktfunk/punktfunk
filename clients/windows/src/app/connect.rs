@@ -374,7 +374,7 @@ fn connect_spawn(
                         }
                     };
                     let log = crate::spawn::log_hint();
-                    match attempt.on_exit(&host, &outcome, &log) {
+                    match attempt.on_exit(&host, &outcome, Some(&log)) {
                         // The user closed the stream window, or Disconnect killed it.
                         ExitRoute::Silent => ss.call(Screen::Hosts),
                         ExitRoute::Banner(msg) => {
@@ -467,7 +467,7 @@ pub(crate) fn open_console(
             SpawnEvent::Exited(outcome) => {
                 crate::shell_window::restore();
                 // A quit from the library or Disconnect returns silently.
-                if let Some(msg) = outcome.console_banner(&crate::spawn::log_hint()) {
+                if let Some(msg) = outcome.console_banner(Some(&crate::spawn::log_hint())) {
                     st.call(msg);
                 }
                 ss.call(Screen::Hosts);
