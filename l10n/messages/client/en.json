@@ -1,0 +1,12 @@
+{
+  "player_stats_scale_pct": "Statistics size",
+  "player_stats_scale_pct_hint": "The overlay's size, on top of your display's scaling.",
+  "prefs_advanced_changed": [{
+    "declarations": ["input count", "local n = count: plural"],
+    "selectors": ["n"],
+    "match": {
+      "n=one": "{count} advanced setting changed",
+      "n=other": "{count} advanced settings changed"
+    }
+  }]
+}

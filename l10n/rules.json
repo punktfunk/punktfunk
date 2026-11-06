@@ -1,0 +1,37 @@
+{
+  "parts": {
+    "always": ["common"],
+    "typescript_only": ["web", "browser", "decky"]
+  },
+  "budgets": {
+    "roles": {
+      "_hint": 110,
+      "_title": 60,
+      "_body": 200,
+      "_confirm": 200,
+      "_failed": 200,
+      "_a11y": 200
+    },
+    "label": 40,
+    "translation_slack": 1.2
+  },
+  "banned": [
+    { "text": "please", "at": "anywhere", "why": "say what to do, without Please" },
+    { "text": "!", "at": "end", "why": "end with a period, not an exclamation mark" },
+    { "text": "failed to", "at": "anywhere", "why": "say what did not happen: Couldn't …" },
+    { "text": "could not", "at": "anywhere", "why": "write Couldn't" },
+    { "text": "cannot", "at": "anywhere", "why": "write can't" },
+    { "text": "unable to", "at": "anywhere", "why": "write Couldn't or can't" }
+  ],
+  "retired": [
+    { "term": "Mbps", "use": "Mbit/s" },
+    { "term": "Mb/s", "use": "Mbit/s" },
+    { "term": "Gbps", "use": "Gbit/s" },
+    { "term": "this phone", "use": "this device" },
+    { "term": "this iPhone", "use": "this device" },
+    { "term": "this iPad", "use": "this device" },
+    { "term": "this Mac", "use": "this device" },
+    { "term": "colour", "use": "color" }
+  ],
+  "debt": {}
+}

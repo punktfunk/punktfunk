@@ -1,0 +1,6 @@
+{
+  "fix_percent_args": "{pct} is a share, {total} what it is a share of.",
+  "fix_order": "{host} is a computer's name, {app} a game's.",
+  "fix_pads": "{count} controllers on the host {host}.",
+  "fix_files": "{count} is a number of files."
+}

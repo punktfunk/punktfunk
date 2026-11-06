@@ -1,0 +1,5 @@
+{
+  "player_stats_scale_pct": "Label of the setting that sizes the statistics overlay.",
+  "player_stats_scale_pct_hint": "Hint under the statistics size setting.",
+  "prefs_advanced_changed": "Settings screen, while advanced settings are hidden: how many of them differ from their defaults. {count} is that number."
+}

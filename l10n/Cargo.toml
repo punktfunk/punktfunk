@@ -1,0 +1,37 @@
+# Every message a person reads in Punktfunk, in messages/, and what compiles them: the runtime
+# lookup, the build script that compiles each shipped language in, and the `pf-l10n` binary
+# (check, android, apple). README.md is the guide; SPEC.md is the format.
+[package]
+name = "pf-l10n"
+description = "Punktfunk's messages: typed lookups compiled from l10n/messages, and the checks and generators for the other platforms"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+publish = false
+
+[features]
+# One feature per part of messages/. `common` is always compiled; the TypeScript-only parts
+# (rules.json) have none. A new Rust part needs its feature here.
+client = []
+console = []
+desktop = []
+apple = []
+android = []
+host = []
+tools = []
+# Adds `en-XA`: each English message accented, a third longer, in brackets.
+pseudo = []
+# `os_languages()`, for desktop binaries.
+os = ["dep:sys-locale"]
+
+# The library has no other dependency: it goes into setup, the tray, a wasm payload and console
+# homebrew. Windows and macOS need an OS call to read the preferred languages; Unix reads the
+# environment.
+[target.'cfg(any(windows, target_os = "macos"))'.dependencies]
+sys-locale = { version = "0.3", optional = true }
+
+[lints]
+workspace = true
