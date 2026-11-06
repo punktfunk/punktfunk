@@ -1,41 +1,14 @@
-crates/install/punktfunk-setup/src/choices.rs	Game Mode / HTPC box
-crates/install/punktfunk-setup/src/choices.rs	{couch_why} hosts are usually headless
-crates/install/punktfunk-setup/src/choices.rs	{couch_why} — virtual Steam Deck pad
 crates/install/punktfunk-setup/src/demo.rs	Arch Linux
 crates/install/punktfunk-setup/src/demo.rs	Arch Linux
 crates/install/punktfunk-setup/src/demo.rs	Debian GNU/Linux 13 (trixie)
 crates/install/punktfunk-setup/src/demo.rs	Debian GNU/Linux 13 (trixie)
 crates/install/punktfunk-setup/src/demo.rs	Fedora Linux 44 (Workstation Edition)
 crates/install/punktfunk-setup/src/demo.rs	Void Linux
-crates/install/punktfunk-setup/src/exec.rs	console certificate trusted — a Chromium that is already running picks it up on restart
-crates/install/punktfunk-setup/src/exec.rs	{pkg} is not on the {channel} channel — removing it (the {channel} packages carry its files)
-crates/install/punktfunk-setup/src/facts.rs	Debian {} is below the glibc floor — {}, or build from source: {DOCS}/developers/build-from-source
-crates/install/punktfunk-setup/src/facts.rs	Linux Mint {} (Ubuntu 24.04 base) installs the package but can't host — {DOCS}/requirements#cinnamon-linux-mint-and-lmde. LMDE 7 and Mint 23 can.
-crates/install/punktfunk-setup/src/facts.rs	NixOS: add the flake input and enable the module instead — {DOCS}/nixos
-crates/install/punktfunk-setup/src/facts.rs	Ubuntu {} installs the package but can't host — its desktop is too old to create a virtual display ({DOCS}/requirements#the-floor-for-a-working-host). Runs on {}.
-crates/install/punktfunk-setup/src/facts.rs	this installer is for Linux hosts — Windows: {DOCS}/windows-host
-crates/install/punktfunk-setup/src/main.rs	Continue anyway?
-crates/install/punktfunk-setup/src/main.rs	Nothing was changed.
-crates/install/punktfunk-setup/src/main.rs	this installer is for Linux hosts — Windows: {DOCS}/windows-host
 crates/install/punktfunk-setup/src/main.rs	{} is not a Facts document: {e}
-crates/install/punktfunk-setup/src/plan.rs	Channel switch: {} → {} ({DOCS}/channels)
-crates/install/punktfunk-setup/src/plan.rs	Checking for Sunshine / Apollo / Vibeshine
-crates/install/punktfunk-setup/src/plan.rs	Clients learn the port from discovery; the console and plugins read it from mgmt-endpoint. Details: {DOCS}/switching-from-sunshine
-crates/install/punktfunk-setup/src/plan.rs	Controller access
-crates/install/punktfunk-setup/src/plan.rs	No conflicting game-streaming host detected.
-crates/install/punktfunk-setup/src/plan.rs	Options (each one can be changed later)
-crates/install/punktfunk-setup/src/plan.rs	Run it later with: punktfunk-omarchy setup ({DOCS}/omarchy)
-crates/install/punktfunk-setup/src/plan.rs	Starting at boot with nobody logged in
-crates/install/punktfunk-setup/src/plan.rs	Starting the host and the web console
-crates/install/punktfunk-setup/src/plan.rs	Uninstalling the host ({DOCS}/uninstall)
-crates/install/punktfunk-setup/src/plan.rs	Web console password
-crates/install/punktfunk-setup/src/plan.rs	with another GameStream host running, only one can bind the Moonlight ports — stop the other first or skip this
 crates/install/punktfunk-setup/src/platform/windows/exec.rs	'{}' did not start
 crates/install/punktfunk-setup/src/platform/windows/exec.rs	'{}' did not start
 crates/install/punktfunk-setup/src/platform/windows/exec.rs	Windows App Runtime already installed
 crates/install/punktfunk-setup/src/platform/windows/exec.rs	Windows App Runtime installed
-crates/install/punktfunk-setup/src/platform/windows/exec.rs	couldn't change '{network}' — set it to Private in Windows Settings, or re-run and open the public firewall
-crates/install/punktfunk-setup/src/platform/windows/exec.rs	couldn't install the Windows App Runtime — install it manually: {url}
 crates/install/punktfunk-setup/src/platform/windows/exec.rs	registered '{display_name}' in Add/Remove Programs
 crates/install/punktfunk-setup/src/platform/windows/exec.rs	would ensure the Windows App Runtime ({arch}; downloaded when missing — a failure warns and never aborts)
 crates/install/punktfunk-setup/src/platform/windows/exec.rs	would register '{display_name}' in Add/Remove Programs ({key})
@@ -44,34 +17,10 @@ crates/install/punktfunk-setup/src/platform/windows/exec.rs	{kept} file(s) an ea
 crates/install/punktfunk-setup/src/platform/windows/exec.rs	{path} — already gone
 crates/install/punktfunk-setup/src/platform/windows/exec.rs	{scope} PATH already right
 crates/install/punktfunk-setup/src/platform/windows/exec.rs	{scope} PATH updated
-crates/install/punktfunk-setup/src/platform/windows/exec.rs	{} in-use file(s) under {dir} ({}) go with the next restart{}
 crates/install/punktfunk-setup/src/platform/windows/exec.rs	{} — not there, nothing to do
-crates/install/punktfunk-setup/src/platform/windows/plan.rs	Checking Windows
-crates/install/punktfunk-setup/src/platform/windows/plan.rs	Checking for Sunshine / Apollo / Vibeshine
-crates/install/punktfunk-setup/src/platform/windows/plan.rs	Checking the virtual display driver
-crates/install/punktfunk-setup/src/platform/windows/plan.rs	Clients learn the port from discovery; the console and plugins read it from mgmt-endpoint. Details: {DOCS}/switching-from-sunshine
-crates/install/punktfunk-setup/src/platform/windows/plan.rs	Drivers (a hiccup warns and never aborts)
-crates/install/punktfunk-setup/src/platform/windows/plan.rs	Moonlight compatibility stays off — the other host owns those ports while it runs
-crates/install/punktfunk-setup/src/platform/windows/plan.rs	No conflicting game-streaming host detected.
-crates/install/punktfunk-setup/src/platform/windows/plan.rs	Plugin runner
-crates/install/punktfunk-setup/src/platform/windows/plan.rs	Plugin runner
 crates/install/punktfunk-setup/src/platform/windows/plan.rs	Punktfunk Host
-crates/install/punktfunk-setup/src/platform/windows/plan.rs	Register the uninstaller
-crates/install/punktfunk-setup/src/platform/windows/plan.rs	Register the uninstaller
-crates/install/punktfunk-setup/src/platform/windows/plan.rs	Restoring what the stop disabled
-crates/install/punktfunk-setup/src/platform/windows/plan.rs	Retiring the Inno Setup uninstaller
-crates/install/punktfunk-setup/src/platform/windows/plan.rs	Stopping running punktfunk apps
-crates/install/punktfunk-setup/src/platform/windows/plan.rs	Stopping the running host for the upgrade
-crates/install/punktfunk-setup/src/platform/windows/plan.rs	The Punktfunk host needs {} — this PC reports build {}, where the virtual display can't start. Nothing was installed.
 crates/install/punktfunk-setup/src/platform/windows/plan.rs	URL:Punktfunk stream link
-crates/install/punktfunk-setup/src/platform/windows/plan.rs	Uninstalling the client ({DOCS}/uninstall)
-crates/install/punktfunk-setup/src/platform/windows/plan.rs	Uninstalling the host ({DOCS}/uninstall)
-crates/install/punktfunk-setup/src/platform/windows/plan.rs	Web console
 crates/install/punktfunk-setup/src/platform/windows/plan.rs	Windows App Runtime
-crates/install/punktfunk-setup/src/platform/windows/plan.rs	network '{}' is set to Public, and the firewall rules below don't apply there — the host will be unreachable until the network is Private or the public rules are added ({DOCS}/troubleshooting#windows-firewall)
-crates/install/punktfunk-setup/src/platform/windows/plan.rs	the Add/Remove Programs entry keeps its key — winget and the updater keep tracking this install
-crates/install/punktfunk-setup/src/platform/windows/plan.rs	with another GameStream host running, only one can bind the Moonlight ports — stop the other first or skip this
-crates/install/punktfunk-setup/src/platform/windows/plan.rs	{who} is active on this box — both want TCP 47990 (its web UI, punktfunk's management API)
 crates/install/punktfunk-setup/src/platform/windows/report.rs	1. Open Punktfunk from the Start menu and pick your host.
 crates/install/punktfunk-setup/src/platform/windows/report.rs	2. Install a client on the device you stream to ({DOCS}/install-client), connect, and click Approve in the console.
 crates/install/punktfunk-setup/src/platform/windows/report.rs	2. Pairing help: {DOCS}/pairing
@@ -82,92 +31,18 @@ crates/install/punktfunk-setup/src/platform/windows/report.rs	Gamepad drivers: {
 crates/install/punktfunk-setup/src/platform/windows/report.rs	HDR Vulkan layer: {}
 crates/install/punktfunk-setup/src/platform/windows/report.rs	Moonlight compat: {}
 crates/install/punktfunk-setup/src/platform/windows/report.rs	Public-network firewall rules: {}
-crates/install/punktfunk-setup/src/platform/windows/report.rs	Running next to Sunshine/Apollo: punktfunk's management API is on :{DEFAULT_MGMT_PORT} — {DOCS}/switching-from-sunshine
 crates/install/punktfunk-setup/src/platform/windows/report.rs	Start the service: {}
 crates/install/punktfunk-setup/src/platform/windows/report.rs	Tray autostart: {}
 crates/install/punktfunk-setup/src/platform/windows/report.rs	Virtual display driver: {}
 crates/install/punktfunk-setup/src/platform/windows/report.rs	Web console reachable from: {}
-crates/install/punktfunk-setup/src/platform/windows/report.rs	⚠ This network is Public and the firewall rules don't apply there — the host is unreachable until that changes ({DOCS}/troubleshooting#windows-firewall)
-crates/install/punktfunk-setup/src/platform/windows/screen.rs	A Punktfunk shortcut on the desktop.
-crates/install/punktfunk-setup/src/platform/windows/screen.rs	After install
-crates/install/punktfunk-setup/src/platform/windows/screen.rs	Controllers arrive on the host as real gamepads.
-crates/install/punktfunk-setup/src/platform/windows/screen.rs	Desktop shortcut
-crates/install/punktfunk-setup/src/platform/windows/screen.rs	Gamepad drivers
-crates/install/punktfunk-setup/src/platform/windows/screen.rs	Generated for you — keep it or type your own. It signs you into the web console and is shown again on the finish page.
-crates/install/punktfunk-setup/src/platform/windows/screen.rs	HDR Vulkan layer
-crates/install/punktfunk-setup/src/platform/windows/screen.rs	HDR for Vulkan and DXVK titles.
-crates/install/punktfunk-setup/src/platform/windows/screen.rs	Moonlight compat
-crates/install/punktfunk-setup/src/platform/windows/screen.rs	Open the firewall on networks marked Public. Off, the host is reachable on private networks only.
-crates/install/punktfunk-setup/src/platform/windows/screen.rs	Public-network firewall rules
-crates/install/punktfunk-setup/src/platform/windows/screen.rs	Serve Moonlight, Artemis, or another third-party client. Punktfunk's own apps don't need this.
-crates/install/punktfunk-setup/src/platform/windows/screen.rs	Serve Moonlight, Artemis, or another third-party client. {who} owns the Moonlight ports while it runs — this plane can't bind until it stops.
-crates/install/punktfunk-setup/src/platform/windows/screen.rs	Start streaming as soon as the install finishes.
-crates/install/punktfunk-setup/src/platform/windows/screen.rs	Start the service
-crates/install/punktfunk-setup/src/platform/windows/screen.rs	The status icon next to the clock, for every user.
-crates/install/punktfunk-setup/src/platform/windows/screen.rs	The virtual display the host streams from.
-crates/install/punktfunk-setup/src/platform/windows/screen.rs	Tray autostart
-crates/install/punktfunk-setup/src/platform/windows/screen.rs	Virtual display driver
-crates/install/punktfunk-setup/src/platform/windows/screen.rs	Web console
-crates/install/punktfunk-setup/src/platform/windows/screen.rs	Web console password
-crates/install/punktfunk-setup/src/platform/windows/screen.rs	Web console reachable from
-crates/install/punktfunk-setup/src/platform/windows/screen.rs	Where the console answers: your local network (never the internet), this PC only, or one address such as a VPN interface. It is how you pair devices and change every setting.
-crates/install/punktfunk-setup/src/platform/windows/screen.rs	{who} detected — punktfunk's management API moves to :{}. {who} keeps :{}.
 crates/install/punktfunk-setup/src/platform/windows/sys.rs	'{name}' did not stop within 30s
 crates/install/punktfunk-setup/src/platform/windows/sys.rs	SCM is Windows-only
 crates/install/punktfunk-setup/src/report.rs	Choices (nothing below has run yet)
 crates/install/punktfunk-setup/src/report.rs	Detected {} → {} (guide: {})
-crates/install/punktfunk-setup/src/report.rs	Done. Next: let a device in.
 crates/install/punktfunk-setup/src/report.rs	Full controller (joins the punktfunk group — grants usbip attach)
-crates/install/punktfunk-setup/src/report.rs	Group changes apply after a restart of this computer (controllers won't work until then).
-crates/install/punktfunk-setup/src/report.rs	Install line for your distro: {}
-crates/install/punktfunk-setup/src/report.rs	NVIDIA GPU without the NVIDIA driver — nothing can encode until it's installed: step 1 of {}
-crates/install/punktfunk-setup/src/report.rs	On the device you play on, open punktfunk and pick this host. Approve it in the notification here, or in the console.
-crates/install/punktfunk-setup/src/report.rs	Open punktfunk here and pick the PC you stream from — then approve this device in that host's console.
-crates/install/punktfunk-setup/src/report.rs	Password — this prints it, until you first sign in: {}
-crates/install/punktfunk-setup/src/report.rs	Password: the one you typed
 crates/install/punktfunk-setup/src/report.rs	Re-running is safe. Ctrl-C stops between steps.
-crates/install/punktfunk-setup/src/report.rs	Removed. Left on purpose: ~/.config/punktfunk (identity, pairings, host.env, plugins — a reinstall
-crates/install/punktfunk-setup/src/report.rs	Running next to Sunshine/Apollo: {DOCS}/switching-from-sunshine
 crates/install/punktfunk-setup/src/report.rs	Shared clipboard
 crates/install/punktfunk-setup/src/report.rs	Start at boot with nobody logged in
-crates/install/punktfunk-setup/src/report.rs	The one-command cleanups for each are on {DOCS}/uninstall#linux-hosts
 crates/install/punktfunk-setup/src/report.rs	The per-distro pages stay the documented path; this automates them. Docs: {DOCS}/install
-crates/install/punktfunk-setup/src/report.rs	The web console is NOT on this box, and pairing and every setting live there.
 crates/install/punktfunk-setup/src/report.rs	Third-party clients (Moonlight, Artemis)
 crates/install/punktfunk-setup/src/report.rs	Web console reachable from: {}
-crates/install/punktfunk-setup/src/ui/summary.rs	A toast when a device asks to pair, and when a stream starts or stops.
-crates/install/punktfunk-setup/src/ui/summary.rs	Desktop notifications
-crates/install/punktfunk-setup/src/ui/summary.rs	Enable and start the services once the install finishes. Off installs the files and starts nothing.
-crates/install/punktfunk-setup/src/ui/summary.rs	Full controller support
-crates/install/punktfunk-setup/src/ui/summary.rs	Holds off the idle lock for as long as a stream is running.
-crates/install/punktfunk-setup/src/ui/summary.rs	Host service
-crates/install/punktfunk-setup/src/ui/summary.rs	Host: the PC you stream from. Client: the device you play on. One PC can be both.
-crates/install/punktfunk-setup/src/ui/summary.rs	Joins the punktfunk group for paddles, trackpads and gyro. It grants usbip attach, so only on a machine you trust.
-crates/install/punktfunk-setup/src/ui/summary.rs	Keep the screen awake
-crates/install/punktfunk-setup/src/ui/summary.rs	Match the Omarchy theme
-crates/install/punktfunk-setup/src/ui/summary.rs	Serve Moonlight, Artemis, or another third-party client. Punktfunk's own apps don't need this.
-crates/install/punktfunk-setup/src/ui/summary.rs	Share the clipboard between this host and your clients. Each client still opts in per host.
-crates/install/punktfunk-setup/src/ui/summary.rs	Shared clipboard
-crates/install/punktfunk-setup/src/ui/summary.rs	Start at boot
-crates/install/punktfunk-setup/src/ui/summary.rs	Starts the host at boot so it is reachable before anyone logs in. It can only stream once a session exists.
-crates/install/punktfunk-setup/src/ui/summary.rs	The console follows whatever theme Omarchy is on, instead of its own palette.
-crates/install/punktfunk-setup/src/ui/summary.rs	Third-party clients
-crates/install/punktfunk-setup/src/ui/summary.rs	This machine is
-crates/install/punktfunk-setup/src/ui/tui.rs	A specific address (e.g. a VPN interface)
-crates/install/punktfunk-setup/src/ui/tui.rs	Apply these changes
-crates/install/punktfunk-setup/src/ui/tui.rs	Both (host + client)
-crates/install/punktfunk-setup/src/ui/tui.rs	Enter accepts · Esc generates one instead
-crates/install/punktfunk-setup/src/ui/tui.rs	Enter accepts · Esc leaves it unchanged
-crates/install/punktfunk-setup/src/ui/tui.rs	Install now with these settings
-crates/install/punktfunk-setup/src/ui/tui.rs	Set my own now
-crates/install/punktfunk-setup/src/ui/tui.rs	The PC I stream from (host)
-crates/install/punktfunk-setup/src/ui/tui.rs	The device I play on (client)
-crates/install/punktfunk-setup/src/ui/tui.rs	The web console ({url}) asks for a password. One is generated for you unless you set your own. Print it any time with: {read_cmd}
-crates/install/punktfunk-setup/src/ui/tui.rs	Type the address the console should listen on. It has to be an address this machine already has.
-crates/install/punktfunk-setup/src/ui/tui.rs	Type the console password. It is stored on this box only, and shown here as you type.
-crates/install/punktfunk-setup/src/ui/tui.rs	Uninstall — remove the packages and the repo
-crates/install/punktfunk-setup/src/ui/tui.rs	Use the generated password
-crates/install/punktfunk-setup/src/ui/tui.rs	Where should the web console be reachable? It is how you pair devices and change every setting.
-crates/install/punktfunk-setup/src/ui/tui.rs	an IPv4 or IPv6 address · Esc leaves it unchanged
-crates/install/punktfunk-setup/src/ui/tui.rs	at least {MIN_PASSWORD} characters · Esc generates one instead
-crates/install/punktfunk-setup/src/ui/tui.rs	↑↓ move · Enter select/edit · q quit — nothing runs until you confirm
