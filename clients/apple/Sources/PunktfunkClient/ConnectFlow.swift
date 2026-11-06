@@ -404,8 +404,8 @@ struct ConnectFlow {
                     guard case .listed(let rows?) = answer,
                           rows.contains(where: { $0.id == profileID }) else {
                         store.setProfile(host.id, nil)
-                        model.errorMessage =
-                            "\(host.displayName): \(HostRejection.profileUnknown.userMessage)"
+                        model.errorMessage = L10n.dialHostReason(
+                            host: host.displayName, reason: HostRejection.profileUnknown.userMessage)
                         return
                     }
                     settleSeat(host, rows: rows, id: profileID) { id in
