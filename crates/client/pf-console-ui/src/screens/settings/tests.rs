@@ -188,18 +188,88 @@ fn catalog_key(id: RowId) -> Option<&'static str> {
     })
 }
 
-/// Each row that edits a shared setting carries its `player_<key>` message (the catalogue's
-/// label for a name with none), the catalogue's category and tier, and every catalogue entry
-/// has a row here: the console is the surface every platform shares.
+/// The catalogue's name for a platform, as `on` spells it.
+fn platform_id(p: crate::platform::Platform) -> &'static str {
+    use crate::platform::Platform;
+    match p {
+        Platform::Desktop => "desktop",
+        Platform::Android => "android",
+        Platform::Apple => "apple",
+        Platform::WebOS => "webos",
+        Platform::Web => "web",
+        Platform::Tizen => "tizen",
+        Platform::Ps5 => "ps5",
+    }
+}
+
+/// A catalogue value as the accessors spell it: a switch `true` or `false`, a string as is.
+fn scalar(v: &serde_json::Value) -> String {
+    v.as_str().map_or_else(|| v.to_string(), str::to_string)
+}
+
+/// Pickers that list fewer entries than the catalogue, with the ones they list in the
+/// catalogue's order: a codec the platform cannot decode, a pad it cannot present, a decoder
+/// the OS lacks, the lossless rates the console offers.
+fn listed_subset(key: &str, platform: &str) -> Option<&'static [&'static str]> {
+    Some(match (key, platform) {
+        ("codec", "webos") => &["auto", "hevc", "h264", "av1"],
+        ("codec", "tizen") => &["auto", "hevc", "h264"],
+        ("codec", "ps5") => &["auto", "hevc", "h264", "pyrowave"],
+        ("gamepad", "webos" | "ps5") => &["auto", "xboxone", "dualsense", "dualshock4"],
+        ("audio_format", _) => &["opus", "lossless48", "lossless96"],
+        ("decoder", "desktop") if cfg!(windows) => {
+            &["auto", "native-vulkan", "native-d3d11va", "software"]
+        }
+        ("decoder", "desktop") => &["auto", "native-vulkan", "native-vaapi", "software"],
+        _ => return None,
+    })
+}
+
+/// Rows `row_on` offers on platforms the catalogue leaves out. `row_applies` never shows
+/// them there.
+const OFFERED_NEVER_SHOWN: &[&str] = &["follow_os_theme"];
+
+/// Catalogue entries naming a platform whose console has no row: the platform's own screen has
+/// one. The desktop shells (GTK, WinUI) draw the console toggle, and the console is the desktop
+/// session itself; the Apple app picks its own controller, in its own id grammar.
+const NATIVE_ONLY: &[(&str, &str)] = &[
+    ("gamepad_ui_enabled", "desktop"),
+    ("gamepad_ui_mode", "desktop"),
+    ("forward_pad", "apple"),
+];
+
+/// Rows with no one stored default to name: none exists, it depends on the device, or an unset
+/// value reads differently on the console and on a native screen.
+const NO_ONE_VALUE: &[&str] = &[
+    "resolution",
+    "library_sections",
+    "overlay_actions",
+    "forward_pad",
+    "reduce_ui_resolution",
+    "library_view",
+];
+
+/// Entries a preset carries in its `extra`, not in a typed overlay field. Android alone.
+const PRESET_IN_EXTRA: &[&str] = &["second_screen", "low_latency"];
+
+/// Entries a preset may hold that the console's preset editor has no row for.
+const PRESET_NOT_IN_CONSOLE: &[&str] = &["overlay_actions", "second_screen", "low_latency"];
+
+/// Each row that edits a shared setting is the catalogue's: the `player_<key>` message for
+/// its label (V-Sync, a brand, has none), its category and tier, whether a preset may hold
+/// it, and on each platform that lists it, its options in the catalogue's order and its
+/// default. Every platform an entry names has a row, and every row has an entry.
 #[test]
 fn rows_match_the_settings_catalog() {
+    use crate::platform::Platform;
     let raw = include_str!("../../../../../../clients/shared/settings-catalog.json");
     let file: serde_json::Value = serde_json::from_str(raw).expect("settings-catalog.json parses");
     let entries = file["settings"].as_array().expect("settings");
     let library = crate::library::LibraryShared::default();
     let mut settings = Settings::default();
     let ctx = Ctx::test(&mut settings, &library);
-    let mut seen = Vec::new();
+    let mut seen: Vec<(&str, &str)> = Vec::new();
+    let mut defaults: std::collections::BTreeMap<&str, Vec<Option<String>>> = Default::default();
     for (tab, rows) in &TABS {
         for id in rows.iter().copied() {
             let Some(key) = catalog_key(id) else { continue };
@@ -208,8 +278,13 @@ fn rows_match_the_settings_catalog() {
                 .find(|e| e["key"] == key)
                 .unwrap_or_else(|| panic!("{key} ({id:?}) is not in the catalogue"));
             let spec = row_spec(id, &ctx, &[], &Default::default());
-            let label = pf_l10n::get(&format!("player_{key}"))
-                .map_or_else(|| entry["label"].as_str().unwrap().into(), |m| m.text());
+            let label = match pf_l10n::get(&format!("player_{key}")) {
+                Some(m) => m.text(),
+                None => {
+                    assert_eq!(key, "vsync", "{key} has no player_{key} message");
+                    "V-Sync".into()
+                }
+            };
             assert_eq!(spec.label, label, "{key}");
             assert_eq!(
                 format!("{tab:?}").to_lowercase(),
@@ -217,12 +292,103 @@ fn rows_match_the_settings_catalog() {
                 "{key}"
             );
             assert_eq!(advanced(id), entry["advanced"].as_bool().unwrap(), "{key}");
-            seen.push(key);
+
+            let preset = entry["preset"].as_bool().unwrap();
+            let mut overlay = SettingsOverlay::default();
+            let pins = overlay.pin(key, &Settings::default());
+            assert_eq!(
+                pins || PRESET_IN_EXTRA.contains(&key),
+                preset,
+                "{key}: preset"
+            );
+            assert_eq!(
+                preset_field(id).is_some(),
+                preset && !PRESET_NOT_IN_CONSOLE.contains(&key),
+                "{key}: the console's preset editor"
+            );
+
+            let on: Vec<&str> = entry["on"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|p| p.as_str().unwrap())
+                .collect();
+            for p in Platform::ALL {
+                let name = platform_id(p);
+                let listed = on.contains(&name);
+                let offered = row_on(id, p);
+                if offered && !listed {
+                    assert!(
+                        OFFERED_NEVER_SHOWN.contains(&key),
+                        "{key}: the console offers {name}, the catalogue does not"
+                    );
+                }
+                if listed && !offered {
+                    assert!(
+                        NATIVE_ONLY.contains(&(key, name)),
+                        "{key}: the catalogue names {name}, the console has no row"
+                    );
+                }
+                if !(listed && offered) {
+                    continue;
+                }
+                seen.push((key, name));
+                let device = crate::screens::Device {
+                    platform: p,
+                    ..crate::screens::Device::test()
+                };
+                let got = stored_options(id, p);
+                let want: Option<Vec<String>> = entry.get("options").map(|o| {
+                    o.as_array()
+                        .unwrap()
+                        .iter()
+                        .map(|v| v.as_str().unwrap().to_string())
+                        .collect()
+                });
+                match (&got, &want) {
+                    (None, None) => {}
+                    (Some(got), Some(want)) => match listed_subset(key, name) {
+                        Some(sub) => {
+                            assert_eq!(got, sub, "{key} on {name}");
+                            let mut rest = want.iter();
+                            assert!(
+                                sub.len() < want.len() && sub.iter().all(|s| rest.any(|w| w == s)),
+                                "{key} on {name}: not the catalogue's options, in order"
+                            );
+                        }
+                        None => assert_eq!(got, want, "{key} on {name}"),
+                    },
+                    _ => panic!("{key} on {name}: options {got:?}, the catalogue's {want:?}"),
+                }
+                let stored = stored_default(id, &device);
+                match entry.get("default") {
+                    Some(v) => assert_eq!(stored, Some(scalar(v)), "{key} on {name}: default"),
+                    None => defaults.entry(key).or_default().push(stored),
+                }
+            }
         }
     }
     for e in entries {
         let key = e["key"].as_str().unwrap();
-        assert!(seen.contains(&key), "{key} has no console row");
+        for p in e["on"].as_array().unwrap() {
+            let name = p.as_str().unwrap();
+            assert!(
+                seen.contains(&(key, name)) || NATIVE_ONLY.contains(&(key, name)),
+                "{key} has no console row on {name}"
+            );
+        }
+    }
+    for (key, stored) in &defaults {
+        if NO_ONE_VALUE.contains(key) {
+            continue;
+        }
+        let mut distinct: Vec<_> = stored.iter().flatten().collect();
+        distinct.sort();
+        distinct.dedup();
+        assert!(
+            distinct.len() > 1,
+            "{key}: every platform stores {distinct:?}, so the catalogue carries it"
+        );
     }
 }
 

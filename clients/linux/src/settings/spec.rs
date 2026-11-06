@@ -224,36 +224,105 @@ specs! {
 
 #[cfg(test)]
 mod tests {
+    use super::super::tables::{
+        AUDIO_FORMATS, CODECS, COMPOSITORS, DECODERS, GAMEPADS, GUIDE_GESTURES, MOUSE_MODES,
+        PRESENT_PRIORITIES, REFRESH, RENDER_SCALES, SCREENS, SMOOTH_BUFFER_STEPS, SYSTEM_BUTTONS,
+        TOUCH_MODES, VIDEO_FITS,
+    };
     use super::*;
 
-    /// Catalog keys this client has no row for, and why.
-    const ABSENT: &[(&str, &str)] = &[
-        (
-            "background_keep_alive",
-            "a phone or TV app in the background",
-        ),
-        (
-            "background_timeout_minutes",
-            "a phone or TV app in the background",
-        ),
+    /// Catalog entries naming `desktop` that this dialog has no row for, and why: the console
+    /// the desktop session draws has them.
+    const CONSOLE_ONLY: &[(&str, &str)] = &[
         ("ui_palette", "the console's own look"),
         ("reduce_motion", "the console's own look"),
-        ("reduce_ui_resolution", "a weak GPU's console"),
         ("library_view", "the console's library"),
         ("library_sections", "Customize on the Library header"),
         ("host_sort", "Sort on the Hosts header"),
         ("host_grouping", "Group on the Hosts header"),
-        ("low_latency", "a MediaCodec decoder flag"),
-        ("second_screen", "an Android handheld's second screen"),
-        ("audio_route", "webOS's own audio plane"),
-        ("cursor_gestures", "a TV remote's missing second button"),
-        ("rumble_on_phone", "a phone's own hardware"),
-        ("gyro_on_phone", "a phone's own hardware"),
-        ("sc2_capture", "Apple only"),
-        ("ds_capture", "Android and webOS only"),
-        ("spatial_audio", "a Vision Pro's room"),
-        ("screen", "a Vision Pro's room"),
     ];
+
+    /// Pickers that list fewer options than the catalog, the ones they list in its order.
+    const SUBSET: &[(&str, &[&str])] = &[
+        (
+            "decoder",
+            &["auto", "native-vulkan", "native-vaapi", "software"],
+        ),
+        ("audio_format", &["opus", "lossless48", "lossless96"]),
+    ];
+
+    /// Pickers that list the catalog's options in another order: open rows in
+    /// docs/settings.md.
+    const OTHER_ORDER: &[(&str, &[&str])] = &[(
+        "gamepad",
+        &[
+            "auto",
+            "xbox360",
+            "dualsense",
+            "xboxone",
+            "dualshock4",
+            "steamdeck",
+            "steamcontroller2",
+        ],
+    )];
+
+    /// Lists the pages build inline, with no table to read: not pinned here.
+    const INLINE: &[&str] = &["audio_channels", "gamepad_ui_mode"];
+
+    /// The stored value of each entry of a row's list, in the order the dialog offers them.
+    fn options(key: &str) -> Option<Vec<String>> {
+        use pf_client_core::start::StartIn;
+        use pf_client_core::trust::{HudCorner, StatsVerbosity};
+        fn strs(table: &[&str]) -> Vec<String> {
+            table.iter().map(|s| s.to_string()).collect()
+        }
+        Some(match key {
+            "start_in" => StartIn::ALL.iter().map(|v| v.as_str().into()).collect(),
+            "stats_verbosity" => (StatsVerbosity::ALL.iter())
+                .map(|v| format!("{v:?}").to_lowercase())
+                .collect(),
+            "hud_placement" => HudCorner::ALL.iter().map(|c| c.as_name().into()).collect(),
+            "stats_scale_pct" => (punktfunk_core::hud::STATS_SCALE_PCTS.iter())
+                .map(|p| p.to_string())
+                .collect(),
+            "refresh_hz" => REFRESH.iter().map(|hz| hz.to_string()).collect(),
+            "render_scale" => RENDER_SCALES.iter().map(|x| x.to_string()).collect(),
+            "video_fit" => strs(VIDEO_FITS),
+            "screens" => strs(SCREENS),
+            "present_priority" => strs(PRESENT_PRIORITIES),
+            "smooth_buffer" => (0..SMOOTH_BUFFER_STEPS).map(|n| n.to_string()).collect(),
+            "codec" => strs(CODECS),
+            "compositor" => strs(COMPOSITORS),
+            "decoder" => strs(DECODERS),
+            "touch_mode" => strs(TOUCH_MODES),
+            "mouse_mode" => strs(MOUSE_MODES),
+            "audio_format" => AUDIO_FORMATS.iter().map(|(v, _)| v.to_string()).collect(),
+            "gamepad" => strs(GAMEPADS),
+            "system_buttons" => strs(SYSTEM_BUTTONS),
+            "guide_gesture" => strs(GUIDE_GESTURES),
+            _ => return None,
+        })
+    }
+
+    /// What a fresh install stores for a setting, spelled as the catalog spells a default.
+    /// `None` for one this build keeps outside the typed settings.
+    fn stored(key: &str, s: &crate::trust::Settings) -> Option<String> {
+        use serde_json::Value;
+        match key {
+            "start_in" => Some(
+                pf_client_core::start::StartIn::parse(&s.start_in)
+                    .as_str()
+                    .into(),
+            ),
+            "stats_verbosity" => Some(format!("{:?}", s.stats_verbosity()).to_lowercase()),
+            _ => match serde_json::to_value(s).ok()?.get(key)? {
+                Value::Bool(b) => Some(b.to_string()),
+                Value::Number(n) => n.as_f64().map(|n| n.to_string()),
+                Value::String(t) => Some(t.clone()),
+                _ => None,
+            },
+        }
+    }
 
     /// Rows with no catalog entry: this client's own variants and device pickers.
     const LOCAL: &[&str] = &[
@@ -264,13 +333,16 @@ mod tests {
         "mic_device",
     ];
 
-    /// Each row that edits a shared setting carries the catalog's label, category and tier,
-    /// and every catalog entry has a row here or a reason it does not.
+    /// Each row that edits a shared setting is the catalog's: the `player_<key>` message for
+    /// its label (V-Sync, a brand, has none), its category, tier and preset tier, its options
+    /// in the catalog's order, and its default. A catalog entry naming `desktop` has a row here
+    /// or a reason it does not, and an entry that leaves `desktop` out has no row.
     #[test]
     fn rows_match_the_settings_catalog() {
         let raw = include_str!("../../../shared/settings-catalog.json");
         let file: serde_json::Value = serde_json::from_str(raw).expect("the catalog parses");
         let entries = file["settings"].as_array().expect("settings");
+        let fresh = crate::trust::Settings::default();
         for spec in SPECS {
             let Some(e) = entries.iter().find(|e| e["key"] == spec.key) else {
                 assert!(
@@ -280,27 +352,68 @@ mod tests {
                 );
                 continue;
             };
-            assert_eq!(spec.title(), e["label"].as_str().unwrap(), "{}", spec.key);
+            let key = spec.key;
+            match pf_l10n::get(&format!("player_{key}")) {
+                Some(m) => assert_eq!(spec.title(), m.text(), "{key}"),
+                None => assert_eq!((key, spec.title()), ("vsync", "V-Sync")),
+            }
+            assert_eq!(spec.page.id(), e["category"].as_str().unwrap(), "{key}");
+            assert_eq!(spec.advanced, e["advanced"].as_bool().unwrap(), "{key}");
             assert_eq!(
-                spec.page.id(),
-                e["category"].as_str().unwrap(),
-                "{}",
-                spec.key
+                spec.layer.presetable(),
+                e["preset"].as_bool().unwrap(),
+                "{key}: preset"
             );
-            assert_eq!(
-                spec.advanced,
-                e["advanced"].as_bool().unwrap(),
-                "{}",
-                spec.key
+            assert!(
+                e["on"].as_array().unwrap().iter().any(|p| p == "desktop"),
+                "{key} has a row here, and the catalog leaves desktop out"
             );
+
+            let want: Option<Vec<String>> = e.get("options").map(|o| {
+                let o = o.as_array().unwrap();
+                o.iter().map(|v| v.as_str().unwrap().to_string()).collect()
+            });
+            match (options(key), want) {
+                (None, None) => {}
+                (None, Some(_)) => assert!(INLINE.contains(&key), "{key}: no table to read"),
+                (Some(got), Some(want)) => {
+                    let subset = SUBSET.iter().find(|(k, _)| *k == key);
+                    let other = OTHER_ORDER.iter().find(|(k, _)| *k == key);
+                    if let Some((_, listed)) = subset {
+                        assert_eq!(got, *listed, "{key}");
+                        let mut rest = want.iter();
+                        assert!(
+                            listed.len() < want.len()
+                                && listed.iter().all(|s| rest.any(|w| w == s)),
+                            "{key}: the dialog's options are not the catalog's, in order"
+                        );
+                    } else if let Some((_, listed)) = other {
+                        assert_eq!(got, *listed, "{key}");
+                        let (mut a, mut b) = (got.clone(), want.clone());
+                        a.sort();
+                        b.sort();
+                        assert!(a == b && got != want, "{key}: not the catalog's, reordered");
+                    } else {
+                        assert_eq!(got, want, "{key}: options");
+                    }
+                }
+                (got, want) => panic!("{key}: options {got:?}, the catalog's {want:?}"),
+            }
+
+            if let (Some(d), Some(stored)) = (e.get("default"), stored(key, &fresh)) {
+                let want = d.as_str().map_or_else(|| d.to_string(), str::to_string);
+                assert_eq!(stored, want, "{key}: default");
+            }
         }
         for e in entries {
             let key = e["key"].as_str().unwrap();
+            let desktop = e["on"].as_array().unwrap().iter().any(|p| p == "desktop");
             let bound = SPECS.iter().any(|s| s.key == key);
-            let absent = ABSENT.iter().any(|(k, _)| *k == key);
-            assert!(
-                bound != absent,
-                "{key}: a row or a reason, not both or neither"
+            let console_only = CONSOLE_ONLY.iter().any(|(k, _)| *k == key);
+            assert_eq!(
+                bound,
+                desktop && !console_only,
+                "{key}: a row, or a reason, exactly when the catalog names desktop"
             );
         }
     }

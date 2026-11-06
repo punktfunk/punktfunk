@@ -101,34 +101,16 @@ rows! {
 mod tests {
     use super::*;
 
-    /// Catalog keys this client has no row for, and why.
-    const ABSENT: &[(&str, &str)] = &[
-        (
-            "background_keep_alive",
-            "a phone or TV app in the background",
-        ),
-        (
-            "background_timeout_minutes",
-            "a phone or TV app in the background",
-        ),
+    /// Catalog entries naming `desktop` that this client has no row for, and why: the console
+    /// the desktop session draws has them.
+    const CONSOLE_ONLY: &[(&str, &str)] = &[
         ("follow_os_theme", "the console's own look"),
         ("ui_palette", "the console's own look"),
         ("reduce_motion", "the console's own look"),
-        ("reduce_ui_resolution", "a weak GPU's console"),
         ("library_view", "the console's library"),
         ("library_sections", "the console's library"),
         ("host_sort", "Sort on the Hosts header"),
         ("host_grouping", "Group on the Hosts header"),
-        ("second_screen", "an Android handheld's second screen"),
-        ("low_latency", "a MediaCodec decoder flag"),
-        ("audio_route", "webOS's own audio plane"),
-        ("cursor_gestures", "a TV remote's missing second button"),
-        ("rumble_on_phone", "a phone's own hardware"),
-        ("gyro_on_phone", "a phone's own hardware"),
-        ("sc2_capture", "Apple only"),
-        ("ds_capture", "Android and webOS only"),
-        ("spatial_audio", "a Vision Pro's room"),
-        ("screen", "a Vision Pro's room"),
     ];
 
     /// Rows with no catalog entry: this device's own pickers.
@@ -138,9 +120,10 @@ mod tests {
     /// its own.
     const OWN_PAGE: &[(&str, &str)] = &[("overlay_actions", "quick_actions")];
 
-    /// Each row that edits a shared setting carries the catalog's label, category and tier,
-    /// save a page [`OWN_PAGE`] names, and every catalog entry has a row here or a reason it
-    /// does not.
+    /// Each row that edits a shared setting is the catalog's: the `player_<key>` message for
+    /// its label (V-Sync, a brand, has none), its category and tier, save a page [`OWN_PAGE`]
+    /// names. A catalog entry naming `desktop` has a row here or a reason it does not, and an
+    /// entry that leaves `desktop` out has no row.
     #[test]
     fn rows_match_the_settings_catalog() {
         let raw = include_str!("../../../../shared/settings-catalog.json");
@@ -155,7 +138,10 @@ mod tests {
                 );
                 continue;
             };
-            assert_eq!(row.label(), e["label"].as_str().unwrap(), "{}", row.key);
+            match pf_l10n::get(&format!("player_{}", row.key)) {
+                Some(m) => assert_eq!(row.label(), m.text(), "{}", row.key),
+                None => assert_eq!((row.key, row.label()), ("vsync", "V-Sync")),
+            }
             let category = e["category"].as_str().unwrap();
             assert_eq!(
                 row.page != category,
@@ -170,15 +156,162 @@ mod tests {
                 "{}",
                 row.key
             );
+            assert!(
+                e["on"].as_array().unwrap().iter().any(|p| p == "desktop"),
+                "{} has a row here, and the catalog leaves desktop out",
+                row.key
+            );
         }
         for e in entries {
             let key = e["key"].as_str().unwrap();
+            let desktop = e["on"].as_array().unwrap().iter().any(|p| p == "desktop");
             let bound = ROWS.iter().any(|r| r.key == key);
-            let absent = ABSENT.iter().any(|(k, _)| *k == key);
-            assert!(
-                bound != absent,
-                "{key}: a row or a reason, not both or neither"
+            let console_only = CONSOLE_ONLY.iter().any(|(k, _)| *k == key);
+            assert_eq!(
+                bound,
+                desktop && !console_only,
+                "{key}: a row, or a reason, exactly when the catalog names desktop"
             );
+        }
+    }
+
+    /// The pages' tables, by the catalog key they hold: the page's source and the const.
+    const TABLES: &[(&str, &str, &str)] = &[
+        ("refresh_hz", include_str!("display.rs"), "REFRESH"),
+        ("decoder", include_str!("display.rs"), "DECODERS"),
+        ("codec", include_str!("display.rs"), "CODECS"),
+        ("video_fit", include_str!("display.rs"), "VIDEO_FITS"),
+        ("screens", include_str!("display.rs"), "SCREENS"),
+        (
+            "present_priority",
+            include_str!("display.rs"),
+            "PRESENT_PRIORITIES",
+        ),
+        (
+            "smooth_buffer",
+            include_str!("display.rs"),
+            "SMOOTH_BUFFERS",
+        ),
+        ("compositor", include_str!("display.rs"), "COMPOSITORS"),
+        ("gamepad", include_str!("controllers.rs"), "GAMEPADS"),
+        (
+            "system_buttons",
+            include_str!("controllers.rs"),
+            "SYSTEM_BUTTONS",
+        ),
+        (
+            "guide_gesture",
+            include_str!("controllers.rs"),
+            "GUIDE_GESTURES",
+        ),
+        ("audio_channels", include_str!("audio.rs"), "AUDIO_CHANNELS"),
+    ];
+
+    /// Lists the pages draw from the shared core (`StartIn`, `StatsVerbosity`, `HudCorner`,
+    /// `TouchMode`, the render-scale stops, the audio formats) or build inline: the console
+    /// and the Linux dialog pin the core's, so there is no table here to read.
+    const NOT_HERE: &[&str] = &[
+        "start_in",
+        "stats_verbosity",
+        "hud_placement",
+        "stats_scale_pct",
+        "render_scale",
+        "touch_mode",
+        "mouse_mode",
+        "audio_format",
+        "gamepad_ui_mode",
+    ];
+
+    /// Pickers that list fewer options than the catalog, the ones they list in its order.
+    const SUBSET: &[(&str, &[&str])] = &[(
+        "decoder",
+        &["auto", "native-vulkan", "native-d3d11va", "software"],
+    )];
+
+    /// Pickers that list the catalog's options in another order: open rows in
+    /// docs/settings.md.
+    const OTHER_ORDER: &[(&str, &[&str])] = &[(
+        "gamepad",
+        &[
+            "auto",
+            "xbox360",
+            "dualsense",
+            "xboxone",
+            "dualshock4",
+            "steamdeck",
+            "steamcontroller2",
+        ],
+    )];
+
+    /// The stored values of `const name` in `source`: the first literal of each tuple, or the
+    /// numbers of a plain array.
+    fn stored(source: &str, name: &str) -> Vec<String> {
+        let at = source
+            .find(&format!("const {name}:"))
+            .unwrap_or_else(|| panic!("no const {name}"));
+        let body = &source[at..];
+        let body = &body[body.find("= ").unwrap() + 2..];
+        let body = &body[..body.find("];").unwrap()];
+        if body.contains('(') {
+            body.lines()
+                .filter_map(|l| l.trim().strip_prefix('('))
+                .map(|l| {
+                    let first = l.split(',').next().unwrap().trim();
+                    first.trim_matches('"').to_string()
+                })
+                .collect()
+        } else {
+            let list = &body[body.find('[').unwrap() + 1..];
+            list.split(',').map(|n| n.trim().to_string()).collect()
+        }
+    }
+
+    /// Each picker the pages build from a table of their own lists the catalog's options in
+    /// its order, or the subset or other order this client names.
+    #[test]
+    fn options_match_the_settings_catalog() {
+        let raw = include_str!("../../../../shared/settings-catalog.json");
+        let file: serde_json::Value = serde_json::from_str(raw).expect("the catalog parses");
+        let entries = file["settings"].as_array().expect("settings");
+        for (key, source, name) in TABLES {
+            let e = entries.iter().find(|e| e["key"] == *key).expect(key);
+            let want: Vec<String> = e["options"]
+                .as_array()
+                .unwrap_or_else(|| panic!("{key} has no options"))
+                .iter()
+                .map(|v| v.as_str().unwrap().to_string())
+                .collect();
+            let got = stored(source, name);
+            let subset = SUBSET.iter().find(|(k, _)| k == key);
+            let other = OTHER_ORDER.iter().find(|(k, _)| k == key);
+            if let Some((_, listed)) = subset {
+                assert_eq!(got, *listed, "{key}");
+                let mut rest = want.iter();
+                assert!(
+                    listed.len() < want.len() && listed.iter().all(|s| rest.any(|w| w == s)),
+                    "{key}: the pages' options are not the catalog's, in order"
+                );
+            } else if let Some((_, listed)) = other {
+                assert_eq!(got, *listed, "{key}");
+                let (mut a, mut b) = (got.clone(), want.clone());
+                a.sort();
+                b.sort();
+                assert!(a == b && got != want, "{key}: not the catalog's, reordered");
+            } else {
+                assert_eq!(got, want, "{key}: options");
+            }
+        }
+        for e in entries {
+            let key = e["key"].as_str().unwrap();
+            let desktop = e["on"].as_array().unwrap().iter().any(|p| p == "desktop");
+            let list = e.get("options").is_some();
+            if desktop && list && ROWS.iter().any(|r| r.key == key) {
+                let read = TABLES.iter().any(|(k, _, _)| *k == key);
+                assert!(
+                    read != NOT_HERE.contains(&key),
+                    "{key}: a table to read, or a reason there is none"
+                );
+            }
         }
     }
 }

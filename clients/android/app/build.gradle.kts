@@ -186,6 +186,8 @@ dependencies {
 // Record (write) the screenshots when the unit tests run. These tests exist to GENERATE marketing
 // images, not to diff goldens, so always capture rather than verify.
 tasks.withType<Test>().configureEach {
+    // SettingsCatalogTest reads it by path; without this a catalogue edit leaves the test up to date.
+    inputs.file("../../shared/settings-catalog.json")
     systemProperty("roborazzi.test.record", "true")
     // Maven Central limits Robolectric's 213 MB runtime jar per IP, and every CI job fetches it
     // from one address. Google's mirror serves the same artifact.

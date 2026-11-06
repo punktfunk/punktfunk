@@ -2196,3 +2196,120 @@ pub(super) fn toggle(value: &mut bool, delta: i32, wrap: bool) -> Option<()> {
         Some(())
     }
 }
+
+/// The stored value of each entry of a list row, in the order the row steps through them; the
+/// catalogue test pins these. `None` for a row that is not a list.
+#[cfg(test)]
+pub(super) fn stored_options(
+    id: RowId,
+    platform: crate::platform::Platform,
+) -> Option<Vec<String>> {
+    fn ids<L>(table: &[(&str, L)]) -> Vec<String> {
+        table.iter().map(|(v, _)| v.to_string()).collect()
+    }
+    Some(match id {
+        RowId::StartIn => (start::StartIn::ALL.iter())
+            .map(|v| v.as_str().into())
+            .collect(),
+        RowId::Stats => (StatsVerbosity::ALL.iter())
+            .map(|v| format!("{v:?}").to_lowercase())
+            .collect(),
+        RowId::GamepadUiMode => ids(&GAMEPAD_UI_MODES),
+        RowId::LibraryView => (crate::library::LibraryView::ALL.iter())
+            .map(|v| v.id().into())
+            .collect(),
+        RowId::HostSort => ids(&home::HOST_SORTS),
+        RowId::HostGrouping => ids(&home::HOST_GROUPINGS),
+        RowId::StatsPosition => HudCorner::ALL.iter().map(|c| c.as_name().into()).collect(),
+        RowId::StatsSize => (punktfunk_core::hud::STATS_SCALE_PCTS.iter())
+            .map(|p| p.to_string())
+            .collect(),
+        RowId::BackgroundTimeout => BACKGROUND_TIMEOUTS.iter().map(|m| m.to_string()).collect(),
+        RowId::Refresh => REFRESH.iter().map(|hz| hz.to_string()).collect(),
+        RowId::RenderScale => RENDER_SCALES.iter().map(|x| x.to_string()).collect(),
+        RowId::VideoFit => ids(&VIDEO_FITS),
+        RowId::Screens => ids(&MONITORS),
+        RowId::PresentPriority => ids(&PRESENT_PRIORITIES),
+        RowId::SmoothBuffer => SMOOTH_BUFFERS.iter().map(|n| n.to_string()).collect(),
+        RowId::Codec => ids(codecs(platform)),
+        RowId::Decoder => ids(&DECODERS),
+        RowId::Compositor => ids(&COMPOSITORS),
+        RowId::Screen => ids(&SCREENS),
+        RowId::Audio => AUDIO.iter().map(|(n, _)| n.to_string()).collect(),
+        RowId::AudioFormat => ids(AUDIO_FORMATS),
+        RowId::AudioRoute => ids(&WEBOS_AUDIO_ROUTES),
+        RowId::Touch => TouchMode::ALL.iter().map(|m| m.as_name().into()).collect(),
+        RowId::Mouse => MouseMode::ALL.iter().map(|m| m.as_name().into()).collect(),
+        RowId::PadType => ids(&pad_types(platform)),
+        RowId::SystemButtons => ids(&SYSTEM_BUTTONS),
+        RowId::GuideGesture => ids(&GUIDE_GESTURE),
+        _ => return None,
+    })
+}
+
+/// What a fresh install on `device` stores for a row, spelled as the catalogue spells a
+/// default: `true` or `false` for a switch, the digits of a number. `None` for a row with no
+/// one value.
+#[cfg(test)]
+pub(super) fn stored_default(id: RowId, device: &crate::screens::Device) -> Option<String> {
+    use serde_json::Value;
+    let s = fresh_settings(device);
+    if let Some(extra) = id.extra() {
+        return Some(match extra {
+            Extra::Bool(key, default) => extra_bool(&s, key, default).to_string(),
+            Extra::Flag(get, _) => get(&s).to_string(),
+            Extra::Choice(key, default, _) => extra_str(&s, key, default).to_string(),
+        });
+    }
+    let json = serde_json::to_value(&s).ok()?;
+    let field = |key: &str| match &json[key] {
+        Value::Bool(b) => Some(b.to_string()),
+        Value::Number(n) => n.as_f64().map(|n| n.to_string()),
+        Value::String(t) => Some(t.clone()),
+        _ => None,
+    };
+    match id {
+        RowId::Refresh => field("refresh_hz"),
+        RowId::Bitrate => field("bitrate_kbps"),
+        RowId::PyroWaveQuality => field("pyrowave_bpp"),
+        RowId::RenderScale => field("render_scale"),
+        RowId::VideoFit => field("video_fit"),
+        RowId::Screens => field("screens"),
+        RowId::Compositor => field("compositor"),
+        RowId::Codec => field("codec"),
+        RowId::Decoder => field("decoder"),
+        RowId::PresentPriority => field("present_priority"),
+        RowId::SmoothBuffer => field("smooth_buffer"),
+        RowId::Audio => field("audio_channels"),
+        RowId::AudioFormat => field("audio_format"),
+        RowId::PadType => field("gamepad"),
+        RowId::SystemButtons => field("system_buttons"),
+        RowId::GuideGesture => field("guide_gesture"),
+        RowId::Touch => field("touch_mode"),
+        RowId::Mouse => field("mouse_mode"),
+        RowId::Palette => field("ui_palette"),
+        RowId::PadSpeaker => Some(pad_speaker_on(&s.pad_speaker).to_string()),
+        RowId::Stats => Some(format!("{:?}", s.stats_verbosity()).to_lowercase()),
+        RowId::StartIn => Some(start::StartIn::parse(&s.start_in).as_str().into()),
+        RowId::LibraryView => Some(
+            crate::library::LibraryView::parse(&s.library_view)
+                .id()
+                .into(),
+        ),
+        RowId::HostGrouping => Some(host_grouping(&s).into()),
+        RowId::BackgroundTimeout => Some(background_timeout(&s).to_string()),
+        RowId::StatsSize => {
+            let pct = punktfunk_core::hud::stats_scale(s.stats_scale_pct) * 100.0;
+            Some(pct.round().to_string())
+        }
+        RowId::StatsPosition => Some(
+            (s.hud_corner(own_stats_corner(device.platform)))
+                .as_name()
+                .into(),
+        ),
+        RowId::ReduceUiResolution => {
+            Some(reduce_ui_res(&s, device.platform, device.fallback_ui).to_string())
+        }
+        _ => None,
+    }
+}
