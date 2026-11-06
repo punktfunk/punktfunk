@@ -438,9 +438,9 @@ struct ScreenPlaceholder: View {
         VStack(spacing: 20) {
             Image(systemName: "pano")
                 .font(.system(size: 44))
-            Text("Streaming on the curved screen")
+            Text(L10n.appleCurveStreaming)
                 .font(.title2)
-            Button("End Stream", systemImage: "xmark", role: .destructive, action: endStream)
+            Button(L10n.appleCurveEndStream, systemImage: "xmark", role: .destructive, action: endStream)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color.black)
