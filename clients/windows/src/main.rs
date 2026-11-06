@@ -30,6 +30,9 @@ mod couch;
 mod deeplink;
 #[cfg(windows)]
 mod gpu;
+// Windows Hello as the profile unlock key store.
+#[cfg(windows)]
+mod hello;
 #[cfg(windows)]
 mod logfile;
 #[cfg(windows)]

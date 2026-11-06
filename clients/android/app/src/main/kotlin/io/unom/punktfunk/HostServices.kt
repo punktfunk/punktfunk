@@ -28,7 +28,8 @@ import kotlinx.coroutines.withContext
  * store-qualified library id to boot into, or `null` for the desktop; [dialer] names the shell
  * and path, for the log and the wire. [deliveryFlags] is [DELIVERY_PROBE_ONLY] for a network
  * check; [profile] the host profile to play as, `null` for none. [wakeSince] is when the host
- * first refused as still waking ([HostNative.elapsedMs]), `null` until it has.
+ * first refused as still waking ([HostNative.elapsedMs]), `null` until it has. [promptsUnlock]:
+ * the shell that dials shows the password prompt after a `profile-locked` refusal.
  */
 data class DialSpec(
     val settings: Settings,
@@ -43,12 +44,16 @@ data class DialSpec(
     val deliveryFlags: Int = 0,
     val profile: String? = null,
     val wakeSince: Long? = null,
+    val promptsUnlock: Boolean = false,
 )
 
 /** The calls [HostServices] makes below Kotlin: [JniHostNative] on device, a fake in the JVM tests. */
 interface HostNative {
-    /** A session handle for [spec], or `0` with the cause in [lastError]. Never cancelled midway. */
-    suspend fun connect(spec: DialSpec): Long
+    /**
+     * A session handle for [spec], or `0` with the cause in [lastError]. Never cancelled midway.
+     * [unlock] rides this one dial and is wiped once the native call returns.
+     */
+    suspend fun connect(spec: DialSpec, unlock: Unlock?): Long
 
     /** The token of the last failed connect or pairing, cleared on read. */
     fun lastError(): String
@@ -92,7 +97,7 @@ interface HostNative {
 
 /** [HostNative] over the JNI bridge. [context] resolves the dial's mode, HDR and device name. */
 class JniHostNative(private val context: Context) : HostNative {
-    override suspend fun connect(spec: DialSpec): Long = connectToHost(context, spec)
+    override suspend fun connect(spec: DialSpec, unlock: Unlock?): Long = connectToHost(context, spec, unlock)
     override fun lastError(): String = NativeBridge.nativeTakeLastError()
     override fun lastSaid(): String = NativeBridge.nativeTakeLastSaid()
     override fun close(handle: Long) = NativeBridge.nativeClose(handle)
@@ -184,10 +189,11 @@ class HostServices(val store: KnownHostStore, private val native: HostNative) {
 
     /**
      * Opens a session as [spec] asks and hands back its handle, with no record kept: the speed
-     * test's dial. A [ticket] cancelled while the dial was out closes the late session.
+     * test's dial. A [ticket] cancelled while the dial was out closes the late session. [unlock]
+     * goes with this dial only.
      */
-    suspend fun open(spec: DialSpec, ticket: Ticket? = null): Opened {
-        val handle = connect(spec)
+    suspend fun open(spec: DialSpec, ticket: Ticket? = null, unlock: Unlock? = null): Opened {
+        val handle = connect(spec, unlock)
         if (ticket?.cancelled == true) {
             if (handle != 0L) withContext(Dispatchers.IO) { native.close(handle) }
             return Cancelled
@@ -201,6 +207,7 @@ class HostServices(val store: KnownHostStore, private val native: HostNative) {
      * approval just let in ([requestAccess]), is saved with the identity it presented, paired
      * when it was approved or already paired, so the next dial is silent. A woken host that
      * refuses before it can stream is dialed again ([wakeRedial]) under the same overlay.
+     * [unlock] rides the first dial only; a redial sends none.
      */
     suspend fun dial(
         spec: DialSpec,
@@ -208,9 +215,10 @@ class HostServices(val store: KnownHostStore, private val native: HostNative) {
         name: String,
         requestAccess: Boolean = false,
         ticket: Ticket? = null,
+        unlock: Unlock? = null,
     ): Dialed {
         var dialing = spec
-        var opened = open(dialing, ticket)
+        var opened = open(dialing, ticket, unlock)
         while (opened is Failed && !requestAccess) {
             val token = opened.token
             val (next, wait) = wakeRedial(dialing) { autoWake, since ->
@@ -247,15 +255,16 @@ class HostServices(val store: KnownHostStore, private val native: HostNative) {
     /**
      * One launch, one session: every shell's dial lands here, so the refusal lives here too. A
      * refused dial returns `0` without touching the host. A coroutine cancelled while the dial
-     * was out has nobody to hand the session to, so it closes here.
+     * was out has nobody to hand the session to, so it closes here. [unlock] is wiped either way.
      */
-    private suspend fun connect(spec: DialSpec): Long {
+    private suspend fun connect(spec: DialSpec, unlock: Unlock?): Long {
         if (!SessionGate.take()) {
+            unlock?.wipe()
             Log.w(TAG, "dial refused (${spec.dialer}): this device already has a session or a dial in hand")
             return 0L
         }
         try {
-            val handle = native.connect(spec)
+            val handle = native.connect(spec, unlock)
             if (handle != 0L && !currentCoroutineContext().isActive) {
                 withContext(Dispatchers.IO + NonCancellable) { native.close(handle) }
             }

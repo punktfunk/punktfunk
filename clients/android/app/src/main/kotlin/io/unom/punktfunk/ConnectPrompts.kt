@@ -69,6 +69,8 @@ internal fun ConnectPrompts(
     connectingHostName: String?,
     waker: WakeController,
     onCancelConnect: () -> Unit,
+    /** The profile whose desktop the dial's unlock is starting; `null` for a plain dial. */
+    startingProfile: String? = null,
 ) {
     pendingTrust?.let { pt ->
         val onPair = { onPendingTrustChange(pt.copy(kind = PendingTrust.Kind.PAIR)) }
@@ -139,5 +141,6 @@ internal fun ConnectPrompts(
         connectingHostName = connectingHostName,
         waker = waker,
         onCancelConnect = onCancelConnect,
+        startingProfile = startingProfile,
     )
 }

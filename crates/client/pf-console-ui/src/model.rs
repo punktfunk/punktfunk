@@ -4,6 +4,7 @@
 //! network or disk rides a [`ConsoleCmd`] — the overlay never blocks. A result that answers
 //! a command carries that command's [`RequestKey`].
 
+use punktfunk_core::quic::v2::msg::ProfileUnlock;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, VecDeque};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -303,6 +304,8 @@ struct ConsoleState {
     profiles: BTreeMap<String, ProfilesAnswer>,
     /// Answers to [`ConsoleCmd::FetchAvatar`] by URL, each taken once.
     avatars: Vec<(String, Arc<[u8]>)>,
+    /// The profile unlock the last `Launch` carries, until its dial takes it.
+    unlock: Option<ProfileUnlock>,
 }
 
 /// What a host answered [`ConsoleCmd::FetchProfiles`] with.
@@ -494,6 +497,17 @@ impl ConsoleShared {
 
     pub(crate) fn take_notice(&self) -> Option<String> {
         self.0.lock().unwrap().notice.take()
+    }
+
+    /// The unlock the `Launch` just taken carries, for its dial. Only an embedder whose console
+    /// prompts ([`crate::shell::ConsoleOptions::prompts_unlock`]) gets one.
+    pub fn take_unlock(&self) -> Option<ProfileUnlock> {
+        self.0.lock().unwrap().unlock.take()
+    }
+
+    /// The next `Launch`'s unlock, replacing (and wiping) any left untaken.
+    pub(crate) fn put_unlock(&self, unlock: Option<ProfileUnlock>) {
+        self.0.lock().unwrap().unlock = unlock;
     }
 }
 

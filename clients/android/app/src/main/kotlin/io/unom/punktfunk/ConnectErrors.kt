@@ -56,6 +56,8 @@ object ConnectErrors {
         "no-seat" -> "All seats are taken."
         "seat-occupied" -> "Someone is already playing as that profile."
         "seat-unavailable" -> "That profile can't play on this host right now."
+        // Where no prompt follows: a redial, or a host whose profiles didn't list.
+        "profile-locked" -> "This profile is locked. Enter its password."
         "busy" -> "The host is busy with another session."
         "access-expired" ->
             "Your access to this host has expired — ask the host's owner to grant it again."

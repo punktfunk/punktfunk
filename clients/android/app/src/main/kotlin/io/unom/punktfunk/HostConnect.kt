@@ -29,6 +29,12 @@ const val CONNECT_TIMEOUT_MS = 10_000
  */
 const val REQUEST_ACCESS_TIMEOUT_MS = 185_000
 
+/**
+ * Handshake budget for a dial that carries a profile unlock: above the supervisor's 120 s answer
+ * window (30 s PAM, 90 s cold start), with room for the redirect to the seat.
+ */
+const val UNLOCK_TIMEOUT_MS = 150_000
+
 /** How often a dial in flight checks whether the host parked it for its operator. */
 const val PENDING_POLL_MS = 250L
 
@@ -146,9 +152,10 @@ class SessionOwner(private val close: (Long) -> Unit) {
  * The one place [NativeBridge.nativeConnect] is assembled, for [JniHostNative]. Derives the mode,
  * HDR and gamepad settings the host needs from [spec]'s settings, waits for the last session's
  * close, and dials off the main thread. The dial cannot be interrupted, so it runs
- * `NonCancellable`. Returns the session handle, or `0` on failure.
+ * `NonCancellable`. [unlock] crosses as byte arrays and is wiped when the native call returns.
+ * Returns the session handle, or `0` on failure.
  */
-suspend fun connectToHost(context: Context, spec: DialSpec): Long {
+suspend fun connectToHost(context: Context, spec: DialSpec, unlock: Unlock? = null): Long {
     val settings = spec.settings
     // Advertise HDR only when the user enabled it AND this device's display can present it (else the
     // host sends a proper SDR stream rather than PQ the panel would mis-tone-map).
@@ -226,7 +233,8 @@ suspend fun connectToHost(context: Context, spec: DialSpec): Long {
             // What this device can decode (H.264 always; HEVC and AV1 when a real decoder exists) +
             // the soft codec preference (user choice, or the Automatic AV1 rule above) — the
             // host resolves the emitted codec from both.
-            videoCodecs = codecBits, preferredCodec = preferredCodec, timeoutMs = spec.timeoutMs,
+            videoCodecs = codecBits, preferredCodec = preferredCodec,
+            timeoutMs = if (unlock != null) maxOf(spec.timeoutMs, UNLOCK_TIMEOUT_MS) else spec.timeoutMs,
             launch = spec.launch,
             // The host's approval-list / trust-store label for this device — the same
             // user-set device name the pairing dialogs offer for nativePair.
@@ -249,6 +257,14 @@ suspend fun connectToHost(context: Context, spec: DialSpec): Long {
             deliveryFlags = spec.deliveryFlags,
             profile = spec.profile,
         )
-        NativeBridge.nativeConnect(request.toJson())
+        if (!spec.promptsUnlock && unlock == null) return@withContext NativeBridge.nativeConnect(request.toJson())
+        try {
+            NativeBridge.nativeConnectWithUnlock(
+                request.toJson(), spec.promptsUnlock || unlock != null, unlock?.kind ?: 0, unlock?.secret,
+                unlock?.staySignedIn == true, unlock?.enrollAlg ?: 0, unlock?.enrollKey,
+            )
+        } finally {
+            unlock?.wipe()
+        }
     }
 }

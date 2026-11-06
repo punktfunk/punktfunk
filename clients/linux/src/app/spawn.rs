@@ -14,6 +14,7 @@
 use crate::app::AppMsg;
 use crate::hosts::ConnectRequest;
 use pf_client_core::orchestrate::{self, ConnectOutcome, ConnectPlan, HostTarget, SessionEvent};
+use punktfunk_core::quic::v2::msg::ProfileUnlock;
 
 /// Spawn tunables beyond a plain connect.
 #[derive(Debug, Default)]
@@ -23,6 +24,8 @@ pub struct SpawnOpts {
     pub profile: Option<Option<String>>,
     /// This dial is the one retry after the host refused the profile as unknown.
     pub redial: bool,
+    /// The profile's unlock, for the child's stdin only. It wipes on drop and prints lengths.
+    pub unlock: Option<ProfileUnlock>,
 }
 
 pub use orchestrate::{session_process, CancelHandle};
@@ -51,6 +54,8 @@ fn plan_for(req: &ConnectRequest, fp_hex: &str, tofu: bool, opts: &SpawnOpts) ->
     // `ConnectOrchestrator`, arch-split C0).
     plan.wake = false;
     plan.tofu = tofu;
+    // This shell prompts for a locked profile's password and spawns again with it.
+    plan.prompts_unlock = true;
     if let Some(profile) = &opts.profile {
         plan.profile = profile.clone();
     }
@@ -60,7 +65,8 @@ fn plan_for(req: &ConnectRequest, fp_hex: &str, tofu: bool, opts: &SpawnOpts) ->
 /// Spawns the session with `fp_hex` pinned and translates its lifecycle into [`AppMsg`]s.
 ///
 /// `tofu` marks the plan's pin as an advertised one. The plan supplies all effective
-/// settings, including preset fullscreen policy.
+/// settings, including preset fullscreen policy. `opts.unlock` goes to the child's stdin and
+/// is wiped before this returns.
 ///
 /// The caller takes the slot; [`AppMsg::SessionExited`] frees it. `Ok` is the child's
 /// handle; `Err` reports a spawn failure before supervision starts.
@@ -69,33 +75,46 @@ pub fn spawn_session(
     req: ConnectRequest,
     fp_hex: String,
     tofu: bool,
-    opts: SpawnOpts,
+    mut opts: SpawnOpts,
 ) -> Result<CancelHandle, String> {
     let plan = plan_for(&req, &fp_hex, tofu, &opts);
+    let unlock = opts.unlock.take();
+    let (cmd, spec) = orchestrate::session_command(&plan);
     let (mut error, mut ended) = (None::<orchestrate::SessionError>, None::<String>);
-    orchestrate::spawn_session(&plan, None, move |ev| match ev {
-        SessionEvent::AwaitingApproval => {
-            let _ = sender.send(AppMsg::AwaitingApproval(req.clone()));
-        }
-        SessionEvent::Ready => {
-            let _ = sender.send(AppMsg::SessionReady {
-                req: req.clone(),
-                fp_hex: fp_hex.clone(),
-            });
-        }
-        SessionEvent::Error(e) => error = Some(e),
-        SessionEvent::Ended(msg) => ended = Some(msg),
-        // The brain persists the window size; this shell shows no live stats.
-        SessionEvent::Window { .. } | SessionEvent::Stats(_) => {}
-        SessionEvent::Exited(code) => {
-            let _ = sender.send(AppMsg::SessionExited {
-                req: req.clone(),
-                code,
-                error: error.take(),
-                ended: ended.take(),
-            });
-        }
-    })
+    let stderr = std::io::stderr();
+    let child =
+        orchestrate::spawn_child_with_unlock(
+            cmd,
+            spec,
+            None,
+            stderr,
+            unlock,
+            move |ev| match ev {
+                SessionEvent::AwaitingApproval => {
+                    let _ = sender.send(AppMsg::AwaitingApproval(req.clone()));
+                }
+                SessionEvent::Ready => {
+                    let _ = sender.send(AppMsg::SessionReady {
+                        req: req.clone(),
+                        fp_hex: fp_hex.clone(),
+                    });
+                }
+                SessionEvent::Error(e) => error = Some(e),
+                SessionEvent::Ended(msg) => ended = Some(msg),
+                // The brain persists the window size; this shell shows no live stats.
+                SessionEvent::Window { .. } | SessionEvent::Stats(_) => {}
+                SessionEvent::Exited(code) => {
+                    let _ = sender.send(AppMsg::SessionExited {
+                        req: req.clone(),
+                        code,
+                        error: error.take(),
+                        ended: ended.take(),
+                    });
+                }
+            },
+        )?;
+    tracing::info!(host = %plan.host.addr, port = plan.host.port, "session binary spawned");
+    Ok(child)
 }
 
 /// Spawns the console and posts [`AppMsg::ConsoleExited`] with what its exit shows. `Err` is

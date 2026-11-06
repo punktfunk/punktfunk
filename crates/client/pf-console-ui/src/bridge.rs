@@ -50,6 +50,11 @@ pub struct CreateOptions {
     /// card's remembered pick unchecked.
     #[serde(default)]
     pub profiles: bool,
+    /// The host takes each `Launch`'s password out of the console natively, never through
+    /// this JSON, and reports a `profile-locked` close as [`PHASE_PROFILE_LOCKED`]. Absent
+    /// means a locked profile dials as it stands.
+    #[serde(default)]
+    pub prompts_unlock: bool,
     /// The settings snapshot the shell starts from.
     pub settings: Settings,
     /// The preset catalog as `[{id, name, overrides}, …]`.
@@ -102,6 +107,7 @@ impl CreateOptions {
                 safe: self.safe_area.unwrap_or(full),
             }),
             profiles: self.profiles,
+            prompts_unlock: self.prompts_unlock,
         };
         (opts, self.entry.into_entry(), store)
     }
@@ -412,14 +418,19 @@ pub fn key_code(code: u8) -> Option<Key> {
 /// [`crate::console::Console::profile_gone`] before the phase.
 pub const PHASE_PROFILE_GONE: u8 = 5;
 
+/// A failed connect the host closed with `profile-locked`, `message` its sentence verbatim
+/// (empty when it said none): the host calls [`crate::console::Console::profile_locked`]
+/// before the phase.
+pub const PHASE_PROFILE_LOCKED: u8 = 7;
+
 /// 0 connecting, 1 streaming, 2 failed, 3 ended (an empty `message` is a clean end),
 /// 4 reconnecting, [`PHASE_PROFILE_GONE`] failed as `profile-unknown`, 6 awaiting the host
-/// operator's approval.
+/// operator's approval, [`PHASE_PROFILE_LOCKED`] failed as `profile-locked`.
 pub fn phase_code(code: u8, message: &str) -> Option<SessionPhase<'_>> {
     Some(match code {
         0 => SessionPhase::Connecting,
         1 => SessionPhase::Streaming,
-        2 | PHASE_PROFILE_GONE => SessionPhase::Failed(message),
+        2 | PHASE_PROFILE_GONE | PHASE_PROFILE_LOCKED => SessionPhase::Failed(message),
         3 => SessionPhase::Ended((!message.is_empty()).then_some(message)),
         4 => SessionPhase::Reconnecting(message),
         6 => SessionPhase::AwaitingApproval,
@@ -449,6 +460,15 @@ mod tests {
         let (opts, entry, _) = o.into_console(Platform::Android);
         assert!(matches!(entry, ConsoleEntry::Home));
         assert_eq!(opts.gpu_cache_bytes, 16 << 20);
+        assert!(
+            !opts.prompts_unlock,
+            "a host that never said so gets no prompt"
+        );
+        let o: CreateOptions = serde_json::from_str(
+            r#"{"device_name": "TV", "gpu_cache_bytes": 0, "settings": {}, "prompts_unlock": true}"#,
+        )
+        .unwrap();
+        assert!(o.into_console(Platform::Android).0.prompts_unlock);
     }
 
     #[test]
@@ -470,10 +490,11 @@ mod tests {
             label: "PIN".into(),
             text: "12".into(),
             digits: true,
+            secure: false,
         };
         assert_eq!(
             Event::EditField(field).to_json(),
-            r#"{"edit_text":{"label":"PIN","text":"12","digits":true}}"#
+            r#"{"edit_text":{"label":"PIN","text":"12","digits":true,"secure":false}}"#
         );
     }
 
@@ -537,6 +558,10 @@ mod tests {
                 "awaiting_approval" => matches!(p, Some(SessionPhase::AwaitingApproval)),
                 "profile_gone" => {
                     code == usize::from(PHASE_PROFILE_GONE)
+                        && matches!(p, Some(SessionPhase::Failed("m")))
+                }
+                "profile_locked" => {
+                    code == usize::from(PHASE_PROFILE_LOCKED)
                         && matches!(p, Some(SessionPhase::Failed("m")))
                 }
                 _ => panic!("phase code {code} names {name}"),

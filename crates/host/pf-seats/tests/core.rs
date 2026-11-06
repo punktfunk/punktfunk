@@ -117,7 +117,25 @@ impl PlatformBackend for FakeBackend {
         Ok(())
     }
 
-    fn adopt_account(&self, seat: &Seat, _password: &Secret) -> Result<bool, BackendError> {
+    fn account_uid(&self, account: &str, ledger: &Ledger) -> Result<u32, BackendError> {
+        self.state
+            .calls
+            .lock()
+            .unwrap()
+            .push(format!("account_uid:{account}"));
+        let refuse = |code, why| Err(BackendError::new(code, why));
+        match account {
+            "ghost" => refuse("account_missing", "no such account"),
+            "enrico" => refuse("account_is_owner", "the owner has a profile"),
+            _ if ledger.seats.iter().any(|seat| seat.account == account) => {
+                refuse("account_taken", "another profile uses it")
+            }
+            "jdoe" => Ok(1500),
+            _ => Ok(1600),
+        }
+    }
+
+    fn adopt_account(&self, seat: &Seat, password: &Secret) -> Result<bool, BackendError> {
         self.record("adopt_account", seat);
         if seat.account == "Administrator" {
             return Err(BackendError::new(
@@ -125,13 +143,34 @@ impl PlatformBackend for FakeBackend {
                 "account is an administrator",
             ));
         }
-        Ok(true)
+        refuse_wrong(&seat.account, password)?;
+        Ok(seat.adopted_uid.is_none())
     }
 
-    fn reseal(&self, seat: &Seat, _password: &Secret) -> Result<(), BackendError> {
-        self.record("reseal", seat);
-        Ok(())
+    fn check_password(&self, seat: &Seat, password: &Secret) -> Result<(), BackendError> {
+        self.state
+            .calls
+            .lock()
+            .unwrap()
+            .push(format!("check_password:{}", seat.account));
+        refuse_wrong(&seat.account, password)
     }
+
+    fn reseal(&self, seat: &Seat, password: &Secret) -> Result<(), BackendError> {
+        self.record("reseal", seat);
+        refuse_wrong(&seat.account, password)
+    }
+}
+
+/// The fake's password check: `wrong` is wrong for every account.
+fn refuse_wrong(account: &str, password: &Secret) -> Result<(), BackendError> {
+    if password.expose() == "wrong" {
+        return Err(BackendError::new(
+            "credential_wrong",
+            format!("That isn't {account}'s password."),
+        ));
+    }
+    Ok(())
 }
 
 fn adopt(account: &str) -> Command {
@@ -518,6 +557,152 @@ fn an_adopted_account_is_resealed_and_released_through_the_backend() {
     assert_eq!(service.ledger().seats, [made]);
     let gone = service.dispatch(credential(&adopted.id)).unwrap_err();
     assert_eq!(gone.code, ErrorCode::NotFound);
+}
+
+/// Two wrong passwords for one Windows account reach the backend, by `adopt` or `credential`;
+/// the third, even a right one, is refused before it. Another account keeps its own allowance.
+#[test]
+fn a_third_password_in_the_window_never_reaches_the_windows_sign_in() {
+    let temp = tempfile::tempdir().unwrap();
+    let backend = FakeBackend::default();
+    let service = SeatService::open(temp.path(), backend.clone()).unwrap();
+    let CommandResult::Created { seat: ben } = service
+        .dispatch(adopt_existing("Ben", "S-1-5-21-1-2-3-1001"))
+        .unwrap()
+    else {
+        panic!("adopt")
+    };
+    let typed = |password: &str| Secret::new(password.into());
+    let credential = |password| Command::Credential {
+        id: ben.id.clone(),
+        password: typed(password),
+    };
+    let cara = |password| Command::Adopt {
+        seat: CreateSeat {
+            name: "Cara".into(),
+            account: "Cara".into(),
+            autostart: false,
+        },
+        sid: "S-1-5-21-1-2-3-1002".into(),
+        password: typed(password),
+    };
+    let refused = |command| service.dispatch(command).unwrap_err().message;
+    let reached = |verb: &str| {
+        let calls = backend.calls();
+        calls.iter().filter(|c| c.starts_with(verb)).count()
+    };
+    backend.clear_calls();
+
+    for _ in 0..2 {
+        assert!(refused(credential("wrong")).starts_with("credential_wrong: "));
+        assert!(refused(cara("wrong")).starts_with("credential_wrong: "));
+    }
+    for command in [credential("wrong"), credential("right"), cara("right")] {
+        let message = refused(command);
+        assert!(message.starts_with("unlock_locked_out: "), "{message}");
+        assert!(message.ends_with("Try again in 15 minutes."), "{message}");
+    }
+    assert_eq!((reached("reseal:"), reached("adopt_account:")), (2, 2));
+    let CommandResult::Created { .. } = service
+        .dispatch(adopt_existing("Dana", "S-1-5-21-1-2-3-1003"))
+        .unwrap()
+    else {
+        panic!("another account is not held back")
+    };
+}
+
+fn adopt_user(account: &str, password: &str) -> Command {
+    Command::AdoptUser {
+        seat: CreateSeat {
+            name: account.into(),
+            account: account.into(),
+            autostart: false,
+        },
+        password: Secret::new(password.into()),
+    }
+}
+
+/// A Linux person's row records the uid the backend named and no SID, and the backend checks the
+/// password after naming the uid, then names it again. A refusal leaves no row, and one before
+/// the check never reaches it. A wrong password holds the console back from that account for a
+/// while. Nobody's password is updated, and delete releases the row through `remove` once.
+#[test]
+fn a_person_s_account_is_adopted_by_the_uid_the_backend_names() {
+    let temp = tempfile::tempdir().unwrap();
+    let backend = FakeBackend::default();
+    let service = SeatService::open(temp.path(), backend.clone()).unwrap();
+    let checks = || {
+        let calls = backend.calls();
+        calls
+            .iter()
+            .filter(|c| c.starts_with("check_password:"))
+            .count()
+    };
+
+    for (account, password, code) in [
+        ("ghost", "pw", ErrorCode::Backend),
+        ("enrico", "pw", ErrorCode::Backend),
+        ("Jdoe", "pw", ErrorCode::InvalidRequest),
+    ] {
+        let refused = service.dispatch(adopt_user(account, password)).unwrap_err();
+        assert_eq!(refused.code, code, "{account}");
+        assert!(service.ledger().seats.is_empty(), "{account} left a row");
+    }
+    assert_eq!(checks(), 0);
+    let wrong = service.dispatch(adopt_user("jane", "wrong")).unwrap_err();
+    assert_eq!(wrong.code, ErrorCode::Backend);
+    assert_eq!(
+        wrong.message,
+        "credential_wrong: That isn't jane's password."
+    );
+    assert!(service.ledger().seats.is_empty());
+    let held = service.dispatch(adopt_user("jane", "pw")).unwrap_err();
+    let prefix = "unlock_locked_out: Too many wrong passwords. Try again in ";
+    assert!(held.message.starts_with(prefix), "{}", held.message);
+    assert_eq!(checks(), 1, "the retry never reached the check");
+
+    backend.clear_calls();
+    let CommandResult::Created { seat } = service.dispatch(adopt_user("jdoe", "pw")).unwrap()
+    else {
+        panic!("a person's row is created")
+    };
+    let named = "account_uid:jdoe".to_owned();
+    let expected = [
+        named.clone(),
+        "check_password:jdoe".to_owned(),
+        named,
+        format!("adopt_account:{}", seat.id),
+    ];
+    assert_eq!(
+        backend.calls(),
+        expected,
+        "the uid is named again after the check"
+    );
+    assert_eq!(seat.adopted_uid, Some(1500));
+    assert!(seat.adopted_sid.is_none() && !seat.rdp_granted && !seat.owner);
+    assert_eq!(service.ledger().seats, std::slice::from_ref(&seat));
+
+    let twice = service.dispatch(adopt_user("jdoe", "pw")).unwrap_err();
+    assert_eq!(twice.code, ErrorCode::Backend, "the account is taken");
+    backend.clear_calls();
+    let credential = Command::Credential {
+        id: seat.id.clone(),
+        password: Secret::new("new".into()),
+    };
+    let error = service.dispatch(credential).unwrap_err();
+    assert_eq!(error.code, ErrorCode::InvalidRequest);
+    assert!(
+        backend.calls().is_empty(),
+        "a Linux row has no password to seal"
+    );
+
+    service
+        .dispatch(Command::Delete {
+            id: seat.id.clone(),
+        })
+        .unwrap();
+    assert_eq!(backend.calls(), [format!("remove:{}", seat.id)]);
+    assert!(service.ledger().seats.is_empty());
 }
 
 #[test]

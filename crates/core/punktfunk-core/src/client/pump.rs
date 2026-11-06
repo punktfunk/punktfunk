@@ -99,8 +99,9 @@ impl std::ops::Deref for ClientConn {
     }
 }
 
-pub(super) async fn run_pump(args: WorkerArgs) {
-    let hs = match handshake::connect_and_handshake(&args).await {
+pub(super) async fn run_pump(mut args: WorkerArgs) {
+    let unlock = args.params.unlock.take();
+    let hs = match handshake::connect_and_handshake(&args, unlock).await {
         Ok(hs) => hs,
         Err(e) => {
             let _ = args.ready_tx.send(Err(e));

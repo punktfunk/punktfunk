@@ -753,6 +753,7 @@ mod tests {
             owner: false,
             fingerprint: None,
             adopted_sid: None,
+            adopted_uid: None,
             rdp_granted: false,
         }
     }

@@ -155,6 +155,11 @@ pub struct SessionParams {
     /// the stream asks for them and keeps asking as monitors come and go. Only an embedder that
     /// opens a window per screen reads it.
     pub shows_screens: bool,
+    /// The spawning shell asks for a profile's password ([`ConnectParams::prompts_unlock`]).
+    pub prompts_unlock: bool,
+    /// The unlock the next dial sends, taken by it. Clones share the slot, so a re-dial sends
+    /// none.
+    pub unlock: Arc<std::sync::Mutex<Option<punktfunk_core::quic::v2::msg::ProfileUnlock>>>,
 }
 
 /// Host, pin, launch, and budget for one dial.
@@ -281,6 +286,8 @@ impl SessionParams {
             render_scale_max_dim: punktfunk_core::render_scale::max_dimension(&settings.codec),
             screens: Vec::new(),
             shows_screens: settings.all_screens(),
+            prompts_unlock: false,
+            unlock: Arc::default(),
         }
     }
 
@@ -633,6 +640,7 @@ fn client_caps(params: &SessionParams, pad_audio_on: bool) -> u8 {
 
 /// Dial the host. `Err` is the terminal event the pump sends instead of `Connected`; a host
 /// that parks the dial for its operator raises [`SessionEvent::AwaitingApproval`] on `ev_tx`.
+/// The params' unlock goes with this dial and no later one.
 fn dial(
     params: &SessionParams,
     stop: &Arc<AtomicBool>,
@@ -705,6 +713,12 @@ fn dial(
         cancel: Some(stop.clone()),
         screens: params.screens.clone(),
         shows_screens: params.shows_screens,
+        prompts_unlock: params.prompts_unlock,
+        unlock: params
+            .unlock
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take(),
         on_pending: Some({
             let ev_tx = ev_tx.clone();
             Arc::new(move || {

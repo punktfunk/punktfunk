@@ -17,6 +17,7 @@ use pf_console_ui::{
     PadTestState, PairStatus, Platform, ProfilesAnswer, Prompt, SnapshotStore, SpeedPhase,
     Viewport, WakeStatus,
 };
+use punktfunk_core::quic::v2::msg::{ProfileUnlock, UNLOCK_PASSWORD, UNLOCK_PASSWORD_MAX};
 use skia_safe::gpu::{self, mtl, DirectContext, SurfaceOrigin};
 use skia_safe::ColorType;
 use std::collections::VecDeque;
@@ -96,6 +97,10 @@ pub const PUNKTFUNK_CONSOLE_PUSH_PAD_TEST: u8 = 18;
 /// `{"fp_hex": "…", "answer": ProfilesAnswer}` — the answer to the `FetchProfiles` command:
 /// `{"Listed": [rows]}`, `"NoProfiles"` or `{"Failed": "why"}`.
 pub const PUNKTFUNK_CONSOLE_PUSH_PROFILES: u8 = 20;
+
+/// The room `punktfunk_console_take_unlock` needs: the longest password the wire takes.
+pub const PUNKTFUNK_CONSOLE_UNLOCK_MAX: usize = 512;
+const _: () = assert!(PUNKTFUNK_CONSOLE_UNLOCK_MAX == UNLOCK_PASSWORD_MAX);
 
 /// One console. Opaque to C.
 pub struct PunktfunkConsole {
@@ -540,7 +545,8 @@ pub unsafe extern "C" fn punktfunk_console_text(c: *const PunktfunkConsole, utf8
 }
 
 /// Where the session the console asked for stands: 0 connecting, 1 streaming, 2 failed,
-/// 3 ended (`message` NULL or empty = clean), 4 reconnecting.
+/// 3 ended (`message` NULL or empty = clean), 4 reconnecting, 6 awaiting approval, 7 failed
+/// as `profile-locked` (`message` the host's sentence, empty when it said none).
 ///
 /// # Safety
 /// `c` is live; `message` is NULL or a NUL-terminated string.
@@ -555,15 +561,58 @@ pub unsafe extern "C" fn punktfunk_console_phase(
         let (Some(c), msg) = (unsafe { c.as_ref() }, unsafe { str_arg(message) }) else {
             return;
         };
-        let Some(phase) = bridge::phase_code(phase, msg.unwrap_or("")) else {
+        let (code, Some(phase)) = (phase, bridge::phase_code(phase, msg.unwrap_or(""))) else {
             return;
         };
         let Some(mut shell) = c.shell() else {
             return;
         };
+        if code == bridge::PHASE_PROFILE_LOCKED {
+            shell.console.profile_locked();
+        }
         shell.console.session_phase(phase);
         c.publish(&mut shell);
     })
+}
+
+/// Moves the password the console's prompt typed for the `Launch` it just raised into `out`,
+/// its "Stay signed in" switch into `*stay`, and returns its length: 0 when the console holds
+/// none. The console's copy is wiped either way, so call it once per `Launch`, first.
+///
+/// # Safety
+/// `c` is live; `out` is NULL or `cap` writable bytes; `stay` is NULL or a writable `bool`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn punktfunk_console_take_unlock(
+    c: *const PunktfunkConsole,
+    out: *mut u8,
+    cap: usize,
+    stay: *mut bool,
+) -> usize {
+    guard(0, || {
+        // SAFETY: live per the contract.
+        let Some(c) = (unsafe { c.as_ref() }) else {
+            return 0;
+        };
+        let taken = c.handles.console.take_unlock();
+        if out.is_null() || stay.is_null() {
+            return 0;
+        }
+        // SAFETY: `out` is `cap` writable bytes and `stay` a writable `bool`, per the contract.
+        let (out, stay) = unsafe { (std::slice::from_raw_parts_mut(out, cap), &mut *stay) };
+        hand_over(taken, out, stay)
+    })
+}
+
+/// Copies a password unlock that fits into `out` and answers its length; anything else answers
+/// 0. `unlock` wipes as it drops.
+fn hand_over(unlock: Option<ProfileUnlock>, out: &mut [u8], stay: &mut bool) -> usize {
+    let Some(u) = unlock.filter(|u| u.kind == UNLOCK_PASSWORD && u.secret.len() <= out.len())
+    else {
+        return 0;
+    };
+    out[..u.secret.len()].copy_from_slice(&u.secret);
+    *stay = u.stay_signed_in;
+    u.secret.len()
 }
 
 #[derive(serde::Deserialize)]
@@ -757,5 +806,32 @@ pub unsafe extern "C" fn punktfunk_console_string_free(s: *mut c_char) {
     if !s.is_null() {
         // SAFETY: from `CString::into_raw` in this module, freed once, per the contract.
         drop(unsafe { CString::from_raw(s) });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use punktfunk_core::quic::v2::msg::{Zeroizing, UNLOCK_KEY_PROOF};
+
+    fn unlock(kind: u8, secret: &[u8], stay: bool) -> ProfileUnlock {
+        ProfileUnlock::new(kind, Zeroizing::new(secret.to_vec()), stay, 0, Vec::new()).unwrap()
+    }
+
+    /// A password that fits goes over with its switch. One that does not fit, a key proof and
+    /// nothing at all leave the buffer and the switch untouched.
+    #[test]
+    fn only_a_password_that_fits_is_handed_over() {
+        let (mut out, mut stay) = ([0u8; 8], false);
+        let fits = Some(unlock(UNLOCK_PASSWORD, b"pw!", true));
+        assert_eq!(hand_over(fits, &mut out, &mut stay), 3);
+        assert_eq!((&out[..4], stay), (&b"pw!\0"[..], true));
+        let (mut small, mut stay) = ([0u8; 2], false);
+        let long = Some(unlock(UNLOCK_PASSWORD, b"pw!", true));
+        assert_eq!(hand_over(long, &mut small, &mut stay), 0);
+        let proof = Some(unlock(UNLOCK_KEY_PROOF, b"sig", false));
+        assert_eq!(hand_over(proof, &mut small, &mut stay), 0);
+        assert_eq!(hand_over(None, &mut small, &mut stay), 0);
+        assert_eq!((small, stay), ([0, 0], false));
     }
 }

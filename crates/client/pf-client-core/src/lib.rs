@@ -148,6 +148,9 @@ pub mod trust;
 // Profiles on a box and the picker rule every shell shares (`design/profiles-and-seats.md` §10).
 #[cfg(portable)]
 pub mod profiles;
+// The unlock of a profile on a person's own account: prompt, device key, refusal.
+#[cfg(portable)]
+pub mod unlock;
 // The `host_sort` / `host_grouping` order every shell on a device shares.
 #[cfg(portable)]
 pub mod host_order;

@@ -233,10 +233,12 @@ fn socket_acl(group: u16, owner: Option<u32>) -> Vec<u8> {
     acl_bytes(&entries)
 }
 
-/// How long the box host waits for `command`'s answer.
+/// How long the box host waits for `command`'s answer. An unlock runs the password check before
+/// the start it may make.
 fn answer_within(command: &Command) -> Duration {
     match command {
         Command::InstallFlatpak { .. } | Command::RemoveFlatpak { .. } => FLATPAK_TIMEOUT,
+        Command::Unlock { .. } => super::pam::CHECK_TIMEOUT + ANSWER_TIMEOUT,
         _ => ANSWER_TIMEOUT,
     }
 }
@@ -375,11 +377,22 @@ mod tests {
         assert_eq!(after, mode);
     }
 
+    /// A Flatpak change waits longest; an unlock waits for its password check and a start.
     #[test]
     fn a_flatpak_change_is_waited_on_longer_than_a_start() {
         assert_eq!(answer_within(&Command::List), ANSWER_TIMEOUT);
         let install = Command::InstallFlatpak { id: "a.b".into() };
         assert_eq!(answer_within(&install), FLATPAK_TIMEOUT);
+        let unlock = Command::Unlock {
+            id: crate::model::SeatId::random(),
+            device: crate::ipc::Device {
+                fingerprint: "ab".repeat(32),
+                name: "TV".into(),
+            },
+            proof: crate::ipc::Proof::None,
+        };
+        let waited = answer_within(&unlock);
+        assert!(waited >= Duration::from_secs(30 + 90), "{waited:?}");
     }
 
     /// A list over a real socket answers with the empty ledger, and a second bind on a live

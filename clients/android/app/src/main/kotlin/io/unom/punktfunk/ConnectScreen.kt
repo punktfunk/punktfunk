@@ -417,6 +417,7 @@ fun ConnectScreen(
     ctl.seatWait?.let { w ->
         SeatWaitDialog(w, onCancel = { w.cancelled.complete(Unit); ctl.seatWait = null })
     }
+    ctl.unlockAsk?.let { UnlockPromptDialog(it) }
     switching?.let { (kh, answer) ->
         ProfilePickerDialog(
             hostName = kh.name.ifBlank { kh.address },
@@ -504,6 +505,7 @@ fun ConnectScreen(
         connectingHostName = ctl.connectingHostName,
         waker = ctl.waker,
         onCancelConnect = ctl::cancelConnect,
+        startingProfile = ctl.startingProfile,
     )
 }
 

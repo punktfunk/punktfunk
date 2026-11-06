@@ -11,7 +11,9 @@ use pf_client_core::orchestrate::{
     self, trust_route, wake_parked_line, CancelHandle, ConnectAttempt, ExitRoute, HostTarget,
     TrustRoute, WakeOutcome, WakeWait, FINGERPRINT_CHANGED, WAKE_PARKED_HINT,
 };
+use pf_client_core::unlock::{self, Pending};
 use pf_fluent::Palette;
+use punktfunk_core::quic::v2::msg::ProfileUnlock;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -128,8 +130,12 @@ fn ask_then_connect(
         pin,
         set_screen,
         set_status,
-        move |profile| {
-            let opts = ConnectOpts { profile, ..opts };
+        move |profile, unlock| {
+            let opts = ConnectOpts {
+                profile,
+                unlock,
+                ..opts
+            };
             connect_with(&ctx2, &t, pin, &ss, &st, opts)
         },
     );
@@ -161,10 +167,11 @@ fn redial_profile(
                 st.clone(),
                 row.id.clone(),
             );
-            profiles::seat_then(&ctx, target, pin, &ss, &st, Some(row), move || {
+            profiles::seat_then(&ctx, target, pin, &ss, &st, Some(row), move |unlock| {
                 let opts = ConnectOpts {
                     profile: Some(id),
                     retried: true,
+                    unlock,
                     ..ConnectOpts::default()
                 };
                 connect_with(&ctx2, &t, pin, &ss2, &st2, opts)
@@ -213,6 +220,8 @@ pub(crate) struct ConnectOpts {
     profile: Option<String>,
     /// This dial is the one retry after the host refused the profile as unknown.
     retried: bool,
+    /// The profile's unlock, for the child's stdin only. It wipes on drop and prints lengths.
+    unlock: Option<ProfileUnlock>,
 }
 
 /// A fresh pairing's first connect: it asks who plays, as any connect to a paired host does.
@@ -248,7 +257,8 @@ fn connect_with(
 /// Spawn-mode connect: run the stream in the punktfunk-session binary and turn its events
 /// into screens. The child never connects unpinned: a stored or ceremony pin, else the
 /// advertised fingerprint (TOFU, saved once ready proves the host holds it); no fingerprint
-/// routes to the PIN ceremony. One [`ConnectAttempt`] reads its ready and its exit.
+/// routes to the PIN ceremony. One [`ConnectAttempt`] reads its ready and its exit;
+/// `opts.unlock` rides the child's stdin, and a locked profile's refusal reopens the prompt.
 fn connect_spawn(
     ctx: &Arc<AppCtx>,
     target: &Target,
@@ -298,13 +308,21 @@ fn connect_spawn(
     if opts.wake_on_fail {
         attempt.arm_wake(&host);
     }
-    attempt.dial(tofu, opts.profile.as_deref(), opts.retried);
+    attempt.dial(
+        tofu,
+        opts.profile.as_deref(),
+        opts.retried,
+        opts.unlock.is_some(),
+    );
+    // A dial with an unlock waits for its desktop on this screen, with a progress line.
+    let mut starting = false;
     let spawned = crate::spawn::spawn_session(
         host.clone(),
         orchestrate::DEFAULT_CONNECT_TIMEOUT_SECS,
         launch_arg.as_deref(),
         preset_arg.as_deref(),
         profile_arg.as_deref(),
+        opts.unlock,
         child,
         move |event| {
             use crate::spawn::SpawnEvent;
@@ -316,8 +334,18 @@ fn connect_spawn(
             match event {
                 // A plain connect the host parked for its operator: the same waiting screen
                 // request-access shows, whose Cancel kills the child.
-                SpawnEvent::AwaitingApproval => ss.call(Screen::RequestAccess),
+                SpawnEvent::AwaitingApproval => match attempt.on_pending() {
+                    Pending::Approval => ss.call(Screen::RequestAccess),
+                    Pending::Starting if !starting => {
+                        starting = true;
+                        st.call(unlock::starting_line(&host.name));
+                    }
+                    Pending::Starting => {}
+                },
                 SpawnEvent::Ready => {
+                    if std::mem::take(&mut starting) {
+                        st.call(String::new());
+                    }
                     // A pin trusted on first use is saved unpaired. A failed save waits on the
                     // status line, which a clean exit leaves for the host list.
                     if attempt.on_ready()
@@ -333,6 +361,9 @@ fn connect_spawn(
                 }
                 SpawnEvent::Stats(s) => *shared.stats.lock().unwrap() = Some(*s),
                 SpawnEvent::Exited(outcome) => {
+                    if std::mem::take(&mut starting) {
+                        st.call(String::new());
+                    }
                     let forget_then = |msg: String| {
                         let (host, ss, st) = (host.clone(), ss.clone(), st.clone());
                         move || {
@@ -363,6 +394,30 @@ fn connect_spawn(
                             redial_profile(&ctx2, target, pin, id, &ss, &st, give_up);
                         }
                         ExitRoute::ForgetProfileThen(msg) => forget_then(msg)(),
+                        ExitRoute::Unlock { id, error, sent } => {
+                            let target = Target {
+                                launch: retry_launch.clone(),
+                                ..target.clone()
+                            };
+                            let (ctx, t, ss2, st2, id2) = (
+                                ctx2.clone(),
+                                target.clone(),
+                                ss.clone(),
+                                st.clone(),
+                                id.clone(),
+                            );
+                            let go = move |unlock| {
+                                let opts = ConnectOpts {
+                                    profile: Some(id2),
+                                    unlock,
+                                    ..ConnectOpts::default()
+                                };
+                                connect_with(&ctx, &t, pin, &ss2, &st2, opts)
+                            };
+                            super::unlock::after_refusal(
+                                &ctx2, target, pin, id, error, sent, &ss, &st, go,
+                            );
+                        }
                         ExitRoute::Wake => wake_and_connect(&ctx2, target.clone(), &ss, &st),
                     }
                 }

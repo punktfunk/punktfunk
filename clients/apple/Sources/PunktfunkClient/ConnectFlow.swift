@@ -33,13 +33,34 @@ struct ConnectFlow {
     @Binding var profileAsk: ProfileAsk?
     /// The wait for the picked profile's seat to come up.
     @Binding var seatWait: SeatWait?
+    /// The password prompt of a profile on a person's own account.
+    @Binding var unlockAsk: UnlockAsk?
 
     /// Which profile a connect plays as.
     enum ProfileChoice {
         /// Ask the paired host first; `link` is a link's `as=`, which wins for this connect.
         case ask(link: String? = nil)
-        /// Already decided (the console's own picker): dial with this id, nil sends none.
-        case send(String?)
+        /// Already decided (the console's own picker): dial with this id, nil sends none, with
+        /// the password the console's prompt typed. `console` takes back what the console asks.
+        case send(String?, unlock: ProfileUnlock? = nil, console: ConsoleDial? = nil)
+    }
+
+    /// What a dial the console issued reports to the console instead of the app's own prompts.
+    struct ConsoleDial {
+        /// The host closed with `ProfileLocked` and this sentence: the console's prompt reopens.
+        let locked: @MainActor (String?) -> Void
+        /// The host holds the unlock dial while the profile's desktop starts.
+        let starting: @MainActor () -> Void
+    }
+
+    /// The profile a dial plays as, and what opens it. `prompts`: a `ProfileLocked` close opens
+    /// the password prompt rather than an error; `console` sends it to the console's instead.
+    struct ProfileDial {
+        var id: String?
+        var name: String?
+        var unlock: ProfileUnlock?
+        var prompts = false
+        var console: ConsoleDial?
     }
 
     /// `preset` is this connect's one-off pick ("Connect with ▸", a pinned card, a link's
@@ -78,10 +99,12 @@ struct ConnectFlow {
         }
         let allowTofu = host.pinnedSHA256 == nil
         switch profile {
-        case .send(let id):
+        case .send(let id, let unlock, let console):
+            // The console asks for the password itself. Only a pinned host is sent one.
             startSession(
                 host, launchID: launchID, preset: preset, allowTofu: allowTofu,
-                fromLibrary: fromLibrary, profileID: id)
+                fromLibrary: fromLibrary,
+                profile: ProfileDial(id: id, unlock: allowTofu ? nil : unlock, console: console))
         case .ask(let link):
             // An unpinned host can't be asked (no paired identity), and the demo host has no
             // management API.
@@ -91,30 +114,41 @@ struct ConnectFlow {
                     fromLibrary: fromLibrary)
                 return
             }
-            askProfile(host, link: link) { id in
+            askProfile(host, link: link) { profile in
                 startSession(
                     host, launchID: launchID, preset: preset, allowTofu: false,
-                    fromLibrary: fromLibrary, profileID: id)
+                    fromLibrary: fromLibrary, profile: profile)
             }
         }
     }
 
-    /// Ask the host who is playing, then run `go` with the id to dial as. A box without profiles,
-    /// a failed answer and a late one dial as before, with the saved pick.
+    /// Ask the host who is playing, then run `go` with the profile to dial as and what opens it.
+    /// A box without profiles, a failed answer and a late one dial as before, with the saved pick.
     private func askProfile(
-        _ host: StoredHost, link: String?, go: @escaping @MainActor (String?) -> Void
+        _ host: StoredHost, link: String?, go: @escaping @MainActor (ProfileDial) -> Void
     ) {
         let saved = (store.hosts.first { $0.id == host.id } ?? host).pickedProfile
         Task { @MainActor in
             let answer = await ProfileFetch.list(host, within: ProfileFetch.wait)
             guard case .listed(let rows) = answer else {
-                go(link ?? saved?.id)
+                let id = link ?? saved?.id
+                let name = id == saved?.id ? saved?.displayName : nil
+                go(ProfileDial(id: id, name: name, prompts: true))
                 return
+            }
+            let unlocked: @MainActor (String?) -> Void = { id in
+                guard let row = rows?.first(where: { $0.id == id }) else {
+                    go(ProfileDial(id: id, prompts: true))
+                    return
+                }
+                unlock(host, row) { unlock in
+                    go(ProfileDial(id: id, name: row.displayName, unlock: unlock, prompts: true))
+                }
             }
             let d = HostProfiles.pickerDecision(listed: rows, remembered: saved, link: link)
             guard d.picker, let rows else {
                 store.setProfile(host.id, d.remember)
-                settleSeat(host, rows: rows, id: d.send, go: go)
+                settleSeat(host, rows: rows, id: d.send, go: unlocked)
                 return
             }
             profileAsk = ProfileAsk(
@@ -122,8 +156,84 @@ struct ConnectFlow {
                 content: .choose(rows, saved: rows.first { $0.id == saved?.id }?.id, gone: d.gone),
                 pick: { pick in
                     store.setProfile(host.id, pick)
-                    settleSeat(host, rows: rows, id: pick.id, afterSheet: true, go: go)
+                    settleSeat(host, rows: rows, id: pick.id, afterSheet: true, go: unlocked)
                 })
+        }
+    }
+
+    /// Run `then` with what opens `row`: nothing, its key, or the password the player typed. A
+    /// cancelled prompt runs nothing. An unpinned host gets no unlock.
+    private func unlock(
+        _ host: StoredHost, _ row: ListedProfile,
+        then: @escaping @MainActor (ProfileUnlock?) -> Void
+    ) {
+        guard row.unlock != .none, let unlocker = unlocker(for: host) else {
+            then(nil)
+            return
+        }
+        let prompt = passwordPrompt(host, name: row.displayName, unlocker: unlocker)
+        Task { @MainActor in
+            if case .dial(let unlock) = await unlocker.before(row, prompt: prompt) { then(unlock) }
+        }
+    }
+
+    /// The prompt after a `ProfileLocked` close, with the host's sentence; then the dial again.
+    /// False when there is nothing to prompt for: the caller shows the error.
+    private func reprompt(
+        _ host: StoredHost, _ profile: ProfileDial, said: String?,
+        dial: @escaping @MainActor (ProfileDial) -> Void
+    ) -> Bool {
+        guard profile.prompts, let id = profile.id, let unlocker = unlocker(for: host) else {
+            return false
+        }
+        let prompt = passwordPrompt(host, name: profile.name ?? id, unlocker: unlocker)
+        Task { @MainActor in
+            guard case .dial(let unlock) = await unlocker.refused(
+                profile: id, said: said, prompt: prompt)
+            else { return }
+            var next = profile
+            next.unlock = unlock
+            dial(next)
+        }
+        return true
+    }
+
+    /// The key and prompt rules for `host`: only a pinned host is sent an unlock.
+    private func unlocker(for host: StoredHost) -> ProfileUnlocker? {
+        guard let pin = host.pinnedSHA256,
+              case .success(let target) = MgmtTarget.make(host: host)
+        else { return nil }
+        #if os(tvOS)
+        let keys: (any UnlockKeys)? = nil
+        #else
+        let keys: (any UnlockKeys)? = EnclaveUnlockKeys()
+        #endif
+        return ProfileUnlocker(
+            keys: keys, host: pin,
+            device: (try? ClientIdentityStore.shared.load())?.identity.fingerprint,
+            hostName: host.displayName
+        ) { id in
+            try await LibraryClient.unlockChallenge(id: id, on: target)
+        }
+    }
+
+    /// Shows the password prompt and answers what the player entered.
+    private func passwordPrompt(
+        _ host: StoredHost, name: String, unlocker: ProfileUnlocker
+    ) -> ProfileUnlocker.Prompt {
+        let ask = $unlockAsk
+        let (hostName, switchTitle) = (host.displayName, unlocker.switchTitle)
+        return { error in
+            await withCheckedContinuation { done in
+                Task { @MainActor in
+                    // A picker or seat sheet may still be closing, and a sheet shown over it drops.
+                    try? await Task.sleep(nanoseconds: 400_000_000)
+                    ask.wrappedValue = UnlockAsk(
+                        hostName: hostName, profileName: name, error: error,
+                        switchTitle: switchTitle
+                    ) { done.resume(returning: $0) }
+                }
+            }
         }
     }
 
@@ -200,13 +310,16 @@ struct ConnectFlow {
     /// Resolve the stream mode + input prefs and hand off to the session model. The gamepad-type
     /// setting resolves NOW (Automatic → match the active physical controller): the host's virtual
     /// pad backend is fixed per session. `requestAccess` opens the no-PIN delegated-approval
-    /// connect (host parks it until the operator approves).
+    /// connect (host parks it until the operator approves). Only the first dial carries the
+    /// profile's unlock; the waker's redial goes without it.
     private func startSession(
         _ host: StoredHost, launchID: String? = nil,
         preset: PresetSelection = .inherit,
         allowTofu: Bool, requestAccess: Bool = false, approvalReq: ApprovalRequest? = nil,
-        fromLibrary: Bool = false, profileID: String? = nil
+        fromLibrary: Bool = false, profile: ProfileDial = ProfileDial()
     ) {
+        var redial = profile
+        redial.unlock = nil
         // Dial the record as it stands NOW: a host that came back on a new DHCP lease was re-keyed
         // by the reachability check while we waited, and the value captured here is then stale.
         let go = {
@@ -214,7 +327,7 @@ struct ConnectFlow {
                 store.hosts.first { $0.id == host.id } ?? host,
                 launchID: launchID, preset: preset, allowTofu: allowTofu,
                 requestAccess: requestAccess, approvalReq: approvalReq,
-                fromLibrary: fromLibrary, profileID: profileID)
+                fromLibrary: fromLibrary, profile: redial)
         }
         // A host the probe calls down still gets the dial first: a routed host (VPN, another
         // subnet) answers without advertising. `prepareWake` already sent the magic packet, so
@@ -224,7 +337,7 @@ struct ConnectFlow {
             startSessionDirect(
                 host, launchID: launchID, preset: preset, allowTofu: allowTofu,
                 requestAccess: requestAccess, approvalReq: approvalReq, fromLibrary: fromLibrary,
-                profileID: profileID,
+                profile: profile,
                 onUnreachable: {
                     waker.start(
                         host: host, connectsAfter: true, macs: host.wakeMacs, lastIP: host.address,
@@ -232,21 +345,27 @@ struct ConnectFlow {
                         onOnline: go)
                 })
         } else {
-            go()
+            startSessionDirect(
+                store.hosts.first { $0.id == host.id } ?? host,
+                launchID: launchID, preset: preset, allowTofu: allowTofu,
+                requestAccess: requestAccess, approvalReq: approvalReq, fromLibrary: fromLibrary,
+                profile: profile)
         }
     }
 
     /// The actual dial — reached directly when the host is awake, or from the waker once a woken
     /// host is back online. `prepareWake` still runs here to LEARN/refresh the MAC now that the host
     /// is advertising (and is a harmless no-op otherwise). `onUnreachable` hands a plain connect
-    /// failure back to the caller (the wake-wait fallback) instead of the error alert.
+    /// failure back to the caller (the wake-wait fallback) instead of the error alert. A dial the
+    /// console issued hands a `ProfileLocked` close and an unlock's wait back to the console.
     private func startSessionDirect(
         _ host: StoredHost, launchID: String? = nil,
         preset: PresetSelection = .inherit,
         allowTofu: Bool, requestAccess: Bool = false, approvalReq: ApprovalRequest? = nil,
-        fromLibrary: Bool = false, profileID: String? = nil, redialed: Bool = false,
+        fromLibrary: Bool = false, profile: ProfileDial = ProfileDial(), redialed: Bool = false,
         onUnreachable: (@MainActor () -> Void)? = nil
     ) {
+        let profileID = profile.id
         prepareWake(for: host)
         // The delegated-approval wait prompt only makes sense once we're actually dialing — set it
         // here (after any wake), not before, so it never stacks under the "Waking…" overlay.
@@ -290,15 +409,33 @@ struct ConnectFlow {
                         return
                     }
                     settleSeat(host, rows: rows, id: profileID) { id in
+                        var next = profile
+                        next.id = id
+                        next.unlock = nil
                         startSessionDirect(
                             store.hosts.first { $0.id == host.id } ?? host,
                             launchID: launchID, preset: preset, allowTofu: allowTofu,
                             requestAccess: requestAccess, approvalReq: approvalReq,
-                            fromLibrary: fromLibrary, profileID: id, redialed: true,
+                            fromLibrary: fromLibrary, profile: next, redialed: true,
                             onUnreachable: onUnreachable)
                     }
                 }
                 return true
+            },
+            unlock: profile.unlock,
+            onUnlockPending: profile.console?.starting,
+            onProfileLocked: { said in
+                if let console = profile.console {
+                    console.locked(said)
+                    return true
+                }
+                return reprompt(host, profile, said: said) { next in
+                    startSessionDirect(
+                        store.hosts.first { $0.id == host.id } ?? host,
+                        launchID: launchID, preset: preset, allowTofu: allowTofu,
+                        fromLibrary: fromLibrary, profile: next, redialed: redialed,
+                        onUnreachable: onUnreachable)
+                }
             },
             onUnreachable: onUnreachable)
     }

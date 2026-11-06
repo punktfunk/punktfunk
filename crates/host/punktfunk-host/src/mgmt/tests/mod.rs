@@ -48,6 +48,7 @@ mod door;
 mod events;
 mod library;
 mod native_pairing;
+mod own_account;
 mod plugin_access;
 mod plugins;
 mod profiles;

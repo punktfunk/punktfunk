@@ -1,8 +1,10 @@
 import { afterEach, expect, test } from "bun:test";
 import { MutationObserver, QueryClient } from "@tanstack/react-query";
+import type { CatalogEntry } from "@/api/gen/model";
 import type { ProfileAdmin } from "@/api/gen/model/profileAdmin";
 import { apiFetch } from "./fetcher";
 import { isFullSeat, seatChoices, seatClient } from "./seat";
+import { installable } from "./store";
 
 const KID = "0a1b2c3d4e5f";
 const realFetch = globalThis.fetch;
@@ -70,6 +72,32 @@ test("on a door the owner and the seats of their own have a library, the rest sh
 	]);
 	// Off a door the owner is the box, and the same list offers nothing on Linux.
 	expect(seatChoices([owner, shared, desktop], "linux")).toEqual([]);
+});
+
+test("a seat on a person's own account is marked with its host's platform", () => {
+	const owner = profile({ id: "o".repeat(32), owner: true });
+	const made = profile({ id: "m".repeat(32), display_name: "Made", seat });
+	const mia = profile({ seat: { ...seat, account: "mia" } as typeof seat });
+	expect(seatChoices([owner, made, mia], "linux", true)).toEqual([
+		{ id: "o".repeat(32), name: "Kid" },
+		{ id: "m".repeat(32), name: "Made" },
+		{ id: KID, name: "Kid", own: "linux" },
+	]);
+	expect(seatChoices([made, mia], "windows")).toEqual([
+		{ id: "m".repeat(32), name: "Made" },
+		{ id: KID, name: "Kid", own: "windows" },
+	]);
+});
+
+const entry = (id: string, tier: string): CatalogEntry =>
+	({ id, tier, source: "unom", pkg: id }) as CatalogEntry;
+
+test("a seat on a person's own account offers only the plugins its host installs", () => {
+	const all = [entry("romm", "verified"), entry("theirs", "external")];
+	expect(installable(all, null)).toEqual(all);
+	expect(installable(all, "windows").map((e) => e.id)).toEqual(["romm"]);
+	expect(installable(all, "linux")).toEqual([]);
+	expect(installable(undefined, null)).toEqual([]);
 });
 
 test("a seat's cache asks the seat's host and the box's never does", async () => {

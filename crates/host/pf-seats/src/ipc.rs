@@ -4,8 +4,9 @@
 //! Requests and responses carry a schema version; commands and results are tagged enums;
 //! errors have stable codes and a message. The pipe's DACL admits SYSTEM and Administrators
 //! only, and the socket checks its peer's credentials, so the request carries no credential of
-//! its own; an adopt or credential frame carries the account's password, which the supervisor
-//! seals and forgets. [`answer`] serves one request on any reader and writer, which keeps
+//! its own; an adopt, credential or unlock frame carries the account's password, which the
+//! supervisor seals (Windows) or checks once (Linux) and forgets. Both ends hold each frame in a buffer
+//! wiped when it drops. [`answer`] serves one request on any reader and writer, which keeps
 //! dispatch testable without a pipe.
 
 use crate::backend::PlatformBackend;
@@ -15,6 +16,7 @@ use crate::service::SeatService;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use std::io::{Read, Write};
+use zeroize::Zeroizing;
 
 pub const CONTROL_SCHEMA_VERSION: u32 = 1;
 pub const MAX_FRAME_BYTES: usize = 64 * 1024;
@@ -64,6 +66,13 @@ pub enum Command {
         sid: String,
         password: Secret,
     },
+    /// Linux: a seat on `seat.account`, a person's own account that already exists, once PAM
+    /// accepts `password`. The supervisor resolves the uid itself and keeps no password.
+    /// `Delete` releases the row and never touches the account.
+    AdoptUser {
+        seat: CreateSeat,
+        password: Secret,
+    },
     /// Windows: an adopted seat's new password, verified and sealed in place of the old one.
     Credential {
         id: SeatId,
@@ -80,6 +89,123 @@ pub enum Command {
         id: String,
         purge: bool,
     },
+    /// Linux, a person's row: let `device` onto it with `proof`, starting the session when the
+    /// proof may. Answers `unlocked` only while the session runs and the device is admitted.
+    Unlock {
+        id: SeatId,
+        device: Device,
+        proof: Proof,
+    },
+    /// Linux, a person's row: what `fingerprint` must send to get on.
+    UnlockState {
+        id: SeatId,
+        fingerprint: String,
+    },
+    /// Linux, a person's row: a fresh challenge for `fingerprint`'s enrolled key to sign.
+    Challenge {
+        id: SeatId,
+        fingerprint: String,
+    },
+    /// Linux, a person's row: `fingerprint` disconnected, so its presence runs out soon.
+    Left {
+        id: SeatId,
+        fingerprint: String,
+    },
+    /// Linux, a person's row: forget `fingerprint`, or every device when `None`.
+    SignOut {
+        id: SeatId,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        fingerprint: Option<String>,
+    },
+    /// Linux, a person's row: the devices it lists.
+    Devices {
+        id: SeatId,
+    },
+}
+
+/// A device asking for a person's row: its certificate's SHA-256 as 64 lowercase hex, and the
+/// name it paired with, at most 64 characters, shown and never trusted.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Device {
+    pub fingerprint: String,
+    pub name: String,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum KeyAlg {
+    /// ECDSA P-256 with SHA-256, the signature ASN.1 DER.
+    P256,
+    /// RSA 2048 with SHA-256, the signature PKCS#1 v1.5 or PSS.
+    Rsa2048,
+}
+
+/// A device's unlock key, `public` in lowercase hex: the 65-byte uncompressed SEC1 point for
+/// `p256`, a DER `RSAPublicKey` of at most 600 bytes for `rsa2048`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UnlockKey {
+    pub alg: KeyAlg,
+    pub public: String,
+}
+
+/// What a device offers for a person's row.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum Proof {
+    /// Nothing: a device already admitted rejoins a running session.
+    None,
+    /// The account's password, checked by PAM. `stay_signed_in` keeps the device listed until it
+    /// is signed out; `enroll` stores a key it may prove itself with later.
+    Password {
+        password: Secret,
+        #[serde(default)]
+        stay_signed_in: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        enroll: Option<UnlockKey>,
+    },
+    /// The enrolled key's signature, lowercase hex, at most 1024 bytes, over the live challenge.
+    Key { signature: String },
+}
+
+impl Proof {
+    /// The proof's wire name, for the audit line.
+    pub fn kind(&self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::Password { .. } => "password",
+            Self::Key { .. } => "key",
+        }
+    }
+}
+
+/// What a device must send to get onto a person's row.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Needs {
+    None,
+    Password,
+    Key,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DeviceKind {
+    /// Listed until its presence ends.
+    ForNow,
+    /// Rejoins a running session without a proof until it is signed out.
+    Stay,
+    /// Proves itself with an enrolled key on every connect.
+    Key,
+}
+
+/// A device a person's row lists, as the console shows it. Times are unix seconds.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DeviceEntry {
+    pub fingerprint: String,
+    pub name: String,
+    pub kind: DeviceKind,
+    pub added_unix: i64,
+    pub last_unix: i64,
 }
 
 /// A Flatpak app id the supervisor hands to `flatpak`: reverse-DNS, `[A-Za-z0-9._-]`, at least
@@ -140,6 +266,24 @@ pub enum CommandResult {
         id: String,
         #[serde(default)]
         version: Option<String>,
+    },
+    /// The device is admitted and the session runs; `started` when this unlock started it.
+    Unlocked {
+        seat: Seat,
+        started: bool,
+    },
+    UnlockState {
+        needs: Needs,
+    },
+    /// 32 random bytes as 64 lowercase hex, for `seat`'s id to be signed with.
+    Challenge {
+        challenge: String,
+        seat: SeatId,
+    },
+    Left,
+    SignedOut,
+    Devices {
+        devices: Vec<DeviceEntry>,
     },
 }
 
@@ -272,23 +416,48 @@ where
     serde_json::from_slice(&bytes).map_err(FrameError::Decode)
 }
 
+/// Encodes `value` into one wiped buffer of its exact size, measured first, so a frame that
+/// carries a password leaves no copy behind a growing buffer.
 pub fn write_json_frame<W, T>(writer: &mut W, value: &T) -> Result<(), FrameError>
 where
     W: Write,
     T: Serialize,
 {
-    let bytes = serde_json::to_vec(value).map_err(FrameError::Encode)?;
-    write_frame_bytes(writer, &bytes)
+    let mut length = Measure(0);
+    serde_json::to_writer(&mut length, value).map_err(FrameError::Encode)?;
+    if length.0 > MAX_FRAME_BYTES {
+        return Err(FrameError::TooLarge(length.0));
+    }
+    let mut bytes = Zeroizing::new(vec![0_u8; length.0]);
+    let mut rest = bytes.as_mut_slice();
+    serde_json::to_writer(&mut rest, value).map_err(FrameError::Encode)?;
+    let written = length.0 - rest.len();
+    write_frame_bytes(writer, &bytes[..written])
 }
 
-pub fn read_frame_bytes<R: Read>(reader: &mut R) -> Result<Vec<u8>, FrameError> {
+/// Counts the bytes written to it and keeps none.
+struct Measure(usize);
+
+impl Write for Measure {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.0 = self.0.saturating_add(bytes.len());
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+/// One frame's payload, in a buffer wiped when it drops: it may carry a password.
+pub fn read_frame_bytes<R: Read>(reader: &mut R) -> Result<Zeroizing<Vec<u8>>, FrameError> {
     let mut prefix = [0_u8; 4];
     reader.read_exact(&mut prefix)?;
     let length = u32::from_be_bytes(prefix) as usize;
     if length > MAX_FRAME_BYTES {
         return Err(FrameError::TooLarge(length));
     }
-    let mut payload = vec![0_u8; length];
+    let mut payload = Zeroizing::new(vec![0_u8; length]);
     reader.read_exact(&mut payload)?;
     Ok(payload)
 }
@@ -373,7 +542,7 @@ mod tests {
         let exact = vec![7_u8; MAX_FRAME_BYTES];
         let mut framed = Vec::new();
         write_frame_bytes(&mut framed, &exact).unwrap();
-        assert_eq!(read_frame_bytes(&mut Cursor::new(framed)).unwrap(), exact);
+        assert_eq!(*read_frame_bytes(&mut Cursor::new(framed)).unwrap(), exact);
 
         let oversized = vec![0_u8; MAX_FRAME_BYTES + 1];
         assert!(matches!(
@@ -436,6 +605,17 @@ mod tests {
                 r#"{"type":"adopt","seat":{"name":"Ben","account":"Ben Ott","autostart":false},"sid":"S-1-5-21-1-2-3-1001","password":"hunter2 Bärbel"}"#,
             ),
             (
+                Command::AdoptUser {
+                    seat: CreateSeat {
+                        name: "Ben".into(),
+                        account: "jdoe@corp.example.com".into(),
+                        autostart: false,
+                    },
+                    password: password(),
+                },
+                r#"{"type":"adopt_user","seat":{"name":"Ben","account":"jdoe@corp.example.com","autostart":false},"password":"hunter2 Bärbel"}"#,
+            ),
+            (
                 Command::Credential {
                     id: SeatId::parse("01".repeat(16)).unwrap(),
                     password: password(),
@@ -447,6 +627,13 @@ mod tests {
             assert!(!format!("{command:?}").contains("hunter2"), "{wire}");
             let mut frame = Vec::new();
             write_json_frame(&mut frame, &Request::new(command.clone())).unwrap();
+            let plain = serde_json::to_vec(&Request::new(command.clone())).unwrap();
+            assert_eq!(frame[..4], (plain.len() as u32).to_be_bytes(), "{wire}");
+            assert_eq!(
+                frame[4..],
+                plain,
+                "the wiped encoding is byte for byte the plain one"
+            );
             let decoded: Request = read_json_frame(&mut Cursor::new(frame)).unwrap();
             assert_eq!(decoded.command, command);
         }
@@ -462,6 +649,195 @@ mod tests {
         assert_eq!(
             read_json_frame::<_, Response>(&mut Cursor::new(frame)).unwrap(),
             answer
+        );
+    }
+
+    /// The unlock commands and answers as the door and the supervisor share them (CONTRACT §4).
+    /// A password rides the frame and never a command's `Debug`.
+    #[test]
+    fn the_unlock_frames_round_trip() {
+        let id = || SeatId::parse("01".repeat(16)).unwrap();
+        let fp = "ab".repeat(32);
+        let device = Device {
+            fingerprint: fp.clone(),
+            name: "Jane's iPhone".into(),
+        };
+        let key = UnlockKey {
+            alg: KeyAlg::P256,
+            public: "04".into(),
+        };
+        let unlock = |proof| Command::Unlock {
+            id: id(),
+            device: device.clone(),
+            proof,
+        };
+        let head = format!(
+            r#"{{"type":"unlock","id":"{}","device":{{"fingerprint":"{fp}","name":"Jane's iPhone"}},"proof":"#,
+            id()
+        );
+        for (command, wire) in [
+            (unlock(Proof::None), format!(r#"{head}{{"kind":"none"}}}}"#)),
+            (
+                unlock(Proof::Password {
+                    password: Secret::new("hunter2 Bärbel".into()),
+                    stay_signed_in: true,
+                    enroll: Some(key.clone()),
+                }),
+                format!(
+                    r#"{head}{{"kind":"password","password":"hunter2 Bärbel","stay_signed_in":true,"enroll":{{"alg":"p256","public":"04"}}}}}}"#
+                ),
+            ),
+            (
+                unlock(Proof::Key {
+                    signature: "3045".into(),
+                }),
+                format!(r#"{head}{{"kind":"key","signature":"3045"}}}}"#),
+            ),
+            (
+                Command::UnlockState {
+                    id: id(),
+                    fingerprint: fp.clone(),
+                },
+                format!(
+                    r#"{{"type":"unlock_state","id":"{}","fingerprint":"{fp}"}}"#,
+                    id()
+                ),
+            ),
+            (
+                Command::Challenge {
+                    id: id(),
+                    fingerprint: fp.clone(),
+                },
+                format!(
+                    r#"{{"type":"challenge","id":"{}","fingerprint":"{fp}"}}"#,
+                    id()
+                ),
+            ),
+            (
+                Command::Left {
+                    id: id(),
+                    fingerprint: fp.clone(),
+                },
+                format!(r#"{{"type":"left","id":"{}","fingerprint":"{fp}"}}"#, id()),
+            ),
+            (
+                Command::SignOut {
+                    id: id(),
+                    fingerprint: Some(fp.clone()),
+                },
+                format!(
+                    r#"{{"type":"sign_out","id":"{}","fingerprint":"{fp}"}}"#,
+                    id()
+                ),
+            ),
+            (
+                Command::SignOut {
+                    id: id(),
+                    fingerprint: None,
+                },
+                format!(r#"{{"type":"sign_out","id":"{}"}}"#, id()),
+            ),
+            (
+                Command::Devices { id: id() },
+                format!(r#"{{"type":"devices","id":"{}"}}"#, id()),
+            ),
+        ] {
+            assert_eq!(serde_json::to_string(&command).unwrap(), wire);
+            assert_eq!(serde_json::from_str::<Command>(&wire).unwrap(), command);
+            assert!(!format!("{command:?}").contains("hunter2"), "{wire}");
+        }
+        let bare = format!(r#"{head}{{"kind":"password","password":"pw"}}}}"#);
+        let Command::Unlock { proof, .. } = serde_json::from_str(&bare).unwrap() else {
+            panic!("an unlock")
+        };
+        assert_eq!(
+            proof,
+            Proof::Password {
+                password: Secret::new("pw".into()),
+                stay_signed_in: false,
+                enroll: None
+            }
+        );
+        let rsa = r#"{"alg":"rsa2048","public":"30"}"#;
+        assert_eq!(
+            serde_json::from_str::<UnlockKey>(rsa).unwrap().alg,
+            KeyAlg::Rsa2048
+        );
+
+        let entry = DeviceEntry {
+            fingerprint: fp.clone(),
+            name: "TV".into(),
+            kind: DeviceKind::ForNow,
+            added_unix: 1,
+            last_unix: 2,
+        };
+        for (result, wire) in [
+            (
+                CommandResult::UnlockState { needs: Needs::Key },
+                r#"{"kind":"unlock_state","needs":"key"}"#.to_owned(),
+            ),
+            (
+                CommandResult::Challenge {
+                    challenge: "00".repeat(32),
+                    seat: id(),
+                },
+                format!(
+                    r#"{{"kind":"challenge","challenge":"{}","seat":"{}"}}"#,
+                    "00".repeat(32),
+                    id()
+                ),
+            ),
+            (CommandResult::Left, r#"{"kind":"left"}"#.to_owned()),
+            (
+                CommandResult::SignedOut,
+                r#"{"kind":"signed_out"}"#.to_owned(),
+            ),
+            (
+                CommandResult::Devices {
+                    devices: vec![entry],
+                },
+                format!(
+                    r#"{{"kind":"devices","devices":[{{"fingerprint":"{fp}","name":"TV","kind":"for_now","added_unix":1,"last_unix":2}}]}}"#
+                ),
+            ),
+        ] {
+            assert_eq!(serde_json::to_string(&result).unwrap(), wire);
+            assert_eq!(
+                serde_json::from_str::<CommandResult>(&wire).unwrap(),
+                result
+            );
+        }
+        let seat = crate::model::Ledger::new()
+            .allocate_adopted_user(
+                CreateSeat {
+                    name: "Jane".into(),
+                    account: "jdoe".into(),
+                    autostart: false,
+                },
+                1500,
+            )
+            .unwrap();
+        let unlocked = Response::success(CommandResult::Unlocked {
+            seat,
+            started: true,
+        });
+        let wire = serde_json::to_value(&unlocked).unwrap();
+        assert_eq!(wire["result"]["kind"], "unlocked");
+        assert_eq!(wire["result"]["started"], true);
+        let mut frame = Vec::new();
+        write_json_frame(&mut frame, &unlocked).unwrap();
+        assert_eq!(
+            read_json_frame::<_, Response>(&mut Cursor::new(frame)).unwrap(),
+            unlocked
+        );
+        for kind in [DeviceKind::Stay, DeviceKind::Key] {
+            let text = serde_json::to_string(&kind).unwrap();
+            assert_eq!(serde_json::from_str::<DeviceKind>(&text).unwrap(), kind);
+        }
+        assert_eq!(serde_json::to_string(&Needs::None).unwrap(), r#""none""#);
+        assert_eq!(
+            serde_json::to_string(&Needs::Password).unwrap(),
+            r#""password""#
         );
     }
 

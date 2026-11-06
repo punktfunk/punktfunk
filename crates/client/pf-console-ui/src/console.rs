@@ -257,6 +257,12 @@ impl Console {
         self.shell.profile_gone();
     }
 
+    /// The host closed the connect with `profile-locked`; call before its failed phase, whose
+    /// message is the host's sentence.
+    pub fn profile_locked(&mut self) {
+        self.shell.profile_locked();
+    }
+
     /// Drain after every input and every frame.
     pub fn take_action(&mut self) -> Option<OverlayAction> {
         self.shell.take_action()

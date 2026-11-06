@@ -26,8 +26,13 @@ zeroize = "1"
 
 # `net` reads a socket peer's credentials (SO_PEERCRED), `fs` opens a file without following a
 # link and `process` names the uid the state directory must belong to, all through safe wrappers,
-# so this half keeps `forbid(unsafe_code)`.
+# so this half denies unsafe code everywhere but `linux::pam`. That module loads libpam at run
+# time, since this crate is linked into `punktfunk-host` too and only the seat daemon may need
+# the library. PAM frees the answers its conversation returns with `free()`, so they come from
+# libc's own allocator.
 [target.'cfg(unix)'.dependencies]
+libc = "0.2"
+libloading = "0.9"
 rustix = { version = "1", features = ["fs", "net", "process"] }
 
 [target.'cfg(windows)'.dependencies]

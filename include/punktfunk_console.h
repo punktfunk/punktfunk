@@ -81,6 +81,9 @@
 // `{"Listed": [rows]}`, `"NoProfiles"` or `{"Failed": "why"}`.
 #define PUNKTFUNK_CONSOLE_PUSH_PROFILES 20
 
+// The room `punktfunk_console_take_unlock` needs: the longest password the wire takes.
+#define PUNKTFUNK_CONSOLE_UNLOCK_MAX 512
+
 // One console. Opaque to C.
 typedef struct PunktfunkConsole PunktfunkConsole;
 
@@ -172,11 +175,23 @@ bool punktfunk_console_key(const PunktfunkConsole *c, uint8_t key, bool shift, b
 void punktfunk_console_text(const PunktfunkConsole *c, const char *utf8);
 
 // Where the session the console asked for stands: 0 connecting, 1 streaming, 2 failed,
-// 3 ended (`message` NULL or empty = clean), 4 reconnecting.
+// 3 ended (`message` NULL or empty = clean), 4 reconnecting, 6 awaiting approval, 7 failed
+// as `profile-locked` (`message` the host's sentence, empty when it said none).
 //
 // # Safety
 // `c` is live; `message` is NULL or a NUL-terminated string.
 void punktfunk_console_phase(const PunktfunkConsole *c, uint8_t phase, const char *message);
+
+// Moves the password the console's prompt typed for the `Launch` it just raised into `out`,
+// its "Stay signed in" switch into `*stay`, and returns its length: 0 when the console holds
+// none. The console's copy is wiped either way, so call it once per `Launch`, first.
+//
+// # Safety
+// `c` is live; `out` is NULL or `cap` writable bytes; `stay` is NULL or a writable `bool`.
+uintptr_t punktfunk_console_take_unlock(const PunktfunkConsole *c,
+                                        uint8_t *out,
+                                        uintptr_t cap,
+                                        bool *stay);
 
 // Hand the console a model update; `kind` is a `PUNKTFUNK_CONSOLE_PUSH_*`. A bad kind or bad
 // JSON is a logged no-op.

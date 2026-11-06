@@ -84,7 +84,7 @@ pub(crate) fn list() -> Result<Vec<pf_seats::Seat>, ApiError> {
 
 /// The ledger and who plays on each running seat. A profile list reads every seat at once, and
 /// reads within [`FRESH`] of the last one share it.
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub(crate) struct Snapshot {
     /// The operator turned seats on. Linux seats are on whenever the supervisor answers.
     pub on: bool,
@@ -122,6 +122,13 @@ impl Snapshot {
             self.owner().ok().flatten(),
             pf_paths::seat::role().is_door(),
         )
+    }
+
+    /// The row `account` plays on when it is a person's own Linux account. Only the
+    /// supervisor's unlock lets a device onto it or starts it.
+    pub(crate) fn person_row(&self, account: &OsAccount) -> Option<&pf_seats::Seat> {
+        let (seat, _) = self.seat(self.row_of(account)?)?;
+        seat.adopted_uid.is_some().then_some(seat)
     }
 }
 

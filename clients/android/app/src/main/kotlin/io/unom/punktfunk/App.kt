@@ -253,10 +253,27 @@ fun App(forceGamepadUi: Boolean = false) {
 
     // A lost session dials the same host again on the schedule every client shares; the host
     // resumes the session it still holds. The connect modal stays up between dials and Cancel
-    // stops them. A refusal or a spent schedule ends it with a toast.
+    // stops them. A refusal or a spent schedule ends it with a toast. A redial carries no unlock:
+    // a locked profile the host no longer admits goes to the key unlock or the password prompt.
     val redialScope = rememberCoroutineScope()
     var redialing by remember { mutableStateOf<Pair<String, Job>?>(null) }
     val redialServices = remember { HostServices(KnownHostStore(context), JniHostNative(context)) }
+    var redialUnlock by remember { mutableStateOf<PasswordAsk?>(null) }
+    suspend fun redialOnce(spec: DialSpec, name: String): HostServices.Dialed {
+        val record = redialServices.store.resolve(spec.pinHex, spec.host, spec.port)
+        val hooks = record?.takeIf { spec.promptsUnlock }?.let { r ->
+            touchUnlockHooks(context, spec.identity, r, ask = { ask ->
+                redialUnlock = ask
+                try {
+                    ask.answer.await()
+                } finally {
+                    redialUnlock = null
+                }
+            })
+        }
+        val row = spec.profile?.let { savedRow(it, record?.asProfile) }
+        return dialUnlocked(hooks, spec.pinHex, row) { unlock -> redialServices.dial(spec, record, name, unlock = unlock) }
+    }
     fun redial(spec: DialSpec, name: String) {
         val job = redialScope.launch {
             var attempt = 0
@@ -271,8 +288,7 @@ fun App(forceGamepadUi: Boolean = false) {
                     break
                 }
                 delay(wait)
-                val record = redialServices.store.resolve(spec.pinHex, spec.host, spec.port)
-                when (val dialed = redialServices.dial(spec, record, name)) {
+                when (val dialed = redialOnce(spec, name)) {
                     is HostServices.Connected -> {
                         owner.open(dialed.session)
                         break
@@ -297,8 +313,7 @@ fun App(forceGamepadUi: Boolean = false) {
     fun redialWaking(spec: DialSpec, name: String, waitMs: Long) {
         val job = redialScope.launch {
             delay(waitMs)
-            val record = redialServices.store.resolve(spec.pinHex, spec.host, spec.port)
-            when (val dialed = redialServices.dial(spec, record, name)) {
+            when (val dialed = redialOnce(spec, name)) {
                 is HostServices.Connected -> owner.open(dialed.session)
                 is HostServices.Failed -> Toast.makeText(
                     context,
@@ -311,9 +326,10 @@ fun App(forceGamepadUi: Boolean = false) {
         }
         redialing = name to job
     }
-    redialing?.let { (name, job) ->
+    redialing?.takeIf { redialUnlock == null }?.let { (name, job) ->
         ConnectModal(ConnectPhase.Connecting(name), onCancel = { job.cancel(); redialing = null }, onRetry = {})
     }
+    redialUnlock?.let { UnlockPromptDialog(it) }
 
     AnimatedContent(
         targetState = session,

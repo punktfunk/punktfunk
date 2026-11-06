@@ -45,6 +45,8 @@
   libGL,
   vulkan-loader,
   libva,
+  # The seat daemon dlopens libpam.so.0 to check an adopted account's password.
+  linux-pam,
   # gbm lives in `libgbm` on recent nixpkgs, `mesa` on older ones.
   libgbm ? null,
   mesa,
@@ -272,6 +274,17 @@ in
         libxkbcommon # pf-inject's keymap
         bash
       ];
+
+      # Nothing links libpam, so a `buildInputs` entry never reaches RUNPATH: add it by hand, and
+      # assert the soname resolves. A miss refuses every adopt of an existing account.
+      postFixup = ''
+        patchelf --add-rpath "${linux-pam}/lib" "$out/libexec/punktfunk/punktfunk-seats"
+        ok=""
+        for d in $(patchelf --print-rpath "$out/libexec/punktfunk/punktfunk-seats" | tr : ' '); do
+          [ -e "$d/libpam.so.0" ] && ok=1
+        done
+        [ -n "$ok" ] || { echo "punktfunk-seats: libpam.so.0 unresolvable from RUNPATH"; exit 1; }
+      '';
 
       postInstall = ''
         install -d "$out/libexec/punktfunk"

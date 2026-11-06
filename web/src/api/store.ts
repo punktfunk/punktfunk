@@ -28,6 +28,7 @@ import {
 	useSetPluginRuntime,
 } from "@/api/gen/store/store";
 import { boostPluginPolling } from "@/api/plugins";
+import type { OwnAccount } from "@/api/seat";
 
 /**
  * How much a plugin's provenance is worth, from most to least trustworthy:
@@ -40,6 +41,21 @@ import { boostPluginPolling } from "@/api/plugins";
  * - `cli` — installed with the CLI, so the host holds no provenance record at all.
  */
 export type StoreTier = "verified" | "external" | "unverified" | "cli";
+
+/**
+ * The catalog entries the page's host installs. A seat on a person's own Linux account installs
+ * none and a Windows one only `verified` ones: their hosts refuse the rest.
+ */
+export function installable(
+	entries: CatalogEntry[] | undefined,
+	own: OwnAccount | null,
+): CatalogEntry[] {
+	if (own === "linux") return [];
+	const list = entries ?? [];
+	return own === "windows"
+		? list.filter((e) => e.tier === ("verified" satisfies StoreTier))
+		: list;
+}
 
 /** An installed plugin paired with the catalog entry an update would install. */
 export interface PendingUpdate {

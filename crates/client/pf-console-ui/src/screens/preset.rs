@@ -295,6 +295,7 @@ impl ScreenView for PresetName {
             label: "Name".into(),
             text: self.name.clone(),
             digits: false,
+            secure: false,
         };
         self.editing.then_some(field)
     }
@@ -384,7 +385,7 @@ impl ScreenView for PresetName {
 
     fn hints(&self, ctx: &Ctx) -> Vec<Hint> {
         if self.editing {
-            return TextEntry::hints(ctx.device, "Save");
+            return self.keyboard.hints(ctx.device, "Save");
         }
         vec![
             Hint::new(HintKey::Confirm, "Select"),

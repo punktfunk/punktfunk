@@ -31,6 +31,7 @@ import { useDialogs } from "@/components/dialogs";
 import { apiErrorMessage } from "@/lib/errors";
 import { useLocale } from "@/lib/i18n";
 import { m } from "@/paraglide/messages";
+import { SignedInDevices } from "./devices";
 import {
 	AddProfileDialog,
 	DoctorDialog,
@@ -114,7 +115,8 @@ export const SectionProfiles: FC = () => {
 	const failed = (fallback: string) => (e: unknown) =>
 		toast.error(apiErrorMessage(e) ?? fallback);
 
-	const create = useCreateProfile();
+	// An existing account's password rides in the variables: gone from the cache once settled.
+	const create = useCreateProfile({ mutation: { gcTime: 0 } });
 	const update = useUpdateProfile();
 	const clearPicture = useDeleteProfileAvatar();
 	const picture = useMutation({
@@ -200,6 +202,7 @@ export const SectionProfiles: FC = () => {
 					else refresh();
 				},
 				onError: failed(m.profiles_add_failed()),
+				onSettled: () => create.reset(),
 			},
 		);
 
@@ -240,7 +243,8 @@ export const SectionProfiles: FC = () => {
 								onStart: (p) => act(p, "start"),
 								onStop: (p) => act(p, "stop"),
 								onEnd: (p) => act(p, "end"),
-								onPassword: setPasswordFor,
+								// Windows seals a password; Linux checks it once and keeps none.
+								onPassword: windows ? setPasswordFor : undefined,
 								doctor: doctorLine,
 							}
 						: undefined
@@ -273,6 +277,9 @@ export const SectionProfiles: FC = () => {
 				}
 				onRemove={setRemoving}
 				busyId={busyId}
+				devices={
+					linux && door ? (p) => <SignedInDevices profile={p} /> : undefined
+				}
 			/>
 			<AddProfileDialog
 				open={adding}

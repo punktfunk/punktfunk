@@ -8,8 +8,9 @@
 //! - `seats/<id>/` holds the seat user's home, those three private directories, and the box
 //!   owner's libraries as the seat sees them (`libraries.rs`).
 //! - `trust/<id>/` is a read-only copy of the box's pairing store and profiles from the door's
-//!   directory, so a seat user can read what it needs and nothing else there. A seat other than
-//!   the owner's also finds the box's library there.
+//!   directory, so a seat user can read what it needs and nothing else there. A seat on a
+//!   person's own account gets only the pairing records of the devices its row admits. A seat
+//!   other than the owner's also finds the box's library there.
 //! - `library/` is the box's library: a copy of the owner's, which the owner's host writes, with
 //!   the plugins' grants and the firmware they staged. The door serves it to every client, and
 //!   each seat's trust copy takes it from here.
@@ -23,7 +24,7 @@ use crate::backend::BackendError;
 use crate::model::SeatId;
 use rustix::fs::{AtFlags, Mode, OFlags, XattrFlags};
 use rustix::io::Errno;
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashSet};
 use std::ffi::CStr;
 use std::io::{Read as _, Write as _};
 use std::os::fd::{AsFd, AsRawFd as _, BorrowedFd, OwnedFd};
@@ -33,10 +34,13 @@ use std::os::unix::fs::{
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
+/// The box's pairing list: who a seat host admits. A person's seat gets it filtered.
+const PAIRED: &str = "punktfunk1-paired.json";
+
 /// Box files a seat host reads; any may not exist yet. Never the box's identity: a seat host
 /// mints its own, and clients reach it through the pin the box's `Redirect` carries.
 const TRUST_FILES: [&str; 4] = [
-    "punktfunk1-paired.json",
+    PAIRED,
     "profiles.json",
     "display-settings.json",
     // `pf_host_config::seat_defaults::FILE`: the Seat defaults a seat applies itself.
@@ -438,6 +442,31 @@ fn with_mask(acl: &[u8], perm: u16) -> Option<Vec<u8>> {
     Some(out)
 }
 
+/// Where a person's host keeps its identity, beside the row's other files and not in their home:
+/// the person's `0700`, so nothing of the host's settings lands next to theirs.
+pub(super) fn person_config_dir(state: &Path, id: &SeatId) -> PathBuf {
+    seat_dir(state, id).join("config")
+}
+
+/// A person's row directory, `0711` as a seat's is, and inside it their host's [`person_config_dir`],
+/// owned by them. Nothing is made in their home. What is in either stays.
+pub(super) fn ensure_person_dirs(
+    state: &Path,
+    id: &SeatId,
+    passwd: &Passwd,
+) -> Result<(), BackendError> {
+    let io =
+        |what: &str, path: &Path, e| io_err("seat_dirs", &format!("{what} {}", path.display()), e);
+    let dir = seat_dir(state, id);
+    make_dir(&dir, 0o711).map_err(|e| io("create", &dir, e))?;
+    let config = person_config_dir(state, id);
+    std::fs::create_dir_all(&config).map_err(|e| io("create", &config, e))?;
+    std::os::unix::fs::chown(&config, Some(passwd.uid), Some(passwd.gid))
+        .map_err(|e| io("own", &config, e))?;
+    std::fs::set_permissions(&config, std::fs::Permissions::from_mode(0o700))
+        .map_err(|e| io("set the mode of", &config, e))
+}
+
 /// The seat's private directories, owned by its user and in place before its unit starts: a
 /// missing bind source fails the unit with `226/NAMESPACE`. Then `saves/out` and `saves/in`,
 /// where its saves cross to and from the owner's plugins: the seat user's, `0770`, with an ACL
@@ -558,8 +587,20 @@ pub(super) fn pin_dir(state: &Path, id: &SeatId) -> PathBuf {
 /// while the host has none. `home` is a seat user's or the owner's, so it goes through
 /// [`safe_open`].
 pub(super) fn copy_pin(home: &Path, dst: &Path) -> std::io::Result<()> {
+    copy_cert(home, &[".config", "punktfunk"], dst)
+}
+
+/// [`copy_pin`] for a person's row, whose host keeps its identity in the row's own
+/// [`person_config_dir`], not in their home.
+pub(super) fn copy_person_pin(state: &Path, id: &SeatId, dst: &Path) -> std::io::Result<()> {
+    copy_cert(&seat_dir(state, id), &["config"], dst)
+}
+
+/// The certificate in `base`/`below`, as [`copy_pin`] copies it. The directories on the way are
+/// the user's, so each opens without following a link.
+fn copy_cert(base: &Path, below: &[&str], dst: &Path) -> std::io::Result<()> {
     const CERT: &str = "native-cert.pem";
-    let config = safe_open::walk(safe_open::dir(home)?, &[".config", "punktfunk"])?;
+    let config = safe_open::walk(safe_open::dir(base)?, below)?;
     let found = match config {
         Some(at) => safe_open::read_at(at, CERT, 64 * 1024)?,
         None => None,
@@ -682,31 +723,139 @@ pub(super) fn refresh_trust(
     id: &SeatId,
     reader: Reader,
 ) -> Result<bool, BackendError> {
+    sync_trust(box_dir, state, id, reader, None)
+}
+
+/// [`refresh_trust`] for a seat on a person's own account, whose pairing list holds only the
+/// box's records of the devices in `admitted` ([`write_admitted`]).
+pub(super) fn refresh_person_trust(
+    box_dir: &Path,
+    state: &Path,
+    id: &SeatId,
+    reader: Reader,
+    admitted: &BTreeSet<String>,
+) -> Result<bool, BackendError> {
+    sync_trust(box_dir, state, id, reader, Some(admitted))
+}
+
+fn sync_trust(
+    box_dir: &Path,
+    state: &Path,
+    id: &SeatId,
+    reader: Reader,
+    admitted: Option<&BTreeSet<String>>,
+) -> Result<bool, BackendError> {
     let io = |what: &str, e| io_err("trust_copy", what, e);
     let dst = open_copy(&trust_dir(state, id), reader).map_err(|e| io("open the trust copy", e))?;
-    let src = open_source(box_dir).map_err(|e| io("open the box directory", e))?;
-    let Some(src) = src else { return Ok(false) };
-    // The display policy is the owner's, by way of the library copy, not the door's.
-    let owner = open_source(&box_library_dir(state)).map_err(|e| io("open the box library", e))?;
     let (mut changed, mut first) = (false, None);
-    let mut note = |copied: std::io::Result<bool>, what: String| match copied {
+    let mut note = |copied: std::io::Result<bool>, what: &str| match copied {
         Ok(did) => changed |= did,
         Err(e) => {
-            first.get_or_insert_with(|| io(&what, e));
+            first.get_or_insert_with(|| io(what, e));
         }
     };
-    for name in TRUST_FILES {
-        let from = if name == OWNER_POLICY {
-            owner.as_ref()
-        } else {
-            Some(&src)
-        };
-        let copied = sync_file(from, &dst, name, reader, MAX_TRUST_BYTES);
-        note(copied, format!("copy {name}"));
+    if let Some(admitted) = admitted {
+        note(
+            write_admitted(box_dir, &dst, reader, admitted),
+            "write the pairing list",
+        );
     }
-    let avatars = sync_flat_dir(Some(&src), &dst, AVATARS, reader, MAX_TRUST_BYTES);
-    note(avatars, "copy the avatars".to_owned());
+    let src = open_source(box_dir).map_err(|e| io("open the box directory", e))?;
+    if let Some(src) = src {
+        // The display policy is the owner's, by way of the library copy, not the door's.
+        let owner =
+            open_source(&box_library_dir(state)).map_err(|e| io("open the box library", e))?;
+        for name in TRUST_FILES
+            .into_iter()
+            .filter(|&n| admitted.is_none() || n != PAIRED)
+        {
+            let from = if name == OWNER_POLICY {
+                owner.as_ref()
+            } else {
+                Some(&src)
+            };
+            let copied = sync_file(from, &dst, name, reader, MAX_TRUST_BYTES);
+            note(copied, &format!("copy {name}"));
+        }
+        let avatars = sync_flat_dir(Some(&src), &dst, AVATARS, reader, MAX_TRUST_BYTES);
+        note(avatars, "copy the avatars");
+    }
     first.map_or(Ok(changed), Err)
+}
+
+/// The pairing list of a person's seat in `dst`, for `reader`: each record of the box's
+/// [`PAIRED`] whose fingerprint is in `admitted`, kept as it is. The box's file is the door's,
+/// so one that is missing, refused by [`safe_open`], over [`MAX_TRUST_BYTES`] or not
+/// `{"clients": [...]}` holds no record. Written only when it differs; `true` when it did.
+fn write_admitted(
+    box_dir: &Path,
+    dst: &OwnedFd,
+    reader: Reader,
+    admitted: &BTreeSet<String>,
+) -> std::io::Result<bool> {
+    #[derive(serde::Deserialize)]
+    struct Paired {
+        clients: Vec<serde_json::Value>,
+    }
+    let admits = |record: &serde_json::Value| {
+        let fingerprint = record.get("fingerprint").and_then(|f| f.as_str());
+        fingerprint.is_some_and(|f| admitted.contains(&f.to_ascii_lowercase()))
+    };
+    let read = || -> Option<Vec<serde_json::Value>> {
+        let (bytes, _) = safe_open::read(&box_dir.join(PAIRED), MAX_TRUST_BYTES).ok()??;
+        let paired: Paired = serde_json::from_slice(&bytes).ok()?;
+        Some(paired.clients.into_iter().filter(admits).collect())
+    };
+    let clients = if admitted.is_empty() {
+        Vec::new()
+    } else {
+        read().unwrap_or_default()
+    };
+    let mut bytes = serde_json::to_vec_pretty(&serde_json::json!({ "clients": clients }))?;
+    bytes.push(b'\n');
+    put_file(dst, PAIRED, &bytes, reader)
+}
+
+/// [`write_admitted`] into the trust copy `id` has, for the reader it was made for. A seat that
+/// never started has none; its start writes one.
+pub(super) fn rewrite_admitted(
+    box_dir: &Path,
+    state: &Path,
+    id: &SeatId,
+    admitted: &BTreeSet<String>,
+) -> Result<bool, BackendError> {
+    let io = |what: &str, e| io_err("trust_copy", what, e);
+    let dst = match safe_open::dir(&trust_dir(state, id)) {
+        Ok(dst) => dst,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(e) => return Err(io("open the trust copy", e)),
+    };
+    let owner = rustix::fs::fstat(&dst).map_err(|e| io("read the trust copy's owner", e.into()))?;
+    let reader = Reader::person(owner.st_uid, owner.st_gid);
+    write_admitted(box_dir, &dst, reader, admitted).map_err(|e| io("write the pairing list", e))
+}
+
+/// `bytes` as `name` in `dst` for `reader`, through a new file renamed over the old, when the
+/// file holds anything else. `true` when it changed.
+fn put_file(dst: &OwnedFd, name: &str, bytes: &[u8], reader: Reader) -> std::io::Result<bool> {
+    let current = safe_open::read_at(dst, name, MAX_TRUST_BYTES)
+        .ok()
+        .flatten();
+    if current.is_some_and(|(held, _)| held == bytes) {
+        return Ok(false);
+    }
+    let temp = format!("{name}.tmp");
+    unlink(dst, &temp)?;
+    let create =
+        OFlags::WRONLY | OFlags::CREATE | OFlags::EXCL | OFlags::NOFOLLOW | OFlags::CLOEXEC;
+    let mode = Mode::from_raw_mode(reader.file_mode() as _);
+    let mut out = std::fs::File::from(rustix::fs::openat(dst, temp.as_str(), create, mode)?);
+    out.write_all(bytes)?;
+    out.set_permissions(std::fs::Permissions::from_mode(reader.file_mode()))?;
+    std::os::unix::fs::fchown(&out, reader.uid, Some(reader.gid))?;
+    drop(out);
+    rustix::fs::renameat(dst, temp.as_str(), dst, name)?;
+    Ok(true)
 }
 
 /// Brings the box's library level with the owner's own in `home`, for `reader`, the door's

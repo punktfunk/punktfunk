@@ -28,6 +28,11 @@ fn shell_hwnd() -> Option<HWND> {
     (!h.is_null() && unsafe { IsWindow(Some(h)) }.as_bool()).then_some(h)
 }
 
+/// The shell window's handle as a number, while the window lives.
+pub(crate) fn raw() -> Option<usize> {
+    shell_hwnd().map(|h| h as usize)
+}
+
 /// The exe's icon resource (build.rs, ordinal 1) as the title bar, Alt-Tab and unpackaged
 /// taskbar icon. The MSIX taskbar and Start icons come from the package assets.
 fn set_icon(hwnd: HWND) {

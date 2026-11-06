@@ -5,10 +5,17 @@ import { createContext, useContext } from "react";
 import type { ProfileAdmin } from "@/api/gen/model/profileAdmin";
 import { inSeat } from "./fetcher";
 
+/** A seat that runs on a person's own account, by the host's platform. Its host refuses hooks; a
+ * Linux one also every plugin and emulator change, a Windows one unreviewed plugins and emulator
+ * copies added by hand. */
+export type OwnAccount = "linux" | "windows";
+
 /** A profile whose seat has a host of its own, so it has a library of its own. */
 export interface SeatChoice {
 	id: string;
 	name: string;
+	/** Set when the seat runs on a person's own account. */
+	own?: OwnAccount;
 }
 
 /** The pages that differ per seat. The entry page shares the library's pick. */
@@ -32,6 +39,9 @@ export const SeatScopeContext = createContext<SeatScopeValue | null>(null);
 /** The seat the page in view shows; `null` is the box's own, and outside the three pages. */
 export const useSeat = (): SeatChoice | null =>
 	useContext(SeatScopeContext)?.seat ?? null;
+
+/** Whose own account the page's seat runs on, if it is a person's; `null` for every other host. */
+export const useOwnAccount = (): OwnAccount | null => useSeat()?.own ?? null;
 
 /**
  * True when the page's plugins are the ones the console reaches: the box's own, and behind a door
@@ -65,14 +75,21 @@ export function isFullSeat(
 	);
 }
 
+/** The seats with a host of its own. The console reads an account only on a seat that runs on
+ * a person's own account, and full seats off a door are Windows ones. */
 export function seatChoices(
 	profiles: ProfileAdmin[] | undefined,
 	os: string | undefined,
 	door = false,
 ): SeatChoice[] {
+	const own: OwnAccount = door ? "linux" : "windows";
 	return (profiles ?? [])
 		.filter((p) => isFullSeat(p, os, door))
-		.map((p) => ({ id: p.id, name: p.display_name }));
+		.map((p) => ({
+			id: p.id,
+			name: p.display_name,
+			...(p.seat?.account ? { own } : {}),
+		}));
 }
 
 const bound = new WeakSet<object>();

@@ -27,6 +27,7 @@ pub(crate) mod ring_editor;
 pub(crate) mod search;
 pub(crate) mod settings;
 pub(crate) mod shortcut_editor;
+pub(crate) mod unlock;
 
 use crate::glyphs::Hint;
 use crate::library::LibraryShared;
@@ -162,6 +163,9 @@ pub struct EditField {
     pub text: String,
     /// Digits only: a PIN, a port, a bitrate.
     pub digits: bool,
+    /// A password: `text` is always empty, and the console's tray types it. A host keeps its
+    /// own keyboard down for it, or opens one that hides and learns nothing.
+    pub secure: bool,
 }
 
 impl EditField {
@@ -170,6 +174,15 @@ impl EditField {
             label: label.into(),
             text: text.into(),
             digits,
+            secure: false,
+        })
+    }
+
+    /// A password field. What it holds stays with the screen.
+    fn secret(label: &str) -> Option<EditField> {
+        Some(EditField {
+            secure: true,
+            ..EditField::new(label, "", false)?
         })
     }
 }
@@ -177,14 +190,30 @@ impl EditField {
 /// The keyboard of a screen's text field. Where the device's own keyboard types
 /// ([`Device::system_keyboard`]) the tray never rises and the pad only confirms or closes;
 /// each method applies that rule, so a screen keeps only what its field's [`Entry`] means.
+/// A password always types on the tray ([`TextEntry::secret`]).
 #[derive(Default)]
 pub(crate) struct TextEntry {
     keyboard: Keyboard,
     /// How far the tray is up, 0..1, as the last frame left it.
     seat: f64,
+    secret: bool,
 }
 
 impl TextEntry {
+    /// The keyboard of a password field. Steam's keyboard has no password mode, and the tray
+    /// types into the screen's one wiping buffer, with no copy in the host's text widget.
+    pub(crate) fn secret() -> TextEntry {
+        TextEntry {
+            secret: true,
+            ..TextEntry::default()
+        }
+    }
+
+    /// The device's own keyboard types into this field.
+    fn system(&self, device: &Device) -> bool {
+        device.system_keyboard && !self.secret
+    }
+
     /// A pad or remote event for the open field over `text`, typing through `admits`.
     pub(crate) fn menu(
         &mut self,
@@ -193,7 +222,8 @@ impl TextEntry {
         text: &mut String,
         admits: impl Fn(&str, char) -> bool,
     ) -> (Entry, Option<MenuPulse>) {
-        (self.keyboard).edit_menu(ev, device.system_keyboard, text, admits)
+        let system = self.system(device);
+        (self.keyboard).edit_menu(ev, system, text, admits)
     }
 
     /// A pointer while a field is open over `text`. `None` when the device's keyboard types:
@@ -206,12 +236,12 @@ impl TextEntry {
         text: &mut String,
         admits: impl Fn(&str, char) -> bool,
     ) -> Option<Option<Entry>> {
-        (!device.system_keyboard).then(|| self.keyboard.edit_pointer(p, text, admits))
+        (!self.system(device)).then(|| self.keyboard.edit_pointer(p, text, admits))
     }
 
     /// Steps the tray toward up while a field is `open`, down otherwise. Once a frame.
     pub(crate) fn seat(&mut self, open: bool, device: &Device, dt: f64) {
-        self.seat = self.keyboard.seat(open && !device.system_keyboard, dt);
+        self.seat = self.keyboard.seat(open && !self.system(device), dt);
     }
 
     /// How far the tray is up, as [`Self::seat`] last left it.
@@ -249,9 +279,9 @@ impl TextEntry {
 
     /// The legend while a field is open. Where the device's keyboard types, the pad only
     /// confirms (`done`) or closes; on a Steam Deck the legend also names Steam's chord.
-    pub(crate) fn hints(device: &Device, done: &'static str) -> Vec<Hint> {
+    pub(crate) fn hints(&self, device: &Device, done: &'static str) -> Vec<Hint> {
         use crate::glyphs::HintKey;
-        if !device.system_keyboard {
+        if !self.system(device) {
             return vec![
                 Hint::new(HintKey::Confirm, "Type"),
                 Hint::new(HintKey::Tertiary, "Delete"),
@@ -371,6 +401,8 @@ pub(crate) enum Nav {
 pub(crate) struct Outbox {
     pub nav: Option<Nav>,
     pub connect: Option<ConnectIntent>,
+    /// The password prompt's unlock: `connect` dials with it, past the profile and seat checks.
+    pub unlock: Option<punktfunk_core::quic::v2::msg::ProfileUnlock>,
     pub cmds: Vec<ConsoleCmd>,
     pub toast: Option<String>,
     /// Clipboard text. Rides the run loop, not the command bus: SDL owns the clipboard.
@@ -482,6 +514,8 @@ pub(crate) enum Screen {
     InputTest(input_test::InputTestScreen),
     /// Who plays on a host. Raised by Switch profile, and by a connect that needs a pick.
     Profiles(profiles::ProfilesScreen),
+    /// A locked profile's password. Raised by a connect to one, and by the host's refusal.
+    Unlock(unlock::UnlockScreen),
 }
 
 /// What every screen answers. The shell reaches the top screen's through [`Screen::view`]
@@ -576,6 +610,7 @@ impl Screen {
             Screen::PresetEdit(s) => s,
             Screen::InputTest(s) => s,
             Screen::Profiles(s) => s,
+            Screen::Unlock(s) => s,
         }
     }
 
@@ -605,6 +640,7 @@ impl Screen {
             Screen::PresetEdit(s) => s,
             Screen::InputTest(s) => s,
             Screen::Profiles(s) => s,
+            Screen::Unlock(s) => s,
         }
     }
 
@@ -705,7 +741,7 @@ mod tests {
                 platform,
                 ..Device::test()
             };
-            let hints = TextEntry::hints(&device, "Done");
+            let hints = TextEntry::default().hints(&device, "Done");
             hints.into_iter().map(|h| h.key).collect::<Vec<_>>()
         };
         let steam = HintKey::Key("STEAM + X");

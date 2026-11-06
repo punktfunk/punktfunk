@@ -461,7 +461,7 @@ extension ConsoleModel {
             onOnline: { [weak self] in
                 guard let self else { return }
                 bridge.push(.wake, "null")
-                if thenConnect { actions.connect(host, .inherit, host.pickedProfile?.id) }
+                if thenConnect { actions.connect(host, .inherit, .send(host.pickedProfile?.id)) }
             })
     }
 

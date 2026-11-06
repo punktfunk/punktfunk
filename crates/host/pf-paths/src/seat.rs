@@ -6,7 +6,8 @@
 //! the console host.
 //!
 //! `serve` fixes the role with [`resolve`]. Any other process reads the environment at each
-//! [`role`] call. No other crate reads a role variable.
+//! [`role`] call. No other crate reads a role variable. [`own_account`] alone says a seat host
+//! runs on a person's own account.
 //! `every_predicate_answers_its_truth_table_row` pins what each role answers. [`ignored`] names
 //! each setting that is set and changes nothing, which `serve` warns of.
 //!
@@ -125,12 +126,20 @@ impl HostRole {
     }
 }
 
-/// The role and whether pairing is refused, as [`resolve`] fixed them.
-static RESOLVED: std::sync::OnceLock<(HostRole, bool)> = std::sync::OnceLock::new();
+/// What the role variables say, as [`resolve`] fixed them or [`read`] reads them now.
+#[derive(Clone, Copy)]
+struct Resolved {
+    role: HostRole,
+    pairing_refused: bool,
+    own_account: bool,
+}
+
+static RESOLVED: std::sync::OnceLock<Resolved> = std::sync::OnceLock::new();
 
 /// The role variables as they are now. `door_flag` is `serve --door`. A seat host refuses
-/// pairing whatever `PUNKTFUNK_PAIRING` says.
-fn read(door_flag: bool) -> (HostRole, bool) {
+/// pairing whatever `PUNKTFUNK_PAIRING` says. The own-account marker counts only beside the
+/// seat marker.
+fn read(door_flag: bool) -> Resolved {
     let var = |name: &str| std::env::var(name).ok();
     let role = HostRole::from_env_values(
         var("PUNKTFUNK_SEAT_SESSION").as_deref(),
@@ -139,7 +148,12 @@ fn read(door_flag: bool) -> (HostRole, bool) {
         door_flag,
     );
     let refused = var("PUNKTFUNK_PAIRING").as_deref() == Some("refused");
-    (role, role.is_seat_host() || refused)
+    let own = var("PUNKTFUNK_SEAT_OWN_ACCOUNT").as_deref() == Some("1");
+    Resolved {
+        role,
+        pairing_refused: role.is_seat_host() || refused,
+        own_account: role.is_seat_host() && own,
+    }
 }
 
 /// Fixes this process's role for the rest of its life. `serve` calls it once its arguments are
@@ -150,21 +164,29 @@ pub fn resolve(door_flag: bool) {
 
 /// What [`resolve`] fixed, else the environment as it is now. A process that never resolves (a
 /// management CLI, the Windows service, a test) reads it at each call.
-fn current() -> (HostRole, bool) {
+fn current() -> Resolved {
     RESOLVED.get().copied().unwrap_or_else(|| read(false))
 }
 
 /// This process's role: what [`resolve`] fixed, else the environment as it is now.
 pub fn role() -> HostRole {
-    current().0
+    current().role
+}
+
+/// Whether this seat host runs on a person's own account, on Linux or Windows: the supervisor
+/// sets `PUNKTFUNK_SEAT_OWN_ACCOUNT=1` beside the seat marker. Nothing else decides that a host
+/// runs as a real person. [`resolve`] fixes it with the role.
+pub fn own_account() -> bool {
+    current().own_account
 }
 
 /// Each role variable, the one value that sets its marker, and what to say of any other.
-const MARKERS: [(&str, &str, &str); 4] = [
+const MARKERS: [(&str, &str, &str); 5] = [
     ("PUNKTFUNK_SEAT_SESSION", "1", ONLY_ONE),
     ("PUNKTFUNK_SEAT_OWNER", "1", ONLY_ONE),
     ("PUNKTFUNK_SEAT_HEADLESS", "1", ONLY_ONE),
     ("PUNKTFUNK_PAIRING", "refused", ONLY_REFUSED),
+    ("PUNKTFUNK_SEAT_OWN_ACCOUNT", "1", ONLY_ONE),
 ];
 const ONLY_ONE: &str = "only the value 1 sets it";
 const ONLY_REFUSED: &str = "only the value refused sets it";
@@ -172,15 +194,15 @@ const NO_SEAT_MARKER: &str = "PUNKTFUNK_SEAT_SESSION is not 1";
 const ON_A_SEAT_HOST: &str = "a seat host is never the door";
 
 /// Each seat-contract setting that is set and changes nothing, with why: a role variable whose
-/// value is not its marker; the owner marker, the headless marker or a seat id without the seat
-/// marker; the door asked for on a seat host. `values` are the role variables' in [`MARKERS`]
-/// order, `None` when unset. Naming a setting here changes no answer.
+/// value is not its marker; the owner, headless or own-account marker or a seat id without the
+/// seat marker; the door asked for on a seat host. `values` are the role variables' in
+/// [`MARKERS`] order, `None` when unset. Naming a setting here changes no answer.
 pub fn ignored_values(
-    values: [Option<&str>; 4],
+    values: [Option<&str>; 5],
     door_flag: bool,
     seat_id_set: bool,
 ) -> Vec<(&'static str, &'static str)> {
-    let [seat_session, seat_owner, seat_headless, _] = values;
+    let [seat_session, seat_owner, seat_headless, _, own_account] = values;
     let mut ignored = Vec::new();
     for (value, (name, marker, why)) in values.into_iter().zip(MARKERS) {
         if value.is_some_and(|value| value != marker) {
@@ -193,6 +215,7 @@ pub fn ignored_values(
         let seat = vec![
             ("PUNKTFUNK_SEAT_OWNER", seat_owner == Some("1")),
             ("PUNKTFUNK_SEAT_HEADLESS", seat_headless == Some("1")),
+            ("PUNKTFUNK_SEAT_OWN_ACCOUNT", own_account == Some("1")),
             ("PUNKTFUNK_SEAT_ID", seat_id_set),
         ];
         (seat, NO_SEAT_MARKER)
@@ -315,7 +338,7 @@ pub fn library_dir() -> std::path::PathBuf {
 /// host with `PUNKTFUNK_PAIRING=refused`. A knock is refused, a PIN window never opens.
 /// [`resolve`] fixes it with the role.
 pub fn pairing_refused() -> bool {
-    current().1
+    current().pairing_refused
 }
 
 /// The seat supervisor's pad broker: a seat host asks here for the pads it cannot make itself.
@@ -360,58 +383,91 @@ mod tests {
 
     /// What each predicate answers, by the markers set. Inputs: `S` `PUNKTFUNK_SEAT_SESSION=1`,
     /// `O` `PUNKTFUNK_SEAT_OWNER=1`, `H` `PUNKTFUNK_SEAT_HEADLESS=1`, `D` `serve --door`, `P`
-    /// `PUNKTFUNK_PAIRING=refused`. Answers, in [`answers`]' order:
-    /// `s` seat host, `o` owner seat, `c` follows the contract, `r` runs a seat session, `d` door,
-    /// `p` pairing refused, `e` a missing seat id is an error.
-    const TRUTH: [(&str, &str); 32] = [
-        ("-----", "-------"),
-        ("----P", "-----p-"),
-        ("---D-", "----d--"),
-        ("---DP", "----dp-"),
-        ("--H--", "-------"),
-        ("--H-P", "-----p-"),
-        ("--HD-", "----d--"),
-        ("--HDP", "----dp-"),
-        ("-O---", "-------"),
-        ("-O--P", "-----p-"),
-        ("-O-D-", "----d--"),
-        ("-O-DP", "----dp-"),
-        ("-OH--", "-------"),
-        ("-OH-P", "-----p-"),
-        ("-OHD-", "----d--"),
-        ("-OHDP", "----dp-"),
-        ("S----", "s-cr-pe"),
-        ("S---P", "s-cr-pe"),
-        ("S--D-", "s-cr-pe"),
-        ("S--DP", "s-cr-pe"),
-        ("S-H--", "s-cr-pe"),
-        ("S-H-P", "s-cr-pe"),
-        ("S-HD-", "s-cr-pe"),
-        ("S-HDP", "s-cr-pe"),
-        ("SO---", "so---pe"),
-        ("SO--P", "so---pe"),
-        ("SO-D-", "so---pe"),
-        ("SO-DP", "so---pe"),
-        ("SOH--", "so-r-pe"),
-        ("SOH-P", "so-r-pe"),
-        ("SOHD-", "so-r-pe"),
-        ("SOHDP", "so-r-pe"),
+    /// `PUNKTFUNK_PAIRING=refused`, `A` `PUNKTFUNK_SEAT_OWN_ACCOUNT=1`. Answers, in [`answers`]'
+    /// order: `s` seat host, `o` owner seat, `c` follows the contract, `r` runs a seat session,
+    /// `d` door, `p` pairing refused, `e` a missing seat id is an error, `a` own account.
+    const TRUTH: [(&str, &str); 64] = [
+        ("------", "--------"),
+        ("-----A", "--------"),
+        ("----P-", "-----p--"),
+        ("----PA", "-----p--"),
+        ("---D--", "----d---"),
+        ("---D-A", "----d---"),
+        ("---DP-", "----dp--"),
+        ("---DPA", "----dp--"),
+        ("--H---", "--------"),
+        ("--H--A", "--------"),
+        ("--H-P-", "-----p--"),
+        ("--H-PA", "-----p--"),
+        ("--HD--", "----d---"),
+        ("--HD-A", "----d---"),
+        ("--HDP-", "----dp--"),
+        ("--HDPA", "----dp--"),
+        ("-O----", "--------"),
+        ("-O---A", "--------"),
+        ("-O--P-", "-----p--"),
+        ("-O--PA", "-----p--"),
+        ("-O-D--", "----d---"),
+        ("-O-D-A", "----d---"),
+        ("-O-DP-", "----dp--"),
+        ("-O-DPA", "----dp--"),
+        ("-OH---", "--------"),
+        ("-OH--A", "--------"),
+        ("-OH-P-", "-----p--"),
+        ("-OH-PA", "-----p--"),
+        ("-OHD--", "----d---"),
+        ("-OHD-A", "----d---"),
+        ("-OHDP-", "----dp--"),
+        ("-OHDPA", "----dp--"),
+        ("S-----", "s-cr-pe-"),
+        ("S----A", "s-cr-pea"),
+        ("S---P-", "s-cr-pe-"),
+        ("S---PA", "s-cr-pea"),
+        ("S--D--", "s-cr-pe-"),
+        ("S--D-A", "s-cr-pea"),
+        ("S--DP-", "s-cr-pe-"),
+        ("S--DPA", "s-cr-pea"),
+        ("S-H---", "s-cr-pe-"),
+        ("S-H--A", "s-cr-pea"),
+        ("S-H-P-", "s-cr-pe-"),
+        ("S-H-PA", "s-cr-pea"),
+        ("S-HD--", "s-cr-pe-"),
+        ("S-HD-A", "s-cr-pea"),
+        ("S-HDP-", "s-cr-pe-"),
+        ("S-HDPA", "s-cr-pea"),
+        ("SO----", "so---pe-"),
+        ("SO---A", "so---pea"),
+        ("SO--P-", "so---pe-"),
+        ("SO--PA", "so---pea"),
+        ("SO-D--", "so---pe-"),
+        ("SO-D-A", "so---pea"),
+        ("SO-DP-", "so---pe-"),
+        ("SO-DPA", "so---pea"),
+        ("SOH---", "so-r-pe-"),
+        ("SOH--A", "so-r-pea"),
+        ("SOH-P-", "so-r-pe-"),
+        ("SOH-PA", "so-r-pea"),
+        ("SOHD--", "so-r-pe-"),
+        ("SOHD-A", "so-r-pea"),
+        ("SOHDP-", "so-r-pe-"),
+        ("SOHDPA", "so-r-pea"),
     ];
 
     /// Each role variable in [`TRUTH`]'s input order: its name, the value that sets its marker,
     /// and a value that must not.
-    const VARS: [(&str, &str, &str); 4] = [
+    const VARS: [(&str, &str, &str); 5] = [
         ("PUNKTFUNK_SEAT_SESSION", "1", "true"),
         ("PUNKTFUNK_SEAT_OWNER", "1", "0"),
         ("PUNKTFUNK_SEAT_HEADLESS", "1", "yes"),
         ("PUNKTFUNK_PAIRING", "refused", "1"),
+        ("PUNKTFUNK_SEAT_OWN_ACCOUNT", "1", "true"),
     ];
 
     /// Set on the child only: `flag` for a `serve --door` process.
     const CHILD: &str = "PF_ROLE_TRUTH_CHILD";
     const MARK: &str = "role-answers=";
     /// Every variable unset, set and near-missed, with and without the flag.
-    const COMBINATIONS: usize = 3 * 3 * 3 * 3 * 2;
+    const COMBINATIONS: usize = 3 * 3 * 3 * 3 * 3 * 2;
 
     fn answers() -> String {
         let role = role();
@@ -423,6 +479,7 @@ mod tests {
             ('d', role.is_door()),
             ('p', pairing_refused()),
             ('e', seat_id().is_err()),
+            ('a', own_account()),
         ];
         answers
             .iter()
@@ -480,7 +537,7 @@ mod tests {
         let mut child = child("every_predicate_answers_its_truth_table_row");
         child.env(CHILD, if flag { "flag" } else { "none" });
         let mut digits = combination / 2;
-        let mut set = [false; 4];
+        let mut set = [false; 5];
         for (at, (name, on, near_miss)) in VARS.iter().enumerate() {
             match digits % 3 {
                 0 => child.env_remove(name),
@@ -491,10 +548,10 @@ mod tests {
             digits /= 3;
         }
         let row = |door_flag: bool| {
-            let [seat, owner, headless, pairing] = set;
-            let inputs: String = "SOHDP"
+            let [seat, owner, headless, pairing, own] = set;
+            let inputs: String = "SOHDPA"
                 .chars()
-                .zip([seat, owner, headless, door_flag, pairing])
+                .zip([seat, owner, headless, door_flag, pairing, own])
                 .map(|(letter, on)| if on { letter } else { '-' })
                 .collect();
             let row = TRUTH.iter().find(|(row, _)| *row == inputs);
@@ -547,16 +604,24 @@ mod tests {
 
     #[test]
     fn a_setting_that_changes_nothing_is_named_with_why() {
-        let (seat, owner, headless, pairing) = (VARS[0].0, VARS[1].0, VARS[2].0, VARS[3].0);
-        // A console host, a door, and the two seats a supervisor starts: nothing to say.
-        assert!(ignored_values([None; 4], false, false).is_empty());
-        assert!(ignored_values([None; 4], true, false).is_empty());
-        let row = [Some("1"), None, Some("1"), Some("refused")];
+        let [seat, owner, headless, pairing, own] = VARS.map(|(name, ..)| name);
+        // A console host, a door, and the three seats a supervisor starts: nothing to say.
+        assert!(ignored_values([None; 5], false, false).is_empty());
+        assert!(ignored_values([None; 5], true, false).is_empty());
+        let row = [Some("1"), None, Some("1"), Some("refused"), None];
         assert!(ignored_values(row, false, true).is_empty());
-        let owner_row = [Some("1"), Some("1"), Some("1"), Some("refused")];
+        let owner_row = [Some("1"), Some("1"), Some("1"), Some("refused"), None];
         assert!(ignored_values(owner_row, false, true).is_empty());
+        let person_row = [Some("1"), None, Some("1"), Some("refused"), Some("1")];
+        assert!(ignored_values(person_row, false, true).is_empty());
 
-        let near_misses = [Some("true"), Some("0"), Some("yes"), Some("1")];
+        let near_misses = [
+            Some("true"),
+            Some("0"),
+            Some("yes"),
+            Some("1"),
+            Some("true"),
+        ];
         assert_eq!(
             ignored_values(near_misses, false, false),
             [
@@ -564,18 +629,21 @@ mod tests {
                 (owner, ONLY_ONE),
                 (headless, ONLY_ONE),
                 (pairing, "only the value refused sets it"),
+                (own, ONLY_ONE),
             ]
         );
+        let stray = [None, Some("1"), Some("1"), None, Some("1")];
         assert_eq!(
-            ignored_values([None, Some("1"), Some("1"), None], false, true),
+            ignored_values(stray, false, true),
             [
                 (owner, NO_SEAT_MARKER),
                 (headless, NO_SEAT_MARKER),
+                (own, NO_SEAT_MARKER),
                 ("PUNKTFUNK_SEAT_ID", NO_SEAT_MARKER),
             ]
         );
         assert_eq!(
-            ignored_values([Some("1"), None, None, None], true, true),
+            ignored_values([Some("1"), None, None, None, None], true, true),
             [("--door", ON_A_SEAT_HOST)]
         );
     }

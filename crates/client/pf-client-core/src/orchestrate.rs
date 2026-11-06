@@ -134,19 +134,30 @@ pub enum ExitRoute {
     RedialProfile { id: String, msg: String },
     /// Drop the host's saved profile pick, then this banner.
     ForgetProfileThen(String),
+    /// The host wants profile `id`'s password or a fresh key proof. `sent`: the refused dial
+    /// carried an unlock. [`crate::unlock::after_refusal`] picks the prompt, `error` under its
+    /// field, or the device key. Never a redial on its own.
+    Unlock {
+        id: String,
+        error: Option<String>,
+        sent: bool,
+    },
     /// The dial-first attempt to a quiet host failed: wake-and-wait.
     Wake,
 }
 
 /// The post-dial half of [`trust_route`]: where a session exit leads. `tofu` = the dial
-/// pinned an advertised fingerprint. `retry_profile` = the profile the dial named, unless the
-/// dial was already the retry. `wake_armed` = a dial-first wake armed for this dial, with
+/// pinned an advertised fingerprint. `profile` = the profile the dial named; `retried` = the
+/// dial was already the retry after an unknown-profile refusal; `unlock_sent` = the refused
+/// dial carried an unlock. `wake_armed` = a dial-first wake armed for this dial, with
 /// auto-wake read once when it armed, and no ready since. `log` names this shell's log for a
 /// session that died silently.
 pub fn exit_route(
     outcome: &ConnectOutcome,
     tofu: bool,
-    retry_profile: Option<&str>,
+    profile: Option<&str>,
+    retried: bool,
+    unlock_sent: bool,
     wake_armed: bool,
     log: &str,
 ) -> ExitRoute {
@@ -156,12 +167,22 @@ pub fn exit_route(
         ConnectOutcome::Ended(Some(reason)) => ExitRoute::Banner(reason.clone()),
         // The host answered and refused: never a wake.
         ConnectOutcome::Refused { msg, reason } if *reason == RejectReason::ProfileUnknown => {
-            match retry_profile {
+            match profile.filter(|_| !retried) {
                 Some(id) => ExitRoute::RedialProfile {
                     id: id.to_string(),
                     msg: msg.clone(),
                 },
                 None => ExitRoute::ForgetProfileThen(msg.clone()),
+            }
+        }
+        ConnectOutcome::Refused { msg, reason } if *reason == RejectReason::ProfileLocked => {
+            match profile {
+                Some(id) => ExitRoute::Unlock {
+                    id: id.to_string(),
+                    error: crate::unlock::refusal_line(msg),
+                    sent: unlock_sent,
+                },
+                None => ExitRoute::Banner(msg.clone()),
             }
         }
         ConnectOutcome::Refused { msg, .. } => ExitRoute::Banner(msg.clone()),
@@ -190,8 +211,14 @@ pub struct ConnectAttempt {
     wake: Option<HostTarget>,
     /// The dial pins an advertised fingerprint, which a ready session proves.
     tofu: bool,
-    /// The profile the dial names, unless the dial is already the retry.
-    retry_profile: Option<String>,
+    /// The profile the dial names.
+    profile: Option<String>,
+    /// The dial is the one retry after an unknown-profile refusal.
+    retried: bool,
+    /// The dial carries a profile unlock, which only the session's first dial sends.
+    unlock: bool,
+    /// The session presented, so a later refusal met a redial that carried no unlock.
+    ready: bool,
 }
 
 impl ConnectAttempt {
@@ -202,16 +229,25 @@ impl ConnectAttempt {
 
     /// A session is about to dial. `tofu`: it pins an advertised fingerprint. `profile` is
     /// the one it names. `redial` marks the one retry after a `PROFILE_UNKNOWN` refusal.
-    pub fn dial(&mut self, tofu: bool, profile: Option<&str>, redial: bool) {
+    /// `unlock`: the dial carries a profile unlock.
+    pub fn dial(&mut self, tofu: bool, profile: Option<&str>, redial: bool, unlock: bool) {
         self.tofu = tofu;
-        self.retry_profile = profile.filter(|_| !redial).map(str::to_string);
+        self.profile = profile.map(str::to_string);
+        self.retried = redial;
+        self.unlock = unlock;
     }
 
     /// The session is streaming, so the host answered and no later exit is the asleep case.
     /// `true`: the dial trusted its pin on first use, and the caller saves it now.
     pub fn on_ready(&mut self) -> bool {
         self.wake = None;
+        self.ready = true;
         self.tofu
+    }
+
+    /// What the host holding this dial with `Pending` means ([`crate::unlock::pending`]).
+    pub fn on_pending(&self) -> crate::unlock::Pending {
+        crate::unlock::pending(self.unlock && !self.ready)
     }
 
     /// The session that dialed `host` is gone: where its exit leads. Every exit ends the
@@ -223,8 +259,16 @@ impl ConnectAttempt {
             (Some(a), Some(b)) => a == b,
             _ => w.addr == host.addr && w.port == host.port,
         });
-        let retry = was.retry_profile.as_deref();
-        exit_route(outcome, was.tofu, retry, wake_armed, log)
+        let (profile, sent) = (was.profile.as_deref(), was.unlock && !was.ready);
+        exit_route(
+            outcome,
+            was.tofu,
+            profile,
+            was.retried,
+            sent,
+            wake_armed,
+            log,
+        )
     }
 }
 
@@ -267,6 +311,9 @@ pub struct ConnectPlan {
     /// Per-host trust decision, not a preset setting. Resolved here so the renderer
     /// does not look it up again.
     pub clipboard: bool,
+    /// This shell asks for a profile's password and spawns again with it after a
+    /// `profile-locked` refusal ([`PROMPTS_UNLOCK_ARG`]).
+    pub prompts_unlock: bool,
 }
 
 /// Handshake budget when the plan and `--connect-timeout` both omit one.
@@ -354,6 +401,7 @@ impl ConnectPlan {
             connect_timeout_secs: None,
             tofu: false,
             clipboard: host.clipboard_sync,
+            prompts_unlock: false,
         }
     }
 
@@ -397,6 +445,9 @@ impl ConnectPlan {
         }
         if self.settings.fullscreen_on_stream || self.settings.fullscreen_always() {
             args.push("--fullscreen".into());
+        }
+        if self.prompts_unlock {
+            args.push(PROMPTS_UNLOCK_ARG.into());
         }
         // No `--window-pos`: Wayland compositors own placement, so the flag is a silent
         // no-op from GTK/CLI. Windows appends its own. An X11-only special case is drift.
@@ -956,6 +1007,62 @@ pub mod exit {
     pub const RENDERER_FAILED: u8 = 4;
 }
 
+/// Session flag: read one profile unlock from stdin before dialing ([`read_unlock`]).
+pub const UNLOCK_STDIN_ARG: &str = "--unlock-stdin";
+/// Session flag: the spawning shell asks for a profile's password, so the dial offers it.
+pub const PROMPTS_UNLOCK_ARG: &str = "--prompts-unlock";
+/// Longest unlock frame on the session's stdin.
+pub const UNLOCK_STDIN_MAX: usize = 4096;
+
+/// Write `unlock` to a session's stdin as `len u32 LE ‖ ProfileUnlock frame`, then close it by
+/// dropping `to`. Every copy made here wipes.
+pub fn write_unlock(
+    mut to: impl std::io::Write,
+    unlock: punktfunk_core::quic::v2::msg::ProfileUnlock,
+) -> std::io::Result<()> {
+    let frame = unlock.encode();
+    drop(unlock);
+    to.write_all(&(frame.len() as u32).to_le_bytes())?;
+    to.write_all(&frame)?;
+    to.flush()
+}
+
+/// The one unlock [`write_unlock`] sent: a length of at most [`UNLOCK_STDIN_MAX`], one whole
+/// `ProfileUnlock` frame inside the wire's bounds, then EOF. Anything else is `InvalidData`,
+/// and no error carries a byte of the frame.
+pub fn read_unlock(
+    mut from: impl std::io::Read,
+) -> std::io::Result<punktfunk_core::quic::v2::msg::ProfileUnlock> {
+    use punktfunk_core::quic::v2::{field, msg, registry};
+    let bad = |what| std::io::Error::new(std::io::ErrorKind::InvalidData, what);
+    let mut len = [0u8; 4];
+    from.read_exact(&mut len)?;
+    let len = u32::from_le_bytes(len) as usize;
+    if len > UNLOCK_STDIN_MAX {
+        return Err(bad("unlock frame over its bound"));
+    }
+    let mut frame = msg::Zeroizing::new(vec![0u8; len]);
+    from.read_exact(&mut frame)?;
+    if from.read(&mut [0u8; 1])? != 0 {
+        return Err(bad("more than one unlock frame"));
+    }
+    match field::split_frame(&frame, registry::max_body) {
+        Ok(Some((ty, body, n))) if n == frame.len() => {
+            msg::decode::<msg::ProfileUnlock>(ty, body).map_err(|_| bad("bad unlock frame"))
+        }
+        _ => Err(bad("bad unlock frame")),
+    }
+}
+
+/// [`read_unlock`] on this process's stdin, past std's buffer, which is never wiped.
+pub fn read_unlock_from_stdin() -> std::io::Result<punktfunk_core::quic::v2::msg::ProfileUnlock> {
+    #[cfg(unix)]
+    let raw = std::os::fd::AsFd::as_fd(&std::io::stdin()).try_clone_to_owned()?;
+    #[cfg(windows)]
+    let raw = std::os::windows::io::AsHandle::as_handle(&std::io::stdin()).try_clone_to_owned()?;
+    read_unlock(std::fs::File::from(raw))
+}
+
 /// One line the session writes on stdout; [`parse_session_line`] reads each back.
 pub enum SessionLine<'a> {
     Ready,
@@ -1218,14 +1325,32 @@ pub fn spawn_session(
 /// exits, or at once if it never starts. `cancel` accepts cancellation before or after the
 /// child is armed; `None` creates a fresh handle. [`SessionEvent::Exited`] always arrives.
 pub fn spawn_child(
-    mut cmd: Command,
+    cmd: Command,
     spec_path: Option<std::path::PathBuf>,
     cancel: Option<CancelHandle>,
     stderr_sink: impl std::io::Write + Send + 'static,
     on_event: impl FnMut(SessionEvent) + Send + 'static,
 ) -> Result<CancelHandle, String> {
-    cmd.stdin(Stdio::null())
-        .stdout(Stdio::piped())
+    spawn_child_with_unlock(cmd, spec_path, cancel, stderr_sink, None, on_event)
+}
+
+/// [`spawn_child`] for a dial that carries `unlock`: the child gets [`UNLOCK_STDIN_ARG`] and
+/// reads the frame from its stdin, never argv or the environment. The frame is written, stdin
+/// closed and this copy wiped before this returns.
+pub fn spawn_child_with_unlock(
+    mut cmd: Command,
+    spec_path: Option<std::path::PathBuf>,
+    cancel: Option<CancelHandle>,
+    stderr_sink: impl std::io::Write + Send + 'static,
+    unlock: Option<punktfunk_core::quic::v2::msg::ProfileUnlock>,
+    on_event: impl FnMut(SessionEvent) + Send + 'static,
+) -> Result<CancelHandle, String> {
+    if unlock.is_some() {
+        cmd.arg(UNLOCK_STDIN_ARG).stdin(Stdio::piped());
+    } else {
+        cmd.stdin(Stdio::null());
+    }
+    cmd.stdout(Stdio::piped())
         // Piped through the ring forwarder, not inherited: a GUI-only log export
         // otherwise holds everything except the stream it was exported about.
         .stderr(Stdio::piped());
@@ -1238,6 +1363,12 @@ pub fn spawn_child(
             return Err(format!("couldn't start {}: {e}", SESSION_BIN));
         }
     };
+    if let (Some(unlock), Some(stdin)) = (unlock, child.stdin.take()) {
+        // A child that gets a torn frame refuses to dial, so a failed write fails closed.
+        if let Err(e) = write_unlock(stdin, unlock) {
+            tracing::warn!(error = %e, "the profile unlock did not reach the session");
+        }
+    }
     if let Some(stderr) = child.stderr.take() {
         crate::logring::forward_child_stderr(stderr, stderr_sink);
     }
@@ -1367,7 +1498,7 @@ mod tests {
     }
 
     /// Every exit routes one way on every shell: a rejected pin always repairs, a profile
-    /// refusal redials once, and only an armed dial that failed wakes.
+    /// refusal redials once, a locked profile prompts, and only an armed dial that failed wakes.
     #[test]
     fn exit_route_decides_once_for_every_shell() {
         use punktfunk_core::reject::RejectReason as R;
@@ -1383,6 +1514,11 @@ mod tests {
         let redial = RedialProfile {
             id: "kid".into(),
             msg: "no".into(),
+        };
+        let unlock = Unlock {
+            id: "kid".into(),
+            error: Some("no".into()),
+            sent: false,
         };
         for (outcome, tofu, retry, armed, want) in [
             (O::Ended(None), false, None, true, Silent),
@@ -1411,6 +1547,14 @@ mod tests {
                 ForgetProfileThen("no".into()),
             ),
             (refused(R::Busy), false, Some("kid"), true, banner("no")),
+            (
+                refused(R::ProfileLocked),
+                false,
+                Some("kid"),
+                true,
+                unlock.clone(),
+            ),
+            (refused(R::ProfileLocked), false, None, false, banner("no")),
             (O::ConnectFailed("gone".into()), false, None, true, Wake),
             (
                 O::ConnectFailed("gone".into()),
@@ -1429,7 +1573,7 @@ mod tests {
                 banner("Stream session was killed — out of memory, or stopped by the system"),
             ),
         ] {
-            let got = exit_route(&outcome, tofu, retry, armed, "the client log");
+            let got = exit_route(&outcome, tofu, retry, false, false, armed, "the client log");
             assert_eq!(
                 got, want,
                 "{outcome:?}, tofu {tofu}, retry {retry:?}, armed {armed}"
@@ -1471,7 +1615,7 @@ mod tests {
             if let Some(host) = armed {
                 attempt.arm_wake(host);
             }
-            attempt.dial(false, None, false);
+            attempt.dial(false, None, false, false);
             if ready {
                 assert!(!attempt.on_ready());
             }
@@ -1494,18 +1638,64 @@ mod tests {
             Repair(FINGERPRINT_CHANGED.into()),
             ForgetProfileThen("no".into()),
         );
+        // A locked profile prompts again on the retry too, and the stand-in line says nothing.
+        let locked = ConnectOutcome::Refused {
+            msg: crate::trust::connect_reject_message(R::ProfileLocked),
+            reason: R::ProfileLocked,
+        };
+        let prompt = Unlock {
+            id: "kid".into(),
+            error: None,
+            sent: false,
+        };
         for (tofu, profile, redial, outcome, want) in [
             (true, None, false, &rejected, Repair("pin".into())),
             (false, None, false, &rejected, changed),
             (false, Some("kid"), false, &refused, again),
             (false, Some("kid"), true, &refused, forget),
+            (false, Some("kid"), true, &locked, prompt),
         ] {
             let mut attempt = ConnectAttempt::default();
-            attempt.dial(tofu, profile, redial);
+            attempt.dial(tofu, profile, redial, false);
             assert_eq!(attempt.on_ready(), tofu);
             let got = attempt.on_exit(&desk, outcome, "the client log");
             assert_eq!(got, want, "tofu {tofu}, {profile:?}, redial {redial}");
             assert_eq!(attempt, ConnectAttempt::default());
+        }
+    }
+
+    /// An unlock dial's `Pending` is its desktop starting. A refusal before the stream came
+    /// up refused that unlock; after it, it met a redial that carried none.
+    #[test]
+    fn an_unlock_dial_waits_for_its_desktop_and_knows_what_was_refused() {
+        use crate::unlock::Pending;
+        use punktfunk_core::reject::RejectReason as R;
+        let locked = ConnectOutcome::Refused {
+            msg: "Wrong password.".into(),
+            reason: R::ProfileLocked,
+        };
+        let host = HostTarget::default();
+        for (unlock, ready, pending, sent) in [
+            (true, false, Pending::Starting, true),
+            (true, true, Pending::Approval, false),
+            (false, false, Pending::Approval, false),
+        ] {
+            let mut attempt = ConnectAttempt::default();
+            attempt.dial(false, Some("kid"), false, unlock);
+            if ready {
+                attempt.on_ready();
+            }
+            assert_eq!(
+                attempt.on_pending(),
+                pending,
+                "unlock {unlock}, ready {ready}"
+            );
+            let want = ExitRoute::Unlock {
+                id: "kid".into(),
+                error: Some("Wrong password.".into()),
+                sent,
+            };
+            assert_eq!(attempt.on_exit(&host, &locked, "log"), want);
         }
     }
 
@@ -1546,6 +1736,39 @@ mod tests {
         assert!(w.tick(false).send_packet);
     }
 
+    /// One unlock crosses the session's stdin whole. Past its bound, torn, followed by more
+    /// bytes, empty or of another type, the frame is refused.
+    #[test]
+    fn one_unlock_crosses_the_session_stdin() {
+        use punktfunk_core::quic::v2::msg::{
+            ProfileUnlock, V2Message, Zeroizing, ENROLL_NONE, UNLOCK_PASSWORD,
+        };
+        let secret = Zeroizing::new(b" tr0ub4dor &3 ".to_vec());
+        let unlock = ProfileUnlock::new(UNLOCK_PASSWORD, secret, true, ENROLL_NONE, vec![]);
+        let mut wire = Vec::new();
+        write_unlock(&mut wire, unlock.unwrap()).unwrap();
+        let back = read_unlock(&wire[..]).unwrap();
+        assert_eq!(back.secret.as_slice(), b" tr0ub4dor &3 ");
+        assert!(back.stay_signed_in);
+
+        let mut more = wire.clone();
+        more.push(0);
+        let mut long = wire.clone();
+        long[..4].copy_from_slice(&(UNLOCK_STDIN_MAX as u32 + 1).to_le_bytes());
+        let other = punktfunk_core::quic::PairResult { ok: true }.encode_v2();
+        let mut wrong = (other.len() as u32).to_le_bytes().to_vec();
+        wrong.extend_from_slice(&other);
+        for bad in [
+            &more[..],
+            &wire[..wire.len() - 1],
+            &long[..],
+            &wrong[..],
+            &[][..],
+        ] {
+            assert!(read_unlock(bad).is_err());
+        }
+    }
+
     /// One-off preset rides the flag; a host binding does not — the session
     /// resolves it with the same helper, so passing it would be a second source of truth.
     #[test]
@@ -1570,6 +1793,7 @@ mod tests {
             connect_timeout_secs: None,
             tofu: false,
             clipboard: false,
+            prompts_unlock: false,
         };
         assert_eq!(
             plan.session_args(),
@@ -1588,10 +1812,12 @@ mod tests {
         plan.preset_override = Some("aaaaaaaaaaaa".into());
         plan.connect_timeout_secs = Some(185);
         plan.settings.fullscreen_on_stream = true;
+        plan.prompts_unlock = true;
         let args = plan.session_args();
         assert!(args.windows(2).any(|w| w == ["--preset", "aaaaaaaaaaaa"]));
         assert!(args.windows(2).any(|w| w == ["--connect-timeout", "185"]));
         assert!(args.contains(&"--fullscreen".to_string()));
+        assert!(args.contains(&PROMPTS_UNLOCK_ARG.to_string()));
         // Fullscreen Always outranks a preset that turned streams fullscreen off.
         plan.settings.fullscreen_on_stream = false;
         plan.settings.set_fullscreen_always(true);
@@ -1957,6 +2183,19 @@ mod tests {
             parse_session_line(r#"{"error":"x","refused":"from-a-newer-session"}"#),
             Some(SessionEvent::Error(SessionError { refused: None, .. }))
         ));
+        // A locked profile reaches the shell as a refusal with the host's sentence.
+        let Some(SessionEvent::Error(locked)) =
+            parse_session_line(r#"{"error":"Wrong password.","refused":"profile-locked"}"#)
+        else {
+            panic!("a refusal line");
+        };
+        assert_eq!(
+            ConnectOutcome::from_exit(2, Some(locked), None, false),
+            ConnectOutcome::Refused {
+                msg: "Wrong password.".into(),
+                reason: punktfunk_core::reject::RejectReason::ProfileLocked,
+            }
+        );
         assert_eq!(
             parse_session_line(r#"{"ended":"Host ended the session"}"#),
             Some(SessionEvent::Ended("Host ended the session".into()))
@@ -2086,6 +2325,7 @@ mod tests {
             connect_timeout_secs: Some(45),
             tofu: false,
             clipboard: true,
+            prompts_unlock: false,
         };
         let force_software = Arc::new(AtomicBool::new(false));
         let probes = |hdr_enabled: bool, hevc_444_hardware: bool| Probes {

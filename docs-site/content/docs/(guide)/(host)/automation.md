@@ -68,6 +68,9 @@ The console writes `~/.config/punktfunk/hooks.json` (Windows:
 `%ProgramData%\punktfunk\hooks.json`). You can edit that file by hand or `PUT` it to
 `/api/v1/hooks`; changes apply from the next event.
 
+A profile on an existing account runs no hooks, on Linux and Windows: its hooks would run as that
+person. Its seat refuses a new hook, and skips any it already has.
+
 ```json
 {
   "hooks": [

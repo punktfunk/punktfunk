@@ -24,7 +24,8 @@ pub(crate) async fn get_hooks() -> Json<crate::hooks::HooksConfig> {
 ///
 /// Whole-document PUT, not a patch. Applies from the next event. Commands run as the host
 /// user (the interactive session on Windows). An `elevated` hook is refused until an
-/// administrator turns elevated commands on at the host (`HostInfo.elevated_commands`).
+/// administrator turns elevated commands on at the host (`HostInfo.elevated_commands`). A
+/// seat host on a person's own account refuses every hook and runs none.
 #[utoipa::path(
     put,
     path = "/hooks",
@@ -35,10 +36,14 @@ pub(crate) async fn get_hooks() -> Json<crate::hooks::HooksConfig> {
         (status = OK, description = "Configuration stored; the new state", body = crate::hooks::HooksConfig),
         (status = BAD_REQUEST, description = "Structurally invalid configuration, or an `elevated` hook this host won't run", body = ApiError),
         (status = UNAUTHORIZED, description = "Missing or invalid bearer token", body = ApiError),
+        (status = FORBIDDEN, description = "A seat host on a person's own account, which takes no hooks", body = ApiError),
         (status = INTERNAL_SERVER_ERROR, description = "Configuration could not be persisted", body = ApiError),
     )
 )]
 pub(crate) async fn set_hooks(ApiJson(cfg): ApiJson<crate::hooks::HooksConfig>) -> Response {
+    if let Some(why) = crate::hooks::own_account_refusal() {
+        return api_error(StatusCode::FORBIDDEN, why);
+    }
     if let Err(e) = cfg.validate() {
         return api_error(StatusCode::BAD_REQUEST, &e);
     }

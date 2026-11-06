@@ -636,6 +636,24 @@ public enum LibraryClient {
         try expectWoken(response)
     }
 
+    /// A fresh challenge for this device's key on profile `id`:
+    /// `POST /api/v1/profiles/{id}/unlock-challenge`. Valid once, for two minutes.
+    public static func unlockChallenge(id: String, on target: MgmtTarget) async throws
+        -> UnlockChallenge
+    {
+        var allowed = CharacterSet.urlPathAllowed
+        allowed.remove("/")
+        let escaped = id.addingPercentEncoding(withAllowedCharacters: allowed) ?? id
+        let response = try await send(
+            "/api/v1/profiles/\(escaped)/unlock-challenge", to: target, method: "POST",
+            body: (Data(), "application/json"))
+        try expectOK(response)
+        guard let challenge = UnlockChallenge(json: response.body) else {
+            throw LibraryError.unreachable("bad JSON")
+        }
+        return challenge
+    }
+
     /// ``expectOK(_:_:)`` for a wake. An unpaired device gets 401, so a 403 is the host refusing
     /// this device the profile's seat: `http(403)`, not `unauthorized`.
     static func expectWoken(_ response: HTTPResponse) throws {

@@ -9,8 +9,13 @@
 //! serializes lifecycle calls because four seats do not need rollback races; the
 //! ledger's own lock is never held across a backend call that takes time (a
 //! create, start, stop, delete or Enable), only for the edit and its write, so
-//! `List` answers while a seat takes its tens of seconds to come up.
+//! `List` answers while a seat takes its tens of seconds to come up. A password check runs under
+//! the attempt limits of [`crate::attempts`]; a Linux one runs outside the mutex too. A person's
+//! Linux row starts only through [`unlock`].
 
+mod unlock;
+
+use crate::attempts::{Attempts, Outcome, Target};
 use crate::backend::{BackendError, PlatformBackend};
 use crate::ipc::{
     ApiError, Command, CommandResult, Diagnostic, DiagnosticLevel, DoctorReport, ErrorCode,
@@ -19,16 +24,25 @@ use crate::ipc::{
 use crate::model::{CreateSeat, Ledger, RuntimeState, RuntimeStatus, Seat, SeatId};
 use crate::persistence::{LedgerStore, StoreError};
 use crate::secret::Secret;
+use crate::unlock::Challenges;
 use std::path::Path;
 use std::sync::{Mutex, MutexGuard};
+use std::time::Instant;
+
+/// The device a password typed in the console counts against.
+const CONSOLE: &str = "console";
 
 pub struct SeatService<B> {
     backend: B,
     store: LedgerStore,
     ledger: Mutex<Ledger>,
-    /// Held across every create, start, stop, delete, adopt, credential, Enable and Disable. Only
-    /// a call under it adds or drops a row.
+    /// Held across every create, start, stop, delete, adopt, credential, unlock grant, Enable and
+    /// Disable, but not a Linux password check. Only a call under it adds or drops a row.
     ops: Mutex<()>,
+    /// Failed password checks and key proofs, per device and per account.
+    attempts: Mutex<Attempts>,
+    /// The live challenge of each person's device with a key.
+    challenges: Mutex<Challenges>,
     /// The start, stop or delete in flight; `List` reports its seat's published state meanwhile.
     changing: Mutex<Option<Change>>,
     /// Held by the one box-wide Flatpak change allowed at a time.
@@ -56,6 +70,8 @@ impl<B: PlatformBackend> SeatService<B> {
             store,
             ledger: Mutex::new(ledger),
             ops: Mutex::new(()),
+            attempts: Mutex::new(Attempts::default()),
+            challenges: Mutex::new(Challenges::default()),
             changing: Mutex::new(None),
             flatpak: Mutex::new(()),
         })
@@ -98,11 +114,18 @@ impl<B: PlatformBackend> SeatService<B> {
                 sid,
                 password,
             } => self.adopt(seat, sid, &password),
+            Command::AdoptUser { seat, password } => self.adopt_user(seat, &password),
             Command::Credential { id, password } => self.credential(&id, &password),
             Command::InstallFlatpak { id } => self.flatpak(&id, |b| b.install_flatpak(&id)),
             Command::RemoveFlatpak { id, purge } => {
                 self.flatpak(&id, |b| b.remove_flatpak(&id, purge).map(|()| None))
             }
+            Command::Unlock { id, device, proof } => self.unlock(&id, &device, proof),
+            Command::UnlockState { id, fingerprint } => self.unlock_state(&id, &fingerprint),
+            Command::Challenge { id, fingerprint } => self.challenge(&id, &fingerprint),
+            Command::Left { id, fingerprint } => self.left(&id, &fingerprint),
+            Command::SignOut { id, fingerprint } => self.sign_out(&id, fingerprint.as_deref()),
+            Command::Devices { id } => self.devices(&id),
         }
     }
 
@@ -155,19 +178,21 @@ impl<B: PlatformBackend> SeatService<B> {
 
     /// Refresh every seat's state, then start the autostart seats one at a time. A start runs
     /// outside the ledger lock, as a `start` command does, so `list` answers meanwhile; a failed
-    /// start is recorded on its row, and the first one is returned once all have run.
+    /// start is recorded on its row, and the first one is returned once all have run. A person's
+    /// Linux row never autostarts: only its person's proof starts it.
     pub fn reconcile_startup(&self) -> Result<(), ApiError> {
+        let autostarts = |seat: &Seat| seat.autostart && seat.adopted_uid.is_none();
         let autostart: Vec<SeatId> = {
             let mut current = self.lock();
             let mut next = current.clone();
-            for seat in next.seats.iter_mut().filter(|seat| !seat.autostart) {
+            for seat in next.seats.iter_mut().filter(|seat| !autostarts(seat)) {
                 seat.runtime = self.observe(seat);
                 self.learn_pin(seat);
             }
             let ids = next
                 .seats
                 .iter()
-                .filter(|seat| seat.autostart)
+                .filter(|seat| autostarts(seat))
                 .map(|seat| seat.id.clone())
                 .collect();
             if next != *current {
@@ -309,41 +334,120 @@ impl<B: PlatformBackend> SeatService<B> {
     }
 
     /// A seat on a person's own account, whose SID is `sid`. Allocated on a copy, as `create`
-    /// is; a backend that refuses has undone its own steps.
+    /// is; a backend that refuses has undone its own steps. Its sign-in counts against the
+    /// account's attempt limit.
     fn adopt(
         &self,
         request: CreateSeat,
         sid: String,
         password: &Secret,
     ) -> Result<CommandResult, ApiError> {
+        let account = format!("sid:{sid}");
         let _op = self.op();
         let mut seat = self
             .lock()
             .clone()
             .allocate_adopted(request, sid)
             .map_err(ApiError::from)?;
-        seat.rdp_granted = self
-            .backend
+        let target = Target {
+            device: None,
+            account: Some(&account),
+        };
+        let granted = self.limited(target, || self.backend.adopt_account(&seat, password))?;
+        seat.rdp_granted = granted;
+        self.land(seat)
+    }
+
+    /// A seat on a Linux person's own account. The backend names the uid, so the row records the
+    /// daemon's reading and never the caller's. The password check takes seconds, so it runs
+    /// outside `ops`, under the console's and the account's attempt limits, and keeps nothing.
+    /// What it rested on is read again under `ops`: a uid that moved meanwhile is refused.
+    fn adopt_user(
+        &self,
+        request: CreateSeat,
+        password: &Secret,
+    ) -> Result<CommandResult, ApiError> {
+        let checked = self.person_row(&request)?;
+        let account = format!("uid:{}", checked.adopted_uid.unwrap_or_default());
+        let target = Target {
+            device: Some((&account, CONSOLE)),
+            account: Some(&account),
+        };
+        self.limited(target, || self.backend.check_password(&checked, password))?;
+        let _op = self.op();
+        let seat = self.person_row(&request)?;
+        if seat.adopted_uid != checked.adopted_uid {
+            return Err(ApiError::new(
+                ErrorCode::Conflict,
+                format!(
+                    "account {} changed while its password was checked",
+                    seat.account
+                ),
+            ));
+        }
+        self.backend
             .adopt_account(&seat, password)
             .map_err(ApiError::from)?;
         self.land(seat)
     }
 
-    /// Stores `password` for `id`, an adopted row, once the backend has verified it. A made
-    /// row's password is the backend's own and is refused before the backend sees it.
+    /// `request`'s row on the ledger as it is now, for the uid the backend names: refused when
+    /// the account doesn't resolve, is the owner's or is another row's.
+    fn person_row(&self, request: &CreateSeat) -> Result<Seat, ApiError> {
+        let mut current = self.lock().clone();
+        let uid = self
+            .backend
+            .account_uid(request.account.trim(), &current)
+            .map_err(ApiError::from)?;
+        current
+            .allocate_adopted_user(request.clone(), uid)
+            .map_err(ApiError::from)
+    }
+
+    /// Stores `password` for `id`, a Windows adopted row, once the backend has verified it under
+    /// the account's attempt limit. A made row's password is the backend's own, and a Linux
+    /// person's is nobody's: both are refused before the backend sees them.
     fn credential(&self, id: &SeatId, password: &Secret) -> Result<CommandResult, ApiError> {
         let _op = self.op();
         let seat = self.lock().seat(id).cloned().ok_or_else(|| not_found(id))?;
-        if seat.adopted_sid.is_none() {
+        let Some(sid) = &seat.adopted_sid else {
             return Err(ApiError::new(
                 ErrorCode::InvalidRequest,
-                "only an adopted account's password can be updated",
+                "only an adopted Windows account's password can be updated",
             ));
-        }
-        self.backend
-            .reseal(&seat, password)
-            .map_err(ApiError::from)?;
+        };
+        let account = format!("sid:{sid}");
+        let target = Target {
+            device: None,
+            account: Some(&account),
+        };
+        self.limited(target, || self.backend.reseal(&seat, password))?;
         Ok(CommandResult::Resealed { seat })
+    }
+
+    /// Runs `check`, a password or key-proof check for `target`, under the attempt limits: a
+    /// refusal answers `unlock_locked_out` before the check runs, and the check's answer counts
+    /// once it returns. Only a password check has an account side.
+    fn limited<T>(
+        &self,
+        target: Target<'_>,
+        check: impl FnOnce() -> Result<T, BackendError>,
+    ) -> Result<T, ApiError> {
+        let admitted = self.attempts().admit(target, Instant::now());
+        let ticket = admitted.map_err(|wait| {
+            tracing::warn!(?target, wait_s = wait.as_secs(), "unlock check refused");
+            let sentence = crate::attempts::sentence(wait, target.account.is_some());
+            ApiError::from(BackendError::new("unlock_locked_out", sentence))
+        })?;
+        let answer = check();
+        let outcome = match &answer {
+            Ok(_) => Outcome::Passed,
+            Err(error) if unproven(&error.code) => Outcome::Failed,
+            Err(_) => Outcome::Unjudged,
+        };
+        self.attempts()
+            .settle(target, ticket, outcome, Instant::now());
+        answer.map_err(ApiError::from)
     }
 
     fn start(&self, id: &SeatId) -> Result<CommandResult, ApiError> {
@@ -354,11 +458,29 @@ impl<B: PlatformBackend> SeatService<B> {
         self.change_runtime(id, false)
     }
 
+    /// A start or stop asked of `id`. A person's Linux row answers `unlock_required` to a start:
+    /// it starts only once its person proves they are there ([`Self::unlock`]).
     fn change_runtime(&self, id: &SeatId, start: bool) -> Result<CommandResult, ApiError> {
         if !start {
             self.interrupt_start(id);
+        } else if self
+            .lock()
+            .seat(id)
+            .is_some_and(|s| s.adopted_uid.is_some())
+        {
+            return Err(unlock::unlock_required());
         }
         let _op = self.op();
+        let seat = self.change_locked(id, start)?;
+        Ok(if start {
+            CommandResult::Started { seat }
+        } else {
+            CommandResult::Stopped { seat }
+        })
+    }
+
+    /// The start or stop of `id`, under `ops`, which the caller holds: the row as it is after.
+    fn change_locked(&self, id: &SeatId, start: bool) -> Result<Seat, ApiError> {
         let original = self.begin(id, start)?;
         if start {
             let published = self.publish_runtime(
@@ -425,11 +547,7 @@ impl<B: PlatformBackend> SeatService<B> {
         }
         let changed = seat.clone();
         self.commit(&mut current, next)?;
-        if start {
-            Ok(CommandResult::Started { seat: changed })
-        } else {
-            Ok(CommandResult::Stopped { seat: changed })
-        }
+        Ok(changed)
     }
 
     fn delete(&self, id: &SeatId) -> Result<CommandResult, ApiError> {
@@ -594,6 +712,21 @@ impl<B: PlatformBackend> SeatService<B> {
     fn op(&self) -> MutexGuard<'_, ()> {
         self.ops.lock().unwrap_or_else(|error| error.into_inner())
     }
+
+    fn attempts(&self) -> MutexGuard<'_, Attempts> {
+        self.attempts
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+    }
+}
+
+/// Whether a check that answered `code` may have met a wrong password or key proof: a refusal of
+/// it, or a check that gave no verdict. Either counts as a failure.
+fn unproven(code: &str) -> bool {
+    matches!(
+        code,
+        "credential_wrong" | "credential_verify" | "pam_unavailable" | "proof_invalid"
+    )
 }
 
 impl From<crate::model::ValidationError> for ApiError {

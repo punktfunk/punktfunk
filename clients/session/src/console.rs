@@ -131,18 +131,21 @@ fn note_connected(pending: &Mutex<Option<PendingApproval>>, fingerprint: [u8; 32
 }
 
 /// What the launch handler holds across actions: the console's identity for the session,
-/// `--all-screens`, and the request-access hand-off slot [`note_connected`] reads.
+/// `--all-screens`, the request-access hand-off slot [`note_connected`] reads, and the
+/// console's model, which holds a launch's profile unlock.
 struct Launcher {
     identity: (String, String),
     all_screens: bool,
     pending_approval: Arc<Mutex<Option<PendingApproval>>>,
+    console: ConsoleShared,
 }
 
 impl Launcher {
     /// One overlay action. A launch becomes the session's params, re-resolved from the
-    /// settings and the host's preset binding each time; the run-loop-side and Android-only
-    /// actions are handled there, listed so adding an action to the enum keeps failing
-    /// loudly here instead of falling into a wildcard that silently drops it.
+    /// settings and the host's preset binding each time, with the unlock the console's password
+    /// prompt left for it. The run-loop-side and Android-only actions are handled there, listed
+    /// so adding an action to the enum keeps failing loudly here instead of falling into a
+    /// wildcard that silently drops it.
     fn act(
         &self,
         action: OverlayAction,
@@ -163,6 +166,8 @@ impl Launcher {
                 preset,
                 profile,
             } => {
+                // Taken first, so a refused launch drops and wipes it.
+                let unlock = self.console.take_unlock();
                 let Some(pin) = trust::parse_hex32(&fp_hex) else {
                     // Connect (and request-access) pin the host's advertised fingerprint;
                     // a pinless launch is a logic slip, never a silent TOFU.
@@ -203,6 +208,10 @@ impl Launcher {
                 );
                 params.profile = profile;
                 params.shows_screens |= self.all_screens;
+                // This console asks for a locked profile's password, and prompts again when the
+                // host refuses it: the presenter reports that refusal to it.
+                params.prompts_unlock = true;
+                params.unlock = Arc::new(Mutex::new(unlock));
                 if request_access {
                     // The host PARKS the connect until the operator approves — outlast its
                     // approval window (host `PENDING_APPROVAL_WAIT`), matching the desktop
@@ -351,6 +360,7 @@ pub fn run(target: Option<&str>) -> u8 {
         identity,
         all_screens: arg_flag("--all-screens"),
         pending_approval,
+        console: console.clone(),
     };
     let result = pf_presenter::run_browse(
         opts,

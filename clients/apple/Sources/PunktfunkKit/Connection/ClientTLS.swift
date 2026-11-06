@@ -35,7 +35,7 @@ enum ClientTLS {
     }
 
     /// First PEM block of `type` ("CERTIFICATE" / "PRIVATE KEY") → its DER bytes.
-    private static func derFromPEM(_ pem: String, type: String) -> Data? {
+    static func derFromPEM(_ pem: String, type: String) -> Data? {
         guard let start = pem.range(of: "-----BEGIN \(type)-----"),
               let end = pem.range(of: "-----END \(type)-----", range: start.upperBound..<pem.endIndex)
         else { return nil }

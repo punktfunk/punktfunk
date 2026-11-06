@@ -88,10 +88,11 @@ public final class ConsoleBridge {
         case endGame = "EndGame", install = "Install"
     }
 
-    /// Where the session the console asked for stands.
+    /// Where the session the console asked for stands. `profileLocked` is a failure the host
+    /// closed with `profile-locked`, its message the host's sentence: the console's prompt opens.
     public enum Phase: UInt8 {
         case connecting = 0, streaming = 1, failed = 2, ended = 3, reconnecting = 4
-        case awaitingApproval = 6
+        case awaitingApproval = 6, profileLocked = 7
     }
 
     /// `nil` when the options JSON or Skia's Metal context fails; the log says which.
@@ -148,6 +149,17 @@ public final class ConsoleBridge {
 
     public func phase(_ phase: Phase, message: String = "") {
         punktfunk_console_phase(handle, phase.rawValue, message)
+    }
+
+    /// The password the console's prompt typed for the `Launch` it just raised, moved out of the
+    /// console into a secret that wipes; nil when it holds none. Take it before anything else
+    /// the `Launch` does: one left in the console is wiped by the next.
+    public func takeUnlock() -> ProfileUnlock? {
+        var stay = false
+        let secret = UnlockSecret(capacity: Int(PUNKTFUNK_CONSOLE_UNLOCK_MAX)) { out in
+            Int(punktfunk_console_take_unlock(handle, out.baseAddress, UInt(out.count), &stay))
+        }
+        return secret.count > 0 ? ProfileUnlock.password(secret, staySignedIn: stay) : nil
     }
 
     public func push(_ kind: Push, _ json: String) {

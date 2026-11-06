@@ -36,6 +36,8 @@ mod settings;
 mod speed;
 mod stream;
 mod style;
+/// The password prompt for a profile on a person's own account, and Windows Hello beside it.
+mod unlock;
 
 use crate::trust::{KnownHosts, Settings};
 use hosts::{HostRef, HostsProps};
@@ -159,6 +161,8 @@ pub(crate) struct Shared {
     pub(crate) set_picker: Mutex<Option<AsyncSetState<Option<profiles::PickerAsk>>>>,
     /// Opens the wait for a profile's seat the same way ([`profiles::seat_then`]).
     pub(crate) set_seat: Mutex<Option<AsyncSetState<Option<profiles::SeatWait>>>>,
+    /// Opens the password prompt the same way ([`unlock::before_dial`]).
+    pub(crate) set_unlock: Mutex<Option<AsyncSetState<Option<unlock::UnlockAsk>>>>,
     pub(crate) pictures: Mutex<profiles::Pictures>,
 }
 
@@ -278,6 +282,7 @@ pub(crate) enum Msg {
     SettingsRev(u64),
     Picker(Option<profiles::PickerAsk>),
     Seat(Option<profiles::SeatWait>),
+    Unlock(Option<unlock::UnlockAsk>),
     /// A `punktfunk://` link, from argv or a later instance.
     Link(String),
     LinkConfirm(Option<Box<orchestrate::ConnectPlan>>),
@@ -352,6 +357,7 @@ pub(crate) struct Shell {
     settings_rev: u64,
     picker: Option<profiles::PickerAsk>,
     seat: Option<profiles::SeatWait>,
+    unlock: Option<unlock::UnlockAsk>,
     /// A link that named its host by something guessable, awaiting "Open this link?".
     link_confirm: Option<Box<orchestrate::ConnectPlan>>,
     pads: usize,
@@ -421,6 +427,7 @@ impl Component for Shell {
             settings_rev: 0,
             picker: None,
             seat: None,
+            unlock: None,
             link_confirm: None,
             pads: 0,
             enter: Tween::start(0.0, 1.0, ENTER_FRAMES, Msg::Tick(Anim::Screen), cx),
@@ -433,9 +440,11 @@ impl Component for Shell {
                 })
             },
         };
-        // A connect's worker thread raises the picker and the seat wait through these.
+        // A connect's worker thread raises the picker, the seat wait and the password prompt
+        // through these.
         *ctx.shared.set_picker.lock().unwrap() = Some(shell.set(Msg::Picker));
         *ctx.shared.set_seat.lock().unwrap() = Some(shell.set(Msg::Seat));
+        *ctx.shared.set_unlock.lock().unwrap() = Some(shell.set(Msg::Unlock));
         // Before the link poll starts: a link queued at startup is explicit intent and wins.
         open_start_screen(&shell.svc());
         poll_links(shell.set(Msg::Link));
@@ -506,6 +515,7 @@ impl Component for Shell {
             Msg::SettingsRev(r) => self.settings_rev = r,
             Msg::Picker(p) => self.picker = p,
             Msg::Seat(s) => self.seat = s,
+            Msg::Unlock(u) => self.unlock = u,
             Msg::Link(url) => route_link(
                 &self.ctx,
                 &url,
@@ -523,7 +533,7 @@ impl Component for Shell {
                     let prev = std::mem::replace(&mut self.pads, n);
                     let busy = rules::console_waits(
                         &self.screen,
-                        self.picker.is_some(),
+                        self.picker.is_some() || self.unlock.is_some(),
                         self.seat.is_some(),
                     );
                     open_console_on_pad(&self.svc(), busy, prev, n);
@@ -534,7 +544,9 @@ impl Component for Shell {
             Msg::Colors(p) => self.pal = p.with_scheme(self.pal.scheme),
             // The topmost sheet first, each closed the way its own Cancel closes it.
             Msg::Escape => {
-                if let Some(w) = self.seat.take() {
+                if let Some(u) = self.unlock.take() {
+                    u.abandon();
+                } else if let Some(w) = self.seat.take() {
                     w.abandon();
                 } else if let Some(a) = self.picker.take() {
                     a.abandon();
@@ -643,6 +655,7 @@ impl Component for Shell {
                             entrance(body, &self.screen, self.enter.eased()),
                             profiles::picker_slot(pal, &self.picker, &self.set(Msg::Picker)),
                             profiles::seat_slot(pal, &self.seat, &self.set(Msg::Seat)),
+                            unlock::unlock_slot(pal, &self.unlock, &self.set(Msg::Unlock)),
                         )),
                     )),
             )
@@ -695,7 +708,8 @@ pub fn run(identity: (String, String), gamepad: GamepadService) -> windows::core
 impl Shell {
     /// Whether a sheet is up for [`Msg::Escape`] to close, in the set it walks.
     fn sheet_open(&self) -> bool {
-        self.seat.is_some()
+        self.unlock.is_some()
+            || self.seat.is_some()
             || self.picker.is_some()
             || (self.screen == Screen::Settings && self.settings_edit)
             || (self.screen == Screen::Hosts && (self.rename.is_some() || self.show_add))

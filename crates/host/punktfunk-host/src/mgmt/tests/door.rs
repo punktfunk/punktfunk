@@ -68,6 +68,20 @@ impl Seats for FakeSeats {
         Arc::clone(&self.snapshot)
     }
 
+    fn ledger(&self) -> Snapshot {
+        (*self.snapshot).clone()
+    }
+
+    fn ask(
+        &self,
+        _: pf_seats::ipc::Command,
+    ) -> Result<pf_seats::ipc::CommandResult, pf_seats::ipc::ApiError> {
+        Err(pf_seats::ipc::ApiError::new(
+            pf_seats::ipc::ErrorCode::Transport,
+            "no supervisor in this test",
+        ))
+    }
+
     fn call(&self, target: &Target, call: Forwarded) -> Answer {
         let stream = call.stream;
         let path = call.target.clone();

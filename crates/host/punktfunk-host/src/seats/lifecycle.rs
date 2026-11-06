@@ -1,5 +1,6 @@
 //! What keeps seats up and what lets them go: the seats of recent players start with the host,
-//! and a seat nobody plays on stops after **Stop an idle seat after** (`seat_idle_stop`).
+//! and a seat nobody plays on stops after **Stop an idle seat after** (`seat_idle_stop`). A
+//! Linux row on a person's own account does neither ([`managed`]).
 //!
 //! The Windows service holds the supervisor in-process; the door on Linux reaches it over its
 //! socket. Both run this through [`Supervisor`].
@@ -76,18 +77,33 @@ impl Supervisor for Socket {
     }
 }
 
-/// The rows of the `wanted` most recent players, newest first, once each. `now` is unix seconds.
+/// Whether keep-warm may start the row and the idle stop may end it. Not the owner's row, the
+/// box's host, and not a Linux row on a person's own account: its desktop may hold unsaved work,
+/// and it never starts without its person. A Windows row on an existing account is managed.
+fn managed(seat: &Seat) -> bool {
+    !seat.owner && seat.adopted_uid.is_none()
+}
+
+/// The rows of the `wanted` most recent players, newest first, once each, but no row on a
+/// person's own Linux account. `now` is unix seconds.
 fn warm_rows(
     profiles: &[Profile],
-    owner: Option<&Seat>,
+    ledger: &[Seat],
     door: bool,
     now: u64,
     wanted: usize,
 ) -> Vec<String> {
+    let owner = ledger.iter().find(|s| s.owner);
+    let person = |row: &str| {
+        ledger
+            .iter()
+            .any(|s| s.id.as_str() == row && s.adopted_uid.is_some())
+    };
     let mut recent: Vec<(u64, &str)> = profiles
         .iter()
         .filter(|p| p.last_used_unix > 0 && now.saturating_sub(p.last_used_unix) < WARM_WITHIN_SECS)
         .filter_map(|p| Some((p.last_used_unix, super::row_in(&p.os_account, owner, door)?)))
+        .filter(|(_, row)| !person(row))
         .collect();
     recent.sort_by_key(|r| std::cmp::Reverse(r.0));
     let mut rows: Vec<String> = Vec::new();
@@ -112,9 +128,8 @@ pub(crate) fn keep_warm(sup: &dyn Supervisor) {
         .map_or(0, |d| d.as_secs());
     let profiles = crate::profiles::Profiles::load_with(None, None).list();
     let ledger = sup.seats();
-    let owner = ledger.iter().find(|s| s.owner);
     let door = pf_paths::seat::role().is_door();
-    for row in warm_rows(&profiles, owner, door, now, wanted) {
+    for row in warm_rows(&profiles, &ledger, door, now, wanted) {
         let Ok(id) = SeatId::parse(row) else { continue };
         let running = ledger
             .iter()
@@ -138,8 +153,8 @@ fn idle_since(since: Instant, now: Instant, busy: bool, placed: Option<Instant>)
 }
 
 /// Stops a running seat once nobody has played on it for [`idle_stop`]. A seat whose host
-/// doesn't answer counts as busy: stopping it would be a guess. The owner's row is the box's
-/// host, which runs the plugins and keeps the library, so it never idles out.
+/// doesn't answer counts as busy: stopping it would be a guess. Only a [`managed`] row idles
+/// out: the owner's runs the plugins and keeps the library.
 pub(crate) fn stop_idle(sup: &dyn Supervisor, stop: &AtomicBool) {
     let Some(limit) = idle_stop() else { return };
     let mut busy_at: HashMap<String, Instant> = HashMap::new();
@@ -153,7 +168,7 @@ pub(crate) fn stop_idle(sup: &dyn Supervisor, stop: &AtomicBool) {
             waited += Duration::from_secs(1);
         }
         let now = Instant::now();
-        for seat in sup.seats().into_iter().filter(|s| !s.owner) {
+        for seat in sup.seats().into_iter().filter(managed) {
             let id = seat.id.as_str().to_string();
             if seat.runtime.state != RuntimeState::Running {
                 busy_at.remove(&id);
@@ -337,7 +352,7 @@ mod tests {
     /// newest first, each row once, nothing older than two weeks, and no more than asked.
     #[test]
     fn the_most_recent_players_rows_warm_once_each() {
-        let owner = seat(OWNER, true);
+        let owner = [seat(OWNER, true)];
         let now = 10_000_000;
         let profiles = [
             profile("owner", OsAccount::Operator, now - 300),
@@ -347,15 +362,50 @@ mod tests {
             profile("never", full(KID), 0),
         ];
         assert_eq!(
-            warm_rows(&profiles, Some(&owner), true, now, 8),
+            warm_rows(&profiles, &owner, true, now, 8),
             vec![OWNER.to_string(), KID.to_string()]
         );
-        assert_eq!(
-            warm_rows(&profiles, Some(&owner), true, now, 1),
-            vec![OWNER]
-        );
+        assert_eq!(warm_rows(&profiles, &owner, true, now, 1), vec![OWNER]);
         // Off a door only a full seat has a row, and with no owner row there is none to warm.
-        assert_eq!(warm_rows(&profiles, None, false, now, 8), vec![KID]);
-        assert!(warm_rows(&profiles[..2], None, true, now, 8).is_empty());
+        assert_eq!(warm_rows(&profiles, &[], false, now, 8), vec![KID]);
+        assert!(warm_rows(&profiles[..2], &[], true, now, 8).is_empty());
+    }
+
+    const PERSON: &str = "00112233445566778899aabbccddeeff";
+    const WINDOWS: &str = "ffeeddccbbaa99887766554433221100";
+
+    /// Keep-warm never starts a Linux row on a person's own account and gives its place to the
+    /// next player; a Windows row on an existing account still warms.
+    #[test]
+    fn a_person_s_own_linux_account_never_warms() {
+        let mut person = seat(PERSON, false);
+        person.adopted_uid = Some(1500);
+        let mut windows = seat(WINDOWS, false);
+        windows.adopted_sid = Some("S-1-5-21-1-2-3-1001".into());
+        let ledger = [seat(OWNER, true), person, windows];
+        let now = 10_000_000;
+        let profiles = [
+            profile("jane", full(PERSON), now - 100),
+            profile("sam", full(WINDOWS), now - 200),
+            profile("kid", full(KID), now - 300),
+        ];
+        assert_eq!(
+            warm_rows(&profiles, &ledger, true, now, 2),
+            vec![WINDOWS, KID]
+        );
+    }
+
+    /// The idle stop ends only a managed row: never the owner's or a person's own Linux
+    /// account, while a Windows row on an existing account still idles out.
+    #[test]
+    fn the_idle_stop_spares_the_owner_and_a_person_s_own_linux_account() {
+        let mut person = seat(PERSON, false);
+        person.adopted_uid = Some(1500);
+        let mut windows = seat(WINDOWS, false);
+        windows.adopted_sid = Some("S-1-5-21-1-2-3-1001".into());
+        assert!(managed(&seat(KID, false)));
+        assert!(managed(&windows));
+        assert!(!managed(&person));
+        assert!(!managed(&seat(OWNER, true)));
     }
 }
