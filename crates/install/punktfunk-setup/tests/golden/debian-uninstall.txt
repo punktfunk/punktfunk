@@ -6,6 +6,6 @@
   + sudo apt update
 
   Removed. Left on purpose: ~/.config/punktfunk (identity, pairings, host.env, plugins — a reinstall
-  picks them up), the punktfunk, punktfunk-door and punktfunk-update groups, and any firewall
-  rules you opened.
+  picks them up), the punktfunk, punktfunk-door and punktfunk-update groups, and any firewall rules
+  you opened.
   The one-command cleanups for each are on https://docs.punktfunk.unom.io/docs/uninstall#linux-hosts

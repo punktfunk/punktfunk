@@ -15,7 +15,7 @@
   ok would unpack the payload into C:\Program Files\punktfunk
 ==> Retiring the Inno Setup uninstaller
   ok would delete C:\Program Files\punktfunk\unins000.dat, C:\Program Files\punktfunk\unins000.msg
-  ok the Add/Remove Programs entry keeps its key — winget and the updater keep tracking this install
+  ok The Add/Remove Programs entry keeps its key — winget and the updater keep tracking this install
 ==> Register the uninstaller
   ok would register 'Punktfunk Host' in Add/Remove Programs (HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\{7C9E6A52-1F4B-4E8D-A3C7-2B5D8F1E0A93}_is1)
 ==> Registry

@@ -16,19 +16,19 @@
 ==> Starting at boot with nobody logged in
   + sudo loginctl enable-linger "$USER"
 ==> Controller access
-  ok already in the input group
+  ok Already in the input group
   + sudo usermod -aG punktfunk "$USER"
 ==> Firewall
-  ok no active firewall found — nothing to open (https://docs.punktfunk.unom.io/docs/ports if you add one later)
+  ok No active firewall found — nothing to open (https://docs.punktfunk.unom.io/docs/ports if you add one later)
 ==> Starting the host and the web console
   + systemctl --user enable --now punktfunk-host punktfunk-web
   + certutil -A -d sql:/box/home/.pki/nssdb -n punktfunk-console -t C,, -i /box/config/punktfunk/native-cert.pem
 ==> Checking
 
   Done. Next: let a device in.
-  On the device you play on, open punktfunk and pick this host. Approve it in the notification here, or in the console.
+  On the device you play on, open Punktfunk and pick this host. Approve it in the notification here, or in the console.
   Console: https://192.168.1.10:47992  (its certificate is this host's own)
   Password — this prints it, until you first sign in: sed -n 's/^PUNKTFUNK_UI_PASSWORD=//p' ~/.config/punktfunk/web-password
-  Group changes apply after a restart of this computer (controllers won't work until then).
+  Group changes apply after a restart of this device (controllers won't work until then).
   https://docs.punktfunk.unom.io/docs/troubleshooting · https://docs.punktfunk.unom.io/docs/bazzite
 

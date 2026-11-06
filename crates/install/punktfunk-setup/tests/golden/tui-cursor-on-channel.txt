@@ -1,14 +1,14 @@
 │
-◆  punktfunk setup  ·  Arch Linux · pacman
+◆  Punktfunk setup  ·  Arch Linux · pacman
 │  https://docs.punktfunk.unom.io/docs/arch
 │
 │    Install now with these settings
 │  ──────────────────────────────────────────────────────────
-│    This machine is          the PC I stream from (host)
+│    This device is           The PC I stream from (host)
 │  ▸ Channel                  stable
-│    Full controller support  yes — joins the punktfunk group (grants usbip attach)
-│    Third-party clients      no  — punktfunk's own apps don't need it
-│    Shared clipboard         yes
-│    Host service             yes
+│    Full controller support  Yes — joins the punktfunk group (grants usbip attach)
+│    Third-party clients      No  — Punktfunk's own apps don't need it
+│    Shared clipboard         Yes
+│    Host service             Yes
 │
 │  ↑↓ move · Enter select/edit · q quit — nothing runs until you confirm

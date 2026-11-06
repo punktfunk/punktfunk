@@ -20,7 +20,7 @@
   + reg add HKLM\SOFTWARE\Khronos\Vulkan\ImplicitLayers /v "C:\Program Files\punktfunk\vklayer\pf_vkhdr_layer.json" /t REG_DWORD /d 0 /f
   ok would add C:\Program Files\punktfunk to the machine PATH
 ==> Network
-  ok keeping the network Public and opening the firewall for it (--allow-public-network=on)
+  ok Keeping the network Public and opening the firewall for it (--allow-public-network=on)
 ==> Checking for Sunshine / Apollo / Vibeshine
   ok No conflicting game-streaming host detected.
 ==> Drivers (a hiccup warns and never aborts)
