@@ -143,6 +143,7 @@ let
   seats = evalWith {
     services.punktfunk.host = {
       enable = true;
+      users = [ "alice" ];
       openFirewall = true;
       gamescopeHdr = false;
       settings.RUST_LOG = "info";
@@ -414,6 +415,13 @@ let
       ok =
         hasSys seats "punktfunk-seat@.service"
           "PUNKTFUNK_HOST_BIN=/pf-stub/system-punktfunk-host/bin/punktfunk-host";
+    }
+    {
+      # The console turns the door on through the helper templates, which only this group starts.
+      name = "seats put the host's users in punktfunk-update, and only with seats on";
+      ok =
+        lib.elem "punktfunk-update" seats.users.users.alice.extraGroups
+        && !lib.elem "punktfunk-update" desktop.users.users.alice.extraGroups;
     }
     {
       name = "a switch leaves running seats up";
