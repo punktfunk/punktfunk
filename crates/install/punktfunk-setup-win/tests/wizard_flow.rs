@@ -10,6 +10,7 @@
 use std::collections::HashMap;
 
 use pf_fluent::{Palette, Shade};
+use pf_l10n::tools;
 use punktfunk_setup::platform::windows::demo::win_preset;
 use punktfunk_setup_win::real::Seams;
 use punktfunk_setup_win::wizard::{Wizard, WizardInput};
@@ -229,7 +230,10 @@ impl Wiz {
 #[test]
 fn the_fresh_host_demo_walks_welcome_to_done_through_the_fake_executor() {
     let mut wiz = Wiz::open("win11-fresh");
-    assert!(wiz.has_text("punktfunk"), "the Welcome wordmark");
+    assert!(
+        wiz.has_text("Punktfunk"),
+        "the Welcome sentence names the product"
+    );
     assert!(wiz.has_text("Recommended") && wiz.has_text("Custom"));
     assert_eq!(wiz.dots(), 3, "Recommended: Welcome · Install · Done");
     assert!(
@@ -356,13 +360,13 @@ fn the_public_network_demo_walks_the_d12_step_and_answer_b_opens_the_firewall() 
 fn the_uninstaller_demo_offers_only_the_teardown_and_runs_it_in_the_sandbox() {
     let mut wiz = Wiz::open("win11-uninstall");
     assert!(wiz.has_text("0.34.0 · host installed"));
-    assert!(wiz.has_text("This removes punktfunk"));
+    assert!(wiz.has_text(tools::wizard_welcome_uninstall()));
     assert!(!wiz.has_text("Reconfigure"), "no payload, no reconfigure");
     assert_eq!(wiz.dots(), 3, "Welcome · Uninstall · Done");
     wiz.click("Uninstall");
     wiz.wait_for_done();
     assert!(wiz.has_text("service uninstall"), "the teardown ran");
-    assert!(wiz.has_text("punktfunk was removed"));
+    assert!(wiz.has_text(tools::wizard_done_removed()));
 }
 
 #[test]
@@ -393,7 +397,7 @@ fn uninstall_from_the_manage_welcome_tears_down() {
     wiz.click("Uninstall");
     wiz.wait_for_done();
     assert!(wiz.has_text("service uninstall"), "the teardown ran");
-    assert!(wiz.has_text("punktfunk was removed"));
+    assert!(wiz.has_text(tools::wizard_done_removed()));
 }
 
 #[test]

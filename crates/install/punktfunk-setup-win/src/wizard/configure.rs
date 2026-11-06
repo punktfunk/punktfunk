@@ -6,7 +6,7 @@ use super::*;
 fn section(
     w: &Wizard,
     cx: &ViewContext<'_, Wizard>,
-    title: &str,
+    section_title: &str,
     fields: &[Field],
     lead: Option<View>,
 ) -> View {
@@ -30,7 +30,7 @@ fn section(
     }
     StackPanel::new()
         .children((
-            note(w, title)
+            note(w, section_title)
                 .font_size(12.0)
                 .font_weight(FontWeight::SEMI_BOLD)
                 .margin(Thickness::new(2.0, 0.0, 0.0, 6.0)),
@@ -46,7 +46,7 @@ pub(super) fn configure_page(w: &Wizard, cx: &ViewContext<'_, Wizard>) -> View {
             .spacing(2.0)
             .children((
                 TextBlock::new()
-                    .text("Runs next to your other streaming host")
+                    .text(tools::wizard_coexist_title())
                     .font_weight(FontWeight::SEMI_BOLD)
                     .foreground(w.palette.get(Token::SystemAttention)),
                 note(w, text).font_size(12.0),
@@ -54,13 +54,13 @@ pub(super) fn configure_page(w: &Wizard, cx: &ViewContext<'_, Wizard>) -> View {
             .into()
     });
     let mut columns: [Vec<View>; 2] = [Vec::new(), Vec::new()];
-    for (i, (title, fields)) in w.screen.sections().into_iter().enumerate() {
-        let lead = if title == "Network" {
+    for (i, (id, fields)) in w.screen.sections().into_iter().enumerate() {
+        let lead = if id == Section::Network {
             coexistence.clone()
         } else {
             None
         };
-        columns[i % 2].push(section(w, cx, title, &fields, lead));
+        columns[i % 2].push(section(w, cx, id.title(), &fields, lead));
     }
     let [left, right] = columns;
     let body: View = if right.is_empty() {
@@ -104,7 +104,11 @@ fn config_row(w: &Wizard, cx: &ViewContext<'_, Wizard>, field: Field) -> View {
             .vertical_alignment(VerticalAlignment::Center)
             .into(),
         Editor::TriState(value) => ComboBox::new()
-            .items_source(["Keep the box's setting", "On", "Off"])
+            .items_source([
+                tools::wizard_keep_setting(),
+                tools::wizard_tristate_on(),
+                tools::wizard_tristate_off(),
+            ])
             .selected_index(Some(match value {
                 None => 0,
                 Some(true) => 1,
@@ -135,17 +139,17 @@ fn config_row(w: &Wizard, cx: &ViewContext<'_, Wizard>, field: Field) -> View {
                 .children((
                     ComboBox::new()
                         .items_source([
-                            "Leave host.env alone",
-                            "This PC only",
-                            "This local network",
-                            "A specific address",
+                            tools::wizard_bind_keep(),
+                            tools::wizard_bind_loopback(),
+                            tools::wizard_bind_lan(),
+                            tools::wizard_bind_address(),
                         ])
                         .selected_index(Some(selected))
                         .on_selection_changed(cx.callback(Msg::BindChoice))
                         .vertical_alignment(VerticalAlignment::Center),
                     TextBox::new()
                         .text(typed)
-                        .placeholder_text("e.g. 100.64.0.3")
+                        .placeholder_text(tools::wizard_bind_address_placeholder())
                         .is_enabled(selected == 3)
                         .min_width(160.0)
                         .on_text_changed(
@@ -175,11 +179,15 @@ fn config_row(w: &Wizard, cx: &ViewContext<'_, Wizard>, field: Field) -> View {
                             cx.callback(|pw: Rc<str>| Msg::Password(pw.to_string())),
                         ),
                     Button::new()
-                        .content(if reveal { "Hide" } else { "Show" })
+                        .content(if reveal {
+                            tools::wizard_password_hide()
+                        } else {
+                            tools::wizard_password_show()
+                        })
                         .min_width(72.0)
                         .on_click(cx.message(Msg::Reveal(!reveal))),
                     Button::new()
-                        .content("Regenerate")
+                        .content(tools::wizard_password_regenerate())
                         .style(ButtonStyle::Subtle)
                         .on_click(cx.message(Msg::Regenerate)),
                 ))
