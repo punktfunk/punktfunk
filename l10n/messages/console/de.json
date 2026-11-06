@@ -74,7 +74,7 @@
 	"console_card_opens_on_launch": "{host} öffnet sich beim Start",
 	"console_card_is_default_body": "{host} ist der Standard-Host",
 	"console_card_not_default_body": "{host} ist nicht mehr der Standard-Host",
-	"console_card_not_saved_body": "Dieser Host ist nicht mehr gespeichert.",
+	"console_card_not_saved_body": "Dieser Host ist nicht mehr gespeichert",
 	"console_card_check_network": "Netzwerk prüfen…",
 	"console_card_details_title": "{host} · Details",
 	"console_card_connect_with_title": "{host} verbinden mit",

@@ -323,7 +323,7 @@
 	"wizard_welcome_manage": "Reconfigure keeps what is on this device and applies your changes. Uninstall removes it — identity, pairings and passwords stay.",
 	"wizard_reconfigure": "Reconfigure",
 	"wizard_welcome_host": "This device becomes the one you stream from: the Punktfunk host sends its screen, audio and games to the devices you play on.",
-	"wizard_welcome_client": "This device becomes a device you play on: the Punktfunk client shows the stream from the PC you stream from.",
+	"wizard_welcome_client": "This PC becomes a device you play on: the Punktfunk client shows the stream from the PC you stream from.",
 	"wizard_recommended": "Recommended",
 	"wizard_custom": "Custom",
 	"wizard_recommended_host": "The defaults: virtual display and gamepad drivers, the HDR layer, a tray icon, and the service starts right away. A web console password is generated for you.",
