@@ -284,17 +284,20 @@ impl TextEntry {
         if !self.system(device) {
             return vec![
                 Hint::new(HintKey::Confirm, "Type"),
-                Hint::new(HintKey::Tertiary, "Delete"),
-                Hint::new(HintKey::Back, "Done"),
+                Hint::new(HintKey::Tertiary, pf_l10n::common::common_delete()),
+                Hint::new(HintKey::Back, pf_l10n::common::common_done()),
             ];
         }
         let mut hints = vec![
             Hint::new(HintKey::Confirm, done),
-            Hint::new(HintKey::Back, "Done"),
+            Hint::new(HintKey::Back, pf_l10n::common::common_done()),
         ];
         // The one desktop session whose own keyboard types is a Steam Deck's.
         if device.platform == crate::platform::Platform::Desktop {
-            hints.insert(0, Hint::new(HintKey::Key("STEAM + X"), "Keyboard"));
+            hints.insert(
+                0,
+                Hint::new(HintKey::Key("STEAM + X"), pf_l10n::client::ring_keyboard()),
+            );
         }
         hints
     }

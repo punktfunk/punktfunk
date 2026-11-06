@@ -78,11 +78,7 @@ const LITERAL: &[Rule] = &[
 
 /// Text the kit still draws without a message. Each entry is a gap to close; the table only
 /// shrinks, and an entry that no longer draws fails the test.
-const LITERAL_DEBT: &[(&str, &str)] = &[
-    ("Delete", "legend label in `TextEntry::hints`"),
-    ("Done", "legend label in `TextEntry::hints`"),
-    ("Keyboard", "legend label in `TextEntry::hints`"),
-];
+const LITERAL_DEBT: &[(&str, &str)] = &[];
 
 /// Messages that overflow under the pseudo-language today, by key. Waits for the wording pass.
 const OVERFLOW_DEBT: &[(&str, &str)] = &[];
