@@ -25,11 +25,11 @@ pub(crate) enum SpawnEvent {
     Exited(ConnectOutcome),
 }
 
-/// Where a banner sends the user for a cause: the log's real location.
+/// Where a banner sends the user for a cause: the log's real location, else its file name.
 pub(crate) fn log_hint() -> String {
     crate::logfile::path()
         .map(|p| p.display().to_string())
-        .unwrap_or_else(|| "the client log".into())
+        .unwrap_or_else(|| "client.log".into())
 }
 
 /// Spawn the session binary for a connect to `host`, its `fp_hex` the pin it dials, and feed
@@ -123,7 +123,7 @@ fn spawn(
     })
     .map_err(|e| {
         tracing::error!(error = %e, "spawning the session binary");
-        "The session didn't start. Check the client log.".to_string()
+        pf_l10n::client::dial_session_not_started().to_string()
     })?;
     tracing::info!(host = %label, "session binary spawned");
     Ok(())

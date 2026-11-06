@@ -6,6 +6,7 @@ use super::connect::{connect, request_access};
 use super::style::*;
 use super::{Screen, Svc};
 use crate::trust;
+use pf_l10n::{client, common, desktop};
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::atomic::Ordering;
@@ -45,7 +46,7 @@ fn pair_page(props: &Svc, live_pin: &Rc<RefCell<String>>) -> View {
             live_pin.clone(),
             target.clone(),
         );
-        icon_button("check", "Pair")
+        icon_button("check", client::pair_action())
             .style(ButtonStyle::Accent)
             .on_click(move || {
                 let pin = live.borrow().trim().to_string();
@@ -78,13 +79,13 @@ fn pair_page(props: &Svc, live_pin: &Rc<RefCell<String>>) -> View {
                             if target3.from_link {
                                 connect(&ctx3, &target3, Some(paired.fp), &ss, &st);
                                 if let Err(e) = paired.saved {
-                                    st.call(format!("Paired, but couldn't save — {e:#}"));
+                                    st.call(client::pair_saved_failed(format!("{e:#}")));
                                 }
                                 return;
                             }
                             svc.report(match paired.saved {
-                                Ok(()) => Ok(format!("Paired with {}", target3.host.name)),
-                                Err(e) => Err(format!("Paired, but couldn't save — {e:#}")),
+                                Ok(()) => Ok(client::pair_paired(&target3.host.name)),
+                                Err(e) => Err(client::pair_saved_failed(format!("{e:#}"))),
                             });
                             ss.call(Screen::Hosts);
                         }
@@ -103,7 +104,7 @@ fn pair_page(props: &Svc, live_pin: &Rc<RefCell<String>>) -> View {
     };
     let cancel_btn = {
         let (ss, ctx2) = (set_screen.clone(), ctx.clone());
-        icon_button("x", "Cancel").on_click(move || {
+        icon_button("x", common::common_cancel()).on_click(move || {
             ctx2.shared.pair_gen.fetch_add(1, Ordering::SeqCst);
             ss.call(Screen::Hosts);
         })
@@ -112,7 +113,7 @@ fn pair_page(props: &Svc, live_pin: &Rc<RefCell<String>>) -> View {
     // the host parks until the operator approves this device in its console (delegated approval).
     let request_btn = {
         let (svc, target2) = (props.clone(), target.clone());
-        icon_button("send", "Request access without a PIN")
+        icon_button("send", client::pair_request_access())
             .on_click(move || request_access(&svc, &target2))
             .horizontal_alignment(HorizontalAlignment::Stretch)
     };
@@ -127,7 +128,7 @@ fn pair_page(props: &Svc, live_pin: &Rc<RefCell<String>>) -> View {
                         .grid_column(0)
                         .vertical_alignment(VerticalAlignment::Center),
                     vstack((
-                        text(format!("Pair with {}", target.host.name))
+                        text(client::pair_title(&target.host.name))
                             .font_size(20.0)
                             .font_weight(FontWeight::SEMI_BOLD),
                         muted(pal, format!("{}:{}", target.host.addr, target.host.port))
@@ -140,25 +141,18 @@ fn pair_page(props: &Svc, live_pin: &Rc<RefCell<String>>) -> View {
                 ))
                 .columns([GridLength::Auto, GridLength::STAR]),
             InfoBar::new()
-                .title("Arm pairing on the host")
-                .message(
-                    "On the host's console or web console, start pairing — it shows a 4-digit \
-                     PIN. Enter it below within 90 seconds.",
-                )
+                .title(desktop::desktop_pair_arm_title())
+                .message(client::pair_intro_pin_only())
                 .severity(InfoBarSeverity::Informational)
                 .is_open(true)
                 .is_closable(false),
             TextBox::new()
-                .placeholder_text("PIN")
+                .placeholder_text(client::pair_pin())
                 .on_text_changed(move |s: Rc<str>| *live.borrow_mut() = s.to_string()),
             hstack((pair_btn, cancel_btn)).spacing(8.0),
-            muted(
-                pal,
-                "Don\u{2019}t have a PIN? Request access instead and approve this device on the \
-                 host (its console or web UI) \u{2014} no PIN needed.",
-            )
-            .font_size(12.0)
-            .text_wrapping(TextWrapping::Wrap),
+            muted(pal, client::pair_no_pin_hint())
+                .font_size(12.0)
+                .text_wrapping(TextWrapping::Wrap),
             request_btn,
         ))
         .spacing(16.0),

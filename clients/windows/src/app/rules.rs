@@ -5,6 +5,7 @@
 use super::Screen;
 use pf_client_core::deeplink::{self, DeepLink};
 use pf_client_core::discovery::{DiscoveredHost, DiscoveryEvent};
+use pf_l10n::client;
 
 /// Whether something holds the shell, so a controller connecting waits for the next first pad
 /// instead of opening the console: a connect, a stream, a pairing, a speed test, or a
@@ -34,9 +35,6 @@ pub(super) enum LinkGate {
     Plan(DeepLink),
 }
 
-/// The status line for a link that meets a live session.
-const SESSION_RUNNING: &str = "A session is already running \u{2014} end it first.";
-
 /// A link never preempts a session: its child, or a connect still waiting on a wake or an
 /// approval. `session_running` is the child; the screens cover the waits that have none. While
 /// one is alive every outcome, a refusal included, leaves the screen where it is: a refusal that
@@ -49,7 +47,7 @@ pub(super) fn gate_link(url: &str, screen: &Screen, session_running: bool) -> Li
     match deeplink::parse(url) {
         Err(e) if busy => LinkGate::Hold(e.message()),
         Err(e) => LinkGate::Refuse(e.message()),
-        Ok(_) if busy => LinkGate::Hold(SESSION_RUNNING.into()),
+        Ok(_) if busy => LinkGate::Hold(client::link_session_running().into()),
         Ok(link) => LinkGate::Plan(link),
     }
 }
@@ -72,17 +70,13 @@ pub(super) fn fold_advert(acc: &mut Vec<DiscoveredHost>, event: DiscoveryEvent) 
 /// The "Open this link?" body. It names the host and the game, because that is how someone
 /// tells their own shortcut from a link a web page handed them.
 pub(super) fn link_prompt(name: &str, addr: &str, launch: Option<&str>) -> String {
-    let mut s = format!("A link asks to connect to {name} ({addr}).");
+    let mut s = client::link_confirm_asks(name, addr);
     if let Some(id) = launch {
-        s.push_str(&format!(
-            "\n\nIt also asks the host to launch \u{201c}{id}\u{201d}."
-        ));
+        s.push_str("\n\n");
+        s.push_str(&client::link_confirm_launch(id));
     }
-    s.push_str(
-        "\n\nIt names the host by its label or address, which anything that can open \
-         a link could guess. Shortcuts made in Punktfunk name the host's id and \
-         connect without asking.",
-    );
+    s.push_str("\n\n");
+    s.push_str(client::link_confirm_guessable());
     s
 }
 
@@ -212,7 +206,7 @@ mod tests {
         let parsed = deeplink::parse(VALID).unwrap();
         for s in ALL {
             let want = if busy.contains(&s) {
-                LinkGate::Hold(SESSION_RUNNING.into())
+                LinkGate::Hold(client::link_session_running().into())
             } else {
                 LinkGate::Plan(parsed.clone())
             };
@@ -225,11 +219,11 @@ mod tests {
             // A live child holds a link on any screen.
             assert_eq!(
                 gate_link(VALID, &s, true),
-                LinkGate::Hold(SESSION_RUNNING.into())
+                LinkGate::Hold(client::link_session_running().into())
             );
         }
         assert_eq!(
-            SESSION_RUNNING,
+            client::link_session_running(),
             "A session is already running \u{2014} end it first."
         );
     }

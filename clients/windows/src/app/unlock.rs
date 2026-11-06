@@ -10,6 +10,7 @@ use pf_client_core::library::HostApi;
 use pf_client_core::profiles::{ListedProfile, UnlockNeed};
 use pf_client_core::unlock::{self, DeviceKey, Gate};
 use pf_fluent::Palette;
+use pf_l10n::{client, common};
 use punktfunk_core::quic::v2::msg::{ProfileUnlock, Zeroizing};
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -255,18 +256,15 @@ pub(crate) fn unlock_slot(
         return Border::new().into();
     };
     let mut body: Vec<View> = vec![
-        text(format!("Sign in as {}", a.name))
+        text(client::unlock_title(&a.name))
             .font_size(20.0)
             .font_weight(FontWeight::BOLD)
             .text_wrapping(TextWrapping::Wrap)
             .into(),
-        muted(
-            pal,
-            format!("Enter the password for this account on {}.", a.host),
-        )
-        .font_size(13.0)
-        .text_wrapping(TextWrapping::Wrap)
-        .into(),
+        muted(pal, client::unlock_intro(&a.host))
+            .font_size(13.0)
+            .text_wrapping(TextWrapping::Wrap)
+            .into(),
     ];
     if let Some(error) = &a.error {
         body.push(
@@ -282,7 +280,7 @@ pub(crate) fn unlock_slot(
     let typed = a.password.clone();
     body.push(
         PasswordBox::new()
-            .header("Password")
+            .header(client::unlock_password())
             .password_reveal_mode(PasswordRevealMode::Peek)
             .on_password_changed(move |p: Rc<str>| {
                 *typed.lock().unwrap() = Zeroizing::new(p.as_bytes().to_vec());
@@ -294,12 +292,12 @@ pub(crate) fn unlock_slot(
         ToggleSwitch::new()
             .is_on(false)
             .header(if a.hello {
-                "Unlock with Windows Hello on this device"
+                client::unlock_with_biometry("Windows Hello")
             } else {
-                "Stay signed in on this device"
+                client::unlock_stay_signed_in().to_string()
             })
-            .on_content("On")
-            .off_content("Off")
+            .on_content(common::common_on())
+            .off_content(common::common_off())
             .on_toggled(move |v: bool| on.store(v, Ordering::SeqCst))
             .into(),
     );
@@ -324,8 +322,8 @@ pub(crate) fn unlock_slot(
     let click = cancel.clone();
     body.push(
         hstack((
-            button("Cancel").on_click(click),
-            button("Sign in")
+            button(common::common_cancel()).on_click(click),
+            button(client::unlock_sign_in())
                 .style(ButtonStyle::Accent)
                 .on_click(sign_in),
         ))

@@ -49,6 +49,7 @@ use pf_client_core::settings::GamepadUi;
 use pf_client_core::start;
 use pf_fluent::motion::Tween;
 use pf_fluent::Palette;
+use pf_l10n::{client, common, desktop};
 use rules::LinkGate;
 use speed::{SpeedProps, SpeedState};
 use std::collections::HashMap;
@@ -117,7 +118,7 @@ pub(crate) fn saved<R, E: std::fmt::Display>(
     if let Some((rev, set_rev)) = rev {
         set_rev.call(rev + 1);
     }
-    r.map_err(|e| set_status.call(format!("Couldn't save \u{2014} {e:#}")))
+    r.map_err(|e| set_status.call(desktop::desktop_save_failed(format!("{e:#}"))))
         .ok()
 }
 
@@ -730,10 +731,10 @@ impl Shell {
             self.set(Msg::LinkConfirm),
         );
         ContentDialog::new()
-            .title("Open this link?")
+            .title(client::link_confirm_title())
             .content(content)
-            .primary_button_text("Connect")
-            .close_button_text("Cancel")
+            .primary_button_text(common::common_connect())
+            .close_button_text(common::common_cancel())
             .is_open(pending.is_some())
             .on_closed(move |r: ContentDialogResult| {
                 sc.call(None);
@@ -984,15 +985,12 @@ fn route_link(
                 from_link: true,
                 ..Target::default()
             };
-            set_status.call(format!(
-                "{name} isn't paired with this device yet \u{2014} pair it to continue."
-            ));
+            set_status.call(desktop::desktop_link_unpaired_host(&name));
             set_screen.call(Screen::Pair);
         }
-        Ok(PlanOutcome::Unsupported(route)) => refuse(format!(
-            "Punktfunk can't open \u{201c}{}\u{201d} links yet.",
-            route.as_str()
-        )),
+        Ok(PlanOutcome::Unsupported(route)) => {
+            refuse(client::link_route_unsupported(route.as_str()))
+        }
         Err(e) => refuse(e.message()),
     }
 }
