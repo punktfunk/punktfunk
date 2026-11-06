@@ -36,6 +36,9 @@ serde = ["dep:serde"]
 chacha-aws-lc-rs = ["dep:aws-lc-rs"]
 # Optional native AES-128-GCM (VAES on x86 hosts); same wire format. Off for wasm and armv7.
 aes-aws-lc-rs = ["dep:aws-lc-rs"]
+# The mute notices a client shows (`audio::audio_mute_label`), worded from the client messages.
+# Clients only: the host never shows them and stays without pf-l10n.
+l10n = ["dep:pf-l10n"]
 
 [dependencies]
 reed-solomon-simd = "3.1"      # GF(2^16) Leopard-RS, SIMD, O(n log n) — the wall-breaker (P2)
@@ -82,6 +85,7 @@ ureq = { workspace = true, optional = true, features = ["gzip"] }
 # `punktfunk/2` media keys expand with HMAC-SHA256 in every build (`crypto::MediaKeys`).
 sha2 = "0.11"
 serde = { version = "1", features = ["derive"], optional = true }
+pf-l10n = { path = "../../../l10n", features = ["client"], optional = true }
 hmac = "0.13"
 spake2 = { version = "0.4", optional = true }
 # `io-util` for the `AsyncRead`/`AsyncWrite` extension traits the control framing is generic

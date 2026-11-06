@@ -25,8 +25,11 @@ repository.workspace = true
 # Apple targets take the same subset: the console crate builds for the Mac, iOS and tvOS, and so
 # does the PS5 homebrew title (`all(target_os = "freebsd", target_vendor = "sie"), target_os = "horizon"`).
 [dependencies]
-# The words this crate hands a person: the shared client messages. No dependencies of its own.
-pf-l10n = { path = "../../../l10n", features = ["client"] }
+# The words this crate hands a person: the shared client messages, and the host's power
+# actions by name. No dependencies of its own.
+pf-l10n = { path = "../../../l10n", features = ["client", "host"] }
+# Every client words core's mute notices; the target tables below pick the other features.
+punktfunk-core = { path = "../../core/punktfunk-core", features = ["l10n"] }
 
 [target.'cfg(any(target_os = "android", target_vendor = "apple", all(target_os = "freebsd", target_vendor = "sie"), target_os = "horizon"))'.dependencies]
 punktfunk-core = { path = "../../core/punktfunk-core", features = ["quic", "serde"] }

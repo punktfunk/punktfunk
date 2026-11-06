@@ -53,10 +53,9 @@ pub use self::planes::AudioPacket;
 pub use self::probe::ProbeOutcome;
 pub use crate::reanchor::{FLUSH_COOLDOWN, NO_VIDEO_RETRY};
 
-pub use crate::audio::{
-    audio_mute_label, audio_mute_notice, mic_mute_label, mic_mute_notice, AUDIO_MUTE_HOST,
-    AUDIO_MUTE_LOCAL, LOCAL_MUTE_NOTICE,
-};
+#[cfg(feature = "l10n")]
+pub use crate::audio::{audio_mute_label, audio_mute_notice, mic_mute_label};
+pub use crate::audio::{mic_mute_notice, AUDIO_MUTE_HOST, AUDIO_MUTE_LOCAL, LOCAL_MUTE_NOTICE};
 
 /// Set or clear one bit of a mute mask. Read-modify-write on the atomic: the embedder and
 /// the control task own different bits and never wait on each other.
@@ -2371,7 +2370,7 @@ mod client_caps_tests {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "l10n"))]
 mod mute_tests {
     use super::*;
 

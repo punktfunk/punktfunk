@@ -4192,6 +4192,7 @@ dependencies = [
  "if-addrs",
  "libc",
  "opus",
+ "pf-l10n",
  "proptest",
  "quinn",
  "quinn-udp",
