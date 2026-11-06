@@ -14,21 +14,39 @@
 import { DialogButton, Focusable, ModalRoot, Spinner, showModal } from "@decky/ui";
 import { toaster } from "@decky/api";
 import { FC, useRef, useState } from "react";
-import { requestAccess, trustHost } from "./backend";
+import { type PairResult, requestAccess, trustHost } from "./backend";
+import { diag } from "./diag";
 import type { HostView } from "./hosts";
+import { rejectText, t } from "./i18n";
 import { PairModal } from "./pair";
 
 /** User-facing copy for a `trustHost` failure code. */
 function trustErrorBody(error: string | undefined, name: string): string {
   switch (error) {
     case "refused":
-      return `${name} is already saved under a different identity. Forget it in the Punktfunk app before trusting it again.`;
+      return t("decky_trust_refused", { host: name });
     case "client-outdated":
-      return "Update the Punktfunk client to use request access";
+      return t("decky_trust_outdated");
     case "client-unavailable":
-      return "Couldn’t reach the Punktfunk client — is it still installed?";
+      return t("decky_client_unreachable");
     default:
-      return `Couldn’t save ${name}`;
+      return t("decky_trust_save_failed", { host: name });
+  }
+}
+
+/** User-facing copy for a failed `requestAccess`: the host's own reason when it gave one. */
+function accessErrorBody(res: PairResult, name: string): string {
+  switch (res.error) {
+    case "client-outdated":
+      return t("decky_trust_outdated");
+    case "client-unavailable":
+      return t("decky_client_unreachable");
+    case "bad-fingerprint":
+      return t("decky_trust_bad_fingerprint", { host: name });
+    case "refused":
+      return rejectText(res.reject) ?? t("decky_trust_denied", { host: name });
+    default:
+      return t("decky_trust_request_failed", { host: name });
   }
 }
 
@@ -89,24 +107,22 @@ export const TrustSheet: FC<{
       // Step 2: the request, pinned to that fingerprint. It parks until somebody answers.
       toaster.toast({
         title: "Punktfunk",
-        body: `Approve this Deck in ${h.name}’s console`,
+        body: t("decky_trust_approve_toast", { host: h.name }),
         duration: 10_000,
       });
       const res = await requestAccess(h.addr, h.port, "Steam Deck", h.advertisedFp);
       if (!res.ok) {
-        setError(
-          res.error === "client-outdated"
-            ? trustErrorBody(res.error, h.name)
-            : (res.detail ?? `${h.name} didn’t let this Deck in`),
-        );
+        diag(`request access: ${res.error} ${res.reject ?? ""} ${res.detail ?? ""}`);
+        setError(accessErrorBody(res, h.name));
         setBusy(false);
         return;
       }
-      toaster.toast({ title: "Punktfunk", body: `Paired with ${h.name}` });
+      toaster.toast({ title: "Punktfunk", body: t("pair_paired", { host: h.name }) });
       changed();
       closeModal?.();
     } catch (e) {
-      setError(String(e));
+      diag(`request access threw: ${e}`);
+      setError(t("decky_client_unreachable"));
       setBusy(false);
     }
   };
@@ -122,14 +138,14 @@ export const TrustSheet: FC<{
   return (
     <ModalRoot closeModal={closeModal}>
       <div style={{ fontWeight: "bold", fontSize: "1.3em", marginBottom: "0.3em" }}>
-        Connect to {host.name}
+        {t("decky_trust_title", { host: host.name })}
       </div>
       <div style={{ opacity: 0.8, marginBottom: "1em" }}>
         {!hasIdentity
-          ? "No advertised identity for this host — pair with a PIN instead."
+          ? t("decky_trust_no_identity")
           : canTrustDirectly
-            ? `${host.name} accepts new devices. Connecting pins its identity so later streams are silent.`
-            : `${host.name} needs to let this device in before it can stream.`}
+            ? t("decky_trust_open_host", { host: host.name })
+            : t("decky_trust_needs_approval", { host: host.name })}
       </div>
       {error && (
         <div style={{ color: "#ff6b6b", marginBottom: "0.6em" }}>{error}</div>
@@ -138,26 +154,25 @@ export const TrustSheet: FC<{
       <Focusable style={{ display: "flex", flexDirection: "column", gap: "0.5em" }}>
         {canRequestAccess && (
           <DialogButton disabled={busy} onClick={() => void letIn(true)}>
-            {busy ? <Spinner style={{ height: "1em" }} /> : "Request access"}
+            {busy ? <Spinner style={{ height: "1em" }} /> : t("pair_request_access")}
           </DialogButton>
         )}
         {canTrustDirectly && (
           <DialogButton disabled={busy} onClick={() => void letIn(false)}>
-            {busy ? <Spinner style={{ height: "1em" }} /> : "Connect"}
+            {busy ? <Spinner style={{ height: "1em" }} /> : t("common_connect")}
           </DialogButton>
         )}
         <DialogButton disabled={busy} onClick={usePin}>
-          Use a PIN instead…
+          {t("decky_use_pin")}
         </DialogButton>
         <DialogButton disabled={busy} onClick={() => closeModal?.()}>
-          Cancel
+          {t("common_cancel")}
         </DialogButton>
       </Focusable>
 
       {canRequestAccess && (
         <div style={{ opacity: 0.6, fontSize: "0.85em", marginTop: "0.8em" }}>
-          Request access asks {host.name}’s operator to approve this Deck in its console or web
-          UI. No PIN to type — this Deck is paired as soon as they do.
+          {t("decky_trust_request_hint", { host: host.name })}
         </div>
       )}
     </ModalRoot>
