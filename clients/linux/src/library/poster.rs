@@ -9,6 +9,7 @@ use gtk::subclass::prelude::*;
 use gtk::{gdk, gio, glib};
 use pf_client_core::library::{initials, store_label, GameEntry};
 use pf_client_core::library_layout::ago;
+use pf_l10n::{client, common};
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -148,7 +149,7 @@ impl Poster {
                 .build()
         };
         let (badge, running) = (pill(gtk::Align::Start), pill(gtk::Align::End));
-        running.set_label("Running");
+        running.set_label(client::lib_badge_running());
         let overlay = gtk::Overlay::builder()
             .css_classes(["pf-poster"])
             .overflow(gtk::Overflow::Hidden)
@@ -333,9 +334,9 @@ impl Poster {
     pub fn show_desktop(&self) {
         self.set_shows(Shows::Desktop);
         self.with_parts(|p| {
-            p.title.set_label("Desktop");
+            p.title.set_label(client::lib_desktop());
             self.button
-                .set_tooltip_text(Some("Stream the host's desktop"));
+                .set_tooltip_text(Some(client::lib_desktop_stream()));
             p.caption.set_visible(false);
             p.badge.set_visible(false);
             p.running.set_visible(false);
@@ -404,8 +405,8 @@ fn caption_text(g: &GameEntry, caption: Caption) -> Option<String> {
             Some(ago(now.saturating_sub(s.last_played_unix_ms)))
         }
         Caption::PlayTime if s.play_time_ms > 0 => Some(match s.play_time_ms / 3_600_000 {
-            0 => "Under an hour".into(),
-            h => format!("{h} h"),
+            0 => client::lib_played_under_hour().into(),
+            h => client::lib_played_hours_short(h),
         }),
         _ => None,
     }
@@ -423,21 +424,25 @@ fn open_menu(button: &gtk::Button, view: &View, id: &str, at: Option<(f64, f64)>
         menu.append_item(&item);
     };
     item(
-        if running.is_some() { "Resume" } else { "Play" },
+        if running.is_some() {
+            client::lib_resume()
+        } else {
+            common::common_play()
+        },
         "title.play",
     );
     item(
         if favorite {
-            "Remove from Favorites"
+            client::lib_favorite_remove()
         } else {
-            "Add to Favorites"
+            client::lib_favorite_add()
         },
         "title.favorite",
     );
-    item("Details\u{2026}", "title.details");
-    item("Copy Link", "title.copy-link");
+    item(client::lib_title_details(), "title.details");
+    item(client::hostcard_copy_link(), "title.copy-link");
     if running.is_some_and(|r| r.endable) {
-        item("End Game", "title.end-game");
+        item(client::lib_end_game(), "title.end-game");
     }
     let popover = gtk::PopoverMenu::from_model(Some(&menu));
     popover.set_parent(button);
