@@ -285,7 +285,6 @@
 	"apierr_vc_runtime": "Die Microsoft-Visual-C++-Laufzeit fehlt. Installiere das Visual C++ 2015–2022 Redistributable (x64) von Microsoft und versuch es dann erneut.",
 	"apierr_windows_account_missing": "Auf diesem PC gibt es kein Windows-Konto mit diesem Namen.",
 	"apierr_windows_account_taken": "Ein anderes Profil nutzt dieses Windows-Konto schon.",
-	"apierr_worker_stopped": "Der {what} reagiert nicht mehr.",
 	"close_display_asleep": "Der Bildschirm des Hosts schläft und ließ sich nicht wecken. Wecke ihn und verbinde dich dann erneut.",
 	"close_monitor_missing": "Der Host soll einen Monitor namens „{monitor}“ aufnehmen, der nicht angeschlossen ist. Wähle in den Display-Einstellungen des Hosts einen vorhandenen ({monitors}) oder entferne die Auswahl, um stattdessen ein virtuelles Display zu streamen.",
 	"close_monitor_none": "Der Host soll einen Monitor namens „{monitor}“ aufnehmen und meldet überhaupt keine Monitore. Entferne das in den Display-Einstellungen des Hosts, um stattdessen ein virtuelles Display zu streamen.",

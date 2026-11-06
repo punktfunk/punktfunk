@@ -426,7 +426,7 @@
 //
 // The wire is versioned by ALPN, not by this. Pin the integer in `punktfunk-ffi`
 // (`abi_version_is_pinned`). Per-bump notes live in `CHANGELOG.md`.
-#define PUNKTFUNK_ABI_VERSION 64
+#define PUNKTFUNK_ABI_VERSION 65
 
 // This client silenced its own speakers (`client::NativeClient::set_audio_muted`). The host
 // keeps sending, so a session joined to the same sink still hears the game.
@@ -991,6 +991,13 @@
 // a host cannot make the client hold more than this.
 #define PUNKTFUNK_LAUNCH_MESSAGE_MAX 200
 
+// Longest [`LaunchOutcome::message_id`], and each placeholder name, in bytes.
+#define LAUNCH_ID_MAX 64
+
+// Most [`LaunchOutcome::message_params`]. With every field at its cap the frame stays
+// under the 1 KiB a client reads.
+#define LAUNCH_PARAMS_MAX 3
+
 #define PUNKTFUNK_AUDIO_MAGIC 201
 
 #define PUNKTFUNK_RUMBLE_MAGIC 202
@@ -1191,6 +1198,10 @@
 // Longest `reason` on the wire. Enough for one host sentence.
 #define PUNKTFUNK_REFUSED_REASON_MAX 256
 
+// Most [`Refused::reason_params`]. With every field at its cap the frame stays under the
+// 1 KiB a client reads.
+#define REFUSED_PARAMS_MAX 2
+
 // Implied by [`PEN_TOUCHING`]; [`PenTracker`] ORs it so a client that only sets TOUCHING still looks in-range.
 #define PUNKTFUNK_PEN_IN_RANGE 1
 
@@ -1248,8 +1259,8 @@
 #define PUNKTFUNK_REANCHOR_MARKS_TO_LIFT 2
 
 // `mode_conflict = reject` admission close. Distinct from a transport
-// failure so a client can render "host busy". Reason bytes carry live mode
-// + client label.
+// failure so a client can render "host busy". The reason bytes are empty: a
+// client words `reject_busy`, and the live mode stays in the host's log.
 #define PUNKTFUNK_REJECT_BUSY_CLOSE_CODE 66
 
 // Pairing-gate close. Occupies 0x60.., disjoint from
@@ -3620,6 +3631,20 @@ PunktfunkStatus punktfunk_connection_profile(const PunktfunkConnection *c,
 PunktfunkStatus punktfunk_connection_launch_notice(const PunktfunkConnection *c,
                                                    char *out,
                                                    uintptr_t cap);
+#endif
+
+#if defined(PUNKTFUNK_FEATURE_QUIC)
+// [`punktfunk_connection_launch_notice`] by message: the host message the sentence is the
+// English of, then the sentence, then each placeholder as `name<TAB>value`, one per line,
+// NUL-terminated, into the caller's buffer; empty when the launch needs no words. The id is
+// empty from a host that names none. A 1200-byte buffer is ample: the wire caps the id at 64
+// bytes, the sentence at 200 and each of at most 3 placeholders at 64 + 200.
+//
+// # Safety
+// `c` is a valid connection handle; `out` is writable for `cap` bytes.
+PunktfunkStatus punktfunk_connection_launch_message(const PunktfunkConnection *c,
+                                                    char *out,
+                                                    uintptr_t cap);
 #endif
 
 #if defined(PUNKTFUNK_FEATURE_QUIC)

@@ -231,9 +231,11 @@ pub(crate) async fn set_gpu_preference(ApiJson(req): ApiJson<SetGpuPreference>) 
         }
     };
     if let Err(e) = pf_gpu::prefs().set(pref) {
-        return api_error(
+        return api_error_logged(
             StatusCode::INTERNAL_SERVER_ERROR,
-            &format!("Couldn't save the GPU choice — {e:#}"),
+            "gpu_choice_not_saved",
+            "Couldn't save the GPU choice",
+            &format!("{e:#}"),
         );
     }
     tracing::info!(mode = %req.mode, gpu_id = ?req.gpu_id, "management API: GPU preference updated");

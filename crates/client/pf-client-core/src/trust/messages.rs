@@ -70,6 +70,16 @@ pub fn access_error_message(err: &punktfunk_core::PunktfunkError) -> String {
 mod tests {
     use super::*;
 
+    /// Every close code is worded: `reject_<token>` is a host message, and the line a client
+    /// shows for the code is that message.
+    #[test]
+    fn every_close_code_has_its_message() {
+        for &r in punktfunk_core::reject::RejectReason::ALL {
+            let msg = pf_l10n::get(&r.message_id()).unwrap_or_else(|| panic!("{}", r.message_id()));
+            assert_eq!(connect_reject_message(r), msg.text(), "{r:?}");
+        }
+    }
+
     #[test]
     fn the_hosts_own_words_outrank_our_generic_line() {
         use punktfunk_core::reject::RejectReason as R;

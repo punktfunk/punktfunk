@@ -51,6 +51,13 @@ pub(crate) struct UpdateResultInfo {
     /// Applied; activates on the next reboot (rpm-ostree).
     #[serde(default)]
     pub staged: bool,
+    /// The failure in words, as the host message `hostupdate_<error_code>` with `from`, `to`
+    /// and `error_params`; `error` keeps the detail.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error_code: Option<String>,
+    /// The values of that message's other placeholders, by name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error_params: Option<std::collections::BTreeMap<String, String>>,
 }
 
 #[derive(Serialize, Deserialize, ToSchema)]
@@ -146,6 +153,8 @@ fn status_from(snap: update::Snapshot) -> UpdateStatus {
             error: r.error.clone(),
             log_path: r.log_path.clone(),
             staged: r.staged,
+            error_code: r.error_code.clone(),
+            error_params: (!r.error_params.is_empty()).then(|| r.error_params.clone()),
         }),
     }
 }
@@ -187,13 +196,15 @@ pub(crate) async fn get_update_status() -> Json<UpdateStatus> {
 pub(crate) async fn force_update_check() -> Response {
     match update::force_check().await {
         Ok(snap) => Json(status_from(snap)).into_response(),
-        Err(update::ForceError::Disabled) => api_error(
+        Err(update::ForceError::Disabled) => api_error_coded(
             StatusCode::CONFLICT,
-            "update checks are disabled on this host (PUNKTFUNK_UPDATE_CHECK=0)",
+            "update_checks_disabled",
+            "Update checks are disabled on this host (PUNKTFUNK_UPDATE_CHECK=0)",
         ),
-        Err(update::ForceError::TooSoon) => api_error(
+        Err(update::ForceError::TooSoon) => api_error_coded(
             StatusCode::TOO_MANY_REQUESTS,
-            "a forced update check ran less than 30 s ago — try again shortly",
+            "update_check_too_soon",
+            "A forced update check ran less than 30 s ago — try again shortly",
         ),
     }
 }
@@ -236,25 +247,30 @@ pub(crate) async fn apply_update(
             let snap = update::snapshot_and_maybe_refresh();
             (StatusCode::ACCEPTED, Json(status_from(snap))).into_response()
         }
-        Err(update::ApplyError::Unsupported) => api_error(
+        Err(update::ApplyError::Unsupported) => api_error_coded(
             StatusCode::CONFLICT,
-            "this install kind has no one-click apply — use the update command shown in status",
+            "update_no_one_click",
+            "This install kind has no one-click apply — use the update command shown in status",
         ),
-        Err(update::ApplyError::Disabled) => api_error(
+        Err(update::ApplyError::Disabled) => api_error_coded(
             StatusCode::CONFLICT,
-            "one-click apply is disabled on this host (PUNKTFUNK_UPDATE_APPLY=0)",
+            "update_apply_disabled",
+            "One-click apply is disabled on this host (PUNKTFUNK_UPDATE_APPLY=0)",
         ),
         Err(update::ApplyError::JobRunning) => api_error(
             StatusCode::CONFLICT,
             "an update is already being applied — poll GET /update/status",
         ),
-        Err(update::ApplyError::SessionActive) => api_error(
+        // The code is the console's cue to offer the forced update; the text stays the API's.
+        Err(update::ApplyError::SessionActive) => api_error_coded(
             StatusCode::CONFLICT,
+            "update_session_active",
             "a streaming session is active — pass {\"force\": true} to update anyway (the stream will drop)",
         ),
-        Err(update::ApplyError::NothingToApply) => api_error(
+        Err(update::ApplyError::NothingToApply) => api_error_coded(
             StatusCode::CONFLICT,
-            "no newer release is known for this channel — run a check first",
+            "update_none_known",
+            "No newer release is known for this channel — run a check first",
         ),
     }
 }

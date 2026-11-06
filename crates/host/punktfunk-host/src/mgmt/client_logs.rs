@@ -68,9 +68,10 @@ pub(crate) async fn client_logs_upload(
         .and_then(|n| n.effective(&fp, now_unix))
         .is_none()
     {
-        return api_error(
+        return api_error_coded(
             StatusCode::FORBIDDEN,
-            "this device's access has expired — ask the host's operator to approve it again",
+            "device_access_expired",
+            "This device's access to the host has expired.",
         );
     }
     // Auth already proved membership; a race with unpair between the gate and here falls
@@ -95,9 +96,11 @@ pub(crate) async fn client_logs_upload(
             );
             (StatusCode::CREATED, Json(ClientLogUploaded { id })).into_response()
         }
-        Err(e) => api_error(
+        Err(e) => api_error_logged(
             StatusCode::INTERNAL_SERVER_ERROR,
-            &format!("Couldn't store the log bundle — {e}"),
+            "log_bundle_not_stored",
+            "Couldn't store the log bundle",
+            &e,
         ),
     }
 }
@@ -147,9 +150,11 @@ pub(crate) async fn client_logs_get(
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
             api_error(StatusCode::NOT_FOUND, "no bundle with that id")
         }
-        Err(e) => api_error(
+        Err(e) => api_error_logged(
             StatusCode::INTERNAL_SERVER_ERROR,
-            &format!("Couldn't read the log bundle — {e}"),
+            "log_bundle_not_read",
+            "Couldn't read the log bundle",
+            &e,
         ),
     }
 }
@@ -182,9 +187,11 @@ pub(crate) async fn client_logs_delete(
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
             api_error(StatusCode::NOT_FOUND, "no bundle with that id")
         }
-        Err(e) => api_error(
+        Err(e) => api_error_logged(
             StatusCode::INTERNAL_SERVER_ERROR,
-            &format!("Couldn't delete the log bundle — {e}"),
+            "log_bundle_not_deleted",
+            "Couldn't delete the log bundle",
+            &e,
         ),
     }
 }

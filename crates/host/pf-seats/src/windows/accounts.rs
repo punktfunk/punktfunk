@@ -206,7 +206,9 @@ impl AccountManager {
             return Err(backend_error(
                 "account_not_owned",
                 format!("No Windows account {account} on this PC."),
-            ));
+            )
+            .said("account_missing_windows")
+            .param("account", account));
         };
         if contains_name(
             &local_groups(account)?,
@@ -218,20 +220,26 @@ impl AccountManager {
                     "{account} is an administrator. A seat is a standard user: make {account} a \
                      standard user in Windows, or pick another account."
                 ),
-            ));
+            )
+            .said("account_is_administrator")
+            .param("account", account));
         }
         if has_account_right(account, DENY_REMOTE)? {
             return Err(backend_error(
                 "account_policy",
                 format!("{account} isn't allowed to sign in over Remote Desktop on this PC."),
-            ));
+            )
+            .said("account_policy")
+            .param("account", account));
         }
         // A seat start logs the account's other sessions off, so none may be live now.
         if wts::has_session(account)? {
             return Err(backend_error(
                 "account_signed_in",
                 format!("{account} is signed in on this PC. Sign {account} out first."),
-            ));
+            )
+            .said("account_signed_in")
+            .param("account", account));
         }
         let credential = typed_credential(password)?;
         verify_password(account, &credential, |error| {
@@ -516,6 +524,8 @@ fn changed_fault(account: &str) -> BackendError {
             "{account}'s Windows password changed or expired. Enter the new one on the profile's card."
         ),
     )
+    .said("credential_changed")
+    .param("account", account)
 }
 
 /// The sentence for a password just typed for `account` that Windows refused. `denied`: the
@@ -530,30 +540,43 @@ fn typed_fault(account: &str, error: windows::core::Error, denied: bool) -> Back
 /// [`typed_fault`] by the Win32 `code` of the refusal. One it doesn't know keeps the operator's
 /// line.
 fn logon_fault(account: &str, code: u32, denied: bool) -> BackendError {
+    let said = |error: BackendError, code: &str| error.said(code).param("account", account);
     match WIN32_ERROR(code) {
-        ERROR_LOGON_FAILURE => backend_error(
-            "credential_wrong",
-            format!("That isn't {account}'s Windows password."),
-        ),
-        ERROR_PASSWORD_MUST_CHANGE | ERROR_PASSWORD_EXPIRED if denied => backend_error(
-            "credential_must_change",
-            format!(
-                "Windows wants {account}'s password changed. Remove the profile, sign in to \
-                 {account} at the PC and set the new password, then add the profile again."
+        ERROR_LOGON_FAILURE => said(
+            backend_error(
+                "credential_wrong",
+                format!("That isn't {account}'s Windows password."),
             ),
+            "credential_wrong_windows",
         ),
-        ERROR_PASSWORD_MUST_CHANGE | ERROR_PASSWORD_EXPIRED => backend_error(
-            "credential_must_change",
-            format!(
-                "Windows wants {account}'s password changed. Sign in to {account} at the PC \
-                 once and set it, then enter the new one here."
+        ERROR_PASSWORD_MUST_CHANGE | ERROR_PASSWORD_EXPIRED if denied => said(
+            backend_error(
+                "credential_must_change",
+                format!(
+                    "Windows wants {account}'s password changed. Remove the profile, sign in to \
+                     {account} at the PC and set the new password, then add the profile again."
+                ),
             ),
+            "credential_must_change_windows_made",
         ),
-        ERROR_ACCOUNT_LOCKED_OUT => backend_error(
-            "account_locked",
-            format!(
-                "Windows locked {account} out after too many wrong passwords. Wait ten minutes."
+        ERROR_PASSWORD_MUST_CHANGE | ERROR_PASSWORD_EXPIRED => said(
+            backend_error(
+                "credential_must_change",
+                format!(
+                    "Windows wants {account}'s password changed. Sign in to {account} at the PC \
+                     once and set it, then enter the new one here."
+                ),
             ),
+            "credential_must_change_windows",
+        ),
+        ERROR_ACCOUNT_LOCKED_OUT => said(
+            backend_error(
+                "account_locked",
+                format!(
+                    "Windows locked {account} out after too many wrong passwords. Wait ten minutes."
+                ),
+            ),
+            "account_locked_windows",
         ),
         _ => status_error(
             "credential_verify",
@@ -567,12 +590,20 @@ fn logon_fault(account: &str, code: u32, denied: bool) -> BackendError {
 /// can't be one.
 fn typed_credential(password: &Secret) -> WinResult<Credential> {
     Credential::new(password.expose().to_owned()).map_err(|error| {
-        let sentence = match password.expose() {
-            "" => "This account has no password. Set one in Windows first.",
-            typed if typed.len() > 256 => "The password is too long.",
-            _ => "The password can't hold a tab or a line break.",
+        let (said, sentence) = match password.expose() {
+            "" => (
+                "credential_invalid_no_password",
+                "This account has no password. Set one in Windows first.",
+            ),
+            typed if typed.len() > 256 => {
+                ("credential_invalid_too_long", "The password is too long.")
+            }
+            _ => (
+                "credential_invalid_control_char",
+                "The password can't hold a tab or a line break.",
+            ),
         };
-        backend_error(&error.code, sentence)
+        backend_error(&error.code, sentence).said(said)
     })
 }
 

@@ -212,6 +212,8 @@ pub enum EditError {
     NotFound,
     /// The body breaks a rule; the sentence says which.
     Invalid(String),
+    /// The name is empty once trimmed.
+    NameMissing,
     /// Another profile has that name.
     NameTaken,
     /// The box already has [`PROFILES_MAX`].
@@ -227,9 +229,10 @@ impl std::fmt::Display for EditError {
         match self {
             EditError::NotFound => f.write_str("no profile with that id"),
             EditError::Invalid(why) => f.write_str(why),
-            EditError::NameTaken => f.write_str("another profile has that name"),
-            EditError::Full => write!(f, "a host holds at most {PROFILES_MAX} profiles"),
-            EditError::Owner => f.write_str("the owner profile can't be removed"),
+            EditError::NameMissing => f.write_str("A profile needs a name"),
+            EditError::NameTaken => f.write_str("Another profile has that name"),
+            EditError::Full => write!(f, "A host holds at most {PROFILES_MAX} profiles"),
+            EditError::Owner => f.write_str("The owner profile can't be removed"),
             EditError::Store(e) => write!(f, "{e:#}"),
         }
     }
@@ -395,8 +398,7 @@ impl Profiles {
     /// The name [`create`](Self::create) would take `input` under, or what it would refuse. The
     /// caller asks before it makes a seat's account for the profile.
     pub fn vet_create(&self, input: &ProfileCreate) -> Result<String, EditError> {
-        let name = clean_name(&input.display_name)
-            .ok_or_else(|| EditError::Invalid("a profile needs a name".into()))?;
+        let name = clean_name(&input.display_name).ok_or(EditError::NameMissing)?;
         if let Some(accent) = &input.accent {
             valid_accent(accent.clone())?;
         }
@@ -411,8 +413,7 @@ impl Profiles {
         input: ProfileCreate,
         os_account: OsAccount,
     ) -> Result<Profile, EditError> {
-        let name = clean_name(&input.display_name)
-            .ok_or_else(|| EditError::Invalid("a profile needs a name".into()))?;
+        let name = clean_name(&input.display_name).ok_or(EditError::NameMissing)?;
         let accent = input.accent.map(valid_accent).transpose()?;
         let mut made = None;
         self.edit(|file| {
@@ -451,9 +452,7 @@ impl Profiles {
         let name = input
             .display_name
             .as_deref()
-            .map(|n| {
-                clean_name(n).ok_or_else(|| EditError::Invalid("a profile needs a name".into()))
-            })
+            .map(|n| clean_name(n).ok_or(EditError::NameMissing))
             .transpose()?;
         let accent = input.accent.map(valid_accent).transpose()?;
         let mut out = None;

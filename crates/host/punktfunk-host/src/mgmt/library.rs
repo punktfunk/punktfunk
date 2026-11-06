@@ -32,8 +32,9 @@ pub(super) async fn box_library_is_read_only(
     let library = path == "/api/v1/library" || path.starts_with("/api/v1/library/");
     let write = !matches!(*req.method(), Method::GET | Method::HEAD);
     if box_library && library && write {
-        return api_error(
+        return api_error_coded(
             StatusCode::CONFLICT,
+            "seat_library_read_only",
             "This seat plays the box's library, so it can't be changed here. Change it on the box.",
         );
     }
@@ -305,8 +306,9 @@ pub(crate) async fn get_library_page(
         Some(c) => match decode_cursor(c) {
             Some(key) => Some(key),
             None => {
-                return api_error(
+                return api_error_coded(
                     StatusCode::BAD_REQUEST,
+                    "library_page_marker_invalid",
                     "That page marker isn't valid. Load the list again from the start",
                 )
             }
@@ -456,7 +458,7 @@ pub(crate) async fn set_library_entry_hidden(
             tracing::info!(entry = %id, hidden, "management API: library entry visibility set");
             Json(HiddenState { id, hidden }).into_response()
         }
-        Err(e) => api_error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+        Err(e) => host_error("library change refused", &e),
     }
 }
 
@@ -518,7 +520,7 @@ pub(crate) async fn set_library_scanner(
             Json(scanners).into_response()
         }
         Ok(None) => api_error(StatusCode::NOT_FOUND, "no such scanner on this platform"),
-        Err(e) => api_error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+        Err(e) => host_error("library change refused", &e),
     }
 }
 
@@ -556,7 +558,7 @@ pub(crate) async fn create_custom_game(
     }
     match crate::library::add_custom(input) {
         Ok(entry) => (StatusCode::CREATED, Json(entry)).into_response(),
-        Err(e) => api_error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+        Err(e) => host_error("library change refused", &e),
     }
 }
 
@@ -631,11 +633,12 @@ pub(crate) async fn update_custom_game(
             &format!("entry is owned by provider `{p}` — update it through its reconcile"),
         ),
         // Manual CRUD never requests a store claim; this arm is a programming error.
-        Ok(MutateOutcome::StoreClaimed { .. }) => api_error(
+        Ok(MutateOutcome::StoreClaimed { .. }) => api_error_coded(
             StatusCode::INTERNAL_SERVER_ERROR,
+            "library_entry_not_updated",
             "The entry wasn't updated — the host hit an unexpected state",
         ),
-        Err(e) => api_error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+        Err(e) => host_error("library change refused", &e),
     }
 }
 
@@ -674,11 +677,12 @@ pub(crate) async fn delete_custom_game(
             ),
         ),
         // Manual CRUD never requests a store claim; this arm is a programming error.
-        Ok(MutateOutcome::StoreClaimed { .. }) => api_error(
+        Ok(MutateOutcome::StoreClaimed { .. }) => api_error_coded(
             StatusCode::INTERNAL_SERVER_ERROR,
+            "library_entry_not_deleted",
             "The entry wasn't deleted — the host hit an unexpected state",
         ),
-        Err(e) => api_error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+        Err(e) => host_error("library change refused", &e),
     }
 }
 
@@ -831,11 +835,12 @@ pub(crate) async fn reconcile_provider_entries(
             StatusCode::CONFLICT,
             &format!("store `{store}` is already claimed by provider `{provider}`"),
         ),
-        Ok(_) => api_error(
+        Ok(_) => api_error_coded(
             StatusCode::INTERNAL_SERVER_ERROR,
+            "library_not_updated",
             "The library wasn't updated — the host hit an unexpected state",
         ),
-        Err(e) => api_error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+        Err(e) => host_error("library change refused", &e),
     }
 }
 
@@ -866,7 +871,7 @@ pub(crate) async fn delete_provider_entries(OwnedId(provider, _): OwnedId<Provid
             crate::runstate::forget(&provider);
             Json(ProviderRemoved { removed }).into_response()
         }
-        Err(e) => api_error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+        Err(e) => host_error("library change refused", &e),
     }
 }
 
@@ -1015,7 +1020,7 @@ pub(crate) async fn put_library_metadata(
             tracing::debug!(source, entries, "library metadata stored");
             Json(MetadataAccepted { entries, dropped }).into_response()
         }
-        Err(e) => api_error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+        Err(e) => host_error("library change refused", &e),
     }
 }
 
@@ -1040,7 +1045,7 @@ pub(crate) async fn put_library_metadata(
 pub(crate) async fn delete_library_metadata(OwnedId(source, _): OwnedId<ProviderId>) -> Response {
     match crate::library::delete_metadata(&source) {
         Ok(removed) => Json(MetadataRemoved { removed }).into_response(),
-        Err(e) => api_error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+        Err(e) => host_error("library change refused", &e),
     }
 }
 
@@ -1090,7 +1095,7 @@ pub(crate) async fn set_library_metadata(
             );
             Json(sources).into_response()
         }
-        Err(e) => api_error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+        Err(e) => host_error("library change refused", &e),
     }
 }
 
@@ -1141,7 +1146,7 @@ pub(crate) async fn set_library_art_pick(
             tracing::info!(entry = %id, kind = kind.name(), "management API: library art picked");
             Json(picks).into_response()
         }
-        Err(e) => api_error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+        Err(e) => host_error("library change refused", &e),
     }
 }
 

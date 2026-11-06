@@ -82,6 +82,7 @@ pub(super) fn maybe_boot_loop_rollback(restarts: u32, attempted: &mut bool) {
         )),
         log_path: Some(log.display().to_string()),
         staged: false,
+        ..Default::default()
     };
     let _ = crate::update::jobs::write_json_atomic(&crate::update::jobs::result_path(), &record);
     // Delete the intent first: the incoming host must boot clean, and a missing intent is the one-shot.

@@ -316,8 +316,9 @@ async fn answer(st: &MgmtState) -> Response {
         super::owner::Answer::NoSeat => Json(own).into_response(),
         super::owner::Answer::Reply(200, _, body) => match with_owner_rows(own, &body) {
             Some(merged) => Json(merged).into_response(),
-            None => api_error(
+            None => api_error_coded(
                 StatusCode::BAD_GATEWAY,
+                "owner_settings_unreadable",
                 "The owner's host answered with settings this console can't read.",
             ),
         },
@@ -405,7 +406,7 @@ pub(crate) async fn patch_host_settings(
         {
             super::owner::Answer::Reply(200, ..) => {}
             super::owner::Answer::NoSeat => {
-                return api_error(StatusCode::SERVICE_UNAVAILABLE, super::owner::NO_OWNER)
+                return super::owner::no_owner(StatusCode::SERVICE_UNAVAILABLE)
             }
             other => return other.into_response(),
         }
@@ -431,9 +432,10 @@ async fn save(st: &MgmtState, patch: serde_json::Map<String, Value>) -> Response
         Ok(()) => {}
         Err(e @ pf_host_config::SaveError::Io(_)) => {
             tracing::warn!(error = %e, "host settings not saved");
-            return api_error(
+            return api_error_coded(
                 StatusCode::INTERNAL_SERVER_ERROR,
-                &format!("Couldn't save the host settings — {e}"),
+                "host_settings_not_saved",
+                "Couldn't save the host settings",
             );
         }
         Err(e) => return api_error(StatusCode::BAD_REQUEST, &e.to_string()),

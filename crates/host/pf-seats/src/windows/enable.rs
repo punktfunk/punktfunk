@@ -95,39 +95,45 @@ pub(super) fn checks_until(deadline: Instant) -> Vec<Diagnostic> {
     let mut checks = Vec::new();
     let server = match server_edition() {
         Some(true) => {
-            checks.push(Diagnostic::info(
-                "windows_server",
-                "This is Windows Server.",
-            ));
+            checks.push(
+                Diagnostic::info("windows_server", "This is Windows Server.")
+                    .worded("seatcheck_windows_server_ok"),
+            );
             true
         }
         Some(false) if session_wrapper() => {
             checks.push(Diagnostic::warning(
                 "windows_server",
                 "A Remote Desktop wrapper lets this desktop edition of Windows run concurrent seats. Only Windows Server is supported for that. To take turns instead, add an Own account profile.",
-            ));
+            ).worded("seatcheck_windows_server_wrapper"));
             false
         }
         Some(false) => {
             checks.push(Diagnostic::error(
                 "windows_server",
                 "Playing at the same time needs Windows Server — this is a desktop edition of Windows. To take turns, add an Own account profile instead.",
-            ));
+            ).worded("seatcheck_windows_server_desktop"));
             return checks;
         }
         None => {
-            checks.push(Diagnostic::error(
-                "windows_server",
-                "Couldn't tell which edition of Windows this is.",
-            ));
+            checks.push(
+                Diagnostic::error(
+                    "windows_server",
+                    "Couldn't tell which edition of Windows this is.",
+                )
+                .worded("seatcheck_edition_unknown"),
+            );
             return checks;
         }
     };
     let Some((role, [licensing, gpu])) = probe(deadline) else {
-        checks.push(Diagnostic::error(
-            "probe",
-            "Couldn't read this machine's Remote Desktop and graphics settings.",
-        ));
+        checks.push(
+            Diagnostic::error(
+                "probe",
+                "Couldn't read this machine's Remote Desktop and graphics settings.",
+            )
+            .worded("seatcheck_probe"),
+        );
         return checks;
     };
     if server {
@@ -137,6 +143,7 @@ pub(super) fn checks_until(deadline: Instant) -> Vec<Diagnostic> {
             checks.push(check(
                 licensing,
                 "rds_licensing",
+                ["seatcheck_rds_licensing_ok", "seatcheck_rds_licensing_missing"],
                 "Remote Desktop licensing is set.",
                 "Remote Desktop licensing isn't set. Press Set up Remote Desktop in Profiles → Seats to set it to Per User.",
             ));
@@ -145,6 +152,7 @@ pub(super) fn checks_until(deadline: Instant) -> Vec<Diagnostic> {
     checks.push(check(
         gpu,
         "gpu",
+        ["seatcheck_gpu_ok", "seatcheck_gpu_missing"],
         "A graphics card is installed.",
         "No graphics card was found. Seats need a GPU.",
     ));
@@ -184,7 +192,8 @@ pub(super) fn prepare() -> Vec<Diagnostic> {
             return vec![Diagnostic::error(
                 "rds_setup",
                 "Windows couldn't set up Remote Desktop. Add Remote Desktop Session Host under Remote Desktop Services in Server Manager, restart, then try again.",
-            )];
+            )
+            .worded("seatcheck_rds_setup")];
         }
     };
     tracing::info!(output = ?lines, "remote desktop setup");
@@ -192,18 +201,24 @@ pub(super) fn prepare() -> Vec<Diagnostic> {
     let (role, licensing) = last.split_once(' ').unwrap_or((last, ""));
     let mut rows = Vec::new();
     match role {
-        "installed" => rows.push(Diagnostic::info(
-            "rds_role_installed",
-            "Remote Desktop Session Host is now installed.",
-        )),
-        "restart" => rows.push(Diagnostic::error("restart", RESTART)),
+        "installed" => rows.push(
+            Diagnostic::info(
+                "rds_role_installed",
+                "Remote Desktop Session Host is now installed.",
+            )
+            .worded("seatcheck_rds_role_installed"),
+        ),
+        "restart" => rows.push(Diagnostic::error("restart", RESTART).worded("seatcheck_restart")),
         _ => {}
     }
     match licensing {
-        "set" => rows.push(Diagnostic::info(
-            "rds_licensing_set",
-            "Remote Desktop licensing is now Per User.",
-        )),
+        "set" => rows.push(
+            Diagnostic::info(
+                "rds_licensing_set",
+                "Remote Desktop licensing is now Per User.",
+            )
+            .worded("seatcheck_rds_licensing_set"),
+        ),
         "kept" | "skipped" => {}
         code => tracing::warn!(code, "licensing mode change refused"),
     }
@@ -239,6 +254,7 @@ pub(super) fn turn_off() -> WinResult<()> {
                 "Couldn't turn Remote Desktop back off.",
                 cause,
             )
+            .said("rdp_listener_off")
         })?;
     }
     super::seat_listener::remove();
@@ -252,7 +268,9 @@ pub(super) fn turn_off() -> WinResult<()> {
     super::steam::restore_registration();
     drop(seats);
     hklm.delete_subkey_with_flags(SEATS_KEY, KEY_WOW64_64KEY)
-        .map_err(|cause| refuse("seats_key", "Couldn't turn seats off.", cause))
+        .map_err(|cause| {
+            refuse("seats_key", "Couldn't turn seats off.", cause).said("seats_key_off")
+        })
 }
 
 /// Whether the network reaches Remote Desktop: the operator's choice while seats are on. While
@@ -351,10 +369,13 @@ pub(super) fn licensing_row(deadline: Instant) -> Option<Diagnostic> {
         Ok(lines) => lines,
         Err(cause) => {
             tracing::warn!(%cause, "remote desktop licensing not read");
-            return Some(Diagnostic::warning(
-                "rds_grace",
-                "Couldn't read how long Remote Desktop runs without a licence server. Run the check again in a few minutes.",
-            ));
+            return Some(
+                Diagnostic::warning(
+                    "rds_grace",
+                    "Couldn't read how long Remote Desktop runs without a license server. Run the check again in a few minutes.",
+                )
+                .worded("seatcheck_rds_grace_unread"),
+            );
         }
     };
     let (days, servers) = lines.last()?.split_once('|')?;
@@ -369,34 +390,53 @@ pub(super) fn licensing_row(deadline: Instant) -> Option<Diagnostic> {
 fn grace_row(days_left: Option<u32>, licence_server: bool) -> Option<Diagnostic> {
     const CODE: &str = "rds_grace";
     if licence_server {
-        return Some(Diagnostic::info(
-            CODE,
-            "Remote Desktop gets its licences from a licence server.",
-        ));
+        return Some(
+            Diagnostic::info(
+                CODE,
+                "Remote Desktop gets its licenses from a license server.",
+            )
+            .worded("seatcheck_rds_grace_server"),
+        );
     }
+    let more = |days: u32| match days {
+        1 => "1 more day".to_string(),
+        days => format!("{days} more days"),
+    };
     Some(match days_left? {
         0 => Diagnostic::error(
             CODE,
-            "Remote Desktop's days without a licence server are over, so seats can't sign in. \
-             Set up a licence server with CALs.",
-        ),
+            "Remote Desktop's days without a license server are over, so seats can't sign in. \
+             Set up a license server with CALs.",
+        )
+        .worded("seatcheck_rds_grace_over"),
         days @ 1..=30 => Diagnostic::warning(
             CODE,
             format!(
-                "Remote Desktop runs {days} more days without a licence server. After that \
-                 seats can't sign in: set one up with CALs."
+                "Remote Desktop runs {} without a license server. After that \
+                 seats can't sign in: set one up with CALs.",
+                more(days)
             ),
-        ),
+        )
+        .worded("seatcheck_rds_grace_ending")
+        .param("count", days),
         days => Diagnostic::info(
             CODE,
-            format!("Remote Desktop runs {days} more days without a licence server."),
-        ),
+            format!(
+                "Remote Desktop runs {} without a license server.",
+                more(days)
+            ),
+        )
+        .worded("seatcheck_rds_grace_days")
+        .param("count", days),
     })
 }
 
 /// A refusal as the check list shows it.
 pub(super) fn refusal(error: BackendError) -> Diagnostic {
-    Diagnostic::error(error.code, error.message)
+    let mut row = Diagnostic::error(error.code, error.message);
+    row.id = error.said.map(|code| format!("apierr_{code}"));
+    row.params = error.params;
+    row
 }
 
 fn apply(host_path: &Path, allow_rdp_from_network: bool) -> WinResult<()> {
@@ -404,18 +444,21 @@ fn apply(host_path: &Path, allow_rdp_from_network: bool) -> WinResult<()> {
     if PACKAGE.iter().any(|name| !dir.join(name).is_file()) {
         return Err(refuse(
             "driver_missing",
-            "The seat display driver isn't on this machine. Reinstall punktfunk, then try again.",
+            "The seat display driver isn't on this machine. Reinstall Punktfunk, then try again.",
             dir.display(),
-        ));
+        )
+        .said("seat_display_driver"));
     }
     let (seats, disposition) = RegKey::predef(HKEY_LOCAL_MACHINE)
         .create_subkey_with_flags(SEATS_KEY, KEY_READ | KEY_SET_VALUE | KEY_WOW64_64KEY)
-        .map_err(|cause| refuse("seats_key", "Couldn't turn seats on.", cause))?;
+        .map_err(|cause| {
+            refuse("seats_key", "Couldn't turn seats on.", cause).said("seats_key_on")
+        })?;
     // A new key reads as off until the last step; a finished one stays on while it is redone.
     if disposition == RegDisposition::REG_CREATED_NEW_KEY {
-        seats
-            .set_value(ENABLING, &1_u32)
-            .map_err(|cause| refuse("seats_key", "Couldn't turn seats on.", cause))?;
+        seats.set_value(ENABLING, &1_u32).map_err(|cause| {
+            refuse("seats_key", "Couldn't turn seats on.", cause).said("seats_key_on")
+        })?;
     }
     install_driver(&dir, true)?;
     allow_listener(&seats)?;
@@ -429,6 +472,7 @@ fn apply(host_path: &Path, allow_rdp_from_network: bool) -> WinResult<()> {
                 "Couldn't limit Remote Desktop to this machine.",
                 cause,
             )
+            .said("rdp_firewall_limit")
         })?;
     } else if was_narrowed {
         restore_scopes(&seats)?;
@@ -440,14 +484,16 @@ fn apply(host_path: &Path, allow_rdp_from_network: bool) -> WinResult<()> {
     }
     seats
         .set_value(RDP_FROM_NETWORK, &u32::from(allow_rdp_from_network))
-        .map_err(|cause| refuse("seats_key", "Couldn't turn seats on.", cause))?;
+        .map_err(|cause| {
+            refuse("seats_key", "Couldn't turn seats on.", cause).said("seats_key_on")
+        })?;
     if let Err(cause) = super::seat_listener::ensure(host_path) {
         tracing::warn!(%cause, "seat listener not ready — seats start without pad audio");
     }
     trust_rdp_certificate(host_path)?;
     match seats.delete_value(ENABLING) {
         Err(cause) if cause.kind() != std::io::ErrorKind::NotFound => {
-            Err(refuse("seats_key", "Couldn't turn seats on.", cause))
+            Err(refuse("seats_key", "Couldn't turn seats on.", cause).said("seats_key_on"))
         }
         _ => Ok(()),
     }
@@ -488,11 +534,15 @@ pub(super) fn ensure_driver(host_path: &Path) -> WinResult<()> {
     if PACKAGE.iter().any(|name| !dir.join(name).is_file()) {
         return Err(refuse(
             "seat_display_driver",
-            "The seat display driver isn't on this machine. Reinstall punktfunk, then try again.",
+            "The seat display driver isn't on this machine. Reinstall Punktfunk, then try again.",
             dir.display(),
-        ));
+        )
+        .said("seat_display_driver"));
     }
-    install_driver(&dir, false).map_err(|error| backend_error("seat_display_driver", error.message))
+    install_driver(&dir, false).map_err(|error| BackendError {
+        code: "seat_display_driver".into(),
+        ..error
+    })
 }
 
 /// The `DriverVer` value of an INF, such as `10/12/2026,9.9.1012.257`, spaces dropped.
@@ -573,14 +623,16 @@ fn install_driver(dir: &Path, install: bool) -> WinResult<()> {
             "driver_install",
             "Windows couldn't install the seat display driver.",
             format!("pnputil exited {code:?}"),
-        )),
+        )
+        .said("driver_install")),
     }
 }
 
 /// Turn the Remote Desktop listener on, noting under the Seats key that it was off.
 fn allow_listener(seats: &RegKey) -> WinResult<()> {
-    let listener =
-        |cause: std::io::Error| refuse("rdp_listener", "Couldn't turn on Remote Desktop.", cause);
+    let listener = |cause: std::io::Error| {
+        refuse("rdp_listener", "Couldn't turn on Remote Desktop.", cause).said("rdp_listener_on")
+    };
     let terminal_server = RegKey::predef(HKEY_LOCAL_MACHINE)
         .open_subkey_with_flags(
             TERMINAL_SERVER_KEY,
@@ -645,6 +697,7 @@ fn record_scopes(seats: &RegKey) -> WinResult<()> {
             "Couldn't read Remote Desktop's firewall rules.",
             cause,
         )
+        .said("rdp_firewall_read")
     };
     let scopes = powershell_lines(&scopes_script(), QUERY_LIMIT).map_err(fail)?;
     seats
@@ -691,6 +744,7 @@ fn restore_scopes(seats: &RegKey) -> WinResult<()> {
                 "Couldn't restore Remote Desktop's firewall rules.",
                 cause,
             )
+            .said("rdp_firewall_restore")
         })
 }
 
@@ -727,6 +781,7 @@ fn open_rdp_rules(seats: &RegKey) -> WinResult<()> {
             "Couldn't open Remote Desktop to the network.",
             cause,
         )
+        .said("rdp_firewall_open")
     };
     let off = powershell_lines(
         &format!(
@@ -773,6 +828,7 @@ fn close_rdp_rules(seats: &RegKey) -> WinResult<()> {
             "Couldn't close Remote Desktop to the network.",
             cause,
         )
+        .said("rdp_firewall_close")
     };
     powershell_lines(
         &format!(
@@ -836,9 +892,10 @@ fn trust_rdp_certificate(host_path: &Path) -> WinResult<()> {
     if !keeper.is_file() {
         return Err(refuse(
             "keeper_missing",
-            "A punktfunk file is missing. Reinstall punktfunk, then try again.",
+            "A Punktfunk file is missing. Reinstall Punktfunk, then try again.",
             keeper.display(),
-        ));
+        )
+        .said("keeper_missing"));
     }
     let mut cause = String::new();
     for attempt in 0..TRUST_ATTEMPTS {
@@ -860,7 +917,8 @@ fn trust_rdp_certificate(host_path: &Path) -> WinResult<()> {
                     "vc_runtime",
                     "The Microsoft Visual C++ runtime is missing. Install the Visual C++ 2015–2022 Redistributable (x64) from Microsoft, then try again.",
                     keeper.display(),
-                ));
+                )
+                .said("vc_runtime"));
             }
             Ok(output) => cause = String::from_utf8_lossy(&output.stderr).trim().to_owned(),
             Err(error) => cause = error.to_string(),
@@ -870,7 +928,8 @@ fn trust_rdp_certificate(host_path: &Path) -> WinResult<()> {
         "rdp_trust",
         "Couldn't record this machine's Remote Desktop certificate. Check that Remote Desktop is running, then try again.",
         cause,
-    ))
+    )
+    .said("rdp_trust"))
 }
 
 /// What a query may take: up to [`QUERY_LIMIT`], and none once `deadline` has passed.
@@ -908,16 +967,19 @@ fn parse_probe(text: &str) -> Option<(String, [bool; 2])> {
 fn role_check(state: &str) -> Diagnostic {
     const CODE: &str = "rds_role";
     match state {
-        "Installed" => Diagnostic::info(CODE, "Remote Desktop Session Host is installed."),
-        RESTART_PENDING => Diagnostic::error("restart", RESTART),
+        "Installed" => Diagnostic::info(CODE, "Remote Desktop Session Host is installed.")
+            .worded("seatcheck_rds_role_ok"),
+        RESTART_PENDING => Diagnostic::error("restart", RESTART).worded("seatcheck_restart"),
         "Unknown" => Diagnostic::warning(
             CODE,
             "Couldn't confirm that Remote Desktop Session Host is installed. If it isn't, press Set up Remote Desktop in Profiles → Seats.",
-        ),
+        )
+        .worded("seatcheck_rds_role_unknown"),
         _ => Diagnostic::error(
             CODE,
             "Remote Desktop Session Host isn't installed. Press Set up Remote Desktop in Profiles → Seats to install it; Windows then needs a restart.",
-        ),
+        )
+        .worded("seatcheck_rds_role_missing"),
     }
 }
 
@@ -948,15 +1010,17 @@ pub(super) fn run(tool: &str, args: &[&str]) -> Option<i32> {
     .code()
 }
 
-fn check(ok: bool, code: &str, met: &str, unmet: &str) -> Diagnostic {
+/// `ids` are the message ids of `met` and `unmet`.
+fn check(ok: bool, code: &str, ids: [&str; 2], met: &str, unmet: &str) -> Diagnostic {
     if ok {
-        Diagnostic::info(code, met)
+        Diagnostic::info(code, met).worded(ids[0])
     } else {
-        Diagnostic::error(code, unmet)
+        Diagnostic::error(code, unmet).worded(ids[1])
     }
 }
 
-/// A refusal the operator reads: `sentence` is the answer, `cause` goes to the log.
+/// A refusal the operator reads: `sentence` is the answer, `cause` goes to the log. The caller
+/// names the sentence's message with [`BackendError::said`].
 fn refuse(code: &str, sentence: &str, cause: impl std::fmt::Display) -> BackendError {
     tracing::warn!(code, %cause, "seat change refused");
     backend_error(code, sentence)

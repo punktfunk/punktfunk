@@ -464,7 +464,7 @@ pub(crate) fn start_apply(force: bool, session_active: bool) -> Result<(), Apply
                 job.stage = s;
             }
         };
-        let outcome: Result<PostApply, (&'static str, String)> = {
+        let outcome: Result<PostApply, jobs::ApplyFailed> = {
             #[cfg(target_os = "windows")]
             {
                 let progress = |received: u64, total: Option<u64>| {
@@ -477,12 +477,14 @@ pub(crate) fn start_apply(force: bool, session_active: bool) -> Result<(), Apply
                 let asset = asset.expect("windows leg reserved with an asset");
                 windows::run_apply(&asset, &target_version, serial, &progress, &stage)
                     .map(|()| PostApply::AwaitRestart)
+                    .map_err(jobs::ApplyFailed::from)
             }
             #[cfg(target_os = "linux")]
             {
                 let _ = &asset; // unused: Linux legs use the package manager
                 let run = if leg == Leg::SteamosSource {
                     linux::run_apply_steamos(&target_version, serial, &stage)
+                        .map_err(jobs::ApplyFailed::from)
                 } else {
                     linux::run_apply(&target_version, serial, &stage)
                 };
@@ -496,7 +498,7 @@ pub(crate) fn start_apply(force: bool, session_active: bool) -> Result<(), Apply
             #[cfg(not(any(target_os = "windows", target_os = "linux")))]
             {
                 let _ = (&asset, &target_version, serial, &stage);
-                Err(("applying", "no apply leg for this platform".to_string()))
+                Err(("applying", "no apply leg for this platform".to_string()).into())
             }
         };
         match outcome {
@@ -507,16 +509,18 @@ pub(crate) fn start_apply(force: bool, session_active: bool) -> Result<(), Apply
             Ok(PostApply::Done) => {
                 runtime().lock().unwrap().job = None;
             }
-            Err((stage_name, error)) => {
+            Err(failed) => {
                 let record = jobs::ResultRecord {
                     ok: false,
                     from: crate::version::get().into(),
                     to: target_version.clone(),
                     finished_unix: crate::clock::unix_secs_u64(),
-                    stage: Some(stage_name.into()),
-                    error: Some(error),
+                    stage: Some(failed.stage.into()),
+                    error: Some(failed.error),
                     log_path: None,
                     staged: false,
+                    error_code: failed.code,
+                    error_params: failed.params,
                 };
                 let _ = jobs::write_json_atomic(&jobs::result_path(), &record);
                 runtime().lock().unwrap().job = None;

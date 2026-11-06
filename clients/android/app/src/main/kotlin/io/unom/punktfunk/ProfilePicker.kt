@@ -157,7 +157,7 @@ sealed interface ProfileChoice {
 
 /** A seat wait a connect shows: [title], the host's progress [detail], and Cancel. */
 class ProfileWait(val title: Say) {
-    var detail by mutableStateOf<String?>(null)
+    var detail by mutableStateOf<Say?>(null)
     val cancelled = CompletableDeferred<Unit>()
 }
 
@@ -287,7 +287,7 @@ internal fun SeatWaitDialog(wait: ProfileWait, onCancel: () -> Unit) {
         text = {
             Column {
                 wait.detail?.let {
-                    Text(it, style = MaterialTheme.typography.bodyMedium)
+                    Text(it.asString(), style = MaterialTheme.typography.bodyMedium)
                     Spacer(Modifier.height(12.dp))
                 }
                 CircularProgressIndicator()

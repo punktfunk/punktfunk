@@ -7,7 +7,7 @@
 //! No log line, trace field or error carries anything of an unlock but its proof kind and the
 //! supervisor's answer code. A browser never opens such a profile.
 
-use super::link;
+use super::{link, Said};
 use crate::mgmt::owner::Seats;
 use anyhow::{anyhow, bail, Context, Result};
 use pf_seats::ipc::{
@@ -25,11 +25,33 @@ use std::time::{Duration, Instant};
 /// How long the unlock a hello announced may take to follow it.
 const PROOF_WAIT: Duration = Duration::from_secs(5);
 
-const FROM_A_BROWSER: &str = "Open this profile from the Punktfunk app.";
-const UPDATE: &str = "This profile needs its account password. Update Punktfunk on this device.";
-const UNREADABLE: &str = "Couldn't read the password this device sent. Try again.";
-const SILENT: &str = "This computer's seat service didn't answer. Try again in a moment.";
-const NOT_STARTED: &str = "This profile's desktop didn't start. Try again in a moment.";
+/// A refusal's message id and its English.
+type Words = (&'static str, &'static str);
+
+const FROM_A_BROWSER: Words = (
+    "close_unlock_from_browser",
+    "Open this profile from the Punktfunk app.",
+);
+const UPDATE: Words = (
+    "close_unlock_update_app",
+    "This profile needs its account password. Update Punktfunk on this device.",
+);
+const UNREADABLE: Words = (
+    "close_unlock_unreadable",
+    "Couldn't read the password this device sent. Try again.",
+);
+const SILENT: Words = (
+    "close_unlock_silent",
+    "This computer's seat service didn't answer. Try again in a moment.",
+);
+const NOT_STARTED: Words = (
+    "close_unlock_not_started",
+    "This profile's desktop didn't start. Try again in a moment.",
+);
+
+fn said((id, text): Words) -> Said {
+    Said::new(id, text)
+}
 
 /// Supervisor codes whose message is the sentence a person reads at the password prompt.
 const PROMPT_CODES: &[&str] = &[
@@ -82,7 +104,8 @@ pub(super) async fn unlock(
 ) -> Result<(Seat, Claim)> {
     if conn.is_web() {
         let reason = RejectReason::SeatUnavailable;
-        conn.refuse(reason.close_code(), FROM_A_BROWSER).await;
+        conn.refuse_said(reason.close_code(), &said(FROM_A_BROWSER))
+            .await;
         bail!("a browser asked for a person's own account");
     }
     let Some(device) = device else {
@@ -100,8 +123,8 @@ pub(super) async fn unlock(
         {
             Some(proof) => proof,
             None => {
-                let (reason, sentence) = locked(offered, UNREADABLE);
-                conn.refuse(reason.close_code(), sentence).await;
+                let (reason, words) = locked(offered, said(UNREADABLE));
+                conn.refuse_said(reason.close_code(), &words).await;
                 bail!("the profile unlock the hello announced didn't arrive whole");
             }
         }
@@ -127,8 +150,8 @@ pub(super) async fn unlock(
     };
     let code = code_of(&error);
     tracing::info!(seat = %row.id, outcome = %code, "profile unlock answered");
-    let (reason, sentence) = refusal(&error, offered);
-    conn.refuse(reason.close_code(), sentence).await;
+    let (reason, words) = refusal(&error, offered);
+    conn.refuse_said(reason.close_code(), &words).await;
     bail!("profile unlock refused: {code}")
 }
 
@@ -194,33 +217,41 @@ fn proof_of(unlock: ProfileUnlock) -> Option<Proof> {
     }
 }
 
-/// A refusal at the prompt: `ProfileLocked` with `sentence` for a client that offered the
+/// A refusal at the prompt: `ProfileLocked` with `words` for a client that offered the
 /// unlock, the update sentence for one that can't send it.
-fn locked(offered: bool, sentence: &str) -> (RejectReason, &str) {
+fn locked(offered: bool, words: Said) -> (RejectReason, Said) {
     if offered {
-        (RejectReason::ProfileLocked, sentence)
+        (RejectReason::ProfileLocked, words)
     } else {
-        (RejectReason::SeatUnavailable, UPDATE)
+        (RejectReason::SeatUnavailable, said(UPDATE))
     }
 }
 
 /// What the client hears when the supervisor didn't let it on. A refusal at the prompt carries
-/// the supervisor's sentence, none for `unlock_required` (show the prompt). A supervisor that
-/// didn't answer, or a seat that didn't start, is `SeatUnavailable` with a plain sentence: the
-/// supervisor's other messages are the operator's.
-fn refusal(error: &ApiError, offered: bool) -> (RejectReason, &str) {
+/// the supervisor's sentence and its message `apierr_<code>`, none for `unlock_required` (show
+/// the prompt). A supervisor that didn't answer, or a seat that didn't start, is
+/// `SeatUnavailable` with a plain sentence: the supervisor's other messages are the operator's.
+fn refusal(error: &ApiError, offered: bool) -> (RejectReason, Said) {
+    let backend = |sentence: &str| Said {
+        text: sentence.to_string(),
+        id: error
+            .said
+            .as_deref()
+            .map_or_else(String::new, |code| format!("apierr_{code}")),
+        params: error.params.clone().into_iter().collect(),
+    };
     let prompt = match (error.code, error.message.split_once(": ")) {
-        (ErrorCode::Backend, Some(("unlock_required", _))) => Some(""),
+        (ErrorCode::Backend, Some(("unlock_required", _))) => Some(Said::default()),
         (ErrorCode::Backend, Some((code, sentence))) if PROMPT_CODES.contains(&code) => {
-            Some(sentence)
+            Some(backend(sentence))
         }
-        (ErrorCode::Capacity, _) => Some(error.message.as_str()),
+        (ErrorCode::Capacity, _) => Some(backend(&error.message)),
         _ => None,
     };
     match prompt {
-        Some(sentence) => locked(offered, sentence),
-        None if error.code == ErrorCode::Transport => (RejectReason::SeatUnavailable, SILENT),
-        None => (RejectReason::SeatUnavailable, NOT_STARTED),
+        Some(words) => locked(offered, words),
+        None if error.code == ErrorCode::Transport => (RejectReason::SeatUnavailable, said(SILENT)),
+        None => (RejectReason::SeatUnavailable, said(NOT_STARTED)),
     }
 }
 
@@ -594,28 +625,38 @@ mod tests {
             ),
             (
                 refused("seat_dirs", "create /var/lib/x: denied"),
-                (SeatUnavailable, NOT_STARTED),
+                (SeatUnavailable, NOT_STARTED.1),
             ),
             (
                 ApiError::new(ErrorCode::InvalidRequest, "device name is bad"),
-                (SeatUnavailable, NOT_STARTED),
+                (SeatUnavailable, NOT_STARTED.1),
             ),
             (
                 ApiError::new(ErrorCode::Transport, "connect: No such file"),
-                (SeatUnavailable, SILENT),
+                (SeatUnavailable, SILENT.1),
             ),
         ];
-        for (error, want) in &cases {
-            assert_eq!(refusal(error, true), *want, "{}", error.message);
+        let heard = |error: &ApiError, offered: bool| {
+            let (reason, words) = refusal(error, offered);
+            (reason, words.text)
+        };
+        for (error, (reason, sentence)) in &cases {
+            let want = (*reason, sentence.to_string());
+            assert_eq!(heard(error, true), want, "{}", error.message);
         }
         for (error, (reason, sentence)) in &cases {
-            let old = refusal(error, false);
+            let old = heard(error, false);
             if *reason == ProfileLocked {
-                assert_eq!(old, (SeatUnavailable, UPDATE), "{}", error.message);
+                let update = (SeatUnavailable, UPDATE.1.to_string());
+                assert_eq!(old, update, "{}", error.message);
             } else {
-                assert_eq!(old, (*reason, *sentence), "{}", error.message);
+                assert_eq!(old, (*reason, sentence.to_string()), "{}", error.message);
             }
         }
+        let worded = refusal(&wrong.clone().said("credential_wrong_windows"), true).1;
+        assert_eq!(worded.id, "apierr_credential_wrong_windows");
+        assert_eq!(refusal(&wrong, true).1.id, "");
+        assert_eq!(refusal(&wrong, false).1.id, UPDATE.0);
         assert_eq!(code_of(&wrong), "credential_wrong");
         assert_eq!(
             code_of(&ApiError::new(ErrorCode::Transport, "read: timed out")),

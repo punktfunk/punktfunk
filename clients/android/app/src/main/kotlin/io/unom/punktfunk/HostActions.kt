@@ -39,8 +39,10 @@ object HostActions {
         val danger: Boolean,
         /** The host can run it right now. */
         val available: Boolean,
-        /** Why not, when it can't. Empty otherwise. */
+        /** Why not, when it can't: the host's English. Empty otherwise. */
         val unavailableReason: String,
+        /** The host message of [unavailableReason], `apierr_<code>`. Empty when it is the system's own words. */
+        val unavailableCode: String = "",
     ) {
         /**
          * This client's wording for a known id, else the host's own title, which is what lets a
@@ -50,8 +52,18 @@ object HostActions {
             "power.sleep" -> res.getString(R.string.host_power_sleep)
             "power.reboot" -> res.getString(R.string.host_power_reboot)
             "power.shutdown" -> res.getString(R.string.host_power_shutdown)
+            "host.restart" -> res.getString(R.string.host_power_restart_service)
+            "display.next" -> res.getString(R.string.hostaction_display_next)
             else -> label
         }
+
+        /** [unavailableReason] in the app's language when the host names its message. */
+        fun reason(res: Resources): String =
+            if (unavailableCode.isEmpty()) {
+                unavailableReason
+            } else {
+                Say.Host("apierr_$unavailableCode", emptyMap(), unavailableReason).words(res)
+            }
     }
 
     /**
@@ -75,6 +87,7 @@ object HostActions {
                 danger = o.optBoolean("danger"),
                 available = o.optBoolean("available"),
                 unavailableReason = o.optString("unavailable_reason"),
+                unavailableCode = if (o.isNull("unavailable_code")) "" else o.optString("unavailable_code"),
             )
         }
     }

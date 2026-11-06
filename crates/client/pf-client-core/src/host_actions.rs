@@ -25,9 +25,14 @@ pub struct ActionInfo {
     /// Host can run it now. False for no-suspend, a foreign inhibitor, missing group.
     #[serde(default)]
     pub available: bool,
-    /// Why `available` is false; shown on a disabled row, never used to hide it.
+    /// Why `available` is false; shown on a disabled row, never used to hide it. The host's
+    /// English until [`Self::worded`] puts this app's wording of [`Self::unavailable_code`] here.
     #[serde(default)]
     pub unavailable_reason: Option<String>,
+    /// The host message of `unavailable_reason`, `apierr_<code>`. Absent when the reason is the
+    /// system's own words, and from a host that predates it.
+    #[serde(default)]
+    pub unavailable_code: Option<String>,
     /// Host-power grant for this device. False hides the row ([`Self::offerable`]).
     #[serde(default)]
     pub permitted: bool,
@@ -45,8 +50,21 @@ impl ActionInfo {
             "power.sleep" => pf_l10n::host::host_power_sleep(),
             "power.reboot" => pf_l10n::host::host_power_reboot(),
             "power.shutdown" => pf_l10n::host::host_power_shutdown(),
+            "host.restart" => pf_l10n::host::host_power_restart_service(),
+            "display.next" => pf_l10n::host::hostaction_display_next(),
             _ => &self.title,
         }
+    }
+
+    /// The row with its unavailable reason in this app's language when the host named the
+    /// message; the host's English stands for a code this build does not know.
+    pub fn worded(mut self) -> Self {
+        if let Some(code) = &self.unavailable_code {
+            let english = self.unavailable_reason.as_deref().unwrap_or_default();
+            let said = crate::host_text::word_code(code, &[], english);
+            self.unavailable_reason = Some(said).filter(|s| !s.is_empty());
+        }
+        self
     }
 }
 
@@ -71,6 +89,9 @@ pub fn fetch_actions(
     let path = "/api/v1/actions";
     crate::library::get_json::<ActionList>(addr, mgmt_port, stream_port, identity, pin, path)
         .actions
+        .into_iter()
+        .map(ActionInfo::worded)
+        .collect()
 }
 
 /// `POST /api/v1/actions/{id}` with an empty body.
@@ -175,10 +196,13 @@ mod tests {
             danger: false,
             available: true,
             unavailable_reason: None,
+            unavailable_code: None,
             permitted: true,
         };
         assert_eq!(mk("power.sleep", "Sleep host").label(), "Sleep host");
         assert_eq!(mk("power.reboot", "whatever").label(), "Restart host");
+        assert_eq!(mk("host.restart", "x").label(), "Restart Punktfunk");
+        assert_eq!(mk("display.next", "x").label(), "Next monitor");
         assert_eq!(
             mk("plugin:vpn:toggle", "Toggle the VPN").label(),
             "Toggle the VPN"
@@ -194,10 +218,33 @@ mod tests {
             danger: false,
             available: false,
             unavailable_reason: Some("this machine does not support sleep".into()),
+            unavailable_code: None,
             permitted: true,
         };
         assert!(a.offerable(), "unavailable actions are shown with a reason");
         a.permitted = false;
         assert!(!a.offerable(), "an ungranted action is not offered at all");
+    }
+
+    #[test]
+    fn the_reason_is_worded_by_its_code_and_stays_english_without_one() {
+        let row = |code: Option<&str>| ActionInfo {
+            unavailable_reason: Some("The host's English.".into()),
+            unavailable_code: code.map(Into::into),
+            ..serde_json::from_str(r#"{"id":"power.sleep","available":false}"#).unwrap()
+        };
+        let reason = |a: ActionInfo| a.worded().unavailable_reason.unwrap();
+        let known = Some("host_power_not_supported_here");
+        assert_eq!(reason(row(known)), "This machine does not support it");
+        pf_l10n::with_language("en-XA", || {
+            let said = reason(row(known));
+            assert!(said.starts_with('['), "{said}");
+        });
+        assert_eq!(
+            reason(row(Some("from_a_newer_host"))),
+            "The host's English."
+        );
+        // The system's own words arrive without a code.
+        assert_eq!(reason(row(None)), "The host's English.");
     }
 }

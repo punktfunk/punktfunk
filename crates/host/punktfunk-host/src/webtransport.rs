@@ -584,15 +584,18 @@ async fn session(
                 .downcast_ref::<session::Refusal>()
                 .map_or(punktfunk_core::reject::SETUP_FAILED_CLOSE_CODE, |r| r.code);
             let detail = format!("{e:#}");
-            // A browser renders this text, so prefer the user sentence; the chain is
-            // the fallback only because there is nothing better to show yet.
-            let said = crate::native::setup_failed_sentence(&e).unwrap_or(detail.clone());
-            let mut cut = said.len().min(256);
-            while !said.is_char_boundary(cut) {
-                cut -= 1;
-            }
-            refuse(&connection, code, &said[..cut]).await;
-            connection.close(wtransport::VarInt::from_u32(code), &said.as_bytes()[..cut]);
+            // A browser renders this text: the user sentence, or none and the refusal's own
+            // message. The chain stays in the log.
+            let said = crate::native::setup_failed_sentence(&e).unwrap_or_else(|| {
+                let id = punktfunk_core::reject::RejectReason::from_close_code(code)
+                    .map(|r| r.message_id())
+                    .unwrap_or_default();
+                crate::native::Said::new(&id, "")
+            });
+            let refused = said.refused(code);
+            let reason = refused.reason.clone();
+            refuse(&connection, refused).await;
+            connection.close(wtransport::VarInt::from_u32(code), reason.as_bytes());
             tracing::warn!(%peer, code, error = %detail, "browser session ended with error");
         }
     }
@@ -606,12 +609,17 @@ const OLDER_PAGE: &str =
 /// Say why on a fresh unidirectional stream, then give the browser a moment to read it. The
 /// close that follows carries no retransmit, so the wait is what makes the message arrive. The
 /// stream carries the `Refused` frame alone.
-pub(crate) async fn refuse(connection: &wtransport::Connection, code: u32, reason: &str) {
+pub(crate) async fn refuse(
+    connection: &wtransport::Connection,
+    mut refused: punktfunk_core::quic::Refused,
+) {
     use punktfunk_core::quic::v2::msg::V2Message;
-    let refused = punktfunk_core::quic::Refused {
-        code,
-        reason: reason.to_string(),
-    };
+    let max = punktfunk_core::quic::REFUSED_REASON_MAX;
+    let mut cut = refused.reason.len().min(max);
+    while !refused.reason.is_char_boundary(cut) {
+        cut -= 1;
+    }
+    refused.reason.truncate(cut);
     say_then_wait(connection, &refused.encode_v2()).await;
 }
 
@@ -620,6 +628,7 @@ async fn refuse_older_page(connection: &wtransport::Connection, code: u32, reaso
     let refused = punktfunk_core::quic::Refused {
         code,
         reason: reason.to_string(),
+        ..Default::default()
     };
     say_then_wait(
         connection,

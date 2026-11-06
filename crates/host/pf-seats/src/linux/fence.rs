@@ -39,9 +39,7 @@ pub fn diagnostics() -> Vec<Diagnostic> {
         } else {
             DiagnosticLevel::Warning
         },
-        code: code.into(),
-        message: if ok { good } else { bad }.into(),
-        seat_id: None,
+        ..Diagnostic::info(code, if ok { good } else { bad })
     };
     vec![
         row(

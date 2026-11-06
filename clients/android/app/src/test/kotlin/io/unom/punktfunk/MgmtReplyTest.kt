@@ -15,7 +15,7 @@ class MgmtReplyTest {
         val refused = MgmtReply.Answer.of(409, """{"error":"Quit Halo first."}""")
         assertEquals(Say.Text("Quit Halo first."), refused.why)
         assertEquals(
-            InstallOutcome.Refused("Quit Halo first."),
+            InstallOutcome.Refused(Say.Text("Quit Halo first.")),
             InstallOutcome.fromReply(refused.code, refused.apiError),
         )
         assertEquals(say(R.string.error_mgmt_refused, 500), MgmtReply.Answer.of(500, "<html>").why)

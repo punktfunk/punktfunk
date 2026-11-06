@@ -43,8 +43,15 @@ pub enum SeatState {
 #[serde(default)]
 pub struct Seat {
     pub state: SeatState,
-    /// The progress line while starting, or why while unavailable.
+    /// The progress line while starting, or why while unavailable. The host's English until
+    /// [`Self::worded`] puts this app's wording of [`Self::detail_id`] here.
     pub detail: Option<String>,
+    /// The host message of `detail` (`seatline_*`), absent for the supervisor's own text.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub detail_id: Option<String>,
+    /// The values of that message's placeholders, by name.
+    #[serde(skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub detail_params: std::collections::BTreeMap<String, String>,
     /// The device playing on it while occupied.
     pub occupant: Option<String>,
     /// Its Steam has no account yet. `None` where the host can't tell.
@@ -83,7 +90,31 @@ pub struct ListedProfile {
     pub unlock: UnlockNeed,
 }
 
+impl Seat {
+    /// The seat with its detail in this app's language when the host named the message; the
+    /// host's English stands for an id this build does not know.
+    pub fn worded(mut self) -> Self {
+        if let Some(id) = &self.detail_id {
+            let params: Vec<(&str, &str)> = self
+                .detail_params
+                .iter()
+                .map(|(k, v)| (k.as_str(), v.as_str()))
+                .collect();
+            let english = self.detail.as_deref().unwrap_or_default();
+            let said = crate::host_text::word(id, &params, english);
+            self.detail = Some(said).filter(|s| !s.is_empty());
+        }
+        self
+    }
+}
+
 impl ListedProfile {
+    /// The row with its seat worded ([`Seat::worded`]).
+    pub fn worded(mut self) -> Self {
+        self.seat = self.seat.map(Seat::worded);
+        self
+    }
+
     pub fn pick(&self) -> ProfilePick {
         ProfilePick {
             id: self.id.clone(),
@@ -290,8 +321,8 @@ pub fn fetch_enumerate(
     if reply.status == 404 {
         return Ok(None);
     }
-    serde_json::from_slice(&reply.ok()?)
-        .map(Some)
+    serde_json::from_slice::<Vec<ListedProfile>>(&reply.ok()?)
+        .map(|rows| Some(rows.into_iter().map(ListedProfile::worded).collect()))
         .map_err(|e| LibraryError::Unreachable(format!("bad JSON: {e}")))
 }
 
@@ -323,7 +354,8 @@ pub fn wake(
     let https = agent(identity, pin)?;
     let api = HostApi::new(addr, mgmt_port, stream_port, identity, pin);
     let reply = api.call(&https, "POST", &format!("/api/v1/profiles/{id}/wake"), None)?;
-    serde_json::from_slice(&wake_answer(reply)?)
+    serde_json::from_slice::<ListedProfile>(&wake_answer(reply)?)
+        .map(ListedProfile::worded)
         .map_err(|e| LibraryError::Unreachable(format!("bad JSON: {e}")))
 }
 
@@ -672,6 +704,44 @@ mod tests {
         assert_eq!(rows[0].note().as_deref(), Some("In use by Ben's Apple TV"));
         assert_eq!(rows[1].seat.as_ref().unwrap().state, SeatState::Other);
         assert_eq!(initials("anna lena x"), "AL");
+    }
+
+    /// A seat line the host names is worded by its id; the supervisor's own text, and an id
+    /// from a newer host, stay the host's English.
+    #[test]
+    fn a_seat_line_is_worded_by_its_id() {
+        let seat = |id: Option<&str>| -> ListedProfile {
+            serde_json::from_value::<ListedProfile>(serde_json::json!({
+                "id": "kid", "display_name": "Kid",
+                "seat": {
+                    "state": "starting", "detail": "The host's English.", "detail_id": id,
+                    "detail_params": { "attempt": "2", "total": "3" },
+                },
+            }))
+            .unwrap()
+            .worded()
+        };
+        let line = |p: &ListedProfile| p.note().unwrap();
+        let known = seat(Some("seatline_stage_sign_in_try"));
+        assert_eq!(
+            line(&known),
+            "Signing in to the seat's Windows account (try 2 of 3)…"
+        );
+        pf_l10n::with_language("en-XA", || {
+            let again: ListedProfile = known.clone().worded();
+            assert!(line(&again).starts_with('['), "{}", line(&again));
+        });
+        assert_eq!(
+            line(&seat(Some("seatline_from_a_newer_host"))),
+            "The host's English."
+        );
+        assert_eq!(line(&seat(None)), "The host's English.");
+        assert_eq!(
+            seat_gate(&known),
+            SeatGate::Wait {
+                detail: Some("Signing in to the seat's Windows account (try 2 of 3)…".into())
+            }
+        );
     }
 
     #[cfg(desktop)]

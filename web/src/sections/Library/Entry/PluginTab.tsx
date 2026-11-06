@@ -19,7 +19,8 @@ import {
 	SchemaForm,
 } from "@/components/schema-form";
 import { Button } from "@/components/ui/button";
-import { newlyHanded } from "@/lib/handed-paths";
+import { type GrantRefusal, newlyHanded } from "@/lib/handed-paths";
+import { apiText } from "@/lib/host-messages";
 import { m } from "@/paraglide/messages";
 import { Group } from "./fields";
 import type { PluginTabSpec } from "./view";
@@ -99,7 +100,7 @@ const PluginTab: FC<{
 	const stored = loaded.tag === "ready" ? (loaded.section.value ?? {}) : {};
 	const [draft, setDraft] = useState<JsonObject | null>(stored);
 	const [saving, setSaving] = useState(false);
-	const [refused, setRefused] = useState<{ path: string; error: string }[]>([]);
+	const [refused, setRefused] = useState<GrantRefusal[]>([]);
 	// A save that hands a folder over waits for the console password.
 	const [asking, setAsking] = useState(false);
 
@@ -119,7 +120,7 @@ const PluginTab: FC<{
 	const dirty = JSON.stringify(draft) !== JSON.stringify(stored);
 	const put = async (value: JsonObject, password?: string) => {
 		const saved = await pluginSurfaceOrThrow<{
-			access?: { refused?: { path: string; error: string }[] };
+			access?: { refused?: GrantRefusal[] };
 		} | null>(sectionUrl(plugin.id, entryId), {
 			method: "PUT",
 			body: value,
@@ -195,7 +196,10 @@ const PluginTab: FC<{
 					role="alert"
 					className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive"
 				>
-					{m.plugin_form_grant_refused({ path: r.path, issue: r.error })}
+					{m.plugin_form_grant_refused({
+						path: r.path,
+						issue: apiText(r.code, r.params, r.error),
+					})}
 				</p>
 			))}
 			<div>

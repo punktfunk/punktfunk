@@ -41,11 +41,8 @@ pub(super) async fn prepare_launch(
     });
     // The title's files never arrived: stream without it, and say why.
     match prepared.declined.take() {
-        Some(sentence) => {
-            let _ = outcome.send(punktfunk_core::quic::LaunchOutcome::new(
-                punktfunk_core::quic::LaunchOutcomeKind::Refused,
-                &sentence,
-            ));
+        Some(refusal) => {
+            let _ = outcome.send(refusal);
             Ok((None, None, prepared))
         }
         None => Ok((target, command, prepared)),
@@ -79,16 +76,26 @@ async fn resolve_launch(
                 launch_id = id,
                 "client requested a title this host can't start — ignoring"
             );
-            let sentence = if pf_paths::seat::box_library_dir().is_some() {
-                "Couldn't start that title — this desktop doesn't have its emulator, launcher \
-                 or game files."
+            let (id, sentence) = if pf_paths::seat::box_library_dir().is_some() {
+                (
+                    "launch_title_not_on_desktop",
+                    "Couldn't start that title — this desktop doesn't have its emulator, \
+                     launcher or game files.",
+                )
             } else {
-                "Couldn't start that title — this host doesn't have it in its library any more."
+                (
+                    "launch_title_not_in_library",
+                    "Couldn't start that title — this host doesn't have it in its library any \
+                     more.",
+                )
             };
-            let _ = outcome.send(punktfunk_core::quic::LaunchOutcome::new(
-                punktfunk_core::quic::LaunchOutcomeKind::Refused,
-                sentence,
-            ));
+            let _ = outcome.send(
+                punktfunk_core::quic::LaunchOutcome::new(
+                    punktfunk_core::quic::LaunchOutcomeKind::Refused,
+                    sentence,
+                )
+                .worded(id, &[]),
+            );
         }
     }
     Ok(found)

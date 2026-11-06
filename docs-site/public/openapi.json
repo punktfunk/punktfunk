@@ -9310,6 +9310,13 @@
             "type": "string",
             "description": "Clients localize known ids and fall back to this for unknown ones."
           },
+          "unavailable_code": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The id of `unavailable_reason`: the host message `apierr_<code>`. Absent when the reason\nis the system's own words."
+          },
           "unavailable_reason": {
             "type": [
               "string",
@@ -9568,13 +9575,34 @@
       },
       "ApiError": {
         "type": "object",
-        "description": "Envelope for every non-2xx body.",
+        "description": "Envelope for every non-2xx body.\n\nA sentence written for a person carries `code`: an app words it as the host message\n`apierr_<code>` with `params`, and shows `error` for a code it does not know. Without\n`code`, `error` is developer text and an app words the failure itself.",
         "required": [
           "error"
         ],
         "properties": {
+          "code": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The sentence's id: the message `apierr_<code>` in the host's messages."
+          },
           "error": {
-            "type": "string"
+            "type": "string",
+            "description": "The sentence in English, or developer text when `code` is absent."
+          },
+          "params": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "description": "The values of that message's placeholders, by name.",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
           }
         }
       },
@@ -13135,6 +13163,13 @@
             "type": "string",
             "description": "What breaks. Empty only on `ok`/`inapplicable`."
           },
+          "impact_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The host message `impact` is the English of."
+          },
           "params": {
             "type": "object",
             "description": "Interpolation for localized strings (`{user}`, `{group}`). Only the host can see these.",
@@ -13154,6 +13189,13 @@
                 "$ref": "#/components/schemas/Remedy"
               }
             ]
+          },
+          "remedy_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The host message the remedy's `text` is the English of."
           },
           "severity": {
             "$ref": "#/components/schemas/Severity",
@@ -13177,6 +13219,13 @@
           "summary": {
             "type": "string",
             "description": "English fallback. Console localizes when it knows `id`."
+          },
+          "summary_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The host message `summary` is the English of, worded with `params`."
           }
         }
       },
@@ -13287,6 +13336,26 @@
               "null"
             ],
             "description": "Why turning the door on would be refused here, as the operator's next move: the files a\nchannel installs it with are missing, or the account isn't in `punktfunk-update`. `null`\nwhen it would start, on the door itself and on a seat host, and for every lane but the\nadmin one. The answer is up to 30 s old; a switch request drops it."
+          },
+          "door_unavailable_code": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The id of `door_unavailable`: the host message `apierr_<code>`."
+          },
+          "door_unavailable_params": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "description": "The values of that message's placeholders, by name.",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
           },
           "elevated_commands": {
             "type": [
@@ -16255,12 +16324,29 @@
             "description": "A stable id such as `rds_role`.",
             "example": "rds_role"
           },
+          "id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The host message `message` is the English of, worded with `params`."
+          },
           "level": {
             "$ref": "#/components/schemas/CheckLevel"
           },
           "message": {
             "type": "string",
             "description": "One plain sentence for the operator."
+          },
+          "params": {
+            "type": "object",
+            "description": "The values of that message's placeholders, by name.",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
           },
           "seat_id": {
             "type": [
@@ -16308,6 +16394,23 @@
               "null"
             ],
             "description": "The progress line while `starting`, or why while `unavailable`."
+          },
+          "detail_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The host message `detail` is the English of, worded with `detail_params`."
+          },
+          "detail_params": {
+            "type": "object",
+            "description": "The values of that message's placeholders, by name.",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
           },
           "kind": {
             "$ref": "#/components/schemas/SeatKind",
@@ -17898,6 +18001,26 @@
               "string",
               "null"
             ]
+          },
+          "error_code": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The failure in words, as the host message `hostupdate_<error_code>` with `from`, `to`\nand `error_params`; `error` keeps the detail."
+          },
+          "error_params": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "description": "The values of that message's other placeholders, by name.",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
           },
           "finished_unix": {
             "type": "integer",

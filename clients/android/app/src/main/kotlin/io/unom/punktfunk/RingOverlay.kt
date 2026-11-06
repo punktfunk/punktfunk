@@ -409,9 +409,9 @@ internal fun spec(slot: SlotId, cfg: OverlayConfig, a: RingActions, ctx: Context
             else -> Icons.Filled.PowerSettingsNew
         }
         SlotSpec(
-            "host:${slot.actionId}", act?.label ?: slot.actionId, icon,
+            "host:${slot.actionId}", act?.text(ctx.resources) ?: slot.actionId, icon,
             enabled = act?.available == true,
-            reason = act?.unavailableReason?.ifEmpty { null } ?: ctx.getString(R.string.ring_host_not_offered),
+            reason = act?.reason(ctx.resources)?.ifEmpty { null } ?: ctx.getString(R.string.ring_host_not_offered),
             armed = act?.danger ?: true,
         )
     }
@@ -1019,9 +1019,9 @@ private fun sheetRows(
     actions.hostActions().forEachIndexed { i, act ->
         val id = "host:${act.id}"
         rows += SheetRowSpec(
-            if (i == 0) ctx.getString(R.string.ring_group_host) else null, act.label,
+            if (i == 0) ctx.getString(R.string.ring_group_host) else null, act.text(ctx.resources),
             when {
-                !act.available -> act.unavailableReason
+                !act.available -> act.reason(ctx.resources)
                 state.armed == id -> pressAgain
                 else -> ""
             },

@@ -40,6 +40,11 @@ struct HelperResult {
     staged: bool,
     #[serde(default)]
     error: Option<String>,
+    /// `hostupdate_<error_code>` in the host's messages; a helper from before it is absent.
+    #[serde(default)]
+    error_code: Option<String>,
+    #[serde(default)]
+    error_params: std::collections::BTreeMap<String, String>,
     #[serde(default)]
     finished_unix: u64,
 }
@@ -259,7 +264,7 @@ pub(super) fn run_apply(
     target_version: &str,
     serial: u64,
     stage: &dyn Fn(&'static str),
-) -> Result<(), (&'static str, String)> {
+) -> Result<(), jobs::ApplyFailed> {
     let started_unix = crate::clock::unix_secs_u64();
 
     // No password prompt on the box's own desktop: a refusal answers at once.
@@ -283,10 +288,11 @@ pub(super) fn run_apply(
                          `journalctl -u punktfunk-update.service`",
                         HELPER_TIMEOUT.as_secs() / 60
                     ),
-                ));
+                )
+                    .into());
             }
             Ok(None) => std::thread::sleep(Duration::from_millis(500)),
-            Err(e) => return Err(("applying", format!("wait for systemctl: {e}"))),
+            Err(e) => return Err(("applying", format!("wait for systemctl: {e}")).into()),
         }
     };
 
@@ -300,21 +306,27 @@ pub(super) fn run_apply(
         let denial = said.contains("interactive authentication")
             || said.contains("access denied")
             || said.contains("permission denied");
+        if denial {
+            return Err(jobs::ApplyFailed {
+                code: Some("helper_not_authorized".into()),
+                ..jobs::ApplyFailed::from((
+                    "applying",
+                    format!(
+                        "Not authorized to start the update helper — enable web-triggered \
+                         updates first: {}",
+                        super::OPT_IN_HINT
+                    ),
+                ))
+            });
+        }
         return Err((
             "applying",
-            if denial {
-                format!(
-                    "not authorized to start the update helper — enable web-triggered \
-                     updates first: {}",
-                    super::OPT_IN_HINT
-                )
-            } else {
-                format!(
-                    "update helper failed ({status}) — see \
-                     `journalctl -u punktfunk-update.service`. {err}"
-                )
-            },
-        ));
+            format!(
+                "update helper failed ({status}) — see \
+                 `journalctl -u punktfunk-update.service`. {err}"
+            ),
+        )
+            .into());
     }
 
     // Unit exit 0 is not enough: a leftover record from an old run must not count.
@@ -333,15 +345,18 @@ pub(super) fn run_apply(
                  ({} < {started_unix}) — it never wrote one",
                 result.finished_unix
             ),
-        ));
+        )
+            .into());
     }
     if !result.ok {
-        return Err((
-            "applying",
-            result
+        return Err(jobs::ApplyFailed {
+            stage: "applying",
+            error: result
                 .error
                 .unwrap_or_else(|| "the update helper reported failure without detail".into()),
-        ));
+            code: result.error_code,
+            params: result.error_params,
+        });
     }
 
     let current = crate::version::get();
@@ -358,6 +373,7 @@ pub(super) fn run_apply(
                 error: None,
                 log_path: None,
                 staged: true,
+                ..Default::default()
             },
         );
         return Ok(());
@@ -375,6 +391,7 @@ pub(super) fn run_apply(
                 error: None,
                 log_path: None,
                 staged: false,
+                ..Default::default()
             },
         );
         return Ok(());

@@ -1832,14 +1832,29 @@ impl WindowNotices {
         }
         if let Some(outcome) = launch {
             if self.launch_told.as_ref() != Some(&outcome) {
-                if let Some(n) = outcome.notice() {
-                    notices.push(n.to_string());
-                }
+                notices.extend(launch_notice(&outcome));
                 self.launch_told = Some(outcome);
             }
         }
         notices
     }
+}
+
+/// The line a launch verdict owes the player: the host's message in this app's language when it
+/// names one this build has, else its English. `None` when the player got their game.
+fn launch_notice(outcome: &punktfunk_core::quic::LaunchOutcome) -> Option<String> {
+    if !outcome.kind.needs_telling()
+        || (outcome.message.is_empty() && outcome.message_id.is_empty())
+    {
+        return None;
+    }
+    let params: Vec<(&str, &str)> = outcome
+        .message_params
+        .iter()
+        .map(|(name, value)| (name.as_str(), value.as_str()))
+        .collect();
+    let said = crate::host_text::word(&outcome.message_id, &params, &outcome.message);
+    (!said.is_empty()).then_some(said)
 }
 
 /// The terminal event when `e` says the negotiated codec ran out of decode rungs;
@@ -2425,6 +2440,32 @@ mod tests {
             w.tick(0, 0, 0, mode_1080p(), Some(refused)),
             ["Nothing to run."]
         );
+    }
+
+    /// A verdict that names its message reads in the app's language; one from a newer host, or
+    /// from an old one, reads as the host's English.
+    #[test]
+    fn a_launch_verdict_is_worded_by_its_message() {
+        use punktfunk_core::quic::{LaunchOutcome, LaunchOutcomeKind};
+        let failed = |id: &str| {
+            LaunchOutcome::new(LaunchOutcomeKind::Failed, "The host's English.")
+                .worded(id, &[("title", "Quail"), ("seconds", "4")])
+        };
+        let known = failed("launch_closed_at_once");
+        assert_eq!(
+            launch_notice(&known).as_deref(),
+            Some("Couldn't start Quail \u{2014} it closed again after 4 s.")
+        );
+        pf_l10n::with_language("en-XA", || {
+            let said = launch_notice(&known).unwrap();
+            assert!(said.starts_with('[') && said.contains("Quail"), "{said}");
+        });
+        assert_eq!(
+            launch_notice(&failed("launch_from_a_newer_host")).as_deref(),
+            Some("The host's English.")
+        );
+        let spawned = LaunchOutcome::new(LaunchOutcomeKind::Spawned, "Started.");
+        assert_eq!(launch_notice(&spawned), None);
     }
 
     /// HEVC reconnect as the terminal event both refusal sites produce. Pins that

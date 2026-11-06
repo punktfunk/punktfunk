@@ -94,9 +94,19 @@ pub(crate) struct RemoveEmulatorRequest {
     pub purge: bool,
 }
 
-/// A hermir failure as an API error, by what went wrong rather than where.
-pub(crate) fn hermir_err(e: &hermir::Error, what: &str) -> Response {
-    let status = match e {
+/// A hermir failure as an API error, by what went wrong rather than where. `what` is the sentence
+/// for a person, the English of the host message `apierr_<code>`; the error goes to the log.
+pub(crate) fn hermir_err(e: &hermir::Error, (code, what): (&str, &str)) -> Response {
+    api_error_logged(hermir_status(e), code, what, e)
+}
+
+/// [`hermir_err`] for a sentence with no host message: the error rides along.
+pub(crate) fn hermir_plain(e: &hermir::Error, what: &str) -> Response {
+    api_error(hermir_status(e), &format!("{what} — {e}"))
+}
+
+fn hermir_status(e: &hermir::Error) -> StatusCode {
+    match e {
         hermir::Error::NotInCatalog(_) => StatusCode::NOT_FOUND,
         hermir::Error::Policy { .. } | hermir::Error::UnsupportedOs { .. } => {
             StatusCode::BAD_REQUEST
@@ -104,8 +114,7 @@ pub(crate) fn hermir_err(e: &hermir::Error, what: &str) -> Response {
         hermir::Error::Network { .. } | hermir::Error::Verify { .. } => StatusCode::BAD_GATEWAY,
         hermir::Error::Locked(_) => StatusCode::CONFLICT,
         _ => StatusCode::INTERNAL_SERVER_ERROR,
-    };
-    api_error(status, &format!("{what} — {e}"))
+    }
 }
 
 fn statuses() -> hermir::Result<Vec<EmulatorStatus>> {
@@ -166,9 +175,12 @@ fn statuses() -> hermir::Result<Vec<EmulatorStatus>> {
     )
 )]
 pub(crate) async fn get_emulators() -> Response {
-    match blocking("emulator manager", statuses).await {
+    match blocking("emulator_manager", statuses).await {
         Ok(Ok(rows)) => Json(rows).into_response(),
-        Ok(Err(e)) => hermir_err(&e, "The emulators couldn't be listed"),
+        Ok(Err(e)) => hermir_err(
+            &e,
+            ("emulators_not_listed", "The emulators couldn't be listed"),
+        ),
         Err(r) => r,
     }
 }
@@ -196,7 +208,7 @@ pub(crate) async fn get_emulators() -> Response {
 )]
 pub(crate) async fn install_emulator(Path(id): Path<String>) -> Response {
     let target = id.clone();
-    match blocking("emulator manager", move || {
+    match blocking("emulator_manager", move || {
         crate::emulators::install(&target)
     })
     .await
@@ -212,7 +224,10 @@ pub(crate) async fn install_emulator(Path(id): Path<String>) -> Response {
             })
             .into_response()
         }
-        Ok(Err(e)) => hermir_err(&e, "The emulator didn't install"),
+        Ok(Err(e)) => hermir_err(
+            &e,
+            ("emulator_not_installed", "The emulator didn't install"),
+        ),
         Err(r) => r,
     }
 }
@@ -267,7 +282,7 @@ pub(crate) async fn prepare_emulator(
     let platform = req.platform;
     // No session here: pads not up yet are taken as the default Xbox 360.
     let pad = punktfunk_core::config::GamepadPref::Xbox360;
-    let prepared = blocking("emulator manager", move || {
+    let prepared = blocking("emulator_manager", move || {
         crate::emulators::prepare(&id, platform.as_deref(), dir.as_deref(), pad, None)
     })
     .await;
@@ -291,7 +306,10 @@ pub(crate) async fn prepare_emulator(
                 .collect::<Vec<_>>(),
         )
         .into_response(),
-        Ok(Err(e)) => hermir_err(&e, "The emulator wasn't prepared"),
+        Ok(Err(e)) => hermir_err(
+            &e,
+            ("emulator_not_prepared", "The emulator wasn't prepared"),
+        ),
         Err(r) => r,
     }
 }
@@ -418,7 +436,7 @@ pub(crate) async fn remove_emulator(
     ApiJson(req): ApiJson<RemoveEmulatorRequest>,
 ) -> Response {
     let target = id.clone();
-    match blocking("emulator manager", move || {
+    match blocking("emulator_manager", move || {
         crate::emulators::remove(&target, req.purge)
     })
     .await
@@ -427,7 +445,7 @@ pub(crate) async fn remove_emulator(
             emit(EventKind::EmulatorsChanged { id });
             StatusCode::NO_CONTENT.into_response()
         }
-        Ok(Err(e)) => hermir_err(&e, "The emulator wasn't removed"),
+        Ok(Err(e)) => hermir_err(&e, ("emulator_not_removed", "The emulator wasn't removed")),
         Err(r) => r,
     }
 }
@@ -454,9 +472,15 @@ pub(crate) struct EmulatorRegistry(hermir::Registry);
     )
 )]
 pub(crate) async fn get_emulator_registry() -> Response {
-    match blocking("emulator manager", crate::emulators::registry).await {
+    match blocking("emulator_manager", crate::emulators::registry).await {
         Ok(Ok(r)) => Json(EmulatorRegistry(r)).into_response(),
-        Ok(Err(e)) => hermir_err(&e, "The registry couldn't be read"),
+        Ok(Err(e)) => hermir_err(
+            &e,
+            (
+                "emulator_registry_not_read",
+                "The registry couldn't be read",
+            ),
+        ),
         Err(r) => r,
     }
 }
@@ -580,14 +604,20 @@ pub(crate) async fn get_emulator_firmware(
         Ok(seat) => seat,
         Err(r) => return r,
     };
-    let checked = blocking("emulator manager", move || match &seat {
+    let checked = blocking("emulator_manager", move || match &seat {
         None => Some(crate::emulators::firmware_status(None, &id, &q.platform)),
         Some(seat) => crate::emulators::exchange::firmware_status(seat, &id, &q.platform),
     })
     .await;
     match checked {
         Ok(Some(Ok(status))) => Json(status.map(firmware_view)).into_response(),
-        Ok(Some(Err(e))) => hermir_err(&e, "The firmware couldn't be checked"),
+        Ok(Some(Err(e))) => hermir_err(
+            &e,
+            (
+                "emulator_firmware_not_checked",
+                "The firmware couldn't be checked",
+            ),
+        ),
         Ok(None) => api_error(
             StatusCode::NOT_FOUND,
             "That seat hasn't checked this platform's firmware yet",
@@ -828,7 +858,7 @@ pub(crate) async fn get_emulator_saves(
         Ok(seat) => seat,
         Err(r) => return r,
     };
-    match blocking("emulator manager", move || match &seat {
+    match blocking("emulator_manager", move || match &seat {
         None => crate::emulators::units(None, &id, &q.platform, game.as_deref()),
         Some(seat) => crate::emulators::exchange::units(seat, &id, &q.platform, game.as_deref()),
     })
@@ -849,7 +879,10 @@ pub(crate) async fn get_emulator_saves(
                 .collect::<Vec<_>>(),
         )
         .into_response(),
-        Ok(Err(e)) => hermir_err(&e, "The saves couldn't be listed"),
+        Ok(Err(e)) => hermir_err(
+            &e,
+            ("emulator_saves_not_listed", "The saves couldn't be listed"),
+        ),
         Err(r) => r,
     }
 }
@@ -914,7 +947,7 @@ pub(crate) async fn export_emulator_saves(
     let units: Vec<(hermir::SaveKind, String)> =
         req.units.into_iter().map(|u| (u.kind, u.name)).collect();
     let dir = req.dir;
-    let exported = blocking("emulator manager", move || {
+    let exported = blocking("emulator_manager", move || {
         let (platform, game) = (&req.platform, game.as_deref());
         match &seat {
             None => crate::emulators::export_units(None, &id, platform, game, &units, &out),
@@ -946,7 +979,13 @@ pub(crate) async fn export_emulator_saves(
                 .collect::<Vec<_>>(),
         )
         .into_response(),
-        Ok(Err(e)) => hermir_err(&e, "The saves weren't copied out"),
+        Ok(Err(e)) => hermir_err(
+            &e,
+            (
+                "emulator_saves_not_exported",
+                "The saves weren't copied out",
+            ),
+        ),
         Err(r) => r,
     }
 }
@@ -1019,7 +1058,7 @@ pub(crate) async fn import_emulator_saves(
     }
     let others = req.others;
     let platform = req.platform;
-    let imported = blocking("emulator manager", move || {
+    let imported = blocking("emulator_manager", move || {
         rows.into_iter()
             .map(|(name, file, kinds)| {
                 let game = game.as_deref();
@@ -1044,7 +1083,10 @@ pub(crate) async fn import_emulator_saves(
     .await;
     match imported {
         Ok(Ok(steps)) => Json(steps).into_response(),
-        Ok(Err(e)) => hermir_err(&e, "The saves weren't put back"),
+        Ok(Err(e)) => hermir_err(
+            &e,
+            ("emulator_saves_not_imported", "The saves weren't put back"),
+        ),
         Err(r) => r,
     }
 }
@@ -1100,7 +1142,7 @@ pub(crate) async fn install_emulator_content(
             Err((status, why)) => return api_error(status, why),
         }
     }
-    let installed = blocking("emulator manager", move || {
+    let installed = blocking("emulator_manager", move || {
         crate::emulators::install_content(&id, &req.platform, &req.kind, &files)
     })
     .await;
@@ -1118,7 +1160,13 @@ pub(crate) async fn install_emulator_content(
                 .collect::<Vec<_>>(),
         )
         .into_response(),
-        Ok(Err(e)) => hermir_err(&e, "The add-ons weren't installed"),
+        Ok(Err(e)) => hermir_err(
+            &e,
+            (
+                "emulator_addons_not_installed",
+                "The add-ons weren't installed",
+            ),
+        ),
         Err(r) => r,
     }
 }
@@ -1150,14 +1198,15 @@ pub(crate) async fn adopt_emulator(
     ApiJson(req): ApiJson<AdoptRequest>,
 ) -> Response {
     if pf_paths::seat::own_account() && !req.forget {
-        return api_error(
+        return api_error_coded(
             StatusCode::FORBIDDEN,
+            "emulator_adopt_own_account",
             "An emulator copy can't be added by hand on a profile that uses an existing account, \
              because it would run as that person.",
         );
     }
     let target = id.clone();
-    let adopted = blocking("emulator manager", move || {
+    let adopted = blocking("emulator_manager", move || {
         crate::emulators::adopt(&target, std::path::Path::new(&req.exe), !req.forget)
     })
     .await;
@@ -1173,7 +1222,7 @@ pub(crate) async fn adopt_emulator(
             }))
             .into_response()
         }
-        Ok(Err(e)) => hermir_err(&e, "The copy wasn't adopted"),
+        Ok(Err(e)) => hermir_err(&e, ("emulator_copy_not_adopted", "The copy wasn't adopted")),
         Err(r) => r,
     }
 }

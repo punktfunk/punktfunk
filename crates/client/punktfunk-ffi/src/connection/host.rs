@@ -168,6 +168,50 @@ pub unsafe extern "C" fn punktfunk_connection_launch_notice(
     })
 }
 
+/// [`punktfunk_connection_launch_notice`] by message: the host message the sentence is the
+/// English of, then the sentence, then each placeholder as `name<TAB>value`, one per line,
+/// NUL-terminated, into the caller's buffer; empty when the launch needs no words. The id is
+/// empty from a host that names none. A 1200-byte buffer is ample: the wire caps the id at 64
+/// bytes, the sentence at 200 and each of at most 3 placeholders at 64 + 200.
+///
+/// # Safety
+/// `c` is a valid connection handle; `out` is writable for `cap` bytes.
+#[cfg(feature = "quic")]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn punktfunk_connection_launch_message(
+    c: *const PunktfunkConnection,
+    out: *mut c_char,
+    cap: usize,
+) -> PunktfunkStatus {
+    with_conn!(c => {
+        if out.is_null() || cap == 0 {
+            return PunktfunkStatus::NullPointer;
+        }
+        let outcome = c.inner.launch_outcome();
+        let said = match outcome.as_ref().filter(|o| o.notice().is_some()) {
+            Some(o) => launch_message_lines(o),
+            None => String::new(),
+        };
+        // SAFETY: `out` is writable for `cap` bytes, per this function's contract.
+        if !unsafe { write_cstr(out, cap, &said) } {
+            return PunktfunkStatus::InvalidArg;
+        }
+        PunktfunkStatus::Ok
+    })
+}
+
+/// The lines [`punktfunk_connection_launch_message`] writes. A field is the host's text, so
+/// a separator inside one reads as a space.
+#[cfg(feature = "quic")]
+fn launch_message_lines(o: &punktfunk_core::quic::LaunchOutcome) -> String {
+    let flat = |s: &str| s.replace(['\n', '\t'], " ");
+    let mut said = format!("{}\n{}", flat(&o.message_id), flat(&o.message));
+    for (name, value) in &o.message_params {
+        said.push_str(&format!("\n{}\t{}", flat(name), flat(value)));
+    }
+    said
+}
+
 /// Mid-session typed rejection (`PUNKTFUNK_STATUS_REJECTED_*`); `0` = none.
 /// Ask after `Closed`, before free. Connect-time rejections come from connect.
 ///
@@ -190,4 +234,28 @@ pub unsafe extern "C" fn punktfunk_connection_end_reject(
         unsafe { put(status, value) };
         PunktfunkStatus::Ok
     })
+}
+
+#[cfg(all(test, feature = "quic"))]
+mod tests {
+    use super::launch_message_lines;
+    use punktfunk_core::quic::{LaunchOutcome, LaunchOutcomeKind};
+
+    #[test]
+    fn a_launch_verdict_is_its_message_then_its_placeholders() {
+        let said = LaunchOutcome::new(LaunchOutcomeKind::Failed, "Quail closed at once.").worded(
+            "launch_closed_at_once",
+            &[("title", "Quail"), ("seconds", "4")],
+        );
+        assert_eq!(
+            launch_message_lines(&said),
+            "launch_closed_at_once\nQuail closed at once.\ntitle\tQuail\nseconds\t4"
+        );
+        let bare = LaunchOutcome::new(LaunchOutcomeKind::Refused, "Nothing to run.");
+        assert_eq!(launch_message_lines(&bare), "\nNothing to run.");
+        // A separator in the host's text cannot start another field.
+        let mut hostile = said;
+        hostile.message_params[0].1 = "a\nb\tc".into();
+        assert!(launch_message_lines(&hostile).contains("title\ta b c"));
+    }
 }

@@ -15,6 +15,7 @@ use crate::secret::Secret;
 use crate::service::SeatService;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::io::{Read, Write};
 use zeroize::Zeroizing;
 
@@ -320,6 +321,11 @@ impl Response {
 pub struct ApiError {
     pub code: ErrorCode,
     pub message: String,
+    /// A backend refusal's [`BackendError::said`](crate::BackendError::said).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub said: Option<String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub params: BTreeMap<String, String>,
 }
 
 impl ApiError {
@@ -327,7 +333,15 @@ impl ApiError {
         Self {
             code,
             message: message.into(),
+            said: None,
+            params: BTreeMap::new(),
         }
+    }
+
+    /// Marks `message` as the English of the host message `apierr_<code>`.
+    pub fn said(mut self, code: &str) -> Self {
+        self.said = Some(code.to_string());
+        self
     }
 }
 
@@ -370,6 +384,11 @@ pub struct Diagnostic {
     pub message: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub seat_id: Option<SeatId>,
+    /// The host message `message` is the English of, worded with `params`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub params: BTreeMap<String, String>,
 }
 
 impl Diagnostic {
@@ -379,6 +398,8 @@ impl Diagnostic {
             code: code.into(),
             message: message.into(),
             seat_id: None,
+            id: None,
+            params: BTreeMap::new(),
         }
     }
 
@@ -392,10 +413,20 @@ impl Diagnostic {
     pub fn error(code: impl Into<String>, message: impl Into<String>) -> Self {
         Self {
             level: DiagnosticLevel::Error,
-            code: code.into(),
-            message: message.into(),
-            seat_id: None,
+            ..Self::info(code, message)
         }
+    }
+
+    /// Names the host message `message` is the English of.
+    pub fn worded(mut self, id: &str) -> Self {
+        self.id = Some(id.to_string());
+        self
+    }
+
+    /// Fills the placeholder `name` of that message.
+    pub fn param(mut self, name: &str, value: impl ToString) -> Self {
+        self.params.insert(name.to_string(), value.to_string());
+        self
     }
 }
 

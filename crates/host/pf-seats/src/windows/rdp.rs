@@ -24,7 +24,9 @@ pub(super) fn require_live(host_path: &Path, pin: [u8; 32]) -> WinResult<()> {
 
 fn require_same(live: Option<[u8; 32]>, pin: [u8; 32]) -> WinResult<()> {
     match live {
-        Some(live) if live != pin => Err(backend_error("rdp_pin_changed", PIN_CHANGED)),
+        Some(live) if live != pin => {
+            Err(backend_error("rdp_pin_changed", PIN_CHANGED).said("rdp_pin_changed"))
+        }
         _ => Ok(()),
     }
 }

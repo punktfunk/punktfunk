@@ -520,7 +520,11 @@ public struct HostAction: Codable, Hashable, Sendable, Identifiable {
     /// Whether the host can run it right now (a machine that cannot suspend, a foreign inhibitor).
     public var available: Bool
     /// Why not, when it can't — shown rather than hidden, so "greyed out" always has a reason.
+    /// When the host names the message (`unavailableCode`) this is the app's wording of it.
     public var unavailableReason: String?
+    /// The host message of `unavailableReason`, `apierr_<code>`. Absent when the reason is the
+    /// system's own words, and from a host that predates it.
+    public var unavailableCode: String?
     /// Whether THIS device's access covers it (the host's Host-power grant). The client only ever
     /// keeps the permitted ones.
     public var permitted: Bool
@@ -535,12 +539,29 @@ public struct HostAction: Codable, Hashable, Sendable, Identifiable {
         self.danger = danger
         self.available = available
         self.unavailableReason = unavailableReason
+        self.unavailableCode = nil
         self.permitted = permitted
     }
 
     private enum CodingKeys: String, CodingKey {
         case id, title, group, danger, available, permitted
         case unavailableReason = "unavailable_reason"
+        case unavailableCode = "unavailable_code"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        title = try c.decode(String.self, forKey: .title)
+        group = try c.decode(String.self, forKey: .group)
+        danger = try c.decode(Bool.self, forKey: .danger)
+        available = try c.decode(Bool.self, forKey: .available)
+        permitted = try c.decode(Bool.self, forKey: .permitted)
+        unavailableCode = try c.decodeIfPresent(String.self, forKey: .unavailableCode)
+        let english = try c.decodeIfPresent(String.self, forKey: .unavailableReason)
+        // The host's English stands for a code this build does not know.
+        let said = unavailableCode.map { HostText.word(code: $0, english: english ?? "") }
+        unavailableReason = said.flatMap { $0.isEmpty ? nil : $0 } ?? english
     }
 
     /// This client's wording for a known id, else the host's own title — so a familiar action is
@@ -550,6 +571,8 @@ public struct HostAction: Codable, Hashable, Sendable, Identifiable {
         case "power.sleep": return String(localized: L10n.hostPowerSleep)
         case "power.reboot": return String(localized: L10n.hostPowerReboot)
         case "power.shutdown": return String(localized: L10n.hostPowerShutdown)
+        case "host.restart": return String(localized: L10n.hostPowerRestartService)
+        case "display.next": return String(localized: L10n.hostactionDisplayNext)
         default: return title
         }
     }
@@ -843,10 +866,10 @@ public enum LibraryClient {
         throw LibraryError.http(response.status)
     }
 
-    /// The host's own sentence from its `ApiError` envelope (`{"error": "..."}`), if it sent one.
+    /// The host's sentence from its `ApiError` envelope, if it sent one: its message in the
+    /// app's language when the envelope names one this build has, else the host's English.
     static func hostReason(_ body: Data) -> String? {
-        let json = try? JSONSerialization.jsonObject(with: body) as? [String: Any]
-        return (json?["error"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+        HostText.apiError(body)
     }
 
     /// One request against `target`: over the stream port when it is known, which needs no TCP

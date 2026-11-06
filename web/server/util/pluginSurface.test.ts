@@ -17,6 +17,8 @@ const SCHEMA = {
 /** What each fake saw: the plugin's saves and the host's access calls. */
 const saves: unknown[] = [];
 const access: { route: string; body: unknown }[] = [];
+/** The refusal the host answers a `decide` with, when a test sets one. */
+let refusal: Record<string, unknown> | null = null;
 
 const plugin = Bun.serve({
 	port: 0,
@@ -37,6 +39,8 @@ const host = Bun.serve({
 			return Response.json({ port: plugin.port, secret: "s" });
 		const route = pathname.split("/").pop() ?? "";
 		access.push({ route, body: JSON.parse(await req.text()) });
+		if (route === "decide" && refusal)
+			return Response.json(refusal, { status: 400 });
 		return Response.json({});
 	},
 });
@@ -68,6 +72,7 @@ beforeEach(async () => {
 	bustCredential("demo");
 });
 afterEach(() => {
+	refusal = null;
 	saves.length = 0;
 	access.length = 0;
 	delete process.env.PUNKTFUNK_MGMT_URL;
@@ -108,4 +113,23 @@ test("with the password it saves and grants the new folder", async () => {
 		write: false,
 		form: "config",
 	});
+});
+
+test("a refused grant relays the host's code and params with its English", async () => {
+	refusal = {
+		error: "Couldn't record the decision",
+		code: "plugin_access_decision_not_recorded",
+		params: { reason: "disk" },
+	};
+	const res = await save("/api/plugin-config/demo", "/games/new", "typed");
+	expect(res.status).toBe(200);
+	const body = (await res.json()) as { access: { refused: unknown[] } };
+	expect(body.access.refused).toEqual([
+		{
+			path: "/games/new",
+			error: "Couldn't record the decision",
+			code: "plugin_access_decision_not_recorded",
+			params: { reason: "disk" },
+		},
+	]);
 });

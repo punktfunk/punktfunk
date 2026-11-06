@@ -299,8 +299,9 @@ fn refused_on_seat() -> Option<Response> {
     crate::vdisplay::policy::prefs()
         .follows_contract()
         .then(|| {
-            api_error(
+            api_error_coded(
                 StatusCode::CONFLICT,
+                "seat_display_read_only",
                 "A seat's display can't be changed here. Change display settings on the box.",
             )
         })
@@ -337,9 +338,11 @@ fn write(body: serde_json::Map<String, serde_json::Value>) -> Option<Response> {
         ));
     }
     if let Err(e) = stored {
-        return Some(api_error(
+        return Some(api_error_logged(
             StatusCode::INTERNAL_SERVER_ERROR,
-            &format!("Couldn't save the display policy — {e:#}"),
+            "display_policy_not_saved",
+            "Couldn't save the display policy",
+            &format!("{e:#}"),
         ));
     }
     #[cfg(target_os = "linux")]
@@ -450,9 +453,11 @@ pub(crate) async fn set_display_client(
         true
     });
     if let Err(e) = saved {
-        return api_error(
+        return api_error_logged(
             StatusCode::INTERNAL_SERVER_ERROR,
-            &format!("Couldn't save the display settings for this device — {e:#}"),
+            "device_display_not_saved",
+            "Couldn't save the display settings for this device",
+            &format!("{e:#}"),
         );
     }
     tracing::info!(fingerprint = %key, "management API: per-device display overlay updated");
@@ -484,9 +489,11 @@ pub(crate) async fn delete_display_client(Path(fingerprint): Path<String>) -> Re
         Ok(false) => return Json(display_settings_state()).into_response(),
         Ok(true) => {}
         Err(e) => {
-            return api_error(
+            return api_error_logged(
                 StatusCode::INTERNAL_SERVER_ERROR,
-                &format!("Couldn't clear the display settings for this device — {e:#}"),
+                "device_display_not_cleared",
+                "Couldn't clear the display settings for this device",
+                &format!("{e:#}"),
             );
         }
     }
@@ -606,7 +613,7 @@ pub(crate) async fn get_display_monitors() -> Result<Json<MonitorsResponse>, Res
         .flatten();
     // Shells out / D-Bus / Wayland, and on Windows walks CCD (can serialize on the display-config
     // lock). Off the async worker.
-    let (compositor, listed) = blocking("monitor list", || {
+    let (compositor, listed) = blocking("monitor_list", || {
         // No compositor to detect. Label the CCD walk as `windows` instead of Linux XDG advice.
         #[cfg(windows)]
         {
@@ -813,9 +820,11 @@ pub(crate) async fn set_display_layout(ApiJson(req): ApiJson<DisplayLayoutReques
         true
     });
     if let Err(e) = saved {
-        return api_error(
+        return api_error_logged(
             StatusCode::INTERNAL_SERVER_ERROR,
-            &format!("Couldn't save the display layout — {e:#}"),
+            "display_layout_not_saved",
+            "Couldn't save the display layout",
+            &format!("{e:#}"),
         );
     }
     tracing::info!(
@@ -867,9 +876,11 @@ pub(crate) async fn create_custom_preset(
     }
     match crate::vdisplay::policy::add_custom_preset(input) {
         Ok(preset) => (StatusCode::CREATED, Json(preset)).into_response(),
-        Err(e) => api_error(
+        Err(e) => api_error_logged(
             StatusCode::INTERNAL_SERVER_ERROR,
-            &format!("Couldn't save the preset — {e}"),
+            "display_preset_not_saved",
+            "Couldn't save the preset",
+            &e,
         ),
     }
 }
@@ -900,9 +911,11 @@ pub(crate) async fn update_custom_preset(
     match crate::vdisplay::policy::update_custom_preset(&id, input) {
         Ok(Some(preset)) => Json(preset).into_response(),
         Ok(None) => api_error(StatusCode::NOT_FOUND, "no custom preset with that id"),
-        Err(e) => api_error(
+        Err(e) => api_error_logged(
             StatusCode::INTERNAL_SERVER_ERROR,
-            &format!("Couldn't save the preset — {e}"),
+            "display_preset_not_saved",
+            "Couldn't save the preset",
+            &e,
         ),
     }
 }
@@ -928,9 +941,11 @@ pub(crate) async fn delete_custom_preset(Path(id): Path<String>) -> Response {
     match crate::vdisplay::policy::delete_custom_preset(&id) {
         Ok(true) => StatusCode::NO_CONTENT.into_response(),
         Ok(false) => api_error(StatusCode::NOT_FOUND, "no custom preset with that id"),
-        Err(e) => api_error(
+        Err(e) => api_error_logged(
             StatusCode::INTERNAL_SERVER_ERROR,
-            &format!("Couldn't delete the preset — {e}"),
+            "display_preset_not_deleted",
+            "Couldn't delete the preset",
+            &e,
         ),
     }
 }

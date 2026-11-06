@@ -294,12 +294,14 @@ impl Answer {
             Answer::Stream(code, content_type, body) => {
                 with_type((status(code), body).into_response(), content_type)
             }
-            Answer::Starting => api_error(
+            Answer::Starting => api_error_coded(
                 StatusCode::SERVICE_UNAVAILABLE,
+                "seat_session_starting",
                 "That session is starting. Try again in a moment.",
             ),
-            Answer::Down | Answer::NoSeat => api_error(
+            Answer::Down | Answer::NoSeat => api_error_coded(
                 StatusCode::BAD_GATEWAY,
+                "seat_host_no_answer",
                 "That host didn't answer. Try again in a moment.",
             ),
         }
@@ -396,7 +398,7 @@ pub(crate) async fn pass_on(
     let to_owner = target == Target::Owner;
     match tokio::task::spawn_blocking(move || seats.call(&target, call)).await {
         // A running door always has an owner row; its own files are no stand-in for the owner's.
-        Ok(Answer::NoSeat) if to_owner => api_error(StatusCode::SERVICE_UNAVAILABLE, NO_OWNER),
+        Ok(Answer::NoSeat) if to_owner => no_owner(StatusCode::SERVICE_UNAVAILABLE),
         Ok(Answer::NoSeat) => next.run(Request::from_parts(parts, bytes.into())).await,
         Ok(answer) => answer.into_response(),
         Err(_) => Answer::Down.into_response(),
@@ -404,8 +406,13 @@ pub(crate) async fn pass_on(
 }
 
 /// A door with no owner row: the switch that made the door made none, or one was removed.
-pub(crate) const NO_OWNER: &str =
-    "This box has no owner's host to answer that. Turn Reachable without logging in off and on again.";
+pub(crate) fn no_owner(status: StatusCode) -> Response {
+    api_error_coded(
+        status,
+        "door_no_owner",
+        "This box has no owner's host to answer that. Turn Reachable without logging in off and on again.",
+    )
+}
 
 #[cfg(test)]
 mod tests {

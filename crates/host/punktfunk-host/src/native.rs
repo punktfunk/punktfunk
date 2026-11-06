@@ -561,7 +561,10 @@ async fn serve_connection(incoming: quinn::Incoming, host: SessionHost, at: Arc<
             let detail = format!("{e:#}");
             conn_err.close(
                 punktfunk_core::reject::SETUP_FAILED_CLOSE_CODE.into(),
-                setup_failed_sentence(&e).unwrap_or_default().as_bytes(),
+                setup_failed_sentence(&e)
+                    .unwrap_or_default()
+                    .text
+                    .as_bytes(),
             );
             tracing::warn!(%peer, error = %detail, "session ended with error")
         }
@@ -689,18 +692,19 @@ fn spawn_profile_watch(scope: &SessionScope, profile: String) {
         tracing::info!(%profile, "profile removed — closing its session");
         life.end(crate::events::SessionEndReason::StoppedByOperator);
         let reason = punktfunk_core::reject::RejectReason::SeatUnavailable;
-        conn.refuse(
-            reason.close_code(),
+        let said = Said::new(
+            "close_profile_removed",
             "Your profile was removed by the host's owner.",
-        )
-        .await;
+        );
+        conn.refuse_said(reason.close_code(), &said).await;
     });
 }
 
 /// Close with the typed reject code before the session task returns `Err`. A bare drop
 /// closes with code 0, which the client cannot tell from transport trouble.
 async fn close_rejected(conn: &link::SessionLink, reason: punktfunk_core::reject::RejectReason) {
-    conn.refuse(reason.close_code(), &reason.to_string()).await;
+    let said = Said::new(&reason.message_id(), &reason.to_string());
+    conn.refuse_said(reason.close_code(), &said).await;
 }
 
 /// Client close code for a deliberate quit (user "stop"). Tears the virtual display down
@@ -827,35 +831,83 @@ pub(crate) enum Served {
     Access,
 }
 
-/// The sentence a person reads when setup fails, or `None` where the host has no
+/// A close reason a person reads: its English, the host message it is (`close_*`,
+/// `reject_*`, `apierr_*`; empty for none), and that message's placeholder values. The
+/// native close carries the English alone; a browser's `Refused` frame carries all three.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct Said {
+    pub(crate) text: String,
+    pub(crate) id: String,
+    pub(crate) params: Vec<(String, String)>,
+}
+
+impl Said {
+    pub(crate) fn new(id: &str, text: &str) -> Self {
+        Said {
+            text: text.to_string(),
+            id: id.to_string(),
+            params: Vec::new(),
+        }
+    }
+
+    /// Fills the placeholder `name`.
+    pub(crate) fn param(mut self, name: &str, value: impl ToString) -> Self {
+        self.params.push((name.to_string(), value.to_string()));
+        self
+    }
+
+    /// The `Refused` frame a browser reads for a close with `code` and these words.
+    pub(crate) fn refused(&self, code: u32) -> punktfunk_core::quic::Refused {
+        let params: Vec<(&str, &str)> = self
+            .params
+            .iter()
+            .map(|(name, value)| (name.as_str(), value.as_str()))
+            .collect();
+        punktfunk_core::quic::Refused {
+            code,
+            reason: self.text.clone(),
+            ..Default::default()
+        }
+        .worded(&self.id, &params)
+    }
+}
+
+/// The words a person reads when setup fails, or `None` where the host has no
 /// wording better than the client's own generic one. Every close that carries text
 /// goes through here: the reason bytes reach a user, and an `anyhow` chain is
 /// operator register.
 ///
 /// `downcast_ref` walks the context chain, so a failure keeps its sentence however
 /// deep under `.context()` it was raised.
-pub(crate) fn setup_failed_sentence(e: &anyhow::Error) -> Option<String> {
+pub(crate) fn setup_failed_sentence(e: &anyhow::Error) -> Option<Said> {
     if let Some(m) = e.downcast_ref::<pf_vdisplay::monitors::MonitorNotFound>() {
-        return Some(m.user_message());
+        let (id, params) = m.message();
+        return Some(
+            params
+                .into_iter()
+                .fold(Said::new(id, &m.user_message()), |said, (name, value)| {
+                    said.param(name, value)
+                }),
+        );
     }
     #[cfg(target_os = "linux")]
     if let Some(n) = e.downcast_ref::<pf_vdisplay::NoVirtualOutputs>() {
-        return Some(n.user_message().into());
+        return Some(Said::new("close_niri_no_outputs", n.user_message()));
     }
     #[cfg(target_os = "linux")]
     if let Some(m) = e.downcast_ref::<pf_vdisplay::UmbrielIpcMismatch>() {
-        return Some(m.user_message().into());
+        return Some(Said::new("close_umbriel_mismatch", m.user_message()));
     }
     // Umbriel is the one Linux backend whose outputs have no PipeWire node.
     #[cfg(target_os = "linux")]
     if e.downcast_ref::<pf_capture::NoPipeWireNode>().is_some() {
-        return Some(
-            "This Umbriel session can't be captured directly; the stream needs a GPU encoder."
-                .into(),
-        );
+        return Some(Said::new(
+            "close_umbriel_no_capture",
+            "This Umbriel session can't be captured directly; the stream needs a GPU encoder.",
+        ));
     }
     e.downcast_ref::<pf_vdisplay::DisplayAsleep>()
-        .map(|d| d.user_message())
+        .map(|d| Said::new("close_display_asleep", &d.user_message()))
 }
 
 /// Handshake → input/audio → data plane. RAII teardown. A first-message PairRequest is

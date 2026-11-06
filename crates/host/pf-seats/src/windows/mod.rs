@@ -379,9 +379,7 @@ impl WindowsBackend {
         let driver = enable::driver_state(&self.host_path);
         let inbox_driver_newer = enable::inbox_display_driver_newer(&self.host_path);
         let pin = match rdp::load_pin_optional(&self.root) {
-            Ok(Some(pin)) => {
-                Some(rdp::require_live(&self.host_path, pin).map_err(|error| error.message))
-            }
+            Ok(Some(pin)) => Some(rdp::require_live(&self.host_path, pin)),
             _ => None,
         };
         let steam_box = steam::box_install();

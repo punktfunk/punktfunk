@@ -139,6 +139,8 @@ mod clock;
 mod compositor_route;
 mod library;
 mod lifecycle;
+#[cfg(test)]
+mod message_ids;
 // Network-facing secure-default surface. `not(test)` because tests mutate process env
 // (`set_var` is unsafe in 2024) and `native` has in-process C-ABI roundtrips.
 #[cfg_attr(not(test), forbid(unsafe_code))]

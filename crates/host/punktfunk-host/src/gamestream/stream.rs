@@ -359,8 +359,8 @@ fn run(
         });
         // The title's files never arrived: Moonlight has no notice channel, so stream without it.
         let target = match declined {
-            Some(sentence) => {
-                tracing::warn!(reason = %sentence, "streaming without the launched title");
+            Some(refusal) => {
+                tracing::warn!(reason = %refusal.message, "streaming without the launched title");
                 None
             }
             None => target,

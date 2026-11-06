@@ -181,7 +181,7 @@ class SpeedTestTest {
                 val (id, args) = when (say) {
                     is Say.Msg -> say.id to say.args
                     is Say.Plural -> say.id to say.args
-                    is Say.Text -> error("$case: a finding is a message")
+                    is Say.Text, is Say.Host -> error("$case: a finding is a message")
                 }
                 assertEquals("$case", case.getString("key"), res.getResourceEntryName(id))
                 // The file lists the placeholders in the order the English text shows them.

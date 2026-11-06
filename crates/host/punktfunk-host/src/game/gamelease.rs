@@ -423,13 +423,33 @@ fn died_on_the_spot(quick: bool, success: bool, fallback: &LeaseKind) -> bool {
 /// 127 and 126 are the shell's own "no such command" / "cannot execute"; named,
 /// because a number is not a next move. Anything else gets how long it lasted.
 #[cfg_attr(target_os = "macos", allow(dead_code, reason = "no watcher on macOS"))]
-fn early_exit_message(title: &str, code: Option<i32>, secs: f32) -> String {
-    let cause = match code {
-        Some(127) => "this host doesn't have that command".to_string(),
-        Some(126) => "this host can't run that command".to_string(),
-        _ => format!("it closed again after {secs:.1} s"),
-    };
-    format!("Couldn't start {title} — {cause}.")
+fn early_exit_message(
+    title: &str,
+    code: Option<i32>,
+    secs: f32,
+) -> punktfunk_core::quic::LaunchOutcome {
+    use punktfunk_core::quic::{LaunchOutcome, LaunchOutcomeKind};
+    let failed = |text: String| LaunchOutcome::new(LaunchOutcomeKind::Failed, &text);
+    match code {
+        Some(127) => failed(format!(
+            "Couldn't start {title} — this host doesn't have that command."
+        ))
+        .worded("launch_command_missing", &[("title", title)]),
+        Some(126) => failed(format!(
+            "Couldn't start {title} — this host can't run that command."
+        ))
+        .worded("launch_command_not_runnable", &[("title", title)]),
+        _ => {
+            let seconds = format!("{secs:.1}");
+            failed(format!(
+                "Couldn't start {title} — it closed again after {seconds} s."
+            ))
+            .worded(
+                "launch_closed_at_once",
+                &[("title", title), ("seconds", &seconds)],
+            )
+        }
+    }
 }
 
 /// Open a lease and start watching. `on_exit` fires **at most once**: game
@@ -810,7 +830,7 @@ fn apply_on_window(stage: &WindowStage, win: &crate::vdisplay::Toplevel) {
 /// exit to end the session on.
 #[cfg_attr(target_os = "macos", allow(dead_code, reason = "no watcher on macOS"))]
 fn report_early_exit(shared: &LeaseShared, code: Option<i32>, ran: Duration) {
-    let said = early_exit_message(&shared.game.title, code, ran.as_secs_f32());
+    let outcome = early_exit_message(&shared.game.title, code, ran.as_secs_f32());
     tracing::warn!(
         title = %shared.game.title,
         status = ?code,
@@ -823,10 +843,7 @@ fn report_early_exit(shared: &LeaseShared, code: Option<i32>, ran: Duration) {
         crate::launchreg::unlaunched(p);
     }
     if let Some(tx) = &shared.outcome {
-        let _ = tx.send(punktfunk_core::quic::LaunchOutcome::new(
-            punktfunk_core::quic::LaunchOutcomeKind::Failed,
-            &said,
-        ));
+        let _ = tx.send(outcome);
     }
 }
 
@@ -1984,19 +2001,24 @@ mod tests {
     #[test]
     fn a_dead_launch_says_what_the_player_can_act_on() {
         assert_eq!(
-            early_exit_message("Quail", Some(127), 0.2),
+            early_exit_message("Quail", Some(127), 0.2).message,
             "Couldn't start Quail \u{2014} this host doesn't have that command."
         );
         assert_eq!(
-            early_exit_message("Quail", Some(126), 0.2),
+            early_exit_message("Quail", Some(126), 0.2).message,
             "Couldn't start Quail \u{2014} this host can't run that command."
         );
+        let closed = early_exit_message("Quail", Some(1), 0.24);
         assert_eq!(
-            early_exit_message("Quail", Some(1), 0.24),
+            closed.message,
             "Couldn't start Quail \u{2014} it closed again after 0.2 s."
         );
+        assert_eq!(closed.message_id, "launch_closed_at_once");
+        assert_eq!(closed.message_params[1], ("seconds".into(), "0.2".into()));
         // Killed by a signal: no code, same shape.
-        assert!(early_exit_message("Quail", None, 1.0).starts_with("Couldn't start Quail"));
+        assert!(early_exit_message("Quail", None, 1.0)
+            .message
+            .starts_with("Couldn't start Quail"));
     }
 
     /// The whole of ask 2 in one place: the client hears `failed`, and the

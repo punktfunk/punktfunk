@@ -508,11 +508,17 @@ impl Watch {
             "wire MTU: this session's video does not fit the client's path, and this session \
              cannot be re-keyed — ending it so the client reconnects at a size that fits");
         let why = if moved {
-            "The network path changed and this stream can't be resized."
+            super::Said::new(
+                "close_path_changed",
+                "The network path changed and this stream can't be resized.",
+            )
         } else {
-            "This network path can't carry the stream at its packet size."
+            super::Said::new(
+                "close_path_too_small",
+                "This network path can't carry the stream at its packet size.",
+            )
         };
-        self.conn.refuse(PATH_SHRANK_CLOSE_CODE, why).await;
+        self.conn.refuse_said(PATH_SHRANK_CLOSE_CODE, &why).await;
         false
     }
 

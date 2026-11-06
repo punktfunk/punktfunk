@@ -51,6 +51,7 @@ import {
 import { Spinner } from "@/components/ui/spinner";
 import { apiErrorMessage } from "@/lib/errors";
 import { fmtDateTimeSecs } from "@/lib/format";
+import { seatCheckText, seatDetail } from "@/lib/host-messages";
 import type { Loadable } from "@/lib/query";
 import { cn } from "@/lib/utils";
 import { m } from "@/paraglide/messages";
@@ -91,9 +92,9 @@ export function playsLine(p: ProfileAdmin, ownerName: string): string {
 	if (seat.state === "occupied" && seat.occupant)
 		return m.profiles_occupied_by({ device: seat.occupant });
 	if (seat.state === "starting")
-		return seat.detail || m.profiles_seat_starting();
+		return seatDetail(seat) || m.profiles_seat_starting();
 	if (seat.state === "unavailable")
-		return seat.detail || STATE_WORD.unavailable();
+		return seatDetail(seat) || STATE_WORD.unavailable();
 	return seat.take_turns
 		? m.profiles_outcome_account()
 		: m.profiles_outcome_desktop();
@@ -949,7 +950,7 @@ const CheckList: FC<{ checks: SeatCheck[] }> = ({ checks }) => (
 			return (
 				<li key={`${c.code}-${i}`} className="flex items-start gap-2">
 					<Icon className={cn("mt-0.5 size-4 shrink-0", tone)} />
-					<span>{c.message}</span>
+					<span>{seatCheckText(c)}</span>
 				</li>
 			);
 		})}

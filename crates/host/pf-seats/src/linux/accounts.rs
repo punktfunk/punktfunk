@@ -320,7 +320,9 @@ fn check_adoptable(
         return Err(err(
             "account_is_owner",
             format!("{name} is this machine's owner, who has a profile of their own."),
-        ));
+        )
+        .said("account_is_owner")
+        .param("account", name));
     }
     let held = ledger
         .seats
@@ -330,7 +332,9 @@ fn check_adoptable(
         return Err(err(
             "account_taken",
             format!("Another profile already uses {name}."),
-        ));
+        )
+        .said("account_taken")
+        .param("account", name));
     }
     Ok(())
 }
@@ -344,11 +348,15 @@ fn require_ordinary(account: &str) -> Result<Passwd, BackendError> {
         Some(_) => Err(err(
             "account_not_ordinary",
             format!("{account} is a system account, not a person's."),
-        )),
+        )
+        .said("account_not_ordinary")
+        .param("account", account)),
         None => Err(err(
             "account_missing",
             format!("There is no account called {account} on this machine."),
-        )),
+        )
+        .said("account_missing")
+        .param("account", account)),
     }
 }
 

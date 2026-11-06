@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Spinner } from "@/components/ui/spinner";
 import { m } from "@/paraglide/messages";
+import { actionUnavailable } from "@/sections/Host/PowerCard";
 
 /**
  * Settings that only a restart applies, and the restart itself. Absent when nothing waits. Where
@@ -39,7 +40,7 @@ export const RestartBanner: FC<{
 				) : (
 					action?.unavailable_reason && (
 						<p className="w-full text-xs text-muted-foreground">
-							{action.unavailable_reason}
+							{actionUnavailable(action)}
 						</p>
 					)
 				)}

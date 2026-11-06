@@ -15,7 +15,7 @@
 
 use rand::Rng;
 use serde::{Deserialize, Deserializer, Serialize};
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::fmt;
 use std::str::FromStr;
 
@@ -136,21 +136,39 @@ pub struct RuntimeStatus {
     pub state: RuntimeState,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub detail: Option<String>,
+    /// The host message `detail` is the English of, worded with `detail_params`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail_id: Option<String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub detail_params: BTreeMap<String, String>,
 }
 
 impl RuntimeStatus {
     pub fn stopped() -> Self {
         Self {
             state: RuntimeState::Stopped,
-            detail: None,
+            ..Self::default()
         }
     }
 
     pub fn running() -> Self {
         Self {
             state: RuntimeState::Running,
-            detail: None,
+            ..Self::default()
         }
+    }
+
+    /// Names the host message `detail` is the English of.
+    pub fn worded(mut self, id: &str) -> Self {
+        self.detail_id = Some(id.to_string());
+        self
+    }
+
+    /// Fills the placeholder `name` of that message.
+    pub fn param(mut self, name: &str, value: impl ToString) -> Self {
+        self.detail_params
+            .insert(name.to_string(), value.to_string());
+        self
     }
 
     /// Backend error text is unbounded; capping it here keeps one long
@@ -167,6 +185,7 @@ impl RuntimeStatus {
         Self {
             state: RuntimeState::Failed,
             detail: Some(detail),
+            ..Self::default()
         }
     }
 }

@@ -363,7 +363,7 @@ fn an_update_is_only_ever_newer() {
     )
 )]
 pub(crate) async fn get_catalog() -> Response {
-    match blocking("plugin store", || build_catalog(false)).await {
+    match blocking("plugin_store", || build_catalog(false)).await {
         Ok(c) => Json(c).into_response(),
         Err(e) => e,
     }
@@ -384,7 +384,7 @@ pub(crate) async fn get_catalog() -> Response {
     )
 )]
 pub(crate) async fn refresh_catalog() -> Response {
-    match blocking("plugin store", || build_catalog(true)).await {
+    match blocking("plugin_store", || build_catalog(true)).await {
         Ok(c) => {
             crate::events::emit(crate::events::EventKind::StoreChanged);
             Json(c).into_response()
@@ -411,7 +411,7 @@ pub(crate) async fn refresh_catalog() -> Response {
 pub(crate) async fn list_installed() -> Response {
     // Lease registry is in-memory; read it here, not inside `spawn_blocking`.
     let live: Vec<String> = crate::plugin_host::registry::live_plugin_ids();
-    match blocking("plugin store", move || build_installed(&live)).await {
+    match blocking("plugin_store", move || build_installed(&live)).await {
         Ok(v) => Json(v).into_response(),
         Err(e) => e,
     }
@@ -450,7 +450,7 @@ pub(crate) async fn install_plugin(
             req.spec.as_deref(),
         ) {
             (Some(source), Some(id), None) => {
-                let found = match blocking("plugin store", {
+                let found = match blocking("plugin_store", {
                     let (source, id) = (source.to_string(), id.to_string());
                     move || store::find_entry(&source, &id)
                 })
@@ -465,11 +465,25 @@ pub(crate) async fn install_plugin(
                         "no such plugin in that source's catalog",
                     );
                 };
-                if let Some(reason) = entry.incompatible_reason() {
-                    return api_error(
-                        StatusCode::BAD_REQUEST,
-                        &format!("This plugin can't run on this host — {reason}"),
-                    );
+                if let Some(why) = entry.incompatibility() {
+                    let refusal = match why {
+                        index::Incompatible::Platforms(list) => ApiError::coded(
+                            "plugin_needs_platform",
+                            format!(
+                                "This plugin can't run on this host — requires {}",
+                                list.join(" or ")
+                            ),
+                        )
+                        .param("platforms", list.join(", ")),
+                        index::Incompatible::Host(min) => ApiError::coded(
+                            "plugin_needs_newer_host",
+                            format!(
+                            "This plugin can't run on this host — needs Punktfunk {min} or newer"
+                        ),
+                        )
+                        .param("version", min),
+                    };
+                    return refusal.respond(StatusCode::BAD_REQUEST);
                 }
                 match jobs::Plan::from_entry(&entry, source, verified) {
                     Ok(p) => p,
@@ -496,15 +510,16 @@ pub(crate) async fn install_plugin(
         };
 
     if pf_paths::seat::own_account() && plan.tier != manifest::Tier::Verified {
-        return api_error(
+        return api_error_coded(
             StatusCode::FORBIDDEN,
+            "plugin_own_account_unreviewed",
             "Only plugins reviewed for the Punktfunk store install on a profile that uses an \
              existing account, because they run as that person.",
         );
     }
     match jobs::spawn_install(plan, st.plugin_tokens.clone()) {
         Ok(job) => (StatusCode::ACCEPTED, Json(JobRef { job })).into_response(),
-        Err(e) => api_error(StatusCode::CONFLICT, &format!("{e:#}")),
+        Err(e) => job_running(&e),
     }
 }
 
@@ -536,7 +551,7 @@ pub(crate) async fn uninstall_plugin(
     // `@scope/plugin-*` also matches `@punktfunk/plugin-kit`, a library plugins depend on.
     // Only a top-level install (`installed_packages`) may be removed.
     let pkg = req.pkg.clone();
-    let known = match blocking("plugin store", move || {
+    let known = match blocking("plugin_store", move || {
         store::installed_packages(&store::plugins_dir())
             .iter()
             .any(|p| p.pkg == pkg)
@@ -559,8 +574,18 @@ pub(crate) async fn uninstall_plugin(
         crate::library::delete_provider,
     ) {
         Ok(job) => (StatusCode::ACCEPTED, Json(JobRef { job })).into_response(),
-        Err(e) => api_error(StatusCode::CONFLICT, &format!("{e:#}")),
+        Err(e) => job_running(&e),
     }
+}
+
+/// The `409` for a plugin job refused because another one runs; which one goes to the log.
+fn job_running(e: &anyhow::Error) -> Response {
+    api_error_logged(
+        StatusCode::CONFLICT,
+        "plugin_job_running",
+        "Another plugin operation is already running",
+        &format!("{e:#}"),
+    )
 }
 
 /// List recent package jobs
@@ -615,7 +640,7 @@ pub(crate) async fn get_job(Path(id): Path<String>) -> Response {
     )
 )]
 pub(crate) async fn list_sources() -> Response {
-    match blocking("plugin store", || {
+    match blocking("plugin_store", || {
         store::cached_catalogs()
             .into_iter()
             .map(|st| SourceView {
@@ -665,7 +690,7 @@ pub(crate) async fn put_source(
         url: input.url,
         public_key: input.public_key.filter(|k| !k.trim().is_empty()),
     };
-    let saved = blocking("plugin store", move || {
+    let saved = blocking("plugin_store", move || {
         let r = sources::put(source);
         if r.is_ok() {
             // A redefined source must not keep serving the old cache.
@@ -704,7 +729,7 @@ pub(crate) async fn delete_source(Path(name): Path<String>) -> Response {
             "the built-in source cannot be removed",
         );
     }
-    let removed = blocking("plugin store", move || {
+    let removed = blocking("plugin_store", move || {
         let r = sources::remove(&name);
         if matches!(r, Ok(true)) {
             store::drop_source_cache(&name);
@@ -738,7 +763,7 @@ pub(crate) async fn delete_source(Path(name): Path<String>) -> Response {
     )
 )]
 pub(crate) async fn get_runtime() -> Response {
-    match blocking("plugin store", runtime_view).await {
+    match blocking("plugin_store", runtime_view).await {
         Ok(v) => Json(v).into_response(),
         Err(e) => e,
     }
@@ -759,13 +784,18 @@ pub(crate) async fn get_runtime() -> Response {
     )
 )]
 pub(crate) async fn set_runtime(ApiJson(req): ApiJson<RuntimeRequest>) -> Response {
-    let switched = blocking("plugin store", move || {
+    let switched = blocking("plugin_store", move || {
         crate::plugins::set_runtime_enabled(req.enabled).map(|()| runtime_view())
     })
     .await;
     match switched {
         Err(e) => e,
-        Ok(Err(e)) => api_error(StatusCode::BAD_REQUEST, &format!("{e:#}")),
+        Ok(Err(e)) => api_error_logged(
+            StatusCode::BAD_REQUEST,
+            "host_error",
+            "The host hit an error",
+            &format!("{e:#}"),
+        ),
         Ok(Ok(v)) => {
             crate::events::emit(crate::events::EventKind::StoreChanged);
             Json(v).into_response()

@@ -199,13 +199,22 @@ pub(crate) fn elevated_on() -> bool {
 /// Why an `elevated` command won't run on this host, as the operator's next move. `None` when it
 /// may. The console can't turn it on: its password must not become administrator rights.
 pub(crate) fn elevated_refusal() -> Option<&'static str> {
+    elevated_refused().map(|(_, why)| why)
+}
+
+/// [`elevated_refusal`] with the code of its host message `apierr_<code>`.
+pub(crate) fn elevated_refused() -> Option<(&'static str, &'static str)> {
     if !cfg!(windows) {
-        return Some("Commands run as administrator on Windows hosts only.");
+        return Some((
+            "hooks_elevated_windows_only",
+            "Commands run as administrator on Windows hosts only.",
+        ));
     }
-    (!elevated_on()).then_some(
+    (!elevated_on()).then_some((
+        "hooks_elevated_off",
         "Running commands as administrator is off on this host. Turn it on once from an \
          administrator PowerShell: punktfunk-host hooks elevated on",
-    )
+    ))
 }
 
 /// Why this host takes no hooks, as the console says it. `None` where it does. A seat on a

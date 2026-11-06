@@ -568,16 +568,27 @@ impl Drop for Login {
 /// What `code`, a check's answer, means for `account`, with the console's sentence. A code this
 /// doesn't know is a check that didn't run.
 fn refusal(account: &str, code: &str) -> Result<(), BackendError> {
-    let sentence = match code {
+    let (said, sentence) = match code {
         PASSED => return Ok(()),
-        WRONG => format!("That isn't {account}'s password."),
-        MUST_CHANGE => format!(
-            "{account}'s password has expired. Choose a new one at the machine, then try again."
+        WRONG => (
+            "credential_wrong",
+            format!("That isn't {account}'s password."),
         ),
-        LOCKED => format!("{account}'s account is locked or has expired."),
+        MUST_CHANGE => (
+            "credential_must_change",
+            format!(
+                "{account}'s password has expired. Choose a new one at the machine, then try again."
+            ),
+        ),
+        LOCKED => (
+            "account_locked",
+            format!("{account}'s account is locked or has expired."),
+        ),
         _ => return Err(unanswered(account, &format!("the check answered {code:?}"))),
     };
-    Err(BackendError::new(code, sentence))
+    Err(BackendError::new(code, sentence)
+        .said(said)
+        .param("account", account))
 }
 
 /// The check couldn't run; `cause` is for the journal.
@@ -593,6 +604,7 @@ fn unanswered(account: &str, cause: &str) -> BackendError {
         UNAVAILABLE,
         "Couldn't check the password: this machine's login service didn't answer.",
     )
+    .said("pam_unavailable")
 }
 
 #[cfg(test)]

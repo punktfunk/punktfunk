@@ -11,6 +11,7 @@ use crate::ipc::{Diagnostic, SeatingStatus};
 use crate::model::{Ledger, RuntimeStatus, Seat};
 use crate::secret::Secret;
 use crate::unlock::DeviceList;
+use std::collections::BTreeMap;
 
 pub trait PlatformBackend: Send + Sync + 'static {
     fn provision(&self, seat: &Seat) -> Result<(), BackendError>;
@@ -147,6 +148,10 @@ fn no_flatpaks() -> BackendError {
 pub struct BackendError {
     pub code: String,
     pub message: String,
+    /// When `message` is a sentence for a person: the code of the host message
+    /// `apierr_<said>` it is the English of, worded with `params`.
+    pub said: Option<String>,
+    pub params: BTreeMap<String, String>,
 }
 
 impl BackendError {
@@ -154,7 +159,21 @@ impl BackendError {
         Self {
             code: code.into(),
             message: message.into(),
+            said: None,
+            params: BTreeMap::new(),
         }
+    }
+
+    /// Marks `message` as the English of the host message `apierr_<code>`.
+    pub fn said(mut self, code: &str) -> Self {
+        self.said = Some(code.to_string());
+        self
+    }
+
+    /// Fills the placeholder `name` of that message.
+    pub fn param(mut self, name: &str, value: impl ToString) -> Self {
+        self.params.insert(name.to_string(), value.to_string());
+        self
     }
 }
 

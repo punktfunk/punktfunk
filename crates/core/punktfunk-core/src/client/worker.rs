@@ -309,8 +309,19 @@ pub(crate) fn reject_from_close(
         quinn::ConnectionError::ApplicationClosed(ac) => u32::try_from(u64::from(ac.error_code))
             .ok()
             .and_then(crate::reject::RejectReason::from_close_code)
-            .map(|r| (r, sanitize_reason(&ac.reason))),
+            .map(|r| (r, said_beyond(r, sanitize_reason(&ac.reason)))),
         _ => None,
+    }
+}
+
+/// `said` without the stock sentence of `reason`'s code, which the host sends for a plain
+/// refusal. A client words the code itself (`RejectReason::message_id`), so only a sentence
+/// the code does not carry is the host's own.
+fn said_beyond(reason: crate::reject::RejectReason, said: String) -> String {
+    if said == reason.to_string() {
+        String::new()
+    } else {
+        said
     }
 }
 
@@ -332,7 +343,20 @@ pub(crate) fn sanitize_reason(bytes: &[u8]) -> String {
 
 #[cfg(test)]
 mod reason_tests {
-    use super::sanitize_reason;
+    use super::{said_beyond, sanitize_reason};
+    use crate::reject::RejectReason;
+
+    #[test]
+    fn a_stock_sentence_is_the_codes_not_the_hosts() {
+        for &r in RejectReason::ALL {
+            assert_eq!(said_beyond(r, r.to_string()), "", "{r:?}");
+        }
+        let own = "The host is set to capture a monitor that isn't connected.";
+        assert_eq!(said_beyond(RejectReason::SetupFailed, own.into()), own);
+        // Another code's stock sentence is not this code's.
+        let other = RejectReason::Busy.to_string();
+        assert_eq!(said_beyond(RejectReason::Denied, other.clone()), other);
+    }
 
     #[test]
     fn a_hostile_reason_cannot_fill_the_screen_or_move_the_cursor() {

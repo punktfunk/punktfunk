@@ -29,6 +29,7 @@ import {
 } from "@/api/gen/profiles/profiles";
 import { useDialogs } from "@/components/dialogs";
 import { apiErrorMessage } from "@/lib/errors";
+import { doorUnavailable, seatCheckText } from "@/lib/host-messages";
 import { useLocale } from "@/lib/i18n";
 import { m } from "@/paraglide/messages";
 import { SignedInDevices } from "./devices";
@@ -172,7 +173,11 @@ export const SectionProfiles: FC = () => {
 	const doctorLine =
 		seatsOn && (doctor.data || doctor.error)
 			? {
-					message: doctor.data ? (firstError?.message ?? null) : doctorError,
+					message: doctor.data
+						? firstError
+							? seatCheckText(firstError)
+							: null
+						: doctorError,
 					notes:
 						doctor.data?.diagnostics.filter((d) => d.level === "warning")
 							.length ?? 0,
@@ -254,7 +259,7 @@ export const SectionProfiles: FC = () => {
 						? {
 								on: door,
 								changing: switching !== null,
-								unavailable: host.data?.door_unavailable,
+								unavailable: host.data ? doorUnavailable(host.data) : undefined,
 								onChange: () => setDoorAsk(!door),
 							}
 						: undefined

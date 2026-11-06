@@ -15,8 +15,9 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Spinner } from "@/components/ui/spinner";
-import { apiErrorMessage } from "@/lib/errors";
+import { apiErrorCode, apiErrorMessage } from "@/lib/errors";
 import { fmtDateTimeSecs } from "@/lib/format";
+import { updateError } from "@/lib/host-messages";
 import type { Loadable } from "@/lib/query";
 import { m } from "@/paraglide/messages";
 import {
@@ -305,11 +306,7 @@ const ApplyPanel: FC<{
 				body: JSON.stringify({ password, force: needsForce }),
 			});
 		} catch (e) {
-			if (
-				e instanceof ApiError &&
-				e.status === 409 &&
-				apiErrorMessage(e)?.includes("force")
-			) {
+			if (apiErrorCode(e) === "update_session_active") {
 				// A live stream: the dialog stays open as the explicit "drop the stream" step, and
 				// its description says why.
 				setNeedsForce(true);
@@ -444,7 +441,7 @@ const LastResult: FC<{
 			<p className="font-medium text-destructive">
 				{m.update_result_failed({ to: result.to, stage: result.stage ?? "?" })}
 			</p>
-			{result.error && <p>{result.error}</p>}
+			{result.error && <p>{updateError(result)}</p>}
 			{result.log_path && (
 				<p className="text-xs text-muted-foreground">
 					{m.update_result_log()} <code>{result.log_path}</code>

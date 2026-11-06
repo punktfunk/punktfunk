@@ -175,13 +175,13 @@ impl Fault {
     pub(crate) fn plain(&self) -> String {
         let text = match self.code {
             Code::WtsTimeout | Code::KeeperExited => {
-                "Windows didn't sign in to the seat's account. Remote Desktop may be off or out of licences."
+                "Windows didn't sign in to the seat's account. Remote Desktop may be off or out of licenses."
             }
             Code::QualityFailed | Code::Quality => {
                 "The seat's screen didn't start. The graphics card or the seat display driver failed its check."
             }
             Code::HostReadyTimeout | Code::HostExited => {
-                "punktfunk didn't start on the seat. The seat's log has the cause."
+                "Punktfunk didn't start on the seat. The seat's log has the cause."
             }
             Code::AccountNotOwned
             | Code::AccountIsAdministrator
@@ -202,6 +202,23 @@ impl Fault {
             | Code::Other => return self.error.message.clone(),
         };
         text.into()
+    }
+
+    /// [`Self::plain`] as a failed seat's status, with its message.
+    pub(crate) fn status(&self) -> RuntimeStatus {
+        let failed = RuntimeStatus::failed(self.plain());
+        match self.code {
+            Code::WtsTimeout | Code::KeeperExited => failed.worded("seatline_signin_failed"),
+            Code::QualityFailed | Code::Quality => failed.worded("seatline_screen_failed"),
+            Code::HostReadyTimeout | Code::HostExited => failed.worded("seatline_host_failed"),
+            _ => match &self.error.said {
+                Some(code) => RuntimeStatus {
+                    detail_params: self.error.params.clone(),
+                    ..failed.worded(&format!("apierr_{code}"))
+                },
+                None => failed,
+            },
+        }
     }
 }
 
@@ -226,7 +243,7 @@ impl Stage {
         match self {
             Self::SignIn => "signing in to the seat's Windows account",
             Self::Display => "checking the seat's screen and graphics card",
-            Self::Host => "starting punktfunk on the seat",
+            Self::Host => "starting Punktfunk on the seat",
         }
     }
 
@@ -240,12 +257,38 @@ impl Stage {
         text + "…"
     }
 
-    /// The console's sentence for a start that ran out of time on this stage.
-    fn timed_out(self) -> String {
-        format!(
+    /// [`Self::detail`] as a starting seat's status, with its message.
+    fn status(self, attempt: u32) -> RuntimeStatus {
+        let id = match (self, attempt > 1) {
+            (Self::SignIn, false) => "seatline_stage_sign_in",
+            (Self::SignIn, true) => "seatline_stage_sign_in_try",
+            (Self::Display, false) => "seatline_stage_display",
+            (Self::Display, true) => "seatline_stage_display_try",
+            (Self::Host, false) => "seatline_stage_host",
+            (Self::Host, true) => "seatline_stage_host_try",
+        };
+        let status = starting(self.detail(attempt)).worded(id);
+        if attempt > 1 {
+            status
+                .param("attempt", attempt)
+                .param("total", QUALITY_SESSIONS)
+        } else {
+            status
+        }
+    }
+
+    /// The console's line for a start that ran out of time on this stage.
+    fn timed_out(self) -> RuntimeStatus {
+        let id = match self {
+            Self::SignIn => "seatline_timeout_sign_in",
+            Self::Display => "seatline_timeout_display",
+            Self::Host => "seatline_timeout_host",
+        };
+        RuntimeStatus::failed(format!(
             "The seat didn't start in time. It stopped while {}.",
             self.phrase()
-        )
+        ))
+        .worded(id)
     }
 }
 
@@ -396,7 +439,7 @@ impl State {
             account,
             phase: Phase::Resting { until: None },
             stage: Stage::SignIn,
-            status: starting(Stage::SignIn.detail(0)),
+            status: Stage::SignIn.status(0),
             session: None,
             answer: None,
             stop: None,
@@ -467,7 +510,7 @@ impl State {
             }
             Observation::StartTimedOut => {
                 self.stop = Some(Stop::TimedOut(self.stage));
-                self.status = RuntimeStatus::failed(self.stage.timed_out());
+                self.status = self.stage.timed_out();
                 self.answer = Some(Err(self.start_timeout()));
                 Vec::new()
             }
@@ -635,6 +678,7 @@ impl State {
             self.status = RuntimeStatus {
                 state: RuntimeState::Stopping,
                 detail: None,
+                ..RuntimeStatus::default()
             };
             self.end(None)
         } else if let Some(code) = probe.keeper {
@@ -678,7 +722,7 @@ impl State {
     /// Enter `stage` of a start: the console shows its detail and the log names it.
     fn enter(&mut self, stage: Stage, attempt: u32, action: Action) -> Vec<Action> {
         self.stage = stage;
-        self.status = starting(stage.detail(attempt));
+        self.status = stage.status(attempt);
         vec![Action::Announce(stage, attempt), action]
     }
 
@@ -725,7 +769,7 @@ impl State {
             });
         }
         if !gate_retry {
-            self.status = RuntimeStatus::failed(fault.plain());
+            self.status = fault.status();
             self.answer = Some(Err(fault.error));
         }
         if retry {
@@ -749,7 +793,7 @@ impl State {
         if let Some(stop) = self.stop {
             self.status = match stop {
                 Stop::Asked => RuntimeStatus::stopped(),
-                Stop::TimedOut(stage) => RuntimeStatus::failed(stage.timed_out()),
+                Stop::TimedOut(stage) => stage.timed_out(),
             };
             self.answer.get_or_insert_with(|| {
                 Err(BackendError::new(
@@ -768,6 +812,7 @@ fn starting(detail: String) -> RuntimeStatus {
     RuntimeStatus {
         state: RuntimeState::Starting,
         detail: Some(detail),
+        ..RuntimeStatus::default()
     }
 }
 
@@ -777,7 +822,7 @@ mod tests {
 
     const SIGN_IN: &str = "Windows didn't sign in to the seat's account.";
     const SCREEN: &str = "The seat's screen didn't start.";
-    const HOST: &str = "punktfunk didn't start on the seat.";
+    const HOST: &str = "Punktfunk didn't start on the seat.";
     const MESSAGE: &str = "the operator's message";
 
     /// Code, whether a retry is pointless, and how the console's sentence starts.
@@ -855,9 +900,9 @@ mod tests {
     };
     const SIGNING_IN: &str = "Signing in to the seat's Windows account…";
     const CHECKING: &str = "Checking the seat's screen and graphics card…";
-    const STARTING_HOST: &str = "Starting punktfunk on the seat…";
+    const STARTING_HOST: &str = "Starting Punktfunk on the seat…";
     const NO_SCREEN: &str = "The seat's screen didn't start. The graphics card or the seat display driver failed its check.";
-    const NO_HOST: &str = "punktfunk didn't start on the seat. The seat's log has the cause.";
+    const NO_HOST: &str = "Punktfunk didn't start on the seat. The seat's log has the cause.";
     const GATE_OUT_OF_TIME: &str =
         "same-session virtual-display quality gate did not finish within 60 seconds";
     const STOPPED_EARLY: (&str, &str) = ("seat_stopping", "seat stopped before startup completed");
@@ -895,7 +940,42 @@ mod tests {
         RuntimeStatus {
             state,
             detail: Some(detail.into()),
+            ..RuntimeStatus::default()
         }
+    }
+
+    /// `status` without its message id, as [`shows`] builds one.
+    fn bare(status: &RuntimeStatus) -> RuntimeStatus {
+        RuntimeStatus {
+            state: status.state.clone(),
+            detail: status.detail.clone(),
+            ..RuntimeStatus::default()
+        }
+    }
+
+    #[test]
+    fn a_seat_line_names_its_message() {
+        let first = Stage::Display.status(1);
+        assert_eq!(first.detail_id.as_deref(), Some("seatline_stage_display"));
+        assert!(first.detail_params.is_empty());
+        let again = Stage::Display.status(2);
+        assert_eq!(
+            again.detail_id.as_deref(),
+            Some("seatline_stage_display_try")
+        );
+        assert_eq!(again.detail_params["attempt"], "2");
+        let late = Stage::Host.timed_out();
+        assert_eq!(late.detail_id.as_deref(), Some("seatline_timeout_host"));
+        let refused =
+            Fault::from(BackendError::new("credential_wrong", MESSAGE).said("credential_wrong"));
+        assert_eq!(
+            refused.status().detail_id.as_deref(),
+            Some("apierr_credential_wrong")
+        );
+        assert_eq!(
+            Fault::from(error("other", MESSAGE)).status().detail_id,
+            None
+        );
     }
 
     fn start_cycle() -> Vec<Action> {
@@ -1057,7 +1137,7 @@ mod tests {
     fn a_clean_start_runs_each_stage_once() {
         let mut bench = bench(At::Fresh);
         assert_eq!(
-            *bench.state.status(),
+            bare(bench.state.status()),
             shows(RuntimeState::Starting, SIGNING_IN)
         );
         let after = [
@@ -1071,7 +1151,7 @@ mod tests {
         for ((reached, probe, actions), status) in road().into_iter().zip(after) {
             assert_eq!(bench.answer(), None, "before {reached:?}");
             assert_eq!(bench.see(probe), actions, "into {reached:?}");
-            assert_eq!(*bench.state.status(), status, "in {reached:?}");
+            assert_eq!(bare(bench.state.status()), status, "in {reached:?}");
         }
         assert_eq!(bench.answer(), Some(Ok(())));
         assert_eq!(bench.state.session(), Some(7));
@@ -1151,7 +1231,7 @@ mod tests {
                 n => format!("Checking the seat's screen and graphics card (try {n} of 5)…"),
             };
             assert_eq!(
-                *bench.state.status(),
+                bare(bench.state.status()),
                 shows(RuntimeState::Starting, &detail)
             );
             bench.rests(Duration::from_secs(1 << (session - 1)));
@@ -1167,7 +1247,7 @@ mod tests {
         assert_eq!(bench.see(NOTHING), [Action::Finish]);
         assert_eq!(bench.answer(), Some(Err(("quality_failed", failed))));
         assert_eq!(
-            *bench.state.status(),
+            bare(bench.state.status()),
             shows(RuntimeState::Failed, NO_SCREEN)
         );
         assert!(bench.state.finished());
@@ -1188,18 +1268,21 @@ mod tests {
         assert_eq!(bench.see(host(1)), [Action::EndCycle]);
         // The console reads the old status until the session is logged off.
         assert_eq!(
-            *bench.state.status(),
+            bare(bench.state.status()),
             shows(RuntimeState::Starting, STARTING_HOST)
         );
         assert_eq!(bench.state.session(), Some(7));
         // The first failure is the start's answer, so its caller logs it.
         assert_eq!(bench.see(NOTHING), []);
         assert_eq!(bench.answer(), Some(Err(("host_exited", exited))));
-        assert_eq!(*bench.state.status(), shows(RuntimeState::Failed, NO_HOST));
+        assert_eq!(
+            bare(bench.state.status()),
+            shows(RuntimeState::Failed, NO_HOST)
+        );
         assert_eq!(bench.state.session(), None);
         bench.rests(Duration::from_secs(1));
         assert_eq!(
-            *bench.state.status(),
+            bare(bench.state.status()),
             shows(RuntimeState::Starting, SIGNING_IN)
         );
         // The gate passed in the first cycle. A second failure has only the log.
@@ -1229,7 +1312,7 @@ mod tests {
             assert_eq!(bench.later(served).see(host(3)), [Action::LogHostExit(3)]);
             let detail = format!("punktfunk stopped on the seat. Restarting it in {secs} s…");
             assert_eq!(
-                *bench.state.status(),
+                bare(bench.state.status()),
                 shows(RuntimeState::Starting, &detail)
             );
             bench.later(Duration::from_secs(secs) - MS);
@@ -1237,11 +1320,11 @@ mod tests {
             // No stage is announced: the start was answered long ago.
             assert_eq!(bench.later(MS).see(NOTHING), [Action::StartHost]);
             assert_eq!(
-                *bench.state.status(),
+                bare(bench.state.status()),
                 shows(RuntimeState::Starting, &detail)
             );
             assert_eq!(bench.see(READY), []);
-            assert_eq!(*bench.state.status(), RuntimeStatus::running());
+            assert_eq!(bare(bench.state.status()), RuntimeStatus::running());
         }
         assert_eq!(bench.answer(), Some(Ok(())));
         assert_eq!(bench.state.session(), Some(7));
@@ -1278,7 +1361,10 @@ mod tests {
         assert_eq!(bench.see(READY), []);
         assert_eq!(bench.see(host(3)), [Action::LogHostExit(3)]);
         let detail = "punktfunk stopped on the seat. Restarting it in 1 s…";
-        assert_eq!(*bench.state.status(), shows(RuntimeState::Starting, detail));
+        assert_eq!(
+            bare(bench.state.status()),
+            shows(RuntimeState::Starting, detail)
+        );
     }
 
     #[test]
@@ -1426,7 +1512,7 @@ mod tests {
         for (_, probe, actions) in road().into_iter().skip(1) {
             assert_eq!(bench.see(probe), actions);
         }
-        assert_eq!(*bench.state.status(), RuntimeStatus::running());
+        assert_eq!(bare(bench.state.status()), RuntimeStatus::running());
         assert_eq!(bench.answer(), Some(Ok(())));
     }
 
@@ -1465,13 +1551,21 @@ mod tests {
             assert_eq!(bench.state.phase, before.phase, "{at:?}");
             assert_eq!(bench.state.status(), before.status(), "{at:?}");
             assert_eq!(bench.run_out(), actions, "{at:?}");
-            assert_eq!(*bench.state.status(), RuntimeStatus::stopped(), "{at:?}");
+            assert_eq!(
+                bare(bench.state.status()),
+                RuntimeStatus::stopped(),
+                "{at:?}"
+            );
             assert_eq!(bench.answer(), Some(answer), "{at:?}");
             assert_eq!(bench.state.session(), None, "{at:?}");
             // A second stop, and a look after the worker left, change nothing.
             bench.asks(Observation::Stop);
             assert_eq!(bench.see(NOTHING), [Action::Finish], "{at:?}");
-            assert_eq!(*bench.state.status(), RuntimeStatus::stopped(), "{at:?}");
+            assert_eq!(
+                bare(bench.state.status()),
+                RuntimeStatus::stopped(),
+                "{at:?}"
+            );
         }
     }
 
@@ -1480,17 +1574,18 @@ mod tests {
         let stopping = RuntimeStatus {
             state: RuntimeState::Stopping,
             detail: None,
+            ..RuntimeStatus::default()
         };
         let mut bench = bench(At::Running);
         bench.asks(Observation::Stop);
         assert_eq!(bench.see(NOTHING), [Action::EndCycle]);
-        assert_eq!(*bench.state.status(), stopping);
+        assert_eq!(bare(bench.state.status()), stopping);
         // A host waiting to start again keeps its line instead.
         let mut bench = self::bench(At::HostDown);
-        let before = bench.state.status().clone();
+        let before = bare(bench.state.status());
         bench.asks(Observation::Stop);
         assert_eq!(bench.see(NOTHING), [Action::EndCycle]);
-        assert_eq!(*bench.state.status(), before);
+        assert_eq!(bare(bench.state.status()), before);
     }
 
     #[test]
@@ -1501,7 +1596,7 @@ mod tests {
         // The failed gate was owed another session, so it is not the start's answer.
         assert_eq!(bench.see(NOTHING), [Action::Finish]);
         assert_eq!(bench.answer(), Some(Err(STOPPED_EARLY)));
-        assert_eq!(*bench.state.status(), RuntimeStatus::stopped());
+        assert_eq!(bare(bench.state.status()), RuntimeStatus::stopped());
     }
 
     #[test]
@@ -1528,7 +1623,7 @@ mod tests {
     fn a_start_out_of_time_reads_failed_from_every_stage() {
         const SIGN_IN: &str = "signing in to the seat's Windows account";
         const DISPLAY: &str = "checking the seat's screen and graphics card";
-        const HOST: &str = "starting punktfunk on the seat";
+        const HOST: &str = "starting Punktfunk on the seat";
         let rows = [
             (At::Fresh, SIGN_IN),
             (At::SigningIn, SIGN_IN),
@@ -1549,7 +1644,10 @@ mod tests {
                 }
                 bench.asks(Observation::StartTimedOut);
                 let why = format!("The seat didn't start in time. It stopped while {stage}.");
-                assert_eq!(*bench.state.status(), shows(RuntimeState::Failed, &why));
+                assert_eq!(
+                    bare(bench.state.status()),
+                    shows(RuntimeState::Failed, &why)
+                );
                 // A second start before the worker leaves answers the timeout too.
                 let timed_out = Err(("start_timeout", message.as_str()));
                 assert_eq!(bench.answer(), Some(timed_out), "{at:?}");
@@ -1557,7 +1655,10 @@ mod tests {
                     bench.asks(Observation::Stop);
                 }
                 bench.run_out();
-                assert_eq!(*bench.state.status(), shows(RuntimeState::Failed, &why));
+                assert_eq!(
+                    bare(bench.state.status()),
+                    shows(RuntimeState::Failed, &why)
+                );
                 assert!(matches!(bench.answer(), Some(Err(_))), "{at:?}");
             }
         }
