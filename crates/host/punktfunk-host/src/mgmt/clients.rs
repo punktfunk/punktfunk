@@ -390,13 +390,15 @@ pub(crate) async fn submit_pairing_pin(
         .submit(pin.to_string(), label, &target)
     {
         SubmitOutcome::Delivered(_) => StatusCode::NO_CONTENT.into_response(),
-        SubmitOutcome::NoWaiter => api_error(
+        SubmitOutcome::NoWaiter => api_error_coded(
             StatusCode::CONFLICT,
-            "no pairing handshake is waiting for a PIN",
+            "pairing_no_pin_wait",
+            "No pairing handshake is waiting for a PIN",
         ),
-        SubmitOutcome::NoMatch => api_error(
+        SubmitOutcome::NoMatch => api_error_coded(
             StatusCode::CONFLICT,
-            "the selected pairing ceremony is no longer waiting — refresh and retry",
+            "pairing_request_gone",
+            "The selected pairing ceremony is no longer waiting — refresh and retry",
         ),
     }
 }

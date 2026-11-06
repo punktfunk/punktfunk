@@ -22,6 +22,7 @@ use pf_seats::ipc::{
     ErrorCode, Needs,
 };
 use pf_seats::{RuntimeState, Secret};
+use std::collections::BTreeMap;
 
 /// One profile as a client's picker shows it.
 #[derive(Serialize, ToSchema, Clone)]
@@ -120,6 +121,13 @@ pub(crate) struct SeatPublic {
     /// The progress line while `starting`, or why while `unavailable`.
     #[serde(skip_serializing_if = "Option::is_none")]
     detail: Option<String>,
+    /// The host message `detail` is the English of, worded with `detail_params`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    detail_id: Option<String>,
+    /// The values of that message's placeholders, by name.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    #[schema(required = false)]
+    detail_params: BTreeMap<String, String>,
     /// The port to dial for this profile.
     port: u16,
     /// The device playing on it while `occupied`.
@@ -285,25 +293,45 @@ fn take_turns_seat(st: &MgmtState, display_name: &str, account: &str) -> SeatPub
         TurnSeat::Ready => (SeatState::Ready, None),
         TurnSeat::Switching => (
             SeatState::Starting,
-            Some(format!("Switching to {display_name}…")),
+            Some((
+                "seatline_switching",
+                format!("Switching to {display_name}…"),
+            )),
         ),
         TurnSeat::Switchable => (SeatState::Stopped, None),
         TurnSeat::SignIn => (
             SeatState::Unavailable,
-            Some(format!("Sign {display_name} in on the PC once.")),
+            Some((
+                "seatline_sign_in_once",
+                format!("Sign {display_name} in on the PC once."),
+            )),
         ),
         TurnSeat::Occupied => (
             SeatState::Unavailable,
-            Some("Someone else is playing on this PC right now.".to_string()),
+            Some((
+                "seatline_pc_occupied",
+                "Someone else is playing on this PC right now.".to_string(),
+            )),
         ),
         TurnSeat::Gone => (
             SeatState::Unavailable,
-            Some("This Windows account is gone.".to_string()),
+            Some((
+                "seatline_windows_account_gone",
+                "This Windows account is gone.".to_string(),
+            )),
         ),
+    };
+    let detail_params = match &detail {
+        Some(("seatline_switching" | "seatline_sign_in_once", _)) => {
+            BTreeMap::from([("profile".to_string(), display_name.to_string())])
+        }
+        _ => BTreeMap::new(),
     };
     SeatPublic {
         state,
-        detail,
+        detail_id: detail.as_ref().map(|(id, _)| id.to_string()),
+        detail: detail.map(|(_, text)| text),
+        detail_params,
         port: st.app.native_port.get().copied().unwrap_or(0),
         occupant: None,
         pin: None,
@@ -317,9 +345,11 @@ fn take_turns_seat(st: &MgmtState, display_name: &str, account: &str) -> SeatPub
 /// also reads the Windows account of a seat on an existing one.
 fn seat_line(st: &MgmtState, p: &Profile, seats: &Snapshot, operator: bool) -> SeatPublic {
     let port = st.app.native_port.get().copied().unwrap_or(0);
-    let unavailable = |why: &str| SeatPublic {
+    let unavailable = |(id, why): (&str, &str)| SeatPublic {
         state: SeatState::Unavailable,
         detail: Some(why.to_string()),
+        detail_id: Some(id.to_string()),
+        detail_params: BTreeMap::new(),
         port,
         occupant: None,
         pin: None,
@@ -338,12 +368,17 @@ fn seat_line(st: &MgmtState, p: &Profile, seats: &Snapshot, operator: bool) -> S
         };
     }
     if pf_paths::seat::role().is_door() {
-        return unavailable("This host has no seat for the owner yet.");
+        return unavailable((
+            "seatline_no_owner_seat",
+            "This host has no seat for the owner yet.",
+        ));
     }
     match &p.os_account {
         OsAccount::Seat { .. } | OsAccount::Operator => SeatPublic {
             state: SeatState::Ready,
             detail: None,
+            detail_id: None,
+            detail_params: BTreeMap::new(),
             port,
             occupant: None,
             pin: None,
@@ -351,18 +386,21 @@ fn seat_line(st: &MgmtState, p: &Profile, seats: &Snapshot, operator: bool) -> S
             take_turns: false,
             account: None,
         },
-        OsAccount::Linux { .. } | OsAccount::Windows { .. } => {
-            unavailable("This profile signs in to an account this host can't start yet.")
-        }
+        OsAccount::Linux { .. } | OsAccount::Windows { .. } => unavailable((
+            "seatline_account_not_startable",
+            "This profile signs in to an account this host can't start yet.",
+        )),
     }
 }
 
 /// A seat's line: its ledger row, who plays there, and its host's pin. Why a seat failed is the
 /// supervisor's own text (unit, account, ports): only the `operator` reads it.
 fn seated(seats: &Snapshot, id: &str, operator: bool) -> SeatPublic {
-    let line = |state, port, detail: Option<&str>| SeatPublic {
+    let line = |state, port, detail: Option<(&str, &str)>| SeatPublic {
         state,
-        detail: detail.map(str::to_string),
+        detail: detail.map(|(_, text)| text.to_string()),
+        detail_id: detail.map(|(id, _)| id.to_string()),
+        detail_params: BTreeMap::new(),
         port,
         occupant: None,
         pin: None,
@@ -372,22 +410,40 @@ fn seated(seats: &Snapshot, id: &str, operator: bool) -> SeatPublic {
     };
     let Some((seat, _)) = seats.seat(id) else {
         let why = if !seats.on && pf_paths::seat::role().is_door() {
-            "The box's seat service isn't answering."
+            (
+                "seatline_seat_service_silent",
+                "The box's seat service isn't answering.",
+            )
         } else {
-            "This profile's seat is gone. Remove the profile and add it again."
+            (
+                "seatline_seat_gone",
+                "This profile's seat is gone. Remove the profile and add it again.",
+            )
         };
         return line(SeatState::Unavailable, 0, Some(why));
     };
     let port = seat.native_port;
     if !seats.on {
         let why = if seats.single_session {
-            "This Windows edition serves one person at a time."
+            (
+                "seatline_single_session",
+                "This Windows edition serves one person at a time.",
+            )
         } else {
-            "This host needs seats turned on for a second profile."
+            (
+                "seatline_seats_off",
+                "This host needs seats turned on for a second profile.",
+            )
         };
         return line(SeatState::Unavailable, port, Some(why));
     }
-    let detail = seat.runtime.detail.as_deref();
+    // The supervisor's own line, with its message where it names one.
+    let said = |state| SeatPublic {
+        detail: seat.runtime.detail.clone(),
+        detail_id: seat.runtime.detail_id.clone(),
+        detail_params: seat.runtime.detail_params.clone(),
+        ..line(state, port, None)
+    };
     let mut out = match seat.runtime.state {
         RuntimeState::Running => match seats.occupants.get(id).and_then(|o| o.first()) {
             Some(o) => SeatPublic {
@@ -396,15 +452,14 @@ fn seated(seats: &Snapshot, id: &str, operator: bool) -> SeatPublic {
             },
             None => line(SeatState::Ready, port, None),
         },
-        RuntimeState::Starting => line(SeatState::Starting, port, detail),
+        RuntimeState::Starting => said(SeatState::Starting),
+        RuntimeState::Failed if operator && seat.runtime.detail.is_some() => {
+            said(SeatState::Unavailable)
+        }
         RuntimeState::Failed => line(
             SeatState::Unavailable,
             port,
-            Some(
-                detail
-                    .filter(|_| operator)
-                    .unwrap_or("This seat didn't start."),
-            ),
+            Some(("seatline_not_started", "This seat didn't start.")),
         ),
         RuntimeState::Stopping | RuntimeState::Stopped | RuntimeState::Unknown => {
             line(SeatState::Stopped, port, None)
@@ -426,8 +481,21 @@ async fn seats_now(st: &MgmtState) -> Arc<Snapshot> {
 }
 
 /// Why a profile on a person's own Linux account is never started from here.
-const OPENS_WITH_PASSWORD: &str = "This profile opens with its account password.";
-const NOT_A_PERSON: &str = "This profile doesn't open with an account password.";
+fn opens_with_password() -> Response {
+    api_error_coded(
+        StatusCode::CONFLICT,
+        "profile_opens_with_password",
+        "This profile opens with its account password.",
+    )
+}
+
+fn not_a_person() -> Response {
+    api_error_coded(
+        StatusCode::CONFLICT,
+        "profile_not_password",
+        "This profile doesn't open with an account password.",
+    )
+}
 
 /// The person's own Linux account `id` plays on, from the door's ledger, or the answer for a
 /// profile with none.
@@ -439,12 +507,12 @@ async fn person_of(st: &MgmtState, id: &str) -> Result<pf_seats::SeatId, Respons
         return Err(api_error(StatusCode::NOT_FOUND, "no profile with that id"));
     };
     let ledger = match st.door.clone() {
-        Some(door) => blocking("seat ledger", move || door.ledger()).await?,
+        Some(door) => blocking("seat_ledger", move || door.ledger()).await?,
         None => Snapshot::default(),
     };
     match ledger.person_row(&p.os_account) {
         Some(row) => Ok(row.id.clone()),
-        None => Err(api_error(StatusCode::CONFLICT, NOT_A_PERSON)),
+        None => Err(not_a_person()),
     }
 }
 
@@ -452,15 +520,16 @@ async fn person_of(st: &MgmtState, id: &str) -> Result<pf_seats::SeatId, Respons
 /// sentence; a supervisor that didn't answer is a 503.
 async fn ask_door(st: &MgmtState, command: Command) -> Result<CommandResult, Response> {
     let Some(door) = st.door.clone() else {
-        return Err(api_error(StatusCode::CONFLICT, NOT_A_PERSON));
+        return Err(not_a_person());
     };
-    match blocking("seat supervisor", move || door.ask(command)).await? {
+    match blocking("seat_supervisor", move || door.ask(command)).await? {
         Ok(answer) => Ok(answer),
         Err(e) if e.code == ErrorCode::Backend => Err(refused(seat_error(e))),
         Err(e) => {
             tracing::warn!(code = ?e.code, "seat supervisor request failed");
-            Err(api_error(
+            Err(api_error_coded(
                 StatusCode::SERVICE_UNAVAILABLE,
+                "seat_supervisor_unreachable",
                 "Couldn't reach the seat supervisor. Try again in a moment.",
             ))
         }
@@ -468,8 +537,9 @@ async fn ask_door(st: &MgmtState, command: Command) -> Result<CommandResult, Res
 }
 
 fn unexpected() -> Response {
-    api_error(
+    api_error_coded(
         StatusCode::INTERNAL_SERVER_ERROR,
+        "seat_supervisor_unexpected",
         "The seat supervisor answered something unexpected.",
     )
 }
@@ -496,7 +566,7 @@ async fn unlock_needs(
     if rows.is_empty() {
         return needs;
     }
-    let asked = blocking("seat supervisor", move || {
+    let asked = blocking("seat_supervisor", move || {
         let state = |id| Command::UnlockState {
             id,
             fingerprint: fp.clone(),
@@ -513,11 +583,11 @@ async fn unlock_needs(
     needs
 }
 
-/// A refusal to answer with: the status and its sentence.
-type Refusal = (StatusCode, String);
+/// A refusal to answer with: the status and its body.
+type Refusal = (StatusCode, ApiError);
 
-fn refused((status, message): Refusal) -> Response {
-    api_error(status, &message)
+fn refused((status, error): Refusal) -> Response {
+    error.respond(status)
 }
 
 /// The status a supervisor refusal reads as, and its sentence for the console.
@@ -530,7 +600,15 @@ fn seat_error(e: SeatError) -> Refusal {
         ErrorCode::Backend => backend_status(&e.message),
         _ => StatusCode::SERVICE_UNAVAILABLE,
     };
-    (status, sentence_of(&e.message).to_string())
+    let sentence = sentence_of(&e.message);
+    let error = match e.said {
+        Some(code) => ApiError {
+            params: (!e.params.is_empty()).then_some(e.params),
+            ..ApiError::coded(&code, sentence)
+        },
+        None => ApiError::plain(sentence),
+    };
+    (status, error)
 }
 
 /// A backend refusal's status, by the code its message leads with: the person can fix a password
@@ -577,7 +655,15 @@ fn sentence_of(message: &str) -> &str {
     }
 }
 
-const SEATS_OFF: &str = "Turn seats on before adding a profile with a desktop of its own.";
+fn seats_off() -> Refusal {
+    (
+        StatusCode::CONFLICT,
+        ApiError::coded(
+            "seats_off_for_desktop",
+            "Turn seats on before adding a profile with a desktop of its own.",
+        ),
+    )
+}
 
 /// The account of seat `n`, never shown to a player: `pf_seat<n>` on Windows, a Linux user name
 /// `pf-seat-<n>` elsewhere.
@@ -592,7 +678,7 @@ fn seat_account(n: usize) -> String {
 /// A seat of its own for a new profile, on an account made for it.
 fn new_seat(name: &str) -> Result<String, Refusal> {
     if !crate::seats::enabled() {
-        return Err((StatusCode::CONFLICT, SEATS_OFF.into()));
+        return Err(seats_off());
     }
     let taken: Vec<String> = crate::seats::list()
         .map_err(seat_error)?
@@ -605,7 +691,10 @@ fn new_seat(name: &str) -> Result<String, Refusal> {
         .ok_or_else(|| {
             (
                 StatusCode::UNPROCESSABLE_ENTITY,
-                "This host already serves four seats, the most it can.".to_string(),
+                ApiError::coded(
+                    "seats_full",
+                    "This host already serves four seats, the most it can.",
+                ),
             )
         })?;
     created(crate::seats::call(Command::Create(pf_seats::CreateSeat {
@@ -625,7 +714,7 @@ fn adopt_seat(
     bound: &[String],
 ) -> Result<String, Refusal> {
     if !crate::seats::enabled() {
-        return Err((StatusCode::CONFLICT, SEATS_OFF.into()));
+        return Err(seats_off());
     }
     if !cfg!(windows) {
         return adopt_user(name, account, password);
@@ -651,7 +740,10 @@ fn adopt_user(name: &str, account: &str, password: Secret) -> Result<String, Ref
     if !pf_seats::model::valid_owner_account(account) {
         return Err((
             StatusCode::BAD_REQUEST,
-            "Enter the account's Linux user name, in lowercase.".into(),
+            ApiError::coded(
+                "account_name_lowercase",
+                "Enter the account's Linux user name, in lowercase.",
+            ),
         ));
     }
     created(crate::seats::call(Command::AdoptUser {
@@ -675,7 +767,7 @@ fn created(made: Result<CommandResult, SeatError>) -> Result<String, Refusal> {
         }
         other => Err((
             StatusCode::INTERNAL_SERVER_ERROR,
-            format!("seats create answered {other:?}"),
+            ApiError::plain(format!("seats create answered {other:?}")),
         )),
     }
 }
@@ -689,13 +781,19 @@ fn bindable_account(
     let Some(account) = take_turns::local_account(name) else {
         return Err((
             StatusCode::BAD_REQUEST,
-            "No Windows account by that name on this PC.".into(),
+            ApiError::coded(
+                "windows_account_missing",
+                "No Windows account by that name on this PC.",
+            ),
         ));
     };
     if !take_turns::bindable(&account, ledger, bound) {
         return Err((
             StatusCode::CONFLICT,
-            "Another profile already uses that Windows account.".into(),
+            ApiError::coded(
+                "windows_account_taken",
+                "Another profile already uses that Windows account.",
+            ),
         ));
     }
     Ok(account)
@@ -729,8 +827,10 @@ fn reseal(id: &str, password: Secret) -> Result<(), Refusal> {
 fn reseal_refusal() -> Refusal {
     (
         StatusCode::CONFLICT,
-        "Only a profile with a desktop of its own on an existing Windows account has a password to update."
-            .to_string(),
+        ApiError::coded(
+            "profile_no_password_to_update",
+            "Only a profile with a desktop of its own on an existing Windows account has a password to update.",
+        ),
     )
 }
 
@@ -836,14 +936,22 @@ fn keeps_steam_home(id: &str) -> bool {
 }
 
 fn edit_error(e: EditError) -> Response {
-    let status = match e {
-        EditError::NotFound => StatusCode::NOT_FOUND,
-        EditError::Invalid(_) => StatusCode::BAD_REQUEST,
-        EditError::NameTaken | EditError::Owner => StatusCode::CONFLICT,
-        EditError::Full => StatusCode::UNPROCESSABLE_ENTITY,
-        EditError::Store(_) => StatusCode::INTERNAL_SERVER_ERROR,
-    };
-    api_error(status, &e.to_string())
+    let text = e.to_string();
+    match e {
+        EditError::NotFound => api_error(StatusCode::NOT_FOUND, &text),
+        EditError::Invalid(_) => api_error(StatusCode::BAD_REQUEST, &text),
+        EditError::NameMissing => {
+            api_error_coded(StatusCode::BAD_REQUEST, "profile_name_missing", &text)
+        }
+        EditError::NameTaken => api_error_coded(StatusCode::CONFLICT, "profile_name_taken", &text),
+        EditError::Owner => {
+            api_error_coded(StatusCode::CONFLICT, "profile_owner_not_removable", &text)
+        }
+        EditError::Full => ApiError::coded("profile_limit", text)
+            .param("count", crate::profiles::PROFILES_MAX)
+            .respond(StatusCode::UNPROCESSABLE_ENTITY),
+        EditError::Store(e) => host_error("profile store refused", &format!("{e:#}")),
+    }
 }
 
 /// List the profiles a device can pick
@@ -980,12 +1088,13 @@ pub(crate) async fn wake_profile(
     };
     let seats = seats_now(&st).await;
     if seats.person_row(&p.os_account).is_some() {
-        return api_error(StatusCode::CONFLICT, OPENS_WITH_PASSWORD);
+        return opens_with_password();
     }
     let fp = device.map(|Extension(PairedDevice(fp))| fp);
     if lane != AuthLane::Admin && !may_wake(&st, profiles, &p.id, fp.as_deref()) {
-        return api_error(
+        return api_error_coded(
             StatusCode::FORBIDDEN,
+            "device_not_allowed_to_wake_seat",
             "This device isn't allowed to start another profile's seat.",
         );
     }
@@ -1118,8 +1227,9 @@ pub(crate) async fn create_profile(
     }
     // A Linux seat is the door's; elsewhere `new_seat` asks whether seats are on.
     if input.seat && cfg!(target_os = "linux") && !pf_paths::seat::role().is_door() {
-        return api_error(
+        return api_error_coded(
             StatusCode::CONFLICT,
+            "profile_seat_needs_door",
             "Turn on Reachable without logging in before adding a profile with a desktop of its own.",
         );
     }
@@ -1131,7 +1241,7 @@ pub(crate) async fn create_profile(
         };
         let adopt = input.seat_account.clone().zip(input.seat_password.clone());
         let bound = take_turns_bound(profiles);
-        let made = blocking("seat supervisor", move || match adopt {
+        let made = blocking("seat_supervisor", move || match adopt {
             Some((account, password)) => adopt_seat(&name, &account, password, &bound),
             None => new_seat(&name),
         });
@@ -1167,22 +1277,28 @@ pub(crate) async fn create_profile(
 /// Why a seat can't sign in to the existing account the input names, if it names one.
 fn adopt_refusal(input: &ProfileCreate) -> Option<Refusal> {
     input.seat_account.as_ref()?;
-    let (status, why) = if !input.seat {
+    let (status, code, why) = if !input.seat {
         (
             StatusCode::BAD_REQUEST,
+            "existing_account_needs_desktop",
             "An existing account needs a desktop of its own.",
         )
     } else if !cfg!(any(windows, target_os = "linux")) {
         (
             StatusCode::CONFLICT,
+            "existing_account_seat_platforms",
             "A seat on an existing account is only on Windows Server and Linux.",
         )
     } else if input.seat_password.is_none() {
-        (StatusCode::BAD_REQUEST, "Enter the account's password.")
+        (
+            StatusCode::BAD_REQUEST,
+            "account_password_missing",
+            "Enter the account's password.",
+        )
     } else {
         return None;
     };
-    Some((status, why.to_string()))
+    Some((status, ApiError::coded(code, why)))
 }
 
 /// Make a take-turns profile bound to the local Windows account `account`. Windows only; the
@@ -1195,13 +1311,14 @@ async fn create_take_turns(
     account: String,
 ) -> Response {
     if !cfg!(windows) {
-        return api_error(
+        return api_error_coded(
             StatusCode::CONFLICT,
+            "take_turns_windows_only",
             "Take-turns profiles are only on Windows.",
         );
     }
     let bound = take_turns_bound(profiles);
-    let vetted = blocking("Windows accounts", move || {
+    let vetted = blocking("windows_accounts", move || {
         let ledger = crate::seats::list().unwrap_or_default();
         bindable_account(&account, &ledger, &bound)
     });
@@ -1294,7 +1411,7 @@ pub(crate) async fn update_profile(
             Some(OsAccount::Seat { seat: Some(seat) }) => seat,
             Some(_) => return refused(reseal_refusal()),
         };
-        match blocking("seat supervisor", move || reseal(&seat, password)).await {
+        match blocking("seat_supervisor", move || reseal(&seat, password)).await {
             Ok(Ok(())) => {}
             Ok(Err(refusal)) => return refused(refusal),
             Err(resp) => return resp,
@@ -1353,7 +1470,7 @@ pub(crate) async fn delete_profile(
                 },
             );
         }
-        match blocking("seat supervisor", move || drop_seat(&seat)).await {
+        match blocking("seat_supervisor", move || drop_seat(&seat)).await {
             Ok(Ok(())) => {}
             Ok(Err(refusal)) => return refused(refusal),
             Err(resp) => return resp,
@@ -1393,10 +1510,17 @@ pub(crate) async fn set_profile_avatar(
     if profiles.get(&id).is_none() {
         return api_error(StatusCode::NOT_FOUND, "no profile with that id");
     }
-    let stored = blocking("profile store", move || profiles.put_avatar(&id, &body)).await;
+    let stored = blocking("profile_store", move || profiles.put_avatar(&id, &body)).await;
     match stored {
         Ok(Ok(_)) => StatusCode::NO_CONTENT.into_response(),
-        Ok(Err(e)) => api_error(StatusCode::BAD_REQUEST, &format!("{e:#}")),
+        Ok(Err(e)) => {
+            tracing::warn!(error = %format!("{e:#}"), "profile picture refused");
+            api_error_coded(
+                StatusCode::BAD_REQUEST,
+                "profile_picture_invalid",
+                "Couldn't save the picture. Use a PNG or JPEG under 1 MB.",
+            )
+        }
         Err(resp) => resp,
     }
 }
@@ -1426,7 +1550,7 @@ pub(crate) async fn delete_profile_avatar(
     }
     match profiles.remove_avatar(&id) {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
-        Err(e) => api_error(StatusCode::INTERNAL_SERVER_ERROR, &format!("{e:#}")),
+        Err(e) => host_error("profile picture not removed", &format!("{e:#}")),
     }
 }
 
@@ -1474,6 +1598,13 @@ pub(crate) struct SeatCheck {
     code: String,
     /// One plain sentence for the operator.
     message: String,
+    /// The host message `message` is the English of, worded with `params`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    id: Option<String>,
+    /// The values of that message's placeholders, by name.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    #[schema(required = false)]
+    params: BTreeMap<String, String>,
     /// The seat it is about; absent when it is about the box.
     #[serde(skip_serializing_if = "Option::is_none")]
     seat_id: Option<String>,
@@ -1492,6 +1623,8 @@ impl From<Diagnostic> for SeatCheck {
             },
             code: d.code,
             message: d.message,
+            id: d.id,
+            params: d.params,
             seat_id: d.seat_id.map(|id| id.to_string()),
             seat_name: None,
         }
@@ -1555,22 +1688,30 @@ pub(crate) struct SeatsDoctor {
     diagnostics: Vec<SeatCheck>,
 }
 
-const SEATS_NEED_WINDOWS: &str = "Seats need Windows Server.";
+fn seats_need_windows() -> Response {
+    api_error_coded(
+        StatusCode::CONFLICT,
+        "seats_need_windows_server",
+        "Seats need Windows Server.",
+    )
+}
 
 /// One request to the seat supervisor on a blocking thread, or the response that says why not.
 async fn supervisor(command: Command) -> Result<CommandResult, Response> {
-    match blocking("seat supervisor", move || crate::seats::call(command)).await? {
+    match blocking("seat_supervisor", move || crate::seats::call(command)).await? {
         Ok(result) => Ok(result),
         Err(e) => {
             tracing::warn!(code = ?e.code, error = %e.message, "seat supervisor request failed");
             Err(if e.code == ErrorCode::Transport {
-                api_error(
+                api_error_coded(
                     StatusCode::SERVICE_UNAVAILABLE,
+                    "seat_supervisor_unreachable_restart",
                     "Couldn't reach the seat supervisor. Restart the Punktfunk service, then try again.",
                 )
             } else {
-                api_error(
+                api_error_coded(
                     StatusCode::INTERNAL_SERVER_ERROR,
+                    "seats_not_changed",
                     "Couldn't change seats on this machine. Check the host log.",
                 )
             })
@@ -1591,10 +1732,7 @@ async fn seating(command: Command) -> Response {
             allow_rdp_from_network: status.allow_rdp_from_network,
         })
         .into_response(),
-        Ok(_) => api_error(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "The seat supervisor answered something unexpected.",
-        ),
+        Ok(_) => unexpected(),
         Err(response) => response,
     }
 }
@@ -1652,14 +1790,14 @@ pub(crate) async fn get_seating() -> Response {
 )]
 pub(crate) async fn put_seating(ApiJson(input): ApiJson<SeatingChange>) -> Response {
     if !cfg!(windows) {
-        return api_error(
-            StatusCode::CONFLICT,
-            if pf_paths::seat::role().is_door() {
-                "Seats stay on while Reachable without logging in is on."
-            } else {
-                SEATS_NEED_WINDOWS
-            },
-        );
+        if pf_paths::seat::role().is_door() {
+            return api_error_coded(
+                StatusCode::CONFLICT,
+                "seats_stay_on_with_door",
+                "Seats stay on while Reachable without logging in is on.",
+            );
+        }
+        return seats_need_windows();
     }
     seating(if input.enabled {
         Command::Enable {
@@ -1693,7 +1831,7 @@ pub(crate) async fn put_seating(ApiJson(input): ApiJson<SeatingChange>) -> Respo
 )]
 pub(crate) async fn get_seats_doctor() -> Response {
     if !crate::seats::has_supervisor() {
-        return api_error(StatusCode::CONFLICT, SEATS_NEED_WINDOWS);
+        return seats_need_windows();
     }
     match supervisor(Command::Doctor).await {
         Ok(CommandResult::Doctor { report }) => {
@@ -1713,10 +1851,7 @@ pub(crate) async fn get_seats_doctor() -> Response {
             })
             .into_response()
         }
-        Ok(_) => api_error(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "The seat supervisor answered something unexpected.",
-        ),
+        Ok(_) => unexpected(),
         Err(response) => response,
     }
 }
@@ -1775,10 +1910,16 @@ pub(crate) async fn put_door(
 /// The ledger row the profile plays on, or the answer for a profile that has none.
 fn seat_of(st: &MgmtState, id: &str, seats: &Snapshot) -> Result<(Profile, String), Refusal> {
     let Some(profiles) = st.app.profiles.get() else {
-        return Err((StatusCode::NOT_FOUND, "this host has no profiles".into()));
+        return Err((
+            StatusCode::NOT_FOUND,
+            ApiError::plain("this host has no profiles"),
+        ));
     };
     let Some(p) = profiles.get(id) else {
-        return Err((StatusCode::NOT_FOUND, "no profile with that id".into()));
+        return Err((
+            StatusCode::NOT_FOUND,
+            ApiError::plain("no profile with that id"),
+        ));
     };
     match seats.row_of(&p.os_account) {
         Some(row) => {
@@ -1787,7 +1928,10 @@ fn seat_of(st: &MgmtState, id: &str, seats: &Snapshot) -> Result<(Profile, Strin
         }
         None => Err((
             StatusCode::CONFLICT,
-            "This profile plays on the host's own desktop; it has no seat to start or stop.".into(),
+            ApiError::coded(
+                "profile_has_no_seat",
+                "This profile plays on the host's own desktop; it has no seat to start or stop.",
+            ),
         )),
     }
 }
@@ -1819,7 +1963,7 @@ pub(crate) async fn start_profile_seat(
         Err(refusal) => return refused(refusal),
     };
     if seats.person_row(&p.os_account).is_some() {
-        return api_error(StatusCode::CONFLICT, OPENS_WITH_PASSWORD);
+        return opens_with_password();
     }
     start_seat(&seat);
     let Some(profiles) = st.app.profiles.get() else {
@@ -1862,7 +2006,7 @@ pub(crate) async fn stop_profile_seat(
         Ok(found) => found,
         Err(refusal) => return refused(refusal),
     };
-    let stopped = blocking("seat supervisor", move || {
+    let stopped = blocking("seat_supervisor", move || {
         let id = pf_seats::SeatId::parse(seat)
             .map_err(|e| SeatError::new(ErrorCode::InvalidRequest, e.to_string()))?;
         let done = crate::seats::call(Command::Stop { id });
@@ -1917,8 +2061,9 @@ pub(crate) async fn end_profile_session(
     match ended {
         Ok(true) => {}
         Ok(false) => {
-            return api_error(
+            return api_error_coded(
                 StatusCode::SERVICE_UNAVAILABLE,
+                "seat_no_answer_stop",
                 "The seat didn't answer. Stop it instead to disconnect whoever plays there.",
             )
         }
@@ -2157,8 +2302,9 @@ pub(crate) async fn proxy_profile_seat(
     body: axum::body::Bytes,
 ) -> Response {
     if proxy_refuses(&rest) {
-        return api_error(
+        return api_error_coded(
             StatusCode::FORBIDDEN,
+            "seat_part_is_box",
             "That part of a seat is the box's. Change it on this page, not through a seat.",
         );
     }
@@ -2168,14 +2314,19 @@ pub(crate) async fn proxy_profile_seat(
         Err(refusal) => return refused(refusal),
     };
     let Some(row) = seats.seat(&seat).map(|(s, _)| s.clone()) else {
-        return api_error(StatusCode::NOT_FOUND, "This profile's seat is gone.");
+        return api_error_coded(
+            StatusCode::NOT_FOUND,
+            "seat_gone",
+            "This profile's seat is gone.",
+        );
     };
     // The owner's session starts on demand: the console asked for its library, and nobody has
     // logged in to make it.
     if row.owner && needs_start(&row.runtime.state) {
         start_seat(&seat);
-        return api_error(
+        return api_error_coded(
             StatusCode::SERVICE_UNAVAILABLE,
+            "owner_session_starting",
             "The owner's session is starting. Try again in a moment.",
         );
     }
@@ -2195,8 +2346,9 @@ pub(crate) async fn proxy_profile_seat(
     let answer = match forwarded.await {
         Ok(Some(answer)) => answer,
         Ok(None) => {
-            return api_error(
+            return api_error_coded(
                 StatusCode::BAD_GATEWAY,
+                "seat_no_answer_start",
                 "The seat didn't answer. Start it, then try again.",
             )
         }
@@ -2302,13 +2454,9 @@ mod tests {
         let no_password = input(serde_json::json!({ "seat_account": "jdoe" }));
         let refusal = adopt_refusal(&no_password).unwrap();
         if cfg!(any(windows, target_os = "linux")) {
-            assert_eq!(
-                refusal,
-                (
-                    StatusCode::BAD_REQUEST,
-                    "Enter the account's password.".to_string()
-                )
-            );
+            assert_eq!(refusal.0, StatusCode::BAD_REQUEST);
+            assert_eq!(refusal.1.code.as_deref(), Some("account_password_missing"));
+            assert_eq!(refusal.1.error, "Enter the account's password.");
             let ready = input(serde_json::json!({ "seat_account": "jdoe", "seat_password": "pw" }));
             assert!(adopt_refusal(&ready).is_none());
         } else {
@@ -2489,7 +2637,7 @@ mod tests {
             refusal,
             (
                 StatusCode::BAD_REQUEST,
-                "That isn't Ben's Windows password.".to_string()
+                ApiError::plain("That isn't Ben's Windows password.")
             )
         );
         let locked_out = seat_error(SeatError::new(
@@ -2500,8 +2648,17 @@ mod tests {
             locked_out,
             (
                 StatusCode::TOO_MANY_REQUESTS,
-                "Too many wrong passwords. Try again in 12 minutes.".to_string()
+                ApiError::plain("Too many wrong passwords. Try again in 12 minutes.")
             )
+        );
+        let coded = seat_error(
+            SeatError::new(ErrorCode::Backend, "account_taken: Another profile.")
+                .said("account_taken"),
+        );
+        assert_eq!(coded.0, StatusCode::CONFLICT);
+        assert_eq!(
+            coded.1,
+            ApiError::coded("account_taken", "Another profile.")
         );
         for (message, status) in [
             ("account_locked: Wait ten minutes.", StatusCode::BAD_REQUEST),

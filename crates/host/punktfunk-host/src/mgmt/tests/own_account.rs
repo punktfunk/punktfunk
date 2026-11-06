@@ -144,7 +144,7 @@ fn a_person_s_own_linux_account_refuses_every_plugin_and_emulator_write() {
         ),
     ];
     for (method, path, why) in writes {
-        assert_eq!(refusal(&method, path), why, "{method} {path}");
+        assert_eq!(refusal(&method, path).map(|r| r.1), why, "{method} {path}");
     }
     for (method, path) in [
         (Method::GET, "/api/v1/store/catalog"),

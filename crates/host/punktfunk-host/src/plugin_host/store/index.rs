@@ -239,17 +239,33 @@ impl Entry {
     }
 
     pub(crate) fn incompatible_reason(&self) -> Option<String> {
+        self.incompatibility().map(|why| match why {
+            Incompatible::Platforms(list) => format!("requires {}", list.join(" or ")),
+            Incompatible::Host(min) => format!("needs punktfunk {min} or newer"),
+        })
+    }
+
+    /// Why this host can't run the plugin, as data.
+    pub(crate) fn incompatibility(&self) -> Option<Incompatible> {
         if !self.platforms.is_empty() && !self.platforms.iter().any(|p| p == HOST_PLATFORM) {
-            return Some(format!("requires {}", self.platforms.join(" or ")));
+            return Some(Incompatible::Platforms(self.platforms.clone()));
         }
         if let Some(min) = &self.min_host {
             let min = semver::Version::parse(min).ok()?;
             if older_than(host_version(), &min) {
-                return Some(format!("needs punktfunk {min} or newer"));
+                return Some(Incompatible::Host(min.to_string()));
             }
         }
         None
     }
+}
+
+/// Why a plugin can't run on this host.
+pub(crate) enum Incompatible {
+    /// The platforms it runs on, none of them this one.
+    Platforms(Vec<String>),
+    /// The oldest host version it runs on.
+    Host(String),
 }
 
 /// Whether the build stamped `host` predates `min`, on `major.minor.patch` alone: a canary

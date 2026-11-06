@@ -321,8 +321,9 @@ pub(crate) async fn arm_native_pairing(
         );
     };
     if np.pairing_refused() {
-        return api_error(
+        return api_error_coded(
             StatusCode::CONFLICT,
+            "seat_pairing_on_box",
             "This is a seat. Pair devices with the box in its console.",
         );
     }
@@ -449,9 +450,11 @@ pub(crate) async fn unpair_native_client(
             StatusCode::NOT_FOUND,
             "no paired native client with that fingerprint",
         ),
-        Err(e) => api_error(
+        Err(e) => api_error_logged(
             StatusCode::INTERNAL_SERVER_ERROR,
-            &format!("Couldn't save the paired-device list — {e}"),
+            "paired_devices_not_saved",
+            "Couldn't save the paired-device list",
+            &e,
         ),
     }
 }
@@ -559,9 +562,11 @@ pub(crate) async fn update_native_client_access(
             StatusCode::NOT_FOUND,
             "no paired native client with that fingerprint",
         ),
-        Err(e) => api_error(
+        Err(e) => api_error_logged(
             StatusCode::INTERNAL_SERVER_ERROR,
-            &format!("Couldn't save the paired-device list — {e}"),
+            "paired_devices_not_saved",
+            "Couldn't save the paired-device list",
+            &e,
         ),
     }
 }
@@ -605,9 +610,11 @@ pub(crate) async fn unpair_all_native_clients(State(st): State<Arc<MgmtState>>) 
             tracing::info!(unpaired, "management API: all native clients unpaired");
             Json(UnpairAllResult { unpaired }).into_response()
         }
-        Err(e) => api_error(
+        Err(e) => api_error_logged(
             StatusCode::INTERNAL_SERVER_ERROR,
-            &format!("Couldn't save the paired-device list — {e}"),
+            "paired_devices_not_saved",
+            "Couldn't save the paired-device list",
+            &e,
         ),
     }
 }
@@ -721,32 +728,44 @@ pub(crate) async fn approve_pending_device(
                 "management API: pending device approved (delegated pairing)");
             Json(NativeClient::from_record(client)).into_response()
         }
-        Ok(crate::native_pairing::ApproveOutcome::NotFound) => api_error(
+        Ok(crate::native_pairing::ApproveOutcome::NotFound) => api_error_coded(
             StatusCode::NOT_FOUND,
-            "no pending request with that id (it may have expired — have the device retry)",
+            "pending_request_expired",
+            "No pending request with that id (it may have expired — have the device retry)",
         ),
         Ok(crate::native_pairing::ApproveOutcome::WanNeedsBoundPin {
             relayed,
             unfamiliar_origin,
-        }) => api_error(
-            StatusCode::CONFLICT,
-            if relayed {
-                "Couldn't admit this device: it came through the web client, where the name it \
-                 sent proves nothing. Arm a PIN bound to its fingerprint instead, then read the \
-                 PIN out to whoever is holding it."
+        }) => {
+            let (code, text) = if relayed {
+                (
+                    "device_admit_relayed",
+                    "Couldn't admit this device: it came through the web client, where the name \
+                     it sent proves nothing. Arm a PIN bound to its fingerprint instead, then read \
+                     the PIN out to whoever is holding it.",
+                )
             } else if unfamiliar_origin {
-                "Couldn't admit this device: it asked from a page this host doesn't know yet, so \
-                 the name it sent proves nothing. Arm a PIN bound to its fingerprint instead, then \
-                 read the PIN out to whoever is holding it."
+                (
+                    "device_admit_unfamiliar_origin",
+                    "Couldn't admit this device: it asked from a page this host doesn't know yet, \
+                     so the name it sent proves nothing. Arm a PIN bound to its fingerprint \
+                     instead, then read the PIN out to whoever is holding it.",
+                )
             } else {
-                "Couldn't admit this device: it knocked from the internet, where the name it sent \
-                 proves nothing. Arm a PIN bound to its fingerprint instead, then read the PIN \
-                 out to whoever is holding it."
-            },
-        ),
-        Err(e) => api_error(
+                (
+                    "device_admit_internet",
+                    "Couldn't admit this device: it knocked from the internet, where the name it \
+                     sent proves nothing. Arm a PIN bound to its fingerprint instead, then read \
+                     the PIN out to whoever is holding it.",
+                )
+            };
+            api_error_coded(StatusCode::CONFLICT, code, text)
+        }
+        Err(e) => api_error_logged(
             StatusCode::INTERNAL_SERVER_ERROR,
-            &format!("Couldn't save the paired-device list — {e}"),
+            "paired_devices_not_saved",
+            "Couldn't save the paired-device list",
+            &e,
         ),
     }
 }

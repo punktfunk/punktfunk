@@ -60,6 +60,12 @@ pub(crate) struct HostInfo {
     /// when it would start, on the door itself and on a seat host, and for every lane but the
     /// admin one. The answer is up to 30 s old; a switch request drops it.
     door_unavailable: Option<String>,
+    /// The id of `door_unavailable`: the host message `apierr_<code>`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    door_unavailable_code: Option<String>,
+    /// The values of that message's placeholders, by name.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    door_unavailable_params: Option<std::collections::BTreeMap<String, String>>,
     /// The switch this host last started ran and failed, so the console stops waiting for it.
     /// Admin lane only.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
@@ -580,13 +586,13 @@ pub(crate) async fn get_health() -> Json<Health> {
 /// How long a probe of the door's blockers answers: it forks `id`.
 const DOOR_PROBE_FRESH: std::time::Duration = std::time::Duration::from_secs(30);
 
-type DoorProbe = std::sync::Mutex<Option<(std::time::Instant, Option<String>)>>;
+type DoorProbe<T = ApiError> = std::sync::Mutex<Option<(std::time::Instant, Option<T>)>>;
 
 static DOOR_PROBE: DoorProbe = std::sync::Mutex::new(None);
 
 /// The door's blockers, read only for the console: a paired device is not told which account
 /// the host runs as, and a seat host has no door to turn on.
-async fn door_unavailable(lane: AuthLane) -> Option<String> {
+async fn door_unavailable(lane: AuthLane) -> Option<ApiError> {
     if lane != AuthLane::Admin || pf_paths::seat::role().is_seat_host() {
         return None;
     }
@@ -615,12 +621,12 @@ pub(super) fn forget_door_probe() {
     forget_probe(&DOOR_PROBE);
 }
 
-fn forget_probe(last: &DoorProbe) {
+fn forget_probe<T>(last: &DoorProbe<T>) {
     *last.lock().unwrap_or_else(|e| e.into_inner()) = None;
 }
 
 /// `probe`'s answer, or the last one if it is under [`DOOR_PROBE_FRESH`] old.
-fn probe_door(last: &DoorProbe, probe: impl FnOnce() -> Option<String>) -> Option<String> {
+fn probe_door<T: Clone>(last: &DoorProbe<T>, probe: impl FnOnce() -> Option<T>) -> Option<T> {
     let mut last = last.lock().unwrap_or_else(|e| e.into_inner());
     if let Some((at, answer)) = last.as_ref() {
         if at.elapsed() < DOOR_PROBE_FRESH {
@@ -696,7 +702,9 @@ pub(crate) async fn get_host_info(
         },
         gamestream: gs,
         door: pf_paths::seat::role().is_door(),
-        door_unavailable,
+        door_unavailable_code: door_unavailable.as_ref().and_then(|e| e.code.clone()),
+        door_unavailable_params: door_unavailable.as_ref().and_then(|e| e.params.clone()),
+        door_unavailable: door_unavailable.map(|e| e.error),
         door_switch_failed,
         elevated_commands: (cfg!(windows) && lane == AuthLane::Admin)
             .then(crate::hooks::elevated_on),
@@ -1148,7 +1156,7 @@ mod tests {
 
     #[test]
     fn the_door_probe_runs_once_a_while() {
-        let last: DoorProbe = std::sync::Mutex::new(None);
+        let last: DoorProbe<String> = std::sync::Mutex::new(None);
         let mut runs = 0;
         let mut ask = |answer: Option<&str>| {
             probe_door(&last, || {
@@ -1196,7 +1204,7 @@ mod tests {
     /// A switch request drops the answer a fresh probe would have kept.
     #[test]
     fn a_forgotten_door_probe_asks_again() {
-        let last: DoorProbe = std::sync::Mutex::new(None);
+        let last: DoorProbe<String> = std::sync::Mutex::new(None);
         assert_eq!(
             probe_door(&last, || Some("blocked".into())).as_deref(),
             Some("blocked")

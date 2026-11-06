@@ -97,7 +97,7 @@ fn a_profile_create_would_refuse_is_vetted_before_its_seat_is_made() {
     ));
     assert!(matches!(
         p.vet_create(&new(" \u{7} ")),
-        Err(EditError::Invalid(_))
+        Err(EditError::NameMissing)
     ));
     let red = ProfileCreate {
         accent: Some("red".into()),

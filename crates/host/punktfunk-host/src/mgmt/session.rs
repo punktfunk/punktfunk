@@ -272,8 +272,9 @@ pub(crate) async fn set_session_player(
         .slot
         .is_some_and(|s| s as usize >= punktfunk_core::input::MAX_PADS)
     {
-        return api_error(
+        return api_error_coded(
             StatusCode::BAD_REQUEST,
+            "player_number_too_high",
             "That player number is higher than this host has controllers for.",
         );
     }
@@ -410,8 +411,9 @@ pub(crate) async fn stream_session_pads(Path(id): Path<u64>) -> Response {
 
 /// One id, one 404 — never a reach across to another session.
 fn no_such_session() -> Response {
-    api_error(
+    api_error_coded(
         StatusCode::NOT_FOUND,
+        "session_not_streaming",
         "No session with that id is streaming.",
     )
 }
@@ -419,8 +421,9 @@ fn no_such_session() -> Response {
 /// The session is live but its plane cannot carry this. GameStream has no message for a
 /// mute, an access change or a player slot, so the honest answer is that it did not happen.
 fn not_on_this_plane() -> Response {
-    api_error(
+    api_error_coded(
         StatusCode::CONFLICT,
+        "session_gamestream_cannot",
         "This session is a GameStream one, which can't do that. Stop it or ask its client.",
     )
 }
@@ -499,8 +502,9 @@ pub(crate) async fn end_game(
 ) -> Response {
     let ender = GameEnder::of(&st, lane, device.as_ref().map(|d| d.0 .0.as_str()));
     if ender.refused {
-        return api_error(
+        return api_error_coded(
             StatusCode::FORBIDDEN,
+            "device_access_expired",
             "This device's access to the host has expired.",
         );
     }
@@ -523,7 +527,11 @@ pub(crate) async fn end_game(
         }
     }
     if ended == 0 {
-        return api_error(StatusCode::CONFLICT, "no game is waiting to be ended");
+        return api_error_coded(
+            StatusCode::CONFLICT,
+            "no_game_to_end",
+            "No game is waiting to be ended",
+        );
     }
     tracing::info!(app_id = ?req.app_id, ended, device = ?ender.scope(), "management API: game ended");
     Json(EndGameResult { ended }).into_response()
@@ -625,15 +633,18 @@ pub(crate) async fn set_session_settings(
     ApiJson(settings): ApiJson<crate::session_settings::SessionSettings>,
 ) -> Response {
     if pf_paths::seat::role().follows_contract() {
-        return api_error(
+        return api_error_coded(
             StatusCode::CONFLICT,
+            "seat_session_settings_read_only",
             "A seat's session settings can't be changed here. Change the Seat defaults on the box.",
         );
     }
     if let Err(e) = crate::session_settings::store().set(settings) {
-        return api_error(
+        return api_error_logged(
             StatusCode::INTERNAL_SERVER_ERROR,
-            &format!("Couldn't save the session settings — {e:#}"),
+            "session_settings_not_saved",
+            "Couldn't save the session settings",
+            &format!("{e:#}"),
         );
     }
     let state = session_settings_state();

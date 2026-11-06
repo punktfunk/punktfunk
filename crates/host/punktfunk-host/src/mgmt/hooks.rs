@@ -42,7 +42,7 @@ pub(crate) async fn get_hooks() -> Json<crate::hooks::HooksConfig> {
 )]
 pub(crate) async fn set_hooks(ApiJson(cfg): ApiJson<crate::hooks::HooksConfig>) -> Response {
     if let Some(why) = crate::hooks::own_account_refusal() {
-        return api_error(StatusCode::FORBIDDEN, why);
+        return api_error_coded(StatusCode::FORBIDDEN, "hooks_own_account", why);
     }
     if let Err(e) = cfg.validate() {
         return api_error(StatusCode::BAD_REQUEST, &e);
@@ -51,19 +51,21 @@ pub(crate) async fn set_hooks(ApiJson(cfg): ApiJson<crate::hooks::HooksConfig>) 
         .hooks
         .iter()
         .any(|h| h.elevated)
-        .then(crate::hooks::elevated_refusal)
+        .then(crate::hooks::elevated_refused)
         .flatten()
     {
-        return api_error(StatusCode::BAD_REQUEST, why);
+        return api_error_coded(StatusCode::BAD_REQUEST, why.0, why.1);
     }
     match crate::hooks::store().set(cfg) {
         Ok(()) => {
             tracing::info!("management API: hook configuration updated");
             Json(crate::hooks::store().get()).into_response()
         }
-        Err(e) => api_error(
+        Err(e) => api_error_logged(
             StatusCode::INTERNAL_SERVER_ERROR,
-            &format!("Couldn't save the hooks — {e:#}"),
+            "hooks_not_saved",
+            "Couldn't save the hooks",
+            &format!("{e:#}"),
         ),
     }
 }
