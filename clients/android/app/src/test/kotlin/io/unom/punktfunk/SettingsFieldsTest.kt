@@ -1,5 +1,6 @@
 package io.unom.punktfunk
 
+import io.unom.punktfunk.kit.R
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
@@ -66,9 +67,10 @@ class SettingsFieldsTest {
 
         val kept = codecOptionsFor("av1", av1Capable = false, pyrowaveCapable = false)
         assertEquals(listOf("auto", "hevc", "h264", "av1"), kept.map { it.first })
-        val label = kept.first { it.first == "av1" }.second
-        assertNotEquals("AV1", label)
-        assert(label.contains("no hardware decoder")) { label }
+        assertEquals(
+            OptionLabel.Message(R.string.player_codec_av1_unsupported),
+            kept.first { it.first == "av1" }.second,
+        )
     }
 
     @Test

@@ -19,7 +19,7 @@ class PyroWaveQualityTest {
             asked = listOf(w, h, hz, chroma, depth, x100)
             "50 Mbit/s\n"
         }
-        assertEquals("960×540 at 60 Hz: 50 Mbit/s" to null, lines)
+        assertEquals(PyroWaveQuality.Cost(960, 540, 60, "50 Mbit/s", null), lines)
         assertEquals(listOf(960, 540, 60, false, 8, 120), asked)
 
         val warning = "Needs 1.6 Gbit/s — more than a 1 GbE link carries."
@@ -27,7 +27,7 @@ class PyroWaveQualityTest {
             asked = listOf(depth)
             "1.6 Gbit/s\n$warning"
         }
-        assertEquals("3840×2160 at 120 Hz: 1.6 Gbit/s" to warning, hdr)
+        assertEquals(PyroWaveQuality.Cost(3840, 2160, 120, "1.6 Gbit/s", warning), hdr)
         assertEquals("HDR asks 10 bits", listOf(10), asked)
     }
 

@@ -1,5 +1,6 @@
 package io.unom.punktfunk.kit.link
 
+import io.unom.punktfunk.kit.R
 import io.unom.punktfunk.kit.security.KnownHost
 
 /**
@@ -13,12 +14,12 @@ import io.unom.punktfunk.kit.security.KnownHost
 
 /**
  * The `start_in` setting. Unknown reads as [HOSTS], the `library_view` convention: a value a
- * newer client wrote degrades, it never ends a launch.
+ * newer client wrote degrades, it never ends a launch. [label] is the option's string resource.
  */
-enum class StartIn(val stored: String, val label: String) {
-    HOSTS("hosts", "Host list"),
-    LIBRARY("library", "Library"),
-    STREAM("stream", "Stream"),
+enum class StartIn(val stored: String, val label: Int) {
+    HOSTS("hosts", R.string.player_start_in_hosts),
+    LIBRARY("library", R.string.player_start_in_library),
+    STREAM("stream", R.string.player_start_in_stream),
     ;
 
     companion object {
