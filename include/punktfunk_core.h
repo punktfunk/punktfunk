@@ -991,6 +991,13 @@
 // a host cannot make the client hold more than this.
 #define PUNKTFUNK_LAUNCH_MESSAGE_MAX 200
 
+// Longest [`LaunchOutcome::message_id`], and each placeholder name, in bytes.
+#define LAUNCH_ID_MAX 64
+
+// Most [`LaunchOutcome::message_params`]. With every field at its cap the frame stays
+// under the 1 KiB a client reads.
+#define LAUNCH_PARAMS_MAX 3
+
 #define PUNKTFUNK_AUDIO_MAGIC 201
 
 #define PUNKTFUNK_RUMBLE_MAGIC 202
@@ -1191,6 +1198,10 @@
 // Longest `reason` on the wire. Enough for one host sentence.
 #define PUNKTFUNK_REFUSED_REASON_MAX 256
 
+// Most [`Refused::reason_params`]. With every field at its cap the frame stays under the
+// 1 KiB a client reads.
+#define REFUSED_PARAMS_MAX 2
+
 // Implied by [`PEN_TOUCHING`]; [`PenTracker`] ORs it so a client that only sets TOUCHING still looks in-range.
 #define PUNKTFUNK_PEN_IN_RANGE 1
 
@@ -1248,8 +1259,8 @@
 #define PUNKTFUNK_REANCHOR_MARKS_TO_LIFT 2
 
 // `mode_conflict = reject` admission close. Distinct from a transport
-// failure so a client can render "host busy". Reason bytes carry live mode
-// + client label.
+// failure so a client can render "host busy". The reason bytes are empty: a
+// client words `reject_busy`, and the live mode stays in the host's log.
 #define PUNKTFUNK_REJECT_BUSY_CLOSE_CODE 66
 
 // Pairing-gate close. Occupies 0x60.., disjoint from
