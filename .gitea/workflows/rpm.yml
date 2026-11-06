@@ -69,6 +69,7 @@ on:
       - 'packaging/linux/*.conf'
       - 'packaging/linux/*.desktop'
       - 'packaging/linux/*.generator'
+      - 'packaging/linux/*.pam'
       - 'packaging/linux/apparmor/**'
       - 'packaging/linux/*.rules'
       - 'packaging/linux/*.service'
