@@ -54,6 +54,8 @@ xz2 = { version = "0.1", features = ["static"] }
 [target.'cfg(windows)'.dependencies]
 windows-reactor = { workspace = true }
 pf-fluent = { path = "../../core/pf-fluent" }
+# The wizard's text; the language comes from the OS at the first screen.
+pf-l10n = { path = "../../../l10n", features = ["tools", "os"] }
 windows = { workspace = true, features = [
     # Done's Copy button: the password onto the clipboard.
     "ApplicationModel_DataTransfer",

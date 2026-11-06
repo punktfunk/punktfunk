@@ -4357,6 +4357,7 @@ dependencies = [
  "console",
  "getrandom 0.4.3",
  "pf-host-config",
+ "pf-l10n",
  "pf-paths",
  "portable-pty",
  "serde",
@@ -4370,6 +4371,7 @@ name = "punktfunk-setup-win"
 version = "0.46.0"
 dependencies = [
  "pf-fluent",
+ "pf-l10n",
  "pf-paths",
  "pf-paths-win",
  "punktfunk-setup",
@@ -4391,6 +4393,7 @@ version = "0.46.0"
 dependencies = [
  "anyhow",
  "ksni",
+ "pf-l10n",
  "pf-paths",
  "punktfunk-core",
  "rustls",

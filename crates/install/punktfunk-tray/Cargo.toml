@@ -25,6 +25,8 @@ anyhow = "1"
 pf-paths = { path = "../../host/pf-paths" }
 
 [target.'cfg(any(windows, target_os = "linux"))'.dependencies]
+# The menu's text and the OS language. No dependencies of its own on Linux, one on Windows.
+pf-l10n = { path = "../../../l10n", features = ["tools", "os"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # Loopback HTTPS poll of GET /api/v1/local/summary. Same sync ureq + rustls stack and
@@ -39,6 +41,8 @@ rustls = { workspace = true, features = ["logging", "tls12"] }
 punktfunk-core = { path = "../../core/punktfunk-core", default-features = false, features = ["tls", "ureq-tls"] }
 
 [target.'cfg(windows)'.dependencies]
+# "Restart Punktfunk" is the host part's message, shared with the web console.
+pf-l10n = { path = "../../../l10n", features = ["host"] }
 # SCM QUERY_STATUS works unprivileged — the service-state probe. Same crate the host service uses,
 # and it must stay in lockstep with it — see the windows-sys note on the host's declaration.
 windows-service = "0.8"
