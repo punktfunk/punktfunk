@@ -1510,27 +1510,31 @@ fn launch_verdict(
     if spawned {
         return LaunchOutcome::new(Kind::Spawned, "");
     }
-    match claim.and_then(|c| c.adopted()) {
-        Some(Liveness::Running) => LaunchOutcome::new(
+    let (kind, id, text) = match claim.and_then(|c| c.adopted()) {
+        Some(Liveness::Running) => (
             Kind::Adopted,
-            &format!(
+            "launch_adopted",
+            format!(
                 "{title} was already running from an earlier session — this picked that copy up \
                  instead of starting a second one."
             ),
         ),
         // Adopted on the in-flight window: the host reused a launch it cannot see.
-        Some(_) => LaunchOutcome::new(
+        Some(_) => (
             Kind::AdoptedUnknown,
-            &format!(
+            "launch_adopted_unknown",
+            format!(
                 "{title} was started a moment ago, so this picked that launch up rather than \
                  starting a second copy. Start it again if nothing comes up."
             ),
         ),
-        None => LaunchOutcome::new(
+        None => (
             Kind::Refused,
-            &format!("Couldn't start {title} — this host had nothing to run for it."),
+            "launch_nothing_to_run",
+            format!("Couldn't start {title} — this host had nothing to run for it."),
         ),
-    }
+    };
+    LaunchOutcome::new(kind, &text).worded(id, &[("title", title)])
 }
 
 /// Point the clipboard at the gamescope behind `lease`. A lease with no seat is the box's own

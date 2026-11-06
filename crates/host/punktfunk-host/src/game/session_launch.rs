@@ -35,8 +35,9 @@ pub(crate) struct Prepared {
     /// Undoes the prep steps in reverse on drop, panic-unwind included.
     pub prep: Option<crate::hooks::PrepGuard>,
     /// This session won't start its title: its files never arrived. The caller drops the
-    /// target and tells the player this sentence; empty when the session left first.
-    pub declined: Option<String>,
+    /// target and sends the player this refusal; its message is empty when the session left
+    /// first.
+    pub declined: Option<punktfunk_core::quic::LaunchOutcome>,
     /// The `launching` row a download wait published. Held for the session; [`games`] hides
     /// it once the session lists the game itself.
     ///
@@ -73,7 +74,7 @@ pub(crate) fn prepare(
     if let Some(t) = target.filter(|_| claim.as_ref().is_some_and(|c| c.must_spawn())) {
         match await_files(t, owner, gone) {
             Ok(row) => waiting = row,
-            Err(sentence) => {
+            Err(refusal) => {
                 // A retry must start the title, not adopt a launch that never happened.
                 if let Some(c) = &claim {
                     c.abandon();
@@ -82,7 +83,7 @@ pub(crate) fn prepare(
                     claim: None,
                     stamp,
                     prep: None,
-                    declined: Some(sentence),
+                    declined: Some(refusal),
                     waiting: None,
                 };
             }
@@ -118,13 +119,15 @@ pub(crate) fn prepare(
 
 /// A title that isn't installed downloads now, through the plugin that lists it. `Ok` once
 /// its files are there, with the `launching` row clients saw meanwhile; `Ok(None)` when
-/// nothing needed fetching. `Err` is the player's sentence, empty when the session left.
+/// nothing needed fetching. `Err` is the player's refusal, without words when the session
+/// left.
 fn await_files(
     t: &LaunchTarget,
     owner: &LaunchOwner,
     gone: &dyn Fn() -> bool,
-) -> Result<Option<crate::session_status::WaitingRow>, String> {
+) -> Result<Option<crate::session_status::WaitingRow>, punktfunk_core::quic::LaunchOutcome> {
     use crate::library::downloads::{self, Action, Refusal, Waited};
+    use punktfunk_core::quic::{LaunchOutcome, LaunchOutcomeKind};
     let Some(id) = t.game.id.as_deref() else {
         return Ok(None);
     };
@@ -143,9 +146,16 @@ fn await_files(
     let title = &t.game.title;
     if let Err(r) = downloads::call(provider, id, external, Action::Start) {
         tracing::warn!(title = %title, refusal = ?r, "the title's download did not start");
+        let refused = |text: String| LaunchOutcome::new(LaunchOutcomeKind::Refused, &text);
         return Err(match r {
-            Refusal::Said(why) => format!("Couldn't download {title} — {why}"),
-            _ => format!("Couldn't download {title} — the plugin that lists it didn't answer."),
+            Refusal::Said(why) => refused(format!("Couldn't download {title} — {why}")).worded(
+                "launch_download_refused",
+                &[("title", title), ("reason", &why)],
+            ),
+            _ => refused(format!(
+                "Couldn't download {title} — the plugin that lists it didn't answer."
+            ))
+            .worded("launch_download_no_answer", &[("title", title)]),
         });
     }
     downloads::begin(id, title, Some(owner.client.clone()));
@@ -166,7 +176,9 @@ fn await_files(
         Waited::Done => Ok(Some(row)),
         w => {
             tracing::info!(title = %title, outcome = ?w, "the launch ends without its title");
-            Err(w.sentence(title).unwrap_or_default())
+            Err(w
+                .outcome(title)
+                .unwrap_or_else(|| LaunchOutcome::new(LaunchOutcomeKind::Refused, "")))
         }
     }
 }
