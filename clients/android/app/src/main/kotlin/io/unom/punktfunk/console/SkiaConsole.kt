@@ -195,8 +195,11 @@ object SkiaConsole {
         val prefs = app.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
         val base = prefs.getString("json", null)?.let { runCatching { JSONObject(it) }.getOrNull() }
         val presets = presetStore.all()
+        val locales = app.resources.configuration.locales
         val opts = JSONObject()
             .put("device_name", deviceName(app))
+            // The app's languages as BCP-47 tags, most preferred first: the console's text follows.
+            .put("languages", JSONArray(List(locales.size()) { locales[it].toLanguageTag() }))
             .put("gpu_cache_bytes", gpuCacheBytes(app))
             // The touch shell exists as a fallback on phones/tablets but not on a TV —
             // gates the console's own "Controller-optimized UI" off switch.
