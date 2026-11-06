@@ -4,6 +4,9 @@ Punktfunk text census: the text a person reads that does not come from l10n/mess
 
 Usage:  python3 scripts/l10n-census.py <repo-root> [--check | --update]
 
+It reads the files git lists (tracked, or untracked and not ignored), so a generated `L10n.swift`
+or `strings.xml` on disk never counts.
+
 Per surface, it counts the string literals (and JSX text) in code that read as prose. It is a
 ratchet for a surface that is half moved to messages: a count may fall, never rise. `--check`
 fails when a surface counts more than scripts/ci/l10n-census/<surface>.txt and prints the
@@ -25,6 +28,7 @@ import collections
 import json
 import os
 import re
+import subprocess
 import sys
 
 SURFACES = {
@@ -452,14 +456,35 @@ def literals(src, lang, names):
 CFG_TEST_MOD = re.compile(r"#\[cfg\(test\)\]\s*(?:pub(?:\([^)]*\))?\s+)?mod\s+(\w+)\s*;")
 
 
+def listed(repo):
+    """Paths relative to `repo` that git tracks or would add, so an ignored generated file never
+    counts. `None` outside a checkout, where the file system is walked instead."""
+    try:
+        out = subprocess.run(
+            ["git", "-C", repo, "ls-files", "-z", "--cached", "--others", "--exclude-standard"],
+            capture_output=True, check=True).stdout
+    except (OSError, subprocess.CalledProcessError):
+        return None
+    return sorted(set(out.decode("utf-8", "replace").split("\0")) - {""})
+
+
 def surface_files(repo, roots):
     """Source files under `roots`, sorted, without test files or test-only Rust modules."""
     found = []
+    paths = listed(repo)
     for root in roots:
-        for d, dirs, files in os.walk(os.path.join(repo, root)):
-            dirs[:] = sorted(x for x in dirs if x not in SKIP_DIRS and not x.startswith("."))
-            found += [os.path.join(d, f) for f in sorted(files)
-                      if os.path.splitext(f)[1] in LANGS]
+        if paths is None:
+            for d, dirs, files in os.walk(os.path.join(repo, root)):
+                dirs[:] = sorted(x for x in dirs if x not in SKIP_DIRS and not x.startswith("."))
+                found += [os.path.join(d, f) for f in sorted(files)
+                          if os.path.splitext(f)[1] in LANGS]
+            continue
+        for rel in paths:
+            dirs = rel[len(root) + 1:].split("/")[:-1]
+            if (rel.startswith(root + "/") and os.path.splitext(rel)[1] in LANGS
+                    and not any(x in SKIP_DIRS or x.startswith(".") for x in dirs)
+                    and os.path.isfile(os.path.join(repo, rel))):
+                found.append(os.path.join(repo, rel))
     test_only = set()
     for p in found:
         if p.endswith(".rs"):

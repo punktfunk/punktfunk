@@ -5,6 +5,8 @@ Run: python3 scripts/l10n-census-test.py
 """
 import importlib.util
 import os
+import subprocess
+import tempfile
 import unittest
 
 _spec = importlib.util.spec_from_file_location(
@@ -149,6 +151,26 @@ class Prose(unittest.TestCase):
                   "https://docs.punktfunk.unom.io", "width=1920", ".row { color: red; }",
                   "{\"label\": \"Open Punktfunk\"}", "HEVC (H.265)"]:
             self.assertFalse(self.check(t), t)
+
+
+class Tree(unittest.TestCase):
+    def test_ignored_files_do_not_count(self):
+        with tempfile.TemporaryDirectory() as repo:
+            def put(rel, text=""):
+                path = os.path.join(repo, rel)
+                os.makedirs(os.path.dirname(path), exist_ok=True)
+                with open(path, "w", encoding="utf-8") as f:
+                    f.write(text)
+            try:
+                subprocess.run(["git", "-C", repo, "init", "-q"], check=True)
+            except (OSError, subprocess.CalledProcessError):
+                self.skipTest("git is not available")
+            put(".gitignore", "Generated/\n")
+            put("app/Home.swift")
+            put("app/Generated/L10n.swift")
+            put("app/Tests/HomeTests.swift")
+            rows = [os.path.relpath(p, repo) for p in census.surface_files(repo, ["app"])]
+            self.assertEqual(rows, ["app/Home.swift"])
 
 
 class Ratchet(unittest.TestCase):
