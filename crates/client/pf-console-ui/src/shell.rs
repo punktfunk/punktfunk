@@ -234,6 +234,9 @@ pub struct ConsoleOptions {
     /// `ProfileLocked` close before its failure, so the console asks for a locked profile's
     /// password. False dials a locked profile as it stands.
     pub prompts_unlock: bool,
+    /// The OS's preferred languages, BCP-47, most preferred first. A non-empty list sets the
+    /// process's language ([`pf_l10n::set_languages`]) when the console is built; empty leaves it.
+    pub languages: Vec<String>,
 }
 
 /// A built-in screen in landscape pixels, whole and clear of its cutout.
@@ -264,6 +267,7 @@ impl ConsoleOptions {
             screen: None,
             profiles: true,
             prompts_unlock: true,
+            languages: Vec::new(),
         }
     }
 }

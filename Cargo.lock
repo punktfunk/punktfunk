@@ -3344,6 +3344,7 @@ dependencies = [
  "opus",
  "pf-client-video",
  "pf-dmabuf",
+ "pf-l10n",
  "pf-update-check",
  "pipewire",
  "punktfunk-core",
@@ -3420,6 +3421,7 @@ dependencies = [
  "ash",
  "metal",
  "pf-client-core",
+ "pf-l10n",
  "pf-presenter",
  "punktfunk-core",
  "sdl3",
@@ -4151,6 +4153,7 @@ version = "0.46.0"
 dependencies = [
  "pf-client-core",
  "pf-console-ui",
+ "pf-l10n",
  "pf-presenter",
  "punktfunk-core",
  "serde_json",

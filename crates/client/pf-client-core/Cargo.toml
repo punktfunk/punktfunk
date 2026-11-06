@@ -24,6 +24,10 @@ repository.workspace = true
 # `NativeClient`/`endpoint` for identity + pairing; nothing here fetches over HTTPS.
 # Apple targets take the same subset: the console crate builds for the Mac, iOS and tvOS, and so
 # does the PS5 homebrew title (`all(target_os = "freebsd", target_vendor = "sie"), target_os = "horizon"`).
+[dependencies]
+# The words this crate hands a person: the shared client messages. No dependencies of its own.
+pf-l10n = { path = "../../../l10n", features = ["client"] }
+
 [target.'cfg(any(target_os = "android", target_vendor = "apple", all(target_os = "freebsd", target_vendor = "sie"), target_os = "horizon"))'.dependencies]
 punktfunk-core = { path = "../../core/punktfunk-core", features = ["quic", "serde"] }
 serde = { version = "1", features = ["derive"] }
