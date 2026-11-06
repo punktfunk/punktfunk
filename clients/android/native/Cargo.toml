@@ -40,8 +40,9 @@ pf-client-core = { path = "../../../crates/client/pf-client-core", default-featu
     "discovery",
 ] }
 async-channel = "2"
-# The stats overlay's warning lines read their text from the shared messages.
-pf-l10n = { path = "../../../l10n", features = ["android"] }
+# The stats overlay's warning lines and the PyroWave quality row read their text from the shared
+# messages.
+pf-l10n = { path = "../../../l10n", features = ["android", "client"] }
 # Shared, NOT in the Android table below: `session::connect` parses the `ConnectRequest`
 # JSON Kotlin hands `nativeConnect`, and that module compiles on the host too — CI's
 # workspace clippy builds this crate as a host cdylib.
@@ -136,6 +137,10 @@ ash = { workspace = true, features = ["loaded"] }
 # `DOWNLOAD AND INSTALL SUCCEEDED` in the build log on every bump — see pf-console-ui/Cargo.toml).
 skia-safe = { version = "0.153", features = ["gl", "textlayout"] }
 anyhow = "1"
+
+[dev-dependencies]
+# `en-XA`, the pseudo-language the tests read the PyroWave row in.
+pf-l10n = { path = "../../../l10n", features = ["pseudo"] }
 
 [lints]
 workspace = true

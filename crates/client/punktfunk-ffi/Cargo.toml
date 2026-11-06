@@ -18,15 +18,16 @@ crate-type = ["lib", "cdylib", "staticlib"]
 [features]
 default = []
 # The connection API, pairing and the demo host: everything behind core's control plane. The
-# stats overlay it formats takes its words from core's `l10n`.
+# stats overlay it formats takes its words from core's `l10n`, the PyroWave warning from pf-l10n.
 quic = [
-    "punktfunk-core/quic", "punktfunk-core/l10n", "dep:opus", "dep:quinn", "dep:rand",
-    "dep:rcgen", "dep:tokio",
+    "punktfunk-core/quic", "punktfunk-core/l10n", "dep:pf-l10n", "dep:opus", "dep:quinn",
+    "dep:rand", "dep:rcgen", "dep:tokio",
 ]
 
 [dependencies]
 punktfunk-core = { path = "../../core/punktfunk-core" }
 pf-bitstream = { path = "../../codec/pf-bitstream" }
+pf-l10n = { path = "../../../l10n", features = ["client"], optional = true }
 # The backend `punktfunk_set_log_callback` installs (`log::set_logger` + `log::Log`). tracing's
 # `log` feature mirrors every event as a `log` record while no tracing subscriber is installed,
 # which is how core's lines reach the callback.

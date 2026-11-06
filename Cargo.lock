@@ -4233,6 +4233,7 @@ dependencies = [
  "log",
  "opus",
  "pf-bitstream",
+ "pf-l10n",
  "punktfunk-core",
  "quinn",
  "rand 0.10.3",
