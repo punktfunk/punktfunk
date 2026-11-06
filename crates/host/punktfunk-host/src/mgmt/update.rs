@@ -51,6 +51,13 @@ pub(crate) struct UpdateResultInfo {
     /// Applied; activates on the next reboot (rpm-ostree).
     #[serde(default)]
     pub staged: bool,
+    /// The failure in words, as the host message `hostupdate_<error_code>` with `from`, `to`
+    /// and `error_params`; `error` keeps the detail.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error_code: Option<String>,
+    /// The values of that message's other placeholders, by name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error_params: Option<std::collections::BTreeMap<String, String>>,
 }
 
 #[derive(Serialize, Deserialize, ToSchema)]
@@ -146,6 +153,8 @@ fn status_from(snap: update::Snapshot) -> UpdateStatus {
             error: r.error.clone(),
             log_path: r.log_path.clone(),
             staged: r.staged,
+            error_code: r.error_code.clone(),
+            error_params: (!r.error_params.is_empty()).then(|| r.error_params.clone()),
         }),
     }
 }

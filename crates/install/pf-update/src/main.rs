@@ -22,6 +22,7 @@
 mod linux_main {
     use pf_update_check::detect::{self, Product};
     use serde::Serialize;
+    use std::collections::BTreeMap;
     use std::path::Path;
     use std::process::Command;
 
@@ -77,7 +78,29 @@ mod linux_main {
         staged: bool,
         #[serde(skip_serializing_if = "Option::is_none")]
         error: Option<String>,
+        /// The failure a person reads, as the host message `hostupdate_<error_code>`.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        error_code: Option<&'static str>,
+        #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+        error_params: BTreeMap<&'static str, String>,
         finished_unix: u64,
+    }
+
+    /// A failed apply: the detail, and the message a person reads for it, if any.
+    struct Failed {
+        error: String,
+        code: Option<&'static str>,
+        params: BTreeMap<&'static str, String>,
+    }
+
+    impl From<String> for Failed {
+        fn from(error: String) -> Self {
+            Failed {
+                error,
+                code: None,
+                params: BTreeMap::new(),
+            }
+        }
     }
 
     fn now_unix() -> u64 {
@@ -158,7 +181,7 @@ mod linux_main {
     }
 
     /// Per-kind apply. `Ok(true)` means the new bits wait for a reboot (rpm-ostree).
-    fn apply_for_kind(kind: &str) -> Result<bool, String> {
+    fn apply_for_kind(kind: &str) -> Result<bool, Failed> {
         match kind {
             "apt" => {
                 // Restrict apt-get update to our list when it exists; a full refresh is slower, not safer.
@@ -235,10 +258,15 @@ mod linux_main {
                     .map(|c| c.lines().any(|l| l.trim() == "PACMAN_FULL_SYSUPGRADE=1"))
                     .unwrap_or(false);
                 if !optin {
-                    return Err(format!(
-                        "pacman full-sysupgrade is not opted in — set PACMAN_FULL_SYSUPGRADE=1 \
-                         in {PACMAN_OPTIN_CONF} (this runs `pacman -Syu` for the WHOLE system)"
-                    ));
+                    return Err(Failed {
+                        error: format!(
+                            "Pacman full-sysupgrade is not opted in — set \
+                             PACMAN_FULL_SYSUPGRADE=1 in {PACMAN_OPTIN_CONF} (this runs \
+                             `pacman -Syu` for the WHOLE system)"
+                        ),
+                        code: Some("pacman_not_opted_in"),
+                        params: BTreeMap::from([("path", PACMAN_OPTIN_CONF.to_string())]),
+                    });
                 }
                 run(
                     Command::new("pacman").args(["-Syu", "--noconfirm"]),
@@ -246,7 +274,7 @@ mod linux_main {
                 )?;
                 Ok(false)
             }
-            other => Err(format!("no apply leg for install kind {other}")),
+            other => Err(format!("no apply leg for install kind {other}").into()),
         }
     }
 
@@ -295,6 +323,8 @@ mod linux_main {
                         changed: false,
                         staged: false,
                         error: Some(e),
+                        error_code: None,
+                        error_params: BTreeMap::new(),
                         finished_unix: now_unix(),
                     },
                 );
@@ -309,8 +339,11 @@ mod linux_main {
             let after = if staged {
                 before.clone()
             } else {
-                gate_version(mode)
-                    .map_err(|e| format!("run-the-binary gate: {e} — the update did NOT stick"))?
+                gate_version(mode).map_err(|e| {
+                    Failed::from(format!(
+                        "run-the-binary gate: {e} — the update did NOT stick"
+                    ))
+                })?
             };
             Ok((staged, after))
         });
@@ -324,10 +357,12 @@ mod linux_main {
                 before_version: before,
                 after_version: after,
                 error: None,
+                error_code: None,
+                error_params: BTreeMap::new(),
                 finished_unix: now_unix(),
             },
             Err(e) => {
-                eprintln!("pf-update: {e}");
+                eprintln!("pf-update: {}", e.error);
                 HelperResult {
                     ok: false,
                     kind: kind.into(),
@@ -335,7 +370,9 @@ mod linux_main {
                     after_version: before,
                     changed: false,
                     staged: false,
-                    error: Some(e),
+                    error: Some(e.error),
+                    error_code: e.code,
+                    error_params: e.params,
                     finished_unix: now_unix(),
                 }
             }
