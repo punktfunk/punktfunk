@@ -89,7 +89,7 @@ pub fn show_scoped(
         None => store.settings().clone(),
     };
     let dialog = adw::PreferencesDialog::new();
-    dialog.set_title("Preferences");
+    dialog.set_title(pf_l10n::desktop::desktop_preferences_title());
     dialog.set_search_enabled(true);
     // Wide enough that the page switcher sits in the header: the dialog moves it to a bottom
     // bar below 110 pt per page, ≈ 733 px for five.

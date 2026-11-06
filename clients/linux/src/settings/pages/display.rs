@@ -7,19 +7,20 @@ use crate::settings::spec::{self, Page};
 use crate::settings::tables::*;
 use crate::trust::Settings;
 use adw::prelude::*;
+use pf_l10n::{client, common, desktop};
 use std::cell::Cell;
 use std::rc::Rc;
 
 pub fn display(b: &mut Build) {
     let mut p = b.page(Page::Display, "video-display-symbolic");
-    let size = p.group("Resolution", "");
+    let size = p.group(client::prefs_group_resolution(), "");
     let res = resolution(b);
     b.put(&mut p, Some(&size), res);
     let names: Vec<String> = REFRESH
         .iter()
         .map(|&r| match r {
-            0 => "Native".to_string(),
-            r => format!("{r} Hz"),
+            0 => client::player_refresh_hz_native().to_string(),
+            r => common::common_hz(r),
         })
         .collect();
     let row = b.choice(
@@ -35,10 +36,13 @@ pub fn display(b: &mut Build) {
     );
 
     // The one form-level note, not repeated on every row.
-    let picture = p.group("Picture", "Display changes apply from the next session.");
+    let picture = p.group(
+        client::prefs_group_picture(),
+        client::prefs_applies_next_session(),
+    );
     let (bitrate_field, show_pyrowave_bitrate) = bitrate_row(b);
     b.put(&mut p, Some(&picture), bitrate_field);
-    let fit = b.choice(&spec::VIDEO_FIT, VIDEO_FIT_LABELS);
+    let fit = b.choice(&spec::VIDEO_FIT, &texts(VIDEO_FIT_LABELS));
     caption_follows(&fit, VIDEO_FIT_CAPTIONS);
     b.put(
         &mut p,
@@ -47,7 +51,7 @@ pub fn display(b: &mut Build) {
             s.video_fit = at(VIDEO_FITS, i).to_string()
         }),
     );
-    let screens = b.choice(&spec::SCREENS, SCREENS_LABELS);
+    let screens = b.choice(&spec::SCREENS, &texts(SCREENS_LABELS));
     caption_follows(&screens, SCREENS_CAPTIONS);
     b.put(
         &mut p,
@@ -59,8 +63,12 @@ pub fn display(b: &mut Build) {
     let (field, _) = Field::switch(&spec::HDR, |s| s.hdr_enabled, |s, v| s.hdr_enabled = v);
     b.put(&mut p, Some(&picture), field);
     // The buffer only means something under Smoothness, so it hides the rest of the time.
-    let present = b.choice(&spec::PRESENT, PRESENT_PRIORITY_LABELS);
-    let buffer = b.choice(&spec::SMOOTH_BUFFER, SMOOTH_BUFFER_LABELS);
+    let present = b.choice(&spec::PRESENT, &texts(PRESENT_PRIORITY_LABELS));
+    let buffer_names = smooth_buffer_labels();
+    let buffer = b.choice(
+        &spec::SMOOTH_BUFFER,
+        &buffer_names.iter().map(String::as_str).collect::<Vec<_>>(),
+    );
     caption_follows(&present, PRESENT_PRIORITY_CAPTIONS);
     let w = buffer.widget().clone();
     w.set_visible(false);
@@ -80,12 +88,12 @@ pub fn display(b: &mut Build) {
             &spec::SMOOTH_BUFFER,
             &buffer,
             index::smooth_buffer,
-            |s, i| s.smooth_buffer = i.min(SMOOTH_BUFFER_LABELS.len() as u32 - 1) as u8,
+            |s, i| s.smooth_buffer = i.min(SMOOTH_BUFFER_STEPS - 1) as u8,
         ),
     );
     let scale = render_scale(b);
     b.put(&mut p, None, scale);
-    let codec = b.choice(&spec::CODEC, CODEC_LABELS);
+    let codec = b.choice(&spec::CODEC, &texts(CODEC_LABELS));
     let (quality_field, show_quality) = pyrowave_quality_row(b);
     {
         let w = codec.widget().clone();
@@ -126,7 +134,7 @@ pub fn display(b: &mut Build) {
     let row = b.choice(
         &spec::COMPOSITOR,
         &[
-            "Automatic",
+            client::player_compositor_auto(),
             "KWin",
             "Mutter (GNOME)",
             "Hyprland",
@@ -153,7 +161,12 @@ fn hardware(b: &mut Build, p: &mut PageB) {
     b.put(p, None, awake);
     let row = b.choice(
         &spec::DECODER,
-        &["Automatic", "Vulkan Video", "VAAPI", "Software"],
+        &[
+            client::player_decoder_auto(),
+            "Vulkan Video",
+            "VAAPI",
+            client::player_decoder_software(),
+        ],
     );
     b.put(
         p,
@@ -172,14 +185,14 @@ fn hardware(b: &mut Build, p: &mut PageB) {
     // The adapter feeds the session's device pick. Hidden with nothing to pick; a saved one
     // that is gone (an unplugged eGPU) keeps an entry to move off.
     let saved = b.seed.adapter.clone();
-    let mut names = vec!["Automatic".to_string()];
+    let mut names = vec![desktop::desktop_adapter_auto().to_string()];
     let mut keys = vec![String::new()];
     for a in &b.probes.adapters {
         names.push(a.clone());
         keys.push(a.clone());
     }
     if !saved.is_empty() && !keys.contains(&saved) {
-        names.push(format!("{saved} (not detected)"));
+        names.push(desktop::desktop_adapter_missing(&saved));
         keys.push(saved);
     }
     if keys.len() > 1 {
@@ -212,13 +225,19 @@ fn resolution(b: &Build) -> Field {
             .map(String::as_str)
             .collect::<Vec<_>>(),
     );
-    let width = size_row("Width", punktfunk_core::resolutions::MIN_WIDTH);
-    let height = size_row("Height", punktfunk_core::resolutions::MIN_HEIGHT);
+    let width = size_row(
+        client::player_resolution_width(),
+        punktfunk_core::resolutions::MIN_WIDTH,
+    );
+    let height = size_row(
+        client::player_resolution_height(),
+        punktfunk_core::resolutions::MIN_HEIGHT,
+    );
     let aspect = ChoiceRow::new(
         &b.dialog,
         b.inline,
-        "Aspect ratio",
-        "Which shapes the Resolution row offers",
+        client::player_resolution_aspect(),
+        client::player_resolution_aspect_hint(),
         &ASPECTS.iter().map(|a| a.label).collect::<Vec<_>>(),
     );
     // The family the Resolution row lists; only the Aspect handler moves it.
@@ -324,14 +343,14 @@ fn render_scale(b: &Build) -> Field {
     let names: Vec<String> = RENDER_SCALES
         .iter()
         .map(|&s| render_scale_label(s))
-        .chain(["Custom\u{2026}".to_string()])
+        .chain([client::player_render_scale_custom().to_string()])
         .collect();
     let choice = b.choice(
         &spec::RENDER_SCALE,
         &names.iter().map(String::as_str).collect::<Vec<_>>(),
     );
     let percent = adw::SpinRow::with_range(50.0, 400.0, 1.0);
-    percent.set_title("Percent");
+    percent.set_title(client::player_render_scale_percent());
     percent.set_visible(false);
     {
         let percent = percent.clone();
@@ -393,12 +412,15 @@ fn bitrate_row(b: &Build) -> (Field, Rc<dyn Fn(bool)>) {
     use pf_client_core::settings::PYROWAVE_FIXED_KBPS;
     let row = adw::SpinRow::with_range(0.0, 3000.0, 1.0);
     row.set_title(spec::BITRATE.title());
-    row.set_subtitle(spec::BITRATE.caption());
-    let auto = b.choice(&spec::BITRATE, &["Automatic", "Fixed"]);
-    set_row_subtitle(
-        auto.widget(),
-        pf_l10n::client::player_bitrate_kbps_pyrowave_hint(),
+    row.set_subtitle(&spec::BITRATE.caption());
+    let auto = b.choice(
+        &spec::BITRATE,
+        &[
+            client::player_bitrate_kbps_automatic(),
+            client::player_bitrate_kbps_fixed(),
+        ],
     );
+    set_row_subtitle(auto.widget(), client::player_bitrate_kbps_pyrowave_hint());
     auto.widget().set_visible(false);
     {
         let r = row.clone();
@@ -543,7 +565,7 @@ fn pyrowave_quality_row(b: &Build) -> (Field, Rc<dyn Fn(bool)>) {
 }
 
 /// The row's caption names the selected choice.
-pub(super) fn caption_follows(row: &ChoiceRow, captions: &'static [&'static str]) {
+pub(super) fn caption_follows(row: &ChoiceRow, captions: &'static [Text]) {
     let w = row.widget().clone();
-    row.connect_changed(move |i| set_row_subtitle(&w, at(captions, i)));
+    row.connect_changed(move |i| set_row_subtitle(&w, at(captions, i)()));
 }

@@ -10,6 +10,7 @@ use adw::prelude::*;
 use pf_client_core::settings::GamepadUi;
 use pf_client_core::start::{self, StartIn};
 use pf_client_core::trust::{HudCorner, StatsVerbosity};
+use pf_l10n::{client, common, desktop};
 use punktfunk_core::hud::STATS_SCALE_PCTS;
 
 pub fn general(b: &mut Build, switcher: adw::PreferencesGroup) {
@@ -25,8 +26,9 @@ pub fn general(b: &mut Build, switcher: adw::PreferencesGroup) {
         omarchy(b, &mut p);
     }
 
-    let stats = p.group("Statistics", "");
-    let row = b.choice(&spec::STATS, &["Off", "Compact", "Normal", "Detailed"]);
+    let stats = p.group(client::prefs_group_statistics(), "");
+    let tiers: Vec<&str> = StatsVerbosity::ALL.iter().map(|v| v.label()).collect();
+    let row = b.choice(&spec::STATS, &tiers);
     b.put(
         &mut p,
         Some(&stats),
@@ -63,7 +65,10 @@ pub fn general(b: &mut Build, switcher: adw::PreferencesGroup) {
             |s, i| s.hud_placement = at(&HudCorner::ALL, i).as_name().to_string(),
         ),
     );
-    let sizes: Vec<String> = STATS_SCALE_PCTS.iter().map(|p| format!("{p} %")).collect();
+    let sizes: Vec<String> = STATS_SCALE_PCTS
+        .iter()
+        .map(common::common_percent)
+        .collect();
     let row = b.choice(
         &spec::STATS_SIZE,
         &sizes.iter().map(String::as_str).collect::<Vec<_>>(),
@@ -84,7 +89,7 @@ pub fn general(b: &mut Build, switcher: adw::PreferencesGroup) {
 }
 
 fn session(b: &mut Build, p: &mut PageB) {
-    let g = p.group("Session", "");
+    let g = p.group(client::prefs_group_session(), "");
     // A preset carries only `fullscreen_on_stream`; the defaults show the three-way picker,
     // which also sets `fullscreen_always`.
     let (field, _) = Field::switch(
@@ -93,7 +98,14 @@ fn session(b: &mut Build, p: &mut PageB) {
         |s, v| s.fullscreen_on_stream = v,
     );
     b.put(p, Some(&g), field);
-    let row = b.choice(&spec::FULLSCREEN, &["Off", "While streaming", "Always"]);
+    let row = b.choice(
+        &spec::FULLSCREEN,
+        &[
+            client::player_fullscreen_off(),
+            client::player_fullscreen_stream(),
+            client::player_fullscreen_always(),
+        ],
+    );
     b.put(
         p,
         Some(&g),
@@ -134,14 +146,20 @@ fn session(b: &mut Build, p: &mut PageB) {
 
 /// Which interface this device opens: the device's, never a preset's.
 fn console(b: &mut Build, p: &mut PageB) {
-    let g = p.group("Console", "");
+    let g = p.group(client::prefs_group_console(), "");
     let (field, on) = Field::switch(
         &spec::GAMEPAD_UI,
         |s| s.gamepad_ui() != GamepadUi::Off,
         |s, v| s.set_gamepad_ui_enabled(v),
     );
     b.put(p, Some(&g), field);
-    let mode = b.choice(&spec::GAMEPAD_UI_MODE, &["With a controller", "Always"]);
+    let mode = b.choice(
+        &spec::GAMEPAD_UI_MODE,
+        &[
+            client::player_gamepad_ui_mode_connected(),
+            client::player_gamepad_ui_mode_always(),
+        ],
+    );
     let w = mode.widget().clone();
     w.set_visible(false);
     on.connect_active_notify(move |r| w.set_visible(r.is_active()));
@@ -214,17 +232,14 @@ fn omarchy_menu() -> Field {
 fn start_in_subtitle(store: &Store) -> String {
     let known = store.hosts();
     match start::default_host(&store.settings(), &known) {
-        Some(i) => format!(
-            "Library opens {}'s games; Stream also connects to its desktop",
-            known.hosts[i].name
-        ),
-        None => "Opens on the host list: there is no default host yet".into(),
+        Some(i) => client::player_start_in_host_hint(&known.hosts[i].name),
+        None => client::player_start_in_no_host_hint().into(),
     }
 }
 
 fn docs_row() -> adw::ActionRow {
     let row = adw::ActionRow::builder()
-        .title("What each number means")
+        .title(client::player_stats_docs_link())
         .subtitle("docs.punktfunk.unom.io/docs/stats")
         .activatable(true)
         .build();
@@ -241,16 +256,16 @@ fn docs_row() -> adw::ActionRow {
 
 fn clear_art_row(dialog: &adw::PreferencesDialog) -> adw::ActionRow {
     let row = adw::ActionRow::builder()
-        .title("Clear cached art")
-        .subtitle("Posters are kept on this device so a library opens before the host answers")
+        .title(desktop::desktop_clear_art())
+        .subtitle(desktop::desktop_clear_art_hint())
         .activatable(true)
         .build();
     row.add_suffix(&crate::widgets::lucide::row_icon("trash-2"));
     let dialog = dialog.downgrade();
     row.connect_activated(move |_| {
         let toast = match pf_client_core::art_cache::clear() {
-            Ok(()) => "Cached art cleared".to_string(),
-            Err(e) => format!("Couldn't clear the cached art \u{2014} {e}"),
+            Ok(()) => desktop::desktop_clear_art_done().to_string(),
+            Err(e) => desktop::desktop_clear_art_failed(e),
         };
         if let Some(d) = dialog.upgrade() {
             d.add_toast(adw::Toast::new(&toast));
