@@ -1,20 +1,15 @@
 import type { HostCheck } from "@/api/gen/model/hostCheck";
+import { hostText } from "@/lib/host-messages";
 import { m } from "@/paraglide/messages";
 
 /**
  * Presentation rules for the host's diagnostics checks.
  *
  * The console and the host ship as **separate packages**, and canary setups pair console N with
- * host N±1 — so a check whose `id` this build has never heard of is a normal state, not an error.
- * Every host check therefore arrives with English `summary`/`impact`/`remedy.text` already filled
- * in, and this module's job is to *decorate* that: a localized name for the checks we know, a
- * readable heading for the ones we don't, and the badge vocabulary.
- *
- * What is deliberately NOT localized here is the situational prose. A single check has many shapes
- * (the vhci one alone has four distinct causes, each with its own remedy), and copying ~20 sentences
- * into a package that versions independently of the one that generates them is exactly the drift
- * this design set out to avoid. The host is the single source of that text; when it starts sending
- * a shape discriminator alongside `id`, the console can key localized prose off it without guessing.
+ * host N±1, so a check whose `id` or message ids this build has never heard of is a normal state,
+ * not an error. Every check arrives with English `summary`/`impact`/`remedy.text` filled in. The
+ * console words each of them by `summary_id`/`impact_id`/`remedy_id` and `params` when it has the
+ * message, and shows the English for an id it lacks. Unknown check ids get a readable heading.
  */
 
 /** Localized names for the check ids this build knows about. */
@@ -42,6 +37,20 @@ export function checkTitle(check: HostCheck): string {
 		.replace(/_/g, " ")
 		.replace(/^./, (first) => first.toUpperCase());
 }
+
+/** What the check found, in the console's language. */
+export const checkSummary = (check: HostCheck): string =>
+	hostText(check.summary_id, check.params, check.summary);
+
+/** What breaks, in the console's language; empty when the check has no impact. */
+export const checkImpact = (check: HostCheck): string =>
+	hostText(check.impact_id, check.params, check.impact);
+
+/** The remedy's text, in the console's language. */
+export const remedyText = (check: HostCheck): string | undefined =>
+	check.remedy
+		? hostText(check.remedy_id, check.params, check.remedy.text)
+		: undefined;
 
 /** True when this build recognizes the check — used only to decide how much chrome to show. */
 export function isKnownCheck(check: HostCheck): boolean {

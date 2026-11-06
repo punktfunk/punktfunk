@@ -10,6 +10,7 @@ import { ROW, ROW_GAP, staggerProps } from "@/components/stagger";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import {
+	checkSummary,
 	checkTitle,
 	needsAttention,
 	statusLabel,
@@ -98,7 +99,7 @@ export const AttentionStrip: FC<{
 								</Badge>
 								<span className="font-medium">{checkTitle(check)}</span>
 								<span className="min-w-0 text-muted-foreground">
-									{check.summary}
+									{checkSummary(check)}
 								</span>
 							</motion.li>
 						))}

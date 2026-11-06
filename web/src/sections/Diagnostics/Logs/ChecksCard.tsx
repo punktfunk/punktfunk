@@ -22,8 +22,11 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardTitle } from "@/components/ui/card";
 import {
+	checkImpact,
+	checkSummary,
 	checkTitle,
 	needsAttention,
+	remedyText,
 	statusLabel,
 	statusVariant,
 	worstFirst,
@@ -190,7 +193,9 @@ const CheckRow: FC<{ check: HostCheck }> = ({ check }) => {
 		<>
 			<Badge variant={statusVariant(check)}>{statusLabel(check)}</Badge>
 			<span className="font-medium">{title}</span>
-			<span className="min-w-0 text-muted-foreground">{check.summary}</span>
+			<span className="min-w-0 text-muted-foreground">
+				{checkSummary(check)}
+			</span>
 		</>
 	);
 
@@ -226,7 +231,7 @@ const CheckRow: FC<{ check: HostCheck }> = ({ check }) => {
 							<p className="text-xs text-muted-foreground">
 								{m.diag_impact_label()}
 							</p>
-							<p className="mt-0.5 max-w-prose">{check.impact}</p>
+							<p className="mt-0.5 max-w-prose">{checkImpact(check)}</p>
 						</div>
 					)}
 					{check.remedy && (
@@ -234,7 +239,7 @@ const CheckRow: FC<{ check: HostCheck }> = ({ check }) => {
 							<p className="text-xs text-muted-foreground">
 								{m.diag_remedy_label()}
 							</p>
-							<p className="mt-0.5 max-w-prose">{check.remedy.text}</p>
+							<p className="mt-0.5 max-w-prose">{remedyText(check)}</p>
 							{check.remedy.command && (
 								<CopyableCommand command={check.remedy.command} />
 							)}
