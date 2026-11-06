@@ -218,7 +218,7 @@ final class ProfileUnlockTests: XCTestCase {
             ConnectOffer.failureMessage(
                 PunktfunkClientError.rejected(.profileLocked), hostName: "Desk", pinned: true,
                 requestAccess: false, callerRecovers: true),
-            "Desk: This profile needs its account password.")
+            L10n.dialHostReason(host: "Desk", reason: String(localized: L10n.rejectProfileLocked)))
         XCTAssertEqual(
             ConnectOffer.failureMessage(
                 PunktfunkClientError.rejected(.profileLocked, said: "Wrong password."),
