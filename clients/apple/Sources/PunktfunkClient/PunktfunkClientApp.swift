@@ -24,6 +24,7 @@ struct PunktfunkClientApp: App {
         // Before anything touches the core, so its first lines (identity load, the first connect's
         // transport setup) land in the log ring "Send logs to host" uploads.
         CoreLog.install()
+        ConsoleBridge.setLanguages()
         #if os(iOS) || os(visionOS)
         // Put Geist on the navigation titles before any bar is built.
         BrandTheme.apply()

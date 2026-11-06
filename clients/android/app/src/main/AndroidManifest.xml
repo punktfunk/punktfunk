@@ -71,6 +71,7 @@
          and console surfaces vote their own rate. ADPF carries the decode hints. localeConfig
          lists the shipped languages for Android 13+'s per-app language; :kit generates it. -->
     <application
+        android:name=".PunktfunkApplication"
         android:allowBackup="false"
         android:appCategory="game"
         android:isGame="true"

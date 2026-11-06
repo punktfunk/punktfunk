@@ -957,6 +957,13 @@ object NativeBridge {
     external fun nativeConsoleAvailable(): Boolean
 
     /**
+     * Word the Rust side's text in the first of [tags] that Punktfunk ships: a JSON array of
+     * BCP-47 tags, most preferred first. `nativeConsoleCreate` does this from its `languages`; the app
+     * calls this at process start, for the text read with no console.
+     */
+    external fun nativeSetLanguages(tags: String)
+
+    /**
      * Build the console: [optionsJson] = `{device_name, gpu_cache_bytes, settings: <trust::Settings>,
      * presets: [[id, name]], known_hosts: <KnownHosts>, entry: {} | {"library": <HostRow>}}`.
      * Returns a handle (its render thread parked until a surface arrives), or `0` on a bad options
