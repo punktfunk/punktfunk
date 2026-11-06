@@ -42,6 +42,7 @@ import io.unom.punktfunk.SettingsStore
 import io.unom.punktfunk.kit.DsDevice
 import io.unom.punktfunk.kit.Gamepad
 import io.unom.punktfunk.kit.NativeBridge
+import io.unom.punktfunk.kit.R
 import io.unom.punktfunk.models.ActiveSession
 import io.unom.punktfunk.models.LibraryReturn
 import io.unom.punktfunk.kit.Sc2BleLink
@@ -490,11 +491,11 @@ private fun padAction(activity: MainActivity?, action: String, padKey: String) {
                     .firstOrNull { "${it.vendorId}:${it.productId}:${it.name}" == padKey }
                     ?.let { testRumble(it, deviceBodyVibrator(activity)) } == true
             }
-            if (!pulsed) SkiaConsole.notice("No motor answered.")
+            if (!pulsed) SkiaConsole.notice(activity.getString(R.string.android_pad_no_motor))
         }
         "sc2_bluetooth" -> when {
             Sc2BleLink.permissionGranted(activity) ->
-                SkiaConsole.notice("Bluetooth access is already granted.")
+                SkiaConsole.notice(activity.getString(R.string.android_pad_bt_already))
             // The system dialog pauses the activity; onResume re-probes and engages the capture,
             // the same way the menu-time auto-ask completes.
             else -> Sc2BleLink.CONNECT_PERMISSION?.let {
@@ -509,11 +510,9 @@ private fun padAction(activity: MainActivity?, action: String, padKey: String) {
             }
             when {
                 !settings.dsCapture ->
-                    SkiaConsole.notice(
-                        "Enable \"DualSense / DualShock passthrough (USB)\" in Settings first.",
-                    )
-                dev == null -> SkiaConsole.notice("No wired DualSense or DualShock 4 detected.")
-                usb.hasPermission(dev) -> SkiaConsole.notice("USB access is already granted.")
+                    SkiaConsole.notice(activity.getString(R.string.android_pad_ds_enable_passthrough))
+                dev == null -> SkiaConsole.notice(activity.getString(R.string.android_pad_ds_none))
+                usb.hasPermission(dev) -> SkiaConsole.notice(activity.getString(R.string.android_pad_usb_already))
                 else -> usb.requestPermission(
                     dev,
                     PendingIntent.getBroadcast(
@@ -530,10 +529,10 @@ private fun padAction(activity: MainActivity?, action: String, padKey: String) {
                 it.vendorId == DsDevice.VID_SONY && it.productId in DsDevice.USB_PIDS
             }
             when {
-                dev == null -> SkiaConsole.notice("No wired DualSense detected.")
+                dev == null -> SkiaConsole.notice(activity.getString(R.string.android_pad_dualsense_none))
                 DsDevice.modelFor(dev.productId) == DsDevice.Model.DUALSHOCK4 ->
-                    SkiaConsole.notice("The DualShock 4 has no haptics audio device.")
-                !usb.hasPermission(dev) -> SkiaConsole.notice("Grant USB access first.")
+                    SkiaConsole.notice(activity.getString(R.string.android_pad_ds4_no_haptics))
+                !usb.hasPermission(dev) -> SkiaConsole.notice(activity.getString(R.string.android_pad_grant_usb_first))
                 else -> Thread({
                     // Its OWN connection: the renderer's descriptor must never be shared with
                     // another transfer engine, and that applies to this test as much as to the
@@ -544,10 +543,10 @@ private fun padAction(activity: MainActivity?, action: String, padKey: String) {
                     conn?.close()
                     SkiaConsole.notice(
                         when {
-                            r > 0 -> "Haptics test passed — $r frames to the pad."
-                            r == -1 -> "Couldn't open the pad's haptics — the pad still works normally"
-                            r == -2 -> "The audio stream stopped part-way."
-                            else -> "The stream opened but no audio reached the pad."
+                            r > 0 -> activity.resources.getQuantityString(R.plurals.android_pad_haptics_passed, r, r)
+                            r == -1 -> activity.getString(R.string.android_pad_haptics_open_failed)
+                            r == -2 -> activity.getString(R.string.android_pad_haptics_stopped)
+                            else -> activity.getString(R.string.android_pad_haptics_silent)
                         },
                     )
                 }, "pf-pad-selftest-console").start()
@@ -591,7 +590,7 @@ private fun sc2Extras(activity: MainActivity?): List<ConsoleJson.ExtraPad> {
                 else -> Gamepad.PREF_STEAMCONTROLLER2
             },
             detail = dev?.let { "%04X:%04X · usb".format(it.vendorId, it.productId) }
-                ?: if (onBle) "bluetooth" else "captured",
+                ?: if (onBle) "bluetooth" else activity.getString(R.string.android_pad_detail_captured),
             forwarded = captured,
             // Only a live capture owns the HID output the buzz rides; an ungranted pad has no link.
             rumble = captured,

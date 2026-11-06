@@ -10,9 +10,11 @@ import android.util.Log
 import android.view.InputDevice
 import android.view.KeyEvent
 import android.view.MotionEvent
+import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.res.stringResource
 import io.unom.punktfunk.CONNECT_TIMEOUT_MS
 import io.unom.punktfunk.ConnectErrors
 import io.unom.punktfunk.DialSpec
@@ -41,6 +43,7 @@ import io.unom.punktfunk.shortcutId
 import io.unom.punktfunk.kit.Gamepad
 import io.unom.punktfunk.kit.NativeBridge
 import io.unom.punktfunk.kit.ProfilePick
+import io.unom.punktfunk.kit.R
 import io.unom.punktfunk.kit.VideoDecoders
 import io.unom.punktfunk.kit.deviceBodyVibrator
 import io.unom.punktfunk.kit.discovery.DiscoveredHost
@@ -157,11 +160,10 @@ object SkiaConsole {
      * report of "the gamepad UI just doesn't activate, even on Always, even with a controller"
      * looks like. Reads [healthy] as Compose state, so the note clears itself if it ever recovers.
      */
+    @Composable
     fun unavailable(): String? = when {
-        !wanted() -> "This device has no console UI in this build, so the touch layout stays up."
-        !healthy -> "The console UI couldn't start on this device, so the touch layout is " +
-            "standing in. Restart the app to try again — and if it keeps happening, send this " +
-            "host your logs from a saved host's ⋮ menu."
+        !wanted() -> stringResource(R.string.android_console_unavailable_build)
+        !healthy -> stringResource(R.string.android_console_unavailable_failed)
         else -> null
     }
 
@@ -468,6 +470,7 @@ object SkiaConsole {
      */
     fun handleDeepLink(url: String) {
         if (handle == 0L) return
+        val app = appContext ?: return
         if (!identities.settled) {
             state.now { parkedLink = url }
             return
@@ -479,14 +482,14 @@ object SkiaConsole {
         }
         val link = (parsed as io.unom.punktfunk.kit.link.DeepLinkResult.Parsed).link
         if (link.route != io.unom.punktfunk.kit.link.LinkRoute.CONNECT) {
-            notice("Punktfunk on Android can't do “${link.route.word}” links yet.")
+            notice(app.getString(R.string.link_route_unsupported, link.route.word))
             return
         }
         val presetRef = link.preset
         if (presetRef != null) {
             val (_, resolution) = presetStore.resolve(presetRef)
             if (resolution != io.unom.punktfunk.PresetResolution.FOUND) {
-                notice("That link asks for a preset called “$presetRef”, which isn't on this device.")
+                notice(app.getString(R.string.link_unknown_preset, presetRef))
                 return
             }
         }
@@ -494,15 +497,15 @@ object SkiaConsole {
             is io.unom.punktfunk.kit.link.HostResolution.Record -> {
                 val kh = resolved.host
                 if (link.pinConflict(kh)) {
-                    notice("That link's fingerprint doesn't match the one pinned for ${kh.name}.")
+                    notice(app.getString(R.string.link_pin_conflict, kh.name))
                     return
                 }
                 if (kh.fpHex.isEmpty() || !kh.paired) {
-                    notice("Pair with ${kh.name} first — a link can't establish trust.")
+                    notice(app.getString(R.string.android_link_pair_first, kh.name))
                     return
                 }
                 if (resolved is io.unom.punktfunk.kit.link.HostResolution.Confirm) {
-                    notice("A link can only dial ${kh.name} by its id — open it from the list.")
+                    notice(app.getString(R.string.android_link_by_id_only, kh.name))
                     return
                 }
                 state.now {
@@ -516,11 +519,11 @@ object SkiaConsole {
                 }
             }
             is io.unom.punktfunk.kit.link.HostResolution.Unknown ->
-                notice("That link points at a host this device hasn't paired with.")
+                notice(app.getString(R.string.android_link_host_unpaired))
             io.unom.punktfunk.kit.link.HostResolution.Ambiguous ->
-                notice("More than one saved host is called “${link.hostRef}”.")
+                notice(app.getString(R.string.link_ambiguous_host, link.hostRef))
             io.unom.punktfunk.kit.link.HostResolution.Unresolvable ->
-                notice("That link points at a host this device doesn't know.")
+                notice(app.getString(R.string.link_host_not_saved))
         }
     }
 
@@ -852,9 +855,9 @@ object SkiaConsole {
         ioPool.execute {
             val notices = runCatching {
                 app.assets.open("THIRD-PARTY-NOTICES.txt").bufferedReader().use { it.readText() }
-            }.getOrDefault("Third-party notices unavailable.")
+            }.getOrDefault(app.getString(R.string.about_notices_unavailable))
             val json = JSONArray()
-                .put(JSONObject().put("heading", "Third-party software").put("text", notices))
+                .put(JSONObject().put("heading", app.getString(R.string.about_third_party_heading)).put("text", notices))
                 .toString()
             state.launch { if (handle != 0L) NativeBridge.nativeConsoleSetLicenses(handle, json) }
         }

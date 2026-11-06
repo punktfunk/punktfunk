@@ -146,6 +146,8 @@
 	"android_launcher_save_failed": "Toast when writing a launcher file failed.",
 	"android_save_dialog_failed": "Toast when Android offers no document picker.",
 	"android_link_file_unreadable": "Toast when an opened launcher file holds no link.",
+	"android_link_pair_first": "Console notice when a link names a saved host that is not paired. host: the saved host's name.",
+	"android_link_by_id_only": "Console notice when a link names a saved host by a guessable label. host: the saved host's name.",
 	"android_overlay_app_capped": "Stats overlay warning line (Android). rate = the refresh the system holds the app to, a whole number.",
 	"android_overlay_panel_rate": "Stats overlay warning line (Android). rate = the panel's measured refresh; stream_rate = the stream's; both whole numbers."
 }

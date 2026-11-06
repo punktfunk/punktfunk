@@ -4107,6 +4107,7 @@ dependencies = [
  "pf-client-core",
  "pf-client-video",
  "pf-console-ui",
+ "pf-l10n",
  "punktfunk-core",
  "serde",
  "serde_json",

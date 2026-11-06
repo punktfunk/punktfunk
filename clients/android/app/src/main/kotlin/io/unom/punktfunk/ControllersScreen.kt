@@ -51,9 +51,11 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import io.unom.punktfunk.kit.DsDevice
 import io.unom.punktfunk.kit.Gamepad
+import io.unom.punktfunk.kit.R
 import io.unom.punktfunk.kit.Sc2BleLink
 import io.unom.punktfunk.kit.Sc2Capture
 import io.unom.punktfunk.kit.bodyRumbleFor
@@ -129,7 +131,7 @@ internal fun ControllersScreen(
             .padding(contentPadding),
         verticalArrangement = Arrangement.spacedBy(24.dp),
     ) {
-        Text("Controllers", style = MaterialTheme.typography.headlineMedium)
+        Text(stringResource(R.string.pad_title), style = MaterialTheme.typography.headlineMedium)
 
         // Capture-side detection, re-checked on USB hot-plug. The SC2 is never an InputDevice
         // (lizard mode is kb/mouse; the capture claims even those away) so it's enumerated from
@@ -155,15 +157,12 @@ internal fun ControllersScreen(
                 }
         }
 
-        Group("Gamepads") {
+        Group(stringResource(R.string.android_pad_group_gamepads)) {
             if (sc2Present) Sc2Row(sc2Usb, activity)
             dsUsb?.let { DsRow(it) }
             if (pads.isEmpty() && !sc2Present) {
                 Text(
-                    "No controller detected. Punktfunk can only forward devices Android " +
-                        "classifies as a gamepad or joystick — a pad connected through an adapter " +
-                        "or hub may show up under \"Other input devices\" below with the adapter's " +
-                        "identity, or not at all.",
+                    stringResource(R.string.android_pad_none_detected),
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -189,15 +188,15 @@ internal fun ControllersScreen(
             }
         }
 
-        Group("Input test") {
+        Group(stringResource(R.string.android_pad_group_input_test)) {
             Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
-                    Text("Test inputs", style = MaterialTheme.typography.bodyLarge)
+                    Text(stringResource(R.string.android_pad_test_inputs), style = MaterialTheme.typography.bodyLarge)
                     Text(
                         when {
-                            test.holdSatisfied -> "Release B to finish"
-                            testing -> "Controller input stays on this screen — hold B to finish"
-                            else -> "Show button presses and stick motion live"
+                            test.holdSatisfied -> stringResource(R.string.android_pad_test_release, "B")
+                            testing -> stringResource(R.string.android_pad_test_running, "B")
+                            else -> stringResource(R.string.android_pad_test_idle)
                         },
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -214,17 +213,17 @@ internal fun ControllersScreen(
             }
             test.lastInput?.let {
                 Text(
-                    "Last input — $it",
+                    stringResource(R.string.pad_test_last_input, it),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
         }
 
-        Group("Other input devices") {
+        Group(stringResource(R.string.android_pad_group_other)) {
             if (others.isEmpty()) {
                 Text(
-                    "None",
+                    stringResource(R.string.android_pad_other_none),
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -456,25 +455,19 @@ private fun Sc2BluetoothRow(
             verticalArrangement = Arrangement.spacedBy(6.dp),
         ) {
             Text(
-                if (attached) "Steam Controller 2" else "Steam Controller 2 over Bluetooth",
+                if (attached) "Steam Controller 2" else stringResource(R.string.pad_sc2_bluetooth),
                 style = MaterialTheme.typography.bodyLarge,
             )
             Text(
                 when {
-                    attached ->
-                        "Paired over Bluetooth. Punktfunk needs Bluetooth access to capture it — " +
-                            "until then it stays in its built-in keyboard/mouse mode and no game " +
-                            "sees a controller."
-                    else ->
-                        "A Steam Controller 2 paired over Bluetooth can't be detected without " +
-                            "Bluetooth access. Wired and Puck-dongle controllers need no " +
-                            "permission and are already listed above."
+                    attached -> stringResource(R.string.android_pad_sc2_bt_paired)
+                    else -> stringResource(R.string.pad_sc2_bluetooth_detail)
                 },
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             OutlinedButton(onClick = { launcher.launch(permission) }) {
-                Text("Grant Bluetooth access")
+                Text(stringResource(R.string.android_pad_grant_bluetooth))
             }
         }
     }
@@ -507,7 +500,7 @@ private fun Sc2Row(usbDev: android.hardware.usb.UsbDevice?, activity: MainActivi
                 )
                 if (active) {
                     Text(
-                        "navigating this UI",
+                        stringResource(R.string.android_pad_navigating_ui),
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.primary,
                     )
@@ -515,11 +508,11 @@ private fun Sc2Row(usbDev: android.hardware.usb.UsbDevice?, activity: MainActivi
             }
             Text(
                 when {
-                    usbDev == null -> "Paired via Bluetooth"
-                    usbDev.productId == io.unom.punktfunk.kit.Sc2Device.PID_WIRED -> "Wired (USB)"
-                    usbDev.productId == io.unom.punktfunk.kit.Sc1Device.PID_WIRED -> "Wired (USB)"
-                    classic -> "Wireless dongle (USB)"
-                    else -> "Puck dongle (USB)"
+                    usbDev == null -> stringResource(R.string.android_pad_paired_bluetooth)
+                    usbDev.productId == io.unom.punktfunk.kit.Sc2Device.PID_WIRED -> stringResource(R.string.android_pad_wired_usb)
+                    usbDev.productId == io.unom.punktfunk.kit.Sc1Device.PID_WIRED -> stringResource(R.string.android_pad_wired_usb)
+                    classic -> stringResource(R.string.android_pad_wireless_dongle)
+                    else -> stringResource(R.string.android_pad_puck_dongle)
                 },
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -527,8 +520,7 @@ private fun Sc2Row(usbDev: android.hardware.usb.UsbDevice?, activity: MainActivi
             when {
                 active -> {
                     Text(
-                        "Captured — streams as-is: the host presents a real $name " +
-                            "that its Steam drives directly (trackpads, gyro, haptics).",
+                        stringResource(R.string.android_pad_sc_captured, name),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -538,24 +530,24 @@ private fun Sc2Row(usbDev: android.hardware.usb.UsbDevice?, activity: MainActivi
                     // is only ever true with an activity behind it.
                     OutlinedButton(onClick = {
                         val sent = activity.testSc2Rumble()
-                        val msg =
-                            if (sent) "Sent a rumble to the controller."
-                            else "Couldn't reach the controller."
+                        val msg = context.getString(
+                            if (sent) R.string.android_pad_rumble_sent else R.string.android_pad_rumble_unreachable,
+                        )
                         Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
-                    }) { Text("Test rumble") }
+                    }) { Text(stringResource(R.string.android_pad_test_rumble)) }
                 }
                 usbDev != null && !permitted -> {
                     Text(
-                        "Needs USB access to be captured.",
+                        stringResource(R.string.android_pad_needs_usb),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                     OutlinedButton(onClick = { activity?.startSc2MenuNav(forceAsk = true) }) {
-                        Text("Grant USB access")
+                        Text(stringResource(R.string.android_pad_grant_usb))
                     }
                 }
                 else -> Text(
-                    "Detected — capture engages automatically.",
+                    stringResource(R.string.android_pad_detected),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -613,22 +605,21 @@ private fun DsRow(usbDev: android.hardware.usb.UsbDevice) {
             modifier = Modifier.padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(6.dp),
         ) {
-            Text("$label passthrough", style = MaterialTheme.typography.bodyLarge)
+            Text(stringResource(R.string.android_pad_passthrough_title, label), style = MaterialTheme.typography.bodyLarge)
             Text(
-                "Wired (USB)",
+                stringResource(R.string.android_pad_wired_usb),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             when {
                 !settingOn -> Text(
-                    "Passthrough is disabled in Settings — enable \"DualSense / DualShock " +
-                        "passthrough (USB)\" to capture it.",
+                    stringResource(R.string.android_pad_passthrough_disabled),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 !permitted -> {
                     Text(
-                        "Needs USB access — grant it now and streams capture the pad silently.",
+                        stringResource(R.string.android_pad_needs_usb_grant),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -643,18 +634,18 @@ private fun DsRow(usbDev: android.hardware.usb.UsbDevice) {
                             ),
                         )
                     }) {
-                        Text("Grant USB access")
+                        Text(stringResource(R.string.android_pad_grant_usb))
                     }
                 }
                 else -> {
                     Text(
-                        if (model == DsDevice.Model.DUALSHOCK4) {
-                            "Ready — captured at stream start: rumble, lightbar and gyro are " +
-                                "driven directly."
-                        } else {
-                            "Ready — captured at stream start: rumble, adaptive triggers, lightbar " +
-                                "and gyro are driven directly."
-                        },
+                        stringResource(
+                            if (model == DsDevice.Model.DUALSHOCK4) {
+                                R.string.android_pad_ready_ds4
+                            } else {
+                                R.string.android_pad_ready_dualsense
+                            },
+                        ),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -691,10 +682,10 @@ private fun DsRow(usbDev: android.hardware.usb.UsbDevice) {
                                     }
                                     conn?.close()
                                     val msg = when {
-                                        r > 0 -> "Haptics test passed — $r frames to the pad."
-                                        r == -1 -> "Couldn't open the pad's haptics — the pad still works normally"
-                                        r == -2 -> "The audio stream stopped part-way."
-                                        else -> "The stream opened but no audio reached the pad."
+                                        r > 0 -> context.resources.getQuantityString(R.plurals.android_pad_haptics_passed, r, r)
+                                        r == -1 -> context.getString(R.string.android_pad_haptics_open_failed)
+                                        r == -2 -> context.getString(R.string.android_pad_haptics_stopped)
+                                        else -> context.getString(R.string.android_pad_haptics_silent)
                                     }
                                     android.os.Handler(android.os.Looper.getMainLooper()).post {
                                         result = msg
@@ -703,7 +694,7 @@ private fun DsRow(usbDev: android.hardware.usb.UsbDevice) {
                                 }, "pf-pad-selftest-ui").start()
                             },
                         ) {
-                            Text(if (testing) "Testing…" else "Test haptics")
+                            Text(stringResource(if (testing) R.string.android_pad_haptics_testing else R.string.android_pad_test_haptics))
                         }
                     }
                 }
@@ -712,9 +703,14 @@ private fun DsRow(usbDev: android.hardware.usb.UsbDevice) {
     }
 }
 
+/** What a pad type is called: its brand, or Automatic for the one that has none. */
+private fun padKindName(context: Context, pref: Int): String =
+    Gamepad.prefLabel(pref).ifEmpty { context.getString(R.string.player_gamepad_auto) }
+
 /** One detected gamepad: identity, what it streams as, and a rumble test. */
 @Composable
 private fun PadRow(info: PadInfo, gamepadSetting: Int) {
+    val context = LocalContext.current
     OutlinedCard(modifier = Modifier.fillMaxWidth()) {
         Column(
             modifier = Modifier.padding(16.dp),
@@ -728,7 +724,11 @@ private fun PadRow(info: PadInfo, gamepadSetting: Int) {
                     // assigned separately (lowest-free per device) once streaming starts.
                     val number = info.controllerNumber
                     Text(
-                        if (number > 0) "forwarded · player $number" else "forwarded to host",
+                        if (number > 0) {
+                            stringResource(R.string.android_pad_forwarded_player, number)
+                        } else {
+                            stringResource(R.string.android_pad_forwarded)
+                        },
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.primary,
                     )
@@ -742,10 +742,12 @@ private fun PadRow(info: PadInfo, gamepadSetting: Int) {
             val resolved = info.resolvedPref
             Text(
                 if (gamepadSetting == Gamepad.PREF_AUTO) {
-                    "Streams as: ${Gamepad.prefLabel(resolved)} (automatic)"
+                    stringResource(R.string.android_pad_streams_as_auto, padKindName(context, resolved))
                 } else {
-                    "Streams as: ${Gamepad.prefLabel(gamepadSetting)} (set in Settings; " +
-                        "automatic would pick ${Gamepad.prefLabel(resolved)})"
+                    stringResource(
+                        R.string.android_pad_streams_as_set,
+                        padKindName(context, gamepadSetting), padKindName(context, resolved),
+                    )
                 },
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -755,21 +757,20 @@ private fun PadRow(info: PadInfo, gamepadSetting: Int) {
             // nobody anything. Named rather than merely flagged, so a field report can quote it.
             padButtonsNote(info.buttons)?.let {
                 Text(
-                    it,
+                    stringResource(it),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
             if (info.canRumble) {
-                val context = LocalContext.current
                 OutlinedButton(onClick = {
                     if (info.dev?.let { testRumble(it, deviceBodyVibrator(context)) } != true) {
-                        Toast.makeText(context, "No motor answered", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(context, context.getString(R.string.android_pad_no_motor), Toast.LENGTH_SHORT).show()
                     }
-                }) { Text("Test rumble") }
+                }) { Text(stringResource(R.string.android_pad_test_rumble)) }
             } else {
                 Text(
-                    "No rumble motors reported — host rumble will be silent",
+                    stringResource(R.string.android_pad_no_rumble_motors),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -910,17 +911,14 @@ internal fun testRumble(dev: InputDevice, body: Vibrator?): Boolean = runCatchin
 
 /** Identity line: VID:PID + the source classes Android assigned. */
 /**
- * What to say about a pad whose buttons had to be resolved from their scancodes because Android
+ * The message about a pad whose buttons had to be resolved from their scancodes because Android
  * has no key layout for it — null for a pad it does know, which needs no explanation.
  */
-private fun padButtonsNote(buttons: Gamepad.PadButtons): String? = when (buttons) {
+private fun padButtonsNote(buttons: Gamepad.PadButtons): Int? = when (buttons) {
     Gamepad.PadButtons.NATIVE -> null
-    Gamepad.PadButtons.GENERIC_SONY ->
-        "Android has no button layout for this controller — read as a PlayStation pad"
-    Gamepad.PadButtons.GENERIC_XBOX ->
-        "Android has no button layout for this controller — read as an Xbox pad"
-    Gamepad.PadButtons.SONY_MODERN ->
-        "Android has no button layout for this controller — face buttons corrected"
+    Gamepad.PadButtons.GENERIC_SONY -> R.string.android_pad_layout_playstation
+    Gamepad.PadButtons.GENERIC_XBOX -> R.string.android_pad_layout_xbox
+    Gamepad.PadButtons.SONY_MODERN -> R.string.android_pad_layout_corrected
 }
 
 internal fun deviceDetail(dev: InputDevice): String =

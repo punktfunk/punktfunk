@@ -181,6 +181,9 @@
 	"android_launcher_save_failed": "Couldn't save the launcher file.",
 	"android_save_dialog_failed": "Couldn't open a save dialog on this device.",
 	"android_link_file_unreadable": "Couldn't read a Punktfunk link from that file.",
+	"android_link_pair_first": "Pair with {host} first — a link can't establish trust.",
+	"android_link_by_id_only": "A link can only dial {host} by its id — open it from the list.",
+	"android_link_host_unpaired": "That link points at a host this device hasn't paired with.",
 	"android_overlay_app_capped": "⚠ app capped {rate} Hz by the system",
 	"android_overlay_panel_rate": "⚠ panel {rate} Hz, not {stream_rate} · check the game frame-rate limit"
 }

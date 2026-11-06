@@ -338,7 +338,7 @@ abstract class GenerateMessages @Inject constructor(private val exec: ExecOperat
             environment("PATH", File(cargo.get()).parent + File.pathSeparator + System.getenv("PATH"))
             commandLine(
                 cargo.get(), "run", "-q", "-p", "pf-l10n", "--",
-                "android", "--out", out.absolutePath, "--parts", "common,client,android",
+                "android", "--out", out.absolutePath, "--parts", "common,client,android,host",
             )
         }
     }

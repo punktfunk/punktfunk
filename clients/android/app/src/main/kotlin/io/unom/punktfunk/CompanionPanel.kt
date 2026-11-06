@@ -372,7 +372,7 @@ private fun ActionsPage(cfg: OverlayConfig, actions: RingActions, haptics: Conso
                 }
                 items(group.slots, key = { it.id }) { slot ->
                     val s = spec(slot, cfg, actions, ctx)
-                    ActionTile(s, armed = state.armed == s.id) { fireSlot(s, slot, state, cfg, actions, haptics) {} }
+                    ActionTile(s, armed = state.armed == s.id) { fireSlot(s, slot, state, cfg, actions, haptics, ctx) {} }
                 }
             }
         }

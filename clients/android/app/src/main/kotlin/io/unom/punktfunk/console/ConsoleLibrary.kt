@@ -1,6 +1,7 @@
 package io.unom.punktfunk.console
 
 import io.unom.punktfunk.kit.NativeBridge
+import io.unom.punktfunk.kit.R
 import io.unom.punktfunk.kit.library.GameEntry
 import io.unom.punktfunk.kit.library.InstallAction
 import io.unom.punktfunk.kit.library.InstallOutcome
@@ -112,7 +113,9 @@ internal fun SkiaConsole.fetchLibrary(c: JSONObject, refreshOnly: Boolean) {
     val gen = fetchGen.incrementAndGet()
     NativeBridge.nativeConsoleLibraryBegin(handle)
     if (id == null) {
-        NativeBridge.nativeConsoleLibraryPhase(handle, ConsoleJson.libraryError(req, "Couldn't load the library", identities.blockedMessage(), true))
+        NativeBridge.nativeConsoleLibraryPhase(
+            handle, ConsoleJson.libraryError(req, app.getString(R.string.lib_load_failed), identities.blockedMessage(), true),
+        )
         return
     }
     val cache = LibraryCache.standard(app.cacheDir)
@@ -148,7 +151,9 @@ internal fun SkiaConsole.fetchLibrary(c: JSONObject, refreshOnly: Boolean) {
                 state.launch {
                     if (gen != fetchGen.get()) return@launch
                     if (cached != null) NativeBridge.nativeConsoleLibraryStale(handle, 2)
-                    else NativeBridge.nativeConsoleLibraryPhase(handle, ConsoleJson.libraryError(req, "Not paired", r.message, false))
+                    else NativeBridge.nativeConsoleLibraryPhase(
+                        handle, ConsoleJson.libraryError(req, app.getString(R.string.lib_load_not_paired), r.message, false),
+                    )
                 }
             }
             is LibraryResult.Error -> {
@@ -156,7 +161,9 @@ internal fun SkiaConsole.fetchLibrary(c: JSONObject, refreshOnly: Boolean) {
                 state.launch {
                     if (gen != fetchGen.get()) return@launch
                     if (cached != null) NativeBridge.nativeConsoleLibraryStale(handle, 2)
-                    else NativeBridge.nativeConsoleLibraryPhase(handle, ConsoleJson.libraryError(req, "Couldn't load the library", r.message, true))
+                    else NativeBridge.nativeConsoleLibraryPhase(
+                        handle, ConsoleJson.libraryError(req, app.getString(R.string.lib_load_failed), r.message, true),
+                    )
                 }
             }
             null -> {}

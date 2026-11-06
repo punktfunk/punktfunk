@@ -40,6 +40,8 @@ pf-client-core = { path = "../../../crates/client/pf-client-core", default-featu
     "discovery",
 ] }
 async-channel = "2"
+# The stats overlay's warning lines read their text from the shared messages.
+pf-l10n = { path = "../../../l10n", features = ["android"] }
 # Shared, NOT in the Android table below: `session::connect` parses the `ConnectRequest`
 # JSON Kotlin hands `nativeConnect`, and that module compiles on the host too — CI's
 # workspace clippy builds this crate as a host cdylib.
