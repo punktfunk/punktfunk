@@ -102,6 +102,7 @@ on:
       - 'packaging/windows/**'
       - 'scripts/windows/**'
       - 'web/**'
+      - 'l10n/messages/**'
       - 'sdk/**'
       - 'Cargo.lock'
       - 'Cargo.toml'
@@ -145,6 +146,7 @@ on:
       - 'packaging/windows/**'
       - 'scripts/windows/**'
       - 'web/**'
+      - 'l10n/messages/**'
       - 'sdk/**'
       - 'Cargo.lock'
       - 'Cargo.toml'
@@ -502,8 +504,8 @@ jobs:
           Pop-Location
 
       # The console output is fully self-contained (Nitro noExternals) and most pushes
-      # don't touch web/ or sdk/ — restore it from the central cache and skip the ~2.5 min
-      # bun build+smoke entirely on a hit. First workflow on this runner to use the
+      # don't touch web/, sdk/ or l10n/messages/ — restore it from the central cache and
+      # skip the ~2.5 min bun build+smoke entirely on a hit. First workflow on this runner to use the
       # actions cache at all (the runner's config.yaml needed cache.external_server —
       # see unom/infra runners/ci-core/README.md).
       - name: Cache web console output
@@ -511,7 +513,7 @@ jobs:
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: web/.output
-          key: web-console-win-${{ hashFiles('web/**', 'sdk/**') }}
+          key: web-console-win-${{ hashFiles('web/**', 'sdk/**', 'l10n/messages/**') }}
 
       - name: Fetch portable bun runtime (build tool + bundled to run the console)
         shell: pwsh

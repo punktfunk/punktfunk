@@ -474,7 +474,8 @@ in
     '';
 
     # Everything past the deps fetch is offline: codegen + the vite build take every input from the
-    # installed node_modules, the checked-in api/openapi.json, and web/project.inlang.
+    # installed node_modules, the checked-in api/openapi.json, web/project.inlang and the
+    # l10n/messages it names (`src` is the whole repo, so they are there).
     #
     # ⚠ "Offline" is load-bearing and NOT self-enforcing. inlang resolves the plugins in
     # web/project.inlang/settings.json `modules`, and a failed import is only a WARNING there:

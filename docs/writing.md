@@ -260,8 +260,7 @@ shows text: the web console, each client, the console kit, setup, the tray.
 Error messages stay §4. Writing for translation is §4d.
 
 A control is made clear by its options, not by a paragraph under it.
-`pf-l10n check` fails the build on a message over budget; for the web console,
-`web/tools/check-i18n.mjs` does.
+`cargo run -p pf-l10n -- check` fails on a string over budget (`l10n/rules.json`).
 
 | Kind | Budget | Rule |
 |---|---|---|
@@ -278,9 +277,9 @@ A control is made clear by its options, not by a paragraph under it.
 - Status words are outcomes: `Streaming`, `Kept`, `Kept until released`, `Off`.
   Not `Lingering`, `Pinned`, `Active`.
 - Translations get 20% more room; the base locale is where the budget bites.
-- The allowlists are for legal and security texts, where the exact wording is
-  the point, and for wording that waits for review. In `l10n/` each key has its
-  reason under `debt` in `rules.json`; the web console's are debt lines in
+- The allowlist (`debt` in `l10n/rules.json`) is for legal and security texts, where
+  the exact wording is the point, and for wording that waits for review. Each entry
+  carries its reason; the web console's are debt lines in
   `design/web-console-overhaul.md` §2.2.
 
 Bad: `Windows only, takes effect with Exclusive topology. Before disabling your

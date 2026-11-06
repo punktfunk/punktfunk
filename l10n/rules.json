@@ -139,6 +139,9 @@
     "player_second_screen_hint": "Existing wording over the hint budget; waits for the wording pass.",
     "player_start_in_hint": "Existing wording over the hint budget; waits for the wording pass.",
     "player_touch_mode_hint": "Existing wording over the hint budget; waits for the wording pass.",
-    "player_video_fit_hint": "Existing wording over the hint budget; waits for the wording pass."
+    "player_video_fit_hint": "Existing wording over the hint budget; waits for the wording pass.",
+    "store_install_external_note": "Security text: third-party catalog code runs with the runner's privileges.",
+    "store_spec_lead": "Security text: a raw package registry has no catalog and no review.",
+    "store_update_all_external_note": "Security text: the same warning, for a bulk update."
   }
 }

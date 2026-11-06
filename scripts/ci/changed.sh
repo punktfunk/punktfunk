@@ -38,7 +38,7 @@ classify() {
                 .cargo/*|Cargo.toml|Cargo.lock|rust-toolchain.toml|rustfmt.toml|l10n/*|\
                 crates/*|tools/*|clients/cli/*|clients/linux/*|clients/probe/*|clients/session/*|\
                 clients/shared/*|clients/android/native/*|clients/apple/native/*|include/*|\
-                api/openapi.json|\
+                api/openapi.json|l10n/*|\
                 data/platforms.json|ci/rust-ci.Dockerfile|web/src/lib/command-execution.ts|\
                 scripts/ci/ensure-sccache.sh|scripts/ci/install-retrying-curl.sh|\
                 scripts/ci/check-installer-behavior.sh|scripts/ci/check-install-defaults.sh|\
@@ -70,6 +70,7 @@ classify() {
             esac
             case "$path" in
                 web/*|api/openapi.json|scripts/ci/retry.sh|clients/shared/library-id-vectors.json|\
+                l10n/messages/web/*|l10n/messages/common/*|l10n/messages/host/*|l10n/vectors.json|\
                 crates/host/punktfunk-host/src/library/custom.rs|plugin-kit/src/wire.ts|\
                 crates/core/punktfunk-core/testdata/grant-vectors.json|\
                 crates/core/punktfunk-core/testdata/gamepad-button-vectors.json)
@@ -197,6 +198,11 @@ self_test() {
         'rust=false rust_arm64=false web=false docs_site=false sdk_plugin_kit=true decky_typecheck=false'
     check openapi 'api/openapi.json' \
         'rust=true rust_arm64=false web=true docs_site=false sdk_plugin_kit=true decky_typecheck=false'
+    # pf-l10n's tests are the message check; the console compiles three of its parts.
+    check l10n-web 'l10n/messages/web/en.json' \
+        'rust=true rust_arm64=false web=true docs_site=false sdk_plugin_kit=false decky_typecheck=false'
+    check l10n-client 'l10n/messages/client/en.json' \
+        'rust=true rust_arm64=false web=false docs_site=false sdk_plugin_kit=false decky_typecheck=false'
     check platforms 'data/platforms.json' \
         'rust=true rust_arm64=false web=false docs_site=false sdk_plugin_kit=false decky_typecheck=false'
     check workflow '.gitea/workflows/ci.yml' \
