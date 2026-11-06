@@ -67,6 +67,7 @@ seats usr/lib/systemd/system/punktfunk-web-door.service
 seats usr/lib/systemd/system/punktfunk-door-on@.service
 seats usr/lib/systemd/system/punktfunk-door-off@.service
 seats usr/lib/systemd/system/user@.service.d/50-punktfunk-seats.conf
+seats usr/lib/pam.d/punktfunk-seat
 seats usr/lib/tmpfiles.d/punktfunk-seats.conf
 seats usr/lib/udev/rules.d/65-punktfunk-seats.rules
 seats usr/share/polkit-1/rules.d/49-punktfunk-door.rules

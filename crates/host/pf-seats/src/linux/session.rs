@@ -246,6 +246,45 @@ pub(super) fn render_class() -> &'static str {
     "[Service]\nEnvironment=XDG_SESSION_CLASS=background\n"
 }
 
+/// The login helper's SELinux context, as the spike measured it on Bazzite: a plain system service
+/// may not enter a user's domain. systemd ignores the line where SELinux is off.
+const LOGIN_CONTEXT: &str = "unconfined_u:unconfined_r:unconfined_t:s0";
+
+/// The drop-in of a start through the login helper (`super::login`): the unit's main process is
+/// `helper login <account>` as root, systemd opens no PAM session itself, a helper that ends
+/// ends the start, and the journal keeps the seat's own tag. `None` for a path a unit file can't
+/// hold verbatim.
+pub(super) fn render_login(helper: &Path) -> Option<String> {
+    let path = helper.to_str()?;
+    let plain = path.starts_with('/')
+        && path
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"/._+-".contains(&b));
+    plain.then(|| {
+        format!(
+            "[Service]\nUser=\nPAMName=\nExecStart=\nExecStart={path} {} %i\nRestart=no\n\
+             SyslogIdentifier=seat-session\nSELinuxContext={LOGIN_CONTEXT}\n",
+            super::login::VERB
+        )
+    })
+}
+
+/// Writes `dropin`, [`render_login`]'s, for `account`'s unit, or removes it for `None`, and
+/// reloads systemd when that changed it.
+pub(super) fn set_login(account: &str, dropin: Option<&str>) -> Result<(), BackendError> {
+    let path = dropin_dir(account).join("login.conf");
+    let changed = match dropin {
+        Some(contents) => write_if_changed(&path, contents, 0o644),
+        None => remove_if_present(&path),
+    };
+    let changed =
+        changed.map_err(|e| err("session_files", format!("update the login drop-in: {e}")))?;
+    if changed {
+        daemon_reload()?;
+    }
+    Ok(())
+}
+
 /// Writes `contents` at `path` with `mode` unless it already holds exactly that. `true` when it
 /// changed.
 pub(super) fn write_if_changed(path: &Path, contents: &str, mode: u32) -> std::io::Result<bool> {
@@ -423,18 +462,36 @@ pub(super) struct UnitState {
     pub sub: String,
     /// `success`, or why the last run ended (`exit-code`, `signal`, `start-limit-hit`, ...).
     pub result: String,
+    /// How the main process of the last run ended, once it has.
+    pub ended: Option<Ended>,
+}
+
+/// A process's end: its exit code, or the signal that killed it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Ended {
+    Exited(i32),
+    Killed(i32),
 }
 
 pub(super) fn parse_show(text: &str) -> UnitState {
     let mut state = UnitState::default();
+    let (mut code, mut status) = (None, None);
     for line in text.lines() {
         match line.split_once('=') {
             Some(("ActiveState", value)) => state.active = value.to_owned(),
             Some(("SubState", value)) => state.sub = value.to_owned(),
             Some(("Result", value)) => state.result = value.to_owned(),
+            Some(("ExecMainCode", value)) => code = value.parse::<i32>().ok(),
+            Some(("ExecMainStatus", value)) => status = value.parse::<i32>().ok(),
             _ => {}
         }
     }
+    // `si_code`: 1 exited, 2 killed, 3 dumped core.
+    state.ended = match (code, status) {
+        (Some(1), Some(status)) => Some(Ended::Exited(status)),
+        (Some(2 | 3), Some(signal)) => Some(Ended::Killed(signal)),
+        _ => None,
+    };
     state
 }
 
@@ -479,6 +536,10 @@ pub(super) fn state(account: &str) -> Result<UnitState, BackendError> {
             "SubState",
             "-p",
             "Result",
+            "-p",
+            "ExecMainCode",
+            "-p",
+            "ExecMainStatus",
         ],
     )?;
     Ok(parse_show(&shown))

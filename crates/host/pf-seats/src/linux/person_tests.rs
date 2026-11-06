@@ -7,8 +7,8 @@ use crate::model::CreateSeat;
 use std::os::unix::fs::PermissionsExt as _;
 
 /// The unit's state as `systemctl show` prints it.
-const SHOW: &str =
-    "systemctl show punktfunk-seat@jdoe.service -p ActiveState -p SubState -p Result";
+const SHOW: &str = "systemctl show punktfunk-seat@jdoe.service -p ActiveState -p SubState \
+     -p Result -p ExecMainCode -p ExecMainStatus";
 const STOP: &str = "systemctl stop punktfunk-seat@jdoe.service";
 const RESET: &str = "systemctl reset-failed punktfunk-seat@jdoe.service";
 
@@ -227,6 +227,87 @@ fn only_a_made_seat_is_ours_to_end() {
             "{kind:?}"
         );
     }
+}
+
+/// The login helper gives the session the shell the passwd row names, and none for a user that
+/// doesn't exist.
+#[test]
+fn the_login_shell_is_the_passwd_row_s_last_field() {
+    let rig = rig();
+    let _machine = fake::install(machine(&rig.home, 1500, "inactive", false));
+    assert_eq!(
+        accounts::shell("jdoe").unwrap().as_deref(),
+        Some("/bin/bash")
+    );
+    assert_eq!(accounts::shell("nobody-here").unwrap(), None);
+}
+
+/// The start choice: a person's password starts their session through the login helper, and a
+/// start without one, a key proof's, through systemd's own login.
+#[test]
+fn only_a_password_start_goes_through_the_login_helper() {
+    let password = Secret::new("hunter2 Bärbel".into());
+    assert_eq!(login_with(Some(&password)), Some(&password));
+    assert_eq!(login_with(None), None);
+}
+
+/// The helper's end decides what a failed start through it does: a credential refusal is the
+/// check's own refusal, an end before a session falls back, anything else is the seat's failure.
+/// A plain start never reads the helper's codes.
+#[test]
+fn a_start_through_the_login_helper_reads_its_end() {
+    let seat = person();
+    let ended = |code| session::UnitState {
+        active: "failed".into(),
+        result: "exit-code".into(),
+        ended: Some(session::Ended::Exited(code)),
+        ..Default::default()
+    };
+    let wrong = unit_ended(&seat, &ended(91), true);
+    assert_eq!(
+        (wrong.code.as_str(), wrong.message.as_str()),
+        ("credential_wrong", "That isn't jdoe's password.")
+    );
+    assert_eq!(unit_ended(&seat, &ended(92), true).code, "account_locked");
+    assert_eq!(
+        unit_ended(&seat, &ended(93), true).code,
+        "credential_must_change"
+    );
+    let fallback = unit_ended(&seat, &ended(95), true);
+    assert_eq!(fallback.code, LOGIN_FALLBACK);
+    assert_eq!(fallback.message, "the login helper got no password");
+    for (code, login) in [(1, true), (91, false), (95, false), (203, false)] {
+        assert_eq!(unit_ended(&seat, &ended(code), login).code, "seat_exited");
+    }
+}
+
+/// The login drop-in runs the helper as root with systemd's own PAM session off and no restart,
+/// and carries no secret; a path a unit file can't hold verbatim gets none.
+#[test]
+fn the_login_drop_in_runs_the_helper_and_nothing_else() {
+    let dropin =
+        session::render_login(Path::new("/usr/libexec/punktfunk/punktfunk-seats")).unwrap();
+    assert_eq!(
+        dropin,
+        "[Service]\nUser=\nPAMName=\nExecStart=\n\
+         ExecStart=/usr/libexec/punktfunk/punktfunk-seats login %i\nRestart=no\n\
+         SyslogIdentifier=seat-session\nSELinuxContext=unconfined_u:unconfined_r:unconfined_t:s0\n"
+    );
+    let nix = "/nix/store/0abc-punktfunk-seats-0.47.0/libexec/punktfunk/punktfunk-seats";
+    assert!(session::render_login(Path::new(nix)).is_some());
+    for bad in [
+        "relative/punktfunk-seats",
+        "/opt/a b/x",
+        "/opt/%i/x",
+        "/opt/$HOME/x",
+        "/a\nb",
+    ] {
+        assert_eq!(session::render_login(Path::new(bad)), None, "{bad:?}");
+    }
+    assert!(
+        login_dropin().is_some(),
+        "this test binary's own path renders"
+    );
 }
 
 /// The password check runs as `punktfunk-seats pam-check <account>` once the account still names

@@ -1,0 +1,12 @@
+#%PAM-1.0
+# punktfunk-seat: a person's own-account seat, opened with their password by
+# `punktfunk-seats login` (punktfunk-seat@.service). The box's own login stack decides who gets in
+# and what opens. The wallet lines run where the box has the module; `-` skips a missing one.
+auth      include   login
+-auth     optional  pam_kwallet5.so
+-auth     optional  pam_gnome_keyring.so
+account   include   login
+password  include   login
+session   include   login
+-session  optional  pam_kwallet5.so auto_start
+-session  optional  pam_gnome_keyring.so auto_start

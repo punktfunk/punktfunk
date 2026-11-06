@@ -28,7 +28,9 @@ mod devices;
 mod fake;
 pub mod fence;
 mod flatpak;
+pub mod handover;
 mod libraries;
+pub mod login;
 mod logind;
 mod pam;
 #[cfg(test)]
@@ -160,6 +162,8 @@ struct Inner {
     /// Each person's row's device list, loaded on first use. Held across each change, its save
     /// and the trust copy it rewrites, so two writers never cross. Taken after `level`.
     devices: Mutex<HashMap<SeatId, devices::Held>>,
+    /// The password of a start through the login helper, while it waits for the helper.
+    handover: handover::Handover,
 }
 
 /// `slot`'s checks when they ran less than [`CHECKS_FRESH`] before `now`, else what `run`
@@ -445,6 +449,7 @@ impl LinuxBackend {
             checks: Mutex::new(None),
             level: Mutex::new(()),
             devices: Mutex::new(HashMap::new()),
+            handover: handover::Handover::default(),
         });
         let weak = Arc::downgrade(&inner);
         std::thread::Builder::new()
@@ -471,6 +476,7 @@ impl LinuxBackend {
                 checks: Mutex::new(None),
                 level: Mutex::new(()),
                 devices: Mutex::new(HashMap::new()),
+                handover: handover::Handover::default(),
             }),
         }
     }
@@ -686,8 +692,9 @@ impl LinuxBackend {
     }
 
     /// Waits for the unit to be active and the host's management port to answer. A unit that
-    /// ends first, a stop or a timeout stops the seat and fails the start.
-    fn wait_ready(&self, seat: &Seat, asked: u64) -> Result<(), BackendError> {
+    /// ends first, a stop or a timeout stops the seat and fails the start. `login`: the unit runs
+    /// the login helper, whose end says why ([`unit_ended`]).
+    fn wait_ready(&self, seat: &Seat, asked: u64, login: bool) -> Result<(), BackendError> {
         let deadline = Instant::now() + START_TIMEOUT;
         let failure = loop {
             if let Err(stopped) = self.stopped_since(asked) {
@@ -696,16 +703,7 @@ impl LinuxBackend {
             let state = session::state(&seat.account)?;
             match state.active.as_str() {
                 "active" if self.is_ready(seat) => return Ok(()),
-                "failed" | "inactive" => {
-                    break err(
-                        "seat_exited",
-                        format!(
-                            "seat unit ended ({}); journalctl -u {} says why",
-                            state.result,
-                            session::unit(&seat.account)
-                        ),
-                    );
-                }
+                "failed" | "inactive" => break unit_ended(seat, &state, login),
                 _ => {}
             }
             if Instant::now() >= deadline {
@@ -944,7 +942,7 @@ impl PlatformBackend for LinuxBackend {
         let asked = self.inner.stops.load(Ordering::SeqCst);
         match Own::of(seat) {
             Own::Owner => return self.start_owner(seat, asked),
-            Own::Person => return self.start_person(seat, asked),
+            Own::Person => return self.start_person(seat, asked, None),
             Own::Seat => {}
         }
         let (box_dir, state) = (&self.inner.box_dir, &self.inner.state);
@@ -995,8 +993,22 @@ impl PlatformBackend for LinuxBackend {
             run("systemctl_failed", "systemctl", &["start", &unit])?;
         }
         self.track(&seat.id, Tracked::of(seat, &passwd));
-        self.wait_ready(seat, asked)?;
+        self.wait_ready(seat, asked, false)?;
         Ok(RuntimeStatus::running())
+    }
+
+    /// A person's row, started with the password they proved the start with: [`login_with`]
+    /// decides whether that password opens their session.
+    fn start_with_password(
+        &self,
+        seat: &Seat,
+        password: &Secret,
+    ) -> Result<RuntimeStatus, BackendError> {
+        if Own::of(seat) != Own::Person {
+            return self.start(seat);
+        }
+        let asked = self.inner.stops.load(Ordering::SeqCst);
+        self.start_person(seat, asked, Some(password))
     }
 
     /// Ends the headless session. A host in the owner's own login stays: it isn't the unit's.
@@ -1238,7 +1250,7 @@ impl LinuxBackend {
             let _ = run("systemctl_failed", "systemctl", &["reset-failed", &unit]);
             run("systemctl_failed", "systemctl", &["start", &unit])?;
         }
-        self.wait_ready(seat, asked)?;
+        self.wait_ready(seat, asked, false)?;
         Ok(RuntimeStatus::running())
     }
 
@@ -1246,8 +1258,15 @@ impl LinuxBackend {
     /// login is theirs, and the headless session would sit beside it uninvited. Otherwise the
     /// unit brings up the headless session and a contract seat's host in it, which admits only
     /// the devices the row's list does. The account is checked first, and what is made is the
-    /// row's own, never in the account.
-    fn start_person(&self, seat: &Seat, asked: u64) -> Result<RuntimeStatus, BackendError> {
+    /// row's own, never in the account. A cold start with `password` runs the login helper when
+    /// [`login_with`] says so, and hands it the password through [`handover`] while this waits;
+    /// a helper that ended before a session falls back to the plain start.
+    fn start_person(
+        &self,
+        seat: &Seat,
+        asked: u64,
+        password: Option<&Secret>,
+    ) -> Result<RuntimeStatus, BackendError> {
         let passwd = accounts::require_person(seat)?;
         if owner_at_desk(&seat.account) {
             return Err(err(
@@ -1263,6 +1282,7 @@ impl LinuxBackend {
         let reader = shared::Reader::person(passwd.uid, passwd.gid);
         person_trust(&self.inner, &seat.id, reader)?;
         shared::refresh_seat_library(state, &seat.id, reader)?;
+        let mut login = false;
         // A unit already up keeps its token: the host read it when it started.
         if !session::state(&seat.account)?.live() {
             if session::port_taken(seat.mgmt_port) {
@@ -1281,13 +1301,55 @@ impl LinuxBackend {
             )?;
             let browser = session::browser(box_dir);
             session::write_unit_files(seat, &passwd.home, state, &token, None, None, &browser)?;
+            let password = login_with(password);
+            let dropin = password.and_then(|_| login_dropin());
+            if password.is_some() && dropin.is_none() {
+                tracing::warn!(account = %seat.account, cause = "this binary's path can't go in a unit file",
+                    "seat started without the wallet login");
+            }
+            session::set_login(&seat.account, dropin.as_deref())?;
+            login = dropin.is_some();
             self.stopped_since(asked)?;
             let unit = session::unit(&seat.account);
             let _ = run("systemctl_failed", "systemctl", &["reset-failed", &unit]);
+            let handover = &self.inner.handover;
+            let offer = password
+                .filter(|_| login)
+                .map(|password| handover.offer(&seat.account, password, Instant::now()));
             run("systemctl_failed", "systemctl", &["start", &unit])?;
+            if let Some(offer) = offer {
+                offer.wait(|| session::state(&seat.account).is_ok_and(|s| s.live()));
+            }
         }
         self.track(&seat.id, Tracked::of(seat, &passwd));
-        self.wait_ready(seat, asked)?;
+        let ready = self.wait_ready(seat, asked, login);
+        if login && let Err(error) = session::set_login(&seat.account, None) {
+            tracing::warn!(account = %seat.account, %error, "login drop-in not removed");
+        }
+        match ready {
+            Err(error) if error.code == LOGIN_FALLBACK => {
+                tracing::warn!(account = %seat.account, cause = %error.message,
+                    "seat started without the wallet login");
+                self.start_plain(seat, &passwd, asked)
+            }
+            ready => ready.map(|()| RuntimeStatus::running()),
+        }
+    }
+
+    /// `seat`'s unit started again as systemd's own login opens it, after the login helper ended
+    /// before a session.
+    fn start_plain(
+        &self,
+        seat: &Seat,
+        passwd: &accounts::Passwd,
+        asked: u64,
+    ) -> Result<RuntimeStatus, BackendError> {
+        self.stopped_since(asked)?;
+        let unit = session::unit(&seat.account);
+        let _ = run("systemctl_failed", "systemctl", &["reset-failed", &unit]);
+        run("systemctl_failed", "systemctl", &["start", &unit])?;
+        self.track(&seat.id, Tracked::of(seat, passwd));
+        self.wait_ready(seat, asked, false)?;
         Ok(RuntimeStatus::running())
     }
 
@@ -1400,6 +1462,48 @@ fn keep_level(inner: Weak<Inner>) {
                 tracing::warn!(%error, "games ACL mask not repaired");
             }
         }
+    }
+}
+
+/// The one choice of how a person's cold start opens their session: through the login helper,
+/// with the password the person proved the start with, so what their own login unlocks with it
+/// unlocks here too; without one, as systemd's `PAMName=` opens it. A switch for the wallet
+/// login goes here.
+fn login_with(password: Option<&Secret>) -> Option<&Secret> {
+    password
+}
+
+/// The login drop-in for this binary, `None` when its path can't go in a unit file. After an
+/// upgrade replaced the file, the link names the new one with a ` (deleted)` suffix.
+fn login_dropin() -> Option<String> {
+    let exe = std::env::current_exe().ok()?;
+    let path = exe.to_str()?;
+    let path = Path::new(path.strip_suffix(" (deleted)").unwrap_or(path));
+    session::render_login(path)
+}
+
+/// The error of a start through the login helper that ended before a session for a reason that
+/// isn't the credential: the start goes on without it.
+const LOGIN_FALLBACK: &str = "login_fallback";
+
+/// Why `seat`'s start failed once its unit ended in `state`. With `login`, the end of the login
+/// helper says: before a session, [`LOGIN_FALLBACK`] with the operator's cause, or the
+/// credential's refusal with the console's sentence.
+fn unit_ended(seat: &Seat, state: &session::UnitState, login: bool) -> BackendError {
+    let account = &seat.account;
+    match login.then(|| login::outcome(state.ended)).flatten() {
+        Some(login::Outcome::Fallback(cause)) => err(LOGIN_FALLBACK, cause),
+        Some(login::Outcome::Refused(code)) => pam::refusal(account, code)
+            .err()
+            .unwrap_or_else(|| err(code, code)),
+        None => err(
+            "seat_exited",
+            format!(
+                "seat unit ended ({}); journalctl -u {} says why",
+                state.result,
+                session::unit(account)
+            ),
+        ),
     }
 }
 

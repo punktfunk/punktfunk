@@ -15,6 +15,17 @@ use crate::unlock::DeviceList;
 pub trait PlatformBackend: Send + Sync + 'static {
     fn provision(&self, seat: &Seat) -> Result<(), BackendError>;
     fn start(&self, seat: &Seat) -> Result<RuntimeStatus, BackendError>;
+
+    /// [`Self::start`] of a seat its person proved the start for with `password`. Linux may open
+    /// their session with it; nothing keeps it past the start.
+    fn start_with_password(
+        &self,
+        seat: &Seat,
+        _password: &Secret,
+    ) -> Result<RuntimeStatus, BackendError> {
+        self.start(seat)
+    }
+
     fn stop(&self, seat: &Seat) -> Result<RuntimeStatus, BackendError>;
     fn remove(&self, seat: &Seat) -> Result<(), BackendError>;
     /// A pure read of `seat`'s state.

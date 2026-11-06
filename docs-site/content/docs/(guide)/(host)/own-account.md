@@ -66,8 +66,9 @@ The profile's card under **Profiles** lists each device signed in to it, as **Si
 - **The desktop keeps running.** It doesn't stop when idle, and **Seats kept warm** never starts
   it: only its person's unlock does. **Stop** on its card logs it off, and unsaved work there is
   lost.
-- **The wallet stays locked.** KWallet or GNOME Keyring stays locked until they type its password
-  in the stream.
+- **The password opens the wallet.** When the typed password starts the desktop, KWallet opens
+  with it on a machine whose own login opens KWallet. A desktop that a face or finger match
+  started keeps the wallet locked until they type its password in the stream.
 - **Nothing is set up in the account.** Punktfunk makes no user or group and doesn't prepare their
   home; the apps the profile runs write there what they always write. **Remove** ends only the
   profile's own session. The account and its files stay.

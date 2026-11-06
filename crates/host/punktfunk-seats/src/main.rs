@@ -2,8 +2,9 @@
 //!
 //! `serve` is the root daemon (`punktfunk-seats.service`). The other verbs send one request to
 //! its socket, as the box host does, and print the answer; `serve-usb` is the pad server the
-//! daemon starts for a seat's USB device, and `pam-check` the password check it runs in a child,
-//! so libpam never loads into the daemon. The pad broker, [`pads`], and each seat's
+//! daemon starts for a seat's USB device, `pam-check` the password check it runs in a child, so
+//! libpam never loads into the daemon, and `login` the main process of a seat unit that opens a
+//! person's session with their password. The pad broker, [`pads`], and each seat's
 //! `/dev/uinput`, [`uinput`], are the daemon's too; they live here rather than in `pf-seats`
 //! because they link `pf-inject`, whose dependencies the Windows seat keeper's own workspace
 //! cannot resolve beside IronRDP.
@@ -34,7 +35,7 @@ mod vhci;
 mod linux {
     use crate::pads;
     use pf_seats::ipc::{Command, CommandResult, DiagnosticLevel};
-    use pf_seats::linux::{socket, LinuxBackend, SOCKET_PATH};
+    use pf_seats::linux::{handover, socket, LinuxBackend, SOCKET_PATH};
     use pf_seats::{CreateSeat, SeatId};
     use std::path::PathBuf;
     use std::process::ExitCode;
@@ -57,10 +58,18 @@ mod linux {
         \x20 ungate                      open the vhci gate and the box's hidraw (ExecStopPost)\n\
         \x20 drain                       answer the seats' waiting uinput reads (ExecStop)\n\
         \x20 serve-usb                   a seat's USB pad server, which the supervisor starts\n\
-        \x20 pam-check <account>         the supervisor's password check: password on stdin, a code out\n";
+        \x20 pam-check <account>         the supervisor's password check: password on stdin, a code out\n\
+        \x20 login <account>             a seat unit's login helper, which the supervisor starts\n";
 
     pub fn main() -> ExitCode {
-        match run(std::env::args().skip(1).collect()) {
+        let args: Vec<String> = std::env::args().skip(1).collect();
+        // No flags here: the account is data from a unit's instance name.
+        if let [verb, account] = args.as_slice()
+            && verb == pf_seats::linux::login::VERB
+        {
+            return ExitCode::from(pf_seats::linux::login::run(account));
+        }
+        match run(args) {
             Ok(()) => ExitCode::SUCCESS,
             Err(message) => {
                 eprintln!("{message}");
@@ -301,6 +310,15 @@ mod linux {
         let pads_listener =
             pads::bind(pads_path).map_err(|e| format!("bind {}: {e}", pads_path.display()))?;
         pads::refresh_pad_nodes();
+        // The login helper's password, for root alone.
+        let login_path = std::path::Path::new(handover::SOCKET_PATH);
+        let login_listener = handover::bind(login_path)
+            .map_err(|e| format!("bind {}: {e}", login_path.display()))?;
+        let for_login = Arc::clone(&service);
+        std::thread::Builder::new()
+            .name("seat-login".into())
+            .spawn(move || handover::serve(login_listener, for_login))
+            .map_err(|e| format!("start the login socket: {e}"))?;
         let for_pads = Arc::clone(&service);
         std::thread::Builder::new()
             .name("seat-pads".into())
