@@ -220,37 +220,48 @@ struct SlotSpec {
 
 #if os(tvOS)
 /// Why the touch slots are dimmed on a device with no touch screen.
-private let noTouchScreenReason = "Apple TV has no touch screen"
+private let noTouchScreenReason = String(localized: L10n.appleRingNoTouchTv)
 #elseif os(macOS)
-private let noTouchScreenReason = "A Mac has no touch screen"
+private let noTouchScreenReason = String(localized: L10n.appleRingNoTouchMac)
 #endif
 
 /// Why the two system-button slots are dimmed: they ride the wire pad, like the virtual one.
-private let padOffReason = "Controller input is not forwarded this session"
+private let padOffReason = String(localized: L10n.ringPadNotForwarded)
 
 /// The controller-mouse slot's state; the Rust and Android rings say the same.
 func padMouseState(_ mode: PunktfunkConnection.PadMouseMode) -> String {
     switch mode {
-    case .off: return "Off"
-    case .touchpad: return "Touchpad"
-    case .full: return "Full"
+    case .off: return String(localized: L10n.ringPadMouseOff)
+    case .touchpad: return String(localized: L10n.ringPadMouseTouchpad)
+    case .full: return String(localized: L10n.ringPadMouseFull)
+    }
+}
+
+/// The Touch mode slot's state word.
+private func touchModeState(_ mode: TouchInputMode) -> String {
+    switch mode {
+    case .trackpad: return String(localized: L10n.playerTouchModeTrackpad)
+    case .pointer: return String(localized: L10n.playerTouchModePointer)
+    case .touch: return String(localized: L10n.playerTouchModeTouch)
+    case .off: return String(localized: L10n.playerTouchModeOff)
     }
 }
 
 func spec(_ slot: SlotId, _ cfg: OverlayConfig, _ a: RingActions) -> SlotSpec {
     switch slot {
     case .endStream:
-        return SlotSpec(id: "end_stream", label: "End stream", icon: "xmark", armed: true)
+        return SlotSpec(id: "end_stream", label: String(localized: L10n.ringEndStream), icon: "xmark",
+                        armed: true)
     case .endGame:
-        return SlotSpec(id: "end_game", label: "End game", icon: "xmark.circle",
+        return SlotSpec(id: "end_game", label: String(localized: L10n.ringEndGame), icon: "xmark.circle",
                         enabled: a.streamedGame() != nil,
-                        reason: "No game this device launched is running here", armed: true)
+                        reason: String(localized: L10n.ringEndGameUnavailable), armed: true)
     case .disconnectLinger:
-        return SlotSpec(id: "disconnect_linger", label: "Disconnect, keep the game running",
+        return SlotSpec(id: "disconnect_linger", label: String(localized: L10n.ringDisconnectLinger),
                         icon: "rectangle.portrait.and.arrow.right")
     case .touchMode:
         #if os(tvOS) || os(macOS)
-        return SlotSpec(id: "touch_mode", label: "Touch mode", icon: "hand.tap",
+        return SlotSpec(id: "touch_mode", label: String(localized: L10n.ringTouchMode), icon: "hand.tap",
                         enabled: false, reason: noTouchScreenReason)
         #else
         let m = a.touchMode()
@@ -261,61 +272,69 @@ func spec(_ slot: SlotId, _ cfg: OverlayConfig, _ a: RingActions) -> SlotSpec {
         case .touch: icon = "hand.tap"
         case .off: icon = "hand.raised.slash"
         }
-        return SlotSpec(id: "touch_mode", label: "Touch mode", icon: icon, toggle: true,
-                        state: m.rawValue.capitalized)
+        return SlotSpec(id: "touch_mode", label: String(localized: L10n.ringTouchMode), icon: icon,
+                        toggle: true, state: touchModeState(m))
         #endif
     case .keyboard:
         #if os(macOS)
         // No software keyboard on a Mac, and the real one already reaches the host — a slot that
         // opened nothing would read as a broken button rather than as a platform that has one.
-        return SlotSpec(id: "keyboard", label: "Keyboard", icon: "keyboard",
-                        enabled: false, reason: "Use this Mac's keyboard")
+        return SlotSpec(id: "keyboard", label: String(localized: L10n.ringKeyboard), icon: "keyboard",
+                        enabled: false, reason: String(localized: L10n.appleRingKeyboardMac))
         #else
-        return SlotSpec(id: "keyboard", label: "Keyboard", icon: "keyboard")
+        return SlotSpec(id: "keyboard", label: String(localized: L10n.ringKeyboard), icon: "keyboard")
         #endif
     case .stats:
-        return SlotSpec(id: "stats", label: "Statistics", icon: "chart.bar", toggle: true,
-                        state: a.stats().label)
+        return SlotSpec(id: "stats", label: String(localized: L10n.ringStats), icon: "chart.bar",
+                        toggle: true, state: a.stats().label)
     case .mic:
-        return SlotSpec(id: "mic", label: "Microphone", icon: a.micMuted() ? "mic.slash.fill" : "mic.fill",
-                        enabled: a.micAvailable(), reason: "No microphone is running this session",
-                        toggle: true, state: a.micMuted() ? "Muted" : "On")
+        return SlotSpec(id: "mic", label: String(localized: L10n.ringMic),
+                        icon: a.micMuted() ? "mic.slash.fill" : "mic.fill",
+                        enabled: a.micAvailable(), reason: String(localized: L10n.ringMicUnavailable),
+                        toggle: true,
+                        state: a.micMuted() ? String(localized: L10n.ringMicMuted)
+                            : String(localized: L10n.ringMicOn))
     case .pad:
         #if os(tvOS) || os(macOS)
-        return SlotSpec(id: "pad", label: "Virtual controller", icon: "gamecontroller",
+        return SlotSpec(id: "pad", label: String(localized: L10n.ringPad), icon: "gamecontroller",
                         enabled: false, reason: noTouchScreenReason)
         #else
-        return SlotSpec(id: "pad", label: "Virtual controller", icon: "gamecontroller",
-                        enabled: a.padAvailable(), reason: "Controller input is not forwarded this session",
-                        toggle: true, state: a.padShown() ? "On" : "Off")
+        return SlotSpec(id: "pad", label: String(localized: L10n.ringPad), icon: "gamecontroller",
+                        enabled: a.padAvailable(), reason: String(localized: L10n.ringPadNotForwarded),
+                        toggle: true,
+                        state: a.padShown() ? String(localized: L10n.ringPadOn)
+                            : String(localized: L10n.ringPadOff))
         #endif
     case .sendText:
-        return SlotSpec(id: "send_text", label: "Send text", icon: "textformat",
-                        enabled: false, reason: "Use the keyboard on this device")
+        return SlotSpec(id: "send_text", label: String(localized: L10n.ringSendText), icon: "textformat",
+                        enabled: false, reason: String(localized: L10n.ringSendTextUnavailable))
     case .guide:
-        return SlotSpec(id: "guide", label: "Guide button", icon: "house",
+        return SlotSpec(id: "guide", label: String(localized: L10n.ringGuide), icon: "house",
                         enabled: a.padAvailable(), reason: padOffReason)
     case .qam:
-        return SlotSpec(id: "qam", label: "Quick access menu", icon: "sidebar.right",
+        return SlotSpec(id: "qam", label: String(localized: L10n.ringQam), icon: "sidebar.right",
                         enabled: a.padAvailable(), reason: padOffReason)
     case .padMouse:
-        return SlotSpec(id: "pad_mouse", label: "Controller mouse", icon: "computermouse",
+        return SlotSpec(id: "pad_mouse", label: String(localized: L10n.ringPadMouse), icon: "computermouse",
                         enabled: a.pointerGranted() && a.padMouseTarget() != 0,
-                        reason: a.pointerGranted() ? "No controller is connected"
-                            : "This host only allows controller input",
+                        reason: a.pointerGranted() ? String(localized: L10n.ringNoController)
+                            : String(localized: L10n.ringControllerOnly),
                         toggle: true, state: padMouseState(a.padMouseMode()))
     case .padType:
         // Automatic keeps a plain controller; a picked type shows its outline.
         let type = a.padType()
-        return SlotSpec(id: "pad_type", label: "Controller type", icon: "dpad", mark: type.mark,
-                        enabled: a.padTypeAvailable(), reason: "No controller is connected",
+        return SlotSpec(id: "pad_type", label: String(localized: L10n.ringPadType), icon: "dpad",
+                        mark: type.mark,
+                        enabled: a.padTypeAvailable(), reason: String(localized: L10n.ringNoController),
                         toggle: true, state: type.ringLabel)
     case .streamMute:
-        return SlotSpec(id: "stream_mute", label: "Mute this stream", icon: "speaker.wave.2",
-                        enabled: false, reason: "Not on this device")
+        return SlotSpec(id: "stream_mute", label: String(localized: L10n.ringStreamMute),
+                        icon: "speaker.wave.2",
+                        enabled: false, reason: String(localized: L10n.appleRingStreamMuteUnavailable))
     case .swapScreens:
-        return SlotSpec(id: "swap_screens", label: "Swap screens", icon: "arrow.up.arrow.down",
-                        enabled: false, reason: "Dual-screen handhelds only")
+        return SlotSpec(id: "swap_screens", label: String(localized: L10n.ringSwapScreens),
+                        icon: "arrow.up.arrow.down",
+                        enabled: false, reason: String(localized: L10n.ringSwapScreensUnavailable))
     case .host(let id):
         let act = a.hostActions().first { $0.id == id }
         // Three power actions, three glyphs — the same icon on all three made them one button.
@@ -328,23 +347,31 @@ func spec(_ slot: SlotId, _ cfg: OverlayConfig, _ a: RingActions) -> SlotSpec {
         }
         return SlotSpec(id: "host:\(id)", label: act?.label ?? id, icon: icon,
                         enabled: act?.available == true,
-                        reason: act?.unavailableReason ?? "This host doesn't offer it",
+                        reason: act?.unavailableReason ?? String(localized: L10n.ringHostNotOffered),
                         armed: act?.danger ?? true)
     case .shortcut(let id):
         let s = cfg.shortcut(id)
         let keys = s?.keys ?? []
         let known = !keys.isEmpty && keys.allSatisfy { keyVk($0) != nil }
         return SlotSpec(id: "shortcut:\(id)", label: (s?.label.isEmpty == false ? s!.label : chordChip(keys)),
-                        keys: keys, enabled: known, reason: "A key in this chord is unknown")
+                        keys: keys, enabled: known, reason: String(localized: L10n.ringChordUnknown))
     }
 }
 
-/// The second-press prompt for a destructive slot, in the words of the input that reaches it.
-#if os(iOS) || os(visionOS)
-private let againHint = "Tap again"
-#else
-private let againHint = "Press again"
-#endif
+/// The second-press prompt in the sheet's value column.
+private var againHint: String { String(localized: L10n.ringPressAgain) }
+
+/// The ring's question for a destructive slot: one whole message per slot, chosen by id.
+private func confirmHint(_ s: SlotSpec) -> String {
+    switch s.id {
+    case "end_stream": return String(localized: L10n.ringEndStreamConfirm)
+    case "end_game": return String(localized: L10n.ringEndGameConfirm)
+    case "host:power.sleep": return String(localized: L10n.ringHostSleepConfirm)
+    case "host:power.reboot": return String(localized: L10n.ringHostRebootConfirm)
+    case "host:power.shutdown": return String(localized: L10n.ringHostShutdownConfirm)
+    default: return L10n.ringHostActionConfirm(action: s.label)
+    }
+}
 
 private let ringRadius: CGFloat = 120
 private let slotSize: CGFloat = 56
@@ -481,7 +508,7 @@ struct RingOverlay: View {
                 // The centre opens the sheet. In the editor it is not editable, so it sits
                 // dimmed and inert rather than offering a preview nobody asked for.
                 let cq = discQ(6)
-                slotButton(SlotSpec(id: "more", label: "More", icon: "ellipsis"),
+                slotButton(SlotSpec(id: "more", label: String(localized: L10n.ringMore), icon: "ellipsis"),
                            size: centreSize, scale: 0.6 + 0.4 * cq,
                            alpha: cq * (editing == nil ? 1 : 0.45), armed: false,
                            highlighted: state.highlight == 6) {
@@ -494,7 +521,7 @@ struct RingOverlay: View {
                 .animation(discAnimation(6), value: phase)
                 // The label under the ring: a hint, else the highlighted slot's name.
                 let label: String? = state.hint ?? state.highlight.flatMap { h in
-                    h == 6 ? "More" : cfg.ring[h].map { spec($0, cfg, actions).label }
+                    h == 6 ? String(localized: L10n.ringMore) : cfg.ring[h].map { spec($0, cfg, actions).label }
                 }
                 if let hint = label {
                     Text(hint)
@@ -618,7 +645,7 @@ struct RingOverlay: View {
         if s.armed, state.armed != s.id {
             state.warnTick &+= 1
             state.armed = s.id
-            state.hint = "\(s.label)? \(againHint)"
+            state.hint = confirmHint(s)
             return
         }
         state.pressTick &+= 1
@@ -739,9 +766,10 @@ struct RingOverlay: View {
         }
         .scaleEffect(scale)
         .opacity(alpha)
-        .accessibilityLabel(s?.label ?? "Empty slot")
+        .accessibilityLabel(s?.label ?? String(localized: L10n.ringSlotEmpty))
         .accessibilityValue(
-            armed ? "armed — press again" : (s?.enabled == false ? (s?.reason ?? "") : (s?.state ?? "")))
+            armed ? String(localized: L10n.ringArmedA11y)
+                : (s?.enabled == false ? (s?.reason ?? "") : (s?.state ?? "")))
     }
 }
 
@@ -789,8 +817,11 @@ private struct SheetRowSpec {
 
     static func scrollInversion(_ actions: RingActions) -> SheetRowSpec {
         let granted = actions.pointerGranted()
-        return SheetRowSpec(label: "Invert scroll direction",
-                            value: granted ? (actions.scrollInverted() ? "On" : "Off") : "Pointer input is not allowed",
+        return SheetRowSpec(label: String(localized: L10n.ringSheetInvertScroll),
+                            value: granted
+                                ? String(localized: actions.scrollInverted() ? L10n.ringScrollInvertOn
+                                    : L10n.ringScrollInvertOff)
+                                : String(localized: L10n.ringPointerNotAllowed),
                             enabled: granted) {
             if actions.pointerGranted() { actions.toggleScrollInversion() }
         }
@@ -811,7 +842,9 @@ extension RingOverlay {
         let mode = a.currentMode()
         let native = state.native ?? mode
         let resLabel: String = {
-            if mode.w == native.w && mode.h == native.h { return "Native (\(mode.w)×\(mode.h))" }
+            if mode.w == native.w && mode.h == native.h {
+                return L10n.ringSheetNative(width: String(mode.w), height: String(mode.h))
+            }
             return resPresets.first { $0.1 == mode.w && $0.2 == mode.h }?.0 ?? "\(mode.w)×\(mode.h)"
         }()
         func adjustRes(_ dir: Int) {
@@ -829,21 +862,28 @@ extension RingOverlay {
             a.requestMode(mode.w, mode.h, options[((i + dir) % n + n) % n])
         }
         var rows: [SheetRowSpec] = []
-        rows.append(SheetRowSpec(header: "Session", label: "End stream",
+        rows.append(SheetRowSpec(header: String(localized: L10n.ringGroupSession),
+                                 label: String(localized: L10n.ringEndStream),
                                  value: state.armed == "end_stream" ? againHint : "") { [state] in
             if state.armed == "end_stream" { state.close(); a.endStream() } else { state.warnTick &+= 1; state.armed = "end_stream" }
         })
         if a.streamedGame() != nil {
-            rows.append(SheetRowSpec(label: "End game",
+            rows.append(SheetRowSpec(label: String(localized: L10n.ringEndGame),
                                      value: state.armed == "end_game" ? againHint : "") { [state] in
                 if state.armed == "end_game" { state.close(); a.endGame() } else { state.warnTick &+= 1; state.armed = "end_game" }
             })
         }
-        rows.append(SheetRowSpec(label: "Disconnect, keep the game running") { [state] in state.close(); a.disconnectLinger() })
-        rows.append(SheetRowSpec(header: "Resolution", label: "Resolution", value: resLabel, adjust: adjustRes) { adjustRes(1) })
-        rows.append(SheetRowSpec(label: "Refresh", value: "\(mode.hz) Hz", adjust: adjustHz) { adjustHz(1) })
+        rows.append(SheetRowSpec(label: String(localized: L10n.ringDisconnectLinger)) { [state] in
+            state.close()
+            a.disconnectLinger()
+        })
+        rows.append(SheetRowSpec(header: String(localized: L10n.ringGroupResolution),
+                                 label: String(localized: L10n.ringSheetResolution),
+                                 value: resLabel, adjust: adjustRes) { adjustRes(1) })
+        rows.append(SheetRowSpec(label: String(localized: L10n.ringSheetRefresh),
+                                 value: L10n.commonHz(value: String(mode.hz)), adjust: adjustHz) { adjustHz(1) })
         let tm = spec(.touchMode, cfg, a)
-        rows.append(SheetRowSpec(header: "Input", label: tm.label,
+        rows.append(SheetRowSpec(header: String(localized: L10n.ringGroupInput), label: tm.label,
                                  value: tm.enabled ? tm.state : tm.reason,
                                  enabled: tm.enabled) {
             if tm.enabled { a.cycleTouchMode() }
@@ -877,14 +917,18 @@ extension RingOverlay {
         rows.append(SheetRowSpec(label: pt.label, value: pt.enabled ? pt.state : pt.reason, enabled: pt.enabled) {
             if pt.enabled { a.cyclePadType() }
         })
-        rows.append(SheetRowSpec(header: "View", label: "Statistics", value: a.stats().label) { a.cycleStats() })
+        rows.append(SheetRowSpec(header: String(localized: L10n.ringGroupView),
+                                 label: String(localized: L10n.ringStats),
+                                 value: a.stats().label) { a.cycleStats() })
         let mic = spec(.mic, cfg, a)
-        rows.append(SheetRowSpec(header: "Audio", label: mic.label, value: mic.enabled ? mic.state : mic.reason,
+        rows.append(SheetRowSpec(header: String(localized: L10n.ringGroupAudio), label: mic.label,
+                                 value: mic.enabled ? mic.state : mic.reason,
                                  enabled: mic.enabled) { if mic.enabled { a.toggleMic() } })
         for (i, act) in a.hostActions().enumerated() {
             let id = "host:\(act.id)"
             let value = !act.available ? (act.unavailableReason ?? "") : (state.armed == id ? againHint : "")
-            rows.append(SheetRowSpec(header: i == 0 ? "Host" : nil, label: act.label, value: value,
+            rows.append(SheetRowSpec(header: i == 0 ? String(localized: L10n.ringGroupHost) : nil,
+                                     label: act.label, value: value,
                                      enabled: act.available) { [state] in
                 guard act.available else { state.refuseTick &+= 1; return }
                 if act.danger, state.armed != id { state.warnTick &+= 1; state.armed = id } else { state.close(); a.invokeHost(act) }
@@ -892,7 +936,7 @@ extension RingOverlay {
         }
         for (i, sc) in cfg.shortcuts.enumerated() {
             let ok = !sc.keys.isEmpty && sc.keys.allSatisfy { keyVk($0) != nil }
-            rows.append(SheetRowSpec(header: i == 0 ? "Shortcuts" : nil,
+            rows.append(SheetRowSpec(header: i == 0 ? String(localized: L10n.ringGroupShortcuts) : nil,
                                      label: sc.label.isEmpty ? chordChip(sc.keys) : sc.label,
                                      value: chordChip(sc.keys), enabled: ok) { [state] in
                 guard ok else { state.refuseTick &+= 1; return }
