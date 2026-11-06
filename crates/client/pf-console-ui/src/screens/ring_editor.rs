@@ -18,6 +18,7 @@ use pf_client_core::overlay_actions::{
     catalogue, chord_chip, CatalogueEntry, OverlayConfig, RingPlatform, SlotId,
 };
 use pf_client_core::ring::{RingFacts, RING_RADIUS, SLOT_DIAMETER};
+use pf_l10n::client as c;
 use skia_safe::{Canvas, Color4f, RRect, Rect};
 
 /// Stage and caption in design units. Height is the in-stream ring (top slot, bottom
@@ -119,7 +120,7 @@ impl RingEditorScreen {
         self.ring.set_facts(&RingFacts {
             overlay_actions: effective,
             touch_mode: "trackpad".into(),
-            stats_tier: "Compact".into(),
+            stats_tier: pf_l10n::client::player_stats_verbosity_compact().into(),
             mic_available: true,
             pad_mouse_target: 0b1,
             pointer_granted: true,
@@ -158,7 +159,7 @@ impl RingEditorScreen {
     /// Empty blob = platform default, same as the settings row.
     fn reset(&mut self, ctx: &mut Ctx, fx: &mut Outbox) {
         self.write(String::new(), ctx);
-        fx.toast = Some("Quick actions reset".into());
+        fx.toast = Some(pf_l10n::console::console_ring_reset_toast().into());
     }
 
     /// The picker's list while it is open, else the slot list.
@@ -180,9 +181,11 @@ impl RingEditorScreen {
             for (i, entry) in group.entries.into_iter().enumerate() {
                 let CatalogueEntry { id, label, note } = entry;
                 let is_current = id == current;
+                let now = pf_l10n::console::console_ring_picker_current();
                 let value = match (is_current, note.is_empty()) {
-                    (true, true) => "Current".to_string(),
-                    (true, false) => format!("Current · {note}"),
+                    (true, true) => now.to_string(),
+                    // Two messages side by side; the dot is a list separator.
+                    (true, false) => format!("{now} · {note}"),
                     (false, _) => note,
                 };
                 let mut r = RowSpec::field(label, value, "");
@@ -230,21 +233,21 @@ impl RingEditorScreen {
                 };
                 r.adjustable = false;
                 if i == 0 {
-                    r.header = Some("Shortcuts");
+                    r.header = Some(c::ring_editor_shortcuts());
                 }
                 r
             })
             .collect();
-        let mut new = RowSpec::action("New shortcut", true);
+        let mut new = RowSpec::action(c::ring_shortcut_add(), true);
         if rows.is_empty() {
-            new.header = Some("Shortcuts");
+            new.header = Some(c::ring_editor_shortcuts());
         }
         rows.push(new);
         rows.push(RowSpec::action(
             if self.reset_armed {
-                "Press again to reset the dial"
+                c::ring_reset_confirm()
             } else {
-                "Reset to default"
+                c::ring_reset()
             },
             true,
         ));
@@ -296,7 +299,7 @@ impl RingEditorScreen {
 
 impl ScreenView for RingEditorScreen {
     fn title(&self) -> String {
-        "Quick actions".into()
+        c::ring_editor_title().into()
     }
 
     fn menu(&mut self, ev: MenuEvent, ctx: &mut Ctx, fx: &mut Outbox) -> Option<MenuPulse> {
@@ -408,37 +411,43 @@ impl ScreenView for RingEditorScreen {
     }
 
     fn hints(&self, _ctx: &Ctx) -> Vec<Hint> {
+        use pf_l10n::common as m;
+        use pf_l10n::console as con;
         if self.picker.is_some() {
             return vec![
-                Hint::new(HintKey::Confirm, "Choose"),
-                Hint::new(HintKey::Back, "Cancel"),
+                Hint::new(HintKey::Confirm, m::common_choose()),
+                Hint::new(HintKey::Back, m::common_cancel()),
             ];
         }
         match self.focus {
             Focus::Ring => {
                 let carrying = self.ring.carrying();
+                let (confirm, lift, back) = if carrying {
+                    let put_down = con::console_hint_put_down();
+                    (con::console_hint_drop_here(), put_down, put_down)
+                } else {
+                    (
+                        con::console_hint_change(),
+                        con::console_hint_lift(),
+                        m::common_back(),
+                    )
+                };
                 vec![
-                    Hint::new(
-                        HintKey::Confirm,
-                        if carrying { "Drop here" } else { "Change" },
-                    ),
-                    Hint::new(
-                        HintKey::Secondary,
-                        if carrying { "Put down" } else { "Lift" },
-                    ),
-                    Hint::new(HintKey::Back, if carrying { "Put down" } else { "Back" }),
+                    Hint::new(HintKey::Confirm, confirm),
+                    Hint::new(HintKey::Secondary, lift),
+                    Hint::new(HintKey::Back, back),
                 ]
             }
             Focus::List => {
                 let n = self.cfg.shortcuts.len();
                 let label = match self.list.cursor {
-                    i if i < n => "Edit",
-                    i if i == n => "Add",
-                    _ => "Reset",
+                    i if i < n => m::common_edit(),
+                    i if i == n => m::common_add(),
+                    _ => m::common_reset(),
                 };
                 vec![
                     Hint::new(HintKey::Confirm, label),
-                    Hint::new(HintKey::Back, "Back"),
+                    Hint::new(HintKey::Back, m::common_back()),
                 ]
             }
         }
@@ -460,12 +469,12 @@ impl ScreenView for RingEditorScreen {
         }
         self.ring.tick();
         let kf = k as f32;
+        // A and Y name the buttons as the ring's own hints do, in every pad style.
         crate::widgets::blurb(
             canvas,
             ui,
             fonts,
-            "Point the stick at a button; A changes it. Y lifts a button and A drops it on \
-             another to swap; with a pointer, click or drag.",
+            &pf_l10n::console::console_ring_editor_hint("A", "Y"),
             rect,
             k,
         );

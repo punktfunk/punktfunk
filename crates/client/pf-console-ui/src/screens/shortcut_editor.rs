@@ -21,6 +21,8 @@ use pf_client_core::menu_nav::{MenuDir, MenuEvent, MenuPulse};
 use pf_client_core::overlay_actions::{
     chord_chip, key_legend, Chord, OverlayConfig, Shortcut, CHORD_MODIFIERS, KEY_GRID,
 };
+use pf_l10n::client as c;
+use pf_l10n::console as con;
 use skia_safe::{Canvas, Color4f, RRect, Rect};
 
 use super::ring_editor::ring_platform;
@@ -57,37 +59,42 @@ impl Draft {
 
 fn rows(d: &Draft, typing: bool, picking: bool) -> Vec<RowSpec> {
     let mut v = Vec::with_capacity(ROW_REMOVE + 1);
-    let mut name = RowSpec::field("Name", d.label.clone(), "Optional — e.g. Task Manager");
-    name.header = Some("Shortcut");
+    let mut name = RowSpec::field(
+        c::ring_shortcut_name(),
+        d.label.clone(),
+        c::ring_shortcut_name_placeholder(),
+    );
+    name.header = Some(con::console_shortcut_section());
     name.caret = typing;
     v.push(name);
     let mut key = RowSpec::field(
-        "Key",
+        c::ring_shortcut_key(),
         d.chord.key.as_deref().map(key_legend).unwrap_or_default(),
-        "Choose…",
+        con::console_shortcut_key_choose(),
     );
     key.caret = picking;
     v.push(key);
     for (i, m) in CHORD_MODIFIERS.iter().enumerate() {
-        let mut row = RowSpec::field(
-            key_legend(m),
-            if d.chord.mods[i] { "On" } else { "Off" }.into(),
-            "",
-        );
-        row.header = if i == 0 { Some("Hold with") } else { None };
+        let on = if d.chord.mods[i] {
+            con::console_shortcut_modifier_on()
+        } else {
+            con::console_shortcut_modifier_off()
+        };
+        let mut row = RowSpec::field(key_legend(m), on.into(), "");
+        row.header = (i == 0).then(c::ring_shortcut_modifiers);
         row.adjustable = true;
         v.push(row);
     }
     v.push(RowSpec::action(
         if d.id.is_some() {
-            "Save"
+            pf_l10n::common::common_save()
         } else {
-            "Add to the dial"
+            pf_l10n::common::common_add()
         },
         d.chord.key.is_some(),
     ));
     if d.id.is_some() {
-        v.push(RowSpec::action("Remove shortcut", true));
+        v.push(RowSpec::action(c::ring_shortcut_remove(), true));
     }
     v
 }
@@ -350,7 +357,7 @@ impl ShortcutEditorScreen {
 
     fn save(&mut self, ctx: &mut Ctx, fx: &mut Outbox) {
         if self.draft.chord.key.is_none() {
-            fx.toast = Some("Pick a key first".into());
+            fx.toast = Some(c::ring_shortcut_pick_key_first().into());
             self.list.jump_to(ROW_KEY);
             self.open_keys();
             return;
@@ -364,7 +371,7 @@ impl ShortcutEditorScreen {
             c.settings.overlay_actions = cfg.to_json();
             true
         });
-        fx.toast = Some("Saved".into());
+        fx.toast = Some(con::console_shortcut_saved().into());
         fx.pop();
     }
 
@@ -381,7 +388,7 @@ impl ShortcutEditorScreen {
             c.settings.overlay_actions = cfg.to_json();
             true
         });
-        fx.toast = Some("Removed".into());
+        fx.toast = Some(con::console_shortcut_removed().into());
         fx.pop();
     }
 
@@ -433,9 +440,9 @@ impl ShortcutEditorScreen {
 impl ScreenView for ShortcutEditorScreen {
     fn title(&self) -> String {
         if self.draft.id.is_some() {
-            "Shortcut".into()
+            c::ring_shortcut_title().into()
         } else {
-            "New shortcut".into()
+            c::ring_shortcut_new_title().into()
         }
     }
 
@@ -446,7 +453,7 @@ impl ScreenView for ShortcutEditorScreen {
     fn edit_field(&self) -> Option<crate::screens::EditField> {
         let name = self.draft.label.as_str();
         self.editing_name
-            .then(|| crate::screens::EditField::new("Name", name, false))
+            .then(|| crate::screens::EditField::new(c::ring_shortcut_name(), name, false))
             .flatten()
     }
 
@@ -531,27 +538,37 @@ impl ScreenView for ShortcutEditorScreen {
     }
 
     fn hints(&self, ctx: &Ctx) -> Vec<Hint> {
+        use pf_l10n::common as m;
         if self.editing_name {
-            return self.keyboard.hints(ctx.device, "Done");
+            return self.keyboard.hints(ctx.device, m::common_done());
         }
         if self.picking_key {
             return vec![
-                Hint::new(HintKey::Confirm, "Choose"),
-                Hint::new(HintKey::Back, "Close"),
+                Hint::new(HintKey::Confirm, m::common_choose()),
+                Hint::new(HintKey::Back, m::common_close()),
             ];
         }
         let mut hints = Vec::with_capacity(3);
         match self.list.cursor {
-            ROW_NAME => hints.push(Hint::new(HintKey::Confirm, "Edit name")),
-            ROW_KEY => hints.push(Hint::new(HintKey::Confirm, "Choose key")),
+            ROW_NAME => hints.push(Hint::new(
+                HintKey::Confirm,
+                con::console_shortcut_hint_edit_name(),
+            )),
+            ROW_KEY => hints.push(Hint::new(
+                HintKey::Confirm,
+                con::console_shortcut_hint_choose_key(),
+            )),
             r if (ROW_MODS..ROW_SAVE).contains(&r) => {
-                hints.push(Hint::new(HintKey::Adjust, "Off / On"));
-                hints.push(Hint::new(HintKey::Confirm, "Toggle"));
+                hints.push(Hint::new(
+                    HintKey::Adjust,
+                    con::console_shortcut_hint_adjust(),
+                ));
+                hints.push(Hint::new(HintKey::Confirm, con::console_hint_toggle()));
             }
-            ROW_SAVE => hints.push(Hint::new(HintKey::Confirm, "Save")),
-            _ => hints.push(Hint::new(HintKey::Confirm, "Remove")),
+            ROW_SAVE => hints.push(Hint::new(HintKey::Confirm, m::common_save())),
+            _ => hints.push(Hint::new(HintKey::Confirm, m::common_remove())),
         }
-        hints.push(Hint::new(HintKey::Back, "Back"));
+        hints.push(Hint::new(HintKey::Back, m::common_back()));
         hints
     }
 
@@ -571,7 +588,7 @@ impl ScreenView for ShortcutEditorScreen {
             canvas,
             ui,
             fonts,
-            "Hold the modifiers marked on, then press the key. The dial draws it as a keycap.",
+            c::ring_shortcut_modifiers_hint(),
             rect,
             k,
         );
@@ -586,7 +603,7 @@ impl ScreenView for ShortcutEditorScreen {
         fonts.draw(
             canvas,
             if chip.is_empty() {
-                "No key yet"
+                c::ring_shortcut_no_key()
             } else {
                 chip.as_str()
             },
@@ -598,7 +615,7 @@ impl ScreenView for ShortcutEditorScreen {
         );
         fonts.draw(
             canvas,
-            "How the dial will draw it",
+            c::ring_shortcut_preview(),
             legend_x,
             f64::from(top) + 46.0 * k,
             W::Regular,
@@ -693,7 +710,7 @@ mod tests {
         assert_eq!(r[ROW_NAME].header, Some("Shortcut"));
         assert_eq!(r[ROW_KEY].value.as_deref(), Some("Choose…"));
         assert!(r[ROW_KEY].value_dim && r[ROW_KEY].caret);
-        assert_eq!(r[ROW_MODS].header, Some("Hold with"));
+        assert_eq!(r[ROW_MODS].header, Some(c::ring_shortcut_modifiers()));
         assert!(r[ROW_MODS..ROW_SAVE]
             .iter()
             .all(|m| m.adjustable && m.value.as_deref() == Some("Off")));

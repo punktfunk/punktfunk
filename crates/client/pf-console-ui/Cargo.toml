@@ -114,8 +114,9 @@ serde_json = "1"
 punktfunk-core = { path = "../../core/punktfunk-core" }
 # Flexbox for the element layer (`el/`). Pure Rust; flexbox and the content-size pass only.
 taffy = { version = "0.14", default-features = false, features = ["std", "taffy_tree", "flexbox", "content_size"] }
-# Every word the shell draws: the shared client messages and the controller interface's own.
-pf-l10n = { path = "../../../l10n", features = ["client", "console"] }
+# Every word the shell draws: the shared client messages, the controller interface's own, and
+# the host's power actions by name.
+pf-l10n = { path = "../../../l10n", features = ["client", "console", "host"] }
 
 # Linux links the system SDL3; Windows builds it from source (same choice as the rest
 # of the workspace's Windows SDL consumers).
