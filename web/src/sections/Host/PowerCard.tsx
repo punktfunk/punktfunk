@@ -2,6 +2,7 @@ import type { FC } from "react";
 import { apiFetch } from "@/api/fetcher";
 import type { ActionInfo } from "@/api/gen/model";
 import { PasswordConfirmDialog } from "@/components/password-confirm";
+import { apiText } from "@/lib/host-messages";
 import { m } from "@/paraglide/messages";
 
 /** Localized titles for the KNOWN action ids; unknown ids fall back to the server's title —
@@ -16,10 +17,16 @@ export const actionTitle = (a: ActionInfo): string => {
 			return m.host_power_shutdown();
 		case "host.restart":
 			return m.host_power_restart_service();
+		case "display.next":
+			return m.hostaction_display_next();
 		default:
 			return a.title;
 	}
 };
+
+/** Why an action is unavailable: the host's `apierr_<code>`, else the system's own words. */
+export const actionUnavailable = (a: ActionInfo): string | null | undefined =>
+	apiText(a.unavailable_code, undefined, a.unavailable_reason);
 
 /** Runs a host action once the console password is re-entered; the BFF verifies it. */
 export const ConfirmDialog: FC<{

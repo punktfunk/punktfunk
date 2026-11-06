@@ -13,7 +13,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { MenuItem, MenuSeparator, RowMenu } from "@/components/ui/menu";
 import { m } from "@/paraglide/messages";
 import { CopyRow } from "./CopyRow";
-import { actionTitle, ConfirmDialog } from "./PowerCard";
+import { actionTitle, actionUnavailable, ConfirmDialog } from "./PowerCard";
 import { type Update, updateLine } from "./UpdateCard";
 
 /**
@@ -170,7 +170,7 @@ const ActionItem: FC<{
 				{actionTitle(a)}
 				{!a.available && a.unavailable_reason && (
 					<span className="text-xs text-muted-foreground">
-						{a.unavailable_reason}
+						{actionUnavailable(a)}
 					</span>
 				)}
 			</span>
