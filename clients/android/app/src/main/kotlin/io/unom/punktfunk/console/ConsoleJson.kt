@@ -55,17 +55,20 @@ internal object ConsoleJson {
         // streams at, so the console must not offer to write the global default instead.
         .put("bitrate_kbps", p.overrides.bitrateKbps ?: JSONObject.NULL)
 
-    /** A host's advertised actions in the console model's shape (`HostRow.actions`). */
-    private fun actionRows(actions: List<HostActions.Action>?): JSONArray {
+    /**
+     * A host's advertised actions in the console model's shape (`HostRow.actions`), worded in
+     * [res]'s language; the host's own words without it.
+     */
+    private fun actionRows(actions: List<HostActions.Action>?, res: Resources?): JSONArray {
         val arr = JSONArray()
         for (a in actions.orEmpty()) {
             arr.put(
                 JSONObject()
                     .put("id", a.id)
-                    .put("label", a.label)
+                    .put("label", res?.let(a::text) ?: a.label)
                     .put("danger", a.danger)
                     .put("available", a.available)
-                    .put("unavailable_reason", a.unavailableReason),
+                    .put("unavailable_reason", res?.let(a::reason) ?: a.unavailableReason),
             )
         }
         return arr
@@ -89,6 +92,8 @@ internal object ConsoleJson {
         /** What each paired host has up, by fingerprint. Absent = nothing, or nobody has
          *  asked yet; the tile draws no line either way. */
         running: Map<String, String> = emptyMap(),
+        /** The language of the actions' words. */
+        res: Resources? = null,
     ): String {
         val out = JSONArray()
         // The store keeps no insertion order; an undated record predates the stamp, so it
@@ -116,7 +121,7 @@ internal object ConsoleJson {
                 .put("clipboard_sync", h.clipboardSync)
                 .put("last_used", h.lastUsed ?: JSONObject.NULL)
                 .put("os", advert?.os?.takeIf { it.isNotEmpty() } ?: h.os)
-                .put("actions", actionRows(hostActions[h.fpHex]))
+                .put("actions", actionRows(hostActions[h.fpHex], res))
                 .put("pin", JSONObject.NULL)
                 .put(
                     "bound_preset",
@@ -197,8 +202,8 @@ internal object ConsoleJson {
             .put("profile", profileJson(h))
     }
 
-    /** One `enumerate` row, as the console's `ListedProfile` reads it. */
-    fun profileRow(p: io.unom.punktfunk.kit.ListedProfile): JSONObject = JSONObject()
+    /** One `enumerate` row, as the console's `ListedProfile` reads it; the seat line in [res]'s language. */
+    fun profileRow(p: io.unom.punktfunk.kit.ListedProfile, res: Resources): JSONObject = JSONObject()
         .put("id", p.id)
         .put("display_name", p.displayName)
         .put("accent", p.accent ?: JSONObject.NULL)
@@ -210,7 +215,7 @@ internal object ConsoleJson {
             p.seat?.let {
                 JSONObject()
                     .put("state", it.state.name.lowercase())
-                    .put("detail", it.detail ?: JSONObject.NULL)
+                    .put("detail", it.line?.words(res) ?: JSONObject.NULL)
                     .put("occupant", it.occupant ?: JSONObject.NULL)
                     .put("steam_sign_in", it.steamSignIn ?: JSONObject.NULL)
             } ?: JSONObject.NULL,
@@ -327,7 +332,8 @@ internal object ConsoleJson {
 
     /** The answer to `ConsoleCmd::FetchProfiles`, as the console's `ProfilesAnswer`. */
     fun profilesAnswer(answer: ProfilesAnswer, res: Resources): String = when (answer) {
-        is ProfilesAnswer.Listed -> JSONObject().put("Listed", JSONArray(answer.rows.map(::profileRow))).toString()
+        is ProfilesAnswer.Listed ->
+            JSONObject().put("Listed", JSONArray(answer.rows.map { profileRow(it, res) })).toString()
         ProfilesAnswer.NoProfiles -> "\"NoProfiles\""
         is ProfilesAnswer.Failed -> JSONObject().put("Failed", answer.why.words(res)).toString()
     }

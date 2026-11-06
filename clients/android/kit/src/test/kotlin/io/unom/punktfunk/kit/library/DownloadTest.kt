@@ -100,7 +100,7 @@ class DownloadTest {
         )
         assertEquals(
             Say.Text("Quit Quail first."),
-            InstallOutcome.fromReply(409, "Quit Quail first.").notice(InstallAction.Remove, "Quail"),
+            InstallOutcome.fromReply(409, Say.Text("Quit Quail first.")).notice(InstallAction.Remove, "Quail"),
         )
         assertEquals(
             say(R.string.lib_install_unsupported),

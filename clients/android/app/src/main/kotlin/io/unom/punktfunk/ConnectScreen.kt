@@ -298,7 +298,7 @@ fun ConnectScreen(
             // The host already said it cannot do this right now — say why, rather than send a
             // request we know it will refuse.
             !a.available ->
-                ctl.notice = a.unavailableReason.ifEmpty {
+                ctl.notice = a.reason(context.resources).ifEmpty {
                     context.getString(R.string.hostcard_action_unavailable_body, a.text(context.resources))
                 }
             a.danger -> confirmAction = kh to a

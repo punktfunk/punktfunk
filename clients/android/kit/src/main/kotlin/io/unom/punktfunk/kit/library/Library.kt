@@ -1,6 +1,7 @@
 package io.unom.punktfunk.kit.library
 
 import android.util.Log
+import io.unom.punktfunk.kit.HostText
 import io.unom.punktfunk.kit.NativeBridge
 import io.unom.punktfunk.kit.R
 import io.unom.punktfunk.kit.Say
@@ -307,7 +308,7 @@ sealed class InstallOutcome {
     data object Done : InstallOutcome()
 
     /** `403`/`404`/`409` with the host's own sentence. */
-    data class Refused(val message: String) : InstallOutcome()
+    data class Refused(val said: Say) : InstallOutcome()
 
     /** A host without the route. */
     data object Unsupported : InstallOutcome()
@@ -320,7 +321,7 @@ sealed class InstallOutcome {
             InstallAction.Pause -> say(R.string.lib_download_paused_done, title)
             InstallAction.Remove -> say(R.string.lib_removed, title)
         }
-        is Refused -> Say.Text(message)
+        is Refused -> said
         Unsupported -> say(R.string.lib_install_unsupported)
         is Failed -> say(
             when (action) {
@@ -335,9 +336,9 @@ sealed class InstallOutcome {
 
     companion object {
         /** An answer: the host's sentence when it sent one, else the route is missing. */
-        fun fromReply(code: Int, message: String?): InstallOutcome = when {
+        fun fromReply(code: Int, said: Say?): InstallOutcome = when {
             code in 200..299 -> Done
-            !message.isNullOrBlank() -> Refused(message)
+            said != null -> Refused(said)
             code == 401 || code == 404 || code == 405 -> Unsupported
             else -> Failed(say(R.string.error_mgmt_refused, code))
         }
@@ -862,16 +863,16 @@ sealed interface MgmtReply {
     /** Why it is not a success, in the user register: the host's own sentence, else its status. */
     val why: Say
 
-    /** The host answered. [apiError] is the `ApiError` envelope's `error`, when it sent one. */
-    data class Answer(val code: Int, val body: String, val apiError: String?) : MgmtReply {
+    /**
+     * The host answered. [apiError] is the sentence of the `ApiError` envelope, when it sent
+     * one: its message by code ([HostText]), else its English.
+     */
+    data class Answer(val code: Int, val body: String, val apiError: Say?) : MgmtReply {
         val ok: Boolean get() = code in 200..299
-        override val why: Say get() = apiError?.let { Say.Text(it) } ?: say(R.string.error_mgmt_refused, code)
+        override val why: Say get() = apiError ?: say(R.string.error_mgmt_refused, code)
 
         companion object {
-            fun of(code: Int, body: String) = Answer(
-                code, body,
-                runCatching { JSONObject(body).optString("error") }.getOrNull()?.takeIf { it.isNotBlank() },
-            )
+            fun of(code: Int, body: String) = Answer(code, body, HostText.apiError(body))
         }
     }
 

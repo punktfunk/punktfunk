@@ -16,9 +16,16 @@ sealed interface Say {
     /** Words shown as they came: a name, or a sentence the host or the OS sent. */
     data class Text(val value: String) : Say
 
+    /**
+     * A sentence the host sent by the id of its message ([HostText]), with the values of its
+     * placeholders. [english] is the host's own, for an id this build does not know.
+     */
+    data class Host(val id: String, val params: Map<String, String>, val english: String) : Say
+
     /** This line in the language [res] is in. */
     fun words(res: Resources): String = when (this) {
         is Text -> value
+        is Host -> HostText.words(res, id, params) ?: english
         is Plural -> res.getQuantityString(id, count, *args.toTypedArray())
         is Msg ->
             if (args.isEmpty()) {

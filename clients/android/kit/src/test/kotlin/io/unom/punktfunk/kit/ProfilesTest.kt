@@ -80,7 +80,7 @@ class ProfilesTest {
         assertEquals(SeatGate.Dial, seatGate(row("occupied")))
         assertEquals(SeatGate.Dial, seatGate(row("sleeping")))
         assertEquals(SeatGate.Wake, seatGate(row("stopped")))
-        assertEquals(SeatGate.Wait("Signing in"), seatGate(row("starting", "Signing in")))
+        assertEquals(SeatGate.Wait(Say.Text("Signing in")), seatGate(row("starting", "Signing in")))
         assertEquals(SeatGate.Wait(null), seatGate(row("starting")))
         assertEquals(SeatGate.Refuse(Say.Text("Seats are off.")), seatGate(row("unavailable", "Seats are off.")))
         assertEquals(SeatGate.Refuse(say(R.string.reject_seat_unavailable)), seatGate(row("unavailable")))

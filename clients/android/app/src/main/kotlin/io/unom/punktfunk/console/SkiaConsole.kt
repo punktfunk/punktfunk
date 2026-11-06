@@ -584,7 +584,7 @@ object SkiaConsole {
             handle,
             ConsoleJson.hostRows(
                 services.store.all(), services.discovered, services.reachable, presetStore.all(),
-                services.hostActions, services.nowPlaying,
+                services.hostActions, services.nowPlaying, appContext?.resources,
             ),
         )
     }

@@ -74,13 +74,21 @@ enum class UnlockNeed {
 /** A profile's own seat. Absent for one that plays on the box's own session. */
 data class Seat(
     val state: SeatState = SeatState.READY,
-    /** The progress line while starting, or why while unavailable. */
+    /** The progress line while starting, or why while unavailable: the host's English. */
     val detail: String? = null,
+    /** The host message of [detail] (`seatline_*`), absent for the supervisor's own text. */
+    val detailId: String? = null,
+    /** The values of that message's placeholders, by name. */
+    val detailParams: Map<String, String> = emptyMap(),
     /** The device playing on it while occupied. */
     val occupant: String? = null,
     /** Its Steam has no account yet. `null` where the host can't tell. */
     val steamSignIn: Boolean? = null,
-)
+) {
+    /** [detail] in the app's language when the host names its message, else as the host said it. */
+    val line: Say?
+        get() = detail?.let { if (detailId != null) Say.Host(detailId, detailParams, it) else Say.Text(it) }
+}
 
 /** One row of `enumerate`. Every field defaults, so a host that adds one never fails the list. */
 data class ListedProfile(
@@ -105,10 +113,8 @@ data class ListedProfile(
         return when {
             seat.state == SeatState.OCCUPIED ->
                 seat.occupant?.let { say(R.string.profile_in_use_by, it) } ?: say(R.string.profile_in_use)
-            seat.state == SeatState.STARTING ->
-                seat.detail?.let { Say.Text(it) } ?: say(R.string.profile_getting_ready)
-            seat.state == SeatState.UNAVAILABLE ->
-                seat.detail?.let { Say.Text(it) } ?: say(R.string.profile_unavailable)
+            seat.state == SeatState.STARTING -> seat.line ?: say(R.string.profile_getting_ready)
+            seat.state == SeatState.UNAVAILABLE -> seat.line ?: say(R.string.profile_unavailable)
             seat.steamSignIn == true -> say(R.string.profile_steam_sign_in)
             else -> null
         }
@@ -127,6 +133,8 @@ data class ListedProfile(
                 Seat(
                     state = SeatState.of(str(it, "state")),
                     detail = str(it, "detail"),
+                    detailId = str(it, "detail_id"),
+                    detailParams = HostText.paramsOf(it.optJSONObject("detail_params")),
                     occupant = str(it, "occupant"),
                     steamSignIn = if (it.isNull("steam_sign_in")) null else it.optBoolean("steam_sign_in"),
                 )
@@ -211,7 +219,7 @@ sealed interface SeatGate {
     data object Wake : SeatGate
 
     /** The seat is coming up: poll `enumerate`, show [detail], offer Cancel. */
-    data class Wait(val detail: String?) : SeatGate
+    data class Wait(val detail: Say?) : SeatGate
 
     /** The seat can't play now; [line] says why. Don't dial. */
     data class Refuse(val line: Say) : SeatGate
@@ -226,9 +234,8 @@ fun seatGate(p: ListedProfile): SeatGate {
     return when (seat.state) {
         SeatState.READY, SeatState.OCCUPIED, SeatState.OTHER -> SeatGate.Dial
         SeatState.STOPPED -> if (p.unlock == UnlockNeed.NONE) SeatGate.Wake else SeatGate.Dial
-        SeatState.STARTING -> SeatGate.Wait(seat.detail)
-        SeatState.UNAVAILABLE ->
-            SeatGate.Refuse(seat.detail?.let { Say.Text(it) } ?: say(R.string.reject_seat_unavailable))
+        SeatState.STARTING -> SeatGate.Wait(seat.line)
+        SeatState.UNAVAILABLE -> SeatGate.Refuse(seat.line ?: say(R.string.reject_seat_unavailable))
     }
 }
 
