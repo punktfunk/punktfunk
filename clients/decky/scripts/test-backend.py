@@ -158,30 +158,30 @@ shutil.rmtree("/tmp/pf-test-home", ignore_errors=True)
 
 # ---- _cli_error: the CLI's exit-code contract -------------------------------------------
 #
-# Exit 5 + `unknown command` is how a client too old for a verb announces itself — the ONE
-# signature the panel turns into "update the client" plus the button that fixes it. Getting it
-# wrong makes an out-of-date client look like a broken plugin.
-check(
-    "err: unknown verb => client-outdated",
-    main._cli_error(5, 'unknown command "discover"\n\npunktfunk — the Punktfunk client')
-    == "client-outdated",
-)
-check(
-    "err: exit 5 without that phrase is NOT outdated",
-    main._cli_error(5, 'no saved host matches "desk"') == "unresolved",
-)
-check("err: connect failed", main._cli_error(2, "unreachable 10.0.0.1:9777") == "unreachable")
-check("err: trust rejected", main._cli_error(3, "wrong PIN") == "refused")
-check("err: needs a person", main._cli_error(6, "pair it first") == "needs-pairing")
-check("err: nothing ran", main._cli_error(-1, "") == "client-unavailable")
-check("err: unmapped code falls back", main._cli_error(4, "renderer") == "client-error")
+# The exit code alone picks the error: no prose is read. A client too old for a verb is told
+# apart by the CLI's `--json` answer (`unknown-command`) or, for `discover`, by exit 5.
+check("err: exit 5 is unresolved", main._cli_error(5) == "unresolved")
+check("err: connect failed", main._cli_error(2) == "unreachable")
+check("err: trust rejected", main._cli_error(3) == "refused")
+check("err: needs a person", main._cli_error(6) == "needs-pairing")
+check("err: nothing ran", main._cli_error(-1) == "client-unavailable")
+check("err: unmapped code falls back", main._cli_error(4) == "client-error")
+
+# ---- the host's refusal token: a safe shape, or nothing -----------------------------------
+check("reject: a token passes", main._reject_token('{"ok": false, "reject": "not-armed"}') == "not-armed")
+check("reject: null is none", main._reject_token('{"ok": false, "reject": null}') is None)
+check("reject: junk stdout is none", main._reject_token("paired 10.0.0.5:9777 fp=ab") is None)
+check("reject: a token off the shape is none", main._reject_token('{"reject": "Not Armed"}') is None)
+check("reject: a non-string is none", main._reject_token('{"reject": 3}') is None)
+check("fp: from the json object", main._paired_fp('{"ok": true, "fp": "ab12"}') == "ab12")
+check("fp: from a client older than --json", main._paired_fp("paired 10.0.0.5:9777 fp=ab12\n") == "ab12")
 
 # ---- _cli_json: a zero exit with junk on stdout is a FAILURE, not an empty result --------
 import asyncio  # noqa: E402
 
 
 def _fake_cli(rc: int, out: str, err: str = ""):
-    async def run(_args, timeout=20.0):
+    async def run(_args, timeout=20.0, stdin_text=None):
         return rc, out, err
 
     return run
@@ -196,10 +196,16 @@ got = asyncio.run(main._cli_json(["discover", "--json"]))
 check("json: unparseable stdout is an error, not an empty list", got["ok"] is False)
 check("json: ...and says so specifically", got["error"] == "client-error")
 
-main._run_cli = _fake_cli(5, "", 'unknown command "discover"')
-got = asyncio.run(main._cli_json(["discover", "--json"]))
-check("json: old client surfaces as client-outdated", got["error"] == "client-outdated")
+main._run_cli = _fake_cli(5, '{"ok": false, "error": "unknown-command"}', 'unknown command "x"')
+got = asyncio.run(main._cli_json(["library", "--json"]))
+check("json: the CLI's own unknown-command answer is client-outdated", got["error"] == "client-outdated")
 check("json: detail carries the CLI's own last line", "unknown command" in got["detail"])
+
+main._run_cli = _fake_cli(5, "", 'no saved host matches "desk"')
+got = asyncio.run(main._cli_json(["library", "desk", "--json"]))
+check("json: exit 5 alone is unresolved, not outdated", got["error"] == "unresolved")
+got = asyncio.run(main._cli_json(["discover", "--json"], outdated_rc=(5,)))
+check("json: a verb that never exits 5 reads it as outdated", got["error"] == "client-outdated")
 
 # ---- Plugin.library: the argv shape, and a ref that would read as a flag ------------------
 #
@@ -237,7 +243,10 @@ asyncio.run(main.Plugin().request_access("192.168.1.9", 9777, "Steam Deck", desk
 check(
     "request access: argv pins the advertised fingerprint",
     captured.get("args")
-    == ["pair", "192.168.1.9:9777", "--request-access", "--name", "Steam Deck", "--fp", desk],
+    == [
+        "pair", "192.168.1.9:9777", "--request-access", "--name", "Steam Deck", "--json",
+        "--fp", desk,
+    ],
 )
 captured.clear()
 asyncio.run(main.Plugin().request_access("192.168.1.9", 9777, "Steam Deck"))
@@ -245,7 +254,22 @@ check("request access: no fingerprint, no --fp", "--fp" not in captured.get("arg
 captured.clear()
 got = asyncio.run(main.Plugin().request_access("192.168.1.9", 9777, "Steam Deck", "--exec"))
 check("request access: a flag-shaped fingerprint never reaches the CLI", "args" not in captured)
-check("request access: ...and is reported as unresolved", got["error"] == "unresolved")
+check("request access: ...and is reported as bad-fingerprint", got["error"] == "bad-fingerprint")
+
+# The host's refusal reaches the panel as a token; a client that exits 6 is too old for the flag.
+main._run_cli = _fake_cli(3, '{"ok": false, "reject": "approval-timeout"}', "nobody approved it")
+got = asyncio.run(main.Plugin().request_access("192.168.1.9", 9777, "Steam Deck", desk))
+check("request access: refusal carries the host's token",
+      got["error"] == "refused" and got["reject"] == "approval-timeout")
+main._run_cli = _fake_cli(6, "", "no --pin - and no terminal to ask on")
+got = asyncio.run(main.Plugin().request_access("192.168.1.9", 9777, "Steam Deck", desk))
+check("request access: exit 6 is a client too old for the flag", got["error"] == "client-outdated")
+main._run_cli = _fake_cli(0, '{"ok": true, "fp": "ab"}')
+got = asyncio.run(main.Plugin().pair("192.168.1.9", 9777, "1234"))
+check("pair: the fingerprint comes from the json object", got == {"ok": True, "fp": "ab"})
+main._run_cli = _fake_cli(3, '{"ok": false, "reject": null}', "the PIN was wrong")
+got = asyncio.run(main.Plugin().pair("192.168.1.9", 9777, "1234"))
+check("pair: a wrong PIN has no token", got["error"] == "refused" and "reject" not in got)
 
 # ---- game_art: the inputs that become a URL and a file name are validated ----------------
 #
@@ -317,6 +341,26 @@ info = "        ID: io.unom.punktfunk\n    Origin: punktfunk-origin\n    Commit:
 check("field: commit", main._field_from(info, "Commit") == "abc123def")
 check("field: origin", main._field_from(info, "Origin") == "punktfunk-origin")
 check("field: absent", main._field_from(info, "Nope") == "")
+
+# ---- flatpak runs in the C locale: `flatpak info` labels are localized ------------------
+_seen: dict = {}
+_real_exec = main._exec
+
+
+async def _spy_exec(argv, label, timeout, **kw):
+    _seen.update(kw)
+    return 0, "", ""
+
+
+main._exec = _spy_exec
+main._flatpak = lambda: "/usr/bin/flatpak"
+asyncio.run(main._flatpak_capture(["info", "--user", "io.unom.punktfunk//stable"]))
+check("flatpak: info is read in the C locale", _seen.get("env_extra") == {"LC_ALL": "C"})
+main._exec = _real_exec
+
+# ---- end_game: a ref that would read as a flag is refused without a sentence --------------
+check("end game: a flag-shaped ref is unresolved, with no English notice",
+      asyncio.run(main.Plugin().end_game("--exec", "steam:570")) == {"ok": False, "error": "unresolved"})
 
 # ---- _looks_outdated (the GTK-init signature of a client predating a headless flag) ------
 check("outdated: gtk init noise", main._looks_outdated("cannot open display: \nGtk-WARNING") is True)
