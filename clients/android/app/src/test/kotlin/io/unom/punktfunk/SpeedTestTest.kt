@@ -1,5 +1,6 @@
 package io.unom.punktfunk
 
+import io.unom.punktfunk.kit.Say
 import io.unom.punktfunk.kit.security.KnownHost
 import java.io.File
 import java.util.Locale
@@ -158,9 +159,8 @@ class SpeedTestTest {
     }
 
     /**
-     * `clients/shared/finding-vectors.json`: the sentence the console and every shell show, read
-     * in English. When the file carries each case's message `key` and `args`, assert
-     * [findingMessage] against those and drop the sentence.
+     * `clients/shared/finding-vectors.json`: each case's message `key` and `args` are what
+     * [findingMessage] must pick; its `sentence` is the English rendering the resource gives.
      */
     @Test
     fun everyFindingVectorAgrees() {
@@ -177,11 +177,18 @@ class SpeedTestTest {
                 val case = cases.getJSONObject(i)
                 val n = case.getJSONArray("numbers")
                 val numbers = (0 until n.length()).map(n::getInt)
-                assertEquals(
-                    "$case",
-                    case.getString("sentence"),
-                    findingMessage(case.getInt("id"), numbers).words(res),
-                )
+                val say = findingMessage(case.getInt("id"), numbers)
+                val (id, args) = when (say) {
+                    is Say.Msg -> say.id to say.args
+                    is Say.Plural -> say.id to say.args
+                    is Say.Text -> error("$case: a finding is a message")
+                }
+                assertEquals("$case", case.getString("key"), res.getResourceEntryName(id))
+                // The file lists the placeholders in the order the English text shows them.
+                val named = case.getJSONObject("args")
+                val want = named.keys().asSequence().map(named::getString).toList()
+                assertEquals("$case", want, args.map { "$it" })
+                assertEquals("$case", case.getString("sentence"), say.words(res))
             }
         } finally {
             Locale.setDefault(was)
