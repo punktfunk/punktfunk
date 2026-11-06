@@ -540,7 +540,7 @@ mod tests {
         std::fs::write(&program, script).unwrap();
         std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
 
-        let listener = handover::bind(socket).unwrap();
+        let (listener, _) = handover::bind(socket).unwrap();
         listener.set_nonblocking(true).unwrap();
         let handover = Handover::default();
         let root_only = |stream: &std::os::unix::net::UnixStream, _: &str| {

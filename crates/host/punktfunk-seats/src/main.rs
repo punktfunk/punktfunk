@@ -312,8 +312,10 @@ mod linux {
         pads::refresh_pad_nodes();
         // The login helper's password, for root alone.
         let login_path = std::path::Path::new(handover::SOCKET_PATH);
-        let login_listener = handover::bind(login_path)
+        let (login_listener, label) = handover::bind(login_path)
             .map_err(|e| format!("bind {}: {e}", login_path.display()))?;
+        tracing::info!(?label, "seat login socket bound");
+        service.backend().login_socket(label);
         let for_login = Arc::clone(&service);
         std::thread::Builder::new()
             .name("seat-login".into())

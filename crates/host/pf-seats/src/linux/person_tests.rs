@@ -242,20 +242,29 @@ fn the_login_shell_is_the_passwd_row_s_last_field() {
     assert_eq!(accounts::shell("nobody-here").unwrap(), None);
 }
 
-/// The start choice: a person's password starts their session through the login helper, and a
-/// start without one, a key proof's, through systemd's own login, as does every start once the
-/// helper is off.
+/// The start choice: a person's password starts their session through the login helper, in
+/// PID 1's SELinux context where SELinux is on, and a start without one, a key proof's, through
+/// systemd's own login. So does every start once the helper is off, and with SELinux on every
+/// start whose login socket doesn't carry PID 1's context.
 #[test]
 fn only_a_password_start_goes_through_the_login_helper() {
+    use handover::Label;
     let password = Secret::new("hunter2 Bärbel".into());
-    assert_eq!(login_with(Some(&password), false, false), Some(&password));
-    assert_eq!(login_with(None, false, false), None);
-    assert_eq!(login_with(Some(&password), false, true), None, "helper off");
+    let init = "system_u:system_r:init_t:s0".to_owned();
+    let labelled = Label::Init(init.clone());
     assert_eq!(
-        login_with(Some(&password), true, false),
-        None,
-        "SELinux on: today's start"
+        login_with(Some(&password), &Label::Off, false),
+        Some((&password, None))
     );
+    assert_eq!(
+        login_with(Some(&password), &labelled, false),
+        Some((&password, Some(init)))
+    );
+    for label in [&Label::Off, &labelled, &Label::Missing] {
+        assert_eq!(login_with(None, label, false), None, "{label:?}");
+        assert_eq!(login_with(Some(&password), label, true), None, "{label:?}");
+    }
+    assert_eq!(login_with(Some(&password), &Label::Missing, false), None);
 }
 
 /// The helper's end decides what a failed start through it does: every end before a session
@@ -280,20 +289,21 @@ fn a_start_through_the_login_helper_reads_its_end() {
 }
 
 /// The login drop-in runs the helper as root (`!`: the unit's `User=` stays, only the switch to
-/// it is skipped) with no restart, and carries no secret; a path a unit file can't hold verbatim
-/// gets none.
+/// it is skipped) with no restart, in the SELinux context it is given, and carries no secret; a
+/// path a unit file can't hold verbatim gets none.
 #[test]
 fn the_login_drop_in_runs_the_helper_and_nothing_else() {
-    let dropin =
-        session::render_login(Path::new("/usr/libexec/punktfunk/punktfunk-seats")).unwrap();
-    assert_eq!(
-        dropin,
-        "[Service]\nExecStart=\n\
+    let helper = Path::new("/usr/libexec/punktfunk/punktfunk-seats");
+    let plain = "[Service]\nExecStart=\n\
          ExecStart=!/usr/libexec/punktfunk/punktfunk-seats login %i\nRestart=no\n\
-         SyslogIdentifier=seat-session\n"
+         SyslogIdentifier=seat-session\n";
+    assert_eq!(session::render_login(helper, None).unwrap(), plain);
+    assert_eq!(
+        session::render_login(helper, Some("system_u:system_r:init_t:s0")).unwrap(),
+        format!("{plain}SELinuxContext=system_u:system_r:init_t:s0\n")
     );
     let nix = "/nix/store/0abc-punktfunk-seats-0.47.0/libexec/punktfunk/punktfunk-seats";
-    assert!(session::render_login(Path::new(nix)).is_some());
+    assert!(session::render_login(Path::new(nix), None).is_some());
     for bad in [
         "relative/punktfunk-seats",
         "/opt/a b/x",
@@ -301,10 +311,10 @@ fn the_login_drop_in_runs_the_helper_and_nothing_else() {
         "/opt/$HOME/x",
         "/a\nb",
     ] {
-        assert_eq!(session::render_login(Path::new(bad)), None, "{bad:?}");
+        assert_eq!(session::render_login(Path::new(bad), None), None, "{bad:?}");
     }
     assert!(
-        login_dropin().is_some(),
+        login_dropin(None).is_some(),
         "this test binary's own path renders"
     );
 }

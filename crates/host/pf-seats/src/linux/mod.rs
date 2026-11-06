@@ -167,6 +167,8 @@ struct Inner {
     /// Set once a login helper tripped ([`LOGIN_TRIPPED`]): no helper until the supervisor
     /// restarts.
     helper_off: AtomicBool,
+    /// What the login socket carries, once the binary bound it ([`LinuxBackend::login_socket`]).
+    login_label: OnceLock<handover::Label>,
 }
 
 /// `slot`'s checks when they ran less than [`CHECKS_FRESH`] before `now`, else what `run`
@@ -454,6 +456,7 @@ impl LinuxBackend {
             devices: Mutex::new(HashMap::new()),
             handover: handover::Handover::default(),
             helper_off: AtomicBool::new(false),
+            login_label: OnceLock::new(),
         });
         let weak = Arc::downgrade(&inner);
         std::thread::Builder::new()
@@ -482,8 +485,15 @@ impl LinuxBackend {
                 devices: Mutex::new(HashMap::new()),
                 handover: handover::Handover::default(),
                 helper_off: AtomicBool::new(false),
+                login_label: OnceLock::new(),
             }),
         }
+    }
+
+    /// Records what the login socket the binary bound carries ([`handover::bind`]), which
+    /// decides whether a start may go through the login helper. The first call wins.
+    pub fn login_socket(&self, label: handover::Label) {
+        let _ = self.inner.login_label.set(label);
     }
 
     /// Sets what runs beside each seat's unit: the binary's uinput proxy. The first call wins.
@@ -1306,14 +1316,19 @@ impl LinuxBackend {
             )?;
             let browser = session::browser(box_dir);
             session::write_unit_files(seat, &passwd.home, state, &token, None, None, &browser)?;
-            let selinux = Path::new(SELINUX_ON).exists();
-            if selinux && password.is_some() {
-                tracing::info!(account = %seat.account, cause = "SELinux is on",
+            let label =
+                (self.inner.login_label.get().cloned()).unwrap_or_else(handover::Label::unbound);
+            if label == handover::Label::Missing && password.is_some() {
+                tracing::warn!(account = %seat.account,
+                    cause = "the login socket doesn't carry PID 1's SELinux context",
                     "seat started without the wallet login");
             }
             let off = self.inner.helper_off.load(Ordering::SeqCst);
-            let password = login_with(password, selinux, off);
-            let dropin = password.and_then(|_| login_dropin());
+            let login = login_with(password, &label, off);
+            let dropin = login
+                .as_ref()
+                .and_then(|(_, context)| login_dropin(context.as_deref()));
+            let password = login.map(|(password, _)| password);
             if password.is_some() && dropin.is_none() {
                 tracing::warn!(account = %seat.account, cause = "this binary's path can't go in a unit file",
                     "seat started without the wallet login");
@@ -1478,17 +1493,27 @@ fn keep_level(inner: Weak<Inner>) {
     }
 }
 
-/// Present while an SELinux policy is loaded.
-const SELINUX_ON: &str = "/sys/fs/selinux/enforce";
-
 /// The one choice of how a person's cold start opens their session: through the login helper,
 /// with the password the person proved the start with, so what their own login unlocks with it
 /// unlocks here too; without one, or once the helper is `off`, as systemd's `PAMName=` opens
-/// it. Never with SELinux on: pam_selinux picks the session's context from the caller's, and
-/// only systemd's own `init_t` gets every user's right one, a confined `staff_u` included. A
-/// switch for the wallet login goes here.
-fn login_with(password: Option<&Secret>, selinux: bool, off: bool) -> Option<&Secret> {
-    password.filter(|_| !selinux && !off)
+/// it. With SELinux on, the helper runs in PID 1's context, the one systemd's own PAM child
+/// has: pam_selinux computes the session's context from the caller's, so every user gets what
+/// today's start gives them, a confined one included. That needs the login socket to carry the
+/// context too ([`handover::Label::Init`]); without it, today's start. A switch for the wallet
+/// login goes here.
+fn login_with<'a>(
+    password: Option<&'a Secret>,
+    label: &handover::Label,
+    off: bool,
+) -> Option<(&'a Secret, Option<String>)> {
+    let context = match label {
+        handover::Label::Off => None,
+        handover::Label::Init(context) => Some(context.clone()),
+        handover::Label::Missing => return None,
+    };
+    password
+        .filter(|_| !off)
+        .map(|password| (password, context))
 }
 
 /// Removes `.0`'s login drop-in when it drops: every way out of a start that wrote one, so a
@@ -1503,13 +1528,14 @@ impl Drop for LoginDropin<'_> {
     }
 }
 
-/// The login drop-in for this binary, `None` when its path can't go in a unit file. After an
-/// upgrade replaced the file, the link names the new one with a ` (deleted)` suffix.
-fn login_dropin() -> Option<String> {
+/// The login drop-in for this binary in SELinux `context`, `None` when its path can't go in a
+/// unit file. After an upgrade replaced the file, the link names the new one with a
+/// ` (deleted)` suffix.
+fn login_dropin(context: Option<&str>) -> Option<String> {
     let exe = std::env::current_exe().ok()?;
     let path = exe.to_str()?;
     let path = Path::new(path.strip_suffix(" (deleted)").unwrap_or(path));
-    session::render_login(path)
+    session::render_login(path, context)
 }
 
 /// The error of a start through the login helper that ended before a session: the start goes

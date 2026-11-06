@@ -6,7 +6,8 @@
 //! helper asks on [`SOCKET_PATH`], a socket only root can open; the door's socket has no request
 //! that answers with a password. A request names its account and uses up that account's
 //! password whether it is served or not, and only a peer that is root inside that account's
-//! seat unit is served.
+//! seat unit is served. With SELinux on, the socket carries PID 1's context ([`Label`]), the
+//! one the helper runs in.
 
 use super::LinuxBackend;
 use crate::ipc::{read_frame_bytes, write_frame_bytes};
@@ -94,12 +95,111 @@ impl Drop for Offer<'_> {
     }
 }
 
-/// Binds `path` for root alone.
-pub fn bind(path: &Path) -> std::io::Result<UnixListener> {
+/// Present while an SELinux policy is loaded.
+pub(super) const SELINUX_ON: &str = "/sys/fs/selinux/enforce";
+
+/// What the login socket carries, as [`bind`] left it. A helper in PID 1's context reaches only
+/// a socket that carries that context too.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Label {
+    /// SELinux is off.
+    Off,
+    /// PID 1's context.
+    Init(String),
+    /// SELinux is on, and the socket carries the supervisor's own context.
+    Missing,
+}
+
+impl Label {
+    /// The label of a socket this process hasn't bound: no helper reaches it with SELinux on.
+    pub(super) fn unbound() -> Self {
+        if Path::new(SELINUX_ON).exists() {
+            Self::Missing
+        } else {
+            Self::Off
+        }
+    }
+}
+
+/// Binds `path` for root alone, with SELinux on in PID 1's context, read from
+/// `/proc/1/attr/current`.
+pub fn bind(path: &Path) -> std::io::Result<(UnixListener, Label)> {
+    let init = Path::new(SELINUX_ON)
+        .exists()
+        .then_some(Path::new("/proc/1/attr/current"));
+    bind_in(path, init, Path::new("/proc/thread-self/attr/sockcreate"))
+}
+
+/// [`bind`] reading PID 1's context from `init`, `None` with SELinux off, and setting it through
+/// `sockcreate`. The way is made from this thread, whose sockets carry the supervisor's context:
+/// a probe in PID 1's would be refused by a live socket and read as a stale one.
+fn bind_in(
+    path: &Path,
+    init: Option<&Path>,
+    sockcreate: &Path,
+) -> std::io::Result<(UnixListener, Label)> {
     use std::os::unix::fs::PermissionsExt as _;
-    let listener = super::socket::bind_fresh(path)?;
+    super::socket::make_way(path)?;
+    let context = init.map(|init| {
+        std::fs::read(init)
+            .ok()
+            .and_then(|raw| selinux_context(&raw))
+    });
+    let labelled = match context {
+        None => Ok(None),
+        Some(None) => Err("PID 1's SELinux context can't be read".to_owned()),
+        Some(Some(context)) => bind_as(path, &context, sockcreate)
+            .map(|listener| Some((listener, context)))
+            .map_err(|e| format!("the socket didn't take PID 1's context: {e}")),
+    };
+    let (listener, label) = match labelled {
+        Ok(Some((listener, context))) => (listener, Label::Init(context)),
+        Ok(None) => (UnixListener::bind(path)?, Label::Off),
+        Err(cause) => {
+            tracing::warn!(%cause, "seat logins go without the wallet");
+            (UnixListener::bind(path)?, Label::Missing)
+        }
+    };
     std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
-    Ok(listener)
+    Ok((listener, label))
+}
+
+/// `path` bound by a socket carrying `context`, set through `sockcreate` in a thread of its own
+/// and cleared after the bind. The thread ends there, so no other socket of the supervisor
+/// carries the context even if the clear failed.
+fn bind_as(path: &Path, context: &str, sockcreate: &Path) -> std::io::Result<UnixListener> {
+    use std::io::Write as _;
+    std::thread::scope(|scope| {
+        scope
+            .spawn(|| {
+                std::fs::write(sockcreate, context)?;
+                let bound = UnixListener::bind(path);
+                let cleared = std::fs::OpenOptions::new()
+                    .write(true)
+                    .open(sockcreate)
+                    .and_then(|mut attr| attr.write(&[]));
+                if let Err(error) = cleared {
+                    tracing::warn!(%error, "socket context not cleared");
+                }
+                bound
+            })
+            .join()
+            .unwrap_or_else(|_| Err(std::io::Error::other("the bind thread panicked")))
+    })
+}
+
+/// `raw` as one SELinux context, `user:role:type` with an optional range, its trailing NUL or
+/// newline dropped. Only the characters a context has: nothing a unit file would expand.
+pub(super) fn selinux_context(raw: &[u8]) -> Option<String> {
+    let text = std::str::from_utf8(raw)
+        .ok()?
+        .trim_end_matches(['\0', '\n']);
+    let plain = text.len() <= 255
+        && text
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"_:.,-".contains(&b));
+    let parts: Vec<&str> = text.split(':').collect();
+    (plain && parts.len() >= 3 && parts[..3].iter().all(|p| !p.is_empty())).then(|| text.into())
 }
 
 /// Serves `listener` until the process ends, one request at a time.
@@ -155,9 +255,11 @@ fn in_unit(cgroup: &str, account: &str) -> bool {
     })
 }
 
-/// Root inside `account`'s seat unit, and so its login helper before it opens a session. Defence
-/// in depth: the socket's mode already admits root alone. The process is read through a pidfd
-/// for the peer where the kernel gives one (`SO_PEERPIDFD`), so a recycled pid can't stand in.
+/// Root inside `account`'s seat unit, and so its login helper before it opens a session. The
+/// socket's mode admits root alone. With SELinux on it carries PID 1's context, so any root
+/// process in a domain allowed to connect to PID 1's sockets gets this far: this check is what
+/// keeps those out. The process is read through a pidfd for the peer where the kernel gives one
+/// (`SO_PEERPIDFD`), so a recycled pid can't stand in.
 #[cfg(target_os = "linux")]
 fn peer_in_unit(stream: &UnixStream, account: &str) -> Result<(), String> {
     let cred = rustix::net::sockopt::socket_peercred(stream)
@@ -259,6 +361,86 @@ pub(super) fn fetch(socket: &Path, account: &str) -> Result<Zeroizing<Vec<u8>>, 
 mod tests {
     use super::*;
 
+    /// With SELinux off the socket is bound as is. With it on, it carries PID 1's context only
+    /// when that context was read and set; otherwise it is still bound, root's alone, and says so.
+    #[test]
+    fn the_login_socket_says_what_it_carries() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let dir = tempfile::tempdir().unwrap();
+        let (init, attr) = (dir.path().join("init"), dir.path().join("sockcreate"));
+        std::fs::write(&init, b"system_u:system_r:init_t:s0\0").unwrap();
+        std::fs::write(&attr, b"").unwrap();
+        let unreadable = dir.path().join("none");
+        let no_attr = dir.path().join("no/sockcreate");
+        let cases = [
+            (None, &*attr, Label::Off),
+            (
+                Some(&*init),
+                &*attr,
+                Label::Init("system_u:system_r:init_t:s0".into()),
+            ),
+            (Some(&*unreadable), &*attr, Label::Missing),
+            (Some(&*init), &*no_attr, Label::Missing),
+        ];
+        for (at, (init, sockcreate, label)) in cases.into_iter().enumerate() {
+            let path = dir.path().join(format!("login-{at}.sock"));
+            let (listener, got) = bind_in(&path, init, sockcreate).unwrap();
+            assert_eq!(got, label, "{at}");
+            assert_eq!(listener.local_addr().unwrap().as_pathname(), Some(&*path));
+            let mode = std::fs::metadata(&path).unwrap().permissions().mode();
+            assert_eq!(mode & 0o777, 0o600, "{at}");
+        }
+    }
+
+    /// On an SELinux machine the kernel labels the login socket with PID 1's context, and a
+    /// socket made after it, on the caller's thread, with the process's own.
+    #[cfg(target_os = "linux")]
+    #[test]
+    #[ignore = "needs root on an SELinux machine"]
+    fn the_login_socket_carries_pid1s_context() {
+        if !Path::new(SELINUX_ON).exists() {
+            eprintln!("SELinux is off here: nothing to check");
+            return;
+        }
+        let read = |path: &str| selinux_context(&std::fs::read(path).unwrap()).unwrap();
+        let label_of = |socket: &UnixListener| {
+            let mut buf = [0_u8; 256];
+            let len = rustix::fs::fgetxattr(socket, "security.selinux", &mut buf).unwrap();
+            selinux_context(&buf[..len]).unwrap()
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let (listener, label) = bind(&dir.path().join("login.sock")).unwrap();
+        assert_eq!(label, Label::Init(read("/proc/1/attr/current")));
+        assert_eq!(label_of(&listener), read("/proc/1/attr/current"));
+        let after = UnixListener::bind(dir.path().join("after.sock")).unwrap();
+        assert_eq!(label_of(&after), read("/proc/self/attr/current"));
+    }
+
+    /// PID 1's context as `/proc/1/attr/current` reads, and nothing a unit file would expand.
+    #[test]
+    fn only_a_context_reads_as_one() {
+        let init = Some("system_u:system_r:init_t:s0".to_owned());
+        assert_eq!(selinux_context(b"system_u:system_r:init_t:s0\0"), init);
+        assert_eq!(selinux_context(b"system_u:system_r:init_t:s0\n"), init);
+        assert_eq!(
+            selinux_context(b"system_u:system_r:init_t:s0-s0:c0.c1023"),
+            Some("system_u:system_r:init_t:s0-s0:c0.c1023".into())
+        );
+        for bad in [
+            &b""[..],
+            b"kernel",
+            b"unconfined",
+            b"a:b",
+            b"a::c:s0",
+            b"system_u:system_r:init_t:s0 x",
+            b"system_u:system_r:%i:s0",
+            b"system_u:system_r:init_t:s0\nUser=root",
+            b"system_u:system_r:\xff:s0",
+        ] {
+            assert_eq!(selinux_context(bad), None, "{bad:?}");
+        }
+    }
+
     const ACCOUNT: &str = "jdoe";
 
     fn secret() -> Secret {
@@ -345,7 +527,7 @@ mod tests {
     fn the_helper_fetches_its_password_over_the_socket() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("login.sock");
-        let listener = bind(&path).unwrap();
+        let (listener, _) = bind(&path).unwrap();
         let handover = Arc::new(Handover::default());
         let _offer = handover.offer(ACCOUNT, &secret(), Instant::now());
         let served = Arc::clone(&handover);

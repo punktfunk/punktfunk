@@ -249,9 +249,10 @@ pub(super) fn render_class() -> &'static str {
 /// The drop-in of a start through the login helper (`super::login`): the unit's main process is
 /// `helper login <account>`, run as root by `!`, which skips only the switch to `User=`. So
 /// systemd opens no PAM session of its own, the runtime directory stays the person's and a stop
-/// runs as today's. A helper that ends ends the start, and the journal keeps the seat's own tag.
-/// `None` for a path a unit file can't hold verbatim.
-pub(super) fn render_login(helper: &Path) -> Option<String> {
+/// runs as today's. In SELinux `context` when there is one; a helper that ends ends the start,
+/// and the journal keeps the seat's own tag. `None` for a path a unit file can't hold verbatim;
+/// `context` is the caller's to check.
+pub(super) fn render_login(helper: &Path, context: Option<&str>) -> Option<String> {
     let path = helper.to_str()?;
     let plain = path.starts_with('/')
         && path
@@ -260,8 +261,11 @@ pub(super) fn render_login(helper: &Path) -> Option<String> {
     plain.then(|| {
         format!(
             "[Service]\nExecStart=\nExecStart=!{path} {} %i\nRestart=no\n\
-             SyslogIdentifier=seat-session\n",
-            super::login::VERB
+             SyslogIdentifier=seat-session\n{}",
+            super::login::VERB,
+            context.map_or(String::new(), |context| format!(
+                "SELinuxContext={context}\n"
+            )),
         )
     })
 }
