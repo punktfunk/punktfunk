@@ -106,7 +106,10 @@ fn a_buried_pin_miss_still_reaches_the_client_in_words() {
         .context("build the session pipeline")
         .unwrap_err();
 
-    let said = setup_failed_sentence(&buried).expect("a pin miss has words for the user");
+    let worded = setup_failed_sentence(&buried).expect("a pin miss has words for the user");
+    assert_eq!(worded.id, "close_monitor_missing");
+    assert_eq!(worded.params[0], ("monitor".into(), "HDMI-A-3".into()));
+    let said = worded.text;
     assert!(
         said.contains("HDMI-A-3") && said.contains("HDMI-A-1"),
         "{said}"
@@ -119,7 +122,9 @@ fn a_buried_pin_miss_still_reaches_the_client_in_words() {
 
     let asleep = anyhow::Error::new(pf_vdisplay::DisplayAsleep)
         .context("acquire virtual output for the session (retry-hold lease)");
-    let said = setup_failed_sentence(&asleep).expect("a dark display has words for the user");
+    let said = setup_failed_sentence(&asleep)
+        .expect("a dark display has words for the user")
+        .text;
     assert!(said.starts_with("The host's screen is asleep"), "{said}");
     assert!(said.len() <= punktfunk_core::quic::REFUSED_REASON_MAX);
 
@@ -138,7 +143,9 @@ fn stock_niri_reaches_the_client_in_words() {
         .context("build the session pipeline")
         .unwrap_err();
 
-    let said = setup_failed_sentence(&buried).expect("stock niri has words for the user");
+    let said = setup_failed_sentence(&buried)
+        .expect("stock niri has words for the user")
+        .text;
     assert!(said.contains("biri"), "{said}");
     assert!(said.len() <= punktfunk_core::quic::REFUSED_REASON_MAX);
 }
@@ -150,7 +157,9 @@ fn an_umbriel_ipc_mismatch_reaches_the_client_in_words() {
     let buried = anyhow::Error::new(pf_vdisplay::UmbrielIpcMismatch)
         .context("create virtual output")
         .context("build the session pipeline");
-    let said = setup_failed_sentence(&buried).expect("a mismatch has words for the user");
+    let said = setup_failed_sentence(&buried)
+        .expect("a mismatch has words for the user")
+        .text;
     assert!(said.contains("Update Punktfunk"), "{said}");
     assert!(said.len() <= punktfunk_core::quic::REFUSED_REASON_MAX);
 }
@@ -163,7 +172,9 @@ fn a_node_less_output_reaches_the_client_in_words() {
         .context(pf_capture::NoPipeWireNode)
         .context("open the session capture")
         .context("build the session pipeline");
-    let said = setup_failed_sentence(&buried).expect("a node-less output has words for the user");
+    let said = setup_failed_sentence(&buried)
+        .expect("a node-less output has words for the user")
+        .text;
     assert!(said.contains("GPU encoder"), "{said}");
     assert!(said.len() <= punktfunk_core::quic::REFUSED_REASON_MAX);
 }

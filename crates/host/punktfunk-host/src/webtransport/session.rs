@@ -852,6 +852,7 @@ mod tests {
         let why = RejectReason::LaunchNotPermitted;
         assert_eq!(said.code, why.close_code());
         assert_eq!(said.reason, why.to_string());
+        assert_eq!(said.reason_id, "reject_launch_not_permitted");
     }
 
     /// A browser never opens a profile on a person's own Linux account, and the supervisor is
@@ -910,6 +911,7 @@ mod tests {
         assert!(ended.is_err(), "the session is refused");
         assert_eq!(said.code, RejectReason::SeatUnavailable.close_code());
         assert_eq!(said.reason, "Open this profile from the Punktfunk app.");
+        assert_eq!(said.reason_id, "close_unlock_from_browser");
         assert!(sup.asked().is_empty(), "nothing asked of the supervisor");
     }
 

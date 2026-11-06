@@ -1066,10 +1066,13 @@ async fn admit_mode(
         Admission::Reject(reason) => {
             tracing::warn!("mode-conflict: REJECT — {reason}");
             // Out of the table before the refusal goes out, so a connect behind this one is
-            // not refused by it. BUSY + reason bytes: the client reads `ApplicationClosed`,
-            // not a bare drop, so the UI can name the live session.
+            // not refused by it. BUSY with no reason bytes: the client reads `ApplicationClosed`
+            // and words `reject_busy`; the live mode stays in the log.
             drop(reservation);
-            n.conn.refuse(REJECT_BUSY_CODE, &reason).await;
+            let busy = punktfunk_core::reject::RejectReason::Busy.message_id();
+            n.conn
+                .refuse_said(REJECT_BUSY_CODE, &super::Said::new(&busy, ""))
+                .await;
             anyhow::bail!("{reason}");
         }
     };
