@@ -32,7 +32,8 @@ pub(super) fn audio_section(cx: &Cx) -> Vec<View> {
     // The lossless-audio opt-in. An unknown stored value (a newer client's row, arriving through a
     // shared preset) shows as Opus — which is what the session resolves it to as well, so the row
     // and the wire agree rather than the combo silently rewriting the user's choice on save.
-    let (af_names, af_i) = presets(AUDIO_FORMATS, |v| *v == s.audio_format);
+    let af_table: Vec<(&str, &str)> = AUDIO_FORMATS.iter().map(|(v, l)| (*v, l())).collect();
+    let (af_names, af_i) = presets(&af_table, |v| *v == s.audio_format);
     let format_combo = setting_combo(cx, scope, "audio_format", af_names, af_i, |s, i| {
         s.audio_format = AUDIO_FORMATS[i].0.to_string();
     });

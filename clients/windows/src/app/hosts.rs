@@ -602,19 +602,19 @@ fn hosts_page(page: &HostsPage, props: &HostsProps) -> View {
             .collect();
         host_order::arrange(&mut cards, &settings);
         let grouping = host_order::grouping(&settings);
-        let mut bands: Vec<(Option<String>, Vec<View>)> = Vec::new();
+        let mut bands: Vec<(Option<host_order::Band>, Vec<View>)> = Vec::new();
         for c in &cards {
-            let title = host_order::group_of(c, grouping);
+            let band = host_order::band_of(c, grouping);
             let tile = saved_tile(props, c, &hover, &presets, &settings.default_host);
             match bands.last_mut() {
-                Some((t, tiles)) if *t == title => tiles.push(tile),
-                _ => bands.push((title, vec![tile])),
+                Some((b, tiles)) if *b == band => tiles.push(tile),
+                _ => bands.push((band, vec![tile])),
             }
         }
-        for (title, tiles) in bands {
+        for (band, tiles) in bands {
             body.push(section(
                 pal,
-                &title.map_or_else(|| "SAVED HOSTS".into(), |t| t.to_uppercase()),
+                &band.map_or_else(|| "SAVED HOSTS".into(), |b| b.label().to_uppercase()),
             ));
             body.push(tile_grid(tiles, cols, TILE_GAP));
         }
@@ -800,9 +800,9 @@ fn arrange_button(props: &HostsProps, settings: &Settings) -> View {
         let mut leaves = Vec::new();
         for (value, label) in values {
             let label = if *value == current {
-                format!("{label} \u{2713}")
+                format!("{} \u{2713}", label())
             } else {
-                label.to_string()
+                label().to_string()
             };
             leaves.push(rows.row(label, (key, *value)));
         }

@@ -76,7 +76,7 @@ pub(crate) fn spawn_browse(
 ) -> Result<(), String> {
     let cmd = orchestrate::browse_command(fullscreen, until_no_pads);
     spawn(cmd, None, "console", slot, None, on_event)
-        .map_err(|_| orchestrate::CONSOLE_NOT_STARTED.to_string())
+        .map_err(|_| pf_l10n::client::dial_console_not_started().to_string())
 }
 
 /// Hand the shell window's position to the child (`--window-pos`) so the session window

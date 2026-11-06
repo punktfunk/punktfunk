@@ -34,9 +34,14 @@ fn shortcuts_reference(pal: &Palette) -> Vec<View> {
             let mut children: Vec<View> = Vec::new();
             for (i, item) in g.items.iter().enumerate() {
                 let row = i as i32;
-                children.push(key_chip(pal, item.keys).grid_row(row).grid_column(0).into());
                 children.push(
-                    muted(pal, item.text)
+                    key_chip(pal, &item.keys.to_string())
+                        .grid_row(row)
+                        .grid_column(0)
+                        .into(),
+                );
+                children.push(
+                    muted(pal, item.text())
                         .text_wrapping(TextWrapping::Wrap)
                         .vertical_alignment(VerticalAlignment::Center)
                         .grid_row(row)
@@ -51,7 +56,7 @@ fn shortcuts_reference(pal: &Palette) -> Vec<View> {
                 .column_spacing(12.0)
                 .row_spacing(6.0);
             card(vstack((
-                text(g.title)
+                text(g.heading())
                     .font_weight(FontWeight::SEMI_BOLD)
                     .margin(edges(0.0, 0.0, 0.0, 8.0)),
                 table,

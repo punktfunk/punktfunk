@@ -292,7 +292,7 @@ fn disc_face(cfg: &OverlayConfig, slot: Option<&SlotId>, dim: bool) -> View {
         let keys = cfg.shortcut(id).map(|s| s.keys.clone()).unwrap_or_default();
         return keycap(&keys, ink, 9.0, 14.0);
     }
-    if let Some(name) = slot_icon(&slot.id(), "") {
+    if let Some(name) = slot_icon(&slot.id(), false) {
         return mark(name, ICON_DIP, dim);
     }
     text(short_label(cfg, slot))
@@ -947,14 +947,14 @@ mod tests {
         let cfg = OverlayConfig::platform_default(RingPlatform::Desktop);
         for slot in cfg.ring.iter().flatten() {
             let id = slot.id();
-            let name = slot_icon(&id, "").unwrap_or_else(|| panic!("{id} has no mark"));
+            let name = slot_icon(&id, false).unwrap_or_else(|| panic!("{id} has no mark"));
             assert!(
                 !lucide::glyph(name).is_empty(),
                 "{id}: the font has no '{name}'"
             );
         }
         // The centre and the empty slot draw marks of their own, outside the ring's contents.
-        assert_eq!(slot_icon("more", ""), Some("ellipsis"));
+        assert_eq!(slot_icon("more", false), Some("ellipsis"));
         assert!(!lucide::glyph("ellipsis").is_empty());
         assert!(!lucide::glyph("plus").is_empty());
     }

@@ -461,7 +461,7 @@ pub(super) fn display_section(cx: &Cx) -> Vec<View> {
     let mut picture = Vec::new();
     if pyrowave {
         // Automatic or Fixed only: the quality row stands in for the rate.
-        use pf_client_core::settings::{PYROWAVE_BITRATE_HINT, PYROWAVE_FIXED_KBPS};
+        use pf_client_core::settings::PYROWAVE_FIXED_KBPS;
         let auto = setting_toggle(cx, scope, "bitrate_kbps", s.bitrate_kbps == 0, |s, on| {
             s.bitrate_kbps = if on { 0 } else { PYROWAVE_FIXED_KBPS };
         })
@@ -471,7 +471,7 @@ pub(super) fn display_section(cx: &Cx) -> Vec<View> {
             cx,
             &rows::BITRATE,
             auto,
-            PYROWAVE_BITRATE_HINT,
+            pf_l10n::client::player_bitrate_kbps_pyrowave_hint(),
         ));
     } else {
         picture.push(described_overridable(

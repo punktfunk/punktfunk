@@ -9,7 +9,7 @@ use super::{AppCtx, AsyncSetState, Screen, Svc, Target};
 use crate::trust::{self, KnownHosts};
 use pf_client_core::orchestrate::{
     self, trust_route, wake_parked_line, CancelHandle, ConnectAttempt, ExitRoute, HostTarget,
-    TrustRoute, WakeOutcome, WakeWait, FINGERPRINT_CHANGED, WAKE_PARKED_HINT,
+    TrustRoute, WakeOutcome, WakeWait,
 };
 use pf_client_core::unlock::{self, Pending};
 use pf_fluent::Palette;
@@ -78,7 +78,7 @@ fn initiate_opts(
         TrustRoute::Pinned(fp_hex) => trust::parse_hex32(&fp_hex),
         TrustRoute::OfferTofu(_) => None,
         TrustRoute::FingerprintChanged => {
-            set_status.call(FINGERPRINT_CHANGED.to_string());
+            set_status.call(pf_l10n::client::dial_fingerprint_changed().to_string());
             set_screen.call(Screen::Pair);
             return;
         }
@@ -736,7 +736,7 @@ pub(crate) fn wake_parked_page(
         pal,
         None,
         &wake_parked_line(&target.host.name),
-        WAKE_PARKED_HINT,
+        pf_l10n::client::dial_wake_parked_hint(),
         vec![actions.into()],
     )
 }
