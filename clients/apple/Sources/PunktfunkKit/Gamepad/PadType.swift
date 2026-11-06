@@ -3,6 +3,7 @@
 // Resources/PadMarks.xcassets by scripts/gen-pad-marks.py; template rendering tints them like an
 // SF Symbol.
 
+import PunktfunkShared
 import SwiftUI
 
 extension PunktfunkConnection.GamepadType {
@@ -18,13 +19,13 @@ extension PunktfunkConnection.GamepadType {
     /// The Controller type slot's state word.
     public var ringLabel: String {
         switch self {
-        case .auto: return "Automatic"
+        case .auto: return String(localized: L10n.ringPadTypeAutomatic)
         case .xbox360: return "Xbox 360"
         case .xboxOne: return "Xbox One"
         case .dualSense: return "DualSense"
         case .dualShock4: return "DualShock 4"
         case .steamDeck: return "Steam Deck"
-        default: return "Other"
+        default: return String(localized: L10n.ringPadTypeOther)
         }
     }
 
