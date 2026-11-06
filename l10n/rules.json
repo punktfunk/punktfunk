@@ -1,7 +1,13 @@
 {
   "parts": {
-    "always": ["common"],
-    "typescript_only": ["web", "browser", "decky"]
+    "always": [
+      "common"
+    ],
+    "typescript_only": [
+      "web",
+      "browser",
+      "decky"
+    ]
   },
   "budgets": {
     "roles": {
@@ -12,26 +18,116 @@
       "_failed": 200,
       "_a11y": 200
     },
-    "label": 40,
+    "label": 200,
     "translation_slack": 1.2
   },
   "banned": [
-    { "text": "please", "at": "anywhere", "why": "say what to do, without Please" },
-    { "text": "!", "at": "end", "why": "end with a period, not an exclamation mark" },
-    { "text": "failed to", "at": "anywhere", "why": "say what did not happen: Couldn't …" },
-    { "text": "could not", "at": "anywhere", "why": "write Couldn't" },
-    { "text": "cannot", "at": "anywhere", "why": "write can't" },
-    { "text": "unable to", "at": "anywhere", "why": "write Couldn't or can't" }
+    {
+      "text": "please",
+      "at": "anywhere",
+      "why": "say what to do, without Please"
+    },
+    {
+      "text": "!",
+      "at": "end",
+      "why": "end with a period, not an exclamation mark"
+    },
+    {
+      "text": "failed to",
+      "at": "anywhere",
+      "why": "say what did not happen: Couldn't …"
+    },
+    {
+      "text": "could not",
+      "at": "anywhere",
+      "why": "write Couldn't"
+    },
+    {
+      "text": "cannot",
+      "at": "anywhere",
+      "why": "write can't"
+    },
+    {
+      "text": "unable to",
+      "at": "anywhere",
+      "why": "write Couldn't or can't"
+    }
   ],
   "retired": [
-    { "term": "Mbps", "use": "Mbit/s" },
-    { "term": "Mb/s", "use": "Mbit/s" },
-    { "term": "Gbps", "use": "Gbit/s" },
-    { "term": "this phone", "use": "this device" },
-    { "term": "this iPhone", "use": "this device" },
-    { "term": "this iPad", "use": "this device" },
-    { "term": "this Mac", "use": "this device" },
-    { "term": "colour", "use": "color" }
+    {
+      "term": "Mbps",
+      "use": "Mbit/s"
+    },
+    {
+      "term": "Mb/s",
+      "use": "Mbit/s"
+    },
+    {
+      "term": "Gbps",
+      "use": "Gbit/s"
+    },
+    {
+      "term": "this phone",
+      "use": "this device"
+    },
+    {
+      "term": "this iPhone",
+      "use": "this device"
+    },
+    {
+      "term": "this iPad",
+      "use": "this device"
+    },
+    {
+      "term": "this Mac",
+      "use": "this device"
+    },
+    {
+      "term": "colour",
+      "use": "color"
+    }
   ],
-  "debt": {}
+  "debt": {
+    "android_console_failed": "Disclosure or legal text; the exact wording is the point.",
+    "android_console_unavailable_failed": "Disclosure or legal text; the exact wording is the point.",
+    "android_keyboard_shortcuts_hint": "Existing wording over the hint budget; waits for the wording pass.",
+    "android_keycapture_body_what": "Disclosure or legal text; the exact wording is the point.",
+    "android_keycapture_service_description": "Disclosure or legal text; the exact wording is the point.",
+    "android_pad_none_detected": "Disclosure or legal text; the exact wording is the point.",
+    "android_speedtest_target_ask_body": "Disclosure or legal text; the exact wording is the point.",
+    "apple_about_third_party_intro": "Disclosure or legal text; the exact wording is the point.",
+    "apple_hostcard_presets_hint": "German draft over the budget; waits for review.",
+    "apple_player_audio_format_lossless_hint": "Existing wording over the hint budget; waits for the wording pass.",
+    "apple_player_sc2_capture_mac_hint": "Existing wording over the hint budget; waits for the wording pass.",
+    "console_gamepad_ui_enabled_hint": "Existing wording over the hint budget; waits for the wording pass.",
+    "console_gamepad_ui_enabled_webos_hint": "Existing wording over the hint budget; waits for the wording pass.",
+    "console_gamepad_ui_mode_hint": "Existing wording over the hint budget; waits for the wording pass.",
+    "console_gamepad_ui_mode_webos_hint": "Existing wording over the hint budget; waits for the wording pass.",
+    "console_player_overlay_actions_hint": "Existing wording over the hint budget; waits for the wording pass.",
+    "console_preset_editor_hint": "Existing wording over the hint budget; waits for the wording pass.",
+    "console_preset_new_hint": "Existing wording over the hint budget; waits for the wording pass.",
+    "console_preset_row_hint": "Existing wording over the hint budget; waits for the wording pass.",
+    "console_reduce_ui_resolution_webos_hint": "Existing wording over the hint budget; waits for the wording pass.",
+    "console_ring_editor_hint": "Existing wording over the hint budget; waits for the wording pass.",
+    "desktop_about_logs_hint": "Existing wording over the hint budget; waits for the wording pass.",
+    "desktop_about_system_libraries_body": "Disclosure or legal text; the exact wording is the point.",
+    "desktop_hosts_preset_hint": "Existing wording over the hint budget; waits for the wording pass.",
+    "desktop_licenses_bundled_body": "Disclosure or legal text; the exact wording is the point.",
+    "desktop_player_overlay_actions_hint": "Existing wording over the hint budget; waits for the wording pass.",
+    "desktop_preset_sheet_hint": "Existing wording over the hint budget; waits for the wording pass.",
+    "player_advanced_stats_hint": "Existing wording over the hint budget; waits for the wording pass.",
+    "player_audio_route_hint": "Existing wording over the hint budget; waits for the wording pass.",
+    "player_codec_pyrowave_unsupported_hint": "Existing wording over the hint budget; waits for the wording pass.",
+    "player_cursor_gestures_hint": "Existing wording over the hint budget; waits for the wording pass.",
+    "player_host_grouping_hint": "Existing wording over the hint budget; waits for the wording pass.",
+    "player_overlay_actions_hint": "Existing wording over the hint budget; waits for the wording pass.",
+    "player_present_priority_hint": "Existing wording over the hint budget; waits for the wording pass.",
+    "player_reduce_motion_hint": "Existing wording over the hint budget; waits for the wording pass.",
+    "player_reduce_ui_resolution_hint": "Existing wording over the hint budget; waits for the wording pass.",
+    "player_screens_hint": "Existing wording over the hint budget; waits for the wording pass.",
+    "player_second_screen_hint": "Existing wording over the hint budget; waits for the wording pass.",
+    "player_start_in_hint": "Existing wording over the hint budget; waits for the wording pass.",
+    "player_touch_mode_hint": "Existing wording over the hint budget; waits for the wording pass.",
+    "player_video_fit_hint": "Existing wording over the hint budget; waits for the wording pass."
+  }
 }

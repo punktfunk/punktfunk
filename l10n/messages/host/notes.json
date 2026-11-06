@@ -1,1 +1,24 @@
-{}
+{
+	"reject_access_expired": "Shown when the host refuses a connection or pairing with the token \"access-expired\"; replaced by the host's own sentence when it sends one.",
+	"reject_approval_timeout": "Shown when the host refuses a connection or pairing with the token \"approval-timeout\"; replaced by the host's own sentence when it sends one.",
+	"reject_bound_other": "Shown when the host refuses a connection or pairing with the token \"bound-other\"; replaced by the host's own sentence when it sends one.",
+	"reject_busy": "Shown when the host refuses a connection or pairing with the token \"busy\"; replaced by the host's own sentence when it sends one.",
+	"reject_denied": "Shown when the host refuses a connection or pairing with the token \"denied\"; replaced by the host's own sentence when it sends one.",
+	"reject_host_power": "Shown when the host refuses a connection or pairing with the token \"host-power\"; replaced by the host's own sentence when it sends one.",
+	"reject_identity_required": "Shown when the host refuses a connection or pairing with the token \"identity-required\"; replaced by the host's own sentence when it sends one.",
+	"reject_launch_not_permitted": "Shown when the host refuses a connection or pairing with the token \"launch-not-permitted\"; replaced by the host's own sentence when it sends one.",
+	"reject_no_seat": "Shown when the host refuses a connection or pairing with the token \"no-seat\"; replaced by the host's own sentence when it sends one.",
+	"reject_not_armed": "Shown when the host refuses a connection or pairing with the token \"not-armed\"; replaced by the host's own sentence when it sends one.",
+	"reject_profile_locked": "Shown when the host refuses a connection or pairing with the token \"profile-locked\"; replaced by the host's own sentence when it sends one.",
+	"reject_profile_unknown": "Shown when the host refuses a connection or pairing with the token \"profile-unknown\"; replaced by the host's own sentence when it sends one.",
+	"reject_rate_limited": "Shown when the host refuses a connection or pairing with the token \"rate-limited\"; replaced by the host's own sentence when it sends one.",
+	"reject_seat_occupied": "Shown when the host refuses a connection or pairing with the token \"seat-occupied\"; replaced by the host's own sentence when it sends one.",
+	"reject_seat_unavailable": "Shown when the host refuses a connection or pairing with the token \"seat-unavailable\"; replaced by the host's own sentence when it sends one.",
+	"reject_setup_failed": "Shown when the host refuses a connection or pairing with the token \"setup-failed\"; replaced by the host's own sentence when it sends one.",
+	"reject_superseded": "Shown when the host refuses a connection or pairing with the token \"superseded\"; replaced by the host's own sentence when it sends one.",
+	"reject_wire_version": "Shown when the host refuses a connection or pairing with the token \"wire-version\"; replaced by the host's own sentence when it sends one.",
+	"host_power_sleep": "Host action: put the host computer to sleep.",
+	"host_power_reboot": "Host action: restart the host computer.",
+	"host_power_shutdown": "Host action: shut down the host computer.",
+	"host_power_confirm_title": "Confirmation title before a host power action. {action} is the action's name, e.g. 'Restart host'."
+}

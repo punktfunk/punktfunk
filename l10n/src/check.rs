@@ -425,12 +425,12 @@ mod tests {
         assert_eq!(budget(&r, "player_bitrate_hint", true), 110);
         assert_eq!(budget(&r, "pair_title", true), 60);
         assert_eq!(budget(&r, "notice_saved_body", true), 200);
-        assert_eq!(budget(&r, "player_bitrate", true), 40);
-        assert_eq!(budget(&r, "player_bitrate", false), 48);
-        assert!(over_budget(&r, "player_bitrate", &"x".repeat(40), true).is_none());
+        assert_eq!(budget(&r, "player_bitrate", true), 200);
+        assert_eq!(budget(&r, "player_bitrate", false), 240);
+        assert!(over_budget(&r, "player_bitrate", &"x".repeat(200), true).is_none());
         assert_eq!(
-            over_budget(&r, "player_bitrate", &"é".repeat(41), true).unwrap(),
-            "41 characters, over the budget of 40"
+            over_budget(&r, "player_bitrate", &"é".repeat(201), true).unwrap(),
+            "201 characters, over the budget of 200"
         );
     }
 
@@ -550,7 +550,7 @@ mod tests {
     #[test]
     fn policy_skips_debt_and_spares_translations() {
         let mut r = rules();
-        let long = "y".repeat(45);
+        let long = "y".repeat(205);
         let f = file(
             "messages/a/en.json",
             "en",

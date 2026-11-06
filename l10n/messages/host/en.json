@@ -1,1 +1,24 @@
-{}
+{
+	"reject_access_expired": "Your access to this host has expired — ask the host's owner to grant it again.",
+	"reject_approval_timeout": "Nobody approved the request on the host in time — approve this device in the host's console or web UI, then request access again.",
+	"reject_bound_other": "The host's pairing window is armed for a different device — arm it for this one.",
+	"reject_busy": "The host is busy with another session.",
+	"reject_denied": "The host declined this device's request.",
+	"reject_host_power": "The host is going to sleep or shutting down — wake it when you want to play again.",
+	"reject_identity_required": "The host requires pairing — pair this device (PIN or request access) first.",
+	"reject_launch_not_permitted": "This device isn't permitted to launch games on the host — connect without picking a game, or ask the host's owner to allow launching.",
+	"reject_no_seat": "All seats are taken.",
+	"reject_not_armed": "Pairing isn't armed on the host — arm it on the host's Pairing page, then try again.",
+	"reject_profile_locked": "This profile is locked. Enter its password.",
+	"reject_profile_unknown": "That profile is gone from this host. Pick another one.",
+	"reject_rate_limited": "Too many pairing attempts — wait a couple of seconds and try again.",
+	"reject_seat_occupied": "Someone is already playing as that profile.",
+	"reject_seat_unavailable": "That profile can't play on this host right now.",
+	"reject_setup_failed": "The host accepted the connection but couldn't start the stream — the host's log (web console → Log) has the cause.",
+	"reject_superseded": "A newer request from this device replaced this one — approve the latest request on the host.",
+	"reject_wire_version": "Client and host versions don't match — update both to the same release.",
+	"host_power_sleep": "Sleep host",
+	"host_power_reboot": "Restart host",
+	"host_power_shutdown": "Shut down host",
+	"host_power_confirm_title": "{action}?"
+}
