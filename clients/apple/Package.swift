@@ -26,7 +26,11 @@ let package = Package(
         .binaryTarget(name: "PunktfunkCore", path: "PunktfunkCore.xcframework"),
         // No dependencies by design — an extension process links this alone. `Generated/` is
         // the String Catalog and `L10n` from l10n/messages: scripts/gen-l10n-apple.sh writes it.
-        .target(name: "PunktfunkShared", resources: [.process("Generated/Localizable.xcstrings")]),
+        // The two other catalogs there belong to the apps, which compile them.
+        .target(
+            name: "PunktfunkShared",
+            exclude: ["Generated/AppShortcuts.xcstrings", "Generated/InfoPlist.xcstrings"],
+            resources: [.process("Generated/Localizable.xcstrings")]),
         .target(
             name: "PunktfunkKit",
             dependencies: ["PunktfunkCore", "PunktfunkShared"],
