@@ -8,6 +8,7 @@ use crate::trust::{KnownHost, Settings};
 use pf_client_core::host_order::{self, Arrangeable};
 use pf_client_core::orchestrate::HostTarget;
 use pf_client_core::profiles::ProfilePick;
+use pf_l10n::client;
 use std::collections::HashMap;
 
 /// A preset as a card needs it: what to call it and the colour its chip carries.
@@ -70,13 +71,13 @@ impl Status {
 
     pub fn sentence(&self) -> String {
         match self {
-            Status::Connecting => "Connecting\u{2026}".into(),
-            Status::Streaming => "Streaming".into(),
-            Status::Playing(title) => format!("Playing {title}"),
-            Status::Online => "Online".into(),
-            Status::NotPaired => "Not paired \u{b7} click to pair".into(),
-            Status::OfflineWakes => "Offline \u{b7} wakes on click".into(),
-            Status::Offline => "Offline".into(),
+            Status::Connecting => client::hostcard_status_connecting().into(),
+            Status::Streaming => client::hostcard_status_streaming().into(),
+            Status::Playing(title) => client::hostcard_status_playing(title),
+            Status::Online => client::hostcard_status_online().into(),
+            Status::NotPaired => client::hostcard_status_not_paired().into(),
+            Status::OfflineWakes => client::hostcard_status_offline_wakes().into(),
+            Status::Offline => client::hostcard_status_offline().into(),
         }
     }
 

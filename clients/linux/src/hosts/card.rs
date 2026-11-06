@@ -6,6 +6,7 @@ use super::model::{CardKind, CardModel, Preset, Status};
 use super::{Act, HostRef, HostsMsg};
 use adw::prelude::*;
 use gtk::{gdk, gio, glib};
+use pf_l10n::{client, desktop};
 use std::cell::RefCell;
 use std::collections::HashSet;
 
@@ -42,11 +43,10 @@ pub fn build(
     let host = saved_ref(m);
     if let Some(host) = &host {
         let info = crate::widgets::lucide::button("info");
-        info.set_tooltip_text(Some("Host details"));
-        info.update_property(&[gtk::accessible::Property::Label(&format!(
-            "{} details",
-            m.name
-        ))]);
+        info.set_tooltip_text(Some(client::hostcard_details_hint()));
+        info.update_property(&[gtk::accessible::Property::Label(
+            &client::hostcard_details_a11y(&m.name),
+        )]);
         info.set_valign(gtk::Align::Center);
         info.add_css_class("flat");
         info.add_css_class("circular");
@@ -129,7 +129,7 @@ fn tile(m: &CardModel, identity: &(String, String)) -> gtk::Widget {
         star.add_css_class("pf-star");
         star.set_halign(gtk::Align::End);
         star.set_valign(gtk::Align::Start);
-        star.set_tooltip_text(Some("Default host"));
+        star.set_tooltip_text(Some(client::hostcard_default_host()));
         overlay.add_overlay(&star);
     }
     if let CardKind::Saved {
@@ -157,8 +157,8 @@ fn line_text(m: &CardModel) -> String {
         CardKind::Discovered { .. } if m.status == Status::Connecting => m.status.sentence(),
         CardKind::Discovered {
             pair_optional: true,
-        } => "Found on this network".into(),
-        CardKind::Discovered { .. } => "Pairing required".into(),
+        } => client::hostcard_status_found().into(),
+        CardKind::Discovered { .. } => client::hostcard_status_pairing_required().into(),
     }
 }
 
@@ -285,38 +285,47 @@ fn menu(
     let menu = gio::Menu::new();
     if pinned.is_some() {
         if *paired {
-            menu.append(Some("Browse Library"), Some("card.library"));
+            menu.append(
+                Some(client::hostcard_browse_library()),
+                Some("card.library"),
+            );
         }
-        menu.append(Some("Copy Link"), Some("card.copy-link"));
-        menu.append(Some("Unpin Card"), Some("card.unpin"));
+        menu.append(Some(client::hostcard_copy_link()), Some("card.copy-link"));
+        menu.append(Some(client::hostcard_unpin_card()), Some("card.unpin"));
         return (menu, actions);
     }
     if m.status == Status::Streaming {
-        menu.append(Some("Disconnect"), Some("card.disconnect"));
+        menu.append(Some(desktop::desktop_disconnect()), Some("card.disconnect"));
     }
     if !presets.is_empty() {
         let with = gio::Menu::new();
-        for (label, id) in std::iter::once(("Default settings", ""))
+        for (label, id) in std::iter::once((client::hostcard_default_settings(), ""))
             .chain(presets.iter().map(|p| (p.name.as_str(), p.id.as_str())))
         {
             let item = gio::MenuItem::new(Some(label), None);
             item.set_action_and_target_value(Some("card.connect-with"), Some(&id.to_variant()));
             with.append_item(&item);
         }
-        menu.append_submenu(Some("Connect With"), &with);
+        menu.append_submenu(Some(client::hostcard_connect_with()), &with);
     }
     // The library fetch authenticates as this device, so only a paired host serves it.
     if *paired {
-        menu.append(Some("Browse Library"), Some("card.library"));
+        menu.append(
+            Some(client::hostcard_browse_library()),
+            Some("card.library"),
+        );
     }
     if !m.status.live() && !m.request.host.mac.is_empty() {
-        menu.append(Some("Wake Host"), Some("card.wake"));
+        menu.append(Some(client::hostcard_wake()), Some("card.wake"));
     }
     if profile.is_some() {
-        menu.append(Some("Switch Profile\u{2026}"), Some("card.switch-profile"));
+        menu.append(
+            Some(client::hostcard_switch_profile()),
+            Some("card.switch-profile"),
+        );
     }
-    menu.append(Some("Copy Link"), Some("card.copy-link"));
-    menu.append(Some("Host Details\u{2026}"), Some("card.details"));
+    menu.append(Some(client::hostcard_copy_link()), Some("card.copy-link"));
+    menu.append(Some(client::hostcard_details()), Some("card.details"));
     (menu, actions)
 }
 

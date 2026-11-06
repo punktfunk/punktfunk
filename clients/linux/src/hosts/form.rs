@@ -2,6 +2,7 @@
 
 use super::*;
 use crate::trust::HostField;
+use pf_l10n::{client, desktop};
 
 /// Address, port and Wake-on-LAN MAC rows, checked as they are typed. A row the store would
 /// refuse wears the `error` style, and `problem` says why under the list.
@@ -15,18 +16,15 @@ pub(super) struct ConnectionRows {
 impl ConnectionRows {
     pub(super) fn new(addr: &str, port: u16, macs: &[String]) -> Self {
         let port_row = adw::EntryRow::builder()
-            .title("Port")
+            .title(client::hosts_field_port())
             .text(port.to_string())
             .input_purpose(gtk::InputPurpose::Digits)
             .build();
         let macs_row = adw::EntryRow::builder()
-            .title("Wake-on-LAN MAC addresses")
+            .title(client::hosts_field_mac())
             .text(macs.join(", "))
             .build();
-        macs_row.set_tooltip_text(Some(
-            "Wakes this host from sleep. Found on the network automatically when it's on; \
-             separate several with commas.",
-        ));
+        macs_row.set_tooltip_text(Some(desktop::desktop_hosts_field_mac_hint()));
         let problem = gtk::Label::builder()
             .xalign(0.0)
             .wrap(true)
@@ -35,7 +33,10 @@ impl ConnectionRows {
             .css_classes(["caption", "error"])
             .build();
         ConnectionRows {
-            addr: adw::EntryRow::builder().title("Address").text(addr).build(),
+            addr: adw::EntryRow::builder()
+                .title(client::hosts_field_address())
+                .text(addr)
+                .build(),
             port: port_row,
             macs: macs_row,
             problem,
