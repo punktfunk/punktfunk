@@ -612,11 +612,14 @@ def _paired_fp(out: str) -> str:
 
 
 def _pair_failure(rc: int, out: str, err: str, fallback: str) -> dict:
-    """A failed ``pair`` as the panel gets it: the exit-code error, the host's ``reject`` token
-    when it sent one, and the CLI's last stderr line (``fallback`` when none) for the log."""
+    """A failed ``pair`` as the panel gets it: the exit-code error (``unreachable`` when the
+    ``--json`` answer says the host never replied, which exit 3 alone cannot), the host's
+    ``reject`` token when it sent one, and the CLI's last stderr line (``fallback`` when none)
+    for the log."""
     detail = (err.strip().splitlines() or [fallback])[-1]
     decky.logger.warning("pair failed (rc=%s): %s", rc, detail)
-    failure = {"ok": False, "error": _cli_error(rc), "detail": detail}
+    silent = _stdout_json(out).get("kind") in ("timeout", "unreachable")
+    failure = {"ok": False, "error": "unreachable" if silent else _cli_error(rc), "detail": detail}
     token = _reject_token(out)
     if token:
         failure["reject"] = token

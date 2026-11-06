@@ -267,9 +267,12 @@ check("request access: exit 6 is a client too old for the flag", got["error"] ==
 main._run_cli = _fake_cli(0, '{"ok": true, "fp": "ab"}')
 got = asyncio.run(main.Plugin().pair("192.168.1.9", 9777, "1234"))
 check("pair: the fingerprint comes from the json object", got == {"ok": True, "fp": "ab"})
-main._run_cli = _fake_cli(3, '{"ok": false, "reject": null}', "the PIN was wrong")
+main._run_cli = _fake_cli(3, '{"ok": false, "kind": "crypto", "reject": null}', "the PIN was wrong")
 got = asyncio.run(main.Plugin().pair("192.168.1.9", 9777, "1234"))
 check("pair: a wrong PIN has no token", got["error"] == "refused" and "reject" not in got)
+main._run_cli = _fake_cli(3, '{"ok": false, "kind": "timeout", "reject": null}', "the host did not answer")
+got = asyncio.run(main.Plugin().pair("192.168.1.9", 9777, "1234"))
+check("pair: a host that never answered is unreachable, not refused", got["error"] == "unreachable")
 
 # ---- game_art: the inputs that become a URL and a file name are validated ----------------
 #

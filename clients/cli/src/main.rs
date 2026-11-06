@@ -116,9 +116,10 @@ punktfunk pair <host[:port]> [--json] — enrol this device with a host (PIN cer
   --name LABEL  the label the host files this device under
                 (default: this machine's name)
   --json        stdout is one object: {\"ok\":true,\"addr\",\"port\",\"fp\"}, or
-                {\"ok\":false,\"reject\"} where reject is the host's refusal token
-                (`not-armed`, `denied`, …) or null. The stderr lines and the exit
-                code do not change
+                {\"ok\":false,\"kind\",\"reject\"}. kind is rejected, crypto (a
+                wrong PIN), timeout, unreachable or failed; reject is the host's
+                refusal token (`not-armed`, `denied`, …) or null. The stderr
+                lines and the exit code do not change
 
 Pairing verifies the host end-to-end and pins its fingerprint in the saved-hosts
 store, so every later connect — here, in the desktop client or the console — is
@@ -736,20 +737,25 @@ from the config directory for a true factory reset."
         )
     }
 
-    /// Why a pairing did not happen: the sentence for a person, and the host's refusal token
-    /// when the host turned the device away.
+    /// Why a pairing did not happen: the sentence for a person, what kind of failure it was, and
+    /// the host's refusal token when the host turned the device away.
     struct PairFailure {
         msg: String,
+        kind: &'static str,
         reject: Option<&'static str>,
     }
 
     impl PairFailure {
         fn new(err: &punktfunk_core::PunktfunkError, msg: String) -> Self {
-            let reject = match err {
-                punktfunk_core::PunktfunkError::Rejected(reason, _) => Some(reason.as_str()),
-                _ => None,
+            use punktfunk_core::PunktfunkError as E;
+            let (kind, reject) = match err {
+                E::Rejected(reason, _) => ("rejected", Some(reason.as_str())),
+                E::Crypto => ("crypto", None),
+                E::Timeout => ("timeout", None),
+                E::Io(_) => ("unreachable", None),
+                _ => ("failed", None),
             };
-            Self { msg, reject }
+            Self { msg, kind, reject }
         }
     }
 
@@ -758,7 +764,7 @@ from the config directory for a true factory reset."
     fn pair_json(addr: &str, port: u16, paired: &Result<trust::Paired, PairFailure>) -> String {
         match paired {
             Ok(p) => serde_json::json!({"ok": true, "addr": addr, "port": port, "fp": p.fp_hex}),
-            Err(f) => serde_json::json!({"ok": false, "reject": f.reject}),
+            Err(f) => serde_json::json!({"ok": false, "kind": f.kind, "reject": f.reject}),
         }
         .to_string()
     }
@@ -2251,10 +2257,10 @@ from the config directory for a true factory reset."
             );
         }
 
-        /// `pair --json` names the host's refusal by its token and nothing else by prose; a
-        /// failure the host did not send carries `null`.
+        /// `pair --json` names the kind of failure and the host's refusal by its token, never by
+        /// prose; a failure the host did not send carries `null`.
         #[test]
-        fn pair_json_carries_the_reject_token() {
+        fn pair_json_carries_the_kind_and_the_reject_token() {
             use punktfunk_core::reject::RejectReason;
             use punktfunk_core::PunktfunkError;
             let json = |err: PunktfunkError| {
@@ -2272,10 +2278,15 @@ from the config directory for a true factory reset."
             ));
             assert_eq!(
                 refused,
-                serde_json::json!({"ok": false, "reject": "not-armed"})
+                serde_json::json!({"ok": false, "kind": "rejected", "reject": "not-armed"})
             );
             let wrong_pin = json(PunktfunkError::Crypto);
-            assert_eq!(wrong_pin, serde_json::json!({"ok": false, "reject": null}));
+            assert_eq!(
+                wrong_pin,
+                serde_json::json!({"ok": false, "kind": "crypto", "reject": null})
+            );
+            let silent = json(PunktfunkError::Timeout);
+            assert_eq!(silent["kind"], "timeout");
         }
 
         /// A host without a ramp reports no clean round and no slow round: both `null`.
