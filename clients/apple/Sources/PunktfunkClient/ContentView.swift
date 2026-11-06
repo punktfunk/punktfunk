@@ -63,15 +63,17 @@ struct ContentView: View {
         /// The link's `as=`: the host profile to play as, this connect only.
         var asProfile: String?
 
-        var actionTitle: String { browse ? "Open Library" : "Connect" }
+        var actionTitle: String {
+            String(localized: browse ? L10n.appleLinkOpenLibrary : L10n.commonConnect)
+        }
         var message: String {
-            let asked = browse
-                ? "open \(host.displayName)'s game library"
-                : "connect to \(host.displayName)"
-                    + (launch.map { " and launch \u{201C}\($0)\u{201D}" } ?? "")
-            return "A link asked to \(asked). It names the host by its label or address, which "
-                + "anything that can open a link could guess — a shortcut made in Punktfunk names "
-                + "the host's id and opens without asking."
+            var paragraphs =
+                browse
+                ? [L10n.appleLinkConfirmAsksLibrary(host: host.displayName)]
+                : [L10n.linkConfirmAsks(host: host.displayName, address: host.address)]
+            if !browse, let launch { paragraphs.append(L10n.linkConfirmLaunch(game: launch)) }
+            paragraphs.append(String(localized: L10n.linkConfirmGuessable))
+            return paragraphs.joined(separator: "\n\n")
         }
     }
     @State private var deepLinkConfirm: DeepLinkConfirm?
@@ -205,44 +207,42 @@ struct ContentView: View {
             // is the no-PIN approval path, "Pair with PIN…" the SPAKE2 ceremony. The follow-on
             // presentation waits a tick so this alert is fully dismissed first.
             .alert(
-                "Pairing required",
+                L10n.pairRequiredTitle,
                 isPresented: approvalChoicePresented,
                 presenting: approvalChoice
             ) { req in
-                Button("Request Access") {
+                Button(L10n.pairRequestAccess) {
                     DispatchQueue.main.async { flow.requestAccess(req) }
                 }
-                Button("Pair with PIN…") {
+                Button(L10n.pairUsePin) {
                     DispatchQueue.main.async {
                         pairThen = req.thenConnect
                         pairingTarget = req.host
                     }
                 }
-                Button("Cancel", role: .cancel) {}
+                Button(L10n.commonCancel, role: .cancel) {}
             } message: { req in
-                Text("\(req.host.displayName) requires pairing. Request access and approve this "
-                    + "device in the host's web console (port 47992 → Pairing) — no PIN needed. Or "
-                    + "pair with the 4-digit PIN it can display.")
+                Text(
+                    L10n.pairRequiredBody(host: req.host.displayName) + "\n\n"
+                        + String(localized: L10n.pairIntro))
             }
             // One "Connection failed" surface for every home screen (touch grid, gamepad launcher)
             // and platform — SessionModel funnels all connect/session errors into `errorMessage`.
-            .alert("Connection failed", isPresented: connectionErrorPresented) {
-                Button("OK", role: .cancel) {}
+            .alert(L10n.appleDialFailedTitle, isPresented: connectionErrorPresented) {
+                Button(L10n.commonOk, role: .cancel) {}
             } message: {
                 Text(model.errorMessage ?? "")
             }
             // The delegated-approval wait: the host holds the request until the operator approves
             // it. Cancel returns the UI at once; `ConnectFlow.requestAccess` drops the late answer.
             .alert(
-                "Waiting for approval",
+                L10n.pairWaitingForApproval,
                 isPresented: awaitingApprovalPresented,
                 presenting: awaitingApproval
             ) { _ in
-                Button("Cancel", role: .cancel) {}
+                Button(L10n.commonCancel, role: .cancel) {}
             } message: { req in
-                Text("Approve \u{201C}\(DeviceName.current)\u{201D} in \(req.host.displayName)'s "
-                    + "web console (port 47992 → Pairing). This device is paired once you "
-                    + "approve it.")
+                Text(L10n.dialApproveNoPin(host: req.host.displayName))
             }
             // Who is playing: shown by a connect when its host lists several profiles.
             .sheet(item: $profileAsk) { ProfilePickerView(ask: $0) }
@@ -251,20 +251,20 @@ struct ContentView: View {
             .sheet(item: $unlockAsk) { UnlockPromptView(ask: $0) }
             // Informational deep-link outcome (unknown host, a refused preset, already
             // streaming). Not an error.
-            .alert("Can't open", isPresented: deepLinkNoticePresented) {
-                Button("OK", role: .cancel) {}
+            .alert(L10n.linkRefusedTitle, isPresented: deepLinkNoticePresented) {
+                Button(L10n.commonOk, role: .cancel) {}
             } message: {
                 Text(deepLinkNotice ?? "")
             }
             // A link that named a saved host by a guessable reference: the dial (or the library)
             // happens on the user's word rather than on the link's.
             .alert(
-                "Open this link?",
+                L10n.linkConfirmTitle,
                 isPresented: deepLinkConfirmPresented,
                 presenting: deepLinkConfirm
             ) { confirm in
                 Button(confirm.actionTitle) { runDeepLinkConfirm(confirm) }
-                Button("Cancel", role: .cancel) {}
+                Button(L10n.commonCancel, role: .cancel) {}
             } message: { confirm in
                 Text(confirm.message)
             }
@@ -755,7 +755,7 @@ struct ContentView: View {
             return // not ours — ignore it silently rather than warning about someone else's URL
         } catch {
             deepLinkNotice = (error as? DeepLinkError)?.message
-                ?? "That link is malformed and was ignored."
+                ?? String(localized: L10n.linkErrorMalformed)
             return
         }
         switch link.route {
@@ -771,7 +771,7 @@ struct ContentView: View {
         case .wake:
             // Still reserved: saying so beats silently connecting instead. (Shortcuts users have
             // the Wake Host intent, which never round-trips through a URL.)
-            deepLinkNotice = "Punktfunk links can't do “wake” yet."
+            deepLinkNotice = L10n.linkRouteUnsupported(route: "wake")
             return
         }
         let session = DeepLinkRouter.SessionState(
@@ -945,19 +945,23 @@ struct ContentView: View {
     @ViewBuilder private var touchTabs: some View {
         if #available(iOS 18, *) {
             TabView(selection: $touchTab) {
-                Tab("Hosts", systemImage: "desktopcomputer", value: TouchTab.hosts) { touchHome }
-                Tab("Library", systemImage: "square.grid.2x2", value: TouchTab.library) {
-                    libraryTab
-                }
+                Tab(
+                    String(localized: L10n.hostsTab), systemImage: "desktopcomputer",
+                    value: TouchTab.hosts
+                ) { touchHome }
+                Tab(
+                    String(localized: L10n.hostsTabLibrary), systemImage: "square.grid.2x2",
+                    value: TouchTab.library
+                ) { libraryTab }
             }
             .tabViewStyle(.sidebarAdaptable)
         } else {
             TabView(selection: $touchTab) {
                 touchHome
-                    .tabItem { Label("Hosts", systemImage: "desktopcomputer") }
+                    .tabItem { Label(L10n.hostsTab, systemImage: "desktopcomputer") }
                     .tag(TouchTab.hosts)
                 libraryTab
-                    .tabItem { Label("Library", systemImage: "square.grid.2x2") }
+                    .tabItem { Label(L10n.hostsTabLibrary, systemImage: "square.grid.2x2") }
                     .tag(TouchTab.library)
             }
         }
@@ -971,11 +975,11 @@ struct ContentView: View {
                 .tabItem { TouchTab.hostsLabel }
                 .tag(TouchTab.hosts)
             libraryTab
-                .tabItem { Label("Library", systemImage: "square.grid.2x2") }
+                .tabItem { Label(L10n.hostsTabLibrary, systemImage: "square.grid.2x2") }
                 .tag(TouchTab.library)
             NavigationStack { SettingsView() }
                 .tvPushSlide()
-                .tabItem { Label("Settings", systemImage: "gearshape") }
+                .tabItem { Label(L10n.hostsTabSettings, systemImage: "gearshape") }
                 .tag(TouchTab.settings)
         }
     }
@@ -1031,7 +1035,6 @@ struct ContentView: View {
             if let fp = pendingFingerprint {
                 TrustCardView(
                     fingerprint: fp,
-                    hostName: model.activeHost?.displayName ?? "host",
                     onCancel: { model.rejectTrust() },
                     onTrust: {
                         if let fp = model.confirmTrust(), let host = model.activeHost {

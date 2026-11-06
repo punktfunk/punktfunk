@@ -845,7 +845,7 @@ private struct ShotTrust: View {
                 .blur(radius: 32)
                 .overlay(Color.black.opacity(0.45))
             TrustCardView(
-                fingerprint: ShotMock.fingerprint, hostName: "Battlestation",
+                fingerprint: ShotMock.fingerprint,
                 onCancel: {}, onTrust: {}, onPairInstead: {})
         }
     }

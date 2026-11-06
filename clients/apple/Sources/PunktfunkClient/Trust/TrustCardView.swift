@@ -14,7 +14,6 @@ import SwiftUI
 
 struct TrustCardView: View {
     let fingerprint: Data
-    let hostName: String
     let onCancel: () -> Void
     let onTrust: () -> Void
     let onPairInstead: () -> Void
@@ -51,11 +50,9 @@ struct TrustCardView: View {
             Image(systemName: "lock.shield")
                 .font(.system(size: 36, weight: .light))
                 .foregroundStyle(.tint)
-            Text("Verify \(hostName)")
+            Text(L10n.trustTitle)
                 .font(.geist(20, .semibold, relativeTo: .title3))
-            Text("First connection. Compare this fingerprint with the one "
-                + "punktfunk-host logged at startup (\u{201C}clients pin this "
-                + "fingerprint\u{201D}):")
+            Text(L10n.trustExplain)
                 .font(.geist(16, relativeTo: .callout))
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
@@ -70,11 +67,11 @@ struct TrustCardView: View {
                 .padding(10)
                 .background(.quaternary, in: RoundedRectangle(cornerRadius: 8))
             HStack(spacing: 12) {
-                Button("Cancel", role: .cancel, action: onCancel)
+                Button(L10n.commonCancel, role: .cancel, action: onCancel)
                     #if !os(tvOS)
                     .keyboardShortcut(.cancelAction)
                     #endif
-                Button("Trust & Connect", action: onTrust)
+                Button(L10n.trustAccept, action: onTrust)
                     // Opaque prominent, NOT glass: this card is itself a glass panel
                     // (.glassBackground below), and glass-on-glass loses contrast — a tinted
                     // bordered button reads cleanly over glass (HIG). The sheet primaries stay
@@ -89,7 +86,7 @@ struct TrustCardView: View {
             #endif
             // The verified alternative to eyeballing hex: drop this session (the host
             // serves one connection at a time) and run the SPAKE2 PIN ceremony instead.
-            Button("Pair with PIN instead…", action: onPairInstead)
+            Button(L10n.pairUsePin, action: onPairInstead)
                 #if os(macOS)
                 .buttonStyle(.link)
                 #else
@@ -102,13 +99,16 @@ struct TrustCardView: View {
             if gamepads.active != nil {
                 GamepadHintBar(hints: [
                     .init(
-                        glyph: buttonGlyph(\.buttonA, fallback: "a.circle"), text: "Trust",
+                        glyph: buttonGlyph(\.buttonA, fallback: "a.circle"),
+                        text: String(localized: L10n.trustAccept),
                         action: onTrust),
                     .init(
-                        glyph: buttonGlyph(\.buttonX, fallback: "x.circle"), text: "Pair with PIN",
+                        glyph: buttonGlyph(\.buttonX, fallback: "x.circle"),
+                        text: String(localized: L10n.pairUsePin),
                         action: onPairInstead),
                     .init(
-                        glyph: buttonGlyph(\.buttonB, fallback: "b.circle"), text: "Cancel",
+                        glyph: buttonGlyph(\.buttonB, fallback: "b.circle"),
+                        text: String(localized: L10n.commonCancel),
                         action: onCancel),
                 ])
                 .padding(.top, 2)
