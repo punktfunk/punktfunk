@@ -22,8 +22,10 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
+import io.unom.punktfunk.kit.R
 
 /**
  * Open-source licenses: punktfunk's own license (MIT OR Apache-2.0) plus the third-party software
@@ -43,9 +45,9 @@ fun LicensesScreen(onBack: () -> Unit) {
             verticalAlignment = Alignment.CenterVertically,
         ) {
             IconButton(onClick = onBack) {
-                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.common_back))
             }
-            Text("Open-source licenses", style = MaterialTheme.typography.headlineSmall)
+            Text(stringResource(R.string.about_licenses_title), style = MaterialTheme.typography.headlineSmall)
         }
         LicensesBody(
             scroll = rememberScrollState(),
@@ -61,10 +63,11 @@ private fun LicensesBody(
     contentPadding: PaddingValues,
 ) {
     val context = LocalContext.current
-    val notices = remember {
+    val unavailable = stringResource(R.string.about_notices_unavailable)
+    val notices = remember(unavailable) {
         runCatching {
             context.assets.open("THIRD-PARTY-NOTICES.txt").bufferedReader().use { it.readText() }
-        }.getOrDefault("Third-party notices unavailable.")
+        }.getOrDefault(unavailable)
     }
     // The bundled brand typeface (Geist Sans) ships under the SIL Open Font License 1.1. The OFL
     // requires the license travel with the font, so surface it here (mirrors the Apple client).
@@ -95,8 +98,8 @@ private fun LicensesBody(
             )
         }
         Text(
-            "Punktfunk is licensed under MIT OR Apache-2.0, at your option. It uses the open-source " +
-                "components below, each under its own license.",
+            stringResource(R.string.about_license_statement) + " " +
+                stringResource(R.string.android_about_components_intro),
             style = MaterialTheme.typography.bodyMedium,
         )
         Text(
@@ -104,9 +107,9 @@ private fun LicensesBody(
             style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
         )
         if (fontLicense != null) {
-            Text("Bundled font", style = MaterialTheme.typography.titleMedium)
+            Text(stringResource(R.string.about_bundled_font), style = MaterialTheme.typography.titleMedium)
             Text(
-                "The Geist typeface is licensed under the SIL Open Font License 1.1.",
+                stringResource(R.string.about_geist_license),
                 style = MaterialTheme.typography.bodyMedium,
             )
             Text(
