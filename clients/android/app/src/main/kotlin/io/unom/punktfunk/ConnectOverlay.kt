@@ -32,12 +32,14 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.DialogProperties
+import io.unom.punktfunk.kit.R
 import io.unom.punktfunk.kit.wakingLine
 
 /**
@@ -70,23 +72,32 @@ private data class ConnectCopy(
     val cancelLabel: String,
 )
 
+@Composable
 private fun connectCopy(phase: ConnectPhase): ConnectCopy = when (phase) {
     is ConnectPhase.Connecting -> ConnectCopy(
-        "Connecting to ${phase.hostName}", "Establishing a secure connection…", false, "Cancel",
+        stringResource(R.string.dial_connecting_to, phase.hostName),
+        stringResource(R.string.dial_connecting_detail),
+        false,
+        stringResource(R.string.common_cancel),
     )
-    is ConnectPhase.Starting -> ConnectCopy(wakingLine(phase.profile), "This can take a minute.", false, "Cancel")
+    is ConnectPhase.Starting -> ConnectCopy(
+        wakingLine(phase.profile).asString(),
+        stringResource(R.string.android_profile_starting_hint),
+        false,
+        stringResource(R.string.common_cancel),
+    )
     is ConnectPhase.Waking -> ConnectCopy(
-        "Waking ${phase.hostName}…",
-        "Waiting for it to come online · ${phase.seconds}s",
+        stringResource(R.string.dial_waking, phase.hostName),
+        stringResource(R.string.dial_waking_progress, phase.seconds),
         true,
-        // A wake-only wait (no dial after) says "Stop Waiting"; a wake that will connect says "Cancel".
-        if (!phase.connectsAfter) "Stop Waiting" else "Cancel",
+        // A wake-only wait (no dial after) says "Stop waiting"; a wake that will connect says "Cancel".
+        stringResource(if (!phase.connectsAfter) R.string.dial_stop_waiting else R.string.common_cancel),
     )
     is ConnectPhase.WakeTimedOut -> ConnectCopy(
-        "${phase.hostName} didn't wake",
-        "It may still be booting, or it's powered off / off this network.",
+        stringResource(R.string.dial_wake_parked, phase.hostName),
+        stringResource(R.string.dial_wake_parked_hint),
         false,
-        "Cancel",
+        stringResource(R.string.common_cancel),
     )
 }
 
@@ -163,9 +174,9 @@ internal fun ConnectModal(
                 fontFamily = if (copy.monoSubtitle) FontFamily.Monospace else FontFamily.Default,
             )
         },
-        // No confirm action until the wake times out; then "Try Again" is the primary button.
+        // No confirm action until the wake times out; then "Try again" is the primary button.
         confirmButton = {
-            if (timedOut) TextButton(onClick = onRetry) { Text("Try Again") }
+            if (timedOut) TextButton(onClick = onRetry) { Text(stringResource(R.string.common_try_again)) }
         },
         dismissButton = {
             TextButton(onClick = onCancel) { Text(copy.cancelLabel) }

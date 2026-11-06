@@ -149,5 +149,6 @@
 	"android_link_pair_first": "Console notice when a link names a saved host that is not paired. host: the saved host's name.",
 	"android_link_by_id_only": "Console notice when a link names a saved host by a guessable label. host: the saved host's name.",
 	"android_overlay_app_capped": "Stats overlay warning line (Android). rate = the refresh the system holds the app to, a whole number.",
-	"android_overlay_panel_rate": "Stats overlay warning line (Android). rate = the panel's measured refresh; stream_rate = the stream's; both whole numbers."
+	"android_overlay_panel_rate": "Stats overlay warning line (Android). rate = the panel's measured refresh; stream_rate = the stream's; both whole numbers.",
+	"android_redial_gave_up": "Toast when the automatic reconnect after a lost stream gives up. host: the host's name."
 }

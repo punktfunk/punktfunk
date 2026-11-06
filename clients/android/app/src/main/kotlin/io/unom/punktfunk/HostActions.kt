@@ -1,7 +1,11 @@
 package io.unom.punktfunk
 
+import android.content.res.Resources
+import io.unom.punktfunk.kit.R
+import io.unom.punktfunk.kit.Say
 import io.unom.punktfunk.kit.library.MgmtReply
 import io.unom.punktfunk.kit.library.mgmtCall
+import io.unom.punktfunk.kit.say
 import io.unom.punktfunk.kit.security.ClientIdentity
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
@@ -19,8 +23,8 @@ import org.json.JSONObject
  * menu row costs a menu row and a thrown exception costs the screen.
  *
  * ONE implementation for both Android shells, like [SendLogs]: the Skia console's host menu and
- * the touch home's card menu. Wording is the desktop's verbatim (`pf_client_core::host_actions`)
- * so a quoted message means the same thing on every client.
+ * the touch home's card menu. Wording is the desktop's (`pf_client_core::host_actions`) so a
+ * quoted message means the same thing on every client.
  *
  * Blocking — call it off the main thread.
  */
@@ -29,7 +33,7 @@ object HostActions {
     data class Action(
         /** Stable id, the invoke argument (`power.sleep`). */
         val id: String,
-        /** This client's wording for a known id, else the host's own title. */
+        /** The host's own title: the English fallback. A screen words it with [text]. */
         val label: String,
         /** Confirm twice — the action loses whatever is running on that machine. */
         val danger: Boolean,
@@ -37,15 +41,17 @@ object HostActions {
         val available: Boolean,
         /** Why not, when it can't. Empty otherwise. */
         val unavailableReason: String,
-    )
-
-    /** Local wording for the ids we know; anything else keeps the host's own title, which is
-     *  what lets a later host add an action with no client release. */
-    private fun label(id: String, title: String): String = when (id) {
-        "power.sleep" -> "Sleep host"
-        "power.reboot" -> "Restart host"
-        "power.shutdown" -> "Shut down host"
-        else -> title
+    ) {
+        /**
+         * This client's wording for a known id, else the host's own title, which is what lets a
+         * later host add an action with no client release.
+         */
+        fun text(res: Resources): String = when (id) {
+            "power.sleep" -> res.getString(R.string.host_power_sleep)
+            "power.reboot" -> res.getString(R.string.host_power_reboot)
+            "power.shutdown" -> res.getString(R.string.host_power_shutdown)
+            else -> label
+        }
     }
 
     /**
@@ -65,7 +71,7 @@ object HostActions {
             val id = o.optString("id")
             Action(
                 id = id,
-                label = label(id, o.optString("title")),
+                label = o.optString("title"),
                 danger = o.optBoolean("danger"),
                 available = o.optBoolean("available"),
                 unavailableReason = o.optString("unavailable_reason"),
@@ -75,7 +81,7 @@ object HostActions {
 
     /**
      * Invoke one action by id (`POST /api/v1/actions/{id}`, empty body) and return the
-     * user-facing outcome.
+     * user-facing outcome. [label] is the action's name as the caller shows it.
      *
      * A 2xx is the last word: the host ends every session and acts about a second later, so
      * there is nothing to poll and nothing to undo. A refusal carries the host's own reason
@@ -91,7 +97,7 @@ object HostActions {
         actionId: String,
         label: String,
         streamPort: Int = 0,
-    ): String {
+    ): Say {
         val reply = mgmtCall(identity, addr, mgmtPort, fpHex, streamPort = streamPort) { base ->
             Request.Builder()
                 .url("$base/api/v1/actions/$actionId")
@@ -101,9 +107,9 @@ object HostActions {
                 .build()
         }
         return if (reply is MgmtReply.Answer && reply.ok) {
-            "$hostName: $label — on its way"
+            say(R.string.hostcard_action_sent_body, hostName, label)
         } else {
-            "$label failed — ${reply.why}"
+            say(R.string.hostcard_action_failed, label, reply.why)
         }
     }
 }

@@ -1,7 +1,10 @@
 package io.unom.punktfunk
 
 import io.unom.punktfunk.kit.ListedProfile
+import io.unom.punktfunk.kit.R
+import io.unom.punktfunk.kit.Say
 import io.unom.punktfunk.kit.UnlockNeed
+import io.unom.punktfunk.kit.say
 import java.security.KeyPair
 import java.security.KeyPairGenerator
 import java.security.MessageDigest
@@ -107,7 +110,7 @@ class ProfileUnlockTest {
         assertEquals(HostServices.Cancelled, dialed)
         // Bare first; an empty sentence asks plainly; the host's own sentence shows as the error.
         assertNull(sent[0])
-        assertEquals(listOf(null, "Wrong password."), asked.map { it.error })
+        assertEquals(listOf(null, Say.Text("Wrong password.")), asked.map { it.error })
         assertEquals("Ada", asked[0].profileName)
         val password = sent[1]!!
         assertEquals(UNLOCK_PASSWORD, password.kind)
@@ -184,7 +187,7 @@ class ProfileUnlockTest {
         val asked = mutableListOf<PasswordAsk>()
         val hooks = hooks(SoftKeys(biometric = false), Host(), ask = { asked += it; answers.removeFirst() })
         dialUnlocked(hooks, hostFp, row(UnlockNeed.PASSWORD)) { error("dialed") }
-        assertEquals(listOf(null, "That password is too long."), asked.map { it.error })
+        assertEquals(listOf(null, say(R.string.unlock_error_too_long)), asked.map { it.error })
     }
 
     @Test
@@ -218,10 +221,7 @@ class ProfileUnlockTest {
 
     @Test
     fun a_profile_locked_close_reads_as_a_locked_profile() {
-        assertEquals(
-            "This profile is locked. Enter its password.",
-            ConnectErrors.connectMessage(PROFILE_LOCKED, requestAccess = false),
-        )
+        assertEquals(R.string.reject_profile_locked, ConnectErrors.connectMessage(PROFILE_LOCKED, requestAccess = false))
     }
 
     @Test

@@ -84,7 +84,7 @@ class SpeedTestTest {
             settings = globals,
             onGlobalChange = { savedGlobals = it },
         )
-        assertEquals("“Game”", where)
+        assertEquals(SpeedTestWrote.Preset("Game"), where)
         assertNull("the global must not move when a preset was the target", savedGlobals)
         val after = s.byId(game.id)!!.overrides
         assertEquals(84_000, after.bitrateKbps)
@@ -106,7 +106,7 @@ class SpeedTestTest {
             42_000, SpeedTestTarget.Ask(work), toPreset = false, presets = s,
             settings = globals, onGlobalChange = { savedGlobals = it },
         )
-        assertEquals("the default bitrate", whereGlobal)
+        assertEquals(SpeedTestWrote.Default, whereGlobal)
         assertEquals(42_000, savedGlobals!!.bitrateKbps)
         assertNull(s.byId(work.id)!!.overrides.bitrateKbps)
 
@@ -116,9 +116,23 @@ class SpeedTestTest {
             42_000, SpeedTestTarget.Ask(work), toPreset = true, presets = s,
             settings = globals, onGlobalChange = { savedGlobals = it },
         )
-        assertEquals("“Work”", wherePreset)
+        assertEquals(SpeedTestWrote.Preset("Work"), wherePreset)
         assertNull(savedGlobals)
         assertEquals(42_000, s.byId(work.id)!!.overrides.bitrateKbps)
+    }
+
+    /** The confirmation names the figure with its unit, then the layer it went to. */
+    @Test
+    fun theConfirmationNamesWhereTheRateWent() {
+        val res = RuntimeEnvironment.getApplication().resources
+        assertEquals(
+            "84 Mbit/s set as the default bitrate",
+            speedTestApplied(SpeedTestWrote.Default, mbitRate(84.0)).words(res),
+        )
+        assertEquals(
+            "84 Mbit/s set in “Game”",
+            speedTestApplied(SpeedTestWrote.Preset("Game"), mbitRate(84.0)).words(res),
+        )
     }
 
     @Test
@@ -143,9 +157,14 @@ class SpeedTestTest {
         assertEquals(null, parseNetworkCheck(v.copyOf(21)))
     }
 
-    /** `clients/shared/finding-vectors.json`: the sentence the console and every shell show. */
+    /**
+     * `clients/shared/finding-vectors.json`: the sentence the console and every shell show, read
+     * in English. When the file carries each case's message `key` and `args`, assert
+     * [findingMessage] against those and drop the sentence.
+     */
     @Test
     fun everyFindingVectorAgrees() {
+        val res = RuntimeEnvironment.getApplication().resources
         // Gradle runs unit tests with the module dir as cwd (clients/android/app).
         val file = File("../../shared/finding-vectors.json")
         assertTrue("the shared vector file must be reachable at ${file.absolutePath}", file.isFile)
@@ -158,7 +177,11 @@ class SpeedTestTest {
                 val case = cases.getJSONObject(i)
                 val n = case.getJSONArray("numbers")
                 val numbers = (0 until n.length()).map(n::getInt)
-                assertEquals("$case", case.getString("sentence"), findingText(case.getInt("id"), numbers))
+                assertEquals(
+                    "$case",
+                    case.getString("sentence"),
+                    findingMessage(case.getInt("id"), numbers).words(res),
+                )
             }
         } finally {
             Locale.setDefault(was)

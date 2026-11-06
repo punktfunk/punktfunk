@@ -23,10 +23,12 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.autofill.ContentType
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentType
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
+import io.unom.punktfunk.kit.R
 
 /**
  * The password prompt for a profile on a person's own account: its name, a masked field the
@@ -56,14 +58,14 @@ internal fun UnlockPromptDialog(ask: PasswordAsk) {
     }
     AlertDialog(
         onDismissRequest = { finish(submit = false) },
-        title = { Text("Unlock ${ask.profileName}") },
+        title = { Text(stringResource(R.string.unlock_title, ask.profileName)) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 OutlinedSecureTextField(
                     state = field,
-                    label = { Text("Password") },
+                    label = { Text(stringResource(R.string.unlock_password)) },
                     isError = ask.error != null,
-                    supportingText = ask.error?.let { { Text(it) } },
+                    supportingText = ask.error?.let { { Text(it.asString()) } },
                     keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
                     onKeyboardAction = { if (field.text.isNotEmpty()) finish(submit = true) },
                     modifier = Modifier
@@ -72,7 +74,9 @@ internal fun UnlockPromptDialog(ask: PasswordAsk) {
                 )
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
-                        if (ask.biometric) "Unlock with fingerprint on this device" else "Stay signed in on this device",
+                        stringResource(
+                            if (ask.biometric) R.string.android_unlock_with_fingerprint else R.string.unlock_stay_signed_in,
+                        ),
                         style = MaterialTheme.typography.bodyLarge,
                         modifier = Modifier.weight(1f).padding(end = 12.dp),
                     )
@@ -81,8 +85,12 @@ internal fun UnlockPromptDialog(ask: PasswordAsk) {
             }
         },
         confirmButton = {
-            TextButton(enabled = field.text.isNotEmpty(), onClick = { finish(submit = true) }) { Text("Unlock") }
+            TextButton(enabled = field.text.isNotEmpty(), onClick = { finish(submit = true) }) {
+                Text(stringResource(R.string.unlock_sign_in))
+            }
         },
-        dismissButton = { TextButton(onClick = { finish(submit = false) }) { Text("Cancel") } },
+        dismissButton = {
+            TextButton(onClick = { finish(submit = false) }) { Text(stringResource(R.string.common_cancel)) }
+        },
     )
 }

@@ -12,6 +12,7 @@ import androidx.biometric.BiometricPrompt
 import androidx.core.content.ContextCompat
 import androidx.fragment.app.FragmentActivity
 import io.unom.punktfunk.kit.NativeBridge
+import io.unom.punktfunk.kit.R
 import io.unom.punktfunk.kit.security.ClientIdentity
 import io.unom.punktfunk.kit.security.KnownHost
 import java.security.KeyPair
@@ -120,8 +121,8 @@ suspend fun authenticateSigner(activity: FragmentActivity, signature: Signature,
         }
         val prompt = BiometricPrompt(activity, ContextCompat.getMainExecutor(activity), callback)
         val info = BiometricPrompt.PromptInfo.Builder()
-            .setTitle("Unlock $profileName")
-            .setNegativeButtonText("Use password")
+            .setTitle(activity.getString(R.string.unlock_title, profileName))
+            .setNegativeButtonText(activity.getString(R.string.android_unlock_use_password))
             .setAllowedAuthenticators(BiometricManager.Authenticators.BIOMETRIC_STRONG)
             .build()
         cont.invokeOnCancellation { activity.runOnUiThread { prompt.cancelAuthentication() } }

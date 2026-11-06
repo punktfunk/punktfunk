@@ -185,5 +185,6 @@
 	"android_link_by_id_only": "A link can only dial {host} by its id — open it from the list.",
 	"android_link_host_unpaired": "That link points at a host this device hasn't paired with.",
 	"android_overlay_app_capped": "⚠ app capped {rate} Hz by the system",
-	"android_overlay_panel_rate": "⚠ panel {rate} Hz, not {stream_rate} · check the game frame-rate limit"
+	"android_overlay_panel_rate": "⚠ panel {rate} Hz, not {stream_rate} · check the game frame-rate limit",
+	"android_redial_gave_up": "Lost the connection to {host} — the host may be asleep. Wake it to reconnect."
 }
