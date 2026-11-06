@@ -87,7 +87,7 @@
     <release version="0.47.0" date="2026-11-06">
       <url type="details">https://git.unom.io/unom/punktfunk/releases/tag/v0.47.0</url>
       <description>
-        <p>Safer pairing through the browser client, Apple apps that keep their memory in long sessions, Bazzite hosts that survive a major update, and seats that see the owner's libraries.</p>
+        <p>Profiles on a family member's own Linux account, opened with their password, safer pairing through the browser client, Apple apps that keep their memory in long sessions, and Bazzite hosts that survive a major update.</p>
       </description>
     </release>
     <release version="0.46.0" date="2026-11-01">

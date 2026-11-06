@@ -16,31 +16,41 @@ short; the version-bump commit retitles it. Older sections stay as they are.
 
 ## v0.47.0
 
-35 commits since v0.46.0. ALPN `pkf2`, C ABI 63 and driver protocol floor 9 stay. A browser that
-comes through the web client's page server, or from a public page no paired device used, pairs
-only by a fingerprint-bound PIN; gamescope moves to `+pfhdr32`.
+92 commits since v0.46.0. ALPN `pkf2` and driver protocol floor 9 stay; **C ABI 64**. A Linux
+profile can run on a person's own account, opened by their password or an enrolled key. A browser
+that comes through the web client's page server, or from a public page no paired device used,
+pairs only by a fingerprint-bound PIN. gamescope moves to `+pfhdr32`.
 Deep dive: `git log v0.46.0..v0.47.0`
 
 ### Versions
 
 | | v0.46.0 | v0.47.0 | Notes |
 |---|---|---|---|
-| Wire protocol | punktfunk/2 | **punktfunk/2** | ALPN unchanged. The browser plane answers an unvalidated source with QUIC Retry and holds at most 8 unadmitted sessions per address, 64 in all. A session keeps the page origin its WebTransport request carried. Native peers see no change |
-| C ABI | 63 | **63** | unchanged |
-| C headers | — | — | unchanged |
+| Wire protocol | punktfunk/2 | **punktfunk/2** | ALPN unchanged. Message 0x07 `ProfileUnlock` carries a password or a key proof right after the hello; Hello feature bit 42 announces it, and a host without it reads none. A locked profile closes with `ProfileLocked` (close code 116). The browser plane answers an unvalidated source with QUIC Retry and holds at most 8 unadmitted sessions per address, 64 in all. Old peers skip all of it |
+| C ABI | 63 | **64** | `PunktfunkProfileUnlock` on `PunktfunkConnectOpts`, `PUNKTFUNK_UNLOCK_PASSWORD`/`_KEY_PROOF`, `PUNKTFUNK_ENROLL_NONE`/`_P256`/`_RSA2048`, `PUNKTFUNK_UNLOCK_MESSAGE_LEN`, `PUNKTFUNK_STATUS_REJECTED_PROFILE_LOCKED` (-37), `PROFILE_LOCKED_CLOSE_CODE`. An unlock with an unpinned host is an invalid argument. Nothing removed |
+| C headers | — | — | `punktfunk_core.h` gains the above. `punktfunk_console.h` gains `punktfunk_console_take_unlock` and `PUNKTFUNK_CONSOLE_UNLOCK_MAX`; phase 7 is a `profile-locked` refusal |
 | Rust edition / MSRV | 2024 / 1.85 | **2024 / 1.85** | unchanged |
 | Workspace crate dirs | 47 | **47** | unchanged. `punktfunk-core` gains `mgmt_routes`, `provenance` and `tls::verify_plane_attestation`, which the web client's page server pins |
 | Virtual-display driver protocol | 9 | **9** | unchanged |
 | Windows virtual-gamepad channel | 3 | **3** | unchanged |
 | Plugin index schema | 1 | **1** | unchanged |
 | Host event schema | 1 | **1** | unchanged |
-| `api/openapi.json` | 0.46.0 | **0.47.0** | `PendingRequest` gains `relayed` and `unfamiliar_origin` (required) and `origin`; approve answers 409 for both, as for a `wan` knock. Nothing removed |
+| `api/openapi.json` | 0.46.0 | **0.47.0** | `GET`/`DELETE /profiles/{id}/devices`, `DELETE /profiles/{id}/devices/{fingerprint}`, `POST /profiles/{id}/unlock-challenge`; `ProfilePublic.unlock`, `SignedInDevice`, `UnlockChallenge`; a supervisor lockout answers 429. A Linux door takes `seat_account` + `seat_password` on `POST /profiles`. `PendingRequest` gains `relayed` and `unfamiliar_origin` (required) and `origin`; approve answers 409 for both, as for a `wan` knock. Nothing removed |
 | gamescope patch level (`+pfhdrN`) | 31 | **32** | patch 0035: on NVIDIA a planar capture is allocated `DRM_FORMAT_MOD_LINEAR` with external memory and its plane views; a driver that refuses the shape is not offered NV12/P010 |
 | `@punktfunk/host` (SDK) | 0.5.0 | **0.5.0** | unchanged; the generated types carry the new `PendingRequest` fields for the next cut. The host's plugin runner holds a registry lease per running package |
 | `@punktfunk/plugin-kit` | 0.14.0 | **0.14.0** | unchanged |
 
 ### Breaking
 
+- **C ABI 64.** `PunktfunkConnectOpts` gains the unlock pointer. An app pins the integer, so re-pin
+  and rebuild.
+- **Hooks on a seat on an existing account.** Such a seat host refuses `PUT /hooks`, skips a stored
+  `hooks.json`, installs only Verified plugins and adopts no emulator copy; Windows seats on an
+  existing account included. `PUNKTFUNK_SEAT_OWN_ACCOUNT=1` in the seat's environment marks it.
+- **Seat supervisor (Linux).** A row can adopt an existing account: the password is checked once by
+  `punktfunk-seats pam-check` under attempt limits, and none is kept. Starting such a row needs an
+  unlock (`unlock_required` for keep-warm and autostart); the devices let in are
+  `seats/<id>/devices.json`. Host and supervisor ship in one package.
 - **A relayed knock is strict.** A `pf-client-addr` header on a plane session, pairing attempt or
   management request makes it `wan` whatever address it names, and never loopback. Its approve
   answers 409; pair it with a PIN armed for its fingerprint. Strict and local pairing attempts
