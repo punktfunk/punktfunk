@@ -1,34 +1,31 @@
 //! Input: touch, keyboard and mouse, and the quick-action ring.
 
 use super::{described_overridable, group, presets, rows, setting_combo, setting_toggle, Cx};
+use pf_client_core::settings::{MouseMode, TouchMode};
+use pf_l10n::{client, desktop};
 use windows_reactor::*;
-
-/// Touch-input presets: `(stored value, display label)` — how a touchscreen's fingers drive
-/// the host. The cross-client set (Android/Apple); only meaningful on a touchscreen device.
-const TOUCH_MODES: &[(&str, &str)] = &[
-    ("trackpad", "Trackpad"),
-    ("pointer", "Direct pointer"),
-    ("touch", "Touch passthrough"),
-    ("off", "Off"),
-];
-/// Physical-mouse presets: `(stored value, display label)` — capture (pointer lock,
-/// relative, for games) vs desktop (uncaptured absolute pointer, for remote desktop
-/// work). Ctrl+Alt+Shift+M flips the model live in-stream.
-const MOUSE_MODES: &[(&str, &str)] = &[
-    ("capture", "Capture (games)"),
-    ("desktop", "Desktop (absolute)"),
-];
 
 /// Input: touch, keyboard and mouse.
 pub(super) fn input_section(cx: &Cx) -> Vec<View> {
     let Cx { scope, ref s, .. } = *cx;
-    let (touch_names, touch_i) = presets(TOUCH_MODES, |v| *v == s.touch_mode);
+    // How a touchscreen's fingers drive the host; only meaningful on a touchscreen device.
+    let touch_modes: Vec<(&str, &str)> = TouchMode::ALL
+        .iter()
+        .map(|m| (m.as_name(), m.label()))
+        .collect();
+    let (touch_names, touch_i) = presets(&touch_modes, |v| *v == s.touch_mode);
     let touch_combo = setting_combo(cx, scope, "touch_mode", touch_names, touch_i, |s, i| {
-        s.touch_mode = TOUCH_MODES[i].0.to_string();
+        s.touch_mode = TouchMode::ALL[i].as_name().to_string();
     });
-    let (mouse_names, mouse_i) = presets(MOUSE_MODES, |v| *v == s.mouse_mode);
+    // Capture (pointer lock, relative, for games) vs desktop (uncaptured absolute pointer, for
+    // remote desktop work); Ctrl+Alt+Shift+M flips the model live in-stream.
+    let mouse_modes: Vec<(&str, &str)> = MouseMode::ALL
+        .iter()
+        .map(|m| (m.as_name(), m.label()))
+        .collect();
+    let (mouse_names, mouse_i) = presets(&mouse_modes, |v| *v == s.mouse_mode);
     let mouse_combo = setting_combo(cx, scope, "mouse_mode", mouse_names, mouse_i, |s, i| {
-        s.mouse_mode = MOUSE_MODES[i].0.to_string();
+        s.mouse_mode = MouseMode::ALL[i].as_name().to_string();
     });
     let invert_scroll_toggle =
         setting_toggle(cx, scope, "invert_scroll", s.invert_scroll, |s, on| {
@@ -44,42 +41,40 @@ pub(super) fn input_section(cx: &Cx) -> Vec<View> {
 
     let mut out = group(
         cx.pal,
-        Some("Touch & pointer"),
+        Some(client::prefs_group_touch_pointer()),
         vec![described_overridable(
             cx,
             &rows::TOUCH,
             touch_combo,
-            "How a touchscreen drives the host: Trackpad moves the host cursor like a \
-             laptop trackpad (tap to click), Direct pointer jumps the cursor to wherever \
-             you touch, Touch passthrough sends real multi-touch through.",
+            client::player_touch_mode_hint(),
         )],
         None,
     );
     out.extend(group(
         cx.pal,
-        Some("Keyboard & mouse"),
+        Some(client::prefs_group_keyboard_mouse()),
         vec![
             described_overridable(
                 cx,
                 &rows::MOUSE,
                 mouse_combo,
-                "Capture locks the pointer to the stream and sends relative motion — \
-                 best for games. Desktop leaves the pointer free to enter and leave \
-                 the stream and sends absolute positions — best for remote desktop \
-                 work. Ctrl+Alt+Shift+M switches live.",
+                &format!(
+                    "{} {}",
+                    client::player_mouse_mode_hint(),
+                    client::player_mouse_mode_keys_hint("Ctrl+Alt+Shift+M"),
+                ),
             ),
             described_overridable(
                 cx,
                 &rows::SHORTCUTS,
                 shortcuts_toggle,
-                "Alt+Tab, the Windows key and friends reach the host while the stream \
-                 has input captured. Off, they act on this machine instead.",
+                &client::player_inhibit_shortcuts_hint("Alt+Tab, Win, \u{2026}"),
             ),
             described_overridable(
                 cx,
                 &rows::INVERT_SCROLL,
                 invert_scroll_toggle,
-                "Reverses the wheel and trackpad scroll direction sent to the host.",
+                client::player_invert_scroll_hint(),
             ),
         ],
         None,
@@ -112,8 +107,10 @@ pub(super) fn quick_actions_section(cx: &Cx) -> Vec<View> {
                 set_status: set_status.clone(),
             },
         ),
-        "The dial Ctrl+Alt+Shift+O, a two-finger twist or Select+A opens in a stream: what \
-         its six buttons hold, and the shortcut chords they can send. A preset that \
-         changes it owns the whole dial.",
+        &format!(
+            "{} {}",
+            desktop::desktop_player_overlay_actions_hint("Ctrl+Alt+Shift+O", "Select+A"),
+            desktop::desktop_player_overlay_actions_preset_hint(),
+        ),
     )]
 }

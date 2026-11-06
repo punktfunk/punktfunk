@@ -28,7 +28,9 @@ use super::style::*;
 use super::{AppCtx, AsyncSetState, Msg, Shell};
 use crate::trust::Settings;
 use pf_client_core::presets::{PresetsFile, SettingsOverlay, StreamPreset};
+use pf_client_core::settings::Label;
 use pf_fluent::{Palette, Token};
+use pf_l10n::{client, common, desktop};
 use std::sync::Arc;
 use windows_reactor::*;
 
@@ -184,9 +186,17 @@ fn setting_combo(
         })
 }
 
+/// A `(value, message)` table with each message read now, for the page being drawn.
+fn labeled<V: Copy>(table: &[(V, Label)]) -> Vec<(V, &'static str)> {
+    table.iter().map(|(v, l)| (*v, l())).collect()
+}
+
 /// The labels of a `(value, label)` preset table, plus the index of `is_current`'s match.
-fn presets<V>(table: &[(V, &str)], is_current: impl Fn(&V) -> bool) -> (Vec<String>, usize) {
-    let names = table.iter().map(|(_, l)| l.to_string()).collect();
+fn presets<V, L: AsRef<str>>(
+    table: &[(V, L)],
+    is_current: impl Fn(&V) -> bool,
+) -> (Vec<String>, usize) {
+    let names = table.iter().map(|(_, l)| l.as_ref().to_string()).collect();
     let current = table.iter().position(|(v, _)| is_current(v)).unwrap_or(0);
     (names, current)
 }
@@ -202,8 +212,8 @@ fn setting_toggle(
 ) -> ToggleSwitch {
     ToggleSwitch::new()
         .is_on(on)
-        .on_content("On")
-        .off_content("Off")
+        .on_content(common::common_on())
+        .off_content(common::common_off())
         .on_toggled(committer(cx, scope, field, apply))
 }
 
@@ -246,7 +256,7 @@ fn described_overridable(
     let pill = Border::new()
         .content(
             hstack((
-                text("Overridden")
+                text(client::prefs_overridden())
                     .font_size(11.0)
                     .font_weight(FontWeight::SEMI_BOLD)
                     .foreground(pal.get(Token::SystemAttention))
@@ -255,7 +265,7 @@ fn described_overridable(
                 blank(1.0, 12.0)
                     .background(ThemeBrush::CardStroke)
                     .vertical_alignment(VerticalAlignment::Center),
-                text("Reset")
+                text(common::common_reset())
                     .font_size(11.0)
                     .font_weight(FontWeight::SEMI_BOLD)
                     .foreground(ThemeBrush::AccentText)
@@ -277,7 +287,7 @@ fn described_overridable(
         // did: the bump re-renders the row showing the inherited value.
         saved(r, &set_status, Some((rev, &set_rev)));
     })
-    .tooltip("Overridden by this preset \u{2014} Reset returns it to Default settings");
+    .tooltip(client::prefs_override_help());
     vstack((
         row_label(label),
         reset_pill,
@@ -367,12 +377,12 @@ fn group(
 /// which shows them. Nothing when none changed.
 fn advanced_group(cx: &Cx, fields: Vec<View>, changed: usize, overridden: bool) -> Vec<View> {
     if cx.s.show_advanced || overridden {
-        return group(cx.pal, Some("Advanced"), fields, None);
+        return group(cx.pal, Some(client::prefs_advanced()), fields, None);
     }
     if changed == 0 || cx.preset_mode {
         return Vec::new();
     }
-    let label = pf_l10n::client::prefs_advanced_changed(changed as u64);
+    let label = client::prefs_advanced_changed(changed as u64);
     let (ctx, rev, set_rev, set_status) = (
         cx.ctx.clone(),
         cx.rev,
@@ -421,15 +431,23 @@ impl Cx<'_> {
     }
 }
 
-/// The sidebar's sections in the Apple client's order: tag, title, Lucide mark.
-const SECTIONS: [(&str, &str, &str); 7] = [
-    ("general", "General", "settings"),
-    ("display", "Display", "maximize"),
-    ("input", "Input", "keyboard"),
-    ("quick_actions", "Quick actions", "rotate-cw"),
-    ("audio", "Audio", "volume-2"),
-    ("controllers", "Controllers", "gamepad-2"),
-    ("about", "About", "circle-help"),
+/// The sidebar's sections in the Apple client's order: tag, title message, Lucide mark.
+const SECTIONS: [(&str, Label, &str); 7] = [
+    ("general", client::prefs_category_general, "settings"),
+    ("display", client::prefs_category_display, "maximize"),
+    ("input", client::prefs_category_input, "keyboard"),
+    (
+        "quick_actions",
+        client::prefs_category_quick_actions,
+        "rotate-cw",
+    ),
+    ("audio", client::prefs_category_audio, "volume-2"),
+    (
+        "controllers",
+        client::prefs_category_controllers,
+        "gamepad-2",
+    ),
+    ("about", client::prefs_category_about, "circle-help"),
 ];
 
 /// The settings screen: a stock WinUI `NavigationView` (the Windows-Settings sidebar pattern),
@@ -494,14 +512,14 @@ pub(crate) fn settings_page(shell: &Shell) -> View {
     let title = SECTIONS
         .iter()
         .find(|(tag, ..)| *tag == section)
-        .map_or("General", |(_, title, _)| title);
+        .map_or_else(client::prefs_category_general, |(_, title, _)| title());
 
     let items = SECTIONS.iter().map(|(tag, title, mark)| {
         KeyedView::new(
             *tag,
             NavigationViewItem::new()
                 .tag(tag)
-                .content(*title)
+                .content(title())
                 .icon(lucide::icon(mark, pal))
                 .is_selected(*tag == section),
         )
@@ -536,7 +554,7 @@ pub(crate) fn settings_page(shell: &Shell) -> View {
         // ScrollView scrolls through its direct child's Translation, and a Translation write
         // stops that scroll until the child resizes. The tweened column stays one Border in.
         .content(ScrollView::new().content(Border::new().content(column)))
-        .pane_title("Settings")
+        .pane_title(client::prefs_title())
         .on_selected_tag_changed({
             let ss = shell.set(Msg::SettingsNav);
             move |tag: Option<std::rc::Rc<str>>| {
@@ -562,11 +580,8 @@ pub(crate) fn settings_page(shell: &Shell) -> View {
             Border::new()
                 .content(
                     InfoBar::new()
-                        .title("Your changes aren\u{2019}t being saved")
-                        .message(format!(
-                            "Punktfunk can\u{2019}t write to its settings folder, so nothing \
-                             on this page will survive a restart. {err}"
-                        ))
+                        .title(desktop::desktop_prefs_not_saved_title())
+                        .message(format!("{} {err}", desktop::desktop_prefs_not_saved_body()))
                         .severity(InfoBarSeverity::Error)
                         .is_open(true)
                         .is_closable(false),

@@ -1,12 +1,14 @@
 //! Display: resolution, picture, decoding, presentation and host output.
 
 use super::{
-    advanced_group, commit, described_labeled, described_overridable, group, presets, rows,
-    setting_combo, setting_toggle, Cx,
+    advanced_group, commit, described_labeled, described_overridable, group, labeled, presets,
+    rows, setting_combo, setting_toggle, Cx,
 };
 use crate::app::style::*;
 use crate::trust::Settings;
+use pf_client_core::settings::Label;
 use pf_fluent::Token;
+use pf_l10n::{client, common, desktop};
 use windows_reactor::*;
 
 /// Sizes by family; the Resolution combo lists one family at a time behind the Aspect combo.
@@ -20,67 +22,77 @@ use punktfunk_core::render_scale::PRESETS as RENDER_SCALES;
 /// A compact label for a render-scale multiplier: "Native" / "1.5×" / "2× (supersample)".
 fn render_scale_label(scale: f64) -> String {
     if scale == 1.0 {
-        "Native".to_string()
+        client::player_render_scale_native().to_string()
     } else if scale > 1.0 {
-        format!("{scale}\u{00D7} (supersample)")
+        client::player_render_scale_supersample(scale)
     } else {
         format!("{scale}\u{00D7}")
     }
 }
-/// Decode backend presets: `(stored value, display label)`.
+/// Decode backend presets: `(stored value, label)`. A label is a message, read when the page
+/// renders; a format or product name is a literal.
 // A stored legacy value that matches no preset (the D3D11VA-era "hardware", and since M10
 // the bare "vulkan"/"d3d11va" that named libavcodec's rungs) shows as Automatic — which is
 // how the session's ladder reads "hardware", and near enough for the other two, which
 // `pf_client_core::video::migrate_decoder_pref` maps onto the entries below anyway.
-const DECODERS: &[(&str, &str)] = &[
-    ("auto", "Automatic (GPU, fall back to CPU)"),
-    ("native-vulkan", "Hardware (Vulkan Video)"),
-    ("native-d3d11va", "Hardware (Direct3D 11 / DXVA)"),
-    ("software", "Software (CPU)"),
+const DECODERS: &[(&str, Label)] = &[
+    ("auto", client::player_decoder_auto),
+    ("native-vulkan", || "Vulkan Video"),
+    ("native-d3d11va", || "Direct3D 11"),
+    ("software", client::player_decoder_software),
 ];
 /// Preferred-codec presets: `(stored value, display label)`. Soft — the host falls back if it
 /// can't encode the chosen codec.
-const CODECS: &[(&str, &str)] = &[
-    ("auto", "Automatic"),
-    ("hevc", "HEVC (H.265)"),
-    ("h264", "H.264 (AVC)"),
-    ("av1", "AV1"),
+const CODECS: &[(&str, Label)] = &[
+    ("auto", client::player_codec_auto),
+    ("hevc", || "HEVC (H.265)"),
+    ("h264", || "H.264 (AVC)"),
+    ("av1", || "AV1"),
     // Preference-only by design: `resolve_codec` never auto-picks PyroWave, and asking for
     // it on a host or device that can't do it simply falls back down the ladder to HEVC.
-    ("pyrowave", "PyroWave (wired LAN)"),
+    ("pyrowave", client::player_codec_pyrowave),
 ];
 /// `video_fit`: `(stored value, display label)`. Unknown values show as Fit.
-const VIDEO_FITS: &[(&str, &str)] = &[
-    ("fit", "Fit"),
-    ("crop", "Crop to fill"),
-    ("stretch", "Stretch to fill"),
+const VIDEO_FITS: &[(&str, Label)] = &[
+    ("fit", client::player_video_fit_fit),
+    ("crop", client::player_video_fit_crop),
+    ("stretch", client::player_video_fit_stretch),
 ];
 /// `screens`: `(stored value, display label)`. Unknown values show as This monitor.
-const SCREENS: &[(&str, &str)] = &[("this", "This monitor"), ("all", "All monitors")];
+const SCREENS: &[(&str, Label)] = &[
+    ("this", client::player_screens_this),
+    ("all", client::player_screens_all),
+];
 /// Presentation intent: `(stored value, display label)` — the `present_priority` key the
 /// Apple and Android clients share, so one preset means the same thing everywhere.
-const PRESENT_PRIORITIES: &[(&str, &str)] =
-    &[("latency", "Lowest latency"), ("smooth", "Smoothness")];
-/// Smoothness buffer depth in frames: `(stored value, display label)`. `0` = Automatic,
-/// which resolves to 2 (`PresentPriority::resolve`). No millisecond hints — the cost is
-/// one refresh per frame, and the refresh isn't known here when the mode is Native.
-const SMOOTH_BUFFERS: &[(u8, &str)] = &[
-    (0, "Automatic"),
-    (1, "1 frame"),
-    (2, "2 frames"),
-    (3, "3 frames"),
+const PRESENT_PRIORITIES: &[(&str, Label)] = &[
+    ("latency", client::player_present_priority_latency),
+    ("smooth", client::player_present_priority_smooth),
 ];
+/// Smoothness buffer depths in frames, as stored. `0` = Automatic, which resolves to 2
+/// (`PresentPriority::resolve`). No millisecond hints — the cost is one refresh per frame, and
+/// the refresh isn't known here when the mode is Native.
+const SMOOTH_BUFFERS: [u8; 4] = [0, 1, 2, 3];
+
+/// The label of one [`SMOOTH_BUFFERS`] depth.
+fn smooth_buffer_label(frames: u8) -> String {
+    if frames == 0 {
+        client::player_smooth_buffer_automatic().to_string()
+    } else {
+        client::player_smooth_buffer_frames(u64::from(frames))
+    }
+}
 /// Host compositor presets: `(stored value, display label)`. Advisory — the host falls back to
 /// auto-detect when the choice is unavailable. Only meaningful against a Linux host.
-const COMPOSITORS: &[(&str, &str)] = &[
-    ("auto", "Automatic"),
-    ("kwin", "KWin"),
-    ("mutter", "Mutter (GNOME)"),
-    ("hyprland", "Hyprland"),
-    ("niri", "niri"),
-    ("umbriel", "Umbriel"),
-    ("wlroots", "wlroots (Sway/River)"),
-    ("gamescope", "gamescope"),
+const COMPOSITORS: &[(&str, Label)] = &[
+    ("auto", client::player_compositor_auto),
+    ("kwin", || "KWin"),
+    ("mutter", || "Mutter (GNOME)"),
+    ("hyprland", || "Hyprland"),
+    ("niri", || "niri"),
+    ("umbriel", || "Umbriel"),
+    ("wlroots", || "wlroots (Sway/River)"),
+    ("gamescope", || "gamescope"),
 ];
 
 /// Display: resolution, quality, decoding, presentation, host output.
@@ -117,11 +129,14 @@ pub(super) fn display_section(cx: &Cx) -> Vec<View> {
     let custom =
         !s.match_window && s.width != 0 && (cx.custom_res || !sizes.contains(&(s.width, s.height)));
     let (res_names, res_i) = {
-        let names: Vec<String> = ["Native display".to_string(), "Match window".to_string()]
-            .into_iter()
-            .chain(sizes.iter().map(|&(w, h)| format!("{w} \u{00D7} {h}")))
-            .chain(["Custom\u{2026}".to_string()])
-            .collect();
+        let names: Vec<String> = [
+            client::player_resolution_native().to_string(),
+            client::player_resolution_match_window().to_string(),
+        ]
+        .into_iter()
+        .chain(sizes.iter().map(|&(w, h)| format!("{w} \u{00D7} {h}")))
+        .chain([client::player_resolution_custom().to_string()])
+        .collect();
         let i = if s.match_window {
             1
         } else if custom {
@@ -183,11 +198,11 @@ pub(super) fn display_section(cx: &Cx) -> Vec<View> {
             View::from(res_combo),
             hstack((
                 size_box(s.width, punktfunk_core::resolutions::MIN_WIDTH, true)
-                    .header("Width")
+                    .header(client::player_resolution_width())
                     .width(120.0),
                 text("\u{00D7}").vertical_alignment(VerticalAlignment::Bottom),
                 size_box(s.height, punktfunk_core::resolutions::MIN_HEIGHT, false)
-                    .header("Height")
+                    .header(client::player_resolution_height())
                     .width(120.0),
             ))
             .spacing(8.0),
@@ -202,9 +217,9 @@ pub(super) fn display_section(cx: &Cx) -> Vec<View> {
             .iter()
             .map(|&r| {
                 if r == 0 {
-                    "Native".into()
+                    client::player_refresh_hz_native().into()
                 } else {
-                    format!("{r} Hz")
+                    common::common_hz(r)
                 }
             })
             .collect();
@@ -222,7 +237,7 @@ pub(super) fn display_section(cx: &Cx) -> Vec<View> {
     let scale_names: Vec<String> = RENDER_SCALES
         .iter()
         .map(|&x| render_scale_label(x))
-        .chain(["Custom\u{2026}".to_string()])
+        .chain([client::player_render_scale_custom().to_string()])
         .collect();
     let scale_i = match scale_stop {
         Some(i) if !custom_scale => i,
@@ -255,7 +270,7 @@ pub(super) fn display_section(cx: &Cx) -> Vec<View> {
                 .value(f64::from(percent))
                 .minimum(50.0)
                 .maximum(400.0)
-                .header("Percent")
+                .header(client::player_render_scale_percent())
                 .width(120.0)
                 .on_value_changed(move |v: Option<f64>| {
                     // A cleared box is no scale, not Native.
@@ -280,7 +295,7 @@ pub(super) fn display_section(cx: &Cx) -> Vec<View> {
     } else {
         scale_combo.into()
     };
-    let (comp_names, comp_i) = presets(COMPOSITORS, |v| *v == s.compositor);
+    let (comp_names, comp_i) = presets(&labeled(COMPOSITORS), |v| *v == s.compositor);
     let comp_combo = setting_combo(cx, scope, "compositor", comp_names, comp_i, |s, i| {
         s.compositor = COMPOSITORS[i].0.to_string();
     });
@@ -288,7 +303,7 @@ pub(super) fn display_section(cx: &Cx) -> Vec<View> {
     // holds `vulkan`/`d3d11va`, which match no preset — the combo would show Automatic and
     // a save would silently rewrite the user's hardware preference to `auto`.
     let stored_decoder = pf_client_core::video::migrate_decoder_pref(&s.decoder);
-    let (dec_names, dec_i) = presets(DECODERS, |v| *v == stored_decoder);
+    let (dec_names, dec_i) = presets(&labeled(DECODERS), |v| *v == stored_decoder);
     let decoder_combo = setting_combo(cx, scope, "decoder", dec_names, dec_i, |s, i| {
         s.decoder = DECODERS[i].0.to_string();
     });
@@ -296,7 +311,7 @@ pub(super) fn display_section(cx: &Cx) -> Vec<View> {
     // Stored as the adapter description; empty = automatic (the window's monitor's adapter).
     let gpus = ctx.probes.lock().unwrap().gpus.clone();
     let gpu_combo = (gpus.len() > 1).then(|| {
-        let mut names = vec!["Automatic (the display's GPU)".to_string()];
+        let mut names = vec![desktop::desktop_adapter_auto().to_string()];
         names.extend(gpus.iter().cloned());
         let current = gpus
             .iter()
@@ -311,7 +326,7 @@ pub(super) fn display_section(cx: &Cx) -> Vec<View> {
             };
         })
     });
-    let (codec_names, codec_i) = presets(CODECS, |v| *v == s.codec);
+    let (codec_names, codec_i) = presets(&labeled(CODECS), |v| *v == s.codec);
     let codec_combo = setting_combo(cx, scope, "codec", codec_names, codec_i, |s, i| {
         s.codec = CODECS[i].0.to_string();
     });
@@ -396,15 +411,16 @@ pub(super) fn display_section(cx: &Cx) -> Vec<View> {
     // Presentation intent (design/desktop-presentation-rebuild.md). The buffer row is
     // rendered only under Smoothness — `commit` bumps the revision, so flipping the
     // intent re-renders the section and the row appears/disappears with it.
-    let (fit_names, fit_i) = presets(VIDEO_FITS, |v| *v == s.video_fit);
+    let (fit_names, fit_i) = presets(&labeled(VIDEO_FITS), |v| *v == s.video_fit);
     let fit_combo = setting_combo(cx, scope, "video_fit", fit_names, fit_i, |s, i| {
         s.video_fit = VIDEO_FITS[i].0.to_string();
     });
-    let (screens_names, screens_i) = presets(SCREENS, |v| *v == s.screens);
+    let (screens_names, screens_i) = presets(&labeled(SCREENS), |v| *v == s.screens);
     let screens_combo = setting_combo(cx, scope, "screens", screens_names, screens_i, |s, i| {
         s.screens = SCREENS[i].0.to_string();
     });
-    let (present_names, present_i) = presets(PRESENT_PRIORITIES, |v| *v == s.present_priority);
+    let (present_names, present_i) =
+        presets(&labeled(PRESENT_PRIORITIES), |v| *v == s.present_priority);
     let present_combo = setting_combo(
         cx,
         scope,
@@ -414,14 +430,18 @@ pub(super) fn display_section(cx: &Cx) -> Vec<View> {
         |s, i| s.present_priority = PRESENT_PRIORITIES[i].0.to_string(),
     );
     let smoothing = s.present_priority == "smooth";
-    let (buffer_names, buffer_i) = presets(SMOOTH_BUFFERS, |v| *v == s.smooth_buffer);
+    let buffer_labels: Vec<(u8, String)> = SMOOTH_BUFFERS
+        .iter()
+        .map(|&n| (n, smooth_buffer_label(n)))
+        .collect();
+    let (buffer_names, buffer_i) = presets(&buffer_labels, |v| *v == s.smooth_buffer);
     let buffer_combo = setting_combo(
         cx,
         scope,
         "smooth_buffer",
         buffer_names,
         buffer_i,
-        |s, i| s.smooth_buffer = SMOOTH_BUFFERS[i].0,
+        |s, i| s.smooth_buffer = SMOOTH_BUFFERS[i],
     );
     let vsync_toggle = setting_toggle(cx, scope, "vsync", s.vsync, |s, on| s.vsync = on);
     let vrr_toggle = setting_toggle(cx, scope, "allow_vrr", s.allow_vrr, |s, on| {
@@ -430,30 +450,25 @@ pub(super) fn display_section(cx: &Cx) -> Vec<View> {
 
     let mut out = group(
         cx.pal,
-        Some("Resolution"),
+        Some(client::prefs_group_resolution()),
         vec![
             described_labeled(
                 cx.pal,
-                "Aspect ratio",
+                client::player_resolution_aspect(),
                 aspect_combo,
-                "Which shapes the Resolution list offers. Picking one moves to its \
-                 size nearest the current height.",
+                client::player_resolution_aspect_hint(),
             ),
             described_overridable(
                 cx,
                 &rows::RESOLUTION,
                 res_control,
-                "The host drives a real virtual output at exactly this size \u{2014} true \
-                 pixels, no scaling. \u{201C}Native display\u{201D} follows the monitor this \
-                 window is on; \u{201C}Match window\u{201D} keeps the picture pixel-exact \
-                 (1:1) through every resize.",
+                client::player_resolution_hint(),
             ),
             described_overridable(
                 cx,
                 &rows::REFRESH,
                 hz_combo,
-                "\u{201C}Native\u{201D} resolves to this display\u{2019}s refresh rate at \
-                 connect.",
+                client::player_refresh_hz_hint(),
             ),
         ],
         None,
@@ -465,21 +480,20 @@ pub(super) fn display_section(cx: &Cx) -> Vec<View> {
         let auto = setting_toggle(cx, scope, "bitrate_kbps", s.bitrate_kbps == 0, |s, on| {
             s.bitrate_kbps = if on { 0 } else { PYROWAVE_FIXED_KBPS };
         })
-        .on_content("Automatic")
-        .off_content("Fixed");
+        .on_content(client::player_bitrate_kbps_automatic())
+        .off_content(client::player_bitrate_kbps_fixed());
         picture.push(described_overridable(
             cx,
             &rows::BITRATE,
             auto,
-            pf_l10n::client::player_bitrate_kbps_pyrowave_hint(),
+            client::player_bitrate_kbps_pyrowave_hint(),
         ));
     } else {
         picture.push(described_overridable(
             cx,
             &rows::BITRATE,
             bitrate_box,
-            "In Mb/s. 0 lets the host decide (its default, clamped to what it supports). A \
-             host card\u{2019}s context menu has a network speed test.",
+            desktop::desktop_bitrate_kbps_hint(),
         ));
     }
     picture.extend([
@@ -487,42 +501,27 @@ pub(super) fn display_section(cx: &Cx) -> Vec<View> {
             cx,
             &rows::VIDEO_FIT,
             fit_combo,
-            "When the stream's shape differs from the window. Fit shows the whole \
-             picture with black bars, Crop to fill cuts the edges off, Stretch to \
-             fill distorts it.",
+            client::player_video_fit_hint(),
         ),
         described_overridable(
             cx,
             &rows::SCREENS,
             screens_combo,
-            "All monitors opens a fullscreen window on each of this computer's monitors, \
-             one host screen each, laid out as your monitors sit. Close a window to give \
-             its monitor back.",
+            client::player_screens_hint(),
         ),
         described_overridable(
             cx,
             &rows::HDR,
             hdr_toggle,
-            "HDR10, when the host has HDR content and this display supports it. \
-             With H.264 the stream stays SDR.",
+            client::player_hdr_enabled_hint(),
         ),
         described_overridable(
             cx,
             &rows::PRESENT,
             present_combo,
-            "Lowest latency shows each frame the moment the display can take \
-             it \u{2014} a network hiccup becomes an occasional repeated or \
-             skipped frame. Smoothness buffers a little to even those out.",
+            client::player_present_priority_hint(),
         ),
-        described_overridable(
-            cx,
-            &rows::CODEC,
-            codec_combo,
-            "A preference \u{2014} the host falls back if it can\u{2019}t encode it. \
-             PyroWave is the low-latency wavelet codec for a WIRED link: it trades \
-             bitrate (hundreds of Mb/s) for near-zero decode time, so it wants \
-             gigabit Ethernet.",
-        ),
+        described_overridable(cx, &rows::CODEC, codec_combo, client::player_codec_hint()),
     ]);
     if pyrowave {
         picture.push(described_overridable(
@@ -534,10 +533,10 @@ pub(super) fn display_section(cx: &Cx) -> Vec<View> {
     }
     out.extend(group(
         cx.pal,
-        Some("Picture"),
+        Some(client::prefs_group_picture()),
         picture,
         // The one form-level note, exactly as on Apple.
-        Some("Display changes apply from the next session."),
+        Some(client::prefs_applies_next_session()),
     ));
 
     let d = Settings::default();
@@ -547,8 +546,7 @@ pub(super) fn display_section(cx: &Cx) -> Vec<View> {
             cx,
             &rows::SMOOTH_BUFFER,
             buffer_combo,
-            "Frames held back before showing. Each one absorbs about a refresh of \
-             network hiccup and adds a refresh of delay. Automatic holds two.",
+            client::player_smooth_buffer_hint(),
         ));
     }
     advanced.extend([
@@ -556,8 +554,7 @@ pub(super) fn display_section(cx: &Cx) -> Vec<View> {
             cx,
             &rows::RENDER_SCALE,
             scale_control,
-            "Above native supersamples for sharpness; below renders lighter on the \
-             host and the link. This device resamples the result to the window.",
+            client::player_render_scale_hint(),
         ),
         // First sentence shared with the GTK client (its chroma_row); the constraint
         // sentence names the real gate (host: PyroWave || NVENC).
@@ -565,40 +562,21 @@ pub(super) fn display_section(cx: &Cx) -> Vec<View> {
             cx,
             &rows::CHROMA,
             chroma_toggle,
-            "Full-colour video: crisp small text and thin lines, at more bandwidth. \
-             Requires an NVIDIA host (NVENC) or the PyroWave codec \u{2014} other \
-             encoders stream 4:2:0.",
+            client::player_enable_444_hint(),
         ),
         described_overridable(
             cx,
             &rows::TEN_BIT_SDR,
             ten_bit_sdr_toggle,
-            "Smoother gradients without HDR \u{2014} the picture is encoded at 10-bit \
-             precision. Needs an NVIDIA host; HDR takes over when it engages.",
+            client::player_ten_bit_sdr_hint(),
         ),
-        described_overridable(
-            cx,
-            &rows::VSYNC,
-            vsync_toggle,
-            "Tear-free. Turning it off removes the wait for the screen\u{2019}s refresh \
-             \u{2014} the lowest possible delay, at the cost of visible tearing. Not \
-             every driver offers it; the stats overlay names the mode actually in use.",
-        ),
-        described_overridable(
-            cx,
-            &rows::VRR,
-            vrr_toggle,
-            "On a VRR/FreeSync/G-Sync screen, let the panel refresh in step with the \
-             stream instead of on a fixed cadence. Applies to fullscreen sessions; \
-             harmless on a fixed-refresh screen.",
-        ),
+        described_overridable(cx, &rows::VSYNC, vsync_toggle, client::player_vsync_hint()),
+        described_overridable(cx, &rows::VRR, vrr_toggle, client::player_allow_vrr_hint()),
         described_overridable(
             cx,
             &rows::COMPOSITOR,
             comp_combo,
-            "The backend the host uses for its virtual output (Linux hosts only). A \
-             specific choice falls back to auto-detection when that backend \
-             isn\u{2019}t available.",
+            client::player_compositor_hint(),
         ),
     ]);
     // Decoder, GPU and the screen saver are facts about THIS device — never per preset.
@@ -609,24 +587,20 @@ pub(super) fn display_section(cx: &Cx) -> Vec<View> {
             setting_toggle(cx, scope, "keep_awake", s.keep_awake, |s, on| {
                 s.keep_awake = on
             }),
-            "Off, a stream keeps the screen awake only while you play. Left alone for \
-             five minutes, it lets Windows\u{2019} own screen saver or sleep take over.",
+            client::player_keep_awake_hint(),
         ));
         advanced.push(described_labeled(
             cx.pal,
             rows::DECODER.label(),
             decoder_combo,
-            "Automatic picks the hardware path this GPU does best \u{2014} Direct3D 11 on \
-             Intel, Vulkan Video on NVIDIA and AMD \u{2014} and falls back to the CPU. \
-             Change it only when debugging.",
+            client::player_decoder_hint(),
         ));
         if let Some(c) = gpu_combo {
             advanced.push(described_labeled(
                 cx.pal,
                 rows::ADAPTER.label(),
                 c,
-                "Which adapter decodes and presents the stream. Automatic uses the GPU \
-                 driving this window\u{2019}s display.",
+                desktop::desktop_adapter_hint(),
             ));
         }
     }

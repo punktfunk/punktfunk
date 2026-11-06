@@ -5,22 +5,24 @@ use crate::app::style::*;
 use crate::app::{saved, AsyncSetState};
 use crate::trust::KnownHosts;
 use pf_client_core::presets::{PresetsFile, StreamPreset};
+use pf_client_core::settings::Label;
+use pf_l10n::{client, common, desktop};
 use windows_reactor::*;
 
 /// The chip palette a preset can carry (`StreamPreset.accent`), same set as the GTK client so
 /// a preset looks the same on both. Eight legible colours rather than a free picker: the job is
 /// telling presets apart at a glance on a host tile, and the schema still accepts any
 /// `#RRGGBB` a hand-edit writes.
-const SWATCHES: &[(&str, &str)] = &[
-    ("", "None"),
-    ("#e01b24", "Red"),
-    ("#ff7800", "Orange"),
-    ("#f6d32d", "Yellow"),
-    ("#33d17a", "Green"),
-    ("#3584e4", "Blue"),
-    ("#9141ac", "Purple"),
-    ("#d16d9e", "Pink"),
-    ("#77767b", "Slate"),
+const SWATCHES: &[(&str, Label)] = &[
+    ("", client::preset_color_none),
+    ("#e01b24", client::preset_color_red),
+    ("#ff7800", client::preset_color_orange),
+    ("#f6d32d", desktop::desktop_preset_color_yellow),
+    ("#33d17a", client::preset_color_green),
+    ("#3584e4", client::preset_color_blue),
+    ("#9141ac", desktop::desktop_preset_color_purple),
+    ("#d16d9e", client::preset_color_pink),
+    ("#77767b", desktop::desktop_preset_color_slate),
 ];
 
 /// `#RRGGBB` to a brush colour. Anything else is refused rather than guessed at — the value is
@@ -40,12 +42,13 @@ pub(crate) fn hex_color(hex: &str) -> Option<Color> {
 /// The colour row: one tappable swatch per palette entry, the current one ringed.
 fn colour_swatches(cx: &Cx, preset: &StreamPreset) -> View {
     let current = preset.accent.clone().unwrap_or_default();
-    let mut row: Vec<View> = vec![muted(cx.pal, "Colour")
+    let mut row: Vec<View> = vec![muted(cx.pal, client::preset_color())
         .font_size(12.0)
         .vertical_alignment(VerticalAlignment::Center)
         .margin(edges(0.0, 0.0, 6.0, 0.0))
         .into()];
     for (hex, name) in SWATCHES {
+        let name = name();
         let selected = current == *hex;
         // "None" (and anything unparsable) draws as a faint neutral disc, so the row still
         // reads as a palette with a clear "no colour" end.
@@ -68,7 +71,7 @@ fn colour_swatches(cx: &Cx, preset: &StreamPreset) -> View {
                 });
                 saved(r, &set_status, Some((rev, &set_rev)));
             })
-            .tooltip(*name),
+            .tooltip(name),
         );
     }
     hstack(row).spacing(8.0).into()
@@ -98,7 +101,7 @@ pub(super) fn edit_preset_modal(
     set_edit: &AsyncSetState<bool>,
 ) -> View {
     let (rev, set_rev, pal) = (cx.rev, cx.set_rev, cx.pal);
-    let mut rows: Vec<View> = vec![text("Edit preset")
+    let mut rows: Vec<View> = vec![text(client::preset_edit_title())
         .font_size(20.0)
         .font_weight(FontWeight::BOLD)
         .into()];
@@ -107,8 +110,8 @@ pub(super) fn edit_preset_modal(
         rows.push(
             TextBox::new()
                 .text(&preset.name)
-                .header("Name")
-                .placeholder_text("Preset name")
+                .header(client::preset_name())
+                .placeholder_text(client::preset_name_placeholder())
                 .on_text_changed(move |t: std::rc::Rc<str>| {
                     let name = t.trim().to_string();
                     if name.is_empty() {
@@ -122,15 +125,10 @@ pub(super) fn edit_preset_modal(
         rows.push(colour_swatches(cx, preset));
     }
     rows.push(
-        muted(
-            pal,
-            "A preset overrides only what you change while it is selected; everything \
-             else follows Default settings. Renaming applies as you type. Deleting leaves \
-             hosts that used it on Default settings.",
-        )
-        .font_size(12.0)
-        .text_wrapping(TextWrapping::Wrap)
-        .into(),
+        muted(pal, desktop::desktop_preset_sheet_hint())
+            .font_size(12.0)
+            .text_wrapping(TextWrapping::Wrap)
+            .into(),
     );
     let mut buttons: Vec<View> = Vec::new();
     if let Some(p) = preset {
@@ -138,7 +136,7 @@ pub(super) fn edit_preset_modal(
         let (dup_id, set_scope) = (id.clone(), set_scope.clone());
         let (set_rev, set_status) = (set_rev.clone(), cx.set_status.clone());
         buttons.push(
-            icon_button("copy", "Duplicate")
+            icon_button("copy", common::common_duplicate())
                 .on_click(move || {
                     let r = PresetsFile::update(|catalog| catalog.duplicate(&dup_id));
                     // The sheet stays open and now edits the copy — scope follows it.
@@ -150,7 +148,7 @@ pub(super) fn edit_preset_modal(
         );
         let set_delete = set_delete.clone();
         buttons.push(
-            icon_button("trash-2", "Delete\u{2026}")
+            icon_button("trash-2", client::preset_menu_delete())
                 .on_click(move || set_delete.call(Some(id.clone())))
                 .into(),
         );
@@ -168,7 +166,7 @@ pub(super) fn edit_preset_modal(
     };
     let save = close_sheet.clone();
     buttons.push(
-        icon_button("save", "Save")
+        icon_button("save", common::common_save())
             .style(ButtonStyle::Accent)
             .on_click(save)
             .into(),
@@ -202,7 +200,7 @@ pub(super) fn scope_bar(
 ) -> View {
     let catalog = PresetsFile::load();
     let mut picks = vec![ScopePick::Default];
-    let mut items = vec![MenuItem::item("0", "Default settings")];
+    let mut items = vec![MenuItem::item("0", client::prefs_scope_defaults())];
     for p in &catalog.presets {
         items.push(MenuItem::item(picks.len().to_string(), p.name.as_str()));
         picks.push(ScopePick::Preset(p.id.clone()));
@@ -210,15 +208,15 @@ pub(super) fn scope_bar(
     items.push(MenuItem::separator("sep"));
     items.push(MenuItem::item(
         picks.len().to_string(),
-        "New preset\u{2026}",
+        client::preset_new(),
     ));
     picks.push(ScopePick::New);
     if let Some(p) = active {
-        let label = format!("Edit \u{201c}{}\u{201d}\u{2026}", p.name);
+        let label = client::preset_menu_edit_named(&p.name);
         items.push(MenuItem::item(picks.len().to_string(), label));
         picks.push(ScopePick::Edit);
     }
-    let scope_label = active.map_or("Default settings", |p| p.name.as_str());
+    let scope_label = active.map_or(client::prefs_scope_defaults(), |p| p.name.as_str());
     let (set_scope, set_edit) = (set_scope.clone(), set_edit.clone());
     let (rev, set_rev, set_status) = (cx.rev, cx.set_rev.clone(), cx.set_status.clone());
     let menu = Menu::new(items, move |key: Key| {
@@ -235,9 +233,9 @@ pub(super) fn scope_bar(
                 // half-created state a Cancel would have to unwind.
                 let r = PresetsFile::update(|catalog| {
                     let name = (1..)
-                        .map(|n| format!("Preset {n}"))
+                        .map(desktop::desktop_preset_auto_name)
                         .find(|n| !catalog.name_taken(n, None))
-                        .unwrap_or_else(|| "Preset".to_string());
+                        .unwrap_or_else(|| desktop::desktop_preset_auto_name_bare().to_string());
                     let preset = StreamPreset::new(name);
                     let new_id = preset.id.clone();
                     catalog.presets.push(preset);
@@ -256,7 +254,7 @@ pub(super) fn scope_bar(
         .content(scope_label)
         .vertical_alignment(VerticalAlignment::Center)
         .menu(menu);
-    let mut row: Vec<View> = vec![muted(cx.pal, "Editing")
+    let mut row: Vec<View> = vec![muted(cx.pal, client::prefs_scope_editing())
         .font_size(13.0)
         .vertical_alignment(VerticalAlignment::Center)
         .into()];
@@ -305,18 +303,14 @@ pub(super) fn delete_dialog(
                 .iter()
                 .filter(|h| h.pinned_presets.iter().any(|x| x == &p.id))
                 .count();
-            let mut body = format!("\u{201c}{}\u{201d} will be removed.", p.name);
+            let mut body = desktop::desktop_preset_delete_body(&p.name);
             if bound > 0 {
-                body.push_str(&format!(
-                    " {bound} host{} will fall back to Default settings.",
-                    if bound == 1 { "" } else { "s" }
-                ));
+                body.push(' ');
+                body.push_str(&client::preset_delete_hosts(bound as u64));
             }
             if pinned > 0 {
-                body.push_str(&format!(
-                    " {pinned} pinned card{} will disappear.",
-                    if pinned == 1 { "" } else { "s" }
-                ));
+                body.push(' ');
+                body.push_str(&client::preset_delete_cards(pinned as u64));
             }
             body
         })
@@ -329,10 +323,10 @@ pub(super) fn delete_dialog(
     );
     let (rev, set_rev, set_status) = (cx.rev, cx.set_rev.clone(), cx.set_status.clone());
     ContentDialog::new()
-        .title("Delete preset?")
+        .title(desktop::desktop_preset_delete_title())
         .content(body)
-        .primary_button_text("Delete")
-        .close_button_text("Cancel")
+        .primary_button_text(common::common_delete())
+        .close_button_text(common::common_cancel())
         .is_open(pending.is_some())
         .on_closed(move |r: ContentDialogResult| {
             set_delete.call(None);

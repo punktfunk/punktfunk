@@ -97,7 +97,7 @@ tracing = "0.1"
 # test where the client is a stub.
 [dev-dependencies]
 serde_json = "1"
-pf-l10n = { path = "../../l10n", features = ["client"] }
+pf-l10n = { path = "../../l10n", features = ["client", "desktop"] }
 
 # Embeds the app icon as an exe resource (build.rs) — Windows hosts only (rc.exe from the SDK).
 [target.'cfg(windows)'.build-dependencies]

@@ -7,19 +7,12 @@ use super::{
 use crate::app::style::*;
 use crate::trust::{KnownHosts, Settings};
 use pf_client_core::settings::GamepadUi;
+use pf_client_core::shortcuts::Press;
 use pf_client_core::start;
 use pf_client_core::trust::{HudCorner, StatsVerbosity};
+use pf_l10n::{client, common, desktop};
 use punktfunk_core::hud::{stats_scale, STATS_SCALE_PCTS};
 use windows_reactor::*;
-
-/// Stats-overlay tiers: `(stored value, display label)` — the cross-client verbosity ladder
-/// (Compact ⊂ Normal ⊂ Detailed); Ctrl+Alt+Shift+S cycles it live in the session window.
-const STATS_TIERS: &[(StatsVerbosity, &str)] = &[
-    (StatsVerbosity::Off, "Off"),
-    (StatsVerbosity::Compact, "Compact"),
-    (StatsVerbosity::Normal, "Normal"),
-    (StatsVerbosity::Detailed, "Detailed"),
-];
 
 /// Names the host the Start in row resolves to, and says when it resolves to nothing — which
 /// is what every value does until one host is paired. The pointer is written from a host's own
@@ -27,14 +20,8 @@ const STATS_TIERS: &[(StatsVerbosity, &str)] = &[
 fn start_in_help() -> String {
     let known = KnownHosts::load();
     match start::default_host(&Settings::load(), &known) {
-        Some(i) => format!(
-            "Library opens {}\u{2019}s games; Stream also connects to its desktop. Back leaves \
-             either one on the host list.",
-            known.hosts[i].name
-        ),
-        None => "Opens on the host list: there is no default host yet. Pair one, or pick one \
-                 from a host\u{2019}s menu when several are paired."
-            .into(),
+        Some(i) => client::player_start_in_host_hint(&known.hosts[i].name),
+        None => client::player_start_in_no_host_hint().into(),
     }
 }
 
@@ -73,15 +60,20 @@ pub(super) fn general_section(cx: &Cx) -> Vec<View> {
         |s, on| s.fullscreen_on_stream = on,
     );
 
-    let (hud_names, hud_i) = presets(STATS_TIERS, |v| *v == s.stats_verbosity());
+    // The cross-client verbosity ladder (Compact ⊂ Normal ⊂ Detailed).
+    let tiers: Vec<(StatsVerbosity, &str)> = StatsVerbosity::ALL
+        .iter()
+        .map(|v| (*v, v.label()))
+        .collect();
+    let (hud_names, hud_i) = presets(&tiers, |v| *v == s.stats_verbosity());
     let hud_combo = setting_combo(cx, scope, "stats_verbosity", hud_names, hud_i, |s, i| {
-        s.set_stats_verbosity(STATS_TIERS[i].0);
+        s.set_stats_verbosity(StatsVerbosity::ALL[i]);
     });
     let advanced_toggle = setting_toggle(cx, scope, "advanced_stats", s.advanced_stats, |s, on| {
         s.advanced_stats = on
     });
     // Explorer hands a URL to the default browser; best-effort, like About's log folder.
-    let stats_docs_button = button("What each number means").on_click(|| {
+    let stats_docs_button = button(client::player_stats_docs_link()).on_click(|| {
         let _ = std::process::Command::new("explorer.exe")
             .arg("https://docs.punktfunk.unom.io/docs/stats")
             .spawn();
@@ -89,13 +81,16 @@ pub(super) fn general_section(cx: &Cx) -> Vec<View> {
 
     let mut out = group(
         cx.pal,
-        Some("Session"),
+        Some(client::prefs_group_session()),
         vec![described_overridable(
             cx,
             &rows::FULLSCREEN_ON_STREAM,
             fullscreen_toggle,
-            "Go fullscreen when a session starts; F11 or Alt+Enter switches back \
-                 live.",
+            &format!(
+                "{} {}",
+                client::player_fullscreen_on_stream_hint(),
+                desktop::desktop_fullscreen_exit_hint(Press::Either("F11", "Alt+Enter")),
+            ),
         )]
         .into_iter()
         // Auto-wake is about this host and this network, not about "Game vs Work" —
@@ -105,9 +100,7 @@ pub(super) fn general_section(cx: &Cx) -> Vec<View> {
                 cx.pal,
                 rows::AUTO_WAKE.label(),
                 auto_wake_toggle,
-                "Connecting to a saved host that\u{2019}s offline sends Wake-on-LAN and \
-                 waits for it to boot. Turn off if hosts behind a VPN look offline when \
-                 they aren\u{2019}t.",
+                client::player_auto_wake_hint(),
             )
         }))
         .chain((!preset_mode).then(|| {
@@ -136,27 +129,29 @@ pub(super) fn general_section(cx: &Cx) -> Vec<View> {
             cx,
             scope,
             rows::GAMEPAD_UI_MODE.key,
-            vec!["With a controller".into(), "Always".into()],
+            vec![
+                client::player_gamepad_ui_mode_connected().into(),
+                client::player_gamepad_ui_mode_always().into(),
+            ],
             usize::from(s.gamepad_ui_always()),
             |s, i| s.set_gamepad_ui_always(i == 1),
         )
         .is_enabled(ui != GamepadUi::Off);
         out.extend(group(
             cx.pal,
-            Some("Console"),
+            Some(client::prefs_group_console()),
             vec![
                 described_labeled(
                     cx.pal,
                     rows::GAMEPAD_UI.label(),
                     on_toggle,
-                    "Opens the console, the interface built for a controller.",
+                    client::player_gamepad_ui_enabled_hint(),
                 ),
                 described_labeled(
                     cx.pal,
                     rows::GAMEPAD_UI_MODE.label(),
                     mode_combo,
-                    "Always opens it at launch. Otherwise it opens when a controller connects, \
-                     and this window returns when the last one disconnects.",
+                    client::player_gamepad_ui_mode_hint(),
                 ),
             ],
             None,
@@ -166,13 +161,21 @@ pub(super) fn general_section(cx: &Cx) -> Vec<View> {
         cx,
         &rows::STATS,
         hud_combo,
-        "Live session stats in a corner overlay \u{2014} Compact is a one-line pill, \
-         Detailed adds the stage breakdown. Ctrl+Alt+Shift+S cycles the tiers any time.",
+        &format!(
+            "{} {}",
+            client::player_stats_verbosity_hint(),
+            client::player_stats_verbosity_cycle_hint("Ctrl+Alt+Shift+S"),
+        ),
     )];
     if !preset_mode {
         stats_rows.push(stats_docs_button.into());
     }
-    out.extend(group(cx.pal, Some("Statistics"), stats_rows, None));
+    out.extend(group(
+        cx.pal,
+        Some(client::prefs_group_statistics()),
+        stats_rows,
+        None,
+    ));
     // Device-wide, and shown in both scopes: it changes what this page lists, not a stream.
     let show_toggle = setting_toggle(cx, "", "show_advanced", s.show_advanced, |s, on| {
         s.show_advanced = on
@@ -184,7 +187,7 @@ pub(super) fn general_section(cx: &Cx) -> Vec<View> {
             cx.pal,
             rows::SHOW_ADVANCED.label(),
             show_toggle,
-            "Adds the settings most players never need to change.",
+            client::player_show_advanced_hint(),
         )],
         None,
     ));
@@ -210,7 +213,10 @@ pub(super) fn general_section(cx: &Cx) -> Vec<View> {
             cx,
             scope,
             "stats_scale_pct",
-            STATS_SCALE_PCTS.iter().map(|p| format!("{p} %")).collect(),
+            STATS_SCALE_PCTS
+                .iter()
+                .map(common::common_percent)
+                .collect(),
             STATS_SCALE_PCTS.iter().position(|p| *p == pct).unwrap_or(1),
             |s, i| s.stats_scale_pct = STATS_SCALE_PCTS[i],
         );
@@ -228,26 +234,25 @@ pub(super) fn general_section(cx: &Cx) -> Vec<View> {
                     cx.pal,
                     rows::ADVANCED_STATS.label(),
                     advanced_toggle,
-                    "Off shows the figures Moonlight's overlay also shows. On shows capture \
-                     to glass as p50/p95 and every stage between.",
+                    client::player_advanced_stats_hint(),
                 ),
                 described_labeled(
                     cx.pal,
                     rows::STATS_POSITION.label(),
                     corner_combo,
-                    "The corner the statistics overlay sits in.",
+                    client::player_hud_placement_hint(),
                 ),
                 described_labeled(
                     cx.pal,
                     rows::STATS_SIZE.label(),
                     size_combo,
-                    pf_l10n::client::player_stats_scale_pct_hint(),
+                    client::player_stats_scale_pct_hint(),
                 ),
                 described_labeled(
                     cx.pal,
                     rows::EXIT_HINT.label(),
                     hint_toggle,
-                    "Shows how to leave for a few seconds when a stream starts.",
+                    client::player_exit_hint_hint(),
                 ),
             ],
             changed,
