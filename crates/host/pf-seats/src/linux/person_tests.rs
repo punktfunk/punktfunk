@@ -7,8 +7,8 @@ use crate::model::CreateSeat;
 use std::os::unix::fs::PermissionsExt as _;
 
 /// The unit's state as `systemctl show` prints it.
-const SHOW: &str =
-    "systemctl show punktfunk-seat@jdoe.service -p ActiveState -p SubState -p Result";
+const SHOW: &str = "systemctl show punktfunk-seat@jdoe.service -p ActiveState -p SubState \
+     -p Result -p ExecMainCode -p ExecMainStatus";
 const STOP: &str = "systemctl stop punktfunk-seat@jdoe.service";
 const RESET: &str = "systemctl reset-failed punktfunk-seat@jdoe.service";
 
@@ -227,6 +227,177 @@ fn only_a_made_seat_is_ours_to_end() {
             "{kind:?}"
         );
     }
+}
+
+/// The login helper gives the session the shell the passwd row names, and none for a user that
+/// doesn't exist.
+#[test]
+fn the_login_shell_is_the_passwd_row_s_last_field() {
+    let rig = rig();
+    let _machine = fake::install(machine(&rig.home, 1500, "inactive", false));
+    assert_eq!(
+        accounts::shell("jdoe").unwrap().as_deref(),
+        Some("/bin/bash")
+    );
+    assert_eq!(accounts::shell("nobody-here").unwrap(), None);
+}
+
+/// The start choice: a person's password starts their session through the login helper, in
+/// PID 1's SELinux context where SELinux is on, and a start without one, a key proof's, through
+/// systemd's own login. So does every start once the helper is off, and with SELinux on every
+/// start whose login socket doesn't carry PID 1's context.
+#[test]
+fn only_a_password_start_goes_through_the_login_helper() {
+    use handover::Label;
+    let password = Secret::new("hunter2 Bärbel".into());
+    let init = "system_u:system_r:init_t:s0".to_owned();
+    let labelled = Label::Init(init.clone());
+    assert_eq!(
+        login_with(Some(&password), &Label::Off, false),
+        Some((&password, None))
+    );
+    assert_eq!(
+        login_with(Some(&password), &labelled, false),
+        Some((&password, Some(init)))
+    );
+    for label in [&Label::Off, &labelled, &Label::Missing] {
+        assert_eq!(login_with(None, label, false), None, "{label:?}");
+        assert_eq!(login_with(Some(&password), label, true), None, "{label:?}");
+    }
+    assert_eq!(login_with(Some(&password), &Label::Missing, false), None);
+}
+
+/// The helper's end decides what a failed start through it does: every end before a session
+/// falls back, PAM's refusal of what the gate admitted also trips the helper off, anything else
+/// is the seat's failure. A plain start never reads the helper's codes.
+#[test]
+fn a_start_through_the_login_helper_reads_its_end() {
+    let seat = person();
+    let ended = |code| session::UnitState {
+        active: "failed".into(),
+        result: "exit-code".into(),
+        ended: Some(session::Ended::Exited(code)),
+        ..Default::default()
+    };
+    assert_eq!(unit_ended(&seat, &ended(91), true).code, LOGIN_TRIPPED);
+    let fallback = unit_ended(&seat, &ended(95), true);
+    assert_eq!(fallback.code, LOGIN_FALLBACK);
+    assert_eq!(fallback.message, "the login helper got no password");
+    for (code, login) in [(1, true), (91, false), (95, false), (203, false)] {
+        assert_eq!(unit_ended(&seat, &ended(code), login).code, "seat_exited");
+    }
+}
+
+/// The login drop-in runs the helper as root (`!`: the unit's `User=` stays, only the switch to
+/// it is skipped) with no restart, in the SELinux context it is given, and carries no secret; a
+/// path a unit file can't hold verbatim gets none.
+#[test]
+fn the_login_drop_in_runs_the_helper_and_nothing_else() {
+    let helper = Path::new("/usr/libexec/punktfunk/punktfunk-seats");
+    let plain = "[Service]\nExecStart=\n\
+         ExecStart=!/usr/libexec/punktfunk/punktfunk-seats login %i\nRestart=no\n\
+         SyslogIdentifier=seat-session\n";
+    assert_eq!(session::render_login(helper, None).unwrap(), plain);
+    assert_eq!(
+        session::render_login(helper, Some("system_u:system_r:init_t:s0")).unwrap(),
+        format!("{plain}SELinuxContext=system_u:system_r:init_t:s0\n")
+    );
+    let nix = "/nix/store/0abc-punktfunk-seats-0.47.0/libexec/punktfunk/punktfunk-seats";
+    assert!(session::render_login(Path::new(nix), None).is_some());
+    for bad in [
+        "relative/punktfunk-seats",
+        "/opt/a b/x",
+        "/opt/%i/x",
+        "/opt/$HOME/x",
+        "/a\nb",
+    ] {
+        assert_eq!(session::render_login(Path::new(bad), None), None, "{bad:?}");
+    }
+    assert!(
+        login_dropin(None).is_some(),
+        "this test binary's own path renders"
+    );
+}
+
+/// Held by each test that writes `jdoe`'s real drop-ins: two at once remove each other's files.
+static REAL_DROPINS: Mutex<()> = Mutex::new(());
+
+/// A start that wrote the login drop-in takes it away on every way out, a failed `systemctl
+/// start` included, and leaves no password waiting.
+#[test]
+#[ignore = "needs root: writes the row's drop-ins under /run/systemd/system and /run/punktfunk"]
+fn a_failed_start_leaves_no_login_drop_in() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let _alone = REAL_DROPINS.lock().unwrap_or_else(|e| e.into_inner());
+    let rig = rig();
+    let dropin = session::dropin_dir("jdoe").join("login.conf");
+    let seen = Arc::new(AtomicBool::new(false));
+    let (base, at_start, path) = (
+        machine(&rig.home, 1500, "inactive", false),
+        Arc::clone(&seen),
+        dropin.clone(),
+    );
+    let _machine = fake::install(move |program, args| match (program, args) {
+        ("systemctl", ["start", _]) => {
+            at_start.store(path.exists(), Ordering::SeqCst);
+            (1, String::new())
+        }
+        _ => base(program, args),
+    });
+    let password = Secret::new("hunter2 Bärbel".into());
+    let error = rig.backend.start_with_password(&rig.seat, &password);
+    let left = dropin.exists();
+    let _ = std::fs::remove_dir_all(session::dropin_dir("jdoe"));
+    let _ = std::fs::remove_file(session::env_path("jdoe"));
+    assert_eq!(error.unwrap_err().code, "systemctl_failed");
+    assert!(
+        seen.load(Ordering::SeqCst),
+        "the start ran with the drop-in"
+    );
+    assert!(!left, "the drop-in went with the failed start");
+    assert!(!rig.backend.inner.handover.waits("jdoe"));
+}
+
+/// PAM refusing in the helper what the gate admitted falls back to today's start, and the
+/// supervisor runs no helper again until it restarts.
+#[test]
+#[ignore = "needs root: writes the row's drop-ins under /run/systemd/system and /run/punktfunk"]
+fn a_helper_refusal_falls_back_and_turns_the_helper_off() {
+    let _alone = REAL_DROPINS.lock().unwrap_or_else(|e| e.into_inner());
+    let rig = rig();
+    let dropin = session::dropin_dir("jdoe").join("login.conf");
+    let starts = Arc::new(Mutex::new(Vec::new()));
+    let (base, at_start, at_show, path) = (
+        machine(&rig.home, 1500, "inactive", false),
+        Arc::clone(&starts),
+        Arc::clone(&starts),
+        dropin.clone(),
+    );
+    let refused = "ActiveState=failed\nSubState=failed\nResult=exit-code\nExecMainCode=1\n\
+                   ExecMainStatus=91\n";
+    let _machine = fake::install(move |program, args| match (program, args) {
+        ("systemctl", ["start", _]) => {
+            let mut starts = at_start.lock().unwrap();
+            starts.push(path.exists());
+            (i32::from(starts.len() > 1), String::new())
+        }
+        ("systemctl", ["show", ..]) if !at_show.lock().unwrap().is_empty() => (0, refused.into()),
+        _ => base(program, args),
+    });
+    let password = Secret::new("hunter2 Bärbel".into());
+    let first = rig.backend.start_with_password(&rig.seat, &password);
+    let second = rig.backend.start_with_password(&rig.seat, &password);
+    let left = dropin.exists();
+    let _ = std::fs::remove_dir_all(session::dropin_dir("jdoe"));
+    let _ = std::fs::remove_file(session::env_path("jdoe"));
+    assert_eq!(
+        first.unwrap_err().code,
+        "systemctl_failed",
+        "the plain start ran"
+    );
+    assert_eq!(second.unwrap_err().code, "systemctl_failed");
+    assert_eq!(*starts.lock().unwrap(), [true, false, false]);
+    assert!(!left);
 }
 
 /// The password check runs as `punktfunk-seats pam-check <account>` once the account still names

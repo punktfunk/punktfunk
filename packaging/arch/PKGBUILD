@@ -443,6 +443,7 @@ package_punktfunk-seats() {
     install -Dm0644 "$R/packaging/linux/$f" "$pkgdir/usr/lib/systemd/system/$f"
   done
   install -Dm0644 "$R/packaging/linux/punktfunk-seats-user.conf" "$pkgdir/usr/lib/systemd/system/user@.service.d/50-punktfunk-seats.conf"
+  install -Dm0644 "$R/packaging/linux/punktfunk-seat.pam" "$pkgdir/usr/lib/pam.d/punktfunk-seat"
   install -Dm0644 "$R/packaging/linux/punktfunk-seats.tmpfiles" "$pkgdir/usr/lib/tmpfiles.d/punktfunk-seats.conf"
   # A seat's pads: udev hands each one to its seat's user alone.
   install -Dm0644 "$R/packaging/linux/65-punktfunk-seats.rules" "$pkgdir/usr/lib/udev/rules.d/65-punktfunk-seats.rules"

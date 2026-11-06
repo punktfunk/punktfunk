@@ -71,20 +71,24 @@ pub fn peer_uid(_stream: &UnixStream) -> std::io::Result<u32> {
 /// Binds `path`, replacing a stale socket file. Fails when another process answers on it.
 /// The file keeps the default mode; the caller sets who may connect.
 pub fn bind_fresh(path: &Path) -> std::io::Result<UnixListener> {
+    make_way(path)?;
+    UnixListener::bind(path)
+}
+
+/// Readies `path` for a bind: its directory made, a stale socket file removed. Fails when another
+/// process answers on it.
+pub fn make_way(path: &Path) -> std::io::Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
     match UnixStream::connect(path) {
-        Ok(_) => {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::AddrInUse,
-                format!("another process answers on {}", path.display()),
-            ));
-        }
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-        Err(_) => std::fs::remove_file(path)?,
+        Ok(_) => Err(std::io::Error::new(
+            std::io::ErrorKind::AddrInUse,
+            format!("another process answers on {}", path.display()),
+        )),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(_) => std::fs::remove_file(path),
     }
-    UnixListener::bind(path)
 }
 
 /// Makes the door's group when no package has yet. A package restarts this daemon before the one

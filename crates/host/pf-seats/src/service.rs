@@ -471,7 +471,7 @@ impl<B: PlatformBackend> SeatService<B> {
             return Err(unlock::unlock_required());
         }
         let _op = self.op();
-        let seat = self.change_locked(id, start)?;
+        let seat = self.change_locked(id, start, None)?;
         Ok(if start {
             CommandResult::Started { seat }
         } else {
@@ -479,8 +479,14 @@ impl<B: PlatformBackend> SeatService<B> {
         })
     }
 
-    /// The start or stop of `id`, under `ops`, which the caller holds: the row as it is after.
-    fn change_locked(&self, id: &SeatId, start: bool) -> Result<Seat, ApiError> {
+    /// The start or stop of `id`, under `ops`, which the caller holds: the row as it is after. A
+    /// start its person proved with `password` hands the backend that password.
+    fn change_locked(
+        &self,
+        id: &SeatId,
+        start: bool,
+        password: Option<&Secret>,
+    ) -> Result<Seat, ApiError> {
         let original = self.begin(id, start)?;
         if start {
             let published = self.publish_runtime(
@@ -502,6 +508,8 @@ impl<B: PlatformBackend> SeatService<B> {
                 "seat_stopped",
                 "the seat was stopped before it began to start",
             ))
+        } else if let Some(password) = password {
+            self.backend.start_with_password(&original, password)
         } else {
             self.backend.start(&original)
         };

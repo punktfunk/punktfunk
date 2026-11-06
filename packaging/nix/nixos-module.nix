@@ -783,6 +783,11 @@ in
       # packaging/linux/punktfunk-seats-user.conf: a lingering owner's units wait for the contract.
       systemd.services."user@".after = [ "punktfunk-seats.service" ];
 
+      # The login helper's PAM service: the box's own `login` stack. The wallet lines name
+      # modules by bare name, which NixOS doesn't resolve, so they are skipped here; a `login`
+      # with the wallet enabled brings it.
+      security.pam.services.punktfunk-seat.text = builtins.readFile ../linux/punktfunk-seat.pam;
+
       systemd.services."punktfunk-seat@" = {
         path = seatPath;
         # seat-session starts this host; the packaged default is /usr/bin/punktfunk-host.

@@ -28,7 +28,9 @@ mod devices;
 mod fake;
 pub mod fence;
 mod flatpak;
+pub mod handover;
 mod libraries;
+pub mod login;
 mod logind;
 mod pam;
 #[cfg(test)]
@@ -160,6 +162,13 @@ struct Inner {
     /// Each person's row's device list, loaded on first use. Held across each change, its save
     /// and the trust copy it rewrites, so two writers never cross. Taken after `level`.
     devices: Mutex<HashMap<SeatId, devices::Held>>,
+    /// The password of a start through the login helper, while it waits for the helper.
+    handover: handover::Handover,
+    /// Set once a login helper tripped ([`LOGIN_TRIPPED`]): no helper until the supervisor
+    /// restarts.
+    helper_off: AtomicBool,
+    /// What the login socket carries, once the binary bound it ([`LinuxBackend::login_socket`]).
+    login_label: OnceLock<handover::Label>,
 }
 
 /// `slot`'s checks when they ran less than [`CHECKS_FRESH`] before `now`, else what `run`
@@ -256,6 +265,17 @@ impl Tracked {
 }
 
 /// The wall clock in unix seconds, as presence is kept.
+/// Whether an account no ledger row names is what a stopped create left under `state`: its seat
+/// directory is here and its seat never started. A create makes that directory before the
+/// account, so an account without one belongs to a state directory that isn't mounted or was
+/// emptied, where every seat would look abandoned; it is kept, the last pointer to that seat's
+/// files. The token directory exists once a seat has started, and one that can't be read counts.
+fn reapable(state: &Path, id: &SeatId) -> bool {
+    let here = matches!(shared::seat_dir(state, id).try_exists(), Ok(true));
+    let started = !matches!(shared::host_dir(state, id).try_exists(), Ok(false));
+    here && !started
+}
+
 fn unix_now() -> i64 {
     let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH);
     now.map_or(0, |d| i64::try_from(d.as_secs()).unwrap_or(i64::MAX))
@@ -445,6 +465,9 @@ impl LinuxBackend {
             checks: Mutex::new(None),
             level: Mutex::new(()),
             devices: Mutex::new(HashMap::new()),
+            handover: handover::Handover::default(),
+            helper_off: AtomicBool::new(false),
+            login_label: OnceLock::new(),
         });
         let weak = Arc::downgrade(&inner);
         std::thread::Builder::new()
@@ -471,8 +494,17 @@ impl LinuxBackend {
                 checks: Mutex::new(None),
                 level: Mutex::new(()),
                 devices: Mutex::new(HashMap::new()),
+                handover: handover::Handover::default(),
+                helper_off: AtomicBool::new(false),
+                login_label: OnceLock::new(),
             }),
         }
+    }
+
+    /// Records what the login socket the binary bound carries ([`handover::bind`]), which
+    /// decides whether a start may go through the login helper. The first call wins.
+    pub fn login_socket(&self, label: handover::Label) {
+        let _ = self.inner.login_label.set(label);
     }
 
     /// Sets what runs beside each seat's unit: the binary's uinput proxy. The first call wins.
@@ -515,9 +547,8 @@ impl LinuxBackend {
     }
 
     /// Removes the seat accounts no ledger row names, with their directories: what a create that
-    /// stopped after `useradd` left, which refuses every later create of its name. A seat that has
-    /// been started keeps its account, since its files may outlive a lost ledger; so does one
-    /// whose unit is up or can't be read.
+    /// stopped after `useradd` left, which refuses every later create of its name. An account
+    /// that isn't [`reapable`] is kept, and so is one whose unit is up or can't be read.
     pub fn reap_orphans(&self, ledger: &Ledger) {
         let users = match accounts::all() {
             Ok(users) => users,
@@ -528,11 +559,8 @@ impl LinuxBackend {
         };
         for (user, id) in accounts::orphans(&users, ledger, &self.inner.state) {
             let account = &user.name;
-            // The token directory exists once the seat has started; one that can't be read counts.
-            let token_dir = shared::host_dir(&self.inner.state, &id);
-            let started = !matches!(token_dir.try_exists(), Ok(false));
             let idle = session::state(account).is_ok_and(|state| !state.live());
-            if started || !idle {
+            if !reapable(&self.inner.state, &id) || !idle {
                 tracing::warn!(%account, seat = %id, "seat account without a ledger row kept");
                 continue;
             }
@@ -686,8 +714,9 @@ impl LinuxBackend {
     }
 
     /// Waits for the unit to be active and the host's management port to answer. A unit that
-    /// ends first, a stop or a timeout stops the seat and fails the start.
-    fn wait_ready(&self, seat: &Seat, asked: u64) -> Result<(), BackendError> {
+    /// ends first, a stop or a timeout stops the seat and fails the start. `login`: the unit runs
+    /// the login helper, whose end says why ([`unit_ended`]).
+    fn wait_ready(&self, seat: &Seat, asked: u64, login: bool) -> Result<(), BackendError> {
         let deadline = Instant::now() + START_TIMEOUT;
         let failure = loop {
             if let Err(stopped) = self.stopped_since(asked) {
@@ -696,16 +725,7 @@ impl LinuxBackend {
             let state = session::state(&seat.account)?;
             match state.active.as_str() {
                 "active" if self.is_ready(seat) => return Ok(()),
-                "failed" | "inactive" => {
-                    break err(
-                        "seat_exited",
-                        format!(
-                            "seat unit ended ({}); journalctl -u {} says why",
-                            state.result,
-                            session::unit(&seat.account)
-                        ),
-                    );
-                }
+                "failed" | "inactive" => break unit_ended(seat, &state, login),
                 _ => {}
             }
             if Instant::now() >= deadline {
@@ -944,7 +964,7 @@ impl PlatformBackend for LinuxBackend {
         let asked = self.inner.stops.load(Ordering::SeqCst);
         match Own::of(seat) {
             Own::Owner => return self.start_owner(seat, asked),
-            Own::Person => return self.start_person(seat, asked),
+            Own::Person => return self.start_person(seat, asked, None),
             Own::Seat => {}
         }
         let (box_dir, state) = (&self.inner.box_dir, &self.inner.state);
@@ -995,8 +1015,22 @@ impl PlatformBackend for LinuxBackend {
             run("systemctl_failed", "systemctl", &["start", &unit])?;
         }
         self.track(&seat.id, Tracked::of(seat, &passwd));
-        self.wait_ready(seat, asked)?;
+        self.wait_ready(seat, asked, false)?;
         Ok(RuntimeStatus::running())
+    }
+
+    /// A person's row, started with the password they proved the start with: [`login_with`]
+    /// decides whether that password opens their session.
+    fn start_with_password(
+        &self,
+        seat: &Seat,
+        password: &Secret,
+    ) -> Result<RuntimeStatus, BackendError> {
+        if Own::of(seat) != Own::Person {
+            return self.start(seat);
+        }
+        let asked = self.inner.stops.load(Ordering::SeqCst);
+        self.start_person(seat, asked, Some(password))
     }
 
     /// Ends the headless session. A host in the owner's own login stays: it isn't the unit's.
@@ -1238,7 +1272,7 @@ impl LinuxBackend {
             let _ = run("systemctl_failed", "systemctl", &["reset-failed", &unit]);
             run("systemctl_failed", "systemctl", &["start", &unit])?;
         }
-        self.wait_ready(seat, asked)?;
+        self.wait_ready(seat, asked, false)?;
         Ok(RuntimeStatus::running())
     }
 
@@ -1246,8 +1280,15 @@ impl LinuxBackend {
     /// login is theirs, and the headless session would sit beside it uninvited. Otherwise the
     /// unit brings up the headless session and a contract seat's host in it, which admits only
     /// the devices the row's list does. The account is checked first, and what is made is the
-    /// row's own, never in the account.
-    fn start_person(&self, seat: &Seat, asked: u64) -> Result<RuntimeStatus, BackendError> {
+    /// row's own, never in the account. A cold start with `password` runs the login helper when
+    /// [`login_with`] says so, and hands it the password through [`handover`] while this waits;
+    /// a helper that ended before a session falls back to the plain start.
+    fn start_person(
+        &self,
+        seat: &Seat,
+        asked: u64,
+        password: Option<&Secret>,
+    ) -> Result<RuntimeStatus, BackendError> {
         let passwd = accounts::require_person(seat)?;
         if owner_at_desk(&seat.account) {
             return Err(err(
@@ -1263,6 +1304,7 @@ impl LinuxBackend {
         let reader = shared::Reader::person(passwd.uid, passwd.gid);
         person_trust(&self.inner, &seat.id, reader)?;
         shared::refresh_seat_library(state, &seat.id, reader)?;
+        let mut written = None;
         // A unit already up keeps its token: the host read it when it started.
         if !session::state(&seat.account)?.live() {
             if session::port_taken(seat.mgmt_port) {
@@ -1281,13 +1323,68 @@ impl LinuxBackend {
             )?;
             let browser = session::browser(box_dir);
             session::write_unit_files(seat, &passwd.home, state, &token, None, None, &browser)?;
+            let label =
+                (self.inner.login_label.get().cloned()).unwrap_or_else(handover::Label::unbound);
+            if label == handover::Label::Missing && password.is_some() {
+                tracing::warn!(account = %seat.account,
+                    cause = "the login socket doesn't carry PID 1's SELinux context",
+                    "seat started without the wallet login");
+            }
+            let off = self.inner.helper_off.load(Ordering::SeqCst);
+            let login = login_with(password, &label, off);
+            let dropin = login
+                .as_ref()
+                .and_then(|(_, context)| login_dropin(context.as_deref()));
+            let password = login.map(|(password, _)| password);
+            if password.is_some() && dropin.is_none() {
+                tracing::warn!(account = %seat.account, cause = "this binary's path can't go in a unit file",
+                    "seat started without the wallet login");
+            }
+            written = dropin.is_some().then(|| LoginDropin(&seat.account));
+            session::set_login(&seat.account, dropin.as_deref())?;
             self.stopped_since(asked)?;
             let unit = session::unit(&seat.account);
             let _ = run("systemctl_failed", "systemctl", &["reset-failed", &unit]);
+            let handover = &self.inner.handover;
+            let offer = password
+                .filter(|_| written.is_some())
+                .map(|password| handover.offer(&seat.account, password, Instant::now()));
             run("systemctl_failed", "systemctl", &["start", &unit])?;
+            if let Some(offer) = offer {
+                offer.wait(|| session::state(&seat.account).is_ok_and(|s| s.live()));
+            }
         }
         self.track(&seat.id, Tracked::of(seat, &passwd));
-        self.wait_ready(seat, asked)?;
+        let ready = self.wait_ready(seat, asked, written.is_some());
+        drop(written);
+        match ready {
+            Err(error) if [LOGIN_FALLBACK, LOGIN_TRIPPED].contains(&error.code.as_str()) => {
+                let tripped = error.code == LOGIN_TRIPPED;
+                if tripped && !self.inner.helper_off.swap(true, Ordering::SeqCst) {
+                    tracing::warn!("login helper off until the seat supervisor restarts");
+                }
+                tracing::warn!(account = %seat.account, cause = %error.message,
+                    "seat started without the wallet login");
+                self.start_plain(seat, &passwd, asked)
+            }
+            ready => ready.map(|()| RuntimeStatus::running()),
+        }
+    }
+
+    /// `seat`'s unit started again as systemd's own login opens it, after the login helper ended
+    /// before a session.
+    fn start_plain(
+        &self,
+        seat: &Seat,
+        passwd: &accounts::Passwd,
+        asked: u64,
+    ) -> Result<RuntimeStatus, BackendError> {
+        self.stopped_since(asked)?;
+        let unit = session::unit(&seat.account);
+        let _ = run("systemctl_failed", "systemctl", &["reset-failed", &unit]);
+        run("systemctl_failed", "systemctl", &["start", &unit])?;
+        self.track(&seat.id, Tracked::of(seat, passwd));
+        self.wait_ready(seat, asked, false)?;
         Ok(RuntimeStatus::running())
     }
 
@@ -1403,6 +1500,76 @@ fn keep_level(inner: Weak<Inner>) {
     }
 }
 
+/// The one choice of how a person's cold start opens their session: through the login helper,
+/// with the password the person proved the start with, so what their own login unlocks with it
+/// unlocks here too; without one, or once the helper is `off`, as systemd's `PAMName=` opens
+/// it. With SELinux on, the helper runs in PID 1's context, the one systemd's own PAM child
+/// has: pam_selinux computes the session's context from the caller's, so every user gets what
+/// today's start gives them, a confined one included. That needs the login socket to carry the
+/// context too ([`handover::Label::Init`]); without it, today's start. A switch for the wallet
+/// login goes here.
+fn login_with<'a>(
+    password: Option<&'a Secret>,
+    label: &handover::Label,
+    off: bool,
+) -> Option<(&'a Secret, Option<String>)> {
+    let context = match label {
+        handover::Label::Off => None,
+        handover::Label::Init(context) => Some(context.clone()),
+        handover::Label::Missing => return None,
+    };
+    password
+        .filter(|_| !off)
+        .map(|password| (password, context))
+}
+
+/// Removes `.0`'s login drop-in when it drops: every way out of a start that wrote one, so a
+/// restart or the next start runs the plain unit.
+struct LoginDropin<'a>(&'a str);
+
+impl Drop for LoginDropin<'_> {
+    fn drop(&mut self) {
+        if let Err(error) = session::set_login(self.0, None) {
+            tracing::warn!(account = %self.0, %error, "login drop-in not removed");
+        }
+    }
+}
+
+/// The login drop-in for this binary in SELinux `context`, `None` when its path can't go in a
+/// unit file. After an upgrade replaced the file, the link names the new one with a
+/// ` (deleted)` suffix.
+fn login_dropin(context: Option<&str>) -> Option<String> {
+    let exe = std::env::current_exe().ok()?;
+    let path = exe.to_str()?;
+    let path = Path::new(path.strip_suffix(" (deleted)").unwrap_or(path));
+    session::render_login(path, context)
+}
+
+/// The error of a start through the login helper that ended before a session: the start goes
+/// on without it. The gate already admitted the person, so the helper never refuses.
+const LOGIN_FALLBACK: &str = "login_fallback";
+/// [`LOGIN_FALLBACK`] that also turns the helper off ([`login::Fallback::trips`]).
+const LOGIN_TRIPPED: &str = "login_tripped";
+
+/// Why `seat`'s start failed once its unit ended in `state`. With `login`, a login helper that
+/// ended before a session says [`LOGIN_FALLBACK`] or [`LOGIN_TRIPPED`], with the operator's
+/// cause.
+fn unit_ended(seat: &Seat, state: &session::UnitState, login: bool) -> BackendError {
+    let account = &seat.account;
+    match login.then(|| login::fallback(state.ended)).flatten() {
+        Some(fallback) if fallback.trips => err(LOGIN_TRIPPED, fallback.cause),
+        Some(fallback) => err(LOGIN_FALLBACK, fallback.cause),
+        None => err(
+            "seat_exited",
+            format!(
+                "seat unit ended ({}); journalctl -u {} says why",
+                state.result,
+                session::unit(account)
+            ),
+        ),
+    }
+}
+
 /// Writes the environment file of a row on a person's own account again with the token it holds,
 /// as the box's Seat defaults stand now: Browser streaming reaches its host at the next start.
 /// The owner's is handed to the owner, whose own host reads it; another person's stays root's.
@@ -1463,6 +1630,29 @@ fn exec_paths(show: &str) -> Vec<PathBuf> {
 
 #[cfg(test)]
 mod tests {
+    /// Only a seat whose directory is here and that never started is reaped. On a state
+    /// directory that is empty, as an unmounted one is, no account is.
+    #[test]
+    fn an_account_is_reaped_only_from_the_state_directory_that_made_it() {
+        let state = tempfile::tempdir().unwrap();
+        let (gone, stopped_create, started) =
+            (SeatId::random(), SeatId::random(), SeatId::random());
+        for id in [&stopped_create, &started] {
+            std::fs::create_dir_all(super::shared::seat_dir(state.path(), id)).unwrap();
+        }
+        std::fs::create_dir_all(super::shared::host_dir(state.path(), &started)).unwrap();
+        assert!(!super::reapable(state.path(), &gone), "no seat directory");
+        assert!(super::reapable(state.path(), &stopped_create));
+        assert!(!super::reapable(state.path(), &started), "it has run");
+        let empty = tempfile::tempdir().unwrap();
+        for id in [&gone, &stopped_create, &started] {
+            assert!(
+                !super::reapable(empty.path(), id),
+                "an empty state directory"
+            );
+        }
+    }
+
     #[test]
     fn doctor_reads_the_programs_systemd_would_run() {
         let show = "LoadState=loaded\n\

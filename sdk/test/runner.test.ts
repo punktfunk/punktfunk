@@ -777,6 +777,37 @@ describe("supervision", () => {
 		}
 	});
 
+	test("a plugin in a child process holds its lease from the supervisor", async () => {
+		const calls: string[] = [];
+		const server = leaseHost("boxed", calls);
+		const d = mkdirs("lease-child");
+		const fiber = Effect.runFork(
+			superviseUnit(
+				{
+					name: "@punktfunk/plugin-boxed",
+					file: path.join(d.pluginsDir, "index.js"),
+					packageDir: d.pluginsDir,
+					manifest: { schema: 1, id: "boxed" },
+				},
+				{
+					connect: { url: `http://127.0.0.1:${server.port}`, token: TOKEN },
+					configDir: d.dir,
+					log: () => {},
+					leaseSettle: "1 millis",
+					sandbox: "on",
+					sandboxRun: () => Effect.never,
+				},
+			),
+		);
+		try {
+			await waitFor(() => calls.includes("PUT"));
+			await Effect.runPromise(Fiber.interrupt(fiber));
+			expect(calls).toEqual(["PUT", "DELETE"]);
+		} finally {
+			server.stop(true);
+		}
+	});
+
 	test("a plugin that dies at start never takes a lease", async () => {
 		const calls: string[] = [];
 		const logs: string[] = [];
