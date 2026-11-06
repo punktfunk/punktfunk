@@ -310,6 +310,41 @@ fn the_login_drop_in_runs_the_helper_and_nothing_else() {
     );
 }
 
+/// A start that wrote the login drop-in takes it away on every way out, a failed `systemctl
+/// start` included, and leaves no password waiting.
+#[test]
+#[ignore = "needs root: writes the row's drop-ins under /run/systemd/system and /run/punktfunk"]
+fn a_failed_start_leaves_no_login_drop_in() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let rig = rig();
+    let dropin = session::dropin_dir("jdoe").join("login.conf");
+    let seen = Arc::new(AtomicBool::new(false));
+    let (base, at_start, path) = (
+        machine(&rig.home, 1500, "inactive", false),
+        Arc::clone(&seen),
+        dropin.clone(),
+    );
+    let _machine = fake::install(move |program, args| match (program, args) {
+        ("systemctl", ["start", _]) => {
+            at_start.store(path.exists(), Ordering::SeqCst);
+            (1, String::new())
+        }
+        _ => base(program, args),
+    });
+    let password = Secret::new("hunter2 Bärbel".into());
+    let error = rig.backend.start_with_password(&rig.seat, &password);
+    let left = dropin.exists();
+    let _ = std::fs::remove_dir_all(session::dropin_dir("jdoe"));
+    let _ = std::fs::remove_file(session::env_path("jdoe"));
+    assert_eq!(error.unwrap_err().code, "systemctl_failed");
+    assert!(
+        seen.load(Ordering::SeqCst),
+        "the start ran with the drop-in"
+    );
+    assert!(!left, "the drop-in went with the failed start");
+    assert!(!rig.backend.inner.handover.waits("jdoe"));
+}
+
 /// The password check runs as `punktfunk-seats pam-check <account>` once the account still names
 /// the row's uid: the account alone is its argument, and the code it prints reads as the
 /// console's sentence. An account that moved never reaches the check.

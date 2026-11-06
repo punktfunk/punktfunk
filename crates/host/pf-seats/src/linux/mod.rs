@@ -1282,7 +1282,7 @@ impl LinuxBackend {
         let reader = shared::Reader::person(passwd.uid, passwd.gid);
         person_trust(&self.inner, &seat.id, reader)?;
         shared::refresh_seat_library(state, &seat.id, reader)?;
-        let mut login = false;
+        let mut written = None;
         // A unit already up keeps its token: the host read it when it started.
         if !session::state(&seat.account)?.live() {
             if session::port_taken(seat.mgmt_port) {
@@ -1307,14 +1307,14 @@ impl LinuxBackend {
                 tracing::warn!(account = %seat.account, cause = "this binary's path can't go in a unit file",
                     "seat started without the wallet login");
             }
+            written = dropin.is_some().then(|| LoginDropin(&seat.account));
             session::set_login(&seat.account, dropin.as_deref())?;
-            login = dropin.is_some();
             self.stopped_since(asked)?;
             let unit = session::unit(&seat.account);
             let _ = run("systemctl_failed", "systemctl", &["reset-failed", &unit]);
             let handover = &self.inner.handover;
             let offer = password
-                .filter(|_| login)
+                .filter(|_| written.is_some())
                 .map(|password| handover.offer(&seat.account, password, Instant::now()));
             run("systemctl_failed", "systemctl", &["start", &unit])?;
             if let Some(offer) = offer {
@@ -1322,10 +1322,8 @@ impl LinuxBackend {
             }
         }
         self.track(&seat.id, Tracked::of(seat, &passwd));
-        let ready = self.wait_ready(seat, asked, login);
-        if login && let Err(error) = session::set_login(&seat.account, None) {
-            tracing::warn!(account = %seat.account, %error, "login drop-in not removed");
-        }
+        let ready = self.wait_ready(seat, asked, written.is_some());
+        drop(written);
         match ready {
             Err(error) if error.code == LOGIN_FALLBACK => {
                 tracing::warn!(account = %seat.account, cause = %error.message,
@@ -1471,6 +1469,18 @@ fn keep_level(inner: Weak<Inner>) {
 /// login goes here.
 fn login_with(password: Option<&Secret>) -> Option<&Secret> {
     password
+}
+
+/// Removes `.0`'s login drop-in when it drops: every way out of a start that wrote one, so a
+/// restart or the next start runs the plain unit.
+struct LoginDropin<'a>(&'a str);
+
+impl Drop for LoginDropin<'_> {
+    fn drop(&mut self) {
+        if let Err(error) = session::set_login(self.0, None) {
+            tracing::warn!(account = %self.0, %error, "login drop-in not removed");
+        }
+    }
 }
 
 /// The login drop-in for this binary, `None` when its path can't go in a unit file. After an
