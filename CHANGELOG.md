@@ -44,9 +44,11 @@ Deep dive: `git log v0.46.0..v0.47.0`
 
 - **C ABI 64.** `PunktfunkConnectOpts` gains the unlock pointer. An app pins the integer, so re-pin
   and rebuild.
-- **Hooks on a seat on an existing account.** Such a seat host refuses `PUT /hooks`, skips a stored
-  `hooks.json`, installs only Verified plugins and adopts no emulator copy; Windows seats on an
-  existing account included. `PUNKTFUNK_SEAT_OWN_ACCOUNT=1` in the seat's environment marks it.
+- **Hooks on a seat on an existing account.** Such a seat host refuses `PUT /hooks` and skips a
+  stored `hooks.json`; Windows seats on an existing account included. On Windows it installs only
+  Verified plugins and adopts no emulator copy. On Linux it drives no plugin runner and answers
+  403 to every write under `/store`, `/plugin-access` and `/emulators`, a catalog refresh aside.
+  `PUNKTFUNK_SEAT_OWN_ACCOUNT=1` in the seat's environment marks it.
 - **Seat supervisor (Linux).** A row can adopt an existing account: the password is checked once by
   `punktfunk-seats pam-check` under attempt limits, and none is kept. Starting such a row needs an
   unlock (`unlock_required` for keep-warm and autostart); the devices let in are
