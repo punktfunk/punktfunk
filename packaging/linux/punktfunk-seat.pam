@@ -2,7 +2,8 @@
 # punktfunk-seat: a person's own-account seat, opened with their password by
 # `punktfunk-seats login` (punktfunk-seat@.service). The box's own login stack decides who gets in
 # and what opens. The wallet lines run where the box has the module; `-` skips a missing one.
-auth      include   login
+# `substack`: a `sufficient` success inside the login stack ends only that stack, not the wallet's.
+auth      substack  login
 -auth     optional  pam_kwallet5.so
 -auth     optional  pam_gnome_keyring.so
 account   include   login
