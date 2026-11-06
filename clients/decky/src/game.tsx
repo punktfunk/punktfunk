@@ -3,6 +3,7 @@ import { toaster } from "@decky/api";
 import { FC } from "react";
 import { startGameStream } from "./hooks";
 import type { HostView } from "./hosts";
+import { t } from "./i18n";
 
 /** What the game page knows about its title; what the per-game shortcut is dressed with. */
 export interface Game {
@@ -14,7 +15,7 @@ export interface Game {
 export function streamFrom(host: HostView, game: Game): void {
   // A sleeping host is the one case that takes a while and looks like nothing happened.
   if (!host.online) {
-    toaster.toast({ title: "Punktfunk", body: `Waking ${host.name} to stream ${game.title}` });
+    toaster.toast({ title: "Punktfunk", body: t("decky_waking_to_stream", { host: host.name, title: game.title }) });
   }
   void startGameStream(host, game.appId, game.title, game.iconHash);
 }

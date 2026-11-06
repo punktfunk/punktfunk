@@ -8,6 +8,7 @@
 import { toaster } from "@decky/api";
 import { library } from "./backend";
 import type { HostView } from "./hosts";
+import { t } from "./i18n";
 
 export interface LibrarySnapshot {
   /** When it was fetched (ms since epoch). */
@@ -111,8 +112,8 @@ export async function refreshLibraries(views: HostView[]): Promise<void> {
           // forty characters, so this is a count and a name, nothing more.
           if (!snapshots.has(v.ref) && steamAppIds.length > 0) {
             toaster.toast({
-              title: `Stream from ${v.name}`,
-              body: `${steamAppIds.length} Steam ${steamAppIds.length === 1 ? "game" : "games"} ready in Play menus`,
+              title: t("decky_catalog_title", { host: v.name }),
+              body: t("decky_catalog_ready", { count: steamAppIds.length }),
               duration: 8_000,
             });
           }
