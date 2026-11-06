@@ -35,7 +35,7 @@ classify() {
                     ;;
             esac
             case "$path" in
-                .cargo/*|Cargo.toml|Cargo.lock|rust-toolchain.toml|rustfmt.toml|\
+                .cargo/*|Cargo.toml|Cargo.lock|rust-toolchain.toml|rustfmt.toml|l10n/*|\
                 crates/*|tools/*|clients/cli/*|clients/linux/*|clients/probe/*|clients/session/*|\
                 clients/shared/*|clients/android/native/*|clients/apple/native/*|include/*|\
                 api/openapi.json|\
@@ -143,6 +143,9 @@ self_test() {
     check notice-template 'about.hbs' \
         'rust=true rust_arm64=false web=false docs_site=false sdk_plugin_kit=false decky_typecheck=false'
     check host 'crates/host/punktfunk-host/src/main.rs' \
+        'rust=true rust_arm64=false web=false docs_site=false sdk_plugin_kit=false decky_typecheck=false'
+    # The rust job runs `pf-l10n check` over the message files.
+    check messages 'l10n/messages/client/en.json' \
         'rust=true rust_arm64=false web=false docs_site=false sdk_plugin_kit=false decky_typecheck=false'
     check workspace-tool 'tools/loss-harness/src/main.rs' \
         'rust=true rust_arm64=false web=false docs_site=false sdk_plugin_kit=false decky_typecheck=false'

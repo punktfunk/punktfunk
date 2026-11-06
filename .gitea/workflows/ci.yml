@@ -308,6 +308,11 @@ jobs:
       - name: Test (unit + loopback + proptest + C ABI harness)
         run: cargo test --workspace --locked
 
+      # The message files in l10n/: one line per problem (a key in two parts, a lost
+      # placeholder, a missing plural category, over budget, a retired term).
+      - name: Message check
+        run: cargo run -p pf-l10n --locked -- check
+
       # Discovery without the desktop bundle. The workspace test above enables `desktop`,
       # which includes this feature, so it never compiles the feature on its own.
       # Clippy with warnings denied: `cargo check` would stay green on a warning.
