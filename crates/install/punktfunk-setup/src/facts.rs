@@ -115,8 +115,8 @@ pub enum Nvidia {
     Ok,
 }
 
-/// A distro this installer will not act on.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// A distro this installer will not act on. Stored as the cause and worded where it is shown.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Punt {
     NotLinux,
     NoOsRelease,
@@ -126,18 +126,13 @@ pub enum Punt {
 
 impl Punt {
     pub fn message(&self) -> String {
+        use pf_l10n::tools as t;
         match self {
-            Punt::NotLinux => {
-                format!("this installer is for Linux hosts — Windows: {DOCS}/windows-host")
-            }
-            Punt::NoOsRelease => {
-                format!("no /etc/os-release — can't tell which distro this is: {DOCS}/install")
-            }
-            Punt::NixOs => {
-                format!("NixOS: add the flake input and enable the module instead — {DOCS}/nixos")
-            }
+            Punt::NotLinux => t::setup_punt_not_linux(format!("{DOCS}/windows-host")),
+            Punt::NoOsRelease => t::setup_punt_no_os_release(format!("{DOCS}/install")),
+            Punt::NixOs => t::setup_punt_nixos(format!("{DOCS}/nixos")),
             Punt::Unsupported(pretty) => {
-                format!("no package repo for '{pretty}' yet — {DOCS}/developers/build-from-source")
+                t::setup_punt_unsupported(pretty, format!("{DOCS}/developers/build-from-source"))
             }
         }
     }
@@ -148,9 +143,45 @@ impl Punt {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Floor {
     /// Fatal: below the glibc floor, or a Fedora with no RPM group.
-    Die(String),
+    Die(FloorCause),
     /// Warn, then ask "Continue anyway?" with default no — so `--yes` aborts.
-    Confirm(String),
+    Confirm(FloorCause),
+}
+
+/// The release a floor names, by its `VERSION_ID`. Stored as the cause and worded where it is
+/// shown.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum FloorCause {
+    DebianOld(String),
+    UbuntuOld(String),
+    MintOld(String),
+    FedoraNoGroup(String),
+}
+
+impl Floor {
+    pub fn message(&self) -> String {
+        use pf_l10n::tools as t;
+        let (Floor::Die(cause) | Floor::Confirm(cause)) = self;
+        match cause {
+            FloorCause::DebianOld(version) => t::setup_floor_debian(
+                version,
+                crate::platform::floor("debian"),
+                format!("{DOCS}/developers/build-from-source"),
+            ),
+            FloorCause::UbuntuOld(version) => t::setup_floor_ubuntu(
+                version,
+                format!("{DOCS}/requirements#the-floor-for-a-working-host"),
+                crate::platform::floor("debian"),
+            ),
+            FloorCause::MintOld(version) => t::setup_floor_mint(
+                version,
+                format!("{DOCS}/requirements#cinnamon-linux-mint-and-lmde"),
+            ),
+            FloorCause::FedoraNoGroup(version) => {
+                t::setup_floor_fedora(version, format!("{DOCS}/developers/build-from-source"))
+            }
+        }
+    }
 }
 
 /// The `os-release` fields the plan reads. `--facts` and the plan goldens serialize this shape.
@@ -207,7 +238,7 @@ pub struct Facts {
     pub omarchy: bool,
     pub docs_page: String,
     /// Why a host install cannot happen here. A client install ignores it.
-    pub host_punt: Option<String>,
+    pub host_punt: Option<Punt>,
     pub rpm_group: Option<String>,
     pub floor: Option<Floor>,
     /// Flatpak client already on the box; uninstall has a leg to sweep.
@@ -282,7 +313,7 @@ impl Facts {
             family,
             omarchy,
             docs_page: format!("{DOCS}/{page}"),
-            host_punt: host_punt.map(|p| p.message()),
+            host_punt,
             rpm_group,
             floor,
             has_flatpak_client: run
@@ -339,13 +370,14 @@ impl Facts {
 /// NixOS and SteamOS refuse outright — they own installers for both halves. An unknown distro
 /// is a dead end only for the host: the client still has a user-scope flatpak (§5).
 impl Family {
-    /// What to install for `certutil`, named in the warning when it is missing.
-    pub fn certutil_package(self) -> &'static str {
+    /// The command that installs `certutil`, named in the warning when it is missing. `None`
+    /// where no host install reaches it (the flatpak client has no console).
+    pub fn certutil_package(self) -> Option<&'static str> {
         match self {
-            Family::Apt => "sudo apt install libnss3-tools",
-            Family::Dnf | Family::Sysext => "sudo dnf install nss-tools",
-            Family::Pacman | Family::Steamos => "sudo pacman -S nss",
-            Family::Flatpak => "install nss tools",
+            Family::Apt => Some("sudo apt install libnss3-tools"),
+            Family::Dnf | Family::Sysext => Some("sudo dnf install nss-tools"),
+            Family::Pacman | Family::Steamos => Some("sudo pacman -S nss"),
+            Family::Flatpak => None,
         }
     }
 }
@@ -394,20 +426,15 @@ fn detect_family(os: &OsRelease, run: &dyn CommandRunner) -> Result<Detected, Pu
 /// Fedora RPM group lives here because it shares the version-floor check.
 pub fn floors(os: &OsRelease, family: Family) -> (Option<String>, Option<Floor>) {
     let floor = match os.id.as_str() {
-        "debian" if os.major() < 13 => Some(Floor::Die(format!(
-            "Debian {} is below the glibc floor — {}, or build from source: {DOCS}/developers/build-from-source",
-            os.version_id,
-            crate::platform::floor("debian")
-        ))),
-        "ubuntu" if (20..=25).contains(&os.major()) => Some(Floor::Confirm(format!(
-            "Ubuntu {} installs the package but can't host — its desktop is too old to create a virtual display ({DOCS}/requirements#the-floor-for-a-working-host). Runs on {}.",
-            os.version_id,
-            crate::platform::floor("debian")
-        ))),
-        "linuxmint" if (20..=22).contains(&os.major()) => Some(Floor::Confirm(format!(
-            "Linux Mint {} (Ubuntu 24.04 base) installs the package but can't host — {DOCS}/requirements#cinnamon-linux-mint-and-lmde. LMDE 7 and Mint 23 can.",
-            os.version_id
-        ))),
+        "debian" if os.major() < 13 => {
+            Some(Floor::Die(FloorCause::DebianOld(os.version_id.clone())))
+        }
+        "ubuntu" if (20..=25).contains(&os.major()) => {
+            Some(Floor::Confirm(FloorCause::UbuntuOld(os.version_id.clone())))
+        }
+        "linuxmint" if (20..=22).contains(&os.major()) => {
+            Some(Floor::Confirm(FloorCause::MintOld(os.version_id.clone())))
+        }
         _ => None,
     };
     if family != Family::Dnf {
@@ -420,10 +447,7 @@ pub fn floors(os: &OsRelease, family: Family) -> (Option<String>, Option<Floor>)
         43 => (Some("bazzite".into()), floor),
         _ => (
             None,
-            Some(Floor::Die(format!(
-                "no RPM group for Fedora {} yet — {DOCS}/developers/build-from-source",
-                os.version_id
-            ))),
+            Some(Floor::Die(FloorCause::FedoraNoGroup(os.version_id.clone()))),
         ),
     }
 }

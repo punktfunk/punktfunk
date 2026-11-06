@@ -16,6 +16,8 @@
 
 use std::cell::RefCell;
 
+use pf_l10n::tools as t;
+
 use crate::choices::{Action, LAN_BIND, LOOPBACK_BIND};
 use crate::facts::Channel;
 use crate::ui::logo::{self, Intro, MARK_TEXT_ROWS};
@@ -305,12 +307,13 @@ impl<'a> Tui<'a> {
         out.push_str(&format!("{bar}  {}\n", self.dim(&screen.facts.docs_page)));
         out.push_str(&format!("{bar}\n"));
 
+        let label_width = Screen::label_width();
         for (index, item) in screen.items.iter().enumerate() {
             let on = index == screen.cursor;
             let mark = if on { self.accent(CURSOR) } else { " ".into() };
             match item {
                 Item::Row(field) => {
-                    let label = format!("{:<25}", Screen::label(*field));
+                    let label = format!("{:<width$}", Screen::label(*field), width = label_width);
                     let value = screen.value(*field);
                     let text = if on {
                         format!("{}{}", self.highlight(&label), value)
@@ -321,23 +324,29 @@ impl<'a> Tui<'a> {
                 }
                 Item::Go => {
                     let label = if screen.manage_mode() {
-                        "Apply these changes"
+                        t::setup_go_apply()
                     } else {
-                        "Install now with these settings"
+                        t::setup_go_install()
                     };
                     out.push_str(&format!("{bar}  {mark} {}\n", self.highlight(label)));
                     out.push_str(&format!("{bar}  {rule}\n"));
                 }
                 Item::Uninstall => out.push_str(&format!(
                     "{bar}  {mark} {}\n",
-                    self.dim("Uninstall — remove the packages and the repo")
+                    self.dim(t::setup_uninstall_item())
                 )),
             }
         }
         out.push_str(&format!("{bar}\n"));
         out.push_str(&format!(
             "{bar}  {}\n",
-            self.dim("↑↓ move · Enter select/edit · q quit — nothing runs until you confirm")
+            self.dim(&format!(
+                "{} · {} · {} — {}",
+                t::setup_keys_move("↑↓"),
+                t::setup_keys_select("Enter"),
+                t::setup_keys_quit("q"),
+                t::setup_keys_nothing_runs()
+            ))
         ));
         out
     }
@@ -363,9 +372,9 @@ impl<'a> Tui<'a> {
                     _ => 2,
                 };
                 let options = [
-                    "The PC I stream from (host)",
-                    "Both (host + client)",
-                    "The device I play on (client)",
+                    t::setup_components_host(),
+                    t::setup_components_option_both(),
+                    t::setup_components_client(),
                 ];
                 if let Some(pick) = self.choose(why, &options, current) {
                     screen.set_components(pick != 2, pick != 0);
@@ -373,7 +382,7 @@ impl<'a> Tui<'a> {
             }
             other => {
                 let current = usize::from(!self.current_bool(screen, other));
-                if let Some(pick) = self.choose(why, &["yes", "no"], current) {
+                if let Some(pick) = self.choose(why, &[t::setup_yes(), t::setup_no()], current) {
                     screen.set_bool(other, pick == 0);
                 }
             }
@@ -415,9 +424,14 @@ impl<'a> Tui<'a> {
     /// of either prompt is that same answer, never a cancelled install.
     pub fn web_password(&self, url: &str, read_cmd: &str) -> Option<String> {
         let prompt = format!(
-            "The web console ({url}) asks for a password.\nOne is generated for you unless you set your own. Print it any time with:\n{read_cmd}"
+            "{}\n{}\n{read_cmd}",
+            t::setup_password_prompt(url),
+            t::setup_password_prompt_generated()
         );
-        let options = ["Use the generated password", "Set my own now"];
+        let options = [
+            t::setup_password_use_generated(),
+            t::setup_password_set_own(),
+        ];
         match self.choose(&prompt, &options, 0)? {
             0 => None,
             _ => self.ask_secret(),
@@ -431,12 +445,16 @@ impl<'a> Tui<'a> {
     /// someone already placed. "Any address" is deliberately not an option: a console on the open
     /// internet is a route the operator builds on purpose, not one a list offers them.
     pub fn web_bind(&self, ip: &str, current: &str) -> Option<String> {
-        let prompt =
-            "Where should the web console be reachable?\nIt is how you pair devices and change every setting.";
+        let prompt = format!(
+            "{}\n{}",
+            t::setup_bind_prompt(),
+            t::setup_bind_prompt_body()
+        );
+        let lan = t::setup_bind_option_lan(ip);
         let options = [
-            "This machine only (https://127.0.0.1:47992)",
-            &format!("This local network (https://{ip}:47992)"),
-            "A specific address (e.g. a VPN interface)",
+            t::setup_bind_option_loopback(),
+            lan.as_str(),
+            t::setup_bind_option_address(),
         ];
         // The cursor starts on what the box already answers, so Enter is always "leave it".
         let initial = match current {
@@ -444,25 +462,32 @@ impl<'a> Tui<'a> {
             LAN_BIND => 1,
             _ => 2,
         };
-        match self.choose(prompt, &options, initial)? {
+        match self.choose(&prompt, &options, initial)? {
             0 => Some(LOOPBACK_BIND.to_string()),
             1 => Some(LAN_BIND.to_string()),
-            _ => self.ask_line(
-                "Type the address the console should listen on. It has to be an address this machine already has.",
-                "an IPv4 or IPv6 address · Esc leaves it unchanged",
-                "Enter accepts · Esc leaves it unchanged",
-                |typed| typed.parse::<std::net::IpAddr>().is_ok(),
-            ),
+            _ => {
+                let unchanged = t::setup_hint_esc_unchanged("Esc");
+                self.ask_line(
+                    t::setup_bind_address_prompt(),
+                    &format!("{} · {unchanged}", t::setup_hint_ip_address()),
+                    &format!("{} · {unchanged}", t::setup_hint_enter_accepts("Enter")),
+                    |typed| typed.parse::<std::net::IpAddr>().is_ok(),
+                )
+            }
         }
     }
 
     /// Inline text entry for the console password. `None` on Esc — the caller reads that as
     /// "generate one after all", so there is no way to leave here with nothing set.
     fn ask_secret(&self) -> Option<String> {
+        let generates = t::setup_hint_esc_generates("Esc");
         self.ask_line(
-            "Type the console password. It is stored on this box only, and shown here as you type.",
-            &format!("at least {MIN_PASSWORD} characters · Esc generates one instead"),
-            "Enter accepts · Esc generates one instead",
+            t::setup_password_type_prompt(),
+            &format!(
+                "{} · {generates}",
+                t::setup_hint_min_chars(MIN_PASSWORD as u64)
+            ),
+            &format!("{} · {generates}", t::setup_hint_enter_accepts("Enter")),
             |typed| typed.chars().count() >= MIN_PASSWORD,
         )
     }

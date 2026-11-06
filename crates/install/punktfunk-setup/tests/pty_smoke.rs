@@ -161,10 +161,10 @@ fn a_failed_step_renders_the_failure_and_points_at_the_docs() {
     let text = plain(&run(
         &["--demo", "debian-fresh", "--fail", "installing"],
         b"\r\r\r",
-        "that step failed",
+        "That step failed",
     ));
     assert!(
-        text.contains("that step failed"),
+        text.contains("That step failed"),
         "no failure text:\n{text}"
     );
     assert!(
