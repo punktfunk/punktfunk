@@ -1,0 +1,405 @@
+clients/linux/src/app/connect.rs	A link asks to connect to {} ({}).
+clients/linux/src/app/connect.rs	A session is already running — end it first.
+clients/linux/src/app/connect.rs	A session is already running — end it first.
+clients/linux/src/app/connect.rs	A session is already running — end it first.
+clients/linux/src/app/connect.rs	Connected, but couldn't save — {e:#}
+clients/linux/src/app/connect.rs	Disconnect All
+clients/linux/src/app/connect.rs	It also asks the host to launch “{id}”.
+clients/linux/src/app/connect.rs	It names the host by its label or address, which anything that can open a link could guess. A link that names the host's id connects without asking.
+clients/linux/src/app/connect.rs	Open this link?
+clients/linux/src/app/connect.rs	Punktfunk can't open “{}” links yet.
+clients/linux/src/app/connect.rs	Streaming from {a} and {b}
+clients/linux/src/app/connect.rs	Streaming from {one}
+clients/linux/src/app/connect.rs	Streaming from {} hosts
+clients/linux/src/app/connect.rs	That host isn't saved on this device.
+clients/linux/src/app/connect.rs	Trusted on first use — fingerprint {}…
+clients/linux/src/app/connect.rs	{} isn't paired with this device yet — pair it to continue.
+clients/linux/src/app/gate.rs	4-digit PIN shown by the host
+clients/linux/src/app/gate.rs	Approve “{}” in {host_name}’s console or web UI. This device is paired once you approve it.
+clients/linux/src/app/gate.rs	Arm pairing on {} (console or web UI), then enter the PIN it displays.
+clients/linux/src/app/gate.rs	New Host
+clients/linux/src/app/gate.rs	No advertised identity for this host — pair with a PIN instead.
+clients/linux/src/app/gate.rs	Pair with PIN
+clients/linux/src/app/gate.rs	Pair with PIN…
+clients/linux/src/app/gate.rs	Paired with {}
+clients/linux/src/app/gate.rs	Paired with {}
+clients/linux/src/app/gate.rs	Paired, but couldn't save — {e:#}
+clients/linux/src/app/gate.rs	Paired, but couldn't save — {e:#}
+clients/linux/src/app/gate.rs	Pairing Required
+clients/linux/src/app/gate.rs	Request Access
+clients/linux/src/app/gate.rs	Sent a wake signal to “{}”. Waiting for it to come online…
+clients/linux/src/app/gate.rs	This device
+clients/linux/src/app/gate.rs	Try Again
+clients/linux/src/app/gate.rs	Use a PIN instead…
+clients/linux/src/app/gate.rs	Waiting for Approval
+clients/linux/src/app/gate.rs	Waking Host
+clients/linux/src/app/gate.rs	{} at {}:{} Pairing with a PIN verifies the certificate fingerprint below; trusting accepts it as-is.
+clients/linux/src/app/gate.rs	{} requires pairing. Request access and approve this device in the host's console (or web UI) — no PIN needed. Or pair with the 4-digit PIN it can display.
+clients/linux/src/app/host_ops.rs	Sending logs to {}…
+clients/linux/src/app/host_ops.rs	This ends every stream from {} and anything running on it. You'll need to wake or start it again.
+clients/linux/src/app/mod.rs	Add a host
+clients/linux/src/app/mod.rs	Close the window
+clients/linux/src/app/mod.rs	Cycle the statistics overlay (off · compact · normal · detailed)
+clients/linux/src/app/mod.rs	Keyboard shortcuts
+clients/linux/src/app/mod.rs	Mute or unmute your microphone (only while the stream sends one)
+clients/linux/src/app/mod.rs	Open the quick actions dial
+clients/linux/src/app/mod.rs	Release captured input (click the stream to capture)
+clients/linux/src/app/mod.rs	Rescan or reload
+clients/linux/src/app/mod.rs	Search the Library
+clients/linux/src/app/mod.rs	Show Hosts
+clients/linux/src/app/mod.rs	Show Library
+clients/linux/src/app/mod.rs	Stream (session window)
+clients/linux/src/app/mod.rs	Switch the mouse mode
+clients/linux/src/app/mod.rs	This window
+clients/linux/src/app/mod.rs	Toggle fullscreen
+clients/linux/src/app/mod.rs	Toggle fullscreen
+clients/linux/src/app/mod.rs	Your changes aren’t being saved — Punktfunk can’t write to its settings folder.
+clients/linux/src/app/profile.rs	Couldn't load the profiles.
+clients/linux/src/app/profile.rs	Couldn't save the profile — {e:#}
+clients/linux/src/app/profile.rs	No profiles on this host.
+clients/linux/src/app/profile.rs	Who’s playing on {}?
+clients/linux/src/app/profile.rs	{g} is gone from this host.
+clients/linux/src/app/unlock.rs	Enter the password for this account on {host}.
+clients/linux/src/app/unlock.rs	Sign In
+clients/linux/src/app/unlock.rs	Sign in as {name}
+clients/linux/src/app/unlock.rs	Stay signed in on this device
+clients/linux/src/cli.rs	Couldn't {verb} {addr}:{port} — it names {} saved hosts. Name one by its fingerprint:
+clients/linux/src/cli.rs	Punktfunk added to the Omarchy menu (Super+Space) — it follows your saved hosts from here
+clients/linux/src/cli.rs	Punktfunk removed from the Omarchy menu
+clients/linux/src/desktop/shortcuts.rs	Copy link
+clients/linux/src/desktop/shortcuts.rs	Couldn't create the shortcut — {e}
+clients/linux/src/desktop/shortcuts.rs	Create Shortcut
+clients/linux/src/desktop/shortcuts.rs	HOME isn't set
+clients/linux/src/desktop/shortcuts.rs	Punktfunk is sandboxed here, so it can't add the shortcut itself. Copy this link and make a launcher for it — it opens the same stream.
+clients/linux/src/desktop/shortcuts.rs	Shortcut for “{label}” added to your applications
+clients/linux/src/hosts/card.rs	Browse Library
+clients/linux/src/hosts/card.rs	Browse Library
+clients/linux/src/hosts/card.rs	Connect With
+clients/linux/src/hosts/card.rs	Copy Link
+clients/linux/src/hosts/card.rs	Copy Link
+clients/linux/src/hosts/card.rs	Default host
+clients/linux/src/hosts/card.rs	Default settings
+clients/linux/src/hosts/card.rs	Found on this network
+clients/linux/src/hosts/card.rs	Host Details…
+clients/linux/src/hosts/card.rs	Host details
+clients/linux/src/hosts/card.rs	Pairing required
+clients/linux/src/hosts/card.rs	Switch Profile…
+clients/linux/src/hosts/card.rs	Unpin Card
+clients/linux/src/hosts/card.rs	Wake Host
+clients/linux/src/hosts/detail.rs	Add its MAC address under Connection to wake it
+clients/linux/src/hosts/detail.rs	An app launcher entry that connects to this host
+clients/linux/src/hosts/detail.rs	Browse Library
+clients/linux/src/hosts/detail.rs	Click the card to pair it
+clients/linux/src/hosts/detail.rs	Connect with
+clients/linux/src/hosts/detail.rs	Copy Link
+clients/linux/src/hosts/detail.rs	Copy and paste between this machine and that host
+clients/linux/src/hosts/detail.rs	Couldn't remove the host
+clients/linux/src/hosts/detail.rs	Couldn't save the host
+clients/linux/src/hosts/detail.rs	Couldn't save the host — {e:#}
+clients/linux/src/hosts/detail.rs	Create Shortcut…
+clients/linux/src/hosts/detail.rs	Default host
+clients/linux/src/hosts/detail.rs	Default settings
+clients/linux/src/hosts/detail.rs	Enter a name for the host.
+clients/linux/src/hosts/detail.rs	Enter the PIN the host shows to pair this device
+clients/linux/src/hosts/detail.rs	Forget Identity…
+clients/linux/src/hosts/detail.rs	Forget {name}'s identity?
+clients/linux/src/hosts/detail.rs	It has to be added and paired again to connect.
+clients/linux/src/hosts/detail.rs	It stays saved with its name, address and presets, but has to be paired again before it connects.
+clients/linux/src/hosts/detail.rs	Keeps the host saved; it has to be paired again to connect
+clients/linux/src/hosts/detail.rs	Make one in Preferences to connect with other settings
+clients/linux/src/hosts/detail.rs	Management port
+clients/linux/src/hosts/detail.rs	Measures the link and recommends a bitrate
+clients/linux/src/hosts/detail.rs	No presets yet
+clients/linux/src/hosts/detail.rs	Not paired
+clients/linux/src/hosts/detail.rs	Pair With PIN…
+clients/linux/src/hosts/detail.rs	Pair first
+clients/linux/src/hosts/detail.rs	Pair first
+clients/linux/src/hosts/detail.rs	Pin “{}” as a card
+clients/linux/src/hosts/detail.rs	Punktfunk connects to it on launch
+clients/linux/src/hosts/detail.rs	Punktfunk opens on its library
+clients/linux/src/hosts/detail.rs	Remove Host
+clients/linux/src/hosts/detail.rs	Send Logs to Host
+clients/linux/src/hosts/detail.rs	Sends a Wake-on-LAN packet
+clients/linux/src/hosts/detail.rs	Share clipboard
+clients/linux/src/hosts/detail.rs	Test Network Speed…
+clients/linux/src/hosts/detail.rs	The host is offline
+clients/linux/src/hosts/detail.rs	The host is offline
+clients/linux/src/hosts/detail.rs	The host is on
+clients/linux/src/hosts/detail.rs	Trusted on first use
+clients/linux/src/hosts/detail.rs	Uploads this device's recent log to the host's web console
+clients/linux/src/hosts/detail.rs	Used when Start in opens the Library or a stream
+clients/linux/src/hosts/detail.rs	Wake Host
+clients/linux/src/hosts/detail.rs	Wake-on-LAN MAC addresses
+clients/linux/src/hosts/detail.rs	Wakes this host from sleep. Learned from the network while it is on; separate several with commas.
+clients/linux/src/hosts/detail.rs	What a click on its card uses
+clients/linux/src/hosts/dialogs.rs	Add Host
+clients/linux/src/hosts/dialogs.rs	Added {shown}. Click it to connect.
+clients/linux/src/hosts/dialogs.rs	Couldn't save the host — {e:#}
+clients/linux/src/hosts/dialogs.rs	Name (optional)
+clients/linux/src/hosts/form.rs	Wake-on-LAN MAC addresses
+clients/linux/src/hosts/form.rs	Wakes this host from sleep. Found on the network automatically when it's on; separate several with commas.
+clients/linux/src/hosts/mod.rs	Add Host
+clients/linux/src/hosts/mod.rs	Add host
+clients/linux/src/hosts/mod.rs	Console UI — the controller-driven couch interface
+clients/linux/src/hosts/mod.rs	Couldn't save — {e:#}
+clients/linux/src/hosts/mod.rs	Hosts on your network appear here automatically. Add one by address with +.
+clients/linux/src/hosts/mod.rs	Link copied
+clients/linux/src/hosts/mod.rs	No hosts yet
+clients/linux/src/hosts/mod.rs	On this network
+clients/linux/src/hosts/mod.rs	Saved hosts
+clients/linux/src/hosts/mod.rs	Scan the network for hosts again
+clients/linux/src/hosts/mod.rs	Searching the network…
+clients/linux/src/hosts/mod.rs	Sort and group
+clients/linux/src/hosts/model.rs	Not paired · click to pair
+clients/linux/src/hosts/model.rs	Offline · wakes on click
+clients/linux/src/hosts/speed.rs	Apply to “{}”
+clients/linux/src/hosts/speed.rs	At {}: {:.1} % loss, {:.1} ms jitter
+clients/linux/src/hosts/speed.rs	Couldn't measure
+clients/linux/src/hosts/speed.rs	Couldn't save the bitrate — {e:#}
+clients/linux/src/hosts/speed.rs	Current bitrate
+clients/linux/src/hosts/speed.rs	Host default
+clients/linux/src/hosts/speed.rs	Measured over the real data plane
+clients/linux/src/hosts/speed.rs	Network Speed
+clients/linux/src/hosts/speed.rs	Recommended bitrate
+clients/linux/src/hosts/speed.rs	Set as default
+clients/linux/src/hosts/speed.rs	Set in “{}”
+clients/linux/src/hosts/speed.rs	The host sends a short burst to {}
+clients/linux/src/hosts/speed.rs	What the check found
+clients/linux/src/hosts/speed.rs	{} of {} packets
+clients/linux/src/hosts/speed.rs	{} of {} packets
+clients/linux/src/hosts/speed.rs	{} set as the default bitrate
+clients/linux/src/hosts/speed.rs	{} set in “{name}”
+clients/linux/src/hosts/speed.rs	━ Live goodput
+clients/linux/src/hosts/speed.rs	┄ Current bitrate
+clients/linux/src/library/customize.rs	Library Sections
+clients/linux/src/library/customize.rs	Move down
+clients/linux/src/library/customize.rs	Move up
+clients/linux/src/library/customize.rs	Restore Defaults
+clients/linux/src/library/details.rs	Always stream with
+clients/linux/src/library/details.rs	Copy Link
+clients/linux/src/library/details.rs	Create Shortcut…
+clients/linux/src/library/details.rs	End Game
+clients/linux/src/library/details.rs	For this title on this host
+clients/linux/src/library/details.rs	Same as the host
+clients/linux/src/library/mod.rs	Couldn't load the library
+clients/linux/src/library/mod.rs	Customize sections
+clients/linux/src/library/mod.rs	End Game
+clients/linux/src/library/mod.rs	Last known library — asking the host…
+clients/linux/src/library/mod.rs	Last known library — pair again to refresh it
+clients/linux/src/library/mod.rs	Last known library — {name} didn’t answer
+clients/linux/src/library/mod.rs	Link copied
+clients/linux/src/library/mod.rs	Loading library…
+clients/linux/src/library/mod.rs	No library yet
+clients/linux/src/library/mod.rs	Pair Again
+clients/linux/src/library/mod.rs	Pair Again
+clients/linux/src/library/mod.rs	Pair a host to browse its games here.
+clients/linux/src/library/mod.rs	Pair {} to browse its library.
+clients/linux/src/library/mod.rs	Search titles
+clients/linux/src/library/mod.rs	Search titles
+clients/linux/src/library/mod.rs	Show Hosts
+clients/linux/src/library/mod.rs	Sort and group
+clients/linux/src/library/mod.rs	This host isn't saved any more
+clients/linux/src/library/mod.rs	Unsaved progress in the game is lost.
+clients/linux/src/library/mod.rs	{host} didn't answer. Check that it's on, then try again.
+clients/linux/src/library/mod.rs	{host} doesn't recognize this device any more. Pair again to see its games.
+clients/linux/src/library/mod.rs	{host} turned the request down (HTTP {code}). Try again later.
+clients/linux/src/library/mod.rs	{host}'s certificate changed since you paired. Pair again to see its games.
+clients/linux/src/library/poster.rs	Add to Favorites
+clients/linux/src/library/poster.rs	Copy Link
+clients/linux/src/library/poster.rs	End Game
+clients/linux/src/library/poster.rs	Remove from Favorites
+clients/linux/src/library/poster.rs	Stream the host's desktop
+clients/linux/src/library/poster.rs	Under an hour
+clients/linux/src/library/rows.rs	Recently played
+clients/linux/src/library/tile.rs	Stream {}'s desktop
+clients/linux/src/settings/about.rs	Punktfunk is licensed under MIT OR Apache-2.0, at your option.
+clients/linux/src/settings/about.rs	Third-party software (Rust crates)
+clients/linux/src/settings/about.rs	Third-party software (system libraries)
+clients/linux/src/settings/about.rs	This application dynamically links system libraries under their own licenses, including GTK 4 and libadwaita (LGPL v2.1+), PipeWire (MIT), and SDL 3 (Zlib). Their full license texts are available from each project. Video decoding uses the system's own Vulkan Video and VAAPI drivers (loaded at runtime, never linked), with OpenH264 and rav1d — both BSD-2-Clause, and both in the Rust crate notices — as the CPU fallback; no FFmpeg is linked or bundled.
+clients/linux/src/settings/field.rs	Reset to Default settings
+clients/linux/src/settings/field.rs	Your changes aren’t being saved — Punktfunk can’t write to its settings folder.
+clients/linux/src/settings/pages/audio.rs	Applies from the next session.
+clients/linux/src/settings/pages/audio.rs	System default
+clients/linux/src/settings/pages/audio.rs	{saved} (not detected)
+clients/linux/src/settings/pages/controllers.rs	Automatic (all controllers)
+clients/linux/src/settings/pages/controllers.rs	No controllers detected
+clients/linux/src/settings/pages/controllers.rs	No controllers detected
+clients/linux/src/settings/pages/controllers.rs	Saved controller
+clients/linux/src/settings/pages/controllers.rs	Steam Controller 2
+clients/linux/src/settings/pages/controllers.rs	Steam Input's virtual pad — Automatic skips it while a real pad is connected
+clients/linux/src/settings/pages/controllers.rs	{name} (not connected)
+clients/linux/src/settings/pages/display.rs	Aspect ratio
+clients/linux/src/settings/pages/display.rs	Display changes apply from the next session.
+clients/linux/src/settings/pages/display.rs	Vulkan Video
+clients/linux/src/settings/pages/display.rs	Which shapes the Resolution row offers
+clients/linux/src/settings/pages/display.rs	{saved} (not detected)
+clients/linux/src/settings/pages/general.rs	Cached art cleared
+clients/linux/src/settings/pages/general.rs	Clear cached art
+clients/linux/src/settings/pages/general.rs	Couldn't clear the cached art — {e}
+clients/linux/src/settings/pages/general.rs	Library opens {}'s games; Stream also connects to its desktop
+clients/linux/src/settings/pages/general.rs	Opens on the host list: there is no default host yet
+clients/linux/src/settings/pages/general.rs	Posters are kept on this device so a library opens before the host answers
+clients/linux/src/settings/pages/general.rs	What each number means
+clients/linux/src/settings/pages/general.rs	While streaming
+clients/linux/src/settings/pages/general.rs	With a controller
+clients/linux/src/settings/pages/input.rs	Quick actions
+clients/linux/src/settings/pages/input.rs	The dial Ctrl+Alt+Shift+O, a two-finger twist or Select+A opens in a stream: what its six buttons hold, and the shortcut chords they can send.
+clients/linux/src/settings/pages/mod.rs	1 advanced setting changed
+clients/linux/src/settings/pages/mod.rs	{n} advanced settings changed
+clients/linux/src/settings/presets.rs	A preset overrides only what you change here; everything else follows Default settings.
+clients/linux/src/settings/presets.rs	Colour — tints this preset's chips on host cards
+clients/linux/src/settings/presets.rs	Couldn't save — {e:#}
+clients/linux/src/settings/presets.rs	Default settings
+clients/linux/src/settings/presets.rs	Delete preset?
+clients/linux/src/settings/presets.rs	Name — already used by another preset
+clients/linux/src/settings/presets.rs	New preset
+clients/linux/src/settings/presets.rs	New preset…
+clients/linux/src/settings/presets.rs	No colour
+clients/linux/src/settings/presets.rs	Rename preset
+clients/linux/src/settings/presets.rs	This preset
+clients/linux/src/settings/presets.rs	Which layer these settings belong to
+clients/linux/src/settings/presets.rs	{bound} host{} will fall back to Default settings.
+clients/linux/src/settings/presets.rs	{pinned} pinned card{} will disappear.
+clients/linux/src/settings/presets.rs	“{name}” will be removed.
+clients/linux/src/settings/quick_actions.rs	A new shortcut takes the first empty dial slot.
+clients/linux/src/settings/quick_actions.rs	Add shortcut
+clients/linux/src/settings/quick_actions.rs	Add shortcut
+clients/linux/src/settings/quick_actions.rs	Click a button to change it, or drag one onto another to swap the two. Ctrl+Alt+Shift+O, a two-finger twist or Select+A opens this dial in a stream.
+clients/linux/src/settings/quick_actions.rs	Hold the modifiers marked on, then the key.
+clients/linux/src/settings/quick_actions.rs	How the dial will draw it
+clients/linux/src/settings/quick_actions.rs	More — the rest of the actions, in the stream
+clients/linux/src/settings/quick_actions.rs	New shortcut
+clients/linux/src/settings/quick_actions.rs	Pad type
+clients/linux/src/settings/quick_actions.rs	Pick a key
+clients/linux/src/settings/quick_actions.rs	Pick a key first
+clients/linux/src/settings/quick_actions.rs	Press the chord…
+clients/linux/src/settings/quick_actions.rs	Quick actions
+clients/linux/src/settings/quick_actions.rs	Remove shortcut
+clients/linux/src/settings/quick_actions.rs	Reset quick actions?
+clients/linux/src/settings/quick_actions.rs	Reset to default
+clients/linux/src/settings/quick_actions.rs	The dial goes back to the platform default and the shortcuts are removed.
+clients/linux/src/settings/quick_actions.rs	Then press the keys on your keyboard
+clients/linux/src/settings/spec.rs	Above 1× supersamples for sharpness; below is lighter on the host
+clients/linux/src/settings/spec.rs	Adds the settings most players never need to change
+clients/linux/src/settings/spec.rs	Advanced statistics
+clients/linux/src/settings/spec.rs	Advertise 10-bit HDR10 so the host upgrades HDR content — shown in HDR where the display supports it, tone-mapped otherwise
+clients/linux/src/settings/spec.rs	Advisory — the host falls back to auto-detect when unavailable
+clients/linux/src/settings/spec.rs	Always keeps this window fullscreen too. F11 leads back out
+clients/linux/src/settings/spec.rs	Always opens it at launch. Otherwise it opens when a controller connects, and this window returns when the last one disconnects
+clients/linux/src/settings/spec.rs	Audio channels
+clients/linux/src/settings/spec.rs	Audio quality
+clients/linux/src/settings/spec.rs	Auto-wake on connect
+clients/linux/src/settings/spec.rs	Automatic picks the best hardware decode, then software
+clients/linux/src/settings/spec.rs	Automatic sends it to the host, except where this device reacts to it too
+clients/linux/src/settings/spec.rs	Capture system shortcuts
+clients/linux/src/settings/spec.rs	Colours track omarchy-theme-set live — off keeps Punktfunk's own look
+clients/linux/src/settings/spec.rs	Controller haptics
+clients/linux/src/settings/spec.rs	Controller rumble
+clients/linux/src/settings/spec.rs	Controller speaker
+clients/linux/src/settings/spec.rs	Controller type
+clients/linux/src/settings/spec.rs	Controller-optimized UI
+clients/linux/src/settings/spec.rs	Decodes and presents the stream
+clients/linux/src/settings/spec.rs	Each frame held absorbs one refresh of hiccup and adds one of delay
+clients/linux/src/settings/spec.rs	Echo cancellation
+clients/linux/src/settings/spec.rs	Every pad is its own player — pick one to force single-player
+clients/linux/src/settings/spec.rs	Exit hint
+clients/linux/src/settings/spec.rs	F11, the mouse at the top edge, or L1+R1+Start+Select lead back out
+clients/linux/src/settings/spec.rs	Follow system theme
+clients/linux/src/settings/spec.rs	Follow variable refresh
+clients/linux/src/settings/spec.rs	Forward Alt+Tab, Super, … to the host while input is captured
+clients/linux/src/settings/spec.rs	Forward controllers
+clients/linux/src/settings/spec.rs	Full chroma (4:4:4)
+clients/linux/src/settings/spec.rs	Full-colour video: crisp small text and thin lines, at more bandwidth. HEVC only, and only where the host can encode it.
+clients/linux/src/settings/spec.rs	Guide button
+clients/linux/src/settings/spec.rs	Hold Select alone for the host's guide button — a tap still goes through
+clients/linux/src/settings/spec.rs	Hold Select for guide
+clients/linux/src/settings/spec.rs	Host audio plays here — System default follows the desktop
+clients/linux/src/settings/spec.rs	Host compositor
+clients/linux/src/settings/spec.rs	Hosts in the Omarchy menu
+clients/linux/src/settings/spec.rs	Invert scroll direction
+clients/linux/src/settings/spec.rs	Keep host audio playing
+clients/linux/src/settings/spec.rs	Keep screen awake
+clients/linux/src/settings/spec.rs	Keeps the host's audio, playing from this machine's speakers, out of the uplink
+clients/linux/src/settings/spec.rs	Lossless is uncompressed PCM — 2.3–4.6 Mb/s off the top of the link, and the host has its own switch
+clients/linux/src/settings/spec.rs	Mouse input
+clients/linux/src/settings/spec.rs	Native follows the monitor the window is on
+clients/linux/src/settings/spec.rs	Off shows the figures Moonlight's overlay also shows. On shows capture to glass as p50/p95 and every stage between
+clients/linux/src/settings/spec.rs	Off, a stream keeps the screen awake only while you play
+clients/linux/src/settings/spec.rs	Off, controllers don't vibrate from the stream or in the menus, whatever the game sends
+clients/linux/src/settings/spec.rs	On a VRR/FreeSync/G-Sync screen, let the panel refresh in step with the stream instead of on a fixed cadence. Applies to fullscreen sessions; harmless on a fixed-refresh screen
+clients/linux/src/settings/spec.rs	Opens the console, the interface built for a controller
+clients/linux/src/settings/spec.rs	Picture fit
+clients/linux/src/settings/spec.rs	Play a DualSense's voice-coil haptics on the pad itself
+clients/linux/src/settings/spec.rs	Play the audio a game sends to the pad's own speaker on the pad, not here
+clients/linux/src/settings/spec.rs	Quick actions
+clients/linux/src/settings/spec.rs	Refresh rate
+clients/linux/src/settings/spec.rs	Render scale
+clients/linux/src/settings/spec.rs	Reverses the wheel and trackpad scroll direction sent to the host
+clients/linux/src/settings/spec.rs	Send this device's controllers to the host — off if it already has them another way
+clients/linux/src/settings/spec.rs	Sends Wake-on-LAN to an offline saved host and waits for it to boot — turn off if hosts behind a VPN look offline when they aren't
+clients/linux/src/settings/spec.rs	Sends your microphone to the host's virtual mic — Ctrl+Alt+Shift+V mutes it mid-stream
+clients/linux/src/settings/spec.rs	Show advanced
+clients/linux/src/settings/spec.rs	Show it
+clients/linux/src/settings/spec.rs	Shows how to leave for a few seconds when a stream starts
+clients/linux/src/settings/spec.rs	Smoother gradients without HDR — 10-bit encoding precision. Needs an NVIDIA host; HDR takes over when it engages.
+clients/linux/src/settings/spec.rs	Smoothness buffer
+clients/linux/src/settings/spec.rs	Start in
+clients/linux/src/settings/spec.rs	Start streams fullscreen
+clients/linux/src/settings/spec.rs	Statistics overlay
+clients/linux/src/settings/spec.rs	Statistics position
+clients/linux/src/settings/spec.rs	Statistics size
+clients/linux/src/settings/spec.rs	Stereo or surround — the host downmixes if its output has fewer
+clients/linux/src/settings/spec.rs	Stream microphone
+clients/linux/src/settings/spec.rs	Super+Space: connect, wake, the console — this writes rows to omarchy-menu.jsonc
+clients/linux/src/settings/spec.rs	Tear-free. Turning it off removes the wait for the screen's refresh — the lowest possible delay, at the cost of visible tearing. Not every driver offers it; the stats overlay names the mode actually in use
+clients/linux/src/settings/spec.rs	The corner the statistics overlay sits in
+clients/linux/src/settings/spec.rs	The host's speakers or headphones keep playing while you stream — needs a host on 0.32+
+clients/linux/src/settings/spec.rs	The input that feeds the host's virtual mic
+clients/linux/src/settings/spec.rs	The overlay's size, on top of your display's scaling
+clients/linux/src/settings/spec.rs	The virtual pad on the host — Automatic matches your controller. An X-Box type has no gyroscope, so pick a DualSense-class one if you want motion.
+clients/linux/src/settings/spec.rs	Touch input
+clients/linux/src/settings/spec.rs	Use controller
+clients/linux/src/settings/spec.rs	Video codec
+clients/linux/src/settings/spec.rs	Video decoder
+clients/linux/src/settings/tables.rs	A host screen on each monitor, laid out as they sit. Close one to give it back
+clients/linux/src/settings/tables.rs	A preference — the host falls back if it can't encode it
+clients/linux/src/settings/tables.rs	All monitors
+clients/linux/src/settings/tables.rs	Buffers a little to even out network hiccups
+clients/linux/src/settings/tables.rs	Capture (games)
+clients/linux/src/settings/tables.rs	Crop to fill
+clients/linux/src/settings/tables.rs	Desktop (absolute)
+clients/linux/src/settings/tables.rs	Direct pointer
+clients/linux/src/settings/tables.rs	Drives the cursor like a laptop trackpad — tap to click
+clients/linux/src/settings/tables.rs	Each frame shows the moment the display can take it
+clients/linux/src/settings/tables.rs	Follows the stream window — resizes renegotiate the host output
+clients/linux/src/settings/tables.rs	Lowest latency
+clients/linux/src/settings/tables.rs	Match window
+clients/linux/src/settings/tables.rs	Native display
+clients/linux/src/settings/tables.rs	No bars — the picture is stretched to the window
+clients/linux/src/settings/tables.rs	No bars — the picture's edges are cut off
+clients/linux/src/settings/tables.rs	Pointer locks to the stream — relative motion, best for games
+clients/linux/src/settings/tables.rs	Pointer moves freely in and out — best for remote desktop work
+clients/linux/src/settings/tables.rs	PyroWave (wired LAN)
+clients/linux/src/settings/tables.rs	Real multi-touch reaches the host — for touch-native apps
+clients/linux/src/settings/tables.rs	Send to host
+clients/linux/src/settings/tables.rs	Stretch to fill
+clients/linux/src/settings/tables.rs	The cursor jumps to your finger — a tap clicks there
+clients/linux/src/settings/tables.rs	The host drives a virtual output at exactly this size
+clients/linux/src/settings/tables.rs	The native mode of this monitor, resolved at connect
+clients/linux/src/settings/tables.rs	The stream shows on the monitor the window is on
+clients/linux/src/settings/tables.rs	The whole picture, with black bars when shapes differ
+clients/linux/src/settings/tables.rs	This device
+clients/linux/src/settings/tables.rs	This monitor
+clients/linux/src/settings/tables.rs	Touch passthrough
+clients/linux/src/settings/tables.rs	Touches on the stream don't reach the host
+clients/linux/src/settings/tables.rs	Wavelet codec for wired LAN — minimal latency, lots of bandwidth
+clients/linux/src/shots.rs	HDMI / DisplayPort Audio
+clients/linux/src/shots.rs	Living Room PC
+clients/linux/src/shots.rs	Living Room PC
+clients/linux/src/shots.rs	NVIDIA GeForce RTX 4070
+clients/linux/src/shots.rs	The Witcher 3
+clients/linux/src/shots.rs	USB Microphone Analog Stereo
+clients/linux/src/widgets/chrome.rs	About Punktfunk
+clients/linux/src/widgets/chrome.rs	Console UI
+clients/linux/src/widgets/chrome.rs	Keyboard Shortcuts
+clients/linux/src/widgets/chrome.rs	Main menu

@@ -1,0 +1,105 @@
+clients/decky/src/boundary.tsx	Punktfunk couldn’t draw this view
+clients/decky/src/boundary.tsx	The plugin hit a display error — your Steam Deck is fine. Reload Punktfunk from Decky&apos;s plugin list, or update the plugin.
+clients/decky/src/catalog.ts	Stream from {}
+clients/decky/src/catalog.ts	{} Steam {} ready in Play menus
+clients/decky/src/game.tsx	Waking {} to stream {}
+clients/decky/src/hooks.ts	A newer client ({}) is available — update it the way you installed it.
+clients/decky/src/hooks.ts	Client is already up to date.
+clients/decky/src/hooks.ts	Client update available ({}). Run: {}
+clients/decky/src/hooks.ts	Client update failed
+clients/decky/src/hooks.ts	Client update failed{}
+clients/decky/src/hooks.ts	Client update timed out — check the box and try again
+clients/decky/src/hooks.ts	Client updated to the latest version.
+clients/decky/src/hooks.ts	Client updated — reboot to finish.
+clients/decky/src/hooks.ts	Couldn’t check the client for updates
+clients/decky/src/hooks.ts	Couldn’t check the client — it predates update checks. Update it once by hand.
+clients/decky/src/hooks.ts	Couldn’t reach the client to update it — is it still installed?
+clients/decky/src/hooks.ts	Couldn’t reach the update server — are you online?
+clients/decky/src/hooks.ts	Development build — plugin updates are disabled; the client is up to date.
+clients/decky/src/hooks.ts	Launch failed ({}): {}
+clients/decky/src/hooks.ts	Launch failed{}: {}
+clients/decky/src/hooks.ts	The client updates outside Punktfunk on this install.
+clients/decky/src/hooks.ts	This client updates outside Punktfunk — use the way you installed it.
+clients/decky/src/hooks.ts	This client updates outside Punktfunk. Run: {}
+clients/decky/src/hooks.ts	Update available: {}.
+clients/decky/src/hooks.ts	Update the plugin from Decky → Developer → Install Plugin from URL.
+clients/decky/src/hooks.ts	Updating the client — this can take a few minutes…
+clients/decky/src/hooks.ts	Updating the client…
+clients/decky/src/hooks.ts	Updating the plugin to v{} — confirm Decky’s prompt. This can take a couple of minutes.
+clients/decky/src/hooks.ts	You’re up to date (plugin v{}).
+clients/decky/src/index.tsx	Check for updates
+clients/decky/src/index.tsx	Client update available
+clients/decky/src/index.tsx	Close {} on the host, then end the stream. Unsaved progress is lost.
+clients/decky/src/index.tsx	Couldn't create the shortcut
+clients/decky/src/index.tsx	Couldn't end the game.
+clients/decky/src/index.tsx	Couldn't reach the Punktfunk client.
+clients/decky/src/index.tsx	Couldn't reach the stream
+clients/decky/src/index.tsx	Couldn’t scan for hosts
+clients/decky/src/index.tsx	End game
+clients/decky/src/index.tsx	End game
+clients/decky/src/index.tsx	Ends a stream that stopped responding.
+clients/decky/src/index.tsx	Host menus
+clients/decky/src/index.tsx	Installing can take a couple of minutes
+clients/decky/src/index.tsx	Missing the Punktfunk entry in your library, or seeing several? This puts one back and removes the rest.
+clients/decky/src/index.tsx	New client version
+clients/decky/src/index.tsx	Newer version
+clients/decky/src/index.tsx	No game shortcuts to remove
+clients/decky/src/index.tsx	No hosts yet
+clients/decky/src/index.tsx	No stream is running
+clients/decky/src/index.tsx	Open Punktfunk
+clients/decky/src/index.tsx	Open Punktfunk to find and pair one.
+clients/decky/src/index.tsx	Open the host's Quick Access Menu
+clients/decky/src/index.tsx	Plugin v{} → v{}{}
+clients/decky/src/index.tsx	Press the Steam/guide button on the host
+clients/decky/src/index.tsx	Punktfunk in Steam's Play menu
+clients/decky/src/index.tsx	Punktfunk isn’t installed
+clients/decky/src/index.tsx	Quick access on host
+clients/decky/src/index.tsx	Recreate library shortcut
+clients/decky/src/index.tsx	Remove game shortcuts
+clients/decky/src/index.tsx	Removed {} game {}
+clients/decky/src/index.tsx	Scanning your network…
+clients/decky/src/index.tsx	Settings, adding a host by address, and browsing a host's games all live here.
+clients/decky/src/index.tsx	Shortcut restored to your library
+clients/decky/src/index.tsx	Shortcut restored — removed {} duplicate {}
+clients/decky/src/index.tsx	Something went wrong while scanning — Refresh tries again.
+clients/decky/src/index.tsx	Steam menu on host
+clients/decky/src/index.tsx	Stopped the stream
+clients/decky/src/index.tsx	Streams started from a game's page run under a hidden entry named after that game. This removes them; each returns on its next Stream.
+clients/decky/src/index.tsx	The ▾ beside a game's Play button lists your hosts that have it, next to Steam Link's; pick one and Play becomes Stream.
+clients/decky/src/index.tsx	This client is too old to find hosts on your network. Saved hosts still work.
+clients/decky/src/index.tsx	This panel launches the Punktfunk app, which isn’t on this Deck yet. Install it in Desktop Mode.
+clients/decky/src/index.tsx	Unsaved progress in the game is lost.
+clients/decky/src/index.tsx	Update Punktfunk
+clients/decky/src/index.tsx	Update available
+clients/decky/src/index.tsx	Update the Punktfunk client
+clients/decky/src/library-page.tsx	game page: the play bar was not reached — Steam's page tree has changed
+clients/decky/src/library-page.tsx	{} host(s) have it
+clients/decky/src/pair.tsx	Arm pairing on the host (its console or web UI), then enter the 4-digit PIN it shows.
+clients/decky/src/pair.tsx	Couldn’t reach the Punktfunk client — is it still installed?
+clients/decky/src/pair.tsx	Couldn’t reach {}
+clients/decky/src/pair.tsx	Pair with
+clients/decky/src/pair.tsx	Paired with {}
+clients/decky/src/pair.tsx	Pairing failed
+clients/decky/src/pair.tsx	Update the Punktfunk client to pair from here
+clients/decky/src/pair.tsx	Wrong PIN, or the host isn’t showing one. Arm pairing again and retry.
+clients/decky/src/patch.ts	{}: handler failed: {}
+clients/decky/src/play-from.tsx	Play from
+clients/decky/src/play-from.tsx	Play from
+clients/decky/src/play-from.tsx	Stream from: %s
+clients/decky/src/play-from.tsx	Stream from: %s
+clients/decky/src/play-from.tsx	This device
+clients/decky/src/steam.ts	client path can't ride Steam's launch options: {}
+clients/decky/src/trust.tsx	: "Request access"
+clients/decky/src/trust.tsx	Approve this Deck in {}’s console
+clients/decky/src/trust.tsx	Connect to
+clients/decky/src/trust.tsx	Couldn’t reach the Punktfunk client — is it still installed?
+clients/decky/src/trust.tsx	Couldn’t save {}
+clients/decky/src/trust.tsx	No advertised identity for this host — pair with a PIN instead.
+clients/decky/src/trust.tsx	Paired with {}
+clients/decky/src/trust.tsx	Request access asks
+clients/decky/src/trust.tsx	Update the Punktfunk client to use request access
+clients/decky/src/trust.tsx	Use a PIN instead…
+clients/decky/src/trust.tsx	{} accepts new devices. Connecting pins its identity so later streams are silent.
+clients/decky/src/trust.tsx	{} didn’t let this Deck in
+clients/decky/src/trust.tsx	{} is already saved under a different identity. Forget it in the Punktfunk app before trusting it again.
+clients/decky/src/trust.tsx	{} needs to let this device in before it can stream.

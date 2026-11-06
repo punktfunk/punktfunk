@@ -1,0 +1,43 @@
+crates/install/punktfunk-setup-win/src/bootstrap.rs	{} isn't admin-only after hardening: {e}
+crates/install/punktfunk-setup-win/src/pack.rs	{}: no runtime files — build the wizard into this dir first
+crates/install/punktfunk-setup-win/src/pack.rs	{}: {e} (and no reboot-time replace)
+crates/install/punktfunk-setup-win/src/wizard.rs	Punktfunk Setup
+crates/install/punktfunk-setup-win/src/wizard.rs	Punktfunk Setup
+crates/install/punktfunk-setup-win/src/wizard/configure.rs	A specific address
+crates/install/punktfunk-setup-win/src/wizard/configure.rs	Keep the box's setting
+crates/install/punktfunk-setup-win/src/wizard/configure.rs	Leave host.env alone
+crates/install/punktfunk-setup-win/src/wizard/configure.rs	Runs next to your other streaming host
+crates/install/punktfunk-setup-win/src/wizard/configure.rs	This PC only
+crates/install/punktfunk-setup-win/src/wizard/configure.rs	This local network
+crates/install/punktfunk-setup-win/src/wizard/done.rs	Approve devices, pick what to stream, change settings. The certificate is the host's own — continue past the browser's warning.
+crates/install/punktfunk-setup-win/src/wizard/done.rs	Client downloads
+crates/install/punktfunk-setup-win/src/wizard/done.rs	Host install guide
+crates/install/punktfunk-setup-win/src/wizard/done.rs	Install a client
+crates/install/punktfunk-setup-win/src/wizard/done.rs	Install the punktfunk host on the PC you stream from.
+crates/install/punktfunk-setup-win/src/wizard/done.rs	It is in the Start menu. Pick your host from the list, or add one by address.
+crates/install/punktfunk-setup-win/src/wizard/done.rs	No host yet?
+crates/install/punktfunk-setup-win/src/wizard/done.rs	On the device you play on — Windows, macOS, iOS, Android, Linux, Steam Deck — then connect and press Approve in the console.
+crates/install/punktfunk-setup-win/src/wizard/done.rs	Open Punktfunk
+crates/install/punktfunk-setup-win/src/wizard/done.rs	Open the web console
+crates/install/punktfunk-setup-win/src/wizard/done.rs	Pairing help
+crates/install/punktfunk-setup-win/src/wizard/done.rs	The punktfunk client is installed.
+crates/install/punktfunk-setup-win/src/wizard/done.rs	The punktfunk client is up to date.
+crates/install/punktfunk-setup-win/src/wizard/done.rs	The punktfunk host is installed and streaming.
+crates/install/punktfunk-setup-win/src/wizard/done.rs	The punktfunk host is up to date.
+crates/install/punktfunk-setup-win/src/wizard/done.rs	Your web console password
+crates/install/punktfunk-setup-win/src/wizard/install.rs	Installing punktfunk…
+crates/install/punktfunk-setup-win/src/wizard/install.rs	Removing punktfunk…
+crates/install/punktfunk-setup-win/src/wizard/install.rs	Something went wrong — the log below has the step.
+crates/install/punktfunk-setup-win/src/wizard/network.rs	'{name}' is set to Public
+crates/install/punktfunk-setup-win/src/wizard/network.rs	Keep it Public, open the firewall for it
+crates/install/punktfunk-setup-win/src/wizard/network.rs	Skip — I'll fix it later
+crates/install/punktfunk-setup-win/src/wizard/network.rs	This is my home network — make '{name}' Private (recommended)
+crates/install/punktfunk-setup-win/src/wizard/network.rs	Windows scopes the standard firewall rules to private networks, so on this network the host would be silently unreachable. VPN and virtual adapters are routinely Public by design — this changes only the named network, never a global setting.
+crates/install/punktfunk-setup-win/src/wizard/welcome.rs	Choose whether a desktop shortcut is added.
+crates/install/punktfunk-setup-win/src/wizard/welcome.rs	Install into your profile with Start-menu shortcuts.
+crates/install/punktfunk-setup-win/src/wizard/welcome.rs	Pick the drivers, Moonlight compatibility, firewall scope, autostart and the console password yourself.
+crates/install/punktfunk-setup-win/src/wizard/welcome.rs	Reconfigure keeps what is on this PC and applies your changes. Uninstall removes it — identity, pairings and passwords stay.
+crates/install/punktfunk-setup-win/src/wizard/welcome.rs	The defaults: virtual display and gamepad drivers, the HDR layer, a tray icon, and the service starts right away. A web console password is generated for you.
+crates/install/punktfunk-setup-win/src/wizard/welcome.rs	This PC becomes a device you play on: the punktfunk client shows the stream from the PC you stream from.
+crates/install/punktfunk-setup-win/src/wizard/welcome.rs	This PC becomes the one you stream from: the punktfunk host sends its screen, audio and games to the devices you play on.
+crates/install/punktfunk-setup-win/src/wizard/welcome.rs	This removes punktfunk from this PC. Identity, pairings and passwords stay — a reinstall picks them up.

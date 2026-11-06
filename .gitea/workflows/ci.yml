@@ -760,6 +760,12 @@ jobs:
       # the repo's markdown. External URLs are deliberately not checked.
       - name: Docs link check
         run: sh scripts/ci/check-docs-links.sh
+      # Text a person reads that is not in l10n/messages yet, per surface: a count may fall,
+      # never rise. Pure text and unfiltered, so a Swift-, Kotlin- or Decky-only PR runs it.
+      - name: Text census ratchet
+        run: |
+          python3 scripts/l10n-census-test.py
+          python3 scripts/l10n-census.py . --check
       # Touched Rust comments fail at 6 (`//`) / 24 (`//!`/`///`). Self-test plants
       # those failures before the live tree is checked.
       - name: Writing-style gates

@@ -1,0 +1,457 @@
+crates/client/pf-console-ui/src/library.rs	Last known library — checking the host…
+crates/client/pf-console-ui/src/library.rs	Last known library — the host didn't answer
+crates/client/pf-console-ui/src/library.rs	Last known library — waking the host…
+crates/client/pf-console-ui/src/ring.rs	A key in this chord is unknown
+crates/client/pf-console-ui/src/ring.rs	Controller mouse
+crates/client/pf-console-ui/src/ring.rs	Controller type
+crates/client/pf-console-ui/src/ring.rs	Direct pointer
+crates/client/pf-console-ui/src/ring.rs	Disconnect, keep the game running
+crates/client/pf-console-ui/src/ring.rs	Empty — press A to choose
+crates/client/pf-console-ui/src/ring.rs	End game
+crates/client/pf-console-ui/src/ring.rs	End stream
+crates/client/pf-console-ui/src/ring.rs	Guide button
+crates/client/pf-console-ui/src/ring.rs	Invert scroll direction
+crates/client/pf-console-ui/src/ring.rs	Move to a slot and press A to swap
+crates/client/pf-console-ui/src/ring.rs	Mute this stream
+crates/client/pf-console-ui/src/ring.rs	No controller is connected
+crates/client/pf-console-ui/src/ring.rs	No controller is connected
+crates/client/pf-console-ui/src/ring.rs	No game this device launched is running here
+crates/client/pf-console-ui/src/ring.rs	No microphone is running this session
+crates/client/pf-console-ui/src/ring.rs	Not on this client yet — use the keyboard
+crates/client/pf-console-ui/src/ring.rs	Pointer input is not allowed
+crates/client/pf-console-ui/src/ring.rs	Quick access menu
+crates/client/pf-console-ui/src/ring.rs	Restart host
+crates/client/pf-console-ui/src/ring.rs	Send text
+crates/client/pf-console-ui/src/ring.rs	Shut down host
+crates/client/pf-console-ui/src/ring.rs	Sleep host
+crates/client/pf-console-ui/src/ring.rs	Swap screens
+crates/client/pf-console-ui/src/ring.rs	The virtual controller is for phones and tablets
+crates/client/pf-console-ui/src/ring.rs	This device has one screen
+crates/client/pf-console-ui/src/ring.rs	This host doesn't offer it
+crates/client/pf-console-ui/src/ring.rs	This host only allows controller input
+crates/client/pf-console-ui/src/ring.rs	Touch mode
+crates/client/pf-console-ui/src/ring.rs	Touch passthrough
+crates/client/pf-console-ui/src/ring.rs	Virtual controller
+crates/client/pf-console-ui/src/ring.rs	{}? Press again
+crates/client/pf-console-ui/src/screens/add_host.rs	Add Host
+crates/client/pf-console-ui/src/screens/add_host.rs	Add host
+crates/client/pf-console-ui/src/screens/add_host.rs	Edit Host
+crates/client/pf-console-ui/src/screens/add_host.rs	Hosts on this network appear automatically — add one by address for everything else.
+crates/client/pf-console-ui/src/screens/add_host.rs	IP or hostname
+crates/client/pf-console-ui/src/screens/add_host.rs	Optional — e.g. Living Room
+crates/client/pf-console-ui/src/screens/add_host.rs	Save changes
+crates/client/pf-console-ui/src/screens/bind_preset.rs	Default for {}
+crates/client/pf-console-ui/src/screens/bind_preset.rs	In use
+crates/client/pf-console-ui/src/screens/bind_preset.rs	No default
+crates/client/pf-console-ui/src/screens/bind_preset.rs	No presets yet — create them in the desktop app, then choose one here.
+crates/client/pf-console-ui/src/screens/bind_preset.rs	Preset for {}
+crates/client/pf-console-ui/src/screens/bind_preset.rs	Set default
+crates/client/pf-console-ui/src/screens/bind_preset.rs	Use for this title
+crates/client/pf-console-ui/src/screens/bind_preset.rs	Use the host's default
+crates/client/pf-console-ui/src/screens/bind_preset.rs	What a plain press on this host's tile connects with. Pinned cards keep their own.
+crates/client/pf-console-ui/src/screens/bind_preset.rs	What this title streams with, overriding the host's default. A pinned card still keeps its own.
+crates/client/pf-console-ui/src/screens/card_menu.rs	A shortcut to one preset on this host. Unpinning it changes nothing about the host or the preset.
+crates/client/pf-console-ui/src/screens/card_menu.rs	Add host
+crates/client/pf-console-ui/src/screens/card_menu.rs	Add to Favorites
+crates/client/pf-console-ui/src/screens/card_menu.rs	Add to home screen
+crates/client/pf-console-ui/src/screens/card_menu.rs	Browse games
+crates/client/pf-console-ui/src/screens/card_menu.rs	Check network…
+crates/client/pf-console-ui/src/screens/card_menu.rs	Clipboard no longer shared with {}
+crates/client/pf-console-ui/src/screens/card_menu.rs	Clipboard shared with {}
+crates/client/pf-console-ui/src/screens/card_menu.rs	Connect to {name} with
+crates/client/pf-console-ui/src/screens/card_menu.rs	Connect with…
+crates/client/pf-console-ui/src/screens/card_menu.rs	Copy link
+crates/client/pf-console-ui/src/screens/card_menu.rs	Default host: Off
+crates/client/pf-console-ui/src/screens/card_menu.rs	Default host: On
+crates/client/pf-console-ui/src/screens/card_menu.rs	Default preset…
+crates/client/pf-console-ui/src/screens/card_menu.rs	Default settings
+crates/client/pf-console-ui/src/screens/card_menu.rs	Edit name and address…
+crates/client/pf-console-ui/src/screens/card_menu.rs	End game
+crates/client/pf-console-ui/src/screens/card_menu.rs	End game — press again
+crates/client/pf-console-ui/src/screens/card_menu.rs	Found on this network.
+crates/client/pf-console-ui/src/screens/card_menu.rs	Host details…
+crates/client/pf-console-ui/src/screens/card_menu.rs	Link copied
+crates/client/pf-console-ui/src/screens/card_menu.rs	Pair again…
+crates/client/pf-console-ui/src/screens/card_menu.rs	Pausing {}'s download…
+crates/client/pf-console-ui/src/screens/card_menu.rs	Pinned “{name}” as a card
+crates/client/pf-console-ui/src/screens/card_menu.rs	Play with preset…
+crates/client/pf-console-ui/src/screens/card_menu.rs	Play {name} with
+crates/client/pf-console-ui/src/screens/card_menu.rs	Remove download — press again
+crates/client/pf-console-ui/src/screens/card_menu.rs	Remove from Favorites
+crates/client/pf-console-ui/src/screens/card_menu.rs	Remove host
+crates/client/pf-console-ui/src/screens/card_menu.rs	Remove host — press again
+crates/client/pf-console-ui/src/screens/card_menu.rs	Save launcher file…
+crates/client/pf-console-ui/src/screens/card_menu.rs	Send logs to host
+crates/client/pf-console-ui/src/screens/card_menu.rs	Sending logs to {}…
+crates/client/pf-console-ui/src/screens/card_menu.rs	Settings preset…
+crates/client/pf-console-ui/src/screens/card_menu.rs	Shared clipboard: {}
+crates/client/pf-console-ui/src/screens/card_menu.rs	Starting {}'s download…
+crates/client/pf-console-ui/src/screens/card_menu.rs	Switch profile…
+crates/client/pf-console-ui/src/screens/card_menu.rs	Test network speed…
+crates/client/pf-console-ui/src/screens/card_menu.rs	This connect only; the card keeps its own preset.
+crates/client/pf-console-ui/src/screens/card_menu.rs	This host isn't saved any more
+crates/client/pf-console-ui/src/screens/card_menu.rs	This host isn't saved any more
+crates/client/pf-console-ui/src/screens/card_menu.rs	Unpair — press again
+crates/client/pf-console-ui/src/screens/card_menu.rs	Unpaired {}. The next connect asks for a PIN.
+crates/client/pf-console-ui/src/screens/card_menu.rs	Unpin card
+crates/client/pf-console-ui/src/screens/card_menu.rs	Wake host
+crates/client/pf-console-ui/src/screens/card_menu.rs	{name} is no longer the default host
+crates/client/pf-console-ui/src/screens/card_menu.rs	{name} is the default host
+crates/client/pf-console-ui/src/screens/card_menu.rs	{name} opens on launch
+crates/client/pf-console-ui/src/screens/card_menu.rs	{} is a favorite
+crates/client/pf-console-ui/src/screens/card_menu.rs	{} is no longer a favorite
+crates/client/pf-console-ui/src/screens/card_menu.rs	{} isn't available right now
+crates/client/pf-console-ui/src/screens/card_menu.rs	{} — press again
+crates/client/pf-console-ui/src/screens/controls.rs	Press these while a stream is running.
+crates/client/pf-console-ui/src/screens/controls.rs	Stream controls
+crates/client/pf-console-ui/src/screens/grants.rs	A Steam Controller 2 paired over Bluetooth can't be detected at all without Bluetooth access. Wired and Puck-dongle controllers need no permission.
+crates/client/pf-console-ui/src/screens/grants.rs	A wired DualSense or DualShock 4 needs USB access to be captured — with it, streams drive rumble, adaptive triggers, lightbar and gyro directly.
+crates/client/pf-console-ui/src/screens/grants.rs	A wired or Puck-dongle Steam Controller 2 needs USB access to be captured; until then it stays in its built-in keyboard/mouse mode.
+crates/client/pf-console-ui/src/screens/grants.rs	Controller access
+crates/client/pf-console-ui/src/screens/grants.rs	Play a short tone through a wired DualSense's audio endpoint, to tell a pad that can't do haptics from a stream that is not sending them.
+crates/client/pf-console-ui/src/screens/home.rs	Add Host
+crates/client/pf-console-ui/src/screens/home.rs	Add Host
+crates/client/pf-console-ui/src/screens/home.rs	Connect with…
+crates/client/pf-console-ui/src/screens/home.rs	Found on this network
+crates/client/pf-console-ui/src/screens/home.rs	Hosts on this network appear automatically. Add one by address for everything else.
+crates/client/pf-console-ui/src/screens/home.rs	Look for hosts on this network again
+crates/client/pf-console-ui/src/screens/home.rs	Not paired yet
+crates/client/pf-console-ui/src/screens/home.rs	Offline · wakes when you connect
+crates/client/pf-console-ui/src/screens/home.rs	Pair with {} to see its games here.
+crates/client/pf-console-ui/src/screens/home.rs	Playing as {}
+crates/client/pf-console-ui/src/screens/home.rs	Register a host by address
+crates/client/pf-console-ui/src/screens/home.rs	Scan Again
+crates/client/pf-console-ui/src/screens/home.rs	Scanning for hosts…
+crates/client/pf-console-ui/src/screens/home.rs	Select a Host
+crates/client/pf-console-ui/src/screens/home.rs	Who’s playing?
+crates/client/pf-console-ui/src/screens/home.rs	{} is asleep. Wake it to see its games.
+crates/client/pf-console-ui/src/screens/home.rs	{} is offline. Its games show here once it is back.
+crates/client/pf-console-ui/src/screens/input_test.rs	Controller test
+crates/client/pf-console-ui/src/screens/input_test.rs	Every button and stick on the controller shows here. Hold B to finish.
+crates/client/pf-console-ui/src/screens/input_test.rs	Hold to finish
+crates/client/pf-console-ui/src/screens/input_test.rs	Last input — {input}
+crates/client/pf-console-ui/src/screens/input_test.rs	Press a button or move a stick
+crates/client/pf-console-ui/src/screens/library.rs	Install Steam titles or add custom entries in the host's web console. This host still streams its desktop.
+crates/client/pf-console-ui/src/screens/library.rs	Loading library…
+crates/client/pf-console-ui/src/screens/library.rs	Loading library…
+crates/client/pf-console-ui/src/screens/library.rs	No games found
+crates/client/pf-console-ui/src/screens/library.rs	No matches
+crates/client/pf-console-ui/src/screens/library.rs	No title on this host contains {}.
+crates/client/pf-console-ui/src/screens/library.rs	Search titles
+crates/client/pf-console-ui/src/screens/library.rs	Stream desktop
+crates/client/pf-console-ui/src/screens/library.rs	{min} min played
+crates/client/pf-console-ui/src/screens/library/games.rs	Set down
+crates/client/pf-console-ui/src/screens/library/games.rs	Set down
+crates/client/pf-console-ui/src/screens/library/games.rs	The Games tab shows these in this order. An empty section stays hidden.
+crates/client/pf-console-ui/src/screens/licenses.rs	Apache License 2.0
+crates/client/pf-console-ui/src/screens/licenses.rs	Bundled font
+crates/client/pf-console-ui/src/screens/licenses.rs	Loading this device's third-party notices…
+crates/client/pf-console-ui/src/screens/licenses.rs	Open-source licences
+crates/client/pf-console-ui/src/screens/licenses.rs	Punktfunk is licensed under MIT OR Apache-2.0, at your option.
+crates/client/pf-console-ui/src/screens/licenses.rs	The Geist typeface, © The Geist Project Authors / Vercel, is licensed under the SIL Open Font License 1.1.
+crates/client/pf-console-ui/src/screens/pad_menu.rs	A short pulse on the controller's motors: is the motor wired, and does the host reach it.
+crates/client/pf-console-ui/src/screens/pad_menu.rs	Shows every button, trigger and stick as the controller sends it, to tell a worn button from a setting. Hold B to finish.
+crates/client/pf-console-ui/src/screens/pad_menu.rs	Test controller
+crates/client/pf-console-ui/src/screens/pair.rs	Approve this device in the host's console
+crates/client/pf-console-ui/src/screens/pair.rs	Device name
+crates/client/pf-console-ui/src/screens/pair.rs	Device name
+crates/client/pf-console-ui/src/screens/pair.rs	Enter the PIN from the host's web console (Pairing page) or its log.
+crates/client/pf-console-ui/src/screens/pair.rs	From the host
+crates/client/pf-console-ui/src/screens/pair.rs	How the host lists this device
+crates/client/pf-console-ui/src/screens/pair.rs	No PIN needed
+crates/client/pf-console-ui/src/screens/pair.rs	Or pair with a PIN
+crates/client/pf-console-ui/src/screens/pair.rs	Pair with {}
+crates/client/pf-console-ui/src/screens/pair.rs	Pairing… confirm the PIN on the host
+crates/client/pf-console-ui/src/screens/pair.rs	Request access and approve this device on the host, or enter the PIN it shows.
+crates/client/pf-console-ui/src/screens/pair.rs	Request access — approve on the host
+crates/client/pf-console-ui/src/screens/pair.rs	Waiting for approval…
+crates/client/pf-console-ui/src/screens/pin_hosts.rs	A pinned preset appears as its own card on the host — one press connects with it.
+crates/client/pf-console-ui/src/screens/pin_hosts.rs	No saved hosts yet — pair with a host first, then pin this preset to it.
+crates/client/pf-console-ui/src/screens/players.rs	A wired DualSense or Steam Controller 2 needs USB access before it can be captured, and a Steam Controller 2 over Bluetooth needs Bluetooth access to be seen at all. OK lists the grants and a haptics test.
+crates/client/pf-console-ui/src/screens/players.rs	Connect one to see it here
+crates/client/pf-console-ui/src/screens/players.rs	Controller not showing? Opens the access list
+crates/client/pf-console-ui/src/screens/players.rs	DualSense / DualShock over USB
+crates/client/pf-console-ui/src/screens/players.rs	DualSense haptics self-test
+crates/client/pf-console-ui/src/screens/players.rs	No controller
+crates/client/pf-console-ui/src/screens/players.rs	No controller connected
+crates/client/pf-console-ui/src/screens/players.rs	Not forwarded
+crates/client/pf-console-ui/src/screens/players.rs	Not showing?
+crates/client/pf-console-ui/src/screens/players.rs	Punktfunk only forwards devices the system classifies as a gamepad or joystick — a pad behind an adapter or hub may enumerate with the adapter's identity, or not at all.
+crates/client/pf-console-ui/src/screens/players.rs	Some controllers need access first
+crates/client/pf-console-ui/src/screens/players.rs	Steam Controller 2 over Bluetooth
+crates/client/pf-console-ui/src/screens/players.rs	Steam Controller 2 over USB
+crates/client/pf-console-ui/src/screens/players.rs	Streams as Xbox 360
+crates/client/pf-console-ui/src/screens/players.rs	Streams as {kind}
+crates/client/pf-console-ui/src/screens/players.rs	{} other devices
+crates/client/pf-console-ui/src/screens/preset.rs	A dot marks what this preset changes; everything else follows Settings. X puts a row back on the global value.
+crates/client/pf-console-ui/src/screens/preset.rs	A preset is already called {}.
+crates/client/pf-console-ui/src/screens/preset.rs	Delete preset
+crates/client/pf-console-ui/src/screens/preset.rs	Delete preset — press again
+crates/client/pf-console-ui/src/screens/preset.rs	Edit settings…
+crates/client/pf-console-ui/src/screens/preset.rs	Name it for what it is for: Couch, Low latency, Travel. The name shows on the cards it is pinned to.
+crates/client/pf-console-ui/src/screens/preset.rs	New Preset
+crates/client/pf-console-ui/src/screens/preset.rs	Pin to hosts…
+crates/client/pf-console-ui/src/screens/preset.rs	Preset name
+crates/client/pf-console-ui/src/screens/preset.rs	Rename Preset
+crates/client/pf-console-ui/src/screens/preset.rs	Use global
+crates/client/pf-console-ui/src/screens/profiles.rs	Ask every time
+crates/client/pf-console-ui/src/screens/profiles.rs	Ask every time
+crates/client/pf-console-ui/src/screens/profiles.rs	Couldn't load the profiles — {why}
+crates/client/pf-console-ui/src/screens/profiles.rs	Everyone on {name} plays as {}.
+crates/client/pf-console-ui/src/screens/profiles.rs	Host and profile
+crates/client/pf-console-ui/src/screens/profiles.rs	Loading profiles…
+crates/client/pf-console-ui/src/screens/profiles.rs	Playing as {} on {}
+crates/client/pf-console-ui/src/screens/profiles.rs	Remember on this device
+crates/client/pf-console-ui/src/screens/profiles.rs	Who’s playing on {}?
+crates/client/pf-console-ui/src/screens/profiles.rs	{name} has no profiles.
+crates/client/pf-console-ui/src/screens/profiles.rs	{n} is gone from this host.
+crates/client/pf-console-ui/src/screens/profiles.rs	{} asks who’s playing each time
+crates/client/pf-console-ui/src/screens/prompt.rs	Exit punktfunk?
+crates/client/pf-console-ui/src/screens/ring_editor.rs	Drop here
+crates/client/pf-console-ui/src/screens/ring_editor.rs	New shortcut
+crates/client/pf-console-ui/src/screens/ring_editor.rs	Point the stick at a button; A changes it. Y lifts a button and A drops it on another to swap; with a pointer, click or drag.
+crates/client/pf-console-ui/src/screens/ring_editor.rs	Press again to reset the dial
+crates/client/pf-console-ui/src/screens/ring_editor.rs	Put down
+crates/client/pf-console-ui/src/screens/ring_editor.rs	Put down
+crates/client/pf-console-ui/src/screens/ring_editor.rs	Quick actions
+crates/client/pf-console-ui/src/screens/ring_editor.rs	Quick actions reset
+crates/client/pf-console-ui/src/screens/ring_editor.rs	Reset to default
+crates/client/pf-console-ui/src/screens/search.rs	Finds the titles on this host whose name contains what you type.
+crates/client/pf-console-ui/src/screens/search.rs	Part of a title
+crates/client/pf-console-ui/src/screens/settings.rs	1 advanced setting changed
+crates/client/pf-console-ui/src/screens/settings.rs	Bitrate in Mbps
+crates/client/pf-console-ui/src/screens/settings.rs	Custom rate
+crates/client/pf-console-ui/src/screens/settings.rs	Height in pixels
+crates/client/pf-console-ui/src/screens/settings.rs	Render scale in percent
+crates/client/pf-console-ui/src/screens/settings.rs	Type a percent
+crates/client/pf-console-ui/src/screens/settings.rs	Type a size
+crates/client/pf-console-ui/src/screens/settings.rs	Width in pixels
+crates/client/pf-console-ui/src/screens/settings.rs	{n} advanced settings changed
+crates/client/pf-console-ui/src/screens/settings/rows.rs	A preference — the host falls back if it can't encode this one.
+crates/client/pf-console-ui/src/screens/settings/rows.rs	A preset bundles stream settings for one use, a low-latency one or a quality one, over the settings here. Pin it to a host as a one-press card.
+crates/client/pf-console-ui/src/screens/settings/rows.rs	A smaller second screen — a dual-screen handheld's lower panel, a foldable half open — shows the companion panel, or the picture with Screens. Off leaves it to the system: for a phone on a TV.
+crates/client/pf-console-ui/src/screens/settings/rows.rs	Adds the settings most players never need to change.
+crates/client/pf-console-ui/src/screens/settings/rows.rs	Advanced settings changed
+crates/client/pf-console-ui/src/screens/settings/rows.rs	Advanced statistics
+crates/client/pf-console-ui/src/screens/settings/rows.rs	All monitors
+crates/client/pf-console-ui/src/screens/settings/rows.rs	All monitors opens a window on each of this computer's monitors, one host screen each, laid out as they sit. Close a window to give its monitor back.
+crates/client/pf-console-ui/src/screens/settings/rows.rs	All monitors shows one host screen on each of this Mac's monitors, laid out as they sit. The extra monitors stay covered until the session ends.
+crates/client/pf-console-ui/src/screens/settings/rows.rs	All shown
+crates/client/pf-console-ui/src/screens/settings/rows.rs	Also play controller 1's rumble on this phone's own motor — for a clip-on pad with no motor. Costs battery.
+crates/client/pf-console-ui/src/screens/settings/rows.rs	Alt+Tab, Super and friends reach the host while input is captured. Off, they act on this device instead.
+crates/client/pf-console-ui/src/screens/settings/rows.rs	Aspect ratio
+crates/client/pf-console-ui/src/screens/settings/rows.rs	Audio and the connection stay live when you switch away; video pauses.
+crates/client/pf-console-ui/src/screens/settings/rows.rs	Audio channels
+crates/client/pf-console-ui/src/screens/settings/rows.rs	Audio processing
+crates/client/pf-console-ui/src/screens/settings/rows.rs	Audio quality
+crates/client/pf-console-ui/src/screens/settings/rows.rs	Auto-wake on connect
+crates/client/pf-console-ui/src/screens/settings/rows.rs	Automatic adapts to the network as you play. Press to type a fixed rate, up to 2 Gbps.
+crates/client/pf-console-ui/src/screens/settings/rows.rs	Automatic picks the best hardware decoder for this GPU, then software.
+crates/client/pf-console-ui/src/screens/settings/rows.rs	Bit-exact PCM instead of Opus — 2.3 Mb/s at 48 kHz, 4.6 at 96, off the top of the link. The host has its own switch and stays on Opus if it can't deliver the rate; the stats overlay names what the session got. Stereo only.
+crates/client/pf-console-ui/src/screens/settings/rows.rs	Capture a wired DualSense directly (touchpad, motion, adaptive triggers). Needs the USB grant when the pad is plugged in.
+crates/client/pf-console-ui/src/screens/settings/rows.rs	Capture system shortcuts
+crates/client/pf-console-ui/src/screens/settings/rows.rs	Capture the Steam Controller 2 directly (touchpads, gyro, paddles) instead of the generic pad Android shows. Needs the Bluetooth or USB grant.
+crates/client/pf-console-ui/src/screens/settings/rows.rs	Controller haptics
+crates/client/pf-console-ui/src/screens/settings/rows.rs	Controller rumble
+crates/client/pf-console-ui/src/screens/settings/rows.rs	Controller speaker
+crates/client/pf-console-ui/src/screens/settings/rows.rs	Controller type
+crates/client/pf-console-ui/src/screens/settings/rows.rs	Controller-optimized UI
+crates/client/pf-console-ui/src/screens/settings/rows.rs	Crop to fill
+crates/client/pf-console-ui/src/screens/settings/rows.rs	Disconnect after
+crates/client/pf-console-ui/src/screens/settings/rows.rs	Draws the animated backdrop small and steps it slower, so the console stays smooth on this TV's graphics chip. Nothing about a stream changes — this is the interface only.
+crates/client/pf-console-ui/src/screens/settings/rows.rs	Draws the menus at 1080p — the backdrop cheaper, too — and lets the display scale them up. Text goes a little softer; the console gets much smoother on a 4K TV or projector, whose graphics chip is far slower than the panel in front of it. Nothing about a stream changes — this is the interface only.
+crates/client/pf-console-ui/src/screens/settings/rows.rs	DualSense over USB
+crates/client/pf-console-ui/src/screens/settings/rows.rs	Echo cancellation
+crates/client/pf-console-ui/src/screens/settings/rows.rs	Ends a backgrounded session so it can't run down the battery.
+crates/client/pf-console-ui/src/screens/settings/rows.rs	Ends a session left in the background after this long.
+crates/client/pf-console-ui/src/screens/settings/rows.rs	Exit hint
+crates/client/pf-console-ui/src/screens/settings/rows.rs	Feeds the decoder slice by slice as frames arrive and marks the media sockets for priority. Off if a decoder shows artefacts under it.
+crates/client/pf-console-ui/src/screens/settings/rows.rs	Follow system theme
+crates/client/pf-console-ui/src/screens/settings/rows.rs	Follow variable refresh
+crates/client/pf-console-ui/src/screens/settings/rows.rs	Forward controllers
+crates/client/pf-console-ui/src/screens/settings/rows.rs	Frames held back before showing. Each one absorbs about a refresh of network hiccup and adds a refresh of delay. Automatic holds two.
+crates/client/pf-console-ui/src/screens/settings/rows.rs	Freezes the backdrop and replaces the console's slides and pops with plain fades. Also the gentler choice on an OLED, where a still field can sit for hours.
+crates/client/pf-console-ui/src/screens/settings/rows.rs	Front the app with this console instead of the cursor UI. Off returns to the cursor UI immediately — switch it back on there.
+crates/client/pf-console-ui/src/screens/settings/rows.rs	Front the app with this console instead of the touch interface. Off returns to the touch home immediately — switch it back on there.
+crates/client/pf-console-ui/src/screens/settings/rows.rs	Full chroma (4:4:4)
+crates/client/pf-console-ui/src/screens/settings/rows.rs	Full-colour video: crisp small text and thin lines, at more bandwidth. Needs an NVIDIA host (NVENC) or the PyroWave codec — other encoders stream 4:2:0 and the session falls back silently.
+crates/client/pf-console-ui/src/screens/settings/rows.rs	Group hosts by
+crates/client/pf-console-ui/src/screens/settings/rows.rs	Guide button
+crates/client/pf-console-ui/src/screens/settings/rows.rs	Gyro from this phone
+crates/client/pf-console-ui/src/screens/settings/rows.rs	HDR10 — engages when the host sends HDR content and this display supports it.
+crates/client/pf-console-ui/src/screens/settings/rows.rs	Higher is sharper and needs a faster wired link.
+crates/client/pf-console-ui/src/screens/settings/rows.rs	Hold OK to send a right click, for a remote with no second button. Off, OK stays the plain immediate left click.
+crates/client/pf-console-ui/src/screens/settings/rows.rs	Hold Select for guide
+crates/client/pf-console-ui/src/screens/settings/rows.rs	Hold Select on its own to press the host's guide button — keep holding for the host's quick-access menu. Automatic arms it only where the real button can't reach the host. A Select tap still goes through, slightly delayed.
+crates/client/pf-console-ui/src/screens/settings/rows.rs	Host compositor
+crates/client/pf-console-ui/src/screens/settings/rows.rs	Host list
+crates/client/pf-console-ui/src/screens/settings/rows.rs	Host list (no default host)
+crates/client/pf-console-ui/src/screens/settings/rows.rs	Host order
+crates/client/pf-console-ui/src/screens/settings/rows.rs	How a physical mouse drives the host: Capture locks the pointer (relative, for games), Desktop leaves it free and sends absolute positions.
+crates/client/pf-console-ui/src/screens/settings/rows.rs	How a physical mouse drives the host: Capture locks the pointer (relative, for games), Desktop leaves it free and sends absolute positions. Ctrl+Alt+Shift+M switches live while streaming.
+crates/client/pf-console-ui/src/screens/settings/rows.rs	How much the overlay shows: Compact (one line) → Normal → Detailed.
+crates/client/pf-console-ui/src/screens/settings/rows.rs	How much the overlay shows: Compact (one line) → Normal → Detailed. Ctrl+Alt+Shift+S cycles it live while streaming.
+crates/client/pf-console-ui/src/screens/settings/rows.rs	How the touchscreen drives the host: Trackpad (relative cursor), Direct pointer (cursor jumps to your finger), or Touch passthrough (raw contacts).
+crates/client/pf-console-ui/src/screens/settings/rows.rs	Invert scroll direction
+crates/client/pf-console-ui/src/screens/settings/rows.rs	Its settings, its name, and the hosts it is pinned to: pinned, it appears as its own card, and one press connects with these settings.
+crates/client/pf-console-ui/src/screens/settings/rows.rs	Keep host audio playing
+crates/client/pf-console-ui/src/screens/settings/rows.rs	Keep screen awake
+crates/client/pf-console-ui/src/screens/settings/rows.rs	Keep streaming in background
+crates/client/pf-console-ui/src/screens/settings/rows.rs	Library sections
+crates/client/pf-console-ui/src/screens/settings/rows.rs	Library view
+crates/client/pf-console-ui/src/screens/settings/rows.rs	Long press to right-click
+crates/client/pf-console-ui/src/screens/settings/rows.rs	Low-latency mode
+crates/client/pf-console-ui/src/screens/settings/rows.rs	Lowest latency
+crates/client/pf-console-ui/src/screens/settings/rows.rs	Lowest latency shows each frame the moment the display can take it — a network hiccup becomes an occasional repeated or skipped frame. Smoothness buffers a little to even those out.
+crates/client/pf-console-ui/src/screens/settings/rows.rs	Match window
+crates/client/pf-console-ui/src/screens/settings/rows.rs	Mouse input
+crates/client/pf-console-ui/src/screens/settings/rows.rs	Native (safe area)
+crates/client/pf-console-ui/src/screens/settings/rows.rs	Native follows the display this window is on.
+crates/client/pf-console-ui/src/screens/settings/rows.rs	New preset…
+crates/client/pf-console-ui/src/screens/settings/rows.rs	Not pinned
+crates/client/pf-console-ui/src/screens/settings/rows.rs	Off shows the figures Moonlight's overlay also shows. On shows capture to glass as p50/p95 and every stage between. Every number: docs.punktfunk.unom.io/docs/stats
+crates/client/pf-console-ui/src/screens/settings/rows.rs	Off, a stream keeps the screen awake only while you play. Left alone for five minutes, it lets this device's own screen saver or sleep take over.
+crates/client/pf-console-ui/src/screens/settings/rows.rs	Off, controllers don't vibrate from the stream or in the menus, whatever the game sends.
+crates/client/pf-console-ui/src/screens/settings/rows.rs	Offload (NDL)
+crates/client/pf-console-ui/src/screens/settings/rows.rs	On a VRR screen, let the panel refresh in step with the stream instead of on a fixed cadence. Applies to fullscreen sessions; harmless on a fixed screen.
+crates/client/pf-console-ui/src/screens/settings/rows.rs	On, the sound comes from the window. Off plays the game's own mix straight to your ears.
+crates/client/pf-console-ui/src/screens/settings/rows.rs	Open-source licences
+crates/client/pf-console-ui/src/screens/settings/rows.rs	Picture fit
+crates/client/pf-console-ui/src/screens/settings/rows.rs	Pinned to 1 host
+crates/client/pf-console-ui/src/screens/settings/rows.rs	Pinned to {n} hosts
+crates/client/pf-console-ui/src/screens/settings/rows.rs	Play a DualSense's fine-grained haptics on the pad itself instead of plain rumble. Negotiated — it changes nothing without a capable host and a wired pad.
+crates/client/pf-console-ui/src/screens/settings/rows.rs	Play the audio a game sends to the controller's own speaker on the pad, not through this device's output.
+crates/client/pf-console-ui/src/screens/settings/rows.rs	Preset “{preset}” on {host}: {value}
+crates/client/pf-console-ui/src/screens/settings/rows.rs	Punktfunk opens fullscreen and stays fullscreen between streams.
+crates/client/pf-console-ui/src/screens/settings/rows.rs	PyroWave (wired LAN)
+crates/client/pf-console-ui/src/screens/settings/rows.rs	Quick actions
+crates/client/pf-console-ui/src/screens/settings/rows.rs	Reduce interface resolution
+crates/client/pf-console-ui/src/screens/settings/rows.rs	Reduce motion
+crates/client/pf-console-ui/src/screens/settings/rows.rs	Refresh rate
+crates/client/pf-console-ui/src/screens/settings/rows.rs	Render scale
+crates/client/pf-console-ui/src/screens/settings/rows.rs	Reverses the wheel and trackpad scroll direction sent to the host.
+crates/client/pf-console-ui/src/screens/settings/rows.rs	Rumble on this phone
+crates/client/pf-console-ui/src/screens/settings/rows.rs	Saved (disconnected)
+crates/client/pf-console-ui/src/screens/settings/rows.rs	Second screen
+crates/client/pf-console-ui/src/screens/settings/rows.rs	Send Wake-on-LAN to a sleeping host before connecting. Turn off for hosts reached over a VPN, where the wake wait only adds delay.
+crates/client/pf-console-ui/src/screens/settings/rows.rs	Send controllers connected to this device to the host. Turn it off when your controller already reaches the host another way — USB passthrough such as VirtualHere, or a pad plugged into the host — so games don't see two of them.
+crates/client/pf-console-ui/src/screens/settings/rows.rs	Send this device's microphone to the host's virtual mic. Ctrl+Alt+Shift+V mutes and unmutes it while streaming.
+crates/client/pf-console-ui/src/screens/settings/rows.rs	Send this phone's motion as controller 1's gyro when that pad has none of its own — the on-screen pad included. Only games that read gyro notice.
+crates/client/pf-console-ui/src/screens/settings/rows.rs	Send to host
+crates/client/pf-console-ui/src/screens/settings/rows.rs	Shelf shows one cover at a time, big. Grid shows about eighteen at once — for when you already know what you are looking for. The library's own bar switches it while you browse, along with the sort.
+crates/client/pf-console-ui/src/screens/settings/rows.rs	Show advanced
+crates/client/pf-console-ui/src/screens/settings/rows.rs	Show it
+crates/client/pf-console-ui/src/screens/settings/rows.rs	Shows how to leave for a few seconds when a stream starts.
+crates/client/pf-console-ui/src/screens/settings/rows.rs	Smoother gradients without HDR — the picture is encoded at 10-bit precision. Needs an NVIDIA or AMD host, or Intel on Linux; HDR takes over when it engages.
+crates/client/pf-console-ui/src/screens/settings/rows.rs	Smoothness buffer
+crates/client/pf-console-ui/src/screens/settings/rows.rs	Software (SDL)
+crates/client/pf-console-ui/src/screens/settings/rows.rs	Some hidden settings differ from a fresh install. A shows them.
+crates/client/pf-console-ui/src/screens/settings/rows.rs	Spatial audio
+crates/client/pf-console-ui/src/screens/settings/rows.rs	Split the host row into bands, each named over its first card: by the preset a card connects with, or online before offline.
+crates/client/pf-console-ui/src/screens/settings/rows.rs	Start in
+crates/client/pf-console-ui/src/screens/settings/rows.rs	Start streams fullscreen
+crates/client/pf-console-ui/src/screens/settings/rows.rs	Statistics overlay
+crates/client/pf-console-ui/src/screens/settings/rows.rs	Statistics position
+crates/client/pf-console-ui/src/screens/settings/rows.rs	Statistics size
+crates/client/pf-console-ui/src/screens/settings/rows.rs	Steam Controller 2
+crates/client/pf-console-ui/src/screens/settings/rows.rs	Steam Controller 2 passthrough
+crates/client/pf-console-ui/src/screens/settings/rows.rs	Stops the host's audio, playing from this device's speakers, being picked up and sent back. Turn it off if your microphone already runs its own processing.
+crates/client/pf-console-ui/src/screens/settings/rows.rs	Stream controls
+crates/client/pf-console-ui/src/screens/settings/rows.rs	Stream microphone
+crates/client/pf-console-ui/src/screens/settings/rows.rs	Streams go fullscreen. The host list returns to a window.
+crates/client/pf-console-ui/src/screens/settings/rows.rs	Streams open fullscreen instead of windowed.
+crates/client/pf-console-ui/src/screens/settings/rows.rs	Streams stay in a window.
+crates/client/pf-console-ui/src/screens/settings/rows.rs	Stretch to fill
+crates/client/pf-console-ui/src/screens/settings/rows.rs	Tear-free. Off removes the wait for the screen's refresh — the lowest possible delay, at the cost of visible tearing. Not every driver offers it; the stats overlay names the mode actually in use.
+crates/client/pf-console-ui/src/screens/settings/rows.rs	The colour family this backdrop drifts through. Appearance only; nothing about a stream depends on it.
+crates/client/pf-console-ui/src/screens/settings/rows.rs	The console wears your desktop's theme — background, text and accent — and follows a theme switch live. Off, the Background row below picks the look.
+crates/client/pf-console-ui/src/screens/settings/rows.rs	The controllers connected here, their grants and a rumble test.
+crates/client/pf-console-ui/src/screens/settings/rows.rs	The host creates a virtual display at exactly this size — no scaling. Y types any size.
+crates/client/pf-console-ui/src/screens/settings/rows.rs	The host renders larger or smaller than the stream mode and this window resamples — above 1× supersamples, below saves bandwidth. Any percent from 50 to 400 can be typed.
+crates/client/pf-console-ui/src/screens/settings/rows.rs	The host's own speakers or headphones keep playing while you stream. Both ends hear the same audio; needs a host on 0.32 or newer.
+crates/client/pf-console-ui/src/screens/settings/rows.rs	The keys, controller chords and gestures that work while you stream.
+crates/client/pf-console-ui/src/screens/settings/rows.rs	The open-source licences this app ships under.
+crates/client/pf-console-ui/src/screens/settings/rows.rs	The order of the host row: as you added them, by name, or most recently connected first.
+crates/client/pf-console-ui/src/screens/settings/rows.rs	The ring a two-finger twist or Select+A opens in a stream: what its six buttons hold, and the shortcut chords they can send. Edited on the ring itself.
+crates/client/pf-console-ui/src/screens/settings/rows.rs	The size of the statistics overlay, on top of your display's scaling.
+crates/client/pf-console-ui/src/screens/settings/rows.rs	The speaker layout requested from the host.
+crates/client/pf-console-ui/src/screens/settings/rows.rs	The virtual pad the host creates — Automatic matches this controller. A host's preset can pin another; the row says so.
+crates/client/pf-console-ui/src/screens/settings/rows.rs	This console's build.
+crates/client/pf-console-ui/src/screens/settings/rows.rs	This device
+crates/client/pf-console-ui/src/screens/settings/rows.rs	This device
+crates/client/pf-console-ui/src/screens/settings/rows.rs	This device can't decode PyroWave — it needs a Vulkan 1.3 GPU, which most TV boxes don't have. The session streams HEVC instead.
+crates/client/pf-console-ui/src/screens/settings/rows.rs	This device has no hardware AV1 decoder, so the client never asks for AV1 — the session streams HEVC instead.
+crates/client/pf-console-ui/src/screens/settings/rows.rs	This monitor
+crates/client/pf-console-ui/src/screens/settings/rows.rs	Touch input
+crates/client/pf-console-ui/src/screens/settings/rows.rs	Use controller
+crates/client/pf-console-ui/src/screens/settings/rows.rs	Video codec
+crates/client/pf-console-ui/src/screens/settings/rows.rs	Video decoder
+crates/client/pf-console-ui/src/screens/settings/rows.rs	Vulkan Video
+crates/client/pf-console-ui/src/screens/settings/rows.rs	Vulkan Video
+crates/client/pf-console-ui/src/screens/settings/rows.rs	When the stream's shape differs from this window. Fit shows the whole picture with black bars, Crop to fill cuts the edges off, Stretch to fill distorts it.
+crates/client/pf-console-ui/src/screens/settings/rows.rs	When this console fronts the app: whenever a controller is attached, or always — for a device that lives docked to a TV. The switch above turns it off altogether.
+crates/client/pf-console-ui/src/screens/settings/rows.rs	When this console fronts the app: whenever a controller is connected, or always. Without one the remote gets the cursor UI, which it points at. The switch above turns it off altogether.
+crates/client/pf-console-ui/src/screens/settings/rows.rs	Where the guide (Xbox/PS/Steam) and quick-access presses go. Automatic sends them to the host except in Gaming Mode, where Steam on this device reacts to the same press and both overlays would open at once.
+crates/client/pf-console-ui/src/screens/settings/rows.rs	Where the picture shows: this window, or a curved screen.
+crates/client/pf-console-ui/src/screens/settings/rows.rs	Where the stream's audio is decoded. Offload hands the TV's own plane the Opus stream and spends no CPU on it — stereo only, and not every set plays it.
+crates/client/pf-console-ui/src/screens/settings/rows.rs	Where this app opens. Library lands on your host's shelf, Stream goes straight to its desktop, and Back leaves either one on the host list. With one paired host that host is the default; with several, pick one from its Options menu.
+crates/client/pf-console-ui/src/screens/settings/rows.rs	Which compositor drives the virtual output — honored only if available on the host.
+crates/client/pf-console-ui/src/screens/settings/rows.rs	Which corner the statistics overlay sits in.
+crates/client/pf-console-ui/src/screens/settings/rows.rs	Which pad is forwarded to the host, as player 1.
+crates/client/pf-console-ui/src/screens/settings/rows.rs	Which sections the Games tab shows, and in what order.
+crates/client/pf-console-ui/src/screens/settings/rows.rs	Which shapes the Resolution row offers. Picking one moves to its size nearest the current height.
+crates/client/pf-console-ui/src/screens/settings/rows.rs	While streaming
+crates/client/pf-console-ui/src/screens/settings/rows.rs	With a controller
+crates/client/pf-console-ui/src/screens/settings/rows.rs	{n} of {all} shown
+crates/client/pf-console-ui/src/screens/shortcut_editor.rs	Add to the dial
+crates/client/pf-console-ui/src/screens/shortcut_editor.rs	Choose key
+crates/client/pf-console-ui/src/screens/shortcut_editor.rs	Edit name
+crates/client/pf-console-ui/src/screens/shortcut_editor.rs	Hold the modifiers marked on, then press the key. The dial draws it as a keycap.
+crates/client/pf-console-ui/src/screens/shortcut_editor.rs	Hold with
+crates/client/pf-console-ui/src/screens/shortcut_editor.rs	How the dial will draw it
+crates/client/pf-console-ui/src/screens/shortcut_editor.rs	New shortcut
+crates/client/pf-console-ui/src/screens/shortcut_editor.rs	No key yet
+crates/client/pf-console-ui/src/screens/shortcut_editor.rs	Optional — e.g. Task Manager
+crates/client/pf-console-ui/src/screens/shortcut_editor.rs	Pick a key first
+crates/client/pf-console-ui/src/screens/shortcut_editor.rs	Remove shortcut
+crates/client/pf-console-ui/src/screens/unlock.rs	Account password
+crates/client/pf-console-ui/src/screens/unlock.rs	Enter the password for this account on {}.
+crates/client/pf-console-ui/src/screens/unlock.rs	Password, empty
+crates/client/pf-console-ui/src/screens/unlock.rs	Password, entered
+crates/client/pf-console-ui/src/screens/unlock.rs	Sign In
+crates/client/pf-console-ui/src/screens/unlock.rs	Sign In
+crates/client/pf-console-ui/src/screens/unlock.rs	Sign In
+crates/client/pf-console-ui/src/screens/unlock.rs	Sign in as {}
+crates/client/pf-console-ui/src/screens/unlock.rs	Stay signed in on this device
+crates/client/pf-console-ui/src/shell.rs	ABCDEFGHIJKLM NOPQRSTUVWXYZ abcdefghijklm nopqrstuvwxyz 0123456789 :'-.,!?&()/+ ®™©éèêëáàâäóòôöúùûüíìîïçñß ÉÀÖÜ–—’“”…
+crates/client/pf-console-ui/src/shell.rs	Paired with {name}
+crates/client/pf-console-ui/src/shell.rs	{} Mb/s set as the default
+crates/client/pf-console-ui/src/shell/connect.rs	Couldn't connect — {msg}
+crates/client/pf-console-ui/src/shell/connect.rs	Session ended — {reason}
+crates/client/pf-console-ui/src/shell/connect.rs	The host didn't start {title} — nothing is running for it.
+crates/client/pf-console-ui/src/shell/connect.rs	{title} closed right after starting.
+crates/client/pf-console-ui/src/shell/connect.rs	{title} is still starting after 2 minutes.
+crates/client/pf-console-ui/src/shell/overlays.rs	Approve this device in {}'s console or web UI — no PIN needed.
+crates/client/pf-console-ui/src/shell/overlays.rs	Check its power settings, or wake it manually and try again.
+crates/client/pf-console-ui/src/shell/overlays.rs	Connecting to {}…
+crates/client/pf-console-ui/src/shell/overlays.rs	Couldn't measure {}
+crates/client/pf-console-ui/src/shell/overlays.rs	Leaving won't stop the download.
+crates/client/pf-console-ui/src/shell/overlays.rs	Link carries at least {}.
+crates/client/pf-console-ui/src/shell/overlays.rs	Link carries {}.
+crates/client/pf-console-ui/src/shell/overlays.rs	Measuring the link — this takes a few seconds.
+crates/client/pf-console-ui/src/shell/overlays.rs	Set as the default
+crates/client/pf-console-ui/src/shell/overlays.rs	Show stream
+crates/client/pf-console-ui/src/shell/overlays.rs	Show the desktop anyway
+crates/client/pf-console-ui/src/shell/overlays.rs	Starting the game…
+crates/client/pf-console-ui/src/shell/overlays.rs	Starting the stream in this window.
+crates/client/pf-console-ui/src/shell/overlays.rs	Stop Waiting
+crates/client/pf-console-ui/src/shell/overlays.rs	Try Again
+crates/client/pf-console-ui/src/shell/overlays.rs	Waiting for approval…
+crates/client/pf-console-ui/src/shell/overlays.rs	Waiting for it to come online · {} s
+crates/client/pf-console-ui/src/shell/overlays.rs	Waiting for the game's window…
+crates/client/pf-console-ui/src/shell/overlays.rs	{carries} At {}: {:.1} % loss, {:.1} ms jitter
+crates/client/pf-console-ui/src/shell/overlays.rs	{} didn't wake
+crates/client/pf-console-ui/src/shell/overlays.rs	{} recommended, leaving headroom for FEC and loss.
+crates/client/pf-console-ui/src/shell/overlays.rs	{} · {:.1} % loss at {}
+crates/client/pf-console-ui/src/shell/overlays.rs	“{name}” sets this host's bitrate — change it there to use this.
+crates/client/pf-console-ui/src/skia_overlay.rs	Hold L1 + R1 + Start + Select to leave
