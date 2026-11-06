@@ -5,61 +5,63 @@ import Foundation
 public enum L10n {
     /// @home
     public static var fixAt: LocalizedStringResource {
-        LocalizedStringResource("fix_at", defaultValue: "@home", bundle: .atURL(Bundle.module.bundleURL))
+        LocalizedStringResource("fix_at", defaultValue: "@home", bundle: L10n.bundle)
     }
 
     /// C:\Games {x}
     public static var fixBackslash: LocalizedStringResource {
-        LocalizedStringResource("fix_backslash", defaultValue: "C:\\Games {x}", bundle: .atURL(Bundle.module.bundleURL))
+        LocalizedStringResource("fix_backslash", defaultValue: "C:\\Games {x}", bundle: L10n.bundle)
     }
 
     /// {count} files
-    public static func fixFiles(_ count: Int) -> LocalizedStringResource {
-        LocalizedStringResource("fix_files", defaultValue: "\(count) files", bundle: .atURL(Bundle.module.bundleURL))
+    public static func fixFiles(count: Int) -> String {
+        String(localized: LocalizedStringResource("fix_files", defaultValue: "\(count) files", bundle: L10n.bundle))
     }
 
     /// First line Second  line
     public static var fixLines: LocalizedStringResource {
-        LocalizedStringResource("fix_lines", defaultValue: "First line\nSecond  line ", bundle: .atURL(Bundle.module.bundleURL))
+        LocalizedStringResource("fix_lines", defaultValue: "First line\nSecond  line ", bundle: L10n.bundle)
     }
 
     /// Only in English
     public static var fixOnlyEn: LocalizedStringResource {
-        LocalizedStringResource("fix_only_en", defaultValue: "Only in English", bundle: .atURL(Bundle.module.bundleURL))
+        LocalizedStringResource("fix_only_en", defaultValue: "Only in English", bundle: L10n.bundle)
     }
 
     /// {host} is running {app}
-    public static func fixOrder(_ host: String, _ app: String) -> LocalizedStringResource {
-        LocalizedStringResource("fix_order", defaultValue: "\(host) is running \(app)", bundle: .atURL(Bundle.module.bundleURL))
+    public static func fixOrder(host: String, app: String) -> String {
+        String(localized: LocalizedStringResource("fix_order", defaultValue: "\(host) is running \(app)", bundle: L10n.bundle))
     }
 
     /// {count} pads on {host}
-    public static func fixPads(_ count: Int, _ host: String) -> LocalizedStringResource {
-        LocalizedStringResource("fix_pads", defaultValue: "\(count) pads on \(host)", bundle: .atURL(Bundle.module.bundleURL))
+    public static func fixPads(count: Int, host: String) -> String {
+        String(localized: LocalizedStringResource("fix_pads", defaultValue: "\(count) pads on \(host)", bundle: L10n.bundle))
     }
 
     /// 100% sure
     public static var fixPercent: LocalizedStringResource {
-        LocalizedStringResource("fix_percent", defaultValue: "100% sure", bundle: .atURL(Bundle.module.bundleURL))
+        LocalizedStringResource("fix_percent", defaultValue: "100% sure", bundle: L10n.bundle)
     }
 
     /// {pct}% of {total}
-    public static func fixPercentArgs(_ pct: String, _ total: String) -> LocalizedStringResource {
-        LocalizedStringResource("fix_percent_args", defaultValue: "\(pct)% of \(total)", bundle: .atURL(Bundle.module.bundleURL))
+    public static func fixPercentArgs(pct: String, total: String) -> String {
+        String(localized: LocalizedStringResource("fix_percent_args", defaultValue: "\(pct)% of \(total)", bundle: L10n.bundle))
     }
 
     /// Copy link
     public static var fixPlain: LocalizedStringResource {
-        LocalizedStringResource("fix_plain", defaultValue: "Copy link", bundle: .atURL(Bundle.module.bundleURL))
+        LocalizedStringResource("fix_plain", defaultValue: "Copy link", bundle: L10n.bundle)
     }
 
     /// ?mark
     public static var fixQuestion: LocalizedStringResource {
-        LocalizedStringResource("fix_question", defaultValue: "?mark", bundle: .atURL(Bundle.module.bundleURL))
+        LocalizedStringResource("fix_question", defaultValue: "?mark", bundle: L10n.bundle)
     }
 
     /// Don't use "quotes" & <tags>
     public static var fixQuote: LocalizedStringResource {
-        LocalizedStringResource("fix_quote", defaultValue: "Don't use \"quotes\" & <tags>", bundle: .atURL(Bundle.module.bundleURL))
+        LocalizedStringResource("fix_quote", defaultValue: "Don't use \"quotes\" & <tags>", bundle: L10n.bundle)
     }
+
+    private static let bundle = LocalizedStringResource.BundleDescription.atURL(Bundle.module.bundleURL)
 }

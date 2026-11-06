@@ -1,22 +1,22 @@
-//! `pf-l10n apple`: `Localizable.xcstrings` and `L10n.swift` from shared parts. A first
-//! version; the Apple wiring owns it next, against a real Xcode build.
+//! `pf-l10n apple`: `Localizable.xcstrings` and `L10n.swift` for the `PunktfunkShared` module.
 //!
-//! `L10n` has one accessor per message, named in camelCase, returning a
-//! `LocalizedStringResource` whose key is the message key. A message without placeholders is
-//! a property: `Text(L10n.playerStatsScalePct)`. One with placeholders is a function taking
-//! them in English order, a plural's count as `Int`: `Text(L10n.prefsAdvancedChanged(n))`, or
-//! `String(localized: L10n.statsCycleHint(keys))` where a `String` is needed. The accessor's
-//! default value interpolates the arguments in that order, so they fill the catalog's `%1$@`,
-//! `%2$lld`, and the catalog's plural variation picks the form from the count. A plural with
-//! more arguments than its count still needs checking against Xcode.
+//! `L10n` has one accessor per message, named in camelCase. A message without placeholders is
+//! a `LocalizedStringResource`: `Text(L10n.playerStatsScalePct)`, or
+//! `String(localized: L10n.playerStatsScalePct)` where a `String` is needed. A message with
+//! placeholders is a function returning a `String`, one labelled parameter per placeholder in
+//! English order, a plural's count as `Int`: `L10n.prefsAdvancedChanged(count: n)`. It is a
+//! `String` because `Text` reads Markdown in a resource's arguments, and a host name is not
+//! Markdown.
+//!
+//! The catalog keys each entry by message key and marks it manual, so Xcode never edits or
+//! drops it. A plural is a substitution over its count with an explicit argument number, so a
+//! variant need not show the number. The accessor passes every argument in index order; the
+//! catalog's `%N$` picks them out.
 
 use std::fmt::Write as _;
 
-use crate::catalog::{self, Catalog, Compiled, Ix, Message};
+use crate::catalog::{self, Catalog, Compiled, Ix, Row};
 use crate::json::Json;
-
-/// The generated files live in a SwiftPM target, whose resources are `Bundle.module`.
-const BUNDLE: &str = ".atURL(Bundle.module.bundleURL)";
 
 /// `(file name, contents)` for both files.
 pub fn generate(cat: &Catalog, parts: &[String]) -> Result<Vec<(String, String)>, String> {
@@ -27,25 +27,6 @@ pub fn generate(cat: &Catalog, parts: &[String]) -> Result<Vec<(String, String)>
     );
     let mut names: Vec<(String, &str)> = Vec::new();
     for row in &rows {
-        let args = row.en.args();
-        let count = row
-            .en
-            .count()
-            .and_then(|n| args.iter().position(|a| a == n));
-        let mut langs: Vec<(String, Json)> = row
-            .langs
-            .iter()
-            .map(|(lang, c)| ((*lang).to_owned(), unit(c, count, !args.is_empty())))
-            .collect();
-        langs.sort_by(|a, b| a.0.cmp(&b.0));
-        let mut entry = Vec::new();
-        if let Some(note) = row.note {
-            entry.push(("comment".to_owned(), Json::Str(note.to_owned())));
-        }
-        entry.push(("extractionState".into(), Json::Str("manual".into())));
-        entry.push(("localizations".into(), Json::Obj(langs)));
-        strings.push((row.key.to_owned(), Json::Obj(entry)));
-
         let name = camel(row.key);
         if let Some((_, other)) = names.iter().find(|(n, _)| *n == name) {
             return Err(format!(
@@ -54,10 +35,12 @@ pub fn generate(cat: &Catalog, parts: &[String]) -> Result<Vec<(String, String)>
             ));
         }
         names.push((name.clone(), row.key));
-        accessor(&mut swift, row.key, &name, row.en, &args, count)?;
+        strings.push((row.key.to_owned(), entry(row, &cat.shipped)));
+        accessor(&mut swift, row, &name)?;
     }
-    swift.truncate(swift.trim_end().len());
-    swift.push_str("\n}\n");
+    swift.push_str(
+        "    private static let bundle = LocalizedStringResource.BundleDescription.atURL(Bundle.module.bundleURL)\n}\n",
+    );
     let catalog = Json::Obj(vec![
         ("sourceLanguage".into(), Json::Str(cat.source.clone())),
         ("strings".into(), Json::Obj(strings)),
@@ -72,41 +55,93 @@ pub fn generate(cat: &Catalog, parts: &[String]) -> Result<Vec<(String, String)>
     ])
 }
 
-/// One language's entry: a string unit, or plural variations of string units.
-fn unit(c: &Compiled, count: Option<usize>, formatted: bool) -> Json {
-    let string = |ix: &[Ix], formatted: bool| {
-        let value = Json::Str(format_string(ix, count, formatted));
-        let unit = vec![
-            ("state".into(), Json::Str("translated".into())),
-            ("value".into(), value),
-        ];
-        Json::Obj(vec![("stringUnit".into(), Json::Obj(unit))])
-    };
-    match c {
-        Compiled::Plain(ix) => string(ix, formatted),
-        Compiled::Plural(cases) => {
+/// One catalog entry, its fields in the order Xcode writes them. A shipped language without
+/// the message gets the English, state `new`: the compiled table would otherwise hold the key.
+fn entry(row: &Row, shipped: &[String]) -> Json {
+    let args = row.en.args();
+    let count = row
+        .en
+        .count()
+        .and_then(|n| args.iter().position(|a| a == n));
+    let formatted = !args.is_empty();
+    let mut langs: Vec<(String, Json)> = row
+        .langs
+        .iter()
+        .map(|(lang, c)| ((*lang).to_owned(), unit(c, count, formatted, "translated")))
+        .collect();
+    for lang in shipped {
+        if !row.langs.iter().any(|(l, _)| l == lang) {
+            langs.push((lang.clone(), unit(&row.langs[0].1, count, formatted, "new")));
+        }
+    }
+    langs.sort_by(|a, b| a.0.cmp(&b.0));
+    let mut entry = Vec::new();
+    if let Some(note) = row.note {
+        entry.push(("comment".to_owned(), Json::Str(note.to_owned())));
+    }
+    entry.push(("extractionState".into(), Json::Str("manual".into())));
+    entry.push(("localizations".into(), Json::Obj(langs)));
+    Json::Obj(entry)
+}
+
+/// The `stringUnit` field of a language or of a plural form.
+fn string_unit(value: String, state: &str) -> (String, Json) {
+    let unit = vec![
+        ("state".into(), Json::Str(state.into())),
+        ("value".into(), Json::Str(value)),
+    ];
+    ("stringUnit".into(), Json::Obj(unit))
+}
+
+/// One language's entry: a string unit, or for a plural `%#@count@` with the count's
+/// substitution. A top-level plural variation would not compile without the number in each
+/// variant.
+fn unit(c: &Compiled, count: Option<usize>, formatted: bool, state: &str) -> Json {
+    match (c, count) {
+        (Compiled::Plain(ix), _) => {
+            Json::Obj(vec![string_unit(format_string(ix, None, formatted), state)])
+        }
+        (Compiled::Plural(cases), Some(n)) => {
             let mut cases: Vec<_> = cases.iter().collect();
             cases.sort_by_key(|(c, _)| *c);
             let forms = cases
                 .iter()
-                .map(|(c, ix)| (c.name().to_owned(), string(ix, true)))
+                .map(|(c, ix)| {
+                    let form = string_unit(format_string(ix, count, true), state);
+                    (c.name().to_owned(), Json::Obj(vec![form]))
+                })
                 .collect();
-            let plural = Json::Obj(vec![("plural".into(), Json::Obj(forms))]);
-            Json::Obj(vec![("variations".into(), plural)])
+            let sub = Json::Obj(vec![
+                ("argNum".into(), Json::Num((n + 1) as f64)),
+                ("formatSpecifier".into(), Json::Str("lld".into())),
+                (
+                    "variations".into(),
+                    Json::Obj(vec![("plural".into(), Json::Obj(forms))]),
+                ),
+            ]);
+            Json::Obj(vec![
+                string_unit("%#@count@".into(), state),
+                (
+                    "substitutions".into(),
+                    Json::Obj(vec![("count".into(), sub)]),
+                ),
+            ])
         }
+        (Compiled::Plural(_), None) => unreachable!("a plural has a count"),
     }
 }
 
-/// `%1$@` for a placeholder, `%1$lld` for the count; a literal `%` doubles when formatted.
+/// `%1$@` for a placeholder, `%arg` for the count inside its substitution; a literal `%`
+/// doubles when formatted.
 fn format_string(ix: &[Ix], count: Option<usize>, formatted: bool) -> String {
     let mut out = String::new();
     for i in ix {
         match i {
             Ix::Text(t) if formatted => out.push_str(&t.replace('%', "%%")),
             Ix::Text(t) => out.push_str(t),
+            Ix::Arg(n) if Some(*n) == count => out.push_str("%arg"),
             Ix::Arg(n) => {
-                let spec = if Some(*n) == count { "lld" } else { "@" };
-                let _ = write!(out, "%{}${spec}", n + 1);
+                let _ = write!(out, "%{}$@", n + 1);
             }
         }
     }
@@ -146,61 +181,68 @@ fn swift_text(s: &str) -> String {
     out
 }
 
-fn accessor(
-    out: &mut String,
-    key: &str,
-    name: &str,
-    en: &Message,
-    args: &[String],
-    count: Option<usize>,
-) -> Result<(), String> {
-    let ix = match catalog::compile(en, en)? {
+fn accessor(out: &mut String, row: &Row, name: &str) -> Result<(), String> {
+    let args = row.en.args();
+    let count = row.en.count();
+    // The English the code reads: the plain text, or a plural's `other` variant.
+    let ix = match catalog::compile(row.en, row.en)? {
         Compiled::Plain(ix) => ix,
-        Compiled::Plural(cases) => {
-            let other = cases
-                .into_iter()
-                .find(|(c, _)| *c == crate::plural::Category::Other);
-            let ix = other.map(|(_, ix)| ix).unwrap_or_default();
-            if !ix
-                .iter()
-                .any(|i| matches!(i, Ix::Arg(n) if Some(*n) == count))
-            {
-                return Err(format!(
-                    "{key}: the English other variant must show the count"
-                ));
-            }
-            ix
-        }
+        Compiled::Plural(cases) => cases
+            .into_iter()
+            .find(|(c, _)| *c == crate::plural::Category::Other)
+            .map(|(_, ix)| ix)
+            .unwrap_or_default(),
     };
+    let params: Vec<String> = args.iter().map(|a| camel(a)).collect();
     let mut doc = String::new();
-    let mut value = String::new();
+    let mut text = String::new();
+    let mut order = Vec::new();
     for i in &ix {
         match i {
             Ix::Text(t) => {
                 doc.push_str(&t.replace('\n', " "));
-                value.push_str(&swift_text(t));
+                text.push_str(&swift_text(t));
             }
             Ix::Arg(n) => {
                 let _ = write!(doc, "{{{}}}", args[*n]);
-                let _ = write!(value, "\\({})", args[*n]);
+                let _ = write!(text, "\\({})", params[*n]);
+                order.push(*n);
             }
         }
     }
-    let resource =
-        format!("LocalizedStringResource(\"{key}\", defaultValue: \"{value}\", bundle: {BUNDLE})");
+    // The default value carries the arguments in index order. When the English shows each
+    // once and in that order it is the English; otherwise only the arguments, as Xcode's own
+    // generated symbols do.
+    if order != (0..args.len()).collect::<Vec<_>>() {
+        text = params.iter().map(|p| format!("\\({p})")).collect();
+    }
+    let resource = format!(
+        "LocalizedStringResource(\"{}\", defaultValue: \"{text}\", bundle: L10n.bundle)",
+        row.key
+    );
     let _ = writeln!(out, "    /// {}", doc.trim_end());
     if args.is_empty() {
-        let _ = writeln!(out, "    public static var {name}: LocalizedStringResource {{\n        {resource}\n    }}\n");
+        let _ = writeln!(
+            out,
+            "    public static var {name}: LocalizedStringResource {{\n        {resource}\n    }}\n"
+        );
     } else {
-        let params: Vec<String> = args
+        let sig: Vec<String> = args
             .iter()
-            .enumerate()
-            .map(|(i, a)| format!("_ {a}: {}", if Some(i) == count { "Int" } else { "String" }))
+            .zip(&params)
+            .map(|(a, p)| {
+                let ty = if Some(a.as_str()) == count {
+                    "Int"
+                } else {
+                    "String"
+                };
+                format!("{p}: {ty}")
+            })
             .collect();
         let _ = writeln!(
             out,
-            "    public static func {name}({}) -> LocalizedStringResource {{\n        {resource}\n    }}\n",
-            params.join(", ")
+            "    public static func {name}({}) -> String {{\n        String(localized: {resource})\n    }}\n",
+            sig.join(", ")
         );
     }
     Ok(())
@@ -220,10 +262,43 @@ mod tests {
     #[test]
     fn format_strings() {
         let ix = vec![Ix::Arg(1), Ix::Text(" at 5% of ".into()), Ix::Arg(0)];
-        assert_eq!(format_string(&ix, Some(0), true), "%2$@ at 5%% of %1$lld");
+        assert_eq!(format_string(&ix, Some(0), true), "%2$@ at 5%% of %arg");
         assert_eq!(
             format_string(&[Ix::Text("100%".into())], None, false),
             "100%"
+        );
+    }
+
+    /// A plural whose variants never show the count: a substitution, and the count first.
+    #[test]
+    fn plural_without_the_number() {
+        let src = r#"[{"declarations": ["input count", "input players", "local n = count: plural"],
+            "selectors": ["n"], "match": {"n=one": "player {players}", "n=other": "players {players}"}}]"#;
+        let en = catalog::parse_message(&crate::json::parse(src).unwrap(), false).unwrap();
+        let row = Row {
+            key: "fix_players",
+            en: &en,
+            note: None,
+            langs: vec![("en", catalog::compile(&en, &en).unwrap())],
+        };
+        let json = crate::json::pretty(&entry(&row, &["en".into(), "de".into()]));
+        assert!(json.contains(r#""value" : "%#@count@""#), "{json}");
+        assert!(json.contains(r#""argNum" : 1"#), "{json}");
+        assert!(json.contains(r#""value" : "players %2$@""#), "{json}");
+        // German lacks it, so German reads the English.
+        assert!(
+            json.contains(r#""de" : {"#) && json.contains(r#""state" : "new""#),
+            "{json}"
+        );
+        let mut swift = String::new();
+        accessor(&mut swift, &row, "fixPlayers").unwrap();
+        assert!(
+            swift.contains("func fixPlayers(count: Int, players: String) -> String"),
+            "{swift}"
+        );
+        assert!(
+            swift.contains(r#"defaultValue: "\(count)\(players)""#),
+            "{swift}"
         );
     }
 
