@@ -589,6 +589,8 @@ in
         capabilities = "cap_sys_nice=ep";
         owner = "root";
         group = "root";
+        # Readable: the host opens the wrapper to pin its inode, then execs that fd.
+        permissions = "u+rx,g+rx,o+rx";
       };
 
       # CPU-side thread priority for the host's data-plane threads (capture/encode/send and the
