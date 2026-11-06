@@ -2,6 +2,7 @@
 //! actions (sleep, restart, shut down).
 
 use super::*;
+use pf_l10n::{client, common};
 
 impl AppModel {
     pub(super) fn send_logs(
@@ -14,7 +15,7 @@ impl AppModel {
         // a worker thread, with the outcome routed back as a Toast.
         let identity = self.identity.clone();
         let mgmt = mgmt_port.unwrap_or(pf_client_core::library::DEFAULT_MGMT_PORT);
-        self.toast(&format!("Sending logs to {}…", req.host.name));
+        self.toast(&client::hostcard_sending_logs(&req.host.name));
         let out = sender.input_sender().clone();
         std::thread::Builder::new()
             .name("punktfunk-sendlogs".into())
@@ -48,14 +49,10 @@ impl AppModel {
         // menu ("Wake host"), so it goes straight through.
         if danger {
             let dialog = adw::AlertDialog::new(
-                Some(&format!("{label}?")),
-                Some(&format!(
-                    "This ends every stream from {} and anything running on it. \
-                     You'll need to wake or start it again.",
-                    req.host.name
-                )),
+                Some(&pf_l10n::host::host_power_confirm_title(&label)),
+                Some(&client::hostcard_action_confirm_body(&req.host.name)),
             );
-            dialog.add_responses(&[("cancel", "Cancel"), ("go", &label)]);
+            dialog.add_responses(&[("cancel", common::common_cancel()), ("go", &label)]);
             dialog.set_response_appearance("go", adw::ResponseAppearance::Destructive);
             dialog.set_default_response(Some("cancel"));
             dialog.set_close_response("cancel");
@@ -77,7 +74,7 @@ impl AppModel {
         }
         // Blocking network on a worker, outcome as a toast — the SendLogs recipe.
         let identity = self.identity.clone();
-        self.toast(&format!("{label} — asking {}…", req.host.name));
+        self.toast(&client::hostcard_action_asking(&label, &req.host.name));
         let out = sender.input_sender().clone();
         std::thread::Builder::new()
             .name("punktfunk-hostaction".into())

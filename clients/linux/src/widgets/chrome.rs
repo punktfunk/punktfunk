@@ -4,6 +4,7 @@
 
 use adw::prelude::*;
 use gtk::gio;
+use pf_l10n::desktop;
 
 /// A destination's header and bottom bar, both switching `views`. `narrow` swaps the header's
 /// switcher for the bar.
@@ -28,15 +29,24 @@ pub fn destination_header(
 pub fn primary_menu() -> gtk::MenuButton {
     let menu = gio::Menu::new();
     if cfg!(feature = "console") {
-        menu.append(Some("Console UI"), Some("win.console"));
+        menu.append(
+            Some(desktop::desktop_menu_console_ui()),
+            Some("win.console"),
+        );
     }
-    menu.append(Some("Preferences"), Some("win.preferences"));
-    menu.append(Some("Keyboard Shortcuts"), Some("win.shortcuts"));
-    menu.append(Some("About Punktfunk"), Some("win.about"));
+    menu.append(
+        Some(desktop::desktop_menu_preferences()),
+        Some("win.preferences"),
+    );
+    menu.append(
+        Some(desktop::desktop_menu_shortcuts()),
+        Some("win.shortcuts"),
+    );
+    menu.append(Some(desktop::desktop_menu_about()), Some("win.about"));
     gtk::MenuButton::builder()
         .child(&crate::widgets::lucide::row_icon("menu"))
         .menu_model(&menu)
         .primary(true)
-        .tooltip_text("Main menu")
+        .tooltip_text(desktop::desktop_main_menu_hint())
         .build()
 }
