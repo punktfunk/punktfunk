@@ -12,6 +12,7 @@
 	"console_pair_paired_unnamed": "Paired with the host",
 	"console_pair_status_pairing": "Pairing… confirm the PIN on the host",
 	"console_pair_status_requesting": "Approve this device in the host's console",
+	"console_dial_approve_no_pin_unnamed": "Approve this device in the host's console or web UI — no PIN needed.",
 	"console_profile_ask_every_time": "Ask every time",
 	"console_profile_asks_each_time": "{host} asks who’s playing each time",
 	"console_profile_everyone_plays_as": "Everyone on {host} plays as {name}.",

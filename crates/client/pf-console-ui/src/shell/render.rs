@@ -413,7 +413,10 @@ fn shortcuts(hints: Vec<Hint>, glyphs: GlyphStyle, root: bool, no_back_button: b
         })
         .collect();
     if root {
-        kept.insert(0, Hint::new(HintKey::Shoulders, "Tabs"));
+        kept.insert(
+            0,
+            Hint::new(HintKey::Shoulders, pf_l10n::console::console_hint_tabs()),
+        );
     }
     kept
 }

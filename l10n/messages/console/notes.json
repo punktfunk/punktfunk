@@ -10,6 +10,7 @@
 	"console_pair_paired_unnamed": "Toast after pairing when the host's name is unknown.",
 	"console_pair_status_pairing": "Status line beside a spinner while PIN pairing runs.",
 	"console_pair_status_requesting": "Status line beside a spinner while a request waits.",
+	"console_dial_approve_no_pin_unnamed": "Body of the approval wait when the host's name is unknown.",
 	"console_profile_ask_every_time": "A tile in the picker: remember no profile, ask on each connect.",
 	"console_profile_asks_each_time": "Toast after choosing Ask every time. host: the host's name.",
 	"console_profile_everyone_plays_as": "The host has a single profile. host: the host's name; name: the profile's name.",
