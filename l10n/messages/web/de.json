@@ -1239,8 +1239,21 @@
 	"profiles_doctor_box": "Dieser PC",
 	"profiles_doctor_seat": "Seat",
 	"profiles_doctor_again": "Erneut prüfen",
-	"profiles_doctor_note": "Seats laufen. Die Prüfung hat 1 Hinweis.",
-	"profiles_doctor_notes": "Seats laufen. Die Prüfung hat {count} Hinweise.",
+	"profiles_doctor_notes": [
+		{
+			"declarations": [
+				"input count",
+				"local n = count: plural"
+			],
+			"selectors": [
+				"n"
+			],
+			"match": {
+				"n=one": "Seats laufen. Die Prüfung hat {count} Hinweis.",
+				"n=*": "Seats laufen. Die Prüfung hat {count} Hinweise."
+			}
+		}
+	],
 	"pairing_approve_profile": "Möchte als {name} spielen.",
 	"seat_whose_library": "Wessen Bibliothek",
 	"seat_whose_plugins": "Wessen Plugins",
@@ -1264,8 +1277,21 @@
 	"emulators_show_absent": "{count} nicht installierte anzeigen",
 	"emulators_hide_absent": "Nicht installierte ausblenden",
 	"library_entry_role": "Rolle",
-	"library_entry_launched_once": "Einmal gestartet",
-	"library_entry_launches": "{count}-mal gestartet",
+	"library_entry_launches": [
+		{
+			"declarations": [
+				"input count",
+				"local n = count: plural"
+			],
+			"selectors": [
+				"n"
+			],
+			"match": {
+				"n=one": "Einmal gestartet",
+				"n=*": "{count}-mal gestartet"
+			}
+		}
+	],
 	"library_entry_play_time": "{time} gespielt",
 	"library_entry_last_played": "zuletzt {ago}",
 	"profiles_seat_account": "Windows-Konto",

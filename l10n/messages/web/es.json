@@ -497,8 +497,21 @@
 	"library_entry_role_launcher": "Abre un lanzador",
 	"library_entry_role_game": "Un juego",
 	"library_entry_role": "Función",
-	"library_entry_launched_once": "Iniciado una vez",
-	"library_entry_launches": "Iniciado {count} veces",
+	"library_entry_launches": [
+		{
+			"declarations": [
+				"input count",
+				"local n = count: plural"
+			],
+			"selectors": [
+				"n"
+			],
+			"match": {
+				"n=one": "Iniciado una vez",
+				"n=*": "Iniciado {count} veces"
+			}
+		}
+	],
 	"library_entry_play_time": "{time} jugado",
 	"library_entry_last_played": "última vez hace {ago}",
 	"library_entry_prep_title": "Comandos previos",
@@ -1330,8 +1343,21 @@
 	"profiles_doctor_box": "Este PC",
 	"profiles_doctor_seat": "Puesto",
 	"profiles_doctor_again": "Comprobar de nuevo",
-	"profiles_doctor_note": "Los puestos funcionan. El diagnóstico tiene 1 nota.",
-	"profiles_doctor_notes": "Los puestos funcionan. El diagnóstico tiene {count} notas.",
+	"profiles_doctor_notes": [
+		{
+			"declarations": [
+				"input count",
+				"local n = count: plural"
+			],
+			"selectors": [
+				"n"
+			],
+			"match": {
+				"n=one": "Los puestos funcionan. El diagnóstico tiene {count} nota.",
+				"n=*": "Los puestos funcionan. El diagnóstico tiene {count} notas."
+			}
+		}
+	],
 	"pairing_approve_profile": "Solicita jugar como {name}.",
 	"seat_whose_library": "Biblioteca por usuario",
 	"seat_whose_plugins": "Plugins por usuario",
