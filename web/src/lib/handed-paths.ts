@@ -8,6 +8,14 @@ export interface HandedPath {
 	write: boolean;
 }
 
+/** A grant the host refused: its English, and the `code` and `params` that word it. */
+export interface GrantRefusal {
+	path: string;
+	error: string;
+	code?: string;
+	params?: Record<string, string> | null;
+}
+
 /** Every handed path in `value`, found by walking `schema` (the kit's `{schema: {…}}` document). */
 export function handedPaths(schema: unknown, value: unknown): HandedPath[] {
 	const out = new Map<string, HandedPath>();

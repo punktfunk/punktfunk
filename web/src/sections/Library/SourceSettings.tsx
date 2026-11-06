@@ -22,7 +22,8 @@ import {
 	DialogTitle,
 } from "@/components/ui/dialog";
 import { Spinner } from "@/components/ui/spinner";
-import { newlyHanded } from "@/lib/handed-paths";
+import { type GrantRefusal, newlyHanded } from "@/lib/handed-paths";
+import { apiText } from "@/lib/host-messages";
 import { m } from "@/paraglide/messages";
 
 /**
@@ -76,11 +77,14 @@ export const SourceSettingsDialog: FC<{
 
 	const put = async (value: JsonObject, password?: string) => {
 		const saved = await pluginSurfaceOrThrow<{
-			access?: { refused?: { path: string; error: string }[] };
+			access?: { refused?: GrantRefusal[] };
 		} | null>(configUrl, { method: "PUT", body: value, password });
 		for (const r of saved?.access?.refused ?? []) {
 			toast.error(
-				m.plugin_form_grant_refused({ path: r.path, issue: r.error }),
+				m.plugin_form_grant_refused({
+					path: r.path,
+					issue: apiText(r.code, r.params, r.error),
+				}),
 			);
 		}
 		toast.success(m.library_source_settings_saved());
