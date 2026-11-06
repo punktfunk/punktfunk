@@ -13,6 +13,8 @@ store="$HOME/ci/xcframework"
 bundle=clients/apple/PunktfunkCore.xcframework
 mkdir -p "$store"
 find "$store" -mindepth 1 -maxdepth 1 -mtime +2 -exec rm -rf {} +
+# The String Catalog is per checkout, not per bundle: a reused bundle still needs it.
+bash scripts/gen-l10n-apple.sh
 
 if [ -d "$store/$sha/PunktfunkCore.xcframework" ]; then
     rm -rf "$bundle"
