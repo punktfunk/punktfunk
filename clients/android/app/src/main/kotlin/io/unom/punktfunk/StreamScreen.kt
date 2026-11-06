@@ -83,6 +83,8 @@ import io.unom.punktfunk.kit.SessionAccess
 import io.unom.punktfunk.kit.SessionEndReason
 import io.unom.punktfunk.kit.VideoFit
 import io.unom.punktfunk.models.ActiveSession
+import io.unom.punktfunk.kit.R
+import io.unom.punktfunk.kit.say
 import io.unom.punktfunk.kit.library.GameEnd
 import io.unom.punktfunk.kit.library.LibraryClient
 import kotlinx.coroutines.Dispatchers
@@ -479,7 +481,7 @@ fun StreamScreen(
             hostRecord?.let { kh ->
                 scope.launch(Dispatchers.IO) {
                     (IdentityStore(context).load() as? IdentityLoad.Ok)?.identity?.let { id ->
-                        HostActions.invoke(id, kh.address, kh.effectiveMgmtPort, kh.fpHex, kh.name, act.id, act.label, kh.port)
+                        HostActions.invoke(id, kh.address, kh.effectiveMgmtPort, kh.fpHex, kh.name, act.id, act.text(context.resources), kh.port)
                     }
                 }
             }
@@ -512,14 +514,14 @@ fun StreamScreen(
                     val outcome = withContext(Dispatchers.IO) {
                         (IdentityStore(context).load() as? IdentityLoad.Ok)?.identity?.let { id ->
                             LibraryClient.endGame(id, kh.address, kh.effectiveMgmtPort, kh.fpHex, appId, kh.port)
-                        } ?: GameEnd.Failed(context.getString(R.string.android_lib_error_no_identity))
+                        } ?: GameEnd.Failed(say(R.string.android_lib_error_no_identity))
                     }
                     // Gone either way: leave as End stream does. A refusal keeps the stream.
                     if (outcome.gameGone) {
                         NativeBridge.nativeDisconnectQuit(handle)
                         onSessionEnded(SessionEndReason.LOCAL)
                     } else {
-                        Toast.makeText(context, outcome.notice(game.title), Toast.LENGTH_LONG).show()
+                        Toast.makeText(context, outcome.notice(game.title).words(context.resources), Toast.LENGTH_LONG).show()
                     }
                 }
             }

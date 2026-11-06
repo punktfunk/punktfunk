@@ -1,5 +1,6 @@
 package io.unom.punktfunk.console
 
+import android.content.res.Resources
 import android.os.Vibrator
 import android.view.InputDevice
 import io.unom.punktfunk.HostActions
@@ -325,10 +326,10 @@ internal object ConsoleJson {
         JSONObject().put("Progress", JSONObject().put("kbps", kbps)).toString()
 
     /** The answer to `ConsoleCmd::FetchProfiles`, as the console's `ProfilesAnswer`. */
-    fun profilesAnswer(answer: ProfilesAnswer): String = when (answer) {
+    fun profilesAnswer(answer: ProfilesAnswer, res: Resources): String = when (answer) {
         is ProfilesAnswer.Listed -> JSONObject().put("Listed", JSONArray(answer.rows.map(::profileRow))).toString()
         ProfilesAnswer.NoProfiles -> "\"NoProfiles\""
-        is ProfilesAnswer.Failed -> JSONObject().put("Failed", answer.why).toString()
+        is ProfilesAnswer.Failed -> JSONObject().put("Failed", answer.why.words(res)).toString()
     }
 
     // ---- library ------------------------------------------------------------------------------

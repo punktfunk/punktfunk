@@ -4,6 +4,7 @@ import android.app.ActivityManager
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import android.content.res.Resources
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
@@ -477,7 +478,9 @@ object SkiaConsole {
         }
         val parsed = io.unom.punktfunk.kit.link.DeepLinks.parse(url)
         if (parsed is io.unom.punktfunk.kit.link.DeepLinkResult.Refused) {
-            if (parsed.error != io.unom.punktfunk.kit.link.LinkError.NOT_OUR_SCHEME) notice(parsed.message())
+            if (parsed.error != io.unom.punktfunk.kit.link.LinkError.NOT_OUR_SCHEME) {
+                appContext?.let { notice(parsed.message().words(it.resources)) }
+            }
             return
         }
         val link = (parsed as io.unom.punktfunk.kit.link.DeepLinkResult.Parsed).link
@@ -833,7 +836,7 @@ object SkiaConsole {
                     HostRecords.savePick(services.store, kh, null)
                     pushHosts(); pushKnownHosts()
                 }
-                val (phase, message) = failedPhase(token, dialed.said, requestAccess)
+                val (phase, message) = failedPhase(token, dialed.said, requestAccess, app.resources)
                 NativeBridge.nativeConsoleSessionPhase(handle, phase, message)
                 resumeDiscovery()
             }
@@ -1007,13 +1010,14 @@ object SkiaConsole {
     private fun fetchProfiles(c: JSONObject) {
         val addr = c.optString("addr"); val mgmt = c.optInt("mgmt"); val fp = c.optString("fp_hex")
         val id = identity
+        val res = appContext?.resources ?: return
         ioPool.execute {
             val answer = if (id == null) {
                 ProfilesAnswer.Failed(identities.blockedMessage())
             } else {
                 HostProfiles.fetch(id, addr, mgmt, fp, streamPort(fp))
             }
-            val json = ConsoleJson.profilesAnswer(answer)
+            val json = ConsoleJson.profilesAnswer(answer, res)
             state.launch { if (handle != 0L) NativeBridge.nativeConsoleSetProfiles(handle, fp, json) }
         }
     }
@@ -1074,10 +1078,11 @@ object SkiaConsole {
         }
         // The probe blocks for its two-second burst on the IO pool, and the console keeps
         // drawing.
+        val res = appContext?.resources ?: return
         ioPool.execute {
             kotlinx.coroutines.runBlocking {
                 runSpeedTest(
-                    services, id, addr, port, fp,
+                    services, id, addr, port, fp, res,
                     onProgress = { kbps -> state.launch { advanceSpeedProgress(key, kbps) } },
                 ) { p -> state.launch { advanceSpeed(key, p) } }
             }
@@ -1107,9 +1112,10 @@ object SkiaConsole {
             notice(identities.blockedMessage())
             return
         }
+        val res = appContext?.resources ?: return
         ioPool.execute {
             val message = HostActions.invoke(id, addr, mgmt, fp, hostName, actionId, label, streamPort(fp))
-            state.launch { notice(message) }
+            state.launch { notice(message.words(res)) }
         }
     }
 
@@ -1134,7 +1140,7 @@ object SkiaConsole {
      */
     private fun runPairing(
         c: JSONObject,
-        wording: (String) -> String,
+        wording: (String) -> Int,
         ask: (ClientIdentity, String, Int) -> HostServices.Paired,
     ) {
         val addr = c.optString("addr"); val port = c.optInt("port")
@@ -1165,7 +1171,10 @@ object SkiaConsole {
                         NativeBridge.nativeConsoleSetPair(handle, ConsoleJson.pairPaired(req, fp))
                     }
                     is HostServices.Paired.Failed ->
-                        NativeBridge.nativeConsoleSetPair(handle, ConsoleJson.pairFailed(req, wording(paired.token)))
+                        NativeBridge.nativeConsoleSetPair(
+                            handle,
+                            ConsoleJson.pairFailed(req, (appContext ?: return@launch).getString(wording(paired.token))),
+                        )
                 }
             }
         }
@@ -1216,11 +1225,11 @@ object SkiaConsole {
  * asks the box's list again, 7 reopens the password prompt under the host's own sentence ([said],
  * empty for none), and 2 shows any other failure.
  */
-internal fun failedPhase(token: String, said: String, requestAccess: Boolean): Pair<Int, String> =
+internal fun failedPhase(token: String, said: String, requestAccess: Boolean, res: Resources): Pair<Int, String> =
     when (token) {
         PROFILE_LOCKED -> 7 to said
         else -> (if (token == "profile-unknown") 5 else 2) to
-            said.ifEmpty { ConnectErrors.connectMessage(token, requestAccess) }
+            said.ifEmpty { res.getString(ConnectErrors.connectMessage(token, requestAccess)) }
     }
 
 /** One pad's held buttons and axes, by the names the console's `PadTestState` reads. */
