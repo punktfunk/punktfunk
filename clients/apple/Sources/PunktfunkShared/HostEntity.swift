@@ -11,7 +11,8 @@ import AppIntents
 import Foundation
 
 public struct HostEntity: AppEntity, Identifiable {
-    public static let typeDisplayRepresentation = TypeDisplayRepresentation(name: "Host")
+    public static let typeDisplayRepresentation = TypeDisplayRepresentation(
+        name: LocalizedStringResource("apple_entity_host", defaultValue: "Host"))
     public static let defaultQuery = HostEntityQuery()
 
     public let id: UUID

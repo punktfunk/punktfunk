@@ -12,7 +12,8 @@ import Foundation
 
 /// Keeps its name: Shortcuts stores the type name in every saved action that uses a preset.
 public struct ProfileEntity: AppEntity, Identifiable {
-    public static let typeDisplayRepresentation = TypeDisplayRepresentation(name: "Settings Preset")
+    public static let typeDisplayRepresentation = TypeDisplayRepresentation(
+        name: LocalizedStringResource("apple_entity_preset", defaultValue: "Settings Preset"))
     public static let defaultQuery = ProfileEntityQuery()
 
     /// The catalog id — stable across renames, which is why a shortcut keeps working after the
