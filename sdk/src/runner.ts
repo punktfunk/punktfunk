@@ -22,6 +22,7 @@ import {
 	Exit,
 	Fiber,
 	Schedule,
+	type Scope,
 } from "effect";
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -126,25 +127,47 @@ const isPluginDef = (v: unknown): v is PluginDef =>
 	typeof (v as PluginDef).name === "string" &&
 	(v as PluginDef).main !== undefined;
 
-/**
- * The lease behind the store's "running", held while a plugin's `main` runs: a plugin with no page
- * has no other, and over a page the host only extends it. The settle keeps a plugin that dies at
- * start from reading as running. The host's TTL is 90 s, so a killed plugin drops out by itself.
- */
-const holdLease = (pf: Punktfunk, id: string, options: RunnerOptions) => {
-	const call = (method: string, body?: unknown) =>
-		Effect.tryPromise(() => pf.request(method, `/plugins/${id}`, body)).pipe(Effect.ignore);
-	const renew = call("PUT", { title: id });
-	return Effect.sleep(options.leaseSettle ?? "5 seconds").pipe(
-		Effect.andThen(
-			Effect.acquireRelease(renew, () =>
-				call("DELETE").pipe(Effect.timeoutOption("2 seconds")),
-			),
-		),
-		Effect.andThen(Effect.forever(Effect.sleep("30 seconds").pipe(Effect.andThen(renew)))),
-		Effect.scoped,
+/** A connected client, closed with its scope. */
+const client = (own: ConnectOptions | undefined) =>
+	Effect.acquireRelease(
+		Effect.tryPromise(() => connect(own)),
+		(pf) => Effect.sync(() => pf.close()),
 	);
-};
+
+/**
+ * The lease behind the store's "running", held while a plugin runs: a plugin with no page has no
+ * other, and over a page the host only extends it. The settle keeps a plugin that dies at start
+ * from reading as running. The host's TTL is 90 s, so a killed plugin drops out by itself. A
+ * lease that can't be held never stops the plugin.
+ */
+const holdLease = (
+	acquire: Effect.Effect<Punktfunk, unknown, Scope.Scope>,
+	id: string,
+	options: RunnerOptions,
+) =>
+	Effect.sleep(options.leaseSettle ?? "5 seconds").pipe(
+		Effect.andThen(acquire),
+		Effect.flatMap((pf) => {
+			const call = (method: string, body?: unknown) =>
+				Effect.tryPromise(() => pf.request(method, `/plugins/${id}`, body)).pipe(Effect.ignore);
+			const renew = call("PUT", { title: id });
+			return Effect.acquireRelease(renew, () =>
+				call("DELETE").pipe(Effect.timeoutOption("2 seconds")),
+			).pipe(
+				Effect.andThen(Effect.forever(Effect.sleep("30 seconds").pipe(Effect.andThen(renew)))),
+			);
+		}),
+		Effect.scoped,
+		Effect.ignore,
+	);
+
+/** A plugin in a child process, its lease held here: the child's unit has no package dir. */
+const leased = <A>(unit: Unit, id: string, options: RunnerOptions, run: Effect.Effect<A, unknown>) =>
+	Effect.scoped(
+		Effect.forkScoped(holdLease(client(inProcessConnect(unit, options)), id, options)).pipe(
+			Effect.andThen(run),
+		),
+	);
 
 /** One attempt at a unit: import (cache-busted per attempt) and run whatever it exports. */
 const attemptUnit = (
@@ -157,13 +180,14 @@ const attemptUnit = (
 		// A plugin that declared a manifest runs in its own sandbox, in its own process. A loose
 		// script is the operator's own code and stays here, as does everything on a box that
 		// cannot sandbox — with the reason said out loud at startup, never silently.
+		const id = unit.manifest?.id ?? unit.name;
 		if (unit.manifest && options.sandbox !== "off") {
 			const run =
 				options.sandboxRun ?? (process.platform === "win32" ? runInContainer : runSandboxed);
-			return yield* run(unit, unit.manifest, options, log);
+			return yield* leased(unit, id, options, run(unit, unit.manifest, options, log));
 		}
 		if (unit.manifest && (options.ownProcess ?? process.platform === "win32")) {
-			return yield* runInOwnProcess(unit, options);
+			return yield* leased(unit, id, options, runInOwnProcess(unit, options));
 		}
 		const mod = (yield* Effect.tryPromise(
 			() => import(`${pathToFileURL(unit.file).href}?attempt=${attempt}`),
@@ -177,13 +201,12 @@ const attemptUnit = (
 		// (shutdown), after the lease is given back.
 		yield* Effect.scoped(
 			Effect.gen(function* () {
-				const pf = yield* Effect.acquireRelease(
-					Effect.tryPromise(() => connect(own)),
-					(client) => Effect.sync(() => client.close()),
-				);
+				const pf = yield* client(own);
 				// A loose script is in no store listing, so only a package holds a lease.
 				if (unit.packageDir) {
-					yield* Effect.forkScoped(holdLease(pf, unit.manifest?.id ?? def.name, options));
+					yield* Effect.forkScoped(
+						holdLease(Effect.succeed(pf), unit.manifest?.id ?? def.name, options),
+					);
 				}
 				if (Effect.isEffect(def.main)) {
 					// The well-behaved shape: interruption reaches it structurally, its scoped
