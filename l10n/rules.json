@@ -142,6 +142,19 @@
     "player_video_fit_hint": "Existing wording over the hint budget; waits for the wording pass.",
     "store_install_external_note": "Security text: third-party catalog code runs with the runner's privileges.",
     "store_spec_lead": "Security text: a raw package registry has no catalog and no review.",
-    "store_update_all_external_note": "Security text: the same warning, for a bulk update."
+    "store_update_all_external_note": "Security text: the same warning, for a bulk update.",
+    "apierr_device_admit_unfamiliar_origin": "Host sentence over the budget; waits for the wording pass.",
+    "close_monitor_missing": "Host sentence over the budget; waits for the wording pass.",
+    "diag_hyprland_permissions_impact": "Host sentence over the budget; waits for the wording pass.",
+    "diag_hyprland_permissions_remedy": "Host sentence over the budget; waits for the wording pass.",
+    "diag_takeover_privilege_impact": "Host sentence over the budget; waits for the wording pass.",
+    "diag_vdisplay_driver_wedged_remedy": "Host sentence over the budget; waits for the wording pass.",
+    "diag_takeover_privilege_remedy": "Host sentence over the budget; waits for the wording pass.",
+    "diag_virtual_deck_vhci_pads_impact": "Host sentence over the budget; waits for the wording pass.",
+    "display_preset_default_hint": "Host sentence over the budget; waits for the wording pass.",
+    "display_preset_gaming_rig_hint": "Host sentence over the budget; waits for the wording pass.",
+    "display_preset_hotdesk_hint": "Host sentence over the budget; waits for the wording pass.",
+    "display_preset_shared_desktop_hint": "Host sentence over the budget; waits for the wording pass.",
+    "display_preset_workstation_hint": "Host sentence over the budget; waits for the wording pass."
   }
 }

@@ -1669,5 +1669,10 @@
 	"profiles_devices_sign_out_all_body": "Each one needs {account}'s password again to open this desktop.",
 	"profiles_devices_failed": "Couldn't sign out. Try again in a moment.",
 	"seat_own_unmanaged": "{name}'s desktop runs on their own account, so the console manages no plugins or emulators there.",
-	"seat_own_verified": "{name}'s desktop runs on their own account, so only Verified plugins install there."
+	"seat_own_verified": "{name}'s desktop runs on their own account, so only Verified plugins install there.",
+	"display_preset_default_hint": "Good for most setups. Reconnects resume quickly, the stream is the whole desktop, and extra viewers each get their own screen.",
+	"display_preset_gaming_rig_hint": "For a machine with no monitor that you only stream from. The game keeps running when you disconnect, and whoever connects next takes it over.",
+	"display_preset_hotdesk_hint": "One person at a time — roam between your own devices with an instant reconnect. Anyone else is told the box is busy.",
+	"display_preset_shared_desktop_hint": "For a PC you also use in person. Your real monitors are never blanked or left with a leftover display, and extra viewers each get their own screen.",
+	"display_preset_workstation_hint": "Your multi-monitor daily driver. Displays come back exactly where you arranged them, each client keeps its own settings, and the desktop is yours alone."
 }
