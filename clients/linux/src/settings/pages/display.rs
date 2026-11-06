@@ -390,12 +390,15 @@ fn size_row(title: &str, min: u32) -> adw::SpinRow {
 /// quality row stands in for the rate and Bitrate offers Automatic or Fixed, which only move
 /// the spin between 0 and a fixed rate. The returned closure swaps the two rows.
 fn bitrate_row(b: &Build) -> (Field, Rc<dyn Fn(bool)>) {
-    use pf_client_core::settings::{PYROWAVE_BITRATE_HINT, PYROWAVE_FIXED_KBPS};
+    use pf_client_core::settings::PYROWAVE_FIXED_KBPS;
     let row = adw::SpinRow::with_range(0.0, 3000.0, 1.0);
     row.set_title(spec::BITRATE.title());
     row.set_subtitle(spec::BITRATE.caption());
     let auto = b.choice(&spec::BITRATE, &["Automatic", "Fixed"]);
-    set_row_subtitle(auto.widget(), PYROWAVE_BITRATE_HINT);
+    set_row_subtitle(
+        auto.widget(),
+        pf_l10n::client::player_bitrate_kbps_pyrowave_hint(),
+    );
     auto.widget().set_visible(false);
     {
         let r = row.clone();

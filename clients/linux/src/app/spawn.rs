@@ -145,7 +145,7 @@ pub fn spawn_console(
         .map(drop)
         .map_err(|e| {
             tracing::error!(error = %e, "console did not launch");
-            orchestrate::CONSOLE_NOT_STARTED.to_string()
+            pf_l10n::client::dial_console_not_started().to_string()
         })
 }
 

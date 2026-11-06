@@ -377,7 +377,7 @@ fn disc_face(cfg: &OverlayConfig, slot: Option<&SlotId>) -> gtk::Widget {
         let keys = cfg.shortcut(id).map(|s| s.keys.clone()).unwrap_or_default();
         return keycap(&keys).upcast();
     }
-    if let Some(name) = slot_icon(&slot.id(), "") {
+    if let Some(name) = slot_icon(&slot.id(), false) {
         return crate::widgets::lucide::icon(name, ICON_PX).upcast();
     }
     gtk::Label::builder()

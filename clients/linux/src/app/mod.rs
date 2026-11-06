@@ -20,7 +20,6 @@ use adw::prelude::*;
 use gtk::{gdk, gio, glib};
 use pf_client_core::orchestrate::{
     self, trust_route, ConnectAttempt, ConnectOutcome, ExitRoute, HostTarget, TrustRoute,
-    FINGERPRINT_CHANGED,
 };
 use pf_client_core::profiles::{ListedProfile as ProfileRow, ProfilePick};
 use pf_client_core::settings::GamepadUi;
@@ -1031,12 +1030,12 @@ fn shortcut_sections() -> Vec<adw::ShortcutsSection> {
     // The keyboard group is the sections above; the rest read from the shared list.
     for g in shortcuts::groups(shortcuts::Client::Desktop, true)
         .into_iter()
-        .filter(|g| g.title != "Keyboard")
+        .filter(|g| g.kind != shortcuts::Kind::Keyboard)
     {
-        let section = adw::ShortcutsSection::new(Some(g.title));
+        let section = adw::ShortcutsSection::new(Some(&g.heading()));
         for i in g.items {
-            let item = adw::ShortcutsItem::new(i.text, "");
-            item.set_subtitle(i.keys);
+            let item = adw::ShortcutsItem::new(&i.text(), "");
+            item.set_subtitle(&i.keys.to_string());
             section.add(item);
         }
         sections.push(section);

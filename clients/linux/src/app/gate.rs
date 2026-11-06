@@ -8,7 +8,7 @@ use crate::hosts::ConnectRequest;
 use crate::trust;
 use adw::prelude::*;
 use gtk::glib;
-use pf_client_core::orchestrate::{wake_parked_line, WakeOutcome, WakeWait, WAKE_PARKED_HINT};
+use pf_client_core::orchestrate::{wake_parked_line, WakeOutcome, WakeWait};
 use relm4::prelude::*;
 
 /// The waiting dialog plus its Cancel handler. Both halves are needed to dismiss it: a bare
@@ -80,7 +80,7 @@ pub fn wake_and_connect(
                 Some(WakeOutcome::TimedOut) => {
                     // Park in the same dialog. Cancel stays its close response.
                     waiting.set_heading(Some(&wake_parked_line(&req.host.name)));
-                    waiting.set_body(WAKE_PARKED_HINT);
+                    waiting.set_body(pf_l10n::client::dial_wake_parked_hint());
                     waiting.add_response("retry", "Try Again");
                     waiting.set_response_appearance("retry", adw::ResponseAppearance::Suggested);
                     waiting.set_default_response(Some("retry"));

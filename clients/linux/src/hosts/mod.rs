@@ -530,7 +530,7 @@ fn arrange_menu(store: &Rc<Store>) -> (gtk::MenuButton, gio::SimpleAction, gio::
     ] {
         let section = gio::Menu::new();
         for (id, label) in values {
-            let item = gio::MenuItem::new(Some(label), None);
+            let item = gio::MenuItem::new(Some(label()), None);
             item.set_action_and_target_value(Some(action), Some(&id.to_variant()));
             section.append_item(&item);
         }

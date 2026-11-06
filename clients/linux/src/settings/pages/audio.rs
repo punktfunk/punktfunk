@@ -18,7 +18,7 @@ pub fn audio(b: &mut Build) {
     );
     // Lossless is stereo-only: a lossless surround frame does not fit one QUIC datagram at the
     // default MTU (design/hi-res-audio.md §4.2). Greyed, so the reason stays beside its cause.
-    let labels: Vec<&str> = AUDIO_FORMATS.iter().map(|(_, l)| *l).collect();
+    let labels: Vec<&str> = AUDIO_FORMATS.iter().map(|(_, l)| l()).collect();
     let format = b.choice(&spec::AUDIO_FORMAT, &labels);
     {
         let w = format.widget().clone();

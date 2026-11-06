@@ -156,7 +156,7 @@ impl AppModel {
         match route {
             TrustRoute::Pinned(fp_hex) => self.ask_profile(req, fp_hex, false, sender),
             TrustRoute::FingerprintChanged => {
-                self.toast(FINGERPRINT_CHANGED);
+                self.toast(pf_l10n::client::dial_fingerprint_changed());
                 crate::app::gate::pin_dialog(
                     &self.window,
                     sender,
