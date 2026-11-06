@@ -1,5 +1,5 @@
 {
-	"console_dial_no_wake_address": "{host} has no wake address on record.",
+	"console_dial_no_wake_address": "{host} has no wake address on record",
 	"console_error_connect_failed_detail": "Connection failed: {reason}",
 	"console_error_host_closed": "The host closed the connection.",
 	"console_exit_confirm": "Exit",

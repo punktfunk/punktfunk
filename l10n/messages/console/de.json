@@ -1,5 +1,5 @@
 {
-	"console_dial_no_wake_address": "Für {host} ist keine Weckadresse gespeichert.",
+	"console_dial_no_wake_address": "Für {host} ist keine Weckadresse gespeichert",
 	"console_error_connect_failed_detail": "Verbindung fehlgeschlagen: {reason}",
 	"console_error_host_closed": "Der Host hat die Verbindung getrennt.",
 	"console_exit_confirm": "Beenden",
