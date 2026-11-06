@@ -144,6 +144,10 @@ windows = { workspace = true, optional = true, features = [
     "windef",
 ] }
 
+[dev-dependencies]
+# `en-XA`, the pseudo-language the tests word in to find text that does not come from pf-l10n.
+pf-l10n = { path = "../../../l10n", features = ["pseudo"] }
+
 [target.'cfg(any(target_os = "linux", windows))'.dev-dependencies]
 # `logring`'s bridged-decoder test plants `log`-crate records through the tracing-log
 # bridge and installs a registry subscriber — the full-featured halves the shipping layer

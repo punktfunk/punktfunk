@@ -443,6 +443,7 @@ fn dump_profiles() {
                 detail: detail.map(Into::into),
                 occupant: occupant.map(Into::into),
                 steam_sign_in: steam,
+                ..Default::default()
             })
         };
         let p = |id: &str, name: &str, accent: Option<&str>, seat| ListedProfile {

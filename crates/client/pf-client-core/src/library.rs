@@ -728,15 +728,12 @@ pub enum InstallOutcome {
 }
 
 impl InstallOutcome {
-    /// A non-2xx answer: the host's sentence from its `{"error": …}` body when it sent one,
-    /// else the route is missing.
+    /// A non-2xx answer: the host's sentence from its `ApiError` body when it sent one,
+    /// worded by its code ([`crate::host_text::api_error`]), else the route is missing.
     pub fn from_reply(code: u16, body: &str) -> InstallOutcome {
-        let said = serde_json::from_str::<serde_json::Value>(body)
-            .ok()
-            .and_then(|v| v["error"].as_str().map(str::to_string));
-        match (code, said) {
+        match (code, crate::host_text::api_error(body)) {
             (200..=299, _) => InstallOutcome::Done,
-            (_, Some(m)) if !m.is_empty() => InstallOutcome::Refused(m),
+            (_, Some(m)) => InstallOutcome::Refused(m),
             (401 | 404 | 405, _) => InstallOutcome::Unsupported,
             (code, _) => InstallOutcome::Failed(pf_l10n::client::error_mgmt_refused(code)),
         }
@@ -1608,6 +1605,17 @@ mod tests {
             ),
             "Quit Quail first."
         );
+        // The code outranks the English beside it: it is the message in the app's language.
+        let coded =
+            r#"{"error":"Quit the game first.","code":"title_in_use","params":{"title":"Quail"}}"#;
+        assert_eq!(
+            notice(409, coded, InstallAction::Remove),
+            "Quit Quail first."
+        );
+        pf_l10n::with_language("en-XA", || {
+            let said = notice(409, coded, InstallAction::Remove);
+            assert!(said.starts_with('[') && said.contains("Quail"), "{said}");
+        });
         assert_eq!(
             notice(404, "", InstallAction::Pause),
             "This host needs an update to manage games from here."
