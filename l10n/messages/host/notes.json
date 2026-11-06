@@ -20,6 +20,7 @@
 	"host_power_sleep": "Host action: put the host computer to sleep.",
 	"host_power_reboot": "Host action: restart the host computer.",
 	"host_power_shutdown": "Host action: shut down the host computer.",
+	"host_power_restart_service": "Host action: restart the Punktfunk service. Not the computer; the Windows tray and the web console show it.",
 	"host_power_confirm_title": "Confirmation title before a host power action. {action} is the action's name, e.g. 'Restart host'.",
 	"apierr_account_at_desk": "{account} is an account name.",
 	"apierr_account_is_administrator": "{account} is an account name.",

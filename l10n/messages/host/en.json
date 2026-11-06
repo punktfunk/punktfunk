@@ -20,6 +20,7 @@
 	"host_power_sleep": "Sleep host",
 	"host_power_reboot": "Restart host",
 	"host_power_shutdown": "Shut down host",
+	"host_power_restart_service": "Restart Punktfunk",
 	"host_power_confirm_title": "{action}?",
 	"apierr_account_at_desk": "{account} is signed in at the machine. Try again once they have signed out.",
 	"apierr_account_is_administrator": "{account} is an administrator. A seat is a standard user: make {account} a standard user in Windows, or pick another account.",

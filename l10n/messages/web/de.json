@@ -1030,7 +1030,6 @@
 	"setting_audio_voice_chat_host": "Auf dem Host",
 	"setting_audio_voice_apps": "Sprachchat-Apps",
 	"setting_audio_voice_apps_hint": "Apps, die zur eingebauten Sprachchat-Liste hinzukommen.",
-	"host_power_restart_service": "Punktfunk neu starten",
 	"host_settings_restart_banner": "Starte Punktfunk neu, damit das gilt: {names}.",
 	"host_settings_restarting": "Startet neu…",
 	"host_settings_restarted": "Punktfunk wurde neu gestartet. Alle Einstellungen gelten.",

@@ -20,6 +20,7 @@
 	"host_power_sleep": "Host schlafen legen",
 	"host_power_reboot": "Host neu starten",
 	"host_power_shutdown": "Host herunterfahren",
+	"host_power_restart_service": "Punktfunk neu starten",
 	"host_power_confirm_title": "{action}?",
 	"apierr_account_at_desk": "{account} ist am Rechner angemeldet. Versuch es erneut, sobald die Person abgemeldet ist.",
 	"apierr_account_is_administrator": "{account} ist Administrator. Ein Seat ist ein Standardbenutzer: Mach {account} in Windows zum Standardbenutzer oder wähle ein anderes Konto.",

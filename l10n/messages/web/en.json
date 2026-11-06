@@ -1356,7 +1356,6 @@
 	"setting_audio_voice_chat_host": "On the host",
 	"setting_audio_voice_apps": "Voice chat apps",
 	"setting_audio_voice_apps_hint": "Apps added to the built-in voice chat list.",
-	"host_power_restart_service": "Restart Punktfunk",
 	"host_settings_restart_banner": "Restart Punktfunk to apply: {names}.",
 	"host_settings_restarting": "Restarting…",
 	"host_settings_restarted": "Punktfunk restarted. Every setting is in effect.",
