@@ -36,8 +36,6 @@ const HOST_PAD: f64 = 10.0;
 const HOST_AIR: f64 = 20.0;
 /// The Remember switch's pill.
 const REMEMBER_H: f64 = 44.0;
-const REMEMBER_LABEL: &str = "Remember on this device";
-
 fn card_id(i: usize) -> Id {
     Id::new("profile-card", i)
 }
@@ -468,9 +466,9 @@ impl ProfilesScreen {
                     remember: true,
                     ..row.pick()
                 };
-                fx.toast = Some(format!(
-                    "Playing as {} on {}",
-                    pick.display_name, self.ask.name
+                fx.toast = Some(pf_l10n::console::console_profile_playing_as(
+                    &pick.display_name,
+                    &self.ask.name,
                 ));
                 fx.cmds.push(ConsoleCmd::SetProfile {
                     key,
@@ -481,9 +479,8 @@ impl ProfilesScreen {
                 if self.ask.saved.is_some() {
                     fx.cmds.push(ConsoleCmd::SetProfile { key, profile: None });
                 }
-                fx.toast = Some(format!(
-                    "{} asks who\u{2019}s playing each time",
-                    self.ask.name
+                fx.toast = Some(pf_l10n::console::console_profile_asks_each_time(
+                    &self.ask.name,
                 ));
             }
             (_, then) => {
@@ -529,16 +526,14 @@ impl ProfilesScreen {
     fn line(&self) -> Option<String> {
         let name = &self.ask.name;
         match &self.state {
-            State::Waiting => Some("Loading profiles\u{2026}".into()),
+            State::Waiting => Some(pf_l10n::console::console_profile_loading().into()),
             State::Unasked => None,
-            State::NoProfiles => Some(format!("{name} has no profiles.")),
-            State::Failed(why) => Some(format!("Couldn't load the profiles \u{2014} {why}")),
-            State::Listed(l) if self.faces().is_empty() => l
-                .first()
-                .map(|p| format!("Everyone on {name} plays as {}.", p.display_name)),
-            State::Listed(_) => {
-                (self.gone.as_ref()).map(|n| format!("{n} is gone from this host."))
-            }
+            State::NoProfiles => Some(pf_l10n::client::profile_none().into()),
+            State::Failed(why) => Some(pf_l10n::console::console_profile_load_failed_reason(why)),
+            State::Listed(l) if self.faces().is_empty() => l.first().map(|p| {
+                pf_l10n::console::console_profile_everyone_plays_as(name, &p.display_name)
+            }),
+            State::Listed(_) => (self.gone.as_ref()).map(pf_l10n::client::profile_gone),
         }
     }
 
@@ -591,8 +586,8 @@ impl ProfilesScreen {
 impl ScreenView for ProfilesScreen {
     fn title(&self) -> String {
         match self.mode {
-            Mode::Games => "Host and profile".into(),
-            _ => format!("Who\u{2019}s playing on {}?", self.ask.name),
+            Mode::Games => pf_l10n::console::console_profile_title_games().into(),
+            _ => pf_l10n::client::profile_title(&self.ask.name),
         }
     }
 
@@ -651,28 +646,31 @@ impl ScreenView for ProfilesScreen {
 
     fn announcement(&self, ctx: &Ctx) -> Option<String> {
         let selected = |say: String, on: bool| match on {
-            true => format!("{say}, selected"),
+            true => pf_l10n::console::console_profile_selected_a11y(say),
             false => say,
         };
         match self.focus {
-            Focus::Remember => Some(format!(
-                "{REMEMBER_LABEL}, {}",
-                if self.remember { "on" } else { "off" }
-            )),
+            Focus::Remember => Some(match self.remember {
+                true => pf_l10n::console::console_profile_remember_on_a11y().into(),
+                false => pf_l10n::console::console_profile_remember_off_a11y().into(),
+            }),
             Focus::Host(i) => paired_hosts(ctx.hosts).nth(i).map(|h| h.name.clone()),
             Focus::Face(i) => match self.faces().get(i) {
                 Some(p) => {
                     let name = match p.unlock {
                         UnlockNeed::None => p.display_name.clone(),
-                        _ => format!("{}, locked", p.display_name),
+                        _ => pf_l10n::console::console_profile_locked_a11y(&p.display_name),
                     };
                     let say = selected(name, self.current(i));
                     Some(match p.note() {
-                        Some(note) => format!("{say}, {note}"),
+                        Some(note) => pf_l10n::console::console_profile_note_a11y(say, note),
                         None => say,
                     })
                 }
-                None if self.ask_tile() => Some(selected("Ask every time".into(), self.current(i))),
+                None if self.ask_tile() => Some(selected(
+                    pf_l10n::console::console_profile_ask_every_time().into(),
+                    self.current(i),
+                )),
                 None => None,
             },
         }
@@ -680,17 +678,19 @@ impl ScreenView for ProfilesScreen {
 
     fn hints(&self, _ctx: &Ctx) -> Vec<Hint> {
         let ok = match self.focus {
-            Focus::Remember => Some("Change"),
-            Focus::Host(_) => Some("Open"),
-            Focus::Face(_) if self.then.is_some() && !self.faces().is_empty() => Some("Play"),
-            Focus::Face(_) if !self.faces().is_empty() => Some("Select"),
+            Focus::Remember => Some(pf_l10n::common::common_change()),
+            Focus::Host(_) => Some(pf_l10n::common::common_open()),
+            Focus::Face(_) if self.then.is_some() && !self.faces().is_empty() => {
+                Some(pf_l10n::common::common_play())
+            }
+            Focus::Face(_) if !self.faces().is_empty() => Some(pf_l10n::common::common_select()),
             Focus::Face(_) => None,
         };
         let mut hints: Vec<Hint> = ok
             .map(|v| Hint::new(HintKey::Confirm, v))
             .into_iter()
             .collect();
-        hints.push(Hint::new(HintKey::Back, "Back"));
+        hints.push(Hint::new(HintKey::Back, pf_l10n::common::common_back()));
         hints
     }
 
@@ -806,9 +806,14 @@ impl ScreenView for ProfilesScreen {
                             .child(
                                 El::paint(move |canvas, cell| match p {
                                     Some(p) => draw_caption(canvas, ui, fonts, p, cell, k),
-                                    None => {
-                                        draw_label(canvas, ui, fonts, "Ask every time", cell, k)
-                                    }
+                                    None => draw_label(
+                                        canvas,
+                                        ui,
+                                        fonts,
+                                        pf_l10n::console::console_profile_ask_every_time(),
+                                        cell,
+                                        k,
+                                    ),
                                 })
                                 .size(cw as f32, (52.0 * k) as f32),
                             )
@@ -834,7 +839,8 @@ impl ScreenView for ProfilesScreen {
         }
         if switch {
             let on = self.remember;
-            let w = f64::from(fonts.measure(REMEMBER_LABEL, W::SemiBold, 15.0 * k)) + 92.0 * k;
+            let label = pf_l10n::console::console_profile_remember();
+            let w = f64::from(fonts.measure(label, W::SemiBold, 15.0 * k)) + 92.0 * k;
             let r = Rect::from_xywh(
                 ((width - w) / 2.0) as f32,
                 (top + used + 8.0 * k) as f32,
@@ -963,7 +969,7 @@ fn draw_remember(canvas: &Canvas, ui: &Frame, fonts: &Fonts, on: bool, r: Rect, 
     let (x, cy) = (f64::from(r.left) + 20.0 * k, f64::from(r.center_y()));
     fonts.draw(
         canvas,
-        REMEMBER_LABEL,
+        pf_l10n::console::console_profile_remember(),
         x,
         cy + size * 0.36,
         W::SemiBold,

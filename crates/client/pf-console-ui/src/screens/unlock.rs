@@ -20,7 +20,6 @@ use skia_safe::{Canvas, Rect};
 const PASSWORD: usize = 0;
 const STAY: usize = 1;
 const SIGN_IN: usize = 2;
-const STAY_LABEL: &str = "Stay signed in on this device";
 
 pub(crate) struct UnlockScreen {
     /// The dial this prompt opens, its profile named.
@@ -125,12 +124,16 @@ impl UnlockScreen {
 
     fn rows(&self) -> Vec<RowSpec> {
         let dots = "\u{2022}".repeat(self.password.chars().count());
-        let mut field = RowSpec::field("Password", dots, "Account password");
+        let mut field = RowSpec::field(
+            pf_l10n::client::unlock_password(),
+            dots,
+            pf_l10n::client::unlock_password_placeholder(),
+        );
         field.caret = self.editing;
         vec![
             field,
-            RowSpec::toggle(STAY_LABEL, self.stay),
-            RowSpec::action("Sign In", !self.password.is_empty()),
+            RowSpec::toggle(pf_l10n::client::unlock_stay_signed_in(), self.stay),
+            RowSpec::action(pf_l10n::client::unlock_sign_in(), !self.password.is_empty()),
         ]
     }
 
@@ -154,7 +157,7 @@ impl ScreenView for UnlockScreen {
 
     fn edit_field(&self) -> Option<EditField> {
         self.editing
-            .then(|| EditField::secret("Password"))
+            .then(|| EditField::secret(pf_l10n::client::unlock_password()))
             .flatten()
     }
 
@@ -215,21 +218,26 @@ impl ScreenView for UnlockScreen {
 
     fn hints(&self, ctx: &Ctx) -> Vec<Hint> {
         if self.editing {
-            return self.keyboard.hints(ctx.device, "Sign In");
+            return self
+                .keyboard
+                .hints(ctx.device, pf_l10n::client::unlock_sign_in());
         }
         vec![
-            Hint::new(HintKey::Confirm, "Select"),
-            Hint::new(HintKey::Back, "Cancel"),
+            Hint::new(HintKey::Confirm, pf_l10n::common::common_select()),
+            Hint::new(HintKey::Back, pf_l10n::common::common_cancel()),
         ]
     }
 
     fn announcement(&self, _ctx: &Ctx) -> Option<String> {
-        Some(match self.list.cursor {
-            PASSWORD if self.password.is_empty() => "Password, empty".into(),
-            PASSWORD => "Password, entered".into(),
-            STAY => format!("{STAY_LABEL}, {}", if self.stay { "on" } else { "off" }),
-            _ => "Sign In".into(),
-        })
+        use pf_l10n::console as m;
+        let said = match self.list.cursor {
+            PASSWORD if self.password.is_empty() => m::console_unlock_password_empty_a11y(),
+            PASSWORD => m::console_unlock_password_entered_a11y(),
+            STAY if self.stay => m::console_unlock_stay_signed_in_on_a11y(),
+            STAY => m::console_unlock_stay_signed_in_off_a11y(),
+            _ => pf_l10n::client::unlock_sign_in(),
+        };
+        Some(said.into())
     }
 
     fn render(
@@ -242,7 +250,7 @@ impl ScreenView for UnlockScreen {
         ctx: &mut Ctx,
     ) {
         let ui = ctx.ui;
-        let intro = format!("Enter the password for this account on {}.", self.host);
+        let intro = pf_l10n::client::unlock_intro(&self.host);
         let below = blurb(canvas, ui, fonts, &intro, rect, k);
         self.keyboard.seat(self.editing, ctx.device, dt);
         let tray_h = self.keyboard.reserve(k);
@@ -268,7 +276,7 @@ impl ScreenView for UnlockScreen {
     }
 
     fn title(&self) -> String {
-        format!("Sign in as {}", self.name)
+        pf_l10n::client::unlock_title(&self.name)
     }
 
     fn press(&mut self) {

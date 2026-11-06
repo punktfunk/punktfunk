@@ -179,7 +179,7 @@ fn focus_walks_the_rows() {
     assert_eq!(at(&mut s, Down), SIGN_IN);
     assert_eq!(
         with_ctx(|ctx| s.announcement(ctx)).as_deref(),
-        Some("Sign In")
+        Some(pf_l10n::client::unlock_sign_in())
     );
 }
 
