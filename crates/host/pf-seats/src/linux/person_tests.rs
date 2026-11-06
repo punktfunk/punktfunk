@@ -308,12 +308,16 @@ fn the_login_drop_in_runs_the_helper_and_nothing_else() {
     );
 }
 
+/// Held by each test that writes `jdoe`'s real drop-ins: two at once remove each other's files.
+static REAL_DROPINS: Mutex<()> = Mutex::new(());
+
 /// A start that wrote the login drop-in takes it away on every way out, a failed `systemctl
 /// start` included, and leaves no password waiting.
 #[test]
 #[ignore = "needs root: writes the row's drop-ins under /run/systemd/system and /run/punktfunk"]
 fn a_failed_start_leaves_no_login_drop_in() {
     use std::sync::atomic::{AtomicBool, Ordering};
+    let _alone = REAL_DROPINS.lock().unwrap_or_else(|e| e.into_inner());
     let rig = rig();
     let dropin = session::dropin_dir("jdoe").join("login.conf");
     let seen = Arc::new(AtomicBool::new(false));
@@ -348,6 +352,7 @@ fn a_failed_start_leaves_no_login_drop_in() {
 #[test]
 #[ignore = "needs root: writes the row's drop-ins under /run/systemd/system and /run/punktfunk"]
 fn a_helper_refusal_falls_back_and_turns_the_helper_off() {
+    let _alone = REAL_DROPINS.lock().unwrap_or_else(|e| e.into_inner());
     let rig = rig();
     let dropin = session::dropin_dir("jdoe").join("login.conf");
     let starts = Arc::new(Mutex::new(Vec::new()));
