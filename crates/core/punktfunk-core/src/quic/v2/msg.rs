@@ -136,6 +136,33 @@ impl FieldValue for LaunchOutcomeKind {
     }
 }
 
+/// Name-value pairs as one value: a nested `{1 => name, 2 => value}` field per pair.
+impl FieldValue for Vec<(String, String)> {
+    fn put(&self, f: Fields, tag: u64) -> Fields {
+        let pairs = self.iter().fold(Fields::new(), |all, (name, value)| {
+            all.fields(1, Fields::new().str(1, name).str(2, value))
+        });
+        f.fields(tag, pairs)
+    }
+    fn get(v: &[u8]) -> Result<Self> {
+        let mut out = Vec::new();
+        let mut pairs = FieldReader::new(v);
+        while let Some((_, pair)) = pairs.next_field()? {
+            let (mut name, mut value) = (String::new(), String::new());
+            let mut r = FieldReader::new(pair);
+            while let Some((tag, b)) = r.next_field()? {
+                match tag {
+                    1 => name = String::get(b)?,
+                    2 => value = String::get(b)?,
+                    _ => {}
+                }
+            }
+            out.push((name, value));
+        }
+        Ok(out)
+    }
+}
+
 /// A [`V2Message`] for a plain struct: `tag => field` per member, then an optional check of
 /// the decoded value. Every member's type is a [`FieldValue`].
 macro_rules! v2_message {
@@ -178,8 +205,9 @@ v2_message!(PairProof = reg::MSG_PAIR_PROOF, { 1 => confirm });
 v2_message!(PairResult = reg::MSG_PAIR_RESULT, { 1 => ok });
 v2_message!(AuthChallenge = reg::MSG_AUTH_CHALLENGE, { 1 => nonce });
 v2_message!(AuthResponse = reg::MSG_AUTH_RESPONSE, { 1 => device_key, 2 => signature });
-v2_message!(Refused = reg::MSG_REFUSED, { 1 => code, 2 => reason },
-    check |m| m.reason.len() <= REFUSED_REASON_MAX);
+v2_message!(Refused = reg::MSG_REFUSED,
+    { 1 => code, 2 => reason, 3 => reason_id, 4 => reason_params },
+    check |m| m.bounded());
 
 v2_message!(Reconfigure = reg::MSG_RECONFIGURE, { 1 => mode, 2 => exclude_codecs });
 v2_message!(Reconfigured = reg::MSG_RECONFIGURED,
@@ -198,8 +226,9 @@ v2_message!(CursorShape = reg::MSG_CURSOR_SHAPE,
 v2_message!(CursorRenderMode = reg::MSG_CURSOR_RENDER, { 1 => client_draws });
 v2_message!(AccessUpdate = reg::MSG_ACCESS_UPDATE, { 1 => grants, 2 => remaining_secs });
 v2_message!(AudioState = reg::MSG_AUDIO_STATE, { 1 => muted });
-v2_message!(LaunchOutcome = reg::MSG_LAUNCH_OUTCOME, { 1 => kind, 2 => message },
-    check |m| m.message.len() <= LAUNCH_MESSAGE_MAX);
+v2_message!(LaunchOutcome = reg::MSG_LAUNCH_OUTCOME,
+    { 1 => kind, 2 => message, 3 => message_id, 4 => message_params },
+    check |m| m.bounded());
 v2_message!(PadSlots = reg::MSG_PAD_SLOTS, { 1 => slots });
 v2_message!(ShardPayloadChanged = reg::MSG_SHARD_PAYLOAD_CHANGED, { 1 => shard_payload });
 v2_message!(ShardPayloadAck = reg::MSG_SHARD_PAYLOAD_ACK, { 1 => shard_payload });
@@ -767,7 +796,24 @@ mod tests {
         round_trip(Refused {
             code: 0x67,
             reason: "update both".into(),
+            ..Refused::default()
         });
+        let worded = Refused {
+            code: 0x68,
+            reason: "x".repeat(REFUSED_REASON_MAX),
+            ..Refused::default()
+        }
+        .worded(
+            "close_monitor_missing",
+            &[
+                ("monitor", &"é".repeat(400)),
+                ("monitors", &"é".repeat(400)),
+                ("x", "y"),
+            ],
+        );
+        assert_eq!(worded.reason_params.len(), REFUSED_PARAMS_MAX);
+        assert!(worded.encode_v2().len() <= 1024);
+        round_trip(worded);
         round_trip(Redirect {
             addr: "couch-pc.local".into(),
             port: 9778,
@@ -1013,6 +1059,7 @@ mod tests {
         let bad_reason = Refused {
             code: 1,
             reason: long(REFUSED_REASON_MAX + 1),
+            ..Refused::default()
         };
         assert!(Refused::from_body(&bad_reason.fields().into_body()).is_err());
         let nowhere = Redirect {
