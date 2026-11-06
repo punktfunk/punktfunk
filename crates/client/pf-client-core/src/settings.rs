@@ -11,6 +11,9 @@ use std::path::{Path, PathBuf};
 /// Overlay tier and corner. Live in the core so every client formats with the same enums.
 pub use punktfunk_core::hud::{HudCorner, StatsVerbosity};
 
+/// An option's label in a `(stored value, label)` table, read when the menu is drawn.
+pub type Label = fn() -> &'static str;
+
 /// How a touchscreen drives the host (Android `TouchMode`, Apple `TouchInputMode`).
 /// Stored stringly in [`Settings::touch_mode`]; parsed with [`TouchMode::from_name`].
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -55,11 +58,12 @@ impl TouchMode {
     }
 
     pub fn label(self) -> &'static str {
+        use pf_l10n::client as m;
         match self {
-            TouchMode::Trackpad => "Trackpad",
-            TouchMode::Pointer => "Direct pointer",
-            TouchMode::Touch => "Touch passthrough",
-            TouchMode::Off => "Off",
+            TouchMode::Trackpad => m::player_touch_mode_trackpad(),
+            TouchMode::Pointer => m::player_touch_mode_pointer(),
+            TouchMode::Touch => m::player_touch_mode_touch(),
+            TouchMode::Off => m::player_touch_mode_off(),
         }
     }
 }
@@ -95,8 +99,8 @@ impl MouseMode {
 
     pub fn label(self) -> &'static str {
         match self {
-            MouseMode::Capture => "Capture (games)",
-            MouseMode::Desktop => "Desktop (absolute)",
+            MouseMode::Capture => pf_l10n::client::player_mouse_mode_capture(),
+            MouseMode::Desktop => pf_l10n::client::player_mouse_mode_desktop(),
         }
     }
 }
@@ -398,11 +402,6 @@ pub const FULLSCREEN_ALWAYS_KEY: &str = "fullscreen_always";
 pub const GAMEPAD_UI_KEY: &str = "gamepad_ui_enabled";
 pub const GAMEPAD_UI_MODE_KEY: &str = "gamepad_ui_mode";
 
-/// Bitrate's hint under PyroWave, where the row offers Automatic or Fixed and the quality row
-/// stands in for the rate. Fixed stores any non-zero rate; the host pins it at the quality.
-pub const PYROWAVE_BITRATE_HINT: &str =
-    "Automatic lowers PyroWave quality while the network falls short; Fixed always streams at \
-     your quality.";
 /// The rate Fixed stores under PyroWave, kbps. The host pins the session at the quality, so
 /// only "not zero" counts. If the host picks another codec the session is Automatic
 /// ([`punktfunk_core::quic::session_bitrate_kbps`]).
@@ -509,15 +508,39 @@ impl Settings {
             if ten_bit { 10 } else { 8 },
             f64::from(self.pyrowave_bpp_x100()) / 100.0,
         );
-        let caption = format!(
-            "{}\u{d7}{} at {} Hz: {}",
+        let caption = pf_l10n::client::player_pyrowave_bpp_rate(
             mode.width,
             mode.height,
             mode.refresh_hz,
-            punktfunk_core::pyrowave::rate_label(kbps)
+            rate_label(kbps),
         );
-        (caption, punktfunk_core::pyrowave::link_warning(kbps, link))
+        (caption, link_warning(kbps, link))
     }
+}
+
+/// `kbps` as a player reads it: `940 Mbit/s`, `1.3 Gbit/s`.
+fn rate_label(kbps: u32) -> String {
+    use punktfunk_core::pyrowave::Rate;
+    match punktfunk_core::pyrowave::rate(kbps) {
+        Rate::Mbit(n) => pf_l10n::common::common_mbits(n),
+        Rate::Gbit(n) => pf_l10n::common::common_gbits(n),
+    }
+}
+
+/// What to tell a player whose PyroWave quality needs `kbps` over `link`; `None` when it fits.
+fn link_warning(kbps: u32, link: punktfunk_core::transport::LinkFacts) -> Option<String> {
+    use pf_l10n::client as m;
+    use punktfunk_core::pyrowave::LinkShortfall;
+    Some(
+        match punktfunk_core::pyrowave::link_shortfall(kbps, link)? {
+            LinkShortfall::Wifi => m::player_pyrowave_bpp_wifi_warning().into(),
+            LinkShortfall::Port(mbps) => m::player_pyrowave_bpp_port_warning(
+                rate_label(kbps),
+                rate_label(mbps.saturating_mul(1000)),
+            ),
+            LinkShortfall::Gbe => m::player_pyrowave_bpp_gbe_warning(rate_label(kbps)),
+        },
+    )
 }
 
 impl Settings {

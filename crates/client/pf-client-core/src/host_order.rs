@@ -2,17 +2,25 @@
 //! on the device reads from [`Settings::extra`] under the Apple app's names. The console and
 //! the desktop shell share one settings file, so one reading of the keys keeps them agreeing.
 
+use crate::settings::Label;
 use crate::trust::Settings;
 
 pub const HOST_SORT_KEY: &str = "host_sort";
 pub const HOST_GROUPING_KEY: &str = "host_grouping";
-pub const HOST_SORTS: [(&str, &str); 3] = [
-    ("added", "Date added"),
-    ("name", "Name"),
-    ("lastConnected", "Last connected"),
+/// `(stored value, label)`.
+pub const HOST_SORTS: [(&str, Label); 3] = [
+    ("added", pf_l10n::client::player_host_sort_added),
+    ("name", pf_l10n::client::player_host_sort_name),
+    (
+        "lastConnected",
+        pf_l10n::client::player_host_sort_last_connected,
+    ),
 ];
-pub const HOST_GROUPINGS: [(&str, &str); 3] =
-    [("none", "None"), ("preset", "Preset"), ("status", "Status")];
+pub const HOST_GROUPINGS: [(&str, Label); 3] = [
+    ("none", pf_l10n::client::player_host_grouping_none),
+    ("preset", pf_l10n::client::player_host_grouping_preset),
+    ("status", pf_l10n::client::player_host_grouping_status),
+];
 
 /// One host card as the order needs it.
 pub trait Arrangeable {
@@ -55,26 +63,56 @@ pub fn grouping(s: &Settings) -> &str {
     }
 }
 
+/// A band of the host row, named only where it is drawn ([`Band::label`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Band<'a> {
+    Online,
+    Offline,
+    /// The preset's name.
+    Preset(&'a str),
+    NoPreset,
+}
+
+impl Band<'_> {
+    /// The name over the band's first card.
+    pub fn label(self) -> String {
+        match self {
+            Band::Online => pf_l10n::client::hosts_group_online().into(),
+            Band::Offline => pf_l10n::client::hosts_group_offline().into(),
+            Band::Preset(name) => name.into(),
+            Band::NoPreset => pf_l10n::client::hosts_group_no_preset().into(),
+        }
+    }
+}
+
 /// The band a card sits in under `grouping`, or `None` ungrouped.
-pub fn group_of<T: Arrangeable>(h: &T, grouping: &str) -> Option<String> {
+pub fn band_of<'a, T: Arrangeable>(h: &'a T, grouping: &str) -> Option<Band<'a>> {
     match grouping {
-        "status" => Some(if h.online() { "Online" } else { "Offline" }.into()),
-        "preset" => Some(h.preset_name().unwrap_or("No preset").to_string()),
+        "status" => Some(if h.online() {
+            Band::Online
+        } else {
+            Band::Offline
+        }),
+        "preset" => Some(h.preset_name().map_or(Band::NoPreset, Band::Preset)),
         _ => None,
     }
 }
 
+/// [`band_of`]'s name.
+pub fn group_of<T: Arrangeable>(h: &T, grouping: &str) -> Option<String> {
+    band_of(h, grouping).map(Band::label)
+}
+
 /// Order the cards as Settings asks: bands first (Online before Offline, presets by name with
-/// "No preset" last), then the sort inside each. Stable, so equal cards keep store order,
+/// no preset last), then the sort inside each. Stable, so equal cards keep store order,
 /// which is the order they were added.
 pub fn arrange<T: Arrangeable>(hosts: &mut [T], s: &Settings) {
     let grouping = grouping(s);
     let sort = sort(s);
-    let band = |h: &T| match (grouping, group_of(h, grouping)) {
-        ("status", _) => (u8::from(!h.online()), String::new()),
-        (_, Some(name)) if name == "No preset" => (1, String::new()),
-        (_, Some(name)) => (0, name.to_lowercase()),
-        (_, None) => (0, String::new()),
+    let band = |h: &T| match band_of(h, grouping) {
+        Some(Band::Offline | Band::NoPreset) => (1, String::new()),
+        Some(Band::Preset(name)) => (0, name.to_lowercase()),
+        Some(Band::Online) | None => (0, String::new()),
     };
     hosts.sort_by(|a, b| {
         band(a).cmp(&band(b)).then_with(|| match sort {

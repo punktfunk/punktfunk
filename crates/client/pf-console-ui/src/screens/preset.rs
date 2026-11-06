@@ -7,7 +7,9 @@
 //! A step pins that row's field ([`SettingsOverlay::pin`]), even at the global value; X clears
 //! it, so the row follows the global value again.
 
-use super::settings::rows::{adjust, advanced, overrides_row, preset_field, preset_rows, row_spec};
+use super::settings::rows::{
+    adjust, advanced, overrides_row, preset_field, preset_rows, row_spec, Section,
+};
 use crate::glyphs::{Hint, HintKey};
 use crate::model::ConsoleCmd;
 use crate::pointer::Pointer;
@@ -17,6 +19,7 @@ use crate::widgets::{blurb, field_key, type_text, Entry, ListMsg, MenuList, RowS
 use pf_client_core::menu_nav::{MenuEvent, MenuPulse};
 use pf_client_core::presets::SettingsOverlay;
 use pf_client_core::trust::Settings;
+use pf_l10n::{client, common, console};
 use skia_safe::{Canvas, Rect};
 
 fn save(id: &str, name: &str, overlay: &SettingsOverlay) -> ConsoleCmd {
@@ -25,11 +28,6 @@ fn save(id: &str, name: &str, overlay: &SettingsOverlay) -> ConsoleCmd {
         name: name.into(),
         overrides: serde_json::to_value(overlay).unwrap_or_default(),
     }
-}
-
-/// `“name”`, as every preset screen names it.
-fn quoted(name: &str) -> String {
-    format!("\u{201c}{name}\u{201d}")
 }
 
 // --- the menu --------------------------------------------------------------------------------
@@ -112,7 +110,7 @@ impl PresetMenu {
                 fx.cmds.push(ConsoleCmd::DeletePreset {
                     id: self.id.clone(),
                 });
-                fx.toast = Some(format!("Deleted {}", quoted(&self.name)));
+                fx.toast = Some(console::console_preset_deleted(&self.name));
                 fx.pop();
             }
         }
@@ -122,7 +120,7 @@ impl PresetMenu {
 
 impl ScreenView for PresetMenu {
     fn title(&self) -> String {
-        format!("Preset {}", quoted(&self.name))
+        console::console_preset_title(&self.name)
     }
 
     fn menu(&mut self, ev: MenuEvent, ctx: &mut Ctx, fx: &mut Outbox) -> Option<MenuPulse> {
@@ -145,8 +143,8 @@ impl ScreenView for PresetMenu {
 
     fn hints(&self, _ctx: &Ctx) -> Vec<Hint> {
         vec![
-            Hint::new(HintKey::Confirm, "Select"),
-            Hint::new(HintKey::Back, "Back"),
+            Hint::new(HintKey::Confirm, common::common_select()),
+            Hint::new(HintKey::Back, common::common_back()),
         ]
     }
 
@@ -175,11 +173,11 @@ impl ScreenView for PresetMenu {
             .map(|item| {
                 let mut row = RowSpec::action(
                     match item {
-                        Item::Edit => "Edit settings\u{2026}",
-                        Item::Rename => "Rename\u{2026}",
-                        Item::Pin => "Pin to hosts\u{2026}",
-                        Item::Delete if self.armed => "Delete preset \u{2014} press again",
-                        Item::Delete => "Delete preset",
+                        Item::Edit => console::console_preset_menu_edit_settings(),
+                        Item::Rename => client::preset_menu_rename(),
+                        Item::Pin => console::console_preset_menu_pin(),
+                        Item::Delete if self.armed => console::console_preset_delete_confirm(),
+                        Item::Delete => console::console_preset_delete(),
                     },
                     true,
                 );
@@ -258,7 +256,7 @@ impl PresetName {
         let taken = (ctx.store.presets().iter())
             .any(|(id, other)| Some(id) != self.id.as_ref() && other.eq_ignore_ascii_case(&name));
         if taken {
-            self.error = Some(format!("A preset is already called {}.", quoted(&name)));
+            self.error = Some(client::preset_name_taken(&name));
             self.editing = false;
             return Some(MenuPulse::Boundary);
         }
@@ -281,8 +279,8 @@ impl PresetName {
 impl ScreenView for PresetName {
     fn title(&self) -> String {
         match self.id {
-            Some(_) => "Rename Preset".into(),
-            None => "New Preset".into(),
+            Some(_) => client::preset_rename_title().into(),
+            None => client::preset_new_title().into(),
         }
     }
 
@@ -292,7 +290,7 @@ impl ScreenView for PresetName {
 
     fn edit_field(&self) -> Option<EditField> {
         let field = EditField {
-            label: "Name".into(),
+            label: client::preset_name().into(),
             text: self.name.clone(),
             digits: false,
             secure: false,
@@ -385,11 +383,11 @@ impl ScreenView for PresetName {
 
     fn hints(&self, ctx: &Ctx) -> Vec<Hint> {
         if self.editing {
-            return self.keyboard.hints(ctx.device, "Save");
+            return self.keyboard.hints(ctx.device, common::common_save());
         }
         vec![
-            Hint::new(HintKey::Confirm, "Select"),
-            Hint::new(HintKey::Back, "Cancel"),
+            Hint::new(HintKey::Confirm, common::common_select()),
+            Hint::new(HintKey::Back, common::common_cancel()),
         ]
     }
 
@@ -403,10 +401,7 @@ impl ScreenView for PresetName {
         ctx: &mut Ctx,
     ) {
         let ui = ctx.ui;
-        let text = self.error.as_deref().unwrap_or(
-            "Name it for what it is for: Couch, Low latency, Travel. The name shows on the \
-             cards it is pinned to.",
-        );
+        let text = (self.error.as_deref()).unwrap_or(console::console_preset_name_hint());
         let below = blurb(canvas, ui, fonts, text, rect, k);
         self.keyboard.seat(self.editing, ctx.device, dt);
         let tray_h = self.keyboard.reserve(k);
@@ -416,9 +411,17 @@ impl ScreenView for PresetName {
             rect.right,
             rect.bottom - tray_h as f32,
         );
-        let mut field = RowSpec::field("Name", self.name.clone(), "Preset name");
+        let mut field = RowSpec::field(
+            client::preset_name(),
+            self.name.clone(),
+            client::preset_name_placeholder(),
+        );
         field.caret = self.editing;
-        let action = if self.id.is_some() { "Save" } else { "Create" };
+        let action = if self.id.is_some() {
+            common::common_save()
+        } else {
+            common::common_create()
+        };
         let rows = [field, RowSpec::action(action, !self.name.trim().is_empty())];
         self.list.lift = self.keyboard.lift(rect, k);
         self.list
@@ -465,7 +468,7 @@ impl PresetEdit {
 
     /// The preset's rows. An advanced one shows under Show advanced, or while this preset
     /// overrides it, so no override is ever out of sight.
-    fn rows(&self, ctx: &mut Ctx) -> Vec<(&'static str, super::settings::rows::RowId)> {
+    fn rows(&self, ctx: &mut Ctx) -> Vec<(Section, super::settings::rows::RowId)> {
         let overlay = &self.overlay;
         self.in_preset(ctx, |ctx| {
             let all = ctx.settings.show_advanced;
@@ -517,7 +520,7 @@ impl PresetEdit {
 
 impl ScreenView for PresetEdit {
     fn title(&self) -> String {
-        format!("Preset {}", quoted(&self.name))
+        console::console_preset_title(&self.name)
     }
 
     fn menu(&mut self, ev: MenuEvent, ctx: &mut Ctx, fx: &mut Outbox) -> Option<MenuPulse> {
@@ -562,9 +565,9 @@ impl ScreenView for PresetEdit {
     fn hints(&self, ctx: &Ctx) -> Vec<Hint> {
         let _ = ctx;
         vec![
-            Hint::new(HintKey::Adjust, "Change"),
-            Hint::new(HintKey::Tertiary, "Use global"),
-            Hint::new(HintKey::Back, "Done"),
+            Hint::new(HintKey::Adjust, common::common_change()),
+            Hint::new(HintKey::Tertiary, console::console_hint_use_global()),
+            Hint::new(HintKey::Back, common::common_done()),
         ]
     }
 
@@ -578,24 +581,18 @@ impl ScreenView for PresetEdit {
         ctx: &mut Ctx,
     ) {
         let ui = ctx.ui;
-        let below = blurb(
-            canvas,
-            ui,
-            fonts,
-            "A dot marks what this preset changes; everything else follows Settings. X puts a \
-             row back on the global value.",
-            rect,
-            k,
-        );
+        // The Tertiary button's name is data, never part of the message.
+        let hint = console::console_preset_editor_hint("X");
+        let below = blurb(canvas, ui, fonts, &hint, rect, k);
         let overlay = self.overlay.clone();
         let listed = self.rows(ctx);
         let rows: Vec<RowSpec> = self.in_preset(ctx, |ctx| {
-            let mut last = "";
+            let mut last = None;
             (listed.into_iter())
-                .map(|(tab, id)| {
+                .map(|(section, id)| {
                     let mut spec = row_spec(id, ctx, &[], &Default::default());
-                    spec.header = (tab != last).then_some(tab);
-                    last = tab;
+                    spec.header = (Some(section) != last).then(|| section.name());
+                    last = Some(section);
                     spec.dot = overrides_row(id, &overlay);
                     spec
                 })

@@ -42,9 +42,9 @@ impl StartIn {
     /// Settings-row label. The value line names the resolved host beside it.
     pub fn label(self) -> &'static str {
         match self {
-            StartIn::Hosts => "Host list",
-            StartIn::Library => "Library",
-            StartIn::Stream => "Stream",
+            StartIn::Hosts => pf_l10n::client::player_start_in_hosts(),
+            StartIn::Library => pf_l10n::client::player_start_in_library(),
+            StartIn::Stream => pf_l10n::client::player_start_in_stream(),
         }
     }
 

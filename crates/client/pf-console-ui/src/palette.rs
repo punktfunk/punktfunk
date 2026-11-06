@@ -25,6 +25,8 @@ pub const MESH_COLORS: [(f64, f64, f64); 16] = [
 
 // --- Background palettes -------------------------------------------------------------------
 
+use pf_l10n::console as msg;
+
 /// One background colour family.
 ///
 /// `stops` is several distinct hues, not one hue at several brightnesses. The 4×4 mesh
@@ -33,7 +35,8 @@ pub const MESH_COLORS: [(f64, f64, f64); 16] = [
 pub struct Palette {
     /// The stored `ui_palette` value (see `trust::Settings::ui_palette`).
     pub id: &'static str,
-    pub name: &'static str,
+    /// The name a picker shows, read when it is drawn.
+    pub name: fn() -> &'static str,
     /// Colour ramp, dark end first: the field's gradient ([`field_sksl`]) and the mesh.
     /// `None` = [`MESH_COLORS`] verbatim for the mesh and [`VIOLET_FIELD`] for the field.
     pub stops: Option<&'static [(f64, f64, f64)]>,
@@ -60,13 +63,13 @@ pub const PALETTES: [Palette; 36] = [
     // --- dark fields (white ink) ---
     Palette {
         // The brand default: the website's deep-violet ground, lit by its brand violets.
-        id: "violet", name: "Violet", stops: None,
+        id: "violet", name: msg::console_palette_violet, stops: None,
         ground: (0.129, 0.094, 0.431), accent: (0.525, 0.471, 0.961), light: false,
     },
     Palette {
         // First two stops are (0,0,0): OLED pixels off, not dark grey. Ground is black so calm lifts to nothing.
         // Id stays `"oled"` — stored `ui_palette` key; renaming orphans saved choices.
-        id: "oled", name: "Eclipse",
+        id: "oled", name: msg::console_palette_oled,
         stops: Some(&[
             (0.00, 0.00, 0.00), (0.00, 0.00, 0.00), (0.01, 0.02, 0.10),
             (0.045, 0.016, 0.115), (0.12, 0.024, 0.13),
@@ -75,7 +78,7 @@ pub const PALETTES: [Palette; 36] = [
     },
     Palette {
         // Nothing at all: every pixel off. The accent is the only colour on it.
-        id: "void", name: "Void",
+        id: "void", name: msg::console_palette_void,
         stops: Some(&[
             (0.00, 0.00, 0.00), (0.00, 0.00, 0.00), (0.00, 0.00, 0.00),
             (0.00, 0.00, 0.00), (0.00, 0.00, 0.00),
@@ -83,7 +86,7 @@ pub const PALETTES: [Palette; 36] = [
         ground: (0.000, 0.000, 0.000), accent: (0.525, 0.471, 0.961), light: false,
     },
     Palette {
-        id: "graphite", name: "Graphite",
+        id: "graphite", name: msg::console_palette_graphite,
         stops: Some(&[
             (0.06, 0.07, 0.11), (0.15, 0.18, 0.25), (0.30, 0.31, 0.35),
             (0.45, 0.42, 0.38), (0.60, 0.56, 0.49),
@@ -92,7 +95,7 @@ pub const PALETTES: [Palette; 36] = [
     },
     Palette {
         // Cool neutral: blue-grey warming to stone at the top.
-        id: "slate", name: "Slate",
+        id: "slate", name: msg::console_palette_slate,
         stops: Some(&[
             (0.06, 0.08, 0.11), (0.14, 0.18, 0.24), (0.24, 0.30, 0.38),
             (0.40, 0.44, 0.48), (0.60, 0.58, 0.52),
@@ -101,7 +104,7 @@ pub const PALETTES: [Palette; 36] = [
     },
     Palette {
         // Indigo shadow, cobalt body, a teal break.
-        id: "midnight", name: "Midnight",
+        id: "midnight", name: msg::console_palette_midnight,
         stops: Some(&[
             (0.05, 0.02, 0.16), (0.05, 0.11, 0.36), (0.08, 0.24, 0.60),
             (0.14, 0.42, 0.80), (0.36, 0.76, 0.86),
@@ -110,7 +113,7 @@ pub const PALETTES: [Palette; 36] = [
     },
     Palette {
         // Ultraviolet into an electric blue and cyan.
-        id: "electric", name: "Electric",
+        id: "electric", name: msg::console_palette_electric,
         stops: Some(&[
             (0.02, 0.00, 0.10), (0.14, 0.02, 0.50), (0.30, 0.10, 0.95),
             (0.10, 0.45, 1.00), (0.20, 0.90, 1.00),
@@ -119,7 +122,7 @@ pub const PALETTES: [Palette; 36] = [
     },
     Palette {
         // Deep water rising through teal to foam.
-        id: "ocean", name: "Ocean",
+        id: "ocean", name: msg::console_palette_ocean,
         stops: Some(&[
             (0.01, 0.05, 0.14), (0.02, 0.18, 0.40), (0.02, 0.40, 0.62),
             (0.05, 0.66, 0.72), (0.55, 0.92, 0.80),
@@ -128,7 +131,7 @@ pub const PALETTES: [Palette; 36] = [
     },
     Palette {
         // Deep teal into green, then a violet curtain.
-        id: "aurora", name: "Aurora",
+        id: "aurora", name: msg::console_palette_aurora,
         stops: Some(&[
             (0.02, 0.07, 0.11), (0.03, 0.24, 0.28), (0.05, 0.46, 0.40),
             (0.14, 0.60, 0.72), (0.44, 0.42, 0.86),
@@ -137,7 +140,7 @@ pub const PALETTES: [Palette; 36] = [
     },
     Palette {
         // Deep water into jade and a leaf-green lift.
-        id: "jade", name: "Jade",
+        id: "jade", name: msg::console_palette_jade,
         stops: Some(&[
             (0.02, 0.07, 0.10), (0.03, 0.22, 0.19), (0.05, 0.40, 0.34),
             (0.16, 0.58, 0.46), (0.60, 0.84, 0.52),
@@ -146,7 +149,7 @@ pub const PALETTES: [Palette; 36] = [
     },
     Palette {
         // Saturated green, forest floor to lime.
-        id: "emerald", name: "Emerald",
+        id: "emerald", name: msg::console_palette_emerald,
         stops: Some(&[
             (0.01, 0.07, 0.04), (0.02, 0.26, 0.12), (0.04, 0.50, 0.22),
             (0.16, 0.74, 0.34), (0.60, 0.92, 0.40),
@@ -155,7 +158,7 @@ pub const PALETTES: [Palette; 36] = [
     },
     Palette {
         // Plum shadow, crimson body, a coral edge.
-        id: "crimson", name: "Crimson",
+        id: "crimson", name: msg::console_palette_crimson,
         stops: Some(&[
             (0.10, 0.02, 0.10), (0.34, 0.03, 0.12), (0.62, 0.06, 0.20),
             (0.86, 0.20, 0.28), (0.98, 0.52, 0.32),
@@ -164,7 +167,7 @@ pub const PALETTES: [Palette; 36] = [
     },
     Palette {
         // Violet shadow under a hot pink-red.
-        id: "ruby", name: "Ruby",
+        id: "ruby", name: msg::console_palette_ruby,
         stops: Some(&[
             (0.06, 0.00, 0.20), (0.40, 0.02, 0.16), (0.80, 0.06, 0.30),
             (1.00, 0.28, 0.48), (1.00, 0.62, 0.56),
@@ -173,7 +176,7 @@ pub const PALETTES: [Palette; 36] = [
     },
     Palette {
         // Black rock, red heat, a yellow glow.
-        id: "lava", name: "Lava",
+        id: "lava", name: msg::console_palette_lava,
         stops: Some(&[
             (0.06, 0.01, 0.02), (0.42, 0.02, 0.04), (0.86, 0.12, 0.02),
             (1.00, 0.45, 0.02), (1.00, 0.85, 0.20),
@@ -182,7 +185,7 @@ pub const PALETTES: [Palette; 36] = [
     },
     Palette {
         // Bronze shadow under copper, a verdigris lift.
-        id: "copper", name: "Copper",
+        id: "copper", name: msg::console_palette_copper,
         stops: Some(&[
             (0.08, 0.05, 0.04), (0.36, 0.15, 0.08), (0.66, 0.32, 0.14),
             (0.85, 0.56, 0.26), (0.50, 0.78, 0.62),
@@ -191,7 +194,7 @@ pub const PALETTES: [Palette; 36] = [
     },
     Palette {
         // Wine shadow into amber and gold.
-        id: "amber", name: "Amber",
+        id: "amber", name: msg::console_palette_amber,
         stops: Some(&[
             (0.10, 0.02, 0.10), (0.36, 0.16, 0.02), (0.66, 0.36, 0.04),
             (0.88, 0.58, 0.08), (0.92, 0.86, 0.36),
@@ -200,7 +203,7 @@ pub const PALETTES: [Palette; 36] = [
     },
     Palette {
         // Indigo through mauve to a peach horizon.
-        id: "dusk", name: "Dusk",
+        id: "dusk", name: msg::console_palette_dusk,
         stops: Some(&[
             (0.08, 0.04, 0.14), (0.26, 0.10, 0.34), (0.50, 0.20, 0.48),
             (0.78, 0.38, 0.50), (0.96, 0.62, 0.48),
@@ -209,7 +212,7 @@ pub const PALETTES: [Palette; 36] = [
     },
     Palette {
         // Purple climbing to orchid and pink.
-        id: "grape", name: "Grape",
+        id: "grape", name: msg::console_palette_grape,
         stops: Some(&[
             (0.08, 0.02, 0.16), (0.28, 0.06, 0.48), (0.52, 0.14, 0.78),
             (0.78, 0.30, 0.92), (1.00, 0.55, 0.80),
@@ -218,7 +221,7 @@ pub const PALETTES: [Palette; 36] = [
     },
     Palette {
         // Magenta, electric blue and a lime flash on black.
-        id: "neon", name: "Neon",
+        id: "neon", name: msg::console_palette_neon,
         stops: Some(&[
             (0.05, 0.00, 0.12), (0.40, 0.00, 0.60), (0.90, 0.05, 0.55),
             (0.15, 0.35, 0.95), (0.30, 0.95, 0.55),
@@ -227,7 +230,7 @@ pub const PALETTES: [Palette; 36] = [
     },
     Palette {
         // Teal shade, orange sun, a pink bloom.
-        id: "tropic", name: "Tropic",
+        id: "tropic", name: msg::console_palette_tropic,
         stops: Some(&[
             (0.02, 0.10, 0.12), (0.02, 0.42, 0.42), (0.95, 0.45, 0.10),
             (0.98, 0.20, 0.45), (0.40, 0.10, 0.55),
@@ -237,7 +240,7 @@ pub const PALETTES: [Palette; 36] = [
     // --- pale fields (dark ink) ---
     Palette {
         // Near-white: warm cream, cool blue and a rose tint in turn.
-        id: "paper", name: "Paper",
+        id: "paper", name: msg::console_palette_paper,
         stops: Some(&[
             (0.99, 0.95, 0.88), (0.91, 0.94, 0.98), (0.98, 0.91, 0.94),
             (0.99, 0.97, 0.89), (0.90, 0.94, 0.99),
@@ -246,7 +249,7 @@ pub const PALETTES: [Palette; 36] = [
     },
     Palette {
         // Pale blue through periwinkle to a mint edge.
-        id: "sky", name: "Sky",
+        id: "sky", name: msg::console_palette_sky,
         stops: Some(&[
             (0.76, 0.87, 1.00), (0.62, 0.78, 0.99), (0.72, 0.76, 0.99),
             (0.84, 0.82, 1.00), (0.86, 0.98, 0.96),
@@ -255,7 +258,7 @@ pub const PALETTES: [Palette; 36] = [
     },
     Palette {
         // Saturated sky blue cooling into violet.
-        id: "glacier", name: "Glacier",
+        id: "glacier", name: msg::console_palette_glacier,
         stops: Some(&[
             (0.45, 0.70, 1.00), (0.60, 0.80, 1.00), (0.75, 0.85, 1.00),
             (0.85, 0.80, 1.00), (0.95, 0.85, 1.00),
@@ -264,7 +267,7 @@ pub const PALETTES: [Palette; 36] = [
     },
     Palette {
         // Lavender and periwinkle, warming to a pink bloom.
-        id: "lilac", name: "Lilac",
+        id: "lilac", name: msg::console_palette_lilac,
         stops: Some(&[
             (0.84, 0.76, 0.99), (0.74, 0.70, 0.99), (0.88, 0.74, 0.98),
             (0.98, 0.82, 0.94), (0.96, 0.94, 1.00),
@@ -273,7 +276,7 @@ pub const PALETTES: [Palette; 36] = [
     },
     Palette {
         // Vivid purple and periwinkle, a pink edge.
-        id: "iris", name: "Iris",
+        id: "iris", name: msg::console_palette_iris,
         stops: Some(&[
             (0.60, 0.35, 0.95), (0.55, 0.50, 1.00), (0.65, 0.65, 1.00),
             (0.85, 0.60, 0.98), (1.00, 0.70, 0.90),
@@ -282,7 +285,7 @@ pub const PALETTES: [Palette; 36] = [
     },
     Palette {
         // Hot pink cooling into a baby blue.
-        id: "bubblegum", name: "Bubblegum",
+        id: "bubblegum", name: msg::console_palette_bubblegum,
         stops: Some(&[
             (1.00, 0.50, 0.80), (1.00, 0.62, 0.85), (0.92, 0.70, 0.95),
             (0.70, 0.75, 1.00), (0.60, 0.85, 1.00),
@@ -291,7 +294,7 @@ pub const PALETTES: [Palette; 36] = [
     },
     Palette {
         // Pink into coral, fading to a warm cream.
-        id: "coral", name: "Coral",
+        id: "coral", name: msg::console_palette_coral,
         stops: Some(&[
             (1.00, 0.58, 0.62), (1.00, 0.68, 0.56), (1.00, 0.80, 0.64),
             (0.99, 0.88, 0.72), (1.00, 0.96, 0.80),
@@ -300,7 +303,7 @@ pub const PALETTES: [Palette; 36] = [
     },
     Palette {
         // Hot pink into orange, fully saturated.
-        id: "flamingo", name: "Flamingo",
+        id: "flamingo", name: msg::console_palette_flamingo,
         stops: Some(&[
             (1.00, 0.30, 0.60), (1.00, 0.42, 0.55), (1.00, 0.55, 0.45),
             (1.00, 0.70, 0.45), (1.00, 0.85, 0.60),
@@ -309,7 +312,7 @@ pub const PALETTES: [Palette; 36] = [
     },
     Palette {
         // Pink into peach and apricot.
-        id: "peach", name: "Peach",
+        id: "peach", name: msg::console_palette_peach,
         stops: Some(&[
             (1.00, 0.45, 0.60), (1.00, 0.60, 0.44), (1.00, 0.72, 0.52),
             (1.00, 0.82, 0.58), (0.98, 0.92, 0.72),
@@ -318,7 +321,7 @@ pub const PALETTES: [Palette; 36] = [
     },
     Palette {
         // Pink, peach, lime and sky in one bag.
-        id: "candy", name: "Candy",
+        id: "candy", name: msg::console_palette_candy,
         stops: Some(&[
             (1.00, 0.40, 0.70), (1.00, 0.55, 0.60), (1.00, 0.75, 0.40),
             (0.80, 0.90, 0.50), (0.55, 0.85, 0.95),
@@ -327,7 +330,7 @@ pub const PALETTES: [Palette; 36] = [
     },
     Palette {
         // Lemon through lime to a pale green.
-        id: "lemon", name: "Lemon",
+        id: "lemon", name: msg::console_palette_lemon,
         stops: Some(&[
             (1.00, 0.86, 0.44), (0.98, 0.96, 0.56), (0.70, 0.94, 0.64),
             (0.84, 0.97, 0.78), (0.98, 0.99, 0.90),
@@ -336,7 +339,7 @@ pub const PALETTES: [Palette; 36] = [
     },
     Palette {
         // Orange into a full yellow and a green edge.
-        id: "sunflower", name: "Sunflower",
+        id: "sunflower", name: msg::console_palette_sunflower,
         stops: Some(&[
             (1.00, 0.60, 0.10), (1.00, 0.75, 0.10), (1.00, 0.88, 0.20),
             (0.95, 0.95, 0.40), (0.75, 0.92, 0.60),
@@ -345,7 +348,7 @@ pub const PALETTES: [Palette; 36] = [
     },
     Palette {
         // Orange, lemon and lime scoops.
-        id: "sherbet", name: "Sherbet",
+        id: "sherbet", name: msg::console_palette_sherbet,
         stops: Some(&[
             (1.00, 0.55, 0.25), (1.00, 0.72, 0.30), (1.00, 0.90, 0.40),
             (0.85, 0.95, 0.50), (0.60, 0.92, 0.70),
@@ -354,7 +357,7 @@ pub const PALETTES: [Palette; 36] = [
     },
     Palette {
         // Sage into pale olive and cream.
-        id: "sage", name: "Sage",
+        id: "sage", name: msg::console_palette_sage,
         stops: Some(&[
             (0.72, 0.84, 0.70), (0.80, 0.90, 0.76), (0.90, 0.94, 0.80),
             (0.96, 0.96, 0.84), (0.99, 0.97, 0.90),
@@ -363,7 +366,7 @@ pub const PALETTES: [Palette; 36] = [
     },
     Palette {
         // Grass green into a warm yellow.
-        id: "meadow", name: "Meadow",
+        id: "meadow", name: msg::console_palette_meadow,
         stops: Some(&[
             (0.30, 0.80, 0.40), (0.55, 0.90, 0.40), (0.80, 0.95, 0.45),
             (0.95, 0.95, 0.55), (1.00, 0.90, 0.65),
@@ -372,7 +375,7 @@ pub const PALETTES: [Palette; 36] = [
     },
     Palette {
         // Turquoise water into a pale green shore.
-        id: "lagoon", name: "Lagoon",
+        id: "lagoon", name: msg::console_palette_lagoon,
         stops: Some(&[
             (0.20, 0.75, 0.80), (0.35, 0.85, 0.85), (0.55, 0.92, 0.80),
             (0.70, 0.95, 0.70), (0.92, 0.98, 0.75),
