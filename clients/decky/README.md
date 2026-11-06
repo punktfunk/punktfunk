@@ -106,6 +106,7 @@ the client's data files and re-implements none of its rules.
 | `src/library-page.tsx` · `src/play-from.tsx` | The game-page route patch and the descent to the play bar; Punktfunk hosts in Steam's "Play from" dropdown. |
 | `src/patch.ts` · `src/game.tsx` · `src/diag.ts` | MobX-observer-safe subclassing; the title record and lens mark; the diagnostics buffer. |
 | `src/trust.tsx` · `src/pair.tsx` | The trust sheet and the gamepad-navigable PIN keypad. |
+| `src/i18n.ts` · `src/l10n.ts` | `t(key, params)` over the shared messages in `l10n/messages`. `rollup.config.js` bundles the shipped languages; Steam's own language list picks one. |
 | `src/steam.ts` | Shortcut launch (`AddShortcut` / `SetAppLaunchOptions` / `RunGame`) and the running-state feed. |
 | `bin/punktfunkrun.sh` | The wrapper the shortcut runs. Reads `PF_REF` / `PF_PROFILE` / `PF_GAME` / `PF_REQUEST_ACCESS` / `PF_BROWSE`. |
 | `main.py` | Five thin CLI shells plus the Steam-side work only a plugin can do — `runner_info`, `shortcut_art`, `game_art`, `apply_controller_config`, `kill_stream`, `check_update` / `update_client` (with an explicit CA-bundle search: Decky's embedded Python has no usable default TLS roots on SteamOS). |
