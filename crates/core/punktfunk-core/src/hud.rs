@@ -340,6 +340,20 @@ impl Role {
 pub struct HudLine {
     pub role: Role,
     pub text: String,
+    /// The fields `text` joins with ` · `, in order, for a client that draws each on its own.
+    /// A line that is not a row of fields holds itself as the only one.
+    pub fields: Vec<String>,
+}
+
+impl HudLine {
+    /// A line of one field.
+    pub fn new(role: Role, text: String) -> HudLine {
+        HudLine {
+            role,
+            fields: vec![text.clone()],
+            text,
+        }
+    }
 }
 
 /// A line only one platform can measure. `tier` is the lowest tier that shows it.
@@ -1077,10 +1091,7 @@ pub fn format(s: &StatsSnapshot, tier: StatsVerbosity, advanced: bool) -> Vec<Hu
         s.extras
             .iter()
             .filter(|e| tier >= e.tier && (advanced || !e.advanced_only))
-            .map(|e| HudLine {
-                role: e.role,
-                text: e.text.clone(),
-            }),
+            .map(|e| HudLine::new(e.role, e.text.clone())),
     );
     lines
 }
@@ -1183,12 +1194,13 @@ fn line(role: Role, fields: Vec<String>) -> HudLine {
     HudLine {
         role,
         text: fields.join(" · "),
+        fields,
     }
 }
 
 #[cfg(any(test, feature = "l10n"))]
 fn text(role: Role, text: String) -> HudLine {
-    HudLine { role, text }
+    HudLine::new(role, text)
 }
 
 #[cfg(any(test, feature = "l10n"))]
@@ -1658,6 +1670,21 @@ mod tests {
 
     fn all(s: &StatsSnapshot, tier: StatsVerbosity, advanced: bool) -> String {
         join(&format(s, tier, advanced), "\n")
+    }
+
+    #[test]
+    fn a_line_hands_over_the_fields_it_joins() {
+        let s = desktop();
+        for advanced in [false, true] {
+            for tier in StatsVerbosity::ALL {
+                for line in format(&s, tier, advanced) {
+                    assert_eq!(line.fields.join(" · "), line.text, "{tier:?} {advanced}");
+                }
+            }
+        }
+        let head = &format(&s, StatsVerbosity::Detailed, true)[0];
+        assert_eq!(head.fields[..2], ["1920×1080@120", "120 fps"]);
+        assert!(head.fields.contains(&s.decoder));
     }
 
     #[test]
@@ -2173,14 +2200,8 @@ mod tests {
     #[test]
     fn lines_encode_with_their_role() {
         let lines = [
-            HudLine {
-                role: Role::Primary,
-                text: "a · b".into(),
-            },
-            HudLine {
-                role: Role::Warn,
-                text: "lost 3".into(),
-            },
+            HudLine::new(Role::Primary, "a · b".into()),
+            HudLine::new(Role::Warn, "lost 3".into()),
         ];
         assert_eq!(encode_lines(&lines), "0\ta · b\n3\tlost 3\n");
         assert_eq!(Role::from_code(3), Role::Warn);

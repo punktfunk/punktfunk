@@ -83,9 +83,9 @@ pub(crate) fn session_page(pal: &Palette, ctx: &Arc<super::AppCtx>, hud: &HudSam
             let mut lines = format(snap, StatsVerbosity::Detailed, advanced).into_iter();
             if let Some(first) = lines.next() {
                 let chips: Vec<View> = first
-                    .text
-                    .split(" \u{00B7} ")
-                    .map(str::trim)
+                    .fields
+                    .iter()
+                    .map(|c| c.trim())
                     .filter(|c| !c.is_empty())
                     .map(|c| {
                         let kind = match c {
