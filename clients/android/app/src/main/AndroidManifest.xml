@@ -68,7 +68,8 @@
 
     <!-- A game: isGame for the TV launcher's Games row, appCategory for GameManager (game power
          mode, setGameState). Android 15+ renders a game's unvoted layer at 60 Hz, so the stream
-         and console surfaces vote their own rate. ADPF carries the decode hints. -->
+         and console surfaces vote their own rate. ADPF carries the decode hints. localeConfig
+         lists the shipped languages for Android 13+'s per-app language; :kit generates it. -->
     <application
         android:allowBackup="false"
         android:appCategory="game"
@@ -77,6 +78,7 @@
         android:icon="@mipmap/ic_launcher"
         android:roundIcon="@mipmap/ic_launcher_round"
         android:label="@string/app_name"
+        android:localeConfig="@xml/locales_config"
         android:supportsRtl="true"
         android:theme="@style/Theme.PunktfunkAndroid">
 
@@ -134,7 +136,7 @@
         <service
             android:name=".KeyCaptureService"
             android:exported="true"
-            android:label="@string/key_capture_service_label"
+            android:label="@string/android_keycapture_service_label"
             android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
             <intent-filter>
                 <action android:name="android.accessibilityservice.AccessibilityService" />

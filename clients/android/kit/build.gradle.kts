@@ -2,6 +2,8 @@ import java.io.File
 import java.net.URI
 import java.security.MessageDigest
 import java.util.Properties
+import javax.inject.Inject
+import org.gradle.process.ExecOperations
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 
 plugins {
@@ -309,6 +311,49 @@ val cargoNdkDebug = registerCargoNdk("cargoNdkDebug", release = false)
 val cargoNdkRelease = registerCargoNdk("cargoNdkRelease", release = true)
 val checkJniImportsDebug = registerCheckJniImports("checkJniImportsDebug", cargoNdkDebug)
 val checkJniImportsRelease = registerCheckJniImports("checkJniImportsRelease", cargoNdkRelease)
+
+// Strings: `pf-l10n android` writes values*/strings.xml and xml/locales_config.xml from
+// l10n/messages into a generated res directory, so R.string.<key> and R.plurals.<key> live in
+// this module's R (l10n/README.md). Nothing generated is committed. It runs host cargo, so every
+// build needs the Rust toolchain, -PskipRustBuild included.
+@CacheableTask
+abstract class GenerateMessages @Inject constructor(private val exec: ExecOperations) : DefaultTask() {
+    @get:InputDirectory
+    @get:PathSensitive(PathSensitivity.RELATIVE)
+    abstract val l10n: DirectoryProperty
+
+    /** Absolute, like the cargo-ndk tasks: a GUI Android Studio launch has no cargo on PATH. */
+    @get:Internal
+    abstract val cargo: Property<String>
+
+    @get:OutputDirectory
+    abstract val outDir: DirectoryProperty
+
+    @TaskAction
+    fun generate() {
+        val out = outDir.get().asFile
+        out.deleteRecursively() // a language dropped from locales.json leaves no values-<lang>
+        exec.exec {
+            workingDir = l10n.get().asFile
+            environment("PATH", File(cargo.get()).parent + File.pathSeparator + System.getenv("PATH"))
+            commandLine(
+                cargo.get(), "run", "-q", "-p", "pf-l10n", "--",
+                "android", "--out", out.absolutePath, "--parts", "common,client,android",
+            )
+        }
+    }
+}
+
+// One task for every variant: AGP puts its output in build/generated/res/generateMessages.
+val generateMessages = tasks.register<GenerateMessages>("generateMessages") {
+    group = "build"
+    l10n.set(File(repoRoot, "l10n"))
+    cargo.set("$cargoBin/cargo")
+}
+
+androidComponents {
+    onVariants { it.sources.res?.addGeneratedSourceDirectory(generateMessages, GenerateMessages::outDir) }
+}
 
 afterEvaluate {
     tasks.named("preDebugBuild").configure { dependsOn(checkJniNames) }

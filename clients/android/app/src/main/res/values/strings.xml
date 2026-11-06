@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- Text a person reads comes from l10n/messages, generated into :kit (l10n/README.md). Only
+     the product name stays here: it is never translated. -->
 <resources>
-    <string name="app_name">Punktfunk</string>
-    <string name="key_capture_service_label">Punktfunk keyboard shortcuts</string>
-    <string name="key_capture_service_description">Lets a stream take every keyboard shortcut, Alt+Tab and the Windows key included. Keys go only to the computer you stream from, and only while a stream is on screen; outside a stream every key passes through untouched. Nothing is stored.</string>
+    <string name="app_name" translatable="false">Punktfunk</string>
 </resources>
