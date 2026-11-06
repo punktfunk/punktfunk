@@ -738,6 +738,26 @@ fn clear_steam_sdl_device_filter() {
     }
 }
 
+/// Reads the OS's languages into `pf_l10n`. GTK and libadwaita translate their own strings
+/// through gettext; while Punktfunk reads English, their messages stay English too, so one
+/// window never mixes two languages. Every other locale category follows the OS. Call before
+/// GTK starts and before any other thread exists.
+#[allow(unsafe_code)]
+fn set_language() {
+    // Another language leaves GTK on the OS's list; matching it needs `LANGUAGE` narrowed.
+    if pf_l10n::set_languages(&pf_l10n::os_languages()) != "en" {
+        return;
+    }
+    gtk::disable_setlocale();
+    // gettext ignores `LANGUAGE` while messages are in the C locale.
+    // SAFETY: GTK has not started and no other thread exists, so nothing reads the locale
+    // while it changes. Both arguments are NUL-terminated literals.
+    unsafe {
+        libc::setlocale(libc::LC_ALL, c"".as_ptr());
+        libc::setlocale(libc::LC_MESSAGES, c"C".as_ptr());
+    }
+}
+
 pub fn run() -> glib::ExitCode {
     // Logs to stdout and the ring "Send logs to host" uploads. The spawned session's stderr
     // joins the ring too, so a bundle carries the stream's trail. Colour only on a terminal.
@@ -770,6 +790,7 @@ pub fn run() -> glib::ExitCode {
     {
         return crate::cli::exec_session();
     }
+    set_language();
 
     // HANDLES_OPEN is what makes `Exec=punktfunk-client %u` work: GApplication turns the URI
     // into an `open` call, and — this is the part that matters — a SECOND invocation forwards

@@ -392,8 +392,8 @@ fn size_row(title: &str, min: u32) -> adw::SpinRow {
 fn bitrate_row(b: &Build) -> (Field, Rc<dyn Fn(bool)>) {
     use pf_client_core::settings::{PYROWAVE_BITRATE_HINT, PYROWAVE_FIXED_KBPS};
     let row = adw::SpinRow::with_range(0.0, 3000.0, 1.0);
-    row.set_title(spec::BITRATE.title);
-    row.set_subtitle(spec::BITRATE.caption);
+    row.set_title(spec::BITRATE.title());
+    row.set_subtitle(spec::BITRATE.caption());
     let auto = b.choice(&spec::BITRATE, &["Automatic", "Fixed"]);
     set_row_subtitle(auto.widget(), PYROWAVE_BITRATE_HINT);
     auto.widget().set_visible(false);
@@ -457,7 +457,7 @@ fn pyrowave_quality_row(b: &Build) -> (Field, Rc<dyn Fn(bool)>) {
     scale.set_width_request(220);
     scale.set_valign(gtk::Align::Center);
     let row = adw::ActionRow::builder()
-        .title(spec::PYROWAVE_QUALITY.title)
+        .title(spec::PYROWAVE_QUALITY.title())
         .visible(false)
         .build();
     row.add_suffix(&scale);

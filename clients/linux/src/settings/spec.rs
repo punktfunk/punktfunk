@@ -61,19 +61,31 @@ impl Layer {
 pub struct Spec {
     /// The catalog key, and the name a preset pins it under.
     pub key: &'static str,
-    pub title: &'static str,
-    pub caption: &'static str,
+    title: fn() -> &'static str,
+    caption: fn() -> &'static str,
     pub page: Page,
     pub advanced: bool,
     pub layer: Layer,
 }
 
+impl Spec {
+    pub fn title(&self) -> &'static str {
+        (self.title)()
+    }
+
+    pub fn caption(&self) -> &'static str {
+        (self.caption)()
+    }
+}
+
+/// A row's title and caption are read each time the row is built, so a message such as
+/// `pf_l10n::client::player_stats_scale_pct()` reads in the language `pf_l10n` settled on.
 macro_rules! specs {
-    ($($name:ident: $key:literal, $title:literal, $caption:expr, $page:ident, $advanced:literal, $layer:ident;)*) => {
+    ($($name:ident: $key:literal, $title:expr, $caption:expr, $page:ident, $advanced:literal, $layer:ident;)*) => {
         $(pub const $name: Spec = Spec {
             key: $key,
-            title: $title,
-            caption: $caption,
+            title: || $title,
+            caption: || $caption,
             page: Page::$page,
             advanced: $advanced,
             layer: Layer::$layer,
@@ -114,8 +126,8 @@ specs! {
          p50/p95 and every stage between", General, true, Device;
     STATS_POSITION: "hud_placement", "Statistics position",
         "The corner the statistics overlay sits in", General, true, Device;
-    STATS_SIZE: "stats_scale_pct", "Statistics size",
-        "The overlay's size, on top of your display's scaling", General, true, Device;
+    STATS_SIZE: "stats_scale_pct", pf_l10n::client::player_stats_scale_pct(),
+        pf_l10n::client::player_stats_scale_pct_hint(), General, true, Device;
     EXIT_HINT: "exit_hint", "Exit hint",
         "Shows how to leave for a few seconds when a stream starts", General, true, Device;
 
@@ -276,7 +288,7 @@ mod tests {
                 );
                 continue;
             };
-            assert_eq!(spec.title, e["label"].as_str().unwrap(), "{}", spec.key);
+            assert_eq!(spec.title(), e["label"].as_str().unwrap(), "{}", spec.key);
             let page = spec.page.title().to_lowercase();
             assert_eq!(page, e["category"].as_str().unwrap(), "{}", spec.key);
             assert_eq!(

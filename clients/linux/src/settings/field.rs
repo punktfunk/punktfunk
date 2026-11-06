@@ -56,8 +56,8 @@ impl Field {
         set: fn(&mut Settings, bool),
     ) -> (Field, adw::SwitchRow) {
         let row = adw::SwitchRow::builder()
-            .title(spec.title)
-            .subtitle(spec.caption)
+            .title(spec.title())
+            .subtitle(spec.caption())
             .build();
         let fresh = get(&Settings::default());
         let r = row.clone();

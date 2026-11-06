@@ -215,7 +215,7 @@ impl QuickActions {
     /// The row for the Input page, seeded with the scope's effective blob.
     pub fn new(dialog: &adw::PreferencesDialog, blob: &str) -> QuickActions {
         let row = adw::ActionRow::builder()
-            .title(super::spec::QUICK_ACTIONS.title)
+            .title(super::spec::QUICK_ACTIONS.title())
             .use_markup(false)
             .activatable(true)
             .build();

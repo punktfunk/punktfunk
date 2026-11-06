@@ -59,6 +59,7 @@ on:
       - 'clients/session/**'
       - 'clients/shared/**'
       - 'clients/cli/**'
+      - 'l10n/**'
       - 'web/**'
       - 'sdk/**'
       - 'api/openapi.json'

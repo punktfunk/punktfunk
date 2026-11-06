@@ -47,7 +47,13 @@ pub struct Build<'a> {
 
 impl Build<'_> {
     pub fn choice(&self, spec: &Spec, options: &[&str]) -> ChoiceRow {
-        ChoiceRow::new(&self.dialog, self.inline, spec.title, spec.caption, options)
+        ChoiceRow::new(
+            &self.dialog,
+            self.inline,
+            spec.title(),
+            spec.caption(),
+            options,
+        )
     }
 
     pub fn page(&self, kind: Page, icon: &str) -> PageB {
@@ -179,9 +185,7 @@ impl Tier {
             self.counted.iter().filter(|f| f.changed()).count()
         };
         self.note.set_visible(n > 0);
-        self.note_row.set_title(&match n {
-            1 => "1 advanced setting changed".to_string(),
-            n => format!("{n} advanced settings changed"),
-        });
+        self.note_row
+            .set_title(&pf_l10n::client::prefs_advanced_changed(n as u64));
     }
 }

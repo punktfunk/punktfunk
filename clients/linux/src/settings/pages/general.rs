@@ -177,8 +177,8 @@ fn omarchy(b: &mut Build, p: &mut PageB) {
 fn omarchy_menu() -> Field {
     use pf_client_core::omarchy_menu as menu;
     let row = adw::SwitchRow::builder()
-        .title(spec::OMARCHY_MENU.title)
-        .subtitle(spec::OMARCHY_MENU.caption)
+        .title(spec::OMARCHY_MENU.title())
+        .subtitle(spec::OMARCHY_MENU.caption())
         .build();
     let r = row.clone();
     Field::new(
