@@ -102,17 +102,16 @@ public enum DeepLinkError: Error, Equatable, Sendable {
     /// the wrong settings.
     public var message: String {
         switch self {
-        case .notOurScheme: return "That isn't a Punktfunk link."
-        case .tooLong: return "That link is too long to be genuine."
-        case .unknownRoute(let r): return "Punktfunk links can't do “\(r)”."
-        case .pairRefused:
-            return "Pairing can't be done from a link — pair the host in Punktfunk first."
-        case .missingHostRef: return "That link doesn't say which host to use."
-        case .badEscape, .controlChar: return "That link is malformed and was ignored."
-        case .paramTooLong(let p): return "That link's “\(p)” value is too long."
-        case .badFingerprint: return "That link's host fingerprint isn't a valid one."
-        case .badHostParam: return "That link's host address isn't valid."
-        case .badLaunchID: return "That link's game id isn't a valid one."
+        case .notOurScheme: return String(localized: L10n.linkErrorNotOurScheme)
+        case .tooLong: return String(localized: L10n.linkErrorTooLong)
+        case .unknownRoute(let r): return L10n.linkErrorUnknownRoute(route: r)
+        case .pairRefused: return String(localized: L10n.linkErrorPairRefused)
+        case .missingHostRef: return String(localized: L10n.linkErrorMissingHostRef)
+        case .badEscape, .controlChar: return String(localized: L10n.linkErrorMalformed)
+        case .paramTooLong(let p): return L10n.linkErrorParamTooLong(param: p)
+        case .badFingerprint: return String(localized: L10n.linkErrorBadFingerprint)
+        case .badHostParam: return String(localized: L10n.linkErrorBadHostParam)
+        case .badLaunchID: return String(localized: L10n.linkErrorBadLaunchId)
         }
     }
 }
