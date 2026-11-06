@@ -83,7 +83,6 @@ import io.unom.punktfunk.kit.SessionAccess
 import io.unom.punktfunk.kit.SessionEndReason
 import io.unom.punktfunk.kit.VideoFit
 import io.unom.punktfunk.models.ActiveSession
-import io.unom.punktfunk.kit.R
 import io.unom.punktfunk.kit.say
 import io.unom.punktfunk.kit.library.GameEnd
 import io.unom.punktfunk.kit.library.LibraryClient
