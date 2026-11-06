@@ -23,6 +23,7 @@ pub(super) fn unlock_required() -> ApiError {
         "unlock_required",
         "This profile needs its account password.",
     )
+    .said("unlock_required")
 }
 
 fn refusal(code: &str, sentence: &str) -> ApiError {
@@ -34,6 +35,7 @@ fn proof_invalid() -> BackendError {
         "proof_invalid",
         "Couldn't confirm it's you on this device. Type the account password.",
     )
+    .said("proof_invalid")
 }
 
 fn invalid(what: &str) -> ApiError {
@@ -248,6 +250,7 @@ impl<B: PlatformBackend> SeatService<B> {
                 "proof_invalid",
                 "This machine's identity changed, so this device can't unlock with its key. Type the account password.",
             )
+            .said("proof_invalid_identity_changed")
         })
     }
 
@@ -381,4 +384,5 @@ fn full() -> ApiError {
         ErrorCode::Capacity,
         "This profile has too many signed-in devices. Sign one out in the console, then try again.",
     )
+    .said("devices_full")
 }

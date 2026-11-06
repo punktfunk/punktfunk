@@ -436,8 +436,7 @@ impl<B: PlatformBackend> SeatService<B> {
         let admitted = self.attempts().admit(target, Instant::now());
         let ticket = admitted.map_err(|wait| {
             tracing::warn!(?target, wait_s = wait.as_secs(), "unlock check refused");
-            let sentence = crate::attempts::sentence(wait, target.account.is_some());
-            ApiError::from(BackendError::new("unlock_locked_out", sentence))
+            ApiError::from(crate::attempts::lockout(wait, target.account.is_some()))
         })?;
         let answer = check();
         let outcome = match &answer {
@@ -494,6 +493,7 @@ impl<B: PlatformBackend> SeatService<B> {
                 RuntimeStatus {
                     state: RuntimeState::Starting,
                     detail: None,
+                    ..RuntimeStatus::default()
                 },
             );
             if let Err(error) = published {
@@ -662,7 +662,9 @@ impl<B: PlatformBackend> SeatService<B> {
         let mut diagnostics = vec![Diagnostic::info(
             "ledger",
             format!("Seats set up: {} of 4.", current.seats.len()),
-        )];
+        )
+        .worded("seatcheck_ledger")
+        .param("count", current.seats.len())];
         match self.backend.doctor(&current) {
             Ok(mut backend) => diagnostics.append(&mut backend),
             Err(error) => diagnostics.push(Diagnostic::error("backend", error.to_string())),
@@ -671,13 +673,16 @@ impl<B: PlatformBackend> SeatService<B> {
             if seat.runtime.state == RuntimeState::Failed {
                 diagnostics.push(Diagnostic {
                     level: DiagnosticLevel::Error,
-                    code: "runtime_failed".into(),
-                    message: seat
-                        .runtime
-                        .detail
-                        .clone()
-                        .unwrap_or_else(|| "seat runtime failed".into()),
                     seat_id: Some(seat.id.clone()),
+                    id: seat.runtime.detail_id.clone(),
+                    params: seat.runtime.detail_params.clone(),
+                    ..Diagnostic::info(
+                        "runtime_failed",
+                        seat.runtime
+                            .detail
+                            .clone()
+                            .unwrap_or_else(|| "seat runtime failed".into()),
+                    )
                 });
             }
         }
@@ -751,7 +756,12 @@ impl From<crate::model::ValidationError> for ApiError {
 
 impl From<BackendError> for ApiError {
     fn from(error: BackendError) -> Self {
-        Self::new(ErrorCode::Backend, error.to_string())
+        Self {
+            message: error.to_string(),
+            said: error.said,
+            params: error.params,
+            ..Self::new(ErrorCode::Backend, "")
+        }
     }
 }
 

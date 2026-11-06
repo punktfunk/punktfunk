@@ -503,14 +503,17 @@ impl UnitState {
             "activating" if self.sub == "auto-restart" => RuntimeStatus {
                 state: RuntimeState::Starting,
                 detail: Some(format!("restarting after {}", self.result)),
+                ..RuntimeStatus::default()
             },
             "activating" | "reloading" => RuntimeStatus {
                 state: RuntimeState::Starting,
                 detail: Some("starting".into()),
+                ..RuntimeStatus::default()
             },
             "deactivating" => RuntimeStatus {
                 state: RuntimeState::Stopping,
                 detail: None,
+                ..RuntimeStatus::default()
             },
             "failed" => RuntimeStatus::failed(format!("seat unit failed: {}", self.result)),
             "inactive" => RuntimeStatus::stopped(),

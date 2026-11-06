@@ -787,16 +787,18 @@ impl LinuxBackend {
 
     fn prerequisites(&self) -> Vec<Diagnostic> {
         let mut out = Vec::new();
-        let mut check = |ok: bool, code: &str, good: &str, bad: &str| {
+        // `ids` are the message ids of `good` and `bad`.
+        let mut check = |ok: bool, code: &str, ids: [&str; 2], good: &str, bad: &str| {
             out.push(if ok {
-                Diagnostic::info(code, good)
+                Diagnostic::info(code, good).worded(ids[0])
             } else {
-                Diagnostic::error(code, bad)
+                Diagnostic::error(code, bad).worded(ids[1])
             });
         };
         check(
             Path::new("/run/systemd/system").is_dir(),
             "systemd",
+            ["seatcheck_systemd_ok", "seatcheck_systemd_missing"],
             "systemd is the init system",
             "This machine doesn't run systemd, which seats need.",
         );
@@ -807,6 +809,7 @@ impl LinuxBackend {
         check(
             logind,
             "logind",
+            ["seatcheck_logind_ok", "seatcheck_logind_missing"],
             "systemd-logind is running",
             "systemd-logind isn't running, so a seat can't get a session.",
         );
@@ -814,13 +817,18 @@ impl LinuxBackend {
         check(
             group(socket::DOOR_GROUP),
             "door_group",
-            "the punktfunk-door group exists",
+            ["seatcheck_door_group_ok", "seatcheck_door_group_missing"],
+            "The punktfunk-door group exists",
             "The punktfunk-door group doesn't exist; reinstall the package that creates it.",
         );
         check(
             group("render"),
             "render_group",
-            "the render group exists",
+            [
+                "seatcheck_render_group_ok",
+                "seatcheck_render_group_missing",
+            ],
+            "The render group exists",
             "The render group doesn't exist, so a seat can't use the graphics card.",
         );
         let render_node = std::fs::read_dir("/dev/dri").is_ok_and(|entries| {
@@ -831,13 +839,15 @@ impl LinuxBackend {
         check(
             render_node,
             "render_node",
-            "a GPU render node is present",
+            ["seatcheck_render_node_ok", "seatcheck_render_node_missing"],
+            "A GPU render node is present",
             "No graphics card render node was found, so seats can't stream.",
         );
         check(
             which("kwin_wayland").is_some() || which("gamescope").is_some(),
             "compositor",
-            "a seat compositor is installed",
+            ["seatcheck_compositor_ok", "seatcheck_compositor_missing"],
+            "A seat compositor is installed",
             "Neither kwin_wayland nor gamescope is installed.",
         );
         let missing: Vec<&str> = [
@@ -856,7 +866,8 @@ impl LinuxBackend {
         check(
             missing.is_empty(),
             "tools",
-            "the account and ACL tools are installed",
+            ["seatcheck_tools_ok", "seatcheck_tools_missing"],
+            "The account and ACL tools are installed",
             &format!("These tools are missing: {}.", missing.join(", ")),
         );
         // What systemd would run, wherever the package put it.
@@ -883,16 +894,24 @@ impl LinuxBackend {
         check(
             installed,
             "seat_unit",
-            "the seat unit and its scripts are installed",
+            ["seatcheck_seat_unit_ok", "seatcheck_seat_unit_missing"],
+            "The seat unit and its scripts are installed",
             "The seat unit or its scripts are missing; reinstall the host package.",
         );
         let box_dir = &self.inner.box_dir;
         check(
             box_dir.join("native-cert.pem").is_file() && box_dir.join("native-key.pem").is_file(),
             "box_identity",
-            "the box has a host identity",
+            [
+                "seatcheck_box_identity_ok",
+                "seatcheck_box_identity_missing",
+            ],
+            "The box has a host identity",
             "The box has no host identity yet; start its host once.",
         );
+        if let Some(row) = out.iter_mut().find(|row| row.code == "tools") {
+            row.params.insert("tools".into(), missing.join(", "));
+        }
         out
     }
 }
@@ -1176,23 +1195,36 @@ impl PlatformBackend for LinuxBackend {
                 } else {
                     DiagnosticLevel::Error
                 },
-                code: "account_marker".into(),
-                message: if owned { good } else { bad }.into(),
                 seat_id: Some(seat.id.clone()),
+                ..Diagnostic::info("account_marker", if owned { good } else { bad })
             });
             let state = session::state(&seat.account)?;
+            tracing::debug!(
+                seat = %seat.id,
+                active = %state.active,
+                sub = %state.sub,
+                result = %state.result,
+                "seat unit state"
+            );
+            let runtime = state.runtime().state;
+            let (id, message) = match runtime {
+                RuntimeState::Running => ("seatcheck_child_state_running", "Running."),
+                RuntimeState::Starting => ("seatcheck_child_state_starting", "Starting…"),
+                RuntimeState::Stopping => ("seatcheck_child_state_stopping", "Stopping…"),
+                RuntimeState::Failed => ("seatline_not_started", "This seat didn't start."),
+                RuntimeState::Stopped | RuntimeState::Unknown => (
+                    "seatcheck_child_state_stopped",
+                    "Stopped. It starts when its player connects.",
+                ),
+            };
             out.push(Diagnostic {
-                level: if state.runtime().state == RuntimeState::Failed {
+                level: if runtime == RuntimeState::Failed {
                     DiagnosticLevel::Error
                 } else {
                     DiagnosticLevel::Info
                 },
-                code: "unit_state".into(),
-                message: format!(
-                    "unit is {} ({}), last result {}",
-                    state.active, state.sub, state.result
-                ),
                 seat_id: Some(seat.id.clone()),
+                ..Diagnostic::info("unit_state", message).worded(id)
             });
             if kind == Own::Person {
                 let unreadable =
@@ -1297,7 +1329,9 @@ impl LinuxBackend {
                     "{} is signed in at the machine. Try again once they have signed out.",
                     seat.account
                 ),
-            ));
+            )
+            .said("account_at_desk")
+            .param("account", &seat.account));
         }
         let (box_dir, state) = (&self.inner.box_dir, &self.inner.state);
         shared::ensure_person_dirs(state, &seat.id, &passwd)?;
@@ -1412,6 +1446,7 @@ impl LinuxBackend {
                 return RuntimeStatus {
                     state: RuntimeState::Starting,
                     detail: Some("starting".into()),
+                    ..RuntimeStatus::default()
                 };
             }
             return state.runtime();
