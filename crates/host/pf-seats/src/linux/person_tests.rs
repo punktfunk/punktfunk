@@ -279,16 +279,17 @@ fn a_start_through_the_login_helper_reads_its_end() {
     }
 }
 
-/// The login drop-in runs the helper as root with systemd's own PAM session off and no restart,
-/// and carries no secret; a path a unit file can't hold verbatim gets none.
+/// The login drop-in runs the helper as root (`!`: the unit's `User=` stays, only the switch to
+/// it is skipped) with no restart, and carries no secret; a path a unit file can't hold verbatim
+/// gets none.
 #[test]
 fn the_login_drop_in_runs_the_helper_and_nothing_else() {
     let dropin =
         session::render_login(Path::new("/usr/libexec/punktfunk/punktfunk-seats")).unwrap();
     assert_eq!(
         dropin,
-        "[Service]\nUser=\nPAMName=\nExecStart=\n\
-         ExecStart=/usr/libexec/punktfunk/punktfunk-seats login %i\nRestart=no\n\
+        "[Service]\nExecStart=\n\
+         ExecStart=!/usr/libexec/punktfunk/punktfunk-seats login %i\nRestart=no\n\
          SyslogIdentifier=seat-session\n"
     );
     let nix = "/nix/store/0abc-punktfunk-seats-0.47.0/libexec/punktfunk/punktfunk-seats";

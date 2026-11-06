@@ -247,9 +247,10 @@ pub(super) fn render_class() -> &'static str {
 }
 
 /// The drop-in of a start through the login helper (`super::login`): the unit's main process is
-/// `helper login <account>` as root, systemd opens no PAM session itself, a helper that ends
-/// ends the start, and the journal keeps the seat's own tag. `None` for a path a unit file can't
-/// hold verbatim.
+/// `helper login <account>`, run as root by `!`, which skips only the switch to `User=`. So
+/// systemd opens no PAM session of its own, the runtime directory stays the person's and a stop
+/// runs as today's. A helper that ends ends the start, and the journal keeps the seat's own tag.
+/// `None` for a path a unit file can't hold verbatim.
 pub(super) fn render_login(helper: &Path) -> Option<String> {
     let path = helper.to_str()?;
     let plain = path.starts_with('/')
@@ -258,7 +259,7 @@ pub(super) fn render_login(helper: &Path) -> Option<String> {
             .all(|b| b.is_ascii_alphanumeric() || b"/._+-".contains(&b));
     plain.then(|| {
         format!(
-            "[Service]\nUser=\nPAMName=\nExecStart=\nExecStart={path} {} %i\nRestart=no\n\
+            "[Service]\nExecStart=\nExecStart=!{path} {} %i\nRestart=no\n\
              SyslogIdentifier=seat-session\n",
             super::login::VERB
         )

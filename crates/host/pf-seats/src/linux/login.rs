@@ -146,10 +146,6 @@ fn run_in(account: &str, service: &str, socket: &Path, program: &Path) -> u8 {
         tracing::error!(service = ?service, "login service not installed");
         return NO_SERVICE;
     }
-    if let Err(error) = person.own_runtime_dir() {
-        tracing::error!(%error, "seat runtime directory not handed to its person");
-        return NO_SESSION;
-    }
     let password = match super::handover::fetch(socket, account) {
         Ok(password) => password,
         Err(cause) => {
@@ -202,7 +198,6 @@ struct Person {
     uid: rustix::process::Uid,
     gid: rustix::process::Gid,
     groups: Vec<rustix::process::Gid>,
-    runtime_dir: std::path::PathBuf,
     /// The environment PAM starts from: this process's, with the person's `USER`, `LOGNAME`,
     /// `HOME` and `SHELL`, as systemd's `User=` sets them.
     env: Vec<std::ffi::CString>,
@@ -253,23 +248,8 @@ impl Person {
             uid: rustix::process::Uid::from_raw(found.uid),
             gid: rustix::process::Gid::from_raw(found.gid),
             groups,
-            runtime_dir: super::session::runtime_dir(account),
             env,
         })
-    }
-
-    /// The unit's runtime directory, which systemd made root's, handed to the person:
-    /// `seat-session` records its session and readiness there.
-    fn own_runtime_dir(&self) -> std::io::Result<()> {
-        use rustix::fs::{chownat, AtFlags, CWD};
-        chownat(
-            CWD,
-            &self.runtime_dir,
-            Some(self.uid),
-            Some(self.gid),
-            AtFlags::SYMLINK_NOFOLLOW,
-        )
-        .map_err(Into::into)
     }
 
     /// `program` in a child that takes this process's descriptors 0 to 2 and no other, the
@@ -538,6 +518,8 @@ mod tests {
                 .unwrap()
         };
         let (uid, gid) = (id("-u", ACCOUNT), id("-g", ACCOUNT));
+        // The person's, as systemd makes a unit's runtime directory with its `User=`.
+        std::os::unix::fs::chown(&runtime, Some(uid), Some(gid)).unwrap();
         let extra = String::from_utf8(
             std::process::Command::new("getent")
                 .args(["group", GROUP])
