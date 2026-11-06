@@ -2676,16 +2676,17 @@ public final class PunktfunkConnection: @unchecked Sendable {
     private static func redialDelay(ms: Int64) -> Duration? { ms < 0 ? nil : .milliseconds(ms) }
 
     /// The host's sentence when this session's launch did not give the player their game:
-    /// refused, died on the spot, or picked up without the host seeing it. `nil` otherwise,
-    /// and on a host too old to say. The latest verdict wins, so poll it.
+    /// refused, died on the spot, or picked up without the host seeing it. In the app's language
+    /// when the host names its message, else the host's English. `nil` otherwise, and on a host
+    /// too old to say. The latest verdict wins, so poll it.
     public var launchNotice: String? {
         return withLiveHandle(or: nil) { h in
-            // The wire caps the sentence at 200 bytes; this is that plus room for the NUL.
-            var buf = [CChar](repeating: 0, count: 256)
-            guard punktfunk_connection_launch_notice(h, &buf, UInt(buf.count)) == statusOK
+            // The wire caps the id at 64 bytes, the sentence at 200 and each of 3 placeholders at
+            // 64 + 200; this is that plus room for the separators and the NUL.
+            var buf = [CChar](repeating: 0, count: 1200)
+            guard punktfunk_connection_launch_message(h, &buf, UInt(buf.count)) == statusOK
             else { return nil }
-            let notice = String(cString: buf)
-            return notice.isEmpty ? nil : notice
+            return HostText.launch(lines: String(cString: buf))
         }
     }
 

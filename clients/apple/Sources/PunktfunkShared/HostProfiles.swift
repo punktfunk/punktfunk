@@ -63,7 +63,8 @@ public enum SeatState: String, Codable, Sendable {
 /// A profile's own seat. Absent for one that plays on the box's own session.
 public struct ProfileSeat: Codable, Hashable, Sendable {
     public var state: SeatState = .ready
-    /// The progress line while starting, or why while unavailable.
+    /// The progress line while starting, or why while unavailable. When the host names the
+    /// message (`detail_id`) this is the app's wording of it, else the host's English.
     public var detail: String?
     /// The device playing on it while occupied.
     public var occupant: String?
@@ -75,11 +76,25 @@ public struct ProfileSeat: Codable, Hashable, Sendable {
         case steamSignIn = "steam_sign_in"
     }
 
+    /// What the host names beside `detail`; read, never kept.
+    private enum MessageKeys: String, CodingKey {
+        case detailId = "detail_id"
+        case detailParams = "detail_params"
+    }
+
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         let word = try c.decodeIfPresent(String.self, forKey: .state) ?? "ready"
         state = SeatState(rawValue: word) ?? .other
-        detail = try c.decodeIfPresent(String.self, forKey: .detail)
+        let english = try c.decodeIfPresent(String.self, forKey: .detail)
+        let message = try decoder.container(keyedBy: MessageKeys.self)
+        if let id = try message.decodeIfPresent(String.self, forKey: .detailId) {
+            let params = (try? message.decode([String: String].self, forKey: .detailParams)) ?? [:]
+            let said = HostText.word(id, params: params, english: english ?? "")
+            detail = said.isEmpty ? nil : said
+        } else {
+            detail = english
+        }
         occupant = try c.decodeIfPresent(String.self, forKey: .occupant)
         steamSignIn = try c.decodeIfPresent(Bool.self, forKey: .steamSignIn)
     }
