@@ -171,7 +171,10 @@ mod tests {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixture");
         let (cat, problems) = catalog::load(&root, false);
         assert!(problems.is_empty(), "{problems:?}");
-        for (path, body) in generate(&cat, &["fix".into()]).unwrap() {
+        let files = generate(&cat, &["fix".into()]).unwrap();
+        // The fixture has es.json, and es does not ship.
+        assert!(files.iter().all(|(path, _)| !path.starts_with("values-es")));
+        for (path, body) in files {
             crate::golden(&format!("android/{path}"), &body);
         }
     }
