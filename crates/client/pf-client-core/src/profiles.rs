@@ -51,6 +51,20 @@ pub struct Seat {
     pub steam_sign_in: Option<bool>,
 }
 
+/// What this device must send to open a profile on a person's own account, as `enumerate`
+/// says for it ([`crate::unlock`]). An old host omits it: [`UnlockNeed::None`]. A word a later
+/// host adds reads as [`UnlockNeed::Password`], the prompt every client has.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum UnlockNeed {
+    #[default]
+    None,
+    /// A signature from this device's unlock key.
+    Key,
+    #[serde(other)]
+    Password,
+}
+
 /// One row of `enumerate`. Every field defaults, so a host that adds one never fails the list.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
@@ -65,6 +79,8 @@ pub struct ListedProfile {
     pub seat: Option<Seat>,
     /// This device's old seat became this profile.
     pub legacy_seat: bool,
+    /// What opens the profile from this device.
+    pub unlock: UnlockNeed,
 }
 
 impl ListedProfile {
@@ -219,13 +235,15 @@ pub enum SeatGate {
 /// How often a client re-reads the list while a seat comes up.
 pub const SEAT_POLL: Duration = Duration::from_secs(2);
 
-/// The gate for `p`'s seat, as `enumerate` lists it.
+/// The gate for `p`'s seat, as `enumerate` lists it. A stopped seat that needs an unlock
+/// dials: the unlock starts it, and the host refuses a wake for it.
 pub fn seat_gate(p: &ListedProfile) -> SeatGate {
     let Some(seat) = &p.seat else {
         return SeatGate::Dial;
     };
     match seat.state {
         SeatState::Ready | SeatState::Occupied | SeatState::Other => SeatGate::Dial,
+        SeatState::Stopped if p.unlock != UnlockNeed::None => SeatGate::Dial,
         SeatState::Stopped => SeatGate::Wake,
         SeatState::Starting => SeatGate::Wait {
             detail: seat.detail.clone(),
@@ -306,6 +324,53 @@ pub fn wake(
     let reply = api.call(&https, "POST", &format!("/api/v1/profiles/{id}/wake"), None)?;
     serde_json::from_slice(&wake_answer(reply)?)
         .map_err(|e| LibraryError::Unreachable(format!("bad JSON: {e}")))
+}
+
+/// What `unlock-challenge` answers: 32 fresh bytes, good once for two minutes, and the seat
+/// they are for.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct UnlockChallenge {
+    pub challenge: [u8; 32],
+    /// The `SeatId`'s 32 lowercase hex characters.
+    pub seat: String,
+}
+
+impl UnlockChallenge {
+    /// The host's answer, `{ "challenge": "<64 hex>", "seat": "<32 hex>" }`. `None` for any
+    /// other shape.
+    pub fn parse(body: &[u8]) -> Option<UnlockChallenge> {
+        #[derive(Deserialize)]
+        struct Wire {
+            challenge: String,
+            seat: String,
+        }
+        let w: Wire = serde_json::from_slice(body).ok()?;
+        let lower_hex = |s: &str| s.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'));
+        (lower_hex(&w.challenge) && w.seat.len() == 32 && lower_hex(&w.seat)).then_some(())?;
+        Some(UnlockChallenge {
+            challenge: crate::trust::parse_hex32(&w.challenge)?,
+            seat: w.seat,
+        })
+    }
+}
+
+/// `POST /api/v1/profiles/{id}/unlock-challenge` on the device lane: a challenge for this
+/// device's unlock key. `api` must carry the box's pin, since the proof names it.
+#[cfg(desktop)]
+pub fn unlock_challenge(
+    api: &crate::library::HostApi,
+    id: &str,
+) -> Result<UnlockChallenge, crate::library::LibraryError> {
+    use crate::library::{agent, LibraryError};
+    if api.pin.is_none() || !crate::unlock::is_profile_id(id) {
+        return Err(LibraryError::Unreachable(
+            "no pinned profile to unlock".into(),
+        ));
+    }
+    let https = agent(&api.identity, api.pin)?;
+    let path = format!("/api/v1/profiles/{id}/unlock-challenge");
+    let body = api.call(&https, "POST", &path, None)?.ok()?;
+    UnlockChallenge::parse(&body).ok_or_else(|| LibraryError::Unreachable("bad challenge".into()))
 }
 
 /// [`Reply::ok`](crate::library::Reply::ok) for a wake. The cert lane answers an unpaired

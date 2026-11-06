@@ -16,7 +16,7 @@ import {
 	Users,
 } from "lucide-react";
 import { motion } from "motion/react";
-import { type FC, useEffect, useRef, useState } from "react";
+import { type FC, type ReactNode, useEffect, useRef, useState } from "react";
 import type { ProfileAdmin } from "@/api/gen/model/profileAdmin";
 import type { ProfileCreate } from "@/api/gen/model/profileCreate";
 import type { SeatCheck } from "@/api/gen/model/seatCheck";
@@ -132,7 +132,8 @@ export type DoorControl = {
 	onChange: () => void;
 };
 
-/** The page: one card per profile, the owner first, and **Add profile**. */
+/** The page: one card per profile, the owner first, and **Add profile**. A profile on a person's
+ * own account shows its signed-in devices under its row. */
 export const ProfilesView: FC<{
 	profiles: Loadable<ProfileAdmin[]>;
 	onAdd: () => void;
@@ -145,6 +146,8 @@ export const ProfilesView: FC<{
 	seats?: SeatActions;
 	/** Linux: the door's switch. */
 	door?: DoorControl;
+	/** A Linux door: the signed-in devices of a profile on a person's own account. */
+	devices?: (p: ProfileAdmin) => ReactNode;
 }> = ({
 	profiles,
 	onAdd,
@@ -155,6 +158,7 @@ export const ProfilesView: FC<{
 	busyId,
 	seats,
 	door,
+	devices,
 }) => {
 	const list = profiles.data ?? [];
 	const ownerName = list.find((p) => p.owner)?.display_name ?? "";
@@ -189,6 +193,8 @@ export const ProfilesView: FC<{
 									profile={p}
 									ownerName={ownerName}
 									seats={seats}
+									linux={door !== undefined}
+									devices={p.seat?.account ? devices?.(p) : undefined}
 									busy={busyId === p.id}
 									onRename={() => onRename(p)}
 									onPicture={(f) => onPicture(p, f)}
@@ -273,6 +279,10 @@ const ProfileRow: FC<{
 	profile: ProfileAdmin;
 	ownerName: string;
 	seats?: SeatActions;
+	/** A Linux host: its seat on an existing account is a login, not a Windows account. */
+	linux: boolean;
+	/** Below the row: the profile's signed-in devices. */
+	devices?: ReactNode;
 	busy: boolean;
 	onRename: () => void;
 	onPicture: (file: File) => void;
@@ -282,6 +292,8 @@ const ProfileRow: FC<{
 	profile: p,
 	ownerName,
 	seats,
+	linux,
+	devices,
 	busy,
 	onRename,
 	onPicture,
@@ -291,8 +303,10 @@ const ProfileRow: FC<{
 	const file = useRef<HTMLInputElement>(null);
 	const state = p.seat?.state;
 	// A take-turns profile has no managed seat to start/stop by hand — the client drives the
-	// switch. Its card shows no seat buttons.
+	// switch. Its card shows no seat buttons. Only its person's unlock starts a desktop on their
+	// own Linux account.
 	const managed = p.seat?.take_turns ? undefined : seats;
+	const startable = !(linux && p.seat?.account);
 	const facts = [
 		playsLine(p, ownerName),
 		p.home === "bigpicture"
@@ -303,7 +317,7 @@ const ProfileRow: FC<{
 			: m.profiles_never_used(),
 	];
 	return (
-		<div className="flex flex-col gap-3 border-b pb-4 last:border-0 last:pb-0 sm:flex-row sm:items-center">
+		<div className="flex flex-col gap-3 border-b pb-4 last:border-0 last:pb-0 sm:flex-row sm:flex-wrap sm:items-center">
 			<div className="flex min-w-0 flex-1 items-center gap-3">
 				<ProfileAvatar profile={p} className="size-11" />
 				<div className="min-w-0">
@@ -323,13 +337,15 @@ const ProfileRow: FC<{
 					<p className="text-sm text-muted-foreground">{facts.join(" · ")}</p>
 					{p.seat?.account && (
 						<p className="text-sm text-muted-foreground">
-							{m.profiles_seat_account_line({ account: p.seat.account })}
+							{(linux
+								? m.profiles_seat_account_line_linux
+								: m.profiles_seat_account_line)({ account: p.seat.account })}
 						</p>
 					)}
 				</div>
 			</div>
 			<div className="flex shrink-0 items-center justify-end gap-1">
-				{managed && state === "stopped" && (
+				{managed && startable && state === "stopped" && (
 					<Button
 						variant="outline"
 						size="sm"
@@ -430,6 +446,7 @@ const ProfileRow: FC<{
 					</Button>
 				)}
 			</div>
+			{devices && <div className="sm:basis-full">{devices}</div>}
 		</div>
 	);
 };
@@ -438,13 +455,15 @@ const ProfileRow: FC<{
  * Windows account taking the console in turn. */
 type Outcome = "shared" | "seats" | "account";
 
-/** The Windows account a desktop of its own signs in to: one punktfunk makes, or one of this PC's. */
+/** The account a desktop of its own runs on: one punktfunk makes, or one the machine has. */
 type SeatAccount = "new" | "existing";
 
 /**
  * **Add profile**: the picture beside a name and a colour, then one question answered as
- * outcomes. The home follows the answer on the host. A Windows desktop of its own asks a
- * second: a new account, or an existing one with its password.
+ * outcomes. The home follows the answer on the host. A desktop of its own on Windows or a
+ * Linux door asks a second: a new account, or an existing one with its password. Windows picks
+ * from a list and keeps the password, sealed; Linux types the user name, since a directory's
+ * accounts don't enumerate and the console doesn't list the box's users, and keeps no password.
  */
 export const AddProfileDialog: FC<{
 	open: boolean;
@@ -496,7 +515,8 @@ export const AddProfileDialog: FC<{
 		setSeatAccount("new");
 		setPassword("");
 	}, [open, freeAccent]);
-	const asksAccount = windows && seatsOn && outcome === "seats";
+	const asksAccount =
+		((windows && seatsOn) || (linux && door)) && outcome === "seats";
 	const adopting = asksAccount && seatAccount === "existing";
 	const accountReady =
 		outcome === "account"
@@ -520,17 +540,20 @@ export const AddProfileDialog: FC<{
 			id: "new",
 			icon: <UserPlus />,
 			label: m.profiles_seat_account_new(),
-			hint: m.profiles_seat_account_new_hint(),
+			hint: windows
+				? m.profiles_seat_account_new_hint()
+				: m.profiles_seat_account_new_hint_linux(),
 		},
 		{
 			id: "existing",
 			icon: <UserRound />,
 			label: m.profiles_seat_account_existing(),
-			hint:
-				windowsAccounts.length > 0
+			hint: !windows
+				? m.profiles_seat_account_existing_hint_linux()
+				: windowsAccounts.length > 0
 					? m.profiles_seat_account_existing_hint()
 					: m.profiles_seat_account_none(),
-			disabled: windowsAccounts.length === 0,
+			disabled: windows && windowsAccounts.length === 0,
 		},
 	];
 	const outcomes: Choice<Outcome>[] = [
@@ -574,7 +597,11 @@ export const AddProfileDialog: FC<{
 	});
 	return (
 		<Dialog open={open} onOpenChange={(o) => !o && onCancel()}>
-			<DialogContent className="max-w-md sm:max-w-lg">
+			{/* Fires once the closed dialog has faded out: the typed password goes with it. */}
+			<DialogContent
+				className="max-w-md sm:max-w-lg"
+				onCloseAutoFocus={() => setPassword("")}
+			>
 				<DialogHeader>
 					<DialogTitle>{m.profiles_add()}</DialogTitle>
 				</DialogHeader>
@@ -623,14 +650,37 @@ export const AddProfileDialog: FC<{
 						{asksAccount && (
 							<motion.div variants={ROW}>
 								<ChoiceCards
-									label={m.profiles_seat_account()}
+									label={
+										windows
+											? m.profiles_seat_account()
+											: m.profiles_seat_account_linux()
+									}
 									value={seatAccount}
 									choices={seatAccounts}
 									onChange={setSeatAccount}
 								/>
 							</motion.div>
 						)}
-						{(outcome === "account" || adopting) && (
+						{adopting && !windows && (
+							<motion.div variants={ROW} className="space-y-2">
+								<Label htmlFor="profile-account">
+									{m.profiles_account_which_linux()}
+								</Label>
+								<Input
+									id="profile-account"
+									autoComplete="off"
+									autoCapitalize="none"
+									spellCheck={false}
+									data-1p-ignore
+									value={account}
+									onChange={(e) => setAccount(e.target.value.trim())}
+								/>
+								<p className="text-sm text-muted-foreground">
+									{m.profiles_account_name_linux()}
+								</p>
+							</motion.div>
+						)}
+						{(outcome === "account" || (adopting && windows)) && (
 							<motion.div variants={ROW} className="space-y-2">
 								<Label htmlFor="profile-account">
 									{m.profiles_account_which()}
@@ -660,7 +710,9 @@ export const AddProfileDialog: FC<{
 						{adopting && (
 							<motion.div variants={ROW} className="space-y-2">
 								<Label htmlFor="profile-seat-password">
-									{m.profiles_seat_password()}
+									{windows
+										? m.profiles_seat_password()
+										: m.profiles_seat_password_linux()}
 								</Label>
 								<Input
 									id="profile-seat-password"
@@ -671,8 +723,15 @@ export const AddProfileDialog: FC<{
 									onChange={(e) => setPassword(e.target.value)}
 								/>
 								<p className="text-sm text-muted-foreground">
-									{m.profiles_seat_account_lock()}
+									{windows
+										? m.profiles_seat_account_lock()
+										: m.profiles_seat_account_lock_linux()}
 								</p>
+								{windows && (
+									<p className="text-sm text-muted-foreground">
+										{m.profiles_seat_password_kept()}
+									</p>
+								)}
 							</motion.div>
 						)}
 						<DialogFooter>
@@ -722,7 +781,9 @@ export const RemoveProfileDialog: FC<{
 		(windows || profile.seat.kind === "desktop");
 	const adopted = profile.seat?.account;
 	const goes = adopted
-		? m.profiles_remove_adopted({ account: adopted })
+		? (windows ? m.profiles_remove_adopted : m.profiles_remove_adopted_linux)({
+				account: adopted,
+			})
 		: (windows ? m.profiles_remove_windows : m.profiles_remove_linux)({
 				name: profile.display_name,
 			});

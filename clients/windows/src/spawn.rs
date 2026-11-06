@@ -8,6 +8,7 @@
 use pf_client_core::orchestrate::{
     self, CancelHandle, ConnectOutcome, ConnectPlan, HostTarget, SessionEvent,
 };
+use punktfunk_core::quic::v2::msg::ProfileUnlock;
 use std::os::windows::process::CommandExt as _;
 use std::path::PathBuf;
 use std::process::Command;
@@ -35,17 +36,20 @@ pub(crate) fn log_hint() -> String {
 /// its lifecycle to `on_event` from a reader thread. `slot` is the handle Disconnect/Cancel kill. `launch`
 /// carries a library title id for the host to launch during the handshake; `preset` is a
 /// ONE-OFF settings-preset pick. `profile` is the shell's answer for who plays: it replaces
-/// the saved pick the plan read, and `None` names none. `Err` = the spawn itself failed (binary missing?) —
+/// the saved pick the plan read, and `None` names none. `unlock` goes to the child's stdin and
+/// is wiped before this returns. `Err` = the spawn itself failed (binary missing?) —
 /// surfaced as a connect error by the caller.
 ///
 /// The argv and the `--resolved-spec` come from [`orchestrate::session_command`], so this
 /// shell's sessions run from the same effective (preset-aware) settings as every other one.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn spawn_session(
     host: HostTarget,
     connect_timeout_secs: u64,
     launch: Option<&str>,
     preset: Option<&str>,
     profile: Option<&str>,
+    unlock: Option<ProfileUnlock>,
     slot: CancelHandle,
     on_event: impl FnMut(SpawnEvent) + Send + 'static,
 ) -> Result<(), String> {
@@ -54,8 +58,10 @@ pub(crate) fn spawn_session(
         ConnectPlan::for_target(host, launch.map(str::to_string), preset.map(str::to_string));
     plan.profile = profile.map(str::to_string);
     plan.connect_timeout_secs = Some(connect_timeout_secs);
+    // This shell prompts for a locked profile's password and spawns again with it.
+    plan.prompts_unlock = true;
     let (cmd, spec_path) = orchestrate::session_command(&plan);
-    spawn(cmd, spec_path, &label, slot, on_event)
+    spawn(cmd, spec_path, &label, slot, unlock, on_event)
 }
 
 /// Spawn the session binary in `--browse` mode: the console home, in the session window —
@@ -69,7 +75,7 @@ pub(crate) fn spawn_browse(
     on_event: impl FnMut(SpawnEvent) + Send + 'static,
 ) -> Result<(), String> {
     let cmd = orchestrate::browse_command(fullscreen, until_no_pads);
-    spawn(cmd, None, "console", slot, on_event)
+    spawn(cmd, None, "console", slot, None, on_event)
         .map_err(|_| orchestrate::CONSOLE_NOT_STARTED.to_string())
 }
 
@@ -82,13 +88,14 @@ fn add_window_pos(cmd: &mut Command) {
     }
 }
 
-/// [`orchestrate::spawn_child`] with this shell's window flags and log tee, folding the
-/// contract's `error`/`ended` lines and our own kill into [`SpawnEvent::Exited`].
+/// [`orchestrate::spawn_child_with_unlock`] with this shell's window flags and log tee, folding
+/// the contract's `error`/`ended` lines and our own kill into [`SpawnEvent::Exited`].
 fn spawn(
     mut cmd: Command,
     spec_path: Option<PathBuf>,
     label: &str,
     slot: CancelHandle,
+    unlock: Option<ProfileUnlock>,
     mut on_event: impl FnMut(SpawnEvent) + Send + 'static,
 ) -> Result<(), String> {
     const CREATE_NO_WINDOW: u32 = 0x0800_0000;
@@ -96,7 +103,8 @@ fn spawn(
     cmd.creation_flags(CREATE_NO_WINDOW);
     let (mut error, mut ended) = (None::<orchestrate::SessionError>, None::<String>);
     let cancel = slot.clone();
-    orchestrate::spawn_child(cmd, spec_path, Some(slot), crate::logfile::Tee, move |ev| {
+    let tee = crate::logfile::Tee;
+    orchestrate::spawn_child_with_unlock(cmd, spec_path, Some(slot), tee, unlock, move |ev| {
         match ev {
             SessionEvent::AwaitingApproval => on_event(SpawnEvent::AwaitingApproval),
             SessionEvent::Ready => on_event(SpawnEvent::Ready),

@@ -4,9 +4,11 @@ import { type FC, useEffect, useMemo, useState } from "react";
 import { ApiError } from "@/api/fetcher";
 import type { CatalogEntry, InstalledView, Job } from "@/api/gen/model";
 import { useGetPluginCatalog, useUninstallPlugin } from "@/api/gen/store/store";
+import { useOwnAccount, useSeat } from "@/api/seat";
 import {
 	catalogEntryFor,
 	type InstallBody,
+	installable,
 	type PendingUpdate,
 	planUpdates,
 	runningJob,
@@ -59,13 +61,31 @@ interface UpdateRun {
  */
 export const SectionStore: FC = () => (
 	<SeatScope page="plugins">
-		<Store />
+		<StoreHere />
 	</SeatScope>
 );
+
+/** A seat on a person's own Linux account runs no plugin: one sentence stands in for the store. */
+export const StoreHere: FC = () => {
+	useLocale();
+	const seat = useSeat();
+	if (seat?.own !== "linux") return <Store />;
+	return (
+		<Section maxWidth={false}>
+			<div className="flex flex-col gap-card">
+				<SeatTitle title={m.store_title()} />
+				<p className="text-sm text-muted-foreground">
+					{m.seat_own_unmanaged({ name: seat.name })}
+				</p>
+			</div>
+		</Section>
+	);
+};
 
 const Store: FC = () => {
 	useLocale();
 	const { confirm } = useDialogs();
+	const own = useOwnAccount();
 	const [tab, setTab] = useState<StoreTab>("browse");
 	// The catalog entry awaiting its install confirmation, and the raw-spec dialog's open state.
 	const [target, setTarget] = useState<CatalogEntry | null>(null);
@@ -82,12 +102,16 @@ const Store: FC = () => {
 	const [run, setRun] = useState<UpdateRun | null>(null);
 
 	const catalog = useGetPluginCatalog();
+	const offered = useMemo(
+		() => installable(catalog.data?.plugins, own),
+		[catalog.data, own],
+	);
 	// Also queried by the Installed tab; react-query serves both from one fetch. Here it is what
 	// "Update all" counts, so the button is right even while that tab has never been opened.
 	const installed = useInstalledPlugins();
 	const plan = useMemo(
-		() => planUpdates(installed.data, catalog.data?.plugins),
-		[installed.data, catalog.data],
+		() => planUpdates(installed.data, offered),
+		[installed.data, offered],
 	);
 	// Re-attach to a job that was already running when this page loaded — an install survives a
 	// reload on the host side, and losing sight of it left the Install buttons armed against a host
@@ -144,7 +168,7 @@ const Store: FC = () => {
 	// An update from the Installed tab installs the CATALOG version — so it goes through the very
 	// same tier-appropriate dialog a fresh install would, warning included.
 	const onUpdate = (plugin: InstalledView) => {
-		const entry = catalogEntryFor(plugin, catalog.data?.plugins);
+		const entry = catalogEntryFor(plugin, offered);
 		if (!entry) {
 			toast.error(m.store_update_no_entry());
 			return;

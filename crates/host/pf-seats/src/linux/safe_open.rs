@@ -95,7 +95,12 @@ pub(super) fn read(path: &Path, max: u64) -> std::io::Result<Option<(Vec<u8>, st
             format!("{} names no file", path.display()),
         ));
     };
-    let flags = OFlags::PATH | OFlags::DIRECTORY | OFlags::CLOEXEC;
+    // `O_PATH` is Linux's; where the tests run elsewhere a read-only open does the same walk.
+    #[cfg(target_os = "linux")]
+    let access = OFlags::PATH;
+    #[cfg(not(target_os = "linux"))]
+    let access = OFlags::RDONLY;
+    let flags = access | OFlags::DIRECTORY | OFlags::CLOEXEC;
     match rustix::fs::open(parent, flags, Mode::empty()) {
         Ok(at) => read_at(at, name, max),
         Err(e) if e == rustix::io::Errno::NOENT => Ok(None),
@@ -160,7 +165,8 @@ pub(super) mod tests {
     }
 
     /// Search permission is enough, as the door has on the state directory. Root passes this
-    /// whatever the flags.
+    /// whatever the flags. Only Linux's `O_PATH` opens such a directory.
+    #[cfg(target_os = "linux")]
     #[test]
     fn a_directory_that_cannot_be_listed_is_read_through() {
         use std::os::unix::fs::PermissionsExt as _;

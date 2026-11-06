@@ -230,6 +230,10 @@ pub struct ConsoleOptions {
     /// The host answers [`ConsoleCmd::FetchProfiles`], so a connect checks the box's profiles
     /// first. False connects with the card's remembered pick, unchecked, and offers no pick.
     pub profiles: bool,
+    /// The host dials each `Launch` with [`ConsoleShared::take_unlock`] and reports a
+    /// `ProfileLocked` close before its failure, so the console asks for a locked profile's
+    /// password. False dials a locked profile as it stands.
+    pub prompts_unlock: bool,
 }
 
 /// A built-in screen in landscape pixels, whole and clear of its cutout.
@@ -259,6 +263,7 @@ impl ConsoleOptions {
             gpu_cache_bytes: DEFAULT_GPU_CACHE_BYTES,
             screen: None,
             profiles: true,
+            prompts_unlock: true,
         }
     }
 }
@@ -335,6 +340,10 @@ pub(crate) struct Shell {
     connect: Connect,
     /// How far a connect is from asking its profiles a second time.
     reask: Reask,
+    /// [`ConsoleOptions::prompts_unlock`].
+    prompts_unlock: bool,
+    /// The last dial that named a profile, for the prompt a `ProfileLocked` close reopens.
+    locked: Option<connect::LockedDial>,
     /// What each paired host listed of its profiles this run, and this run's picks.
     profiles: crate::screens::profiles::ProfileBook,
     /// Host title of the last connect. [`Self::session_reconnecting`] has no
@@ -457,6 +466,8 @@ impl Shell {
             in_stream: false,
             connect: Connect::Idle,
             reask: Reask::None,
+            prompts_unlock: opts.prompts_unlock,
+            locked: None,
             profiles: crate::screens::profiles::ProfileBook::new(opts.profiles),
             last_connect_title: None,
             wake: None,
@@ -1533,14 +1544,24 @@ impl Shell {
         if let Some(action) = fx.action {
             self.actions.push_back(action);
         }
+        let depth = self.stack.len();
         if let Some(intent) = fx.connect {
-            self.start_connect(intent);
+            match fx.unlock {
+                Some(unlock) => self.dial(intent, Some(unlock)),
+                None => self.start_connect(intent),
+            }
         }
         if let Some(tab) = fx.tab {
             self.switch_tab(tab);
         }
-        if let Some(nav) = fx.nav {
-            self.apply_nav(nav);
+        match fx.nav {
+            // The connect raised its password prompt over the screen that asked to leave.
+            Some(Nav::Pop) if self.stack.len() > depth => {
+                let prompt = self.stack.pop().expect("deeper than before");
+                self.apply_nav(Nav::Replace(Box::new(prompt)));
+            }
+            Some(nav) => self.apply_nav(nav),
+            None => {}
         }
         if fx.quit {
             self.actions.push_back(OverlayAction::Quit);

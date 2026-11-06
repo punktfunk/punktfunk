@@ -12,16 +12,18 @@ import UIKit
 /// Present inside a fullScreenCover: immediately raises the system keyboard for one
 /// value, then calls `onDone` with the result (also on Menu-button dismissal, with
 /// whatever was typed so far — match the system apps' "edits stick" behavior).
+/// `secure` masks a password the system's password autofill can fill; Menu reports it empty.
 struct TVTextEntry: UIViewControllerRepresentable {
     let title: String
     let text: String
     var keyboardType: UIKeyboardType = .default
+    var secure = false
     let onDone: (String) -> Void
 
     func makeUIViewController(context: Context) -> TVTextEntryController {
         let controller = TVTextEntryController()
         controller.configure(
-            title: title, text: text, keyboardType: keyboardType, onDone: onDone)
+            title: title, text: text, keyboardType: keyboardType, secure: secure, onDone: onDone)
         return controller
     }
 
@@ -32,18 +34,23 @@ final class TVTextEntryController: UIViewController, UITextFieldDelegate {
     private let field = UITextField()
     private var onDone: ((String) -> Void)?
     private var finished = false
+    private var returned = false
 
     func configure(
-        title: String, text: String, keyboardType: UIKeyboardType,
+        title: String, text: String, keyboardType: UIKeyboardType, secure: Bool,
         onDone: @escaping (String) -> Void
     ) {
         field.placeholder = title
         field.text = text
         field.keyboardType = keyboardType
-        // An address or a number is typed exactly: no correction, no capital.
-        if keyboardType != .default {
+        // An address, a number or a password is typed exactly: no correction, no capital.
+        if keyboardType != .default || secure {
             field.autocorrectionType = .no
             field.autocapitalizationType = .none
+        }
+        if secure {
+            field.isSecureTextEntry = true
+            field.textContentType = .password
         }
         field.returnKeyType = .done
         self.onDone = onDone
@@ -62,6 +69,7 @@ final class TVTextEntryController: UIViewController, UITextFieldDelegate {
     }
 
     func textFieldShouldReturn(_ textField: UITextField) -> Bool {
+        returned = true
         textField.resignFirstResponder()
         return true
     }
@@ -69,7 +77,9 @@ final class TVTextEntryController: UIViewController, UITextFieldDelegate {
     func textFieldDidEndEditing(_ textField: UITextField) {
         guard !finished else { return }
         finished = true
-        onDone?(textField.text ?? "")
+        let keeps = returned || !textField.isSecureTextEntry
+        onDone?(keeps ? textField.text ?? "" : "")
+        if textField.isSecureTextEntry { textField.text = nil }
     }
 }
 

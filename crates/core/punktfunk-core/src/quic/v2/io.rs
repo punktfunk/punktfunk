@@ -6,40 +6,75 @@
 //! against its type's bound ([`max_body`]) before the body is buffered.
 
 use super::field::{get_varint, put_varint, split_frame};
-use super::registry::max_body;
+use super::msg::{ProfileUnlock, Zeroizing};
+use super::registry::{max_body, MSG_PROFILE_UNLOCK};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
 fn invalid(what: &'static str) -> std::io::Error {
     std::io::Error::new(std::io::ErrorKind::InvalidData, what)
 }
 
-/// Cancel-safe reader of v2 frames on one stream.
+/// Cancel-safe reader of v2 frames on one stream. A `ProfileUnlock` crosses it, so every byte
+/// it buffered or held is wiped once handed out, when its buffer moves, and on drop.
 pub struct FrameReader<R> {
     recv: R,
     /// Bytes read and not yet returned; may hold the start of the next frame.
-    buf: Vec<u8>,
+    buf: Zeroizing<Vec<u8>>,
     /// Frames a reader set aside for whoever reads next ([`Self::hold`]).
-    held: std::collections::VecDeque<(u64, Vec<u8>)>,
+    held: std::collections::VecDeque<(u64, Zeroizing<Vec<u8>>)>,
 }
 
 impl<R: AsyncRead + Unpin> FrameReader<R> {
     pub fn new(recv: R) -> Self {
         FrameReader {
             recv,
-            buf: Vec::new(),
+            buf: Zeroizing::default(),
             held: std::collections::VecDeque::new(),
         }
     }
 
-    /// Hand a frame back: the next [`Self::read_frame`] returns it first. For a reader that
-    /// waits on one type while another arrives.
-    pub fn hold(&mut self, frame: (u64, Vec<u8>)) {
-        self.held.push_back(frame);
+    /// Hand a frame back: the next read returns it first. For a reader that waits on one type
+    /// while another arrives.
+    pub fn hold(&mut self, (ty, body): (u64, Vec<u8>)) {
+        self.held.push_back((ty, Zeroizing::new(body)));
     }
 
     /// The next frame as `(type, body)`. A clean end of stream between frames is
     /// `UnexpectedEof` like one inside a frame; the caller tells them apart by what it expected.
+    /// A `ProfileUnlock` is wiped and skipped: only [`Self::read_profile_unlock`] returns one.
     pub async fn read_frame(&mut self) -> std::io::Result<(u64, Vec<u8>)> {
+        loop {
+            let (ty, mut body) = self.next_frame().await?;
+            if ty != MSG_PROFILE_UNLOCK {
+                return Ok((ty, std::mem::take(&mut *body)));
+            }
+            tracing::debug!("skipped a profile unlock no hello announced");
+        }
+    }
+
+    /// The `ProfileUnlock` a hello with [`unlock_follows`] promised, by `deadline`. Call it
+    /// right after that hello, before clock sync. Any other frame, a malformed unlock, the
+    /// stream's end or the deadline is an error, and the frame it read is wiped.
+    ///
+    /// [`unlock_follows`]: super::hello::ClientHello::unlock_follows
+    pub async fn read_profile_unlock(
+        &mut self,
+        deadline: tokio::time::Instant,
+    ) -> std::io::Result<ProfileUnlock> {
+        let late =
+            || std::io::Error::new(std::io::ErrorKind::TimedOut, "no profile unlock in time");
+        let (ty, body) = tokio::time::timeout_at(deadline, self.next_frame())
+            .await
+            .map_err(|_| late())??;
+        if ty != MSG_PROFILE_UNLOCK {
+            return Err(invalid("another frame where a profile unlock was promised"));
+        }
+        super::msg::decode::<ProfileUnlock>(ty, &body).map_err(|_| invalid("bad profile unlock"))
+    }
+
+    /// The next frame, held ones first, with a body that wipes on drop.
+    async fn next_frame(&mut self) -> std::io::Result<(u64, Zeroizing<Vec<u8>>)> {
+        use zeroize::Zeroize;
         if let Some(frame) = self.held.pop_front() {
             return Ok(frame);
         }
@@ -47,21 +82,24 @@ impl<R: AsyncRead + Unpin> FrameReader<R> {
             let next = split_frame(&self.buf, max_body)
                 .map_err(|_| invalid("v2 frame over its type's bound"))?;
             if let Some((ty, body, n)) = next {
-                let body = body.to_vec();
+                let body = Zeroizing::new(body.to_vec());
+                self.buf[..n].zeroize();
                 self.buf.drain(..n);
+                // `drain` moved the rest down; the `n` bytes past the new end are a stale copy.
+                self.buf.spare_capacity_mut()[..n].zeroize();
                 return Ok((ty, body));
             }
-            let mut chunk = [0u8; 4096];
+            let mut chunk = Zeroizing::new([0u8; 4096]);
             // `read` reports only the bytes it returns, and they land in `buf` before the next
             // await: a dropped future loses nothing.
-            match self.recv.read(&mut chunk).await? {
+            match self.recv.read(&mut chunk[..]).await? {
                 0 => {
                     return Err(std::io::Error::new(
                         std::io::ErrorKind::UnexpectedEof,
                         "v2 stream ended",
                     ))
                 }
-                n => self.buf.extend_from_slice(&chunk[..n]),
+                n => grow_wiped(&mut self.buf, &chunk[..n]),
             }
         }
     }
@@ -69,6 +107,18 @@ impl<R: AsyncRead + Unpin> FrameReader<R> {
     pub fn into_inner(self) -> R {
         self.recv
     }
+}
+
+/// Append `more` to `buf`, wiping the old allocation when it has to move.
+fn grow_wiped(buf: &mut Vec<u8>, more: &[u8]) {
+    use zeroize::Zeroize;
+    if buf.capacity() - buf.len() < more.len() {
+        let mut moved = Vec::with_capacity((buf.len() + more.len()).max(2 * buf.capacity()));
+        moved.extend_from_slice(buf);
+        buf.zeroize();
+        *buf = moved;
+    }
+    buf.extend_from_slice(more);
 }
 
 /// Write `msg` as one whole frame.
@@ -158,6 +208,73 @@ mod tests {
         tx.write_all(&head).await.unwrap();
         let err = reader.read_frame().await.unwrap_err();
         assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+    }
+
+    fn unlock(kind: u8) -> ProfileUnlock {
+        ProfileUnlock {
+            kind,
+            secret: Zeroizing::new(b"open sesame".to_vec()),
+            stay_signed_in: false,
+            enroll_alg: crate::quic::v2::msg::ENROLL_NONE,
+            enroll_key: vec![],
+        }
+    }
+
+    fn soon(ms: u64) -> tokio::time::Instant {
+        tokio::time::Instant::now() + std::time::Duration::from_millis(ms)
+    }
+
+    /// A promised unlock reads, a held one too, and one no hello announced never reaches
+    /// `read_frame`.
+    #[tokio::test]
+    async fn a_promised_unlock_reads_and_a_stray_one_is_skipped() {
+        use crate::quic::v2::msg::UNLOCK_PASSWORD;
+        let (mut tx, rx) = tokio::io::duplex(4096);
+        let mut reader = FrameReader::new(rx);
+        tx.write_all(&unlock(UNLOCK_PASSWORD).encode())
+            .await
+            .unwrap();
+        let got = reader.read_profile_unlock(soon(1000)).await.unwrap();
+        assert_eq!(&got.secret[..], b"open sesame");
+        reader.hold((MSG_PROFILE_UNLOCK, got.fields().into_body()));
+        let held = reader.read_profile_unlock(soon(1000)).await.unwrap();
+        assert_eq!(held.kind, UNLOCK_PASSWORD);
+
+        tx.write_all(&unlock(UNLOCK_PASSWORD).encode())
+            .await
+            .unwrap();
+        tx.write_all(&SetBitrate { bitrate_kbps: 9 }.encode_v2())
+            .await
+            .unwrap();
+        let (ty, _) = reader.read_frame().await.unwrap();
+        assert_eq!(ty, SetBitrate::TYPE);
+    }
+
+    /// Another frame first, a malformed unlock, half a frame by the deadline and the stream's
+    /// end are each refused.
+    #[tokio::test]
+    async fn a_promised_unlock_refuses_anything_else() {
+        use std::io::ErrorKind;
+        let (mut tx, rx) = tokio::io::duplex(4096);
+        let mut reader = FrameReader::new(rx);
+        tx.write_all(&SetBitrate { bitrate_kbps: 9 }.encode_v2())
+            .await
+            .unwrap();
+        let other = reader.read_profile_unlock(soon(1000)).await.unwrap_err();
+        assert_eq!(other.kind(), ErrorKind::InvalidData);
+
+        tx.write_all(&unlock(9).encode()).await.unwrap();
+        let bad = reader.read_profile_unlock(soon(1000)).await.unwrap_err();
+        assert_eq!(bad.kind(), ErrorKind::InvalidData);
+
+        let frame = unlock(crate::quic::v2::msg::UNLOCK_PASSWORD).encode();
+        tx.write_all(&frame[..5]).await.unwrap();
+        let late = reader.read_profile_unlock(soon(20)).await.unwrap_err();
+        assert_eq!(late.kind(), ErrorKind::TimedOut);
+
+        drop(tx);
+        let ended = reader.read_profile_unlock(soon(1000)).await.unwrap_err();
+        assert_eq!(ended.kind(), ErrorKind::UnexpectedEof);
     }
 
     #[tokio::test]

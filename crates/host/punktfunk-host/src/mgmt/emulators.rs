@@ -1127,7 +1127,8 @@ pub(crate) async fn install_emulator_content(
 ///
 /// Points the host at the operator's own copy, one no rule finds (a portable build unpacked
 /// anywhere), so it is listed and launched like any other; `forget` drops it again. Admin lane
-/// only.
+/// only. A seat host on a person's own account adopts none: a prepare runs the copy as that
+/// person, unasked.
 #[utoipa::path(
     post,
     path = "/emulators/{id}/adopt",
@@ -1141,12 +1142,20 @@ pub(crate) async fn install_emulator_content(
         (status = NOT_FOUND, description = "Not in the catalog", body = ApiError),
         (status = CONFLICT, description = "Another install holds the prefix", body = ApiError),
         (status = UNAUTHORIZED, description = "Missing or invalid bearer token", body = ApiError),
+        (status = FORBIDDEN, description = "A seat host on a person's own account, which adopts no copy", body = ApiError),
     )
 )]
 pub(crate) async fn adopt_emulator(
     Path(id): Path<String>,
     ApiJson(req): ApiJson<AdoptRequest>,
 ) -> Response {
+    if pf_paths::seat::own_account() && !req.forget {
+        return api_error(
+            StatusCode::FORBIDDEN,
+            "An emulator copy can't be added by hand on a profile that uses an existing account, \
+             because it would run as that person.",
+        );
+    }
     let target = id.clone();
     let adopted = blocking("emulator manager", move || {
         crate::emulators::adopt(&target, std::path::Path::new(&req.exe), !req.forget)

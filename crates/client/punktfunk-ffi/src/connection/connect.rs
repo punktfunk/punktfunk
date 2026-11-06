@@ -812,6 +812,134 @@ pub struct PunktfunkConnectOpts {
     pub shows_screens: u8,
     /// Always `0`. Fills what would otherwise be padding.
     pub reserved5: [u8; 6],
+    /// The profile unlock this connect sends, or null. Read during the call: the secret is
+    /// copied into a buffer the library wipes, and the caller wipes its own. An unlock outside
+    /// the wire's bounds, or one without `pin_sha256`, fails the connect with `INVALID_ARG`
+    /// before anything is dialed.
+    pub unlock: *const PunktfunkProfileUnlock,
+    /// `1`: this caller asks the player for a profile's password and dials again with it after
+    /// `PUNKTFUNK_STATUS_REJECTED_PROFILE_LOCKED`. A non-null `unlock` implies it.
+    pub prompts_unlock: u8,
+    /// Always `0`. Fills what would otherwise be padding.
+    pub reserved6: [u8; 7],
+}
+
+/// [`PunktfunkProfileUnlock::kind`]: the account password as typed.
+pub const PUNKTFUNK_UNLOCK_PASSWORD: u8 = 1;
+/// [`PunktfunkProfileUnlock::kind`]: a signature over [`punktfunk_profile_unlock_message`].
+pub const PUNKTFUNK_UNLOCK_KEY_PROOF: u8 = 2;
+/// [`PunktfunkProfileUnlock::enroll_alg`]: enrol no key.
+pub const PUNKTFUNK_ENROLL_NONE: u8 = 0;
+/// [`PunktfunkProfileUnlock::enroll_alg`]: ECDSA P-256 with SHA-256, the 65-byte SEC1 point.
+pub const PUNKTFUNK_ENROLL_P256: u8 = 1;
+/// [`PunktfunkProfileUnlock::enroll_alg`]: RSA 2048 PKCS#1 v1.5 with SHA-256, a DER
+/// `RSAPublicKey` of at most 600 bytes.
+pub const PUNKTFUNK_ENROLL_RSA2048: u8 = 2;
+/// Bytes [`punktfunk_profile_unlock_message`] writes.
+pub const PUNKTFUNK_UNLOCK_MESSAGE_LEN: usize = 152;
+
+/// What opens a profile on a person's own account ([`PunktfunkConnectOpts::unlock`]). Password:
+/// `secret` is the password as typed, UTF-8, 1 to 512 bytes, never trimmed, no NUL; optionally
+/// with a key to enrol. Key proof: `secret` is the signature, 1 to 1024 bytes, and nothing else
+/// is set.
+#[cfg(feature = "quic")]
+#[repr(C)]
+pub struct PunktfunkProfileUnlock {
+    /// `PUNKTFUNK_UNLOCK_*`.
+    pub kind: u8,
+    /// Password only: `1` keeps this device signed in to the profile.
+    pub stay_signed_in: u8,
+    /// Password only: `PUNKTFUNK_ENROLL_*` of `enroll_key`.
+    pub enroll_alg: u8,
+    /// Always `0`.
+    pub reserved: [u8; 5],
+    /// Readable for `secret_len` bytes during the call.
+    pub secret: *const u8,
+    /// See `secret`.
+    pub secret_len: usize,
+    /// The public key to enrol, readable for `enroll_key_len` bytes; null with
+    /// `PUNKTFUNK_ENROLL_NONE`.
+    pub enroll_key: *const u8,
+    /// See `enroll_key`.
+    pub enroll_key_len: usize,
+}
+
+/// The unlock `u` points at, copied. Null is none; a null buffer with a length is `NullPointer`,
+/// any bound of the wire broken `InvalidArg`. Neither buffer is read past the wire's longest
+/// value.
+///
+/// # Safety
+/// `u` is null or a readable [`PunktfunkProfileUnlock`] whose buffers are readable for their
+/// lengths.
+#[cfg(feature = "quic")]
+unsafe fn unlock_of(
+    u: *const PunktfunkProfileUnlock,
+) -> Result<Option<punktfunk_core::quic::v2::msg::ProfileUnlock>, PunktfunkStatus> {
+    use punktfunk_core::quic::v2::msg::{
+        ProfileUnlock, Zeroizing, ENROLL_RSA_KEY_MAX, UNLOCK_SIGNATURE_MAX,
+    };
+    // SAFETY: null or readable for one struct, per this fn's contract.
+    let Some(u) = (unsafe { u.as_ref() }) else {
+        return Ok(None);
+    };
+    let bytes = |p: *const u8, len: usize, cap: usize| {
+        if len > cap {
+            return Err(PunktfunkStatus::InvalidArg);
+        }
+        // SAFETY: null or readable for `len` bytes (caller contract).
+        Ok(unsafe { in_bytes(p, len) }?.to_vec())
+    };
+    let secret = Zeroizing::new(bytes(u.secret, u.secret_len, UNLOCK_SIGNATURE_MAX)?);
+    let key = bytes(u.enroll_key, u.enroll_key_len, ENROLL_RSA_KEY_MAX)?;
+    ProfileUnlock::new(u.kind, secret, u.stay_signed_in != 0, u.enroll_alg, key)
+        .map(Some)
+        .map_err(|_| PunktfunkStatus::InvalidArg)
+}
+
+/// The bytes a profile's unlock key signs, with SHA-256 as the digest, into `out`:
+/// `"punktfunk-seat-unlock-v1" ‖ challenge ‖ seat id ‖ device fingerprint ‖ box fingerprint`.
+/// `seat_id` is the seat's 32 lowercase hex characters; `device_sha256` is this device's
+/// certificate fingerprint, `box_sha256` the box's as this caller pinned it. `INVALID_ARG` for
+/// any other seat id, `NULL_POINTER` for a null argument.
+///
+/// # Safety
+/// `challenge`, `device_sha256` and `box_sha256` are readable for 32 bytes; `seat_id` is a
+/// NUL-terminated string; `out` is writable for [`PUNKTFUNK_UNLOCK_MESSAGE_LEN`] bytes.
+#[cfg(feature = "quic")]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn punktfunk_profile_unlock_message(
+    challenge: *const u8,
+    seat_id: *const std::os::raw::c_char,
+    device_sha256: *const u8,
+    box_sha256: *const u8,
+    out: *mut u8,
+) -> PunktfunkStatus {
+    guard(|| {
+        if out.is_null() {
+            return PunktfunkStatus::NullPointer;
+        }
+        // SAFETY: null or readable for 32 bytes (caller contract).
+        let fp = |p: *const u8| unsafe { in_bytes(p, 32) }.map(<[u8; 32]>::try_from);
+        let (Ok(Ok(c)), Ok(Ok(d)), Ok(Ok(b))) = (fp(challenge), fp(device_sha256), fp(box_sha256))
+        else {
+            return PunktfunkStatus::NullPointer;
+        };
+        // SAFETY: null or NUL-terminated, per this function's contract.
+        let seat = match unsafe { opt_cstr(seat_id) } {
+            Ok(Some(s)) => s,
+            Ok(None) => return PunktfunkStatus::NullPointer,
+            Err(()) => return PunktfunkStatus::InvalidArg,
+        };
+        match punktfunk_core::quic::v2::msg::unlock_signed_message(&c, seat, &d, &b) {
+            Ok(m) => {
+                // SAFETY: `out` is non-null and writable for the message's length (caller
+                // contract); a byte array has alignment 1.
+                unsafe { put(out.cast(), m) };
+                PunktfunkStatus::Ok
+            }
+            Err(_) => PunktfunkStatus::InvalidArg,
+        }
+    })
 }
 
 /// [`PunktfunkConnectOpts::reformat`]: this caller rebuilds its decoder on a frame flagged
@@ -832,7 +960,7 @@ const _: () = {
     use core::mem::{offset_of, size_of};
     #[cfg(target_pointer_width = "64")]
     assert!(
-        size_of::<PunktfunkConnectOpts>() == 176
+        size_of::<PunktfunkConnectOpts>() == 192
             && offset_of!(PunktfunkConnectOpts, video_fit) == 100
             && offset_of!(PunktfunkConnectOpts, delivery_flags) == 121
             && offset_of!(PunktfunkConnectOpts, profile_id) == 128
@@ -841,10 +969,13 @@ const _: () = {
             && offset_of!(PunktfunkConnectOpts, on_pending) == 144
             && offset_of!(PunktfunkConnectOpts, screens) == 160
             && offset_of!(PunktfunkConnectOpts, shows_screens) == 169
+            && offset_of!(PunktfunkConnectOpts, unlock) == 176
+            && offset_of!(PunktfunkConnectOpts, prompts_unlock) == 184
+            && size_of::<PunktfunkProfileUnlock>() == 40
     );
     #[cfg(target_pointer_width = "32")]
     assert!(
-        size_of::<PunktfunkConnectOpts>() == 124
+        size_of::<PunktfunkConnectOpts>() == 136
             && offset_of!(PunktfunkConnectOpts, video_fit) == 72
             && offset_of!(PunktfunkConnectOpts, delivery_flags) == 85
             && offset_of!(PunktfunkConnectOpts, profile_id) == 92
@@ -853,6 +984,9 @@ const _: () = {
             && offset_of!(PunktfunkConnectOpts, on_pending) == 104
             && offset_of!(PunktfunkConnectOpts, screens) == 112
             && offset_of!(PunktfunkConnectOpts, shows_screens) == 117
+            && offset_of!(PunktfunkConnectOpts, unlock) == 124
+            && offset_of!(PunktfunkConnectOpts, prompts_unlock) == 128
+            && size_of::<PunktfunkProfileUnlock>() == 24
     );
 };
 
@@ -901,6 +1035,9 @@ impl Default for PunktfunkConnectOpts {
             screen_count: 0,
             shows_screens: 0,
             reserved5: [0; 6],
+            unlock: ptr::null(),
+            prompts_unlock: 0,
+            reserved6: [0; 7],
         }
     }
 }
@@ -1103,8 +1240,9 @@ unsafe fn connect_ex_impl(
     })
 }
 
-/// The dial `o` asks for. A null or non-UTF-8 `host` and half an identity are `InvalidArg`;
-/// a bad launch id, device name or preset degrades to none (the OS name for the device).
+/// The dial `o` asks for. A null or non-UTF-8 `host`, half an identity and an unlock outside the
+/// wire's bounds are `InvalidArg`; a bad launch id, device name or preset degrades to none (the
+/// OS name for the device).
 ///
 /// # Safety
 /// Each pointer field of `o` is null or valid as [`punktfunk_connect_opts`] documents.
@@ -1176,7 +1314,15 @@ unsafe fn connect_params(
     let n = usize::from(o.screen_count).min(PUNKTFUNK_SCREENS_MAX);
     // SAFETY: `screens` is null or readable for `screen_count >= n` records (caller contract).
     let screens = unsafe { super::screens::screens_at(o.screens, n) };
+    // An unlock goes only to a pinned host; refused before its secret is read.
+    if !o.unlock.is_null() && pin.is_none() {
+        return Err(PunktfunkStatus::InvalidArg);
+    }
+    // SAFETY: `unlock` is null or a readable struct whose buffers match their lengths.
+    let unlock = unsafe { unlock_of(o.unlock) }?;
     Ok(punktfunk_core::client::ConnectParams {
+        prompts_unlock: o.prompts_unlock != 0,
+        unlock,
         compositor,
         gamepad,
         bitrate_kbps: o.bitrate_kbps,
@@ -1651,6 +1797,104 @@ mod tests {
         // SAFETY: both outs are locals; a null `host_ip` asks for the default route.
         unsafe { punktfunk_local_link_facts(std::ptr::null(), &mut kind, &mut mbps) };
         assert_ne!(kind, u8::MAX, "the kind is written either way");
+    }
+
+    /// An unlock and the prompt promise reach the dial; one outside the wire's bounds, or a null
+    /// buffer with a length, fails the connect before any dial.
+    #[test]
+    fn connect_opts_carry_the_unlock() {
+        let secret = *b"open sesame";
+        let mut u = PunktfunkProfileUnlock {
+            kind: PUNKTFUNK_UNLOCK_PASSWORD,
+            stay_signed_in: 1,
+            enroll_alg: PUNKTFUNK_ENROLL_NONE,
+            reserved: [0; 5],
+            secret: secret.as_ptr(),
+            secret_len: secret.len(),
+            enroll_key: std::ptr::null(),
+            enroll_key_len: 0,
+        };
+        let mut o = PunktfunkConnectOpts {
+            host: c"127.0.0.1".as_ptr(),
+            unlock: &u,
+            prompts_unlock: 1,
+            ..Default::default()
+        };
+        // SAFETY: every pointer field is null, a C-string literal, or a live local.
+        let unpinned = unsafe { connect_params(&o) }.err();
+        assert_eq!(unpinned, Some(PunktfunkStatus::InvalidArg), "no pin");
+        let pin = [7u8; 32];
+        o.pin_sha256 = pin.as_ptr();
+        // SAFETY: as above.
+        let p = unsafe { connect_params(&o) }.unwrap();
+        let got = p.unlock.expect("the unlock is carried");
+        assert!(p.prompts_unlock && got.stay_signed_in);
+        assert_eq!(*got.secret, secret);
+        for (kind, len) in [(9, secret.len()), (PUNKTFUNK_UNLOCK_PASSWORD, 0)] {
+            (u.kind, u.secret_len) = (kind, len);
+            o.unlock = &u;
+            // SAFETY: as above.
+            let refused = unsafe { connect_params(&o) }.err();
+            assert_eq!(refused, Some(PunktfunkStatus::InvalidArg));
+        }
+        u = PunktfunkProfileUnlock {
+            secret: std::ptr::null(),
+            secret_len: 4,
+            kind: PUNKTFUNK_UNLOCK_KEY_PROOF,
+            ..u
+        };
+        o.unlock = &u;
+        // SAFETY: as above; the null buffer is refused before any read.
+        let refused = unsafe { connect_params(&o) }.err();
+        assert_eq!(refused, Some(PunktfunkStatus::NullPointer));
+    }
+
+    /// The C builder writes core's message and refuses a seat id that is not lowercase hex.
+    #[test]
+    fn the_unlock_message_is_cores() {
+        let (challenge, dev, boxed) = ([1u8; 32], [0xaa; 32], [0xbb; 32]);
+        let mut out = [0u8; PUNKTFUNK_UNLOCK_MESSAGE_LEN];
+        let seat = c"0123456789abcdef0123456789abcdef";
+        // SAFETY: each input is a live 32-byte local or a C-string literal; `out` fits the message.
+        let st = unsafe {
+            punktfunk_profile_unlock_message(
+                challenge.as_ptr(),
+                seat.as_ptr(),
+                dev.as_ptr(),
+                boxed.as_ptr(),
+                out.as_mut_ptr(),
+            )
+        };
+        assert_eq!(st, PunktfunkStatus::Ok);
+        let want = punktfunk_core::quic::v2::msg::unlock_signed_message(
+            &challenge,
+            seat.to_str().unwrap(),
+            &dev,
+            &boxed,
+        );
+        assert_eq!(out, want.unwrap());
+        // SAFETY: as above.
+        let st = unsafe {
+            punktfunk_profile_unlock_message(
+                challenge.as_ptr(),
+                c"0123456789ABCDEF0123456789abcdef".as_ptr(),
+                dev.as_ptr(),
+                boxed.as_ptr(),
+                out.as_mut_ptr(),
+            )
+        };
+        assert_eq!(st, PunktfunkStatus::InvalidArg);
+        // SAFETY: a null fingerprint is refused before any read.
+        let st = unsafe {
+            punktfunk_profile_unlock_message(
+                challenge.as_ptr(),
+                seat.as_ptr(),
+                std::ptr::null(),
+                boxed.as_ptr(),
+                out.as_mut_ptr(),
+            )
+        };
+        assert_eq!(st, PunktfunkStatus::NullPointer);
     }
 
     /// Size-prefix guard: null/undersized is a status, not a read.

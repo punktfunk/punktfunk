@@ -3,6 +3,7 @@
 //! `hooks.json` is operator-privileged (`/api/v1/hooks`). Commands get event JSON and
 //! `PF_EVENT_*` env; Windows SYSTEM hosts run them as their WTS session user, and `elevated`
 //! ones on that user's administrator token once an administrator opted in ([`elevated_refusal`]).
+//! A seat on a person's own account runs none ([`own_account_refusal`]).
 //! Webhooks use verified TLS, do not follow redirects or attach host credentials,
 //! and may carry an HMAC signature.
 //!
@@ -207,6 +208,15 @@ pub(crate) fn elevated_refusal() -> Option<&'static str> {
     )
 }
 
+/// Why this host takes no hooks, as the console says it. `None` where it does. A seat on a
+/// person's own account takes none: the console's password must not run commands as them.
+pub(crate) fn own_account_refusal() -> Option<&'static str> {
+    pf_paths::seat::own_account().then_some(
+        "Hooks can't run on a profile that uses an existing account, because they would run as \
+         that person.",
+    )
+}
+
 /// `punktfunk-host hooks elevated on|off`. The config dir admits administrators alone, so a
 /// refused write is the elevation check.
 #[cfg(windows)]
@@ -402,13 +412,14 @@ fn note_client_mismatch(h: &HookEntry, ev: &crate::events::EventKind, kind: &str
 }
 
 /// Fires every hook `ev` matches, and the env-var mirrors. A seat's event fires none: it is on
-/// this bus for the plugins, and hooks run on this host's own.
+/// this bus for the plugins, and hooks run on this host's own. A host that takes no hooks
+/// ([`own_account_refusal`]) fires none either.
 fn dispatch(
     ev: &crate::events::HostEvent,
     sem: &std::sync::Arc<tokio::sync::Semaphore>,
     debounce: &mut HashMap<u64, Instant>,
 ) {
-    if ev.seat.is_some() {
+    if ev.seat.is_some() || own_account_refusal().is_some() {
         return;
     }
     let kind = ev.kind.name();
@@ -457,8 +468,12 @@ fn dispatch(
     }
 }
 
-/// The hooks that hold `ev`'s stage: `hold` set, kind and filter matching.
+/// The hooks that hold `ev`'s stage: `hold` set, kind and filter matching. None on a host that
+/// takes no hooks ([`own_account_refusal`]).
 pub(crate) fn holding(ev: &crate::events::HostEvent) -> Vec<HookEntry> {
+    if own_account_refusal().is_some() {
+        return Vec::new();
+    }
     let kind = ev.kind.name();
     store()
         .get()

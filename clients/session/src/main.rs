@@ -13,6 +13,7 @@
 //! the first presented frame, `stats:` lines per 1 s window, one `{"error": …}` /
 //! `{"ended": …}` JSON line on the way out. Logs go to stderr. Exit codes: 0 clean end,
 //! 2 connect failed, 3 trust rejected / pairing required, 4 presenter init failed.
+//! `--unlock-stdin` reads one profile unlock frame from stdin before the dial, then EOF.
 // `deny`, not `forbid`: edition 2024 makes this bin's startup env writes unsafe, and they
 // sit under localized `#[allow(unsafe_code)]` with SAFETY comments. `forbid` cannot be
 // overridden there and refuses the file. Do not name the env APIs here — the unsafe-hygiene
@@ -126,7 +127,7 @@ fn resolve_hdr_enabled(
 #[cfg(any(target_os = "linux", windows))]
 mod session_main {
     use pf_client_core::gamepad::GamepadService;
-    use pf_client_core::orchestrate::{emit, exit, ResolvedSpec, SessionLine};
+    use pf_client_core::orchestrate::{self, emit, exit, ResolvedSpec, SessionLine};
     use pf_client_core::session::{Dial, Probes, SessionParams};
     use pf_client_core::trust;
     use punktfunk_core::config::{GamepadPref, Mode};
@@ -1051,6 +1052,23 @@ mod session_main {
         let all_screens = arg_flag("--all-screens");
         let profile =
             arg_value("--as").map(|wanted| as_profile(&addr, known_host, &identity, pin, wanted));
+        // The shell's one profile unlock, from stdin only; a torn or missing one dials nothing.
+        let prompts_unlock = arg_flag(orchestrate::PROMPTS_UNLOCK_ARG);
+        let unlock = match arg_flag(orchestrate::UNLOCK_STDIN_ARG) {
+            false => None,
+            true => match orchestrate::read_unlock_from_stdin() {
+                Ok(u) => Some(u),
+                Err(e) => {
+                    tracing::error!(error = %e, "reading the profile unlock");
+                    emit(SessionLine::Error {
+                        msg: "the profile's sign-in didn't reach the stream",
+                        trust_rejected: None,
+                        refused: None,
+                    });
+                    return exit::CONNECT_FAILED;
+                }
+            },
+        };
         let outcome =
             pf_presenter::run_session(opts, move |gamepad, native, hdr, force_software, vulkan| {
                 let mut params = match resolved {
@@ -1086,6 +1104,8 @@ mod session_main {
                 };
                 params.profile = profile;
                 params.shows_screens |= all_screens;
+                params.prompts_unlock = prompts_unlock;
+                params.unlock = Arc::new(std::sync::Mutex::new(unlock));
                 params
             });
 

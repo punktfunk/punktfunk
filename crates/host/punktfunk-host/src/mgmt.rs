@@ -44,6 +44,7 @@ mod hooks;
 mod host;
 mod library;
 mod native;
+mod own_account;
 pub(crate) mod owner;
 #[cfg(windows)]
 mod pipes;
@@ -385,10 +386,11 @@ fn app(
         door,
     });
     let (api_routes, api) = api_router_parts();
-    // Auth, then the door's pass-on, then the library guard: a caller without a credential
-    // gets 401, only the lane auth stamped is passed on, and a library write a door passes to
-    // the owner never meets the 409 of the box copy.
+    // Auth, then the door's pass-on, then the library guard and a person's own Linux account: a
+    // caller without a credential gets 401, only the lane auth stamped is passed on, and a
+    // library write a door passes to the owner never meets the 409 of the box copy.
     let routed = api_routes
+        .route_layer(middleware::from_fn(own_account::gate))
         .route_layer(middleware::from_fn(move |req: Request, next: Next| {
             library::box_library_is_read_only(box_library, req, next)
         }))
@@ -624,6 +626,12 @@ fn api_router_parts() -> (Router<Arc<MgmtState>>, utoipa::openapi::OpenApi) {
         .routes(routes!(profiles::start_profile_seat))
         .routes(routes!(profiles::stop_profile_seat))
         .routes(routes!(profiles::end_profile_session))
+        .routes(routes!(profiles::unlock_challenge))
+        .routes(routes!(
+            profiles::list_profile_devices,
+            profiles::sign_out_profile_devices
+        ))
+        .routes(routes!(profiles::sign_out_profile_device))
         .routes(routes!(update::get_update_status))
         .routes(routes!(update::force_update_check))
         .routes(routes!(update::apply_update))

@@ -532,7 +532,7 @@ impl ScreenView for ShortcutEditorScreen {
 
     fn hints(&self, ctx: &Ctx) -> Vec<Hint> {
         if self.editing_name {
-            return TextEntry::hints(ctx.device, "Done");
+            return self.keyboard.hints(ctx.device, "Done");
         }
         if self.picking_key {
             return vec![

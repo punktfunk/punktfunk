@@ -96,6 +96,8 @@ struct ContentView: View {
     @State private var profileAsk: ProfileAsk?
     /// The wait for a profile's seat to come up, before the dial.
     @State private var seatWait: SeatWait?
+    /// The password prompt of a profile on a person's own account, before the dial.
+    @State private var unlockAsk: UnlockAsk?
     @State private var speedTestTarget: StoredHost?
     @State private var libraryTarget: LibraryTarget?
     #if os(iOS) || os(visionOS) || os(tvOS)
@@ -246,6 +248,7 @@ struct ContentView: View {
             .sheet(item: $profileAsk) { ProfilePickerView(ask: $0) }
             // The seat of the picked profile is starting; the dial follows once it is up.
             .sheet(item: $seatWait) { SeatWaitView(wait: $0) }
+            .sheet(item: $unlockAsk) { UnlockPromptView(ask: $0) }
             // Informational deep-link outcome (unknown host, a refused preset, already
             // streaming). Not an error.
             .alert("Can't open", isPresented: deepLinkNoticePresented) {
@@ -913,11 +916,11 @@ struct ContentView: View {
             entry: $libraryTarget, notice: $deepLinkNotice, pairing: pairingBinding,
             linkConfirm: $deepLinkConfirm, runLink: runDeepLinkConfirm,
             onFailed: { consoleFailed = true }, onPaired: handlePaired,
-            connect: { flow.connect($0, preset: $1, profile: .send($2)) },
+            connect: { flow.connect($0, preset: $1, profile: $2) },
             connectDiscovered: flow.connectDiscovered,
             requestAccess: flow.consoleRequestAccess,
             requestAccessDiscovered: flow.requestAccessDiscovered,
-            launchTitle: { launch($0, $1, profile: .send($2)) }, connectShelf: connectFromShelf,
+            launchTitle: { launch($0, $1, profile: $2) }, connectShelf: connectFromShelf,
             wakeOnly: { flow.wakeOnly($0) }, awaitingApproval: awaitingApproval != nil)
     }
 
@@ -1077,7 +1080,8 @@ struct ContentView: View {
         ConnectFlow(
             model: model, store: store, presets: presets, discovery: discovery, waker: waker,
             autoWake: $autoWakeEnabled, approvalChoice: $approvalChoice,
-            awaitingApproval: $awaitingApproval, profileAsk: $profileAsk, seatWait: $seatWait)
+            awaitingApproval: $awaitingApproval, profileAsk: $profileAsk, seatWait: $seatWait,
+            unlockAsk: $unlockAsk)
     }
 
     /// A title picked on a library shelf: dial its host, booting straight into that title — with

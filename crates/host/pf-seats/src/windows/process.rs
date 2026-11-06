@@ -415,7 +415,8 @@ fn session_system_token(session_id: u32) -> WinResult<OwnedHandle> {
 
 /// `steam` is the seat's own `steam.exe` ([`super::steam::seat_exe`]), set when the box has Steam.
 /// `isolate` false extends the virtual display instead: the quality gate exits inside its linger,
-/// so an isolate it made is never restored and leaves the session with no lit display.
+/// so an isolate it made is never restored and leaves the session with no lit display. A row on a
+/// person's own account gets `PUNKTFUNK_SEAT_OWN_ACCOUNT=1`, as a Linux one does.
 pub(super) fn seat_environment(
     host_root: &Path,
     seat: &Seat,
@@ -491,6 +492,9 @@ pub(super) fn seat_environment(
     }
     if let Some(exe) = steam {
         entries.insert("PUNKTFUNK_SEAT_STEAM".into(), exe.as_os_str().to_owned());
+    }
+    if seat.adopted_sid.is_some() {
+        entries.insert("PUNKTFUNK_SEAT_OWN_ACCOUNT".into(), OsString::from("1"));
     }
     if !isolate {
         entries.insert("PUNKTFUNK_NO_ISOLATE".into(), OsString::from("1"));
@@ -573,6 +577,28 @@ mod tests {
     use super::*;
     use crate::windows::{util, wts};
     use std::time::{Duration, Instant};
+
+    /// Only a row on a person's own account carries the marker its host reads.
+    #[test]
+    fn only_an_adopted_row_s_host_is_marked_as_a_person_s() {
+        let mut ledger = crate::model::Ledger::new();
+        let request = |name: &str| crate::model::CreateSeat {
+            name: name.into(),
+            account: name.into(),
+            autostart: false,
+        };
+        let made = ledger.allocate(request("pf_seat1")).unwrap();
+        let sid = "S-1-5-21-1-2-3-1001".to_owned();
+        let adopted = ledger.allocate_adopted(request("Ben"), sid).unwrap();
+        let marked = |seat: &Seat| {
+            let block = seat_environment(Path::new(r"C:\seat"), seat, None, true).unwrap();
+            String::from_utf16_lossy(&block)
+                .split('\0')
+                .any(|entry| entry == "PUNKTFUNK_SEAT_OWN_ACCOUNT=1")
+        };
+        assert!(marked(&adopted));
+        assert!(!marked(&made));
+    }
 
     /// A child in another session ends when its job closes, as it must when the service dies.
     /// It needs a LocalSystem allowed to start a process in the console session, which a CI

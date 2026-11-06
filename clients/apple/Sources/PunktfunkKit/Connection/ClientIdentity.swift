@@ -1,6 +1,7 @@
 // The client's persistent identity + the SPAKE2 PIN pairing ceremony — the trust
 // bootstrap that precedes any pinned PunktfunkConnection.
 
+import CryptoKit
 import Foundation
 import PunktfunkCore
 
@@ -13,6 +14,11 @@ public struct ClientIdentity: Sendable {
     public init(certPEM: String, keyPEM: String) {
         self.certPEM = certPEM
         self.keyPEM = keyPEM
+    }
+
+    /// SHA-256 of the certificate's DER: the fingerprint a host knows this device by.
+    public var fingerprint: Data? {
+        ClientTLS.derFromPEM(certPEM, type: "CERTIFICATE").map { Data(SHA256.hash(data: $0)) }
     }
 }
 

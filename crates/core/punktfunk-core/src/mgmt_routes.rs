@@ -56,15 +56,19 @@ pub fn paired_may_access(method: &str, path: &str) -> bool {
     if method == "POST" && path_matches("/api/v1/library/install/{}/pause", path) {
         return true;
     }
-    // A client's picker: the list, a picture, and getting a seat ready. Editing stays the
-    // console's.
+    // A client's picker: the list, a picture, getting a seat ready, and the challenge of a key
+    // unlock for this device, which the handler answers only for a key it enrolled. Editing
+    // stays the console's.
     if method == "GET"
         && (path == "/api/v1/profiles/enumerate"
             || path_matches("/api/v1/profiles/{}/avatar", path))
     {
         return true;
     }
-    if method == "POST" && path_matches("/api/v1/profiles/{}/wake", path) {
+    if method == "POST"
+        && (path_matches("/api/v1/profiles/{}/wake", path)
+            || path_matches("/api/v1/profiles/{}/unlock-challenge", path))
+    {
         return true;
     }
     method == "GET"

@@ -25,6 +25,35 @@ object NativeBridge {
     external fun nativeConnect(requestJson: String): Long
 
     /**
+     * [nativeConnect] for a profile on a person's own account. [promptsUnlock]: this app asks for
+     * the password after a `profile-locked` refusal. [secret] null sends no unlock; else [kind] 1
+     * is the password as typed (UTF-8), 2 a key proof, and [enrollKey] null or the key to enrol
+     * under [enrollAlg]. The bridge copies [secret]; the caller wipes its array after this returns.
+     * An unlock needs a non-empty `pin_hex`, or this fails with the token "error" before dialing.
+     */
+    external fun nativeConnectWithUnlock(
+        requestJson: String,
+        promptsUnlock: Boolean,
+        kind: Int,
+        secret: ByteArray?,
+        staySignedIn: Boolean,
+        enrollAlg: Int,
+        enrollKey: ByteArray?,
+    ): Long
+
+    /**
+     * The 152 bytes a profile's unlock key signs (SHA-256 digest): [challenge], [seatId] as 32
+     * lowercase hex characters, then this device's and the pinned box's certificate SHA-256.
+     * The three arrays are 32 bytes each. Null for anything else.
+     */
+    external fun nativeProfileUnlockMessage(
+        challenge: ByteArray,
+        seatId: String,
+        deviceFp: ByteArray,
+        boxFp: ByteArray,
+    ): ByteArray?
+
+    /**
      * True while the dial [nativeConnect] is blocked on has been parked by the host for its
      * operator's approval. The dial then waits for the verdict; show the approval wait.
      */
@@ -987,9 +1016,18 @@ object NativeBridge {
     /**
      * Where the session the console asked for stands: 0 connecting, 1 streaming, 2 failed([message]),
      * 3 ended ([message] = the abnormal reason, or "" for a clean end), 4 reconnecting([message]),
-     * 5 failed as profile-unknown([message]), 6 awaiting the host operator's approval.
+     * 5 failed as profile-unknown([message]), 6 awaiting the host operator's approval, 7 failed as
+     * profile-locked ([message] = the host's sentence, "" when it said none): the console's
+     * password prompt opens again.
      */
     external fun nativeConsoleSessionPhase(handle: Long, phase: Int, message: String)
+
+    /**
+     * The password the console's prompt holds for the `Launch` it just raised, moved out of the
+     * console: null when it holds none. [stays] gets its "Stay signed in" switch at index 0. The
+     * console's copy is wiped as this returns; the caller wipes the array once its dial returns.
+     */
+    external fun nativeConsoleTakeUnlock(handle: Long, stays: BooleanArray): ByteArray?
 
     /** Re-root the console: `{}` = Home, `{"library": <HostRow>}` = that host's shelf over Home. */
     external fun nativeConsoleNavigate(handle: Long, entryJson: String)

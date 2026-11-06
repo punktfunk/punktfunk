@@ -399,6 +399,11 @@ mod tests {
 
     /// The `ClientHello` frame a browser opens a session with.
     fn hello(name: &str, launch: Option<&str>) -> Vec<u8> {
+        client_hello(name, launch).encode_v2()
+    }
+
+    /// [`hello`] before it is encoded.
+    fn client_hello(name: &str, launch: Option<&str>) -> ClientHello {
         use punktfunk_core::config::{CompositorPref, GamepadPref};
         let hello = Hello {
             mode: punktfunk_core::Mode {
@@ -440,7 +445,6 @@ mod tests {
             access_only: false,
             screens: Vec::new(),
         }
-        .encode_v2()
     }
 
     /// A host endpoint on loopback, and a browser that dials it and opens the control stream
@@ -848,6 +852,65 @@ mod tests {
         let why = RejectReason::LaunchNotPermitted;
         assert_eq!(said.code, why.close_code());
         assert_eq!(said.reason, why.to_string());
+    }
+
+    /// A browser never opens a profile on a person's own Linux account, and the supervisor is
+    /// never asked to unlock it for one: the browser is sent to the app.
+    #[tokio::test]
+    async fn a_browser_never_opens_a_person_s_own_account() {
+        use crate::native::unlock::fake::{self, Fake};
+        use punktfunk_core::quic::Refused;
+        let np = store("person");
+        let mut s = serving(np.clone());
+        let key = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).unwrap();
+        let fp_hex = hex::encode(sha256(&key.subject_public_key_info()));
+        np.add("Jane's browser", &fp_hex).unwrap();
+        let seat = "b0b0".repeat(8);
+        let file = crate::test_support::scratch().join("pf-wt-person-profiles.json");
+        let profiles = serde_json::json!({"version": 1, "profiles": [
+            {"id": "7a11ce00b001", "display_name": "Jane",
+             "os_account": {"kind": "seat", "seat": seat}}]});
+        std::fs::write(&file, profiles.to_string()).unwrap();
+        s.host.profiles = Arc::new(crate::profiles::Profiles::load_with(Some(file), None));
+        let sup = Arc::new(Fake::new(vec![fake::person(&seat, 9780)], |_| {
+            Ok(pf_seats::ipc::CommandResult::Left)
+        }));
+        let _armed = fake::arm(&fp_hex, sup.clone());
+        let mut first = client_hello("Safari on Mac", None);
+        first.profile = Some("7a11ce00b001".into());
+        let (browser, _rx, admitted) =
+            admit_over_loopback(&s, &key, &first.encode_v2(), Via::DIRECT).await;
+        let Admitted {
+            link,
+            tx,
+            rx,
+            first,
+            ..
+        } = admitted;
+        let SessionLink::Web(host, ..) = &link else {
+            unreachable!("a browser's link")
+        };
+        let plane = DataPlane::Web(WebTransportPlane::new(
+            host.clone(),
+            link.v2_session().clone(),
+        ));
+        let sem = Arc::new(tokio::sync::Semaphore::new(1));
+        let permit = sem.try_acquire_owned().unwrap();
+        let session =
+            crate::native::run_admitted(link.clone(), tx, rx, first, &s.host, plane, permit);
+        let read = async {
+            let mut uni = browser.accept_uni().await.unwrap();
+            let (ty, body) = punktfunk_core::quic::v2::io::read_one_frame(&mut uni)
+                .await
+                .unwrap();
+            assert_eq!(ty, Refused::TYPE);
+            Refused::from_body(&body).unwrap()
+        };
+        let (ended, said) = tokio::join!(session, read);
+        assert!(ended.is_err(), "the session is refused");
+        assert_eq!(said.code, RejectReason::SeatUnavailable.close_code());
+        assert_eq!(said.reason, "Open this profile from the Punktfunk app.");
+        assert!(sup.asked().is_empty(), "nothing asked of the supervisor");
     }
 
     /// A `Redirect` reaches the browser before any `ServerHello`, and the host then closes.

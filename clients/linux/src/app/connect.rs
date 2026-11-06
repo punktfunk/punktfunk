@@ -192,10 +192,11 @@ impl AppModel {
             return;
         }
         let profile = opts.profile.as_ref().and_then(|p| p.as_deref());
+        let unlock = opts.unlock.is_some();
         self.flights
             .of(&key)
             .attempt
-            .dial(tofu, profile, opts.redial);
+            .dial(tofu, profile, opts.redial, unlock);
         self.hosts.emit(HostsMsg::ClearError);
         self.hosts
             .emit(HostsMsg::SetSession(key.clone(), Some(Phase::Connecting)));
@@ -309,6 +310,16 @@ impl AppModel {
                 self.forget_profile(&req);
                 self.hosts.emit(HostsMsg::ShowError(msg));
             }
+            ExitRoute::Unlock { id, error, sent } => match req.host.pin().map(str::to_string) {
+                Some(fp_hex) => self.reask_unlock(req, fp_hex, id, error, sent, sender),
+                None => self
+                    .hosts
+                    .emit(HostsMsg::ShowError(error.unwrap_or_else(|| {
+                        trust::connect_reject_message(
+                            punktfunk_core::reject::RejectReason::ProfileLocked,
+                        )
+                    }))),
+            },
             ExitRoute::Wake => crate::app::gate::wake_and_connect(&self.window, sender, req),
         }
     }

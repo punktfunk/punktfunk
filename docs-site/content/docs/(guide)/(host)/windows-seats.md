@@ -37,6 +37,8 @@ sealed on this PC.
   standard user in Windows.
 - When the account's Windows password changes or expires, its card says so. **Update password…**
   on the card takes the new one.
+- Its seat runs no [hooks](/docs/automation#hooks): they would run as that person. A hook saved
+  for it before is skipped.
 - If Windows wants the password changed, remove the profile, sign in to the account at the PC and
   set it, then add the profile again.
 

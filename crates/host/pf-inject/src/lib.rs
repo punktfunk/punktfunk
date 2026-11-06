@@ -74,8 +74,8 @@ pub enum Backend {
     /// KWin `org_kde_kwin_fake_input`. Direct; no RemoteDesktop portal. Authorized by the
     /// host `.desktop`.
     KwinFakeInput,
-    /// libei via `reis`. RemoteDesktop portal, or Mutter's direct RemoteDesktop API on GNOME
-    /// (`libei_ei_source`).
+    /// libei via `reis`. RemoteDesktop portal, Mutter's direct RemoteDesktop API on GNOME, or
+    /// KWin's own on a seat (`libei_ei_source`).
     Libei,
     /// libei against gamescope's EIS socket (no portal). Nested-game / SteamOS-like session.
     GamescopeEi,
@@ -760,23 +760,67 @@ mod pad_driver_verdict_tests {
 mod service;
 pub use service::InjectorService;
 
-/// How libei reaches EIS. KWin uses the RemoteDesktop portal (pre-seeded grant). GNOME
-/// portal `Start()` needs interactive approval a headless host cannot answer, so GNOME uses
-/// Mutter's direct `org.gnome.Mutter.RemoteDesktop` — same API as the Mutter video backend.
+/// The compositor a libei connection goes to, as far as its EIS route goes.
+#[cfg(target_os = "linux")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum EisCompositor {
+    Mutter,
+    Kwin,
+    Other,
+}
+
+/// How libei reaches EIS. GNOME's portal `Start()` needs an approval a headless host cannot
+/// give, so GNOME uses Mutter's direct `org.gnome.Mutter.RemoteDesktop`, the API of the Mutter
+/// video backend. A seat host on KWin asks KWin itself: a person's headless session has no
+/// portal grant, and none may be written into their home. Any other KWin uses the portal.
+#[cfg(target_os = "linux")]
+fn ei_source_for(seat_host: bool, compositor: EisCompositor) -> libei::EiSource {
+    match compositor {
+        EisCompositor::Mutter => libei::EiSource::MutterEis,
+        EisCompositor::Kwin if seat_host => libei::EiSource::KwinEis,
+        EisCompositor::Kwin | EisCompositor::Other => libei::EiSource::Portal,
+    }
+}
+
+/// [`ei_source_for`] this host: the compositor the host pinned, else the session's desktop.
 #[cfg(target_os = "linux")]
 fn libei_ei_source() -> libei::EiSource {
-    let gnome = pf_host_config::config()
-        .compositor
-        .as_deref()
-        .is_some_and(|v| v.trim().eq_ignore_ascii_case("mutter"))
-        || pf_host_config::session::current_desktop()
-            .unwrap_or_default()
-            .to_ascii_uppercase()
-            .contains("GNOME");
-    if gnome {
-        libei::EiSource::MutterEis
+    let config = pf_host_config::config();
+    let pinned = |name: &str| {
+        config
+            .compositor
+            .as_deref()
+            .is_some_and(|v| v.trim().eq_ignore_ascii_case(name))
+    };
+    let desktop = pf_host_config::session::current_desktop()
+        .unwrap_or_default()
+        .to_ascii_uppercase();
+    let compositor = if pinned("mutter") || desktop.contains("GNOME") {
+        EisCompositor::Mutter
+    } else if pinned("kwin") || desktop.contains("KDE") {
+        EisCompositor::Kwin
     } else {
-        libei::EiSource::Portal
+        EisCompositor::Other
+    };
+    ei_source_for(pf_paths::seat::role().is_seat_host(), compositor)
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod ei_source_tests {
+    use super::*;
+    use libei::EiSource;
+
+    /// Only a seat host on KWin asks KWin for input; GNOME keeps Mutter's route and every
+    /// other host the portal.
+    #[test]
+    fn a_seat_on_kwin_asks_kwin_and_every_other_host_keeps_its_route() {
+        for seat_host in [false, true] {
+            let route = |compositor| ei_source_for(seat_host, compositor);
+            assert_eq!(route(EisCompositor::Mutter), EiSource::MutterEis);
+            assert_eq!(route(EisCompositor::Other), EiSource::Portal);
+        }
+        assert_eq!(ei_source_for(true, EisCompositor::Kwin), EiSource::KwinEis);
+        assert_eq!(ei_source_for(false, EisCompositor::Kwin), EiSource::Portal);
     }
 }
 

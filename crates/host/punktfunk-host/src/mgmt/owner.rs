@@ -171,6 +171,13 @@ pub(crate) trait Seats: Send + Sync {
     fn snapshot(&self) -> Arc<crate::seats::Snapshot>;
     /// Blocking.
     fn call(&self, target: &Target, call: Forwarded) -> Answer;
+    /// The ledger, with no seat host asked. Blocking.
+    fn ledger(&self) -> crate::seats::Snapshot;
+    /// One request to the seat supervisor. Blocking.
+    fn ask(
+        &self,
+        command: pf_seats::ipc::Command,
+    ) -> Result<pf_seats::ipc::CommandResult, pf_seats::ipc::ApiError>;
 }
 
 /// The live seats, through the supervisor and each seat host's loopback API.
@@ -179,6 +186,17 @@ pub(crate) struct LiveSeats;
 impl Seats for LiveSeats {
     fn snapshot(&self) -> Arc<crate::seats::Snapshot> {
         crate::seats::snapshot()
+    }
+
+    fn ledger(&self) -> crate::seats::Snapshot {
+        crate::seats::ledger()
+    }
+
+    fn ask(
+        &self,
+        command: pf_seats::ipc::Command,
+    ) -> Result<pf_seats::ipc::CommandResult, pf_seats::ipc::ApiError> {
+        crate::seats::call(command)
     }
 
     fn call(&self, target: &Target, call: Forwarded) -> Answer {
@@ -299,7 +317,8 @@ impl Answer {
 /// axum's default request limit: a policy, a hook list, a PIN, a plugin page's form.
 const BODY_LIMIT: usize = 2 * 1024 * 1024;
 
-/// The seat a device plays on: where its host lists it now, else its own profile's row.
+/// The seat a device plays on: where its host lists it now, else its own profile's row. A
+/// person's own Linux account is only ever the first: a device reaches it by unlocking.
 fn device_seat(st: &MgmtState, seats: &crate::seats::Snapshot, fp: &str) -> Option<String> {
     let seen = seats.occupants.iter().find(|(_, who)| {
         who.iter()
@@ -309,6 +328,9 @@ fn device_seat(st: &MgmtState, seats: &crate::seats::Snapshot, fp: &str) -> Opti
         return Some(id.clone());
     }
     let profile = st.app.profiles.get()?.resolve(Some(fp), None).ok()?;
+    if seats.person_row(&profile.os_account).is_some() {
+        return None;
+    }
     seats.row_of(&profile.os_account).map(str::to_string)
 }
 

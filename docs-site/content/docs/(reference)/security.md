@@ -140,6 +140,33 @@ only root can change.
 - **Your library.** Every seat gets a read-only copy of your game library, so a game on a seat
   can read it, commands and prep steps of your custom titles included. It can't change it.
 
+### A profile on an existing account runs as that person
+
+A profile on an existing account plays on that person's own account, on Linux and Windows. So the
+console password can't run a command as them, its seat runs no hooks. On an existing Linux
+account the console manages nothing inside the account: no plugins run there, and it installs,
+prepares and removes no emulator. On an existing Windows account the seat installs **Verified**
+plugins only and takes no emulator copy named by hand. Games still start what the library says
+when the person picks them, custom titles' commands and prep steps included.
+
+### Only its person opens an existing Linux account
+
+[Someone's own account](/docs/own-account) opens with that account's password or a device it
+signed in, never with the console password:
+
+| | |
+|---|---|
+| Who decides | `punktfunk-seats`, as root. It checks the password through the machine's login (PAM), keeps the seat's list of signed-in devices, and starts the session. The host that faces the network only passes the password on: taken over, it can read a password typed after that, but can't open the session or add a device. |
+| The password | The app sends it only to a host whose certificate it pinned at pairing, over the encrypted connection, and the host reads it only from a paired device. It is wiped after the check and never written to disk, a log, a command line or an environment. Nothing on the device stores it. |
+| Limits | 5 wrong passwords per device, then 15 minutes. At most 2 wrong passwords per account in 15 minutes reach the login, so a distro that locks an account after 3 failures never does it from a stream. |
+| Face or finger unlock | A key in the device's secure hardware (Secure Enclave, Android Keystore, Windows Hello) that signs only after a match. `punktfunk-seats` checks its signature over a one-time challenge, good for 2 minutes and bound to this seat, this device and this box. A failed signature never reaches the login. |
+| Which devices get on | The seat's host admits only the devices on its list, not every device paired with the box. A device with face or finger unlock is on it only after a fresh match, until 10 minutes after it leaves, so a copy of its pairing can't skip the match. **Sign out** on the profile's card takes a device and its key off. |
+| Record | Each unlock writes one line to the journal of `punktfunk-seats`: seat, account, device, how it unlocked, the result and the failures so far. Never the password. |
+
+An existing Windows account is different: Windows needs its password at each sign-in, so the PC
+keeps it, encrypted for the system account. Anyone with administrator rights on the PC can recover
+it.
+
 ## Plugins run code on your host
 
 Installing a [plugin](/docs/plugins) is a trust decision, like installing any program. What limits

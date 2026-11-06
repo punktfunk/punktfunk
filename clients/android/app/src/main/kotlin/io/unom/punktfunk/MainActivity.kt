@@ -20,7 +20,6 @@ import android.view.KeyEvent
 import android.view.ViewConfiguration
 import android.view.MotionEvent
 import android.widget.Toast
-import androidx.activity.ComponentActivity
 import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -36,6 +35,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.fragment.app.FragmentActivity
 import io.unom.punktfunk.kit.DsDevice
 import io.unom.punktfunk.kit.Gamepad
 import io.unom.punktfunk.kit.GamepadRouter
@@ -103,7 +103,8 @@ private fun HoldWindowInsetsListeners() {
     remember(WindowInsets.systemBars) {}
 }
 
-class MainActivity : ComponentActivity() {
+// A FragmentActivity: BiometricPrompt hosts the unlock key's sheet in a fragment of it.
+class MainActivity : FragmentActivity() {
     /**
      * The active stream session handle (0 = not streaming). Set by [StreamScreen] while it's shown.
      * `dispatchKeyEvent` is the earliest key hook an app has — above Compose's focus system — so

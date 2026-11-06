@@ -126,10 +126,7 @@ pub(super) fn ensure_group(name: &str) -> Result<u32, BackendError> {
 }
 
 fn getent(database: &str, key: &str) -> Result<Option<String>, BackendError> {
-    let output = std::process::Command::new("getent")
-        .args([database, key])
-        .stdin(std::process::Stdio::null())
-        .output()
+    let output = super::output("getent", &[database, key])
         .map_err(|error| err("getent", format!("run getent: {error}")))?;
     match output.status.code() {
         Some(0) => Ok(Some(String::from_utf8_lossy(&output.stdout).into_owned())),
@@ -279,6 +276,87 @@ pub(super) fn require_owner(account: &str) -> Result<Passwd, BackendError> {
             format!("account '{account}' is a system or seat account, not a person's"),
         )),
         None => Err(err(
+            "account_missing",
+            format!("account '{account}' doesn't exist"),
+        )),
+    }
+}
+
+/// The person a new row may adopt as `account`: an existing ordinary user whom no row holds and
+/// who is not the box owner, the one `door-helper` recorded in `state` or the one the owner's
+/// row names. The uid is read here, from the system, and no caller's.
+pub(super) fn adoptable(
+    account: &str,
+    ledger: &Ledger,
+    state: &Path,
+) -> Result<Passwd, BackendError> {
+    let found = require_ordinary(account)?;
+    let mut owners = Vec::new();
+    let named = ledger.owner().map(|owner| owner.account.clone());
+    for name in named.into_iter().chain(recorded_owner(state)) {
+        owners.extend(lookup(&name)?.map(|owner| (name, owner)));
+    }
+    check_adoptable(&found, ledger, &owners)?;
+    Ok(found)
+}
+
+/// [`adoptable`] without the lookups: `owners` are the owner's accounts as named, resolved.
+fn check_adoptable(
+    found: &Passwd,
+    ledger: &Ledger,
+    owners: &[(String, Passwd)],
+) -> Result<(), BackendError> {
+    let name = &found.name;
+    if owners
+        .iter()
+        .any(|(named, owner)| named == name || owner.uid == found.uid)
+    {
+        return Err(err(
+            "account_is_owner",
+            format!("{name} is this machine's owner, who has a profile of their own."),
+        ));
+    }
+    let held = ledger
+        .seats
+        .iter()
+        .any(|seat| seat.adopted_uid == Some(found.uid) || seat.account.eq_ignore_ascii_case(name));
+    if held {
+        return Err(err(
+            "account_taken",
+            format!("Another profile already uses {name}."),
+        ));
+    }
+    Ok(())
+}
+
+/// The user `account`: it exists and is a person's. A refusal's message is the console's
+/// sentence.
+fn require_ordinary(account: &str) -> Result<Passwd, BackendError> {
+    check_name(account)?;
+    match lookup(account)? {
+        Some(found) if is_ordinary(&found) => Ok(found),
+        Some(_) => Err(err(
+            "account_not_ordinary",
+            format!("{account} is a system account, not a person's."),
+        )),
+        None => Err(err(
+            "account_missing",
+            format!("There is no account called {account} on this machine."),
+        )),
+    }
+}
+
+/// The user a person's row adopted: its name must still resolve to the uid the row recorded. A
+/// name given to another user since, or to none, is refused; nothing runs as a stranger.
+pub(super) fn require_person(seat: &Seat) -> Result<Passwd, BackendError> {
+    let account = &seat.account;
+    match (lookup(account)?, seat.adopted_uid) {
+        (Some(found), Some(uid)) if found.uid == uid => Ok(found),
+        (Some(_), _) => Err(err(
+            "account_not_owned",
+            format!("account '{account}' is now another user than the one this profile adopted"),
+        )),
+        (None, _) => Err(err(
             "account_missing",
             format!("account '{account}' doesn't exist"),
         )),
@@ -635,6 +713,65 @@ mod tests {
         assert_eq!(longest.len(), MAX_OWNER_ACCOUNT_LEN);
         std::fs::write(state.path().join(OWNER_FILE), format!("{longest}\n")).unwrap();
         assert!(!refused(&longest), "the longest name the seats accept");
+    }
+
+    /// A new row adopts neither the owner, by name or by uid, nor an account another row holds,
+    /// whatever name it goes by.
+    #[test]
+    fn the_owner_and_a_held_account_are_not_adoptable() {
+        use crate::model::CreateSeat;
+        let user = |name: &str, uid: u32| {
+            parse_passwd(&format!("{name}:x:{uid}:{uid}::/home/{name}:/bin/bash")).unwrap()
+        };
+        let named = |account: &str| CreateSeat {
+            name: account.into(),
+            account: account.into(),
+            autostart: false,
+        };
+        let mut ledger = Ledger::new();
+        ledger.allocate_adopted_user(named("carol"), 1200).unwrap();
+        let owners = [("enrico".to_owned(), user("enrico", 1000))];
+        let code = |found: &Passwd| check_adoptable(found, &ledger, &owners).unwrap_err().code;
+
+        assert!(check_adoptable(&user("dave", 1300), &ledger, &owners).is_ok());
+        assert_eq!(code(&user("enrico", 1000)), "account_is_owner");
+        assert_eq!(
+            code(&user("enrico@corp", 1000)),
+            "account_is_owner",
+            "an alias"
+        );
+        assert_eq!(code(&user("carol", 1200)), "account_taken");
+        assert_eq!(code(&user("carol@corp", 1200)), "account_taken", "an alias");
+        assert!(check_adoptable(&user("dave", 1300), &Ledger::new(), &[]).is_ok());
+    }
+
+    /// A person's row runs only while its name resolves to the uid it recorded.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_person_row_refuses_a_name_that_is_another_user() {
+        use crate::model::CreateSeat;
+        let seat = |account: &str, uid| {
+            let request = CreateSeat {
+                name: "Root".into(),
+                account: account.into(),
+                autostart: false,
+            };
+            let mut ledger = Ledger::new();
+            let mut seat = ledger.allocate_adopted_user(request, 1500).unwrap();
+            seat.adopted_uid = Some(uid);
+            seat
+        };
+        assert_eq!(
+            require_person(&seat("root", 1500)).unwrap_err().code,
+            "account_not_owned"
+        );
+        assert_eq!(
+            require_person(&seat("pf-no-such-user", 1500))
+                .unwrap_err()
+                .code,
+            "account_missing"
+        );
+        assert_eq!(require_person(&seat("root", 0)).unwrap().uid, 0);
     }
 
     /// A miss means gone only where no passwd source could have been silent.

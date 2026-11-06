@@ -7,8 +7,10 @@
 //! serves. Linux adds users with their own logind session, one systemd unit per seat and the
 //! Unix socket the `punktfunk-seats` daemon serves.
 
-#![cfg_attr(not(windows), forbid(unsafe_code))]
+// `linux::pam` alone allows it: the libpam calls.
+#![cfg_attr(not(windows), deny(unsafe_code))]
 
+mod attempts;
 pub mod backend;
 pub mod backoff;
 #[cfg(any(windows, test))]
@@ -30,6 +32,7 @@ mod seat_step;
 mod secret;
 pub mod service;
 pub mod steam;
+pub mod unlock;
 #[cfg(windows)]
 pub mod windows;
 

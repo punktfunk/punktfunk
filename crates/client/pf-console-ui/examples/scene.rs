@@ -316,6 +316,7 @@ mod scene {
             av1_ok: true,
             pyrowave_ok: true,
             profiles: false,
+            prompts_unlock: false,
             settings: Settings::default(),
             presets: Vec::new(),
             known_hosts: Default::default(),

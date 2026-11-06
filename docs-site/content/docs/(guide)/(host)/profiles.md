@@ -17,8 +17,9 @@ profile, the owner, named after you; while it is the only one, nothing changes f
    - **Own account (take turns)** (Windows): its own Windows account, Steam and saves, one person
      at a time — see [On Windows](#on-windows). Any edition of Windows.
    - **Own desktop**: a desktop of its own that plays at the same time as the others, with its own
-     Steam and controllers, on [Windows Server](#on-windows-server) or [Linux](#on-linux). On
-     Windows Server it gets a new account, or one of this PC's accounts under **Existing account**.
+     Steam and controllers, on [Windows Server](#on-windows-server) or [Linux](#on-linux). It
+     gets a new account, or someone's own account under **Existing account**: one of this PC's
+     on Windows Server, a login of this machine on Linux.
 
 On Linux, **Own desktop** needs [**Reachable without logging in**](#on-linux) and stays greyed until
 it is on. A host holds up to 8 profiles, and two can't share a name.
@@ -81,7 +82,8 @@ Every seat shares one set of **Seats** settings on **Host**, shown while seats a
 
 - **Seats kept warm**: the seats of the most recent players start with the host.
 - **Stop an idle seat after**: 240 minutes by default; 0 never stops one. Your own seat never
-  stops for this: it runs your plugins.
+  stops for this: it runs your plugins. A seat on [someone's own account](/docs/own-account)
+  neither stops for this nor starts warm.
 - **End a seat's stream when its game exits**: off keeps streaming the seat's desktop.
 - **Highest mode per seat**, such as `2560x1440@120`: a device's own cap outranks it.
 - **Seats update your games** (Linux): off, seats play the games you installed but can't update
@@ -146,6 +148,12 @@ What turning it on does:
   neither touches the box's own session. The desktop's apps keep running underneath, and Steam
   keeps running when you disconnect in Game Mode. A seat starts in the mode it was last in.
 
+### A seat on someone's own account
+
+**Existing account** under **Own desktop** plays on a person's own login of this machine, and only
+their password or a device they signed in opens it. [Someone's own account](/docs/own-account)
+covers adding one, what the person sees when they connect, and signing devices out.
+
 Turning it off copies the files back to your home and your own host serves the box again. Seats of
 their own stay on the box, stopped, and come back with the switch.
 
@@ -177,8 +185,9 @@ The controller interface asks on every connect instead:
 - The [Decky plugin](/docs/steam-deck) shows one chip per profile under the host.
 - [Moonlight](/docs/moonlight) and the other clients play as the owner.
 
-A profile is a name, not a lock: anyone on a paired device may pick any profile. What a device may
-do stays its [access level](/docs/access-levels).
+A profile is a name, not a lock: anyone on a paired device may pick any profile, except one on
+[someone's own account](/docs/own-account), which asks for its password. What a
+device may do stays its [access level](/docs/access-levels).
 
 ## Where a profile shows
 

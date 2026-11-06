@@ -2,7 +2,8 @@
 //!
 //! `serve` is the root daemon (`punktfunk-seats.service`). The other verbs send one request to
 //! its socket, as the box host does, and print the answer; `serve-usb` is the pad server the
-//! daemon starts for a seat's USB device. The pad broker, [`pads`], and each seat's
+//! daemon starts for a seat's USB device, and `pam-check` the password check it runs in a child,
+//! so libpam never loads into the daemon. The pad broker, [`pads`], and each seat's
 //! `/dev/uinput`, [`uinput`], are the daemon's too; they live here rather than in `pf-seats`
 //! because they link `pf-inject`, whose dependencies the Windows seat keeper's own workspace
 //! cannot resolve beside IronRDP.
@@ -55,7 +56,8 @@ mod linux {
         \x20 fence                       udev's IMPORT{program}: whose a seat's pad is\n\
         \x20 ungate                      open the vhci gate and the box's hidraw (ExecStopPost)\n\
         \x20 drain                       answer the seats' waiting uinput reads (ExecStop)\n\
-        \x20 serve-usb                   a seat's USB pad server, which the supervisor starts\n";
+        \x20 serve-usb                   a seat's USB pad server, which the supervisor starts\n\
+        \x20 pam-check <account>         the supervisor's password check: password on stdin, a code out\n";
 
     pub fn main() -> ExitCode {
         match run(std::env::args().skip(1).collect()) {
@@ -68,6 +70,13 @@ mod linux {
     }
 
     fn run(args: Vec<String>) -> Result<(), String> {
+        // No flags here: the account is data, from the supervisor that resolved it.
+        if let [verb, account] = args.as_slice()
+            && verb == pf_seats::linux::PAM_CHECK_VERB
+        {
+            pf_seats::linux::pam_check(account);
+            return Ok(());
+        }
         // No flags here: the account is data from a unit's instance name.
         if let [verb, direction, account] = args.as_slice()
             && verb == "check-owner"
@@ -218,7 +227,19 @@ mod linux {
             CommandResult::Created { seat }
             | CommandResult::Started { seat }
             | CommandResult::Stopped { seat }
-            | CommandResult::Resealed { seat } => line(seat),
+            | CommandResult::Resealed { seat }
+            | CommandResult::Unlocked { seat, .. } => line(seat),
+            CommandResult::UnlockState { needs } => println!("{needs:?}"),
+            CommandResult::Challenge { challenge, seat } => println!("{seat} {challenge}"),
+            CommandResult::Left | CommandResult::SignedOut => {}
+            CommandResult::Devices { devices } => {
+                for d in devices {
+                    println!(
+                        "{} {:?} {:?} {}",
+                        d.fingerprint, d.kind, d.name, d.last_unix
+                    );
+                }
+            }
             CommandResult::Deleted { id } => println!("{id} deleted"),
             CommandResult::Flatpak { id, version } => {
                 println!("{id} {}", version.as_deref().unwrap_or("-"));

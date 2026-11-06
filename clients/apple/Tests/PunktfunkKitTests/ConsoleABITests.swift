@@ -125,5 +125,20 @@ final class ConsoleABITests: XCTestCase {
         }
         XCTAssertFalse(events.contains(#"{"action":"Quit"}"#), "events: \(events)")
     }
+
+    /// With nothing typed into its prompt, the console hands over nothing and writes nothing;
+    /// a NULL buffer is refused, not written through.
+    @MainActor
+    func testAConsoleWithNoPasswordHandsOverNothing() throws {
+        var buffer = [UInt8](repeating: 7, count: Int(PUNKTFUNK_CONSOLE_UNLOCK_MAX))
+        var stay = true
+        XCTAssertEqual(punktfunk_console_take_unlock(console, &buffer, UInt(buffer.count), &stay), 0)
+        XCTAssertTrue(buffer.allSatisfy { $0 == 7 } && stay)
+        XCTAssertEqual(punktfunk_console_take_unlock(console, nil, 0, nil), 0)
+        let bridge = try XCTUnwrap(ConsoleBridge(
+            options: #"{"device_name": "Test", "gpu_cache_bytes": 0, "settings": {}}"#,
+            device: device, queue: queue))
+        XCTAssertNil(bridge.takeUnlock())
+    }
 }
 #endif

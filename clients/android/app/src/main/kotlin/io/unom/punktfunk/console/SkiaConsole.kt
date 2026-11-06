@@ -23,12 +23,15 @@ import io.unom.punktfunk.HostServices
 import io.unom.punktfunk.JniHostNative
 import io.unom.punktfunk.ProfilesAnswer
 import io.unom.punktfunk.PENDING_POLL_MS
+import io.unom.punktfunk.PROFILE_LOCKED
 import io.unom.punktfunk.PresetStore
 import io.unom.punktfunk.REQUEST_ACCESS_TIMEOUT_MS
 import io.unom.punktfunk.Settings
 import io.unom.punktfunk.SettingsStore
 import io.unom.punktfunk.SpeedTestPhase
 import io.unom.punktfunk.StreamPreset
+import io.unom.punktfunk.UNLOCK_PASSWORD
+import io.unom.punktfunk.Unlock
 import io.unom.punktfunk.deviceName
 import io.unom.punktfunk.effectiveFor
 import io.unom.punktfunk.matches
@@ -205,6 +208,9 @@ object SkiaConsole {
             .put("av1_ok", VideoDecoders.decodableCodecBits() and 4 != 0)
             // Answers `FetchProfiles`, so a connect checks the box's profiles first.
             .put("profiles", true)
+            // Takes each launch's password out of the console (`nativeConsoleTakeUnlock`) and
+            // reports a `profile-locked` close as phase 7, so the console asks for it.
+            .put("prompts_unlock", true)
             .put("settings", ConsoleJson.settings(initial, base))
             .put("presets", JSONArray(ConsoleJson.presets(presets)))
             .put("known_hosts", JSONObject(ConsoleJson.knownHosts(services.store.all())))
@@ -727,10 +733,18 @@ object SkiaConsole {
      * console's (an unpaired host went to its Pair screen first), so this is the dial itself
      * ([HostServices.dial]): pinned by the row's fingerprint, with the host's bound preset or the
      * pinned card's one-off, and — for the pair screen's "Request access" — the long approval
-     * budget. The result lands on main, beside `CancelConnect`.
+     * budget. The password the console's prompt typed rides the first dial and is wiped once it
+     * returns; a `profile-locked` close reopens that prompt. The result lands on main, beside
+     * `CancelConnect`.
      */
     private fun ConsoleState.onLaunch(a: JSONObject) {
-        val app = appContext ?: return
+        // Taken first, so a launch that dials nothing still wipes it.
+        val unlock = takeUnlock()
+        val app = appContext
+        if (app == null) {
+            unlock?.wipe()
+            return
+        }
         val fp = a.optString("fp_hex")
         // The record the row's pin names — never the other OS saved at the same address — and
         // dialled where IT says: the last sweep may have followed the host to a new address. An
@@ -744,6 +758,7 @@ object SkiaConsole {
         val requestAccess = a.optBoolean("request_access", false)
         val id = identity
         if (id == null) {
+            unlock?.wipe()
             NativeBridge.nativeConsoleSessionPhase(handle, 2, identities.blockedMessage())
             return
         }
@@ -765,6 +780,7 @@ object SkiaConsole {
             timeoutMs = if (requestAccess) REQUEST_ACCESS_TIMEOUT_MS else CONNECT_TIMEOUT_MS,
             preset = preset,
             profile = profile,
+            promptsUnlock = true,
         )
         // A host the dial saves by what it presented is named by its advert, else its address.
         val name = services.discovered.firstOrNull { it.host == addr && it.port == port }?.name ?: addr
@@ -774,7 +790,11 @@ object SkiaConsole {
             NativeBridge.nativeConsoleSessionPhase(handle, 6, "")
         }
         state.launch {
-            val dialed = services.dial(spec, kh, name, requestAccess, ticket)
+            val dialed = try {
+                services.dial(spec, kh, name, requestAccess, ticket, unlock)
+            } finally {
+                unlock?.wipe()
+            }
             watch.cancel()
             if (dialed is HostServices.Cancelled) return@launch
             dial = null
@@ -807,14 +827,18 @@ object SkiaConsole {
                     HostRecords.savePick(services.store, kh, null)
                     pushHosts(); pushKnownHosts()
                 }
-                // 5: the console forgets the pick and asks the box's list once more.
-                NativeBridge.nativeConsoleSessionPhase(
-                    handle, if (token == "profile-unknown") 5 else 2,
-                    dialed.said.ifEmpty { ConnectErrors.connectMessage(token, requestAccess) },
-                )
+                val (phase, message) = failedPhase(token, dialed.said, requestAccess)
+                NativeBridge.nativeConsoleSessionPhase(handle, phase, message)
                 resumeDiscovery()
             }
         }
+    }
+
+    /** The password the console's prompt typed for the launch it just raised, or `null`. */
+    private fun takeUnlock(): Unlock? {
+        val stays = BooleanArray(1)
+        val secret = NativeBridge.nativeConsoleTakeUnlock(handle, stays) ?: return null
+        return Unlock(UNLOCK_PASSWORD, secret, staySignedIn = stays[0])
     }
 
     // ---- commands from the console -----------------------------------------------------
@@ -1180,6 +1204,18 @@ object SkiaConsole {
      *  Short: this is the one host fact that changes while somebody is looking at the tile. */
     private const val NOW_PLAYING_TTL_MS = 20_000L
 }
+
+/**
+ * The console's phase code and message for a dial refused with [token]: 5 forgets the pick and
+ * asks the box's list again, 7 reopens the password prompt under the host's own sentence ([said],
+ * empty for none), and 2 shows any other failure.
+ */
+internal fun failedPhase(token: String, said: String, requestAccess: Boolean): Pair<Int, String> =
+    when (token) {
+        PROFILE_LOCKED -> 7 to said
+        else -> (if (token == "profile-unknown") 5 else 2) to
+            said.ifEmpty { ConnectErrors.connectMessage(token, requestAccess) }
+    }
 
 /** One pad's held buttons and axes, by the names the console's `PadTestState` reads. */
 internal class PadTestReading {

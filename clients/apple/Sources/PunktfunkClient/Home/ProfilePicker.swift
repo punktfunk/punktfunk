@@ -208,7 +208,16 @@ struct ProfilePickerView: View {
                         }
                     }
                     .padding(6)
-                Text(row.displayName).font(.headline).lineLimit(1)
+                HStack(spacing: 4) {
+                    // Opens with its account password, or this device's face or finger.
+                    if row.unlock != .none {
+                        Image(systemName: "lock.fill")
+                            .imageScale(.small)
+                            .foregroundStyle(.secondary)
+                            .accessibilityLabel("Locked")
+                    }
+                    Text(row.displayName).font(.headline).lineLimit(1)
+                }
                 if let note = row.note {
                     Text(note).font(.caption).foregroundStyle(.secondary).lineLimit(2)
                         .multilineTextAlignment(.center)

@@ -429,8 +429,12 @@ fn forward_to_runner(args: &[String]) -> Result<()> {
 }
 
 /// The runner's launch line. Also the store job executor ([`crate::store::jobs`]): console
-/// installs use this same invocation so the box has one "install a plugin" path.
+/// installs use this same invocation so the box has one "install a plugin" path. None where no
+/// runner is driven ([`runner_here`]).
 pub(crate) fn runner_command() -> Result<(std::path::PathBuf, Vec<String>)> {
+    if !runner_here() {
+        bail!("run the plugin runner: not on a person's own Linux account");
+    }
     plat::runner_command()
 }
 
@@ -476,14 +480,33 @@ pub(crate) struct RuntimeStatus {
     pub detail: String,
 }
 
+/// Whether this host drives a plugin runner. Not a seat on a person's own Linux account: the
+/// runner there is their own user unit, which the host never queries, writes or restarts.
+fn runner_here() -> bool {
+    !(cfg!(target_os = "linux") && pf_paths::seat::own_account())
+}
+
+/// The runner's state. Where no runner is driven ([`runner_here`]) it reads as not installed,
+/// so nothing mints its tokens, converges its roots or restarts it.
 pub(crate) fn runtime_status() -> RuntimeStatus {
+    if !runner_here() {
+        return RuntimeStatus {
+            installed: false,
+            enabled: false,
+            running: false,
+            unit: "punktfunk-scripting",
+            principal: None,
+            detail: "Plugins don't run on a profile that uses an existing Linux account.".into(),
+        };
+    }
     plat::runtime_status()
 }
 
-/// Has the operator turned the per-plugin sandbox off for the runner?
+/// Has the operator turned the per-plugin sandbox off for the runner? Never where no runner is
+/// driven ([`runner_here`]).
 #[cfg(any(target_os = "linux", windows))]
 pub(crate) fn runner_sandbox_off() -> bool {
-    plat::runner_sandbox_off()
+    runner_here() && plat::runner_sandbox_off()
 }
 
 /// Why the runner stopped at its last start instead of running a plugin unsandboxed, in its own
@@ -505,8 +528,11 @@ fn sandbox_refusal_in(config_dir: &std::path::Path) -> Option<String> {
 }
 
 /// [`enable`]/[`disable`], also `POST /store/runtime`. Windows: the SYSTEM service
-/// already clears the elevation bar the CLI checks.
+/// already clears the elevation bar the CLI checks. Refused where no runner is driven.
 pub(crate) fn set_runtime_enabled(enabled: bool) -> Result<()> {
+    if !runner_here() {
+        bail!("switch the plugin runner: not on a person's own Linux account");
+    }
     if enabled {
         plat::enable()
     } else {

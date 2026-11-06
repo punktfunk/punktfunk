@@ -69,6 +69,7 @@ pub fn connect_reject_message(reason: punktfunk_core::reject::RejectReason) -> S
         R::NoSeat => "All seats are taken.".into(),
         R::SeatOccupied => "Someone is already playing as that profile.".into(),
         R::SeatUnavailable => "That profile can't play on this host right now.".into(),
+        R::ProfileLocked => "This profile is locked. Enter its password.".into(),
     }
 }
 

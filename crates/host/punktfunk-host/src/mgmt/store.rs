@@ -421,7 +421,8 @@ pub(crate) async fn list_installed() -> Response {
 ///
 /// `{source, id}` installs the catalog pin after re-checking integrity, or `{spec,
 /// accept_unverified: true}` installs unreviewed code the operator owns. `202` + job id; watch at
-/// `GET /store/jobs/{id}`.
+/// `GET /store/jobs/{id}`. A seat host on a person's own account installs from the built-in
+/// source alone: anything else would run code the box chose as that person.
 ///
 /// One package operation at a time (`409` otherwise): `bun` shares a lockfile and `node_modules`.
 #[utoipa::path(
@@ -435,7 +436,7 @@ pub(crate) async fn list_installed() -> Response {
         (status = BAD_REQUEST, description = "Unknown entry, bad spec, or missing acknowledgement", body = ApiError),
         (status = CONFLICT, description = "Another package operation is in flight", body = ApiError),
         (status = UNAUTHORIZED, description = "Missing or invalid bearer token", body = ApiError),
-        (status = FORBIDDEN, description = "Not authorized for the plugin token", body = ApiError),
+        (status = FORBIDDEN, description = "Not authorized for the plugin token, or a plugin from outside the built-in source on a seat host on a person's own account", body = ApiError),
     )
 )]
 pub(crate) async fn install_plugin(
@@ -494,6 +495,13 @@ pub(crate) async fn install_plugin(
             ),
         };
 
+    if pf_paths::seat::own_account() && plan.tier != manifest::Tier::Verified {
+        return api_error(
+            StatusCode::FORBIDDEN,
+            "Only plugins reviewed for the Punktfunk store install on a profile that uses an \
+             existing account, because they run as that person.",
+        );
+    }
     match jobs::spawn_install(plan, st.plugin_tokens.clone()) {
         Ok(job) => (StatusCode::ACCEPTED, Json(JobRef { job })).into_response(),
         Err(e) => api_error(StatusCode::CONFLICT, &format!("{e:#}")),

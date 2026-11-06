@@ -1503,7 +1503,7 @@
           "emulators"
         ],
         "summary": "Adopt a copy of an emulator",
-        "description": "Points the host at the operator's own copy, one no rule finds (a portable build unpacked\nanywhere), so it is listed and launched like any other; `forget` drops it again. Admin lane\nonly.",
+        "description": "Points the host at the operator's own copy, one no rule finds (a portable build unpacked\nanywhere), so it is listed and launched like any other; `forget` drops it again. Admin lane\nonly. A seat host on a person's own account adopts none: a prepare runs the copy as that\nperson, unasked.",
         "operationId": "adoptEmulator",
         "parameters": [
           {
@@ -1556,6 +1556,16 @@
           },
           "401": {
             "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "A seat host on a person's own account, which adopts no copy",
             "content": {
               "application/json": {
                 "schema": {
@@ -2745,7 +2755,7 @@
           "hooks"
         ],
         "summary": "Replace the hook configuration",
-        "description": "Whole-document PUT, not a patch. Applies from the next event. Commands run as the host\nuser (the interactive session on Windows). An `elevated` hook is refused until an\nadministrator turns elevated commands on at the host (`HostInfo.elevated_commands`).",
+        "description": "Whole-document PUT, not a patch. Applies from the next event. Commands run as the host\nuser (the interactive session on Windows). An `elevated` hook is refused until an\nadministrator turns elevated commands on at the host (`HostInfo.elevated_commands`). A\nseat host on a person's own account refuses every hook and runs none.",
         "operationId": "setHooks",
         "requestBody": {
           "content": {
@@ -2780,6 +2790,16 @@
           },
           "401": {
             "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "A seat host on a person's own account, which takes no hooks",
             "content": {
               "application/json": {
                 "schema": {
@@ -6080,7 +6100,7 @@
           "profiles"
         ],
         "summary": "Add a profile",
-        "description": "A seat profile (the default) gets a desktop of its own, whose account is made here, or on\nWindows Server signs in to `seat_account`, an existing local account, with `seat_password`.\nOne with `seat: false` plays the box's own session under its own name. A seat needs seats on\n(Windows) or the door (Linux).",
+        "description": "A seat profile (the default) gets a desktop of its own, whose account is made here, or runs\non `seat_account`, an existing account, once `seat_password` is its password: a local account\non Windows Server, a person's own login on a Linux door. A Linux row never starts while that\nperson sits at the machine, and the host keeps no password. One with `seat: false` plays the\nbox's own session under its own name. A seat needs seats on (Windows) or the door (Linux).",
         "operationId": "createProfile",
         "requestBody": {
           "content": {
@@ -6104,7 +6124,7 @@
             }
           },
           "400": {
-            "description": "No name, an accent that is not #RRGGBB, an unknown Windows account, or a password missing or refused",
+            "description": "No name, an accent that is not #RRGGBB, an unknown account, or a password missing or refused",
             "content": {
               "application/json": {
                 "schema": {
@@ -6124,7 +6144,7 @@
             }
           },
           "409": {
-            "description": "Another profile has that name or Windows account, seats are off (Windows), the door is off (Linux), or a Windows account a seat can't use",
+            "description": "Another profile has that name or account, seats are off (Windows), the door is off (Linux), or an account a seat can't use (an administrator, a system account, the box owner)",
             "content": {
               "application/json": {
                 "schema": {
@@ -6135,6 +6155,16 @@
           },
           "422": {
             "description": "The box already has eight profiles, or four seats",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many wrong passwords for that account; the sentence says when to try again",
             "content": {
               "application/json": {
                 "schema": {
@@ -6336,7 +6366,7 @@
           "profiles"
         ],
         "summary": "List the profiles a device can pick",
-        "description": "Every profile on the box, the owner first. A client shows this as its picker.",
+        "description": "Every profile on the box, the owner first. A client shows this as its picker. Each row's\n`unlock` says what the asking device sends with its connect: a profile on a person's own\nLinux account needs the account's password, or a key proof from a device that enrolled one,\nuntil the device is signed in to its running desktop.",
         "operationId": "enumerateProfiles",
         "responses": {
           "200": {
@@ -6854,6 +6884,231 @@
         }
       }
     },
+    "/api/v1/profiles/{id}/devices": {
+      "get": {
+        "tags": [
+          "profiles"
+        ],
+        "summary": "List the devices signed in to a profile",
+        "description": "For a profile on a person's own Linux account: each device that unlocked it, and how it gets\nback on. Admin lane only.",
+        "operationId": "listProfileDevices",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The profile id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The signed-in devices",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/SignedInDevice"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No profile with that id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The profile doesn't open with an account password",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The seat supervisor didn't answer",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "profiles"
+        ],
+        "summary": "Sign every device out of a profile",
+        "description": "For a profile on a person's own Linux account: every device needs the account's password\nagain and every unlock key is forgotten. Admin lane only.",
+        "operationId": "signOutProfileDevices",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The profile id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Signed out"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No profile with that id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The profile doesn't open with an account password",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The seat supervisor didn't answer",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/profiles/{id}/devices/{fingerprint}": {
+      "delete": {
+        "tags": [
+          "profiles"
+        ],
+        "summary": "Sign a device out of a profile",
+        "description": "For a profile on a person's own Linux account: the device needs the account's password again\nand its unlock key is forgotten. Admin lane only.",
+        "operationId": "signOutProfileDevice",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The profile id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "fingerprint",
+            "in": "path",
+            "description": "The device's certificate SHA-256, lowercase hex",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Signed out"
+          },
+          "400": {
+            "description": "Not a device fingerprint",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No profile with that id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The profile doesn't open with an account password",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The seat supervisor didn't answer",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/profiles/{id}/end": {
       "post": {
         "tags": [
@@ -6933,7 +7188,7 @@
           "profiles"
         ],
         "summary": "Start a profile's seat",
-        "description": "The console's **Start**: as `wake`, from the console.",
+        "description": "The console's **Start**: as `wake`, from the console. A profile on a person's own Linux\naccount is refused: only its person's password at connect starts it.",
         "operationId": "startProfileSeat",
         "parameters": [
           {
@@ -6978,7 +7233,7 @@
             }
           },
           "409": {
-            "description": "The profile has no seat of its own",
+            "description": "The profile has no seat of its own, or opens with its account password",
             "content": {
               "application/json": {
                 "schema": {
@@ -7063,13 +7318,106 @@
         }
       }
     },
+    "/api/v1/profiles/{id}/unlock-challenge": {
+      "post": {
+        "tags": [
+          "profiles"
+        ],
+        "summary": "Ask for a key unlock's challenge",
+        "description": "For a profile on a person's own Linux account and a device that enrolled an unlock key: 32\nrandom bytes for the key to sign, and the seat id the signed message names. It is good for\none proof within two minutes, and a new one replaces it. A device without a key is refused;\nit unlocks with the account's password. Paired devices only.",
+        "operationId": "unlockChallenge",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The profile id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The challenge",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnlockChallenge"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "This machine's identity changed: unlock with the password",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not a paired device",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No profile with that id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The profile doesn't open with an account password, or this device has no unlock key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The seat supervisor didn't answer",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/profiles/{id}/wake": {
       "post": {
         "tags": [
           "profiles"
         ],
         "summary": "Get a profile's seat ready",
-        "description": "Starts a stopped seat so the next connect lands in it, and answers at once with the seat\n`starting`; poll `enumerate` until it is `ready`. A profile with no seat to start only gets\nits row back. A paired device wakes the profile it lands in when it names none; any other\nneeds its launch grant.",
+        "description": "Starts a stopped seat so the next connect lands in it, and answers at once with the seat\n`starting`; poll `enumerate` until it is `ready`. A profile with no seat to start only gets\nits row back. A paired device wakes the profile it lands in when it names none; any other\nneeds its launch grant. A profile on a person's own Linux account is never woken: its\ndesktop starts when the connect brings the account's password.",
         "operationId": "wakeProfile",
         "parameters": [
           {
@@ -7115,6 +7463,16 @@
           },
           "404": {
             "description": "No profile with that id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The profile opens with its account password",
             "content": {
               "application/json": {
                 "schema": {
@@ -8061,7 +8419,7 @@
           "store"
         ],
         "summary": "Install a plugin",
-        "description": "`{source, id}` installs the catalog pin after re-checking integrity, or `{spec,\naccept_unverified: true}` installs unreviewed code the operator owns. `202` + job id; watch at\n`GET /store/jobs/{id}`.\n\nOne package operation at a time (`409` otherwise): `bun` shares a lockfile and `node_modules`.",
+        "description": "`{source, id}` installs the catalog pin after re-checking integrity, or `{spec,\naccept_unverified: true}` installs unreviewed code the operator owns. `202` + job id; watch at\n`GET /store/jobs/{id}`. A seat host on a person's own account installs from the built-in\nsource alone: anything else would run code the box chose as that person.\n\nOne package operation at a time (`409` otherwise): `bun` shares a lockfile and `node_modules`.",
         "operationId": "installPlugin",
         "requestBody": {
           "content": {
@@ -8105,7 +8463,7 @@
             }
           },
           "403": {
-            "description": "Not authorized for the plugin token",
+            "description": "Not authorized for the plugin token, or a plugin from outside the built-in source on a seat host on a person's own account",
             "content": {
               "application/json": {
                 "schema": {
@@ -15190,11 +15548,11 @@
               "string",
               "null"
             ],
-            "description": "With `seat`, a local Windows standard account that already exists, which the seat signs\nin to instead of one punktfunk makes. Windows Server only."
+            "description": "With `seat`, an account that already exists, which the seat runs on instead of one\npunktfunk makes: a local Windows standard account on Windows Server, a person's own login\non a Linux door."
           },
           "seat_password": {
             "type": "string",
-            "description": "That account's password, entered once and sealed by the host."
+            "description": "That account's password, entered once. Windows seals it; Linux checks it and keeps\nnothing."
           },
           "windows_account": {
             "type": [
@@ -15263,6 +15621,17 @@
               {
                 "$ref": "#/components/schemas/SeatPublic",
                 "description": "Its own seat; absent when it plays on the box's own session."
+              }
+            ]
+          },
+          "unlock": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/UnlockNeed",
+                "description": "What the asking device sends to open it. Every row of `enumerate` has it."
               }
             ]
           }
@@ -15931,7 +16300,7 @@
               "string",
               "null"
             ],
-            "description": "The Windows account of a seat on an existing one, for the console's card and its Remove\nsentence. Absent for an account punktfunk made, and to a paired device."
+            "description": "The account of a seat on an existing one, for the console's card and its Remove\nsentence. Absent for an account punktfunk made, and to a paired device."
           },
           "detail": {
             "type": [
@@ -16774,6 +17143,49 @@
           "critical"
         ]
       },
+      "SignedInDevice": {
+        "type": "object",
+        "description": "A device signed in to a profile on a person's own Linux account.",
+        "required": [
+          "fingerprint",
+          "name",
+          "kind",
+          "added_unix",
+          "last_unix"
+        ],
+        "properties": {
+          "added_unix": {
+            "type": "integer",
+            "format": "int64",
+            "description": "When it first signed in, unix seconds."
+          },
+          "fingerprint": {
+            "type": "string",
+            "description": "SHA-256 of the device's certificate, lowercase hex."
+          },
+          "kind": {
+            "$ref": "#/components/schemas/SignedInKind"
+          },
+          "last_unix": {
+            "type": "integer",
+            "format": "int64",
+            "description": "When it last unlocked or rejoined, unix seconds."
+          },
+          "name": {
+            "type": "string",
+            "description": "The name it paired with."
+          }
+        }
+      },
+      "SignedInKind": {
+        "type": "string",
+        "description": "How a signed-in device gets back on.",
+        "enum": [
+          "for_now",
+          "stay",
+          "key"
+        ]
+      },
       "SourceInput": {
         "type": "object",
         "required": [
@@ -17316,6 +17728,35 @@
             "type": "string"
           }
         }
+      },
+      "UnlockChallenge": {
+        "type": "object",
+        "description": "`POST /profiles/{id}/unlock-challenge`.",
+        "required": [
+          "challenge",
+          "seat"
+        ],
+        "properties": {
+          "challenge": {
+            "type": "string",
+            "description": "32 random bytes, lowercase hex: good for one proof within two minutes.",
+            "example": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"
+          },
+          "seat": {
+            "type": "string",
+            "description": "The seat's id, 32 lowercase hex characters, as the signed message names it.",
+            "example": "0123456789abcdef0123456789abcdef"
+          }
+        }
+      },
+      "UnlockNeed": {
+        "type": "string",
+        "description": "What a device sends with its connect to open a profile on a person's own Linux account.",
+        "enum": [
+          "none",
+          "password",
+          "key"
+        ]
       },
       "UnpairAllResult": {
         "type": "object",

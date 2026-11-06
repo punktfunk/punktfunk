@@ -311,14 +311,30 @@ pub(super) fn present_waiting(
     host_name: &str,
     on_cancel: impl Fn() + 'static,
 ) -> adw::AlertDialog {
-    let waiting = adw::AlertDialog::new(
-        Some("Waiting for Approval"),
-        Some(&format!(
-            "Approve “{}” in {host_name}’s console or web UI.\n\nThis device is paired once you \
-             approve it.",
-            glib::host_name(),
-        )),
+    let body = format!(
+        "Approve “{}” in {host_name}’s console or web UI.\n\nThis device is paired once you \
+         approve it.",
+        glib::host_name(),
     );
+    present_wait(
+        window,
+        waiting_slot,
+        "Waiting for Approval",
+        Some(&body),
+        on_cancel,
+    )
+}
+
+/// A wait dialog with `heading`, `body` and Cancel, filed in `waiting_slot` as
+/// [`present_waiting`] files its own.
+pub(super) fn present_wait(
+    window: &adw::ApplicationWindow,
+    waiting_slot: &WaitingSlot,
+    heading: &str,
+    body: Option<&str>,
+    on_cancel: impl Fn() + 'static,
+) -> adw::AlertDialog {
+    let waiting = adw::AlertDialog::new(Some(heading), body);
     waiting.add_responses(&[("cancel", "Cancel")]);
     waiting.set_close_response("cancel");
     let handler = waiting.connect_response(Some("cancel"), move |_, _| on_cancel());

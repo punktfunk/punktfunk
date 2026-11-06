@@ -2,11 +2,12 @@
 //! host-fingerprint read, and the SPAKE2 PIN pairing ceremony.
 
 use jni::errors::LogErrorAndDefault;
-use jni::objects::{JObject, JString};
+use jni::objects::{JByteArray, JObject, JString};
 use jni::sys::{jboolean, jint, jlong};
 use jni::EnvUnowned;
 use punktfunk_core::client::{ConnectParams, NativeClient};
 use punktfunk_core::config::{CompositorPref, GamepadPref, Mode};
+use punktfunk_core::quic::v2::msg::{ProfileUnlock, Zeroizing};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -428,6 +429,18 @@ struct ConnectRequest {
     studio_range: bool,
 }
 
+/// The request Kotlin's JSON names; `None` (logged) when it doesn't parse.
+fn request_of(env: &jni::Env, request: &JString) -> jni::errors::Result<Option<ConnectRequest>> {
+    let text = request.try_to_string(env)?;
+    Ok(match serde_json::from_str::<ConnectRequest>(&text) {
+        Ok(r) => Some(r),
+        Err(e) => {
+            log::error!("nativeConnect: bad request JSON from Kotlin: {e}");
+            None
+        }
+    })
+}
+
 /// `NativeBridge.nativeConnect(requestJson): Long` — see [`ConnectRequest`]. Returns an opaque
 /// handle, or 0 on failure (`nativeTakeLastError` carries the cause).
 #[unsafe(no_mangle)]
@@ -439,25 +452,114 @@ pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeConnect<'lo
     // The one `Env` scope jni 0.22 grants a native method reads the JSON; everything below is
     // pure Rust over the owned request.
     let req: Option<ConnectRequest> = env
-        .with_env(|env| -> jni::errors::Result<Option<ConnectRequest>> {
-            let text = request.try_to_string(env)?;
-            Ok(match serde_json::from_str::<ConnectRequest>(&text) {
-                Ok(r) => Some(r),
-                Err(e) => {
-                    log::error!("nativeConnect: bad request JSON from Kotlin: {e}");
-                    None
-                }
-            })
-        })
+        .with_env(|env| request_of(env, &request))
         .resolve::<LogErrorAndDefault>();
     let Some(req) = req else {
         return 0;
     };
-    jni_guard(0, || connect(req))
+    jni_guard(0, || connect(req, false, None))
 }
 
-/// The connect proper, off the JNI seam.
-fn connect(req: ConnectRequest) -> jlong {
+/// `NativeBridge.nativeConnectWithUnlock(requestJson, promptsUnlock, kind, secret, staySignedIn,
+/// enrollAlg, enrollKey): Long` — `nativeConnect` for a profile on a person's own account.
+/// `promptsUnlock`: this app asks for the profile's password and dials again with it after the
+/// `profile-locked` refusal. `secret` null sends no unlock; else `kind` 1 is the password as
+/// typed (UTF-8) and 2 a key proof, and `enrollKey` is null or the key to enrol. The secret is
+/// copied into a buffer that wipes; Kotlin wipes its own array once this returns. An unlock
+/// outside the wire's bounds, or one whose request has no `pin_hex`, fails with the token
+/// "error" before anything is dialed.
+#[unsafe(no_mangle)]
+#[allow(clippy::too_many_arguments)]
+pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeConnectWithUnlock<'local>(
+    mut env: EnvUnowned<'local>,
+    _this: JObject<'local>,
+    request: JString<'local>,
+    prompts_unlock: jboolean,
+    kind: jint,
+    secret: JByteArray<'local>,
+    stay_signed_in: jboolean,
+    enroll_alg: jint,
+    enroll_key: JByteArray<'local>,
+) -> jlong {
+    type Read = Option<(
+        ConnectRequest,
+        Option<punktfunk_core::error::Result<ProfileUnlock>>,
+    )>;
+    let read: Read = env
+        .with_env(|env| -> jni::errors::Result<Read> {
+            let Some(req) = request_of(env, &request)? else {
+                return Ok(None);
+            };
+            if secret.is_null() {
+                return Ok(Some((req, None)));
+            }
+            // An unlock goes only to a pinned host; refused before its secret is read.
+            if parse_hex32(&req.pin_hex).is_none() {
+                let unpinned = punktfunk_core::error::PunktfunkError::InvalidArg(
+                    "a profile unlock needs a pinned host",
+                );
+                return Ok(Some((req, Some(Err(unpinned)))));
+            }
+            let secret = Zeroizing::new(env.convert_byte_array(&secret)?);
+            let key = match enroll_key.is_null() {
+                true => Vec::new(),
+                false => env.convert_byte_array(&enroll_key)?,
+            };
+            let byte = |v: jint| u8::try_from(v).unwrap_or(u8::MAX);
+            let unlock =
+                ProfileUnlock::new(byte(kind), secret, stay_signed_in, byte(enroll_alg), key);
+            Ok(Some((req, Some(unlock))))
+        })
+        .resolve::<LogErrorAndDefault>();
+    let Some((req, unlock)) = read else {
+        return 0;
+    };
+    let unlock = match unlock.transpose() {
+        Ok(u) => u,
+        Err(e) => {
+            log::error!("nativeConnectWithUnlock: {e}");
+            note_error(&e);
+            return 0;
+        }
+    };
+    jni_guard(0, || connect(req, prompts_unlock, unlock))
+}
+
+/// `NativeBridge.nativeProfileUnlockMessage(challenge, seatId, deviceFp, boxFp): ByteArray?` —
+/// the 152 bytes a profile's unlock key signs, with SHA-256 as the digest
+/// ([`punktfunk_core::quic::v2::msg::unlock_signed_message`]). `seatId` is the seat's 32
+/// lowercase hex characters; the three arrays are 32 bytes each. Null for anything else.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeProfileUnlockMessage<
+    'local,
+>(
+    mut env: EnvUnowned<'local>,
+    _this: JObject<'local>,
+    challenge: JByteArray<'local>,
+    seat_id: JString<'local>,
+    device_fp: JByteArray<'local>,
+    box_fp: JByteArray<'local>,
+) -> JByteArray<'local> {
+    env.with_env(|env| -> jni::errors::Result<JByteArray<'local>> {
+        let seat = seat_id.try_to_string(env)?;
+        let fp = |a: &JByteArray| -> jni::errors::Result<Option<[u8; 32]>> {
+            Ok(env.convert_byte_array(a)?.try_into().ok())
+        };
+        let (c, d, b) = (fp(&challenge)?, fp(&device_fp)?, fp(&box_fp)?);
+        let (Some(c), Some(d), Some(b)) = (c, d, b) else {
+            return Ok(JByteArray::default());
+        };
+        match punktfunk_core::quic::v2::msg::unlock_signed_message(&c, &seat, &d, &b) {
+            Ok(m) => env.byte_array_from_slice(&m),
+            Err(_) => Ok(JByteArray::default()),
+        }
+    })
+    .resolve::<LogErrorAndDefault>()
+}
+
+/// The connect proper, off the JNI seam. `prompts_unlock` and `unlock` are
+/// [`ConnectParams`]'s.
+fn connect(req: ConnectRequest, prompts_unlock: bool, unlock: Option<ProfileUnlock>) -> jlong {
     let ConnectRequest {
         host,
         port,
@@ -645,6 +747,8 @@ fn connect(req: ConnectRequest) -> jlong {
         // No `cancel`: Kotlin drops the result (`Dial.cancelled`) rather than abort the dial — its
         // connect runs on a pool thread, so a parked one costs a thread, not a stuck UI.
         on_pending: Some(Arc::new(|| DIAL_PENDING.store(true, Ordering::Relaxed))),
+        prompts_unlock,
+        unlock,
         ..ConnectParams::new(&host, port, mode, Duration::from_millis(timeout_ms))
     };
     DIAL_PENDING.store(false, Ordering::Relaxed);

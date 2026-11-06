@@ -75,6 +75,13 @@ windows = { workspace = true, features = [
     "winerror",
     # Windowing, messages, icons, and the deep-link receiver's message-only window + COPYDATASTRUCT.
     "winuser",
+    # Windows Hello profile unlock keys (hello.rs): KeyCredentialManager, its byte buffers and
+    # public-key blob type, and the WindowId its prompt is parented to.
+    "Security_Credentials",
+    "Security_Cryptography",
+    "Security_Cryptography_Core",
+    "Storage_Streams",
+    "UI",
 ] }
 
 # Gamepad enumeration + pin persistence for Settings runs on pf-client-core's shared SDL service

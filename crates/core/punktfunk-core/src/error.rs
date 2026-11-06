@@ -74,6 +74,7 @@ pub enum PunktfunkStatus {
     RejectedNoSeat = -34,
     RejectedSeatOccupied = -35,
     RejectedSeatUnavailable = -36,
+    RejectedProfileLocked = -37,
     Panic = -99,
 }
 
@@ -109,6 +110,7 @@ impl PunktfunkError {
                     R::NoSeat => PunktfunkStatus::RejectedNoSeat,
                     R::SeatOccupied => PunktfunkStatus::RejectedSeatOccupied,
                     R::SeatUnavailable => PunktfunkStatus::RejectedSeatUnavailable,
+                    R::ProfileLocked => PunktfunkStatus::RejectedProfileLocked,
                 }
             }
         }

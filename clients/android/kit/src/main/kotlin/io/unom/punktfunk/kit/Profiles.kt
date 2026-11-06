@@ -54,6 +54,23 @@ enum class SeatState {
     }
 }
 
+/**
+ * What a profile on a person's own account needs from this device before it plays: nothing, the
+ * account password, or a proof from this device's unlock key. An old host sends none: [NONE].
+ */
+enum class UnlockNeed {
+    NONE, PASSWORD, KEY;
+
+    companion object {
+        fun of(word: String?): UnlockNeed = when (word) {
+            "password" -> PASSWORD
+            "key" -> KEY
+            // A word a newer host adds dials bare; the host refuses what it can't admit.
+            else -> NONE
+        }
+    }
+}
+
 /** A profile's own seat. Absent for one that plays on the box's own session. */
 data class Seat(
     val state: SeatState = SeatState.READY,
@@ -77,6 +94,8 @@ data class ListedProfile(
     val legacySeat: Boolean = false,
     /** Host-relative URL of the picture. */
     val avatar: String? = null,
+    /** What this device must send to play as it, as the host judged for this device. */
+    val unlock: UnlockNeed = UnlockNeed.NONE,
 ) {
     fun pick() = ProfilePick(id, displayName, avatar = avatar)
 
@@ -111,6 +130,7 @@ data class ListedProfile(
                 )
             },
             legacySeat = j.optBoolean("legacy_seat", false),
+            unlock = UnlockNeed.of(str(j, "unlock")),
         )
 
         /** The body of `enumerate`, or `null` when it isn't a JSON array. */
@@ -195,12 +215,15 @@ sealed interface SeatGate {
     data class Refuse(val line: String) : SeatGate
 }
 
-/** The gate for [p]'s seat, as `enumerate` lists it. */
+/**
+ * The gate for [p]'s seat, as `enumerate` lists it. A locked seat that is stopped dials: the
+ * host refuses its wake, and the unlock on the dial starts it.
+ */
 fun seatGate(p: ListedProfile): SeatGate {
     val seat = p.seat ?: return SeatGate.Dial
     return when (seat.state) {
         SeatState.READY, SeatState.OCCUPIED, SeatState.OTHER -> SeatGate.Dial
-        SeatState.STOPPED -> SeatGate.Wake
+        SeatState.STOPPED -> if (p.unlock == UnlockNeed.NONE) SeatGate.Wake else SeatGate.Dial
         SeatState.STARTING -> SeatGate.Wait(seat.detail)
         SeatState.UNAVAILABLE ->
             SeatGate.Refuse(seat.detail ?: "That profile can't play on this host right now.")

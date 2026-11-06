@@ -105,7 +105,9 @@ pub(super) fn mint_token() -> String {
 ///
 /// The owner's row keeps the owner's own config directory, library, host name and GameStream
 /// setting: it is the owner's host, behind the door. `PUNKTFUNK_SEAT_OWNER` tells the runner and
-/// the host so. Every other seat plays the box's library, from its trust copy.
+/// the host so. Every other seat plays the box's library, from its trust copy. A person's row
+/// is such a seat on an account that is theirs: `PUNKTFUNK_SEAT_OWN_ACCOUNT` tells the runner
+/// alone, and its host keeps its identity in the row's directory, not in their home.
 pub(super) fn render_env(
     seat: &Seat,
     home: &Path,
@@ -123,7 +125,12 @@ pub(super) fn render_env(
     if seat.owner {
         rows.push(("PUNKTFUNK_SEAT_OWNER", "1".to_owned()));
     } else {
-        let config = home.join(".config/punktfunk");
+        let config = if seat.adopted_uid.is_some() {
+            rows.push(("PUNKTFUNK_SEAT_OWN_ACCOUNT", "1".to_owned()));
+            shared::person_config_dir(state, &seat.id)
+        } else {
+            home.join(".config/punktfunk")
+        };
         rows.push((
             "PUNKTFUNK_CONFIG_DIR",
             config.to_string_lossy().into_owned(),
@@ -206,8 +213,9 @@ pub(super) fn render_updates(present: impl Fn(&Path) -> bool) -> Option<String> 
     (!binds.is_empty()).then(|| format!("[Service]\n{binds}"))
 }
 
-/// The seat user's manager's drop-in: `user@<uid>.service`, which runs what Plasma launches,
-/// autostarts and D-Bus activates, outside the seat unit's namespace.
+/// A made seat's user's manager's drop-in: `user@<uid>.service`, which runs what Plasma
+/// launches, autostarts and D-Bus activates, outside the seat unit's namespace. A person's own
+/// manager never gets one.
 pub(super) fn manager_dropin(uid: u32) -> PathBuf {
     Path::new(DROPIN_ROOT)
         .join(format!("user@{uid}.service.d"))
@@ -231,8 +239,9 @@ pub(super) fn render_manager(dropins: &[&str]) -> String {
     out
 }
 
-/// The owner's drop-in: a `background` session, so the monitor's own login stays the one logind
-/// and polkit treat as the user's display.
+/// The drop-in of the owner's row: a `background` session, so the owner's login at the monitor
+/// stays the one logind and polkit treat as the owner's display. Another person's row keeps the
+/// unit's `user` class: a shutdown at the machine counts it as another user's session.
 pub(super) fn render_class() -> &'static str {
     "[Service]\nEnvironment=XDG_SESSION_CLASS=background\n"
 }
@@ -314,9 +323,12 @@ pub(super) fn write_env(
 }
 
 /// Writes the environment file and the drop-ins for `seat`, then reloads systemd when a drop-in
-/// changed. Every seat, the owner's included, gets the update helpers' binds. `user` is the seat
-/// user's uid and gid: the owner's row hands its environment file to them, and any other seat's
-/// user gets `shares` and the rest of the seat's view in its own systemd manager too.
+/// changed. Every seat gets the update helpers' binds. The owner's row gets the `background`
+/// class, a made seat its private directories and `shares`, and another person's row neither. A
+/// drop-in the row doesn't get is removed: its account may have been another kind of row before.
+/// `user` is the seat user's uid and gid: the owner's row hands its environment file to them,
+/// and a made seat's user gets the seat's binds in its own systemd manager too. A person's
+/// manager is theirs and gets nothing.
 pub(super) fn write_unit_files(
     seat: &Seat,
     home: &Path,
@@ -329,17 +341,16 @@ pub(super) fn write_unit_files(
     let io = |what: &str, error: std::io::Error| err("session_files", format!("{what}: {error}"));
     let owner = user.filter(|_| seat.owner);
     write_env(seat, home, state, token, owner, browser)?;
-    let (name, contents) = if seat.owner {
-        ("class.conf", render_class().to_owned())
-    } else {
-        (
-            "binds.conf",
-            render_binds(state, &seat.id, &seat.account, shares),
-        )
-    };
-    let dropin = dropin_dir(&seat.account).join(name);
-    let mut changed = write_if_changed(&dropin, &contents, 0o644)
-        .map_err(|e| io("write the seat unit drop-in", e))?;
+    let mut changed = false;
+    let dropins = kind_dropins(seat, state, shares);
+    for (name, contents) in &dropins {
+        let dropin = dropin_dir(&seat.account).join(name);
+        changed |= match contents {
+            Some(contents) => write_if_changed(&dropin, contents, 0o644)
+                .map_err(|e| io("write the seat unit drop-in", e))?,
+            None => remove_if_present(&dropin).map_err(|e| io("remove a seat unit drop-in", e))?,
+        };
+    }
     let updates = dropin_dir(&seat.account).join("updates.conf");
     let update_binds = render_updates(|helper| helper.is_file());
     match &update_binds {
@@ -351,16 +362,54 @@ pub(super) fn write_unit_files(
         }
         None => changed |= std::fs::remove_file(&updates).is_ok(),
     }
-    if let Some((uid, _)) = user.filter(|_| !seat.owner) {
-        let mut dropins = vec![contents.as_str()];
-        dropins.extend(update_binds.as_deref());
-        changed |= write_if_changed(&manager_dropin(uid), &render_manager(&dropins), 0o644)
+    if let Some((uid, parts)) = manager_parts(user, &dropins, update_binds.as_deref()) {
+        changed |= write_if_changed(&manager_dropin(uid), &render_manager(&parts), 0o644)
             .map_err(|e| io("write the seat user's manager drop-in", e))?;
     }
     if changed {
         daemon_reload()?;
     }
     Ok(())
+}
+
+/// The class and binds drop-ins by file name, each with what `seat` gets in it or `None` for one
+/// it must not have.
+fn kind_dropins(
+    seat: &Seat,
+    state: &Path,
+    shares: Option<&libraries::Shares>,
+) -> [(&'static str, Option<String>); 2] {
+    let made = !seat.owner && seat.adopted_uid.is_none();
+    let class = seat.owner.then(|| render_class().to_owned());
+    let binds = made.then(|| render_binds(state, &seat.id, &seat.account, shares));
+    [("class.conf", class), ("binds.conf", binds)]
+}
+
+/// What a seat user's own manager takes of the seat's drop-ins: the binds and the update binds
+/// of a made seat. `None` for a row with no binds, the owner's or a person's: their manager is
+/// theirs.
+fn manager_parts<'a>(
+    user: Option<(u32, u32)>,
+    dropins: &'a [(&'static str, Option<String>); 2],
+    update_binds: Option<&'a str>,
+) -> Option<(u32, Vec<&'a str>)> {
+    let (uid, _) = user?;
+    let binds = dropins
+        .iter()
+        .find(|(name, _)| *name == "binds.conf")
+        .and_then(|(_, contents)| contents.as_deref())?;
+    let mut parts = vec![binds];
+    parts.extend(update_binds);
+    Some((uid, parts))
+}
+
+/// Removes `path`. `true` when there was one.
+fn remove_if_present(path: &Path) -> std::io::Result<bool> {
+    match std::fs::remove_file(path) {
+        Ok(()) => Ok(true),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(error),
+    }
 }
 
 pub(super) fn daemon_reload() -> Result<(), BackendError> {
@@ -512,6 +561,7 @@ mod tests {
             owner: false,
             fingerprint: None,
             adopted_sid: None,
+            adopted_uid: None,
             rdp_granted: false,
         }
     }
@@ -553,6 +603,98 @@ mod tests {
         assert!(!text.contains("CONFIG_DIR"));
         assert!(!text.contains("LIBRARY_DIR"));
         assert!(render_class().contains("XDG_SESSION_CLASS=background"));
+    }
+
+    /// Only the owner's row is a `background` session and only a made seat gets the binds; a
+    /// person's row gets neither, so it runs as the unit's `user` class and a drop-in either
+    /// left from an earlier start is removed.
+    #[test]
+    fn each_row_kind_gets_its_own_drop_ins_and_no_other() {
+        let state = Path::new("/var/lib/punktfunk-seats");
+        let person = Seat {
+            account: "jdoe".into(),
+            adopted_uid: Some(1500),
+            ..seat("Jane")
+        };
+        let kinds = |seat: &Seat| {
+            kind_dropins(seat, state, None).map(|(name, contents)| (name, contents.is_some()))
+        };
+        let gets = |class, binds| [("class.conf", class), ("binds.conf", binds)];
+        assert_eq!(kinds(&owner()), gets(true, false));
+        assert_eq!(kinds(&seat("Desk")), gets(false, true));
+        assert_eq!(kinds(&person), gets(false, false));
+        let [(_, class), _] = kind_dropins(&owner(), state, None);
+        assert_eq!(class.as_deref(), Some(render_class()));
+        let dir = tempfile::tempdir().unwrap();
+        let stale = dir.path().join("class.conf");
+        std::fs::write(&stale, render_class()).unwrap();
+        assert!(remove_if_present(&stale).unwrap());
+        assert!(
+            !remove_if_present(&stale).unwrap(),
+            "a second start finds none"
+        );
+    }
+
+    /// Only a made seat's user gets the seat's binds in its own systemd manager. The owner's and
+    /// a person's manager get nothing, even when their uid is known.
+    #[test]
+    fn only_a_made_seat_s_user_manager_gets_the_seat_s_binds() {
+        let state = Path::new("/var/lib/punktfunk-seats");
+        let person = Seat {
+            account: "jdoe".into(),
+            adopted_uid: Some(1500),
+            ..seat("Jane")
+        };
+        let user = Some((1500, 1500));
+        let updates = Some("[Service]\nBindReadOnlyPaths=/a:/b\n");
+        for row in [owner(), person] {
+            let dropins = kind_dropins(&row, state, None);
+            assert!(manager_parts(user, &dropins, updates).is_none());
+        }
+        let dropins = kind_dropins(&seat("Desk"), state, None);
+        let (uid, parts) = manager_parts(user, &dropins, updates).unwrap();
+        assert_eq!((uid, parts.len()), (1500, 2));
+        assert!(manager_parts(None, &dropins, updates).is_none());
+    }
+
+    /// A person's row is a contract seat on their own account: the box's library and the row's
+    /// name, a host identity under the row's directory and nothing under their home, and the
+    /// runner's marker without the owner's.
+    #[test]
+    fn a_person_s_env_file_keeps_their_home_clear() {
+        let person = Seat {
+            account: "jdoe".into(),
+            adopted_uid: Some(1500),
+            ..seat("Jane")
+        };
+        let id = "0123456789abcdef0123456789abcdef";
+        let text = render_env(
+            &person,
+            Path::new("/home/jdoe"),
+            Path::new("/var/lib/punktfunk-seats"),
+            "ab12",
+            &Browser::default(),
+        );
+        assert_eq!(
+            text,
+            format!(
+                "PUNKTFUNK_SEAT_SESSION=\"1\"\n\
+                 PUNKTFUNK_SEAT_ID=\"{id}\"\n\
+                 PUNKTFUNK_SEAT_OWN_ACCOUNT=\"1\"\n\
+                 PUNKTFUNK_CONFIG_DIR=\"/var/lib/punktfunk-seats/seats/{id}/config\"\n\
+                 PUNKTFUNK_TRUST_DIR=\"/var/lib/punktfunk-seats/trust/{id}\"\n\
+                 PUNKTFUNK_PAIRING=\"refused\"\n\
+                 PUNKTFUNK_LIBRARY_DIR=\"/var/lib/punktfunk-seats/trust/{id}\"\n\
+                 PUNKTFUNK_NATIVE_PORT=\"9779\"\n\
+                 PUNKTFUNK_MGMT_BIND=\"127.0.0.1:47995\"\n\
+                 PUNKTFUNK_HOST_NAME=\"Jane\"\n\
+                 PUNKTFUNK_GAMESTREAM=\"0\"\n\
+                 PUNKTFUNK_MDNS=\"0\"\n\
+                 PUNKTFUNK_WEBTRANSPORT=\"0\"\n\
+                 PUNKTFUNK_MGMT_TOKEN=ab12\n"
+            )
+        );
+        assert!(!text.contains("/home/jdoe") && !text.contains("SEAT_OWNER"));
     }
 
     /// The whole seat contract, in the order the doc lists it, with each path under its seat.

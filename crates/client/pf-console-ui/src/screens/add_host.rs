@@ -241,7 +241,7 @@ impl ScreenView for AddHostScreen {
 
     fn hints(&self, ctx: &Ctx) -> Vec<Hint> {
         if self.editing.is_some() {
-            return TextEntry::hints(ctx.device, "Done");
+            return self.keyboard.hints(ctx.device, "Done");
         }
         vec![
             Hint::new(HintKey::Confirm, "Select"),

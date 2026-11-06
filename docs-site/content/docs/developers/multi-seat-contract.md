@@ -1,6 +1,6 @@
 ---
 title: Multi-seat contract
-description: How the host runs seats — on Windows the supervisor in the service, its pipe, the seat keeper and the connector reservation; on Linux the seat daemon, its socket and unit, and the owner's row behind the door; and the variables a seat host starts with.
+description: How the host runs seats — on Windows the supervisor in the service, its pipe, the seat keeper and the connector reservation; on Linux the seat daemon, its socket and unit, the owner's row behind the door and a seat on a person's own account; and the variables a seat host starts with.
 ---
 
 The rules between the host and its seat supervisor, which runs one host per seat so several people
@@ -47,6 +47,11 @@ standard account the box already has. The console asks for the second with `seat
 - **Commands.** `adopt` carries `seat`, as `create` does, plus the account's `sid` and
   `password`, and answers `created`. `credential` carries `id` and `password`, checks the password
   with a sign-in, seals it in place of the old one and answers `resealed` with the row.
+- **Attempts.** Two wrong passwords for one account, by `adopt` and `credential` together, reach
+  the sign-in in any 15 minutes. A third answers `unlock_locked_out` with the wait in its
+  sentence before any sign-in, so the supervisor never drives the account into Windows' lockout.
+- **Its host** starts with `PUNKTFUNK_SEAT_OWN_ACCOUNT=1`, as a Linux one on a person's own
+  account does.
 - **Ledger.** An adopted row has `adopted_sid`, the account's SID, and `rdp_granted`, `true` when
   adopt put the account in Remote Desktop Users. A made row has neither, and its JSON is unchanged.
 - **Identity.** A made account is the row's when its comment holds the seat's marker. An adopted
@@ -149,6 +154,7 @@ them together. The host logs a warning at startup for each one that is set and i
 | `PUNKTFUNK_TRUST_DIR` | the box's config directory | The seat reads the box's pairing store, `profiles.json`, per-device display overlays and `seat-defaults.json` from here, read only, and follows their changes. A relative path is ignored. |
 | `PUNKTFUNK_PAIRING` | `refused` | Devices pair with the box. A knock is refused and no PIN window opens. A seat host refuses pairing with or without it. |
 | `PUNKTFUNK_LIBRARY_DIR` | Windows: the box's config directory. Linux: the seat's trust copy, on every seat but the owner's | The seat reads the box's library from here, read only: `library*.json`, `library-metadata/`, the plugin grants and the firmware plugins staged; on Windows also the plugin manifests its entries launch through and the managed emulators. Play stats stay in the seat's own directory. A relative path is ignored. |
+| `PUNKTFUNK_SEAT_OWN_ACCOUNT` | `1` on a seat on a person's own account, Windows and Linux | The host's one sign that it runs as a real person: read through `pf_paths::seat`. Unset on a made seat and on the Linux owner's row. |
 | `PUNKTFUNK_SEAT_STEAM` | the seat's own `steam.exe` (Windows only, when the box has Steam) | Steam runs once per IPC name per machine, so a seat starts Steam from here only, always with `-master_ipc_name_override pfseat<seat id>`. The supervisor copies the box's client into the seat account's profile at the seat's first start; until the file exists, the seat's Steam titles don't start. Unset or relative: no Steam on the seat. |
 
 It also sets these ordinary [host settings](/docs/configuration), so seats don't collide. A seat
@@ -685,3 +691,121 @@ it, so it moves to the row's ports at boot, logged in or not. The owner's own co
   lines to `/var/lib/punktfunk/host.env` before each door start, so an update or a later edit
   reaches the door. On NixOS the door also takes the two port keys from
   `services.punktfunk.host.settings`, and its console follows `services.punktfunk.web.bind`.
+
+### A seat on a person's own account
+
+A seat on the Linux door can run on an account the box already has: a family member's own login.
+The console asks with `seat: true`, `seat_account`, a Linux user name, and `seat_password` on
+`POST /api/v1/profiles`. It runs as the owner's row does, on a bus of its own, but in a session
+of the unit's `user` class, which a shutdown at the machine counts as another user's session,
+and it is a contract seat's host, not the owner's.
+
+- **Command.** `adopt_user` carries `seat`, as `create` does, plus the account's `password`, and
+  answers `created`. The supervisor reads the account's uid itself. The password goes once through
+  PAM's `login` stack, the one `punktfunk-seat@.service` runs its unit under: `pam_authenticate`,
+  then `pam_acct_mgmt`, so a locked or expired account is refused. Nothing keeps it, and
+  `credential` is refused for the row. A refusal's code is `credential_wrong`,
+  `credential_must_change`, `account_locked`, `account_missing`, `account_not_ordinary`,
+  `account_is_owner`, `account_taken`, `unlock_locked_out` or `pam_unavailable`.
+- **The check.** PAM runs in a child, `punktfunk-seats pam-check <account>`, with an empty
+  environment and the password on stdin; libpam never loads into the daemon. A child that hasn't
+  answered in 30 seconds is killed and the answer is `pam_unavailable`. Other commands don't
+  wait on it, and the account's uid is read again before the row lands.
+- **Attempts.** After a failed check the console waits 2 s × 2^failures for that account, and
+  15 minutes after the fifth. Two failed checks for one account reach PAM in any 15 minutes,
+  from every source together, so a stack that locks after three, such as `pam_faillock`, is
+  never driven there. A refusal answers `unlock_locked_out` with the wait in its sentence. A
+  check that gave no verdict counts as failed.
+- **Which accounts.** An ordinary user, as the owner's row takes: uid 1000 up, outside
+  60001–65535 and below 2³¹, never a seat's, named by the owner's name rule, so `user@domain` of
+  a directory service passes. Not the box owner, by name or by uid, and not an account another row
+  holds, by name or by uid.
+- **Ledger.** The row has `adopted_uid`, the uid read at adopt, and no `owner`. A made row has
+  neither and its JSON is unchanged. A start, the certificate read and the doctor refuse a row
+  whose name now resolves to another uid. A stop or a delete still runs and reaches only the
+  row's unit.
+- **A guest on the account.** Nothing on the account changes: no `useradd`, `usermod` or
+  `userdel`, no group, no mode or owner of the home, and the daemon writes nothing inside it.
+  The row's files are under `/var/lib/punktfunk-seats` and `/run`: its environment file stays
+  root's, and the host keeps its identity in `seats/<id>/config`, the person's `0700`, not in
+  `~/.config/punktfunk`. A stop ends the row's unit and no other process of the user, their
+  login and SSH included. A delete removes what the row made and gives the account back.
+- **The monitor wins.** While the person has a session on a seat, a start answers
+  `account_at_desk`, and a running unit ends within 2 seconds of their login. Nothing takes the
+  row over: their own `punktfunk-host` units are not started or stopped.
+- **What it does not take.** The owner's `host.env` and settings, the box's library as its own
+  (it plays the box's, from its trust copy), the door, and the owner's user host. The trust copy
+  is readable by the person alone.
+
+#### Who opens a person's seat
+
+The supervisor, not the door, decides which device gets onto a person's row. The door relays and
+names the device by the fingerprint its QUIC handshake authenticated. Every command below answers
+`invalid_request` for any other row, `not_found` for a missing one, and `invalid_request` for a
+fingerprint that isn't 64 lowercase hex or a device name that isn't 1 to 64 printable characters.
+A refusal is `backend` with `<code>: <sentence>`, the sentence the person reads.
+
+- **`unlock {id, device: {fingerprint, name}, proof}`** answers `unlocked {seat, started}` only
+  while the session runs and the device is admitted; `started` when this unlock started it.
+  `proof` is tagged by `kind`:
+  - `none`: an admitted device rejoins a running session. Otherwise `unlock_required`.
+  - `password {password, stay_signed_in, enroll}`: the attempt limits, then PAM (`login` stack,
+    auth then account) in the `pam-check` child, outside the supervisor's lock. On success a
+    stopped session is started through the same path as `start`, so `account_at_desk` and the other
+    start refusals apply, then the device is present; `stay_signed_in` sets `stay`, and `enroll`
+    (`{alg: "p256" | "rsa2048", public}`) stores its key. A key that isn't a P-256 point on the
+    curve or a DER `RSAPublicKey` of exactly 2048 bits is `invalid_request`, before PAM. Refusals:
+    `credential_wrong`, `account_locked`, `credential_must_change`, `pam_unavailable`,
+    `unlock_locked_out`, or `capacity` when the row lists 64 devices.
+  - `key {signature}`: the device's enrolled key signed the live challenge (below), which this uses
+    up whatever the outcome; then as after a password, with no PAM call. A wrong signature, a
+    challenge used up, expired or never asked for, and a box certificate that no longer matches
+    its pin answer `proof_invalid`. A failure counts against the device's limit alone, never the
+    account's.
+- **`unlock_state {id, fingerprint}`** answers `unlock_state {needs}`: `none` while the session
+  runs and the device is admitted, else `key` when it has a key, else `password`.
+- **`challenge {id, fingerprint}`** answers `challenge {challenge, seat}`: 32 bytes from the OS as
+  64 hex, valid 120 seconds and once, the device's only live one. A device with no key gets
+  `unlock_required`. The key signs `"punktfunk-seat-unlock-v1"` ‖ challenge ‖ the seat id's 32 hex
+  characters ‖ the device fingerprint ‖ the box fingerprint, 152 bytes, with SHA-256: ECDSA P-256
+  as an ASN.1 DER signature, or RSA 2048 as a 256-byte signature, PKCS#1 v1.5 or PSS with a
+  32-byte salt. Windows Hello's documentation names both paddings, so either passes.
+- **`left {id, fingerprint}`** answers `left`: the device disconnected, so its presence ends 600
+  seconds later unless it rejoins.
+- **`sign_out {id, fingerprint}`** answers `signed_out`: forgets that device, its stay and its key,
+  or every device without a fingerprint.
+- **`devices {id}`** answers `devices {devices}`, each `{fingerprint, name, kind, added_unix,
+  last_unix}`, `kind` `key` with a key, else `stay`, else `for_now`.
+- **`start`** of a person's row answers `unlock_required`, and autostart never starts one. The box
+  host waits up to 210 seconds for an `unlock`.
+- **The device list.** `seats/<id>/devices.json`, root `0600`, replaced whole on each change:
+  `{devices: [{fingerprint, name, stay, key, present: {unlocked_unix, expires_unix}, added_unix,
+  last_unix}]}`. A password or key unlock makes the device present: no end while connected, 600
+  seconds after `left`, never more than 24 hours from the unlock, and none once the session stops,
+  from a stop, the person's login at the machine or a unit found failed or down. An entry with
+  neither `stay` nor a key goes with its presence. The supervisor loads each list at start and
+  drops the presence that ran out; it keeps presence for a session still running. A file it can't
+  read, or one that holds anything it wouldn't write, is no device, and `doctor` shows
+  `device_list`.
+- **Who is admitted.** A device that is present, or that stays signed in and has no key: a key
+  never lets a device on without a fresh proof, so a copied pairing key alone can't reach the seat.
+  The seat's `trust/<id>/punktfunk1-paired.json` holds only the box's records of admitted devices,
+  each as the box wrote it; the other trust files copy as on any seat. The box's file is the door's:
+  one that is missing, unreadable, over 8 MiB or not `{"clients": [...]}` gives an empty list. The
+  list is rewritten on each change of who is admitted and checked every 2 seconds while the seat
+  runs.
+- **The box pin.** The first challenge or key proof pins the SHA-256 of the door's
+  `/var/lib/punktfunk/native-cert.pem` in `box-pin`. While the certificate differs from it, every
+  challenge and key proof is refused and `doctor` shows `box_pin` as an error; removing the file
+  takes a new pin.
+- **The audit line.** Every `unlock` writes one journal line under the target `punktfunk::audit`:
+  `seat`, `account`, `uid`, `device`, `proof`, `result`, `device_failures` and
+  `account_failures`. Never the password.
+
+| Variable | A person's row |
+|---|---|
+| `PUNKTFUNK_SEAT_OWN_ACCOUNT` | `1`: the account is a person's own. The runner keeps the session on a private bus, leaves the user's other desktop processes alone and writes no seat-only setup into their home; the owner's row has the same mode from `PUNKTFUNK_SEAT_OWNER`. The host reads it too, as on Windows. |
+| `PUNKTFUNK_SEAT_OWNER` | Not set: the host is a contract seat's. |
+| `PUNKTFUNK_CONFIG_DIR` | `seats/<id>/config`, not the home. |
+| `PUNKTFUNK_LIBRARY_DIR`, `PUNKTFUNK_HOST_NAME`, `PUNKTFUNK_GAMESTREAM` | As on any contract seat. |
+

@@ -40,11 +40,29 @@ private class RequestAccessState(val target: PendingTrust) {
  * A plain dial in flight: [hostName] labels the [ConnectOverlay]'s "Connecting…" phase, and its
  * Cancel trips [ticket]. A late handle is closed silently, as [RequestAccessState]'s is.
  */
-private class ConnectAttempt(val hostName: String) {
+internal class ConnectAttempt(val hostName: String) {
     val ticket = HostServices.Ticket()
 
     /** The host parked this dial for its operator: the approval wait replaces "Connecting…". */
     var awaitingApproval by mutableStateOf(false)
+        private set
+
+    /** The profile whose desktop this dial's unlock is starting: a progress line, not an approval. */
+    var starting by mutableStateOf<String?>(null)
+        private set
+
+    /** The profile named by the unlock the dial now out carries; `null` for a bare dial. */
+    var unlocking: String? = null
+        set(value) {
+            field = value
+            starting = null
+        }
+
+    /** The host said `Pending` about the dial now out. */
+    fun hostPending() {
+        val profile = unlocking
+        if (profile != null) starting = profile else awaitingApproval = true
+    }
 }
 
 /**
@@ -123,6 +141,10 @@ internal class ConnectController(
     /** The profile picker a dial waits on. */
     var profileAsk by mutableStateOf<ProfileAsk?>(null)
         private set
+
+    /** The password prompt a dial waits on. */
+    var unlockAsk by mutableStateOf<PasswordAsk?>(null)
+        private set
     var seatWait by mutableStateOf<ProfileWait?>(null)
 
     // A link's `as=`, taken by the next dial.
@@ -132,6 +154,9 @@ internal class ConnectController(
 
     /** The host a plain dial is connecting to, for the overlay's "Connecting…" phase. */
     val connectingHostName: String? get() = attempt?.takeUnless { it.awaitingApproval }?.hostName
+
+    /** The profile whose desktop the dial's unlock is starting, for the overlay's progress line. */
+    val startingProfile: String? get() = attempt?.starting
 
     /** The host a request-access connect, or a parked plain dial, waits on: "Waiting for approval…". */
     val awaitingHostName: String?
@@ -166,9 +191,9 @@ internal class ConnectController(
         return null
     }
 
-    // The dial itself, identity ready. A TOFU dial saves what the host presented, unpaired.
-    // [onFailure] takes an unreachable dial (the wake wait), [onMismatch] a refused pin;
-    // [redial] marks the one dial a [ProfileRetry] grants.
+    // The dial itself, identity ready, through the profile's unlock. A TOFU dial saves what the
+    // host presented, unpaired. [onFailure] takes an unreachable dial (the wake wait),
+    // [onMismatch] a refused pin; [redial] marks the one dial a [ProfileRetry] grants.
     private fun doConnectDirect(
         targetHost: String,
         targetPort: Int,
@@ -220,20 +245,30 @@ internal class ConnectController(
             val spec = DialSpec(
                 settings.effectiveFor(preset), id, targetHost, targetPort, pinHex ?: "", launch,
                 dialer = "touch/host-grid", preset = preset, profile = choice.id,
+                promptsUnlock = promptsUnlock(context),
             )
+            // While the password prompt or the biometric sheet is up, it takes the overlay's place.
+            val hooks = record?.let { r ->
+                touchUnlockHooks(context, id, r, ask = { askUnlock(thisAttempt, it) }) { up ->
+                    attempt = if (up) null else thisAttempt
+                }
+            }
             // By this dial's pin (the address may also name the other OS of a dual-boot box); with
             // no saved record, a TOFU dial pins what the host presented, unpaired.
-            // A dial the host parks for its operator turns the overlay into the approval wait.
+            // A parked dial is the approval wait, or with an unlock the desktop starting.
             val watch = launch {
                 while (!thisAttempt.awaitingApproval) {
                     delay(PENDING_POLL_MS)
-                    if (NativeBridge.nativeDialPending()) thisAttempt.awaitingApproval = true
+                    if (thisAttempt.starting == null && NativeBridge.nativeDialPending()) thisAttempt.hostPending()
                 }
             }
-            val dialed = services.dial(spec, record, name, ticket = thisAttempt.ticket)
+            val dialed = dialUnlocked(hooks, spec.pinHex, choice.row) { unlock ->
+                thisAttempt.unlocking = unlock?.let { choice.row?.displayName?.ifEmpty { null } ?: name }
+                services.dial(spec, record, name, ticket = thisAttempt.ticket, unlock = unlock)
+            }
             watch.cancel()
-            // Cancelled mid-dial: cancelConnect already returned the UI and resumed the browse,
-            // and the just-opened session closed silently.
+            // Cancelled mid-dial or at the password prompt: the UI and the browse are back
+            // already, and a just-opened session closed silently.
             if (dialed is HostServices.Cancelled) return@launch
             attempt = null
             connecting = false
@@ -267,6 +302,30 @@ internal class ConnectController(
                 }
             }
         }
+    }
+
+    /**
+     * Shows the password prompt for [at] in place of its overlay. Cancel there ends the dial the
+     * way the overlay's Cancel does, so the dial returns [HostServices.Cancelled] to a UI already
+     * handed back.
+     */
+    private suspend fun askUnlock(at: ConnectAttempt, ask: PasswordAsk): PasswordAnswer? {
+        if (at.ticket.cancelled) return null
+        attempt = null
+        unlockAsk = ask
+        val answer = try {
+            ask.answer.await()
+        } finally {
+            unlockAsk = null
+        }
+        if (answer != null) {
+            attempt = at
+        } else {
+            at.ticket.cancel()
+            connecting = false
+            resumeBrowse()
+        }
+        return answer
     }
 
     /**

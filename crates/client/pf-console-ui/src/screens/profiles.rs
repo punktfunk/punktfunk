@@ -18,7 +18,7 @@ use crate::screens::library::art::ArtDecoder;
 use crate::screens::{ConnectIntent, Ctx, Outbox, ProfileAsk, Screen, ScreenView, Seated};
 use crate::theme::{fill, Fonts, Frame, PanelStroke, W};
 use pf_client_core::menu_nav::{MenuDir, MenuEvent, MenuPulse};
-use pf_client_core::profiles::{initials, ListedProfile, ProfilePick};
+use pf_client_core::profiles::{initials, ListedProfile, ProfilePick, UnlockNeed};
 use skia_safe::{Canvas, Color4f, Image, Matrix, RRect, Rect, TileMode};
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -662,7 +662,11 @@ impl ScreenView for ProfilesScreen {
             Focus::Host(i) => paired_hosts(ctx.hosts).nth(i).map(|h| h.name.clone()),
             Focus::Face(i) => match self.faces().get(i) {
                 Some(p) => {
-                    let say = selected(p.display_name.clone(), self.current(i));
+                    let name = match p.unlock {
+                        UnlockNeed::None => p.display_name.clone(),
+                        _ => format!("{}, locked", p.display_name),
+                    };
+                    let say = selected(name, self.current(i));
                     Some(match p.note() {
                         Some(note) => format!("{say}, {note}"),
                         None => say,
@@ -791,6 +795,9 @@ impl ScreenView for ProfilesScreen {
                                         paint.set_anti_alias(true);
                                         canvas.draw_circle((cx, cy), r as f32 + ring * 2.0, &paint);
                                     }
+                                    if p.is_some_and(|p| p.unlock != UnlockNeed::None) {
+                                        draw_lock(canvas, ui, cx, cy, r as f32);
+                                    }
                                 })
                                 .id(card_id(i))
                                 .focusable((face / 2.0) as f32)
@@ -900,6 +907,35 @@ fn draw_label(canvas: &Canvas, ui: &Frame, fonts: &Fonts, text: &str, cell: Rect
     let x = f64::from(cell.center_x()) - tw / 2.0;
     let base = f64::from(cell.top) + 20.0 * k;
     fonts.draw_clipped(canvas, text, x, base, W::Bold, size, ui.fg(1.0), w);
+}
+
+/// The badge of a locked profile: a padlock on an accent disc at the lower right of the circle
+/// of radius `r` at `cx, cy`.
+fn draw_lock(canvas: &Canvas, ui: &Frame, cx: f32, cy: f32, r: f32) {
+    let rb = r * 0.27;
+    let (bx, by) = (cx + r * 0.68, cy + r * 0.68);
+    let mut disc = fill(ui.accent(1.0));
+    disc.set_anti_alias(true);
+    canvas.draw_circle((bx, by), rb, &disc);
+    let ink = ui.on_accent();
+    let (w, h) = (rb * 0.96, rb * 0.74);
+    let body = Rect::from_xywh(bx - w / 2.0, by - h * 0.25, w, h);
+    let mut paint = fill(ink);
+    paint.set_anti_alias(true);
+    canvas.draw_rrect(RRect::new_rect_xy(body, rb * 0.14, rb * 0.14), &paint);
+    let (l, rt) = (bx - w * 0.3, bx + w * 0.3);
+    let mut shackle = skia_safe::PathBuilder::new();
+    shackle.move_to((l, body.top));
+    shackle.line_to((l, by - rb * 0.32));
+    shackle.cubic_to(
+        (l, by - rb * 0.72),
+        (rt, by - rb * 0.72),
+        (rt, by - rb * 0.32),
+    );
+    shackle.line_to((rt, body.top));
+    let mut line = crate::theme::stroke(ink, rb * 0.18);
+    line.set_anti_alias(true);
+    canvas.draw_path(&shackle.detach(), &line);
 }
 
 /// Ask every time's circle: a question mark on the field.

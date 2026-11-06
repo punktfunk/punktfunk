@@ -129,6 +129,11 @@ dependencies {
     // WindowInfoTracker is the platform's only source for one.
     implementation("androidx.window:window:1.5.1")
 
+    // A profile's unlock key signs only behind BiometricPrompt (ProfileUnlock.kt). The prompt
+    // needs a FragmentActivity; Fragment 1.3+ is what delivers Activity Result callbacks there.
+    implementation("androidx.biometric:biometric:1.1.0")
+    implementation("androidx.fragment:fragment:1.9.1")
+
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.ui:ui-tooling-preview")
     implementation("androidx.compose.foundation:foundation")

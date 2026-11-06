@@ -36,7 +36,7 @@ class HostServicesTest {
     private fun spec(pin: String = "") = DialSpec(Settings(), me, ADDR, PORT, pin, launch = null, dialer = "test")
 
     @Test
-    fun a_dial_that_lands_hands_over_the_session() = runBlocking {
+    fun a_dial_that_lands_hands_over_the_session() = runBlocking<Unit> {
         val kh = store.trust(ADDR, PORT, "Desk", FP, paired = true)
         native.handles += 7L
         native.mgmtPort = 47991
@@ -55,7 +55,7 @@ class HostServicesTest {
     }
 
     @Test
-    fun a_host_that_asks_for_a_pin_refuses_the_dial_until_paired() = runBlocking {
+    fun a_host_that_asks_for_a_pin_refuses_the_dial_until_paired() = runBlocking<Unit> {
         native.handles += 0L
         native.tokens += "identity-required"
         native.fingerprint = FP
@@ -71,7 +71,7 @@ class HostServicesTest {
     }
 
     @Test
-    fun a_rejected_trust_saves_nothing() = runBlocking {
+    fun a_rejected_trust_saves_nothing() = runBlocking<Unit> {
         val kh = store.trust(ADDR, PORT, "Desk", FP, paired = true)
         native.handles += 0L
         native.tokens += "crypto"
@@ -118,7 +118,7 @@ class HostServicesTest {
     }
 
     @Test
-    fun a_dial_cancelled_mid_flight_closes_its_late_session() = runBlocking {
+    fun a_dial_cancelled_mid_flight_closes_its_late_session() = runBlocking<Unit> {
         native.fingerprint = FP
         native.handles += 9L
         val wire = native.holdNextConnect()
@@ -135,7 +135,7 @@ class HostServicesTest {
     }
 
     @Test
-    fun two_dials_in_a_row_open_one_session_at_a_time() = runBlocking {
+    fun two_dials_in_a_row_open_one_session_at_a_time() = runBlocking<Unit> {
         val kh = store.trust(ADDR, PORT, "Desk", FP, paired = true)
         native.handles += listOf(10L, 11L)
         val wire = native.holdNextConnect()
@@ -153,7 +153,7 @@ class HostServicesTest {
     }
 
     @Test
-    fun a_woken_host_that_refuses_setup_is_dialed_again() = runBlocking {
+    fun a_woken_host_that_refuses_setup_is_dialed_again() = runBlocking<Unit> {
         val kh = store.trust(ADDR, PORT, "Desk", FP, paired = true)
         native.sleep(500)
         native.handles += listOf(0L, 0L, 12L)
@@ -171,6 +171,23 @@ class HostServicesTest {
         native.handles += 0L
         native.tokens += "setup-failed"
         assertEquals("setup-failed", (services.dial(spec(FP), kh, "Desk") as HostServices.Failed).token)
+    }
+
+    @Test
+    fun an_unlock_rides_only_the_first_dial_of_a_woken_host() = runBlocking<Unit> {
+        val kh = store.trust(ADDR, PORT, "Desk", FP, paired = true)
+        native.handles += listOf(0L, 13L)
+        native.tokens += "setup-failed"
+        native.wakeWaits += 1L
+        val unlock = Unlock(UNLOCK_PASSWORD, byteArrayOf(1, 2, 3))
+        services.dial(spec(FP), kh, "Desk", unlock = unlock) as HostServices.Connected
+        assertEquals(listOf(listOf<Byte>(1, 2, 3), null), native.unlocks.map { it?.toList() })
+        // A dial the gate refuses never reaches the host, and its secret is gone.
+        assertTrue(SessionGate.take())
+        val refused = Unlock(UNLOCK_PASSWORD, byteArrayOf(4, 5))
+        services.dial(spec(FP), kh, "Desk", unlock = refused) as HostServices.Failed
+        assertEquals(2, native.connects)
+        assertTrue(refused.secret.all { it == 0.toByte() })
     }
 
     /** The native layer, scripted: each connect takes the next of [handles]. */
@@ -197,8 +214,12 @@ class HostServicesTest {
 
         fun awaitOnWire() = assertTrue(onWire.await(5, TimeUnit.SECONDS))
 
-        override suspend fun connect(spec: DialSpec): Long {
+        /** What each connect carried; a copy of the secret, taken before the dial wipes it. */
+        val unlocks = mutableListOf<ByteArray?>()
+
+        override suspend fun connect(spec: DialSpec, unlock: Unlock?): Long {
             connects++
+            unlocks += unlock?.secret?.copyOf()
             wire?.let { held ->
                 wire = null
                 onWire.countDown()
