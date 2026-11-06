@@ -48,7 +48,7 @@ A new Rust part needs a feature of its name in `Cargo.toml`.
 | File | Holds |
 |---|---|
 | `locales.json` | The source language, the shipped ones, and fallbacks between them |
-| `rules.json` | Which parts are TypeScript-only, length budgets by role (`budgets.parts`: a part's own), banned patterns, retired terms, keys allowed over budget (`debt`) |
+| `rules.json` | Which parts are TypeScript-only or read by Apple, length budgets by role (`budgets.parts`: a part's own), banned patterns, retired terms, keys allowed over budget or holding Markdown (`debt`) |
 | `glossary.json` | Agreed terms, and names never translated |
 | `vectors.json` | What a reader of the format must produce; the tests replay it |
 

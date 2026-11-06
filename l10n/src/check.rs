@@ -23,6 +23,8 @@ pub struct Rules {
     banned: Vec<Banned>,
     retired: Vec<(String, String)>,
     debt: Vec<String>,
+    /// `parts.apple`: the parts an Apple app reads, where SwiftUI renders Markdown.
+    apple: Vec<String>,
 }
 
 #[derive(Clone)]
@@ -93,6 +95,11 @@ impl Rules {
             .iter()
             .map(|(k, _)| k.clone())
             .collect();
+        let apple = v
+            .get("parts")
+            .and_then(|p| p.get("apple"))
+            .and_then(Json::as_strs)
+            .unwrap_or_default();
         Ok(Rules {
             roles,
             label,
@@ -101,6 +108,7 @@ impl Rules {
             banned,
             retired,
             debt,
+            apple,
         })
     }
 
@@ -153,6 +161,28 @@ fn banned(rules: &Rules, text: &str) -> Option<String> {
         }
     })?;
     Some(format!("\"{}\": {}", hit.text, hit.why))
+}
+
+/// Markdown SwiftUI renders in a localized string instead of showing it: `*`, a backtick,
+/// `~~`, `](` and an `_emphasis_` run.
+fn markdown(text: &str) -> Option<&'static str> {
+    let hit = ["*", "`", "~~", "]("]
+        .into_iter()
+        .find(|m| text.contains(m));
+    let chars: Vec<char> = text.chars().collect();
+    let word = |c: Option<&char>| c.is_some_and(|c| c.is_alphanumeric());
+    let open = |i: usize| {
+        let before = i.checked_sub(1).and_then(|b| chars.get(b));
+        chars[i] == '_' && !word(before) && chars.get(i + 1).is_some_and(|c| !c.is_whitespace())
+    };
+    let close = |i: usize| {
+        let before = i.checked_sub(1).and_then(|b| chars.get(b));
+        chars[i] == '_' && before.is_some_and(|c| !c.is_whitespace()) && !word(chars.get(i + 1))
+    };
+    let emphasis = (0..chars.len())
+        .filter(|&i| open(i))
+        .any(|i| (i + 2..chars.len()).any(close));
+    hit.or(emphasis.then_some("_"))
 }
 
 fn retired(rules: &Rules, text: &str) -> Option<String> {
@@ -313,6 +343,22 @@ fn policy(rules: &Rules, file: &File, source: bool) -> Vec<String> {
     out
 }
 
+/// `markdown` over one file of a part an Apple app reads.
+fn markdown_in(rules: &Rules, file: &File) -> Vec<String> {
+    let mut out = Vec::new();
+    for e in file.entries.iter().filter(|e| !rules.debt.contains(&e.key)) {
+        for text in e.msg.texts() {
+            out.extend(markdown(&text).map(|m| {
+                format!(
+                    "{}: {}: \"{m}\" reads as Markdown on Apple; reword it",
+                    file.path, e.key
+                )
+            }));
+        }
+    }
+    out
+}
+
 /// Budgets alone, for a TypeScript-only part with a budget of its own.
 fn lengths(rules: &Rules, file: &File, source: bool) -> Vec<String> {
     let mut out = Vec::new();
@@ -416,6 +462,9 @@ pub fn run(root: &Path) -> Report {
             }
             if let Some(rules) = own.as_ref().or(rules.as_ref()) {
                 problems.extend(policy(rules, file, file.lang == cat.source));
+                if rules.apple.contains(&part.name) {
+                    problems.extend(markdown_in(rules, file));
+                }
             }
         }
     }
@@ -518,6 +567,34 @@ mod tests {
         assert!(banned(&r, "Couldn't wake the host — it may be asleep.").is_none());
         assert!(banned(&r, "Is it on? Yes!?").is_none());
         assert!(banned(&r, "Displeased hosts").is_none());
+    }
+
+    #[test]
+    fn markdown_is_found() {
+        for bad in [
+            "a *b* c", "run `ls`", "~~gone~~", "[a](b)", "a _b_ c", "_b c_", "_b_",
+        ] {
+            assert!(markdown(bad).is_some(), "{bad}");
+        }
+        for fine in [
+            "snake_case and a_b_c",
+            "{host_name} left",
+            "a _ b",
+            "_a",
+            "Use ~ for home",
+            "Up to {rate} Mbit/s",
+        ] {
+            assert!(markdown(fine).is_none(), "{fine}");
+        }
+        let mut r = rules();
+        let msgs = [("a_x", "*B*"), ("a_y", "ok")];
+        let f = file("messages/apple/en.json", "en", &msgs);
+        assert_eq!(
+            markdown_in(&r, &f),
+            ["messages/apple/en.json: a_x: \"*\" reads as Markdown on Apple; reword it"]
+        );
+        r.debt = vec!["a_x".into()];
+        assert!(markdown_in(&r, &f).is_empty());
     }
 
     #[test]

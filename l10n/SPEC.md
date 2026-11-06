@@ -71,6 +71,13 @@ when `rules.json` `budgets.parts` names the part, its own length budget; markup,
 selectors and functions are Paraglide's to read. Paraglide reads a plural category the message
 lacks as the message's key, so their plurals end in `<n>=*`, not `<n>=other`.
 
+## Markdown in Apple-bound parts
+
+SwiftUI renders Markdown in a localized string, so `*b*` shows as emphasis. In the parts
+`rules.json` lists under `parts.apple` (`common`, `client`, `apple`, `host`), `check` refuses a
+message in any language that holds `*`, a backtick, `~~`, `](` or an `_emphasis_` run, unless
+`debt` lists its key.
+
 ## Reading a message
 
 - **Arguments** follow the order the placeholders first appear in the English text, a plural's
