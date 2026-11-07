@@ -135,12 +135,12 @@ pub fn display(b: &mut Build) {
         &spec::COMPOSITOR,
         &[
             client::player_compositor_auto(),
-            "KWin",
+            "KWin (KDE Plasma)",
             "Mutter (GNOME)",
             "Hyprland",
             "niri",
             "Umbriel",
-            "wlroots (Sway/River)",
+            "wlroots (Sway, River)",
             "gamescope",
         ],
     );

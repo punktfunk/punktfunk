@@ -45,8 +45,8 @@ const DECODERS: &[(&str, Label)] = &[
 /// can't encode the chosen codec.
 const CODECS: &[(&str, Label)] = &[
     ("auto", client::player_codec_auto),
-    ("hevc", || "HEVC (H.265)"),
-    ("h264", || "H.264 (AVC)"),
+    ("hevc", || "HEVC"),
+    ("h264", || "H.264"),
     ("av1", || "AV1"),
     // Preference-only by design: `resolve_codec` never auto-picks PyroWave, and asking for
     // it on a host or device that can't do it simply falls back down the ladder to HEVC.
@@ -86,12 +86,12 @@ fn smooth_buffer_label(frames: u8) -> String {
 /// auto-detect when the choice is unavailable. Only meaningful against a Linux host.
 const COMPOSITORS: &[(&str, Label)] = &[
     ("auto", client::player_compositor_auto),
-    ("kwin", || "KWin"),
+    ("kwin", || "KWin (KDE Plasma)"),
     ("mutter", || "Mutter (GNOME)"),
     ("hyprland", || "Hyprland"),
     ("niri", || "niri"),
     ("umbriel", || "Umbriel"),
-    ("wlroots", || "wlroots (Sway/River)"),
+    ("wlroots", || "wlroots (Sway, River)"),
     ("gamescope", || "gamescope"),
 ];
 
