@@ -1,7 +1,5 @@
 {
 	"$schema": "https://inlang.com/schema/inlang-message-format",
-	"app_name": "Punktfunk",
-	"app_tagline": "management console",
 	"display_settings_saved": "Display configuration saved",
 	"nav_home": "Home",
 	"nav_host": "Host",
@@ -84,7 +82,6 @@
 	"plugin_open_new_tab": "Open in new tab",
 	"home_now": "Now",
 	"home_now_empty": "Nothing is streaming.",
-	"home_last": "Last: {device}, {duration}, {ago}",
 	"home_recent_sessions": "Recent sessions",
 	"home_attention_pending": "Waiting for approval: {names}",
 	"home_attention_audio": "Audio endpoint not ready: {state}",
@@ -253,7 +250,6 @@
 	"gpu_encoder_pin_warning": "PUNKTFUNK_ENCODER={value} pins a {vendor} encoder, but the next session's GPU is “{name}” — remove the stale pin from host.env.",
 	"host_conflicts_title": "Another game-streaming server is active on this machine",
 	"host_conflicts_help": "Another server holds Punktfunk's ports, so whichever started first answers. Stop it, then restart.",
-	"host_displays_help": "Pick a preset, or Custom to set options directly. A change applies to the next session.",
 	"display_preset_default": "Default",
 	"display_preset_gaming_rig": "Headless box",
 	"display_preset_shared_desktop": "Shared desktop",
@@ -430,8 +426,6 @@
 	"library_field_region": "Region",
 	"library_field_region_help": "e.g. NTSC-U, PAL, NTSC-J.",
 	"library_field_players": "Players",
-	"library_details_legend": "Details (optional)",
-	"library_owned_by": "via {provider}",
 	"library_provider_count": [
 		{
 			"declarations": [
@@ -563,12 +557,10 @@
 	"library_provider_purge_failed": "Couldn't remove this provider's entries",
 	"library_save": "Save",
 	"library_create": "Add",
-	"library_cancel": "Cancel",
 	"library_delete": "Delete",
 	"library_entry_tab_information": "Information",
 	"library_entry_tab_media": "Media",
 	"library_entry_tab_launch": "Launch",
-	"library_entry_managed_by": "Managed by {source}",
 	"library_entry_managed_note": "{source} keeps this title's details. Change them there; they come back on its next sync.",
 	"library_entry_missing": "This title is no longer in the library.",
 	"library_entry_leave_title": "Leave without saving?",
@@ -675,7 +667,6 @@
 	"common_loading": "Loading…",
 	"common_error": "Something went wrong.",
 	"common_confirm": "Confirm",
-	"common_discard": "Discard",
 	"common_unauthorized": "Session expired — redirecting to sign in…",
 	"login_title": "Sign in",
 	"login_subtitle": "Enter the management password to continue. Don't know what to do?",
