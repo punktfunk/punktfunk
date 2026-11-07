@@ -258,7 +258,7 @@ pub fn picker_decision(
 pub enum SeatGate {
     /// Dial now. The host places the connect, or says why it can't.
     Dial,
-    /// `POST /api/v1/profiles/{id}/wake`, then wait: `Getting Kid's desk ready…`.
+    /// `POST /api/v1/profiles/{id}/wake`, then wait: `Getting Kid's desktop ready…`.
     Wake,
     /// The seat is coming up. Poll `enumerate` every 2 s, show `detail`, offer **Cancel**; there
     /// is no timeout.
@@ -291,7 +291,7 @@ pub fn seat_gate(p: &ListedProfile) -> SeatGate {
     }
 }
 
-/// The line while a seat comes up: `Getting Kid's desk ready…`.
+/// The line while a seat comes up: `Getting Kid's desktop ready…`.
 pub fn waking_line(display_name: &str) -> String {
     pf_l10n::client::profile_waking(display_name)
 }
@@ -761,7 +761,7 @@ mod tests {
             true
         });
         assert!(
-            matches!(&seen[..], [Err(l)] if l.starts_with("Couldn't wake Kid's desk \u{2014} "))
+            matches!(&seen[..], [Err(l)] if l.starts_with("Couldn't get Kid's desktop ready \u{2014} "))
         );
         seen.clear();
         watch_seat(
