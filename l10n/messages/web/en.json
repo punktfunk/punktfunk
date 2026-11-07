@@ -1108,7 +1108,7 @@
 	"display_monitor_disabled": "off",
 	"display_monitor_missing": "not connected",
 	"display_monitor_missing_hint": "This host has no screen with this name, so no client can start a session.",
-	"display_monitor_missing_warning": "The screen this host is set to stream isn't connected to it any more, so every session fails. Pick a screen below, or the virtual screen.",
+	"display_monitor_missing_warning": "The screen this host is set to stream isn't connected to it anymore, so every session fails. Pick a screen below, or the virtual screen.",
 	"update_title": "Updates",
 	"update_available_badge": "Update available",
 	"update_current": "Installed",
@@ -1669,9 +1669,9 @@
 	"profiles_devices_failed": "Couldn't sign out. Try again in a moment.",
 	"seat_own_unmanaged": "{name}'s desktop runs on their own account, so the console manages no plugins or emulators there.",
 	"seat_own_verified": "{name}'s desktop runs on their own account, so only Verified plugins install there.",
-	"display_preset_default_hint": "Good for most setups. Reconnects resume quickly, the stream is the whole desktop, and extra viewers each get their own screen.",
-	"display_preset_gaming_rig_hint": "For a machine with no monitor that you only stream from. The game keeps running when you disconnect, and whoever connects next takes it over.",
-	"display_preset_hotdesk_hint": "One person at a time — roam between your own devices with an instant reconnect. Anyone else is told the box is busy.",
-	"display_preset_shared_desktop_hint": "For a PC you also use in person. Your real monitors are never blanked or left with a leftover display, and extra viewers each get their own screen.",
-	"display_preset_workstation_hint": "Your multi-monitor daily driver. Displays come back exactly where you arranged them, each client keeps its own settings, and the desktop is yours alone."
+	"display_preset_default_hint": "Good for most setups: quick reconnects, the whole desktop, and a screen of their own for extra viewers.",
+	"display_preset_gaming_rig_hint": "For a host with no monitor: the game keeps running when you leave, and whoever connects next takes over.",
+	"display_preset_hotdesk_hint": "One person at a time, with instant reconnects between your devices; anyone else is told it's busy.",
+	"display_preset_shared_desktop_hint": "For a host you also use in person: your monitors stay on, and extra viewers get their own screen.",
+	"display_preset_workstation_hint": "Your multi-monitor daily driver: displays return where you put them, and the desktop is yours alone."
 }
