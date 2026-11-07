@@ -65,7 +65,7 @@
 	"decky_trust_open_host": "Trust sheet line for a host that takes new devices. {host}: the host's name.",
 	"decky_trust_needs_approval": "Trust sheet line. {host}: the host's name.",
 	"decky_use_pin": "Trust sheet button: open the PIN keypad.",
-	"decky_trust_request_hint": "Trust sheet footer. 'Request access' is the button above: use its label. {host}: the host's name.",
+	"decky_trust_request_hint": "Trust sheet footer, under the Request access button. {host}: the host's name.",
 	"decky_pair_wrong_pin": "PIN keypad error.",
 	"decky_pair_unreachable": "PIN keypad error. {host}: the host's name.",
 	"decky_pair_outdated": "PIN keypad error when the client is too old.",
