@@ -1,13 +1,13 @@
 //! Whether a made seat's Steam opened the libraries the seat shows it.
 //!
 //! Steam's `content_log.txt` names each listed folder it couldn't open at a library load:
-//! `Install folder <path> not mounted.` The check reads the last load, and for each folder of
-//! ours it missed, tries the folder as that Steam does: its user, its groups, its mount
-//! namespace. The error that try meets, beside the folder's owner and mode on the host, names
-//! the cause.
+//! `Install folder <path> not mounted.` The check reads the last load of the unit's run, and for
+//! each folder of ours it missed, tries the folder as that Steam does: its user, its groups, its
+//! mount namespace. The error that try meets, beside the folder's owner and mode on the host,
+//! names the cause. A Steam the check can't find is logged with what the seat's user runs.
 
 use super::accounts::Passwd;
-use super::{libraries, output, safe_open, shared};
+use super::{libraries, output, run, safe_open, shared};
 use crate::model::SeatId;
 use std::io::{Read as _, Seek as _, SeekFrom};
 use std::os::unix::fs::MetadataExt as _;
@@ -18,10 +18,15 @@ const TAIL: u64 = 256 * 1024;
 
 const LOAD: &str = "] Loaded Steam library folders configuration: ";
 
+/// At most this many of the seat user's processes are logged when Steam isn't among them.
+const LISTED: usize = 8;
+/// The characters of each listed process's arguments kept.
+const CMDLINE: usize = 200;
+
 /// The seat's folders its Steam's last library load couldn't open.
 #[derive(Debug, PartialEq, Eq)]
 pub(super) struct Missed {
-    /// The load's time as Steam logs it, which tells one load from the next.
+    /// The load's local time as Steam logs it, which tells one load from the next.
     pub stamp: String,
     pub folders: Vec<String>,
 }
@@ -36,6 +41,23 @@ pub(super) fn missed(state: &Path, id: &SeatId, home: &Path) -> Option<Missed> {
         folder == games || folder.starts_with(&libraries)
     };
     parse(&read_log(home).ok()??, ours)
+}
+
+/// Whether `missed` is a load of `unit`'s current run, not one the log keeps from the last. A
+/// start time that can't be read counts the load in.
+pub(super) fn this_run(missed: &Missed, unit: &str) -> bool {
+    let args = ["show", "-p", "ActiveEnterTimestamp", "--value", unit];
+    let shown = run("systemctl_failed", "systemctl", &args).unwrap_or_default();
+    started(&shown).is_none_or(|started| missed.stamp >= started)
+}
+
+/// `systemctl show`'s `Fri 2026-11-07 19:34:42 CET` as Steam stamps a line: local, to the second.
+fn started(shown: &str) -> Option<String> {
+    let mut words = shown.split_whitespace().skip(1);
+    let (day, time) = (words.next()?, words.next()?);
+    let stamp = format!("{day} {time}");
+    let digits = |at: &[usize]| at.iter().all(|&i| stamp.as_bytes()[i].is_ascii_digit());
+    (stamp.len() == 19 && digits(&[0, 3, 5, 8, 11, 14, 17, 18])).then_some(stamp)
 }
 
 /// The folders `ours` admits that `log` says its last library load couldn't open.
@@ -73,51 +95,77 @@ fn read_log(home: &Path) -> std::io::Result<Option<String>> {
     Ok(Some(String::from_utf8_lossy(&bytes).into_owned()))
 }
 
-/// Logs, for each folder in `missed`, what keeps the seat's Steam from it.
+/// Logs how the seat's Steam runs, then, for each folder in `missed`, what keeps it from it.
 pub(super) fn explain(id: &SeatId, seat: &Passwd, missed: &Missed) {
-    let steam = client(Path::new("/proc"), seat.uid);
-    for folder in &missed.folders {
-        let host = on_host(Path::new(folder));
-        let Some(steam) = &steam else {
-            let steam = "exited";
-            tracing::warn!(seat = %id, folder, host, steam, "seat Steam library folder out of reach");
-            continue;
-        };
+    let processes = processes(Path::new("/proc"), seat.uid);
+    let Some(steam) = processes.iter().find(|process| process.is_client()) else {
+        let steam_like: Vec<String> = (processes.iter())
+            .filter(|process| process.cmdline.to_lowercase().contains("steam"))
+            .take(LISTED)
+            .map(|process| {
+                let cmdline: String = process.cmdline.chars().take(CMDLINE).collect();
+                format!("{} {} {cmdline}", process.pid, process.cgroup)
+            })
+            .collect();
         tracing::warn!(
             seat = %id,
-            folder,
-            host,
-            as_steam = %open_as(steam, folder),
-            steam_pid = steam.pid,
-            steam_cgroup = %steam.cgroup,
-            steam_gid = steam.gid,
-            steam_groups = ?steam.groups,
-            seat_gid = seat.gid,
-            "seat Steam library folder out of reach"
+            folders = ?missed.folders,
+            steam = "not found",
+            seat_processes = processes.len(),
+            ?steam_like,
+            "seat Steam missed library folders"
         );
+        return;
+    };
+    tracing::warn!(
+        seat = %id,
+        steam_pid = steam.pid,
+        steam_binary = %steam.argv0,
+        steam_cgroup = %steam.cgroup,
+        steam_gid = steam.gid,
+        steam_groups = ?steam.groups,
+        seat_gid = seat.gid,
+        "seat Steam missed library folders"
+    );
+    for folder in &missed.folders {
+        let host = on_host(Path::new(folder));
+        let as_steam = open_as(steam, folder);
+        tracing::warn!(seat = %id, folder, host, %as_steam, "seat Steam library folder out of reach");
     }
 }
 
-/// The seat's running Steam client, as `/proc` shows it.
+/// A process of the seat's user, as `/proc` shows it.
 #[derive(Debug, PartialEq, Eq)]
-struct Client {
+struct Process {
     pid: u32,
     uid: u32,
     gid: u32,
     groups: Vec<u32>,
+    argv0: String,
+    /// Its arguments joined by spaces.
+    cmdline: String,
     cgroup: String,
 }
 
-/// The Steam client `uid` runs: `ubuntu12_32/steam`, the binary that writes the content log.
-fn client(proc: &Path, uid: u32) -> Option<Client> {
-    std::fs::read_dir(proc).ok()?.flatten().find_map(|entry| {
+impl Process {
+    /// The Steam client, the binary that writes the content log: `steam` in `ubuntu12_32`, or
+    /// `ubuntu12_64` for a 64-bit client.
+    fn is_client(&self) -> bool {
+        let binary = Path::new(&self.argv0);
+        let dir = binary.parent().and_then(Path::file_name);
+        binary.file_name() == Some("steam".as_ref())
+            && dir.is_some_and(|dir| dir.to_string_lossy().starts_with("ubuntu12_"))
+    }
+}
+
+/// Every process whose real user is `uid`.
+fn processes(proc: &Path, uid: u32) -> Vec<Process> {
+    let Ok(entries) = std::fs::read_dir(proc) else {
+        return Vec::new();
+    };
+    let process = |entry: std::fs::DirEntry| {
         let pid = entry.file_name().to_str()?.parse().ok()?;
         let dir = entry.path();
-        let cmdline = std::fs::read(dir.join("cmdline")).ok()?;
-        let argv0 = cmdline.split(|byte| *byte == 0).next()?;
-        if !argv0.ends_with(b"ubuntu12_32/steam") {
-            return None;
-        }
         let status = std::fs::read_to_string(dir.join("status")).ok()?;
         let ids = |name: &str| -> Vec<u32> {
             let line = status.lines().find_map(|line| line.strip_prefix(name));
@@ -127,19 +175,24 @@ fn client(proc: &Path, uid: u32) -> Option<Client> {
         if ids("Uid:").first() != Some(&uid) {
             return None;
         }
+        let cmdline = std::fs::read(dir.join("cmdline")).unwrap_or_default();
+        let args: Vec<String> = (cmdline.split(|byte| *byte == 0))
+            .filter(|arg| !arg.is_empty())
+            .map(|arg| String::from_utf8_lossy(arg).into_owned())
+            .collect();
         let cgroup = std::fs::read_to_string(dir.join("cgroup")).unwrap_or_default();
-        Some(Client {
+        let cgroup = cgroup.lines().find_map(|line| line.strip_prefix("0::"));
+        Some(Process {
             pid,
             uid,
             gid: *ids("Gid:").first()?,
             groups: ids("Groups:"),
-            cgroup: cgroup
-                .lines()
-                .find_map(|l| l.strip_prefix("0::"))
-                .unwrap_or("")
-                .to_owned(),
+            argv0: args.first().cloned().unwrap_or_default(),
+            cmdline: args.join(" "),
+            cgroup: cgroup.unwrap_or("").to_owned(),
         })
-    })
+    };
+    entries.flatten().filter_map(process).collect()
 }
 
 /// The folder's owner and mode, or why the host can't stat it.
@@ -152,7 +205,7 @@ fn on_host(folder: &Path) -> String {
 
 /// What listing `folder` meets as `steam` does: its ids and groups, through its root. The
 /// supervisor holds no `CAP_SYS_PTRACE`; only Steam's own ids may enter `/proc/<pid>/root`.
-fn open_as(steam: &Client, folder: &str) -> String {
+fn open_as(steam: &Process, folder: &str) -> String {
     let (uid, gid) = (steam.uid.to_string(), steam.gid.to_string());
     let groups: Vec<String> = steam.groups.iter().map(u32::to_string).collect();
     let groups = groups.join(",");
@@ -212,29 +265,48 @@ mod tests {
     }
 
     #[test]
-    fn steam_is_found_by_its_client_binary_and_user() {
+    fn a_unit_start_reads_as_a_steam_stamp() {
+        let stamp = started("Fri 2026-11-07 19:34:42 CET\n");
+        assert_eq!(stamp.as_deref(), Some("2026-11-07 19:34:42"));
+        assert!(
+            "2026-11-07 19:34:41" < stamp.as_deref().unwrap(),
+            "the last run's load"
+        );
+        assert_eq!(started(""), None, "a unit that never ran");
+        assert_eq!(started("n/a"), None);
+    }
+
+    #[test]
+    fn steam_is_the_seat_user_s_client_binary() {
         let proc = tempfile::tempdir().unwrap();
-        let process = |pid: &str, argv0: &str, uid: u32| {
+        let process = |pid: &str, cmdline: &str, uid: u32| {
             let dir = proc.path().join(pid);
             std::fs::create_dir(&dir).unwrap();
-            std::fs::write(dir.join("cmdline"), format!("{argv0}\0-silent\0")).unwrap();
+            std::fs::write(dir.join("cmdline"), cmdline.replace(' ', "\0") + "\0").unwrap();
             let status = format!(
-                "Uid:\t{uid}\t{uid}\t{uid}\t{uid}\nGid:\t946\t946\t946\t946\nGroups:\t977 946 \n"
+                "Name:\tsteam\nUid:\t{uid}\t{uid}\t{uid}\t{uid}\nGid:\t946\t946\t946\t946\nGroups:\t977 946 \n"
             );
             std::fs::write(dir.join("status"), status).unwrap();
-            std::fs::write(
-                dir.join("cgroup"),
-                "0::/user.slice/punktfunk-seat@pf-seat-1.service\n",
-            )
-            .unwrap();
+            std::fs::write(dir.join("cgroup"), "0::/user.slice/app-steam.scope\n").unwrap();
         };
-        process("10", "/bin/bash", 946);
-        process("11", "/h/.local/share/Steam/ubuntu12_32/steam", 1000);
-        process("12", "/h/.local/share/Steam/ubuntu12_32/steam", 946);
-        let found = client(proc.path(), 946).expect("the seat user's Steam");
+        process("10", "/bin/bash /usr/bin/steam -silent", 946);
+        process(
+            "11",
+            "/h/.local/share/Steam/ubuntu12_32/steam -silent",
+            1000,
+        );
+        process("12", "/h/.local/share/Steam/ubuntu12_64/steam -silent", 946);
+        let seat = processes(proc.path(), 946);
+        assert_eq!(seat.len(), 2, "the seat user's only");
+        let found = seat.iter().find(|p| p.is_client()).expect("its Steam");
         assert_eq!((found.pid, found.gid), (12, 946));
         assert_eq!(found.groups, [977, 946]);
-        assert_eq!(found.cgroup, "/user.slice/punktfunk-seat@pf-seat-1.service");
-        assert_eq!(client(proc.path(), 947), None);
+        assert_eq!(found.cgroup, "/user.slice/app-steam.scope");
+        let launcher = seat.iter().find(|p| p.pid == 10).unwrap();
+        assert!(
+            !launcher.is_client(),
+            "a script named steam runs under its shell"
+        );
+        assert_eq!(launcher.cmdline, "/bin/bash /usr/bin/steam -silent");
     }
 }
