@@ -1102,14 +1102,82 @@ fn safe_name(name: &str) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'))
 }
 
-/// The box owner's Steam install: `~/.steam/steam`, else `~/.local/share/Steam`.
-fn steam_root_of(home: &Path) -> Option<PathBuf> {
-    let linked = home.join(".steam/steam");
-    if linked.is_dir() {
-        return Some(std::fs::canonicalize(&linked).unwrap_or(linked));
+/// Where Steam installs itself under a home: its own link, the native folder, Debian's installer,
+/// the Flatpak's home and data folders, and the Snap.
+pub(super) const STEAM_ROOTS: [&str; 6] = [
+    ".steam/steam",
+    ".local/share/Steam",
+    ".steam/debian-installation",
+    ".var/app/com.valvesoftware.Steam/.local/share/Steam",
+    ".var/app/com.valvesoftware.Steam/data/Steam",
+    "snap/steam/common/.local/share/Steam",
+];
+
+/// The seat's Steam folders that get the library list: its own copy, and the folder Debian's
+/// launcher installs into when `~/.steam/steam` names no install.
+pub(super) const SEAT_STEAMS: [&str; 2] = [".local/share/Steam", ".steam/debian-installation"];
+
+/// `~/.steam/steam` and `~/.steam/root` naming the seat's own Steam, once it has one, where the
+/// seat has neither, as `steam.sh` makes them. A launcher with another default install, as
+/// Debian's, then runs that copy. Through descriptors: no link the seat user placed is followed.
+pub(super) fn link_steam(seat: &Passwd) -> std::io::Result<()> {
+    if !seat.home.join(STEAM_MARKER).exists() {
+        return Ok(());
     }
-    let data = home.join(".local/share/Steam");
-    data.is_dir().then_some(data)
+    let steam = seat.home.join(".local/share/Steam");
+    let home = safe_open::dir(&seat.home)?;
+    let dot = match safe_open::dir_at(&home, ".steam")? {
+        Some(dot) => dot,
+        None => {
+            rustix::fs::mkdirat(&home, ".steam", Mode::from_raw_mode(0o755 as _))?;
+            let dot = safe_open::dir_at(&home, ".steam")?.ok_or(Errno::NOENT)?;
+            std::os::unix::fs::fchown(&dot, Some(seat.uid), Some(seat.gid))?;
+            dot
+        }
+    };
+    let owner = rustix::process::Uid::from_raw(seat.uid);
+    let group = rustix::process::Gid::from_raw(seat.gid);
+    for name in ["steam", "root"] {
+        match rustix::fs::symlinkat(&steam, &dot, name) {
+            Ok(()) => {}
+            Err(Errno::EXIST) => continue,
+            Err(error) => return Err(error.into()),
+        }
+        rustix::fs::chownat(
+            &dot,
+            name,
+            Some(owner),
+            Some(group),
+            AtFlags::SYMLINK_NOFOLLOW,
+        )?;
+    }
+    Ok(())
+}
+
+/// The Steam install under `home` that `owns` admits: of [`STEAM_ROOTS`], the one whose library
+/// list Steam wrote last, so an old native install beside the Flatpak in use loses to it. A root
+/// with no list counts oldest, and the first listed wins a tie.
+fn steam_root_of(home: &Path, owns: impl Fn(&Path) -> bool) -> Option<PathBuf> {
+    let written = |root: &Path| {
+        let list = root.join("steamapps").join("libraryfolders.vdf");
+        std::fs::metadata(list)
+            .and_then(|meta| meta.modified())
+            .ok()
+    };
+    let mut best: Option<(Option<std::time::SystemTime>, PathBuf)> = None;
+    for root in STEAM_ROOTS.iter().map(|root| home.join(root)) {
+        let Ok(root) = std::fs::canonicalize(&root) else {
+            continue;
+        };
+        if !root.is_dir() || !owns(&root) {
+            continue;
+        }
+        let at = written(&root);
+        if best.as_ref().is_none_or(|(best, _)| at > *best) {
+            best = Some((at, root));
+        }
+    }
+    best.map(|(_, root)| root)
 }
 
 /// A Steam install to clone and the user it is read as.
@@ -1150,8 +1218,8 @@ fn stat_owner(root: &Path) -> Option<u32> {
 
 /// [`steam_source_of`] with `owner` naming who owns a Steam root.
 fn owned_source_of(user: &Passwd, owner: impl Fn(&Path) -> Option<u32>) -> Option<SteamSource> {
-    let root = steam_root_of(&user.home)?;
-    (owner(&root) == Some(user.uid)).then_some(SteamSource {
+    let root = steam_root_of(&user.home, |root| owner(root) == Some(user.uid))?;
+    Some(SteamSource {
         root,
         uid: user.uid,
         gid: user.gid,
@@ -1167,9 +1235,10 @@ fn find_source(users: &[Passwd], owner: impl Fn(&Path) -> Option<u32>) -> Option
         .find_map(|u| owned_source_of(u, &owner))
 }
 
-/// A Steam under the seat's home, cloned from `source` when there is one, and a library list that
-/// names that Steam, then the shared games folder. Never fails the seat: without a clone Steam
-/// downloads itself on first run, and without the list it offers games again.
+/// A Steam under the seat's home, cloned from `source` when there is one, the links that name it
+/// ([`link_steam`]), and a library list that names that Steam, then the shared games folder.
+/// Never fails the seat: without a clone Steam downloads itself on first run, and without the
+/// list it offers games again.
 pub(super) fn provision_steam(
     state: &Path,
     id: &SeatId,
@@ -1189,6 +1258,9 @@ pub(super) fn provision_steam(
             }
             None => tracing::info!("no steam install to clone; the seat downloads its own"),
         }
+    }
+    if let Err(error) = link_steam(passwd) {
+        tracing::warn!(%error, "seat's steam links not made");
     }
     if let Err(error) = write_library_folders(state, &steam) {
         tracing::warn!(%error, "steam library list not written");
@@ -2057,6 +2129,76 @@ mod tests {
         std::os::unix::fs::symlink(&early.root, linked.join("steam")).unwrap();
         assert_eq!(find_source(&users, owner), Some(early));
         assert_eq!(owned_source_of(&users[3], owner), None);
+    }
+
+    /// Of the Steam folders under a home, the one whose list Steam wrote last is the owner's: an
+    /// old native install beside the Flatpak in use loses to it. A root the user doesn't own is
+    /// passed over.
+    #[test]
+    fn the_owner_s_steam_is_the_install_that_wrote_its_list_last() {
+        let temp = tempfile::tempdir().unwrap();
+        let home = std::fs::canonicalize(temp.path()).unwrap();
+        let list = |root: &str, age: u64| {
+            let steamapps = home.join(root).join("steamapps");
+            std::fs::create_dir_all(&steamapps).unwrap();
+            let file = std::fs::File::create(steamapps.join("libraryfolders.vdf")).unwrap();
+            let at = std::time::SystemTime::now() - std::time::Duration::from_secs(age);
+            file.set_modified(at).unwrap();
+        };
+        let all = |_: &Path| true;
+        assert_eq!(steam_root_of(&home, all), None, "no Steam");
+        list(".local/share/Steam", 3600);
+        assert_eq!(
+            steam_root_of(&home, all),
+            Some(home.join(".local/share/Steam"))
+        );
+        let flatpak = ".var/app/com.valvesoftware.Steam/data/Steam";
+        list(flatpak, 60);
+        assert_eq!(steam_root_of(&home, all), Some(home.join(flatpak)));
+        let native = |root: &Path| !root.starts_with(home.join(".var"));
+        assert_eq!(
+            steam_root_of(&home, native),
+            Some(home.join(".local/share/Steam"))
+        );
+    }
+
+    /// A seat with its own Steam gets the links a launcher follows to it. A link it has stays, and
+    /// a `.steam` that is itself a link is refused.
+    #[test]
+    fn a_seat_s_own_steam_gets_the_links_launchers_follow() {
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path().join("home");
+        std::fs::create_dir(&home).unwrap();
+        let seat = Passwd {
+            name: "pf-seat-1".into(),
+            uid: rustix::process::getuid().as_raw(),
+            gid: rustix::process::getgid().as_raw(),
+            gecos: String::new(),
+            home: home.clone(),
+        };
+        link_steam(&seat).unwrap();
+        assert!(!home.join(".steam").exists(), "no install, no links");
+        let own = home.join(".local/share/Steam");
+        std::fs::create_dir_all(&own).unwrap();
+        std::fs::write(home.join(STEAM_MARKER), "").unwrap();
+        link_steam(&seat).unwrap();
+        assert_eq!(std::fs::read_link(home.join(".steam/steam")).unwrap(), own);
+        assert_eq!(std::fs::read_link(home.join(".steam/root")).unwrap(), own);
+        std::fs::remove_file(home.join(".steam/root")).unwrap();
+        std::os::unix::fs::symlink("/elsewhere", home.join(".steam/root")).unwrap();
+        link_steam(&seat).unwrap();
+        let kept = std::fs::read_link(home.join(".steam/root")).unwrap();
+        assert_eq!(kept, Path::new("/elsewhere"));
+        let outside = temp.path().join("outside");
+        std::fs::create_dir(&outside).unwrap();
+        std::fs::remove_dir_all(home.join(".steam")).unwrap();
+        std::os::unix::fs::symlink(&outside, home.join(".steam")).unwrap();
+        assert!(link_steam(&seat).is_err());
+        assert_eq!(
+            std::fs::read_dir(&outside).unwrap().count(),
+            0,
+            "nothing made through it"
+        );
     }
 
     /// A link where the box's avatar folder should be is refused, and nothing behind it is

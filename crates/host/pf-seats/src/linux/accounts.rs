@@ -243,7 +243,8 @@ fn present_groups() -> Result<Vec<&'static str>, BackendError> {
 
 /// Adds the seat user `account` to each of [`GROUPS`] it is missing. Run at each start: a group
 /// made after the account, or made again, has no members, and the games folder admits only them.
-pub(super) fn join_groups(account: &str) -> Result<(), BackendError> {
+/// `true` when it added one.
+pub(super) fn join_groups(account: &str) -> Result<bool, BackendError> {
     let mut missing = Vec::new();
     for group in present_groups()? {
         let line = getent("group", group)?.unwrap_or_default();
@@ -252,10 +253,11 @@ pub(super) fn join_groups(account: &str) -> Result<(), BackendError> {
         }
     }
     if missing.is_empty() {
-        return Ok(());
+        return Ok(false);
     }
     let groups = missing.join(",");
-    run("usermod_failed", "usermod", &["-a", "-G", &groups, account]).map(drop)
+    run("usermod_failed", "usermod", &["-a", "-G", &groups, account])?;
+    Ok(true)
 }
 
 /// The members `line`, a group as `getent group` prints it, lists.
