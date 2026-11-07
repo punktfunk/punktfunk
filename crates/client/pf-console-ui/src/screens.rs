@@ -283,7 +283,7 @@ impl TextEntry {
         use crate::glyphs::HintKey;
         if !self.system(device) {
             return vec![
-                Hint::new(HintKey::Confirm, "Type"),
+                Hint::new(HintKey::Confirm, pf_l10n::console::console_entry_type()),
                 Hint::new(HintKey::Tertiary, pf_l10n::common::common_delete()),
                 Hint::new(HintKey::Back, pf_l10n::common::common_done()),
             ];

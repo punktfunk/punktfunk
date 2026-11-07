@@ -1684,10 +1684,7 @@ pub fn detail(id: RowId, ctx: &Ctx) -> Cow<'static, str> {
     let platform = ctx.device.platform;
     let two = |hint: &str, more: String| -> Cow<'static, str> { format!("{hint} {more}").into() };
     match id {
-        RowId::Resolution => two(
-            m::player_resolution_hint(),
-            console::console_resolution_type_hint("Y"),
-        ),
+        RowId::Resolution => m::player_resolution_hint().into(),
         RowId::Aspect => m::player_resolution_aspect_hint().into(),
         RowId::Refresh => m::player_refresh_hz_hint().into(),
         RowId::RenderScale => m::player_render_scale_hint().into(),
