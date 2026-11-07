@@ -59,7 +59,7 @@
     {"id": "launch_closed_at_once", "params": {"title": "Quail", "seconds": "4"}, "english": "The host's own English.", "sentence": "Couldn't start Quail — it closed again after 4 s."},
     {"id": "launch_command_missing", "params": {"title": "Quail"}, "english": "The host's own English.", "sentence": "Couldn't start Quail — this host doesn't have that command."},
     {"id": "launch_command_not_runnable", "params": {"title": "Quail"}, "english": "The host's own English.", "sentence": "Couldn't start Quail — this host can't run that command."},
-    {"id": "launch_download_cancelled", "params": {"title": "Quail"}, "english": "The host's own English.", "sentence": "Quail's download was cancelled."},
+    {"id": "launch_download_cancelled", "params": {"title": "Quail"}, "english": "The host's own English.", "sentence": "Quail's download was canceled."},
     {"id": "launch_download_failed", "params": {"title": "Quail"}, "english": "The host's own English.", "sentence": "Quail didn't download."},
     {"id": "launch_download_failed_reason", "params": {"title": "Quail", "reason": "the server is down"}, "english": "The host's own English.", "sentence": "Quail didn't download — the server is down"},
     {"id": "launch_download_no_answer", "params": {"title": "Quail"}, "english": "The host's own English.", "sentence": "Couldn't download Quail — the plugin that lists it didn't answer."},
