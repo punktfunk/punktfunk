@@ -163,7 +163,7 @@ function GroupLabel({ children }: { children: ReactNode }) {
 	return (
 		<motion.p
 			variants={{ from: { opacity: 0 }, enter: { opacity: 1 } }}
-			className="mt-6 border-t pt-4 px-3 pb-1 text-xs font-medium uppercase text-muted-foreground/70 lg:border-0 lg:pt-0"
+			className="mt-6 border-t pt-4 px-3 pb-1 text-xs font-medium text-muted-foreground/70 lg:border-0 lg:pt-0"
 		>
 			<span className="hidden lg:inline">{children}</span>
 		</motion.p>
@@ -404,7 +404,7 @@ function MoreGroup({
 	return (
 		<div className="border-b last:border-0">
 			{label && (
-				<p className="px-4 pt-3 pb-1 text-xs font-medium uppercase text-muted-foreground/70">
+				<p className="px-4 pt-3 pb-1 text-xs font-medium text-muted-foreground/70">
 					{label}
 				</p>
 			)}
