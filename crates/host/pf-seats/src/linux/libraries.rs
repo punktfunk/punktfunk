@@ -147,14 +147,15 @@ fn unit_safe(path: &str) -> bool {
 }
 
 /// The library at `path` as a seat would see it, with its `steamapps`' device and inode, or why
-/// a seat can't.
+/// a seat can't. A `steamapps` linked to another drive is the folder it names.
 fn check(
     path: &str,
     owner_uid: u32,
     fstype: &impl Fn(&Path) -> Option<String>,
 ) -> Result<(Library, (u64, u64)), &'static str> {
     let canonical = std::fs::canonicalize(path).map_err(|_| "not found")?;
-    let steamapps = canonical.join("steamapps");
+    let steamapps =
+        std::fs::canonicalize(canonical.join("steamapps")).map_err(|_| "no steamapps folder")?;
     if !steamapps.to_str().is_some_and(unit_safe) {
         return Err("its path has characters a unit file can't carry");
     }
@@ -374,11 +375,21 @@ fn steam_libraries(
         return None;
     }
     let list = steam_root.join("steamapps").join(LIST);
+    let list_path = list.display();
     let vdf = match safe_open::read(&list, MAX_LIST_BYTES) {
-        Ok(Some((bytes, _))) => String::from_utf8(bytes).ok()?,
-        Ok(None) => return None,
+        Ok(Some((bytes, _))) => match String::from_utf8(bytes) {
+            Ok(vdf) => vdf,
+            Err(_) => {
+                tracing::warn!(list = %list_path, "owner's steam library list isn't text");
+                return None;
+            }
+        },
+        Ok(None) => {
+            tracing::info!(list = %list_path, "owner's steam has no library list; no library shown");
+            return None;
+        }
         Err(error) => {
-            tracing::warn!(%error, "owner's steam library list unreadable");
+            tracing::warn!(list = %list_path, %error, "owner's steam library list unreadable");
             return None;
         }
     };
@@ -749,8 +760,16 @@ pub(super) fn forget(id: &SeatId, steam_root: &Path) {
         return;
     }
     let (uid, gid) = (meta.uid().to_string(), meta.gid().to_string());
-    for path in steam::library_paths(&String::from_utf8_lossy(&bytes)) {
-        let seats = Path::new(&path).join(steam::SEAT_ROOTS);
+    for path in listed(&String::from_utf8_lossy(&bytes), steam_root) {
+        // Beside the `steamapps` the anchor was made for, linked or not.
+        let steamapps = std::fs::canonicalize(Path::new(&path).join("steamapps"));
+        let Some(drive) = steamapps
+            .ok()
+            .and_then(|s| s.parent().map(Path::to_path_buf))
+        else {
+            continue;
+        };
+        let seats = drive.join(steam::SEAT_ROOTS);
         let anchor = seats.join(id.as_str());
         let (Some(seats), Some(anchor)) = (seats.to_str(), anchor.to_str()) else {
             continue;
@@ -1104,8 +1123,12 @@ mod tests {
         let linked = root.join("linked");
         std::fs::create_dir(&linked).unwrap();
         let target = root.join("QEMU HARDDISK/steamapps");
-        std::os::unix::fs::symlink(target, linked.join("steamapps")).unwrap();
+        std::os::unix::fs::symlink(&target, linked.join("steamapps")).unwrap();
         let linked = linked.to_string_lossy().into_owned();
+        let followed = reason(&linked, uid, "btrfs").expect("a steamapps on another drive");
+        assert_eq!(followed.steamapps, target, "the folder the link names");
+        std::fs::remove_file(root.join("linked/steamapps")).unwrap();
+        std::os::unix::fs::symlink(root.join("gone"), root.join("linked/steamapps")).unwrap();
         assert_eq!(reason(&linked, uid, "btrfs"), Err("no steamapps folder"));
 
         let quoted = library("say \"hi\"");
