@@ -52,7 +52,7 @@ EXTRA_NAMES = ["Steam", "Moonlight", "Sunshine", "Apollo", "Decky", "Apple TV", 
                "iPadOS", "tvOS", "Android", "Fire TV", "Windows", "Linux", "GNOME", "KDE Plasma",
                "Plasma", "Bazzite", "SteamOS", "Flatpak", "Tailscale", "PlayStation", "Nintendo",
                "Switch Pro", "Joy-Con", "Xbox Series", "Xbox One", "Geist", "Geist Mono", "Noto",
-               "Segoe Fluent Icons", "Segoe MDL2 Assets"]
+               "Segoe Fluent Icons", "Segoe MDL2 Assets", "wlroots", "Sway", "River"]
 
 # ---------------------------------------------------------------- tokenizer
 
