@@ -1,0 +1,688 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: punktfunk <packages@unom.io>
+Date: Sat, 7 Nov 2026 12:00:00 +0100
+Subject: [PATCH 36/36] pipewire: write NVIDIA's planar capture into a buffer
+
+With 0035 a GTX 1080 Ti still streamed the NV12 capture striped: 32-byte
+sectors moved inside each KiB. An EGL import, a map of the allocation's own
+memory object and a Vulkan buffer import all read the same scramble, so the
+bytes already sat off the LINEAR layout the export names when the storage
+image stores into the LINEAR NV12 image wrote them. On the same card, a
+Vulkan pass that fills a storage buffer word by word reads back clean.
+
+On NVIDIA, back a planar capture with an exportable storage buffer: luma
+rows, then chroma rows at the same pitch, exported as a two-plane LINEAR
+dmabuf. The pass computes each word's address, so the bytes sit where the
+consumer is told they are. A driver that cannot export such a buffer keeps
+the LINEAR-modifier image of 0035.
+
+punktfunk: also stamps the version banner +pfhdr33.
+---
+ src/meson.build                     |   5 ++++-
+ src/pipewire.cpp                    |   5 ++++-
+ src/rendervulkan.cpp                | 207 ++++++++++++++++++++++++++++++++++++++++---------
+ src/rendervulkan.hpp                |  20 +++++++++++++++++---
+ src/shaders/cs_rgb_to_nv12_buf.comp |  88 ++++++++++++++++++++++++++++++++++++++++
+ src/shaders/cs_rgb_to_p010_buf.comp |  83 ++++++++++++++++++++++++++++++++++++++++
+ 6 files changed, 394 insertions(+), 14 deletions(-)
+
+diff --git a/src/meson.build b/src/meson.build
+--- a/src/meson.build
++++ b/src/meson.build
+@@ -72,6 +72,8 @@
+   'shaders/cs_rgb_to_nv12.comp',
+   'shaders/cs_sgsr.comp',
+   'shaders/cs_rgb_to_p010.comp',
++  'shaders/cs_rgb_to_nv12_buf.comp',
++  'shaders/cs_rgb_to_p010_buf.comp',
+ ]
+ 
+ spirv_shaders = glsl_generator.process(shader_src)
+@@ -215,7 +217,8 @@
+ #   +pfhdr30 — …on upstream 3.16.31 (28 and 29 are upstream there); builds against a vendored wayland
+ #   +pfhdr31 — …and each uploaded constant block meets the device's uniform offset alignment
+ #   +pfhdr32 — …and a planar capture dmabuf on NVIDIA carries DRM_FORMAT_MOD_LINEAR's layout
+-version_tag = vcs_tag + '+pfhdr32' + ' (' + compiler_name + ' ' + compiler_version + ')'
++#   +pfhdr33 — …written into a storage buffer, so its bytes sit where the export says
++version_tag = vcs_tag + '+pfhdr33' + ' (' + compiler_name + ' ' + compiler_version + ')'
+ 
+ gamescope_version_conf = configuration_data()
+ gamescope_version_conf.set('VCS_TAG', version_tag)
+diff --git a/src/pipewire.cpp b/src/pipewire.cpp
+--- a/src/pipewire.cpp
++++ b/src/pipewire.cpp
+@@ -810,9 +810,12 @@
+ 	{
+ 		screenshotImageFlags.bExportable = true;
+ 		const bool bPlanar = is_planar_video_format(state->video_info.format);
++		const EPlanarCaptureAlloc ePlanarAlloc = is_dmabuf && bPlanar ? vulkan_get_planar_capture_alloc(drmFormat) : EPlanarCaptureAlloc::PlainLinear;
+ 		if (is_dmabuf && !bPlanar && state->modifier != DRM_FORMAT_MOD_LINEAR)
+ 			screenshotImageFlags.ulDrmModifier = state->modifier;
+-		else if (is_dmabuf && bPlanar && vulkan_get_planar_capture_alloc(drmFormat) == EPlanarCaptureAlloc::LinearModifier)
++		else if (ePlanarAlloc == EPlanarCaptureAlloc::Buffer)
++			screenshotImageFlags.bPlanarBuffer = true;
++		else if (ePlanarAlloc == EPlanarCaptureAlloc::LinearModifier)
+ 			screenshotImageFlags.ulDrmModifier = DRM_FORMAT_MOD_LINEAR;
+ 		else
+ 			screenshotImageFlags.bLinear = true;
+diff --git a/src/rendervulkan.cpp b/src/rendervulkan.cpp
+--- a/src/rendervulkan.cpp
++++ b/src/rendervulkan.cpp
+@@ -51,6 +51,8 @@
+ #include "cs_rgb_to_nv12.h"
+ #include "cs_sgsr.h"
+ #include "cs_rgb_to_p010.h"
++#include "cs_rgb_to_nv12_buf.h"
++#include "cs_rgb_to_p010_buf.h"
+ 
+ #define A_CPU
+ #include "shaders/ffx_a.h"
+@@ -856,7 +858,7 @@
+ 	for (auto& sampler : ycbcrSamplers)
+ 		sampler = m_ycbcrSampler;
+ 
+-	std::array<VkDescriptorSetLayoutBinding, 7 > layoutBindings = {
++	std::array<VkDescriptorSetLayoutBinding, 8 > layoutBindings = {
+ 		VkDescriptorSetLayoutBinding {
+ 			.binding = 0,
+ 			.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+@@ -900,6 +902,13 @@
+ 			.descriptorCount = VKR_LUT3D_COUNT,
+ 			.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT,
+ 		},
++		// A planar capture target that is a buffer (CVulkanTexture::planarBuffer).
++		VkDescriptorSetLayoutBinding {
++			.binding = 7,
++			.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
++			.descriptorCount = 1,
++			.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT,
++		},
+ 	};
+ 
+ 	VkDescriptorSetLayoutCreateInfo descriptorSetLayoutCreateInfo =
+@@ -979,7 +988,7 @@
+ 
+ 	res = vk.GetPhysicalDeviceImageFormatProperties2( physDev(), &imageFormatInfo, &imageFormatProps );
+ 
+-	VkDescriptorPoolSize poolSizes[3] {
++	VkDescriptorPoolSize poolSizes[4] {
+ 		{
+ 			VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+ 			uint32_t(m_descriptorSets.size()),
+@@ -989,6 +998,10 @@
+ 			uint32_t(m_descriptorSets.size()) * 2,
+ 		},
+ 		{
++			VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
++			uint32_t(m_descriptorSets.size()),
++		},
++		{
+ 			VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+ 			uint32_t(m_descriptorSets.size()) * (((ycbcrProps.combinedImageSamplerDescriptorCount + 1) * VKR_SAMPLER_SLOTS) + (2 * VKR_LUT3D_COUNT)),
+ 		},
+@@ -1047,6 +1060,8 @@
+ 	SHADER(RGB_TO_NV12, cs_rgb_to_nv12);
+ 	SHADER(SGSR, cs_sgsr);
+ 	SHADER(RGB_TO_P010, cs_rgb_to_p010);
++	SHADER(RGB_TO_NV12_BUF, cs_rgb_to_nv12_buf);
++	SHADER(RGB_TO_P010_BUF, cs_rgb_to_p010_buf);
+ #undef SHADER
+ 
+ 	for (uint32_t i = 0; i < shaderInfos.size(); i++)
+@@ -1279,6 +1294,8 @@
+ 	SHADER(RGB_TO_NV12, 1, 1, 1);
+ 	SHADER(SGSR, 1, 1, 1);
+ 	SHADER(RGB_TO_P010, 1, 1, 1);
++	SHADER(RGB_TO_NV12_BUF, 1, 1, 1);
++	SHADER(RGB_TO_P010_BUF, 1, 1, 1);
+ #undef SHADER
+ 
+ 	for (auto& info : pipelineInfos) {
+@@ -1771,7 +1788,7 @@
+ 
+ 	VkDescriptorSet descriptorSet = m_device->descriptorSet( this );
+ 
+-	std::array<VkWriteDescriptorSet, 7> writeDescriptorSets;
++	std::array<VkWriteDescriptorSet, 8> writeDescriptorSets;
+ 	std::array<VkDescriptorImageInfo, VKR_SAMPLER_SLOTS> imageDescriptors = {};
+ 	std::array<VkDescriptorImageInfo, VKR_SAMPLER_SLOTS> ycbcrImageDescriptors = {};
+ 	std::array<VkDescriptorImageInfo, VKR_TARGET_SLOTS> targetDescriptors = {};
+@@ -1849,6 +1866,22 @@
+ 		.pImageInfo = lut3DDescriptor.data(),
+ 	};
+ 
++	// Null unless the target is a planar buffer: the device enables nullDescriptor.
++	const VkDescriptorBufferInfo planarDescriptor = {
++		.buffer = m_target->planarBuffer(),
++		.range = VK_WHOLE_SIZE,
++	};
++
++	writeDescriptorSets[7] = {
++		.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
++		.dstSet = descriptorSet,
++		.dstBinding = 7,
++		.dstArrayElement = 0,
++		.descriptorCount = 1,
++		.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
++		.pBufferInfo = &planarDescriptor,
++	};
++
+ 	scratchDescriptor.buffer = m_device->m_uploadBuffer;
+ 	scratchDescriptor.offset = m_renderBufferOffset;
+ 	scratchDescriptor.range = VK_WHOLE_SIZE;
+@@ -2010,6 +2043,7 @@
+ void CVulkanCmdBuffer::insertBarrier(bool flush)
+ {
+ 	std::vector<VkImageMemoryBarrier> barriers;
++	std::vector<VkBufferMemoryBarrier> bufferBarriers;
+ 
+ 	uint32_t externalQueue = m_device->supportsModifiers() ? VK_QUEUE_FAMILY_FOREIGN_EXT : VK_QUEUE_FAMILY_EXTERNAL_KHR;
+ 
+@@ -2051,7 +2085,21 @@
+ 			.subresourceRange = subResRange
+ 		};
+ 
+-		barriers.push_back(memoryBarrier);
++		// A planar buffer target has no layout: the same access and ownership, on the buffer.
++		if (image->planarBuffer() != VK_NULL_HANDLE)
++		{
++			bufferBarriers.push_back({
++				.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER,
++				.srcAccessMask = memoryBarrier.srcAccessMask,
++				.dstAccessMask = memoryBarrier.dstAccessMask,
++				.srcQueueFamilyIndex = memoryBarrier.srcQueueFamilyIndex,
++				.dstQueueFamilyIndex = memoryBarrier.dstQueueFamilyIndex,
++				.buffer = image->planarBuffer(),
++				.size = VK_WHOLE_SIZE,
++			});
++		}
++		else
++			barriers.push_back(memoryBarrier);
+ 
+ 		state.discarded = false;
+ 		state.dirty = false;
+@@ -2060,7 +2108,7 @@
+ 
+ 	// TODO replace VK_PIPELINE_STAGE_ALL_COMMANDS_BIT
+ 	m_device->vk.CmdPipelineBarrier(m_cmdBuffer, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+-									0, 0, nullptr, 0, nullptr, barriers.size(), barriers.data());
++									0, 0, nullptr, bufferBarriers.size(), bufferBarriers.data(), barriers.size(), barriers.data());
+ }
+ 
+ namespace { CNoDestroy<CVulkanDevice> g_deviceHolder; }
+@@ -2162,6 +2210,18 @@
+ 	if ( g_device.vendorID() != k_uNvidiaVendorID )
+ 		return EPlanarCaptureAlloc::PlainLinear;
+ 
++	const VkPhysicalDeviceExternalBufferInfo bufferInfo = {
++		.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_EXTERNAL_BUFFER_INFO,
++		.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
++		.handleType = VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT,
++	};
++	VkExternalBufferProperties bufferProps = {
++		.sType = VK_STRUCTURE_TYPE_EXTERNAL_BUFFER_PROPERTIES,
++	};
++	g_device.vk.GetPhysicalDeviceExternalBufferProperties( g_device.physDev(), &bufferInfo, &bufferProps );
++	if ( bufferProps.externalMemoryProperties.externalMemoryFeatures & VK_EXTERNAL_MEMORY_FEATURE_EXPORTABLE_BIT )
++		return EPlanarCaptureAlloc::Buffer;
++
+ 	if ( !g_device.supportsModifiers() )
+ 		return EPlanarCaptureAlloc::Unavailable;
+ 
+@@ -2241,6 +2301,9 @@
+ 
+ bool CVulkanTexture::BInit( uint32_t width, uint32_t height, uint32_t depth, uint32_t drmFormat, createFlags flags, wlr_dmabuf_attributes *pDMA /* = nullptr */,  uint32_t contentWidth /* = 0 */, uint32_t contentHeight /* =  0 */, CVulkanTexture *pExistingImageToReuseMemory, gamescope::OwningRc<gamescope::IBackendFb> pBackendFb )
+ {
++	if ( flags.bPlanarBuffer )
++		return BInitPlanarBuffer( width, height, drmFormat );
++
+ 	m_pBackendFb = std::move( pBackendFb );
+ 	m_drmFormat = drmFormat;
+ 	VkResult res = VK_ERROR_INITIALIZATION_FAILED;
+@@ -2840,10 +2903,118 @@
+ 	}
+ 	
+ 	m_bInitialized = true;
+-	
++
+ 	return true;
+ }
+ 
++// Luma rows, then chroma rows, at one pitch, in exportable device memory. Pitches and offsets are
++// whole words for the pass; 256-byte rows and a page-aligned chroma suit every importer.
++bool CVulkanTexture::BInitPlanarBuffer( uint32_t width, uint32_t height, uint32_t drmFormat )
++{
++	assert( drmFormat == DRM_FORMAT_NV12 || drmFormat == DRM_FORMAT_P010 );
++
++	m_drmFormat = drmFormat;
++	m_format = DRMFormatToVulkan( drmFormat, false );
++	m_width = m_contentWidth = width;
++	m_height = m_contentHeight = height;
++	m_depth = 1;
++	m_bExternal = true;
++
++	const uint32_t uSampleBytes = drmFormat == DRM_FORMAT_P010 ? 2 : 1;
++	m_lumaOffset = 0;
++	m_lumaPitch = m_chromaPitch = align( width * uSampleBytes, 256u );
++	m_chromaOffset = align( m_lumaPitch * height, 4096u );
++	m_size = m_chromaOffset + VkDeviceSize( m_chromaPitch ) * ( ( height + 1 ) / 2 );
++
++	const VkExternalMemoryBufferCreateInfo externalInfo = {
++		.sType = VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_BUFFER_CREATE_INFO,
++		.handleTypes = VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT,
++	};
++	const VkBufferCreateInfo bufferInfo = {
++		.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
++		.pNext = &externalInfo,
++		.size = m_size,
++		.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
++		.sharingMode = VK_SHARING_MODE_EXCLUSIVE,
++	};
++	VkResult res = g_device.vk.CreateBuffer( g_device.device(), &bufferInfo, nullptr, &m_vkPlanarBuffer );
++	if ( res != VK_SUCCESS )
++	{
++		vk_errorf( res, "vkCreateBuffer failed" );
++		return false;
++	}
++
++	VkMemoryRequirements memRequirements;
++	g_device.vk.GetBufferMemoryRequirements( g_device.device(), m_vkPlanarBuffer, &memRequirements );
++	const int32_t nMemoryType = g_device.findMemoryType( VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, memRequirements.memoryTypeBits );
++	if ( nMemoryType < 0 )
++	{
++		vk_log.errorf( "no device-local memory type for a planar capture buffer" );
++		return false;
++	}
++
++	const VkExportMemoryAllocateInfo exportInfo = {
++		.sType = VK_STRUCTURE_TYPE_EXPORT_MEMORY_ALLOCATE_INFO,
++		.handleTypes = VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT,
++	};
++	const VkMemoryDedicatedAllocateInfo dedicatedInfo = {
++		.sType = VK_STRUCTURE_TYPE_MEMORY_DEDICATED_ALLOCATE_INFO,
++		.pNext = &exportInfo,
++		.buffer = m_vkPlanarBuffer,
++	};
++	const VkMemoryAllocateInfo allocInfo = {
++		.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
++		.pNext = &dedicatedInfo,
++		.allocationSize = memRequirements.size,
++		.memoryTypeIndex = uint32_t( nMemoryType ),
++	};
++	res = g_device.vk.AllocateMemory( g_device.device(), &allocInfo, nullptr, &m_vkImageMemory );
++	if ( res != VK_SUCCESS )
++	{
++		vk_errorf( res, "vkAllocateMemory failed" );
++		return false;
++	}
++
++	res = g_device.vk.BindBufferMemory( g_device.device(), m_vkPlanarBuffer, m_vkImageMemory, 0 );
++	if ( res != VK_SUCCESS )
++	{
++		vk_errorf( res, "vkBindBufferMemory failed" );
++		return false;
++	}
++
++	struct wlr_dmabuf_attributes dmabuf = {
++		.width = int( width ),
++		.height = int( height ),
++		.format = drmFormat,
++		.modifier = DRM_FORMAT_MOD_LINEAR,
++		.n_planes = 2,
++		.offset = { m_lumaOffset, m_chromaOffset },
++		.stride = { m_lumaPitch, m_chromaPitch },
++	};
++	const VkMemoryGetFdInfoKHR getFdInfo = {
++		.sType = VK_STRUCTURE_TYPE_MEMORY_GET_FD_INFO_KHR,
++		.memory = m_vkImageMemory,
++		.handleType = VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT,
++	};
++	res = g_device.vk.GetMemoryFdKHR( g_device.device(), &getFdInfo, &dmabuf.fd[0] );
++	if ( res != VK_SUCCESS )
++	{
++		vk_errorf( res, "vkGetMemoryFdKHR failed" );
++		return false;
++	}
++	dmabuf.fd[1] = dup( dmabuf.fd[0] );
++	if ( dmabuf.fd[1] < 0 )
++	{
++		vk_log.errorf_errno( "dup failed" );
++		close( dmabuf.fd[0] );
++		return false;
++	}
++	m_dmabuf = dmabuf;
++
++	m_bInitialized = true;
++	return true;
++}
++
+ bool CVulkanTexture::BInitFromSwapchain( VkImage image, uint32_t width, uint32_t height, VkFormat format )
+ {
+ 	m_drmFormat = VulkanFormatToDRM( format );
+@@ -2959,6 +3130,12 @@
+ 	if ( m_pBackendFb != nullptr )
+ 		m_pBackendFb = nullptr;
+ 
++	if ( m_vkPlanarBuffer != VK_NULL_HANDLE )
++	{
++		g_device.vk.DestroyBuffer( g_device.device(), m_vkPlanarBuffer, nullptr );
++		m_vkPlanarBuffer = VK_NULL_HANDLE;
++	}
++
+ 	if ( m_vkImageMemory != VK_NULL_HANDLE )
+ 	{
+ 		if ( m_vkImage != VK_NULL_HANDLE )
+@@ -4099,6 +4276,10 @@
+ 	mat3x4 outputCTM;
+ 	uint32_t borderMask;
+ 	uint32_t halfExtent[2];
++	// A buffer target's plane layout, in words: the luma pitch, which chroma shares, and where
++	// chroma starts.
++	uint32_t pitchWords = 0;
++	uint32_t chromaOffsetWords = 0;
+ 
+ 	explicit CaptureConvertBlitData_t(float blit_scale, const mat3x4 &color_matrix) {
+ 		scale[0] = { blit_scale, blit_scale };
+@@ -4292,15 +4473,21 @@
+ 		float scale = (float)pScreenshotTexture->width() / pYUVOutTexture->width();
+ 
+ 		const bool bTenBit = pYUVOutTexture->isYcbcr10();
++		const bool bBuffer = pYUVOutTexture->planarBuffer() != VK_NULL_HANDLE;
+ 		CaptureConvertBlitData_t constants( scale, capture_conversion_matrix( pYUVOutTexture ) );
+ 		constants.halfExtent[0] = pYUVOutTexture->width() / 2.0f;
+ 		constants.halfExtent[1] = pYUVOutTexture->height() / 2.0f;
++		constants.pitchWords = pYUVOutTexture->lumaRowPitch() / 4;
++		constants.chromaOffsetWords = pYUVOutTexture->chromaOffset() / 4;
+ 		cmdBuffer->uploadConstants<CaptureConvertBlitData_t>(constants);
+ 
+ 		for (uint32_t i = 0; i < EOTF_Count; i++)
+ 			cmdBuffer->bindColorMgmtLuts(i, nullptr, nullptr);
+ 
+-		cmdBuffer->bindPipeline(g_device.pipeline( bTenBit ? SHADER_TYPE_RGB_TO_P010 : SHADER_TYPE_RGB_TO_NV12, 1, 0, 0, GAMESCOPE_APP_TEXTURE_COLORSPACE_SRGB, EOTF_Count ));
++		const ShaderType eShader = bBuffer
++			? ( bTenBit ? SHADER_TYPE_RGB_TO_P010_BUF : SHADER_TYPE_RGB_TO_NV12_BUF )
++			: ( bTenBit ? SHADER_TYPE_RGB_TO_P010 : SHADER_TYPE_RGB_TO_NV12 );
++		cmdBuffer->bindPipeline(g_device.pipeline( eShader, 1, 0, 0, GAMESCOPE_APP_TEXTURE_COLORSPACE_SRGB, EOTF_Count ));
+ 		cmdBuffer->bindTexture(0, pScreenshotTexture);
+ 		cmdBuffer->setTextureSrgb(0, !bTenBit);
+ 		cmdBuffer->setSamplerNearest(0, false);
+@@ -4313,10 +4500,12 @@
+ 
+ 		const int pixelsPerGroup = 8;
+ 
+-		// For ycbcr, we operate on 2 pixels at a time, so use the half-extent.
++		// For ycbcr, we operate on 2 pixels at a time, so use the half-extent. An NV12 buffer
++		// invocation takes four columns, one word of luma per row.
+ 		const int dispatchSize = pixelsPerGroup * 2;
++		const int dispatchWidth = bBuffer && !bTenBit ? pixelsPerGroup * 4 : dispatchSize;
+ 
+-		cmdBuffer->dispatch(div_roundup(pYUVOutTexture->width(), dispatchSize), div_roundup(pYUVOutTexture->height(), dispatchSize));
++		cmdBuffer->dispatch(div_roundup(pYUVOutTexture->width(), dispatchWidth), div_roundup(pYUVOutTexture->height(), dispatchSize));
+ 	}
+ 
+ 	uint64_t sequence = g_device.submit(std::move(cmdBuffer));
+diff --git a/src/rendervulkan.hpp b/src/rendervulkan.hpp
+--- a/src/rendervulkan.hpp
++++ b/src/rendervulkan.hpp
+@@ -132,12 +132,14 @@
+ // take. Empty without VK_EXT_image_drm_format_modifier.
+ std::vector<uint64_t> vulkan_get_capture_modifiers( uint32_t drmFormat );
+ 
+-// How a planar capture dmabuf is allocated. A consumer imports DRM_FORMAT_MOD_LINEAR, which means
+-// pitch page kind. On NVIDIA a plain LINEAR image promises neither, and a kind that differs moves
+-// bytes below 1 KiB. Unavailable: that driver cannot make the promise, so the format is not offered.
++// How a planar capture dmabuf is allocated; the consumer imports DRM_FORMAT_MOD_LINEAR.
++// Buffer, on NVIDIA: a storage buffer the pass addresses itself, so the bytes sit at the exported
++// layout, which a pre-Turing image's do not. LinearModifier: the image, where no such buffer
++// exports. Unavailable: neither, so the format is not offered.
+ enum class EPlanarCaptureAlloc
+ {
+ 	PlainLinear,
++	Buffer,
+ 	LinearModifier,
+ 	Unavailable,
+ };
+@@ -160,6 +162,7 @@
+ 			bExportable = false;
+ 			bOutputImage = false;
+ 			bColorAttachment = false;
++			bPlanarBuffer = false;
+ 			imageType = VK_IMAGE_TYPE_2D;
+ 		}
+ 
+@@ -173,6 +176,9 @@
+ 		bool bExportable : 1;
+ 		bool bOutputImage : 1;
+ 		bool bColorAttachment : 1;
++		// An exported NV12/P010 capture target backed by a storage buffer, no image: see
++		// EPlanarCaptureAlloc::Buffer. Every other flag is ignored.
++		bool bPlanarBuffer : 1;
+ 		VkImageType imageType;
+ 		// Allocate with exactly this DRM format modifier, in device memory, and export it.
+ 		// INVALID leaves the choice to bLinear or the backend's list.
+@@ -203,6 +209,8 @@
+ 	inline VkFormat format() const { return m_format; }
+ 	inline const struct wlr_dmabuf_attributes& dmabuf() { return m_dmabuf; }
+ 	inline VkImage vkImage() { return m_vkImage; }
++	// Set only on a bPlanarBuffer target, which has no image.
++	inline VkBuffer planarBuffer() { return m_vkPlanarBuffer; }
+ 	inline bool outputImage() { return m_bOutputImage; }
+ 	inline bool externalImage() { return m_bExternal; }
+ 	inline VkDeviceSize totalSize() const { return m_size; }
+@@ -235,6 +243,8 @@
+ 	uint32_t queueFamily = VK_QUEUE_FAMILY_IGNORED;
+ 
+ private:
++	bool BInitPlanarBuffer( uint32_t width, uint32_t height, uint32_t drmFormat );
++
+ 	bool m_bInitialized = false;
+ 	bool m_bExternal = false;
+ 	bool m_bOutputImage = false;
+@@ -242,6 +252,7 @@
+ 	uint32_t m_drmFormat = DRM_FORMAT_INVALID;
+ 
+ 	VkImage m_vkImage = VK_NULL_HANDLE;
++	VkBuffer m_vkPlanarBuffer = VK_NULL_HANDLE;
+ 	VkDeviceMemory m_vkImageMemory = VK_NULL_HANDLE;
+ 	
+ 	VkImageView m_srgbView = VK_NULL_HANDLE;
+@@ -643,6 +654,8 @@
+ 	SHADER_TYPE_RGB_TO_NV12,
+ 	SHADER_TYPE_SGSR,
+ 	SHADER_TYPE_RGB_TO_P010,
++	SHADER_TYPE_RGB_TO_NV12_BUF,
++	SHADER_TYPE_RGB_TO_P010_BUF,
+ 
+ 	SHADER_TYPE_COUNT
+ };
+@@ -741,6 +754,7 @@
+ 	VK_FUNC(EnumerateDeviceExtensionProperties) \
+ 	VK_FUNC(EnumeratePhysicalDevices) \
+ 	VK_FUNC(GetDeviceProcAddr) \
++	VK_FUNC(GetPhysicalDeviceExternalBufferProperties) \
+ 	VK_FUNC(GetPhysicalDeviceFeatures2) \
+ 	VK_FUNC(GetPhysicalDeviceFormatProperties) \
+ 	VK_FUNC(GetPhysicalDeviceFormatProperties2) \
+diff --git a/src/shaders/cs_rgb_to_nv12_buf.comp b/src/shaders/cs_rgb_to_nv12_buf.comp
+new file mode 100644
+--- /dev/null
++++ b/src/shaders/cs_rgb_to_nv12_buf.comp
+@@ -0,0 +1,88 @@
++#version 450
++
++#extension GL_GOOGLE_include_directive : require
++#extension GL_EXT_scalar_block_layout : require
++
++#include "descriptor_set.h"
++
++layout(
++  local_size_x = 8,
++  local_size_y = 8,
++  local_size_z = 1) in;
++
++// cs_rgb_to_nv12 into a storage buffer: Y rows at u_pitchWords, then the UV rows at
++// u_chromaOffsetWords. One invocation owns 4x2 luma pixels and their two chroma samples, so
++// every store is a whole word and no two invocations share one.
++
++const uint u_frameId = 0;
++const uint u_shaderFilter = filter_linear_emulated;
++const uint u_alphaMode = 0;
++const float u_linearToNits = 400.0f;
++const float u_nitsToLinear = 1.0f / 100.0f;
++const float u_itmSdrNits = 100.f;
++const float u_itmTargetNits = 1000.f;
++
++layout(binding = 0, scalar)
++uniform layers_t {
++    vec2 u_scale[1];
++    vec2 u_offset[1];
++    float u_opacity[1];
++    mat3x4 u_ctm[1];
++    mat3x4 u_outputCTM;
++    uint u_borderMask;
++    uvec2 u_halfExtent;
++    uint u_pitchWords;
++    uint u_chromaOffsetWords;
++};
++
++layout(binding = 7, std430) writeonly buffer planar_t {
++    uint dst_words[];
++};
++
++#include "composite.h"
++
++vec4 sampleLayer(uint layerIdx, vec2 uv) {
++  return sampleLayer(s_samplers[layerIdx], layerIdx, uv, true);
++}
++
++vec3 applyColorMatrix(vec3 rgb, mat3x4 matrix) {
++  return vec4(linearToSrgb(rgb), 1.0f) * matrix;
++}
++
++void main() {
++  uvec2 thread_id = gl_GlobalInvocationID.xy;
++
++  if (thread_id.x * 2 >= u_halfExtent.x || thread_id.y >= u_halfExtent.y)
++    return;
++
++  vec4 luma[2];
++  vec4 chroma;
++  for (uint half_block = 0; half_block < 2; half_block++) {
++    vec2 luma_uv = vec2(thread_id.x * 4 + half_block * 2, thread_id.y * 2) + vec2(0.5f, 0.5f);
++
++    vec3 top_left = sampleLayer(0, luma_uv).rgb;
++    vec3 top_right = sampleLayer(0, luma_uv + vec2(1, 0)).rgb;
++    vec3 bottom_left = sampleLayer(0, luma_uv + vec2(0, 1)).rgb;
++    vec3 bottom_right = sampleLayer(0, luma_uv + vec2(1, 1)).rgb;
++
++    // Left-sited chroma (H.273 type 0, what decoders assume): [1 2 1] across columns x-1..x+1.
++    vec3 left_top = sampleLayer(0, luma_uv + vec2(-1, 0)).rgb;
++    vec3 left_bottom = sampleLayer(0, luma_uv + vec2(-1, 1)).rgb;
++    vec3 avg_color = (left_top + 2.0f * top_left + top_right +
++                      left_bottom + 2.0f * bottom_left + bottom_right) / 8.0f;
++    vec2 uv = applyColorMatrix(avg_color, u_outputCTM).yz;
++
++    uint lane = half_block * 2;
++    luma[0][lane] = applyColorMatrix(top_left, u_outputCTM).x;
++    luma[0][lane + 1] = applyColorMatrix(top_right, u_outputCTM).x;
++    luma[1][lane] = applyColorMatrix(bottom_left, u_outputCTM).x;
++    luma[1][lane + 1] = applyColorMatrix(bottom_right, u_outputCTM).x;
++    chroma[lane] = uv.x;
++    chroma[lane + 1] = uv.y;
++  }
++
++  uint row = thread_id.y * 2 * u_pitchWords + thread_id.x;
++  dst_words[row] = packUnorm4x8(luma[0]);
++  dst_words[row + u_pitchWords] = packUnorm4x8(luma[1]);
++  dst_words[u_chromaOffsetWords + thread_id.y * u_pitchWords + thread_id.x] = packUnorm4x8(chroma);
++}
+diff --git a/src/shaders/cs_rgb_to_p010_buf.comp b/src/shaders/cs_rgb_to_p010_buf.comp
+new file mode 100644
+--- /dev/null
++++ b/src/shaders/cs_rgb_to_p010_buf.comp
+@@ -0,0 +1,83 @@
++#version 450
++
++#extension GL_GOOGLE_include_directive : require
++#extension GL_EXT_scalar_block_layout : require
++
++#include "descriptor_set.h"
++
++layout(
++  local_size_x = 8,
++  local_size_y = 8,
++  local_size_z = 1) in;
++
++// cs_rgb_to_p010 into a storage buffer: Y rows at u_pitchWords, then the UV rows at
++// u_chromaOffsetWords. One invocation owns a 2x2 block: two 16-bit samples per luma row and
++// one UV pair are whole words, and no two invocations share one.
++
++const uint u_frameId = 0;
++const uint u_shaderFilter = filter_linear_emulated;
++const uint u_alphaMode = 0;
++const float u_linearToNits = 400.0f;
++const float u_nitsToLinear = 1.0f / 100.0f;
++const float u_itmSdrNits = 100.f;
++const float u_itmTargetNits = 1000.f;
++
++layout(binding = 0, scalar)
++uniform layers_t {
++    vec2 u_scale[1];
++    vec2 u_offset[1];
++    float u_opacity[1];
++    mat3x4 u_ctm[1];
++    mat3x4 u_outputCTM;
++    uint u_borderMask;
++    uvec2 u_halfExtent;
++    uint u_pitchWords;
++    uint u_chromaOffsetWords;
++};
++
++layout(binding = 7, std430) writeonly buffer planar_t {
++    uint dst_words[];
++};
++
++#include "composite.h"
++
++vec3 fetchLayer(vec2 uv) {
++  ivec2 coord = ivec2((uv + u_offset[0]) * u_scale[0]);
++  ivec2 maxCoord = textureSize(s_samplers[0], 0) - ivec2(1);
++  return texelFetch(s_samplers[0], clamp(coord, ivec2(0), maxCoord), 0).rgb;
++}
++
++// A 10-bit code lands in the top bits of the 16-bit sample; the low six stay zero.
++uvec3 toCodes(vec3 yuv) {
++  return uvec3(round(clamp(yuv, 0.0f, 1.0f) * 1023.0f)) << 6;
++}
++
++uint lumaCode(vec3 rgb) {
++  return toCodes(vec4(rgb, 1.0f) * u_outputCTM).x;
++}
++
++void main() {
++  uvec2 thread_id = gl_GlobalInvocationID.xy;
++
++  if (thread_id.x >= u_halfExtent.x || thread_id.y >= u_halfExtent.y)
++    return;
++
++  vec2 luma_uv = vec2(thread_id * 2);
++
++  vec3 top_left = fetchLayer(luma_uv);
++  vec3 top_right = fetchLayer(luma_uv + vec2(1, 0));
++  vec3 bottom_left = fetchLayer(luma_uv + vec2(0, 1));
++  vec3 bottom_right = fetchLayer(luma_uv + vec2(1, 1));
++
++  // Left-sited chroma (H.273 type 0, what decoders assume): [1 2 1] across columns x-1..x+1.
++  vec3 left_top = fetchLayer(luma_uv + vec2(-1, 0));
++  vec3 left_bottom = fetchLayer(luma_uv + vec2(-1, 1));
++  vec3 avg_color = (left_top + 2.0f * top_left + top_right +
++                    left_bottom + 2.0f * bottom_left + bottom_right) / 8.0f;
++  uvec3 uv = toCodes(vec4(avg_color, 1.0f) * u_outputCTM);
++
++  uint row = thread_id.y * 2 * u_pitchWords + thread_id.x;
++  dst_words[row] = lumaCode(top_left) | (lumaCode(top_right) << 16);
++  dst_words[row + u_pitchWords] = lumaCode(bottom_left) | (lumaCode(bottom_right) << 16);
++  dst_words[u_chromaOffsetWords + thread_id.y * u_pitchWords + thread_id.x] = uv.y | (uv.z << 16);
++}
+-- 
+2.49.0
