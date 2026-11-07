@@ -308,7 +308,8 @@ BARE_CALLS = {
               "preconditionFailure", "assert", "assertionFailure", "Logger"},
     "kotlin": {"print", "println", "error", "require", "requireNotNull", "check",
                "checkNotNull", "assert", "TODO"},
-    "ts": set(), "tsx": set(), "rust": set(),
+    # Decky's `diag()` is its console trace.
+    "ts": {"diag"}, "tsx": {"diag"}, "rust": set(),
 }
 # A receiver that is a logger: `log.info(`, `Log.w(`, `sessionLog.debug(`, `console.warn(`.
 LOGGER = re.compile(r"^(?:log|logger|Log|Logger|Timber|console|tracing)$|[a-z0-9](?:Log|Logger)$")

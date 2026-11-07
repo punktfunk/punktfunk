@@ -116,6 +116,7 @@ class TypeScript(unittest.TestCase):
             const r = /it's "quoted"/g;
             const a = x / 2;
             console.warn("Plugin failed to load");
+            diag(`Shortcut ${id} runs in ${tool} now`);
             toast(`Paired with ${host.name} now`);
         """
         self.assertEqual(texts(src, "ts"), ["Paired with {} now"])
