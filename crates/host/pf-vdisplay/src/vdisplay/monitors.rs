@@ -414,16 +414,16 @@ impl MonitorNotFound {
         )
     }
 
-    /// The host message [`Self::user_message`] is the English of, and its placeholder values.
+    /// The host message that words [`Self::user_message`], and its placeholder values. The
+    /// message names no heads; only the English sentence does.
     pub fn message(&self) -> (&'static str, Vec<(&'static str, String)>) {
         let monitor = ("monitor", self.want.clone());
-        if self.available.is_empty() {
-            return ("close_monitor_none", vec![monitor]);
-        }
-        (
-            "close_monitor_missing",
-            vec![monitor, ("monitors", self.named())],
-        )
+        let id = if self.available.is_empty() {
+            "close_monitor_none"
+        } else {
+            "close_monitor_missing"
+        };
+        (id, vec![monitor])
     }
 
     /// The heads the host has, at most [`NAMED_IN_SENTENCE`] of them.
