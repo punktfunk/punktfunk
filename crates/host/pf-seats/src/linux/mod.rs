@@ -990,6 +990,9 @@ impl PlatformBackend for LinuxBackend {
         let passwd = accounts::require(seat)?;
         accounts::close_home(&passwd.home)?;
         let games = accounts::ensure_group(accounts::GAMES_GROUP)?;
+        if let Err(error) = accounts::join_groups(&passwd.name) {
+            tracing::warn!(account = %passwd.name, %error, "seat user's groups not restored");
+        }
         shared::ensure_games(state, games)?;
         shared::ensure_seat_dirs(state, &seat.id, &passwd, self.owner_uid())?;
         let reader = shared::Reader::group(passwd.gid);

@@ -178,13 +178,7 @@ pub(super) fn ensure(seat: &Seat, state: &Path) -> Result<Passwd, BackendError> 
             Err(not_owned(&seat.account, &seat.id))
         };
     }
-    let mut groups = Vec::new();
-    for group in GROUPS {
-        if group_gid(group)?.is_some() {
-            materialize_group(group)?;
-            groups.push(group);
-        }
-    }
+    let groups = present_groups()?;
     let seat_dir = super::shared::seat_dir(state, &seat.id);
     super::shared::make_dir(&seat_dir, 0o711)
         .map_err(|e| err("seat_dirs", format!("create {}: {e}", seat_dir.display())))?;
@@ -208,6 +202,43 @@ pub(super) fn ensure(seat: &Seat, state: &Path) -> Result<Passwd, BackendError> 
         ],
     )?;
     lookup(&seat.account)?.ok_or_else(|| err("useradd_failed", "useradd left no passwd entry"))
+}
+
+/// The [`GROUPS`] this box has, each in `/etc/group`.
+fn present_groups() -> Result<Vec<&'static str>, BackendError> {
+    let mut groups = Vec::new();
+    for group in GROUPS {
+        if group_gid(group)?.is_some() {
+            materialize_group(group)?;
+            groups.push(group);
+        }
+    }
+    Ok(groups)
+}
+
+/// Adds the seat user `account` to each of [`GROUPS`] it is missing. Run at each start: a group
+/// made after the account, or made again, has no members, and the games folder admits only them.
+pub(super) fn join_groups(account: &str) -> Result<(), BackendError> {
+    let mut missing = Vec::new();
+    for group in present_groups()? {
+        let line = getent("group", group)?.unwrap_or_default();
+        if !is_member(&line, account) {
+            missing.push(group);
+        }
+    }
+    if missing.is_empty() {
+        return Ok(());
+    }
+    let groups = missing.join(",");
+    run("usermod_failed", "usermod", &["-a", "-G", &groups, account]).map(drop)
+}
+
+/// Whether `line`, a group as `getent group` prints it, lists `account` among its members.
+fn is_member(line: &str, account: &str) -> bool {
+    line.trim_end()
+        .splitn(4, ':')
+        .nth(3)
+        .is_some_and(|members| members.split(',').any(|member| member == account))
 }
 
 /// The home `useradd` is given for `id`'s user.
@@ -575,6 +606,22 @@ fn not_owned(account: &str, id: &SeatId) -> BackendError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_group_s_members_are_its_fourth_field() {
+        let line = "punktfunk-games:x:947:gamestream,pf-seat-1\n";
+        assert!(is_member(line, "pf-seat-1"));
+        assert!(is_member(line, "gamestream"));
+        assert!(!is_member(line, "pf-seat-10"), "a prefix is not a member");
+        assert!(
+            !is_member("punktfunk-games:x:947:\n", "pf-seat-1"),
+            "a remade group is empty"
+        );
+        assert!(
+            !is_member("pf-seat-1:x:946:", "pf-seat-1"),
+            "a group's name is not a member"
+        );
+    }
 
     #[test]
     fn a_user_is_busy_while_a_process_has_it_as_real_effective_or_saved_user() {
