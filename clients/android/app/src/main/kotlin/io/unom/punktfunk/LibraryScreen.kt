@@ -184,7 +184,7 @@ private fun LibState.Ready.withStatus(status: HostStatus) = copy(
     running = status.games
         .filter { it.isUp }
         // Two sessions can have the same title up (the host admits concurrent sessions); for a
-        // Resume badge either one is the same answer, and the endable one (sorted last, so it
+        // Running badge either one is the same answer, and the endable one (sorted last, so it
         // wins) carries End game.
         .sortedBy { it.endable }
         .mapNotNull { g -> g.appId?.let { it to g } }
@@ -395,7 +395,7 @@ fun LibraryScreen(
     val resumeAt = remember(host.id) { LibraryPosition.last(context, host.id) }
 
     // End game: the title the confirm asks about, then the host's answer as a toast. Gone either
-    // way drops the Resume badge here; the next load reads the host again.
+    // way drops the Running badge here; the next load reads the host again.
     var endAsk by remember { mutableStateOf<GameEntry?>(null) }
     fun endGame(game: GameEntry) {
         val ready = state as? LibState.Ready ?: return
@@ -747,7 +747,7 @@ internal fun TouchGrid(
     onEndGame: (GameEntry) -> Unit = {},
     /**
      * Which titles the host already has up, keyed by library id — so a tile the player can return
-     * to says `Resume` rather than looking like every other one. Empty on an older host, an
+     * to says "Running" rather than looking like every other one. Empty on an older host, an
      * unreachable one, and while a shelf is being served from cache.
      */
     running: Map<String, RunningGame> = emptyMap(),
@@ -839,7 +839,7 @@ private fun flatIndexOf(
 @Composable
 private fun TouchGroupHeading(text: String) {
     Text(
-        text.uppercase(),
+        text,
         style = MaterialTheme.typography.labelSmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
         letterSpacing = 1.4.sp,
@@ -1077,12 +1077,12 @@ private fun RunningBadge(compact: Boolean = false) {
             modifier = Modifier.size(12.dp),
         )
         // Glyph only on the touch grid, whose tiles go down to ~130 dp wide and already carry the
-        // store chip in the opposite corner; at that size "Resume" plus an icon leaves the two
+        // store chip in the opposite corner; at that size "Running" plus an icon leaves the two
         // badges touching in the middle. The coverflow's covers are several times wider and take
         // the word.
         if (!compact) {
             Text(
-                stringResource(R.string.lib_badge_resume),
+                stringResource(R.string.lib_badge_running),
                 style = MaterialTheme.typography.labelSmall,
                 fontWeight = FontWeight.SemiBold,
                 color = RESUME_INK,

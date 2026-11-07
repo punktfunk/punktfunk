@@ -998,8 +998,8 @@ val AUDIO_FORMAT_WIRE_UNSPECIFIED = 0 to 0
  */
 val CODEC_OPTIONS: List<Pair<String, OptionLabel>> = listOf(
     "auto" to OptionLabel.Message(R.string.player_codec_auto),
-    "hevc" to OptionLabel.Name("HEVC (H.265)"),
-    "h264" to OptionLabel.Name("H.264 (AVC)"),
+    "hevc" to OptionLabel.Name("HEVC"),
+    "h264" to OptionLabel.Name("H.264"),
     "av1" to OptionLabel.Name("AV1"),
     "pyrowave" to OptionLabel.Message(R.string.player_codec_pyrowave),
 )
@@ -1079,7 +1079,7 @@ val COMPOSITOR_OPTIONS: List<Pair<Int, OptionLabel>> = listOf(
     5 to OptionLabel.Name("Hyprland"),
     7 to OptionLabel.Name("niri"),
     8 to OptionLabel.Name("Umbriel"),
-    2 to OptionLabel.Name("wlroots (Sway / River)"),
+    2 to OptionLabel.Name("wlroots (Sway, River)"),
     4 to OptionLabel.Name("gamescope"),
 )
 

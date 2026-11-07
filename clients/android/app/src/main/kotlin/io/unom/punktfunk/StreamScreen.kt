@@ -692,8 +692,11 @@ fun StreamScreen(
                         ui.statsVerbosity == StatsVerbosity.OFF -> null
                         ui.accessGrants and SessionAccess.ALL == SessionAccess.ALL && ui.accessRemaining == 0 -> null
                         ui.accessRemaining > 0 ->
-                            "$accessLevel · " +
+                            "$accessLevel · " + if (ui.accessRemaining < 60) {
+                                stringResource(R.string.grant_chip_ends_soon)
+                            } else {
                                 stringResource(R.string.grant_chip_ends, context.accessRemaining(ui.accessRemaining))
+                            }
                         else -> accessLevel
                     }
                     // Same corner, stacked: the mute sentence stands whatever the stats tier, because
