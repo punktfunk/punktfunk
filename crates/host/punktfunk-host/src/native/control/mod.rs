@@ -22,7 +22,7 @@ mod inbound;
 mod rate;
 
 use super::*;
-use crate::native::bitrate::{pyrowave_bounds_kbps, UnrecoveredRun};
+use crate::native::bitrate::{fec_pct, pyrowave_bounds_kbps, UnrecoveredRun, FEC_WHOLE_FRAME};
 use pf_clipboard::ClipCoordCmd;
 use punktfunk_core::abr::governor::{ShareWindow, NO_SHARE_KBPS};
 use punktfunk_core::quic::v2::{dgram::Feedback, io as v2io, msg as v2msg};
@@ -652,7 +652,7 @@ impl ControlTask {
         self.link
             .note_positions(fb.head, fb.mid, fb.tail, fb.sock_drops);
         self.link.sample_bands(
-            shared.fec_target.load(Ordering::Relaxed),
+            fec_pct(shared.fec_target.load(Ordering::Relaxed)),
             shared.live_bitrate.load(Ordering::Relaxed),
         );
         // No-op when FEC is pinned (`PUNKTFUNK_FEC_PCT`).
@@ -680,12 +680,13 @@ impl ControlTask {
         }
     }
 
-    /// Adaptive FEC's proposal for this window. It lands on `fec_requested`; the stream loop
-    /// publishes it to `fec_target` (what the send loop reads per frame) once the encoder
-    /// accepts the matching rate.
+    /// Adaptive FEC's proposal for this window: the percent, and [`FEC_WHOLE_FRAME`] while the
+    /// link reads lossy. It lands on `fec_requested`; the stream loop publishes it to
+    /// `fec_target` (what the send loop reads per frame) once the encoder accepts the matching
+    /// rate.
     fn adapt_fec(&mut self, fb: &Feedback, unrecovered_run: u32) {
         let shared = &self.task.shared;
-        let prev = shared.fec_target.load(Ordering::Relaxed);
+        let prev = fec_pct(shared.fec_target.load(Ordering::Relaxed));
         let target = punktfunk_core::abr::budget::fec_target(
             fb.loss_ppm,
             prev,
@@ -703,7 +704,20 @@ impl ControlTask {
             },
             &mut self.fec_horizon,
         );
-        shared.fec_requested.store(target, Ordering::Release);
+        let whole = if self.fec_horizon.lossy() {
+            FEC_WHOLE_FRAME
+        } else {
+            0
+        };
+        let asked = shared.fec_requested.swap(target | whole, Ordering::AcqRel);
+        if asked & FEC_WHOLE_FRAME != whole && self.task.codec == crate::encode::Codec::PyroWave {
+            tracing::info!(
+                whole_frame = whole != 0,
+                loss_ppm = fb.loss_ppm,
+                unrecovered_run,
+                "PyroWave parity span moved (whole frame while the link loses, head once clean)"
+            );
+        }
         if prev != target {
             tracing::debug!(
                 loss_ppm = fb.loss_ppm,
@@ -886,7 +900,7 @@ impl ControlTask {
         let task = &self.task;
         let m = self.link.close(
             &task.counters.link,
-            task.shared.fec_target.load(Ordering::Relaxed),
+            fec_pct(task.shared.fec_target.load(Ordering::Relaxed)),
             task.shared.live_bitrate.load(Ordering::Relaxed),
         );
         crate::link_health::emit(&m, task.peer);

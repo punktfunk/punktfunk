@@ -39,6 +39,10 @@ const LOSS_HORIZON_WINDOWS: u32 = 32;
 /// at the session's refresh. A shorter budget is a glitch every few minutes;
 /// a longer one spends picture on loss the link does not have.
 const LOSS_BUDGET_SECS: u64 = 600;
+/// Report windows a lost shard or frame keeps the link lossy ([`LossHorizon::lossy`]):
+/// [`LOSS_BUDGET_SECS`] of them. Head-only parity leaves every tail loss unrepaired, so it
+/// waits until the link has gone the failure budget's span without one.
+const LOSSY_WINDOWS: u32 = 800;
 /// How much more loss than the level shows must still not want a parity shard
 /// back before the rule gives it up. Every move of the target re-derives the
 /// encoder rate, and the level's own error over the horizon is under a tenth,
@@ -60,7 +64,7 @@ const LOSS_PCT_MAX: u8 = 25;
 /// ```
 ///
 /// More parity means a lower encoder rate, never a fatter wire. Floored at
-/// [`MIN_BITRATE_KBPS`]. PyroWave passes the share its head-only parity takes as `fec_percent`.
+/// [`MIN_BITRATE_KBPS`]. PyroWave passes the share of the frame its parity takes as `fec_percent`.
 pub fn encoder_kbps_for_budget(
     budget_kbps: u32,
     audio_kbps: u32,
@@ -113,13 +117,21 @@ pub struct LossHorizon {
     acc: u32,
     /// The percent the rule is holding. `0` before the first window.
     sized: u8,
+    /// Windows left in which the link still reads as lossy ([`Self::lossy`]).
+    lossy_left: u32,
 }
 
 impl LossHorizon {
     /// Fold one report window in and read the level, ppm. A window a frame
     /// died in is a burst or an overload, which parity answers with
     /// [`FEC_STEP`] and never with a wider share: the level holds instead.
+    /// Any loss restarts [`Self::lossy`]'s span.
     pub fn note(&mut self, loss_ppm: u32, unrecovered: bool) -> u32 {
+        self.lossy_left = if loss_ppm > 0 || unrecovered {
+            LOSSY_WINDOWS
+        } else {
+            self.lossy_left.saturating_sub(1)
+        };
         if !unrecovered {
             self.acc = self
                 .acc
@@ -127,6 +139,13 @@ impl LossHorizon {
                 .saturating_add(loss_ppm.min(1_000_000));
         }
         self.acc / LOSS_HORIZON_WINDOWS
+    }
+
+    /// A window in the last [`LOSSY_WINDOWS`] lost a shard, repaired or not, or a frame. A
+    /// PyroWave frame then carries parity over its whole length, not its head alone. A session
+    /// opens clean.
+    pub fn lossy(&self) -> bool {
+        self.lossy_left > 0
     }
 
     /// The percent the rule holds for a frame of `shards`. It rises the window
@@ -602,6 +621,39 @@ mod tests {
             assert!(windows < 80, "still asking for parity after {windows}");
         }
         assert!(windows <= 40, "{windows} windows to forget the loss");
+    }
+
+    /// A session opens clean. One window with a repaired shard or a dead frame makes the link
+    /// lossy for the failure budget's span of windows, and every later loss restarts them.
+    #[test]
+    fn any_loss_reads_lossy_for_the_failure_budget() {
+        assert_eq!(
+            u64::from(LOSSY_WINDOWS) * super::super::sample::WINDOW_US as u64,
+            LOSS_BUDGET_SECS * 1_000_000
+        );
+        let mut h = LossHorizon::default();
+        assert!(!h.lossy());
+        h.note(0, false);
+        assert!(!h.lossy(), "a clean window is not loss");
+        for (loss_ppm, unrecovered) in [(1, false), (0, true)] {
+            let mut h = LossHorizon::default();
+            h.note(loss_ppm, unrecovered);
+            for _ in 1..800 {
+                h.note(0, false);
+            }
+            assert!(h.lossy(), "{loss_ppm} {unrecovered}: 799 clean windows on");
+            h.note(0, false);
+            assert!(!h.lossy(), "{loss_ppm} {unrecovered}: 600 s clean");
+        }
+        h.note(5, false);
+        for _ in 0..400 {
+            h.note(0, false);
+        }
+        h.note(5, false);
+        for _ in 0..799 {
+            h.note(0, false);
+        }
+        assert!(h.lossy(), "the later loss restarted the span");
     }
 
     #[test]

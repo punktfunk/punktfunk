@@ -887,6 +887,13 @@ impl Session {
         self.packetizer.fec_percent()
     }
 
+    /// Host: whether a PyroWave AU's tail carries its percent beside the head's parity
+    /// ([`Packetizer::set_whole_frame_parity`](crate::packet::Packetizer::set_whole_frame_parity)).
+    /// Next AU; every other AU carries parity whole either way.
+    pub fn set_whole_frame_parity(&mut self, on: bool) {
+        self.packetizer.set_whole_frame_parity(on);
+    }
+
     // -- Client path ------------------------------------------------------
 
     /// Client opt-in: deliver incomplete chunk-aligned frames as [`Frame`]`{ complete: false }`
@@ -1314,20 +1321,24 @@ mod wire_equivalence_tests {
                 let mut piped = host_session(cfg.clone(), encrypt);
                 let mut whole = host_session(cfg, encrypt);
                 // At shard 64: 47, 2, 313 and 1 data shards; 313 is three chunks of 128. The
-                // last is a PyroWave AU split into a 6-shard head and 300 tail shards.
+                // last two are a PyroWave AU split into a 6-shard head and 300 tail shards,
+                // with parity on the head only, then on the whole frame.
                 let frames = [
                     pattern(3000),
                     pattern(100),
                     pattern(20000),
                     Vec::new(),
                     crate::pyrowave::windowed_au(64, 6, 300),
+                    crate::pyrowave::windowed_au(64, 6, 300),
                 ];
                 for (i, frame) in frames.iter().enumerate() {
                     let pts = 1000 * i as u64;
                     let flags = match i {
-                        4 => crate::packet::USER_FLAG_CHUNK_ALIGNED,
+                        4 | 5 => crate::packet::USER_FLAG_CHUNK_ALIGNED,
                         i => i as u32,
                     };
+                    piped.set_whole_frame_parity(i == 5);
+                    whole.set_whole_frame_parity(i == 5);
                     let want = whole.seal_frame_at(frame, pts, flags, i as u32).unwrap();
                     let mut got: Vec<Vec<u8>> = Vec::new();
                     let mut calls = 0usize;
@@ -1478,6 +1489,53 @@ mod wire_equivalence_tests {
                 assert_eq!(got, sent, "window {w}");
             }
         }
+    }
+
+    /// On a lossy link the same AU keeps its head block and floor, and each tail block carries
+    /// its percent: a lost tail shard is rebuilt with the head shard. Off again, only the head
+    /// carries parity.
+    #[test]
+    fn a_pyrowave_au_on_a_lossy_link_protects_its_whole_frame() {
+        use crate::packet::USER_FLAG_CHUNK_ALIGNED;
+        let mk = |role| Config {
+            role,
+            fec: FecConfig {
+                scheme: FecScheme::Gf16,
+                fec_percent: 10,
+                max_data_per_block: 64,
+            },
+            shard_payload: 1024,
+            max_frame_bytes: 8 * 1024 * 1024,
+            loopback_drop_period: 0,
+        };
+        let (wire, c) = loopback_pair(0, 0);
+        let mut client = Session::new(mk(Role::Client), media(false), Box::new(c)).unwrap();
+        client.set_deliver_partial_frames(true);
+        let (spare, _) = loopback_pair(0, 0);
+        let mut host = Session::new(mk(Role::Host), media(false), Box::new(spare)).unwrap();
+
+        let au = crate::pyrowave::windowed_au(1024, 11, 190);
+        host.set_whole_frame_parity(true);
+        let wires = host
+            .seal_frame_at(&au, 1_000, USER_FLAG_CHUNK_ALIGNED, 0)
+            .unwrap();
+        // Tail blocks of 64, 64 and 62 shards carry 7 each at 10 %; the head keeps its 4.
+        assert_eq!(wires.len(), 201 + 4 + 3 * 7);
+        for (i, w) in wires.iter().enumerate() {
+            if i != 3 && i != 100 {
+                wire.send(w).unwrap();
+            }
+        }
+        let f = client.poll_frame().expect("the frame completes");
+        assert!(f.complete);
+        assert_eq!(f.data, au);
+        assert_eq!(client.stats().fec_recovered_shards, 2);
+
+        host.set_whole_frame_parity(false);
+        let wires = host
+            .seal_frame_at(&au, 2_000, USER_FLAG_CHUNK_ALIGNED, 1)
+            .unwrap();
+        assert_eq!(wires.len(), 201 + 4, "back on the head only");
     }
 
     /// Partials go up when they can no longer complete, not a loss window later: a newer

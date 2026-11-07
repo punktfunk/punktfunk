@@ -25,10 +25,10 @@ pub(super) struct SessionFacts {
     pub(super) bitrate_auto: bool,
     pub(super) audio_reserved_kbps: u32,
     pub(super) shard_payload: u16,
-    /// PyroWave: parity rides each frame's head ([`EncDerive::head_only_hz`]), and an
+    /// PyroWave: parity rides each frame's head ([`EncDerive::pyrowave_hz`]), and an
     /// explicit-rate stream paces at the link.
     ///
-    /// [`EncDerive::head_only_hz`]: crate::native::bitrate::EncDerive::head_only_hz
+    /// [`EncDerive::pyrowave_hz`]: crate::native::bitrate::EncDerive::pyrowave_hz
     pub(super) pyrowave: bool,
     pub(super) streamed_wire: bool,
     pub(super) perf: bool,
