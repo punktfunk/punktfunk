@@ -85,17 +85,11 @@ pub(crate) fn licenses_page(
 
     page(vec![
         page_header(client::about_licenses_title(), back_btn),
-        section(pal, "PUNKTFUNK"),
+        section(pal, "Punktfunk"),
         app_card.into(),
-        section(
-            pal,
-            &desktop::desktop_licenses_section_bundled().to_uppercase(),
-        ),
+        section(pal, desktop::desktop_licenses_section_bundled()),
         natives_card.into(),
-        section(
-            pal,
-            &desktop::desktop_licenses_section_open_source().to_uppercase(),
-        ),
+        section(pal, desktop::desktop_licenses_section_open_source()),
         notices_card.into(),
     ])
 }
