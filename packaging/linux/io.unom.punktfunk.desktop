@@ -1,7 +1,7 @@
 [Desktop Entry]
 Type=Application
 Name=Punktfunk
-Comment=Stream a remote punktfunk host
+Comment=Stream a remote Punktfunk host
 Comment[de]=Von einem entfernten Punktfunk-Host streamen
 Exec=punktfunk-client %u
 Icon=io.unom.punktfunk
