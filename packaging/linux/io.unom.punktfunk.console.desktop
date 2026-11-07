@@ -2,6 +2,7 @@
 Type=Application
 Name=Punktfunk Console
 Comment=Controller-driven couch interface — browse hosts and stream with a gamepad
+Comment[de]=Oberfläche fürs Sofa, mit dem Controller bedient — Hosts durchsuchen und mit dem Gamepad streamen
 # The shell already execs `punktfunk-session --browse` for this argv, so the shortcut goes
 # through the same binary the main entry uses (which is also what flatpak's Exec rewrite
 # expects). A couch UI is fullscreen; the session fullscreens itself on the Deck and under
@@ -11,4 +12,5 @@ Icon=io.unom.punktfunk
 Terminal=false
 Categories=Network;Game;
 Keywords=streaming;remote;game;gamepad;controller;couch;console;bigpicture;
+Keywords[de]=Streaming;Fernzugriff;Spiel;Gamepad;Controller;Sofa;Couch;Konsole;bigpicture;
 StartupNotify=true

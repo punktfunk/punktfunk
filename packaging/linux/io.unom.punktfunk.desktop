@@ -2,10 +2,12 @@
 Type=Application
 Name=Punktfunk
 Comment=Stream a remote punktfunk host
+Comment[de]=Von einem entfernten Punktfunk-Host streamen
 Exec=punktfunk-client %u
 Icon=io.unom.punktfunk
 Terminal=false
 Categories=Network;Game;
 Keywords=streaming;remote;game;moonlight;
+Keywords[de]=Streaming;Fernzugriff;Spiel;Moonlight;
 StartupNotify=true
 MimeType=x-scheme-handler/punktfunk;
