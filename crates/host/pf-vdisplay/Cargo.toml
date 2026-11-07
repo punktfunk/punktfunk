@@ -66,6 +66,9 @@ wayland-backend = "0.3"
 # wayland-scanner emits `bitflags::bitflags!` for the KDE output-device protocol's bitfield enums
 # (kde-output-device-v2 `capability`/`flags`); needs the crate in scope (kwin_output_mgmt.rs).
 bitflags = "2"
+# Umbriel re-lights a returning head over `zwlr_output_manager_v1` (umbriel/output_mgmt.rs).
+# Already in the host's closure through pf-inject.
+wayland-protocols-wlr = { version = "0.3", features = ["client"] }
 # The gamescope bare-spawn splash client (gamescope/splash.rs): pure-Rust X11 core protocol (the
 # same no-libxcb-link stance as pf-capture's XFixes cursor source), no extension features needed.
 x11rb = { version = "0.14", default-features = false }

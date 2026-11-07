@@ -7,10 +7,10 @@
 //! output; window moves and full-screen act on the focused window, so they focus it first.
 
 use super::ipc::{self, Action, Output, Window, Workspace};
-use super::{focus_output, list_monitors};
+use super::{focus_output, list_monitors, output_mgmt};
 use crate::monitors::DISABLE_BUDGET;
 use crate::toplevels::{Toplevel, WindowVerb};
-use crate::topology_journal::{self as journal, Undo};
+use crate::topology_journal::{self as journal, Head, Undo};
 use anyhow::{bail, Context, Result};
 use serde_json::json;
 use std::thread;
@@ -189,18 +189,38 @@ fn wait_head(name: &str, want: bool) -> bool {
 }
 
 /// Turn off the heads an `exclusive` session darkens ([`crate::monitors::disable_for_exclusive`]),
-/// journaling the plan onto `pending` before the first goes dark. `keep_monitors` stays lit and
-/// a managed sibling is never touched. A config reload re-enables them; that is not watched.
+/// journaling each with its mode onto `pending` before the first goes dark: a monitor switched
+/// off meanwhile comes back with none. `keep_monitors` stays lit and a managed sibling is never
+/// touched. A config reload re-enables them; that is not watched.
 pub(crate) fn disable_other_heads(ours: &str, pending: &mut Vec<u64>) {
     let keep = crate::policy::prefs().get().keep_monitors;
+    let listed = list_monitors();
+    let modes: Vec<(String, String)> = listed
+        .iter()
+        .flatten()
+        .map(|m| (m.connector.clone(), m.mode_label()))
+        .collect();
+    let journaled = |plan: &[String]| {
+        let heads = plan
+            .iter()
+            .map(|name| Head {
+                name: name.clone(),
+                mode: modes
+                    .iter()
+                    .find(|(n, _)| n == name)
+                    .map(|(_, m)| m.clone()),
+            })
+            .collect();
+        pending.push(journal::push("umbriel", Undo::EnableHeads { heads }))
+    };
     crate::monitors::disable_for_exclusive(
         "umbriel",
-        list_monitors(),
+        listed,
         ours,
         &keep,
         disable_head,
         focus_output,
-        |plan| pending.push(journal::push_heads("umbriel", plan)),
+        journaled,
     );
 }
 
@@ -212,12 +232,14 @@ fn disable_head(name: &str) -> Result<()> {
     bail!("umbriel accepted output-disable for {name} but the output stayed enabled")
 }
 
-/// `output-enable` and `dpms-on` for each of `names`: an exclusive disable or a gamescope
-/// darken, whichever this was. The heads still disabled after the read-back. A head Umbriel no
-/// longer lists was unplugged meanwhile.
-fn restore_heads(names: &[String]) -> Vec<String> {
+/// `output-enable` and `dpms-on` for each of `heads`: an exclusive disable or a gamescope
+/// darken, whichever this was. A head back from a power-off has no mode, so Umbriel refuses
+/// `output-enable`; it is enabled at its journaled mode over output management instead.
+/// The heads still disabled after the read-back. A head Umbriel no longer lists was unplugged
+/// meanwhile.
+fn restore_heads(heads: &[Head]) -> Vec<String> {
     let mut dark = Vec::new();
-    for name in names {
+    for Head { name, mode } in heads {
         let Ok(outputs) = ipc::outputs() else {
             dark.push(name.clone());
             continue;
@@ -228,8 +250,16 @@ fn restore_heads(names: &[String]) -> Vec<String> {
         if h.enabled && h.powered {
             continue;
         }
-        let back =
-            ipc::msg(&head_action(true, name)).and_then(|()| ipc::msg(&dpms_action(true, name)));
+        let back = ipc::msg(&head_action(true, name))
+            .or_else(|e| {
+                tracing::info!(
+                    output = %name, ?mode, error = %format!("{e:#}"),
+                    "umbriel refused output-enable — enabling the head at its mode instead"
+                );
+                let want = mode.as_deref().and_then(crate::policy::parse_mode);
+                output_mgmt::enable(name, want).context("enable over output management")
+            })
+            .and_then(|()| ipc::msg(&dpms_action(true, name)));
         match back {
             Ok(()) if wait_head(name, true) => {
                 tracing::info!(output = %name, "umbriel: re-enabled the output the stream turned off")
@@ -249,14 +279,12 @@ fn restore_heads(names: &[String]) -> Vec<String> {
 pub(crate) fn undo(undo: &Undo) -> Result<()> {
     match undo {
         Undo::EnableHeads { heads } => {
-            let names: Vec<String> = heads.iter().map(|h| h.name.clone()).collect();
-            let dark = restore_heads(&names);
+            let dark = restore_heads(heads);
             if dark.is_empty() {
                 return Ok(());
             }
             bail!(
-                "{} still off — `umbriel msg output-enable <name>` or `umbriel msg config-reload` \
-                 re-lights it",
+                "{} still off — `wlr-randr --output <name> --on --preferred` re-lights it",
                 dark.join(", ")
             )
         }
