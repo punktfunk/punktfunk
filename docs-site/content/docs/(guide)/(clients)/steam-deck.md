@@ -121,6 +121,13 @@ use **Request access**.
 
 The host isn't advertising on this network. Use the PIN.
 
+### Punktfunk returns to Play within a second
+
+Steam ran it through Proton. Once an entry has had a compatibility tool set, even back to
+**Default**, Steam runs it with its default Proton until Steam restarts. Update the plugin: it
+replaces its own entries when that happens. For an entry you added yourself, set its
+compatibility tool to **Default**, then restart Steam.
+
 ### The stream launches but doesn't take focus
 
 Start it from the panel, not by launching the client yourself.
