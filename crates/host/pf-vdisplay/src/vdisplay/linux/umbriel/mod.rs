@@ -9,6 +9,7 @@
 
 pub(crate) mod desktop;
 pub(crate) mod ipc;
+mod output_mgmt;
 
 use super::{Mode, SessionCastParts, VirtualDisplay, VirtualOutput};
 use crate::hyprland::{head_name, is_managed_output};
