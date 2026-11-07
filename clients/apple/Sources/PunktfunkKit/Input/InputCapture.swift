@@ -82,6 +82,8 @@ public final class InputCapture {
     /// itself (`takeRelease`). Whatever is still here when the last ⌘ comes up is released then
     /// (`flushCommandChord`), so a chord key never outlives its ⌘ on the host.
     private var commandChordVKs: Set<UInt32> = []
+    /// The Caps Lock state the host was last sent, `nil` before the first. See `capsLockTap`.
+    private var capsLockOn: Bool?
 
     #endif
 
@@ -604,15 +606,24 @@ public final class InputCapture {
     /// from the flags. Fed `event.keyCode` + `UInt(event.modifierFlags.rawValue)` — LOW 16
     /// bits intact, they carry the device-dependent L/R bits (the .deviceIndependentFlagsMask
     /// the ⌘⎋ monitor uses deliberately strips exactly these — do NOT pre-mask here).
+    /// Caps Lock carries a lock state instead, and goes out as a tap (`capsLockTap`).
     public func handleFlagsChanged(keyCode: UInt16, rawFlags: UInt) {
         if inputDebug {
             inputLog.debug(
                 "flagsChanged keyCode \(keyCode, privacy: .public) flags 0x\(String(rawFlags, radix: 16), privacy: .public) forwarding \(self.forwarding, privacy: .public)")
         }
         guard forwarding else { return }
+        if let caps = Self.capsLockTap(keyCode: keyCode, rawFlags: rawFlags, was: capsLockOn) {
+            capsLockOn = caps.on
+            if caps.tap {
+                sendKey(0x14, down: true) // VK_CAPITAL
+                sendKey(0x14, down: false)
+            }
+            return
+        }
         guard let (vk, down) = Self.resolveModifier(
             keyCode: keyCode, rawFlags: rawFlags, isDown: { pressedVKs.contains($0) })
-        else { return } // Fn / Caps Lock / unknown — nothing the host consumes on this path
+        else { return } // Fn / unknown — nothing the host consumes on this path
         // Keep cmdKeysDown in step (the ⌘⎋ toggle + Esc suppression read it); sendKey
         // adds the VK to pressedVKs so releaseAll/blur flushes a held modifier cleanly.
         if vk == 0x5B || vk == 0x5C {
@@ -638,7 +649,7 @@ public final class InputCapture {
     /// say which side is held now; class bit set with NO device bits → flip the held state
     /// we track (`isDown`, from pressedVKs — SDL ships the same fallback). Each keyCode
     /// maps to the L/R modifier VK `hidToVK` already emits, so the host needs no change.
-    /// Returns nil for modifiers the host doesn't consume on this path (Fn, Caps Lock).
+    /// Returns nil for Fn and Caps Lock; Caps Lock goes through `capsLockTap`.
     nonisolated static func resolveModifier(
         keyCode: UInt16, rawFlags: UInt, isDown: (UInt32) -> Bool
     ) -> (vk: UInt32, down: Bool)? {
@@ -652,6 +663,17 @@ public final class InputCapture {
             down = !isDown(mod.vk)
         }
         return (mod.vk, down)
+    }
+
+    /// Caps Lock (kVK_CapsLock) reaches flagsChanged once per toggle, as the `.capsLock` bit, never
+    /// as a press and a release. A host toggles its lock on a press, so a state that differs from
+    /// `was`, the one the host was last sent, is one tap. Nil for any other key.
+    nonisolated static func capsLockTap(
+        keyCode: UInt16, rawFlags: UInt, was: Bool?
+    ) -> (on: Bool, tap: Bool)? {
+        guard keyCode == 57 else { return nil }
+        let on = rawFlags & NSEvent.ModifierFlags.capsLock.rawValue != 0
+        return (on, on != was)
     }
 
     // MARK: - ⌘ chord passthrough
