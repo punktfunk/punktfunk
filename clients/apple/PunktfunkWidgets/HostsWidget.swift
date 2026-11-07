@@ -75,6 +75,13 @@ struct HostsWidgetView: View {
     }
 }
 
+/// "2 hr. ago" in the system language, as of the render; the timeline reloads when the store does.
+private func sinceLabel(_ date: Date) -> String {
+    let formatter = RelativeDateTimeFormatter()
+    formatter.unitsStyle = .short
+    return formatter.localizedString(for: date, relativeTo: Date())
+}
+
 /// Deep link that connects to a stored host.
 private func connectURL(_ host: StoredHost) -> URL {
     DeepLink.connect(host: host.id, launchID: nil).url
@@ -93,7 +100,7 @@ private struct SmallHostView: View {
                     .font(.headline)
                     .lineLimit(2)
                 if let last = host.lastConnected {
-                    Text(last, style: .relative)
+                    Text(sinceLabel(last))
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                 }
@@ -126,7 +133,7 @@ private struct MediumHostsView: View {
                                 .lineLimit(1)
                             Spacer()
                             if let last = host.lastConnected {
-                                Text(last, style: .relative)
+                                Text(sinceLabel(last))
                                     .font(.caption2)
                                     .foregroundStyle(.secondary)
                             }
