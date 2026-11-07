@@ -767,12 +767,12 @@ fn bitrate_rungs(platform: crate::platform::Platform) -> usize {
 }
 const COMPOSITORS: [(&str, Label); 8] = [
     ("auto", m::player_compositor_auto),
-    ("kwin", || "KWin"),
-    ("mutter", || "Mutter"),
+    ("kwin", || "KWin (KDE Plasma)"),
+    ("mutter", || "Mutter (GNOME)"),
     ("hyprland", || "Hyprland"),
     ("niri", || "niri"),
     ("umbriel", || "Umbriel"),
-    ("wlroots", || "wlroots"),
+    ("wlroots", || "wlroots (Sway, River)"),
     ("gamescope", || "gamescope"),
 ];
 const CODECS: [(&str, Label); 5] = [
