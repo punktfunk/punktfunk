@@ -247,7 +247,7 @@ pub fn tray(canvas: &Canvas, ui: &Frame, rect: Rect, toward: Toward, k: f64) {
 pub struct Foot<'a> {
     /// Centred, bold: the focused game.
     pub title: Option<&'a str>,
-    /// Tracked capitals under the title: where it comes from.
+    /// Under the title, as written: where it comes from.
     pub subtitle: Option<&'a str>,
     /// A short note on the leading margin, on the subtitle's line.
     pub note: Option<&'a str>,
@@ -1177,7 +1177,7 @@ impl MenuList {
         if let Some(header) = row.header {
             fonts.draw(
                 canvas,
-                &header.to_uppercase(),
+                header,
                 x0 + 16.0 * k,
                 top - HEADER_RISE * k,
                 W::SemiBold,
