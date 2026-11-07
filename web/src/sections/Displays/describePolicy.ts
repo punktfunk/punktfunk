@@ -1,9 +1,8 @@
-// The Displays page's one plain sentence: what happens to my screens when a device connects. The
-// same function captions every preset, so picking one means reading what it will do. It says
-// what the page shows: a mirror pin and dedicated game sessions change the answer.
+// The Displays page's plain summary: what happens to my screens when a device connects. The same
+// function captions every preset, so picking one means reading what it will do. It says what the
+// page shows: a mirror pin and dedicated game sessions change the answer.
 //
-// Clauses are whole messages, not glued fragments: German puts the verb somewhere English does
-// not, and a sentence assembled from four half-phrases cannot be translated.
+// Every sentence is a whole message, put side by side and never filled with another message.
 import type { EffectivePolicy, GameSession, KeepAlive } from "@/api/gen/model";
 import { m } from "@/paraglide/messages";
 
@@ -21,7 +20,7 @@ export interface DescribeOptions {
 	gameSession?: GameSession;
 }
 
-/** `{who} gets {screen}, {kept}. {second device}. [Games…] [Applies to the next connection.]` */
+/** `{Who gets which screen}. {What disconnecting does}. {Second device}. [Games…] [Next connection.]` */
 export function describePolicy(
 	policy: EffectivePolicy,
 	opts: DescribeOptions = {},
@@ -45,43 +44,48 @@ function firstSentence(policy: EffectivePolicy, opts: DescribeOptions): string {
 					connector: opts.mirror,
 				})
 			: m.display_says_mirror({ connector: opts.mirror });
-	const kept = keptClause(policy.keep_alive);
-	// A named device is one device, so it never reads as "each"; an idle host has no device yet,
-	// so it speaks about the next one.
-	if (opts.deviceName) {
-		return m.display_says_device({
-			name: opts.deviceName,
-			kept,
-			...screen(policy),
-		});
-	}
-	return m.display_says_each({ kept, ...screen(policy) });
+	return `${screenSentence(policy.topology, opts.deviceName)} ${keptSentence(policy.keep_alive)}`;
 }
 
-/** The screen a device is given, as a fragment the sentence messages interpolate. */
-function screen(policy: EffectivePolicy): { screen: string } {
-	switch (policy.topology) {
+/**
+ * The screen a device is given. A named device is one device, so it never reads as "each"; an
+ * idle host has no device yet, so it speaks about the next one.
+ */
+function screenSentence(
+	topology: EffectivePolicy["topology"],
+	name: string | undefined,
+): string {
+	switch (topology) {
 		case "extend":
-			return { screen: m.display_says_screen_extend() };
+			return name
+				? m.display_says_device_extend({ name })
+				: m.display_says_each_extend();
 		case "primary":
-			return { screen: m.display_says_screen_primary() };
+			return name
+				? m.display_says_device_primary({ name })
+				: m.display_says_each_primary();
 		case "exclusive":
-			return { screen: m.display_says_screen_exclusive() };
+			return name
+				? m.display_says_device_exclusive({ name })
+				: m.display_says_each_exclusive();
 		default:
 			// `auto` is the host choosing per setup — a headless box has nothing to extend from.
 			// Naming a specific outcome here would be a guess the host has not made yet.
-			return { screen: m.display_says_screen_auto() };
+			return name
+				? m.display_says_device_auto({ name })
+				: m.display_says_each_auto();
 	}
 }
 
-function keptClause(keep: KeepAlive): string {
+/** What happens to that screen when the device disconnects. */
+function keptSentence(keep: KeepAlive): string {
 	switch (keep.mode) {
 		case "off":
-			return m.display_says_kept_off();
+			return m.display_says_on_disconnect_remove();
 		case "forever":
-			return m.display_says_kept_forever();
+			return m.display_says_on_disconnect_forever();
 		default:
-			return m.display_says_kept_for({ seconds: keep.seconds });
+			return m.display_says_on_disconnect_keep({ seconds: keep.seconds });
 	}
 }
 
