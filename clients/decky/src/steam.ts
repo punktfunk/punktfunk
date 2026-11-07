@@ -23,12 +23,14 @@
 // the first Stream tap for that game and reused after; see ensureGameShortcut.
 
 import { applyControllerConfig, gameArt, runnerInfo, saveIcon, shortcutArt } from "./backend";
+import { type CompatApps, compatToolOf } from "./compat";
+import { diag } from "./diag";
 
 // SteamClient is a Steam-internal global injected into the CEF context; it is not fully typed
 // by @decky/ui, so declare the surface we use. Signatures verified against MoonDeck + the
 // decky-frontend-lib SteamClient.Apps typings.
 declare const SteamClient: {
-  Apps: {
+  Apps: CompatApps & {
     AddShortcut(
       name: string,
       exePath: string,
@@ -40,8 +42,6 @@ declare const SteamClient: {
     SetShortcutStartDir(appId: number, dir: string): void;
     SetShortcutIcon(appId: number, iconPath: string): void;
     SetAppLaunchOptions(appId: number, options: string): void;
-    // An empty name removes the app's forced compatibility tool.
-    SpecifyCompatTool?(appId: number, toolName: string): void;
     // assetType: 0 = grid (portrait capsule), 1 = hero, 2 = logo, 3 = wide grid.
     SetCustomArtworkForApp(
       appId: number,
@@ -464,10 +464,14 @@ interface ShortcutRole {
 }
 
 /**
- * Ensure a role's shortcut exists and points at the current plugin dir: reuse the remembered
- * appId only while the shortcut is alive (a stale id must fall through, not be repointed), else
- * adopt or mint one. Then rewrite exe, start dir, name, compatibility tool, visibility and art.
+ * Ensure a role's shortcut exists, runs natively and points at the current plugin dir: reuse the
+ * remembered appId only while the shortcut is alive (a stale id must fall through, not be
+ * repointed), else adopt or mint one. Then rewrite exe, start dir, name, visibility and art.
  * Throws when the launch wrapper is missing.
+ *
+ * Any `SpecifyCompatTool` call, even an empty name, marks a shortcut as a compat app until Steam
+ * restarts, and it then runs in the player's global default, which is Proton. Only a shortcut
+ * that never had a tool runs natively, so a marked one is replaced, never cleared.
  */
 async function ensureShortcutOnce(role: ShortcutRole): Promise<Ensured> {
   const info = await runnerInfo();
@@ -478,26 +482,36 @@ async function ensureShortcutOnce(role: ShortcutRole): Promise<Ensured> {
   if (role.configMarker) {
     void configOnce(role.configMarker, role.name); // never blocks the launch
   }
+  const mint = async (): Promise<number> => {
+    const id = await SteamClient.Apps.AddShortcut(role.name, SHELL, startDir, "");
+    try {
+      localStorage.removeItem(role.artKey(id)); // a recycled appId must not skip its art
+    } catch {
+      /* ignore */
+    }
+    remember(role.key, id);
+    return id;
+  };
   const remembered = recall(role.key);
   let appId =
     remembered != null && (await shortcutStillExists(remembered)) ? remembered : null;
   if (appId == null) {
     appId = role.adoptExcept ? findAdoptableShortcut(recall(role.adoptExcept)) : null;
     if (appId == null) {
-      appId = await SteamClient.Apps.AddShortcut(role.name, SHELL, startDir, "");
-      try {
-        localStorage.removeItem(role.artKey(appId)); // a recycled appId must not skip its art
-      } catch {
-        /* ignore */
-      }
+      appId = await mint();
+    } else {
+      remember(role.key, appId);
     }
-    remember(role.key, appId);
+  }
+  const tool = await compatToolOf(SteamClient.Apps, appId);
+  if (tool) {
+    diag(`shortcut ${appId}: Steam would run it in ${tool}, replacing it`);
+    SteamClient.Apps.RemoveShortcut(appId);
+    appId = await mint();
   }
   SteamClient.Apps.SetShortcutExe(appId, SHELL);
   SteamClient.Apps.SetShortcutStartDir(appId, startDir);
   SteamClient.Apps.SetShortcutName(appId, role.name);
-  // A compatibility tool runs the wrapper in a container with no flatpak, so the launch dies.
-  SteamClient.Apps.SpecifyCompatTool?.(appId, "");
   if (role.launchOptions) {
     SteamClient.Apps.SetAppLaunchOptions(appId, role.launchOptions(info.runner, info.client_bin));
   }
