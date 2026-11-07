@@ -59,6 +59,8 @@
 	"automation_filter_preset": "Voreinstellung",
 	"automation_filter_preset_help": "Die Voreinstellung, mit der das Gerät gestreamt hat, als Name oder ID, etwa Docked.",
 	"automation_filter_none": "Kein Treffer – wird trotzdem so gespeichert.",
+	"automation_filter_any_device": "Beliebiges Gerät",
+	"automation_filter_any_profile": "Beliebiges Profil",
 	"automation_field_debounce": "Mindestabstand (ms)",
 	"automation_field_timeout": "Zeitlimit (s)",
 	"automation_field_hold": "Start zurückhalten, bis das fertig ist",

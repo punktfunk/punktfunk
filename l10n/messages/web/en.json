@@ -49,6 +49,8 @@
 	"automation_filter_preset": "Settings preset",
 	"automation_filter_preset_help": "The preset the device streamed with, by name or id, like Docked.",
 	"automation_filter_none": "No match — it will still be saved as typed.",
+	"automation_filter_any_device": "Any device",
+	"automation_filter_any_profile": "Any profile",
 	"automation_field_debounce": "Minimum gap (ms)",
 	"automation_field_timeout": "Timeout (s)",
 	"automation_field_hold": "Hold the launch until this finishes",
