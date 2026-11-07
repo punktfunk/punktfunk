@@ -484,7 +484,7 @@ impl Waited {
             ),
             Self::Cancelled => (
                 "launch_download_cancelled",
-                format!("{title}'s download was cancelled."),
+                format!("{title}'s download was canceled."),
             ),
             Self::Paused => (
                 "launch_download_paused",
