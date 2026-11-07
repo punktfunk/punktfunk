@@ -488,7 +488,7 @@
 	"lib_download_eta_hours": "about {hours} h {minutes} min left",
 	"lib_download_failed": "{title} didn't download.",
 	"lib_download_failed_why": "{title} didn't download — {why}",
-	"lib_download_cancelled": "{title}'s download was cancelled.",
+	"lib_download_cancelled": "{title}'s download was canceled.",
 	"lib_download_paused": "{title}'s download was paused. Start it again to resume.",
 	"lib_hold_downloading": "Downloading",
 	"lib_hold_leaving": "Leaving won't stop the download.",

@@ -457,7 +457,7 @@
 	"launch_closed_at_once": "Couldn't start {title} — it closed again after {seconds} s.",
 	"launch_command_missing": "Couldn't start {title} — this host doesn't have that command.",
 	"launch_command_not_runnable": "Couldn't start {title} — this host can't run that command.",
-	"launch_download_cancelled": "{title}'s download was cancelled.",
+	"launch_download_cancelled": "{title}'s download was canceled.",
 	"launch_download_failed": "{title} didn't download.",
 	"launch_download_failed_reason": "{title} didn't download — {reason}",
 	"launch_download_no_answer": "Couldn't download {title} — the plugin that lists it didn't answer.",

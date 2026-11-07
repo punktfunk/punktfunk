@@ -310,7 +310,7 @@ export const HookForm: FC<{
 								</SelectTrigger>
 								<SelectContent>
 									<SelectItem value={ANY_DEVICE}>
-										{m.automation_filter_none()}
+										{m.automation_filter_any_device()}
 									</SelectItem>
 									{legacyClient && (
 										<SelectItem value={legacyClient}>{legacyClient}</SelectItem>
@@ -344,7 +344,7 @@ export const HookForm: FC<{
 									</SelectTrigger>
 									<SelectContent>
 										<SelectItem value={ANY_DEVICE}>
-											{m.automation_filter_none()}
+											{m.automation_filter_any_profile()}
 										</SelectItem>
 										{players.map((p) => (
 											<SelectItem key={p.id} value={p.id}>
