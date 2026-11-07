@@ -601,19 +601,13 @@ fn hosts_page(page: &HostsPage, props: &HostsProps) -> View {
         for (band, tiles) in bands {
             body.push(section(
                 pal,
-                &band.map_or_else(
-                    || client::hosts_section_saved().to_uppercase(),
-                    |b| b.label().to_uppercase(),
-                ),
+                &band.map_or_else(|| client::hosts_section_saved().to_string(), |b| b.label()),
             ));
             body.push(tile_grid(tiles, cols, TILE_GAP));
         }
     }
 
-    body.push(section(
-        pal,
-        &client::hosts_section_discovered().to_uppercase(),
-    ));
+    body.push(section(pal, client::hosts_section_discovered()));
     body.push(discovered_tiles(props, &known, &hover, cols));
     let edit: View = match &props.rename {
         Some(who) => edit_editor(page, props, who),

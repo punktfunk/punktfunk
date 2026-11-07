@@ -422,10 +422,13 @@ impl<'a> Tui<'a> {
     /// The password step: a fresh host install must not end with the console asking for
     /// something the user never saw mentioned. `None` keeps the generated one — backing out
     /// of either prompt is that same answer, never a cancelled install.
-    pub fn web_password(&self, url: &str, read_cmd: &str) -> Option<String> {
+    pub fn web_password(&self, ip: Option<&str>, host: &str, read_cmd: &str) -> Option<String> {
+        let ask = match ip {
+            Some(ip) => t::setup_password_prompt(format!("https://{ip}:47992")),
+            None => t::setup_password_prompt_no_ip(host),
+        };
         let prompt = format!(
-            "{}\n{}\n{read_cmd}",
-            t::setup_password_prompt(url),
+            "{ask}\n{}\n{read_cmd}",
             t::setup_password_prompt_generated()
         );
         let options = [
@@ -444,13 +447,16 @@ impl<'a> Tui<'a> {
     /// `None` on Esc leaves `current` standing, so backing out of a re-run never moves a console
     /// someone already placed. "Any address" is deliberately not an option: a console on the open
     /// internet is a route the operator builds on purpose, not one a list offers them.
-    pub fn web_bind(&self, ip: &str, current: &str) -> Option<String> {
+    pub fn web_bind(&self, ip: Option<&str>, host: &str, current: &str) -> Option<String> {
         let prompt = format!(
             "{}\n{}",
             t::setup_bind_prompt(),
             t::setup_bind_prompt_body()
         );
-        let lan = t::setup_bind_option_lan(ip);
+        let lan = match ip {
+            Some(ip) => t::setup_bind_option_lan(ip),
+            None => t::setup_bind_option_lan_no_ip(host),
+        };
         let options = [
             t::setup_bind_option_loopback(),
             lan.as_str(),

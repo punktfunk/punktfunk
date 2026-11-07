@@ -79,7 +79,7 @@ pub fn wake_and_connect(
                     // Park in the same dialog. Cancel stays its close response.
                     waiting.set_heading(Some(&wake_parked_line(&req.host.name)));
                     waiting.set_body(client::dial_wake_parked_hint());
-                    waiting.add_response("retry", common::common_try_again());
+                    waiting.add_response("retry", common::common_retry());
                     waiting.set_response_appearance("retry", adw::ResponseAppearance::Suggested);
                     waiting.set_default_response(Some("retry"));
                     waiting.connect_response(Some("retry"), move |_, _| {

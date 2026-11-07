@@ -1370,7 +1370,7 @@ impl LibraryScreen {
     }
 
     /// What the title band says for the focus: the title and, on the grid, where it comes
-    /// from — `STORE · PLATFORM`, or `STORE · LAUNCHER`.
+    /// from — `Store · Platform`, or `Store · Launcher`, drawn as the data and message read.
     fn title_band(&self, ctx: &Ctx) -> card::TitleBand<'static> {
         let note = self.stale.note();
         let game = match self.zone {
@@ -1387,16 +1387,11 @@ impl LibraryScreen {
         let subtitle = game
             .filter(|g| grid && g.id != crate::library::DESKTOP_ID)
             .map(|g| {
-                let store = store_label(&g.store).to_uppercase();
+                let store = store_label(&g.store);
                 match (g.launcher, g.platform.as_deref().map(str::trim)) {
-                    (true, _) => format!(
-                        "{store} \u{b7} {}",
-                        pf_l10n::client::lib_launcher().to_uppercase()
-                    ),
-                    (false, Some(p)) if !p.is_empty() => {
-                        format!("{store} \u{b7} {}", p.to_uppercase())
-                    }
-                    _ => store,
+                    (true, _) => format!("{store} \u{b7} {}", pf_l10n::client::lib_launcher()),
+                    (false, Some(p)) if !p.is_empty() => format!("{store} \u{b7} {p}"),
+                    _ => store.to_string(),
                 }
             });
         card::TitleBand {

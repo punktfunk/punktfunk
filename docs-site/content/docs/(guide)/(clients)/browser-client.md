@@ -154,7 +154,7 @@ UDP. The machine that runs the page has to be reachable over HTTPS from the netw
 Streaming over this path is a preview, and a browser that pairs over it asks
 [through the web client](#3-open-it-and-pair).
 
-## Console mode
+## Controller interface
 
 The controller button in the top bar switches the page to Punktfunk Console, the interface every
 client draws for a TV and a gamepad: hosts, pairing, the library and settings, all by D-pad.

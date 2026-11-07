@@ -235,7 +235,7 @@ mod tests {
         };
         let reason = |a: ActionInfo| a.worded().unavailable_reason.unwrap();
         let known = Some("host_power_not_supported_here");
-        assert_eq!(reason(row(known)), "This machine does not support it");
+        assert_eq!(reason(row(known)), "This host doesn't support it");
         pf_l10n::with_language("en-XA", || {
             let said = reason(row(known));
             assert!(said.starts_with('['), "{said}");

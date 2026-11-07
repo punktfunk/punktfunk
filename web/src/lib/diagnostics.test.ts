@@ -28,7 +28,7 @@ test("summary, impact and remedy are worded by their own ids", () => {
 		params: { count: "2" },
 	});
 	expect(checkSummary(c)).toBe(
-		"The controller speaker endpoint takes the host's open (2 pad slots).",
+		"The controller speaker endpoint takes the host's open (2 controller slots).",
 	);
 	overwriteGetLocale(() => "de");
 	expect(checkSummary(c)).toBe(

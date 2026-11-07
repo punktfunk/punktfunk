@@ -422,13 +422,14 @@ mod tests {
         assert_eq!(on_page(&mut mac), [Kind::Keyboard, Kind::Pad]);
     }
 
-    /// A phone's width stacks the badges over the text, and the text wraps whole.
+    /// A phone's width stacks the badges over the text; a narrower column wraps the text whole.
     #[test]
     fn a_narrow_column_stacks_badges_over_text() {
         let fonts = build_fonts().unwrap();
         let mut s = screen();
-        s.layout(&fonts, 360.0, 1.0);
+        s.layout(&fonts, 320.0, 1.0);
         assert!(s.cards.iter().all(|c| c.stacked));
+        s.layout(&fonts, 250.0, 1.0);
         assert!(s
             .cards
             .iter()

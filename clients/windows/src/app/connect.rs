@@ -720,7 +720,7 @@ pub(crate) fn wake_parked_page(
             set_status.clone(),
             target.clone(),
         );
-        icon_button("rotate-cw", common::common_try_again())
+        icon_button("rotate-cw", common::common_retry())
             .style(ButtonStyle::Accent)
             .on_click(move || wake_and_connect(&ctx, target.clone(), &ss, &st))
     };

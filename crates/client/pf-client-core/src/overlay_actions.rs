@@ -624,7 +624,7 @@ pub fn next_pad_type(current: GamepadPref) -> GamepadPref {
 }
 
 /// `(name, short)` for the Controller type slot: the sheet's value and the dial's face. A
-/// pad's name is a brand; a type outside the cycle shows its id.
+/// pad's name is a brand; a type outside the cycle reads "Other".
 pub fn pad_type_label(pref: GamepadPref) -> (&'static str, &'static str) {
     use pf_l10n::client as c;
     match pref {
@@ -634,7 +634,7 @@ pub fn pad_type_label(pref: GamepadPref) -> (&'static str, &'static str) {
         GamepadPref::DualSense => ("DualSense", "DualSense"),
         GamepadPref::DualShock4 => ("DualShock 4", "DS4"),
         GamepadPref::SteamDeck => ("Steam Deck", "Deck"),
-        other => (other.as_str(), other.as_str()),
+        _ => (c::ring_pad_type_other(), c::ring_pad_type_other()),
     }
 }
 
@@ -795,6 +795,10 @@ mod tests {
             assert_eq!(next_pad_type(pref(name)), GamepadPref::Auto, "{name}");
         }
         assert_eq!(pad_type_label(GamepadPref::DualShock4).1, "DS4");
+        assert_eq!(
+            pad_type_label(GamepadPref::SteamController),
+            ("Other", "Other")
+        );
     }
 
     #[test]

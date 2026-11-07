@@ -240,8 +240,8 @@ pub const COMPOSITORS: &[&str] = &[
 pub const CODECS: &[&str] = &["auto", "hevc", "h264", "av1", "pyrowave"];
 pub const CODEC_LABELS: &[Text] = &[
     client::player_codec_auto,
-    || "HEVC (H.265)",
-    || "H.264 (AVC)",
+    || "HEVC",
+    || "H.264",
     || "AV1",
     client::player_codec_pyrowave,
 ];

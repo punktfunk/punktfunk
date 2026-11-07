@@ -76,7 +76,7 @@ final class HostTextTests: XCTestCase {
         }
         XCTAssertEqual(
             try reason(#""unavailable_reason":"The host's English.","unavailable_code":"host_power_not_supported_here""#),
-            "This machine does not support it")
+            "This host doesn't support it")
         XCTAssertEqual(
             try reason(#""unavailable_reason":"The host's English.","unavailable_code":"from_a_newer_host""#),
             "The host's English.")

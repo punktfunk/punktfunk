@@ -152,7 +152,7 @@ pub(crate) fn sheet(
     .into()
 }
 
-/// A small all-caps section label above a group of cards.
+/// A small section label above a group of cards, drawn as written.
 pub(crate) fn section(pal: &Palette, label: &str) -> View {
     muted(pal, label)
         .font_size(12.0)

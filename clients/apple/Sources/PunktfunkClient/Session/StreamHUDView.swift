@@ -154,7 +154,7 @@ struct StreamHUDView: View {
         let remaining = model.notices.accessRemainingSecs
         guard remaining != 0 else { return String(localized: level) }
         return [String(localized: level),
-                L10n.grantChipEnds(time: SessionModel.accessCountdown(remaining))]
+                SessionModel.accessChipEnd(remaining)]
             .joined(separator: " \u{b7} ")
     }
     #endif
@@ -478,7 +478,7 @@ struct AccessChipBadge: View {
     /// The level, then how long it lasts; the level alone while the access is permanent.
     private func levelAndEnd(separator: String) -> String {
         guard remainingSecs != 0 else { return label }
-        return [label, L10n.grantChipEnds(time: SessionModel.accessCountdown(remainingSecs))]
+        return [label, SessionModel.accessChipEnd(remainingSecs)]
             .joined(separator: separator)
     }
 }

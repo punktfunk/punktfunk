@@ -2230,12 +2230,12 @@ fn the_announcement_names_the_trailing_actions() {
     }
     assert_eq!(
         s.focus_announcement().as_deref(),
-        Some("Add host, Register a host by address")
+        Some("Add host, By address")
     );
     s.handle_menu(MenuEvent::Move(MenuDir::Right));
     assert_eq!(
         s.focus_announcement().as_deref(),
-        Some("Scan again, Scan the network for hosts again")
+        Some("Scan again, Find hosts on this network")
     );
 }
 

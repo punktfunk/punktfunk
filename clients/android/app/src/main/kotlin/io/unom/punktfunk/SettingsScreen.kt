@@ -1444,10 +1444,10 @@ internal fun SettingsGroup(
     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
         if (header != null) {
             Text(
-                header.uppercase(),
+                header,
                 style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.colorScheme.primary,
-                letterSpacing = 1.2.sp,
+                letterSpacing = 0.sp,
                 modifier = Modifier.padding(start = 4.dp),
             )
         }

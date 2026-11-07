@@ -179,16 +179,15 @@ pub(crate) fn paint_tile(
         GroupKey::Platform(_) | GroupKey::Other | GroupKey::Launchers => {
             pf_l10n::client::lib_collection_kind_platform()
         }
-    }
-    .to_uppercase();
-    let kind_w = f64::from(fonts.measure(&kind, W::SemiBold, 11.0 * k));
+    };
+    let kind_w = f64::from(fonts.measure(kind, W::SemiBold, 11.0 * k));
     // Never left of the deck's reserved corner: a narrow tile would otherwise
     // walk the caption back into the covers.
     let kind_x = (f64::from(rect.right) - pad - kind_w).max(l + (FAN_W + 10.0) * fk);
     let kind_y = t + 12.0 * k;
     fonts.draw(
         canvas,
-        &kind,
+        kind,
         kind_x,
         kind_y,
         W::SemiBold,

@@ -1,6 +1,6 @@
 │
-◆  Joins the punktfunk group for paddles, trackpads and gyro. It grants usbip attach, so only on a
-│  machine you trust.
+◆  For paddles, trackpads and gyro; the punktfunk group can attach USB devices, so only on a host
+│  you trust.
 │  ● Yes
 │  ○ No
 │

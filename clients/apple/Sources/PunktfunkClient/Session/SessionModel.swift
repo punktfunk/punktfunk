@@ -863,15 +863,22 @@ final class SessionModel: ObservableObject {
         flash(\.launch, text, for: SessionNotices.launchSeconds)
     }
 
-    /// "1 h 58 m" / "12 m" / "45 s" — the countdown wording the chip and the warnings share.
+    /// "1 h 58 m" / "12 m" — the countdown wording the chip and the warnings share, for a
+    /// minute or more.
     static func accessCountdown(_ secs: UInt32) -> String {
         let s = Int(secs)
         if s >= 3600 {
             return L10n.grantRemainingHoursMinutes(
                 hours: String(s / 3600), minutes: String((s % 3600) / 60))
         }
-        if s >= 60 { return L10n.grantRemainingMinutes(minutes: String(s / 60)) }
-        return L10n.grantRemainingSeconds(seconds: String(s))
+        return L10n.grantRemainingMinutes(minutes: String(s / 60))
+    }
+
+    /// The chip's tail: "ends in 12 m", or "ends in under 1 m" in the last minute.
+    static func accessChipEnd(_ secs: UInt32) -> String {
+        secs < 60
+            ? String(localized: L10n.grantChipEndsSoon)
+            : L10n.grantChipEnds(time: accessCountdown(secs))
     }
 
     /// Move this session's overlay tier: a Settings change to the stored tier, or `cycleStats`.

@@ -119,7 +119,7 @@ impl Shell {
                         pf_l10n::client::dial_wake_parked(&wk.name),
                         pf_l10n::client::dial_wake_parked_hint().into(),
                         vec![
-                            Hint::new(HintKey::Confirm, pf_l10n::common::common_try_again()),
+                            Hint::new(HintKey::Confirm, pf_l10n::common::common_retry()),
                             cancel(),
                         ],
                     ))

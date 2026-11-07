@@ -35,7 +35,7 @@ fn render(facts: &WinFacts, choices: &WinChoices, artifact: Artifact, uninstall:
     let plan = plan::build(facts, choices, artifact, uninstall);
     exec::render(&plan, &ui);
     if !uninstall {
-        report::outro(&ui, facts, choices, artifact);
+        report::outro(&ui, facts, choices, artifact, "PUNKT-PC");
     }
     buf.borrow().clone()
 }

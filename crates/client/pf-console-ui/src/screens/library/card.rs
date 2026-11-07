@@ -233,12 +233,12 @@ pub(super) fn store_badge(
     );
 }
 
-/// The running badge, upper-cased, in `rect`'s top-right, opposite the store badge. Fixed
-/// green on every palette; `alpha` is the cover's.
+/// The running badge in `rect`'s top-right, opposite the store badge. Fixed green on every
+/// palette; `alpha` is the cover's.
 pub(super) fn running_badge(canvas: &Canvas, fonts: &Fonts, rect: Rect, k: f64, alpha: f32) {
-    let label = pf_l10n::client::lib_badge_resume().to_uppercase();
+    let label = pf_l10n::client::lib_badge_running();
     let size = 11.0 * k;
-    let tw = f64::from(fonts.measure(&label, W::SemiBold, size));
+    let tw = f64::from(fonts.measure(label, W::SemiBold, size));
     let (bw, bh) = (tw + 14.0 * k, 19.0 * k);
     let pad = 7.0 * k;
     let x = f64::from(rect.right) - pad - bw;
@@ -251,7 +251,7 @@ pub(super) fn running_badge(canvas: &Canvas, fonts: &Fonts, rect: Rect, k: f64, 
     let ink = Color4f::new(0.04, 0.10, 0.05, alpha);
     fonts.draw(
         canvas,
-        &label,
+        label,
         x + 7.0 * k,
         y + bh / 2.0 + size * 0.36,
         W::SemiBold,

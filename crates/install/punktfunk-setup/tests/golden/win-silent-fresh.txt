@@ -40,7 +40,7 @@
   + "C:\Program Files\punktfunk\punktfunk-host.exe" driver check
 
   Done. Next:
-  1. Open the web console:  https://<this-PC>:47992  (the certificate is the host's own — continue past the warning)
+  1. Open the web console:  https://PUNKT-PC:47992  (the certificate is the host's own — continue past the warning)
      password: punktfunk-host web password  (from an elevated PowerShell)
   2. Install a client on the device you stream to (https://docs.punktfunk.unom.io/docs/install-client), connect, and click Approve in the console.
   Stuck? https://docs.punktfunk.unom.io/docs/troubleshooting

@@ -471,7 +471,7 @@ pub(crate) async fn install_plugin(
                             "plugin_needs_platform",
                             format!(
                                 "This plugin can't run on this host — requires {}",
-                                list.join(" or ")
+                                list.join(", ")
                             ),
                         )
                         .param("platforms", list.join(", ")),

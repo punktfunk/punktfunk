@@ -103,7 +103,7 @@ class HostTextTest {
             id, "x", danger = false, available = false,
             unavailableReason = "The host's English.", unavailableCode = code,
         )
-        assertEquals("This machine does not support it", action("host_power_not_supported_here").reason(res))
+        assertEquals("This host doesn't support it", action("host_power_not_supported_here").reason(res))
         assertEquals("The host's English.", action("from_a_newer_host").reason(res))
         assertEquals("The host's English.", action("").reason(res))
         assertEquals("Restart Punktfunk", action("", "host.restart").text(res))

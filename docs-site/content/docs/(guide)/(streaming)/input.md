@@ -117,7 +117,7 @@ let go, so a long hold opens a SteamOS host's **Quick Access Menu**. A quick tap
 reaches the game, a beat late. L1, R1 or Start pressed with a held Select keep it a Select, so
 the leave chord never presses guide.
 
-Two advanced settings control this: **Guide button** and **Hold Select for guide**. **Automatic** does this:
+Two advanced settings control this: **Guide button** and **Guide gesture**. **Automatic** does this:
 
 | Client | Guide button | Hold Select |
 |---|---|---|

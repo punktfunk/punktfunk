@@ -417,22 +417,18 @@ fn interactive_choices(
     choices = screen.choices;
     choices.action = action;
     let host_install = action == Action::Install && choices.components.host;
-    // A stand-in the person can read as "your address": the same one the outro prints.
-    let ip = facts.ip.clone().unwrap_or_else(|| "<host-ip>".to_string());
+    let (ip, host) = (facts.ip.as_deref(), facts.console_host());
     // After the settings screen, not a row on it: the console password is the one thing
     // a fresh host install leaves the user needing, and a row is too easy to walk past.
     // A box that already has one keeps it — this never overwrites a password in use.
     if host_install && !facts.web_password_present {
-        choices.web_password = tui.web_password(
-            &format!("https://{ip}:47992"),
-            report::password_read(facts.family),
-        );
+        choices.web_password = tui.web_password(ip, host, report::password_read(facts.family));
     }
     // Right after it, for the same reason: the console is the whole product surface.
     // `--web-bind` pins it, and then there is nothing to ask.
     if host_install
         && pins.web_bind.is_none()
-        && let Some(bind) = tui.web_bind(&ip, &choices.web_bind)
+        && let Some(bind) = tui.web_bind(ip, host, &choices.web_bind)
     {
         choices.web_bind = bind;
     }

@@ -822,8 +822,7 @@ impl ScreenView for HomeScreen {
                     if let Some(text) = &caption {
                         let (x, y) = (f64::from(tile.left), f64::from(tile.top) - 10.0 * k);
                         let size = GROUP_CAPTION * k;
-                        let upper = text.to_uppercase();
-                        fonts.draw(canvas, &upper, x, y, W::SemiBold, size, ui.fg(0.55));
+                        fonts.draw(canvas, text, x, y, W::SemiBold, size, ui.fg(0.55));
                     }
                     look.paint(canvas, ui, fonts, &slot)
                 })

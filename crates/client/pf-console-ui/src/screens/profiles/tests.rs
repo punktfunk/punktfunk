@@ -86,7 +86,7 @@ fn ask_every_time_forgets_the_pick() {
     );
     s.focus = Focus::Face(2);
     let say = with_ctx(&[], &book, |ctx| s.announcement(ctx));
-    assert_eq!(say.as_deref(), Some("Ask every time, selected"));
+    assert_eq!(say.as_deref(), Some("Always ask, selected"));
     let fx = press(&mut s, MenuEvent::Confirm, &[]);
     assert_eq!(
         fx.cmds,

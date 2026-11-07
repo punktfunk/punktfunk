@@ -58,14 +58,14 @@ SDL3 controllers. It adds:
 - Keys for the window: **Keyboard Shortcuts** in the menu lists them.
 
 For the couch, open **Punktfunk Console**, the gamepad button in the header bar, or run
-`punktfunk-client --browse --fullscreen`. **Controller-optimized UI** opens it when a controller
+`punktfunk-client --browse --fullscreen`. **Controller interface** opens it when a controller
 connects.
 
 ## Windows desktop client
 
 A WinUI 3 app for x64 and Arm64 with hardware decode (Vulkan Video or D3D11VA), HDR, WASAPI audio
 and SDL3 controllers. **Punktfunk Console** in the Start menu is the controller interface for a TV or
-HTPC, on x64; the Arm64 build has no console yet. **Controller-optimized UI** opens it when a
+HTPC, on x64; the Arm64 build has no console yet. **Controller interface** opens it when a
 controller connects.
 
 ## Android app (phone + Android TV)

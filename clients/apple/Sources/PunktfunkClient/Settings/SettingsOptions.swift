@@ -155,8 +155,8 @@ enum SettingsOptions {
     static func codecs(current: String) -> [(label: String, tag: String)] {
         var options: [(label: String, tag: String)] = [
             (String(localized: L10n.playerCodecAuto), "auto"),
-            ("HEVC (H.265)", "hevc"),
-            ("H.264 (AVC)", "h264"),
+            ("HEVC", "hevc"),
+            ("H.264", "h264"),
         ]
         if AV1.hardwareDecodeSupported {
             options.insert(("AV1", "av1"), at: 2)

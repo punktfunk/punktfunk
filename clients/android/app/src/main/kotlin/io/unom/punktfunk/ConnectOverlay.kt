@@ -176,7 +176,7 @@ internal fun ConnectModal(
         },
         // No confirm action until the wake times out; then "Try again" is the primary button.
         confirmButton = {
-            if (timedOut) TextButton(onClick = onRetry) { Text(stringResource(R.string.common_try_again)) }
+            if (timedOut) TextButton(onClick = onRetry) { Text(stringResource(R.string.common_retry)) }
         },
         dismissButton = {
             TextButton(onClick = onCancel) { Text(copy.cancelLabel) }

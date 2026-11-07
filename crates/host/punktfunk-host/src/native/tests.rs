@@ -108,7 +108,7 @@ fn a_buried_pin_miss_still_reaches_the_client_in_words() {
 
     let worded = setup_failed_sentence(&buried).expect("a pin miss has words for the user");
     assert_eq!(worded.id, "close_monitor_missing");
-    assert_eq!(worded.params[0], ("monitor".into(), "HDMI-A-3".into()));
+    assert_eq!(worded.params, [("monitor".into(), "HDMI-A-3".into())]);
     let said = worded.text;
     assert!(
         said.contains("HDMI-A-3") && said.contains("HDMI-A-1"),

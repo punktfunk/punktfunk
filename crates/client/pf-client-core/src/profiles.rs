@@ -258,7 +258,7 @@ pub fn picker_decision(
 pub enum SeatGate {
     /// Dial now. The host places the connect, or says why it can't.
     Dial,
-    /// `POST /api/v1/profiles/{id}/wake`, then wait: `Getting Kid's desk ready…`.
+    /// `POST /api/v1/profiles/{id}/wake`, then wait: `Getting Kid's desktop ready…`.
     Wake,
     /// The seat is coming up. Poll `enumerate` every 2 s, show `detail`, offer **Cancel**; there
     /// is no timeout.
@@ -291,7 +291,7 @@ pub fn seat_gate(p: &ListedProfile) -> SeatGate {
     }
 }
 
-/// The line while a seat comes up: `Getting Kid's desk ready…`.
+/// The line while a seat comes up: `Getting Kid's desktop ready…`.
 pub fn waking_line(display_name: &str) -> String {
     pf_l10n::client::profile_waking(display_name)
 }
@@ -584,11 +584,11 @@ mod tests {
             seat_gate(&with("unavailable", Some("Seats are off."))),
             SeatGate::Refuse("Seats are off.".into())
         );
-        assert_eq!(waking_line("Kid"), "Getting Kid's desk ready…");
+        assert_eq!(waking_line("Kid"), "Getting Kid's desktop ready…");
     }
 
     /// A wake the host refuses (403) reads as its sentence; an unpaired device (401) and any
-    /// other failure keep the desk's frame.
+    /// other failure keep the desktop's frame.
     #[test]
     fn a_refused_wake_reads_as_the_hosts_sentence() {
         use crate::library::LibraryError;
@@ -598,7 +598,7 @@ mod tests {
         );
         assert_eq!(
             wake_failed("Kid", &LibraryError::Http(500)),
-            "Couldn't wake Kid's desk \u{2014} the host refused it (500)"
+            "Couldn't get Kid's desktop ready \u{2014} the host refused it (500)"
         );
         #[cfg(desktop)]
         {
@@ -761,7 +761,7 @@ mod tests {
             true
         });
         assert!(
-            matches!(&seen[..], [Err(l)] if l.starts_with("Couldn't wake Kid's desk \u{2014} "))
+            matches!(&seen[..], [Err(l)] if l.starts_with("Couldn't get Kid's desktop ready \u{2014} "))
         );
         seen.clear();
         watch_seat(

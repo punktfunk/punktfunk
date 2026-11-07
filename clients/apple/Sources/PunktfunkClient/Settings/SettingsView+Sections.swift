@@ -782,16 +782,7 @@ extension SettingsView {
             field: "present_priority") {
             settingPicker(
                 L10n.playerPresentPriority,
-                options: SettingsOptions.presentPriorities.map { option in
-                    // Latency is the default, and the only option that says so.
-                    let isDefault = option.tag == "latency"
-                        && option.tag == SettingDefault.presentPriority
-                    return (
-                        label: isDefault
-                            ? String(localized: L10n.applePresentPriorityLatencyDefault)
-                            : option.label,
-                        tag: option.tag)
-                },
+                options: SettingsOptions.presentPriorities,
                 selection: scoped(SettingsFields.presentPriority))
         }
     }

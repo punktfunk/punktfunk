@@ -25,7 +25,7 @@ The advanced rows are **Advanced statistics**, **Statistics position**, **Statis
 hint**, **Reduce interface resolution**, **Smoothness buffer**, **Render scale**,
 **Full chroma (4:4:4)**, **10-bit SDR**, **V-Sync**, **Follow variable refresh**, **Host
 compositor**, **Video decoder**, **GPU**, **Low-latency mode**, **Keep screen awake**, **Audio quality**, **Keep host audio playing**, **Echo cancellation**, **Forward controllers**,
-**Use controller**, **Guide button**, **Hold Select for guide**, **Controller haptics**,
+**Use controller**, **Guide button**, **Guide gesture**, **Controller haptics**,
 **Controller speaker**, **Steam Controller 2 passthrough** and **DualSense over USB**.
 
 Linux stores settings in `~/.config/punktfunk/client-gtk-settings.json`, shared with the console;
@@ -95,7 +95,7 @@ Touch modes, mouse modes and the in-stream keys are explained on [Input](/docs/i
 | **Controller rumble** | On | Off, controllers don't vibrate from the stream or in the menus, whatever the game sends. A DualSense's haptics follow **Controller haptics**; a Steam Controller 2 in passthrough follows Steam on the host. | Linux, Windows, Android, Apple |
 | **Use controller** | Automatic (all controllers) | Forward only the controller you pick. | Linux, Windows, Apple, console |
 | **Guide button** | Automatic | Where the guide and quick-access buttons go: **Send to host** or **This device**. Automatic keeps them on the device only in Steam Deck Gaming Mode. See [the guide button](/docs/input#the-guide-button-xbox--ps--steam-and-quick-access). | All |
-| **Hold Select for guide** | Automatic | Hold Select about ⅓ s to press the host's guide button. A Select tap then arrives a beat late. Automatic turns it on in Gaming Mode and on iPhone, iPad and Apple TV. | All |
+| **Guide gesture** | Automatic | Hold Select about ⅓ s to press the host's guide button. A Select tap then arrives a beat late. Automatic turns it on in Gaming Mode and on iPhone, iPad and Apple TV. | All |
 | **Controller haptics** | On | Plays a DualSense's voice-coil haptics, over USB or Bluetooth (Android: USB). See [Controller audio](/docs/controller-audio). | Linux, Windows, Android |
 | **Controller speaker** | On (Android: off) | Plays the game's pad audio on a DualSense's speaker. | Linux, Windows, Android |
 | **Steam Controller 2 passthrough** | Off | Passes a Steam Controller 2 or a 2015 Steam Controller to a Linux or Windows host as itself, so its trackpads, gyro and haptics work as they do locally. Mac: USB, a dongle or Bluetooth. iPhone, iPad, Apple TV: Bluetooth. Android and the desktop clients always pass one through. | Apple |
@@ -136,13 +136,13 @@ shortcuts. It's on every app and in the console (which edits your defaults only)
 | **Start in** | Host list | **Library** opens the default host's games; **Stream** connects to its desktop. With several paired hosts, set one with **Make default host** in its menu (Apple: **Default host** on the host page) or `punktfunk default-host`. | All |
 | **Auto-wake on connect** | On | Wakes a sleeping saved host with [Wake-on-LAN](/docs/wake-on-lan) and waits. Turn it off for hosts over a VPN. | All |
 | **Start streams fullscreen** | On | F11 or Alt+Enter leaves fullscreen. On Linux and a Mac, **Always** also keeps the app fullscreen. | Linux, Windows, Mac (Linux and Mac: **Fullscreen**: **Off**, **While streaming**, **Always**) |
-| **Keep streaming in background** | Off | Audio and the connection stay live while you switch apps, for 10 minutes unless you pick another limit. | iPhone, iPad, Apple TV, Android phones (**Keep streaming in the background**) |
+| **Stream in background** | Off | Audio and the connection stay live while you switch apps, for 10 minutes unless you pick another limit. | iPhone, iPad, Apple TV, Android phones |
 
 ## Interface
 
 | Setting | Default | What it does | Where |
 |---|---|---|---|
-| **Controller-optimized UI** | On | Switches to the console when a controller is in use. | Linux, Windows (x64), Android (not Android TV, which always uses it), Apple |
+| **Controller interface** | On | Switches to the console when a controller is in use. | Linux, Windows (x64), Android (not Android TV, which always uses it), Apple |
 | **Show it** | With a controller | **Always** keeps the console without a pad, for a docked phone or tablet. | Linux, Windows (x64), Android, Apple |
 | **Background** | Violet | The console's backdrop colour: 20 dark fields, then 16 pale ones. **Eclipse** is true black for OLED screens. | Console; Apple TV **Settings** |
 | **Reduce motion** | Off | Stops the console's moving backdrop. Apple follows the system setting instead, and so do Windows and Linux desktops that report one (GNOME, KDE); the row then hides. | Console on Linux, Windows, Android |

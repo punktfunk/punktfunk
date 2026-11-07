@@ -4,8 +4,8 @@
 // connect path (trust policy / WoL / approval all apply).
 //
 // No reachability probing in v1 (a UDP check has no place in a timeline build; WoL handles offline
-// hosts on tap). Timeline is a single `.never` entry — the app pushes reloads on store changes
-// (HostStore → WidgetCenter.reloadTimelines).
+// hosts on tap). The timeline steps the "2 hr. ago" line over an hour of entries, then reloads;
+// the app also pushes reloads on store changes (HostStore → WidgetCenter.reloadTimelines).
 
 import SwiftUI
 import WidgetKit
@@ -29,11 +29,18 @@ struct HostsProvider: TimelineProvider {
     }
 
     func getTimeline(in context: Context, completion: @escaping (Timeline<HostsEntry>) -> Void) {
-        // Single entry, never auto-refresh: the app reloads this timeline whenever the store
-        // changes (a new host, a fresh connect reordering by recency).
-        let entry = HostsEntry(date: .now, hosts: Self.loadHosts())
-        completion(Timeline(entries: [entry], policy: .never))
+        // Same hosts at growing gaps: each entry's date re-words "2 hr. ago", finely while minutes
+        // matter. The app also reloads when the store changes (a new host, a fresh connect).
+        let now = Date.now
+        let hosts = Self.loadHosts()
+        let entries = Self.refreshMinutes.map {
+            HostsEntry(date: now.addingTimeInterval(Double($0) * 60), hosts: hosts)
+        }
+        completion(Timeline(entries: entries, policy: .after(now.addingTimeInterval(3600))))
     }
+
+    /// Minutes past the reload at which the relative times are worded again.
+    static let refreshMinutes = [0, 1, 2, 5, 10, 15, 30, 45, 60]
 
     /// The shared-suite host JSON, most-recent first — see `StoredHost.loadAll`.
     static func loadHosts() -> [StoredHost] { StoredHost.loadAll(recentFirst: true) }
@@ -64,15 +71,22 @@ struct HostsWidgetView: View {
     var body: some View {
         switch family {
         case .systemMedium:
-            MediumHostsView(hosts: entry.hosts)
+            MediumHostsView(hosts: entry.hosts, now: entry.date)
         case .accessoryCircular:
             CircularHostView(host: entry.hosts.first)
         case .accessoryRectangular:
             RectangularHostView(host: entry.hosts.first)
         default: // systemSmall + fallback
-            SmallHostView(host: entry.hosts.first)
+            SmallHostView(host: entry.hosts.first, now: entry.date)
         }
     }
+}
+
+/// "2 hr. ago" in the system language, counted to the entry's own date.
+private func sinceLabel(_ date: Date, now: Date) -> String {
+    let formatter = RelativeDateTimeFormatter()
+    formatter.unitsStyle = .short
+    return formatter.localizedString(for: date, relativeTo: now)
 }
 
 /// Deep link that connects to a stored host.
@@ -82,6 +96,7 @@ private func connectURL(_ host: StoredHost) -> URL {
 
 private struct SmallHostView: View {
     let host: StoredHost?
+    let now: Date
     var body: some View {
         if let host {
             VStack(alignment: .leading, spacing: 6) {
@@ -93,7 +108,7 @@ private struct SmallHostView: View {
                     .font(.headline)
                     .lineLimit(2)
                 if let last = host.lastConnected {
-                    Text("\(last, style: .relative) ago")
+                    Text(sinceLabel(last, now: now))
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                 }
@@ -108,6 +123,7 @@ private struct SmallHostView: View {
 
 private struct MediumHostsView: View {
     let hosts: [StoredHost]
+    let now: Date
     var body: some View {
         if hosts.isEmpty {
             EmptyHostView()
@@ -126,7 +142,7 @@ private struct MediumHostsView: View {
                                 .lineLimit(1)
                             Spacer()
                             if let last = host.lastConnected {
-                                Text("\(last, style: .relative) ago")
+                                Text(sinceLabel(last, now: now))
                                     .font(.caption2)
                                     .foregroundStyle(.secondary)
                             }

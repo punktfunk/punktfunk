@@ -81,7 +81,8 @@ pub fn run(
     if uninstall {
         ui.ok("punktfunk was removed");
     } else {
-        report::outro(ui, facts, &choices, artifact);
+        let host = env.get("COMPUTERNAME").unwrap_or("<this-PC>");
+        report::outro(ui, facts, &choices, artifact, host);
     }
     Ok(())
 }
