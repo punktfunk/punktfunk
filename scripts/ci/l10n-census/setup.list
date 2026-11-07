@@ -22,7 +22,6 @@ crates/install/punktfunk-setup/src/platform/windows/plan.rs	Punktfunk Host
 crates/install/punktfunk-setup/src/platform/windows/plan.rs	URL:Punktfunk stream link
 crates/install/punktfunk-setup/src/platform/windows/plan.rs	Windows App Runtime
 crates/install/punktfunk-setup/src/platform/windows/report.rs	1. Open Punktfunk from the Start menu and pick your host.
-crates/install/punktfunk-setup/src/platform/windows/report.rs	2. Install a client on the device you stream to ({DOCS}/install-client), connect, and click Approve in the console.
 crates/install/punktfunk-setup/src/platform/windows/report.rs	2. Pairing help: {DOCS}/pairing
 crates/install/punktfunk-setup/src/platform/windows/report.rs	Choices (nothing below has run yet)
 crates/install/punktfunk-setup/src/platform/windows/report.rs	Desktop shortcut: {}
