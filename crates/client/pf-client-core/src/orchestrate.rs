@@ -803,9 +803,9 @@ impl ConnectOutcome {
         }
     }
 
-    /// What a console exit shows on the host list. `None` after a quit or our own kill, else
-    /// the line the console ended on. One that said nothing shows how it went, in the shape of
-    /// [`Self::died_banner`], which `log` is as there: no exit code means a signal killed it.
+    /// What a controller-interface exit shows on the host list. `None` after a quit or our own
+    /// kill, else the line it ended on. One that said nothing shows a plain line that points at
+    /// `log`, the client log's path; its exit code goes to the log, not to the screen.
     pub fn console_banner(&self, log: Option<&str>) -> Option<String> {
         use pf_l10n::client as m;
         match self {
@@ -817,16 +817,13 @@ impl ConnectOutcome {
             ConnectOutcome::RendererFailed { code: -1 } => {
                 Some(pf_l10n::client::dial_console_killed().into())
             }
-            ConnectOutcome::RendererFailed { code } => Some(match (ExitHow::of(*code), log) {
-                (ExitHow::AccessViolation, Some(log)) => m::dial_console_access_violation(log),
-                (ExitHow::AccessViolation, None) => {
-                    m::dial_console_access_violation_no_path().into()
-                }
-                (ExitHow::Exception(hex), Some(log)) => m::dial_console_exception(hex, log),
-                (ExitHow::Exception(hex), None) => m::dial_console_exception_no_path(hex),
-                (ExitHow::Code, Some(log)) => m::dial_console_exit_code(code, log),
-                (ExitHow::Code, None) => m::dial_console_exit_code_no_path(code),
-            }),
+            ConnectOutcome::RendererFailed { code } => {
+                tracing::warn!(code, how = ?ExitHow::of(*code), "controller interface did not start");
+                Some(match log {
+                    Some(log) => m::dial_console_not_started_log(log),
+                    None => m::dial_console_not_started().into(),
+                })
+            }
         }
     }
 
@@ -2120,15 +2117,14 @@ mod tests {
             ),
             (
                 O::RendererFailed { code: 4 },
-                Some(
-                    "The console didn't start (punktfunk-session exited with code 4). \
-                     Check the client log."
-                        .into(),
-                ),
+                Some("The controller interface didn't start. Check the client log.".into()),
             ),
             (
                 O::RendererFailed { code: -1 },
-                Some("The console was killed — out of memory, or stopped by the system".into()),
+                Some(
+                    "The controller interface was killed — out of memory, or stopped by the system"
+                        .into(),
+                ),
             ),
         ] {
             assert_eq!(outcome.console_banner(Some(log)), want, "{outcome:?}");
