@@ -94,25 +94,32 @@ impl StreamState {
         }
     }
 
-    /// Say what a proposal came to. A hold the control task re-proposes every
-    /// window is logged at warn once, then at debug.
+    /// Say what a proposal came to, its percent and whether it spans the whole frame. A hold
+    /// the control task re-proposes every window is logged at warn once, then at debug.
     fn note_fec_move(&mut self, requested: u8, encoder_kbps: u32, moved: bool) {
+        use crate::native::bitrate::{fec_pct, FEC_WHOLE_FRAME};
+        let whole_frame = requested & FEC_WHOLE_FRAME != 0;
         if moved {
             self.fec.hold_logged = 0;
             tracing::debug!(
-                fec_pct = requested,
+                fec_pct = fec_pct(requested),
+                whole_frame,
                 encoder_kbps,
                 budget_kbps = self.live.bitrate_kbps,
                 "adaptive FEC moved — encoder rate re-derived within the wire budget"
             );
         } else if std::mem::replace(&mut self.fec.hold_logged, requested) != requested {
             tracing::warn!(
-                requested_fec_pct = requested,
-                applied_fec_pct = self.fec.last,
+                requested_fec_pct = fec_pct(requested),
+                whole_frame,
+                applied_fec_pct = fec_pct(self.fec.last),
                 "adaptive FEC held — encoder did not take the matching bitrate"
             );
         } else {
-            tracing::debug!(requested_fec_pct = requested, "adaptive FEC still held");
+            tracing::debug!(
+                requested_fec_pct = fec_pct(requested),
+                "adaptive FEC still held"
+            );
         }
     }
 

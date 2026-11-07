@@ -858,8 +858,8 @@ fn prepare_at_welcome(
         enc_of: EncDerive {
             audio_kbps: audio_reserved_kbps(welcome),
             shard_payload: welcome.shard_payload,
-            fec_percent: welcome.fec.fec_percent,
-            head_only_hz: (t.codec == crate::encode::Codec::PyroWave)
+            fec_target: welcome.fec.fec_percent,
+            pyrowave_hz: (t.codec == crate::encode::Codec::PyroWave)
                 .then_some(welcome.mode.refresh_hz),
             // Further screens build after Welcome and take their shares then.
             share_permille: super::bitrate::SHARE_ALL,

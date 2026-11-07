@@ -475,7 +475,7 @@ pub(crate) fn synthetic_abr_stream(ctx: SynthAbrContext) -> Result<()> {
             let enc_kbps = encoder_kbps_for_budget(
                 budget_kbps,
                 audio_reserved_kbps,
-                fec_target.load(Ordering::Relaxed),
+                crate::native::bitrate::fec_pct(fec_target.load(Ordering::Relaxed)),
                 shard_payload,
             );
             let len = frame_bytes(

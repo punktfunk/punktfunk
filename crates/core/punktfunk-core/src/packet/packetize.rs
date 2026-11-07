@@ -37,6 +37,8 @@ pub struct Packetizer {
     /// Streamed block-count ceiling in SLICE mode ([`USER_FLAG_SLICE_STREAM`]): variable-K,
     /// floored at `min(MIN_STREAM_BLOCK_SHARDS, max_data_per_block)` shards per block.
     slice_block_cap: usize,
+    /// A PyroWave AU's tail blocks carry their percent too ([`Geometry::parity_of`]).
+    whole_frame: bool,
 }
 
 /// In-progress streamed access unit. Encoder chunks enter via
@@ -85,6 +87,7 @@ impl Packetizer {
             // Derived from the shard size below (single source of truth for the formulas).
             max_blocks: 0,
             slice_block_cap: 0,
+            whole_frame: false,
         };
         p.set_shard_payload(config.shard_payload);
         p
@@ -127,6 +130,12 @@ impl Packetizer {
         self.fec.fec_percent
     }
 
+    /// Next AU on: whether a PyroWave AU's tail blocks carry their percent beside the head's
+    /// parity. Off, only the head carries any.
+    pub fn set_whole_frame_parity(&mut self, on: bool) {
+        self.whole_frame = on;
+    }
+
     /// One AU's shard geometry in uniform blocks: what the data pass, the parity pass and a
     /// parity thread agree on before any of them runs.
     pub fn geometry(&self, frame_len: usize) -> Geometry {
@@ -140,6 +149,7 @@ impl Packetizer {
             block_count: total_data.div_ceil(max_block).max(1),
             frame_bytes: frame_len as u32,
             head: 0,
+            whole: false,
             fec: self.fec,
             max_total_shards: self.max_total_shards,
         }
@@ -147,14 +157,16 @@ impl Packetizer {
 
     /// [`geometry`](Self::geometry) for this AU. A windowed PyroWave AU
     /// ([`USER_FLAG_CHUNK_ALIGNED`]) puts its head ([`crate::pyrowave::head_shards`]) in a block
-    /// of its own that carries all the frame's parity: a lost tail shard blurs one small patch
-    /// of one frame, a lost head shard up to half of it.
+    /// of its own with a parity floor: a lost tail shard blurs one small patch of one frame, a
+    /// lost head shard up to half of it. Its tail blocks carry parity only under
+    /// [`set_whole_frame_parity`](Self::set_whole_frame_parity).
     pub fn geometry_for(&self, frame: &[u8], user_flags: u32) -> Geometry {
         let mut geo = self.geometry(frame.len());
         if user_flags & USER_FLAG_CHUNK_ALIGNED != 0 {
             if let Some(head) = crate::pyrowave::head_shards(frame, geo.payload) {
                 if head > 0 && head < geo.total_data && head <= geo.max_block {
                     geo.head = head;
+                    geo.whole = self.whole_frame;
                     geo.block_count = 1 + (geo.total_data - head).div_ceil(geo.max_block);
                 }
             }
@@ -476,9 +488,11 @@ pub struct Geometry {
     pub block_count: usize,
     /// `frame.len()`, as the header carries it.
     pub frame_bytes: u32,
-    /// Data shards of a head block that carries all the frame's parity; the blocks after it
-    /// carry none. `0`: uniform blocks, each with its percent.
+    /// Data shards of a head block whose parity never drops under
+    /// [`HEAD_MIN_RECOVERY_SHARDS`]. `0`: uniform blocks, each with its percent.
     pub head: usize,
+    /// The blocks after the head carry their percent. Without it they carry none.
+    pub whole: bool,
     fec: crate::config::FecConfig,
     max_total_shards: usize,
 }
@@ -509,6 +523,7 @@ impl Geometry {
             (_, 0) if self.fec.fec_percent > 0 => {
                 self.fec.recovery_for(k).max(HEAD_MIN_RECOVERY_SHARDS)
             }
+            _ if self.whole => self.fec.recovery_for(k),
             _ => 0,
         };
         m.min(self.max_total_shards.saturating_sub(k))

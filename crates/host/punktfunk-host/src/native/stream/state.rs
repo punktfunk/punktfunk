@@ -338,13 +338,13 @@ pub(in crate::native) fn video_format(
 }
 
 impl StreamState {
-    /// The encoder-rate derivation for a FEC percentage.
+    /// The encoder-rate derivation for an adaptive-FEC target.
     pub(super) fn enc_derive(&self, fec: u8) -> EncDerive {
         EncDerive {
             audio_kbps: self.facts.audio_reserved_kbps,
             shard_payload: self.facts.shard_payload,
-            fec_percent: fec,
-            head_only_hz: self.facts.pyrowave.then_some(self.live.cur_mode.refresh_hz),
+            fec_target: fec,
+            pyrowave_hz: self.facts.pyrowave.then_some(self.live.cur_mode.refresh_hz),
             share_permille: self
                 .shared
                 .screen_wire
@@ -456,7 +456,7 @@ impl StreamState {
             bitrate_auto: self.facts.bitrate_auto,
             bit_depth: self.bit_depth,
             enc_of: EncDerive {
-                head_only_hz: self.facts.pyrowave.then_some(mode.refresh_hz),
+                pyrowave_hz: self.facts.pyrowave.then_some(mode.refresh_hz),
                 ..self.enc_now()
             },
             plan: self.plan,
@@ -1111,8 +1111,8 @@ fn build_first(
         enc_of: EncDerive {
             audio_kbps: facts.audio_reserved_kbps,
             shard_payload: facts.shard_payload,
-            fec_percent: fec.target.load(Ordering::Relaxed),
-            head_only_hz: facts.pyrowave.then_some(mode.refresh_hz),
+            fec_target: fec.target.load(Ordering::Relaxed),
+            pyrowave_hz: facts.pyrowave.then_some(mode.refresh_hz),
             share_permille: crate::native::bitrate::SHARE_ALL,
         },
         plan,
@@ -1643,7 +1643,7 @@ mod tests {
             ..f.st.live.cur_mode
         };
         let req = f.st.build_request(to, f.st.live.bitrate_kbps);
-        assert_eq!(req.enc_of.head_only_hz, Some(to.refresh_hz));
+        assert_eq!(req.enc_of.pyrowave_hz, Some(to.refresh_hz));
     }
 
     /// A swapped-in encoder opened at the first screen's share in force, whatever the swap's

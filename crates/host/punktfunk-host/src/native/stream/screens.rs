@@ -691,7 +691,7 @@ fn position_of(display_gen: Option<u64>) -> Option<(i32, i32)> {
 /// The rate derivation at this screen's share and the FEC in force.
 fn enc_of(base: &ScreenBase, run: &ScreenRun) -> EncDerive {
     EncDerive {
-        fec_percent: base.fec_target.load(Ordering::Relaxed),
+        fec_target: base.fec_target.load(Ordering::Relaxed),
         share_permille: run.share.load(Ordering::Relaxed),
         ..base.enc_of
     }
@@ -739,11 +739,8 @@ fn stream_screen(
             last_key = std::time::Instant::now();
         }
         let now_rate = (base.live_bitrate.load(Ordering::Relaxed), enc_of(base, run));
-        if (
-            now_rate.0,
-            now_rate.1.share_permille,
-            now_rate.1.fec_percent,
-        ) != (rate.0, rate.1.share_permille, rate.1.fec_percent)
+        if (now_rate.0, now_rate.1.share_permille, now_rate.1.fec_target)
+            != (rate.0, rate.1.share_permille, rate.1.fec_target)
         {
             rate = now_rate;
             enc.reconfigure_bitrate(u64::from(rate.1.enc_kbps(rate.0)) * 1000);
@@ -965,8 +962,8 @@ mod tests {
             enc_of: EncDerive {
                 audio_kbps: 512,
                 shard_payload: 1408,
-                fec_percent: 10,
-                head_only_hz: None,
+                fec_target: 10,
+                pyrowave_hz: None,
                 share_permille: SHARE_ALL,
             },
             fec_target: Arc::new(AtomicU8::new(10)),

@@ -232,16 +232,27 @@ pub(crate) fn encoder_bps_for_budget(
     }
 }
 
+/// Set on an adaptive-FEC target (`fec_target`, `fec_requested`) while the link reads lossy
+/// ([`LossHorizon::lossy`](punktfunk_core::abr::budget::LossHorizon::lossy)): a PyroWave frame's
+/// tail carries parity too. The low bits are the percent ([`fec_pct`]).
+pub(crate) const FEC_WHOLE_FRAME: u8 = 0x80;
+
+/// An adaptive-FEC target's percent, without [`FEC_WHOLE_FRAME`].
+pub(crate) fn fec_pct(target: u8) -> u8 {
+    target & !FEC_WHOLE_FRAME
+}
+
 /// Budget↔encoder at one moment: session constants plus a snapshot of adaptive FEC,
-/// taken at each encoder touch. Stream loop re-derives when the live percent moves.
+/// taken at each encoder touch. Stream loop re-derives when the live target moves.
 #[derive(Clone, Copy, Debug)]
 pub(super) struct EncDerive {
     pub(super) audio_kbps: u32,
     pub(super) shard_payload: u16,
-    pub(super) fec_percent: u8,
-    /// PyroWave at this refresh rate: parity rides the frame's head only
-    /// ([`pyrowave_parity_pct`]). `None`: every block carries `fec_percent`.
-    pub(super) head_only_hz: Option<u32>,
+    /// The adaptive-FEC target, [`FEC_WHOLE_FRAME`] included.
+    pub(super) fec_target: u8,
+    /// PyroWave at this refresh rate: parity rides the frame's head, and its tail too under
+    /// [`FEC_WHOLE_FRAME`] ([`pyrowave_parity_pct`]). `None`: every block carries the percent.
+    pub(super) pyrowave_hz: Option<u32>,
     /// This encoder's share of the session's video, per mille: [`SHARE_ALL`] alone, less while
     /// further screens' encoders split the budget with it.
     pub(super) share_permille: u16,
@@ -253,14 +264,14 @@ pub(super) const SHARE_ALL: u16 = 1000;
 impl EncDerive {
     /// The share of the wire parity takes at `budget_kbps`, as the budget prices it.
     fn parity_pct(&self, budget_kbps: u32) -> u8 {
-        match self.head_only_hz {
-            None => self.fec_percent,
+        match self.pyrowave_hz {
+            None => fec_pct(self.fec_target),
             Some(hz) => pyrowave_parity_pct(
                 budget_kbps,
                 self.audio_kbps,
                 self.shard_payload,
                 hz,
-                self.fec_percent,
+                self.fec_target,
             ),
         }
     }
@@ -304,17 +315,19 @@ impl EncDerive {
     }
 }
 
-/// The share of a PyroWave frame its parity takes, as a percent of the frame: the head's parity
-/// over the frame's wire shards. The head is sized at 15 % of the frame, the most level 4 measured
-/// on game frames; its parity is `fec_percent` of that, never under
-/// [`HEAD_MIN_RECOVERY_SHARDS`](punktfunk_core::packet::HEAD_MIN_RECOVERY_SHARDS).
+/// The share of a PyroWave frame its parity takes, as a percent of the frame's wire shards. The
+/// head is sized at 15 % of the frame, the most level 4 measured on game frames; its parity is the
+/// percent of that, never under
+/// [`HEAD_MIN_RECOVERY_SHARDS`](punktfunk_core::packet::HEAD_MIN_RECOVERY_SHARDS). Under
+/// [`FEC_WHOLE_FRAME`] the rest of the frame adds its percent.
 fn pyrowave_parity_pct(
     budget_kbps: u32,
     audio_kbps: u32,
     shard_payload: u16,
     hz: u32,
-    fec_percent: u8,
+    fec_target: u8,
 ) -> u8 {
+    let fec_percent = fec_pct(fec_target);
     if fec_percent == 0 {
         return 0;
     }
@@ -327,9 +340,12 @@ fn pyrowave_parity_pct(
         },
     );
     let head = (shards * 15).div_ceil(100);
-    let parity = (head * u32::from(fec_percent))
+    let mut parity = (head * u32::from(fec_percent))
         .div_ceil(100)
         .max(punktfunk_core::packet::HEAD_MIN_RECOVERY_SHARDS as u32);
+    if fec_target & FEC_WHOLE_FRAME != 0 {
+        parity += (shards.saturating_sub(head) * u32::from(fec_percent)).div_ceil(100);
+    }
     (parity * 100).div_ceil(shards).min(100) as u8
 }
 
@@ -451,12 +467,14 @@ impl UnrecoveredRun {
     }
 }
 
-/// Per-frame send path: apply the adaptive-FEC target if it changed (relaxed load + compare).
+/// Per-frame send path: apply the adaptive-FEC target, its percent if it changed and whether a
+/// PyroWave frame's tail carries parity ([`FEC_WHOLE_FRAME`]).
 pub(super) fn apply_fec_target(session: &mut Session, fec_target: &AtomicU8) {
     let t = fec_target.load(Ordering::Relaxed);
-    if session.fec_percent() != t {
-        session.set_fec_percent(t);
+    if session.fec_percent() != fec_pct(t) {
+        session.set_fec_percent(fec_pct(t));
     }
+    session.set_whole_frame_parity(t & FEC_WHOLE_FRAME != 0);
 }
 
 #[cfg(test)]
@@ -502,8 +520,8 @@ mod tests {
         let whole = EncDerive {
             audio_kbps: 512,
             shard_payload: 1408,
-            fec_percent: 10,
-            head_only_hz: None,
+            fec_target: 10,
+            pyrowave_hz: None,
             share_permille: SHARE_ALL,
         };
         let quarter = EncDerive {
@@ -523,8 +541,8 @@ mod tests {
         let ed = EncDerive {
             audio_kbps: 576,
             shard_payload: 1408,
-            fec_percent: 8,
-            head_only_hz: None,
+            fec_target: 8,
+            pyrowave_hz: None,
             share_permille: SHARE_ALL,
         };
         for budget in [2349u32, 4799, 6857, 9798, 14000, 20000, 940_032] {
@@ -833,8 +851,8 @@ mod tests {
         let native = EncDerive {
             audio_kbps: 512,
             shard_payload: 1408,
-            fec_percent: 10,
-            head_only_hz: None,
+            fec_target: 10,
+            pyrowave_hz: None,
             share_permille: SHARE_ALL,
         };
         let bps = encoder_bps_for_budget(20_000, 512, 10, 1408, WireFraming::Shards);
@@ -863,11 +881,11 @@ mod tests {
     /// apply is the ask.
     #[test]
     fn a_pyrowave_pin_prices_only_its_head_parity() {
-        let at = |fec_percent, hz| EncDerive {
+        let at = |fec_target, hz| EncDerive {
             audio_kbps: 512,
             shard_payload: 1408,
-            fec_percent,
-            head_only_hz: Some(hz),
+            fec_target,
+            pyrowave_hz: Some(hz),
             share_permille: SHARE_ALL,
         };
         // 4K60 at 1.6 bpp: 1126 wire shards a frame, a 169-shard head, 9 parity at 5 %.
@@ -887,6 +905,64 @@ mod tests {
             assert!(ed.budget_kbps(asked) <= pin, "a roundtrip never inflates");
             assert_eq!(ed.applied_budget_kbps(pin, asked), pin);
         }
+    }
+
+    /// On a lossy link the frame's tail adds its percent to the head's parity, and the encoder
+    /// gives that up inside the same wire budget. H.26x always carries parity whole, so the
+    /// flag moves nothing there.
+    #[test]
+    fn a_lossy_pyrowave_frame_prices_parity_over_its_whole_frame() {
+        let pin = 796_262;
+        let whole = |fec: u8| fec | FEC_WHOLE_FRAME;
+        // 4K60: a 169-shard head and 957 tail shards. 9 + 48 parity at 5 % of 1126 is 6 %.
+        assert_eq!(pyrowave_parity_pct(pin, 512, 1408, 60, whole(5)), 6);
+        assert_eq!(pyrowave_parity_pct(pin, 512, 1408, 60, whole(10)), 11);
+        // 720p60, 124 shards: the head keeps its four-shard floor, the tail adds 6.
+        assert_eq!(pyrowave_parity_pct(88_473, 512, 1408, 60, whole(5)), 9);
+        assert_eq!(pyrowave_parity_pct(pin, 512, 1408, 60, FEC_WHOLE_FRAME), 0);
+        let at = |fec_target, pyrowave_hz| EncDerive {
+            audio_kbps: 512,
+            shard_payload: 1408,
+            fec_target,
+            pyrowave_hz,
+            share_permille: SHARE_ALL,
+        };
+        let head = at(8, Some(60));
+        let lossy = at(whole(8), Some(60));
+        assert!(lossy.enc_kbps(pin) < head.enc_kbps(pin));
+        assert!(lossy.budget_kbps(lossy.enc_kbps(pin)) <= pin);
+        assert_eq!(at(whole(8), None).enc_kbps(pin), at(8, None).enc_kbps(pin));
+    }
+
+    /// The send path hands the packetizer the percent alone: the flag never reads as 128 %.
+    #[test]
+    fn the_send_path_splits_a_whole_frame_target() {
+        use punktfunk_core::config::{Config, FecConfig, FecScheme, Role};
+        let cfg = Config {
+            role: Role::Host,
+            fec: FecConfig {
+                scheme: FecScheme::Gf16,
+                fec_percent: 10,
+                max_data_per_block: 64,
+            },
+            shard_payload: 1024,
+            max_frame_bytes: 1 << 20,
+            loopback_drop_period: 0,
+        };
+        let media = punktfunk_core::session::MediaV2 {
+            clock_origin_ns: 0,
+            keys: None,
+            clock: None,
+            clear_placement: false,
+        };
+        let (tp, _) = punktfunk_core::transport::loopback_pair(0, 0);
+        let mut session = Session::new(cfg, media, Box::new(tp)).unwrap();
+        let target = AtomicU8::new(8 | FEC_WHOLE_FRAME);
+        apply_fec_target(&mut session, &target);
+        assert_eq!(session.fec_percent(), 8);
+        target.store(6, Ordering::Relaxed);
+        apply_fec_target(&mut session, &target);
+        assert_eq!(session.fec_percent(), 6);
     }
 
     /// An RFI ask prices the report window it lands in. A report a window late closes a
