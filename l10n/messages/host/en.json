@@ -587,6 +587,7 @@
 	"seatcheck_steam_installed": "Steam is installed in {path}. Each seat gets a copy of its own.",
 	"seatcheck_steam_libraries_unreachable": "Its Steam can't open the host's game libraries, so their games are missing here. Restart the seat, and report a bug if they're still missing.",
 	"seatcheck_steam_none": "Steam isn't installed, so seats have no Steam.",
+	"seatcheck_steam_sandboxed": "Its Steam is a Flatpak or Snap app, which doesn't see the host's game libraries, so their games are missing here. Install the distribution's Steam package on the host to share them.",
 	"seatcheck_systemd_missing": "This host doesn't run systemd, which seats need.",
 	"seatcheck_systemd_ok": "systemd is the init system",
 	"seatcheck_termservice_off": "Remote Desktop Services isn't running. Start it under Services, or restart the host.",

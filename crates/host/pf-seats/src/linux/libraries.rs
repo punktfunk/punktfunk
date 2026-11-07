@@ -186,6 +186,34 @@ fn check(
     ))
 }
 
+/// The Flatpak Steam's own folder, which its sandbox shows as the user's home.
+const FLATPAK_HOME: &str = ".var/app/com.valvesoftware.Steam";
+
+/// The folders the owner's Steam at `root` lists in `vdf`, as the host sees them. Entry `0` is that
+/// install itself, whatever path Steam saw it at: a Flatpak writes its sandbox's. A Flatpak's
+/// other folders under the owner's home lie in its own folder unless the home holds them.
+fn listed(vdf: &str, root: &Path) -> Vec<String> {
+    let mut paths = steam::library_paths(vdf);
+    if let Some(own) = paths.first_mut() {
+        *own = root.to_string_lossy().into_owned();
+    }
+    let sandbox = root.ancestors().find(|dir| dir.ends_with(FLATPAK_HOME));
+    let Some((app, home)) = sandbox.and_then(|app| Some((app, app.parent()?.parent()?.parent()?)))
+    else {
+        return paths;
+    };
+    for path in paths.iter_mut().skip(1) {
+        let Ok(inside) = Path::new(path.as_str()).strip_prefix(home) else {
+            continue;
+        };
+        let kept = app.join(inside);
+        if !Path::new(path.as_str()).join("steamapps").is_dir() && kept.join("steamapps").is_dir() {
+            *path = kept.to_string_lossy().into_owned();
+        }
+    }
+    paths
+}
+
 /// The libraries at `paths` a seat can see, each once.
 fn find(
     paths: &[String],
@@ -354,7 +382,7 @@ fn steam_libraries(
             return None;
         }
     };
-    let found = find(&steam::library_paths(&vdf), owner.0, fstype);
+    let found = find(&listed(&vdf, steam_root), owner.0, fstype);
     let orphans = orphans(&shared::seat_dir(state, id).join("private"), &found);
     if !orphans.is_empty() {
         tracing::info!(seat = %id, ?orphans, "private folders of libraries no longer listed");
@@ -872,8 +900,8 @@ fn rom_lines(id: &SeatId, shares: &Shares, host: &str) -> String {
 /// Lists the shared games folder and `libraries` in the seat's Steam and drops the ones it no
 /// longer has, and any folder under `/run/media`, which a seat never sees. Steam's own entries
 /// stay as written, and a folder missing from the list goes last: Steam reads entry `0` as its
-/// own install and drops a folder listed there. Never fails the start: an unlisted library is
-/// one the seat's Steam doesn't offer.
+/// own install and drops a folder listed there. Each of [`shared::SEAT_STEAMS`] the seat has gets
+/// the list. Never fails the start: an unlisted library is one the seat's Steam doesn't offer.
 pub(super) fn register(state: &Path, id: &SeatId, seat: &Passwd, libraries: &[Library]) {
     let ours = libraries_dir(state, id);
     let games = shared::games_dir(state).to_string_lossy().into_owned();
@@ -887,25 +915,29 @@ pub(super) fn register(state: &Path, id: &SeatId, seat: &Passwd, libraries: &[Li
     let managed =
         |path: &str| Path::new(path).starts_with(&ours) || path.starts_with("/run/media/");
     // Steam writes both copies and reads the one under `config`.
-    for dir in ["steamapps", "config"] {
+    for (root, dir) in shared::SEAT_STEAMS
+        .iter()
+        .flat_map(|root| [(root, "steamapps"), (root, "config")])
+    {
         let merge = |vdf: &str| steam::merge_library_folders(vdf, managed, &wanted);
-        if let Err(error) = merge_list(&seat.home, dir, seat, merge) {
-            tracing::warn!(%error, dir, "seat's steam library list not updated");
+        if let Err(error) = merge_list(&seat.home, root, dir, seat, merge) {
+            tracing::warn!(%error, root, dir, "seat's steam library list not updated");
         }
     }
 }
 
-/// Rewrites `.local/share/Steam/<dir>/libraryfolders.vdf` under `home` through `merge`. Root
-/// writes in a tree the seat user owns, so it goes through [`safe_open`]: no link on the way is
-/// followed, a FIFO there doesn't block, and the new file is the seat's. An absent file stays
-/// absent: Steam writes its own on first run.
+/// Rewrites `<root>/<dir>/libraryfolders.vdf` under `home` through `merge`, `root` a Steam
+/// folder such as `.local/share/Steam`. Root writes in a tree the seat user owns, so it goes
+/// through [`safe_open`]: no link on the way is followed, a FIFO there doesn't block, and the new
+/// file is the seat's. An absent file stays absent: Steam writes its own on first run.
 pub(super) fn merge_list(
     home: &Path,
+    root: &str,
     dir: &str,
     seat: &Passwd,
     merge: impl Fn(&str) -> Option<String>,
 ) -> std::io::Result<()> {
-    let path = [".local", "share", "Steam", dir];
+    let path: Vec<&str> = root.split('/').chain([dir]).collect();
     let Some(at) = safe_open::walk(safe_open::dir(home)?, &path)? else {
         return Ok(());
     };
@@ -949,6 +981,44 @@ mod tests {
 
     fn id() -> SeatId {
         SeatId::parse("0123456789abcdef0123456789abcdef").unwrap()
+    }
+
+    /// A Flatpak's own entry is its install, and its folders under the home lie in its own folder
+    /// when the home doesn't hold them. A native Steam's list is read as written.
+    #[test]
+    fn a_flatpak_steam_s_list_is_read_as_the_host_sees_it() {
+        let temp = tempfile::tempdir().unwrap();
+        let home = std::fs::canonicalize(temp.path()).unwrap();
+        let app = home.join(FLATPAK_HOME);
+        let root = app.join("data/Steam");
+        for dir in [&root, &app.join("Games/Lib"), &home.join("Shared")] {
+            std::fs::create_dir_all(dir.join("steamapps")).unwrap();
+        }
+        let h = home.display();
+        let vdf = steam::library_folders_vdf(&[
+            format!("{h}/.local/share/Steam"),
+            format!("{h}/Games/Lib"),
+            format!("{h}/Shared"),
+            "/mnt/games".to_owned(),
+        ]);
+        let shown = |path: PathBuf| path.to_string_lossy().into_owned();
+        assert_eq!(
+            listed(&vdf, &root),
+            [
+                shown(root.clone()),
+                shown(app.join("Games/Lib")),
+                format!("{h}/Shared"),
+                "/mnt/games".to_owned(),
+            ]
+        );
+        let native = home.join(".local/share/Steam");
+        let read = listed(&vdf, &native);
+        assert_eq!(read[0], shown(native));
+        assert_eq!(
+            read[1],
+            format!("{h}/Games/Lib"),
+            "a native Steam's folders are as listed"
+        );
     }
 
     /// A seat user that is whoever owns `home`, so the test can hand files to it.
@@ -1544,12 +1614,12 @@ mod tests {
         std::os::unix::fs::symlink(&elsewhere, home.join(".local/share/Steam")).unwrap();
         let seat = me(temp.path());
         let merge = |_: &str| Some("changed".to_owned());
-        assert!(merge_list(&home, "steamapps", &seat, merge).is_err());
+        assert!(merge_list(&home, ".local/share/Steam", "steamapps", &seat, merge).is_err());
 
         std::fs::remove_file(home.join(".local/share/Steam")).unwrap();
         std::fs::create_dir_all(home.join(".local/share/Steam/steamapps")).unwrap();
         std::os::unix::fs::symlink(&target, steam_file(&home, "steamapps")).unwrap();
-        assert!(merge_list(&home, "steamapps", &seat, merge).is_err());
+        assert!(merge_list(&home, ".local/share/Steam", "steamapps", &seat, merge).is_err());
         assert_eq!(
             std::fs::read_to_string(&target).unwrap(),
             "\"libraryfolders\"\n{\n}\n"
@@ -1567,7 +1637,8 @@ mod tests {
         let seat = me(temp.path());
         let h = home.clone();
         let merge = |_: &str| Some("changed".to_owned());
-        let merged = within(move || merge_list(&h, "steamapps", &seat, merge).is_ok());
+        let merged =
+            within(move || merge_list(&h, ".local/share/Steam", "steamapps", &seat, merge).is_ok());
         assert_eq!(
             merged,
             Some(false),

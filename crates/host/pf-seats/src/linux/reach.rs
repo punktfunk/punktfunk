@@ -1,10 +1,12 @@
 //! Whether a made seat's Steam opened the libraries the seat shows it.
 //!
 //! Steam's `content_log.txt` names each listed folder it couldn't open at a library load:
-//! `Install folder <path> not mounted.` The check reads the last load of the unit's run, and for
-//! each folder of ours it missed, tries the folder as that Steam does: its user, its groups, its
+//! `Install folder <path> not mounted.` The check reads the log of every Steam folder in the
+//! seat's home ([`shared::STEAM_ROOTS`]) and takes the last load of the unit's run. For each
+//! folder of ours it missed, it tries the folder as that Steam does: its user, its groups, its
 //! mount namespace. The error that try meets, beside the folder's owner and mode on the host,
-//! names the cause. A Steam the check can't find is logged with what the seat's user runs.
+//! names the cause. A Steam the library list doesn't reach, a Flatpak's or a Snap's, is named,
+//! and a Steam the check can't find is logged with what the seat's user runs.
 
 use super::accounts::Passwd;
 use super::{libraries, output, run, safe_open, shared};
@@ -23,16 +25,26 @@ const LISTED: usize = 8;
 /// The characters of each listed process's arguments kept.
 const CMDLINE: usize = 200;
 
-/// The seat's folders its Steam's last library load couldn't open.
+/// The last library load of the seat's Steam, when it went wrong.
 #[derive(Debug, PartialEq, Eq)]
 pub(super) struct Missed {
+    /// The Steam folder under the seat's home whose log holds the load.
+    pub root: &'static str,
     /// The load's local time as Steam logs it, which tells one load from the next.
     pub stamp: String,
+    /// The folders of ours it couldn't open.
     pub folders: Vec<String>,
 }
 
-/// What the Steam in `home` missed of seat `id`'s folders at its last library load. `None` when
-/// it opened them all, or has no log.
+impl Missed {
+    /// Whether that Steam is one the seat's library list reaches ([`shared::SEAT_STEAMS`]).
+    pub(super) fn listed(&self) -> bool {
+        shared::SEAT_STEAMS.contains(&self.root)
+    }
+}
+
+/// What the Steam in `home` that loaded its libraries last missed of seat `id`'s folders. `None`
+/// when that Steam opened every folder of ours and is one the list reaches, or none logged a load.
 pub(super) fn missed(state: &Path, id: &SeatId, home: &Path) -> Option<Missed> {
     let games = shared::games_dir(state);
     let libraries = libraries::libraries_dir(state, id);
@@ -40,7 +52,27 @@ pub(super) fn missed(state: &Path, id: &SeatId, home: &Path) -> Option<Missed> {
         let folder = Path::new(folder);
         folder == games || folder.starts_with(&libraries)
     };
-    parse(&read_log(home).ok()??, ours)
+    let mut last: Option<Missed> = None;
+    // `.steam/steam` is a link to one of the others, which `safe_open` doesn't follow.
+    for root in shared::STEAM_ROOTS
+        .into_iter()
+        .filter(|root| *root != ".steam/steam")
+    {
+        let Some(log) = read_log(home, root).ok().flatten() else {
+            continue;
+        };
+        let Some((stamp, folders)) = parse(&log, ours) else {
+            continue;
+        };
+        if last.as_ref().is_none_or(|last| stamp > last.stamp) {
+            last = Some(Missed {
+                root,
+                stamp,
+                folders,
+            });
+        }
+    }
+    last.filter(|load| !load.folders.is_empty() || !load.listed())
 }
 
 /// Whether `missed` is a load of `unit`'s current run, not one the log keeps from the last. A
@@ -60,8 +92,8 @@ fn started(shown: &str) -> Option<String> {
     (stamp.len() == 19 && digits(&[0, 3, 5, 8, 11, 14, 17, 18])).then_some(stamp)
 }
 
-/// The folders `ours` admits that `log` says its last library load couldn't open.
-fn parse(log: &str, ours: impl Fn(&str) -> bool) -> Option<Missed> {
+/// The stamp of `log`'s last library load, and the folders `ours` admits it couldn't open.
+fn parse(log: &str, ours: impl Fn(&str) -> bool) -> Option<(String, Vec<String>)> {
     let at = log.rfind(LOAD)?;
     let line = log[..at].rfind('\n').map_or(0, |end| end + 1);
     let stamp = log[line..at].trim_start_matches('[').to_owned();
@@ -76,13 +108,13 @@ fn parse(log: &str, ours: impl Fn(&str) -> bool) -> Option<Missed> {
             folders.push(folder.to_owned());
         }
     }
-    (!folders.is_empty()).then_some(Missed { stamp, folders })
+    Some((stamp, folders))
 }
 
-/// The tail of the Steam log in `home`, which the seat's user writes: opened without following
-/// a link.
-fn read_log(home: &Path) -> std::io::Result<Option<String>> {
-    let names = [".local", "share", "Steam", "logs"];
+/// The tail of the log of the Steam at `root` in `home`, which the seat's user writes: opened
+/// without following a link.
+fn read_log(home: &Path, root: &str) -> std::io::Result<Option<String>> {
+    let names: Vec<&str> = root.split('/').chain(["logs"]).collect();
     let Some(logs) = safe_open::walk(safe_open::dir(home)?, &names)? else {
         return Ok(None);
     };
@@ -95,8 +127,13 @@ fn read_log(home: &Path) -> std::io::Result<Option<String>> {
     Ok(Some(String::from_utf8_lossy(&bytes).into_owned()))
 }
 
-/// Logs how the seat's Steam runs, then, for each folder in `missed`, what keeps it from it.
+/// Logs which Steam loaded and how it runs, then, for each folder in `missed`, what keeps it from
+/// it.
 pub(super) fn explain(id: &SeatId, seat: &Passwd, missed: &Missed) {
+    let steam_root = missed.root;
+    if !missed.listed() {
+        tracing::warn!(seat = %id, steam_root, "seat Steam without the host's library list");
+    }
     let processes = processes(Path::new("/proc"), seat.uid);
     let Some(steam) = processes.iter().find(|process| process.is_client()) else {
         let steam_like: Vec<String> = (processes.iter())
@@ -109,6 +146,7 @@ pub(super) fn explain(id: &SeatId, seat: &Passwd, missed: &Missed) {
             .collect();
         tracing::warn!(
             seat = %id,
+            steam_root,
             folders = ?missed.folders,
             steam = "not found",
             seat_processes = processes.len(),
@@ -119,6 +157,7 @@ pub(super) fn explain(id: &SeatId, seat: &Passwd, missed: &Missed) {
     };
     tracing::warn!(
         seat = %id,
+        steam_root,
         steam_pid = steam.pid,
         steam_binary = %steam.argv0,
         steam_cgroup = %steam.cgroup,
@@ -248,10 +287,10 @@ mod tests {
 
     #[test]
     fn the_last_load_names_the_folders_of_ours_it_missed() {
-        let missed = parse(LOG, ours).expect("a folder was missed");
-        assert_eq!(missed.stamp, "2026-11-07 13:14:16");
+        let (stamp, folders) = parse(LOG, ours).expect("a load");
+        assert_eq!(stamp, "2026-11-07 13:14:16");
         assert_eq!(
-            missed.folders,
+            folders,
             ["/var/libraries/01c1"],
             "ours, once, from the last load"
         );
@@ -260,8 +299,53 @@ mod tests {
     #[test]
     fn a_load_that_opened_every_folder_of_ours_missed_nothing() {
         let log = format!("{LOG}[2026-11-07 14:00:00{LOAD}/h/steamapps/libraryfolders.vdf\n");
-        assert_eq!(parse(&log, ours), None);
-        assert_eq!(parse("", ours), None, "no load, nothing missed");
+        let (stamp, folders) = parse(&log, ours).expect("a load");
+        assert_eq!((stamp.as_str(), folders.len()), ("2026-11-07 14:00:00", 0));
+        assert_eq!(parse("", ours), None, "no load");
+    }
+
+    /// Every Steam folder's log is read, and the latest load wins: a Flatpak Steam that ran last
+    /// is named though it missed nothing, as its list never had the host's libraries.
+    #[test]
+    fn the_steam_that_loaded_last_is_the_one_judged() {
+        let temp = tempfile::tempdir().unwrap();
+        let (home, state) = (temp.path().join("home"), temp.path().join("state"));
+        let id = SeatId::parse("0123456789abcdef0123456789abcdef").unwrap();
+        let games = shared::games_dir(&state);
+        let log = |root: &str, stamp: &str, missed: &str| {
+            let logs = home.join(root).join("logs");
+            std::fs::create_dir_all(&logs).unwrap();
+            let mut text = format!("[{stamp}{LOAD}/x/libraryfolders.vdf\n");
+            if !missed.is_empty() {
+                text += &format!("[{stamp}] Install folder {missed} not mounted.\n");
+            }
+            std::fs::write(logs.join("content_log.txt"), text).unwrap();
+        };
+        log(
+            ".local/share/Steam",
+            "2026-11-07 19:37:06",
+            &games.to_string_lossy(),
+        );
+        let found = missed(&state, &id, &home).expect("its own copy missed the games");
+        assert_eq!((found.root, found.listed()), (".local/share/Steam", true));
+        assert_eq!(found.folders, [games.to_string_lossy()]);
+        log(
+            ".var/app/com.valvesoftware.Steam/.local/share/Steam",
+            "2026-11-07 20:01:00",
+            "",
+        );
+        let found = missed(&state, &id, &home).expect("the Flatpak ran last");
+        assert_eq!(
+            found.root,
+            ".var/app/com.valvesoftware.Steam/.local/share/Steam"
+        );
+        assert!(!found.listed() && found.folders.is_empty());
+        log(".local/share/Steam", "2026-11-07 20:05:00", "");
+        assert_eq!(
+            missed(&state, &id, &home),
+            None,
+            "its own copy opened everything last"
+        );
     }
 
     #[test]

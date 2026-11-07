@@ -1010,6 +1010,9 @@ impl PlatformBackend for LinuxBackend {
         }
         shared::ensure_games(state, games)?;
         shared::ensure_seat_dirs(state, &seat.id, &passwd, self.owner_uid())?;
+        if let Err(error) = shared::link_steam(&passwd) {
+            tracing::warn!(account = %passwd.name, %error, "seat's steam links not made");
+        }
         let reader = shared::Reader::group(passwd.gid);
         shared::refresh_trust(box_dir, state, &seat.id, reader)?;
         shared::refresh_seat_library(state, &seat.id, reader)?;
@@ -1252,18 +1255,28 @@ impl PlatformBackend for LinuxBackend {
                 seat_id: Some(seat.id.clone()),
                 ..Diagnostic::info("unit_state", message).worded(id)
             });
-            let missed = |passwd: &accounts::Passwd| {
-                let missed = reach::missed(&self.inner.state, &seat.id, &passwd.home);
-                missed.is_some_and(|missed| reach::this_run(&missed, &session::unit(&seat.account)))
-            };
-            let running = runtime == RuntimeState::Running;
-            if kind == Own::Seat && running && found.as_ref().is_some_and(missed) {
-                let message = "Its Steam can't open the host's game libraries, so their games are \
-                               missing here. Restart the seat, and report a bug if they're still missing.";
+            let running = kind == Own::Seat && runtime == RuntimeState::Running;
+            let missed = (found.as_ref().filter(|_| running))
+                .and_then(|passwd| reach::missed(&self.inner.state, &seat.id, &passwd.home))
+                .filter(|missed| reach::this_run(missed, &session::unit(&seat.account)));
+            if let Some(missed) = missed {
+                let (id, message) = if missed.listed() {
+                    (
+                        "seatcheck_steam_libraries_unreachable",
+                        "Its Steam can't open the host's game libraries, so their games are \
+                         missing here. Restart the seat, and report a bug if they're still missing.",
+                    )
+                } else {
+                    (
+                        "seatcheck_steam_sandboxed",
+                        "Its Steam is a Flatpak or Snap app, which doesn't see the host's game \
+                         libraries, so their games are missing here. Install the distribution's \
+                         Steam package on the host to share them.",
+                    )
+                };
                 out.push(Diagnostic {
                     seat_id: Some(seat.id.clone()),
-                    ..Diagnostic::warning("steam_libraries", message)
-                        .worded("seatcheck_steam_libraries_unreachable")
+                    ..Diagnostic::warning("steam_libraries", message).worded(id)
                 });
             }
             if kind == Own::Person {
