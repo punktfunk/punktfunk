@@ -240,28 +240,15 @@ fn collides(a: &Run, b: &Run) -> bool {
     a.layer == b.layer && across > SLACK && down > line / 2.0 && a.text != b.text
 }
 
-/// The pixel rows a run sits on: what ties a problem in the pseudo-language to the same one
-/// in English.
-type Band = (i32, i32);
-
-fn band(r: &Run) -> Band {
-    (r.y0.round() as i32, r.y1.round() as i32)
-}
-
-/// One scene's problems: each problem run, what is wrong with it, and every band it touches.
-fn problems(runs: &[&Run]) -> Vec<(usize, String, Vec<Band>)> {
+/// One scene's problems: each problem run and what is wrong with it.
+fn problems(runs: &[&Run]) -> Vec<(usize, String)> {
     let mut out = Vec::new();
     for (i, r) in runs.iter().enumerate() {
         if let Some((allotted, measured)) = overflow(r) {
-            out.push((
-                i,
-                format!("{measured:.0} px in {allotted:.0}"),
-                vec![band(r)],
-            ));
+            out.push((i, format!("{measured:.0} px in {allotted:.0}")));
         }
         if let Some(under) = runs[..i].iter().find(|o| collides(o, r)) {
-            let what = format!("on {:?}", under.text);
-            out.push((i, what, vec![band(r), band(under)]));
+            out.push((i, format!("on {:?}", under.text)));
         }
     }
     out
@@ -367,8 +354,6 @@ struct Gate {
     surface: skia_safe::Surface,
     pads: Vec<PadInfo>,
     seen: Vec<Seen>,
-    /// The same last frames in English.
-    english: Vec<Seen>,
 }
 
 impl Gate {
@@ -381,7 +366,6 @@ impl Gate {
             surface: skia_safe::surfaces::raster_n32_premul((1, 1)).unwrap(),
             pads: Vec::new(),
             seen: Vec::new(),
-            english: Vec::new(),
         };
         g.resize(size.viewport);
         g
@@ -409,44 +393,21 @@ impl Gate {
     fn look(&mut self, s: &mut Shell, scene: &str, pad: bool) {
         let t = s.fake_clock.map_or(0.0, |(t, _)| t);
         s.fake_clock = Some((t, STEP));
-        // The last frame twice over, the second in English: what overflows there already is
-        // not the language's doing.
-        for frame in 0..=FRAMES {
-            let english = frame == FRAMES;
-            if frame + 1 >= FRAMES {
+        let pref = pad.then_some(GamepadPref::Xbox360);
+        let name = pad.then_some(PAD);
+        for frame in 0..FRAMES {
+            if frame + 1 == FRAMES {
                 textprobe::begin();
             }
-            let mut draw = |s: &mut Shell| {
-                let pref = pad.then_some(GamepadPref::Xbox360);
-                let name = pad.then_some(PAD);
-                s.render_in(
-                    self.surface.canvas(),
-                    &self.viewport,
-                    &self.fonts,
-                    name,
-                    pref,
-                    &self.pads,
-                )
-            };
-            if english {
-                pf_l10n::with_language("en", || draw(s));
-            } else {
-                draw(s);
-            }
-            if frame + 1 >= FRAMES {
-                let into = if english {
-                    &mut self.english
-                } else {
-                    &mut self.seen
-                };
-                for run in textprobe::end() {
-                    into.push(Seen {
-                        size: self.size,
-                        scene: scene.to_owned(),
-                        run,
-                    });
-                }
-            }
+            let canvas = self.surface.canvas();
+            s.render_in(canvas, &self.viewport, &self.fonts, name, pref, &self.pads);
+        }
+        for run in textprobe::end() {
+            self.seen.push(Seen {
+                size: self.size,
+                scene: scene.to_owned(),
+                run,
+            });
         }
     }
 }
@@ -896,18 +857,17 @@ fn by_scene(all: &[Seen]) -> BTreeMap<(&str, &str), Vec<&Run>> {
 #[test]
 fn every_screen_reads_the_pseudo_language() {
     textprobe::set_bare(true);
-    let (seen, english) = pf_l10n::with_language("en-XA", || {
-        let (mut seen, mut english) = (Vec::new(), Vec::new());
+    let seen = pf_l10n::with_language("en-XA", || {
+        let mut seen = Vec::new();
         for size in sizes() {
             let mut g = Gate::new(&size);
             walk(&mut g);
             seen.append(&mut g.seen);
-            english.append(&mut g.english);
         }
-        (seen, english)
+        seen
     });
     textprobe::set_bare(false);
-    let (seen_scenes, english_scenes) = (by_scene(&seen), by_scene(&english));
+    let seen_scenes = by_scene(&seen);
 
     // Findings by what they say: the same text on many screens is one finding.
     let mut literal: BTreeMap<&str, String> = BTreeMap::new();
@@ -919,16 +879,10 @@ fn every_screen_reads_the_pseudo_language() {
                 literal.entry(text).or_insert_with(|| at.clone());
             }
         }
-        let before: Vec<Band> = english_scenes
-            .get(scene)
-            .map(|r| problems(r).into_iter().flat_map(|p| p.2).collect())
-            .unwrap_or_default();
-        for (i, what, bands) in problems(runs) {
-            if !before.contains(&bands[0]) {
-                let key = key_of(&runs[i].text);
-                over.entry((key, what))
-                    .or_insert_with(|| format!("{at}: {:?}", runs[i].text));
-            }
+        for (i, what) in problems(runs) {
+            let key = key_of(&runs[i].text);
+            over.entry((key, what))
+                .or_insert_with(|| format!("{at}: {:?}", runs[i].text));
         }
     }
 
@@ -951,6 +905,28 @@ fn every_screen_reads_the_pseudo_language() {
     for (key, _) in OVERFLOW_DEBT {
         if !over.keys().any(|(k, _)| k == key) {
             report += &format!("OVERFLOW_DEBT: {key} fits now; remove it\n");
+        }
+    }
+    // A list that is not ready says so in view at every size, the phone's first screenful
+    // ending at the title band included.
+    let states = pf_l10n::with_language("en-XA", || {
+        [
+            (
+                "library: loading",
+                pf_l10n::client::lib_loading().to_string(),
+            ),
+            (
+                "library: empty",
+                pf_l10n::client::lib_empty_title().to_string(),
+            ),
+        ]
+    });
+    for size in sizes() {
+        for (scene, text) in &states {
+            let runs = seen_scenes.get(&(size.name, *scene));
+            if !runs.is_some_and(|runs| runs.iter().any(|r| r.text == *text)) {
+                report += &format!("out of view: {text:?} at {} / {scene}\n", size.name);
+            }
         }
     }
     assert!(report.is_empty(), "\n{report}");

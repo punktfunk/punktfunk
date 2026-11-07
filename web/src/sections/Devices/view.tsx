@@ -90,9 +90,7 @@ const Group: FC<{ label: string; children: ReactNode }> = ({
 	children,
 }) => (
 	<section>
-		<h2 className="text-xs font-medium uppercase text-muted-foreground">
-			{label}
-		</h2>
+		<h2 className="text-xs font-medium text-muted-foreground">{label}</h2>
 		{children}
 	</section>
 );

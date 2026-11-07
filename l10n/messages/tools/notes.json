@@ -174,7 +174,7 @@
 	"setup_win_outro_console_loopback_body": "Silent transcript, under next step 1. PUNKTFUNK_UI_BIND and host.env are a setting's and a file's names.",
 	"setup_win_outro_console": "Silent transcript, next step 1. {host} is this device's host name.",
 	"setup_win_outro_password": "Silent transcript. 'punktfunk-host web password' is a command: never translate it.",
-	"setup_win_outro_install_client": "Silent transcript, next step 2. 'Approve' is the console's button: use its label in this language. {url}: the client downloads page.",
+	"setup_win_outro_install_client": "Silent transcript, next step 2. {url}: the client downloads page.",
 	"setup_win_outro_open_client": "Silent transcript after a client install, next step 1.",
 	"setup_win_outro_pairing_help": "Silent transcript after a client install, next step 2. {url}: the pairing docs page.",
 	"setup_win_outro_stuck": "Last line of the silent transcript. {url}: the troubleshooting docs page.",

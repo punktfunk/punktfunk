@@ -57,7 +57,8 @@ pub(crate) fn layer() {
     LAYER.with(|l| l.set(l.get() + 1));
 }
 
-/// A run of `width` from `x` between the rows `y`.
+/// A run of `width` from `x` between the rows `y`. One the clip hides top to bottom draws
+/// nothing and is not kept.
 pub(crate) fn run(
     canvas: &Canvas,
     text: &str,
@@ -67,7 +68,11 @@ pub(crate) fn run(
 ) {
     RUNS.with(|r| {
         if let Some(runs) = r.borrow_mut().as_mut() {
-            let clip = canvas.local_clip_bounds().map(|c| (c.left, c.right));
+            let bounds = canvas.local_clip_bounds();
+            if bounds.is_some_and(|c| y1 <= c.top || y0 >= c.bottom) {
+                return;
+            }
+            let clip = bounds.map(|c| (c.left, c.right));
             runs.push(Run {
                 text: text.to_owned(),
                 x0: x,

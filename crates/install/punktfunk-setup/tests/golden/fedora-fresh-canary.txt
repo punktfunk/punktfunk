@@ -4,7 +4,7 @@
   Third-party clients (Moonlight, Artemis): no
   Shared clipboard: yes
   Start at boot with nobody logged in: no
-  Web console reachable from: this local network
+  Web console reachable from: This local network
 ==> Installing: host web-console plugin-runner (canary channel)
   + sudo tee /etc/yum.repos.d/punktfunk.repo >/dev/null <<'REPO'
 [punktfunk]
