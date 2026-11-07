@@ -1253,7 +1253,8 @@ impl PlatformBackend for LinuxBackend {
                 ..Diagnostic::info("unit_state", message).worded(id)
             });
             let missed = |passwd: &accounts::Passwd| {
-                reach::missed(&self.inner.state, &seat.id, &passwd.home).is_some()
+                let missed = reach::missed(&self.inner.state, &seat.id, &passwd.home);
+                missed.is_some_and(|missed| reach::this_run(&missed, &session::unit(&seat.account)))
             };
             let running = runtime == RuntimeState::Running;
             if kind == Own::Seat && running && found.as_ref().is_some_and(missed) {
@@ -1502,7 +1503,8 @@ impl LinuxBackend {
 /// which follows the owner's own first. A person's pairing list follows who its row admits, as
 /// presence runs out. Ends a person's headless session when they sit down at the machine, and
 /// repairs the games folder's ACL mask after a made seat stops and every [`ACL_EVERY`]. Logs,
-/// once per library load, why a made seat's Steam couldn't open a library folder. The owner's
+/// once per library load of the unit's run, why a made seat's Steam couldn't open a library
+/// folder; a load the log keeps from the last run is passed over. The owner's
 /// row stays listed while its host is the owner's own, which reads the same copy. Ends when the
 /// backend is dropped.
 fn keep_level(inner: Weak<Inner>) {
@@ -1575,10 +1577,13 @@ fn keep_level(inner: Weak<Inner>) {
                 let Some(missed) = reach::missed(&inner.state, id, &passwd.home) else {
                     continue;
                 };
-                if explained.get(id) != Some(&missed.stamp) {
-                    reach::explain(id, &passwd, &missed);
-                    explained.insert(id.clone(), missed.stamp);
+                if explained.get(id) == Some(&missed.stamp) {
+                    continue;
                 }
+                if reach::this_run(&missed, &session::unit(&tracked.account)) {
+                    reach::explain(id, &passwd, &missed);
+                }
+                explained.insert(id.clone(), missed.stamp);
             }
         }
         let seat_up = seats.iter().any(|(_, tracked)| tracked.guest.is_none());
