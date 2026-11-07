@@ -240,7 +240,7 @@ impl Entry {
 
     pub(crate) fn incompatible_reason(&self) -> Option<String> {
         self.incompatibility().map(|why| match why {
-            Incompatible::Platforms(list) => format!("requires {}", list.join(" or ")),
+            Incompatible::Platforms(list) => format!("requires {}", list.join(", ")),
             Incompatible::Host(min) => format!("needs punktfunk {min} or newer"),
         })
     }
