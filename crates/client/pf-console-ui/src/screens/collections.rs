@@ -182,10 +182,11 @@ pub(crate) fn paint_tile(
     };
     let kind_w = f64::from(fonts.measure(kind, W::SemiBold, 11.0 * k));
     // Never left of the deck's reserved corner: a narrow tile would otherwise
-    // walk the caption back into the covers.
-    let kind_x = (f64::from(rect.right) - pad - kind_w).max(l + (FAN_W + 10.0) * fk);
+    // walk the caption back into the covers. Past the room right of it, it is cut.
+    let corner = l + (FAN_W + 10.0) * fk;
+    let kind_x = (f64::from(rect.right) - pad - kind_w).max(corner);
     let kind_y = t + 12.0 * k;
-    fonts.draw(
+    fonts.draw_clipped(
         canvas,
         kind,
         kind_x,
@@ -193,6 +194,7 @@ pub(crate) fn paint_tile(
         W::SemiBold,
         11.0 * k,
         ui.fg(0.45),
+        f64::from(rect.right) - pad - corner,
     );
 }
 

@@ -910,8 +910,7 @@ impl LibraryScreen {
     }
 
     /// The screen's lines in one scroll: the pills, the chips and the bands, then the
-    /// field — grid, shelf, or the card a failed or empty list leaves — and the title band
-    /// over its foot.
+    /// field — grid, shelf, or the card a failed or empty list leaves — above the title band.
     fn draw_field(
         &mut self,
         canvas: &Canvas,
@@ -925,9 +924,14 @@ impl LibraryScreen {
         let t = ctx.t;
         let (bands, lines) = self.place_zone(ctx);
         let sectioned = self.sectioned();
-        // The lines run on to the screen's foot and blur under the band there.
+        // The lines stop at the title band, so its caption never sits on one. Without the
+        // band they run on to the screen's foot and blur under the tray there.
         let clip = canvas.local_clip_bounds().unwrap_or(rect);
-        let foot = clip.bottom.max(rect.bottom);
+        let foot = if self.band_shown() {
+            rect.bottom - self.pinned(k).1
+        } else {
+            clip.bottom.max(rect.bottom)
+        };
         let g = self.field_geom(ui, rect, foot, k);
         let FieldGeom {
             shape,
@@ -1328,7 +1332,7 @@ impl LibraryScreen {
         }
     }
 
-    /// The focused title's band reaches the shell's tray in this far, over the lines' foot.
+    /// The focused title's band reaches the shell's tray in this far, under the lines.
     pub(crate) fn pinned(&self, k: f64) -> (f32, f32) {
         if self.band_shown() {
             (0.0, (crate::widgets::FOOT_TITLE_H * k) as f32)
@@ -1337,7 +1341,7 @@ impl LibraryScreen {
         }
     }
 
-    /// The focused title on the shell's tray: drawn after the trays, over the lines.
+    /// The focused title on the shell's tray: drawn after the trays, under the lines.
     pub(crate) fn render_pinned(
         &mut self,
         canvas: &Canvas,
