@@ -59,12 +59,6 @@
     "desktop_licenses_bundled_body": "Disclosure or legal text; the exact wording is the point.",
     "store_install_external_note": "Security text: third-party catalog code runs with the runner's privileges.",
     "store_spec_lead": "Security text: a raw package registry has no catalog and no review.",
-    "store_update_all_external_note": "Security text: the same warning, for a bulk update.",
-    "setup_uninstall_outro": "Setup or wizard sentence over the budget; waits for the wording pass.",
-    "setup_row_group_hint": "Setup or wizard sentence over the budget; waits for the wording pass.",
-    "wizard_row_web_bind_hint": "Setup or wizard sentence over the budget; waits for the wording pass.",
-    "wizard_row_password_hint": "Setup or wizard sentence over the budget; waits for the wording pass.",
-    "wizard_network_body": "Setup or wizard sentence over the budget; waits for the wording pass.",
-    "setup_row_linger_hint": "Setup or wizard sentence over the budget; waits for the wording pass."
+    "store_update_all_external_note": "Security text: the same warning, for a bulk update."
   }
 }
