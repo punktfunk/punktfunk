@@ -103,7 +103,7 @@ pub(super) struct Shares {
     pub home: Option<PathBuf>,
 }
 
-fn libraries_dir(state: &Path, id: &SeatId) -> PathBuf {
+pub(super) fn libraries_dir(state: &Path, id: &SeatId) -> PathBuf {
     shared::seat_dir(state, id).join("libraries")
 }
 
@@ -288,7 +288,8 @@ fn fstype(path: &Path) -> Option<String> {
 
 /// What seat `seat` is shown of the owner's: the libraries of the Steam at `steam_root`, read-only
 /// when the box's defaults in `box_dir` say so, and every root `owner` granted a plugin. Their
-/// folders are put in place under `state`. `None` without the mount tools.
+/// folders are put in place under `state`, and the libraries logged. `None` without the mount
+/// tools.
 pub(super) fn share(
     box_dir: &Path,
     state: &Path,
@@ -307,6 +308,11 @@ pub(super) fn share(
     let (idmap, libraries) = steam_root
         .and_then(|root| steam_libraries(state, id, seat, root, read_only))
         .unwrap_or_default();
+    // Each folder the seat's Steam lists, beside the owner's library it is.
+    let shown: Vec<String> = (libraries.iter())
+        .map(|library| format!("{} {}", library.key, library.steamapps.display()))
+        .collect();
+    tracing::info!(seat = %id, read_only, libraries = ?shown, "owner's libraries shown to the seat");
     let (roms, home) = owner.map_or_else(Default::default, |owner| {
         granted_roms(state, id, seat, owner, &libraries)
     });
@@ -556,6 +562,27 @@ fn orphans(private: &Path, libraries: &[Library]) -> Vec<String> {
         .collect();
     out.sort();
     out
+}
+
+/// The stages of `shares` that aren't mounts once seat `id`'s unit has started: its
+/// `ExecStartPre=-` lines go on past a failed mount, and the seat then shows an empty folder.
+/// A stage is on `/run`'s tmpfs and what it mounts is not, so a mounted stage's device differs
+/// from its parent's.
+pub(super) fn unmounted(id: &SeatId, shares: &Shares) -> Vec<PathBuf> {
+    let libraries = shares.libraries.iter().flat_map(|library| {
+        let anchor = library
+            .anchor
+            .as_ref()
+            .map(|_| anchor_stage(id, &library.key));
+        std::iter::once(stage_dir(id, &library.key)).chain(anchor)
+    });
+    let roms = shares.roms.iter().filter(|rom| rom.idmap.is_some());
+    let dev = |path: &Path| std::fs::metadata(path).map(|meta| meta.dev()).ok();
+    let parent = dev(&Path::new(STAGE_ROOT).join(id.as_str()));
+    libraries
+        .chain(roms.map(|rom| stage_dir(id, &rom.key)))
+        .filter(|stage| dev(stage) == parent)
+        .collect()
 }
 
 /// Removes `id`'s stage folders, the mount points its unit mounted the libraries at. `rmdir`

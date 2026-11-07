@@ -585,6 +585,7 @@
 	"seatcheck_steam_client_pending": "Its own Steam isn't set up yet. It's copied the first time the seat starts; Steam games start on the seat once that's done.",
 	"seatcheck_steam_elsewhere": "Steam is installed in {path}, so seats get no Steam. Seats copy Steam only from C:\\\\Program Files (x86)\\\\Steam; reinstall it there.",
 	"seatcheck_steam_installed": "Steam is installed in {path}. Each seat gets a copy of its own.",
+	"seatcheck_steam_libraries_unreachable": "Its Steam can't open the host's game libraries, so their games are missing here. Restart the seat, and report a bug if they're still missing.",
 	"seatcheck_steam_none": "Steam isn't installed, so seats have no Steam.",
 	"seatcheck_systemd_missing": "This host doesn't run systemd, which seats need.",
 	"seatcheck_systemd_ok": "systemd is the init system",
