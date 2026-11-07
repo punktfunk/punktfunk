@@ -52,12 +52,8 @@
     }
   ],
   "debt": {
-    "android_console_unavailable_failed": "Disclosure or legal text; the exact wording is the point.",
-    "android_keyboard_shortcuts_hint": "Existing wording over the hint budget; waits for the wording pass.",
     "android_keycapture_body_what": "Disclosure or legal text; the exact wording is the point.",
     "android_keycapture_service_description": "Disclosure or legal text; the exact wording is the point.",
-    "android_pad_none_detected": "Disclosure or legal text; the exact wording is the point.",
-    "android_speedtest_target_ask_body": "Disclosure or legal text; the exact wording is the point.",
     "apple_about_third_party_intro": "Disclosure or legal text; the exact wording is the point.",
     "desktop_about_system_libraries_body": "Disclosure or legal text; the exact wording is the point.",
     "desktop_licenses_bundled_body": "Disclosure or legal text; the exact wording is the point.",
