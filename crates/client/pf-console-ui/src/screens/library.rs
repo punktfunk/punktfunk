@@ -1618,7 +1618,9 @@ impl LibraryScreen {
     }
 
     /// What a list that is not ready says, and the button it offers, centred in a block
-    /// `h` tall. A pushed or failed shelf with nothing else to stand on focuses the button.
+    /// `h` tall. A block the clip cuts at its foot centres the copy in what shows of it, so
+    /// a first screenful that ends at the title band still says it. A pushed or failed shelf
+    /// with nothing else to stand on focuses the button.
     #[allow(clippy::too_many_arguments)]
     fn state_el<'a>(
         &'a self,
@@ -1659,7 +1661,11 @@ impl LibraryScreen {
         let y0 = ((h - content) / 2.0).max(0.0);
         let copy = El::paint(move |canvas, r| {
             let cx = f64::from(r.center_x());
-            let top = f64::from(r.top) + y0;
+            // Only ever up from `y0`: the button keeps its laid-out place under the copy.
+            let shown = canvas
+                .local_clip_bounds()
+                .map_or(h, |c| f64::from(c.bottom - r.top).min(h));
+            let top = f64::from(r.top) + ((shown - content) / 2.0).clamp(0.0, y0);
             let max_w = (600.0 * k).min(width * 0.85);
             if loading {
                 crate::theme::spinner(canvas, ui, cx, top + 14.0 * k, 16.0 * k, t);

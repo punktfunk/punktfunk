@@ -907,6 +907,28 @@ fn every_screen_reads_the_pseudo_language() {
             report += &format!("OVERFLOW_DEBT: {key} fits now; remove it\n");
         }
     }
+    // A list that is not ready says so in view at every size, the phone's first screenful
+    // ending at the title band included.
+    let states = pf_l10n::with_language("en-XA", || {
+        [
+            (
+                "library: loading",
+                pf_l10n::client::lib_loading().to_string(),
+            ),
+            (
+                "library: empty",
+                pf_l10n::client::lib_empty_title().to_string(),
+            ),
+        ]
+    });
+    for size in sizes() {
+        for (scene, text) in &states {
+            let runs = seen_scenes.get(&(size.name, *scene));
+            if !runs.is_some_and(|runs| runs.iter().any(|r| r.text == *text)) {
+                report += &format!("out of view: {text:?} at {} / {scene}\n", size.name);
+            }
+        }
+    }
     assert!(report.is_empty(), "\n{report}");
 }
 
