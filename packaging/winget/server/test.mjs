@@ -101,6 +101,12 @@ const post = (p, body) =>
   // `exe` from the M5 swap on; `inno` for every release before it (the catalogue carries both).
   check("manifest: installer-level fields folded into the entry", ["exe", "inno"].includes(inst?.InstallerType) && inst?.Scope === "machine");
   check("manifest: ProductCode preserved for correlation", !!inst?.ProductCode || !!v?.ProductCodes?.length);
+  // A Locales entry without PackageLocale, or with per-file keys left in, fails the schema.
+  check(
+    "manifest: each extra locale names its PackageLocale and nothing per-file",
+    (v?.Locales ?? []).every((l) => l.PackageLocale && !l.ManifestType && !l.PackageVersion),
+    `got ${JSON.stringify(v?.Locales?.map((l) => l.PackageLocale))}`,
+  );
   // A Log switch is only useful if winget SUBSTITUTES the path. <LOGPATH> is the one token it
   // replaces; anything else is passed through verbatim, and `|LOGPATH|` shipped in 0.20.0 — Inno
   // then rejected `|` as a filename and aborted with "Error creating log file", in EVERY install
