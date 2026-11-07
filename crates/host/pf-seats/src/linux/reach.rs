@@ -17,6 +17,8 @@ use std::path::Path;
 
 /// One library load and what Steam logs after it fit many times over.
 const TAIL: u64 = 256 * 1024;
+/// A session's downloads log a few megabytes at most between two loads.
+const LONG_TAIL: u64 = 4 * 1024 * 1024;
 
 const LOAD: &str = "] Loaded Steam library folders configuration: ";
 
@@ -112,7 +114,8 @@ fn parse(log: &str, ours: impl Fn(&str) -> bool) -> Option<(String, Vec<String>)
 }
 
 /// The tail of the log of the Steam at `root` in `home`, which the seat's user writes: opened
-/// without following a link.
+/// without following a link. A tail with no library load, which a long download pushes out, is
+/// read again [`LONG_TAIL`] long.
 fn read_log(home: &Path, root: &str) -> std::io::Result<Option<String>> {
     let names: Vec<&str> = root.split('/').chain(["logs"]).collect();
     let Some(logs) = safe_open::walk(safe_open::dir(home)?, &names)? else {
@@ -121,10 +124,17 @@ fn read_log(home: &Path, root: &str) -> std::io::Result<Option<String>> {
     let Some((mut file, meta)) = safe_open::file_at(&logs, "content_log.txt", u64::MAX)? else {
         return Ok(None);
     };
-    file.seek(SeekFrom::Start(meta.len().saturating_sub(TAIL)))?;
-    let mut bytes = Vec::new();
-    file.take(TAIL).read_to_end(&mut bytes)?;
-    Ok(Some(String::from_utf8_lossy(&bytes).into_owned()))
+    let mut tail = |length: u64| -> std::io::Result<String> {
+        file.seek(SeekFrom::Start(meta.len().saturating_sub(length)))?;
+        let mut bytes = Vec::new();
+        (&mut file).take(length).read_to_end(&mut bytes)?;
+        Ok(String::from_utf8_lossy(&bytes).into_owned())
+    };
+    let log = tail(TAIL)?;
+    if log.contains(LOAD) || meta.len() <= TAIL {
+        return Ok(Some(log));
+    }
+    tail(LONG_TAIL).map(Some)
 }
 
 /// Logs which Steam loaded and how it runs, then, for each folder in `missed`, what keeps it from
@@ -302,6 +312,23 @@ mod tests {
         let (stamp, folders) = parse(&log, ours).expect("a load");
         assert_eq!((stamp.as_str(), folders.len()), ("2026-11-07 14:00:00", 0));
         assert_eq!(parse("", ours), None, "no load");
+    }
+
+    /// A load a long download pushed out of the short tail is still found.
+    #[test]
+    fn a_load_far_back_in_the_log_is_still_read() {
+        let temp = tempfile::tempdir().unwrap();
+        let logs = temp.path().join(".local/share/Steam/logs");
+        std::fs::create_dir_all(&logs).unwrap();
+        let filler = "[2026-11-07 20:00:01] Downloading update (1 of 2 KB)...\n".repeat(8000);
+        let log = format!("{LOG}{filler}");
+        assert!(log.len() as u64 > TAIL);
+        std::fs::write(logs.join("content_log.txt"), log).unwrap();
+        let read = read_log(temp.path(), ".local/share/Steam")
+            .unwrap()
+            .unwrap();
+        let (stamp, folders) = parse(&read, ours).expect("the load before the download");
+        assert_eq!((stamp.as_str(), folders.len()), ("2026-11-07 13:14:16", 1));
     }
 
     /// Every Steam folder's log is read, and the latest load wins: a Flatpak Steam that ran last
