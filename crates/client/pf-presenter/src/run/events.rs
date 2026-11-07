@@ -746,21 +746,36 @@ impl Shell {
             }
         }
 
-        // Controller escape chord: release capture and leave fullscreen. Gamescope has
-        // nothing to release into and no pointer to click back with, while a release masks
-        // the pads — there the chord only starts the disconnect hold.
+        // Controller escape chord: toggles capture like Ctrl+Alt+Shift+Q, so a pad alone gets
+        // back in. A release leaves fullscreen and the press back restores it. Gamescope has
+        // nothing to release into; there, under the ring or out of focus, it only starts the
+        // disconnect hold.
         while self.escape_rx.try_recv().is_ok() {
-            if in_gamescope() {
+            if in_gamescope() || ring_open {
                 continue;
             }
-            if let Some(cap) = capture_mut(stream) {
+            let back_in = capture_mut(stream).is_some_and(|c| !c.captured() && c.can_capture());
+            if back_in {
+                if self.focus_lost {
+                    continue;
+                }
+                if let Some(cap) = capture_mut(stream) {
+                    if cap.engage() {
+                        self.capture_on(cap);
+                    }
+                }
+            } else if let Some(cap) = capture_mut(stream) {
                 if cap.release(true) {
                     self.capture_off();
                 }
             }
-            if self.fullscreen && !self.opts.fullscreen {
-                self.fullscreen = false;
-                let _ = self.window.set_fullscreen(false);
+            tracing::info!(captured = back_in, "controller chord: release/engage");
+            let leave = !back_in && self.fullscreen && !self.opts.fullscreen;
+            let restore = back_in && std::mem::take(&mut self.pad_left_fullscreen);
+            if leave || (restore && !self.fullscreen) {
+                self.pad_left_fullscreen = leave;
+                self.fullscreen = restore;
+                let _ = self.window.set_fullscreen(restore);
                 if let Some(st) = stream.as_mut() {
                     st.forget_refresh_verdict();
                 }

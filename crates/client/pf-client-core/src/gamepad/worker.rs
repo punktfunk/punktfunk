@@ -26,9 +26,10 @@ const GYRO_LSB_PER_RAD_S: f32 =
 const ACCEL_LSB_PER_G: f32 = wire::MOTION_ACCEL_LSB_PER_G as f32;
 const G: f32 = 9.80665;
 
-/// L1+R1+Start+Select: raises the UI escape (on a desktop the presenter releases capture,
-/// which masks forwarding until capture returns). A hold of [`DISCONNECT_HOLD`]
-/// disconnects, mask or not. Not Guide/QAM — those pass through to the host.
+/// L1+R1+Start+Select: raises the UI escape (on a desktop the presenter toggles capture, and a
+/// released capture masks forwarding). The chord still fires under the mask, so a pad alone gets
+/// back in. A hold of [`DISCONNECT_HOLD`] disconnects, mask or not. Not Guide/QAM — those pass
+/// through to the host.
 const ESCAPE_CHORD: [sdl3::gamepad::Button; 4] = [
     sdl3::gamepad::Button::LeftShoulder,
     sdl3::gamepad::Button::RightShoulder,
@@ -1059,7 +1060,7 @@ impl Worker {
             self.chord_since = Some(Instant::now());
             let _ = self.escape_tx.try_send(());
             tracing::info!(
-                "gamepad escape chord (L1+R1+Start+Select) — leaving fullscreen (hold to disconnect)"
+                "gamepad escape chord (L1+R1+Start+Select) — toggling capture (hold to disconnect)"
             );
         }
     }

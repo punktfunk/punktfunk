@@ -194,6 +194,7 @@ impl Shell {
             overlay_frame: None,
             stats_verbosity: opts.stats_verbosity,
             fullscreen: opts.fullscreen,
+            pad_left_fullscreen: false,
             mouse,
             event_pump,
             native,
