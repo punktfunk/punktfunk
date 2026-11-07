@@ -298,7 +298,7 @@
 	"pairing_native_disabled": "The native host isn't running. Start it with `serve --native` to pair Punktfunk devices.",
 	"pairing_native_arm": "Show PIN",
 	"pairing_native_bound_for": "PIN for {name}",
-	"pairing_native_bound_hint": "Only this device can use the PIN. Any other device that knocks is turned away without spending it.",
+	"pairing_native_bound_hint": "Only this device can pair with this PIN. Other devices that try are turned away, and the PIN keeps working.",
 	"pairing_native_bound_clear": "Pair any device instead",
 	"pairing_native_enter": "Enter this PIN on your device:",
 	"pairing_native_expires": "Expires in",

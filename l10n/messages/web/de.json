@@ -242,7 +242,7 @@
 	"pairing_native_disabled": "Der native Host läuft nicht. Starte ihn mit `serve --native`, um Punktfunk-Geräte zu koppeln.",
 	"pairing_native_arm": "PIN anzeigen",
 	"pairing_native_bound_for": "PIN für {name}",
-	"pairing_native_bound_hint": "Nur dieses Gerät kann die PIN nutzen. Jedes andere Gerät, das anfragt, wird abgewiesen, ohne sie zu verbrauchen.",
+	"pairing_native_bound_hint": "Nur dieses Gerät kann sich mit dieser PIN koppeln. Andere Geräte werden abgewiesen, und die PIN bleibt gültig.",
 	"pairing_native_bound_clear": "Stattdessen ein beliebiges Gerät koppeln",
 	"pairing_native_enter": "Gib diese PIN auf deinem Gerät ein:",
 	"pairing_native_expires": "Läuft ab in",
