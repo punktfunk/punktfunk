@@ -9,8 +9,8 @@
 //! grant is stated, so the row names it (`design/installer-v2.md`).
 //!
 //! `banner`, `detected` and `choices_summary` print only on the plain transcript: the screens
-//! replace them, so they stay English literals. The rest reaches the screens too and reads
-//! `pf_l10n`.
+//! replace them, so they stay English literals, but for the bind label. The rest reaches the
+//! screens too and reads `pf_l10n`.
 
 use pf_l10n::tools as t;
 
@@ -102,8 +102,8 @@ pub fn choices_summary(ui: &dyn Reporter, choices: &Choices) {
 /// The console's bind in the words the question asked it in.
 fn bind_label(choices: &Choices) -> String {
     match choices.web_bind.as_str() {
-        LOOPBACK_BIND => "this machine only".to_string(),
-        LAN_BIND => "this local network".to_string(),
+        LOOPBACK_BIND => t::setup_bind_value_loopback().to_string(),
+        LAN_BIND => t::setup_bind_value_lan().to_string(),
         addr => addr.to_string(),
     }
 }

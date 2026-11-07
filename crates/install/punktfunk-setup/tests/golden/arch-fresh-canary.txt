@@ -4,7 +4,7 @@
   Third-party clients (Moonlight, Artemis): no
   Shared clipboard: yes
   Start at boot with nobody logged in: no
-  Web console reachable from: this local network
+  Web console reachable from: This local network
 ==> Installing: host web-console plugin-runner (canary channel)
   + curl -fsS https://git.unom.io/api/packages/unom/arch/repository.key | sudo pacman-key --add -
   + sudo pacman-key --lsign-key E0CA04465C99C936E0B0C6510A317015A34DDD69

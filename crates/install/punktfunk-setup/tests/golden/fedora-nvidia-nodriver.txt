@@ -4,7 +4,7 @@
   Third-party clients (Moonlight, Artemis): no
   Shared clipboard: yes
   Start at boot with nobody logged in: no
-  Web console reachable from: this local network
+  Web console reachable from: This local network
 ==> Host, web console and plugin runner are already installed (punktfunk-host 0.34.0, stable channel) — updating to the current build
   + sudo dnf install -y punktfunk punktfunk-web punktfunk-scripting
 ==> Checking for Sunshine / Apollo / Vibeshine

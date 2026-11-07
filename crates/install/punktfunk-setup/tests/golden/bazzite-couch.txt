@@ -4,7 +4,7 @@
   Third-party clients (Moonlight, Artemis): no
   Shared clipboard: yes
   Start at boot with nobody logged in: yes  (Bazzite hosts are usually headless)
-  Web console reachable from: this local network
+  Web console reachable from: This local network
 ==> Installing: host web-console plugin-runner (stable channel)
   + curl -fsSLO https://git.unom.io/unom/punktfunk/raw/branch/main/packaging/bazzite/punktfunk-sysext.sh
   + sudo bash punktfunk-sysext.sh install

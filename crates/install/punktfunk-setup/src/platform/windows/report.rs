@@ -4,9 +4,9 @@
 //! is the two facts a user must leave knowing — the moved management port when a
 //! competitor is live, and the unreachable-host warning when the network is Public.
 //!
-//! Only the silent `/LOG` transcript prints `detected`, `choices_summary` and `outro`. They read
-//! `pf_l10n` for the outro's console, password and install-client lines and the bind label; the
-//! rest stays English. `footnotes` also fills the wizard's Done page.
+//! Only the silent `/LOG` transcript prints `detected`, `choices_summary` and `outro`.
+//! `outro` and the bind label read `pf_l10n`; `detected` and the choices rows stay English.
+//! `footnotes` also fills the wizard's Done page.
 //!
 //! Goldens pin the strings. Design: `design/installer-v2-windows.md`.
 
@@ -100,7 +100,7 @@ pub fn outro(
     host: &str,
 ) {
     ui.blank();
-    ui.line("  Done. Next:");
+    ui.line(&format!("  {}", t::setup_win_outro_next()));
     match artifact {
         Artifact::Host => {
             // The URL has to be the one that answers: a loopback console is not at this host's
@@ -127,11 +127,17 @@ pub fn outro(
             }
         }
         Artifact::Client => {
-            ui.line("  1. Open Punktfunk from the Start menu and pick your host.");
-            ui.line(&format!("  2. Pairing help: {DOCS}/pairing"));
+            ui.line(&format!("  1. {}", t::setup_win_outro_open_client()));
+            ui.line(&format!(
+                "  2. {}",
+                t::setup_win_outro_pairing_help(format!("{DOCS}/pairing"))
+            ));
         }
     }
-    ui.line(&format!("  Stuck? {DOCS}/troubleshooting"));
+    ui.line(&format!(
+        "  {}",
+        t::setup_win_outro_stuck(format!("{DOCS}/troubleshooting"))
+    ));
     ui.blank();
 }
 
