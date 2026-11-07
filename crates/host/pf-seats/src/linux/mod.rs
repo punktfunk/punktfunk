@@ -987,7 +987,19 @@ impl PlatformBackend for LinuxBackend {
             Own::Seat => {}
         }
         let (box_dir, state) = (&self.inner.box_dir, &self.inner.state);
-        let passwd = accounts::require(seat)?;
+        let mut passwd = accounts::require(seat)?;
+        // The trust copy goes and is made again for the new group.
+        match accounts::own_group(&passwd) {
+            Ok(false) => {}
+            Ok(true) => {
+                tracing::info!(account = %passwd.name, "seat user moved to a group of its own");
+                let _ = std::fs::remove_dir_all(shared::trust_dir(state, &seat.id));
+                passwd = accounts::require(seat)?;
+            }
+            Err(error) => {
+                tracing::warn!(account = %passwd.name, %error, "seat user's own group not made");
+            }
+        }
         accounts::close_home(&passwd.home)?;
         let games = accounts::ensure_group(accounts::GAMES_GROUP)?;
         if let Err(error) = accounts::join_groups(&passwd.name) {

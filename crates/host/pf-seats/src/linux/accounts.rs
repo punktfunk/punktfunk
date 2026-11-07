@@ -168,8 +168,9 @@ pub(super) fn check_seat_name(account: &str) -> Result<(), BackendError> {
     ))
 }
 
-/// The seat's user, created on first use. An existing user is accepted only with the seat's
-/// marker.
+/// The seat's user, created on first use with a group of its own, never a shared one such as
+/// NixOS's `users`. An empty group of its name, which `userdel` may leave, is taken over. An
+/// existing user is accepted only with the seat's marker.
 pub(super) fn ensure(seat: &Seat, state: &Path) -> Result<Passwd, BackendError> {
     if let Some(existing) = lookup(&seat.account)? {
         return if owned_by(&existing, &seat.id) {
@@ -186,22 +187,46 @@ pub(super) fn ensure(seat: &Seat, state: &Path) -> Result<Passwd, BackendError> 
     let comment = marker(&seat.id);
     let groups = groups.join(",");
     let home_arg = home.to_string_lossy();
-    run(
-        "useradd_failed",
-        "useradd",
-        &[
-            "-r",
-            "-m",
-            "-d",
-            &home_arg,
-            "-c",
-            &comment,
-            "-G",
-            &groups,
-            &seat.account,
-        ],
-    )?;
+    let leftover = getent("group", &seat.account)?.is_some_and(|line| members(&line).is_empty());
+    let own: &[&str] = if leftover {
+        &["-g", &seat.account]
+    } else {
+        &["-U"]
+    };
+    let mut args = vec!["-r", "-m", "-d", &home_arg, "-c", &comment, "-G", &groups];
+    args.extend_from_slice(own);
+    args.push(&seat.account);
+    run("useradd_failed", "useradd", &args)?;
     lookup(&seat.account)?.ok_or_else(|| err("useradd_failed", "useradd left no passwd entry"))
+}
+
+/// Moves the seat user `passwd` onto a group of its own, named after it, when its primary group
+/// is another. The seat's group-readable files are then its alone. Waits for a start with no
+/// process of the user, whose old group a lingering manager would hand on. Refused while the
+/// group of that name has members. `true` when the group changed.
+pub(super) fn own_group(passwd: &Passwd) -> Result<bool, BackendError> {
+    let primary = getent("group", &passwd.gid.to_string())?;
+    if primary.is_some_and(|line| line.split(':').next() == Some(passwd.name.as_str()))
+        || runs_as(Path::new("/proc"), passwd.uid)
+    {
+        return Ok(false);
+    }
+    match getent("group", &passwd.name)? {
+        Some(line) if !members(&line).is_empty() => {
+            return Err(err(
+                "group_taken",
+                format!("group {} has members", passwd.name),
+            ))
+        }
+        Some(_) => {}
+        None => run("groupadd_failed", "groupadd", &["--system", &passwd.name]).map(drop)?,
+    }
+    run(
+        "usermod_failed",
+        "usermod",
+        &["-g", &passwd.name, &passwd.name],
+    )?;
+    Ok(true)
 }
 
 /// The [`GROUPS`] this box has, each in `/etc/group`.
@@ -233,12 +258,16 @@ pub(super) fn join_groups(account: &str) -> Result<(), BackendError> {
     run("usermod_failed", "usermod", &["-a", "-G", &groups, account]).map(drop)
 }
 
-/// Whether `line`, a group as `getent group` prints it, lists `account` among its members.
+/// The members `line`, a group as `getent group` prints it, lists.
+fn members(line: &str) -> Vec<&str> {
+    let list = line.trim_end().splitn(4, ':').nth(3).unwrap_or("");
+    list.split(',')
+        .filter(|member| !member.is_empty())
+        .collect()
+}
+
 fn is_member(line: &str, account: &str) -> bool {
-    line.trim_end()
-        .splitn(4, ':')
-        .nth(3)
-        .is_some_and(|members| members.split(',').any(|member| member == account))
+    members(line).contains(&account)
 }
 
 /// The home `useradd` is given for `id`'s user.
@@ -620,6 +649,10 @@ mod tests {
         assert!(
             !is_member("pf-seat-1:x:946:", "pf-seat-1"),
             "a group's name is not a member"
+        );
+        assert!(
+            members("pf-seat-1:x:946:\n").is_empty(),
+            "a leftover group is empty"
         );
     }
 
