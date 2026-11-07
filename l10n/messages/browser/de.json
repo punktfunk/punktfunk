@@ -1,5 +1,5 @@
 {
-	"browser_accept_again": "Fragt er weiter, obwohl du es angenommen hast? Dann antwortet der Host Seiten wie dieser nicht: Schalte in seiner Konsole das Browser-Streaming ein. Safari erreicht einen Host so nur über einen Punktfunk-Server.",
+	"browser_accept_again": "Fragt er weiter, obwohl du es angenommen hast? Dann antwortet der Host Seiten wie dieser nicht: Schalte in seiner Web-Konsole das Browser-Streaming ein. Safari erreicht einen Host so nur über einen Punktfunk-Server.",
 	"browser_accept_body": "Ein Punktfunk-Host signiert sein Zertifikat selbst. Dein Browser spricht deshalb erst mit ihm, wenn du es einmal erlaubst. Öffne den Link, akzeptiere die Warnung und komm dann zurück.",
 	"browser_accept_done": "Ich habe es angenommen",
 	"browser_accept_title": "Zertifikat dieses Hosts annehmen",
@@ -18,28 +18,30 @@
 	"browser_link_other_host": "Der Link nennt einen anderen Host als den, der hier gekoppelt ist",
 	"browser_needs_https": "Diese Seite hat keine https-Adresse, deshalb streamt der Browser nicht von ihr. Öffne sie über https.",
 	"browser_no_answer_title": "Keine Antwort",
-	"browser_no_attestation": "Dieser Host hat keine Bestätigung veröffentlicht, deshalb kann ein gekoppelter Browser ihn nicht anwählen",
+	"browser_no_attestation": "Dieser Host hat keine Bestätigung veröffentlicht, deshalb kann sich ein gekoppelter Browser nicht mit ihm verbinden",
 	"browser_no_plane": "Dieser Host bietet keinen Zugang für Browser",
 	"browser_not_paired_host": "Das ist nicht der Host, mit dem gekoppelt wurde",
 	"browser_pair_again_body": "Dieser Host kennt diesen Browser nicht mehr — er wurde dort entkoppelt. Gib die PIN ein, die er anzeigt, um erneut zu koppeln.",
 	"browser_pair_title_again": "Diesen Host erneut koppeln",
-	"browser_plane_off": "Browser-Streaming ist auf diesem Host aus. Schalte es in der Konsole des Hosts unter Host → Einstellungen ein und starte den Host neu.",
+	"browser_plane_off": "Browser-Streaming ist auf diesem Host aus. Schalte es in der Web-Konsole des Hosts unter Host → Einstellungen ein und starte den Host neu.",
 	"browser_reply_unreadable": "Diese Seite konnte nicht lesen, was der Host gesendet hat",
 	"browser_sign_in_failed": "Dieser Browser konnte sich nicht beim Host anmelden. Versuch es gleich noch einmal.",
 	"browser_skew_hint": "Aktualisiere den Host oder diese Seite, damit beide zusammenpassen.",
 	"browser_skew_title": "Dieser Host spricht eine andere Version",
 	"browser_too_many": "Zu viele Anfragen von dieser Adresse. Warte eine Minute und versuch es dann erneut.",
-	"browser_trust_advice": "Hast du Punktfunk dort neu installiert oder die Konfiguration zurückgesetzt, ist das zu erwarten — vergiss diesen Host und kopple erneut. Wenn nicht, hör hier auf: Unter dieser Adresse antwortet etwas anderes.",
-	"browser_trust_body": "Unter {host} antwortet etwas, kann aber nicht beweisen, dass es der Rechner ist, mit dem dieser Browser gekoppelt wurde.",
-	"browser_trust_forget": "Vergessen und neu koppeln",
+	"browser_trust_advice": "Hast du Punktfunk dort neu installiert oder die Konfiguration zurückgesetzt, ist das zu erwarten – entferne diesen Host und kopple ihn neu. Wenn nicht, hör hier auf: Unter dieser Adresse antwortet etwas anderes.",
+	"browser_trust_body": "Unter {host} antwortet etwas, kann aber nicht beweisen, dass es der Host ist, mit dem dieser Browser gekoppelt wurde.",
+	"browser_trust_forget": "Entfernen und neu koppeln",
 	"browser_udp_unreachable": "Der Host war über UDP {port}, seinen Port für Browser-Streaming, nicht erreichbar. Prüfe, ob zwischen diesem Gerät und dem Host etwas ihn blockiert.",
 	"browser_wake_failed": "{host} ließ sich nicht wecken — der Server dieser Seite hat das Wecksignal nicht gesendet.",
 	"browser_wake_timeout": "{host} hat innerhalb einer Minute nach dem Wecken nicht geantwortet. Vielleicht startet er noch.",
 	"browser_wake_unpaired": "Nur ein mit {host} gekoppelter Browser kann ihn von dieser Seite aus wecken.",
 	"browser_wt_refused": "Der Browser hat die WebTransport-Sitzung abgelehnt",
-	"browser_hosts_sub_first": "Füge den Rechner hinzu, von dem du streamen willst.",
+	"browser_hosts_sub_first": "Füge den Host hinzu, von dem du streamen willst.",
 	"browser_hosts_sub": "Klicke auf einen Host, um seinen Desktop zu streamen.",
 	"browser_nav_main_a11y": "Hauptnavigation",
+	"browser_nav_console": "Controller-Oberfläche",
+	"browser_nav_console_hint": "Für Fernseher und Controller gemacht",
 	"browser_hostcard_stream_desktop": "Desktop streamen",
 	"browser_hostcard_rename": "Umbenennen",
 	"browser_hostcard_rename_a11y": "Name für {address}",
@@ -69,7 +71,7 @@
 	"browser_announce_accept_a11y": "Das Zertifikat dieses Hosts muss einmal akzeptiert werden",
 	"browser_announce_connecting_to_a11y": "Verbindung zu {host} wird hergestellt",
 	"browser_announce_pair_a11y": "Gib die PIN ein, die dieser Host anzeigt",
-	"browser_announce_waiting_a11y": "Warte darauf, dass {name} in der Konsole des Hosts freigegeben wird",
+	"browser_announce_waiting_a11y": "Warte darauf, dass {name} in der Web-Konsole des Hosts freigegeben wird",
 	"browser_announce_profiles_a11y": "Wähle, wer auf {host} spielt",
 	"browser_announce_trust_a11y": "Das ist nicht der Host, mit dem gekoppelt wurde",
 	"browser_announce_link_a11y": "Ein Link möchte eine Verbindung zu {name} herstellen",
@@ -84,8 +86,8 @@
 				"n"
 			],
 			"match": {
-				"n=one": "{count} Titel",
-				"n=other": "{count} Titel"
+				"n=one": "{count} Spiel",
+				"n=other": "{count} Spiele"
 			}
 		}
 	],
@@ -102,8 +104,8 @@
 				"n"
 			],
 			"match": {
-				"n=one": "{count} Titel",
-				"n=other": "{count} Titel"
+				"n=one": "{count} Spiel",
+				"n=other": "{count} Spiele"
 			}
 		}
 	],
@@ -134,12 +136,12 @@
 	"browser_video_backend": "Video-Ebene",
 	"browser_video_backend_auto": "Automatisch",
 	"browser_video_backend_hint": "Automatisch nutzt WebGPU, wo der Browser es hat. Nach dem ersten Stream greift eine Änderung erst nach dem Neuladen der Seite.",
-	"browser_console_mode": "Konsolenmodus",
-	"browser_console_mode_hint": "Die Controller-Oberfläche, die alle Punktfunk-Clients teilen, für Fernseher oder Gamepad.",
-	"browser_console_mode_switch": "Zum Konsolenmodus wechseln",
+	"browser_console_mode": "Controller-Oberfläche",
+	"browser_console_mode_hint": "Die Controller-Oberfläche, die alle Punktfunk-Clients teilen, für Fernseher oder Controller.",
+	"browser_console_mode_switch": "Zur Controller-Oberfläche wechseln",
 	"browser_prefs_page_hint": "Sie gelten für jeden Host. Stream-Einstellungen wirken ab dem nächsten Stream.",
 	"browser_prefs_dialog_hint": "Maus-, Controller- und Statistik-Einstellungen gelten sofort; der Rest ab dem nächsten Stream.",
-	"browser_player_mouse_mode_capture_hint": "Ein Klick hält den Zeiger fest und sendet Bewegung. Für Spiele mit Maussteuerung; {keys} gibt ihn frei.",
+	"browser_player_mouse_mode_capture_hint": "Ein Klick hält den Zeiger für Spiele mit Maussteuerung fest; {keys} gibt ihn frei.",
 	"browser_player_capture_input": "Tastatur, Maus und Controller senden",
 	"browser_player_capture_input_hint": "Aus schaut nur dem Stream zu.",
 	"browser_prefs_group_playback": "Wiedergabe",

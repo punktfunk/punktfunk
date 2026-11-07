@@ -1,5 +1,5 @@
 {
-	"browser_accept_again": "Still asking after you accepted it? Then the host is not answering pages like this one: turn on Browser streaming in its console. Safari reaches a host this way only through a Punktfunk server.",
+	"browser_accept_again": "Still asking after you accepted it? Then the host is not answering pages like this one: turn on Browser streaming in its web console. Safari reaches a host this way only through a Punktfunk server.",
 	"browser_accept_body": "A Punktfunk host signs its own certificate, so your browser will not talk to it until you say so once. Open this, accept the warning, then come back.",
 	"browser_accept_done": "I have accepted it",
 	"browser_accept_title": "Accept this host's certificate",
@@ -18,30 +18,30 @@
 	"browser_link_other_host": "The link names a different host than the one paired here",
 	"browser_needs_https": "This page isn't on an https address, so the browser won't stream from it. Open it over https.",
 	"browser_no_answer_title": "No answer",
-	"browser_no_attestation": "This host published no attestation, so a paired browser can't dial it",
+	"browser_no_attestation": "This host published no attestation, so a paired browser can't connect to it",
 	"browser_no_plane": "This host does not offer the browser plane",
 	"browser_not_paired_host": "This is not the host that was paired with",
 	"browser_pair_again_body": "This host no longer knows this browser — it was unpaired there. Enter the PIN it is showing to pair again.",
 	"browser_pair_title_again": "Pair with this host again",
-	"browser_plane_off": "Browser streaming is off on this host. Turn it on in the host's console, under Host → Settings, then restart the host.",
+	"browser_plane_off": "Browser streaming is off on this host. Turn it on in the host's web console, under Host → Settings, then restart the host.",
 	"browser_reply_unreadable": "This page couldn't read what the host sent",
 	"browser_sign_in_failed": "This browser couldn't sign in to the host. Try again in a moment.",
 	"browser_skew_hint": "Update the host, or this page, so the two agree.",
 	"browser_skew_title": "This host speaks a different version",
 	"browser_too_many": "Too many requests from this address. Wait a minute, then try again.",
-	"browser_trust_advice": "If you reinstalled Punktfunk on it, or reset its configuration, that is expected — forget this host and pair again. If you did not, stop here: something else is answering at that address.",
-	"browser_trust_body": "Something is answering at {host}, but it can't prove it is the machine this browser paired with.",
-	"browser_trust_forget": "Forget and pair again",
+	"browser_trust_advice": "If you reinstalled Punktfunk on it, or reset its configuration, that is expected — remove this host and pair again. If you did not, stop here: something else is answering at that address.",
+	"browser_trust_body": "Something is answering at {host}, but it can't prove it is the host this browser paired with.",
+	"browser_trust_forget": "Remove and pair again",
 	"browser_udp_unreachable": "Couldn't reach the host on UDP {port}, its browser streaming port. Check that nothing between this device and the host blocks it.",
 	"browser_wake_failed": "Couldn't wake {host} — this page's server didn't send the wake packet.",
 	"browser_wake_timeout": "{host} didn't answer within a minute of waking. It may still be starting.",
 	"browser_wake_unpaired": "Only a browser paired with {host} can wake it from this page.",
 	"browser_wt_refused": "The browser refused the WebTransport session",
-	"browser_hosts_sub_first": "Add the machine you want to stream from.",
+	"browser_hosts_sub_first": "Add the host you want to stream from.",
 	"browser_hosts_sub": "Click a host to stream its desktop.",
 	"browser_nav_main_a11y": "Main",
-	"browser_nav_console": "Console mode",
-	"browser_nav_console_hint": "Console mode — the controller interface",
+	"browser_nav_console": "Controller interface",
+	"browser_nav_console_hint": "Built for a TV and a controller",
 	"browser_hostcard_stream_desktop": "Stream desktop",
 	"browser_hostcard_rename": "Rename",
 	"browser_hostcard_rename_a11y": "Name for {address}",
@@ -71,7 +71,7 @@
 	"browser_announce_accept_a11y": "This host's certificate must be accepted once",
 	"browser_announce_connecting_to_a11y": "Connecting to {host}",
 	"browser_announce_pair_a11y": "Enter the PIN this host is showing",
-	"browser_announce_waiting_a11y": "Waiting for approval of {name} in the host's console",
+	"browser_announce_waiting_a11y": "Waiting for approval of {name} in the host's web console",
 	"browser_announce_profiles_a11y": "Pick who is playing on {host}",
 	"browser_announce_trust_a11y": "This is not the host that was paired with",
 	"browser_announce_link_a11y": "A link asks to connect to {name}",
@@ -86,8 +86,8 @@
 				"n"
 			],
 			"match": {
-				"n=one": "{count} title",
-				"n=other": "{count} titles"
+				"n=one": "{count} game",
+				"n=other": "{count} games"
 			}
 		}
 	],
@@ -104,8 +104,8 @@
 				"n"
 			],
 			"match": {
-				"n=one": "{count} title",
-				"n=other": "{count} titles"
+				"n=one": "{count} game",
+				"n=other": "{count} games"
 			}
 		}
 	],
@@ -136,12 +136,12 @@
 	"browser_video_backend": "Video plane",
 	"browser_video_backend_auto": "Automatic",
 	"browser_video_backend_hint": "Automatic uses WebGPU where the browser has it. Once a stream has played, a change waits for the page to reload.",
-	"browser_console_mode": "Console mode",
-	"browser_console_mode_hint": "The controller interface every Punktfunk client shares, for a TV or a gamepad.",
-	"browser_console_mode_switch": "Switch to console mode",
+	"browser_console_mode": "Controller interface",
+	"browser_console_mode_hint": "The controller interface every Punktfunk client shares, for a TV or a controller.",
+	"browser_console_mode_switch": "Switch to the controller interface",
 	"browser_prefs_page_hint": "These apply to every host. Stream settings take effect on the next stream.",
 	"browser_prefs_dialog_hint": "Mouse, controller and statistics settings apply now; the rest take effect on the next stream.",
-	"browser_player_mouse_mode_capture_hint": "A click locks the pointer and sends motion. For games with mouselook; {keys} releases.",
+	"browser_player_mouse_mode_capture_hint": "A click locks the pointer for games with mouselook; {keys} releases it.",
 	"browser_player_capture_input": "Send keyboard, mouse and controllers",
 	"browser_player_capture_input_hint": "Off only watches the stream.",
 	"browser_prefs_group_playback": "Playback",
