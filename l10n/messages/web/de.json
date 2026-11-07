@@ -92,10 +92,38 @@
 	"status_last_copied": "Kopiert",
 	"status_last_bitrate": "{mbit} Mbit/s",
 	"status_last_bitrate_avg": "{mbit} Mbit/s Durchschnitt",
-	"status_last_steps": "{count} Bitratenwechsel",
-	"status_last_audio_late": "{count} Audiobilder zu spät",
-	"status_last_gyro": "{count} Gyro-Aussetzer",
-	"status_last_dropped": "{count} Bilder verloren",
+	"status_last_steps": [{
+		"declarations": ["input count", "local n = count: plural"],
+		"selectors": ["n"],
+		"match": {
+			"n=one": "{count} Bitratenwechsel",
+			"n=*": "{count} Bitratenwechsel"
+		}
+	}],
+	"status_last_audio_late": [{
+		"declarations": ["input count", "local n = count: plural"],
+		"selectors": ["n"],
+		"match": {
+			"n=one": "{count} Audiobild zu spät",
+			"n=*": "{count} Audiobilder zu spät"
+		}
+	}],
+	"status_last_gyro": [{
+		"declarations": ["input count", "local n = count: plural"],
+		"selectors": ["n"],
+		"match": {
+			"n=one": "{count} Gyro-Aussetzer",
+			"n=*": "{count} Gyro-Aussetzer"
+		}
+	}],
+	"status_last_dropped": [{
+		"declarations": ["input count", "local n = count: plural"],
+		"selectors": ["n"],
+		"match": {
+			"n=one": "{count} Bild verloren",
+			"n=*": "{count} Bilder verloren"
+		}
+	}],
 	"status_last_join": "nutzte den Bildschirm einer anderen Sitzung",
 	"status_last_ended": "Ende: {reason}",
 	"status_last_end_local": "der Client hat sie beendet",
@@ -256,7 +284,14 @@
 	"pairing_native_empty": "Noch keine Geräte gekoppelt.",
 	"pairing_native_unpair_confirm": "Dieses Gerät entkoppeln?",
 	"pairing_native_unpair_body": "Es muss sich erneut koppeln, um zu verbinden.",
-	"pairing_native_unpair_all_confirm": "Alle {count} Geräte entkoppeln?",
+	"pairing_native_unpair_all_confirm": [{
+		"declarations": ["input count", "local n = count: plural"],
+		"selectors": ["n"],
+		"match": {
+			"n=one": "{count} Gerät entkoppeln?",
+			"n=*": "Alle {count} Geräte entkoppeln?"
+		}
+	}],
 	"pairing_native_unpair_all_body": "Jedes gekoppelte Gerät – punktfunk/2 wie Moonlight – muss sich erneut koppeln, um zu verbinden; was gerade streamt, wird getrennt.",
 	"pairing_knock_title": "Ein Gerät möchte sich koppeln",
 	"pairing_knock_desc": "{name} wartet auf Freigabe.",
@@ -358,7 +393,14 @@
 	"library_field_region": "Region",
 	"library_field_region_help": "z. B. NTSC-U, PAL, NTSC-J.",
 	"library_field_players": "Spieler",
-	"library_provider_count": "{count} Einträge",
+	"library_provider_count": [{
+		"declarations": ["input count", "local n = count: plural"],
+		"selectors": ["n"],
+		"match": {
+			"n=one": "{count} Eintrag",
+			"n=*": "{count} Einträge"
+		}
+	}],
 	"library_launchers_title": "Launcher",
 	"library_empty_add_source": "Füge unter Quellen eine Spielquelle hinzu, damit deine installierten Spiele hier erscheinen.",
 	"library_add_source": "Quelle hinzufügen",
@@ -454,7 +496,14 @@
 	"library_provider_filter": "Nur diese zeigen",
 	"library_provider_show_all": "Alle zeigen",
 	"library_provider_purge": "Einträge dieses Anbieters entfernen",
-	"library_provider_purge_confirm": "Alle {count} von „{provider}“ synchronisierten Einträge entfernen?",
+	"library_provider_purge_confirm": [{
+		"declarations": ["input count", "input provider", "local n = count: plural"],
+		"selectors": ["n"],
+		"match": {
+			"n=one": "{count} von „{provider}“ synchronisierten Eintrag entfernen?",
+			"n=*": "Alle {count} von „{provider}“ synchronisierten Einträge entfernen?"
+		}
+	}],
 	"library_provider_purge_body": "Das entfernt sie nur aus der Bibliothek.",
 	"library_provider_purged": "Die von „{provider}“ synchronisierten Einträge wurden entfernt.",
 	"library_provider_purge_failed": "Die Einträge dieses Anbieters konnten nicht entfernt werden",
@@ -563,7 +612,14 @@
 	"diag_loading": "Prüfung läuft…",
 	"diag_all_ok": "Alles, was dieser Host prüfen kann, sieht gesund aus.",
 	"diag_unavailable": "Dieser Host ist älter als die Konsole und kann keine Zustandsprüfungen melden. Aktualisiere den Host, um sie zu sehen.",
-	"diag_show_inapplicable": "{count} anzeigen, die hier nicht zutreffen",
+	"diag_show_inapplicable": [{
+		"declarations": ["input count", "local n = count: plural"],
+		"selectors": ["n"],
+		"match": {
+			"n=one": "{count} anzeigen, die hier nicht zutrifft",
+			"n=*": "{count} anzeigen, die hier nicht zutreffen"
+		}
+	}],
 	"diag_hide_inapplicable": "Die hier nicht zutreffenden ausblenden",
 	"diag_impact_label": "Was dadurch nicht funktioniert",
 	"diag_remedy_label": "So wird es behoben",
@@ -612,7 +668,14 @@
 	"logs_copy": "Logs in die Zwischenablage kopieren",
 	"logs_copied": "Logs in die Zwischenablage kopiert",
 	"logs_share_failed": "Logs konnten nicht geteilt werden",
-	"client_logs_manage": "{count} hochgeladene Pakete verwalten",
+	"client_logs_manage": [{
+		"declarations": ["input count", "local n = count: plural"],
+		"selectors": ["n"],
+		"match": {
+			"n=one": "{count} hochgeladenes Paket verwalten",
+			"n=*": "{count} hochgeladene Pakete verwalten"
+		}
+	}],
 	"client_logs_col_received": "Empfangen",
 	"client_logs_col_device": "Gerät",
 	"client_logs_col_size": "Größe",
@@ -636,7 +699,14 @@
 	"stats_kind_gamestream": "GameStream",
 	"stats_kind_web": "Browser",
 	"stats_live_title": "Live",
-	"stats_live_window": "Es werden die letzten {count} Messpunkte gezeigt. Die gespeicherte Aufzeichnung enthält alles.",
+	"stats_live_window": [{
+		"declarations": ["input count", "local n = count: plural"],
+		"selectors": ["n"],
+		"match": {
+			"n=one": "Gezeigt wird {count} Messpunkt, der neueste. Die gespeicherte Aufzeichnung enthält alles.",
+			"n=*": "Es werden die letzten {count} Messpunkte gezeigt. Die gespeicherte Aufzeichnung enthält alles."
+		}
+	}],
 	"stats_live_waiting": "Scharf – warte auf die ersten Proben. Starte eine Sitzung, um aufzuzeichnen.",
 	"stats_latency_title": "Latenz nach Stufe",
 	"stats_latency_axis": "ms",
@@ -745,7 +815,14 @@
 	"store_uninstall_failed": "Die Deinstallation konnte nicht gestartet werden",
 	"store_update_no_entry": "Dieses Plugin steckt derzeit in keinem Katalog – aktualisiere die Quellen und versuche es erneut.",
 	"store_update_all_count": "Alle aktualisieren ({count})",
-	"store_updates_pending": "Für {count} Plugins gibt es Updates",
+	"store_updates_pending": [{
+		"declarations": ["input count", "local n = count: plural"],
+		"selectors": ["n"],
+		"match": {
+			"n=one": "Für {count} Plugin gibt es ein Update",
+			"n=*": "Für {count} Plugins gibt es Updates"
+		}
+	}],
 	"store_update_all_title": "Diese Plugins aktualisieren?",
 	"store_update_all_body": "Jedes wird nacheinander auf seine Katalogversion gebracht – der Host führt immer nur einen Paketvorgang auf einmal aus. Nach jedem startet der Plugin-Runner neu.",
 	"store_update_all_external_note": "Einige stammen aus Katalogen, die du selbst hinzugefügt hast ({sources}). unom hat diesen Code nicht geprüft; er ist festgepinnt und auf Integrität geprüft, läuft aber mit den Rechten des Plugin-Runners auf diesem Host.",
@@ -754,7 +831,14 @@
 	"store_update_all_skipped": "Nicht dabei: {names}. Entweder führt sie kein Katalog, oder dieser Host kann die angebotene Version nicht ausführen.",
 	"store_update_all_step": "Update {index} von {total}",
 	"store_update_all_running": "Nächstes Update startet",
-	"store_update_all_finished": "{count} Plugins aktualisiert.",
+	"store_update_all_finished": [{
+		"declarations": ["input count", "local n = count: plural"],
+		"selectors": ["n"],
+		"match": {
+			"n=one": "{count} Plugin aktualisiert.",
+			"n=*": "{count} Plugins aktualisiert."
+		}
+	}],
 	"store_update_all_stopped": "Nach einem Fehler gestoppt – {done} aktualisiert, {left} nicht versucht. Du kannst sie unten einzeln erneut anstoßen.",
 	"store_sources_title": "Katalogquellen",
 	"store_sources_help": "Der eingebaute unom-Katalog ist immer dabei. Jede weitere Quelle hast du hinzugefügt.",
@@ -764,7 +848,14 @@
 	"store_source_signed": "Signiert",
 	"store_source_unsigned": "Unsigniert",
 	"store_source_stale": "Veraltet",
-	"store_source_entries": "{count} Plugins",
+	"store_source_entries": [{
+		"declarations": ["input count", "local n = count: plural"],
+		"selectors": ["n"],
+		"match": {
+			"n=one": "{count} Plugin",
+			"n=*": "{count} Plugins"
+		}
+	}],
 	"store_source_fetched": "zuletzt geladen {when}",
 	"store_source_never": "nie",
 	"store_source_remove": "Quelle entfernen",
@@ -831,8 +922,22 @@
 	"games_detached_note": "Der Stream ist beendet, das Spiel läuft weiter",
 	"games_untracked_note": "Dieser Titel bietet nichts, woran der Host seinen Prozess erkennen kann – das Beenden des Spiels beendet die Sitzung deshalb nicht",
 	"games_closing_in": "Client ist weg – wird in {time} geschlossen, falls er nicht zurückkommt",
-	"games_end_all_waiting_confirm": "Dieses Spiel hat keine ID, die der Host einzeln ansprechen kann – es jetzt zu beenden beendet alle {count} Spiele, die niemand streamt.",
-	"games_end_all_waiting_title": "Alle {count} Spiele beenden, die niemand streamt?",
+	"games_end_all_waiting_confirm": [{
+		"declarations": ["input count", "local n = count: plural"],
+		"selectors": ["n"],
+		"match": {
+			"n=one": "Dieses Spiel hat keine ID, die der Host einzeln ansprechen kann – es jetzt zu beenden beendet {count} Spiel, das niemand streamt.",
+			"n=*": "Dieses Spiel hat keine ID, die der Host einzeln ansprechen kann – es jetzt zu beenden beendet alle {count} Spiele, die niemand streamt."
+		}
+	}],
+	"games_end_all_waiting_title": [{
+		"declarations": ["input count", "local n = count: plural"],
+		"selectors": ["n"],
+		"match": {
+			"n=one": "{count} Spiel beenden, das niemand streamt?",
+			"n=*": "Alle {count} Spiele beenden, die niemand streamt?"
+		}
+	}],
 	"action_stop_session_all_confirm": "Der Host kennt nur einen Stopp, und der beendet jede laufende Sitzung – alle {count}, nicht nur diese.",
 	"action_stop_session_all_title": "Jede laufende Sitzung beenden?",
 	"action_stop_session_all": "Alle Sitzungen beenden",
@@ -1241,8 +1346,22 @@
 	"library_platform_option": "{platform} ({count})",
 	"library_view_grid": "Cover",
 	"library_view_rows": "Liste",
-	"library_count": "{count} Spiele",
-	"library_count_shown": "{shown} von {count} Spielen",
+	"library_count": [{
+		"declarations": ["input count", "local n = count: plural"],
+		"selectors": ["n"],
+		"match": {
+			"n=one": "{count} Spiel",
+			"n=*": "{count} Spiele"
+		}
+	}],
+	"library_count_shown": [{
+		"declarations": ["input count", "input shown", "local n = count: plural"],
+		"selectors": ["n"],
+		"match": {
+			"n=one": "{shown} von {count} Spiel",
+			"n=*": "{shown} von {count} Spielen"
+		}
+	}],
 	"library_load_more": "Mehr anzeigen",
 	"library_no_matches": "Kein Spiel passt. Ändere die Suche oder die Filter.",
 	"library_tab_games": "Spiele",

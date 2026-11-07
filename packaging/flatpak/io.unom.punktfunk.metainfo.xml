@@ -9,6 +9,8 @@
   <name>Punktfunk</name>
   <summary>Stream your PC's games and desktop</summary>
   <summary xml:lang="de">Spiele und Desktop deines PCs streamen</summary>
+  <summary xml:lang="es">Transmite los juegos y el escritorio de tu PC</summary>
+  <summary xml:lang="fr">Les jeux et le bureau de votre PC en streaming</summary>
 
   <description>
     <p>
@@ -21,6 +23,16 @@
       auf dem der Punktfunk-Host läuft, und nutzt seinen Desktop. Der Stream kommt in der Auflösung
       und Bildwiederholrate dieses Bildschirms an, ohne Skalierung.
     </p>
+    <p xml:lang="es">
+      Con Punktfunk juegas y usas el escritorio de un equipo que ejecuta el host de Punktfunk, con
+      baja latencia a través de tu red. La transmisión llega a la resolución y la frecuencia de
+      actualización de esta pantalla, sin escalado.
+    </p>
+    <p xml:lang="fr">
+      Punktfunk vous fait jouer et utiliser le bureau d’un ordinateur qui exécute l’hôte Punktfunk,
+      avec une faible latence sur votre réseau. Le flux arrive à la résolution et à la fréquence de
+      rafraîchissement de cet écran, sans mise à l’échelle.
+    </p>
     <p>
       You need the Punktfunk host on the computer you stream from. It runs on Linux and Windows.
     </p>
@@ -28,17 +40,35 @@
       Auf dem Computer, von dem du streamst, brauchst du den Punktfunk-Host. Er läuft unter Linux
       und Windows.
     </p>
+    <p xml:lang="es">
+      Necesitas el host de Punktfunk en el equipo desde el que transmites. Funciona en Linux y
+      Windows.
+    </p>
+    <p xml:lang="fr">
+      Il vous faut l’hôte Punktfunk sur l’ordinateur depuis lequel vous diffusez. Il fonctionne sous
+      Linux et Windows.
+    </p>
     <ul>
       <li>Hardware decoding with Vulkan Video or VA-API: H.264, HEVC and AV1, with HDR</li>
       <li xml:lang="de">Hardware-Decodierung mit Vulkan Video oder VA-API: H.264, HEVC und AV1, mit HDR</li>
+      <li xml:lang="es">Decodificación por hardware con Vulkan Video o VA-API: H.264, HEVC y AV1, con HDR</li>
+      <li xml:lang="fr">Décodage matériel avec Vulkan Video ou VA-API : H.264, HEVC et AV1, avec HDR</li>
       <li>A controller interface for the couch and the Steam Deck</li>
       <li xml:lang="de">Eine Controller-Oberfläche fürs Sofa und das Steam Deck</li>
+      <li xml:lang="es">Una interfaz pensada para mando, para el sofá y la Steam Deck</li>
+      <li xml:lang="fr">Une interface à la manette pour le salon et le Steam Deck</li>
       <li>Gamepads, including the DualSense touchpad, motion, adaptive triggers and lightbar</li>
       <li xml:lang="de">Gamepads, beim DualSense mit Touchpad, Bewegungssensor, adaptiven Triggern und Lightbar</li>
+      <li xml:lang="es">Mandos, con el panel táctil, el movimiento, los gatillos adaptativos y la barra de luz del DualSense</li>
+      <li xml:lang="fr">Manettes, y compris le pavé tactile, le gyroscope, les gâchettes adaptatives et la barre lumineuse de la DualSense</li>
       <li>Game audio and your microphone</li>
       <li xml:lang="de">Spielaudio und dein Mikrofon</li>
+      <li xml:lang="es">Audio del juego y tu micrófono</li>
+      <li xml:lang="fr">L’audio du jeu et votre microphone</li>
       <li>Finds hosts on your network and pairs with a PIN</li>
       <li xml:lang="de">Findet Hosts in deinem Netzwerk und koppelt per PIN</li>
+      <li xml:lang="es">Encuentra los hosts de tu red y se empareja con un PIN</li>
+      <li xml:lang="fr">Détecte les hôtes de votre réseau et s’associe avec un code PIN</li>
     </ul>
   </description>
 
@@ -48,21 +78,29 @@
     <screenshot type="default">
       <caption>Hosts on your network</caption>
       <caption xml:lang="de">Hosts in deinem Netzwerk</caption>
+      <caption xml:lang="es">Hosts de tu red</caption>
+      <caption xml:lang="fr">Hôtes sur votre réseau</caption>
       <image>https://git.unom.io/unom/punktfunk/raw/branch/main/packaging/flatpak/screenshots/hosts.png</image>
     </screenshot>
     <screenshot>
       <caption>A host's game library</caption>
       <caption xml:lang="de">Die Spielebibliothek eines Hosts</caption>
+      <caption xml:lang="es">La biblioteca de juegos de un host</caption>
+      <caption xml:lang="fr">La bibliothèque de jeux d’un hôte</caption>
       <image>https://git.unom.io/unom/punktfunk/raw/branch/main/packaging/flatpak/screenshots/library.png</image>
     </screenshot>
     <screenshot>
       <caption>Pairing with a PIN</caption>
       <caption xml:lang="de">Koppeln per PIN</caption>
+      <caption xml:lang="es">Emparejamiento con un PIN</caption>
+      <caption xml:lang="fr">Association avec un code PIN</caption>
       <image>https://git.unom.io/unom/punktfunk/raw/branch/main/packaging/flatpak/screenshots/pair.png</image>
     </screenshot>
     <screenshot>
       <caption>Settings</caption>
       <caption xml:lang="de">Einstellungen</caption>
+      <caption xml:lang="es">Ajustes</caption>
+      <caption xml:lang="fr">Paramètres</caption>
       <image>https://git.unom.io/unom/punktfunk/raw/branch/main/packaging/flatpak/screenshots/settings.png</image>
     </screenshot>
   </screenshots>
@@ -75,9 +113,19 @@
 
   <keywords>
     <keyword>streaming</keyword>
+    <keyword xml:lang="es">streaming</keyword>
+    <keyword xml:lang="fr">streaming</keyword>
     <keyword>remote</keyword>
+    <keyword xml:lang="de">Fernzugriff</keyword>
+    <keyword xml:lang="es">remoto</keyword>
+    <keyword xml:lang="fr">à distance</keyword>
     <keyword>game</keyword>
+    <keyword xml:lang="de">Spiele</keyword>
+    <keyword xml:lang="es">juegos</keyword>
+    <keyword xml:lang="fr">jeu</keyword>
     <keyword>moonlight</keyword>
+    <keyword xml:lang="es">moonlight</keyword>
+    <keyword xml:lang="fr">moonlight</keyword>
   </keywords>
 
   <supports>

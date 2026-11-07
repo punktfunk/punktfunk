@@ -1,0 +1,51 @@
+# yaml-language-server: $schema=https://aka.ms/winget-manifest.locale.1.6.0.schema.json
+PackageIdentifier: unom.PunktfunkHost
+PackageVersion: 0.19.2
+PackageLocale: es-ES
+
+Publisher: unom
+PublisherUrl: https://git.unom.io/unom/punktfunk
+PublisherSupportUrl: https://punktfunk.unom.io/community
+PrivacyUrl: https://unom.io/en/legal/privacy#punktfunk-apps
+PackageName: Punktfunk Host
+PackageUrl: https://docs.punktfunk.unom.io/docs/windows-host
+License: MIT OR Apache-2.0
+LicenseUrl: https://git.unom.io/unom/punktfunk/src/branch/main/LICENSE-MIT
+Copyright: Copyright (c) unom
+ShortDescription: Host de transmisión de juegos de baja latencia — transmite los juegos de tu PC a cualquier cliente Punktfunk o Moonlight.
+Description: |-
+  Punktfunk Host convierte un PC con Windows 11 en un servidor de transmisión de juegos de baja latencia.
+  Captura el escritorio o una pantalla virtual dedicada, codifica con NVENC / AMF / QSV / Vulkan y
+  transmite por su protocolo QUIC nativo a clientes Punktfunk en Windows, macOS, iOS, tvOS, Android y
+  Linux — o por GameStream a clientes Moonlight estándar.
+
+  El instalador incluye el controlador de pantalla virtual pf-vdisplay (transmisión en resolución nativa
+  y con HDR sin una pantalla física), mandos virtuales DualSense / DualShock 4 / Xbox 360 y una consola
+  de administración web que se sirve en el puerto 47992.
+Tags:
+  - game-streaming
+  - remote-desktop
+  - moonlight
+  - gamestream
+  - streaming
+  - remote-play
+ReleaseNotesUrl: https://git.unom.io/unom/punktfunk/src/branch/main/docs/releases/v0.19.2.md
+InstallationNotes: |-
+  Consola de administración web:  https://<este-PC>:47992
+    Esta instalación generó una contraseña de acceso y no la mostró. Imprímela desde un
+    PowerShell con privilegios ELEVADOS, ANTES de tu primer inicio de sesión:   punktfunk-host web password
+    Después la consola solo conserva un hash con sal en %ProgramData%\punktfunk\web-password, así que una
+    contraseña olvidada se restablece: vuelve a poner una línea PUNKTFUNK_UI_PASSWORD=<tu-contraseña> en ese
+    archivo y ejecuta  punktfunk-host service restart
+
+  Configuración:  %ProgramData%\punktfunk\host.env
+  Registros:      %ProgramData%\punktfunk\logs\
+
+  El servicio del host se inicia automáticamente al arrancar. `punktfunk-host` está en el PATH del equipo — ejecuta
+  `punktfunk-host service status` desde un símbolo del sistema con privilegios elevados para comprobarlo.
+Documentations:
+  - DocumentLabel: Windows Host Setup
+    DocumentUrl: https://docs.punktfunk.unom.io/docs/windows-host
+
+ManifestType: locale
+ManifestVersion: 1.6.0
