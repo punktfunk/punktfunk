@@ -99,7 +99,7 @@ Hold **L1 + R1 + Start + Select** (LB + RB + Start + Back on an Xbox pad) on any
 
 | Client | Quick press | Hold |
 |---|---|---|
-| Linux, Windows | Releases input and leaves fullscreen, unless the stream started fullscreen | About 1.5 s disconnects |
+| Linux, Windows | Releases input and leaves fullscreen, unless the stream started fullscreen. Press again to capture and go back | About 1.5 s disconnects |
 | Steam Deck | Releases input | About 1.5 s disconnects |
 | macOS, iPhone, iPad, Apple TV | Nothing | About 1.5 s disconnects |
 | Android | Shows **Hold to quit…** | About 1 s disconnects |

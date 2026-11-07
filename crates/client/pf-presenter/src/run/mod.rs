@@ -290,6 +290,8 @@ struct Shell {
     overlay_frame: Option<OverlayFrame>,
     stats_verbosity: StatsVerbosity,
     fullscreen: bool,
+    /// The pad's escape chord left fullscreen; its press back in restores it.
+    pad_left_fullscreen: bool,
     mouse: sdl3::mouse::MouseUtil,
     event_pump: sdl3::EventPump,
     /// Native display mode — the `0 = native` fallback for the requested stream mode.

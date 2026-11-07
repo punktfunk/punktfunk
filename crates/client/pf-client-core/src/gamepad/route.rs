@@ -226,9 +226,10 @@ fn is_system(bit: u32) -> bool {
     matches!(bit, wire::BTN_GUIDE | wire::BTN_MISC1)
 }
 
-/// Where one transition on a forwarded pad goes. Under the mask nothing moves, and a local
-/// Guide holds the rest of its pad until it lifts. A press meets the Select chord, then the
-/// guide gesture, then the wire.
+/// Where one transition on a forwarded pad goes. Under the mask nothing reaches the host, but a
+/// press still checks the escape chord: it is the pad's way back in and out. A local Guide holds
+/// the rest of its pad until it lifts. A press meets the Select chord, then the guide gesture,
+/// then the wire.
 pub(super) fn route(
     input: PadInput,
     gates: &Gates,
@@ -242,7 +243,13 @@ pub(super) fn route(
             ..
         }
     );
-    if gates.masked || (pad.guide_local && !guide) {
+    if gates.masked {
+        return match input {
+            PadInput::Button { down: true, .. } => vec![Action::Escape],
+            _ => Vec::new(),
+        };
+    }
+    if pad.guide_local && !guide {
         return Vec::new();
     }
     match input {
@@ -478,7 +485,7 @@ mod tests {
                         ring_nav: true,
                         ..masked()
                     }),
-                    In(down(A), vec![]),
+                    In(down(A), vec![Escape]),
                     In(PadInput::Analog, vec![]),
                 ],
             ),
@@ -489,12 +496,23 @@ mod tests {
                     Set(masked()),
                     Release(vec![(A, false)]),
                     In(up(A), vec![]),
-                    In(down(GUIDE), vec![]),
+                    In(down(GUIDE), vec![Escape]),
                     In(PadInput::Analog, vec![]),
                     In(click(true), vec![]),
                     Set(host()),
                     Adopt(vec![X], false, true),
                     In(up(X), vec![off(X), Rearm]),
+                ],
+            ),
+            (
+                "the escape chord pressed again under the mask it raised is checked",
+                vec![
+                    Set(masked()),
+                    In(down(LB), vec![Escape]),
+                    In(down(RB), vec![Escape]),
+                    In(down(START), vec![Escape]),
+                    In(down(SELECT), vec![Escape]),
+                    In(up(SELECT), vec![]),
                 ],
             ),
             (
@@ -793,7 +811,7 @@ mod tests {
             assert_eq!(want.opens_menu_pads(), opens, "{at:?}");
             if session {
                 let pad = &mut PadRoute::default();
-                let sent = !route(down(A), &gates, pad, Instant::now()).is_empty();
+                let sent = route(down(A), &gates, pad, Instant::now()).contains(&on(A));
                 assert_eq!(sent, matches!(want, Host | HostAndRing), "{at:?}");
             }
         }
@@ -849,7 +867,7 @@ mod tests {
             ..host()
         };
         let mut pad = PadRoute::default();
-        assert!(route(down(B), &gates, &mut pad, ms(30)).is_empty());
+        assert_eq!(route(down(B), &gates, &mut pad, ms(30)), [Escape]);
         assert!(pad.adopt(vec![B], false, true));
         assert_eq!(route(up(B), &host(), &mut pad, ms(120)), [off(B), Rearm]);
     }
