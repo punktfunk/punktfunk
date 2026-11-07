@@ -66,7 +66,7 @@ final class HostDownloadTests: XCTestCase {
             TileBadge.forTitle(
                 missing,
                 download: HostDownload(appID: "a", state: "paused", doneBytes: 429, totalBytes: 1000)),
-            TileBadge(icon: "pause", text: "42 %"))
+            TileBadge(icon: "pause", text: "42%"))
         XCTAssertEqual(
             InstallOutcome.from(status: 409, message: "Quit Quail first.").notice(.remove, title: "Quail"),
             "Quit Quail first.")

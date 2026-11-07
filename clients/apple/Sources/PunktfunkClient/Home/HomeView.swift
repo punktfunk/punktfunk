@@ -323,7 +323,6 @@ struct HomeView: View {
             Text(title)
                 .font(.geist(13, .semibold, relativeTo: .subheadline))
                 .foregroundStyle(.secondary)
-                .textCase(.uppercase)
                 .tracking(0.6)
         }
         .padding(.top, 4)

@@ -93,7 +93,7 @@ private struct SmallHostView: View {
                     .font(.headline)
                     .lineLimit(2)
                 if let last = host.lastConnected {
-                    Text("\(last, style: .relative) ago")
+                    Text(last, style: .relative)
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                 }
@@ -126,7 +126,7 @@ private struct MediumHostsView: View {
                                 .lineLimit(1)
                             Spacer()
                             if let last = host.lastConnected {
-                                Text("\(last, style: .relative) ago")
+                                Text(last, style: .relative)
                                     .font(.caption2)
                                     .foregroundStyle(.secondary)
                             }

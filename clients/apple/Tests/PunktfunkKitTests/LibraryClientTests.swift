@@ -461,8 +461,8 @@ final class LibraryClientTests: XCTestCase {
         XCTAssertEqual(woken(200), "ok")
         XCTAssertEqual(woken(202), "ok")
         XCTAssertEqual(woken(403), "This device isn't allowed to start another profile's seat.")
-        XCTAssertEqual(woken(401), "Couldn't wake Kid's desk. Try again in a moment.")
-        XCTAssertEqual(woken(500), "Couldn't wake Kid's desk. Try again in a moment.")
+        XCTAssertEqual(woken(401), "Couldn't get Kid's desktop ready. Try again in a moment.")
+        XCTAssertEqual(woken(500), "Couldn't get Kid's desktop ready. Try again in a moment.")
     }
 
     func testExpectOKFoldsTheCertificateRefusals() {

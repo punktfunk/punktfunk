@@ -99,7 +99,7 @@ struct ConnectOverlay: View {
                     .multilineTextAlignment(.center)
                 HStack(spacing: 12) {
                     Button(L10n.commonCancel) { waker.cancel() }.buttonStyle(.bordered)
-                    Button(L10n.commonTryAgain) { waker.retry() }.glassProminentButtonStyle()
+                    Button(L10n.commonRetry) { waker.retry() }.glassProminentButtonStyle()
                 }
                 .padding(.top, 6)
             case .waking(let w):
