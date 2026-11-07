@@ -842,7 +842,7 @@ private fun TouchGroupHeading(text: String) {
         text,
         style = MaterialTheme.typography.labelSmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
-        letterSpacing = 1.4.sp,
+        letterSpacing = 0.sp,
     )
 }
 

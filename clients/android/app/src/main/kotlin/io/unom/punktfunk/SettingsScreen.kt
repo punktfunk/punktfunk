@@ -1447,7 +1447,7 @@ internal fun SettingsGroup(
                 header,
                 style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.colorScheme.primary,
-                letterSpacing = 1.2.sp,
+                letterSpacing = 0.sp,
                 modifier = Modifier.padding(start = 4.dp),
             )
         }
