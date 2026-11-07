@@ -202,7 +202,7 @@ fn next_steps(
     outcome: &Outcome,
     opts: Opts,
 ) {
-    let ip = facts.ip.clone().unwrap_or_else(|| "<host-ip>".to_string());
+    let lan = facts.ip.as_deref().unwrap_or(facts.console_host());
     ui.blank();
     // The download page's third step, in its words, so the terminal ends where the page does.
     ui.line(&format!("{INDENT}{}", t::setup_outro_done()));
@@ -221,7 +221,7 @@ fn next_steps(
         // address, and printing it there is how an operator concludes the install failed.
         let console = match choices.web_bind.as_str() {
             LOOPBACK_BIND => t::setup_outro_console_loopback("https://127.0.0.1:47992"),
-            LAN_BIND => t::setup_outro_console(format!("https://{ip}:47992")),
+            LAN_BIND => t::setup_outro_console(format!("https://{lan}:47992")),
             addr => t::setup_outro_console(format!("https://{addr}:47992")),
         };
         ui.line(&format!("{INDENT}{console}"));

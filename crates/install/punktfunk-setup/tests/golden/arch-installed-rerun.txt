@@ -23,8 +23,8 @@
 ==> Checking
 
   Done. Next: let a device in.
-  On the device you play on, open Punktfunk and pick this host. Approve it in the notification here, or in the console.
-  Console: https://192.168.1.10:47992  (its certificate is this host's own)
+  On the device you play on, open Punktfunk and pick this host. Approve it in the notification on this device, or in the web console.
+  Web console: https://192.168.1.10:47992  (its certificate is this host's own)
   Password — this prints it, until you first sign in: sed -n 's/^PUNKTFUNK_UI_PASSWORD=//p' ~/.config/punktfunk/web-password
   Group changes apply after a restart of this device (controllers won't work until then).
   https://docs.punktfunk.unom.io/docs/troubleshooting · https://docs.punktfunk.unom.io/docs/arch

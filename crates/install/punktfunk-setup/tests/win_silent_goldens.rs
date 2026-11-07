@@ -55,8 +55,8 @@ fn transcript(
         web_password: None,
         subst: Subst::default(),
     };
-    let outcome =
-        silent::run(&exec, facts, artifact, uninstall, args, &Env::default()).map_err(|f| f.0);
+    let env = Env::of(&[("COMPUTERNAME", "PUNKT-PC")]);
+    let outcome = silent::run(&exec, facts, artifact, uninstall, args, &env).map_err(|f| f.0);
     let text = buf.borrow().clone();
     (outcome, text)
 }

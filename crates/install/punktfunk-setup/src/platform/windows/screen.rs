@@ -556,7 +556,9 @@ mod tests {
         let note = s.coexistence_note().unwrap();
         assert!(note.contains("Sunshine detected"));
         assert!(note.contains(":47991"));
-        assert!(s.why(Field::Gamestream).contains("Sunshine owns"));
+        assert!(s
+            .why(Field::Gamestream)
+            .contains("Sunshine holds the Moonlight ports"));
         assert!(screen_of(fresh_facts(), Artifact::Host)
             .coexistence_note()
             .is_none());
@@ -574,6 +576,6 @@ mod tests {
         assert!(note.starts_with("Another streaming host detected"));
         assert!(s
             .why(Field::Gamestream)
-            .contains("Another streaming host owns"));
+            .contains("Another streaming host holds the Moonlight ports"));
     }
 }

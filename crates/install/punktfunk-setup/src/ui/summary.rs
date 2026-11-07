@@ -432,7 +432,7 @@ mod tests {
     fn the_group_row_always_states_the_usbip_grant() {
         let s = screen();
         assert!(s.value(Field::Group).contains("usbip attach"));
-        assert!(Screen::why(Field::Group).contains("usbip attach"));
+        assert!(Screen::why(Field::Group).contains("can attach USB devices"));
     }
 
     #[test]

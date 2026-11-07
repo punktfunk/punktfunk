@@ -6,7 +6,7 @@
 │  ──────────────────────────────────────────────────────────
 │    This device is           The PC I stream from (host)
 │    Channel                  stable
-│    Full controller support  Yes — Bazzite — virtual Steam Deck pad
+│    Full controller support  Yes — Bazzite — virtual Steam Deck controller
 │    Third-party clients      No  — Punktfunk's own apps don't need it
 │    Shared clipboard         Yes
 │    Start at boot            Yes — Bazzite hosts are usually headless

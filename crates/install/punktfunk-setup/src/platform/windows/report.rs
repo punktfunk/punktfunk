@@ -5,7 +5,8 @@
 //! competitor is live, and the unreachable-host warning when the network is Public.
 //!
 //! Only the silent `/LOG` transcript prints `detected`, `choices_summary` and `outro`, so they
-//! stay English literals. `footnotes` also fills the wizard's Done page and reads `pf_l10n`.
+//! stay English literals, but for the outro's console line. `footnotes` also fills the
+//! wizard's Done page and reads `pf_l10n`.
 //!
 //! Goldens pin the strings. Design: `design/installer-v2-windows.md`.
 
@@ -91,7 +92,13 @@ fn bind_label(choices: &WinChoices) -> String {
     }
 }
 
-pub fn outro(ui: &dyn Reporter, facts: &WinFacts, choices: &WinChoices, artifact: Artifact) {
+pub fn outro(
+    ui: &dyn Reporter,
+    facts: &WinFacts,
+    choices: &WinChoices,
+    artifact: Artifact,
+    host: &str,
+) {
     ui.blank();
     ui.line("  Done. Next:");
     match artifact {
@@ -103,7 +110,7 @@ pub fn outro(ui: &dyn Reporter, facts: &WinFacts, choices: &WinChoices, artifact
                     ui.line("  1. Open the web console:  https://127.0.0.1:47992  (the certificate is the host's own — continue past the warning)");
                     ui.line("     It answers on this PC only. Set PUNKTFUNK_UI_BIND in host.env to reach it from another device.");
                 }
-                _ => ui.line("  1. Open the web console:  https://<this-PC>:47992  (the certificate is the host's own — continue past the warning)"),
+                _ => ui.line(&format!("  1. {}", t::setup_win_outro_console(host))),
             }
             if !facts.web_password_present {
                 ui.line(

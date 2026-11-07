@@ -280,6 +280,9 @@ pub struct Facts {
     #[serde(default)]
     pub mgmt_bind: Option<String>,
     pub ip: Option<String>,
+    /// This device's host name: what the console URL names when `ip` is unknown.
+    #[serde(default)]
+    pub host_name: Option<String>,
     pub user: String,
 }
 
@@ -353,6 +356,7 @@ impl Facts {
             web_bind: env_line(&paths.host_env(), "PUNKTFUNK_UI_BIND"),
             mgmt_bind: env_line(&paths.host_env(), "PUNKTFUNK_MGMT_BIND"),
             ip: local_ip(run),
+            host_name: run.first_line("uname", &["-n"]),
             user,
             os,
         })
@@ -360,6 +364,11 @@ impl Facts {
 
     pub fn fully_installed(&self) -> bool {
         self.missing.is_empty()
+    }
+
+    /// The host in the console URL when `ip` is unknown: the host name, else a stand-in to read.
+    pub fn console_host(&self) -> &str {
+        self.host_name.as_deref().unwrap_or("<host-ip>")
     }
 }
 

@@ -246,7 +246,7 @@ fn the_fresh_host_demo_walks_welcome_to_done_through_the_fake_executor() {
     assert_eq!(wiz.dots(), 4, "Custom adds the Configure dot");
     wiz.click("Continue");
     assert!(
-        wiz.has_text("Moonlight compat"),
+        wiz.has_text(tools::wizard_row_gamestream()),
         "the Configure rows render"
     );
     assert!(
@@ -258,7 +258,7 @@ fn the_fresh_host_demo_walks_welcome_to_done_through_the_fake_executor() {
         "the fresh-only password row"
     );
 
-    let gamestream = wiz.toggle_of("Moonlight compat");
+    let gamestream = wiz.toggle_of(tools::wizard_row_gamestream());
     wiz.fire(gamestream, EventId::Toggled, EventPayload::Bool(true));
 
     wiz.click("Install");
@@ -375,7 +375,7 @@ fn the_upgrade_demo_opens_in_manage_mode_and_reconfigure_walks_the_upgrade() {
     assert!(wiz.has_text("0.34.0 · host installed"));
     wiz.click("Reconfigure");
     assert!(
-        wiz.has_text("Moonlight compat"),
+        wiz.has_text(tools::wizard_row_gamestream()),
         "the Configure rows render"
     );
     assert!(

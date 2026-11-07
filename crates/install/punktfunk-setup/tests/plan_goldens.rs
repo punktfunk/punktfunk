@@ -72,6 +72,7 @@ fn fresh(id: &str, family: Family) -> Facts {
         web_bind: None,
         mgmt_bind: None,
         ip: Some("192.168.1.10".into()),
+        host_name: Some("pf-box".into()),
         user: "pf".into(),
     }
 }

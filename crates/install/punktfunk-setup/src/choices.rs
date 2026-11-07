@@ -303,7 +303,7 @@ mod tests {
         assert_eq!(couch.group_why, Some(Why::CouchPad(Couch::Bazzite)));
         assert_eq!(
             couch.group_why.map(Why::text).as_deref(),
-            Some("Bazzite — virtual Steam Deck pad")
+            Some("Bazzite — virtual Steam Deck controller")
         );
 
         let mut seatless = fresh("debian", Family::Apt);
@@ -348,7 +348,7 @@ mod tests {
             ),
             (
                 Why::CouchPad(Couch::Other),
-                "Game Mode / HTPC box — virtual Steam Deck pad",
+                "Game Mode / HTPC box — virtual Steam Deck controller",
             ),
             (
                 Why::SteamosLinger,

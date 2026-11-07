@@ -80,6 +80,7 @@ fn box_of(id: &str, pretty: &str, version: &str, family: Family, docs: &str) -> 
         web_bind: None,
         mgmt_bind: None,
         ip: Some("192.168.1.24".into()),
+        host_name: Some("couch".into()),
         user: "you".into(),
     }
 }

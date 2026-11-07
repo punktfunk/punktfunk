@@ -143,7 +143,7 @@ fn the_row_editor_frame_names_the_grant() {
         .expect("no radio list was ever drawn");
     golden("tui-editor-group", editor);
     assert!(
-        editor.contains("usbip attach"),
+        editor.contains("can attach USB devices"),
         "the editor hid what the row grants"
     );
 }
@@ -344,12 +344,27 @@ fn verbose_keeps_the_command_transcript() {
 /// The step a fresh host install ends on. Enter takes the generated password, and the frame
 /// it was taken from names the command that prints it.
 fn ask_password(keys: &[Key]) -> (Option<String>, Vec<String>) {
+    ask_password_at(Some("192.168.1.10"), keys)
+}
+
+fn ask_password_at(ip: Option<&str>, keys: &[Key]) -> (Option<String>, Vec<String>) {
     let mut term = ScriptedTerm::new(keys);
     let answer = {
         let tui = Tui::new(&mut term as &mut dyn Terminal, caps(), 0);
-        tui.web_password("https://192.168.1.10:47992", report::PASSWORD_READ)
+        tui.web_password(ip, "pf-box", report::PASSWORD_READ)
     };
     (answer, term.frames.clone())
+}
+
+/// With no address found, the prompt names the host instead.
+#[test]
+fn the_password_step_names_the_host_when_no_address_is_known() {
+    let (_, frames) = ask_password_at(None, &[Key::Enter]);
+    assert!(
+        frames[0].contains("The web console (https://pf-box:47992) asks for a password."),
+        "{}",
+        frames[0]
+    );
 }
 
 #[test]
@@ -361,6 +376,20 @@ fn the_password_step_offers_the_generated_one_and_says_how_to_print_it() {
     );
     golden("tui-web-password", &frames[0]);
     assert!(frames[0].contains(report::PASSWORD_READ));
+}
+
+#[test]
+fn the_bind_step_names_the_host_when_no_address_is_known() {
+    let mut term = ScriptedTerm::new(&[Key::Enter]);
+    {
+        let tui = Tui::new(&mut term as &mut dyn Terminal, caps(), 0);
+        tui.web_bind(None, "pf-box", "127.0.0.1");
+    }
+    let all = term.frames.join("");
+    assert!(
+        all.contains("This local network (https://pf-box:47992)"),
+        "{all}"
+    );
 }
 
 #[test]
@@ -421,7 +450,7 @@ fn the_screens_read_their_words_from_the_messages() {
         let mut term = ScriptedTerm::new(&[Key::Down, Key::Down, Key::Enter]);
         {
             let tui = Tui::new(&mut term as &mut dyn Terminal, caps(), 0);
-            tui.web_bind("192.168.1.10", "0.0.0.0");
+            tui.web_bind(Some("192.168.1.10"), "pf-box", "0.0.0.0");
         }
         [list.join(""), password.join(""), term.frames.join("")].join("\n")
     });

@@ -100,12 +100,12 @@ defaults_case omarchy-desk  "$OMA" desktop '' 'Full controller (joins the punktf
 defaults_case omarchy-desk2 "$OMA" desktop '' 'Start at boot with nobody logged in: no'
 defaults_case omarchy-ssh   "$OMA" headless '' 'Start at boot with nobody logged in: yes  (no graphical session)'
 
-defaults_case bazzite-desk  "$BAZ" desktop '' 'Full controller (joins the punktfunk group — grants usbip attach): yes  (Bazzite — virtual Steam Deck pad)'
+defaults_case bazzite-desk  "$BAZ" desktop '' 'Full controller (joins the punktfunk group — grants usbip attach): yes  (Bazzite — virtual Steam Deck controller)'
 defaults_case bazzite-desk2 "$BAZ" desktop '' 'Start at boot with nobody logged in: yes  (Bazzite hosts are usually headless)'
 defaults_case bazzite-desk3 "$BAZ" desktop '' 'Third-party clients (Moonlight, Artemis): no'
 defaults_case bazzite-desk4 "$BAZ" desktop '' 'Shared clipboard: yes'
 
-defaults_case nobara-desk  "$NOB" desktop '' 'Full controller (joins the punktfunk group — grants usbip attach): yes  (Nobara — virtual Steam Deck pad)'
+defaults_case nobara-desk  "$NOB" desktop '' 'Full controller (joins the punktfunk group — grants usbip attach): yes  (Nobara — virtual Steam Deck controller)'
 defaults_case nobara-desk2 "$NOB" desktop '' 'Start at boot with nobody logged in: yes  (Nobara hosts are usually headless)'
 # Flags/env still win over the distro default.
 defaults_case bazzite-flag "$BAZ" desktop '' 'Full controller (joins the punktfunk group — grants usbip attach): no' --no-punktfunk-group
@@ -143,7 +143,7 @@ defaults_case debian-ujust2 "$DEB" desktop "$ujbin" 'Start at boot with nobody l
 defaults_case silverblue  "$SIL" desktop "$ujbin" 'Full controller (joins the punktfunk group — grants usbip attach): yes'
 defaults_case silverblue2 "$SIL" desktop "$ujbin" 'Start at boot with nobody logged in: no'
 # …and the narrowing must not cost Bazzite its own defaults, sysext family and all.
-defaults_case bazzite-sysext "$BAZ" desktop "$ujbin" 'Full controller (joins the punktfunk group — grants usbip attach): yes  (Bazzite — virtual Steam Deck pad)'
+defaults_case bazzite-sysext "$BAZ" desktop "$ujbin" 'Full controller (joins the punktfunk group — grants usbip attach): yes  (Bazzite — virtual Steam Deck controller)'
 
 # --no-start is "don't enable the services", not "don't configure": linger was promised in the
 # summary, so it has to actually run. Every other case here passes --no-start, so without this
