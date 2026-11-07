@@ -1,7 +1,7 @@
 # Lints the packaging sources on every pull request that touches them. deb, rpm, arch and flatpak
 # build only on push to main and tags, so a broken spec, PKGBUILD or shell script otherwise
 # surfaces on the canary. Nothing is built here: syntax, shellcheck, rpmspec, makepkg
-# --printsrcinfo, the payload checker's self-test, each channel's policy against its matrix and
+# --printsrcinfo, the desktop entries and metainfo, the payload checker's self-test, each channel's policy against its matrix and
 # the Steam Deck rebuild check on a stub box. scripts/ci/check-workflow-paths.py fails CI when
 # the paths below stop covering what the lane lints, and holds every workflow's path lists to
 # the files its package recipes name.
@@ -77,6 +77,15 @@ jobs:
             echo "== $spec"
             rpmspec --parse --define 'pf_version 0.0.0' --define 'pf_release 1' "$spec" > /dev/null
           done
+
+      # Every package ships these files as they are, translations inline, so one bad entry
+      # reaches every launcher and software center.
+      - name: Desktop entries and AppStream metainfo
+        run: |
+          set -eu
+          dnf -y -q install desktop-file-utils appstream
+          desktop-file-validate packaging/linux/*.desktop
+          appstreamcli validate --no-net packaging/flatpak/io.unom.punktfunk.metainfo.xml
 
   makepkg:
     runs-on: ubuntu-24.04

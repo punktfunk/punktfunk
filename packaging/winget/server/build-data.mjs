@@ -1,7 +1,7 @@
 // Build src/data.json — the payload the Worker serves — from published winget manifests.
 //
-// Source of truth is the Gitea RELEASES, not local files: windows-host.yml attaches the manifest
-// trio to each stable tag, so walking releases yields every version the source should offer. That
+// Source of truth is the Gitea RELEASES, not local files: windows-host.yml attaches the manifests
+// to each stable tag, so walking releases yields every version the source should offer. That
 // matters because winget resolves `--version` and `upgrade` against the version LIST; a source that
 // only knows the newest release can neither pin an older one nor show an upgrade path from it.
 //
@@ -35,13 +35,21 @@ const argVal = (flag) => {
 const outPath = resolve(HERE, argVal("--out") ?? "src/data.json");
 const localDir = argVal("--local");
 
-/** One version's three manifests -> the shape the Worker serves. */
-function toVersionEntry(installer, locale, productCodeFallback) {
-  // The REST manifest nests DefaultLocale + Installers under each version, whereas the YAML splits
-  // them across files keyed by PackageVersion. Strip the per-file bookkeeping that does not belong
-  // in the merged object.
+const DEFAULT_LOCALE = `${PACKAGE_ID}.locale.en-US.yaml`;
+/** Every other locale manifest's file name; its fields replace the default's in that language. */
+const isExtraLocale = (name) =>
+  name.startsWith(`${PACKAGE_ID}.locale.`) && name.endsWith(".yaml") && name !== DEFAULT_LOCALE;
+
+/** One version's manifests -> the shape the Worker serves. */
+function toVersionEntry(installer, locale, extraLocales = [], productCodeFallback) {
+  // The REST manifest nests DefaultLocale, Locales + Installers under each version, whereas the
+  // YAML splits them across files keyed by PackageVersion. Strip the per-file bookkeeping that does
+  // not belong in the merged object.
   const { PackageIdentifier: _i, PackageVersion, ManifestType: _t, ManifestVersion: _v, Installers, ...installerRest } = installer;
   const { PackageIdentifier: _i2, PackageVersion: _pv, ManifestType: _t2, ManifestVersion: _v2, PackageLocale, ...localeRest } = locale;
+  const locales = extraLocales.map(
+    ({ PackageIdentifier: _i3, PackageVersion: _pv3, ManifestType: _t3, ManifestVersion: _v3, ...rest }) => rest,
+  );
 
   // Installer-level fields are inherited by each entry in Installers unless overridden there. The
   // REST shape has no inheritance, so fold the parent down into every installer.
@@ -50,6 +58,7 @@ function toVersionEntry(installer, locale, productCodeFallback) {
   return {
     PackageVersion,
     DefaultLocale: { PackageLocale, ...localeRest },
+    ...(locales.length ? { Locales: locales } : {}),
     Installers: installers,
     ProductCodes: [installer.ProductCode ?? productCodeFallback].filter(Boolean),
   };
@@ -79,11 +88,14 @@ async function versionsFromReleases() {
     const localeUrl = find(".locale.en-US.yaml");
     // Releases from before winget support shipped have no manifests — skip, don't fail.
     if (!installerUrl || !localeUrl) continue;
-    const [installer, locale] = await Promise.all([
-      fetchText(installerUrl).then(parseYaml),
-      fetchText(localeUrl).then(parseYaml),
-    ]);
-    out.push({ entry: toVersionEntry(installer, locale), locale, prerelease: rel.prerelease });
+    const extraUrls = assets
+      .filter((a) => isExtraLocale(a.name))
+      .sort((a, b) => a.name.localeCompare(b.name))
+      .map((a) => a.browser_download_url);
+    const [installer, locale, ...extra] = await Promise.all(
+      [installerUrl, localeUrl, ...extraUrls].map((u) => fetchText(u).then(parseYaml)),
+    );
+    out.push({ entry: toVersionEntry(installer, locale, extra), locale, prerelease: rel.prerelease });
     console.log(`  + ${rel.tag_name} (${installer.PackageVersion})`);
   }
   return out;
@@ -99,8 +111,9 @@ function versionsFromLocal(dir) {
   };
   const installer = read(".installer.yaml");
   const locale = read(".locale.en-US.yaml");
+  const extra = names.filter(isExtraLocale).sort().map((n) => parseYaml(readFileSync(join(d, n), "utf8")));
   console.log(`  + local (${installer.PackageVersion})`);
-  return [{ entry: toVersionEntry(installer, locale), locale, prerelease: false }];
+  return [{ entry: toVersionEntry(installer, locale, extra), locale, prerelease: false }];
 }
 
 /** Newest first, so winget's "latest" is the head of the list. */
