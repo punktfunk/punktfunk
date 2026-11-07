@@ -168,8 +168,9 @@ pub(super) fn check_seat_name(account: &str) -> Result<(), BackendError> {
     ))
 }
 
-/// The seat's user, created on first use. An existing user is accepted only with the seat's
-/// marker.
+/// The seat's user, created on first use with a group of its own, never a shared one such as
+/// NixOS's `users`. An empty group of its name, which `userdel` may leave, is taken over. An
+/// existing user is accepted only with the seat's marker.
 pub(super) fn ensure(seat: &Seat, state: &Path) -> Result<Passwd, BackendError> {
     if let Some(existing) = lookup(&seat.account)? {
         return if owned_by(&existing, &seat.id) {
@@ -178,13 +179,7 @@ pub(super) fn ensure(seat: &Seat, state: &Path) -> Result<Passwd, BackendError> 
             Err(not_owned(&seat.account, &seat.id))
         };
     }
-    let mut groups = Vec::new();
-    for group in GROUPS {
-        if group_gid(group)?.is_some() {
-            materialize_group(group)?;
-            groups.push(group);
-        }
-    }
+    let groups = present_groups()?;
     let seat_dir = super::shared::seat_dir(state, &seat.id);
     super::shared::make_dir(&seat_dir, 0o711)
         .map_err(|e| err("seat_dirs", format!("create {}: {e}", seat_dir.display())))?;
@@ -192,22 +187,87 @@ pub(super) fn ensure(seat: &Seat, state: &Path) -> Result<Passwd, BackendError> 
     let comment = marker(&seat.id);
     let groups = groups.join(",");
     let home_arg = home.to_string_lossy();
-    run(
-        "useradd_failed",
-        "useradd",
-        &[
-            "-r",
-            "-m",
-            "-d",
-            &home_arg,
-            "-c",
-            &comment,
-            "-G",
-            &groups,
-            &seat.account,
-        ],
-    )?;
+    let leftover = getent("group", &seat.account)?.is_some_and(|line| members(&line).is_empty());
+    let own: &[&str] = if leftover {
+        &["-g", &seat.account]
+    } else {
+        &["-U"]
+    };
+    let mut args = vec!["-r", "-m", "-d", &home_arg, "-c", &comment, "-G", &groups];
+    args.extend_from_slice(own);
+    args.push(&seat.account);
+    run("useradd_failed", "useradd", &args)?;
     lookup(&seat.account)?.ok_or_else(|| err("useradd_failed", "useradd left no passwd entry"))
+}
+
+/// Moves the seat user `passwd` onto a group of its own, named after it, when its primary group
+/// is another. The seat's group-readable files are then its alone. Waits for a start with no
+/// process of the user, whose old group a lingering manager would hand on. Refused while the
+/// group of that name has members. `true` when the group changed.
+pub(super) fn own_group(passwd: &Passwd) -> Result<bool, BackendError> {
+    let primary = getent("group", &passwd.gid.to_string())?;
+    if primary.is_some_and(|line| line.split(':').next() == Some(passwd.name.as_str()))
+        || runs_as(Path::new("/proc"), passwd.uid)
+    {
+        return Ok(false);
+    }
+    match getent("group", &passwd.name)? {
+        Some(line) if !members(&line).is_empty() => {
+            return Err(err(
+                "group_taken",
+                format!("group {} has members", passwd.name),
+            ))
+        }
+        Some(_) => {}
+        None => run("groupadd_failed", "groupadd", &["--system", &passwd.name]).map(drop)?,
+    }
+    run(
+        "usermod_failed",
+        "usermod",
+        &["-g", &passwd.name, &passwd.name],
+    )?;
+    Ok(true)
+}
+
+/// The [`GROUPS`] this box has, each in `/etc/group`.
+fn present_groups() -> Result<Vec<&'static str>, BackendError> {
+    let mut groups = Vec::new();
+    for group in GROUPS {
+        if group_gid(group)?.is_some() {
+            materialize_group(group)?;
+            groups.push(group);
+        }
+    }
+    Ok(groups)
+}
+
+/// Adds the seat user `account` to each of [`GROUPS`] it is missing. Run at each start: a group
+/// made after the account, or made again, has no members, and the games folder admits only them.
+pub(super) fn join_groups(account: &str) -> Result<(), BackendError> {
+    let mut missing = Vec::new();
+    for group in present_groups()? {
+        let line = getent("group", group)?.unwrap_or_default();
+        if !is_member(&line, account) {
+            missing.push(group);
+        }
+    }
+    if missing.is_empty() {
+        return Ok(());
+    }
+    let groups = missing.join(",");
+    run("usermod_failed", "usermod", &["-a", "-G", &groups, account]).map(drop)
+}
+
+/// The members `line`, a group as `getent group` prints it, lists.
+fn members(line: &str) -> Vec<&str> {
+    let list = line.trim_end().splitn(4, ':').nth(3).unwrap_or("");
+    list.split(',')
+        .filter(|member| !member.is_empty())
+        .collect()
+}
+
+fn is_member(line: &str, account: &str) -> bool {
+    members(line).contains(&account)
 }
 
 /// The home `useradd` is given for `id`'s user.
@@ -520,14 +580,17 @@ pub(super) fn delete(account: &str, id: &SeatId) -> Result<(), BackendError> {
 
 /// Ends everything the user still runs: at its seat's stop, and before its account is deleted or
 /// rehomed. Its user manager outlives the seat's unit by seconds, and `userdel` or `usermod`
-/// refuse a busy user.
+/// refuse a busy user. Done when no process runs as the user: logind keeps an empty user's
+/// record for `UserStopDelaySec` (10 s by default), as long as this whole wait.
 pub(super) fn quiesce(account: &str) -> Result<(), BackendError> {
-    let present = || run("loginctl_failed", "loginctl", &["show-user", account]).is_ok();
-    if present() {
+    let Some(user) = lookup(account)? else {
+        return Ok(());
+    };
+    if run("loginctl_failed", "loginctl", &["show-user", account]).is_ok() {
         let _ = run("loginctl_failed", "loginctl", &["terminate-user", account]);
     }
     for attempt in 0..40 {
-        if !present() {
+        if !runs_as(Path::new("/proc"), user.uid) {
             return Ok(());
         }
         if attempt == 12 {
@@ -542,6 +605,26 @@ pub(super) fn quiesce(account: &str) -> Result<(), BackendError> {
     ))
 }
 
+/// Whether a process in `proc` has `uid` as its real, effective or saved user, the test `userdel`
+/// makes. An unreadable `proc` counts as busy.
+fn runs_as(proc: &Path, uid: u32) -> bool {
+    let Ok(entries) = std::fs::read_dir(proc) else {
+        return true;
+    };
+    entries.flatten().any(|entry| {
+        std::fs::read_to_string(entry.path().join("status")).is_ok_and(|status| {
+            status
+                .lines()
+                .find_map(|line| line.strip_prefix("Uid:"))
+                .is_some_and(|ids| {
+                    ids.split_whitespace()
+                        .take(3)
+                        .any(|id| id.parse::<u32>().ok() == Some(uid))
+                })
+        })
+    })
+}
+
 fn not_owned(account: &str, id: &SeatId) -> BackendError {
     err(
         "account_not_owned",
@@ -552,6 +635,50 @@ fn not_owned(account: &str, id: &SeatId) -> BackendError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_group_s_members_are_its_fourth_field() {
+        let line = "punktfunk-games:x:947:gamestream,pf-seat-1\n";
+        assert!(is_member(line, "pf-seat-1"));
+        assert!(is_member(line, "gamestream"));
+        assert!(!is_member(line, "pf-seat-10"), "a prefix is not a member");
+        assert!(
+            !is_member("punktfunk-games:x:947:\n", "pf-seat-1"),
+            "a remade group is empty"
+        );
+        assert!(
+            !is_member("pf-seat-1:x:946:", "pf-seat-1"),
+            "a group's name is not a member"
+        );
+        assert!(
+            members("pf-seat-1:x:946:\n").is_empty(),
+            "a leftover group is empty"
+        );
+    }
+
+    #[test]
+    fn a_user_is_busy_while_a_process_has_it_as_real_effective_or_saved_user() {
+        let proc = tempfile::tempdir().unwrap();
+        let status = |pid: &str, uids: &str| {
+            std::fs::create_dir(proc.path().join(pid)).unwrap();
+            let text = format!("Name:\tx\nUid:\t{uids}\nGid:\t0\t0\t0\t0\n");
+            std::fs::write(proc.path().join(pid).join("status"), text).unwrap();
+        };
+        status("1", "0\t0\t0\t0");
+        status("70", "0\t0\t0\t1001");
+        std::fs::create_dir(proc.path().join("sys")).unwrap();
+        assert!(
+            !runs_as(proc.path(), 1001),
+            "the filesystem uid alone is not the user's"
+        );
+        assert!(!runs_as(proc.path(), 1002));
+        status("71", "0\t0\t1001\t1001");
+        assert!(runs_as(proc.path(), 1001), "a saved uid is the user's");
+        assert!(
+            runs_as(&proc.path().join("missing"), 1002),
+            "an unreadable proc is busy"
+        );
+    }
 
     fn id() -> SeatId {
         SeatId::parse("0123456789abcdef0123456789abcdef").unwrap()

@@ -268,8 +268,13 @@ start_kwin() {
     start_plasmashell
 }
 
-# plasmashell draws the desktop and can crash; restart it for as long as kwin lives.
+# plasmashell draws the desktop and can crash; restart it for as long as kwin lives. A box with
+# kwin but no Plasma runs the seat without it.
 start_plasmashell() {
+    if ! command -v plasmashell >/dev/null 2>&1; then
+        echo "seat-session: plasmashell not installed; the seat has no desktop shell" >&2
+        return 0
+    fi
     (
         while kill -0 "$KWIN_PID" 2>/dev/null; do
             plasmashell

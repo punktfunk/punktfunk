@@ -35,6 +35,7 @@ mod logind;
 mod pam;
 #[cfg(test)]
 mod person_tests;
+mod reach;
 mod safe_open;
 mod session;
 mod shared;
@@ -91,6 +92,8 @@ const START_TIMEOUT: Duration = Duration::from_secs(90);
 const TRUST_TICK: Duration = Duration::from_secs(2);
 /// How often the games folder's ACL mask is repaired while a seat runs.
 const ACL_EVERY: Duration = Duration::from_secs(600);
+/// How often a made seat's Steam log is read for library folders Steam couldn't open.
+const REACH_EVERY: Duration = Duration::from_secs(10);
 /// How long `Seating` reuses the prerequisite checks it ran.
 const CHECKS_FRESH: Duration = Duration::from_secs(10);
 
@@ -987,9 +990,24 @@ impl PlatformBackend for LinuxBackend {
             Own::Seat => {}
         }
         let (box_dir, state) = (&self.inner.box_dir, &self.inner.state);
-        let passwd = accounts::require(seat)?;
+        let mut passwd = accounts::require(seat)?;
+        // The trust copy goes and is made again for the new group.
+        match accounts::own_group(&passwd) {
+            Ok(false) => {}
+            Ok(true) => {
+                tracing::info!(account = %passwd.name, "seat user moved to a group of its own");
+                let _ = std::fs::remove_dir_all(shared::trust_dir(state, &seat.id));
+                passwd = accounts::require(seat)?;
+            }
+            Err(error) => {
+                tracing::warn!(account = %passwd.name, %error, "seat user's own group not made");
+            }
+        }
         accounts::close_home(&passwd.home)?;
         let games = accounts::ensure_group(accounts::GAMES_GROUP)?;
+        if let Err(error) = accounts::join_groups(&passwd.name) {
+            tracing::warn!(account = %passwd.name, %error, "seat user's groups not restored");
+        }
         shared::ensure_games(state, games)?;
         shared::ensure_seat_dirs(state, &seat.id, &passwd, self.owner_uid())?;
         let reader = shared::Reader::group(passwd.gid);
@@ -1032,6 +1050,14 @@ impl PlatformBackend for LinuxBackend {
             self.stopped_since(asked)?;
             let _ = run("systemctl_failed", "systemctl", &["reset-failed", &unit]);
             run("systemctl_failed", "systemctl", &["start", &unit])?;
+            // The mount's own error is in the unit's journal.
+            for stage in shares
+                .iter()
+                .flat_map(|s| libraries::unmounted(&seat.id, s))
+            {
+                let stage = stage.display();
+                tracing::warn!(seat = %seat.id, %stage, %unit, "seat library stage not mounted");
+            }
         }
         self.track(&seat.id, Tracked::of(seat, &passwd));
         self.wait_ready(seat, asked, false)?;
@@ -1226,6 +1252,19 @@ impl PlatformBackend for LinuxBackend {
                 seat_id: Some(seat.id.clone()),
                 ..Diagnostic::info("unit_state", message).worded(id)
             });
+            let missed = |passwd: &accounts::Passwd| {
+                reach::missed(&self.inner.state, &seat.id, &passwd.home).is_some()
+            };
+            let running = runtime == RuntimeState::Running;
+            if kind == Own::Seat && running && found.as_ref().is_some_and(missed) {
+                let message = "Its Steam can't open the host's game libraries, so their games are \
+                               missing here. Restart the seat, and report a bug if they're still missing.";
+                out.push(Diagnostic {
+                    seat_id: Some(seat.id.clone()),
+                    ..Diagnostic::warning("steam_libraries", message)
+                        .worded("seatcheck_steam_libraries_unreachable")
+                });
+            }
             if kind == Own::Person {
                 let unreadable =
                     with_devices(&self.inner, &seat.id, |held, _| Ok(held.unreadable.clone()))?;
@@ -1462,12 +1501,15 @@ impl LinuxBackend {
 /// of a row on a person's own account, and, for a seat other than the owner's, the box's library,
 /// which follows the owner's own first. A person's pairing list follows who its row admits, as
 /// presence runs out. Ends a person's headless session when they sit down at the machine, and
-/// repairs the games folder's ACL mask after a made seat stops and every [`ACL_EVERY`]. The
-/// owner's row stays listed while its host is the owner's own, which reads the same copy. Ends
-/// when the backend is dropped.
+/// repairs the games folder's ACL mask after a made seat stops and every [`ACL_EVERY`]. Logs,
+/// once per library load, why a made seat's Steam couldn't open a library folder. The owner's
+/// row stays listed while its host is the owner's own, which reads the same copy. Ends when the
+/// backend is dropped.
 fn keep_level(inner: Weak<Inner>) {
     let mut acl_at = Instant::now();
+    let mut reach_at = Instant::now();
     let mut failing: HashSet<SeatId> = HashSet::new();
+    let mut explained: HashMap<SeatId, String> = HashMap::new();
     let mut library_failing = false;
     loop {
         std::thread::sleep(TRUST_TICK);
@@ -1522,6 +1564,21 @@ fn keep_level(inner: Weak<Inner>) {
             }
             if let Some((seat, _)) = &tracked.guest {
                 yield_to_the_desk(&inner, seat);
+            }
+        }
+        if reach_at.elapsed() >= REACH_EVERY {
+            reach_at = Instant::now();
+            for (id, tracked) in seats.iter().filter(|(_, tracked)| tracked.guest.is_none()) {
+                let Ok(Some(passwd)) = accounts::lookup(&tracked.account) else {
+                    continue;
+                };
+                let Some(missed) = reach::missed(&inner.state, id, &passwd.home) else {
+                    continue;
+                };
+                if explained.get(id) != Some(&missed.stamp) {
+                    reach::explain(id, &passwd, &missed);
+                    explained.insert(id.clone(), missed.stamp);
+                }
             }
         }
         let seat_up = seats.iter().any(|(_, tracked)| tracked.guest.is_none());
