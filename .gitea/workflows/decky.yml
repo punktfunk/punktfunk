@@ -42,6 +42,11 @@ on:
       - '.gitea/workflows/decky.yml'
     tags: ['v*']
   workflow_dispatch:
+    inputs:
+      stable:
+        description: 'Publish as stable X.Y.Z (empty: canary)'
+        required: false
+        default: ''
 
 env:
   REGISTRY: git.unom.io
@@ -86,6 +91,8 @@ jobs:
         # `-ci<N>` prerelease: compare-versions orders prerelease identifiers lexically
         # (ci10 < ci9), which would break update detection; the run number is monotonic.
         working-directory: ${{ gitea.workspace }}
+        env:
+          STABLE: ${{ github.event.inputs.stable }}
         run: |
           eval "$(bash scripts/ci/pf-version.sh)"   # -> PF_MAJOR/PF_MINOR (base one minor ahead of latest stable)
           case "$GITHUB_REF" in
@@ -98,6 +105,11 @@ jobs:
             # where major.minor track one minor ahead of the latest stable and the run number climbs.
             *)            V="${PF_MAJOR}.${PF_MINOR}.${GITHUB_RUN_NUMBER}"; ALIAS=canary; CANARY_VERSION="" ;;
           esac
+          # A plugin-only stable hotfix: a dispatch naming a version replaces latest/ alone.
+          if [ -n "$STABLE" ]; then
+            printf '%s' "$STABLE" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$' || { echo "stable: X.Y.Z, got $STABLE" >&2; exit 1; }
+            V="$STABLE"; ALIAS=latest; CANARY_VERSION=""
+          fi
           BASE="https://$REGISTRY/api/packages/$OWNER/generic/$PACKAGE"
           echo "VERSION=$V" >> "$GITHUB_ENV"
           echo "ALIAS=$ALIAS" >> "$GITHUB_ENV"
