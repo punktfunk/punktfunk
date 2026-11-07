@@ -42,16 +42,17 @@ impl SessionSwitch {
     }
 }
 
-/// The session's `PUNKTFUNK_SESSION_WATCH` (`row`) on/off wins. Auto is on for Bazzite/SteamOS
-/// (they flip Gaming↔Desktop mid-stream) and off elsewhere.
+/// The session's `PUNKTFUNK_SESSION_WATCH` (`row`) on/off wins. Auto is on where the box has a
+/// Game Mode to flip to mid-stream, and off elsewhere.
 pub(super) fn session_watch_enabled(row: Option<bool>) -> bool {
-    row.unwrap_or_else(is_steam_htpc_platform)
+    row.unwrap_or_else(has_game_mode)
 }
 
-/// Bazzite or SteamOS (`ID`/`ID_LIKE`). Absent os-release (non-Linux) → false.
-fn is_steam_htpc_platform() -> bool {
+/// Bazzite, SteamOS, or any box with a gamescope session (Nobara). Only the watcher removes the
+/// takeover's idle drop-in when a capture-loss rebuild reaches the desktop first.
+fn has_game_mode() -> bool {
     let os = pf_host_config::os_release::os_release();
-    os.is("bazzite") || os.is("steamos")
+    os.is("bazzite") || os.is("steamos") || crate::vdisplay::managed_session_available()
 }
 
 pub(super) fn session_watcher_loop(

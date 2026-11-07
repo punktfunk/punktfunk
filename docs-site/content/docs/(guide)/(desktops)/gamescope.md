@@ -10,10 +10,11 @@ runs one. Install the host first: [Bazzite](/docs/bazzite) or [SteamOS (Host)](/
 
 - Each client gets Gaming Mode at its own resolution and refresh rate (managed and bare spawn,
   [below](#how-the-host-gets-a-gamescope)).
-- On Bazzite and SteamOS it follows **Switch to Desktop** and back mid-stream, with no reconnect.
-  Elsewhere, turn on **Follow mode switches** in the console (`PUNKTFUNK_SESSION_WATCH=1`). The
-  desktop streams at 60 Hz until its KWin reaches 6.6 ([KDE](/docs/kde#known-limits)); SteamOS
-  3.8 ships 6.4. Gaming Mode keeps your client's refresh rate.
+- On a box with Steam Gaming Mode (Bazzite, SteamOS, Nobara) it follows **Switch to Desktop**
+  and back mid-stream, with no reconnect. Elsewhere, turn on **Follow mode switches** in the
+  console (`PUNKTFUNK_SESSION_WATCH=1`). The desktop streams at 60 Hz until its KWin reaches 6.6
+  ([KDE](/docs/kde#known-limits)); SteamOS 3.8 ships 6.4. Gaming Mode keeps your client's refresh
+  rate.
 - Controllers, including a virtual Steam Deck pad when you are in the
   [`punktfunk` group](#the-punktfunk-group).
 - With [`punktfunk-gamescope`](#hdr-on-gamescope): HDR, the real resolution and refresh rate in
