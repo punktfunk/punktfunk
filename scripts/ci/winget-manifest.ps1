@@ -1,10 +1,10 @@
-# Emit the winget manifest trio for a released Windows host installer.
+# Emit the winget manifests for a released Windows host installer.
 #
 # winget pins the installer by SHA256, so a manifest is only ever valid for ONE immutable artifact.
 # The `latest/` channel alias in the generic registry is therefore NOT usable here — this always
 # writes the versioned Gitea release URL, which the registry makes immutable (a re-upload 409s).
 #
-# The three files are templated from packaging/winget/, which holds the reviewed, hand-maintained
+# The files are templated from packaging/winget/, which holds the reviewed, hand-maintained
 # copy: everything except PackageVersion / InstallerUrl / InstallerSha256 is edited THERE, not here.
 # That keeps the switches, agreements and installation notes under normal code review rather than
 # buried in a generator.
@@ -15,6 +15,7 @@
 # Emits: <OutDir>/unom.PunktfunkHost.yaml
 #        <OutDir>/unom.PunktfunkHost.installer.yaml
 #        <OutDir>/unom.PunktfunkHost.locale.en-US.yaml
+#        <OutDir>/unom.PunktfunkHost.locale.<locale>.yaml for every other locale template
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)][string]$Version,
@@ -40,14 +41,13 @@ Write-Host "                 url=$url"
 
 New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
 
-# PackageVersion appears in all three files; InstallerUrl/Sha256 only in the installer manifest.
+# PackageVersion appears in every file; InstallerUrl/Sha256 only in the installer manifest.
 # Anchored replacements (line-leading key) so a version string inside prose — e.g. the release-notes
 # URL in the locale manifest — is never rewritten by accident.
-$files = @(
-    'unom.PunktfunkHost.yaml',
-    'unom.PunktfunkHost.installer.yaml',
-    'unom.PunktfunkHost.locale.en-US.yaml'
-)
+$default = 'unom.PunktfunkHost.locale.en-US.yaml'
+$locales = Get-ChildItem -Path $TemplateDir -Filter 'unom.PunktfunkHost.locale.*.yaml' |
+    Where-Object Name -ne $default | Sort-Object Name | ForEach-Object Name
+$files = @('unom.PunktfunkHost.yaml', 'unom.PunktfunkHost.installer.yaml', $default) + @($locales)
 foreach ($f in $files) {
     $src = Join-Path $TemplateDir $f
     if (-not (Test-Path $src)) { throw "template missing: $src" }

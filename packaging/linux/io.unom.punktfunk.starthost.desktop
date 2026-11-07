@@ -2,7 +2,9 @@
 Type=Application
 Name=Punktfunk Host
 GenericName=Streaming host
+GenericName[de]=Streaming-Host
 Comment=Start the streaming host, its web console and plugin runner, and show their status in the tray
+Comment[de]=Streaming-Host, Web-Konsole und Plugin-Runner starten und ihren Status im Tray anzeigen
 # The Windows "Punktfunk Host" Start-menu link runs the same command.
 Exec=/usr/bin/punktfunk-tray --start-host
 Icon=punktfunk-tray
@@ -10,8 +12,10 @@ Terminal=false
 StartupNotify=false
 Categories=Network;RemoteAccess;
 Keywords=streaming;host;server;tray;status;
+Keywords[de]=Streaming;Host;Server;Tray;Infobereich;Status;
 Actions=status;
 
 [Desktop Action status]
 Name=Show status only
+Name[de]=Nur Status anzeigen
 Exec=/usr/bin/punktfunk-tray

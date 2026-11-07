@@ -8,6 +8,7 @@
   <project_license>MIT OR Apache-2.0</project_license>
   <name>Punktfunk</name>
   <summary>Stream your PC's games and desktop</summary>
+  <summary xml:lang="de">Spiele und Desktop deines PCs streamen</summary>
 
   <description>
     <p>
@@ -15,15 +16,29 @@
       low latency over your network. The stream arrives at this screen's resolution and refresh
       rate, without scaling.
     </p>
+    <p xml:lang="de">
+      Mit Punktfunk spielst du über dein Netzwerk mit geringer Latenz die Spiele eines Computers,
+      auf dem der Punktfunk-Host läuft, und nutzt seinen Desktop. Der Stream kommt in der Auflösung
+      und Bildwiederholrate dieses Bildschirms an, ohne Skalierung.
+    </p>
     <p>
       You need the Punktfunk host on the computer you stream from. It runs on Linux and Windows.
     </p>
+    <p xml:lang="de">
+      Auf dem Computer, von dem du streamst, brauchst du den Punktfunk-Host. Er läuft unter Linux
+      und Windows.
+    </p>
     <ul>
       <li>Hardware decoding with Vulkan Video or VA-API: H.264, HEVC and AV1, with HDR</li>
+      <li xml:lang="de">Hardware-Decodierung mit Vulkan Video oder VA-API: H.264, HEVC und AV1, mit HDR</li>
       <li>A controller interface for the couch and the Steam Deck</li>
+      <li xml:lang="de">Eine Controller-Oberfläche fürs Sofa und das Steam Deck</li>
       <li>Gamepads, including the DualSense touchpad, motion, adaptive triggers and lightbar</li>
+      <li xml:lang="de">Gamepads, beim DualSense mit Touchpad, Bewegungssensor, adaptiven Triggern und Lightbar</li>
       <li>Game audio and your microphone</li>
+      <li xml:lang="de">Spielaudio und dein Mikrofon</li>
       <li>Finds hosts on your network and pairs with a PIN</li>
+      <li xml:lang="de">Findet Hosts in deinem Netzwerk und koppelt per PIN</li>
     </ul>
   </description>
 
@@ -32,18 +47,22 @@
   <screenshots>
     <screenshot type="default">
       <caption>Hosts on your network</caption>
+      <caption xml:lang="de">Hosts in deinem Netzwerk</caption>
       <image>https://git.unom.io/unom/punktfunk/raw/branch/main/packaging/flatpak/screenshots/hosts.png</image>
     </screenshot>
     <screenshot>
       <caption>A host's game library</caption>
+      <caption xml:lang="de">Die Spielebibliothek eines Hosts</caption>
       <image>https://git.unom.io/unom/punktfunk/raw/branch/main/packaging/flatpak/screenshots/library.png</image>
     </screenshot>
     <screenshot>
       <caption>Pairing with a PIN</caption>
+      <caption xml:lang="de">Koppeln per PIN</caption>
       <image>https://git.unom.io/unom/punktfunk/raw/branch/main/packaging/flatpak/screenshots/pair.png</image>
     </screenshot>
     <screenshot>
       <caption>Settings</caption>
+      <caption xml:lang="de">Einstellungen</caption>
       <image>https://git.unom.io/unom/punktfunk/raw/branch/main/packaging/flatpak/screenshots/settings.png</image>
     </screenshot>
   </screenshots>

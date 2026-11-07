@@ -47,13 +47,13 @@ which Inno gives us exactly (`<AppId>_is1`).
 | `handler.mjs` | The three endpoints. Pure `(Request, catalogue) -> Response`, no I/O, no deps. |
 | `server.mjs` | node:http front. Loads the catalogue, reloads on mtime change. |
 | `build-data.mjs` | Generates `data/data.json` from the published release manifests. Build-time only. |
-| `test.mjs` | 28 checks driving `handler.mjs` directly. |
+| `test.mjs` | 30 checks driving `handler.mjs` directly. |
 | `compose.production.yml` | The unom-1 service. |
 
 ## How it runs
 
 ```
-Gitea releases (manifest trio per stable tag)
+Gitea releases (manifests per stable tag)
         │  build-data.mjs   ← walks ALL releases, no local state   [CI, Linux job]
         ▼
    data/data.json (~8 KB)   ← rsynced to unom-1 on each stable tag
@@ -91,7 +91,7 @@ lost deployment is one command away and nothing can drift.
 ```bash
 npm install
 npm run build:local     # data/data.json from ../*.yaml (single version — fine for dev)
-npm test                # 28 checks, no network, no server
+npm test                # 30 checks, no network, no server
 npm start               # http://localhost:3240
 ```
 
@@ -153,4 +153,4 @@ curl -s -X POST https://winget.punktfunk.unom.io/manifestSearch \
 
 > Releases published before winget support shipped have no manifests attached, so `npm run build`
 > skips them. Until the first stable tag lands with them, build with `--local ..` to serve the
-> checked-in manifests, or backfill the manifest trio onto an existing release.
+> checked-in manifests, or backfill the manifests onto an existing release.
