@@ -1568,9 +1568,9 @@ mod tests {
             ..Default::default()
         };
         let live = badge(Some(&missing), Some(&d("downloading", Some(1000)))).unwrap();
-        assert_eq!((live.icon, live.text.as_str()), ("download", "42 %"));
+        assert_eq!((live.icon, live.text.as_str()), ("download", "42%"));
         let paused = badge(Some(&missing), Some(&d("paused", Some(1000)))).unwrap();
-        assert_eq!((paused.icon, paused.text.as_str()), ("pause", "42 %"));
+        assert_eq!((paused.icon, paused.text.as_str()), ("pause", "42%"));
         assert_eq!(
             badge(Some(&missing), Some(&d("queued", None)))
                 .unwrap()
@@ -1639,7 +1639,7 @@ mod tests {
         assert_eq!(GameEnd::from_status(403), GameEnd::Expired);
         assert_eq!(
             GameEnd::NotRunning.notice("Hades"),
-            "Hades isn't running any more."
+            "Hades isn't running anymore."
         );
     }
 
