@@ -329,12 +329,12 @@ public enum ConsoleJSON {
 
     /// `{"req", "games": [LibraryGame]}` from this client's catalog — the desktop service's
     /// `to_model` mapping, under the `FetchLibrary` command's `req`. Without `stats` the Recent
-    /// and Most played sorts fall back to host order.
+    /// and Most played sorts fall back to host order. `overrides` only when the host set some.
     public static func libraryGames(_ req: Any, _ games: [GameEntry]) -> String {
         string([
             "req": req,
             "games": games.map { g -> [String: Any] in
-                [
+                var row: [String: Any] = [
                     "id": g.id, "title": g.title, "store": g.store,
                     "launcher": g.role == "launcher",
                     "icon": g.icon.flatMap { validIconToken($0) ? $0 : nil } ?? "",
@@ -354,6 +354,10 @@ public enum ConsoleJSON {
                         return o
                     } ?? NSNull(),
                 ]
+                if let o = g.overrides, let data = try? JSONEncoder().encode(o) {
+                    row["overrides"] = try? JSONSerialization.jsonObject(with: data)
+                }
+                return row
             },
         ])
     }

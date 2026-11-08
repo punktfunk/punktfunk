@@ -295,8 +295,8 @@ mod session_main {
     /// Clipboard decision, then [`params_from_spec`].
     ///
     /// `clipboard_override` is the spawner's per-host decision. `None` reads the
-    /// record this pin resolves to. `display_hdr` is the selected output's HDR
-    /// volume on Windows.
+    /// record this pin resolves to. The launched game's overrides come from this pin's
+    /// cached library. `display_hdr` is the selected output's HDR volume on Windows.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn session_params(
         settings: &trust::Settings,
@@ -319,12 +319,10 @@ mod session_main {
                 .resolve(Some(&trust::hex(&pin)), &addr, port)
                 .is_some_and(|h| h.clipboard_sync)
         });
-        let spec = ResolvedSpec {
-            settings: settings.clone(),
-            clipboard,
-            preset,
-            preset_id,
-        };
+        let overrides = launch
+            .as_deref()
+            .and_then(|game| pf_client_core::library_cache::overrides(&trust::hex(&pin), game));
+        let spec = ResolvedSpec::new(settings.clone(), clipboard, preset, preset_id, overrides);
         params_from_spec(
             spec,
             addr,

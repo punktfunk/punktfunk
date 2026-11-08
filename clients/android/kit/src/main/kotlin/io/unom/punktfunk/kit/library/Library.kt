@@ -126,6 +126,8 @@ data class GameEntry(
     val stats: GameStats? = null,
     /** A title a plugin installs. Null is installed, as every other title is. */
     val install: TitleInstall? = null,
+    /** What the host sets for this game's stream; null from an older host or when it sets none. */
+    val overrides: GameOverrides? = null,
 ) {
     val isCustom: Boolean get() = store == "custom"
 
@@ -277,7 +279,7 @@ enum class InstallAction {
 
 /** A tile's mark for a title's files; an installed title has none. Same words as the Rust tiles. */
 data class TileBadge(
-    /** `download`, `pause` or `alert`. */
+    /** `download`, `pause` or `alert`; `host` marks the host's stream settings. */
     val icon: String,
     /** `42 %`, `26 GB`, `Not installed`, `Queued`. */
     val text: Say,
@@ -843,6 +845,7 @@ object LibraryClient {
                             freeBytes = if (i.has("free_bytes")) i.optLong("free_bytes") else null,
                         )
                     },
+                    overrides = GameOverrides.from(o.optJSONObject("overrides")),
                 ),
             )
         }

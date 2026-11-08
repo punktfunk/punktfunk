@@ -44,6 +44,8 @@ pub mod error;
 pub mod fec;
 /// cbindgen:ignore
 pub mod fp;
+/// cbindgen:ignore
+pub mod game_overrides;
 // The stats overlay every client draws: window, snapshot, formatter. `punktfunk-ffi` exports it.
 /// cbindgen:ignore
 pub mod hud;

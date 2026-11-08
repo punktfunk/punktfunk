@@ -11,6 +11,10 @@ import {
 	SelectValue,
 } from "@/components/ui/select";
 import { m } from "@/paraglide/messages";
+import { storeLabel } from "../../helpers";
+import { storeOf } from "../../overrides";
+import { useSourceNames } from "../../Sources";
+import { StreamControls } from "../../Stream";
 import { Group, ReadRow, TextField } from "../fields";
 import type { TabProps } from "./types";
 
@@ -27,26 +31,45 @@ export function describeLaunch(launch: LaunchSpec | null | undefined): string {
 	}
 }
 
-/** Launch, role, process hints, audio, and the prep commands as read. */
+/** The host's stream settings for this game. A store of its own: each control saves, apart from
+ * the draft and Save, so a provider's title has them too. */
+const StreamGroup: FC<{ id: string }> = ({ id }) => {
+	const nameOf = useSourceNames();
+	return (
+		<Group title={m.library_stream_title()} help={m.library_stream_hint()}>
+			<StreamControls
+				kind="game"
+				id={id}
+				from={storeLabel(storeOf(id), nameOf)}
+			/>
+		</Group>
+	);
+};
+
+/** Launch, role, process hints, audio, the prep commands as read, and the stream settings. */
 export const LaunchTab: FC<TabProps> = ({ draft, set, readOnly, entry }) => {
+	const stream = entry && <StreamGroup id={entry.id} />;
 	if (readOnly) {
 		return (
-			<Group>
-				<div className="grid gap-4 @md:grid-cols-2">
-					<ReadRow
-						label={m.library_entry_launch_title()}
-						value={describeLaunch(entry?.launch)}
-					/>
-					<ReadRow
-						label={m.library_entry_role()}
-						value={
-							entry?.role === "launcher"
-								? m.library_entry_role_launcher()
-								: m.library_entry_role_game()
-						}
-					/>
-				</div>
-			</Group>
+			<>
+				<Group>
+					<div className="grid gap-4 @md:grid-cols-2">
+						<ReadRow
+							label={m.library_entry_launch_title()}
+							value={describeLaunch(entry?.launch)}
+						/>
+						<ReadRow
+							label={m.library_entry_role()}
+							value={
+								entry?.role === "launcher"
+									? m.library_entry_role_launcher()
+									: m.library_entry_role_game()
+							}
+						/>
+					</div>
+				</Group>
+				{stream}
+			</>
 		);
 	}
 	const kept = !draft.command.trim() && draft.launch?.kind !== "command";
@@ -83,6 +106,7 @@ export const LaunchTab: FC<TabProps> = ({ draft, set, readOnly, entry }) => {
 					</p>
 				</div>
 			</Group>
+			{stream}
 			<Group title={m.library_process_legend()} help={m.library_process_help()}>
 				<div className="grid gap-4 @lg:grid-cols-3">
 					<TextField

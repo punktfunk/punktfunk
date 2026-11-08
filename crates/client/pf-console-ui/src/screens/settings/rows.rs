@@ -1130,7 +1130,8 @@ fn start_in_value(ctx: &Ctx) -> String {
 }
 
 /// The row as drawn, keyed by its [`RowId`]. A row a known host's bound preset overrides
-/// carries the dot and a note naming preset, host and the value that host streams at: the
+/// carries the dot and a note naming preset, host and the value that host streams at; a row
+/// no preset touches but a game in the open library sets names host, game and value. The
 /// row keeps showing the global, which is what the console edits.
 pub fn row_spec(
     id: RowId,
@@ -1157,8 +1158,23 @@ pub fn row_spec(
         let value = row_spec_base(id, &under, presets).value.unwrap_or_default();
         spec.dot = true;
         spec.note = Some(console::console_prefs_override_note(preset, host, value));
+    } else if let Some((host, game, value)) = host_override(id, ctx) {
+        spec.dot = true;
+        spec.note = Some(console::console_prefs_host_note(host, game, value));
     }
     spec
+}
+
+/// The open library's first title whose host override sets `id`: `(host, title, value)`.
+/// Aspect stays the device's; the override sets lines.
+fn host_override(id: RowId, ctx: &Ctx) -> Option<(String, String, String)> {
+    let field = preset_field(id).filter(|_| id != RowId::Aspect)?;
+    let (fp, (title, value)) = ctx.library.find_game(|g| {
+        let value = pf_client_core::library::override_value(g.overrides.as_ref()?, field)?;
+        Some((g.title.clone(), value))
+    })?;
+    let host = ctx.hosts.iter().find(|h| h.fp_hex == fp)?;
+    Some((host.name.clone(), title, value))
 }
 
 /// The row's Lucide mark.

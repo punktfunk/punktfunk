@@ -265,30 +265,43 @@ pub struct PadBattery {
     pub charging: bool,
 }
 
+/// A pad kind by name, Automatic and Xbox 360 included.
+pub fn pad_name(pref: GamepadPref) -> &'static str {
+    match pref {
+        GamepadPref::Auto => pf_l10n::client::ring_pad_type_automatic(),
+        GamepadPref::Xbox360 => "Xbox 360",
+        p => kind_label(p),
+    }
+}
+
 impl PadInfo {
     /// Settings-list kind; `""` for a plain Xbox / standard pad.
     pub fn kind_label(&self) -> &'static str {
-        match self.pref {
-            GamepadPref::DualSense => "DualSense",
-            GamepadPref::DualSenseEdge => "DualSense Edge",
-            GamepadPref::DualShock4 => "DualShock 4",
-            GamepadPref::XboxOne => "Xbox One",
-            // SDL has no Elite GamepadType, but a pinned setting can carry it.
-            GamepadPref::XboxElite => "Xbox Elite Series 2",
-            GamepadPref::SteamDeck => "Steam Deck",
-            GamepadPref::SteamController => "Steam Controller",
-            GamepadPref::SteamController2 => "Steam Controller 2",
-            GamepadPref::SteamController2Puck => "Steam Controller 2 Puck",
-            GamepadPref::SwitchPro => "Switch Pro",
-            GamepadPref::EightBitDoUltimate2 => "8BitDo Ultimate 2",
-            GamepadPref::EightBitDoPro2 => "8BitDo Pro 2",
-            GamepadPref::EightBitDoPro3 => "8BitDo Pro 3",
-            GamepadPref::HoripadSteam => "HORIPAD for Steam",
-            GamepadPref::JoyConPair => pf_l10n::client::pad_kind_joycon_pair(),
-            GamepadPref::Switch2Pro => "Switch 2 Pro",
-            GamepadPref::Switch2GameCube => "GameCube (Switch 2)",
-            _ => "",
-        }
+        kind_label(self.pref)
+    }
+}
+
+fn kind_label(pref: GamepadPref) -> &'static str {
+    match pref {
+        GamepadPref::DualSense => "DualSense",
+        GamepadPref::DualSenseEdge => "DualSense Edge",
+        GamepadPref::DualShock4 => "DualShock 4",
+        GamepadPref::XboxOne => "Xbox One",
+        // SDL has no Elite GamepadType, but a pinned setting can carry it.
+        GamepadPref::XboxElite => "Xbox Elite Series 2",
+        GamepadPref::SteamDeck => "Steam Deck",
+        GamepadPref::SteamController => "Steam Controller",
+        GamepadPref::SteamController2 => "Steam Controller 2",
+        GamepadPref::SteamController2Puck => "Steam Controller 2 Puck",
+        GamepadPref::SwitchPro => "Switch Pro",
+        GamepadPref::EightBitDoUltimate2 => "8BitDo Ultimate 2",
+        GamepadPref::EightBitDoPro2 => "8BitDo Pro 2",
+        GamepadPref::EightBitDoPro3 => "8BitDo Pro 3",
+        GamepadPref::HoripadSteam => "HORIPAD for Steam",
+        GamepadPref::JoyConPair => pf_l10n::client::pad_kind_joycon_pair(),
+        GamepadPref::Switch2Pro => "Switch 2 Pro",
+        GamepadPref::Switch2GameCube => "GameCube (Switch 2)",
+        _ => "",
     }
 }
 

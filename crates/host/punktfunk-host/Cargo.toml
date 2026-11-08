@@ -17,7 +17,8 @@ omur = { git = "https://github.com/unom-io/omur", rev = "18981af0cd66380b06cbf52
 # `ureq-tls` is for `ctl`: ureq's own `TlsConfig` has no hook for a custom certificate verifier,
 # so the pinned operator client hands rustls a `ClientConfig` through core's shared glue — the same
 # path the tray and the desktop client already take. `quic` brings `tls` (and `PinVerify`) with it.
-punktfunk-core = { path = "../../core/punktfunk-core", features = ["quic", "ureq-tls"] }
+# `serde` reads and writes `GameOverrides` in `library-overrides.json` and on `GET /library`.
+punktfunk-core = { path = "../../core/punktfunk-core", features = ["quic", "ureq-tls", "serde"] }
 # Vendor libraries are dlopen'd at runtime, never linked: `libcuda.so.1` (`zerocopy::cuda`) and
 # NVML on every OS (`encoder_sessions`), so one binary runs with or without an NVIDIA driver.
 libloading = "0.9"

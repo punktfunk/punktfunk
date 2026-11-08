@@ -37,6 +37,7 @@ import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -224,14 +225,10 @@ fun LibraryScreen(
     var state by remember { mutableStateOf<LibState>(LibState.Loading) }
     // A launch (connect) in flight: shows an overlay + gates the pad so a second press can't dial twice.
     var launching by remember { mutableStateOf(false) }
-    // The preset every launch off this shelf runs with, resolved ONCE per shelf by the same rule
-    // the host-list connect uses: this card's pin as the one-off, else the host's binding, else the
-    // globals. Resolved here rather than per launch so a preset edited mid-browse cannot make two
-    // titles on one shelf stream differently.
-    val preset = remember(host.id, pinnedPresetId) {
-        PresetStore(context).resolveFor(host, pinnedPresetId)
-    }
-    val streamSettings = remember(settings, preset) { settings.effectiveFor(preset) }
+    // A launch resolves its preset as every connect does ([PresetStore.resolveFor]): this card's
+    // pin, else the title's binding, else the host's. [preset] is the shelf's, for its title.
+    val presetStore = remember { PresetStore(context) }
+    val preset = remember(host.id, pinnedPresetId) { presetStore.resolveFor(host, pinnedPresetId) }
     val knownHostStore = remember { KnownHostStore(context) }
     val services = remember { HostServices(knownHostStore, JniHostNative(context)) }
     // The profile picker a launch waits on.
@@ -269,9 +266,9 @@ fun LibraryScreen(
     )
 
     // Dial through [HostServices.dial] on the pinned trust and the profile's unlock, booting
-    // straight into this title (the host resolves `launch` = its library id). A grid tap and A on a
-    // centred cover share this one launch. [link] names the profile to play as; [redial] marks the
-    // one dial [ProfileRetry] grants.
+    // straight into this title (the host resolves `launch` = its library id) with its preset and
+    // the host's overrides for it. A grid tap and A on a centred cover share this one launch.
+    // [link] names the profile to play as; [redial] marks the one dial [ProfileRetry] grants.
     fun launch(identity: ClientIdentity, game: GameEntry, link: String? = null, redial: Boolean = false) {
         if (launching) return
         launching = true
@@ -297,13 +294,16 @@ fun LibraryScreen(
                 }
                 return@launch
             }
+            val launchId = game.id.takeUnless { game.isDesktop }
+            val launchPreset = presetStore.resolveFor(host, pinnedPresetId, launchId)
             val spec = DialSpec(
-                streamSettings, identity, host.address, host.port, host.fpHex,
-                launch = game.id.takeUnless { game.isDesktop },
+                settings.effectiveFor(launchPreset), identity, host.address, host.port, host.fpHex,
+                launch = launchId,
                 dialer = "touch/library",
-                preset = preset,
+                preset = launchPreset,
                 profile = choice.id,
                 promptsUnlock = promptsUnlock(context),
+                overrides = game.overrides,
             )
             val hooks = touchUnlockHooks(context, identity, host, ask = { ask ->
                 unlockAsk = ask
@@ -905,7 +905,12 @@ private fun TouchPoster(
                     }
                 } else if (badge != null) {
                     Box(Modifier.fillMaxSize().padding(6.dp), contentAlignment = Alignment.TopEnd) {
-                        FilesBadge(badge)
+                        PosterBadge(badge)
+                    }
+                }
+                game.overrides?.summaryWords(context.resources)?.let { words ->
+                    Box(Modifier.fillMaxSize().padding(6.dp), contentAlignment = Alignment.BottomStart) {
+                        PosterBadge(TileBadge("host", say(R.string.lib_host_override, words)))
                     }
                 }
                 Box(Modifier.fillMaxSize().padding(6.dp), contentAlignment = Alignment.TopStart) {
@@ -988,9 +993,12 @@ private fun TouchPoster(
     }
 }
 
-/** A title's files on its tile: `42 %` downloading, paused, failed, or the size to download. */
+/**
+ * A mark on a tile: its files (`42 %` downloading, paused, failed, the size to download) or what
+ * the host sets for its stream (`host`). One line; a narrow tile cuts it short.
+ */
 @Composable
-private fun FilesBadge(badge: TileBadge) {
+private fun PosterBadge(badge: TileBadge) {
     Row(
         verticalAlignment = Alignment.CenterVertically,
         modifier = Modifier
@@ -1002,6 +1010,7 @@ private fun FilesBadge(badge: TileBadge) {
             when (badge.icon) {
                 "pause" -> Icons.Filled.Pause
                 "alert" -> Icons.Filled.Warning
+                "host" -> Icons.Filled.Tune
                 else -> Icons.Filled.Download
             },
             contentDescription = null,
@@ -1013,6 +1022,8 @@ private fun FilesBadge(badge: TileBadge) {
             style = MaterialTheme.typography.labelSmall,
             fontWeight = FontWeight.SemiBold,
             color = Color.White,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
             modifier = Modifier.padding(start = 4.dp),
         )
     }

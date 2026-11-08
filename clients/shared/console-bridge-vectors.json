@@ -66,6 +66,9 @@
     "GamesPush": [
       {"req": {"host": "ab12", "epoch": 3}, "games": [
         {"id": "steam:570", "title": "Dota 2", "store": "steam", "launcher": false, "icon": "", "platform": null, "developer": null, "year": null, "genres": [], "stats": null, "running": false, "install": null}
+      ]},
+      {"req": {"host": "ab12", "epoch": 3}, "games": [
+        {"id": "steam:1091500", "title": "Cyberpunk 2077", "store": "steam", "launcher": false, "icon": "", "platform": null, "developer": null, "year": null, "genres": [], "stats": null, "running": false, "install": null, "overrides": {"name": "1080p60 DualSense", "lines": 1080, "hz": 60, "gamepad": "dualsense"}}
       ]}
     ],
     "DownloadsPush": [

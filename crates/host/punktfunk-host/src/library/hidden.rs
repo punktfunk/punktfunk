@@ -36,7 +36,7 @@ pub(crate) fn hidden_ids() -> HashSet<String> {
 
 /// `library.changed` source. A missing `:` yields the whole id, not `""` —
 /// a blank source matches no cache key.
-fn store_of(id: &str) -> &str {
+pub(super) fn store_of(id: &str) -> &str {
     id.split_once(':').map_or(id, |(store, _)| store)
 }
 

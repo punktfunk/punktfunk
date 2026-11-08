@@ -1,6 +1,6 @@
 ---
 title: Your game library
-description: Fill the host's game library from your launchers, add a game by hand, and launch a title from a client, Moonlight, a link or the command line.
+description: Fill the host's game library from your launchers, add a game by hand, set how a game streams, and launch a title from a client, Moonlight, a link or the command line.
 ---
 
 Fill the host's game library once, and every client, Moonlight and the web console can launch
@@ -125,6 +125,47 @@ Where the game opens (your desktop, a gamescope session, or a headless session o
 display policy: see [Dedicated game sessions](/docs/virtual-displays#dedicated-game-sessions).
 Whether quitting the game ends the session, and the reverse, is under
 [When a game ends](/docs/virtual-displays#when-a-game-ends-and-when-a-session-does).
+
+## Stream settings for a game
+
+Set how a game streams once on the host, and every device that launches it follows. On the game's
+page, **Launch** → **Stream** has **Use**, **Resolution**, **Refresh rate**, **HDR** and
+**Controller**, each **Device decides** until you change it. **Use** picks **Custom**, a shared
+override or **New shared override…**. A change saves right away, even on a title a plugin syncs.
+
+A value you set wins over the device's own pick, within what the device can show. The resolution
+stays within what it decodes, and at or below its screen unless **Also on smaller screens** is
+ticked. The refresh rate stays at or below the screen's; HDR **On** reaches only an HDR screen.
+The width follows the screen's shape: a 16:10 laptop under **1080p** streams 1728×1080.
+
+### Shared overrides
+
+A shared override is a named set of these rows, such as *1080p60 DualSense*. Editing it changes
+every game that uses it.
+
+- **Make one** with **New shared override…**, or in **Shared overrides** on the **Library** page.
+- **Several games:** **Select games** on **Library**, tick them, then **Use shared override…**.
+- **A whole source:** its **Settings** in **Game sources** has the same group, **Stream, for every
+  Lutris title**. A game's own setting wins over it, **Device decides** included; **Use** →
+  **Same as Lutris** follows the source again.
+- **Delete one** in **Shared overrides**. Its games go back to their source's settings, or to
+  **Device decides**.
+
+For example, set a demanding game's **Resolution** to **4K**, and give three couch games a shared
+override *1080p60 DualSense*. A 4K TV plays the first in 4K and a 1440p monitor in 1440p; a Steam
+Deck plays the three at 1280×800 and 60 Hz. Moving them to 1440p later is one edit.
+
+### When the settings apply
+
+They apply when a device connects to launch the game, from a Punktfunk library, a link or
+`punktfunk launch`. A game started inside a running stream, on its desktop, in Steam or from the
+library, keeps that stream's settings until the next such connect. Moonlight doesn't use them.
+
+Each app says what the host set: see [Presets and links](/docs/presets-and-links#using-a-preset).
+An app that doesn't read them (an older version, or one that hasn't loaded the library yet) still
+gets the controller and any lower resolution, refresh rate or HDR **Off**; the host never raises
+what a device asked for. The host keeps them in `library-overrides.json` beside `library.json`;
+seats use the box's, set on your own **Library** page.
 
 ## Ending a game
 

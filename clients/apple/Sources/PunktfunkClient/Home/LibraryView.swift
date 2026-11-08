@@ -1322,6 +1322,9 @@ struct GameCard: View {
             .overlay(alignment: .topTrailing) {
                 if isRunning { RunningBadge() } else if let badge { FilesBadge(badge: badge) }
             }
+            .overlay(alignment: .bottomLeading) {
+                if let line = game.overrides?.hostLine { HostOverrideBadge(line: line) }
+            }
     }
 }
 

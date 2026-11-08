@@ -396,8 +396,8 @@ system-range user, `pf-seat-<n>`, with a logind session of its own, a headless c
   other than the owner's also finds the box's library there, its `PUNKTFUNK_LIBRARY_DIR`.
 - **The box's library.** The owner's host writes the library; its plugins scan the owner's home.
   From the owner's `~/.config/punktfunk` the daemon copies `library.json`,
-  `library-hidden.json`, `library-metadata.json`, `library-picks.json`, `library-scanners.json`
-  and `library-metadata/` to `library/`, `root:punktfunk` `0640`, within 2 seconds of a change,
+  `library-hidden.json`, `library-metadata.json`, `library-overrides.json`, `library-picks.json`,
+  `library-scanners.json` and `library-metadata/` to `library/`, `root:punktfunk` `0640`, within 2 seconds of a change,
   and from there into each seat's trust copy. `plugin-run/plugin-grants.json` goes with them, and
   so does the firmware plugins staged, `plugin-state/<provider>/firmware/<platform>/<file>` at
   exactly that depth, up to 1 GiB a file. Nothing else of `plugin-run` or `plugin-state` is read:

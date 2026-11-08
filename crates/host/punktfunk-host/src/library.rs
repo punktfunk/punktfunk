@@ -27,6 +27,7 @@ pub mod downloads;
 mod hidden;
 mod launch;
 mod metadata;
+mod overrides;
 mod scanners;
 mod stats;
 
@@ -36,6 +37,7 @@ pub use detect::*;
 pub use hidden::*;
 pub use launch::*;
 pub use metadata::*;
+pub use overrides::*;
 pub use scanners::*;
 pub use stats::*;
 
@@ -271,6 +273,11 @@ pub struct GameEntry {
     /// time from `library-stats.json`, never stored on the entry.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stats: Option<EntryStats>,
+    /// The stream settings this host sets for the title (`overrides.rs`), resolved: its own, a
+    /// shared override's with that one's `name`, or its source's. Joined at read time.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(value_type = Option<GameOverridesSchema>)]
+    pub overrides: Option<punktfunk_core::game_overrides::GameOverrides>,
     /// Catalog ids a metadata source matches on (`steam`, `gog`, `libretro`, `sgdb` → value),
     /// set by the plugin that lists the entry. Not sent to paired clients.
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
@@ -435,11 +442,12 @@ pub(crate) fn sorted_games() -> std::sync::Arc<Vec<GameEntry>> {
 }
 
 /// Merge every enabled source and the custom entries, sorted by [`sort_key`], each
-/// carrying its play stats and what Art & Metadata sources fill. Split out so the
-/// two public views differ only in how they apply the hidden set.
+/// carrying its play stats, its game overrides and what Art & Metadata sources fill. Split
+/// out so the two public views differ only in how they apply the hidden set.
 fn collect_games() -> Vec<GameEntry> {
     let off = disabled_scanners();
     let stats = game_stats();
+    let overrides = load_overrides();
     let fills = Fills::load();
     // Manual entries always contribute; a provider's follow its toggle and [`source_off`].
     let mut games: Vec<GameEntry> = load_custom()
@@ -449,6 +457,7 @@ fn collect_games() -> Vec<GameEntry> {
         .collect();
     for g in &mut games {
         g.stats = stats.get(&g.id).map(|t| t.entry(None));
+        g.overrides = overrides.resolve(&g.id);
         fills.apply(g);
     }
     games.sort_by_cached_key(sort_key);
@@ -502,6 +511,7 @@ mod tests {
             detect: DetectSpec::default(),
             on_window: OnWindow::default(),
             stats: None,
+            overrides: None,
             ids: BTreeMap::new(),
             filled: BTreeMap::new(),
             install: None,

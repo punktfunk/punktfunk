@@ -52,6 +52,8 @@ pub(crate) struct Game {
     /// names no mark or one we don't ship. Resolved at decode time rather than per render: the
     /// shelf re-renders on every art arrival.
     pub(crate) icon: Option<EncodedImage>,
+    /// [`library::host_line`] for the entry's overrides; `None` when the host sets nothing.
+    pub(crate) host: Option<String>,
 }
 
 /// Streaming the desktop was the host tile's click, two pages back from a shelf. Built here
@@ -64,6 +66,7 @@ fn desktop_entry() -> Game {
         launcher: false,
         platform: None,
         icon: None,
+        host: None,
     }
 }
 
@@ -167,6 +170,10 @@ pub(crate) fn start_fetch(ctx: &Arc<AppCtx>, set_library: &AsyncSetState<Library
                 state.phase = LibraryPhase::Empty;
                 return publish(&state);
             }
+            // The connect that launches a title reads its game overrides from here.
+            if let Some(fp) = target.host.fp_hex.as_deref() {
+                pf_client_core::library_cache::store(fp, &games);
+            }
 
             // Seed cached posters; queue the art pipeline for the rest.
             let base = library::base_url(
@@ -198,6 +205,7 @@ pub(crate) fn start_fetch(ctx: &Arc<AppCtx>, set_library: &AsyncSetState<Library
                         launcher: g.is_launcher(),
                         platform: g.platform.clone(),
                         icon: super::launcher_icons::image(g.icon_token()),
+                        host: g.overrides.as_ref().and_then(library::host_line),
                     })
                     .collect(),
             );
@@ -323,7 +331,8 @@ fn group_heading(pal: &Palette, label: &str) -> View {
 }
 
 /// One poster tile: the artwork (or a monogram placeholder while it loads) with the store
-/// badge overlaid top-left, the title below, tap-to-launch across the whole tile.
+/// badge overlaid top-left, the title below, then one line of what the host sets for it,
+/// tap-to-launch across the whole tile.
 #[allow(clippy::too_many_arguments)]
 fn poster_tile(
     pal: &Palette,
@@ -425,15 +434,26 @@ fn poster_tile(
         })
         .border_thickness(uniform(1.0));
 
+    let mut below: Vec<View> = vec![
+        framed.into(),
+        text(&game.title)
+            .font_size(12.0)
+            .text_wrapping(TextWrapping::Wrap)
+            .margin(edges(2.0, 6.0, 2.0, 0.0))
+            .into(),
+    ];
+    if let Some(line) = &game.host {
+        below.push(
+            muted(pal, line)
+                .font_size(11.0)
+                .text_trimming(TextTrimming::CharacterEllipsis)
+                .margin(edges(2.0, 2.0, 2.0, 0.0))
+                .into(),
+        );
+    }
     let tappable = on_tap(
         Border::new()
-            .content(vstack((
-                framed,
-                text(&game.title)
-                    .font_size(12.0)
-                    .text_wrapping(TextWrapping::Wrap)
-                    .margin(edges(2.0, 6.0, 2.0, 0.0)),
-            )))
+            .content(vstack(below))
             .background(hit_test_backstop()),
         tap,
     );

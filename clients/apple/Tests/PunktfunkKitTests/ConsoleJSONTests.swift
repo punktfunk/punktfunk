@@ -258,6 +258,12 @@ final class ConsoleJSONTests: XCTestCase {
         let wire = #"{"id": "steam:570", "store": "steam", "title": "Dota 2", "art": {}}"#
         let dota = try JSONDecoder().decode(GameEntry.self, from: Data(wire.utf8))
         try check("GamesPush", 0, ConsoleJSON.libraryGames(fetch, [dota]))
+        let cyberpunk = try JSONDecoder().decode(GameEntry.self, from: Data(#"""
+            {"id": "steam:1091500", "store": "steam", "title": "Cyberpunk 2077", "art": {},
+             "overrides": {"name": "1080p60 DualSense", "lines": 1080, "hz": 60,
+                           "gamepad": "dualsense"}}
+            """#.utf8))
+        try check("GamesPush", 1, ConsoleJSON.libraryGames(fetch, [cyberpunk]))
         let downloads = [
             HostDownload(
                 appID: "steam:570", state: "downloading", doneBytes: 1_048_576,

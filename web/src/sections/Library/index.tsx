@@ -1,6 +1,6 @@
 import { Link } from "@tanstack/react-router";
 import Section from "@unom/ui/section";
-import { Plus } from "lucide-react";
+import { Plus, SlidersHorizontal } from "lucide-react";
 import { type FC, useState } from "react";
 import { useGetPluginAccess } from "@/api/gen/plugin-access/plugin-access";
 import { usePluginsReachable } from "@/api/seat";
@@ -13,14 +13,21 @@ import { m } from "@/paraglide/messages";
 import { LibraryGridSection } from "./LibraryGrid";
 import { MetadataSourcesSection } from "./MetadataSources";
 import { SourcesSection, useSourceNames } from "./Sources";
+import { SharedOverridesDialog } from "./Stream";
 
 type Tab = "games" | "sources";
 
-/** The title, which is whose library it is, and **Add**. */
-export const LibraryHeader: FC = () => (
+/** The title, which is whose library it is, **Shared overrides** and **Add**. */
+export const LibraryHeader: FC<{ onShared?: () => void }> = ({ onShared }) => (
 	<div className="flex flex-wrap items-center justify-between gap-4">
 		<SeatTitle title={m.library_title()} />
 		<div className="flex items-center gap-3">
+			{onShared && (
+				<Button variant="outline" onClick={onShared}>
+					<SlidersHorizontal className="size-4" />
+					{m.library_stream_shared()}
+				</Button>
+			)}
 			<Button asChild>
 				<Link to="/library/$gameId" params={{ gameId: "new" }}>
 					<Plus className="size-4" />
@@ -45,6 +52,7 @@ const Library: FC = () => {
 	const [tab, setTab] = useState<Tab>("games");
 	// Which provider (if any) the games are narrowed to.
 	const [providerFilter, setProviderFilter] = useState<string | null>(null);
+	const [shared, setShared] = useState(false);
 	const nameOf = useSourceNames();
 	const reachable = usePluginsReachable();
 	// Folder and install requests wait under Sources; the tab says so while Games is open.
@@ -57,7 +65,8 @@ const Library: FC = () => {
 	return (
 		<Section maxWidth={false}>
 			<div className="flex flex-col gap-card">
-				<LibraryHeader />
+				<LibraryHeader onShared={() => setShared(true)} />
+				{shared && <SharedOverridesDialog onClose={() => setShared(false)} />}
 
 				<Tabs value={tab} onValueChange={(v) => setTab(v as Tab)}>
 					<TabsList>

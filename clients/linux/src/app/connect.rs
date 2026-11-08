@@ -419,6 +419,14 @@ impl AppModel {
                     body.push_str("\n\n");
                     body.push_str(&client::link_confirm_launch(id));
                 }
+                if let Some(line) = plan
+                    .overrides
+                    .as_ref()
+                    .and_then(pf_client_core::library::host_line)
+                {
+                    body.push_str("\n\n");
+                    body.push_str(&line);
+                }
                 body.push_str("\n\n");
                 body.push_str(client::link_confirm_guessable());
                 let dialog = adw::AlertDialog::new(Some(client::link_confirm_title()), Some(&body));

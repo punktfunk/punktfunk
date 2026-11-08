@@ -1212,6 +1212,7 @@ mod tests {
             running: false,
             endable: false,
             install: None,
+            overrides: None,
         }
     }
 

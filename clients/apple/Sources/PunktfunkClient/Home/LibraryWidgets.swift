@@ -54,6 +54,24 @@ struct RunningBadge: View {
     }
 }
 
+/// The host sets this title's stream: a glyph on the tile, the "Host: …" line for a screen
+/// reader and a pointer.
+struct HostOverrideBadge: View {
+    let line: String
+
+    var body: some View {
+        Image(systemName: "slider.horizontal.3")
+            .font(.geist(11, .semibold, relativeTo: .caption2))
+            .foregroundStyle(.primary)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 3)
+            .background(.ultraThinMaterial, in: Capsule())
+            .padding(6)
+            .help(line)
+            .accessibilityLabel(line)
+    }
+}
+
 /// A title's files on its tile: `42 %` downloading, paused, failed, or the size to download.
 struct FilesBadge: View {
     let badge: TileBadge

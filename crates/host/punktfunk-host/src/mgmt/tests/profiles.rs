@@ -63,9 +63,11 @@ async fn a_plugin_reads_who_is_on_the_box_and_nothing_more() {
 }
 
 /// `?profile=` points the save routes at that profile's seat: one with none here, the owner's
-/// included, is 404 before any copy or file is touched.
+/// included, is 404 before any copy or file is touched. The env lock keeps a seat test's
+/// library dir from making this host a seat host.
 #[tokio::test]
 async fn a_save_route_for_a_profile_without_a_seat_is_404() {
+    let _env = ConfigDirOverride::new();
     let state = state_with_profiles("saves");
     let owner = state.profiles.get().unwrap().owner_id().unwrap();
     let app = test_app(state, None);

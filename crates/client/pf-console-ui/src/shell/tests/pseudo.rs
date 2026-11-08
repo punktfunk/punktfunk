@@ -427,6 +427,7 @@ fn game(i: usize, title: &str) -> crate::library::LibraryGame {
         running: false,
         endable: false,
         install: None,
+        overrides: None,
     }
 }
 

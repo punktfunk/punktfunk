@@ -375,7 +375,7 @@ struct StreamState {
     redials: u32,
     ready_announced: bool,
     mode_line: String,
-    /// Settings preset this session resolved; `None` = global defaults, nothing shown.
+    /// The stats line's preset field ([`SessionParams::hud_preset`]); `None` shows nothing.
     preset: Option<String>,
     /// Host↔client clock offset (`None` until Connected). Loaded per present so a
     /// mid-stream re-sync keeps e2e honest after an NTP step.

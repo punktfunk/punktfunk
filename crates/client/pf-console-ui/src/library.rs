@@ -92,6 +92,9 @@ pub struct LibraryGame {
     /// A title a plugin installs. `None` is installed, as every other title is.
     #[serde(default)]
     pub install: Option<TitleFiles>,
+    /// What the host set for this title ([`pf_client_core::library::GameEntry::overrides`]).
+    #[serde(default)]
+    pub overrides: Option<pf_client_core::library::GameOverrides>,
 }
 
 /// What a shell that reads `/status` itself pushes: `{"downloads": [...], "grants": 255}`.
@@ -516,6 +519,16 @@ impl LibraryShared {
         self.0.lock().unwrap().generation
     }
 
+    /// The fetch's host and the first title `f` answers for, without copying the shelf.
+    pub(crate) fn find_game<T>(
+        &self,
+        f: impl FnMut(&LibraryGame) -> Option<T>,
+    ) -> Option<(String, T)> {
+        let s = self.0.lock().unwrap();
+        let found = s.games.iter().find_map(f)?;
+        Some((s.req.host.clone(), found))
+    }
+
     pub(crate) fn snapshot(&self) -> LibrarySnapshot {
         let s = self.0.lock().unwrap();
         LibrarySnapshot {
@@ -595,6 +608,7 @@ fn desktop_tile() -> LibraryGame {
         running: false,
         endable: false,
         install: None,
+        overrides: None,
     }
 }
 
@@ -666,6 +680,7 @@ mod tests {
             running: false,
             endable: false,
             install: None,
+            overrides: None,
         };
         let shared = LibraryShared::default();
         shared.set_games(
@@ -709,6 +724,7 @@ mod tests {
             running: false,
             endable: false,
             install: None,
+            overrides: None,
         };
         let shared = LibraryShared::default();
         shared.set_games(
@@ -790,6 +806,7 @@ mod tests {
                 running: false,
                 endable: false,
                 install: None,
+                overrides: None,
             }],
         );
         assert_eq!(shared.status_gen(), 0);
@@ -838,6 +855,7 @@ mod tests {
             running: false,
             endable: false,
             install: None,
+            overrides: None,
         };
         let shared = LibraryShared::default();
         shared.set_games_cached(&shared.req(), vec![g("Celeste"), g("Tunic")]);
@@ -890,6 +908,7 @@ mod tests {
                     running: false,
                     endable: false,
                     install: None,
+                    overrides: None,
                 })
                 .collect(),
         );
@@ -973,6 +992,7 @@ mod tests {
                 running: true,
                 endable: false,
                 install: None,
+                overrides: None,
             }],
         );
         assert_eq!(shared.snapshot().games[0].id, DESKTOP_ID);
@@ -1010,6 +1030,7 @@ mod tests {
                     running: false,
                     endable: false,
                     install: None,
+                    overrides: None,
                 })
                 .collect(),
         );

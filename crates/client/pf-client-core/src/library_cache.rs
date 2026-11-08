@@ -17,7 +17,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
-use crate::library::GameEntry;
+use crate::library::{GameEntry, GameOverrides};
 
 #[derive(Debug, Deserialize, Serialize)]
 pub struct CachedLibrary {
@@ -33,6 +33,18 @@ impl CachedLibrary {
         let now = SystemTime::now().duration_since(UNIX_EPOCH).ok()?.as_secs();
         now.checked_sub(self.fetched_at).map(Duration::from_secs)
     }
+
+    /// What the host set for `game`, `None` when it set nothing.
+    pub fn overrides(&self, game: &str) -> Option<GameOverrides> {
+        let g = self.games.iter().find(|g| g.id == game)?;
+        g.overrides.clone().filter(|o| !o.is_empty())
+    }
+}
+
+/// The launched game's overrides from this host's last-seen library. A cold deep link on a
+/// library never fetched gets none; the host still clamps the mode down at the handshake.
+pub fn overrides(fp_hex: &str, game: &str) -> Option<GameOverrides> {
+    load(fp_hex)?.overrides(game)
 }
 
 /// One resolution for every client-side cache: `$XDG_CACHE_HOME/punktfunk/<name>`,
@@ -145,5 +157,33 @@ mod tests {
             fetched_at: u64::MAX,
         };
         assert!(ahead.age().is_none());
+    }
+
+    /// The file's bytes keep a title's overrides, and the lookup finds them by id.
+    #[test]
+    fn a_cached_catalog_keeps_a_titles_overrides() {
+        let raw = r#"{"fetched_at":1,"games":[
+            {"id":"steam:570","store":"steam","title":"Dota 2","overrides":{"lines":1080,"gamepad":"dualsense"}},
+            {"id":"steam:70","store":"steam","title":"Half-Life","overrides":{"name":"Empty"}},
+            {"id":"steam:10","store":"steam","title":"Counter-Strike"}]}"#;
+        let cached: CachedLibrary = serde_json::from_str(raw).unwrap();
+        let back: CachedLibrary =
+            serde_json::from_slice(&serde_json::to_vec(&cached).unwrap()).unwrap();
+        let o = back.overrides("steam:570").expect("round-tripped");
+        assert_eq!(
+            (o.lines, o.gamepad.as_deref()),
+            (Some(1080), Some("dualsense"))
+        );
+        assert_eq!(
+            back.overrides("steam:70"),
+            None,
+            "a name alone sets nothing"
+        );
+        assert_eq!(back.overrides("steam:10"), None);
+        assert_eq!(
+            back.overrides("steam:1"),
+            None,
+            "a title the cache never listed"
+        );
     }
 }

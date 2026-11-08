@@ -343,7 +343,8 @@ internal object ConsoleJson {
     /**
      * `{"req", "games": [LibraryGame]}` from the Kotlin catalog — the desktop service's
      * `to_model` mapping, under the `FetchLibrary` command's `req`. Without `stats` the Recent
-     * and Most played sorts fall back to host order.
+     * and Most played sorts fall back to host order. `overrides` rides only when the host set
+     * some, for the launch hold's "Host: …" line.
      */
     fun libraryGames(req: JSONObject, games: List<GameEntry>): String {
         val out = JSONArray()
@@ -361,7 +362,8 @@ internal object ConsoleJson {
                     .put("genres", JSONArray(g.genres))
                     .put("stats", g.stats?.toJson() ?: JSONObject.NULL)
                     .put("running", false)
-                    .put("install", g.install?.let(::installJson) ?: JSONObject.NULL),
+                    .put("install", g.install?.let(::installJson) ?: JSONObject.NULL)
+                    .apply { g.overrides?.let { put("overrides", it.toJson()) } },
             )
         }
         return JSONObject().put("req", req).put("games", out).toString()

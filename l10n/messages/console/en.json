@@ -162,6 +162,7 @@
 	"console_prefs_advanced_changed_hint": "Some hidden settings differ from a fresh install; {button} shows them.",
 	"console_prefs_header_this_device": "This device",
 	"console_prefs_override_note": "Preset “{preset}” on {host}: {value}",
+	"console_prefs_host_note": "Set by {host} for {game}: {value}",
 	"console_hint_section": "Section",
 	"console_hint_rows": "Rows",
 	"console_hint_create": "Create…",

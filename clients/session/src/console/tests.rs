@@ -424,6 +424,7 @@ fn open_shelf(library: &LibraryShared, req: &RequestKey) {
         running: false,
         endable: false,
         install: None,
+        overrides: None,
     };
     library.set_games(req, vec![title]);
     library.set_running(&[library::RunningGame {
@@ -600,4 +601,21 @@ fn the_console_opens_where_the_target_or_the_policy_says() {
     let e = console_entry(None, &known, false, policy("stream"));
     assert!(matches!(e.entry, ConsoleEntry::Stream(ref r) if r.name == "Desk"));
     assert!(e.label.is_none() && e.seed.is_none());
+}
+
+/// The shell's titles keep what the host set for each, so the hold and the settings rows
+/// can say so.
+#[test]
+fn the_shell_model_keeps_a_titles_overrides() {
+    let games: Vec<library::GameEntry> = serde_json::from_str(
+        r#"[{"id":"steam:570","store":"steam","title":"Dota 2","overrides":{"lines":1080}},
+            {"id":"steam:70","store":"steam","title":"Half-Life"}]"#,
+    )
+    .unwrap();
+    let model = to_model(&games);
+    assert_eq!(
+        model[0].overrides.as_ref().and_then(|o| o.lines),
+        Some(1080)
+    );
+    assert!(model[1].overrides.is_none());
 }

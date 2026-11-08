@@ -8,6 +8,7 @@
 //! Wake cadence lives on [`WAKE_TIMEOUT_SECS`] / [`WAKE_RESEND_SECS`].
 
 use crate::deeplink::{DeepLink, HostResolution, Route};
+use crate::library::GameOverrides;
 use crate::presets::{PresetsFile, Resolution, StreamPreset};
 use crate::session::{Dial, Probes, SessionParams};
 use crate::settings::GamepadUi;
@@ -303,6 +304,9 @@ pub struct ConnectPlan {
     /// Both paths use the same resolver, so they cannot disagree.
     pub preset_override: Option<String>,
     pub settings: Settings,
+    /// What the host set for the launched game, from its cached library. The spec bakes the
+    /// HDR and pad into `settings`; the session fits the mode to the panel.
+    pub overrides: Option<GameOverrides>,
     /// Magic packet first; wake-and-wait if the dial fails. Off with no MAC, and when
     /// auto-wake is off — VPN hosts look offline when they aren't.
     pub wake: bool,
@@ -325,21 +329,28 @@ pub const DEFAULT_CONNECT_TIMEOUT_SECS: u64 = 15;
 
 impl ConnectPlan {
     /// Card-click plan. `one_off_preset`: `Some("")` forces the global defaults on a
-    /// bound host; `None` honors the binding. Loads the catalog and settings; use
-    /// [`ConnectPlan::resolve`] when the caller already holds them. The binding is
-    /// `host`'s own: its address may also name the other OS of a dual-boot box.
+    /// bound host; `None` honors the binding. Loads the catalog, settings and the host's
+    /// cached library; use [`ConnectPlan::resolve`] when the caller already holds them. The
+    /// binding is `host`'s own: its address may also name the other OS of a dual-boot box.
     pub fn for_host(
         host: &KnownHost,
         launch: Option<&str>,
         one_off_preset: Option<&str>,
     ) -> ConnectPlan {
-        Self::resolve(
+        let mut plan = Self::resolve(
             host,
             launch,
             one_off_preset,
             &PresetsFile::load(),
             &Settings::load(),
-        )
+        );
+        plan.overrides = plan.cached_overrides();
+        plan
+    }
+
+    /// The launched game's overrides from the pinned host's cached library.
+    fn cached_overrides(&self) -> Option<GameOverrides> {
+        crate::library_cache::overrides(self.host.fp_hex.as_deref()?, self.launch.as_deref()?)
     }
 
     /// Plan for a host the front-end already holds as values, not a stored [`KnownHost`].
@@ -370,13 +381,14 @@ impl ConnectPlan {
         // must follow this MAC, not the record's.
         plan.wake = plan.settings.auto_wake && !host.mac.is_empty();
         plan.host = host;
+        plan.overrides = plan.cached_overrides();
         plan
     }
 
     /// Same plan from stores the caller already holds — no disk, no clock, no
-    /// environment. Precedence is `trust::resolve_preset`'s, called rather than
-    /// restated: this path and [`effective_settings`] must not be able to disagree
-    /// about which preset a launch gets.
+    /// environment, so no game overrides: the callers that read disk add those. Precedence
+    /// is `trust::resolve_preset`'s, called rather than restated: this path and
+    /// [`effective_settings`] must not be able to disagree about which preset a launch gets.
     pub fn resolve(
         host: &KnownHost,
         launch: Option<&str>,
@@ -402,6 +414,7 @@ impl ConnectPlan {
             preset_override: one_off_preset.map(str::to_string),
             wake: settings.auto_wake && !host.mac.is_empty(),
             settings,
+            overrides: None,
             connect_timeout_secs: None,
             tofu: false,
             clipboard: host.clipboard_sync,
@@ -411,12 +424,13 @@ impl ConnectPlan {
 
     /// Spec for a first-party spawner so the session performs no store reads.
     pub fn spec(&self, clipboard: bool) -> ResolvedSpec {
-        ResolvedSpec {
-            settings: self.settings.clone(),
+        ResolvedSpec::new(
+            self.settings.clone(),
             clipboard,
-            preset: self.preset.as_ref().map(|p| p.name.clone()),
-            preset_id: self.preset.as_ref().map(|p| p.id.clone()),
-        }
+            self.preset.as_ref().map(|p| p.name.clone()),
+            self.preset.as_ref().map(|p| p.id.clone()),
+            self.overrides.clone(),
+        )
     }
 
     /// Session argv for this plan. Assembled once so shells cannot spawn different sessions.
@@ -581,6 +595,7 @@ pub fn plan_from_link(
                 catalog,
                 base,
             );
+            plan.overrides = plan.cached_overrides();
             // Known but never pinned: the session refuses without a pin. Hand back as
             // ConfirmUnknown so the front-end runs its trust flow.
             if plan.host.pin().is_none() {
@@ -879,9 +894,34 @@ pub struct ResolvedSpec {
     /// The preset's stable id, which the dial names to the host.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub preset_id: Option<String>,
+    /// What the host set for the launched game. Its HDR and pad are already in `settings`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub overrides: Option<GameOverrides>,
 }
 
 impl ResolvedSpec {
+    /// A spec over resolved `settings`. The host's HDR and pad replace the device's here,
+    /// before any probe in the session reads them; an older session that ignores
+    /// `overrides` still streams them.
+    pub fn new(
+        mut settings: Settings,
+        clipboard: bool,
+        preset: Option<String>,
+        preset_id: Option<String>,
+        overrides: Option<GameOverrides>,
+    ) -> ResolvedSpec {
+        if let Some(o) = &overrides {
+            settings.apply_game_overrides(o);
+        }
+        ResolvedSpec {
+            settings,
+            clipboard,
+            preset,
+            preset_id,
+            overrides,
+        }
+    }
+
     /// Write the spec somewhere the child can read, returning the path. A file, not
     /// a pipe: the session already takes a path, and a crashed spawner leaves
     /// something inspectable.
@@ -923,13 +963,14 @@ impl ResolvedSpec {
 
     /// Pump parameters for a direct connect. Same fill as
     /// [`ConnectPlan::session_params`]. Host, pin, launch, and timeout come from
-    /// the command line; this spec already holds settings, clipboard, and preset.
+    /// the command line; this spec already holds settings, clipboard, preset and overrides.
     pub fn session_params(&self, dial: Dial, probes: Probes) -> SessionParams {
         SessionParams::from_plan(
             &self.settings,
             self.clipboard,
             self.preset.clone(),
             self.preset_id.clone(),
+            self.overrides.as_ref(),
             dial,
             probes,
         )
@@ -1803,6 +1844,7 @@ mod tests {
                 fullscreen_on_stream: false,
                 ..Default::default()
             },
+            overrides: None,
             wake: true,
             connect_timeout_secs: None,
             tofu: false,
@@ -2013,18 +2055,24 @@ mod tests {
             clipboard: true,
             preset: Some("Work".into()),
             preset_id: Some("3f9a0c11e2b4".into()),
+            overrides: Some(GameOverrides {
+                lines: Some(1080),
+                gamepad: Some("dualsense".into()),
+                ..Default::default()
+            }),
         };
         let json = serde_json::to_string(&spec).unwrap();
         assert_eq!(serde_json::from_str::<ResolvedSpec>(&json).unwrap(), spec);
 
-        // No preset: the key is absent, not null.
+        // No preset, no overrides: the keys are absent, not null.
         let plain = ResolvedSpec {
             preset: None,
             preset_id: None,
+            overrides: None,
             ..spec.clone()
         };
         let json = serde_json::to_string(&plain).unwrap();
-        assert!(!json.contains("preset"));
+        assert!(!json.contains("preset") && !json.contains("overrides"));
         assert_eq!(serde_json::from_str::<ResolvedSpec>(&json).unwrap(), plain);
     }
 
@@ -2348,6 +2396,7 @@ mod tests {
                 fullscreen_on_stream: true,
                 ..Default::default()
             },
+            overrides: None,
             wake: false,
             connect_timeout_secs: Some(45),
             tofu: false,
@@ -2451,5 +2500,125 @@ mod tests {
             off.display_hdr.is_none(),
             "the volume stays off with HDR off"
         );
+    }
+
+    /// The host's overrides fit the asked mode to this panel and codec (the shared vectors
+    /// 1, 4, 5 and 8); their HDR and pad are in the spec's settings before a probe reads them.
+    #[test]
+    fn game_overrides_reach_the_hello() {
+        let raw = include_str!("../../../../clients/shared/game-override-vectors.json");
+        let file: serde_json::Value = serde_json::from_str(raw).expect("vectors parse");
+        let mode = |a: &serde_json::Value| {
+            let n = |i: usize| a[i].as_u64().expect("number") as u32;
+            Mode {
+                width: n(0),
+                height: n(1),
+                refresh_hz: n(2),
+            }
+        };
+        let probes = |native: Mode, hdr_enabled: bool| Probes {
+            mode: native,
+            identity: ("client".into(), "desk".into()),
+            vulkan: None,
+            force_software: Arc::default(),
+            gamepad: GamepadPref::Auto,
+            hdr_enabled,
+            display_hdr: None,
+            hevc_444_hardware: false,
+            stats_verbosity: StatsVerbosity::Normal,
+        };
+        let h = host(
+            "Desk",
+            "192.168.1.50",
+            "11111111-2222-4333-8444-555555555555",
+            &"ab".repeat(32),
+        );
+        let fit_rows = file["fit"].as_array().expect("fit rows");
+        for row in [0, 3, 4, 7].map(|i| &fit_rows[i]) {
+            let asked = mode(&row["mode"]);
+            let settings = Settings {
+                width: asked.width,
+                height: asked.height,
+                refresh_hz: asked.refresh_hz,
+                ..Default::default()
+            };
+            let mut plan = ConnectPlan::resolve(
+                &h,
+                Some("steam:570"),
+                None,
+                &PresetsFile::default(),
+                &settings,
+            );
+            plan.overrides = Some(GameOverrides {
+                lines: row["lines"].as_u64().map(|v| v as u32),
+                hz: row["hz"].as_u64().map(|v| v as u32),
+                beyond_screen: row["beyond_screen"].as_bool().unwrap_or(false),
+                ..Default::default()
+            });
+            let params = plan.session_params([9; 32], probes(mode(&row["native"]), false));
+            assert_eq!(params.mode, mode(&row["expect"]), "{}", row["why"]);
+            assert!(params.host_overrides);
+        }
+
+        let device = Settings {
+            codec: "av1".into(),
+            hdr_enabled: false,
+            gamepad: "xboxone".into(),
+            ..Default::default()
+        };
+        let mut plan = ConnectPlan::resolve(
+            &h,
+            Some("steam:570"),
+            None,
+            &PresetsFile::default(),
+            &device,
+        );
+        plan.overrides = Some(GameOverrides {
+            hdr: Some(true),
+            gamepad: Some("dualsense".into()),
+            ..Default::default()
+        });
+        let spec = plan.spec(false);
+        assert!(
+            spec.settings.hdr_enabled,
+            "the session's HDR gate reads this"
+        );
+        assert_eq!(
+            spec.settings.gamepad, "dualsense",
+            "the session's pad probe reads this"
+        );
+        assert!(
+            !plan.settings.hdr_enabled,
+            "the plan keeps the device's own"
+        );
+        let params = plan.session_params(
+            [9; 32],
+            probes(mode(&serde_json::json!([1920, 1080, 60])), true),
+        );
+        assert_ne!(params.video_caps & punktfunk_core::quic::VIDEO_CAP_HDR, 0);
+        assert_eq!(
+            params.hud_preset().as_deref(),
+            Some("set by the host for this game")
+        );
+        let named = SessionParams {
+            preset: Some("Work".into()),
+            ..params.clone()
+        };
+        assert_eq!(
+            named.hud_preset().as_deref(),
+            Some("Work \u{b7} set by the host for this game")
+        );
+
+        plan.overrides = None;
+        let params = plan.session_params(
+            [9; 32],
+            probes(mode(&serde_json::json!([1920, 1080, 60])), true),
+        );
+        assert_eq!(
+            params.video_caps & punktfunk_core::quic::VIDEO_CAP_HDR,
+            0,
+            "the device's off"
+        );
+        assert!(params.hud_preset().is_none());
     }
 }

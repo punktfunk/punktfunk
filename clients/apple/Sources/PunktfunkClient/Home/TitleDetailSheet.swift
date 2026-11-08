@@ -189,6 +189,7 @@ struct TitleDetailSheet: View {
     private var tvFacts: [Fact] {
         let rows: [(id: String, label: LocalizedStringResource, value: String?)] = [
             ("host", L10n.libFactHost, host?.displayName),
+            ("hostSets", L10n.libFactHostSets, game.overrides?.summary),
             ("developer", L10n.libFactDeveloper, game.developer),
             ("publisher", L10n.libFactPublisher, game.publisher == game.developer ? nil : game.publisher),
             ("released", L10n.libFactReleased, game.releaseYear.map { String($0) }),
@@ -218,8 +219,8 @@ struct TitleDetailSheet: View {
         }
     }
 
-    /// Store · platform, the credits, the genres (tags when there are none), then the player
-    /// count: a line only when it has something.
+    /// Store · platform, the credits, the genres (tags when there are none), the player count,
+    /// then what the host sets for it: a line only when it has something.
     private var facts: [String] {
         let credits = [
             game.developer, game.publisher == game.developer ? nil : game.publisher,
@@ -232,6 +233,7 @@ struct TitleDetailSheet: View {
             credits.compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " \u{b7} "),
             kinds.joined(separator: ", "),
             players ?? "",
+            game.overrides?.hostLine ?? "",
         ].filter { !$0.isEmpty }
     }
     #endif

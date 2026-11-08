@@ -510,8 +510,8 @@ impl Shell {
         .rects
     }
 
-    /// The launch hold: the title's poster on the takeover field, its name and store
-    /// beneath, a spinner for the wait. `appear` lifts the poster group in; the field
+    /// The launch hold: the title's poster on the takeover field, its name, store and what
+    /// the host set for it beneath, a spinner for the wait. `appear` lifts the poster group in; the field
     /// itself is already on screen from the connect, so it never blinks.
     #[allow(clippy::too_many_arguments)]
     fn draw_launch_hold(
@@ -539,6 +539,7 @@ impl Shell {
         let a = l.appear as f32;
         let rows: Vec<(&String, f64, f32)> = [
             (&l.facts, 15.0, 0.62),
+            (&l.host_line, 14.0, 0.62),
             (&l.developer, 14.0, 0.45),
             (&l.genres, 14.0, 0.45),
         ]

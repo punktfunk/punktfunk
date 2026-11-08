@@ -29,6 +29,31 @@ extension PunktfunkConnection.GamepadType {
         }
     }
 
+    /// Every type by name, the words pf-client-core's `pad_name` prints.
+    public var padName: String {
+        switch self {
+        case .auto: return String(localized: L10n.ringPadTypeAutomatic)
+        case .xbox360: return "Xbox 360"
+        case .dualSense: return "DualSense"
+        case .dualSenseEdge: return "DualSense Edge"
+        case .dualShock4: return "DualShock 4"
+        case .xboxOne: return "Xbox One"
+        case .xboxElite: return "Xbox Elite Series 2"
+        case .steamDeck: return "Steam Deck"
+        case .steamController: return "Steam Controller"
+        case .steamController2: return "Steam Controller 2"
+        case .steamController2Puck: return "Steam Controller 2 Puck"
+        case .switchPro: return "Switch Pro"
+        case .eightBitDoUltimate2: return "8BitDo Ultimate 2"
+        case .eightBitDoPro2: return "8BitDo Pro 2"
+        case .eightBitDoPro3: return "8BitDo Pro 3"
+        case .horipadSteam: return "HORIPAD for Steam"
+        case .joyConPair: return String(localized: L10n.padKindJoyconPair)
+        case .switch2Pro: return "Switch 2 Pro"
+        case .switch2GameCube: return "GameCube (Switch 2)"
+        }
+    }
+
     /// This type's pad outline, or nil for Automatic and a type with no shipped mark.
     public var mark: Image? { markName.map { Image($0, bundle: .module) } }
 

@@ -57,6 +57,13 @@ clipboard** is a per-host switch on the host's page or in its edit sheet, not a 
 
 The active preset's name shows in the [stats overlay](/docs/stats).
 
+A host can set a game's resolution, refresh rate, HDR and controller for every device
+([Stream settings for a game](/docs/game-library#stream-settings-for-a-game)). When you launch that
+game, those values win over your preset within what this device's screen shows, and the preset
+fills every row the host leaves alone. The game's launch screen or details reads **Host: 1080p60
+DualSense** (a shared override's name, or the values), the stats overlay adds **set by the host
+for this game**, and in the console a row the host sets notes **Set by Couch PC for Hades: 1080p**.
+
 Deleting a preset says how many hosts and pinned cards use it. Those fall back to your default
 settings; nothing fails to connect.
 

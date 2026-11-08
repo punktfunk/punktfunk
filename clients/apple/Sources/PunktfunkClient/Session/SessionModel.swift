@@ -88,6 +88,11 @@ enum LaunchedEntry {
         last = entry.map { ($0, rect) }
     }
 
+    /// The remembered entry for `id`, left for `take`.
+    static func peek(_ id: String) -> GameEntry? {
+        last?.entry.id == id ? last?.entry : nil
+    }
+
     static func take(_ id: String, seq: Int) -> LaunchHoldTarget? {
         defer { last = nil }
         guard let last, last.entry.id == id else { return nil }
@@ -192,6 +197,7 @@ final class SessionModel: ObservableObject {
         var host: StoredHost
         let effective: EffectiveSettings
         let gamepad: PunktfunkConnection.GamepadType
+        let overrides: GameOverrides?
         let launchID: String?
         let profileID: String?
         let shelf: LibraryTarget?
@@ -224,6 +230,8 @@ final class SessionModel: ObservableObject {
     /// connect (design/client-settings-profiles.md §4.2). The connection carries the same value
     /// for the readers that live in PunktfunkKit and can't see this model.
     @Published private(set) var settings = EffectiveSettings()
+    /// The host set something for this session's game: the stats line says so.
+    private var hostOverrides = false
     /// The stats-overlay tier for this session: the resolved one at connect, then whatever the
     /// live cycle surfaces (⌃⌥⇧S, the three-finger tap) move it to. Separate from the @AppStorage
     /// global so a preset that overrides the tier actually gets it, without the cycle breaking.
@@ -388,6 +396,9 @@ final class SessionModel: ObservableObject {
     /// over (the Wake-on-LAN wait). It never fires for `requestAccess`.
     func connect(to host: StoredHost, effective: EffectiveSettings,
                  gamepad: PunktfunkConnection.GamepadType = .auto,
+                 /// The host's overrides for the launched game; `effective` already carries
+                 /// their HDR and pad. Their lines and refresh are fitted to this display here.
+                 overrides: GameOverrides? = nil,
                  launchID: String? = nil,
                  /// The host profile to play as; nil lets the host choose.
                  profileID: String? = nil,
@@ -422,8 +433,8 @@ final class SessionModel: ObservableObject {
         connectSeq += 1
         let attempt = connectSeq
         lastDial = Redial(
-            host: host, effective: effective, gamepad: gamepad, launchID: launchID,
-            profileID: profileID, shelf: shelf, allowTofu: allowTofu,
+            host: host, effective: effective, gamepad: gamepad, overrides: overrides,
+            launchID: launchID, profileID: profileID, shelf: shelf, allowTofu: allowTofu,
             autoWake: autoWake && !requestAccess, wakeSince: wakeSince)
         phase = .connecting
         activeHost = host
@@ -437,14 +448,17 @@ final class SessionModel: ObservableObject {
         launchDownload = nil
         errorMessage = nil
         settings = effective
+        hostOverrides = overrides.map { !$0.isEmpty } ?? false
         statsVerbosity = StatsVerbosity(rawValue: effective.statsVerbosity) ?? .normal
         #if os(iOS)
         // An attached monitor shows the picture (StreamViewController), so Native is its mode.
-        let mode = ExternalDisplay.streamMode(effective)
-            ?? effective.streamMode(native: NativeDisplay.mode)
+        let native = ExternalDisplay.nativeMode ?? NativeDisplay.mode
         #else
-        let mode = effective.streamMode(native: NativeDisplay.mode)
+        let native = NativeDisplay.mode
         #endif
+        let own = effective.streamMode(native: native)
+        let mode = overrides?.fit(
+            own, native: native, codecMax: RenderScale.maxDimension(codec: effective.codec)) ?? own
         let pin = host.pinnedSHA256
         // Screens (main-actor — screen APIs): with All monitors, a host screen per display now and
         // the promise to show more as displays come.
@@ -501,6 +515,7 @@ final class SessionModel: ObservableObject {
                 + "hdr=\(offer.hdr) 10bit=\(offer.tenBit) 444=\(offer.want444) "
                 + "audio=\(offer.audioChannels)ch/\(offer.audioRateHz)Hz/\(offer.audioBits)bit "
                 + "pinned=\(pin != nil) tofu=\(allowTofu) launch=\(launchID ?? "-") "
+                + "overrides=\(overrides.map { !$0.isEmpty } ?? false) "
                 + "unlock=\(unlock.map { "\($0.kind)" } ?? "-")"
             sessionLog.info("\(connectLine, privacy: .public)")
             let result = Result { try PunktfunkConnection(
@@ -1048,7 +1063,8 @@ final class SessionModel: ObservableObject {
             guard let self, self.redial?.attempt == next.attempt, self.phase == .idle else { return }
             self.connect(
                 to: next.host, effective: next.effective, gamepad: next.gamepad,
-                launchID: next.launchID, profileID: next.profileID, shelf: next.shelf,
+                overrides: next.overrides, launchID: next.launchID, profileID: next.profileID,
+                shelf: next.shelf,
                 onUnreachable: { [weak self] in self?.redialAfterLoss(next) })
         }
     }
@@ -1071,7 +1087,8 @@ final class SessionModel: ObservableObject {
             else { return }
             self.connect(
                 to: next.host, effective: next.effective, gamepad: next.gamepad,
-                launchID: next.launchID, profileID: next.profileID, shelf: next.shelf,
+                overrides: next.overrides, launchID: next.launchID, profileID: next.profileID,
+                shelf: next.shelf,
                 allowTofu: next.allowTofu, autoWake: next.autoWake, wakeSince: next.wakeSince)
         }
         return true
@@ -1381,11 +1398,11 @@ final class SessionModel: ObservableObject {
         if lines != hudLines { hudLines = lines } // an unchanged overlay must not re-render
     }
 
-    /// What only the app knows: the floor policy, this app's audio ring, the preset, and the
-    /// Apple-only lines. Display and end-to-end charge what the client controls. The deadline
-    /// link's pick → glass lead is pipeline depth no client paces under, so it comes off both
-    /// and Detailed names it, as on Android. macOS presents straight to the display and feeds
-    /// no floor, so nothing is shaved there.
+    /// What only the app knows: the floor policy, this app's audio ring, the preset and whether
+    /// the host set the game's mode or pad, and the Apple-only lines. Display and end-to-end
+    /// charge what the client controls. The deadline link's pick → glass lead is pipeline depth
+    /// no client paces under, so it comes off both and Detailed names it, as on Android. macOS
+    /// presents straight to the display and feeds no floor, so nothing is shaved there.
     private func hudFacts() -> PunktfunkConnection.HudFacts {
         var f = PunktfunkConnection.HudFacts()
         #if !os(macOS)
@@ -1395,7 +1412,9 @@ final class SessionModel: ObservableObject {
             f.audioBufferMs = UInt32(clamping: a.bufferMS)
             f.avOffsetMs = Int32(clamping: a.avOffsetMS)
         }
-        f.preset = settings.presetName
+        let byHost = hostOverrides ? String(localized: L10n.overlayHostOverride) : nil
+        let preset = [settings.presetName, byHost].compactMap { $0 }
+        f.preset = preset.isEmpty ? nil : preset.joined(separator: " \u{b7} ")
         // The deadline link's ask beside its readback: a readback that differs is the one clamp
         // signal the API gives, and on tvOS the screen is the only place to read it.
         if let l = PresentLinkInfo.shared.snapshot() {

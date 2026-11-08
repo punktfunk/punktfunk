@@ -545,6 +545,14 @@ fn api_router_parts() -> (Router<Arc<MgmtState>>, utoipa::openapi::OpenApi) {
             library::set_library_metadata
         ))
         .routes(routes!(library::set_library_art_pick))
+        .routes(routes!(library::get_library_overrides))
+        .routes(routes!(library::create_override_set))
+        .routes(routes!(
+            library::update_override_set,
+            library::delete_override_set
+        ))
+        .routes(routes!(library::set_game_overrides))
+        .routes(routes!(library::set_source_overrides))
         .routes(routes!(library::report_provider_running))
         .routes(routes!(downloads::report_provider_downloads))
         .routes(routes!(downloads::get_downloads))
