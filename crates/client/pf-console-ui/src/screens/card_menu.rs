@@ -20,6 +20,7 @@ use crate::store::SettingsStore;
 use crate::theme::{Fonts, Frame, W};
 use crate::widgets::{blurb, ListMsg, MenuList, RowSpec, TabStrip, TAB_STRIP_H};
 use pf_client_core::console::OverlayAction;
+use pf_client_core::display_targets::{DisplayTarget, Target};
 use pf_client_core::library::InstallAction;
 use pf_client_core::menu_nav::{MenuDir, MenuEvent, MenuPulse};
 use pf_client_core::start;
@@ -71,6 +72,10 @@ enum Action {
     MakeDefault,
     /// Indexed into [`HostRow::actions`]: this build renders labels it has never heard of.
     Host(usize),
+    /// Stream row `i` of [`HostRow::screens`] from the next connect on.
+    Screen(usize),
+    /// The host's settings file fixes the screen: the pick, disabled, and why.
+    ScreenLocked,
     SendLogs,
     Forget,
     /// Connect once with preset `i`; `None` is the host's own binding.
@@ -88,6 +93,7 @@ enum Mode {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Section {
     Presets,
+    Screen,
     Connection,
     Pairing,
     Power,
@@ -99,6 +105,7 @@ impl Section {
     fn name(self) -> &'static str {
         match self {
             Section::Presets => pf_l10n::client::hostcard_section_presets(),
+            Section::Screen => pf_l10n::client::hostcard_section_screen(),
             Section::Connection => pf_l10n::client::hostcard_section_connection(),
             Section::Pairing => pf_l10n::client::hostcard_section_pairing(),
             Section::Power => pf_l10n::client::hostcard_section_power(),
@@ -337,6 +344,11 @@ impl CardMenu {
         a.extend((0..host.actions.len()).map(Action::Host));
         a.push(Action::BindPreset);
         a.extend((0..store.presets().len()).map(Action::Pin));
+        match host.screens.as_ref().filter(|_| host.paired) {
+            Some(s) if s.locked => a.push(Action::ScreenLocked),
+            Some(s) => a.extend((0..s.targets.len()).map(Action::Screen)),
+            None => {}
+        }
         if host.paired && host.online {
             a.push(Action::SpeedTest);
         }
@@ -361,6 +373,7 @@ impl CardMenu {
     fn section(a: Action) -> Section {
         match a {
             Action::BindPreset | Action::Pin(_) => Section::Presets,
+            Action::Screen(_) | Action::ScreenLocked => Section::Screen,
             Action::SpeedTest | Action::Clipboard | Action::Edit | Action::MakeDefault => {
                 Section::Connection
             }
@@ -397,6 +410,9 @@ impl CardMenu {
                 Some("power.reboot") => "rotate-cw",
                 _ => "power",
             },
+            Action::Screen(i) if self.is_screen(i) => "check",
+            Action::Screen(_) => "monitor",
+            Action::ScreenLocked => "lock",
             Action::SendLogs => "scroll-text",
             Action::Forget => "trash-2",
             Action::EndGame => "x",
@@ -414,6 +430,19 @@ impl CardMenu {
             }
             Subject::Host(_) => false,
         }
+    }
+
+    /// Row `i` of the host's screens, read from the row the menu opened on.
+    fn screen(&self, i: usize) -> Option<&Target> {
+        self.host().screens.as_ref()?.targets.get(i)
+    }
+
+    /// Row `i` is what this device streams now: its own pick, else the host's default.
+    fn is_screen(&self, i: usize) -> bool {
+        let Some(s) = &self.host().screens else {
+            return false;
+        };
+        s.targets.get(i).is_some_and(|t| t.target() == *s.current())
     }
 
     /// `default` (`Settings::default_host`) names this row. A derived default reads as unset.
@@ -501,6 +530,16 @@ impl CardMenu {
                 Some(act) => act.label.clone(),
                 None => String::new(),
             },
+            Action::Screen(i) => self
+                .screen(i)
+                .map(|t| t.name().to_string())
+                .unwrap_or_default(),
+            Action::ScreenLocked => self
+                .host()
+                .screens
+                .as_ref()
+                .map(|s| s.summary())
+                .unwrap_or_default(),
             Action::SendLogs => pf_l10n::client::hostcard_send_logs().into(),
             Action::Forget if self.armed == Some(Action::Forget) => {
                 pf_l10n::console::console_card_remove_armed().into()
@@ -511,10 +550,12 @@ impl CardMenu {
         }
     }
 
-    /// Host-reported verbs can be unavailable. The row stays; activating it says why.
+    /// Host-reported verbs and screens can be unavailable. The row stays; activating it says why.
     fn enabled(&self, a: Action) -> bool {
         match a {
             Action::Host(i) => self.host().actions.get(i).is_none_or(|act| act.available),
+            Action::Screen(i) => self.screen(i).is_none_or(|t| t.reason().is_none()),
+            Action::ScreenLocked => false,
             _ => true,
         }
     }
@@ -848,6 +889,33 @@ impl CardMenu {
                 ));
                 fx.pop();
             }
+            // An off or taken head says why rather than write a pick the host would not open.
+            Action::Screen(i) => {
+                let host = self.host();
+                let Some(t) = self.screen(i) else {
+                    return; // row list changed under the cursor
+                };
+                if let Some(why) = t.reason() {
+                    fx.toast = Some(why);
+                    return;
+                }
+                let screen = t.target();
+                fx.toast = Some(match screen {
+                    DisplayTarget::Own => t.name().to_string(),
+                    DisplayTarget::Monitor(_) => pf_l10n::client::screen_streams(t.name()),
+                });
+                fx.cmds.push(ConsoleCmd::SetScreen {
+                    addr: host.addr.clone(),
+                    mgmt: host.mgmt_port,
+                    fp_hex: host.fp_hex.clone(),
+                    screen,
+                    label: t.name().to_string(),
+                });
+                fx.pop();
+            }
+            Action::ScreenLocked => {
+                fx.toast = Some(pf_l10n::client::screen_locked_hint().into());
+            }
             Action::Unpin => {
                 if let Some(p) = &self.host().pin {
                     fx.cmds.push(ConsoleCmd::SetPin {
@@ -1004,6 +1072,15 @@ impl ScreenView for CardMenu {
                     },
                     (Action::SwitchProfile, Subject::Host(h)) => RowSpec {
                         value: h.profile.as_ref().map(|p| p.display_name.clone()),
+                        ..row
+                    },
+                    (Action::Screen(i), _) => RowSpec {
+                        value: self.screen(i).map(Target::detail).filter(|d| !d.is_empty()),
+                        note: self.screen(i).and_then(Target::reason),
+                        ..row
+                    },
+                    (Action::ScreenLocked, _) => RowSpec {
+                        note: Some(pf_l10n::client::screen_locked_hint().into()),
                         ..row
                     },
                     _ => row,
@@ -1182,6 +1259,56 @@ mod tests {
             ],
             ..host()
         }
+    }
+
+    /// The host's own screen, the TV this device picked, a head another device streams and
+    /// one that is off.
+    fn screened(locked: bool) -> HostRow {
+        use pf_client_core::display_targets::Targets;
+        let head = |id: &str, label: &str| Target {
+            id: id.into(),
+            label: label.into(),
+            connector: Some(id.into()),
+            mode: Some("3840x2160@60".into()),
+            ..Target::default()
+        };
+        HostRow {
+            screens: Some(Targets {
+                locked,
+                host_default: DisplayTarget::Own,
+                yours: Some(DisplayTarget::Monitor("HDMI-A-1".into())),
+                targets: vec![
+                    Target {
+                        id: "own".into(),
+                        label: "Own screen".into(),
+                        ..Target::default()
+                    },
+                    head("HDMI-A-1", "LG TV"),
+                    Target {
+                        in_use_by: Some("Ben's Apple TV".into()),
+                        ..head("DP-1", "DELL U2723QE")
+                    },
+                    Target {
+                        enabled: false,
+                        ..head("DP-2", "Samsung Odyssey")
+                    },
+                ],
+            }),
+            ..host()
+        }
+    }
+
+    /// `h`'s Screen tab, and its rows.
+    fn screen_tab(h: &HostRow) -> (CardMenu, Vec<Action>) {
+        let d = details(h);
+        let sections = d.sections(crate::store::file_store());
+        let tab = sections.iter().position(|s| *s == Section::Screen);
+        let s = CardMenu {
+            tab: tab.expect("a Screen tab"),
+            ..d
+        };
+        let rows = rows(&s);
+        (s, rows)
     }
 
     fn pinned() -> HostRow {
@@ -1885,6 +2012,107 @@ mod tests {
             "the desktop's file is its host's link, named after it: {:?}",
             fx.action
         );
+    }
+
+    /// The Screen tab sits between Presets and Connection, one row per screen in the host's
+    /// order. The pick carries the check; a taken or switched-off head is greyed and says why.
+    #[test]
+    fn the_screen_tab_lists_the_hosts_screens_and_marks_the_pick() {
+        let sections = details(&screened(false)).sections(crate::store::file_store());
+        let at = |want| sections.iter().position(|s| *s == want).unwrap();
+        assert_eq!(at(Section::Screen), at(Section::Presets) + 1);
+        assert_eq!(at(Section::Connection), at(Section::Screen) + 1);
+
+        let (s, rows) = screen_tab(&screened(false));
+        assert_eq!(
+            rows,
+            (0..4).map(Action::Screen).collect::<Vec<_>>(),
+            "one row per screen, in order"
+        );
+        let names: Vec<String> = rows.iter().map(|a| label(&s, *a)).collect();
+        assert_eq!(
+            names,
+            ["Own screen", "LG TV", "DELL U2723QE", "Samsung Odyssey"]
+        );
+        let icons: Vec<&str> = rows.iter().map(|a| s.icon(*a)).collect();
+        assert_eq!(icons, ["monitor", "check", "monitor", "monitor"]);
+        let enabled: Vec<bool> = rows.iter().map(|a| s.enabled(*a)).collect();
+        assert_eq!(enabled, [true, true, false, false]);
+
+        for (i, why) in [(2, "Streamed by Ben's Apple TV"), (3, "Off")] {
+            let mut s = screen_tab(&screened(false)).0;
+            let mut fx = Outbox::default();
+            run_action(&mut s, Action::Screen(i), &mut fx);
+            assert!(fx.cmds.is_empty(), "no write the host would not open");
+            assert_eq!(fx.toast.as_deref(), Some(why));
+        }
+
+        let mut follows = screened(false);
+        follows.screens.as_mut().unwrap().yours = None;
+        let (s, _) = screen_tab(&follows);
+        assert_eq!(
+            s.icon(Action::Screen(0)),
+            "check",
+            "no row of its own: the host's default"
+        );
+        assert_eq!(s.icon(Action::Screen(1)), "monitor");
+    }
+
+    /// A pick is one write of this device's row, and the menu closes on it.
+    #[test]
+    fn picking_a_screen_writes_it_once() {
+        let tv = DisplayTarget::Monitor("HDMI-A-1".into());
+        for (i, screen, name, toast) in [
+            (0, DisplayTarget::Own, "Own screen", "Own screen"),
+            (1, tv, "LG TV", "Streams LG TV"),
+        ] {
+            let mut s = screen_tab(&screened(false)).0;
+            let mut fx = Outbox::default();
+            run_action(&mut s, Action::Screen(i), &mut fx);
+            assert_eq!(
+                fx.cmds,
+                vec![ConsoleCmd::SetScreen {
+                    addr: "10.0.0.5".into(),
+                    mgmt: 9778,
+                    fp_hex: "aa".into(),
+                    screen,
+                    label: name.into(),
+                }]
+            );
+            assert_eq!(fx.toast.as_deref(), Some(toast));
+            assert!(matches!(fx.nav, Some(Nav::Pop)));
+        }
+    }
+
+    /// A locked host shows what it streams and why, and offers nothing to pick.
+    #[test]
+    fn a_locked_host_shows_its_pick_without_rows() {
+        let (mut s, rows) = screen_tab(&screened(true));
+        assert_eq!(rows, vec![Action::ScreenLocked]);
+        assert!(!s.enabled(Action::ScreenLocked));
+        assert_eq!(label(&s, Action::ScreenLocked), "Streams LG TV");
+        let mut fx = Outbox::default();
+        run_action(&mut s, Action::ScreenLocked, &mut fx);
+        assert!(fx.cmds.is_empty());
+        assert_eq!(
+            fx.toast.as_deref(),
+            Some("The host's settings file fixes which screen is streamed.")
+        );
+    }
+
+    /// No answer from the host, or no pairing to ask with, is no Screen tab.
+    #[test]
+    fn no_screens_no_screen_tab() {
+        let has_tab = |h: &HostRow| {
+            details(h)
+                .sections(crate::store::file_store())
+                .contains(&Section::Screen)
+        };
+        assert!(!has_tab(&host()));
+        assert!(!has_tab(&HostRow {
+            paired: false,
+            ..screened(false)
+        }));
     }
 
     /// A paired host's Pairing tab offers Unpair beside Pair again; it arms, then sends one

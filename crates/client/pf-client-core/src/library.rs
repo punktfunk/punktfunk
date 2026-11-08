@@ -1047,6 +1047,13 @@ impl<T: Clone + Send + 'static> FpCache<T> {
     pub(crate) fn invalidate(&self, fp_hex: &str) {
         self.map().remove(fp_hex);
     }
+
+    /// Let the next [`FpCache::refresh`] fetch again while [`FpCache::get`] keeps the old rows.
+    pub(crate) fn expire(&self, fp_hex: &str) {
+        if let Some(entry) = self.map().get_mut(fp_hex) {
+            entry.0 = Instant::now().checked_sub(self.ttl).unwrap_or(entry.0);
+        }
+    }
 }
 
 /// 20 s. What a host has up changes minute to minute, unlike the grants

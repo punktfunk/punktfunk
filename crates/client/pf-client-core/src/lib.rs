@@ -82,6 +82,9 @@ pub mod host_actions;
 // A sentence the host sent by the id of its message, worded in this app's language.
 #[cfg(portable)]
 pub mod host_text;
+// Which host screen this device streams (`design/screen-pick.md`); ureq stays desktop-gated.
+#[cfg(portable)]
+pub mod display_targets;
 // Log ring (note/render, std only) on every platform. `send_to_host` stays desktop-gated; Android posts via OkHttp (`SkiaConsole.sendLogs`).
 #[cfg(portable)]
 pub mod logring;

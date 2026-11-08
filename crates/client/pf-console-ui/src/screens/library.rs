@@ -345,7 +345,8 @@ impl LibraryScreen {
         }
     }
 
-    /// Re-read sort/view each frame: Settings can change while this screen is on the stack.
+    /// Re-read sort, view and the host's live fields each frame: Settings and the host change
+    /// while this screen is on the stack.
     fn adopt_settings(&mut self, ctx: &Ctx) {
         let sort = crate::collate::SortKey::parse(&ctx.settings.library_sort);
         if sort != self.sort {
@@ -367,11 +368,12 @@ impl LibraryScreen {
             // Which titles a band holds out of the grid follows both.
             self.recollate();
         }
-        // The row was cloned when the shelf opened; what the host has UP moves under it.
-        // Only that field: the rest is frozen on purpose (a pin the carousel dropped must
-        // not retarget this shelf).
+        // The row was cloned when the shelf opened; what the host has UP and the screens it
+        // offers move under it. Only those: the rest is frozen on purpose (a pin the carousel
+        // dropped must not retarget this shelf).
         if let Some(row) = ctx.hosts.iter().find(|h| h.key == self.host.key) {
             self.host.running.clone_from(&row.running);
+            self.host.screens.clone_from(&row.screens);
         }
     }
 
