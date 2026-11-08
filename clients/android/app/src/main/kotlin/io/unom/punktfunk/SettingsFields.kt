@@ -119,6 +119,9 @@ internal object SettingsFields {
             overlay({ it.invertScroll }, { o, v -> o.copy(invertScroll = v) })),
         field("overlayActions", "overlay_actions", StrKind, { it.overlayActions }, { s, v -> s.copy(overlayActions = v) },
             overlay({ it.overlayActions }, { o, v -> o.copy(overlayActions = v) })),
+        // The console writes an empty blob for its Reset to defaults: there it is a value.
+        field("shortcuts", "shortcuts", StrKind, { it.shortcuts }, { s, v -> s.copy(shortcuts = v) },
+            overlay({ it.shortcuts }, { o, v -> o.copy(shortcuts = v) }), console = Console(BlobKind)),
         field("backOpensRing", "android.back_opens_ring", BoolKind, { it.backOpensRing },
             { s, v -> s.copy(backOpensRing = v) }, prefsKey = "back_opens_ring"),
         // Cross-client start-screen keys; the console writes the same two names.
@@ -252,6 +255,14 @@ internal object SettingsFields {
         override fun read(p: SharedPreferences, k: String, def: String) = p.getString(k, def) ?: def
         override fun write(e: SharedPreferences.Editor, k: String, v: String) { e.putString(k, v) }
         override fun read(j: JSONObject, k: String): String? = if (j.has(k)) j.optString(k).ifEmpty { null } else null
+        override fun write(j: JSONObject, k: String, v: String) { j.put(k, v) }
+    }
+
+    /** A blob whose empty string is a value (this client's defaults), not an absent field. */
+    object BlobKind : Kind<String> {
+        override fun read(p: SharedPreferences, k: String, def: String) = p.getString(k, def) ?: def
+        override fun write(e: SharedPreferences.Editor, k: String, v: String) { e.putString(k, v) }
+        override fun read(j: JSONObject, k: String): String? = if (j.has(k)) j.optString(k) else null
         override fun write(j: JSONObject, k: String, v: String) { j.put(k, v) }
     }
 

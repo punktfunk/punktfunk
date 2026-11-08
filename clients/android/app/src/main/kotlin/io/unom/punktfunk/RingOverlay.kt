@@ -1,6 +1,7 @@
 package io.unom.punktfunk
 
 import android.content.Context
+import android.os.SystemClock
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloatAsState
@@ -33,13 +34,17 @@ import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.Bedtime
 import androidx.compose.material.icons.filled.Cancel
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.DoNotTouch
+import androidx.compose.material.icons.filled.Fullscreen
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Insights
 import androidx.compose.material.icons.filled.Keyboard
+import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Logout
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.MicOff
+import androidx.compose.material.icons.filled.Minimize
 import androidx.compose.material.icons.filled.MoreHoriz
 import androidx.compose.material.icons.filled.Mouse
 import androidx.compose.material.icons.filled.PanTool
@@ -94,6 +99,10 @@ import io.unom.punktfunk.kit.Gamepad
 import io.unom.punktfunk.kit.NativeBridge
 import io.unom.punktfunk.kit.R
 import io.unom.punktfunk.kit.RingNav
+import io.unom.punktfunk.kit.Shortcuts
+import io.unom.punktfunk.kit.SlotId
+import io.unom.punktfunk.kit.chordChip
+import io.unom.punktfunk.kit.keyVk
 import io.unom.punktfunk.kit.library.RunningGame
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.delay
@@ -149,6 +158,9 @@ class RingState {
     var onOpenChange: ((Boolean) -> Unit)? = null
     /** The wire pad whose `Select+A` opened the ring; null for a touch or key open. */
     var opener: Int? = null
+
+    /** Send text's dialog is up, over the ring. */
+    var textDialog by mutableStateOf(false)
 
     fun nav(n: RingNav) {
         pendingNav = n
@@ -258,6 +270,9 @@ class RingActions(
     val padType: () -> Int = { Gamepad.PREF_AUTO },
     val padTypeAvailable: () -> Boolean = { false },
     val cyclePadType: () -> Unit = {},
+    /** A mouse this device can capture, and the grab's toggle: Release input and Mouse mode. */
+    val pointerCapture: () -> Boolean = { false },
+    val toggleCapture: () -> Unit = {},
 )
 
 /**
@@ -400,6 +415,24 @@ internal fun spec(slot: SlotId, cfg: OverlayConfig, a: RingActions, ctx: Context
         enabled = a.screenLayouts().size > 1, reason = ctx.getString(R.string.ring_swap_screens_unavailable),
         toggle = true, state = ctx.getString(a.screenLayout().label),
     )
+    // Android's mouse mode IS the grab: captured is relative, released is the desktop pointer.
+    SlotId.ReleaseInput, SlotId.MouseMode -> SlotSpec(
+        slot.id,
+        ctx.getString(if (slot == SlotId.ReleaseInput) R.string.ring_release_input else R.string.ring_mouse_mode),
+        if (slot == SlotId.ReleaseInput) Icons.Filled.Lock else Icons.Filled.Mouse,
+        enabled = a.pointerGranted() && a.pointerCapture(),
+        reason = ctx.getString(if (a.pointerGranted()) R.string.ring_no_pointer_capture else R.string.ring_controller_only),
+    )
+    SlotId.Fullscreen, SlotId.Minimize -> SlotSpec(
+        slot.id,
+        ctx.getString(if (slot == SlotId.Fullscreen) R.string.ring_fullscreen else R.string.ring_minimize),
+        if (slot == SlotId.Fullscreen) Icons.Filled.Fullscreen else Icons.Filled.Minimize,
+        enabled = false, reason = ctx.getString(R.string.ring_no_window),
+    )
+    SlotId.Clipboard -> SlotSpec(
+        "clipboard", ctx.getString(R.string.ring_clipboard), Icons.Filled.ContentCopy,
+        enabled = false, reason = ctx.getString(R.string.ring_clipboard_unavailable),
+    )
     is SlotId.Host -> {
         val act = a.hostActions().firstOrNull { it.id == slot.actionId }
         // Three power actions, three glyphs — the same icon on all three made them one button.
@@ -484,11 +517,10 @@ fun RingOverlay(
         }
     }
     ExpireRingHint(state)
-    var textDialog by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) { if (state.nativeMode == null) state.nativeMode = actions.currentMode() }
-    val rows = if (state.sheet) sheetRows(state, cfg, actions, haptics, ctx) { textDialog = true } else emptyList()
+    val rows = if (state.sheet) sheetRows(state, cfg, actions, haptics, ctx) { state.textDialog = true } else emptyList()
 
-    val fire = { s: SlotSpec, slot: SlotId -> fireSlot(s, slot, state, cfg, actions, haptics, ctx) { textDialog = true } }
+    val fire = { s: SlotSpec, slot: SlotId -> fireSlot(s, slot, state, cfg, actions, haptics, ctx) { state.textDialog = true } }
 
     // The pad (design §2.6): the left stick AIMS — its sector is the highlight, so the ring
     // follows the thumb — while the D-pad steps, Right clockwise, Left anticlockwise, Up to 12
@@ -597,9 +629,9 @@ fun RingOverlay(
         }
     }
 
-    if (textDialog) {
-        SendTextDialog(onDismiss = { textDialog = false }) { text ->
-            textDialog = false
+    if (state.textDialog) {
+        SendTextDialog(onDismiss = { state.textDialog = false }) { text ->
+            state.textDialog = false
             state.close()
             actions.sendText(text)
         }
@@ -648,6 +680,13 @@ internal fun fireSlot(
     haptics.tick()
     state.armed = null
     state.hint = null
+    perform(slot, state, cfg, actions, onSendText)
+    if (s.toggle) state.hint = spec(slot, cfg, actions, ctx).let { "${it.label}: ${it.state}" }
+}
+
+/** What [slot] does once its gate passed, from the ring or a shortcut. The actions that take
+ *  the screen close the ring first. */
+private fun perform(slot: SlotId, state: RingState, cfg: OverlayConfig, actions: RingActions, onSendText: () -> Unit) {
     when (slot) {
         SlotId.EndStream -> { state.close(); actions.endStream() }
         SlotId.EndGame -> { state.close(); actions.endGame() }
@@ -672,8 +711,64 @@ internal fun fireSlot(
         is SlotId.Shortcut -> {
             cfg.shortcut(slot.shortcutId)?.let { state.close(); actions.sendShortcut(it.keys) }
         }
+        SlotId.ReleaseInput, SlotId.MouseMode -> { state.close(); actions.toggleCapture() }
+        SlotId.Fullscreen, SlotId.Minimize, SlotId.Clipboard -> {}
     }
-    if (s.toggle) state.hint = spec(slot, cfg, actions, ctx).let { "${it.label}: ${it.state}" }
+}
+
+/** A danger action a shortcut armed: its slot id and since when. */
+internal class ShortcutArm(var id: String? = null, var at: Long = 0L)
+
+/**
+ * A shortcut fired [action] outside the dial (design §4, D9): the slot's own effect behind the
+ * ring's gate. A dimmed slot [tell]s why; a host danger action or End game asks for a second
+ * press within [ARM_MS] in the ring's words, and End stream fires at once. A key combination
+ * goes down and up by [phase]; Quick actions opens the ring through [openRing].
+ */
+internal fun fireShortcut(
+    action: Shortcuts.Action,
+    phase: Shortcuts.Phase,
+    handle: Long,
+    state: RingState,
+    cfg: OverlayConfig,
+    actions: RingActions,
+    ctx: Context,
+    arm: ShortcutArm,
+    openRing: () -> Unit,
+    tell: (String) -> Unit,
+) {
+    val slot = when (action) {
+        Shortcuts.Action.Ring -> return openRing()
+        is Shortcuts.Action.Slot -> action.slot
+        is Shortcuts.Action.Unknown -> return
+    }
+    val s = spec(slot, cfg, actions, ctx)
+    if (!s.enabled) {
+        if (phase != Shortcuts.Phase.UP) tell(s.reason)
+        return
+    }
+    if (slot is SlotId.Shortcut) {
+        val keys = cfg.shortcut(slot.shortcutId)?.keys ?: return
+        when (phase) {
+            Shortcuts.Phase.DOWN -> sendKeys(handle, keys, down = true)
+            Shortcuts.Phase.UP -> sendKeys(handle, keys, down = false)
+            else -> sendChord(handle, keys)
+        }
+        return
+    }
+    if (phase == Shortcuts.Phase.UP) return
+    val now = SystemClock.uptimeMillis()
+    if (s.armed && slot != SlotId.EndStream && (arm.id != s.id || now - arm.at > ARM_MS)) {
+        arm.id = s.id
+        arm.at = now
+        tell(confirmText(ctx, slot, s.label))
+        return
+    }
+    arm.id = null
+    perform(slot, state, cfg, actions) {
+        openRing()
+        state.textDialog = true
+    }
 }
 
 /** The line a destructive slot shows on its first press; a host action with no wording of its own takes its title. */
@@ -1086,8 +1181,13 @@ private fun RingSheet(state: RingState, rows: List<SheetRowSpec>, haptics: Conso
 
 /** The chord as key events: modifiers down in order, the key, modifiers up in reverse. */
 fun sendChord(handle: Long, keys: List<String>) {
+    sendKeys(handle, keys, down = true)
+    sendKeys(handle, keys, down = false)
+}
+
+/** A chord's keys down in order, or up in reverse: a held shortcut's two halves. */
+fun sendKeys(handle: Long, keys: List<String>, down: Boolean) {
     val vks = keys.mapNotNull { keyVk(it) }
     if (vks.size != keys.size || vks.isEmpty()) return
-    vks.forEach { NativeBridge.nativeSendKey(handle, it, true, 0) }
-    vks.asReversed().forEach { NativeBridge.nativeSendKey(handle, it, false, 0) }
+    (if (down) vks else vks.asReversed()).forEach { NativeBridge.nativeSendKey(handle, it, down, 0) }
 }

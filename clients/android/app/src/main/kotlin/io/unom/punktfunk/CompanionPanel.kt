@@ -63,6 +63,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import io.unom.punktfunk.components.SectionLabel
 import io.unom.punktfunk.kit.R
+import io.unom.punktfunk.kit.SlotId
 
 /*
  * The companion panel (design/android-dual-screen.md §6): what the lower screen of a dual-screen

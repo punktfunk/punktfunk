@@ -65,6 +65,7 @@ class SettingsRoundTripTest {
         mouseMode = MouseMode.CAPTURE,
         invertScroll = true,
         overlayActions = "zz-ring-blob",
+        shortcuts = "zz-shortcuts-blob",
         backOpensRing = false,
         startIn = "library",
         defaultHost = "zz-host-id",

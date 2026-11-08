@@ -49,6 +49,9 @@ internal class StreamUi(
     /** Transient confirmation of a mic toggle, whichever control made it: a string resource, or null for nothing. */
     var micHint by mutableStateOf<Int?>(null)
 
+    /** A fired shortcut's line: why its action is dimmed, or "press again". Shown briefly. */
+    var shortcutHint by mutableStateOf<String?>(null)
+
     /** A captured pad has a gyro this session's virtual controller cannot carry. Shown briefly. */
     var motionHint by mutableStateOf(false)
 

@@ -24,6 +24,7 @@ class SettingsResetTest {
             hdrEnabled = false,
             gamepadUiEnabled = false,
             showAdvanced = true,
+            shortcuts = "{\"v\":1,\"bindings\":[]}",
             reduceUiResolution = false,
             defaultHost = "desk",
         )

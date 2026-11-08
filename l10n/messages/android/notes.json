@@ -51,6 +51,7 @@
 	"android_keycapture_service_label": "The accessibility service's name in Android's Accessibility settings.",
 	"android_keycapture_service_description": "The service's description in Android's Accessibility settings.",
 	"android_remote_pointer_hint": "Cue on Android TV while the remote drives the host's cursor. select, play_pause = the remote keys' names, e.g. 'SELECT', 'play/pause'.",
+	"android_controls_remote_pointer": "A fixed row on the Android TV Shortcuts screen, beside \"Hold Select\": holding the remote's Select turns it into the host's mouse pointer, and back.",
 	"android_grant_expired": "Toast when a stream ends because this device's timed access ran out.",
 	"android_keepalive_streaming": "Ongoing notification text while a stream runs in the foreground with no mode line yet.",
 	"android_keepalive_background": "Ongoing notification text while the app is in the background and the stream is kept alive.",
