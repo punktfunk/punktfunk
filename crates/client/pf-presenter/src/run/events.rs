@@ -3,7 +3,8 @@
 use super::pace::bump_stats_tier;
 use super::*;
 use crate::route::{route, Kind, RouteFacts, Target};
-use sdl3::keyboard::{Keycode, Scancode, TextInputOptions, TextInputType};
+use pf_client_core::shortcuts::Out;
+use sdl3::keyboard::{Scancode, TextInputOptions, TextInputType};
 
 impl Shell {
     /// One SDL event: the console's verdict, then [`route`] picks who takes it, and this
@@ -17,6 +18,8 @@ impl Shell {
             .get_window_id()
             .and_then(|id| stream.as_ref()?.screens.screen_of(id));
         let overlay_took = self.overlay_takes(&event, screen.is_none());
+        let keys = self.key_step(&event, overlay_took);
+        let fired = keys.iter().any(|o| matches!(o, Out::Fire(..)));
         let facts = RouteFacts {
             on_primary: event.get_window_id() == Some(self.window.id()),
             on_screen: screen.is_some(),
@@ -27,18 +30,14 @@ impl Shell {
             wheel_blocked: self.scroll_routing.blocked,
             captured: self.scroll_routing.captured_before,
         };
-        match route(kind_of(&event), &facts) {
+        match route(kind_of(&event, fired), &facts) {
             Target::Overlay => self.scroll_routing.consumed(&event),
             Target::Screen => {
                 if let Some(screen) = screen {
                     self.on_screen_event(stream, screen, event);
                 }
             }
-            Target::Chord => {
-                if let Some(chord) = chord_in(&event) {
-                    self.on_chord(stream, chord);
-                }
-            }
+            Target::Chord => self.on_key_shortcut(stream, keys),
             Target::Capture => self.on_capture_event(stream, event),
             Target::Gesture => self.on_finger_event(stream, event),
             Target::Window => {
@@ -56,6 +55,26 @@ impl Shell {
             Target::Drop => {}
         }
         Ok(ControlFlow::Continue(()))
+    }
+
+    /// A key into the keyboard's shortcuts: a first press the console did not take, and every
+    /// release, so a key the console took on its way up never stays down in the engine.
+    fn key_step(&mut self, event: &Event, overlay_took: bool) -> Vec<Out> {
+        match *event {
+            Event::KeyDown {
+                keycode,
+                scancode: Some(sc),
+                repeat: false,
+                ..
+            } if !overlay_took => self.keys.press(keycode, sc),
+            Event::KeyUp {
+                scancode: Some(sc), ..
+            } => {
+                self.keys.release(sc);
+                Vec::new()
+            }
+            _ => Vec::new(),
+        }
     }
 
     /// The console's verdict, asked before routing: keys and text anywhere; the pointer and
@@ -279,59 +298,6 @@ impl Shell {
             _ => {}
         }
         Ok(())
-    }
-
-    /// One of the loop's own chords, answered here and never forwarded.
-    fn on_chord(&mut self, stream: &mut Option<StreamState>, chord: Chord) {
-        match chord {
-            Chord::Capture => {
-                if let Some(st) = stream.as_mut() {
-                    self.toggle_capture(st);
-                }
-            }
-            Chord::MouseModel => {
-                if let Some(st) = stream.as_mut() {
-                    self.toggle_mouse_mode(st);
-                }
-            }
-            Chord::Disconnect => {
-                if let Some(st) = stream {
-                    tracing::info!("chord: disconnect");
-                    st.request_quit();
-                    self.capture_off();
-                }
-            }
-            Chord::Stats => {
-                bump_stats_tier(&mut self.stats_verbosity, stream);
-                tracing::info!(tier = ?self.stats_verbosity, "chord: stats verbosity");
-            }
-            // Quick-action ring at the window centre (a locked pointer has no
-            // position worth opening at).
-            Chord::Ring => {
-                if let (Some(o), true) = (self.overlay.as_mut(), stream.is_some()) {
-                    let (pw, ph) = self.window.size_in_pixels();
-                    o.ring_input(RingInput::Toggle {
-                        x: pw as f32 / 2.0,
-                        y: ph as f32 / 2.0,
-                    });
-                }
-            }
-            // Mic mute — per session, never persisted. The uplink keeps running;
-            // only sending stops. A session with no mic says so instead of
-            // swallowing the chord.
-            Chord::Mic => {
-                if let Some(st) = stream {
-                    match st.handle.mic.toggle() {
-                        Some(muted) => tracing::info!(muted, "chord: microphone mute"),
-                        None => tracing::info!(
-                            "chord: microphone mute — this session streams no \
-                             microphone (turn it on in Settings)"
-                        ),
-                    }
-                }
-            }
-            Chord::Fullscreen => self.toggle_fullscreen(stream.as_mut()),
-        }
     }
 
     /// Release the captured mouse and keyboard, or capture them again.
@@ -684,32 +650,13 @@ impl Shell {
         }
     }
 
-    /// Who owns the pads: pad chords, the ring, the mask, and the escape and disconnect
-    /// holds. `want_mask_ui` is [`Shell::ui_wants_mask`] from before the pump tick.
+    /// Who owns the pads: what their shortcuts fire, the ring, the mask. `want_mask_ui` is
+    /// [`Shell::ui_wants_mask`] from before the pump tick.
     pub(super) fn pad_owner_tick(&mut self, stream: &mut Option<StreamState>, want_mask_ui: bool) {
-        // Select chords on a pad. `Select+A` puts the ring at the window centre, where its
-        // highlight starts on the centre so `Select+A` then `A` opens the sheet; `Select+X`
-        // steps the stats tier, the same move the keyboard chord and the dial's own slot make.
-        while let Ok((pad, chord)) = self.chord_rx.try_recv() {
-            if self.overlay.is_none() || stream.is_none() {
-                continue;
-            }
-            match chord {
-                SelectChord::Ring => {
-                    if let Some(o) = self.overlay.as_mut() {
-                        self.ring_opener = Some(pad);
-                        let (pw, ph) = self.window.size_in_pixels();
-                        o.ring_input(RingInput::Toggle {
-                            x: pw as f32 / 2.0,
-                            y: ph as f32 / 2.0,
-                        });
-                    }
-                }
-                SelectChord::Stats => {
-                    bump_stats_tier(&mut self.stats_verbosity, stream);
-                    tracing::info!(tier = ?self.stats_verbosity, "chord: stats verbosity");
-                }
-            }
+        // The worker reads the pads' shortcuts before the mask: the exit chord still works
+        // with input released or the ring up.
+        while let Ok((pad, action, phase)) = self.shortcut_rx.try_recv() {
+            self.fire_action(stream, Some(pad), &action, phase);
         }
         // While the ring is up, or the console holds a launch over the live stream, the
         // pad belongs to the overlay: masked off the wire, polled into menu events. The
@@ -755,63 +702,7 @@ impl Shell {
                 }
             }
         }
-
-        // Controller escape chord: toggles capture like Ctrl+Alt+Shift+Q, so a pad alone gets
-        // back in. A release leaves fullscreen and the press back restores it. Gamescope has
-        // nothing to release into; there, under the ring or out of focus, it only starts the
-        // disconnect hold.
-        while self.escape_rx.try_recv().is_ok() {
-            if in_gamescope() || ring_open {
-                continue;
-            }
-            let back_in = capture_mut(stream).is_some_and(|c| !c.captured() && c.can_capture());
-            if back_in {
-                if self.focus_lost {
-                    continue;
-                }
-                if let Some(cap) = capture_mut(stream) {
-                    if cap.engage() {
-                        self.capture_on(cap);
-                    }
-                }
-            } else if let Some(cap) = capture_mut(stream) {
-                if cap.release(true) {
-                    self.capture_off();
-                }
-            }
-            tracing::info!(captured = back_in, "controller chord: release/engage");
-            let leave = !back_in && self.fullscreen && !self.opts.fullscreen;
-            let restore = back_in && std::mem::take(&mut self.pad_left_fullscreen);
-            if leave || (restore && !self.fullscreen) {
-                self.pad_left_fullscreen = leave;
-                self.fullscreen = restore;
-                let _ = self.window.set_fullscreen(restore);
-                if let Some(st) = stream.as_mut() {
-                    st.forget_refresh_verdict();
-                }
-            }
-        }
-        // Escape chord held past the threshold: the controller's disconnect.
-        if self.disconnect_rx.try_recv().is_ok() {
-            if let Some(st) = stream {
-                tracing::info!("controller chord: disconnect");
-                st.request_quit();
-                self.capture_off();
-            }
-        }
     }
-}
-
-/// A key the loop answers itself instead of forwarding.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum Chord {
-    Capture,
-    MouseModel,
-    Disconnect,
-    Stats,
-    Ring,
-    Mic,
-    Fullscreen,
 }
 
 /// SDL text input as it should stand: `Some(secure)` on, `None` off. The ring's Keyboard slot
@@ -837,49 +728,9 @@ fn steam_keyboard() -> bool {
     })
 }
 
-/// Ctrl+Alt+Shift with Q, M, D, S, O or V, and F11 or Alt+Enter for fullscreen (some Fn
-/// layers send a media key for plain F11). A letter matches the key the layout prints it
-/// on (AZERTY's Q sits on Scancode::A), or its position on a layout without that letter.
-pub(super) fn chord_of(keycode: Option<Keycode>, sc: Scancode, keymod: Mod) -> Option<Chord> {
-    let alt = keymod.intersects(Mod::LALTMOD | Mod::RALTMOD);
-    if alt
-        && keymod.intersects(Mod::LCTRLMOD | Mod::RCTRLMOD)
-        && keymod.intersects(Mod::LSHIFTMOD | Mod::RSHIFTMOD)
-    {
-        let table = [
-            (Keycode::Q, Scancode::Q, Chord::Capture),
-            (Keycode::M, Scancode::M, Chord::MouseModel),
-            (Keycode::D, Scancode::D, Chord::Disconnect),
-            (Keycode::S, Scancode::S, Chord::Stats),
-            (Keycode::O, Scancode::O, Chord::Ring),
-            (Keycode::V, Scancode::V, Chord::Mic),
-        ];
-        if let Some(&(.., chord)) = table
-            .iter()
-            .find(|(k, s, _)| keycode == Some(*k) || sc == *s)
-        {
-            return Some(chord);
-        }
-    }
-    (sc == Scancode::F11 || (sc == Scancode::Return && alt)).then_some(Chord::Fullscreen)
-}
-
-/// The chord a first press makes. Repeats never fire one.
-fn chord_in(event: &Event) -> Option<Chord> {
-    match event {
-        Event::KeyDown {
-            keycode,
-            scancode: Some(sc),
-            keymod,
-            repeat: false,
-            ..
-        } => chord_of(*keycode, *sc, *keymod),
-        _ => None,
-    }
-}
-
-/// What [`route`] knows of an SDL event. A key without a scancode is the pump's.
-fn kind_of(event: &Event) -> Kind {
+/// What [`route`] knows of an SDL event. A key without a scancode is the pump's; `chord` is a
+/// first press that fired a keyboard shortcut.
+fn kind_of(event: &Event, chord: bool) -> Kind {
     match event {
         Event::Quit { .. } => Kind::Quit,
         Event::Window { win_event, .. } => match win_event {
@@ -895,7 +746,7 @@ fn kind_of(event: &Event) -> Kind {
         Event::KeyDown {
             scancode: Some(sc), ..
         } => Kind::Key {
-            chord: chord_in(event).is_some(),
+            chord,
             super_key: matches!(sc, Scancode::LGui | Scancode::RGui),
         },
         Event::KeyUp {
@@ -1273,44 +1124,6 @@ mod tests {
         assert!(!is_warp_device(b"xwayland-relative-pointer:13"));
         assert!(!is_warp_device(b"xwayland-pointer-gestures:13"));
         assert!(!is_warp_device(b"Logitech USB Receiver"));
-    }
-
-    /// Chords need all three modifiers and match by printed letter or by position; the
-    /// fullscreen keys need none.
-    #[test]
-    fn chords_match_by_letter_or_position_under_all_three_modifiers() {
-        let all = Mod::LCTRLMOD | Mod::RALTMOD | Mod::LSHIFTMOD;
-        assert_eq!(
-            chord_of(Some(Keycode::Q), Scancode::Q, all),
-            Some(Chord::Capture)
-        );
-        // AZERTY prints Q where QWERTY has A.
-        assert_eq!(
-            chord_of(Some(Keycode::Q), Scancode::A, all),
-            Some(Chord::Capture)
-        );
-        assert_eq!(chord_of(None, Scancode::M, all), Some(Chord::MouseModel));
-        for (k, s, c) in [
-            (Keycode::D, Scancode::D, Chord::Disconnect),
-            (Keycode::S, Scancode::S, Chord::Stats),
-            (Keycode::O, Scancode::O, Chord::Ring),
-            (Keycode::V, Scancode::V, Chord::Mic),
-        ] {
-            assert_eq!(chord_of(Some(k), s, all), Some(c));
-        }
-        assert_eq!(chord_of(Some(Keycode::A), Scancode::A, all), None);
-        let two = Mod::LCTRLMOD | Mod::LALTMOD;
-        assert_eq!(chord_of(Some(Keycode::Q), Scancode::Q, two), None);
-        assert_eq!(
-            chord_of(Some(Keycode::F11), Scancode::F11, Mod::NOMOD),
-            Some(Chord::Fullscreen)
-        );
-        let alt_enter = chord_of(Some(Keycode::Return), Scancode::Return, Mod::RALTMOD);
-        assert_eq!(alt_enter, Some(Chord::Fullscreen));
-        assert_eq!(
-            chord_of(Some(Keycode::Return), Scancode::Return, Mod::NOMOD),
-            None
-        );
     }
 
     #[test]

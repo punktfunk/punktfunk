@@ -5,12 +5,14 @@
 
 use super::ds5::Ds5Feedback;
 use super::feedback::{hid_plan, is_dualsense, rumble_verdict, HidPlan, HidTarget, RumbleVerdict};
-use super::route::{route, Action, Gates, MenuReads, MenuSettle, PadInput, PadRoute};
-use super::select_gesture::TAP_PRESS;
-use super::{is_steam_deck, set_valve_hidapi, Ctl, SelectChord, DISCONNECT_HOLD};
+use super::route::{
+    ring_on_select_a, route, tap_events, Action, Gates, MenuReads, MenuSettle, PadInput, PadRoute,
+};
+use super::{is_steam_deck, set_valve_hidapi, Ctl, ShortcutFired};
 use crate::menu_nav::{
     ring_sector, MenuEvent, MenuNav, MenuPulse, MenuSample, PadBattery, PadInfo,
 };
+use crate::shortcuts::Binding;
 use punktfunk_core::client::{ActuatorQuirks, NativeClient, RumbleCommand};
 use punktfunk_core::config::GamepadPref;
 use punktfunk_core::input::{gamepad as wire, InputEvent, InputKind};
@@ -25,17 +27,6 @@ const GYRO_LSB_PER_RAD_S: f32 =
     wire::MOTION_GYRO_LSB_PER_DEG_S as f32 * 180.0 / std::f32::consts::PI;
 const ACCEL_LSB_PER_G: f32 = wire::MOTION_ACCEL_LSB_PER_G as f32;
 const G: f32 = 9.80665;
-
-/// L1+R1+Start+Select: raises the UI escape (on a desktop the presenter toggles capture, and a
-/// released capture masks forwarding). The chord still fires under the mask, so a pad alone gets
-/// back in. A hold of [`DISCONNECT_HOLD`] disconnects, mask or not. Not Guide/QAM — those pass
-/// through to the host.
-const ESCAPE_CHORD: [sdl3::gamepad::Button; 4] = [
-    sdl3::gamepad::Button::LeftShoulder,
-    sdl3::gamepad::Button::RightShoulder,
-    sdl3::gamepad::Button::Start,
-    sdl3::gamepad::Button::Back,
-];
 
 /// Deck actuator keepalive, declared as [`ActuatorQuirks`] at slot open. The built-in
 /// actuator decays inside SDL's ~2 s rumble resend, and an identical `set_rumble` is a
@@ -142,18 +133,6 @@ fn declared_kind(setting: GamepadPref, physical: GamepadPref) -> GamepadPref {
         GamepadPref::Auto => physical,
         explicit => explicit,
     }
-}
-
-/// A synthetic tap's wire events as `(bit, down, after)`: each press [`TAP_PRESS`] after
-/// the one before, then every release together, last pressed first. Apart, because core
-/// folds per-transition sends into one state, and because a chord's first button has to be
-/// held before its second counts.
-fn tap_events(presses: &[u32]) -> Vec<(u32, bool, Duration)> {
-    let downs = presses.iter().zip(0u32..);
-    let mut events: Vec<_> = downs.map(|(&b, i)| (b, true, TAP_PRESS * i)).collect();
-    let up = TAP_PRESS * presses.len() as u32;
-    events.extend(presses.iter().rev().map(|&b| (b, false, up)));
-    events
 }
 
 /// What SDL's HIDAPI driver calls the Deck's built-in controller.
@@ -357,7 +336,7 @@ struct Slot {
     /// Kind declared in [`InputKind::GamepadArrival`] — the host's pretence, not `pref`.
     declared: GamepadPref,
     last_axis: [i32; 6],
-    /// Held buttons, the Select chord and gesture, a local Guide: where this pad's input goes.
+    /// Held buttons, this pad's shortcuts, a local Guide: where its input goes.
     route: PadRoute,
     /// Host-believed contacts `(surface, finger)`; lifted on close. 0 = legacy pad, 1/2 = Steam.
     held_touches: std::collections::HashSet<(u8, u8)>,
@@ -392,6 +371,7 @@ impl Slot {
         pref: GamepadPref,
         declared: GamepadPref,
         pad: sdl3::gamepad::Gamepad,
+        route: PadRoute,
     ) -> Slot {
         Slot {
             id,
@@ -400,7 +380,7 @@ impl Slot {
             pref,
             declared,
             last_axis: [i32::MIN; 6],
-            route: PadRoute::default(),
+            route,
             held_touches: std::collections::HashSet::new(),
             surface_last: [(0, 0, false); 2],
             held_clicks: [false; 2],
@@ -462,15 +442,11 @@ pub(super) struct Worker {
     /// Off: wire rumble is drained and dropped.
     rumble: bool,
     attached: Option<Arc<NativeClient>>,
-    escape_tx: async_channel::Sender<()>,
-    disconnect_tx: async_channel::Sender<()>,
-    /// Escape chord fully held — latched so it fires once.
-    chord_armed: bool,
-    chord_since: Option<Instant>,
-    disconnect_fired: bool,
+    /// The pad shortcuts every slot opens with ([`Ctl::Shortcuts`]).
+    bindings: Vec<Binding>,
     menu_nav: MenuNav,
     menu_tx: async_channel::Sender<MenuEvent>,
-    chord_tx: async_channel::Sender<(u8, SelectChord)>,
+    shortcut_tx: async_channel::Sender<ShortcutFired>,
 }
 
 /// The attached session and the open slot SDL's `which` names. Takes the two fields,
@@ -683,9 +659,17 @@ impl Worker {
         };
         let pref = self.pad_info(id).map_or(GamepadPref::Xbox360, |p| p.pref);
         let declared = declared_kind(self.kind_override, pref);
+        let quick_access = wire::quick_access_presses(self.attached.as_ref().is_some_and(|c| {
+            punktfunk_core::config::pad_has_quick_access(
+                declared,
+                c.requested_gamepad,
+                c.resolved_gamepad,
+            )
+        }));
         match self.subsystem.open(sdl3::joystick::JoystickId::new(id)) {
             Ok(pad) => {
-                let mut slot = Slot::new(id, index, pref, declared, pad);
+                let route = PadRoute::new(&self.bindings, quick_access);
+                let mut slot = Slot::new(id, index, pref, declared, pad, route);
                 let raw = crate::sc2_capture::raw_model(
                     pref,
                     declared,
@@ -827,7 +811,10 @@ impl Worker {
     }
 
     /// Flush held wire state and drop the SDL handle. Flush is wire-only, so unplug is safe.
+    /// The shortcuts let go first: a key combination held down comes up on the client too.
     fn close_slot_at(&mut self, i: usize) {
+        let acts = self.slots[i].route.flush(&self.gates, Instant::now());
+        self.perform(i, acts);
         // Raw reports stop first: one landing after the remove would outlive the slot.
         self.slots[i].sc2 = None;
         // Silence before the handle drops; do not depend on SDL at close. Errors if already gone.
@@ -906,10 +893,9 @@ impl Worker {
         }
     }
 
-    /// After hotplug or pin change. A pad holding the escape chord may have just unplugged.
+    /// After hotplug or pin change.
     fn refresh_active(&mut self) {
         self.sync_open();
-        self.rearm_escape();
         self.publish();
     }
 
@@ -981,7 +967,6 @@ impl Worker {
         for slot in &mut self.slots {
             Self::readopt_slot(slot, attached.as_deref(), self.gates.system_forward);
         }
-        self.rearm_escape();
     }
 
     /// The pad is ours again: [`PadRoute::adopt`] takes what is down now, without a wire
@@ -1043,83 +1028,42 @@ impl Worker {
         }
     }
 
-    /// Read from the pads, not `held_buttons`: the mask drops button events, and a hold
-    /// that began before it must still complete or let go.
-    fn chord_held(&self) -> bool {
-        self.slots
-            .iter()
-            .any(|s| ESCAPE_CHORD.iter().all(|&b| s.pad.button(b)))
-    }
-
-    fn maybe_fire_escape(&mut self) {
-        if self.chord_armed {
-            return;
-        }
-        if self.chord_held() {
-            self.chord_armed = true;
-            self.chord_since = Some(Instant::now());
-            let _ = self.escape_tx.try_send(());
-            tracing::info!(
-                "gamepad escape chord (L1+R1+Start+Select) — toggling capture (hold to disconnect)"
-            );
-        }
-    }
-
-    /// Hold threshold and a tap's owed presses and releases. ~10 ms attached jitter at most.
-    pub(super) fn gesture_poll(&mut self) {
-        let Some(c) = self.attached.clone() else {
-            self.synthetic.clear();
-            return;
-        };
+    /// A tap's owed presses and releases, and each slot's shortcut clock: a hold fires, or a
+    /// held-back tap lets go, with no new event. ~10 ms attached jitter at most.
+    pub(super) fn shortcut_poll(&mut self) {
         let now = Instant::now();
-        self.synthetic.retain(|&(pad, bit, down, due)| {
-            if now >= due {
-                send(&c, InputKind::GamepadButton, bit, down as i32, pad);
-                false
-            } else {
-                true
-            }
-        });
-        if !self.gates.guide_gesture {
-            return;
+        match self.attached.clone() {
+            Some(c) => self.synthetic.retain(|&(pad, bit, down, due)| {
+                let keep = now < due;
+                if !keep {
+                    send(&c, InputKind::GamepadButton, bit, down as i32, pad);
+                }
+                keep
+            }),
+            None => self.synthetic.clear(),
         }
-        for slot in &mut self.slots {
-            let mut due = Vec::new();
-            slot.route.gesture.poll(now, &mut due);
-            for (b, down) in due {
-                send(&c, InputKind::GamepadButton, b, down as i32, slot.index);
-            }
+        for i in 0..self.slots.len() {
+            let acts = self.slots[i].route.poll(&self.gates, now);
+            self.perform(i, acts);
         }
     }
 
-    /// Polled so the hold completes, or lets go, without new events — a mask drops them.
-    pub(super) fn maybe_fire_disconnect(&mut self) {
-        self.rearm_escape();
-        if self.disconnect_fired {
-            return;
-        }
-        if let Some(since) = self.chord_since {
-            if since.elapsed() >= DISCONNECT_HOLD {
-                self.disconnect_fired = true;
-                let _ = self.disconnect_tx.try_send(());
-                tracing::info!("gamepad escape chord held — disconnecting");
+    /// Slot `i`'s wire transitions, and what its shortcuts fired for the client.
+    fn perform(&self, i: usize, acts: Vec<Action>) {
+        let index = self.slots[i].index;
+        for action in acts {
+            match action {
+                Action::Wire { bit, down } => {
+                    if let Some(c) = &self.attached {
+                        send(c, InputKind::GamepadButton, bit, down as i32, index);
+                    }
+                }
+                Action::Fire(fired, phase) => {
+                    let _ = self.shortcut_tx.try_send((index, fired, phase));
+                }
+                other => tracing::debug!(?other, "pad action outside an input event"),
             }
         }
-    }
-
-    fn rearm_escape(&mut self) {
-        if self.chord_armed && !self.chord_held() {
-            self.reset_chord();
-        }
-    }
-
-    /// Session boundary: hold-to-disconnect ends the session while the chord is still held,
-    /// so button-ups arrive after detach and `rearm_escape` never runs. Without this the
-    /// latch leaks into the next session (swallows the first chord or fires a stale disconnect).
-    fn reset_chord(&mut self) {
-        self.chord_armed = false;
-        self.chord_since = None;
-        self.disconnect_fired = false;
     }
 
     /// Steam pads: `TouchpadEx` (SDL 0 = left → surface 1, signed). DualSense: legacy unsigned.
@@ -1284,14 +1228,11 @@ impl Worker {
                 self.refresh_active();
             }
             Ctl::KindOverride(pref) => self.set_kind_override(pref),
-            Ctl::ChordsLive(on) => {
-                self.gates.chords_live = on;
+            Ctl::Shortcuts(bindings) => self.on_shortcuts(bindings),
+            Ctl::SystemButtons(forward_raw) => {
+                self.gates.system_forward = forward_raw;
                 self.push_sc2_gate();
             }
-            Ctl::SystemButtons {
-                forward_raw,
-                gesture,
-            } => self.on_system_buttons(forward_raw, gesture),
             Ctl::TapButton(bit) => self.on_tap(bit),
             Ctl::Mask(on) => self.on_mask(on),
             Ctl::Forwarding(on) => self.on_forwarding(on),
@@ -1309,7 +1250,6 @@ impl Worker {
     fn on_attach(&mut self, c: Arc<NativeClient>) {
         c.set_rumble_wake(self.rumble_wake.clone());
         self.attached = Some(c);
-        self.reset_chord();
         if self.forwarding {
             set_valve_hidapi(true);
         }
@@ -1322,39 +1262,29 @@ impl Worker {
     fn on_detach(&mut self) {
         self.close_all_slots();
         self.attached = None;
-        self.reset_chord();
         set_valve_hidapi(false);
         self.sync_open();
         if self.gates.menu_mode {
-            // Adopt still-held buttons so the escape chord cannot ghost-fire the menu.
+            // Adopt still-held buttons so the exit chord cannot ghost-fire the menu.
             self.menu_nav.reset();
         }
     }
 
-    /// `forward_raw` sends physical Guide/QAM to the host, `gesture` arms hold-Select. A
-    /// gesture flip lifts a synthetic Guide or owed tap now, so a mid-session change strands none.
-    fn on_system_buttons(&mut self, forward_raw: bool, gesture: bool) {
-        self.gates.system_forward = forward_raw;
+    /// The pad shortcuts of the next stream. An open slot lets go of what its old ones held.
+    fn on_shortcuts(&mut self, bindings: Vec<Binding>) {
+        self.gates.ring_chord = ring_on_select_a(&bindings);
         self.push_sc2_gate();
-        if self.gates.guide_gesture == gesture {
-            return;
+        let now = Instant::now();
+        for i in 0..self.slots.len() {
+            let acts = self.slots[i].route.rebind(&bindings, &self.gates, now);
+            self.perform(i, acts);
         }
-        self.gates.guide_gesture = gesture;
-        let Some(c) = self.attached.clone() else {
-            return;
-        };
-        for slot in &mut self.slots {
-            let mut due = Vec::new();
-            slot.route.gesture.flush(&mut due);
-            for (b, down) in due {
-                send(&c, InputKind::GamepadButton, b, down as i32, slot.index);
-            }
-        }
+        self.bindings = bindings;
     }
 
     /// A synthetic tap on the first forwarded slot (pad 0 if none). `MISC1` is Quick Access,
     /// pressed as that pad's host device reads it. The first press goes out now; the rest
-    /// are owed to [`Self::gesture_poll`].
+    /// are owed to [`Self::shortcut_poll`].
     fn on_tap(&mut self, bit: u32) {
         let Some(c) = self.attached.clone() else {
             return;
@@ -1381,8 +1311,8 @@ impl Worker {
     }
 
     /// The overlay takes the pads or gives them back. Masking flushes every slot neutral but
-    /// keeps it open, so the host sees no unplug; an escape hold carries on, since the escape
-    /// itself raises the mask. Lifting adopts what is held.
+    /// keeps it open, so the host sees no unplug; a shortcut's hold carries on, since the mask
+    /// never reaches the shortcuts. Lifting adopts what is held.
     fn on_mask(&mut self, on: bool) {
         if self.gates.masked == on {
             return;
@@ -1409,7 +1339,6 @@ impl Worker {
             return;
         }
         self.forwarding = on;
-        self.reset_chord();
         let attached = self.attached.is_some();
         if on && attached {
             set_valve_hidapi(true);
@@ -1483,8 +1412,7 @@ impl Worker {
         }
     }
 
-    /// One transition on a forwarded pad: [`route`] decides, this performs. The escape
-    /// chord is checked last, once the slot borrow has ended.
+    /// One transition on a forwarded pad: [`route`] decides, this performs.
     fn on_input(&mut self, event: &sdl3::event::Event) {
         let Some(which) = input_pad(event) else {
             return;
@@ -1495,7 +1423,6 @@ impl Worker {
         let Some(input) = Self::pad_input(slot, event) else {
             return;
         };
-        let mut escape = None;
         for action in route(input, &self.gates, &mut slot.route, Instant::now()) {
             match action {
                 Action::Wire { bit, down } => {
@@ -1505,16 +1432,10 @@ impl Worker {
                 Action::Forward => Self::forward(&c, slot, event),
                 Action::Flush => Self::flush_slot(&c, slot),
                 Action::Readopt => Self::readopt_slot(slot, Some(&*c), self.gates.system_forward),
-                Action::Chord(chord) => {
-                    let _ = self.chord_tx.try_send((slot.index, chord));
+                Action::Fire(fired, phase) => {
+                    let _ = self.shortcut_tx.try_send((slot.index, fired, phase));
                 }
-                Action::Escape | Action::Rearm => escape = Some(action),
             }
-        }
-        match escape {
-            Some(Action::Escape) => self.maybe_fire_escape(),
-            Some(Action::Rearm) => self.rearm_escape(),
-            _ => {}
         }
     }
 
@@ -1806,10 +1727,8 @@ impl Worker {
         subsystem: sdl3::GamepadSubsystem,
         pads_out: Arc<Mutex<Vec<PadInfo>>>,
         active_out: Arc<Mutex<Option<PadInfo>>>,
-        escape_tx: async_channel::Sender<()>,
-        disconnect_tx: async_channel::Sender<()>,
         menu_tx: async_channel::Sender<MenuEvent>,
-        chord_tx: async_channel::Sender<(u8, SelectChord)>,
+        shortcut_tx: async_channel::Sender<ShortcutFired>,
     ) -> Worker {
         Worker {
             subsystem,
@@ -1832,14 +1751,10 @@ impl Worker {
             pad_audio_prefs: 0,
             rumble: true,
             attached: None,
-            escape_tx,
-            disconnect_tx,
-            chord_armed: false,
-            chord_since: None,
-            disconnect_fired: false,
+            bindings: Vec::new(),
             menu_nav: MenuNav::new(),
             menu_tx,
-            chord_tx,
+            shortcut_tx,
         }
     }
 }
@@ -1848,10 +1763,8 @@ pub(super) fn run(
     pads_out: Arc<Mutex<Vec<PadInfo>>>,
     active_out: Arc<Mutex<Option<PadInfo>>>,
     ctl: &Receiver<Ctl>,
-    escape_tx: &async_channel::Sender<()>,
-    disconnect_tx: &async_channel::Sender<()>,
     menu_tx: &async_channel::Sender<MenuEvent>,
-    chord_tx: &async_channel::Sender<(u8, SelectChord)>,
+    shortcut_tx: &async_channel::Sender<ShortcutFired>,
 ) -> Result<(), String> {
     // Off-main-thread, no video: keep SDL away from signals; poll pads on this thread.
     sdl3::hint::set("SDL_NO_SIGNAL_HANDLERS", "1");
@@ -1873,10 +1786,8 @@ pub(super) fn run(
         subsystem,
         pads_out,
         active_out,
-        escape_tx.clone(),
-        disconnect_tx.clone(),
         menu_tx.clone(),
-        chord_tx.clone(),
+        shortcut_tx.clone(),
     );
     w.rumble_wake = Arc::new(move || {
         let _ = sender.push_custom_event(RumbleWake);
@@ -1887,8 +1798,8 @@ pub(super) fn run(
             return Ok(());
         }
 
-        // Wait, don't sleep+poll. 10 ms attached/menu bounds chord-hold and haptic
-        // jitter (DISCONNECT_HOLD is 1500 ms). Idle wakes at 30 ms for hotplug + ctl.
+        // Wait, don't sleep+poll. 10 ms attached/menu bounds a shortcut hold's and haptic
+        // jitter (`shortcuts::HOLD` is 1 s). Idle wakes at 30 ms for hotplug + ctl.
         let menu = w.gates.input_route(false).opens_menu_pads();
         let timeout = Duration::from_millis(if w.attached.is_some() || menu { 10 } else { 30 });
         if let Some(event) = pump.wait_event_timeout(timeout) {
@@ -1898,9 +1809,7 @@ pub(super) fn run(
             }
         }
 
-        w.gesture_poll();
-        w.maybe_fire_disconnect();
-
+        w.shortcut_poll();
         w.menu_poll();
         w.battery_poll();
         w.render_feedback();
@@ -1984,16 +1893,6 @@ mod menu_merge_tests {
 mod slot_tests {
     use super::*;
 
-    #[test]
-    fn the_guide_gesture_knows_the_escape_chord() {
-        let mut chord: Vec<u32> = ESCAPE_CHORD.iter().filter_map(|&b| button_bit(b)).collect();
-        let mut want = super::super::select_gesture::EXIT_PARTNERS.to_vec();
-        want.push(wire::BTN_BACK);
-        chord.sort_unstable();
-        want.sort_unstable();
-        assert_eq!(chord, want);
-    }
-
     /// SDL's names for a Switch 2 Pro's GR, GL and C: the bits the host's Switch 2 report sets
     /// them from (`switch2_proto`).
     #[test]
@@ -2052,6 +1951,7 @@ mod slot_tests {
     /// keeps that order on the wire and lets go of A first. A pad with the button taps it.
     #[test]
     fn a_quick_access_tap_holds_guide_before_it_presses_a() {
+        use crate::shortcuts::TAP_PRESS;
         assert_eq!(
             tap_events(wire::quick_access_presses(false)),
             [
@@ -2266,26 +2166,17 @@ mod ctl_tests {
             eprintln!("no SDL gamepad subsystem on this box, test skipped");
             return;
         };
-        let (escape_tx, _) = async_channel::unbounded();
-        let (disconnect_tx, _) = async_channel::unbounded();
         let (menu_tx, _) = async_channel::unbounded();
-        let (chord_tx, _) = async_channel::unbounded();
+        let (shortcut_tx, _) = async_channel::unbounded();
         let mut w = Worker::new(
             subsystem,
             Arc::default(),
             Arc::default(),
-            escape_tx,
-            disconnect_tx,
             menu_tx,
-            chord_tx,
+            shortcut_tx,
         );
         let (tx, rx) = channel();
         test(&mut w, tx, rx);
-    }
-
-    fn latch_chord(w: &mut Worker) {
-        w.chord_armed = true;
-        w.chord_since = Some(Instant::now());
     }
 
     /// A closed queue still yields what it held, and only then ends the worker.
@@ -2307,10 +2198,7 @@ mod ctl_tests {
             for msg in [
                 Ctl::Mask(false),
                 Ctl::Forwarding(true),
-                Ctl::SystemButtons {
-                    forward_raw: true,
-                    gesture: false,
-                },
+                Ctl::SystemButtons(true),
                 Ctl::MenuRumble(MenuPulse::Move),
                 Ctl::Rumble(false),
             ] {
@@ -2324,12 +2212,11 @@ mod ctl_tests {
     #[test]
     fn settings_land_in_the_gates_and_the_worker() {
         with_worker(|w, tx, rx| {
+            let shortcuts =
+                crate::shortcuts::defaults(crate::shortcuts::Client::Desktop, true, "auto");
             for msg in [
-                Ctl::ChordsLive(true),
-                Ctl::SystemButtons {
-                    forward_raw: false,
-                    gesture: true,
-                },
+                Ctl::Shortcuts(shortcuts.bindings.clone()),
+                Ctl::SystemButtons(false),
                 Ctl::MenuMode(true),
                 Ctl::RingNav(true),
                 Ctl::PadAudioPrefs(0xFF),
@@ -2340,8 +2227,9 @@ mod ctl_tests {
             }
             assert!(w.drain_ctl(&rx));
             let g = w.gates;
-            assert!(g.chords_live && g.menu_mode && g.ring_nav && g.guide_gesture);
+            assert!(g.ring_chord && g.menu_mode && g.ring_nav);
             assert!(!g.system_forward && !g.masked);
+            assert_eq!(w.bindings, shortcuts.bindings);
             assert_eq!(w.pad_audio_prefs, 0x03, "only haptics and speaker survive");
             assert_eq!(w.kind_override, GamepadPref::DualShock4);
             assert_eq!(w.pinned.as_deref(), Some("054c:0ce6:pad"));
@@ -2351,42 +2239,14 @@ mod ctl_tests {
         });
     }
 
-    /// Lifting the mask re-reads the pads, so a latch no pad still holds is let go.
+    /// Detach with nothing attached still turns the Deck driver off.
     #[test]
-    fn lifting_the_mask_lets_go_of_an_escape_latch_no_pad_holds() {
+    fn detach_turns_the_deck_driver_off() {
         with_worker(|w, tx, rx| {
-            latch_chord(w);
-            tx.send(Ctl::Mask(true)).unwrap();
-            assert!(w.drain_ctl(&rx));
-            assert!(w.gates.masked && w.chord_armed, "an escape hold carries on");
-            tx.send(Ctl::Mask(false)).unwrap();
-            assert!(w.drain_ctl(&rx));
-            assert!(!w.gates.masked && !w.chord_armed);
-        });
-    }
-
-    #[test]
-    fn a_forwarding_change_resets_the_escape_latch_and_a_repeat_does_not() {
-        with_worker(|w, tx, rx| {
-            latch_chord(w);
-            tx.send(Ctl::Forwarding(true)).unwrap();
-            assert!(w.drain_ctl(&rx));
-            assert!(w.forwarding && w.chord_armed);
-            tx.send(Ctl::Forwarding(false)).unwrap();
-            assert!(w.drain_ctl(&rx));
-            assert!(!w.forwarding && !w.chord_armed && w.chord_since.is_none());
-        });
-    }
-
-    /// Detach with nothing attached still drops the latch and turns the Deck driver off.
-    #[test]
-    fn detach_resets_the_latch_and_turns_the_deck_driver_off() {
-        with_worker(|w, tx, rx| {
-            latch_chord(w);
             sdl3::hint::set("SDL_JOYSTICK_HIDAPI_STEAMDECK", "1");
             tx.send(Ctl::Detach).unwrap();
             assert!(w.drain_ctl(&rx));
-            assert!(w.attached.is_none() && !w.chord_armed);
+            assert!(w.attached.is_none());
             assert_eq!(
                 sdl3::hint::get("SDL_JOYSTICK_HIDAPI_STEAMDECK").as_deref(),
                 Some("0")

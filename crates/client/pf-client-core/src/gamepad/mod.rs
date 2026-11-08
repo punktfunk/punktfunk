@@ -10,29 +10,27 @@
 //! driver stays off; an attached session supersedes. This thread is the single
 //! rumble/HID-output consumer. Menu types live in `menu_nav`.
 //!
-//! `worker` owns SDL and the forwarded slots; `route` decides where pad input goes;
-//! `feedback` decides what rumble and HID output a pad is told; `ds5` builds the DualSense
-//! effects packets; `select_gesture` is the hold-Select state machine.
+//! `worker` owns SDL and the forwarded slots; `route` decides where pad input goes, through
+//! each slot's [`crate::shortcuts::Engine`]; `feedback` decides what rumble and HID output a
+//! pad is told; `ds5` builds the DualSense effects packets.
 
 mod ds5;
 mod feedback;
 mod route;
-mod select_gesture;
 mod worker;
 
 pub use crate::menu_nav::{MenuDir, MenuEvent, MenuPulse, PadBattery, PadInfo};
+use crate::shortcuts::{Action, Binding, Phase};
 use punktfunk_core::client::NativeClient;
 use punktfunk_core::config::GamepadPref;
 use punktfunk_core::input::gamepad as wire;
-pub use select_gesture::SelectChord;
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::mpsc::{Receiver, Sender};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
 use worker::{run, Worker};
 
-/// 1500 ms is long enough to be deliberate over a leave-fullscreen press.
-const DISCONNECT_HOLD: Duration = Duration::from_millis(1500);
+/// A shortcut a forwarded pad fired: the pad's wire index, the action and its phase.
+pub type ShortcutFired = (u8, Action, Phase);
 
 /// The Deck's HIDAPI driver on/off. It sends `ID_CLEAR_DIGITAL_MAPPINGS` +
 /// `TRACKPAD_NONE` at *enumeration* and feeds the lizard-mode watchdog, so the
@@ -77,10 +75,8 @@ enum Ctl {
     Pin(Option<String>),
     KindOverride(GamepadPref),
     Forwarding(bool),
-    SystemButtons {
-        forward_raw: bool,
-        gesture: bool,
-    },
+    /// Physical Guide and Quick Access reach the host.
+    SystemButtons(bool),
     TapButton(u32),
     /// Pad-audio streams to render: bit0 = haptics, bit1 = speaker. Settings half of
     /// the tier-A capability declared at slot open.
@@ -94,8 +90,8 @@ enum Ctl {
     /// pads before a session attaches. It does not mask: without [`Ctl::Mask`] the same
     /// presses also reach the host.
     RingNav(bool),
-    /// Whether anything is listening for a Select chord ([`GamepadService::set_chords_live`]).
-    ChordsLive(bool),
+    /// The pad shortcuts every forwarded slot runs ([`GamepadService::set_shortcuts`]).
+    Shortcuts(Vec<Binding>),
 }
 
 #[derive(Clone)]
@@ -105,12 +101,8 @@ pub struct GamepadService {
     /// The last [`Self::set_kind_override`], as [`GamepadPref::to_u8`].
     kind: Arc<AtomicU8>,
     ctl: Sender<Ctl>,
-    escape_rx: async_channel::Receiver<()>,
-    disconnect_rx: async_channel::Receiver<()>,
     menu_rx: async_channel::Receiver<MenuEvent>,
-    /// A Select chord while streaming — the second button swallowed. Carries the pad's wire
-    /// index and what it asked for.
-    chord_rx: async_channel::Receiver<(u8, SelectChord)>,
+    shortcut_rx: async_channel::Receiver<ShortcutFired>,
 }
 
 impl GamepadService {
@@ -118,23 +110,13 @@ impl GamepadService {
         let pads = Arc::new(Mutex::new(Vec::new()));
         let active = Arc::new(Mutex::new(None));
         let (ctl, ctl_rx) = std::sync::mpsc::channel();
-        let (escape_tx, escape_rx) = async_channel::unbounded();
-        let (disconnect_tx, disconnect_rx) = async_channel::unbounded();
         let (menu_tx, menu_rx) = async_channel::unbounded();
-        let (chord_tx, chord_rx) = async_channel::unbounded();
+        let (shortcut_tx, shortcut_rx) = async_channel::unbounded();
         let (p, a) = (pads.clone(), active.clone());
         if let Err(e) = std::thread::Builder::new()
             .name("punktfunk-gamepad".into())
             .spawn(move || {
-                if let Err(e) = run(
-                    p,
-                    a,
-                    &ctl_rx,
-                    &escape_tx,
-                    &disconnect_tx,
-                    &menu_tx,
-                    &chord_tx,
-                ) {
+                if let Err(e) = run(p, a, &ctl_rx, &menu_tx, &shortcut_tx) {
                     tracing::warn!(error = %e, "gamepad service ended — pads disabled");
                 }
             })
@@ -146,10 +128,8 @@ impl GamepadService {
             active,
             kind: Arc::default(),
             ctl,
-            escape_rx,
-            disconnect_rx,
             menu_rx,
-            chord_rx,
+            shortcut_rx,
         }
     }
 
@@ -165,18 +145,14 @@ impl GamepadService {
         let pads = Arc::new(Mutex::new(Vec::new()));
         let active = Arc::new(Mutex::new(None));
         let (ctl, ctl_rx) = std::sync::mpsc::channel();
-        let (escape_tx, escape_rx) = async_channel::unbounded();
-        let (disconnect_tx, disconnect_rx) = async_channel::unbounded();
         let (menu_tx, menu_rx) = async_channel::unbounded();
-        let (chord_tx, chord_rx) = async_channel::unbounded();
+        let (shortcut_tx, shortcut_rx) = async_channel::unbounded();
         let worker = Worker::new(
             subsystem,
             pads.clone(),
             active.clone(),
-            escape_tx,
-            disconnect_tx,
             menu_tx,
-            chord_tx,
+            shortcut_tx,
         );
         (
             GamepadService {
@@ -184,23 +160,11 @@ impl GamepadService {
                 active,
                 kind: Arc::default(),
                 ctl,
-                escape_rx,
-                disconnect_rx,
                 menu_rx,
-                chord_rx,
+                shortcut_rx,
             },
             GamepadPump { worker, ctl_rx },
         )
-    }
-
-    /// Clone of the shared mpmc channel; the stream page spawns a future on it.
-    pub fn escape_events(&self) -> async_channel::Receiver<()> {
-        self.escape_rx.clone()
-    }
-
-    /// Clone of the shared mpmc channel; fires once past [`DISCONNECT_HOLD`].
-    pub fn disconnect_events(&self) -> async_channel::Receiver<()> {
-        self.disconnect_rx.clone()
     }
 
     /// Clone of the shared mpmc channel; flowing only while menu mode is on and idle.
@@ -208,19 +172,17 @@ impl GamepadService {
         self.menu_rx.clone()
     }
 
-    /// Select chords on a forwarded pad — both buttons swallowed. One event per chord, carrying
-    /// the pad's wire index and what it asked for. Silent until [`Self::set_chords_live`].
-    pub fn chord_events(&self) -> async_channel::Receiver<(u8, SelectChord)> {
-        self.chord_rx.clone()
+    /// What the forwarded pads' shortcuts fire, mask or not. A pad's Guide and Quick Access
+    /// go to its own wire instead and never show up here.
+    pub fn shortcut_events(&self) -> async_channel::Receiver<ShortcutFired> {
+        self.shortcut_rx.clone()
     }
 
-    /// Whether this client can act on a Select chord at all.
-    ///
-    /// Off by default, and off for good on a build with no console UI: the chord swallows the
-    /// button pressed with Select, so claiming one nothing receives eats a face button the game
-    /// was owed. The client turns it on once it has somewhere to send them.
-    pub fn set_chords_live(&self, on: bool) {
-        let _ = self.ctl.send(Ctl::ChordsLive(on));
+    /// The pad bindings of the next stream: only actions this client can take. A binding to
+    /// something nothing performs holds back a press the game was owed. A slot open now lets
+    /// go of what its old bindings held.
+    pub fn set_shortcuts(&self, bindings: Vec<Binding>) {
+        let _ = self.ctl.send(Ctl::Shortcuts(bindings));
     }
 
     /// Forwarded pads drive the ring, or every pad does before a session attaches (a launch
@@ -269,8 +231,8 @@ impl GamepadService {
     }
 
     /// Off holds no slot: no arrival and the hidraw node stays free for a passthrough
-    /// tool (SDL HIDAPI takes it at open). The escape chord listens only on forwarded
-    /// pads; menu navigation is untouched.
+    /// tool (SDL HIDAPI takes it at open). Pad shortcuts listen only on forwarded pads;
+    /// menu navigation is untouched.
     pub fn set_forwarding(&self, on: bool) {
         let _ = self.ctl.send(Ctl::Forwarding(on));
     }
@@ -288,16 +250,13 @@ impl GamepadService {
     }
 
     /// `forward_raw` gates physical Guide/QAM onto the wire (off = local shell; on a
-    /// Gaming-Mode host, forwarding opens both overlays). `gesture` arms hold-Select
-    /// ([`GUIDE_HOLD`](select_gesture::GUIDE_HOLD)) so the host Guide stays reachable.
-    pub fn set_system_buttons(&self, forward_raw: bool, gesture: bool) {
-        let _ = self.ctl.send(Ctl::SystemButtons {
-            forward_raw,
-            gesture,
-        });
+    /// Gaming-Mode host, forwarding opens both overlays). A local one never reaches the pad
+    /// shortcuts; a shortcut's Guide still reaches the host.
+    pub fn set_system_buttons(&self, forward_raw: bool) {
+        let _ = self.ctl.send(Ctl::SystemButtons(forward_raw));
     }
 
-    /// Synthetic host Guide: down now, up [`TAP_PRESS`](select_gesture::TAP_PRESS) later, on
+    /// Synthetic host Guide: down now, up [`TAP_PRESS`](crate::shortcuts::TAP_PRESS) later, on
     /// the first forwarded slot (pad 0 if none). No-op with no session.
     pub fn tap_guide(&self) {
         self.tap_button(wire::BTN_GUIDE);
@@ -361,12 +320,11 @@ impl GamepadPump {
         self.worker.handle_event(event);
     }
 
-    /// Per-wakeup work: ctl drain, chord hold, menu repeat, rumble/HID. ≲30 ms keeps
-    /// chord-hold and haptics inside the threaded worker's tolerances.
+    /// Per-wakeup work: ctl drain, shortcut holds, menu repeat, rumble/HID. ≲30 ms keeps
+    /// shortcut holds and haptics inside the threaded worker's tolerances.
     pub fn tick(&mut self) {
         let _ = self.worker.drain_ctl(&self.ctl_rx);
-        self.worker.gesture_poll();
-        self.worker.maybe_fire_disconnect();
+        self.worker.shortcut_poll();
         self.worker.menu_poll();
         self.worker.battery_poll();
         self.worker.render_feedback();

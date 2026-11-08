@@ -675,7 +675,7 @@ impl SkiaOverlay {
             self.banner_text = None;
             return 0.0;
         }
-        self.banner_text = Some(exit_hint(ctx.pad.is_some()));
+        self.banner_text = exit_hint(ctx.shortcuts, ctx.pad.is_some());
         ((BANNER_S - age) / BANNER_FADE_S).min(1.0)
     }
 
@@ -813,13 +813,17 @@ fn fit_scale(scale: f32, width_at_scale: f32, budget: f32) -> f32 {
     }
 }
 
-/// How to leave a stream, in one line: the pad chord when a pad is forwarded, else the key.
-pub(crate) fn exit_hint(pad: bool) -> String {
-    if pad {
-        pf_l10n::client::notice_exit_hold("L1 + R1 + Start + Select")
-    } else {
-        pf_l10n::client::notice_exit_keys("Ctrl+Alt+Shift+D")
-    }
+/// How to leave a stream, in one line: the pad's End stream when a pad is forwarded, else the
+/// keyboard's. `None` when neither ends it.
+pub(crate) fn exit_hint(
+    shortcuts: &pf_client_core::shortcuts::Shortcuts,
+    pad: bool,
+) -> Option<String> {
+    use pf_client_core::shortcuts::Device;
+    use pf_presenter::overlay::leave_line;
+    pad.then(|| leave_line(shortcuts, Device::Pad))
+        .flatten()
+        .or_else(|| leave_line(shortcuts, Device::Keyboard))
 }
 
 /// Stats OSD: translucent rounded panel in `corner`, one line each, painted by role.

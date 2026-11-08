@@ -50,6 +50,7 @@ impl StreamState {
             access: pf_client_core::access::SessionAccess::default(),
             session_notice: None,
             ending_game: None,
+            host_notice: None,
             touch_mouse: crate::touch::SteamTouchMouse::new(in_gamescope()),
             cursor: crate::cursor_model::CursorModel::new(Instant::now()),
             force_software,
@@ -370,7 +371,11 @@ pub(super) fn ring_facts(
 
 /// The game this device launched that this stream plays, from the running cache. Keeps
 /// the cache fresh too: [`pf_client_core::library::refresh_running`] is TTL-gated.
-fn streamed_game(addr: &str, (mgmt, port): (u16, u16), fp_hex: &str) -> Option<(String, String)> {
+pub(super) fn streamed_game(
+    addr: &str,
+    (mgmt, port): (u16, u16),
+    fp_hex: &str,
+) -> Option<(String, String)> {
     pf_client_core::library::refresh_running(addr, mgmt, port, fp_hex);
     pf_client_core::library::running(fp_hex)
         .into_iter()
@@ -708,6 +713,8 @@ impl Shell {
         if self.pacing_active {
             self.present_priority = p.present_priority;
         }
+        let ring = self.overlay.is_some();
+        (self.shortcuts, self.keys) = super::shortcuts::adopt(&p.shortcuts, &self.gamepad, ring);
         let o = &mut self.opts;
         o.touch_mode = p.touch_mode;
         o.mouse_mode = p.mouse_mode;
@@ -866,8 +873,7 @@ impl Shell {
         }
     }
 
-    /// The ring's commands this pass. Stats tier, keyboard, pad mouse, controller type, stream
-    /// mute and system buttons are the loop's; the rest go to [`Shell::ring_command`].
+    /// The ring's commands this pass ([`Shell::run_ring_command`]).
     pub(super) fn ring_tick(&mut self, stream: &mut Option<StreamState>) {
         let mut ring_cmds = Vec::new();
         if let (Some(o), true) = (self.overlay.as_mut(), stream.is_some()) {
@@ -877,36 +883,47 @@ impl Shell {
         }
         for cmd in ring_cmds {
             tracing::info!(?cmd, "ring");
-            match cmd {
-                RingCommand::CycleStats => {
-                    bump_stats_tier(&mut self.stats_verbosity, stream);
+            self.run_ring_command(stream, cmd, self.ring_opener);
+        }
+    }
+
+    /// One command from the ring or a shortcut. Stats tier, keyboard, pad mouse, controller
+    /// type, stream mute and system buttons are the loop's; the rest go to
+    /// [`Shell::ring_command`]. `opener` is the pad the command came from.
+    pub(super) fn run_ring_command(
+        &mut self,
+        stream: &mut Option<StreamState>,
+        cmd: RingCommand,
+        opener: Option<u8>,
+    ) {
+        match cmd {
+            RingCommand::CycleStats => {
+                bump_stats_tier(&mut self.stats_verbosity, stream);
+            }
+            RingCommand::Keyboard => self.ring_keyboard = !self.ring_keyboard,
+            RingCommand::CyclePadMouse => {
+                if let Some(c) = stream.as_ref().and_then(|st| st.connector.as_ref()) {
+                    cycle_pad_mouse(c, opener);
                 }
-                RingCommand::Keyboard => self.ring_keyboard = !self.ring_keyboard,
-                RingCommand::CyclePadMouse => {
-                    if let Some(c) = stream.as_ref().and_then(|st| st.connector.as_ref()) {
-                        cycle_pad_mouse(c, self.ring_opener);
-                    }
+            }
+            RingCommand::ToggleStreamMute => {
+                if let Some(c) = stream.as_ref().and_then(|st| st.connector.as_ref()) {
+                    let on = c.audio_mute() & punktfunk_core::client::AUDIO_MUTE_LOCAL != 0;
+                    c.set_audio_muted(!on);
                 }
-                RingCommand::ToggleStreamMute => {
-                    if let Some(c) = stream.as_ref().and_then(|st| st.connector.as_ref()) {
-                        let on = c.audio_mute() & punktfunk_core::client::AUDIO_MUTE_LOCAL != 0;
-                        c.set_audio_muted(!on);
-                    }
-                }
-                // The pad worker owns the wire index and the owed release, so this one is
-                // the service's, not `ring_command`'s.
-                RingCommand::TapButton(bit) => self.gamepad.tap_button(bit),
-                // This stream only: the next connect reads the saved setting again.
-                RingCommand::CyclePadType => {
-                    let next = pf_client_core::overlay_actions::next_pad_type(
-                        self.gamepad.kind_override(),
-                    );
-                    self.gamepad.set_kind_override(next);
-                }
-                other => {
-                    if let Some(st) = stream.as_mut() {
-                        self.ring_command(other, st);
-                    }
+            }
+            // The pad worker owns the wire index and the owed release, so this one is
+            // the service's, not `ring_command`'s.
+            RingCommand::TapButton(bit) => self.gamepad.tap_button(bit),
+            // This stream only: the next connect reads the saved setting again.
+            RingCommand::CyclePadType => {
+                let next =
+                    pf_client_core::overlay_actions::next_pad_type(self.gamepad.kind_override());
+                self.gamepad.set_kind_override(next);
+            }
+            other => {
+                if let Some(st) = stream.as_mut() {
+                    self.ring_command(other, st);
                 }
             }
         }
@@ -915,7 +932,7 @@ impl Shell {
 
 impl Shell {
     /// Run one ring command against the live session (stats tier, keyboard, system buttons,
-    /// controller mouse and controller type are the loop's own, handled at the call site).
+    /// controller mouse and controller type are [`Shell::run_ring_command`]'s).
     pub(super) fn ring_command(&mut self, cmd: RingCommand, st: &mut StreamState) {
         match cmd {
             RingCommand::EndStream => {

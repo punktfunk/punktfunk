@@ -335,6 +335,7 @@ pub fn run(target: Option<&str>) -> u8 {
         touch_mode: settings_at_start.touch_mode(),
         mouse_mode: settings_at_start.mouse_mode(),
         invert_scroll: settings_at_start.invert_scroll,
+        shortcuts: crate::session_main::shortcuts_blob(&settings_at_start),
         inhibit_shortcuts: settings_at_start.inhibit_shortcuts,
         present_priority: settings_at_start.present_priority(),
         vsync: settings_at_start.vsync,

@@ -45,7 +45,6 @@ mod gamepad {
     mod ds5;
     mod feedback;
     mod route;
-    mod select_gesture;
 }
 // Menu-event synthesizer and pad descriptors. Desktop `gamepad` re-exports them; Android feeds the same synthesizer from Kotlin samples (`design/android-skia-console-port.md`).
 #[cfg(portable)]

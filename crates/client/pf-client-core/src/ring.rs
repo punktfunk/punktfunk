@@ -65,6 +65,39 @@ pub enum RingCommand {
     Minimize,
 }
 
+impl RingCommand {
+    /// The command a slot sends with no facts and no arming. `None` for a slot that needs
+    /// either (End game, a host action, a key combination) or does nothing here.
+    pub fn for_slot(slot: &crate::overlay_actions::SlotId) -> Option<RingCommand> {
+        use crate::overlay_actions::SlotId as S;
+        use punktfunk_core::input::gamepad as wire;
+        Some(match slot {
+            S::EndStream => RingCommand::EndStream,
+            S::DisconnectLinger => RingCommand::DisconnectLinger,
+            S::TouchMode => RingCommand::CycleTouchMode,
+            S::Keyboard => RingCommand::Keyboard,
+            S::Stats => RingCommand::CycleStats,
+            S::Mic => RingCommand::ToggleMic,
+            S::Guide => RingCommand::TapButton(wire::BTN_GUIDE),
+            S::Qam => RingCommand::TapButton(wire::BTN_MISC1),
+            S::PadMouse => RingCommand::CyclePadMouse,
+            S::PadType => RingCommand::CyclePadType,
+            S::StreamMute => RingCommand::ToggleStreamMute,
+            S::ReleaseInput => RingCommand::ToggleCapture,
+            S::MouseMode => RingCommand::ToggleMouseMode,
+            S::Fullscreen => RingCommand::ToggleFullscreen,
+            S::Minimize => RingCommand::Minimize,
+            S::EndGame
+            | S::Host(_)
+            | S::Shortcut(_)
+            | S::Pad
+            | S::SendText
+            | S::SwapScreens
+            | S::Clipboard => return None,
+        })
+    }
+}
+
 /// 100 % scale, client design units (px on Skia, dp/pt on phones). Shared so editors cannot drift.
 pub const RING_RADIUS: f32 = 120.0;
 pub const SLOT_DIAMETER: f32 = 56.0;
@@ -101,6 +134,26 @@ mod geometry_tests {
         assert!(x1 > 0.0 && y1 < 0.0, "2 o'clock is up and right");
         for k in 0..6 {
             assert!((slot_angle_deg(k) - (-90.0 + 60.0 * k as f32)).abs() < 1e-6);
+        }
+    }
+
+    #[test]
+    fn a_slot_that_needs_facts_or_arming_has_no_plain_command() {
+        use crate::overlay_actions::SlotId as S;
+        assert_eq!(
+            RingCommand::for_slot(&S::Minimize),
+            Some(RingCommand::Minimize)
+        );
+        assert_eq!(
+            RingCommand::for_slot(&S::ReleaseInput),
+            Some(RingCommand::ToggleCapture)
+        );
+        for slot in [
+            S::EndGame,
+            S::Host("power.sleep".into()),
+            S::Shortcut("s1".into()),
+        ] {
+            assert_eq!(RingCommand::for_slot(&slot), None, "{slot:?}");
         }
     }
 }

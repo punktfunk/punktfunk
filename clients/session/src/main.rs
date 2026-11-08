@@ -177,6 +177,14 @@ mod session_main {
         pf_client_core::gamescope::under_gamescope()
     }
 
+    /// The shortcuts these settings stream with, as a blob: the player's, or this desktop's
+    /// defaults, where the old *Hold Select for guide* value decides the Hold Select row.
+    pub(crate) fn shortcuts_blob(settings: &trust::Settings) -> String {
+        use pf_client_core::shortcuts::{resolve, Client};
+        let legacy = settings.guide_gesture.as_str();
+        resolve(&settings.shortcuts, Client::Desktop, gaming_mode(), legacy).to_json()
+    }
+
     /// Run fullscreen: `--fullscreen`, or the Deck/gamescope env as a fallback so a
     /// manual launch under Gaming Mode does the right thing too. (Browse-mode only —
     /// gated with `mod browse`, its one caller.)
@@ -364,11 +372,7 @@ mod session_main {
         gamepad
             .set_pinned((!settings.forward_pad.is_empty()).then(|| settings.forward_pad.clone()));
         gamepad.set_forwarding(settings.gamepad_forwarding);
-        let game_mode = gaming_mode();
-        gamepad.set_system_buttons(
-            settings.system_buttons_forward(game_mode),
-            settings.guide_gesture_enabled(game_mode),
-        );
+        gamepad.set_system_buttons(settings.system_buttons_forward(gaming_mode()));
         // First build binds it, for --connect and for console launches.
         #[cfg(unix)]
         crate::ctl_socket::spawn(gamepad.clone());
@@ -413,7 +417,8 @@ mod session_main {
             GamepadPref::Auto => gamepad.auto_pref(),
             explicit => explicit,
         };
-        spec.session_params(
+        let shortcuts = shortcuts_blob(settings);
+        let mut params = spec.session_params(
             Dial {
                 host: addr,
                 port,
@@ -434,7 +439,9 @@ mod session_main {
                 hevc_444_hardware,
                 stats_verbosity: stats_tier(settings),
             },
-        )
+        );
+        params.shortcuts = shortcuts;
+        params
     }
 
     /// The window's starting size under Match-window: the persisted last size, so the
@@ -1018,6 +1025,7 @@ mod session_main {
             touch_mode: settings.touch_mode(),
             mouse_mode: settings.mouse_mode(),
             invert_scroll: settings.invert_scroll,
+            shortcuts: shortcuts_blob(&settings),
             inhibit_shortcuts: settings.inhibit_shortcuts,
             present_priority: settings.present_priority(),
             vsync: settings.vsync,
