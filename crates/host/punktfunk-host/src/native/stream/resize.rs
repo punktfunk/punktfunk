@@ -9,8 +9,9 @@ use super::*;
 impl StreamState {
     /// Mode-set the live monitor, restore its presentation, and open an encoder at the first
     /// frame of the new size, for the rebuild performer to swap in. `None` → full rebuild.
-    /// `recover_ring` re-attaches the ring at the current mode and demands a second, newer
-    /// present as proof the OS resumed presenting.
+    /// With the driver's encoder, only its pool taking a frame proves the new size; a second
+    /// without one restarts the presentation once. `recover_ring` re-attaches the ring at the
+    /// current mode and demands a second, newer present as proof the OS resumed presenting.
     pub(super) fn resize(
         &mut self,
         new_mode: punktfunk_core::Mode,
@@ -95,13 +96,34 @@ impl StreamState {
         // are the one place that polls it without the stream loop's own tick. SET_ENCODE retired
         // `enc`'s section, so the clocks are the pre-opened encoder's or they never move.
         let live: &dyn crate::encode::Encoder = pre_opened.as_deref().unwrap_or(&*self.live.enc);
+        // A pixel-less delivery carries the asked size even while DWM still composes the old
+        // one into the old swap chain, which the pool refuses frame by frame.
+        let pool_took =
+            || pre_opened.is_none() || live.telemetry().is_some_and(|t| t.source_seq > 0);
+        let mut kick_at = pre_opened
+            .is_some()
+            .then(|| std::time::Instant::now() + std::time::Duration::from_secs(1));
         let new_frame = loop {
             if let Some(s) = self.live.capturer.supervised() {
                 s.observe(live.telemetry());
             }
             match self.live.capturer.try_latest() {
-                Ok(Some(f)) if (f.width, f.height) == (new_mode.width, new_mode.height) => break f,
+                Ok(Some(f))
+                    if (f.width, f.height) == (new_mode.width, new_mode.height) && pool_took() =>
+                {
+                    break f
+                }
                 Ok(_) => {
+                    if kick_at.is_some_and(|t| std::time::Instant::now() >= t) {
+                        kick_at = None;
+                        tracing::info!(
+                            "resize: the driver's pool took no frame at the new size — restarting \
+                             the presentation"
+                        );
+                        if let Some(d) = self.live.capturer.display() {
+                            d.restart_presentation();
+                        }
+                    }
                     if std::time::Instant::now() >= deadline {
                         tracing::warn!(
                             "resize: no new-size frame within 3s of the in-place mode set — running \
