@@ -1,6 +1,9 @@
 [Desktop Entry]
 Type=Application
 Name=Punktfunk
+Name[de]=Punktfunk
+Name[es]=Punktfunk
+Name[fr]=Punktfunk
 Comment=Stream a remote Punktfunk host
 Comment[de]=Von einem entfernten Punktfunk-Host streamen
 Comment[es]=Transmite desde un host Punktfunk remoto
