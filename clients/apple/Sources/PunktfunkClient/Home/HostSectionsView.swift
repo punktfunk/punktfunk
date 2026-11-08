@@ -26,6 +26,7 @@ struct HostSectionsView: View {
     let handOff: (HostPageRequest) -> Void
     @ObservedObject private var presets = PresetStore.shared
     @ObservedObject private var hostPower = HostPowerStore.shared
+    @ObservedObject private var hostScreens = HostScreenStore.shared
     @Environment(\.dismiss) private var dismiss
     @State private var section: HostSection
     @State private var confirmPower: PendingHostAction?
@@ -99,7 +100,10 @@ struct HostSectionsView: View {
             Text(outcome?.message ?? "")
         }
         .onAppear {
-            if let host = store.hosts.first(where: { $0.id == hostID }) { hostPower.refresh(host) }
+            if let host = store.hosts.first(where: { $0.id == hostID }) {
+                hostPower.refresh(host)
+                hostScreens.refresh(host)
+            }
         }
         #if os(macOS)
         // System type sizes, like the Settings window: the touch UI's 17 pt Geist makes a Mac
@@ -136,9 +140,14 @@ struct HostSectionsView: View {
         }
     }
 
-    /// The sidebar's rows. The demo host has no speed test to run.
+    /// The sidebar's rows. The demo host has no speed test to run; a host that offers this
+    /// device no screens has no Screen row.
     private var sections: [HostSection] {
-        HostSection.allCases.filter { $0 != .speedTest || hostID != DemoMode.hostID }
+        let offersScreens = store.hosts.first { $0.id == hostID }
+            .flatMap(hostScreens.targets(for:)) != nil
+        return HostSection.allCases.filter {
+            ($0 != .speedTest || hostID != DemoMode.hostID) && ($0 != .screen || offersScreens)
+        }
     }
 
     /// A click on empty space deselects a List; the page always shows a section.
@@ -151,6 +160,7 @@ struct HostSectionsView: View {
         HostActions(
             host: host, pinned: nil, online: store.probedOnline.contains(host.id), store: store,
             presets: presets.presets, power: hostPower.actions(for: host),
+            screens: hostScreens.targets(for: host),
             surface: HostActionSurface(
                 connect: { handOff(.connect(host.id, $0)) },
                 pair: { handOff(.pair(host.id)) },
@@ -169,7 +179,10 @@ struct HostSectionsView: View {
                 },
                 wake: { handOff(.wake(host.id)) },
                 showDetails: {},
-                runPower: { power($0, on: host) }))
+                runPower: { power($0, on: host) },
+                screenRefused: {
+                    outcome = (String(localized: L10n.appleHostcardActionFailedTitle), $0)
+                }))
     }
 
     /// Explain an unavailable action, confirm a destructive one, run the rest — as the grid does.

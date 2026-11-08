@@ -63,6 +63,8 @@ struct HomeView: View {
     @State private var sendLogsResult: (ok: Bool, message: String)?
     /// What each paired host says this device may do to it (`design/host-actions.md` §7).
     @StateObject private var hostPower = HostPowerStore.shared
+    /// The screen each paired host streams this device, on the same beat.
+    @StateObject private var hostScreens = HostScreenStore.shared
     /// "Switch profile…": the picker, opened from a card's menu.
     @StateObject private var profileSwitch = ProfileSwitch()
     /// What each paired host is playing right now — refreshed on the same beat below.
@@ -345,6 +347,7 @@ struct HomeView: View {
         HostActions(
             host: host, pinned: pinned, online: isOnline(host), store: store,
             presets: presets.presets, power: hostPower.actions(for: host),
+            screens: hostScreens.targets(for: host),
             surface: HostActionSurface(
                 connect: { connect(host, $0) },
                 pair: { if !model.isBusy { pairingTarget = host } },
@@ -354,7 +357,8 @@ struct HomeView: View {
                 wake: { wake(host) },
                 showDetails: { showDetails(host) },
                 runPower: { hostAction($0, on: host) },
-                switchProfile: { profileSwitch.start(host, store: store) }))
+                switchProfile: { profileSwitch.start(host, store: store) },
+                screenRefused: { hostActionResult = (false, $0) }))
     }
 
     /// The host page: its own window on the Mac, a sheet of sections on the iPad, pushed on the

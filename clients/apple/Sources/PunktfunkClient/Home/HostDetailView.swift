@@ -9,7 +9,7 @@ import SwiftUI
 /// The host page's parts: one form on touch, where the speed test is a page of its own, and one
 /// sidebar row each in the Mac's host window.
 enum HostSection: String, CaseIterable, Identifiable {
-    case overview, presets, connection, speedTest, pairing, power
+    case overview, presets, screen, connection, speedTest, pairing, power
 
     var id: Self { self }
 
@@ -17,6 +17,7 @@ enum HostSection: String, CaseIterable, Identifiable {
         switch self {
         case .overview: String(localized: L10n.appleHostcardSectionOverview)
         case .presets: String(localized: L10n.hostcardSectionPresets)
+        case .screen: String(localized: L10n.hostcardSectionScreen)
         case .connection: String(localized: L10n.hostcardSectionConnection)
         case .speedTest: String(localized: L10n.speedtestTitle)
         case .pairing: String(localized: L10n.hostcardSectionPairing)
@@ -28,6 +29,7 @@ enum HostSection: String, CaseIterable, Identifiable {
         switch self {
         case .overview: "desktopcomputer"
         case .presets: "slider.horizontal.3"
+        case .screen: "display"
         case .connection: "network"
         case .speedTest: "gauge.with.needle"
         case .pairing: "lock"
@@ -83,6 +85,7 @@ struct HostDetailView: View {
                 }
             }
             if shows(.presets) { presetsSection(host, a) }
+            if shows(.screen) { screenSection(a) }
             if shows(.connection) { connectionSection(host, a) }
             if shows(.pairing) { pairingSection(host, a) }
             if shows(.power) { powerSection(a) }
@@ -193,6 +196,57 @@ struct HostDetailView: View {
                     .foregroundStyle(.secondary)
             }
         }
+    }
+
+    /// The host's screens for this device, the pick checked. A row the host can't open now
+    /// says why under it; a locked host shows its reason instead of rows.
+    @ViewBuilder private func screenSection(_ a: HostActions) -> some View {
+        if let screens = a.screens {
+            Section {
+                if screens.locked {
+                    Text(L10n.screenLockedHint)
+                        .foregroundStyle(.secondary)
+                } else {
+                    ForEach(screens.targets) { row in
+                        screenRow(row, current: row.target == screens.current) { a.pickScreen(row) }
+                    }
+                }
+            } header: {
+                Text(L10n.hostcardSectionScreen)
+            } footer: {
+                Text(L10n.screenHint)
+            }
+        }
+    }
+
+    private func screenRow(
+        _ row: ScreenTarget, current: Bool, pick: @escaping () -> Void
+    ) -> some View {
+        Button(action: pick) {
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(row.name)
+                        .foregroundStyle(.primary)
+                    if let line = row.reason ?? (row.detail.isEmpty ? nil : row.detail) {
+                        Text(line)
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                Spacer(minLength: 8)
+                if current {
+                    Image(systemName: "checkmark")
+                        .foregroundStyle(.tint)
+                }
+            }
+            .contentShape(Rectangle())
+        }
+        #if os(macOS)
+        // A grouped Mac form draws a default button as a push button; this is a row.
+        .buttonStyle(.plain)
+        #endif
+        .disabled(row.reason != nil)
+        .accessibilityAddTraits(current ? .isSelected : [])
     }
 
     /// How to reach the host, edited in place. The speed test's button is the iPhone's: a page of

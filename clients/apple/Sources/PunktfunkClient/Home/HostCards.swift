@@ -149,6 +149,10 @@ struct HostActions {
     var power: [HostAction] = []
     var runPower: (HostAction) -> Void = { _ in }
     var presets: HostPresetMenu?
+    /// What this device streams from the host (`GET /display/targets`); nil: no Screen section.
+    var screens: DisplayTargets?
+    /// Writes the row on the host. Only a pickable row is offered.
+    var pickScreen: (ScreenTarget) -> Void = { _ in }
 }
 
 /// Where one surface runs the acts that need more than the store: a sheet, a dial, a window.
@@ -163,15 +167,18 @@ struct HostActionSurface {
     var runPower: (HostAction) -> Void
     /// Only the grid opens the profile picker; a surface that can't leaves this empty.
     var switchProfile: () -> Void = {}
+    /// The host refused a screen pick: the sentence to show.
+    var screenRefused: (String) -> Void = { _ in }
 }
 
 extension HostActions {
     /// What `host` offers, gated in one place for the grid and the Mac's host window. A pinned
     /// card connects and browses with ITS preset and carries no host acts: it is a shortcut, not
-    /// a second host.
+    /// a second host. `screens` is the host's answer for this device, the pick it streams.
     @MainActor init(
         host: StoredHost, pinned: StreamPreset?, online: Bool, store: HostStore,
-        presets: [StreamPreset], power: [HostAction], surface: HostActionSurface
+        presets: [StreamPreset], power: [HostAction], screens: DisplayTargets?,
+        surface: HostActionSurface
     ) {
         let selection: PresetSelection = pinned.map { .preset($0.id) } ?? .inherit
         // Library, speed test and logs dial with the pinned identity, and an unpinned host would
@@ -206,7 +213,15 @@ extension HostActions {
                 togglePin: { id in
                     let pinned = (host.pinnedPresetIDs ?? []).contains(id)
                     store.setPinned(host.id, presetID: id, pinned: !pinned)
-                }))
+                }),
+            screens: screens,
+            pickScreen: { row in
+                Task {
+                    let said = await HostScreenStore.shared.pick(
+                        row.target, label: row.name, on: host)
+                    if let said { surface.screenRefused(said) }
+                }
+            })
     }
 }
 
@@ -314,6 +329,12 @@ struct HostCardView: View {
     var nowPlaying: String? = nil
     @AutoWake private var autoWake
 
+    /// "Streams LG TV" while this device's pick is a host monitor; its own screen says nothing.
+    private var streams: String? {
+        guard let screens = actions.screens, case .monitor = screens.current else { return nil }
+        return screens.summary
+    }
+
     /// The preset this card announces: a pinned card's own, else the host's binding.
     private var shownPreset: StreamPreset? {
         pinnedPreset ?? actions.presets.flatMap { menu in
@@ -362,6 +383,12 @@ struct HostCardView: View {
                                     preset: preset, size: m.status,
                                     prominent: pinnedPreset != nil)
                                     .fixedSize()
+                            }
+                            if let streams {
+                                Text(streams)
+                                    .font(.geist(m.meta, .medium, relativeTo: .footnote))
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(1)
                             }
                         }
                         // One height with or without a chip, so preset cards line up with the rest.
@@ -435,8 +462,8 @@ struct HostCardView: View {
         #endif
     }
 
-    /// The daily acts, five rows at most (design §2.3). Setup, diagnostics, power and removal
-    /// live on the host page. A pinned card offers only its shortcut's acts.
+    /// The daily acts (design §2.3). Setup, diagnostics, power and removal live on the host
+    /// page. A pinned card offers only its shortcut's acts.
     @ViewBuilder private var menuItems: some View {
         if let pinned = pinnedPreset {
             if let browse = actions.browseLibrary {
@@ -453,6 +480,9 @@ struct HostCardView: View {
         } else {
             if let presets = actions.presets {
                 connectWithMenu(presets)
+            }
+            if let screens = actions.screens {
+                screenMenu(screens)
             }
             if let browse = actions.browseLibrary {
                 Button(L10n.hostcardBrowseLibrary, systemImage: "square.grid.2x2", action: browse)
@@ -494,6 +524,30 @@ struct HostCardView: View {
             } label: {
                 Label(L10n.hostcardConnectWith, systemImage: "slider.horizontal.3")
             }
+        }
+    }
+
+    /// "Screen ▸": the host's screens for this device, the pick checked. A row the host can't
+    /// open now is greyed with its reason; a locked host offers its reason instead of rows.
+    @ViewBuilder private func screenMenu(_ screens: DisplayTargets) -> some View {
+        Menu {
+            if screens.locked {
+                Text(L10n.screenLockedHint)
+            } else {
+                ForEach(screens.targets) { row in
+                    Button {
+                        actions.pickScreen(row)
+                    } label: {
+                        checkable(row.name, on: row.target == screens.current)
+                        if let line = row.reason ?? (row.detail.isEmpty ? nil : row.detail) {
+                            Text(line)
+                        }
+                    }
+                    .disabled(row.reason != nil)
+                }
+            }
+        } label: {
+            Label(L10n.hostcardSectionScreen, systemImage: "display")
         }
     }
 
