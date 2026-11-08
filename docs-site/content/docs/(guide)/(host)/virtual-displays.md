@@ -110,6 +110,10 @@ it. **Arrange automatically**, under **Advanced**, puts them back in a row.
 Open **Display settings…** from a device's row in **Devices**. Each question offers **Follow
 host** or an answer for this device only:
 
+- **Screen it streams** (Linux and Windows hosts): **Own screen**, or one of your monitors. **Own
+  screen** keeps this device off a monitor the whole host streams. A device can also pick its
+  screen in its own app ([Screen](/docs/client-settings#screen)); the sheet then says **Chosen on
+  the device.** The latest pick wins, from either side;
 - the keep-alive (including **Keep for** a number of seconds), second-device and remember
   questions above;
 - **Your monitors while streaming**. On a Windows host the first device to connect decides it for
@@ -127,6 +131,10 @@ host** or an answer for this device only:
 **Linux and Windows hosts.** In **Screens**, click **Stream this monitor** on a monitor's row. Every
 device then sees that monitor instead of its own virtual screen. Click it again to give each device
 its own screen.
+
+A device's own pick outranks this, whether made in its app or in its
+[display settings](#per-device-settings). One device streams a monitor at a time: a device set to
+a monitor another device is streaming gets its own screen for that session.
 
 - The monitor is never touched, so keep-alive, **Your monitors while streaming** and layout don't
   apply.

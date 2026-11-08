@@ -75,11 +75,11 @@ const gameSessionLabel = (v: string): string =>
 /** One question after another as the dialog opens. */
 const QUESTION = { from: { opacity: 0, y: 8 }, enter: { opacity: 1, y: 0 } };
 
-const Question: FC<{ label: string; help?: string; children: ReactNode }> = ({
-	label,
-	help,
-	children,
-}) => (
+export const Question: FC<{
+	label: string;
+	help?: string;
+	children: ReactNode;
+}> = ({ label, help, children }) => (
 	<motion.fieldset variants={QUESTION} className="space-y-2">
 		<legend className="text-sm font-medium">{label}</legend>
 		<div className="flex flex-wrap items-center gap-2">{children}</div>
@@ -96,9 +96,11 @@ export const PolicyQuestions: FC<{
 	/** A device's sheet: the host's answers, each offered first as **Follow host**. */
 	inherited?: PolicyValues;
 	busy?: boolean;
+	/** Shown first, in the same stagger: a device sheet's own `Question`. */
+	lead?: ReactNode;
 	/** Shown last, in the same stagger: Customise's sentence. */
 	footer?: ReactNode;
-}> = ({ value, axes, onSet, inherited, busy, footer }) => {
+}> = ({ value, axes, onSet, inherited, busy, lead, footer }) => {
 	const keep = value.keep_alive;
 	// Kept across Off / Keep so switching back restores the operator's number.
 	const [seconds, setSeconds] = useState(
@@ -143,6 +145,7 @@ export const PolicyQuestions: FC<{
 
 	return (
 		<Stagger className="space-y-5">
+			{lead}
 			{axes.includes("keep_alive") && (
 				<Question label={m.display_q_keep()}>
 					<Segmented<string>

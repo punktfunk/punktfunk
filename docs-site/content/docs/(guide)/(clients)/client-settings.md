@@ -28,6 +28,18 @@ compositor**, **Video decoder**, **GPU**, **Low-latency mode**, **Keep screen aw
 **Use controller**, **Guide button**, **Guide gesture**, **Controller haptics**,
 **Controller speaker**, **Steam Controller 2 passthrough** and **DualSense over USB**.
 
+## Screen
+
+A host card's menu has a **Screen** section on every app. It picks what this device streams from
+that host: **Own screen**, a screen the host makes for this device at its resolution, or one of the
+host's monitors, listed by name and current mode. The pick applies from the next session. A greyed
+monitor is streamed by another device or switched off. When the host's settings file fixes the
+screen for every device, the section says so and offers no choice. Only Linux and Windows hosts
+list monitors.
+
+The host keeps the pick for this device, so a preset can't change it. The web console shows it,
+and can change it, in the device's [display settings](/docs/virtual-displays#per-device-settings).
+
 ## Reset all settings
 
 **Reset all settings…**, the last row of **General**, asks first, then puts every setting back to
