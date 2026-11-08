@@ -156,8 +156,7 @@ impl PadProto for XusbWinProto {
     type State = XboxState;
     const LABEL: &'static str = "Xbox 360/Windows";
     const DEVICE: &'static str = "Xbox 360";
-    const CREATE_HINT: &'static str =
-        " (install/repair: punktfunk-host.exe driver install --gamepad)";
+    const CREATE_HINT: &'static str = " (install/repair: run the Punktfunk installer again)";
 
     fn open(&mut self, idx: u8) -> Result<XusbWinPad> {
         let p = XusbWinPad::open(idx)?;

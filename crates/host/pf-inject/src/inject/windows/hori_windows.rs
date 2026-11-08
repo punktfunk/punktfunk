@@ -56,8 +56,7 @@ impl PadProto for HoriWinProto {
     type State = HoriState;
     const LABEL: &'static str = "HORIPAD/Windows";
     const DEVICE: &'static str = "HORIPAD for Steam";
-    const CREATE_HINT: &'static str =
-        " (install/repair: punktfunk-host.exe driver install --gamepad)";
+    const CREATE_HINT: &'static str = " (install/repair: run the Punktfunk installer again)";
 
     fn open(&mut self, idx: u8) -> Result<HoriWinPad> {
         let p = HoriWinPad::open(idx)?;

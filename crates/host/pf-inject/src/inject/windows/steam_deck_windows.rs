@@ -88,8 +88,7 @@ impl PadProto for DeckWinProto {
     type State = SteamState;
     const LABEL: &'static str = "Steam Deck/Windows";
     const DEVICE: &'static str = "Steam Deck";
-    const CREATE_HINT: &'static str =
-        " (install/repair: punktfunk-host.exe driver install --gamepad)";
+    const CREATE_HINT: &'static str = " (install/repair: run the Punktfunk installer again)";
 
     fn open(&mut self, idx: u8) -> Result<DeckWinPad> {
         let p = DeckWinPad::open(idx)?;

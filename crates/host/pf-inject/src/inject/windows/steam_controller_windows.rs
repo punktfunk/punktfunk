@@ -106,8 +106,7 @@ impl PadProto for ScWinProto {
     type State = ScState;
     const LABEL: &'static str = "Steam Controller/Windows";
     const DEVICE: &'static str = "Steam Controller";
-    const CREATE_HINT: &'static str =
-        " (install/repair: punktfunk-host.exe driver install --gamepad)";
+    const CREATE_HINT: &'static str = " (install/repair: run the Punktfunk installer again)";
 
     fn open(&mut self, idx: u8) -> Result<ScWinPad> {
         let identity = crate::triton_proto::identity_for(idx);
