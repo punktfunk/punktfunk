@@ -162,6 +162,7 @@
 	"console_prefs_advanced_changed_hint": "Algunos ajustes ocultos difieren de una instalación nueva; {button} los muestra.",
 	"console_prefs_header_this_device": "Este dispositivo",
 	"console_prefs_override_note": "Preajuste “{preset}” en {host}: {value}",
+	"console_prefs_host_note": "Definido por {host} para {game}: {value}",
 	"console_hint_section": "Sección",
 	"console_hint_rows": "Filas",
 	"console_hint_create": "Crear…",

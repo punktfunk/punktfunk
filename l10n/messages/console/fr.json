@@ -162,6 +162,7 @@
 	"console_prefs_advanced_changed_hint": "Certains paramètres masqués diffèrent d’une installation neuve ; {button} les affiche.",
 	"console_prefs_header_this_device": "Cet appareil",
 	"console_prefs_override_note": "Préréglage « {preset} » sur {host} : {value}",
+	"console_prefs_host_note": "Défini par {host} pour {game} : {value}",
 	"console_hint_section": "Section",
 	"console_hint_rows": "Lignes",
 	"console_hint_create": "Créer…",

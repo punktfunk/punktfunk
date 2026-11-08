@@ -121,6 +121,7 @@
 	"apierr_library_entry_not_deleted": "Der Eintrag wurde nicht gelöscht – der Host war in einem unerwarteten Zustand",
 	"apierr_library_entry_not_updated": "Der Eintrag wurde nicht aktualisiert – der Host war in einem unerwarteten Zustand",
 	"apierr_library_not_updated": "Die Bibliothek wurde nicht aktualisiert – der Host war in einem unerwarteten Zustand",
+	"apierr_library_override_name_taken": "Eine andere gemeinsame Vorgabe heißt schon so. Wähle einen anderen Namen.",
 	"apierr_library_page_marker_invalid": "Diese Seitenmarke ist ungültig. Lade die Liste noch einmal von vorn",
 	"apierr_log_bundle_not_deleted": "Das Log-Paket konnte nicht gelöscht werden",
 	"apierr_log_bundle_not_read": "Das Log-Paket konnte nicht gelesen werden",
