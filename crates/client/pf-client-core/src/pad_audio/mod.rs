@@ -387,7 +387,8 @@ fn run(connector: &NativeClient, stop: &AtomicBool, haptics: bool, speaker: bool
         if !stage.wants(f.kind) {
             continue;
         }
-        // v1: one DualSense. Latch the first streaming pad, drop the rest.
+        // v1: one DualSense. Latch the first streaming pad, drop the rest; a vanished
+        // sink releases the latch, so the pad that replugs on another index is heard.
         match active_pad {
             None => active_pad = Some(f.pad),
             Some(p) if p != f.pad => {
@@ -412,6 +413,7 @@ fn run(connector: &NativeClient, stop: &AtomicBool, haptics: bool, speaker: bool
         if out.as_ref().is_some_and(Sink::finished) {
             tracing::info!("pad-audio output ended (device gone?) — re-correlating");
             out = None;
+            active_pad = None;
             retry_at = Instant::now() + backoff;
             backoff = (backoff * 2).min(RETRY_MAX);
         }
