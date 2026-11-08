@@ -370,74 +370,98 @@ struct ConnectFlow {
         // The delegated-approval wait prompt only makes sense once we're actually dialing — set it
         // here (after any wake), not before, so it never stacks under the "Waking…" overlay.
         if let approvalReq { awaitingApproval = approvalReq }
-        // THE resolution point (design §4.4): the globals plus this connect's preset, once, here.
-        // The model latches the result for the whole session, so nothing downstream can end up
-        // applying a preset to half of it.
-        let effective = EffectiveSettings.resolve(
-            host: host, selection: preset, launch: launchID, catalog: presets.catalog)
-        model.connect(
-            to: host,
-            effective: effective,
-            gamepad: GamepadManager.shared.resolveType(
-                setting: PunktfunkConnection.GamepadType(
-                    rawValue: UInt32(clamping: effective.gamepadType)) ?? .auto),
-            launchID: launchID,
-            profileID: profileID,
-            // Where this session goes back to when it ends: the shelf it started from — the
-            // host's own, or the pinned card whose preset it is using. nil for a connect that
-            // did NOT come off a shelf, which is what keeps a plain host-list connect ending on
-            // the host list.
-            shelf: launchID != nil || fromLibrary
-                ? LibraryTarget(host: host, preset: preset) : nil,
-            allowTofu: allowTofu,
-            requestAccess: requestAccess,
-            autoWake: autoWake,
-            onProfileUnknown: {
-                // One re-dial when the list still has the profile: a seat host refused a stale
-                // seat. Otherwise forget the pick, so the next connect asks.
-                guard !redialed, let profileID else {
-                    store.setProfile(host.id, nil)
-                    return false
-                }
-                Task { @MainActor in
-                    let answer = await ProfileFetch.list(host, within: ProfileFetch.wait)
-                    guard case .listed(let rows?) = answer,
-                          rows.contains(where: { $0.id == profileID }) else {
+        launchOverrides(host, launchID) { overrides in
+            // THE resolution point (design §4.4): the globals plus this connect's preset, once,
+            // here, then the host's overrides for the game. The model latches the result for the
+            // whole session, so nothing downstream can apply a preset to half of it.
+            var effective = EffectiveSettings.resolve(
+                host: host, selection: preset, launch: launchID, catalog: presets.catalog)
+            if let hdr = overrides?.hdr { effective.hdrEnabled = hdr }
+            if let pad = overrides?.gamepad.flatMap(PunktfunkConnection.GamepadType.init(name:)) {
+                effective.gamepadType = Int(pad.rawValue)
+            }
+            model.connect(
+                to: host,
+                effective: effective,
+                gamepad: GamepadManager.shared.resolveType(
+                    setting: PunktfunkConnection.GamepadType(
+                        rawValue: UInt32(clamping: effective.gamepadType)) ?? .auto),
+                overrides: overrides,
+                launchID: launchID,
+                profileID: profileID,
+                // Where this session goes back to when it ends: the shelf it started from — the
+                // host's own, or the pinned card whose preset it is using. nil for a connect that
+                // did NOT come off a shelf, which is what keeps a plain host-list connect ending on
+                // the host list.
+                shelf: launchID != nil || fromLibrary
+                    ? LibraryTarget(host: host, preset: preset) : nil,
+                allowTofu: allowTofu,
+                requestAccess: requestAccess,
+                autoWake: autoWake,
+                onProfileUnknown: {
+                    // One re-dial when the list still has the profile: a seat host refused a stale
+                    // seat. Otherwise forget the pick, so the next connect asks.
+                    guard !redialed, let profileID else {
                         store.setProfile(host.id, nil)
-                        model.errorMessage = L10n.dialHostReason(
-                            host: host.displayName, reason: HostRejection.profileUnknown.userMessage)
-                        return
+                        return false
                     }
-                    settleSeat(host, rows: rows, id: profileID) { id in
-                        var next = profile
-                        next.id = id
-                        next.unlock = nil
+                    Task { @MainActor in
+                        let answer = await ProfileFetch.list(host, within: ProfileFetch.wait)
+                        guard case .listed(let rows?) = answer,
+                              rows.contains(where: { $0.id == profileID }) else {
+                            store.setProfile(host.id, nil)
+                            model.errorMessage = L10n.dialHostReason(
+                                host: host.displayName,
+                                reason: HostRejection.profileUnknown.userMessage)
+                            return
+                        }
+                        settleSeat(host, rows: rows, id: profileID) { id in
+                            var next = profile
+                            next.id = id
+                            next.unlock = nil
+                            startSessionDirect(
+                                store.hosts.first { $0.id == host.id } ?? host,
+                                launchID: launchID, preset: preset, allowTofu: allowTofu,
+                                requestAccess: requestAccess, approvalReq: approvalReq,
+                                fromLibrary: fromLibrary, profile: next, redialed: true,
+                                onUnreachable: onUnreachable)
+                        }
+                    }
+                    return true
+                },
+                unlock: profile.unlock,
+                onUnlockPending: profile.console?.starting,
+                onProfileLocked: { said in
+                    if let console = profile.console {
+                        console.locked(said)
+                        return true
+                    }
+                    return reprompt(host, profile, said: said) { next in
                         startSessionDirect(
                             store.hosts.first { $0.id == host.id } ?? host,
                             launchID: launchID, preset: preset, allowTofu: allowTofu,
-                            requestAccess: requestAccess, approvalReq: approvalReq,
-                            fromLibrary: fromLibrary, profile: next, redialed: true,
+                            fromLibrary: fromLibrary, profile: next, redialed: redialed,
                             onUnreachable: onUnreachable)
                     }
-                }
-                return true
-            },
-            unlock: profile.unlock,
-            onUnlockPending: profile.console?.starting,
-            onProfileLocked: { said in
-                if let console = profile.console {
-                    console.locked(said)
-                    return true
-                }
-                return reprompt(host, profile, said: said) { next in
-                    startSessionDirect(
-                        store.hosts.first { $0.id == host.id } ?? host,
-                        launchID: launchID, preset: preset, allowTofu: allowTofu,
-                        fromLibrary: fromLibrary, profile: next, redialed: redialed,
-                        onUnreachable: onUnreachable)
-                }
-            },
-            onUnreachable: onUnreachable)
+                },
+                onUnreachable: onUnreachable)
+        }
+    }
+
+    /// Runs `go` with the launched game's overrides: a tile's entry at once (the hold mounts in
+    /// this turn), else the cached catalog's once read. A title never fetched here gets nil and
+    /// dials as before; the host still lowers the mode and swaps the pad.
+    private func launchOverrides(
+        _ host: StoredHost, _ launchID: String?,
+        go: @escaping @MainActor (GameOverrides?) -> Void
+    ) {
+        guard let launchID else { return go(nil) }
+        if let entry = LaunchedEntry.peek(launchID) { return go(entry.overrides) }
+        guard let cache = LibraryCache.shared else { return go(nil) }
+        Task { @MainActor in
+            let cached = await cache.load(hostID: host.id.uuidString)
+            go(cached?.games.first { $0.id == launchID }?.overrides)
+        }
     }
 
     /// Learn-while-awake, wake-while-asleep — run just before every connect:
