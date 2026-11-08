@@ -64,6 +64,23 @@ class LibraryClientTest {
     }
 
     @Test
+    fun a_game_carries_the_hosts_overrides_and_an_older_host_none() {
+        val body = """{"items":[
+            {"id":"steam:1","store":"steam","title":"A","art":{},
+             "overrides":{"lines":1080,"hz":60,"hdr":false,"gamepad":"dualsense","beyond_screen":true,"future":1}},
+            {"id":"steam:2","store":"steam","title":"B","art":{},"overrides":{"name":"4K","lines":"x"}},
+            {"id":"steam:3","store":"steam","title":"C","art":{}}
+        ]}"""
+        val games = (LibraryClient.walkPages("https://h:47990") { 200 to body } as LibraryClient.Walk.Done).games
+        assertEquals(
+            GameOverrides(lines = 1080, hz = 60, hdr = false, gamepad = "dualsense", beyondScreen = true),
+            games[0].overrides,
+        )
+        assertNull("a name alone sets nothing", games[1].overrides)
+        assertNull(games[2].overrides)
+    }
+
+    @Test
     fun a_walk_ends_on_a_cursor_that_does_not_move() {
         var calls = 0
         val walked = LibraryClient.walkPages("https://h:47990") {

@@ -9,6 +9,8 @@ import io.unom.punktfunk.kit.NativeBridge
 import io.unom.punktfunk.kit.R
 import io.unom.punktfunk.kit.discovery.DiscoveredHost
 import io.unom.punktfunk.kit.discovery.HostDiscovery
+import io.unom.punktfunk.kit.library.GameOverrides
+import io.unom.punktfunk.kit.library.LibraryCache
 import io.unom.punktfunk.kit.link.DeepLinkResult
 import io.unom.punktfunk.kit.link.DeepLinks
 import io.unom.punktfunk.kit.link.HostResolution
@@ -193,8 +195,9 @@ internal class ConnectController(
     }
 
     // The dial itself, identity ready, through the profile's unlock. A TOFU dial saves what the
-    // host presented, unpaired. [onFailure] takes an unreachable dial (the wake wait),
-    // [onMismatch] a refused pin; [redial] marks the one dial a [ProfileRetry] grants.
+    // host presented, unpaired. [overrides] are the host's for the [launch]ed title. [onFailure]
+    // takes an unreachable dial (the wake wait), [onMismatch] a refused pin; [redial] marks the
+    // one dial a [ProfileRetry] grants.
     private fun doConnectDirect(
         targetHost: String,
         targetPort: Int,
@@ -202,6 +205,7 @@ internal class ConnectController(
         pinHex: String?,
         preset: StreamPreset?,
         launch: String? = null,
+        overrides: GameOverrides? = null,
         onFailure: (() -> Unit)? = null,
         onMismatch: (() -> Unit)? = null,
         redial: Boolean = false,
@@ -246,7 +250,7 @@ internal class ConnectController(
             val spec = DialSpec(
                 settings.effectiveFor(preset), id, targetHost, targetPort, pinHex ?: "", launch,
                 dialer = "touch/host-grid", preset = preset, profile = choice.id,
-                promptsUnlock = promptsUnlock(context),
+                promptsUnlock = promptsUnlock(context), overrides = overrides,
             )
             // While the password prompt or the biometric sheet is up, it takes the overlay's place.
             val hooks = record?.let { r ->
@@ -292,7 +296,7 @@ internal class ConnectController(
                 ) {
                     linkAs = choice.id
                     doConnectDirect(
-                        targetHost, targetPort, name, pinHex, preset, launch, onFailure, onMismatch,
+                        targetHost, targetPort, name, pinHex, preset, launch, overrides, onFailure, onMismatch,
                         redial = true,
                     )
                 } else {
@@ -364,8 +368,13 @@ internal class ConnectController(
         // placeholder can be it — never the other OS of a dual-boot box at the same address.
         val kh = knownHostStore.resolve(pinHex ?: "", targetHost, targetPort)
         // Latched here, not per dial attempt: a wake-and-redial must stream with the same preset
-        // the user asked for, and the "applies from the next session" footers stay truthful.
-        val preset = presetStore.resolveFor(kh, oneOffPreset)
+        // and overrides, and the "applies from the next session" footers stay truthful. A title's
+        // overrides come from the cached catalog; a cold link has none.
+        val preset = presetStore.resolveFor(kh, oneOffPreset, launch)
+        val overrides = launch?.let { id ->
+            LibraryCache.standard(context.cacheDir).load(LibraryCache.keyFor(kh, pinHex ?: ""))
+                ?.games?.firstOrNull { it.id == id }?.overrides
+        }
         val macs = kh?.mac ?: emptyList()
         // "Up" = a live advert that is THIS host — matched by fingerprint first (so it survives a DHCP
         // address change on a cold boot), else by address:port. Returns the CURRENT advert so we can
@@ -377,7 +386,7 @@ internal class ConnectController(
         if (settings.autoWakeEnabled && macs.isNotEmpty() && down) {
             // Fire-and-forget first packet (harmless if it's awake), then dial-first.
             scope.launch(Dispatchers.IO) { services.sendWake(macs, targetHost) }
-            doConnectDirect(targetHost, targetPort, name, pinHex, preset, launch, onMismatch = onMismatch, onFailure = {
+            doConnectDirect(targetHost, targetPort, name, pinHex, preset, launch, overrides, onMismatch = onMismatch, onFailure = {
                 waker.start(
                     hostName = name,
                     connectsAfter = true,
@@ -396,13 +405,13 @@ internal class ConnectController(
                         }
                         doConnectDirect(
                             live?.host ?: targetHost, live?.port ?: targetPort, name, pinHex,
-                            preset, launch, onMismatch = onMismatch,
+                            preset, launch, overrides, onMismatch = onMismatch,
                         )
                     },
                 )
             })
         } else {
-            doConnectDirect(targetHost, targetPort, name, pinHex, preset, launch, onMismatch = onMismatch)
+            doConnectDirect(targetHost, targetPort, name, pinHex, preset, launch, overrides, onMismatch = onMismatch)
         }
     }
 

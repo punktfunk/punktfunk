@@ -134,6 +134,11 @@ internal fun rememberStatsLines(
 ): State<List<HudLine>> {
     val handle = session.handle
     val context = LocalContext.current
+    // The preset closes the first line, and says so when the host set this game's stream.
+    val preset = listOfNotNull(
+        session.presetName,
+        session.redial?.overrides?.let { context.getString(R.string.overlay_host_override) },
+    ).joinToString(" · ").ifEmpty { null }
     val lines = remember { mutableStateOf<List<HudLine>>(emptyList()) }
     val pollTier by rememberUpdatedState(tier)
     LaunchedEffect(handle, statsOn) {
@@ -149,7 +154,7 @@ internal fun rememberStatsLines(
                     NativeBridge.nativeVideoStatsLines(
                         handle, pollTier.ordinal, session.settings.advancedStats,
                         display?.refreshRate ?: 0f, display?.mode?.refreshRate ?: 0f,
-                        session.presetName,
+                        preset,
                     ),
                 )
                 if (history != null) StatsSample.of(NativeBridge.nativeVideoStatsSample(handle))?.let(history::push)

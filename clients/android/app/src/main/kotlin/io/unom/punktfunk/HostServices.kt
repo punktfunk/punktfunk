@@ -8,6 +8,7 @@ import io.unom.punktfunk.kit.discovery.DiscoveredHost
 import io.unom.punktfunk.kit.discovery.Presence
 import io.unom.punktfunk.kit.discovery.PresenceTracker
 import io.unom.punktfunk.kit.discovery.WakeLoop
+import io.unom.punktfunk.kit.library.GameOverrides
 import io.unom.punktfunk.kit.security.ClientIdentity
 import io.unom.punktfunk.kit.security.KnownHost
 import io.unom.punktfunk.kit.security.KnownHostStore
@@ -29,7 +30,8 @@ import kotlinx.coroutines.withContext
  * and path, for the log and the wire. [deliveryFlags] is [DELIVERY_PROBE_ONLY] for a network
  * check; [profile] the host profile to play as, `null` for none. [wakeSince] is when the host
  * first refused as still waking ([HostNative.elapsedMs]), `null` until it has. [promptsUnlock]:
- * the shell that dials shows the password prompt after a `profile-locked` refusal.
+ * the shell that dials shows the password prompt after a `profile-locked` refusal. [overrides]
+ * are what the host sets for the [launch]ed game, applied over [settings] ([underHost]).
  */
 data class DialSpec(
     val settings: Settings,
@@ -45,6 +47,7 @@ data class DialSpec(
     val profile: String? = null,
     val wakeSince: Long? = null,
     val promptsUnlock: Boolean = false,
+    val overrides: GameOverrides? = null,
 )
 
 /** The calls [HostServices] makes below Kotlin: [JniHostNative] on device, a fake in the JVM tests. */
@@ -247,7 +250,7 @@ class HostServices(val store: KnownHostStore, private val native: HostNative) {
         // A redial is pinned to the identity this session proved.
         val redial = dialing.copy(pinHex = spec.pinHex.ifEmpty { native.fingerprint(handle) })
         val session = SessionFactory.afterDial(
-            handle, dialed, spec.settings, spec.preset, store, native.mgmtPort(handle), redial,
+            handle, dialed, spec.settings.underHost(spec.overrides), spec.preset, store, native.mgmtPort(handle), redial,
         )
         return Connected(session, dialed, pinned)
     }

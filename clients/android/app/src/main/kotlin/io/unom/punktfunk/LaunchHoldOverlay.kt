@@ -337,6 +337,14 @@ fun LaunchHoldOverlay(hold: LaunchHold, onRetry: () -> Unit, onShow: () -> Unit)
                     modifier = Modifier.padding(top = 4.dp),
                 )
             }
+            hold.game.overrides?.summaryWords(context.resources)?.let {
+                Text(
+                    stringResource(R.string.lib_host_override, it),
+                    color = Color.White.copy(alpha = 0.62f),
+                    fontSize = 13.sp,
+                    modifier = Modifier.padding(top = 4.dp),
+                )
+            }
             if (hold.game.genres.isNotEmpty()) {
                 Text(
                     hold.game.genres.joinToString(" · "),
