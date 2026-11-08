@@ -235,10 +235,10 @@ What the dial can hold:
 | Group | Actions |
 |---|---|
 | Session | **End stream**, **End game** (a game this device launched, then the stream), **Disconnect, keep the game running** |
-| Input | **Touch mode**, **Keyboard**, **Virtual controller**, **Send text**, **Guide button**, **Quick access menu**, **Controller mouse**, **Controller type** |
-| View · Audio | **Statistics**, **Screens** (dual-screen handhelds: the panel below, the picture below, or the picture across both), **Microphone**, **Mute this stream** (this device only) |
+| Input | **Touch mode**, **Keyboard**, **Virtual controller**, **Send text**, **Guide button**, **Quick access menu**, **Controller mouse**, **Controller type**, **Release input** (give your mouse and keyboard back, or capture them again), **Mouse mode** ([capture or desktop](#mouse-modes)), **Clipboard sharing** (start or stop it; Mac, iPhone, iPad) |
+| View · Audio | **Statistics**, **Screens** (dual-screen handhelds: the panel below, the picture below, or the picture across both), **Fullscreen**, **Minimize** (the stream keeps running), **Microphone**, **Mute this stream** (this device only) |
 | Host | **Sleep host**, **Restart host**, **Shut down host** ([Host power](/docs/host-power)) |
-| Shortcuts | Key combinations you add, such as Alt+F4 |
+| Key combinations | Keys you add, such as Alt+F4. A modifier alone works too: **Win** opens the host's Start menu |
 
 A button a client can't serve is dimmed and says why. **Send text** works on Android against a
 host that takes typed text. **Controller type** works on the desktop clients: each press re-plugs

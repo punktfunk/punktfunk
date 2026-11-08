@@ -285,39 +285,13 @@ impl Shell {
     fn on_chord(&mut self, stream: &mut Option<StreamState>, chord: Chord) {
         match chord {
             Chord::Capture => {
-                if let Some(cap) = capture_mut(stream) {
-                    if cap.captured() {
-                        cap.release(true);
-                        self.capture_off();
-                    } else if cap.engage() {
-                        self.capture_on(cap);
-                    }
-                    tracing::info!(captured = cap.captured(), "chord: release/engage");
+                if let Some(st) = stream.as_mut() {
+                    self.toggle_capture(st);
                 }
             }
-            // Mouse model flip. Applies immediately when engaged; a released
-            // stream just changes what the next engage does.
             Chord::MouseModel => {
                 if let Some(st) = stream.as_mut() {
-                    let mut flipped = false;
-                    if let Some(cap) = st.capture.as_mut() {
-                        match cap.toggle_desktop() {
-                            Some(desktop) => {
-                                if cap.captured() {
-                                    self.capture_on(cap);
-                                }
-                                flipped = true;
-                                tracing::info!(desktop, "chord: mouse mode");
-                            }
-                            None => tracing::info!(
-                                "chord: mouse mode — host has no absolute pointer \
-                                 (gamescope), staying captured"
-                            ),
-                        }
-                    }
-                    if flipped {
-                        st.cursor.manual_flip();
-                    }
+                    self.toggle_mouse_mode(st);
                 }
             }
             Chord::Disconnect => {
@@ -356,16 +330,52 @@ impl Shell {
                     }
                 }
             }
-            Chord::Fullscreen => {
-                self.fullscreen = !self.fullscreen;
-                tracing::debug!(fullscreen = self.fullscreen, "fullscreen toggle");
-                if let Some(st) = stream.as_mut() {
-                    st.forget_refresh_verdict();
+            Chord::Fullscreen => self.toggle_fullscreen(stream.as_mut()),
+        }
+    }
+
+    /// Release the captured mouse and keyboard, or capture them again.
+    pub(super) fn toggle_capture(&mut self, st: &mut StreamState) {
+        let Some(cap) = st.capture.as_mut() else {
+            return;
+        };
+        if cap.captured() {
+            cap.release(true);
+            self.capture_off();
+        } else if cap.engage() {
+            self.capture_on(cap);
+        }
+        tracing::info!(captured = cap.captured(), "chord: release/engage");
+    }
+
+    /// Flip the mouse model. Applies at once while engaged; a released stream only changes
+    /// what the next engage does.
+    pub(super) fn toggle_mouse_mode(&mut self, st: &mut StreamState) {
+        let Some(cap) = st.capture.as_mut() else {
+            return;
+        };
+        match cap.toggle_desktop() {
+            Some(desktop) => {
+                if cap.captured() {
+                    self.capture_on(cap);
                 }
-                if let Err(e) = self.window.set_fullscreen(self.fullscreen) {
-                    tracing::warn!(error = %e, fullscreen = self.fullscreen, "fullscreen toggle failed");
-                }
+                st.cursor.manual_flip();
+                tracing::info!(desktop, "chord: mouse mode");
             }
+            None => tracing::info!(
+                "chord: mouse mode — host has no absolute pointer (gamescope), staying captured"
+            ),
+        }
+    }
+
+    pub(super) fn toggle_fullscreen(&mut self, stream: Option<&mut StreamState>) {
+        self.fullscreen = !self.fullscreen;
+        tracing::debug!(fullscreen = self.fullscreen, "fullscreen toggle");
+        if let Some(st) = stream {
+            st.forget_refresh_verdict();
+        }
+        if let Err(e) = self.window.set_fullscreen(self.fullscreen) {
+            tracing::warn!(error = %e, fullscreen = self.fullscreen, "fullscreen toggle failed");
         }
     }
 

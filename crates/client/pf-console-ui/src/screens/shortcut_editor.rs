@@ -91,7 +91,8 @@ fn rows(d: &Draft, typing: bool, picking: bool) -> Vec<RowSpec> {
         } else {
             pf_l10n::common::common_add()
         },
-        d.chord.key.is_some(),
+        // A modifier alone is a combination: Win opens the Start menu.
+        !d.chord.keys().is_empty(),
     ));
     if d.id.is_some() {
         v.push(RowSpec::action(c::ring_shortcut_remove(), true));
@@ -330,7 +331,7 @@ impl ShortcutEditorScreen {
     pub(crate) fn new(_ctx: &Ctx, existing: Option<&Shortcut>) -> ShortcutEditorScreen {
         let draft = Draft::of(existing);
         let mut list = MenuList::new();
-        list.jump_to(if draft.chord.key.is_none() {
+        list.jump_to(if draft.chord.keys().is_empty() {
             ROW_KEY
         } else {
             ROW_NAME
@@ -356,7 +357,7 @@ impl ShortcutEditorScreen {
     }
 
     fn save(&mut self, ctx: &mut Ctx, fx: &mut Outbox) {
-        if self.draft.chord.key.is_none() {
+        if self.draft.chord.keys().is_empty() {
             fx.toast = Some(c::ring_shortcut_pick_key_first().into());
             self.list.jump_to(ROW_KEY);
             self.open_keys();
@@ -715,6 +716,13 @@ mod tests {
             .iter()
             .all(|m| m.adjustable && m.value.as_deref() == Some("Off")));
         assert!(!r[ROW_SAVE].enabled, "no key, nothing to add");
+        d.chord.mods[3] = true;
+        assert!(
+            rows(&d, false, false)[ROW_SAVE].enabled,
+            "Win alone is a combination"
+        );
+        assert_eq!(chord_chip(&d.chord.keys()), "Win");
+        d.chord.mods[3] = false;
         d.chord.key = Some("escape".into());
         d.chord.mods[1] = true;
         d.id = Some("s1".into());
@@ -727,7 +735,7 @@ mod tests {
         );
         assert_eq!(r[ROW_MODS + 1].value.as_deref(), Some("On"));
         assert!(r[ROW_SAVE].enabled);
-        assert_eq!(r[ROW_REMOVE].label, "Remove shortcut");
+        assert_eq!(r[ROW_REMOVE].label, "Remove key combination");
         assert_eq!(d.row_count(), ROW_REMOVE + 1);
     }
 

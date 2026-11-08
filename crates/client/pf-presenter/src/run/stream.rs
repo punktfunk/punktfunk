@@ -354,6 +354,9 @@ pub(super) fn ring_facts(
         pad_mouse: c.pad_mouse_mode(target),
         audio_mute: c.audio_mute(),
         pointer_granted: c.access_grants() & punktfunk_core::quic::GRANT_POINTER != 0,
+        // Gamescope owns the one surface: nothing to minimize or leave fullscreen into.
+        windowed: !in_gamescope(),
+        pointer_capture: st.capture.is_some(),
         pad_type,
         mode: (m.width, m.height, m.refresh_hz),
         native_mode: st.native_mode,
@@ -1005,6 +1008,16 @@ impl Shell {
                         cap.send_chord(&vks);
                     }
                 }
+            }
+            RingCommand::ToggleCapture => self.toggle_capture(st),
+            RingCommand::ToggleMouseMode => self.toggle_mouse_mode(st),
+            RingCommand::ToggleFullscreen => self.toggle_fullscreen(Some(st)),
+            RingCommand::Minimize => {
+                if let Some(cap) = &mut st.capture {
+                    cap.release(true);
+                }
+                self.capture_off();
+                self.window.minimize();
             }
             RingCommand::CycleStats
             | RingCommand::Keyboard

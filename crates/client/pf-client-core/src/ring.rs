@@ -56,6 +56,13 @@ pub enum RingCommand {
     /// Flip this client's own speakers ([`punktfunk_core::client::AUDIO_MUTE_LOCAL`]). Never
     /// reaches the host, so a session joined to the same display keeps hearing the game.
     ToggleStreamMute,
+    /// Release the captured mouse and keyboard, or capture them again.
+    ToggleCapture,
+    /// Switch the mouse between capture (relative) and desktop (absolute) mode.
+    ToggleMouseMode,
+    ToggleFullscreen,
+    /// Minimize the window and release capture; the stream keeps running.
+    Minimize,
 }
 
 /// 100 % scale, client design units (px on Skia, dp/pt on phones). Shared so editors cannot drift.
@@ -121,6 +128,10 @@ pub struct RingFacts {
     pub pad_mouse: punktfunk_core::input::PadMouseMode,
     /// The host grants pointer input; controller mouse needs it.
     pub pointer_granted: bool,
+    /// The stream sits in a desktop window: Fullscreen and Minimize act on it.
+    pub windowed: bool,
+    /// This client captures the mouse and keyboard: Release input and Mouse mode act on it.
+    pub pointer_capture: bool,
     /// The controller type the host emulates; `Auto` = each pad as itself.
     pub pad_type: punktfunk_core::config::GamepadPref,
     /// Live `(w, h, hz)`. `native_mode` is the Welcome native.

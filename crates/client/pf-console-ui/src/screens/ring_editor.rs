@@ -124,6 +124,9 @@ impl RingEditorScreen {
             mic_available: true,
             pad_mouse_target: 0b1,
             pointer_granted: true,
+            // The desktop's stream sits in a window and captures the pointer.
+            windowed: matches!(platform, crate::platform::Platform::Desktop),
+            pointer_capture: matches!(platform, crate::platform::Platform::Desktop),
             mode: (1920, 1080, 60),
             native_mode: (1920, 1080, 60),
             ..RingFacts::default()
