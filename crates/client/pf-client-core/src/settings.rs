@@ -186,9 +186,8 @@ pub struct Settings {
     /// [`Settings::system_buttons_forward`].
     #[serde(default = "default_auto")]
     pub system_buttons: String,
-    /// Hold-Select ≥ ~350 ms sends the host the guide button (down for the hold).
-    /// `"auto"` / `"on"` / `"off"`; auto = on only where raw guide cannot reach the
-    /// host cleanly (Gaming Mode). A Select tap is delayed up to the threshold.
+    /// Legacy `"auto"` / `"on"` / `"off"`: only decides whether the default shortcuts
+    /// ([`crate::shortcuts::defaults`]) carry Hold Select → Guide. Nothing else reads it.
     #[serde(default = "default_auto")]
     pub guide_gesture: String,
     /// Host compositor backend to request (advisory; the host falls back if unavailable).
@@ -672,16 +671,6 @@ impl Settings {
             "forward" => true,
             "local" => false,
             _ => !game_mode,
-        }
-    }
-
-    /// Whether the hold-Select guide gesture is armed.
-    /// Auto = on only under Gaming Mode, the sole controller route once raw presses stay local.
-    pub fn guide_gesture_enabled(&self, game_mode: bool) -> bool {
-        match self.guide_gesture.as_str() {
-            "on" => true,
-            "off" => false,
-            _ => game_mode,
         }
     }
 

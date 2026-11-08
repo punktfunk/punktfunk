@@ -284,7 +284,7 @@ impl Shortcuts {
             };
             let id = b.action.id();
             let label = match (&b.action, labels.iter().find(|(k, _)| *k == id)) {
-                (Action::Ring, _) => c::controls_open_dial().to_string(),
+                (Action::Ring, _) => c::ring_open_ring().to_string(),
                 (_, Some((_, label))) => label.clone(),
                 (Action::Slot(SlotId::Host(host)), None) => host_label(host, &id),
                 _ => id,

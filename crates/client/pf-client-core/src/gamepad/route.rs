@@ -767,15 +767,14 @@ mod tests {
                 ],
             ),
             (
-                "an exit-chord partner keeps the Select held back until it lifts",
+                "an exit-chord partner makes the held-back Select real",
                 deck(),
                 vec![
                     In(down(SELECT), vec![]),
                     Wait(KEY_TAP * 2, vec![]),
-                    In(down(START), vec![on(START)]),
+                    In(down(START), vec![on(SELECT), on(START)]),
                     Wait(HOLD, vec![]),
-                    In(up(SELECT), vec![on(SELECT)]),
-                    Wait(TAP_PRESS, vec![off(SELECT)]),
+                    In(up(SELECT), vec![off(SELECT)]),
                 ],
             ),
             (

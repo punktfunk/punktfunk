@@ -63,7 +63,7 @@ pub struct Engine {
     down: Vec<u32>,
     /// Down on the host because of a [`Out::Forward`].
     forwarded: Vec<u32>,
-    /// Pressed, not sent: the press that may complete a hold.
+    /// Pressed, not sent: a held chord's presses, only while its hold is armed.
     held_back: Vec<u32>,
     armed: Option<Armed>,
     /// Buttons of a chord that fired: their releases are dropped.
@@ -111,7 +111,7 @@ impl Engine {
             Event::Press(b) => self.press(b, now, &mut out),
             Event::Release(b) => self.release(b, now, &mut out),
         }
-        self.rearm(now);
+        self.settle(now, &mut out);
         out
     }
 
@@ -166,17 +166,10 @@ impl Engine {
             self.owed.remove(i);
             out.push(Out::Forward(b, false));
         }
-        let mut next = self.down.clone();
-        next.push(b);
-        if !self.held_back.is_empty() && !self.rules.iter().any(|r| subset(&next, &r.ids)) {
-            for h in std::mem::take(&mut self.held_back) {
-                self.forwarded.push(h);
-                out.push(Out::Forward(h, true));
-            }
-        }
-        self.down = next;
+        self.down.push(b);
         self.armed = None;
-        if !self.is_modifier(b) {
+        // While a key-like hold is down, a press is the host's: Guide+A is Steam's chord.
+        if !self.is_modifier(b) && self.key_down.is_none() {
             let press = self.exact(false);
             let hold = self.exact(true);
             match (press, hold) {
@@ -199,6 +192,8 @@ impl Engine {
                 (None, None) => {}
             }
         }
+        // A partner that completes nothing makes a held-back press real, sent first.
+        self.send_held_back(out);
         self.forwarded.push(b);
         out.push(Out::Forward(b, true));
     }
@@ -267,18 +262,28 @@ impl Engine {
         }
     }
 
-    /// A broken chord can leave a hold's buttons exactly down with its press still held
-    /// back: that hold arms again, timed from `now`.
-    fn rearm(&mut self, now: Instant) {
+    /// A press stays held back only while its hold is armed. When a release disarms it, a
+    /// hold still exactly down (a nested one) arms from `now`; otherwise the press goes out.
+    fn settle(&mut self, now: Instant, out: &mut Vec<Out>) {
         if self.armed.is_some() || self.held_back.is_empty() {
             return;
         }
-        if let Some(hold) = self.exact(true) {
-            self.armed = Some(Armed {
-                since: now,
-                hold,
-                twin: self.exact(false),
-            });
+        match self.exact(true) {
+            Some(hold) => {
+                self.armed = Some(Armed {
+                    since: now,
+                    hold,
+                    twin: self.exact(false),
+                })
+            }
+            None => self.send_held_back(out),
+        }
+    }
+
+    fn send_held_back(&mut self, out: &mut Vec<Out>) {
+        for h in std::mem::take(&mut self.held_back) {
+            self.forwarded.push(h);
+            out.push(Out::Forward(h, true));
         }
     }
 

@@ -389,7 +389,7 @@
   },
 
   "engine": {
-    "$comment": "Timelines through Engine(bindings, device). events and ticks merge by t (ms); at one t the events go first, in order, then the tick; flush, when given, runs last at its t. A step runs a due tick before its event. After every step, a hold whose buttons are exactly down again, with its press still held back, arms anew from that step's t. expect lists every output in order with the t it came out at: forward [button, down] (to the host, obeys the input mask), fire [action id, once|down|up|tap], lift [buttons] (release on the host, mask or not). Key devices name keys by key_vk name; left and right modifiers are one key. HOLD 1000 ms, TAP_PRESS 50 ms, KEY_TAP 350 ms.",
+    "$comment": "Timelines through Engine(bindings, device). events and ticks merge by t (ms); at one t the events go first, in order, then the tick; flush, when given, runs last at its t. A step runs a due tick before its event. A press is held back only while the buttons down are exactly an armed hold's: a press that completes no shortcut sends any held-back press first, then itself; a release that disarms a hold sends the held-back press at once, unless another hold is then exactly down, which arms from that t. While a key-like hold is down, a further press matches no shortcut and is forwarded; the hold's own buttons still end it on their first lift. expect lists every output in order with the t it came out at: forward [button, down] (to the host, obeys the input mask), fire [action id, once|down|up|tap], lift [buttons] (release on the host, mask or not). Key devices name keys by key_vk name; left and right modifiers are one key. HOLD 1000 ms, TAP_PRESS 50 ms, KEY_TAP 350 ms.",
     "cases": [
       {
         "name": "hold Start opens quick actions; the game never sees Start",
@@ -571,9 +571,10 @@
         ],
         "ticks": [1000, 1199, 1200],
         "expect": [
+          {"t": 100, "out": {"forward": ["select", true]}},
           {"t": 100, "out": {"forward": ["lb", true]}},
           {"t": 150, "out": {"forward": ["rb", true]}},
-          {"t": 1200, "out": {"lift": ["lb", "rb"]}},
+          {"t": 1200, "out": {"lift": ["select", "lb", "rb"]}},
           {"t": 1200, "out": {"fire": ["end_stream", "once"]}}
         ]
       },
@@ -616,7 +617,7 @@
         ]
       },
       {
-        "name": "a release of a button the hold did not hold back disarms it",
+        "name": "a release that breaks a hold sends its held-back press at once",
         "device": "pad",
         "bindings": [{"on": "pad", "keys": ["lb", "select"], "hold": true, "do": "pad_mouse"}],
         "events": [
@@ -629,12 +630,75 @@
         "expect": [
           {"t": 0, "out": {"forward": ["lb", true]}},
           {"t": 300, "out": {"forward": ["lb", false]}},
-          {"t": 1300, "out": {"forward": ["select", true]}},
-          {"t": 1350, "out": {"forward": ["select", false]}}
+          {"t": 300, "out": {"forward": ["select", true]}},
+          {"t": 1300, "out": {"forward": ["select", false]}}
         ]
       },
       {
-        "name": "a chord that breaks re-arms the hold left under it",
+        "name": "a two-button hold released by its held-back press is a tap of it",
+        "device": "pad",
+        "bindings": [{"on": "pad", "keys": ["select", "a"], "hold": true, "do": "pad_mouse"}],
+        "events": [
+          {"t": 0, "bit": "select", "down": true},
+          {"t": 100, "bit": "a", "down": true},
+          {"t": 400, "bit": "a", "down": false},
+          {"t": 600, "bit": "select", "down": false}
+        ],
+        "ticks": [449, 450, 1200],
+        "expect": [
+          {"t": 0, "out": {"forward": ["select", true]}},
+          {"t": 400, "out": {"forward": ["a", true]}},
+          {"t": 450, "out": {"forward": ["a", false]}},
+          {"t": 600, "out": {"forward": ["select", false]}}
+        ]
+      },
+      {
+        "name": "a nested hold arms again when its partner taps out",
+        "device": "pad",
+        "bindings": [
+          {"on": "pad", "keys": ["select"], "hold": true, "do": "guide"},
+          {"on": "pad", "keys": ["select", "a"], "hold": true, "do": "pad_mouse"}
+        ],
+        "events": [
+          {"t": 0, "bit": "select", "down": true},
+          {"t": 100, "bit": "a", "down": true},
+          {"t": 300, "bit": "a", "down": false},
+          {"t": 1500, "bit": "select", "down": false}
+        ],
+        "ticks": [350, 1000, 1100, 1299, 1300],
+        "expect": [
+          {"t": 300, "out": {"forward": ["a", true]}},
+          {"t": 350, "out": {"forward": ["a", false]}},
+          {"t": 1300, "out": {"fire": ["guide", "down"]}},
+          {"t": 1500, "out": {"fire": ["guide", "up"]}}
+        ]
+      },
+      {
+        "name": "Select then Start, part of the exit chord: Select goes out first, for Select + Start hotkeys",
+        "device": "pad",
+        "bindings": [
+          {"on": "pad", "keys": ["select", "a"], "hold": false, "do": "ring"},
+          {"on": "pad", "keys": ["select", "x"], "hold": false, "do": "stats"},
+          {"on": "pad", "keys": ["select"], "hold": true, "do": "guide"},
+          {"on": "pad", "keys": ["lb", "rb", "start", "select"], "hold": false, "do": "release_input"},
+          {"on": "pad", "keys": ["lb", "rb", "start", "select"], "hold": true, "do": "end_stream"}
+        ],
+        "events": [
+          {"t": 0, "bit": "select", "down": true},
+          {"t": 200, "bit": "start", "down": true},
+          {"t": 300, "bit": "start", "down": false},
+          {"t": 350, "bit": "select", "down": false}
+        ],
+        "ticks": [1000, 1400],
+        "expect": [
+          {"t": 200, "out": {"forward": ["select", true]}},
+          {"t": 200, "out": {"forward": ["start", true]}},
+          {"t": 300, "out": {"forward": ["start", false]}},
+          {"t": 350, "out": {"forward": ["select", false]}}
+        ]
+      },
+      {
+        "name": "a partner makes a held-back press real: no Guide after it lifts",
         "device": "pad",
         "bindings": [
           {"on": "pad", "keys": ["select", "a"], "hold": false, "do": "ring"},
@@ -651,10 +715,10 @@
         ],
         "ticks": [1000, 1299, 1300, 1400],
         "expect": [
+          {"t": 100, "out": {"forward": ["select", true]}},
           {"t": 100, "out": {"forward": ["lb", true]}},
           {"t": 300, "out": {"forward": ["lb", false]}},
-          {"t": 1300, "out": {"fire": ["guide", "down"]}},
-          {"t": 1500, "out": {"fire": ["guide", "up"]}}
+          {"t": 1500, "out": {"forward": ["select", false]}}
         ]
       },
       {
@@ -724,6 +788,27 @@
           {"t": 100, "out": {"forward": ["select", false]}},
           {"t": 200, "out": {"forward": ["select", true]}},
           {"t": 250, "out": {"forward": ["select", false]}}
+        ]
+      },
+      {
+        "name": "Guide held, then A: A reaches the host, no dial",
+        "device": "pad",
+        "bindings": [
+          {"on": "pad", "keys": ["select", "a"], "hold": false, "do": "ring"},
+          {"on": "pad", "keys": ["select"], "hold": true, "do": "guide"}
+        ],
+        "events": [
+          {"t": 0, "bit": "select", "down": true},
+          {"t": 1200, "bit": "a", "down": true},
+          {"t": 1300, "bit": "a", "down": false},
+          {"t": 1500, "bit": "select", "down": false}
+        ],
+        "ticks": [1000],
+        "expect": [
+          {"t": 1000, "out": {"fire": ["guide", "down"]}},
+          {"t": 1200, "out": {"forward": ["a", true]}},
+          {"t": 1300, "out": {"forward": ["a", false]}},
+          {"t": 1500, "out": {"fire": ["guide", "up"]}}
         ]
       },
       {
