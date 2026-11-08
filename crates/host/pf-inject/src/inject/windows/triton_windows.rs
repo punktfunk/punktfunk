@@ -147,8 +147,7 @@ impl PadProto for TritonWinProto {
     type State = TritonState;
     const LABEL: &'static str = "Steam Controller 2/Windows";
     const DEVICE: &'static str = "Steam Controller 2";
-    const CREATE_HINT: &'static str =
-        " (install/repair: punktfunk-host.exe driver install --gamepad)";
+    const CREATE_HINT: &'static str = " (install/repair: run the Punktfunk installer again)";
 
     fn open(&mut self, idx: u8) -> Result<TritonWinPad> {
         let identity = crate::triton_proto::identity_for(idx);

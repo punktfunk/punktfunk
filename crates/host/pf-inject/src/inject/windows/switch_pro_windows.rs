@@ -141,8 +141,7 @@ impl PadProto for SwitchWinProto {
     type State = SwitchState;
     const LABEL: &'static str = "Switch Pro/Windows";
     const DEVICE: &'static str = "Switch Pro Controller";
-    const CREATE_HINT: &'static str =
-        " (install/repair: punktfunk-host.exe driver install --gamepad)";
+    const CREATE_HINT: &'static str = " (install/repair: run the Punktfunk installer again)";
 
     fn open(&mut self, idx: u8) -> Result<SwitchWinPad> {
         let p = SwitchWinPad::open_pro(idx)?;
@@ -196,8 +195,7 @@ impl PadProto for JoyConWinProto {
     type State = SwitchState;
     const LABEL: &'static str = "Joy-Con pair/Windows";
     const DEVICE: &'static str = "Joy-Con pair";
-    const CREATE_HINT: &'static str =
-        " (install/repair: punktfunk-host.exe driver install --gamepad)";
+    const CREATE_HINT: &'static str = " (install/repair: run the Punktfunk installer again)";
 
     fn open(&mut self, idx: u8) -> Result<JoyConWinPair> {
         let pair = JoyConWinPair {
