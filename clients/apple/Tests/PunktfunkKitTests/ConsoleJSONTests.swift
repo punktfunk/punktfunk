@@ -137,6 +137,21 @@ final class ConsoleJSONTests: XCTestCase {
         XCTAssertTrue(pads.last?["battery"] is NSNull)
     }
 
+    /// The iOS SC2 menu pad's input test: the GameController path's names and signs.
+    func testSc2PadTestUsesTheGameControllerNames() throws {
+        var s = Sc2Device.State()
+        s.buttons = Sc2Device.btnA | Sc2Device.btnView | Sc2Device.btnMenu | Sc2Device.btnDpadUp
+        s.lsY = 32767
+        s.rt = 255
+        let data = try XCTUnwrap(ConsoleJSON.padTest(sc2: s).data(using: .utf8))
+        let doc = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        XCTAssertEqual(doc["held"] as? [String], ["A", "Back", "Start", "Up", "RT"])
+        let axes = try XCTUnwrap(doc["axes"] as? [[Any]])
+        XCTAssertEqual(axes[1][0] as? String, "LY")
+        XCTAssertEqual(axes[1][1] as? Double, -1)
+        XCTAssertEqual(axes[5][1] as? Double, 1)
+    }
+
     /// The Recent and Most played sorts read `stats`; a title the host never launched has none.
     func testLibraryGamesCarryPlayStats() throws {
         let wire = #"""

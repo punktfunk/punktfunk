@@ -219,6 +219,33 @@ public enum ConsoleJSON {
         return string(doc)
     }
 
+    /// The input test's push for the iOS SC2 menu pad, nil while none delivers. Same names and
+    /// signs as `ConsoleModel.pushPadTest`'s GameController path: +y is down, a trigger counts
+    /// as held past half travel, ⧉ is Back and ☰ is Start.
+    @MainActor public static func padTest(sc2 manager: GamepadManager) -> String? {
+        manager.sc2MenuState.map { padTest(sc2: $0) }
+    }
+
+    static func padTest(sc2 s: Sc2Device.State) -> String {
+        let buttons: [(String, UInt32)] = [
+            ("A", Sc2Device.btnA), ("B", Sc2Device.btnB), ("X", Sc2Device.btnX),
+            ("Y", Sc2Device.btnY), ("LB", Sc2Device.btnLB), ("RB", Sc2Device.btnRB),
+            ("Back", Sc2Device.btnView), ("Start", Sc2Device.btnMenu),
+            ("Guide", Sc2Device.btnSteam), ("LS", Sc2Device.btnL3), ("RS", Sc2Device.btnR3),
+            ("Up", Sc2Device.btnDpadUp), ("Down", Sc2Device.btnDpadDown),
+            ("Left", Sc2Device.btnDpadLeft), ("Right", Sc2Device.btnDpadRight),
+        ]
+        var held = buttons.filter { s.buttons & $0.1 != 0 }.map(\.0)
+        if s.lt > 127 { held.append("LT") }
+        if s.rt > 127 { held.append("RT") }
+        let axes: [[Any]] = [
+            ["LX", Float(s.lsX) / 32767], ["LY", -Float(s.lsY) / 32767],
+            ["RX", Float(s.rsX) / 32767], ["RY", -Float(s.rsY) / 32767],
+            ["LT", Float(s.lt) / 255], ["RT", Float(s.rt) / 255],
+        ]
+        return string(["held": held, "axes": axes])
+    }
+
     /// The catalog with each preset's overrides, so a settings row can say when a host's bound
     /// preset outranks the global it shows.
     public static func presets(_ presets: [StreamPreset]) -> String {
