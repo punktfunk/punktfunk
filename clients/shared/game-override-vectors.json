@@ -1,0 +1,27 @@
+{
+  "$comment": "Game overrides → the mode a client requests, pinned by punktfunk-core game_overrides::fit, the Swift GameOverrides.fit and the Kotlin GameOverrides.fit. `mode` is what the device would ask on its own, `native` its panel, `max` the codec's per-axis wall (render_scale max_dimension). Only `lines`, `hz` and `beyond_screen` reach fit; `hdr` and `gamepad` replace the device's value before its own gates. Arrays are [width, height, hz].",
+  "fit": [
+    {"mode": [3840, 2160, 120], "native": [3840, 2160, 120], "lines": 1080, "max": 8192, "expect": [1920, 1080, 120], "why": "the ask"},
+    {"mode": [2560, 1600, 60], "native": [2560, 1600, 60], "lines": 1080, "max": 8192, "expect": [1728, 1080, 60], "why": "16:10 keeps its shape"},
+    {"mode": [3440, 1440, 144], "native": [3440, 1440, 144], "lines": 1080, "hz": 60, "max": 8192, "expect": [2580, 1080, 60], "why": "21:9, both axes"},
+    {"mode": [1920, 1080, 60], "native": [1920, 1080, 60], "lines": 2160, "max": 8192, "expect": [1920, 1080, 60], "why": "panel clamp"},
+    {"mode": [1920, 1080, 60], "native": [1920, 1080, 60], "lines": 2160, "beyond_screen": true, "max": 8192, "expect": [3840, 2160, 60], "why": "Also on smaller screens"},
+    {"mode": [1920, 1080, 120], "native": [1920, 1080, 120], "hz": 60, "max": 8192, "expect": [1920, 1080, 60], "why": "refresh only"},
+    {"mode": [1920, 1080, 60], "native": [1920, 1080, 60], "hz": 144, "max": 8192, "expect": [1920, 1080, 60], "why": "refresh never above the panel"},
+    {"mode": [2560, 1440, 120], "native": [3840, 2160, 120], "lines": 2160, "max": 8192, "expect": [3840, 2160, 120], "why": "raises within the panel"},
+    {"mode": [2560, 1440, 120], "native": [3840, 2160, 120], "max": 8192, "expect": [2560, 1440, 120], "why": "nothing set, nothing moves"},
+    {"mode": [1280, 800, 90], "native": [1280, 800, 90], "lines": 1080, "max": 8192, "expect": [1280, 800, 90], "why": "a Deck under a 1080 rule"},
+    {"mode": [1920, 1080, 60], "native": [1920, 1080, 60], "lines": 4320, "beyond_screen": true, "max": 4096, "expect": [4096, 2304, 60], "why": "the h264 wall after the option"},
+    {"mode": [1920, 1080, 60], "native": [0, 0, 0], "lines": 1440, "hz": 120, "max": 8192, "expect": [2560, 1440, 120], "why": "no panel known: the host's downward half"}
+  ],
+  "valid": [
+    {"lines": 1080, "hz": 60, "gamepad": "dualsense", "ok": true},
+    {"lines": 359, "ok": false, "why": "under 360 lines"},
+    {"lines": 4321, "ok": false, "why": "over 4320 lines"},
+    {"hz": 23, "ok": false, "why": "under 24 Hz"},
+    {"hz": 241, "ok": false, "why": "over 240 Hz"},
+    {"gamepad": "joycon", "ok": false, "why": "not a pad the host creates"},
+    {"name": "", "ok": false, "why": "an empty name"},
+    {"ok": true, "why": "nothing set is a valid, empty override"}
+  ]
+}
