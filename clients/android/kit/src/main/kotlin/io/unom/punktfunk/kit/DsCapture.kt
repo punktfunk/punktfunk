@@ -102,6 +102,15 @@ class DsCapture(
     @Volatile
     var padAudio: PadAudioHook? = null
 
+    /** The speaker lane is on, so the pad's output route is pointed at its speaker. */
+    @Volatile
+    var padSpeaker = false
+
+    /** The console's key for this pad (`vendor:product:name` of its InputDevice), if it had one. */
+    @Volatile
+    var padKey: String? = null
+        private set
+
     /** True once [PadAudioHook.start] has run for the current capture, so it fires exactly once. */
     @Volatile private var padAudioStarted = false
 
@@ -131,6 +140,10 @@ class DsCapture(
     fun startUsb(dev: UsbDevice): Boolean {
         if (model != null) return false
         val m = DsDevice.modelFor(dev.productId) ?: return false
+        // Read before the claim: the InputDevice leaves with the kernel driver.
+        padKey = InputDevice.getDeviceIds().toList().mapNotNull { InputDevice.getDevice(it) }
+            .firstOrNull { it.vendorId == dev.vendorId && it.productId == dev.productId }
+            ?.let { "${it.vendorId}:${it.productId}:${it.name}" }
         if (!usb.start(dev)) return false
         // Before `model`, which is what lets the link thread into the parse at all: opening the
         // claim forgets the last pad's calibration, so reports arriving while this pad's own read
@@ -340,6 +353,7 @@ class DsCapture(
             // clears it — so without this the stream renders into a muted actuator and looks for
             // all the world like the host is sending nothing.
             restoreAudioHaptics()
+            if (padSpeaker) routeSpeaker()
             hook.start(index, fd)
         }
     }
@@ -354,6 +368,15 @@ class DsCapture(
         if (m == DsDevice.Model.DUALSHOCK4) return // no voice coils, no audio-haptics path
         if (!usb.writeControl(DsDevice.ds5AudioHapticsReport(m))) {
             Log.w(TAG, "pad audio: handing the coils back to audio haptics failed")
+        }
+    }
+
+    /** Select the speaker output path, once per capture; the pad keeps it until power-off. */
+    private fun routeSpeaker() {
+        val m = model ?: return
+        if (m == DsDevice.Model.DUALSHOCK4) return // no speaker
+        if (!usb.writeControl(DsDevice.ds5SpeakerRouteReport(m))) {
+            Log.w(TAG, "pad audio: routing the speaker failed")
         }
     }
 

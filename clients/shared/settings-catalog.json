@@ -72,5 +72,9 @@
     { "key": "pad_speaker", "category": "controllers", "advanced": true, "preset": false, "on": ["desktop", "android", "webos"] },
     { "key": "sc2_capture", "category": "controllers", "advanced": true, "default": false, "preset": false, "on": ["apple"] },
     { "key": "ds_capture", "category": "controllers", "advanced": true, "default": true, "preset": false, "on": ["android", "webos"] }
+  ],
+  "$comment_per_controller": "Rows on a controller's own card in the Controllers screen, stored per physical controller under its key instead of once per client; the words are player_<key> and player_<key>_hint like the rows above.",
+  "per_controller": [
+    { "key": "pad_speaker_volume", "category": "controllers", "default": "100", "on": ["desktop", "android", "webos"] }
   ]
 }

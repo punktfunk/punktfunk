@@ -173,8 +173,9 @@ pub(super) fn render_env(
     out
 }
 
-/// The drop-in that gives the unit its private prefix directories, the owner's libraries and
-/// granted roots ([`libraries`]), an empty `/run/media` and the supervisor's uinput proxy as
+/// The drop-in that gives the unit an empty `/run/media` holding the shared games folder at
+/// [`libraries::games_view`], its private prefix directories over both of that folder's paths,
+/// the owner's libraries and granted roots ([`libraries`]), and the supervisor's uinput proxy as
 /// `/dev/uinput`.
 /// A SteamOS-mode Steam adopts every mounted drive holding a `steamapps` as a library, and the
 /// drive as mounted is the owner's alone. Without the proxy the unit starts all the same.
@@ -185,14 +186,20 @@ pub(super) fn render_binds(
     shares: Option<&libraries::Shares>,
 ) -> String {
     let seat = shared::seat_dir(state, id);
-    let shared_steamapps = shared::games_dir(state).join("steamapps");
-    let mut out = String::from("[Service]\nTemporaryFileSystem=/run/media:ro\n");
-    for name in PRIVATE_DIRS {
-        out.push_str(&format!(
-            "BindPaths={}:{}\n",
-            seat.join(name).display(),
-            shared_steamapps.join(name).display()
-        ));
+    let (games, view) = (shared::games_dir(state), libraries::games_view());
+    let mut out = format!(
+        "[Service]\nTemporaryFileSystem=/run/media:ro\nBindPaths={}:{}\n",
+        games.display(),
+        view.display()
+    );
+    for steamapps in [games.join("steamapps"), view.join("steamapps")] {
+        for name in PRIVATE_DIRS {
+            out.push_str(&format!(
+                "BindPaths={}:{}\n",
+                seat.join(name).display(),
+                steamapps.join(name).display()
+            ));
+        }
     }
     if let Some(shares) = shares {
         out.push_str(&libraries::unit_lines(state, id, shares));
@@ -903,9 +910,13 @@ mod tests {
             render_binds(Path::new("/var/lib/punktfunk-seats"), &id, "pf-seat-1", None),
             "[Service]\n\
              TemporaryFileSystem=/run/media:ro\n\
+             BindPaths=/var/lib/punktfunk-seats/games:/run/media/punktfunk/games\n\
              BindPaths=/var/lib/punktfunk-seats/seats/0123456789abcdef0123456789abcdef/compatdata:/var/lib/punktfunk-seats/games/steamapps/compatdata\n\
              BindPaths=/var/lib/punktfunk-seats/seats/0123456789abcdef0123456789abcdef/shadercache:/var/lib/punktfunk-seats/games/steamapps/shadercache\n\
              BindPaths=/var/lib/punktfunk-seats/seats/0123456789abcdef0123456789abcdef/downloading:/var/lib/punktfunk-seats/games/steamapps/downloading\n\
+             BindPaths=/var/lib/punktfunk-seats/seats/0123456789abcdef0123456789abcdef/compatdata:/run/media/punktfunk/games/steamapps/compatdata\n\
+             BindPaths=/var/lib/punktfunk-seats/seats/0123456789abcdef0123456789abcdef/shadercache:/run/media/punktfunk/games/steamapps/shadercache\n\
+             BindPaths=/var/lib/punktfunk-seats/seats/0123456789abcdef0123456789abcdef/downloading:/run/media/punktfunk/games/steamapps/downloading\n\
              BindPaths=-/dev/punktfunk/uinput-pf-seat-1:/dev/uinput\n"
         );
     }

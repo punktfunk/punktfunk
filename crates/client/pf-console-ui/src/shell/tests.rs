@@ -2596,6 +2596,7 @@ fn dump_device_marks() {
         detail: format!("{id} · gamepad · dpad"),
         forwarded: true,
         rumble: true,
+        audio: false,
     };
     let pads = vec![
         pad(

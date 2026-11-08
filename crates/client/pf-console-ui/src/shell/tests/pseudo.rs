@@ -457,6 +457,7 @@ fn pad_info(name: &str, id: &str, pref: GamepadPref) -> PadInfo {
         detail: format!("{id} · gamepad · dpad"),
         forwarded: true,
         rumble: true,
+        audio: false,
     }
 }
 
@@ -760,7 +761,7 @@ fn pushed(g: &mut Gate) {
         (
             "pad menu",
             Screen::PadMenu(crate::screens::pad_menu::PadMenuScreen::new(
-                &pad, true, true,
+                &pad, true, true, true,
             )),
         ),
         (

@@ -86,6 +86,15 @@ fails until the exception goes. The browser client is another repository (`clien
 console rows are the kit's `web` rows, pinned here, and a settings screen of its own reads this
 file in its own test.
 
+### Per-controller rows
+
+Some settings belong to one physical controller, not to the client. Their rows sit on the pad's
+card in the Controllers screen, and the value is stored under the pad's key in `Settings::pads`.
+The catalogue lists them in a second array, `per_controller`, beside `settings`; each entry has
+a `key`, `category`, `default` and `on`, and its words are `player_<key>` and `player_<key>_hint`.
+The first is Speaker volume (`pad_speaker_volume`), shown while the client plays the pad's audio.
+The console kit pins it in `pad_menu.rs`. The Linux and Windows dialogs do not draw it yet.
+
 ## Open rows
 
 Where screens differ today. Each is the maintainer's call, one row at a time; the tests hold
@@ -113,6 +122,7 @@ today's state and change with the screen.
 | `fullscreen_on_stream` | a three-way picker on the Mac and in the Linux dialog's defaults, a switch elsewhere |
 | `overlay_actions`, `shortcuts` | Windows has a page for each |
 | `second_screen`, `low_latency` | Android only; the console's preset editor has no row |
+| `pad_speaker_volume` | only the console draws the pad card; the desktop dialogs have no per-controller rows |
 
 ## Examples
 

@@ -1263,7 +1263,7 @@ pub(super) fn provision_steam(
     if let Err(error) = link_steam(passwd) {
         tracing::warn!(%error, "seat's steam links not made");
     }
-    if let Err(error) = write_library_folders(state, &steam) {
+    if let Err(error) = write_library_folders(&steam) {
         tracing::warn!(%error, "steam library list not written");
     }
     let local = passwd.home.join(".local");
@@ -1354,10 +1354,11 @@ fn clone_names(src: &SteamSource) -> std::io::Result<Vec<String>> {
     Ok(out)
 }
 
-/// Lists the seat's own Steam, then the shared games folder. Steam reads entry `0` as its own
-/// install whatever path stands there, so a folder listed there is lost. Written once; Steam owns
-/// the file afterwards, and [`super::libraries::register`] adds the games folder if it goes.
-fn write_library_folders(state: &Path, steam: &Path) -> std::io::Result<()> {
+/// Lists the seat's own Steam, then the shared games folder as the seat sees it. Steam reads
+/// entry `0` as its own install whatever path stands there, so a folder listed there is lost.
+/// Written once; Steam owns the file afterwards, and [`super::libraries::register`] adds the
+/// games folder if it goes.
+fn write_library_folders(steam: &Path) -> std::io::Result<()> {
     let dir = steam.join("steamapps");
     let file = dir.join("libraryfolders.vdf");
     if file.exists() {
@@ -1366,7 +1367,9 @@ fn write_library_folders(state: &Path, steam: &Path) -> std::io::Result<()> {
     std::fs::create_dir_all(&dir)?;
     let folders = [
         steam.to_string_lossy().into_owned(),
-        games_dir(state).to_string_lossy().into_owned(),
+        super::libraries::games_view()
+            .to_string_lossy()
+            .into_owned(),
     ];
     std::fs::write(file, crate::steam::library_folders_vdf(&folders))
 }
@@ -1601,24 +1604,24 @@ mod tests {
             .is_symlink());
     }
 
-    /// A new seat's list names its own Steam at entry 0, the games folder after it, and a list
-    /// Steam already wrote stays.
+    /// A new seat's list names its own Steam at entry 0, the games folder's view after it, and a
+    /// list Steam already wrote stays.
     #[test]
     fn a_new_seat_lists_its_own_steam_first() {
         let temp = tempfile::tempdir().unwrap();
-        let (state, steam) = (temp.path().join("state"), temp.path().join("home/Steam"));
-        write_library_folders(&state, &steam).unwrap();
+        let steam = temp.path().join("home/Steam");
+        write_library_folders(&steam).unwrap();
         let file = steam.join("steamapps/libraryfolders.vdf");
         let listed = crate::steam::library_paths(&std::fs::read_to_string(&file).unwrap());
         assert_eq!(
             listed,
             [
                 steam.to_string_lossy().into_owned(),
-                state.join("games").to_string_lossy().into_owned(),
+                "/run/media/punktfunk/games".to_owned(),
             ]
         );
         std::fs::write(&file, "steam's own").unwrap();
-        write_library_folders(&state, &steam).unwrap();
+        write_library_folders(&steam).unwrap();
         assert_eq!(std::fs::read_to_string(&file).unwrap(), "steam's own");
     }
 

@@ -979,6 +979,8 @@
 	"player_pad_haptics_hint": "Joue sur la manette elle-même les effets haptiques fins d’une DualSense.",
 	"player_pad_speaker": "Haut-parleur de la manette",
 	"player_pad_speaker_hint": "Joue sur la manette l’audio qu’un jeu envoie à son haut-parleur, et non via cet appareil.",
+	"player_pad_speaker_volume": "Volume du haut-parleur",
+	"player_pad_speaker_volume_hint": "Volume du haut-parleur de cette manette. 100 % correspond à ce que le jeu envoie.",
 	"player_sc2_capture": "Transmission directe du Steam Controller 2",
 	"player_sc2_capture_hint": "Diffuse tel quel un Steam Controller 2 ou un Steam Controller de 2015 ; exige l’accès Bluetooth.",
 	"player_ds_capture": "DualSense via USB",
