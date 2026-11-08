@@ -212,7 +212,7 @@ fun SkiaConsoleShell(
     // claim changes `Gamepad.pads()`, so nothing else here would notice.
     val sc2Captured = activity?.sc2MenuActive == true
     val sc2OnUsb = activity?.sc2UsbAttached == true
-    LaunchedEffect(handle, sc2Captured, sc2OnUsb) {
+    LaunchedEffect(handle, sc2Captured, sc2OnUsb, settings.dsCapture, settings.padHaptics, settings.padSpeaker) {
         if (handle != 0L) SkiaConsole.padsChanged(Gamepad.firstPad(), sc2Extras(activity))
     }
     DisposableEffect(handle, activity) {

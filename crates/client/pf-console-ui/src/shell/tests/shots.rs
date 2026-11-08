@@ -908,6 +908,7 @@ fn store_pads() -> Vec<PadInfo> {
         detail: format!("{id} · gamepad · dpad"),
         forwarded: true,
         rumble: true,
+        audio: false,
     };
     vec![
         pad(

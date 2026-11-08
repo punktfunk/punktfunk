@@ -22,6 +22,7 @@ pub(super) async fn run(
     let mut audio_red = crate::audio::AudioRedRecovery::new();
     // One seq space for every audio plane: a late or duplicate packet never reaches a decoder.
     let mut audio_seq = crate::audio::AudioSeqGate::new();
+    let mut pad_audio_seq = [[crate::audio::PadSeqGate::default(); 2]; crate::input::MAX_PADS];
     // `0xD4` parts become one access unit. A format mark rides the next whole unit out.
     let mut access_unit = crate::audio::bitstream::AuAssembler::new();
     let mut access_unit_mark = None;
@@ -127,7 +128,14 @@ pub(super) async fn run(
                 }
             }
             Some(&crate::quic::PAD_AUDIO_MAGIC) => {
-                if let Some(f) = crate::quic::decode_pad_audio_datagram(&d) {
+                // One gate per (pad, kind): a duplicate or reordered frame never reaches the
+                // decoder. A jump back past the reorder window is a host streamer restart.
+                // A kind this build does not know passes unfiltered.
+                if let Some(f) = crate::quic::decode_pad_audio_datagram(&d).filter(|f| {
+                    f.kind > crate::quic::PAD_AUDIO_KIND_SPEAKER
+                        || pad_audio_seq[usize::from(f.pad & 0x0f)][usize::from(f.kind)]
+                            .fresh(f.seq)
+                }) {
                     let _ = planes.pad_audio.try_send(f);
                 }
             }

@@ -11,10 +11,13 @@ use super::{is_steam_deck, set_valve_hidapi, Ctl, SelectChord, DISCONNECT_HOLD};
 use crate::menu_nav::{
     ring_sector, MenuEvent, MenuNav, MenuPulse, MenuSample, PadBattery, PadInfo,
 };
+use crate::settings::PAD_SPEAKER_VOLUME_DEFAULT;
+use punktfunk_core::audio::pad_mix;
 use punktfunk_core::client::{ActuatorQuirks, NativeClient, RumbleCommand};
 use punktfunk_core::config::GamepadPref;
 use punktfunk_core::input::{gamepad as wire, InputEvent, InputKind};
 use punktfunk_core::quic::{HidOutput, RichInput};
+use std::collections::BTreeMap;
 use std::sync::mpsc::{Receiver, TryRecvError};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -349,6 +352,8 @@ fn env_u8(key: &str) -> Option<u8> {
 struct Slot {
     /// SDL instance id (`ControllerDevice*::which`).
     id: u32,
+    /// [`PadInfo::key`], the handle a per-pad setting hangs off.
+    key: String,
     /// Wire pad index — lowest-free at open, stable for the slot's life.
     index: u8,
     pad: sdl3::gamepad::Gamepad,
@@ -388,6 +393,7 @@ struct Slot {
 impl Slot {
     fn new(
         id: u32,
+        key: String,
         index: u8,
         pref: GamepadPref,
         declared: GamepadPref,
@@ -395,6 +401,7 @@ impl Slot {
     ) -> Slot {
         Slot {
             id,
+            key,
             index,
             pad,
             pref,
@@ -459,6 +466,8 @@ pub(super) struct Worker {
     synthetic: Vec<(u8, u32, bool, Instant)>,
     /// bit0 = haptics, bit1 = speaker. `0` until declared: tier-A detection then never runs.
     pad_audio_prefs: u8,
+    /// Speaker volume in percent by [`PadInfo::key`]; absent = full.
+    speaker_volumes: BTreeMap<String, u8>,
     /// Off: wire rumble is drained and dropped.
     rumble: bool,
     attached: Option<Arc<NativeClient>>,
@@ -550,6 +559,7 @@ impl Worker {
             detail: format!("{vid:04X}:{pid:04X}"),
             forwarded: true,
             rumble: false,
+            audio: crate::pad_audio::is_tier_a_ds5(vid, pid),
         })
     }
 
@@ -681,11 +691,13 @@ impl Worker {
             );
             return;
         };
-        let pref = self.pad_info(id).map_or(GamepadPref::Xbox360, |p| p.pref);
+        let info = self.pad_info(id);
+        let pref = info.as_ref().map_or(GamepadPref::Xbox360, |p| p.pref);
+        let key = info.map(|p| p.key).unwrap_or_default();
         let declared = declared_kind(self.kind_override, pref);
         match self.subsystem.open(sdl3::joystick::JoystickId::new(id)) {
             Ok(pad) => {
-                let mut slot = Slot::new(id, index, pref, declared, pad);
+                let mut slot = Slot::new(id, key, index, pref, declared, pad);
                 let raw = crate::sc2_capture::raw_model(
                     pref,
                     declared,
@@ -697,6 +709,7 @@ impl Worker {
                 }
                 let (audio_caps, bluetooth) = self.pad_audio_caps_for(id, &slot.pad);
                 slot.audio_caps = audio_caps;
+                self.apply_speaker_volume(&slot);
                 if let Some(path) = slot.pad.path() {
                     let (vid, pid) = (slot.pad.vendor_id(), slot.pad.product_id());
                     crate::sc2_capture::log_descriptor(&path, vid.unwrap_or(0), pid.unwrap_or(0));
@@ -826,6 +839,12 @@ impl Worker {
         (self.pad_audio_prefs, bluetooth)
     }
 
+    /// The decode stage's gain for this slot's wire index: its pad's saved percent, else full.
+    fn apply_speaker_volume(&self, slot: &Slot) {
+        let percent = self.speaker_volumes.get(&slot.key).copied();
+        pad_mix::set_speaker_volume(slot.index, percent.unwrap_or(PAD_SPEAKER_VOLUME_DEFAULT));
+    }
+
     /// Flush held wire state and drop the SDL handle. Flush is wire-only, so unplug is safe.
     fn close_slot_at(&mut self, i: usize) {
         // Raw reports stop first: one landing after the remove would outlive the slot.
@@ -840,6 +859,8 @@ impl Worker {
             send(&c, InputKind::GamepadRemove, 0, 0, self.slots[i].index);
         }
         let slot = self.slots.remove(i);
+        // Wire indices are reused: the next pad on this index starts at full.
+        pad_mix::set_speaker_volume(slot.index, PAD_SPEAKER_VOLUME_DEFAULT);
         if slot.audio_caps != 0 {
             crate::pad_audio::unregister_tier_a(slot.index);
             crate::pad_audio::clear_haptics_liveness(slot.index);
@@ -1296,6 +1317,12 @@ impl Worker {
             Ctl::Mask(on) => self.on_mask(on),
             Ctl::Forwarding(on) => self.on_forwarding(on),
             Ctl::PadAudioPrefs(bits) => self.pad_audio_prefs = bits & 0x03,
+            Ctl::PadSpeakerVolumes(volumes) => {
+                self.speaker_volumes = volumes;
+                for slot in &self.slots {
+                    self.apply_speaker_volume(slot);
+                }
+            }
             Ctl::Rumble(on) => self.rumble = on,
             Ctl::MenuMode(on) => self.on_menu_mode(on),
             Ctl::RingNav(on) => self.set_ring_nav(on),
@@ -1830,6 +1857,7 @@ impl Worker {
             kind_override: GamepadPref::Auto,
             synthetic: Vec::new(),
             pad_audio_prefs: 0,
+            speaker_volumes: BTreeMap::new(),
             rumble: true,
             attached: None,
             escape_tx,
@@ -2030,6 +2058,7 @@ mod slot_tests {
             detail: String::new(),
             forwarded: true,
             rumble: false,
+            audio: false,
         };
         let names = |mut list: Vec<PadInfo>| {
             fold_deck_shadows(&mut list);
@@ -2177,6 +2206,7 @@ mod menu_pad_tests {
             detail: String::new(),
             forwarded: true,
             rumble: false,
+            audio: false,
         }
     }
 

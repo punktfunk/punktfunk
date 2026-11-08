@@ -68,6 +68,17 @@ class ConsolePadsTest {
     }
 
     @Test
+    fun `a pad's speaker volume is read from the saved document and defaults to full`() {
+        val doc = JSONObject("""{"pads": {"54C:CE6:Wireless Controller": {"speaker_volume": 60}}}""")
+        assertEquals(60, ConsoleJson.padSpeakerVolume(doc, "54C:CE6:Wireless Controller"))
+        assertEquals(100, ConsoleJson.padSpeakerVolume(doc, "54C:DF2:Other"))
+        assertEquals(100, ConsoleJson.padSpeakerVolume(JSONObject(), "54C:CE6:Wireless Controller"))
+        assertEquals(100, ConsoleJson.padSpeakerVolume(null, "54C:CE6:Wireless Controller"))
+        val wild = JSONObject("""{"pads": {"k": {"speaker_volume": 400}}}""")
+        assertEquals(100, ConsoleJson.padSpeakerVolume(wild, "k"))
+    }
+
+    @Test
     fun noExtrasLeavesTheChipEmpty() {
         val j = JSONObject(ConsoleJson.pads(emptyList(), null))
         assertTrue(j.isNull("label"))

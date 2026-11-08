@@ -347,6 +347,22 @@ class DsDeviceTest {
         assertEquals(64, DsDevice.ds5RumbleReport(DsDevice.Model.DUALSENSE_EDGE, 0, 0).size)
     }
 
+    /** The USB report of `Ds5Feedback::speaker_enable_packet(0x64, 0x20)`: payload offset + 1. */
+    @Test
+    fun ds5SpeakerRouteReportSelectsTheSpeaker() {
+        val r = DsDevice.ds5SpeakerRouteReport(DsDevice.Model.DUALSENSE)
+        val want = ByteArray(48).also {
+            it[0] = 0x02
+            it[1] = 0xA0.toByte()
+            it[2] = 0x80.toByte()
+            it[6] = 0x64
+            it[8] = 0x20
+            it[38] = 0x02
+        }
+        assertEquals(want.toList(), r.toList())
+        assertEquals(64, DsDevice.ds5SpeakerRouteReport(DsDevice.Model.DUALSENSE_EDGE).size)
+    }
+
     @Test
     fun ds5TriggerReportPlacesTheBlockPerSide() {
         val effect = ByteArray(11) { (it + 1).toByte() }

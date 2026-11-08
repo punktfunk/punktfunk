@@ -206,6 +206,7 @@ mod scene {
             detail: detail.into(),
             forwarded: true,
             rumble: true,
+            audio: false,
         }
     }
 
@@ -288,6 +289,7 @@ mod scene {
             // A pad no family claims: Automatic falls back to the Xbox 360 build and drawing.
             PadInfo {
                 rumble: false,
+                audio: false,
                 ..pad(
                     "USB Gamepad",
                     "0079:0006:USB Gamepad",

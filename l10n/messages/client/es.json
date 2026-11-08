@@ -979,6 +979,8 @@
 	"player_pad_haptics_hint": "Reproduce la háptica de precisión de un DualSense en el propio mando.",
 	"player_pad_speaker": "Altavoz del mando",
 	"player_pad_speaker_hint": "Reproduce en el mando el audio que un juego envía a su altavoz, en lugar de hacerlo en este dispositivo.",
+	"player_pad_speaker_volume": "Volumen del altavoz",
+	"player_pad_speaker_volume_hint": "Volumen del altavoz de este mando. 100 % es lo que envía el juego.",
 	"player_sc2_capture": "Passthrough de Steam Controller 2",
 	"player_sc2_capture_hint": "Transmite tal cual un Steam Controller 2 o un Steam Controller de 2015; requiere acceso a Bluetooth.",
 	"player_ds_capture": "DualSense por USB",

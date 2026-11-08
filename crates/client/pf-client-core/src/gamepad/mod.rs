@@ -85,6 +85,8 @@ enum Ctl {
     /// Pad-audio streams to render: bit0 = haptics, bit1 = speaker. Settings half of
     /// the tier-A capability declared at slot open.
     PadAudioPrefs(u8),
+    /// Speaker volume in percent per pad key; a key missing from the map plays at full.
+    PadSpeakerVolumes(std::collections::BTreeMap<String, u8>),
     /// Off drops the host's rumble ([`GamepadService::set_rumble`]).
     Rumble(bool),
     MenuMode(bool),
@@ -322,6 +324,12 @@ impl GamepadService {
     pub fn set_pad_audio_prefs(&self, haptics: bool, speaker: bool) {
         let bits = (haptics as u8) | ((speaker as u8) << 1);
         let _ = self.ctl.send(Ctl::PadAudioPrefs(bits));
+    }
+
+    /// DualSense speaker volume per pad key ([`PadInfo::key`]), in percent. Replaces the
+    /// whole map; open pads pick it up at once, a pad that opens later at its slot open.
+    pub fn set_pad_speaker_volumes(&self, volumes: std::collections::BTreeMap<String, u8>) {
+        let _ = self.ctl.send(Ctl::PadSpeakerVolumes(volumes));
     }
 
     /// Off, the host's rumble never reaches a pad. Call before [`Self::attach`]; the
