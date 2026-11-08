@@ -156,7 +156,7 @@ fn get_searches_only_compiled_parts() {
 #[test]
 fn language_override_stays_on_its_thread() {
     assert_eq!(crate::set_languages(&["ja-JP"]), "en");
-    crate::with_language("de-AT", || assert_eq!(crate::language(), "en"));
+    crate::with_language("de-AT", || assert_eq!(crate::language(), "de"));
     #[cfg(feature = "pseudo")]
     crate::with_language("en-XA", || {
         assert_eq!(crate::language(), "en-XA");
