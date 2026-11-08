@@ -20,8 +20,8 @@ pub enum Concealment {
     Intact,
     /// Decode these bytes instead: every current reference names a picture the decoder holds.
     Rewritten(Vec<u8>),
-    /// No present entry to stand in. Keep this and every following delta off the decoder and
-    /// ask for an IDR; the concealer resumes at the next IRAP.
+    /// No present entry to stand in: keep this AU off the decoder and ask for recovery. The
+    /// concealer forgets it, so the host's anchor on a picture the decoder holds plans intact.
     Unrecoverable,
 }
 
@@ -47,6 +47,7 @@ impl H265Concealer {
 
     /// Fold one access unit; see [`Concealment`].
     pub fn conceal(&mut self, au: &[u8]) -> Concealment {
+        let before = self.planner.checkpoint();
         let plan = match self.planner.plan_au(au) {
             Ok(plan) => plan,
             Err(PlanError::AwaitingIdr) => return Concealment::Unrecoverable,
@@ -81,8 +82,9 @@ impl H265Concealer {
             ) {
                 Some(bytes) => patches.push((slice.data.clone(), bytes)),
                 None => {
-                    // The decoder never sees this picture, so the mirror must forget it too.
-                    self.planner.flush();
+                    // The decoder never sees this picture: the mirror forgets it and keeps
+                    // what the decoder still holds, the picture the host's anchor names.
+                    self.planner.restore(before);
                     return Concealment::Unrecoverable;
                 }
             }
@@ -369,19 +371,24 @@ mod tests {
         assert_eq!(current, vec![0]);
     }
 
+    /// A one-reference chain, as NVENC codes it: each P names only the picture before it.
     #[test]
-    fn no_present_entry_in_the_rps_is_unrecoverable_until_an_idr() {
+    fn no_present_entry_is_unrecoverable_until_the_anchor_on_a_held_picture() {
         let mut c = H265Concealer::new();
         c.conceal(&idr());
-        // POC 2 names only the missing POC 1: nothing in its RPS can stand in.
-        assert_eq!(
-            c.conceal(&trail_p(2, &[(0, true)], 1)),
-            Concealment::Unrecoverable
-        );
+        assert_eq!(c.conceal(&trail_p(1, &[(0, true)], 1)), Concealment::Intact);
+        // POC 2 never arrived; POC 3 and 4 name only pictures the decoder lacks.
         assert_eq!(
             c.conceal(&trail_p(3, &[(0, true)], 1)),
             Concealment::Unrecoverable
         );
+        assert_eq!(
+            c.conceal(&trail_p(4, &[(0, true)], 1)),
+            Concealment::Unrecoverable
+        );
+        // The host's anchor names POC 1, which the decoder still holds.
+        assert_eq!(c.conceal(&trail_p(5, &[(3, true)], 1)), Concealment::Intact);
+        assert_eq!(c.conceal(&trail_p(6, &[(0, true)], 1)), Concealment::Intact);
         assert_eq!(c.conceal(&idr()), Concealment::Intact);
         assert_eq!(c.conceal(&trail_p(1, &[(0, true)], 1)), Concealment::Intact);
     }

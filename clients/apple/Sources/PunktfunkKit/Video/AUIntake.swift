@@ -29,7 +29,8 @@ struct AUIntake {
     /// The decoder reads the RPS itself, so a lost reference is concealed in the bitstream first.
     /// HEVC only; a new format builds it again.
     private var concealer: HevcConcealer?
-    private var wasUnrecoverable = false
+    /// When the current unrecoverable stretch began, for the resume log.
+    private var unrecoverableSince: Date?
     /// When the current wait for parameter sets began, for the resume log.
     private var awaitingSince = Date.distantPast
 
@@ -121,7 +122,8 @@ struct AUIntake {
         awaitingSince = Date()
     }
 
-    /// Run the H.265 concealer over `au`, swapping in its rewrite.
+    /// Run the H.265 concealer over `au`, swapping in its rewrite. Logs where an unrecoverable
+    /// stretch starts and how long it lasted.
     private mutating func conceal(_ au: inout AccessUnit) -> AUPumpState.Concealment {
         guard let concealer else { return .none }
         let concealed: AUPumpState.Concealment
@@ -137,12 +139,18 @@ struct AUIntake {
         case .unrecoverable:
             concealed = .unrecoverable
         }
-        if concealed == .unrecoverable, !wasUnrecoverable {
+        if concealed == .unrecoverable, unrecoverableSince == nil {
+            unrecoverableSince = Date()
             intakeLog.warning(
-                "video: frame \(au.frameIndex, privacy: .public) names a lost reference with nothing to stand in — withholding until an IDR"
+                "video: frame \(au.frameIndex, privacy: .public) names a lost reference with nothing to stand in — withholding until the host re-anchors"
+            )
+        } else if concealed == .decodable, let since = unrecoverableSince {
+            unrecoverableSince = nil
+            let ms = Int(Date().timeIntervalSince(since) * 1000)
+            intakeLog.notice(
+                "video: frame \(au.frameIndex, privacy: .public) decodes again — resumed after \(ms, privacy: .public) ms"
             )
         }
-        wasUnrecoverable = concealed == .unrecoverable
         return concealed
     }
 }
