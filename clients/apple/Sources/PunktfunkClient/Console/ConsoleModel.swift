@@ -340,6 +340,17 @@ final class ConsoleModel: ObservableObject, ConsoleViewDelegate {
         let pad = { (c: GamepadManager.DiscoveredController) in
             ConsoleJSON.Pad(c, forwarded: forwarded.contains(c.id))
         }
+        var pads = m.controllers.map(pad)
+        var active = m.active.map(pad)
+        // A Bluetooth Steam Controller on iOS never reaches GameController: `Sc2MenuPad` reads
+        // it, so its card and, with no other pad, the legend's glyphs come from here.
+        if let kind = m.sc2MenuKind {
+            let sc2 = ConsoleJSON.Pad(
+                name: kind.padName, key: "sc2-ble", pref: kind.rawValue, detail: "Bluetooth",
+                forwarded: true, rumble: false, battery: nil, charging: false)
+            pads.append(sc2)
+            if active == nil { active = sc2 }
+        }
         var others: [(name: String, kind: String)] = []
         if let keyboard = GCKeyboard.coalesced {
             others.append((keyboard.vendorName ?? "Keyboard", "keyboard"))
@@ -349,9 +360,7 @@ final class ConsoleModel: ObservableObject, ConsoleViewDelegate {
         others += GCController.controllers()
             .filter { $0.extendedGamepad == nil && $0.microGamepad != nil }
             .map { ($0.vendorName ?? "Remote", "remote") }
-        bridge.push(
-            .pads,
-            ConsoleJSON.pads(m.controllers.map(pad), active: m.active.map(pad), others: others))
+        bridge.push(.pads, ConsoleJSON.pads(pads, active: active, others: others))
     }
 
     /// The console's input test is up (`true`) or gone. While up, the pad's every button and
@@ -372,7 +381,11 @@ final class ConsoleModel: ObservableObject, ConsoleViewDelegate {
     }
 
     private func pushPadTest() {
-        guard let g = GamepadManager.shared.active?.controller.extendedGamepad else { return }
+        let m = GamepadManager.shared
+        guard let g = m.active?.controller.extendedGamepad else {
+            if let json = ConsoleJSON.padTest(sc2: m) { bridge.push(.padTest, json) }
+            return
+        }
         let buttons: [(String, GCControllerButtonInput?)] = [
             ("A", g.buttonA), ("B", g.buttonB), ("X", g.buttonX), ("Y", g.buttonY),
             ("LB", g.leftShoulder), ("RB", g.rightShoulder),
