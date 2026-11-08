@@ -138,7 +138,8 @@ pub fn open_portal_monitor(
 /// remote fds cannot reveal. `stream_hz` is the wire rate, which a display created at a
 /// multiple of it cannot tell the capture. `screen` is the session's screen the output shows,
 /// `0` the first: absolute input for it aims at this head. `gamescope_cursor` reads the
-/// pointer from the output's nested Xwaylands (Linux; ignored elsewhere).
+/// pointer from the output's nested Xwaylands (Linux; ignored elsewhere). `mirrored` is a
+/// session that streams a host monitor, whose capture worker encodes for it (Windows).
 pub(crate) struct VirtualCaptureRequest {
     pub output: OutputFormat,
     pub codec: Option<crate::encode::Codec>,
@@ -149,6 +150,7 @@ pub(crate) struct VirtualCaptureRequest {
     pub stream_hz: u32,
     pub screen: u8,
     pub gamescope_cursor: bool,
+    pub mirrored: bool,
 }
 
 /// A live output's metadata without its keepalive: what [`capture_virtual_output`] needs to
@@ -227,6 +229,8 @@ pub fn capture_virtual_output(
         stream_hz,
         screen,
         gamescope_cursor,
+        // The portal path has no capture worker.
+        mirrored: _mirrored,
     } = request;
     // `want.hdr` was resolved by [`capturer_supports_hdr_for`] before the Welcome.
     // Aim absolute input at THIS head: EXTEND backends sit beside the operator's
@@ -421,6 +425,7 @@ pub fn capture_virtual_output(
         stream_hz: _stream_hz,
         screen: _screen,
         gamescope_cursor: _gamescope_cursor,
+        mirrored: _mirrored,
     } = request;
     anyhow::bail!("virtual-output capture requires Linux or Windows")
 }

@@ -46,6 +46,8 @@ pub(crate) struct Negotiated {
     pub(crate) clock_rtt_ns: Option<u64>,
     /// The profile the host resolved this session to; `None` from a host without profiles.
     pub(crate) profile: Option<String>,
+    /// The screen the host says this session streams; `None` from a host that does not say.
+    pub(crate) screen: Option<crate::quic::v2::hello::ScreenEcho>,
     /// The host counts axis-unit scroll (`FEATURE_SCROLL_AXIS_UNITS`).
     pub(crate) scroll_axis_units: bool,
 }

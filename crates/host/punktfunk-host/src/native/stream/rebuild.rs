@@ -446,6 +446,7 @@ impl StreamState {
             usize::from(self.facts.shard_payload),
             self.plan.reframe_to,
             self.display.vd_params.join_live,
+            self.plan.mirrored,
         );
         self.bit_depth = bit_depth;
         let route = self.display.vd_params.route.clone();

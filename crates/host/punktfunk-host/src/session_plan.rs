@@ -28,11 +28,12 @@ pub enum CaptureBackend {
 }
 
 impl CaptureBackend {
-    /// Shared by [`SessionPlan::resolve`] and the standalone callers (GameStream / spike).
-    pub fn resolve() -> Self {
+    /// The capture of a session that streams a monitor (`mirrored`) or a display of its own.
+    /// Shared by [`SessionPlan::mirroring`] and the standalone callers (GameStream / spike).
+    pub fn resolve(mirrored: bool) -> Self {
         if !cfg!(target_os = "windows") {
             CaptureBackend::Portal
-        } else if mirrored() {
+        } else if mirrored {
             CaptureBackend::Wgc
         } else {
             CaptureBackend::IddPush
@@ -130,6 +131,9 @@ pub struct SessionPlan {
     /// A joiner's own view and fit: the encoder frames the owner's picture for it. `None`
     /// streams the source as captured, or a mirrored head fitted to the negotiated size.
     pub reframe_to: Option<(punktfunk_core::video_fit::VideoFit, (u32, u32))>,
+    /// The session streams a host monitor, not a display of its own: the device's screen as the
+    /// handshake resolved it. Set only through [`Self::mirroring`], which picks the capture.
+    pub mirrored: bool,
     /// The encoder's own RGB conversion writes the range it is asked for
     /// ([`crate::encode::Resolved::rgb_full_range`]). Read through [`Self::full_range`].
     pub rgb_full_range: bool,
@@ -217,7 +221,8 @@ pub fn client_slices(video_caps: u8, asked: u8) -> u32 {
 impl SessionPlan {
     /// `encoder` is the session's resolution. `hdr` is the handshake verdict, not derived from
     /// depth: 10-bit SDR exists. PyroWave's bits per pixel start at the host's; a caller that
-    /// knows the client's sets them. `slices` is the client's count, [`Self::slices`].
+    /// knows the client's sets them. `slices` is the client's count, [`Self::slices`]. The plan
+    /// is a display of the session's own until [`Self::mirroring`] says otherwise.
     #[allow(clippy::too_many_arguments)]
     pub fn resolve(
         encoder: &crate::encode::Resolved,
@@ -229,7 +234,7 @@ impl SessionPlan {
         cursor_forward: bool,
         slices: u32,
     ) -> Self {
-        let capture = CaptureBackend::resolve();
+        let capture = CaptureBackend::resolve(false);
         SessionPlan {
             capture,
             topology: resolve_topology(capture),
@@ -250,7 +255,17 @@ impl SessionPlan {
             sdr10_native: false,
             slices,
             reframe_to: None,
+            mirrored: false,
         }
+    }
+
+    /// This plan for a session that streams a host monitor (`mirrored`) or a display of its own,
+    /// with the capture that takes it.
+    pub fn mirroring(mut self, mirrored: bool) -> Self {
+        self.mirrored = mirrored;
+        self.capture = CaptureBackend::resolve(mirrored);
+        self.topology = resolve_topology(self.capture);
+        self
     }
 
     /// The range this plan encodes and advertises at the live `hdr` and `bit_depth` ([`full_range`]).
@@ -517,11 +532,6 @@ pub(crate) fn live_depth(plan_hdr: bool, source_hdr: bool, bit_depth: u8) -> (bo
     (hdr, if plan_hdr && !hdr { 8 } else { bit_depth })
 }
 
-/// Whether a session opened now streams a pinned physical head instead of a virtual display.
-pub(crate) fn mirrored() -> bool {
-    pf_vdisplay::mirrors_pinned()
-}
-
 impl SessionPlan {
     /// The plan of a session `mode_conflict: join` admitted. On Windows the owner's display is
     /// captured by a worker; a Linux joiner gets a second cast through the same portal path.
@@ -535,13 +545,14 @@ impl SessionPlan {
 }
 
 /// Open the encoder for `frame` through `open(width, height)` and return it with the framing
-/// it encodes. A joiner's `reframe_to` frames the owner's picture for its view; a mirrored head
-/// larger than the client's `negotiated` picture fits inside it. Either crops and scales on
-/// ingest; a backend that cannot is reopened at the source's own size.
+/// it encodes. A joiner's `reframe_to` frames the owner's picture for its view; a `mirrored`
+/// head larger than the client's `negotiated` picture fits inside it. Either crops and scales
+/// on ingest; a backend that cannot is reopened at the source's own size.
 pub(crate) fn open_encoder_fitted(
     frame: &crate::capture::CapturedFrame,
     negotiated: (u32, u32),
     reframe_to: Option<(punktfunk_core::video_fit::VideoFit, (u32, u32))>,
+    mirrored: bool,
     mut open: impl FnMut(u32, u32) -> anyhow::Result<Box<dyn crate::encode::Encoder>>,
 ) -> anyhow::Result<(
     Box<dyn crate::encode::Encoder>,
@@ -550,8 +561,7 @@ pub(crate) fn open_encoder_fitted(
     use punktfunk_core::video_fit::{Reframe, VideoFit};
     let captured = (frame.width, frame.height);
     let full = Reframe::full(captured);
-    let Some((fit, view)) =
-        reframe_to.or_else(|| mirrored().then_some((VideoFit::Fit, negotiated)))
+    let Some((fit, view)) = reframe_to.or_else(|| mirrored.then_some((VideoFit::Fit, negotiated)))
     else {
         return Ok((open(captured.0, captured.1)?, full));
     };
@@ -640,6 +650,40 @@ mod tests {
             );
             assert_eq!(plan.slices, slices);
         }
+    }
+
+    /// A session set to a monitor captures it with WGC in a worker on Windows, whatever the
+    /// host-wide screen is; its own screen is the driver's IDD push. Linux takes the portal.
+    #[test]
+    fn a_mirrored_session_plans_its_own_capture() {
+        let plan = |mirrored| {
+            SessionPlan::resolve(
+                &crate::encode::resolve(),
+                8,
+                false,
+                ChromaFormat::Yuv420,
+                Codec::H264,
+                false,
+                false,
+                1,
+            )
+            .mirroring(mirrored)
+        };
+        let (own, mirror) = (plan(false), plan(true));
+        assert!(mirror.mirrored && !own.mirrored);
+        if cfg!(target_os = "windows") {
+            assert_eq!(
+                (own.capture, mirror.capture),
+                (CaptureBackend::IddPush, CaptureBackend::Wgc)
+            );
+            assert_eq!(mirror.topology, SessionTopology::CaptureWorker);
+        } else {
+            assert_eq!(
+                (own.capture, mirror.capture),
+                (CaptureBackend::Portal, CaptureBackend::Portal)
+            );
+        }
+        assert_eq!(own.topology, SessionTopology::SingleProcess);
     }
 
     #[cfg(target_os = "linux")]

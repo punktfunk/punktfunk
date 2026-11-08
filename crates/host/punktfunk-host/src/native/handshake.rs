@@ -13,6 +13,7 @@ use crate::native::bitrate::{
     audio_reserved_kbps, resolve_bitrate_kbps_for, session_pyrowave_bpp, EncDerive,
 };
 use punktfunk_core::abr::budget::FEC_ADAPTIVE_START;
+use punktfunk_core::quic::v2::hello::ScreenEcho;
 
 /// Encode tier and `0xD2` redundancy, budgeted against this session's video kbps.
 ///
@@ -362,14 +363,15 @@ pub(super) fn resolve_audio_plane(
 /// Out-of-band cursor: client asked, capture can deliver metadata, `encoder` can blend.
 ///
 /// Welcome `HOST_CAP_CURSOR` is computed from this; session wiring reads that bit back.
-/// Denied, the host still composites wherever the backend can blend.
+/// Denied, the host still composites wherever the backend can blend. `worker` is a joiner's
+/// or a mirror's session, whose picture a capture worker takes.
 pub(super) fn cursor_forward(
     client_caps: u8,
     compositor: Option<crate::vdisplay::Compositor>,
     codec: crate::encode::Codec,
     bit_depth: u8,
     hdr: bool,
-    joined: bool,
+    worker: bool,
     encoder: &crate::encode::Resolved,
 ) -> bool {
     if client_caps & punktfunk_core::quic::CLIENT_CAP_CURSOR == 0 {
@@ -379,7 +381,7 @@ pub(super) fn cursor_forward(
     {
         // Same CUDA prediction `SessionPlan` makes; it picks the backend.
         let cuda_planned = !encoder.zero_copy_is_vaapi() && crate::zerocopy::enabled();
-        let _ = joined;
+        let _ = worker;
         compositor.is_some_and(|c| c != crate::vdisplay::Compositor::Gamescope)
             && encoder.cursor_blend_capable(codec, cuda_planned, bit_depth == 10, hdr)
     }
@@ -388,10 +390,9 @@ pub(super) fn cursor_forward(
         // Windows: the v5 IddCx hardware-cursor channel. Without it DWM paints the pointer
         // into the IDD frame and a second copy doubles it. The encoder is not consulted: the
         // IDD capturer composites on the capture-mouse flip; no Windows encode backend blends.
-        // A mirrored monitor's pointer, and a shared display's, is in the picture the capture
-        // worker takes.
+        // A capture worker's picture carries the pointer already.
         let _ = (compositor, codec, bit_depth, hdr, encoder);
-        !joined && !crate::session_plan::mirrored() && crate::windows::idd::hw_cursor_capable()
+        !worker && crate::windows::idd::hw_cursor_capable()
     }
 }
 
@@ -470,6 +471,8 @@ pub(super) struct Negotiated {
     pub(super) resolved: crate::profiles::Resolved,
     /// The encode resolution the Welcome was negotiated against, kept for the session.
     pub(super) encoder: Arc<crate::encode::Resolved>,
+    /// The session streams a host monitor: the device's screen as `ServerHello` stated it.
+    pub(super) mirrored: bool,
 }
 
 /// How long the host holds the connection after a `Redirect` for the client to read it and
@@ -538,6 +541,10 @@ struct Terms {
     shard_payload: usize,
     chacha: bool,
     audio_plane: AudioPlane,
+    /// What the Welcome says this session streams; `None` for a joiner or a synthetic source.
+    screen: Option<ScreenEcho>,
+    /// `screen` is a monitor this session mirrors.
+    mirrored: bool,
 }
 
 /// `ClientHello` → `ServerHello` → `Ready`. Borrows the control streams; the caller keeps them
@@ -566,6 +573,8 @@ pub(super) async fn negotiate(
         compositor = d.compositor;
         gamescope_route = d.route.clone();
     }
+    let screen = session_screen(&n, joined.is_some()).await?;
+    let mirrored = matches!(screen, Some(ScreenEcho::Monitor(_)));
 
     // Library launch is resolved after Welcome into `SessionContext.launch`. Do not write
     // `PUNKTFUNK_GAMESCOPE_APP`: process env races concurrent sessions and only gamescope's bare spawn reads it.
@@ -642,6 +651,8 @@ pub(super) async fn negotiate(
         shard_payload,
         chacha,
         audio_plane,
+        screen,
+        mirrored,
     };
     let server_hello = server_hello(&n, &t, welcome(&n, &t));
     let host_link = crate::telemetry::net_health::host_link(
@@ -677,7 +688,28 @@ pub(super) async fn negotiate(
         features: server_hello.features,
         resolved: n.resolved,
         encoder: t.encoder,
+        mirrored: t.mirrored,
     })
+}
+
+/// The screen this session streams, decided once: the Welcome says it and the plan captures it.
+/// A monitor the session cannot mirror now reads as its own screen. A joiner streams the owner's
+/// display and a synthetic source none, so neither picks one. Blocks on a compositor read.
+async fn session_screen(n: &Negotiation<'_>, joined: bool) -> Result<Option<ScreenEcho>> {
+    if joined || !matches!(n.source, Punktfunk1Source::Virtual) {
+        return Ok(None);
+    }
+    let client = n.conn.peer_fingerprint();
+    let echo = tokio::task::spawn_blocking(move || {
+        let target = crate::vdisplay::resolve_screen(client).target;
+        match target.clone().into_monitor() {
+            Some(c) if crate::vdisplay::mirrors(&target) => ScreenEcho::Monitor(c),
+            _ => ScreenEcho::Own,
+        }
+    })
+    .await
+    .context("resolve screen task")?;
+    Ok(Some(echo))
 }
 
 /// The Welcome's shard payload. Before Welcome: a path a previous session proved jumbo is given
@@ -812,7 +844,7 @@ fn server_hello(n: &Negotiation<'_>, t: &Terms, welcome: Welcome) -> ServerHello
         && t.compositor
             .is_some_and(|c| c != crate::vdisplay::Compositor::Gamescope)
         && t.joined.is_none()
-        && !crate::session_plan::mirrored()
+        && !t.mirrored
     {
         offered = offered.with(punktfunk_core::quic::v2::registry::FEATURE_SCREENS);
     }
@@ -823,6 +855,7 @@ fn server_hello(n: &Negotiation<'_>, t: &Terms, welcome: Welcome) -> ServerHello
         suite,
         features: n.first.features.intersect(offered),
         profile: Some(n.resolved.id.clone()),
+        screen: t.screen.clone(),
     }
 }
 
@@ -870,6 +903,7 @@ fn prepare_at_welcome(
         pyrowave_max_kbps: n.knobs.pyrowave_max_kbps,
         shard_payload: welcome.shard_payload,
         encoder: t.encoder.clone(),
+        mirrored: t.mirrored,
         // A joiner's view and fit, as `SessionContext::reframe_to` carries them.
         reframe_to: t.joined.as_ref().map(|(_, view)| {
             (
@@ -1106,7 +1140,7 @@ fn welcome_host_caps(n: &Negotiation<'_>, t: &Terms) -> u8 {
             t.codec,
             t.bit_depth,
             t.hdr,
-            t.joined.is_some(),
+            t.joined.is_some() || t.mirrored,
             &t.encoder,
         ) {
             punktfunk_core::quic::HOST_CAP_CURSOR
@@ -1203,7 +1237,14 @@ async fn negotiate_compositor(
             Some(crate::seats::session_switch::connect_route())
         }
         Punktfunk1Source::Virtual => {
-            let pref = hello.compositor;
+            let game_mode = game_mode_pref(hello.launch.as_deref());
+            if game_mode.is_some() {
+                tracing::info!(
+                    asked = hello.compositor.as_str(),
+                    "gamescope compositor for the Game Mode tile"
+                );
+            }
+            let pref = game_mode.unwrap_or(hello.compositor);
             // Dedicated gamescope only if the launch id resolves to a command; an unknown id
             // must not spawn a blank "sleep infinity" gamescope. `launch_is_resolvable`, not
             // `resolve_launch`: a plugin command is loopback I/O and this is the async path.
@@ -1215,11 +1256,13 @@ async fn negotiate_compositor(
                 || (hello.launch.is_none() && super::opens_big_picture(profile));
             let seat_profile =
                 matches!(profile.os_account, crate::profiles::OsAccount::Seat { .. });
-            let dedicated = crate::vdisplay::wants_dedicated_game_session(
-                has_resolvable_launch,
-                client,
-                seat_profile,
-            );
+            // Game Mode is the box's own session, never a dedicated spawn.
+            let dedicated = game_mode.is_none()
+                && crate::vdisplay::wants_dedicated_game_session(
+                    has_resolvable_launch,
+                    client,
+                    seat_profile,
+                );
             Some(
                 tokio::task::spawn_blocking(move || {
                     resolve_compositor(pref, dedicated, true, true)
@@ -1236,6 +1279,13 @@ async fn negotiate_compositor(
     let gamescope_route = compositor.as_ref().and_then(|(_, r)| r.clone());
     let compositor = compositor.map(|(c, _)| c);
     Ok((compositor, gamescope_route))
+}
+
+/// What a Game Mode tile connect ([`crate::library::GAME_MODE_ID`]) asks for: gamescope, which
+/// the routing ladder takes over where the box's own session allows, else spawns with Big
+/// Picture. `None` for any other launch.
+fn game_mode_pref(launch: Option<&str>) -> Option<CompositorPref> {
+    (launch == Some(crate::library::GAME_MODE_ID)).then_some(CompositorPref::Gamescope)
 }
 
 /// What the depth, HDR and chroma rule reads about the client, the source and the operator,
@@ -1634,6 +1684,15 @@ mod tests {
         assert_eq!(linux_depth_under_444(10, Yuv420, false, H265), 10);
         assert_eq!(linux_depth_under_444(10, Yuv444, false, PyroWave), 10);
         assert_eq!(linux_depth_under_444(8, Yuv444, false, H265), 8);
+    }
+
+    /// The Game Mode tile asks for gamescope whatever the device prefers; no other launch does.
+    #[test]
+    fn the_game_mode_tile_asks_for_gamescope() {
+        let tile = Some(crate::library::GAME_MODE_ID);
+        assert_eq!(game_mode_pref(tile), Some(CompositorPref::Gamescope));
+        assert_eq!(game_mode_pref(Some("steam:570")), None);
+        assert_eq!(game_mode_pref(None), None);
     }
 
     /// gamescope reads no tablet, so its sessions withhold `HOST_CAP_PEN` and the pen

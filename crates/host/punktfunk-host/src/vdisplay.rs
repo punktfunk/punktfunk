@@ -11,10 +11,6 @@ use pf_vdisplay::policy::{DisplayTarget, ScreenPick, ScreenReason};
 
 /// The screen `client` gets now: what it is set to ([`screen_target`]), else its own screen
 /// when that monitor is off, missing, or streamed by another device.
-#[cfg_attr(
-    not(target_os = "linux"),
-    allow(dead_code, reason = "GameStream's portal source reads it, on Linux")
-)]
 pub(crate) fn resolve_screen(client: Option<[u8; 32]>) -> ScreenPick {
     pick(None, policy::fp_hex(client).as_deref())
 }

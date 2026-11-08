@@ -448,17 +448,23 @@ pub fn streamed_monitors() -> Vec<(String, Option<String>)> {
     Vec::new()
 }
 
-/// Whether a session opened now streams the pinned monitor instead of a virtual display: a
-/// [`capture_monitor`] pin, and on Windows a desktop that can be captured (see [`open`]).
-pub fn mirrors_pinned() -> bool {
+/// Whether a session opened now on `target` streams that monitor instead of a virtual display:
+/// a monitor, and on Windows a desktop that can be captured (see [`open_for`]).
+pub fn mirrors(target: &policy::DisplayTarget) -> bool {
+    let monitor = matches!(target, policy::DisplayTarget::Monitor(_));
     #[cfg(target_os = "windows")]
     {
-        capture_monitor().is_some() && mirror::desktop_capturable()
+        monitor && mirror::desktop_capturable()
     }
     #[cfg(not(target_os = "windows"))]
     {
-        capture_monitor().is_some()
+        monitor
     }
+}
+
+/// [`mirrors`] for a device with no row of its own: the host-wide screen.
+pub fn mirrors_pinned() -> bool {
+    mirrors(&screen_target(None).0)
 }
 
 /// [`open_for`] the host-wide screen: what a device with no row of its own streams.

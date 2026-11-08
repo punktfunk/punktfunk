@@ -95,11 +95,14 @@ pub(in crate::native) struct DisplayPrep {
     pub(in crate::native) reframe_to: Option<(punktfunk_core::video_fit::VideoFit, (u32, u32))>,
     /// The handshake's encode resolution, which the session keeps.
     pub(in crate::native) encoder: Arc<crate::encode::Resolved>,
+    /// The session streams a host monitor ([`SessionPlan::mirrored`](crate::session_plan::SessionPlan::mirrored)).
+    pub(in crate::native) mirrored: bool,
 }
 
 /// A virtual-display session's plan on `compositor`, `pyrowave_bpp` and `encoder` the
-/// session's, at the range `studio_asked` leads to. Bring-up, the Welcome-time prep and a codec
-/// change all resolve here, so a prepared pipeline is built from the plan its session runs.
+/// session's, at the range `studio_asked` leads to, on the screen the handshake picked
+/// (`mirrored`). Bring-up, the Welcome-time prep and a codec change all resolve here, so a
+/// prepared pipeline is built from the plan its session runs.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn resolve_plan(
     encoder: &crate::encode::Resolved,
@@ -116,6 +119,7 @@ pub(super) fn resolve_plan(
     shard_payload: usize,
     reframe_to: Option<(punktfunk_core::video_fit::VideoFit, (u32, u32))>,
     join_live: bool,
+    mirrored: bool,
 ) -> crate::session_plan::SessionPlan {
     let mut plan = crate::session_plan::SessionPlan::resolve(
         encoder,
@@ -134,7 +138,8 @@ pub(super) fn resolve_plan(
         ),
         cursor_forward,
         slices,
-    );
+    )
+    .mirroring(mirrored);
     // After resolve: a self-painting gamescope node would otherwise get a second XFixes pointer.
     plan.gamescope_cursor = crate::session_plan::gamescope_cursor_for(
         compositor == pf_vdisplay::Compositor::Gamescope,
@@ -182,6 +187,7 @@ pub(in crate::native) fn prepare_display(
         shard_payload,
         reframe_to,
         encoder,
+        mirrored,
     } = prep;
     let join_live = reframe_to.is_some();
     let plan = resolve_plan(
@@ -199,6 +205,7 @@ pub(in crate::native) fn prepare_display(
         shard_payload as usize,
         reframe_to,
         join_live,
+        mirrored,
     );
     let (_, metadata_composite) = super::cursor::composite_plan(
         &plan,
@@ -598,6 +605,7 @@ pub(super) fn open_session_encoder_with(
         frame,
         negotiated,
         plan.reframe_to,
+        plan.mirrored,
         |width, height| {
             open_video(
                 encoder,
@@ -724,6 +732,7 @@ fn attach_pipeline(
             stream_hz: effective_hz,
             screen,
             gamescope_cursor: plan.gamescope_cursor,
+            mirrored: plan.mirrored,
         },
     )
     .context("capture virtual output")?;
@@ -873,6 +882,7 @@ mod tests {
             sdr10_native: false,
             slices,
             reframe_to: None,
+            mirrored: false,
             rgb_full_range: true,
             studio_asked: crate::session_plan::StudioAsk::default(),
         }

@@ -277,6 +277,35 @@ fn label(v: &[u8], max: usize) -> Option<String> {
         .flatten()
 }
 
+/// Longest connector a [`ScreenEcho::Monitor`] carries; a longer one reads as no echo.
+const CONNECTOR_MAX: usize = 64;
+
+/// What a session streams, as its `ServerHello` says: a screen of its own, or the monitor it
+/// mirrors by connector (`HDMI-A-1`). Tag 28 carries `0x00`, else the connector.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ScreenEcho {
+    /// A virtual display the host made for this session.
+    Own,
+    /// A physical monitor, by connector.
+    Monitor(String),
+}
+
+impl ScreenEcho {
+    fn wire(&self) -> &[u8] {
+        match self {
+            ScreenEcho::Own => &[0],
+            ScreenEcho::Monitor(c) => c.as_bytes(),
+        }
+    }
+
+    fn of_wire(v: &[u8]) -> Option<Self> {
+        if v == [0] {
+            return Some(ScreenEcho::Own);
+        }
+        label(v, CONNECTOR_MAX).map(ScreenEcho::Monitor)
+    }
+}
+
 /// `host → client`: the session.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ServerHello {
@@ -291,6 +320,8 @@ pub struct ServerHello {
     pub features: FeatureSet,
     /// The profile this session resolved to. `None` from a host without profiles.
     pub profile: Option<String>,
+    /// The screen this session streams. `None` from a host that does not say.
+    pub screen: Option<ScreenEcho>,
 }
 
 impl V2Message for ServerHello {
@@ -334,6 +365,9 @@ impl V2Message for ServerHello {
             .when(self.profile.is_some(), |f| {
                 f.str(27, self.profile.as_deref().unwrap_or(""))
             })
+            .when(self.screen.is_some(), |f| {
+                f.bytes(28, self.screen.as_ref().map_or(&[][..], ScreenEcho::wire))
+            })
     }
 
     fn from_body(body: &[u8]) -> Result<Self> {
@@ -367,7 +401,7 @@ impl V2Message for ServerHello {
         };
         let (mut session_id, mut clock_origin_ns, mut suite) = (None, 0, None);
         let mut features = FeatureSet::default();
-        let mut profile = None;
+        let (mut profile, mut screen) = (None, None);
         let mut seen = Vec::new();
         let mut r = FieldReader::new(body);
         while let Some((tag, v)) = r.next_field()? {
@@ -422,6 +456,7 @@ impl V2Message for ServerHello {
                 25 => w.audio_frame_us = u16_of(v)?,
                 26 => w.audio_layout = u8_of(v)?,
                 27 => profile = label(v, PROFILE_ID_MAX),
+                28 => screen = ScreenEcho::of_wire(v),
                 _ => {}
             }
         }
@@ -449,6 +484,7 @@ impl V2Message for ServerHello {
             suite,
             features,
             profile,
+            screen,
         })
     }
 }
@@ -632,7 +668,7 @@ mod tests {
             let twice = ClientHello::from_body(&once.fields().into_body()).unwrap();
             prop_assert_eq!(twice, once);
 
-            let sh = ServerHello { welcome: w, session_id: [7; 16], clock_origin_ns: 1, suite: None, features: FeatureSet::default(), profile: None };
+            let sh = ServerHello { welcome: w, session_id: [7; 16], clock_origin_ns: 1, suite: None, features: FeatureSet::default(), profile: None, screen: None };
             let once = ServerHello::from_body(&sh.fields().into_body()).unwrap();
             let twice = ServerHello::from_body(&once.fields().into_body()).unwrap();
             prop_assert_eq!(twice, once);
@@ -670,6 +706,46 @@ mod tests {
         sh.profile = Some("9a3f1c2b7e40".into());
         let back = ServerHello::from_body(&sh.fields().into_body()).unwrap();
         assert_eq!(back.profile.as_deref(), Some("9a3f1c2b7e40"));
+    }
+
+    /// The screen echo rides `ServerHello` tag 28, after the profile: `0x00` for the session's
+    /// own screen, else the connector. A host that says nothing, or an empty or oversized
+    /// value, reads as no echo.
+    #[test]
+    fn the_screen_echo_rides_server_hello() {
+        let hex = |sh: &ServerHello| -> String {
+            let body = sh.fields().into_body();
+            body.iter().map(|b| format!("{b:02x}")).collect()
+        };
+        let mut sh = ServerHello::from_body(&Fields::new().bytes(1, &[0; 16]).into_body()).unwrap();
+        assert_eq!(sh.screen, None);
+        sh.profile = Some("p1".into());
+        assert!(hex(&sh).ends_with("1b027031"), "no echo, no tag 28");
+        // The bytes on the wire are pinned: a change here is a wire change.
+        sh.screen = Some(ScreenEcho::Own);
+        assert!(hex(&sh).ends_with("1b0270311c0100"), "{}", hex(&sh));
+        assert_eq!(
+            ServerHello::from_body(&sh.fields().into_body()).unwrap(),
+            sh
+        );
+        sh.screen = Some(ScreenEcho::Monitor("HDMI-A-1".into()));
+        assert!(
+            hex(&sh).ends_with("1b0270311c0848444d492d412d31"),
+            "{}",
+            hex(&sh)
+        );
+        assert_eq!(
+            ServerHello::from_body(&sh.fields().into_body()).unwrap(),
+            sh
+        );
+
+        let read = |v: &[u8]| {
+            let body = Fields::new().bytes(1, &[0; 16]).bytes(28, v).into_body();
+            ServerHello::from_body(&body).unwrap().screen
+        };
+        assert_eq!(read(b"DP-1"), Some(ScreenEcho::Monitor("DP-1".into())));
+        assert_eq!(read(&[]), None);
+        assert_eq!(read(&[b'x'; CONNECTOR_MAX + 1]), None);
     }
 
     /// The unlock promise rides the feature bits; a hello without it reads `false`.
@@ -820,6 +896,7 @@ mod tests {
             suite: Some(MediaSuite::ChaCha20Poly1305),
             features: FeatureSet::default().with(reg::FEATURE_STREAM_CONFIG),
             profile: None,
+            screen: None,
         };
         assert_eq!(
             ServerHello::from_body(&sh.fields().into_body()).unwrap(),

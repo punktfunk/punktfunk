@@ -55,6 +55,9 @@ pub struct StreamConfig {
     /// The encode resolution ANNOUNCE negotiated against. Every capture and encoder open of the
     /// session uses it, so an Encoder-row change applies at the next session.
     pub encoder: Arc<encode::Resolved>,
+    /// The device's screen is a host monitor. The stream thread sets it once from the paired
+    /// certificate's pick; ANNOUNCE knows no device and leaves it `false`.
+    pub mirrored: bool,
 }
 
 /// The negotiated values without the resolution's probe cells, for the log lines.
@@ -277,7 +280,7 @@ pub fn start(
 
 #[allow(clippy::too_many_arguments)]
 fn run(
-    cfg: StreamConfig,
+    mut cfg: StreamConfig,
     app: Option<&super::apps::AppEntry>,
     running: &Arc<AtomicBool>,
     // Set by `DELETE /session/{id}`: this one session, not the whole host.
@@ -325,6 +328,9 @@ fn run(
         .fingerprint
         .as_deref()
         .and_then(|h| <[u8; 32] as hex::FromHex>::from_hex(h).ok());
+    // Decided once: every plan of this stream, and the pooled capturer's key, read this pick.
+    let screen = crate::vdisplay::resolve_screen(device);
+    cfg.mirrored = crate::vdisplay::mirrors(&screen.target);
 
     // Not pooled: a reconnect at a different resolution needs a freshly-sized output.
     if pf_host_config::config().video_source.as_deref() == Some("virtual") {
@@ -540,9 +546,7 @@ fn run(
     let metadata_cursor = blend_capable_metadata_cursor(&cfg);
     // The device's monitor: without it, Moonlight gets whichever head the portal hands back.
     #[cfg(target_os = "linux")]
-    let pinned = crate::vdisplay::resolve_screen(device)
-        .target
-        .into_monitor();
+    let pinned = screen.target.into_monitor();
     #[cfg(not(target_os = "linux"))]
     let pinned: Option<String> = None;
     // The range the encoder signals, which a mirror's YUV converts must write.
@@ -686,12 +690,13 @@ fn open_gs_mirror_source(
             output: plan.output_format(&cfg.encoder),
             codec: Some(plan.codec),
             encoder: cfg.encoder.clone(),
-            capture: crate::session_plan::CaptureBackend::resolve(),
+            capture: plan.capture,
             kwin: compositor == crate::vdisplay::Compositor::Kwin,
             gamescope: compositor == crate::vdisplay::Compositor::Gamescope,
             stream_hz: cfg.fps,
             screen: 0,
             gamescope_cursor: false,
+            mirrored: plan.mirrored,
         },
     )
     .context("attach a capturer to the mirrored monitor")
@@ -832,7 +837,7 @@ fn open_gs_virtual_source(
     // Register an unread stop flag so a later session can preempt (3 s grace, then force).
     // Anonymous slot 0 — only another slot-0 connect preempts it.
     let _idd_setup_guard = crate::windows::idd::setup_guard(
-        crate::session_plan::CaptureBackend::resolve(),
+        crate::session_plan::CaptureBackend::resolve(cfg.mirrored),
         None,
         (cfg.width, cfg.height),
         &std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
@@ -883,12 +888,13 @@ fn gs_capture_output(
             output: plan.output_format(&cfg.encoder),
             codec: Some(plan.codec),
             encoder: cfg.encoder.clone(),
-            capture: crate::session_plan::CaptureBackend::resolve(),
+            capture: plan.capture,
             kwin: compositor == crate::vdisplay::Compositor::Kwin,
             gamescope,
             stream_hz: cfg.fps,
             screen: 0,
             gamescope_cursor: crate::session_plan::gamescope_cursor_for(gamescope, route),
+            mirrored: plan.mirrored,
         },
     )
     .context("capture virtual output")?;
@@ -900,8 +906,8 @@ fn gs_capture_output(
 
 /// Shared [`SessionPlan`](crate::session_plan::SessionPlan) at this plane's shape: 4:2:0 unless
 /// PyroWave negotiated 4:4:4 (stock Moonlight cannot decode it), depth 10 only with HDR, no
-/// cursor-forward (GameStream has no client cursor channel), and exactly the slices the client
-/// asked for: a TV decoder wedges on more.
+/// cursor-forward (GameStream has no client cursor channel), exactly the slices the client asked
+/// for (a TV decoder wedges on more), and the device's screen ([`StreamConfig::mirrored`]).
 fn gs_session_plan(cfg: &StreamConfig, cursor_blend: bool) -> crate::session_plan::SessionPlan {
     let mut plan = crate::session_plan::SessionPlan::resolve(
         &cfg.encoder,
@@ -912,7 +918,8 @@ fn gs_session_plan(cfg: &StreamConfig, cursor_blend: bool) -> crate::session_pla
         cursor_blend,
         false,
         cfg.slices,
-    );
+    )
+    .mirroring(cfg.mirrored);
     plan.studio_asked = cfg.studio_asked;
     plan
 }
@@ -1375,8 +1382,7 @@ fn stream_body(
     // A mirror is sized by `open_encoder_fitted`. A virtual display was created at the
     // negotiated size, so a mismatch is a backend fault — not fatal, the encoder opens at the
     // captured size.
-    if !crate::session_plan::mirrored() && (frame.width != cfg.width || frame.height != cfg.height)
-    {
+    if !cfg.mirrored && (frame.width != cfg.width || frame.height != cfg.height) {
         tracing::warn!(
             captured = ?(frame.width, frame.height),
             negotiated = ?(cfg.width, cfg.height),
@@ -2429,6 +2435,7 @@ mod tests {
             encrypt_video: false,
             studio_asked: crate::session_plan::StudioAsk::default(),
             encoder: crate::encode::resolve(),
+            mirrored: false,
         }
     }
 

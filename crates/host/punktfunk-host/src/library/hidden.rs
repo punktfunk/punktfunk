@@ -31,7 +31,17 @@ fn load_settings() -> HiddenSettings {
 }
 
 pub(crate) fn hidden_ids() -> HashSet<String> {
-    load_settings().hidden.into_iter().collect()
+    load_settings().ids()
+}
+
+impl HiddenSettings {
+    /// The hidden ids, less the host's own [`GAME_MODE_ID`] tile, which no hide takes away.
+    fn ids(self) -> HashSet<String> {
+        self.hidden
+            .into_iter()
+            .filter(|id| id != GAME_MODE_ID)
+            .collect()
+    }
 }
 
 /// `library.changed` source. A missing `:` yields the whole id, not `""` —
@@ -93,5 +103,14 @@ mod tests {
         assert_eq!(s.hidden, vec!["steam:70", "lutris:4"]);
         let json = serde_json::to_string(&s).expect("serializes");
         assert_eq!(json, r#"{"hidden":["steam:70","lutris:4"]}"#);
+    }
+
+    /// A hide of the host's Game Mode tile, written or hand-edited, takes nothing away.
+    #[test]
+    fn the_game_mode_tile_cannot_be_hidden() {
+        let s = HiddenSettings {
+            hidden: vec![GAME_MODE_ID.into(), "steam:70".into()],
+        };
+        assert_eq!(s.ids(), HashSet::from(["steam:70".to_string()]));
     }
 }

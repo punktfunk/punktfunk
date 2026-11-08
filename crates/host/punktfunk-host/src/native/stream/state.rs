@@ -860,6 +860,7 @@ fn session_plan(ctx: &SessionContext) -> crate::session_plan::SessionPlan {
         c.session.shard_payload(),
         ctx.reframe_to,
         ctx.join_live,
+        ctx.mirrored,
     );
     tracing::info!(?plan, "resolved session plan");
     plan
