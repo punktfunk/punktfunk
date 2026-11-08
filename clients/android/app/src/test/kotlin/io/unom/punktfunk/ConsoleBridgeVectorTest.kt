@@ -8,6 +8,7 @@ import io.unom.punktfunk.kit.SeatState
 import io.unom.punktfunk.kit.library.Artwork
 import io.unom.punktfunk.kit.library.Download
 import io.unom.punktfunk.kit.library.GameEntry
+import io.unom.punktfunk.kit.library.GameOverrides
 import java.io.File
 import org.json.JSONArray
 import org.json.JSONObject
@@ -124,6 +125,11 @@ class ConsoleBridgeVectorTest {
         assertWrites("PhasePush", 3, ConsoleJson.libraryError(fetch, "Not paired", "Pair this device first.", false))
         val dota = GameEntry("steam:570", "steam", "Dota 2", Artwork(null, null, null))
         assertWrites("GamesPush", 0, ConsoleJson.libraryGames(fetch, listOf(dota)))
+        val cyberpunk = GameEntry(
+            "steam:1091500", "steam", "Cyberpunk 2077", Artwork(null, null, null),
+            overrides = GameOverrides(name = "1080p60 DualSense", lines = 1080, hz = 60, gamepad = "dualsense"),
+        )
+        assertWrites("GamesPush", 1, ConsoleJson.libraryGames(fetch, listOf(cyberpunk)))
         val downloads = listOf(
             Download(
                 "steam:570", "downloading", doneBytes = 1_048_576, totalBytes = 4_194_304,
