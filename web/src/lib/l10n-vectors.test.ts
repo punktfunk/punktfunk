@@ -92,6 +92,15 @@ describe("the console's plurals", () => {
 		).toBe("0 of 1 game");
 	});
 
+	test("German follows the count", () => {
+		expect(m.store_updates_pending({ count: 1 }, { locale: "de" })).toBe(
+			"Für 1 Plugin gibt es ein Update",
+		);
+		expect(m.store_updates_pending({ count: 3 }, { locale: "de" })).toBe(
+			"Für 3 Plugins gibt es Updates",
+		);
+	});
+
 	test("a translation can be a plural of its own", () => {
 		expect(m.library_entry_launches({ count: 1 }, { locale: "de" })).toBe(
 			"Einmal gestartet",
