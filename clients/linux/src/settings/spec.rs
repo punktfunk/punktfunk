@@ -2,10 +2,13 @@
 //! page, whether it waits behind Show advanced, and which layer it edits. Rows take their text
 //! from here, and the catalog test holds this table to `clients/shared/settings-catalog.json`.
 
+use super::shortcuts::{chord, chords};
 use super::tables::{
     resolution_caption, MOUSE_MODE_CAPTIONS, PRESENT_PRIORITY_CAPTIONS, SCREENS_CAPTIONS,
     TOUCH_MODE_CAPTIONS, VIDEO_FIT_CAPTIONS,
 };
+use pf_client_core::overlay_actions::SlotId;
+use pf_client_core::shortcuts::{Action, Device};
 use pf_l10n::{client, desktop};
 use std::borrow::Cow;
 
@@ -92,6 +95,14 @@ impl Spec {
     }
 }
 
+/// `base`, then `sentence` naming the key bound to `slot` in the dialog's scope, when one is.
+fn and_keys(base: &str, slot: SlotId, sentence: fn(&str) -> String) -> String {
+    match chord(Action::Slot(slot), Device::Keyboard) {
+        Some(keys) => format!("{base} {}", sentence(&keys)),
+        None => base.into(),
+    }
+}
+
 /// A row's title and caption are read each time the row is built, so a message such as
 /// `client::player_stats_scale_pct()` reads in the language `pf_l10n` settled on. A caption
 /// may be a message or a few joined, so it is a `Cow`.
@@ -112,10 +123,12 @@ macro_rules! specs {
 
 specs! {
     FULLSCREEN: "fullscreen", client::player_fullscreen(),
-        format!("{} {}", desktop::desktop_fullscreen_hint(),
-            desktop::desktop_fullscreen_exit_hint("F11")), General, false, Device;
+        and_keys(desktop::desktop_fullscreen_hint(), SlotId::Fullscreen,
+            |k| desktop::desktop_fullscreen_exit_hint(k)), General, false, Device;
     FULLSCREEN_ON_STREAM: "fullscreen_on_stream", client::player_fullscreen_on_stream(),
-        desktop::desktop_fullscreen_on_stream_exit_hint("F11", "L1+R1+Start+Select"),
+        chords(Action::Slot(SlotId::Fullscreen), Action::Slot(SlotId::ReleaseInput))
+            .map(|(k, pad)| desktop::desktop_fullscreen_on_stream_exit_hint(k, pad))
+            .unwrap_or_default(),
         General, false, PresetOnly;
     AUTO_WAKE: "auto_wake", client::player_auto_wake(), client::player_auto_wake_hint(),
         General, false, Device;
@@ -129,8 +142,8 @@ specs! {
     OMARCHY_MENU: "omarchy_menu", desktop::desktop_omarchy_menu(),
         desktop::desktop_omarchy_menu_hint("Super+Space"), General, false, Device;
     STATS: "stats_verbosity", client::player_stats_verbosity(),
-        format!("{} {}", client::player_stats_verbosity_hint(),
-            client::player_stats_verbosity_cycle_hint("Ctrl+Alt+Shift+S")),
+        and_keys(client::player_stats_verbosity_hint(), SlotId::Stats,
+            |k| client::player_stats_verbosity_cycle_hint(k)),
         General, false, Stream;
     SHOW_ADVANCED: "show_advanced", client::player_show_advanced(),
         client::player_show_advanced_hint(), General, false, Dialog;
@@ -187,14 +200,16 @@ specs! {
     INVERT_SCROLL: "invert_scroll", client::player_invert_scroll(),
         client::player_invert_scroll_hint(), Input, false, Stream;
     QUICK_ACTIONS: "overlay_actions", client::player_overlay_actions(), "", Input, false, Stream;
+    PLAYER_SHORTCUTS: "shortcuts", client::player_shortcuts(), client::player_shortcuts_hint(),
+        Input, false, Stream;
 
     AUDIO_CHANNELS: "audio_channels", client::player_audio_channels(),
         client::player_audio_channels_hint(), Audio, false, Stream;
     SPEAKER: "speaker_device", client::player_speaker_device(),
         client::player_speaker_device_hint(), Audio, false, Device;
     MIC: "mic_enabled", client::player_mic_enabled(),
-        format!("{} {}", client::player_mic_enabled_hint(),
-            client::player_mic_enabled_keys_hint("Ctrl+Alt+Shift+V")), Audio, false, Stream;
+        and_keys(client::player_mic_enabled_hint(), SlotId::Mic,
+            |k| client::player_mic_enabled_keys_hint(k)), Audio, false, Stream;
     MIC_DEVICE: "mic_device", client::player_mic_device(), client::player_mic_device_hint(),
         Audio, false, Device;
     AUDIO_FORMAT: "audio_format", client::player_audio_format(),
@@ -214,8 +229,6 @@ specs! {
         Controllers, true, Device;
     SYSTEM_BUTTONS: "system_buttons", client::player_system_buttons(),
         client::player_system_buttons_hint(), Controllers, true, Stream;
-    GUIDE_GESTURE: "guide_gesture", client::player_guide_gesture(),
-        client::player_guide_gesture_hint("Select"), Controllers, true, Stream;
     PAD_HAPTICS: "pad_haptics", client::player_pad_haptics(), client::player_pad_haptics_hint(),
         Controllers, true, Device;
     PAD_SPEAKER: "pad_speaker", client::player_pad_speaker(), client::player_pad_speaker_hint(),
@@ -225,9 +238,9 @@ specs! {
 #[cfg(test)]
 mod tests {
     use super::super::tables::{
-        AUDIO_FORMATS, CODECS, COMPOSITORS, DECODERS, GAMEPADS, GUIDE_GESTURES, MOUSE_MODES,
-        PRESENT_PRIORITIES, REFRESH, RENDER_SCALES, SCREENS, SMOOTH_BUFFER_STEPS, SYSTEM_BUTTONS,
-        TOUCH_MODES, VIDEO_FITS,
+        AUDIO_FORMATS, CODECS, COMPOSITORS, DECODERS, GAMEPADS, MOUSE_MODES, PRESENT_PRIORITIES,
+        REFRESH, RENDER_SCALES, SCREENS, SMOOTH_BUFFER_STEPS, SYSTEM_BUTTONS, TOUCH_MODES,
+        VIDEO_FITS,
     };
     use super::*;
 
@@ -299,7 +312,6 @@ mod tests {
             "audio_format" => AUDIO_FORMATS.iter().map(|(v, _)| v.to_string()).collect(),
             "gamepad" => strs(GAMEPADS),
             "system_buttons" => strs(SYSTEM_BUTTONS),
-            "guide_gesture" => strs(GUIDE_GESTURES),
             _ => return None,
         })
     }

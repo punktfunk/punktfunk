@@ -1,9 +1,10 @@
-//! Input: touch, keyboard and mouse, and the quick-action dial.
+//! Input: touch, keyboard and mouse, the quick-action dial, and the in-stream shortcuts.
 
 use super::display::caption_follows;
 use super::Build;
 use crate::settings::field::Field;
 use crate::settings::quick_actions::QuickActions;
+use crate::settings::shortcuts::{ring_chords, ShortcutsPage};
 use crate::settings::spec::{self, Page};
 use crate::settings::tables::*;
 use adw::prelude::*;
@@ -44,17 +45,20 @@ pub fn input(b: &mut Build) {
     );
     b.put(&mut p, Some(&kbm), field);
 
-    let ring = p.group(
-        client::player_overlay_actions(),
-        &desktop::desktop_player_overlay_actions_hint("Ctrl+Alt+Shift+O", "Select+A"),
-    );
-    b.put(&mut p, Some(&ring), quick_actions(b));
+    let opens = ring_chords()
+        .map(|(keys, pad)| desktop::desktop_player_overlay_actions_hint(keys, pad))
+        .unwrap_or_default();
+    let ring = p.group(client::player_overlay_actions(), &opens);
+    let quick = QuickActions::new(&b.dialog, &b.seed.overlay_actions);
+    let keys = p.group("", "");
+    let bindings = shortcuts(b, &quick);
+    b.put(&mut p, Some(&ring), quick_actions(quick));
+    b.put(&mut p, Some(&keys), bindings);
     b.finish(p);
 }
 
 /// The ring's row opens its editor; every edit the editor makes is a change.
-fn quick_actions(b: &Build) -> Field {
-    let quick = QuickActions::new(&b.dialog, &b.seed.overlay_actions);
+fn quick_actions(quick: QuickActions) -> Field {
     let row = quick.row().clone();
     Field::new(
         &spec::QUICK_ACTIONS,
@@ -70,5 +74,27 @@ fn quick_actions(b: &Build) -> Field {
         },
         || false,
         move |f| quick.connect_changed(move || f()),
+    )
+}
+
+/// The shortcuts' row opens their page; every edit the page makes is a change. Its key
+/// combinations are the ring editor's as edited so far.
+fn shortcuts(b: &Build, quick: &QuickActions) -> Field {
+    let page = ShortcutsPage::new(&b.dialog, b.seed, quick.blob());
+    let row = page.row().clone();
+    Field::new(
+        &spec::PLAYER_SHORTCUTS,
+        &row,
+        vec![row.clone().upcast()],
+        {
+            let page = page.clone();
+            move |s| page.set(s)
+        },
+        {
+            let blob = page.blob();
+            move |s| s.shortcuts = blob.borrow().clone()
+        },
+        || false,
+        move |f| page.connect_changed(move || f()),
     )
 }

@@ -67,15 +67,6 @@ pub fn controllers(b: &mut Build) {
             |s, i| s.system_buttons = at(SYSTEM_BUTTONS, i).to_string(),
         ),
     );
-    let row = b.choice(&spec::GUIDE_GESTURE, &texts(GUIDE_GESTURE_LABELS));
-    follows.push(row.widget().clone().upcast());
-    b.put(
-        &mut p,
-        None,
-        Field::choice(&spec::GUIDE_GESTURE, &row, index::guide_gesture, |s, i| {
-            s.guide_gesture = at(GUIDE_GESTURES, i).to_string()
-        }),
-    );
     // A DualSense's voice coils and speaker, streamed from the host.
     let (field, haptics) = Field::switch(
         &spec::PAD_HAPTICS,
