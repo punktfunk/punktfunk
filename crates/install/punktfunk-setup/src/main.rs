@@ -227,10 +227,10 @@ fn run() -> Result<(), ExitCode> {
         .is_ok();
     let demo = cli.demo.clone();
     let yes = cli.yes || !tty;
-    // The screens speak the person's language; every transcript (`--yes`, no terminal) stays
+    // The screens speak the terminal's language; every transcript (`--yes`, no terminal) stays
     // English, so a pasted log reads the same everywhere. Set before the first message is made.
     if tty && !yes {
-        pf_l10n::set_languages(&pf_l10n::os_languages());
+        pf_l10n::set_languages(&pf_l10n::terminal_languages());
     }
     let plain = Plain::stdio(env.get("NO_COLOR").is_none());
     let paths = match &demo {

@@ -252,9 +252,24 @@ pub fn os_languages() -> Vec<String> {
     posix_languages(|name| std::env::var(name).ok())
 }
 
+/// The languages for a program drawn in a terminal: the terminal's locale variables when any is
+/// set, so `LC_ALL=C` reads the source language on every OS, else [`os_languages`].
+#[cfg(feature = "os")]
+pub fn terminal_languages() -> Vec<String> {
+    let var = |name: &str| std::env::var(name).ok().filter(|v| !v.is_empty());
+    if ["LC_ALL", "LC_MESSAGES", "LANG"]
+        .into_iter()
+        .any(|n| var(n).is_some())
+    {
+        posix_languages(var)
+    } else {
+        os_languages()
+    }
+}
+
 /// gettext's order: `LANGUAGE`'s list unless the locale is `C`, then the first of `LC_ALL`,
 /// `LC_MESSAGES` and `LANG` that is set. `de_AT.UTF-8@euro` becomes `de-AT`.
-#[cfg(any(test, all(feature = "os", not(any(windows, target_os = "macos")))))]
+#[cfg(any(test, feature = "os"))]
 fn posix_languages(var: impl Fn(&str) -> Option<String>) -> Vec<String> {
     let tag = |s: &str| {
         let t = s.split(['.', '@']).next().unwrap_or("").replace('_', "-");

@@ -86,9 +86,11 @@ let package = Package(
             ]),
         // PunktfunkCore is a direct dep too so the wire tests can name the C ABI's
         // `PunktfunkInputEvent` / `PUNKTFUNK_INPUT_KIND_*` when asserting the gamepad byte layout.
+        // Pins the tests to English; see TestLanguage.m.
+        .target(name: "PunktfunkTestLanguage", path: "Tests/TestLanguage"),
         .testTarget(
             name: "PunktfunkKitTests",
-            dependencies: ["PunktfunkKit", "PunktfunkShared", "PunktfunkCore"],
+            dependencies: ["PunktfunkKit", "PunktfunkShared", "PunktfunkCore", "PunktfunkTestLanguage"],
             resources: [
                 // PyroWave golden fixtures: host-encoded AUs + upstream-decoded reference
                 // planes (regenerate with punktfunk-host's `pyrowave_dump_golden` on a
