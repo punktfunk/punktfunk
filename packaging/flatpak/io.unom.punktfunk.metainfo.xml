@@ -7,6 +7,9 @@
   <metadata_license>CC0-1.0</metadata_license>
   <project_license>MIT OR Apache-2.0</project_license>
   <name>Punktfunk</name>
+  <name xml:lang="de">Punktfunk</name>
+  <name xml:lang="es">Punktfunk</name>
+  <name xml:lang="fr">Punktfunk</name>
   <summary>Stream your PC's games and desktop</summary>
   <summary xml:lang="de">Spiele und Desktop deines PCs streamen</summary>
   <summary xml:lang="es">Transmite los juegos y el escritorio de tu PC</summary>
@@ -115,6 +118,7 @@
     <keyword>streaming</keyword>
     <keyword xml:lang="es">streaming</keyword>
     <keyword xml:lang="fr">streaming</keyword>
+    <keyword xml:lang="de">Streaming</keyword>
     <keyword>remote</keyword>
     <keyword xml:lang="de">Fernzugriff</keyword>
     <keyword xml:lang="es">remoto</keyword>
@@ -126,6 +130,7 @@
     <keyword>moonlight</keyword>
     <keyword xml:lang="es">moonlight</keyword>
     <keyword xml:lang="fr">moonlight</keyword>
+    <keyword xml:lang="de">Moonlight</keyword>
   </keywords>
 
   <supports>
@@ -141,6 +146,9 @@
 
   <developer id="io.unom">
     <name>unom</name>
+    <name xml:lang="de">unom</name>
+    <name xml:lang="es">unom</name>
+    <name xml:lang="fr">unom</name>
   </developer>
 
   <content_rating type="oars-1.1"/>

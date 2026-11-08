@@ -1,6 +1,9 @@
 [Desktop Entry]
 Type=Application
 Name=Punktfunk Console
+Name[de]=Punktfunk Console
+Name[es]=Punktfunk Console
+Name[fr]=Punktfunk Console
 Comment=Controller-driven couch interface — browse hosts and stream with a gamepad
 Comment[de]=Oberfläche fürs Sofa, mit dem Controller bedient — Hosts durchsuchen und mit dem Gamepad streamen
 Comment[es]=Interfaz para el sofá, manejada con mando — explora hosts y transmite con un mando

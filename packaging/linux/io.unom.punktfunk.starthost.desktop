@@ -1,6 +1,9 @@
 [Desktop Entry]
 Type=Application
 Name=Punktfunk Host
+Name[de]=Punktfunk-Host
+Name[es]=Host de Punktfunk
+Name[fr]=Hôte Punktfunk
 GenericName=Streaming host
 GenericName[de]=Streaming-Host
 GenericName[es]=Host de transmisión
