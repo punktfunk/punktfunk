@@ -121,6 +121,7 @@
 	"apierr_library_entry_not_deleted": "L’entrée n’a pas été supprimée — l’hôte a rencontré un état inattendu",
 	"apierr_library_entry_not_updated": "L’entrée n’a pas été mise à jour — l’hôte a rencontré un état inattendu",
 	"apierr_library_not_updated": "La bibliothèque n’a pas été mise à jour — l’hôte a rencontré un état inattendu",
+	"apierr_library_override_name_taken": "Une autre configuration partagée porte déjà ce nom. Choisissez-en un autre.",
 	"apierr_library_page_marker_invalid": "Ce repère de page n’est pas valide. Rechargez la liste depuis le début",
 	"apierr_log_bundle_not_deleted": "Impossible de supprimer l’archive de journaux",
 	"apierr_log_bundle_not_read": "Impossible de lire l’archive de journaux",

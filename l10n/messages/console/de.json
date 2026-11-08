@@ -162,6 +162,7 @@
 	"console_prefs_advanced_changed_hint": "Einige ausgeblendete Einstellungen weichen vom Auslieferungszustand ab; {button} zeigt sie an.",
 	"console_prefs_header_this_device": "Dieses Gerät",
 	"console_prefs_override_note": "Voreinstellung „{preset}“ auf {host}: {value}",
+	"console_prefs_host_note": "Von {host} für {game} festgelegt: {value}",
 	"console_hint_section": "Bereich",
 	"console_hint_rows": "Zeilen",
 	"console_hint_create": "Erstellen…",

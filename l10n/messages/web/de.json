@@ -488,6 +488,82 @@
 	"library_source_settings_refused": "der Host hat abgelehnt",
 	"library_source_settings_own_page": "{source} verwaltet seine Einstellungen auf einer eigenen Seite.",
 	"library_source_settings_open_page": "{source} öffnen",
+	"library_stream_title": "Stream",
+	"library_stream_hint": "Alle Geräte übernehmen diese Werte, den Rest bestimmen ihre eigenen Einstellungen",
+	"library_stream_source_title": "Stream für alle Titel von {source}",
+	"library_stream_use": "Verwenden",
+	"library_stream_device": "Gerät entscheidet",
+	"library_stream_same_as_source": "Wie {source}",
+	"library_stream_custom": "Eigene Werte",
+	"library_stream_new": "Neue gemeinsame Vorgabe…",
+	"library_stream_resolution": "Auflösung",
+	"library_stream_beyond": "Auch auf kleineren Bildschirmen",
+	"library_stream_refresh": "Bildwiederholrate",
+	"library_stream_hz": "{hz} Hz",
+	"library_stream_hdr": "HDR",
+	"library_stream_hdr_on": "HDR an",
+	"library_stream_hdr_off": "HDR aus",
+	"library_stream_controller": "Controller",
+	"library_stream_from": "von {source}",
+	"library_stream_edit_shared": "Gemeinsame Vorgabe bearbeiten",
+	"library_stream_failed": "Die Stream-Einstellungen konnten nicht gespeichert werden",
+	"library_stream_shared": "Gemeinsame Vorgaben",
+	"library_stream_shared_empty": "Noch keine gemeinsamen Vorgaben",
+	"library_stream_name": "Name",
+	"library_stream_new_title": "Neue gemeinsame Vorgabe",
+	"library_stream_rename_title": "Gemeinsame Vorgabe umbenennen",
+	"library_stream_unused": "Noch nicht verwendet",
+	"library_stream_used_games": [{
+		"declarations": ["input count", "local n = count: plural"],
+		"selectors": ["n"],
+		"match": {
+			"n=one": "{count} Spiel",
+			"n=*": "{count} Spiele"
+		}
+	}],
+	"library_stream_used_sources": [{
+		"declarations": ["input count", "local n = count: plural"],
+		"selectors": ["n"],
+		"match": {
+			"n=one": "{count} Quelle",
+			"n=*": "{count} Quellen"
+		}
+	}],
+	"library_stream_delete_title": "{name} löschen?",
+	"library_stream_delete_body": [{
+		"declarations": ["input count", "local n = count: plural"],
+		"selectors": ["n"],
+		"match": {
+			"n=one": "Wird von {count} Spiel verwendet. Es fällt auf die Einstellungen seiner Quelle oder auf „Gerät entscheidet“ zurück.",
+			"n=*": "Wird von {count} Spielen verwendet. Diese fallen auf die Einstellungen ihrer Quelle oder auf „Gerät entscheidet“ zurück."
+		}
+	}],
+	"library_stream_delete_sources_body": [{
+		"declarations": ["input count", "local n = count: plural"],
+		"selectors": ["n"],
+		"match": {
+			"n=one": "Wird von {count} Quelle verwendet. Ihre Spiele fallen auf „Gerät entscheidet“ zurück.",
+			"n=*": "Wird von {count} Quellen verwendet. Deren Spiele fallen auf „Gerät entscheidet“ zurück."
+		}
+	}],
+	"library_stream_select": "Spiele auswählen",
+	"library_stream_selected": [{
+		"declarations": ["input count", "local n = count: plural"],
+		"selectors": ["n"],
+		"match": {
+			"n=one": "{count} ausgewählt",
+			"n=*": "{count} ausgewählt"
+		}
+	}],
+	"library_stream_bulk": "Gemeinsame Vorgabe verwenden…",
+	"library_stream_bulk_failed": [{
+		"declarations": ["input count", "local n = count: plural"],
+		"selectors": ["n"],
+		"match": {
+			"n=one": "{count} Spiel konnte nicht geändert werden",
+			"n=*": "{count} Spiele konnten nicht geändert werden"
+		}
+	}],
 	"library_migrate_title": "Spielquellen werden zu Plugins",
 	"library_migrate_help": "Jeder Launcher wird ein eigenes Add-on. Installierst du eines, übernimmt es; Kacheln bleiben.",
 	"library_migrate_install": "Quelle {source} installieren",
