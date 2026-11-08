@@ -7,6 +7,7 @@ import android.util.Log
 import android.view.SurfaceView
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.unit.IntSize
+import io.unom.punktfunk.console.SkiaConsole
 import io.unom.punktfunk.kit.DeviceGyro
 import io.unom.punktfunk.kit.DsCapture
 import io.unom.punktfunk.kit.Gamepad
@@ -317,8 +318,12 @@ internal class StreamPeripherals(
             // lives at this layer; DsCapture decides WHEN (it knows the wire index and the link
             // lifetime), this decides WHETHER.
             if (settings.padHaptics || settings.padSpeaker) {
+                ds.padSpeaker = settings.padSpeaker
                 ds.padAudio = object : DsCapture.PadAudioHook {
                     override fun start(pad: Int, fd: Int) {
+                        // The console's per-controller volume, set before the first frame decodes.
+                        val volume = ds.padKey?.let { SkiaConsole.padSpeakerVolume(context, it) } ?: 100
+                        NativeBridge.nativeSetPadSpeakerVolume(pad, volume)
                         val ok = NativeBridge.nativeStartPadAudio(
                             handle,
                             pad,

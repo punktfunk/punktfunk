@@ -1042,6 +1042,8 @@
 	"player_pad_haptics_hint": "Spielt die feine Haptik eines DualSense direkt auf dem Controller ab.",
 	"player_pad_speaker": "Controller-Lautsprecher",
 	"player_pad_speaker_hint": "Spielt den Ton, den ein Spiel an den Controller-Lautsprecher schickt, am Controller ab statt über dieses Gerät.",
+	"player_pad_speaker_volume": "Lautsprecherlautstärke",
+	"player_pad_speaker_volume_hint": "Wie laut der Lautsprecher dieses Controllers spielt. 100 % ist, was das Spiel sendet.",
 	"player_sc2_capture": "Steam Controller 2 durchreichen",
 	"player_sc2_capture_hint": "Streamt einen Steam Controller 2 oder einen Steam Controller von 2015 unverändert; braucht Bluetooth-Zugriff.",
 	"player_ds_capture": "DualSense über USB",

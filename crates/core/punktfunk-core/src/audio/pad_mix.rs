@@ -6,9 +6,24 @@
 use crate::audio::{AudioGapTracker, SAMPLE_RATE_HZ};
 use crate::quic::{PadAudioFrame, PAD_AUDIO_KIND_HAPTICS, PAD_AUDIO_KIND_SPEAKER};
 use std::collections::VecDeque;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
+
+/// The player's speaker volume per wire pad, as an f32 gain in bits; 1.0 until set. Written by
+/// the shell when a pad opens or the setting changes, read by the render thread after decode.
+static SPEAKER_GAIN: [AtomicU32; 16] = [const { AtomicU32::new(0x3F80_0000) }; 16];
+
+/// Set `pad`'s speaker volume, `percent` 0..=100, linear in amplitude.
+pub fn set_speaker_volume(pad: u8, percent: u8) {
+    let gain = f32::from(percent.min(100)) / 100.0;
+    SPEAKER_GAIN[usize::from(pad & 0x0f)].store(gain.to_bits(), Ordering::Relaxed);
+}
+
+/// The gain [`set_speaker_volume`] left for `pad`.
+pub fn speaker_gain(pad: u8) -> f32 {
+    f32::from_bits(SPEAKER_GAIN[usize::from(pad & 0x0f)].load(Ordering::Relaxed))
+}
 
 /// Speaker FL/FR on 0/1, voice coils on 2/3: the DualSense USB audio function's layout.
 pub const PAD_CHANNELS: usize = 4;
@@ -140,6 +155,8 @@ pub const MAX_FRAME_SAMPLES: usize = 5_760;
 #[cfg(feature = "quic")]
 pub trait PadSample: Copy + Default {
     fn decode(dec: &mut opus::Decoder, opus: &[u8], pcm: &mut [Self]) -> opus::Result<usize>;
+    /// Scale in place by `gain` in 0..=1: the player's volume, so it never clips.
+    fn scale(pcm: &mut [Self], gain: f32);
 }
 
 #[cfg(feature = "quic")]
@@ -147,12 +164,24 @@ impl PadSample for i16 {
     fn decode(dec: &mut opus::Decoder, opus: &[u8], pcm: &mut [i16]) -> opus::Result<usize> {
         dec.decode(opus, pcm, false)
     }
+
+    fn scale(pcm: &mut [i16], gain: f32) {
+        for s in pcm {
+            *s = (f32::from(*s) * gain).round() as i16;
+        }
+    }
 }
 
 #[cfg(feature = "quic")]
 impl PadSample for f32 {
     fn decode(dec: &mut opus::Decoder, opus: &[u8], pcm: &mut [f32]) -> opus::Result<usize> {
         dec.decode_float(opus, pcm, false)
+    }
+
+    fn scale(pcm: &mut [f32], gain: f32) {
+        for s in pcm {
+            *s *= gain;
+        }
     }
 }
 
@@ -221,10 +250,20 @@ impl PadDecode {
                 }
             },
         };
+        // The player's volume applies to the speaker pair only; the coils play as sent.
+        let gain = match frame.kind {
+            PAD_AUDIO_KIND_SPEAKER => speaker_gain(frame.pad),
+            _ => 1.0,
+        };
         let plc = st.frame_samples * 2;
         for _ in 0..plc_frames(&mut st.gaps, frame.seq, st.frame_samples) {
             match S::decode(&mut st.dec, &[], &mut pcm[..plc]) {
-                Ok(n) => mixer.push(frame.kind, &pcm[..n * 2], Instant::now()),
+                Ok(n) => {
+                    if gain != 1.0 {
+                        S::scale(&mut pcm[..n * 2], gain);
+                    }
+                    mixer.push(frame.kind, &pcm[..n * 2], Instant::now());
+                }
                 Err(_) => break,
             }
         }
@@ -234,6 +273,9 @@ impl PadDecode {
         match S::decode(&mut st.dec, &frame.opus, pcm) {
             Ok(n) => {
                 st.frame_samples = n;
+                if gain != 1.0 {
+                    S::scale(&mut pcm[..n * 2], gain);
+                }
                 mixer.push(frame.kind, &pcm[..n * 2], Instant::now());
                 Some(n)
             }
@@ -505,5 +547,29 @@ mod tests {
         assert!(!l.live(3));
         l.clear(2);
         assert!(!l.live(2));
+    }
+
+    #[test]
+    fn speaker_volume_defaults_to_full_and_clamps() {
+        // The gains are process-wide statics: each assertion keeps to its own pad slot.
+        assert_eq!(speaker_gain(15), 1.0, "untouched pad");
+        set_speaker_volume(14, 50);
+        assert_eq!(speaker_gain(14), 0.5);
+        set_speaker_volume(13, 150);
+        assert_eq!(speaker_gain(13), 1.0, "clamped");
+        set_speaker_volume(0x1c, 25);
+        assert_eq!(speaker_gain(0x0c), 0.25, "pad index masks to 16");
+    }
+
+    #[cfg(feature = "quic")]
+    #[test]
+    fn pad_sample_scale_rounds_ints_and_multiplies_floats() {
+        let mut i = [-32768_i16, 1000];
+        i16::scale(&mut i[..1], 0.5);
+        i16::scale(&mut i[1..], 0.25);
+        assert_eq!(i, [-16384, 250]);
+        let mut f = [1.0_f32, -0.5, 0.0];
+        f32::scale(&mut f, 0.5);
+        assert_eq!(f, [0.5, -0.25, 0.0]);
     }
 }

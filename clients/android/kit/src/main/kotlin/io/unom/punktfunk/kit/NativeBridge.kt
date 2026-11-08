@@ -609,6 +609,12 @@ object NativeBridge {
     ): Boolean
 
     /**
+     * Set wire pad [pad]'s speaker volume, [percent] 0..100 (100 = unscaled). Takes effect on the
+     * next decoded frame, so it may be called before [nativeStartPadAudio] and while it runs.
+     */
+    external fun nativeSetPadSpeakerVolume(pad: Int, percent: Int)
+
+    /**
      * Stop tier-A pad audio and join its render thread, and hand the pad back to wire rumble.
      *
      * Returns only once the thread is joined — so the `UsbDeviceConnection` may be closed as soon

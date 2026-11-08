@@ -242,7 +242,9 @@ impl MenuNav {
 #[derive(Clone, Debug)]
 pub struct PadInfo {
     pub name: String,
-    /// `vid:pid:name`. SDL instance ids are per-run; [`Settings::forward_pad`](crate::trust::Settings) persists this.
+    /// Stable per physical controller on this platform: `vid:pid:serial` where the pad reports
+    /// one (a DualSense reports its MAC), else `vid:pid:name`. SDL instance ids are per-run;
+    /// [`Settings::forward_pad`](crate::trust::Settings) and `Settings::pads` persist this.
     pub key: String,
     /// What "Automatic" resolves this physical pad to. Fallback is Xbox 360.
     pub pref: GamepadPref,
@@ -256,6 +258,9 @@ pub struct PadInfo {
     /// Forwarded: real, non-virtual, OS-classified GAMEPAD. Joystick siblings are listed, not forwarded.
     pub forwarded: bool,
     pub rumble: bool,
+    /// This client plays the host's pad audio on this pad (a DualSense with a lane open), so
+    /// its card offers the per-controller audio rows.
+    pub audio: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

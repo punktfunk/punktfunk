@@ -176,6 +176,9 @@ struct PadJson {
     forwarded: bool,
     #[serde(default)]
     rumble: bool,
+    /// This client plays pad audio on the pad, so its card shows the speaker rows.
+    #[serde(default)]
+    audio: bool,
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -208,6 +211,7 @@ impl PadsJson {
                 detail: j.detail,
                 forwarded: j.forwarded,
                 rumble: j.rumble,
+                audio: j.audio,
             })
             .collect();
         (self.label, self.pref.map(GamepadPref::from_u8), pads)

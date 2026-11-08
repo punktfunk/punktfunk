@@ -1,6 +1,8 @@
 {
 	"player_stats_scale_pct": "Label of the setting that sizes the statistics overlay.",
 	"player_stats_scale_pct_hint": "Desktop and console: the overlay scales on top of the OS display scaling.",
+	"player_pad_speaker_volume": "Label of the slider on a controller card's menu in the Controllers screen; 0 to 100 %.",
+	"player_pad_speaker_volume_hint": "Foot of that menu while the slider is focused; 100 % is the level the game sends.",
 	"prefs_advanced_changed": "Row at the end of a settings category while advanced settings are hidden; count is how many of them differ from a fresh install. Activating it shows them.",
 	"dial_approve_no_pin": "Under 'Waiting for approval…'. host: the host's name.",
 	"dial_connect_failed": "Banner or toast after a failed connect. reason: a sentence saying why, from another message or from the host.",

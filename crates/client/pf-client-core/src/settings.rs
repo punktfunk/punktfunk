@@ -386,10 +386,33 @@ pub struct Settings {
     /// connect already matches. `0` = never stored → 1280×720.
     pub last_window_w: u32,
     pub last_window_h: u32,
+    /// Per physical controller, by `PadInfo::key`: what one player set for the pad in their
+    /// hands. Only pads off their defaults are stored.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub pads: BTreeMap<String, PadPrefs>,
     /// Keys this build does not model, carried through load→save so an older writer
     /// does not drop a newer client's fields. Empty map serializes to nothing.
     #[serde(flatten)]
     pub extra: BTreeMap<String, serde_json::Value>,
+}
+
+/// One controller's own settings. Every field is `None` at its default, so a pad that never
+/// left the defaults has no entry.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PadPrefs {
+    /// DualSense speaker volume, 0..=100 %; `None` = [`PAD_SPEAKER_VOLUME_DEFAULT`].
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub speaker_volume: Option<u8>,
+}
+
+/// The speaker plays what the game sends until the player turns it down.
+pub const PAD_SPEAKER_VOLUME_DEFAULT: u8 = 100;
+
+impl PadPrefs {
+    fn is_default(&self) -> bool {
+        *self == PadPrefs::default()
+    }
 }
 
 fn default_codec() -> String {
@@ -597,6 +620,24 @@ impl Settings {
         self.extra.get(GAMEPAD_UI_MODE_KEY).and_then(|v| v.as_str()) == Some("always")
     }
 
+    /// The speaker volume for the pad with `key`, 0..=100 %.
+    pub fn pad_speaker_volume(&self, key: &str) -> u8 {
+        self.pads
+            .get(key)
+            .and_then(|p| p.speaker_volume)
+            .unwrap_or(PAD_SPEAKER_VOLUME_DEFAULT)
+            .min(100)
+    }
+
+    /// Store `percent` for the pad with `key`; the default drops the pad's entry.
+    pub fn set_pad_speaker_volume(&mut self, key: &str, percent: u8) {
+        let prefs = self.pads.entry(key.to_string()).or_default();
+        prefs.speaker_volume = Some(percent.min(100)).filter(|&v| v != PAD_SPEAKER_VOLUME_DEFAULT);
+        if prefs.is_default() {
+            self.pads.remove(key);
+        }
+    }
+
     pub fn set_gamepad_ui_enabled(&mut self, on: bool) {
         self.extra
             .insert(GAMEPAD_UI_KEY.into(), serde_json::Value::Bool(on));
@@ -759,6 +800,7 @@ impl Default for Settings {
             match_window: false,
             last_window_w: 0,
             last_window_h: 0,
+            pads: BTreeMap::new(),
             extra: BTreeMap::new(),
         }
     }
@@ -1133,6 +1175,46 @@ mod tests {
         let plain = serde_json::to_string(&Settings::default()).unwrap();
         assert!(!plain.contains("extra"), "{plain}");
         assert!(!plain.contains("frob"), "{plain}");
+    }
+
+    /// A pad nobody touched plays at full; a set volume reads back, and setting full again
+    /// leaves no entry behind.
+    #[test]
+    fn pad_speaker_volume_defaults_sets_and_drops_at_full() {
+        let key = "054c:0ce6:DualSense Wireless Controller";
+        let mut s = Settings::default();
+        assert_eq!(s.pad_speaker_volume(key), 100);
+        s.set_pad_speaker_volume(key, 60);
+        assert_eq!(s.pad_speaker_volume(key), 60);
+        assert_eq!(s.pad_speaker_volume("other"), 100, "per pad");
+        s.set_pad_speaker_volume(key, 100);
+        assert_eq!(s.pad_speaker_volume(key), 100);
+        assert!(s.pads.is_empty(), "{:?}", s.pads);
+    }
+
+    /// The per-pad map survives load, save and load, beside a key this build does not model.
+    #[test]
+    fn pad_prefs_round_trip_with_unknown_keys() {
+        let key = "054c:0ce6:DualSense Wireless Controller";
+        let mut s: Settings = serde_json::from_str(r#"{"frob_mode":"fancy"}"#).unwrap();
+        s.set_pad_speaker_volume(key, 40);
+        let back: Settings = serde_json::from_str(&serde_json::to_string(&s).unwrap()).unwrap();
+        assert_eq!(back.pad_speaker_volume(key), 40);
+        assert_eq!(
+            back.extra.get("frob_mode").and_then(|v| v.as_str()),
+            Some("fancy")
+        );
+        assert_eq!(back, s);
+    }
+
+    /// A reset puts every controller back to its defaults.
+    #[test]
+    fn a_reset_clears_the_per_pad_settings() {
+        let mut s = Settings::default();
+        s.set_pad_speaker_volume("054c:0ce6:pad", 30);
+        s.reset_to_defaults();
+        assert!(s.pads.is_empty(), "{:?}", s.pads);
+        assert_eq!(s.pad_speaker_volume("054c:0ce6:pad"), 100);
     }
 
     /// A retired key (`library_enabled`) must not fail the load, and must survive the
