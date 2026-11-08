@@ -41,6 +41,7 @@ import {
 	applyPatch,
 	type Fields,
 	fieldsOf,
+	gameEntry,
 	linesLabel,
 	type Patch,
 	padLabel,
@@ -56,6 +57,7 @@ import {
 const DEVICE = "device";
 const CUSTOM = "custom";
 const NEW = "new";
+const SAME = "same";
 
 /** The document and every library view ask again: a badge follows the entry it summarizes. */
 export const refreshOverrides = (qc: QueryClient) =>
@@ -233,8 +235,9 @@ export const StreamFields: FC<{
 
 /**
  * A game's or a source's stream settings: *Use* (none, its own values, or a shared override),
- * then the values. A shared override's values read here and change in its dialog. A game with no
- * entry shows its source's, muted, and editing one makes them the game's own.
+ * then the values. A shared override's values read here and change in its dialog. A game under a
+ * source's entry also has *Same as <source>*: its source's values, muted. Editing one makes them
+ * the game's own, and *Device decides* opts out of them.
  */
 export const StreamControls: FC<{
 	kind: "game" | "source";
@@ -255,20 +258,23 @@ export const StreamControls: FC<{
 
 	const d = doc.data;
 	const own = kind === "game" ? d?.games?.[id] : d?.sources?.[id];
-	const inherited =
-		!own && kind === "game" ? d?.sources?.[storeOf(id)] : undefined;
+	const source = kind === "game" ? d?.sources?.[storeOf(id)] : undefined;
+	const inherited = own ? undefined : source;
 	const entry = own ?? inherited;
 	// A set id the document no longer holds resolves to nothing, as on the host.
 	const setId = entry?.set && d?.sets?.[entry.set] ? entry.set : undefined;
 	const values = Object.keys(fieldsOf(entry)).length > 0;
 	const shown = setId ? fieldsOf(d?.sets?.[setId]) : fieldsOf(entry);
-	const use = setId ?? (values || custom ? CUSTOM : DEVICE);
+	const use =
+		inherited && !custom
+			? SAME
+			: (setId ?? (values || custom ? CUSTOM : DEVICE));
 	const via = inherited && (setId || values) ? from : undefined;
 
-	const put = (data: OverrideEntry) =>
+	const put = (data: OverrideEntry | null) =>
 		kind === "game"
-			? setGame.mutateAsync({ id, data })
-			: setSource.mutateAsync({ source: id, data });
+			? setGame.mutateAsync({ id, data: gameEntry(d, id, data) })
+			: setSource.mutateAsync({ source: id, data: data ?? {} });
 
 	const onUse = async (v: string) => {
 		if (v === NEW) {
@@ -290,7 +296,7 @@ export const StreamControls: FC<{
 				await run(() => put(shown));
 			return;
 		}
-		await run(() => put(v === DEVICE ? {} : { set: v }));
+		await run(() => put(v === SAME ? null : v === DEVICE ? {} : { set: v }));
 	};
 
 	const htmlId = `stream-${kind}-${id}`;
@@ -308,6 +314,16 @@ export const StreamControls: FC<{
 						value={use}
 						options={[
 							[DEVICE, m.library_stream_device()],
+							...(source
+								? [
+										[
+											SAME,
+											m.library_stream_same_as_source({
+												source: from ?? storeOf(id),
+											}),
+										] as [string, string],
+									]
+								: []),
 							[CUSTOM, m.library_stream_custom()],
 							...setList(d).map((s): [string, string] => [
 								s.id,
@@ -317,7 +333,6 @@ export const StreamControls: FC<{
 						]}
 						onPick={(v) => void onUse(v)}
 						disabled={busy}
-						note={via && m.library_stream_from({ source: via })}
 					>
 						{setId && (
 							<Button

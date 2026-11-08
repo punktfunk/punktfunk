@@ -1,5 +1,11 @@
 import { expect, test } from "bun:test";
-import { applyPatch, storeOf, streamSummary, usageOf } from "./overrides";
+import {
+	applyPatch,
+	gameEntry,
+	storeOf,
+	streamSummary,
+	usageOf,
+} from "./overrides";
 
 test("the badge names the shared override, else sums up the values", () => {
 	expect(streamSummary({ name: "4K", lines: 2160, hz: 60 })).toBe("4K");
@@ -25,6 +31,21 @@ test("a field edit writes the whole entry, and clearing the height drops the scr
 	expect(applyPatch(base, { lines: null })).toEqual({ hz: 60 });
 	expect(applyPatch({}, { beyond_screen: true })).toEqual({});
 	expect(applyPatch({ hdr: true }, { hdr: false })).toEqual({ hdr: false });
+});
+
+test("a game under a source's entry writes none for nothing, so it skips the source", () => {
+	const doc = { sources: { lutris: { gamepad: "xbox360" } } };
+	expect(gameEntry(doc, "lutris:4", {})).toEqual({ none: true });
+	expect(gameEntry(doc, "lutris:4", { hz: 60 })).toEqual({ hz: 60 });
+	expect(gameEntry(doc, "lutris:4", { set: "a" })).toEqual({ set: "a" });
+	expect(gameEntry(doc, "steam:70", {})).toEqual({});
+	expect(gameEntry(undefined, "lutris:4", {})).toEqual({});
+});
+
+test("Same as the source clears the game's entry, where Device decides opts out", () => {
+	const doc = { sources: { lutris: { gamepad: "xbox360" } } };
+	expect(gameEntry(doc, "lutris:4", null)).toEqual({});
+	expect(gameEntry(doc, "lutris:4", {})).toEqual({ none: true });
 });
 
 test("usage counts the games and sources naming a set", () => {

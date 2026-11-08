@@ -146,7 +146,8 @@ every game that uses it.
 - **Make one** with **New shared override…**, or in **Shared overrides** on the **Library** page.
 - **Several games:** **Select games** on **Library**, tick them, then **Use shared override…**.
 - **A whole source:** its **Settings** in **Game sources** has the same group, **Stream, for every
-  Lutris title**. A game's own setting wins over it.
+  Lutris title**. A game's own setting wins over it, **Device decides** included; **Use** →
+  **Same as Lutris** follows the source again.
 - **Delete one** in **Shared overrides**. Its games go back to their source's settings, or to
   **Device decides**.
 

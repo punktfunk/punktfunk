@@ -535,6 +535,7 @@
 	"library_stream_source_title": "Stream, for every {source} title",
 	"library_stream_use": "Use",
 	"library_stream_device": "Device decides",
+	"library_stream_same_as_source": "Same as {source}",
 	"library_stream_custom": "Custom",
 	"library_stream_new": "New shared override…",
 	"library_stream_resolution": "Resolution",

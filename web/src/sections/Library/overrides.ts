@@ -1,5 +1,5 @@
 // The words and arithmetic of game overrides, without React: option lists, the badge's summary,
-// how many entries name a shared override, and the entry a field edit writes.
+// how many entries name a shared override, and the entry an edit writes.
 import type { GameOverrides } from "@/api/gen/model/gameOverrides";
 import type { OverrideEntry } from "@/api/gen/model/overrideEntry";
 import type { OverridesDoc } from "@/api/gen/model/overridesDoc";
@@ -47,6 +47,20 @@ export function fieldsOf(o: OverrideEntry | GameOverrides | undefined): Fields {
 /** `base` with `patch` applied, as the entry to write. Empty means none. */
 export const applyPatch = (base: Fields, patch: Patch): Fields =>
 	fieldsOf({ ...base, ...patch } as GameOverrides);
+
+/**
+ * What game `id` stores for `data`; `null` follows its source again. Nothing of its own under a
+ * source's entry is `none`, or the game would take the source's.
+ */
+export function gameEntry(
+	doc: OverridesDoc | undefined,
+	id: string,
+	data: OverrideEntry | null,
+): OverrideEntry {
+	if (!data) return {};
+	const empty = !data.set && Object.keys(fieldsOf(data)).length === 0;
+	return empty && doc?.sources?.[storeOf(id)] ? { none: true } : data;
+}
 
 /**
  * The badge: the shared override's name, else the values in a few words, `1080p60 · HDR off ·

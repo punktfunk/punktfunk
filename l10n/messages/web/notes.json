@@ -450,6 +450,7 @@
 	"library_stream_source_title": "Heading of the stream settings in a game source's settings dialog. source: the source's name, e.g. Lutris.",
 	"library_stream_use": "Label of the first stream setting: pick a shared override, Custom values, or none.",
 	"library_stream_device": "Option in every stream setting: the host sets nothing, each device uses its own setting.",
+	"library_stream_same_as_source": "Option of 'Use' on a game whose source has stream settings: the game follows the source's. source: the source's name, e.g. Lutris.",
 	"library_stream_custom": "Option of 'Use': this game has its own values, set in the rows below.",
 	"library_stream_new": "Last option of 'Use', and a button in the 'Shared overrides' dialog; asks for a name, then creates a reusable set of stream settings.",
 	"library_stream_resolution": "Stream setting: the picture's height, offered as 4K, 1440p, 1080p, 720p.",
