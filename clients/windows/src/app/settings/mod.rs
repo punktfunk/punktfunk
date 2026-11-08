@@ -434,7 +434,7 @@ impl Cx<'_> {
 }
 
 /// The sidebar's sections in the Apple client's order: tag, title message, Lucide mark.
-const SECTIONS: [(&str, Label, &str); 7] = [
+const SECTIONS: [(&str, Label, &str); 8] = [
     ("general", client::prefs_category_general, "settings"),
     ("display", client::prefs_category_display, "maximize"),
     ("input", client::prefs_category_input, "keyboard"),
@@ -443,6 +443,7 @@ const SECTIONS: [(&str, Label, &str); 7] = [
         client::prefs_category_quick_actions,
         "rotate-cw",
     ),
+    ("shortcuts", client::player_shortcuts, "pointer"),
     ("audio", client::prefs_category_audio, "volume-2"),
     (
         "controllers",
@@ -507,6 +508,7 @@ pub(crate) fn settings_page(shell: &Shell) -> View {
         "display" => display::display_section(&cx),
         "input" => input::input_section(&cx),
         "quick_actions" => input::quick_actions_section(&cx),
+        "shortcuts" => input::shortcuts_section(&cx),
         "controllers" => controllers::controllers_section(&cx),
         "audio" => audio::audio_section(&cx),
         "about" => about::about_section(pal, &set_screen),
