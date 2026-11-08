@@ -341,6 +341,7 @@ mod tests {
     ) -> GameEntry {
         GameEntry {
             install: None,
+            overrides: None,
             id: id.into(),
             store: store.into(),
             title: title.into(),
@@ -490,6 +491,7 @@ mod tests {
             .iter()
             .map(|e| GameEntry {
                 install: None,
+                overrides: None,
                 id: e["id"].as_str().expect("id").to_string(),
                 store: e["store"].as_str().expect("store").to_string(),
                 title: e["title"].as_str().expect("title").to_string(),

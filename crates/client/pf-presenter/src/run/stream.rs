@@ -18,7 +18,7 @@ impl StreamState {
         native_refresh_hz: u32,
         knobs: &crate::knobs::Knobs,
     ) -> StreamState {
-        let preset = params.preset.clone();
+        let preset = params.hud_preset();
         // Rate we asked for, until Welcome resolves it. No frames flow before that,
         // so this only has to be sane, not right.
         let source_interval_ns = frame_interval_ns(params.mode.refresh_hz, native_refresh_hz);

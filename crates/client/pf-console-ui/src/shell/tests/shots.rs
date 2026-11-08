@@ -184,6 +184,7 @@ fn dump_console_screens() {
             running: false,
             endable: false,
             install: None,
+            overrides: None,
         })
         .collect(),
     );
@@ -295,6 +296,7 @@ fn dump_console_screens() {
                 running: false,
                 endable: false,
                 install: None,
+                overrides: None,
             })
             .collect();
         list[2].stats = played(2 * 3_600_000);
@@ -589,6 +591,7 @@ fn platform_games() -> Vec<crate::library::LibraryGame> {
         running: false,
         endable: false,
         install: None,
+        overrides: None,
     })
     .collect()
 }
@@ -962,6 +965,7 @@ fn store_games() -> Vec<crate::library::LibraryGame> {
         running: false,
         endable: false,
         install: None,
+        overrides: None,
     };
     let mut games = vec![game("steam:launcher".into(), "Steam", true)];
     games.extend(

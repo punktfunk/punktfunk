@@ -52,6 +52,60 @@ fn a_bound_preset_marks_the_row_it_overrides() {
     );
 }
 
+/// A row a game in the open library has its host set carries the same dot, naming host,
+/// game and value; a row the host leaves alone carries none.
+#[test]
+fn a_host_game_override_marks_the_row_it_sets() {
+    let mut settings = Settings::default();
+    let library = crate::library::LibraryShared::default();
+    let req = crate::model::RequestKey::new("bb");
+    library.begin_for_test(&req);
+    library.set_games(
+        &req,
+        vec![crate::library::LibraryGame {
+            id: "steam:1091500".into(),
+            title: "Cyberpunk 2077".into(),
+            store: "steam".into(),
+            launcher: false,
+            icon: String::new(),
+            platform: None,
+            developer: None,
+            year: None,
+            genres: Vec::new(),
+            stats: None,
+            running: false,
+            endable: false,
+            install: None,
+            overrides: Some(pf_client_core::library::GameOverrides {
+                lines: Some(1080),
+                hdr: Some(false),
+                ..Default::default()
+            }),
+        }],
+    );
+    let hosts = [crate::model::HostRow::fixture("bb", "Desk")];
+    let ctx = Ctx {
+        hosts: &hosts,
+        ..Ctx::test(&mut settings, &library)
+    };
+    let none = std::collections::HashMap::new();
+    let spec = row_spec(RowId::Resolution, &ctx, &[], &none);
+    assert!(spec.dot);
+    assert_eq!(
+        spec.note.as_deref(),
+        Some("Set by Desk for Cyberpunk 2077: 1080p")
+    );
+    let spec = row_spec(RowId::Hdr, &ctx, &[], &none);
+    assert_eq!(
+        spec.note.as_deref(),
+        Some("Set by Desk for Cyberpunk 2077: HDR off")
+    );
+    for id in [RowId::Refresh, RowId::PadType, RowId::Aspect, RowId::Codec] {
+        let spec = row_spec(id, &ctx, &[], &none);
+        assert!(!spec.dot && spec.note.is_none(), "{id:?} is the device's");
+    }
+}
+
 /// A preset's Aspect note names the pinned size's shape among this device's own, as the
 /// row itself does.
 #[test]

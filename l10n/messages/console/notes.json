@@ -150,6 +150,7 @@
 	"console_prefs_advanced_changed_hint": "Explainer under the advanced-changed row. button is the controller button the console draws for Confirm (A, Cross, OK).",
 	"console_prefs_header_this_device": "Heading over the rows about the phone's own motor and gyro in the Controllers tab.",
 	"console_prefs_override_note": "Note under a setting a host's bound preset overrides. preset is the preset's name, host the host's name, value the row's value as that host streams it, already in the reader's language.",
+	"console_prefs_host_note": "Note under a setting a host sets for one game, which wins over the row when that game launches. host is the host's name, game the game's title, value what the host set, such as '1080p', '60 Hz', 'HDR off' or 'DualSense'.",
 	"console_hint_section": "Hint bar: the shoulder buttons or Left/Right switch the settings tab.",
 	"console_hint_rows": "Hint bar: Confirm on the settings tab strip moves focus down to the rows.",
 	"console_hint_create": "Hint bar on the New preset row.",

@@ -65,6 +65,7 @@ fn live_shelf() -> (LibraryScreen, LibraryShared) {
                 running: false,
                 endable: false,
                 install: None,
+                overrides: None,
             })
             .collect(),
     );
@@ -637,6 +638,7 @@ fn waiting_shelf() -> LibraryScreen {
             running: false,
             endable: false,
             install: None,
+            overrides: None,
         })
         .collect();
     s.recollate();
@@ -991,6 +993,7 @@ fn games(spec: &[(&str, Option<&str>)]) -> Vec<LibraryGame> {
             running: false,
             endable: false,
             install: None,
+            overrides: None,
         })
         .collect()
 }
@@ -1259,6 +1262,7 @@ fn dump_library() {
                 running: i == 1,
                 endable: false,
                 install: None,
+                overrides: None,
             })
             .collect();
         for (i, hours) in [(2, 2), (3, 30), (5, 80)] {

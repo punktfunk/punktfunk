@@ -544,6 +544,16 @@ fn link_warning(kbps: u32, link: punktfunk_core::transport::LinkFacts) -> Option
 }
 
 impl Settings {
+    /// The host's HDR and pad for the launched game replace this device's, before the HDR
+    /// gate and the pad probe read them. `lines` and `hz` wait for the panel
+    /// ([`punktfunk_core::game_overrides::fit`]).
+    pub fn apply_game_overrides(&mut self, o: &punktfunk_core::game_overrides::GameOverrides) {
+        self.hdr_enabled = o.hdr.unwrap_or(self.hdr_enabled);
+        if let Some(pad) = &o.gamepad {
+            self.gamepad.clone_from(pad);
+        }
+    }
+
     /// Overlay tier, resolving pre-tier stores: `show_stats = false` → Off, else Normal.
     pub fn stats_verbosity(&self) -> StatsVerbosity {
         self.stats_verbosity.unwrap_or(if self.show_stats {
@@ -1266,5 +1276,28 @@ mod tests {
             resolve_preset(&catalog, None, Some("deleted00000"), None),
             None
         );
+    }
+
+    /// A field the host set replaces the device's; one it left unset keeps it.
+    #[test]
+    fn game_overrides_replace_hdr_and_the_pad_only_where_set() {
+        use punktfunk_core::game_overrides::GameOverrides;
+        let mut s = Settings {
+            hdr_enabled: true,
+            gamepad: "xboxone".into(),
+            ..Default::default()
+        };
+        s.apply_game_overrides(&GameOverrides {
+            hdr: Some(false),
+            ..Default::default()
+        });
+        assert!(!s.hdr_enabled);
+        assert_eq!(s.gamepad, "xboxone", "no pad set, the device's stays");
+        s.apply_game_overrides(&GameOverrides {
+            gamepad: Some("dualsense".into()),
+            ..Default::default()
+        });
+        assert!(!s.hdr_enabled, "no HDR set, the last value stays");
+        assert_eq!(s.gamepad, "dualsense");
     }
 }

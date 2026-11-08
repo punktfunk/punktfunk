@@ -20,6 +20,7 @@ fn game(id: &str, title: &str, launcher: bool) -> LibraryGame {
         running: false,
         endable: false,
         install: None,
+        overrides: None,
     }
 }
 
@@ -138,6 +139,31 @@ fn a_launched_title_holds_the_stream_until_the_host_says_running() {
     library.set_running(&running("steam:570", "running"));
     s.sync();
     assert!(!s.holds_stream() && s.in_stream);
+}
+
+/// The hold says what the host set for the game; a title it set nothing for shows no line.
+#[test]
+fn the_hold_names_what_the_host_set_for_the_game() {
+    let (mut s, library, _bus) = on_shelf();
+    let mut dota = game("steam:570", "Dota 2", false);
+    dota.overrides = Some(pf_client_core::library::GameOverrides {
+        lines: Some(1080),
+        hz: Some(60),
+        gamepad: Some("dualsense".into()),
+        ..Default::default()
+    });
+    library.set_games(&library.req(), vec![dota]);
+    s.start_connect(intent("steam:570"));
+    assert_eq!(
+        s.connect.launching().map(|l| l.host_line.as_str()),
+        Some("Host: 1080p60, DualSense")
+    );
+    let (mut plain, _library, _bus) = on_shelf();
+    plain.start_connect(intent("steam:570"));
+    assert_eq!(
+        plain.connect.launching().map(|l| l.host_line.as_str()),
+        Some("")
+    );
 }
 
 /// B belongs to the dial while it is in flight: the hold stands where the connect

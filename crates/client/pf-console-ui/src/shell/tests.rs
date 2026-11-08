@@ -515,6 +515,7 @@ fn down_from_a_card_lands_on_its_games_and_launches_there() {
             running: false,
             endable: false,
             install: None,
+            overrides: None,
         }],
     );
     frame(&mut s);
@@ -556,6 +557,7 @@ fn a_fetch_clears_the_previous_hosts_list() {
             running: false,
             endable: false,
             install: None,
+            overrides: None,
         }],
     );
     s.sync();
@@ -701,6 +703,7 @@ fn a_pinned_cards_library_launches_with_its_preset() {
             running: false,
             endable: false,
             install: None,
+            overrides: None,
         }],
     );
     // Down past the Desktops band, which arrives focused and launches nothing.
@@ -742,6 +745,7 @@ fn a_primary_tiles_library_leaves_the_preset_to_the_binding() {
             running: false,
             endable: false,
             install: None,
+            overrides: None,
         }],
     );
     s.handle_menu(MenuEvent::Confirm);
@@ -1596,6 +1600,7 @@ fn mixed_library(library: &LibraryShared) {
             running: false,
             endable: false,
             install: None,
+            overrides: None,
         }
     };
     library.set_games(
@@ -2405,6 +2410,7 @@ fn dump_phone_home() {
             running: false,
             endable: false,
             install: None,
+            overrides: None,
         })
         .collect();
     library.set_games(&library.req(), games);

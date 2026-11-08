@@ -167,6 +167,10 @@ pub(crate) fn start_fetch(ctx: &Arc<AppCtx>, set_library: &AsyncSetState<Library
                 state.phase = LibraryPhase::Empty;
                 return publish(&state);
             }
+            // The connect that launches a title reads its game overrides from here.
+            if let Some(fp) = target.host.fp_hex.as_deref() {
+                pf_client_core::library_cache::store(fp, &games);
+            }
 
             // Seed cached posters; queue the art pipeline for the rest.
             let base = library::base_url(

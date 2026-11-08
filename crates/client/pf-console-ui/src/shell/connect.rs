@@ -205,6 +205,8 @@ pub(super) struct Launching {
     pub(super) title: String,
     /// `PC · 2024 · Steam` — where the host filed it, in the order a player scans it.
     pub(super) facts: String,
+    /// `Host: 1080p60 DualSense` — what the host set for this game; empty when nothing.
+    pub(super) host_line: String,
     /// Studio, and the genres joined; either may be empty, and an older host sends neither.
     pub(super) developer: String,
     pub(super) genres: String,
@@ -384,6 +386,9 @@ impl Shell {
             host,
             title: g.title.clone(),
             facts,
+            host_line: (g.overrides.as_ref())
+                .and_then(pf_client_core::library::host_line)
+                .unwrap_or_default(),
             developer: g.developer.clone().unwrap_or_default(),
             genres: g.genres.join(" \u{b7} "),
             appear: 0.0,
