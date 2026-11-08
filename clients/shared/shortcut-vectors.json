@@ -28,6 +28,12 @@
         "expect": {"v": 1, "bindings": [{"on": "pad", "keys": ["select", "a"], "hold": false, "do": "ring"}]}
       },
       {
+        "name": "the pad art's grip names are the paddles",
+        "blob": "{\"v\":1,\"bindings\":[{\"on\":\"pad\",\"keys\":[\"R4\",\"l4\"],\"hold\":true,\"do\":\"ring\"},{\"on\":\"pad\",\"keys\":[\"r5\",\"L5\"],\"hold\":true,\"do\":\"stats\"}]}",
+        "defaults": false,
+        "expect": {"v": 1, "bindings": [{"on": "pad", "keys": ["paddle1", "paddle2"], "hold": true, "do": "ring"}, {"on": "pad", "keys": ["paddle3", "paddle4"], "hold": true, "do": "stats"}]}
+      },
+      {
         "name": "modifier aliases fold and sort, the key is lowercased",
         "blob": "{\"v\":1,\"bindings\":[{\"on\":\"key\",\"keys\":[\"shift\",\"control\",\"option\",\"Q\"],\"do\":\"release_input\"}]}",
         "defaults": false,

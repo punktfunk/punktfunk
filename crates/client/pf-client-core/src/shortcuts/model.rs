@@ -32,10 +32,18 @@ pub const BUTTONS: [(&str, u32); 22] = [
     ("paddle4", wire::BTN_PADDLE4),
 ];
 
-/// The wire bit of a stored button name, any case; `back` is `select`.
+/// The wire bit of a stored button name, any case; `back` is `select`, and the pad art's
+/// grip names (`r4`, `l4`, `r5`, `l5`) are the paddles, so a recorded Deck grip resolves.
 pub fn button_bit(name: &str) -> Option<u32> {
     let n = name.trim().to_ascii_lowercase();
-    let n = if n == "back" { "select" } else { n.as_str() };
+    let n = match n.as_str() {
+        "back" => "select",
+        "r4" => "paddle1",
+        "l4" => "paddle2",
+        "r5" => "paddle3",
+        "l5" => "paddle4",
+        other => other,
+    };
     BUTTONS.iter().find(|(k, _)| *k == n).map(|&(_, bit)| bit)
 }
 
