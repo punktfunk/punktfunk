@@ -134,6 +134,9 @@ pub struct SessionParams {
     /// Quick-action ring blob this launch resolved; empty = the platform default. Per launch
     /// like the tier, so a browse-mode presenter shows a ring edited between streams.
     pub overlay_actions: String,
+    /// Shortcuts blob of this launch; empty = the client's defaults. Per launch like the
+    /// ring: a running stream keeps its bindings.
+    pub shortcuts: String,
     /// The window's settings as this launch resolved them, presentation-only like the tier.
     /// A browse-mode presenter adopts them at each launch; the console outlives every stream.
     pub touch_mode: crate::trust::TouchMode,
@@ -284,6 +287,7 @@ impl SessionParams {
             exit_hint: settings.exit_hint,
             keep_awake: settings.keep_awake,
             overlay_actions: settings.overlay_actions.clone(),
+            shortcuts: settings.shortcuts.clone(),
             touch_mode: settings.touch_mode(),
             mouse_mode: settings.mouse_mode(),
             invert_scroll: settings.invert_scroll,

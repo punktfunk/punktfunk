@@ -2391,6 +2391,7 @@ mod tests {
                 codec: "av1".into(),
                 enable_444: true,
                 overlay_actions: r#"{"v":2,"ring":["stats"]}"#.into(),
+                shortcuts: r#"{"v":1,"bindings":[]}"#.into(),
                 vsync: false,
                 invert_scroll: true,
                 fullscreen_on_stream: true,
@@ -2431,6 +2432,7 @@ mod tests {
         assert_eq!(params.bitrate_kbps, plan.settings.bitrate_kbps);
         assert_ne!(plan.settings.bitrate_kbps, Settings::default().bitrate_kbps);
         assert_eq!(params.overlay_actions, plan.settings.overlay_actions);
+        assert_eq!(params.shortcuts, plan.settings.shortcuts);
         assert!(!params.vsync && params.invert_scroll && params.fullscreen);
         assert_eq!(
             params.render_scale_max_dim, 8192,

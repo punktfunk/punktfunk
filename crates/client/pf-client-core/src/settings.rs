@@ -358,6 +358,10 @@ pub struct Settings {
     /// Empty = platform default. One opaque field: each cross-client setting is ~six edits.
     #[serde(default)]
     pub overlay_actions: String,
+    /// In-stream shortcuts JSON ([`crate::shortcuts::Shortcuts::parse`]). Empty = this
+    /// client's defaults ([`crate::shortcuts::resolve`]), which read `guide_gesture`.
+    #[serde(default)]
+    pub shortcuts: String,
     /// Playback endpoint (PipeWire `node.name` / WASAPI `IMMDevice` id); empty = OS default.
     /// Maps to `PUNKTFUNK_AUDIO_SINK`. A gone pick falls back to default.
     #[serde(default)]
@@ -751,6 +755,7 @@ impl Default for Settings {
             auto_wake: true,
             invert_scroll: false,
             overlay_actions: String::new(),
+            shortcuts: String::new(),
             speaker_device: String::new(),
             mic_device: String::new(),
             pad_rumble: true,
