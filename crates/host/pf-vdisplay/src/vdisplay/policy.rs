@@ -517,9 +517,10 @@ impl DisplayPolicy {
 
     /// Clamp a requested mode to this device's cap.
     ///
-    /// Returns the mode to grant. Each axis is capped on its own: a device capped at
-    /// 2560x1440@60 asking for 3840x2160@120 gets 2560x1440@60, and one asking for
-    /// 1920x1080@120 keeps its size and loses only the refresh it cannot have.
+    /// Returns the mode to grant. The size scales down into the cap's box keeping its aspect,
+    /// even on both axes; the refresh is capped on its own. A device capped at 1920x1080@60
+    /// asking for 2560x1600@120 gets 1728x1080@60, and one asking for 1920x1080@120 keeps its
+    /// size and loses only the refresh it cannot have.
     pub fn cap_mode(&self, fp: Option<&str>, want: (u32, u32, u32)) -> (u32, u32, u32) {
         self.cap_mode_or(fp, want, None)
     }
@@ -539,7 +540,15 @@ impl DisplayPolicy {
         else {
             return want;
         };
-        (want.0.min(cap.0), want.1.min(cap.1), want.2.min(cap.2))
+        let hz = want.2.min(cap.2);
+        let s = (f64::from(cap.0) / f64::from(want.0)).min(f64::from(cap.1) / f64::from(want.1));
+        if s >= 1.0 {
+            return (want.0, want.1, hz);
+        }
+        // Rounding to even may pass an odd cap by one; the even floor under it holds.
+        let fit =
+            |v: u32, c: u32| punktfunk_core::game_overrides::even(f64::from(v) * s).min(c & !1);
+        (fit(want.0, cap.0), fit(want.1, cap.1), hz)
     }
 
     pub fn effective(&self) -> EffectivePolicy {
@@ -1987,6 +1996,18 @@ mod tests {
         );
     }
 
+    /// A cap is a box the requested shape scales into: a 16:10 or 21:9 panel under a 16:9 cap
+    /// keeps its own aspect rather than a letterboxed 16:9.
+    #[test]
+    fn a_mode_cap_keeps_the_requested_aspect() {
+        let p = DisplayPolicy::default();
+        let cap = |want, spec| p.cap_mode_or(None, want, Some(spec));
+        assert_eq!(cap((2560, 1600, 120), "1920x1080@60"), (1728, 1080, 60));
+        assert_eq!(cap((3440, 1440, 144), "1920x1080@60"), (1920, 804, 60));
+        assert_eq!(cap((1280, 800, 90), "1920x1080@60"), (1280, 800, 60));
+        assert_eq!(cap((3840, 2160, 60), "1279x719@60"), (1278, 718, 60));
+    }
+
     #[test]
     fn store_roundtrips_and_gates_on_file_presence() {
         let dir = std::env::temp_dir().join(format!("pf-disp-{}", std::process::id()));
@@ -2556,10 +2577,10 @@ mod tests {
             assert_eq!(p.effective_for(None).keep_alive, KeepAlive::Off);
         }
 
-        /// A cap is per axis, so a device that asks for less than the cap in one
-        /// dimension keeps what it asked for there.
+        /// A device that asks for less than the cap keeps it; one over only in refresh
+        /// keeps its size.
         #[test]
-        fn a_mode_cap_clamps_each_axis_on_its_own() {
+        fn a_mode_cap_takes_only_what_is_over_it() {
             let mut p = DisplayPolicy::default();
             p.clients.insert(
                 PAD.into(),

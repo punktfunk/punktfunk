@@ -121,6 +121,7 @@
 	"apierr_library_entry_not_deleted": "The entry wasn't deleted — the host hit an unexpected state",
 	"apierr_library_entry_not_updated": "The entry wasn't updated — the host hit an unexpected state",
 	"apierr_library_not_updated": "The library wasn't updated — the host hit an unexpected state",
+	"apierr_library_override_name_taken": "Another shared override already has this name. Pick a different one.",
 	"apierr_library_page_marker_invalid": "That page marker isn't valid. Load the list again from the start",
 	"apierr_log_bundle_not_deleted": "Couldn't delete the log bundle",
 	"apierr_log_bundle_not_read": "Couldn't read the log bundle",

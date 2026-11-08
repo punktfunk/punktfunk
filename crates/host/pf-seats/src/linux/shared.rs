@@ -54,10 +54,11 @@ const AVATARS: &str = "profiles";
 pub(super) const MAX_TRUST_BYTES: u64 = 8 * 1024 * 1024;
 
 /// The library files a host reads from its library dir. Play stats stay with each host.
-const LIBRARY_FILES: [&str; 5] = [
+const LIBRARY_FILES: [&str; 6] = [
     "library.json",
     "library-hidden.json",
     "library-metadata.json",
+    "library-overrides.json",
     "library-picks.json",
     "library-scanners.json",
 ];

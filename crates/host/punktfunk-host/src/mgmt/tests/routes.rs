@@ -193,6 +193,24 @@ fn every_route_is_classified_for_the_plugin_and_cert_lanes() {
         ("PUT", "/api/v1/library/metadata/{source}", true, false),
         ("DELETE", "/api/v1/library/metadata/{source}", true, false),
         ("PUT", "/api/v1/library/picks/{id}", false, false),
+        // Game overrides are curation like picks. A client reads what each title resolves to
+        // on `GET /library`, never the document.
+        ("GET", "/api/v1/library/overrides", false, false),
+        ("POST", "/api/v1/library/overrides/sets", false, false),
+        ("PUT", "/api/v1/library/overrides/sets/{id}", false, false),
+        (
+            "DELETE",
+            "/api/v1/library/overrides/sets/{id}",
+            false,
+            false,
+        ),
+        ("PUT", "/api/v1/library/overrides/games/{id}", false, false),
+        (
+            "PUT",
+            "/api/v1/library/overrides/sources/{source}",
+            false,
+            false,
+        ),
         // A plugin reports its own downloads; the host maps them through the catalog.
         (
             "PUT",
@@ -672,6 +690,12 @@ fn every_route_has_a_side_on_the_door() {
         ("DELETE", "/api/v1/library/custom/{id}", false),
         ("PUT", "/api/v1/library/hidden/{id}", false),
         ("PUT", "/api/v1/library/picks/{id}", false),
+        ("GET", "/api/v1/library/overrides", false),
+        ("POST", "/api/v1/library/overrides/sets", false),
+        ("PUT", "/api/v1/library/overrides/sets/{id}", false),
+        ("DELETE", "/api/v1/library/overrides/sets/{id}", false),
+        ("PUT", "/api/v1/library/overrides/games/{id}", false),
+        ("PUT", "/api/v1/library/overrides/sources/{source}", false),
         ("GET", "/api/v1/library/metadata", false),
         ("PUT", "/api/v1/library/metadata", false),
         ("PUT", "/api/v1/library/metadata/{source}", false),

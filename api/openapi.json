@@ -4028,6 +4028,430 @@
         }
       }
     },
+    "/api/v1/library/overrides": {
+      "get": {
+        "tags": [
+          "library"
+        ],
+        "summary": "Read the game overrides",
+        "description": "The shared overrides, each game's entry and each source's, as `library-overrides.json`\nholds them. `GET /library` carries what each title resolves to.",
+        "operationId": "getLibraryOverrides",
+        "responses": {
+          "200": {
+            "description": "The shared overrides and every game's and source's entry",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OverridesDoc"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/library/overrides/games/{id}": {
+      "put": {
+        "tags": [
+          "library"
+        ],
+        "summary": "Set one game's overrides",
+        "description": "`{ \"set\": id }` points the game at a shared override; fields alone are its own values;\n`{}` clears its entry, and the game takes its source's. The id is not required to exist\nnow, as with hiding. Emits `library.changed`.",
+        "operationId": "setGameOverrides",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The library entry id (e.g. `steam:70`)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OverrideEntry"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Stored; the game's entry after the call",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OverrideEntry"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Empty id, a value out of range, or `set` beside values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`set` names no shared override",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Couldn't save the overrides",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/library/overrides/sets": {
+      "post": {
+        "tags": [
+          "library"
+        ],
+        "summary": "Create a shared override",
+        "description": "A named set of stream settings that games and sources point at. The host assigns its id.",
+        "operationId": "createOverrideSet",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GameOverrides"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Created, with its id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OverrideSet"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "No name, or a value out of range",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Another shared override has this name",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Couldn't save the overrides",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/library/overrides/sets/{id}": {
+      "put": {
+        "tags": [
+          "library"
+        ],
+        "summary": "Change a shared override",
+        "description": "A field left out keeps its value; `null` clears it. Every game and source that uses it\nfollows. Emits `library.changed` for each source they belong to.",
+        "operationId": "updateOverrideSet",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The shared override's id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OverrideSetPatch"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Stored; the shared override after the call",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OverrideSet"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "No name left, or a value out of range",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No shared override with that id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Another shared override has this name",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Couldn't save the overrides",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "library"
+        ],
+        "summary": "Delete a shared override",
+        "description": "The games and sources that used it lose their entry and go back to what the device\ndecides. The answer counts them. Emits `library.changed` for each source they belong to.",
+        "operationId": "deleteOverrideSet",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The shared override's id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Deleted; how many games and sources used it",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OverrideUsers"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No shared override with that id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Couldn't save the overrides",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/library/overrides/sources/{source}": {
+      "put": {
+        "tags": [
+          "library"
+        ],
+        "summary": "Set one source's overrides",
+        "description": "The same body as a game's. Each title of the source without an entry of its own takes\nit. Emits `library.changed`.",
+        "operationId": "setSourceOverrides",
+        "parameters": [
+          {
+            "name": "source",
+            "in": "path",
+            "description": "The source, the store part of a library id (e.g. `lutris`)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OverrideEntry"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Stored; the source's entry after the call",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OverrideEntry"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Empty source, a value out of range, or `set` beside values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`set` names no shared override",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Couldn't save the overrides",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/library/page": {
       "get": {
         "tags": [
@@ -12598,6 +13022,17 @@
                 "$ref": "#/components/schemas/OnWindow",
                 "description": "Which workspace this title's windows open on, where the compositor can\nplace them ([`OnWindow`])."
               },
+              "overrides": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/GameOverrides",
+                    "description": "The stream settings this host sets for the title (`overrides.rs`), resolved: its own, a\nshared override's with that one's `name`, or its source's. Joined at read time."
+                  }
+                ]
+              },
               "provider": {
                 "type": [
                   "string",
@@ -12716,6 +13151,54 @@
           "on_quit",
           "always"
         ]
+      },
+      "GameOverrides": {
+        "type": "object",
+        "description": "Stream settings this host sets for a game. A field left out is the device's to decide.",
+        "properties": {
+          "beyond_screen": {
+            "type": "boolean",
+            "description": "`lines` also reaches a device whose screen is smaller, scaled down there."
+          },
+          "gamepad": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A controller by the Hello's name for it: `xbox360`, `dualsense`, `dualshock4`, `auto`, …\nThe host stores the name itself, so `ds` reads back as `dualsense`.",
+            "example": "dualsense"
+          },
+          "hdr": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "hz": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Refresh rate in Hz, never above the device's screen.",
+            "example": 60,
+            "maximum": 240,
+            "minimum": 24
+          },
+          "lines": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Height in lines: 2160 for 4K. The width follows the device's aspect.",
+            "example": 1080,
+            "maximum": 4320,
+            "minimum": 360
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The shared override these values came from. A game's or source's own values have none.",
+            "example": "1080p60 DualSense"
+          }
+        }
       },
       "GameRefPayload": {
         "type": "object",
@@ -14681,6 +15164,152 @@
           }
         ],
         "description": "A library entry plus the operator's view of it — whether they hid it.\n\nA field on [`GameEntry`] would leak onto every lane: `GET /library` returns\n`Vec<GameEntry>` except on the operator's lane, so a hidden flag cannot\nreach a paired client. `flatten` keeps the wire a plain entry plus one key."
+      },
+      "OverrideEntry": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/GameOverrides"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "set": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "example": "a1b2c3d4e5f6"
+              }
+            }
+          }
+        ],
+        "description": "A game's or a source's entry: `set` names a shared override, or the fields are its own.\nBoth at once is refused, and `{}` is no entry. `name` is the shared override's alone."
+      },
+      "OverrideSet": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/GameOverrides"
+          },
+          {
+            "type": "object",
+            "required": [
+              "id"
+            ],
+            "properties": {
+              "id": {
+                "type": "string",
+                "example": "a1b2c3d4e5f6"
+              }
+            }
+          }
+        ],
+        "description": "A shared override with its id: what create and update answer."
+      },
+      "OverrideSetPatch": {
+        "type": "object",
+        "description": "`PUT /library/overrides/sets/{id}`: a field left out keeps its value, `null` clears it.",
+        "properties": {
+          "beyond_screen": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "gamepad": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "hdr": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "hz": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "minimum": 0
+          },
+          "lines": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "minimum": 0
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "OverrideUsers": {
+        "type": "object",
+        "description": "How many entries named a deleted shared override. They are removed: those games and sources\ngo back to what the device decides.",
+        "required": [
+          "games",
+          "sources"
+        ],
+        "properties": {
+          "games": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "sources": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      },
+      "OverridesDoc": {
+        "type": "object",
+        "description": "`library-overrides.json`, and the body of `GET /library/overrides`.",
+        "properties": {
+          "games": {
+            "type": "object",
+            "description": "Library id (`steam:570`) → its entry.",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/OverrideEntry"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "sets": {
+            "type": "object",
+            "description": "Shared overrides by id, 12 lowercase hex.",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/GameOverrides"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "sources": {
+            "type": "object",
+            "description": "Source (`lutris`) → the entry each of its titles takes when it has none of its own.",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/OverrideEntry"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "version": {
+            "type": "integer",
+            "format": "int32",
+            "example": 1,
+            "minimum": 0
+          }
+        }
       },
       "PadFrame": {
         "type": "object",
