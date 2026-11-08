@@ -357,7 +357,20 @@ impl SettingsScreen {
                 return match msg {
                     ListMsg::Activate => {
                         fx.push(Screen::RingEditor(Box::new(
-                            super::ring_editor::RingEditorScreen::new(ctx),
+                            super::ring_editor::RingEditorScreen::new(ctx, Default::default()),
+                        )));
+                        pulse
+                    }
+                    ListMsg::Adjust(_) => Some(MenuPulse::Boundary),
+                    ListMsg::None => pulse,
+                };
+            }
+            RowId::ShortcutsPage => {
+                return match msg {
+                    ListMsg::Activate => {
+                        fx.push(Screen::Shortcuts(super::shortcuts::ShortcutsScreen::new(
+                            ctx,
+                            Default::default(),
                         )));
                         pulse
                     }
@@ -388,16 +401,6 @@ impl SettingsScreen {
                         if let Some(i) = first.and_then(|id| ids.iter().position(|r| *r == id)) {
                             self.list.jump_to(i);
                         }
-                        pulse
-                    }
-                    ListMsg::Adjust(_) => Some(MenuPulse::Boundary),
-                    ListMsg::None => pulse,
-                };
-            }
-            RowId::StreamControls => {
-                return match msg {
-                    ListMsg::Activate => {
-                        fx.push(Screen::Controls(super::controls::ControlsScreen::new(ctx)));
                         pulse
                     }
                     ListMsg::Adjust(_) => Some(MenuPulse::Boundary),
@@ -669,7 +672,8 @@ impl ScreenView for SettingsScreen {
             Some(RowId::Version) | None => vec![done()],
             Some(
                 RowId::Controllers
-                | RowId::StreamControls
+                | RowId::QuickActions
+                | RowId::ShortcutsPage
                 | RowId::Licenses
                 | RowId::LibrarySections
                 | RowId::Palette

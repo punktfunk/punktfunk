@@ -106,7 +106,7 @@ enum Target {
 }
 
 /// The hosts that send a pad's readings for the input test.
-fn can_test(platform: Platform) -> bool {
+pub(super) fn can_test(platform: Platform) -> bool {
     matches!(platform, Platform::Android | Platform::Apple)
 }
 

@@ -221,8 +221,9 @@ fn catalog_key(id: RowId) -> Option<&'static str> {
         RowId::Touch => "touch_mode",
         RowId::Mouse => "mouse_mode",
         RowId::InvertScroll => "invert_scroll",
-        RowId::Shortcuts => "inhibit_shortcuts",
+        RowId::InhibitShortcuts => "inhibit_shortcuts",
         RowId::QuickActions => "overlay_actions",
+        RowId::ShortcutsPage => "shortcuts",
         RowId::CursorGestures => "cursor_gestures",
         RowId::PadType => "gamepad",
         RowId::PadRumble => "pad_rumble",
@@ -233,7 +234,6 @@ fn catalog_key(id: RowId) -> Option<&'static str> {
         RowId::PadForward => "gamepad_forwarding",
         RowId::Pad => "forward_pad",
         RowId::SystemButtons => "system_buttons",
-        RowId::GuideGesture => "guide_gesture",
         RowId::PadHaptics => "pad_haptics",
         RowId::PadSpeaker => "pad_speaker",
         RowId::Sc2Passthrough => "sc2_capture",
@@ -298,6 +298,7 @@ const NO_ONE_VALUE: &[&str] = &[
     "resolution",
     "library_sections",
     "overlay_actions",
+    "shortcuts",
     "forward_pad",
     "reduce_ui_resolution",
     "library_view",
@@ -307,7 +308,7 @@ const NO_ONE_VALUE: &[&str] = &[
 const PRESET_IN_EXTRA: &[&str] = &["second_screen", "low_latency"];
 
 /// Entries a preset may hold that the console's preset editor has no row for.
-const PRESET_NOT_IN_CONSOLE: &[&str] = &["overlay_actions", "second_screen", "low_latency"];
+const PRESET_NOT_IN_CONSOLE: &[&str] = &["second_screen", "low_latency"];
 
 /// Each row that edits a shared setting is the catalogue's: the `player_<key>` message for
 /// its label (V-Sync, a brand, has none), its category and tier, whether a preset may hold
@@ -1734,7 +1735,7 @@ fn platform_row_split_hides_only_the_other_platforms_concepts() {
             RowId::Decoder,
             RowId::SpatialAudio,
             RowId::AudioRoute,
-            RowId::Shortcuts,
+            RowId::InhibitShortcuts,
             RowId::CursorGestures,
             // Every controller already gets its own wire slot, so player 1 is not a choice.
             RowId::Pad,
@@ -2054,7 +2055,7 @@ fn every_row_has_exactly_one_tab() {
             seen.push(*id);
         }
     }
-    assert_eq!(seen.len(), 74, "{seen:?}");
+    assert_eq!(seen.len(), 73, "{seen:?}");
     assert!(
         !seen.contains(&RowId::AdvancedChanged),
         "built per tab, never listed"
@@ -2269,25 +2270,27 @@ fn palette_row_names_the_pick_and_opens_the_cards() {
         if matches!(**b, Screen::Palette(_))));
 }
 
-/// About lists the stream controls on every platform, and a press opens the read-only screen.
+/// Input lists Shortcuts right after Quick actions on every platform, and a press opens the
+/// page; About no longer lists the stream controls.
 #[test]
-fn about_opens_the_stream_controls_where_the_client_has_them() {
+fn input_opens_the_shortcuts_page_on_every_platform() {
     let mut settings = Settings::default();
     let library = crate::library::LibraryShared::default();
     let mut ctx = Ctx::test(&mut settings, &library);
     let mut s = SettingsScreen::with_presets(Vec::new());
-    s.tab = TABS.len() - 1;
+    s.tab = (TABS.iter().position(|(t, _)| *t == Section::Input)).unwrap();
     let ids = s.row_ids(&ctx);
-    s.list.cursor = ids
-        .iter()
-        .position(|r| *r == RowId::StreamControls)
-        .expect("About lists the stream controls");
+    let at = (ids.iter().position(|r| *r == RowId::ShortcutsPage)).expect("Input lists Shortcuts");
+    assert_eq!(ids[at - 1], RowId::QuickActions);
+    s.list.cursor = at;
     let mut fx = Outbox::default();
     s.apply_row(ListMsg::Activate, None, &ids, &mut ctx, &mut fx);
     let Some(crate::screens::Nav::Push(b)) = fx.nav else {
-        panic!("a press opens the screen");
+        panic!("a press opens the page");
     };
-    assert!(matches!(*b, Screen::Controls(ref c) if c.title() == "Stream controls"));
+    assert!(matches!(*b, Screen::Shortcuts(ref p) if p.title() == "Shortcuts"));
+    let about = &TABS[TABS.len() - 1].1;
+    assert_eq!(*about, [RowId::Version, RowId::Licenses]);
 
     for platform in crate::platform::Platform::ALL {
         let mut settings = Settings::default();
@@ -2296,7 +2299,7 @@ fn about_opens_the_stream_controls_where_the_client_has_them() {
         device.platform = platform;
         ctx.device = &device;
         assert!(
-            s.row_ids(&ctx).contains(&RowId::StreamControls),
+            s.row_ids(&ctx).contains(&RowId::ShortcutsPage),
             "{platform:?}"
         );
     }

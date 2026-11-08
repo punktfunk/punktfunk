@@ -64,7 +64,6 @@ pub enum RowId {
     /// console's own pulses.
     PadRumble,
     SystemButtons,
-    GuideGesture,
     /// `trust::Settings::pad_haptics`. Negotiated: needs a capable host and a wired DS5.
     PadHaptics,
     /// `trust::Settings::pad_speaker`. On (`"pad"`) / Off only — stored `"mix"`
@@ -73,9 +72,12 @@ pub enum RowId {
     Touch,
     Mouse,
     InvertScroll,
-    Shortcuts,
+    /// `trust::Settings::inhibit_shortcuts`: the system's own key chords reach the host.
+    InhibitShortcuts,
     /// `trust::Settings::overlay_actions`. Action row: opens [`super::ring_editor::RingEditorScreen`].
     QuickActions,
+    /// `trust::Settings::shortcuts`. Action row: opens [`super::shortcuts::ShortcutsScreen`].
+    ShortcutsPage,
     Stats,
     /// `trust::Settings::advanced_stats`: which vocabulary the overlay speaks. Device-wide.
     AdvancedStats,
@@ -134,8 +136,6 @@ pub enum RowId {
     CursorGestures,
     /// Action row: jumps to the Controllers tab.
     Controllers,
-    /// Action row: the stream's keys, chords and gestures, read-only.
-    StreamControls,
     /// Action row: asks the host to open the platform licences screen.
     Licenses,
     /// Action row: the Games tab's sections, in [`super::library::CustomizeScreen`].
@@ -177,7 +177,6 @@ pub fn advanced(id: RowId) -> bool {
             | RowId::PadForward
             | RowId::Pad
             | RowId::SystemButtons
-            | RowId::GuideGesture
             | RowId::PadHaptics
             | RowId::PadSpeaker
             | RowId::Sc2Passthrough
@@ -388,7 +387,9 @@ impl RowId {
             RowId::PadRumble => Extra::Flag(|s| s.pad_rumble, |s| &mut s.pad_rumble),
             RowId::PadHaptics => Extra::Flag(|s| s.pad_haptics, |s| &mut s.pad_haptics),
             RowId::InvertScroll => Extra::Flag(|s| s.invert_scroll, |s| &mut s.invert_scroll),
-            RowId::Shortcuts => Extra::Flag(|s| s.inhibit_shortcuts, |s| &mut s.inhibit_shortcuts),
+            RowId::InhibitShortcuts => {
+                Extra::Flag(|s| s.inhibit_shortcuts, |s| &mut s.inhibit_shortcuts)
+            }
             RowId::AdvancedStats => Extra::Flag(|s| s.advanced_stats, |s| &mut s.advanced_stats),
             RowId::FollowOsTheme => Extra::Flag(|s| s.follow_os_theme, |s| &mut s.follow_os_theme),
             RowId::ReduceMotion => Extra::Flag(|s| s.reduce_motion, |s| &mut s.reduce_motion),
@@ -578,8 +579,9 @@ pub(super) const TABS: [(Section, &[RowId]); 7] = [
             RowId::Touch,
             RowId::Mouse,
             RowId::InvertScroll,
-            RowId::Shortcuts,
+            RowId::InhibitShortcuts,
             RowId::QuickActions,
+            RowId::ShortcutsPage,
             RowId::CursorGestures,
         ],
     ),
@@ -594,7 +596,6 @@ pub(super) const TABS: [(Section, &[RowId]); 7] = [
             RowId::PadForward,
             RowId::Pad,
             RowId::SystemButtons,
-            RowId::GuideGesture,
             RowId::PadHaptics,
             RowId::PadSpeaker,
             RowId::Sc2Passthrough,
@@ -602,10 +603,7 @@ pub(super) const TABS: [(Section, &[RowId]); 7] = [
         ],
     ),
     (Section::Presets, &[]),
-    (
-        Section::About,
-        &[RowId::Version, RowId::StreamControls, RowId::Licenses],
-    ),
+    (Section::About, &[RowId::Version, RowId::Licenses]),
 ];
 
 /// The Presets section — catalog-built, not [`TABS`] rows.
@@ -869,11 +867,6 @@ const SYSTEM_BUTTONS: [(&str, Label); 3] = [
     ("forward", m::player_system_buttons_forward),
     ("local", m::player_system_buttons_local),
 ];
-const GUIDE_GESTURE: [(&str, Label); 3] = [
-    ("auto", m::player_guide_gesture_auto),
-    ("on", m::player_guide_gesture_on),
-    ("off", m::player_guide_gesture_off),
-];
 
 /// Whether this platform has the row at all.
 ///
@@ -929,22 +922,13 @@ pub fn row_on(id: RowId, platform: crate::platform::Platform) -> bool {
         | RowId::EchoCancel
         | RowId::PadForward
         | RowId::SystemButtons
-        | RowId::GuideGesture
         | RowId::Touch => &[Desktop, Android, Apple, Platform::Web, Platform::Tizen],
         // DualSense voice coils and speaker: no Apple or browser client plays them.
         RowId::PadHaptics | RowId::PadSpeaker => &[Desktop, Android, WebOS],
         // The clients whose rumble paths read the switch.
         RowId::PadRumble => &[Desktop, Android, Apple],
         // Every client binds something mid-stream: keys, chords, or a remote's colour buttons.
-        RowId::StreamControls => &[
-            Desktop,
-            Android,
-            WebOS,
-            Platform::Web,
-            Apple,
-            Platform::Tizen,
-            Ps5,
-        ],
+        RowId::ShortcutsPage => &Platform::ALL,
         // Every client ships third-party code. The browser build has no bundle to list.
         RowId::Licenses => &[Desktop, Android, WebOS, Apple, Ps5],
         // DualSense capture — the pad reaches webOS over Bluetooth HID, not hidraw, so the
@@ -983,7 +967,7 @@ pub fn row_on(id: RowId, platform: crate::platform::Platform) -> bool {
         | RowId::Vsync
         | RowId::AllowVrr
         | RowId::Fullscreen
-        | RowId::Shortcuts => &[Desktop, Apple],
+        | RowId::InhibitShortcuts => &[Desktop, Apple],
         _ => &Platform::ALL,
     };
     on.contains(&platform)
@@ -1008,7 +992,9 @@ pub fn row_applies(id: RowId, ctx: &Ctx) -> bool {
     let apple = ctx.device.platform == crate::platform::Platform::Apple;
     match id {
         // The Apple app reads these on the Mac alone, as its own settings offer them.
-        RowId::Vsync | RowId::Shortcuts | RowId::Mouse | RowId::Screens if apple => is_mac(ctx),
+        RowId::Vsync | RowId::InhibitShortcuts | RowId::Mouse | RowId::Screens if apple => {
+            is_mac(ctx)
+        }
         // An Apple TV has no touchscreen, microphone, scroll wheel or variable refresh.
         RowId::Touch | RowId::Mic | RowId::EchoCancel | RowId::InvertScroll | RowId::AllowVrr
             if apple =>
@@ -1155,9 +1141,11 @@ pub fn row_spec(
             profiles: ctx.profiles,
             ui: ctx.ui,
         };
-        let value = row_spec_base(id, &under, presets).value.unwrap_or_default();
         spec.dot = true;
-        spec.note = Some(console::console_prefs_override_note(preset, host, value));
+        // A page row (Shortcuts, Quick actions) has no value to name: the dot alone.
+        if let Some(value) = row_spec_base(id, &under, presets).value {
+            spec.note = Some(console::console_prefs_override_note(preset, host, value));
+        }
     } else if let Some((host, game, value)) = host_override(id, ctx) {
         spec.dot = true;
         spec.note = Some(console::console_prefs_host_note(host, game, value));
@@ -1210,14 +1198,14 @@ pub(super) fn row_icon(id: RowId) -> &'static str {
         | RowId::Sc2Passthrough
         | RowId::DsCapture
         | RowId::Controllers => "gamepad-2",
-        RowId::SystemButtons | RowId::GuideGesture => "house",
+        RowId::SystemButtons => "house",
         RowId::PhoneGyro => "rotate-cw",
         RowId::SecondScreen | RowId::Screen | RowId::Screens => "monitor",
         RowId::Touch | RowId::CursorGestures => "pointer",
         RowId::Mouse => "mouse",
         RowId::QuickActions => "ellipsis",
         RowId::InvertScroll => "undo-2",
-        RowId::Shortcuts => "keyboard",
+        RowId::InhibitShortcuts | RowId::ShortcutsPage => "keyboard",
         RowId::FollowOsTheme => "moon",
         RowId::Palette => "palette",
         RowId::LibrarySections => "grip-vertical",
@@ -1233,7 +1221,6 @@ pub(super) fn row_icon(id: RowId) -> &'static str {
         RowId::ReduceMotion => "eye",
         RowId::AutoWake => "power",
         RowId::Version | RowId::Licenses => "info",
-        RowId::StreamControls => "keyboard",
         RowId::ShowAdvanced | RowId::AdvancedChanged => "wrench",
         RowId::StatsSize => "chart-column",
         RowId::ExitHint => "log-out",
@@ -1292,11 +1279,12 @@ pub(crate) fn preset_field(id: RowId) -> Option<&'static str> {
         RowId::PadForward => "gamepad_forwarding",
         RowId::PadType => "gamepad",
         RowId::SystemButtons => "system_buttons",
-        RowId::GuideGesture => "guide_gesture",
         RowId::Touch => "touch_mode",
         RowId::Mouse => "mouse_mode",
         RowId::InvertScroll => "invert_scroll",
-        RowId::Shortcuts => "inhibit_shortcuts",
+        RowId::InhibitShortcuts => "inhibit_shortcuts",
+        RowId::QuickActions => "overlay_actions",
+        RowId::ShortcutsPage => "shortcuts",
         RowId::Stats => "stats_verbosity",
         RowId::Fullscreen => "fullscreen_on_stream",
         _ => return None,
@@ -1347,7 +1335,6 @@ fn row_spec_base(id: RowId, ctx: &Ctx, presets: &[(String, String)]) -> RowSpec 
         RowId::Controllers => return RowSpec::action(console::console_prefs_controllers(), true),
         // The label is the tab's count; `SettingsScreen::spec` writes it in.
         RowId::AdvancedChanged => return RowSpec::action(String::new(), true),
-        RowId::StreamControls => return RowSpec::action(m::about_stream_controls(), true),
         RowId::Licenses => return RowSpec::action(m::about_licenses(), true),
         RowId::ResetSettings => {
             return RowSpec {
@@ -1356,6 +1343,7 @@ fn row_spec_base(id: RowId, ctx: &Ctx, presets: &[(String, String)]) -> RowSpec 
             };
         }
         RowId::QuickActions => return RowSpec::action(m::player_overlay_actions(), true),
+        RowId::ShortcutsPage => return RowSpec::action(m::player_shortcuts(), true),
         // Opens the cards: the value names the pick, no ‹ › to step it.
         RowId::Palette => {
             return RowSpec {
@@ -1555,11 +1543,6 @@ fn row_spec_base(id: RowId, ctx: &Ctx, presets: &[(String, String)]) -> RowSpec 
             m::player_system_buttons(),
             label_for(&SYSTEM_BUTTONS, &s.system_buttons).into(),
         ),
-        RowId::GuideGesture => (
-            None,
-            m::player_guide_gesture(),
-            label_for(&GUIDE_GESTURE, &s.guide_gesture).into(),
-        ),
         RowId::PadRumble => (None, m::player_pad_rumble(), extra()),
         RowId::PadHaptics => (None, m::player_pad_haptics(), extra()),
         RowId::PadSpeaker => (
@@ -1570,7 +1553,7 @@ fn row_spec_base(id: RowId, ctx: &Ctx, presets: &[(String, String)]) -> RowSpec 
         RowId::Touch => (None, m::player_touch_mode(), s.touch_mode().label().into()),
         RowId::Mouse => (None, m::player_mouse_mode(), s.mouse_mode().label().into()),
         RowId::InvertScroll => (None, m::player_invert_scroll(), extra()),
-        RowId::Shortcuts => (None, m::player_inhibit_shortcuts(), extra()),
+        RowId::InhibitShortcuts => (None, m::player_inhibit_shortcuts(), extra()),
         RowId::FollowOsTheme => (None, m::player_follow_os_theme(), extra()),
         // Label is the reduction, so On means it is in effect.
         RowId::ReduceMotion => (None, m::player_reduce_motion(), extra()),
@@ -1663,10 +1646,10 @@ fn row_spec_base(id: RowId, ctx: &Ctx, presets: &[(String, String)]) -> RowSpec 
         | RowId::NewPreset
         | RowId::Controllers
         | RowId::AdvancedChanged
-        | RowId::StreamControls
         | RowId::Licenses
         | RowId::ResetSettings
         | RowId::QuickActions
+        | RowId::ShortcutsPage
         | RowId::LibrarySections
         | RowId::Palette
         | RowId::PyroWaveQuality
@@ -1699,7 +1682,6 @@ fn row_enabled(id: RowId, s: &pf_client_core::trust::Settings) -> bool {
         | RowId::PadType
         | RowId::PadRumble
         | RowId::SystemButtons
-        | RowId::GuideGesture
         | RowId::PadHaptics
         | RowId::PadSpeaker => s.gamepad_forwarding,
         _ => true,
@@ -1752,7 +1734,6 @@ pub fn detail(id: RowId, ctx: &Ctx) -> Cow<'static, str> {
         RowId::Pad => m::player_forward_pad_hint().into(),
         RowId::PadType => m::player_gamepad_hint().into(),
         RowId::SystemButtons => m::player_system_buttons_hint().into(),
-        RowId::GuideGesture => m::player_guide_gesture_hint("Select").into(),
         RowId::PadRumble => m::player_pad_rumble_hint().into(),
         RowId::PadHaptics => m::player_pad_haptics_hint().into(),
         RowId::PadSpeaker => m::player_pad_speaker_hint().into(),
@@ -1772,7 +1753,10 @@ pub fn detail(id: RowId, ctx: &Ctx) -> Cow<'static, str> {
         },
         RowId::InvertScroll => m::player_invert_scroll_hint().into(),
         RowId::QuickActions => console::console_player_overlay_actions_hint("Select+A").into(),
-        RowId::Shortcuts => m::player_inhibit_shortcuts_hint("Alt+Tab, Super, \u{2026}").into(),
+        RowId::ShortcutsPage => m::player_shortcuts_hint().into(),
+        RowId::InhibitShortcuts => {
+            m::player_inhibit_shortcuts_hint("Alt+Tab, Super, \u{2026}").into()
+        }
         RowId::FollowOsTheme => m::player_follow_os_theme_hint().into(),
         RowId::Palette => m::player_ui_palette_hint().into(),
         RowId::ReduceMotion => m::player_reduce_motion_hint().into(),
@@ -1849,7 +1833,6 @@ pub fn detail(id: RowId, ctx: &Ctx) -> Cow<'static, str> {
             Platform::WebOS => console::console_gamepad_ui_mode_webos_hint().into(),
         },
         RowId::Controllers => console::console_prefs_controllers_hint().into(),
-        RowId::StreamControls => m::about_stream_controls_hint().into(),
         RowId::Licenses => m::about_licenses_hint().into(),
         RowId::ResetSettings => m::prefs_reset_all_hint().into(),
         RowId::LibrarySections => m::player_library_sections_hint().into(),
@@ -2055,7 +2038,6 @@ pub fn adjust(id: RowId, delta: i32, wrap: bool, ctx: &mut Ctx) -> bool {
         }
         RowId::PadType => step_str(&pad_types(platform), &mut s.gamepad, delta, wrap),
         RowId::SystemButtons => step_str(&SYSTEM_BUTTONS, &mut s.system_buttons, delta, wrap),
-        RowId::GuideGesture => step_str(&GUIDE_GESTURE, &mut s.guide_gesture, delta, wrap),
         RowId::PadSpeaker => {
             // `"mix"` reads Off; a step writes only `"pad"` / `"off"`.
             let mut on = pad_speaker_on(&s.pad_speaker);
@@ -2120,7 +2102,7 @@ pub fn adjust(id: RowId, delta: i32, wrap: bool, ctx: &mut Ctx) -> bool {
         | RowId::PadRumble
         | RowId::PadHaptics
         | RowId::InvertScroll
-        | RowId::Shortcuts
+        | RowId::InhibitShortcuts
         | RowId::AdvancedStats
         | RowId::FollowOsTheme
         | RowId::ReduceMotion
@@ -2178,7 +2160,7 @@ pub fn adjust(id: RowId, delta: i32, wrap: bool, ctx: &mut Ctx) -> bool {
         | RowId::NewPreset
         | RowId::Controllers
         | RowId::AdvancedChanged
-        | RowId::StreamControls
+        | RowId::ShortcutsPage
         | RowId::Licenses
         | RowId::ResetSettings
         | RowId::QuickActions
@@ -2270,7 +2252,6 @@ pub(super) fn stored_options(
         RowId::Mouse => MouseMode::ALL.iter().map(|m| m.as_name().into()).collect(),
         RowId::PadType => ids(&pad_types(platform)),
         RowId::SystemButtons => ids(&SYSTEM_BUTTONS),
-        RowId::GuideGesture => ids(&GUIDE_GESTURE),
         _ => return None,
     })
 }
@@ -2312,7 +2293,6 @@ pub(super) fn stored_default(id: RowId, device: &crate::screens::Device) -> Opti
         RowId::AudioFormat => field("audio_format"),
         RowId::PadType => field("gamepad"),
         RowId::SystemButtons => field("system_buttons"),
-        RowId::GuideGesture => field("guide_gesture"),
         RowId::Touch => field("touch_mode"),
         RowId::Mouse => field("mouse_mode"),
         RowId::Palette => field("ui_palette"),
