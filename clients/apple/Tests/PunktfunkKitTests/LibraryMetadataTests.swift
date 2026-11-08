@@ -61,6 +61,7 @@ final class LibraryMetadataTests: XCTestCase {
             "Host: 1080p60, DualSense, HDR off")
         XCTAssertEqual(GameOverrides(hz: 120).hostLine, "Host: 120 Hz")
         XCTAssertEqual(GameOverrides(gamepad: "xbox").hostLine, "Host: Xbox 360")
+        XCTAssertEqual(GameOverrides(gamepad: "switchpro").hostLine, "Host: Switch Pro")
     }
 
     func testInlineArtDecodesBase64AndRefusesTheRest() throws {

@@ -294,7 +294,7 @@ public extension GameOverrides {
         case let (nil, z?): L10n.commonHz(value: String(z))
         case (nil, nil): nil
         }
-        let pad = gamepad.flatMap(PunktfunkConnection.GamepadType.init(name:))?.ringLabel
+        let pad = gamepad.flatMap(PunktfunkConnection.GamepadType.init(name:))?.padName
         let hdr = hdr.map {
             String(localized: $0 ? L10n.libHostOverrideHdrOn : L10n.libHostOverrideHdrOff)
         }
