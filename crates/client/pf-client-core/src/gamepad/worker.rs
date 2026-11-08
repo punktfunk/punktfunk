@@ -8,7 +8,7 @@ use super::feedback::{hid_plan, is_dualsense, rumble_verdict, HidPlan, HidTarget
 use super::route::{
     ring_on_select_a, route, tap_events, Action, Gates, MenuReads, MenuSettle, PadInput, PadRoute,
 };
-use super::{is_steam_deck, set_valve_hidapi, Ctl, ShortcutFired};
+use super::{is_steam_deck, set_valve_hidapi, Ctl, PadReading, ShortcutFired, PAD_TEST};
 use crate::menu_nav::{
     ring_sector, MenuEvent, MenuNav, MenuPulse, MenuSample, PadBattery, PadInfo,
 };
@@ -300,6 +300,63 @@ fn input_pad(event: &sdl3::event::Event) -> Option<u32> {
 }
 
 /// SDL sticks are +y = down; the wire (XInput) is +y = up. Triggers 0..32767 → 0..255.
+/// Every SDL button [`button_bit`] maps.
+const BUTTONS: [sdl3::gamepad::Button; 22] = {
+    use sdl3::gamepad::Button::*;
+    [
+        South,
+        East,
+        West,
+        North,
+        Back,
+        Start,
+        Guide,
+        LeftStick,
+        RightStick,
+        LeftShoulder,
+        RightShoulder,
+        DPadUp,
+        DPadDown,
+        DPadLeft,
+        DPadRight,
+        Touchpad,
+        RightPaddle1,
+        LeftPaddle1,
+        RightPaddle2,
+        LeftPaddle2,
+        Misc1,
+        Misc2,
+    ]
+};
+
+/// LX LY RX RY, then LT RT: the order of [`PadReading::axes`].
+const AXES: [sdl3::gamepad::Axis; 6] = {
+    use sdl3::gamepad::Axis::*;
+    [LeftX, LeftY, RightX, RightY, TriggerLeft, TriggerRight]
+};
+
+/// What the console's input test shows: buttons held on any pad, axes of the one pushed furthest.
+fn pad_reading(pads: &[(u32, &sdl3::gamepad::Gamepad)]) -> PadReading {
+    let mut reading = PadReading::default();
+    let mut furthest = -1.0;
+    for (_, pad) in pads {
+        for bit in BUTTONS
+            .into_iter()
+            .filter(|&b| pad.button(b))
+            .filter_map(button_bit)
+        {
+            reading.buttons |= bit;
+        }
+        let axes = AXES.map(|a| (f32::from(pad.axis(a)) / 32767.0).clamp(-1.0, 1.0));
+        let reach: f32 = axes.iter().map(|v| v * v).sum();
+        if reach > furthest {
+            furthest = reach;
+            reading.axes = axes;
+        }
+    }
+    reading
+}
+
 fn axis_value(axis: sdl3::gamepad::Axis, v: i16) -> (u32, i32) {
     use sdl3::gamepad::Axis;
     match axis {
@@ -419,6 +476,8 @@ pub(super) struct Worker {
     menu_open: Vec<(u32, sdl3::gamepad::Gamepad)>,
     /// Menu pad that last had a button or stick engaged — the one a detent pulse belongs in.
     menu_last: Option<u32>,
+    /// The input test's last reading, so it only hears changes.
+    pad_test_last: Option<PadReading>,
     /// A forwarded slot or a menu pad just opened: menu navigation adopts until it has reported.
     menu_settle: MenuSettle,
     /// Menu pad power, `(id, level)`. Cached: [`publish`](Self::publish) runs on every hotplug.
@@ -973,39 +1032,7 @@ impl Worker {
     /// press. Axes are re-sent: the flush zeroed them and SDL only speaks on change, so a
     /// still-held stick would stay dead host-side. A local Guide still down keeps the pad.
     fn readopt_slot(slot: &mut Slot, c: Option<&NativeClient>, system_forward: bool) {
-        use sdl3::gamepad::{Axis, Button};
-        const BUTTONS: [Button; 22] = [
-            Button::South,
-            Button::East,
-            Button::West,
-            Button::North,
-            Button::Back,
-            Button::Start,
-            Button::Guide,
-            Button::LeftStick,
-            Button::RightStick,
-            Button::LeftShoulder,
-            Button::RightShoulder,
-            Button::DPadUp,
-            Button::DPadDown,
-            Button::DPadLeft,
-            Button::DPadRight,
-            Button::Touchpad,
-            Button::RightPaddle1,
-            Button::LeftPaddle1,
-            Button::RightPaddle2,
-            Button::LeftPaddle2,
-            Button::Misc1,
-            Button::Misc2,
-        ];
-        const AXES: [Axis; 6] = [
-            Axis::LeftX,
-            Axis::LeftY,
-            Axis::RightX,
-            Axis::RightY,
-            Axis::TriggerLeft,
-            Axis::TriggerRight,
-        ];
+        use sdl3::gamepad::Button;
         // A trackpad click forwards as a surface, and its release never clears a bit.
         let down: Vec<u32> = BUTTONS
             .into_iter()
@@ -1557,6 +1584,19 @@ impl Worker {
             MenuReads::MenuPads => self.menu_open.iter().map(|(id, p)| (*id, p)).collect(),
             MenuReads::Nothing => return,
         };
+        // The input test reads the pads instead; reset adopts what is held when it ends.
+        if reads == MenuReads::MenuPads {
+            if let Some(sink) = PAD_TEST.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
+                let reading = pad_reading(&pads);
+                if self.pad_test_last != Some(reading) {
+                    sink(reading);
+                    self.pad_test_last = Some(reading);
+                }
+                self.menu_nav.reset();
+                return;
+            }
+        }
+        self.pad_test_last = None;
         if pads.is_empty() {
             return;
         }
@@ -1739,6 +1779,7 @@ impl Worker {
             slots: Vec::new(),
             menu_open: Vec::new(),
             menu_last: None,
+            pad_test_last: None,
             menu_settle: MenuSettle::default(),
             battery: None,
             battery_at: None,

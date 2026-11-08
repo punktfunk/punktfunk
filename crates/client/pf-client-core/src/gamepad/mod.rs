@@ -32,6 +32,26 @@ use worker::{run, Worker};
 /// A shortcut a forwarded pad fired: the pad's wire index, the action and its phase.
 pub type ShortcutFired = (u8, Action, Phase);
 
+/// The menu pads while the console's input test runs: wire bits held on any of them, and the
+/// axes of the one pushed furthest.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct PadReading {
+    pub buttons: u32,
+    /// LX LY RX RY (−1…1, +y down), then LT RT (0…1).
+    pub axes: [f32; 6],
+}
+
+pub type PadTestSink = Box<dyn Fn(PadReading) + Send>;
+
+// One sink per process: the console's service thread never holds the pumped service.
+static PAD_TEST: Mutex<Option<PadTestSink>> = Mutex::new(None);
+
+/// While `Some`, the menu pads feed the console's input test on every change instead of
+/// moving the menu. `None` hands them back, what is still held adopted, not fired.
+pub fn set_pad_test(sink: Option<PadTestSink>) {
+    *PAD_TEST.lock().unwrap_or_else(|e| e.into_inner()) = sink;
+}
+
 /// The Deck's HIDAPI driver on/off. It sends `ID_CLEAR_DIGITAL_MAPPINGS` +
 /// `TRACKPAD_NONE` at *enumeration* and feeds the lizard-mode watchdog, so the
 /// trackpad-mouse dies while the driver merely runs. Enable only in-session (paddles,
