@@ -250,7 +250,7 @@ pub struct PadSeqGate {
 
 impl PadSeqGate {
     /// Packets behind the newest that still count as a reorder, not a restart.
-    pub const REORDER: u32 = 256;
+    const REORDER: u32 = 256;
 
     /// `true` when `seq` should reach the decoder. Seq 0 is always a restart: a stream younger
     /// than [`Self::REORDER`] frames would otherwise lose the restarted stream's first frames.
