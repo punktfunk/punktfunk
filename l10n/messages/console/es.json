@@ -207,6 +207,7 @@
 	"console_preset_bind_default": "Predeterminado",
 	"console_preset_bind_game_hint": "Con qué se transmite este juego, en lugar del predeterminado del host; una tarjeta fijada conserva el suyo.",
 	"console_hint_preset_options": "Opciones…",
+	"console_hint_reset": "Restablecer…",
 	"console_pad_sc2_usb": "Steam Controller 2 por USB",
 	"console_pad_ds_usb": "DualSense / DualShock por USB",
 	"console_pad_ds_haptics": "Prueba háptica del DualSense",

@@ -19,6 +19,8 @@ struct SettingsView: View {
     /// is being confirmed for.
     @State var presetDraft: PresetDraft?
     @State var presetPendingDelete: StreamPreset?
+    /// Reset All Settings is asking.
+    @State var confirmingReset = false
     /// The menu's icons are rasterised per appearance (see `MenuIcon`), so the surface has to know
     /// which one it is drawing in.
     @Environment(\.colorScheme) var colorScheme
@@ -250,6 +252,7 @@ struct SettingsView: View {
                 librarySection
                 showAdvancedSection
                 generalAdvancedSection
+                resetSection
             }
             .formStyle(.grouped)
             .tabItem { Label(L10n.prefsCategoryGeneral, systemImage: "gearshape") }
@@ -397,6 +400,7 @@ struct SettingsView: View {
                 librarySection
                 showAdvancedSection
                 generalAdvancedSection
+                resetSection
             }
             .formStyle(.grouped)
             .navigationTitle(category.title)
@@ -534,6 +538,7 @@ struct SettingsView: View {
                 librarySection
                 showAdvancedSection
                 generalAdvancedSection
+                resetSection
             }
         case .category(.display):
             Form {

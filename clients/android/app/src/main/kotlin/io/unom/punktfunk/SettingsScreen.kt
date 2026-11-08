@@ -192,6 +192,12 @@ fun SettingsScreen(
         presets = presetStore.all()
     }
 
+    /** Every default back to a fresh install's. Only the defaults scope offers it. */
+    fun resetAll() {
+        globals = globals.reset(isTvDevice(context))
+        onChange(globals)
+    }
+
     // Mic uplink — turning it on requests RECORD_AUDIO; if denied, the toggle stays off.
     val micLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission(),
@@ -308,6 +314,7 @@ fun SettingsScreen(
                         onOpenQuickActions = { showQuickActions = true },
                         onOpenLicenses = { showLicenses = true },
                         onOpenShortcuts = { showShortcuts = true },
+                        onResetAll = ::resetAll,
                         onBack = back,
                     )
                 }
@@ -640,6 +647,7 @@ private fun CategoryDetail(
     onOpenQuickActions: () -> Unit,
     onOpenLicenses: () -> Unit,
     onOpenShortcuts: () -> Unit,
+    onResetAll: () -> Unit,
     onBack: (() -> Unit)?,
 ) {
     Column(
@@ -658,7 +666,7 @@ private fun CategoryDetail(
             Text(stringResource(category.title), style = MaterialTheme.typography.headlineMedium)
         }
         when (category) {
-            SettingsCategory.General -> GeneralSettings(settings, onChange)
+            SettingsCategory.General -> GeneralSettings(settings, onChange, onResetAll)
             SettingsCategory.Display -> DisplaySettings(settings, onChange, context)
             SettingsCategory.Input -> InputSettings(settings, onChange, onOpenQuickActions)
             SettingsCategory.Audio -> AudioSettings(settings, onChange, onMicChange)
@@ -669,7 +677,7 @@ private fun CategoryDetail(
 }
 
 @Composable
-private fun GeneralSettings(s: Settings, update: (String, Settings) -> Unit) {
+private fun GeneralSettings(s: Settings, update: (String, Settings) -> Unit, onResetAll: () -> Unit) {
     val context = LocalContext.current
     // Turning the keep-alive on asks for notifications, because the ongoing notification is how
     // the session announces itself and the only way to end it from outside the app. A refusal
@@ -821,6 +829,41 @@ private fun GeneralSettings(s: Settings, update: (String, Settings) -> Unit) {
                 onCheckedChange = { on -> update("exit_hint", s.copy(exitHint = on)) },
             )
         }
+        // The page's last row. A preset resets row by row, so only the defaults have it.
+        ResetAllGroup(onResetAll)
+    }
+}
+
+/** Every setting back to a fresh install's, asked first. */
+@Composable
+private fun ResetAllGroup(onReset: () -> Unit) {
+    var asking by remember { mutableStateOf(false) }
+    SettingsGroup {
+        Column(Modifier.fillMaxWidth().clickable { asking = true }) {
+            Text(
+                stringResource(R.string.prefs_reset_all),
+                style = MaterialTheme.typography.bodyLarge,
+                color = MaterialTheme.colorScheme.error,
+            )
+            Text(
+                stringResource(R.string.prefs_reset_all_hint),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+    if (asking) {
+        PunktfunkDialog(
+            title = stringResource(R.string.prefs_reset_all_title),
+            onDismiss = { asking = false },
+            actions = listOf(
+                DialogAction(stringResource(R.string.common_reset)) {
+                    asking = false
+                    onReset()
+                },
+                DialogAction(stringResource(R.string.common_cancel)) { asking = false },
+            ),
+        ) { PromptText(stringResource(R.string.prefs_reset_all_body)) }
     }
 }
 

@@ -277,6 +277,7 @@ pub(crate) enum Msg {
     SettingsNav(String),
     SettingsScope(String),
     SettingsDelete(Option<String>),
+    SettingsReset(bool),
     SettingsEdit(bool),
     CustomRes(bool),
     CustomScale(bool),
@@ -349,6 +350,8 @@ pub(crate) struct Shell {
     /// The layer the settings page edits: "" for the defaults, else a preset id.
     settings_scope: String,
     settings_delete: Option<String>,
+    /// The reset confirmation is up.
+    settings_reset: bool,
     settings_edit: bool,
     /// Resolution / Render scale sit on Custom… while the stored value is a listed one.
     custom_res: bool,
@@ -422,6 +425,7 @@ impl Component for Shell {
             settings_nav: "general".into(),
             settings_scope: String::new(),
             settings_delete: None,
+            settings_reset: false,
             settings_edit: false,
             custom_res: false,
             custom_scale: false,
@@ -510,6 +514,7 @@ impl Component for Shell {
             }
             Msg::SettingsScope(s) => self.settings_scope = s,
             Msg::SettingsDelete(d) => self.settings_delete = d,
+            Msg::SettingsReset(r) => self.settings_reset = r,
             Msg::SettingsEdit(e) => self.settings_edit = e,
             Msg::CustomRes(c) => self.custom_res = c,
             Msg::CustomScale(c) => self.custom_scale = c,

@@ -153,7 +153,8 @@ impl SettingsScreen {
     }
 
     /// Filtered by [`row_on`] / [`row_applies`], and [`advanced`] rows by Show advanced: a tab
-    /// hiding changed ones ends on [`RowId::AdvancedChanged`]. Presets comes from the catalog.
+    /// hiding changed ones ends on [`RowId::AdvancedChanged`], above General's reset. Presets
+    /// comes from the catalog.
     fn row_ids(&self, ctx: &Ctx) -> Vec<RowId> {
         if self.tab != PRESETS_TAB {
             let offered = TABS[self.tab]
@@ -168,7 +169,8 @@ impl SettingsScreen {
             }
             let mut rows: Vec<RowId> = offered.filter(|id| !advanced(*id)).collect();
             if !changed_advanced(self.tab, ctx).is_empty() {
-                rows.push(RowId::AdvancedChanged);
+                let at = rows.len() - usize::from(rows.last() == Some(&RowId::ResetSettings));
+                rows.insert(at, RowId::AdvancedChanged);
             }
             return rows;
         }
@@ -396,6 +398,16 @@ impl SettingsScreen {
                 return match msg {
                     ListMsg::Activate => {
                         fx.push(Screen::Controls(super::controls::ControlsScreen::new(ctx)));
+                        pulse
+                    }
+                    ListMsg::Adjust(_) => Some(MenuPulse::Boundary),
+                    ListMsg::None => pulse,
+                };
+            }
+            RowId::ResetSettings => {
+                return match msg {
+                    ListMsg::Activate => {
+                        fx.push(Screen::Prompt(super::prompt::PromptScreen::reset_settings()));
                         pulse
                     }
                     ListMsg::Adjust(_) => Some(MenuPulse::Boundary),
@@ -648,6 +660,12 @@ impl ScreenView for SettingsScreen {
                 Hint::new(HintKey::Confirm, console::console_hint_create()),
                 done(),
             ],
+            Some(RowId::ResetSettings) => {
+                vec![
+                    Hint::new(HintKey::Confirm, console::console_hint_reset()),
+                    done(),
+                ]
+            }
             Some(RowId::Version) | None => vec![done()],
             Some(
                 RowId::Controllers

@@ -3,8 +3,8 @@
 //! reference. One row per answer; Back answers none of them.
 //!
 //! The answer leaves as [`ConsoleCmd::PromptAnswer`] carrying the prompt's `id`, so the app
-//! can drop a reply to a question it no longer holds. The shell's own exit question
-//! ([`PromptScreen::exit`]) answers nobody: its yes quits.
+//! can drop a reply to a question it no longer holds. The shell's own questions answer nobody:
+//! [`PromptScreen::exit`]'s yes quits, [`PromptScreen::reset_settings`]'s resets.
 
 use crate::glyphs::{Hint, HintKey};
 use crate::model::ConsoleCmd;
@@ -24,11 +24,19 @@ pub struct Prompt {
     pub choices: Vec<String>,
 }
 
+/// The shell's own questions, answered here: the app hears nothing.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Own {
+    /// Row 0 quits.
+    Exit,
+    /// Row 1 resets every setting; row 0, Cancel, sits under the cursor.
+    ResetSettings,
+}
+
 pub(crate) struct PromptScreen {
     prompt: Prompt,
     list: MenuList,
-    /// The shell's own exit question: its first row quits, and the app hears no answer.
-    exit: bool,
+    own: Option<Own>,
 }
 
 impl PromptScreen {
@@ -36,34 +44,52 @@ impl PromptScreen {
         PromptScreen {
             prompt,
             list: MenuList::new(),
-            exit: false,
+            own: None,
+        }
+    }
+
+    fn own(own: Own, title: &str, message: &str, choices: [&str; 2]) -> PromptScreen {
+        PromptScreen {
+            own: Some(own),
+            ..PromptScreen::new(Prompt {
+                id: String::new(),
+                title: title.into(),
+                message: message.into(),
+                choices: choices.map(String::from).to_vec(),
+            })
         }
     }
 
     pub(crate) fn exit() -> PromptScreen {
-        PromptScreen {
-            exit: true,
-            ..PromptScreen::new(Prompt {
-                id: String::new(),
-                title: pf_l10n::console::console_exit_title().into(),
-                message: pf_l10n::console::console_exit_message().into(),
-                choices: vec![
-                    pf_l10n::console::console_exit_confirm().into(),
-                    pf_l10n::common::common_cancel().into(),
-                ],
-            })
-        }
+        use pf_l10n::{common, console};
+        Self::own(
+            Own::Exit,
+            console::console_exit_title(),
+            console::console_exit_message(),
+            [console::console_exit_confirm(), common::common_cancel()],
+        )
+    }
+
+    pub(crate) fn reset_settings() -> PromptScreen {
+        use pf_l10n::{client, common};
+        Self::own(
+            Own::ResetSettings,
+            client::prefs_reset_all_title(),
+            client::prefs_reset_all_body(),
+            [common::common_cancel(), common::common_reset()],
+        )
     }
 
     fn run(
         &mut self,
         msg: ListMsg,
         pulse: Option<MenuPulse>,
+        ctx: &mut Ctx,
         fx: &mut Outbox,
     ) -> Option<MenuPulse> {
         match msg {
             ListMsg::Activate => {
-                self.answer(Some(self.list.cursor), fx);
+                self.answer(Some(self.list.cursor), ctx, fx);
                 Some(MenuPulse::Confirm)
             }
             ListMsg::Adjust(_) => Some(MenuPulse::Boundary),
@@ -71,14 +97,20 @@ impl PromptScreen {
         }
     }
 
-    fn answer(&self, choice: Option<usize>, fx: &mut Outbox) {
-        if self.exit {
-            fx.quit = choice == Some(0);
-        } else {
-            fx.cmds.push(ConsoleCmd::PromptAnswer {
+    fn answer(&self, choice: Option<usize>, ctx: &mut Ctx, fx: &mut Outbox) {
+        match self.own {
+            Some(Own::Exit) => fx.quit = choice == Some(0),
+            Some(Own::ResetSettings) if choice == Some(1) => {
+                ctx.write(|c| {
+                    c.settings.reset_to_defaults();
+                    true
+                });
+            }
+            Some(Own::ResetSettings) => {}
+            None => fx.cmds.push(ConsoleCmd::PromptAnswer {
                 id: self.prompt.id.clone(),
                 choice,
-            });
+            }),
         }
         fx.pop();
     }
@@ -89,21 +121,21 @@ impl ScreenView for PromptScreen {
         self.prompt.title.clone()
     }
 
-    fn menu(&mut self, ev: MenuEvent, _ctx: &mut Ctx, fx: &mut Outbox) -> Option<MenuPulse> {
+    fn menu(&mut self, ev: MenuEvent, ctx: &mut Ctx, fx: &mut Outbox) -> Option<MenuPulse> {
         if ev == MenuEvent::Back {
-            self.answer(None, fx);
+            self.answer(None, ctx, fx);
             return None;
         }
         let (msg, pulse) = self.list.menu(ev, self.prompt.choices.len());
-        self.run(msg, pulse, fx)
+        self.run(msg, pulse, ctx, fx)
     }
 
-    fn pointer(&mut self, p: Pointer, _ctx: &mut Ctx, fx: &mut Outbox) -> bool {
+    fn pointer(&mut self, p: Pointer, ctx: &mut Ctx, fx: &mut Outbox) -> bool {
         let (msg, pulse) = self.list.pointer(p, self.prompt.choices.len());
         if matches!(msg, ListMsg::None) && pulse.is_none() {
             return false;
         }
-        self.run(msg, pulse, fx);
+        self.run(msg, pulse, ctx, fx);
         true
     }
 
@@ -132,9 +164,11 @@ impl ScreenView for PromptScreen {
         ctx: &mut Ctx,
     ) {
         let ui = ctx.ui;
-        let rows: Vec<RowSpec> = (self.prompt.choices.iter())
-            .map(|label| RowSpec {
+        let reset = self.own == Some(Own::ResetSettings);
+        let rows: Vec<RowSpec> = (self.prompt.choices.iter().enumerate())
+            .map(|(i, label)| RowSpec {
                 label: label.clone(),
+                danger: reset && i == 1,
                 ..RowSpec::default()
             })
             .collect();
@@ -201,6 +235,47 @@ mod tests {
             }]
         );
         assert!(matches!(fx.nav, Some(crate::screens::Nav::Pop)));
+    }
+
+    /// The pad's first OK lands on Cancel; Down then OK resets every setting through the store,
+    /// and the app hears no answer.
+    #[test]
+    fn reset_needs_cancel_passed_and_writes_the_store() {
+        let changed = Settings {
+            codec: "av1".into(),
+            show_advanced: true,
+            ..Settings::default()
+        };
+        for (events, reset) in [
+            (&[MenuEvent::Confirm][..], false),
+            (&[MenuEvent::Back][..], false),
+            (
+                &[MenuEvent::Move(MenuDir::Down), MenuEvent::Confirm][..],
+                true,
+            ),
+        ] {
+            let store = crate::store::SnapshotStore::new(changed.clone(), Vec::new());
+            let mut settings = changed.clone();
+            let library = crate::library::LibraryShared::default();
+            let mut ctx = Ctx {
+                store: &store,
+                ..Ctx::test(&mut settings, &library)
+            };
+            let mut s = PromptScreen::reset_settings();
+            let mut fx = Outbox::default();
+            for ev in events {
+                s.menu(*ev, &mut ctx, &mut fx);
+            }
+            assert!(fx.cmds.is_empty(), "{events:?}");
+            assert!(matches!(fx.nav, Some(crate::screens::Nav::Pop)));
+            let want = if reset {
+                Settings::default()
+            } else {
+                changed.clone()
+            };
+            assert_eq!(store.snapshot().0, want, "{events:?}");
+            assert_eq!(settings, want, "{events:?}: the open screen shows it");
+        }
     }
 
     #[test]

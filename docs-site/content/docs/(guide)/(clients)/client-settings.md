@@ -16,10 +16,10 @@ screen: **Open Punktfunk** in the [Decky panel](/docs/steam-deck).
 
 ## Advanced settings
 
-Rows most players never change are hidden until **Show advanced**, the last row of **General**, is
-on. A hidden setting still applies: a category with one changed says **1 advanced setting
-changed**, and choosing that shows them. While you edit a [preset](/docs/presets-and-links), a row
-it overrides shows either way.
+Rows most players never change are hidden until **Show advanced**, on **General**, is on. A hidden
+setting still applies: a category with one changed says **1 advanced setting changed**, and
+choosing that shows them. While you edit a [preset](/docs/presets-and-links), a row it overrides
+shows either way.
 
 The advanced rows are **Advanced statistics**, **Statistics position**, **Statistics size**, **Exit
 hint**, **Reduce interface resolution**, **Smoothness buffer**, **Render scale**,
@@ -27,6 +27,13 @@ hint**, **Reduce interface resolution**, **Smoothness buffer**, **Render scale**
 compositor**, **Video decoder**, **GPU**, **Low-latency mode**, **Keep screen awake**, **Audio quality**, **Keep host audio playing**, **Echo cancellation**, **Forward controllers**,
 **Use controller**, **Guide button**, **Guide gesture**, **Controller haptics**,
 **Controller speaker**, **Steam Controller 2 passthrough** and **DualSense over USB**.
+
+## Reset all settings
+
+**Reset all settings…**, the last row of **General**, asks first, then puts every setting back to
+how a fresh install has it. Paired hosts and presets stay, and so does the host the app opens on.
+It shows under the default settings only: while you edit a preset, each row resets on its own. The
+console offers it on Linux, Windows and the Steam Deck.
 
 Linux stores settings in `~/.config/punktfunk/client-gtk-settings.json`, shared with the console;
 Windows in `%APPDATA%\punktfunk\client-windows-settings.json`. Changes apply to the next session.

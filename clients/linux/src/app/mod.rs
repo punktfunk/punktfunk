@@ -948,7 +948,7 @@ const ACCELS: &[Accel] = &[
 ];
 
 /// The `Settings::extra` key the window's size is kept under: width, height, maximized.
-const WINDOW_KEY: &str = "shell_window";
+const WINDOW_KEY: &str = pf_client_core::settings::SHELL_WINDOW_KEY;
 
 /// Open at the size the window last closed at, and keep it on close.
 fn remember_size(window: &adw::ApplicationWindow, store: &Rc<Store>) {

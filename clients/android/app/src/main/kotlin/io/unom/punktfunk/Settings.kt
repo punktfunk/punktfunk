@@ -397,6 +397,12 @@ enum class StatsVerbosity(@StringRes val label: Int) {
     fun next(): StatsVerbosity = entries[(ordinal + 1) % entries.size]
 }
 
+/**
+ * What Reset leaves: a fresh install's settings on this kind of device, [Settings.defaultHost]
+ * kept because it names a host record. Hosts, pairing and presets live in their own stores.
+ */
+fun Settings.reset(tv: Boolean): Settings = Settings(reduceUiResolution = tv, defaultHost = defaultHost)
+
 /** Loads/saves [Settings] in the app-private `punktfunk_settings` prefs. */
 class SettingsStore(
     context: Context,

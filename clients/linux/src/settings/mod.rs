@@ -111,7 +111,7 @@ pub fn show_scoped(
         show_advanced: None,
     };
     let switcher = presets::scope_group(&b, &scope, active.as_ref(), &next, parent.as_ref());
-    pages::general(&mut b, switcher);
+    pages::general(&mut b, switcher, &next);
     pages::display(&mut b);
     pages::input(&mut b);
     pages::audio(&mut b);

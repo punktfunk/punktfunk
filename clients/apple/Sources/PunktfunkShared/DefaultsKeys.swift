@@ -428,6 +428,40 @@ public enum SettingDefault {
     public static let hostGrouping = HostGrouping.none.rawValue
     public static let rumbleOnDevice = false
     public static let gyroFromDevice = false
+
+    /// What Reset removes, so each key reads as its default again: every setting, and the
+    /// legacy overlay switch the tier migrates from. Hosts, presets, the default host, the
+    /// last pad, the library's place and the muted VRR notice are records and stay.
+    public static let resetKeys: [String] = [
+        DefaultsKey.streamWidth, DefaultsKey.streamHeight, DefaultsKey.streamHz,
+        DefaultsKey.matchWindow, DefaultsKey.renderScale, DefaultsKey.videoFit,
+        DefaultsKey.screens, DefaultsKey.compositor, DefaultsKey.gamepadType,
+        DefaultsKey.gamepadID, DefaultsKey.gamepadForwarding, DefaultsKey.sc2Capture,
+        DefaultsKey.systemButtons, DefaultsKey.guideGesture, DefaultsKey.bitrateKbps,
+        DefaultsKey.audioChannels, DefaultsKey.audioFormat, DefaultsKey.codec,
+        DefaultsKey.pyrowaveBpp, DefaultsKey.micEnabled, DefaultsKey.spatialAudio,
+        DefaultsKey.screen, DefaultsKey.echoCancel, DefaultsKey.keepHostAudio,
+        DefaultsKey.speakerUID, DefaultsKey.micUID, DefaultsKey.micChannel,
+        DefaultsKey.presentPriority, DefaultsKey.smoothBuffer, DefaultsKey.vsync,
+        DefaultsKey.allowVRR, DefaultsKey.hdrEnabled, DefaultsKey.enable444,
+        DefaultsKey.tenBitSdr, DefaultsKey.hostSort, DefaultsKey.hostGrouping,
+        DefaultsKey.mouseMode, DefaultsKey.invertScroll, DefaultsKey.overlayActions,
+        DefaultsKey.modifierLayout, DefaultsKey.inhibitShortcuts, DefaultsKey.pointerCapture,
+        DefaultsKey.touchMode, DefaultsKey.librarySort, DefaultsKey.libraryView,
+        DefaultsKey.startIn, DefaultsKey.libraryGroupBy, DefaultsKey.librarySections,
+        DefaultsKey.fullscreenWhileStreaming, DefaultsKey.fullscreenAlways,
+        DefaultsKey.hudEnabled, DefaultsKey.statsVerbosity, DefaultsKey.hudPlacement,
+        DefaultsKey.statsScalePct, DefaultsKey.exitHint, DefaultsKey.showAdvanced,
+        DefaultsKey.advancedStats, DefaultsKey.gamepadUIEnabled, DefaultsKey.gamepadUIMode,
+        DefaultsKey.uiPalette, DefaultsKey.padRumble, DefaultsKey.keepAwake,
+        DefaultsKey.rumbleOnDevice, DefaultsKey.gyroFromDevice, DefaultsKey.autoWake,
+        DefaultsKey.backgroundKeepAlive, DefaultsKey.backgroundTimeoutMinutes,
+    ]
+
+    /// Every setting back to a fresh install's value.
+    public static func resetAll(_ defaults: UserDefaults = .standard) {
+        for key in resetKeys { defaults.removeObject(forKey: key) }
+    }
 }
 
 extension Notification.Name {
