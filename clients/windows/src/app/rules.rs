@@ -68,12 +68,21 @@ pub(super) fn fold_advert(acc: &mut Vec<DiscoveredHost>, event: DiscoveryEvent) 
 }
 
 /// The "Open this link?" body. It names the host and the game, because that is how someone
-/// tells their own shortcut from a link a web page handed them.
-pub(super) fn link_prompt(name: &str, addr: &str, launch: Option<&str>) -> String {
+/// tells their own shortcut from a link a web page handed them, and what the host set for it.
+pub(super) fn link_prompt(
+    name: &str,
+    addr: &str,
+    launch: Option<&str>,
+    overrides: Option<&pf_client_core::library::GameOverrides>,
+) -> String {
     let mut s = client::link_confirm_asks(name, addr);
     if let Some(id) = launch {
         s.push_str("\n\n");
         s.push_str(&client::link_confirm_launch(id));
+    }
+    if let Some(line) = overrides.and_then(pf_client_core::library::host_line) {
+        s.push_str("\n\n");
+        s.push_str(&line);
     }
     s.push_str("\n\n");
     s.push_str(client::link_confirm_guessable());
@@ -279,17 +288,25 @@ mod tests {
     #[test]
     fn the_link_prompt_names_the_host_and_the_game() {
         assert_eq!(
-            link_prompt("Desk", "192.168.1.5", None),
+            link_prompt("Desk", "192.168.1.5", None, None),
             "A link asks to connect to Desk (192.168.1.5).\n\nIt names the host by its label \
              or address, which anything that can open a link could guess. Shortcuts made in \
              Punktfunk name the host's id and connect without asking."
         );
         assert_eq!(
-            link_prompt("Desk", "192.168.1.5", Some("steam:570")),
+            link_prompt("Desk", "192.168.1.5", Some("steam:570"), None),
             "A link asks to connect to Desk (192.168.1.5).\n\nIt also asks the host to launch \
              \u{201c}steam:570\u{201d}.\n\nIt names the host by its label or address, which \
              anything that can open a link could guess. Shortcuts made in Punktfunk name the \
              host's id and connect without asking."
+        );
+        let set = pf_client_core::library::GameOverrides {
+            lines: Some(1080),
+            ..Default::default()
+        };
+        assert!(
+            link_prompt("Desk", "192.168.1.5", Some("steam:570"), Some(&set))
+                .contains("\u{201d}.\n\nHost: 1080p\n\nIt names")
         );
     }
 }

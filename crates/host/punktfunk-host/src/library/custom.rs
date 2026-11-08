@@ -168,6 +168,7 @@ impl From<CustomEntry> for GameEntry {
             detect,
             on_window: c.on_window,
             stats: None,
+            overrides: None,
             ids: c.ids,
             filled: BTreeMap::new(),
             install: c.install,

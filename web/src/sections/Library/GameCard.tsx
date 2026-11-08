@@ -1,16 +1,18 @@
 import { Link } from "@tanstack/react-router";
 import { Eye, EyeOff, Trash2 } from "lucide-react";
-import { type FC, useState } from "react";
+import { type FC, useId, useState } from "react";
 import type { Download } from "@/api/gen/model/download";
 import type { OperatorGameEntry } from "@/api/gen/model/operatorGameEntry";
 import { LauncherIcon } from "@/components/launcher-icon";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import { Checkbox } from "@/components/ui/checkbox";
 import { cn } from "@/lib/utils";
 import { m } from "@/paraglide/messages";
 import { isOperatorOwned } from "./helpers";
 import { InstallBadge } from "./Install";
+import { streamSummary } from "./overrides";
 
 export interface GameCardProps {
 	game: OperatorGameEntry;
@@ -24,13 +26,46 @@ export interface GameCardProps {
 	nameOf?: (id: string) => string | undefined;
 	/** The title's download, while it has one. */
 	download?: Download;
+	/** Selection mode: a click checks or unchecks the title instead of opening its page. */
+	selecting?: boolean;
+	selected?: boolean;
+	onSelect?: () => void;
 }
+
+/** The checkbox over a card or row in selection mode; the whole surface takes the click. */
+export const SelectCover: FC<{
+	title: string;
+	selected: boolean;
+	onSelect: () => void;
+	className?: string;
+}> = ({ title, selected, onSelect, className }) => {
+	const id = useId();
+	return (
+		<label
+			htmlFor={id}
+			className={cn(
+				"absolute inset-0 z-20 flex cursor-pointer rounded-[inherit]",
+				selected && "ring-2 ring-primary ring-inset",
+				className,
+			)}
+		>
+			<Checkbox
+				id={id}
+				checked={selected}
+				onCheckedChange={onSelect}
+				aria-label={title}
+				className="bg-background"
+			/>
+		</label>
+	);
+};
 
 /**
  * A poster that opens the entry's page. The cover prefers the 2:3 portrait; on a load error it
  * falls back to the wide header, then to the title. Only what a cover cannot say sits on it: a
- * console's platform, Hidden, and the install mark; the source is the entry page's. Hide and
- * delete appear on hover, on a pointer that can hover; a phone manages a title on its page.
+ * console's platform, Hidden, the host's stream settings, and the install mark; the source is
+ * the entry page's. Hide and delete appear on hover, on a pointer that can hover; a phone
+ * manages a title on its page. In selection mode the card is one checkbox.
  */
 export const GameCard: FC<GameCardProps> = ({
 	game,
@@ -39,6 +74,9 @@ export const GameCard: FC<GameCardProps> = ({
 	onToggleHidden,
 	hiding,
 	download,
+	selecting,
+	selected = false,
+	onSelect,
 }) => {
 	// Every store can be hidden: the titles most worth hiding are the ones the operator cannot
 	// edit. The host keys the setting by entry id and never needs to own the entry.
@@ -50,6 +88,7 @@ export const GameCard: FC<GameCardProps> = ({
 		(u): u is string => !!u && !failed[u],
 	);
 	const emulated = game.platform && game.platform.toUpperCase() !== "PC";
+	const stream = streamSummary(game.overrides);
 	return (
 		<Card className="group relative overflow-hidden">
 			<Link
@@ -106,6 +145,15 @@ export const GameCard: FC<GameCardProps> = ({
 								{m.library_hidden_badge()}
 							</Badge>
 						)}
+						{stream && (
+							<Badge
+								variant="secondary"
+								className="max-w-full truncate bg-background/90 px-1.5 text-[10px] backdrop-blur"
+								title={stream}
+							>
+								{stream}
+							</Badge>
+						)}
 					</div>
 					<div className="absolute bottom-1.5 left-1.5">
 						<InstallBadge
@@ -134,6 +182,7 @@ export const GameCard: FC<GameCardProps> = ({
 					hidden
 						? "opacity-100"
 						: "pointer-events-none opacity-0 group-hover:pointer-events-auto group-hover:opacity-100 focus-within:pointer-events-auto focus-within:opacity-100",
+					selecting && "sm:hidden",
 				)}
 			>
 				<Button
@@ -168,6 +217,14 @@ export const GameCard: FC<GameCardProps> = ({
 					</Button>
 				)}
 			</div>
+			{selecting && onSelect && (
+				<SelectCover
+					title={game.title}
+					selected={selected}
+					onSelect={onSelect}
+					className="items-start justify-end p-2"
+				/>
+			)}
 		</Card>
 	);
 };

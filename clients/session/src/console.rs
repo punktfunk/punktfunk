@@ -1879,6 +1879,7 @@ fn to_model(games: &[library::GameEntry]) -> Vec<LibraryGame> {
             running: false,
             endable: false,
             install: g.install.clone().map(Into::into),
+            overrides: g.overrides.clone(),
         })
         .collect()
 }

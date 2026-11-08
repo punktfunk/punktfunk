@@ -206,6 +206,7 @@ export const SourcesSection: FC<{
 			{settingsFor && (
 				<SourceSettingsDialog
 					source={settingsFor}
+					stream
 					onClose={() => setSettingsFor(null)}
 				/>
 			)}

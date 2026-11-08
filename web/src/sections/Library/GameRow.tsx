@@ -5,13 +5,15 @@ import { LauncherIcon } from "@/components/launcher-icon";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { m } from "@/paraglide/messages";
-import type { GameCardProps } from "./GameCard";
+import { type GameCardProps, SelectCover } from "./GameCard";
 import { isOperatorOwned, sourceLabel } from "./helpers";
 import { InstallBadge } from "./Install";
+import { streamSummary } from "./overrides";
 
 /**
- * One title as a line: a small cover, its name, where it comes from, and the same two controls
- * a card has. Many more fit a screen than posters do, which is the point of the row view.
+ * One title as a line: a small cover, its name, where it comes from, the host's stream settings,
+ * and the same two controls a card has. Many more fit a screen than posters do, which is the
+ * point of the row view. In selection mode the row is one checkbox.
  */
 export const GameRow: FC<GameCardProps> = ({
 	game,
@@ -21,15 +23,19 @@ export const GameRow: FC<GameCardProps> = ({
 	hiding,
 	nameOf,
 	download,
+	selecting,
+	selected = false,
+	onSelect,
 }) => {
 	const hidden = game.hidden === true;
 	const isCustom = isOperatorOwned(game);
+	const stream = streamSummary(game.overrides);
 	const [failed, setFailed] = useState<Record<string, boolean>>({});
 	const src = [game.art.portrait, game.art.header].find(
 		(u): u is string => !!u && !failed[u],
 	);
 	return (
-		<li className="flex items-center gap-3 px-card py-2">
+		<li className="relative flex items-center gap-3 px-card py-2">
 			<Link
 				to="/library/$gameId"
 				params={{ gameId: game.id }}
@@ -74,6 +80,7 @@ export const GameRow: FC<GameCardProps> = ({
 						{hidden && (
 							<Badge variant="secondary">{m.library_hidden_badge()}</Badge>
 						)}
+						{stream && <Badge variant="secondary">{stream}</Badge>}
 						<InstallBadge
 							{...(game.install ? { install: game.install } : {})}
 							{...(download ? { download } : {})}
@@ -81,7 +88,7 @@ export const GameRow: FC<GameCardProps> = ({
 					</div>
 				</div>
 			</Link>
-			<div className="flex shrink-0 gap-1">
+			<div className={`flex shrink-0 gap-1${selecting ? " invisible" : ""}`}>
 				<Button
 					variant="ghost"
 					size="icon"
@@ -109,6 +116,14 @@ export const GameRow: FC<GameCardProps> = ({
 					</Button>
 				)}
 			</div>
+			{selecting && onSelect && (
+				<SelectCover
+					title={game.title}
+					selected={selected}
+					onSelect={onSelect}
+					className="items-center justify-end px-card"
+				/>
+			)}
 		</li>
 	);
 };

@@ -20,6 +20,7 @@ class LibraryCacheTest {
             releaseYear = 1992,
             genres = listOf("Racing"),
             stats = GameStats(lastPlayedUnixMs = 1_757_160_000_000, playTimeMs = 5_400_000, launchCount = 12),
+            overrides = GameOverrides(name = "1080p60 DualSense", lines = 1080, hz = 60, hdr = false, gamepad = "dualsense"),
         )
         cache.store("host", listOf(game))
         assertEquals(listOf(game), cache.load("host")?.games)

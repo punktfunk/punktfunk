@@ -560,7 +560,7 @@ pub(super) async fn negotiate(
     // Pairing ran before this future: a client here is paired, or the host is `--open`.
     let (codec_bit, codec) = pick_codec(&hello, &encoder)?;
     settle_bitrate(&mut hello, codec_bit);
-    cap_mode(&n, &mut hello);
+    cap_mode(&n, &mut hello, codec);
     let (joined, reservation) = admit_mode(&n, &mut hello, codec).await?;
 
     crate::encode::validate_dimensions(codec, hello.mode.width, hello.mode.height)
@@ -996,9 +996,10 @@ fn settle_bitrate(hello: &mut Hello, codec_bit: u8) {
     }
 }
 
-/// The operator's cap for this device, applied before mode-conflict and before Welcome: the
-/// client is told the mode it actually gets, not a yes to 4K120 and then something else.
-fn cap_mode(n: &Negotiation<'_>, hello: &mut Hello) {
+/// The operator's cap for this device, then the launched game's overrides, applied before
+/// mode-conflict and before Welcome: the client is told the mode it actually gets, not a yes
+/// to 4K120 and then something else.
+fn cap_mode(n: &Negotiation<'_>, hello: &mut Hello, codec: crate::encode::Codec) {
     let fp = crate::vdisplay::policy::fp_hex(n.conn.peer_fingerprint());
     let want = (hello.mode.width, hello.mode.height, hello.mode.refresh_hz);
     let capped = crate::vdisplay::policy::prefs().cap_mode(fp.as_deref(), want);
@@ -1012,6 +1013,52 @@ fn cap_mode(n: &Negotiation<'_>, hello: &mut Hello) {
         hello.mode.height = capped.1;
         hello.mode.refresh_hz = capped.2;
     }
+    let Some(game) = hello.launch.clone() else {
+        return;
+    };
+    let Some(o) = crate::library::overrides_for(&game) else {
+        return;
+    };
+    let asked = (hello.mode, hello.video_caps, hello.gamepad);
+    let held = game_override_terms(asked, &o, codec.max_dimension());
+    if held != asked {
+        let m = |m: punktfunk_core::Mode| format!("{}x{}@{}", m.width, m.height, m.refresh_hz);
+        tracing::info!(
+            game = %game,
+            requested = %m(asked.0),
+            granted = %m(held.0),
+            hdr_off = held.1 != asked.1,
+            gamepad = held.2.as_str(),
+            "game override applied"
+        );
+        (hello.mode, hello.video_caps, hello.gamepad) = held;
+    }
+}
+
+/// The half of a game override the host holds a client to: a lower mode, the width keeping
+/// the request's aspect; HDR off; the pad it names. It never raises: no panel is known here.
+fn game_override_terms(
+    (mode, caps, pad): (punktfunk_core::Mode, u8, GamepadPref),
+    o: &punktfunk_core::game_overrides::GameOverrides,
+    codec_max: u32,
+) -> (punktfunk_core::Mode, u8, GamepadPref) {
+    use punktfunk_core::game_overrides::{fit, GameOverrides};
+    let down = GameOverrides {
+        lines: o.lines.filter(|&l| l < mode.height),
+        hz: o.hz.filter(|&z| z < mode.refresh_hz),
+        ..GameOverrides::default()
+    };
+    let mode = if down.is_empty() {
+        mode
+    } else {
+        fit(mode, punktfunk_core::Mode::default(), &down, codec_max)
+    };
+    let caps = if o.hdr == Some(false) {
+        caps & !punktfunk_core::quic::VIDEO_CAP_HDR
+    } else {
+        caps
+    };
+    (mode, caps, o.gamepad_pref().unwrap_or(pad))
 }
 
 /// Mode-conflict before Welcome: stop this client's own earlier sessions, then join, steal or
@@ -1637,6 +1684,79 @@ mod tests {
                 None,
             ),
             20_000
+        );
+    }
+
+    fn mode(width: u32, height: u32, refresh_hz: u32) -> punktfunk_core::Mode {
+        punktfunk_core::Mode {
+            width,
+            height,
+            refresh_hz,
+        }
+    }
+
+    /// The host lowers what a client asked for and never raises it: it knows no panel, so a
+    /// 4K rule on a 1080p request is the client's to apply.
+    #[test]
+    fn a_game_override_only_lowers_the_mode() {
+        use punktfunk_core::game_overrides::GameOverrides;
+        let held =
+            |m, o: &GameOverrides, max| game_override_terms((m, 0, GamepadPref::Auto), o, max).0;
+        let o = GameOverrides {
+            lines: Some(1080),
+            hz: Some(60),
+            ..Default::default()
+        };
+        assert_eq!(held(mode(2560, 1600, 120), &o, 8192), mode(1728, 1080, 60));
+        assert_eq!(held(mode(3440, 1440, 144), &o, 8192), mode(2580, 1080, 60));
+        assert_eq!(held(mode(1280, 800, 90), &o, 8192), mode(1280, 800, 60));
+        assert_eq!(held(mode(1920, 1080, 30), &o, 8192), mode(1920, 1080, 30));
+        let up = GameOverrides {
+            lines: Some(2160),
+            hz: Some(144),
+            beyond_screen: true,
+            ..Default::default()
+        };
+        assert_eq!(held(mode(1920, 1080, 60), &up, 8192), mode(1920, 1080, 60));
+        let four_k = GameOverrides {
+            lines: Some(2160),
+            ..Default::default()
+        };
+        assert_eq!(
+            held(mode(7680, 4320, 60), &four_k, 4096),
+            mode(3840, 2160, 60)
+        );
+    }
+
+    /// HDR off clears only the HDR bit, so 10-bit SDR stays the host's own call.
+    #[test]
+    fn a_game_override_turns_hdr_off_and_names_the_pad() {
+        use punktfunk_core::game_overrides::GameOverrides;
+        use punktfunk_core::quic::{VIDEO_CAP_10BIT, VIDEO_CAP_HDR};
+        let m = mode(1920, 1080, 60);
+        let asked = (m, VIDEO_CAP_10BIT | VIDEO_CAP_HDR, GamepadPref::Xbox360);
+        let o = GameOverrides {
+            hdr: Some(false),
+            gamepad: Some("dualsense".into()),
+            ..Default::default()
+        };
+        assert_eq!(
+            game_override_terms(asked, &o, 8192),
+            (m, VIDEO_CAP_10BIT, GamepadPref::DualSense)
+        );
+        let on = GameOverrides {
+            hdr: Some(true),
+            ..Default::default()
+        };
+        let sdr = (m, 0, GamepadPref::Xbox360);
+        assert_eq!(
+            game_override_terms(sdr, &on, 8192),
+            sdr,
+            "HDR on is the client's ask"
+        );
+        assert_eq!(
+            game_override_terms(asked, &GameOverrides::default(), 8192),
+            asked
         );
     }
 

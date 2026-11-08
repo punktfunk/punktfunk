@@ -255,6 +255,12 @@ struct LaunchHoldView: View {
                     .foregroundStyle(.white.opacity(0.62))
                     .padding(.top, 10)
             }
+            if let hostLine = entry.overrides?.hostLine {
+                Text(hostLine)
+                    .font(.geist(14, .medium, relativeTo: .subheadline))
+                    .foregroundStyle(.white.opacity(0.62))
+                    .padding(.top, 4)
+            }
             if let developer = entry.developer, !developer.isEmpty {
                 Text(developer)
                     .font(.geist(14, .regular, relativeTo: .subheadline))

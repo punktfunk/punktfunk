@@ -125,6 +125,11 @@ clients/apple/Sources/PunktfunkKit/Demo/DemoScene.swift	Scroll up
 clients/apple/Sources/PunktfunkKit/Demo/DemoScene.swift	Scroll up
 clients/apple/Sources/PunktfunkKit/Demo/DemoScene.swift	Streamed from the demo host running inside this app.
 clients/apple/Sources/PunktfunkKit/Gamepad/GamepadManager.swift	Steam Controller
+clients/apple/Sources/PunktfunkKit/Gamepad/PadType.swift	HORIPAD for Steam
+clients/apple/Sources/PunktfunkKit/Gamepad/PadType.swift	Steam Controller
+clients/apple/Sources/PunktfunkKit/Gamepad/PadType.swift	Steam Controller 2
+clients/apple/Sources/PunktfunkKit/Gamepad/PadType.swift	Steam Controller 2 Puck
+clients/apple/Sources/PunktfunkKit/Gamepad/PadType.swift	Xbox Elite Series 2
 clients/apple/Sources/PunktfunkKit/Gamepad/RumbleRenderer.swift	DualSense HID · {}
 clients/apple/Sources/PunktfunkKit/Gamepad/RumbleRenderer.swift	Lost the direct connection to this DualSense; using the system path.
 clients/apple/Sources/PunktfunkKit/Gamepad/RumbleRenderer.swift	The system haptics service is refusing connections — no app can rumble a

@@ -354,6 +354,8 @@ clients wait until a slot frees. The limit isn't configurable.
 - **Which GPU** on a multi-GPU box: **Host → GPUs**. A pick there outranks `PUNKTFUNK_RENDER_NODE`
   and `PUNKTFUNK_RENDER_ADAPTER`.
 - **Event hooks and webhooks** — `hooks.json`: [Events & hooks](/docs/automation).
+- **Per-game stream settings** — `library-overrides.json`:
+  [Stream settings for a game](/docs/game-library#stream-settings-for-a-game).
 - **Browser streaming** ports: [Browser Client](/docs/browser-client).
 - **Encoder prerequisites** — drivers and firmware: [Requirements](/docs/requirements).
 - **Client settings** — resolution, bitrate, codec, HDR: [Client settings](/docs/client-settings).

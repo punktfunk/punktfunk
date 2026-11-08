@@ -569,6 +569,7 @@ mod tests {
             detect: DetectSpec::default(),
             on_window: OnWindow::default(),
             stats: None,
+            overrides: None,
             ids: BTreeMap::new(),
             filled: BTreeMap::new(),
             install: None,

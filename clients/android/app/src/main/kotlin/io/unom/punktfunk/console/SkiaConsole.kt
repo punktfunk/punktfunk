@@ -755,10 +755,10 @@ object SkiaConsole {
      * `OverlayAction::Launch` — the console asked for a session. The trust decision was the
      * console's (an unpaired host went to its Pair screen first), so this is the dial itself
      * ([HostServices.dial]): pinned by the row's fingerprint, with the host's bound preset or the
-     * pinned card's one-off, and — for the pair screen's "Request access" — the long approval
-     * budget. The password the console's prompt typed rides the first dial and is wiped once it
-     * returns; a `profile-locked` close reopens that prompt. The result lands on main, beside
-     * `CancelConnect`.
+     * pinned card's one-off, the host's overrides for a cached title, and — for the pair screen's
+     * "Request access" — the long approval budget. The password the console's prompt typed rides
+     * the first dial and is wiped once it returns; a `profile-locked` close reopens that prompt.
+     * The result lands on main, beside `CancelConnect`.
      */
     private fun ConsoleState.onLaunch(a: JSONObject) {
         // Taken first, so a launch that dials nothing still wipes it.
@@ -787,10 +787,12 @@ object SkiaConsole {
         }
         // The shell raises its hold for a GAME launch off a shelf; a desktop connect and a
         // launcher tile go straight through, so the session is handed over at once. Mirrors
-        // `Shell::launch_hold`, and reads the same cached catalog the shelf was drawn from.
-        holdsLaunch = launchId != null &&
-            LibraryCache.standard(app.cacheDir).load(LibraryCache.keyFor(kh, fp))?.games
-                ?.firstOrNull { it.id == launchId }?.isLauncher == false
+        // `Shell::launch_hold`, and reads the same cached catalog the shelf was drawn from, which
+        // also carries the host's overrides for the title.
+        val entry = launchId?.let { id ->
+            LibraryCache.standard(app.cacheDir).load(LibraryCache.keyFor(kh, fp))?.games?.firstOrNull { it.id == id }
+        }
+        holdsLaunch = entry?.isLauncher == false
         val preset: StreamPreset? = presetStore.resolveFor(kh, presetId, launchId)
         val effective = settings.effectiveFor(preset)
         val ticket = HostServices.Ticket()
@@ -804,6 +806,7 @@ object SkiaConsole {
             preset = preset,
             profile = profile,
             promptsUnlock = true,
+            overrides = entry?.overrides,
         )
         // A host the dial saves by what it presented is named by its advert, else its address.
         val name = services.discovered.firstOrNull { it.host == addr && it.port == port }?.name ?: addr

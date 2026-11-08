@@ -2,8 +2,8 @@
 //!
 //! Domain logic lives in [`crate::library`] and [`crate::runstate`]; this is the `/api/v1/library`
 //! surface. Lanes split on [`super::auth::AuthLane`]:
-//! - **admin** — custom CRUD, hide/unhide, scanner toggles, and operator-only launch fields
-//!   (`command`, `prep`).
+//! - **admin** — custom CRUD, hide/unhide, scanner toggles, game overrides, and operator-only
+//!   launch fields (`command`, `prep`).
 //! - **plugin** — reconcile and liveness report for the store it publishes; privileged fields
 //!   403, unservable local art is stripped rather than refusing the set.
 //! - **paired cert** — `GET /library` (hidden titles filtered, `command` values cleared) and
@@ -1147,6 +1147,224 @@ pub(crate) async fn set_library_art_pick(
             Json(picks).into_response()
         }
         Err(e) => host_error("library change refused", &e),
+    }
+}
+
+/// The answer to a refused game-override write.
+fn override_refused(e: crate::library::OverrideError) -> Response {
+    use crate::library::OverrideError as E;
+    use punktfunk_core::game_overrides as go;
+    let invalid = |text: String| api_error(StatusCode::BAD_REQUEST, &text);
+    match e {
+        E::Invalid("lines") => invalid(format!(
+            "lines must be {} to {}",
+            go::MIN_LINES,
+            go::MAX_LINES
+        )),
+        E::Invalid("hz") => invalid(format!("hz must be {} to {}", go::MIN_HZ, go::MAX_HZ)),
+        E::Invalid("name") => invalid(format!(
+            "a shared override needs a name of 1 to {} characters",
+            go::MAX_NAME_LEN
+        )),
+        E::Invalid("set") => invalid(
+            "set must be a shared override's id, with no values of its own beside it".into(),
+        ),
+        E::Invalid("none") => invalid("none stands alone, and only a game's entry takes it".into()),
+        E::Invalid(field) => invalid(format!("{field} is not a value the host knows")),
+        E::NameTaken => api_error_coded(
+            StatusCode::CONFLICT,
+            "library_override_name_taken",
+            "Another shared override already has this name. Pick a different one.",
+        ),
+        E::NoSuchSet => api_error(StatusCode::NOT_FOUND, "no shared override with that id"),
+        E::Save(e) => host_error("library change refused", &e),
+    }
+}
+
+/// Read the game overrides
+///
+/// The shared overrides, each game's entry and each source's, as `library-overrides.json`
+/// holds them. `GET /library` carries what each title resolves to.
+#[utoipa::path(
+    get,
+    path = "/library/overrides",
+    tag = "library",
+    operation_id = "getLibraryOverrides",
+    responses(
+        (status = OK, description = "The shared overrides and every game's and source's entry", body = crate::library::OverridesDoc),
+        (status = UNAUTHORIZED, description = "Missing or invalid bearer token", body = ApiError),
+    )
+)]
+pub(crate) async fn get_library_overrides() -> Json<crate::library::OverridesDoc> {
+    Json(crate::library::load_overrides())
+}
+
+/// Create a shared override
+///
+/// A named set of stream settings that games and sources point at. The host assigns its id.
+#[utoipa::path(
+    post,
+    path = "/library/overrides/sets",
+    tag = "library",
+    operation_id = "createOverrideSet",
+    request_body = crate::library::GameOverridesSchema,
+    responses(
+        (status = CREATED, description = "Created, with its id", body = crate::library::OverrideSet),
+        (status = BAD_REQUEST, description = "No name, or a value out of range", body = ApiError),
+        (status = UNAUTHORIZED, description = "Missing or invalid bearer token", body = ApiError),
+        (status = CONFLICT, description = "Another shared override has this name", body = ApiError),
+        (status = INTERNAL_SERVER_ERROR, description = "Couldn't save the overrides", body = ApiError),
+    )
+)]
+pub(crate) async fn create_override_set(
+    ApiJson(values): ApiJson<punktfunk_core::game_overrides::GameOverrides>,
+) -> Response {
+    match crate::library::create_override_set(values) {
+        Ok(set) => {
+            tracing::info!(set = %set.id, "management API: shared override created");
+            (StatusCode::CREATED, Json(set)).into_response()
+        }
+        Err(e) => override_refused(e),
+    }
+}
+
+/// Change a shared override
+///
+/// A field left out keeps its value; `null` clears it. Every game and source that uses it
+/// follows. Emits `library.changed` for each source they belong to.
+#[utoipa::path(
+    put,
+    path = "/library/overrides/sets/{id}",
+    tag = "library",
+    operation_id = "updateOverrideSet",
+    params(("id" = String, Path, description = "The shared override's id")),
+    request_body = crate::library::OverrideSetPatch,
+    responses(
+        (status = OK, description = "Stored; the shared override after the call", body = crate::library::OverrideSet),
+        (status = BAD_REQUEST, description = "No name left, or a value out of range", body = ApiError),
+        (status = UNAUTHORIZED, description = "Missing or invalid bearer token", body = ApiError),
+        (status = NOT_FOUND, description = "No shared override with that id", body = ApiError),
+        (status = CONFLICT, description = "Another shared override has this name", body = ApiError),
+        (status = INTERNAL_SERVER_ERROR, description = "Couldn't save the overrides", body = ApiError),
+    )
+)]
+pub(crate) async fn update_override_set(
+    Path(id): Path<String>,
+    ApiJson(patch): ApiJson<crate::library::OverrideSetPatch>,
+) -> Response {
+    match crate::library::update_override_set(&id, patch) {
+        Ok(set) => {
+            tracing::info!(set = %id, "management API: shared override changed");
+            Json(set).into_response()
+        }
+        Err(e) => override_refused(e),
+    }
+}
+
+/// Delete a shared override
+///
+/// The games and sources that used it lose their entry and go back to what the device
+/// decides. The answer counts them. Emits `library.changed` for each source they belong to.
+#[utoipa::path(
+    delete,
+    path = "/library/overrides/sets/{id}",
+    tag = "library",
+    operation_id = "deleteOverrideSet",
+    params(("id" = String, Path, description = "The shared override's id")),
+    responses(
+        (status = OK, description = "Deleted; how many games and sources used it", body = crate::library::OverrideUsers),
+        (status = UNAUTHORIZED, description = "Missing or invalid bearer token", body = ApiError),
+        (status = NOT_FOUND, description = "No shared override with that id", body = ApiError),
+        (status = INTERNAL_SERVER_ERROR, description = "Couldn't save the overrides", body = ApiError),
+    )
+)]
+pub(crate) async fn delete_override_set(Path(id): Path<String>) -> Response {
+    match crate::library::delete_override_set(&id) {
+        Ok(users) => {
+            tracing::info!(
+                set = %id,
+                games = users.games,
+                sources = users.sources,
+                "management API: shared override deleted"
+            );
+            Json(users).into_response()
+        }
+        Err(e) => override_refused(e),
+    }
+}
+
+/// Set one game's overrides
+///
+/// `{ "set": id }` points the game at a shared override; fields alone are its own values;
+/// `{ "none": true }` leaves it to the device, whatever the source sets; `{}` clears its entry,
+/// and the game takes its source's. The id is not required to exist now, as with hiding.
+/// Emits `library.changed`.
+#[utoipa::path(
+    put,
+    path = "/library/overrides/games/{id}",
+    tag = "library",
+    operation_id = "setGameOverrides",
+    params(("id" = String, Path, description = "The library entry id (e.g. `steam:70`)")),
+    request_body = crate::library::OverrideEntry,
+    responses(
+        (status = OK, description = "Stored; the game's entry after the call", body = crate::library::OverrideEntry),
+        (status = BAD_REQUEST, description = "Empty id, a value out of range, or `set` or `none` beside another field", body = ApiError),
+        (status = UNAUTHORIZED, description = "Missing or invalid bearer token", body = ApiError),
+        (status = NOT_FOUND, description = "`set` names no shared override", body = ApiError),
+        (status = INTERNAL_SERVER_ERROR, description = "Couldn't save the overrides", body = ApiError),
+    )
+)]
+pub(crate) async fn set_game_overrides(
+    Path(id): Path<String>,
+    ApiJson(entry): ApiJson<crate::library::OverrideEntry>,
+) -> Response {
+    if id.trim().is_empty() {
+        return api_error(StatusCode::BAD_REQUEST, "entry id must not be empty");
+    }
+    match crate::library::set_game_overrides(&id, entry) {
+        Ok(entry) => {
+            tracing::info!(entry = %id, "management API: game overrides set");
+            Json(entry).into_response()
+        }
+        Err(e) => override_refused(e),
+    }
+}
+
+/// Set one source's overrides
+///
+/// The same body as a game's, without `none`: `{}` clears the source's entry. Each title of
+/// the source without an entry of its own takes it. Emits `library.changed`.
+#[utoipa::path(
+    put,
+    path = "/library/overrides/sources/{source}",
+    tag = "library",
+    operation_id = "setSourceOverrides",
+    params(("source" = String, Path, description = "The source, the store part of a library id (e.g. `lutris`)")),
+    request_body = crate::library::OverrideEntry,
+    responses(
+        (status = OK, description = "Stored; the source's entry after the call", body = crate::library::OverrideEntry),
+        (status = BAD_REQUEST, description = "Empty source, a value out of range, `set` beside values, or `none`", body = ApiError),
+        (status = UNAUTHORIZED, description = "Missing or invalid bearer token", body = ApiError),
+        (status = NOT_FOUND, description = "`set` names no shared override", body = ApiError),
+        (status = INTERNAL_SERVER_ERROR, description = "Couldn't save the overrides", body = ApiError),
+    )
+)]
+pub(crate) async fn set_source_overrides(
+    Path(source): Path<String>,
+    ApiJson(entry): ApiJson<crate::library::OverrideEntry>,
+) -> Response {
+    if source.trim().is_empty() || source.contains(':') {
+        return api_error(
+            StatusCode::BAD_REQUEST,
+            "source must be a store name, with no `:`",
+        );
+    }
+    match crate::library::set_source_overrides(&source, entry) {
+        Ok(entry) => {
+            tracing::info!(source = %source, "management API: source overrides set");
+            Json(entry).into_response()
+        }
+        Err(e) => override_refused(e),
     }
 }
 

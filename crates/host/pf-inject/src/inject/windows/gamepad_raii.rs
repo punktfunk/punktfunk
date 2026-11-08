@@ -192,7 +192,7 @@ impl PadChannel {
                 driver_proto,
                 host_proto = GAMEPAD_PROTO_VERSION,
                 "gamepad driver/host protocol mismatch on the bootstrap mailbox — update the \
-                 drivers: punktfunk-host.exe driver install --gamepad"
+                 drivers: run the Punktfunk installer again"
             );
         }
 
@@ -268,8 +268,8 @@ impl PadChannel {
                         error = %error,
                         "the pad's devnode has not answered a channel proof — the host will NOT \
                          hand the DATA section to a pid it cannot verify, so this pad stays \
-                         unattached (an old driver? reinstall: punktfunk-host.exe driver install \
-                         --gamepad)"
+                         unattached (an old driver? reinstall: run the Punktfunk \
+                         installer again)"
                     );
                 } else {
                     tracing::debug!(

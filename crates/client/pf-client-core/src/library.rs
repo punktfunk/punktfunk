@@ -9,6 +9,7 @@
 //! Types (`GameEntry`, `Artwork`, `RunningGame`, `LibraryError`, `base_url`) are
 //! portable. The ureq/rustls fetch path is desktop-gated (`linux` / `windows`).
 
+pub use punktfunk_core::game_overrides::GameOverrides;
 use serde::{Deserialize, Serialize};
 #[cfg(desktop)]
 use std::collections::VecDeque;
@@ -97,6 +98,58 @@ pub struct GameEntry {
     /// doesn't install is.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub install: Option<TitleInstall>,
+    /// What the host set for this game, applied at the connect that launches it. `None`
+    /// from a host that sets nothing, or predates game overrides.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub overrides: Option<GameOverrides>,
+}
+
+/// One host-set field as a player reads it: `1080p`, `60 Hz`, `HDR off`, `DualSense`. `field`
+/// is the settings row's preset field (`resolution`, `refresh_hz`, `hdr_enabled`, `gamepad`);
+/// `None` when the override leaves it to the device.
+pub fn override_value(o: &GameOverrides, field: &str) -> Option<String> {
+    use pf_l10n::client as c;
+    match field {
+        "resolution" => o.lines.map(|l| format!("{l}p")),
+        "refresh_hz" => o.hz.map(pf_l10n::common::common_hz),
+        "hdr_enabled" => o.hdr.map(|on| {
+            if on {
+                c::lib_host_override_hdr_on()
+            } else {
+                c::lib_host_override_hdr_off()
+            }
+            .to_string()
+        }),
+        "gamepad" => o
+            .gamepad_pref()
+            .map(|p| crate::menu_nav::pad_name(p).to_string()),
+        _ => None,
+    }
+}
+
+/// `Host: 1080p60 DualSense` for a launch hold, a details sheet or a link prompt: the shared
+/// override's name, else the values, `Host: 1080p60, DualSense`. `None` when nothing is set.
+pub fn host_line(o: &GameOverrides) -> Option<String> {
+    if o.is_empty() {
+        return None;
+    }
+    if let Some(name) = o.name.as_deref().filter(|n| !n.trim().is_empty()) {
+        return Some(pf_l10n::client::lib_host_override(name));
+    }
+    let mode = match (o.lines, o.hz) {
+        (Some(l), Some(z)) => Some(format!("{l}p{z}")),
+        _ => override_value(o, "resolution").or_else(|| override_value(o, "refresh_hz")),
+    };
+    let values: Vec<String> = [
+        mode,
+        override_value(o, "hdr_enabled"),
+        override_value(o, "gamepad"),
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
+    // `beyond_screen` alone sets no value a player reads.
+    (!values.is_empty()).then(|| pf_l10n::client::lib_host_override(values.join(", ")))
 }
 
 /// A title's files on the host, from the library entry's `install`.
@@ -1824,5 +1877,60 @@ mod tests {
     fn ipv6_base_url_is_bracketed() {
         assert_eq!(base_url("fe80::1", 47990), "https://[fe80::1]:47990");
         assert_eq!(base_url("192.168.1.42", 1234), "https://192.168.1.42:1234");
+    }
+
+    /// The host line names a shared override, else the values it set, and nothing for none.
+    #[test]
+    fn the_host_line_names_the_set_or_its_values() {
+        let named = GameOverrides {
+            name: Some("1080p60 DualSense".into()),
+            lines: Some(1080),
+            ..Default::default()
+        };
+        assert_eq!(
+            host_line(&named).as_deref(),
+            Some("Host: 1080p60 DualSense")
+        );
+        let values = GameOverrides {
+            lines: Some(1080),
+            hz: Some(60),
+            hdr: Some(false),
+            gamepad: Some("dualsense".into()),
+            ..Default::default()
+        };
+        assert_eq!(
+            host_line(&values).as_deref(),
+            Some("Host: 1080p60, HDR off, DualSense")
+        );
+        let hz = GameOverrides {
+            hz: Some(120),
+            ..Default::default()
+        };
+        assert_eq!(host_line(&hz).as_deref(), Some("Host: 120 Hz"));
+        assert_eq!(host_line(&GameOverrides::default()), None);
+        let beyond = GameOverrides {
+            beyond_screen: true,
+            ..Default::default()
+        };
+        assert_eq!(host_line(&beyond), None, "the option alone shows nothing");
+    }
+
+    /// A catalog entry keeps the host's overrides through the cache's write and read.
+    #[test]
+    fn a_game_entry_round_trips_its_overrides() {
+        let wire = r#"{"id":"steam:570","store":"steam","title":"Dota 2",
+            "overrides":{"name":"4K","lines":2160,"beyond_screen":true,"future":1}}"#;
+        let g: GameEntry = serde_json::from_str(wire).unwrap();
+        let o = g.overrides.clone().expect("decoded");
+        assert_eq!(
+            (o.name.as_deref(), o.lines, o.beyond_screen),
+            (Some("4K"), Some(2160), true)
+        );
+        let back: GameEntry = serde_json::from_str(&serde_json::to_string(&g).unwrap()).unwrap();
+        assert_eq!(back.overrides, Some(o));
+        let plain: GameEntry =
+            serde_json::from_str(r#"{"id":"a","store":"steam","title":"A"}"#).unwrap();
+        assert!(plain.overrides.is_none());
+        assert!(!serde_json::to_string(&plain).unwrap().contains("overrides"));
     }
 }

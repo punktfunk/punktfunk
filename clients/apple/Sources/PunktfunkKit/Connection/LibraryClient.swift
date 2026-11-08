@@ -102,10 +102,12 @@ public struct GameEntry: Codable, Hashable, Identifiable, Sendable {
     public var stats: GameStats?
     /// A title a plugin installs; `nil` is installed, as every other title is.
     public var install: TitleInstall?
+    /// What the host sets for this game on every device; `nil` when it sets nothing.
+    public var overrides: GameOverrides?
 
     private enum CodingKeys: String, CodingKey {
         case id, store, title, art, launch, role, icon, platform
-        case developer, publisher, genres, description, tags, players, stats, install
+        case developer, publisher, genres, description, tags, players, stats, install, overrides
         case releaseYear = "release_year"
     }
 
@@ -278,6 +280,30 @@ public enum InstallOutcome: Equatable, Sendable {
         case .failed(let why): return action.failed(title: title, why: why)
         }
     }
+}
+
+public extension GameOverrides {
+    /// What the host sets, for the "Host: …" line: the shared override's name, else its values
+    /// (`1080p60, DualSense, HDR off`). nil when it sets nothing worth a line.
+    var summary: String? {
+        guard !isEmpty else { return nil }
+        if let name, !name.isEmpty { return name }
+        let mode: String? = switch (lines, hz) {
+        case let (l?, z?): "\(l)p\(z)"
+        case let (l?, nil): "\(l)p"
+        case let (nil, z?): L10n.commonHz(value: String(z))
+        case (nil, nil): nil
+        }
+        let pad = gamepad.flatMap(PunktfunkConnection.GamepadType.init(name:))?.padName
+        let hdr = hdr.map {
+            String(localized: $0 ? L10n.libHostOverrideHdrOn : L10n.libHostOverrideHdrOff)
+        }
+        let parts = [mode, pad, hdr].compactMap { $0 }
+        return parts.isEmpty ? nil : parts.joined(separator: ", ")
+    }
+
+    /// `Host: 1080p60, DualSense`, or nil when it sets nothing.
+    var hostLine: String? { summary.map { L10n.libHostOverride(rule: $0) } }
 }
 
 public extension Array where Element == GameEntry {

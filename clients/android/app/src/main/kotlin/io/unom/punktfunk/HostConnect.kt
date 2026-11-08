@@ -9,6 +9,7 @@ import io.unom.punktfunk.kit.Gamepad
 import io.unom.punktfunk.kit.ConnectRequest
 import io.unom.punktfunk.kit.NativeBridge
 import io.unom.punktfunk.kit.VideoDecoders
+import io.unom.punktfunk.kit.library.GameOverrides
 import io.unom.punktfunk.kit.security.KnownHost
 import io.unom.punktfunk.kit.security.KnownHostStore
 import io.unom.punktfunk.models.ActiveSession
@@ -148,24 +149,34 @@ class SessionOwner(private val close: (Long) -> Unit) {
     }
 }
 
+/** The host's HDR and pad for this game in place of the device's; the mode is [GameOverrides.fit]'s. */
+fun Settings.underHost(o: GameOverrides?): Settings =
+    if (o == null) this else copy(hdrEnabled = o.hdr ?: hdrEnabled, gamepad = o.gamepadPref ?: gamepad)
+
 /**
  * The one place [NativeBridge.nativeConnect] is assembled, for [JniHostNative]. Derives the mode,
- * HDR and gamepad settings the host needs from [spec]'s settings, waits for the last session's
- * close, and dials off the main thread. The dial cannot be interrupted, so it runs
- * `NonCancellable`. [unlock] crosses as byte arrays and is wiped when the native call returns.
- * Returns the session handle, or `0` on failure.
+ * HDR and gamepad settings the host needs from [spec]'s settings under its game overrides, waits
+ * for the last session's close, and dials off the main thread. The dial cannot be interrupted, so
+ * it runs `NonCancellable`. [unlock] crosses as byte arrays and is wiped when the native call
+ * returns. Returns the session handle, or `0` on failure.
  */
 suspend fun connectToHost(context: Context, spec: DialSpec, unlock: Unlock? = null): Long {
-    val settings = spec.settings
-    // Advertise HDR only when the user enabled it AND this device's display can present it (else the
-    // host sends a proper SDR stream rather than PQ the panel would mis-tone-map).
-    val (baseW, baseH, hz) = settings.effectiveMode(context)
+    val settings = spec.settings.underHost(spec.overrides)
+    val (baseW, baseH, baseHz) = settings.effectiveMode(context)
     // Render scale: ask the host for `chosen mode × scale` (even + codec-clamped) — > 1 supersamples
     // (the compositor downscales the larger decoded frame to the SurfaceView), < 1 renders under
     // native. 1.0 leaves the resolved mode untouched.
-    val (w, h) = RenderScale.apply(
+    val (scaledW, scaledH) = RenderScale.apply(
         baseW, baseH, settings.renderScale, RenderScale.maxDimension(settings.codec)
     )
+    // A size or rate the host sets for this game wins, within this panel and this codec.
+    val (w, h, hz) = spec.overrides?.fit(
+        Triple(scaledW, scaledH, baseHz),
+        nativeDisplayMode(context, secondScreen = settings.secondScreen),
+        RenderScale.maxDimension(settings.codec),
+    ) ?: Triple(scaledW, scaledH, baseHz)
+    // Advertise HDR only when it is on AND this device's display can present it (else the host
+    // sends a proper SDR stream rather than PQ the panel would mis-tone-map).
     val hdrEnabled = settings.hdrEnabled && displaySupportsHdr(context)
     // 10-bit on its own asks nothing of the PANEL: Main10 at BT.709 decodes and presents on an
     // ordinary display, and the compositor dithers what it cannot show. So this is the user's

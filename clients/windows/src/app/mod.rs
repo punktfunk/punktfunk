@@ -727,7 +727,14 @@ impl Shell {
         let pending = self.link_confirm.clone();
         let content = pending
             .as_ref()
-            .map(|p| rules::link_prompt(&p.host.name, &p.host.addr, p.launch.as_deref()))
+            .map(|p| {
+                rules::link_prompt(
+                    &p.host.name,
+                    &p.host.addr,
+                    p.launch.as_deref(),
+                    p.overrides.as_ref(),
+                )
+            })
             .unwrap_or_default();
         let (ctx, ss, st, sc) = (
             self.ctx.clone(),

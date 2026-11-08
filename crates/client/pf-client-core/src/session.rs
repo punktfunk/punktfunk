@@ -114,6 +114,8 @@ pub struct SessionParams {
     /// That preset's stable id: the dial names it to the host, which shows it and hands it to
     /// hooks and plugins. `None` with `preset` from an older spec just names nothing.
     pub preset_id: Option<String>,
+    /// The host set this game's stream; the stats line says so ([`Self::hud_preset`]).
+    pub host_overrides: bool,
     /// Overlay tier this launch resolved to. Presentation-only: the controller never
     /// reads it. It rides so a browse-mode presenter (one window, many sessions) can
     /// adopt a per-launch choice; the in-stream cycle chord still wins for that stream.
@@ -197,18 +199,26 @@ impl SessionParams {
     /// One fill for a resolved spec and a [`Dial`]. Probes stay off the plan.
     ///
     /// The mode is [`Settings::stream_mode`](crate::trust::Settings::stream_mode) over the
-    /// probed one. `exclude_codecs` stays 0. `want_444` is the switch; caps carry 4:4:4 only
-    /// when `hevc_444_hardware` is set too. HDR caps need the setting and
-    /// [`Probes::hdr_enabled`]. The panel volume follows the probe alone.
+    /// probed one, then the host's game overrides [`fit`](punktfunk_core::game_overrides::fit)
+    /// to that panel and the codec. Their HDR and pad are already in `settings`
+    /// ([`ResolvedSpec::new`](crate::orchestrate::ResolvedSpec::new)). `exclude_codecs` stays
+    /// 0. `want_444` is the switch; caps carry 4:4:4 only when `hevc_444_hardware` is set
+    /// too. HDR caps need the setting and [`Probes::hdr_enabled`]. The panel volume follows
+    /// the probe alone.
     pub fn from_plan(
         settings: &crate::trust::Settings,
         clipboard: bool,
         preset: Option<String>,
         preset_id: Option<String>,
+        overrides: Option<&punktfunk_core::game_overrides::GameOverrides>,
         dial: Dial,
         probes: Probes,
     ) -> Self {
-        let mode = settings.stream_mode(probes.mode);
+        let mut mode = settings.stream_mode(probes.mode);
+        if let Some(o) = overrides {
+            let max = punktfunk_core::render_scale::max_dimension(&settings.codec);
+            mode = punktfunk_core::game_overrides::fit(mode, probes.mode, o, max);
+        }
         let caps_444 = settings.enable_444 && probes.hevc_444_hardware;
         // The CPU rung is 8-bit: without a hardware 10-bit path the host would
         // build a stream this client tears down.
@@ -265,6 +275,7 @@ impl SessionParams {
             force_software: probes.force_software,
             preset,
             preset_id,
+            host_overrides: overrides.is_some_and(|o| !o.is_empty()),
             stats_verbosity: probes.stats_verbosity,
             advanced_stats: settings.advanced_stats,
             // The desktop overlay's own corner is top left.
@@ -288,6 +299,18 @@ impl SessionParams {
             shows_screens: settings.all_screens(),
             prompts_unlock: false,
             unlock: Arc::default(),
+        }
+    }
+
+    /// What the stats line names: the preset, then that the host set this game's stream.
+    /// Display only; the dial names `preset` alone.
+    pub fn hud_preset(&self) -> Option<String> {
+        let host = self
+            .host_overrides
+            .then(pf_l10n::client::overlay_host_override);
+        match (self.preset.as_deref(), host) {
+            (Some(p), Some(h)) => Some(format!("{p} \u{b7} {h}")),
+            (p, h) => p.or(h).map(str::to_string),
         }
     }
 
