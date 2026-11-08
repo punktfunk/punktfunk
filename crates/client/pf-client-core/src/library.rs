@@ -1048,11 +1048,10 @@ impl<T: Clone + Send + 'static> FpCache<T> {
         self.map().remove(fp_hex);
     }
 
-    /// Let the next [`FpCache::refresh`] fetch again while [`FpCache::get`] keeps the old rows.
-    pub(crate) fn expire(&self, fp_hex: &str) {
-        if let Some(entry) = self.map().get_mut(fp_hex) {
-            entry.0 = Instant::now().checked_sub(self.ttl).unwrap_or(entry.0);
-        }
+    /// Store rows a caller fetched itself, as fresh as a [`FpCache::refresh`] landing now.
+    pub(crate) fn put(&self, fp_hex: &str, rows: Vec<T>) {
+        self.map()
+            .insert(fp_hex.to_string(), (Instant::now(), rows));
     }
 }
 

@@ -5,6 +5,7 @@
 use super::ConnectRequest;
 use crate::discovery::{self, DiscoveredHost};
 use crate::trust::{KnownHost, Settings};
+use pf_client_core::display_targets::{DisplayTarget, Targets};
 use pf_client_core::host_order::{self, Arrangeable};
 use pf_client_core::orchestrate::HostTarget;
 use pf_client_core::profiles::ProfilePick;
@@ -122,6 +123,8 @@ pub struct CardModel {
     pub status: Status,
     /// What a plain click connects with: a pinned card's preset, else the host's binding.
     pub chip: Option<Preset>,
+    /// "Streams LG TV" when a connect mirrors one of the host's monitors.
+    pub screen: Option<String>,
     pub kind: CardKind,
     pub request: ConnectRequest,
     pub last_used: Option<u64>,
@@ -166,12 +169,22 @@ pub struct Live<'a> {
     pub sessions: &'a HashMap<String, Phase>,
     /// What a host has up, by fingerprint; empty when nothing is.
     pub playing: &'a dyn Fn(&str) -> String,
+    /// The card's screen line, by fingerprint ([`screen_line`]).
+    pub screen: &'a dyn Fn(&str) -> Option<String>,
 }
 
 impl Live<'_> {
     pub fn online(&self, k: &KnownHost) -> bool {
         self.probed.get(&k.card_key()).copied().unwrap_or(false)
     }
+}
+
+/// What a card says about the host's screen: the pick only when it is one of the host's
+/// monitors. Its own screen is the ordinary case and says nothing.
+pub fn screen_line(targets: Option<&Targets>) -> Option<String> {
+    targets
+        .filter(|t| matches!(t.current(), DisplayTarget::Monitor(_)))
+        .map(Targets::summary)
 }
 
 /// The saved cards in the device's order, split into its bands. A host's pinned cards follow
@@ -185,10 +198,10 @@ pub fn saved_bands(
     let mut cards = Vec::new();
     for k in hosts {
         let online = live.online(k);
-        let playing = if k.fp_hex.is_empty() {
-            String::new()
+        let (playing, screen) = if k.fp_hex.is_empty() {
+            (String::new(), None)
         } else {
-            (live.playing)(&k.fp_hex)
+            ((live.playing)(&k.fp_hex), (live.screen)(&k.fp_hex))
         };
         let is_default = k.id.is_some() && settings.default_host.as_deref() == k.id.as_deref();
         let card = |pinned: Option<&Preset>, phase: Option<Phase>| {
@@ -211,6 +224,7 @@ pub fn saved_bands(
                 os: k.os.clone(),
                 status: Status::of(k, online, phase, &playing, settings.auto_wake),
                 chip: pinned.or(bound).cloned(),
+                screen: screen.clone(),
                 kind: CardKind::Saved {
                     id: k.id.clone(),
                     paired: k.paired,
@@ -285,6 +299,7 @@ pub fn discovered_cards<'a>(
                 address: format!("{}:{}", a.addr, a.port),
                 os: a.os.clone(),
                 chip: None,
+                screen: None,
                 kind: CardKind::Discovered {
                     pair_optional: request.pair_optional,
                 },
@@ -354,6 +369,7 @@ mod tests {
                     String::new()
                 }
             },
+            screen: &|_| None,
         };
         saved_bands(hosts, presets, s, &live)
     }
@@ -451,6 +467,7 @@ mod tests {
             probed: &HashMap::new(),
             sessions: &sessions,
             playing: &|_| String::new(),
+            screen: &|_| None,
         };
         let status = |name: &str| {
             saved_bands(&hosts, &[], &Settings::default(), &live)
@@ -462,5 +479,43 @@ mod tests {
         assert_eq!(status("Desk"), Some(Status::Streaming));
         assert_eq!(status("Den"), Some(Status::Connecting));
         assert_eq!(status("Lab"), Some(Status::Offline));
+    }
+
+    /// A card names the screen only when a connect mirrors a monitor, on every card of the host.
+    #[test]
+    fn a_card_names_a_monitor_pick_only() {
+        let tv: Targets = serde_json::from_str(
+            r#"{"host_default": "own", "yours": {"monitor": "HDMI-A-1"},
+                "targets": [{"id": "own"}, {"id": "HDMI-A-1", "label": "LG TV"}]}"#,
+        )
+        .unwrap();
+        assert_eq!(screen_line(Some(&tv)).as_deref(), Some("Streams LG TV"));
+        let own = Targets {
+            yours: Some(DisplayTarget::Own),
+            ..tv.clone()
+        };
+        assert_eq!(screen_line(Some(&own)), None);
+        assert_eq!(
+            screen_line(None),
+            None,
+            "a host without the route says nothing"
+        );
+
+        let mut desk = host("Desk", "10.0.0.2", "ab");
+        desk.pinned_presets = vec!["g".into()];
+        let game = Preset {
+            id: "g".into(),
+            name: "Game".into(),
+            accent: None,
+        };
+        let live = Live {
+            probed: &HashMap::new(),
+            sessions: &HashMap::new(),
+            playing: &|_| String::new(),
+            screen: &|fp| screen_line(Some(&tv)).filter(|_| fp == "ab"),
+        };
+        let out = saved_bands(&[desk], &[game], &Settings::default(), &live);
+        let lines: Vec<_> = out[0].cards.iter().map(|c| c.screen.as_deref()).collect();
+        assert_eq!(lines, [Some("Streams LG TV"), Some("Streams LG TV")]);
     }
 }

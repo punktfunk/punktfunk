@@ -136,8 +136,9 @@ pub fn fetch_targets(
 }
 
 /// `PUT /api/v1/display/clients/{this device's fingerprint}` with `{"screen": target}`, then
-/// a fresh fetch. `fp_hex` is the host's fingerprint: the pin and the cache key. `Err` is a
-/// phrase each shell frames, like [`crate::library::LibraryError`]'s.
+/// the host's rows read back into [`cached`] before this returns, so a shell redraws from them
+/// at once. `fp_hex` is the host's fingerprint: the pin and the cache key. `Err` is a phrase
+/// each shell frames, like [`crate::library::LibraryError`]'s.
 #[cfg(desktop)]
 pub fn set_target(
     addr: &str,
@@ -149,7 +150,7 @@ pub fn set_target(
 ) -> Result<(), String> {
     use crate::library::{HostApi, LibraryError};
     let pin = crate::trust::parse_hex32(fp_hex);
-    let put = || -> Result<(), LibraryError> {
+    let write = || -> Result<(), LibraryError> {
         let device = punktfunk_core::quic::endpoint::fingerprint_of_pem(&identity.0)
             .map_err(|e| LibraryError::Unreachable(e.to_string()))?;
         let path = format!(
@@ -165,10 +166,12 @@ pub fn set_target(
             code => Err(LibraryError::Http(code)),
         }
     };
-    let said = put().map_err(|e| e.to_string());
-    // Whatever the answer, the host's rows may have moved: ask again, keeping the old rows up.
-    TARGETS.expire(fp_hex);
-    refresh(addr, mgmt_port, stream_port, fp_hex);
+    let said = write().map_err(|e| e.to_string());
+    // Whatever the answer, the host's rows may have moved: read them back now. A miss keeps
+    // the old rows up.
+    if let Some(rows) = fetch_targets(addr, mgmt_port, stream_port, identity, pin) {
+        TARGETS.put(fp_hex, vec![rows]);
+    }
     said
 }
 

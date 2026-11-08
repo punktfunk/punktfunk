@@ -1,7 +1,7 @@
 //! The host page (design §2.4): everything about one saved host beyond the daily act, as
-//! grouped rows pushed over the hosts page — presets, connection, pairing, power, support and
-//! removal. Opened from a card's ⓘ or its Host Details… row. The hosts page refreshes it on
-//! every change it draws; a row being edited keeps what was typed.
+//! grouped rows pushed over the hosts page — presets, screen, connection, pairing, power,
+//! support and removal. Opened from a card's ⓘ or its Host Details… row. The hosts page
+//! refreshes it on every change it draws; a row being edited keeps what was typed.
 
 use super::card::os_icon_name;
 use super::model::{Preset, Status};
@@ -10,6 +10,7 @@ use crate::store::{Changed, Store};
 use crate::trust::{HostEdit, KnownHost};
 use adw::prelude::*;
 use gtk::glib;
+use pf_client_core::display_targets::{DisplayTarget, Target, Targets};
 use pf_client_core::host_actions::ActionInfo;
 use pf_client_core::orchestrate::HostTarget;
 use pf_client_core::start::StartIn;
@@ -24,12 +25,17 @@ pub struct Live {
     pub presets: Vec<Preset>,
     /// The host's own actions this device may run (sleep, restart, shut down).
     pub actions: Vec<ActionInfo>,
+    /// The screens the host offers this device; `None` hides the section.
+    pub screens: Option<Targets>,
     pub is_default: bool,
     pub start_in: StartIn,
 }
 
 /// The power rows on screen: id, can run now, why not.
 type ActionsShown = Vec<(String, bool, Option<String>)>;
+
+/// The screen rows on screen: the host's answer, and whether it is reachable to write to.
+type ScreensShown = (Option<Targets>, bool);
 
 /// State the row handlers share: the record they act on, and a switch that silences them
 /// while `refresh` writes rows.
@@ -102,6 +108,9 @@ pub struct DetailPage {
     preset_rows: RefCell<Vec<gtk::Widget>>,
     binding: RefCell<Option<(adw::ComboRow, Vec<String>)>>,
     pins: RefCell<Vec<(String, adw::SwitchRow)>>,
+    screen_group: adw::PreferencesGroup,
+    screens_shown: RefCell<Option<ScreensShown>>,
+    screen_rows: RefCell<Vec<adw::ActionRow>>,
     name_row: adw::EntryRow,
     addr_row: adw::EntryRow,
     port_row: adw::EntryRow,
@@ -187,6 +196,14 @@ impl DetailPage {
             .title(glib::markup_escape_text(client::hostcard_section_presets()))
             .build();
         prefs.add(&presets_group);
+
+        // ---- Screen: rows built by `refresh` from the host's answer ----
+        let screen_group = adw::PreferencesGroup::builder()
+            .title(glib::markup_escape_text(client::hostcard_section_screen()))
+            .description(glib::markup_escape_text(client::screen_hint()))
+            .visible(false)
+            .build();
+        prefs.add(&screen_group);
 
         // ---- Connection ----
         let connection = adw::PreferencesGroup::builder()
@@ -382,6 +399,9 @@ impl DetailPage {
             preset_rows: RefCell::default(),
             binding: RefCell::new(None),
             pins: RefCell::default(),
+            screen_group,
+            screens_shown: RefCell::new(None),
+            screen_rows: RefCell::default(),
             name_row,
             addr_row,
             port_row,
@@ -435,6 +455,7 @@ impl DetailPage {
         self.library.set_visible(k.paired);
 
         self.refresh_presets(k, &live.presets);
+        self.refresh_screens(live.screens.as_ref(), live.online);
 
         set_if_idle(&self.name_row, &k.name);
         set_if_idle(&self.addr_row, &k.addr);
@@ -578,6 +599,57 @@ impl DetailPage {
         }
     }
 
+    /// One row per screen the host offers this device, the current one checked; an off or
+    /// taken head stays, insensitive, with why. A locked host gets one insensitive row: what
+    /// it streams, and that its settings file decides. Offline, nothing can be written.
+    fn refresh_screens(&self, targets: Option<&Targets>, online: bool) {
+        let shown = (targets.cloned(), online);
+        if self.screens_shown.borrow().as_ref() == Some(&shown) {
+            return;
+        }
+        for row in self.screen_rows.borrow_mut().drain(..) {
+            self.screen_group.remove(&row);
+        }
+        let rows: Vec<adw::ActionRow> = match targets {
+            None => Vec::new(),
+            Some(t) if t.locked => {
+                let row = data_row(&t.summary(), client::screen_locked_hint());
+                row.set_sensitive(false);
+                vec![row]
+            }
+            Some(t) => t
+                .targets
+                .iter()
+                .map(|row| self.screen_row(row, t.current(), online))
+                .collect(),
+        };
+        self.screen_group.set_visible(!rows.is_empty());
+        for row in rows {
+            self.screen_group.add(&row);
+            self.screen_rows.borrow_mut().push(row);
+        }
+        *self.screens_shown.borrow_mut() = Some(shown);
+    }
+
+    fn screen_row(&self, t: &Target, current: &DisplayTarget, online: bool) -> adw::ActionRow {
+        let reason = t.reason();
+        let row = data_row(t.name(), &reason.clone().unwrap_or_else(|| t.detail()));
+        row.set_activatable(true);
+        if t.target() == *current {
+            row.add_suffix(&crate::widgets::lucide::row_icon("check"));
+        }
+        row.set_sensitive(online && reason.is_none());
+        let (ctx, screen, label) = (self.ctx.clone(), t.target(), t.name().to_string());
+        row.connect_activated(move |_| {
+            ctx.act(Act::Screen {
+                req: ctx.request(),
+                screen: screen.clone(),
+                label: label.clone(),
+            })
+        });
+        row
+    }
+
     /// One row per action the host grants this device; one it cannot run now stays, disabled,
     /// with the host's reason.
     fn refresh_actions(&self, actions: &[ActionInfo], online: bool) {
@@ -637,6 +709,19 @@ fn action_row(title: &str, subtitle: &str) -> adw::ActionRow {
         row.set_subtitle(subtitle);
     }
     row.add_suffix(&crate::widgets::lucide::row_icon("chevron-right"));
+    row
+}
+
+/// A row whose words may come from the host (a monitor's label, a device's pairing name):
+/// plain text, never markup.
+fn data_row(title: &str, subtitle: &str) -> adw::ActionRow {
+    let row = adw::ActionRow::builder()
+        .title(title)
+        .use_markup(false)
+        .build();
+    if !subtitle.is_empty() {
+        row.set_subtitle(subtitle);
+    }
     row
 }
 
