@@ -4066,7 +4066,7 @@
           "library"
         ],
         "summary": "Set one game's overrides",
-        "description": "`{ \"set\": id }` points the game at a shared override; fields alone are its own values;\n`{}` clears its entry, and the game takes its source's. The id is not required to exist\nnow, as with hiding. Emits `library.changed`.",
+        "description": "`{ \"set\": id }` points the game at a shared override; fields alone are its own values;\n`{ \"none\": true }` leaves it to the device, whatever the source sets; `{}` clears its entry,\nand the game takes its source's. The id is not required to exist now, as with hiding.\nEmits `library.changed`.",
         "operationId": "setGameOverrides",
         "parameters": [
           {
@@ -4101,7 +4101,7 @@
             }
           },
           "400": {
-            "description": "Empty id, a value out of range, or `set` beside values",
+            "description": "Empty id, a value out of range, or `set` or `none` beside another field",
             "content": {
               "application/json": {
                 "schema": {
@@ -4375,7 +4375,7 @@
           "library"
         ],
         "summary": "Set one source's overrides",
-        "description": "The same body as a game's. Each title of the source without an entry of its own takes\nit. Emits `library.changed`.",
+        "description": "The same body as a game's, without `none`: `{}` clears the source's entry. Each title of\nthe source without an entry of its own takes it. Emits `library.changed`.",
         "operationId": "setSourceOverrides",
         "parameters": [
           {
@@ -4410,7 +4410,7 @@
             }
           },
           "400": {
-            "description": "Empty source, a value out of range, or `set` beside values",
+            "description": "Empty source, a value out of range, `set` beside values, or `none`",
             "content": {
               "application/json": {
                 "schema": {
@@ -15173,6 +15173,10 @@
           {
             "type": "object",
             "properties": {
+              "none": {
+                "type": "boolean",
+                "description": "A game's alone, with no other field: the device decides, and the source's entry is\nskipped. A source that sets nothing has no entry."
+              },
               "set": {
                 "type": [
                   "string",
@@ -15183,7 +15187,7 @@
             }
           }
         ],
-        "description": "A game's or a source's entry: `set` names a shared override, or the fields are its own.\nBoth at once is refused, and `{}` is no entry. `name` is the shared override's alone."
+        "description": "A game's or a source's entry: `set` names a shared override, the fields are its own, or a\ngame's `none` opts out. Only one of the three; `{}` is no entry. `name` is the shared\noverride's alone."
       },
       "OverrideSet": {
         "allOf": [

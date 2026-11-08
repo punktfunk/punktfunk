@@ -2,10 +2,11 @@
 //! source ([`GameOverrides`]). A side table like `hidden.rs`, keyed by the stable
 //! `<store>:<external_id>` ids, so a rescan keeps it.
 //!
-//! An entry names a shared override (`set`) or carries values of its own. A game's entry wins
-//! over its source's. A shared override that is gone, or values that fail validation, override
-//! nothing. [`GameEntry::overrides`] carries what each title resolves to; the handshake holds
-//! a client to the downward half. Pin `library-overrides.json` in the tests below.
+//! An entry names a shared override (`set`), carries values of its own, or is a game's `none`:
+//! the device decides, whatever its source sets. A game's entry wins over its source's. A shared
+//! override that is gone, or values that fail validation, override nothing.
+//! [`GameEntry::overrides`] carries what each title resolves to; the handshake holds a client to
+//! the downward half. Pin `library-overrides.json` in the tests below.
 
 use super::hidden::store_of;
 use super::*;
@@ -43,10 +44,16 @@ pub struct GameOverridesSchema {
     beyond_screen: bool,
 }
 
-/// A game's or a source's entry: `set` names a shared override, or the fields are its own.
-/// Both at once is refused, and `{}` is no entry. `name` is the shared override's alone.
+/// A game's or a source's entry: `set` names a shared override, the fields are its own, or a
+/// game's `none` opts out. Only one of the three; `{}` is no entry. `name` is the shared
+/// override's alone.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 pub struct OverrideEntry {
+    /// A game's alone, with no other field: the device decides, and the source's entry is
+    /// skipped. A source that sets nothing has no entry.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    #[schema(required = false)]
+    pub none: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schema(example = "a1b2c3d4e5f6")]
     pub set: Option<String>,
@@ -57,7 +64,7 @@ pub struct OverrideEntry {
 
 impl OverrideEntry {
     fn is_empty(&self) -> bool {
-        self.set.is_none() && self.values.is_empty()
+        !self.none && self.set.is_none() && self.values.is_empty()
     }
 }
 
@@ -81,13 +88,16 @@ pub struct OverridesDoc {
 
 impl OverridesDoc {
     /// `games[id] ?? sources[store]`, then the shared override it names, in the stored shape.
-    /// A pad name the host does not know drops only the pad. Absent when nothing is set or
-    /// another value fails validation.
+    /// A pad name the host does not know drops only the pad. Absent when nothing is set, the
+    /// entry is `none`, or another value fails validation.
     pub(crate) fn resolve(&self, id: &str) -> Option<GameOverrides> {
         let entry = self
             .games
             .get(id)
             .or_else(|| self.sources.get(store_of(id)))?;
+        if entry.none {
+            return None;
+        }
         let mut o = match &entry.set {
             Some(set) => self.sets.get(set)?.clone(),
             None => GameOverrides {
@@ -189,7 +199,7 @@ impl OverrideSetPatch {
 /// Why a write was refused.
 #[derive(Debug)]
 pub enum OverrideError {
-    /// The field out of range or unknown; `set` also when values ride beside it.
+    /// The field out of range or unknown; `set` or `none` also when values ride beside it.
     Invalid(&'static str),
     /// Another shared override has this name, ignoring case.
     NameTaken,
@@ -272,6 +282,9 @@ fn checked_entry(
     mut e: OverrideEntry,
 ) -> std::result::Result<OverrideEntry, OverrideError> {
     e.values.name = None;
+    if e.none && (e.set.is_some() || !e.values.is_empty()) {
+        return Err(OverrideError::Invalid("none"));
+    }
     if let Some(set) = e.set.as_deref() {
         if !is_set_id(set) || !e.values.is_empty() {
             return Err(OverrideError::Invalid("set"));
@@ -305,11 +318,14 @@ pub fn set_game_overrides(
     })
 }
 
-/// One source's entry, which each of its titles without one of its own takes.
+/// One source's entry, which each of its titles without one of its own takes. Never `none`.
 pub fn set_source_overrides(
     source: &str,
     entry: OverrideEntry,
 ) -> std::result::Result<OverrideEntry, OverrideError> {
+    if entry.none {
+        return Err(OverrideError::Invalid("none"));
+    }
     mutate(|doc| {
         let entry = checked_entry(doc, entry)?;
         put(&mut doc.sources, source, entry.clone());
@@ -375,7 +391,7 @@ mod tests {
     const DOC: &str = r#"{"version":1,
         "sets":{"a1b2c3d4e5f6":{"name":"1080p60 DualSense","lines":1080,"hz":60,"gamepad":"dualsense"}},
         "games":{"steam:1091500":{"set":"a1b2c3d4e5f6"},"steam:413150":{"lines":2160,"hdr":false},
-                 "heroic:legendary:fc0b13b7":{"set":"0123456789ab"}},
+                 "heroic:legendary:fc0b13b7":{"set":"0123456789ab"},"lutris:7":{"none":true}},
         "sources":{"lutris":{"gamepad":"xbox"},"heroic":{"hz":30}}}"#;
 
     fn doc() -> OverridesDoc {
@@ -412,6 +428,19 @@ mod tests {
         );
     }
 
+    /// `none` skips the source's entry, and with no source entry it is no override either.
+    #[test]
+    fn none_opts_a_game_out_of_its_source() {
+        let mut d = doc();
+        assert_eq!(d.resolve("lutris:7"), None, "the source's pad is skipped");
+        assert!(
+            d.resolve("lutris:4").is_some(),
+            "the source covers the rest"
+        );
+        d.sources.remove("lutris");
+        assert_eq!(d.resolve("lutris:7"), None);
+    }
+
     #[test]
     fn malformed_or_out_of_range_overrides_nothing() {
         let d: OverridesDoc = serde_json::from_str("{ not json").unwrap_or_default();
@@ -432,9 +461,22 @@ mod tests {
     }
 
     #[test]
-    fn an_entry_is_a_set_or_values_never_both() {
+    fn an_entry_is_a_set_values_or_none_never_two() {
         let d = doc();
         let entry = |json: &str| serde_json::from_str::<OverrideEntry>(json).unwrap();
+        for both in [
+            r#"{"none":true,"hz":60}"#,
+            r#"{"none":true,"set":"a1b2c3d4e5f6"}"#,
+        ] {
+            assert!(
+                matches!(
+                    checked_entry(&d, entry(both)),
+                    Err(OverrideError::Invalid("none"))
+                ),
+                "{both}"
+            );
+        }
+        assert!(checked_entry(&d, entry(r#"{"none":true}"#)).unwrap().none);
         assert!(matches!(
             checked_entry(&d, entry(r#"{"set":"a1b2c3d4e5f6","hz":60}"#)),
             Err(OverrideError::Invalid("set"))

@@ -341,6 +341,69 @@ async fn game_overrides_resolve_onto_the_library() {
     assert_eq!(doc, empty);
 }
 
+/// A game's `none` skips its source's entry, outlives a set's delete, and stands alone; a
+/// source refuses it.
+#[tokio::test]
+async fn a_game_opts_out_of_its_source_with_none() {
+    let _tmp = ConfigDirOverride::new();
+    let app = test_app(test_state(), None);
+    seed_title("Alpha", "PC");
+    seed_title("Bravo", "PC");
+    let ids: Vec<String> = crate::library::sorted_games()
+        .iter()
+        .map(|g| g.id.clone())
+        .collect();
+    let game = |i: usize| format!("/api/v1/library/overrides/games/{}", ids[i]);
+    let source = "/api/v1/library/overrides/sources/custom";
+    let set = serde_json::json!({"name": "4K", "lines": 2160});
+    let post = json_req(Method::POST, "/api/v1/library/overrides/sets", set);
+    let (_, set) = send(&app, post).await;
+    let id = set["id"].as_str().expect("an id").to_string();
+    let none = serde_json::json!({"none": true});
+    for (path, body) in [
+        (
+            source.to_string(),
+            serde_json::json!({"gamepad": "xbox360"}),
+        ),
+        (game(0), none.clone()),
+        (game(1), serde_json::json!({"set": id})),
+    ] {
+        let (s, stored) = send(&app, put_json(&path, body.clone())).await;
+        assert_eq!((s, stored), (StatusCode::OK, body), "{path}");
+    }
+    let (_, json) = send(&app, get_req("/api/v1/library")).await;
+    assert!(json[0].get("overrides").is_none(), "{json}");
+    assert_eq!(json[1]["overrides"]["name"], "4K");
+
+    let set_path = format!("/api/v1/library/overrides/sets/{id}");
+    let (_, users) = send(&app, delete_req(&set_path)).await;
+    assert_eq!(users, serde_json::json!({"games": 1, "sources": 0}));
+    let (_, json) = send(&app, get_req("/api/v1/library")).await;
+    assert!(json[0].get("overrides").is_none(), "{json}");
+    assert_eq!(
+        json[1]["overrides"],
+        serde_json::json!({"gamepad": "xbox360"})
+    );
+
+    for (path, body) in [
+        (game(0), serde_json::json!({"none": true, "hz": 60})),
+        (
+            game(0),
+            serde_json::json!({"none": true, "set": "a1b2c3d4e5f6"}),
+        ),
+        (source.to_string(), none.clone()),
+    ] {
+        let (s, _) = send(&app, put_json(&path, body.clone())).await;
+        assert_eq!(s, StatusCode::BAD_REQUEST, "{path} {body}");
+    }
+    let (_, doc) = send(&app, get_req("/api/v1/library/overrides")).await;
+    assert_eq!(doc["games"], serde_json::json!({(ids[0].as_str()): none}));
+    assert_eq!(
+        doc["sources"]["custom"],
+        serde_json::json!({"gamepad": "xbox360"})
+    );
+}
+
 /// Each refusal names what it could not store. Ids with colons route, and a set that is gone
 /// overrides nothing, not even with the source's values.
 #[tokio::test]

@@ -1169,6 +1169,7 @@ fn override_refused(e: crate::library::OverrideError) -> Response {
         E::Invalid("set") => invalid(
             "set must be a shared override's id, with no values of its own beside it".into(),
         ),
+        E::Invalid("none") => invalid("none stands alone, and only a game's entry takes it".into()),
         E::Invalid(field) => invalid(format!("{field} is not a value the host knows")),
         E::NameTaken => api_error_coded(
             StatusCode::CONFLICT,
@@ -1295,8 +1296,9 @@ pub(crate) async fn delete_override_set(Path(id): Path<String>) -> Response {
 /// Set one game's overrides
 ///
 /// `{ "set": id }` points the game at a shared override; fields alone are its own values;
-/// `{}` clears its entry, and the game takes its source's. The id is not required to exist
-/// now, as with hiding. Emits `library.changed`.
+/// `{ "none": true }` leaves it to the device, whatever the source sets; `{}` clears its entry,
+/// and the game takes its source's. The id is not required to exist now, as with hiding.
+/// Emits `library.changed`.
 #[utoipa::path(
     put,
     path = "/library/overrides/games/{id}",
@@ -1306,7 +1308,7 @@ pub(crate) async fn delete_override_set(Path(id): Path<String>) -> Response {
     request_body = crate::library::OverrideEntry,
     responses(
         (status = OK, description = "Stored; the game's entry after the call", body = crate::library::OverrideEntry),
-        (status = BAD_REQUEST, description = "Empty id, a value out of range, or `set` beside values", body = ApiError),
+        (status = BAD_REQUEST, description = "Empty id, a value out of range, or `set` or `none` beside another field", body = ApiError),
         (status = UNAUTHORIZED, description = "Missing or invalid bearer token", body = ApiError),
         (status = NOT_FOUND, description = "`set` names no shared override", body = ApiError),
         (status = INTERNAL_SERVER_ERROR, description = "Couldn't save the overrides", body = ApiError),
@@ -1330,8 +1332,8 @@ pub(crate) async fn set_game_overrides(
 
 /// Set one source's overrides
 ///
-/// The same body as a game's. Each title of the source without an entry of its own takes
-/// it. Emits `library.changed`.
+/// The same body as a game's, without `none`: `{}` clears the source's entry. Each title of
+/// the source without an entry of its own takes it. Emits `library.changed`.
 #[utoipa::path(
     put,
     path = "/library/overrides/sources/{source}",
@@ -1341,7 +1343,7 @@ pub(crate) async fn set_game_overrides(
     request_body = crate::library::OverrideEntry,
     responses(
         (status = OK, description = "Stored; the source's entry after the call", body = crate::library::OverrideEntry),
-        (status = BAD_REQUEST, description = "Empty source, a value out of range, or `set` beside values", body = ApiError),
+        (status = BAD_REQUEST, description = "Empty source, a value out of range, `set` beside values, or `none`", body = ApiError),
         (status = UNAUTHORIZED, description = "Missing or invalid bearer token", body = ApiError),
         (status = NOT_FOUND, description = "`set` names no shared override", body = ApiError),
         (status = INTERNAL_SERVER_ERROR, description = "Couldn't save the overrides", body = ApiError),
