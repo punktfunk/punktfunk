@@ -268,10 +268,11 @@ A real monitor is being streamed, and those settings only apply to virtual scree
 
 `PUNKTFUNK_CAPTURE_MONITOR` is set in `host.env`. Remove it and restart the host.
 
-### A session fails with "no monitor named …"
+### A device streams its own screen instead of the monitor I picked
 
-The monitor you picked isn't connected, was renamed, or the host runs in another session. Run
-`punktfunk-host list-monitors` and pick a listed one.
+The monitor isn't connected, was renamed, another device is streaming it, or the host runs in
+another session. The host log names the reason. Run `punktfunk-host list-monitors` and pick a
+listed one, or wait for the other device to finish.
 
 ### My couch box's TV stayed on the stream after I disconnected
 
