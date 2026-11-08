@@ -463,9 +463,17 @@ data class Shortcuts(val bindings: List<Binding> = emptyList()) {
         val MODIFIERS = listOf("ctrl", "alt", "shift")
         private val MODIFIER_VKS = MODIFIERS.mapNotNull(::keyVk).toSet()
 
-        /** The wire bit of a stored button name, any case; `back` is `select`. */
+        /** The wire bit of a stored button name, any case; `back` is `select`, and the pad art's
+         *  grip names (`r4` `l4` `r5` `l5`) are the paddles. */
         fun buttonBit(name: String): Int? {
-            val n = name.trim().lowercase().let { if (it == "back") "select" else it }
+            val n = when (val raw = name.trim().lowercase()) {
+                "back" -> "select"
+                "r4" -> "paddle1"
+                "l4" -> "paddle2"
+                "r5" -> "paddle3"
+                "l5" -> "paddle4"
+                else -> raw
+            }
             return BUTTONS.firstOrNull { it.first == n }?.second
         }
 

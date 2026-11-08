@@ -41,7 +41,7 @@ class ShortcutVectorsTest {
     @Test
     fun parse() {
         val cases = section("parse")
-        assertTrue(cases.size >= 14)
+        assertTrue(cases.size >= 15)
         for (c in cases) {
             val name = c.getString("name")
             val raw = c.getString("blob")
