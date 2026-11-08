@@ -10,7 +10,7 @@
 //
 // - Raw plane: every report goes to core (`sendHidReport`), which gates it (`setSc2Gate`).
 // - Typed mirror: buttons, sticks and triggers also go out typed, for a host that degraded the kind.
-// - Local chords: escape, stats and the ring read the HARDWARE mask, so no gate hides the way out.
+// - Shortcuts: the engine reads the HARDWARE mask (`Sc2RingGate`), so no gate hides the way out.
 // - Raw return: host writes arrive through `GamepadFeedback` → `onHidRaw` → the link.
 //
 // macOS also shows the pad to GameController; `syncShadowSuppression` drops that twin only while a
@@ -48,8 +48,8 @@ public final class Sc2Capture {
     /// is never 0 for a real device, so the spaces cannot collide.
     private static let bleSource: UInt64 = 0
 
-    /// Everything one physical pad owns: its wire slot, typed-mirror diff state and escape-chord
-    /// timer. One per live HID source, in `sources`.
+    /// Everything one physical pad owns: its wire slot, typed-mirror diff state and shortcuts.
+    /// One per live HID source, in `sources`.
     /// All fields are guarded by the capture's `lock`.
     private final class PadSource {
         var padIndex: UInt8?
@@ -57,15 +57,15 @@ public final class Sc2Capture {
         /// What the HOST has been told is held (wire layout) — the typed mirror's diff state,
         /// gated, so it is 0 for anything the ring swallowed.
         var wireButtons: UInt32 = 0
-        /// This pad's local chords and ring state, including the ungated hardware mask the
-        /// escape chord reads.
-        let ring = Sc2RingGate()
+        /// This pad's shortcuts and ring state, read off the ungated hardware.
+        let ring: Sc2RingGate
         var lastAxis = [Int32](repeating: Int32.min, count: 6)
         /// Reusable up-path buffer: the gated report is copied in and sent from here, so the
         /// raw plane costs no per-report allocation beyond the link's own framing.
         var rawBuf = [UInt8](repeating: 0, count: 64)
-        /// Armed while the escape chord is held (fires `onDisconnectRequest` on main).
-        var chordWork: DispatchWorkItem?
+        init(_ bindings: [Shortcuts.Binding]) {
+            ring = Sc2RingGate(bindings)
+        }
     }
 
     /// Guards every field below (see the threading note in the header).
@@ -82,19 +82,11 @@ public final class Sc2Capture {
     /// recommended backgrounding behavior for a CoreBluetooth central). Never set on macOS.
     private var suspended = false
 
-    /// The cross-client controller escape chord, read off this capture's own hardware mask —
-    /// MUST stay equal to `GamepadCapture.escapeChord` (pinned by `Sc2EscapeChordMirrorTests`;
-    /// re-declared here because the original is main-actor-isolated and this class reads the
-    /// mask on the BLE queue). Held `disconnectHold` it ends the session, so a captured SC2 —
-    /// whose raw feed bypasses GamepadCapture entirely — can still exit the stream.
-    static let escapeChord: UInt32 =
-        GamepadWire.leftShoulder | GamepadWire.rightShoulder | GamepadWire.start | GamepadWire.back
-    /// pf-client-core's `DISCONNECT_HOLD` — the same 1.5 s on every client (and the same value
-    /// as GamepadCapture's private `disconnectHold`; the mirror test pins it).
-    static let disconnectHold: TimeInterval = 1.5
+    /// The session's shortcuts (`EffectiveSettings.resolvedShortcuts`), read before any report.
+    private let shortcuts: Shortcuts
 
-    /// Fired ON MAIN once the escape chord has been held `disconnectHold` — the session owner
-    /// disconnects (same contract as `GamepadCapture.onDisconnectRequest`).
+    /// The End stream shortcut fired on a captured pad, ON MAIN — the session owner disconnects
+    /// (same contract as `GamepadCapture.onDisconnectRequest`).
     public var onDisconnectRequest: (() -> Void)?
 
     /// The capture's claim/release edges, for the stream surface. `captured` fires whenever a
@@ -113,9 +105,9 @@ public final class Sc2Capture {
     /// Fired ON MAIN on `Phase` edges — the session owner surfaces the passthrough badge.
     public var onPhaseChange: ((Phase) -> Void)?
 
-    /// `Select+A` on a captured pad: the quick-action ring's opener, the same contract as
-    /// `GamepadCapture.onRingChord`. Fired ON MAIN, on the press that completes the chord.
-    public var onRingChord: (() -> Void)?
+    /// Any other shortcut fired on a captured pad, the dial's opener included — the contract of
+    /// `GamepadCapture.onShortcut`, with no wire pad. Fired ON MAIN. Set before `start`.
+    public var onShortcut: ((Shortcuts.Action, Shortcuts.Phase) -> Void)?
     /// A press while the ring owns the pad (`ringOpen`) — fired ON MAIN.
     public var onRingNav: ((RingNav) -> Void)?
     /// The ring is up: the pad drives it, and the host sees a neutral report at the same cadence
@@ -141,16 +133,22 @@ public final class Sc2Capture {
     }
     private var ringOpenLocked = false
 
-    /// Core holds back of this pad's raw reports what the ring gate holds back of the typed
-    /// plane. Steam and QAM always go to the host's Steam. Caller holds `lock`.
+    /// Core holds back of this pad's raw reports what it can of the typed plane's gate: the
+    /// open ring, and Select then A while that opens it. Steam and QAM always go to the host's
+    /// Steam. Caller holds `lock`.
     private func pushGateLocked(pad: UInt8) {
-        connection.setSc2Gate(
-            pad: pad, masked: ringOpenLocked, systemLocal: false, chords: onRingChord != nil)
+        let selectA = Shortcuts.Trigger.pad(buttons: [GamepadWire.back, GamepadWire.a], hold: false)
+        let chords = padBindings.contains { $0.action == .ring && $0.trigger.ids == selectA.ids && !$0.trigger.hold }
+        connection.setSc2Gate(pad: pad, masked: ringOpenLocked, systemLocal: false, chords: chords)
     }
+
+    /// The bindings a pad engine runs; the dial only while the session opens it.
+    private var padBindings: [Shortcuts.Binding] { shortcuts.runnable(dial: onShortcut != nil) }
 
     public init(connection: PunktfunkConnection, manager: GamepadManager) {
         self.connection = connection
         self.manager = manager
+        shortcuts = connection.settings.resolvedShortcuts
         link = Sc2BleLink(
             queue: queue,
             onReport: { [weak self] report in
@@ -403,15 +401,14 @@ public final class Sc2Capture {
         // The gate reads the ungated hardware; the two planes below see what is left of it, so
         // a press the client consumed never reaches the game.
         deliver(src.ring.read(state))
-        updateChordLocked(src)
         src.ring.apply(&state)
         forwardRawLocked(src, &report, pad: pad)
         mirrorTypedLocked(src, state, pad: pad)
         lock.unlock()
     }
 
-    /// Deliver one pad's local-chord events. The gate decided them off the ungated hardware;
-    /// this only routes them to the main actor, where the ring and the overlay live.
+    /// Deliver one pad's shortcut events. The gate decided them off the ungated hardware; this
+    /// only routes them to the main actor, where the ring and the overlay live.
     private func deliver(_ events: [Sc2RingGate.Event]) {
         guard !events.isEmpty else { return }
         DispatchQueue.main.async { [weak self] in
@@ -419,9 +416,10 @@ public final class Sc2Capture {
             MainActor.assumeIsolated {
                 for event in events {
                     switch event {
-                    case .ringChord: self.onRingChord?()
+                    case .fire(.slot(.endStream), _): self.onDisconnectRequest?()
+                    case .fire(.slot(.stats), _): StatsVerbosity.requestCycle(for: self.connection)
+                    case .fire(let action, let phase): self.onShortcut?(action, phase)
                     case .nav(let nav): self.onRingNav?(nav)
-                    case .statsChord: StatsVerbosity.requestCycle(for: self.connection)
                     }
                 }
             }
@@ -432,7 +430,7 @@ public final class Sc2Capture {
     /// is up joins it already gated. Caller holds `lock`.
     private func sourceLocked(_ source: UInt64) -> PadSource {
         if let existing = sources[source] { return existing }
-        let fresh = PadSource()
+        let fresh = PadSource(padBindings)
         fresh.ring.ringOpen = ringOpenLocked
         sources[source] = fresh
         return fresh
@@ -492,25 +490,6 @@ public final class Sc2Capture {
         guard src.lastAxis[i] != value else { return }
         src.lastAxis[i] = value
         connection.send(.gamepadAxis(id, value: value, pad: UInt32(pad)))
-    }
-
-    /// Arm the disconnect timer while the full chord is held, disarm on any release —
-    /// GamepadCapture's rule, off this capture's own state. Read from the HARDWARE mask, never
-    /// the forwarded one: the way out of a stream must not be something a client-side gate can
-    /// swallow. Any captured pad can fire it. Caller holds `lock`.
-    private func updateChordLocked(_ src: PadSource) {
-        let held = src.ring.hardware & Self.escapeChord == Self.escapeChord
-        if held, src.chordWork == nil {
-            let work = DispatchWorkItem { [weak self] in
-                guard let self else { return }
-                MainActor.assumeIsolated { self.onDisconnectRequest?() }
-            }
-            src.chordWork = work
-            DispatchQueue.main.asyncAfter(deadline: .now() + Self.disconnectHold, execute: work)
-        } else if !held, let work = src.chordWork {
-            work.cancel()
-            src.chordWork = nil
-        }
     }
 
     // MARK: - Slot lifecycle
@@ -615,10 +594,8 @@ public final class Sc2Capture {
             return
         }
         let index = src.padIndex
-        let chord = src.chordWork
         let lastClaimed = index != nil && !sources.values.contains { $0.padIndex != nil }
         lock.unlock()
-        chord?.cancel()
         guard let index else { return }
         // A 2015 pad's haptics are finite pulse trains; `0x80` means something else to it.
         if !isClassicSource(source) { write(source: source, kind: 0, frame: Self.rumbleStop) }

@@ -1050,6 +1050,7 @@ extension SettingsView {
                 }
             }
             quickActionsRow
+            shortcutsRow
             // Whether a hardware mouse attached to THIS iPad gets locked is a fact about this
             // device's input hardware (tier G), not about how a host is streamed.
             if !inPresetScope, UIDevice.current.userInterfaceIdiom == .pad {
@@ -1078,22 +1079,45 @@ extension SettingsView {
     }
     #endif
 
+    /// The shortcuts of the layer being edited, as the next stream resolves them.
+    var editedShortcuts: Shortcuts {
+        Shortcuts.resolve(effective.shortcuts, client: shortcutClient,
+                          legacyGuideGesture: effective.guideGesture)
+    }
+
+    /// The Shortcuts page of the layer being edited.
+    var shortcutsEditor: ShortcutsEditor {
+        ShortcutsEditor(
+            blob: scoped(SettingsFields.shortcuts), legacyGuideGesture: effective.guideGesture,
+            overlayActions: effective.overlayActions, overridden: isOverridden("shortcuts")
+        ) {
+            if inPresetScope {
+                resetOverride("shortcuts")
+            } else {
+                scoped(SettingsFields.shortcuts).wrappedValue = ""
+            }
+        }
+    }
+
     #if os(iOS) || os(visionOS) || os(macOS)
-    /// The in-stream quick-action ring's editor, opened as a sheet. Every platform with a ring
-    /// the user can change: iOS from Touch & pointer, macOS from Keyboard & mouse (the Mac opens
-    /// the ring with ⌃⌥⇧O or the Stream menu, so that is where a reader looks for it).
-    /// How to reach the dial on THIS platform. The editor must name its opener: six buttons
-    /// nobody can summon are six buttons nobody sees.
+    /// How to reach the dial on THIS platform, from the live shortcuts. The editor must name its
+    /// opener: six buttons nobody can summon are six buttons nobody sees.
     private var dialOpener: String {
+        let s = editedShortcuts
+        guard let keys = s.hint(.ring, device: .keyboard), let pad = s.hint(.ring, device: .pad) else {
+            return ""
+        }
         #if os(macOS)
-        L10n.applePlayerOverlayActionsOpenerMac(keys: "⌃⌥⇧O", padKeys: "Select + A")
+        return L10n.applePlayerOverlayActionsOpenerMac(keys: keys, padKeys: pad) + " "
         #else
-        L10n.applePlayerOverlayActionsOpener(keys: "⌃⌥⇧O", padKeys: "Select + A")
+        return L10n.applePlayerOverlayActionsOpener(keys: keys, padKeys: pad) + " "
         #endif
     }
 
+    /// The in-stream quick-action ring's editor, opened as a sheet. Every platform with a ring
+    /// the user can change: iOS from Touch & pointer, macOS from Keyboard & mouse.
     @ViewBuilder var quickActionsRow: some View {
-        described(dialOpener + " " + String(localized: L10n.playerOverlayActionsHint),
+        described(dialOpener + String(localized: L10n.playerOverlayActionsHint),
                   field: "overlay_actions") {
             // A SHEET, not a push: the detail column is not a NavigationStack, and a
             // NavigationLink pushed from it popped the collapsed iPhone stack to the category
@@ -1137,6 +1161,38 @@ extension SettingsView {
             }
         }
     }
+
+    /// The Shortcuts page (design/client-shortcuts.md §5), a sheet like Quick actions.
+    @ViewBuilder var shortcutsRow: some View {
+        described(L10n.playerShortcutsHint, field: "shortcuts") {
+            Button {
+                showShortcuts = true
+            } label: {
+                HStack {
+                    Text(L10n.playerShortcuts)
+                    Spacer(minLength: 8)
+                    Image(systemName: "chevron.right")
+                        .font(.footnote.weight(.semibold))
+                        .foregroundStyle(.tertiary)
+                        .accessibilityHidden(true)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .sheet(isPresented: $showShortcuts) {
+                NavigationStack {
+                    shortcutsEditor.toolbar {
+                        ToolbarItem(placement: .confirmationAction) {
+                            Button(L10n.commonDone) { showShortcuts = false }
+                        }
+                    }
+                }
+                #if os(macOS)
+                .frame(width: 460, height: 560)
+                #endif
+            }
+        }
+    }
     #endif
 
     #if !os(tvOS)
@@ -1159,6 +1215,7 @@ extension SettingsView {
                 Toggle(L10n.playerInhibitShortcuts, isOn: scoped(SettingsFields.inhibitShortcuts))
             }
             quickActionsRow
+            shortcutsRow
             #endif
             described(
                 (ModifierLayout(rawValue: effective.modifierLayout) ?? .mac).detail,
@@ -1184,8 +1241,9 @@ extension SettingsView {
     private var mouseModeDescription: String {
         switch MouseInputMode(rawValue: effective.mouseMode) ?? .capture {
         case .capture:
-            return String(localized: L10n.playerMouseModeCaptureHint) + " "
-                + L10n.playerMouseModeKeysHint(keys: "⌃⌥⇧M")
+            let keys = editedShortcuts.hint(.slot(.mouseMode), device: .keyboard)
+            return String(localized: L10n.playerMouseModeCaptureHint)
+                + (keys.map { " " + L10n.playerMouseModeKeysHint(keys: $0) } ?? "")
         case .desktop:
             return String(localized: L10n.playerMouseModeDesktopHint)
         }
@@ -1457,7 +1515,7 @@ extension SettingsView {
         }
     }
 
-    /// Forwarding and the guide button. The master switch is presetable, so it renders in both
+    /// Forwarding and the system buttons. The master switch is presetable, so it renders in both
     /// scopes: a "Work" preset can decline to forward what "Game" forwards.
     @ViewBuilder private var controllerAdvancedRows: some View {
         described(L10n.playerGamepadForwardingHint, field: "gamepad_forwarding") {
@@ -1477,12 +1535,6 @@ extension SettingsView {
                 selection: scoped(SettingsFields.systemButtons))
                 .disabled(!effective.gamepadForwarding)
         }
-        described(L10n.playerGuideGestureHint(button: "Select"), field: "guide_gesture") {
-            settingPicker(
-                L10n.playerGuideGesture, options: SettingsOptions.guideGestures,
-                selection: scoped(SettingsFields.guideGesture))
-                .disabled(!effective.gamepadForwarding)
-        }
         // Steam Controller 2 as-is passthrough: device tier (EffectiveSettings.sc2Capture is not
         // presetable). It engages at the next stream; the in-stream badge announces it.
         if !inPresetScope {
@@ -1497,7 +1549,7 @@ extension SettingsView {
         let e = effective, d = EffectiveSettings()
         return [
             e.gamepadForwarding != d.gamepadForwarding, !gamepads.preferredID.isEmpty,
-            e.systemButtons != d.systemButtons, e.guideGesture != d.guideGesture, sc2Capture,
+            e.systemButtons != d.systemButtons, sc2Capture,
         ].filter { $0 }.count
     }
 

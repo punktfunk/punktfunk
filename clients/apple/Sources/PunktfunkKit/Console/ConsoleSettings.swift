@@ -132,6 +132,7 @@ public enum ConsoleSettings {
         .string("mouse_mode", DefaultsKey.mouseMode, SettingDefault.mouseMode),
         .bool("invert_scroll", DefaultsKey.invertScroll, SettingDefault.invertScroll),
         .string("overlay_actions", DefaultsKey.overlayActions, SettingDefault.overlayActions),
+        .string("shortcuts", DefaultsKey.shortcuts, SettingDefault.shortcuts),
         .bool("inhibit_shortcuts", DefaultsKey.inhibitShortcuts, SettingDefault.inhibitShortcuts),
         .bool(
             "gamepad_forwarding", DefaultsKey.gamepadForwarding,

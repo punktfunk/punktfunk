@@ -593,14 +593,7 @@ public struct HostAction: Codable, Hashable, Sendable, Identifiable {
     /// This client's wording for a known id, else the host's own title — so a familiar action is
     /// worded the way the rest of this app words it, without hiding an unfamiliar one.
     public var label: String {
-        switch id {
-        case "power.sleep": return String(localized: L10n.hostPowerSleep)
-        case "power.reboot": return String(localized: L10n.hostPowerReboot)
-        case "power.shutdown": return String(localized: L10n.hostPowerShutdown)
-        case "host.restart": return String(localized: L10n.hostPowerRestartService)
-        case "display.next": return String(localized: L10n.hostactionDisplayNext)
-        default: return title
-        }
+        SlotId.hostWord(id).map { String(localized: $0) } ?? title
     }
 }
 

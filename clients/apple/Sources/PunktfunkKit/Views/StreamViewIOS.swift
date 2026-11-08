@@ -62,6 +62,7 @@ public struct StreamView: UIViewControllerRepresentable {
     private let captureEnabled: Bool
     private let onCaptureChange: ((Bool) -> Void)?
     private let onDisconnectRequest: (() -> Void)?
+    private let onShortcut: ((Shortcuts.Action, Shortcuts.Phase) -> Void)?
     private let onDial: ((DialEvent) -> Void)?
     private let onFrame: (@Sendable (AccessUnit) -> Void)?
     private let onSessionEnd: (@Sendable () -> Void)?
@@ -72,8 +73,8 @@ public struct StreamView: UIViewControllerRepresentable {
     private var curveTarget: CurveTarget?
     #endif
 
-    /// `onDisconnectRequest` (main queue) is the captured-state ⌃⌥⇧D from an iPad keyboard,
-    /// as on the macOS StreamView; released, the Stream menu's key equivalent disconnects.
+    /// `onShortcut` (main queue) is a keyboard shortcut that fired on an iPad keyboard, as on
+    /// the macOS StreamView.
     public init(
         connection: PunktfunkConnection,
         captureEnabled: Bool = true,
@@ -81,6 +82,7 @@ public struct StreamView: UIViewControllerRepresentable {
         overlayShown: Bool = false,
         onCaptureChange: ((Bool) -> Void)? = nil,
         onDisconnectRequest: (() -> Void)? = nil,
+        onShortcut: ((Shortcuts.Action, Shortcuts.Phase) -> Void)? = nil,
         onDial: ((DialEvent) -> Void)? = nil,
         onFrame: (@Sendable (AccessUnit) -> Void)? = nil,
         onSessionEnd: (@Sendable () -> Void)? = nil,
@@ -92,6 +94,7 @@ public struct StreamView: UIViewControllerRepresentable {
         self.captureEnabled = captureEnabled
         self.onCaptureChange = onCaptureChange
         self.onDisconnectRequest = onDisconnectRequest
+        self.onShortcut = onShortcut
         self.onDial = onDial
         self.onFrame = onFrame
         self.onSessionEnd = onSessionEnd
@@ -116,6 +119,7 @@ public struct StreamView: UIViewControllerRepresentable {
         #endif
         controller.onCaptureChange = onCaptureChange
         controller.onDisconnectRequest = onDisconnectRequest
+        controller.onShortcut = onShortcut
         controller.onDial = onDial
         controller.captureEnabled = captureEnabled
         controller.endToEndMeter = endToEndMeter
@@ -128,6 +132,7 @@ public struct StreamView: UIViewControllerRepresentable {
     public func updateUIViewController(_ controller: StreamViewController, context: Context) {
         controller.onCaptureChange = onCaptureChange
         controller.onDisconnectRequest = onDisconnectRequest
+        controller.onShortcut = onShortcut
         controller.onDial = onDial
         controller.captureEnabled = captureEnabled
         controller.endToEndMeter = endToEndMeter
@@ -234,8 +239,10 @@ public final class StreamViewController: StreamViewControllerBase {
     }
 
     var onCaptureChange: ((Bool) -> Void)?
-    /// The captured-state ⌃⌥⇧D (see `StreamView.init`).
+    /// Kept for call-site parity; the keyboard's End stream arrives through `onShortcut`.
     var onDisconnectRequest: (() -> Void)?
+    /// A keyboard shortcut that fired (see `StreamView.init`).
+    var onShortcut: ((Shortcuts.Action, Shortcuts.Phase) -> Void)?
     /// The two-finger twist turning the quick-action ring (forwarded from the stream view).
     var onDial: ((DialEvent) -> Void)?
     /// Resize-overlay START: forwarded to the Match-window follower so a scene resize drives the
@@ -564,29 +571,9 @@ public final class StreamViewController: StreamViewControllerBase {
             guard let self else { return }
             self.setCaptured(!self.captured)
         }
-        // ⌃⌥⇧Q (cross-client parity with macOS/Windows/Linux) releases the captured pointer +
-        // keyboard so the Magic Keyboard trackpad returns to driving the local iPad UI. Detected
-        // from the HID stream in InputCapture (no NSEvent monitor on iOS); unlike the ⌘⎋ toggle it
-        // only ever RELEASES — re-pressing it while already released is a no-op (setCaptured guards).
-        capture.onReleaseCapture = { [weak self] in
-            self?.setCaptured(false)
-        }
-        // ⌃⌥⇧A mutes the mic uplink and ⌃⌥⇧C flips clipboard sharing: session state this
-        // controller doesn't own, posted as the macOS chords are, naming the session.
-        capture.onToggleMicMute = { [weak connection] in
-            NotificationCenter.default.post(name: .punktfunkToggleMicMute, object: connection)
-        }
-        capture.onToggleClipboard = { [weak connection] in
-            NotificationCenter.default.post(name: .punktfunkToggleClipboard, object: connection)
-        }
-        // ⌃⌥⇧O toggles the quick-action ring, posted the way the Mac's chord is.
-        capture.onQuickActions = { [weak connection] in
-            NotificationCenter.default.post(name: .punktfunkToggleQuickActions, object: connection)
-        }
-        // ⌃⌥⇧D and ⌃⌥⇧S take the Mac's routes: the session's disconnect, and this session's
-        // stats cycle.
-        capture.onDisconnect = { [weak self] in self?.onDisconnectRequest?() }
-        capture.onCycleStats = { [weak connection] in StatsVerbosity.requestCycle(for: connection) }
+        // The keyboard shortcuts, detected from the HID stream in InputCapture (no NSEvent
+        // monitor on iOS), go to the session, which runs them as the dial does.
+        capture.onShortcut = { [weak self] action, phase in self?.onShortcut?(action, phase) }
         capture.onPreempted = { [weak self] in
             self?.setCaptured(false)
         }
@@ -702,6 +689,13 @@ public final class StreamViewController: StreamViewControllerBase {
             guard let self,
                   self.view.window?.windowScene?.activationState == .foregroundActive else { return }
             self.setCaptured(false)
+        })
+        // The quick actions only this view runs, from the dial or a shortcut, for its session.
+        observers.append(NotificationCenter.default.addObserver(
+            forName: .punktfunkStreamSlot, object: connection, queue: .main
+        ) { [weak self] note in
+            guard let self, note.userInfo?["slot"] as? String == SlotId.releaseInput.id else { return }
+            self.setCaptured(!self.captured)
         })
         // The quick-action ring is SwiftUI above this layer. Unlock the pointer for as long as it
         // is up, and take the lock back when it closes: the false→true edge is the ask. A close

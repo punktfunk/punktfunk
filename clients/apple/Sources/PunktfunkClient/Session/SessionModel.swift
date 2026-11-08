@@ -278,10 +278,12 @@ final class SessionModel: ObservableObject {
     private let resources = SessionResources()
     private var audio: SessionAudio? { resources.part() }
     private var gamepadCapture: GamepadCapture? { resources.part() }
-    /// The in-stream ring's pad path (design/touch-client-overlay.md §2.6), forwarded from the
-    /// capture so the view can wire them once per session. The chord carries the pad's wire
-    /// index; a remote's Back and a captured Steam Controller carry none.
+    /// The in-stream ring's remote path (design/touch-client-overlay.md §2.6): the Siri Remote's
+    /// short Back. Wired by the view once per session.
     var onRingChord: ((UInt32?) -> Void)?
+    /// A pad or Steam Controller shortcut the session runs (design/client-shortcuts.md): the
+    /// action, its phase and the wire pad that fired it, `nil` for a captured Steam Controller.
+    var onShortcut: ((Shortcuts.Action, Shortcuts.Phase, UInt32?) -> Void)?
     var onRingNav: ((RingNav) -> Void)?
     /// A connect the host parked for its operator: the view shows the approval wait.
     var onAwaitingApproval: ((StoredHost) -> Void)?
@@ -300,8 +302,24 @@ final class SessionModel: ObservableObject {
 
     /// One synthetic system-button tap on the host's pad (a `GamepadWire` bit) — the ring's
     /// guide / quick-access slots, which reach the host where the physical button cannot.
-    func tapPadButton(_ bit: UInt32) {
-        gamepadCapture?.tapButton(bit)
+    func tapPadButton(_ bit: UInt32, pad: UInt32? = nil) {
+        gamepadCapture?.tapButton(bit, pad: pad)
+    }
+
+    /// A system button a shortcut holds down on the host's pad, or lets go of.
+    func holdPadButton(_ bit: UInt32, down: Bool, pad: UInt32?) {
+        gamepadCapture?.holdButton(bit, down: down, pad: pad)
+    }
+
+    /// A shortcut to a danger action arms on its first press and fires on a second within 2 s,
+    /// as the dial's does. True when this press is the second.
+    func confirmShortcut(_ id: String, prompt: String) -> Bool {
+        if notices.shortcutArm.value?.id == id {
+            notices.shortcutArm.clear()
+            return true
+        }
+        flash(\.shortcutArm, ShortcutArm(id: id, text: prompt), for: 2)
+        return false
     }
 
     /// The ring's Controller type slot: what every forwarded pad declares, whether one is
@@ -779,19 +797,23 @@ final class SessionModel: ObservableObject {
         if forever { UserDefaults.standard.set(true, forKey: DefaultsKey.vrrWarningMuted) }
     }
 
-    /// How to leave, in one line, for the input in hand: the pad chord when a controller is
-    /// forwarded, else this device's own way out. Touch passthrough reads no twist, so it
-    /// names the edge pull (`EdgeDial`) instead.
+    /// How to leave, in one line, for the input in hand: the pad's End stream shortcut when a
+    /// controller is connected, else this device's own way out. Touch passthrough reads no
+    /// twist, so it names the edge pull (`EdgeDial`) instead.
     var exitHintText: String {
-        if connection?.settings.gamepadForwarding ?? true, !GCController.controllers().isEmpty {
-            return L10n.noticeExitHold(keys: "L1 + R1 + Start + Select")
+        let shortcuts = settings.resolvedShortcuts
+        func line(_ device: Shortcuts.Device) -> String? {
+            guard let t = shortcuts.trigger(for: .slot(.endStream), device: device) else { return nil }
+            let keys = t.chord(client: shortcutClient)
+            return t.hold ? L10n.noticeExitHold(keys: keys) : L10n.noticeExitKeys(keys: keys)
         }
+        if !GCController.controllers().isEmpty, let pad = line(.pad) { return pad }
         #if os(tvOS)
         return L10n.noticeExitHold(keys: "Back")
         #elseif os(macOS)
-        return L10n.noticeExitKeys(keys: "⌃⌥⇧D")
+        return line(.keyboard) ?? line(.pad) ?? ""
         #else
-        if GCKeyboard.coalesced != nil { return L10n.noticeExitKeys(keys: "⌃⌥⇧D") }
+        if GCKeyboard.coalesced != nil, let keys = line(.keyboard) { return keys }
         return String(localized: touchPassthrough ? L10n.noticeRingEdgePull : L10n.noticeRingTwist)
         #endif
     }
@@ -1277,8 +1299,8 @@ final class SessionModel: ObservableObject {
             let sc2 = Sc2Capture(connection: conn, manager: .shared)
             // A captured SC2's raw feed bypasses GC, so it brings its own escape chord.
             sc2.onDisconnectRequest = { [weak self] in self?.disconnect() }
-            // The ring's pad path, the same two hooks GamepadCapture gets below.
-            sc2.onRingChord = { [weak self] in self?.onRingChord?(nil) }
+            // The shortcuts and the ring's pad path, the same hooks GamepadCapture gets below.
+            sc2.onShortcut = { [weak self] action, phase in self?.onShortcut?(action, phase, nil) }
             sc2.onRingNav = { [weak self] nav in self?.onRingNav?(nav) }
             // Claim/release → the bottom-stack badge (the capture's only UI surface).
             sc2.onPhaseChange = { [weak self] phase in self?.noteSc2Phase(phase) }
@@ -1288,18 +1310,17 @@ final class SessionModel: ObservableObject {
             resources.add(sc2, stop: { feedback.setHidRawSink(nil); sc2.stop() })
         }
         // Every controller GamepadManager selected, each on its own wire pad. With forwarding
-        // off the host gets the pads elsewhere: capture still watches for the escape chord.
+        // off the host gets the pads elsewhere: capture still runs the shortcuts.
         let capture = GamepadCapture(
             connection: conn, manager: .shared, forwarding: settings.gamepadForwarding,
-            systemForward: settings.systemButtonsForward,
-            guideGesture: settings.guideGestureEnabled)
-        // The cross-client escape chord (hold L1+R1+Start+Select 1.5 s) — on tvOS the only
-        // controller way out of a stream (B/Menu is swallowed during sessions; see ContentView).
+            systemForward: settings.systemButtonsForward)
+        // End stream (by default L1+R1+Start+Select held 1 s) — on tvOS the only controller way
+        // out of a stream (B/Menu is swallowed during sessions; see ContentView).
         capture.onDisconnectRequest = { [weak self] in self?.disconnect() }
         // A pad with a gyro that this session cannot carry — say so once, briefly, and name the
         // setting that fixes it. Already main-actor (GamepadCapture fires it there).
         capture.onMotionUnreachable = { [weak self] kind in self?.flash(\.motionUnreachable, kind) }
-        capture.onRingChord = { [weak self] pad in self?.onRingChord?(pad) }
+        capture.onShortcut = { [weak self] action, phase, pad in self?.onShortcut?(action, phase, pad) }
         capture.onRingNav = { [weak self] nav in self?.onRingNav?(nav) }
         capture.start()
         capture.onOwnershipChange = { [weak feedback] owned in feedback?.setSilenced(!owned) }

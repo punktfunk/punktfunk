@@ -276,7 +276,6 @@ final class SettingsCatalogTests: XCTestCase {
         case "gamepad":
             return try tags("padTypes").map { ConsoleSettings.padTypeName(Int($0)!) }
         case "system_buttons": return try tags("systemButtons")
-        case "guide_gesture": return try tags("guideGestures")
         default: return nil
         }
     }

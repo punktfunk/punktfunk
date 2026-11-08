@@ -3,59 +3,39 @@ import XCTest
 
 @testable import PunktfunkKit
 
-/// Pins the ⌃⌥⇧ chords: the iPad's match on the GameController key stream, from HID usages
-/// through `hidToVK`, and each platform's table against the shortcuts reference.
+/// The keyboard shortcuts' inputs: the iPad's GameController key stream reaches the engine as
+/// VKs through `hidToVK`, with either side of a modifier folded onto one key.
 final class KeyboardChordTests: XCTestCase {
-    private func held(_ usages: [Int]) -> Set<UInt32> {
-        Set(usages.compactMap { InputCapture.hidToVK[$0] })
+    // HID usages: left Control/Shift/Option 0xE0/0xE1/0xE2, right 0xE4/0xE5/0xE6, Command 0xE3/0xE7.
+    func testEitherSideOfAModifierIsOneShortcutKey() {
+        let fold = { (usage: Int) in InputCapture.hidToVK[usage].map(InputCapture.shortcutKey) }
+        XCTAssertEqual(fold(0xE0), keyVk("ctrl"))
+        XCTAssertEqual(fold(0xE4), keyVk("ctrl"))
+        XCTAssertEqual(fold(0xE2), keyVk("alt"))
+        XCTAssertEqual(fold(0xE6), keyVk("alt"))
+        XCTAssertEqual(fold(0xE1), keyVk("shift"))
+        XCTAssertEqual(fold(0xE5), keyVk("shift"))
+        XCTAssertEqual(fold(0xE3), fold(0xE7), "either ⌘ is one key")
     }
 
-    // HID usages: left Control/Shift/Option 0xE0/0xE1/0xE2, right 0xE4/0xE5/0xE6, Command 0xE3.
-    func testEitherSideOfEachModifierCounts() {
-        XCTAssertTrue(InputCapture.holdsChordModifiers(held([0xE0, 0xE2, 0xE1])))
-        XCTAssertTrue(InputCapture.holdsChordModifiers(held([0xE4, 0xE6, 0xE5])))
-        XCTAssertTrue(InputCapture.holdsChordModifiers(held([0xE0, 0xE6, 0xE1])))
-    }
-
-    func testAMissingModifierIsNoChord() {
-        XCTAssertFalse(InputCapture.holdsChordModifiers([]))
-        XCTAssertFalse(InputCapture.holdsChordModifiers(held([0xE0, 0xE2])))
-        XCTAssertFalse(InputCapture.holdsChordModifiers(held([0xE0, 0xE4, 0xE1, 0xE5])))
-        XCTAssertFalse(InputCapture.holdsChordModifiers(held([0xE3, 0xE2, 0xE1])))
-    }
-
-    /// The handler compares letters as VKs: O toggles the ring, Q releases, A mutes, D
-    /// disconnects, S cycles the stats, C flips clipboard sharing.
-    func testChordLettersAreTheVKsTheirKeysSend() {
-        XCTAssertEqual(InputCapture.hidToVK[0x06], 0x43) // C
-        XCTAssertEqual(InputCapture.hidToVK[0x12], 0x4F) // O
-        XCTAssertEqual(InputCapture.hidToVK[0x14], 0x51) // Q
-        XCTAssertEqual(InputCapture.hidToVK[0x04], 0x41) // A
-        XCTAssertEqual(InputCapture.hidToVK[0x07], 0x44) // D
-        XCTAssertEqual(InputCapture.hidToVK[0x16], 0x53) // S
-    }
-
-    /// Each platform's chord table holds exactly the ⌃⌥⇧ letters `ShortcutsCatalog` lists for it,
-    /// read from source because the app target is not importable.
-    @MainActor
-    func testChordTablesMatchTheShortcutsReference() throws {
-        let url = URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent() // PunktfunkKitTests
-            .deletingLastPathComponent() // Tests
-            .deletingLastPathComponent() // apple
-            .appendingPathComponent("Sources/PunktfunkClient/Settings/ShortcutsReference.swift")
-        let source = try String(contentsOf: url, encoding: .utf8)
-        func listed(from start: String, to end: String) throws -> Set<String> {
-            let from = try XCTUnwrap(source.range(of: start), start).upperBound
-            let to = try XCTUnwrap(source.range(of: end, range: from..<source.endIndex), end)
-            return Set(source[from..<to.lowerBound].matches(of: #/⌃⌥⇧([A-Z])/#).map { String($0.1) })
+    /// The default letters are the VKs their keys send: O opens the dial, Q releases, A mutes,
+    /// D ends the stream, S cycles the statistics, C flips clipboard sharing.
+    func testDefaultLettersAreTheVKsTheirKeysSend() {
+        for (usage, name) in [(0x06, "c"), (0x12, "o"), (0x14, "q"), (0x04, "a"), (0x07, "d"), (0x16, "s")] {
+            XCTAssertEqual(InputCapture.hidToVK[usage], keyVk(name), name)
         }
-        func letters(_ chords: [InputCapture.Chord]) -> Set<String> {
-            Set(chords.map { String(UnicodeScalar(UInt8($0.vk))) })
+    }
+
+    /// ⌃⌥⇧O down through the folded keys fires the dial and lifts the modifiers the host holds.
+    func testTheDefaultDialChordFiresOnItsKey() throws {
+        var engine = Shortcuts.Engine(Shortcuts.defaults(client: .apple).bindings, device: .keyboard)
+        let now = ContinuousClock.now
+        var outs: [Shortcuts.Out] = []
+        for usage in [0xE0, 0xE6, 0xE1, 0x12] {
+            let vk = try XCTUnwrap(InputCapture.hidToVK[usage])
+            outs += engine.step(.press(InputCapture.shortcutKey(vk)), at: now)
         }
-        let mac = try listed(from: "#if os(macOS)", to: "#elseif os(iOS) || os(visionOS)")
-        let pad = try listed(from: "#elseif os(iOS) || os(visionOS)", to: "#elseif os(tvOS)")
-        XCTAssertEqual(letters(InputCapture.macChords), mac)
-        XCTAssertEqual(letters(InputCapture.padChords), pad)
+        XCTAssertEqual(outs.last, .fire(.ring, .once))
+        XCTAssertTrue(outs.contains(.lift([0x11, 0x12, 0x10])))
     }
 }
