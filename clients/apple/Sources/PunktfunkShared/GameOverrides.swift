@@ -46,6 +46,17 @@ public struct GameOverrides: Codable, Hashable, Sendable {
         beyondScreen = (try? c.decodeIfPresent(Bool.self, forKey: .beyondScreen)) ?? false
     }
 
+    /// The wire shape: unset fields and a false `beyond_screen` left out, as the host writes it.
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encodeIfPresent(name, forKey: .name)
+        try c.encodeIfPresent(lines, forKey: .lines)
+        try c.encodeIfPresent(hz, forKey: .hz)
+        try c.encodeIfPresent(hdr, forKey: .hdr)
+        try c.encodeIfPresent(gamepad, forKey: .gamepad)
+        if beyondScreen { try c.encode(true, forKey: .beyondScreen) }
+    }
+
     /// No field set. A name alone sets nothing.
     public var isEmpty: Bool {
         lines == nil && hz == nil && hdr == nil && gamepad == nil && !beyondScreen
