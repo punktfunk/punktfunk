@@ -25,6 +25,7 @@ import { Spinner } from "@/components/ui/spinner";
 import { type GrantRefusal, newlyHanded } from "@/lib/handed-paths";
 import { apiText } from "@/lib/host-messages";
 import { m } from "@/paraglide/messages";
+import { StreamControls } from "./Stream";
 
 /**
  * A library source's settings, rendered as a **generic form** from the plugin's own JSON Schema.
@@ -39,12 +40,17 @@ import { m } from "@/paraglide/messages";
  *
  * `config` is optional on the kit's `serveUi`, so a source that ships its own page may serve no
  * `__config` at all. That 404 points at the plugin's page instead of reporting a failure.
+ *
+ * A game source also shows the stream settings its titles take when they have none of their
+ * own; those save as each control changes, apart from the form.
  */
 export const SourceSettingsDialog: FC<{
 	/** A game source, or an Art & Metadata source by its plugin id. */
 	source: Pick<ScannerInfo, "id" | "label" | "provider">;
+	/** A game source: its titles' stream settings show below the form. */
+	stream?: boolean;
 	onClose: () => void;
-}> = ({ source, onClose }) => {
+}> = ({ source, stream, onClose }) => {
 	const pluginId = source.provider ?? source.id;
 	const configUrl = `/api/plugin-config/${pluginId}`;
 	const config = useQuery({
@@ -112,7 +118,7 @@ export const SourceSettingsDialog: FC<{
 
 	return (
 		<Dialog open onOpenChange={(open) => !open && onClose()}>
-			<DialogContent>
+			<DialogContent className="max-h-[85vh] overflow-y-auto">
 				<DialogHeader>
 					<DialogTitle>
 						{m.library_source_settings_title({ source: source.label })}
@@ -146,6 +152,19 @@ export const SourceSettingsDialog: FC<{
 						saving={saving}
 						onSave={save}
 					/>
+				)}
+				{stream && (
+					<section className="@container space-y-4 border-t pt-4">
+						<div className="space-y-1">
+							<h3 className="font-semibold">
+								{m.library_stream_source_title({ source: source.label })}
+							</h3>
+							<p className="text-sm text-muted-foreground">
+								{m.library_stream_hint()}
+							</p>
+						</div>
+						<StreamControls kind="source" id={source.id} />
+					</section>
 				)}
 			</DialogContent>
 			<PasswordConfirmDialog

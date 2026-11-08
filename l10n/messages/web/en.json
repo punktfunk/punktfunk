@@ -530,6 +530,123 @@
 	"library_source_settings_refused": "the host said no",
 	"library_source_settings_own_page": "{source} keeps its settings on its own page.",
 	"library_source_settings_open_page": "Open {source}",
+	"library_stream_title": "Stream",
+	"library_stream_hint": "Every device follows these; its own settings fill the rest",
+	"library_stream_source_title": "Stream, for every {source} title",
+	"library_stream_use": "Use",
+	"library_stream_device": "Device decides",
+	"library_stream_custom": "Custom",
+	"library_stream_new": "New shared override…",
+	"library_stream_resolution": "Resolution",
+	"library_stream_beyond": "Also on smaller screens",
+	"library_stream_refresh": "Refresh rate",
+	"library_stream_hz": "{hz} Hz",
+	"library_stream_hdr": "HDR",
+	"library_stream_hdr_on": "HDR on",
+	"library_stream_hdr_off": "HDR off",
+	"library_stream_controller": "Controller",
+	"library_stream_from": "from {source}",
+	"library_stream_edit_shared": "Edit shared override",
+	"library_stream_failed": "Couldn't save the stream settings",
+	"library_stream_shared": "Shared overrides",
+	"library_stream_shared_empty": "No shared overrides yet",
+	"library_stream_name": "Name",
+	"library_stream_new_title": "New shared override",
+	"library_stream_rename_title": "Rename shared override",
+	"library_stream_unused": "Not used yet",
+	"library_stream_used_games": [
+		{
+			"declarations": [
+				"input count",
+				"local n = count: plural"
+			],
+			"selectors": [
+				"n"
+			],
+			"match": {
+				"n=one": "{count} game",
+				"n=*": "{count} games"
+			}
+		}
+	],
+	"library_stream_used_sources": [
+		{
+			"declarations": [
+				"input count",
+				"local n = count: plural"
+			],
+			"selectors": [
+				"n"
+			],
+			"match": {
+				"n=one": "{count} source",
+				"n=*": "{count} sources"
+			}
+		}
+	],
+	"library_stream_delete_title": "Delete {name}?",
+	"library_stream_delete_body": [
+		{
+			"declarations": [
+				"input count",
+				"local n = count: plural"
+			],
+			"selectors": [
+				"n"
+			],
+			"match": {
+				"n=one": "Used by {count} game. It goes back to its source's settings or to Device decides.",
+				"n=*": "Used by {count} games. They go back to their source's settings or to Device decides."
+			}
+		}
+	],
+	"library_stream_delete_sources_body": [
+		{
+			"declarations": [
+				"input count",
+				"local n = count: plural"
+			],
+			"selectors": [
+				"n"
+			],
+			"match": {
+				"n=one": "Used by {count} source. Its games go back to Device decides.",
+				"n=*": "Used by {count} sources. Their games go back to Device decides."
+			}
+		}
+	],
+	"library_stream_select": "Select games",
+	"library_stream_selected": [
+		{
+			"declarations": [
+				"input count",
+				"local n = count: plural"
+			],
+			"selectors": [
+				"n"
+			],
+			"match": {
+				"n=one": "{count} selected",
+				"n=*": "{count} selected"
+			}
+		}
+	],
+	"library_stream_bulk": "Use shared override…",
+	"library_stream_bulk_failed": [
+		{
+			"declarations": [
+				"input count",
+				"local n = count: plural"
+			],
+			"selectors": [
+				"n"
+			],
+			"match": {
+				"n=one": "Couldn't change {count} game",
+				"n=*": "Couldn't change {count} games"
+			}
+		}
+	],
 	"library_migrate_title": "Game sources are moving to plugins",
 	"library_migrate_help": "Each launcher becomes its own add-on. Install one and it takes over; your games keep their tiles.",
 	"library_migrate_install": "Install the {source} source",

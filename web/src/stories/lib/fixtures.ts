@@ -10,6 +10,7 @@ import type { GameEntry } from "@/api/gen/model/gameEntry";
 import type { HostInfo } from "@/api/gen/model/hostInfo";
 import type { NativeClient } from "@/api/gen/model/nativeClient";
 import type { NativePairStatus } from "@/api/gen/model/nativePairStatus";
+import type { OverridesDoc } from "@/api/gen/model/overridesDoc";
 import type { PairedClient } from "@/api/gen/model/pairedClient";
 import type { PairingStatus } from "@/api/gen/model/pairingStatus";
 import type { PendingDevice } from "@/api/gen/model/pendingDevice";
@@ -251,6 +252,26 @@ export const library: GameEntry[] = [
 		players: 1,
 	},
 ];
+
+/** Game overrides: two shared overrides, a game on each kind of entry, a source default. */
+export const overridesDoc: OverridesDoc = {
+	version: 1,
+	sets: {
+		a1b2c3d4e5f6: {
+			name: "1080p60 DualSense",
+			lines: 1080,
+			hz: 60,
+			gamepad: "dualsense",
+		},
+		"0f1e2d3c4b5a": { name: "4K", lines: 2160, beyond_screen: true },
+	},
+	games: {
+		"steam:1245620": { set: "a1b2c3d4e5f6" },
+		"steam:1086940": { set: "a1b2c3d4e5f6" },
+		"custom:eden": { lines: 1440, hz: 120, hdr: false },
+	},
+	sources: { lutris: { hz: 60, gamepad: "xbox360" } },
+};
 
 // --- Performance (stats) page ------------------------------------------------
 

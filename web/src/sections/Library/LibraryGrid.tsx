@@ -5,7 +5,7 @@ import {
 } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import { toast } from "@unom/ui/toast";
-import { LayoutGrid, Rows3, Search, X } from "lucide-react";
+import { LayoutGrid, Rows3, Search, SquareCheck, X } from "lucide-react";
 import { motion } from "motion/react";
 import { type FC, useEffect, useRef, useState } from "react";
 import { useDownloads } from "@/api/downloads";
@@ -13,7 +13,9 @@ import {
 	getGetLibraryPageQueryKey,
 	getLibraryPage,
 	useDeleteCustomGame,
+	useGetLibraryOverrides,
 	useGetLibraryPage,
+	useSetGameOverrides,
 	useSetLibraryEntryHidden,
 } from "@/api/gen/library/library";
 import type { Download } from "@/api/gen/model/download";
@@ -44,7 +46,9 @@ import { GameCard } from "./GameCard";
 import { GameRow } from "./GameRow";
 import { customId, refreshLibrary } from "./helpers";
 import { DownloadsList } from "./Install";
+import { setList } from "./overrides";
 import { useSourceNames } from "./Sources";
+import { refreshOverrides } from "./Stream";
 
 /** Titles asked for at a time: a few rows of a wide grid, a screen and a half of the list. */
 const PAGE = 60;
@@ -147,6 +151,44 @@ export const LibraryGridSection: FC<{
 		refresh();
 	};
 
+	// Selection mode: one action, a shared override for every checked title, one call each.
+	const [selecting, setSelecting] = useState(false);
+	const [picked, setPicked] = useState<ReadonlySet<string>>(new Set());
+	const [applying, setApplying] = useState(false);
+	const overrides = useGetLibraryOverrides({ query: { enabled: selecting } });
+	const setGame = useSetGameOverrides();
+	const leave = () => {
+		setSelecting(false);
+		setPicked(new Set());
+	};
+	useEffect(() => {
+		if (!selecting) return;
+		// An Escape that closed a menu or a dialog is theirs.
+		const onKey = (e: KeyboardEvent) => {
+			if (e.key !== "Escape" || e.defaultPrevented) return;
+			setSelecting(false);
+			setPicked(new Set());
+		};
+		window.addEventListener("keydown", onKey);
+		return () => window.removeEventListener("keydown", onKey);
+	}, [selecting]);
+	const onApply = async (set: string | null) => {
+		setApplying(true);
+		let failed = 0;
+		for (const id of picked) {
+			try {
+				await setGame.mutateAsync({ id, data: set ? { set } : {} });
+			} catch {
+				failed++;
+			}
+		}
+		await refreshOverrides(qc);
+		setApplying(false);
+		if (failed > 0)
+			toast.error(m.library_stream_bulk_failed({ count: failed }));
+		else leave();
+	};
+
 	const first = games.data?.pages[0];
 	const byApp = new Map((downloads.data ?? []).map((d) => [d.app_id, d]));
 	return (
@@ -189,6 +231,23 @@ export const LibraryGridSection: FC<{
 					setHidden.isPending ? (setHidden.variables?.id ?? null) : null
 				}
 				nameOf={nameOf}
+				selection={{
+					active: selecting,
+					ids: picked,
+					onActive: (on) => (on ? setSelecting(true) : leave()),
+					onToggle: (id) =>
+						setPicked((prev) => {
+							const next = new Set(prev);
+							if (!next.delete(id)) next.add(id);
+							return next;
+						}),
+					sets: setList(overrides.data).map((s) => ({
+						id: s.id,
+						name: s.name ?? s.id,
+					})),
+					onApply: (set) => void onApply(set),
+					busy: applying,
+				}}
 			/>
 		</>
 	);
@@ -196,6 +255,22 @@ export const LibraryGridSection: FC<{
 
 /** On this host, or not yet: the filter appears once any title isn't installed. */
 type InstallFilter = "installed" | "missing";
+
+/** Selection mode: checkboxes on the titles, and one action for all the checked ones. */
+export interface LibrarySelection {
+	active: boolean;
+	ids: ReadonlySet<string>;
+	onActive: (active: boolean) => void;
+	onToggle: (id: string) => void;
+	/** The shared overrides to pick from, by name. */
+	sets: { id: string; name: string }[];
+	/** Every checked title takes shared override `set`, or none when null. */
+	onApply: (set: string | null) => void;
+	busy: boolean;
+}
+
+/** `Select` value for "Device decides" in the selection bar; a set id is 12 hex. */
+const NO_SET = "device";
 
 export interface LibraryGridProps {
 	/** The titles loaded so far, every page in order. */
@@ -231,7 +306,48 @@ export interface LibraryGridProps {
 	hidingId: string | null;
 	/** A source's display name by id, for the store and owner badges. */
 	nameOf?: (id: string) => string | undefined;
+	/** Selection mode for the bulk action; absent, the titles only open their pages. */
+	selection?: LibrarySelection;
 }
+
+/** The checked count, the shared override chooser, and Done. Escape leaves too. */
+const SelectionBar: FC<{ selection: LibrarySelection }> = ({ selection }) => {
+	const { ids, sets, onApply, onActive, busy } = selection;
+	return (
+		<div className="sticky bottom-4 z-30 flex flex-wrap items-center gap-3 rounded-card border bg-card p-3">
+			<p className="text-sm font-medium tabular-nums" aria-live="polite">
+				{m.library_stream_selected({ count: ids.size })}
+			</p>
+			<div className="min-w-0 flex-1 sm:max-w-64">
+				<Select
+					value=""
+					onValueChange={(v) => onApply(v === NO_SET ? null : v)}
+					disabled={busy || ids.size === 0}
+				>
+					<SelectTrigger aria-label={m.library_stream_bulk()}>
+						<SelectValue placeholder={m.library_stream_bulk()} />
+					</SelectTrigger>
+					<SelectContent>
+						<SelectItem value={NO_SET}>{m.library_stream_device()}</SelectItem>
+						{sets.map((s) => (
+							<SelectItem key={s.id} value={s.id}>
+								{s.name}
+							</SelectItem>
+						))}
+					</SelectContent>
+				</Select>
+			</div>
+			{busy && <Spinner className="size-4" />}
+			<Button
+				variant="outline"
+				className="ml-auto"
+				onClick={() => onActive(false)}
+			>
+				{m.common_done()}
+			</Button>
+		</div>
+	);
+};
 
 /** A launcher, as a chip that opens its page: its mark and its name. Dimmed while hidden. */
 const LauncherChip: FC<{ game: OperatorGameEntry }> = ({ game }) => (
@@ -307,8 +423,10 @@ export const LibraryGrid: FC<LibraryGridProps> = ({
 	onToggleHidden,
 	hidingId,
 	nameOf,
+	selection,
 }) => {
 	const shown = games.data ?? [];
+	const selecting = selection?.active === true;
 	const props = (game: OperatorGameEntry) => {
 		const download = downloadOf?.(game.id);
 		return {
@@ -319,6 +437,13 @@ export const LibraryGrid: FC<LibraryGridProps> = ({
 			hiding: hidingId === game.id,
 			nameOf,
 			...(download ? { download } : {}),
+			...(selection
+				? {
+						selecting,
+						selected: selection.ids.has(game.id),
+						onSelect: () => selection.onToggle(game.id),
+					}
+				: {}),
 		};
 	};
 	const empty = shown.length === 0;
@@ -353,6 +478,18 @@ export const LibraryGrid: FC<LibraryGridProps> = ({
 							: m.library_count({ count: total })}
 					</p>
 					<div className="flex shrink-0 gap-1">
+						{selection && (
+							<Button
+								variant={selecting ? "default" : "outline"}
+								aria-pressed={selecting}
+								onClick={() => selection.onActive(!selecting)}
+							>
+								<SquareCheck className="size-4" />
+								<span className="sr-only sm:not-sr-only">
+									{m.library_stream_select()}
+								</span>
+							</Button>
+						)}
 						<Button
 							size="icon"
 							variant={view === "grid" ? "default" : "outline"}
@@ -504,6 +641,7 @@ export const LibraryGrid: FC<LibraryGridProps> = ({
 						</Stagger>
 					</div>
 				)}
+				{selection && selecting && <SelectionBar selection={selection} />}
 				{hasMore && (
 					<div className="flex flex-col items-center gap-2">
 						<Sentinel onSeen={onMore} active={!loadingMore} />
