@@ -111,6 +111,7 @@ impl Engine {
             Event::Press(b) => self.press(b, now, &mut out),
             Event::Release(b) => self.release(b, now, &mut out),
         }
+        self.rearm(now);
         out
     }
 
@@ -263,6 +264,21 @@ impl Engine {
             if !self.claimed.contains(&b) {
                 self.claimed.push(b);
             }
+        }
+    }
+
+    /// A broken chord can leave a hold's buttons exactly down with its press still held
+    /// back: that hold arms again, timed from `now`.
+    fn rearm(&mut self, now: Instant) {
+        if self.armed.is_some() || self.held_back.is_empty() {
+            return;
+        }
+        if let Some(hold) = self.exact(true) {
+            self.armed = Some(Armed {
+                since: now,
+                hold,
+                twin: self.exact(false),
+            });
         }
     }
 

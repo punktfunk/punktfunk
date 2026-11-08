@@ -377,7 +377,7 @@
   },
 
   "engine": {
-    "$comment": "Timelines through Engine(bindings, device). events and ticks merge by t (ms); at one t the events go first, in order, then the tick; flush, when given, runs last at its t. A step runs a due tick before its event. expect lists every output in order with the t it came out at: forward [button, down] (to the host, obeys the input mask), fire [action id, once|down|up|tap], lift [buttons] (release on the host, mask or not). Key devices name keys by key_vk name; left and right modifiers are one key. HOLD 1000 ms, TAP_PRESS 50 ms, KEY_TAP 350 ms.",
+    "$comment": "Timelines through Engine(bindings, device). events and ticks merge by t (ms); at one t the events go first, in order, then the tick; flush, when given, runs last at its t. A step runs a due tick before its event. After every step, a hold whose buttons are exactly down again, with its press still held back, arms anew from that step's t. expect lists every output in order with the t it came out at: forward [button, down] (to the host, obeys the input mask), fire [action id, once|down|up|tap], lift [buttons] (release on the host, mask or not). Key devices name keys by key_vk name; left and right modifiers are one key. HOLD 1000 ms, TAP_PRESS 50 ms, KEY_TAP 350 ms.",
     "cases": [
       {
         "name": "hold Start opens quick actions; the game never sees Start",
@@ -619,6 +619,30 @@
           {"t": 300, "out": {"forward": ["lb", false]}},
           {"t": 1300, "out": {"forward": ["select", true]}},
           {"t": 1350, "out": {"forward": ["select", false]}}
+        ]
+      },
+      {
+        "name": "a chord that breaks re-arms the hold left under it",
+        "device": "pad",
+        "bindings": [
+          {"on": "pad", "keys": ["select", "a"], "hold": false, "do": "ring"},
+          {"on": "pad", "keys": ["select", "x"], "hold": false, "do": "stats"},
+          {"on": "pad", "keys": ["select"], "hold": true, "do": "guide"},
+          {"on": "pad", "keys": ["lb", "rb", "start", "select"], "hold": false, "do": "release_input"},
+          {"on": "pad", "keys": ["lb", "rb", "start", "select"], "hold": true, "do": "end_stream"}
+        ],
+        "events": [
+          {"t": 0, "bit": "select", "down": true},
+          {"t": 100, "bit": "lb", "down": true},
+          {"t": 300, "bit": "lb", "down": false},
+          {"t": 1500, "bit": "select", "down": false}
+        ],
+        "ticks": [1000, 1299, 1300, 1400],
+        "expect": [
+          {"t": 100, "out": {"forward": ["lb", true]}},
+          {"t": 300, "out": {"forward": ["lb", false]}},
+          {"t": 1300, "out": {"fire": ["guide", "down"]}},
+          {"t": 1500, "out": {"fire": ["guide", "up"]}}
         ]
       },
       {
