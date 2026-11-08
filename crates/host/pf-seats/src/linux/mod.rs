@@ -1264,7 +1264,7 @@ impl PlatformBackend for LinuxBackend {
             });
             let running = kind == Own::Seat && runtime == RuntimeState::Running;
             let missed = (found.as_ref().filter(|_| running))
-                .and_then(|passwd| reach::missed(&self.inner.state, &seat.id, &passwd.home))
+                .and_then(|passwd| reach::missed(&passwd.home))
                 .filter(|missed| reach::this_run(missed, &session::unit(&seat.account)));
             if let Some(missed) = missed {
                 let (id, message) = if missed.listed() {
@@ -1594,7 +1594,7 @@ fn keep_level(inner: Weak<Inner>) {
                 let Ok(Some(passwd)) = accounts::lookup(&tracked.account) else {
                     continue;
                 };
-                let Some(missed) = reach::missed(&inner.state, id, &passwd.home) else {
+                let Some(missed) = reach::missed(&passwd.home) else {
                     continue;
                 };
                 if explained.get(id) == Some(&missed.stamp) {
