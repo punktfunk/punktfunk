@@ -115,7 +115,8 @@ host** or an answer for this device only:
 - **Your monitors while streaming**. On a Windows host the first device to connect decides it for
   every device that joins;
 - **Largest screen this device gets**, such as `2560x1440@60`. The device is told the smaller mode
-  when it asks for more;
+  when it asks for more, in its own screen's shape: a 2560×1600 device under `1920x1080@60` gets
+  1728×1080;
 - **Scale its screen at** (GNOME and niri hosts): the starting scale, until you change the scale in the
   desktop. On KDE, set the scale in System Settings while the device streams; KDE keeps it for
   that device.
