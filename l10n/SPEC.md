@@ -87,4 +87,6 @@ message in any language that holds `*`, a backtick, `~~`, `](` or an `_emphasis_
   category reads `other`.
 - **The language** is picked from the OS's list, most preferred first. Each tag is tried as
   it is, then through `locales.json`'s `fallback`, then one subtag shorter (`de-AT`, `de`).
-  Case and `_` do not matter. Nothing matches: the source language.
+  Case and `_` do not matter. Nothing matches: the source language. A program drawn in a
+  terminal reads the terminal's `LC_ALL`, `LC_MESSAGES` or `LANG` first when one is set, so
+  `LC_ALL=C` gives the source language on every OS.
