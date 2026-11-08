@@ -256,7 +256,7 @@ data class Shortcuts(val bindings: List<Binding> = emptyList()) {
         /** Down on the host because of an [Out.Forward]. */
         private val forwarded = mutableListOf<Int>()
 
-        /** Pressed, not sent: the press that may complete a hold. */
+        /** Pressed, not sent: a held chord's presses, only while its hold is armed. */
         private val heldBack = mutableListOf<Int>()
         private var armed: Armed? = null
 
@@ -279,7 +279,7 @@ data class Shortcuts(val bindings: List<Binding> = emptyList()) {
         fun step(id: Int, down: Boolean, nowMs: Long): List<Out> {
             val out = tick(nowMs).toMutableList()
             if (down) press(id, nowMs, out) else release(id, nowMs, out)
-            rearm(nowMs)
+            settle(nowMs, out)
             return out
         }
 
@@ -327,17 +327,10 @@ data class Shortcuts(val bindings: List<Binding> = emptyList()) {
                 owed.removeAt(o)
                 out += Out.Forward(b, false)
             }
-            val next = down + b
-            if (heldBack.isNotEmpty() && rules.none { r -> r.ids.containsAll(next) }) {
-                for (h in heldBack) {
-                    forwarded += h
-                    out += Out.Forward(h, true)
-                }
-                heldBack.clear()
-            }
             down += b
             armed = null
-            if (!isModifier(b)) {
+            // While a key-like hold is down, a press is the host's: Guide+A is Steam's chord.
+            if (!isModifier(b) && keyDown == null) {
                 val press = exact(hold = false)
                 val hold = exact(hold = true)
                 if (press != null && hold == null) {
@@ -349,6 +342,8 @@ data class Shortcuts(val bindings: List<Binding> = emptyList()) {
                     return
                 }
             }
+            // A partner that completes nothing makes a held-back press real, sent first.
+            sendHeldBack(out)
             forwarded += b
             out += Out.Forward(b, true)
         }
@@ -393,11 +388,20 @@ data class Shortcuts(val bindings: List<Binding> = emptyList()) {
             for (d in down) if (d !in claimed) claimed += d
         }
 
-        /** A broken chord can leave a hold's buttons exactly down with its press still held
-         *  back: that hold arms again, timed from [now]. */
-        private fun rearm(now: Long) {
+        /** A press stays held back only while its hold is armed. When a release disarms it, a
+         *  hold still exactly down (a nested one) arms from [now]; otherwise the press goes out. */
+        private fun settle(now: Long, out: MutableList<Out>) {
             if (armed != null || heldBack.isEmpty()) return
-            exact(hold = true)?.let { armed = Armed(now, it, exact(hold = false)) }
+            val hold = exact(hold = true)
+            if (hold != null) armed = Armed(now, hold, exact(hold = false)) else sendHeldBack(out)
+        }
+
+        private fun sendHeldBack(out: MutableList<Out>) {
+            for (h in heldBack) {
+                forwarded += h
+                out += Out.Forward(h, true)
+            }
+            heldBack.clear()
         }
 
         /** The rule whose buttons are exactly what is down. */
