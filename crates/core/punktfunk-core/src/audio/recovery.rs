@@ -237,6 +237,38 @@ impl DroughtConceal {
     }
 }
 
+/// Drops a duplicate or reordered pad-audio datagram of one (pad, kind) stream.
+///
+/// The host freezes seq while its silence gate is closed and restarts it at 0 when its
+/// streamer restarts, so a jump back past [`Self::REORDER`] is a new stream: it passes and
+/// resets the newest seq. [`crate::audio::AudioSeqGate`] would block that restart for half the
+/// seq range.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct PadSeqGate {
+    newest: Option<u32>,
+}
+
+impl PadSeqGate {
+    /// Packets behind the newest that still count as a reorder, not a restart.
+    pub const REORDER: u32 = 256;
+
+    /// `true` when `seq` should reach the decoder. Seq 0 is always a restart: a stream younger
+    /// than [`Self::REORDER`] frames would otherwise lose the restarted stream's first frames.
+    pub fn fresh(&mut self, seq: u32) -> bool {
+        let Some(newest) = self.newest else {
+            self.newest = Some(seq);
+            return true;
+        };
+        // Wrap-aware signed distance: > 0 is ahead of `newest`, <= 0 is behind or equal.
+        let ahead = seq.wrapping_sub(newest) as i32;
+        if seq != 0 && ahead <= 0 && ahead.unsigned_abs() <= Self::REORDER {
+            return false;
+        }
+        self.newest = Some(seq);
+        true
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -481,5 +513,40 @@ mod tests {
         let q = DroughtConceal::new_at_frame_us(100, 2_000);
         assert_eq!(q.after(), std::time::Duration::from_millis(4));
         assert_eq!(DroughtConceal::new(100).after(), drought_after());
+    }
+
+    #[test]
+    fn pad_seq_gate_passes_in_order_and_drops_duplicates_and_reorders() {
+        let mut g = PadSeqGate::default();
+        assert!(g.fresh(1_010), "first packet");
+        assert!(g.fresh(1_011));
+        assert!(!g.fresh(1_011), "duplicate");
+        assert!(g.fresh(1_013));
+        assert!(!g.fresh(1_012), "reorder");
+        assert!(
+            !g.fresh(1_013 - PadSeqGate::REORDER),
+            "edge of the reorder window"
+        );
+        assert!(g.fresh(1_014), "in order again");
+    }
+
+    #[test]
+    fn pad_seq_gate_takes_a_far_jump_back_as_a_restart() {
+        let mut g = PadSeqGate::default();
+        assert!(g.fresh(9_000));
+        assert!(g.fresh(9_001));
+        assert!(g.fresh(4_001), "back by 5000");
+        assert!(!g.fresh(4_001), "duplicate of the restart");
+        assert!(g.fresh(4_002), "next in order after the restart");
+        let mut g = PadSeqGate::default();
+        assert!(g.fresh(u32::MAX));
+        assert!(g.fresh(0), "wraps forward");
+        assert!(!g.fresh(u32::MAX), "reorder across the wrap");
+        // A young stream restarts: seq 0 passes although it sits inside the reorder window.
+        let mut g = PadSeqGate::default();
+        assert!(g.fresh(40));
+        assert!(!g.fresh(39), "reorder");
+        assert!(g.fresh(0), "restart at 0");
+        assert!(g.fresh(1), "and runs on");
     }
 }
