@@ -493,12 +493,9 @@ final class SessionModel: ObservableObject {
         // metadata we apply (Step 2) when it IS HDR.
         let displayHDR: Bool = {
             #if os(macOS)
-                // POTENTIAL, not current, headroom: `maximumExtendedDynamicRangeColorComponentValue`
-                // is the CURRENTLY-ALLOCATED headroom, which macOS hands out on demand — on an idle
-                // SDR desktop it reads 1.0 even with HDR enabled and active (external HDR displays
-                // like the Samsung G95SC allocate EDR only when content asks). Gating on it means an
-                // HDR monitor never gets advertised at connect time. `maximumPotential…` is the
-                // mode-independent capability (the macOS analogue of the tvOS/iOS gates below).
+                // The potential headroom, not the current one: macOS allocates EDR only when content
+                // asks, so the current value reads 1.0 on an idle desktop and an HDR monitor would
+                // never be advertised at connect.
                 return (NSScreen.main?.maximumPotentialExtendedDynamicRangeColorComponentValue ?? 1.0) > 1.0
             #elseif os(tvOS)
                 // NOT the EDR headroom here: on tvOS that reflects the CURRENT output mode, and

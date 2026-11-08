@@ -1383,14 +1383,9 @@ extension SettingsView {
         }
         let head = L10n.applePlayerAudioFormatLosslessHint(rate: mbps)
         guard effective.audioChannels > 2 else { return head }
-        // Surround is offered at every rate, so what it costs has to be said out loud. The plane
-        // sends one frame per datagram and never fragments, so more channels buy a SHORTER frame
-        // rather than a bigger packet — a packet rate, not an impossibility, right up until no rung
-        // on the ladder fits at all. Where that line falls, at 24-bit and the default datagram size
-        // (`pcm::frame_us_for` against ~1 387 B of payload): 44.1 kHz 5.1/7.1 and 48 kHz 7.1 land
-        // on the 1 ms rung, 48 kHz 5.1 on 1.5 ms, and 88.2 kHz upward fit NOTHING. Two different
-        // sentences, because "it will cost you" and "it will not happen" are two different things
-        // to tell someone.
+        // One frame per datagram: more channels buy a shorter frame. At 24-bit and the default
+        // datagram (`pcm::frame_us_for`), 44.1 and 48 kHz surround fit a 1–1.5 ms rung, which
+        // costs packets; 88.2 kHz upward fits none, so it gets the other sentence.
         guard choice == .lossless441 || choice == .lossless48 else {
             return head + " " + String(localized: L10n.applePlayerAudioFormatSurroundLimitHint)
         }

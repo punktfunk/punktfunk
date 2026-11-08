@@ -134,11 +134,12 @@ public struct Shortcuts: Equatable, Sendable {
         ("paddle1", 0x1_0000), ("paddle2", 0x2_0000), ("paddle3", 0x4_0000), ("paddle4", 0x8_0000),
     ]
 
-    /// The wire bit of a stored button name, any case; `back` is `select`.
+    /// The wire bit of a stored button name, any case; `back` is `select`, and the pad art's
+    /// grip names R4, L4, R5, L5 are paddles 1–4.
     public static func buttonBit(_ name: String) -> UInt32? {
-        var n = name.trimmingCharacters(in: .whitespaces).lowercased()
-        if n == "back" { n = "select" }
-        return buttons.first { $0.name == n }?.bit
+        let aliases = ["back": "select", "r4": "paddle1", "l4": "paddle2", "r5": "paddle3", "l5": "paddle4"]
+        let n = name.trimmingCharacters(in: .whitespaces).lowercased()
+        return buttons.first { $0.name == (aliases[n] ?? n) }?.bit
     }
 
     public static func buttonName(_ bit: UInt32) -> String? {
