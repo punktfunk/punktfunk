@@ -357,6 +357,55 @@ fn a_chord_and_a_group_read_as_one_line() {
         .any(|i| i.keys == Keys("Control+Option+Shift+Q")));
 }
 
+/// A key combination row shows the player's name for it, or its keys; a host action this app
+/// knows has its words; a dangling id stays an id.
+#[test]
+fn rows_in_names_key_combinations_and_host_actions() {
+    use crate::overlay_actions::{OverlayConfig, RingPlatform};
+    let cfg = OverlayConfig::parse(
+        r#"{"v":2,"shortcuts":[
+            {"id":"s1","label":"Task Manager","keys":["ctrl","shift","escape"]},
+            {"id":"s2","keys":["alt","tab"]}]}"#,
+        RingPlatform::Desktop,
+    );
+    let s = Shortcuts::parse(
+        r#"{"v":1,"bindings":[
+            {"on":"pad","keys":["select"],"hold":true,"do":"shortcut:s1"},
+            {"on":"pad","keys":["start"],"hold":true,"do":"shortcut:s2"},
+            {"on":"pad","keys":["lb","rb"],"do":"shortcut:gone"},
+            {"on":"pad","keys":["ls","rs"],"do":"host:display.next"},
+            {"on":"pad","keys":["up","down"],"do":"host:custom.eject"}]}"#,
+    );
+    let texts = |groups: Vec<Group>| -> Vec<String> {
+        let pad = groups.last().unwrap();
+        pad.items.iter().map(|i| i.text().into_owned()).collect()
+    };
+    assert_eq!(
+        texts(s.rows_in(&cfg, Client::Desktop, false)),
+        [
+            "Task Manager",
+            "Alt+Tab",
+            "shortcut:gone",
+            pf_l10n::host::hostaction_display_next(),
+            "host:custom.eject",
+        ]
+    );
+    assert_eq!(texts(s.rows(Client::Desktop, false))[0], "shortcut:s1");
+}
+
+/// The editor checks a changed row against the others; every default row passes its own check.
+#[test]
+fn every_default_row_can_be_edited_in_place() {
+    for c in ALL {
+        let d = defaults(c, true, "on");
+        for (i, b) in d.bindings.iter().enumerate() {
+            let mut others = d.clone();
+            others.bindings.remove(i);
+            assert_eq!(others.validate(b), Ok(()), "{c:?} row {i}: {b:?}");
+        }
+    }
+}
+
 #[test]
 fn a_hint_names_the_live_trigger() {
     use crate::overlay_actions::SlotId;

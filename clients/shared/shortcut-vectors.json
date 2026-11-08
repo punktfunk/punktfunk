@@ -287,7 +287,7 @@
   },
 
   "validate": {
-    "$comment": "Whether candidate may join bindings. expect is ok, identical, press_subset (index = the existing binding it meets), single_press, no_modifier or no_key. Bindings and candidate use the blob's binding shape.",
+    "$comment": "Whether candidate may join bindings. expect is ok, identical, press_subset (index = the existing binding it meets), single_press, no_modifier or no_key. A key needs ctrl, alt or shift unless it is f1-f24. Bindings and candidate use the blob's binding shape.",
     "cases": [
       {
         "name": "a press that a hold starts is allowed",
@@ -348,6 +348,18 @@
         "bindings": [],
         "candidate": {"on": "key", "keys": ["o"], "do": "ring"},
         "expect": "no_modifier"
+      },
+      {
+        "name": "a function key needs no modifier",
+        "bindings": [{"on": "key", "keys": ["alt", "enter"], "do": "fullscreen"}],
+        "candidate": {"on": "key", "keys": ["f11"], "do": "fullscreen"},
+        "expect": "ok"
+      },
+      {
+        "name": "F24 is a function key too",
+        "bindings": [],
+        "candidate": {"on": "key", "keys": ["f24"], "do": "stats"},
+        "expect": "ok"
       },
       {
         "name": "modifiers alone are not a key",

@@ -47,6 +47,13 @@ pub fn button_name(bit: u32) -> Option<&'static str> {
 /// The keyboard modifiers a shortcut may hold, in display order. ⌘ and Win are the host's.
 pub const MODIFIERS: [&str; 3] = ["ctrl", "alt", "shift"];
 
+/// F1–F24: a shortcut on its own, as F11 is.
+fn function_key(key: &str) -> bool {
+    key.strip_prefix('f')
+        .and_then(|n| n.parse::<u8>().ok())
+        .is_some_and(|n| (1..=24).contains(&n))
+}
+
 fn modifier(name: &str) -> Option<&'static str> {
     match name.trim().to_ascii_lowercase().as_str() {
         "ctrl" | "control" => Some("ctrl"),
@@ -157,6 +164,7 @@ pub enum Conflict {
     PressSubset(usize),
     /// One button is a hold; a press needs two.
     SinglePress,
+    /// A key other than F1–F24 needs Ctrl, Alt or Shift.
     NoModifier,
     NoKey,
 }
@@ -287,7 +295,7 @@ impl Shortcuts {
                 if key.is_empty() || modifier(key).is_some() {
                     return Err(Conflict::NoKey);
                 }
-                if modifiers.is_empty() {
+                if modifiers.is_empty() && !function_key(key) {
                     return Err(Conflict::NoModifier);
                 }
             }

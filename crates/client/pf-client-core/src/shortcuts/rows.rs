@@ -3,7 +3,8 @@
 
 use super::model::{Action, Binding, Device, Shortcuts, Trigger};
 use super::Client;
-use crate::overlay_actions::{catalogue, key_legend, OverlayConfig, RingPlatform};
+use crate::host_actions::ActionInfo;
+use crate::overlay_actions::{catalogue, key_legend, OverlayConfig, RingPlatform, SlotId};
 use pf_l10n::client as c;
 use punktfunk_core::input::gamepad as wire;
 use std::borrow::Cow;
@@ -200,9 +201,17 @@ const ANDROID_TOUCH: &[Item] = &[
 ];
 
 impl Shortcuts {
-    /// The groups a client shows, remote and keyboard first. `touchscreen` is false on a TV,
-    /// which has no screen to touch. An Apple TV binds no keys either.
+    /// [`Shortcuts::rows_in`] with the platform's default quick actions: key combinations
+    /// show their ids.
     pub fn rows(&self, client: Client, touchscreen: bool) -> Vec<Group> {
+        let cfg = OverlayConfig::platform_default(RingPlatform::Desktop);
+        self.rows_in(&cfg, client, touchscreen)
+    }
+
+    /// The groups a client shows, remote and keyboard first. `touchscreen` is false on a TV,
+    /// which has no screen to touch. An Apple TV binds no keys either. `cfg` is the player's
+    /// quick actions: a key combination row shows its name, or its keys.
+    pub fn rows_in(&self, cfg: &OverlayConfig, client: Client, touchscreen: bool) -> Vec<Group> {
         let (remote, fixed_keys, touch): (&[Item], &[Item], &[Item]) = match client {
             Client::Desktop => (&[], &[], DESKTOP_TOUCH),
             Client::Android => (&[], &[], ANDROID_TOUCH),
@@ -223,7 +232,7 @@ impl Shortcuts {
             items,
             dualsense: client == Client::Ps5,
         };
-        let labels = labels();
+        let labels = labels(cfg);
         let mut out = Vec::new();
         if !remote.is_empty() {
             out.push(group(Kind::Remote, remote.to_vec()));
@@ -274,12 +283,11 @@ impl Shortcuts {
                 Keys(first)
             };
             let id = b.action.id();
-            let label = match &b.action {
-                Action::Ring => c::controls_open_dial().to_string(),
-                _ => labels
-                    .iter()
-                    .find(|(k, _)| *k == id)
-                    .map_or(id, |(_, label)| label.clone()),
+            let label = match (&b.action, labels.iter().find(|(k, _)| *k == id)) {
+                (Action::Ring, _) => c::controls_open_dial().to_string(),
+                (_, Some((_, label))) => label.clone(),
+                (Action::Slot(SlotId::Host(host)), None) => host_label(host, &id),
+                _ => id,
             };
             items.push(Item {
                 keys,
@@ -369,15 +377,21 @@ fn button_label(bit: u32, dualsense: bool) -> &'static str {
     }
 }
 
-/// Every action id the dial's catalogue names, with its label in the reader's language.
-fn labels() -> Vec<(String, String)> {
-    let cfg = OverlayConfig::platform_default(RingPlatform::Desktop);
+/// Every action id the dial's catalogue names for `cfg`, with its label in the reader's
+/// language. A key combination's is its name, or its keys.
+fn labels(cfg: &OverlayConfig) -> Vec<(String, String)> {
     [RingPlatform::Desktop, RingPlatform::Touch]
         .into_iter()
-        .flat_map(|p| catalogue(&cfg, p))
+        .flat_map(|p| catalogue(cfg, p))
         .flat_map(|g| g.entries)
         .map(|e| (e.id, e.label))
         .collect()
+}
+
+/// A host action the catalogue lacks: this app's words for an id it knows, else `fallback`.
+fn host_label(id: &str, fallback: &str) -> String {
+    serde_json::from_value::<ActionInfo>(serde_json::json!({ "id": id, "title": fallback }))
+        .map_or_else(|_| fallback.to_string(), |a| a.label().to_string())
 }
 
 /// `Press` is `Copy` over `&'static str` for the screens that draw it, so a chord's text is

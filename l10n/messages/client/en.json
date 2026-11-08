@@ -745,6 +745,8 @@
 	"shortcuts_identical_replace": "{keys} already does {action}. Replace it?",
 	"shortcuts_not_on_device": "Not on this device",
 	"shortcuts_fixed": "Fixed",
+	"shortcuts_needs_modifier": "Add Ctrl, Alt or Shift",
+	"shortcuts_replace": "Replace",
 	"prefs_group_session": "Session",
 	"prefs_group_statistics": "Statistics",
 	"prefs_group_library": "Library",
