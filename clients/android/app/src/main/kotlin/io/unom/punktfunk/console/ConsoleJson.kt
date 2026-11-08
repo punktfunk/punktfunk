@@ -3,6 +3,7 @@ package io.unom.punktfunk.console
 import android.content.res.Resources
 import android.os.Vibrator
 import android.view.InputDevice
+import io.unom.punktfunk.DisplayTargets
 import io.unom.punktfunk.HostActions
 import io.unom.punktfunk.ProfilesAnswer
 import io.unom.punktfunk.Settings
@@ -94,6 +95,9 @@ internal object ConsoleJson {
         running: Map<String, String> = emptyMap(),
         /** The language of the actions' words. */
         res: Resources? = null,
+        /** What each paired host last said this device may stream, by fingerprint. Absent = no
+         *  Screen section. */
+        screens: Map<String, DisplayTargets.Targets> = emptyMap(),
     ): String {
         val out = JSONArray()
         // The store keeps no insertion order; an undated record predates the stamp, so it
@@ -133,6 +137,7 @@ internal object ConsoleJson {
                 // inherit the map — a card is the same host's shelf.
                 .put("game_presets", JSONObject(h.gamePresets))
                 .put("profile", profileJson(h))
+                .put("screens", screens[h.fpHex]?.json() ?: JSONObject.NULL)
             out.put(base)
             // A pinned card shares the primary tile's live state under its own key.
             for (pid in h.pinnedPresetIds.distinct()) {

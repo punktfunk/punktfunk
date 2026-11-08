@@ -19,6 +19,7 @@ import androidx.compose.ui.res.stringResource
 import io.unom.punktfunk.CONNECT_TIMEOUT_MS
 import io.unom.punktfunk.ConnectErrors
 import io.unom.punktfunk.DialSpec
+import io.unom.punktfunk.DisplayTargets
 import io.unom.punktfunk.HostActions
 import io.unom.punktfunk.HostProfiles
 import io.unom.punktfunk.HostRecords
@@ -584,7 +585,7 @@ object SkiaConsole {
             handle,
             ConsoleJson.hostRows(
                 services.store.all(), services.discovered, services.reachable, presetStore.all(),
-                services.hostActions, services.nowPlaying, appContext?.resources,
+                services.hostActions, services.nowPlaying, appContext?.resources, services.screens,
             ),
         )
     }
@@ -616,6 +617,13 @@ object SkiaConsole {
                     state.launch { recordNowPlaying(fp, up) }
                 }
             }
+            if (now - (services.screensAt[fp] ?: 0L) >= SCREENS_TTL_MS) {
+                services.screensAt[fp] = now
+                ioPool.execute {
+                    val found = DisplayTargets.fetch(id, addr, mgmt, fp, port)
+                    state.launch { recordScreens(fp, found) }
+                }
+            }
             if (now - (services.hostActionsAt[fp] ?: 0L) < HOST_ACTIONS_TTL_MS) continue
             services.hostActionsAt[fp] = now
             ioPool.execute {
@@ -637,6 +645,13 @@ object SkiaConsole {
         val title = games.firstOrNull { it.isUp && it.title.isNotEmpty() }?.title.orEmpty()
         if (services.nowPlaying[fpHex] == title) return
         services.nowPlaying[fpHex] = title
+        pushHosts()
+    }
+
+    /** Adopt a `/display/targets` answer; null drops the Screen section. Re-pushes only on a change. */
+    private fun recordScreens(fpHex: String, found: DisplayTargets.Targets?) {
+        if (services.screens[fpHex] == found) return
+        if (found == null) services.screens.remove(fpHex) else services.screens[fpHex] = found
         pushHosts()
     }
 
@@ -892,6 +907,7 @@ object SkiaConsole {
         "SendLogs" to ::sendLogs,
         "SpeedTest" to ::speedTest,
         "HostAction" to ::hostAction,
+        "SetScreen" to ::setScreen,
         "EndGame" to this::endGame,
         "Install" to this::changeInstall,
         "SaveHost" to ::saveHost,
@@ -1118,6 +1134,31 @@ object SkiaConsole {
         }
     }
 
+    /**
+     * Write this device's screen on the host, then ask again: the row the card shows is the
+     * host's answer, refused or not. The console already toasted the pick; a refusal is a notice.
+     */
+    private fun setScreen(c: JSONObject) {
+        val addr = c.optString("addr"); val mgmt = c.optInt("mgmt"); val fp = c.optString("fp_hex")
+        val target = DisplayTargets.DisplayTarget.of(c.opt("screen")) ?: return
+        val label = c.optString("label")
+        val id = identity
+        if (id == null) {
+            notice(identities.blockedMessage())
+            return
+        }
+        val res = appContext?.resources ?: return
+        ioPool.execute {
+            val refused = DisplayTargets.setScreen(id, addr, mgmt, fp, target, label, streamPort(fp))
+            val found = DisplayTargets.fetch(id, addr, mgmt, fp, streamPort(fp))
+            state.launch {
+                services.screensAt[fp] = android.os.SystemClock.elapsedRealtime()
+                recordScreens(fp, found)
+                refused?.let { notice(it.words(res)) }
+            }
+        }
+    }
+
     private fun pair(c: JSONObject) {
         val pin = c.optString("pin"); val name = c.optString("device_name")
         runPairing(c, ConnectErrors::pairMessage) { id, addr, port ->
@@ -1217,6 +1258,10 @@ object SkiaConsole {
     /** How long a host's running title stays fresh — `pf_client_core::library::RUNNING_TTL`.
      *  Short: this is the one host fact that changes while somebody is looking at the tile. */
     private const val NOW_PLAYING_TTL_MS = 20_000L
+
+    /** How long a host's screens stay fresh — `pf_client_core::display_targets::TTL`. Another
+     *  device starting a stream moves `in_use_by`. */
+    private const val SCREENS_TTL_MS = 20_000L
 }
 
 /**

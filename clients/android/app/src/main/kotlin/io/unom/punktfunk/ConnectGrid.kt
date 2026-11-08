@@ -91,6 +91,11 @@ internal fun ConnectGrid(
      *  (`design/host-actions.md` §7). Absent = no rows. */
     hostActions: Map<String, List<HostActions.Action>>,
     onHostAction: (KnownHost, HostActions.Action) -> Unit,
+    /** What each paired host last said this device may stream, by fingerprint. Absent = no
+     *  Screen section. */
+    screens: Map<String, DisplayTargets.Targets>,
+    /** Write this device's screen on the host. */
+    onPickScreen: (KnownHost, DisplayTargets.Target) -> Unit,
     onCopyLink: (KnownHost, StreamPreset?) -> Unit,
     onTogglePin: (KnownHost, StreamPreset) -> Unit,
     /**
@@ -165,6 +170,31 @@ internal fun ConnectGrid(
                 },
             )
         }
+        // Which host screen a connect streams: the host's rows, its current one checked. A
+        // taken or off head stays listed, greyed, with why; a locked host shows only its note.
+        val shown = screens[kh.fpHex]?.takeIf { pin == null && kh.paired }
+        if (shown != null) {
+            add(
+                HostMenuItem(
+                    stringResource(R.string.hostcard_section_screen),
+                    startsSection = true,
+                    detail = if (shown.locked) stringResource(R.string.screen_locked_hint) else null,
+                    onClick = null,
+                ),
+            )
+            if (!shown.locked) {
+                shown.targets.forEach { t ->
+                    val why = t.reason(res)
+                    // The check mark is a glyph, not part of the message.
+                    val name = t.name(res) + if (t.target() == shown.current()) " ✓" else ""
+                    add(
+                        HostMenuItem(name, enabled = why == null, detail = why ?: t.detail().ifEmpty { null }) {
+                            onPickScreen(kh, t)
+                        },
+                    )
+                }
+            }
+        }
         if (presets.isEmpty()) return@buildList
         if (pin != null) {
             add(HostMenuItem(stringResource(R.string.hostcard_unpin_card), startsSection = true) { onTogglePin(kh, pin) })
@@ -208,6 +238,12 @@ internal fun ConnectGrid(
     // ANY saved card carries a preset chip, they all reserve its space. Nobody who doesn't use
     // presets ever sees the gap.
     val anyPresetChip = savedCards.any { it.pin != null || it.host.presetId != null }
+    // The card names its screen only when a connect mirrors a monitor; its own screen says nothing.
+    val mirrors = savedHosts.mapNotNull { kh ->
+        screens[kh.fpHex]?.takeIf { kh.paired && it.current() is DisplayTargets.DisplayTarget.Monitor }
+            ?.let { kh.fpHex to it }
+    }.toMap()
+    val res = LocalContext.current.resources
 
     Box(Modifier.fillMaxSize()) {
         LazyVerticalGrid(
@@ -272,6 +308,8 @@ internal fun ConnectGrid(
                         profilePicture = kh.asProfile?.avatar,
                         profileArt = if (kh.asProfile?.avatar != null) rememberProfileArt(kh) else null,
                         reservePresetSlot = anyPresetChip,
+                        screenLine = mirrors[kh.fpHex]?.summary(res),
+                        reserveScreenLine = mirrors.isNotEmpty(),
                     )
                 }
             }
