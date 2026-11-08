@@ -213,7 +213,10 @@ fn next_monitor_target() -> Result<(String, String), Said> {
     }
     plan_display_next(
         pf_host_config::config().capture_monitor.as_deref(),
-        crate::vdisplay::policy::prefs().get().capture_monitor,
+        crate::vdisplay::policy::prefs()
+            .get()
+            .screen_for(None)
+            .and_then(crate::vdisplay::policy::DisplayTarget::into_monitor),
         host_monitors,
     )
 }
@@ -495,7 +498,8 @@ async fn invoke_display_next(
     }
     let switched = blocking("monitor_switch", || {
         let (from, to) = next_monitor_target().map_err(|r| (StatusCode::CONFLICT, r))?;
-        super::display::write_with(|p| p.capture_monitor = Some(to.clone())).map_err(|e| {
+        let next = crate::vdisplay::policy::DisplayTarget::Monitor(to.clone());
+        super::display::write_with(|p| p.screen = Some(next)).map_err(|e| {
             tracing::warn!(error = %format!("{e:#}"), "streamed monitor not saved");
             (
                 StatusCode::INTERNAL_SERVER_ERROR,

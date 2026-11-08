@@ -7,9 +7,9 @@
 //! a monitor the user is sitting in front of.
 //!
 //! `create()` ignores the requested [`Mode`]. A panel runs at the mode the user
-//! set; the client scales. Selection is a host-level pin
-//! (`PUNKTFUNK_CAPTURE_MONITOR`), not a per-session choice: one pin for the whole
-//! host, so the shared injector cannot be re-aimed per session.
+//! set; the client scales. Which head a session mirrors is the device's screen
+//! (`policy::DisplayTarget`); [`streamed`] lists the heads live mirrors hold, so a
+//! second device is not handed a head another one streams.
 
 use super::backend::{DisplayOwnership, VirtualDisplay, VirtualOutput};
 use super::monitors;
@@ -44,6 +44,8 @@ impl MirrorStream {
 pub struct MirrorDisplay {
     compositor: Compositor,
     connector: String,
+    /// The device this mirror streams to (fingerprint hex), for [`streamed`].
+    device: Option<String>,
     hw_cursor: bool,
     last_cursor_mode: Option<crate::portal_cursor::Mode>,
 }
@@ -53,10 +55,43 @@ impl MirrorDisplay {
         Ok(MirrorDisplay {
             compositor,
             connector,
+            device: None,
             hw_cursor: false,
             last_cursor_mode: None,
         })
     }
+}
+
+/// Heads live mirrors stream: `(claim, connector, device)`.
+static STREAMED: std::sync::Mutex<Vec<(u64, String, Option<String>)>> =
+    std::sync::Mutex::new(Vec::new());
+
+/// A head in [`STREAMED`] for as long as the output's keepalive holds this.
+struct Streaming(u64);
+
+impl Streaming {
+    fn claim(connector: &str, device: Option<String>) -> Streaming {
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let id = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let mut live = STREAMED.lock().unwrap_or_else(|e| e.into_inner());
+        live.push((id, connector.to_string(), device));
+        Streaming(id)
+    }
+}
+
+impl Drop for Streaming {
+    fn drop(&mut self) {
+        let mut live = STREAMED.lock().unwrap_or_else(|e| e.into_inner());
+        live.retain(|(id, ..)| *id != self.0);
+    }
+}
+
+/// Every head a live mirror streams, with the device it streams to.
+pub(crate) fn streamed() -> Vec<(String, Option<String>)> {
+    let live = STREAMED.lock().unwrap_or_else(|e| e.into_inner());
+    live.iter()
+        .map(|(_, c, d)| (c.clone(), d.clone()))
+        .collect()
 }
 
 impl VirtualDisplay for MirrorDisplay {
@@ -80,6 +115,10 @@ impl VirtualDisplay for MirrorDisplay {
         self.last_cursor_mode
     }
 
+    fn set_client_identity(&mut self, fingerprint: Option<[u8; 32]>) {
+        self.device = crate::policy::fp_hex(fingerprint);
+    }
+
     fn ownership(&self) -> DisplayOwnership {
         // Asked before `create` can declare `External`. The default `Owned` would claim
         // a head we did not make and must not pool.
@@ -95,9 +134,9 @@ impl VirtualDisplay for MirrorDisplay {
 }
 
 impl MirrorDisplay {
-    /// Windows: the monitor itself is the output. Nothing is created and nothing is held; the
-    /// capture worker opens the monitor by the name resolved here, and the target carries no
-    /// driver process because no driver is involved.
+    /// Windows: the monitor itself is the output. Nothing is created; the keepalive holds only
+    /// the head's [`Streaming`] claim. The capture worker opens the monitor by the name resolved
+    /// here, and the target carries no driver process because no driver is involved.
     #[cfg(target_os = "windows")]
     fn create_windows(&mut self) -> Result<VirtualOutput> {
         let inventory = pf_win_display::display_events::snapshot_or_query()
@@ -120,7 +159,8 @@ impl MirrorDisplay {
             "mirroring an existing monitor (no virtual display created)"
         );
         let dims = (target.width, target.height, refresh_hz(target.refresh_mhz));
-        let mut out = VirtualOutput::owned(0, Some(dims), Box::new(()));
+        let claim = Streaming::claim(&target.connector, self.device.clone());
+        let mut out = VirtualOutput::owned(0, Some(dims), Box::new(claim));
         out.win_capture = Some(pf_frame::dxgi::WinCaptureTarget {
             adapter_luid: head.key.adapter_luid,
             gdi_name: head.gdi_name.clone(),
@@ -198,8 +238,10 @@ impl MirrorDisplay {
             "mirroring an existing monitor (no virtual display created)"
         );
 
-        // Dropping the keepalive stops the cast; we created nothing to restore.
-        let mut out = VirtualOutput::owned(stream.node_id, Some(dims), stream.keepalive);
+        // Dropping the keepalive stops the cast and frees the head; we created nothing to restore.
+        let claim = Streaming::claim(&target.connector, self.device.clone());
+        let keepalive = Box::new((stream.keepalive, claim));
+        let mut out = VirtualOutput::owned(stream.node_id, Some(dims), keepalive);
         out.remote_fd = stream.remote_fd;
         out.ownership = DisplayOwnership::External;
         // Host aims input; this crate must not depend on pf-inject. Connector equals

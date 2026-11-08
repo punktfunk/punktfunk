@@ -417,18 +417,35 @@ pub fn rebuild_probe_active() -> bool {
     REBUILD_PROBES.load(std::sync::atomic::Ordering::SeqCst) > 0
 }
 
-/// Monitor to mirror instead of creating a virtual display, or `None`.
-///
-/// **`PUNKTFUNK_CAPTURE_MONITOR` wins over stored policy** — an appliance pin
-/// in `host.env` must not be overridden by a console click. Unset, the
-/// persisted picker applies (the env is snapshotted at startup, so a UI
-/// cannot write it). Read per `open`, not cached, so a console change takes
-/// effect on the next session.
+/// The host-wide monitor to mirror, or `None`: [`screen_target`] of a device with no row.
 pub fn capture_monitor() -> Option<String> {
+    screen_target(None).0.into_monitor()
+}
+
+/// What the device with pairing fingerprint `fp` (hex) is set to stream, and whether
+/// `PUNKTFUNK_CAPTURE_MONITOR` fixes it.
+///
+/// **The env pin wins over stored policy**: an appliance pin in `host.env` must not be
+/// overridden by a console click (the env is snapshotted at startup, so a UI cannot write
+/// it). Unset, the device's row, then the host's screen, then its own screen. Read per call,
+/// not cached, so a console change takes effect on the next session.
+pub fn screen_target(fp: Option<&str>) -> (policy::DisplayTarget, bool) {
     if let Some(env) = pf_host_config::config().capture_monitor.as_deref() {
-        return Some(env.to_string());
+        return (policy::DisplayTarget::Monitor(env.to_string()), true);
     }
-    policy::prefs().get().capture_monitor
+    let target = policy::prefs().get().screen_for(fp);
+    (target.unwrap_or(policy::DisplayTarget::Own), false)
+}
+
+/// Heads a live mirror streams now, each with the device (fingerprint hex) it streams to.
+/// `None` is a session that named no device.
+pub fn streamed_monitors() -> Vec<(String, Option<String>)> {
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
+    {
+        mirror::streamed()
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "windows")))]
+    Vec::new()
 }
 
 /// Whether a session opened now streams the pinned monitor instead of a virtual display: a
@@ -444,14 +461,20 @@ pub fn mirrors_pinned() -> bool {
     }
 }
 
-/// Open the virtual-display driver for `compositor`.
-///
-/// A [`capture_monitor`] pin routes to the mirror backend (physical head, no
-/// virtual display). Resolved here — the one place every session opens a
-/// display — so the pin is host-wide. `design/per-monitor-portal-capture.md`.
+/// [`open_for`] the host-wide screen: what a device with no row of its own streams.
 pub fn open(compositor: Compositor) -> Result<Box<dyn VirtualDisplay>> {
+    open_for(compositor, screen_target(None).0)
+}
+
+/// Open the display `target` names on `compositor`: the mirror backend for a monitor
+/// (physical head, no virtual display), else the virtual-display driver.
+/// `design/per-monitor-portal-capture.md`.
+pub fn open_for(
+    compositor: Compositor,
+    target: policy::DisplayTarget,
+) -> Result<Box<dyn VirtualDisplay>> {
     #[cfg(target_os = "linux")]
-    if let Some(connector) = capture_monitor() {
+    if let policy::DisplayTarget::Monitor(connector) = target {
         // No desk (nested/headless, or only our own kept outputs) degrades to a
         // virtual display so a persisted pin cannot refuse to stream. A miss among
         // real heads stays a hard error; an enumeration error stays on the mirror path.
@@ -471,7 +494,7 @@ pub fn open(compositor: Compositor) -> Result<Box<dyn VirtualDisplay>> {
         backend(compositor)
     }
     #[cfg(target_os = "windows")]
-    if let Some(connector) = capture_monitor() {
+    if let policy::DisplayTarget::Monitor(connector) = target {
         if mirror::desktop_capturable() {
             return Ok(Box::new(mirror::MirrorDisplay::new(compositor, connector)?));
         }
@@ -499,7 +522,7 @@ pub fn open(compositor: Compositor) -> Result<Box<dyn VirtualDisplay>> {
     }
     #[cfg(not(any(target_os = "linux", target_os = "windows")))]
     {
-        let _ = compositor;
+        let _ = (compositor, target);
         anyhow::bail!("virtual displays require Linux or Windows")
     }
 }

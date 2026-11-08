@@ -197,6 +197,74 @@ pub enum WorkspacePlacement {
     Current,
 }
 
+/// What a device streams: a screen of its own, or one of the host's monitors by connector.
+/// JSON `"own"` or `{"monitor": "HDMI-A-1"}`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum DisplayTarget {
+    /// A virtual display the host creates for this device.
+    Own,
+    /// A physical head, by connector (`DP-1`, `HDMI-A-2`).
+    Monitor(String),
+}
+
+impl DisplayTarget {
+    /// The connector, when this is a monitor.
+    pub fn into_monitor(self) -> Option<String> {
+        match self {
+            DisplayTarget::Monitor(c) => Some(c),
+            DisplayTarget::Own => None,
+        }
+    }
+}
+
+/// Who last wrote a device's `screen`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum SetBy {
+    /// The device itself, on its own row.
+    Device,
+    /// The operator, on the web console.
+    Console,
+}
+
+/// Why a device streams its own screen instead of the monitor it is set to.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ScreenReason {
+    /// Another device streams that monitor now; its pairing label.
+    Taken(String),
+    /// The monitor is listed and switched off.
+    Off,
+    /// The host has no monitor by that name it can stream.
+    Missing,
+}
+
+/// The screen a session opens, and why it is not the one the device is set to.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ScreenPick {
+    pub target: DisplayTarget,
+    /// `PUNKTFUNK_CAPTURE_MONITOR` fixes the screen for every device.
+    pub locked: bool,
+    /// Set when `target` fell back to [`DisplayTarget::Own`].
+    pub reason: Option<ScreenReason>,
+}
+
+/// One release, `capture_monitor` is `screen`'s alias: a document naming only the connector
+/// reads as that monitor, and the connector is rewritten from `screen`. Blank names no monitor.
+fn alias_screen(
+    screen: Option<DisplayTarget>,
+    capture_monitor: Option<String>,
+) -> (Option<DisplayTarget>, Option<String>) {
+    let named = |c: String| Some(c.trim().to_string()).filter(|c| !c.is_empty());
+    let screen = match screen {
+        Some(DisplayTarget::Monitor(c)) => named(c).map(DisplayTarget::Monitor),
+        Some(DisplayTarget::Own) => Some(DisplayTarget::Own),
+        None => capture_monitor.and_then(named).map(DisplayTarget::Monitor),
+    };
+    let mirrored = screen.clone().and_then(DisplayTarget::into_monitor);
+    (screen, mirrored)
+}
+
 /// Named bundle of the fields below. `Custom` uses the explicit fields;
 /// any other preset ignores them and expands ([`DisplayPolicy::effective`]).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
@@ -269,11 +337,15 @@ pub struct DisplayPolicy {
     /// `atiadlxx.dll`. Orthogonal to `preset`; default off.
     #[serde(default)]
     pub edid_lock: bool,
-    /// Stream this physical connector (`DP-1`, `HDMI-A-2`) instead of a
-    /// virtual display; `None` is the virtual path. Host-wide, orthogonal
-    /// to `preset`. `PUNKTFUNK_CAPTURE_MONITOR` overrides it so `host.env`
-    /// can pin without a console write undoing it.
+    /// What a device with no `screen` of its own streams; absent is its own screen.
+    /// Host-wide, orthogonal to `preset`. `PUNKTFUNK_CAPTURE_MONITOR` overrides it so
+    /// `host.env` can pin without a console write undoing it.
     #[serde(default)]
+    pub screen: Option<DisplayTarget>,
+    /// Deprecated: `screen`'s connector, kept one release for older consoles and SDKs. Read
+    /// when `screen` is absent; written from `screen`.
+    #[serde(default)]
+    #[schema(deprecated)]
     pub capture_monitor: Option<String>,
     /// Connectors that stay lit while streaming, even under `exclusive`
     /// (`design/web-console-overhaul.md` §5.5).
@@ -317,11 +389,16 @@ pub struct ClientOverlay {
     pub identity: Option<Identity>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub game_session: Option<GameSession>,
-    /// Mirror this connector for this device only. Absent follows the host,
-    /// which is also the only way back to a virtual screen — a device cannot
-    /// opt OUT of a host-wide pin. Nobody has asked to; the reverse direction
-    /// is what the field exists for.
+    /// What this device streams. `own` opts it out of a host-wide monitor; absent follows
+    /// the host. The device may write this field on its own row.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub screen: Option<DisplayTarget>,
+    /// Who wrote `screen`. Absent with it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub set_by: Option<SetBy>,
+    /// Deprecated: `screen`'s connector, kept one release for older consoles and SDKs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(deprecated)]
     pub capture_monitor: Option<String>,
     /// Scale this device's screen is created at, when the desktop has not already
     /// remembered one for it (`display-management.md` §5.4). Mutter mints a fresh EDID
@@ -364,14 +441,21 @@ impl ClientOverlay {
         }
     }
 
+    /// This device's screen, and who chose it. `capture_monitor` follows, so the alias
+    /// cannot bring back the monitor it replaced.
+    pub fn set_screen(&mut self, screen: Option<DisplayTarget>, by: SetBy) {
+        self.capture_monitor = screen.clone().and_then(DisplayTarget::into_monitor);
+        self.set_by = screen.is_some().then_some(by);
+        self.screen = screen;
+    }
+
     /// Same clamps a host-wide write gets: an overlay must not be able to
-    /// smuggle a linger window a direct PUT would refuse.
+    /// smuggle a linger window a direct PUT would refuse. `capture_monitor` reads as `screen`.
     pub fn sanitized(mut self) -> Self {
         self.keep_alive = self.keep_alive.map(clamp_keep_alive);
-        self.capture_monitor = self
-            .capture_monitor
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty());
+        (self.screen, self.capture_monitor) =
+            alias_screen(self.screen.take(), self.capture_monitor.take());
+        self.set_by = self.set_by.filter(|_| self.screen.is_some());
         // The range every desktop actually offers. A 0 or a negative would reach a
         // compositor as a scale and is not a smaller screen, it is a broken one.
         self.scale = self.scale.filter(|s| (0.25..=6.0).contains(s));
@@ -433,6 +517,7 @@ impl Default for DisplayPolicy {
             ddc_power_off: false,
             pnp_disable_monitors: true,
             edid_lock: false,
+            screen: None,
             capture_monitor: None,
             keep_monitors: Vec::new(),
             clients: BTreeMap::new(),
@@ -503,11 +588,12 @@ impl DisplayPolicy {
             .unwrap_or(self.game_session)
     }
 
-    /// The connector this device mirrors, else the host's pin.
-    pub fn capture_monitor_for(&self, fp: Option<&str>) -> Option<String> {
+    /// What this device streams: its row's `screen`, else the host's. `Own` on a row is an
+    /// answer, so it wins over a host-wide monitor. `None` is its own screen.
+    pub fn screen_for(&self, fp: Option<&str>) -> Option<DisplayTarget> {
         self.overlay_for(fp)
-            .and_then(|o| o.capture_monitor.clone())
-            .or_else(|| self.capture_monitor.clone())
+            .and_then(|o| o.screen.clone())
+            .or_else(|| self.screen.clone())
     }
 
     /// Scale to create this device's screen at, if the operator set one.
@@ -563,17 +649,16 @@ impl DisplayPolicy {
     }
 
     /// Clamp on write and on load. `max_displays` to `1..=16` (connector
-    /// ceiling), linger to `MAX_KEEP_ALIVE_SECS`, layout keys to slot ids.
+    /// ceiling), linger to `MAX_KEEP_ALIVE_SECS`, layout keys to slot ids, `capture_monitor`
+    /// to `screen`'s alias.
     pub fn sanitized(mut self) -> Self {
         self.version = CURRENT_VERSION;
         self.max_displays = self.max_displays.clamp(1, 16);
         self.keep_alive = clamp_keep_alive(self.keep_alive);
         self.layout.positions = canonical_positions(std::mem::take(&mut self.layout.positions));
         // A cleared picker sends `""`; that is "no pin", not a monitor named empty.
-        self.capture_monitor = self
-            .capture_monitor
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty());
+        (self.screen, self.capture_monitor) =
+            alias_screen(self.screen.take(), self.capture_monitor.take());
         // A connector named twice, or blank, is one the operator cannot have meant.
         self.keep_monitors = std::mem::take(&mut self.keep_monitors)
             .into_iter()
@@ -1166,6 +1251,7 @@ pub fn seat_contract() -> DisplayPolicy {
         ddc_power_off: false,
         pnp_disable_monitors: false,
         edid_lock: false,
+        screen: None,
         capture_monitor: None,
         keep_monitors: Vec::new(),
         ..DisplayPolicy::default()
@@ -1907,7 +1993,7 @@ mod tests {
             .with_box_overlays(Some(box_file))
             .with_contract(true);
         let p = seat.get();
-        assert_eq!(p.capture_monitor_for(Some("aa")), None);
+        assert_eq!(p.screen_for(Some("aa")), None);
         assert!(!p.ddc_power_off && !p.pnp_disable_monitors && p.keep_monitors.is_empty());
         // The box gives "aa" its own screen, which a seat has none of.
         assert_eq!(
@@ -2469,20 +2555,84 @@ mod tests {
         fn the_orthogonal_axes_overlay_too() {
             let mut p = host();
             p.game_session = GameSession::Auto;
-            p.capture_monitor = Some("DP-1".into());
             p.clients.insert(
                 PAD.into(),
                 ClientOverlay {
                     game_session: Some(GameSession::Dedicated),
-                    capture_monitor: Some("HDMI-1".into()),
                     ..ClientOverlay::default()
                 },
             );
             assert_eq!(p.game_session_for(Some(PAD)), GameSession::Dedicated);
-            assert_eq!(p.capture_monitor_for(Some(PAD)).as_deref(), Some("HDMI-1"));
-            // The TV pinned neither, so it still mirrors the host's monitor.
             assert_eq!(p.game_session_for(Some(TV)), GameSession::Auto);
-            assert_eq!(p.capture_monitor_for(Some(TV)).as_deref(), Some("DP-1"));
+        }
+
+        fn monitor(c: &str) -> Option<DisplayTarget> {
+            Some(DisplayTarget::Monitor(c.into()))
+        }
+
+        /// Each device streams its own row's screen; one with no row streams the host's, and
+        /// `own` on a row opts that device out of a host-wide monitor.
+        #[test]
+        fn each_device_resolves_its_own_screen() {
+            const PHONE: &str = "cc33";
+            let mut p = host();
+            p.screen = monitor("DP-1");
+            p.clients.get_mut(TV).unwrap().screen = monitor("HDMI-A-1");
+            p.clients.insert(
+                PAD.into(),
+                ClientOverlay {
+                    screen: monitor("DP-2"),
+                    ..ClientOverlay::default()
+                },
+            );
+            p.clients.insert(
+                PHONE.into(),
+                ClientOverlay {
+                    screen: Some(DisplayTarget::Own),
+                    ..ClientOverlay::default()
+                },
+            );
+            let p = p.sanitized();
+            assert_eq!(p.screen_for(Some(TV)), monitor("HDMI-A-1"));
+            assert_eq!(p.screen_for(Some(PAD)), monitor("DP-2"));
+            assert_eq!(p.screen_for(Some("dd44")), monitor("DP-1"), "no row");
+            assert_eq!(p.screen_for(None), monitor("DP-1"));
+            assert_eq!(p.screen_for(Some(PHONE)), Some(DisplayTarget::Own));
+        }
+
+        /// A file from before `screen` reads its connector as the monitor, and a write
+        /// mirrors `screen` back into `capture_monitor` for older readers.
+        #[test]
+        fn capture_monitor_is_the_alias_of_screen() {
+            let doc = br#"{ "capture_monitor": "DP-2",
+                "clients": { "aa11": { "capture_monitor": "HDMI-1" } } }"#;
+            let mut p = DisplayPolicyStore::parse(std::path::Path::new("t.json"), doc).unwrap();
+            assert_eq!(p.screen, monitor("DP-2"));
+            assert_eq!(p.screen_for(Some(TV)), monitor("HDMI-1"));
+
+            p.screen = Some(DisplayTarget::Own);
+            p.clients
+                .get_mut(TV)
+                .unwrap()
+                .set_screen(monitor("DP-3"), SetBy::Device);
+            let json = serde_json::to_value(p.sanitized()).unwrap();
+            assert_eq!(json["screen"], "own");
+            assert!(json["capture_monitor"].is_null(), "own names no connector");
+            let row = &json["clients"][TV];
+            assert_eq!(row["screen"], serde_json::json!({"monitor": "DP-3"}));
+            assert_eq!(row["capture_monitor"], "DP-3");
+            assert_eq!(row["set_by"], "device");
+        }
+
+        /// Clearing a row's screen drops who chose it, and a row with nothing else goes.
+        #[test]
+        fn a_cleared_screen_leaves_no_row() {
+            let mut p = DisplayPolicy::default();
+            let mut row = ClientOverlay::default();
+            row.set_screen(monitor("DP-1"), SetBy::Device);
+            row.set_screen(None, SetBy::Device);
+            p.clients.insert(PAD.into(), row);
+            assert!(p.sanitized().clients.is_empty());
         }
 
         /// An overlay must not smuggle a window a host-wide PUT would clamp.
@@ -2506,6 +2656,7 @@ mod tests {
                 })
             );
             assert_eq!(o.capture_monitor, None, "a blank pin is no pin");
+            assert_eq!(o.screen, None);
         }
 
         /// "Pins nothing" is what an absent key already means; keeping the

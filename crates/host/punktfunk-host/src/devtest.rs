@@ -531,7 +531,7 @@ pub fn mirror_test(args: &[String]) -> Result<()> {
     use std::time::{Duration, Instant};
     let secs: u64 = flag_or(args, "--seconds", 5);
     // `--monitor` cannot set `PUNKTFUNK_CAPTURE_MONITOR`: config is snapshotted at
-    // startup. Explicit connector → `open_mirror`; unset → pin / production `open`.
+    // startup. Explicit connector → `open_mirror`; unset → pin / production `open_for`.
     let explicit = flag(args, "--monitor").map(str::to_owned);
     let want = explicit
         .clone()
@@ -553,7 +553,7 @@ pub fn mirror_test(args: &[String]) -> Result<()> {
 
     let mut vd = match &explicit {
         Some(connector) => crate::vdisplay::open_mirror(compositor, connector)?,
-        None => crate::vdisplay::open(compositor)?,
+        None => crate::vdisplay::open_for(compositor, None)?,
     };
     // Mirror ignores mode (the panel runs at its owner's). Pass the head's own if the pin drops.
     let mode = crate::vdisplay::Mode {

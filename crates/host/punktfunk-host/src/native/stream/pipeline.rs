@@ -205,7 +205,7 @@ pub(in crate::native) fn prepare_display(
         cursor_forward,
         compositor == pf_vdisplay::Compositor::Gamescope,
     );
-    let mut vd = crate::vdisplay::open(compositor)?;
+    let mut vd = crate::vdisplay::open_for(compositor, client_identity)?;
     crate::vdisplay::SessionParams {
         client_fp: client_identity,
         client_hdr,

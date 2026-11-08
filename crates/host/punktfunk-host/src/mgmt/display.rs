@@ -3,11 +3,14 @@
 //!
 //! A PUT stores the next-session policy; a running session keeps the display it opened on.
 //! `keep_alive: forever` pins until `POST /display/release`. A host with no mirror backend
-//! (neither Linux nor Windows) drops `capture_monitor` on write.
+//! (neither Linux nor Windows) drops a monitor `screen` on write.
 //!
 //! See `design/display-management.md` and `design/per-monitor-portal-capture.md`.
 
+use super::auth::PairedDevice;
 use super::shared::*;
+use crate::vdisplay::policy::{ClientOverlay, DisplayTarget, SetBy};
+use axum::Extension;
 
 /// Picker row. `fields` is the expansion so the console does not hardcode it.
 #[derive(Serialize, ToSchema)]
@@ -159,9 +162,11 @@ pub(crate) fn display_settings_state() -> DisplaySettingsState {
     if edid_lock_available() {
         enforced.push("edid_lock".into());
     }
-    // `capture_monitor` needs the mirror backend (`vdisplay::open`): Linux and Windows. Do not
-    // advertise it elsewhere — a stored pin would never take effect.
-    if cfg!(any(target_os = "linux", target_os = "windows")) {
+    // A monitor `screen` needs the mirror backend (`vdisplay::open_for`): Linux and Windows.
+    // Do not advertise it elsewhere — a stored monitor would never take effect.
+    let mirrors = cfg!(any(target_os = "linux", target_os = "windows"));
+    if mirrors {
+        enforced.push("screen".into());
         enforced.push("capture_monitor".into());
     }
     #[cfg(target_os = "linux")]
@@ -197,6 +202,10 @@ pub(crate) fn display_settings_state() -> DisplaySettingsState {
     #[cfg(target_os = "linux")]
     if session.scale {
         client_enforced.push("scale".into());
+    }
+    // Every session opens its device's screen (`vdisplay::open_for`).
+    if mirrors {
+        client_enforced.push("screen".into());
     }
     // A contract seat has nothing to set: the contract fixes its desktop, and only a device's
     // cap, scale and second-device rule follow the device here.
@@ -311,16 +320,17 @@ fn refused_on_seat() -> Option<Response> {
 /// absolute input at its pin (or clear the anchor) without a restart. `Some` is the answer
 /// when nothing was stored: 400 for a body that does not read as a policy, 500 for the write.
 ///
-/// A host with no mirror backend drops `capture_monitor`: a stored pin there never takes effect.
+/// A host with no mirror backend drops a monitor `screen`: it would never take effect there.
 fn write(body: serde_json::Map<String, serde_json::Value>) -> Option<Response> {
     let mut malformed = None;
     let stored = crate::vdisplay::policy::prefs().update(|p| match merged(p, body) {
         Ok(next) => {
-            *p = next;
+            *p = next.sanitized();
             #[cfg(not(any(target_os = "linux", target_os = "windows")))]
-            if let Some(dropped) = p.capture_monitor.take() {
+            if let Some(dropped) = p.screen.take().and_then(DisplayTarget::into_monitor) {
+                p.capture_monitor = None;
                 tracing::warn!(
-                    "management API: ignoring capture_monitor={dropped:?} — this host cannot \
+                    "management API: ignoring screen={dropped:?} — this host cannot \
                      stream a chosen physical monitor; the pin was NOT stored"
                 );
             }
@@ -367,12 +377,23 @@ pub(super) fn write_with(
 /// `body` laid over `stored` key by key: a key the body omits keeps its stored value, and
 /// `null` clears an optional one. The per-device overlays ride across, since the PUT strips
 /// `clients` from the body first.
+///
+/// `screen` and its alias `capture_monitor` are one setting: a body naming one of them drops
+/// the stored other, so an older console's `capture_monitor` write is not outvoted.
 pub(super) fn merged(
     stored: &crate::vdisplay::policy::DisplayPolicy,
     body: serde_json::Map<String, serde_json::Value>,
 ) -> serde_json::Result<crate::vdisplay::policy::DisplayPolicy> {
     let mut base = serde_json::to_value(stored)?;
     if let Some(keys) = base.as_object_mut() {
+        match (
+            body.contains_key("screen"),
+            body.contains_key("capture_monitor"),
+        ) {
+            (true, false) => keys.remove("capture_monitor"),
+            (false, true) => keys.remove("screen"),
+            _ => None,
+        };
         keys.extend(body);
     }
     serde_json::from_value(base)
@@ -409,9 +430,10 @@ pub(crate) async fn get_display_client(
 
 /// Save one device's overlay
 ///
-/// The WHOLE overlay: a field absent from the body stops being pinned and the
-/// device follows the host again. An overlay that pins nothing is dropped, which
-/// is the same as `DELETE`.
+/// The operator writes the WHOLE overlay: a field absent from the body stops being pinned and
+/// the device follows the host again. An overlay that pins nothing is dropped, which is the
+/// same as `DELETE`. A paired device writes only `screen`, and only on its own row; its other
+/// fields stay, and it is answered 204. `set_by` records which of the two wrote the screen.
 #[utoipa::path(
     put,
     path = "/display/clients/{fingerprint}",
@@ -421,34 +443,54 @@ pub(crate) async fn get_display_client(
     request_body = crate::vdisplay::policy::ClientOverlay,
     responses(
         (status = OK, description = "Overlay stored; the new settings state", body = DisplaySettingsState),
+        (status = NO_CONTENT, description = "A device's screen stored"),
         (status = BAD_REQUEST, description = "Empty fingerprint", body = ApiError),
+        (status = FORBIDDEN, description = "A device wrote another row, or more than its screen", body = ApiError),
+        (status = UNPROCESSABLE_ENTITY, description = "The body is not an overlay", body = ApiError),
         (status = INTERNAL_SERVER_ERROR, description = "Overlay could not be persisted", body = ApiError),
         (status = UNAUTHORIZED, description = "Missing or invalid bearer token", body = ApiError),
     )
 )]
 pub(crate) async fn set_display_client(
+    device: Option<Extension<PairedDevice>>,
     Path(fingerprint): Path<String>,
-    ApiJson(overlay): ApiJson<crate::vdisplay::policy::ClientOverlay>,
+    ApiJson(body): ApiJson<serde_json::Value>,
 ) -> Response {
+    let key = fingerprint.trim().to_ascii_lowercase();
+    if let Some(Extension(PairedDevice(me))) = device {
+        return set_own_screen(&me, &key, body);
+    }
     if let Some(refused) = refused_on_seat() {
         return refused;
     }
-    let key = fingerprint.trim().to_ascii_lowercase();
     if key.is_empty() {
         return api_error(StatusCode::BAD_REQUEST, "no device named");
     }
+    let overlay = match serde_json::from_value::<ClientOverlay>(body) {
+        Ok(o) => o.sanitized(),
+        Err(e) => {
+            return api_error(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                &format!("read the display overlay: {e}"),
+            )
+        }
+    };
     let store = crate::vdisplay::policy::prefs();
     // An empty overlay is "follow the host", which is what an absent key already means. On an
     // UNCONFIGURED host writing one would materialise a whole default policy as a side effect:
     // `configured()` flips process-wide, which retires the legacy env knobs and moves a Linux
     // host to per-client identity. Nothing to store, so store nothing.
-    let overlay = overlay.sanitized();
     if overlay.is_empty() && store.configured().is_none() {
         return Json(display_settings_state()).into_response();
     }
     // `sanitized` drops an overlay that pins nothing, so this covers the reset
-    // case too without a second path.
+    // case too without a second path. A screen the body leaves as it was keeps who chose it.
     let saved = store.update(|p| {
+        let mut overlay = overlay;
+        overlay.set_by = match p.clients.get(&key) {
+            Some(stored) if stored.screen == overlay.screen => stored.set_by,
+            _ => Some(SetBy::Console),
+        };
         p.clients.insert(key.clone(), overlay);
         true
     });
@@ -462,6 +504,66 @@ pub(crate) async fn set_display_client(
     }
     tracing::info!(fingerprint = %key, "management API: per-device display overlay updated");
     Json(display_settings_state()).into_response()
+}
+
+/// A paired device `me` sets the screen of its row `key`. The answer carries no settings: the
+/// state names every other device.
+fn set_own_screen(me: &str, key: &str, body: serde_json::Value) -> Response {
+    let screen = match device_screen(me, key, body) {
+        Ok(screen) => screen,
+        Err((status, why)) => return api_error(status, &why),
+    };
+    if let Some(refused) = refused_on_seat() {
+        return refused;
+    }
+    let store = crate::vdisplay::policy::prefs();
+    // A clear on an unconfigured host has nothing to remove, and a write would configure it.
+    if screen.is_none() && store.configured().is_none() {
+        return StatusCode::NO_CONTENT.into_response();
+    }
+    let saved = store.update(|p| {
+        let row = p.clients.entry(key.to_string()).or_default();
+        row.set_screen(screen, SetBy::Device);
+        true
+    });
+    if let Err(e) = saved {
+        return api_error_logged(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "device_display_not_saved",
+            "Couldn't save the display settings for this device",
+            &format!("{e:#}"),
+        );
+    }
+    tracing::info!(fingerprint = %key, "management API: a device set its screen");
+    StatusCode::NO_CONTENT.into_response()
+}
+
+/// The screen a paired device `me` may write to the row `key`: its own row, and a body that
+/// names nothing but `screen`. Anything else is 403; a `screen` that does not read is 422.
+pub(super) fn device_screen(
+    me: &str,
+    key: &str,
+    body: serde_json::Value,
+) -> Result<Option<DisplayTarget>, (StatusCode, String)> {
+    let refused = || {
+        (
+            StatusCode::FORBIDDEN,
+            "a device may set only its own screen".into(),
+        )
+    };
+    let serde_json::Value::Object(mut body) = body else {
+        return Err(refused());
+    };
+    let screen = body.remove("screen").unwrap_or(serde_json::Value::Null);
+    if !me.eq_ignore_ascii_case(key) || !body.is_empty() {
+        return Err(refused());
+    }
+    serde_json::from_value(screen).map_err(|e| {
+        (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            format!("read the screen: {e}"),
+        )
+    })
 }
 
 /// Make one device follow the host again
@@ -657,6 +759,118 @@ pub(crate) async fn get_display_monitors() -> Result<Json<MonitorsResponse>, Res
         pinned,
         pin_supported,
         error,
+    }))
+}
+
+/// One row of the screen picker. The first is always `own`; the rest are the host's heads.
+#[derive(Serialize, ToSchema)]
+pub(crate) struct ScreenRow {
+    /// `own`, else the connector.
+    id: String,
+    /// The monitor's name (`make model`, else the connector). `Own screen` on the first row,
+    /// which clients word themselves.
+    label: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    connector: Option<String>,
+    /// `WIDTHxHEIGHT@HZ` of the current mode.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    mode: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    primary: Option<bool>,
+    /// Driven now. A head another device's exclusive screen switched off is `false`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    enabled: Option<bool>,
+    /// The pairing label of the other device streaming this monitor, else null. Absent on `own`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(value_type = Option<String>)]
+    in_use_by: Option<Option<String>>,
+}
+
+/// What a device may stream (`GET /display/targets`).
+#[derive(Serialize, ToSchema)]
+pub(crate) struct DisplayTargets {
+    /// `PUNKTFUNK_CAPTURE_MONITOR` fixes the screen for every device.
+    locked: bool,
+    /// What a device with no screen of its own streams.
+    host_default: DisplayTarget,
+    /// What the calling device is set to, before a taken or missing monitor falls back to its
+    /// own screen. Null on the operator and plugin lanes.
+    yours: Option<DisplayTarget>,
+    targets: Vec<ScreenRow>,
+}
+
+/// Screen picker
+///
+/// The device's own screen, then each of the host's monitors with the device streaming it
+/// now. A paired device also reads what it is set to. A host with no mirror backend lists its
+/// own screen alone.
+#[utoipa::path(
+    get,
+    path = "/display/targets",
+    tag = "display",
+    operation_id = "getDisplayTargets",
+    responses(
+        (status = OK, description = "What a device may stream", body = DisplayTargets),
+        (status = UNAUTHORIZED, description = "Missing or invalid credentials", body = ApiError),
+    )
+)]
+pub(crate) async fn get_display_targets(
+    device: Option<Extension<PairedDevice>>,
+) -> Result<Json<DisplayTargets>, Response> {
+    let me = device.map(|Extension(PairedDevice(fp))| fp.to_ascii_lowercase());
+    let own = ScreenRow {
+        id: "own".into(),
+        label: "Own screen".into(),
+        connector: None,
+        mode: None,
+        primary: None,
+        enabled: None,
+        in_use_by: None,
+    };
+    if !cfg!(any(target_os = "linux", target_os = "windows")) {
+        return Ok(Json(DisplayTargets {
+            locked: false,
+            host_default: DisplayTarget::Own,
+            yours: me.map(|_| DisplayTarget::Own),
+            targets: vec![own],
+        }));
+    }
+    let (host_default, locked) = crate::vdisplay::screen_target(None);
+    let yours = me
+        .as_deref()
+        .map(|fp| crate::vdisplay::screen_target(Some(fp)).0);
+    // Shells out / D-Bus / Wayland, or walks CCD on Windows: off the async worker.
+    let heads = blocking("monitor_list", || crate::vdisplay::heads(None)).await?;
+    let streamed = crate::vdisplay::streamed_monitors();
+    let in_use_by = |connector: &str| {
+        streamed.iter().find_map(|(c, owner)| {
+            let owner = owner.as_deref()?;
+            let other = me.as_deref() != Some(owner);
+            (other && c.eq_ignore_ascii_case(connector))
+                .then(|| crate::vdisplay::device_label(owner))
+        })
+    };
+    let heads = heads.unwrap_or_else(|e| {
+        tracing::debug!(error = %format!("{e:#}"), "screen picker lists no monitors");
+        Vec::new()
+    });
+    let mut targets = vec![own];
+    for m in heads.into_iter().filter(|m| !m.managed) {
+        targets.push(ScreenRow {
+            id: m.connector.clone(),
+            mode: Some(m.mode_label()),
+            in_use_by: Some(in_use_by(&m.connector)),
+            label: m.description,
+            connector: Some(m.connector),
+            primary: Some(m.primary),
+            enabled: Some(m.enabled),
+        });
+    }
+    Ok(Json(DisplayTargets {
+        locked,
+        host_default,
+        yours,
+        targets,
     }))
 }
 
