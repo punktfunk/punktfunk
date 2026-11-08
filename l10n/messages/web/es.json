@@ -49,6 +49,8 @@
 	"automation_filter_preset": "Preajuste de configuración",
 	"automation_filter_preset_help": "El preajuste con el que transmitió el dispositivo, por nombre o ID, como Acoplado (Docked).",
 	"automation_filter_none": "Sin coincidencia: se guardará tal como lo escribiste.",
+	"automation_filter_any_device": "Cualquier dispositivo",
+	"automation_filter_any_profile": "Cualquier perfil",
 	"automation_field_debounce": "Intervalo mínimo (ms)",
 	"automation_field_timeout": "Tiempo de espera límite (s)",
 	"automation_field_hold": "Retener el inicio hasta que esto termine",
@@ -90,10 +92,42 @@
 	"status_last_copied": "Copiado",
 	"status_last_bitrate": "{mbit} Mbit/s",
 	"status_last_bitrate_avg": "{mbit} Mbit/s promedio",
-	"status_last_steps": "{count} cambios de tasa de bits",
-	"status_last_audio_late": "{count} fotogramas de audio retrasados",
-	"status_last_gyro": "{count} interrupciones de giroscopio",
-	"status_last_dropped": "{count} fotogramas perdidos",
+	"status_last_steps": [{
+		"declarations": ["input count", "local n = count: plural"],
+		"selectors": ["n"],
+		"match": {
+			"n=one": "{count} cambio de tasa de bits",
+			"n=many": "{count} cambios de tasa de bits",
+			"n=*": "{count} cambios de tasa de bits"
+		}
+	}],
+	"status_last_audio_late": [{
+		"declarations": ["input count", "local n = count: plural"],
+		"selectors": ["n"],
+		"match": {
+			"n=one": "{count} fotograma de audio retrasado",
+			"n=many": "{count} fotogramas de audio retrasados",
+			"n=*": "{count} fotogramas de audio retrasados"
+		}
+	}],
+	"status_last_gyro": [{
+		"declarations": ["input count", "local n = count: plural"],
+		"selectors": ["n"],
+		"match": {
+			"n=one": "{count} interrupción del giroscopio",
+			"n=many": "{count} interrupciones del giroscopio",
+			"n=*": "{count} interrupciones del giroscopio"
+		}
+	}],
+	"status_last_dropped": [{
+		"declarations": ["input count", "local n = count: plural"],
+		"selectors": ["n"],
+		"match": {
+			"n=one": "{count} fotograma perdido",
+			"n=many": "{count} fotogramas perdidos",
+			"n=*": "{count} fotogramas perdidos"
+		}
+	}],
 	"status_last_join": "compartió la pantalla de otra sesión",
 	"status_last_ended": "finalizada: {reason}",
 	"status_last_end_local": "el cliente la detuvo",
@@ -242,7 +276,7 @@
 	"pairing_native_disabled": "El host nativo no se está ejecutando. Inícialo con `serve --native` para emparejar dispositivos Punktfunk.",
 	"pairing_native_arm": "Mostrar PIN",
 	"pairing_native_bound_for": "PIN para {name}",
-	"pairing_native_bound_hint": "Solo este dispositivo puede usar el PIN. Cualquier otro dispositivo que lo intente será rechazado sin consumirlo.",
+	"pairing_native_bound_hint": "Solo este dispositivo puede emparejarse con este PIN. Se rechaza a cualquier otro que lo intente y el PIN sigue valiendo.",
 	"pairing_native_bound_clear": "Emparejar cualquier dispositivo en su lugar",
 	"pairing_native_enter": "Introduce este PIN en tu dispositivo:",
 	"pairing_native_expires": "Caduca en",
@@ -254,7 +288,15 @@
 	"pairing_native_empty": "Aún no hay dispositivos emparejados.",
 	"pairing_native_unpair_confirm": "¿Desemparejar este dispositivo?",
 	"pairing_native_unpair_body": "Tendrá que emparejarse de nuevo para poder conectarse.",
-	"pairing_native_unpair_all_confirm": "¿Desemparejar todos los {count} dispositivos?",
+	"pairing_native_unpair_all_confirm": [{
+		"declarations": ["input count", "local n = count: plural"],
+		"selectors": ["n"],
+		"match": {
+			"n=one": "¿Desemparejar {count} dispositivo?",
+			"n=many": "¿Desemparejar los {count} dispositivos?",
+			"n=*": "¿Desemparejar los {count} dispositivos?"
+		}
+	}],
 	"pairing_native_unpair_all_body": "Todos los dispositivos emparejados (tanto punktfunk/2 como Moonlight) tendrán que emparejarse de nuevo para conectarse, y cualquier transmisión en curso se desconectará.",
 	"pairing_knock_title": "Un dispositivo quiere emparejarse",
 	"pairing_knock_desc": "{name} está esperando aprobación.",
@@ -320,6 +362,7 @@
 	"access_edit_desc": "Qué puede hacer {name} en este host y durante cuánto tiempo.",
 	"access_expire_now": "Revocar acceso ahora",
 	"access_edit_failed": "No se pudo actualizar el acceso",
+	"access_widen_confirm_body": "Este dispositivo obtiene más acceso o lo conserva más tiempo. Confirma con tu contraseña de la consola.",
 	"pairing_moonlight_title": "Emparejamiento de Moonlight (GameStream)",
 	"library_title": "Biblioteca",
 	"library_empty": "Aún no se han encontrado juegos.",
@@ -355,7 +398,15 @@
 	"library_field_region": "Región",
 	"library_field_region_help": "P. ej. NTSC-U, PAL, NTSC-J.",
 	"library_field_players": "Jugadores",
-	"library_provider_count": "{count} entradas",
+	"library_provider_count": [{
+		"declarations": ["input count", "local n = count: plural"],
+		"selectors": ["n"],
+		"match": {
+			"n=one": "{count} entrada",
+			"n=many": "{count} entradas",
+			"n=*": "{count} entradas"
+		}
+	}],
 	"library_launchers_title": "Lanzadores",
 	"library_empty_add_source": "Añade una fuente de juegos en Fuentes para ver aquí tus juegos instalados.",
 	"library_add_source": "Añadir fuente",
@@ -405,6 +456,8 @@
 	"plugin_access_later": "Más tarde",
 	"plugin_access_dont_allow": "No permitir",
 	"plugin_access_allow_all": "Permitir todo",
+	"plugin_access_confirm_title": "¿Permitir el acceso?",
+	"plugin_access_confirm_body": "El plugin obtiene en este equipo lo que ha pedido. Confirma con tu contraseña de la consola.",
 	"plugin_access_ask_again": "Preguntar de nuevo",
 	"plugin_access_decision_failed": "No se pudo modificar el acceso a esta carpeta",
 	"plugin_access_install_emulator": "Instalar {name}",
@@ -428,6 +481,8 @@
 	"emulators_adopt_path": "Ruta a su ejecutable",
 	"emulators_adopt_add": "Añadir",
 	"emulators_adopt_failed": "No se pudo utilizar esa copia",
+	"emulators_adopt_confirm_title": "¿Usar esta copia?",
+	"emulators_adopt_confirm_body": "El host ejecuta este programa para cada juego de este emulador. Confirma con tu contraseña de la consola.",
 	"emulators_show_absent": "Mostrar {count} no instalados",
 	"emulators_hide_absent": "Ocultar los no instalados",
 	"library_source_settings": "Ajustes",
@@ -447,7 +502,15 @@
 	"library_provider_filter": "Mostrar solo estos",
 	"library_provider_show_all": "Mostrar todo",
 	"library_provider_purge": "Eliminar entradas de este proveedor",
-	"library_provider_purge_confirm": "¿Eliminar todas las {count} entradas sincronizadas por “{provider}”?",
+	"library_provider_purge_confirm": [{
+		"declarations": ["input count", "input provider", "local n = count: plural"],
+		"selectors": ["n"],
+		"match": {
+			"n=one": "¿Eliminar {count} entrada sincronizada por “{provider}”?",
+			"n=many": "¿Eliminar las {count} entradas sincronizadas por “{provider}”?",
+			"n=*": "¿Eliminar las {count} entradas sincronizadas por “{provider}”?"
+		}
+	}],
 	"library_provider_purge_body": "Esto solo las elimina de la biblioteca.",
 	"library_provider_purged": "Se eliminaron las entradas sincronizadas por “{provider}”.",
 	"library_provider_purge_failed": "No se pudieron eliminar las entradas de este proveedor",
@@ -515,6 +578,8 @@
 	"plugin_form_path_read": "Guardar concede a {plugin} acceso de lectura a las carpetas indicadas aquí.",
 	"plugin_form_path_write": "Guardar concede a {plugin} acceso de lectura y escritura a las carpetas indicadas aquí.",
 	"plugin_form_grant_refused": "No se pudo conceder acceso a {path}: {issue}",
+	"plugin_form_confirm_title": "¿Dar acceso a estas carpetas?",
+	"plugin_form_confirm_body": "{plugin} podrá usar las carpetas que has indicado. Confirma con tu contraseña de la consola.",
 	"library_hide_action": "Ocultar en tus dispositivos",
 	"library_unhide_action": "Volver a mostrar en tus dispositivos",
 	"library_hidden_badge": "Oculto",
@@ -583,7 +648,15 @@
 	"diag_loading": "Comprobando…",
 	"diag_all_ok": "Todo lo que este host puede verificar parece correcto.",
 	"diag_unavailable": "Este host es más antiguo que la consola y no puede informar de comprobaciones de estado. Actualiza el host para verlas.",
-	"diag_show_inapplicable": "Mostrar {count} que no corresponden aquí",
+	"diag_show_inapplicable": [{
+		"declarations": ["input count", "local n = count: plural"],
+		"selectors": ["n"],
+		"match": {
+			"n=one": "Mostrar {count} que no corresponde aquí",
+			"n=many": "Mostrar {count} que no corresponden aquí",
+			"n=*": "Mostrar {count} que no corresponden aquí"
+		}
+	}],
 	"diag_hide_inapplicable": "Ocultar las que no corresponden aquí",
 	"diag_impact_label": "Qué consecuencias tiene",
 	"diag_remedy_label": "Cómo solucionarlo",
@@ -632,7 +705,15 @@
 	"logs_copy": "Copiar registros al portapapeles",
 	"logs_copied": "Registros copiados al portapapeles",
 	"logs_share_failed": "No se pudieron compartir los registros",
-	"client_logs_manage": "Administrar {count} paquetes subidos",
+	"client_logs_manage": [{
+		"declarations": ["input count", "local n = count: plural"],
+		"selectors": ["n"],
+		"match": {
+			"n=one": "Administrar {count} paquete subido",
+			"n=many": "Administrar {count} paquetes subidos",
+			"n=*": "Administrar {count} paquetes subidos"
+		}
+	}],
 	"client_logs_col_received": "Recibido",
 	"client_logs_col_device": "Dispositivo",
 	"client_logs_col_size": "Tamaño",
@@ -656,7 +737,15 @@
 	"stats_kind_gamestream": "GameStream",
 	"stats_kind_web": "Navegador",
 	"stats_live_title": "En directo",
-	"stats_live_window": "Mostrando las últimas {count} muestras. La grabación guardada conserva todo.",
+	"stats_live_window": [{
+		"declarations": ["input count", "local n = count: plural"],
+		"selectors": ["n"],
+		"match": {
+			"n=one": "Mostrando {count} muestra, la más reciente. La grabación guardada conserva todo.",
+			"n=many": "Mostrando las últimas {count} muestras. La grabación guardada conserva todo.",
+			"n=*": "Mostrando las últimas {count} muestras. La grabación guardada conserva todo."
+		}
+	}],
 	"stats_live_waiting": "Preparado: esperando las primeras muestras. Inicia una sesión para comenzar a grabar.",
 	"stats_latency_title": "Latencia por etapa",
 	"stats_latency_axis": "ms",
@@ -765,7 +854,15 @@
 	"store_uninstall_failed": "No se pudo iniciar la desinstalación",
 	"store_update_no_entry": "Ese plugin no se encuentra en ningún catálogo ahora mismo: actualiza las fuentes e inténtalo de nuevo.",
 	"store_update_all_count": "Actualizar todos ({count})",
-	"store_updates_pending": "{count} plugins pueden actualizarse",
+	"store_updates_pending": [{
+		"declarations": ["input count", "local n = count: plural"],
+		"selectors": ["n"],
+		"match": {
+			"n=one": "{count} plugin puede actualizarse",
+			"n=many": "{count} plugins pueden actualizarse",
+			"n=*": "{count} plugins pueden actualizarse"
+		}
+	}],
 	"store_update_all_title": "¿Actualizar estos plugins?",
 	"store_update_all_body": "Cada uno se instalará en su versión de catálogo sucesivamente: el host procesa una sola operación de paquete a la vez. El ejecutor se reinicia tras cada una.",
 	"store_update_all_external_note": "Algunos proceden de catálogos que añadiste manualmente ({sources}). unom no ha revisado ese código; está fijado y comprobado, pero se ejecutará en este host con los permisos del ejecutor.",
@@ -774,7 +871,15 @@
 	"store_update_all_skipped": "No incluidos: {names}. Ningún catálogo los contiene o este host no admite la versión disponible.",
 	"store_update_all_step": "Actualizando {index} de {total}",
 	"store_update_all_running": "Iniciando la siguiente actualización",
-	"store_update_all_finished": "Se actualizaron {count} plugins.",
+	"store_update_all_finished": [{
+		"declarations": ["input count", "local n = count: plural"],
+		"selectors": ["n"],
+		"match": {
+			"n=one": "Se actualizó {count} plugin.",
+			"n=many": "Se actualizaron {count} plugins.",
+			"n=*": "Se actualizaron {count} plugins."
+		}
+	}],
 	"store_update_all_stopped": "Se detuvo tras un fallo: {done} actualizados, {left} pendientes. Reinténtalos desde las filas inferiores.",
 	"store_sources_title": "Fuentes de catálogo",
 	"store_sources_help": "El catálogo integrado de unom siempre está presente. Cualquier otra fuente la añadiste tú.",
@@ -784,7 +889,15 @@
 	"store_source_signed": "Firmado",
 	"store_source_unsigned": "Sin firmar",
 	"store_source_stale": "Desactualizado",
-	"store_source_entries": "{count} plugins",
+	"store_source_entries": [{
+		"declarations": ["input count", "local n = count: plural"],
+		"selectors": ["n"],
+		"match": {
+			"n=one": "{count} plugin",
+			"n=many": "{count} plugins",
+			"n=*": "{count} plugins"
+		}
+	}],
 	"store_source_fetched": "última obtención {when}",
 	"store_source_never": "nunca",
 	"store_source_remove": "Eliminar fuente",
@@ -851,8 +964,24 @@
 	"games_detached_note": "Su transmisión finalizó, pero el juego sigue ejecutándose",
 	"games_untracked_note": "Este título no expone datos para reconocer su proceso, por lo que cerrarlo no finalizará la sesión automáticamente",
 	"games_closing_in": "Su cliente se desconectó: cerrando en {time} a menos que regrese",
-	"games_end_all_waiting_confirm": "Este juego no tiene un ID único identificable, por lo que finalizarlo cerrará los {count} juegos sin clientes conectados.",
-	"games_end_all_waiting_title": "¿Finalizar los {count} juegos sin transmisión activa?",
+	"games_end_all_waiting_confirm": [{
+		"declarations": ["input count", "local n = count: plural"],
+		"selectors": ["n"],
+		"match": {
+			"n=one": "Este juego no tiene un ID que el host pueda distinguir, así que finalizarlo ahora finaliza {count} juego que nadie está transmitiendo.",
+			"n=many": "Este juego no tiene un ID que el host pueda distinguir, así que finalizarlo ahora finaliza los {count} juegos que nadie está transmitiendo.",
+			"n=*": "Este juego no tiene un ID que el host pueda distinguir, así que finalizarlo ahora finaliza los {count} juegos que nadie está transmitiendo."
+		}
+	}],
+	"games_end_all_waiting_title": [{
+		"declarations": ["input count", "local n = count: plural"],
+		"selectors": ["n"],
+		"match": {
+			"n=one": "¿Finalizar {count} juego que nadie está transmitiendo?",
+			"n=many": "¿Finalizar los {count} juegos que nadie está transmitiendo?",
+			"n=*": "¿Finalizar los {count} juegos que nadie está transmitiendo?"
+		}
+	}],
 	"action_stop_session_all_confirm": "El host solo puede detenerlas todas a la vez: finalizará las {count} sesiones activas, no solo esta.",
 	"action_stop_session_all_title": "¿Detener todas las sesiones activas?",
 	"action_stop_session_all": "Detener todas las sesiones",
@@ -958,6 +1087,17 @@
 	"settings_account": "Cuenta",
 	"display_says_mirror": "Cada dispositivo ve {connector}.",
 	"display_says_mirror_device": "{name} ve {connector}.",
+	"display_says_each_extend": "Cada dispositivo recibe su propia pantalla junto a tus monitores.",
+	"display_says_each_primary": "Cada dispositivo recibe la pantalla principal.",
+	"display_says_each_exclusive": "Cada dispositivo recibe la única pantalla: tus monitores se apagan.",
+	"display_says_each_auto": "Cada dispositivo recibe una pantalla adaptada a este host.",
+	"display_says_device_extend": "{name} recibe su propia pantalla junto a tus monitores.",
+	"display_says_device_primary": "{name} recibe la pantalla principal.",
+	"display_says_device_exclusive": "{name} recibe la única pantalla: tus monitores se apagan.",
+	"display_says_device_auto": "{name} recibe una pantalla adaptada a este host.",
+	"display_says_on_disconnect_remove": "La pantalla se elimina cuando el dispositivo se desconecta.",
+	"display_says_on_disconnect_keep": "La pantalla se mantiene {seconds} s después de que el dispositivo se desconecte.",
+	"display_says_on_disconnect_forever": "La pantalla se mantiene hasta que la liberes.",
 	"display_says_second_separate": "Un segundo dispositivo recibe su propia pantalla.",
 	"display_says_second_steal": "Un segundo dispositivo toma el control.",
 	"display_says_second_join": "Un segundo dispositivo comparte la pantalla.",
@@ -1075,6 +1215,8 @@
 	"host_settings_restart_pending": "Esperando reinicio.",
 	"host_settings_reset": "Restablecer",
 	"host_settings_save_failed": "No se pudo guardar el ajuste.",
+	"host_settings_confirm_title": "¿Cambiar {name}?",
+	"host_settings_confirm_body": "Este ajuste decide qué dispositivos llegan a este host y qué comparten. Confirma con tu contraseña de la consola.",
 	"host_settings_add": "Añadir",
 	"host_settings_playing_now": "Jugando ahora:",
 	"settings_group_streaming": "Transmisión",
@@ -1248,8 +1390,24 @@
 	"library_platform_option": "{platform} ({count})",
 	"library_view_grid": "Carátulas",
 	"library_view_rows": "Lista",
-	"library_count": "{count} juegos",
-	"library_count_shown": "{shown} de {count} juegos",
+	"library_count": [{
+		"declarations": ["input count", "local n = count: plural"],
+		"selectors": ["n"],
+		"match": {
+			"n=one": "{count} juego",
+			"n=many": "{count} juegos",
+			"n=*": "{count} juegos"
+		}
+	}],
+	"library_count_shown": [{
+		"declarations": ["input count", "input shown", "local n = count: plural"],
+		"selectors": ["n"],
+		"match": {
+			"n=one": "{shown} de {count} juego",
+			"n=many": "{shown} de {count} juegos",
+			"n=*": "{shown} de {count} juegos"
+		}
+	}],
 	"library_load_more": "Mostrar más",
 	"library_no_matches": "Ningún juego coincide. Modifica la búsqueda o los filtros.",
 	"library_tab_games": "Juegos",
@@ -1311,6 +1469,8 @@
 	"profiles_seat_failed": "No se pudo modificar el puesto.",
 	"profiles_seats": "Puestos (Seats)",
 	"profiles_seats_on": "Los puestos están activos",
+	"profiles_seats_confirm_title": "¿Cambiar los puestos?",
+	"profiles_seats_confirm_body": "Los puestos instalan un controlador de pantalla y modifican Escritorio Remoto en este equipo. Confirma con tu contraseña de la consola.",
 	"profiles_seats_rdp": "Permitir Escritorio Remoto (RDP) desde la red",
 	"profiles_seats_rdp_hint": "Desactivado, el Escritorio Remoto solo funciona en este PC. Actívalo para acceder desde otro ordenador.",
 	"profiles_seats_failed": "No se pudieron modificar los puestos.",
@@ -1399,5 +1559,10 @@
 	"profiles_devices_sign_out_all_body": "Cada uno necesitará de nuevo la contraseña de {account} para abrir este escritorio.",
 	"profiles_devices_failed": "No se pudo cerrar la sesión. Inténtalo de nuevo en un momento.",
 	"seat_own_unmanaged": "El escritorio de {name} usa su propia cuenta, así que la consola no gestiona allí plugins ni emuladores.",
-	"seat_own_verified": "El escritorio de {name} usa su propia cuenta, así que allí solo se instalan plugins verificados."
+	"seat_own_verified": "El escritorio de {name} usa su propia cuenta, así que allí solo se instalan plugins verificados.",
+	"display_preset_default_hint": "Ideal para casi todo: reconexión rápida, el escritorio entero y una pantalla propia para cada espectador extra.",
+	"display_preset_gaming_rig_hint": "Para un host sin monitor: el juego sigue al salir y quien se conecte después toma el relevo.",
+	"display_preset_hotdesk_hint": "Una persona a la vez, con reconexión inmediata entre tus dispositivos; a los demás se les avisa de que está ocupado.",
+	"display_preset_shared_desktop_hint": "Para un host que también usas en persona: tus monitores siguen encendidos y cada espectador extra tiene su pantalla.",
+	"display_preset_workstation_hint": "Tu equipo multimonitor de cada día: las pantallas vuelven a donde las pusiste y el escritorio es solo tuyo."
 }
