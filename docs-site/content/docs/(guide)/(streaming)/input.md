@@ -1,138 +1,12 @@
 ---
 title: Mouse, touch and pen
-description: The shortcuts that give your mouse and keyboard back, the controller chords, mouse and touch modes, the quick-action dial and stylus input.
+description: Mouse modes, scrolling, touch modes, the controller mouse, the virtual controller, second screens and stylus input.
 ---
 
-Get your mouse and keyboard back from a stream, then drive the host with a mouse, a touchscreen,
-a controller or a pen. The settings named here are in your client's **Input** settings; see
-[Client settings](/docs/client-settings#input).
-
-## Getting your input back
-
-A stream captures your mouse and keyboard when it starts and whenever you click the video: your
-cursor disappears and keys go to the host.
-
-| Client | Release input | Leave the stream |
-|---|---|---|
-| Linux, Windows, Steam Deck | **Ctrl+Alt+Shift+Q** | **Ctrl+Alt+Shift+D** |
-| macOS | **⌃⌥⇧Q** or **⌘⎋** | **⌃⌥⇧D** |
-| iPad with a keyboard | **⌃⌥⇧Q** or **⌘⎋** | **⌃⌥⇧D** |
-| Android | **Ctrl+Alt+Shift+Q** (pointer capture) | **End stream** on the [dial](#the-quick-action-dial) |
-| Apple TV | — | Hold the remote's **Back** about a second, then let go |
-| Any client, with a controller | Press **L1 + R1 + Start + Select** (Linux, Windows) | Hold it ([details](#leaving-with-a-controller)) |
-
-A stream opens with a one-line hint naming the way to leave, for a few seconds. **Exit hint**, an
-advanced setting, turns it off.
-
-Press the release shortcut again, or click the stream, to capture again. Switching to another app
-releases input and takes it back when you return. Keys and buttons you were holding are let go on
-the host, so nothing sticks. A key press or release the network drops is sent again, so a bad
-Wi-Fi moment doesn't leave a key held either. On Linux and Windows, controllers stop reaching the
-host too until you capture again.
-
-### Keyboard shortcuts
-
-| Action | Linux · Windows | macOS | iPad keyboard | Android |
-|---|---|---|---|---|
-| Release or capture input | Ctrl+Alt+Shift+Q | ⌃⌥⇧Q, ⌘⎋ | ⌃⌥⇧Q, ⌘⎋ | Ctrl+Alt+Shift+Q |
-| Switch the [mouse mode](#mouse-modes) | Ctrl+Alt+Shift+M | ⌃⌥⇧M | — | — |
-| Disconnect | Ctrl+Alt+Shift+D | ⌃⌥⇧D | ⌃⌥⇧D | — |
-| Cycle the [stats overlay](/docs/stats) | Ctrl+Alt+Shift+S | ⌃⌥⇧S | ⌃⌥⇧S | — |
-| [Mute your microphone](#muting-your-microphone) | Ctrl+Alt+Shift+V | ⌃⌥⇧A | ⌃⌥⇧A | — |
-| Open the [quick-action dial](#the-quick-action-dial) | Ctrl+Alt+Shift+O | ⌃⌥⇧O | ⌃⌥⇧O | Ctrl+Alt+Shift+O |
-| Start or stop [clipboard sharing](/docs/clipboard) | — | ⌃⌥⇧C | ⌃⌥⇧C | — |
-| Fullscreen | F11 or Alt+Enter | ⌃⌘F | — | — |
-
-On an iPad, ⌘⎋ and every ⌃⌥⇧ shortcut work while input is captured.
-
-To see the list without a stream: **Keyboard Shortcuts** in the Linux client's main menu,
-**Shortcuts** on the Windows client's host list, **Settings → About → Stream controls** on
-Android, or **About → Shortcuts** in the Apple apps' Settings. The macOS **Stream** menu lists
-them too. Each list covers the controller chords and touch gestures as well. With a pad alone,
-open the console's **Settings → About → Stream controls** (Linux, Windows, Steam Deck, Android
-and Apple).
-
-**macOS:** while input is captured, every other ⌘ chord goes to the host, ⌘Q included. Turn
-**Capture system shortcuts** off to keep them local. ⌘⎋ always stays with the Mac; press it,
-then ⌃⌘F, to leave fullscreen.
-⌘Space, ⌘Tab, Mission Control and other apps' global shortcuts go to the host too, with no
-permission to grant.
-
-**Android:** Android keeps **Alt+Tab**, the **Windows** key and the **Language** key for itself.
-To send them, turn on **Punktfunk keyboard shortcuts** under Android's Accessibility settings;
-the app offers this at launch when a keyboard is attached, and under **Settings → Input →
-Keyboard shortcuts**. On Android 13 and newer a build from outside the Play Store first needs
-**Allow restricted settings** on the app's info page. Without the service, **Alt+`** stands in
-for Alt+Tab. **Ctrl+Space** reaches the host from Android 13 on.
-
-### Muting your microphone
-
-The mute lasts for the current stream and stops only the sending, so unmuting is instant. Each
-switch shows **Microphone muted** or **Microphone live** over the stream for a few seconds, with
-the stats overlay on or off.
-
-- Keyboard: the shortcut in the [table above](#keyboard-shortcuts).
-- Controller on Android: **Select + Y**, or a DualSense's own **Mute** button.
-- Any client with a microphone: the dial's **Microphone** button.
-
-With the microphone off in [client settings](/docs/client-settings#audio), there is nothing to
-mute and the shortcut does nothing.
-
-### Controller chords
-
-Hold **Select** (Back, View) first, then press the second button.
-
-| Chord | What it does | Clients |
-|---|---|---|
-| **Select + A** | Opens the [quick-action dial](#the-quick-action-dial). The host never sees the A | All |
-| **Select + X** | Cycles the [stats overlay](/docs/stats). Both presses still reach the game | All |
-| **Select + Y** | Mutes or unmutes your microphone | Android |
-| **Hold Select** alone | Presses the host's guide button ([below](#the-guide-button-xbox--ps--steam-and-quick-access)) | Where it is on |
-| **L1 + R1 + Start + Select** | Leaves the stream ([below](#leaving-with-a-controller)) | All |
-
-On an Apple TV remote, **hold Play/Pause** about half a second to cycle the stats overlay; a tap
-is a right click.
-
-### Leaving with a controller
-
-Hold **L1 + R1 + Start + Select** (LB + RB + Start + Back on an Xbox pad) on any connected pad.
-
-| Client | Quick press | Hold |
-|---|---|---|
-| Linux, Windows | Releases input and leaves fullscreen, unless the stream started fullscreen. Press again to capture and go back | About 1.5 s disconnects |
-| Steam Deck | Releases input | About 1.5 s disconnects |
-| macOS, iPhone, iPad, Apple TV | Nothing | About 1.5 s disconnects |
-| Android | Shows **Hold to quit…** | About 1 s disconnects |
-
-On Linux and Windows the chord needs [**Forward controllers**](/docs/client-settings#input) on.
-With it off, use **Ctrl+Alt+Shift+D** or the client's own controls.
-
-### The guide button (Xbox / PS / Steam) and Quick Access
-
-The guide button (the Xbox logo, the PS button, the Deck's **Steam** button) opens menus on the
-host. Where your device keeps that button for itself, **hold Select on its own** for about a
-third of a second instead: the host sees a guide press when you let go, or when you press
-another button with it. Hold on past a second and the host sees its guide button held until you
-let go, so a long hold opens a SteamOS host's **Quick Access Menu**. A quick tap of Select still
-reaches the game, a beat late. L1, R1 or Start pressed with a held Select keep it a Select, so
-the leave chord never presses guide.
-
-Two advanced settings control this: **Guide button** and **Guide gesture**. **Automatic** does this:
-
-| Client | Guide button | Hold Select |
-|---|---|---|
-| Linux, Windows, macOS, Android | Sent to the host | Off |
-| Steam Deck and other Gaming Mode sessions | Stays with the Deck | On |
-| iPhone, iPad | iOS keeps it for its Game Overlay | On |
-| Apple TV | tvOS keeps it | On |
-
-If Steam or the Xbox Game Bar on your own device also watches the guide button, both react; turn
-that off on your device. On macOS and iOS 27 and newer, add Punktfunk to **Home Button
-Overrides** in the system's game controller settings; while the system keeps the button, Punktfunk's
-**Controllers** settings link there. The dial's **Guide button** and **Quick access menu** buttons press
-the host's pad for you. **Quick access menu** needs Steam on the host: it presses the pad's own
-button where the virtual pad has one, and Guide with A on every other pad. On a
-Deck, the Punktfunk panel's **Host menus** buttons do the same ([Steam Deck](/docs/steam-deck)).
+Drive the host with a mouse, a touchscreen, a controller or a pen. The settings named here are in
+your client's **Input** settings; see [Client settings](/docs/client-settings#input). The keys
+that give your input back, the controller chords and the quick-action dial are on
+[Shortcuts and quick actions](/docs/shortcuts).
 
 ## Mouse modes
 
@@ -191,7 +65,7 @@ Trackpad and Direct pointer share these gestures:
 | Tap, then press and drag; or press and hold, then drag | Held left drag |
 | Three-finger tap | Cycle the [stats overlay](/docs/stats) |
 | Three-finger swipe up / down (Android, iPhone, iPad) | Show or hide the on-screen keyboard |
-| Two-finger twist | Open the [quick-action dial](#the-quick-action-dial) |
+| Two-finger twist | Open the [quick-action dial](/docs/shortcuts#the-quick-action-dial) |
 
 In **Off**, only the last three work.
 
@@ -204,52 +78,11 @@ Touch passthrough depends on the host:
 | Sway, Hyprland, niri, Umbriel and other wlroots compositors | Not supported: the client uses Trackpad and says so |
 | gamescope | One finger, as an absolute pointer ([gamescope](/docs/gamescope)) |
 
-## The quick-action dial
+## Controller mouse
 
-The dial is six buttons plus a centre that opens a sheet with every action and the resolution
-presets. Pick its six buttons under **Quick actions** in settings, or edit the dial itself.
-
-| Client | Opens the dial |
-|---|---|
-| Linux, Windows | **Ctrl+Alt+Shift+O**, a two-finger twist on a touchscreen |
-| macOS | **⌃⌥⇧O**, **Stream → Quick Actions** |
-| Android | **Back**, a two-finger twist, **Ctrl+Alt+Shift+O** |
-| iPhone, iPad | A two-finger twist, the corner button, **⌃⌥⇧O** on a keyboard; in **Touch passthrough**, pull two fingers in from a side edge |
-| Apple TV | A short press of the remote's **Back** |
-| Any client, with a controller | **Select + A** |
-
-A twist commits at about 30°; lift earlier and nothing is sent. On Android, turn off **Back opens
-quick actions** to make Back do nothing mid-stream; a mouse's Back button always goes to the
-host.
-
-While the dial is up, input belongs to it and the host sees nothing:
-
-- **Controller:** the left stick aims, the D-pad steps, **A** fires, **Y** returns to the centre,
-  **B** closes.
-- **Keyboard:** **Tab** steps through the buttons, the arrows aim, **Enter** fires, **Esc**
-  closes.
-- **Mouse:** the desktop clients hand the pointer back so you can click a button.
-
-What the dial can hold:
-
-| Group | Actions |
-|---|---|
-| Session | **End stream**, **End game** (a game this device launched, then the stream), **Disconnect, keep the game running** |
-| Input | **Touch mode**, **Keyboard**, **Virtual controller**, **Send text**, **Guide button**, **Quick access menu**, **Controller mouse**, **Controller type**, **Release input** (give your mouse and keyboard back, or capture them again), **Mouse mode** ([capture or desktop](#mouse-modes)), **Clipboard sharing** (start or stop it; Mac, iPhone, iPad) |
-| View · Audio | **Statistics**, **Screens** (dual-screen handhelds: the panel below, the picture below, or the picture across both), **Fullscreen**, **Minimize** (the stream keeps running), **Microphone**, **Mute this stream** (this device only) |
-| Host | **Sleep host**, **Restart host**, **Shut down host** ([Host power](/docs/host-power)) |
-| Key combinations | Keys you add, such as Alt+F4. A modifier alone works too: **Win** opens the host's Start menu |
-
-A button a client can't serve is dimmed and says why. **Send text** works on Android against a
-host that takes typed text. **Controller type** works on the desktop clients: each press re-plugs
-your controllers as the next type (Automatic, Xbox 360, Xbox One, DualSense, DualShock 4, Steam
-Deck) for this stream. The next stream starts from your settings.
-
-### Controller mouse
-
-For a launcher, dialog or desktop that ignores controllers, fire **Controller mouse** on the dial.
-Each press moves the controller that opened the dial to the next mode, and each stream starts
-with **Off**:
+For a launcher, dialog or desktop that ignores controllers, fire **Controller mouse** on the
+[dial](/docs/shortcuts#the-quick-action-dial). Each press moves the controller that opened the
+dial to the next mode, and each stream starts with **Off**:
 
 - **Off**: the controller plays.
 - **Touchpad**: the controller still plays, and its touchpads move the host's pointer.
@@ -284,7 +117,7 @@ controller works like this:
 Select stays with the dial, so **Select + A** still opens it. The button is dimmed with no
 controller connected, or when the host only lets this device send controller input.
 
-### Virtual controller
+## Virtual controller
 
 On Android, iPhone and iPad, the dial's **Virtual controller** button draws a controller over the
 stream. The host sees it as one more pad. Fingers on its controls drive the game; fingers
@@ -293,7 +126,7 @@ the host. Under **Quick actions** in settings, pick a **Layout**
 (**Full**, **Sticks and shoulders**, **D-pad and face buttons**), set **Opacity** and **Scale**,
 or use **Edit layout** to move, resize and hide controls, separately for wide and upright screens.
 
-### Dual-screen handhelds
+## Dual-screen handhelds
 
 On an Android handheld with a second screen of 7 inches or less, or a foldable half open, the
 stream takes one screen and a panel takes the other: statistics, the dial's actions, a keyboard
@@ -307,7 +140,7 @@ starts that way. The handheld remembers the layout per second screen, and an **A
 resolution follows it — the picture screen's mode, or two of them stacked when the picture spans
 both — at once where the host can change mode mid-stream, else from the next connect.
 
-### Foldable iPhone
+## Foldable iPhone
 
 Set a foldable iPhone down half open, like a laptop, and the stream splits at the hinge: the
 picture takes the upright half and the flat half becomes a trackpad, or the

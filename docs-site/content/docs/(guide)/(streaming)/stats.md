@@ -29,8 +29,8 @@ shows. Cycle them during a stream:
 | LG TV (webOS) | the **green** button on the remote |
 | Browser (preview) | **Ctrl+Alt+Shift+S**; the quality dot shows or hides the overlay |
 
-With a controller, **Select + X** cycles it on every client. The Linux, Windows, Android and Apple
-apps also have **Statistics** on the [quick-action dial](/docs/input#the-quick-action-dial). A cycle
+On the Linux, Windows, Android and Apple apps, **Select + X** on a controller cycles it too, and
+so does **Statistics** on the [quick-action dial](/docs/shortcuts#the-quick-action-dial). A cycle
 lasts for that stream; the next one starts at the level in Settings.
 
 The overlay follows your display's scaling. **Statistics size** makes it larger or smaller on top

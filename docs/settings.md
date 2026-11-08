@@ -111,7 +111,7 @@ today's state and change with the screen.
 | `ui_palette` | Apple TV edits it under Controllers |
 | `ui_palette`, `reduce_motion`, `library_view`, `library_sections`, `host_sort`, `host_grouping`, `reduce_ui_resolution` | the console draws them; the Linux and Windows dialogs have none of the first six, Android's screen none of the seven, Apple's none of `library_sections`, `host_sort`, `host_grouping` |
 | `fullscreen_on_stream` | a three-way picker on the Mac and in the Linux dialog's defaults, a switch elsewhere |
-| `overlay_actions` | Windows has a page of its own; the console's preset editor has no row |
+| `overlay_actions`, `shortcuts` | Windows has a page for each |
 | `second_screen`, `low_latency` | Android only; the console's preset editor has no row |
 
 ## Examples

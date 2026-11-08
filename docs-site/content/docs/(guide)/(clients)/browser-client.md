@@ -77,7 +77,7 @@ every time.
   is running.
 - **Menu** in the bar at the top, Ctrl+Alt+Shift+O, or Back+A on a controller opens the quick menu.
   **End stream** closes the title; **Disconnect, keep the game running** leaves it up. The other
-  keys are every client's ([Input](/docs/input#getting-your-input-back)).
+  keys are every client's ([Input](/docs/shortcuts#getting-your-input-back)).
 - The gear opens **Settings**: stream size, frame rate, the mouse, the statistics overlay. The
   bitrate follows the connection unless you turn **Automatic bitrate** off.
 
