@@ -1473,7 +1473,8 @@ typedef enum {
     // Decode the returned bytes instead: a missing current reference was moved to a picture
     // the decoder holds.
     PUNKTFUNK_CONCEALMENT_REWRITTEN = 1,
-    // Keep this and every following delta off the decoder and ask for an IDR.
+    // Keep this access unit off the decoder and ask for recovery. The concealer forgets it,
+    // so the host's anchor on a picture the decoder holds comes back `Intact`.
     PUNKTFUNK_CONCEALMENT_UNRECOVERABLE = 2,
 } PunktfunkConcealment;
 

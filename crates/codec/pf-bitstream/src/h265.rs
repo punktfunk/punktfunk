@@ -428,6 +428,23 @@ pub struct H265Planner {
     report: crate::report::AuReporter,
 }
 
+/// [`H265Planner::checkpoint`]: the planner's state, pictures by value.
+pub struct Checkpoint {
+    parser: Parser,
+    negotiation_info: NegotiationInfo,
+    pictures: Vec<(PictureData, PicId)>,
+    max_num_pics: usize,
+    prev_tid0_pic: Option<PictureData>,
+    max_pic_order_cnt_lsb: i32,
+    irap_no_rasl_output_flag: bool,
+    first_picture_in_bitstream: bool,
+    first_picture_after_eos: bool,
+    last_independent_header: Option<SliceHeader>,
+    next_pic_id: PicId,
+    awaiting_idr: bool,
+    report: crate::report::AuReporter,
+}
+
 impl Default for H265Planner {
     fn default() -> Self {
         Self {
@@ -708,6 +725,75 @@ impl H265Planner {
         self.first_picture_after_eos = true;
         self.awaiting_idr = true;
         self.report.flush(live)
+    }
+
+    /// The decoding state as it stands, for [`Self::restore`]. DPB pictures are
+    /// copied, not shared: planning marks them in place.
+    pub fn checkpoint(&self) -> Checkpoint {
+        // Destructured so a new field cannot slip past the checkpoint.
+        let Self {
+            parser,
+            negotiation_info,
+            dpb,
+            rps: _,
+            prev_tid0_pic,
+            max_pic_order_cnt_lsb,
+            irap_no_rasl_output_flag,
+            first_picture_in_bitstream,
+            first_picture_after_eos,
+            last_independent_header,
+            next_pic_id,
+            awaiting_idr,
+            report,
+        } = self;
+        Checkpoint {
+            parser: parser.clone(),
+            negotiation_info: negotiation_info.clone(),
+            pictures: dpb
+                .entries()
+                .iter()
+                .map(|e| (e.0.borrow().clone(), e.1))
+                .collect(),
+            max_num_pics: dpb.max_num_pics(),
+            prev_tid0_pic: prev_tid0_pic.clone(),
+            max_pic_order_cnt_lsb: *max_pic_order_cnt_lsb,
+            irap_no_rasl_output_flag: *irap_no_rasl_output_flag,
+            first_picture_in_bitstream: *first_picture_in_bitstream,
+            first_picture_after_eos: *first_picture_after_eos,
+            last_independent_header: last_independent_header.clone(),
+            next_pic_id: *next_pic_id,
+            awaiting_idr: *awaiting_idr,
+            report: report.clone(),
+        }
+    }
+
+    /// Return to `c` as if the AUs planned since never arrived. A concealer that
+    /// keeps an AU off its decoder restores, so its mirror stays that decoder's DPB.
+    pub fn restore(&mut self, c: Checkpoint) {
+        let mut dpb = Dpb::default();
+        // Uncapped while refilling, so no store fails; the limit returns below.
+        dpb.set_max_num_pics(usize::MAX);
+        for (pic, id) in &c.pictures {
+            let _ = dpb.store_picture(Rc::new(RefCell::new(pic.clone())), *id);
+        }
+        dpb.set_max_num_pics(c.max_num_pics);
+        // `store_picture` re-marks what it stores: put each picture back as copied.
+        for (mut live, (pic, _)) in dpb.pictures_mut().zip(c.pictures) {
+            *live = pic;
+        }
+        self.dpb = dpb;
+        self.rps = RefPicSet::default();
+        self.parser = c.parser;
+        self.negotiation_info = c.negotiation_info;
+        self.prev_tid0_pic = c.prev_tid0_pic;
+        self.max_pic_order_cnt_lsb = c.max_pic_order_cnt_lsb;
+        self.irap_no_rasl_output_flag = c.irap_no_rasl_output_flag;
+        self.first_picture_in_bitstream = c.first_picture_in_bitstream;
+        self.first_picture_after_eos = c.first_picture_after_eos;
+        self.last_independent_header = c.last_independent_header;
+        self.next_pic_id = c.next_pic_id;
+        self.awaiting_idr = c.awaiting_idr;
+        self.report = c.report;
     }
 
     /// Envelope: no interlaced video, separate-colour-plane, SCC self-reference,
@@ -2660,6 +2746,28 @@ mod tests {
         let plan = planner.plan_au(&trail_p(1, &[(0, true)], 1)).unwrap();
         assert!(plan.warnings.is_empty(), "{:?}", plan.warnings);
         assert_eq!(plan.slices[0].ref_list0.len(), 1);
+    }
+
+    #[test]
+    fn a_restore_plans_as_if_the_au_never_arrived() {
+        let mut planner = H265Planner::new();
+        let mut fresh = H265Planner::new();
+        for au in [
+            opening_idr_au(&SpsOpts::default()),
+            trail_p(1, &[(0, true)], 1),
+        ] {
+            planner.plan_au(&au).unwrap();
+            fresh.plan_au(&au).unwrap();
+        }
+        let before = planner.checkpoint();
+        // POC 3 names the lost POC 2 and marks POC 0 and 1 unused.
+        planner.plan_au(&trail_p(3, &[(0, true)], 1)).unwrap();
+        planner.restore(before);
+        let anchor = trail_p(5, &[(3, true)], 1);
+        let restored = planner.plan_au(&anchor).unwrap();
+        let reference = fresh.plan_au(&anchor).unwrap();
+        assert!(restored.warnings.is_empty(), "{:?}", restored.warnings);
+        assert_eq!(format!("{restored:?}"), format!("{reference:?}"));
     }
 
     #[test]
