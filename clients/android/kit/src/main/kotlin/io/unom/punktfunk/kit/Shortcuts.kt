@@ -15,8 +15,8 @@ import org.json.JSONObject
  */
 data class Shortcuts(val bindings: List<Binding> = emptyList()) {
 
-    /** A client family with its own [defaults]. */
-    enum class Client { DESKTOP, ANDROID, APPLE, MAC, WEBOS, WEB, TIZEN, PS5 }
+    /** A client family with its own [defaults]. On the Switch, Nintendo's A sits east: wire `b`. */
+    enum class Client { DESKTOP, ANDROID, APPLE, MAC, WEBOS, WEB, TIZEN, PS5, SWITCH }
 
     /** Where a trigger is pressed. */
     enum class Device { PAD, KEYBOARD }
@@ -565,7 +565,12 @@ data class Shortcuts(val bindings: List<Binding> = emptyList()) {
             }
             // The clients with their own pad path; the others' dial is their only pad chord.
             val native = client in listOf(Client.DESKTOP, Client.ANDROID, Client.APPLE, Client.MAC)
-            val (open, exit) = if (client == Client.PS5) "touchpad" to PS5_EXIT else "select" to EXIT
+            // The dial opener is Select + the confirm button: Minus + A (east) on a Switch.
+            val (open, exit) = when (client) {
+                Client.PS5 -> listOf("touchpad", "a") to PS5_EXIT
+                Client.SWITCH -> listOf("select", "b") to EXIT
+                else -> listOf("select", "a") to EXIT
+            }
             fun pad(buttons: List<String>, hold: Boolean, action: Action) =
                 Binding(Trigger.Pad(buttons.mapNotNull(::buttonBit), hold), action)
             fun key(mods: List<String>, key: String, action: Action) = Binding(Trigger.Key(mods, key), action)
@@ -573,7 +578,7 @@ data class Shortcuts(val bindings: List<Binding> = emptyList()) {
             fun chord(k: String, action: Action) = key(MODIFIERS, k, action)
             val b = mutableListOf<Binding>()
             // Pad rows first, then keys, each in the order the reference screen lists them.
-            b += pad(listOf(open, "a"), false, Action.Ring)
+            b += pad(open, false, Action.Ring)
             if (native) b += pad(listOf("select", "x"), false, slot(SlotId.Stats))
             if (client == Client.ANDROID) b += pad(listOf("select", "y"), false, slot(SlotId.Mic))
             if (native && guide) b += pad(listOf("select"), true, slot(SlotId.Guide))
@@ -603,7 +608,7 @@ data class Shortcuts(val bindings: List<Binding> = emptyList()) {
                     b += chord("c", slot(SlotId.Clipboard))
                     b += chord("a", slot(SlotId.Mic))
                 }
-                Client.WEBOS, Client.PS5 -> {}
+                Client.WEBOS, Client.PS5, Client.SWITCH -> {}
             }
             return Shortcuts(b)
         }

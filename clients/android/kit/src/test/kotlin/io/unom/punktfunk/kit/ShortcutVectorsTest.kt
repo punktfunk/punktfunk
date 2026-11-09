@@ -54,7 +54,7 @@ class ShortcutVectorsTest {
     @Test
     fun defaults() {
         val cases = section("defaults")
-        assertTrue(cases.size >= 13)
+        assertTrue(cases.size >= 14)
         for (c in cases) {
             val cl = client(c.getString("client"))
             val gameMode = c.getBoolean("game_mode")
@@ -70,7 +70,7 @@ class ShortcutVectorsTest {
     @Test
     fun validate() {
         val cases = section("validate")
-        assertTrue(cases.size >= 13)
+        assertTrue(cases.size >= 15)
         for (c in cases) {
             val name = c.getString("name")
             val have = Shortcuts.parse(blob(c.getJSONArray("bindings")))
@@ -93,7 +93,7 @@ class ShortcutVectorsTest {
     @Test
     fun engine() {
         val cases = section("engine")
-        assertTrue(cases.size >= 28)
+        assertTrue(cases.size >= 32)
         for (c in cases) {
             val name = c.getString("name")
             val pad = when (val d = c.getString("device")) {
