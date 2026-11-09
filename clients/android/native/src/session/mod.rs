@@ -15,6 +15,8 @@ mod cursor;
 mod input;
 mod planes;
 mod probe;
+#[cfg(test)]
+mod slot;
 
 use punktfunk_core::client::NativeClient;
 use punktfunk_core::fp::{hex, parse_hex32};
