@@ -382,4 +382,101 @@ mod tests {
     fn an_empty_hdr_meta_is_an_all_zero_blob() {
         assert_eq!(android_hdr_static_info(&HdrMeta::default()), [0; 25]);
     }
+
+    /// BT.2020 primaries, a D65 white, a 1000-nit master with a 0.005-nit floor.
+    fn hdr10() -> HdrMeta {
+        HdrMeta {
+            display_primaries: [[8500, 39850], [6550, 2300], [35400, 14600]],
+            white_point: [15635, 16450],
+            max_display_mastering_luminance: 10_000_000,
+            min_display_mastering_luminance: 50,
+            max_cll: 1000,
+            max_fall: 400,
+        }
+    }
+
+    fn xy(x: f32, y: f32) -> AColorXy {
+        AColorXy { x, y }
+    }
+
+    fn mastering() -> AHdrMetadataSmpte2086 {
+        AHdrMetadataSmpte2086 {
+            red: xy(0.708, 0.292),
+            green: xy(0.17, 0.797),
+            blue: xy(0.131, 0.046),
+            white: xy(0.3127, 0.329),
+            max_luminance: 1000.0,
+            min_luminance: 0.005,
+        }
+    }
+
+    fn light_level(cll: f32, fall: f32) -> AHdrMetadataCta8613 {
+        AHdrMetadataCta8613 {
+            max_content_light_level: cll,
+            max_frame_average_light_level: fall,
+        }
+    }
+
+    #[test]
+    fn a_layer_gets_floats_in_red_green_blue_order() {
+        assert_eq!(
+            hdr_metadata(&hdr10()),
+            (Some(mastering()), Some(light_level(1000.0, 400.0)))
+        );
+    }
+
+    #[test]
+    fn a_block_with_a_zero_field_is_unknown() {
+        // (name, edit to the HDR10 meta, mastering block kept, light-level block kept)
+        type Edit = fn(&mut HdrMeta);
+        let rows: [(&str, Edit, bool, bool); 7] = [
+            (
+                "nothing is known",
+                |m| *m = HdrMeta::default(),
+                false,
+                false,
+            ),
+            (
+                "no max luminance drops the mastering block",
+                |m| m.max_display_mastering_luminance = 0,
+                false,
+                true,
+            ),
+            (
+                "no min luminance drops it too",
+                |m| m.min_display_mastering_luminance = 0,
+                false,
+                true,
+            ),
+            (
+                "no MaxCLL drops the light level",
+                |m| m.max_cll = 0,
+                true,
+                false,
+            ),
+            ("no MaxFALL drops it too", |m| m.max_fall = 0, true, false),
+            (
+                "a zero white point keeps the mastering block",
+                |m| m.white_point = [0, 0],
+                true,
+                true,
+            ),
+            (
+                "zero primaries keep the mastering block",
+                |m| m.display_primaries = [[0; 2]; 3],
+                true,
+                true,
+            ),
+        ];
+        for (name, edit, want_mastering, want_light) in rows {
+            let mut m = hdr10();
+            edit(&mut m);
+            let (mastering, light) = hdr_metadata(&m);
+            assert_eq!(
+                (mastering.is_some(), light.is_some()),
+                (want_mastering, want_light),
+                "{name}"
+            );
+        }
+    }
 }

@@ -323,6 +323,108 @@ mod tests {
     }
 
     #[test]
+    fn a_crop_in_fractions_is_a_pixel_rect_of_at_least_one_pixel() {
+        let nan = f32::NAN;
+        // (name, crop, width, height, rect)
+        let rows = [
+            (
+                "the whole frame",
+                [0.0, 0.0, 1.0, 1.0],
+                1920,
+                1080,
+                [0, 0, 1920, 1080],
+            ),
+            (
+                "the left half",
+                [0.0, 0.0, 0.5, 1.0],
+                1920,
+                1080,
+                [0, 0, 960, 1080],
+            ),
+            (
+                "the right half",
+                [0.5, 0.0, 1.0, 1.0],
+                1920,
+                1080,
+                [960, 0, 1920, 1080],
+            ),
+            (
+                "the bottom half",
+                [0.0, 0.5, 1.0, 1.0],
+                1920,
+                1080,
+                [0, 540, 1920, 1080],
+            ),
+            (
+                "an edge rounds to the nearest pixel",
+                [0.3333, 0.0, 0.6667, 1.0],
+                1920,
+                1080,
+                [640, 0, 1280, 1080],
+            ),
+            (
+                "a half pixel rounds up",
+                [0.5, 0.0, 1.0, 1.0],
+                3,
+                3,
+                [2, 0, 3, 3],
+            ),
+            (
+                "an empty crop keeps one pixel",
+                [0.5, 0.5, 0.5, 0.5],
+                100,
+                100,
+                [50, 50, 51, 51],
+            ),
+            (
+                "an inverted crop keeps one pixel at its left edge",
+                [0.8, 0.0, 0.2, 1.0],
+                100,
+                100,
+                [80, 0, 81, 100],
+            ),
+            (
+                "a crop at the far edge keeps the last pixel",
+                [1.0, 1.0, 1.0, 1.0],
+                100,
+                100,
+                [99, 99, 100, 100],
+            ),
+            (
+                "fractions below 0 clamp to the edge",
+                [-0.5, -0.5, 1.0, 1.0],
+                100,
+                100,
+                [0, 0, 100, 100],
+            ),
+            (
+                "fractions above 1 clamp to the edge",
+                [0.0, 0.0, 2.0, 2.0],
+                100,
+                100,
+                [0, 0, 100, 100],
+            ),
+            (
+                "NaN edges are the first pixel",
+                [nan, nan, nan, nan],
+                100,
+                100,
+                [0, 0, 1, 1],
+            ),
+            (
+                "a one-pixel buffer",
+                [0.5, 0.5, 1.0, 1.0],
+                1,
+                1,
+                [0, 0, 1, 1],
+            ),
+        ];
+        for (name, crop, w, h, want) in rows {
+            assert_eq!(crop_px(crop, w, h), want, "{name}");
+        }
+    }
+
+    #[test]
     fn the_mime_follows_the_codec_and_anything_else_is_hevc() {
         use punktfunk_core::quic::{CODEC_AV1, CODEC_H264, CODEC_HEVC, CODEC_PYROWAVE};
         // (name, wire codec, mime)
