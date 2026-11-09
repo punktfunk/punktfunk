@@ -29,7 +29,7 @@ use super::vsync::{VsyncClock, VsyncShared};
 use super::{Backstops, DecodeOptions, IN_FLIGHT_CAP};
 use crate::au_intake::{hand_on, Delivery, Intake};
 use crate::feed_rules::{colour_after, render_after, Cause, Piece, Spoiled};
-use crate::feed_step::{Feed, Step};
+use crate::feed_step::{Feed, Step, OVERSIZE_RUN};
 use crate::input_stall::{
     rung_after_failure, InputStall, OutputSilence, RungFloor, INPUT_STALL_PATIENCE, SETTLED_FRAMES,
 };
@@ -1507,11 +1507,11 @@ impl State {
         }
     }
 
-    /// The hung-codec checks ([`InputStall`], [`OutputSilence`]) and the sink's `ShowsNothing`
-    /// verdict, each a wedge; the backstops ([`Backstops::poll`]), the receiver rule's keyframe
-    /// ask, then the 1 Hz `pf.decode` line, once a pass; core throttles the ask. Evaluated after
-    /// `feed`, so an AU that arrived this pass has either been fed or is parked in
-    /// `inputs`. `had_output`: an output arrived.
+    /// The hung-codec checks ([`InputStall`], [`OutputSilence`]), an oversize run
+    /// ([`Feed::outgrown`]) and the sink's `ShowsNothing` verdict, each a wedge; the backstops
+    /// ([`Backstops::poll`]), the receiver rule's keyframe ask, then the 1 Hz `pf.decode` line,
+    /// once a pass; core throttles the ask. Evaluated after `feed`, so an AU that arrived this
+    /// pass has either been fed or is parked in `inputs`. `had_output`: an output arrived.
     fn housekeeping(&mut self, ctx: &Ctx, had_output: bool, pass: &Pass) {
         let waiting = self.inputs.parked() > 0;
         let now = Instant::now();
@@ -1531,6 +1531,13 @@ impl State {
                 "decode: an AU went in {} ms ago and neither an output nor an input slot came \
                  back — treating it as hung",
                 INPUT_STALL_PATIENCE.as_millis()
+            );
+            self.wedged = true;
+        }
+        if self.inputs.outgrown() {
+            log::warn!(
+                "decode: {OVERSIZE_RUN} AUs in a row outgrew the input buffer — treating the \
+                 decoder as failed"
             );
             self.wedged = true;
         }

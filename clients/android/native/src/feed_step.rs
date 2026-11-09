@@ -16,6 +16,10 @@ use crate::feed_rules::{gate, spoiled, Cause, Gate, PartFeed, Piece, Spoiled};
 /// near-empty.
 pub(crate) const FRAME_PARK_CAP: usize = 16;
 
+/// Oversize AUs in a row that end the run as a hung codec's does. Each one asks for a keyframe;
+/// past the first, those keyframes outgrew the buffer too, and only a rebuild changes it.
+pub(crate) const OVERSIZE_RUN: u32 = 3;
+
 /// The codec's input side: the slots it offered, the deliveries parked for them, and the AU open
 /// in the codec. The codec offers a slot once, so one whose call did not take goes back first in
 /// line: a forgotten slot is gone until a rebuild. Loop-local, like the ledger.
@@ -24,6 +28,8 @@ pub(crate) struct Feed {
     slots: VecDeque<usize>,
     park: VecDeque<Frame>,
     open: Option<PartFeed>,
+    /// Oversize AUs since a piece last went in.
+    oversize: u32,
 }
 
 /// The call [`Feed::next`] asks of the loop.
@@ -128,6 +134,7 @@ impl Feed {
     /// poisoned ledger closes at that one ([`spoiled`]).
     pub(crate) fn spoil(&mut self, slot: usize, piece: &Piece, cause: Cause) -> Spoiled {
         self.slots.push_front(slot);
+        self.oversize += u32::from(matches!(cause, Cause::Oversize));
         let left = spoiled(piece, cause);
         if let Spoiled::Poison { ledger, .. } = &left {
             self.open = Some(*ledger);
@@ -138,6 +145,12 @@ impl Feed {
     /// `len` bytes of `piece` went into the codec.
     pub(crate) fn queued(&mut self, piece: &Piece, len: usize) {
         self.open = piece.queued(len);
+        self.oversize = 0;
+    }
+
+    /// [`OVERSIZE_RUN`] AUs in a row outgrew the codec's input buffer: the run ends.
+    pub(crate) fn outgrown(&self) -> bool {
+        self.oversize >= OVERSIZE_RUN
     }
 }
 
@@ -195,6 +208,8 @@ mod tests {
         Refused(u32, Left),
         /// The park dropped its oldest AU.
         Overflow,
+        /// The run ends, as for a hung codec.
+        Wedged,
     }
     use Out::{Closed, Fed, Orphan, Overflow};
 
@@ -230,6 +245,9 @@ mod tests {
         feed_pass(feed, answers, out);
         for _ in 0..feed.trim() {
             out.push(Overflow);
+        }
+        if feed.outgrown() {
+            out.push(Out::Wedged);
         }
     }
 
@@ -393,6 +411,31 @@ mod tests {
                 Pass(&[]),
             ],
             &[Fed(1, 0), Out::CloseRefused(1), Closed(1), Fed(2, 2)],
+        ),
+        (
+            "R1-4: three oversize AUs in a row end the run",
+            &[Burst(1, 3), Slot(0), Pass(&[Small, Small, Small])],
+            &[
+                Out::Oversize(1, Left::Lost),
+                Out::Oversize(2, Left::Lost),
+                Out::Oversize(3, Left::Lost),
+                Out::Wedged,
+            ],
+        ),
+        (
+            "R1-4: a piece that goes in restarts the oversize count",
+            &[
+                Burst(1, 4),
+                Slot(0),
+                Slot(1),
+                Pass(&[Small, Small, Answer::Takes, Small]),
+            ],
+            &[
+                Out::Oversize(1, Left::Lost),
+                Out::Oversize(2, Left::Lost),
+                Fed(3, 0),
+                Out::Oversize(4, Left::Lost),
+            ],
         ),
         (
             "park: past the cap the oldest AU is dropped",
