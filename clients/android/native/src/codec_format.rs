@@ -166,6 +166,322 @@ mod tests {
     }
 
     #[test]
+    fn the_mime_follows_the_codec_and_anything_else_is_hevc() {
+        use punktfunk_core::quic::{CODEC_AV1, CODEC_H264, CODEC_HEVC, CODEC_PYROWAVE};
+        // (name, wire codec, mime)
+        let rows = [
+            ("H.264", CODEC_H264, "video/avc"),
+            ("HEVC", CODEC_HEVC, "video/hevc"),
+            ("AV1", CODEC_AV1, "video/av01"),
+            (
+                "PyroWave never asks MediaCodec",
+                CODEC_PYROWAVE,
+                "video/hevc",
+            ),
+            ("no codec is HEVC", 0, "video/hevc"),
+            ("an unknown id is HEVC", 0xFF, "video/hevc"),
+        ];
+        for (name, codec, want) in rows {
+            assert_eq!(codec_mime(codec), want, "{name}");
+        }
+    }
+
+    #[test]
+    fn a_forced_profile_wins_and_half_rate_tv_is_read_only_for_a_mediatek_decoder() {
+        // (name, forced, decoder, is a half-rate TV, profile, whether the TV check ran)
+        let rows = [
+            (
+                "default",
+                None,
+                "c2.qti.hevc.decoder",
+                true,
+                "standard",
+                false,
+            ),
+            (
+                "forced standard on a TV",
+                Some("standard"),
+                "c2.mtk.hevc.decoder",
+                true,
+                "standard",
+                false,
+            ),
+            (
+                "forced off",
+                Some("off"),
+                "c2.qti.hevc.decoder",
+                false,
+                "off",
+                false,
+            ),
+            (
+                "forced mtk-tv anywhere",
+                Some("mtk-tv"),
+                "c2.qti.hevc.decoder",
+                false,
+                "mtk-tv",
+                false,
+            ),
+            (
+                "forced mtk-boost",
+                Some("mtk-boost"),
+                "c2.mtk.hevc.decoder",
+                false,
+                "mtk-boost",
+                false,
+            ),
+            (
+                "forced qti-fence",
+                Some("qti-fence"),
+                "c2.mtk.hevc.decoder",
+                true,
+                "qti-fence",
+                false,
+            ),
+            (
+                "an unknown name falls to detection",
+                Some("turbo"),
+                "c2.mtk.hevc.decoder",
+                true,
+                "mtk-tv",
+                true,
+            ),
+            (
+                "an unknown name on another decoder",
+                Some("turbo"),
+                "c2.qti.hevc.decoder",
+                true,
+                "standard",
+                false,
+            ),
+            (
+                "a MediaTek decoder on a half-rate TV",
+                None,
+                "c2.mtk.hevc.decoder",
+                true,
+                "mtk-tv",
+                true,
+            ),
+            (
+                "the decoder name is case-folded",
+                None,
+                "C2.MTK.HEVC.DECODER",
+                true,
+                "mtk-tv",
+                true,
+            ),
+            (
+                "a MediaTek decoder elsewhere",
+                None,
+                "c2.mtk.hevc.decoder",
+                false,
+                "standard",
+                true,
+            ),
+            (
+                "OMX MediaTek is not Codec2",
+                None,
+                "omx.mtk.video.decoder.hevc",
+                true,
+                "standard",
+                false,
+            ),
+        ];
+        for (name, forced, decoder, tv, want, asked) in rows {
+            let ran = std::cell::Cell::new(false);
+            let got = low_latency_profile(forced, decoder, || {
+                ran.set(true);
+                tv
+            });
+            assert_eq!((got, ran.get()), (want, asked), "{name}");
+        }
+    }
+
+    const PICTURE_ORDER: (&str, i32) = ("vendor.qti-ext-dec-picture-order.enable", 1);
+    const QTI_LOW_LATENCY: (&str, i32) = ("vendor.qti-ext-dec-low-latency.enable", 1);
+    const MAX_RATE: (&str, i32) = ("operating-rate", 32767);
+    const REALTIME: (&str, i32) = ("priority", 0);
+    const STANDARD: (&str, i32) = ("low-latency", 1);
+    const MEDIATEK: (&str, i32) = ("vdec-lowlatency", 1);
+    type Keys<'a> = &'a [(&'a str, i32)];
+
+    #[test]
+    fn the_keys_follow_the_profile_and_the_decoders_vendor() {
+        // (name, profile, decoder, aggressive, keys in set order)
+        let rows: [(&str, &str, &str, bool, Keys); 14] = [
+            (
+                "Qualcomm gets its vendor pair and the max clock",
+                "standard",
+                "c2.qti.avc.decoder",
+                true,
+                &[STANDARD, MEDIATEK, PICTURE_ORDER, QTI_LOW_LATENCY, MAX_RATE],
+            ),
+            (
+                "the OMX Qualcomm name matches too, in any case",
+                "standard",
+                "OMX.qcom.video.decoder.hevc",
+                true,
+                &[STANDARD, MEDIATEK, PICTURE_ORDER, QTI_LOW_LATENCY, MAX_RATE],
+            ),
+            (
+                "Exynos, which is Tensor, gets realtime priority",
+                "standard",
+                "c2.exynos.hevc.decoder",
+                true,
+                &[
+                    STANDARD,
+                    MEDIATEK,
+                    ("vendor.rtc-ext-dec-low-latency.enable", 1),
+                    REALTIME,
+                ],
+            ),
+            (
+                "Amlogic",
+                "standard",
+                "c2.amlogic.hevc.decoder",
+                true,
+                &[
+                    STANDARD,
+                    MEDIATEK,
+                    ("vendor.low-latency.enable", 1),
+                    REALTIME,
+                ],
+            ),
+            (
+                "HiSilicon sets a request and a ready value of -1",
+                "standard",
+                "omx.hisi.video.decoder.hevc",
+                true,
+                &[
+                    STANDARD,
+                    MEDIATEK,
+                    (
+                        "vendor.hisi-ext-low-latency-video-dec.video-scene-for-low-latency-req",
+                        1,
+                    ),
+                    (
+                        "vendor.hisi-ext-low-latency-video-dec.video-scene-for-low-latency-rdy",
+                        -1,
+                    ),
+                    REALTIME,
+                ],
+            ),
+            (
+                "MediaTek has only the unconditional key",
+                "standard",
+                "c2.mtk.hevc.decoder",
+                true,
+                &[STANDARD, MEDIATEK, REALTIME],
+            ),
+            (
+                "an unlisted vendor gets the same",
+                "standard",
+                "c2.android.hevc.decoder",
+                true,
+                &[STANDARD, MEDIATEK, REALTIME],
+            ),
+            (
+                "the master toggle off sets the blind pair and both clock hints",
+                "standard",
+                "c2.android.hevc.decoder",
+                false,
+                &[STANDARD, QTI_LOW_LATENCY, REALTIME, MAX_RATE],
+            ),
+            (
+                "the toggle off ignores the decoder name",
+                "standard",
+                "c2.exynos.hevc.decoder",
+                false,
+                &[STANDARD, QTI_LOW_LATENCY, REALTIME, MAX_RATE],
+            ),
+            (
+                "off leaves out the standard key",
+                "off",
+                "c2.qti.avc.decoder",
+                true,
+                &[MEDIATEK, PICTURE_ORDER, QTI_LOW_LATENCY, MAX_RATE],
+            ),
+            (
+                "mtk-tv leaves out the standard key and adds its game keys",
+                "mtk-tv",
+                "c2.mtk.hevc.decoder",
+                true,
+                &[
+                    MEDIATEK,
+                    REALTIME,
+                    ("vendor.mtk-codec2.game-mode", 1),
+                    ("vendor.mtk-codec2.low-latency-mode", 1),
+                    ("operating-rate", 60),
+                ],
+            ),
+            (
+                "mtk-boost keeps the standard key",
+                "mtk-boost",
+                "c2.mtk.hevc.decoder",
+                true,
+                &[
+                    STANDARD,
+                    MEDIATEK,
+                    REALTIME,
+                    ("vendor.mtk.vdec.cpu.boost.mode.value", 1),
+                ],
+            ),
+            (
+                "qti-fence on Qualcomm on 13 sets the picture order key twice",
+                "qti-fence",
+                "c2.qti.avc.decoder",
+                true,
+                &[
+                    STANDARD,
+                    MEDIATEK,
+                    PICTURE_ORDER,
+                    QTI_LOW_LATENCY,
+                    MAX_RATE,
+                    PICTURE_ORDER,
+                    ("vendor.qti-ext-output-sw-fence-enable.value", 1),
+                    ("vendor.qti-ext-output-fence.enable", 1),
+                    ("vendor.qti-ext-output-fence.fence_type", 1),
+                ],
+            ),
+            (
+                "qti-fence on another vendor adds nothing",
+                "qti-fence",
+                "c2.mtk.hevc.decoder",
+                true,
+                &[STANDARD, MEDIATEK, REALTIME],
+            ),
+        ];
+        for (name, profile, decoder, aggressive, want) in rows {
+            assert_eq!(
+                low_latency_keys(profile, decoder, aggressive, 60, 34),
+                want,
+                "{name}"
+            );
+        }
+    }
+
+    #[test]
+    fn qti_fence_adds_its_keys_only_from_android_13() {
+        let on_12 = low_latency_keys("qti-fence", "c2.qti.avc.decoder", true, 60, 32);
+        let plain = low_latency_keys("standard", "c2.qti.avc.decoder", true, 60, 32);
+        assert_eq!(on_12, plain, "a refused fence leaves the standard keys");
+        let on_13 = low_latency_keys("qti-fence", "c2.qti.avc.decoder", true, 60, 33);
+        assert_eq!(on_13.len(), plain.len() + 4);
+    }
+
+    #[test]
+    fn mtk_tv_runs_the_decoder_at_the_stream_rate() {
+        let rate = |hz| {
+            let keys = low_latency_keys("mtk-tv", "c2.mtk.hevc.decoder", true, hz, 34);
+            keys.last().copied()
+        };
+        assert_eq!(rate(120), Some(("operating-rate", 120)));
+        assert_eq!(rate(24), Some(("operating-rate", 24)));
+        // A mode without a rate writes 0, though `frame-rate` is left out for it.
+        assert_eq!(rate(0), Some(("operating-rate", 0)));
+    }
+
+    #[test]
     fn the_picture_is_the_crop_when_the_format_has_one() {
         // (name, width, height, crop, size)
         let rows = [

@@ -261,4 +261,68 @@ mod tests {
             assert_eq!(layer_space(&c, sdk), want, "{name}");
         }
     }
+
+    /// Each field holds a distinct byte pair, so a swapped field or byte shows.
+    fn meta() -> HdrMeta {
+        HdrMeta {
+            display_primaries: [[0x0506, 0x0708], [0x090A, 0x0B0C], [0x0102, 0x0304]],
+            white_point: [0x0D0E, 0x0F10],
+            max_display_mastering_luminance: 0x1112 * 10_000,
+            min_display_mastering_luminance: 0x1314,
+            max_cll: 0x1516,
+            max_fall: 0x1718,
+        }
+    }
+
+    #[test]
+    fn the_hdr_blob_is_red_green_blue_in_little_endian() {
+        // The wire form is G, B, R; Android wants R, G, B.
+        assert_eq!(
+            android_hdr_static_info(&meta()),
+            [
+                0, // Type 1 descriptor
+                0x02, 0x01, 0x04, 0x03, // red
+                0x06, 0x05, 0x08, 0x07, // green
+                0x0A, 0x09, 0x0C, 0x0B, // blue
+                0x0E, 0x0D, 0x10, 0x0F, // white point
+                0x12, 0x11, // max luminance, nits
+                0x14, 0x13, // min luminance, 0.0001 nits
+                0x16, 0x15, // MaxCLL
+                0x18, 0x17, // MaxFALL
+            ]
+        );
+    }
+
+    #[test]
+    fn the_hdr_blob_converts_the_luminances() {
+        // (name, max in 0.0001 nits, min in 0.0001 nits, max in nits, min)
+        let rows = [
+            ("1000 nits", 10_000_000, 50, 1000, 50),
+            ("a fraction of a nit is cut", 9_999, 1, 0, 1),
+            ("the max saturates", 700_000_000, 0, u16::MAX, 0),
+            ("the min saturates", 0, 70_000, 0, u16::MAX),
+            ("the largest max", u32::MAX, u32::MAX, u16::MAX, u16::MAX),
+        ];
+        for (name, max_lum, min_lum, want_max, want_min) in rows {
+            let m = HdrMeta {
+                max_display_mastering_luminance: max_lum,
+                min_display_mastering_luminance: min_lum,
+                ..meta()
+            };
+            let blob = android_hdr_static_info(&m);
+            assert_eq!(
+                (
+                    u16::from_le_bytes([blob[17], blob[18]]),
+                    u16::from_le_bytes([blob[19], blob[20]])
+                ),
+                (want_max, want_min),
+                "{name}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_empty_hdr_meta_is_an_all_zero_blob() {
+        assert_eq!(android_hdr_static_info(&HdrMeta::default()), [0; 25]);
+    }
 }
