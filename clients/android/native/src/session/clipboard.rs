@@ -236,3 +236,207 @@ pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeNextClip<'l
     })
     .resolve::<LogErrorAndDefault>()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use punktfunk_core::clipboard::INBOUND_REQ_FLAG;
+    use ClipPoll::{CancelFetch, Line, Nothing};
+
+    type Pulled = Result<ClipEventCore, PunktfunkError>;
+
+    fn line(s: &str) -> ClipPoll {
+        Line(s.to_string())
+    }
+
+    fn fetch(req_id: u32, mime: &str) -> Pulled {
+        Ok(ClipEventCore::FetchRequest {
+            req_id,
+            seq: 1,
+            file_index: CLIP_FILE_INDEX_NONE,
+            mime: mime.to_string(),
+        })
+    }
+
+    fn offer(seq: u32, mimes: &[&str]) -> Pulled {
+        let kinds = mimes
+            .iter()
+            .map(|m| ClipKind {
+                mime: m.to_string(),
+                size_hint: 0,
+            })
+            .collect();
+        Ok(ClipEventCore::RemoteOffer { seq, kinds })
+    }
+
+    fn data(xfer_id: u32, bytes: &[u8]) -> Pulled {
+        Ok(ClipEventCore::Data {
+            xfer_id,
+            bytes: bytes.to_vec(),
+            last: true,
+        })
+    }
+
+    #[test]
+    fn a_poll_that_ends_the_stream_or_needs_a_cancel_says_so_first() {
+        let rows: Vec<(&str, Pulled, ClipPoll)> = vec![
+            ("a poll timeout", Err(PunktfunkError::NoFrame), Nothing),
+            (
+                "a dropped plane",
+                Err(PunktfunkError::Closed),
+                line("closed"),
+            ),
+            (
+                "a timeout error is the plane gone",
+                Err(PunktfunkError::Timeout),
+                line("closed"),
+            ),
+            (
+                "a socket error is the plane gone",
+                Err(PunktfunkError::Io(std::io::Error::other("reset"))),
+                line("closed"),
+            ),
+            (
+                "a fetch for an image",
+                fetch(INBOUND_REQ_FLAG | 4, "image/png"),
+                CancelFetch(INBOUND_REQ_FLAG | 4),
+            ),
+            ("a fetch with no MIME", fetch(7, ""), CancelFetch(7)),
+            ("a fetch for html", fetch(7, "text/html"), CancelFetch(7)),
+            (
+                "the MIME match is case-sensitive",
+                fetch(7, "TEXT/PLAIN"),
+                CancelFetch(7),
+            ),
+            (
+                "text/plain must open the MIME",
+                fetch(7, "application/x-text/plain"),
+                CancelFetch(7),
+            ),
+        ];
+        for (name, pulled, want) in rows {
+            assert_eq!(clip_poll(pulled), want, "{name}");
+        }
+    }
+
+    #[test]
+    fn a_host_event_becomes_the_line_kotlin_parses() {
+        let rows: Vec<(&str, Pulled, ClipPoll)> = vec![
+            (
+                "sharing on",
+                Ok(ClipEventCore::State {
+                    enabled: true,
+                    policy: 3,
+                    reason: 9,
+                }),
+                line("state:1"),
+            ),
+            (
+                "sharing off",
+                Ok(ClipEventCore::State {
+                    enabled: false,
+                    policy: 0,
+                    reason: 0,
+                }),
+                line("state:0"),
+            ),
+            ("an offer with no kinds", offer(3, &[]), line("offer:3:0")),
+            (
+                "an offer of an image",
+                offer(3, &["image/png"]),
+                line("offer:3:0"),
+            ),
+            (
+                "an offer of text",
+                offer(3, &["text/plain;charset=utf-8"]),
+                line("offer:3:1"),
+            ),
+            (
+                "an offer of bare text/plain",
+                offer(3, &["text/plain"]),
+                line("offer:3:1"),
+            ),
+            (
+                "text among other kinds",
+                offer(3, &["image/png", "text/html", "text/plain;charset=utf-8"]),
+                line("offer:3:1"),
+            ),
+            (
+                "an offer matches on the text/plain prefix",
+                offer(3, &["text/plainish"]),
+                line("offer:3:1"),
+            ),
+            (
+                "the largest offer sequence",
+                offer(u32::MAX, &["text/plain"]),
+                line("offer:4294967295:1"),
+            ),
+            (
+                "a text fetch",
+                fetch(5, "text/plain;charset=utf-8"),
+                line("fetch:5"),
+            ),
+            // Core numbers a host paste with its high bit set, and Kotlin reads this id with
+            // `toIntOrNull`, which refuses anything above `Int.MAX_VALUE`.
+            (
+                "a host paste's request id carries core's high bit",
+                fetch(INBOUND_REQ_FLAG | 1, "text/plain"),
+                line("fetch:2147483649"),
+            ),
+            (
+                "a cancelled transfer",
+                Ok(ClipEventCore::Cancelled { id: 9 }),
+                line("cancel:9"),
+            ),
+            (
+                "a failed transfer carries its negative code",
+                Ok(ClipEventCore::Error { id: 9, code: -3 }),
+                line("error:9:-3"),
+            ),
+        ];
+        for (name, pulled, want) in rows {
+            assert_eq!(clip_poll(pulled), want, "{name}");
+        }
+    }
+
+    #[test]
+    fn clip_text_rides_the_line_decoded_lossily_and_whole() {
+        let rows: Vec<(&str, Pulled, ClipPoll)> = vec![
+            ("empty text", data(5, b""), line("data:5:")),
+            ("plain text", data(5, b"hello"), line("data:5:hello")),
+            (
+                "colons stay in the text",
+                data(5, b"a:b:c"),
+                line("data:5:a:b:c"),
+            ),
+            (
+                "newlines stay in the text",
+                data(5, b"one\ntwo"),
+                line("data:5:one\ntwo"),
+            ),
+            (
+                "multi-byte text is intact",
+                data(5, "naïve 😀".as_bytes()),
+                line("data:5:naïve 😀"),
+            ),
+            (
+                "an invalid byte becomes U+FFFD",
+                data(5, &[b'a', 0xff, b'b']),
+                line("data:5:a\u{fffd}b"),
+            ),
+            (
+                "a cut UTF-8 sequence becomes U+FFFD",
+                data(5, &"é".as_bytes()[..1]),
+                line("data:5:\u{fffd}"),
+            ),
+            (
+                "the transfer id leads",
+                data(u32::MAX, b"x"),
+                line("data:4294967295:x"),
+            ),
+        ];
+        for (name, pulled, want) in rows {
+            assert_eq!(clip_poll(pulled), want, "{name}");
+        }
+    }
+}
