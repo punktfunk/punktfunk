@@ -12,7 +12,6 @@
 //! `design/android-presenter-overhaul-v3.md` §3.2 (planning repo).
 
 pub(crate) mod budget;
-#[cfg(test)]
 pub(crate) mod retire;
 pub(crate) mod slots;
 pub(crate) mod store;

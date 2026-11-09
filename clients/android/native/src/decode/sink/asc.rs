@@ -32,6 +32,7 @@ use super::super::surface_control::{
 use super::super::vsync::VsyncShared;
 use super::{Downrate, Routed, Sink};
 use crate::present::budget::{AscBudget, PRESENTED_CAP};
+use crate::present::retire::Retire;
 use crate::present::slots::Slots;
 use crate::present::store::{Held, Store};
 use crate::present::verdict::{Second, Verdict, Verdicts};
@@ -84,7 +85,8 @@ impl Drop for Acquired {
     }
 }
 
-/// Return an unused image only after the codec's pending write finishes.
+/// Return an image to the reader once `fence` signals: the codec's pending write for an unused
+/// image, SurfaceFlinger's release for a presented one. Without a fence it returns at once.
 fn release_image(image: Image, fence: Option<OwnedFd>) {
     match fence {
         Some(fence) => image.delete_async(fence),
@@ -95,7 +97,6 @@ fn release_image(image: Image, fence: Option<OwnedFd>) {
 /// One image applied to SurfaceFlinger, awaiting its completion (metrics) and its successor's
 /// completion (the release fence that frees it back to the pool).
 struct Presented {
-    seq: u64,
     image: Image,
     pts_us: u64,
     decoded_real: i128,
@@ -152,7 +153,7 @@ pub(crate) struct AscSink {
 
     // -- images on SurfaceFlinger --
     /// Images on SurfaceFlinger, oldest first, awaiting release.
-    presented: VecDeque<Presented>,
+    presented: Retire<Presented>,
     /// Completed presents awaiting their present fence, oldest first.
     awaiting: VecDeque<Awaiting>,
     #[cfg(debug_assertions)]
@@ -309,7 +310,7 @@ impl AscSink {
             downrate: Downrate::new(panel_hz),
             downrated: false,
             verdicts: Verdicts::default(),
-            presented: VecDeque::new(),
+            presented: Retire::default(),
             awaiting: VecDeque::new(),
             #[cfg(debug_assertions)]
             jitter_us,
@@ -484,16 +485,18 @@ impl AscSink {
         let pace_us = ((release_real - frame.decoded_real).max(0) / 1000) as u64;
         self.pace_us.push(pace_us);
         let image = frame.take_presented_image();
-        self.presented.push_back(Presented {
+        self.presented.push(
             seq,
-            image,
-            pts_us: frame.pts_us,
-            decoded_real: frame.decoded_real,
-            release_real,
-            release_mono: now_monotonic_ns(),
-            slot,
-            acquire,
-        });
+            Presented {
+                image,
+                pts_us: frame.pts_us,
+                decoded_real: frame.decoded_real,
+                release_real,
+                release_mono: now_monotonic_ns(),
+                slot,
+                acquire,
+            },
+        );
         self.budget.applied(&mut self.counters);
         self.next_seq += 1;
         true
@@ -663,7 +666,7 @@ impl AscSink {
     /// their acquire fences; SurfaceFlinger owns refs to the presented images until done.
     fn release_held(&mut self) {
         self.store.drain().for_each(drop);
-        self.presented.clear();
+        self.presented = Retire::default();
         self.awaiting.clear();
     }
 
@@ -873,14 +876,15 @@ impl Sink for AscSink {
     }
 
     /// Reopen the budget, queue the present sample behind its fence (or record it off the latch
-    /// when there is none), and free the buffer this frame replaced with its release fence. Runs
-    /// on the decode thread; the callback only forwarded the data.
+    /// when there is none), and free what the completion retires ([`Retire::complete`]), each
+    /// image behind its release fence. Runs on the decode thread; the callback only forwarded
+    /// the data.
     fn on_present_complete(&mut self, pc: PresentComplete, clock_offset: i64, ctx: &Ctx) {
         let (stats, video_e2e) = (&*ctx.stats, &*ctx.video_e2e);
         self.budget.completed();
         self.slots.note_latch(pc.latch_ns, &mut self.counters);
         if pc.latch_ns > 0 {
-            if let Some(p) = self.presented.iter_mut().find(|p| p.seq == pc.seq) {
+            if let Some(p) = self.presented.get_mut(pc.seq) {
                 let sample = PresentSample {
                     slot: p.slot,
                     latch_ns: pc.latch_ns,
@@ -908,21 +912,9 @@ impl Sink for AscSink {
             }
             self.poll_fences(clock_offset, stats, video_e2e);
         }
-        // Retire every buffer this transaction replaced (seq < completed): the immediate
-        // predecessor gets the real release fence, any older straggler a plain delete (memory-safe
-        // — SurfaceFlinger holds its own reference until it is actually done).
-        let mut retired: Vec<Presented> = Vec::new();
-        while self.presented.front().is_some_and(|p| p.seq < pc.seq) {
-            retired.push(self.presented.pop_front().unwrap());
+        for (p, fence) in self.presented.complete(pc.seq, pc.prev_release_fence) {
+            release_image(p.image, fence);
         }
-        match (retired.pop(), pc.prev_release_fence) {
-            (Some(last), Some(fence)) => last.image.delete_async(fence),
-            (Some(last), None) => drop(last.image),
-            (None, Some(fence)) => drop(fence),
-            (None, None) => {}
-        }
-        // (`retired` now holds only older stragglers, dropped here — plain AImage_delete.)
-        drop(retired);
     }
 
     /// ASC carries the colour on the transaction, not the SurfaceView window. Neither the stream
