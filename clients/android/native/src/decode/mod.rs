@@ -44,11 +44,6 @@ use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use std::time::Instant;
 
-/// Cap on AUs parked in the async loop awaiting a free codec input slot. Matches the connector's
-/// own frame-channel depth; on sustained overflow the oldest is dropped and a keyframe requested
-/// (same recovery as a reassembler drop). In steady state this stays near-empty.
-const FRAME_PARK_CAP: usize = 16;
-
 /// Cap on the pts→received-timestamp map below: MediaCodec holds only a handful of frames in
 /// flight, so anything beyond this is stale (codec flushed / HUD toggled) and gets evicted.
 const IN_FLIGHT_CAP: usize = 64;

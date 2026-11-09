@@ -16,7 +16,8 @@ use crate::feed_rules::{gate, spoiled, Cause, Gate, PartFeed, Piece, Spoiled};
 pub(crate) const FRAME_PARK_CAP: usize = 16;
 
 /// The codec's input side: the slots it offered, the deliveries parked for them, and the AU open
-/// in the codec. Loop-local, like the ledger.
+/// in the codec. The codec offers a slot once, so one whose call did not take goes back first in
+/// line: a forgotten slot is gone until a rebuild. Loop-local, like the ledger.
 #[derive(Default)]
 pub(crate) struct Feed {
     slots: VecDeque<usize>,

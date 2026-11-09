@@ -26,11 +26,10 @@ use super::setup::{
 use super::sink::{self, asc_backend_selected, AscSink, PresentMeter, Sink};
 use super::surface_control::{Layer, PresentComplete};
 use super::vsync::{VsyncClock, VsyncShared};
-use super::{Backstops, DecodeOptions, FRAME_PARK_CAP, IN_FLIGHT_CAP};
+use super::{Backstops, DecodeOptions, IN_FLIGHT_CAP};
 use crate::au_intake::{hand_on, Delivery, Intake};
-use crate::feed_rules::{
-    colour_after, gate, render_after, spoiled, Cause, Gate, PartFeed, Piece, Spoiled,
-};
+use crate::feed_rules::{colour_after, render_after, Cause, Piece, Spoiled};
+use crate::feed_step::{Feed, Step};
 use crate::input_stall::{
     rung_after_failure, InputStall, OutputSilence, RungFloor, INPUT_STALL_PATIENCE, SETTLED_FRAMES,
 };
@@ -983,16 +982,14 @@ struct Pass {
 /// The loop's working state: every value a pass mutates.
 struct State {
     sink: Box<dyn Sink>,
-    free_inputs: VecDeque<usize>,
-    pending_aus: VecDeque<Frame>,
+    /// The codec's input side: the slots it offered, the parked deliveries, the open AU.
+    inputs: Feed,
     ready: Vec<OutputReady>,
     fed: u64,
     rendered: u64,
     discarded: u64,
     /// AUs larger than the codec input buffer, dropped whole (see `feed`).
     oversized_dropped: u64,
-    /// Slice-progressive continuity ledger (see `PartFeed`).
-    part_open: Option<PartFeed>,
     /// pts → realtime ns at the AU's LAST piece entering the codec — the P3 decode-split ledger
     /// (`feed` = received→queued, `codec` = queued→decoded). Always on; consumed by `present`.
     queued_stamps: VecDeque<(u64, i128)>,
@@ -1126,14 +1123,12 @@ impl State {
     fn new(sink: Box<dyn Sink>, intake: Intake) -> State {
         State {
             sink,
-            free_inputs: VecDeque::new(),
-            pending_aus: VecDeque::new(),
+            inputs: Feed::default(),
             ready: Vec::new(),
             fed: 0,
             rendered: 0,
             discarded: 0,
             oversized_dropped: 0,
-            part_open: None,
             queued_stamps: VecDeque::new(),
             last_arms: 0,
             recovery_flags: VecDeque::new(),
@@ -1178,9 +1173,7 @@ impl State {
                         self.recovery_flags.pop_front();
                     }
                 }
-                self.pending_aus.push_back(f);
-                if self.pending_aus.len() > FRAME_PARK_CAP {
-                    self.pending_aus.pop_front(); // sustained overflow — drop oldest
+                if self.inputs.park(f) {
                     pass.aus_dropped += 1;
                     pass.lost = true;
                     self.loss_open = true;
@@ -1188,7 +1181,7 @@ impl State {
                 }
             }
             DecodeEvent::InputAvailable(i) => {
-                self.free_inputs.push_back(i);
+                self.inputs.offer(i);
                 pass.input_offered = true;
                 self.tally.slots += 1;
             }
@@ -1226,13 +1219,12 @@ impl State {
         if !self.intake.local_loss() {
             return;
         }
-        for f in std::mem::take(&mut self.pending_aus) {
-            let verdict = self.intake.rejudge(delivery(&f));
+        let intake = &mut self.intake;
+        self.inputs.rejudge(|f| {
+            let verdict = intake.rejudge(delivery(f));
             pass.ask_keyframe |= verdict.ask_keyframe;
-            if verdict.feed {
-                self.pending_aus.push_back(f);
-            }
-        }
+            verdict.feed
+        });
     }
 
     /// `feed` dropped an admitted AU: core freezes and asks for a keyframe, and the parked AUs
@@ -1281,50 +1273,43 @@ impl State {
         self.present(ctx);
     }
 
-    /// Queue as many parked AUs as there are free input buffer slots (async mode: the indices
-    /// come from `InputAvailable` callbacks, not a dequeue). An AU larger than the buffer is
-    /// DROPPED: a truncated AU is corrupt input the decoder chews on silently, poisoning the
-    /// reference chain.
-    ///
-    /// Slice-progressive deliveries ([`Frame::part`]) feed as they arrive: every piece rides
-    /// [`BUFFER_FLAG_PARTIAL_FRAME`] except the AU's last, all at the AU's pts. `part_open` is the
-    /// continuity ledger; [`crate::feed_rules`] judges each piece against it and says what one
-    /// that cannot go in leaves behind. A slot whose queue call did not take stays in
-    /// `free_inputs`: the codec offers a slot once, so a forgotten one is gone until a rebuild.
+    /// Queue parked deliveries into the input slots the codec offered (async mode: the indices
+    /// come from `InputAvailable` callbacks, not a dequeue), as [`Feed::next`] pairs them. Every
+    /// piece of a sliced AU ([`Frame::part`]) rides [`BUFFER_FLAG_PARTIAL_FRAME`] except its
+    /// last, all at the AU's pts. An AU larger than the buffer is DROPPED: a truncated AU is
+    /// corrupt input the decoder chews on silently, poisoning the reference chain.
     fn feed(&mut self, ctx: &Ctx, pass: &mut Pass) {
         let codec = &ctx.codec;
-        while !self.pending_aus.is_empty() && !self.free_inputs.is_empty() {
-            let idx = self.free_inputs.pop_front().unwrap();
-            let frame = self.pending_aus.pop_front().unwrap();
-            let piece = Piece::of(&frame);
-            match gate(&mut self.part_open, &piece) {
-                Gate::Go => {}
-                Gate::Close(open) => {
-                    // Spend THIS slot on the close; the current frame re-queues for the next one.
-                    if let Err(e) = codec.queue_input_buffer_by_index(idx, 0, 0, open.pts_us, 0) {
-                        self.free_inputs.push_front(idx);
+        while let Some(step) = self.inputs.next() {
+            let (idx, frame, piece) = match step {
+                Step::Go { slot, frame, piece } => (slot, frame, piece),
+                Step::Close { slot, open } => {
+                    // Spend THIS slot on the close; the parked delivery waits for the next one.
+                    let closed = codec.queue_input_buffer_by_index(slot, 0, 0, open.pts_us, 0);
+                    if let Err(e) = &closed {
                         log::warn!("decode: close of abandoned partial AU {}: {e}", open.index);
                     }
+                    self.inputs.closed(slot, closed.is_ok());
                     log::warn!(
                         "decode: partial AU {} abandoned mid-feed — closed empty, requesting keyframe",
                         open.index
                     );
                     // The close makes the codec emit concealed garbage at the dead pts — freeze it
                     // off the glass until the recovery keyframe re-anchors.
-                    self.pending_aus.push_front(frame);
                     self.drop_admitted(&ctx.client, pass);
                     continue;
                 }
                 // The head was lost upstream: discard and re-sync at the next `first`. No
                 // `local_loss`: the gap or local drop that lost the head already told the rule.
-                Gate::Orphan => {
-                    self.free_inputs.push_front(idx);
+                Step::Orphan => {
                     ctx.client.recovery_lost();
                     continue;
                 }
-            }
+            };
+            // No buffer for a slot it offered: the codec takes nothing else this pass.
             let Some(dst) = codec.input_buffer(idx) else {
-                self.refuse(idx, frame);
+                self.refusing();
+                self.inputs.no_buffer(idx, frame);
                 break;
             };
             let au = &frame.data;
@@ -1362,15 +1347,6 @@ impl State {
         }
     }
 
-    /// The codec handed back no buffer for a slot it offered, and takes nothing else this pass.
-    /// Slot and AU both stay ours: forgetting the slot leaks a codec buffer, dropping the AU
-    /// holes the reference chain.
-    fn refuse(&mut self, idx: usize, frame: Frame) {
-        self.refusing();
-        self.free_inputs.push_front(idx);
-        self.pending_aus.push_front(frame);
-    }
-
     /// The codec refused again, a no-buffer slot or a failed queue call. Refusing for the hang
     /// patience with no piece accepted between, the codec is gone and is rebuilt.
     fn refusing(&mut self) {
@@ -1383,16 +1359,14 @@ impl State {
         }
     }
 
-    /// A piece that cannot go in leaves the ledger poisoned, or its AU lost
-    /// ([`crate::feed_rules::spoiled`]). Its slot was never taken: it stays ours for the next AU.
+    /// A piece that cannot go in leaves the ledger poisoned, or its AU lost ([`Feed::spoil`]).
+    /// A poisoned piece of an oversize AU freezes core at once; a lost AU is a loss.
     fn spoil(&mut self, ctx: &Ctx, pass: &mut Pass, idx: usize, piece: &Piece, cause: Cause) {
-        self.free_inputs.push_front(idx);
-        match spoiled(piece, cause) {
-            Spoiled::Poison { ledger, freeze_now } => {
+        match self.inputs.spoil(idx, piece, cause) {
+            Spoiled::Poison { freeze_now, .. } => {
                 if freeze_now {
                     ctx.client.recovery_lost();
                 }
-                self.part_open = Some(ledger);
             }
             Spoiled::Lost => self.drop_admitted(&ctx.client, pass),
         }
@@ -1435,7 +1409,7 @@ impl State {
                 self.queued_stamps.pop_front(); // stale — codec never echoed it back
             }
         }
-        self.part_open = piece.queued(frame.data.len());
+        self.inputs.queued(piece, frame.data.len());
     }
 
     /// Pair each ready output's decode stage: the ABR decode signal + the HUD histogram consume
@@ -1531,15 +1505,15 @@ impl State {
     /// verdict, each a wedge; the backstops ([`Backstops::poll`]), the receiver rule's keyframe
     /// ask, then the 1 Hz `pf.decode` line, once a pass; core throttles the ask. Evaluated after
     /// `feed`, so an AU that arrived this pass has either been fed or is parked in
-    /// `pending_aus`. `had_output`: an output arrived.
+    /// `inputs`. `had_output`: an output arrived.
     fn housekeeping(&mut self, ctx: &Ctx, had_output: bool, pass: &Pass) {
-        let waiting = !self.pending_aus.is_empty();
+        let waiting = self.inputs.parked() > 0;
         let now = Instant::now();
         if self.stall.poll(pass.input_offered, waiting, now) {
             log::warn!(
                 "decode: the codec took no input for {} ms with {} AU(s) waiting — treating it as hung",
                 INPUT_STALL_PATIENCE.as_millis(),
-                self.pending_aus.len()
+                self.inputs.parked()
             );
             self.wedged = true;
         }
@@ -1570,12 +1544,8 @@ impl State {
         if pass.ask_keyframe {
             let _ = ctx.client.request_keyframe();
         }
-        self.tally.flush(
-            ctx,
-            self.fed,
-            self.intake.withheld(),
-            self.pending_aus.len(),
-        );
+        self.tally
+            .flush(ctx, self.fed, self.intake.withheld(), self.inputs.parked());
     }
 }
 
