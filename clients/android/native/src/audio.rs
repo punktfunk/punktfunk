@@ -12,7 +12,10 @@
 //! the video reference for A/V sync. See `design/hi-res-audio.md` and
 //! `design/audio-latency-overhaul.md` for the full policy.
 
-use crate::audio_policy::{grant_matches, heard_at, ladder_for, OpenRung, Perf, Sharing};
+use crate::audio_policy::{
+    grant_matches, heard_at, ladder_for, sent, DecodeExit, Next, NoDevice, OpenRung, Perf, Sharing,
+    Supervisor, REOPEN_ATTEMPTS,
+};
 use crate::sys::sysprop;
 use ndk::audio::{
     AudioCallbackResult, AudioContentType, AudioDirection, AudioFormat, AudioPerformanceMode,
@@ -25,7 +28,7 @@ use punktfunk_core::error::PunktfunkError;
 use std::collections::VecDeque;
 use std::ffi::c_void;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::mpsc::{sync_channel, Receiver, SyncSender, TrySendError};
+use std::sync::mpsc::{sync_channel, Receiver, SyncSender};
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
@@ -92,25 +95,6 @@ impl Output {
     }
 }
 
-/// Why [`decode_loop`] returned — only one of them is worth reopening the device for.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum DecodeExit {
-    /// `AudioPlayback` was dropped (session teardown, or Kotlin's `nativeStopAudio`).
-    Shutdown,
-    /// AAudio reported the stream disconnected. The stream is now dead by AAudio's contract and
-    /// the only recovery is close + open a new one — see [`supervise`].
-    Disconnected,
-    /// The connector closed: no more audio is coming, so there is nothing to reopen FOR.
-    SessionClosed,
-    /// The plane cannot run at all: the Opus decoder would not build, because libopus refuses the
-    /// negotiated rate or the host named a coupling this build does not know. Reopening the
-    /// DEVICE would not change that, so it is not a reason to walk the ladder again.
-    Fatal,
-    /// The host changed the audio format; the packet that opens it waits in the caller's slot
-    /// for a device opened at it.
-    Reformat,
-}
-
 /// Decoded-chunk hand-off depth: 64 frames of slack (matches the core's AUDIO_QUEUE).
 const RING_CHUNKS: usize = 64;
 
@@ -124,11 +108,6 @@ const START_WATCHDOG_POLL_MS: u64 = 10;
 /// an AVR re-handshaking) is not instantaneous, and reopening into the middle of one just spends
 /// the ladder on rungs that were always going to fail.
 const REOPEN_SETTLE_MS: u64 = 250;
-/// How many times a reopen may find no usable device before the plane gives up — ~2 s of trying,
-/// which comfortably outlasts an HDMI mode switch. Bounded rather than infinite so a device that
-/// disconnects permanently (unplugged, claimed by another app for good) settles into silence
-/// instead of a forever loop of opens on the session's audio thread.
-const REOPEN_ATTEMPTS: u32 = 8;
 /// Packets decoded with AAudio never having taken a single sample before we call it — expressed
 /// as a DURATION, because the two planes do not agree on what a packet is worth: 5 ms on Opus, and
 /// down to the ladder's shortest 1 ms rung on a `0xD3` session that is 24-bit surround or at the
@@ -637,8 +616,7 @@ fn supervise_format(
         Some("0") | Some("false")
     );
 
-    let mut generation: u32 = 0;
-    let mut reopen_attempt: u32 = 0;
+    let mut sup = Supervisor::default();
     while !shutdown.load(Ordering::Relaxed) {
         let disconnected = Arc::new(AtomicBool::new(false));
         let ctx = OpenCtx {
@@ -657,27 +635,25 @@ fn supervise_format(
         };
         let live = match open_any(&ladder, &ctx) {
             Some(live) => {
-                reopen_attempt = 0;
+                sup.opened();
                 live
             }
-            None if shutdown.load(Ordering::Relaxed) => return None,
-            // A reopen that lands in the middle of the very route change that caused the
-            // disconnect finds no usable device and would otherwise disable audio permanently —
-            // the exact outcome this supervisor exists to prevent. An HDMI mode switch or an AVR
-            // re-handshake takes a beat, so keep trying across it before giving up.
-            None if generation > 0 && reopen_attempt < REOPEN_ATTEMPTS => {
-                reopen_attempt += 1;
-                log::warn!(
-                    "audio: reopen attempt {reopen_attempt}/{REOPEN_ATTEMPTS} found no usable configuration — retrying"
-                );
-                nap(shutdown, REOPEN_SETTLE_MS);
-                continue;
-            }
-            None => {
-                log_no_configuration(fmt);
-                return None;
-            }
+            None => match sup.no_device(shutdown.load(Ordering::Relaxed)) {
+                NoDevice::Quit => return None,
+                NoDevice::Retry(reopen_attempt) => {
+                    log::warn!(
+                        "audio: reopen attempt {reopen_attempt}/{REOPEN_ATTEMPTS} found no usable configuration — retrying"
+                    );
+                    nap(shutdown, REOPEN_SETTLE_MS);
+                    continue;
+                }
+                NoDevice::GiveUp => {
+                    log_no_configuration(fmt);
+                    return None;
+                }
+            },
         };
+        let generation = sup.generation;
         if generation > 0 {
             log::info!("audio: reopened after disconnect (generation {generation})");
         }
@@ -693,18 +669,16 @@ fn supervise_format(
         );
         live.output.stop();
         drop(live); // closes the stream, or stops and releases the track
-        match exit {
-            DecodeExit::Disconnected if reopen_allowed && !shutdown.load(Ordering::Relaxed) => {
-                generation += 1;
+        match sup.next(exit, reopen_allowed, shutdown.load(Ordering::Relaxed)) {
+            Next::Reopen => {
                 log::warn!("audio: device disconnected — reopening in {REOPEN_SETTLE_MS} ms");
                 nap(shutdown, REOPEN_SETTLE_MS);
             }
-            DecodeExit::Disconnected => {
+            Next::Stop => {
                 log::warn!("audio: device disconnected — not reopening (shutting down, or pinned by debug.punktfunk.audio_reopen)");
                 break;
             }
-            DecodeExit::Shutdown | DecodeExit::SessionClosed | DecodeExit::Fatal => break,
-            DecodeExit::Reformat => break,
+            Next::End => break,
         }
     }
     log::info!(
@@ -713,7 +687,7 @@ fn supervise_format(
         counters.frames_decoded.load(Ordering::Relaxed),
         counters.pcm_written.load(Ordering::Relaxed),
         counters.underruns.load(Ordering::Relaxed),
-        generation + 1,
+        sup.generation + 1,
     );
     carry.filter(|pkt| pkt.new_format.is_some())
 }
@@ -1163,9 +1137,9 @@ impl<'a> Plane<'a> {
     }
 
     /// Hand `pcm[..n]` to the ring in a recycled buffer (allocating only when the free-list is
-    /// momentarily empty: startup / after a backpressure drop). Full = drop-newest. A muted
-    /// stream queues the same length in silence, so the ring keeps its cadence and the device
-    /// is never closed and reopened on a toggle.
+    /// momentarily empty: startup / after a backpressure drop). Full = drop-newest; closed ends
+    /// the loop, see [`sent`]. A muted stream queues the same length in silence, so the ring
+    /// keeps its cadence and the device is never closed and reopened on a toggle.
     fn push(&mut self, n: usize) -> Result<(), DecodeExit> {
         let mut buf = self
             .live
@@ -1178,12 +1152,7 @@ impl<'a> Plane<'a> {
         } else {
             buf.extend_from_slice(&self.pcm[..n]);
         }
-        match self.live.tx.try_send(buf) {
-            Ok(()) | Err(TrySendError::Full(_)) => Ok(()),
-            // The renderer is gone: an AudioTrack writer ends on a failed write and takes
-            // the ring with it. The supervisor reopens unless the session is stopping.
-            Err(TrySendError::Disconnected(_)) => Err(DecodeExit::Disconnected),
-        }
+        sent(self.live.tx.try_send(buf))
     }
 
     /// One synthesized frame into the ring: an inaudible fade instead of the click a hard gap

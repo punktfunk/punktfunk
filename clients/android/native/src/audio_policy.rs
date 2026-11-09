@@ -2,6 +2,8 @@
 //! their tables run on the host. No NDK type and no clock: the shell reads the device, passes
 //! plain values in and does what comes back.
 
+use std::sync::mpsc::TrySendError;
+
 /// AAudio's sharing mode, as the shell hands it to the stream builder.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Sharing {
@@ -114,6 +116,113 @@ pub(crate) fn grant_matches(
         ));
     }
     Ok(())
+}
+
+/// Reopens in a row that may find no usable device before the plane gives up: about 2 s with the
+/// shell's settle time, which outlasts an HDMI mode switch. Bounded, so a device gone for good
+/// ends in silence instead of a loop of opens on the audio thread.
+pub(crate) const REOPEN_ATTEMPTS: u32 = 8;
+
+/// Why the decode loop returned. Only `Disconnected` is worth reopening the device for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum DecodeExit {
+    /// The playback was dropped: session teardown, or Kotlin's `nativeStopAudio`.
+    Shutdown,
+    /// The device went away: AAudio reported a disconnect, a track write failed, or the renderer
+    /// closed the ring. A dead stream recovers only by a close and a new open.
+    Disconnected,
+    /// The connector closed: no more audio is coming.
+    SessionClosed,
+    /// The decoder refused the negotiated format. Another device would not change that.
+    Fatal,
+    /// The host changed the audio format; the packet that opens it waits for a device opened
+    /// at it.
+    Reformat,
+}
+
+/// What a chunk handed to the ring means for the decode loop. A full ring drops the chunk. A
+/// closed ring is a renderer that went away: an `AudioTrack` writer ends on a failed write and
+/// takes the ring with it.
+pub(crate) fn sent<T>(result: Result<(), TrySendError<T>>) -> Result<(), DecodeExit> {
+    match result {
+        Ok(()) | Err(TrySendError::Full(_)) => Ok(()),
+        Err(TrySendError::Disconnected(_)) => Err(DecodeExit::Disconnected),
+    }
+}
+
+/// What the supervisor does once a decode loop returned.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Next {
+    /// Settle, then open the device again as a new generation.
+    Reopen,
+    /// The device went away and stays closed: the session is stopping, or
+    /// `debug.punktfunk.audio_reopen` pins reopening off.
+    Stop,
+    /// Nothing is left to reopen for.
+    End,
+}
+
+/// What the supervisor does when no rung on the ladder gave it a device.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum NoDevice {
+    /// The session is stopping.
+    Quit,
+    /// Settle and walk the ladder again; the number is this attempt, from 1.
+    Retry(u32),
+    /// Audio is off for the rest of this format.
+    GiveUp,
+}
+
+/// One audio format's device generations: one per device opened, a new one after each
+/// disconnect the supervisor reopens.
+#[derive(Default)]
+pub(crate) struct Supervisor {
+    /// Reopens so far; 0 while the first device plays.
+    pub(crate) generation: u32,
+    /// Ladder walks since the last open that found no device.
+    attempt: u32,
+}
+
+impl Supervisor {
+    /// A rung gave a device: the next disconnect gets its own retries.
+    pub(crate) fn opened(&mut self) {
+        self.attempt = 0;
+    }
+
+    /// No rung gave a device. The first open gives up at once. A reopen retries up to
+    /// [`REOPEN_ATTEMPTS`] times, since it can land inside the route change that caused the
+    /// disconnect.
+    pub(crate) fn no_device(&mut self, shutting_down: bool) -> NoDevice {
+        if shutting_down {
+            return NoDevice::Quit;
+        }
+        if self.generation > 0 && self.attempt < REOPEN_ATTEMPTS {
+            self.attempt += 1;
+            return NoDevice::Retry(self.attempt);
+        }
+        NoDevice::GiveUp
+    }
+
+    /// The decode loop returned `exit`. Only a device that went away reopens, and only while the
+    /// session runs and `reopen_allowed` holds.
+    pub(crate) fn next(
+        &mut self,
+        exit: DecodeExit,
+        reopen_allowed: bool,
+        shutting_down: bool,
+    ) -> Next {
+        match exit {
+            DecodeExit::Disconnected if reopen_allowed && !shutting_down => {
+                self.generation += 1;
+                Next::Reopen
+            }
+            DecodeExit::Disconnected => Next::Stop,
+            DecodeExit::Shutdown
+            | DecodeExit::SessionClosed
+            | DecodeExit::Fatal
+            | DecodeExit::Reformat => Next::End,
+        }
+    }
 }
 
 /// When the newest frame written plays, ns on the timestamp's clock: the timestamp's time plus
@@ -361,6 +470,117 @@ mod tests {
             grant_matches((44_100, 2, true), None, 48_000, 2),
             Err("granted rate=44100 ch=2 f32=true, needed 48000/2/PCM_Float".into())
         );
+    }
+
+    #[test]
+    fn a_full_ring_drops_the_chunk_a_closed_one_is_a_lost_renderer() {
+        assert_eq!(sent::<()>(Ok(())), Ok(()));
+        assert_eq!(sent(Err(TrySendError::Full(()))), Ok(()));
+        assert_eq!(
+            sent(Err(TrySendError::Disconnected(()))),
+            Err(DecodeExit::Disconnected)
+        );
+    }
+
+    #[test]
+    fn only_a_device_that_went_away_reopens() {
+        let lost_renderer = sent(Err(TrySendError::Disconnected(()))).unwrap_err();
+        // (row, exit, reopen allowed, shutting down, next)
+        let rows = [
+            (
+                "R5-1: a renderer that went away reopens",
+                lost_renderer,
+                true,
+                false,
+                Next::Reopen,
+            ),
+            (
+                "a disconnect while the session stops stays closed",
+                DecodeExit::Disconnected,
+                true,
+                true,
+                Next::Stop,
+            ),
+            (
+                "audio_reopen=0 keeps a disconnect closed",
+                DecodeExit::Disconnected,
+                false,
+                false,
+                Next::Stop,
+            ),
+            (
+                "a dropped playback ends",
+                DecodeExit::Shutdown,
+                true,
+                false,
+                Next::End,
+            ),
+            (
+                "a closed connector ends",
+                DecodeExit::SessionClosed,
+                true,
+                false,
+                Next::End,
+            ),
+            (
+                "a decoder that will not build ends",
+                DecodeExit::Fatal,
+                true,
+                false,
+                Next::End,
+            ),
+            (
+                "a format change ends this format's supervisor",
+                DecodeExit::Reformat,
+                true,
+                false,
+                Next::End,
+            ),
+        ];
+        for (row, exit, allowed, stopping, want) in rows {
+            let mut sup = Supervisor::default();
+            assert_eq!(sup.next(exit, allowed, stopping), want, "{row}");
+            assert_eq!(sup.generation, u32::from(want == Next::Reopen), "{row}");
+        }
+    }
+
+    #[test]
+    fn the_first_open_that_finds_no_device_gives_up_at_once() {
+        assert_eq!(Supervisor::default().no_device(false), NoDevice::GiveUp);
+    }
+
+    #[test]
+    fn a_reopen_retries_across_a_route_change_then_gives_up() {
+        let mut sup = Supervisor::default();
+        sup.next(DecodeExit::Disconnected, true, false);
+        let walks: Vec<_> = (0..=REOPEN_ATTEMPTS)
+            .map(|_| sup.no_device(false))
+            .collect();
+        let want: Vec<_> = (1..=REOPEN_ATTEMPTS)
+            .map(NoDevice::Retry)
+            .chain([NoDevice::GiveUp])
+            .collect();
+        assert_eq!(walks, want);
+    }
+
+    #[test]
+    fn an_open_gives_the_next_disconnect_its_own_retries() {
+        let mut sup = Supervisor::default();
+        sup.next(DecodeExit::Disconnected, true, false);
+        sup.no_device(false);
+        sup.no_device(false);
+        sup.opened();
+        sup.next(DecodeExit::Disconnected, true, false);
+        assert_eq!(sup.no_device(false), NoDevice::Retry(1));
+        assert_eq!(sup.generation, 2);
+    }
+
+    #[test]
+    fn a_stopping_session_quits_without_spending_an_attempt() {
+        let mut sup = Supervisor::default();
+        sup.next(DecodeExit::Disconnected, true, false);
+        assert_eq!(sup.no_device(true), NoDevice::Quit);
+        assert_eq!(sup.no_device(false), NoDevice::Retry(1));
     }
 
     #[test]
