@@ -5,12 +5,15 @@
 //!  * [`store`]: the held frames, a FIFO on source-cadence due times, two deep under latency.
 //!  * [`budget`]: the SurfaceView timeline budget and the ASC in-flight budget.
 //!  * [`slots`]: the ASC slot scheduler on the present-phased grid.
+//!  * [`retire`]: which ASC presents a completion frees, behind which release fence.
 //!  * [`verdict`]: the down-rated panel rule and the once-a-second verdicts the sinks act on.
 //!
 //! The replay tests beside each module pin today's decisions. Design:
 //! `design/android-presenter-overhaul-v3.md` §3.2 (planning repo).
 
 pub(crate) mod budget;
+#[cfg(test)]
+pub(crate) mod retire;
 pub(crate) mod slots;
 pub(crate) mod store;
 pub(crate) mod verdict;
