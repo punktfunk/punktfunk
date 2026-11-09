@@ -163,49 +163,76 @@ pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeClipCancel(
     })
 }
 
-/// `NativeBridge.nativeNextClip(handle)` — block ≤250 ms for the next clipboard event, encoded
-/// as a compact string (module docs); null on timeout, `"closed"` once the session is gone.
-/// Call from a dedicated poll thread.
+/// What one poll of the clipboard plane hands Kotlin.
+#[derive(Debug, PartialEq, Eq)]
+enum ClipPoll {
+    /// The event as its protocol line (module docs).
+    Line(String),
+    /// A fetch for something other than text: the shim cancels it and returns null. Only text is
+    /// ever offered, and an unanswered fetch stalls the host.
+    CancelFetch(u32),
+    /// The poll window passed with no event.
+    Nothing,
+}
+
+/// Whether `mime` names text: the wire MIME and any other charset of it.
+fn is_text(mime: &str) -> bool {
+    mime.starts_with("text/plain")
+}
+
+/// The protocol line for one pulled clipboard event, or the one thing to do instead.
 ///
-/// Text payloads ride `data:<xfer_id>:<text>` decoded lossily — safe because the phase-0
-/// clipboard task delivers a whole payload in ONE event (`last = true`), so a chunk boundary
-/// can never split a UTF-8 sequence.
+/// `data:<xfer_id>:<text>` decodes the bytes lossily. That is safe because the clipboard task
+/// delivers a whole payload in ONE event (`last = true`), so a chunk boundary can never split a
+/// UTF-8 sequence. Any pull error but a timeout means the plane is gone: `closed`.
+fn clip_poll(pulled: Result<ClipEventCore, PunktfunkError>) -> ClipPoll {
+    use ClipPoll::{CancelFetch, Line, Nothing};
+    match pulled {
+        Ok(ClipEventCore::State { enabled, .. }) => Line(format!("state:{}", u8::from(enabled))),
+        Ok(ClipEventCore::RemoteOffer { seq, kinds }) => {
+            let has_text = kinds.iter().any(|k| is_text(&k.mime));
+            Line(format!("offer:{seq}:{}", u8::from(has_text)))
+        }
+        Ok(ClipEventCore::FetchRequest { req_id, mime, .. }) => {
+            if is_text(&mime) {
+                Line(format!("fetch:{req_id}"))
+            } else {
+                CancelFetch(req_id)
+            }
+        }
+        Ok(ClipEventCore::Data { xfer_id, bytes, .. }) => Line(format!(
+            "data:{xfer_id}:{}",
+            String::from_utf8_lossy(&bytes)
+        )),
+        Ok(ClipEventCore::Cancelled { id }) => Line(format!("cancel:{id}")),
+        Ok(ClipEventCore::Error { id, code }) => Line(format!("error:{id}:{code}")),
+        Err(PunktfunkError::NoFrame) => Nothing,
+        Err(_) => Line("closed".into()),
+    }
+}
+
+/// `NativeBridge.nativeNextClip(handle)` — block ≤250 ms for the next clipboard event, encoded
+/// as a compact string ([`clip_poll`]); null on timeout, `"closed"` once the session is gone.
+/// Call from a dedicated poll thread.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeNextClip<'local>(
     mut env: EnvUnowned<'local>,
     _this: JObject<'local>,
     handle: jlong,
 ) -> JString<'local> {
-    // `JString::default()` is the null reference the old `std::ptr::null_mut()` returned, so the
-    // "null on timeout" contract in the doc comment above is unchanged.
+    // `JString::default()` is the null reference of the "null on timeout" contract.
     env.with_env(|env| -> jni::errors::Result<JString<'local>> {
         let Some(h) = client(handle) else {
             return env.new_string("closed");
         };
-        let msg = match h.client.next_clip(Duration::from_millis(250)) {
-            Ok(ClipEventCore::State { enabled, .. }) => format!("state:{}", u8::from(enabled)),
-            Ok(ClipEventCore::RemoteOffer { seq, kinds }) => {
-                let has_text = kinds.iter().any(|k| k.mime.starts_with("text/plain"));
-                format!("offer:{seq}:{}", u8::from(has_text))
+        match clip_poll(h.client.next_clip(Duration::from_millis(250))) {
+            ClipPoll::Line(msg) => env.new_string(msg),
+            ClipPoll::CancelFetch(req_id) => {
+                let _ = h.client.clip_cancel(req_id);
+                Ok(JString::default())
             }
-            Ok(ClipEventCore::FetchRequest { req_id, mime, .. }) => {
-                if mime.starts_with("text/plain") {
-                    format!("fetch:{req_id}")
-                } else {
-                    // We only ever offer text; cancel anything else rather than stall the host.
-                    let _ = h.client.clip_cancel(req_id);
-                    return Ok(JString::default());
-                }
-            }
-            Ok(ClipEventCore::Data { xfer_id, bytes, .. }) => {
-                format!("data:{xfer_id}:{}", String::from_utf8_lossy(&bytes))
-            }
-            Ok(ClipEventCore::Cancelled { id }) => format!("cancel:{id}"),
-            Ok(ClipEventCore::Error { id, code }) => format!("error:{id}:{code}"),
-            Err(PunktfunkError::NoFrame) => return Ok(JString::default()),
-            Err(_) => "closed".into(),
-        };
-        env.new_string(msg)
+            ClipPoll::Nothing => Ok(JString::default()),
+        }
     })
     .resolve::<LogErrorAndDefault>()
 }
