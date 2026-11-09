@@ -40,6 +40,9 @@ mod au_intake;
 // shell over EGL/GLES, on every ABI (the armv7 Skia archive is self-hosted — see Cargo.toml).
 #[cfg(target_os = "android")]
 mod console;
+// `console`'s surface lifecycle, `test`-gated like `run_end` so its table runs off-device.
+#[cfg(test)]
+mod console_lifecycle;
 // "Send logs to host" and the log file behind it, `test`-gated on top of Android like
 // `audio_format`. `crash` turns the previous run's exit record into log lines.
 #[cfg(any(target_os = "android", test))]
