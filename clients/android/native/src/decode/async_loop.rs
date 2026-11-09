@@ -28,6 +28,7 @@ use super::surface_control::{Layer, PresentComplete};
 use super::vsync::{VsyncClock, VsyncShared};
 use super::{Backstops, DecodeOptions, IN_FLIGHT_CAP};
 use crate::au_intake::{Delivery, Intake};
+use crate::bring_up::bring_up_rungs;
 use crate::feed_rules::{colour_after, render_after, Cause, Piece, Spoiled};
 use crate::feed_step::{Feed, Handoff, Step, OVERSIZE_RUN};
 use crate::input_stall::{
@@ -85,28 +86,6 @@ pub(crate) enum DecodeEvent {
     PresentComplete(super::surface_control::PresentComplete),
     /// The codec reported an error; `fatal` when neither recoverable nor transient.
     Error { fatal: bool },
-}
-
-/// The decoder bring-up rungs, in order, as `(present backend, low-latency keys)`.
-/// The backend is `Some(overlay)` for ASC with that reader-usage profile (see
-/// [`AscSink::create`]'s `overlay` doc), `None` for the SurfaceView presenter. The keys are
-/// `Some(aggressive)` for that key profile, `None` for no low-latency key at all. See
-/// [`bring_up`] for why these axes, and why in this order.
-///
-/// Consecutive duplicates are collapsed: the `present_backend` sysprop and the low-latency toggle
-/// may each already have shed what a rung was going to shed, and re-running a configuration the
-/// codec just refused buys nothing but another failed `start`. The first rung is always exactly
-/// what the session asked for, so a device that works is never charged for this ladder.
-fn bring_up_rungs(asc_wanted: bool, low_latency: bool) -> Vec<(Option<bool>, Option<bool>)> {
-    let mut rungs = vec![
-        (asc_wanted.then_some(true), Some(low_latency)),
-        (asc_wanted.then_some(false), Some(low_latency)),
-        (None, Some(low_latency)),
-        (None, Some(false)),
-        (None, None),
-    ];
-    rungs.dedup();
-    rungs
 }
 
 /// Human label for a rung's present backend, for the retry / decoder-started log lines — the
@@ -1723,65 +1702,3 @@ fn feeder_loop(
 /// `FEATURE_PartialFrame` probe): this input buffer is a PIECE of an AU — the codec assembles
 /// pieces until a buffer WITHOUT the flag closes the AU.
 const BUFFER_FLAG_PARTIAL_FRAME: u32 = 8;
-
-#[cfg(test)]
-mod tests {
-    use super::bring_up_rungs;
-
-    /// The ladder that turns a decoder which refuses to configure or start into a retry or two
-    /// away from a picture. Order and de-duplication are the whole of its logic — everything else
-    /// in the loop is MediaCodec I/O.
-    #[test]
-    fn rungs_shed_the_overlay_then_asc_then_the_keys_and_never_repeat_one() {
-        // The default: shed the reader's COMPOSER_OVERLAY usage first (keeping ASC — the whole
-        // point of the middle rung), then the `AImageReader` entirely, then the aggressive keys,
-        // then every low-latency key.
-        assert_eq!(
-            bring_up_rungs(true, true),
-            [
-                (Some(true), Some(true)),
-                (Some(false), Some(true)),
-                (None, Some(true)),
-                (None, Some(false)),
-                (None, None)
-            ]
-        );
-        // `present_backend=surfaceview` already shed ASC — both ASC rungs collapse away.
-        assert_eq!(
-            bring_up_rungs(false, true),
-            [(None, Some(true)), (None, Some(false)), (None, None)]
-        );
-        // Low-latency mode off ⇒ the keys are already the plain set; the aggressive rung collapses.
-        assert_eq!(
-            bring_up_rungs(true, false),
-            [
-                (Some(true), Some(false)),
-                (Some(false), Some(false)),
-                (None, Some(false)),
-                (None, None)
-            ]
-        );
-        // Only the keys left to shed: one retry, and no second `start` of the same thing.
-        assert_eq!(
-            bring_up_rungs(false, false),
-            [(None, Some(false)), (None, None)]
-        );
-
-        for asc in [true, false] {
-            for ll in [true, false] {
-                let rungs = bring_up_rungs(asc, ll);
-                // A device that works must pay nothing for this ladder: rung 0 is always exactly
-                // what the session asked for.
-                assert_eq!(rungs[0], (asc.then_some(true), Some(ll)));
-                // Every ladder ends at the most conservative configuration there is.
-                assert_eq!(*rungs.last().unwrap(), (None, None));
-                // Monotonic: a rung only ever sheds, never re-enables what an earlier one dropped
-                // (`Option<bool>`'s Ord: `None < Some(false) < Some(true)`), so the ladder always
-                // descends towards the conservative end.
-                assert!(rungs
-                    .windows(2)
-                    .all(|w| w[1].0 <= w[0].0 && w[1].1 <= w[0].1));
-            }
-        }
-    }
-}

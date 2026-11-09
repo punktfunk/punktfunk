@@ -37,6 +37,7 @@ pub(crate) use setup::boost_thread_priority;
 #[cfg(target_pointer_width = "64")]
 pub(crate) use sink::asc_backend_selected;
 
+use crate::bring_up::ranked_for;
 use crate::input_stall::NoOutput;
 use ndk::native_window::NativeWindow;
 use punktfunk_core::client::NativeClient;
@@ -207,12 +208,6 @@ impl DecodeOptions {
     }
 }
 
-/// Kotlin's pick `name`, ranked for `ranked`, when `mime` is that MIME; else the platform's
-/// default, which low-latency mode off always takes.
-fn ranked_for<'a>(name: Option<&'a str>, ranked: &str, mime: &str) -> Option<&'a str> {
-    name.filter(|_| mime == ranked)
-}
-
 /// The decode entry point on the `pf-decode` thread: dispatches to the codec's loop. All of
 /// them run until `shutdown` is set or the session closes.
 ///
@@ -231,18 +226,4 @@ pub fn run(
         return;
     }
     run_async(client, window, shutdown, stats, opts);
-}
-
-#[cfg(test)]
-mod ranked_tests {
-    use super::ranked_for;
-
-    /// A codec the host moved to after the pick never gets a decoder ranked for another MIME.
-    #[test]
-    fn a_pick_names_only_the_mime_it_was_ranked_for() {
-        let pick = Some("c2.qti.hevc.decoder.low_latency");
-        assert_eq!(ranked_for(pick, "video/hevc", "video/hevc"), pick);
-        assert_eq!(ranked_for(pick, "video/hevc", "video/avc"), None);
-        assert_eq!(ranked_for(None, "video/hevc", "video/hevc"), None);
-    }
 }

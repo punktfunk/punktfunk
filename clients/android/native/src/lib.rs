@@ -52,6 +52,10 @@ mod logs;
 // AAudio callback arithmetic, `test`-gated on top of Android so its proof runs off-device.
 #[cfg(any(target_os = "android", test))]
 mod audio_format;
+// `decode`'s bring-up ladder and decoder pick, `test`-gated like `run_end` so their tests run
+// off-device.
+#[cfg(any(target_os = "android", test))]
+mod bring_up;
 #[cfg(target_os = "android")]
 mod decode;
 // Gated like `pf_client_core::discovery`, the browse it folds: the Linux and Windows host builds
