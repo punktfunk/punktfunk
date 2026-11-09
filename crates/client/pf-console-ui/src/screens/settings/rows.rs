@@ -1109,12 +1109,9 @@ pub(super) fn changed_advanced(tab: usize, ctx: &Ctx) -> Vec<RowId> {
     changed(&offered, ctx)
 }
 
-/// Apple with no handheld screen, no TV and no room around it.
+/// This device is a Mac.
 pub(super) fn is_mac(ctx: &Ctx) -> bool {
-    ctx.device.platform == crate::platform::Platform::Apple
-        && ctx.device.screen.is_none()
-        && !ctx.device.tv
-        && !ctx.device.spatial
+    ctx.device.is_mac()
 }
 
 /// Where a launch will actually land, named. Not the stored value: with no default host

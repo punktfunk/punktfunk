@@ -101,6 +101,22 @@ pub struct Ctx<'a> {
     pub ui: &'a crate::theme::Frame,
 }
 
+impl Device {
+    /// Apple with no handheld screen, no TV and no room around it.
+    pub(crate) fn is_mac(&self) -> bool {
+        self.platform == crate::platform::Platform::Apple
+            && self.screen.is_none()
+            && !self.tv
+            && !self.spatial
+    }
+
+    /// Whether the app may close itself: the platform's answer, and a Mac's, which the one
+    /// Apple platform cannot give for the iPhone, the TV and the Vision Pro.
+    pub(crate) fn can_quit(&self) -> bool {
+        self.platform.can_quit() || self.is_mac()
+    }
+}
+
 #[cfg(test)]
 impl Device {
     /// A desktop that decodes everything, named `test`.
@@ -756,5 +772,46 @@ mod tests {
         assert!(keys(true, Platform::Apple) == [HintKey::Confirm, HintKey::Back]);
         assert!(!keys(false, Platform::Desktop).contains(&steam));
         assert!(keys(false, Platform::Apple).contains(&HintKey::Tertiary));
+    }
+
+    /// The one Apple platform quits on a Mac and nowhere else it runs: an iPhone or iPad
+    /// (it has a screen), an Apple TV and a Vision Pro close from the system, not the app.
+    #[test]
+    fn only_a_mac_among_the_apple_devices_can_quit() {
+        let apple = Device {
+            platform: Platform::Apple,
+            ..Device::test()
+        };
+        let handheld = Some(crate::shell::DeviceScreen {
+            full: (2868, 1320),
+            safe: (2868, 1320),
+        });
+        assert!(apple.can_quit(), "Mac");
+        for (name, device) in [
+            (
+                "iOS",
+                Device {
+                    screen: handheld,
+                    ..apple.clone()
+                },
+            ),
+            (
+                "tvOS",
+                Device {
+                    tv: true,
+                    ..apple.clone()
+                },
+            ),
+            (
+                "visionOS",
+                Device {
+                    spatial: true,
+                    ..apple.clone()
+                },
+            ),
+        ] {
+            assert!(!device.can_quit(), "{name}");
+        }
+        assert!(Device::test().can_quit(), "desktop");
     }
 }

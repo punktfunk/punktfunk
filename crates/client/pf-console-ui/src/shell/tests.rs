@@ -283,7 +283,8 @@ fn navigation_lap() {
 }
 
 /// Back climbs one layer a press: Settings' rows, its sections, the tab, then the exit
-/// question, whose Back stays. An Apple host cannot exit, so its tab's Back does nothing.
+/// question, whose Back stays. An Apple TV cannot exit, so its tab's Back does nothing; a Mac
+/// asks and quits.
 #[test]
 fn back_climbs_from_settings_rows_to_the_exit_question() {
     let (mut s, _console, _library) = shell(vec![Screen::Home(HomeScreen::new())]);
@@ -309,16 +310,33 @@ fn back_climbs_from_settings_rows_to_the_exit_question() {
         "the question's back stays"
     );
 
-    let mut opts = test_options();
-    opts.platform = Platform::Apple;
-    let (console, library) = (ConsoleShared::default(), LibraryShared::default());
-    let home = vec![Screen::Home(HomeScreen::new())];
-    let mut s = Shell::new(console, library, ConsoleBus::default(), opts, home).unwrap();
-    s.sync();
+    let apple = |tv| {
+        let mut opts = test_options();
+        opts.platform = Platform::Apple;
+        opts.tv = tv;
+        let (console, library) = (ConsoleShared::default(), LibraryShared::default());
+        let home = vec![Screen::Home(HomeScreen::new())];
+        let mut s = Shell::new(console, library, ConsoleBus::default(), opts, home).unwrap();
+        s.sync();
+        s
+    };
+    let mut tv = apple(true);
     for _ in 0..3 {
-        s.handle_menu(MenuEvent::Back);
+        tv.handle_menu(MenuEvent::Back);
     }
-    assert!(s.at_root() && s.stack.len() == 1 && s.take_action().is_none());
+    assert!(tv.at_root() && tv.stack.len() == 1 && tv.take_action().is_none());
+
+    let mut mac = apple(false);
+    for _ in 0..2 {
+        mac.handle_menu(MenuEvent::Back);
+    }
+    finish_motion(&mut mac);
+    assert!(
+        matches!(mac.stack.as_slice(), [_, Screen::Prompt(_)]),
+        "a Mac asks"
+    );
+    mac.handle_menu(MenuEvent::Confirm);
+    assert!(matches!(mac.take_action(), Some(OverlayAction::Quit)));
 }
 
 /// A tab root that places nothing to focus parks focus on its tab, where Down stays;

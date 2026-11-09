@@ -49,7 +49,8 @@ impl Platform {
     ];
 
     /// Whether the app may close itself. An Apple app and a browser page cannot; a packaged TV
-    /// page must, because Back at its root is how a Samsung app exits.
+    /// page must, because Back at its root is how a Samsung app exits. A Mac is Apple and
+    /// quits, which only the device knows: ask [`crate::screens::Device::can_quit`].
     pub fn can_quit(self) -> bool {
         !matches!(self, Platform::Apple | Platform::Web)
     }
