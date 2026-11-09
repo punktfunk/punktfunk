@@ -114,11 +114,13 @@ impl Feed {
     }
 
     /// Keep the parked deliveries `keep` passes, in order.
+    #[cfg_attr(not(target_os = "android"), allow(dead_code))]
     pub(crate) fn rejudge(&mut self, keep: impl FnMut(&Frame) -> bool) {
         self.park.retain(keep);
     }
 
     /// Deliveries parked.
+    #[cfg_attr(not(target_os = "android"), allow(dead_code))]
     pub(crate) fn parked(&self) -> usize {
         self.park.len()
     }
