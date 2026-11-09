@@ -10,6 +10,7 @@ use super::device::PyroDevice;
 use super::present::FRAMES;
 use crate::decode::surface_control::{self, Layer, PresentComplete};
 use crate::decode::DecodeEvent;
+use crate::pyro_ring::Ring;
 use anyhow::{anyhow, Context as _, Result};
 use ash::vk;
 use ndk::hardware_buffer::{
@@ -17,7 +18,6 @@ use ndk::hardware_buffer::{
 };
 use ndk::hardware_buffer_format::HardwareBufferFormat;
 use ndk::native_window::NativeWindow;
-use std::collections::VecDeque;
 use std::os::fd::{AsRawFd as _, FromRawFd as _, OwnedFd};
 use std::sync::atomic::AtomicU64;
 use std::sync::{mpsc, Arc};
@@ -31,15 +31,7 @@ pub(super) const FORMAT: vk::Format = vk::Format::R8G8B8A8_UNORM;
 /// `ADATASPACE_SRGB`: BT.709 primaries, sRGB transfer, full range. The CSC tone-maps PQ to it.
 const DATASPACE_SRGB: i32 = 142_671_872;
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum State {
-    Free,
-    /// Drawn and on the layer.
-    OnScreen,
-    /// Replaced on the layer; free once that transaction completes.
-    Leaving,
-}
-
+/// A ring slot's buffer and the Vulkan objects over it; its state is in [`Ring`].
 struct Slot {
     buffer: HardwareBufferRef,
     image: vk::Image,
@@ -48,8 +40,6 @@ struct Slot {
     fb: vk::Framebuffer,
     /// SurfaceFlinger's release fence, imported once it is known; the next draw waits on it.
     release: vk::Semaphore,
-    armed: bool,
-    state: State,
 }
 
 pub(super) struct AscTarget {
@@ -57,15 +47,13 @@ pub(super) struct AscTarget {
     ahb_d: ash::android::external_memory_android_hardware_buffer::Device,
     sem_fd: ash::khr::external_semaphore_fd::Device,
     layer: Layer,
+    /// Indexed as `ring`'s slots.
     slots: Vec<Slot>,
-    extent: vk::Extent2D,
+    ring: Ring,
     /// Per frame in flight: signalled by the draw, exported as the transaction's acquire fence.
     done: [vk::Semaphore; FRAMES],
     ev_tx: mpsc::Sender<DecodeEvent>,
     ev_rx: mpsc::Receiver<DecodeEvent>,
-    seq: u64,
-    /// Applied transactions not yet completed, each with the slot it replaced.
-    pending: VecDeque<(u64, Option<usize>)>,
     frame_rate: f32,
 }
 
@@ -114,19 +102,17 @@ impl AscTarget {
             sem_fd: ash::khr::external_semaphore_fd::Device::new(&dev.base.instance, &dev.device),
             layer,
             slots: Vec::new(),
-            extent: vk::Extent2D::default(),
+            ring: Ring::default(),
             done,
             ev_tx,
             ev_rx,
-            seq: 0,
-            pending: VecDeque::new(),
             frame_rate,
         }))
     }
 
     /// Whether the ring must be rebuilt for a `width`×`height` picture.
     pub(super) fn outgrown(&self, width: u32, height: u32) -> bool {
-        self.extent.width != width || self.extent.height != height
+        self.ring.outgrown(width, height)
     }
 
     /// Rebuild the ring at `width`×`height`.
@@ -141,8 +127,8 @@ impl AscTarget {
     ) -> Result<()> {
         // SAFETY: fn contract: nothing in flight uses the old slots.
         unsafe { self.destroy_slots() };
-        self.pending.clear();
-        self.extent = vk::Extent2D { width, height };
+        self.ring.clear();
+        self.ring.fill(BUFFERS, width, height);
         for _ in 0..BUFFERS {
             // SAFETY: fn contract.
             let slot = unsafe { self.make_slot(render_pass, width, height) }?;
@@ -178,8 +164,6 @@ impl AscTarget {
             view: vk::ImageView::null(),
             fb: vk::Framebuffer::null(),
             release: vk::Semaphore::null(),
-            armed: false,
-            state: State::Free,
         };
         // SAFETY: fn contract; every create-info is a local; on error `drop_slot` frees what was
         // made, null handles being no-ops.
@@ -275,20 +259,15 @@ impl AscTarget {
             else {
                 continue;
             };
-            let Some(at) = self.pending.iter().position(|&(s, _)| s == seq) else {
+            let Some(i) = self.ring.complete(seq) else {
                 continue;
             };
-            let (_, replaced) = self.pending.remove(at).expect("position is in range");
-            let Some(i) = replaced else { continue };
-            let slot = &mut self.slots[i];
-            slot.state = State::Free;
-            slot.armed = false;
             if let Some(fence) = prev_release_fence {
                 // SAFETY: `release` is this slot's idle semaphore and `fence` a live sync fd.
                 let imported = unsafe {
                     self.sem_fd.import_semaphore_fd(
                         &vk::ImportSemaphoreFdInfoKHR::default()
-                            .semaphore(slot.release)
+                            .semaphore(self.slots[i].release)
                             .flags(vk::SemaphoreImportFlags::TEMPORARY)
                             .handle_type(vk::ExternalSemaphoreHandleTypeFlags::SYNC_FD)
                             .fd(fence.as_raw_fd()),
@@ -298,7 +277,7 @@ impl AscTarget {
                     // The semaphore owns the fd now; a failed import leaves it ours to close.
                     Ok(()) => {
                         std::mem::forget(fence);
-                        slot.armed = true;
+                        self.ring.arm(i);
                     }
                     Err(e) => {
                         log::warn!(
@@ -312,15 +291,15 @@ impl AscTarget {
 
     /// The slot the next picture draws into, or `None` while the compositor holds every one.
     pub(super) fn next_draw(&mut self) -> Option<Draw> {
-        let slot = self.slots.iter().position(|s| s.state == State::Free)?;
-        let s = &mut self.slots[slot];
-        let wait = std::mem::take(&mut s.armed).then_some(s.release);
+        let (slot, armed) = self.ring.next_draw()?;
+        let s = &self.slots[slot];
+        let (width, height) = self.ring.extent();
         Some(Draw {
             slot,
             fb: s.fb,
             image: s.image,
-            extent: self.extent,
-            wait,
+            extent: vk::Extent2D { width, height },
+            wait: armed.then_some(s.release),
         })
     }
 
@@ -345,13 +324,13 @@ impl AscTarget {
         // A sync fd of -1 means already signalled.
         // SAFETY: a non-negative fd from the export is a fresh descriptor we own.
         let mut fence = (fd >= 0).then(|| unsafe { OwnedFd::from_raw_fd(fd) });
-        self.seq += 1;
-        let seq = self.seq;
+        let seq = self.ring.next_seq();
+        let (width, height) = self.ring.extent();
         let shown = surface_control::present(
             &mut [&mut self.layer],
             &self.slots[slot].buffer,
-            self.extent.width as i32,
-            self.extent.height as i32,
+            width as i32,
+            height as i32,
             &mut fence,
             0,
             DATASPACE_SRGB,
@@ -360,16 +339,10 @@ impl AscTarget {
             seq,
             &self.ev_tx,
         );
-        if !shown {
-            return Ok(false);
+        if shown {
+            self.ring.shown(slot, seq);
         }
-        let replaced = self.slots.iter().position(|s| s.state == State::OnScreen);
-        if let Some(i) = replaced {
-            self.slots[i].state = State::Leaving;
-        }
-        self.slots[slot].state = State::OnScreen;
-        self.pending.push_back((seq, replaced));
-        Ok(true)
+        Ok(shown)
     }
 
     /// # Safety

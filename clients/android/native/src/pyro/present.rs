@@ -9,6 +9,7 @@
 //! the whole view and the stream rarely matches it exactly, so the render pass clears to
 //! black and the triangle is drawn into the fitted rectangle.
 
+use crate::pyro_ring::{self, verdict, Call, Outcome, Verdict};
 use anyhow::{anyhow, Result};
 use ash::vk::{self, Handle as _};
 use pf_client_video::video_color::{csc_rows, ColorDesc};
@@ -248,24 +249,16 @@ impl<'d> Present<'d> {
         Ok(())
     }
 
-    /// The size the swapchain should have: the view's live size once Kotlin has reported
-    /// it, else the window's, within what the surface allows.
+    /// The size the swapchain should have ([`pyro_ring::target_extent`]).
     fn target_extent(&self, caps: &vk::SurfaceCapabilitiesKHR) -> vk::Extent2D {
-        let want = match crate::session::unpack_surface_size(self.followed) {
-            Some((w, h)) if w > 0 && h > 0 => vk::Extent2D {
-                width: w as u32,
-                height: h as u32,
-            },
-            _ => caps.current_extent,
-        };
-        vk::Extent2D {
-            width: want
-                .width
-                .clamp(caps.min_image_extent.width, caps.max_image_extent.width),
-            height: want
-                .height
-                .clamp(caps.min_image_extent.height, caps.max_image_extent.height),
-        }
+        let wh = |e: vk::Extent2D| (e.width, e.height);
+        let (width, height) = pyro_ring::target_extent(
+            self.followed,
+            wh(caps.current_extent),
+            wh(caps.min_image_extent),
+            wh(caps.max_image_extent),
+        );
+        vk::Extent2D { width, height }
     }
 
     /// (Re)create the swapchain and everything sized by it, keeping the old one as the
@@ -391,10 +384,9 @@ impl<'d> Present<'d> {
         let frame = self.frame;
         let fence = self.fences[frame];
         // SAFETY: the fence belongs to this struct; waiting is read-only on the device.
-        unsafe {
-            self.device
-                .wait_for_fences(&[fence], true, u64::MAX)
-                .map_err(|e| anyhow!("wait_for_fences: {e}"))?;
+        let waited = unsafe { self.device.wait_for_fences(&[fence], true, u64::MAX) };
+        if let Err(e) = waited {
+            return self.failed(Call::FenceWait, e, "wait_for_fences");
         }
         if self.asc.is_some() {
             return self.show_asc(views, color, depth, msb_packed, size);
@@ -411,20 +403,24 @@ impl<'d> Present<'d> {
         };
         let (index, suboptimal) = match acquired {
             Ok(v) => v,
-            Err(vk::Result::ERROR_OUT_OF_DATE_KHR) => {
-                self.recreate()?;
-                return Ok(false);
-            }
-            // Timed out: nothing is draining the queue (backgrounded, or a stalled
-            // compositor). The semaphore is untouched, so drop this picture and come back.
-            Err(vk::Result::TIMEOUT | vk::Result::NOT_READY) => return Ok(false),
-            Err(e) => return Err(anyhow!("acquire_next_image: {e}")),
+            // A timeout means nothing is draining the queue (backgrounded, or a stalled
+            // compositor). The semaphore is untouched, so the picture is dropped.
+            Err(e) => return self.failed(Call::Acquire, e, "acquire_next_image"),
         };
 
         self.bind_planes(frame, views);
         let cmd = self.cmds[frame];
         let fb = self.swap.framebuffers[index as usize];
         let extent = self.swap.extent;
+        let [x, y, width, height] = pyro_ring::crop_viewport(crop, (extent.width, extent.height));
+        let viewport = vk::Viewport {
+            x,
+            y,
+            width,
+            height,
+            min_depth: 0.0,
+            max_depth: 1.0,
+        };
         // SAFETY: the buffer is not in flight (fence waited) and the pool allows reset.
         unsafe {
             self.device
@@ -434,7 +430,6 @@ impl<'d> Present<'d> {
                 &vk::CommandBufferBeginInfo::default()
                     .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT),
             )?;
-            let viewport = crop_viewport(crop, extent);
             self.record(cmd, fb, extent, viewport, color, depth, msb_packed, None);
             self.device.end_command_buffer(cmd)?;
         }
@@ -478,11 +473,20 @@ impl<'d> Present<'d> {
                 }
                 Ok(true)
             }
-            Err(vk::Result::ERROR_OUT_OF_DATE_KHR) => {
+            Err(e) => self.failed(Call::Present, e, "queue_present"),
+        }
+    }
+
+    /// What `call` failing with `e` does to the picture ([`verdict`]): `Ok(false)` drops it,
+    /// after rebuilding the swapchain where the verdict asks; `Err` ends the lane.
+    fn failed(&mut self, call: Call, e: vk::Result, what: &str) -> Result<bool> {
+        match verdict(call, outcome(e)) {
+            Verdict::Rebuild => {
                 self.recreate()?;
                 Ok(false)
             }
-            Err(e) => Err(anyhow!("queue_present: {e}")),
+            Verdict::Go | Verdict::Drop => Ok(false),
+            Verdict::Fatal => Err(anyhow!("{what}: {e}")),
         }
     }
 
@@ -498,24 +502,26 @@ impl<'d> Present<'d> {
     ) -> Result<bool> {
         let frame = self.frame;
         let fence = self.fences[frame];
-        let draw = {
-            let Some(asc) = self.asc.as_mut() else {
-                return Ok(false);
-            };
-            asc.drain();
-            if asc.outgrown(width, height) {
+        let Some(asc) = self.asc.as_mut() else {
+            return Ok(false);
+        };
+        asc.drain();
+        if asc.outgrown(width, height) {
+            let rebuilt = (|| -> Result<()> {
                 {
                     let _q = self.queue_lock.guard();
                     // SAFETY: idling is the precondition for destroying the old buffers.
                     unsafe { self.device.device_wait_idle() }?;
                 }
                 // SAFETY: the device is idle and the render pass draws `asc::FORMAT`.
-                unsafe { asc.rebuild(self.render_pass, width, height) }?;
+                unsafe { asc.rebuild(self.render_pass, width, height) }
+            })();
+            if !self.after_rebuild(rebuilt)? {
+                return Ok(false);
             }
-            match asc.next_draw() {
-                Some(d) => d,
-                None => return Ok(false),
-            }
+        }
+        let Some(draw) = self.asc.as_mut().and_then(|a| a.next_draw()) else {
+            return Ok(false);
         };
         self.bind_planes(frame, views);
         let cmd = self.cmds[frame];
@@ -712,24 +718,43 @@ impl<'d> Present<'d> {
     }
 
     /// Idle the device, then rebuild the swapchain against the surface's current size.
-    fn recreate(&mut self) -> Result<()> {
-        {
-            let _q = self.queue_lock.guard();
-            // SAFETY: idling is the precondition for destroying the in-flight swapchain
-            // resources `rebuild_swapchain` retires.
-            unsafe { self.device.device_wait_idle() }?;
+    /// [`Self::after_rebuild`] reads the result.
+    fn recreate(&mut self) -> Result<bool> {
+        let rebuilt = (|| -> Result<()> {
+            {
+                let _q = self.queue_lock.guard();
+                // SAFETY: idling is the precondition for destroying the in-flight swapchain
+                // resources `rebuild_swapchain` retires.
+                unsafe { self.device.device_wait_idle() }?;
+            }
+            // SAFETY: physical device and surface are live.
+            let formats = unsafe {
+                self.surface_i
+                    .get_physical_device_surface_formats(self.pdev, self.surface)
+            }?;
+            let color_space = formats
+                .iter()
+                .find(|f| f.format == self.format)
+                .map(|f| f.color_space)
+                .unwrap_or(vk::ColorSpaceKHR::SRGB_NONLINEAR);
+            self.rebuild_swapchain(color_space)
+        })();
+        self.after_rebuild(rebuilt)
+    }
+
+    /// What a swapchain or ring rebuild's result does to the picture ([`verdict`]): `Ok(true)`
+    /// carries on; `Err` ends the lane.
+    fn after_rebuild(&self, rebuilt: Result<()>) -> Result<bool> {
+        let got = match &rebuilt {
+            Ok(()) => Outcome::Done,
+            Err(e) => e
+                .downcast_ref::<vk::Result>()
+                .map_or(Outcome::Failed, |&e| outcome(e)),
+        };
+        match verdict(Call::Rebuild, got) {
+            Verdict::Go => Ok(true),
+            _ => rebuilt.map(|()| false),
         }
-        // SAFETY: physical device and surface are live.
-        let formats = unsafe {
-            self.surface_i
-                .get_physical_device_surface_formats(self.pdev, self.surface)
-        }?;
-        let color_space = formats
-            .iter()
-            .find(|f| f.format == self.format)
-            .map(|f| f.color_space)
-            .unwrap_or(vk::ColorSpaceKHR::SRGB_NONLINEAR);
-        self.rebuild_swapchain(color_space)
     }
 
     /// Destroy the per-swapchain resources and `old`.
@@ -789,19 +814,13 @@ impl Drop for Present<'_> {
     }
 }
 
-/// The viewport that shows `crop` (frame fractions) across the whole surface. The SurfaceView is
-/// already laid out at the picture's rect, so the cropped-away edges fall outside the surface and
-/// the scissor drops them.
-fn crop_viewport([left, top, right, bottom]: [f32; 4], surface: vk::Extent2D) -> vk::Viewport {
-    let (sw, sh) = (surface.width as f32, surface.height as f32);
-    let (w, h) = (sw / (right - left).max(1e-3), sh / (bottom - top).max(1e-3));
-    vk::Viewport {
-        x: -left * w,
-        y: -top * h,
-        width: w,
-        height: h,
-        min_depth: 0.0,
-        max_depth: 1.0,
+/// How the lane reads a Vulkan error.
+fn outcome(e: vk::Result) -> Outcome {
+    match e {
+        vk::Result::ERROR_OUT_OF_DATE_KHR => Outcome::OutOfDate,
+        vk::Result::TIMEOUT | vk::Result::NOT_READY => Outcome::Timeout,
+        vk::Result::ERROR_DEVICE_LOST => Outcome::DeviceLost,
+        _ => Outcome::Failed,
     }
 }
 

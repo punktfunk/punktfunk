@@ -94,8 +94,9 @@ pub(crate) mod present;
 // path (design/pyrowave-codec-plan.md). Ungated so the host build compiles the dispatch; the
 // implementation inside is 64-bit-Android-only, like `pyrowave-sys`.
 mod pyro;
-// `pyro`'s present rules, `test`-gated so their tables run off-device.
-#[cfg(test)]
+// `pyro`'s present rules, `test`-gated like `run_end` so their tables run off-device; 64-bit
+// only, like `pyro`'s implementation.
+#[cfg(any(all(target_os = "android", target_pointer_width = "64"), test))]
 mod pyro_ring;
 // `decode`'s rung memory, `test`-gated like `input_stall` so its rules run off-device.
 #[cfg(any(target_os = "android", test))]
