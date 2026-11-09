@@ -49,7 +49,9 @@ pub(crate) fn ring_platform(platform: crate::platform::Platform) -> RingPlatform
         // Not `Touch`: the TV's ring is driven by a pad or the remote's D-pad, so it wants the
         // keyboard/pad default blob. The Magic Remote is a pointer, but it never makes the
         // ring a touch surface.
-        crate::platform::Platform::WebOS | crate::platform::Platform::Ps5 => RingPlatform::Desktop,
+        crate::platform::Platform::WebOS
+        | crate::platform::Platform::Ps5
+        | crate::platform::Platform::Switch => RingPlatform::Desktop,
     }
 }
 

@@ -28,11 +28,12 @@ fn client(name: &str) -> Client {
         "web" => Client::Web,
         "tizen" => Client::Tizen,
         "ps5" => Client::Ps5,
+        "switch" => Client::Switch,
         other => panic!("a client the vectors name: {other}"),
     }
 }
 
-const ALL: [Client; 8] = [
+const ALL: [Client; 9] = [
     Client::Desktop,
     Client::Android,
     Client::Apple,
@@ -41,6 +42,7 @@ const ALL: [Client; 8] = [
     Client::Web,
     Client::Tizen,
     Client::Ps5,
+    Client::Switch,
 ];
 
 #[test]
@@ -197,10 +199,10 @@ fn engine_vectors() {
 fn every_client_lists_the_controller_chords() {
     for c in ALL {
         let pad = groups(c, true).pop().unwrap();
-        let (dial, exit) = if c == Client::Ps5 {
-            ("Touchpad + Cross", "L1 + R1 + Options + Touchpad")
-        } else {
-            ("Select + A", "L1 + R1 + Start + Select")
+        let (dial, exit) = match c {
+            Client::Ps5 => ("Touchpad + Cross", "L1 + R1 + Options + Touchpad"),
+            Client::Switch => ("Minus + A", "L + R + Plus + Minus"),
+            _ => ("Select + A", "L1 + R1 + Start + Select"),
         };
         assert!(
             pad.items.iter().any(|i| i.keys == Keys(dial)),
@@ -343,6 +345,9 @@ fn a_chord_and_a_group_read_as_one_line() {
     assert_eq!(pad.note().as_deref(), Some("Select is Back or View"));
     let ps5 = groups(Client::Ps5, true).pop().unwrap();
     assert_eq!((ps5.title(), ps5.note()), ("DualSense", None));
+    let switch = groups(Client::Switch, false);
+    assert_eq!(switch.len(), 1, "a Switch lists its pad alone");
+    assert_eq!((switch[0].title(), switch[0].note()), ("Controller", None));
     let mac = groups(Client::Mac, true);
     let fullscreen = mac[0]
         .items
@@ -427,6 +432,19 @@ fn a_hint_names_the_live_trigger() {
         Some("Hold Start + Select")
     );
     assert_eq!(moved.hint(&end, Device::Keyboard), None);
+    let switch = defaults(Client::Switch, false, "auto");
+    assert_eq!(
+        switch
+            .hint_for(&Action::Ring, Device::Pad, Client::Switch)
+            .as_deref(),
+        Some("Minus + A")
+    );
+    assert_eq!(
+        switch
+            .hint_for(&end, Device::Pad, Client::Switch)
+            .as_deref(),
+        Some("Hold L + R + Plus + Minus")
+    );
 }
 
 #[test]

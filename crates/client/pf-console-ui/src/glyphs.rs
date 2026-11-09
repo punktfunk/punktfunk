@@ -59,7 +59,8 @@ impl GlyphStyle {
             | Platform::WebOS
             | Platform::Apple
             | Platform::Tizen
-            | Platform::Ps5 => GlyphStyle::Remote,
+            | Platform::Ps5
+            | Platform::Switch => GlyphStyle::Remote,
             Platform::Desktop | Platform::Web => GlyphStyle::Keyboard,
         }
     }

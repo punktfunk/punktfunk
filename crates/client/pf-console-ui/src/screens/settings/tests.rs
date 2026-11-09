@@ -252,7 +252,8 @@ fn platform_id(p: crate::platform::Platform) -> &'static str {
         Platform::WebOS => "webos",
         Platform::Web => "web",
         Platform::Tizen => "tizen",
-        Platform::Ps5 => "ps5",
+        // The Switch title offers the PS5's rows; the catalogue names no switch.
+        Platform::Ps5 | Platform::Switch => "ps5",
     }
 }
 
@@ -1765,7 +1766,8 @@ fn every_platform_offers_rows() {
             | Platform::Web
             | Platform::Apple
             | Platform::Tizen
-            | Platform::Ps5 => {}
+            | Platform::Ps5
+            | Platform::Switch => {}
         }
         let n = TABS
             .iter()
@@ -1776,26 +1778,28 @@ fn every_platform_offers_rows() {
     }
 }
 
-/// The PS5 offers PyroWave and no AV1, the HDR row its HDR10 swapchain honours, no mouse rows,
-/// and it can quit.
+/// The PS5 and the Switch offer PyroWave and no AV1, no mouse rows, and they can quit. The
+/// PS5's HDR10 swapchain honours the HDR row.
 #[test]
-fn ps5_rows_follow_what_the_title_reads() {
+fn console_title_rows_follow_what_the_title_reads() {
     use crate::platform::Platform;
-    let offered: Vec<&str> = codecs(Platform::Ps5).iter().map(|(id, _)| *id).collect();
-    assert_eq!(offered, ["auto", "hevc", "h264", "pyrowave"]);
-    for id in [RowId::Mouse, RowId::InvertScroll, RowId::Touch] {
-        assert!(!row_on(id, Platform::Ps5), "{id:?}");
+    for p in [Platform::Ps5, Platform::Switch] {
+        let offered: Vec<&str> = codecs(p).iter().map(|(id, _)| *id).collect();
+        assert_eq!(offered, ["auto", "hevc", "h264", "pyrowave"], "{p:?}");
+        for id in [RowId::Mouse, RowId::InvertScroll, RowId::Touch] {
+            assert!(!row_on(id, p), "{p:?} {id:?}");
+        }
+        for id in [
+            RowId::Codec,
+            RowId::Resolution,
+            RowId::TenBitSdr,
+            RowId::Licenses,
+        ] {
+            assert!(row_on(id, p), "{p:?} {id:?}");
+        }
+        assert!(p.can_quit(), "{p:?}");
     }
-    for id in [
-        RowId::Codec,
-        RowId::Resolution,
-        RowId::Hdr,
-        RowId::TenBitSdr,
-        RowId::Licenses,
-    ] {
-        assert!(row_on(id, Platform::Ps5), "{id:?}");
-    }
-    assert!(Platform::Ps5.can_quit());
+    assert!(row_on(RowId::Hdr, Platform::Ps5));
 }
 
 /// A Samsung set fronts the same page as the browser, so it answers the row tables exactly as

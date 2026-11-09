@@ -102,8 +102,25 @@ pub enum Kind {
 pub struct Group {
     pub kind: Kind,
     pub items: Vec<Item>,
-    /// The PS5's pad group is the DualSense, by name, with no Select to explain.
-    dualsense: bool,
+    legend: Legend,
+}
+
+/// Whose names the buttons carry. Only the Xbox names leave a Select to explain.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Legend {
+    Xbox,
+    DualSense,
+    Nintendo,
+}
+
+impl Legend {
+    fn of(client: Client) -> Legend {
+        match client {
+            Client::Ps5 => Legend::DualSense,
+            Client::Switch => Legend::Nintendo,
+            _ => Legend::Xbox,
+        }
+    }
 }
 
 /// The names one button carries across controllers, in the pad group's note.
@@ -116,7 +133,7 @@ impl Group {
             Kind::Remote => c::controls_group_remote(),
             Kind::Keyboard => c::controls_group_keyboard(),
             Kind::Touch => c::controls_group_touch(),
-            Kind::Pad if self.dualsense => "DualSense",
+            Kind::Pad if self.legend == Legend::DualSense => "DualSense",
             Kind::Pad => c::controls_group_pad(),
         }
     }
@@ -126,7 +143,7 @@ impl Group {
         let [select, back, view] = SELECT_NAMES;
         match self.kind {
             Kind::Touch => Some(c::controls_group_touch_note().into()),
-            Kind::Pad if !self.dualsense => {
+            Kind::Pad if self.legend == Legend::Xbox => {
                 Some(c::controls_group_pad_note(select, back, view).into())
             }
             _ => None,
@@ -138,7 +155,9 @@ impl Group {
         let [select, back, view] = SELECT_NAMES;
         match self.kind {
             Kind::Touch => c::controls_group_touch_full().into(),
-            Kind::Pad if !self.dualsense => c::controls_group_pad_full(select, back, view).into(),
+            Kind::Pad if self.legend == Legend::Xbox => {
+                c::controls_group_pad_full(select, back, view).into()
+            }
             _ => self.title().into(),
         }
     }
@@ -220,17 +239,17 @@ impl Shortcuts {
             Client::WebOS => (WEBOS_REMOTE, &[], &[]),
             Client::Web => (&[], WEB_KEYS, &[]),
             Client::Tizen => (TIZEN_REMOTE, &[], &[]),
-            Client::Ps5 => (&[], &[], &[]),
+            Client::Ps5 | Client::Switch => (&[], &[], &[]),
         };
         let keyboard = match client {
             Client::Apple => touchscreen,
-            Client::WebOS | Client::Ps5 => false,
+            Client::WebOS | Client::Ps5 | Client::Switch => false,
             _ => true,
         };
         let group = |kind, items| Group {
             kind,
             items,
-            dualsense: client == Client::Ps5,
+            legend: Legend::of(client),
         };
         let labels = labels(cfg);
         let mut out = Vec::new();
@@ -251,13 +270,19 @@ impl Shortcuts {
         out
     }
 
-    /// The first trigger on `device` bound to `action`, as one line: "Hold L1 + R1 + Start +
-    /// Select", "Ctrl+Alt+Shift+D". For the exit hint, the start banner, the capture hint.
+    /// [`Shortcuts::hint_for`] in the desktop's button names.
     pub fn hint(&self, action: &Action, device: Device) -> Option<String> {
+        self.hint_for(action, device, Client::Desktop)
+    }
+
+    /// The first trigger on `device` bound to `action`, as one line in `client`'s button names:
+    /// "Hold L1 + R1 + Start + Select", "Ctrl+Alt+Shift+D". For the exit hint, the start
+    /// banner, the capture hint.
+    pub fn hint_for(&self, action: &Action, device: Device, client: Client) -> Option<String> {
         self.bindings
             .iter()
             .find(|b| b.action == *action && b.trigger.device() == device)
-            .map(|b| b.trigger.label(Client::Desktop))
+            .map(|b| b.trigger.label(client))
     }
 
     /// One row per binding on `device`; two presses of one action share an `Either` row.
@@ -305,12 +330,12 @@ pub fn groups(client: Client, touchscreen: bool) -> Vec<Group> {
 }
 
 impl Trigger {
-    /// The keys alone: "Select + A", "Ctrl+Alt+Shift+Q", "Touchpad + Cross".
+    /// The keys alone: "Select + A", "Ctrl+Alt+Shift+Q", "Touchpad + Cross", "Minus + A".
     pub fn chord(&self, client: Client) -> String {
         match self {
             Trigger::Pad { buttons, .. } => buttons
                 .iter()
-                .map(|&b| button_label(b, client == Client::Ps5))
+                .map(|&b| button_label(b, Legend::of(client)))
                 .collect::<Vec<_>>()
                 .join(" + "),
             Trigger::Key { modifiers, key } => {
@@ -341,16 +366,36 @@ impl Trigger {
 }
 
 /// A button as the reference screens name it: Xbox positions with Select and Start and
-/// PlayStation shoulders, or the DualSense's own names.
-fn button_label(bit: u32, dualsense: bool) -> &'static str {
+/// PlayStation shoulders, or the DualSense's or the Switch's own names. The Switch's letters
+/// sit swapped: its A is the east button, wire `b`.
+fn button_label(bit: u32, legend: Legend) -> &'static str {
+    use Legend::{DualSense, Nintendo};
+    match (legend, bit) {
+        (DualSense, wire::BTN_A) => "Cross",
+        (DualSense, wire::BTN_B) => "Circle",
+        (DualSense, wire::BTN_X) => "Square",
+        (DualSense, wire::BTN_Y) => "Triangle",
+        (DualSense, wire::BTN_START) => "Options",
+        (DualSense, wire::BTN_BACK) => "Create",
+        (DualSense, wire::BTN_GUIDE) => "PS",
+        (Nintendo, wire::BTN_A) => "B",
+        (Nintendo, wire::BTN_B) => "A",
+        (Nintendo, wire::BTN_X) => "Y",
+        (Nintendo, wire::BTN_Y) => "X",
+        (Nintendo, wire::BTN_BACK) => "Minus",
+        (Nintendo, wire::BTN_START) => "Plus",
+        (Nintendo, wire::BTN_LB) => "L",
+        (Nintendo, wire::BTN_RB) => "R",
+        (Nintendo, wire::BTN_LS_CLICK) => "L Stick",
+        (Nintendo, wire::BTN_RS_CLICK) => "R Stick",
+        (Nintendo, wire::BTN_GUIDE) => "Home",
+        (Nintendo, wire::BTN_MISC1) => "Capture",
+        (_, bit) => xbox_label(bit),
+    }
+}
+
+fn xbox_label(bit: u32) -> &'static str {
     match bit {
-        wire::BTN_A if dualsense => "Cross",
-        wire::BTN_B if dualsense => "Circle",
-        wire::BTN_X if dualsense => "Square",
-        wire::BTN_Y if dualsense => "Triangle",
-        wire::BTN_START if dualsense => "Options",
-        wire::BTN_BACK if dualsense => "Create",
-        wire::BTN_GUIDE if dualsense => "PS",
         wire::BTN_A => "A",
         wire::BTN_B => "B",
         wire::BTN_X => "X",

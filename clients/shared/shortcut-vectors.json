@@ -106,7 +106,7 @@
   },
 
   "defaults": {
-    "$comment": "defaults(client, game_mode, guide_gesture) as a blob. guide_gesture is the retired Hold Select for guide setting: on and off decide the Hold Select row; anything else is automatic (desktop: game_mode; apple: on; every other client: off). Order is the reference screen's: pad rows, then keys.",
+    "$comment": "defaults(client, game_mode, guide_gesture) as a blob. guide_gesture is the retired Hold Select for guide setting: on and off decide the Hold Select row where a client has one (desktop, android, apple, mac); anything else is automatic (desktop: game_mode; apple: on; android, mac: off). Clients: desktop android apple mac webos web tizen ps5 switch. The switch names wire bits, so its Minus + A is [select, b]. Order is the reference screen's: pad rows, then keys.",
     "cases": [
       {
         "client": "desktop", "game_mode": false, "guide_gesture": "auto",
@@ -287,6 +287,13 @@
         "expect": [
           {"on": "pad", "keys": ["touchpad", "a"], "hold": false, "do": "ring"},
           {"on": "pad", "keys": ["lb", "rb", "start", "touchpad"], "hold": true, "do": "end_stream"}
+        ]
+      },
+      {
+        "client": "switch", "game_mode": false, "guide_gesture": "auto",
+        "expect": [
+          {"on": "pad", "keys": ["select", "b"], "hold": false, "do": "ring"},
+          {"on": "pad", "keys": ["lb", "rb", "start", "select"], "hold": true, "do": "end_stream"}
         ]
       }
     ]

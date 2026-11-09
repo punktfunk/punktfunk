@@ -44,4 +44,7 @@ pub enum Client {
     Tizen,
     /// The PS5 title: a DualSense, its touchpad click standing in for Create.
     Ps5,
+    /// The Switch title: Nintendo's A sits east, so its wire bit is `b`; Minus is Select, Plus
+    /// is Start, L/R are the shoulders.
+    Switch,
 }

@@ -48,6 +48,7 @@ pub(crate) fn client(platform: Platform) -> Client {
         Platform::Web => Client::Web,
         Platform::Tizen => Client::Tizen,
         Platform::Ps5 => Client::Ps5,
+        Platform::Switch => Client::Switch,
     }
 }
 
@@ -408,6 +409,8 @@ fn no_action() -> Action {
 pub(crate) struct ShortcutRowScreen {
     scope: Scope,
     client: Client,
+    /// Whose button names the grid and the recorder write: the pad in hand's family.
+    names: Client,
     /// The binding this screen edits; `None` until a new one is first saved.
     index: Option<usize>,
     draft: Binding,
@@ -427,11 +430,12 @@ pub(crate) struct ShortcutRowScreen {
 
 impl ShortcutRowScreen {
     fn new(ctx: &Ctx, scope: Scope, client: Client, index: Option<usize>, draft: Binding) -> Self {
-        // A DualSense names its buttons by shape; the PS5 client's chords already do.
-        let names = if pad_style(ctx) == GlyphStyle::Shapes {
-            Client::Ps5
-        } else {
-            client
+        // A DualSense names its buttons by shape and a Switch pad by its own letters; the PS5
+        // and Switch clients' chords already do.
+        let names = match pad_style(ctx) {
+            GlyphStyle::Shapes => Client::Ps5,
+            GlyphStyle::Nintendo => Client::Switch,
+            _ => client,
         };
         let legend = move |n: &str| {
             let buttons = button_bit(n).into_iter().collect();
@@ -444,6 +448,7 @@ impl ShortcutRowScreen {
         ShortcutRowScreen {
             scope,
             client,
+            names,
             index,
             draft,
             line: None,
@@ -914,9 +919,13 @@ impl ShortcutRowScreen {
             buttons,
             hold: false,
         }
-        .chord(self.client);
+        .chord(self.names);
         let press = Press::Keys(keep(&text));
-        let style = pad_style(ctx);
+        // Nintendo letters are already the pad's own: the glyph style must not swap them again.
+        let style = match pad_style(ctx) {
+            GlyphStyle::Nintendo => GlyphStyle::Letters,
+            style => style,
+        };
         let cw = glyphs::chord_width(fonts, press, style, k);
         glyphs::draw_chord(
             canvas,

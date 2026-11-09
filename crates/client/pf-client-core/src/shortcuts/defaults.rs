@@ -27,13 +27,15 @@ pub fn defaults(client: Client, game_mode: bool, legacy_guide_gesture: &str) -> 
         client,
         Client::Desktop | Client::Android | Client::Apple | Client::Mac
     );
-    let (open, exit) = match client {
-        Client::Ps5 => ("touchpad", &PS5_EXIT),
-        _ => ("select", &EXIT),
+    // The dial opener is Select + the confirm button: Minus + A (east) on a Switch.
+    let (open, exit): (&[&str], _) = match client {
+        Client::Ps5 => (&["touchpad", "a"], &PS5_EXIT),
+        Client::Switch => (&["select", "b"], &EXIT),
+        _ => (&["select", "a"], &EXIT),
     };
     let mut b = Vec::new();
     // Pad rows first, then keys, each in the order the reference screen lists them.
-    b.push(pad(&[open, "a"], false, ring()));
+    b.push(pad(open, false, ring()));
     if native {
         b.push(pad(&["select", "x"], false, slot(Stats)));
     }
@@ -74,7 +76,7 @@ pub fn defaults(client: Client, game_mode: bool, legacy_guide_gesture: &str) -> 
             b.push(chord("c", slot(Clipboard)));
             b.push(chord("a", slot(Mic)));
         }
-        Client::WebOS | Client::Ps5 => {}
+        Client::WebOS | Client::Ps5 | Client::Switch => {}
     }
     Shortcuts { bindings: b }
 }

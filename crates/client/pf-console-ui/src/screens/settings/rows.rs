@@ -274,7 +274,9 @@ const BACKGROUND_TIMEOUT_DEFAULT: u64 = 10;
 pub(crate) fn own_stats_corner(platform: crate::platform::Platform) -> HudCorner {
     use crate::platform::Platform;
     match platform {
-        Platform::Desktop | Platform::Android | Platform::Ps5 => HudCorner::TopLeft,
+        Platform::Desktop | Platform::Android | Platform::Ps5 | Platform::Switch => {
+            HudCorner::TopLeft
+        }
         Platform::Apple | Platform::WebOS | Platform::Web | Platform::Tizen => HudCorner::TopRight,
     }
 }
@@ -694,7 +696,7 @@ fn has_window(device: &crate::screens::Device) -> bool {
     match device.platform {
         Platform::Desktop | Platform::Web | Platform::Tizen => true,
         Platform::Apple => !device.tv,
-        Platform::Android | Platform::WebOS | Platform::Ps5 => false,
+        Platform::Android | Platform::WebOS | Platform::Ps5 | Platform::Switch => false,
     }
 }
 
@@ -754,7 +756,8 @@ pub(crate) fn bitrate_ceiling_kbps(platform: crate::platform::Platform) -> u32 {
         | crate::platform::Platform::Web
         | crate::platform::Platform::Apple
         | crate::platform::Platform::Tizen
-        | crate::platform::Platform::Ps5 => CUSTOM_MAX_MBPS * 1_000,
+        | crate::platform::Platform::Ps5
+        | crate::platform::Platform::Switch => CUSTOM_MAX_MBPS * 1_000,
     }
 }
 
@@ -785,7 +788,8 @@ const CODECS: [(&str, Label); 5] = [
     ("pyrowave", m::player_codec_pyrowave),
 ];
 
-/// The PS5's: Videodec2 decodes H.264 and HEVC, the GPU PyroWave, and nothing decodes AV1.
+/// The console titles': the PS5's Videodec2 and the Switch's NVDEC decode H.264 and HEVC, the
+/// GPU PyroWave, and nothing decodes AV1.
 const CODECS_PS5: [(&str, Label); 4] = [CODECS[0], CODECS[1], CODECS[2], CODECS[4]];
 
 /// The codecs this platform decodes. The TV's NDL pipeline takes H.264, HEVC and AV1, but no
@@ -795,7 +799,7 @@ pub(super) fn codecs(platform: crate::platform::Platform) -> &'static [(&'static
     match platform {
         crate::platform::Platform::WebOS => &CODECS[..4],
         crate::platform::Platform::Tizen => &CODECS[..3],
-        crate::platform::Platform::Ps5 => &CODECS_PS5,
+        crate::platform::Platform::Ps5 | crate::platform::Platform::Switch => &CODECS_PS5,
         _ => &CODECS,
     }
 }
@@ -847,15 +851,15 @@ pub(super) const PAD_TYPES: [(&str, Label); 7] = [
     ("steamdeck", || "Steam Deck"),
     ("steamcontroller2", || "Steam Controller 2"),
 ];
-/// The pad types `platform` can ask a host for. The TV and PS5 clients map Xbox 360, Steam Deck
-/// and Steam Controller 2 to Automatic, so their rows do not offer them.
+/// The pad types `platform` can ask a host for. The TV, PS5 and Switch clients map Xbox 360,
+/// Steam Deck and Steam Controller 2 to Automatic, so their rows do not offer them.
 fn pad_types(platform: crate::platform::Platform) -> Vec<(&'static str, Label)> {
     use crate::platform::Platform;
     PAD_TYPES
         .iter()
         .copied()
         .filter(|(v, _)| {
-            !matches!(platform, Platform::WebOS | Platform::Ps5)
+            !matches!(platform, Platform::WebOS | Platform::Ps5 | Platform::Switch)
                 || !matches!(*v, "xbox360" | "steamdeck" | "steamcontroller2")
         })
         .collect()
@@ -877,7 +881,7 @@ pub fn row_on(id: RowId, platform: crate::platform::Platform) -> bool {
     // Rows name the platforms that OFFER them. "Everything except the other one's rows" is
     // well defined for two platforms and ambiguous for three: a new host would inherit every
     // row nobody weighed it against. Unlisted here means universal, as it always did.
-    use Platform::{Android, Apple, Desktop, Ps5, WebOS};
+    use Platform::{Android, Apple, Desktop, Ps5, Switch, WebOS};
     let on: &[Platform] = match id {
         // Phone sensors: hardware a TV does not have. Apple keeps them for the iPhone and
         // iPad (`rumbleOnDevice`, `gyroFromDevice`); an Apple TV has no sensor to report.
@@ -901,7 +905,7 @@ pub fn row_on(id: RowId, platform: crate::platform::Platform) -> bool {
         // The clients that open a window per monitor; Apple's is the Mac (`row_applies`).
         RowId::Screens => &[Desktop, Apple],
         // The clients whose dial sends `pyrowave_bpp`.
-        RowId::PyroWaveQuality => &[Desktop, Android, Apple, Ps5],
+        RowId::PyroWaveQuality => &[Desktop, Android, Apple, Ps5, Switch],
         // Offered wherever there is a second UI to fall back to: Android's touch home,
         // webOS's cursor shell. `row_applies` still needs `fallback_ui` from the host.
         RowId::GamepadUi | RowId::GamepadUiMode => &[Android, WebOS, Apple],
@@ -930,13 +934,21 @@ pub fn row_on(id: RowId, platform: crate::platform::Platform) -> bool {
         // Every client binds something mid-stream: keys, chords, or a remote's colour buttons.
         RowId::ShortcutsPage => &Platform::ALL,
         // Every client ships third-party code. The browser build has no bundle to list.
-        RowId::Licenses => &[Desktop, Android, WebOS, Apple, Ps5],
+        RowId::Licenses => &[Desktop, Android, WebOS, Apple, Ps5, Switch],
         // DualSense capture — the pad reaches webOS over Bluetooth HID, not hidraw, so the
         // concept is real there too (punktfunk-webos docs/NOTES.md).
         RowId::DsCapture => &[Android, WebOS],
         // Apple reads `UIAccessibility.isReduceMotionEnabled` and follows it, so the shell has
         // nothing to ask. The others carry a row because they cannot see the OS switch.
-        RowId::ReduceMotion => &[Desktop, Android, WebOS, Platform::Web, Platform::Tizen, Ps5],
+        RowId::ReduceMotion => &[
+            Desktop,
+            Android,
+            WebOS,
+            Platform::Web,
+            Platform::Tizen,
+            Ps5,
+            Switch,
+        ],
         // Which pad is player 1 — a question only a client that can narrow forwarding to one pad
         // has to answer. Android's router, webOS's slot table and the browser's Gamepad API give
         // every controller its own wire slot, so there is nothing to pick.
@@ -948,8 +960,8 @@ pub fn row_on(id: RowId, platform: crate::platform::Platform) -> bool {
         RowId::ResetSettings => &[Desktop],
         // Main10 at BT.709 asks nothing of the panel, and MediaCodec and NDL both decode it from
         // the SPS.
-        RowId::TenBitSdr => &[Desktop, Android, WebOS, Apple, Ps5],
-        // The PS5 title reads no mouse.
+        RowId::TenBitSdr => &[Desktop, Android, WebOS, Apple, Ps5, Switch],
+        // The PS5 and Switch titles read no mouse.
         RowId::Mouse | RowId::InvertScroll => &[
             Desktop,
             Android,
@@ -1049,7 +1061,12 @@ fn fresh_settings(device: &crate::screens::Device) -> pf_client_core::trust::Set
             s.vsync = false;
             set_extra_bool(&mut s, device_keys::SC2, false);
         }
-        Platform::Desktop | Platform::WebOS | Platform::Web | Platform::Tizen | Platform::Ps5 => {}
+        Platform::Desktop
+        | Platform::WebOS
+        | Platform::Web
+        | Platform::Tizen
+        | Platform::Ps5
+        | Platform::Switch => {}
     }
     s
 }
@@ -1749,7 +1766,8 @@ pub fn detail(id: RowId, ctx: &Ctx) -> Cow<'static, str> {
             | Platform::Web
             | Platform::Apple
             | Platform::Tizen
-            | Platform::Ps5 => m::player_mouse_mode_hint().into(),
+            | Platform::Ps5
+            | Platform::Switch => m::player_mouse_mode_hint().into(),
         },
         RowId::InvertScroll => m::player_invert_scroll_hint().into(),
         RowId::QuickActions => console::console_player_overlay_actions_hint("Select+A").into(),
@@ -1776,7 +1794,8 @@ pub fn detail(id: RowId, ctx: &Ctx) -> Cow<'static, str> {
             | Platform::Web
             | Platform::Apple
             | Platform::Tizen
-            | Platform::Ps5 => m::player_stats_verbosity_hint().into(),
+            | Platform::Ps5
+            | Platform::Switch => m::player_stats_verbosity_hint().into(),
         },
         RowId::AdvancedStats => two(
             m::player_advanced_stats_hint(),
@@ -1820,7 +1839,8 @@ pub fn detail(id: RowId, ctx: &Ctx) -> Cow<'static, str> {
             | Platform::Web
             | Platform::Apple
             | Platform::Tizen
-            | Platform::Ps5 => console::console_gamepad_ui_enabled_hint().into(),
+            | Platform::Ps5
+            | Platform::Switch => console::console_gamepad_ui_enabled_hint().into(),
             Platform::WebOS => console::console_gamepad_ui_enabled_webos_hint().into(),
         },
         RowId::GamepadUiMode => match platform {
@@ -1829,7 +1849,8 @@ pub fn detail(id: RowId, ctx: &Ctx) -> Cow<'static, str> {
             | Platform::Web
             | Platform::Apple
             | Platform::Tizen
-            | Platform::Ps5 => console::console_gamepad_ui_mode_hint().into(),
+            | Platform::Ps5
+            | Platform::Switch => console::console_gamepad_ui_mode_hint().into(),
             Platform::WebOS => console::console_gamepad_ui_mode_webos_hint().into(),
         },
         RowId::Controllers => console::console_prefs_controllers_hint().into(),
