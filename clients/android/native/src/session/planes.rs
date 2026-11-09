@@ -11,8 +11,9 @@ use super::{jni_guard, lock_recover, SESSIONS};
 /// Start the retained session's decoder on a `SurfaceView` window.
 ///
 /// Kotlin supplies its ranked codec (`""` selects the platform default), latency/presenter policy,
-/// panel rate, and live surface size. A missing key, existing worker, invalid window, or failed
-/// thread spawn leaves the session stopped and safely retryable.
+/// panel rate, and live surface size. A missing key or an existing worker changes nothing. An
+/// invalid window or a failed thread spawn starts the keep-alive drain, so the frame queue never
+/// stands; the session stays retryable.
 #[cfg(target_os = "android")]
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeStartVideo(
@@ -56,6 +57,7 @@ pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeStartVideo(
             Some(w) => w,
             None => {
                 log::error!("nativeStartVideo: no ANativeWindow from Surface");
+                h.start_drain(); // nothing else pops the frame queue
                 return Ok(());
             }
         };
@@ -95,6 +97,7 @@ pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeStartVideo(
             Ok(join) => join,
             Err(e) => {
                 log::error!("nativeStartVideo: decode thread spawn failed: {e}");
+                h.start_drain(); // nothing else pops the frame queue
                 return Ok(());
             }
         };
