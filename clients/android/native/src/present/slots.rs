@@ -250,7 +250,7 @@ impl Slots {
     /// it: the compositor's own wake jitter, read before the clock takes the sample. `None`
     /// without a latch or a phased clock.
     pub(crate) fn latch_deviation_ns(&self, latch_ns: i64) -> Option<i64> {
-        if latch_ns == 0 || !self.clock.phased() {
+        if latch_ns <= 0 || !self.clock.phased() {
             return None;
         }
         let anchor = latch_ns + self.clock.lead_ns();
@@ -296,11 +296,12 @@ impl Slots {
         }
     }
 
-    /// One completion's latch (0 = none: `unlatched`). Two transactions latched in one commit
+    /// One completion's latch (0 or below = none: `unlatched`; the platform states -1 for a
+    /// transaction it never latched). Two transactions latched in one commit
     /// share the instant and SurfaceFlinger showed only the newer; the interval histogram sees
     /// the same pair as a 0-slot spacing.
     pub(crate) fn note_latch(&mut self, latch_ns: i64, c: &mut Counters) {
-        if latch_ns == 0 {
+        if latch_ns <= 0 {
             c.unlatched += 1;
             return;
         }
@@ -849,7 +850,9 @@ mod tests {
         let mut c = Counters::default();
         let mut s = Slots::new(120, P, PresentPriority::Latency, true, false, None);
         s.note_latch(0, &mut c);
-        assert_eq!(c.unlatched, 1);
+        s.note_latch(-1, &mut c);
+        s.note_latch(-1, &mut c);
+        assert_eq!((c.unlatched, c.coalesced), (3, 0));
         for k in [0, 1, 3, 3] {
             s.on_present(T0 + k * P, T0 + k * P - LEAD, None, false, 0, &mut c);
         }
